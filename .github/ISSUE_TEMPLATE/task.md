@@ -1,15 +1,9 @@
 ---
 name: Task Template
 about: 작업 예정 내용을 정리해주세요
-title: "[모듈명] 간단한 작업명"
+title: "작업명을 간단하게 작성해주세요."
 labels: ''
 assignees: ''
-
----
-
-### 🧩 Issue 제목
-> _간결하고 명확하게 작성해주세요._  
-_예시: "retriever 모듈에서 문서 검색 속도 개선", "LLM 응답 프롬프트 수정"_
 
 ---
 
