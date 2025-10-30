@@ -1,6 +1,6 @@
 from langgraph.graph import StateGraph, START
 from .node import State, chatbot
-from .tools import tavilysearch
+from .tools import tavilysearch, save_text_tool
 from .edge import wire_tool_edges
 
 def build_graph():

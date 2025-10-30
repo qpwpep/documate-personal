@@ -4,6 +4,7 @@ from langchain_core.messages import HumanMessage, AIMessage
 
 from .make_graph import build_graph
 from .llm import VERBOSE
+from .tools import save_text_to_file
 
 def maybe_save_mermaid_png(graph):
     try:
@@ -35,18 +36,30 @@ def run_cli():
                         msg.pretty_print()
                     except Exception:
                         print(repr(msg))
+            
+            # --- Always prompt to save the last AI answer (works in both verbose/non-verbose) ---
+            last_ai = next(
+                (m for m in reversed(response["messages"]) if isinstance(m, AIMessage)), None)
+            if last_ai:
+                if not VERBOSE:
+                    print(last_ai.content)
+
+                choice = input("Save this response to a .txt file? (y/N): ").strip().lower()
+                if choice in {"y", "yes"}:
+                    try:
+                        result = save_text_to_file(last_ai.content, filename_prefix="response")
+                        print(result)
+                    except Exception as e:
+                        print("Save failed:", e)
             else:
-                # Print the last AI message
-                for m in reversed(response["messages"]):
-                    if isinstance(m, AIMessage):
-                        print(m.content)
-                        break
+                print("[warn] No AIMessage found in response.")
+
         except KeyboardInterrupt:
             print("\nGoodbye!")
             break
         except Exception as e:
             print("Error:", e)
             break
-
+        
 if __name__ == "__main__":
     run_cli()

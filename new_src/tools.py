@@ -10,17 +10,15 @@ tools = [tavilysearch]
 
 # Save response in .txt file format
 from langchain_core.tools import Tool
-import datetime
+from datetime import datetime
 
-def save_text_to_file(content: str) -> str:
-    """
-    Saves text content to a timestamped .txt file in the current directory.
-    """
-    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"llm_output_{timestamp}.txt"
+def save_text_to_file(content: str, filename_prefix: str = "response") -> str:
+    """Save text content to a timestamped .txt file and return the filename."""
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"{filename_prefix}_{timestamp}.txt"
     with open(filename, "w", encoding="utf-8") as f:
         f.write(content)
-    return f"Saved output to {filename}"
+    return f"Saved response to {filename}"
 
 save_text_tool = Tool(
     name="save_text",
