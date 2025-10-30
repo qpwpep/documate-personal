@@ -16,3 +16,6 @@ llm_with_tools = llm.bind_tools(tools)
 
 # Verbosity flag used by main loop
 VERBOSE = True
+
+print(">>> loaded llm from:", __file__)
+print(">>> VERBOSE =", VERBOSE)

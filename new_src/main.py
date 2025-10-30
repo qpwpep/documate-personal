@@ -1,3 +1,5 @@
+print(">>> running main from:", __file__)
+
 import sys
 from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage, AIMessage
@@ -17,42 +19,34 @@ def maybe_save_mermaid_png(graph):
         pass
 
 def run_cli():
+    from langchain_core.messages import AIMessage
     load_dotenv()
     graph = build_graph()
-    maybe_save_mermaid_png(graph)
+
+    history = []  # ✅ keep conversation across turns
 
     while True:
         try:
-            user_input = input("User: ")
+            user_input = input("User: ").strip()
             if user_input.lower() in {"quit", "exit", "q"}:
                 print("Goodbye!")
                 break
 
-            response = graph.invoke({"messages": [HumanMessage(content=user_input)]})
+            # send history + this turn
+            response = graph.invoke({"messages": history + [HumanMessage(content=user_input)]})
 
-            if VERBOSE:
-                for msg in response["messages"]:
-                    try:
-                        msg.pretty_print()
-                    except Exception:
-                        print(repr(msg))
-            
-            # --- Always prompt to save the last AI answer (works in both verbose/non-verbose) ---
-            last_ai = next(
-                (m for m in reversed(response["messages"]) if isinstance(m, AIMessage)), None)
+            msgs = response.get("messages", [])
+
+            # Always show final answer
+            last_ai = next((m for m in reversed(msgs) if isinstance(m, AIMessage)), None)
             if last_ai:
-                if not VERBOSE:
-                    print(last_ai.content)
-
-                choice = input("Save this response to a .txt file? (y/N): ").strip().lower()
-                if choice in {"y", "yes"}:
-                    try:
-                        result = save_text_to_file(last_ai.content, filename_prefix="response")
-                        print(result)
-                    except Exception as e:
-                        print("Save failed:", e)
+                print("\n--- Final Answer ---")
+                print(last_ai.content)
             else:
                 print("[warn] No AIMessage found in response.")
+
+            # ✅ carry forward for the next turn
+            history = msgs
 
         except KeyboardInterrupt:
             print("\nGoodbye!")
