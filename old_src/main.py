@@ -3,10 +3,9 @@ import argparse
 from dotenv import load_dotenv
 
 # 로컬/상대 임포트 환경에 맞춰 수정해 주세요
-try:
-    from .make_graph import build_graph
-except Exception:
-    from make_graph import build_graph
+
+from src.make_graph import build_graph
+
 
 
 
