@@ -1,4 +1,4 @@
-from typing import Annotated, Any
+from typing import Annotated, Any, Optional
 from typing_extensions import TypedDict
 
 from langgraph.graph import add_messages
@@ -7,8 +7,10 @@ from langchain_core.messages import AnyMessage, HumanMessage, SystemMessage, AIM
 from .prompts import SYS_POLICY, needs_search
 from .llm import llm_with_tools
 
-class State(TypedDict):
+class State(TypedDict, total=False):
     messages: Annotated[list[AnyMessage], add_messages]
+    user_input: str             # 사용자의 현재 입력 (멀티턴용)
+    final_answer: Optional[str] # 응답 텍스트만 따로 저장 (선택)
 
 def chatbot(state: State):
     """Single-agent node that optionally injects SYS_POLICY and search hint."""
@@ -23,3 +25,12 @@ def chatbot(state: State):
 
     response = llm_with_tools.invoke(msgs)
     return {"messages": [response]}
+
+def add_user_message(state: State) -> State:
+    """
+    사용자의 입력(user_input)을 messages에 추가 (멀티턴 구현용)
+    """
+    msgs = state.get("messages", [])
+    msgs.append(HumanMessage(content=state["user_input"]))
+    state["messages"] = msgs
+    return state
