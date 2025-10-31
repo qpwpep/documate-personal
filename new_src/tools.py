@@ -1,12 +1,35 @@
-from dotenv import load_dotenv
+import os
 from typing import Optional
 from pydantic import BaseModel, Field
 from datetime import datetime
 
+from dotenv import load_dotenv, find_dotenv
 from langchain_tavily import TavilySearch
 from langchain_core.tools import StructuredTool
 
-load_dotenv()
+# Load .env deterministically
+load_dotenv(find_dotenv(), override=True)
+
+# Read key and fail fast if missing
+TAVILY_KEY = os.getenv("TAVILY_API_KEY")
+assert TAVILY_KEY, "Missing TAVILY_API_KEY in environment (.env not loaded or key not set)."
+
+default_docs = [
+        "https://docs.python.org/3/",
+        "https://git-scm.com/docs",
+        "https://python.langchain.com/docs",
+        "https://matplotlib.org/stable/api/index.html",
+        "https://numpy.org/doc/stable/",
+        "https://pandas.pydata.org/docs/",
+        "https://docs.pytorch.org/docs/stable/index.html",
+        "https://huggingface.co/docs",
+        "https://fastapi.tiangolo.com/reference/",
+        "https://www.crummy.com/software/BeautifulSoup/bs4/doc/",
+        "https://docs.streamlit.io/",
+        "https://www.gradio.app/docs",
+        "https://scikit-learn.org/stable/api/index.html",
+        "https://docs.pydantic.dev/latest/api/base_model/"
+    ]
 
 # Configure your external tools here
 tavilysearch = TavilySearch(max_results=3)
