@@ -4,6 +4,19 @@ import os
 import uuid
 from dotenv import load_dotenv
 
+# ========== tools를 참조하지 못하여 추가
+import sys
+from pathlib import Path
+# 1. 현재 파일의 부모(web)의 부모(new_src)를 프로젝트 루트로 지정합니다.
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+# 2. 이 경로를 Python 모듈 탐색 경로에 추가합니다.
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from tools import DEFAULT_DOCS
+# =================================
+
 # 챗봇 세션이 시작될 때 고유 ID 생성 (탭이 새로 열릴 때마다 1번 실행)
 if "session_id" not in st.session_state:
     st.session_state.session_id = str(uuid.uuid4())
@@ -43,7 +56,17 @@ def get_agent_response(user_input):
 
 # Streamlit 챗봇 UI 구성
 st.set_page_config(page_title="Agent 챗봇 UI", layout="wide")
-st.title("🤖 FastAPI Agent 챗봇 데모")
+st.title("📚 Docs Agent 챗봇")
+
+docs_list = [f"`{key}`" for key in list(DEFAULT_DOCS.keys())]
+result_string = ", ".join(docs_list)
+
+desc_markdown = f"""
+<span style="font-size: 24px;"> 공식 문서 기반 답변을 제공합니다.</span>
+
+<span style="font-size: 18px;"> 지원 문서 : {result_string}</span>
+"""
+st.markdown(desc_markdown, unsafe_allow_html=True)
 
 # 세션 상태 초기화: 채팅 기록 저장
 if "messages" not in st.session_state:
