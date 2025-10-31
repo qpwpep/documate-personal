@@ -22,8 +22,10 @@ def run_cli():
     from langchain_core.messages import AIMessage
     load_dotenv()
     graph = build_graph()
-
-    history = []  # ✅ keep conversation across turns
+    maybe_save_mermaid_png(graph)
+    
+    # 멀티턴을 위한 전체 메시지 저장 변수
+    messages = []
 
     while True:
         try:
@@ -31,29 +33,36 @@ def run_cli():
             if user_input.lower() in {"quit", "exit", "q"}:
                 print("Goodbye!")
                 break
+            
+            # LangGraph에 멀티턴 상태 전달
+            state = {
+                "user_input": user_input,
+                "messages": messages  # 이전 대화 전달
+            }
 
-            # send history + this turn
-            response = graph.invoke({"messages": history + [HumanMessage(content=user_input)]})
+            response = graph.invoke(state)
+            
+            # 결과 메시지 업데이트
+            messages = response["messages"]
 
-            msgs = response.get("messages", [])
-
-            # Always show final answer
-            last_ai = next((m for m in reversed(msgs) if isinstance(m, AIMessage)), None)
-            if last_ai:
-                print("\n--- Final Answer ---")
-                print(last_ai.content)
+            if VERBOSE:
+                for msg in response["messages"]:
+                    try:
+                        msg.pretty_print()
+                    except Exception:
+                        print(repr(msg))
             else:
-                print("[warn] No AIMessage found in response.")
-
-            # ✅ carry forward for the next turn
-            history = msgs
-
+                # Print the last AI message
+                for m in reversed(messages):
+                    if isinstance(m, AIMessage):
+                        print(m.content)
+                        break
         except KeyboardInterrupt:
             print("\nGoodbye!")
             break
         except Exception as e:
             print("Error:", e)
             break
-        
+
 if __name__ == "__main__":
     run_cli()
