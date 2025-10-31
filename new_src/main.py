@@ -19,6 +19,9 @@ def run_cli():
     load_dotenv()
     graph = build_graph()
     maybe_save_mermaid_png(graph)
+    
+    # 멀티턴을 위한 전체 메시지 저장 변수
+    messages = []
 
     while True:
         try:
@@ -26,8 +29,17 @@ def run_cli():
             if user_input.lower() in {"quit", "exit", "q"}:
                 print("Goodbye!")
                 break
+            
+            # LangGraph에 멀티턴 상태 전달
+            state = {
+                "user_input": user_input,
+                "messages": messages  # 이전 대화 전달
+            }
 
-            response = graph.invoke({"messages": [HumanMessage(content=user_input)]})
+            response = graph.invoke(state)
+            
+            # 결과 메시지 업데이트
+            messages = response["messages"]
 
             if VERBOSE:
                 for msg in response["messages"]:
@@ -37,7 +49,7 @@ def run_cli():
                         print(repr(msg))
             else:
                 # Print the last AI message
-                for m in reversed(response["messages"]):
+                for m in reversed(messages):
                     if isinstance(m, AIMessage):
                         print(m.content)
                         break
