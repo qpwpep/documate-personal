@@ -1,9 +1,12 @@
+print(">>> running main from:", __file__)
+
 import sys
 from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage, AIMessage
 
 from .make_graph import build_graph
 from .llm import VERBOSE
+from .tools import save_text_to_file
 
 def maybe_save_mermaid_png(graph):
     try:
@@ -16,6 +19,7 @@ def maybe_save_mermaid_png(graph):
         pass
 
 def run_cli():
+    from langchain_core.messages import AIMessage
     load_dotenv()
     graph = build_graph()
     maybe_save_mermaid_png(graph)
@@ -25,7 +29,7 @@ def run_cli():
 
     while True:
         try:
-            user_input = input("User: ")
+            user_input = input("User: ").strip()
             if user_input.lower() in {"quit", "exit", "q"}:
                 print("Goodbye!")
                 break
