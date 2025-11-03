@@ -10,3 +10,4 @@ class AgentState(TypedDict, total=False):
     final_answer: Optional[str]                         # 모델이 생성한 최종 응답
     search_needed: Optional[bool]                       # 검색 판단 결과 (툴 선택용)
     search_result: Optional[str]                        # 외부 검색 결과 저장용
+    retriever: Optional[Any]                            # 임시 Chroma 리트리버 저장용
