@@ -22,7 +22,6 @@ dependencies = [
     "seaborn>=0.13.2",
     "streamlit>=1.50.0",
     "streamlit-chat>=0.1.1",
-    "torch>=2.9.0",
     "transformers>=4.57.1",
     "uvicorn>=0.38.0",
 ]
