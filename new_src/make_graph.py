@@ -1,26 +1,32 @@
 from langgraph.graph import StateGraph, START, END
+from langgraph.prebuilt import ToolNode, tools_condition
 
 from .node import State, chatbot, add_user_message
-from .tools import tavilysearch
+from .tools import tavilysearch, save_text_tool
 from .edge import wire_tool_edges
+
 
 def build_graph():
     # LangGraph 생성 (State 구조 기반)
     builder = StateGraph(State)
-    
+
     # 사용자 입력을 messages에 추가하는 노드 등록
     builder.add_node("add_user_message", add_user_message)
-    builder.set_entry_point("add_user_message") # START → add_user_message
+    builder.set_entry_point("add_user_message")  # START → add_user_message
 
     # GPT 응답 생성 노드 등록
     builder.add_node("chatbot", chatbot)
     builder.add_edge("add_user_message", "chatbot")
 
-    # 툴 분기 조건 및 웹 검색 연동
-    wire_tool_edges(builder, tavily_tool=tavilysearch)
+    # ✅ 단일 ToolNode에 두 툴(tavilysearch, save_text_tool)을 모두 연결
+    tool_node = ToolNode(tools=[tavilysearch, save_text_tool])
+    builder.add_node("tools", tool_node)
 
-    # 종료 설정
-    builder.add_edge("chatbot", END)
+    # 모델이 툴 호출이 필요하면 tools로, 아니면 종료
+    builder.add_conditional_edges("chatbot", tools_condition, {"tools": "tools", END: END})
+
+    # 툴 실행 후에는 다시 chatbot으로
+    builder.add_edge("tools", "chatbot")
 
     # LangGraph 앱 완성
-    return builder.compile()    
+    return builder.compile()
