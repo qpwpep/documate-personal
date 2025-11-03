@@ -9,3 +9,5 @@ class AgentRequest(BaseModel):
 class AgentResponse(BaseModel):
     response: str
     trace: str # 출력 확인용
+
+    file_path: str | None = None # 파일이 생성된 경우, 해당 파일 경로

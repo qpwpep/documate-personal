@@ -44,15 +44,62 @@ def get_agent_response(user_input):
 
         # 응답 상태 코드 확인
         if response.status_code == 200:
-            print(f"debug >> response : {response.json().get("response", "FastAPI에서 응답을 받았습니다.")}")
-            return response.json().get("response", "FastAPI에서 응답을 받았습니다.")
+            json = response.json()
+            return json.get("response"), json.get("file_path")
+            # print(f"debug >> response : {response.json().get("response", "FastAPI에서 응답을 받았습니다.")}")
+            # return response.json().get("response", "FastAPI에서 응답을 받았습니다.")
         else:
-            return f"Agent 호출 실패: 상태 코드 {response.status_code}. 응답: {response.text}"
-
+            return f"Agent 호출 실패: 상태 코드 {response.status_code}. 응답: {response.text}", None
+            
     except requests.exceptions.ConnectionError:
-        return "FastAPI 서버에 연결할 수 없습니다. 서버(8000번 포트)가 실행 중인지 확인하세요."
+        return "FastAPI 서버에 연결할 수 없습니다. 서버(8000번 포트)가 실행 중인지 확인하세요.", None
     except Exception as e:
-        return f"요청 중 예기치 않은 오류 발생: {e}"
+        return f"요청 중 예기치 않은 오류 발생: {e}", None
+
+
+# def display_agent_response(final_answer, response_file_path, is_new_message=False):
+#     """
+#     Agent 응답 딕셔너리를 받아 메시지를 출력하고 파일 경로가 있으면 다운로드 버튼을 표시합니다.
+#     """
+    
+#     # 딕셔너리에서 안전하게 값 추출 (값이 없으면 기본값 사용)
+#     final_answer = final_answer
+#     file_path = response_file_path
+#     print(f"debug >> final_answer : {final_answer}")
+#     print(f"debug >> file_path : {file_path}")
+
+#     # 1. AI 응답을 세션 상태에 추가 (새 메시지인 경우에만)
+#     if is_new_message:
+#         st.session_state.messages.append({"role": "assistant", "content": final_answer, "file_path": file_path})
+
+#     # 2. AI 응답 출력
+#     with st.chat_message("assistant"):
+#         st.markdown(final_answer)
+#         print(f"debug >> assistant 메시지")
+#         # for file_path in full_file_paths:
+#         # 3. 파일 경로가 있을 경우 다운로드 버튼 생성 (AI 메시지 아래에 표시)
+#         if file_path and os.path.exists(file_path):
+#             print(f"debug >> 파일 있음")
+#             # 파일 경로에서 파일 이름(filename)만 추출합니다.
+#             filename = os.path.basename(file_path)
+
+#             # FastAPI 다운로드 엔드포인트 URL 생성
+#             download_url = f"{FASTAPI_URL}/download/{filename}"
+            
+#             st.markdown("---")
+#             st.info(f"💾 **파일 저장 완료:** {filename}")
+
+#             # Streamlit 마크다운의 링크 버튼을 사용하여 다운로드 링크 제공
+#             st.markdown(
+#                 f'<a href="{download_url}" target="_blank" download="{filename}">'
+#                 f'<button style="background-color: #4CAF50; color: white; padding: 10px 24px; border: none; border-radius: 8px; cursor: pointer; font-size: 16px;">'
+#                 f'⬇️ 파일 다운로드 ({filename})'
+#                 f'</button></a>',
+#                 unsafe_allow_html=True
+#             )
+#         else:
+#             print(f"debug >> 파일 없음")
+
 
 # Streamlit 챗봇 UI 구성
 st.set_page_config(page_title="Agent 챗봇 UI", layout="wide")
@@ -70,25 +117,83 @@ st.markdown(desc_markdown, unsafe_allow_html=True)
 
 # 세션 상태 초기화: 채팅 기록 저장
 if "messages" not in st.session_state:
-    st.session_state["messages"] = [{"role": "assistant", "content": "안녕하세요! 질문을 입력해주세요."}]
+    st.session_state["messages"] = [{"role": "assistant", "content": "안녕하세요! 질문을 입력해주세요.", "file_path": ""}]
 
-# 기존 채팅 메시지 표시
+# # 기존 채팅 메시지 표시
+# for message in st.session_state.messages:
+#     with st.chat_message(message["role"]):
+#         # 기록된 답변 메시지 중 file_path가 설정되어 있다면
+#         if message["role"] == "assistant" and message.get("file_path", ""):
+#             final_answer = message.get("content", "")
+#             full_file_path = message.get("file_path", "")
+#             display_agent_response(final_answer, full_file_path, False)
+#         else:
+#             st.markdown(message["content"])
+        
+
+# # 사용자 입력 처리
+# if prompt := st.chat_input("여기에 질문을 입력하세요..."):
+#     # 1) 사용자 메시지를 세션 상태에 추가하고 화면에 표시
+#     st.session_state.messages.append({"role": "user", "content": prompt})
+#     with st.chat_message("user"):
+#         st.markdown(prompt)
+
+#     # 2) Agent 응답 생성
+#     with st.spinner("Agent가 생각 중입니다..."):
+#         agent_response, agent_file_path = get_agent_response(prompt)
+    
+#     display_agent_response(agent_response, agent_file_path, True)
+
+
+
 for message in st.session_state.messages:
+    # 1. 채팅 메시지 출력 (아이콘은 여기서 한 번만 그려집니다)
     with st.chat_message(message["role"]):
-        st.markdown(message["content"])
+        st.markdown(message["content"]) 
+        
+        # 2. 파일 다운로드 버튼 표시 (오직 'assistant' 메시지에 대해)
+        file_path = message.get("file_path", "")
+        
+        if message["role"] == "assistant" and file_path and os.path.exists(file_path):
+            
+            filename = os.path.basename(file_path)
+            download_url = f"{FASTAPI_URL}/download/{filename}"
+            
+            # UI 출력
+            st.markdown("---")
+            st.info(f"💾 **파일 저장 완료:** `{filename}`")
 
-# 사용자 입력 처리
+            st.markdown(
+                f'<a href="{download_url}" target="_blank" download="{filename}">'
+                f'<button style="background-color: #4CAF50; color: white; padding: 10px 24px; border: none; border-radius: 8px; cursor: pointer; font-size: 16px; width: 100%;">'
+                f'⬇️ 파일 다운로드 ({filename})'
+                f'</button></a>',
+                unsafe_allow_html=True
+            )
+        
+# ----------------------------------------------------
+# 5. 사용자 입력 처리 및 세션 상태 업데이트
+# ----------------------------------------------------
 if prompt := st.chat_input("여기에 질문을 입력하세요..."):
-    # 1) 사용자 메시지를 세션 상태에 추가하고 화면에 표시
-    st.session_state.messages.append({"role": "user", "content": prompt})
+    # 1. 사용자 메시지를 세션 상태에 추가
+    st.session_state.messages.append({"role": "user", "content": prompt, "file_path": ""}) 
+
+    # 2. 사용자가 입력한 메시지를 스피너가 돌기 전에 즉시 화면에 표시합니다.
     with st.chat_message("user"):
         st.markdown(prompt)
 
-    # 2) Agent 응답 생성
+    # 3. Agent 응답 생성
     with st.spinner("Agent가 생각 중입니다..."):
-        agent_response = get_agent_response(prompt)
-
-    # 3) Agent 응답을 세션 상태에 추가하고 화면에 표시
-    st.session_state.messages.append({"role": "assistant", "content": agent_response})
-    with st.chat_message("assistant"):
-        st.markdown(agent_response)
+        # 응답 텍스트와 파일 경로를 받습니다.
+        agent_response_content, agent_file_path = get_agent_response(prompt)
+    
+    # 4. 새로운 Assistant 메시지를 세션에 추가
+    # 이 메시지에 파일 경로 데이터를 저장합니다.
+    st.session_state.messages.append({
+        "role": "assistant", 
+        "content": agent_response_content, 
+        "file_path": agent_file_path 
+    })
+    
+    # 5. UI를 새로고침하여 새로 추가된 메시지와 버튼을 표시
+    st.rerun()
