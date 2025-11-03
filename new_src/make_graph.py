@@ -2,7 +2,7 @@ from langgraph.graph import StateGraph, START, END
 from langgraph.prebuilt import ToolNode, tools_condition
 
 from .node import State, chatbot, add_user_message
-from .tools import tavilysearch, save_text_tool
+from .tools import tavilysearch, rag_search_tool, save_text_tool
 from .edge import wire_tool_edges
 
 
@@ -18,8 +18,8 @@ def build_graph():
     builder.add_node("chatbot", chatbot)
     builder.add_edge("add_user_message", "chatbot")
 
-    # ✅ 단일 ToolNode에 두 툴(tavilysearch, save_text_tool)을 모두 연결
-    tool_node = ToolNode(tools=[tavilysearch, save_text_tool])
+    # ✅ 세 개의 툴(TavilySearch, RAGSearch, SaveText)을 단일 ToolNode에 연결
+    tool_node = ToolNode(tools=[tavilysearch, rag_search_tool, save_text_tool])
     builder.add_node("tools", tool_node)
 
     # 모델이 툴 호출이 필요하면 tools로, 아니면 종료
