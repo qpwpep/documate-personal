@@ -276,3 +276,7 @@ data/*
 # End of https://www.toptal.com/developers/gitignore/api/windows,macos,linux,visualstudiocode,python
 
 *.txt
+
+# uploaded user files (do not commit)
+uploads*
+!uploads/.gitkeep
