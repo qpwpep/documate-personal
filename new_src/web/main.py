@@ -1,7 +1,8 @@
 import os
 import uuid
 import logging
-
+import shutil
+from pathlib import Path
 from fastapi import FastAPI, Depends, Request, HTTPException
 from fastapi.responses import FileResponse
 
@@ -15,6 +16,24 @@ app = FastAPI()
 # 인메모리 세션 저장소 (Global Cache) 정의
 # Key: session_id (str), Value: AgentFlowManager 인스턴스
 active_agents: dict[str, 'AgentFlowManager'] = {}
+
+# ====== FastAPI 재시작 시 기존에 생성된 uploads 폴더 제거
+UPLOAD_DIR = Path("uploads")
+
+@app.on_event("startup")
+def cleanup_upload_folder():
+    """서버 시작 시 기존 uploads 폴더 정리"""
+    if UPLOAD_DIR.exists():
+        try:
+            shutil.rmtree(UPLOAD_DIR)  # 폴더 전체 삭제
+            print(f"[INIT] '{UPLOAD_DIR}' 폴더를 삭제했습니다.")
+        except Exception as e:
+            print(f"[ERROR] uploads 폴더 삭제 실패: {e}")
+
+    # 새 폴더 생성
+    UPLOAD_DIR.mkdir(exist_ok=True)
+    print(f"[INIT] '{UPLOAD_DIR}' 폴더를 새로 생성했습니다.")
+# =================================
 
 @app.get("/")
 async def root():
@@ -60,6 +79,8 @@ async def run_agent_api(
     
     user_query = request_data.query
     session_id = request_data.session_id
+    upload_file_path = request_data.upload_file_path
+    logger.info(f"[upload_file_path] : {str(upload_file_path)}")
 
     # session_id 기준으로 하나의 agent_manager를 생성하여 사용
     agent_manager = _get_or_create_agent(session_id)
@@ -68,9 +89,9 @@ async def run_agent_api(
     logger.info(f"Session ID: {session_id[:8]} | [REQ ID: {request_id}] | Agent Object ID: {id(agent_manager)} | Query: '{user_query[:20]}...'")
 
     # agent_manager > run_agent_flow 메서드를 호출
-    agent_answer = agent_manager.run_agent_flow(user_query)    
+    agent_answer = agent_manager.run_agent_flow(user_query, upload_file_path)    
 
-    logger.info(f"agent_answer : {agent_answer}")
+    # logger.info(f"agent_answer : {agent_answer}")
 
     answer = agent_answer.get("message")
     file_path = agent_answer.get("filepath", "")

@@ -1,8 +1,9 @@
 import os
 import json
-from typing import List, Any, Dict
+from typing import List, Any, Dict, Optional
 from langchain_core.messages import AIMessage, ToolMessage, HumanMessage
 from .graph_builder import build_agent_graph
+from .upload_helpers import build_temp_retriever
 
 # Agent Logic 클래스 정의 (build_graph, 멀티턴 messages 관리)
 class AgentFlowManager:
@@ -14,13 +15,10 @@ class AgentFlowManager:
         self.graph = build_agent_graph()
         # 멀티턴 상태 저장을 위한 변수
         self.messages: List[Any] = []
-
-    def run_agent_flow(self, user_input: str) -> dict:
+    
+    def run_agent_flow(self, user_input: str, upload_file_path: Optional[str] = None) -> dict:
 
         current_messages = self.messages
-
-        # TODO: retriver 처리 필요
-        retriever = None # session_state.get("retriever")
 
         # 종료 명령어 처리
         if user_input.lower() in {"exit", "종료", "quit", "q"}:
@@ -32,8 +30,12 @@ class AgentFlowManager:
             state = {
                 "user_input": user_input,
                 "messages": current_messages, # 이전 대화 상태 전달
-                "retriever": retriever,
             }
+            
+            if upload_file_path is not None:
+                # upload_file_path 가 설정되어 있다면, 이 경로 기준으로 retriever 생성
+                retriever = build_temp_retriever(upload_file_path)
+                state["retriever"] = retriever
 
             # LangGraph 실행
             response = self.graph.invoke(state)
