@@ -41,41 +41,91 @@ def _resolve_user_id(user_id: str | None, email: str | None) -> str | None:
             logger.error(f"fallback lookupByEmail failed: {e}")
     return None
 
-def send_slack_dm(text: str, user_id: str | None = None, email: str | None = None) -> None:
+def _open_dm_channel(user_id: str) -> str | None:
     """
-    Slack 메시지를 DM 또는 채널로 자동 전송.
-    - Uxxxx → 개인 DM
-    - Cxxxx → 공개 채널
-    - Gxxxx → private 채널
-    - email → lookupByEmail로 Uxxxx 찾기
+    Slack DM 채널(Dxxxx)을 연 뒤 채널 ID를 반환합니다.
+    """
+    if not slack_client:
+        return None
+    try:
+        # Slack Web API: conversations.open(users=Uxxxx)
+        r = slack_client.conversations_open(users=user_id)
+        return r["channel"]["id"]  # Dxxxx...
+    except SlackApiError as e:
+        logger.error(f"conversations.open failed for {user_id}: {e.response.get('error')}")
+        return None
+
+
+def send_slack_message(
+    text: str,
+    user_id: str | None = None,
+    email: str | None = None,
+    channel_id: str | None = None,
+    target: str = "auto",  # auto / dm / channel / group
+) -> None:
+    """
+    Slack 메시지 전송 (DM/채널/그룹 안전 판별)
+    - DM: 반드시 Dxxxx 채널로 전송 (user Uxxxx → conversations.open → Dxxxx)
+    - Channel: Cxxxx (public), Gxxxx (private)
     """
     if not slack_client:
         logger.warning("⚠️ SLACK_BOT_TOKEN 미설정: 메시지 전송 스킵")
         return
 
-    # user_id 우선순위 확인
-    uid = _resolve_user_id(user_id, email)
+    resolved_id = None
+    target_type = "Unknown"
 
-    if not uid:
-        logger.warning("⚠️ Slack 사용자 ID를 찾지 못해 메시지 전송 스킵")
+    # 0) 명시 채널 우선 (C/G/D 모두 허용)
+    if channel_id:
+        resolved_id = channel_id
+        if resolved_id.startswith("D"):
+            target_type = "DM"
+        elif resolved_id.startswith("C"):
+            target_type = "Public Channel"
+        elif resolved_id.startswith("G"):
+            target_type = "Private Channel"
+        else:
+            target_type = "Unknown Channel"
+
+    # 1) user 또는 email 이면 → 반드시 DM 채널 열기
+    if not resolved_id and (user_id or email):
+        uid = _resolve_user_id(user_id, email)  # Uxxxx (또는 이미 Uxxxx일 수 있음)
+        if uid and uid.startswith("U"):
+            dm_id = _open_dm_channel(uid)  # Dxxxx
+            if dm_id:
+                resolved_id = dm_id
+                target_type = "DM"
+
+    # 2) .env fallback (기본 DM 대상)
+    if not resolved_id:
+        uid = _resolve_user_id(None, None)
+        if uid and uid.startswith("U"):
+            dm_id = _open_dm_channel(uid)
+            if dm_id:
+                resolved_id = dm_id
+                target_type = "DM"
+
+    if not resolved_id:
+        logger.warning("⚠️ Slack 대상 ID를 찾지 못해 메시지 전송 스킵")
         return
 
-    # ===== 대상 판별 =====
-    if uid.startswith("U"):
-        target_type = "DM"
-    elif uid.startswith("C"):
-        target_type = "Public Channel"
-    elif uid.startswith("G"):
-        target_type = "Private Channel"
-    else:
-        target_type = "Unknown"
-        logger.warning(f"⚠️ Slack ID 형식을 판별할 수 없습니다: {uid}")
-    
+    # 3) target 강제 옵션 (채널/그룹 강제 시 유효성 체크)
+    if target == "channel" and not resolved_id.startswith(("C", "G")):
+        logger.warning("⚠️ target='channel'이지만 DM ID가 선택됨. C/G 채널 ID를 channel_id로 직접 넘기세요.")
+    if target == "group" and not resolved_id.startswith("G"):
+        logger.warning("⚠️ target='group'이지만 선택된 ID가 G가 아님. G 채널 ID를 channel_id로 넘기세요.")
+    if target == "dm" and not resolved_id.startswith("D"):
+        logger.warning("⚠️ target='dm'이지만 DM 채널이 아님. user_id/email로 다시 호출하세요.")
+        # 가능하면 강제로 DM 전환 시도 (C/G/D가 아닌 경우)
+        # 여기서는 경고만 하고 진행하지 않음.
+
+    # 4) 실제 전송
     try:
-        slack_client.chat_postMessage(channel=uid, text=text)
-        logger.info(f"✅ Slack {target_type} 전송 성공 → {uid}")
+        slack_client.chat_postMessage(channel=resolved_id, text=text)
+        logger.info(f"✅ Slack {target_type} 전송 성공 → {resolved_id}")
     except SlackApiError as e:
-        logger.error(f"❌ Slack {target_type} 전송 실패 ({uid}): {e.response['error']}")
+        logger.error(f"❌ Slack {target_type} 전송 실패 ({resolved_id}): {e.response.get('error')}")
+
 
 # 인메모리 세션 저장소 (Global Cache) 정의
 # Key: session_id (str), Value: AgentFlowManager 인스턴스
@@ -138,11 +188,12 @@ async def run_agent_api(
     file_path = agent_answer.get("filepath", "")
 
     if answer:
-        send_slack_dm(
-            text=answer,
-            user_id=request_data.slack_user_id,
-            email=request_data.slack_email,
-        )    
+        send_slack_message(
+        text=answer,
+        user_id=request_data.slack_user_id,
+        email=request_data.slack_email,
+        target="auto"   # auto / dm / channel / group 선택 가능
+    )
 
     logger.info(f"agent_answer : {agent_answer}")
     
