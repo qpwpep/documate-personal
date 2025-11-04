@@ -15,4 +15,4 @@ llm = ChatOpenAI(model="gpt-4.1-mini")
 llm_with_tools = llm.bind_tools(tools)
 
 # Verbosity flag used by main loop
-VERBOSE = False
+VERBOSE = True
