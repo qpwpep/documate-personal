@@ -12,6 +12,8 @@ from langchain_core.tools import StructuredTool
 from langchain_openai import OpenAIEmbeddings
 from langchain_chroma import Chroma
 
+from new_src.util.util import get_save_text_output_dir 
+
 # ─────────────────────────────────────────────
 # 1. Environment setup
 # ─────────────────────────────────────────────
@@ -51,14 +53,29 @@ tavilysearch = TavilySearch(
 # ─────────────────────────────────────────────
 # 3. Save-to-text tool
 # ─────────────────────────────────────────────
-def save_text_to_file(content: str, filename_prefix: str = "response") -> str:
-    """Save text content to a timestamped .txt file and return the file path message."""
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"{filename_prefix}_{ts}.txt"
-    with open(filename, "w", encoding="utf-8") as f:
-        f.write(content)
-    return f"Saved output to {filename}"
+def save_text_to_file(content: str, filename_prefix: str = "response") -> dict:
+    try:
+        """Save text content to a timestamped .txt file and return the file path message."""
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        
+        output_path = get_save_text_output_dir()
+        os.makedirs(output_path, exist_ok=True)
+        filename = f"{filename_prefix}_{ts}.txt"
+        filepath = os.path.join(output_path, filename)
+        with open(filepath, "w", encoding="utf-8") as f:
+            f.write(content)
+        
+        return {
+            "message": f"Saved output to {filename}",
+            "file_path": filepath  # 파일의 절대 경로
+        }
+    
+    except Exception as e:
+        raise RuntimeError(f"Failed to save file: {e}")
 
+# LLM (Agent)이 툴을 호출할 때 넘겨줘야 하는 입력 인자를 정의
+# save_text_to_file > args_schema
+# Pydantic schema so the LLM can pass structured args
 class SaveArgs(BaseModel):
     content: str = Field(description="The exact final response text to write into the .txt file.")
     filename_prefix: Optional[str] = Field(
