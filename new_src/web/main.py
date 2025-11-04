@@ -7,12 +7,14 @@ from fastapi.responses import FileResponse
 
 from .schemas import AgentRequest, AgentResponse
 from ..agent_manager import AgentFlowManager
-from ..graph_builder import build_agent_graph
-
 from ..util.util import get_save_text_output_dir
 
 logger = logging.getLogger("uvicorn")
 app = FastAPI()
+
+# 인메모리 세션 저장소 (Global Cache) 정의
+# Key: session_id (str), Value: AgentFlowManager 인스턴스
+active_agents: dict[str, 'AgentFlowManager'] = {}
 
 @app.get("/")
 async def root():
@@ -30,18 +32,21 @@ async def add_request_id(request: Request, call_next):
     return response
 
 
-# 의존성 함수 정의: 요청 시마다 새로운 Agent 객체 생성 (새로운 브라우저에서 요청 시 동일한 객체를 사용하지 않기 위함)
-def get_new_agent_manager():
-    """요청이 들어올 때마다 새로운 AgentFlowManager 객체를 생성 및 반환합니다."""
-    return AgentFlowManager(app.state.langgraph)
-
-
-@app.on_event("startup")
-async def startup_event():
-    """서버 시작 시점에 build_agent_graph를 실행하여 단 한 번 할당"""
+#AgentFlowManager 인스턴스를 가져오거나 생성
+def _get_or_create_agent(session_id: str) -> AgentFlowManager:
+    """세션 ID에 해당하는 AgentManager 인스턴스를 반환합니다. 없으면 새로 생성합니다."""
     
-    app.state.langgraph = build_agent_graph()
-    logger.info(f"[startup] LangGraph 할당 완료. ID: {id(app.state.langgraph)}")
+    if session_id not in active_agents:
+        # AgentManager가 없으면 새로 생성 후 저장
+        agent = AgentFlowManager()
+        active_agents[session_id] = agent
+        logger.info(f"✅ AgentManager 저장됨: {session_id[:8]}")
+    else:
+        # AgentManager가 이미 있으면 기존 인스턴스를 가져옴
+        agent = active_agents[session_id]
+        logger.info(f"♻️ 기존 AgentManager 재사용: {session_id[:8]}")
+        
+    return agent
 
 
 # http://localhost:8000/agent
@@ -49,7 +54,6 @@ async def startup_event():
 async def run_agent_api(
     request: Request,
     request_data: AgentRequest,
-    agent_manager: AgentFlowManager = Depends(get_new_agent_manager) # 의존성 주입(DI)
 ):
     # 미들웨어에서 할당한 request 고유 ID를 가져옵니다.
     request_id = request.state.request_id[:8]
@@ -57,11 +61,14 @@ async def run_agent_api(
     user_query = request_data.query
     session_id = request_data.session_id
 
+    # session_id 기준으로 하나의 agent_manager를 생성하여 사용
+    agent_manager = _get_or_create_agent(session_id)
+
     # Agent 객체의 메모리 주소와 요청 ID를 로그에 출력
     logger.info(f"Session ID: {session_id[:8]} | [REQ ID: {request_id}] | Agent Object ID: {id(agent_manager)} | Query: '{user_query[:20]}...'")
 
-    # 주입받은 agent_manager > run_agent_flow 메서드를 호출
-    agent_answer = agent_manager.run_agent_flow(user_query, session_id=session_id)    
+    # agent_manager > run_agent_flow 메서드를 호출
+    agent_answer = agent_manager.run_agent_flow(user_query)    
 
     logger.info(f"agent_answer : {agent_answer}")
 
