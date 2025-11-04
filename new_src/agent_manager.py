@@ -22,10 +22,13 @@ class AgentFlowManager:
         # 상태 로드: CLI와 웹 모드 분기 처리
         if session_id:
             # 웹 모드: SESSION_CACHE에서 해당 ID의 상태를 로드 (없으면 []로 초기화)
-            current_messages = SESSION_CACHE.get(session_id, [])
+            session_state = SESSION_CACHE.get(session_id, {})
+            current_messages = session_state.get("messages", [])
+            retriever = session_state.get("retriever")
         else:
             # CLI 모드: 객체 내부의 self.messages 상태를 사용
             current_messages = self.messages
+            retriever = None
         
         # 종료 명령어 처리 (CLI와 웹 모두에서 세션 초기화 기능)
         if user_input.lower() in {"exit", "종료", "quit", "q"}:
@@ -39,7 +42,8 @@ class AgentFlowManager:
             # LangGraph에 멀티턴 상태 전달
             state = {
                 "user_input": user_input,
-                "messages": current_messages  # 이전 대화 상태 전달
+                "messages": current_messages, # 이전 대화 상태 전달
+                "retriever": retriever,
             }
 
             # LangGraph 실행
