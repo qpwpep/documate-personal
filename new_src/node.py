@@ -7,6 +7,9 @@ from langchain_core.messages import AnyMessage, HumanMessage, SystemMessage, AIM
 from .prompts import SYS_POLICY, needs_search, needs_save, needs_rag
 from .llm import llm_with_tools, VERBOSE
 
+# # FastAPI 실행 상태에서 로그 확인을 위해 추가
+# import logging
+# logger = logging.getLogger("uvicorn")
 
 class State(TypedDict, total=False):
     messages: Annotated[list[AnyMessage], add_messages]
@@ -34,7 +37,8 @@ def _inject_uploaded_context_if_any(state: State, msgs: list[AnyMessage]) -> lis
         return msgs
 
     try:
-        docs = retriever.get_relevant_documents(last_user.content)
+        # docs = retriever.get_relevant_documents(last_user.content) 
+        docs = retriever.invoke(last_user.content) # 최신 버전에서는 invoke 사용
         if not docs:
             return msgs
         lines = []
@@ -46,7 +50,9 @@ def _inject_uploaded_context_if_any(state: State, msgs: list[AnyMessage]) -> lis
             lines.append(f"- {snippet}\n  [◆ 업로드 파일] {src}")
         context_block = "아래는 사용자가 업로드한 파일에서 검색된 관련 구문입니다. 가능한 한 이를 우선 참고해 답변하세요:\n" + "\n".join(lines)
         msgs = msgs + [SystemMessage(content=context_block)]
-    except Exception:
+    except Exception as e:
+        # logger.info(f"[test] exception: {e}")
+        print(f"[test] exception: {e}")
         pass
     return msgs
 

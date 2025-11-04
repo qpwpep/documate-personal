@@ -5,6 +5,8 @@ class AgentRequest(BaseModel):
     query: str
     session_id: str # 클라이언트가 생성하여 전송해야 하는 고유 세션 ID (멀티턴 처리 시 사용)
 
+    upload_file_path: str | None = None # 업로드한 파일 경로
+
 # 출력 모델
 class AgentResponse(BaseModel):
     response: str
