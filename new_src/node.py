@@ -4,24 +4,53 @@ from typing_extensions import TypedDict
 from langgraph.graph import add_messages
 from langchain_core.messages import AnyMessage, HumanMessage, SystemMessage, AIMessage, ToolMessage, BaseMessage
 
-from .prompts import SYS_POLICY, needs_search, needs_save
+from .prompts import SYS_POLICY, needs_search, needs_save, needs_rag
 from .llm import llm_with_tools, VERBOSE
+
 
 class State(TypedDict, total=False):
     messages: Annotated[list[AnyMessage], add_messages]
-    user_input: str             # 사용자의 현재 입력 (멀티턴용)
-    final_answer: Optional[str] # 응답 텍스트만 따로 저장 (선택)
+    user_input: str
+    final_answer: Optional[str]
+    retriever: Optional[Any]
+
 
 SAVE_HINT = "(사용자가 응답 저장을 요청했습니다. 최종 '응답 전문'을 content에 담아 'save_text' 도구를 한 번만 호출하세요.)"
 SEARCH_HINT = "(이 질문은 공식/최신 문서 검색이 필요합니다. 'tavilysearch' 도구를 먼저 사용하세요.)"
+RAG_HINT = "(이 요청은 로컬 노트북/예제 기반 지식 검색이 필요합니다. 'rag_search' 도구를 사용하세요.)"
+
 
 def _has_hint(msgs, marker: str) -> bool:
     return any(isinstance(m, SystemMessage) and marker in m.content for m in msgs)
 
+def _inject_uploaded_context_if_any(state: State, msgs: list[AnyMessage]) -> list[AnyMessage]:
+    """If a session retriever exists, fetch short snippets for the last user query and inject as context."""
+    retriever = state.get("retriever")
+    if not retriever:
+        return msgs
+
+    last_user = next((m for m in reversed(msgs) if isinstance(m, HumanMessage)), None)
+    if not last_user or not last_user.content.strip():
+        return msgs
+
+    try:
+        docs = retriever.get_relevant_documents(last_user.content)
+        if not docs:
+            return msgs
+        lines = []
+        for d in docs[:4]:
+            src = d.metadata.get("source", "uploaded")
+            snippet = (d.page_content or "").strip().replace("\n", " ")
+            if len(snippet) > 500:
+                snippet = snippet[:500] + " …"
+            lines.append(f"- {snippet}\n  [◆ 업로드 파일] {src}")
+        context_block = "아래는 사용자가 업로드한 파일에서 검색된 관련 구문입니다. 가능한 한 이를 우선 참고해 답변하세요:\n" + "\n".join(lines)
+        msgs = msgs + [SystemMessage(content=context_block)]
+    except Exception:
+        pass
+    return msgs
+
 def add_user_message(state: State) -> State:
-    """
-    사용자의 입력(user_input)을 messages에 추가 (멀티턴 구현용)
-    """
     msgs = state.get("messages", [])
     msgs.append(HumanMessage(content=state["user_input"]))
     state["messages"] = msgs
@@ -41,7 +70,8 @@ def _keep_recent_messages(messages: List[BaseMessage], max_turns: int = 6) -> Li
     return messages[-window_size:]
 
 def chatbot(state: State):
-    msgs = state["messages"]
+    # ✅ Be defensive
+    msgs = state.get("messages", [])
     
     # 모델 입력용 복사본 생성
     model_msgs: List[BaseMessage] = list(msgs)
@@ -59,13 +89,14 @@ def chatbot(state: State):
 
     # Look at the most recent user message (트리밍 이후 기준으로 판단)
     last_user = next((m for m in reversed(model_msgs) if isinstance(m, HumanMessage)), None)
-
-    # Heuristics: add gentle hints to steer tool decisions
-    if last_user and needs_search(last_user.content) and not _has_hint(model_msgs, SEARCH_HINT):
-        model_msgs.append(SystemMessage(content=SEARCH_HINT))
-
-    if last_user and needs_save(last_user.content) and not _has_hint(model_msgs, SAVE_HINT):
-        model_msgs.append(SystemMessage(content=SAVE_HINT))
+    if last_user:
+        content = last_user.content
+        if needs_search(content) and not _has_hint(model_msgs, SEARCH_HINT):
+            model_msgs.append(SystemMessage(content=SEARCH_HINT))
+        if needs_rag(content) and not _has_hint(model_msgs, RAG_HINT):
+            model_msgs.append(SystemMessage(content=RAG_HINT))
+        if needs_save(content) and not _has_hint(model_msgs, SAVE_HINT):
+            model_msgs.append(SystemMessage(content=SAVE_HINT))
 
     # If we just ran save_text, force the model to ACK and STOP (no more save_text)
     if model_msgs and isinstance(model_msgs[-1], ToolMessage) and getattr(model_msgs[-1], "name", "") == "save_text":
@@ -76,7 +107,15 @@ def chatbot(state: State):
             )
         ))
 
+    model_msgs = _inject_uploaded_context_if_any(state, model_msgs)
+
     # invoke에는 잘라낸 입력 복사본(model_msgs)을 사용, 원본 msgs는 그대로 보존
     response: AIMessage = llm_with_tools.invoke(model_msgs)
     return {"messages": [response]}
 
+    # upload branch
+    # # Call the tool-enabled LLM
+    # ai = llm_with_tools.invoke(msgs)
+
+    # # ✅ Preserve full history (append the AI message)
+    # return {"messages": msgs + [ai]}
