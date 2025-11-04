@@ -4,6 +4,12 @@ import os
 import uuid
 from dotenv import load_dotenv
 
+with st.sidebar:
+    st.subheader("Slack DM 옵션")
+    use_dm = st.checkbox("답변을 Slack DM으로도 보내기", value=False)
+    slack_user_id = st.text_input("Slack User ID (U...)", value="")
+    slack_email = st.text_input("Slack Email", value="")
+
 # ========== tools를 참조하지 못하여 추가
 import sys
 from pathlib import Path
@@ -27,34 +33,45 @@ load_dotenv()
 FASTAPI_URL = os.environ.get("FASTAPI_URL")
 
 # FastAPI Agent API 호출 함수
-def get_agent_response(user_input):
-    """FastAPI의 /agent 엔드포인트에 요청을 보내고 응답을 받습니다."""
+def get_agent_response(user_input: str):
+    """
+    FastAPI /agent 엔드포인트에 요청을 보내고,
+    (옵션) Slack DM 전송을 위해 slack_user_id / slack_email을 함께 전달합니다.
+    """
     endpoint = f"{FASTAPI_URL}/agent"
-    print(f"debug >> user_input : {user_input}")
-    try:
-        # FastAPI 서버로 POST 요청 전송
-        response = requests.post(
-            endpoint,
-            json={
-                "query": user_input,
-                "session_id": st.session_state.session_id,
-                }, # AgentRequest
-            timeout=60 # 응답 대기 시간을 60초로 설정
-        )
 
-        # 응답 상태 코드 확인
-        if response.status_code == 200:
-            json = response.json()
-            return json.get("response"), json.get("file_path")
-            # print(f"debug >> response : {response.json().get("response", "FastAPI에서 응답을 받았습니다.")}")
-            # return response.json().get("response", "FastAPI에서 응답을 받았습니다.")
+    # 기본 payload
+    payload = {
+        "query": user_input,
+        "session_id": st.session_state.session_id,
+    }
+
+    # DM 옵션이 켜져 있을 때만 DM 관련 필드를 포함
+    if use_dm:
+        if slack_user_id:
+            payload["slack_user_id"] = slack_user_id
+        if slack_email:
+            payload["slack_email"] = slack_email
+
+    try:
+        # ✅ payload를 일관되게 사용 (중복/재요청 제거)
+        resp = requests.post(endpoint, json=payload, timeout=60)
+
+        if resp.status_code == 200:
+            data = resp.json()
+            # FastAPI의 응답 스키마에 맞춰 안전하게 접근
+            return data.get("response", ""), data.get("file_path")
         else:
-            return f"Agent 호출 실패: 상태 코드 {response.status_code}. 응답: {response.text}", None
-            
+            # 서버가 에러를 반환한 경우 메시지 표시
+            return (f"Agent 호출 실패: 상태 코드 {resp.status_code}\n"
+                    f"응답: {resp.text}"), None
+
+    except requests.exceptions.Timeout:
+        return "요청이 타임아웃되었습니다. 서버 상태를 확인해 주세요.", None
     except requests.exceptions.ConnectionError:
-        return "FastAPI 서버에 연결할 수 없습니다. 서버(8000번 포트)가 실행 중인지 확인하세요.", None
+        return "FastAPI 서버에 연결할 수 없습니다. 서버(8000번 포트) 실행 여부를 확인해 주세요.", None
     except Exception as e:
-        return f"요청 중 예기치 않은 오류 발생: {e}", None
+        return f"요청 중 예기치 않은 오류가 발생했습니다: {e}", None
 
 
 # Streamlit 챗봇 UI 구성

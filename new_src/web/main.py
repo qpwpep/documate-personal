@@ -4,13 +4,78 @@ import logging
 
 from fastapi import FastAPI, Depends, Request, HTTPException
 from fastapi.responses import FileResponse
+from slack_sdk.web import WebClient
+from slack_sdk.errors import SlackApiError
 
 from .schemas import AgentRequest, AgentResponse
 from ..agent_manager import AgentFlowManager
 from ..util.util import get_save_text_output_dir
 
+SLACK_BOT_TOKEN = os.getenv("SLACK_BOT_TOKEN")
+SLACK_DEFAULT_DM_EMAIL = os.getenv("SLACK_DEFAULT_DM_EMAIL")
+SLACK_DEFAULT_USER_ID = os.getenv("SLACK_DEFAULT_USER_ID")
+
+slack_client = WebClient(token=SLACK_BOT_TOKEN) if SLACK_BOT_TOKEN else None
+
 logger = logging.getLogger("uvicorn")
 app = FastAPI()
+
+def _resolve_user_id(user_id: str | None, email: str | None) -> str | None:
+    """우선순위: 요청값(user_id/email) → .env → None"""
+    if user_id:
+        return user_id
+    if email and slack_client:
+        try:
+            r = slack_client.users_lookupByEmail(email=email)
+            return r["user"]["id"]
+        except SlackApiError as e:
+            logger.error(f"users.lookupByEmail failed: {e}")
+    # .env fallback
+    if SLACK_DEFAULT_USER_ID:
+        return SLACK_DEFAULT_USER_ID
+    if SLACK_DEFAULT_DM_EMAIL and slack_client:
+        try:
+            r = slack_client.users_lookupByEmail(email=SLACK_DEFAULT_DM_EMAIL)
+            return r["user"]["id"]
+        except SlackApiError as e:
+            logger.error(f"fallback lookupByEmail failed: {e}")
+    return None
+
+def send_slack_dm(text: str, user_id: str | None = None, email: str | None = None) -> None:
+    """
+    Slack 메시지를 DM 또는 채널로 자동 전송.
+    - Uxxxx → 개인 DM
+    - Cxxxx → 공개 채널
+    - Gxxxx → private 채널
+    - email → lookupByEmail로 Uxxxx 찾기
+    """
+    if not slack_client:
+        logger.warning("⚠️ SLACK_BOT_TOKEN 미설정: 메시지 전송 스킵")
+        return
+
+    # user_id 우선순위 확인
+    uid = _resolve_user_id(user_id, email)
+
+    if not uid:
+        logger.warning("⚠️ Slack 사용자 ID를 찾지 못해 메시지 전송 스킵")
+        return
+
+    # ===== 대상 판별 =====
+    if uid.startswith("U"):
+        target_type = "DM"
+    elif uid.startswith("C"):
+        target_type = "Public Channel"
+    elif uid.startswith("G"):
+        target_type = "Private Channel"
+    else:
+        target_type = "Unknown"
+        logger.warning(f"⚠️ Slack ID 형식을 판별할 수 없습니다: {uid}")
+    
+    try:
+        slack_client.chat_postMessage(channel=uid, text=text)
+        logger.info(f"✅ Slack {target_type} 전송 성공 → {uid}")
+    except SlackApiError as e:
+        logger.error(f"❌ Slack {target_type} 전송 실패 ({uid}): {e.response['error']}")
 
 # 인메모리 세션 저장소 (Global Cache) 정의
 # Key: session_id (str), Value: AgentFlowManager 인스턴스
@@ -68,12 +133,18 @@ async def run_agent_api(
     logger.info(f"Session ID: {session_id[:8]} | [REQ ID: {request_id}] | Agent Object ID: {id(agent_manager)} | Query: '{user_query[:20]}...'")
 
     # agent_manager > run_agent_flow 메서드를 호출
-    agent_answer = agent_manager.run_agent_flow(user_query)    
-
-    logger.info(f"agent_answer : {agent_answer}")
-
+    agent_answer = agent_manager.run_agent_flow(user_query)
     answer = agent_answer.get("message")
     file_path = agent_answer.get("filepath", "")
+
+    if answer:
+        send_slack_dm(
+            text=answer,
+            user_id=request_data.slack_user_id,
+            email=request_data.slack_email,
+        )    
+
+    logger.info(f"agent_answer : {agent_answer}")
     
     logger.info(f"answer : {answer}")
     logger.info(f"filepath : {file_path}")
