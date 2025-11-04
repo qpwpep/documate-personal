@@ -8,13 +8,13 @@ from dotenv import load_dotenv
 import sys
 from pathlib import Path
 # 1. 현재 파일의 부모(web)의 부모(new_src)를 프로젝트 루트로 지정합니다.
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
 # 2. 이 경로를 Python 모듈 탐색 경로에 추가합니다.
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from tools import DEFAULT_DOCS
+from new_src.tools import DEFAULT_DOCS
 # =================================
 
 # 챗봇 세션이 시작될 때 고유 ID 생성 (탭이 새로 열릴 때마다 1번 실행)
@@ -57,50 +57,6 @@ def get_agent_response(user_input):
         return f"요청 중 예기치 않은 오류 발생: {e}", None
 
 
-# def display_agent_response(final_answer, response_file_path, is_new_message=False):
-#     """
-#     Agent 응답 딕셔너리를 받아 메시지를 출력하고 파일 경로가 있으면 다운로드 버튼을 표시합니다.
-#     """
-    
-#     # 딕셔너리에서 안전하게 값 추출 (값이 없으면 기본값 사용)
-#     final_answer = final_answer
-#     file_path = response_file_path
-#     print(f"debug >> final_answer : {final_answer}")
-#     print(f"debug >> file_path : {file_path}")
-
-#     # 1. AI 응답을 세션 상태에 추가 (새 메시지인 경우에만)
-#     if is_new_message:
-#         st.session_state.messages.append({"role": "assistant", "content": final_answer, "file_path": file_path})
-
-#     # 2. AI 응답 출력
-#     with st.chat_message("assistant"):
-#         st.markdown(final_answer)
-#         print(f"debug >> assistant 메시지")
-#         # for file_path in full_file_paths:
-#         # 3. 파일 경로가 있을 경우 다운로드 버튼 생성 (AI 메시지 아래에 표시)
-#         if file_path and os.path.exists(file_path):
-#             print(f"debug >> 파일 있음")
-#             # 파일 경로에서 파일 이름(filename)만 추출합니다.
-#             filename = os.path.basename(file_path)
-
-#             # FastAPI 다운로드 엔드포인트 URL 생성
-#             download_url = f"{FASTAPI_URL}/download/{filename}"
-            
-#             st.markdown("---")
-#             st.info(f"💾 **파일 저장 완료:** {filename}")
-
-#             # Streamlit 마크다운의 링크 버튼을 사용하여 다운로드 링크 제공
-#             st.markdown(
-#                 f'<a href="{download_url}" target="_blank" download="{filename}">'
-#                 f'<button style="background-color: #4CAF50; color: white; padding: 10px 24px; border: none; border-radius: 8px; cursor: pointer; font-size: 16px;">'
-#                 f'⬇️ 파일 다운로드 ({filename})'
-#                 f'</button></a>',
-#                 unsafe_allow_html=True
-#             )
-#         else:
-#             print(f"debug >> 파일 없음")
-
-
 # Streamlit 챗봇 UI 구성
 st.set_page_config(page_title="Agent 챗봇 UI", layout="wide")
 st.title("📚 Docs Agent 챗봇")
@@ -118,32 +74,6 @@ st.markdown(desc_markdown, unsafe_allow_html=True)
 # 세션 상태 초기화: 채팅 기록 저장
 if "messages" not in st.session_state:
     st.session_state["messages"] = [{"role": "assistant", "content": "안녕하세요! 질문을 입력해주세요.", "file_path": ""}]
-
-# # 기존 채팅 메시지 표시
-# for message in st.session_state.messages:
-#     with st.chat_message(message["role"]):
-#         # 기록된 답변 메시지 중 file_path가 설정되어 있다면
-#         if message["role"] == "assistant" and message.get("file_path", ""):
-#             final_answer = message.get("content", "")
-#             full_file_path = message.get("file_path", "")
-#             display_agent_response(final_answer, full_file_path, False)
-#         else:
-#             st.markdown(message["content"])
-        
-
-# # 사용자 입력 처리
-# if prompt := st.chat_input("여기에 질문을 입력하세요..."):
-#     # 1) 사용자 메시지를 세션 상태에 추가하고 화면에 표시
-#     st.session_state.messages.append({"role": "user", "content": prompt})
-#     with st.chat_message("user"):
-#         st.markdown(prompt)
-
-#     # 2) Agent 응답 생성
-#     with st.spinner("Agent가 생각 중입니다..."):
-#         agent_response, agent_file_path = get_agent_response(prompt)
-    
-#     display_agent_response(agent_response, agent_file_path, True)
-
 
 
 for message in st.session_state.messages:
