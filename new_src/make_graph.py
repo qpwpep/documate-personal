@@ -1,7 +1,7 @@
 from langgraph.graph import StateGraph, START, END
 from langgraph.prebuilt import ToolNode, tools_condition
 
-from .node import State, chatbot, add_user_message
+from .node import State, chatbot, add_user_message, summarize_old_messages
 from .tools import tavilysearch, rag_search_tool, save_text_tool
 from .edge import wire_tool_edges
 
@@ -14,9 +14,15 @@ def build_graph():
     builder.add_node("add_user_message", add_user_message)
     builder.set_entry_point("add_user_message")  # START → add_user_message
 
+    # 오래된 메시지를 4~5줄로 요약하고 state를 '최근 6턴'으로 정리
+    builder.add_node("summarize_old_messages", summarize_old_messages)
+    
     # GPT 응답 생성 노드 등록
     builder.add_node("chatbot", chatbot)
-    builder.add_edge("add_user_message", "chatbot")
+    
+    # 흐름: add_user_message → summarize_old_messages → chatbot
+    builder.add_edge("add_user_message", "summarize_old_messages")
+    builder.add_edge("summarize_old_messages", "chatbot")
 
     # ✅ 세 개의 툴(TavilySearch, RAGSearch, SaveText)을 단일 ToolNode에 연결
     tool_node = ToolNode(tools=[tavilysearch, rag_search_tool, save_text_tool])
