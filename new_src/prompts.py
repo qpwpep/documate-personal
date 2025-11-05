@@ -21,6 +21,11 @@ SYS_POLICY = """당신은 세 가지 주요 능력을 가진 조수입니다:
      ③ 도구가 반환한 파일명(`Saved output to ...`)을 짧게 확인(acknowledge)하고,  
         같은 턴에서는 다시 save_text를 호출하지 않습니다.
 
+4️⃣ SlackNotify — 최종 답변을 Slack으로 전송  
+   - 사용자가 "슬랙으로 보내", "DM으로", "채널에 올려" 등 요청하면 사용하세요.  
+   - `channel_id`가 있으면 우선 사용하고, 없으면 `user_id` 또는 `email`로 DM 채널을 연 뒤 전송합니다.  
+   - 환경변수 기본값(SLACK_DEFAULT_USER_ID / SLACK_DEFAULT_DM_EMAIL)이 설정되었으면 이를 사용할 수 있습니다.        
+
 💡 응답 규칙:
 - 질문이 개념 중심이면 TavilySearch →  
   예제 중심이면 RAGSearch →  
@@ -51,6 +56,11 @@ NEED_SAVE_PATTERNS = [
     r"(저장|내보내|텍스트|txt로|파일로)"
 ]
 
+NEED_SLACK_PATTERNS = [
+    r"(슬랙|slack).*보내", r"(DM|디엠).*보내", r"(채널|channel).*올려",
+    r"(전송|공유).*(슬랙|slack|DM|디엠|채널)"
+]
+
 # ============================================================
 # 🧩 Detection helpers
 # ============================================================
@@ -66,3 +76,6 @@ def needs_rag(text: str) -> bool:
 def needs_save(text: str) -> bool:
     """Return True if text implies save/export request."""
     return any(re.search(p, text, flags=re.I) for p in NEED_SAVE_PATTERNS)
+
+def needs_slack(text: str) -> bool:
+    return any(re.search(p, text, flags=re.I) for p in NEED_SLACK_PATTERNS)

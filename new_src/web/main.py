@@ -187,14 +187,6 @@ async def run_agent_api(
     answer = agent_answer.get("message")
     file_path = agent_answer.get("filepath", "")
 
-    if answer:
-        send_slack_message(
-        text=answer,
-        user_id=request_data.slack_user_id,
-        email=request_data.slack_email,
-        target="auto"   # auto / dm / channel / group 선택 가능
-    )
-
     logger.info(f"agent_answer : {agent_answer}")
     
     logger.info(f"answer : {answer}")
