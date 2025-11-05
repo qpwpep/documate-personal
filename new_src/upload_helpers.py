@@ -27,6 +27,7 @@ def extract_text(path: str) -> str:
         return extract_text_from_ipynb(path)
     raise ValueError("Unsupported file type (only .py or .ipynb).")
 
+# Web > RAG로 사용할 문서 업로드 경로를 전달하면 retriever를 리턴
 def build_temp_retriever(path: str, k: int = 4):
     """Build a temporary in-memory Chroma retriever from a single uploaded file."""
     text = extract_text(path)

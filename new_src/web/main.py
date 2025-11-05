@@ -1,11 +1,13 @@
 import os
 import uuid
 import logging
-
+import shutil
+from pathlib import Path
 from fastapi import FastAPI, Depends, Request, HTTPException
 from fastapi.responses import FileResponse
 from slack_sdk.web import WebClient
 from slack_sdk.errors import SlackApiError
+from langchain_core.messages import SystemMessage
 
 from .schemas import AgentRequest, AgentResponse
 from ..agent_manager import AgentFlowManager
@@ -131,6 +133,24 @@ def send_slack_message(
 # Key: session_id (str), Value: AgentFlowManager 인스턴스
 active_agents: dict[str, 'AgentFlowManager'] = {}
 
+# ====== FastAPI 재시작 시 기존에 생성된 uploads 폴더 제거
+# UPLOAD_DIR = Path("uploads")
+
+# @app.on_event("startup")
+# def cleanup_upload_folder():
+#     """서버 시작 시 기존 uploads 폴더 정리"""
+#     if UPLOAD_DIR.exists():
+#         try:
+#             shutil.rmtree(UPLOAD_DIR)  # 폴더 전체 삭제
+#             print(f"[INIT] '{UPLOAD_DIR}' 폴더를 삭제했습니다.")
+#         except Exception as e:
+#             print(f"[ERROR] uploads 폴더 삭제 실패: {e}")
+
+#     # 새 폴더 생성
+#     UPLOAD_DIR.mkdir(exist_ok=True)
+#     print(f"[INIT] '{UPLOAD_DIR}' 폴더를 새로 생성했습니다.")
+# =================================
+
 @app.get("/")
 async def root():
     return {"message": "Hello World"}
@@ -175,15 +195,38 @@ async def run_agent_api(
     
     user_query = request_data.query
     session_id = request_data.session_id
+    upload_file_path = request_data.upload_file_path
+    logger.info(f"[upload_file_path] : {str(upload_file_path)}")
 
     # session_id 기준으로 하나의 agent_manager를 생성하여 사용
     agent_manager = _get_or_create_agent(session_id)
+
+    # ✅ 사이드바에서 넘어온 Slack 대상 정보를 시스템 힌트로 주입 (자동 전송 X)
+    slack_hints = []
+    if request_data.slack_channel_id:
+        slack_hints.append(f"channel_id={request_data.slack_channel_id}")
+    if request_data.slack_user_id:
+        slack_hints.append(f"user_id={request_data.slack_user_id}")
+    if request_data.slack_email:
+        slack_hints.append(f"email={request_data.slack_email}")
+
+    if slack_hints:
+        hint_text = (
+            "[Slack Destinations]\n"
+            + "\n".join(slack_hints)
+            + "\n(사용자가 슬랙 전송을 요청하면 slack_notify 도구 호출 시 위 인자를 사용하세요.)"
+        )
+        # 다음 턴 호출에서 모델이 참고할 수 있게 상태 메시지에 추가
+        agent_manager.messages.append(SystemMessage(content=hint_text))
 
     # Agent 객체의 메모리 주소와 요청 ID를 로그에 출력
     logger.info(f"Session ID: {session_id[:8]} | [REQ ID: {request_id}] | Agent Object ID: {id(agent_manager)} | Query: '{user_query[:20]}...'")
 
     # agent_manager > run_agent_flow 메서드를 호출
-    agent_answer = agent_manager.run_agent_flow(user_query)
+    agent_answer = agent_manager.run_agent_flow(user_query, upload_file_path)    
+
+    logger.info(f"agent_answer : {agent_answer}")
+
     answer = agent_answer.get("message")
     file_path = agent_answer.get("filepath", "")
 
