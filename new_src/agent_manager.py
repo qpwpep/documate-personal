@@ -15,6 +15,8 @@ class AgentFlowManager:
         self.graph = build_agent_graph()
         # 멀티턴 상태 저장을 위한 변수
         self.messages: List[Any] = []
+        self.retriver = None
+        self.upload_file_path = None
     
     def run_agent_flow(self, user_input: str, upload_file_path: Optional[str] = None) -> dict:
 
@@ -31,11 +33,19 @@ class AgentFlowManager:
                 "user_input": user_input,
                 "messages": current_messages, # 이전 대화 상태 전달
             }
-            
+
             if upload_file_path is not None:
                 # upload_file_path 가 설정되어 있다면, 이 경로 기준으로 retriever 생성
-                retriever = build_temp_retriever(upload_file_path)
-                state["retriever"] = retriever
+                if self.upload_file_path != upload_file_path:
+                    self.upload_file_path = upload_file_path
+                    self.retriver = build_temp_retriever(upload_file_path)
+                
+                if self.retriver is not None:
+                    state["retriever"] = self.retriver
+
+            else:
+                self.retriever = None
+                self.upload_file_path = None
 
             # LangGraph 실행
             response = self.graph.invoke(state)
