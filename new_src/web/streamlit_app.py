@@ -78,17 +78,43 @@ def get_agent_response(user_input):
 
 # Streamlit 챗봇 UI 구성
 st.set_page_config(page_title="Agent 챗봇 UI", layout="wide")
-st.title("📚 Docs Agent 챗봇")
+st.title("📚 DocuMate: 공식 문서를 기반으로 학습을 돕는 AI 챗봇")
 
 docs_list = [f"`{key}`" for key in list(DEFAULT_DOCS.keys())]
 result_string = ", ".join(docs_list)
 
-desc_markdown = f"""
-<span style="font-size: 24px;"> 공식 문서 기반 답변을 제공합니다.</span>
+st.markdown(
+        f"""
+        <div style="height: 20px;"></div>
 
-<span style="font-size: 18px;"> 지원 문서 : {result_string}</span>
-"""
-st.markdown(desc_markdown, unsafe_allow_html=True)
+        #### **파이썬 오픈 소스 라이브러리의 활용법을 학습해보세요!**
+        - **공식 문서 내용을 기반**으로 정확한 정보를 얻으실 수 있습니다.<br>
+          (지원 문서 : {result_string})
+        - 로컬 노트북 (AI 부트캠프 경진대회 baseline code) / 직접 파일을 업로드 하여 **활용 사례를 확인**하실 수 있습니다.
+        - 결과를 **txt 파일로 저장**하거나 **슬랙에 공유**하실 수 있습니다.
+   
+        ---
+    
+        ##### ✅ 빠른 시작 예시
+          `pandas merge 사용법 알려줘. 공식 문서 기준으로 설명해줘.`&nbsp;&nbsp;&nbsp;`matplotlib에서 pie 차트 옵션 정리해줘.`  
+          `이전 노트북에서 matplotlib histplot을 어떻게 썼는지 예제 코드 보여줘.`&nbsp;&nbsp;&nbsp;`업로드한 .ipynb 안에 있는 pandas concat 예제를 찾아줘.`  
+          `pandas concat 기본 사용법을 설명하고, 내 노트북에서 실제로 사용한 예제도 함께 보여줘.`
+          <div style="height: 20px;"></div>
+          
+        ##### 📎 파일 업로드
+        - `.py`, `.ipynb` 파일을 업로드 하여 해당 내용을 기반으로 서칭하기 : `이 파일에서 쓰인 pandas concat() 함수 예제를 찾아줘`  
+        (업로드 파일이 크면 **핵심 코드/셀만** 올리는 것이 더 빠릅니다.)
+        <div style="height: 20px;"></div>
+
+        ##### 💾 결과 txt 파일로 저장 및 Slack 공유
+        - 결과를 txt 파일로 저장하기 : `이 답변을 txt로 저장해줘`&nbsp;&nbsp;&nbsp;`방금 결과를 파일로 저장해줘`  
+        - 결과를 Slack으로 보내기 : `이 답변을 Slack으로 보내줘`&nbsp;&nbsp;&nbsp;`이번 결과를 팀 채널에 공유해줘`  
+
+        ---
+
+        """,
+        unsafe_allow_html=True
+    )
 
 # ----------------------------------------------------
 # 파일 업로드
