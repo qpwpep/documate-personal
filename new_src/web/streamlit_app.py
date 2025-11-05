@@ -51,7 +51,7 @@ def get_agent_response(user_input):
         }
 
         # 업로드 된 파일이 있다면 retriever 생성을 위해 request에 전달
-        if st.session_state['uploaded_file_name'] is not None:
+        if "uploaded_file_name" in st.session_state and st.session_state["uploaded_file_name"] is not None:
             path = SESSION_PATH / st.session_state['uploaded_file_name']
             json["upload_file_path"] = path.as_posix()
 
@@ -123,37 +123,6 @@ def handle_upload(uploaded_file):
         st.session_state['uploaded_file_name'] = None
         st.error(f"파일 업로드 실패 : {e}")
 
-
-# 업로드 버튼 위젯 생성
-uploaded_file = st.file_uploader(
-        label="파일 업로드 (챗봇에게 질문할 노트북 파일을 업로드 하세요.)",
-        type=['ipynb'],
-        width=400,
-    )
-
-# 조건문으로 연결 (파일이 업로드되었을 때만 함수 실행)
-if uploaded_file is not None:
-    
-    # 현재 세션 상태를 확인하여 중복 실행 방지
-    if uploaded_file.name != st.session_state.get('uploaded_file_name'):
-        
-        # 파일 객체를 인수로 전달하며 RAG 초기화 함수 호출
-        handle_upload(uploaded_file)
-
-elif "uploaded_file_name" in st.session_state:
-    # 파일 삭제 처리
-    file_name = st.session_state["uploaded_file_name"]
-    if file_name:
-        try:
-            old_path = SESSION_PATH / st.session_state['uploaded_file_name']
-            if old_path.exists():
-                os.remove(old_path)
-                # st.info(f"이전 파일 '{st.session_state['uploaded_file_name']}'을(를) 삭제했습니다.")
-                
-        except FileNotFoundError:
-            pass
-    del st.session_state["uploaded_file_name"]
-
 # ----------------------------------------------------
 # 채팅 UI
 # ----------------------------------------------------
@@ -213,3 +182,33 @@ if prompt := st.chat_input("여기에 질문을 입력하세요..."):
     
     # 5. UI를 새로고침하여 새로 추가된 메시지와 버튼을 표시
     st.rerun()
+
+# 업로드 버튼 위젯 생성
+uploaded_file = st.file_uploader(
+        label="파일 업로드 (.py, .ipynb 등 챗봇에게 질문할 때 사용할 파일을 업로드 하세요.)",
+        type=['ipynb', 'py'],
+        width=450,
+    )
+
+# 조건문으로 연결 (파일이 업로드되었을 때만 함수 실행)
+if uploaded_file is not None:
+    
+    # 현재 세션 상태를 확인하여 중복 실행 방지
+    if uploaded_file.name != st.session_state.get('uploaded_file_name'):
+        
+        # 파일 객체를 인수로 전달하며 RAG 초기화 함수 호출
+        handle_upload(uploaded_file)
+
+elif "uploaded_file_name" in st.session_state:
+    # 파일 삭제 처리
+    file_name = st.session_state["uploaded_file_name"]
+    if file_name:
+        try:
+            old_path = SESSION_PATH / st.session_state['uploaded_file_name']
+            if old_path.exists():
+                os.remove(old_path)
+                # st.info(f"이전 파일 '{st.session_state['uploaded_file_name']}'을(를) 삭제했습니다.")
+                
+        except FileNotFoundError:
+            pass
+    del st.session_state["uploaded_file_name"]

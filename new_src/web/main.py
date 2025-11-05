@@ -18,21 +18,21 @@ app = FastAPI()
 active_agents: dict[str, 'AgentFlowManager'] = {}
 
 # ====== FastAPI 재시작 시 기존에 생성된 uploads 폴더 제거
-UPLOAD_DIR = Path("uploads")
+# UPLOAD_DIR = Path("uploads")
 
-@app.on_event("startup")
-def cleanup_upload_folder():
-    """서버 시작 시 기존 uploads 폴더 정리"""
-    if UPLOAD_DIR.exists():
-        try:
-            shutil.rmtree(UPLOAD_DIR)  # 폴더 전체 삭제
-            print(f"[INIT] '{UPLOAD_DIR}' 폴더를 삭제했습니다.")
-        except Exception as e:
-            print(f"[ERROR] uploads 폴더 삭제 실패: {e}")
+# @app.on_event("startup")
+# def cleanup_upload_folder():
+#     """서버 시작 시 기존 uploads 폴더 정리"""
+#     if UPLOAD_DIR.exists():
+#         try:
+#             shutil.rmtree(UPLOAD_DIR)  # 폴더 전체 삭제
+#             print(f"[INIT] '{UPLOAD_DIR}' 폴더를 삭제했습니다.")
+#         except Exception as e:
+#             print(f"[ERROR] uploads 폴더 삭제 실패: {e}")
 
-    # 새 폴더 생성
-    UPLOAD_DIR.mkdir(exist_ok=True)
-    print(f"[INIT] '{UPLOAD_DIR}' 폴더를 새로 생성했습니다.")
+#     # 새 폴더 생성
+#     UPLOAD_DIR.mkdir(exist_ok=True)
+#     print(f"[INIT] '{UPLOAD_DIR}' 폴더를 새로 생성했습니다.")
 # =================================
 
 @app.get("/")
