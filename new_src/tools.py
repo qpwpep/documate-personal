@@ -12,6 +12,9 @@ from langchain_core.tools import StructuredTool
 from langchain_openai import OpenAIEmbeddings
 from langchain_chroma import Chroma
 
+from slack_sdk.web import WebClient
+from slack_sdk.errors import SlackApiError
+
 from new_src.util.util import get_save_text_output_dir 
 
 # ─────────────────────────────────────────────
@@ -21,9 +24,12 @@ load_dotenv(find_dotenv(), override=True)
 
 TAVILY_KEY = os.getenv("TAVILY_API_KEY")
 OPENAI_KEY = os.getenv("OPENAI_API_KEY")
+SLACK_BOT_TOKEN = os.getenv("SLACK_BOT_TOKEN")
 
 assert TAVILY_KEY, "Missing TAVILY_API_KEY in environment (.env not loaded or key not set)."
 assert OPENAI_KEY, "Missing OPENAI_API_KEY in environment (.env not loaded or key not set)."
+
+slack_client = WebClient(token=SLACK_BOT_TOKEN) if SLACK_BOT_TOKEN else None
 
 # ─────────────────────────────────────────────
 # 2. TavilySearch configuration
@@ -140,6 +146,103 @@ rag_search_tool = StructuredTool.from_function(
 )
 
 # ─────────────────────────────────────────────
-# 5. Export
+# 5. Slack Notify tool
 # ─────────────────────────────────────────────
-tools = [tavilysearch, rag_search_tool, save_text_tool]
+
+def _resolve_user_id(user_id: Optional[str], email: Optional[str]) -> Optional[str]:
+    """우선순위: user_id → email → 환경변수 기본값"""
+    if user_id and user_id.startswith("U"):
+        return user_id
+    if email and slack_client:
+        try:
+            r = slack_client.users_lookupByEmail(email=email)
+            return r["user"]["id"]
+        except SlackApiError:
+            pass
+    if SLACK_DEFAULT_USER_ID:
+        return SLACK_DEFAULT_USER_ID
+    if SLACK_DEFAULT_DM_EMAIL and slack_client:
+        try:
+            r = slack_client.users_lookupByEmail(email=SLACK_DEFAULT_DM_EMAIL)
+            return r["user"]["id"]
+        except SlackApiError:
+            pass
+    return None
+
+def _open_dm_channel(uid: str) -> Optional[str]:
+    if not slack_client:
+        return None
+    try:
+        r = slack_client.conversations_open(users=uid)
+        return r["channel"]["id"]  # Dxxxx...
+    except SlackApiError:
+        return None
+
+class SlackArgs(BaseModel):
+    text: str = Field(description="Slack으로 보낼 최종 메시지(plain text).")
+    user_id: Optional[str] = Field(default=None, description="Slack Uxxxxx (DM 보낼 대상).")
+    email: Optional[str] = Field(default=None, description="Slack 이메일 (DM 보낼 대상).")
+    channel_id: Optional[str] = Field(default=None, description="채널 ID (Cxxxx/Gxxxx/Dxxxx). 제공되면 우선 사용.")
+    target: str = Field(default="auto", description="auto|dm|channel|group")
+
+def slack_notify(text: str,
+                 user_id: Optional[str] = None,
+                 email: Optional[str] = None,
+                 channel_id: Optional[str] = None,
+                 target: str = "auto") -> dict:
+    """
+    Slack 메시지 전송 (DM/채널/그룹).
+    모델이 호출하는 Tool. 성공 시 channel_id/target_type/status를 반환.
+    """
+    if not slack_client:
+        return {"status": "skipped", "reason": "SLACK_BOT_TOKEN not set"}
+
+    resolved_id = None
+    target_type = "Unknown"
+
+    # 0) 명시 채널 우선
+    if channel_id:
+        resolved_id = channel_id
+        if resolved_id.startswith("D"):
+            target_type = "DM"
+        elif resolved_id.startswith("C"):
+            target_type = "Public Channel"
+        elif resolved_id.startswith("G"):
+            target_type = "Private Channel"
+        else:
+            target_type = "Unknown Channel"
+
+    # 1) DM 대상 지정
+    if not resolved_id and (user_id or email or SLACK_DEFAULT_USER_ID or SLACK_DEFAULT_DM_EMAIL):
+        uid = _resolve_user_id(user_id, email)
+        if uid and uid.startswith("U"):
+            dm_id = _open_dm_channel(uid)
+            if dm_id:
+                resolved_id = dm_id
+                target_type = "DM"
+
+    if not resolved_id:
+        return {"status": "skipped", "reason": "No valid Slack destination resolved"}
+
+    # 2) target 유효성 경고는 툴 내에서는 로깅 없이 그대로 전송
+    try:
+        slack_client.chat_postMessage(channel=resolved_id, text=text)
+        return {"status": "ok", "channel_id": resolved_id, "target_type": target_type}
+    except SlackApiError as e:
+        return {"status": "error", "error": str(e)}
+
+slack_notify_tool = StructuredTool.from_function(
+    name="slack_notify",
+    description=(
+        "Send a message to Slack. Use when the user asks to DM or post the answer to Slack. "
+        "Provide either channel_id (C/G/D...) or a user_id/email for DM. "
+        "If neither is present, the tool tries environment defaults."
+    ),
+    func=slack_notify,
+    args_schema=SlackArgs,
+)
+
+# ─────────────────────────────────────────────
+# 6. Export
+# ─────────────────────────────────────────────
+tools = [tavilysearch, rag_search_tool, save_text_tool, slack_notify_tool]

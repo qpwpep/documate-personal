@@ -4,6 +4,12 @@ import os
 import uuid
 from dotenv import load_dotenv
 
+with st.sidebar:
+    st.subheader("Slack 전송")
+    slack_user_id = st.text_input("User ID (Uxxxxx)", value="")
+    slack_email = st.text_input("Email (optional)", value="")
+    slack_channel_id = st.text_input("Channel ID (C/G/Dxxxxx, optional)", value="")
+
 # ========== tools를 참조하지 못하여 추가
 import sys
 from pathlib import Path
@@ -42,41 +48,50 @@ if FASTAPI_URL is None:
     print(f"debug >> 기본 주소 없어서 재설정 ({FASTAPI_URL})")
 
 # FastAPI Agent API 호출 함수
-def get_agent_response(user_input):
-    """FastAPI의 /agent 엔드포인트에 요청을 보내고 응답을 받습니다."""
+def get_agent_response(user_input: str):
+    """
+    FastAPI /agent 엔드포인트에 요청을 보내고,
+    (옵션) Slack DM 전송을 위해 slack_user_id / slack_email을 함께 전달합니다.
+    """
     endpoint = f"{FASTAPI_URL}/agent"
-    print(f"debug >> user_input : {user_input}")
     try:
-        # FastAPI 서버로 POST 요청 전송
-        json = {
+        payload = {
             "query": user_input,
             "session_id": st.session_state.session_id,
         }
 
-        # 업로드 된 파일이 있다면 retriever 생성을 위해 request에 전달
-        if "uploaded_file_name" in st.session_state and st.session_state["uploaded_file_name"] is not None:
-            path = SESSION_PATH / st.session_state['uploaded_file_name']
-            json["upload_file_path"] = path.as_posix()
+        # ✅ 값이 있으면 항상 payload에 포함 (전송은 모델이 요청 받을 때만)
+        if slack_user_id:
+            payload["slack_user_id"] = slack_user_id
+        if slack_email:
+            payload["slack_email"] = slack_email
+        if slack_channel_id:
+            payload["slack_channel_id"] = slack_channel_id
 
-        response = requests.post(
-            endpoint,
-            json=json, # AgentRequest
-            timeout=60 # 응답 대기 시간을 60초로 설정
-        )
+        # ✅ 업로드 경로 전달 (기존 순서 버그 수정: path 만든 뒤 넣기)
+        if st.session_state.get("uploaded_file_name"):
+            path = SESSION_PATH / st.session_state["uploaded_file_name"]
+            payload["upload_file_path"] = path.as_posix()
 
-        # 응답 상태 코드 확인
-        if response.status_code == 200:
-            json = response.json()
-            return json.get("response"), json.get("file_path")
+        resp = requests.post(endpoint, json=payload, timeout=60)
+
+        if resp.status_code == 200:
+            data = resp.json()
+            # FastAPI의 응답 스키마에 맞춰 안전하게 접근
+            return data.get("response", ""), data.get("file_path")
             # print(f"debug >> response : {response.json().get("response", "FastAPI에서 응답을 받았습니다.")}")
             # return response.json().get("response", "FastAPI에서 응답을 받았습니다.")
         else:
-            return f"Agent 호출 실패: 상태 코드 {response.status_code}. 응답: {response.text}", None
-            
+            # 서버가 에러를 반환한 경우 메시지 표시
+            return (f"Agent 호출 실패: 상태 코드 {resp.status_code}\n"
+                    f"응답: {resp.text}"), None
+
+    except requests.exceptions.Timeout:
+        return "요청이 타임아웃되었습니다. 서버 상태를 확인해 주세요.", None
     except requests.exceptions.ConnectionError:
-        return "FastAPI 서버에 연결할 수 없습니다. 서버(8000번 포트)가 실행 중인지 확인하세요.", None
+        return "FastAPI 서버에 연결할 수 없습니다. 서버(8000번 포트) 실행 여부를 확인해 주세요.", None
     except Exception as e:
-        return f"요청 중 예기치 않은 오류 발생: {e}", None
+        return f"요청 중 예기치 않은 오류가 발생했습니다: {e}", None
 
 
 # Streamlit 챗봇 UI 구성

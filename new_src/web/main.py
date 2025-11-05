@@ -5,13 +5,129 @@ import shutil
 from pathlib import Path
 from fastapi import FastAPI, Depends, Request, HTTPException
 from fastapi.responses import FileResponse
+from slack_sdk.web import WebClient
+from slack_sdk.errors import SlackApiError
+from langchain_core.messages import SystemMessage
 
 from .schemas import AgentRequest, AgentResponse
 from ..agent_manager import AgentFlowManager
 from ..util.util import get_save_text_output_dir
 
+SLACK_BOT_TOKEN = os.getenv("SLACK_BOT_TOKEN")
+SLACK_DEFAULT_DM_EMAIL = os.getenv("SLACK_DEFAULT_DM_EMAIL")
+SLACK_DEFAULT_USER_ID = os.getenv("SLACK_DEFAULT_USER_ID")
+
+slack_client = WebClient(token=SLACK_BOT_TOKEN) if SLACK_BOT_TOKEN else None
+
 logger = logging.getLogger("uvicorn")
 app = FastAPI()
+
+def _resolve_user_id(user_id: str | None, email: str | None) -> str | None:
+    """우선순위: 요청값(user_id/email) → .env → None"""
+    if user_id:
+        return user_id
+    if email and slack_client:
+        try:
+            r = slack_client.users_lookupByEmail(email=email)
+            return r["user"]["id"]
+        except SlackApiError as e:
+            logger.error(f"users.lookupByEmail failed: {e}")
+    # .env fallback
+    if SLACK_DEFAULT_USER_ID:
+        return SLACK_DEFAULT_USER_ID
+    if SLACK_DEFAULT_DM_EMAIL and slack_client:
+        try:
+            r = slack_client.users_lookupByEmail(email=SLACK_DEFAULT_DM_EMAIL)
+            return r["user"]["id"]
+        except SlackApiError as e:
+            logger.error(f"fallback lookupByEmail failed: {e}")
+    return None
+
+def _open_dm_channel(user_id: str) -> str | None:
+    """
+    Slack DM 채널(Dxxxx)을 연 뒤 채널 ID를 반환합니다.
+    """
+    if not slack_client:
+        return None
+    try:
+        # Slack Web API: conversations.open(users=Uxxxx)
+        r = slack_client.conversations_open(users=user_id)
+        return r["channel"]["id"]  # Dxxxx...
+    except SlackApiError as e:
+        logger.error(f"conversations.open failed for {user_id}: {e.response.get('error')}")
+        return None
+
+
+def send_slack_message(
+    text: str,
+    user_id: str | None = None,
+    email: str | None = None,
+    channel_id: str | None = None,
+    target: str = "auto",  # auto / dm / channel / group
+) -> None:
+    """
+    Slack 메시지 전송 (DM/채널/그룹 안전 판별)
+    - DM: 반드시 Dxxxx 채널로 전송 (user Uxxxx → conversations.open → Dxxxx)
+    - Channel: Cxxxx (public), Gxxxx (private)
+    """
+    if not slack_client:
+        logger.warning("⚠️ SLACK_BOT_TOKEN 미설정: 메시지 전송 스킵")
+        return
+
+    resolved_id = None
+    target_type = "Unknown"
+
+    # 0) 명시 채널 우선 (C/G/D 모두 허용)
+    if channel_id:
+        resolved_id = channel_id
+        if resolved_id.startswith("D"):
+            target_type = "DM"
+        elif resolved_id.startswith("C"):
+            target_type = "Public Channel"
+        elif resolved_id.startswith("G"):
+            target_type = "Private Channel"
+        else:
+            target_type = "Unknown Channel"
+
+    # 1) user 또는 email 이면 → 반드시 DM 채널 열기
+    if not resolved_id and (user_id or email):
+        uid = _resolve_user_id(user_id, email)  # Uxxxx (또는 이미 Uxxxx일 수 있음)
+        if uid and uid.startswith("U"):
+            dm_id = _open_dm_channel(uid)  # Dxxxx
+            if dm_id:
+                resolved_id = dm_id
+                target_type = "DM"
+
+    # 2) .env fallback (기본 DM 대상)
+    if not resolved_id:
+        uid = _resolve_user_id(None, None)
+        if uid and uid.startswith("U"):
+            dm_id = _open_dm_channel(uid)
+            if dm_id:
+                resolved_id = dm_id
+                target_type = "DM"
+
+    if not resolved_id:
+        logger.warning("⚠️ Slack 대상 ID를 찾지 못해 메시지 전송 스킵")
+        return
+
+    # 3) target 강제 옵션 (채널/그룹 강제 시 유효성 체크)
+    if target == "channel" and not resolved_id.startswith(("C", "G")):
+        logger.warning("⚠️ target='channel'이지만 DM ID가 선택됨. C/G 채널 ID를 channel_id로 직접 넘기세요.")
+    if target == "group" and not resolved_id.startswith("G"):
+        logger.warning("⚠️ target='group'이지만 선택된 ID가 G가 아님. G 채널 ID를 channel_id로 넘기세요.")
+    if target == "dm" and not resolved_id.startswith("D"):
+        logger.warning("⚠️ target='dm'이지만 DM 채널이 아님. user_id/email로 다시 호출하세요.")
+        # 가능하면 강제로 DM 전환 시도 (C/G/D가 아닌 경우)
+        # 여기서는 경고만 하고 진행하지 않음.
+
+    # 4) 실제 전송
+    try:
+        slack_client.chat_postMessage(channel=resolved_id, text=text)
+        logger.info(f"✅ Slack {target_type} 전송 성공 → {resolved_id}")
+    except SlackApiError as e:
+        logger.error(f"❌ Slack {target_type} 전송 실패 ({resolved_id}): {e.response.get('error')}")
+
 
 # 인메모리 세션 저장소 (Global Cache) 정의
 # Key: session_id (str), Value: AgentFlowManager 인스턴스
@@ -85,16 +201,36 @@ async def run_agent_api(
     # session_id 기준으로 하나의 agent_manager를 생성하여 사용
     agent_manager = _get_or_create_agent(session_id)
 
+    # ✅ 사이드바에서 넘어온 Slack 대상 정보를 시스템 힌트로 주입 (자동 전송 X)
+    slack_hints = []
+    if request_data.slack_channel_id:
+        slack_hints.append(f"channel_id={request_data.slack_channel_id}")
+    if request_data.slack_user_id:
+        slack_hints.append(f"user_id={request_data.slack_user_id}")
+    if request_data.slack_email:
+        slack_hints.append(f"email={request_data.slack_email}")
+
+    if slack_hints:
+        hint_text = (
+            "[Slack Destinations]\n"
+            + "\n".join(slack_hints)
+            + "\n(사용자가 슬랙 전송을 요청하면 slack_notify 도구 호출 시 위 인자를 사용하세요.)"
+        )
+        # 다음 턴 호출에서 모델이 참고할 수 있게 상태 메시지에 추가
+        agent_manager.messages.append(SystemMessage(content=hint_text))
+
     # Agent 객체의 메모리 주소와 요청 ID를 로그에 출력
     logger.info(f"Session ID: {session_id[:8]} | [REQ ID: {request_id}] | Agent Object ID: {id(agent_manager)} | Query: '{user_query[:20]}...'")
 
     # agent_manager > run_agent_flow 메서드를 호출
     agent_answer = agent_manager.run_agent_flow(user_query, upload_file_path)    
 
-    # logger.info(f"agent_answer : {agent_answer}")
+    logger.info(f"agent_answer : {agent_answer}")
 
     answer = agent_answer.get("message")
     file_path = agent_answer.get("filepath", "")
+
+    logger.info(f"agent_answer : {agent_answer}")
     
     logger.info(f"answer : {answer}")
     logger.info(f"filepath : {file_path}")

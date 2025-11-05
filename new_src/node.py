@@ -4,7 +4,7 @@ from typing_extensions import TypedDict
 from langgraph.graph import add_messages
 from langchain_core.messages import AnyMessage, HumanMessage, SystemMessage, AIMessage, ToolMessage, BaseMessage
 
-from .prompts import SYS_POLICY, needs_search, needs_save, needs_rag
+from .prompts import SYS_POLICY, needs_search, needs_save, needs_rag, needs_slack
 from .llm import llm_with_tools, VERBOSE, llm_summarizer
 
 # # FastAPI 실행 상태에서 로그 확인을 위해 추가
@@ -22,7 +22,8 @@ class State(TypedDict, total=False):
 SAVE_HINT = "(사용자가 응답 저장을 요청했습니다. 최종 '응답 전문'을 content에 담아 'save_text' 도구를 한 번만 호출하세요.)"
 SEARCH_HINT = "(이 질문은 공식/최신 문서 검색이 필요합니다. 'tavilysearch' 도구를 먼저 사용하세요.)"
 RAG_HINT = "(이 요청은 로컬 노트북/예제 기반 지식 검색이 필요합니다. 'rag_search' 도구를 사용하세요.)"
-
+SLACK_HINT = "(사용자가 Slack 전송을 요청했습니다. 최종 답변을 'slack_notify' 도구로 보내세요. "\
+             "가능하면 channel_id 또는 user_id/email 인자를 채워주세요.)"
 
 def _has_hint(msgs, marker: str) -> bool:
     return any(isinstance(m, SystemMessage) and marker in m.content for m in msgs)
@@ -159,6 +160,8 @@ def chatbot(state: State):
             model_msgs.append(SystemMessage(content=RAG_HINT))
         if needs_save(content) and not _has_hint(model_msgs, SAVE_HINT):
             model_msgs.append(SystemMessage(content=SAVE_HINT))
+        if needs_slack(content) and not _has_hint(model_msgs, SLACK_HINT):
+            model_msgs.append(SystemMessage(content=SLACK_HINT))
 
     # If we just ran save_text, force the model to ACK and STOP (no more save_text)
     if model_msgs and isinstance(model_msgs[-1], ToolMessage) and getattr(model_msgs[-1], "name", "") == "save_text":
