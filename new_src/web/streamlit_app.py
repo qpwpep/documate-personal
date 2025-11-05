@@ -37,6 +37,9 @@ load_dotenv()
 
 # FastAPI 서버의 주소 설정
 FASTAPI_URL = os.environ.get("FASTAPI_URL")
+if FASTAPI_URL is None:
+    FASTAPI_URL="http://localhost:8000"
+    print(f"debug >> 기본 주소 없어서 재설정 ({FASTAPI_URL})")
 
 # FastAPI Agent API 호출 함수
 def get_agent_response(user_input):
