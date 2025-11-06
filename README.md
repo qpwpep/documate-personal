@@ -93,6 +93,6 @@
 | YYYY.MM.DD  | 데이터 전처리 및 분석 코드 추가                | 박수진      |
 | YYYY.MM.DD  | 배포 환경 설정 및 Docker 이미지 구성           | 홍길동      |
 
-### **발표 자료**
+### **7.4 발표 자료**
 https://docs.google.com/presentation/d/1KiRUrTyEqgig5LG9ZoqUFCCZnZSLrDb_/edit?slide=id.p4#slide=id.p4
 
