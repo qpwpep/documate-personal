@@ -58,7 +58,7 @@
 &emsp; `pandas concat 기본 사용법을 설명하고, 내 노트북에서 실제로 사용한 예제도 함께 보여줘.`
 
 **사용자 시나리오 예시**  
-| case 1. 특정 기술 스택에 관련된 내용 질의** | **case 2. 업로드 파일 기반 검색 질의** | **case 3. 이전 답변 내용 파일 저장 요청** |
+| **case 1. 특정 기술 스택에 관련된 내용 질의** | **case 2. 업로드 파일 기반 검색 질의** | **case 3. 이전 답변 내용 파일 저장 요청** |
 |---|---|---|
 | <img width="400" alt="스크린샷 2025-11-06 오후 3 38 50" src="https://github.com/user-attachments/assets/8f042bb8-da01-4486-8b7e-c6e6c94db5d0" /> | <img width="400" alt="스크린샷 2025-11-06 오후 3 39 28" src="https://github.com/user-attachments/assets/83b76397-4b91-462b-8b6a-71738db074f8" /> | <img width="400" alt="스크린샷 2025-11-06 오후 3 49 06" src="https://github.com/user-attachments/assets/7f8780be-434a-4259-bbab-bedaa04e4439" /> |
 
