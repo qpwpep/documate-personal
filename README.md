@@ -62,12 +62,11 @@
 
 ## **7. Appendix**  
 ### **7.1 참고 자료**  
-- 코드 참고 자료:
-  *[LangChain공식문서](https://docs.langchain.com/oss/python/langchain/overview)*  
-  *[Streamlit공식문서](https://docs.streamlit.io/)*
-  *[FastAPI공식문서](https://fastapi.tiangolo.com/ko/)*
+- *[LangChain공식문서](https://docs.langchain.com/oss/python/langchain/overview)* 
+- *[Streamlit공식문서](https://docs.streamlit.io/)*
+- *[FastAPI공식문서](https://fastapi.tiangolo.com/ko/)*
 
-  
+
 ### **7.2 설치 및 실행 방법**  
 1. **필수 라이브러리 설치:**  
     ```bash
