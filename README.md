@@ -29,7 +29,7 @@
 ---
 
 ## **4. 서비스 아키텍처**  
-### **4.1 시스템 구조도**  
+### **시스템 구조도**  
 서비스 아키텍처 다이어그램을 첨부합니다. *(예: 이미지, 다이어그램)*  
 
 ![서비스 아키텍처 예시](링크 입력)  
@@ -43,7 +43,7 @@
 ### **5.2 프론트엔드**  
 - Streamlit
 
-### **5.4 Agent**  
+### **5.3 Agent**  
 - Python
 
 ---
@@ -91,4 +91,7 @@
 | YYYY.MM.DD  | UI 디자인 및 페이지 구조 업데이트              | 김철수      |
 | YYYY.MM.DD  | 데이터 전처리 및 분석 코드 추가                | 박수진      |
 | YYYY.MM.DD  | 배포 환경 설정 및 Docker 이미지 구성           | 홍길동      |
+
+### **발표 자료**
+https://docs.google.com/presentation/d/1KiRUrTyEqgig5LG9ZoqUFCCZnZSLrDb_/edit?slide=id.p4#slide=id.p4
 
