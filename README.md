@@ -1,98 +1,136 @@
 # **DocuMate**  
-공식 문서를 기반으로 학습을 돕는 AI 챗봇
-- **프로젝트 기간:** 2025.10.24 ~ 2025.11.06
+> **Docu**ment + **Mate** - 공식 문서를 기반으로 학습을 돕는 AI 챗봇 / **프로젝트 기간:** 2025.10.24 ~ 2025.11.06
+
+
+<img width="800" alt="스크린샷 2025-11-06 오후 4 04 32" src="https://github.com/user-attachments/assets/6d0714aa-b086-49e6-aee6-e819eeabbd59" />
 
 ---
 
-## **1. 서비스 구성 요소**  
-### **1.1 주요 기능**  
-- 멀티턴: *한 세션 안에서의 대화 내용을 기억해 대화의 흐름을 자연스럽게 도움*  
-- 웹 검색: *공식 문서 사이트 기반으로 웹 검색을 통해 답변*  
-- 로컬 및 업로드 파일 검색: *LLM이 로컬 노트북이나 사용자가 업로드 한 파일에서 유사한 내용을 검색하고 응답에 반영하도록 설계*
-- 파일 저장: *LLM이 답변을 저장하고, 저장 결과를 응답에 반영*
-- Slack 연동: *슬랙으로 답변을 전송 가능*
+## 🔷 1. 서비스 구성 요소  
 
+### 🔸 1.1 주요 기능  
 
-### **1.2 사용자 흐름**  
-- 사용자 시나리오 예시:  
-  1. 
+| 기능 및 도구명 | 설명 |
+|---|---|
+| 멀티턴 | 한 세션 안에서의 대화 내용을 기억해 대화의 흐름을 자연스럽게 도움 |
+| 웹 검색 | 공식 문서 사이트 기반으로 웹 검색을 통해 답변 생성 |
+| 로컬 및 업로드 <br> 파일 검색 | 로컬 노트북이나 사용자가 업로드 한 파일에서 <br>유사한 내용을 검색하고 응답에 반영하여 답변 생성 |
+| 파일 저장 | 답변을 파일로 저장하여 사용자에게 제공하고, 저장 결과를 응답에 반영하여 답변 생성 |
+| Slack 연동 | LLM이 생성한 답변을 슬랙으로 전송 |
+
+### 🔸 1.2 프로젝트 디렉토리 구조
+```
+├── graph.png
+├── uv.lock
+├── pyproject.toml
+├── README.md
+├── script
+│   ├── start_services.sh
+│   └── stop_services.sh
+├── src
+│   ├── main.py
+│   ├── agent_manager.py
+│   ├── agent_state.py
+│   ├── edge.py
+│   ├── graph_builder.py
+│   ├── make_graph.py
+│   ├── llm.py
+│   ├── node.py
+│   ├── prompts.py
+│   ├── rag_build.py
+│   ├── tools.py
+│   ├── upload_helpers.py
+│   ├── baseline_code.py
+│   ├── util
+│   │   └── util.py
+│   └── web
+│       ├── main.py
+│       ├── schemas.py
+│       └── streamlit_app.py
+└── uploads
+```
+
+### 🔸 1.3 사용자 흐름  
+
+**Streamlit > 빠른 시작 예시 제공**  
+&emsp; `pandas merge 사용법 알려줘. 공식 문서 기준으로 설명해줘.`&nbsp;&nbsp;&nbsp;`matplotlib에서 pie 차트 옵션 정리해줘.`  
+&emsp; `이전 노트북에서 matplotlib histplot을 어떻게 썼는지 예제 코드 보여줘.`&nbsp;&nbsp;&nbsp;`업로드한 .ipynb 안에 있는 pandas concat 예제를 찾아줘.`  
+&emsp; `pandas concat 기본 사용법을 설명하고, 내 노트북에서 실제로 사용한 예제도 함께 보여줘.`
+
+**사용자 시나리오 예시**  
+| case 1. 특정 기술 스택에 관련된 내용 질의** | **case 2. 업로드 파일 기반 검색 질의** | **case 3. 이전 답변 내용 파일 저장 요청** |
+|---|---|---|
+| <img width="400" alt="스크린샷 2025-11-06 오후 3 38 50" src="https://github.com/user-attachments/assets/8f042bb8-da01-4486-8b7e-c6e6c94db5d0" /> | <img width="400" alt="스크린샷 2025-11-06 오후 3 39 28" src="https://github.com/user-attachments/assets/83b76397-4b91-462b-8b6a-71738db074f8" /> | <img width="400" alt="스크린샷 2025-11-06 오후 3 49 06" src="https://github.com/user-attachments/assets/7f8780be-434a-4259-bbab-bedaa04e4439" /> |
+
 
 ---
 
-## **2. 협업 툴**  
+## 🔷 2. 협업 툴 
 
-### **협업 툴**  
+### 🔸 협업 툴 
 - **소스 관리:** GitHub  
 - **커뮤니케이션:** Slack  
 - **버전 관리:** Git  
 
 ---
 
-## **4. 서비스 아키텍처**  
-### **시스템 구조도**  
-서비스 아키텍처 다이어그램을 첨부합니다. *(예: 이미지, 다이어그램)*  
-
-![서비스 아키텍처 예시](링크 입력)  
+## 🔷 3. 서비스 아키텍처 
+### 🔸 Agent 구조도  
+<img width="800" alt="agent" src="https://github.com/user-attachments/assets/1c2bba5d-0c48-4223-ba63-d91bb6919a0d" />
 
 ---
 
-## **5. 사용 기술 스택**  
-### **5.1 백엔드**  
-- FastAPI
-
-### **5.2 프론트엔드**  
-- Streamlit
-
-### **5.3 Agent**  
-- Python
+## 🔷 4. 사용 기술 스택  
+| 서비스 영역 | 기술 스택 |
+|---|---|
+| Agent | Langchain, LangGraph |
+| Backend | FastAPI |
+| Frontend | Streamlit |
 
 ---
 
-## **6. 팀원 소개**  
+## 🔷 5. 팀원 소개  
 
 | 이름      | 역할              | GitHub                               | 담당 기능                                 |
 |----------|------------------|-------------------------------------|-----------------------------------------|
-| **장윤정** | 팀장/웹 서비스 개발 | GitHub 링크             | 서버 구축, API 개발, 배포 관리            |
-| **송인섭** | 웹 서비스 개발  | GitHub 링크             | UI/UX 디자인, 프론트엔드 개발             |
-| **김명철** | Agent 개발    | GitHub 링크             | AI 모델 선정 및 학습, 데이터 분석         |
-| **김상윤** | Agent 개발    | https://github.com/94KSY             | 멀티턴 기능 개발   |
-| **정소현** | Agent 개발    | GitHub 링크             | 데이터 수집, 전처리, 성능 평가 및 테스트   |
+| **장윤정** | 팀장/웹 서비스 개발 | [GitHub 링크](https://github.com/yjjang06)             | 서버 구축, Backend/Frontend 개발            |
+| **송인섭** | 웹 서비스 개발  | [GitHub 링크](https://github.com/SongInseob)             | Backend/Frontend 개발             |
+| **김명철** | Agent 개발    | [GitHub 링크](https://github.com/qpwpep)             | LangGraph 기반 Agent 구축, 웹검색 및 슬랙 메시지 발송 도구 개발 |
+| **김상윤** | Agent 개발    | [GitHub 링크](https://github.com/94KSY)             | 멀티턴 기능 개발   |
+| **정소현** | Agent 개발    | [GitHub 링크](https://github.com/soniajhung)             | 파일 저장 및 노트북 파일 기반 RAG 검색 도구 개발   |
 
 ---
 
-## **7. Appendix**  
-### **7.1 참고 자료**  
-- *[LangChain공식문서](https://docs.langchain.com/oss/python/langchain/overview)* 
-- *[Streamlit공식문서](https://docs.streamlit.io/)*
-- *[FastAPI공식문서](https://fastapi.tiangolo.com/ko/)*
+## 🔷 6. Appendix  
+### 🔸 6.1 참고 자료  
+- [LangChain 공식 문서](https://docs.langchain.com/oss/python/langchain/overview)
+- [Streamlit 공식 문서](https://docs.streamlit.io/)
+- [FastAPI 공식 문서](https://fastapi.tiangolo.com/ko/)
 
 
-### **7.2 설치 및 실행 방법**  
-1. **필수 라이브러리 설치:**  
-    ```bash
-    uv pip install -e .  # pyproject.toml 기반 설치
-    ```
+### 🔸 6.2 설치 및 실행 방법  
+**1. 필수 라이브러리 설치:**  
+- ```bash
+  uv pip install -e .  # pyproject.toml 기반 설치
+  ```
 
-2. **서버 실행:**  
-    ```bash
-    uv run python -m new_src.main --mode startweb
-    ```
+**2. 서버 실행/종료:**  
+- **CLI**
+  ```bash
+  uv run python -m new_src.main
+  ```
+    
+- **WebService**
+  ```bash
+  uv run python -m src.main --mode startweb
+  uv run python -m src.main --mode stopweb
+  ```
 
-3. **웹페이지 접속:**  
-    ```
-    http://localhost:8000
-    ```
+**3. 웹페이지 접속:**  
+- ```
+  http://localhost:8501
+  ```
 
-### **7.3 주요 커밋 기록 및 업데이트 내역**  
-
-| 날짜         | 업데이트 내용                              | 담당자      |
-|-------------|------------------------------------------|------------|
-| YYYY.MM.DD  | 초기 프로젝트 세팅 및 환경 설정 추가          | 홍길동      |
-| YYYY.MM.DD  | AI 모델 최적화 및 성능 개선                   | 이영희      |
-| YYYY.MM.DD  | UI 디자인 및 페이지 구조 업데이트              | 김철수      |
-| YYYY.MM.DD  | 데이터 전처리 및 분석 코드 추가                | 박수진      |
-| YYYY.MM.DD  | 배포 환경 설정 및 Docker 이미지 구성           | 홍길동      |
-
-### **7.4 발표 자료**
-https://docs.google.com/presentation/d/1KiRUrTyEqgig5LG9ZoqUFCCZnZSLrDb_/edit?slide=id.p4#slide=id.p4
+### 🔸 6.3 발표 자료
+[발표 자료 링크](https://github.com/AIBootcamp14/langchainproject-new-langchainproject_3/blob/main/docs/%5B%E1%84%91%E1%85%A2%E1%84%89%E1%85%B3%E1%84%90%E1%85%B3%E1%84%8F%E1%85%A2%E1%86%B7%E1%84%91%E1%85%A5%E1%84%89%E1%85%B3%5D-Upstage-AI-Lab-9%E1%84%80%E1%85%B5_Langchain-%E1%84%91%E1%85%B3%E1%84%85%E1%85%A9%E1%84%8C%E1%85%A6%E1%86%A8%E1%84%90%E1%85%B3-3%E1%84%8C%E1%85%A9.pdf)
 
