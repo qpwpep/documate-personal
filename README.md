@@ -52,18 +52,22 @@
 
 | 이름      | 역할              | GitHub                               | 담당 기능                                 |
 |----------|------------------|-------------------------------------|-----------------------------------------|
-| **장윤정** | 팀장/웹 서비스 개발 | [GitHub 링크]             | 서버 구축, API 개발, 배포 관리            |
-| **송인섭** | 웹 서비스 개발  | [GitHub 링크]             | UI/UX 디자인, 프론트엔드 개발             |
-| **김명철** | Agent 개발    | [GitHub 링크]             | AI 모델 선정 및 학습, 데이터 분석         |
+| **장윤정** | 팀장/웹 서비스 개발 | GitHub 링크             | 서버 구축, API 개발, 배포 관리            |
+| **송인섭** | 웹 서비스 개발  | GitHub 링크             | UI/UX 디자인, 프론트엔드 개발             |
+| **김명철** | Agent 개발    | GitHub 링크             | AI 모델 선정 및 학습, 데이터 분석         |
 | **김상윤** | Agent 개발    | https://github.com/94KSY             | 멀티턴 기능 개발   |
-| **정소현** | Agent 개발    | [GitHub 링크]             | 데이터 수집, 전처리, 성능 평가 및 테스트   |
+| **정소현** | Agent 개발    | GitHub 링크             | 데이터 수집, 전처리, 성능 평가 및 테스트   |
 
 ---
 
 ## **7. Appendix**  
 ### **7.1 참고 자료**  
-- 코드 참고 자료: *LangChain 공식 문서*  
+- 코드 참고 자료:
+  *[LangChain공식문서](https://docs.langchain.com/oss/python/langchain/overview)*  
+  *[Streamlit공식문서](https://docs.streamlit.io/)*
+  *[FastAPI공식문서](https://fastapi.tiangolo.com/ko/)*
 
+  
 ### **7.2 설치 및 실행 방법**  
 1. **필수 라이브러리 설치:**  
     ```bash
