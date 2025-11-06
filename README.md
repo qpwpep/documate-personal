@@ -132,5 +132,5 @@
   ```
 
 ### 🔸 6.3 발표 자료
-[발표 자료 링크](https://github.com/AIBootcamp14/langchainproject-new-langchainproject_3/blob/main/docs/%5B%E1%84%91%E1%85%A2%E1%84%89%E1%85%B3%E1%84%90%E1%85%B3%E1%84%8F%E1%85%A2%E1%86%B7%E1%84%91%E1%85%A5%E1%84%89%E1%85%B3%5D-Upstage-AI-Lab-9%E1%84%80%E1%85%B5_Langchain-%E1%84%91%E1%85%B3%E1%84%85%E1%85%A9%E1%84%8C%E1%85%A6%E1%86%A8%E1%84%90%E1%85%B3-3%E1%84%8C%E1%85%A9.pdf)
+[발표 자료 링크](https://github.com/AIBootcamp14/langchainproject-new-langchainproject_3/blob/main/docs/Langchain_Project_Team_3.pdf)
 
