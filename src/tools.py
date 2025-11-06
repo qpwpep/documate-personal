@@ -15,7 +15,7 @@ from langchain_chroma import Chroma
 from slack_sdk.web import WebClient
 from slack_sdk.errors import SlackApiError
 
-from new_src.util.util import get_save_text_output_dir 
+from src.util.util import get_save_text_output_dir 
 
 # ─────────────────────────────────────────────
 # 1. Environment setup
@@ -115,7 +115,7 @@ def _load_chroma():
 def rag_search(query: str, k: int = 4) -> str:
     """Search local .ipynb notebooks and return relevant snippets with sources."""
     if not os.path.isdir(INDEX_PATH):
-        return "RAG index not found. Please build it first (python -m new_src.rag_build)."
+        return "RAG index not found. Please build it first (python -m src.rag_build)."
 
     db = _load_chroma()
     docs = db.similarity_search(query, k=k)
