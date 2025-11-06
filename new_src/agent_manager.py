@@ -98,4 +98,4 @@ class AgentFlowManager:
         
         except Exception as e:
             print(f"Agent 실행 중 오류 발생: {e}")
-            return f"Agent 실행 중 오류가 발생했습니다: {e}"
+            return {"message": str(e)}
