@@ -124,10 +124,10 @@ if __name__ == "__main__":
 
     """
     CLI 기반 실행 명령어(기본):
-        uv run python -m new_src.main
+        uv run python -m src.main
     WebService 실행 명령어:
-        uv run python -m new_src.main --mode startweb (웹서비스 시작)
-        uv run python -m new_src.main --mode stopweb (웹서비스 종료)
+        uv run python -m src.main --mode startweb (웹서비스 시작)
+        uv run python -m src.main --mode stopweb (웹서비스 종료)
     """
 
     parser = argparse.ArgumentParser()
