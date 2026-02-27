@@ -108,27 +108,43 @@
 - [FastAPI 공식 문서](https://fastapi.tiangolo.com/ko/)
 
 
-### 🔸 6.2 설치 및 실행 방법  
-**1. 필수 라이브러리 설치:**  
+### 🔸 6.2 설치 및 실행 방법 (OS 공통 권장)  
+> 기본 실행 방법은 `bash` 스크립트 없이 동작하므로 Windows/macOS/Linux에서 동일하게 사용할 수 있습니다.
+
+**1. 의존성 설치:**  
 - ```bash
-  uv pip install -e .  # pyproject.toml 기반 설치
+  uv sync
   ```
 
-**2. 서버 실행/종료:**  
-- **CLI**
-  ```bash
-  uv run python -m new_src.main
+**2. CLI 실행:**  
+- ```bash
+  uv run python -m src.main
   ```
-    
-- **WebService**
+
+**3. WebService 실행 (터미널 2개 사용):**  
+- **터미널 A (FastAPI)**
   ```bash
+  uv run uvicorn src.web.main:app --reload --host 0.0.0.0 --port 8000
+  ```
+- **터미널 B (Streamlit)**
+  ```bash
+  uv run streamlit run src/web/streamlit_app.py --server.port 8501
+  ```
+- **종료 방법:** 각 터미널에서 `Ctrl + C`
+
+**4. WebService 실행/종료 (단일 명령, OS 공통):**
+- ```bash
   uv run python -m src.main --mode startweb
   uv run python -m src.main --mode stopweb
   ```
 
-**3. 웹페이지 접속:**  
-- ```
-  http://localhost:8501
+**5. 웹페이지 접속:**  
+- `http://localhost:8501`
+
+**6. (선택) Bash 스크립트 기반 실행 (macOS/Linux):**  
+- ```bash
+  bash script/start_services.sh
+  bash script/stop_services.sh
   ```
 
 ### 🔸 6.3 발표 자료
