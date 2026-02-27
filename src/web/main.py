@@ -21,6 +21,7 @@ slack_client = WebClient(token=SLACK_BOT_TOKEN) if SLACK_BOT_TOKEN else None
 
 logger = logging.getLogger("uvicorn")
 app = FastAPI()
+ALLOWED_UPLOAD_SUFFIXES = {".py", ".ipynb"}
 
 def _resolve_user_id(user_id: str | None, email: str | None) -> str | None:
     """우선순위: 요청값(user_id/email) → .env → None"""
@@ -184,6 +185,32 @@ def _get_or_create_agent(session_id: str) -> AgentFlowManager:
     return agent
 
 
+def _validate_upload_file_path(upload_file_path: str | None, session_id: str) -> str | None:
+    """
+    Validate client-provided upload path and return a normalized absolute path.
+    The file must exist under uploads/<session_id>/ and be one of allowed types.
+    """
+    if not upload_file_path:
+        return None
+
+    try:
+        session_upload_dir = (Path("uploads") / session_id).resolve()
+        candidate_path = Path(upload_file_path).expanduser().resolve()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid upload_file_path")
+
+    if session_upload_dir not in candidate_path.parents:
+        raise HTTPException(status_code=400, detail="Invalid upload file location")
+
+    if candidate_path.suffix.lower() not in ALLOWED_UPLOAD_SUFFIXES:
+        raise HTTPException(status_code=400, detail="Unsupported upload file type")
+
+    if not candidate_path.is_file():
+        raise HTTPException(status_code=400, detail="Upload file not found")
+
+    return str(candidate_path)
+
+
 # http://localhost:8000/agent
 @app.post("/agent", response_model=AgentResponse)
 async def run_agent_api(
@@ -195,7 +222,7 @@ async def run_agent_api(
     
     user_query = request_data.query
     session_id = request_data.session_id
-    upload_file_path = request_data.upload_file_path
+    upload_file_path = _validate_upload_file_path(request_data.upload_file_path, session_id)
     logger.info(f"[upload_file_path] : {str(upload_file_path)}")
 
     # session_id 기준으로 하나의 agent_manager를 생성하여 사용
