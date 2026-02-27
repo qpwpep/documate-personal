@@ -1,3 +1,6 @@
+# LEGACY / REFERENCE ONLY
+# This file is kept for historical comparison and is not used by runtime paths.
+
 import re
 import os
 import json

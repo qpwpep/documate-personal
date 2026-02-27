@@ -3,7 +3,6 @@ from langgraph.prebuilt import ToolNode, tools_condition
 
 from .node import State, chatbot, add_user_message, summarize_old_messages
 from .tools import tavilysearch, rag_search_tool, save_text_tool, slack_notify_tool
-from .edge import wire_tool_edges
 
 
 def build_graph():
