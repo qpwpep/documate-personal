@@ -25,6 +25,8 @@ load_dotenv(find_dotenv(), override=True)
 TAVILY_KEY = os.getenv("TAVILY_API_KEY")
 OPENAI_KEY = os.getenv("OPENAI_API_KEY")
 SLACK_BOT_TOKEN = os.getenv("SLACK_BOT_TOKEN")
+SLACK_DEFAULT_DM_EMAIL = os.getenv("SLACK_DEFAULT_DM_EMAIL")
+SLACK_DEFAULT_USER_ID = os.getenv("SLACK_DEFAULT_USER_ID")
 
 assert TAVILY_KEY, "Missing TAVILY_API_KEY in environment (.env not loaded or key not set)."
 assert OPENAI_KEY, "Missing OPENAI_API_KEY in environment (.env not loaded or key not set)."
