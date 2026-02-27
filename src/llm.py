@@ -11,14 +11,14 @@ assert os.getenv("TAVILY_API_KEY"), "Missing TAVILY_API_KEY"
 from .tools import tools  # relative import assumes package-style usage
 
 # LLMs and bindings
-llm = ChatOpenAI(model="gpt-4.1-mini")
+llm = ChatOpenAI(model="gpt-5.2")
 llm_with_tools = llm.bind_tools(tools)
 
 # Verbosity flag used by main loop
 VERBOSE = True
 
 # 요약 전용 llm
-SUMMARY_MODEL = os.getenv("SUMMARY_MODEL", "gpt-4o-mini")
+SUMMARY_MODEL = os.getenv("SUMMARY_MODEL", "gpt-5-mini")
 llm_summarizer = ChatOpenAI(
     model=SUMMARY_MODEL,
     temperature=0,     # 요약은 사실 중심/결정론적으로
