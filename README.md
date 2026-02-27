@@ -30,17 +30,16 @@
 ├── src
 │   ├── main.py
 │   ├── agent_manager.py
-│   ├── agent_state.py
-│   ├── edge.py
 │   ├── graph_builder.py
 │   ├── make_graph.py
 │   ├── llm.py
 │   ├── node.py
 │   ├── prompts.py
 │   ├── rag_build.py
+│   ├── slack_utils.py
 │   ├── tools.py
 │   ├── upload_helpers.py
-│   ├── baseline_code.py
+│   ├── baseline_code.py  # LEGACY/REFERENCE ONLY (런타임 미사용)
 │   ├── util
 │   │   └── util.py
 │   └── web
