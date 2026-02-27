@@ -13,7 +13,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 from langchain_core.messages import AIMessage
 
-from .make_graph import build_graph
+from .graph_builder import build_agent_graph
 from .llm import VERBOSE
 from .util.util import get_project_root_path
 
@@ -34,9 +34,8 @@ def maybe_save_mermaid_png(graph):
         pass
 
 def run_cli():
-    from langchain_core.messages import AIMessage
     load_dotenv()
-    graph = build_graph()
+    graph = build_agent_graph()
     maybe_save_mermaid_png(graph)
     
     # 멀티턴을 위한 전체 메시지 저장 변수
