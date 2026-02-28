@@ -1,10 +1,30 @@
 import streamlit as st
 import requests
 import os
+import sys
 import uuid
 
 from src.domain_docs import DEFAULT_DOCS
+from src.runtime_encoding import ensure_utf8_stdio
 from src.settings import get_settings
+
+ensure_utf8_stdio()
+
+
+@st.cache_resource(show_spinner=False)
+def _warn_if_utf8_mode_disabled_once() -> None:
+    if sys.flags.utf8_mode == 1:
+        return
+
+    print(
+        "WARNING: UTF-8 mode is disabled (utf8_mode=0). For direct launch, run "
+        "'uv run python -X utf8 -m streamlit run src/web/streamlit_app.py --server.port 8501' "
+        "or set PYTHONUTF8=1 before startup. An already-started interpreter cannot fully "
+        "switch utf8_mode at runtime."
+    )
+
+
+_warn_if_utf8_mode_disabled_once()
 
 with st.sidebar:
     st.subheader("Slack 전송")
