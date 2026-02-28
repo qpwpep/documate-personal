@@ -26,6 +26,13 @@ class AppSettings(BaseSettings):
 
     verbose: bool = Field(default=True, alias="VERBOSE")
     fastapi_url: str = Field(default="http://localhost:8000", alias="FASTAPI_URL")
+    session_ttl_seconds: int = Field(default=1800, alias="SESSION_TTL_SECONDS", ge=1)
+    max_active_sessions: int = Field(default=200, alias="MAX_ACTIVE_SESSIONS", ge=1)
+    session_cleanup_interval_seconds: int = Field(
+        default=60,
+        alias="SESSION_CLEANUP_INTERVAL_SECONDS",
+        ge=1,
+    )
 
     slack_bot_token: str | None = Field(default=None, alias="SLACK_BOT_TOKEN")
     slack_default_dm_email: str | None = Field(default=None, alias="SLACK_DEFAULT_DM_EMAIL")
