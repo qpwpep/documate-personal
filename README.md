@@ -41,9 +41,6 @@
 │   ├── team_docs
 │   │   └── Langchain_Project_Team_3.pdf
 │   └── README.md
-├── script
-│   ├── start_services.sh
-│   └── stop_services.sh
 ├── src
 │   ├── main.py
 │   ├── agent_manager.py
@@ -91,16 +88,9 @@ uv run python -m src.main --mode startweb
 uv run python -m src.main --mode stopweb
 ```
 
-### 4.4 Web 실행 (프로세스 분리)
-
-```bash
-uv run uvicorn src.web.main:app --reload --host 0.0.0.0 --port 8000
-uv run streamlit run src/web/streamlit_app.py --server.port 8501
-```
-
 웹 UI: `http://localhost:8501`
 
-### 4.5 파일 수명주기 정책
+### 4.4 파일 수명주기 정책
 
 - `uploads/<session_id>/` 업로드 파일은 세션 기준 TTL(`SESSION_TTL_SECONDS`)을 따릅니다.
 - `output/save_text/*.txt` 생성 파일은 `GENERATED_FILE_TTL_SECONDS`(기본 86400초, 24시간) 이후 자동 삭제됩니다.
