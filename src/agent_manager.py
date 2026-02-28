@@ -5,14 +5,16 @@ from typing import Any, Dict, List, Optional
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from .graph_builder import build_agent_graph
+from .settings import AppSettings, get_settings
 from .upload_helpers import build_temp_retriever
 
 
 class AgentFlowManager:
     """Manages per-session LangGraph execution and message state."""
 
-    def __init__(self):
-        self.graph = build_agent_graph()
+    def __init__(self, settings: AppSettings | None = None):
+        self.settings = settings or get_settings()
+        self.graph = build_agent_graph(self.settings)
         self.messages: List[Any] = []
         self.retriever = None
         self.upload_file_path: Optional[str] = None
