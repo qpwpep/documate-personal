@@ -1,5 +1,6 @@
-﻿import argparse
+import argparse
 import json
+import os
 import socket
 import subprocess
 import sys
@@ -9,8 +10,16 @@ from pathlib import Path
 import psutil
 from langchain_core.messages import AIMessage
 
+from .runtime_encoding import (
+    build_utf8_env,
+    ensure_utf8_stdio,
+    maybe_reexec_with_utf8_for_main,
+)
 from .settings import ConfigurationError, get_settings, validate_required_keys
 from .util.util import get_project_root_path
+
+
+ensure_utf8_stdio()
 
 
 SERVICE_STATE_FILE = Path("script/web_services_state.json")
@@ -260,7 +269,12 @@ def _find_process_pid_by_tokens(tokens: list[str]) -> int | None:
     return matches[0][1]
 
 
-def _start_background_process(command: list[str], cwd: Path, log_path: Path) -> subprocess.Popen:
+def _start_background_process(
+    command: list[str],
+    cwd: Path,
+    log_path: Path,
+    env: dict[str, str] | None = None,
+) -> subprocess.Popen:
     log_path.parent.mkdir(parents=True, exist_ok=True)
     with log_path.open("a", encoding="utf-8") as log_file:
         process = subprocess.Popen(
@@ -269,6 +283,7 @@ def _start_background_process(command: list[str], cwd: Path, log_path: Path) -> 
             stdout=log_file,
             stderr=subprocess.STDOUT,
             start_new_session=True,
+            env=env,
         )
 
     time.sleep(0.8)
@@ -379,8 +394,11 @@ def _start_web_services(root_path: str) -> None:
     fastapi_log_path = root / FASTAPI_LOG_FILE
     streamlit_log_path = root / STREAMLIT_LOG_FILE
 
+    utf8_env = build_utf8_env(os.environ.copy())
     fastapi_cmd = [
         sys.executable,
+        "-X",
+        "utf8",
         "-m",
         "uvicorn",
         "src.web.main:app",
@@ -391,6 +409,8 @@ def _start_web_services(root_path: str) -> None:
     ]
     streamlit_cmd = [
         sys.executable,
+        "-X",
+        "utf8",
         "-m",
         "streamlit",
         "run",
@@ -410,6 +430,7 @@ def _start_web_services(root_path: str) -> None:
             command=fastapi_cmd,
             cwd=root,
             log_path=fastapi_log_path,
+            env=utf8_env,
         )
         if not _wait_for_port_open(FASTAPI_PORT):
             raise RuntimeError(f"FastAPI port({FASTAPI_PORT}) was not opened. Log: {fastapi_log_path}")
@@ -422,6 +443,7 @@ def _start_web_services(root_path: str) -> None:
             command=streamlit_cmd,
             cwd=root,
             log_path=streamlit_log_path,
+            env=utf8_env,
         )
         if not _wait_for_port_open(STREAMLIT_PORT):
             raise RuntimeError(f"Streamlit port({STREAMLIT_PORT}) was not opened. Log: {streamlit_log_path}")
@@ -541,6 +563,8 @@ def run_web_service(mode: str):
 
 
 if __name__ == "__main__":
+    maybe_reexec_with_utf8_for_main(sys.argv[1:])
+
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--mode",

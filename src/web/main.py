@@ -1,5 +1,6 @@
 import logging
 import shutil
+import sys
 import time
 import uuid
 from dataclasses import dataclass
@@ -10,12 +11,31 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse
 from langchain_core.messages import SystemMessage
 
+from ..runtime_encoding import ensure_utf8_stdio
 from .schemas import AgentRequest, AgentResponse
 from ..agent_manager import AgentFlowManager
 from ..settings import ConfigurationError, get_settings, validate_required_keys
 from ..util.util import get_save_text_output_dir
 
+
+ensure_utf8_stdio()
+
 logger = logging.getLogger("uvicorn")
+
+
+def _warn_if_utf8_mode_disabled() -> None:
+    if sys.flags.utf8_mode == 1:
+        return
+
+    logger.warning(
+        "UTF-8 mode is disabled (utf8_mode=0). For direct launch, run "
+        "'uv run python -X utf8 -m uvicorn src.web.main:app --host 0.0.0.0 --port 8000' "
+        "or set PYTHONUTF8=1 before startup. An already-started interpreter cannot fully "
+        "switch utf8_mode at runtime."
+    )
+
+
+_warn_if_utf8_mode_disabled()
 app = FastAPI()
 ALLOWED_UPLOAD_SUFFIXES = {".py", ".ipynb"}
 
