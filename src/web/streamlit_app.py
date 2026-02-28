@@ -2,7 +2,9 @@ import streamlit as st
 import requests
 import os
 import uuid
-from dotenv import load_dotenv
+
+from src.domain_docs import DEFAULT_DOCS
+from src.settings import get_settings
 
 with st.sidebar:
     st.subheader("Slack 전송")
@@ -10,18 +12,7 @@ with st.sidebar:
     slack_email = st.text_input("Email (optional)", value="")
     slack_channel_id = st.text_input("Channel ID (C/G/Dxxxxx, optional)", value="")
 
-# ========== tools를 참조하지 못하여 추가
-import sys
 from pathlib import Path
-# 1. 현재 파일의 부모(web)의 부모(new_src)를 프로젝트 루트로 지정합니다.
-PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-
-# 2. 이 경로를 Python 모듈 탐색 경로에 추가합니다.
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
-
-from src.tools import DEFAULT_DOCS
-# =================================
 
 # 챗봇 세션이 시작될 때 고유 ID 생성 (탭이 새로 열릴 때마다 1번 실행)
 if "session_id" not in st.session_state:
@@ -38,14 +29,8 @@ SESSION_PATH = UPLOADS_DIR / st.session_state['session_id']
 SESSION_PATH.mkdir(parents=True, exist_ok=True)
 # =================================
 
-# 환경변수 로드
-load_dotenv()
-
-# FastAPI 서버의 주소 설정
-FASTAPI_URL = os.environ.get("FASTAPI_URL")
-if FASTAPI_URL is None:
-    FASTAPI_URL="http://localhost:8000"
-    print(f"debug >> 기본 주소 없어서 재설정 ({FASTAPI_URL})")
+SETTINGS = get_settings()
+FASTAPI_URL = SETTINGS.fastapi_url
 
 # FastAPI Agent API 호출 함수
 def get_agent_response(user_input: str):

@@ -9,6 +9,7 @@ from langchain_core.messages import SystemMessage
 
 from .schemas import AgentRequest, AgentResponse
 from ..agent_manager import AgentFlowManager
+from ..settings import ConfigurationError, get_settings, validate_required_keys
 from ..util.util import get_save_text_output_dir
 
 logger = logging.getLogger("uvicorn")
@@ -17,6 +18,15 @@ ALLOWED_UPLOAD_SUFFIXES = {".py", ".ipynb"}
 
 # In-memory per-session agent cache.
 active_agents: dict[str, AgentFlowManager] = {}
+
+
+@app.on_event("startup")
+async def validate_app_settings_on_startup() -> None:
+    try:
+        validate_required_keys(get_settings(), context="fastapi_startup")
+    except ConfigurationError as exc:
+        logger.error(str(exc))
+        raise RuntimeError(str(exc)) from exc
 
 
 @app.get("/")
@@ -37,7 +47,7 @@ async def add_request_id(request: Request, call_next):
 def _get_or_create_agent(session_id: str) -> AgentFlowManager:
     """Return an AgentFlowManager for the session, creating one if needed."""
     if session_id not in active_agents:
-        agent = AgentFlowManager()
+        agent = AgentFlowManager(settings=get_settings())
         active_agents[session_id] = agent
         logger.info(f"AgentManager created: {session_id[:8]}")
     else:
