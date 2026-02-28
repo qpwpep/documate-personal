@@ -1,29 +1,37 @@
-import os
-from dotenv import load_dotenv
+from dataclasses import dataclass
+from typing import Any
+
 from langchain_openai import ChatOpenAI
 
-# Load environment and validate required keys
-load_dotenv()
-assert os.getenv("OPENAI_API_KEY"), "Missing OPENAI_API_KEY"
-assert os.getenv("TAVILY_API_KEY"), "Missing TAVILY_API_KEY"
-# assert os.getenv("LANGSMITH_API_KEY"), "Missing LANGSMITH_API_KEY"
+from .settings import AppSettings
 
-from .tools import tools  # relative import assumes package-style usage
 
-# LLMs and bindings
-llm = ChatOpenAI(model="gpt-5.2")
-llm_with_tools = llm.bind_tools(tools)
+@dataclass(frozen=True)
+class LLMRegistry:
+    llm_with_tools: Any
+    llm_summarizer: Any
+    verbose: bool
 
-# Verbosity flag used by main loop
-VERBOSE = True
 
-# 요약 전용 llm
-SUMMARY_MODEL = os.getenv("SUMMARY_MODEL", "gpt-5-mini")
-llm_summarizer = ChatOpenAI(
-    model=SUMMARY_MODEL,
-    temperature=0,     # 요약은 사실 중심/결정론적으로
-    max_tokens=250,    # 4~5줄 목표
-    timeout=60,
-    max_retries=2,
-    verbose=VERBOSE,   # 필요 시 내부 로그 확인
-)
+def build_llm_registry(settings: AppSettings, tools: list[Any]) -> LLMRegistry:
+    llm = ChatOpenAI(
+        model=settings.chat_model,
+        api_key=settings.openai_api_key,
+    )
+    llm_with_tools = llm.bind_tools(tools)
+
+    llm_summarizer = ChatOpenAI(
+        model=settings.summary_model,
+        api_key=settings.openai_api_key,
+        temperature=0,
+        max_tokens=250,
+        timeout=60,
+        max_retries=2,
+        verbose=settings.verbose,
+    )
+
+    return LLMRegistry(
+        llm_with_tools=llm_with_tools,
+        llm_summarizer=llm_summarizer,
+        verbose=settings.verbose,
+    )
