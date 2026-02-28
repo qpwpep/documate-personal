@@ -81,6 +81,8 @@ uv sync
 uv run python -m src.main
 ```
 
+위 명령은 `utf8_mode=0` 환경(예: Windows PowerShell 5.1)에서도 내부 재실행을 통해 UTF-8 모드로 동작합니다.
+
 ### 4.3 Web 실행 (단일 명령)
 
 ```bash
@@ -96,6 +98,16 @@ uv run python -m src.main --mode stopweb
 - `output/save_text/*.txt` 생성 파일은 `GENERATED_FILE_TTL_SECONDS`(기본 86400초, 24시간) 이후 자동 삭제됩니다.
 - 파일 정리는 FastAPI 시작 시 1회 + `/agent` 요청 시 주기적으로 수행됩니다.
 - 만료되어 삭제된 파일은 다운로드 시 `404 Not Found`가 반환될 수 있습니다.
+
+### 4.5 FastAPI/Streamlit 직접 실행 시 권장 명령 (UTF-8 강제)
+
+```bash
+uv run python -X utf8 -m uvicorn src.web.main:app --host 0.0.0.0 --port 8000
+uv run python -X utf8 -m streamlit run src/web/streamlit_app.py --server.port 8501
+```
+
+`uvicorn`/`streamlit`을 직접 실행할 때는 `-X utf8` 또는 `PYTHONUTF8=1` 설정이 필요합니다.
+이미 시작된 인터프리터의 `utf8_mode`는 런타임 코드만으로 완전 전환할 수 없습니다.
 
 ## 5. 환경변수 설정
 
@@ -129,3 +141,22 @@ cp .env.example .env
 - LangChain: https://docs.langchain.com/oss/python/langchain/overview
 - Streamlit: https://docs.streamlit.io/
 - FastAPI: https://fastapi.tiangolo.com/ko/
+
+## 7. 프로젝트 인코딩 정책 (UTF-8 no BOM)
+
+- 텍스트 파일 기본 인코딩: UTF-8 (no BOM)
+- 에디터 기본값은 루트 `.editorconfig`의 `charset = utf-8`을 따릅니다.
+- Windows PowerShell 5.1은 터미널 표시 인코딩이 UTF-8이 아닐 수 있어, 콘솔에서 한글이 깨져 보일 수 있습니다.
+  파일 자체 인코딩과 별개이므로 실행은 `-X utf8`/`PYTHONUTF8=1` 기준으로 확인하세요.
+
+수동 인코딩 검증:
+
+```bash
+uv run python script/check_encoding.py
+```
+
+런타임 인코딩 확인 예시:
+
+```bash
+uv run python -X utf8 -c "import sys, locale; print(sys.flags.utf8_mode, sys.stdout.encoding, locale.getpreferredencoding(False))"
+```
