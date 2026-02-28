@@ -280,3 +280,7 @@ data/*
 # uploaded user files (do not commit)
 uploads*
 !uploads/.gitkeep
+
+# runtime service state and generated outputs
+script/web_services_state.json
+output/save_text/
