@@ -100,6 +100,13 @@ uv run streamlit run src/web/streamlit_app.py --server.port 8501
 
 웹 UI: `http://localhost:8501`
 
+### 4.5 파일 수명주기 정책
+
+- `uploads/<session_id>/` 업로드 파일은 세션 기준 TTL(`SESSION_TTL_SECONDS`)을 따릅니다.
+- `output/save_text/*.txt` 생성 파일은 `GENERATED_FILE_TTL_SECONDS`(기본 86400초, 24시간) 이후 자동 삭제됩니다.
+- 파일 정리는 FastAPI 시작 시 1회 + `/agent` 요청 시 주기적으로 수행됩니다.
+- 만료되어 삭제된 파일은 다운로드 시 `404 Not Found`가 반환될 수 있습니다.
+
 ## 5. 환경변수 설정
 
 `.env.example`을 복사해서 `.env`를 생성하세요.
@@ -121,6 +128,8 @@ cp .env.example .env
 - `SESSION_TTL_SECONDS` (default: `1800`)
 - `MAX_ACTIVE_SESSIONS` (default: `200`)
 - `SESSION_CLEANUP_INTERVAL_SECONDS` (default: `60`)
+- `GENERATED_FILE_TTL_SECONDS` (default: `86400`)
+- `FILE_CLEANUP_INTERVAL_SECONDS` (default: `60`)
 - `SLACK_BOT_TOKEN`
 - `SLACK_DEFAULT_USER_ID`
 - `SLACK_DEFAULT_DM_EMAIL`
