@@ -1,27 +1,26 @@
-print(">>> running main from:", __file__)
-
-import sys
-import os
 import argparse
-import subprocess
 import json
-import time
-import signal
-import shutil
+import os
 import re
+import shutil
+import signal
+import subprocess
+import sys
+import time
 from pathlib import Path
-from dotenv import load_dotenv
+
 from langchain_core.messages import AIMessage
 
-from .graph_builder import build_agent_graph
-from .llm import VERBOSE
+from .settings import ConfigurationError, get_settings, validate_required_keys
 from .util.util import get_project_root_path
+
 
 SERVICE_STATE_FILE = "script/web_services_state.json"
 FASTAPI_LOG_FILE = "fastapi.log"
 STREAMLIT_LOG_FILE = "streamlit.log"
 FASTAPI_PORT = 8000
 STREAMLIT_PORT = 8501
+
 
 def maybe_save_mermaid_png(graph):
     try:
@@ -30,53 +29,61 @@ def maybe_save_mermaid_png(graph):
             f.write(png_bytes)
         print("Saved graph to graph.png")
     except Exception:
-        # Might fail if mermaid/graphviz backends aren't installed
         pass
 
-def run_cli():
-    load_dotenv()
-    graph = build_agent_graph()
-    maybe_save_mermaid_png(graph)
-    
-    # 멀티턴을 위한 전체 메시지 저장 변수
-    messages = []
 
+def _load_validated_settings(context: str):
+    settings = get_settings()
+    validate_required_keys(settings, context=context)
+    return settings
+
+
+def run_cli():
+    try:
+        settings = _load_validated_settings("cli")
+    except ConfigurationError as exc:
+        print(f"Configuration error: {exc}")
+        return
+
+    from .graph_builder import build_agent_graph
+
+    graph = build_agent_graph(settings=settings)
+    maybe_save_mermaid_png(graph)
+    verbose = settings.verbose
+
+    messages = []
     while True:
         try:
             user_input = input("User: ").strip()
             if user_input.lower() in {"quit", "exit", "q"}:
                 print("Goodbye!")
                 break
-            
-            # LangGraph에 멀티턴 상태 전달
+
             state = {
                 "user_input": user_input,
-                "messages": messages  # 이전 대화 전달
+                "messages": messages,
             }
-
             response = graph.invoke(state)
-            
-            # 결과 메시지 업데이트
             messages = response["messages"]
 
-            if VERBOSE:
+            if verbose:
                 for msg in response["messages"]:
                     try:
                         msg.pretty_print()
                     except Exception:
                         print(repr(msg))
             else:
-                # Print the last AI message
-                for m in reversed(messages):
-                    if isinstance(m, AIMessage):
-                        print(m.content)
+                for msg in reversed(messages):
+                    if isinstance(msg, AIMessage):
+                        print(msg.content)
                         break
         except KeyboardInterrupt:
             print("\nGoodbye!")
             break
-        except Exception as e:
-            print("Error:", e)
+        except Exception as exc:
+            print("Error:", exc)
             break
+
 
 def _service_state_path(root_path: str) -> Path:
     return Path(root_path) / SERVICE_STATE_FILE
@@ -119,9 +126,7 @@ def _is_process_alive(pid: int | None) -> bool:
             check=False,
         )
         output = result.stdout.strip()
-        if not output:
-            return False
-        if output.startswith("INFO:"):
+        if not output or output.startswith("INFO:"):
             return False
         return str(pid) in output
 
@@ -145,11 +150,9 @@ def _start_background_process(command: list[str], cwd: str, log_path: str) -> su
         else:
             process = subprocess.Popen(command, start_new_session=True, **kwargs)
 
-    # 즉시 종료되는 경우(포트 충돌/명령 오류) 감지
     time.sleep(0.8)
     if process.poll() is not None:
-        raise RuntimeError(f"프로세스 시작 실패: {' '.join(command)} (로그: {log_path})")
-
+        raise RuntimeError(f"Process start failed: {' '.join(command)} (log: {log_path})")
     return process
 
 
@@ -176,11 +179,9 @@ def _get_listening_pids(port: int) -> set[int]:
             parts = line.split()
             if len(parts) < 5:
                 continue
-            state = parts[3].upper()
-            if state != "LISTENING":
+            if parts[3].upper() != "LISTENING":
                 continue
-            local_addr = parts[1]
-            if not local_addr.endswith(f":{port}"):
+            if not parts[1].endswith(f":{port}"):
                 continue
             try:
                 pids.add(int(parts[4]))
@@ -235,11 +236,11 @@ def _wait_for_service_pid(port: int, before_pids: set[int], timeout_sec: float =
 
 def _terminate_process(pid: int | None, name: str) -> bool:
     if not pid:
-        print(f"- {name}: PID 정보가 없습니다.")
+        print(f"- {name}: PID information is missing.")
         return False
 
     if not _is_process_alive(pid):
-        print(f"- {name}: 이미 종료됨 (PID {pid})")
+        print(f"- {name}: already stopped (PID {pid})")
         return False
 
     try:
@@ -251,33 +252,32 @@ def _terminate_process(pid: int | None, name: str) -> bool:
                 check=False,
             )
             if result.returncode == 0:
-                print(f"- {name}: 종료 완료 (PID {pid})")
+                print(f"- {name}: stopped (PID {pid})")
                 return True
-            print(f"- {name}: 종료 실패 (PID {pid})")
+            print(f"- {name}: stop failed (PID {pid})")
             if result.stdout:
                 print(result.stdout.strip())
             if result.stderr:
                 print(result.stderr.strip())
             return False
-        else:
-            os.killpg(pid, signal.SIGTERM)
-            if _wait_until_stopped(pid, timeout_sec=5):
-                print(f"- {name}: 종료 완료 (PID {pid})")
-                return True
-            os.killpg(pid, signal.SIGKILL)
-            stopped = _wait_until_stopped(pid, timeout_sec=2)
-            print(f"- {name}: 종료 완료 (PID {pid})" if stopped else f"- {name}: 종료 실패 (PID {pid})")
-            return stopped
+
+        os.killpg(pid, signal.SIGTERM)
+        if _wait_until_stopped(pid, timeout_sec=5):
+            print(f"- {name}: stopped (PID {pid})")
+            return True
+        os.killpg(pid, signal.SIGKILL)
+        stopped = _wait_until_stopped(pid, timeout_sec=2)
+        print(f"- {name}: stopped (PID {pid})" if stopped else f"- {name}: stop failed (PID {pid})")
+        return stopped
     except ProcessLookupError:
-        print(f"- {name}: 이미 종료됨 (PID {pid})")
+        print(f"- {name}: already stopped (PID {pid})")
         return False
-    except Exception as e:
-        print(f"- {name}: 종료 중 오류 발생 (PID {pid}) -> {e}")
+    except Exception as exc:
+        print(f"- {name}: error while stopping (PID {pid}) -> {exc}")
         return False
 
 
 def _start_web_services(root_path: str) -> None:
-    load_dotenv(dotenv_path=os.path.join(root_path, ".env"))
     state = _load_service_state(root_path)
 
     fastapi_pid = state.get("fastapi_pid")
@@ -289,9 +289,9 @@ def _start_web_services(root_path: str) -> None:
         running.append(f"Streamlit(pid={streamlit_pid})")
 
     if running:
-        print("이미 실행 중인 서비스가 있습니다.")
+        print("Services are already running.")
         print(" / ".join(running))
-        print("먼저 'uv run python -m src.main --mode stopweb'를 실행하세요.")
+        print("Run 'uv run python -m src.main --mode stopweb' first.")
         return
 
     fastapi_log_path = os.path.join(root_path, FASTAPI_LOG_FILE)
@@ -318,7 +318,7 @@ def _start_web_services(root_path: str) -> None:
     ]
 
     print("=" * 60)
-    print("웹 서비스 시작 중...")
+    print("Starting web services...")
     print("=" * 60)
 
     fastapi_proc = None
@@ -334,9 +334,9 @@ def _start_web_services(root_path: str) -> None:
         )
         fastapi_service_pid = _wait_for_service_pid(FASTAPI_PORT, fastapi_before)
         if fastapi_service_pid is None:
-            raise RuntimeError(f"FastAPI 포트({FASTAPI_PORT})가 열리지 않았습니다. 로그: {fastapi_log_path}")
+            raise RuntimeError(f"FastAPI port({FASTAPI_PORT}) was not opened. Log: {fastapi_log_path}")
         print(
-            f"- FastAPI 시작 완료 (launcher PID {fastapi_proc.pid}, service PID {fastapi_service_pid}, 로그: {fastapi_log_path})"
+            f"- FastAPI started (launcher PID {fastapi_proc.pid}, service PID {fastapi_service_pid}, log: {fastapi_log_path})"
         )
 
         streamlit_before = _get_listening_pids(STREAMLIT_PORT)
@@ -347,11 +347,9 @@ def _start_web_services(root_path: str) -> None:
         )
         streamlit_service_pid = _wait_for_service_pid(STREAMLIT_PORT, streamlit_before)
         if streamlit_service_pid is None:
-            raise RuntimeError(
-                f"Streamlit 포트({STREAMLIT_PORT})가 열리지 않았습니다. 로그: {streamlit_log_path}"
-            )
+            raise RuntimeError(f"Streamlit port({STREAMLIT_PORT}) was not opened. Log: {streamlit_log_path}")
         print(
-            f"- Streamlit 시작 완료 (launcher PID {streamlit_proc.pid}, service PID {streamlit_service_pid}, 로그: {streamlit_log_path})"
+            f"- Streamlit started (launcher PID {streamlit_proc.pid}, service PID {streamlit_service_pid}, log: {streamlit_log_path})"
         )
 
         _save_service_state(
@@ -369,13 +367,13 @@ def _start_web_services(root_path: str) -> None:
         )
 
         print("=" * 60)
-        print("웹 서비스가 실행되었습니다.")
+        print("Web services are running.")
         print("- FastAPI:   http://localhost:8000")
         print("- Streamlit: http://localhost:8501")
-        print("- 종료: uv run python -m src.main --mode stopweb")
+        print("- Stop: uv run python -m src.main --mode stopweb")
         print("=" * 60)
-    except Exception as e:
-        print(f"서비스 시작 중 오류가 발생했습니다: {e}")
+    except Exception as exc:
+        print(f"Error while starting services: {exc}")
         if streamlit_service_pid:
             _terminate_process(streamlit_service_pid, "Streamlit")
         elif streamlit_proc and _is_process_alive(streamlit_proc.pid):
@@ -391,7 +389,7 @@ def _stop_web_services(root_path: str) -> None:
     state = _load_service_state(root_path)
 
     if not state:
-        print("저장된 서비스 상태 파일이 없습니다. 포트 기반 종료를 시도합니다.")
+        print("No saved service state file found. Falling back to port-based termination.")
         streamlit_candidates = sorted(_get_listening_pids(STREAMLIT_PORT))
         fastapi_candidates = sorted(_get_listening_pids(FASTAPI_PORT))
 
@@ -399,27 +397,26 @@ def _stop_web_services(root_path: str) -> None:
         fastapi_pid = fastapi_candidates[0] if fastapi_candidates else None
 
         if not streamlit_pid and not fastapi_pid:
-            print("실행 중인 서비스가 없거나, 다른 방식으로 실행되었을 수 있습니다.")
+            print("No running target services found.")
             return
 
         print("=" * 60)
-        print("웹 서비스 종료 중... (fallback)")
+        print("Stopping web services... (fallback)")
         print("=" * 60)
         streamlit_stopped = _terminate_process(streamlit_pid, "Streamlit")
         fastapi_stopped = _terminate_process(fastapi_pid, "FastAPI")
         print("=" * 60)
         if streamlit_stopped or fastapi_stopped:
-            print("웹 서비스 종료 완료.")
+            print("Web services stopped.")
         else:
-            print("종료할 활성 프로세스를 찾지 못했습니다.")
+            print("No active process was stopped.")
         print("=" * 60)
         return
 
     print("=" * 60)
-    print("웹 서비스 종료 중...")
+    print("Stopping web services...")
     print("=" * 60)
 
-    # 의존 관계상 Streamlit을 먼저 내리고 FastAPI를 종료
     streamlit_pid = state.get("streamlit_pid")
     fastapi_pid = state.get("fastapi_pid")
 
@@ -436,55 +433,44 @@ def _stop_web_services(root_path: str) -> None:
     streamlit_stopped = _terminate_process(streamlit_pid, "Streamlit")
     fastapi_stopped = _terminate_process(fastapi_pid, "FastAPI")
 
-    if (
-        not _is_process_alive(streamlit_pid)
-        and not _is_process_alive(fastapi_pid)
-    ):
+    if not _is_process_alive(streamlit_pid) and not _is_process_alive(fastapi_pid):
         _remove_service_state(root_path)
 
     print("=" * 60)
     if streamlit_stopped or fastapi_stopped:
-        print("웹 서비스 종료 완료.")
+        print("Web services stopped.")
     else:
-        print("종료할 활성 프로세스를 찾지 못했습니다.")
+        print("No active process was stopped.")
     print("=" * 60)
 
 
 def run_web_service(mode: str):
-    """
-    FastAPI + Streamlit 웹 서비스를 교차 플랫폼(Windows/macOS/Linux)으로 시작/종료합니다.
-    """
     root_path = str(get_project_root_path())
-
     if mode == "startweb":
+        try:
+            _load_validated_settings("startweb")
+        except ConfigurationError as exc:
+            print(f"Configuration error: {exc}")
+            return
         _start_web_services(root_path)
     elif mode == "stopweb":
         _stop_web_services(root_path)
     else:
-        print("실행할 수 없는 mode 입니다.")
+        print("Unsupported mode.")
 
 
 if __name__ == "__main__":
-
-    """
-    CLI 기반 실행 명령어(기본):
-        uv run python -m src.main
-    WebService 실행 명령어:
-        uv run python -m src.main --mode startweb (웹서비스 시작)
-        uv run python -m src.main --mode stopweb (웹서비스 종료)
-    """
-
     parser = argparse.ArgumentParser()
-    parser.add_argument("--mode", 
-                        type=str, 
-                        default="cli", 
-                        choices=['cli', 'startweb', 'stopweb'], 
-                        help="실행 모드를 지정합니다: 'web' (웹 서비스 시작), 'cli' (cli 실행)")
-    
+    parser.add_argument(
+        "--mode",
+        type=str,
+        default="cli",
+        choices=["cli", "startweb", "stopweb"],
+        help="Execution mode: 'cli', 'startweb', or 'stopweb'.",
+    )
     args = parser.parse_args()
 
-    if args.mode == 'startweb' or args.mode == 'stopweb':
-        # 'web' 모드 선택 시, run_web_services 함수 호출
+    if args.mode in {"startweb", "stopweb"}:
         run_web_service(args.mode)
     else:
         run_cli()
