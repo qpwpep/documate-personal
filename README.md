@@ -149,3 +149,24 @@
 ### 🔸 6.3 발표 자료
 [발표 자료 링크](https://github.com/AIBootcamp14/langchainproject-new-langchainproject_3/blob/main/docs/Langchain_Project_Team_3.pdf)
 
+### 🔸 6.4 환경변수 설정 (.env)
+`.env.example`를 복사해서 `.env` 파일을 만들고 값을 채워주세요.
+
+```bash
+cp .env.example .env
+# Windows (PowerShell): Copy-Item .env.example .env
+```
+
+필수 변수:
+- `OPENAI_API_KEY`
+- `TAVILY_API_KEY`
+
+선택 변수:
+- `CHAT_MODEL` (기본값: `gpt-5.2`)
+- `SUMMARY_MODEL` (기본값: `gpt-5-mini`)
+- `VERBOSE` (기본값: `true`)
+- `FASTAPI_URL` (기본값: `http://localhost:8000`)
+- `SLACK_BOT_TOKEN`
+- `SLACK_DEFAULT_USER_ID`
+- `SLACK_DEFAULT_DM_EMAIL`
+
