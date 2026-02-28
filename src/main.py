@@ -1,32 +1,36 @@
-import argparse
+﻿import argparse
 import json
-import os
-import re
-import shutil
-import signal
+import socket
 import subprocess
 import sys
 import time
 from pathlib import Path
 
+import psutil
 from langchain_core.messages import AIMessage
 
 from .settings import ConfigurationError, get_settings, validate_required_keys
 from .util.util import get_project_root_path
 
 
-SERVICE_STATE_FILE = "script/web_services_state.json"
+SERVICE_STATE_FILE = Path("script/web_services_state.json")
+STATE_SCHEMA_VERSION = 2
 FASTAPI_LOG_FILE = "fastapi.log"
 STREAMLIT_LOG_FILE = "streamlit.log"
 FASTAPI_PORT = 8000
 STREAMLIT_PORT = 8501
+CREATE_TIME_TOLERANCE_SEC = 1.0
+PROCESS_STOP_TIMEOUT_SEC = 5.0
+PROCESS_KILL_TIMEOUT_SEC = 2.0
+
+FASTAPI_PROCESS_TOKENS = ["uvicorn", "src.web.main:app"]
+STREAMLIT_PROCESS_TOKENS = ["streamlit", "src/web/streamlit_app.py"]
 
 
 def maybe_save_mermaid_png(graph):
     try:
         png_bytes = graph.get_graph().draw_mermaid_png()
-        with open("graph.png", "wb") as f:
-            f.write(png_bytes)
+        Path("graph.png").write_bytes(png_bytes)
         print("Saved graph to graph.png")
     except Exception:
         pass
@@ -85,11 +89,25 @@ def run_cli():
             break
 
 
-def _service_state_path(root_path: str) -> Path:
+def _as_int(value) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _as_float(value) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _service_state_path(root_path: str | Path) -> Path:
     return Path(root_path) / SERVICE_STATE_FILE
 
 
-def _load_service_state(root_path: str) -> dict:
+def _load_service_state(root_path: str | Path) -> dict:
     state_path = _service_state_path(root_path)
     if not state_path.exists():
         return {}
@@ -99,7 +117,7 @@ def _load_service_state(root_path: str) -> dict:
         return {}
 
 
-def _save_service_state(root_path: str, state: dict) -> None:
+def _save_service_state(root_path: str | Path, state: dict) -> None:
     state_path = _service_state_path(root_path)
     state_path.parent.mkdir(parents=True, exist_ok=True)
     state_path.write_text(
@@ -108,47 +126,150 @@ def _save_service_state(root_path: str, state: dict) -> None:
     )
 
 
-def _remove_service_state(root_path: str) -> None:
+def _remove_service_state(root_path: str | Path) -> None:
     state_path = _service_state_path(root_path)
     if state_path.exists():
         state_path.unlink()
 
 
-def _is_process_alive(pid: int | None) -> bool:
-    if not pid:
-        return False
+def _normalize_cmd_token(value: str) -> str:
+    normalized = value.strip().lower().replace("\\", "/")
+    while "//" in normalized:
+        normalized = normalized.replace("//", "/")
+    return normalized
 
-    if os.name == "nt":
-        result = subprocess.run(
-            ["tasklist", "/FI", f"PID eq {pid}", "/NH"],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        output = result.stdout.strip()
-        if not output or output.startswith("INFO:"):
-            return False
-        return str(pid) in output
+
+def _get_process(
+    pid: int | None,
+    expected_create_time: float | None = None,
+) -> psutil.Process | None:
+    pid_int = _as_int(pid)
+    if pid_int is None or pid_int <= 0:
+        return None
 
     try:
-        os.kill(pid, 0)
-        return True
+        process = psutil.Process(pid_int)
+    except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess, OSError):
+        return None
+
+    if expected_create_time is None:
+        return process
+
+    try:
+        actual_create_time = float(process.create_time())
+    except (psutil.Error, OSError, ValueError):
+        return None
+
+    if abs(actual_create_time - expected_create_time) > CREATE_TIME_TOLERANCE_SEC:
+        return None
+    return process
+
+
+def _get_process_create_time(pid: int | None) -> float | None:
+    process = _get_process(pid)
+    if process is None:
+        return None
+    try:
+        return float(process.create_time())
+    except (psutil.Error, OSError, ValueError):
+        return None
+
+
+def _is_process_alive(
+    pid: int | None,
+    expected_create_time: float | None = None,
+) -> bool:
+    process = _get_process(pid=pid, expected_create_time=expected_create_time)
+    if process is None:
+        return False
+    try:
+        return process.is_running() and process.status() != psutil.STATUS_ZOMBIE
+    except (psutil.Error, OSError):
+        return False
+
+
+def _is_port_open(port: int, host: str = "127.0.0.1", timeout: float = 0.2) -> bool:
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
     except OSError:
         return False
 
 
-def _start_background_process(command: list[str], cwd: str, log_path: str) -> subprocess.Popen:
-    with open(log_path, "a", encoding="utf-8") as log_file:
-        kwargs = {
-            "cwd": cwd,
-            "stdout": log_file,
-            "stderr": subprocess.STDOUT,
-        }
-        if os.name == "nt":
-            detached = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS
-            process = subprocess.Popen(command, creationflags=detached, **kwargs)
-        else:
-            process = subprocess.Popen(command, start_new_session=True, **kwargs)
+def _wait_for_port_open(
+    port: int,
+    host: str = "127.0.0.1",
+    timeout_sec: float = 20.0,
+    interval_sec: float = 0.2,
+) -> bool:
+    deadline = time.time() + timeout_sec
+    while time.time() < deadline:
+        if _is_port_open(port=port, host=host):
+            return True
+        time.sleep(interval_sec)
+    return _is_port_open(port=port, host=host)
+
+
+def _match_cmdline(pid: int | None, tokens: list[str]) -> bool:
+    process = _get_process(pid=pid)
+    if process is None:
+        return False
+
+    try:
+        cmdline = process.cmdline()
+    except (psutil.Error, OSError):
+        return False
+
+    normalized_cmdline = [_normalize_cmd_token(part) for part in cmdline if part]
+    if not normalized_cmdline:
+        return False
+
+    normalized_tokens = [_normalize_cmd_token(token) for token in tokens if token]
+    return all(
+        any(token in cmd_part for cmd_part in normalized_cmdline)
+        for token in normalized_tokens
+    )
+
+
+def _find_process_pid_by_tokens(tokens: list[str]) -> int | None:
+    normalized_tokens = [_normalize_cmd_token(token) for token in tokens if token]
+    if not normalized_tokens:
+        return None
+
+    matches: list[tuple[float, int]] = []
+    for process in psutil.process_iter(["pid", "cmdline", "create_time"]):
+        try:
+            cmdline = process.info.get("cmdline") or []
+            normalized_cmdline = [_normalize_cmd_token(str(part)) for part in cmdline if part]
+            if not normalized_cmdline:
+                continue
+            if not all(
+                any(token in cmd_part for cmd_part in normalized_cmdline)
+                for token in normalized_tokens
+            ):
+                continue
+
+            create_time = float(process.info.get("create_time") or 0.0)
+            matches.append((create_time, process.pid))
+        except (psutil.Error, OSError, ValueError, TypeError):
+            continue
+
+    if not matches:
+        return None
+    matches.sort(reverse=True)
+    return matches[0][1]
+
+
+def _start_background_process(command: list[str], cwd: Path, log_path: Path) -> subprocess.Popen:
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    with log_path.open("a", encoding="utf-8") as log_file:
+        process = subprocess.Popen(
+            command,
+            cwd=str(cwd),
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
 
     time.sleep(0.8)
     if process.poll() is not None:
@@ -156,136 +277,87 @@ def _start_background_process(command: list[str], cwd: str, log_path: str) -> su
     return process
 
 
-def _wait_until_stopped(pid: int, timeout_sec: float = 5.0) -> bool:
-    deadline = time.time() + timeout_sec
-    while time.time() < deadline:
-        if not _is_process_alive(pid):
-            return True
-        time.sleep(0.1)
-    return not _is_process_alive(pid)
-
-
-def _get_listening_pids(port: int) -> set[int]:
-    pids: set[int] = set()
-
-    if os.name == "nt":
-        result = subprocess.run(
-            ["netstat", "-ano"],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        for line in result.stdout.splitlines():
-            parts = line.split()
-            if len(parts) < 5:
-                continue
-            if parts[3].upper() != "LISTENING":
-                continue
-            if not parts[1].endswith(f":{port}"):
-                continue
-            try:
-                pids.add(int(parts[4]))
-            except ValueError:
-                continue
-        return pids
-
-    if shutil.which("lsof"):
-        result = subprocess.run(
-            ["lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN", "-t"],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        for line in result.stdout.splitlines():
-            try:
-                pids.add(int(line.strip()))
-            except ValueError:
-                continue
-        return pids
-
-    if shutil.which("ss"):
-        result = subprocess.run(
-            ["ss", "-ltnp"],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        for line in result.stdout.splitlines():
-            if f":{port} " not in line:
-                continue
-            match = re.search(r"pid=(\d+)", line)
-            if match:
-                pids.add(int(match.group(1)))
-        return pids
-
-    return pids
-
-
-def _wait_for_service_pid(port: int, before_pids: set[int], timeout_sec: float = 20.0) -> int | None:
-    deadline = time.time() + timeout_sec
-    while time.time() < deadline:
-        current_pids = _get_listening_pids(port)
-        if current_pids:
-            new_pids = current_pids - before_pids
-            target = sorted(new_pids or current_pids)
-            if target:
-                return target[0]
-        time.sleep(0.2)
-    return None
-
-
-def _terminate_process(pid: int | None, name: str) -> bool:
-    if not pid:
+def _terminate_process_tree(
+    pid: int | None,
+    name: str,
+    expected_create_time: float | None = None,
+) -> bool:
+    if pid is None:
         print(f"- {name}: PID information is missing.")
         return False
 
-    if not _is_process_alive(pid):
+    process = _get_process(pid=pid, expected_create_time=expected_create_time)
+    if process is None:
         print(f"- {name}: already stopped (PID {pid})")
         return False
 
     try:
-        if os.name == "nt":
-            result = subprocess.run(
-                ["taskkill", "/PID", str(pid), "/T", "/F"],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            if result.returncode == 0:
-                print(f"- {name}: stopped (PID {pid})")
-                return True
-            print(f"- {name}: stop failed (PID {pid})")
-            if result.stdout:
-                print(result.stdout.strip())
-            if result.stderr:
-                print(result.stderr.strip())
-            return False
+        descendants = process.children(recursive=True)
+    except (psutil.Error, OSError):
+        descendants = []
 
-        os.killpg(pid, signal.SIGTERM)
-        if _wait_until_stopped(pid, timeout_sec=5):
-            print(f"- {name}: stopped (PID {pid})")
-            return True
-        os.killpg(pid, signal.SIGKILL)
-        stopped = _wait_until_stopped(pid, timeout_sec=2)
-        print(f"- {name}: stopped (PID {pid})" if stopped else f"- {name}: stop failed (PID {pid})")
-        return stopped
-    except ProcessLookupError:
-        print(f"- {name}: already stopped (PID {pid})")
+    targets = descendants + [process]
+    for target in targets:
+        try:
+            target.terminate()
+        except (psutil.NoSuchProcess, psutil.ZombieProcess):
+            continue
+        except (psutil.AccessDenied, psutil.Error, OSError):
+            continue
+
+    _, alive = psutil.wait_procs(targets, timeout=PROCESS_STOP_TIMEOUT_SEC)
+    if alive:
+        for target in alive:
+            try:
+                target.kill()
+            except (psutil.NoSuchProcess, psutil.ZombieProcess):
+                continue
+            except (psutil.AccessDenied, psutil.Error, OSError):
+                continue
+        _, alive = psutil.wait_procs(alive, timeout=PROCESS_KILL_TIMEOUT_SEC)
+
+    if alive:
+        print(f"- {name}: stop failed (PID {pid})")
         return False
-    except Exception as exc:
-        print(f"- {name}: error while stopping (PID {pid}) -> {exc}")
-        return False
+
+    print(f"- {name}: stopped (PID {pid})")
+    return True
+
+
+def _resolve_service_process(
+    name: str,
+    pid: int | None,
+    create_time: float | None,
+    fallback_tokens: list[str],
+) -> tuple[int | None, float | None]:
+    if _is_process_alive(pid=pid, expected_create_time=create_time):
+        return pid, create_time
+
+    if pid is not None:
+        print(f"- {name}: saved PID {pid} is stale. Looking for process by command line.")
+
+    discovered_pid = _find_process_pid_by_tokens(fallback_tokens)
+    if discovered_pid is None:
+        return None, None
+
+    discovered_create_time = _get_process_create_time(discovered_pid)
+    print(f"- {name}: discovered running process (PID {discovered_pid}) from command line.")
+    return discovered_pid, discovered_create_time
 
 
 def _start_web_services(root_path: str) -> None:
-    state = _load_service_state(root_path)
+    root = Path(root_path)
+    state = _load_service_state(root)
 
-    fastapi_pid = state.get("fastapi_pid")
-    streamlit_pid = state.get("streamlit_pid")
+    fastapi_pid = _as_int(state.get("fastapi_pid"))
+    streamlit_pid = _as_int(state.get("streamlit_pid"))
+    fastapi_create_time = _as_float(state.get("fastapi_create_time"))
+    streamlit_create_time = _as_float(state.get("streamlit_create_time"))
+
     running = []
-    if _is_process_alive(fastapi_pid):
+    if _is_process_alive(fastapi_pid, fastapi_create_time):
         running.append(f"FastAPI(pid={fastapi_pid})")
-    if _is_process_alive(streamlit_pid):
+    if _is_process_alive(streamlit_pid, streamlit_create_time):
         running.append(f"Streamlit(pid={streamlit_pid})")
 
     if running:
@@ -294,8 +366,18 @@ def _start_web_services(root_path: str) -> None:
         print("Run 'uv run python -m src.main --mode stopweb' first.")
         return
 
-    fastapi_log_path = os.path.join(root_path, FASTAPI_LOG_FILE)
-    streamlit_log_path = os.path.join(root_path, STREAMLIT_LOG_FILE)
+    occupied_ports = []
+    if _is_port_open(FASTAPI_PORT):
+        occupied_ports.append(f"- FastAPI port {FASTAPI_PORT} is already in use.")
+    if _is_port_open(STREAMLIT_PORT):
+        occupied_ports.append(f"- Streamlit port {STREAMLIT_PORT} is already in use.")
+    if occupied_ports:
+        print("Cannot start web services because required ports are not available.")
+        print("\n".join(occupied_ports))
+        return
+
+    fastapi_log_path = root / FASTAPI_LOG_FILE
+    streamlit_log_path = root / STREAMLIT_LOG_FILE
 
     fastapi_cmd = [
         sys.executable,
@@ -323,118 +405,117 @@ def _start_web_services(root_path: str) -> None:
 
     fastapi_proc = None
     streamlit_proc = None
-    fastapi_service_pid = None
-    streamlit_service_pid = None
     try:
-        fastapi_before = _get_listening_pids(FASTAPI_PORT)
         fastapi_proc = _start_background_process(
             command=fastapi_cmd,
-            cwd=root_path,
+            cwd=root,
             log_path=fastapi_log_path,
         )
-        fastapi_service_pid = _wait_for_service_pid(FASTAPI_PORT, fastapi_before)
-        if fastapi_service_pid is None:
+        if not _wait_for_port_open(FASTAPI_PORT):
             raise RuntimeError(f"FastAPI port({FASTAPI_PORT}) was not opened. Log: {fastapi_log_path}")
+        fastapi_create_time = _get_process_create_time(fastapi_proc.pid)
         print(
-            f"- FastAPI started (launcher PID {fastapi_proc.pid}, service PID {fastapi_service_pid}, log: {fastapi_log_path})"
+            f"- FastAPI started (PID {fastapi_proc.pid}, log: {fastapi_log_path})"
         )
 
-        streamlit_before = _get_listening_pids(STREAMLIT_PORT)
         streamlit_proc = _start_background_process(
             command=streamlit_cmd,
-            cwd=root_path,
+            cwd=root,
             log_path=streamlit_log_path,
         )
-        streamlit_service_pid = _wait_for_service_pid(STREAMLIT_PORT, streamlit_before)
-        if streamlit_service_pid is None:
+        if not _wait_for_port_open(STREAMLIT_PORT):
             raise RuntimeError(f"Streamlit port({STREAMLIT_PORT}) was not opened. Log: {streamlit_log_path}")
+        streamlit_create_time = _get_process_create_time(streamlit_proc.pid)
         print(
-            f"- Streamlit started (launcher PID {streamlit_proc.pid}, service PID {streamlit_service_pid}, log: {streamlit_log_path})"
+            f"- Streamlit started (PID {streamlit_proc.pid}, log: {streamlit_log_path})"
         )
 
         _save_service_state(
-            root_path,
+            root,
             {
-                "fastapi_pid": fastapi_service_pid,
-                "streamlit_pid": streamlit_service_pid,
-                "fastapi_log": fastapi_log_path,
-                "streamlit_log": streamlit_log_path,
+                "schema_version": STATE_SCHEMA_VERSION,
+                "fastapi_pid": fastapi_proc.pid,
+                "fastapi_create_time": fastapi_create_time,
+                "streamlit_pid": streamlit_proc.pid,
+                "streamlit_create_time": streamlit_create_time,
+                "fastapi_log": str(fastapi_log_path),
+                "streamlit_log": str(streamlit_log_path),
                 "fastapi_port": FASTAPI_PORT,
                 "streamlit_port": STREAMLIT_PORT,
                 "started_at_unix": int(time.time()),
-                "platform": os.name,
+                "platform": sys.platform,
             },
         )
 
         print("=" * 60)
         print("Web services are running.")
-        print("- FastAPI:   http://localhost:8000")
-        print("- Streamlit: http://localhost:8501")
+        print(f"- FastAPI:   http://localhost:{FASTAPI_PORT}")
+        print(f"- Streamlit: http://localhost:{STREAMLIT_PORT}")
         print("- Stop: uv run python -m src.main --mode stopweb")
         print("=" * 60)
     except Exception as exc:
         print(f"Error while starting services: {exc}")
-        if streamlit_service_pid:
-            _terminate_process(streamlit_service_pid, "Streamlit")
-        elif streamlit_proc and _is_process_alive(streamlit_proc.pid):
-            _terminate_process(streamlit_proc.pid, "Streamlit(launcher)")
-        if fastapi_service_pid:
-            _terminate_process(fastapi_service_pid, "FastAPI")
-        elif fastapi_proc and _is_process_alive(fastapi_proc.pid):
-            _terminate_process(fastapi_proc.pid, "FastAPI(launcher)")
-        _remove_service_state(root_path)
+        if streamlit_proc:
+            _terminate_process_tree(streamlit_proc.pid, "Streamlit(launcher)")
+        if fastapi_proc:
+            _terminate_process_tree(fastapi_proc.pid, "FastAPI(launcher)")
+        _remove_service_state(root)
 
 
 def _stop_web_services(root_path: str) -> None:
-    state = _load_service_state(root_path)
+    root = Path(root_path)
+    state = _load_service_state(root)
 
     if not state:
-        print("No saved service state file found. Falling back to port-based termination.")
-        streamlit_candidates = sorted(_get_listening_pids(STREAMLIT_PORT))
-        fastapi_candidates = sorted(_get_listening_pids(FASTAPI_PORT))
-
-        streamlit_pid = streamlit_candidates[0] if streamlit_candidates else None
-        fastapi_pid = fastapi_candidates[0] if fastapi_candidates else None
-
-        if not streamlit_pid and not fastapi_pid:
-            print("No running target services found.")
-            return
-
-        print("=" * 60)
-        print("Stopping web services... (fallback)")
-        print("=" * 60)
-        streamlit_stopped = _terminate_process(streamlit_pid, "Streamlit")
-        fastapi_stopped = _terminate_process(fastapi_pid, "FastAPI")
-        print("=" * 60)
-        if streamlit_stopped or fastapi_stopped:
-            print("Web services stopped.")
-        else:
-            print("No active process was stopped.")
-        print("=" * 60)
-        return
+        print("No saved service state file found. Falling back to command-line discovery.")
 
     print("=" * 60)
     print("Stopping web services...")
     print("=" * 60)
 
-    streamlit_pid = state.get("streamlit_pid")
-    fastapi_pid = state.get("fastapi_pid")
+    streamlit_pid, streamlit_create_time = _resolve_service_process(
+        name="Streamlit",
+        pid=_as_int(state.get("streamlit_pid")),
+        create_time=_as_float(state.get("streamlit_create_time")),
+        fallback_tokens=STREAMLIT_PROCESS_TOKENS,
+    )
+    fastapi_pid, fastapi_create_time = _resolve_service_process(
+        name="FastAPI",
+        pid=_as_int(state.get("fastapi_pid")),
+        create_time=_as_float(state.get("fastapi_create_time")),
+        fallback_tokens=FASTAPI_PROCESS_TOKENS,
+    )
 
-    if not _is_process_alive(streamlit_pid):
-        port_pids = _get_listening_pids(state.get("streamlit_port", STREAMLIT_PORT))
-        if port_pids:
-            streamlit_pid = sorted(port_pids)[0]
+    if not streamlit_pid and not fastapi_pid:
+        print("No running target services found.")
+        if state:
+            _remove_service_state(root)
+        print("=" * 60)
+        return
 
-    if not _is_process_alive(fastapi_pid):
-        port_pids = _get_listening_pids(state.get("fastapi_port", FASTAPI_PORT))
-        if port_pids:
-            fastapi_pid = sorted(port_pids)[0]
+    streamlit_stopped = (
+        _terminate_process_tree(
+            pid=streamlit_pid,
+            name="Streamlit",
+            expected_create_time=streamlit_create_time,
+        )
+        if streamlit_pid is not None
+        else False
+    )
+    fastapi_stopped = (
+        _terminate_process_tree(
+            pid=fastapi_pid,
+            name="FastAPI",
+            expected_create_time=fastapi_create_time,
+        )
+        if fastapi_pid is not None
+        else False
+    )
 
-    streamlit_stopped = _terminate_process(streamlit_pid, "Streamlit")
-    fastapi_stopped = _terminate_process(fastapi_pid, "FastAPI")
-
-    if not _is_process_alive(streamlit_pid) and not _is_process_alive(fastapi_pid):
-        _remove_service_state(root_path)
+    fastapi_remaining = _find_process_pid_by_tokens(FASTAPI_PROCESS_TOKENS)
+    streamlit_remaining = _find_process_pid_by_tokens(STREAMLIT_PROCESS_TOKENS)
+    if state and fastapi_remaining is None and streamlit_remaining is None:
+        _remove_service_state(root)
 
     print("=" * 60)
     if streamlit_stopped or fastapi_stopped:
