@@ -33,6 +33,16 @@ class AppSettings(BaseSettings):
         alias="SESSION_CLEANUP_INTERVAL_SECONDS",
         ge=1,
     )
+    generated_file_ttl_seconds: int = Field(
+        default=86400,
+        alias="GENERATED_FILE_TTL_SECONDS",
+        ge=1,
+    )
+    file_cleanup_interval_seconds: int = Field(
+        default=60,
+        alias="FILE_CLEANUP_INTERVAL_SECONDS",
+        ge=1,
+    )
 
     slack_bot_token: str | None = Field(default=None, alias="SLACK_BOT_TOKEN")
     slack_default_dm_email: str | None = Field(default=None, alias="SLACK_DEFAULT_DM_EMAIL")
