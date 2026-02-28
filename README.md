@@ -157,16 +157,18 @@ cp .env.example .env
 # Windows (PowerShell): Copy-Item .env.example .env
 ```
 
-필수 변수:
+필수 설정 값:
 - `OPENAI_API_KEY`
 - `TAVILY_API_KEY`
 
-선택 변수:
+선택 설정 값:
 - `CHAT_MODEL` (기본값: `gpt-5.2`)
 - `SUMMARY_MODEL` (기본값: `gpt-5-mini`)
 - `VERBOSE` (기본값: `true`)
 - `FASTAPI_URL` (기본값: `http://localhost:8000`)
+- `SESSION_TTL_SECONDS` (default: `1800`, seconds)
+- `MAX_ACTIVE_SESSIONS` (default: `200`)
+- `SESSION_CLEANUP_INTERVAL_SECONDS` (default: `60`, seconds)
 - `SLACK_BOT_TOKEN`
 - `SLACK_DEFAULT_USER_ID`
 - `SLACK_DEFAULT_DM_EMAIL`
-
