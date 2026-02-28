@@ -1,6 +1,6 @@
-import os
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import urlparse
 
@@ -18,7 +18,7 @@ from .settings import AppSettings
 from .slack_utils import create_slack_client, resolve_destination
 
 
-INDEX_PATH = "data/index"
+INDEX_PATH = Path("data/index")
 
 
 @dataclass(frozen=True)
@@ -73,7 +73,7 @@ def _load_chroma(openai_api_key: str) -> Chroma:
     )
     return Chroma(
         embedding_function=embeddings,
-        persist_directory=INDEX_PATH,
+        persist_directory=str(INDEX_PATH),
         collection_name="notebooks",
     )
 
@@ -89,17 +89,16 @@ def build_tool_registry(settings: AppSettings) -> ToolRegistry:
         """Save text content to a timestamped .txt file and return a status payload."""
         try:
             ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-            output_path = get_save_text_output_dir()
-            os.makedirs(output_path, exist_ok=True)
+            output_path = Path(get_save_text_output_dir())
+            output_path.mkdir(parents=True, exist_ok=True)
 
             filename = f"{filename_prefix}_{ts}.txt"
-            filepath = os.path.join(output_path, filename)
-            with open(filepath, "w", encoding="utf-8") as file:
-                file.write(content)
+            filepath = output_path / filename
+            filepath.write_text(content, encoding="utf-8")
 
             return {
                 "message": f"Saved output to {filename}",
-                "file_path": filepath,
+                "file_path": str(filepath),
             }
         except Exception as exc:
             raise RuntimeError(f"Failed to save file: {exc}") from exc
@@ -116,7 +115,7 @@ def build_tool_registry(settings: AppSettings) -> ToolRegistry:
 
     def rag_search(query: str, k: int = 4) -> str:
         """Search local notebook index and return relevant snippets with sources."""
-        if not os.path.isdir(INDEX_PATH):
+        if not INDEX_PATH.is_dir():
             return "RAG index not found. Please build it first (python -m src.rag_build)."
         if not settings.openai_api_key:
             return "RAG is unavailable because OPENAI_API_KEY is missing."

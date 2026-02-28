@@ -1,10 +1,9 @@
 import logging
-import os
 import shutil
 import time
 import uuid
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from threading import Lock
 
 from fastapi import FastAPI, HTTPException, Request
@@ -445,18 +444,29 @@ async def run_agent_api(
 
 @app.get("/download/{filename}")
 async def download_file(filename: str):
-    output_dir = get_save_text_output_dir()
-    file_path = os.path.join(output_dir, filename)
+    file_path = _resolve_download_path(get_save_text_output_dir(), filename)
 
-    if not os.path.realpath(file_path).startswith(os.path.realpath(output_dir)):
-        raise HTTPException(status_code=403, detail="Forbidden: Invalid file path")
-
-    if not os.path.exists(file_path):
+    if not file_path.exists():
         logger.error(f"Download request failed: File not found at {file_path}")
         raise HTTPException(status_code=404, detail=f"File not found: {filename}")
 
     return FileResponse(
-        path=file_path,
+        path=str(file_path),
         filename=filename,
         media_type="text/plain",
     )
+
+
+def _resolve_download_path(output_dir: str, filename: str) -> Path:
+    base_dir = Path(output_dir).resolve()
+    normalized_filename = filename.replace("\\", "/")
+
+    if Path(normalized_filename).is_absolute() or PureWindowsPath(normalized_filename).is_absolute():
+        raise HTTPException(status_code=403, detail="Forbidden: Invalid file path")
+
+    candidate = (base_dir / normalized_filename).resolve()
+    try:
+        candidate.relative_to(base_dir)
+    except ValueError as exc:
+        raise HTTPException(status_code=403, detail="Forbidden: Invalid file path") from exc
+    return candidate
