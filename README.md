@@ -123,7 +123,7 @@ cp .env.example .env
 - `TAVILY_API_KEY`
 
 선택 값
-- `CHAT_MODEL` (default: `gpt-5.2`)
+- `CHAT_MODEL` (default: `gpt-5-mini`)
 - `SUMMARY_MODEL` (default: `gpt-5-mini`)
 - `VERBOSE` (default: `true`)
 - `FASTAPI_URL` (default: `http://localhost:8000`)
