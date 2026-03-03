@@ -44,6 +44,7 @@ def command_generate(args: argparse.Namespace) -> int:
         seed_path=args.seed,
         out_path=args.out,
         target=args.target,
+        regression_seed_path=args.regression_seed,
         random_seed=args.random_seed,
     )
     print(f"Generated {len(generated)} cases at {args.out}")
@@ -104,6 +105,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser_generate.add_argument("--seed", type=Path, required=True, help="Seed JSONL file path")
     parser_generate.add_argument("--out", type=Path, required=True, help="Output JSONL file path")
     parser_generate.add_argument("--target", type=int, required=True, help="Target number of cases")
+    parser_generate.add_argument(
+        "--regression-seed",
+        type=Path,
+        default=Path("data/benchmarks/fixtures/cases.regression.seed.jsonl"),
+        help="Regression seed JSONL file path",
+    )
     parser_generate.add_argument("--random-seed", type=int, default=42, help="Random seed")
     parser_generate.set_defaults(func=command_generate)
 
