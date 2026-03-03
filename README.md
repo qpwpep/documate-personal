@@ -44,6 +44,14 @@
 ├── src
 │   ├── main.py
 │   ├── agent_manager.py
+│   ├── eval
+│   │   ├── main.py
+│   │   ├── runner_online.py
+│   │   ├── scoring_rules.py
+│   │   ├── judge_llm.py
+│   │   ├── reporting.py
+│   │   ├── schemas.py
+│   │   └── generate_cases.py
 │   ├── graph_builder.py
 │   ├── make_graph.py
 │   ├── llm.py
@@ -60,6 +68,13 @@
 │       ├── main.py
 │       ├── schemas.py
 │       └── streamlit_app.py
+├── data
+│   └── benchmarks
+│       ├── config.toml
+│       └── fixtures
+│           ├── cases.seed.jsonl
+│           ├── cases.generated.jsonl
+│           └── uploads/*
 ├── uploads
 ├── pyproject.toml
 └── README.md
@@ -135,14 +150,63 @@ cp .env.example .env
 - `SLACK_BOT_TOKEN`
 - `SLACK_DEFAULT_USER_ID`
 - `SLACK_DEFAULT_DM_EMAIL`
+- `JUDGE_MODEL` (default: `gpt-5-mini`)
+- `BENCHMARK_ENDPOINT` (default: `http://localhost:8000`)
+- `BENCHMARK_JUDGE_ENABLED` (default: `true`)
 
-## 6. 참고 링크
+## 6. E2E 벤치마크 (Online Only)
+
+DocuMate는 `FastAPI /agent` 실경로를 기준으로 한 온라인 벤치마크를 제공합니다.
+
+### 6.1 케이스 생성 (120개)
+
+```bash
+uv run python -m src.eval.main generate \
+  --seed data/benchmarks/fixtures/cases.seed.jsonl \
+  --out data/benchmarks/fixtures/cases.generated.jsonl \
+  --target 120
+```
+
+### 6.2 온라인 벤치마크 실행
+
+FastAPI 서버를 먼저 실행한 뒤 아래 명령을 사용하세요.
+
+```bash
+uv run python -m src.eval.main run \
+  --mode online \
+  --fixtures data/benchmarks/fixtures/cases.generated.jsonl \
+  --endpoint http://localhost:8000
+```
+
+### 6.3 리포트 재생성
+
+```bash
+uv run python -m src.eval.main report --run output/benchmarks/<run_id>
+```
+
+### 6.4 결과 산출물
+
+- `output/benchmarks/<run_id>/raw_results.jsonl`
+- `output/benchmarks/<run_id>/summary.json`
+- `output/benchmarks/<run_id>/report.md`
+- `output/benchmarks/latest_run.txt`
+
+### 6.5 기본 Hard Gate
+
+- `pass_rate >= 0.82`
+- `tool_precision >= 0.90`
+- `tool_recall >= 0.85`
+- `citation_compliance >= 0.88`
+- `p95_latency_ms <= 20000`
+- `avg_cost_per_case_usd <= 0.035` (token usage가 수집된 경우)
+
+## 7. 참고 링크
 
 - LangChain: https://docs.langchain.com/oss/python/langchain/overview
 - Streamlit: https://docs.streamlit.io/
 - FastAPI: https://fastapi.tiangolo.com/ko/
 
-## 7. 프로젝트 인코딩 정책 (UTF-8 no BOM)
+## 8. 프로젝트 인코딩 정책 (UTF-8 no BOM)
 
 - 텍스트 파일 기본 인코딩: UTF-8 (no BOM)
 - 에디터 기본값은 루트 `.editorconfig`의 `charset = utf-8`을 따릅니다.

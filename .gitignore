@@ -272,6 +272,8 @@ $RECYCLE.BIN/
 # data directory
 data/*
 !data/sample.txt
+!data/benchmarks/
+!data/benchmarks/**
 
 # End of https://www.toptal.com/developers/gitignore/api/windows,macos,linux,visualstudiocode,python
 
@@ -280,7 +282,10 @@ data/*
 # uploaded user files (do not commit)
 uploads*
 !uploads/.gitkeep
+!data/benchmarks/fixtures/uploads/
+!data/benchmarks/fixtures/uploads/**
 
 # runtime service state and generated outputs
 script/web_services_state.json
 output/save_text/
+output/benchmarks/
