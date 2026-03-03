@@ -83,20 +83,28 @@ def get_agent_response(user_input: str):
         if resp.status_code == 200:
             data = resp.json()
             # FastAPI의 응답 스키마에 맞춰 안전하게 접근
-            return data.get("response", ""), data.get("file_path")
+            response_payload = data.get("response") or {}
+            if isinstance(response_payload, dict):
+                answer = str(response_payload.get("answer", "") or "")
+                evidence = response_payload.get("evidence")
+                evidence_items = evidence if isinstance(evidence, list) else []
+            else:
+                answer = str(response_payload)
+                evidence_items = []
+            return answer, data.get("file_path"), evidence_items
             # print(f"debug >> response : {response.json().get("response", "FastAPI에서 응답을 받았습니다.")}")
             # return response.json().get("response", "FastAPI에서 응답을 받았습니다.")
         else:
             # 서버가 에러를 반환한 경우 메시지 표시
             return (f"Agent 호출 실패: 상태 코드 {resp.status_code}\n"
-                    f"응답: {resp.text}"), None
+                    f"응답: {resp.text}"), None, []
 
     except requests.exceptions.Timeout:
-        return "요청이 타임아웃되었습니다. 서버 상태를 확인해 주세요.", None
+        return "요청이 타임아웃되었습니다. 서버 상태를 확인해 주세요.", None, []
     except requests.exceptions.ConnectionError:
-        return "FastAPI 서버에 연결할 수 없습니다. 서버(8000번 포트) 실행 여부를 확인해 주세요.", None
+        return "FastAPI 서버에 연결할 수 없습니다. 서버(8000번 포트) 실행 여부를 확인해 주세요.", None, []
     except Exception as e:
-        return f"요청 중 예기치 않은 오류가 발생했습니다: {e}", None
+        return f"요청 중 예기치 않은 오류가 발생했습니다: {e}", None, []
 
 
 # Streamlit 챗봇 UI 구성
@@ -177,13 +185,28 @@ def handle_upload(uploaded_file):
 # ----------------------------------------------------
 # 세션 상태 초기화: 채팅 기록 저장
 if "messages" not in st.session_state:
-    st.session_state["messages"] = [{"role": "assistant", "content": "안녕하세요! 질문을 입력해주세요.", "file_path": ""}]
+    st.session_state["messages"] = [
+        {"role": "assistant", "content": "안녕하세요! 질문을 입력해주세요.", "file_path": "", "evidence": []}
+    ]
 
 
 for message in st.session_state.messages:
     # 1. 채팅 메시지 출력 (아이콘은 여기서 한 번만 그려집니다)
     with st.chat_message(message["role"]):
         st.markdown(message["content"]) 
+        evidence_items = message.get("evidence") or []
+        if message["role"] == "assistant" and evidence_items:
+            with st.expander("근거 보기"):
+                for item in evidence_items:
+                    if not isinstance(item, dict):
+                        continue
+                    kind = str(item.get("kind", "") or "").strip()
+                    source = str(item.get("source", "") or "").strip()
+                    title = str(item.get("title", "") or "").strip()
+                    if title:
+                        st.markdown(f"- `{kind}`: **{title}** ({source})")
+                    else:
+                        st.markdown(f"- `{kind}`: {source}")
         
         # 2. 파일 다운로드 버튼 표시 (오직 'assistant' 메시지에 대해)
         file_path = message.get("file_path", "")
@@ -210,7 +233,7 @@ for message in st.session_state.messages:
 # ----------------------------------------------------
 if prompt := st.chat_input("여기에 질문을 입력하세요..."):
     # 1. 사용자 메시지를 세션 상태에 추가
-    st.session_state.messages.append({"role": "user", "content": prompt, "file_path": ""}) 
+    st.session_state.messages.append({"role": "user", "content": prompt, "file_path": "", "evidence": []})
 
     # 2. 사용자가 입력한 메시지를 스피너가 돌기 전에 즉시 화면에 표시합니다.
     with st.chat_message("user"):
@@ -219,14 +242,15 @@ if prompt := st.chat_input("여기에 질문을 입력하세요..."):
     # 3. Agent 응답 생성
     with st.spinner("Agent가 생각 중입니다..."):
         # 응답 텍스트와 파일 경로를 받습니다.
-        agent_response_content, agent_file_path = get_agent_response(prompt)
+        agent_response_content, agent_file_path, agent_evidence = get_agent_response(prompt)
     
     # 4. 새로운 Assistant 메시지를 세션에 추가
     # 이 메시지에 파일 경로 데이터를 저장합니다.
     st.session_state.messages.append({
         "role": "assistant", 
         "content": agent_response_content, 
-        "file_path": agent_file_path 
+        "file_path": agent_file_path,
+        "evidence": agent_evidence,
     })
     
     # 5. UI를 새로고침하여 새로 추가된 메시지와 버튼을 표시

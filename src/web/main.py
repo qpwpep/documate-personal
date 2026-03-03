@@ -12,7 +12,14 @@ from fastapi.responses import FileResponse
 from langchain_core.messages import SystemMessage
 
 from ..runtime_encoding import ensure_utf8_stdio
-from .schemas import AgentDebugInfo, AgentRequest, AgentResponse, AgentTokenUsage
+from .schemas import (
+    AgentDebugInfo,
+    AgentRequest,
+    AgentResponse,
+    AgentResponsePayload,
+    AgentTokenUsage,
+    EvidenceItem,
+)
 from ..agent_manager import AgentFlowManager
 from ..settings import ConfigurationError, get_settings, validate_required_keys
 from ..util.util import get_save_text_output_dir
@@ -412,6 +419,7 @@ def _normalize_debug_info(raw_debug: dict | None, latency_ms_server: int | None)
     debug = raw_debug or {}
     tool_calls = debug.get("tool_calls") or []
     errors = debug.get("errors") or []
+    observed_evidence_raw = debug.get("observed_evidence") or []
 
     token_usage_raw = debug.get("token_usage") or {}
     token_usage = AgentTokenUsage(
@@ -420,6 +428,16 @@ def _normalize_debug_info(raw_debug: dict | None, latency_ms_server: int | None)
         total_tokens=int(token_usage_raw.get("total_tokens", 0) or 0),
     )
 
+    observed_evidence: list[EvidenceItem] = []
+    if isinstance(observed_evidence_raw, list):
+        for item in observed_evidence_raw:
+            if not isinstance(item, dict):
+                continue
+            try:
+                observed_evidence.append(EvidenceItem.model_validate(item))
+            except Exception:
+                continue
+
     return AgentDebugInfo(
         tool_calls=[str(name) for name in tool_calls if name],
         tool_call_count=int(debug.get("tool_call_count", len(tool_calls)) or len(tool_calls)),
@@ -427,6 +445,7 @@ def _normalize_debug_info(raw_debug: dict | None, latency_ms_server: int | None)
         token_usage=token_usage,
         model_name=(str(debug.get("model_name")) if debug.get("model_name") else None),
         errors=[str(error) for error in errors if error],
+        observed_evidence=observed_evidence,
     )
 
 
@@ -471,8 +490,20 @@ async def run_agent_api(
     agent_answer = agent_manager.run_agent_flow(user_query, upload_file_path)
     latency_ms_server = int((time.monotonic() - agent_started) * 1000)
 
-    answer = agent_answer.get("message")
+    answer = str(agent_answer.get("message") or "")
     file_path = agent_answer.get("filepath", "")
+    response_payload_raw = agent_answer.get("response_payload")
+
+    fallback_payload = {
+        "answer": answer,
+        "evidence": [],
+    }
+    payload_candidate = response_payload_raw if isinstance(response_payload_raw, dict) else fallback_payload
+    try:
+        response_payload = AgentResponsePayload.model_validate(payload_candidate)
+    except Exception:
+        response_payload = AgentResponsePayload.model_validate(fallback_payload)
+
     debug_info = _normalize_debug_info(
         raw_debug=agent_answer.get("debug"),
         latency_ms_server=latency_ms_server,
@@ -483,7 +514,7 @@ async def run_agent_api(
     logger.info(f"filepath: {file_path}")
 
     response = AgentResponse(
-        response=answer,
+        response=response_payload,
         trace=f"Session ID: {session_id}, Request ID: {request_id}, Agent ID: {id(agent_manager)}",
         file_path=file_path,
         debug=debug_info if request_data.include_debug else None,
