@@ -1,19 +1,50 @@
 from __future__ import annotations
 
 import json
+import math
 import tomllib
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 CaseCategory = Literal["docs_only", "rag_only", "hybrid", "tool_action"]
+CaseScenario = Literal["seed_mutation", "adversarial", "regression", "ambiguity"]
+EvidenceKind = Literal["official", "local"]
+
+
+class EvidenceItem(BaseModel):
+    kind: EvidenceKind
+    source: str
+    title: str | None = None
+    snippet: str | None = None
+    tool: str
+    source_id: str
+
+
+class CaseWeightOverride(BaseModel):
+    tool_match: float | None = Field(default=None, ge=0.0)
+    content_constraints: float | None = Field(default=None, ge=0.0)
+    citation_compliance: float | None = Field(default=None, ge=0.0)
+    safety_format: float | None = Field(default=None, ge=0.0)
+    llm_judge: float | None = Field(default=None, ge=0.0)
+
+    @model_validator(mode="after")
+    def validate_finite(self) -> "CaseWeightOverride":
+        for key, value in self.model_dump(exclude_none=True).items():
+            if not math.isfinite(float(value)):
+                raise ValueError(f"weight_override.{key} must be a finite number")
+        return self
+
+    def as_partial_dict(self) -> dict[str, float]:
+        return {k: float(v) for k, v in self.model_dump(exclude_none=True).items()}
 
 
 class BenchmarkCase(BaseModel):
     case_id: str
     category: CaseCategory
+    scenario: CaseScenario = "seed_mutation"
     query: str
     upload_fixture: str | None = None
     expected_tools: list[str] = Field(default_factory=list)
@@ -23,7 +54,7 @@ class BenchmarkCase(BaseModel):
     require_official_citation: bool = False
     require_local_citation: bool = False
     judge_rubric: str = ""
-    weight_override: dict[str, float] | None = None
+    weight_override: CaseWeightOverride | None = None
 
 
 class TokenUsage(BaseModel):
@@ -70,6 +101,7 @@ class CaseResult(BaseModel):
     run_id: str
     case_id: str
     category: CaseCategory
+    scenario: CaseScenario = "seed_mutation"
     query: str
     session_id: str
     endpoint: str
@@ -77,6 +109,9 @@ class CaseResult(BaseModel):
     request_payload: dict[str, Any]
     http_status: int
     response_text: str = ""
+    response_payload: dict[str, Any] | None = None
+    evidence: list[EvidenceItem] = Field(default_factory=list)
+    observed_evidence: list[EvidenceItem] = Field(default_factory=list)
     file_path: str | None = None
     trace: str | None = None
     latency_ms_e2e: int | None = None
@@ -84,7 +119,10 @@ class CaseResult(BaseModel):
     tool_calls: list[str] = Field(default_factory=list)
     token_usage: TokenUsage | None = None
     model_name: str | None = None
-    errors: list[str] = Field(default_factory=list)
+    runtime_errors: list[str] = Field(default_factory=list)
+    response_errors: list[str] = Field(default_factory=list)
+    judge_errors: list[str] = Field(default_factory=list)
+    effective_weights: dict[str, float] = Field(default_factory=dict)
     rule_scores: dict[str, float] = Field(default_factory=dict)
     rule_score_total: float | None = None
     llm_judge_score: float | None = None

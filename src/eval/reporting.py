@@ -30,6 +30,16 @@ def _percentile(values: list[int], percentile: float) -> float | None:
     return float(sorted_values[lower] + (sorted_values[upper] - sorted_values[lower]) * frac)
 
 
+def _build_failure_reason(result: CaseResult) -> str:
+    if result.runtime_errors:
+        return ", ".join(result.runtime_errors)
+    if result.response_errors:
+        return ", ".join(result.response_errors)
+    if result.judge_errors:
+        return ", ".join(result.judge_errors)
+    return "score below threshold"
+
+
 def build_summary(
     *,
     run_id: str,
@@ -83,12 +93,11 @@ def build_summary(
     for result in results:
         if result.passed:
             continue
-        reason = ", ".join(result.errors) if result.errors else "score below threshold"
         failures.append(
             {
                 "case_id": result.case_id,
                 "category": result.category,
-                "reason": reason,
+                "reason": _build_failure_reason(result),
             }
         )
 

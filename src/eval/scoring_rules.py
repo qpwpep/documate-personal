@@ -1,22 +1,20 @@
 from __future__ import annotations
 
+import math
 import re
 from typing import Any
+from urllib.parse import urlparse
 
-from .schemas import BenchmarkCase, Pricing, ScoreWeights
+from ..domain_docs import DEFAULT_DOCS
+from .schemas import (
+    BenchmarkCase,
+    CaseWeightOverride,
+    EvidenceItem,
+    Pricing,
+    ScoreWeights,
+)
 
 
-_OFFICIAL_CITATION_PATTERNS = [
-    r"\[◆\s*공식 문서\]",
-    r"\[◆\s*official",
-    r"https?://",
-]
-_LOCAL_CITATION_PATTERNS = [
-    r"\[◆\s*로컬 예제\]",
-    r"\[local example\]",
-    r"\.ipynb",
-    r"uploads/",
-]
 _FAILURE_TEXT_PATTERNS = [
     r"Agent 호출 실패",
     r"FastAPI 서버에 연결할 수 없습니다",
@@ -26,6 +24,106 @@ _FAILURE_TEXT_PATTERNS = [
 
 def _contains_any_pattern(text: str, patterns: list[str]) -> bool:
     return any(re.search(pattern, text, flags=re.I) for pattern in patterns)
+
+
+def _normalize_source_id(source: str) -> str:
+    raw = str(source or "").strip()
+    if not raw:
+        return ""
+
+    parsed = urlparse(raw)
+    if parsed.scheme.lower() in {"http", "https"} and parsed.netloc:
+        host = parsed.netloc.lower()
+        if host.startswith("www."):
+            host = host[4:]
+        path = re.sub(r"/+", "/", parsed.path or "/")
+        if not path.startswith("/"):
+            path = "/" + path
+        return f"url:{parsed.scheme.lower()}://{host}{path}"
+
+    normalized_path = re.sub(r"/+", "/", raw.replace("\\", "/")).strip().lower()
+    return f"path:{normalized_path}"
+
+
+def _normalize_domain(url_or_domain: str) -> str:
+    parsed = urlparse(url_or_domain if "://" in url_or_domain else f"https://{url_or_domain}")
+    domain = (parsed.netloc or parsed.path).strip().lower()
+    if domain.startswith("www."):
+        domain = domain[4:]
+    return domain
+
+
+_ALLOWED_OFFICIAL_DOMAINS = {_normalize_domain(value) for value in DEFAULT_DOCS.values()}
+
+
+def _is_valid_official_source(source: str) -> bool:
+    parsed = urlparse(str(source or "").strip())
+    if parsed.scheme.lower() != "https" or not parsed.netloc:
+        return False
+    return _normalize_domain(parsed.netloc) in _ALLOWED_OFFICIAL_DOMAINS
+
+
+def _is_valid_local_source(source: str) -> bool:
+    raw = str(source or "").strip()
+    if not raw:
+        return False
+    normalized = raw.replace("\\", "/").lower()
+    return (
+        normalized.endswith(".py")
+        or normalized.endswith(".ipynb")
+        or "/uploads/" in normalized
+        or normalized.startswith("uploads/")
+        or normalized.startswith("data/")
+    )
+
+
+def _collect_valid_source_ids(
+    evidence: list[EvidenceItem],
+    *,
+    required_kind: str,
+    required_tool: str,
+    source_validator: Any,
+) -> set[str]:
+    valid_ids: set[str] = set()
+    for item in evidence:
+        if item.kind != required_kind:
+            continue
+        if item.tool != required_tool:
+            continue
+        source_id = item.source_id or _normalize_source_id(item.source)
+        if not source_id:
+            continue
+        if source_id != _normalize_source_id(item.source):
+            continue
+        if not source_validator(item.source):
+            continue
+        valid_ids.add(source_id)
+    return valid_ids
+
+
+def resolve_effective_weights(
+    *,
+    base_weights: ScoreWeights,
+    case_override: CaseWeightOverride | None,
+) -> tuple[ScoreWeights, str | None]:
+    merged = base_weights.as_dict()
+
+    if case_override is not None:
+        merged.update(case_override.as_partial_dict())
+
+    for key, value in merged.items():
+        if value < 0.0 or not math.isfinite(float(value)):
+            return base_weights, f"invalid weight '{key}': {value}"
+
+    total = float(sum(merged.values()))
+    if total <= 0.0 or not math.isfinite(total):
+        return base_weights, "weight sum must be a positive finite number"
+
+    normalized = {key: float(value) / total for key, value in merged.items()}
+    try:
+        return ScoreWeights(**normalized), None
+    except Exception as exc:
+        return base_weights, f"failed to build normalized weights: {exc}"
 
 
 def score_tool_match(case: BenchmarkCase, called_tools: list[str]) -> float:
@@ -65,24 +163,60 @@ def score_content_constraints(case: BenchmarkCase, response_text: str) -> float:
     return max(0.0, min(1.0, (include_score + exclude_score) / 2.0))
 
 
-def score_citation_compliance(case: BenchmarkCase, response_text: str) -> float:
-    text = response_text or ""
-    required_checks: list[bool] = []
+def score_citation_compliance(
+    case: BenchmarkCase,
+    response_evidence: list[EvidenceItem],
+    observed_evidence: list[EvidenceItem],
+    called_tools: list[str],
+) -> float:
+    checks: list[bool] = []
 
     if case.require_official_citation:
-        required_checks.append(_contains_any_pattern(text, _OFFICIAL_CITATION_PATTERNS))
-    if case.require_local_citation:
-        required_checks.append(_contains_any_pattern(text, _LOCAL_CITATION_PATTERNS))
+        response_ids = _collect_valid_source_ids(
+            response_evidence,
+            required_kind="official",
+            required_tool="tavily_search",
+            source_validator=_is_valid_official_source,
+        )
+        observed_ids = _collect_valid_source_ids(
+            observed_evidence,
+            required_kind="official",
+            required_tool="tavily_search",
+            source_validator=_is_valid_official_source,
+        )
+        checks.append(("tavily_search" in called_tools) and bool(response_ids.intersection(observed_ids)))
 
-    if not required_checks:
+    if case.require_local_citation:
+        response_ids = _collect_valid_source_ids(
+            response_evidence,
+            required_kind="local",
+            required_tool="rag_search",
+            source_validator=_is_valid_local_source,
+        )
+        observed_ids = _collect_valid_source_ids(
+            observed_evidence,
+            required_kind="local",
+            required_tool="rag_search",
+            source_validator=_is_valid_local_source,
+        )
+        checks.append(("rag_search" in called_tools) and bool(response_ids.intersection(observed_ids)))
+
+    if not checks:
         return 1.0
 
-    return sum(1 for check in required_checks if check) / len(required_checks)
+    return sum(1 for check in checks if check) / len(checks)
 
 
-def score_safety_format(errors: list[str], response_text: str) -> float:
-    if errors:
+def score_safety_format(
+    *,
+    runtime_errors: list[str],
+    response_errors: list[str],
+    judge_errors: list[str],
+    response_text: str,
+) -> float:
+    if runtime_errors or response_errors or judge_errors:
         return 0.0
+
     text = (response_text or "").strip()
     if not text:
         return 0.0
@@ -92,16 +226,31 @@ def score_safety_format(errors: list[str], response_text: str) -> float:
 
 
 def compute_rule_scores(
+    *,
     case: BenchmarkCase,
     response_text: str,
     called_tools: list[str],
-    errors: list[str],
+    response_evidence: list[EvidenceItem],
+    observed_evidence: list[EvidenceItem],
+    runtime_errors: list[str],
+    response_errors: list[str],
+    judge_errors: list[str],
 ) -> dict[str, float]:
     return {
         "tool_match": score_tool_match(case, called_tools),
         "content_constraints": score_content_constraints(case, response_text),
-        "citation_compliance": score_citation_compliance(case, response_text),
-        "safety_format": score_safety_format(errors=errors, response_text=response_text),
+        "citation_compliance": score_citation_compliance(
+            case=case,
+            response_evidence=response_evidence,
+            observed_evidence=observed_evidence,
+            called_tools=called_tools,
+        ),
+        "safety_format": score_safety_format(
+            runtime_errors=runtime_errors,
+            response_errors=response_errors,
+            judge_errors=judge_errors,
+            response_text=response_text,
+        ),
     }
 
 
@@ -123,7 +272,6 @@ def compute_final_score(
 ) -> float:
     llm_weight = float(weights.llm_judge)
     if llm_judge_score is None:
-        # Keep comparable [0,1] range even when LLM judge is disabled.
         denominator = max(1e-9, 1.0 - llm_weight)
         normalized = rule_weighted_score / denominator
         return max(0.0, min(1.0, normalized))
