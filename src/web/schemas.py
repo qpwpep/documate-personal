@@ -1,4 +1,25 @@
+from __future__ import annotations
+
+from typing import Literal
+
 from pydantic import BaseModel, Field
+
+
+EvidenceKind = Literal["official", "local"]
+
+
+class EvidenceItem(BaseModel):
+    kind: EvidenceKind
+    source: str
+    title: str | None = None
+    snippet: str | None = None
+    tool: str
+    source_id: str
+
+
+class AgentResponsePayload(BaseModel):
+    answer: str = ""
+    evidence: list[EvidenceItem] = Field(default_factory=list)
 
 
 class AgentTokenUsage(BaseModel):
@@ -14,6 +35,7 @@ class AgentDebugInfo(BaseModel):
     token_usage: AgentTokenUsage | None = None
     model_name: str | None = None
     errors: list[str] = Field(default_factory=list)
+    observed_evidence: list[EvidenceItem] = Field(default_factory=list)
 
 
 # 입력 모델
@@ -29,7 +51,7 @@ class AgentRequest(BaseModel):
 
 # 출력 모델
 class AgentResponse(BaseModel):
-    response: str
+    response: AgentResponsePayload
     trace: str  # 출력 확인용
     file_path: str | None = None  # 파일이 생성된 경우, 해당 파일 경로
     debug: AgentDebugInfo | None = None
