@@ -1,23 +1,36 @@
 import pandas as pd
 
+sales_q1 = pd.DataFrame(
+    {
+        "user_id": [1, 2, 3, 4],
+        "region": ["KR", "US", "KR", "JP"],
+        "amount": [120, 80, 200, 150],
+    }
+)
 
-def build_sales_features(df: pd.DataFrame) -> pd.DataFrame:
-    base = df.copy()
-    base["order_month"] = pd.to_datetime(base["order_date"]).dt.to_period("M").astype(str)
+sales_q2 = pd.DataFrame(
+    {
+        "user_id": [1, 2, 5],
+        "region": ["KR", "US", "KR"],
+        "amount": [140, 90, 70],
+    }
+)
 
-    agg = (
-        base.groupby(["customer_id", "order_month"], as_index=False)
-        .agg(total_sales=("sales_amount", "sum"), order_count=("order_id", "count"))
-    )
+profiles = pd.DataFrame(
+    {
+        "user_id": [1, 2, 3, 4, 5],
+        "segment": ["gold", "silver", "gold", "silver", "bronze"],
+    }
+)
 
-    latest_profile = base[["customer_id", "region", "membership_level"]].drop_duplicates("customer_id")
-    features = agg.merge(latest_profile, on="customer_id", how="left")
+# concat example
+all_sales = pd.concat([sales_q1, sales_q2], ignore_index=True)
 
-    extra = pd.DataFrame(
-        {
-            "customer_id": [1001, 1002],
-            "campaign_flag": [1, 0],
-        }
-    )
-    final_features = pd.concat([features, extra], axis=1)
-    return final_features
+# groupby example
+grouped = all_sales.groupby("region", as_index=False)["amount"].sum()
+
+# merge example
+sales_with_profile = all_sales.merge(profiles, on="user_id", how="left")
+
+print(grouped)
+print(sales_with_profile.head())
