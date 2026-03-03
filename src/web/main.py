@@ -12,7 +12,7 @@ from fastapi.responses import FileResponse
 from langchain_core.messages import SystemMessage
 
 from ..runtime_encoding import ensure_utf8_stdio
-from .schemas import AgentRequest, AgentResponse
+from .schemas import AgentDebugInfo, AgentRequest, AgentResponse, AgentTokenUsage
 from ..agent_manager import AgentFlowManager
 from ..settings import ConfigurationError, get_settings, validate_required_keys
 from ..util.util import get_save_text_output_dir
@@ -408,6 +408,28 @@ def _validate_upload_file_path(upload_file_path: str | None, session_id: str) ->
     return str(candidate_path)
 
 
+def _normalize_debug_info(raw_debug: dict | None, latency_ms_server: int | None) -> AgentDebugInfo:
+    debug = raw_debug or {}
+    tool_calls = debug.get("tool_calls") or []
+    errors = debug.get("errors") or []
+
+    token_usage_raw = debug.get("token_usage") or {}
+    token_usage = AgentTokenUsage(
+        prompt_tokens=int(token_usage_raw.get("prompt_tokens", 0) or 0),
+        completion_tokens=int(token_usage_raw.get("completion_tokens", 0) or 0),
+        total_tokens=int(token_usage_raw.get("total_tokens", 0) or 0),
+    )
+
+    return AgentDebugInfo(
+        tool_calls=[str(name) for name in tool_calls if name],
+        tool_call_count=int(debug.get("tool_call_count", len(tool_calls)) or len(tool_calls)),
+        latency_ms_server=latency_ms_server,
+        token_usage=token_usage,
+        model_name=(str(debug.get("model_name")) if debug.get("model_name") else None),
+        errors=[str(error) for error in errors if error],
+    )
+
+
 @app.post("/agent", response_model=AgentResponse)
 async def run_agent_api(
     request: Request,
@@ -445,10 +467,16 @@ async def run_agent_api(
         f"Agent Object ID: {id(agent_manager)} | Query: '{user_query[:20]}...'"
     )
 
+    agent_started = time.monotonic()
     agent_answer = agent_manager.run_agent_flow(user_query, upload_file_path)
+    latency_ms_server = int((time.monotonic() - agent_started) * 1000)
 
     answer = agent_answer.get("message")
     file_path = agent_answer.get("filepath", "")
+    debug_info = _normalize_debug_info(
+        raw_debug=agent_answer.get("debug"),
+        latency_ms_server=latency_ms_server,
+    )
 
     logger.info(f"agent_answer: {agent_answer}")
     logger.info(f"answer: {answer}")
@@ -458,6 +486,7 @@ async def run_agent_api(
         response=answer,
         trace=f"Session ID: {session_id}, Request ID: {request_id}, Agent ID: {id(agent_manager)}",
         file_path=file_path,
+        debug=debug_info if request_data.include_debug else None,
     )
     return response
 
