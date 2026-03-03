@@ -17,11 +17,13 @@ from .scoring_rules import (
     compute_final_score,
     compute_rule_scores,
     compute_rule_weighted_score,
+    resolve_effective_weights,
 )
 from .schemas import (
     BenchmarkCase,
     BenchmarkConfig,
     CaseResult,
+    EvidenceItem,
     RunSummary,
     TokenUsage,
     load_cases_jsonl,
@@ -81,6 +83,31 @@ def _parse_token_usage(raw_debug: dict[str, Any] | None) -> TokenUsage | None:
         return None
 
 
+def _parse_evidence_items(
+    raw_items: Any,
+    *,
+    label: str,
+    response_errors: list[str],
+) -> list[EvidenceItem]:
+    parsed: list[EvidenceItem] = []
+    if raw_items is None:
+        return parsed
+
+    if not isinstance(raw_items, list):
+        response_errors.append(f"{label} must be a list")
+        return parsed
+
+    for index, item in enumerate(raw_items):
+        if not isinstance(item, dict):
+            response_errors.append(f"{label}[{index}] must be an object")
+            continue
+        try:
+            parsed.append(EvidenceItem.model_validate(item))
+        except Exception as exc:
+            response_errors.append(f"{label}[{index}] invalid: {exc}")
+    return parsed
+
+
 def _run_single_case(
     *,
     run_id: str,
@@ -94,7 +121,11 @@ def _run_single_case(
     session_id = str(uuid.uuid4())
     created_at = _utc_now_iso()
     endpoint_url = endpoint.rstrip("/") + "/agent"
-    errors: list[str] = []
+
+    runtime_errors: list[str] = []
+    response_errors: list[str] = []
+    judge_errors: list[str] = []
+
     request_payload: dict[str, Any] = {
         "query": case.query,
         "session_id": session_id,
@@ -107,20 +138,22 @@ def _run_single_case(
         if upload_path:
             request_payload["upload_file_path"] = upload_path
     except Exception as exc:
-        errors.append(str(exc))
+        runtime_errors.append(str(exc))
 
     http_status = 0
     response_text = ""
+    response_payload: dict[str, Any] | None = None
+    response_evidence: list[EvidenceItem] = []
+    observed_evidence: list[EvidenceItem] = []
     response_trace: str | None = None
     response_file_path: str | None = None
-    debug_payload: dict[str, Any] | None = None
     latency_ms_e2e: int | None = None
     latency_ms_server: int | None = None
     model_name: str | None = None
     tool_calls: list[str] = []
     token_usage: TokenUsage | None = None
 
-    if not errors:
+    if not runtime_errors:
         started = time.monotonic()
         try:
             response = requests.post(endpoint_url, json=request_payload, timeout=timeout_seconds)
@@ -128,65 +161,103 @@ def _run_single_case(
             http_status = response.status_code
 
             if response.status_code != 200:
-                errors.append(_build_error_message_from_response(response))
+                runtime_errors.append(_build_error_message_from_response(response))
             else:
-                body = response.json()
-                response_text = str(body.get("response", ""))
-                response_trace = body.get("trace")
-                response_file_path = body.get("file_path")
-                debug_payload = body.get("debug") if isinstance(body.get("debug"), dict) else None
+                try:
+                    body = response.json()
+                except json.JSONDecodeError:
+                    response_errors.append("response is not valid JSON")
+                    body = {}
 
-                if debug_payload:
-                    tool_calls = [str(name) for name in (debug_payload.get("tool_calls") or []) if name]
-                    latency_ms_server = (
-                        int(debug_payload.get("latency_ms_server"))
-                        if debug_payload.get("latency_ms_server") is not None
-                        else None
-                    )
-                    model_name = (
-                        str(debug_payload.get("model_name"))
-                        if debug_payload.get("model_name")
-                        else None
-                    )
-                    token_usage = _parse_token_usage(debug_payload)
-                else:
-                    errors.append("debug payload is missing (include_debug=true expected)")
+                if isinstance(body, dict):
+                    response_trace = body.get("trace")
+                    response_file_path = body.get("file_path")
+
+                    response_raw = body.get("response")
+                    if not isinstance(response_raw, dict):
+                        response_errors.append("response payload must be an object")
+                    else:
+                        response_payload = response_raw
+                        answer = response_raw.get("answer")
+                        if isinstance(answer, str):
+                            response_text = answer
+                        else:
+                            response_errors.append("response.answer must be a string")
+                        if not response_text.strip():
+                            response_errors.append("response.answer is empty")
+
+                        response_evidence = _parse_evidence_items(
+                            response_raw.get("evidence"),
+                            label="response.evidence",
+                            response_errors=response_errors,
+                        )
+
+                    debug_payload = body.get("debug")
+                    if isinstance(debug_payload, dict):
+                        tool_calls = [
+                            str(name)
+                            for name in (debug_payload.get("tool_calls") or [])
+                            if name
+                        ]
+                        latency_raw = debug_payload.get("latency_ms_server")
+                        if latency_raw is not None:
+                            try:
+                                latency_ms_server = int(latency_raw)
+                            except (TypeError, ValueError):
+                                response_errors.append("debug.latency_ms_server must be an integer")
+                        model_name = str(debug_payload.get("model_name")) if debug_payload.get("model_name") else None
+                        token_usage = _parse_token_usage(debug_payload)
+                        observed_evidence = _parse_evidence_items(
+                            debug_payload.get("observed_evidence"),
+                            label="debug.observed_evidence",
+                            response_errors=response_errors,
+                        )
+                    else:
+                        response_errors.append("debug payload is missing (include_debug=true expected)")
         except requests.Timeout:
             latency_ms_e2e = int((time.monotonic() - started) * 1000)
-            errors.append("request timeout")
+            runtime_errors.append("request timeout")
         except requests.RequestException as exc:
             latency_ms_e2e = int((time.monotonic() - started) * 1000)
-            errors.append(f"request failed: {exc}")
-        except json.JSONDecodeError:
-            latency_ms_e2e = int((time.monotonic() - started) * 1000)
-            errors.append("response is not valid JSON")
+            runtime_errors.append(f"request failed: {exc}")
         except Exception as exc:
             latency_ms_e2e = int((time.monotonic() - started) * 1000)
-            errors.append(f"unexpected error: {exc}")
+            runtime_errors.append(f"unexpected error: {exc}")
 
-    rule_scores = compute_rule_scores(
-        case=case,
-        response_text=response_text,
-        called_tools=tool_calls,
-        errors=errors,
+    effective_weights, weights_error = resolve_effective_weights(
+        base_weights=config.weights,
+        case_override=case.weight_override,
     )
-    rule_weighted = compute_rule_weighted_score(rule_scores, config.weights)
+    if weights_error:
+        runtime_errors.append(f"weight_override error: {weights_error}")
 
     llm_judge_score: float | None = None
     llm_judge_reason: str | None = None
-    if response_text.strip():
+    if response_text.strip() and config.judge_enabled:
         llm_judge_score, llm_judge_reason, judge_error = judge.score_case(
             case=case,
             response_text=response_text,
             tool_calls=tool_calls,
         )
         if judge_error:
-            errors.append(judge_error)
+            judge_errors.append(judge_error)
+
+    rule_scores = compute_rule_scores(
+        case=case,
+        response_text=response_text,
+        called_tools=tool_calls,
+        response_evidence=response_evidence,
+        observed_evidence=observed_evidence,
+        runtime_errors=runtime_errors,
+        response_errors=response_errors,
+        judge_errors=judge_errors,
+    )
+    rule_weighted = compute_rule_weighted_score(rule_scores, effective_weights)
 
     final_score = compute_final_score(
         rule_weighted_score=rule_weighted,
         llm_judge_score=llm_judge_score,
-        weights=config.weights,
+        weights=effective_weights,
     )
     passed = final_score >= 0.75
     cost = compute_cost_usd(token_usage=token_usage, pricing=config.pricing)
@@ -195,6 +266,7 @@ def _run_single_case(
         run_id=run_id,
         case_id=case.case_id,
         category=case.category,
+        scenario=case.scenario,
         query=case.query,
         session_id=session_id,
         endpoint=endpoint_url,
@@ -202,6 +274,9 @@ def _run_single_case(
         request_payload=request_payload,
         http_status=http_status,
         response_text=response_text,
+        response_payload=response_payload,
+        evidence=response_evidence,
+        observed_evidence=observed_evidence,
         file_path=response_file_path,
         trace=response_trace,
         latency_ms_e2e=latency_ms_e2e,
@@ -209,7 +284,10 @@ def _run_single_case(
         tool_calls=tool_calls,
         token_usage=token_usage,
         model_name=model_name,
-        errors=errors,
+        runtime_errors=runtime_errors,
+        response_errors=response_errors,
+        judge_errors=judge_errors,
+        effective_weights=effective_weights.as_dict(),
         rule_scores=rule_scores,
         rule_score_total=rule_weighted,
         llm_judge_score=llm_judge_score,
