@@ -1,0 +1,23 @@
+[weights]
+tool_match = 0.30
+content_constraints = 0.25
+citation_compliance = 0.20
+safety_format = 0.05
+llm_judge = 0.20
+
+[hard_gates]
+pass_rate = 0.82
+tool_precision = 0.90
+tool_recall = 0.85
+citation_compliance = 0.88
+p95_latency_ms = 20000
+avg_cost_per_case_usd = 0.035
+
+[pricing]
+prompt_per_1k_usd = 0.00015
+completion_per_1k_usd = 0.00060
+
+[runtime]
+judge_model = "gpt-5-mini"
+judge_enabled = true
+request_timeout_seconds = 60
