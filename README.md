@@ -235,6 +235,43 @@ uv run python -m src.eval.main report --run output/benchmarks/<run_id>
 
 - 벤치마크 citation 평가는 regex가 아니라 `response.evidence` + `debug.observed_evidence` 구조 검증으로 계산합니다.
 
+### 6.7 베이스라인 결과 (Latest Online Run)
+
+- run_id: `20260303_134325`
+- generated_at_utc: `2026-03-03T15:24:50.806715+00:00`
+- endpoint: `http://localhost:8000`
+- fixtures: `data\benchmarks\fixtures\cases.generated.jsonl`
+- overall: `FAIL`
+
+#### Metrics
+
+| Metric | Value |
+|---|---:|
+| total_cases | 120 |
+| scored_cases | 120 |
+| passed_cases | 46 |
+| pass_rate | 0.3833 |
+| tool_precision | 0.8049 |
+| tool_recall | 0.4400 |
+| citation_compliance | 0.3056 |
+| p50_latency_ms | 49835.5 |
+| p95_latency_ms | 62063.0 |
+| avg_cost_per_case_usd | 0.00219042 |
+
+#### Hard Gates
+
+| Gate | Threshold | Actual | Passed |
+|---|---:|---:|:---:|
+| pass_rate | 0.82 | 0.3833 | N |
+| tool_precision | 0.90 | 0.8049 | N |
+| tool_recall | 0.85 | 0.4400 | N |
+| citation_compliance | 0.88 | 0.3056 | N |
+| p95_latency_ms | 20000 | 62063.0 | N |
+| avg_cost_per_case_usd | 0.035 | 0.00219042 | Y |
+
+- 베이스라인은 최신 1회 런 스냅샷이며, 재측정 시 동일 섹션 값을 갱신합니다.
+- 비교 이력/추세 그래프는 이번 범위에서 제외합니다.
+
 ## 7. 참고 링크
 
 - LangChain: https://docs.langchain.com/oss/python/langchain/overview
