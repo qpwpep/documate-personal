@@ -22,6 +22,7 @@ class AppSettings(BaseSettings):
     tavily_api_key: str | None = Field(default=None, alias="TAVILY_API_KEY")
 
     chat_model: str = Field(default="gpt-5-mini", alias="CHAT_MODEL")
+    planner_model: str = Field(default="gpt-5-nano", alias="PLANNER_MODEL")
     summary_model: str = Field(default="gpt-5-mini", alias="SUMMARY_MODEL")
 
     verbose: bool = Field(default=True, alias="VERBOSE")
