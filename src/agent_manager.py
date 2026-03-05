@@ -1,11 +1,10 @@
 import json
 import os
-import re
 from typing import Any, Dict, List, Optional
-from urllib.parse import urlparse
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
+from .evidence import dedupe_evidence, evidence_to_dicts, parse_evidence_payload
 from .graph_builder import build_agent_graph
 from .settings import AppSettings, get_settings
 from .upload_helpers import build_temp_retriever
@@ -102,147 +101,30 @@ class AgentFlowManager:
         return str(content)
 
     @staticmethod
-    def _normalize_source_id(source: str) -> str:
-        raw = str(source or "").strip()
-        if not raw:
-            return ""
-
-        parsed = urlparse(raw)
-        if parsed.scheme.lower() in {"http", "https"} and parsed.netloc:
-            host = parsed.netloc.lower()
-            if host.startswith("www."):
-                host = host[4:]
-            path = re.sub(r"/+", "/", parsed.path or "/")
-            if not path.startswith("/"):
-                path = "/" + path
-            return f"url:{parsed.scheme.lower()}://{host}{path}"
-
-        normalized_path = re.sub(r"/+", "/", raw.replace("\\", "/")).strip()
-        return f"path:{normalized_path.lower()}"
-
-    @staticmethod
-    def _dedupe_evidence(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        deduped: list[dict[str, Any]] = []
-        seen: set[tuple[str, str, str]] = set()
-
-        for item in items:
-            kind = str(item.get("kind", "")).strip().lower()
-            source_id = str(item.get("source_id", "")).strip()
-            tool = str(item.get("tool", "")).strip().lower()
-            if not kind or not source_id or not tool:
-                continue
-
-            key = (kind, source_id, tool)
-            if key in seen:
-                continue
-            seen.add(key)
-            deduped.append(item)
-        return deduped
-
-    @staticmethod
-    def _parse_tavily_evidence(content: str) -> list[dict[str, Any]]:
-        try:
-            payload = json.loads(content)
-        except json.JSONDecodeError:
-            return []
-
-        if not isinstance(payload, dict):
-            return []
-        results = payload.get("results")
-        if not isinstance(results, list):
-            return []
-
-        evidence: list[dict[str, Any]] = []
-        for result in results:
-            if not isinstance(result, dict):
-                continue
-            source = str(result.get("url") or "").strip()
-            if not source:
-                continue
-
-            source_id = AgentFlowManager._normalize_source_id(source)
-            if not source_id:
-                continue
-
-            title = str(result.get("title") or "").strip() or None
-            snippet = str(result.get("content") or "").strip() or None
-            if snippet and len(snippet) > 500:
-                snippet = snippet[:500] + " ..."
-
-            evidence.append(
-                {
-                    "kind": "official",
-                    "source": source,
-                    "title": title,
-                    "snippet": snippet,
-                    "tool": "tavily_search",
-                    "source_id": source_id,
-                }
-            )
-        return evidence
-
-    @staticmethod
-    def _parse_rag_evidence(content: str) -> list[dict[str, Any]]:
-        lines = content.splitlines()
-        if not lines:
-            return []
-
-        evidence: list[dict[str, Any]] = []
-        source_pattern = re.compile(r"\[(?:Local Example|◆\s*업로드 파일)\]\s*(.+)$", flags=re.I)
-
-        for index, line in enumerate(lines):
-            match = source_pattern.search(line.strip())
-            if not match:
-                continue
-
-            source = match.group(1).strip()
-            if not source:
-                continue
-
-            snippet = ""
-            for prev_index in range(index - 1, -1, -1):
-                candidate = lines[prev_index].strip()
-                if not candidate:
-                    continue
-                if source_pattern.search(candidate):
-                    continue
-                snippet = re.sub(r"^\d+\.\s*", "", candidate).strip()
-                break
-
-            if snippet and len(snippet) > 500:
-                snippet = snippet[:500] + " ..."
-
-            source_id = AgentFlowManager._normalize_source_id(source)
-            evidence.append(
-                {
-                    "kind": "local",
-                    "source": source,
-                    "title": None,
-                    "snippet": snippet or None,
-                    "tool": "rag_search",
-                    "source_id": source_id,
-                }
-            )
-
-        return evidence
-
-    @staticmethod
-    def _extract_observed_evidence(current_turn_messages: list[Any]) -> list[dict[str, Any]]:
-        collected: list[dict[str, Any]] = []
+    def _extract_observed_evidence(
+        current_turn_messages: list[Any],
+        *,
+        errors: list[str],
+    ) -> list[dict[str, Any]]:
+        collected = []
+        evidence_tools = {"tavily_search", "rag_search", "upload_search"}
 
         for message in current_turn_messages:
             if not isinstance(message, ToolMessage):
                 continue
 
             tool_name = str(getattr(message, "name", "") or "").strip()
-            content = AgentFlowManager._extract_text_content(getattr(message, "content", ""))
+            if tool_name not in evidence_tools:
+                continue
 
-            if tool_name == "tavily_search":
-                collected.extend(AgentFlowManager._parse_tavily_evidence(content))
-            elif tool_name == "rag_search":
-                collected.extend(AgentFlowManager._parse_rag_evidence(content))
+            parsed_items = parse_evidence_payload(
+                getattr(message, "content", None),
+                context=f"tool:{tool_name}",
+                errors=errors,
+            )
+            collected.extend(parsed_items)
 
-        return AgentFlowManager._dedupe_evidence(collected)
+        return evidence_to_dicts(dedupe_evidence(collected))
 
     def run_agent_flow(self, user_input: str, upload_file_path: Optional[str] = None) -> dict:
         current_messages = self.messages
@@ -251,7 +133,7 @@ class AgentFlowManager:
             self.messages = []
             self.retriever = None
             self.upload_file_path = None
-            reset_message = "채팅 세션이 초기화되었습니다. 다시 시작합니다."
+            reset_message = "Chat session has been reset. Start again."
             return {
                 "message": reset_message,
                 "filepath": "",
@@ -303,6 +185,7 @@ class AgentFlowManager:
             total_completion_tokens = 0
             total_tokens = 0
             model_name: str | None = None
+            debug_errors: list[str] = []
 
             current_turn_start_index = -1
             for index in range(len(updated_messages) - 1, -1, -1):
@@ -328,7 +211,10 @@ class AgentFlowManager:
                 elif isinstance(message, ToolMessage) and getattr(message, "name", ""):
                     tool_calls.append(str(message.name))
 
-            observed_evidence = self._extract_observed_evidence(current_turn_messages)
+            observed_evidence = self._extract_observed_evidence(
+                current_turn_messages,
+                errors=debug_errors,
+            )
 
             for message in reversed(updated_messages):
                 if isinstance(message, HumanMessage):
@@ -376,13 +262,13 @@ class AgentFlowManager:
                         "total_tokens": total_tokens,
                     },
                     "model_name": model_name,
-                    "errors": [],
+                    "errors": debug_errors,
                     "observed_evidence": observed_evidence,
                 },
             }
 
         except Exception as exc:
-            print(f"Agent 실행 중 오류 발생: {exc}")
+            print(f"Agent execution error: {exc}")
             message = str(exc)
             return {
                 "message": message,

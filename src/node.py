@@ -22,52 +22,20 @@ class State(TypedDict, total=False):
     memory_summary: Optional[str]
 
 
-SAVE_HINT = "(사용자가 응답 저장을 요청했습니다. 최종 '응답 전문'을 content에 담아 'save_text' 도구를 한 번만 호출하세요.)"
-SEARCH_HINT = "(이 질문은 공식/최신 문서 검색이 필요합니다. 'tavily_search' 도구를 먼저 사용하세요.)"
-RAG_HINT = "(이 요청은 로컬 노트북/예제 기반 지식 검색이 필요합니다. 'rag_search' 도구를 사용하세요.)"
+SAVE_HINT = (
+    "(The user asked to save the answer. Call 'save_text' exactly once with the final "
+    "answer text as content.)"
+)
+SEARCH_HINT = "(This question needs official or latest docs. Use 'tavily_search' first.)"
+RAG_HINT = "(This question needs local notebook examples. Use 'rag_search'.)"
+UPLOAD_HINT = "(An uploaded-file retriever is available. Use 'upload_search' for uploaded-file evidence.)"
 SLACK_HINT = (
-    "(사용자가 Slack 전송을 요청했습니다. 최종 답변을 'slack_notify' 도구로 보내세요. "
-    "가능하면 channel_id 또는 user_id/email 인자를 채워주세요.)"
+    "(The user asked to send to Slack. Use 'slack_notify' with channel_id or user_id/email when available.)"
 )
 
 
 def _has_hint(msgs: list[AnyMessage], marker: str) -> bool:
     return any(isinstance(m, SystemMessage) and marker in m.content for m in msgs)
-
-
-def _inject_uploaded_context_if_any(
-    state: State,
-    msgs: list[AnyMessage],
-    verbose: bool = False,
-) -> list[AnyMessage]:
-    retriever = state.get("retriever")
-    if not retriever:
-        return msgs
-
-    last_user = next((m for m in reversed(msgs) if isinstance(m, HumanMessage)), None)
-    if not last_user or not last_user.content.strip():
-        return msgs
-
-    try:
-        docs = retriever.invoke(last_user.content)
-        if not docs:
-            return msgs
-        lines = []
-        for doc in docs[:4]:
-            src = doc.metadata.get("source", "uploaded")
-            snippet = (doc.page_content or "").strip().replace("\n", " ")
-            if len(snippet) > 500:
-                snippet = snippet[:500] + " ..."
-            lines.append(f"- {snippet}\n  [◆ 업로드 파일] {src}")
-        context_block = (
-            "아래는 사용자가 업로드한 파일에서 검색된 관련 구문입니다. 가능한 한 이를 우선 참고해 답변하세요:\n"
-            + "\n".join(lines)
-        )
-        return msgs + [SystemMessage(content=context_block)]
-    except Exception as exc:
-        if verbose:
-            print(f"[retriever] context injection failed: {exc}")
-        return msgs
 
 
 def add_user_message(state: State) -> State:
@@ -85,9 +53,10 @@ def _keep_recent_messages(messages: List[BaseMessage], max_turns: int = 6) -> Li
 
 
 _SUMMARY_SYS = (
-    "너는 회의록 비서다. 아래 대화의 핵심을 **한국어 4~5줄**로 요약하라.\n"
-    "- 주제/결론/결정/중요한 코드/버전/URL만 유지\n"
-    "- 중복/군더더기 제거, 불확실하면 명시\n"
+    "Summarize the older conversation in 4-5 lines.\n"
+    "- Keep topic, conclusions, decisions, key code/version/URL.\n"
+    "- Remove duplication.\n"
+    "- If uncertain, state uncertainty explicitly.\n"
 )
 
 
@@ -132,7 +101,7 @@ def make_chatbot_node(llm_with_tools: Any, verbose: bool, max_turns: int = 6):
         if state.get("memory_summary"):
             model_msgs = [
                 model_msgs[0],
-                SystemMessage(content=f"[이전 요약]\n{state['memory_summary']}"),
+                SystemMessage(content=f"[Conversation Summary]\n{state['memory_summary']}"),
             ] + model_msgs[1:]
 
         before = len(model_msgs)
@@ -153,7 +122,14 @@ def make_chatbot_node(llm_with_tools: Any, verbose: bool, max_turns: int = 6):
             if needs_slack(content) and not _has_hint(model_msgs, SLACK_HINT):
                 model_msgs.append(SystemMessage(content=SLACK_HINT))
 
-        if model_msgs and isinstance(model_msgs[-1], ToolMessage) and getattr(model_msgs[-1], "name", "") == "save_text":
+        if state.get("retriever") and not _has_hint(model_msgs, UPLOAD_HINT):
+            model_msgs.append(SystemMessage(content=UPLOAD_HINT))
+
+        if (
+            model_msgs
+            and isinstance(model_msgs[-1], ToolMessage)
+            and getattr(model_msgs[-1], "name", "") == "save_text"
+        ):
             model_msgs.append(
                 SystemMessage(
                     content=(
@@ -163,7 +139,6 @@ def make_chatbot_node(llm_with_tools: Any, verbose: bool, max_turns: int = 6):
                 )
             )
 
-        model_msgs = _inject_uploaded_context_if_any(state, model_msgs, verbose=verbose)
         response: AIMessage = llm_with_tools.invoke(model_msgs)
         return {"messages": [response]}
 
