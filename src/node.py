@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from typing import Annotated, Any, List, Optional
+from typing import Annotated, Any, List, Literal, Optional
 
 from langchain_core.messages import (
     AIMessage,
@@ -17,6 +17,160 @@ from typing_extensions import TypedDict
 from .evidence import dedupe_evidence, evidence_to_dicts, parse_evidence_payload
 from .planner_schema import PlannerOutput, RetrievalTask
 from .prompts import SYS_POLICY, needs_save, needs_slack
+
+RetryReason = Literal["no_evidence", "low_score", "tool_error"]
+LOW_SCORE_THRESHOLD = 0.5
+DEFAULT_MAX_RETRIES = 1
+
+UNCERTAINTY_ANSWER_PREFIX = (
+    "There is not enough reliable evidence to provide a confident final answer. "
+    "Please narrow the question scope or broaden retrieval targets and try again."
+)
+
+
+class RetryContext(TypedDict, total=False):
+    attempt: int
+    max_retries: int
+    retry_reason: RetryReason
+    retrieval_feedback: str
+    evidence_start_index: int
+    retrieval_error_start_index: int
+    score_avg: float | None
+
+
+def _safe_list(value: Any) -> list[Any]:
+    if isinstance(value, list):
+        return value
+    return []
+
+
+def _slice_from_index(items: list[Any], start_index: int) -> list[Any]:
+    if start_index < 0:
+        start_index = 0
+    if start_index >= len(items):
+        return []
+    return items[start_index:]
+
+
+def _coerce_retry_context(value: Any) -> RetryContext:
+    context: RetryContext = {
+        "attempt": 0,
+        "max_retries": DEFAULT_MAX_RETRIES,
+        "retrieval_feedback": "",
+        "evidence_start_index": 0,
+        "retrieval_error_start_index": 0,
+        "score_avg": None,
+    }
+    if not isinstance(value, dict):
+        return context
+
+    attempt = value.get("attempt")
+    if isinstance(attempt, int) and attempt >= 0:
+        context["attempt"] = attempt
+
+    max_retries = value.get("max_retries")
+    if isinstance(max_retries, int) and max_retries >= 0:
+        context["max_retries"] = max_retries
+
+    retry_reason = value.get("retry_reason")
+    if retry_reason in {"no_evidence", "low_score", "tool_error"}:
+        context["retry_reason"] = retry_reason
+
+    retrieval_feedback = value.get("retrieval_feedback")
+    if retrieval_feedback is not None:
+        context["retrieval_feedback"] = str(retrieval_feedback).strip()
+
+    evidence_start_index = value.get("evidence_start_index")
+    if isinstance(evidence_start_index, int) and evidence_start_index >= 0:
+        context["evidence_start_index"] = evidence_start_index
+
+    retrieval_error_start_index = value.get("retrieval_error_start_index")
+    if isinstance(retrieval_error_start_index, int) and retrieval_error_start_index >= 0:
+        context["retrieval_error_start_index"] = retrieval_error_start_index
+
+    score_avg = value.get("score_avg")
+    if isinstance(score_avg, (int, float)):
+        context["score_avg"] = float(score_avg)
+    elif score_avg is None:
+        context["score_avg"] = None
+
+    return context
+
+
+def _format_retry_context_for_planner(state: State, retry_context: RetryContext) -> str | None:
+    attempt = int(retry_context.get("attempt", 0))
+    if attempt <= 0:
+        return None
+
+    max_retries = int(retry_context.get("max_retries", DEFAULT_MAX_RETRIES))
+    retry_reason = str(retry_context.get("retry_reason") or "no_evidence")
+    feedback = str(retry_context.get("retrieval_feedback") or "none")
+    score_avg = retry_context.get("score_avg")
+    score_text = f"{score_avg:.3f}" if isinstance(score_avg, (int, float)) else "n/a"
+
+    planner_parse_errors: list[str] = []
+    previous_output = _coerce_planner_output(state.get("planner_output"), planner_parse_errors)
+    if previous_output.use_retrieval and previous_output.tasks:
+        prev_tasks = ", ".join(
+            f"{task.route}:{task.query}(k={task.k})" for task in previous_output.tasks
+        )
+    else:
+        prev_tasks = "none"
+
+    return (
+        "[Retry Context]\n"
+        f"attempt={attempt}/{max_retries}\n"
+        f"reason={retry_reason}\n"
+        f"retrieval_feedback={feedback}\n"
+        f"previous_tasks={prev_tasks}\n"
+        f"score_avg={score_text}\n"
+        "Reformulate query scope and switch routes if needed."
+    )
+
+
+def _contains_tool_error(errors: list[str]) -> bool:
+    if not errors:
+        return False
+    keywords = (
+        "failed",
+        "error",
+        "unavailable",
+        "invalid json",
+        "payload must",
+        "timeout",
+    )
+    for error in errors:
+        lowered = str(error).lower()
+        if any(keyword in lowered for keyword in keywords):
+            return True
+    return False
+
+
+def _build_retrieval_feedback(
+    reason: RetryReason,
+    *,
+    planner_output: PlannerOutput,
+    retrieval_errors: list[str],
+    score_avg: float | None,
+) -> str:
+    if reason == "tool_error":
+        if any("upload" in str(error).lower() and "unavailable" in str(error).lower() for error in retrieval_errors):
+            return "upload retriever unavailable; switch to docs/local routes."
+        return "retrieval tool error detected; broaden query and simplify route strategy."
+    if reason == "no_evidence":
+        selected_routes = ", ".join(task.route for task in planner_output.tasks) if planner_output.tasks else "none"
+        return f"query too narrow or domain mismatch on routes: {selected_routes}"
+    if score_avg is not None:
+        return f"low evidence confidence(avg_score={score_avg:.3f}); broaden query or switch route."
+    return "low evidence confidence; broaden query or switch route."
+
+
+def _build_uncertainty_answer(reason: RetryReason, feedback: str) -> str:
+    return (
+        f"{UNCERTAINTY_ANSWER_PREFIX}\n"
+        f"- retry_reason: {reason}\n"
+        f"- retrieval_feedback: {feedback}"
+    )
 
 
 def _merge_string_lists(current: list[str] | None, update: list[str] | None) -> list[str]:
@@ -49,6 +203,7 @@ class State(TypedDict, total=False):
     action_errors: Annotated[list[str], _merge_string_lists]
     synthesis_attempt: int
     needs_retry: bool
+    retry_context: RetryContext
 
 
 def add_user_message(state: State) -> State:
@@ -171,6 +326,11 @@ def _build_planner_messages(state: State, max_turns: int = 6) -> list[BaseMessag
         SystemMessage(content=f"[Planner Context]\nretriever_available={bool(state.get('retriever'))}")
     )
 
+    retry_context = _coerce_retry_context(state.get("retry_context"))
+    retry_context_message = _format_retry_context_for_planner(state, retry_context)
+    if retry_context_message:
+        model_msgs.append(SystemMessage(content=retry_context_message))
+
     if state.get("memory_summary"):
         model_msgs.append(SystemMessage(content=f"[Conversation Summary]\n{state['memory_summary']}"))
 
@@ -186,6 +346,8 @@ def _build_planner_messages(state: State, max_turns: int = 6) -> list[BaseMessag
 def make_planner_node(llm_planner: Any, verbose: bool, max_turns: int = 6):
     def planner(state: State) -> State:
         planner_errors: list[str] = []
+        existing_retry_context = _coerce_retry_context(state.get("retry_context"))
+
         try:
             planner_raw = llm_planner.invoke(_build_planner_messages(state, max_turns=max_turns))
             planner_output = _coerce_planner_output(planner_raw, planner_errors)
@@ -201,11 +363,24 @@ def make_planner_node(llm_planner: Any, verbose: bool, max_turns: int = 6):
         if verbose:
             print(f"[planner] use_retrieval={planner_output.use_retrieval} tasks={len(planner_output.tasks)}")
 
+        retry_context: RetryContext = dict(existing_retry_context)
+        retry_context["max_retries"] = int(
+            existing_retry_context.get("max_retries", DEFAULT_MAX_RETRIES)
+        )
+        retry_context["evidence_start_index"] = len(_safe_list(state.get("retrieved_evidence")))
+        retry_context["retrieval_error_start_index"] = len(_safe_list(state.get("retrieval_errors")))
+        # On the first attempt, clear stale retry metadata.
+        if int(retry_context.get("attempt", 0)) <= 0:
+            retry_context["retrieval_feedback"] = ""
+            retry_context["score_avg"] = None
+            retry_context.pop("retry_reason", None)
+
         return {
             "planner_output": planner_output,
             "retrieval_errors": planner_errors,
-            "synthesis_attempt": 0,
+            "synthesis_attempt": int(state.get("synthesis_attempt", 0)),
             "needs_retry": False,
+            "retry_context": retry_context,
         }
 
     return planner
@@ -370,9 +545,16 @@ def make_synthesize_node(llm_synthesizer: Any, verbose: bool, max_turns: int = 6
                 SystemMessage(content=f"[Conversation Summary]\n{state['memory_summary']}"),
             ] + model_msgs[1:]
 
+        retry_context = _coerce_retry_context(state.get("retry_context"))
+        evidence_start_index = int(retry_context.get("evidence_start_index", 0))
+        current_attempt_evidence_payload = _slice_from_index(
+            _safe_list(state.get("retrieved_evidence")),
+            evidence_start_index,
+        )
+
         parse_errors: list[str] = []
         parsed_evidence = parse_evidence_payload(
-            state.get("retrieved_evidence", []),
+            current_attempt_evidence_payload,
             context="retrieved_evidence",
             errors=parse_errors,
         )
@@ -423,31 +605,104 @@ def make_validate_evidence_node(verbose: bool):
         parse_errors: list[str] = []
 
         planner_output = _coerce_planner_output(state.get("planner_output"), local_errors)
+        retry_context = _coerce_retry_context(state.get("retry_context"))
+        evidence_start_index = int(retry_context.get("evidence_start_index", 0))
+        retrieval_error_start_index = int(retry_context.get("retrieval_error_start_index", 0))
+
+        current_attempt_evidence_payload = _slice_from_index(
+            _safe_list(state.get("retrieved_evidence")),
+            evidence_start_index,
+        )
         parsed_evidence = parse_evidence_payload(
-            state.get("retrieved_evidence", []),
+            current_attempt_evidence_payload,
             context="retrieved_evidence",
             errors=parse_errors,
         )
         local_errors.extend(parse_errors)
 
+        current_attempt_retrieval_errors = [
+            str(error)
+            for error in _slice_from_index(
+                _safe_list(state.get("retrieval_errors")),
+                retrieval_error_start_index,
+            )
+            if str(error).strip()
+        ]
+
         retrieval_required = bool(planner_output.use_retrieval and planner_output.tasks)
         has_valid_evidence = len(parsed_evidence) > 0
 
+        score_values = [
+            float(item.score)
+            for item in parsed_evidence
+            if item.score is not None
+        ]
+        score_avg = (sum(score_values) / len(score_values)) if score_values else None
+        low_score = bool(
+            retrieval_required
+            and score_avg is not None
+            and score_avg < LOW_SCORE_THRESHOLD
+        )
+        tool_error = bool(
+            retrieval_required
+            and (
+                _contains_tool_error(current_attempt_retrieval_errors)
+                or _contains_tool_error(parse_errors)
+            )
+        )
+
+        retry_reason: RetryReason | None = None
+        if tool_error:
+            retry_reason = "tool_error"
+        elif retrieval_required and not has_valid_evidence:
+            retry_reason = "no_evidence"
+        elif low_score:
+            retry_reason = "low_score"
+
+        max_retries = int(retry_context.get("max_retries", DEFAULT_MAX_RETRIES))
+        used_retries = int(retry_context.get("attempt", 0))
         needs_retry = False
-        if retrieval_required and not has_valid_evidence:
-            local_errors.append("validate_evidence: retrieval was requested but no valid evidence was collected")
-            if int(state.get("synthesis_attempt", 0)) < 2:
+        retrieval_feedback = ""
+        if retry_reason is not None:
+            retrieval_feedback = _build_retrieval_feedback(
+                retry_reason,
+                planner_output=planner_output,
+                retrieval_errors=current_attempt_retrieval_errors + parse_errors,
+                score_avg=score_avg,
+            )
+            local_errors.append(
+                "validate_evidence: retry_reason="
+                f"{retry_reason}, score_avg={score_avg}, feedback={retrieval_feedback}"
+            )
+            if used_retries < max_retries:
                 needs_retry = True
+                used_retries += 1
 
         if verbose:
             print(
                 f"[validate_evidence] required={retrieval_required} "
-                f"evidence={len(parsed_evidence)} retry={needs_retry}"
+                f"evidence={len(parsed_evidence)} retry={needs_retry} reason={retry_reason}"
             )
+
+        next_retry_context: RetryContext = dict(retry_context)
+        next_retry_context["attempt"] = used_retries
+        next_retry_context["max_retries"] = max_retries
+        next_retry_context["score_avg"] = score_avg
+        if retry_reason is not None:
+            next_retry_context["retry_reason"] = retry_reason
+            next_retry_context["retrieval_feedback"] = retrieval_feedback
+        else:
+            next_retry_context["retrieval_feedback"] = ""
+            next_retry_context.pop("retry_reason", None)
 
         updates: State = {
             "needs_retry": needs_retry,
+            "retry_context": next_retry_context,
         }
+        if retry_reason is not None and not needs_retry:
+            uncertainty_answer = _build_uncertainty_answer(retry_reason, retrieval_feedback)
+            updates["messages"] = [AIMessage(content=uncertainty_answer)]
+            updates["final_answer"] = uncertainty_answer
         if local_errors:
             updates["validation_errors"] = local_errors
         return updates
@@ -525,3 +780,5 @@ def make_action_postprocess_node(save_text_tool: Any, slack_notify_tool: Any, ve
         return updates
 
     return action_postprocess
+
+
