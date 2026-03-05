@@ -6,6 +6,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from ..domain_docs import DEFAULT_DOCS
+from ..evidence import normalize_source_id
 from .schemas import (
     BenchmarkCase,
     CaseWeightOverride,
@@ -26,25 +27,6 @@ def _contains_any_pattern(text: str, patterns: list[str]) -> bool:
     return any(re.search(pattern, text, flags=re.I) for pattern in patterns)
 
 
-def _normalize_source_id(source: str) -> str:
-    raw = str(source or "").strip()
-    if not raw:
-        return ""
-
-    parsed = urlparse(raw)
-    if parsed.scheme.lower() in {"http", "https"} and parsed.netloc:
-        host = parsed.netloc.lower()
-        if host.startswith("www."):
-            host = host[4:]
-        path = re.sub(r"/+", "/", parsed.path or "/")
-        if not path.startswith("/"):
-            path = "/" + path
-        return f"url:{parsed.scheme.lower()}://{host}{path}"
-
-    normalized_path = re.sub(r"/+", "/", raw.replace("\\", "/")).strip().lower()
-    return f"path:{normalized_path}"
-
-
 def _normalize_domain(url_or_domain: str) -> str:
     parsed = urlparse(url_or_domain if "://" in url_or_domain else f"https://{url_or_domain}")
     domain = (parsed.netloc or parsed.path).strip().lower()
@@ -56,15 +38,15 @@ def _normalize_domain(url_or_domain: str) -> str:
 _ALLOWED_OFFICIAL_DOMAINS = {_normalize_domain(value) for value in DEFAULT_DOCS.values()}
 
 
-def _is_valid_official_source(source: str) -> bool:
-    parsed = urlparse(str(source or "").strip())
+def _is_valid_official_source(url_or_path: str) -> bool:
+    parsed = urlparse(str(url_or_path or "").strip())
     if parsed.scheme.lower() != "https" or not parsed.netloc:
         return False
     return _normalize_domain(parsed.netloc) in _ALLOWED_OFFICIAL_DOMAINS
 
 
-def _is_valid_local_source(source: str) -> bool:
-    raw = str(source or "").strip()
+def _is_valid_local_source(url_or_path: str) -> bool:
+    raw = str(url_or_path or "").strip()
     if not raw:
         return False
     normalized = raw.replace("\\", "/").lower()
@@ -90,12 +72,12 @@ def _collect_valid_source_ids(
             continue
         if item.tool != required_tool:
             continue
-        source_id = item.source_id or _normalize_source_id(item.source)
+        source_id = item.source_id or normalize_source_id(item.url_or_path)
         if not source_id:
             continue
-        if source_id != _normalize_source_id(item.source):
+        if source_id != normalize_source_id(item.url_or_path):
             continue
-        if not source_validator(item.source):
+        if not source_validator(item.url_or_path):
             continue
         valid_ids.add(source_id)
     return valid_ids
