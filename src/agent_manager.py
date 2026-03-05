@@ -187,6 +187,15 @@ class AgentFlowManager:
             model_name: str | None = None
             debug_errors: list[str] = []
 
+            for state_error_key in ("retrieval_errors", "validation_errors", "action_errors"):
+                raw_errors = response.get(state_error_key)
+                if not isinstance(raw_errors, list):
+                    continue
+                for error in raw_errors:
+                    text = str(error).strip()
+                    if text:
+                        debug_errors.append(text)
+
             current_turn_start_index = -1
             for index in range(len(updated_messages) - 1, -1, -1):
                 if isinstance(updated_messages[index], HumanMessage):
