@@ -216,11 +216,12 @@ uv run python -m src.eval.main report --run output/benchmarks/<run_id>
     "evidence": [
       {
         "kind": "official|local",
-        "source": "https://... or path",
+        "url_or_path": "https://... or path",
         "title": "optional",
         "snippet": "optional",
-        "tool": "tavily_search|rag_search",
-        "source_id": "normalized key"
+        "tool": "tavily_search|rag_search|upload_search",
+        "source_id": "normalized key",
+        "score": 0.0
       }
     ]
   },

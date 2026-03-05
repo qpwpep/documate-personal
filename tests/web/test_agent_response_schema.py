@@ -13,11 +13,12 @@ class AgentResponseSchemaTest(unittest.TestCase):
                 "evidence": [
                     {
                         "kind": "official",
-                        "source": "https://numpy.org/doc/stable/",
-                        "title": "NumPy Docs",
-                        "snippet": "broadcasting rule",
                         "tool": "tavily_search",
                         "source_id": "url:https://numpy.org/doc/stable/",
+                        "url_or_path": "https://numpy.org/doc/stable/",
+                        "title": "NumPy Docs",
+                        "snippet": "broadcasting rule",
+                        "score": 0.99,
                     }
                 ],
             },

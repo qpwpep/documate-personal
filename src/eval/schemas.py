@@ -8,19 +8,11 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
+from ..evidence import EvidenceItem
+
 
 CaseCategory = Literal["docs_only", "rag_only", "hybrid", "tool_action"]
 CaseScenario = Literal["seed_mutation", "adversarial", "regression", "ambiguity"]
-EvidenceKind = Literal["official", "local"]
-
-
-class EvidenceItem(BaseModel):
-    kind: EvidenceKind
-    source: str
-    title: str | None = None
-    snippet: str | None = None
-    tool: str
-    source_id: str
 
 
 class CaseWeightOverride(BaseModel):

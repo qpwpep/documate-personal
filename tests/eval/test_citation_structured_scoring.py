@@ -15,19 +15,21 @@ class CitationStructuredScoringTest(unittest.TestCase):
         )
         self.official = EvidenceItem(
             kind="official",
-            source="https://numpy.org/doc/stable/user/basics.broadcasting.html",
-            title="Broadcasting",
-            snippet="official snippet",
             tool="tavily_search",
             source_id="url:https://numpy.org/doc/stable/user/basics.broadcasting.html",
+            url_or_path="https://numpy.org/doc/stable/user/basics.broadcasting.html",
+            title="Broadcasting",
+            snippet="official snippet",
+            score=0.98,
         )
         self.local = EvidenceItem(
             kind="local",
-            source="uploads/abc/sample_pipeline.ipynb",
-            title=None,
-            snippet="local snippet",
             tool="rag_search",
             source_id="path:uploads/abc/sample_pipeline.ipynb",
+            url_or_path="uploads/abc/sample_pipeline.ipynb",
+            title=None,
+            snippet="local snippet",
+            score=0.77,
         )
 
     def test_full_compliance_scores_one(self) -> None:
@@ -51,11 +53,12 @@ class CitationStructuredScoringTest(unittest.TestCase):
     def test_invalid_domain_scores_zero_for_official(self) -> None:
         invalid_official = EvidenceItem(
             kind="official",
-            source="https://example.com/not-allowed",
-            title=None,
-            snippet=None,
             tool="tavily_search",
             source_id="url:https://example.com/not-allowed",
+            url_or_path="https://example.com/not-allowed",
+            title=None,
+            snippet=None,
+            score=None,
         )
         score = score_citation_compliance(
             case=BenchmarkCase(
