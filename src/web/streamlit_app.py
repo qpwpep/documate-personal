@@ -201,7 +201,7 @@ for message in st.session_state.messages:
                     if not isinstance(item, dict):
                         continue
                     kind = str(item.get("kind", "") or "").strip()
-                    source = str(item.get("source", "") or "").strip()
+                    source = str(item.get("url_or_path", "") or "").strip()
                     title = str(item.get("title", "") or "").strip()
                     if title:
                         st.markdown(f"- `{kind}`: **{title}** ({source})")
