@@ -24,6 +24,7 @@
   - `src/graph_builder.py`
   - `src/make_graph.py`
   - `src/node.py`
+  - 그래프 흐름: `add_user_message -> summarize_old_messages -> planner -> retrieve_docs/upload/local(parallel) -> synthesize -> validate_evidence -> action_postprocess`
 - Infra / Tooling
   - `src/tools.py`
   - `src/upload_helpers.py`
@@ -139,6 +140,7 @@ cp .env.example .env
 
 선택 값
 - `CHAT_MODEL` (default: `gpt-5-mini`)
+- `PLANNER_MODEL` (default: `gpt-5-nano`)
 - `SUMMARY_MODEL` (default: `gpt-5-mini`)
 - `VERBOSE` (default: `true`)
 - `FASTAPI_URL` (default: `http://localhost:8000`)
