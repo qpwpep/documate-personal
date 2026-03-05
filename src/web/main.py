@@ -15,6 +15,7 @@ from ..runtime_encoding import ensure_utf8_stdio
 from .schemas import (
     AgentDebugInfo,
     AgentRequest,
+    AgentRetryContext,
     AgentResponse,
     AgentResponsePayload,
     AgentTokenUsage,
@@ -438,6 +439,14 @@ def _normalize_debug_info(raw_debug: dict | None, latency_ms_server: int | None)
             except Exception:
                 continue
 
+    retry_context = None
+    raw_retry_context = debug.get("retry_context")
+    if isinstance(raw_retry_context, dict):
+        try:
+            retry_context = AgentRetryContext.model_validate(raw_retry_context)
+        except Exception:
+            retry_context = None
+
     return AgentDebugInfo(
         tool_calls=[str(name) for name in tool_calls if name],
         tool_call_count=int(debug.get("tool_call_count", len(tool_calls)) or len(tool_calls)),
@@ -446,6 +455,7 @@ def _normalize_debug_info(raw_debug: dict | None, latency_ms_server: int | None)
         model_name=(str(debug.get("model_name")) if debug.get("model_name") else None),
         errors=[str(error) for error in errors if error],
         observed_evidence=observed_evidence,
+        retry_context=retry_context,
     )
 
 

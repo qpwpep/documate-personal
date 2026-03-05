@@ -126,6 +126,45 @@ class AgentFlowManager:
 
         return evidence_to_dicts(dedupe_evidence(collected))
 
+    @staticmethod
+    def _normalize_retry_context(raw_retry_context: Any) -> Dict[str, Any] | None:
+        if not isinstance(raw_retry_context, dict):
+            return None
+
+        normalized: Dict[str, Any] = {}
+
+        attempt = raw_retry_context.get("attempt")
+        if isinstance(attempt, int) and attempt >= 0:
+            normalized["attempt"] = attempt
+
+        max_retries = raw_retry_context.get("max_retries")
+        if isinstance(max_retries, int) and max_retries >= 0:
+            normalized["max_retries"] = max_retries
+
+        retry_reason = raw_retry_context.get("retry_reason")
+        if retry_reason in {"no_evidence", "low_score", "tool_error"}:
+            normalized["retry_reason"] = retry_reason
+
+        retrieval_feedback = raw_retry_context.get("retrieval_feedback")
+        if retrieval_feedback is not None:
+            normalized["retrieval_feedback"] = str(retrieval_feedback)
+
+        evidence_start_index = raw_retry_context.get("evidence_start_index")
+        if isinstance(evidence_start_index, int) and evidence_start_index >= 0:
+            normalized["evidence_start_index"] = evidence_start_index
+
+        retrieval_error_start_index = raw_retry_context.get("retrieval_error_start_index")
+        if isinstance(retrieval_error_start_index, int) and retrieval_error_start_index >= 0:
+            normalized["retrieval_error_start_index"] = retrieval_error_start_index
+
+        score_avg = raw_retry_context.get("score_avg")
+        if isinstance(score_avg, (int, float)):
+            normalized["score_avg"] = float(score_avg)
+        elif score_avg is None and "score_avg" in raw_retry_context:
+            normalized["score_avg"] = None
+
+        return normalized or None
+
     def run_agent_flow(self, user_input: str, upload_file_path: Optional[str] = None) -> dict:
         current_messages = self.messages
 
@@ -224,6 +263,7 @@ class AgentFlowManager:
                 current_turn_messages,
                 errors=debug_errors,
             )
+            retry_context = self._normalize_retry_context(response.get("retry_context"))
 
             for message in reversed(updated_messages):
                 if isinstance(message, HumanMessage):
@@ -273,6 +313,7 @@ class AgentFlowManager:
                     "model_name": model_name,
                     "errors": debug_errors,
                     "observed_evidence": observed_evidence,
+                    "retry_context": retry_context,
                 },
             }
 

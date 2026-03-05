@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 from ..evidence import EvidenceItem
@@ -16,6 +18,16 @@ class AgentTokenUsage(BaseModel):
     total_tokens: int = 0
 
 
+class AgentRetryContext(BaseModel):
+    attempt: int = 0
+    max_retries: int = 1
+    retry_reason: Literal["no_evidence", "low_score", "tool_error"] | None = None
+    retrieval_feedback: str | None = None
+    evidence_start_index: int | None = None
+    retrieval_error_start_index: int | None = None
+    score_avg: float | None = None
+
+
 class AgentDebugInfo(BaseModel):
     tool_calls: list[str] = Field(default_factory=list)
     tool_call_count: int = 0
@@ -24,6 +36,7 @@ class AgentDebugInfo(BaseModel):
     model_name: str | None = None
     errors: list[str] = Field(default_factory=list)
     observed_evidence: list[EvidenceItem] = Field(default_factory=list)
+    retry_context: AgentRetryContext | None = None
 
 
 class AgentRequest(BaseModel):
