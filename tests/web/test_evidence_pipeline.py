@@ -27,6 +27,28 @@ class _FakeGraph:
         }
 
 
+class _FakeGraphWithSave:
+    def invoke(self, state: dict) -> dict:
+        _ = state
+        return {
+            "messages": [
+                HumanMessage(content="question"),
+                AIMessage(content="final answer before save"),
+                ToolMessage(
+                    content=json.dumps(
+                        {
+                            "message": "Saved output to response_20260101_010101.txt",
+                            "file_path": "output/save_text/response_20260101_010101.txt",
+                        },
+                        ensure_ascii=False,
+                    ),
+                    name="save_text",
+                    tool_call_id="save-1",
+                ),
+            ]
+        }
+
+
 class _FakeVectorStore:
     def similarity_search_with_relevance_scores(self, query: str, k: int = 4):
         _ = (query, k)
@@ -124,6 +146,19 @@ class EvidencePipelineTest(unittest.TestCase):
         self.assertEqual(with_retriever[0]["url_or_path"], "uploads/session/sample_pipeline.ipynb")
         self.assertEqual(with_retriever[0]["source_id"], "path:uploads/session/sample_pipeline.ipynb")
         self.assertAlmostEqual(with_retriever[0]["score"], 0.87)
+
+    def test_save_tool_message_does_not_override_final_answer(self) -> None:
+        manager = AgentFlowManager.__new__(AgentFlowManager)
+        manager.settings = None
+        manager.graph = _FakeGraphWithSave()
+        manager.messages = []
+        manager.retriever = None
+        manager.upload_file_path = None
+
+        result = manager.run_agent_flow("save this")
+
+        self.assertEqual(result["message"], "final answer before save")
+        self.assertEqual(result["response_payload"]["answer"], "final answer before save")
 
 
 if __name__ == "__main__":
