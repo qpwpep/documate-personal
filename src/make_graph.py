@@ -1,15 +1,27 @@
+from __future__ import annotations
+
 from typing import Any
 
 from langgraph.graph import END, StateGraph
-from langgraph.prebuilt import ToolNode, tools_condition
+
+
+def _validate_router(state: dict[str, Any]) -> str:
+    if bool(state.get("needs_retry")):
+        return "retry"
+    return "postprocess"
 
 
 def build_graph(
     state_type: Any,
     add_user_node: Any,
     summarize_node: Any,
-    chatbot_node: Any,
-    tool_list: list[Any],
+    planner_node: Any,
+    retrieve_docs_node: Any,
+    retrieve_upload_node: Any,
+    retrieve_local_node: Any,
+    synthesize_node: Any,
+    validate_evidence_node: Any,
+    action_postprocess_node: Any,
 ):
     builder = StateGraph(state_type)
 
@@ -17,14 +29,31 @@ def build_graph(
     builder.set_entry_point("add_user_message")
 
     builder.add_node("summarize_old_messages", summarize_node)
-    builder.add_node("chatbot", chatbot_node)
+    builder.add_node("planner", planner_node)
+    builder.add_node("retrieve_docs", retrieve_docs_node)
+    builder.add_node("retrieve_upload", retrieve_upload_node)
+    builder.add_node("retrieve_local", retrieve_local_node)
+    builder.add_node("synthesize", synthesize_node)
+    builder.add_node("validate_evidence", validate_evidence_node)
+    builder.add_node("action_postprocess", action_postprocess_node)
 
     builder.add_edge("add_user_message", "summarize_old_messages")
-    builder.add_edge("summarize_old_messages", "chatbot")
+    builder.add_edge("summarize_old_messages", "planner")
 
-    tool_node = ToolNode(tools=tool_list)
-    builder.add_node("tools", tool_node)
-    builder.add_conditional_edges("chatbot", tools_condition, {"tools": "tools", END: END})
-    builder.add_edge("tools", "chatbot")
+    builder.add_edge("planner", "retrieve_docs")
+    builder.add_edge("planner", "retrieve_upload")
+    builder.add_edge("planner", "retrieve_local")
+
+    builder.add_edge(["retrieve_docs", "retrieve_upload", "retrieve_local"], "synthesize")
+    builder.add_edge("synthesize", "validate_evidence")
+    builder.add_conditional_edges(
+        "validate_evidence",
+        _validate_router,
+        {
+            "retry": "synthesize",
+            "postprocess": "action_postprocess",
+        },
+    )
+    builder.add_edge("action_postprocess", END)
 
     return builder.compile()
