@@ -50,7 +50,7 @@ def build_graph(
         "validate_evidence",
         _validate_router,
         {
-            "retry": "synthesize",
+            "retry": "planner",
             "postprocess": "action_postprocess",
         },
     )
