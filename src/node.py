@@ -18,16 +18,11 @@ from .evidence import dedupe_evidence, evidence_to_dicts, parse_evidence_payload
 from .planner_schema import PlannerOutput, RetrievalTask
 from .prompts import SYS_POLICY, needs_rag, needs_save, needs_search, needs_slack
 
-RetryReason = Literal["no_evidence", "low_score", "tool_error"]
+RetryReason = Literal["no_evidence", "low_score", "tool_error", "blocked_missing_upload"]
+PlannerStatus = Literal["llm", "heuristic_fallback", "fallback_no_routes"]
 LOW_SCORE_THRESHOLD = 0.5
 DEFAULT_MAX_RETRIES = 1
 RETRYABLE_REASONS: set[RetryReason] = {"no_evidence", "low_score"}
-
-UNCERTAINTY_ANSWER_PREFIX = (
-    "There is not enough reliable evidence to provide a confident final answer. "
-    "Please narrow the question scope or broaden retrieval targets and try again."
-)
-
 
 class RetryContext(TypedDict, total=False):
     attempt: int
@@ -36,7 +31,23 @@ class RetryContext(TypedDict, total=False):
     retrieval_feedback: str
     evidence_start_index: int
     retrieval_error_start_index: int
+    retrieval_diagnostic_start_index: int
     score_avg: float | None
+
+
+class PlannerDiagnostic(TypedDict, total=False):
+    status: PlannerStatus
+    reason: str | None
+    fallback_routes: list[str]
+
+
+class RetrievalDiagnostic(TypedDict, total=False):
+    tool: str
+    route: str
+    status: str
+    message: str
+    query: str
+    attempt: int
 
 
 def _safe_list(value: Any) -> list[Any]:
@@ -60,6 +71,7 @@ def _coerce_retry_context(value: Any) -> RetryContext:
         "retrieval_feedback": "",
         "evidence_start_index": 0,
         "retrieval_error_start_index": 0,
+        "retrieval_diagnostic_start_index": 0,
         "score_avg": None,
     }
     if not isinstance(value, dict):
@@ -74,7 +86,7 @@ def _coerce_retry_context(value: Any) -> RetryContext:
         context["max_retries"] = max_retries
 
     retry_reason = value.get("retry_reason")
-    if retry_reason in {"no_evidence", "low_score", "tool_error"}:
+    if retry_reason in {"no_evidence", "low_score", "tool_error", "blocked_missing_upload"}:
         context["retry_reason"] = retry_reason
 
     retrieval_feedback = value.get("retrieval_feedback")
@@ -88,6 +100,10 @@ def _coerce_retry_context(value: Any) -> RetryContext:
     retrieval_error_start_index = value.get("retrieval_error_start_index")
     if isinstance(retrieval_error_start_index, int) and retrieval_error_start_index >= 0:
         context["retrieval_error_start_index"] = retrieval_error_start_index
+
+    retrieval_diagnostic_start_index = value.get("retrieval_diagnostic_start_index")
+    if isinstance(retrieval_diagnostic_start_index, int) and retrieval_diagnostic_start_index >= 0:
+        context["retrieval_diagnostic_start_index"] = retrieval_diagnostic_start_index
 
     score_avg = value.get("score_avg")
     if isinstance(score_avg, (int, float)):
@@ -154,6 +170,8 @@ def _build_retrieval_feedback(
     retrieval_errors: list[str],
     score_avg: float | None,
 ) -> str:
+    if reason == "blocked_missing_upload":
+        return "uploaded file context is missing; ask the user to upload the file first."
     if reason == "tool_error":
         if any("upload" in str(error).lower() and "unavailable" in str(error).lower() for error in retrieval_errors):
             return "upload retriever unavailable; switch to docs/local routes."
@@ -166,14 +184,6 @@ def _build_retrieval_feedback(
     return "low evidence confidence; broaden query or switch route."
 
 
-def _build_uncertainty_answer(reason: RetryReason, feedback: str) -> str:
-    return (
-        f"{UNCERTAINTY_ANSWER_PREFIX}\n"
-        f"- retry_reason: {reason}\n"
-        f"- retrieval_feedback: {feedback}"
-    )
-
-
 def _merge_string_lists(current: list[str] | None, update: list[str] | None) -> list[str]:
     merged = list(current or [])
     if update:
@@ -181,7 +191,7 @@ def _merge_string_lists(current: list[str] | None, update: list[str] | None) -> 
     return merged
 
 
-def _merge_evidence_dict_lists(
+def _merge_dict_lists(
     current: list[dict[str, Any]] | None,
     update: list[dict[str, Any]] | None,
 ) -> list[dict[str, Any]]:
@@ -232,6 +242,185 @@ def _is_action_only_request(user_input: str) -> bool:
     return not _has_action_lookup_intent(user_input)
 
 
+def _has_upload_route_intent(user_input: str) -> bool:
+    lowered = str(user_input or "").lower()
+    if not lowered.strip():
+        return False
+
+    keywords = (
+        "upload",
+        "uploaded",
+        "current file",
+        "current notebook",
+        "this file",
+        "this notebook",
+        ".ipynb",
+        ".py",
+        "업로드",
+        "업로드한 파일",
+        "업로드된",
+        "현재 파일",
+        "이 파일",
+        "이 노트북",
+    )
+    return any(keyword in lowered for keyword in keywords)
+
+
+def _needs_upload_followup(user_input: str) -> bool:
+    lowered = str(user_input or "").lower()
+    if not lowered.strip():
+        return False
+
+    keywords = (
+        "upload",
+        "uploaded",
+        "current file",
+        "this file",
+        "업로드",
+        "업로드한 파일",
+        "업로드된",
+        "현재 파일",
+        "이 파일",
+    )
+    return any(keyword in lowered for keyword in keywords)
+
+
+def _build_missing_upload_followup() -> str:
+    return "업로드한 파일을 확인하려면 `.py` 또는 `.ipynb` 파일을 먼저 업로드한 뒤 다시 질문해 주세요."
+
+
+def _build_followup_from_routes(
+    planner_output: PlannerOutput,
+    reason: RetryReason,
+) -> str:
+    routes = {task.route for task in planner_output.tasks}
+    if reason == "blocked_missing_upload":
+        return _build_missing_upload_followup()
+    if reason == "tool_error":
+        if routes == {"docs"}:
+            return "공식 문서 조회 중 문제가 있었습니다. 라이브러리명이나 API 이름을 더 구체적으로 적어 다시 질문해 주세요."
+        if routes == {"upload"}:
+            return "업로드 파일 검색 중 문제가 있었습니다. 파일을 다시 업로드하거나 찾을 함수명을 더 구체적으로 알려주세요."
+        if routes == {"local"}:
+            return "로컬 예제 검색 중 문제가 있었습니다. 찾고 싶은 함수명이나 노트북 주제를 더 구체적으로 알려주세요."
+        return "검색 경로에서 문제가 있었습니다. 확인할 API 이름이나 비교 대상을 더 구체적으로 알려주세요."
+    if routes == {"docs"}:
+        return "공식 문서에서 찾을 라이브러리명이나 API 이름을 더 구체적으로 알려주세요."
+    if routes == {"upload"}:
+        return "업로드한 파일에서 찾을 함수명이나 셀 내용을 더 구체적으로 알려주세요."
+    if routes == {"local"}:
+        return "로컬 예제에서 찾을 함수명이나 노트북 주제를 더 구체적으로 알려주세요."
+    if routes == {"docs", "upload"}:
+        return "공식 문서와 업로드 파일에서 함께 확인할 API나 함수명을 더 구체적으로 알려주세요."
+    if routes == {"docs", "local"}:
+        return "공식 문서와 로컬 예제에서 함께 확인할 API나 함수명을 더 구체적으로 알려주세요."
+    return "찾고 싶은 대상과 범위를 조금 더 구체적으로 알려주세요."
+
+
+def _route_for_tool(tool_name: str) -> str:
+    return {
+        "tavily_search": "docs",
+        "upload_search": "upload",
+        "rag_search": "local",
+    }.get(tool_name, "unknown")
+
+
+def _normalize_planner_diagnostics(
+    *,
+    status: PlannerStatus,
+    reason: str | None = None,
+    fallback_routes: list[str] | None = None,
+) -> PlannerDiagnostic:
+    return {
+        "status": status,
+        "reason": reason,
+        "fallback_routes": list(fallback_routes or []),
+    }
+
+
+def _normalize_retrieval_diagnostic(
+    raw_payload: Any,
+    *,
+    tool_name: str,
+    route: str,
+    query: str,
+    attempt: int,
+    evidence_count: int,
+) -> RetrievalDiagnostic:
+    diagnostics: dict[str, Any] = {}
+    if isinstance(raw_payload, dict) and isinstance(raw_payload.get("diagnostics"), dict):
+        diagnostics = dict(raw_payload.get("diagnostics") or {})
+
+    try:
+        diagnostic_attempt = int(diagnostics.get("attempt") or attempt)
+    except (TypeError, ValueError):
+        diagnostic_attempt = attempt
+
+    status = str(diagnostics.get("status") or ("success" if evidence_count > 0 else "no_result"))
+    message = str(diagnostics.get("message") or "")
+
+    return {
+        "tool": str(diagnostics.get("tool") or tool_name),
+        "route": str(diagnostics.get("route") or route or _route_for_tool(tool_name)),
+        "status": status,
+        "message": message,
+        "query": str(diagnostics.get("query") or query),
+        "attempt": diagnostic_attempt,
+    }
+
+
+def _current_retrieval_attempt(retry_context: RetryContext) -> int:
+    return int(retry_context.get("attempt", 0)) + 1
+
+
+def _build_heuristic_planner_output(
+    *,
+    user_input: str,
+    has_retriever: bool,
+) -> tuple[PlannerOutput, PlannerDiagnostic, str | None]:
+    trimmed_query = str(user_input or "").strip()
+    routes: list[str] = []
+    upload_route_intent = _has_upload_route_intent(user_input)
+    guided_followup: str | None = None
+
+    if needs_search(user_input):
+        routes.append("docs")
+
+    if has_retriever and upload_route_intent:
+        routes.append("upload")
+    elif upload_route_intent and _needs_upload_followup(user_input):
+        guided_followup = _build_missing_upload_followup()
+
+    if needs_rag(user_input) and not upload_route_intent:
+        routes.append("local")
+
+    unique_routes = [route for route in ("docs", "upload", "local") if route in routes]
+    if unique_routes:
+        planner_output = PlannerOutput(
+            use_retrieval=True,
+            tasks=[RetrievalTask(route=route, query=trimmed_query, k=4) for route in unique_routes],
+        )
+        return (
+            planner_output,
+            _normalize_planner_diagnostics(
+                status="heuristic_fallback",
+                reason="planner_failed_or_invalid",
+                fallback_routes=unique_routes,
+            ),
+            guided_followup,
+        )
+
+    return (
+        PlannerOutput.fallback(),
+        _normalize_planner_diagnostics(
+            status="fallback_no_routes",
+            reason="planner_failed_or_invalid",
+            fallback_routes=[],
+        ),
+        guided_followup,
+    )
+
+
 class State(TypedDict, total=False):
     messages: Annotated[list[AnyMessage], add_messages]
     user_input: str
@@ -239,7 +428,11 @@ class State(TypedDict, total=False):
     retriever: Optional[Any]
     memory_summary: Optional[str]
     planner_output: PlannerOutput
-    retrieved_evidence: Annotated[list[dict[str, Any]], _merge_evidence_dict_lists]
+    planner_status: PlannerStatus
+    planner_diagnostics: PlannerDiagnostic
+    guided_followup: Optional[str]
+    retrieved_evidence: Annotated[list[dict[str, Any]], _merge_dict_lists]
+    retrieval_diagnostics: Annotated[list[dict[str, Any]], _merge_dict_lists]
     retrieval_errors: Annotated[list[str], _merge_string_lists]
     validation_errors: Annotated[list[str], _merge_string_lists]
     action_errors: Annotated[list[str], _merge_string_lists]
@@ -432,24 +625,54 @@ def make_planner_node(llm_planner: Any, verbose: bool, max_turns: int = 6):
         planner_errors: list[str] = []
         existing_retry_context = _coerce_retry_context(state.get("retry_context"))
         user_input = str(state.get("user_input", "") or "")
+        has_retriever = bool(state.get("retriever"))
+        planner_status: PlannerStatus = "llm"
+        planner_diagnostics = _normalize_planner_diagnostics(status="llm", reason=None, fallback_routes=[])
+        guided_followup: str | None = None
 
         if _is_action_only_request(user_input):
             planner_output = PlannerOutput.fallback()
         else:
             try:
                 planner_raw = llm_planner.invoke(_build_planner_messages(state, max_turns=max_turns))
-                planner_output = _coerce_planner_output(planner_raw, planner_errors)
+                if isinstance(planner_raw, PlannerOutput):
+                    planner_output = planner_raw
+                else:
+                    try:
+                        planner_output = PlannerOutput.model_validate(planner_raw)
+                    except Exception as exc:
+                        planner_errors.append(f"planner: output validation failed ({exc})")
+                        planner_output, planner_diagnostics, guided_followup = _build_heuristic_planner_output(
+                            user_input=user_input,
+                            has_retriever=has_retriever,
+                        )
+                        planner_status = planner_diagnostics["status"]
             except Exception as exc:
                 planner_errors.append(f"planner: structured output invocation failed ({exc})")
-                planner_output = PlannerOutput.fallback()
+                planner_output, planner_diagnostics, guided_followup = _build_heuristic_planner_output(
+                    user_input=user_input,
+                    has_retriever=has_retriever,
+                )
+                planner_status = planner_diagnostics["status"]
 
         planner_output = _sanitize_planner_output(
             planner_output,
-            has_retriever=bool(state.get("retriever")),
+            has_retriever=has_retriever,
             errors=planner_errors,
         )
+        if not has_retriever and any(task.route == "upload" for task in planner_output.tasks):
+            guided_followup = _build_missing_upload_followup()
+            planner_output = PlannerOutput.fallback()
+            planner_diagnostics = _normalize_planner_diagnostics(
+                status=planner_status,
+                reason="upload_retriever_missing",
+                fallback_routes=planner_diagnostics.get("fallback_routes", []),
+            )
         if verbose:
-            print(f"[planner] use_retrieval={planner_output.use_retrieval} tasks={len(planner_output.tasks)}")
+            print(
+                f"[planner] status={planner_status} "
+                f"use_retrieval={planner_output.use_retrieval} tasks={len(planner_output.tasks)}"
+            )
 
         retry_context: RetryContext = dict(existing_retry_context)
         retry_context["max_retries"] = int(
@@ -457,6 +680,9 @@ def make_planner_node(llm_planner: Any, verbose: bool, max_turns: int = 6):
         )
         retry_context["evidence_start_index"] = len(_safe_list(state.get("retrieved_evidence")))
         retry_context["retrieval_error_start_index"] = len(_safe_list(state.get("retrieval_errors")))
+        retry_context["retrieval_diagnostic_start_index"] = len(
+            _safe_list(state.get("retrieval_diagnostics"))
+        )
         # On the first attempt, clear stale retry metadata.
         if int(retry_context.get("attempt", 0)) <= 0:
             retry_context["retrieval_feedback"] = ""
@@ -465,6 +691,9 @@ def make_planner_node(llm_planner: Any, verbose: bool, max_turns: int = 6):
 
         return {
             "planner_output": planner_output,
+            "planner_status": planner_status,
+            "planner_diagnostics": planner_diagnostics,
+            "guided_followup": guided_followup,
             "retrieval_errors": planner_errors,
             "synthesis_attempt": int(state.get("synthesis_attempt", 0)),
             "needs_retry": False,
@@ -490,38 +719,85 @@ def _build_tool_message(tool_name: str, payload: Any, index: int) -> ToolMessage
     )
 
 
+def _collect_retrieval_result(
+    *,
+    raw_payload: Any,
+    tool_name: str,
+    route: str,
+    query: str,
+    attempt: int,
+    local_errors: list[str],
+) -> tuple[list[dict[str, Any]], RetrievalDiagnostic]:
+    parsed_items = parse_evidence_payload(raw_payload, context=f"tool:{tool_name}", errors=local_errors)
+    payload_dicts = evidence_to_dicts(parsed_items)
+    diagnostic = _normalize_retrieval_diagnostic(
+        raw_payload,
+        tool_name=tool_name,
+        route=route,
+        query=query,
+        attempt=attempt,
+        evidence_count=len(payload_dicts),
+    )
+    if diagnostic["status"] in {"error", "unavailable"} and diagnostic["message"]:
+        local_errors.append(f"{tool_name}: {diagnostic['message']}")
+    return payload_dicts, diagnostic
+
+
 def _run_retrieval_tasks(
     tasks: list[RetrievalTask],
     *,
     tool_name: str,
+    route: str,
     context_label: str,
     invoke_tool: Any,
     verbose: bool,
+    retry_context: RetryContext | None = None,
 ) -> State:
     if not tasks:
         return {}
 
     local_errors: list[str] = []
     evidence_updates: list[dict[str, Any]] = []
+    retrieval_diagnostics: list[dict[str, Any]] = []
     tool_messages: list[ToolMessage] = []
+    attempt = _current_retrieval_attempt(retry_context or _coerce_retry_context(None))
 
     for index, task in enumerate(tasks, start=1):
         try:
             payload = invoke_tool(task)
         except Exception as exc:
-            local_errors.append(f"{tool_name}: failed ({exc})")
-            payload = []
+            payload = {
+                "evidence": [],
+                "diagnostics": {
+                    "tool": tool_name,
+                    "route": route,
+                    "status": "error",
+                    "message": f"tool invocation failed ({exc})",
+                    "query": task.query,
+                },
+            }
 
-        parsed_items = parse_evidence_payload(payload, context=f"tool:{tool_name}", errors=local_errors)
-        payload_dicts = evidence_to_dicts(parsed_items)
+        payload_dicts, diagnostic = _collect_retrieval_result(
+            raw_payload=payload,
+            tool_name=tool_name,
+            route=route,
+            query=task.query,
+            attempt=attempt,
+            local_errors=local_errors,
+        )
         evidence_updates.extend(payload_dicts)
-        tool_messages.append(_build_tool_message(tool_name, payload_dicts, index))
+        retrieval_diagnostics.append(diagnostic)
+        tool_messages.append(_build_tool_message(tool_name, payload, index))
 
     if verbose:
-        print(f"[{context_label}] tasks={len(tasks)} evidence={len(evidence_updates)}")
+        print(
+            f"[{context_label}] tasks={len(tasks)} evidence={len(evidence_updates)} "
+            f"statuses={','.join(str(item.get('status')) for item in retrieval_diagnostics)}"
+        )
 
     updates: State = {
         "retrieved_evidence": evidence_updates,
+        "retrieval_diagnostics": retrieval_diagnostics,
         "messages": tool_messages,
     }
     if local_errors:
@@ -552,9 +828,11 @@ def make_retrieve_docs_node(tavily_search_tool: Any, verbose: bool):
         return _run_retrieval_tasks(
             tasks,
             tool_name="tavily_search",
+            route="docs",
             context_label="retrieve_docs",
             invoke_tool=lambda task: tavily_search_tool.func(query=task.query),
             verbose=verbose,
+            retry_context=_coerce_retry_context(state.get("retry_context")),
         )
 
     return retrieve_docs
@@ -566,6 +844,7 @@ def make_retrieve_upload_node(upload_search_tool: Any, verbose: bool):
         return _run_retrieval_tasks(
             tasks,
             tool_name="upload_search",
+            route="upload",
             context_label="retrieve_upload",
             invoke_tool=lambda task: upload_search_tool.func(
                 query=task.query,
@@ -573,6 +852,7 @@ def make_retrieve_upload_node(upload_search_tool: Any, verbose: bool):
                 retriever=state.get("retriever"),
             ),
             verbose=verbose,
+            retry_context=_coerce_retry_context(state.get("retry_context")),
         )
 
     return retrieve_upload
@@ -584,9 +864,11 @@ def make_retrieve_local_node(rag_search_tool: Any, verbose: bool):
         return _run_retrieval_tasks(
             tasks,
             tool_name="rag_search",
+            route="local",
             context_label="retrieve_local",
             invoke_tool=lambda task: rag_search_tool.func(query=task.query, k=task.k),
             verbose=verbose,
+            retry_context=_coerce_retry_context(state.get("retry_context")),
         )
 
     return retrieve_local
@@ -627,8 +909,11 @@ def make_retrieve_dispatch_node(
 
         local_errors: list[str] = list(planner_errors)
         evidence_updates: list[dict[str, Any]] = []
+        retrieval_diagnostics: list[dict[str, Any]] = []
         tool_messages: list[ToolMessage] = []
         tool_call_counts: dict[str, int] = {}
+        retry_context = _coerce_retry_context(state.get("retry_context"))
+        attempt = _current_retrieval_attempt(retry_context)
 
         for task in planner_output.tasks:
             handler = route_handlers.get(task.route)
@@ -640,27 +925,44 @@ def make_retrieve_dispatch_node(
             try:
                 payload = invoke_tool(task)
             except Exception as exc:
-                local_errors.append(f"{tool_name}: failed ({exc})")
-                payload = []
+                payload = {
+                    "evidence": [],
+                    "diagnostics": {
+                        "tool": tool_name,
+                        "route": task.route,
+                        "status": "error",
+                        "message": f"tool invocation failed ({exc})",
+                        "query": task.query,
+                    },
+                }
 
-            parsed_items = parse_evidence_payload(payload, context=f"tool:{tool_name}", errors=local_errors)
-            payload_dicts = evidence_to_dicts(parsed_items)
+            payload_dicts, diagnostic = _collect_retrieval_result(
+                raw_payload=payload,
+                tool_name=tool_name,
+                route=task.route,
+                query=task.query,
+                attempt=attempt,
+                local_errors=local_errors,
+            )
             evidence_updates.extend(payload_dicts)
+            retrieval_diagnostics.append(diagnostic)
 
             tool_call_counts[tool_name] = tool_call_counts.get(tool_name, 0) + 1
             tool_messages.append(
-                _build_tool_message(tool_name, payload_dicts, tool_call_counts[tool_name])
+                _build_tool_message(tool_name, payload, tool_call_counts[tool_name])
             )
 
         if verbose:
             routes = ",".join(task.route for task in planner_output.tasks)
             print(
                 f"[retrieve_dispatch] tasks={len(planner_output.tasks)} "
-                f"routes={routes} evidence={len(evidence_updates)}"
+                f"routes={routes} evidence={len(evidence_updates)} "
+                f"statuses={','.join(str(item.get('status')) for item in retrieval_diagnostics)}"
             )
 
         updates: State = {
             "retrieved_evidence": evidence_updates,
+            "retrieval_diagnostics": retrieval_diagnostics,
             "messages": tool_messages,
         }
         if local_errors:
@@ -690,8 +992,17 @@ def make_synthesize_node(
             ] + model_msgs[1:]
 
         user_input = str(state.get("user_input", "") or "")
+        guided_followup = str(state.get("guided_followup") or "").strip()
         explicit_slack_destinations = _extract_slack_destinations(state.get("messages", []))
         slack_target_available = any(explicit_slack_destinations.values()) or has_default_slack_destination
+        if guided_followup:
+            response = AIMessage(content=guided_followup)
+            return {
+                "messages": [response],
+                "final_answer": guided_followup,
+                "synthesis_attempt": attempt,
+                "needs_retry": False,
+            }
         if _is_action_only_request(user_input):
             final_answer = _build_action_only_answer(
                 user_input=user_input,
@@ -788,8 +1099,32 @@ def make_validate_evidence_node(verbose: bool):
 
         planner_output = _coerce_planner_output(state.get("planner_output"), local_errors)
         retry_context = _coerce_retry_context(state.get("retry_context"))
+        guided_followup = str(state.get("guided_followup") or "").strip()
+        if guided_followup:
+            next_retry_context: RetryContext = dict(retry_context)
+            next_retry_context["attempt"] = int(retry_context.get("attempt", 0))
+            next_retry_context["max_retries"] = int(
+                retry_context.get("max_retries", DEFAULT_MAX_RETRIES)
+            )
+            next_retry_context["retry_reason"] = "blocked_missing_upload"
+            next_retry_context["retrieval_feedback"] = _build_retrieval_feedback(
+                "blocked_missing_upload",
+                planner_output=planner_output,
+                retrieval_errors=[],
+                score_avg=None,
+            )
+            return {
+                "needs_retry": False,
+                "retry_context": next_retry_context,
+                "messages": [AIMessage(content=guided_followup)],
+                "final_answer": guided_followup,
+            }
+
         evidence_start_index = int(retry_context.get("evidence_start_index", 0))
         retrieval_error_start_index = int(retry_context.get("retrieval_error_start_index", 0))
+        retrieval_diagnostic_start_index = int(
+            retry_context.get("retrieval_diagnostic_start_index", 0)
+        )
 
         current_attempt_evidence_payload = _slice_from_index(
             _safe_list(state.get("retrieved_evidence")),
@@ -810,6 +1145,14 @@ def make_validate_evidence_node(verbose: bool):
             )
             if str(error).strip()
         ]
+        current_attempt_retrieval_diagnostics = [
+            item
+            for item in _slice_from_index(
+                _safe_list(state.get("retrieval_diagnostics")),
+                retrieval_diagnostic_start_index,
+            )
+            if isinstance(item, dict)
+        ]
 
         retrieval_required = bool(planner_output.use_retrieval and planner_output.tasks)
         has_valid_evidence = len(parsed_evidence) > 0
@@ -825,16 +1168,28 @@ def make_validate_evidence_node(verbose: bool):
             and score_avg is not None
             and score_avg < LOW_SCORE_THRESHOLD
         )
+        blocked_missing_upload = bool(
+            retrieval_required
+            and any(
+                str(item.get("route") or "") == "upload"
+                and str(item.get("status") or "") == "unavailable"
+                for item in current_attempt_retrieval_diagnostics
+            )
+        )
         tool_error = bool(
             retrieval_required
+            and not blocked_missing_upload
             and (
-                _contains_tool_error(current_attempt_retrieval_errors)
+                any(str(item.get("status") or "") == "error" for item in current_attempt_retrieval_diagnostics)
+                or _contains_tool_error(current_attempt_retrieval_errors)
                 or _contains_tool_error(parse_errors)
             )
         )
 
         retry_reason: RetryReason | None = None
-        if tool_error:
+        if blocked_missing_upload:
+            retry_reason = "blocked_missing_upload"
+        elif tool_error:
             retry_reason = "tool_error"
         elif retrieval_required and not has_valid_evidence:
             retry_reason = "no_evidence"
@@ -882,9 +1237,9 @@ def make_validate_evidence_node(verbose: bool):
             "retry_context": next_retry_context,
         }
         if retry_reason is not None and not needs_retry:
-            uncertainty_answer = _build_uncertainty_answer(retry_reason, retrieval_feedback)
-            updates["messages"] = [AIMessage(content=uncertainty_answer)]
-            updates["final_answer"] = uncertainty_answer
+            followup_answer = _build_followup_from_routes(planner_output, retry_reason)
+            updates["messages"] = [AIMessage(content=followup_answer)]
+            updates["final_answer"] = followup_answer
         if local_errors:
             updates["validation_errors"] = local_errors
         return updates
