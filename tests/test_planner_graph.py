@@ -59,6 +59,13 @@ class _CapturePlannerLLM:
         return self.planner_output
 
 
+def _tool_payload(evidence: list[dict] | None = None, **diagnostics):
+    return {
+        "evidence": list(evidence or []),
+        "diagnostics": diagnostics,
+    }
+
+
 class PlannerGraphTest(unittest.TestCase):
     def test_planner_schema_rules(self) -> None:
         self.assertEqual(PlannerOutput(use_retrieval=False, tasks=[]).tasks, [])
@@ -89,6 +96,24 @@ class PlannerGraphTest(unittest.TestCase):
         self.assertEqual(planner_output.tasks, [])
         self.assertTrue(any("planner" in error for error in updates.get("retrieval_errors", [])))
 
+    def test_planner_node_uses_docs_heuristic_fallback_when_invoke_fails(self) -> None:
+        planner_node = make_planner_node(_FailingPlannerLLM(), verbose=False)
+        updates = planner_node(
+            {
+                "messages": [HumanMessage(content="공식 문서 기준으로 FastAPI response_model 설명해줘")],
+                "user_input": "공식 문서 기준으로 FastAPI response_model 설명해줘",
+            }
+        )
+
+        planner_output = updates["planner_output"]
+        self.assertTrue(planner_output.use_retrieval)
+        self.assertEqual([task.route for task in planner_output.tasks], ["docs"])
+        self.assertEqual(updates["planner_status"], "heuristic_fallback")
+        self.assertEqual(
+            updates["planner_diagnostics"]["fallback_routes"],
+            ["docs"],
+        )
+
     def test_planner_node_falls_back_when_schema_invalid(self) -> None:
         planner_node = make_planner_node(_InvalidPlannerLLM(), verbose=False)
         updates = planner_node({"messages": [HumanMessage(content="hi")], "user_input": "hi"})
@@ -96,6 +121,33 @@ class PlannerGraphTest(unittest.TestCase):
         self.assertFalse(planner_output.use_retrieval)
         self.assertEqual(planner_output.tasks, [])
         self.assertTrue(any("validation failed" in error for error in updates.get("retrieval_errors", [])))
+
+    def test_planner_node_uses_upload_fallback_when_schema_invalid_and_retriever_available(self) -> None:
+        planner_node = make_planner_node(_InvalidPlannerLLM(), verbose=False)
+        updates = planner_node(
+            {
+                "messages": [HumanMessage(content="업로드한 파일에서 groupby를 찾아줘")],
+                "user_input": "업로드한 파일에서 groupby를 찾아줘",
+                "retriever": object(),
+            }
+        )
+
+        planner_output = updates["planner_output"]
+        self.assertTrue(planner_output.use_retrieval)
+        self.assertEqual([task.route for task in planner_output.tasks], ["upload"])
+        self.assertEqual(updates["planner_status"], "heuristic_fallback")
+
+    def test_planner_node_sets_guided_followup_when_upload_requested_without_retriever(self) -> None:
+        planner_node = make_planner_node(_InvalidPlannerLLM(), verbose=False)
+        updates = planner_node(
+            {
+                "messages": [HumanMessage(content="업로드한 파일에서 groupby를 찾아줘")],
+                "user_input": "업로드한 파일에서 groupby를 찾아줘",
+            }
+        )
+
+        self.assertFalse(updates["planner_output"].use_retrieval)
+        self.assertIn("업로드", updates["guided_followup"])
 
     def test_planner_skips_llm_for_action_only_request(self) -> None:
         capture_planner = _CapturePlannerLLM(
@@ -238,17 +290,38 @@ class PlannerGraphTest(unittest.TestCase):
 
         def _docs_search(query: str):
             docs_calls["count"] += 1
-            return docs_evidence if query else []
+            return _tool_payload(
+                docs_evidence if query else [],
+                tool="tavily_search",
+                route="docs",
+                status="success" if query else "no_result",
+                message="",
+                query=query,
+            )
 
         def _upload_search(query: str, k: int, retriever=None):
             _ = (query, k, retriever)
             upload_calls["count"] += 1
-            return []
+            return _tool_payload(
+                [],
+                tool="upload_search",
+                route="upload",
+                status="no_result",
+                message="no uploaded evidence found",
+                query=query,
+            )
 
         def _local_search(query: str, k: int):
             _ = k
             local_calls["count"] += 1
-            return local_evidence if query else []
+            return _tool_payload(
+                local_evidence if query else [],
+                tool="rag_search",
+                route="local",
+                status="success" if query else "no_result",
+                message="",
+                query=query,
+            )
 
         retrieve_dispatch = make_retrieve_dispatch_node(
             _ToolWrapper(_docs_search),
@@ -296,6 +369,58 @@ class PlannerGraphTest(unittest.TestCase):
         self.assertIn("tavily_search", tool_names)
         self.assertIn("rag_search", tool_names)
         self.assertNotIn("upload_search", tool_names)
+        self.assertEqual(result["retrieval_diagnostics"][0]["status"], "success")
+        self.assertEqual(result["retrieval_diagnostics"][1]["status"], "success")
+
+    def test_graph_forces_retrieval_when_planner_fails_for_docs_query(self) -> None:
+        docs_calls = {"count": 0}
+
+        def _docs_search(query: str):
+            docs_calls["count"] += 1
+            return _tool_payload(
+                [
+                    {
+                        "kind": "official",
+                        "tool": "tavily_search",
+                        "source_id": "url:https://fastapi.tiangolo.com/reference/response/",
+                        "url_or_path": "https://fastapi.tiangolo.com/reference/response/",
+                        "title": "FastAPI Response Reference",
+                        "snippet": "response model docs",
+                        "score": 0.91,
+                    }
+                ],
+                tool="tavily_search",
+                route="docs",
+                status="success",
+                message="",
+                query=query,
+            )
+
+        graph = build_graph(
+            state_type=State,
+            add_user_node=add_user_message,
+            summarize_node=lambda state: state,
+            planner_node=make_planner_node(_FailingPlannerLLM(), verbose=False),
+            retrieve_dispatch_node=make_retrieve_dispatch_node(
+                _ToolWrapper(_docs_search),
+                _ToolWrapper(lambda query, k, retriever=None: _tool_payload([], tool="upload_search", route="upload", status="no_result", message="", query=query)),
+                _ToolWrapper(lambda query, k: _tool_payload([], tool="rag_search", route="local", status="no_result", message="", query=query)),
+                verbose=False,
+            ),
+            synthesize_node=lambda state: {
+                "messages": [AIMessage(content="final answer")],
+                "final_answer": "final answer",
+                "synthesis_attempt": 1,
+                "needs_retry": False,
+            },
+            validate_evidence_node=make_validate_evidence_node(verbose=False),
+            action_postprocess_node=lambda state: {},
+            summary_max_turns=6,
+        )
+
+        result = graph.invoke({"user_input": "공식 문서 기준으로 FastAPI response_model 설명해줘", "messages": []})
+        self.assertEqual(docs_calls["count"], 1)
+        self.assertTrue(any(m.name == "tavily_search" for m in result["messages"] if isinstance(m, ToolMessage)))
 
     def test_retry_path_replans_and_reruns_retrieval(self) -> None:
         planner_output = PlannerOutput(
@@ -311,23 +436,37 @@ class PlannerGraphTest(unittest.TestCase):
         def _docs_search(query: str):
             docs_calls["count"] += 1
             if docs_calls["count"] == 1:
-                return []
-            return [
-                {
-                    "kind": "official",
-                    "tool": "tavily_search",
-                    "source_id": "url:https://numpy.org/doc/stable/",
-                    "url_or_path": "https://numpy.org/doc/stable/",
-                    "title": "NumPy Docs",
-                    "snippet": "official docs",
-                    "score": 0.92,
-                }
-            ]
+                return _tool_payload(
+                    [],
+                    tool="tavily_search",
+                    route="docs",
+                    status="no_result",
+                    message="no official docs found",
+                    query=query,
+                )
+            return _tool_payload(
+                [
+                    {
+                        "kind": "official",
+                        "tool": "tavily_search",
+                        "source_id": "url:https://numpy.org/doc/stable/",
+                        "url_or_path": "https://numpy.org/doc/stable/",
+                        "title": "NumPy Docs",
+                        "snippet": "official docs",
+                        "score": 0.92,
+                    }
+                ],
+                tool="tavily_search",
+                route="docs",
+                status="success",
+                message="",
+                query=query,
+            )
 
         retrieve_dispatch = make_retrieve_dispatch_node(
             _ToolWrapper(_docs_search),
-            _ToolWrapper(lambda query, k, retriever=None: []),
-            _ToolWrapper(lambda query, k: []),
+            _ToolWrapper(lambda query, k, retriever=None: _tool_payload([], tool="upload_search", route="upload", status="no_result", message="", query=query)),
+            _ToolWrapper(lambda query, k: _tool_payload([], tool="rag_search", route="local", status="no_result", message="", query=query)),
             verbose=False,
         )
 
@@ -359,7 +498,7 @@ class PlannerGraphTest(unittest.TestCase):
         self.assertEqual(synth_calls["count"], 2)
         self.assertEqual(result.get("final_answer"), "answer-2")
 
-    def test_validate_evidence_retries_once_then_returns_uncertainty(self) -> None:
+    def test_validate_evidence_retries_once_then_returns_route_specific_followup(self) -> None:
         validate_node = make_validate_evidence_node(verbose=False)
         planner_output = PlannerOutput(
             use_retrieval=True,
@@ -390,7 +529,7 @@ class PlannerGraphTest(unittest.TestCase):
         self.assertEqual(first["retry_context"]["retry_reason"], "no_evidence")
         self.assertFalse(second["needs_retry"])
         self.assertIn("final_answer", second)
-        self.assertIn("retry_reason: no_evidence", second["final_answer"])
+        self.assertIn("공식 문서", second["final_answer"])
 
     def test_validate_evidence_sets_tool_error_reason(self) -> None:
         validate_node = make_validate_evidence_node(verbose=False)
@@ -415,7 +554,40 @@ class PlannerGraphTest(unittest.TestCase):
         self.assertEqual(result["retry_context"]["attempt"], 0)
         self.assertEqual(result["retry_context"]["retry_reason"], "tool_error")
         self.assertIn("final_answer", result)
-        self.assertIn("retry_reason: tool_error", result["final_answer"])
+        self.assertIn("공식 문서", result["final_answer"])
+
+    def test_validate_evidence_maps_upload_unavailable_to_blocked_missing_upload(self) -> None:
+        validate_node = make_validate_evidence_node(verbose=False)
+        planner_output = PlannerOutput(
+            use_retrieval=True,
+            tasks=[RetrievalTask(route="upload", query="groupby", k=3)],
+        )
+        result = validate_node(
+            {
+                "planner_output": planner_output,
+                "retrieved_evidence": [],
+                "retrieval_diagnostics": [
+                    {
+                        "tool": "upload_search",
+                        "route": "upload",
+                        "status": "unavailable",
+                        "message": "upload retriever is unavailable",
+                        "query": "groupby",
+                        "attempt": 1,
+                    }
+                ],
+                "retry_context": {
+                    "attempt": 0,
+                    "max_retries": 1,
+                    "evidence_start_index": 0,
+                    "retrieval_error_start_index": 0,
+                    "retrieval_diagnostic_start_index": 0,
+                },
+            }
+        )
+        self.assertFalse(result["needs_retry"])
+        self.assertEqual(result["retry_context"]["retry_reason"], "blocked_missing_upload")
+        self.assertIn("업로드", result["final_answer"])
 
     def test_validate_evidence_sets_low_score_reason(self) -> None:
         validate_node = make_validate_evidence_node(verbose=False)
@@ -492,6 +664,23 @@ class PlannerGraphTest(unittest.TestCase):
 
         self.assertIsNone(capture_llm.last_messages)
         self.assertEqual(updates["final_answer"], "요청하신 최종 답변을 저장합니다.")
+
+    def test_synthesize_short_circuits_guided_followup(self) -> None:
+        capture_llm = _CaptureSynthesizeLLM()
+        synthesize_node = make_synthesize_node(capture_llm, verbose=False, max_turns=6)
+
+        updates = synthesize_node(
+            {
+                "messages": [HumanMessage(content="업로드한 파일에서 groupby를 찾아줘")],
+                "user_input": "업로드한 파일에서 groupby를 찾아줘",
+                "guided_followup": "업로드한 파일을 먼저 올려주세요.",
+                "retrieved_evidence": [],
+                "synthesis_attempt": 0,
+            }
+        )
+
+        self.assertIsNone(capture_llm.last_messages)
+        self.assertEqual(updates["final_answer"], "업로드한 파일을 먼저 올려주세요.")
 
     def test_synthesize_uses_only_current_attempt_evidence_window(self) -> None:
         capture_llm = _CaptureSynthesizeLLM()
@@ -644,6 +833,28 @@ class PlannerGraphTest(unittest.TestCase):
         tool_messages = updates.get("messages", [])
         self.assertEqual(len(tool_messages), 1)
         self.assertEqual(tool_messages[0].name, "slack_notify")
+
+    def test_retrieve_dispatch_records_error_diagnostics(self) -> None:
+        retrieve_dispatch = make_retrieve_dispatch_node(
+            _ToolWrapper(lambda query: (_ for _ in ()).throw(RuntimeError("boom"))),
+            _ToolWrapper(lambda query, k, retriever=None: _tool_payload([], tool="upload_search", route="upload", status="no_result", message="", query=query)),
+            _ToolWrapper(lambda query, k: _tool_payload([], tool="rag_search", route="local", status="no_result", message="", query=query)),
+            verbose=False,
+        )
+
+        updates = retrieve_dispatch(
+            {
+                "planner_output": PlannerOutput(
+                    use_retrieval=True,
+                    tasks=[RetrievalTask(route="docs", query="numpy docs", k=3)],
+                ),
+                "retry_context": {"attempt": 0},
+            }
+        )
+
+        payload = json.loads(updates["messages"][0].content)
+        self.assertEqual(payload["diagnostics"]["status"], "error")
+        self.assertEqual(updates["retrieval_diagnostics"][0]["status"], "error")
 
 
 if __name__ == "__main__":
