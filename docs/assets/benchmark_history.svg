@@ -1,109 +1,195 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="980" viewBox="0 0 1200 980" role="img" aria-labelledby="title desc">
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="930" viewBox="0 0 1200 930" role="img" aria-labelledby="title desc">
   <title id="title">DocuMate benchmark history</title>
-  <desc id="desc">Baseline run 20260303_134325 and latest run 20260306_094033 comparison for pass rate, tool precision, citation compliance, and p95 latency.</desc>
+  <desc id="desc">Stored benchmark runs 20260303_134325, 20260306_094033, and 20260306_123220 across pass rate, tool precision, tool recall, citation compliance, p95 latency, and average cost.</desc>
   <defs>
     <style>
       .bg { fill: #f5f1e8; }
       .panel { fill: #fffdfa; stroke: #d9cfbf; stroke-width: 1; }
       .title { font: 700 28px 'Segoe UI', 'Noto Sans KR', sans-serif; fill: #1f2933; }
       .subtitle { font: 400 15px 'Segoe UI', 'Noto Sans KR', sans-serif; fill: #52606d; }
-      .metric { font: 700 20px 'Segoe UI', 'Noto Sans KR', sans-serif; fill: #243b53; }
+      .metric { font: 700 19px 'Segoe UI', 'Noto Sans KR', sans-serif; fill: #243b53; }
       .axis { font: 400 12px 'Segoe UI', 'Noto Sans KR', sans-serif; fill: #52606d; }
-      .run { font: 600 12px 'Segoe UI', 'Noto Sans KR', sans-serif; fill: #334e68; }
-      .value { font: 700 14px 'Segoe UI', 'Noto Sans KR', sans-serif; fill: #102a43; }
-      .baseline { fill: #b07a4f; stroke: #b07a4f; }
-      .latest { fill: #127475; stroke: #127475; }
-      .worse { stroke: #b42318; fill: none; stroke-width: 4; }
-      .better { stroke: #127475; fill: none; stroke-width: 4; }
+      .tick { font: 600 11px 'Segoe UI', 'Noto Sans KR', sans-serif; fill: #334e68; }
+      .value { font: 700 12px 'Segoe UI', 'Noto Sans KR', sans-serif; fill: #102a43; }
+      .legend { font: 600 12px 'Segoe UI', 'Noto Sans KR', sans-serif; fill: #334e68; }
+      .legend-sub { font: 400 11px 'Segoe UI', 'Noto Sans KR', sans-serif; fill: #52606d; }
       .guide { stroke: #d9cfbf; stroke-width: 1; }
+      .trend { stroke: #486581; fill: none; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
       .gate { stroke: #7c2d12; stroke-width: 2; stroke-dasharray: 8 6; }
-      .gate-label { font: 600 12px 'Segoe UI', 'Noto Sans KR', sans-serif; fill: #7c2d12; }
-      .legend { font: 600 13px 'Segoe UI', 'Noto Sans KR', sans-serif; fill: #334e68; }
+      .gate-label { font: 600 11px 'Segoe UI', 'Noto Sans KR', sans-serif; fill: #7c2d12; }
+      .dot-a { fill: #b07a4f; stroke: #8c5d36; stroke-width: 1.5; }
+      .dot-b { fill: #6b7280; stroke: #4b5563; stroke-width: 1.5; }
+      .dot-c { fill: #127475; stroke: #0f5c5d; stroke-width: 1.5; }
     </style>
   </defs>
 
-  <rect class="bg" x="0" y="0" width="1200" height="980" rx="24"/>
-  <text class="title" x="60" y="58">DocuMate Benchmark Comparison</text>
-  <text class="subtitle" x="60" y="86">Baseline 20260303_134325 vs Latest 20260306_094033</text>
+  <rect class="bg" x="0" y="0" width="1200" height="930" rx="24"/>
+  <text class="title" x="60" y="58">DocuMate Benchmark Trend</text>
+  <text class="subtitle" x="60" y="86">3 stored runs, 6 key metrics. Panels use short timestamps; full run IDs are shown in the legend.</text>
 
-  <circle class="baseline" cx="920" cy="70" r="7"/>
-  <text class="legend" x="936" y="75">Baseline</text>
-  <circle class="latest" cx="1035" cy="70" r="7"/>
-  <text class="legend" x="1051" y="75">Latest</text>
+  <circle class="dot-a" cx="760" cy="70" r="7"/>
+  <text class="legend" x="776" y="74">20260303_134325</text>
+  <text class="legend-sub" x="776" y="91">03-03 13:43, FAIL</text>
+
+  <circle class="dot-b" cx="930" cy="70" r="7"/>
+  <text class="legend" x="946" y="74">20260306_094033</text>
+  <text class="legend-sub" x="946" y="91">03-06 09:40, FAIL</text>
+
+  <circle class="dot-c" cx="1100" cy="70" r="7"/>
+  <text class="legend" x="1116" y="74">20260306_123220</text>
+  <text class="legend-sub" x="1116" y="91">03-06 12:32, FAIL</text>
 
   <g transform="translate(40,120)">
-    <rect class="panel" x="0" y="0" width="1120" height="185" rx="18"/>
-    <text class="metric" x="28" y="34">pass_rate</text>
-    <text class="axis" x="28" y="58">higher is better</text>
-    <line class="guide" x1="220" y1="150" x2="1000" y2="150"/>
-    <line class="guide" x1="220" y1="25" x2="220" y2="150"/>
-    <line class="guide" x1="1000" y1="25" x2="1000" y2="150"/>
-    <text class="run" x="170" y="170">20260303_134325</text>
-    <text class="run" x="950" y="170">20260306_094033</text>
-    <text class="axis" x="182" y="150">0.0</text>
-    <text class="axis" x="182" y="30">1.0</text>
-    <path class="worse" d="M220 104 L1000 119"/>
-    <circle class="baseline" cx="220" cy="104" r="8"/>
-    <circle class="latest" cx="1000" cy="119" r="8"/>
-    <text class="value" x="235" y="100">0.3833</text>
-    <text class="value" x="905" y="115">0.2500</text>
+    <rect class="panel" x="0" y="0" width="540" height="230" rx="18"/>
+    <text class="metric" x="26" y="34">pass_rate</text>
+    <text class="axis" x="26" y="56">higher is better</text>
+    <line class="guide" x1="90" y1="184" x2="460" y2="184"/>
+    <line class="guide" x1="90" y1="46" x2="90" y2="184"/>
+    <line class="guide" x1="90" y1="46" x2="460" y2="46"/>
+    <line class="gate" x1="90" y1="70.8" x2="460" y2="70.8"/>
+    <text class="gate-label" x="468" y="74.8">gate 0.82</text>
+    <text class="axis" x="56" y="188">0.0</text>
+    <text class="axis" x="56" y="50">1.0</text>
+    <path class="trend" d="M128 131.1 L275 149.5 L422 149.5"/>
+    <line class="guide" x1="128" y1="46" x2="128" y2="184" opacity="0.35"/>
+    <line class="guide" x1="275" y1="46" x2="275" y2="184" opacity="0.35"/>
+    <line class="guide" x1="422" y1="46" x2="422" y2="184" opacity="0.35"/>
+    <circle class="dot-a" cx="128" cy="131.1" r="6"/>
+    <circle class="dot-b" cx="275" cy="149.5" r="6"/>
+    <circle class="dot-c" cx="422" cy="149.5" r="6"/>
+    <text class="value" x="138" y="121.1">0.3833</text>
+    <text class="value" x="285" y="165.5">0.2500</text>
+    <text class="value" x="366" y="139.5">0.2500</text>
+    <text class="tick" x="101" y="208">03-03 13:43</text>
+    <text class="tick" x="248" y="208">03-06 09:40</text>
+    <text class="tick" x="395" y="208">03-06 12:32</text>
   </g>
 
-  <g transform="translate(40,325)">
-    <rect class="panel" x="0" y="0" width="1120" height="185" rx="18"/>
-    <text class="metric" x="28" y="34">tool_precision</text>
-    <text class="axis" x="28" y="58">higher is better</text>
-    <line class="guide" x1="220" y1="150" x2="1000" y2="150"/>
-    <line class="guide" x1="220" y1="25" x2="220" y2="150"/>
-    <line class="guide" x1="1000" y1="25" x2="1000" y2="150"/>
-    <text class="run" x="170" y="170">20260303_134325</text>
-    <text class="run" x="950" y="170">20260306_094033</text>
-    <text class="axis" x="182" y="150">0.0</text>
-    <text class="axis" x="182" y="30">1.0</text>
-    <path class="better" d="M220 49 L1000 39"/>
-    <circle class="baseline" cx="220" cy="49" r="8"/>
-    <circle class="latest" cx="1000" cy="39" r="8"/>
-    <text class="value" x="235" y="45">0.8049</text>
-    <text class="value" x="905" y="35">0.8824</text>
+  <g transform="translate(620,120)">
+    <rect class="panel" x="0" y="0" width="540" height="230" rx="18"/>
+    <text class="metric" x="26" y="34">tool_precision</text>
+    <text class="axis" x="26" y="56">higher is better</text>
+    <line class="guide" x1="90" y1="184" x2="460" y2="184"/>
+    <line class="guide" x1="90" y1="46" x2="90" y2="184"/>
+    <line class="guide" x1="90" y1="46" x2="460" y2="46"/>
+    <line class="gate" x1="90" y1="59.8" x2="460" y2="59.8"/>
+    <text class="gate-label" x="468" y="63.8">gate 0.90</text>
+    <text class="axis" x="56" y="188">0.0</text>
+    <text class="axis" x="56" y="50">1.0</text>
+    <path class="trend" d="M128 72.9 L275 62.2 L422 62.2"/>
+    <line class="guide" x1="128" y1="46" x2="128" y2="184" opacity="0.35"/>
+    <line class="guide" x1="275" y1="46" x2="275" y2="184" opacity="0.35"/>
+    <line class="guide" x1="422" y1="46" x2="422" y2="184" opacity="0.35"/>
+    <circle class="dot-a" cx="128" cy="72.9" r="6"/>
+    <circle class="dot-b" cx="275" cy="62.2" r="6"/>
+    <circle class="dot-c" cx="422" cy="62.2" r="6"/>
+    <text class="value" x="138" y="62.9">0.8049</text>
+    <text class="value" x="285" y="78.2">0.8824</text>
+    <text class="value" x="366" y="52.2">0.8824</text>
+    <text class="tick" x="101" y="208">03-03 13:43</text>
+    <text class="tick" x="248" y="208">03-06 09:40</text>
+    <text class="tick" x="395" y="208">03-06 12:32</text>
   </g>
 
-  <g transform="translate(40,530)">
-    <rect class="panel" x="0" y="0" width="1120" height="185" rx="18"/>
-    <text class="metric" x="28" y="34">citation_compliance</text>
-    <text class="axis" x="28" y="58">hard gate 0.88</text>
-    <line class="guide" x1="220" y1="150" x2="1000" y2="150"/>
-    <line class="guide" x1="220" y1="25" x2="220" y2="150"/>
-    <line class="guide" x1="1000" y1="25" x2="1000" y2="150"/>
-    <line class="gate" x1="220" y1="40" x2="1000" y2="40"/>
-    <text class="gate-label" x="1010" y="44">gate 0.88</text>
-    <text class="run" x="170" y="170">20260303_134325</text>
-    <text class="run" x="950" y="170">20260306_094033</text>
-    <text class="axis" x="182" y="150">0.0</text>
-    <text class="axis" x="182" y="30">1.0</text>
-    <path class="worse" d="M220 112 L1000 150"/>
-    <circle class="baseline" cx="220" cy="112" r="8"/>
-    <circle class="latest" cx="1000" cy="150" r="8"/>
-    <text class="value" x="235" y="108">0.3056</text>
-    <text class="value" x="940" y="144">0.0000</text>
+  <g transform="translate(40,390)">
+    <rect class="panel" x="0" y="0" width="540" height="230" rx="18"/>
+    <text class="metric" x="26" y="34">tool_recall</text>
+    <text class="axis" x="26" y="56">higher is better</text>
+    <line class="guide" x1="90" y1="184" x2="460" y2="184"/>
+    <line class="guide" x1="90" y1="46" x2="90" y2="184"/>
+    <line class="guide" x1="90" y1="46" x2="460" y2="46"/>
+    <line class="gate" x1="90" y1="66.7" x2="460" y2="66.7"/>
+    <text class="gate-label" x="468" y="70.7">gate 0.85</text>
+    <text class="axis" x="56" y="188">0.0</text>
+    <text class="axis" x="56" y="50">1.0</text>
+    <path class="trend" d="M128 123.3 L275 156.4 L422 156.4"/>
+    <line class="guide" x1="128" y1="46" x2="128" y2="184" opacity="0.35"/>
+    <line class="guide" x1="275" y1="46" x2="275" y2="184" opacity="0.35"/>
+    <line class="guide" x1="422" y1="46" x2="422" y2="184" opacity="0.35"/>
+    <circle class="dot-a" cx="128" cy="123.3" r="6"/>
+    <circle class="dot-b" cx="275" cy="156.4" r="6"/>
+    <circle class="dot-c" cx="422" cy="156.4" r="6"/>
+    <text class="value" x="138" y="113.3">0.4400</text>
+    <text class="value" x="285" y="172.4">0.2000</text>
+    <text class="value" x="366" y="146.4">0.2000</text>
+    <text class="tick" x="101" y="208">03-03 13:43</text>
+    <text class="tick" x="248" y="208">03-06 09:40</text>
+    <text class="tick" x="395" y="208">03-06 12:32</text>
   </g>
 
-  <g transform="translate(40,735)">
-    <rect class="panel" x="0" y="0" width="1120" height="185" rx="18"/>
-    <text class="metric" x="28" y="34">p95_latency_ms</text>
-    <text class="axis" x="28" y="58">lower is better, hard gate 20000</text>
-    <line class="guide" x1="220" y1="150" x2="1000" y2="150"/>
-    <line class="guide" x1="220" y1="25" x2="220" y2="150"/>
-    <line class="guide" x1="1000" y1="25" x2="1000" y2="150"/>
-    <line class="gate" x1="220" y1="116" x2="1000" y2="116"/>
-    <text class="gate-label" x="1010" y="120">gate 20000</text>
-    <text class="run" x="170" y="170">20260303_134325</text>
-    <text class="run" x="950" y="170">20260306_094033</text>
-    <text class="axis" x="178" y="150">0</text>
-    <text class="axis" x="160" y="30">70000</text>
-    <path class="better" d="M220 39 L1000 53"/>
-    <circle class="baseline" cx="220" cy="39" r="8"/>
-    <circle class="latest" cx="1000" cy="53" r="8"/>
-    <text class="value" x="235" y="35">62063.0</text>
-    <text class="value" x="895" y="49">53888.1</text>
+  <g transform="translate(620,390)">
+    <rect class="panel" x="0" y="0" width="540" height="230" rx="18"/>
+    <text class="metric" x="26" y="34">citation_compliance</text>
+    <text class="axis" x="26" y="56">higher is better</text>
+    <line class="guide" x1="90" y1="184" x2="460" y2="184"/>
+    <line class="guide" x1="90" y1="46" x2="90" y2="184"/>
+    <line class="guide" x1="90" y1="46" x2="460" y2="46"/>
+    <line class="gate" x1="90" y1="62.6" x2="460" y2="62.6"/>
+    <text class="gate-label" x="468" y="66.6">gate 0.88</text>
+    <text class="axis" x="56" y="188">0.0</text>
+    <text class="axis" x="56" y="50">1.0</text>
+    <path class="trend" d="M128 141.8 L275 184 L422 184"/>
+    <line class="guide" x1="128" y1="46" x2="128" y2="184" opacity="0.35"/>
+    <line class="guide" x1="275" y1="46" x2="275" y2="184" opacity="0.35"/>
+    <line class="guide" x1="422" y1="46" x2="422" y2="184" opacity="0.35"/>
+    <circle class="dot-a" cx="128" cy="141.8" r="6"/>
+    <circle class="dot-b" cx="275" cy="184" r="6"/>
+    <circle class="dot-c" cx="422" cy="184" r="6"/>
+    <text class="value" x="138" y="131.8">0.3056</text>
+    <text class="value" x="285" y="174">0.0000</text>
+    <text class="value" x="366" y="158">0.0000</text>
+    <text class="tick" x="101" y="208">03-03 13:43</text>
+    <text class="tick" x="248" y="208">03-06 09:40</text>
+    <text class="tick" x="395" y="208">03-06 12:32</text>
+  </g>
+
+  <g transform="translate(40,660)">
+    <rect class="panel" x="0" y="0" width="540" height="230" rx="18"/>
+    <text class="metric" x="26" y="34">p95_latency_ms</text>
+    <text class="axis" x="26" y="56">lower is better</text>
+    <line class="guide" x1="90" y1="184" x2="460" y2="184"/>
+    <line class="guide" x1="90" y1="46" x2="90" y2="184"/>
+    <line class="guide" x1="90" y1="46" x2="460" y2="46"/>
+    <line class="gate" x1="90" y1="144.6" x2="460" y2="144.6"/>
+    <text class="gate-label" x="468" y="148.6">gate 20000</text>
+    <text class="axis" x="64" y="188">0</text>
+    <text class="axis" x="42" y="50">70000</text>
+    <path class="trend" d="M128 61.6 L275 77.8 L422 102.3"/>
+    <line class="guide" x1="128" y1="46" x2="128" y2="184" opacity="0.35"/>
+    <line class="guide" x1="275" y1="46" x2="275" y2="184" opacity="0.35"/>
+    <line class="guide" x1="422" y1="46" x2="422" y2="184" opacity="0.35"/>
+    <circle class="dot-a" cx="128" cy="61.6" r="6"/>
+    <circle class="dot-b" cx="275" cy="77.8" r="6"/>
+    <circle class="dot-c" cx="422" cy="102.3" r="6"/>
+    <text class="value" x="138" y="51.6">62063.0</text>
+    <text class="value" x="285" y="67.8">53888.1</text>
+    <text class="value" x="366" y="92.3">41446.1</text>
+    <text class="tick" x="101" y="208">03-03 13:43</text>
+    <text class="tick" x="248" y="208">03-06 09:40</text>
+    <text class="tick" x="395" y="208">03-06 12:32</text>
+  </g>
+
+  <g transform="translate(620,660)">
+    <rect class="panel" x="0" y="0" width="540" height="230" rx="18"/>
+    <text class="metric" x="26" y="34">avg_cost_per_case_usd</text>
+    <text class="axis" x="26" y="56">lower is better, all runs are far below gate 0.035</text>
+    <line class="guide" x1="90" y1="184" x2="460" y2="184"/>
+    <line class="guide" x1="90" y1="46" x2="90" y2="184"/>
+    <line class="guide" x1="90" y1="46" x2="460" y2="46"/>
+    <text class="axis" x="64" y="188">0</text>
+    <text class="axis" x="30" y="50">0.0025</text>
+    <path class="trend" d="M128 63.1 L275 151.7 L422 151.5"/>
+    <line class="guide" x1="128" y1="46" x2="128" y2="184" opacity="0.35"/>
+    <line class="guide" x1="275" y1="46" x2="275" y2="184" opacity="0.35"/>
+    <line class="guide" x1="422" y1="46" x2="422" y2="184" opacity="0.35"/>
+    <circle class="dot-a" cx="128" cy="63.1" r="6"/>
+    <circle class="dot-b" cx="275" cy="151.7" r="6"/>
+    <circle class="dot-c" cx="422" cy="151.5" r="6"/>
+    <text class="value" x="138" y="53.1">0.00219042</text>
+    <text class="value" x="240" y="141.7">0.00058583</text>
+    <text class="value" x="334" y="167.5">0.00058941</text>
+    <text class="tick" x="101" y="208">03-03 13:43</text>
+    <text class="tick" x="248" y="208">03-06 09:40</text>
+    <text class="tick" x="395" y="208">03-06 12:32</text>
   </g>
 </svg>
