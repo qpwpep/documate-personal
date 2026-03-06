@@ -39,6 +39,9 @@ class BenchmarkCase(BaseModel):
     scenario: CaseScenario = "seed_mutation"
     query: str
     upload_fixture: str | None = None
+    slack_channel_id: str | None = None
+    slack_user_id: str | None = None
+    slack_email: str | None = None
     expected_tools: list[str] = Field(default_factory=list)
     forbidden_tools: list[str] = Field(default_factory=list)
     must_include: list[str] = Field(default_factory=list)

@@ -299,3 +299,9 @@ uv run python script/check_encoding.py
 ```bash
 uv run python -X utf8 -c "import sys, locale; print(sys.flags.utf8_mode, sys.stdout.encoding, locale.getpreferredencoding(False))"
 ```
+
+## 9. Benchmark Notes
+
+- Benchmark citation scoring uses the structured `response.evidence` and `debug.observed_evidence` fields.
+- Cases with `upload_fixture` treat `upload_search` as the canonical local-evidence tool.
+- Slack `tool_action` cases may include `slack_channel_id` or `slack_user_id`, and the benchmark runner forwards those hints to `/agent`.
