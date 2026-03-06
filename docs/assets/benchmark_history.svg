@@ -1,0 +1,109 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="980" viewBox="0 0 1200 980" role="img" aria-labelledby="title desc">
+  <title id="title">DocuMate benchmark history</title>
+  <desc id="desc">Baseline run 20260303_134325 and latest run 20260306_094033 comparison for pass rate, tool precision, citation compliance, and p95 latency.</desc>
+  <defs>
+    <style>
+      .bg { fill: #f5f1e8; }
+      .panel { fill: #fffdfa; stroke: #d9cfbf; stroke-width: 1; }
+      .title { font: 700 28px 'Segoe UI', 'Noto Sans KR', sans-serif; fill: #1f2933; }
+      .subtitle { font: 400 15px 'Segoe UI', 'Noto Sans KR', sans-serif; fill: #52606d; }
+      .metric { font: 700 20px 'Segoe UI', 'Noto Sans KR', sans-serif; fill: #243b53; }
+      .axis { font: 400 12px 'Segoe UI', 'Noto Sans KR', sans-serif; fill: #52606d; }
+      .run { font: 600 12px 'Segoe UI', 'Noto Sans KR', sans-serif; fill: #334e68; }
+      .value { font: 700 14px 'Segoe UI', 'Noto Sans KR', sans-serif; fill: #102a43; }
+      .baseline { fill: #b07a4f; stroke: #b07a4f; }
+      .latest { fill: #127475; stroke: #127475; }
+      .worse { stroke: #b42318; fill: none; stroke-width: 4; }
+      .better { stroke: #127475; fill: none; stroke-width: 4; }
+      .guide { stroke: #d9cfbf; stroke-width: 1; }
+      .gate { stroke: #7c2d12; stroke-width: 2; stroke-dasharray: 8 6; }
+      .gate-label { font: 600 12px 'Segoe UI', 'Noto Sans KR', sans-serif; fill: #7c2d12; }
+      .legend { font: 600 13px 'Segoe UI', 'Noto Sans KR', sans-serif; fill: #334e68; }
+    </style>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="1200" height="980" rx="24"/>
+  <text class="title" x="60" y="58">DocuMate Benchmark Comparison</text>
+  <text class="subtitle" x="60" y="86">Baseline 20260303_134325 vs Latest 20260306_094033</text>
+
+  <circle class="baseline" cx="920" cy="70" r="7"/>
+  <text class="legend" x="936" y="75">Baseline</text>
+  <circle class="latest" cx="1035" cy="70" r="7"/>
+  <text class="legend" x="1051" y="75">Latest</text>
+
+  <g transform="translate(40,120)">
+    <rect class="panel" x="0" y="0" width="1120" height="185" rx="18"/>
+    <text class="metric" x="28" y="34">pass_rate</text>
+    <text class="axis" x="28" y="58">higher is better</text>
+    <line class="guide" x1="220" y1="150" x2="1000" y2="150"/>
+    <line class="guide" x1="220" y1="25" x2="220" y2="150"/>
+    <line class="guide" x1="1000" y1="25" x2="1000" y2="150"/>
+    <text class="run" x="170" y="170">20260303_134325</text>
+    <text class="run" x="950" y="170">20260306_094033</text>
+    <text class="axis" x="182" y="150">0.0</text>
+    <text class="axis" x="182" y="30">1.0</text>
+    <path class="worse" d="M220 104 L1000 119"/>
+    <circle class="baseline" cx="220" cy="104" r="8"/>
+    <circle class="latest" cx="1000" cy="119" r="8"/>
+    <text class="value" x="235" y="100">0.3833</text>
+    <text class="value" x="905" y="115">0.2500</text>
+  </g>
+
+  <g transform="translate(40,325)">
+    <rect class="panel" x="0" y="0" width="1120" height="185" rx="18"/>
+    <text class="metric" x="28" y="34">tool_precision</text>
+    <text class="axis" x="28" y="58">higher is better</text>
+    <line class="guide" x1="220" y1="150" x2="1000" y2="150"/>
+    <line class="guide" x1="220" y1="25" x2="220" y2="150"/>
+    <line class="guide" x1="1000" y1="25" x2="1000" y2="150"/>
+    <text class="run" x="170" y="170">20260303_134325</text>
+    <text class="run" x="950" y="170">20260306_094033</text>
+    <text class="axis" x="182" y="150">0.0</text>
+    <text class="axis" x="182" y="30">1.0</text>
+    <path class="better" d="M220 49 L1000 39"/>
+    <circle class="baseline" cx="220" cy="49" r="8"/>
+    <circle class="latest" cx="1000" cy="39" r="8"/>
+    <text class="value" x="235" y="45">0.8049</text>
+    <text class="value" x="905" y="35">0.8824</text>
+  </g>
+
+  <g transform="translate(40,530)">
+    <rect class="panel" x="0" y="0" width="1120" height="185" rx="18"/>
+    <text class="metric" x="28" y="34">citation_compliance</text>
+    <text class="axis" x="28" y="58">hard gate 0.88</text>
+    <line class="guide" x1="220" y1="150" x2="1000" y2="150"/>
+    <line class="guide" x1="220" y1="25" x2="220" y2="150"/>
+    <line class="guide" x1="1000" y1="25" x2="1000" y2="150"/>
+    <line class="gate" x1="220" y1="40" x2="1000" y2="40"/>
+    <text class="gate-label" x="1010" y="44">gate 0.88</text>
+    <text class="run" x="170" y="170">20260303_134325</text>
+    <text class="run" x="950" y="170">20260306_094033</text>
+    <text class="axis" x="182" y="150">0.0</text>
+    <text class="axis" x="182" y="30">1.0</text>
+    <path class="worse" d="M220 112 L1000 150"/>
+    <circle class="baseline" cx="220" cy="112" r="8"/>
+    <circle class="latest" cx="1000" cy="150" r="8"/>
+    <text class="value" x="235" y="108">0.3056</text>
+    <text class="value" x="940" y="144">0.0000</text>
+  </g>
+
+  <g transform="translate(40,735)">
+    <rect class="panel" x="0" y="0" width="1120" height="185" rx="18"/>
+    <text class="metric" x="28" y="34">p95_latency_ms</text>
+    <text class="axis" x="28" y="58">lower is better, hard gate 20000</text>
+    <line class="guide" x1="220" y1="150" x2="1000" y2="150"/>
+    <line class="guide" x1="220" y1="25" x2="220" y2="150"/>
+    <line class="guide" x1="1000" y1="25" x2="1000" y2="150"/>
+    <line class="gate" x1="220" y1="116" x2="1000" y2="116"/>
+    <text class="gate-label" x="1010" y="120">gate 20000</text>
+    <text class="run" x="170" y="170">20260303_134325</text>
+    <text class="run" x="950" y="170">20260306_094033</text>
+    <text class="axis" x="178" y="150">0</text>
+    <text class="axis" x="160" y="30">70000</text>
+    <path class="better" d="M220 39 L1000 53"/>
+    <circle class="baseline" cx="220" cy="39" r="8"/>
+    <circle class="latest" cx="1000" cy="53" r="8"/>
+    <text class="value" x="235" y="35">62063.0</text>
+    <text class="value" x="895" y="49">53888.1</text>
+  </g>
+</svg>
