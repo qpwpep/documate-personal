@@ -90,6 +90,10 @@ class AgentResponseSchemaTest(unittest.TestCase):
                     "status": "heuristic_fallback",
                     "reason": "planner_failed_or_invalid",
                     "fallback_routes": ["docs"],
+                    "intent_required": True,
+                    "required_routes": ["docs", "upload"],
+                    "override_applied": True,
+                    "override_reason": "missing_required_routes",
                 },
             },
         }
@@ -97,6 +101,13 @@ class AgentResponseSchemaTest(unittest.TestCase):
         self.assertIsNotNone(result.debug)
         self.assertEqual(result.debug.retrieval_diagnostics[0].status, "error")
         self.assertEqual(result.debug.planner_diagnostics.status, "heuristic_fallback")
+        self.assertTrue(result.debug.planner_diagnostics.intent_required)
+        self.assertEqual(result.debug.planner_diagnostics.required_routes, ["docs", "upload"])
+        self.assertTrue(result.debug.planner_diagnostics.override_applied)
+        self.assertEqual(
+            result.debug.planner_diagnostics.override_reason,
+            "missing_required_routes",
+        )
 
 
 if __name__ == "__main__":
