@@ -5,9 +5,7 @@ from .node import (
     add_user_message,
     make_action_postprocess_node,
     make_planner_node,
-    make_retrieve_docs_node,
-    make_retrieve_local_node,
-    make_retrieve_upload_node,
+    make_retrieve_dispatch_node,
     make_summarize_node,
     make_synthesize_node,
     make_validate_evidence_node,
@@ -32,15 +30,9 @@ def build_agent_graph(settings: AppSettings | None = None):
         verbose=llm_registry.verbose,
         max_turns=6,
     )
-    retrieve_docs_node = make_retrieve_docs_node(
+    retrieve_dispatch_node = make_retrieve_dispatch_node(
         tavily_search_tool=tool_registry.tavily_search_tool,
-        verbose=llm_registry.verbose,
-    )
-    retrieve_upload_node = make_retrieve_upload_node(
         upload_search_tool=tool_registry.upload_search_tool,
-        verbose=llm_registry.verbose,
-    )
-    retrieve_local_node = make_retrieve_local_node(
         rag_search_tool=tool_registry.rag_search_tool,
         verbose=llm_registry.verbose,
     )
@@ -61,11 +53,10 @@ def build_agent_graph(settings: AppSettings | None = None):
         add_user_node=add_user_message,
         summarize_node=summarize_node,
         planner_node=planner_node,
-        retrieve_docs_node=retrieve_docs_node,
-        retrieve_upload_node=retrieve_upload_node,
-        retrieve_local_node=retrieve_local_node,
+        retrieve_dispatch_node=retrieve_dispatch_node,
         synthesize_node=synthesize_node,
         validate_evidence_node=validate_evidence_node,
         action_postprocess_node=action_postprocess_node,
+        summary_max_turns=6,
     )
     return graph_object
