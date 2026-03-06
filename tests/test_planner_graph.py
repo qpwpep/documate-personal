@@ -10,9 +10,7 @@ from src.node import (
     add_user_message,
     make_action_postprocess_node,
     make_planner_node,
-    make_retrieve_docs_node,
-    make_retrieve_local_node,
-    make_retrieve_upload_node,
+    make_retrieve_dispatch_node,
     make_synthesize_node,
     make_validate_evidence_node,
 )
@@ -99,7 +97,101 @@ class PlannerGraphTest(unittest.TestCase):
         self.assertEqual(planner_output.tasks, [])
         self.assertTrue(any("validation failed" in error for error in updates.get("retrieval_errors", [])))
 
-    def test_parallel_retrieval_fan_in_merges_evidence_and_tool_messages(self) -> None:
+    def test_short_conversation_skips_summary_node(self) -> None:
+        summary_calls = {"count": 0}
+
+        def _summarize(state):
+            summary_calls["count"] += 1
+            return state
+
+        graph = build_graph(
+            state_type=State,
+            add_user_node=add_user_message,
+            summarize_node=_summarize,
+            planner_node=lambda state: {"planner_output": PlannerOutput(use_retrieval=False, tasks=[])},
+            retrieve_dispatch_node=lambda state: self.fail("retrieve_dispatch should not run"),
+            synthesize_node=lambda state: {
+                "messages": [AIMessage(content="final answer")],
+                "final_answer": "final answer",
+                "synthesis_attempt": 1,
+                "needs_retry": False,
+            },
+            validate_evidence_node=make_validate_evidence_node(verbose=False),
+            action_postprocess_node=lambda state: {},
+            summary_max_turns=6,
+        )
+
+        result = graph.invoke({"user_input": "question", "messages": []})
+        self.assertEqual(summary_calls["count"], 0)
+        self.assertEqual(result.get("final_answer"), "final answer")
+
+    def test_long_conversation_runs_summary_node(self) -> None:
+        summary_calls = {"count": 0}
+        long_history = [
+            HumanMessage(content=f"user-{index}") if index % 2 == 0 else AIMessage(content=f"ai-{index}")
+            for index in range(14)
+        ]
+
+        def _summarize(state):
+            summary_calls["count"] += 1
+            return state
+
+        graph = build_graph(
+            state_type=State,
+            add_user_node=add_user_message,
+            summarize_node=_summarize,
+            planner_node=lambda state: {"planner_output": PlannerOutput(use_retrieval=False, tasks=[])},
+            retrieve_dispatch_node=lambda state: self.fail("retrieve_dispatch should not run"),
+            synthesize_node=lambda state: {
+                "messages": [AIMessage(content="final answer")],
+                "final_answer": "final answer",
+                "synthesis_attempt": 1,
+                "needs_retry": False,
+            },
+            validate_evidence_node=make_validate_evidence_node(verbose=False),
+            action_postprocess_node=lambda state: {},
+            summary_max_turns=6,
+        )
+
+        result = graph.invoke({"user_input": "question", "messages": long_history})
+        self.assertEqual(summary_calls["count"], 1)
+        self.assertEqual(result.get("final_answer"), "final answer")
+
+    def test_planner_skips_retrieval_dispatch_when_not_required(self) -> None:
+        dispatch_calls = {"count": 0}
+        synth_calls = {"count": 0}
+
+        def _dispatch(_state):
+            dispatch_calls["count"] += 1
+            return {}
+
+        def _synthesize(state):
+            synth_calls["count"] += 1
+            return {
+                "messages": [AIMessage(content="final answer")],
+                "final_answer": "final answer",
+                "synthesis_attempt": int(state.get("synthesis_attempt", 0)) + 1,
+                "needs_retry": False,
+            }
+
+        graph = build_graph(
+            state_type=State,
+            add_user_node=add_user_message,
+            summarize_node=lambda state: state,
+            planner_node=lambda state: {"planner_output": PlannerOutput(use_retrieval=False, tasks=[])},
+            retrieve_dispatch_node=_dispatch,
+            synthesize_node=_synthesize,
+            validate_evidence_node=make_validate_evidence_node(verbose=False),
+            action_postprocess_node=lambda state: {},
+            summary_max_turns=6,
+        )
+
+        result = graph.invoke({"user_input": "question", "messages": []})
+        self.assertEqual(dispatch_calls["count"], 0)
+        self.assertEqual(synth_calls["count"], 1)
+        self.assertEqual(result.get("final_answer"), "final answer")
+
+    def test_retrieve_dispatch_merges_evidence_and_tool_messages(self) -> None:
         docs_evidence = [
             {
                 "kind": "official",
@@ -123,16 +215,28 @@ class PlannerGraphTest(unittest.TestCase):
             }
         ]
 
-        retrieve_docs = make_retrieve_docs_node(
-            _ToolWrapper(lambda query: docs_evidence if query else []),
-            verbose=False,
-        )
-        retrieve_upload = make_retrieve_upload_node(
-            _ToolWrapper(lambda query, k, retriever=None: []),
-            verbose=False,
-        )
-        retrieve_local = make_retrieve_local_node(
-            _ToolWrapper(lambda query, k: local_evidence if query else []),
+        docs_calls = {"count": 0}
+        upload_calls = {"count": 0}
+        local_calls = {"count": 0}
+
+        def _docs_search(query: str):
+            docs_calls["count"] += 1
+            return docs_evidence if query else []
+
+        def _upload_search(query: str, k: int, retriever=None):
+            _ = (query, k, retriever)
+            upload_calls["count"] += 1
+            return []
+
+        def _local_search(query: str, k: int):
+            _ = k
+            local_calls["count"] += 1
+            return local_evidence if query else []
+
+        retrieve_dispatch = make_retrieve_dispatch_node(
+            _ToolWrapper(_docs_search),
+            _ToolWrapper(_upload_search),
+            _ToolWrapper(_local_search),
             verbose=False,
         )
 
@@ -149,9 +253,7 @@ class PlannerGraphTest(unittest.TestCase):
             add_user_node=add_user_message,
             summarize_node=lambda state: state,
             planner_node=lambda state: {"planner_output": planner_output},
-            retrieve_docs_node=retrieve_docs,
-            retrieve_upload_node=retrieve_upload,
-            retrieve_local_node=retrieve_local,
+            retrieve_dispatch_node=retrieve_dispatch,
             synthesize_node=lambda state: {
                 "messages": [AIMessage(content="final answer")],
                 "final_answer": "final answer",
@@ -160,11 +262,15 @@ class PlannerGraphTest(unittest.TestCase):
             },
             validate_evidence_node=make_validate_evidence_node(verbose=False),
             action_postprocess_node=lambda state: {},
+            summary_max_turns=6,
         )
 
         result = graph.invoke({"user_input": "question", "messages": []})
         retrieved = result.get("retrieved_evidence", [])
         self.assertEqual(len(retrieved), 2)
+        self.assertEqual(docs_calls["count"], 1)
+        self.assertEqual(local_calls["count"], 1)
+        self.assertEqual(upload_calls["count"], 0)
 
         tool_messages = [
             m for m in result["messages"] if isinstance(m, ToolMessage) and getattr(m, "name", "")
@@ -201,12 +307,9 @@ class PlannerGraphTest(unittest.TestCase):
                 }
             ]
 
-        retrieve_docs = make_retrieve_docs_node(_ToolWrapper(_docs_search), verbose=False)
-        retrieve_upload = make_retrieve_upload_node(
+        retrieve_dispatch = make_retrieve_dispatch_node(
+            _ToolWrapper(_docs_search),
             _ToolWrapper(lambda query, k, retriever=None: []),
-            verbose=False,
-        )
-        retrieve_local = make_retrieve_local_node(
             _ToolWrapper(lambda query, k: []),
             verbose=False,
         )
@@ -226,12 +329,11 @@ class PlannerGraphTest(unittest.TestCase):
             add_user_node=add_user_message,
             summarize_node=lambda state: state,
             planner_node=planner_node,
-            retrieve_docs_node=retrieve_docs,
-            retrieve_upload_node=retrieve_upload,
-            retrieve_local_node=retrieve_local,
+            retrieve_dispatch_node=retrieve_dispatch,
             synthesize_node=_synthesize,
             validate_evidence_node=make_validate_evidence_node(verbose=False),
             action_postprocess_node=lambda state: {},
+            summary_max_turns=6,
         )
 
         result = graph.invoke({"user_input": "question", "messages": []})
@@ -292,8 +394,11 @@ class PlannerGraphTest(unittest.TestCase):
                 },
             }
         )
-        self.assertTrue(result["needs_retry"])
+        self.assertFalse(result["needs_retry"])
+        self.assertEqual(result["retry_context"]["attempt"], 0)
         self.assertEqual(result["retry_context"]["retry_reason"], "tool_error")
+        self.assertIn("final_answer", result)
+        self.assertIn("retry_reason: tool_error", result["final_answer"])
 
     def test_validate_evidence_sets_low_score_reason(self) -> None:
         validate_node = make_validate_evidence_node(verbose=False)
