@@ -16,6 +16,9 @@ from .tools import build_tool_registry
 
 def build_agent_graph(settings: AppSettings | None = None):
     app_settings = settings or get_settings()
+    has_default_slack_destination = bool(
+        app_settings.slack_default_user_id or app_settings.slack_default_dm_email
+    )
 
     tool_registry = build_tool_registry(app_settings)
     llm_registry = build_llm_registry(app_settings)
@@ -40,12 +43,14 @@ def build_agent_graph(settings: AppSettings | None = None):
         llm_synthesizer=llm_registry.llm_synthesizer,
         verbose=llm_registry.verbose,
         max_turns=6,
+        has_default_slack_destination=has_default_slack_destination,
     )
     validate_evidence_node = make_validate_evidence_node(verbose=llm_registry.verbose)
     action_postprocess_node = make_action_postprocess_node(
         save_text_tool=tool_registry.save_text_tool,
         slack_notify_tool=tool_registry.slack_notify_tool,
         verbose=llm_registry.verbose,
+        has_default_slack_destination=has_default_slack_destination,
     )
 
     graph_object = build_graph(

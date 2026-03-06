@@ -97,6 +97,23 @@ class PlannerGraphTest(unittest.TestCase):
         self.assertEqual(planner_output.tasks, [])
         self.assertTrue(any("validation failed" in error for error in updates.get("retrieval_errors", [])))
 
+    def test_planner_skips_llm_for_action_only_request(self) -> None:
+        capture_planner = _CapturePlannerLLM(
+            PlannerOutput(use_retrieval=True, tasks=[RetrievalTask(route="docs", query="numpy", k=3)])
+        )
+        planner_node = make_planner_node(capture_planner, verbose=False)
+
+        updates = planner_node(
+            {
+                "messages": [HumanMessage(content="save this answer to txt")],
+                "user_input": "save this answer to txt",
+            }
+        )
+
+        self.assertEqual(capture_planner.call_count, 0)
+        self.assertFalse(updates["planner_output"].use_retrieval)
+        self.assertEqual(updates["planner_output"].tasks, [])
+
     def test_short_conversation_skips_summary_node(self) -> None:
         summary_calls = {"count": 0}
 
@@ -460,6 +477,22 @@ class PlannerGraphTest(unittest.TestCase):
         self.assertIsInstance(capture_llm.last_messages[0], SystemMessage)
         self.assertEqual(capture_llm.last_messages[0].content, SYS_POLICY)
 
+    def test_synthesize_short_circuits_action_only_save_request(self) -> None:
+        capture_llm = _CaptureSynthesizeLLM()
+        synthesize_node = make_synthesize_node(capture_llm, verbose=False, max_turns=6)
+
+        updates = synthesize_node(
+            {
+                "messages": [HumanMessage(content="save this answer to txt")],
+                "user_input": "save this answer to txt",
+                "retrieved_evidence": [],
+                "synthesis_attempt": 0,
+            }
+        )
+
+        self.assertIsNone(capture_llm.last_messages)
+        self.assertEqual(updates["final_answer"], "요청하신 최종 답변을 저장합니다.")
+
     def test_synthesize_uses_only_current_attempt_evidence_window(self) -> None:
         capture_llm = _CaptureSynthesizeLLM()
         synthesize_node = make_synthesize_node(capture_llm, verbose=False, max_turns=8)
@@ -557,6 +590,60 @@ class PlannerGraphTest(unittest.TestCase):
         self.assertEqual(tool_messages[0].name, "save_text")
         payload = json.loads(tool_messages[0].content)
         self.assertIn("file_path", payload)
+
+    def test_action_postprocess_slack_skips_without_destination(self) -> None:
+        calls = {"count": 0}
+
+        def _slack_fn(**kwargs):
+            calls["count"] += 1
+            return kwargs
+
+        action_node = make_action_postprocess_node(
+            save_text_tool=_ToolWrapper(lambda **kwargs: {"status": "ok"}),
+            slack_notify_tool=_ToolWrapper(_slack_fn),
+            verbose=False,
+        )
+
+        updates = action_node(
+            {
+                "user_input": "send this to slack",
+                "final_answer": "final answer text",
+                "messages": [],
+            }
+        )
+
+        self.assertEqual(calls["count"], 0)
+        self.assertEqual(updates, {})
+
+    def test_action_postprocess_slack_uses_explicit_destination(self) -> None:
+        recorded = {}
+
+        def _slack_fn(**kwargs):
+            recorded.update(kwargs)
+            return {"status": "ok", "channel_id": kwargs.get("channel_id")}
+
+        action_node = make_action_postprocess_node(
+            save_text_tool=_ToolWrapper(lambda **kwargs: {"status": "ok"}),
+            slack_notify_tool=_ToolWrapper(_slack_fn),
+            verbose=False,
+        )
+
+        updates = action_node(
+            {
+                "user_input": "send this to slack",
+                "final_answer": "final answer text",
+                "messages": [
+                    SystemMessage(
+                        content="[Slack Destinations]\nchannel_id=C123BENCH\n(When the user asks to send to Slack, call slack_notify with these values.)"
+                    )
+                ],
+            }
+        )
+
+        self.assertEqual(recorded["channel_id"], "C123BENCH")
+        tool_messages = updates.get("messages", [])
+        self.assertEqual(len(tool_messages), 1)
+        self.assertEqual(tool_messages[0].name, "slack_notify")
 
 
 if __name__ == "__main__":
