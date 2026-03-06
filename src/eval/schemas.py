@@ -71,6 +71,14 @@ class PlannerDiagnostic(BaseModel):
     status: str = ""
     reason: str | None = None
     fallback_routes: list[str] = Field(default_factory=list)
+    intent_required: bool = False
+    required_routes: list[str] = Field(default_factory=list)
+    override_applied: bool = False
+    override_reason: Literal[
+        "missing_required_retrieval",
+        "missing_required_routes",
+        "upload_retriever_missing",
+    ] | None = None
 
 
 class ScoreWeights(BaseModel):

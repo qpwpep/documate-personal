@@ -201,14 +201,42 @@ class AgentFlowManager:
             if isinstance(fallback_routes_raw, list)
             else []
         )
+        required_routes_raw = raw_planner_diagnostics.get("required_routes")
+        required_routes = (
+            [str(route) for route in required_routes_raw if route]
+            if isinstance(required_routes_raw, list)
+            else []
+        )
         status = raw_planner_diagnostics.get("status")
         reason = raw_planner_diagnostics.get("reason")
-        if not status and reason is None and not fallback_routes:
+        intent_required = bool(raw_planner_diagnostics.get("intent_required", False))
+        override_applied = bool(raw_planner_diagnostics.get("override_applied", False))
+        override_reason = raw_planner_diagnostics.get("override_reason")
+        if override_reason not in {
+            "missing_required_retrieval",
+            "missing_required_routes",
+            "upload_retriever_missing",
+        }:
+            override_reason = None
+
+        if (
+            not status
+            and reason is None
+            and not fallback_routes
+            and not required_routes
+            and not intent_required
+            and not override_applied
+            and override_reason is None
+        ):
             return None
         return {
             "status": str(status) if status is not None else "",
             "reason": (str(reason) if reason is not None else None),
             "fallback_routes": fallback_routes,
+            "intent_required": intent_required,
+            "required_routes": required_routes,
+            "override_applied": override_applied,
+            "override_reason": override_reason,
         }
 
     def run_agent_flow(self, user_input: str, upload_file_path: Optional[str] = None) -> dict:
@@ -250,7 +278,10 @@ class AgentFlowManager:
             if upload_file_path is not None:
                 if self.upload_file_path != upload_file_path:
                     self.upload_file_path = upload_file_path
-                    self.retriever = build_temp_retriever(upload_file_path)
+                    self.retriever = build_temp_retriever(
+                        upload_file_path,
+                        api_key=self.settings.openai_api_key,
+                    )
 
                 if self.retriever is not None:
                     state["retriever"] = self.retriever

@@ -1,5 +1,6 @@
 import json
 import unittest
+from unittest.mock import patch
 
 from langchain_core.documents import Document
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
@@ -51,6 +52,10 @@ class _FakeGraph:
                 "status": "heuristic_fallback",
                 "reason": "planner_failed_or_invalid",
                 "fallback_routes": ["docs"],
+                "intent_required": True,
+                "required_routes": ["docs"],
+                "override_applied": False,
+                "override_reason": None,
             },
         }
 
@@ -234,6 +239,24 @@ class EvidencePipelineTest(unittest.TestCase):
 
         self.assertEqual(result["debug"]["retrieval_diagnostics"][0]["status"], "success")
         self.assertEqual(result["debug"]["planner_diagnostics"]["status"], "heuristic_fallback")
+        self.assertTrue(result["debug"]["planner_diagnostics"]["intent_required"])
+        self.assertEqual(result["debug"]["planner_diagnostics"]["required_routes"], ["docs"])
+
+    @patch("src.agent_manager.build_temp_retriever")
+    def test_agent_manager_passes_api_key_to_temp_retriever(self, mock_build_temp_retriever) -> None:
+        mock_build_temp_retriever.return_value = _FakeRetriever()
+
+        manager = AgentFlowManager.__new__(AgentFlowManager)
+        manager.settings = AppSettings(openai_api_key="test-key", tavily_api_key="test")
+        manager.graph = _FakeGraph([])
+        manager.messages = []
+        manager.retriever = None
+        manager.upload_file_path = None
+
+        _ = manager.run_agent_flow("question", upload_file_path="uploads/session/sample_pipeline.ipynb")
+
+        _, kwargs = mock_build_temp_retriever.call_args
+        self.assertEqual(kwargs["api_key"], "test-key")
 
     def test_save_tool_message_does_not_override_final_answer(self) -> None:
         manager = AgentFlowManager.__new__(AgentFlowManager)
