@@ -299,10 +299,10 @@ uv run python -m src.eval.main report --run output/benchmarks/20260306_094033
 
 ## 9. 최신 벤치마크 결과
 
-기준 런은 `output/benchmarks/latest_run.txt`가 가리키는 `20260306_094033`입니다.
+기준 런은 `output/benchmarks/latest_run.txt`가 가리키는 `20260306_123220`입니다.
 
-- run_id: `20260306_094033`
-- generated_at_utc: `2026-03-06T10:34:56.024712+00:00`
+- run_id: `20260306_123220`
+- generated_at_utc: `2026-03-06T13:25:46.653810+00:00`
 - endpoint: `http://localhost:8000`
 - fixtures: `data\benchmarks\fixtures\cases.generated.jsonl`
 - overall: `FAIL`
@@ -318,9 +318,9 @@ uv run python -m src.eval.main report --run output/benchmarks/20260306_094033
 | tool_precision | 0.8824 |
 | tool_recall | 0.2000 |
 | citation_compliance | 0.0000 |
-| p50_latency_ms | 14969.0 |
-| p95_latency_ms | 53888.1 |
-| avg_cost_per_case_usd | 0.00058583 |
+| p50_latency_ms | 15905.5 |
+| p95_latency_ms | 41446.1 |
+| avg_cost_per_case_usd | 0.00058941 |
 
 ### 9.2 Hard Gates
 
@@ -330,23 +330,24 @@ uv run python -m src.eval.main report --run output/benchmarks/20260306_094033
 | tool_precision | 0.90 | 0.8824 | N |
 | tool_recall | 0.85 | 0.20 | N |
 | citation_compliance | 0.88 | 0.00 | N |
-| p95_latency_ms | 20000 | 53888.1 | N |
-| avg_cost_per_case_usd | 0.035 | 0.00058583 | Y |
+| p95_latency_ms | 20000 | 41446.1 | N |
+| avg_cost_per_case_usd | 0.035 | 0.00058941 | Y |
 
-최신 실패는 `score below threshold`가 대부분이고, 일부 docs 계열 케이스에서 `request timeout`이 함께 보고되었습니다. 상세 목록은 [latest report](output/benchmarks/20260306_094033/report.md)를 참고하세요.
+최신 실패는 대부분 `score below threshold`입니다. 상세 목록은 [latest report](output/benchmarks/20260306_123220/report.md)를 참고하세요.
 
-## 10. 최근 벤치마크 비교
+## 10. 최근 벤치마크 이력 및 추세
 
-응답 비용과 중앙값 지연은 개선됐다. 반면 정답률, tool recall, citation compliance는 악화됐고 p95는 여전히 hard gate를 넘는다.
+저장소에 남아 있는 3개 런 기준으로 보면, baseline 이후 정답률과 citation 품질은 하락한 상태로 유지되고 있다. 반면 `20260306_123220` 런은 직전 `20260306_094033` 대비 p95 latency를 크게 줄였지만, retrieval 품질 지표는 아직 회복되지 않았다.
 
 | run_id | generated_at_utc | overall | pass_rate | tool_precision | tool_recall | citation_compliance | p50_latency_ms | p95_latency_ms | avg_cost_per_case_usd | 변화 |
 |---|---|---|---:|---:|---:|---:|---:|---:|---:|---|
 | `20260303_134325` | `2026-03-03T15:24:50.806715+00:00` | `FAIL` | 0.3833 | 0.8049 | 0.4400 | 0.3056 | 49835.5 | 62063.0 | 0.00219042 | 기준 런 |
 | `20260306_094033` | `2026-03-06T10:34:56.024712+00:00` | `FAIL` | 0.2500 | 0.8824 | 0.2000 | 0.0000 | 14969.0 | 53888.1 | 0.00058583 | `pass_rate -0.1333; tool_precision +0.0775; tool_recall -0.2400; citation_compliance -0.3056; p50_latency_ms -34866.5; p95_latency_ms -8174.9; avg_cost_per_case_usd -0.00160459` |
+| `20260306_123220` | `2026-03-06T13:25:46.653810+00:00` | `FAIL` | 0.2500 | 0.8824 | 0.2000 | 0.0000 | 15905.5 | 41446.1 | 0.00058941 | `pass_rate +0.0000; tool_precision +0.0000; tool_recall +0.0000; citation_compliance +0.0000; p50_latency_ms +936.5; p95_latency_ms -12442.0; avg_cost_per_case_usd +0.00000358` |
 
 ![DocuMate benchmark history](docs/assets/benchmark_history.svg)
 
-저장소에 남아 있는 비교 대상 2개 런 기준 slope chart입니다. 상세 수치는 [baseline report](output/benchmarks/20260303_134325/report.md)와 [latest report](output/benchmarks/20260306_094033/report.md)에서 다시 확인할 수 있습니다.
+저장소에 남아 있는 3개 런 기준 trend chart입니다. 상세 수치는 [run 20260303_134325](output/benchmarks/20260303_134325/report.md), [run 20260306_094033](output/benchmarks/20260306_094033/report.md), [run 20260306_123220](output/benchmarks/20260306_123220/report.md)에서 다시 확인할 수 있습니다.
 
 ## 11. 테스트 및 검증
 
