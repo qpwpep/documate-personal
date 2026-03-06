@@ -16,7 +16,7 @@ from typing_extensions import TypedDict
 
 from .evidence import dedupe_evidence, evidence_to_dicts, parse_evidence_payload
 from .planner_schema import PlannerOutput, RetrievalTask
-from .prompts import SYS_POLICY, needs_save, needs_slack
+from .prompts import SYS_POLICY, needs_rag, needs_save, needs_search, needs_slack
 
 RetryReason = Literal["no_evidence", "low_score", "tool_error"]
 LOW_SCORE_THRESHOLD = 0.5
@@ -191,6 +191,47 @@ def _merge_evidence_dict_lists(
     return merged
 
 
+def _has_action_lookup_intent(user_input: str) -> bool:
+    lowered = str(user_input or "").lower()
+    if not lowered.strip():
+        return False
+
+    lookup_keywords = (
+        "official",
+        "docs",
+        "documentation",
+        "reference",
+        "api",
+        "example",
+        "sample",
+        "notebook",
+        ".ipynb",
+        ".py",
+        "upload",
+        "uploaded",
+        "file",
+        "검색",
+        "찾아",
+        "문서",
+        "공식",
+        "예제",
+        "노트북",
+        "업로드",
+        "파일",
+        "코드",
+        "설명",
+    )
+    return any(keyword in lowered for keyword in lookup_keywords)
+
+
+def _is_action_only_request(user_input: str) -> bool:
+    if not (needs_save(user_input) or needs_slack(user_input)):
+        return False
+    if needs_search(user_input) or needs_rag(user_input):
+        return False
+    return not _has_action_lookup_intent(user_input)
+
+
 class State(TypedDict, total=False):
     messages: Annotated[list[AnyMessage], add_messages]
     user_input: str
@@ -235,6 +276,46 @@ def _extract_text_content(content: Any) -> str:
                     parts.append(str(text))
         return "\n".join(parts)
     return str(content)
+
+
+def _latest_previous_ai_answer(messages: list[AnyMessage]) -> str:
+    seen_current_user = False
+    for message in reversed(messages):
+        if isinstance(message, HumanMessage):
+            if not seen_current_user:
+                seen_current_user = True
+                continue
+            break
+        if seen_current_user and isinstance(message, AIMessage):
+            text = _extract_text_content(message.content).strip()
+            if text:
+                return text
+    return ""
+
+
+def _build_action_only_answer(
+    *,
+    user_input: str,
+    messages: list[AnyMessage],
+    slack_target_available: bool,
+) -> str:
+    if needs_slack(user_input) and not slack_target_available:
+        return (
+            "Slack으로 공유할 대상을 알려주세요. "
+            "channel_id, user_id, 또는 email 중 하나가 필요합니다."
+        )
+
+    previous_answer = _latest_previous_ai_answer(messages)
+    if previous_answer:
+        return previous_answer
+
+    if needs_save(user_input) and needs_slack(user_input):
+        return "요청하신 최종 답변을 저장하고 Slack으로 공유합니다."
+    if needs_save(user_input):
+        return "요청하신 최종 답변을 저장합니다."
+    if needs_slack(user_input):
+        return "요청하신 최종 답변을 Slack으로 공유합니다."
+    return ""
 
 
 _SUMMARY_SYS = (
@@ -286,6 +367,8 @@ _PLANNER_SYS = (
     "- If retrieval is needed, set use_retrieval=true and include 1-3 tasks.\n"
     "- Each selected route must appear at most once.\n"
     "- Keep each task.query short and route-specific.\n"
+    "- If the request is only asking to save/share/send the current answer, retrieval is unnecessary.\n"
+    "- If retriever_available=true and the user is asking about the currently uploaded file, prefer upload over local.\n"
     "- Do not include actions for save/slack; only retrieval planning."
 )
 
@@ -348,13 +431,17 @@ def make_planner_node(llm_planner: Any, verbose: bool, max_turns: int = 6):
     def planner(state: State) -> State:
         planner_errors: list[str] = []
         existing_retry_context = _coerce_retry_context(state.get("retry_context"))
+        user_input = str(state.get("user_input", "") or "")
 
-        try:
-            planner_raw = llm_planner.invoke(_build_planner_messages(state, max_turns=max_turns))
-            planner_output = _coerce_planner_output(planner_raw, planner_errors)
-        except Exception as exc:
-            planner_errors.append(f"planner: structured output invocation failed ({exc})")
+        if _is_action_only_request(user_input):
             planner_output = PlannerOutput.fallback()
+        else:
+            try:
+                planner_raw = llm_planner.invoke(_build_planner_messages(state, max_turns=max_turns))
+                planner_output = _coerce_planner_output(planner_raw, planner_errors)
+            except Exception as exc:
+                planner_errors.append(f"planner: structured output invocation failed ({exc})")
+                planner_output = PlannerOutput.fallback()
 
         planner_output = _sanitize_planner_output(
             planner_output,
@@ -583,7 +670,12 @@ def make_retrieve_dispatch_node(
     return retrieve_dispatch
 
 
-def make_synthesize_node(llm_synthesizer: Any, verbose: bool, max_turns: int = 6):
+def make_synthesize_node(
+    llm_synthesizer: Any,
+    verbose: bool,
+    max_turns: int = 6,
+    has_default_slack_destination: bool = False,
+):
     def synthesize(state: State):
         attempt = int(state.get("synthesis_attempt", 0)) + 1
         model_msgs: List[BaseMessage] = [m for m in state.get("messages", []) if not isinstance(m, ToolMessage)]
@@ -596,6 +688,44 @@ def make_synthesize_node(llm_synthesizer: Any, verbose: bool, max_turns: int = 6
                 model_msgs[0],
                 SystemMessage(content=f"[Conversation Summary]\n{state['memory_summary']}"),
             ] + model_msgs[1:]
+
+        user_input = str(state.get("user_input", "") or "")
+        explicit_slack_destinations = _extract_slack_destinations(state.get("messages", []))
+        slack_target_available = any(explicit_slack_destinations.values()) or has_default_slack_destination
+        if _is_action_only_request(user_input):
+            final_answer = _build_action_only_answer(
+                user_input=user_input,
+                messages=state.get("messages", []),
+                slack_target_available=slack_target_available,
+            )
+            response = AIMessage(content=final_answer)
+            return {
+                "messages": [response],
+                "final_answer": final_answer,
+                "synthesis_attempt": attempt,
+                "needs_retry": False,
+            }
+
+        action_rules: list[str] = []
+        if needs_save(user_input):
+            action_rules.append(
+                "The user requested saving. Produce the final answer content to save now. "
+                "Do not ask follow-up questions about what to save. If the target is unspecified, "
+                "the save target is the final answer you are generating in this turn."
+            )
+        if needs_slack(user_input):
+            if slack_target_available:
+                action_rules.append(
+                    "A Slack destination is available. Produce the final message body to send now and "
+                    "do not ask for destination confirmation."
+                )
+            else:
+                action_rules.append(
+                    "No Slack destination is available yet. Ask one concise follow-up asking only for "
+                    "channel_id, user_id, or email. Do not ask for message content."
+                )
+        if action_rules:
+            model_msgs.append(SystemMessage(content="[Action Request]\n- " + "\n- ".join(action_rules)))
 
         retry_context = _coerce_retry_context(state.get("retry_context"))
         evidence_start_index = int(retry_context.get("evidence_start_index", 0))
@@ -787,7 +917,12 @@ def _extract_slack_destinations(messages: list[AnyMessage]) -> dict[str, str | N
     return destinations
 
 
-def make_action_postprocess_node(save_text_tool: Any, slack_notify_tool: Any, verbose: bool):
+def make_action_postprocess_node(
+    save_text_tool: Any,
+    slack_notify_tool: Any,
+    verbose: bool,
+    has_default_slack_destination: bool = False,
+):
     def action_postprocess(state: State) -> State:
         user_input = str(state.get("user_input", "") or "")
         final_answer = str(state.get("final_answer", "") or "")
@@ -807,18 +942,19 @@ def make_action_postprocess_node(save_text_tool: Any, slack_notify_tool: Any, ve
 
         if needs_slack(user_input) and final_answer.strip():
             destinations = _extract_slack_destinations(state.get("messages", []))
-            try:
-                slack_result = slack_notify_tool.func(
-                    text=final_answer,
-                    user_id=destinations.get("user_id"),
-                    email=destinations.get("email"),
-                    channel_id=destinations.get("channel_id"),
-                    target="auto",
-                )
-            except Exception as exc:
-                slack_result = {"status": "error", "error": str(exc)}
-                action_errors.append(f"slack_notify: failed ({exc})")
-            tool_messages.append(_build_tool_message("slack_notify", slack_result, 1))
+            if any(destinations.values()) or has_default_slack_destination:
+                try:
+                    slack_result = slack_notify_tool.func(
+                        text=final_answer,
+                        user_id=destinations.get("user_id"),
+                        email=destinations.get("email"),
+                        channel_id=destinations.get("channel_id"),
+                        target="auto",
+                    )
+                except Exception as exc:
+                    slack_result = {"status": "error", "error": str(exc)}
+                    action_errors.append(f"slack_notify: failed ({exc})")
+                tool_messages.append(_build_tool_message("slack_notify", slack_result, 1))
 
         if verbose and tool_messages:
             tool_names = ", ".join(msg.name for msg in tool_messages if msg.name)

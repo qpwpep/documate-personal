@@ -201,7 +201,8 @@ def build_tool_registry(settings: AppSettings) -> ToolRegistry:
             output_path = Path(get_save_text_output_dir())
             output_path.mkdir(parents=True, exist_ok=True)
 
-            filename = f"{filename_prefix}_{ts}.txt"
+            normalized_prefix = str(filename_prefix or "response").strip() or "response"
+            filename = f"{normalized_prefix}_{ts}.txt"
             filepath = output_path / filename
             filepath.write_text(content, encoding="utf-8")
 
