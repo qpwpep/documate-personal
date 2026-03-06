@@ -100,6 +100,76 @@ class RunnerErrorBucketsTest(unittest.TestCase):
         self.assertEqual(result.response_errors, [])
         self.assertIn("judge parse fail", result.judge_errors)
 
+    @patch("src.eval.runner_online.requests.post")
+    def test_runner_preserves_retrieval_diagnostic_statuses(self, mock_post) -> None:
+        mock_post.return_value = _FakeResponse(
+            200,
+            {
+                "response": {"answer": "ok", "evidence": []},
+                "trace": "x",
+                "file_path": "",
+                "debug": {
+                    "tool_calls": ["tavily_search", "upload_search", "rag_search"],
+                    "token_usage": {},
+                    "observed_evidence": [],
+                    "retrieval_diagnostics": [
+                        {
+                            "tool": "tavily_search",
+                            "route": "docs",
+                            "status": "success",
+                            "message": "",
+                            "query": "docs query",
+                            "attempt": 1,
+                        },
+                        {
+                            "tool": "upload_search",
+                            "route": "upload",
+                            "status": "no_result",
+                            "message": "no uploaded evidence found",
+                            "query": "upload query",
+                            "attempt": 1,
+                        },
+                        {
+                            "tool": "rag_search",
+                            "route": "local",
+                            "status": "error",
+                            "message": "local search failed",
+                            "query": "local query",
+                            "attempt": 1,
+                        },
+                        {
+                            "tool": "upload_search",
+                            "route": "upload",
+                            "status": "unavailable",
+                            "message": "upload retriever unavailable",
+                            "query": "upload query",
+                            "attempt": 2,
+                        },
+                    ],
+                    "planner_diagnostics": {
+                        "status": "heuristic_fallback",
+                        "reason": "planner_failed_or_invalid",
+                        "fallback_routes": ["docs", "upload"],
+                    },
+                },
+            },
+        )
+        result = _run_single_case(
+            run_id="run-diagnostics",
+            endpoint="http://localhost:8000",
+            fixtures_path=self.fixtures_path,
+            case=self.case,
+            timeout_seconds=5,
+            judge=_DummyJudge((None, None, None)),
+            config=self.config,
+        )
+        self.assertEqual(
+            [item.status for item in result.retrieval_diagnostics],
+            ["success", "no_result", "error", "unavailable"],
+        )
+        self.assertIsNotNone(result.planner_diagnostics)
+        self.assertEqual(result.planner_diagnostics.status, "heuristic_fallback")
+
 
 if __name__ == "__main__":
     unittest.main()

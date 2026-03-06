@@ -66,6 +66,38 @@ class AgentResponseSchemaTest(unittest.TestCase):
         self.assertIsNotNone(result.debug.retry_context)
         self.assertEqual(result.debug.retry_context.retry_reason, "no_evidence")
 
+    def test_debug_diagnostics_are_optional_and_parseable(self) -> None:
+        payload = {
+            "response": {"answer": "follow up", "evidence": []},
+            "trace": "trace-id",
+            "file_path": None,
+            "debug": {
+                "tool_calls": ["tavily_search"],
+                "tool_call_count": 1,
+                "errors": [],
+                "observed_evidence": [],
+                "retrieval_diagnostics": [
+                    {
+                        "tool": "tavily_search",
+                        "route": "docs",
+                        "status": "error",
+                        "message": "invoke failed",
+                        "query": "numpy docs",
+                        "attempt": 1,
+                    }
+                ],
+                "planner_diagnostics": {
+                    "status": "heuristic_fallback",
+                    "reason": "planner_failed_or_invalid",
+                    "fallback_routes": ["docs"],
+                },
+            },
+        }
+        result = AgentResponse.model_validate(payload)
+        self.assertIsNotNone(result.debug)
+        self.assertEqual(result.debug.retrieval_diagnostics[0].status, "error")
+        self.assertEqual(result.debug.planner_diagnostics.status, "heuristic_fallback")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -21,11 +21,26 @@ class AgentTokenUsage(BaseModel):
 class AgentRetryContext(BaseModel):
     attempt: int = 0
     max_retries: int = 1
-    retry_reason: Literal["no_evidence", "low_score", "tool_error"] | None = None
+    retry_reason: Literal["no_evidence", "low_score", "tool_error", "blocked_missing_upload"] | None = None
     retrieval_feedback: str | None = None
     evidence_start_index: int | None = None
     retrieval_error_start_index: int | None = None
     score_avg: float | None = None
+
+
+class RetrievalDiagnostic(BaseModel):
+    tool: str = ""
+    route: str = ""
+    status: str = ""
+    message: str = ""
+    query: str = ""
+    attempt: int = 0
+
+
+class PlannerDiagnostic(BaseModel):
+    status: str = ""
+    reason: str | None = None
+    fallback_routes: list[str] = Field(default_factory=list)
 
 
 class AgentDebugInfo(BaseModel):
@@ -37,6 +52,8 @@ class AgentDebugInfo(BaseModel):
     errors: list[str] = Field(default_factory=list)
     observed_evidence: list[EvidenceItem] = Field(default_factory=list)
     retry_context: AgentRetryContext | None = None
+    retrieval_diagnostics: list[RetrievalDiagnostic] = Field(default_factory=list)
+    planner_diagnostics: PlannerDiagnostic | None = None
 
 
 class AgentRequest(BaseModel):

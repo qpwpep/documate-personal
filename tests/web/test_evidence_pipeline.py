@@ -18,12 +18,40 @@ class _FakeGraph:
             "messages": [
                 HumanMessage(content=state["user_input"]),
                 ToolMessage(
-                    content=json.dumps(self._evidence_payload, ensure_ascii=False),
+                    content=json.dumps(
+                        {
+                            "evidence": self._evidence_payload,
+                            "diagnostics": {
+                                "tool": "tavily_search",
+                                "route": "docs",
+                                "status": "success",
+                                "message": "",
+                                "query": state["user_input"],
+                                "attempt": 1,
+                            },
+                        },
+                        ensure_ascii=False,
+                    ),
                     name="tavily_search",
                     tool_call_id="call-1",
                 ),
                 AIMessage(content="final answer"),
-            ]
+            ],
+            "retrieval_diagnostics": [
+                {
+                    "tool": "tavily_search",
+                    "route": "docs",
+                    "status": "success",
+                    "message": "",
+                    "query": state["user_input"],
+                    "attempt": 1,
+                }
+            ],
+            "planner_diagnostics": {
+                "status": "heuristic_fallback",
+                "reason": "planner_failed_or_invalid",
+                "fallback_routes": ["docs"],
+            },
         }
 
 
@@ -90,8 +118,40 @@ class EvidencePipelineTest(unittest.TestCase):
         }
 
         messages = [
-            ToolMessage(content=json.dumps([tavily_item, tavily_item]), name="tavily_search", tool_call_id="1"),
-            ToolMessage(content=json.dumps([rag_item]), name="rag_search", tool_call_id="2"),
+            ToolMessage(
+                content=json.dumps(
+                    {
+                        "evidence": [tavily_item, tavily_item],
+                        "diagnostics": {
+                            "tool": "tavily_search",
+                            "route": "docs",
+                            "status": "success",
+                            "message": "",
+                            "query": "numpy",
+                            "attempt": 1,
+                        },
+                    }
+                ),
+                name="tavily_search",
+                tool_call_id="1",
+            ),
+            ToolMessage(
+                content=json.dumps(
+                    {
+                        "evidence": [rag_item],
+                        "diagnostics": {
+                            "tool": "rag_search",
+                            "route": "local",
+                            "status": "success",
+                            "message": "",
+                            "query": "local",
+                            "attempt": 1,
+                        },
+                    }
+                ),
+                name="rag_search",
+                tool_call_id="2",
+            ),
             ToolMessage(content="not-json", name="upload_search", tool_call_id="3"),
             ToolMessage(content=json.dumps([rag_item]), name="save_text", tool_call_id="4"),
         ]
@@ -133,19 +193,47 @@ class EvidencePipelineTest(unittest.TestCase):
         registry = build_tool_registry(AppSettings(openai_api_key="test", tavily_api_key="test"))
 
         no_retriever = registry.upload_search_tool.func(query="uploaded info", k=3, retriever=None)
-        self.assertEqual(no_retriever, [])
+        self.assertEqual(no_retriever["diagnostics"]["status"], "unavailable")
+        self.assertEqual(no_retriever["evidence"], [])
 
         with_retriever = registry.upload_search_tool.func(
             query="uploaded info",
             k=3,
             retriever=_FakeRetriever(),
         )
-        self.assertEqual(len(with_retriever), 1)
-        self.assertEqual(with_retriever[0]["kind"], "local")
-        self.assertEqual(with_retriever[0]["tool"], "upload_search")
-        self.assertEqual(with_retriever[0]["url_or_path"], "uploads/session/sample_pipeline.ipynb")
-        self.assertEqual(with_retriever[0]["source_id"], "path:uploads/session/sample_pipeline.ipynb")
-        self.assertAlmostEqual(with_retriever[0]["score"], 0.87)
+        evidence = with_retriever["evidence"]
+        self.assertEqual(with_retriever["diagnostics"]["status"], "success")
+        self.assertEqual(len(evidence), 1)
+        self.assertEqual(evidence[0]["kind"], "local")
+        self.assertEqual(evidence[0]["tool"], "upload_search")
+        self.assertEqual(evidence[0]["url_or_path"], "uploads/session/sample_pipeline.ipynb")
+        self.assertEqual(evidence[0]["source_id"], "path:uploads/session/sample_pipeline.ipynb")
+        self.assertAlmostEqual(evidence[0]["score"], 0.87)
+
+    def test_agent_manager_exposes_retrieval_and_planner_diagnostics(self) -> None:
+        evidence_payload = [
+            {
+                "kind": "official",
+                "tool": "tavily_search",
+                "source_id": "url:https://numpy.org/doc/stable/",
+                "url_or_path": "https://numpy.org/doc/stable/",
+                "title": "NumPy docs",
+                "snippet": "broadcasting",
+                "score": 0.99,
+            }
+        ]
+
+        manager = AgentFlowManager.__new__(AgentFlowManager)
+        manager.settings = None
+        manager.graph = _FakeGraph(evidence_payload)
+        manager.messages = []
+        manager.retriever = None
+        manager.upload_file_path = None
+
+        result = manager.run_agent_flow("question")
+
+        self.assertEqual(result["debug"]["retrieval_diagnostics"][0]["status"], "success")
+        self.assertEqual(result["debug"]["planner_diagnostics"]["status"], "heuristic_fallback")
 
     def test_save_tool_message_does_not_override_final_answer(self) -> None:
         manager = AgentFlowManager.__new__(AgentFlowManager)
