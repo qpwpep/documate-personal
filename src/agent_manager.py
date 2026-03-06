@@ -142,7 +142,7 @@ class AgentFlowManager:
             normalized["max_retries"] = max_retries
 
         retry_reason = raw_retry_context.get("retry_reason")
-        if retry_reason in {"no_evidence", "low_score", "tool_error"}:
+        if retry_reason in {"no_evidence", "low_score", "tool_error", "blocked_missing_upload"}:
             normalized["retry_reason"] = retry_reason
 
         retrieval_feedback = raw_retry_context.get("retrieval_feedback")
@@ -164,6 +164,52 @@ class AgentFlowManager:
             normalized["score_avg"] = None
 
         return normalized or None
+
+    @staticmethod
+    def _normalize_retrieval_diagnostics(raw_diagnostics: Any) -> list[dict[str, Any]]:
+        if not isinstance(raw_diagnostics, list):
+            return []
+
+        normalized: list[dict[str, Any]] = []
+        for item in raw_diagnostics:
+            if not isinstance(item, dict):
+                continue
+            try:
+                attempt = int(item.get("attempt", 0) or 0)
+            except (TypeError, ValueError):
+                attempt = 0
+            normalized.append(
+                {
+                    "tool": str(item.get("tool") or "").strip(),
+                    "route": str(item.get("route") or "").strip(),
+                    "status": str(item.get("status") or "").strip(),
+                    "message": str(item.get("message") or ""),
+                    "query": str(item.get("query") or ""),
+                    "attempt": attempt,
+                }
+            )
+        return normalized
+
+    @staticmethod
+    def _normalize_planner_diagnostics(raw_planner_diagnostics: Any) -> Dict[str, Any] | None:
+        if not isinstance(raw_planner_diagnostics, dict):
+            return None
+
+        fallback_routes_raw = raw_planner_diagnostics.get("fallback_routes")
+        fallback_routes = (
+            [str(route) for route in fallback_routes_raw if route]
+            if isinstance(fallback_routes_raw, list)
+            else []
+        )
+        status = raw_planner_diagnostics.get("status")
+        reason = raw_planner_diagnostics.get("reason")
+        if not status and reason is None and not fallback_routes:
+            return None
+        return {
+            "status": str(status) if status is not None else "",
+            "reason": (str(reason) if reason is not None else None),
+            "fallback_routes": fallback_routes,
+        }
 
     def run_agent_flow(self, user_input: str, upload_file_path: Optional[str] = None) -> dict:
         current_messages = self.messages
@@ -264,6 +310,12 @@ class AgentFlowManager:
                 errors=debug_errors,
             )
             retry_context = self._normalize_retry_context(response.get("retry_context"))
+            retrieval_diagnostics = self._normalize_retrieval_diagnostics(
+                response.get("retrieval_diagnostics")
+            )
+            planner_diagnostics = self._normalize_planner_diagnostics(
+                response.get("planner_diagnostics")
+            )
 
             for message in reversed(updated_messages):
                 if isinstance(message, HumanMessage):
@@ -314,6 +366,8 @@ class AgentFlowManager:
                     "errors": debug_errors,
                     "observed_evidence": observed_evidence,
                     "retry_context": retry_context,
+                    "retrieval_diagnostics": retrieval_diagnostics,
+                    "planner_diagnostics": planner_diagnostics,
                 },
             }
 
@@ -339,5 +393,7 @@ class AgentFlowManager:
                     "model_name": None,
                     "errors": [message],
                     "observed_evidence": [],
+                    "retrieval_diagnostics": [],
+                    "planner_diagnostics": None,
                 },
             }

@@ -24,6 +24,8 @@ from .schemas import (
     BenchmarkConfig,
     CaseResult,
     EvidenceItem,
+    PlannerDiagnostic,
+    RetrievalDiagnostic,
     RunSummary,
     TokenUsage,
     load_cases_jsonl,
@@ -108,6 +110,47 @@ def _parse_evidence_items(
     return parsed
 
 
+def _parse_retrieval_diagnostics(
+    raw_items: Any,
+    *,
+    response_errors: list[str],
+) -> list[RetrievalDiagnostic]:
+    parsed: list[RetrievalDiagnostic] = []
+    if raw_items is None:
+        return parsed
+
+    if not isinstance(raw_items, list):
+        response_errors.append("debug.retrieval_diagnostics must be a list")
+        return parsed
+
+    for index, item in enumerate(raw_items):
+        if not isinstance(item, dict):
+            response_errors.append(f"debug.retrieval_diagnostics[{index}] must be an object")
+            continue
+        try:
+            parsed.append(RetrievalDiagnostic.model_validate(item))
+        except Exception as exc:
+            response_errors.append(f"debug.retrieval_diagnostics[{index}] invalid: {exc}")
+    return parsed
+
+
+def _parse_planner_diagnostics(
+    raw_item: Any,
+    *,
+    response_errors: list[str],
+) -> PlannerDiagnostic | None:
+    if raw_item is None:
+        return None
+    if not isinstance(raw_item, dict):
+        response_errors.append("debug.planner_diagnostics must be an object")
+        return None
+    try:
+        return PlannerDiagnostic.model_validate(raw_item)
+    except Exception as exc:
+        response_errors.append(f"debug.planner_diagnostics invalid: {exc}")
+        return None
+
+
 def _run_single_case(
     *,
     run_id: str,
@@ -151,6 +194,8 @@ def _run_single_case(
     response_payload: dict[str, Any] | None = None
     response_evidence: list[EvidenceItem] = []
     observed_evidence: list[EvidenceItem] = []
+    retrieval_diagnostics: list[RetrievalDiagnostic] = []
+    planner_diagnostics: PlannerDiagnostic | None = None
     response_trace: str | None = None
     response_file_path: str | None = None
     latency_ms_e2e: int | None = None
@@ -218,6 +263,14 @@ def _run_single_case(
                             label="debug.observed_evidence",
                             response_errors=response_errors,
                         )
+                        retrieval_diagnostics = _parse_retrieval_diagnostics(
+                            debug_payload.get("retrieval_diagnostics"),
+                            response_errors=response_errors,
+                        )
+                        planner_diagnostics = _parse_planner_diagnostics(
+                            debug_payload.get("planner_diagnostics"),
+                            response_errors=response_errors,
+                        )
                     else:
                         response_errors.append("debug payload is missing (include_debug=true expected)")
         except requests.Timeout:
@@ -283,6 +336,8 @@ def _run_single_case(
         response_payload=response_payload,
         evidence=response_evidence,
         observed_evidence=observed_evidence,
+        retrieval_diagnostics=retrieval_diagnostics,
+        planner_diagnostics=planner_diagnostics,
         file_path=response_file_path,
         trace=response_trace,
         latency_ms_e2e=latency_ms_e2e,

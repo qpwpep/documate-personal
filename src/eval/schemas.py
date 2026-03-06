@@ -58,6 +58,21 @@ class TokenUsage(BaseModel):
     total_tokens: int = 0
 
 
+class RetrievalDiagnostic(BaseModel):
+    tool: str = ""
+    route: str = ""
+    status: str = ""
+    message: str = ""
+    query: str = ""
+    attempt: int = 0
+
+
+class PlannerDiagnostic(BaseModel):
+    status: str = ""
+    reason: str | None = None
+    fallback_routes: list[str] = Field(default_factory=list)
+
+
 class ScoreWeights(BaseModel):
     tool_match: float = 0.30
     content_constraints: float = 0.25
@@ -107,6 +122,8 @@ class CaseResult(BaseModel):
     response_payload: dict[str, Any] | None = None
     evidence: list[EvidenceItem] = Field(default_factory=list)
     observed_evidence: list[EvidenceItem] = Field(default_factory=list)
+    retrieval_diagnostics: list[RetrievalDiagnostic] = Field(default_factory=list)
+    planner_diagnostics: PlannerDiagnostic | None = None
     file_path: str | None = None
     trace: str | None = None
     latency_ms_e2e: int | None = None
