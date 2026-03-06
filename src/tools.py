@@ -33,6 +33,27 @@ class ToolRegistry:
     all_tools: list[Any]
 
 
+def _build_retrieval_payload(
+    *,
+    tool: str,
+    route: Literal["docs", "upload", "local"],
+    query: str,
+    evidence: list[dict[str, Any]] | None = None,
+    status: Literal["success", "no_result", "error", "unavailable"] = "success",
+    message: str = "",
+) -> dict[str, Any]:
+    return {
+        "evidence": list(evidence or []),
+        "diagnostics": {
+            "tool": tool,
+            "route": route,
+            "status": status,
+            "message": message,
+            "query": query,
+        },
+    }
+
+
 class TavilyArgs(BaseModel):
     query: str = Field(description="Search query for official documentation.")
     search_depth: Literal["basic", "advanced", "fast", "ultra-fast"] = Field(
@@ -148,7 +169,7 @@ def build_tool_registry(settings: AppSettings) -> ToolRegistry:
         query: str,
         search_depth: Literal["basic", "advanced", "fast", "ultra-fast"] = "basic",
         include_domains: list[str] | None = None,
-    ) -> list[dict[str, Any]]:
+    ) -> dict[str, Any]:
         """Search official web docs and return typed evidence items."""
         domains = _normalize_include_domains(include_domains or default_domains)
         payload: dict[str, Any] = {
@@ -158,14 +179,32 @@ def build_tool_registry(settings: AppSettings) -> ToolRegistry:
         }
         try:
             raw_results = tavily_client.invoke(payload)
-        except Exception:
-            return []
+        except Exception as exc:
+            return _build_retrieval_payload(
+                tool="tavily_search",
+                route="docs",
+                query=query,
+                status="error",
+                message=f"invoke failed ({exc})",
+            )
 
         if not isinstance(raw_results, dict):
-            return []
+            return _build_retrieval_payload(
+                tool="tavily_search",
+                route="docs",
+                query=query,
+                status="error",
+                message="unexpected response type from Tavily",
+            )
         results = raw_results.get("results")
         if not isinstance(results, list):
-            return []
+            return _build_retrieval_payload(
+                tool="tavily_search",
+                route="docs",
+                query=query,
+                status="error",
+                message="missing or invalid Tavily results payload",
+            )
 
         evidence_items: list[EvidenceItem] = []
         for result in results:
@@ -182,7 +221,15 @@ def build_tool_registry(settings: AppSettings) -> ToolRegistry:
             if evidence_item is not None:
                 evidence_items.append(evidence_item)
 
-        return evidence_to_dicts(dedupe_evidence(evidence_items))
+        evidence = evidence_to_dicts(dedupe_evidence(evidence_items))
+        return _build_retrieval_payload(
+            tool="tavily_search",
+            route="docs",
+            query=query,
+            evidence=evidence,
+            status="success" if evidence else "no_result",
+            message="" if evidence else "no official documentation evidence found",
+        )
 
     tavily_search_tool = StructuredTool.from_function(
         name="tavily_search",
@@ -223,12 +270,24 @@ def build_tool_registry(settings: AppSettings) -> ToolRegistry:
         args_schema=SaveArgs,
     )
 
-    def rag_search(query: str, k: int = 4) -> list[dict[str, Any]]:
+    def rag_search(query: str, k: int = 4) -> dict[str, Any]:
         """Search local notebook index and return typed evidence items."""
         if not INDEX_PATH.is_dir():
-            return []
+            return _build_retrieval_payload(
+                tool="rag_search",
+                route="local",
+                query=query,
+                status="unavailable",
+                message="local notebook index is unavailable",
+            )
         if not settings.openai_api_key:
-            return []
+            return _build_retrieval_payload(
+                tool="rag_search",
+                route="local",
+                query=query,
+                status="unavailable",
+                message="OPENAI_API_KEY is not configured for local retrieval",
+            )
 
         db = _load_chroma(settings.openai_api_key)
         docs_with_scores: list[tuple[Any, float | None]] = []
@@ -237,8 +296,17 @@ def build_tool_registry(settings: AppSettings) -> ToolRegistry:
             for doc, score in raw_docs_with_scores:
                 docs_with_scores.append((doc, _to_float_or_none(score)))
         except Exception:
-            docs = db.similarity_search(query, k=k)
-            docs_with_scores = [(doc, None) for doc in docs]
+            try:
+                docs = db.similarity_search(query, k=k)
+                docs_with_scores = [(doc, None) for doc in docs]
+            except Exception as exc:
+                return _build_retrieval_payload(
+                    tool="rag_search",
+                    route="local",
+                    query=query,
+                    status="error",
+                    message=f"local similarity search failed ({exc})",
+                )
 
         evidence_items: list[EvidenceItem] = []
         for doc, score in docs_with_scores:
@@ -255,7 +323,15 @@ def build_tool_registry(settings: AppSettings) -> ToolRegistry:
             if evidence_item is not None:
                 evidence_items.append(evidence_item)
 
-        return evidence_to_dicts(dedupe_evidence(evidence_items))
+        evidence = evidence_to_dicts(dedupe_evidence(evidence_items))
+        return _build_retrieval_payload(
+            tool="rag_search",
+            route="local",
+            query=query,
+            evidence=evidence,
+            status="success" if evidence else "no_result",
+            message="" if evidence else "no local notebook evidence found",
+        )
 
     rag_search_tool = StructuredTool.from_function(
         name="rag_search",
@@ -271,10 +347,16 @@ def build_tool_registry(settings: AppSettings) -> ToolRegistry:
         query: str,
         k: int = 4,
         retriever: Annotated[Any, InjectedState("retriever")] = None,
-    ) -> list[dict[str, Any]]:
+    ) -> dict[str, Any]:
         """Search uploaded file retriever and return typed evidence items."""
         if retriever is None:
-            return []
+            return _build_retrieval_payload(
+                tool="upload_search",
+                route="upload",
+                query=query,
+                status="unavailable",
+                message="upload retriever is unavailable; upload a .py or .ipynb file first",
+            )
 
         docs_with_scores: list[tuple[Any, float | None]] = []
         try:
@@ -286,8 +368,14 @@ def build_tool_registry(settings: AppSettings) -> ToolRegistry:
             else:
                 docs = retriever.invoke(query)
                 docs_with_scores = [(doc, None) for doc in docs]
-        except Exception:
-            return []
+        except Exception as exc:
+            return _build_retrieval_payload(
+                tool="upload_search",
+                route="upload",
+                query=query,
+                status="error",
+                message=f"uploaded file retrieval failed ({exc})",
+            )
 
         evidence_items: list[EvidenceItem] = []
         for doc, score in docs_with_scores:
@@ -303,7 +391,15 @@ def build_tool_registry(settings: AppSettings) -> ToolRegistry:
             )
             if evidence_item is not None:
                 evidence_items.append(evidence_item)
-        return evidence_to_dicts(dedupe_evidence(evidence_items))
+        evidence = evidence_to_dicts(dedupe_evidence(evidence_items))
+        return _build_retrieval_payload(
+            tool="upload_search",
+            route="upload",
+            query=query,
+            evidence=evidence,
+            status="success" if evidence else "no_result",
+            message="" if evidence else "no uploaded file evidence found",
+        )
 
     upload_search_tool = StructuredTool.from_function(
         name="upload_search",
