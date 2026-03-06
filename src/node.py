@@ -21,6 +21,7 @@ from .prompts import SYS_POLICY, needs_save, needs_slack
 RetryReason = Literal["no_evidence", "low_score", "tool_error"]
 LOW_SCORE_THRESHOLD = 0.5
 DEFAULT_MAX_RETRIES = 1
+RETRYABLE_REASONS: set[RetryReason] = {"no_evidence", "low_score"}
 
 UNCERTAINTY_ANSWER_PREFIX = (
     "There is not enough reliable evidence to provide a confident final answer. "
@@ -402,6 +403,45 @@ def _build_tool_message(tool_name: str, payload: Any, index: int) -> ToolMessage
     )
 
 
+def _run_retrieval_tasks(
+    tasks: list[RetrievalTask],
+    *,
+    tool_name: str,
+    context_label: str,
+    invoke_tool: Any,
+    verbose: bool,
+) -> State:
+    if not tasks:
+        return {}
+
+    local_errors: list[str] = []
+    evidence_updates: list[dict[str, Any]] = []
+    tool_messages: list[ToolMessage] = []
+
+    for index, task in enumerate(tasks, start=1):
+        try:
+            payload = invoke_tool(task)
+        except Exception as exc:
+            local_errors.append(f"{tool_name}: failed ({exc})")
+            payload = []
+
+        parsed_items = parse_evidence_payload(payload, context=f"tool:{tool_name}", errors=local_errors)
+        payload_dicts = evidence_to_dicts(parsed_items)
+        evidence_updates.extend(payload_dicts)
+        tool_messages.append(_build_tool_message(tool_name, payload_dicts, index))
+
+    if verbose:
+        print(f"[{context_label}] tasks={len(tasks)} evidence={len(evidence_updates)}")
+
+    updates: State = {
+        "retrieved_evidence": evidence_updates,
+        "messages": tool_messages,
+    }
+    if local_errors:
+        updates["retrieval_errors"] = local_errors
+    return updates
+
+
 def _format_evidence_for_prompt(items: list[dict[str, Any]]) -> str:
     if not items:
         return "No retrieved evidence."
@@ -422,35 +462,13 @@ def _format_evidence_for_prompt(items: list[dict[str, Any]]) -> str:
 def make_retrieve_docs_node(tavily_search_tool: Any, verbose: bool):
     def retrieve_docs(state: State) -> State:
         tasks = _tasks_for_route(state, "docs")
-        if not tasks:
-            return {}
-
-        local_errors: list[str] = []
-        evidence_updates: list[dict[str, Any]] = []
-        tool_messages: list[ToolMessage] = []
-
-        for index, task in enumerate(tasks, start=1):
-            try:
-                payload = tavily_search_tool.func(query=task.query)
-            except Exception as exc:
-                local_errors.append(f"tavily_search: failed ({exc})")
-                payload = []
-
-            parsed_items = parse_evidence_payload(payload, context="tool:tavily_search", errors=local_errors)
-            payload_dicts = evidence_to_dicts(parsed_items)
-            evidence_updates.extend(payload_dicts)
-            tool_messages.append(_build_tool_message("tavily_search", payload_dicts, index))
-
-        if verbose:
-            print(f"[retrieve_docs] tasks={len(tasks)} evidence={len(evidence_updates)}")
-
-        updates: State = {
-            "retrieved_evidence": evidence_updates,
-            "messages": tool_messages,
-        }
-        if local_errors:
-            updates["retrieval_errors"] = local_errors
-        return updates
+        return _run_retrieval_tasks(
+            tasks,
+            tool_name="tavily_search",
+            context_label="retrieve_docs",
+            invoke_tool=lambda task: tavily_search_tool.func(query=task.query),
+            verbose=verbose,
+        )
 
     return retrieve_docs
 
@@ -458,39 +476,17 @@ def make_retrieve_docs_node(tavily_search_tool: Any, verbose: bool):
 def make_retrieve_upload_node(upload_search_tool: Any, verbose: bool):
     def retrieve_upload(state: State) -> State:
         tasks = _tasks_for_route(state, "upload")
-        if not tasks:
-            return {}
-
-        local_errors: list[str] = []
-        evidence_updates: list[dict[str, Any]] = []
-        tool_messages: list[ToolMessage] = []
-
-        for index, task in enumerate(tasks, start=1):
-            try:
-                payload = upload_search_tool.func(
-                    query=task.query,
-                    k=task.k,
-                    retriever=state.get("retriever"),
-                )
-            except Exception as exc:
-                local_errors.append(f"upload_search: failed ({exc})")
-                payload = []
-
-            parsed_items = parse_evidence_payload(payload, context="tool:upload_search", errors=local_errors)
-            payload_dicts = evidence_to_dicts(parsed_items)
-            evidence_updates.extend(payload_dicts)
-            tool_messages.append(_build_tool_message("upload_search", payload_dicts, index))
-
-        if verbose:
-            print(f"[retrieve_upload] tasks={len(tasks)} evidence={len(evidence_updates)}")
-
-        updates: State = {
-            "retrieved_evidence": evidence_updates,
-            "messages": tool_messages,
-        }
-        if local_errors:
-            updates["retrieval_errors"] = local_errors
-        return updates
+        return _run_retrieval_tasks(
+            tasks,
+            tool_name="upload_search",
+            context_label="retrieve_upload",
+            invoke_tool=lambda task: upload_search_tool.func(
+                query=task.query,
+                k=task.k,
+                retriever=state.get("retriever"),
+            ),
+            verbose=verbose,
+        )
 
     return retrieve_upload
 
@@ -498,27 +494,83 @@ def make_retrieve_upload_node(upload_search_tool: Any, verbose: bool):
 def make_retrieve_local_node(rag_search_tool: Any, verbose: bool):
     def retrieve_local(state: State) -> State:
         tasks = _tasks_for_route(state, "local")
-        if not tasks:
+        return _run_retrieval_tasks(
+            tasks,
+            tool_name="rag_search",
+            context_label="retrieve_local",
+            invoke_tool=lambda task: rag_search_tool.func(query=task.query, k=task.k),
+            verbose=verbose,
+        )
+
+    return retrieve_local
+
+
+def make_retrieve_dispatch_node(
+    tavily_search_tool: Any,
+    upload_search_tool: Any,
+    rag_search_tool: Any,
+    verbose: bool,
+):
+    def retrieve_dispatch(state: State) -> State:
+        planner_errors: list[str] = []
+        planner_output = _coerce_planner_output(state.get("planner_output"), planner_errors)
+        if not planner_output.use_retrieval or not planner_output.tasks:
+            if planner_errors:
+                return {"retrieval_errors": planner_errors}
             return {}
 
-        local_errors: list[str] = []
+        route_handlers: dict[str, tuple[str, Any]] = {
+            "docs": (
+                "tavily_search",
+                lambda task: tavily_search_tool.func(query=task.query),
+            ),
+            "upload": (
+                "upload_search",
+                lambda task: upload_search_tool.func(
+                    query=task.query,
+                    k=task.k,
+                    retriever=state.get("retriever"),
+                ),
+            ),
+            "local": (
+                "rag_search",
+                lambda task: rag_search_tool.func(query=task.query, k=task.k),
+            ),
+        }
+
+        local_errors: list[str] = list(planner_errors)
         evidence_updates: list[dict[str, Any]] = []
         tool_messages: list[ToolMessage] = []
+        tool_call_counts: dict[str, int] = {}
 
-        for index, task in enumerate(tasks, start=1):
+        for task in planner_output.tasks:
+            handler = route_handlers.get(task.route)
+            if handler is None:
+                local_errors.append(f"planner: unsupported route ({task.route})")
+                continue
+
+            tool_name, invoke_tool = handler
             try:
-                payload = rag_search_tool.func(query=task.query, k=task.k)
+                payload = invoke_tool(task)
             except Exception as exc:
-                local_errors.append(f"rag_search: failed ({exc})")
+                local_errors.append(f"{tool_name}: failed ({exc})")
                 payload = []
 
-            parsed_items = parse_evidence_payload(payload, context="tool:rag_search", errors=local_errors)
+            parsed_items = parse_evidence_payload(payload, context=f"tool:{tool_name}", errors=local_errors)
             payload_dicts = evidence_to_dicts(parsed_items)
             evidence_updates.extend(payload_dicts)
-            tool_messages.append(_build_tool_message("rag_search", payload_dicts, index))
+
+            tool_call_counts[tool_name] = tool_call_counts.get(tool_name, 0) + 1
+            tool_messages.append(
+                _build_tool_message(tool_name, payload_dicts, tool_call_counts[tool_name])
+            )
 
         if verbose:
-            print(f"[retrieve_local] tasks={len(tasks)} evidence={len(evidence_updates)}")
+            routes = ",".join(task.route for task in planner_output.tasks)
+            print(
+                f"[retrieve_dispatch] tasks={len(planner_output.tasks)} "
+                f"routes={routes} evidence={len(evidence_updates)}"
+            )
 
         updates: State = {
             "retrieved_evidence": evidence_updates,
@@ -528,7 +580,7 @@ def make_retrieve_local_node(rag_search_tool: Any, verbose: bool):
             updates["retrieval_errors"] = local_errors
         return updates
 
-    return retrieve_local
+    return retrieve_dispatch
 
 
 def make_synthesize_node(llm_synthesizer: Any, verbose: bool, max_turns: int = 6):
@@ -674,7 +726,7 @@ def make_validate_evidence_node(verbose: bool):
                 "validate_evidence: retry_reason="
                 f"{retry_reason}, score_avg={score_avg}, feedback={retrieval_feedback}"
             )
-            if used_retries < max_retries:
+            if retry_reason in RETRYABLE_REASONS and used_retries < max_retries:
                 needs_retry = True
                 used_retries += 1
 
