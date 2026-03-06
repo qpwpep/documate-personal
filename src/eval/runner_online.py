@@ -131,6 +131,12 @@ def _run_single_case(
         "session_id": session_id,
         "include_debug": True,
     }
+    if case.slack_channel_id:
+        request_payload["slack_channel_id"] = case.slack_channel_id
+    if case.slack_user_id:
+        request_payload["slack_user_id"] = case.slack_user_id
+    if case.slack_email:
+        request_payload["slack_email"] = case.slack_email
 
     upload_path: str | None = None
     try:

@@ -59,6 +59,10 @@ def _is_valid_local_source(url_or_path: str) -> bool:
     )
 
 
+def _expected_local_citation_tool(case: BenchmarkCase) -> str:
+    return "upload_search" if case.upload_fixture else "rag_search"
+
+
 def _collect_valid_source_ids(
     evidence: list[EvidenceItem],
     *,
@@ -169,19 +173,20 @@ def score_citation_compliance(
         checks.append(("tavily_search" in called_tools) and bool(response_ids.intersection(observed_ids)))
 
     if case.require_local_citation:
+        expected_local_tool = _expected_local_citation_tool(case)
         response_ids = _collect_valid_source_ids(
             response_evidence,
             required_kind="local",
-            required_tool="rag_search",
+            required_tool=expected_local_tool,
             source_validator=_is_valid_local_source,
         )
         observed_ids = _collect_valid_source_ids(
             observed_evidence,
             required_kind="local",
-            required_tool="rag_search",
+            required_tool=expected_local_tool,
             source_validator=_is_valid_local_source,
         )
-        checks.append(("rag_search" in called_tools) and bool(response_ids.intersection(observed_ids)))
+        checks.append((expected_local_tool in called_tools) and bool(response_ids.intersection(observed_ids)))
 
     if not checks:
         return 1.0

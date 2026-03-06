@@ -15,11 +15,11 @@ def _seed_case(case_id: str, category: str) -> BenchmarkCase:
         expected_tools = ["tavily_search"]
         require_official = True
     elif category == "rag_only":
-        expected_tools = ["rag_search"]
+        expected_tools = ["upload_search"]
         require_local = True
         upload = "sample_pipeline.ipynb"
     elif category == "hybrid":
-        expected_tools = ["tavily_search", "rag_search"]
+        expected_tools = ["tavily_search", "upload_search"]
         require_official = True
         require_local = True
         upload = "sample_pipeline.ipynb"
