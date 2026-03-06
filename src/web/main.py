@@ -14,12 +14,14 @@ from langchain_core.messages import SystemMessage
 from ..runtime_encoding import ensure_utf8_stdio
 from .schemas import (
     AgentDebugInfo,
+    PlannerDiagnostic,
     AgentRequest,
     AgentRetryContext,
     AgentResponse,
     AgentResponsePayload,
     AgentTokenUsage,
     EvidenceItem,
+    RetrievalDiagnostic,
 )
 from ..agent_manager import AgentFlowManager
 from ..settings import ConfigurationError, get_settings, validate_required_keys
@@ -447,6 +449,25 @@ def _normalize_debug_info(raw_debug: dict | None, latency_ms_server: int | None)
         except Exception:
             retry_context = None
 
+    retrieval_diagnostics: list[RetrievalDiagnostic] = []
+    raw_retrieval_diagnostics = debug.get("retrieval_diagnostics")
+    if isinstance(raw_retrieval_diagnostics, list):
+        for item in raw_retrieval_diagnostics:
+            if not isinstance(item, dict):
+                continue
+            try:
+                retrieval_diagnostics.append(RetrievalDiagnostic.model_validate(item))
+            except Exception:
+                continue
+
+    planner_diagnostics = None
+    raw_planner_diagnostics = debug.get("planner_diagnostics")
+    if isinstance(raw_planner_diagnostics, dict):
+        try:
+            planner_diagnostics = PlannerDiagnostic.model_validate(raw_planner_diagnostics)
+        except Exception:
+            planner_diagnostics = None
+
     return AgentDebugInfo(
         tool_calls=[str(name) for name in tool_calls if name],
         tool_call_count=int(debug.get("tool_call_count", len(tool_calls)) or len(tool_calls)),
@@ -456,6 +477,8 @@ def _normalize_debug_info(raw_debug: dict | None, latency_ms_server: int | None)
         errors=[str(error) for error in errors if error],
         observed_evidence=observed_evidence,
         retry_context=retry_context,
+        retrieval_diagnostics=retrieval_diagnostics,
+        planner_diagnostics=planner_diagnostics,
     )
 
 
