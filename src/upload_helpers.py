@@ -28,12 +28,12 @@ def extract_text(path: str) -> str:
     raise ValueError("Unsupported file type (only .py or .ipynb).")
 
 # Web > RAG로 사용할 문서 업로드 경로를 전달하면 retriever를 리턴
-def build_temp_retriever(path: str, k: int = 4):
+def build_temp_retriever(path: str, api_key: str | None = None, k: int = 4):
     """Build a temporary in-memory Chroma retriever from a single uploaded file."""
     text = extract_text(path)
     splitter = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=120)
     docs = splitter.create_documents([text], metadatas=[{"source": path}])
 
-    emb = OpenAIEmbeddings(model="text-embedding-3-small")
+    emb = OpenAIEmbeddings(model="text-embedding-3-small", api_key=api_key)
     db = Chroma.from_documents(docs, embedding=emb)  # in-memory (no persist_directory)
     return db.as_retriever(search_kwargs={"k": k})

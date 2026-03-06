@@ -20,9 +20,15 @@ from .prompts import SYS_POLICY, needs_rag, needs_save, needs_search, needs_slac
 
 RetryReason = Literal["no_evidence", "low_score", "tool_error", "blocked_missing_upload"]
 PlannerStatus = Literal["llm", "heuristic_fallback", "fallback_no_routes"]
+PlannerOverrideReason = Literal[
+    "missing_required_retrieval",
+    "missing_required_routes",
+    "upload_retriever_missing",
+]
 LOW_SCORE_THRESHOLD = 0.5
 DEFAULT_MAX_RETRIES = 1
 RETRYABLE_REASONS: set[RetryReason] = {"no_evidence", "low_score"}
+ROUTE_ORDER: tuple[str, ...] = ("docs", "upload", "local")
 
 class RetryContext(TypedDict, total=False):
     attempt: int
@@ -39,6 +45,10 @@ class PlannerDiagnostic(TypedDict, total=False):
     status: PlannerStatus
     reason: str | None
     fallback_routes: list[str]
+    intent_required: bool
+    required_routes: list[str]
+    override_applied: bool
+    override_reason: PlannerOverrideReason | None
 
 
 class RetrievalDiagnostic(TypedDict, total=False):
@@ -289,7 +299,7 @@ def _build_missing_upload_followup() -> str:
     return "업로드한 파일을 확인하려면 `.py` 또는 `.ipynb` 파일을 먼저 업로드한 뒤 다시 질문해 주세요."
 
 
-def _build_followup_from_routes(
+def _build_route_specific_followup(
     planner_output: PlannerOutput,
     reason: RetryReason,
 ) -> str:
@@ -317,6 +327,16 @@ def _build_followup_from_routes(
     return "찾고 싶은 대상과 범위를 조금 더 구체적으로 알려주세요."
 
 
+def _build_followup_from_routes(
+    planner_output: PlannerOutput,
+    reason: RetryReason,
+) -> str:
+    if reason == "blocked_missing_upload":
+        return _build_missing_upload_followup()
+    route_specific_followup = _build_route_specific_followup(planner_output, reason)
+    return f"현재 확인 가능한 근거를 찾지 못했습니다. {route_specific_followup}"
+
+
 def _route_for_tool(tool_name: str) -> str:
     return {
         "tavily_search": "docs",
@@ -330,11 +350,19 @@ def _normalize_planner_diagnostics(
     status: PlannerStatus,
     reason: str | None = None,
     fallback_routes: list[str] | None = None,
+    intent_required: bool = False,
+    required_routes: list[str] | None = None,
+    override_applied: bool = False,
+    override_reason: PlannerOverrideReason | None = None,
 ) -> PlannerDiagnostic:
     return {
         "status": status,
         "reason": reason,
         "fallback_routes": list(fallback_routes or []),
+        "intent_required": bool(intent_required),
+        "required_routes": [route for route in ROUTE_ORDER if route in set(required_routes or [])],
+        "override_applied": bool(override_applied),
+        "override_reason": override_reason,
     }
 
 
@@ -419,6 +447,98 @@ def _build_heuristic_planner_output(
         ),
         guided_followup,
     )
+
+
+def _detect_required_routes(user_input: str) -> list[str]:
+    trimmed = str(user_input or "").strip()
+    if not trimmed:
+        return []
+
+    lowered = trimmed.lower()
+    upload_route_intent = _has_upload_route_intent(trimmed)
+    docs_route_intent = needs_search(trimmed)
+    if upload_route_intent:
+        explicit_docs_keywords = (
+            "official",
+            "docs",
+            "documentation",
+            "reference",
+            "manual",
+            "api",
+            "공식",
+            "문서",
+            "레퍼런스",
+            "참고자료",
+            "최신",
+        )
+        docs_route_intent = any(keyword in lowered for keyword in explicit_docs_keywords)
+
+    routes: list[str] = []
+    if docs_route_intent:
+        routes.append("docs")
+    if upload_route_intent:
+        routes.append("upload")
+    elif needs_rag(trimmed):
+        routes.append("local")
+    return [route for route in ROUTE_ORDER if route in routes]
+
+
+def _apply_required_route_guardrail(
+    *,
+    planner_output: PlannerOutput,
+    planner_status: PlannerStatus,
+    planner_diagnostics: PlannerDiagnostic,
+    user_input: str,
+    has_retriever: bool,
+) -> tuple[PlannerOutput, PlannerDiagnostic, str | None]:
+    required_routes = _detect_required_routes(user_input)
+    diagnostics = _normalize_planner_diagnostics(
+        status=planner_status,
+        reason=planner_diagnostics.get("reason"),
+        fallback_routes=planner_diagnostics.get("fallback_routes", []),
+        intent_required=bool(required_routes),
+        required_routes=required_routes,
+        override_applied=False,
+        override_reason=None,
+    )
+
+    if not required_routes:
+        return planner_output, diagnostics, None
+
+    if "upload" in required_routes and not has_retriever:
+        diagnostics["reason"] = "upload_retriever_missing"
+        diagnostics["override_applied"] = True
+        diagnostics["override_reason"] = "upload_retriever_missing"
+        return PlannerOutput.fallback(), diagnostics, _build_missing_upload_followup()
+
+    existing_tasks = {task.route: task for task in planner_output.tasks}
+    existing_routes = {task.route for task in planner_output.tasks} if planner_output.use_retrieval else set()
+    missing_required_routes = [route for route in required_routes if route not in existing_routes]
+
+    override_reason: PlannerOverrideReason | None = None
+    if required_routes and not planner_output.use_retrieval:
+        override_reason = "missing_required_retrieval"
+    elif missing_required_routes:
+        override_reason = "missing_required_routes"
+
+    if override_reason is None:
+        return planner_output, diagnostics, None
+
+    diagnostics["override_applied"] = True
+    diagnostics["override_reason"] = override_reason
+    if diagnostics.get("reason") is None:
+        diagnostics["reason"] = override_reason
+
+    merged_tasks: list[RetrievalTask] = []
+    for route in ROUTE_ORDER:
+        existing_task = existing_tasks.get(route)
+        if existing_task is not None:
+            merged_tasks.append(existing_task)
+            continue
+        if route in required_routes:
+            merged_tasks.append(RetrievalTask(route=route, query=str(user_input).strip(), k=4))
+
+    return PlannerOutput(use_retrieval=True, tasks=merged_tasks), diagnostics, None
 
 
 class State(TypedDict, total=False):
@@ -660,18 +780,21 @@ def make_planner_node(llm_planner: Any, verbose: bool, max_turns: int = 6):
             has_retriever=has_retriever,
             errors=planner_errors,
         )
-        if not has_retriever and any(task.route == "upload" for task in planner_output.tasks):
-            guided_followup = _build_missing_upload_followup()
-            planner_output = PlannerOutput.fallback()
-            planner_diagnostics = _normalize_planner_diagnostics(
-                status=planner_status,
-                reason="upload_retriever_missing",
-                fallback_routes=planner_diagnostics.get("fallback_routes", []),
-            )
+        planner_output, planner_diagnostics, guardrail_followup = _apply_required_route_guardrail(
+            planner_output=planner_output,
+            planner_status=planner_status,
+            planner_diagnostics=planner_diagnostics,
+            user_input=user_input,
+            has_retriever=has_retriever,
+        )
+        if guardrail_followup:
+            guided_followup = guardrail_followup
         if verbose:
             print(
                 f"[planner] status={planner_status} "
-                f"use_retrieval={planner_output.use_retrieval} tasks={len(planner_output.tasks)}"
+                f"use_retrieval={planner_output.use_retrieval} tasks={len(planner_output.tasks)} "
+                f"required_routes={planner_diagnostics.get('required_routes', [])} "
+                f"override={planner_diagnostics.get('override_applied', False)}"
             )
 
         retry_context: RetryContext = dict(existing_retry_context)
