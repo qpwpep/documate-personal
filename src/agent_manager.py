@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 from typing import Any, Dict, List, Optional
 
@@ -7,7 +8,10 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from .evidence import dedupe_evidence, evidence_to_dicts, parse_evidence_payload
 from .graph_builder import build_agent_graph
 from .settings import AppSettings, get_settings
-from .upload_helpers import build_temp_retriever
+from .upload_helpers import UploadedRetrieverHandle, build_temp_retriever
+
+
+logger = logging.getLogger(__name__)
 
 
 class AgentFlowManager:
@@ -17,8 +21,29 @@ class AgentFlowManager:
         self.settings = settings or get_settings()
         self.graph = build_agent_graph(self.settings)
         self.messages: List[Any] = []
-        self.retriever = None
+        self.upload_retriever_handle: UploadedRetrieverHandle | None = None
         self.upload_file_path: Optional[str] = None
+
+    def _cleanup_upload_retriever(self) -> None:
+        handle = getattr(self, "upload_retriever_handle", None)
+        if handle is None:
+            return
+
+        try:
+            handle.cleanup()
+        except Exception as exc:
+            logger.warning(
+                "upload_retriever_cleanup_failed collection=%s error=%s",
+                handle.collection_name,
+                exc,
+            )
+        finally:
+            self.upload_retriever_handle = None
+
+    def close(self) -> None:
+        self._cleanup_upload_retriever()
+        self.upload_file_path = None
+        self.messages = []
 
     @staticmethod
     def _extract_token_usage_from_ai_message(message: AIMessage) -> Dict[str, int]:
@@ -243,9 +268,7 @@ class AgentFlowManager:
         current_messages = self.messages
 
         if user_input.lower() in {"exit", "종료", "quit", "q"}:
-            self.messages = []
-            self.retriever = None
-            self.upload_file_path = None
+            self.close()
             reset_message = "Chat session has been reset. Start again."
             return {
                 "message": reset_message,
@@ -276,17 +299,23 @@ class AgentFlowManager:
             }
 
             if upload_file_path is not None:
-                if self.upload_file_path != upload_file_path:
-                    self.upload_file_path = upload_file_path
-                    self.retriever = build_temp_retriever(
+                if (
+                    self.upload_file_path != upload_file_path
+                    or getattr(self, "upload_retriever_handle", None) is None
+                ):
+                    self._cleanup_upload_retriever()
+                    new_handle = build_temp_retriever(
                         upload_file_path,
                         api_key=self.settings.openai_api_key,
                     )
+                    self.upload_retriever_handle = new_handle
+                    self.upload_file_path = upload_file_path
 
-                if self.retriever is not None:
-                    state["retriever"] = self.retriever
+                handle = getattr(self, "upload_retriever_handle", None)
+                if handle is not None:
+                    state["retriever"] = handle.retriever
             else:
-                self.retriever = None
+                self._cleanup_upload_retriever()
                 self.upload_file_path = None
 
             response = self.graph.invoke(state)
@@ -403,6 +432,8 @@ class AgentFlowManager:
             }
 
         except Exception as exc:
+            self._cleanup_upload_retriever()
+            self.upload_file_path = None
             print(f"Agent execution error: {exc}")
             message = str(exc)
             return {

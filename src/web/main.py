@@ -157,6 +157,18 @@ def _log_session_cache_event(
     )
 
 
+def _pop_session_entry(session_id: str) -> SessionEntry | None:
+    entry = active_agents.pop(session_id, None)
+    if entry is None:
+        return None
+
+    try:
+        entry.agent.close()
+    except Exception as exc:
+        logger.warning("session_close_error session_id=%s error=%s", session_id[:8], exc)
+    return entry
+
+
 def _cleanup_expired_sessions(now: float, ttl_seconds: int) -> int:
     expired_session_ids = [
         sid
@@ -164,7 +176,7 @@ def _cleanup_expired_sessions(now: float, ttl_seconds: int) -> int:
         if now - entry.last_accessed_monotonic > ttl_seconds
     ]
     for sid in expired_session_ids:
-        active_agents.pop(sid, None)
+        _pop_session_entry(sid)
     return len(expired_session_ids)
 
 
@@ -175,7 +187,7 @@ def _evict_lru_if_needed(max_active_sessions: int) -> int:
             active_agents.items(),
             key=lambda item: item[1].last_accessed_monotonic,
         )[0]
-        active_agents.pop(lru_session_id, None)
+        _pop_session_entry(lru_session_id)
         evicted_count += 1
     return evicted_count
 
