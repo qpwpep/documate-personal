@@ -289,3 +289,4 @@ uploads*
 script/web_services_state.json
 output/save_text/
 output/benchmarks/
+!output/benchmarks/*/report.md
