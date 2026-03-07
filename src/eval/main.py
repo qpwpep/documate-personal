@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 
 from .generate_cases import generate_cases_file
+from .history import refresh_history_report
 from .reporting import build_markdown_report
 from .runner_online import run_online_benchmark
 from .schemas import BenchmarkConfig, CaseResult, RunSummary, load_config
@@ -97,6 +98,19 @@ def command_report(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_history(args: argparse.Namespace) -> int:
+    latest, comparable_runs = refresh_history_report(
+        output_root=args.output_root,
+        readme_path=args.readme,
+        svg_path=args.svg,
+    )
+    print(f"Updated benchmark history for {len(comparable_runs)} comparable runs.")
+    print(f"Latest run: {latest.run_id}")
+    print(f"README: {args.readme}")
+    print(f"SVG: {args.svg}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="DocuMate benchmark CLI (online only)")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -146,6 +160,30 @@ def build_parser() -> argparse.ArgumentParser:
     parser_report = subparsers.add_parser("report", help="Regenerate markdown report from an existing run")
     parser_report.add_argument("--run", type=Path, required=True, help="Run directory path")
     parser_report.set_defaults(func=command_report)
+
+    parser_history = subparsers.add_parser(
+        "history",
+        help="Refresh benchmark history sections in README and regenerate the trend SVG",
+    )
+    parser_history.add_argument(
+        "--output-root",
+        type=Path,
+        default=DEFAULT_OUTPUT_ROOT,
+        help=f"Benchmark output root directory (default: {DEFAULT_OUTPUT_ROOT})",
+    )
+    parser_history.add_argument(
+        "--readme",
+        type=Path,
+        default=Path("README.md"),
+        help="README file to refresh",
+    )
+    parser_history.add_argument(
+        "--svg",
+        type=Path,
+        default=Path("docs/assets/benchmark_history.svg"),
+        help="SVG output path for the benchmark trend chart",
+    )
+    parser_history.set_defaults(func=command_history)
     return parser
 
 
