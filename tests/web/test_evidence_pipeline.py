@@ -101,6 +101,16 @@ class _FakeRetriever:
         self.vectorstore = _FakeVectorStore()
 
 
+class _FakeRetrieverHandle:
+    def __init__(self, retriever=None, collection_name: str = "upload-session-session"):
+        self.retriever = retriever or _FakeRetriever()
+        self.collection_name = collection_name
+        self.cleanup_calls = 0
+
+    def cleanup(self) -> None:
+        self.cleanup_calls += 1
+
+
 class EvidencePipelineTest(unittest.TestCase):
     def test_extract_observed_evidence_uses_tool_native_payloads(self) -> None:
         tavily_item = {
@@ -186,7 +196,7 @@ class EvidencePipelineTest(unittest.TestCase):
         manager.settings = None
         manager.graph = _FakeGraph(evidence_payload)
         manager.messages = []
-        manager.retriever = None
+        manager.upload_retriever_handle = None
         manager.upload_file_path = None
 
         result = manager.run_agent_flow("question")
@@ -232,7 +242,7 @@ class EvidencePipelineTest(unittest.TestCase):
         manager.settings = None
         manager.graph = _FakeGraph(evidence_payload)
         manager.messages = []
-        manager.retriever = None
+        manager.upload_retriever_handle = None
         manager.upload_file_path = None
 
         result = manager.run_agent_flow("question")
@@ -244,13 +254,13 @@ class EvidencePipelineTest(unittest.TestCase):
 
     @patch("src.agent_manager.build_temp_retriever")
     def test_agent_manager_passes_api_key_to_temp_retriever(self, mock_build_temp_retriever) -> None:
-        mock_build_temp_retriever.return_value = _FakeRetriever()
+        mock_build_temp_retriever.return_value = _FakeRetrieverHandle()
 
         manager = AgentFlowManager.__new__(AgentFlowManager)
         manager.settings = AppSettings(openai_api_key="test-key", tavily_api_key="test")
         manager.graph = _FakeGraph([])
         manager.messages = []
-        manager.retriever = None
+        manager.upload_retriever_handle = None
         manager.upload_file_path = None
 
         _ = manager.run_agent_flow("question", upload_file_path="uploads/session/sample_pipeline.ipynb")
@@ -263,7 +273,7 @@ class EvidencePipelineTest(unittest.TestCase):
         manager.settings = None
         manager.graph = _FakeGraphWithSave()
         manager.messages = []
-        manager.retriever = None
+        manager.upload_retriever_handle = None
         manager.upload_file_path = None
 
         result = manager.run_agent_flow("save this")
