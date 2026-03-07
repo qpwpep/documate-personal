@@ -288,5 +288,6 @@ uploads*
 # runtime service state and generated outputs
 script/web_services_state.json
 output/save_text/
-output/benchmarks/
-!output/benchmarks/*/report.md
+output/benchmarks/**
+!output/benchmarks/**/
+!output/benchmarks/**/report.md
