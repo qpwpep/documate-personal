@@ -7,7 +7,11 @@ from src.nodes.validation import make_validate_evidence_node
 from src.planner_schema import PlannerOutput, RetrievalTask
 from src.prompts import SYS_POLICY
 
-from .helpers import _CaptureStructuredSynthesizeLLM, _CaptureSynthesizeLLM
+from .helpers import (
+    _CaptureStructuredSynthesizeLLM,
+    _CaptureSynthesizeLLM,
+    _TimeoutStructuredSynthesizeLLM,
+)
 
 
 class SynthesisValidationTest(unittest.TestCase):
@@ -386,6 +390,43 @@ class SynthesisValidationTest(unittest.TestCase):
         self.assertEqual(len(retrieved_evidence_messages), 1)
         self.assertIn("https://new.example.com/", retrieved_evidence_messages[0])
         self.assertNotIn("https://old.example.com/", retrieved_evidence_messages[0])
+
+    def test_synthesize_timeout_uses_grounded_fallback_without_plain_llm_retry(self) -> None:
+        timeout_llm = _TimeoutStructuredSynthesizeLLM()
+        synthesize_node = make_synthesize_node(timeout_llm, verbose=False, max_turns=8)
+
+        updates = synthesize_node(
+            {
+                "messages": [HumanMessage(content="Explain numpy broadcasting.")],
+                "planner_output": PlannerOutput(
+                    use_retrieval=True,
+                    tasks=[RetrievalTask(route="docs", query="numpy docs", k=3)],
+                ),
+                "retrieved_evidence": [
+                    {
+                        "kind": "official",
+                        "tool": "tavily_search",
+                        "source_id": "url:https://numpy.org/doc/stable/",
+                        "document_id": "url:https://numpy.org/doc/stable/",
+                        "url_or_path": "https://numpy.org/doc/stable/",
+                        "title": "NumPy Docs",
+                        "snippet": "Broadcasting expands compatible array shapes.",
+                        "score": 0.9,
+                    }
+                ],
+                "synthesis_attempt": 0,
+            }
+        )
+
+        self.assertEqual(timeout_llm.call_count, 1)
+        self.assertIn("Broadcasting expands compatible array shapes.", updates["final_answer"])
+        self.assertIn("[1]", updates["final_answer"])
+        self.assertEqual(updates["response_payload"]["claims"][0]["evidence_ids"], ["url:https://numpy.org/doc/stable/"])
+        self.assertEqual(updates["synthesis_errors"][0].startswith("synthesize: structured output timed out"), True)
+        synthesis_attempts = [
+            item for item in updates["latency_trace"] if item.get("kind") == "synthesis_attempt"
+        ]
+        self.assertEqual(synthesis_attempts[0]["mode"], "timeout_grounded_fallback")
 
 
 if __name__ == "__main__":
