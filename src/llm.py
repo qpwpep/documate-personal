@@ -19,6 +19,11 @@ def build_llm_registry(settings: AppSettings) -> LLMRegistry:
     llm_synthesizer = ChatOpenAI(
         model=settings.chat_model,
         api_key=settings.openai_api_key,
+        temperature=0,
+        max_tokens=settings.synthesis_max_tokens,
+        timeout=settings.synthesis_timeout_seconds,
+        max_retries=settings.synthesis_max_retries,
+        verbose=settings.verbose,
     )
 
     llm_planner_base = ChatOpenAI(
