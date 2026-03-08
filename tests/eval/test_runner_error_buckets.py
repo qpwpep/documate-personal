@@ -170,6 +170,44 @@ class RunnerErrorBucketsTest(unittest.TestCase):
         self.assertIsNotNone(result.planner_diagnostics)
         self.assertEqual(result.planner_diagnostics.status, "heuristic_fallback")
 
+    @patch("src.eval.runner_online.requests.post")
+    def test_runner_parses_validator_reason_from_retry_context(self, mock_post) -> None:
+        mock_post.return_value = _FakeResponse(
+            200,
+            {
+                "response": {"answer": "need more evidence", "evidence": []},
+                "trace": "x",
+                "file_path": "",
+                "debug": {
+                    "tool_calls": ["tavily_search"],
+                    "token_usage": {},
+                    "observed_evidence": [],
+                    "retry_context": {
+                        "attempt": 1,
+                        "max_retries": 1,
+                        "retry_reason": "no_evidence",
+                        "retrieval_feedback": "low evidence confidence; broaden query or switch route.",
+                    },
+                },
+            },
+        )
+
+        result = _run_single_case(
+            run_id="run-validator",
+            endpoint="http://localhost:8000",
+            fixtures_path=self.fixtures_path,
+            case=self.case,
+            timeout_seconds=5,
+            judge=_DummyJudge((None, None, None)),
+            config=self.config,
+        )
+
+        self.assertEqual(result.validator_reason, "no_evidence")
+        self.assertEqual(
+            result.validator_feedback,
+            "low evidence confidence; broaden query or switch route.",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
