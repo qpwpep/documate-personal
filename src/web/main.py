@@ -9,9 +9,9 @@ from threading import Lock
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse
-from langchain_core.messages import SystemMessage
 
 from ..latency import LatencyBreakdownModel
+from ..nodes.state import SessionMetadata, coerce_slack_destination
 from ..runtime_encoding import ensure_utf8_stdio
 from .schemas import (
     AgentDebugInfo,
@@ -506,6 +506,19 @@ def _normalize_debug_info(raw_debug: dict | None, latency_ms_server: int | None)
     )
 
 
+def _build_session_metadata_snapshot(request_data: AgentRequest) -> SessionMetadata:
+    slack_destination = coerce_slack_destination(
+        {
+            "channel_id": request_data.slack_channel_id,
+            "user_id": request_data.slack_user_id,
+            "email": request_data.slack_email,
+        }
+    )
+    return {
+        "slack_destination": slack_destination if any(slack_destination.values()) else None,
+    }
+
+
 @app.post("/agent", response_model=AgentResponse)
 async def run_agent_api(
     request: Request,
@@ -520,23 +533,7 @@ async def run_agent_api(
     logger.info(f"[upload_file_path]: {upload_file_path}")
 
     agent_manager = _get_or_create_agent(session_id)
-
-    # Inject Slack destination hints into the message stream (no auto-send here).
-    slack_hints = []
-    if request_data.slack_channel_id:
-        slack_hints.append(f"channel_id={request_data.slack_channel_id}")
-    if request_data.slack_user_id:
-        slack_hints.append(f"user_id={request_data.slack_user_id}")
-    if request_data.slack_email:
-        slack_hints.append(f"email={request_data.slack_email}")
-
-    if slack_hints:
-        hint_text = (
-            "[Slack Destinations]\n"
-            + "\n".join(slack_hints)
-            + "\n(When the user asks to send to Slack, call slack_notify with these values.)"
-        )
-        agent_manager.messages.append(SystemMessage(content=hint_text))
+    agent_manager.set_session_metadata(_build_session_metadata_snapshot(request_data))
 
     logger.info(
         f"Session ID: {session_id[:8]} | [REQ ID: {request_id}] | "
