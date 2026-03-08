@@ -1,8 +1,6 @@
 import json
 import unittest
 
-from langchain_core.messages import SystemMessage
-
 from src.nodes.actions import make_action_postprocess_node
 
 from .helpers import _ToolWrapper
@@ -53,6 +51,7 @@ class ActionsNodeTest(unittest.TestCase):
                 "user_input": "send this to slack",
                 "final_answer": "final answer text",
                 "messages": [],
+                "session_metadata": {"slack_destination": None},
             }
         )
 
@@ -76,11 +75,14 @@ class ActionsNodeTest(unittest.TestCase):
             {
                 "user_input": "send this to slack",
                 "final_answer": "final answer text",
-                "messages": [
-                    SystemMessage(
-                        content="[Slack Destinations]\nchannel_id=C123BENCH\n(When the user asks to send to Slack, call slack_notify with these values.)"
-                    )
-                ],
+                "messages": [],
+                "session_metadata": {
+                    "slack_destination": {
+                        "channel_id": "C123BENCH",
+                        "user_id": None,
+                        "email": None,
+                    }
+                },
             }
         )
 

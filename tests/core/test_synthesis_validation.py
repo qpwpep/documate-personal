@@ -1,6 +1,6 @@
 import unittest
 
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from src.nodes.synthesis import make_synthesize_node
 from src.nodes.validation import make_validate_evidence_node
@@ -286,6 +286,52 @@ class SynthesisValidationTest(unittest.TestCase):
         self.assertIsNone(capture_llm.last_messages)
         self.assertEqual(updates["final_answer"], "요청하신 최종 답변을 저장합니다.")
         self.assertEqual(updates["response_payload"]["claims"], [])
+
+    def test_synthesize_action_only_slack_requests_destination_without_metadata(self) -> None:
+        capture_llm = _CaptureSynthesizeLLM()
+        synthesize_node = make_synthesize_node(capture_llm, verbose=False, max_turns=6)
+
+        updates = synthesize_node(
+            {
+                "messages": [HumanMessage(content="send this to slack")],
+                "user_input": "send this to slack",
+                "retrieved_evidence": [],
+                "synthesis_attempt": 0,
+                "session_metadata": {"slack_destination": None},
+            }
+        )
+
+        self.assertIsNone(capture_llm.last_messages)
+        self.assertIn("channel_id", updates["final_answer"])
+        self.assertEqual(updates["response_payload"]["claims"], [])
+
+    def test_synthesize_action_only_slack_uses_session_metadata_without_followup(self) -> None:
+        capture_llm = _CaptureSynthesizeLLM()
+        synthesize_node = make_synthesize_node(capture_llm, verbose=False, max_turns=6)
+
+        updates = synthesize_node(
+            {
+                "messages": [
+                    HumanMessage(content="Explain numpy broadcasting."),
+                    AIMessage(content="previous answer"),
+                    HumanMessage(content="send this to slack"),
+                ],
+                "user_input": "send this to slack",
+                "retrieved_evidence": [],
+                "synthesis_attempt": 0,
+                "session_metadata": {
+                    "slack_destination": {
+                        "channel_id": "C123BENCH",
+                        "user_id": None,
+                        "email": None,
+                    }
+                },
+            }
+        )
+
+        self.assertIsNone(capture_llm.last_messages)
+        self.assertEqual(updates["final_answer"], "previous answer")
+        self.assertEqual(updates["response_payload"]["answer"], "previous answer")
 
     def test_synthesize_short_circuits_guided_followup(self) -> None:
         capture_llm = _CaptureSynthesizeLLM()
