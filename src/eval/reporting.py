@@ -4,6 +4,7 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
+from ..latency import largest_latency_stage
 from .scoring_rules import tool_confusion_counts
 from .schemas import (
     BenchmarkCase,
@@ -191,7 +192,83 @@ def build_summary(
     )
 
 
-def build_markdown_report(summary: RunSummary) -> str:
+_LATENCY_STAGE_FIELDS: tuple[str, ...] = (
+    "upload_retriever_build_ms",
+    "summarize_ms",
+    "planner_ms",
+    "retrieval_total_ms",
+    "synthesis_total_ms",
+    "validation_ms",
+    "action_postprocess_ms",
+)
+
+
+def _extract_latency_stage_value(result: CaseResult, stage_name: str) -> int | None:
+    breakdown = result.latency_breakdown
+    if breakdown is None:
+        return None
+    if stage_name == "upload_retriever_build_ms":
+        return breakdown.upload_retriever_build_ms
+    return int(getattr(breakdown.stage_totals_ms, stage_name, 0) or 0)
+
+
+def _build_latency_breakdown_lines(results: list[CaseResult]) -> list[str]:
+    if not results:
+        return []
+
+    lines: list[str] = []
+    stage_rows: list[tuple[str, float, float, float]] = []
+    for stage_name in _LATENCY_STAGE_FIELDS:
+        values = [
+            value
+            for result in results
+            for value in [_extract_latency_stage_value(result, stage_name)]
+            if value is not None
+        ]
+        if not values:
+            continue
+        avg_value = sum(values) / len(values)
+        p50_value = _percentile(values, 0.50)
+        p95_value = _percentile(values, 0.95)
+        stage_rows.append(
+            (
+                stage_name,
+                round(avg_value, 2),
+                round(p50_value, 2) if p50_value is not None else 0.0,
+                round(p95_value, 2) if p95_value is not None else 0.0,
+            )
+        )
+
+    if stage_rows:
+        lines.append("")
+        lines.append("## Latency Breakdown")
+        lines.append("")
+        lines.append("| Stage | avg_ms | p50_ms | p95_ms |")
+        lines.append("|---|---:|---:|---:|")
+        for stage_name, avg_value, p50_value, p95_value in stage_rows:
+            lines.append(f"| {stage_name} | {avg_value} | {p50_value} | {p95_value} |")
+
+    slow_results = [
+        result for result in results if result.latency_ms_e2e is not None and result.latency_breakdown is not None
+    ]
+    slow_results.sort(key=lambda item: int(item.latency_ms_e2e or 0), reverse=True)
+    if slow_results:
+        lines.append("")
+        lines.append("### Slow Cases (Top 10)")
+        lines.append("")
+        lines.append("| case_id | latency_ms_e2e | largest_stage | largest_stage_ms |")
+        lines.append("|---|---:|---|---:|")
+        for result in slow_results[:10]:
+            largest_stage, largest_stage_ms = largest_latency_stage(result.latency_breakdown)
+            lines.append(
+                f"| {result.case_id} | {result.latency_ms_e2e} | "
+                f"{largest_stage or '-'} | {largest_stage_ms if largest_stage_ms is not None else '-'} |"
+            )
+
+    return lines
+
+
+def build_markdown_report(summary: RunSummary, results: list[CaseResult] | None = None) -> str:
     lines: list[str] = []
     lines.append(f"# Benchmark Report ({summary.run_id})")
     lines.append("")
@@ -224,6 +301,9 @@ def build_markdown_report(summary: RunSummary) -> str:
             f"| {gate.name} | {gate.threshold} | {gate.actual} | {'Y' if gate.passed else 'N'} |"
         )
 
+    if results:
+        lines.extend(_build_latency_breakdown_lines(results))
+
     if summary.metrics.failures:
         lines.append("")
         lines.append("## Failures (Top 20)")
@@ -254,4 +334,4 @@ def write_run_outputs(
         json.dumps(summary.model_dump(), ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
-    report_path.write_text(build_markdown_report(summary), encoding="utf-8")
+    report_path.write_text(build_markdown_report(summary, results), encoding="utf-8")

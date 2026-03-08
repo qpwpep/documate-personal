@@ -11,6 +11,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse
 from langchain_core.messages import SystemMessage
 
+from ..latency import LatencyBreakdownModel
 from ..runtime_encoding import ensure_utf8_stdio
 from .schemas import (
     AgentDebugInfo,
@@ -480,10 +481,21 @@ def _normalize_debug_info(raw_debug: dict | None, latency_ms_server: int | None)
         except Exception:
             planner_diagnostics = None
 
+    latency_breakdown = None
+    raw_latency_breakdown = debug.get("latency_breakdown")
+    if isinstance(raw_latency_breakdown, dict):
+        latency_payload = dict(raw_latency_breakdown)
+        latency_payload["server_total_ms"] = latency_ms_server
+        try:
+            latency_breakdown = LatencyBreakdownModel.model_validate(latency_payload)
+        except Exception:
+            latency_breakdown = None
+
     return AgentDebugInfo(
         tool_calls=[str(name) for name in tool_calls if name],
         tool_call_count=int(debug.get("tool_call_count", len(tool_calls)) or len(tool_calls)),
         latency_ms_server=latency_ms_server,
+        latency_breakdown=latency_breakdown,
         token_usage=token_usage,
         model_name=(str(debug.get("model_name")) if debug.get("model_name") else None),
         errors=[str(error) for error in errors if error],

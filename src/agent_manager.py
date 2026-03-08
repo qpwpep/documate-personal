@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import time
 from typing import Any, Dict, List, Optional
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
@@ -8,6 +9,7 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from .answer_schema import build_empty_response_payload
 from .evidence import dedupe_evidence, evidence_to_dicts, parse_evidence_payload
 from .graph_builder import build_agent_graph
+from .latency import build_latency_breakdown, elapsed_ms
 from .settings import AppSettings, get_settings
 from .upload_helpers import UploadedRetrieverHandle, build_temp_retriever
 
@@ -280,6 +282,7 @@ class AgentFlowManager:
 
     def run_agent_flow(self, user_input: str, upload_file_path: Optional[str] = None) -> dict:
         current_messages = self.messages
+        upload_retriever_build_ms: int | None = None
 
         if user_input.lower() in {"exit", "종료", "quit", "q"}:
             self.close()
@@ -320,10 +323,12 @@ class AgentFlowManager:
                     or getattr(self, "upload_retriever_handle", None) is None
                 ):
                     self._cleanup_upload_retriever()
+                    build_started = time.perf_counter()
                     new_handle = build_temp_retriever(
                         upload_file_path,
                         api_key=self.settings.openai_api_key,
                     )
+                    upload_retriever_build_ms = elapsed_ms(build_started, time.perf_counter())
                     self.upload_retriever_handle = new_handle
                     self.upload_file_path = upload_file_path
 
@@ -334,7 +339,9 @@ class AgentFlowManager:
                 self._cleanup_upload_retriever()
                 self.upload_file_path = None
 
+            graph_started = time.perf_counter()
             response = self.graph.invoke(state)
+            graph_total_ms = elapsed_ms(graph_started, time.perf_counter())
 
             updated_messages = response["messages"]
             self.messages = updated_messages
@@ -348,7 +355,12 @@ class AgentFlowManager:
             model_name: str | None = None
             debug_errors: list[str] = []
 
-            for state_error_key in ("retrieval_errors", "validation_errors", "action_errors"):
+            for state_error_key in (
+                "retrieval_errors",
+                "synthesis_errors",
+                "validation_errors",
+                "action_errors",
+            ):
                 raw_errors = response.get(state_error_key)
                 if not isinstance(raw_errors, list):
                     continue
@@ -391,6 +403,11 @@ class AgentFlowManager:
             )
             planner_diagnostics = self._normalize_planner_diagnostics(
                 response.get("planner_diagnostics")
+            )
+            latency_breakdown = build_latency_breakdown(
+                raw_trace=response.get("latency_trace"),
+                graph_total_ms=graph_total_ms,
+                upload_retriever_build_ms=upload_retriever_build_ms,
             )
 
             for message in reversed(updated_messages):
@@ -445,6 +462,7 @@ class AgentFlowManager:
                     "retry_context": retry_context,
                     "retrieval_diagnostics": retrieval_diagnostics,
                     "planner_diagnostics": planner_diagnostics,
+                    "latency_breakdown": latency_breakdown.model_dump(mode="json"),
                 },
             }
 

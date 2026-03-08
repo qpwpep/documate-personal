@@ -69,6 +69,14 @@ class _FakeGraph:
                 "override_applied": False,
                 "override_reason": None,
             },
+            "latency_trace": [
+                {"kind": "stage", "stage": "planner", "attempt": 1, "latency_ms": 12, "status": "heuristic_fallback"},
+                {"kind": "retrieval_route", "route": "docs", "tool": "tavily_search", "attempt": 1, "latency_ms": 48, "status": "success"},
+                {"kind": "stage", "stage": "retrieval", "attempt": 1, "latency_ms": 50, "status": "success"},
+                {"kind": "synthesis_attempt", "attempt": 1, "mode": "structured_only", "structured_ms": 22, "fallback_ms": None, "total_ms": 22},
+                {"kind": "stage", "stage": "synthesis", "attempt": 1, "latency_ms": 22, "status": "structured_only"},
+                {"kind": "stage", "stage": "validation", "attempt": 1, "latency_ms": 3, "status": "pass"},
+            ],
         }
 
 
@@ -344,6 +352,23 @@ class EvidencePipelineTest(unittest.TestCase):
         self.assertTrue(result["debug"]["planner_diagnostics"]["intent_required"])
         self.assertEqual(result["debug"]["planner_diagnostics"]["required_routes"], ["docs"])
 
+    def test_agent_manager_exposes_latency_breakdown(self) -> None:
+        manager = AgentFlowManager.__new__(AgentFlowManager)
+        manager.settings = AppSettings(openai_api_key="test", tavily_api_key="test")
+        manager.graph = _FakeGraph([])
+        manager.messages = []
+        manager.upload_retriever_handle = None
+        manager.upload_file_path = None
+
+        result = manager.run_agent_flow("question")
+
+        latency_breakdown = result["debug"]["latency_breakdown"]
+        self.assertIsNotNone(latency_breakdown)
+        self.assertGreaterEqual(latency_breakdown["graph_total_ms"], 0)
+        self.assertEqual(latency_breakdown["stage_totals_ms"]["planner_ms"], 12)
+        self.assertEqual(latency_breakdown["retrieval_routes"][0]["route"], "docs")
+        self.assertEqual(latency_breakdown["synthesis_attempts"][0]["mode"], "structured_only")
+
     @patch("src.agent_manager.build_temp_retriever")
     def test_agent_manager_passes_api_key_to_temp_retriever(self, mock_build_temp_retriever) -> None:
         mock_build_temp_retriever.return_value = _FakeRetrieverHandle()
@@ -355,10 +380,11 @@ class EvidencePipelineTest(unittest.TestCase):
         manager.upload_retriever_handle = None
         manager.upload_file_path = None
 
-        _ = manager.run_agent_flow("question", upload_file_path="uploads/session/sample_pipeline.ipynb")
+        result = manager.run_agent_flow("question", upload_file_path="uploads/session/sample_pipeline.ipynb")
 
         _, kwargs = mock_build_temp_retriever.call_args
         self.assertEqual(kwargs["api_key"], "test-key")
+        self.assertIsNotNone(result["debug"]["latency_breakdown"]["upload_retriever_build_ms"])
 
     def test_save_tool_message_does_not_override_final_answer(self) -> None:
         manager = AgentFlowManager.__new__(AgentFlowManager)
