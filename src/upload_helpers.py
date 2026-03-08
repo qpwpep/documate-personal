@@ -8,7 +8,8 @@ from typing import Any
 import nbformat
 from langchain_chroma import Chroma
 from langchain_openai import OpenAIEmbeddings
-from langchain_text_splitters import RecursiveCharacterTextSplitter
+
+from .chunking import chunk_notebook, chunk_python_text
 
 
 def extract_text_from_py(path: str) -> str:
@@ -77,9 +78,24 @@ def build_temp_retriever(path: str, api_key: str | None = None, k: int = 4) -> U
     session_id = _extract_upload_session_id(path)
     collection_name = _build_upload_collection_name(session_id)
 
-    text = extract_text(path)
-    splitter = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=120)
-    docs = splitter.create_documents([text], metadatas=[{"source": path}])
+    path_lower = str(path).lower()
+    if path_lower.endswith(".py"):
+        docs = chunk_python_text(
+            path=path,
+            text=extract_text_from_py(path),
+            chunk_size=800,
+            chunk_overlap=120,
+        )
+    elif path_lower.endswith(".ipynb"):
+        notebook = nbformat.read(path, as_version=4)
+        docs = chunk_notebook(
+            path=path,
+            notebook=notebook,
+            chunk_size=800,
+            chunk_overlap=120,
+        )
+    else:
+        raise ValueError("Unsupported file type (only .py or .ipynb).")
 
     embeddings = OpenAIEmbeddings(model="text-embedding-3-small", api_key=api_key)
     vectorstore = Chroma.from_documents(

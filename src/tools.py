@@ -15,7 +15,14 @@ from slack_sdk.errors import SlackApiError
 from src.util.util import get_save_text_output_dir
 
 from .domain_docs import DEFAULT_DOCS
-from .evidence import EvidenceItem, dedupe_evidence, evidence_to_dicts, normalize_source_id, truncate_snippet
+from .evidence import (
+    EvidenceItem,
+    build_local_source_id,
+    dedupe_evidence,
+    evidence_to_dicts,
+    normalize_source_id,
+    truncate_snippet,
+)
 from .settings import AppSettings
 from .slack_utils import create_slack_client, resolve_destination
 
@@ -136,24 +143,50 @@ def _build_evidence_item(
     title: Any = None,
     snippet: Any = None,
     score: Any = None,
+    metadata: dict[str, Any] | None = None,
 ) -> EvidenceItem | None:
     source = str(url_or_path or "").strip()
     if not source:
         return None
 
-    source_id = normalize_source_id(source)
-    if not source_id:
+    metadata = dict(metadata or {})
+    document_id = normalize_source_id(source)
+    if not document_id:
         return None
+
+    chunk_id = metadata.get("chunk_id")
+    cell_id = metadata.get("cell_id")
+    start_offset = metadata.get("start_offset", metadata.get("start_index"))
+    end_offset = metadata.get("end_offset")
+    if end_offset is None and start_offset is not None:
+        end_offset = int(start_offset or 0) + len(str(snippet or ""))
+
+    source_id = document_id
+    if kind == "local":
+        source_id = build_local_source_id(
+            url_or_path=source,
+            chunk_id=chunk_id,
+            start_offset=start_offset,
+            end_offset=end_offset,
+            cell_id=cell_id if str(source).lower().endswith(".ipynb") else None,
+        )
+        if not source_id:
+            return None
 
     title_text = str(title).strip() if title else None
     return EvidenceItem(
         kind=kind,
         tool=tool,
         source_id=source_id,
+        document_id=document_id,
         url_or_path=source,
         title=title_text or None,
         snippet=truncate_snippet(str(snippet) if snippet else None),
         score=_to_float_or_none(score),
+        chunk_id=int(chunk_id) if chunk_id is not None else None,
+        cell_id=int(cell_id) if cell_id is not None else None,
+        start_offset=int(start_offset) if start_offset is not None else None,
+        end_offset=int(end_offset) if end_offset is not None else None,
     )
 
 
@@ -217,6 +250,7 @@ def build_tool_registry(settings: AppSettings) -> ToolRegistry:
                 title=result.get("title"),
                 snippet=result.get("content"),
                 score=result.get("score"),
+                metadata={},
             )
             if evidence_item is not None:
                 evidence_items.append(evidence_item)
@@ -319,6 +353,7 @@ def build_tool_registry(settings: AppSettings) -> ToolRegistry:
                 url_or_path=str(source),
                 snippet=(doc.page_content or "").replace("\n", " "),
                 score=score,
+                metadata=getattr(doc, "metadata", None),
             )
             if evidence_item is not None:
                 evidence_items.append(evidence_item)
@@ -388,6 +423,7 @@ def build_tool_registry(settings: AppSettings) -> ToolRegistry:
                 url_or_path=str(source),
                 snippet=(doc.page_content or "").replace("\n", " "),
                 score=score,
+                metadata=getattr(doc, "metadata", None),
             )
             if evidence_item is not None:
                 evidence_items.append(evidence_item)
