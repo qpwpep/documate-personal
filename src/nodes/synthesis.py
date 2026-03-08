@@ -20,7 +20,7 @@ from ..latency import (
     make_synthesis_attempt_latency_event,
 )
 from ..prompts import SYS_POLICY, needs_save, needs_slack
-from .actions import build_action_only_answer, extract_slack_destinations, is_action_only_request
+from .actions import build_action_only_answer, get_slack_destinations, is_action_only_request
 from .retrieval import format_evidence_for_prompt
 from .session import extract_text_content, keep_recent_messages
 from .state import State, coerce_planner_output, coerce_retry_context, safe_list, slice_from_index
@@ -180,7 +180,7 @@ def make_synthesize_node(
 
         user_input = str(state.get("user_input", "") or "")
         guided_followup = str(state.get("guided_followup") or "").strip()
-        explicit_slack_destinations = extract_slack_destinations(state.get("messages", []))
+        explicit_slack_destinations = get_slack_destinations(state.get("session_metadata"))
         slack_target_available = any(explicit_slack_destinations.values()) or has_default_slack_destination
 
         if guided_followup:
