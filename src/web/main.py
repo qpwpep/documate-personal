@@ -541,7 +541,9 @@ async def run_agent_api(
 
     fallback_payload = {
         "answer": answer,
+        "claims": [],
         "evidence": [],
+        "confidence": None,
     }
     payload_candidate = response_payload_raw if isinstance(response_payload_raw, dict) else fallback_payload
     try:
