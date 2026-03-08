@@ -144,6 +144,8 @@ class CaseResult(BaseModel):
     runtime_errors: list[str] = Field(default_factory=list)
     response_errors: list[str] = Field(default_factory=list)
     judge_errors: list[str] = Field(default_factory=list)
+    validator_reason: str | None = None
+    validator_feedback: str | None = None
     effective_weights: dict[str, float] = Field(default_factory=dict)
     rule_scores: dict[str, float] = Field(default_factory=dict)
     rule_score_total: float | None = None
@@ -169,6 +171,68 @@ class SummaryStats(BaseModel):
     failures: list[dict[str, str]] = Field(default_factory=list)
 
 
+class CategoryPassRate(BaseModel):
+    category: str
+    passed_cases: int
+    total_cases: int
+    pass_rate: float
+
+
+class PlannerDiagnosticsBucket(BaseModel):
+    category: str
+    status: str
+    reason: str | None = None
+    override_reason: str | None = None
+    count: int
+
+
+class RetrievalRouteStatusBucket(BaseModel):
+    category: str
+    route: str
+    status: str
+    count: int
+
+
+class RouteConfusionBucket(BaseModel):
+    category: str
+    expected_routes: list[str] = Field(default_factory=list)
+    observed_routes: list[str] = Field(default_factory=list)
+    missing_expected_routes: list[str] = Field(default_factory=list)
+    unexpected_routes: list[str] = Field(default_factory=list)
+    forbidden_routes: list[str] = Field(default_factory=list)
+    count: int
+
+
+class ValidatorReasonBucket(BaseModel):
+    category: str
+    reason: str
+    count: int
+    share: float
+
+
+class StageLatencyPercentile(BaseModel):
+    stage: str
+    sample_count: int
+    p50_latency_ms: float | None = None
+    p95_latency_ms: float | None = None
+
+
+class LatencyBreakdownCoverage(BaseModel):
+    available_cases: int = 0
+    total_cases: int = 0
+    coverage_rate: float = 0.0
+
+
+class AnalysisStats(BaseModel):
+    category_pass_rates: list[CategoryPassRate] = Field(default_factory=list)
+    planner_diagnostics_histogram: list[PlannerDiagnosticsBucket] = Field(default_factory=list)
+    retrieval_route_status_histogram: list[RetrievalRouteStatusBucket] = Field(default_factory=list)
+    route_confusion: list[RouteConfusionBucket] = Field(default_factory=list)
+    validator_reason_histogram: list[ValidatorReasonBucket] = Field(default_factory=list)
+    stage_latency_percentiles: list[StageLatencyPercentile] = Field(default_factory=list)
+    latency_breakdown_coverage: LatencyBreakdownCoverage | None = None
+
+
 class GateResult(BaseModel):
     name: str
     threshold: float | int
@@ -184,6 +248,7 @@ class RunSummary(BaseModel):
     generated_at_utc: str
     mode: str = "online"
     metrics: SummaryStats
+    analysis: AnalysisStats | None = None
     gates: list[GateResult]
     overall_passed: bool
     weights: dict[str, float]
