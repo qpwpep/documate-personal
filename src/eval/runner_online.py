@@ -169,6 +169,25 @@ def _parse_latency_breakdown(
         return None
 
 
+def _parse_validator_metadata(
+    raw_item: Any,
+    *,
+    response_errors: list[str],
+) -> tuple[str | None, str | None]:
+    if raw_item is None:
+        return None, None
+    if not isinstance(raw_item, dict):
+        response_errors.append("debug.retry_context must be an object")
+        return None, None
+
+    validator_reason = raw_item.get("retry_reason")
+    validator_feedback = raw_item.get("retrieval_feedback")
+    return (
+        str(validator_reason).strip() if validator_reason else None,
+        str(validator_feedback).strip() if validator_feedback else None,
+    )
+
+
 def _run_single_case(
     *,
     run_id: str,
@@ -214,6 +233,8 @@ def _run_single_case(
     observed_evidence: list[EvidenceItem] = []
     retrieval_diagnostics: list[RetrievalDiagnostic] = []
     planner_diagnostics: PlannerDiagnostic | None = None
+    validator_reason: str | None = None
+    validator_feedback: str | None = None
     response_trace: str | None = None
     response_file_path: str | None = None
     latency_ms_e2e: int | None = None
@@ -288,6 +309,10 @@ def _run_single_case(
                         )
                         planner_diagnostics = _parse_planner_diagnostics(
                             debug_payload.get("planner_diagnostics"),
+                            response_errors=response_errors,
+                        )
+                        validator_reason, validator_feedback = _parse_validator_metadata(
+                            debug_payload.get("retry_context"),
                             response_errors=response_errors,
                         )
                         latency_breakdown = _parse_latency_breakdown(
@@ -372,6 +397,8 @@ def _run_single_case(
         runtime_errors=runtime_errors,
         response_errors=response_errors,
         judge_errors=judge_errors,
+        validator_reason=validator_reason,
+        validator_feedback=validator_feedback,
         effective_weights=effective_weights.as_dict(),
         rule_scores=rule_scores,
         rule_score_total=rule_weighted,
