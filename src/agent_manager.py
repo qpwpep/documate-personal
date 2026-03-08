@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Optional
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
+from .answer_schema import build_empty_response_payload
 from .evidence import dedupe_evidence, evidence_to_dicts, parse_evidence_payload
 from .graph_builder import build_agent_graph
 from .settings import AppSettings, get_settings
@@ -167,7 +168,13 @@ class AgentFlowManager:
             normalized["max_retries"] = max_retries
 
         retry_reason = raw_retry_context.get("retry_reason")
-        if retry_reason in {"no_evidence", "low_score", "tool_error", "blocked_missing_upload"}:
+        if retry_reason in {
+            "no_evidence",
+            "low_score",
+            "tool_error",
+            "blocked_missing_upload",
+            "unsupported_claims",
+        }:
             normalized["retry_reason"] = retry_reason
 
         retrieval_feedback = raw_retry_context.get("retrieval_feedback")
@@ -181,6 +188,13 @@ class AgentFlowManager:
         retrieval_error_start_index = raw_retry_context.get("retrieval_error_start_index")
         if isinstance(retrieval_error_start_index, int) and retrieval_error_start_index >= 0:
             normalized["retrieval_error_start_index"] = retrieval_error_start_index
+
+        retrieval_diagnostic_start_index = raw_retry_context.get("retrieval_diagnostic_start_index")
+        if (
+            isinstance(retrieval_diagnostic_start_index, int)
+            and retrieval_diagnostic_start_index >= 0
+        ):
+            normalized["retrieval_diagnostic_start_index"] = retrieval_diagnostic_start_index
 
         score_avg = raw_retry_context.get("score_avg")
         if isinstance(score_avg, (int, float)):
@@ -276,7 +290,9 @@ class AgentFlowManager:
                 "response": None,
                 "response_payload": {
                     "answer": reset_message,
+                    "claims": [],
                     "evidence": [],
+                    "confidence": None,
                 },
                 "debug": {
                     "tool_calls": [],
@@ -404,10 +420,11 @@ class AgentFlowManager:
             if total_tokens <= 0:
                 total_tokens = total_prompt_tokens + total_completion_tokens
 
-            response_payload = {
-                "answer": final_answer,
-                "evidence": observed_evidence,
-            }
+            raw_response_payload = response.get("response_payload")
+            if isinstance(raw_response_payload, dict):
+                response_payload = dict(raw_response_payload)
+            else:
+                response_payload = build_empty_response_payload(answer=final_answer).model_dump(mode="json")
 
             return {
                 "message": final_answer,
@@ -442,7 +459,9 @@ class AgentFlowManager:
                 "response": None,
                 "response_payload": {
                     "answer": message,
+                    "claims": [],
                     "evidence": [],
+                    "confidence": None,
                 },
                 "debug": {
                     "tool_calls": [],
