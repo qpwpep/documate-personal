@@ -10,6 +10,7 @@ from .answer_schema import build_empty_response_payload
 from .evidence import dedupe_evidence, evidence_to_dicts, parse_evidence_payload
 from .graph_builder import build_agent_graph
 from .latency import build_latency_breakdown, elapsed_ms
+from .nodes.state import SessionMetadata, coerce_session_metadata
 from .settings import AppSettings, get_settings
 from .upload_helpers import UploadedRetrieverHandle, build_temp_retriever
 
@@ -24,8 +25,15 @@ class AgentFlowManager:
         self.settings = settings or get_settings()
         self.graph = build_agent_graph(self.settings)
         self.messages: List[Any] = []
+        self.session_metadata: SessionMetadata = coerce_session_metadata(None)
         self.upload_retriever_handle: UploadedRetrieverHandle | None = None
         self.upload_file_path: Optional[str] = None
+
+    def set_session_metadata(self, session_metadata: SessionMetadata | None) -> None:
+        self.session_metadata = coerce_session_metadata(session_metadata)
+
+    def _snapshot_session_metadata(self) -> SessionMetadata:
+        return coerce_session_metadata(getattr(self, "session_metadata", None))
 
     def _cleanup_upload_retriever(self) -> None:
         handle = getattr(self, "upload_retriever_handle", None)
@@ -47,6 +55,7 @@ class AgentFlowManager:
         self._cleanup_upload_retriever()
         self.upload_file_path = None
         self.messages = []
+        self.session_metadata = coerce_session_metadata(None)
 
     @staticmethod
     def _extract_token_usage_from_ai_message(message: AIMessage) -> Dict[str, int]:
@@ -315,6 +324,7 @@ class AgentFlowManager:
             state = {
                 "user_input": user_input,
                 "messages": current_messages,
+                "session_metadata": self._snapshot_session_metadata(),
             }
 
             if upload_file_path is not None:

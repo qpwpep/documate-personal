@@ -58,6 +58,16 @@ class RetrievalDiagnostic(TypedDict, total=False):
     attempt: int
 
 
+class SlackDestination(TypedDict):
+    channel_id: str | None
+    user_id: str | None
+    email: str | None
+
+
+class SessionMetadata(TypedDict, total=False):
+    slack_destination: SlackDestination | None
+
+
 def merge_string_lists(current: list[str] | None, update: list[str] | None) -> list[str]:
     merged = list(current or [])
     if update:
@@ -163,11 +173,47 @@ def build_tool_message(tool_name: str, payload: Any, index: int) -> ToolMessage:
     )
 
 
+def empty_slack_destination() -> SlackDestination:
+    return {
+        "channel_id": None,
+        "user_id": None,
+        "email": None,
+    }
+
+
+def coerce_slack_destination(value: Any) -> SlackDestination:
+    destination = empty_slack_destination()
+    if not isinstance(value, dict):
+        return destination
+
+    for key in destination:
+        raw_item = value.get(key)
+        if raw_item is None:
+            destination[key] = None
+            continue
+
+        text = str(raw_item).strip()
+        destination[key] = text or None
+
+    return destination
+
+
+def coerce_session_metadata(value: Any) -> SessionMetadata:
+    metadata: SessionMetadata = {"slack_destination": None}
+    if not isinstance(value, dict):
+        return metadata
+
+    destination = coerce_slack_destination(value.get("slack_destination"))
+    metadata["slack_destination"] = destination if any(destination.values()) else None
+    return metadata
+
+
 class State(TypedDict, total=False):
     messages: Annotated[list[AnyMessage], add_messages]
     user_input: str
     final_answer: Optional[str]
     retriever: Optional[Any]
+    session_metadata: SessionMetadata
     memory_summary: Optional[str]
     planner_output: PlannerOutput
     planner_status: PlannerStatus
