@@ -30,6 +30,23 @@ class _CaptureSynthesizeLLM:
         return AIMessage(content="synth result")
 
 
+class _CaptureStructuredSynthesizeLLM:
+    def __init__(self, payload=None):
+        self.last_messages = None
+        self.payload = payload or {
+            "answer": "synth result",
+            "claims": [],
+            "confidence": None,
+        }
+
+    def with_structured_output(self, *_args, **_kwargs):
+        return self
+
+    def invoke(self, messages):
+        self.last_messages = messages
+        return self.payload
+
+
 class _CapturePlannerLLM:
     def __init__(self, planner_output):
         self.planner_output = planner_output
