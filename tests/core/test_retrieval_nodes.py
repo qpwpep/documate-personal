@@ -1,4 +1,5 @@
 import json
+import time
 import unittest
 
 from langchain_core.messages import AIMessage, ToolMessage
@@ -147,3 +148,77 @@ class RetrievalNodeTest(unittest.TestCase):
         payload = json.loads(updates["messages"][0].content)
         self.assertEqual(payload["diagnostics"]["status"], "error")
         self.assertEqual(updates["retrieval_diagnostics"][0]["status"], "error")
+
+    def test_retrieve_dispatch_preserves_planner_task_order_under_parallel_execution(self) -> None:
+        def _docs_search(query: str):
+            time.sleep(0.05)
+            return _tool_payload(
+                [
+                    {
+                        "kind": "official",
+                        "tool": "tavily_search",
+                        "source_id": "url:https://docs.example.com/",
+                        "url_or_path": "https://docs.example.com/",
+                        "title": "Docs",
+                        "snippet": "docs snippet",
+                        "score": 0.8,
+                    }
+                ],
+                tool="tavily_search",
+                route="docs",
+                status="success",
+                message="",
+                query=query,
+            )
+
+        def _local_search(query: str, k: int):
+            _ = k
+            return _tool_payload(
+                [
+                    {
+                        "kind": "local",
+                        "tool": "rag_search",
+                        "source_id": "path:data/example.ipynb#chunk=0;start=0;end=10",
+                        "url_or_path": "data/example.ipynb",
+                        "title": None,
+                        "snippet": "local snippet",
+                        "score": 0.7,
+                    }
+                ],
+                tool="rag_search",
+                route="local",
+                status="success",
+                message="",
+                query=query,
+            )
+
+        retrieve_dispatch = make_retrieve_dispatch_node(
+            _ToolWrapper(_docs_search),
+            _ToolWrapper(lambda query, k, retriever=None: _tool_payload([], tool="upload_search", route="upload", status="no_result", message="", query=query)),
+            _ToolWrapper(_local_search),
+            verbose=False,
+        )
+
+        updates = retrieve_dispatch(
+            {
+                "planner_output": PlannerOutput(
+                    use_retrieval=True,
+                    tasks=[
+                        RetrievalTask(route="docs", query="docs query", k=3),
+                        RetrievalTask(route="local", query="local query", k=3),
+                    ],
+                ),
+                "retry_context": {"attempt": 0},
+            }
+        )
+
+        self.assertEqual(
+            [item["route"] for item in updates["retrieval_diagnostics"]],
+            ["docs", "local"],
+        )
+        route_events = [
+            item
+            for item in updates["latency_trace"]
+            if item.get("kind") == "retrieval_route"
+        ]
+        self.assertEqual([item["route"] for item in route_events], ["docs", "local"])

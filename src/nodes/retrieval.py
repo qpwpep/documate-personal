@@ -1,8 +1,15 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import time
 from typing import Any
 
 from ..evidence import evidence_to_dicts, parse_evidence_payload
+from ..latency import (
+    elapsed_ms,
+    make_retrieval_route_latency_event,
+    make_stage_latency_event,
+)
 from ..planner_schema import RetrievalTask
 from .retry import current_retrieval_attempt
 from .state import (
@@ -84,6 +91,57 @@ def collect_retrieval_result(
     if diagnostic["status"] in {"error", "unavailable"} and diagnostic["message"]:
         local_errors.append(f"{tool_name}: {diagnostic['message']}")
     return payload_dicts, diagnostic
+
+
+def _execute_retrieval_task(
+    *,
+    index: int,
+    task: RetrievalTask,
+    tool_name: str,
+    route: str,
+    invoke_tool: Any,
+    attempt: int,
+) -> dict[str, Any]:
+    local_errors: list[str] = []
+    started = time.perf_counter()
+    try:
+        payload = invoke_tool(task)
+    except Exception as exc:
+        payload = {
+            "evidence": [],
+            "diagnostics": {
+                "tool": tool_name,
+                "route": route,
+                "status": "error",
+                "message": f"tool invocation failed ({exc})",
+                "query": task.query,
+            },
+        }
+
+    latency_ms = elapsed_ms(started, time.perf_counter())
+    payload_dicts, diagnostic = collect_retrieval_result(
+        raw_payload=payload,
+        tool_name=tool_name,
+        route=route,
+        query=task.query,
+        attempt=attempt,
+        local_errors=local_errors,
+    )
+    return {
+        "index": index,
+        "tool_name": tool_name,
+        "payload": payload,
+        "evidence": payload_dicts,
+        "diagnostic": diagnostic,
+        "errors": local_errors,
+        "latency_trace": make_retrieval_route_latency_event(
+            route=route,
+            tool=tool_name,
+            attempt=attempt,
+            latency_ms=latency_ms,
+            status=str(diagnostic.get("status") or ""),
+        ),
+    }
 
 
 def run_retrieval_tasks(
@@ -241,6 +299,7 @@ def make_retrieve_dispatch_node(
     verbose: bool,
 ):
     def retrieve_dispatch(state: State) -> State:
+        stage_started = time.perf_counter()
         planner_errors: list[str] = []
         planner_output = coerce_planner_output(state.get("planner_output"), planner_errors)
         if not planner_output.use_retrieval or not planner_output.tasks:
@@ -272,40 +331,61 @@ def make_retrieve_dispatch_node(
         retrieval_diagnostics: list[dict[str, Any]] = []
         tool_messages = []
         tool_call_counts: dict[str, int] = {}
+        latency_trace: list[dict[str, Any]] = []
         retry_context = coerce_retry_context(state.get("retry_context"))
         attempt = current_retrieval_attempt(retry_context)
-
-        for task in planner_output.tasks:
+        indexed_tasks: list[tuple[int, RetrievalTask, str, Any]] = []
+        for index, task in enumerate(planner_output.tasks, start=1):
             handler = route_handlers.get(task.route)
             if handler is None:
                 local_errors.append(f"planner: unsupported route ({task.route})")
                 continue
-
             tool_name, invoke_tool = handler
-            try:
-                payload = invoke_tool(task)
-            except Exception as exc:
-                payload = {
-                    "evidence": [],
-                    "diagnostics": {
-                        "tool": tool_name,
-                        "route": task.route,
-                        "status": "error",
-                        "message": f"tool invocation failed ({exc})",
-                        "query": task.query,
-                    },
-                }
+            indexed_tasks.append((index, task, tool_name, invoke_tool))
 
-            payload_dicts, diagnostic = collect_retrieval_result(
-                raw_payload=payload,
-                tool_name=tool_name,
-                route=task.route,
-                query=task.query,
-                attempt=attempt,
-                local_errors=local_errors,
+        task_results: list[dict[str, Any]] = []
+        if len(indexed_tasks) == 1:
+            index, task, tool_name, invoke_tool = indexed_tasks[0]
+            task_results.append(
+                _execute_retrieval_task(
+                    index=index,
+                    task=task,
+                    tool_name=tool_name,
+                    route=task.route,
+                    invoke_tool=invoke_tool,
+                    attempt=attempt,
+                )
             )
-            evidence_updates.extend(payload_dicts)
-            retrieval_diagnostics.append(diagnostic)
+        elif indexed_tasks:
+            with ThreadPoolExecutor(max_workers=len(indexed_tasks)) as executor:
+                futures = {
+                    executor.submit(
+                        _execute_retrieval_task,
+                        index=index,
+                        task=task,
+                        tool_name=tool_name,
+                        route=task.route,
+                        invoke_tool=invoke_tool,
+                        attempt=attempt,
+                    ): index
+                    for index, task, tool_name, invoke_tool in indexed_tasks
+                }
+                for future in as_completed(futures):
+                    task_results.append(future.result())
+
+        task_results.sort(key=lambda item: int(item.get("index", 0)))
+
+        for result in task_results:
+            tool_name = str(result.get("tool_name") or "")
+            payload = result.get("payload")
+            evidence_updates.extend(result.get("evidence") or [])
+            diagnostic = result.get("diagnostic")
+            if isinstance(diagnostic, dict):
+                retrieval_diagnostics.append(diagnostic)
+            local_errors.extend(str(error) for error in (result.get("errors") or []) if str(error).strip())
+            latency_event = result.get("latency_trace")
+            if isinstance(latency_event, dict):
+                latency_trace.append(latency_event)
 
             tool_call_counts[tool_name] = tool_call_counts.get(tool_name, 0) + 1
             tool_messages.append(
@@ -320,10 +400,29 @@ def make_retrieve_dispatch_node(
                 f"statuses={','.join(str(item.get('status')) for item in retrieval_diagnostics)}"
             )
 
+        stage_status = None
+        if retrieval_diagnostics:
+            statuses = {str(item.get("status") or "") for item in retrieval_diagnostics}
+            if statuses.issubset({"success", "no_result"}):
+                stage_status = "success"
+            elif statuses.issubset({"error", "unavailable"}):
+                stage_status = "error"
+            else:
+                stage_status = "mixed"
+        latency_trace.append(
+            make_stage_latency_event(
+                stage="retrieval",
+                attempt=attempt,
+                latency_ms=elapsed_ms(stage_started, time.perf_counter()),
+                status=stage_status,
+            )
+        )
+
         updates: State = {
             "retrieved_evidence": evidence_updates,
             "retrieval_diagnostics": retrieval_diagnostics,
             "messages": tool_messages,
+            "latency_trace": latency_trace,
         }
         if local_errors:
             updates["retrieval_errors"] = local_errors
