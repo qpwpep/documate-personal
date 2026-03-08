@@ -7,7 +7,7 @@ from src.nodes.validation import make_validate_evidence_node
 from src.planner_schema import PlannerOutput, RetrievalTask
 from src.prompts import SYS_POLICY
 
-from .helpers import _CaptureSynthesizeLLM
+from .helpers import _CaptureStructuredSynthesizeLLM, _CaptureSynthesizeLLM
 
 
 class SynthesisValidationTest(unittest.TestCase):
@@ -118,6 +118,7 @@ class SynthesisValidationTest(unittest.TestCase):
                         "kind": "official",
                         "tool": "tavily_search",
                         "source_id": "url:https://numpy.org/doc/stable/",
+                        "document_id": "url:https://numpy.org/doc/stable/",
                         "url_or_path": "https://numpy.org/doc/stable/",
                         "title": "NumPy Docs",
                         "snippet": "official docs",
@@ -135,6 +136,107 @@ class SynthesisValidationTest(unittest.TestCase):
         self.assertTrue(result["needs_retry"])
         self.assertEqual(result["retry_context"]["retry_reason"], "low_score")
         self.assertAlmostEqual(result["retry_context"]["score_avg"], 0.2)
+
+    def test_validate_evidence_retries_when_claims_reference_unknown_evidence(self) -> None:
+        validate_node = make_validate_evidence_node(verbose=False)
+        planner_output = PlannerOutput(
+            use_retrieval=True,
+            tasks=[RetrievalTask(route="local", query="example", k=3)],
+        )
+        result = validate_node(
+            {
+                "planner_output": planner_output,
+                "retrieved_evidence": [
+                    {
+                        "kind": "local",
+                        "tool": "rag_search",
+                        "source_id": "path:data/notebooks/example.ipynb#cell=0;chunk=0;start=0;end=12",
+                        "document_id": "path:data/notebooks/example.ipynb",
+                        "url_or_path": "data/notebooks/example.ipynb",
+                        "snippet": "example snippet",
+                        "score": 0.9,
+                        "cell_id": 0,
+                        "chunk_id": 0,
+                        "start_offset": 0,
+                        "end_offset": 12,
+                    }
+                ],
+                "response_payload": {
+                    "answer": "unsupported answer",
+                    "claims": [
+                        {
+                            "text": "unsupported answer",
+                            "evidence_ids": ["path:data/notebooks/example.ipynb#cell=0;chunk=99;start=0;end=12"],
+                            "confidence": 0.6,
+                        }
+                    ],
+                    "evidence": [],
+                    "confidence": 0.6,
+                },
+                "retry_context": {
+                    "attempt": 0,
+                    "max_retries": 1,
+                    "evidence_start_index": 0,
+                    "retrieval_error_start_index": 0,
+                },
+            }
+        )
+        self.assertTrue(result["needs_retry"])
+        self.assertEqual(result["retry_context"]["retry_reason"], "unsupported_claims")
+
+    def test_validate_evidence_filters_to_valid_claims_after_retry_budget(self) -> None:
+        validate_node = make_validate_evidence_node(verbose=False)
+        planner_output = PlannerOutput(
+            use_retrieval=True,
+            tasks=[RetrievalTask(route="local", query="example", k=3)],
+        )
+        result = validate_node(
+            {
+                "planner_output": planner_output,
+                "retrieved_evidence": [
+                    {
+                        "kind": "local",
+                        "tool": "rag_search",
+                        "source_id": "path:data/notebooks/example.ipynb#cell=0;chunk=0;start=0;end=12",
+                        "document_id": "path:data/notebooks/example.ipynb",
+                        "url_or_path": "data/notebooks/example.ipynb",
+                        "snippet": "example snippet",
+                        "score": 0.9,
+                        "cell_id": 0,
+                        "chunk_id": 0,
+                        "start_offset": 0,
+                        "end_offset": 12,
+                    }
+                ],
+                "response_payload": {
+                    "answer": "kept [1] dropped [2]",
+                    "claims": [
+                        {
+                            "text": "kept",
+                            "evidence_ids": ["path:data/notebooks/example.ipynb#cell=0;chunk=0;start=0;end=12"],
+                            "confidence": 0.9,
+                        },
+                        {
+                            "text": "dropped",
+                            "evidence_ids": ["path:data/notebooks/example.ipynb#cell=0;chunk=99;start=0;end=12"],
+                            "confidence": 0.1,
+                        },
+                    ],
+                    "evidence": [],
+                    "confidence": 0.5,
+                },
+                "retry_context": {
+                    "attempt": 1,
+                    "max_retries": 1,
+                    "evidence_start_index": 0,
+                    "retrieval_error_start_index": 0,
+                },
+            }
+        )
+        self.assertFalse(result["needs_retry"])
+        self.assertEqual(result["final_answer"], "kept [1]")
+        self.assertEqual(len(result["response_payload"]["claims"]), 1)
+        self.assertEqual(len(result["response_payload"]["evidence"]), 1)
 
     def test_validate_evidence_passes_when_retrieval_not_required(self) -> None:
         validate_node = make_validate_evidence_node(verbose=False)
@@ -179,6 +281,7 @@ class SynthesisValidationTest(unittest.TestCase):
 
         self.assertIsNone(capture_llm.last_messages)
         self.assertEqual(updates["final_answer"], "요청하신 최종 답변을 저장합니다.")
+        self.assertEqual(updates["response_payload"]["claims"], [])
 
     def test_synthesize_short_circuits_guided_followup(self) -> None:
         capture_llm = _CaptureSynthesizeLLM()
@@ -188,14 +291,57 @@ class SynthesisValidationTest(unittest.TestCase):
             {
                 "messages": [HumanMessage(content="업로드한 파일에서 groupby를 찾아줘")],
                 "user_input": "업로드한 파일에서 groupby를 찾아줘",
-                "guided_followup": "업로드한 파일을 먼저 올려주세요.",
+                "guided_followup": "업로드한 파일을 먼저 올려 주세요.",
                 "retrieved_evidence": [],
                 "synthesis_attempt": 0,
             }
         )
 
         self.assertIsNone(capture_llm.last_messages)
-        self.assertEqual(updates["final_answer"], "업로드한 파일을 먼저 올려주세요.")
+        self.assertEqual(updates["final_answer"], "업로드한 파일을 먼저 올려 주세요.")
+
+    def test_synthesize_structures_claims_and_adopted_evidence(self) -> None:
+        capture_llm = _CaptureStructuredSynthesizeLLM(
+            {
+                "answer": "Structured answer",
+                "claims": [
+                    {
+                        "text": "Broadcasting expands compatible array shapes.",
+                        "evidence_ids": ["url:https://numpy.org/doc/stable/"],
+                        "confidence": 0.92,
+                    }
+                ],
+                "confidence": 0.92,
+            }
+        )
+        synthesize_node = make_synthesize_node(capture_llm, verbose=False, max_turns=8)
+
+        updates = synthesize_node(
+            {
+                "messages": [HumanMessage(content="Explain numpy broadcasting.")],
+                "retrieved_evidence": [
+                    {
+                        "kind": "official",
+                        "tool": "tavily_search",
+                        "source_id": "url:https://numpy.org/doc/stable/",
+                        "document_id": "url:https://numpy.org/doc/stable/",
+                        "url_or_path": "https://numpy.org/doc/stable/",
+                        "title": "NumPy Docs",
+                        "snippet": "broadcasting rule",
+                        "score": 0.9,
+                    }
+                ],
+                "synthesis_attempt": 0,
+            }
+        )
+
+        self.assertEqual(updates["final_answer"], "Broadcasting expands compatible array shapes. [1]")
+        self.assertEqual(len(updates["response_payload"]["claims"]), 1)
+        self.assertEqual(len(updates["response_payload"]["evidence"]), 1)
+        self.assertEqual(
+            updates["response_payload"]["claims"][0]["evidence_ids"],
+            ["url:https://numpy.org/doc/stable/"],
+        )
 
     def test_synthesize_uses_only_current_attempt_evidence_window(self) -> None:
         capture_llm = _CaptureSynthesizeLLM()
@@ -209,6 +355,7 @@ class SynthesisValidationTest(unittest.TestCase):
                         "kind": "official",
                         "tool": "tavily_search",
                         "source_id": "url:https://old.example.com/",
+                        "document_id": "url:https://old.example.com/",
                         "url_or_path": "https://old.example.com/",
                         "title": "Old Evidence",
                         "snippet": "old snippet",
@@ -218,6 +365,7 @@ class SynthesisValidationTest(unittest.TestCase):
                         "kind": "official",
                         "tool": "tavily_search",
                         "source_id": "url:https://new.example.com/",
+                        "document_id": "url:https://new.example.com/",
                         "url_or_path": "https://new.example.com/",
                         "title": "New Evidence",
                         "snippet": "new snippet",
@@ -238,3 +386,7 @@ class SynthesisValidationTest(unittest.TestCase):
         self.assertEqual(len(retrieved_evidence_messages), 1)
         self.assertIn("https://new.example.com/", retrieved_evidence_messages[0])
         self.assertNotIn("https://old.example.com/", retrieved_evidence_messages[0])
+
+
+if __name__ == "__main__":
+    unittest.main()

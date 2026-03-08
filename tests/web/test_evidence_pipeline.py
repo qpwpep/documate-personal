@@ -36,8 +36,20 @@ class _FakeGraph:
                     name="tavily_search",
                     tool_call_id="call-1",
                 ),
-                AIMessage(content="final answer"),
+                AIMessage(content="final answer [1]"),
             ],
+            "response_payload": {
+                "answer": "final answer [1]",
+                "claims": [
+                    {
+                        "text": "final answer",
+                        "evidence_ids": ["url:https://numpy.org/doc/stable/"],
+                        "confidence": 0.88,
+                    }
+                ],
+                "evidence": self._evidence_payload,
+                "confidence": 0.88,
+            },
             "retrieval_diagnostics": [
                 {
                     "tool": "tavily_search",
@@ -78,7 +90,13 @@ class _FakeGraphWithSave:
                     name="save_text",
                     tool_call_id="save-1",
                 ),
-            ]
+            ],
+            "response_payload": {
+                "answer": "final answer before save",
+                "claims": [],
+                "evidence": [],
+                "confidence": None,
+            },
         }
 
 
@@ -89,16 +107,55 @@ class _FakeVectorStore:
             (
                 Document(
                     page_content="uploaded snippet",
-                    metadata={"source": "uploads/session/sample_pipeline.ipynb"},
+                    metadata={
+                        "source": "uploads/session/sample_pipeline.ipynb",
+                        "cell_id": 2,
+                        "chunk_id": 1,
+                        "start_offset": 12,
+                        "end_offset": 28,
+                    },
                 ),
                 0.87,
             )
         ]
 
 
+class _FakeDedupVectorStore:
+    def similarity_search_with_relevance_scores(self, query: str, k: int = 4):
+        _ = (query, k)
+        return [
+            (
+                Document(
+                    page_content="first chunk",
+                    metadata={
+                        "source": "uploads/session/sample_pipeline.ipynb",
+                        "cell_id": 0,
+                        "chunk_id": 0,
+                        "start_offset": 0,
+                        "end_offset": 10,
+                    },
+                ),
+                0.81,
+            ),
+            (
+                Document(
+                    page_content="second chunk",
+                    metadata={
+                        "source": "uploads/session/sample_pipeline.ipynb",
+                        "cell_id": 0,
+                        "chunk_id": 1,
+                        "start_offset": 10,
+                        "end_offset": 22,
+                    },
+                ),
+                0.79,
+            ),
+        ]
+
+
 class _FakeRetriever:
-    def __init__(self):
-        self.vectorstore = _FakeVectorStore()
+    def __init__(self, vectorstore=None):
+        self.vectorstore = vectorstore or _FakeVectorStore()
 
 
 class _FakeRetrieverHandle:
@@ -117,6 +174,7 @@ class EvidencePipelineTest(unittest.TestCase):
             "kind": "official",
             "tool": "tavily_search",
             "source_id": "url:https://numpy.org/doc/stable/",
+            "document_id": "url:https://numpy.org/doc/stable/",
             "url_or_path": "https://numpy.org/doc/stable/",
             "title": "NumPy docs",
             "snippet": "broadcasting",
@@ -125,11 +183,16 @@ class EvidencePipelineTest(unittest.TestCase):
         rag_item = {
             "kind": "local",
             "tool": "rag_search",
-            "source_id": "path:uploads/s1/sample.ipynb",
+            "source_id": "path:uploads/s1/sample.ipynb#cell=0;chunk=1;start=0;end=16",
+            "document_id": "path:uploads/s1/sample.ipynb",
             "url_or_path": "uploads/s1/sample.ipynb",
             "title": None,
             "snippet": "local snippet",
             "score": 0.71,
+            "chunk_id": 1,
+            "cell_id": 0,
+            "start_offset": 0,
+            "end_offset": 16,
         }
 
         messages = [
@@ -179,12 +242,13 @@ class EvidencePipelineTest(unittest.TestCase):
         self.assertTrue(any(item["tool"] == "rag_search" for item in observed))
         self.assertTrue(any("tool:upload_search" in error for error in errors))
 
-    def test_response_and_debug_share_same_evidence_source(self) -> None:
+    def test_response_payload_uses_adopted_evidence_not_observed_evidence_identity(self) -> None:
         evidence_payload = [
             {
                 "kind": "official",
                 "tool": "tavily_search",
                 "source_id": "url:https://numpy.org/doc/stable/",
+                "document_id": "url:https://numpy.org/doc/stable/",
                 "url_or_path": "https://numpy.org/doc/stable/",
                 "title": "NumPy docs",
                 "snippet": "broadcasting",
@@ -201,10 +265,12 @@ class EvidencePipelineTest(unittest.TestCase):
 
         result = manager.run_agent_flow("question")
 
-        self.assertIs(result["response_payload"]["evidence"], result["debug"]["observed_evidence"])
+        self.assertIsNot(result["response_payload"]["evidence"], result["debug"]["observed_evidence"])
+        self.assertEqual(result["response_payload"]["answer"], "final answer [1]")
+        self.assertEqual(result["response_payload"]["claims"][0]["evidence_ids"], ["url:https://numpy.org/doc/stable/"])
         self.assertEqual(result["response_payload"]["evidence"][0]["url_or_path"], "https://numpy.org/doc/stable/")
 
-    def test_upload_search_returns_typed_evidence_and_handles_missing_retriever(self) -> None:
+    def test_upload_search_returns_typed_chunk_evidence_and_handles_missing_retriever(self) -> None:
         registry = build_tool_registry(AppSettings(openai_api_key="test", tavily_api_key="test"))
 
         no_retriever = registry.upload_search_tool.func(query="uploaded info", k=3, retriever=None)
@@ -222,8 +288,33 @@ class EvidencePipelineTest(unittest.TestCase):
         self.assertEqual(evidence[0]["kind"], "local")
         self.assertEqual(evidence[0]["tool"], "upload_search")
         self.assertEqual(evidence[0]["url_or_path"], "uploads/session/sample_pipeline.ipynb")
-        self.assertEqual(evidence[0]["source_id"], "path:uploads/session/sample_pipeline.ipynb")
+        self.assertEqual(evidence[0]["document_id"], "path:uploads/session/sample_pipeline.ipynb")
+        self.assertEqual(
+            evidence[0]["source_id"],
+            "path:uploads/session/sample_pipeline.ipynb#cell=2;chunk=1;start=12;end=28",
+        )
+        self.assertEqual(evidence[0]["cell_id"], 2)
+        self.assertEqual(evidence[0]["chunk_id"], 1)
+        self.assertEqual(evidence[0]["start_offset"], 12)
+        self.assertEqual(evidence[0]["end_offset"], 28)
         self.assertAlmostEqual(evidence[0]["score"], 0.87)
+
+    def test_upload_search_keeps_multiple_chunks_from_same_document(self) -> None:
+        registry = build_tool_registry(AppSettings(openai_api_key="test", tavily_api_key="test"))
+
+        result = registry.upload_search_tool.func(
+            query="uploaded info",
+            k=4,
+            retriever=_FakeRetriever(vectorstore=_FakeDedupVectorStore()),
+        )
+
+        evidence = result["evidence"]
+        self.assertEqual(len(evidence), 2)
+        self.assertNotEqual(evidence[0]["source_id"], evidence[1]["source_id"])
+        self.assertEqual(
+            [item["chunk_id"] for item in evidence],
+            [0, 1],
+        )
 
     def test_agent_manager_exposes_retrieval_and_planner_diagnostics(self) -> None:
         evidence_payload = [
@@ -231,6 +322,7 @@ class EvidencePipelineTest(unittest.TestCase):
                 "kind": "official",
                 "tool": "tavily_search",
                 "source_id": "url:https://numpy.org/doc/stable/",
+                "document_id": "url:https://numpy.org/doc/stable/",
                 "url_or_path": "https://numpy.org/doc/stable/",
                 "title": "NumPy docs",
                 "snippet": "broadcasting",
@@ -280,6 +372,7 @@ class EvidencePipelineTest(unittest.TestCase):
 
         self.assertEqual(result["message"], "final answer before save")
         self.assertEqual(result["response_payload"]["answer"], "final answer before save")
+        self.assertEqual(result["response_payload"]["claims"], [])
 
 
 if __name__ == "__main__":
