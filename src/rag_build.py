@@ -6,10 +6,10 @@ from typing import Dict, List, Tuple
 from dotenv import load_dotenv
 load_dotenv()
 
-from langchain_community.document_loaders import NotebookLoader
-from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_openai import OpenAIEmbeddings
 from langchain_chroma import Chroma
+
+from .chunking import chunk_notebook_path
 
 # -------------------------------
 # Paths
@@ -54,16 +54,17 @@ def _save_manifest(manifest: Dict[str, float]) -> None:
 def _load_ipynb_docs(file_paths: List[str]):
     docs = []
     for p in file_paths:
-        loader = NotebookLoader(p, include_outputs=False, max_output_length=0)
-        docs.extend(loader.load())
-    # normalize metadata
-    for d in docs:
-        d.metadata["source"] = d.metadata.get("source", d.metadata.get("path", "notebook"))
+        docs.extend(
+            chunk_notebook_path(
+                path=p,
+                chunk_size=CHUNK_SIZE,
+                chunk_overlap=CHUNK_OVERLAP,
+            )
+        )
     return docs
 
 def _split_docs(docs):
-    splitter = RecursiveCharacterTextSplitter(chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP)
-    return splitter.split_documents(docs)
+    return docs
 
 def _ensure_chroma(embeddings) -> Chroma:
     return Chroma(
