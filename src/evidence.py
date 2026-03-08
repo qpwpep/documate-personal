@@ -5,7 +5,7 @@ import re
 from typing import Any, Iterable, Literal
 from urllib.parse import urlparse
 
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 
 
 EvidenceKind = Literal["official", "local"]
@@ -15,10 +15,21 @@ class EvidenceItem(BaseModel):
     kind: EvidenceKind
     tool: str
     source_id: str
+    document_id: str | None = None
     url_or_path: str
     title: str | None = None
     snippet: str | None = None
     score: float | None = None
+    chunk_id: int | None = None
+    cell_id: int | None = None
+    start_offset: int | None = None
+    end_offset: int | None = None
+
+    @model_validator(mode="after")
+    def populate_document_id(self) -> "EvidenceItem":
+        if not self.document_id and self.url_or_path:
+            self.document_id = normalize_source_id(self.url_or_path)
+        return self
 
 
 def normalize_source_id(url_or_path: str) -> str:
@@ -38,6 +49,31 @@ def normalize_source_id(url_or_path: str) -> str:
 
     normalized_path = re.sub(r"/+", "/", raw.replace("\\", "/")).strip().lower()
     return f"path:{normalized_path}"
+
+
+def build_local_source_id(
+    *,
+    url_or_path: str,
+    chunk_id: Any,
+    start_offset: Any,
+    end_offset: Any,
+    cell_id: Any = None,
+) -> str:
+    document_id = normalize_source_id(url_or_path)
+    if not document_id:
+        return ""
+
+    chunk_value = _coerce_non_negative_int(chunk_id)
+    start_value = _coerce_non_negative_int(start_offset)
+    end_value = max(start_value, _coerce_non_negative_int(end_offset))
+
+    if cell_id is not None:
+        cell_value = _coerce_non_negative_int(cell_id)
+        return (
+            f"{document_id}#cell={cell_value};chunk={chunk_value};"
+            f"start={start_value};end={end_value}"
+        )
+    return f"{document_id}#chunk={chunk_value};start={start_value};end={end_value}"
 
 
 def truncate_snippet(text: str | None, *, max_length: int = 500) -> str | None:
@@ -61,6 +97,14 @@ def dedupe_evidence(items: Iterable[EvidenceItem]) -> list[EvidenceItem]:
         seen.add(key)
         deduped.append(item)
     return deduped
+
+
+def _coerce_non_negative_int(value: Any) -> int:
+    try:
+        coerced = int(value)
+    except (TypeError, ValueError):
+        return 0
+    return max(0, coerced)
 
 
 def evidence_to_dicts(items: Iterable[EvidenceItem]) -> list[dict[str, Any]]:
