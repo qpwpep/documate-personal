@@ -222,6 +222,9 @@ uv run python -X utf8 -m streamlit run src/web/streamlit_app.py --server.port 85
 }
 ```
 
+- `slack_user_id`, `slack_email`, `slack_channel_id`는 세션 메시지 히스토리가 아니라 세션 메타데이터 스냅샷을 갱신합니다.
+- 각 요청은 Slack 목적지의 전체 스냅샷으로 처리됩니다. 필드를 생략하거나 `null`로 보내면 기존 세션 Slack 목적지는 제거됩니다.
+
 응답 예시:
 
 ```json

@@ -12,6 +12,7 @@ from src.agent_manager import AgentFlowManager
 from src.settings import AppSettings
 from src.upload_helpers import build_temp_retriever
 from src.web import main as web_main
+from src.web.schemas import AgentRequest
 
 
 class _FakeEmbeddings(Embeddings):
@@ -56,6 +57,7 @@ def _make_manager(graph: _CapturingGraph) -> AgentFlowManager:
     manager.settings = AppSettings(openai_api_key="test-key", tavily_api_key="test")
     manager.graph = graph
     manager.messages = []
+    manager.session_metadata = {"slack_destination": None}
     manager.upload_retriever_handle = None
     manager.upload_file_path = None
     return manager
@@ -143,6 +145,64 @@ class UploadSessionIsolationTest(unittest.TestCase):
         self.assertEqual(result["message"], "boom")
         self.assertEqual(handle.cleanup_calls, 1)
         self.assertIsNone(manager.upload_retriever_handle)
+
+    def test_agent_manager_passes_session_metadata_to_graph_and_clears_on_close(self) -> None:
+        graph = _CapturingGraph()
+        manager = _make_manager(graph)
+        manager.set_session_metadata(
+            {
+                "slack_destination": {
+                    "channel_id": "C123BENCH",
+                    "user_id": None,
+                    "email": None,
+                }
+            }
+        )
+
+        manager.run_agent_flow("send this to slack")
+
+        self.assertEqual(
+            graph.states[-1]["session_metadata"]["slack_destination"]["channel_id"],
+            "C123BENCH",
+        )
+
+        manager.close()
+
+        self.assertEqual(manager.session_metadata, {"slack_destination": None})
+        self.assertEqual(manager.messages, [])
+
+    def test_session_metadata_snapshot_replaces_previous_slack_destination(self) -> None:
+        graph = _CapturingGraph()
+        manager = _make_manager(graph)
+
+        manager.set_session_metadata(
+            web_main._build_session_metadata_snapshot(
+                AgentRequest(
+                    query="share this to slack",
+                    session_id="demo-session",
+                    slack_channel_id="C123BENCH",
+                )
+            )
+        )
+        manager.run_agent_flow("share this to slack")
+
+        self.assertEqual(
+            graph.states[-1]["session_metadata"]["slack_destination"]["channel_id"],
+            "C123BENCH",
+        )
+
+        manager.set_session_metadata(
+            web_main._build_session_metadata_snapshot(
+                AgentRequest(
+                    query="share this to slack",
+                    session_id="demo-session",
+                )
+            )
+        )
+        manager.run_agent_flow("share this to slack")
+
+        self.assertIsNone(graph.states[-1]["session_metadata"]["slack_destination"])
+        self.assertFalse(any(message.__class__.__name__ == "SystemMessage" for message in manager.messages))
 
 
 class SessionCacheCleanupTest(unittest.TestCase):
