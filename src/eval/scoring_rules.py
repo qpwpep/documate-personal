@@ -76,10 +76,11 @@ def _collect_valid_source_ids(
             continue
         if item.tool != required_tool:
             continue
-        source_id = item.source_id or normalize_source_id(item.url_or_path)
-        if not source_id:
+        source_id = str(item.source_id or "").strip()
+        document_id = str(item.document_id or normalize_source_id(item.url_or_path)).strip()
+        if not source_id or not document_id:
             continue
-        if source_id != normalize_source_id(item.url_or_path):
+        if document_id != normalize_source_id(item.url_or_path):
             continue
         if not source_validator(item.url_or_path):
             continue
