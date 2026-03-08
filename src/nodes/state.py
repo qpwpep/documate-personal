@@ -9,7 +9,13 @@ from typing_extensions import TypedDict
 
 from ..planner_schema import PlannerOutput
 
-RetryReason = Literal["no_evidence", "low_score", "tool_error", "blocked_missing_upload"]
+RetryReason = Literal[
+    "no_evidence",
+    "low_score",
+    "tool_error",
+    "blocked_missing_upload",
+    "unsupported_claims",
+]
 PlannerStatus = Literal["llm", "heuristic_fallback", "fallback_no_routes"]
 PlannerOverrideReason = Literal[
     "missing_required_retrieval",
@@ -18,7 +24,7 @@ PlannerOverrideReason = Literal[
 ]
 LOW_SCORE_THRESHOLD = 0.5
 DEFAULT_MAX_RETRIES = 1
-RETRYABLE_REASONS: set[RetryReason] = {"no_evidence", "low_score"}
+RETRYABLE_REASONS: set[RetryReason] = {"no_evidence", "low_score", "unsupported_claims"}
 ROUTE_ORDER: tuple[str, ...] = ("docs", "upload", "local")
 
 
@@ -105,7 +111,13 @@ def coerce_retry_context(value: Any) -> RetryContext:
         context["max_retries"] = max_retries
 
     retry_reason = value.get("retry_reason")
-    if retry_reason in {"no_evidence", "low_score", "tool_error", "blocked_missing_upload"}:
+    if retry_reason in {
+        "no_evidence",
+        "low_score",
+        "tool_error",
+        "blocked_missing_upload",
+        "unsupported_claims",
+    }:
         context["retry_reason"] = retry_reason
 
     retrieval_feedback = value.get("retrieval_feedback")
@@ -167,5 +179,7 @@ class State(TypedDict, total=False):
     validation_errors: Annotated[list[str], merge_string_lists]
     action_errors: Annotated[list[str], merge_string_lists]
     synthesis_attempt: int
+    synthesis_output: dict[str, Any]
+    response_payload: dict[str, Any]
     needs_retry: bool
     retry_context: RetryContext

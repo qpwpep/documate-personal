@@ -79,13 +79,15 @@ def build_retrieval_feedback(
     if reason == "no_evidence":
         selected_routes = ", ".join(task.route for task in planner_output.tasks) if planner_output.tasks else "none"
         return f"query too narrow or domain mismatch on routes: {selected_routes}"
+    if reason == "unsupported_claims":
+        return "generated claims referenced unsupported evidence ids; keep only grounded claims."
     if score_avg is not None:
         return f"low evidence confidence(avg_score={score_avg:.3f}); broaden query or switch route."
     return "low evidence confidence; broaden query or switch route."
 
 
 def build_missing_upload_followup() -> str:
-    return "업로드한 파일을 확인하려면 `.py` 또는 `.ipynb` 파일을 먼저 업로드한 뒤 다시 질문해 주세요."
+    return "업로드한 파일을 확인하려면 `.py` 또는 `.ipynb` 파일을 먼저 올린 뒤 다시 질문해 주세요."
 
 
 def build_route_specific_followup(
@@ -97,23 +99,25 @@ def build_route_specific_followup(
         return build_missing_upload_followup()
     if reason == "tool_error":
         if routes == {"docs"}:
-            return "공식 문서 조회 중 문제가 있었습니다. 라이브러리명이나 API 이름을 더 구체적으로 적어 다시 질문해 주세요."
+            return "공식 문서 조회 중 문제가 있었습니다. 라이브러리명이나 API 이름을 더 구체적으로 알려 주세요."
         if routes == {"upload"}:
-            return "업로드 파일 검색 중 문제가 있었습니다. 파일을 다시 업로드하거나 찾을 함수명을 더 구체적으로 알려주세요."
+            return "업로드 파일 검색 중 문제가 있었습니다. 파일을 다시 올리거나 찾을 함수명을 더 구체적으로 알려 주세요."
         if routes == {"local"}:
-            return "로컬 예제 검색 중 문제가 있었습니다. 찾고 싶은 함수명이나 노트북 주제를 더 구체적으로 알려주세요."
-        return "검색 경로에서 문제가 있었습니다. 확인할 API 이름이나 비교 대상을 더 구체적으로 알려주세요."
+            return "로컬 예제 검색 중 문제가 있었습니다. 찾고 싶은 함수명이나 노트북 주제를 더 구체적으로 알려 주세요."
+        return "검색 경로에서 문제가 있었습니다. 확인할 API 이름이나 비교 대상을 더 구체적으로 알려 주세요."
+    if reason == "unsupported_claims":
+        return "근거로 확인할 코드 위치나 함수명을 더 구체적으로 알려 주시면, 확인 가능한 내용만 다시 정리하겠습니다."
     if routes == {"docs"}:
-        return "공식 문서에서 찾을 라이브러리명이나 API 이름을 더 구체적으로 알려주세요."
+        return "공식 문서에서 찾을 라이브러리명이나 API 이름을 더 구체적으로 알려 주세요."
     if routes == {"upload"}:
-        return "업로드한 파일에서 찾을 함수명이나 셀 내용을 더 구체적으로 알려주세요."
+        return "업로드한 파일에서 찾을 함수명이나 코드 위치를 더 구체적으로 알려 주세요."
     if routes == {"local"}:
-        return "로컬 예제에서 찾을 함수명이나 노트북 주제를 더 구체적으로 알려주세요."
+        return "로컬 예제에서 찾을 함수명이나 노트북 주제를 더 구체적으로 알려 주세요."
     if routes == {"docs", "upload"}:
-        return "공식 문서와 업로드 파일에서 함께 확인할 API나 함수명을 더 구체적으로 알려주세요."
+        return "공식 문서와 업로드 파일에서 함께 확인할 API나 함수명을 더 구체적으로 알려 주세요."
     if routes == {"docs", "local"}:
-        return "공식 문서와 로컬 예제에서 함께 확인할 API나 함수명을 더 구체적으로 알려주세요."
-    return "찾고 싶은 대상과 범위를 조금 더 구체적으로 알려주세요."
+        return "공식 문서와 로컬 예제에서 함께 확인할 API나 함수명을 더 구체적으로 알려 주세요."
+    return "찾고 싶은 대상과 범위를 조금 더 구체적으로 알려 주세요."
 
 
 def build_followup_from_routes(
@@ -122,6 +126,11 @@ def build_followup_from_routes(
 ) -> str:
     if reason == "blocked_missing_upload":
         return build_missing_upload_followup()
+    if reason == "unsupported_claims":
+        return (
+            "현재 답변 초안의 근거 매핑이 충분하지 않아, 확인 가능한 근거만으로 다시 답하기 어렵습니다. "
+            "확인이 필요한 코드 위치나 함수명을 더 구체적으로 알려 주세요."
+        )
     route_specific_followup = build_route_specific_followup(planner_output, reason)
     return f"현재 확인 가능한 근거를 찾지 못했습니다. {route_specific_followup}"
 

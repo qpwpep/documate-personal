@@ -4,12 +4,15 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from ..answer_schema import ClaimItem
 from ..evidence import EvidenceItem
 
 
 class AgentResponsePayload(BaseModel):
     answer: str = ""
+    claims: list[ClaimItem] = Field(default_factory=list)
     evidence: list[EvidenceItem] = Field(default_factory=list)
+    confidence: float | None = Field(default=None, ge=0.0, le=1.0)
 
 
 class AgentTokenUsage(BaseModel):
@@ -21,10 +24,17 @@ class AgentTokenUsage(BaseModel):
 class AgentRetryContext(BaseModel):
     attempt: int = 0
     max_retries: int = 1
-    retry_reason: Literal["no_evidence", "low_score", "tool_error", "blocked_missing_upload"] | None = None
+    retry_reason: Literal[
+        "no_evidence",
+        "low_score",
+        "tool_error",
+        "blocked_missing_upload",
+        "unsupported_claims",
+    ] | None = None
     retrieval_feedback: str | None = None
     evidence_start_index: int | None = None
     retrieval_error_start_index: int | None = None
+    retrieval_diagnostic_start_index: int | None = None
     score_avg: float | None = None
 
 
