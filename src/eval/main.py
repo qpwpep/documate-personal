@@ -87,13 +87,14 @@ def command_report(args: argparse.Namespace) -> int:
     summary = RunSummary(**json.loads(summary_path.read_text(encoding="utf-8")))
 
     # Validate raw result lines for report regeneration safety.
+    results: list[CaseResult] = []
     for line in raw_path.read_text(encoding="utf-8").splitlines():
         record = line.strip()
         if not record:
             continue
-        CaseResult.model_validate_json(record)
+        results.append(CaseResult.model_validate_json(record))
 
-    report_path.write_text(build_markdown_report(summary), encoding="utf-8")
+    report_path.write_text(build_markdown_report(summary, results), encoding="utf-8")
     print(f"Regenerated report: {report_path}")
     return 0
 

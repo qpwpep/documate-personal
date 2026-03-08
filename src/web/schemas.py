@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 
 from ..answer_schema import ClaimItem
 from ..evidence import EvidenceItem
+from ..latency import LatencyBreakdownModel
 
 
 class AgentResponsePayload(BaseModel):
@@ -65,6 +66,7 @@ class AgentDebugInfo(BaseModel):
     tool_calls: list[str] = Field(default_factory=list)
     tool_call_count: int = 0
     latency_ms_server: int | None = None
+    latency_breakdown: LatencyBreakdownModel | None = None
     token_usage: AgentTokenUsage | None = None
     model_name: str | None = None
     errors: list[str] = Field(default_factory=list)

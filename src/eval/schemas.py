@@ -9,6 +9,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field, model_validator
 
 from ..evidence import EvidenceItem
+from ..latency import LatencyBreakdownModel
 
 
 CaseCategory = Literal["docs_only", "rag_only", "hybrid", "tool_action"]
@@ -136,6 +137,7 @@ class CaseResult(BaseModel):
     trace: str | None = None
     latency_ms_e2e: int | None = None
     latency_ms_server: int | None = None
+    latency_breakdown: LatencyBreakdownModel | None = None
     tool_calls: list[str] = Field(default_factory=list)
     token_usage: TokenUsage | None = None
     model_name: str | None = None

@@ -177,6 +177,10 @@ uv run python -X utf8 -m streamlit run src/web/streamlit_app.py --server.port 85
 | `CHAT_MODEL` | `gpt-5-mini` | synthesis 모델 |
 | `PLANNER_MODEL` | `gpt-5-nano` | planner 모델 |
 | `SUMMARY_MODEL` | `gpt-5-mini` | 요약 모델 |
+| `DOCS_SEARCH_TIMEOUT_SECONDS` | `8` | Tavily docs retrieval fail-fast timeout(초) |
+| `SYNTHESIS_TIMEOUT_SECONDS` | `8` | synthesizer timeout(초) |
+| `SYNTHESIS_MAX_RETRIES` | `1` | synthesizer 재시도 횟수 |
+| `SYNTHESIS_MAX_TOKENS` | `900` | synthesizer max_tokens |
 | `VERBOSE` | `true` | CLI 및 내부 로깅 상세도 |
 | `FASTAPI_URL` | `http://localhost:8000` | Streamlit에서 사용할 API 주소 |
 | `SESSION_TTL_SECONDS` | `1800` | 세션 TTL |
@@ -242,6 +246,29 @@ uv run python -X utf8 -m streamlit run src/web/streamlit_app.py --server.port 85
     "tool_calls": ["tavily_search", "save_text"],
     "tool_call_count": 2,
     "latency_ms_server": 1842,
+    "latency_breakdown": {
+      "server_total_ms": 1842,
+      "graph_total_ms": 1765,
+      "upload_retriever_build_ms": null,
+      "stage_totals_ms": {
+        "summarize_ms": 0,
+        "planner_ms": 34,
+        "retrieval_total_ms": 911,
+        "synthesis_total_ms": 702,
+        "validation_ms": 81,
+        "action_postprocess_ms": 37
+      },
+      "stage_attempts": [
+        {"stage": "planner", "attempt": 1, "latency_ms": 34, "status": "llm"},
+        {"stage": "retrieval", "attempt": 1, "latency_ms": 911, "status": "success"}
+      ],
+      "retrieval_routes": [
+        {"route": "docs", "tool": "tavily_search", "attempt": 1, "latency_ms": 884, "status": "success"}
+      ],
+      "synthesis_attempts": [
+        {"attempt": 1, "mode": "structured_only", "structured_ms": 702, "fallback_ms": null, "total_ms": 702}
+      ]
+    },
     "token_usage": {
       "prompt_tokens": 642,
       "completion_tokens": 153,
