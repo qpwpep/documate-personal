@@ -24,6 +24,26 @@ class AppSettings(BaseSettings):
     chat_model: str = Field(default="gpt-5-mini", alias="CHAT_MODEL")
     planner_model: str = Field(default="gpt-5-nano", alias="PLANNER_MODEL")
     summary_model: str = Field(default="gpt-5-mini", alias="SUMMARY_MODEL")
+    docs_search_timeout_seconds: int = Field(
+        default=8,
+        alias="DOCS_SEARCH_TIMEOUT_SECONDS",
+        ge=1,
+    )
+    synthesis_timeout_seconds: int = Field(
+        default=8,
+        alias="SYNTHESIS_TIMEOUT_SECONDS",
+        ge=1,
+    )
+    synthesis_max_retries: int = Field(
+        default=1,
+        alias="SYNTHESIS_MAX_RETRIES",
+        ge=0,
+    )
+    synthesis_max_tokens: int = Field(
+        default=900,
+        alias="SYNTHESIS_MAX_TOKENS",
+        ge=1,
+    )
 
     verbose: bool = Field(default=True, alias="VERBOSE")
     fastapi_url: str = Field(default="http://localhost:8000", alias="FASTAPI_URL")

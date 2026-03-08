@@ -176,8 +176,10 @@ class State(TypedDict, total=False):
     retrieved_evidence: Annotated[list[dict[str, Any]], merge_dict_lists]
     retrieval_diagnostics: Annotated[list[dict[str, Any]], merge_dict_lists]
     retrieval_errors: Annotated[list[str], merge_string_lists]
+    synthesis_errors: Annotated[list[str], merge_string_lists]
     validation_errors: Annotated[list[str], merge_string_lists]
     action_errors: Annotated[list[str], merge_string_lists]
+    latency_trace: Annotated[list[dict[str, Any]], merge_dict_lists]
     synthesis_attempt: int
     synthesis_output: dict[str, Any]
     response_payload: dict[str, Any]
