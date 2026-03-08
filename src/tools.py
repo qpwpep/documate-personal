@@ -7,9 +7,9 @@ from urllib.parse import urlparse
 from langchain_chroma import Chroma
 from langchain_core.tools import StructuredTool
 from langchain_openai import OpenAIEmbeddings
-from langchain_tavily import TavilySearch
 from langgraph.prebuilt import InjectedState
 from pydantic import BaseModel, Field
+import requests
 from slack_sdk.errors import SlackApiError
 
 from src.util.util import get_save_text_output_dir
@@ -28,6 +28,7 @@ from .slack_utils import create_slack_client, resolve_destination
 
 
 INDEX_PATH = Path("data/index")
+TAVILY_SEARCH_API_URL = "https://api.tavily.com/search"
 
 
 @dataclass(frozen=True)
@@ -114,6 +115,62 @@ def _normalize_include_domains(raw_values: list[str]) -> list[str]:
     return normalized
 
 
+def _request_tavily_search(
+    *,
+    query: str,
+    tavily_api_key: str | None,
+    include_domains: list[str],
+    search_depth: Literal["basic", "advanced", "fast", "ultra-fast"],
+    timeout_seconds: int,
+    max_results: int = 3,
+) -> dict[str, Any]:
+    if not tavily_api_key:
+        raise RuntimeError("TAVILY_API_KEY is not configured")
+
+    headers = {
+        "Authorization": f"Bearer {tavily_api_key}",
+        "Content-Type": "application/json",
+        "X-Client-Source": "documate",
+    }
+    payload: dict[str, Any] = {
+        "query": query,
+        "max_results": max_results,
+        "search_depth": search_depth,
+        "topic": "general",
+        "include_domains": include_domains,
+    }
+
+    try:
+        response = requests.post(
+            TAVILY_SEARCH_API_URL,
+            json=payload,
+            headers=headers,
+            timeout=timeout_seconds,
+        )
+    except requests.Timeout as exc:
+        raise TimeoutError(
+            f"Tavily search timed out after {timeout_seconds}s"
+        ) from exc
+    except requests.RequestException as exc:
+        raise RuntimeError(f"Tavily request failed ({exc})") from exc
+
+    try:
+        body = response.json()
+    except ValueError as exc:
+        raise RuntimeError("invalid JSON response from Tavily") from exc
+
+    if response.status_code != 200:
+        detail = body.get("detail") if isinstance(body, dict) else None
+        error_message = detail.get("error") if isinstance(detail, dict) else None
+        if not error_message:
+            error_message = f"HTTP {response.status_code}"
+        raise RuntimeError(str(error_message))
+
+    if not isinstance(body, dict):
+        raise RuntimeError("unexpected response type from Tavily")
+    return body
+
+
 def _load_chroma(openai_api_key: str) -> Chroma:
     embeddings = OpenAIEmbeddings(
         model="text-embedding-3-small",
@@ -192,11 +249,6 @@ def _build_evidence_item(
 
 def build_tool_registry(settings: AppSettings) -> ToolRegistry:
     default_domains = _normalize_include_domains(list(DEFAULT_DOCS.values()))
-    tavily_client = TavilySearch(
-        max_results=3,
-        include_domains=default_domains,
-        tavily_api_key=settings.tavily_api_key,
-    )
 
     def tavily_search(
         query: str,
@@ -211,7 +263,13 @@ def build_tool_registry(settings: AppSettings) -> ToolRegistry:
             "include_domains": domains,
         }
         try:
-            raw_results = tavily_client.invoke(payload)
+            raw_results = _request_tavily_search(
+                query=query,
+                tavily_api_key=settings.tavily_api_key,
+                include_domains=domains,
+                search_depth=search_depth,
+                timeout_seconds=settings.docs_search_timeout_seconds,
+            )
         except Exception as exc:
             return _build_retrieval_payload(
                 tool="tavily_search",
