@@ -2,11 +2,16 @@ from __future__ import annotations
 
 from typing import Any
 
-from langchain_core.messages import AnyMessage, SystemMessage
+from langchain_core.messages import AnyMessage
 
 from ..prompts import needs_rag, needs_save, needs_search, needs_slack
-from .session import extract_text_content, latest_previous_ai_answer
-from .state import State, build_tool_message
+from .session import latest_previous_ai_answer
+from .state import (
+    State,
+    build_tool_message,
+    coerce_session_metadata,
+    coerce_slack_destination,
+)
 
 
 def has_action_lookup_intent(user_input: str) -> bool:
@@ -50,29 +55,9 @@ def is_action_only_request(user_input: str) -> bool:
     return not has_action_lookup_intent(user_input)
 
 
-def extract_slack_destinations(messages: list[AnyMessage]) -> dict[str, str | None]:
-    destinations: dict[str, str | None] = {
-        "channel_id": None,
-        "user_id": None,
-        "email": None,
-    }
-    for message in reversed(messages):
-        if not isinstance(message, SystemMessage):
-            continue
-        content = extract_text_content(message.content)
-        if "[Slack Destinations]" not in content:
-            continue
-
-        for line in content.splitlines():
-            if "=" not in line:
-                continue
-            key, value = line.split("=", 1)
-            key = key.strip()
-            value = value.strip()
-            if key in destinations and value:
-                destinations[key] = value
-        break
-    return destinations
+def get_slack_destinations(session_metadata: Any) -> dict[str, str | None]:
+    metadata = coerce_session_metadata(session_metadata)
+    return coerce_slack_destination(metadata.get("slack_destination"))
 
 
 def build_action_only_answer(
@@ -124,7 +109,7 @@ def make_action_postprocess_node(
             tool_messages.append(build_tool_message("save_text", save_result, 1))
 
         if needs_slack(user_input) and final_answer.strip():
-            destinations = extract_slack_destinations(state.get("messages", []))
+            destinations = get_slack_destinations(state.get("session_metadata"))
             if any(destinations.values()) or has_default_slack_destination:
                 try:
                     slack_result = slack_notify_tool.func(
