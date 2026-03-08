@@ -10,6 +10,7 @@ from typing import Any
 
 import requests
 
+from ..latency import LatencyBreakdownModel
 from .judge_llm import LLMJudge
 from .reporting import build_summary, write_run_outputs
 from .scoring_rules import (
@@ -151,6 +152,23 @@ def _parse_planner_diagnostics(
         return None
 
 
+def _parse_latency_breakdown(
+    raw_item: Any,
+    *,
+    response_errors: list[str],
+) -> LatencyBreakdownModel | None:
+    if raw_item is None:
+        return None
+    if not isinstance(raw_item, dict):
+        response_errors.append("debug.latency_breakdown must be an object")
+        return None
+    try:
+        return LatencyBreakdownModel.model_validate(raw_item)
+    except Exception as exc:
+        response_errors.append(f"debug.latency_breakdown invalid: {exc}")
+        return None
+
+
 def _run_single_case(
     *,
     run_id: str,
@@ -200,6 +218,7 @@ def _run_single_case(
     response_file_path: str | None = None
     latency_ms_e2e: int | None = None
     latency_ms_server: int | None = None
+    latency_breakdown: LatencyBreakdownModel | None = None
     model_name: str | None = None
     tool_calls: list[str] = []
     token_usage: TokenUsage | None = None
@@ -269,6 +288,10 @@ def _run_single_case(
                         )
                         planner_diagnostics = _parse_planner_diagnostics(
                             debug_payload.get("planner_diagnostics"),
+                            response_errors=response_errors,
+                        )
+                        latency_breakdown = _parse_latency_breakdown(
+                            debug_payload.get("latency_breakdown"),
                             response_errors=response_errors,
                         )
                     else:
@@ -342,6 +365,7 @@ def _run_single_case(
         trace=response_trace,
         latency_ms_e2e=latency_ms_e2e,
         latency_ms_server=latency_ms_server,
+        latency_breakdown=latency_breakdown,
         tool_calls=tool_calls,
         token_usage=token_usage,
         model_name=model_name,
