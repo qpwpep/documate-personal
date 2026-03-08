@@ -47,6 +47,20 @@ class _CaptureStructuredSynthesizeLLM:
         return self.payload
 
 
+class _TimeoutStructuredSynthesizeLLM:
+    def __init__(self):
+        self.last_messages = None
+        self.call_count = 0
+
+    def with_structured_output(self, *_args, **_kwargs):
+        return self
+
+    def invoke(self, messages):
+        self.last_messages = messages
+        self.call_count += 1
+        raise TimeoutError("structured timeout")
+
+
 class _CapturePlannerLLM:
     def __init__(self, planner_output):
         self.planner_output = planner_output
