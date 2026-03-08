@@ -1,7 +1,11 @@
 # DocuMate
 > 공식 문서 검색, 로컬 노트북 RAG, 업로드 파일 검색, 멀티턴 세션 메모리를 결합한 LangGraph 기반 학습 보조 에이전트
 
-이 저장소는 2025년 부트캠프 팀 결과물을 기반으로 현재 런타임 경로와 평가 체계를 분리해 유지보수 중인 개인 프로젝트 버전입니다. 현재 버전은 구조화된 evidence 응답, 검증 후 1회 재시도, FastAPI/Streamlit 실행 관리, 온라인 벤치마크 리포팅을 중심으로 정리되어 있습니다.
+이 저장소는 2025년 부트캠프 팀 결과물을 바탕으로 현재 런타임 구조와 평가 체계를 분리해 유지보수 중인 개인 리팩터링 버전입니다. 현재 코드는 `src/graph_builder.py`, `src/make_graph.py`, `src/llm.py`, `src/nodes/*` 중심으로 재편되어 있으며, README는 그 구조를 기준 문서로 유지합니다.
+
+- [벤치마크 상세](docs/benchmarking.md)
+- [변경 이력](CHANGELOG.md)
+- [레거시 산출물 안내](archive/README.md)
 
 ## 1. 핵심 기능
 
@@ -16,29 +20,46 @@
 | 후처리 도구 | 사용자가 요청하면 `save_text`로 답변을 `.txt` 파일로 저장하고 `slack_notify`로 Slack DM 또는 채널 전송을 수행합니다. |
 | UTF-8 안전 실행 | `src/runtime_encoding.py`와 `src/main.py`가 UTF-8 모드 재실행과 표준 입출력 재설정을 처리합니다. |
 
-## 2. 런타임 아키텍처
+## 2. 현재 아키텍처
 
-- Interface
-  - `src/main.py`: CLI 실행과 FastAPI/Streamlit 백그라운드 서비스 시작, 중지
-  - `src/web/main.py`: `/agent`, `/download/{filename}`를 제공하는 FastAPI 앱
-  - `src/web/streamlit_app.py`: 웹 UI
-- Orchestration
-  - `src/agent_manager.py`: 세션별 LangGraph 실행 결과를 정리하고 evidence, debug 정보를 추출
-  - `src/graph_builder.py`: LLM, 도구, 노드 조합
-  - `src/node.py`: planner, retrieval dispatch, synthesis, validate_evidence, action_postprocess 구현
-  - `src/planner_schema.py`: planner 출력 스키마와 route 제약
-- Evidence / Retrieval
-  - `src/evidence.py`: evidence 정규화, dedupe, payload 파싱
-  - `src/domain_docs.py`: 공식 문서 도메인 기본 목록
-  - `src/rag_build.py`: 로컬 노트북 인덱스 생성
-  - `src/upload_helpers.py`: 업로드 파일용 임시 retriever 생성
-- Runtime flow
-  - 사용자 메시지 추가 -> 오래된 대화 요약 -> planner route 선택 -> docs/upload/local retrieval -> synthesis -> evidence 검증 -> 필요 시 1회 재시도 -> save/slack 후처리
+- `src/main.py`: CLI 실행과 FastAPI/Streamlit 백그라운드 서비스 시작, 중지
+- `src/web/main.py`: `/agent`, `/download/{filename}`를 제공하는 FastAPI 앱
+- `src/web/streamlit_app.py`: 웹 UI
+- `src/agent_manager.py`: 세션별 LangGraph 실행 결과를 정리하고 evidence, debug 정보를 추출
+- `src/graph_builder.py`: 설정, 도구 레지스트리, LLM 레지스트리, 각 노드 팩토리를 조립하는 진입점
+- `src/llm.py`: planner, synthesizer, summarizer 모델 레지스트리 구성
+- `src/make_graph.py`: LangGraph 노드, 라우터, edge를 정의하는 그래프 토폴로지
+- `src/nodes/session.py`: `add_user_message`, `summarize_old_messages`
+- `src/nodes/planner.py`: `planner`
+- `src/nodes/retrieval.py`: `retrieve_dispatch`
+- `src/nodes/synthesis.py`: `synthesize`
+- `src/nodes/validation.py`: `validate_evidence`
+- `src/nodes/actions.py`: `action_postprocess`
+- `src/nodes/state.py`: 그래프 상태 타입
+
+```mermaid
+flowchart LR
+    A["add_user_message"] --> B{"summarize?"}
+    B -- yes --> C["summarize_old_messages"]
+    B -- no --> D["planner"]
+    C --> D
+    D --> E{"use_retrieval and tasks?"}
+    E -- yes --> F["retrieve_dispatch"]
+    E -- no --> G["synthesize"]
+    F --> G
+    G --> H["validate_evidence"]
+    H --> I{"needs_retry?"}
+    I -- yes --> D
+    I -- no --> J["action_postprocess"]
+```
+
+문서의 기준 다이어그램은 위 Mermaid입니다. CLI 실행 중 `draw_mermaid_png()`가 성공하면 루트에 `graph.png`가 생성될 수 있지만, 이는 부가 산출물일 뿐 기준 문서는 아닙니다.
 
 ## 3. 프로젝트 구조
 
 ```text
 .
+├── CHANGELOG.md
 ├── archive/
 │   ├── legacy_code/
 │   ├── team_docs/
@@ -47,10 +68,11 @@
 │   ├── benchmarks/
 │   │   ├── config.toml
 │   │   └── fixtures/
-│   └── index/                  # src.rag_build.py가 생성하는 Chroma 인덱스
+│   └── index/                     # src.rag_build.py가 생성하는 Chroma 인덱스
 ├── docs/
-│   └── assets/
-│       └── benchmark_history.svg
+│   ├── assets/
+│   │   └── benchmark_history.svg
+│   └── benchmarking.md
 ├── output/
 │   ├── benchmarks/
 │   └── save_text/
@@ -62,17 +84,23 @@
 │   ├── domain_docs.py
 │   ├── evidence.py
 │   ├── graph_builder.py
+│   ├── llm.py
 │   ├── main.py
-│   ├── node.py
+│   ├── make_graph.py
 │   ├── planner_schema.py
+│   ├── prompts.py
 │   ├── rag_build.py
 │   ├── runtime_encoding.py
 │   ├── settings.py
+│   ├── slack_utils.py
 │   ├── tools.py
 │   ├── upload_helpers.py
 │   ├── eval/
+│   ├── nodes/
+│   ├── util/
 │   └── web/
 ├── tests/
+│   ├── core/
 │   ├── eval/
 │   └── web/
 ├── uploads/
@@ -250,119 +278,23 @@ uv run python -X utf8 -m streamlit run src/web/streamlit_app.py --server.port 85
 - `save_text` 결과 파일 다운로드용 엔드포인트입니다.
 - 절대 경로나 상위 디렉터리 탈출 경로는 거부됩니다.
 
-## 8. 온라인 벤치마크
+## 8. 검증 현황
 
-DocuMate는 `FastAPI /agent` 실경로를 기준으로 하는 온라인 벤치마크를 제공합니다.
+- 테스트: `uv run pytest -q` 기준 현재 저장소에서 `75 passed`
+- 인코딩 검사: `uv run python script/check_encoding.py` 기준 `Encoding check passed. Checked 82 tracked text files.`
+- 온라인 벤치마크: 상세 명령, 최신 저장 런 요약, Hard Gate, 추세는 [docs/benchmarking.md](docs/benchmarking.md)에서 관리합니다.
+- 현재 저장소에 남아 있는 최신 완전한 온라인 리포트는 `20260307_101108`이며, 일부 Hard Gate는 아직 미통과 상태입니다.
 
-### 8.1 케이스 생성
-
-```bash
-uv run python -m src.eval.main generate \
-  --seed data/benchmarks/fixtures/cases.seed.jsonl \
-  --regression-seed data/benchmarks/fixtures/cases.regression.seed.jsonl \
-  --out data/benchmarks/fixtures/cases.generated.jsonl \
-  --target 120
-```
-
-### 8.2 실행
+## 9. 테스트 및 검증
 
 ```bash
-uv run python -m src.eval.main run \
-  --mode online \
-  --fixtures data/benchmarks/fixtures/cases.generated.jsonl \
-  --endpoint http://localhost:8000
-```
-
-### 8.3 리포트 재생성
-
-```bash
-uv run python -m src.eval.main report --run output/benchmarks/20260306_094033
-```
-
-### 8.4 결과 산출물
-
-- `output/benchmarks/<run_id>/raw_results.jsonl`
-- `output/benchmarks/<run_id>/summary.json`
-- `output/benchmarks/<run_id>/report.md`
-- `output/benchmarks/latest_run.txt`
-
-### 8.5 Hard Gate
-
-| Gate | Threshold |
-|---|---:|
-| `pass_rate` | 0.82 |
-| `tool_precision` | 0.90 |
-| `tool_recall` | 0.85 |
-| `citation_compliance` | 0.88 |
-| `p95_latency_ms` | 20000 |
-| `avg_cost_per_case_usd` | 0.035 |
-
-## 9. 최신 벤치마크 결과
-
-기준 런은 `output/benchmarks/latest_run.txt`가 가리키는 `20260307_101108`입니다.
-
-- run_id: `20260307_101108`
-- generated_at_utc: `2026-03-07T11:08:17.965871+00:00`
-- endpoint: `http://localhost:8000`
-- fixtures: `data\benchmarks\fixtures\cases.generated.jsonl`
-- overall: `FAIL`
-
-### 9.1 Metrics
-
-| Metric | Value |
-|---|---:|
-| total_cases | 120 |
-| scored_cases | 120 |
-| passed_cases | 44 |
-| pass_rate | 0.3667 |
-| tool_precision | 0.9091 |
-| tool_recall | 1.0000 |
-| citation_compliance | 0.8167 |
-| p50_latency_ms | 24374.5 |
-| p95_latency_ms | 46977.6 |
-| avg_cost_per_case_usd | 0.00081372 |
-
-### 9.2 Hard Gates
-
-| Gate | Threshold | Actual | Passed |
-|---|---:|---:|:---:|
-| pass_rate | 0.82 | 0.3667 | N |
-| tool_precision | 0.90 | 0.9091 | Y |
-| tool_recall | 0.85 | 1.0000 | Y |
-| citation_compliance | 0.88 | 0.8167 | N |
-| p95_latency_ms | 20000 | 46977.6 | N |
-| avg_cost_per_case_usd | 0.035 | 0.00081372 | Y |
-
-최신 런은 `tool_precision`, `tool_recall`, `avg_cost_per_case_usd` Hard Gate를 통과했지만 `pass_rate`, `citation_compliance`, `p95_latency_ms`는 아직 기준에 못 미칩니다. 상세 목록은 [latest report](output/benchmarks/20260307_101108/report.md)를 참고하세요.
-
-## 10. 최근 벤치마크 이력 및 추세
-
-저장소에 남아 있는 5개 generated-suite 런 기준으로 보면, 최신 `20260307_101108` 런은 직전 `20260306_163931` 대비 `pass_rate` +0.0084, `tool_precision` +0.0029, `tool_recall` +0.0333, `citation_compliance` -0.0333, `p95_latency_ms` -12461.6, `avg_cost_per_case_usd` -0.00004216 변화를 보였습니다. overall 상태는 여전히 `FAIL`입니다.
-
-| run_id | generated_at_utc | overall | pass_rate | tool_precision | tool_recall | citation_compliance | p50_latency_ms | p95_latency_ms | avg_cost_per_case_usd | 변화 |
-|---|---|---|---:|---:|---:|---:|---:|---:|---:|---|
-| `20260303_134325` | `2026-03-03T15:24:50.806715+00:00` | `FAIL` | 0.3833 | 0.8049 | 0.4400 | 0.3056 | 49835.5 | 62063.0 | 0.00219042 | 기준 런 |
-| `20260306_094033` | `2026-03-06T10:34:56.024712+00:00` | `FAIL` | 0.2500 | 0.8824 | 0.2000 | 0.0000 | 14969.0 | 53888.1 | 0.00058583 | `pass_rate -0.1333; tool_precision +0.0775; tool_recall -0.2400; citation_compliance -0.3056; p50_latency_ms -34866.5; p95_latency_ms -8174.9; avg_cost_per_case_usd -0.00160459` |
-| `20260306_123220` | `2026-03-06T13:25:46.653810+00:00` | `FAIL` | 0.2500 | 0.8824 | 0.2000 | 0.0000 | 15905.5 | 41446.1 | 0.00058941 | `pass_rate +0.0000; tool_precision +0.0000; tool_recall +0.0000; citation_compliance +0.0000; p50_latency_ms +936.5; p95_latency_ms -12442.0; avg_cost_per_case_usd +0.00000358` |
-| `20260306_163931` | `2026-03-06T17:48:12.325082+00:00` | `FAIL` | 0.3583 | 0.9062 | 0.9667 | 0.8500 | 29327.0 | 59439.2 | 0.00085588 | `pass_rate +0.1083; tool_precision +0.0238; tool_recall +0.7667; citation_compliance +0.8500; p50_latency_ms +13421.5; p95_latency_ms +17993.1; avg_cost_per_case_usd +0.00026647` |
-| `20260307_101108` | `2026-03-07T11:08:17.965871+00:00` | `FAIL` | 0.3667 | 0.9091 | 1.0000 | 0.8167 | 24374.5 | 46977.6 | 0.00081372 | `pass_rate +0.0084; tool_precision +0.0029; tool_recall +0.0333; citation_compliance -0.0333; p50_latency_ms -4952.5; p95_latency_ms -12461.6; avg_cost_per_case_usd -0.00004216` |
-
-![DocuMate benchmark history](docs/assets/benchmark_history.svg)
-
-저장소에 남아 있는 5개 generated-suite 런 기준 trend chart입니다. 상세 수치는 [run 20260303_134325](output/benchmarks/20260303_134325/report.md), [run 20260306_094033](output/benchmarks/20260306_094033/report.md), [run 20260306_123220](output/benchmarks/20260306_123220/report.md), [run 20260306_163931](output/benchmarks/20260306_163931/report.md), [run 20260307_101108](output/benchmarks/20260307_101108/report.md)에서 다시 확인할 수 있습니다.
-
-## 11. 테스트 및 검증
-
-```bash
-uv run python -m unittest discover -s tests
-uv run python -m src.eval.main report --run output/benchmarks/20260307_101108
-uv run python -m src.eval.main history
+uv run pytest -q
 uv run python script/check_encoding.py
 ```
 
-현재 테스트는 planner graph, evidence pipeline, API 스키마, 벤치마크 fixture 계약, scoring 규칙, request payload 전달을 다룹니다.
+벤치마크 생성, 실행, 리포트 재생성, 이력 확인 명령은 [docs/benchmarking.md](docs/benchmarking.md)에서 별도로 정리합니다.
 
-## 12. 인코딩 정책
+## 10. 인코딩 정책
 
 - 텍스트 파일 기본 인코딩은 UTF-8 no BOM입니다.
 - `.editorconfig`는 `charset = utf-8`을 기본값으로 사용합니다.
@@ -375,7 +307,7 @@ uv run python script/check_encoding.py
 uv run python -X utf8 -c "import sys, locale; print(sys.flags.utf8_mode, sys.stdout.encoding, locale.getpreferredencoding(False))"
 ```
 
-## 13. 참고 링크
+## 11. 참고 링크
 
 - LangChain: https://docs.langchain.com/oss/python/langchain/overview
 - Streamlit: https://docs.streamlit.io/
