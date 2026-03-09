@@ -182,29 +182,3 @@ def build_latency_breakdown(
         retrieval_routes=retrieval_routes,
         synthesis_attempts=synthesis_attempts,
     )
-
-
-def largest_latency_stage(breakdown: LatencyBreakdownModel | None) -> tuple[str | None, int | None]:
-    if breakdown is None:
-        return None, None
-
-    candidates = {
-        "upload_retriever_build_ms": breakdown.upload_retriever_build_ms,
-        "summarize_ms": breakdown.stage_totals_ms.summarize_ms,
-        "planner_ms": breakdown.stage_totals_ms.planner_ms,
-        "retrieval_total_ms": breakdown.stage_totals_ms.retrieval_total_ms,
-        "synthesis_total_ms": breakdown.stage_totals_ms.synthesis_total_ms,
-        "validation_ms": breakdown.stage_totals_ms.validation_ms,
-        "action_postprocess_ms": breakdown.stage_totals_ms.action_postprocess_ms,
-    }
-
-    valid_items = [
-        (name, int(value))
-        for name, value in candidates.items()
-        if value is not None and int(value) > 0
-    ]
-    if not valid_items:
-        return None, None
-
-    stage_name, latency_ms = max(valid_items, key=lambda item: item[1])
-    return stage_name, latency_ms

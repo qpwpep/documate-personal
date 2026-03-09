@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from langchain_core.messages import AIMessage
 
 from ..answer_schema import (
@@ -10,6 +11,7 @@ from ..answer_schema import (
     render_payload_from_claims,
 )
 from ..evidence import EvidenceItem, parse_evidence_payload
+from ..logging_utils import log_event
 from .retry import build_followup_from_routes, build_retry_update, contains_tool_error
 from .state import (
     LOW_SCORE_THRESHOLD,
@@ -20,6 +22,9 @@ from .state import (
     safe_list,
     slice_from_index,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 def _coerce_response_payload(raw_payload: object) -> AgentResponsePayloadModel | None:
@@ -180,9 +185,14 @@ def make_validate_evidence_node(verbose: bool):
             )
 
         if verbose:
-            print(
-                f"[validate_evidence] required={retrieval_required} "
-                f"evidence={len(parsed_evidence)} retry={needs_retry} reason={retry_reason}"
+            log_event(
+                logger,
+                logging.INFO,
+                "validate_evidence",
+                retrieval_required=retrieval_required,
+                evidence_count=len(parsed_evidence),
+                needs_retry=needs_retry,
+                retry_reason=retry_reason,
             )
 
         updates: State = {
