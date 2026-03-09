@@ -31,7 +31,7 @@
 | tool_recall | 0.85 | 0.2067 | N |
 | citation_compliance | 0.88 | 0.3056 | N |
 | p95_latency_ms | 20000 | 62063.0 | N |
-| avg_cost_per_case_usd | 0.035 | 0.00219042 | Y |
+| avg_cost_per_case_usd | 0.01 | 0.00219042 | Y |
 
 ## Category Breakdown
 

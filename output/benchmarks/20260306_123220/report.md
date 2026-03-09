@@ -29,7 +29,7 @@
 | tool_recall | 0.85 | 0.2 | N |
 | citation_compliance | 0.88 | 0.0 | N |
 | p95_latency_ms | 20000 | 41446.1 | N |
-| avg_cost_per_case_usd | 0.035 | 0.00058941 | Y |
+| avg_cost_per_case_usd | 0.01 | 0.00058941 | Y |
 
 ## Failures (Top 20)
 

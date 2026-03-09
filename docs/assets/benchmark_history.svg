@@ -211,7 +211,7 @@
   <g transform="translate(0,0)">
     <rect class="panel" x="620" y="776" width="540" height="230" rx="18"/>
     <text class="metric" x="646" y="810">avg_cost_per_case_usd</text>
-    <text class="axis" x="646" y="832">lower is better; gate 0.035 is off chart</text>
+<text class="axis" x="646" y="832">lower is better; gate 0.01 is off chart</text>
     <line class="guide" x1="710" y1="960" x2="1080" y2="960"/>
     <line class="guide" x1="710" y1="822" x2="710" y2="960"/>
     <line class="guide" x1="710" y1="822" x2="1080" y2="822"/>
