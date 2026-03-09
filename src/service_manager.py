@@ -1,5 +1,8 @@
+from __future__ import annotations
+
 import argparse
 import json
+import logging
 import os
 import socket
 import subprocess
@@ -8,21 +11,18 @@ import time
 from pathlib import Path
 
 import psutil
-from langchain_core.messages import AIMessage
 
-from .runtime_encoding import (
-    build_utf8_env,
-    ensure_utf8_stdio,
-    maybe_reexec_with_utf8_for_main,
-)
+from .logging_utils import configure_logging, log_event
+from .runtime_encoding import build_utf8_env, ensure_utf8_stdio, maybe_reexec_with_utf8
+from .runtime_paths import get_project_root_path, get_runtime_log_path, get_service_state_path
 from .settings import ConfigurationError, get_settings, validate_required_keys
-from .util.util import get_project_root_path
 
 
 ensure_utf8_stdio()
+configure_logging()
+logger = logging.getLogger(__name__)
 
 
-SERVICE_STATE_FILE = Path("script/web_services_state.json")
 STATE_SCHEMA_VERSION = 2
 FASTAPI_LOG_FILE = "fastapi.log"
 STREAMLIT_LOG_FILE = "streamlit.log"
@@ -32,70 +32,14 @@ CREATE_TIME_TOLERANCE_SEC = 1.0
 PROCESS_STOP_TIMEOUT_SEC = 5.0
 PROCESS_KILL_TIMEOUT_SEC = 2.0
 
-FASTAPI_PROCESS_TOKENS = ["uvicorn", "src.web.main:app"]
+FASTAPI_PROCESS_TOKENS = ["uvicorn", "src.web.app:app"]
 STREAMLIT_PROCESS_TOKENS = ["streamlit", "src/web/streamlit_app.py"]
-
-
-def maybe_save_mermaid_png(graph):
-    try:
-        png_bytes = graph.get_graph().draw_mermaid_png()
-        Path("graph.png").write_bytes(png_bytes)
-        print("Saved graph to graph.png")
-    except Exception:
-        pass
 
 
 def _load_validated_settings(context: str):
     settings = get_settings()
     validate_required_keys(settings, context=context)
     return settings
-
-
-def run_cli():
-    try:
-        settings = _load_validated_settings("cli")
-    except ConfigurationError as exc:
-        print(f"Configuration error: {exc}")
-        return
-
-    from .graph_builder import build_agent_graph
-
-    graph = build_agent_graph(settings=settings)
-    maybe_save_mermaid_png(graph)
-    verbose = settings.verbose
-
-    messages = []
-    while True:
-        try:
-            user_input = input("User: ").strip()
-            if user_input.lower() in {"quit", "exit", "q"}:
-                print("Goodbye!")
-                break
-
-            state = {
-                "user_input": user_input,
-                "messages": messages,
-            }
-            response = graph.invoke(state)
-            messages = response["messages"]
-
-            if verbose:
-                for msg in response["messages"]:
-                    try:
-                        msg.pretty_print()
-                    except Exception:
-                        print(repr(msg))
-            else:
-                for msg in reversed(messages):
-                    if isinstance(msg, AIMessage):
-                        print(msg.content)
-                        break
-        except KeyboardInterrupt:
-            print("\nGoodbye!")
-            break
-        except Exception as exc:
-            print("Error:", exc)
-            break
 
 
 def _as_int(value) -> int | None:
@@ -112,22 +56,19 @@ def _as_float(value) -> float | None:
         return None
 
 
-def _service_state_path(root_path: str | Path) -> Path:
-    return Path(root_path) / SERVICE_STATE_FILE
-
-
-def _load_service_state(root_path: str | Path) -> dict:
-    state_path = _service_state_path(root_path)
+def _load_service_state() -> dict:
+    state_path = get_service_state_path()
     if not state_path.exists():
         return {}
     try:
         return json.loads(state_path.read_text(encoding="utf-8"))
-    except Exception:
+    except Exception as exc:
+        log_event(logger, logging.WARNING, "service_state_load_failed", state_path=state_path, error=exc)
         return {}
 
 
-def _save_service_state(root_path: str | Path, state: dict) -> None:
-    state_path = _service_state_path(root_path)
+def _save_service_state(state: dict) -> None:
+    state_path = get_service_state_path()
     state_path.parent.mkdir(parents=True, exist_ok=True)
     state_path.write_text(
         json.dumps(state, ensure_ascii=False, indent=2),
@@ -135,8 +76,8 @@ def _save_service_state(root_path: str | Path, state: dict) -> None:
     )
 
 
-def _remove_service_state(root_path: str | Path) -> None:
-    state_path = _service_state_path(root_path)
+def _remove_service_state() -> None:
+    state_path = get_service_state_path()
     if state_path.exists():
         state_path.unlink()
 
@@ -219,27 +160,6 @@ def _wait_for_port_open(
     return _is_port_open(port=port, host=host)
 
 
-def _match_cmdline(pid: int | None, tokens: list[str]) -> bool:
-    process = _get_process(pid=pid)
-    if process is None:
-        return False
-
-    try:
-        cmdline = process.cmdline()
-    except (psutil.Error, OSError):
-        return False
-
-    normalized_cmdline = [_normalize_cmd_token(part) for part in cmdline if part]
-    if not normalized_cmdline:
-        return False
-
-    normalized_tokens = [_normalize_cmd_token(token) for token in tokens if token]
-    return all(
-        any(token in cmd_part for cmd_part in normalized_cmdline)
-        for token in normalized_tokens
-    )
-
-
 def _find_process_pid_by_tokens(tokens: list[str]) -> int | None:
     normalized_tokens = [_normalize_cmd_token(token) for token in tokens if token]
     if not normalized_tokens:
@@ -298,12 +218,12 @@ def _terminate_process_tree(
     expected_create_time: float | None = None,
 ) -> bool:
     if pid is None:
-        print(f"- {name}: PID information is missing.")
+        log_event(logger, logging.INFO, "service_stop_skipped", service=name, reason="missing_pid")
         return False
 
     process = _get_process(pid=pid, expected_create_time=expected_create_time)
     if process is None:
-        print(f"- {name}: already stopped (PID {pid})")
+        log_event(logger, logging.INFO, "service_already_stopped", service=name, pid=pid)
         return False
 
     try:
@@ -332,10 +252,10 @@ def _terminate_process_tree(
         _, alive = psutil.wait_procs(alive, timeout=PROCESS_KILL_TIMEOUT_SEC)
 
     if alive:
-        print(f"- {name}: stop failed (PID {pid})")
+        log_event(logger, logging.ERROR, "service_stop_failed", service=name, pid=pid)
         return False
 
-    print(f"- {name}: stopped (PID {pid})")
+    log_event(logger, logging.INFO, "service_stopped", service=name, pid=pid)
     return True
 
 
@@ -349,20 +269,26 @@ def _resolve_service_process(
         return pid, create_time
 
     if pid is not None:
-        print(f"- {name}: saved PID {pid} is stale. Looking for process by command line.")
+        log_event(logger, logging.INFO, "service_state_stale", service=name, pid=pid)
 
     discovered_pid = _find_process_pid_by_tokens(fallback_tokens)
     if discovered_pid is None:
         return None, None
 
     discovered_create_time = _get_process_create_time(discovered_pid)
-    print(f"- {name}: discovered running process (PID {discovered_pid}) from command line.")
+    log_event(
+        logger,
+        logging.INFO,
+        "service_discovered_from_cmdline",
+        service=name,
+        pid=discovered_pid,
+    )
     return discovered_pid, discovered_create_time
 
 
-def _start_web_services(root_path: str) -> None:
-    root = Path(root_path)
-    state = _load_service_state(root)
+def _start_web_services() -> int:
+    root = get_project_root_path()
+    state = _load_service_state()
 
     fastapi_pid = _as_int(state.get("fastapi_pid"))
     streamlit_pid = _as_int(state.get("streamlit_pid"))
@@ -376,23 +302,20 @@ def _start_web_services(root_path: str) -> None:
         running.append(f"Streamlit(pid={streamlit_pid})")
 
     if running:
-        print("Services are already running.")
-        print(" / ".join(running))
-        print("Run 'uv run python -m src.main --mode stopweb' first.")
-        return
+        log_event(logger, logging.WARNING, "services_already_running", services=", ".join(running))
+        return 1
 
     occupied_ports = []
     if _is_port_open(FASTAPI_PORT):
-        occupied_ports.append(f"- FastAPI port {FASTAPI_PORT} is already in use.")
+        occupied_ports.append(f"FastAPI:{FASTAPI_PORT}")
     if _is_port_open(STREAMLIT_PORT):
-        occupied_ports.append(f"- Streamlit port {STREAMLIT_PORT} is already in use.")
+        occupied_ports.append(f"Streamlit:{STREAMLIT_PORT}")
     if occupied_ports:
-        print("Cannot start web services because required ports are not available.")
-        print("\n".join(occupied_ports))
-        return
+        log_event(logger, logging.ERROR, "ports_unavailable", ports=", ".join(occupied_ports))
+        return 1
 
-    fastapi_log_path = root / FASTAPI_LOG_FILE
-    streamlit_log_path = root / STREAMLIT_LOG_FILE
+    fastapi_log_path = get_runtime_log_path(FASTAPI_LOG_FILE)
+    streamlit_log_path = get_runtime_log_path(STREAMLIT_LOG_FILE)
 
     utf8_env = build_utf8_env(os.environ.copy())
     fastapi_cmd = [
@@ -401,7 +324,7 @@ def _start_web_services(root_path: str) -> None:
         "utf8",
         "-m",
         "uvicorn",
-        "src.web.main:app",
+        "src.web.app:app",
         "--host",
         "0.0.0.0",
         "--port",
@@ -419,10 +342,6 @@ def _start_web_services(root_path: str) -> None:
         str(STREAMLIT_PORT),
     ]
 
-    print("=" * 60)
-    print("Starting web services...")
-    print("=" * 60)
-
     fastapi_proc = None
     streamlit_proc = None
     try:
@@ -435,8 +354,13 @@ def _start_web_services(root_path: str) -> None:
         if not _wait_for_port_open(FASTAPI_PORT):
             raise RuntimeError(f"FastAPI port({FASTAPI_PORT}) was not opened. Log: {fastapi_log_path}")
         fastapi_create_time = _get_process_create_time(fastapi_proc.pid)
-        print(
-            f"- FastAPI started (PID {fastapi_proc.pid}, log: {fastapi_log_path})"
+        log_event(
+            logger,
+            logging.INFO,
+            "service_started",
+            service="FastAPI",
+            pid=fastapi_proc.pid,
+            log_path=fastapi_log_path,
         )
 
         streamlit_proc = _start_background_process(
@@ -448,12 +372,16 @@ def _start_web_services(root_path: str) -> None:
         if not _wait_for_port_open(STREAMLIT_PORT):
             raise RuntimeError(f"Streamlit port({STREAMLIT_PORT}) was not opened. Log: {streamlit_log_path}")
         streamlit_create_time = _get_process_create_time(streamlit_proc.pid)
-        print(
-            f"- Streamlit started (PID {streamlit_proc.pid}, log: {streamlit_log_path})"
+        log_event(
+            logger,
+            logging.INFO,
+            "service_started",
+            service="Streamlit",
+            pid=streamlit_proc.pid,
+            log_path=streamlit_log_path,
         )
 
         _save_service_state(
-            root,
             {
                 "schema_version": STATE_SCHEMA_VERSION,
                 "fastapi_pid": fastapi_proc.pid,
@@ -466,34 +394,30 @@ def _start_web_services(root_path: str) -> None:
                 "streamlit_port": STREAMLIT_PORT,
                 "started_at_unix": int(time.time()),
                 "platform": sys.platform,
-            },
+            }
         )
-
-        print("=" * 60)
-        print("Web services are running.")
-        print(f"- FastAPI:   http://localhost:{FASTAPI_PORT}")
-        print(f"- Streamlit: http://localhost:{STREAMLIT_PORT}")
-        print("- Stop: uv run python -m src.main --mode stopweb")
-        print("=" * 60)
+        log_event(
+            logger,
+            logging.INFO,
+            "services_running",
+            fastapi_url=f"http://localhost:{FASTAPI_PORT}",
+            streamlit_url=f"http://localhost:{STREAMLIT_PORT}",
+        )
+        return 0
     except Exception as exc:
-        print(f"Error while starting services: {exc}")
+        log_event(logger, logging.ERROR, "service_start_failed", error=exc)
         if streamlit_proc:
             _terminate_process_tree(streamlit_proc.pid, "Streamlit(launcher)")
         if fastapi_proc:
             _terminate_process_tree(fastapi_proc.pid, "FastAPI(launcher)")
-        _remove_service_state(root)
+        _remove_service_state()
+        return 1
 
 
-def _stop_web_services(root_path: str) -> None:
-    root = Path(root_path)
-    state = _load_service_state(root)
-
+def _stop_web_services() -> int:
+    state = _load_service_state()
     if not state:
-        print("No saved service state file found. Falling back to command-line discovery.")
-
-    print("=" * 60)
-    print("Stopping web services...")
-    print("=" * 60)
+        log_event(logger, logging.INFO, "service_state_missing", state_path=get_service_state_path())
 
     streamlit_pid, streamlit_create_time = _resolve_service_process(
         name="Streamlit",
@@ -509,11 +433,10 @@ def _stop_web_services(root_path: str) -> None:
     )
 
     if not streamlit_pid and not fastapi_pid:
-        print("No running target services found.")
         if state:
-            _remove_service_state(root)
-        print("=" * 60)
-        return
+            _remove_service_state()
+        log_event(logger, logging.INFO, "service_stop_skipped", reason="no_running_services")
+        return 0
 
     streamlit_stopped = (
         _terminate_process_tree(
@@ -537,45 +460,50 @@ def _stop_web_services(root_path: str) -> None:
     fastapi_remaining = _find_process_pid_by_tokens(FASTAPI_PROCESS_TOKENS)
     streamlit_remaining = _find_process_pid_by_tokens(STREAMLIT_PROCESS_TOKENS)
     if state and fastapi_remaining is None and streamlit_remaining is None:
-        _remove_service_state(root)
+        _remove_service_state()
 
-    print("=" * 60)
-    if streamlit_stopped or fastapi_stopped:
-        print("Web services stopped.")
-    else:
-        print("No active process was stopped.")
-    print("=" * 60)
+    log_event(
+        logger,
+        logging.INFO,
+        "service_stop_complete",
+        fastapi_stopped=fastapi_stopped,
+        streamlit_stopped=streamlit_stopped,
+    )
+    return 0
 
 
-def run_web_service(mode: str):
-    root_path = str(get_project_root_path())
+def run_web_service(mode: str) -> int:
     if mode == "startweb":
         try:
             _load_validated_settings("startweb")
         except ConfigurationError as exc:
-            print(f"Configuration error: {exc}")
-            return
-        _start_web_services(root_path)
-    elif mode == "stopweb":
-        _stop_web_services(root_path)
-    else:
-        print("Unsupported mode.")
+            log_event(logger, logging.ERROR, "configuration_error", context="startweb", error=exc)
+            return 1
+        return _start_web_services()
+    if mode == "stopweb":
+        return _stop_web_services()
+
+    log_event(logger, logging.ERROR, "unsupported_mode", mode=mode)
+    return 1
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "mode",
+        type=str,
+        choices=["startweb", "stopweb"],
+        help="Service mode: startweb or stopweb.",
+    )
+    return parser
+
+
+def main() -> int:
+    maybe_reexec_with_utf8("src.service_manager", sys.argv[1:])
+    parser = build_parser()
+    args = parser.parse_args()
+    return run_web_service(args.mode)
 
 
 if __name__ == "__main__":
-    maybe_reexec_with_utf8_for_main(sys.argv[1:])
-
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--mode",
-        type=str,
-        default="cli",
-        choices=["cli", "startweb", "stopweb"],
-        help="Execution mode: 'cli', 'startweb', or 'stopweb'.",
-    )
-    args = parser.parse_args()
-
-    if args.mode in {"startweb", "stopweb"}:
-        run_web_service(args.mode)
-    else:
-        run_cli()
+    raise SystemExit(main())
