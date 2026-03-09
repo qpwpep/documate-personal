@@ -10,9 +10,10 @@ from .answer_schema import build_empty_response_payload
 from .evidence import dedupe_evidence, evidence_to_dicts, parse_evidence_payload
 from .graph_builder import build_agent_graph
 from .latency import build_latency_breakdown, elapsed_ms
+from .logging_utils import log_event
 from .nodes.state import SessionMetadata, coerce_session_metadata
 from .settings import AppSettings, get_settings
-from .upload_helpers import UploadedRetrieverHandle, build_temp_retriever
+from .tools.local_rag import UploadedRetrieverHandle, build_temp_retriever
 
 
 logger = logging.getLogger(__name__)
@@ -43,10 +44,12 @@ class AgentFlowManager:
         try:
             handle.cleanup()
         except Exception as exc:
-            logger.warning(
-                "upload_retriever_cleanup_failed collection=%s error=%s",
-                handle.collection_name,
-                exc,
+            log_event(
+                logger,
+                logging.WARNING,
+                "upload_retriever_cleanup_failed",
+                collection=handle.collection_name,
+                error=exc,
             )
         finally:
             self.upload_retriever_handle = None
@@ -479,7 +482,7 @@ class AgentFlowManager:
         except Exception as exc:
             self._cleanup_upload_retriever()
             self.upload_file_path = None
-            print(f"Agent execution error: {exc}")
+            log_event(logger, logging.ERROR, "agent_execution_error", error=exc)
             message = str(exc)
             return {
                 "message": message,
