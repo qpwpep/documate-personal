@@ -11,7 +11,7 @@ tool_precision = 0.90
 tool_recall = 0.85
 citation_compliance = 0.88
 p95_latency_ms = 20000
-avg_cost_per_case_usd = 0.035
+avg_cost_per_case_usd = 0.01
 
 [pricing]
 prompt_per_1k_usd = 0.00015
