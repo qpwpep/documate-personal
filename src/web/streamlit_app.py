@@ -3,12 +3,16 @@ import requests
 import os
 import sys
 import uuid
+import logging
 
 from src.domain_docs import DEFAULT_DOCS
+from src.logging_utils import configure_logging, log_event
 from src.runtime_encoding import ensure_utf8_stdio
 from src.settings import get_settings
 
 ensure_utf8_stdio()
+configure_logging()
+logger = logging.getLogger(__name__)
 
 
 @st.cache_resource(show_spinner=False)
@@ -16,11 +20,13 @@ def _warn_if_utf8_mode_disabled_once() -> None:
     if sys.flags.utf8_mode == 1:
         return
 
-    print(
-        "WARNING: UTF-8 mode is disabled (utf8_mode=0). For direct launch, run "
-        "'uv run python -X utf8 -m streamlit run src/web/streamlit_app.py --server.port 8501' "
-        "or set PYTHONUTF8=1 before startup. An already-started interpreter cannot fully "
-        "switch utf8_mode at runtime."
+    log_event(
+        logger,
+        logging.WARNING,
+        "utf8_mode_disabled",
+        suggested_command=(
+            "uv run python -X utf8 -m streamlit run src/web/streamlit_app.py --server.port 8501"
+        ),
     )
 
 
@@ -37,7 +43,7 @@ from pathlib import Path
 # 챗봇 세션이 시작될 때 고유 ID 생성 (탭이 새로 열릴 때마다 1번 실행)
 if "session_id" not in st.session_state:
     st.session_state.session_id = str(uuid.uuid4())
-    print(f"[REQ ID: {st.session_state.session_id[:8]}] - session start")
+    log_event(logger, logging.INFO, "streamlit_session_start", session_id=st.session_state.session_id[:8])
 
 # ============ 파일 업로드 관련 초기 설정
 UPLOADS_DIR = Path("uploads")
@@ -92,8 +98,6 @@ def get_agent_response(user_input: str):
                 answer = str(response_payload)
                 evidence_items = []
             return answer, data.get("file_path"), evidence_items
-            # print(f"debug >> response : {response.json().get("response", "FastAPI에서 응답을 받았습니다.")}")
-            # return response.json().get("response", "FastAPI에서 응답을 받았습니다.")
         else:
             # 서버가 에러를 반환한 경우 메시지 표시
             return (f"Agent 호출 실패: 상태 코드 {resp.status_code}\n"

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import time
 from typing import Any, List
 
@@ -19,11 +20,15 @@ from ..latency import (
     make_stage_latency_event,
     make_synthesis_attempt_latency_event,
 )
+from ..logging_utils import log_event
 from ..prompts import SYS_POLICY, needs_save, needs_slack
 from .actions import build_action_only_answer, get_slack_destinations, is_action_only_request
 from .retrieval import format_evidence_for_prompt
 from .session import extract_text_content, keep_recent_messages
 from .state import State, coerce_planner_output, coerce_retry_context, safe_list, slice_from_index
+
+
+logger = logging.getLogger(__name__)
 
 
 SYNTHESIS_CONTRACT = (
@@ -288,7 +293,13 @@ def make_synthesize_node(
         model_messages = keep_recent_messages(model_messages, max_turns=max_turns)
         after = len(model_messages)
         if verbose and before != after:
-            print(f"[synthesize] trimmed model messages: {before} -> {after}")
+            log_event(
+                logger,
+                logging.INFO,
+                "synthesize_trimmed_messages",
+                before=before,
+                after=after,
+            )
 
         synthesis_errors: list[str] = []
         structured_ms: int | None = None

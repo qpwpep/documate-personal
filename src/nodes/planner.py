@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage, ToolMessage
 
+from ..logging_utils import log_event
 from ..planner_schema import PlannerOutput, RetrievalTask
 from ..prompts import needs_rag, needs_search
 from .actions import is_action_only_request
@@ -36,6 +38,8 @@ PLANNER_SYS = (
     "- If retriever_available=true and the user is asking about the currently uploaded file, prefer upload over local.\n"
     "- Do not include actions for save/slack; only retrieval planning."
 )
+
+logger = logging.getLogger(__name__)
 
 
 def has_upload_route_intent(user_input: str) -> bool:
@@ -336,11 +340,15 @@ def make_planner_node(llm_planner: Any, verbose: bool, max_turns: int = 6):
         if guardrail_followup:
             guided_followup = guardrail_followup
         if verbose:
-            print(
-                f"[planner] status={planner_status} "
-                f"use_retrieval={planner_output.use_retrieval} tasks={len(planner_output.tasks)} "
-                f"required_routes={planner_diagnostics.get('required_routes', [])} "
-                f"override={planner_diagnostics.get('override_applied', False)}"
+            log_event(
+                logger,
+                logging.INFO,
+                "planner",
+                status=planner_status,
+                use_retrieval=planner_output.use_retrieval,
+                task_count=len(planner_output.tasks),
+                required_routes=planner_diagnostics.get("required_routes", []),
+                override=planner_diagnostics.get("override_applied", False),
             )
 
         retry_context: RetryContext = dict(existing_retry_context)
