@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import logging
 from typing import Any, List
 
 from langchain_core.messages import AIMessage, AnyMessage, BaseMessage, HumanMessage, SystemMessage
 
+from ..logging_utils import log_event
 from .state import State
 
 SUMMARY_SYS = (
@@ -12,6 +14,8 @@ SUMMARY_SYS = (
     "- Remove duplication.\n"
     "- If uncertain, state uncertainty explicitly.\n"
 )
+
+logger = logging.getLogger(__name__)
 
 
 def add_user_message(state: State) -> State:
@@ -76,7 +80,7 @@ def make_summarize_node(llm_summarizer: Any, verbose: bool, max_turns: int = 6):
             ).content.strip()
         except Exception as exc:
             if verbose:
-                print(f"[summary] failed: {exc}")
+                log_event(logger, logging.WARNING, "summary_failed", error=exc)
             state["messages"] = recent_messages
             return state
 
@@ -85,7 +89,7 @@ def make_summarize_node(llm_summarizer: Any, verbose: bool, max_turns: int = 6):
         state["memory_summary"] = merged_summary
         state["messages"] = recent_messages
         if verbose:
-            print(f"[summary] merged ({cutoff} msgs -> 4~5 lines)")
+            log_event(logger, logging.INFO, "summary_merged", cutoff=cutoff)
         return state
 
     return summarize_old_messages

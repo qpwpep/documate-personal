@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from langchain_core.messages import AnyMessage
 
+from ..logging_utils import log_event
 from ..prompts import needs_rag, needs_save, needs_search, needs_slack
 from .session import latest_previous_ai_answer
 from .state import (
@@ -12,6 +14,9 @@ from .state import (
     coerce_session_metadata,
     coerce_slack_destination,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 def has_action_lookup_intent(user_input: str) -> bool:
@@ -126,7 +131,7 @@ def make_action_postprocess_node(
 
         if verbose and tool_messages:
             tool_names = ", ".join(message.name for message in tool_messages if message.name)
-            print(f"[postprocess] tools={tool_names}")
+            log_event(logger, logging.INFO, "postprocess", tools=tool_names)
 
         updates: State = {}
         if tool_messages:
