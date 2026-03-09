@@ -258,6 +258,10 @@ $RECYCLE.BIN/
 
 # Windows Installer files
 *.cab
+
+# DocuMate runtime artifacts
+output/
+graph.png
 *.msi
 *.msix
 *.msm

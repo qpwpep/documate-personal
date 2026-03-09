@@ -18,12 +18,16 @@
 | 구조화된 evidence 응답 | `/agent`는 `response.answer`와 `response.evidence[]`를 반환하고, `debug.observed_evidence`와 함께 평가에 사용됩니다. |
 | evidence 검증 후 재시도 | evidence가 없거나 점수가 낮으면 planner -> retrieval -> synthesis 흐름을 최대 1회 재시도하고, 실패 시 불확실성 응답을 반환합니다. |
 | 후처리 도구 | 사용자가 요청하면 `save_text`로 답변을 `.txt` 파일로 저장하고 `slack_notify`로 Slack DM 또는 채널 전송을 수행합니다. |
-| UTF-8 안전 실행 | `src/runtime_encoding.py`와 `src/main.py`가 UTF-8 모드 재실행과 표준 입출력 재설정을 처리합니다. |
+| UTF-8 안전 실행 | `src/runtime_encoding.py`, `src.cli.py`, `src.service_manager.py`가 UTF-8 모드 재실행과 표준 입출력 재설정을 처리합니다. |
 
 ## 2. 현재 아키텍처
 
-- `src/main.py`: CLI 실행과 FastAPI/Streamlit 백그라운드 서비스 시작, 중지
-- `src/web/main.py`: `/agent`, `/download/{filename}`를 제공하는 FastAPI 앱
+- `src/cli.py`: CLI 실행 엔트리
+- `src/service_manager.py`: FastAPI/Streamlit 백그라운드 서비스 시작, 중지
+- `src/web/app.py`: lifespan, middleware, router 조립을 담당하는 FastAPI 앱
+- `src/web/routes.py`: `/agent`, `/download/{filename}` 라우터
+- `src/web/session_store.py`: 세션 TTL/LRU 캐시
+- `src/web/cleanup.py`: 업로드/생성 파일 cleanup, path validation
 - `src/web/streamlit_app.py`: 웹 UI
 - `src/agent_manager.py`: 세션별 LangGraph 실행 결과를 정리하고 evidence, debug 정보를 추출
 - `src/graph_builder.py`: 설정, 도구 레지스트리, LLM 레지스트리, 각 노드 팩토리를 조립하는 진입점
@@ -53,7 +57,7 @@ flowchart LR
     I -- no --> J["action_postprocess"]
 ```
 
-문서의 기준 다이어그램은 위 Mermaid입니다. CLI 실행 중 `draw_mermaid_png()`가 성공하면 루트에 `graph.png`가 생성될 수 있지만, 이는 부가 산출물일 뿐 기준 문서는 아닙니다.
+문서의 기준 다이어그램은 위 Mermaid입니다. 그래프 PNG 덤프는 기본적으로 생성하지 않으며, 필요할 때만 `src.cli --dump-graph <path>`로 수동 생성합니다.
 
 ## 3. 프로젝트 구조
 
@@ -74,30 +78,30 @@ flowchart LR
 │   │   └── benchmark_history.svg
 │   └── benchmarking.md
 ├── output/
-│   ├── benchmarks/
-│   └── save_text/
+│   ├── runtime/                   # 런타임 로그 및 서비스 상태 파일(기본 git 제외)
+│   ├── benchmarks/                # 온라인 벤치마크 산출물(기본 git 제외)
+│   └── save_text/                 # save_text 결과물(기본 git 제외)
 ├── script/
-│   ├── check_encoding.py
-│   └── web_services_state.json
+│   └── check_encoding.py
 ├── src/
+│   ├── cli.py
 │   ├── agent_manager.py
 │   ├── domain_docs.py
 │   ├── evidence.py
 │   ├── graph_builder.py
 │   ├── llm.py
-│   ├── main.py
 │   ├── make_graph.py
 │   ├── planner_schema.py
 │   ├── prompts.py
 │   ├── rag_build.py
 │   ├── runtime_encoding.py
+│   ├── runtime_paths.py
+│   ├── service_manager.py
 │   ├── settings.py
 │   ├── slack_utils.py
-│   ├── tools.py
-│   ├── upload_helpers.py
+│   ├── tools/
 │   ├── eval/
 │   ├── nodes/
-│   ├── util/
 │   └── web/
 ├── tests/
 │   ├── core/
@@ -143,26 +147,32 @@ uv run python -m src.rag_build
 ### 4.4 CLI 실행
 
 ```bash
-uv run python -m src.main
+uv run python -m src.cli
 ```
 
-`src.main`은 현재 인터프리터가 UTF-8 모드가 아니면 내부적으로 `-X utf8`로 재실행합니다.
+필요하면 그래프 이미지를 수동 덤프할 수 있습니다.
+
+```bash
+uv run python -m src.cli --dump-graph output/runtime/graph.png
+```
+
+`src.cli`는 현재 인터프리터가 UTF-8 모드가 아니면 내부적으로 `-X utf8`로 재실행합니다.
 
 ### 4.5 웹 서비스 실행
 
 ```bash
-uv run python -m src.main --mode startweb
-uv run python -m src.main --mode stopweb
+uv run python -m src.service_manager startweb
+uv run python -m src.service_manager stopweb
 ```
 
 - FastAPI: `http://localhost:8000`
 - Streamlit: `http://localhost:8501`
-- 시작 시 프로세스 상태는 `script/web_services_state.json`에 기록됩니다.
+- 시작 시 프로세스 상태와 로그는 `output/runtime/` 아래에 기록됩니다.
 
 ### 4.6 FastAPI/Streamlit 직접 실행
 
 ```bash
-uv run python -X utf8 -m uvicorn src.web.main:app --host 0.0.0.0 --port 8000
+uv run python -X utf8 -m uvicorn src.web.app:app --host 0.0.0.0 --port 8000
 uv run python -X utf8 -m streamlit run src/web/streamlit_app.py --server.port 8501
 ```
 
@@ -203,6 +213,7 @@ uv run python -X utf8 -m streamlit run src/web/streamlit_app.py --server.port 85
 - `save_text`가 생성한 파일은 `output/save_text/*.txt`에 저장됩니다.
 - 업로드 디렉터리는 `SESSION_TTL_SECONDS`, 생성 파일은 `GENERATED_FILE_TTL_SECONDS` 기준으로 자동 정리됩니다.
 - 만료된 저장 파일은 `/download/{filename}` 요청 시 `404 Not Found`가 반환될 수 있습니다.
+- `output/`와 `graph` 덤프는 런타임 산출물로 취급하며 기본적으로 git 추적 대상에서 제외합니다.
 
 ## 7. API 계약
 
@@ -310,10 +321,10 @@ uv run python -X utf8 -m streamlit run src/web/streamlit_app.py --server.port 85
 
 ## 8. 검증 현황
 
-- 테스트: `uv run pytest -q` 기준 현재 저장소에서 `75 passed`
+- 테스트: `./.venv/Scripts/python.exe -m pytest` 기준 현재 저장소에서 `97 passed`
 - 인코딩 검사: `uv run python script/check_encoding.py` 기준 `Encoding check passed. Checked 82 tracked text files.`
 - 온라인 벤치마크: 상세 명령, 최신 저장 런 요약, Hard Gate, 추세는 [docs/benchmarking.md](docs/benchmarking.md)에서 관리합니다.
-- 현재 저장소에 남아 있는 최신 완전한 온라인 리포트는 `20260307_101108`이며, 일부 Hard Gate는 아직 미통과 상태입니다.
+- 최신 저장 런 기준 일부 Hard Gate는 아직 미통과 상태입니다.
 
 ## 9. 테스트 및 검증
 

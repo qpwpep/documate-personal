@@ -206,7 +206,6 @@ def build_history_readme_block(
     suite_label = _suite_label(latest.summary.fixtures_path)
     previous = comparable_runs[-2] if len(comparable_runs) > 1 else None
     passed_gates, failed_gates = _gate_lists(latest.summary)
-    latest_report_path = _relative_markdown_path(output_root / latest.run_id / "report.md", readme_path.parent)
     svg_markdown_path = _relative_markdown_path(svg_path, readme_path.parent)
 
     lines: list[str] = []
@@ -246,10 +245,9 @@ def build_history_readme_block(
     lines.append("")
     lines.append(
         "최신 런은 {passed} Hard Gate를 통과했지만 {failed}는 아직 기준에 못 미칩니다. "
-        "상세 목록은 [latest report]({report_path})를 참고하세요.".format(
+        "개별 리포트는 로컬 `output/benchmarks/` 또는 release artifact에서 확인합니다.".format(
             passed=_quoted_metric_names(passed_gates) if passed_gates else "아직 어떤",
             failed=_quoted_metric_names(failed_gates) if failed_gates else "추가 실패 항목",
-            report_path=latest_report_path,
         )
     )
     lines.append("")
