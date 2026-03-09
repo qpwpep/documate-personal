@@ -73,9 +73,9 @@ def _summary_payload(
             },
             {
                 "name": "avg_cost_per_case_usd",
-                "threshold": 0.035,
+            "threshold": 0.01,
                 "actual": avg_cost_per_case_usd,
-                "passed": avg_cost_per_case_usd <= 0.035,
+            "passed": avg_cost_per_case_usd <= 0.01,
             },
         ],
         "overall_passed": False,
@@ -92,7 +92,7 @@ def _summary_payload(
             "tool_recall": 0.85,
             "citation_compliance": 0.88,
             "p95_latency_ms": 20000,
-            "avg_cost_per_case_usd": 0.035,
+            "avg_cost_per_case_usd": 0.01,
         },
         "pricing": {
             "prompt_per_1k_usd": 0.00015,

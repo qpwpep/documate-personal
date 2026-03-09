@@ -99,7 +99,7 @@ class HardGates(BaseModel):
     tool_recall: float = 0.85
     citation_compliance: float = 0.88
     p95_latency_ms: int = 20000
-    avg_cost_per_case_usd: float = 0.035
+    avg_cost_per_case_usd: float = 0.01
 
 
 class Pricing(BaseModel):
