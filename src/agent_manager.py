@@ -292,10 +292,185 @@ class AgentFlowManager:
             "override_reason": override_reason,
         }
 
-    def run_agent_flow(self, user_input: str, upload_file_path: Optional[str] = None) -> dict:
-        current_messages = self.messages
+    def _prepare_graph_state(
+        self,
+        user_input: str,
+        upload_file_path: Optional[str],
+    ) -> tuple[dict[str, Any], int | None]:
+        state = {
+            "user_input": user_input,
+            "messages": self.messages,
+            "session_metadata": self._snapshot_session_metadata(),
+        }
         upload_retriever_build_ms: int | None = None
 
+        if upload_file_path is not None:
+            if (
+                self.upload_file_path != upload_file_path
+                or getattr(self, "upload_retriever_handle", None) is None
+            ):
+                self._cleanup_upload_retriever()
+                build_started = time.perf_counter()
+                new_handle = build_temp_retriever(
+                    upload_file_path,
+                    api_key=self.settings.openai_api_key,
+                )
+                upload_retriever_build_ms = elapsed_ms(build_started, time.perf_counter())
+                self.upload_retriever_handle = new_handle
+                self.upload_file_path = upload_file_path
+
+            handle = getattr(self, "upload_retriever_handle", None)
+            if handle is not None:
+                state["retriever"] = handle.retriever
+        else:
+            self._cleanup_upload_retriever()
+            self.upload_file_path = None
+
+        return state, upload_retriever_build_ms
+
+    def _invoke_graph(self, state: dict[str, Any]) -> tuple[dict[str, Any], int]:
+        graph_started = time.perf_counter()
+        response = self.graph.invoke(state)
+        graph_total_ms = elapsed_ms(graph_started, time.perf_counter())
+        return response, graph_total_ms
+
+    def _extract_debug_info(
+        self,
+        response: dict[str, Any],
+        updated_messages: list[Any],
+        graph_total_ms: int,
+        upload_retriever_build_ms: int | None,
+    ) -> dict[str, Any]:
+        tool_calls: list[str] = []
+        total_prompt_tokens = 0
+        total_completion_tokens = 0
+        total_tokens = 0
+        model_name: str | None = None
+        debug_errors: list[str] = []
+
+        for state_error_key in (
+            "retrieval_errors",
+            "synthesis_errors",
+            "validation_errors",
+            "action_errors",
+        ):
+            raw_errors = response.get(state_error_key)
+            if not isinstance(raw_errors, list):
+                continue
+            for error in raw_errors:
+                text = str(error).strip()
+                if text:
+                    debug_errors.append(text)
+
+        current_turn_start_index = -1
+        for index in range(len(updated_messages) - 1, -1, -1):
+            if isinstance(updated_messages[index], HumanMessage):
+                current_turn_start_index = index
+                break
+
+        current_turn_messages = (
+            updated_messages[current_turn_start_index + 1 :]
+            if current_turn_start_index >= 0
+            else updated_messages
+        )
+
+        for message in current_turn_messages:
+            if isinstance(message, AIMessage):
+                tool_calls.extend(self._extract_tool_names_from_ai_message(message))
+                usage = self._extract_token_usage_from_ai_message(message)
+                total_prompt_tokens += usage["prompt_tokens"]
+                total_completion_tokens += usage["completion_tokens"]
+                total_tokens += usage["total_tokens"]
+                if model_name is None:
+                    model_name = self._extract_model_name_from_ai_message(message)
+            elif isinstance(message, ToolMessage) and getattr(message, "name", ""):
+                tool_calls.append(str(message.name))
+
+        if total_tokens <= 0:
+            total_tokens = total_prompt_tokens + total_completion_tokens
+
+        observed_evidence = self._extract_observed_evidence(
+            current_turn_messages,
+            errors=debug_errors,
+        )
+        retry_context = self._normalize_retry_context(response.get("retry_context"))
+        retrieval_diagnostics = self._normalize_retrieval_diagnostics(
+            response.get("retrieval_diagnostics")
+        )
+        planner_diagnostics = self._normalize_planner_diagnostics(
+            response.get("planner_diagnostics")
+        )
+        latency_breakdown = build_latency_breakdown(
+            raw_trace=response.get("latency_trace"),
+            graph_total_ms=graph_total_ms,
+            upload_retriever_build_ms=upload_retriever_build_ms,
+        )
+
+        return {
+            "tool_calls": tool_calls,
+            "tool_call_count": len(tool_calls),
+            "token_usage": {
+                "prompt_tokens": total_prompt_tokens,
+                "completion_tokens": total_completion_tokens,
+                "total_tokens": total_tokens,
+            },
+            "model_name": model_name,
+            "errors": debug_errors,
+            "observed_evidence": observed_evidence,
+            "retry_context": retry_context,
+            "retrieval_diagnostics": retrieval_diagnostics,
+            "planner_diagnostics": planner_diagnostics,
+            "latency_breakdown": latency_breakdown.model_dump(mode="json"),
+        }
+
+    def _assemble_run_result(
+        self,
+        response: dict[str, Any],
+        updated_messages: list[Any],
+        debug_info: dict[str, Any],
+    ) -> dict[str, Any]:
+        final_answer = ""
+        file_path = ""
+
+        for message in reversed(updated_messages):
+            if isinstance(message, HumanMessage):
+                break
+
+            if not final_answer and isinstance(message, AIMessage):
+                final_answer = self._extract_text_content(message.content)
+            elif (
+                not file_path
+                and isinstance(message, ToolMessage)
+                and message.name == "save_text"
+            ):
+                try:
+                    tool_result_dict: Dict[str, Any] = json.loads(
+                        self._extract_text_content(message.content)
+                    )
+                    extracted_path = tool_result_dict.get("file_path")
+                    if extracted_path and os.path.exists(extracted_path):
+                        file_path = extracted_path
+                except json.JSONDecodeError:
+                    continue
+
+            if final_answer and file_path:
+                break
+
+        raw_response_payload = response.get("response_payload")
+        if isinstance(raw_response_payload, dict):
+            response_payload = dict(raw_response_payload)
+        else:
+            response_payload = build_empty_response_payload(answer=final_answer).model_dump(mode="json")
+
+        return {
+            "message": final_answer,
+            "filepath": file_path,
+            "response": response,
+            "response_payload": response_payload,
+            "debug": debug_info,
+        }
+
+    def run_agent_flow(self, user_input: str, upload_file_path: Optional[str] = None) -> dict:
         if user_input.lower() in {"exit", "종료", "quit", "q"}:
             self.close()
             reset_message = "Chat session has been reset. Start again."
@@ -320,164 +495,25 @@ class AgentFlowManager:
                     "model_name": None,
                     "errors": [],
                     "observed_evidence": [],
+                    "retry_context": None,
+                    "retrieval_diagnostics": [],
+                    "planner_diagnostics": None,
+                    "latency_breakdown": None,
                 },
             }
 
         try:
-            state = {
-                "user_input": user_input,
-                "messages": current_messages,
-                "session_metadata": self._snapshot_session_metadata(),
-            }
-
-            if upload_file_path is not None:
-                if (
-                    self.upload_file_path != upload_file_path
-                    or getattr(self, "upload_retriever_handle", None) is None
-                ):
-                    self._cleanup_upload_retriever()
-                    build_started = time.perf_counter()
-                    new_handle = build_temp_retriever(
-                        upload_file_path,
-                        api_key=self.settings.openai_api_key,
-                    )
-                    upload_retriever_build_ms = elapsed_ms(build_started, time.perf_counter())
-                    self.upload_retriever_handle = new_handle
-                    self.upload_file_path = upload_file_path
-
-                handle = getattr(self, "upload_retriever_handle", None)
-                if handle is not None:
-                    state["retriever"] = handle.retriever
-            else:
-                self._cleanup_upload_retriever()
-                self.upload_file_path = None
-
-            graph_started = time.perf_counter()
-            response = self.graph.invoke(state)
-            graph_total_ms = elapsed_ms(graph_started, time.perf_counter())
-
+            state, upload_retriever_build_ms = self._prepare_graph_state(user_input, upload_file_path)
+            response, graph_total_ms = self._invoke_graph(state)
             updated_messages = response["messages"]
             self.messages = updated_messages
-
-            final_answer = ""
-            file_path = ""
-            tool_calls: list[str] = []
-            total_prompt_tokens = 0
-            total_completion_tokens = 0
-            total_tokens = 0
-            model_name: str | None = None
-            debug_errors: list[str] = []
-
-            for state_error_key in (
-                "retrieval_errors",
-                "synthesis_errors",
-                "validation_errors",
-                "action_errors",
-            ):
-                raw_errors = response.get(state_error_key)
-                if not isinstance(raw_errors, list):
-                    continue
-                for error in raw_errors:
-                    text = str(error).strip()
-                    if text:
-                        debug_errors.append(text)
-
-            current_turn_start_index = -1
-            for index in range(len(updated_messages) - 1, -1, -1):
-                if isinstance(updated_messages[index], HumanMessage):
-                    current_turn_start_index = index
-                    break
-
-            current_turn_messages = (
-                updated_messages[current_turn_start_index + 1 :]
-                if current_turn_start_index >= 0
-                else updated_messages
+            debug_info = self._extract_debug_info(
+                response,
+                updated_messages,
+                graph_total_ms,
+                upload_retriever_build_ms,
             )
-
-            for message in current_turn_messages:
-                if isinstance(message, AIMessage):
-                    tool_calls.extend(self._extract_tool_names_from_ai_message(message))
-                    usage = self._extract_token_usage_from_ai_message(message)
-                    total_prompt_tokens += usage["prompt_tokens"]
-                    total_completion_tokens += usage["completion_tokens"]
-                    total_tokens += usage["total_tokens"]
-                    if model_name is None:
-                        model_name = self._extract_model_name_from_ai_message(message)
-                elif isinstance(message, ToolMessage) and getattr(message, "name", ""):
-                    tool_calls.append(str(message.name))
-
-            observed_evidence = self._extract_observed_evidence(
-                current_turn_messages,
-                errors=debug_errors,
-            )
-            retry_context = self._normalize_retry_context(response.get("retry_context"))
-            retrieval_diagnostics = self._normalize_retrieval_diagnostics(
-                response.get("retrieval_diagnostics")
-            )
-            planner_diagnostics = self._normalize_planner_diagnostics(
-                response.get("planner_diagnostics")
-            )
-            latency_breakdown = build_latency_breakdown(
-                raw_trace=response.get("latency_trace"),
-                graph_total_ms=graph_total_ms,
-                upload_retriever_build_ms=upload_retriever_build_ms,
-            )
-
-            for message in reversed(updated_messages):
-                if isinstance(message, HumanMessage):
-                    break
-
-                if not final_answer and isinstance(message, AIMessage):
-                    final_answer = self._extract_text_content(message.content)
-                elif (
-                    not file_path
-                    and isinstance(message, ToolMessage)
-                    and message.name == "save_text"
-                ):
-                    try:
-                        tool_result_dict: Dict[str, Any] = json.loads(
-                            self._extract_text_content(message.content)
-                        )
-                        extracted_path = tool_result_dict.get("file_path")
-                        if extracted_path and os.path.exists(extracted_path):
-                            file_path = extracted_path
-                    except json.JSONDecodeError:
-                        continue
-
-                if final_answer and file_path:
-                    break
-
-            if total_tokens <= 0:
-                total_tokens = total_prompt_tokens + total_completion_tokens
-
-            raw_response_payload = response.get("response_payload")
-            if isinstance(raw_response_payload, dict):
-                response_payload = dict(raw_response_payload)
-            else:
-                response_payload = build_empty_response_payload(answer=final_answer).model_dump(mode="json")
-
-            return {
-                "message": final_answer,
-                "filepath": file_path,
-                "response": response,
-                "response_payload": response_payload,
-                "debug": {
-                    "tool_calls": tool_calls,
-                    "tool_call_count": len(tool_calls),
-                    "token_usage": {
-                        "prompt_tokens": total_prompt_tokens,
-                        "completion_tokens": total_completion_tokens,
-                        "total_tokens": total_tokens,
-                    },
-                    "model_name": model_name,
-                    "errors": debug_errors,
-                    "observed_evidence": observed_evidence,
-                    "retry_context": retry_context,
-                    "retrieval_diagnostics": retrieval_diagnostics,
-                    "planner_diagnostics": planner_diagnostics,
-                    "latency_breakdown": latency_breakdown.model_dump(mode="json"),
-                },
-            }
+            return self._assemble_run_result(response, updated_messages, debug_info)
 
         except Exception as exc:
             self._cleanup_upload_retriever()
@@ -505,7 +541,9 @@ class AgentFlowManager:
                     "model_name": None,
                     "errors": [message],
                     "observed_evidence": [],
+                    "retry_context": None,
                     "retrieval_diagnostics": [],
                     "planner_diagnostics": None,
+                    "latency_breakdown": None,
                 },
             }
