@@ -10,8 +10,9 @@ from langchain_core.messages import AIMessage, HumanMessage
 
 from src.agent_manager import AgentFlowManager
 from src.settings import AppSettings
-from src.upload_helpers import build_temp_retriever
-from src.web import main as web_main
+from src.tools.local_rag import build_temp_retriever
+from src.web.routes import build_session_metadata_snapshot
+from src.web.session_store import InMemorySessionStore, SessionEntry
 from src.web.schemas import AgentRequest
 
 
@@ -64,7 +65,7 @@ def _make_manager(graph: _CapturingGraph) -> AgentFlowManager:
 
 
 class UploadSessionIsolationTest(unittest.TestCase):
-    @patch("src.upload_helpers.OpenAIEmbeddings", return_value=_FakeEmbeddings())
+    @patch("src.tools.local_rag.OpenAIEmbeddings", return_value=_FakeEmbeddings())
     def test_build_temp_retriever_isolates_per_session_collection(self, _mock_embeddings) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             uploads_root = Path(tmp_dir) / "uploads"
@@ -176,7 +177,7 @@ class UploadSessionIsolationTest(unittest.TestCase):
         manager = _make_manager(graph)
 
         manager.set_session_metadata(
-            web_main._build_session_metadata_snapshot(
+            build_session_metadata_snapshot(
                 AgentRequest(
                     query="share this to slack",
                     session_id="demo-session",
@@ -192,7 +193,7 @@ class UploadSessionIsolationTest(unittest.TestCase):
         )
 
         manager.set_session_metadata(
-            web_main._build_session_metadata_snapshot(
+            build_session_metadata_snapshot(
                 AgentRequest(
                     query="share this to slack",
                     session_id="demo-session",
@@ -205,64 +206,64 @@ class UploadSessionIsolationTest(unittest.TestCase):
         self.assertFalse(any(message.__class__.__name__ == "SystemMessage" for message in manager.messages))
 
 
-class SessionCacheCleanupTest(unittest.TestCase):
-    def setUp(self) -> None:
-        self._original_active_agents = dict(web_main.active_agents)
-        web_main.active_agents.clear()
-
-    def tearDown(self) -> None:
-        web_main.active_agents.clear()
-        web_main.active_agents.update(self._original_active_agents)
-
+class SessionStoreCleanupTest(unittest.TestCase):
     def test_cleanup_expired_sessions_calls_agent_close(self) -> None:
+        store = InMemorySessionStore(
+            settings=AppSettings(openai_api_key="test-key", tavily_api_key="test"),
+            agent_factory=lambda: _make_manager(_CapturingGraph()),
+        )
         stale_agent = _make_manager(_CapturingGraph())
         fresh_agent = _make_manager(_CapturingGraph())
         with patch.object(stale_agent, "close") as stale_close, patch.object(
             fresh_agent, "close"
         ) as fresh_close:
-            web_main.active_agents["stale"] = web_main.SessionEntry(
+            store.active_agents["stale"] = SessionEntry(
                 agent=stale_agent,
                 last_accessed_monotonic=0.0,
                 created_monotonic=0.0,
             )
-            web_main.active_agents["fresh"] = web_main.SessionEntry(
+            store.active_agents["fresh"] = SessionEntry(
                 agent=fresh_agent,
                 last_accessed_monotonic=95.0,
                 created_monotonic=0.0,
             )
 
-            removed = web_main._cleanup_expired_sessions(now=100.0, ttl_seconds=10)
+            removed = store.cleanup_expired(now=100.0, ttl_seconds=10)
 
             self.assertEqual(removed, 1)
             stale_close.assert_called_once_with()
             fresh_close.assert_not_called()
-            self.assertNotIn("stale", web_main.active_agents)
-            self.assertIn("fresh", web_main.active_agents)
+            self.assertNotIn("stale", store.active_agents)
+            self.assertIn("fresh", store.active_agents)
 
     def test_lru_eviction_calls_agent_close(self) -> None:
+        store = InMemorySessionStore(
+            settings=AppSettings(openai_api_key="test-key", tavily_api_key="test"),
+            agent_factory=lambda: _make_manager(_CapturingGraph()),
+        )
         oldest_agent = _make_manager(_CapturingGraph())
         newest_agent = _make_manager(_CapturingGraph())
         with patch.object(oldest_agent, "close") as oldest_close, patch.object(
             newest_agent, "close"
         ) as newest_close:
-            web_main.active_agents["oldest"] = web_main.SessionEntry(
+            store.active_agents["oldest"] = SessionEntry(
                 agent=oldest_agent,
                 last_accessed_monotonic=1.0,
                 created_monotonic=0.0,
             )
-            web_main.active_agents["newest"] = web_main.SessionEntry(
+            store.active_agents["newest"] = SessionEntry(
                 agent=newest_agent,
                 last_accessed_monotonic=2.0,
                 created_monotonic=0.0,
             )
 
-            evicted = web_main._evict_lru_if_needed(max_active_sessions=1)
+            evicted = store.evict_lru_if_needed(max_active_sessions=1)
 
             self.assertEqual(evicted, 1)
             oldest_close.assert_called_once_with()
             newest_close.assert_not_called()
-            self.assertNotIn("oldest", web_main.active_agents)
-            self.assertIn("newest", web_main.active_agents)
+            self.assertNotIn("oldest", store.active_agents)
+            self.assertIn("newest", store.active_agents)
 
 
 if __name__ == "__main__":
