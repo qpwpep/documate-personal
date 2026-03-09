@@ -41,6 +41,7 @@ uv run python -m src.eval.main history
 - `output/benchmarks/<run_id>/summary.json`
 - `output/benchmarks/<run_id>/report.md`
 - `output/benchmarks/latest_run.txt`
+- 위 경로는 런타임 산출물이며 기본적으로 git 추적 대상에서 제외합니다.
 
 ## 3. Hard Gate
 
@@ -89,7 +90,7 @@ uv run python -m src.eval.main history
 | p95_latency_ms | 20000 | 46977.6 | N |
 | avg_cost_per_case_usd | 0.01 | 0.00081372 | Y |
 
-최신 저장 런은 `tool_precision`, `tool_recall`, `avg_cost_per_case_usd` Hard Gate를 통과했지만 `pass_rate`, `citation_compliance`, `p95_latency_ms`는 아직 기준에 못 미칩니다. 상세 목록은 [latest report](../output/benchmarks/20260307_101108/report.md)를 참고하세요.
+최신 저장 런은 `tool_precision`, `tool_recall`, `avg_cost_per_case_usd` Hard Gate를 통과했지만 `pass_rate`, `citation_compliance`, `p95_latency_ms`는 아직 기준에 못 미칩니다. 개별 리포트 파일은 로컬 `output/benchmarks/` 또는 release artifact에서 확인합니다.
 
 ## 5. 최근 이력 및 추세
 
@@ -105,4 +106,4 @@ uv run python -m src.eval.main history
 
 ![DocuMate benchmark history](assets/benchmark_history.svg)
 
-상세 수치는 [run 20260303_134325](../output/benchmarks/20260303_134325/report.md), [run 20260306_094033](../output/benchmarks/20260306_094033/report.md), [run 20260306_123220](../output/benchmarks/20260306_123220/report.md), [run 20260306_163931](../output/benchmarks/20260306_163931/report.md), [run 20260307_101108](../output/benchmarks/20260307_101108/report.md)에서 다시 확인할 수 있습니다.
+상세 수치는 로컬 `output/benchmarks/` 또는 release artifact 기준으로 다시 확인할 수 있습니다.
