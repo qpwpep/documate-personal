@@ -38,10 +38,8 @@ def build_utf8_env(base_env: Mapping[str, str] | None = None) -> dict[str, str]:
     return env
 
 
-def maybe_reexec_with_utf8_for_main(argv: list[str]) -> None:
-    """
-    Relaunch `python -m src.main` with UTF-8 mode when current interpreter is not UTF-8.
-    """
+def maybe_reexec_with_utf8(module_name: str, argv: list[str]) -> None:
+    """Relaunch `python -m <module_name>` with UTF-8 mode when needed."""
     if sys.flags.utf8_mode == 1:
         return
 
@@ -50,5 +48,5 @@ def maybe_reexec_with_utf8_for_main(argv: list[str]) -> None:
 
     env = build_utf8_env(os.environ)
     env[_REEXEC_GUARD_ENV] = "1"
-    cmd = [sys.executable, "-X", "utf8", "-m", "src.main", *argv]
+    cmd = [sys.executable, "-X", "utf8", "-m", module_name, *argv]
     raise SystemExit(subprocess.call(cmd, env=env))
