@@ -51,7 +51,7 @@ uv run python -m src.eval.main history
 | `tool_recall` | 0.85 |
 | `citation_compliance` | 0.88 |
 | `p95_latency_ms` | 20000 |
-| `avg_cost_per_case_usd` | 0.035 |
+| `avg_cost_per_case_usd` | 0.01 |
 
 ## 4. 최신 저장 런 요약
 
@@ -87,7 +87,7 @@ uv run python -m src.eval.main history
 | tool_recall | 0.85 | 1.0000 | Y |
 | citation_compliance | 0.88 | 0.8167 | N |
 | p95_latency_ms | 20000 | 46977.6 | N |
-| avg_cost_per_case_usd | 0.035 | 0.00081372 | Y |
+| avg_cost_per_case_usd | 0.01 | 0.00081372 | Y |
 
 최신 저장 런은 `tool_precision`, `tool_recall`, `avg_cost_per_case_usd` Hard Gate를 통과했지만 `pass_rate`, `citation_compliance`, `p95_latency_ms`는 아직 기준에 못 미칩니다. 상세 목록은 [latest report](../output/benchmarks/20260307_101108/report.md)를 참고하세요.
 
