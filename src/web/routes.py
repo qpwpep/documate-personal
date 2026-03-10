@@ -20,6 +20,7 @@ from .schemas import (
     AgentRetryContext,
     AgentTokenUsage,
     EvidenceItem,
+    LLMCallMetadata,
     PlannerDiagnostic,
     RetrievalDiagnostic,
 )
@@ -34,6 +35,8 @@ def normalize_debug_info(raw_debug: dict | None, latency_ms_server: int | None) 
     tool_calls = debug.get("tool_calls") or []
     errors = debug.get("errors") or []
     observed_evidence_raw = debug.get("observed_evidence") or []
+    models_used_raw = debug.get("models_used")
+    raw_llm_calls = debug.get("llm_calls")
 
     token_usage_raw = debug.get("token_usage") or {}
     token_usage = AgentTokenUsage(
@@ -79,6 +82,23 @@ def normalize_debug_info(raw_debug: dict | None, latency_ms_server: int | None) 
         except Exception:
             planner_diagnostics = None
 
+    llm_calls: list[LLMCallMetadata] = []
+    if isinstance(raw_llm_calls, list):
+        for item in raw_llm_calls:
+            if not isinstance(item, dict):
+                continue
+            try:
+                llm_calls.append(LLMCallMetadata.model_validate(item))
+            except Exception:
+                continue
+
+    models_used = [str(name) for name in models_used_raw if name] if isinstance(models_used_raw, list) else []
+    if not models_used and llm_calls:
+        for llm_call in llm_calls:
+            model_name = llm_call.response_metadata.get("model_name") or llm_call.response_metadata.get("model")
+            if model_name and str(model_name) not in models_used:
+                models_used.append(str(model_name))
+
     latency_breakdown = None
     raw_latency_breakdown = debug.get("latency_breakdown")
     if isinstance(raw_latency_breakdown, dict):
@@ -96,6 +116,8 @@ def normalize_debug_info(raw_debug: dict | None, latency_ms_server: int | None) 
         latency_breakdown=latency_breakdown,
         token_usage=token_usage,
         model_name=(str(debug.get("model_name")) if debug.get("model_name") else None),
+        models_used=models_used,
+        llm_calls=llm_calls,
         errors=[str(error) for error in errors if error],
         observed_evidence=observed_evidence,
         retry_context=retry_context,
