@@ -59,6 +59,14 @@ class TokenUsage(BaseModel):
     total_tokens: int = 0
 
 
+class LLMCallMetadata(BaseModel):
+    stage: Literal["summarize", "planner", "synthesis"]
+    attempt: int = 0
+    path: Literal["direct", "structured", "plain_fallback"]
+    response_metadata: dict[str, Any] = Field(default_factory=dict)
+    usage_metadata: dict[str, Any] = Field(default_factory=dict)
+
+
 class RetrievalDiagnostic(BaseModel):
     tool: str = ""
     route: str = ""
@@ -102,9 +110,15 @@ class HardGates(BaseModel):
     avg_cost_per_case_usd: float = 0.01
 
 
+class ModelPricing(BaseModel):
+    prompt_per_1k_usd: float
+    completion_per_1k_usd: float
+
+
 class Pricing(BaseModel):
     prompt_per_1k_usd: float = 0.00015
     completion_per_1k_usd: float = 0.0006
+    models: dict[str, ModelPricing] = Field(default_factory=dict)
 
 
 class BenchmarkConfig(BaseModel):
@@ -141,6 +155,8 @@ class CaseResult(BaseModel):
     tool_calls: list[str] = Field(default_factory=list)
     token_usage: TokenUsage | None = None
     model_name: str | None = None
+    models_used: list[str] = Field(default_factory=list)
+    llm_calls: list[LLMCallMetadata] = Field(default_factory=list)
     runtime_errors: list[str] = Field(default_factory=list)
     response_errors: list[str] = Field(default_factory=list)
     judge_errors: list[str] = Field(default_factory=list)
@@ -253,7 +269,7 @@ class RunSummary(BaseModel):
     overall_passed: bool
     weights: dict[str, float]
     hard_gates: dict[str, float | int]
-    pricing: dict[str, float]
+    pricing: dict[str, Any]
     judge_enabled: bool
     judge_model: str
 

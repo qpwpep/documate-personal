@@ -182,6 +182,78 @@ class LatencyBreakdownReportingTest(unittest.TestCase):
         self.assertIn("Latency breakdown coverage", report)
         self.assertIn("| retrieval_total_ms | 1 | 600.00 | 600.00 |", report)
 
+    @patch("src.eval.runner_online.requests.post")
+    def test_run_single_case_computes_model_specific_cost_from_llm_calls(self, mock_post) -> None:
+        mock_post.return_value = _FakeResponse(
+            200,
+            {
+                "response": {"answer": "done", "claims": [], "evidence": [], "confidence": None},
+                "trace": "trace-id",
+                "file_path": "",
+                "debug": {
+                    "tool_calls": ["tavily_search"],
+                    "token_usage": {
+                        "prompt_tokens": 999,
+                        "completion_tokens": 999,
+                        "total_tokens": 1998,
+                    },
+                    "model_name": "gpt-5-mini",
+                    "models_used": ["gpt-5-nano", "gpt-5-mini"],
+                    "llm_calls": [
+                        {
+                            "stage": "planner",
+                            "attempt": 1,
+                            "path": "structured",
+                            "response_metadata": {"model_name": "gpt-5-nano"},
+                            "usage_metadata": {"input_tokens": 10, "output_tokens": 2, "total_tokens": 12},
+                        },
+                        {
+                            "stage": "synthesis",
+                            "attempt": 1,
+                            "path": "structured",
+                            "response_metadata": {"model_name": "gpt-5-mini"},
+                            "usage_metadata": {"input_tokens": 20, "output_tokens": 5, "total_tokens": 25},
+                        },
+                    ],
+                    "observed_evidence": [],
+                },
+            },
+        )
+
+        result = _run_single_case(
+            run_id="run-cost",
+            endpoint="http://localhost:8000",
+            fixtures_path=Path("data/benchmarks/fixtures/cases.generated.jsonl"),
+            case=BenchmarkCase(
+                case_id="docs_only_seed_mutation_001",
+                category="docs_only",
+                query="numpy docs",
+                expected_tools=["tavily_search"],
+            ),
+            timeout_seconds=5,
+            judge=_DummyJudge(),
+            config=BenchmarkConfig(
+                pricing={
+                    "prompt_per_1k_usd": 0.00015,
+                    "completion_per_1k_usd": 0.0006,
+                    "models": {
+                        "gpt-5-nano": {
+                            "prompt_per_1k_usd": 0.001,
+                            "completion_per_1k_usd": 0.002,
+                        },
+                        "gpt-5-mini": {
+                            "prompt_per_1k_usd": 0.003,
+                            "completion_per_1k_usd": 0.004,
+                        },
+                    },
+                }
+            ),
+        )
+
+        self.assertEqual(result.models_used, ["gpt-5-nano", "gpt-5-mini"])
+        self.assertEqual(len(result.llm_calls), 2)
+        self.assertAlmostEqual(result.cost_usd, 0.000094, places=8)
+
     def test_build_markdown_report_marks_legacy_runs_unavailable(self) -> None:
         summary = RunSummary(
             run_id="20260308_legacy",

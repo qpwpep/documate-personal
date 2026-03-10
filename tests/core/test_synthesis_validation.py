@@ -2,14 +2,17 @@ import unittest
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
+from src.nodes.session import make_summarize_node
 from src.nodes.synthesis import make_synthesize_node
 from src.nodes.validation import make_validate_evidence_node
 from src.planner_schema import PlannerOutput, RetrievalTask
 from src.prompts import SYS_POLICY
 
 from .helpers import (
+    _CaptureSummaryLLM,
     _CaptureStructuredSynthesizeLLM,
     _CaptureSynthesizeLLM,
+    _StructuredThenPlainFallbackSynthesizeLLM,
     _TimeoutStructuredSynthesizeLLM,
 )
 
@@ -270,6 +273,30 @@ class SynthesisValidationTest(unittest.TestCase):
         self.assertIsInstance(capture_llm.last_messages[0], SystemMessage)
         self.assertEqual(capture_llm.last_messages[0].content, SYS_POLICY)
 
+    def test_summarize_node_records_llm_call_metadata(self) -> None:
+        summarize_llm = _CaptureSummaryLLM()
+        summarize_node = make_summarize_node(summarize_llm, verbose=False, max_turns=2)
+
+        updates = summarize_node(
+            {
+                "messages": [
+                    HumanMessage(content="u1"),
+                    AIMessage(content="a1"),
+                    HumanMessage(content="u2"),
+                    AIMessage(content="a2"),
+                    HumanMessage(content="u3"),
+                    AIMessage(content="a3"),
+                    HumanMessage(content="u4"),
+                ]
+            }
+        )
+
+        self.assertIn("memory_summary", updates)
+        self.assertEqual(len(updates["llm_calls"]), 1)
+        self.assertEqual(updates["llm_calls"][0]["stage"], "summarize")
+        self.assertEqual(updates["llm_calls"][0]["path"], "direct")
+        self.assertEqual(updates["llm_calls"][0]["response_metadata"]["model_name"], "gpt-5-mini")
+
     def test_synthesize_short_circuits_action_only_save_request(self) -> None:
         capture_llm = _CaptureSynthesizeLLM()
         synthesize_node = make_synthesize_node(capture_llm, verbose=False, max_turns=6)
@@ -286,6 +313,7 @@ class SynthesisValidationTest(unittest.TestCase):
         self.assertIsNone(capture_llm.last_messages)
         self.assertEqual(updates["final_answer"], "요청하신 최종 답변을 저장합니다.")
         self.assertEqual(updates["response_payload"]["claims"], [])
+        self.assertNotIn("llm_calls", updates)
 
     def test_synthesize_action_only_slack_requests_destination_without_metadata(self) -> None:
         capture_llm = _CaptureSynthesizeLLM()
@@ -304,6 +332,7 @@ class SynthesisValidationTest(unittest.TestCase):
         self.assertIsNone(capture_llm.last_messages)
         self.assertIn("channel_id", updates["final_answer"])
         self.assertEqual(updates["response_payload"]["claims"], [])
+        self.assertNotIn("llm_calls", updates)
 
     def test_synthesize_action_only_slack_uses_session_metadata_without_followup(self) -> None:
         capture_llm = _CaptureSynthesizeLLM()
@@ -332,6 +361,7 @@ class SynthesisValidationTest(unittest.TestCase):
         self.assertIsNone(capture_llm.last_messages)
         self.assertEqual(updates["final_answer"], "previous answer")
         self.assertEqual(updates["response_payload"]["answer"], "previous answer")
+        self.assertNotIn("llm_calls", updates)
 
     def test_synthesize_short_circuits_guided_followup(self) -> None:
         capture_llm = _CaptureSynthesizeLLM()
@@ -349,6 +379,7 @@ class SynthesisValidationTest(unittest.TestCase):
 
         self.assertIsNone(capture_llm.last_messages)
         self.assertEqual(updates["final_answer"], "업로드한 파일을 먼저 올려 주세요.")
+        self.assertNotIn("llm_calls", updates)
 
     def test_synthesize_structures_claims_and_adopted_evidence(self) -> None:
         capture_llm = _CaptureStructuredSynthesizeLLM(
@@ -362,7 +393,8 @@ class SynthesisValidationTest(unittest.TestCase):
                     }
                 ],
                 "confidence": 0.92,
-            }
+            },
+            include_raw=True,
         )
         synthesize_node = make_synthesize_node(capture_llm, verbose=False, max_turns=8)
 
@@ -392,6 +424,9 @@ class SynthesisValidationTest(unittest.TestCase):
             updates["response_payload"]["claims"][0]["evidence_ids"],
             ["url:https://numpy.org/doc/stable/"],
         )
+        self.assertEqual(len(updates["llm_calls"]), 1)
+        self.assertEqual(updates["llm_calls"][0]["stage"], "synthesis")
+        self.assertEqual(updates["llm_calls"][0]["path"], "structured")
 
     def test_synthesize_uses_only_current_attempt_evidence_window(self) -> None:
         capture_llm = _CaptureSynthesizeLLM()
@@ -437,6 +472,80 @@ class SynthesisValidationTest(unittest.TestCase):
         self.assertIn("https://new.example.com/", retrieved_evidence_messages[0])
         self.assertNotIn("https://old.example.com/", retrieved_evidence_messages[0])
 
+    def test_synthesize_trims_only_conversation_history_and_keeps_fixed_messages(self) -> None:
+        capture_llm = _CaptureStructuredSynthesizeLLM(include_raw=True)
+        synthesize_node = make_synthesize_node(capture_llm, verbose=False, max_turns=2)
+
+        updates = synthesize_node(
+            {
+                "messages": [
+                    HumanMessage(content="u1"),
+                    AIMessage(content="a1"),
+                    HumanMessage(content="u2"),
+                    AIMessage(content="a2"),
+                    HumanMessage(content="u3"),
+                    AIMessage(content="a3"),
+                    HumanMessage(content="u4"),
+                ],
+                "memory_summary": "older summary",
+                "user_input": "Explain numpy broadcasting with official docs and save the response.",
+                "retrieved_evidence": [
+                    {
+                        "kind": "official",
+                        "tool": "tavily_search",
+                        "source_id": "url:https://numpy.org/doc/stable/",
+                        "document_id": "url:https://numpy.org/doc/stable/",
+                        "url_or_path": "https://numpy.org/doc/stable/",
+                        "title": "NumPy Docs",
+                        "snippet": "broadcasting rule",
+                        "score": 0.9,
+                    }
+                ],
+                "synthesis_attempt": 0,
+            }
+        )
+
+        self.assertEqual(updates["final_answer"], "synth result")
+        sent_messages = capture_llm.last_messages or []
+        self.assertEqual(str(sent_messages[0].content), SYS_POLICY)
+        self.assertIn("[Conversation Summary]", str(sent_messages[1].content))
+        self.assertFalse(
+            any(isinstance(message, HumanMessage) and message.content == "u1" for message in sent_messages)
+        )
+        self.assertTrue(
+            any(isinstance(message, HumanMessage) and message.content == "u4" for message in sent_messages)
+        )
+        self.assertTrue(
+            any("[Action Request]" in str(message.content) for message in sent_messages if isinstance(message, SystemMessage))
+        )
+        self.assertTrue(
+            any("[Retrieved Evidence]" in str(message.content) for message in sent_messages if isinstance(message, SystemMessage))
+        )
+        self.assertTrue(
+            any("[Synthesis Contract]" in str(message.content) for message in sent_messages if isinstance(message, SystemMessage))
+        )
+
+    def test_synthesize_records_structured_and_plain_fallback_llm_calls(self) -> None:
+        llm = _StructuredThenPlainFallbackSynthesizeLLM()
+        synthesize_node = make_synthesize_node(llm, verbose=False, max_turns=6)
+
+        updates = synthesize_node(
+            {
+                "messages": [HumanMessage(content="Explain numpy broadcasting.")],
+                "retrieved_evidence": [],
+                "synthesis_attempt": 0,
+            }
+        )
+
+        self.assertEqual(updates["final_answer"], "plain fallback answer")
+        self.assertEqual(len(updates["llm_calls"]), 2)
+        self.assertEqual([item["path"] for item in updates["llm_calls"]], ["structured", "plain_fallback"])
+        self.assertEqual(
+            updates["llm_calls"][1]["usage_metadata"]["total_tokens"],
+            21,
+        )
+        self.assertEqual(updates["synthesis_errors"][0].startswith("synthesize: structured output failed"), True)
+
     def test_synthesize_timeout_uses_grounded_fallback_without_plain_llm_retry(self) -> None:
         timeout_llm = _TimeoutStructuredSynthesizeLLM()
         synthesize_node = make_synthesize_node(timeout_llm, verbose=False, max_turns=8)
@@ -469,6 +578,7 @@ class SynthesisValidationTest(unittest.TestCase):
         self.assertIn("[1]", updates["final_answer"])
         self.assertEqual(updates["response_payload"]["claims"][0]["evidence_ids"], ["url:https://numpy.org/doc/stable/"])
         self.assertEqual(updates["synthesis_errors"][0].startswith("synthesize: structured output timed out"), True)
+        self.assertNotIn("llm_calls", updates)
         synthesis_attempts = [
             item for item in updates["latency_trace"] if item.get("kind") == "synthesis_attempt"
         ]

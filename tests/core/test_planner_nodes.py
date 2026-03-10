@@ -209,6 +209,25 @@ class PlannerNodeTest(unittest.TestCase):
         self.assertFalse(updates["planner_output"].use_retrieval)
         self.assertEqual(updates["planner_output"].tasks, [])
 
+    def test_planner_records_llm_call_metadata_when_structured_raw_is_available(self) -> None:
+        capture_planner = _CapturePlannerLLM(
+            PlannerOutput(use_retrieval=True, tasks=[RetrievalTask(route="docs", query="numpy", k=3)]),
+            include_raw=True,
+        )
+        planner_node = make_planner_node(capture_planner, verbose=False)
+
+        updates = planner_node(
+            {
+                "messages": [HumanMessage(content="numpy docs")],
+                "user_input": "numpy docs",
+            }
+        )
+
+        self.assertEqual(len(updates["llm_calls"]), 1)
+        self.assertEqual(updates["llm_calls"][0]["stage"], "planner")
+        self.assertEqual(updates["llm_calls"][0]["path"], "structured")
+        self.assertEqual(updates["llm_calls"][0]["response_metadata"]["model_name"], "gpt-5-nano")
+
     def test_planner_includes_retry_context_system_message_on_retry(self) -> None:
         capture_planner = _CapturePlannerLLM(PlannerOutput(use_retrieval=False, tasks=[]))
         planner_node = make_planner_node(capture_planner, verbose=False)
