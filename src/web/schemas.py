@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -62,6 +62,14 @@ class PlannerDiagnostic(BaseModel):
     ] | None = None
 
 
+class LLMCallMetadata(BaseModel):
+    stage: Literal["summarize", "planner", "synthesis"]
+    attempt: int = 0
+    path: Literal["direct", "structured", "plain_fallback"]
+    response_metadata: dict[str, Any] = Field(default_factory=dict)
+    usage_metadata: dict[str, Any] = Field(default_factory=dict)
+
+
 class AgentDebugInfo(BaseModel):
     tool_calls: list[str] = Field(default_factory=list)
     tool_call_count: int = 0
@@ -69,6 +77,8 @@ class AgentDebugInfo(BaseModel):
     latency_breakdown: LatencyBreakdownModel | None = None
     token_usage: AgentTokenUsage | None = None
     model_name: str | None = None
+    models_used: list[str] = Field(default_factory=list)
+    llm_calls: list[LLMCallMetadata] = Field(default_factory=list)
     errors: list[str] = Field(default_factory=list)
     observed_evidence: list[EvidenceItem] = Field(default_factory=list)
     retry_context: AgentRetryContext | None = None

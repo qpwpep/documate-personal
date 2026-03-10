@@ -110,6 +110,127 @@ class AgentFlowManager:
         return str(model_name) if model_name else None
 
     @staticmethod
+    def _extract_token_usage_from_llm_call(llm_call: dict[str, Any]) -> Dict[str, int]:
+        usage_metadata = llm_call.get("usage_metadata")
+        response_metadata = llm_call.get("response_metadata")
+        usage_candidates = []
+        if isinstance(usage_metadata, dict):
+            usage_candidates.append(usage_metadata)
+        if isinstance(response_metadata, dict):
+            token_usage = response_metadata.get("token_usage")
+            if isinstance(token_usage, dict):
+                usage_candidates.append(token_usage)
+
+        for usage in usage_candidates:
+            prompt_tokens = usage.get("prompt_tokens", usage.get("input_tokens", 0))
+            completion_tokens = usage.get("completion_tokens", usage.get("output_tokens", 0))
+            total_tokens = usage.get("total_tokens", 0)
+
+            try:
+                prompt_tokens = int(prompt_tokens or 0)
+                completion_tokens = int(completion_tokens or 0)
+                total_tokens = int(total_tokens or 0)
+            except (TypeError, ValueError):
+                continue
+
+            if total_tokens <= 0:
+                total_tokens = prompt_tokens + completion_tokens
+
+            if prompt_tokens >= 0 and completion_tokens >= 0 and total_tokens >= 0:
+                return {
+                    "prompt_tokens": prompt_tokens,
+                    "completion_tokens": completion_tokens,
+                    "total_tokens": total_tokens,
+                }
+
+        return {
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+        }
+
+    @staticmethod
+    def _extract_model_name_from_llm_call(llm_call: dict[str, Any]) -> str | None:
+        response_metadata = llm_call.get("response_metadata")
+        if not isinstance(response_metadata, dict):
+            return None
+        model_name = response_metadata.get("model_name") or response_metadata.get("model")
+        return str(model_name) if model_name else None
+
+    @staticmethod
+    def _normalize_llm_calls(raw_llm_calls: Any) -> list[dict[str, Any]]:
+        normalized: list[dict[str, Any]] = []
+        if not isinstance(raw_llm_calls, list):
+            return normalized
+
+        for item in raw_llm_calls:
+            if not isinstance(item, dict):
+                continue
+
+            stage = str(item.get("stage") or "").strip()
+            if stage not in {"summarize", "planner", "synthesis"}:
+                continue
+
+            path = str(item.get("path") or "").strip()
+            if path not in {"direct", "structured", "plain_fallback"}:
+                continue
+
+            try:
+                attempt = int(item.get("attempt", 0) or 0)
+            except (TypeError, ValueError):
+                attempt = 0
+
+            response_metadata = item.get("response_metadata")
+            usage_metadata = item.get("usage_metadata")
+            normalized.append(
+                {
+                    "stage": stage,
+                    "attempt": max(0, attempt),
+                    "path": path,
+                    "response_metadata": dict(response_metadata) if isinstance(response_metadata, dict) else {},
+                    "usage_metadata": dict(usage_metadata) if isinstance(usage_metadata, dict) else {},
+                }
+            )
+
+        return normalized
+
+    @classmethod
+    def _summarize_llm_calls(
+        cls,
+        llm_calls: list[dict[str, Any]],
+    ) -> tuple[dict[str, int], str | None, list[str]]:
+        total_prompt_tokens = 0
+        total_completion_tokens = 0
+        total_tokens = 0
+        models_used: list[str] = []
+        final_synthesis_model: str | None = None
+
+        for call in llm_calls:
+            usage = cls._extract_token_usage_from_llm_call(call)
+            total_prompt_tokens += usage["prompt_tokens"]
+            total_completion_tokens += usage["completion_tokens"]
+            total_tokens += usage["total_tokens"]
+
+            model_name = cls._extract_model_name_from_llm_call(call)
+            if model_name and model_name not in models_used:
+                models_used.append(model_name)
+            if call.get("stage") == "synthesis" and model_name:
+                final_synthesis_model = model_name
+
+        if total_tokens <= 0:
+            total_tokens = total_prompt_tokens + total_completion_tokens
+
+        return (
+            {
+                "prompt_tokens": total_prompt_tokens,
+                "completion_tokens": total_completion_tokens,
+                "total_tokens": total_tokens,
+            },
+            final_synthesis_model,
+            models_used,
+        )
+
+    @staticmethod
     def _extract_tool_names_from_ai_message(message: AIMessage) -> list[str]:
         tool_names: list[str] = []
         tool_calls = getattr(message, "tool_calls", None)
@@ -342,11 +463,9 @@ class AgentFlowManager:
         upload_retriever_build_ms: int | None,
     ) -> dict[str, Any]:
         tool_calls: list[str] = []
-        total_prompt_tokens = 0
-        total_completion_tokens = 0
-        total_tokens = 0
-        model_name: str | None = None
         debug_errors: list[str] = []
+        llm_calls = self._normalize_llm_calls(response.get("llm_calls"))
+        token_usage, model_name, models_used = self._summarize_llm_calls(llm_calls)
 
         for state_error_key in (
             "retrieval_errors",
@@ -377,17 +496,8 @@ class AgentFlowManager:
         for message in current_turn_messages:
             if isinstance(message, AIMessage):
                 tool_calls.extend(self._extract_tool_names_from_ai_message(message))
-                usage = self._extract_token_usage_from_ai_message(message)
-                total_prompt_tokens += usage["prompt_tokens"]
-                total_completion_tokens += usage["completion_tokens"]
-                total_tokens += usage["total_tokens"]
-                if model_name is None:
-                    model_name = self._extract_model_name_from_ai_message(message)
             elif isinstance(message, ToolMessage) and getattr(message, "name", ""):
                 tool_calls.append(str(message.name))
-
-        if total_tokens <= 0:
-            total_tokens = total_prompt_tokens + total_completion_tokens
 
         observed_evidence = self._extract_observed_evidence(
             current_turn_messages,
@@ -409,12 +519,10 @@ class AgentFlowManager:
         return {
             "tool_calls": tool_calls,
             "tool_call_count": len(tool_calls),
-            "token_usage": {
-                "prompt_tokens": total_prompt_tokens,
-                "completion_tokens": total_completion_tokens,
-                "total_tokens": total_tokens,
-            },
+            "token_usage": token_usage,
             "model_name": model_name,
+            "models_used": models_used,
+            "llm_calls": llm_calls,
             "errors": debug_errors,
             "observed_evidence": observed_evidence,
             "retry_context": retry_context,
@@ -493,6 +601,8 @@ class AgentFlowManager:
                         "total_tokens": 0,
                     },
                     "model_name": None,
+                    "models_used": [],
+                    "llm_calls": [],
                     "errors": [],
                     "observed_evidence": [],
                     "retry_context": None,
@@ -539,6 +649,8 @@ class AgentFlowManager:
                         "total_tokens": 0,
                     },
                     "model_name": None,
+                    "models_used": [],
+                    "llm_calls": [],
                     "errors": [message],
                     "observed_evidence": [],
                     "retry_context": None,
