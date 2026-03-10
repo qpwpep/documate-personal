@@ -7,12 +7,14 @@ from src.settings import AppSettings
 
 class _FakeChatOpenAI:
     created_kwargs: list[dict] = []
+    structured_kwargs: list[dict] = []
 
     def __init__(self, **kwargs):
         self.kwargs = kwargs
         self.__class__.created_kwargs.append(kwargs)
 
     def with_structured_output(self, *_args, **_kwargs):
+        self.__class__.structured_kwargs.append(_kwargs)
         return self
 
 
@@ -20,6 +22,7 @@ class LLMRegistryTest(unittest.TestCase):
     @patch("src.llm.ChatOpenAI", new=_FakeChatOpenAI)
     def test_build_llm_registry_applies_explicit_synthesis_policy(self) -> None:
         _FakeChatOpenAI.created_kwargs = []
+        _FakeChatOpenAI.structured_kwargs = []
         settings = AppSettings(
             openai_api_key="test-key",
             tavily_api_key="test-tavily",
@@ -38,6 +41,7 @@ class LLMRegistryTest(unittest.TestCase):
         self.assertEqual(synthesizer_kwargs["max_retries"], 1)
         self.assertEqual(synthesizer_kwargs["max_tokens"], 777)
         self.assertEqual(synthesizer_kwargs["verbose"], False)
+        self.assertEqual(_FakeChatOpenAI.structured_kwargs[0]["include_raw"], True)
 
 
 if __name__ == "__main__":

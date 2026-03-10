@@ -17,6 +17,14 @@ avg_cost_per_case_usd = 0.01
 prompt_per_1k_usd = 0.00015
 completion_per_1k_usd = 0.00060
 
+[pricing.models."gpt-5-mini"]
+prompt_per_1k_usd = 0.00015
+completion_per_1k_usd = 0.00060
+
+[pricing.models."gpt-5-nano"]
+prompt_per_1k_usd = 0.00015
+completion_per_1k_usd = 0.00060
+
 [runtime]
 judge_model = "gpt-5-mini"
 judge_enabled = true

@@ -80,6 +80,40 @@ class _FakeGraph:
         }
 
 
+class _FakeGraphWithLlmCalls:
+    def invoke(self, state: dict) -> dict:
+        _ = state
+        return {
+            "messages": [
+                HumanMessage(content="question"),
+                ToolMessage(content=json.dumps({"evidence": [], "diagnostics": {}}, ensure_ascii=False), name="tavily_search", tool_call_id="call-1"),
+                AIMessage(content="final answer"),
+            ],
+            "response_payload": {
+                "answer": "final answer",
+                "claims": [],
+                "evidence": [],
+                "confidence": None,
+            },
+            "llm_calls": [
+                {
+                    "stage": "planner",
+                    "attempt": 1,
+                    "path": "structured",
+                    "response_metadata": {"model_name": "gpt-5-nano"},
+                    "usage_metadata": {"input_tokens": 12, "output_tokens": 3, "total_tokens": 15},
+                },
+                {
+                    "stage": "synthesis",
+                    "attempt": 1,
+                    "path": "structured",
+                    "response_metadata": {"model_name": "gpt-5-mini"},
+                    "usage_metadata": {"input_tokens": 20, "output_tokens": 5, "total_tokens": 25},
+                },
+            ],
+        }
+
+
 class _FakeGraphWithSave:
     def invoke(self, state: dict) -> dict:
         _ = state
@@ -368,6 +402,23 @@ class EvidencePipelineTest(unittest.TestCase):
         self.assertEqual(latency_breakdown["stage_totals_ms"]["planner_ms"], 12)
         self.assertEqual(latency_breakdown["retrieval_routes"][0]["route"], "docs")
         self.assertEqual(latency_breakdown["synthesis_attempts"][0]["mode"], "structured_only")
+
+    def test_agent_manager_aggregates_llm_calls_into_debug_metadata(self) -> None:
+        manager = AgentFlowManager.__new__(AgentFlowManager)
+        manager.settings = AppSettings(openai_api_key="test", tavily_api_key="test")
+        manager.graph = _FakeGraphWithLlmCalls()
+        manager.messages = []
+        manager.upload_retriever_handle = None
+        manager.upload_file_path = None
+
+        result = manager.run_agent_flow("question")
+
+        self.assertEqual(result["debug"]["token_usage"]["prompt_tokens"], 32)
+        self.assertEqual(result["debug"]["token_usage"]["completion_tokens"], 8)
+        self.assertEqual(result["debug"]["token_usage"]["total_tokens"], 40)
+        self.assertEqual(result["debug"]["model_name"], "gpt-5-mini")
+        self.assertEqual(result["debug"]["models_used"], ["gpt-5-nano", "gpt-5-mini"])
+        self.assertEqual(len(result["debug"]["llm_calls"]), 2)
 
     @patch("src.agent_manager.build_temp_retriever")
     def test_agent_manager_passes_api_key_to_temp_retriever(self, mock_build_temp_retriever) -> None:

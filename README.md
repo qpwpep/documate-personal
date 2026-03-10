@@ -289,6 +289,45 @@ uv run python -X utf8 -m streamlit run src/web/streamlit_app.py --server.port 85
       "total_tokens": 795
     },
     "model_name": "gpt-5-mini",
+    "models_used": ["gpt-5-nano", "gpt-5-mini"],
+    "llm_calls": [
+      {
+        "stage": "planner",
+        "attempt": 1,
+        "path": "structured",
+        "response_metadata": {
+          "model_name": "gpt-5-nano",
+          "token_usage": {
+            "prompt_tokens": 118,
+            "completion_tokens": 21,
+            "total_tokens": 139
+          }
+        },
+        "usage_metadata": {
+          "input_tokens": 118,
+          "output_tokens": 21,
+          "total_tokens": 139
+        }
+      },
+      {
+        "stage": "synthesis",
+        "attempt": 1,
+        "path": "structured",
+        "response_metadata": {
+          "model_name": "gpt-5-mini",
+          "token_usage": {
+            "prompt_tokens": 524,
+            "completion_tokens": 132,
+            "total_tokens": 656
+          }
+        },
+        "usage_metadata": {
+          "input_tokens": 524,
+          "output_tokens": 132,
+          "total_tokens": 656
+        }
+      }
+    ],
     "errors": [],
     "observed_evidence": [
       {
@@ -314,6 +353,9 @@ uv run python -X utf8 -m streamlit run src/web/streamlit_app.py --server.port 85
 }
 ```
 
+- `debug.model_name`은 최종 응답을 생성한 synthesis 모델입니다.
+- `debug.models_used`, `debug.llm_calls`는 요청 1회 동안의 전체 LLM 호출 기록입니다.
+
 ### 7.2 `GET /download/{filename}`
 
 - `save_text` 결과 파일 다운로드용 엔드포인트입니다.
@@ -321,7 +363,7 @@ uv run python -X utf8 -m streamlit run src/web/streamlit_app.py --server.port 85
 
 ## 8. 검증 현황
 
-- 테스트: `./.venv/Scripts/python.exe -m pytest` 기준 현재 저장소에서 `97 passed`
+- 테스트: `./.venv/Scripts/python.exe -m pytest` 기준 현재 저장소에서 `117 passed`
 - 인코딩 검사: `uv run python script/check_encoding.py` 기준 `Encoding check passed. Checked 82 tracked text files.`
 - 온라인 벤치마크: 상세 명령, 최신 저장 런 요약, Hard Gate, 추세는 [docs/benchmarking.md](docs/benchmarking.md)에서 관리합니다.
 - 최신 저장 런 기준 일부 Hard Gate는 아직 미통과 상태입니다.
