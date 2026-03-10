@@ -25,7 +25,15 @@ from ..prompts import SYS_POLICY, needs_save, needs_slack
 from .actions import build_action_only_answer, get_slack_destinations, is_action_only_request
 from .retrieval import format_evidence_for_prompt
 from .session import extract_text_content, keep_recent_messages
-from .state import State, coerce_planner_output, coerce_retry_context, safe_list, slice_from_index
+from .state import (
+    LLMCallMetadata,
+    State,
+    build_llm_call_metadata,
+    coerce_planner_output,
+    coerce_retry_context,
+    safe_list,
+    slice_from_index,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -48,6 +56,7 @@ def _build_structured_synthesizer(llm_synthesizer: Any) -> Any:
             return llm_synthesizer.with_structured_output(
                 SynthesisOutput,
                 method="json_schema",
+                include_raw=True,
                 strict=True,
             )
         except Exception:
@@ -73,6 +82,29 @@ def _coerce_synthesis_output(raw_value: Any) -> SynthesisOutput:
         return SynthesisOutput.model_validate_json(stripped)
     except Exception:
         return SynthesisOutput(answer=stripped, claims=[], confidence=None)
+
+
+def _coerce_structured_synthesis_result(
+    result: Any,
+) -> tuple[Any, AIMessage | None, Exception | None]:
+    if not isinstance(result, dict):
+        return result, None, None
+
+    if not {"raw", "parsed", "parsing_error"}.intersection(result.keys()):
+        return result, None, None
+
+    raw_message = result.get("raw")
+    parsed = result.get("parsed")
+    parsing_error = result.get("parsing_error")
+
+    if not isinstance(raw_message, AIMessage):
+        raw_message = None
+
+    if parsing_error is not None and isinstance(parsing_error, Exception):
+        return parsed, raw_message, parsing_error
+    if parsing_error is not None:
+        return parsed, raw_message, RuntimeError(str(parsing_error))
+    return parsed, raw_message, None
 
 
 def _payload_to_state_dict(payload: AgentResponsePayloadModel) -> dict[str, Any]:
@@ -159,6 +191,43 @@ def _render_synthesis_payload(
     return payload, payload.answer
 
 
+def _build_synthesis_messages(
+    *,
+    state: State,
+    action_rules: list[str],
+    deduped_evidence: list[dict[str, Any]],
+    attempt: int,
+    max_turns: int,
+) -> tuple[list[BaseMessage], int, int]:
+    history_messages = [
+        message for message in state.get("messages", []) if not isinstance(message, ToolMessage)
+    ]
+    history_before = len(history_messages)
+    trimmed_history = keep_recent_messages(history_messages, max_turns=max_turns)
+
+    model_messages: list[BaseMessage] = [SystemMessage(content=SYS_POLICY)]
+    if state.get("memory_summary"):
+        model_messages.append(SystemMessage(content=f"[Conversation Summary]\n{state['memory_summary']}"))
+    model_messages.extend(trimmed_history)
+    if action_rules:
+        model_messages.append(SystemMessage(content="[Action Request]\n- " + "\n- ".join(action_rules)))
+    model_messages.append(
+        SystemMessage(content=f"[Retrieved Evidence]\n{format_evidence_for_prompt(deduped_evidence)}")
+    )
+    model_messages.append(SystemMessage(content=SYNTHESIS_CONTRACT))
+    if attempt > 1:
+        model_messages.append(
+            SystemMessage(
+                content=(
+                    "Retry synthesis after evidence validation failed. "
+                    "Use retrieved evidence when available and avoid unsupported claims."
+                )
+            )
+        )
+
+    return model_messages, history_before, len(trimmed_history)
+
+
 def make_synthesize_node(
     llm_synthesizer: Any,
     verbose: bool,
@@ -170,19 +239,6 @@ def make_synthesize_node(
     def synthesize(state: State):
         stage_started = time.perf_counter()
         attempt = int(state.get("synthesis_attempt", 0)) + 1
-        model_messages: List[BaseMessage] = [
-            message for message in state.get("messages", []) if not isinstance(message, ToolMessage)
-        ]
-
-        if not model_messages or not isinstance(model_messages[0], SystemMessage):
-            model_messages = [SystemMessage(content=SYS_POLICY)] + model_messages
-
-        if state.get("memory_summary"):
-            model_messages = [
-                model_messages[0],
-                SystemMessage(content=f"[Conversation Summary]\n{state['memory_summary']}"),
-            ] + model_messages[1:]
-
         user_input = str(state.get("user_input", "") or "")
         guided_followup = str(state.get("guided_followup") or "").strip()
         explicit_slack_destinations = get_slack_destinations(state.get("session_metadata"))
@@ -251,8 +307,6 @@ def make_synthesize_node(
                     "No Slack destination is available yet. Ask one concise follow-up asking only for "
                     "channel_id, user_id, or email. Do not ask for message content."
                 )
-        if action_rules:
-            model_messages.append(SystemMessage(content="[Action Request]\n- " + "\n- ".join(action_rules)))
 
         retry_context = coerce_retry_context(state.get("retry_context"))
         evidence_start_index = int(retry_context.get("evidence_start_index", 0))
@@ -275,41 +329,46 @@ def make_synthesize_node(
         planner_output = coerce_planner_output(state.get("planner_output"), planner_parse_errors)
         retrieval_required = bool(planner_output.use_retrieval and planner_output.tasks)
 
-        model_messages.append(
-            SystemMessage(content=f"[Retrieved Evidence]\n{format_evidence_for_prompt(deduped_evidence)}")
+        model_messages, history_before, history_after = _build_synthesis_messages(
+            state=state,
+            action_rules=action_rules,
+            deduped_evidence=deduped_evidence,
+            attempt=attempt,
+            max_turns=max_turns,
         )
-        model_messages.append(SystemMessage(content=SYNTHESIS_CONTRACT))
-        if attempt > 1:
-            model_messages.append(
-                SystemMessage(
-                    content=(
-                        "Retry synthesis after evidence validation failed. "
-                        "Use retrieved evidence when available and avoid unsupported claims."
-                    )
-                )
-            )
-
-        before = len(model_messages)
-        model_messages = keep_recent_messages(model_messages, max_turns=max_turns)
-        after = len(model_messages)
-        if verbose and before != after:
+        if verbose and history_before != history_after:
             log_event(
                 logger,
                 logging.INFO,
                 "synthesize_trimmed_messages",
-                before=before,
-                after=after,
+                before=history_before,
+                after=history_after,
             )
 
         synthesis_errors: list[str] = []
+        llm_calls: list[LLMCallMetadata] = []
         structured_ms: int | None = None
         fallback_ms: int | None = None
         synthesis_mode = "structured_only"
 
         try:
             structured_started = time.perf_counter()
-            raw_response_obj = structured_synthesizer.invoke(model_messages)
+            structured_result = structured_synthesizer.invoke(model_messages)
             structured_ms = elapsed_ms(structured_started, time.perf_counter())
+            raw_response_obj, raw_message, structured_error = _coerce_structured_synthesis_result(
+                structured_result
+            )
+            if raw_message is not None:
+                llm_calls.append(
+                    build_llm_call_metadata(
+                        stage="synthesis",
+                        attempt=attempt,
+                        path="structured",
+                        message=raw_message,
+                    )
+                )
+            if structured_error is not None:
+                raise structured_error
             synthesis_output = _coerce_synthesis_output(raw_response_obj)
             payload, final_answer = _render_synthesis_payload(synthesis_output, parsed_evidence)
         except Exception as exc:
@@ -337,6 +396,15 @@ def make_synthesize_node(
                     fallback_started = time.perf_counter()
                     raw_response_obj = llm_synthesizer.invoke(model_messages)
                     fallback_ms = elapsed_ms(fallback_started, time.perf_counter())
+                    if isinstance(raw_response_obj, AIMessage):
+                        llm_calls.append(
+                            build_llm_call_metadata(
+                                stage="synthesis",
+                                attempt=attempt,
+                                path="plain_fallback",
+                                message=raw_response_obj,
+                            )
+                        )
                     synthesis_output = _coerce_synthesis_output(raw_response_obj)
                     payload, final_answer = _render_synthesis_payload(synthesis_output, parsed_evidence)
                 except Exception as fallback_exc:
@@ -387,6 +455,8 @@ def make_synthesize_node(
             updates["retrieval_errors"] = combined_retrieval_errors
         if synthesis_errors:
             updates["synthesis_errors"] = synthesis_errors
+        if llm_calls:
+            updates["llm_calls"] = llm_calls
         return updates
 
     return synthesize

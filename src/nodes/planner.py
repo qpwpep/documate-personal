@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 
 from ..logging_utils import log_event
 from ..planner_schema import PlannerOutput, RetrievalTask
@@ -13,12 +13,14 @@ from .retry import build_missing_upload_followup, format_retry_context_for_plann
 from .session import keep_recent_messages
 from .state import (
     DEFAULT_MAX_RETRIES,
+    LLMCallMetadata,
     ROUTE_ORDER,
     PlannerDiagnostic,
     PlannerOverrideReason,
     PlannerStatus,
     RetryContext,
     State,
+    build_llm_call_metadata,
     coerce_retry_context,
     safe_list,
 )
@@ -290,33 +292,73 @@ def build_planner_messages(state: State, max_turns: int = 6) -> list[BaseMessage
     return model_messages
 
 
+def _coerce_structured_planner_result(
+    result: Any,
+) -> tuple[PlannerOutput | None, AIMessage | None, Exception | None]:
+    if isinstance(result, PlannerOutput):
+        return result, None, None
+
+    if not isinstance(result, dict):
+        try:
+            return PlannerOutput.model_validate(result), None, None
+        except Exception as exc:
+            return None, None, exc
+
+    raw_message = result.get("raw")
+    parsed = result.get("parsed")
+    parsing_error = result.get("parsing_error")
+
+    if not isinstance(raw_message, AIMessage):
+        raw_message = None
+
+    if parsing_error is not None and isinstance(parsing_error, Exception):
+        return None, raw_message, parsing_error
+    if parsing_error is not None:
+        return None, raw_message, RuntimeError(str(parsing_error))
+
+    if isinstance(parsed, PlannerOutput):
+        return parsed, raw_message, None
+
+    try:
+        return PlannerOutput.model_validate(parsed), raw_message, None
+    except Exception as exc:
+        return None, raw_message, exc
+
+
 def make_planner_node(llm_planner: Any, verbose: bool, max_turns: int = 6):
     def planner(state: State) -> State:
         planner_errors: list[str] = []
+        llm_calls: list[LLMCallMetadata] = []
         existing_retry_context = coerce_retry_context(state.get("retry_context"))
         user_input = str(state.get("user_input", "") or "")
         has_retriever = bool(state.get("retriever"))
         planner_status: PlannerStatus = "llm"
         planner_diagnostics = normalize_planner_diagnostics(status="llm", reason=None, fallback_routes=[])
         guided_followup: str | None = None
+        planner_attempt = int(existing_retry_context.get("attempt", 0)) + 1
 
         if is_action_only_request(user_input):
             planner_output = PlannerOutput.fallback()
         else:
             try:
                 planner_raw = llm_planner.invoke(build_planner_messages(state, max_turns=max_turns))
-                if isinstance(planner_raw, PlannerOutput):
-                    planner_output = planner_raw
-                else:
-                    try:
-                        planner_output = PlannerOutput.model_validate(planner_raw)
-                    except Exception as exc:
-                        planner_errors.append(f"planner: output validation failed ({exc})")
-                        planner_output, planner_diagnostics, guided_followup = build_heuristic_planner_output(
-                            user_input=user_input,
-                            has_retriever=has_retriever,
+                planner_output, raw_message, parse_error = _coerce_structured_planner_result(planner_raw)
+                if raw_message is not None:
+                    llm_calls.append(
+                        build_llm_call_metadata(
+                            stage="planner",
+                            attempt=planner_attempt,
+                            path="structured",
+                            message=raw_message,
                         )
-                        planner_status = planner_diagnostics["status"]
+                    )
+                if planner_output is None:
+                    planner_errors.append(f"planner: output validation failed ({parse_error})")
+                    planner_output, planner_diagnostics, guided_followup = build_heuristic_planner_output(
+                        user_input=user_input,
+                        has_retriever=has_retriever,
+                    )
+                    planner_status = planner_diagnostics["status"]
             except Exception as exc:
                 planner_errors.append(f"planner: structured output invocation failed ({exc})")
                 planner_output, planner_diagnostics, guided_followup = build_heuristic_planner_output(
@@ -365,7 +407,7 @@ def make_planner_node(llm_planner: Any, verbose: bool, max_turns: int = 6):
             retry_context["score_avg"] = None
             retry_context.pop("retry_reason", None)
 
-        return {
+        updates: State = {
             "planner_output": planner_output,
             "planner_status": planner_status,
             "planner_diagnostics": planner_diagnostics,
@@ -375,5 +417,8 @@ def make_planner_node(llm_planner: Any, verbose: bool, max_turns: int = 6):
             "needs_retry": False,
             "retry_context": retry_context,
         }
+        if llm_calls:
+            updates["llm_calls"] = llm_calls
+        return updates
 
     return planner
