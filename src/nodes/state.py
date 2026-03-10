@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from typing import Annotated, Any, Literal, Optional
 
-from langchain_core.messages import AnyMessage, ToolMessage
+from langchain_core.messages import AIMessage, AnyMessage, ToolMessage
 from langgraph.graph import add_messages
 from typing_extensions import TypedDict
 
@@ -22,6 +22,8 @@ PlannerOverrideReason = Literal[
     "missing_required_routes",
     "upload_retriever_missing",
 ]
+LLMCallStage = Literal["summarize", "planner", "synthesis"]
+LLMCallPath = Literal["direct", "structured", "plain_fallback"]
 LOW_SCORE_THRESHOLD = 0.5
 DEFAULT_MAX_RETRIES = 1
 RETRYABLE_REASONS: set[RetryReason] = {"no_evidence", "low_score", "unsupported_claims"}
@@ -68,6 +70,14 @@ class SessionMetadata(TypedDict, total=False):
     slack_destination: SlackDestination | None
 
 
+class LLMCallMetadata(TypedDict):
+    stage: LLMCallStage
+    attempt: int
+    path: LLMCallPath
+    response_metadata: dict[str, Any]
+    usage_metadata: dict[str, Any]
+
+
 def merge_string_lists(current: list[str] | None, update: list[str] | None) -> list[str]:
     merged = list(current or [])
     if update:
@@ -89,6 +99,16 @@ def safe_list(value: Any) -> list[Any]:
     if isinstance(value, list):
         return value
     return []
+
+
+def json_safe_deep_copy(value: Any) -> Any:
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, dict):
+        return {str(key): json_safe_deep_copy(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [json_safe_deep_copy(item) for item in value]
+    return str(value)
 
 
 def slice_from_index(items: list[Any], start_index: int) -> list[Any]:
@@ -208,6 +228,32 @@ def coerce_session_metadata(value: Any) -> SessionMetadata:
     return metadata
 
 
+def build_llm_call_metadata(
+    *,
+    stage: LLMCallStage,
+    attempt: int,
+    path: LLMCallPath,
+    message: AIMessage,
+) -> LLMCallMetadata:
+    response_metadata = getattr(message, "response_metadata", None)
+    usage_metadata = getattr(message, "usage_metadata", None)
+
+    safe_response_metadata = (
+        json_safe_deep_copy(response_metadata) if isinstance(response_metadata, dict) else {}
+    )
+    safe_usage_metadata = (
+        json_safe_deep_copy(usage_metadata) if isinstance(usage_metadata, dict) else {}
+    )
+
+    return {
+        "stage": stage,
+        "attempt": max(0, int(attempt)),
+        "path": path,
+        "response_metadata": safe_response_metadata,
+        "usage_metadata": safe_usage_metadata,
+    }
+
+
 class State(TypedDict, total=False):
     messages: Annotated[list[AnyMessage], add_messages]
     user_input: str
@@ -226,6 +272,7 @@ class State(TypedDict, total=False):
     validation_errors: Annotated[list[str], merge_string_lists]
     action_errors: Annotated[list[str], merge_string_lists]
     latency_trace: Annotated[list[dict[str, Any]], merge_dict_lists]
+    llm_calls: Annotated[list[LLMCallMetadata], merge_dict_lists]
     synthesis_attempt: int
     synthesis_output: dict[str, Any]
     response_payload: dict[str, Any]

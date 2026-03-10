@@ -6,7 +6,7 @@ from typing import Any, List
 from langchain_core.messages import AIMessage, AnyMessage, BaseMessage, HumanMessage, SystemMessage
 
 from ..logging_utils import log_event
-from .state import State
+from .state import LLMCallMetadata, State, build_llm_call_metadata
 
 SUMMARY_SYS = (
     "Summarize the older conversation in 4-5 lines.\n"
@@ -68,28 +68,42 @@ def make_summarize_node(llm_summarizer: Any, verbose: bool, max_turns: int = 6):
         messages: List[BaseMessage] = state.get("messages", [])
         recent_window = keep_recent_messages(messages, max_turns=max_turns)
         if len(recent_window) == len(messages):
-            return state
+            return {}
 
         cutoff = len(messages) - len(recent_window)
         old_messages = messages[:cutoff]
         recent_messages = messages[cutoff:]
+        llm_calls: list[LLMCallMetadata] = []
 
         try:
-            summary = llm_summarizer.invoke(
+            summary_response = llm_summarizer.invoke(
                 [SystemMessage(content=SUMMARY_SYS)] + old_messages
-            ).content.strip()
+            )
+            summary = extract_text_content(getattr(summary_response, "content", summary_response)).strip()
+            if isinstance(summary_response, AIMessage):
+                llm_calls.append(
+                    build_llm_call_metadata(
+                        stage="summarize",
+                        attempt=1,
+                        path="direct",
+                        message=summary_response,
+                    )
+                )
         except Exception as exc:
             if verbose:
                 log_event(logger, logging.WARNING, "summary_failed", error=exc)
-            state["messages"] = recent_messages
-            return state
+            return {"messages": recent_messages}
 
         previous_summary = (state.get("memory_summary") or "").strip()
         merged_summary = (previous_summary + ("\n" if previous_summary else "") + summary).strip()
-        state["memory_summary"] = merged_summary
-        state["messages"] = recent_messages
+        updates: State = {
+            "memory_summary": merged_summary,
+            "messages": recent_messages,
+        }
+        if llm_calls:
+            updates["llm_calls"] = llm_calls
         if verbose:
             log_event(logger, logging.INFO, "summary_merged", cutoff=cutoff)
-        return state
+        return updates
 
     return summarize_old_messages

@@ -38,6 +38,7 @@ def build_llm_registry(settings: AppSettings) -> LLMRegistry:
     llm_planner = llm_planner_base.with_structured_output(
         PlannerOutput,
         method="json_schema",
+        include_raw=True,
         strict=True,
     )
 
