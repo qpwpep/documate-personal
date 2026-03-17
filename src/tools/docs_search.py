@@ -7,12 +7,24 @@ import requests
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field
 
+from ..answer_schema import normalize_confidence
 from ..domain_docs import DEFAULT_DOCS
 from ..settings import AppSettings
 from ._common import build_evidence_item, build_retrieval_payload, dedupe_evidence_dicts
 
 
 TAVILY_SEARCH_API_URL = "https://api.tavily.com/search"
+_MIXED_CONTENT_DENY_PREFIXES: dict[str, tuple[str, ...]] = {
+    "huggingface.co": ("/datasets/", "/spaces/", "/models/", "/blog/"),
+}
+_ERROR_PAGE_MARKERS: tuple[str, ...] = (
+    "404",
+    "page not found",
+    "github pages",
+    "does not exist",
+    "not found",
+    "requested file",
+)
 
 
 class TavilyArgs(BaseModel):
@@ -40,6 +52,45 @@ def normalize_include_domains(raw_values: list[str]) -> list[str]:
         if domain and domain not in normalized:
             normalized.append(domain)
     return normalized
+
+
+def _normalize_path_prefix(path: str) -> str:
+    normalized = "/" + str(path or "").strip().lstrip("/")
+    while "//" in normalized:
+        normalized = normalized.replace("//", "/")
+    if normalized == "/":
+        return normalized
+    return normalized if normalized.endswith("/") else normalized + "/"
+
+
+def is_allowed_doc_url(url: str) -> bool:
+    parsed = urlparse(str(url or "").strip())
+    if parsed.scheme.lower() != "https" or not parsed.netloc:
+        return False
+    domain = parsed.netloc.strip().lower()
+    if domain.startswith("www."):
+        domain = domain[4:]
+    allowed_domains = normalize_include_domains(list(DEFAULT_DOCS.values()))
+    if domain not in allowed_domains:
+        return False
+    normalized_path = _normalize_path_prefix(parsed.path or "/")
+    deny_prefixes = _MIXED_CONTENT_DENY_PREFIXES.get(domain, ())
+    return not any(normalized_path.startswith(prefix) for prefix in deny_prefixes)
+
+
+def is_valid_doc_result(*, url: str, title: Any, snippet: Any) -> bool:
+    if not is_allowed_doc_url(url):
+        return False
+
+    combined = " ".join(
+        part.strip().lower()
+        for part in [str(url or ""), str(title or ""), str(snippet or "")]
+        if str(part or "").strip()
+    )
+    if not combined:
+        return False
+
+    return not any(marker in combined for marker in _ERROR_PAGE_MARKERS)
 
 
 def request_tavily_search(
@@ -144,13 +195,20 @@ def build_docs_search_tool(settings: AppSettings) -> Any:
         for result in results:
             if not isinstance(result, dict):
                 continue
+            url = str(result.get("url") or "").strip()
+            if not is_valid_doc_result(
+                url=url,
+                title=result.get("title"),
+                snippet=result.get("content"),
+            ):
+                continue
             evidence_item = build_evidence_item(
                 kind="official",
                 tool="tavily_search",
-                url_or_path=str(result.get("url") or "").strip(),
+                url_or_path=url,
                 title=result.get("title"),
                 snippet=result.get("content"),
-                score=result.get("score"),
+                score=normalize_confidence(result.get("score"), clamp=True),
                 metadata={},
             )
             if evidence_item is not None:

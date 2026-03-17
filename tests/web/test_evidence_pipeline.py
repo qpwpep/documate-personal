@@ -161,6 +161,26 @@ class _FakeDedupVectorStore:
         ]
 
 
+class _FakeNegativeScoreVectorStore:
+    def similarity_search_with_relevance_scores(self, query: str, k: int = 4):
+        _ = (query, k)
+        return [
+            (
+                Document(
+                    page_content="negative score snippet",
+                    metadata={
+                        "source": "uploads/session/sample_pipeline.ipynb",
+                        "cell_id": 1,
+                        "chunk_id": 0,
+                        "start_offset": 0,
+                        "end_offset": 20,
+                    },
+                ),
+                -0.24,
+            )
+        ]
+
+
 class _FakeRetriever:
     def __init__(self, vectorstore=None):
         self.vectorstore = vectorstore or _FakeVectorStore()
@@ -323,6 +343,71 @@ class EvidencePipelineTest(unittest.TestCase):
             [item["chunk_id"] for item in evidence],
             [0, 1],
         )
+
+    def test_upload_search_clamps_negative_scores(self) -> None:
+        registry = build_tool_registry(AppSettings(openai_api_key="test", tavily_api_key="test"))
+
+        result = registry.upload_search_tool.func(
+            query="uploaded info",
+            k=4,
+            retriever=_FakeRetriever(vectorstore=_FakeNegativeScoreVectorStore()),
+        )
+
+        evidence = result["evidence"]
+        self.assertEqual(len(evidence), 1)
+        self.assertEqual(evidence[0]["score"], 0.0)
+
+    @patch("src.tools.docs_search.request_tavily_search")
+    def test_docs_search_filters_to_allowed_doc_prefixes(self, mock_request_tavily_search) -> None:
+        mock_request_tavily_search.return_value = {
+            "results": [
+                {
+                    "url": "https://fastapi.tiangolo.com/ko/tutorial/response-model",
+                    "title": "FastAPI tutorial",
+                    "content": "response_model docs",
+                    "score": 0.91,
+                },
+                {
+                    "url": "https://huggingface.co/docs/transformers/index",
+                    "title": "HF docs",
+                    "content": "docs page",
+                    "score": 0.8,
+                },
+                {
+                    "url": "https://huggingface.co/datasets/foo/bar",
+                    "title": "HF dataset",
+                    "content": "dataset page",
+                    "score": 0.95,
+                },
+            ]
+        }
+
+        registry = build_tool_registry(AppSettings(openai_api_key="test", tavily_api_key="test"))
+        result = registry.tavily_search_tool.func(query="official docs")
+
+        urls = [item["url_or_path"] for item in result["evidence"]]
+        self.assertIn("https://fastapi.tiangolo.com/ko/tutorial/response-model", urls)
+        self.assertIn("https://huggingface.co/docs/transformers/index", urls)
+        self.assertNotIn("https://huggingface.co/datasets/foo/bar", urls)
+
+    @patch("src.tools.docs_search.request_tavily_search")
+    def test_docs_search_returns_no_result_when_all_urls_are_filtered(self, mock_request_tavily_search) -> None:
+        mock_request_tavily_search.return_value = {
+            "results": [
+                {
+                    "url": "https://huggingface.co/datasets/foo/bar",
+                    "title": "HF dataset",
+                    "content": "dataset page",
+                    "score": 0.95,
+                }
+            ]
+        }
+
+        registry = build_tool_registry(AppSettings(openai_api_key="test", tavily_api_key="test"))
+        result = registry.tavily_search_tool.func(query="official docs")
+
+        self.assertEqual(result["diagnostics"]["status"], "no_result")
+        self.assertEqual(result["evidence"], [])
 
     def test_agent_manager_exposes_retrieval_and_planner_diagnostics(self) -> None:
         evidence_payload = [

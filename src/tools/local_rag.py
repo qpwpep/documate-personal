@@ -11,6 +11,7 @@ from langchain_core.tools import StructuredTool
 from langchain_openai import OpenAIEmbeddings
 from langgraph.prebuilt import InjectedState
 
+from ..answer_schema import normalize_confidence
 from ..chunking import chunk_notebook, chunk_python_text
 from ..settings import AppSettings
 from ._common import (
@@ -164,7 +165,7 @@ def build_local_rag_tools(settings: AppSettings) -> tuple[Any, Any]:
                 tool="rag_search",
                 url_or_path=str(source),
                 snippet=(doc.page_content or "").replace("\n", " "),
-                score=score,
+                score=normalize_confidence(score, clamp=True),
                 metadata=getattr(doc, "metadata", None),
             )
             if evidence_item is not None:
@@ -223,7 +224,7 @@ def build_local_rag_tools(settings: AppSettings) -> tuple[Any, Any]:
                 tool="upload_search",
                 url_or_path=str(source),
                 snippet=(doc.page_content or "").replace("\n", " "),
-                score=score,
+                score=normalize_confidence(score, clamp=True),
                 metadata=getattr(doc, "metadata", None),
             )
             if evidence_item is not None:
