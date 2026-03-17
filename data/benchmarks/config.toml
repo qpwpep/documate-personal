@@ -12,8 +12,18 @@ tool_recall = 0.85
 citation_compliance = 0.88
 p95_latency_ms = 20000
 avg_cost_per_case_usd = 0.01
+planner_structured_success_rate = 0.85
+synthesis_structured_success_rate = 0.65
 
 [pricing]
+prompt_per_1k_usd = 0.00015
+completion_per_1k_usd = 0.00060
+
+[pricing.models."gpt-5-mini"]
+prompt_per_1k_usd = 0.00015
+completion_per_1k_usd = 0.00060
+
+[pricing.models."gpt-5-nano"]
 prompt_per_1k_usd = 0.00015
 completion_per_1k_usd = 0.00060
 
