@@ -25,6 +25,7 @@ from .schemas import (
     BenchmarkConfig,
     CaseResult,
     EvidenceItem,
+    LLMCallMetadata,
     PlannerDiagnostic,
     RetrievalDiagnostic,
     RunSummary,
@@ -84,6 +85,53 @@ def _parse_token_usage(raw_debug: dict[str, Any] | None) -> TokenUsage | None:
         )
     except (TypeError, ValueError):
         return None
+
+
+def _parse_llm_calls(
+    raw_items: Any,
+    *,
+    response_errors: list[str],
+) -> list[LLMCallMetadata]:
+    parsed: list[LLMCallMetadata] = []
+    if raw_items is None:
+        return parsed
+
+    if not isinstance(raw_items, list):
+        response_errors.append("debug.llm_calls must be a list")
+        return parsed
+
+    for index, item in enumerate(raw_items):
+        if not isinstance(item, dict):
+            response_errors.append(f"debug.llm_calls[{index}] must be an object")
+            continue
+        try:
+            parsed.append(LLMCallMetadata.model_validate(item))
+        except Exception as exc:
+            response_errors.append(f"debug.llm_calls[{index}] invalid: {exc}")
+    return parsed
+
+
+def _parse_string_list(
+    raw_items: Any,
+    *,
+    label: str,
+    response_errors: list[str],
+) -> list[str]:
+    parsed: list[str] = []
+    if raw_items is None:
+        return parsed
+
+    if not isinstance(raw_items, list):
+        response_errors.append(f"{label} must be a list")
+        return parsed
+
+    for index, item in enumerate(raw_items):
+        text = str(item or "").strip()
+        if not text:
+            response_errors.append(f"{label}[{index}] must be a non-empty string")
+            continue
+        parsed.append(text)
+    return parsed
 
 
 def _parse_evidence_items(
@@ -241,8 +289,11 @@ def _run_single_case(
     latency_ms_server: int | None = None
     latency_breakdown: LatencyBreakdownModel | None = None
     model_name: str | None = None
+    models_used: list[str] = []
     tool_calls: list[str] = []
     token_usage: TokenUsage | None = None
+    llm_calls: list[LLMCallMetadata] = []
+    planner_errors: list[str] = []
 
     if not runtime_errors:
         started = time.monotonic()
@@ -297,7 +348,28 @@ def _run_single_case(
                             except (TypeError, ValueError):
                                 response_errors.append("debug.latency_ms_server must be an integer")
                         model_name = str(debug_payload.get("model_name")) if debug_payload.get("model_name") else None
+                        models_used_raw = debug_payload.get("models_used")
+                        if isinstance(models_used_raw, list):
+                            models_used = [str(name) for name in models_used_raw if name]
+                        elif model_name:
+                            models_used = [model_name]
                         token_usage = _parse_token_usage(debug_payload)
+                        llm_calls = _parse_llm_calls(
+                            debug_payload.get("llm_calls"),
+                            response_errors=response_errors,
+                        )
+                        planner_errors = _parse_string_list(
+                            debug_payload.get("planner_errors"),
+                            label="debug.planner_errors",
+                            response_errors=response_errors,
+                        )
+                        if not models_used and llm_calls:
+                            models_used = []
+                            for llm_call in llm_calls:
+                                response_metadata = llm_call.response_metadata
+                                model_name_candidate = response_metadata.get("model_name") or response_metadata.get("model")
+                                if model_name_candidate and model_name_candidate not in models_used:
+                                    models_used.append(str(model_name_candidate))
                         observed_evidence = _parse_evidence_items(
                             debug_payload.get("observed_evidence"),
                             label="debug.observed_evidence",
@@ -367,7 +439,11 @@ def _run_single_case(
         weights=effective_weights,
     )
     passed = final_score >= 0.75
-    cost = compute_cost_usd(token_usage=token_usage, pricing=config.pricing)
+    cost = compute_cost_usd(
+        token_usage=token_usage,
+        llm_calls=[call.model_dump() for call in llm_calls],
+        pricing=config.pricing,
+    )
 
     result = CaseResult(
         run_id=run_id,
@@ -394,6 +470,9 @@ def _run_single_case(
         tool_calls=tool_calls,
         token_usage=token_usage,
         model_name=model_name,
+        models_used=models_used,
+        llm_calls=llm_calls,
+        planner_errors=planner_errors,
         runtime_errors=runtime_errors,
         response_errors=response_errors,
         judge_errors=judge_errors,

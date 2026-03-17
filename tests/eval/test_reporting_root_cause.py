@@ -10,6 +10,7 @@ def _make_result(
     tool_calls: list[str],
     retrieval_diagnostics: list[dict] | None = None,
     planner_diagnostics: dict | None = None,
+    planner_errors: list[str] | None = None,
     validator_reason: str | None = None,
     validator_feedback: str | None = None,
     llm_judge_reason: str | None = None,
@@ -39,6 +40,7 @@ def _make_result(
             "latency_breakdown": latency_breakdown,
             "tool_calls": tool_calls,
             "token_usage": {"prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150},
+            "planner_errors": planner_errors or [],
             "runtime_errors": [],
             "response_errors": [],
             "judge_errors": [],
@@ -119,6 +121,7 @@ class ReportingRootCauseTest(unittest.TestCase):
                     "override_applied": False,
                     "override_reason": None,
                 },
+                planner_errors=["planner: structured output invocation failed (planner boom)"],
                 validator_reason="no_evidence",
                 validator_feedback="low evidence confidence",
                 llm_judge_reason="Assistant failed to answer even though official docs evidence was present.",
@@ -165,6 +168,7 @@ class ReportingRootCauseTest(unittest.TestCase):
                     "override_applied": False,
                     "override_reason": None,
                 },
+                planner_errors=["planner: dropped upload route because retriever is unavailable"],
                 validator_reason="low_score",
                 llm_judge_reason="Answer stayed too generic and did not compare the uploaded context to docs.",
                 passed=False,
@@ -222,6 +226,19 @@ class ReportingRootCauseTest(unittest.TestCase):
         )
         self.assertEqual(
             planner_buckets[("docs_only", "missing", "diagnostics_unavailable", None)],
+            1,
+        )
+
+        planner_error_buckets = {
+            (row.category, row.error_code): row.count
+            for row in summary.analysis.planner_error_histogram
+        }
+        self.assertEqual(
+            planner_error_buckets[("docs_only", "structured_output_invocation_failed")],
+            1,
+        )
+        self.assertEqual(
+            planner_error_buckets[("hybrid", "upload_route_dropped")],
             1,
         )
 
