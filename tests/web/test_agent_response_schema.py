@@ -88,6 +88,7 @@ class AgentResponseSchemaTest(unittest.TestCase):
                 "tool_calls": ["tavily_search"],
                 "tool_call_count": 1,
                 "errors": [],
+                "planner_errors": ["planner: structured output invocation failed (boom)"],
                 "observed_evidence": [],
                 "retrieval_diagnostics": [
                     {
@@ -117,6 +118,10 @@ class AgentResponseSchemaTest(unittest.TestCase):
         self.assertTrue(result.debug.planner_diagnostics.intent_required)
         self.assertEqual(result.debug.planner_diagnostics.required_routes, ["docs", "upload"])
         self.assertTrue(result.debug.planner_diagnostics.override_applied)
+        self.assertEqual(
+            result.debug.planner_errors,
+            ["planner: structured output invocation failed (boom)"],
+        )
         self.assertEqual(
             result.debug.planner_diagnostics.override_reason,
             "missing_required_routes",
@@ -178,6 +183,45 @@ class AgentResponseSchemaTest(unittest.TestCase):
         self.assertEqual(result.debug.latency_breakdown.stage_totals_ms.retrieval_total_ms, 810)
         self.assertEqual(result.debug.latency_breakdown.retrieval_routes[0].route, "docs")
         self.assertEqual(result.debug.latency_breakdown.synthesis_attempts[0].mode, "structured_only")
+
+    def test_debug_llm_calls_and_models_used_are_optional_and_parseable(self) -> None:
+        payload = {
+            "response": {"answer": "follow up", "claims": [], "evidence": [], "confidence": None},
+            "trace": "trace-id",
+            "file_path": None,
+            "debug": {
+                "tool_calls": ["tavily_search"],
+                "tool_call_count": 1,
+                "errors": [],
+                "observed_evidence": [],
+                "model_name": "gpt-5-mini",
+                "models_used": ["gpt-5-nano", "gpt-5-mini"],
+                "llm_calls": [
+                    {
+                        "stage": "planner",
+                        "attempt": 1,
+                        "path": "structured",
+                        "response_metadata": {"model_name": "gpt-5-nano"},
+                        "usage_metadata": {"input_tokens": 10, "output_tokens": 2, "total_tokens": 12},
+                    },
+                    {
+                        "stage": "synthesis",
+                        "attempt": 1,
+                        "path": "structured",
+                        "response_metadata": {"model_name": "gpt-5-mini"},
+                        "usage_metadata": {"input_tokens": 20, "output_tokens": 5, "total_tokens": 25},
+                    },
+                ],
+            },
+        }
+
+        result = AgentResponse.model_validate(payload)
+        self.assertIsNotNone(result.debug)
+        self.assertEqual(result.debug.model_name, "gpt-5-mini")
+        self.assertEqual(result.debug.models_used, ["gpt-5-nano", "gpt-5-mini"])
+        self.assertEqual(len(result.debug.llm_calls), 2)
+        self.assertEqual(result.debug.llm_calls[0].stage, "planner")
+        self.assertEqual(result.debug.llm_calls[1].usage_metadata["total_tokens"], 25)
 
 
 if __name__ == "__main__":

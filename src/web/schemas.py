@@ -65,7 +65,13 @@ class PlannerDiagnostic(BaseModel):
 class LLMCallMetadata(BaseModel):
     stage: Literal["summarize", "planner", "synthesis"]
     attempt: int = 0
-    path: Literal["direct", "structured", "plain_fallback"]
+    path: Literal[
+        "direct",
+        "structured",
+        "plain_fallback",
+        "structured_compact_fallback",
+        "plain_summary_attach_fallback",
+    ]
     response_metadata: dict[str, Any] = Field(default_factory=dict)
     usage_metadata: dict[str, Any] = Field(default_factory=dict)
 
@@ -80,6 +86,7 @@ class AgentDebugInfo(BaseModel):
     models_used: list[str] = Field(default_factory=list)
     llm_calls: list[LLMCallMetadata] = Field(default_factory=list)
     errors: list[str] = Field(default_factory=list)
+    planner_errors: list[str] = Field(default_factory=list)
     observed_evidence: list[EvidenceItem] = Field(default_factory=list)
     retry_context: AgentRetryContext | None = None
     retrieval_diagnostics: list[RetrievalDiagnostic] = Field(default_factory=list)

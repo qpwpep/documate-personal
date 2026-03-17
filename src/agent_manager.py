@@ -8,15 +8,22 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from .answer_schema import build_empty_response_payload
 from .evidence import dedupe_evidence, evidence_to_dicts, parse_evidence_payload
-from .graph_builder import build_agent_graph
-from .latency import build_latency_breakdown, elapsed_ms
+from .graph_builder import StageExecutionError, build_agent_graph
+from .latency import build_latency_breakdown, elapsed_ms, make_stage_latency_event
 from .logging_utils import log_event
-from .nodes.state import SessionMetadata, coerce_session_metadata
+from .nodes.state import SessionMetadata, coerce_session_metadata, safe_list
 from .settings import AppSettings, get_settings
 from .tools.local_rag import UploadedRetrieverHandle, build_temp_retriever
 
 
 logger = logging.getLogger(__name__)
+
+
+class GraphInvocationError(RuntimeError):
+    def __init__(self, *, graph_total_ms: int, cause: Exception):
+        super().__init__(str(cause))
+        self.graph_total_ms = graph_total_ms
+        self.cause = cause
 
 
 class AgentFlowManager:
@@ -172,7 +179,13 @@ class AgentFlowManager:
                 continue
 
             path = str(item.get("path") or "").strip()
-            if path not in {"direct", "structured", "plain_fallback"}:
+            if path not in {
+                "direct",
+                "structured",
+                "plain_fallback",
+                "structured_compact_fallback",
+                "plain_summary_attach_fallback",
+            }:
                 continue
 
             try:
@@ -451,7 +464,11 @@ class AgentFlowManager:
 
     def _invoke_graph(self, state: dict[str, Any]) -> tuple[dict[str, Any], int]:
         graph_started = time.perf_counter()
-        response = self.graph.invoke(state)
+        try:
+            response = self.graph.invoke(state)
+        except Exception as exc:
+            graph_total_ms = elapsed_ms(graph_started, time.perf_counter())
+            raise GraphInvocationError(graph_total_ms=graph_total_ms, cause=exc) from exc
         graph_total_ms = elapsed_ms(graph_started, time.perf_counter())
         return response, graph_total_ms
 
@@ -466,6 +483,11 @@ class AgentFlowManager:
         debug_errors: list[str] = []
         llm_calls = self._normalize_llm_calls(response.get("llm_calls"))
         token_usage, model_name, models_used = self._summarize_llm_calls(llm_calls)
+        planner_errors = [
+            str(error).strip()
+            for error in safe_list(response.get("planner_errors"))
+            if str(error).strip()
+        ]
 
         for state_error_key in (
             "retrieval_errors",
@@ -524,6 +546,7 @@ class AgentFlowManager:
             "models_used": models_used,
             "llm_calls": llm_calls,
             "errors": debug_errors,
+            "planner_errors": planner_errors,
             "observed_evidence": observed_evidence,
             "retry_context": retry_context,
             "retrieval_diagnostics": retrieval_diagnostics,
@@ -604,6 +627,7 @@ class AgentFlowManager:
                     "models_used": [],
                     "llm_calls": [],
                     "errors": [],
+                    "planner_errors": [],
                     "observed_evidence": [],
                     "retry_context": None,
                     "retrieval_diagnostics": [],
@@ -612,6 +636,8 @@ class AgentFlowManager:
                 },
             }
 
+        flow_started = time.perf_counter()
+        upload_retriever_build_ms: int | None = None
         try:
             state, upload_retriever_build_ms = self._prepare_graph_state(user_input, upload_file_path)
             response, graph_total_ms = self._invoke_graph(state)
@@ -628,8 +654,33 @@ class AgentFlowManager:
         except Exception as exc:
             self._cleanup_upload_retriever()
             self.upload_file_path = None
-            log_event(logger, logging.ERROR, "agent_execution_error", error=exc)
-            message = str(exc)
+            graph_total_ms = None
+            stage_error = None
+            root_exc = exc
+            if isinstance(exc, GraphInvocationError):
+                graph_total_ms = exc.graph_total_ms
+                root_exc = exc.cause
+            if isinstance(root_exc, StageExecutionError):
+                stage_error = root_exc
+                root_exc = root_exc.cause
+            log_event(logger, logging.ERROR, "agent_execution_error", error=root_exc)
+            message = str(root_exc)
+            raw_trace: list[dict[str, Any]] = []
+            if stage_error is not None:
+                raw_trace.append(
+                    make_stage_latency_event(
+                        stage=stage_error.stage,  # type: ignore[arg-type]
+                        attempt=1,
+                        latency_ms=stage_error.latency_ms,
+                        status="error",
+                    )
+                )
+            latency_breakdown = build_latency_breakdown(
+                raw_trace=raw_trace,
+                graph_total_ms=graph_total_ms,
+                server_total_ms=elapsed_ms(flow_started, time.perf_counter()),
+                upload_retriever_build_ms=upload_retriever_build_ms,
+            )
             return {
                 "message": message,
                 "filepath": "",
@@ -652,10 +703,11 @@ class AgentFlowManager:
                     "models_used": [],
                     "llm_calls": [],
                     "errors": [message],
+                    "planner_errors": [],
                     "observed_evidence": [],
                     "retry_context": None,
                     "retrieval_diagnostics": [],
                     "planner_diagnostics": None,
-                    "latency_breakdown": None,
+                    "latency_breakdown": latency_breakdown.model_dump(mode="json"),
                 },
             }
