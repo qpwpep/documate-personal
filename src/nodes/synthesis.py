@@ -55,12 +55,13 @@ PLAIN_SUMMARY_ATTACH_CONTRACT = (
     "[Plain Summary Attach Fallback]\n"
     "- Use only Retrieved Evidence.\n"
     "- Return plain text only.\n"
-    "- Return at most 2 non-empty lines.\n"
-    "- Each line must describe one grounded takeaway.\n"
+    "- Return at most 2 lines or 2 sentences.\n"
+    "- Each line or sentence must describe one grounded takeaway.\n"
     "- Keep the same order as Retrieved Evidence.\n"
     "- Do not include citations, bullets, numbering, JSON, or markdown."
 )
 _LEADING_BULLET_PATTERN = re.compile(r"^\s*(?:[-*•]|\d+[.)])\s*")
+_SENTENCE_SPLIT_PATTERN = re.compile(r"(?<=[.!?])\s+")
 
 
 def _normalize_query_text(text: str) -> str:
@@ -179,17 +180,77 @@ def _build_plain_summary_attach_messages(
     ]
 
 
-def _parse_plain_summary_lines(content: str, *, limit: int) -> list[str]:
+def _parse_plain_summary_segments(content: str, *, limit: int) -> list[str]:
     raw_lines = str(content or "").replace("\r", "\n").splitlines()
-    cleaned_lines: list[str] = []
+    line_segments: list[str] = []
     for line in raw_lines:
         stripped = _LEADING_BULLET_PATTERN.sub("", line).strip()
         if not stripped:
             continue
-        cleaned_lines.append(stripped)
-        if len(cleaned_lines) >= limit:
+        line_segments.append(stripped)
+        if len(line_segments) >= limit:
             break
-    return cleaned_lines
+    if len(line_segments) >= limit or len(line_segments) > 1:
+        return line_segments[:limit]
+
+    normalized = " ".join(str(content or "").replace("\r", "\n").split()).strip()
+    if not normalized:
+        return []
+
+    sentence_segments = [
+        segment.strip()
+        for segment in _SENTENCE_SPLIT_PATTERN.split(normalized)
+        if segment.strip()
+    ]
+    if len(sentence_segments) >= 2:
+        return sentence_segments[:limit]
+    if line_segments:
+        return line_segments[:1]
+    return sentence_segments[:limit] if sentence_segments else [normalized]
+
+
+def _route_for_evidence(item: EvidenceItem) -> str:
+    return {
+        "tavily_search": "docs",
+        "upload_search": "upload",
+        "rag_search": "local",
+    }.get(str(item.tool or ""), "")
+
+
+def _select_primary_evidence_items(
+    *,
+    evidence_items: list[EvidenceItem],
+    planner_output: PlannerOutput,
+) -> list[EvidenceItem]:
+    if not evidence_items:
+        return []
+
+    if planner_output.use_retrieval and planner_output.tasks:
+        selected: list[EvidenceItem] = []
+        seen_routes: set[str] = set()
+        for task in planner_output.tasks:
+            route = str(task.route or "")
+            if route in seen_routes:
+                continue
+            match = next((item for item in evidence_items if _route_for_evidence(item) == route), None)
+            if match is not None:
+                selected.append(match)
+                seen_routes.add(route)
+        if selected:
+            return selected[:2]
+
+    return evidence_items[:2]
+
+
+def _select_grounded_fallback_evidence_items(
+    *,
+    evidence_items: list[EvidenceItem],
+    planner_output: PlannerOutput,
+) -> list[EvidenceItem]:
+    return _select_primary_evidence_items(
+        evidence_items=evidence_items,
+        planner_output=planner_output,
+    ) or evidence_items[:2]
 
 
 def _build_plain_summary_attach_payload(
@@ -201,28 +262,27 @@ def _build_plain_summary_attach_payload(
         return None
 
     limited_evidence = evidence_items[:2]
-    lines = _parse_plain_summary_lines(content, limit=len(limited_evidence))
-    if not lines:
-        return None
-    if len(limited_evidence) == 2 and len(lines) < 2:
+    segments = _parse_plain_summary_segments(content, limit=len(limited_evidence))
+    if not segments:
         return None
 
-    adopted_pairs = list(zip(lines[: len(limited_evidence)], limited_evidence))
+    adopted_pairs = list(zip(segments[: len(limited_evidence)], limited_evidence))
     if not adopted_pairs:
         return None
 
     claims: list[ClaimItem] = []
-    for line, evidence_item in adopted_pairs:
+    for segment, evidence_item in adopted_pairs:
         source_id = str(evidence_item.source_id or "").strip()
         if not source_id:
             continue
         claims.append(
             ClaimItem(
-                text=line,
+                text=segment,
                 evidence_ids=[source_id],
                 confidence=normalize_confidence(evidence_item.score, clamp=True),
             )
         )
+
     if not claims:
         return None
 
@@ -374,11 +434,20 @@ def make_synthesize_node(
             )
         )
         evidence_items = [item for item in parsed_evidence if isinstance(item, EvidenceItem)]
-        deduped_evidence = evidence_to_dicts(evidence_items)
 
         planner_parse_errors: list[str] = []
         planner_output = coerce_planner_output(state.get("planner_output"), planner_parse_errors)
         retrieval_required = bool(planner_output.use_retrieval and planner_output.tasks)
+
+        primary_evidence_items = _select_primary_evidence_items(
+            evidence_items=evidence_items,
+            planner_output=planner_output,
+        )
+        grounded_fallback_evidence_items = _select_grounded_fallback_evidence_items(
+            evidence_items=evidence_items,
+            planner_output=planner_output,
+        )
+        deduped_evidence = evidence_to_dicts(primary_evidence_items)
 
         model_messages, history_before, history_after = _build_synthesis_messages(
             state=state,
@@ -421,7 +490,10 @@ def make_synthesize_node(
             if structured_error is not None:
                 raise structured_error
             synthesis_output = _coerce_synthesis_output(raw_response_obj)
-            payload, final_answer = _render_synthesis_payload(synthesis_output, evidence_items)
+            payload, final_answer = _render_synthesis_payload(
+                synthesis_output,
+                primary_evidence_items,
+            )
         except Exception as exc:
             structured_ms = elapsed_ms(structured_started, time.perf_counter())
             synthesis_errors.append(
@@ -452,7 +524,7 @@ def make_synthesize_node(
                 fallback_content = extract_text_content(getattr(fallback_result, "content", fallback_result))
                 fallback_payload = _build_plain_summary_attach_payload(
                     content=fallback_content,
-                    evidence_items=evidence_items,
+                    evidence_items=primary_evidence_items,
                 )
                 if fallback_payload is None:
                     raise RuntimeError("plain summary attach payload could not be built")
@@ -469,7 +541,7 @@ def make_synthesize_node(
                     fallback_ms = elapsed_ms(fallback_started, time.perf_counter())
                 synthesis_errors.append(f"synthesize: plain summary attach failed ({fallback_exc})")
                 payload = _build_local_fallback_payload(
-                    evidence_items=evidence_items,
+                    evidence_items=grounded_fallback_evidence_items,
                     retrieval_required=retrieval_required,
                     generic_answer="응답 생성 중 오류가 발생했습니다. 질문 범위를 조금 좁혀 다시 시도해 주세요.",
                 )

@@ -103,6 +103,19 @@ _TRAILING_DOCS_STOP_PHRASES = (
     "\uc694\uc57d\ud574\uc918",
     "\uc815\ub9ac\ud574\uc918",
 )
+_DOCS_IDENTIFIER_PATTERN = re.compile(r"\b(?:[A-Za-z][A-Za-z0-9._-]*|v\d+)\b")
+_DOCS_IDENTIFIER_STOPWORDS = {
+    "from",
+    "official",
+    "docs",
+    "doc",
+    "documentation",
+    "reference",
+    "with",
+    "the",
+    "it",
+    "and",
+}
 
 
 def _normalize_query_text(text: str) -> str:
@@ -162,7 +175,19 @@ def _compact_docs_query(text: str) -> str:
     )
     compact = re.sub(r"(?i)\b(and|it with the|with the)\b", " ", compact)
     compact = re.sub(r"\s+", " ", compact)
-    return _normalize_query_text(compact)
+    compact = _normalize_query_text(compact)
+
+    identifier_tokens = _DOCS_IDENTIFIER_PATTERN.findall(compact)
+    if len(identifier_tokens) >= 2:
+        deduped: list[str] = []
+        for token in identifier_tokens:
+            if token.lower() in _DOCS_IDENTIFIER_STOPWORDS:
+                continue
+            if token not in deduped:
+                deduped.append(token)
+        return " ".join(deduped[:4])
+
+    return compact
 
 
 def _compact_upload_query(text: str) -> str:

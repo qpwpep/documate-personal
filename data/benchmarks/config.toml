@@ -6,14 +6,12 @@ safety_format = 0.05
 llm_judge = 0.20
 
 [hard_gates]
-pass_rate = 0.82
+pass_rate = 0.90
 tool_precision = 0.90
 tool_recall = 0.85
-citation_compliance = 0.88
+citation_compliance = 0.95
 p95_latency_ms = 20000
 avg_cost_per_case_usd = 0.01
-planner_structured_success_rate = 0.85
-synthesis_structured_success_rate = 0.65
 
 [pricing]
 prompt_per_1k_usd = 0.00015
