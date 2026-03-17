@@ -22,20 +22,21 @@ class AppSettings(BaseSettings):
     tavily_api_key: str | None = Field(default=None, alias="TAVILY_API_KEY")
 
     chat_model: str = Field(default="gpt-5-mini", alias="CHAT_MODEL")
-    planner_model: str = Field(default="gpt-5-nano", alias="PLANNER_MODEL")
+    planner_model: str = Field(default="gpt-5-mini", alias="PLANNER_MODEL")
     summary_model: str = Field(default="gpt-5-mini", alias="SUMMARY_MODEL")
+    planner_max_tokens: int = Field(default=1200, alias="PLANNER_MAX_TOKENS", ge=1)
     docs_search_timeout_seconds: int = Field(
         default=8,
         alias="DOCS_SEARCH_TIMEOUT_SECONDS",
         ge=1,
     )
     synthesis_timeout_seconds: int = Field(
-        default=8,
+        default=12,
         alias="SYNTHESIS_TIMEOUT_SECONDS",
         ge=1,
     )
     synthesis_max_retries: int = Field(
-        default=1,
+        default=0,
         alias="SYNTHESIS_MAX_RETRIES",
         ge=0,
     )

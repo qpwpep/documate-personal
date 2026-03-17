@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import re
 from typing import Iterable
 
@@ -9,6 +10,23 @@ from .evidence import EvidenceItem
 
 
 _CITATION_PATTERN = re.compile(r"\s*\[(?:\d+)\]\s*$")
+_LEADING_TITLE_PATTERN = re.compile(r"(?i)^title:\s*")
+
+
+def normalize_confidence(value: object, *, clamp: bool = False) -> float | None:
+    if value is None:
+        return None
+    try:
+        normalized = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(normalized):
+        return None
+    if clamp:
+        return max(0.0, min(1.0, normalized))
+    if 0.0 <= normalized <= 1.0:
+        return normalized
+    return None
 
 
 class ClaimItem(BaseModel):
@@ -59,6 +77,14 @@ def build_empty_response_payload(
         evidence=[],
         confidence=confidence,
     )
+
+
+def clean_grounded_text(text: str) -> str:
+    cleaned = _LEADING_TITLE_PATTERN.sub("", str(text or "").strip())
+    cleaned = cleaned.replace("\n", " ")
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    cleaned = re.sub(r"\s+\.\.\.\s*$", "", cleaned)
+    return cleaned.strip()
 
 
 def _strip_trailing_citations(text: str) -> str:
@@ -112,6 +138,51 @@ def render_payload_from_claims(
         evidence=adopted_evidence,
         confidence=confidence,
     )
+
+
+def build_deterministic_grounded_payload(
+    *,
+    evidence_items: Iterable[EvidenceItem],
+    max_claims: int = 2,
+    fallback_answer: str = "",
+) -> AgentResponsePayloadModel:
+    grounded_claims: list[ClaimItem] = []
+    normalized_evidence = [
+        item for item in evidence_items if isinstance(item, EvidenceItem)
+    ]
+
+    for item in normalized_evidence[:max_claims]:
+        source_id = str(item.source_id or "").strip()
+        if not source_id:
+            continue
+
+        fallback_text = (
+            clean_grounded_text(item.snippet or "")
+            or clean_grounded_text(item.title or "")
+            or clean_grounded_text(item.url_or_path or "")
+        )
+        if not fallback_text:
+            continue
+
+        grounded_claims.append(
+            ClaimItem(
+                text=fallback_text,
+                evidence_ids=[source_id],
+                confidence=normalize_confidence(item.score, clamp=True),
+            )
+        )
+
+    if not grounded_claims:
+        return build_empty_response_payload(answer=fallback_answer)
+
+    confidence = average_claim_confidence(grounded_claims)
+    payload = render_payload_from_claims(
+        claims=grounded_claims,
+        evidence_items=normalized_evidence,
+        confidence=confidence,
+    )
+    payload.confidence = confidence
+    return payload
 
 
 def filter_claims_by_evidence(

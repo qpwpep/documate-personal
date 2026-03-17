@@ -86,6 +86,7 @@ def build_agent_graph(settings: AppSettings | None = None):
     )
     synthesize_node = make_synthesize_node(
         llm_synthesizer=llm_registry.llm_synthesizer,
+        llm_synthesizer_compact=llm_registry.llm_synthesizer_compact,
         verbose=llm_registry.verbose,
         max_turns=6,
         has_default_slack_destination=has_default_slack_destination,

@@ -1,20 +1,23 @@
 from __future__ import annotations
 
 import logging
+import re
 import time
-from typing import Any, List
+from typing import Any
 
-from langchain_core.messages import AIMessage, BaseMessage, SystemMessage, ToolMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 
 from ..answer_schema import (
     AgentResponsePayloadModel,
     ClaimItem,
     SynthesisOutput,
     average_claim_confidence,
+    build_deterministic_grounded_payload,
     build_empty_response_payload,
+    normalize_confidence,
     render_payload_from_claims,
 )
-from ..evidence import dedupe_evidence, evidence_to_dicts, parse_evidence_payload
+from ..evidence import EvidenceItem, dedupe_evidence, evidence_to_dicts, parse_evidence_payload
 from ..latency import (
     elapsed_ms,
     make_stage_latency_event,
@@ -48,6 +51,20 @@ SYNTHESIS_CONTRACT = (
     "- If the evidence is insufficient, return claims=[].\n"
     "- Do not embed citation numbers like [1] in claim text; the renderer adds them."
 )
+PLAIN_SUMMARY_ATTACH_CONTRACT = (
+    "[Plain Summary Attach Fallback]\n"
+    "- Use only Retrieved Evidence.\n"
+    "- Return plain text only.\n"
+    "- Return at most 2 non-empty lines.\n"
+    "- Each line must describe one grounded takeaway.\n"
+    "- Keep the same order as Retrieved Evidence.\n"
+    "- Do not include citations, bullets, numbering, JSON, or markdown."
+)
+_LEADING_BULLET_PATTERN = re.compile(r"^\s*(?:[-*•]|\d+[.)])\s*")
+
+
+def _normalize_query_text(text: str) -> str:
+    return " ".join(str(text or "").replace("\r", "\n").split()).strip(" ,.;:-")
 
 
 def _build_structured_synthesizer(llm_synthesizer: Any) -> Any:
@@ -111,86 +128,6 @@ def _payload_to_state_dict(payload: AgentResponsePayloadModel) -> dict[str, Any]
     return payload.model_dump(mode="json")
 
 
-def _is_timeout_error(exc: Exception) -> bool:
-    if isinstance(exc, TimeoutError):
-        return True
-    lowered = str(exc).lower()
-    return "timeout" in lowered or "timed out" in lowered
-
-
-def _build_grounded_timeout_payload(evidence_items: list[Any]) -> AgentResponsePayloadModel:
-    grounded_claims: list[ClaimItem] = []
-    for item in evidence_items[:2]:
-        source_id = str(getattr(item, "source_id", "") or "").strip()
-        if not source_id:
-            continue
-
-        snippet = str(getattr(item, "snippet", "") or "").replace("\n", " ").strip()
-        title = str(getattr(item, "title", "") or "").strip()
-        fallback_text = snippet or title or str(getattr(item, "url_or_path", "") or "").strip()
-        if not fallback_text:
-            continue
-
-        grounded_claims.append(
-            ClaimItem(
-                text=fallback_text,
-                evidence_ids=[source_id],
-                confidence=getattr(item, "score", None),
-            )
-        )
-
-    if not grounded_claims:
-        return build_empty_response_payload(
-            answer="응답 생성이 시간 제한을 초과했습니다. 확인된 근거만으로 요약을 완성하지 못했습니다."
-        )
-
-    confidence = average_claim_confidence(grounded_claims)
-    payload = render_payload_from_claims(
-        claims=grounded_claims,
-        evidence_items=evidence_items,
-        confidence=confidence,
-    )
-    payload.confidence = confidence
-    return payload
-
-
-def _build_local_fallback_payload(
-    *,
-    evidence_items: list[Any],
-    retrieval_required: bool,
-    generic_answer: str,
-) -> AgentResponsePayloadModel:
-    if evidence_items:
-        return _build_grounded_timeout_payload(evidence_items)
-    if retrieval_required:
-        return build_empty_response_payload(answer="")
-    return build_empty_response_payload(answer=generic_answer)
-
-
-def _render_synthesis_payload(
-    synthesis_output: SynthesisOutput,
-    evidence_items: list[Any],
-) -> tuple[AgentResponsePayloadModel, str]:
-    payload_confidence = synthesis_output.confidence
-    if payload_confidence is None:
-        payload_confidence = average_claim_confidence(synthesis_output.claims)
-
-    if synthesis_output.claims:
-        payload = render_payload_from_claims(
-            claims=synthesis_output.claims,
-            evidence_items=evidence_items,
-            confidence=payload_confidence,
-        )
-        return payload, payload.answer
-
-    fallback_answer = str(synthesis_output.answer or "").strip()
-    payload = build_empty_response_payload(
-        answer=fallback_answer,
-        confidence=payload_confidence,
-    )
-    return payload, payload.answer
-
-
 def _build_synthesis_messages(
     *,
     state: State,
@@ -228,13 +165,126 @@ def _build_synthesis_messages(
     return model_messages, history_before, len(trimmed_history)
 
 
+def _build_plain_summary_attach_messages(
+    *,
+    user_input: str,
+    deduped_evidence: list[dict[str, Any]],
+) -> list[BaseMessage]:
+    compact_evidence = deduped_evidence[:2]
+    return [
+        SystemMessage(content=SYS_POLICY),
+        SystemMessage(content=PLAIN_SUMMARY_ATTACH_CONTRACT),
+        HumanMessage(content=_normalize_query_text(user_input) or "Summarize the retrieved evidence."),
+        SystemMessage(content=f"[Retrieved Evidence]\n{format_evidence_for_prompt(compact_evidence)}"),
+    ]
+
+
+def _parse_plain_summary_lines(content: str, *, limit: int) -> list[str]:
+    raw_lines = str(content or "").replace("\r", "\n").splitlines()
+    cleaned_lines: list[str] = []
+    for line in raw_lines:
+        stripped = _LEADING_BULLET_PATTERN.sub("", line).strip()
+        if not stripped:
+            continue
+        cleaned_lines.append(stripped)
+        if len(cleaned_lines) >= limit:
+            break
+    return cleaned_lines
+
+
+def _build_plain_summary_attach_payload(
+    *,
+    content: str,
+    evidence_items: list[EvidenceItem],
+) -> AgentResponsePayloadModel | None:
+    if not evidence_items:
+        return None
+
+    limited_evidence = evidence_items[:2]
+    lines = _parse_plain_summary_lines(content, limit=len(limited_evidence))
+    if not lines:
+        return None
+    if len(limited_evidence) == 2 and len(lines) < 2:
+        return None
+
+    adopted_pairs = list(zip(lines[: len(limited_evidence)], limited_evidence))
+    if not adopted_pairs:
+        return None
+
+    claims: list[ClaimItem] = []
+    for line, evidence_item in adopted_pairs:
+        source_id = str(evidence_item.source_id or "").strip()
+        if not source_id:
+            continue
+        claims.append(
+            ClaimItem(
+                text=line,
+                evidence_ids=[source_id],
+                confidence=normalize_confidence(evidence_item.score, clamp=True),
+            )
+        )
+    if not claims:
+        return None
+
+    confidence = average_claim_confidence(claims)
+    payload = render_payload_from_claims(
+        claims=claims,
+        evidence_items=limited_evidence,
+        confidence=confidence,
+    )
+    payload.confidence = confidence
+    return payload
+
+
+def _build_local_fallback_payload(
+    *,
+    evidence_items: list[EvidenceItem],
+    retrieval_required: bool,
+    generic_answer: str,
+) -> AgentResponsePayloadModel:
+    if evidence_items:
+        return build_deterministic_grounded_payload(
+            evidence_items=evidence_items,
+            fallback_answer=generic_answer,
+        )
+    if retrieval_required:
+        return build_empty_response_payload(answer="")
+    return build_empty_response_payload(answer=generic_answer)
+
+
+def _render_synthesis_payload(
+    synthesis_output: SynthesisOutput,
+    evidence_items: list[EvidenceItem],
+) -> tuple[AgentResponsePayloadModel, str]:
+    payload_confidence = synthesis_output.confidence
+    if payload_confidence is None:
+        payload_confidence = average_claim_confidence(synthesis_output.claims)
+
+    if synthesis_output.claims:
+        payload = render_payload_from_claims(
+            claims=synthesis_output.claims,
+            evidence_items=evidence_items,
+            confidence=payload_confidence,
+        )
+        return payload, payload.answer
+
+    fallback_answer = str(synthesis_output.answer or "").strip()
+    payload = build_empty_response_payload(
+        answer=fallback_answer,
+        confidence=payload_confidence,
+    )
+    return payload, payload.answer
+
+
 def make_synthesize_node(
     llm_synthesizer: Any,
-    verbose: bool,
+    llm_synthesizer_compact: Any | None = None,
+    verbose: bool = False,
     max_turns: int = 6,
     has_default_slack_destination: bool = False,
 ):
     structured_synthesizer = _build_structured_synthesizer(llm_synthesizer)
+    fallback_llm = llm_synthesizer_compact or llm_synthesizer
 
     def synthesize(state: State):
         stage_started = time.perf_counter()
@@ -323,7 +373,8 @@ def make_synthesize_node(
                 errors=parse_errors,
             )
         )
-        deduped_evidence = evidence_to_dicts(parsed_evidence)
+        evidence_items = [item for item in parsed_evidence if isinstance(item, EvidenceItem)]
+        deduped_evidence = evidence_to_dicts(evidence_items)
 
         planner_parse_errors: list[str] = []
         planner_output = coerce_planner_output(state.get("planner_output"), planner_parse_errors)
@@ -370,64 +421,72 @@ def make_synthesize_node(
             if structured_error is not None:
                 raise structured_error
             synthesis_output = _coerce_synthesis_output(raw_response_obj)
-            payload, final_answer = _render_synthesis_payload(synthesis_output, parsed_evidence)
+            payload, final_answer = _render_synthesis_payload(synthesis_output, evidence_items)
         except Exception as exc:
             structured_ms = elapsed_ms(structured_started, time.perf_counter())
-            if _is_timeout_error(exc):
-                synthesis_mode = "timeout_grounded_fallback"
-                synthesis_errors.append(f"synthesize: structured output timed out ({exc})")
+            synthesis_errors.append(
+                (
+                    f"synthesize: structured output timed out ({exc})"
+                    if "timeout" in str(exc).lower() or "timed out" in str(exc).lower()
+                    else f"synthesize: structured output failed ({exc})"
+                )
+            )
+            try:
                 fallback_started = time.perf_counter()
-                payload = _build_local_fallback_payload(
-                    evidence_items=parsed_evidence,
-                    retrieval_required=retrieval_required,
-                    generic_answer="응답 생성이 시간 제한을 초과했습니다. 질문 범위를 조금 좁혀 다시 시도해 주세요.",
+                fallback_result = fallback_llm.invoke(
+                    _build_plain_summary_attach_messages(
+                        user_input=user_input,
+                        deduped_evidence=deduped_evidence,
+                    )
                 )
                 fallback_ms = elapsed_ms(fallback_started, time.perf_counter())
+                if isinstance(fallback_result, AIMessage):
+                    llm_calls.append(
+                        build_llm_call_metadata(
+                            stage="synthesis",
+                            attempt=attempt,
+                            path="plain_summary_attach_fallback",
+                            message=fallback_result,
+                        )
+                    )
+                fallback_content = extract_text_content(getattr(fallback_result, "content", fallback_result))
+                fallback_payload = _build_plain_summary_attach_payload(
+                    content=fallback_content,
+                    evidence_items=evidence_items,
+                )
+                if fallback_payload is None:
+                    raise RuntimeError("plain summary attach payload could not be built")
+                payload = fallback_payload
                 synthesis_output = SynthesisOutput(
                     answer=payload.answer,
                     claims=payload.claims,
                     confidence=payload.confidence,
                 )
                 final_answer = payload.answer
-            else:
-                synthesis_mode = "structured_error_plain_fallback"
-                synthesis_errors.append(f"synthesize: structured output failed ({exc})")
-                try:
-                    fallback_started = time.perf_counter()
-                    raw_response_obj = llm_synthesizer.invoke(model_messages)
+                synthesis_mode = "plain_summary_attach_fallback"
+            except Exception as fallback_exc:
+                if fallback_ms is None:
                     fallback_ms = elapsed_ms(fallback_started, time.perf_counter())
-                    if isinstance(raw_response_obj, AIMessage):
-                        llm_calls.append(
-                            build_llm_call_metadata(
-                                stage="synthesis",
-                                attempt=attempt,
-                                path="plain_fallback",
-                                message=raw_response_obj,
-                            )
-                        )
-                    synthesis_output = _coerce_synthesis_output(raw_response_obj)
-                    payload, final_answer = _render_synthesis_payload(synthesis_output, parsed_evidence)
-                except Exception as fallback_exc:
-                    fallback_ms = elapsed_ms(fallback_started, time.perf_counter())
-                    synthesis_errors.append(f"synthesize: plain fallback failed ({fallback_exc})")
-                    payload = _build_local_fallback_payload(
-                        evidence_items=parsed_evidence,
-                        retrieval_required=retrieval_required,
-                        generic_answer="응답 생성 중 오류가 발생했습니다. 질문 범위를 조금 좁혀 다시 시도해 주세요.",
-                    )
-                    synthesis_output = SynthesisOutput(
-                        answer=payload.answer,
-                        claims=payload.claims,
-                        confidence=payload.confidence,
-                    )
-                    final_answer = payload.answer
+                synthesis_errors.append(f"synthesize: plain summary attach failed ({fallback_exc})")
+                payload = _build_local_fallback_payload(
+                    evidence_items=evidence_items,
+                    retrieval_required=retrieval_required,
+                    generic_answer="응답 생성 중 오류가 발생했습니다. 질문 범위를 조금 좁혀 다시 시도해 주세요.",
+                )
+                synthesis_output = SynthesisOutput(
+                    answer=payload.answer,
+                    claims=payload.claims,
+                    confidence=payload.confidence,
+                )
+                final_answer = payload.answer
+                synthesis_mode = "deterministic_grounded_fallback"
 
         response = AIMessage(content=final_answer)
         total_ms = elapsed_ms(stage_started, time.perf_counter())
         latency_trace = [
             make_synthesis_attempt_latency_event(
                 attempt=attempt,
-                mode=synthesis_mode,
+                mode=synthesis_mode,  # type: ignore[arg-type]
                 structured_ms=structured_ms,
                 fallback_ms=fallback_ms,
                 total_ms=total_ms,
@@ -450,9 +509,10 @@ def make_synthesize_node(
             "latency_trace": latency_trace,
         }
 
-        combined_retrieval_errors = parse_errors + planner_parse_errors
-        if combined_retrieval_errors:
-            updates["retrieval_errors"] = combined_retrieval_errors
+        if parse_errors:
+            updates["retrieval_errors"] = parse_errors
+        if planner_parse_errors:
+            updates["planner_errors"] = planner_parse_errors
         if synthesis_errors:
             updates["synthesis_errors"] = synthesis_errors
         if llm_calls:
