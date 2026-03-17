@@ -15,6 +15,14 @@ from .settings import AppSettings, get_settings
 from .tools import build_tool_registry
 
 
+class StageExecutionError(RuntimeError):
+    def __init__(self, *, stage: str, latency_ms: int, cause: Exception):
+        super().__init__(str(cause))
+        self.stage = stage
+        self.latency_ms = latency_ms
+        self.cause = cause
+
+
 def _resolve_stage_attempt(stage: str, state: State, updates: State) -> int:
     if stage in {"planner"}:
         retry_context = coerce_retry_context(state.get("retry_context"))
@@ -38,7 +46,14 @@ def _resolve_stage_status(stage: str, updates: State) -> str | None:
 def _instrument_stage_node(stage: str, node: Any):
     def wrapped(state: State) -> State:
         started = time.perf_counter()
-        updates = node(state)
+        try:
+            updates = node(state)
+        except Exception as exc:
+            raise StageExecutionError(
+                stage=stage,
+                latency_ms=elapsed_ms(started, time.perf_counter()),
+                cause=exc,
+            ) from exc
         if not isinstance(updates, dict):
             return updates
 

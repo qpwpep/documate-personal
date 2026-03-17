@@ -34,6 +34,7 @@ def normalize_debug_info(raw_debug: dict | None, latency_ms_server: int | None) 
     debug = raw_debug or {}
     tool_calls = debug.get("tool_calls") or []
     errors = debug.get("errors") or []
+    planner_errors_raw = debug.get("planner_errors") or []
     observed_evidence_raw = debug.get("observed_evidence") or []
     models_used_raw = debug.get("models_used")
     raw_llm_calls = debug.get("llm_calls")
@@ -119,6 +120,9 @@ def normalize_debug_info(raw_debug: dict | None, latency_ms_server: int | None) 
         models_used=models_used,
         llm_calls=llm_calls,
         errors=[str(error) for error in errors if error],
+        planner_errors=[str(error) for error in planner_errors_raw if error]
+        if isinstance(planner_errors_raw, list)
+        else [],
         observed_evidence=observed_evidence,
         retry_context=retry_context,
         retrieval_diagnostics=retrieval_diagnostics,
