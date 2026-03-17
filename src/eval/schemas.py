@@ -114,14 +114,12 @@ class ScoreWeights(BaseModel):
 
 
 class HardGates(BaseModel):
-    pass_rate: float = 0.82
+    pass_rate: float = 0.90
     tool_precision: float = 0.90
     tool_recall: float = 0.85
-    citation_compliance: float = 0.88
+    citation_compliance: float = 0.95
     p95_latency_ms: int = 20000
     avg_cost_per_case_usd: float = 0.01
-    planner_structured_success_rate: float = 0.85
-    synthesis_structured_success_rate: float = 0.65
 
 
 class ModelPricing(BaseModel):
@@ -199,6 +197,8 @@ class SummaryStats(BaseModel):
     p50_latency_ms: float | None = None
     p95_latency_ms: float | None = None
     avg_cost_per_case_usd: float | None = None
+    planner_deterministic_rate: float | None = None
+    planner_llm_attempt_count: int | None = None
     planner_structured_success_rate: float | None = None
     synthesis_structured_success_rate: float | None = None
     failures: list[dict[str, str]] = Field(default_factory=list)

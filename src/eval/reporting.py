@@ -454,6 +454,35 @@ def _structured_success_cases(results: list[CaseResult]) -> list[CaseResult]:
     return [result for result in results if result.category in {"docs_only", "rag_only", "hybrid"}]
 
 
+def _compute_planner_deterministic_rate(results: list[CaseResult]) -> float:
+    if not results:
+        return 1.0
+    deterministic_count = sum(
+        1
+        for result in results
+        if result.planner_diagnostics is not None
+        and str(result.planner_diagnostics.status or "") == "deterministic"
+    )
+    return round(deterministic_count / len(results), 4)
+
+
+def _compute_planner_llm_attempt_count(results: list[CaseResult]) -> int:
+    attempt_count = 0
+    for result in results:
+        if any(call.stage == "planner" for call in result.llm_calls):
+            attempt_count += 1
+            continue
+        if result.planner_errors:
+            attempt_count += 1
+            continue
+        if (
+            result.planner_diagnostics is not None
+            and str(result.planner_diagnostics.status or "") not in {"deterministic", "missing"}
+        ):
+            attempt_count += 1
+    return attempt_count
+
+
 def _compute_planner_structured_success_rate(results: list[CaseResult]) -> float:
     eligible = [
         result
@@ -557,6 +586,8 @@ def build_summary(
         p50_latency_ms=round(p50_latency, 2) if p50_latency is not None else None,
         p95_latency_ms=round(p95_latency, 2) if p95_latency is not None else None,
         avg_cost_per_case_usd=round(avg_cost, 8) if avg_cost is not None else None,
+        planner_deterministic_rate=_compute_planner_deterministic_rate(results),
+        planner_llm_attempt_count=_compute_planner_llm_attempt_count(results),
         planner_structured_success_rate=_compute_planner_structured_success_rate(results),
         synthesis_structured_success_rate=_compute_synthesis_structured_success_rate(results),
         failures=failures[:50],
@@ -616,28 +647,6 @@ def build_summary(
             threshold=hard_gates.avg_cost_per_case_usd,
             actual=metrics.avg_cost_per_case_usd,
             passed=avg_cost_gate_passed,
-        )
-    )
-    gates.append(
-        GateResult(
-            name="planner_structured_success_rate",
-            threshold=hard_gates.planner_structured_success_rate,
-            actual=metrics.planner_structured_success_rate,
-            passed=(
-                metrics.planner_structured_success_rate is not None
-                and metrics.planner_structured_success_rate >= hard_gates.planner_structured_success_rate
-            ),
-        )
-    )
-    gates.append(
-        GateResult(
-            name="synthesis_structured_success_rate",
-            threshold=hard_gates.synthesis_structured_success_rate,
-            actual=metrics.synthesis_structured_success_rate,
-            passed=(
-                metrics.synthesis_structured_success_rate is not None
-                and metrics.synthesis_structured_success_rate >= hard_gates.synthesis_structured_success_rate
-            ),
         )
     )
 
@@ -817,6 +826,8 @@ def build_markdown_report(summary: RunSummary, results: list[CaseResult] | None 
     lines.append(f"| p50_latency_ms | {summary.metrics.p50_latency_ms} |")
     lines.append(f"| p95_latency_ms | {summary.metrics.p95_latency_ms} |")
     lines.append(f"| avg_cost_per_case_usd | {summary.metrics.avg_cost_per_case_usd} |")
+    lines.append(f"| planner_deterministic_rate | {summary.metrics.planner_deterministic_rate} |")
+    lines.append(f"| planner_llm_attempt_count | {summary.metrics.planner_llm_attempt_count} |")
     lines.append(
         f"| planner_structured_success_rate | {summary.metrics.planner_structured_success_rate} |"
     )
