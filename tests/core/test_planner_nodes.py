@@ -45,7 +45,7 @@ class PlannerNodeTest(unittest.TestCase):
         self.assertEqual(capture_planner.call_count, 0)
         self.assertEqual(updates["planner_status"], "deterministic")
         self.assertEqual([task.route for task in updates["planner_output"].tasks], ["docs"])
-        self.assertEqual(updates["planner_output"].tasks[0].query, "FastAPI response_model from")
+        self.assertEqual(updates["planner_output"].tasks[0].query, "FastAPI response_model")
 
     def test_planner_deterministically_routes_upload_request(self) -> None:
         capture_planner = _CapturePlannerLLM(PlannerOutput(use_retrieval=False, tasks=[]))
@@ -78,7 +78,7 @@ class PlannerNodeTest(unittest.TestCase):
         self.assertEqual(capture_planner.call_count, 0)
         self.assertEqual(updates["planner_status"], "deterministic")
         self.assertEqual([task.route for task in updates["planner_output"].tasks], ["docs", "upload"])
-        self.assertEqual(updates["planner_output"].tasks[0].query, "pandas concat from")
+        self.assertEqual(updates["planner_output"].tasks[0].query, "pandas concat")
         self.assertEqual(updates["planner_output"].tasks[1].query, "uploaded notebook example")
 
     def test_planner_blocks_upload_route_when_retriever_missing(self) -> None:
