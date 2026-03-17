@@ -8,7 +8,7 @@ from src.nodes.retrieval import make_retrieve_dispatch_node
 from src.nodes.session import add_user_message
 from src.nodes.state import State
 from src.nodes.validation import make_validate_evidence_node
-from src.planner_schema import PlannerOutput, RetrievalTask
+from src.planner_schema import PlannerOutput
 
 from .helpers import (
     _CapturePlannerLLM,
@@ -25,3 +25,6 @@ class GraphRoutingTest(unittest.TestCase):
 
 
 
+
+if __name__ == "__main__":
+    unittest.main()

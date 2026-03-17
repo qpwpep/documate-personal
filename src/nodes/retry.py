@@ -18,27 +18,23 @@ def format_retry_context_for_planner(state: State, retry_context: RetryContext) 
 
     max_retries = int(retry_context.get("max_retries", DEFAULT_MAX_RETRIES))
     retry_reason = str(retry_context.get("retry_reason") or "no_evidence")
-    feedback = str(retry_context.get("retrieval_feedback") or "none")
     score_avg = retry_context.get("score_avg")
     score_text = f"{score_avg:.3f}" if isinstance(score_avg, (int, float)) else "n/a"
 
     planner_parse_errors: list[str] = []
     previous_output = coerce_planner_output(state.get("planner_output"), planner_parse_errors)
     if previous_output.use_retrieval and previous_output.tasks:
-        previous_tasks = ", ".join(
-            f"{task.route}:{task.query}(k={task.k})" for task in previous_output.tasks
-        )
+        previous_routes = ", ".join(task.route for task in previous_output.tasks)
     else:
-        previous_tasks = "none"
+        previous_routes = "none"
 
     return (
         "[Retry Context]\n"
         f"attempt={attempt}/{max_retries}\n"
         f"reason={retry_reason}\n"
-        f"retrieval_feedback={feedback}\n"
-        f"previous_tasks={previous_tasks}\n"
+        f"previous_routes={previous_routes}\n"
         f"score_avg={score_text}\n"
-        "Reformulate query scope and switch routes if needed."
+        "Use a shorter, route-specific query."
     )
 
 
@@ -156,6 +152,8 @@ def build_retry_update(
     next_retry_context["max_retries"] = max_retries
     next_retry_context["score_avg"] = score_avg
 
+    selected_routes = {task.route for task in planner_output.tasks}
+
     if retry_reason is not None:
         retrieval_feedback = build_retrieval_feedback(
             retry_reason,
@@ -163,7 +161,11 @@ def build_retry_update(
             retrieval_errors=retrieval_errors,
             score_avg=score_avg,
         )
-        if retry_reason in RETRYABLE_REASONS and used_retries < max_retries:
+        if (
+            retry_reason in RETRYABLE_REASONS
+            and selected_routes == {"docs"}
+            and used_retries < max_retries
+        ):
             needs_retry = True
             used_retries += 1
         next_retry_context["retry_reason"] = retry_reason

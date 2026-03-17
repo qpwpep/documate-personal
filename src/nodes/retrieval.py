@@ -13,6 +13,7 @@ from ..latency import (
 )
 from ..logging_utils import log_event
 from ..planner_schema import RetrievalTask
+from .planner import sanitize_retrieval_query
 from .retry import current_retrieval_attempt
 from .state import (
     RetrievalDiagnostic,
@@ -186,7 +187,7 @@ def make_retrieve_dispatch_node(
         planner_output = coerce_planner_output(state.get("planner_output"), planner_errors)
         if not planner_output.use_retrieval or not planner_output.tasks:
             if planner_errors:
-                return {"retrieval_errors": planner_errors}
+                return {"planner_errors": planner_errors}
             return {}
 
         route_handlers: dict[str, tuple[str, Any]] = {
@@ -208,7 +209,7 @@ def make_retrieve_dispatch_node(
             ),
         }
 
-        local_errors: list[str] = list(planner_errors)
+        local_errors: list[str] = []
         evidence_updates: list[dict[str, Any]] = []
         retrieval_diagnostics: list[dict[str, Any]] = []
         tool_messages = []
@@ -223,6 +224,12 @@ def make_retrieve_dispatch_node(
                 local_errors.append(f"planner: unsupported route ({task.route})")
                 continue
             tool_name, invoke_tool = handler
+            sanitized_query = sanitize_retrieval_query(
+                route=task.route,
+                query=task.query,
+                retry_context=retry_context,
+            )
+            task = RetrievalTask(route=task.route, query=sanitized_query, k=task.k)
             indexed_tasks.append((index, task, tool_name, invoke_tool))
 
         task_results: list[dict[str, Any]] = []
@@ -311,6 +318,8 @@ def make_retrieve_dispatch_node(
             "messages": tool_messages,
             "latency_trace": latency_trace,
         }
+        if planner_errors:
+            updates["planner_errors"] = planner_errors
         if local_errors:
             updates["retrieval_errors"] = local_errors
         return updates
