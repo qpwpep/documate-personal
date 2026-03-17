@@ -7,12 +7,14 @@ from src.settings import AppSettings
 
 class _FakeChatOpenAI:
     created_kwargs: list[dict] = []
+    structured_kwargs: list[dict] = []
 
     def __init__(self, **kwargs):
         self.kwargs = kwargs
         self.__class__.created_kwargs.append(kwargs)
 
     def with_structured_output(self, *_args, **_kwargs):
+        self.__class__.structured_kwargs.append(_kwargs)
         return self
 
 
@@ -20,9 +22,11 @@ class LLMRegistryTest(unittest.TestCase):
     @patch("src.llm.ChatOpenAI", new=_FakeChatOpenAI)
     def test_build_llm_registry_applies_explicit_synthesis_policy(self) -> None:
         _FakeChatOpenAI.created_kwargs = []
+        _FakeChatOpenAI.structured_kwargs = []
         settings = AppSettings(
             openai_api_key="test-key",
             tavily_api_key="test-tavily",
+            planner_max_tokens=654,
             synthesis_timeout_seconds=9,
             synthesis_max_retries=1,
             synthesis_max_tokens=777,
@@ -31,13 +35,20 @@ class LLMRegistryTest(unittest.TestCase):
 
         _ = build_llm_registry(settings)
 
-        self.assertEqual(len(_FakeChatOpenAI.created_kwargs), 3)
+        self.assertEqual(len(_FakeChatOpenAI.created_kwargs), 4)
         synthesizer_kwargs = _FakeChatOpenAI.created_kwargs[0]
         self.assertEqual(synthesizer_kwargs["temperature"], 0)
         self.assertEqual(synthesizer_kwargs["timeout"], 9)
         self.assertEqual(synthesizer_kwargs["max_retries"], 1)
         self.assertEqual(synthesizer_kwargs["max_tokens"], 777)
         self.assertEqual(synthesizer_kwargs["verbose"], False)
+        compact_kwargs = _FakeChatOpenAI.created_kwargs[1]
+        self.assertEqual(compact_kwargs["timeout"], 4)
+        self.assertEqual(compact_kwargs["max_retries"], 0)
+        self.assertEqual(compact_kwargs["max_tokens"], 320)
+        planner_kwargs = _FakeChatOpenAI.created_kwargs[2]
+        self.assertEqual(planner_kwargs["max_tokens"], 654)
+        self.assertEqual(_FakeChatOpenAI.structured_kwargs[0]["include_raw"], True)
 
 
 if __name__ == "__main__":

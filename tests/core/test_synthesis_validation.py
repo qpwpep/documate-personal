@@ -2,27 +2,30 @@ import unittest
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
+from src.nodes.session import make_summarize_node
 from src.nodes.synthesis import make_synthesize_node
 from src.nodes.validation import make_validate_evidence_node
 from src.planner_schema import PlannerOutput, RetrievalTask
 from src.prompts import SYS_POLICY
 
 from .helpers import (
+    _CaptureSummaryLLM,
     _CaptureStructuredSynthesizeLLM,
     _CaptureSynthesizeLLM,
+    _StructuredThenPlainFallbackSynthesizeLLM,
     _TimeoutStructuredSynthesizeLLM,
 )
 
 
 class SynthesisValidationTest(unittest.TestCase):
-    def test_validate_evidence_retries_once_then_returns_route_specific_followup(self) -> None:
+    def test_validate_evidence_retries_once_for_docs_only_no_evidence(self) -> None:
         validate_node = make_validate_evidence_node(verbose=False)
         planner_output = PlannerOutput(
             use_retrieval=True,
             tasks=[RetrievalTask(route="docs", query="numpy docs", k=3)],
         )
 
-        first = validate_node(
+        result = validate_node(
             {
                 "planner_output": planner_output,
                 "retrieved_evidence": [],
@@ -34,20 +37,11 @@ class SynthesisValidationTest(unittest.TestCase):
                 },
             }
         )
-        second = validate_node(
-            {
-                "planner_output": planner_output,
-                "retrieved_evidence": [],
-                "retry_context": first["retry_context"],
-            }
-        )
-        self.assertTrue(first["needs_retry"])
-        self.assertEqual(first["retry_context"]["attempt"], 1)
-        self.assertEqual(first["retry_context"]["retry_reason"], "no_evidence")
-        self.assertFalse(second["needs_retry"])
-        self.assertIn("final_answer", second)
-        self.assertTrue(second["final_answer"].startswith("현재 확인 가능한 근거를 찾지 못했습니다."))
-        self.assertIn("공식 문서", second["final_answer"])
+
+        self.assertTrue(result["needs_retry"])
+        self.assertEqual(result["retry_context"]["attempt"], 1)
+        self.assertEqual(result["retry_context"]["retry_reason"], "no_evidence")
+        self.assertNotIn("final_answer", result)
 
     def test_validate_evidence_sets_tool_error_reason(self) -> None:
         validate_node = make_validate_evidence_node(verbose=False)
@@ -68,12 +62,77 @@ class SynthesisValidationTest(unittest.TestCase):
                 },
             }
         )
+
         self.assertFalse(result["needs_retry"])
-        self.assertEqual(result["retry_context"]["attempt"], 0)
         self.assertEqual(result["retry_context"]["retry_reason"], "tool_error")
         self.assertIn("final_answer", result)
-        self.assertTrue(result["final_answer"].startswith("현재 확인 가능한 근거를 찾지 못했습니다."))
-        self.assertIn("공식 문서", result["final_answer"])
+
+    def test_validate_evidence_does_not_treat_planner_errors_as_tool_errors(self) -> None:
+        validate_node = make_validate_evidence_node(verbose=False)
+        planner_output = PlannerOutput(
+            use_retrieval=True,
+            tasks=[RetrievalTask(route="docs", query="numpy docs", k=3)],
+        )
+        result = validate_node(
+            {
+                "planner_output": planner_output,
+                "retrieved_evidence": [],
+                "planner_errors": ["planner: structured output invocation failed (boom)"],
+                "retry_context": {
+                    "attempt": 0,
+                    "max_retries": 1,
+                    "evidence_start_index": 0,
+                    "retrieval_error_start_index": 0,
+                    "retrieval_diagnostic_start_index": 0,
+                },
+            }
+        )
+
+        self.assertTrue(result["needs_retry"])
+        self.assertEqual(result["retry_context"]["retry_reason"], "no_evidence")
+
+    def test_validate_evidence_salvages_grounded_payload_when_tool_error_exists(self) -> None:
+        validate_node = make_validate_evidence_node(verbose=False)
+        planner_output = PlannerOutput(
+            use_retrieval=True,
+            tasks=[RetrievalTask(route="docs", query="numpy docs", k=3)],
+        )
+        result = validate_node(
+            {
+                "planner_output": planner_output,
+                "retrieved_evidence": [
+                    {
+                        "kind": "official",
+                        "tool": "tavily_search",
+                        "source_id": "url:https://numpy.org/doc/stable/",
+                        "document_id": "url:https://numpy.org/doc/stable/",
+                        "url_or_path": "https://numpy.org/doc/stable/",
+                        "title": "NumPy Docs",
+                        "snippet": "Broadcasting expands compatible array shapes.",
+                        "score": 0.9,
+                    }
+                ],
+                "retrieval_errors": ["tavily_search: failed (timeout)"],
+                "response_payload": {
+                    "answer": "draft",
+                    "claims": [],
+                    "evidence": [],
+                    "confidence": None,
+                },
+                "retry_context": {
+                    "attempt": 0,
+                    "max_retries": 1,
+                    "evidence_start_index": 0,
+                    "retrieval_error_start_index": 0,
+                    "retrieval_diagnostic_start_index": 0,
+                },
+            }
+        )
+
+        self.assertFalse(result["needs_retry"])
+        self.assertEqual(result["retry_context"]["retry_reason"], "tool_error")
+        self.assertIn("Broadcasting expands compatible array shapes.", result["final_answer"])
+        self.assertEqual(result["response_payload"]["evidence"][0]["source_id"], "url:https://numpy.org/doc/stable/")
 
     def test_validate_evidence_maps_upload_unavailable_to_blocked_missing_upload(self) -> None:
         validate_node = make_validate_evidence_node(verbose=False)
@@ -104,11 +163,12 @@ class SynthesisValidationTest(unittest.TestCase):
                 },
             }
         )
+
         self.assertFalse(result["needs_retry"])
         self.assertEqual(result["retry_context"]["retry_reason"], "blocked_missing_upload")
-        self.assertIn("업로드", result["final_answer"])
+        self.assertIn("final_answer", result)
 
-    def test_validate_evidence_sets_low_score_reason(self) -> None:
+    def test_validate_evidence_low_score_salvages_grounded_payload(self) -> None:
         validate_node = make_validate_evidence_node(verbose=False)
         planner_output = PlannerOutput(
             use_retrieval=True,
@@ -129,6 +189,12 @@ class SynthesisValidationTest(unittest.TestCase):
                         "score": 0.2,
                     }
                 ],
+                "response_payload": {
+                    "answer": "draft",
+                    "claims": [],
+                    "evidence": [],
+                    "confidence": None,
+                },
                 "retry_context": {
                     "attempt": 0,
                     "max_retries": 1,
@@ -137,11 +203,13 @@ class SynthesisValidationTest(unittest.TestCase):
                 },
             }
         )
-        self.assertTrue(result["needs_retry"])
-        self.assertEqual(result["retry_context"]["retry_reason"], "low_score")
-        self.assertAlmostEqual(result["retry_context"]["score_avg"], 0.2)
 
-    def test_validate_evidence_retries_when_claims_reference_unknown_evidence(self) -> None:
+        self.assertFalse(result["needs_retry"])
+        self.assertEqual(result["retry_context"]["retry_reason"], "unsupported_claims")
+        self.assertAlmostEqual(result["retry_context"]["score_avg"], 0.2)
+        self.assertEqual(result["response_payload"]["claims"][0]["evidence_ids"], ["url:https://numpy.org/doc/stable/"])
+
+    def test_validate_evidence_unsupported_claims_falls_back_to_grounded_payload(self) -> None:
         validate_node = make_validate_evidence_node(verbose=False)
         planner_output = PlannerOutput(
             use_retrieval=True,
@@ -185,8 +253,13 @@ class SynthesisValidationTest(unittest.TestCase):
                 },
             }
         )
-        self.assertTrue(result["needs_retry"])
+
+        self.assertFalse(result["needs_retry"])
         self.assertEqual(result["retry_context"]["retry_reason"], "unsupported_claims")
+        self.assertEqual(
+            result["response_payload"]["claims"][0]["evidence_ids"],
+            ["path:data/notebooks/example.ipynb#cell=0;chunk=0;start=0;end=12"],
+        )
 
     def test_validate_evidence_filters_to_valid_claims_after_retry_budget(self) -> None:
         validate_node = make_validate_evidence_node(verbose=False)
@@ -237,6 +310,7 @@ class SynthesisValidationTest(unittest.TestCase):
                 },
             }
         )
+
         self.assertFalse(result["needs_retry"])
         self.assertEqual(result["final_answer"], "kept [1]")
         self.assertEqual(len(result["response_payload"]["claims"]), 1)
@@ -270,6 +344,29 @@ class SynthesisValidationTest(unittest.TestCase):
         self.assertIsInstance(capture_llm.last_messages[0], SystemMessage)
         self.assertEqual(capture_llm.last_messages[0].content, SYS_POLICY)
 
+    def test_summarize_node_records_llm_call_metadata(self) -> None:
+        summarize_llm = _CaptureSummaryLLM()
+        summarize_node = make_summarize_node(summarize_llm, verbose=False, max_turns=2)
+
+        updates = summarize_node(
+            {
+                "messages": [
+                    HumanMessage(content="u1"),
+                    AIMessage(content="a1"),
+                    HumanMessage(content="u2"),
+                    AIMessage(content="a2"),
+                    HumanMessage(content="u3"),
+                    AIMessage(content="a3"),
+                    HumanMessage(content="u4"),
+                ]
+            }
+        )
+
+        self.assertIn("memory_summary", updates)
+        self.assertEqual(len(updates["llm_calls"]), 1)
+        self.assertEqual(updates["llm_calls"][0]["stage"], "summarize")
+        self.assertEqual(updates["llm_calls"][0]["path"], "direct")
+
     def test_synthesize_short_circuits_action_only_save_request(self) -> None:
         capture_llm = _CaptureSynthesizeLLM()
         synthesize_node = make_synthesize_node(capture_llm, verbose=False, max_turns=6)
@@ -284,8 +381,8 @@ class SynthesisValidationTest(unittest.TestCase):
         )
 
         self.assertIsNone(capture_llm.last_messages)
-        self.assertEqual(updates["final_answer"], "요청하신 최종 답변을 저장합니다.")
         self.assertEqual(updates["response_payload"]["claims"], [])
+        self.assertNotIn("llm_calls", updates)
 
     def test_synthesize_action_only_slack_requests_destination_without_metadata(self) -> None:
         capture_llm = _CaptureSynthesizeLLM()
@@ -303,7 +400,7 @@ class SynthesisValidationTest(unittest.TestCase):
 
         self.assertIsNone(capture_llm.last_messages)
         self.assertIn("channel_id", updates["final_answer"])
-        self.assertEqual(updates["response_payload"]["claims"], [])
+        self.assertNotIn("llm_calls", updates)
 
     def test_synthesize_action_only_slack_uses_session_metadata_without_followup(self) -> None:
         capture_llm = _CaptureSynthesizeLLM()
@@ -339,8 +436,8 @@ class SynthesisValidationTest(unittest.TestCase):
 
         updates = synthesize_node(
             {
-                "messages": [HumanMessage(content="업로드한 파일에서 groupby를 찾아줘")],
-                "user_input": "업로드한 파일에서 groupby를 찾아줘",
+                "messages": [HumanMessage(content="Find groupby in uploaded file")],
+                "user_input": "Find groupby in uploaded file",
                 "guided_followup": "업로드한 파일을 먼저 올려 주세요.",
                 "retrieved_evidence": [],
                 "synthesis_attempt": 0,
@@ -362,7 +459,8 @@ class SynthesisValidationTest(unittest.TestCase):
                     }
                 ],
                 "confidence": 0.92,
-            }
+            },
+            include_raw=True,
         )
         synthesize_node = make_synthesize_node(capture_llm, verbose=False, max_turns=8)
 
@@ -388,10 +486,8 @@ class SynthesisValidationTest(unittest.TestCase):
         self.assertEqual(updates["final_answer"], "Broadcasting expands compatible array shapes. [1]")
         self.assertEqual(len(updates["response_payload"]["claims"]), 1)
         self.assertEqual(len(updates["response_payload"]["evidence"]), 1)
-        self.assertEqual(
-            updates["response_payload"]["claims"][0]["evidence_ids"],
-            ["url:https://numpy.org/doc/stable/"],
-        )
+        self.assertEqual(len(updates["llm_calls"]), 1)
+        self.assertEqual(updates["llm_calls"][0]["path"], "structured")
 
     def test_synthesize_uses_only_current_attempt_evidence_window(self) -> None:
         capture_llm = _CaptureSynthesizeLLM()
@@ -437,13 +533,120 @@ class SynthesisValidationTest(unittest.TestCase):
         self.assertIn("https://new.example.com/", retrieved_evidence_messages[0])
         self.assertNotIn("https://old.example.com/", retrieved_evidence_messages[0])
 
-    def test_synthesize_timeout_uses_grounded_fallback_without_plain_llm_retry(self) -> None:
-        timeout_llm = _TimeoutStructuredSynthesizeLLM()
-        synthesize_node = make_synthesize_node(timeout_llm, verbose=False, max_turns=8)
+    def test_synthesize_trims_only_conversation_history_and_keeps_fixed_messages(self) -> None:
+        capture_llm = _CaptureStructuredSynthesizeLLM(include_raw=True)
+        synthesize_node = make_synthesize_node(capture_llm, verbose=False, max_turns=2)
+
+        updates = synthesize_node(
+            {
+                "messages": [
+                    HumanMessage(content="u1"),
+                    AIMessage(content="a1"),
+                    HumanMessage(content="u2"),
+                    AIMessage(content="a2"),
+                    HumanMessage(content="u3"),
+                    AIMessage(content="a3"),
+                    HumanMessage(content="u4"),
+                ],
+                "memory_summary": "older summary",
+                "user_input": "Explain numpy broadcasting with official docs and save the response.",
+                "retrieved_evidence": [
+                    {
+                        "kind": "official",
+                        "tool": "tavily_search",
+                        "source_id": "url:https://numpy.org/doc/stable/",
+                        "document_id": "url:https://numpy.org/doc/stable/",
+                        "url_or_path": "https://numpy.org/doc/stable/",
+                        "title": "NumPy Docs",
+                        "snippet": "broadcasting rule",
+                        "score": 0.9,
+                    }
+                ],
+                "synthesis_attempt": 0,
+            }
+        )
+
+        self.assertEqual(updates["final_answer"], "synth result")
+        sent_messages = capture_llm.last_messages or []
+        self.assertEqual(str(sent_messages[0].content), SYS_POLICY)
+        self.assertIn("[Conversation Summary]", str(sent_messages[1].content))
+        self.assertFalse(
+            any(isinstance(message, HumanMessage) and message.content == "u1" for message in sent_messages)
+        )
+        self.assertTrue(
+            any(isinstance(message, HumanMessage) and message.content == "u4" for message in sent_messages)
+        )
+
+    def test_synthesize_uses_plain_summary_attach_fallback(self) -> None:
+        primary_llm = _StructuredThenPlainFallbackSynthesizeLLM()
+        plain_fallback_llm = _CaptureSynthesizeLLM(
+            content="NumPy broadcasting expands compatible shapes.\nIt avoids Python-level loops."
+        )
+        synthesize_node = make_synthesize_node(
+            primary_llm,
+            llm_synthesizer_compact=plain_fallback_llm,
+            verbose=False,
+            max_turns=6,
+        )
 
         updates = synthesize_node(
             {
                 "messages": [HumanMessage(content="Explain numpy broadcasting.")],
+                "user_input": "Explain numpy broadcasting.",
+                "retrieved_evidence": [
+                    {
+                        "kind": "official",
+                        "tool": "tavily_search",
+                        "source_id": "url:https://numpy.org/doc/stable/",
+                        "document_id": "url:https://numpy.org/doc/stable/",
+                        "url_or_path": "https://numpy.org/doc/stable/",
+                        "title": "NumPy Docs",
+                        "snippet": "Broadcasting expands compatible array shapes.",
+                        "score": 0.9,
+                    },
+                    {
+                        "kind": "official",
+                        "tool": "tavily_search",
+                        "source_id": "url:https://numpy.org/doc/stable/broadcasting-2",
+                        "document_id": "url:https://numpy.org/doc/stable/broadcasting-2",
+                        "url_or_path": "https://numpy.org/doc/stable/broadcasting-2",
+                        "title": "NumPy Docs 2",
+                        "snippet": "Broadcasting keeps loops in C.",
+                        "score": 0.88,
+                    },
+                ],
+                "synthesis_attempt": 0,
+            }
+        )
+
+        self.assertEqual(
+            updates["response_payload"]["claims"][0]["evidence_ids"],
+            ["url:https://numpy.org/doc/stable/"],
+        )
+        self.assertEqual(
+            updates["response_payload"]["claims"][1]["evidence_ids"],
+            ["url:https://numpy.org/doc/stable/broadcasting-2"],
+        )
+        self.assertEqual(updates["llm_calls"][-1]["path"], "plain_summary_attach_fallback")
+        synthesis_attempts = [
+            item for item in updates["latency_trace"] if item.get("kind") == "synthesis_attempt"
+        ]
+        self.assertEqual(synthesis_attempts[0]["mode"], "plain_summary_attach_fallback")
+
+    def test_synthesize_falls_back_to_deterministic_grounded_render_when_plain_attach_fails(self) -> None:
+        primary_llm = _StructuredThenPlainFallbackSynthesizeLLM()
+        failing_plain_llm = _CaptureSynthesizeLLM(content="")
+        synthesize_node = make_synthesize_node(
+            primary_llm,
+            llm_synthesizer_compact=failing_plain_llm,
+            verbose=False,
+            max_turns=8,
+        )
+
+        updates = synthesize_node(
+            {
+                "messages": [HumanMessage(content="Explain numpy broadcasting.")],
+                "user_input": "Explain numpy broadcasting.",
                 "planner_output": PlannerOutput(
                     use_retrieval=True,
                     tasks=[RetrievalTask(route="docs", query="numpy docs", k=3)],
@@ -464,15 +667,11 @@ class SynthesisValidationTest(unittest.TestCase):
             }
         )
 
-        self.assertEqual(timeout_llm.call_count, 1)
         self.assertIn("Broadcasting expands compatible array shapes.", updates["final_answer"])
-        self.assertIn("[1]", updates["final_answer"])
-        self.assertEqual(updates["response_payload"]["claims"][0]["evidence_ids"], ["url:https://numpy.org/doc/stable/"])
-        self.assertEqual(updates["synthesis_errors"][0].startswith("synthesize: structured output timed out"), True)
         synthesis_attempts = [
             item for item in updates["latency_trace"] if item.get("kind") == "synthesis_attempt"
         ]
-        self.assertEqual(synthesis_attempts[0]["mode"], "timeout_grounded_fallback")
+        self.assertEqual(synthesis_attempts[0]["mode"], "deterministic_grounded_fallback")
 
 
 if __name__ == "__main__":

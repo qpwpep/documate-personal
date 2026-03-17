@@ -11,6 +11,7 @@ from .settings import AppSettings
 class LLMRegistry:
     llm_planner: Any
     llm_synthesizer: Any
+    llm_synthesizer_compact: Any
     llm_summarizer: Any
     verbose: bool
 
@@ -25,12 +26,21 @@ def build_llm_registry(settings: AppSettings) -> LLMRegistry:
         max_retries=settings.synthesis_max_retries,
         verbose=settings.verbose,
     )
+    llm_synthesizer_compact = ChatOpenAI(
+        model=settings.chat_model,
+        api_key=settings.openai_api_key,
+        temperature=0,
+        max_tokens=min(320, settings.synthesis_max_tokens),
+        timeout=min(4, settings.synthesis_timeout_seconds),
+        max_retries=0,
+        verbose=settings.verbose,
+    )
 
     llm_planner_base = ChatOpenAI(
         model=settings.planner_model,
         api_key=settings.openai_api_key,
         temperature=0,
-        max_tokens=300,
+        max_tokens=settings.planner_max_tokens,
         timeout=30,
         max_retries=2,
         verbose=settings.verbose,
@@ -55,6 +65,7 @@ def build_llm_registry(settings: AppSettings) -> LLMRegistry:
     return LLMRegistry(
         llm_planner=llm_planner,
         llm_synthesizer=llm_synthesizer,
+        llm_synthesizer_compact=llm_synthesizer_compact,
         llm_summarizer=llm_summarizer,
         verbose=settings.verbose,
     )

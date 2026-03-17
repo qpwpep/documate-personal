@@ -16,17 +16,23 @@ RetryReason = Literal[
     "blocked_missing_upload",
     "unsupported_claims",
 ]
-PlannerStatus = Literal["llm", "heuristic_fallback", "fallback_no_routes"]
+PlannerStatus = Literal["llm", "deterministic", "heuristic_fallback", "fallback_no_routes"]
 PlannerOverrideReason = Literal[
     "missing_required_retrieval",
     "missing_required_routes",
     "upload_retriever_missing",
 ]
 LLMCallStage = Literal["summarize", "planner", "synthesis"]
-LLMCallPath = Literal["direct", "structured", "plain_fallback"]
+LLMCallPath = Literal[
+    "direct",
+    "structured",
+    "plain_fallback",
+    "structured_compact_fallback",
+    "plain_summary_attach_fallback",
+]
 LOW_SCORE_THRESHOLD = 0.5
 DEFAULT_MAX_RETRIES = 1
-RETRYABLE_REASONS: set[RetryReason] = {"no_evidence", "low_score", "unsupported_claims"}
+RETRYABLE_REASONS: set[RetryReason] = {"no_evidence"}
 ROUTE_ORDER: tuple[str, ...] = ("docs", "upload", "local")
 
 
@@ -267,6 +273,7 @@ class State(TypedDict, total=False):
     guided_followup: Optional[str]
     retrieved_evidence: Annotated[list[dict[str, Any]], merge_dict_lists]
     retrieval_diagnostics: Annotated[list[dict[str, Any]], merge_dict_lists]
+    planner_errors: Annotated[list[str], merge_string_lists]
     retrieval_errors: Annotated[list[str], merge_string_lists]
     synthesis_errors: Annotated[list[str], merge_string_lists]
     validation_errors: Annotated[list[str], merge_string_lists]

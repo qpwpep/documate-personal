@@ -6,6 +6,7 @@ from langchain_core.messages import AIMessage
 from ..answer_schema import (
     AgentResponsePayloadModel,
     average_claim_confidence,
+    build_deterministic_grounded_payload,
     build_empty_response_payload,
     filter_claims_by_evidence,
     render_payload_from_claims,
@@ -51,6 +52,14 @@ def _build_followup_updates(answer: str) -> State:
 
 def _coerce_evidence_list(items: list[EvidenceItem]) -> list[EvidenceItem]:
     return [item for item in items if isinstance(item, EvidenceItem)]
+
+
+def _build_response_payload_updates(payload: AgentResponsePayloadModel) -> State:
+    return {
+        "messages": [AIMessage(content=payload.answer)],
+        "final_answer": payload.answer,
+        "response_payload": _payload_to_state_dict(payload),
+    }
 
 
 def make_validate_evidence_node(verbose: bool):
@@ -148,6 +157,12 @@ def make_validate_evidence_node(verbose: bool):
                 claims=response_payload.claims,
                 evidence_items=parsed_evidence,
             )
+        has_grounded_response_payload = bool(
+            response_payload is not None
+            and response_payload.answer.strip()
+            and valid_claims
+            and not invalid_claims
+        )
 
         unsupported_claims = bool(
             retrieval_required
@@ -200,7 +215,9 @@ def make_validate_evidence_node(verbose: bool):
             "retry_context": next_retry_context,
         }
         if retry_reason is not None and not needs_retry:
-            if retry_reason == "unsupported_claims" and valid_claims:
+            if has_grounded_response_payload and response_payload is not None:
+                updates.update(_build_response_payload_updates(response_payload))
+            elif retry_reason == "unsupported_claims" and valid_claims:
                 filtered_confidence = average_claim_confidence(valid_claims)
                 filtered_payload = render_payload_from_claims(
                     claims=valid_claims,
@@ -208,9 +225,13 @@ def make_validate_evidence_node(verbose: bool):
                     confidence=filtered_confidence,
                 )
                 filtered_payload.confidence = filtered_confidence
-                updates["messages"] = [AIMessage(content=filtered_payload.answer)]
-                updates["final_answer"] = filtered_payload.answer
-                updates["response_payload"] = _payload_to_state_dict(filtered_payload)
+                updates.update(_build_response_payload_updates(filtered_payload))
+            elif retrieval_required and parsed_evidence:
+                grounded_payload = build_deterministic_grounded_payload(
+                    evidence_items=parsed_evidence,
+                    fallback_answer="",
+                )
+                updates.update(_build_response_payload_updates(grounded_payload))
             else:
                 followup_answer = build_followup_from_routes(planner_output, retry_reason)
                 updates.update(_build_followup_updates(followup_answer))
