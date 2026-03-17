@@ -15,11 +15,13 @@ from .schemas import (
     GateResult,
     LatencyBreakdownCoverage,
     PlannerDiagnosticsBucket,
+    PlannerErrorBucket,
     RetrievalRouteStatusBucket,
     RouteConfusionBucket,
     RunSummary,
     StageLatencyPercentile,
     SummaryStats,
+    SynthesisModeBucket,
     ValidatorReasonBucket,
     dump_jsonl,
 )
@@ -31,6 +33,12 @@ _RETRIEVAL_TOOL_TO_ROUTE: dict[str, str] = {
     "upload_search": "upload",
     "rag_search": "local",
 }
+_PLANNER_ERROR_ORDER: tuple[str, ...] = (
+    "structured_output_invocation_failed",
+    "output_validation_failed",
+    "sanitized_output_validation_failed",
+    "upload_route_dropped",
+)
 _LATENCY_STAGE_FIELDS: tuple[str, ...] = (
     "upload_retriever_build_ms",
     "summarize_ms",
@@ -66,6 +74,12 @@ def _route_sort_key(value: str) -> tuple[int, str]:
     if value in _ROUTE_ORDER:
         return (_ROUTE_ORDER.index(value), value)
     return (len(_ROUTE_ORDER), value)
+
+
+def _planner_error_sort_key(value: str) -> tuple[int, str]:
+    if value in _PLANNER_ERROR_ORDER:
+        return (_PLANNER_ERROR_ORDER.index(value), value)
+    return (len(_PLANNER_ERROR_ORDER), value)
 
 
 def _sort_categories(values: set[str] | list[str] | tuple[str, ...]) -> list[str]:
@@ -199,6 +213,44 @@ def _build_planner_diagnostics_histogram(results: list[CaseResult]) -> list[Plan
     return rows
 
 
+def _normalize_planner_error_code(error: str) -> str | None:
+    normalized = str(error or "").strip().lower()
+    if not normalized:
+        return None
+    if "structured_output_invocation_failed" in normalized or "structured output invocation failed" in normalized:
+        return "structured_output_invocation_failed"
+    if "sanitized_output_validation_failed" in normalized or "sanitized output validation failed" in normalized:
+        return "sanitized_output_validation_failed"
+    if "upload_route_dropped" in normalized or "dropped upload route because retriever is unavailable" in normalized:
+        return "upload_route_dropped"
+    if "output_validation_failed" in normalized or "output validation failed" in normalized:
+        return "output_validation_failed"
+    return None
+
+
+def _build_planner_error_histogram(results: list[CaseResult]) -> list[PlannerErrorBucket]:
+    counter: Counter[tuple[str, str]] = Counter()
+    for result in results:
+        for error in result.planner_errors:
+            code = _normalize_planner_error_code(error)
+            if code is None:
+                continue
+            counter[(result.category, code)] += 1
+
+    rows = [
+        PlannerErrorBucket(category=category, error_code=error_code, count=count)
+        for (category, error_code), count in counter.items()
+    ]
+    rows.sort(
+        key=lambda item: (
+            _category_sort_key(item.category),
+            _planner_error_sort_key(item.error_code),
+            -item.count,
+        )
+    )
+    return rows
+
+
 def _build_retrieval_route_status_histogram(results: list[CaseResult]) -> list[RetrievalRouteStatusBucket]:
     counter: Counter[tuple[str, str, str]] = Counter()
     for result in results:
@@ -319,6 +371,22 @@ def _build_validator_reason_histogram(results: list[CaseResult]) -> list[Validat
     return rows
 
 
+def _build_synthesis_mode_histogram(results: list[CaseResult]) -> list[SynthesisModeBucket]:
+    counter: Counter[tuple[str, str]] = Counter()
+    for result in results:
+        breakdown = result.latency_breakdown
+        if breakdown is None or not breakdown.synthesis_attempts:
+            continue
+        counter[(result.category, breakdown.synthesis_attempts[0].mode)] += 1
+
+    rows = [
+        SynthesisModeBucket(category=category, mode=mode, count=count)
+        for (category, mode), count in counter.items()
+    ]
+    rows.sort(key=lambda item: (_category_sort_key(item.category), -item.count, item.mode))
+    return rows
+
+
 def _extract_latency_stage_value(result: CaseResult, stage_name: str) -> int | None:
     breakdown = result.latency_breakdown
     if breakdown is None:
@@ -372,12 +440,49 @@ def _build_analysis(
     return AnalysisStats(
         category_pass_rates=_build_category_pass_rates(results),
         planner_diagnostics_histogram=_build_planner_diagnostics_histogram(results),
+        planner_error_histogram=_build_planner_error_histogram(results),
         retrieval_route_status_histogram=_build_retrieval_route_status_histogram(results),
         route_confusion=_build_route_confusion(case_map=case_map, results=results),
         validator_reason_histogram=_build_validator_reason_histogram(results),
+        synthesis_mode_histogram=_build_synthesis_mode_histogram(results),
         stage_latency_percentiles=stage_latency_percentiles,
         latency_breakdown_coverage=latency_breakdown_coverage,
     )
+
+
+def _structured_success_cases(results: list[CaseResult]) -> list[CaseResult]:
+    return [result for result in results if result.category in {"docs_only", "rag_only", "hybrid"}]
+
+
+def _compute_planner_structured_success_rate(results: list[CaseResult]) -> float:
+    eligible = [
+        result
+        for result in _structured_success_cases(results)
+        if result.planner_diagnostics is None
+        or str(result.planner_diagnostics.status or "") != "deterministic"
+    ]
+    if not eligible:
+        return 1.0
+    successes = sum(
+        1
+        for result in eligible
+        if result.planner_diagnostics is not None and str(result.planner_diagnostics.status or "") == "llm"
+    )
+    return round(successes / len(eligible), 4)
+
+
+def _compute_synthesis_structured_success_rate(results: list[CaseResult]) -> float:
+    eligible = _structured_success_cases(results)
+    if not eligible:
+        return 1.0
+    successes = 0
+    for result in eligible:
+        breakdown = result.latency_breakdown
+        if breakdown is None or not breakdown.synthesis_attempts:
+            continue
+        if breakdown.synthesis_attempts[0].mode == "structured_only":
+            successes += 1
+    return round(successes / len(eligible), 4)
 
 
 def build_summary(
@@ -452,6 +557,8 @@ def build_summary(
         p50_latency_ms=round(p50_latency, 2) if p50_latency is not None else None,
         p95_latency_ms=round(p95_latency, 2) if p95_latency is not None else None,
         avg_cost_per_case_usd=round(avg_cost, 8) if avg_cost is not None else None,
+        planner_structured_success_rate=_compute_planner_structured_success_rate(results),
+        synthesis_structured_success_rate=_compute_synthesis_structured_success_rate(results),
         failures=failures[:50],
     )
     analysis = _build_analysis(case_map=case_map, results=results)
@@ -509,6 +616,28 @@ def build_summary(
             threshold=hard_gates.avg_cost_per_case_usd,
             actual=metrics.avg_cost_per_case_usd,
             passed=avg_cost_gate_passed,
+        )
+    )
+    gates.append(
+        GateResult(
+            name="planner_structured_success_rate",
+            threshold=hard_gates.planner_structured_success_rate,
+            actual=metrics.planner_structured_success_rate,
+            passed=(
+                metrics.planner_structured_success_rate is not None
+                and metrics.planner_structured_success_rate >= hard_gates.planner_structured_success_rate
+            ),
+        )
+    )
+    gates.append(
+        GateResult(
+            name="synthesis_structured_success_rate",
+            threshold=hard_gates.synthesis_structured_success_rate,
+            actual=metrics.synthesis_structured_success_rate,
+            passed=(
+                metrics.synthesis_structured_success_rate is not None
+                and metrics.synthesis_structured_success_rate >= hard_gates.synthesis_structured_success_rate
+            ),
         )
     )
 
@@ -572,6 +701,17 @@ def _render_analysis(lines: list[str], summary: RunSummary) -> None:
         )
 
     lines.append("")
+    lines.append("### Planner Errors")
+    lines.append("")
+    if analysis.planner_error_histogram:
+        lines.append("| category | error_code | count |")
+        lines.append("|---|---|---:|")
+        for row in analysis.planner_error_histogram:
+            lines.append(f"| {row.category} | {row.error_code} | {row.count} |")
+    else:
+        lines.append("No planner errors observed.")
+
+    lines.append("")
     lines.append("### Retrieval Diagnostics")
     lines.append("")
     if analysis.retrieval_route_status_histogram:
@@ -616,6 +756,17 @@ def _render_analysis(lines: list[str], summary: RunSummary) -> None:
             lines.append(f"| {row.category} | {row.reason} | {row.count} | {row.share:.4f} |")
     else:
         lines.append("No failed cases for validator reason analysis.")
+
+    lines.append("")
+    lines.append("### Synthesis Modes")
+    lines.append("")
+    if analysis.synthesis_mode_histogram:
+        lines.append("| category | mode | count |")
+        lines.append("|---|---|---:|")
+        for row in analysis.synthesis_mode_histogram:
+            lines.append(f"| {row.category} | {row.mode} | {row.count} |")
+    else:
+        lines.append("No synthesis mode diagnostics observed.")
 
     lines.append("")
     lines.append("### Stage Latency")
@@ -666,6 +817,12 @@ def build_markdown_report(summary: RunSummary, results: list[CaseResult] | None 
     lines.append(f"| p50_latency_ms | {summary.metrics.p50_latency_ms} |")
     lines.append(f"| p95_latency_ms | {summary.metrics.p95_latency_ms} |")
     lines.append(f"| avg_cost_per_case_usd | {summary.metrics.avg_cost_per_case_usd} |")
+    lines.append(
+        f"| planner_structured_success_rate | {summary.metrics.planner_structured_success_rate} |"
+    )
+    lines.append(
+        f"| synthesis_structured_success_rate | {summary.metrics.synthesis_structured_success_rate} |"
+    )
     lines.append("")
     lines.append("## Hard Gates")
     lines.append("")

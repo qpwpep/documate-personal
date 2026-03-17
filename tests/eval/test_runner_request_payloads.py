@@ -61,6 +61,43 @@ class RunnerRequestPayloadTest(unittest.TestCase):
         self.assertEqual(payload["slack_user_id"], "U123BENCH")
         self.assertEqual(payload["slack_email"], "bench@example.com")
 
+    @patch("src.eval.runner_online.requests.post")
+    def test_planner_errors_are_parsed_from_debug_payload(self, mock_post) -> None:
+        mock_post.return_value = _FakeResponse(
+            200,
+            {
+                "response": {"answer": "shared", "evidence": []},
+                "trace": "trace-id",
+                "file_path": "",
+                "debug": {
+                    "tool_calls": ["tavily_search"],
+                    "token_usage": {},
+                    "observed_evidence": [],
+                    "planner_errors": ["planner: structured output invocation failed (boom)"],
+                },
+            },
+        )
+
+        result = _run_single_case(
+            run_id="run-planner-errors",
+            endpoint="http://localhost:8000",
+            fixtures_path=Path("data/benchmarks/fixtures/cases.generated.jsonl"),
+            case=BenchmarkCase(
+                case_id="docs_only_seed_mutation_001",
+                category="docs_only",
+                query="numpy docs",
+                expected_tools=["tavily_search"],
+            ),
+            timeout_seconds=5,
+            judge=_DummyJudge(),
+            config=BenchmarkConfig(),
+        )
+
+        self.assertEqual(
+            result.planner_errors,
+            ["planner: structured output invocation failed (boom)"],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

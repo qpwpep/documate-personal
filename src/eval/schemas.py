@@ -14,6 +14,12 @@ from ..latency import LatencyBreakdownModel
 
 CaseCategory = Literal["docs_only", "rag_only", "hybrid", "tool_action"]
 CaseScenario = Literal["seed_mutation", "adversarial", "regression", "ambiguity"]
+PlannerErrorCode = Literal[
+    "structured_output_invocation_failed",
+    "output_validation_failed",
+    "sanitized_output_validation_failed",
+    "upload_route_dropped",
+]
 
 
 class CaseWeightOverride(BaseModel):
@@ -59,6 +65,20 @@ class TokenUsage(BaseModel):
     total_tokens: int = 0
 
 
+class LLMCallMetadata(BaseModel):
+    stage: Literal["summarize", "planner", "synthesis"]
+    attempt: int = 0
+    path: Literal[
+        "direct",
+        "structured",
+        "plain_fallback",
+        "structured_compact_fallback",
+        "plain_summary_attach_fallback",
+    ]
+    response_metadata: dict[str, Any] = Field(default_factory=dict)
+    usage_metadata: dict[str, Any] = Field(default_factory=dict)
+
+
 class RetrievalDiagnostic(BaseModel):
     tool: str = ""
     route: str = ""
@@ -100,11 +120,19 @@ class HardGates(BaseModel):
     citation_compliance: float = 0.88
     p95_latency_ms: int = 20000
     avg_cost_per_case_usd: float = 0.01
+    planner_structured_success_rate: float = 0.85
+    synthesis_structured_success_rate: float = 0.65
+
+
+class ModelPricing(BaseModel):
+    prompt_per_1k_usd: float
+    completion_per_1k_usd: float
 
 
 class Pricing(BaseModel):
     prompt_per_1k_usd: float = 0.00015
     completion_per_1k_usd: float = 0.0006
+    models: dict[str, ModelPricing] = Field(default_factory=dict)
 
 
 class BenchmarkConfig(BaseModel):
@@ -141,6 +169,9 @@ class CaseResult(BaseModel):
     tool_calls: list[str] = Field(default_factory=list)
     token_usage: TokenUsage | None = None
     model_name: str | None = None
+    models_used: list[str] = Field(default_factory=list)
+    llm_calls: list[LLMCallMetadata] = Field(default_factory=list)
+    planner_errors: list[str] = Field(default_factory=list)
     runtime_errors: list[str] = Field(default_factory=list)
     response_errors: list[str] = Field(default_factory=list)
     judge_errors: list[str] = Field(default_factory=list)
@@ -168,6 +199,8 @@ class SummaryStats(BaseModel):
     p50_latency_ms: float | None = None
     p95_latency_ms: float | None = None
     avg_cost_per_case_usd: float | None = None
+    planner_structured_success_rate: float | None = None
+    synthesis_structured_success_rate: float | None = None
     failures: list[dict[str, str]] = Field(default_factory=list)
 
 
@@ -183,6 +216,12 @@ class PlannerDiagnosticsBucket(BaseModel):
     status: str
     reason: str | None = None
     override_reason: str | None = None
+    count: int
+
+
+class PlannerErrorBucket(BaseModel):
+    category: str
+    error_code: PlannerErrorCode
     count: int
 
 
@@ -217,6 +256,12 @@ class StageLatencyPercentile(BaseModel):
     p95_latency_ms: float | None = None
 
 
+class SynthesisModeBucket(BaseModel):
+    category: str
+    mode: str
+    count: int
+
+
 class LatencyBreakdownCoverage(BaseModel):
     available_cases: int = 0
     total_cases: int = 0
@@ -226,9 +271,11 @@ class LatencyBreakdownCoverage(BaseModel):
 class AnalysisStats(BaseModel):
     category_pass_rates: list[CategoryPassRate] = Field(default_factory=list)
     planner_diagnostics_histogram: list[PlannerDiagnosticsBucket] = Field(default_factory=list)
+    planner_error_histogram: list[PlannerErrorBucket] = Field(default_factory=list)
     retrieval_route_status_histogram: list[RetrievalRouteStatusBucket] = Field(default_factory=list)
     route_confusion: list[RouteConfusionBucket] = Field(default_factory=list)
     validator_reason_histogram: list[ValidatorReasonBucket] = Field(default_factory=list)
+    synthesis_mode_histogram: list[SynthesisModeBucket] = Field(default_factory=list)
     stage_latency_percentiles: list[StageLatencyPercentile] = Field(default_factory=list)
     latency_breakdown_coverage: LatencyBreakdownCoverage | None = None
 
@@ -253,7 +300,7 @@ class RunSummary(BaseModel):
     overall_passed: bool
     weights: dict[str, float]
     hard_gates: dict[str, float | int]
-    pricing: dict[str, float]
+    pricing: dict[str, Any]
     judge_enabled: bool
     judge_model: str
 
