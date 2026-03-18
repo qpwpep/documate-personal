@@ -450,6 +450,44 @@ class EvidencePipelineTest(unittest.TestCase):
         self.assertEqual(result["diagnostics"]["status"], "no_result")
         self.assertEqual(result["evidence"], [])
 
+    @patch("src.tools.docs_search.request_tavily_search")
+    def test_docs_search_blocks_huggingface_commit_diff_urls(self, mock_request_tavily_search) -> None:
+        mock_request_tavily_search.return_value = {
+            "results": [
+                {
+                    "url": "https://huggingface.co/user/repo/commit/abc123.diff?file=tokenizer.json",
+                    "title": "HF commit diff",
+                    "content": "diff page",
+                    "score": 0.99,
+                },
+                {
+                    "url": "https://huggingface.co/docs/transformers/index",
+                    "title": "HF docs",
+                    "content": "docs page",
+                    "score": 0.8,
+                },
+            ]
+        }
+
+        registry = build_tool_registry(AppSettings(openai_api_key="test", tavily_api_key="test"))
+        result = registry.tavily_search_tool.func(query="official docs")
+
+        urls = [item["url_or_path"] for item in result["evidence"]]
+        self.assertEqual(urls, ["https://huggingface.co/docs/transformers/index"])
+
+    @patch("src.tools.docs_search.request_tavily_search")
+    def test_docs_search_applies_symbol_based_query_hint(self, mock_request_tavily_search) -> None:
+        mock_request_tavily_search.return_value = {"results": []}
+
+        registry = build_tool_registry(AppSettings(openai_api_key="test", tavily_api_key="test"))
+        registry.tavily_search_tool.func(query="train_test_split 공식 문법을")
+
+        first_call = mock_request_tavily_search.call_args_list[0]
+        _, kwargs = first_call
+        self.assertEqual(kwargs["include_domains"], ["scikit-learn.org"])
+        self.assertEqual(kwargs["query"], "train_test_split 공식 문법을 scikit-learn")
+        self.assertEqual(mock_request_tavily_search.call_args_list[1].kwargs["query"], "train_test_split sklearn.model_selection")
+
     def test_agent_manager_exposes_retrieval_and_planner_diagnostics(self) -> None:
         evidence_payload = [
             {

@@ -8,14 +8,73 @@ from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field
 
 from ..answer_schema import normalize_confidence
-from ..domain_docs import DEFAULT_DOCS
 from ..settings import AppSettings
 from ._common import build_evidence_item, build_retrieval_payload, dedupe_evidence_dicts
 
 
 TAVILY_SEARCH_API_URL = "https://api.tavily.com/search"
-_MIXED_CONTENT_DENY_PREFIXES: dict[str, tuple[str, ...]] = {
-    "huggingface.co": ("/datasets/", "/spaces/", "/models/", "/blog/"),
+_DOCS_QUERY_HINTS: tuple[tuple[tuple[str, ...], str, tuple[str, ...], tuple[str, ...]], ...] = (
+    (
+        ("train_test_split",),
+        "scikit-learn",
+        ("scikit-learn.org",),
+        ("train_test_split sklearn.model_selection",),
+    ),
+    (
+        ("standardscaler",),
+        "scikit-learn",
+        ("scikit-learn.org",),
+        ("StandardScaler sklearn.preprocessing",),
+    ),
+    (
+        ("logisticregression",),
+        "scikit-learn",
+        ("scikit-learn.org",),
+        ("LogisticRegression sklearn.linear_model",),
+    ),
+    (
+        ("pipeline",),
+        "scikit-learn",
+        ("scikit-learn.org",),
+        ("Pipeline sklearn.pipeline",),
+    ),
+    (("response_model",), "fastapi", ("fastapi.tiangolo.com",), ("response_model fastapi",)),
+    (
+        ("merge",),
+        "pandas",
+        ("pandas.pydata.org",),
+        ("pandas merge user guide", "pandas merging user guide"),
+    ),
+    (
+        ("groupby",),
+        "pandas",
+        ("pandas.pydata.org",),
+        ("pandas groupby user guide",),
+    ),
+    (
+        ("concat",),
+        "pandas",
+        ("pandas.pydata.org",),
+        ("pandas concat user guide",),
+    ),
+    (("broadcasting",), "numpy", ("numpy.org",), ("broadcasting numpy",)),
+    (("dataloader", "dataset"), "pytorch", ("docs.pytorch.org",), ("DataLoader torch.utils.data",)),
+)
+_ALLOWED_DOC_PATH_PREFIXES: dict[str, tuple[str, ...]] = {
+    "docs.python.org": ("/3/",),
+    "git-scm.com": ("/docs/",),
+    "python.langchain.com": ("/docs/",),
+    "matplotlib.org": ("/stable/",),
+    "numpy.org": ("/doc/stable/",),
+    "pandas.pydata.org": ("/docs/",),
+    "docs.pytorch.org": ("/docs/stable/",),
+    "huggingface.co": ("/docs/",),
+    "fastapi.tiangolo.com": ("/",),
+    "crummy.com": ("/software/BeautifulSoup/bs4/doc/",),
+    "docs.streamlit.io": ("/",),
+    "gradio.app": ("/docs/",),
+    "scikit-learn.org": ("/stable/",),
+    "docs.pydantic.dev": ("/latest/",),
 }
 _ERROR_PAGE_MARKERS: tuple[str, ...] = (
     "404",
@@ -70,12 +129,11 @@ def is_allowed_doc_url(url: str) -> bool:
     domain = parsed.netloc.strip().lower()
     if domain.startswith("www."):
         domain = domain[4:]
-    allowed_domains = normalize_include_domains(list(DEFAULT_DOCS.values()))
-    if domain not in allowed_domains:
+    allowed_prefixes = _ALLOWED_DOC_PATH_PREFIXES.get(domain)
+    if not allowed_prefixes:
         return False
     normalized_path = _normalize_path_prefix(parsed.path or "/")
-    deny_prefixes = _MIXED_CONTENT_DENY_PREFIXES.get(domain, ())
-    return not any(normalized_path.startswith(prefix) for prefix in deny_prefixes)
+    return any(normalized_path.startswith(prefix) for prefix in allowed_prefixes)
 
 
 def is_valid_doc_result(*, url: str, title: Any, snippet: Any) -> bool:
@@ -147,8 +205,16 @@ def request_tavily_search(
     return body
 
 
+def infer_docs_query_hint(query: str) -> tuple[str, list[str], list[str]] | None:
+    lowered = str(query or "").lower()
+    for identifiers, library_name, domains, fallback_queries in _DOCS_QUERY_HINTS:
+        if any(identifier in lowered for identifier in identifiers):
+            return library_name, list(domains), list(fallback_queries)
+    return None
+
+
 def build_docs_search_tool(settings: AppSettings) -> Any:
-    default_domains = normalize_include_domains(list(DEFAULT_DOCS.values()))
+    default_domains = list(_ALLOWED_DOC_PATH_PREFIXES.keys())
 
     def tavily_search(
         query: str,
@@ -156,9 +222,18 @@ def build_docs_search_tool(settings: AppSettings) -> Any:
         include_domains: list[str] | None = None,
     ) -> dict[str, Any]:
         domains = normalize_include_domains(include_domains or default_domains)
+        effective_query = str(query or "").strip()
+        fallback_queries: list[str] = []
+        if include_domains is None:
+            query_hint = infer_docs_query_hint(effective_query)
+            if query_hint is not None:
+                library_name, hinted_domains, fallback_queries = query_hint
+                domains = normalize_include_domains(hinted_domains)
+                if library_name.lower() not in effective_query.lower():
+                    effective_query = f"{effective_query} {library_name}".strip()
         try:
             raw_results = request_tavily_search(
-                query=query,
+                query=effective_query,
                 tavily_api_key=settings.tavily_api_key,
                 include_domains=domains,
                 search_depth=search_depth,
@@ -168,7 +243,7 @@ def build_docs_search_tool(settings: AppSettings) -> Any:
             return build_retrieval_payload(
                 tool="tavily_search",
                 route="docs",
-                query=query,
+                query=effective_query,
                 status="error",
                 message=f"invoke failed ({exc})",
             )
@@ -177,7 +252,7 @@ def build_docs_search_tool(settings: AppSettings) -> Any:
             return build_retrieval_payload(
                 tool="tavily_search",
                 route="docs",
-                query=query,
+                query=effective_query,
                 status="error",
                 message="unexpected response type from Tavily",
             )
@@ -186,7 +261,7 @@ def build_docs_search_tool(settings: AppSettings) -> Any:
             return build_retrieval_payload(
                 tool="tavily_search",
                 route="docs",
-                query=query,
+                query=effective_query,
                 status="error",
                 message="missing or invalid Tavily results payload",
             )
@@ -214,11 +289,49 @@ def build_docs_search_tool(settings: AppSettings) -> Any:
             if evidence_item is not None:
                 evidence_items.append(evidence_item)
 
+        for fallback_query in fallback_queries:
+            if evidence_items:
+                break
+            try:
+                fallback_results = request_tavily_search(
+                    query=fallback_query,
+                    tavily_api_key=settings.tavily_api_key,
+                    include_domains=domains,
+                    search_depth=search_depth,
+                    timeout_seconds=settings.docs_search_timeout_seconds,
+                )
+            except Exception:
+                continue
+            fallback_items = fallback_results.get("results") if isinstance(fallback_results, dict) else None
+            if not isinstance(fallback_items, list):
+                continue
+            for result in fallback_items:
+                if not isinstance(result, dict):
+                    continue
+                url = str(result.get("url") or "").strip()
+                if not is_valid_doc_result(
+                    url=url,
+                    title=result.get("title"),
+                    snippet=result.get("content"),
+                ):
+                    continue
+                evidence_item = build_evidence_item(
+                    kind="official",
+                    tool="tavily_search",
+                    url_or_path=url,
+                    title=result.get("title"),
+                    snippet=result.get("content"),
+                    score=normalize_confidence(result.get("score"), clamp=True),
+                    metadata={},
+                )
+                if evidence_item is not None:
+                    evidence_items.append(evidence_item)
+
         evidence = dedupe_evidence_dicts(evidence_items)
         return build_retrieval_payload(
             tool="tavily_search",
             route="docs",
-            query=query,
+            query=effective_query,
             evidence=evidence,
             status="success" if evidence else "no_result",
             message="" if evidence else "no official documentation evidence found",
