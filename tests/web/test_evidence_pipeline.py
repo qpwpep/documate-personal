@@ -6,6 +6,7 @@ from langchain_core.documents import Document
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from src.agent_manager import AgentFlowManager
+from src.contracts.graph_state import DebugState, PlannerState, ResponseState, RetrievalState
 from src.graph_builder import StageExecutionError
 from src.settings import AppSettings
 from src.tools import build_tool_registry
@@ -16,9 +17,11 @@ class _FakeGraph:
         self._evidence_payload = evidence_payload
 
     def invoke(self, state: dict) -> dict:
+        runtime = state["runtime"]
+        query = runtime.user_input
         return {
             "messages": [
-                HumanMessage(content=state["user_input"]),
+                HumanMessage(content=query),
                 ToolMessage(
                     content=json.dumps(
                         {
@@ -28,7 +31,7 @@ class _FakeGraph:
                                 "route": "docs",
                                 "status": "success",
                                 "message": "",
-                                "query": state["user_input"],
+                                "query": query,
                                 "attempt": 1,
                             },
                         },
@@ -39,45 +42,53 @@ class _FakeGraph:
                 ),
                 AIMessage(content="final answer [1]"),
             ],
-            "response_payload": {
-                "answer": "final answer [1]",
-                "claims": [
+            "retrieval": RetrievalState(evidence_log=self._evidence_payload),
+            "response": ResponseState(
+                final_answer="final answer [1]",
+                payload={
+                    "answer": "final answer [1]",
+                    "claims": [
+                        {
+                            "text": "final answer",
+                            "evidence_ids": ["url:https://numpy.org/doc/stable/"],
+                            "confidence": 0.88,
+                        }
+                    ],
+                    "evidence": self._evidence_payload,
+                    "confidence": 0.88,
+                },
+            ),
+            "planner": PlannerState(
+                diagnostics={
+                    "status": "heuristic_fallback",
+                    "reason": "planner_failed_or_invalid",
+                    "fallback_routes": ["docs"],
+                    "intent_required": True,
+                    "required_routes": ["docs"],
+                    "override_applied": False,
+                    "override_reason": None,
+                }
+            ),
+            "debug": DebugState(
+                retrieval_diagnostics=[
                     {
-                        "text": "final answer",
-                        "evidence_ids": ["url:https://numpy.org/doc/stable/"],
-                        "confidence": 0.88,
+                        "tool": "tavily_search",
+                        "route": "docs",
+                        "status": "success",
+                        "message": "",
+                        "query": query,
+                        "attempt": 1,
                     }
                 ],
-                "evidence": self._evidence_payload,
-                "confidence": 0.88,
-            },
-            "retrieval_diagnostics": [
-                {
-                    "tool": "tavily_search",
-                    "route": "docs",
-                    "status": "success",
-                    "message": "",
-                    "query": state["user_input"],
-                    "attempt": 1,
-                }
-            ],
-            "planner_diagnostics": {
-                "status": "heuristic_fallback",
-                "reason": "planner_failed_or_invalid",
-                "fallback_routes": ["docs"],
-                "intent_required": True,
-                "required_routes": ["docs"],
-                "override_applied": False,
-                "override_reason": None,
-            },
-            "latency_trace": [
-                {"kind": "stage", "stage": "planner", "attempt": 1, "latency_ms": 12, "status": "heuristic_fallback"},
-                {"kind": "retrieval_route", "route": "docs", "tool": "tavily_search", "attempt": 1, "latency_ms": 48, "status": "success"},
-                {"kind": "stage", "stage": "retrieval", "attempt": 1, "latency_ms": 50, "status": "success"},
-                {"kind": "synthesis_attempt", "attempt": 1, "mode": "structured_only", "structured_ms": 22, "fallback_ms": None, "total_ms": 22},
-                {"kind": "stage", "stage": "synthesis", "attempt": 1, "latency_ms": 22, "status": "structured_only"},
-                {"kind": "stage", "stage": "validation", "attempt": 1, "latency_ms": 3, "status": "pass"},
-            ],
+                latency_trace=[
+                    {"kind": "stage", "stage": "planner", "attempt": 1, "latency_ms": 12, "status": "heuristic_fallback"},
+                    {"kind": "retrieval_route", "route": "docs", "tool": "tavily_search", "attempt": 1, "latency_ms": 48, "status": "success"},
+                    {"kind": "stage", "stage": "retrieval", "attempt": 1, "latency_ms": 50, "status": "success"},
+                    {"kind": "synthesis_attempt", "attempt": 1, "mode": "structured_only", "structured_ms": 22, "fallback_ms": None, "total_ms": 22},
+                    {"kind": "stage", "stage": "synthesis", "attempt": 1, "latency_ms": 22, "status": "structured_only"},
+                    {"kind": "stage", "stage": "validation", "attempt": 1, "latency_ms": 3, "status": "pass"},
+                ],
+            ),
         }
 
 
@@ -90,28 +101,28 @@ class _FakeGraphWithLlmCalls:
                 ToolMessage(content=json.dumps({"evidence": [], "diagnostics": {}}, ensure_ascii=False), name="tavily_search", tool_call_id="call-1"),
                 AIMessage(content="final answer"),
             ],
-            "response_payload": {
-                "answer": "final answer",
-                "claims": [],
-                "evidence": [],
-                "confidence": None,
-            },
-            "llm_calls": [
-                {
-                    "stage": "planner",
-                    "attempt": 1,
-                    "path": "structured",
-                    "response_metadata": {"model_name": "gpt-5-nano"},
-                    "usage_metadata": {"input_tokens": 12, "output_tokens": 3, "total_tokens": 15},
-                },
-                {
-                    "stage": "synthesis",
-                    "attempt": 1,
-                    "path": "structured",
-                    "response_metadata": {"model_name": "gpt-5-mini"},
-                    "usage_metadata": {"input_tokens": 20, "output_tokens": 5, "total_tokens": 25},
-                },
-            ],
+            "response": ResponseState(
+                final_answer="final answer",
+                payload={"answer": "final answer", "claims": [], "evidence": [], "confidence": None},
+            ),
+            "debug": DebugState(
+                llm_calls=[
+                    {
+                        "stage": "planner",
+                        "attempt": 1,
+                        "path": "structured",
+                        "response_metadata": {"model_name": "gpt-5-nano"},
+                        "usage_metadata": {"input_tokens": 12, "output_tokens": 3, "total_tokens": 15},
+                    },
+                    {
+                        "stage": "synthesis",
+                        "attempt": 1,
+                        "path": "structured",
+                        "response_metadata": {"model_name": "gpt-5-mini"},
+                        "usage_metadata": {"input_tokens": 20, "output_tokens": 5, "total_tokens": 25},
+                    },
+                ]
+            ),
         }
 
 
@@ -127,13 +138,11 @@ class _FakeGraphWithAiMessageMetadata:
                     usage_metadata={"input_tokens": 14, "output_tokens": 6, "total_tokens": 20},
                 ),
             ],
-            "response_payload": {
-                "answer": "final answer",
-                "claims": [],
-                "evidence": [],
-                "confidence": None,
-            },
-            "synthesis_attempt": 1,
+            "response": ResponseState(
+                final_answer="final answer",
+                payload={"answer": "final answer", "claims": [], "evidence": [], "confidence": None},
+                synthesis_attempt=1,
+            ),
         }
 
 
@@ -156,12 +165,15 @@ class _FakeGraphWithSave:
                     tool_call_id="save-1",
                 ),
             ],
-            "response_payload": {
-                "answer": "final answer before save",
-                "claims": [],
-                "evidence": [],
-                "confidence": None,
-            },
+            "response": ResponseState(
+                final_answer="final answer before save",
+                payload={
+                    "answer": "final answer before save",
+                    "claims": [],
+                    "evidence": [],
+                    "confidence": None,
+                },
+            ),
         }
 
 
