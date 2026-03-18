@@ -63,9 +63,10 @@ class SynthesisValidationTest(unittest.TestCase):
             }
         )
 
-        self.assertFalse(result["needs_retry"])
+        self.assertTrue(result["needs_retry"])
+        self.assertEqual(result["retry_context"]["attempt"], 1)
         self.assertEqual(result["retry_context"]["retry_reason"], "tool_error")
-        self.assertIn("final_answer", result)
+        self.assertNotIn("final_answer", result)
 
     def test_validate_evidence_does_not_treat_planner_errors_as_tool_errors(self) -> None:
         validate_node = make_validate_evidence_node(verbose=False)
@@ -91,7 +92,7 @@ class SynthesisValidationTest(unittest.TestCase):
         self.assertTrue(result["needs_retry"])
         self.assertEqual(result["retry_context"]["retry_reason"], "no_evidence")
 
-    def test_validate_evidence_salvages_grounded_payload_when_tool_error_exists(self) -> None:
+    def test_validate_evidence_retries_docs_only_tool_error_even_with_grounded_payload(self) -> None:
         validate_node = make_validate_evidence_node(verbose=False)
         planner_output = PlannerOutput(
             use_retrieval=True,
@@ -129,10 +130,10 @@ class SynthesisValidationTest(unittest.TestCase):
             }
         )
 
-        self.assertFalse(result["needs_retry"])
+        self.assertTrue(result["needs_retry"])
+        self.assertEqual(result["retry_context"]["attempt"], 1)
         self.assertEqual(result["retry_context"]["retry_reason"], "tool_error")
-        self.assertIn("Broadcasting expands compatible array shapes.", result["final_answer"])
-        self.assertEqual(result["response_payload"]["evidence"][0]["source_id"], "url:https://numpy.org/doc/stable/")
+        self.assertNotIn("final_answer", result)
 
     def test_validate_evidence_maps_upload_unavailable_to_blocked_missing_upload(self) -> None:
         validate_node = make_validate_evidence_node(verbose=False)
@@ -168,7 +169,7 @@ class SynthesisValidationTest(unittest.TestCase):
         self.assertEqual(result["retry_context"]["retry_reason"], "blocked_missing_upload")
         self.assertIn("final_answer", result)
 
-    def test_validate_evidence_low_score_salvages_grounded_payload(self) -> None:
+    def test_validate_evidence_retries_docs_only_low_score(self) -> None:
         validate_node = make_validate_evidence_node(verbose=False)
         planner_output = PlannerOutput(
             use_retrieval=True,
@@ -204,10 +205,126 @@ class SynthesisValidationTest(unittest.TestCase):
             }
         )
 
+        self.assertTrue(result["needs_retry"])
+        self.assertEqual(result["retry_context"]["attempt"], 1)
+        self.assertEqual(result["retry_context"]["retry_reason"], "low_score")
+        self.assertAlmostEqual(result["retry_context"]["score_avg"], 0.2)
+        self.assertNotIn("response_payload", result)
+
+    def test_validate_evidence_salvages_upload_low_score_without_retry(self) -> None:
+        validate_node = make_validate_evidence_node(verbose=False)
+        planner_output = PlannerOutput(
+            use_retrieval=True,
+            tasks=[RetrievalTask(route="upload", query="groupby", k=3)],
+        )
+        result = validate_node(
+            {
+                "planner_output": planner_output,
+                "retrieved_evidence": [
+                    {
+                        "kind": "local",
+                        "tool": "upload_search",
+                        "source_id": "path:uploads/demo/sample.py#chunk=0;start=0;end=48",
+                        "document_id": "path:uploads/demo/sample.py",
+                        "url_or_path": "uploads/demo/sample.py",
+                        "snippet": 'grouped = all_sales.groupby("region")["amount"].sum()',
+                        "score": 0.0,
+                        "chunk_id": 0,
+                        "start_offset": 0,
+                        "end_offset": 48,
+                    }
+                ],
+                "response_payload": {
+                    "answer": "draft",
+                    "claims": [],
+                    "evidence": [],
+                    "confidence": None,
+                },
+                "retry_context": {
+                    "attempt": 0,
+                    "max_retries": 1,
+                    "evidence_start_index": 0,
+                    "retrieval_error_start_index": 0,
+                },
+            }
+        )
+
         self.assertFalse(result["needs_retry"])
         self.assertEqual(result["retry_context"]["retry_reason"], "unsupported_claims")
-        self.assertAlmostEqual(result["retry_context"]["score_avg"], 0.2)
-        self.assertEqual(result["response_payload"]["claims"][0]["evidence_ids"], ["url:https://numpy.org/doc/stable/"])
+        self.assertIn("groupby", result["final_answer"])
+
+    def test_validate_evidence_retries_docs_half_of_docs_upload_and_preserves_upload_context(self) -> None:
+        validate_node = make_validate_evidence_node(verbose=False)
+        planner_output = PlannerOutput(
+            use_retrieval=True,
+            tasks=[
+                RetrievalTask(route="docs", query="train_test_split 공식 문법", k=3),
+                RetrievalTask(route="upload", query="업로드 노트북 실제 사용 예", k=3),
+            ],
+        )
+        result = validate_node(
+            {
+                "planner_output": planner_output,
+                "retrieved_evidence": [
+                    {
+                        "kind": "official",
+                        "tool": "tavily_search",
+                        "source_id": "url:https://huggingface.co/docs/bad",
+                        "document_id": "url:https://huggingface.co/docs/bad",
+                        "url_or_path": "https://huggingface.co/docs/bad",
+                        "snippet": "unrelated content",
+                        "score": 0.1,
+                    },
+                    {
+                        "kind": "local",
+                        "tool": "upload_search",
+                        "source_id": "path:uploads/demo/sample.ipynb#cell=1;chunk=0;start=0;end=64",
+                        "document_id": "path:uploads/demo/sample.ipynb",
+                        "url_or_path": "uploads/demo/sample.ipynb",
+                        "snippet": "X_train, X_test, y_train, y_test = train_test_split(...)",
+                        "score": 0.0,
+                        "cell_id": 1,
+                        "chunk_id": 0,
+                        "start_offset": 0,
+                        "end_offset": 64,
+                    },
+                ],
+                "retrieval_diagnostics": [
+                    {
+                        "tool": "tavily_search",
+                        "route": "docs",
+                        "status": "success",
+                        "message": "",
+                        "query": "train_test_split 공식 문법",
+                        "attempt": 1,
+                    },
+                    {
+                        "tool": "upload_search",
+                        "route": "upload",
+                        "status": "success",
+                        "message": "",
+                        "query": "업로드 노트북 실제 사용 예",
+                        "attempt": 1,
+                    },
+                ],
+                "retry_context": {
+                    "attempt": 0,
+                    "max_retries": 1,
+                    "evidence_start_index": 0,
+                    "retrieval_error_start_index": 0,
+                    "retrieval_diagnostic_start_index": 0,
+                },
+            }
+        )
+
+        self.assertTrue(result["needs_retry"])
+        self.assertEqual(result["retry_context"]["retry_reason"], "low_score")
+        self.assertEqual(result["retry_context"]["failed_routes"], ["docs"])
+        self.assertEqual(len(result["retry_context"]["preserved_evidence"]), 1)
+        self.assertEqual(
+            result["retry_context"]["preserved_evidence"][0]["tool"],
+            "upload_search",
+        )
 
     def test_validate_evidence_unsupported_claims_falls_back_to_grounded_payload(self) -> None:
         validate_node = make_validate_evidence_node(verbose=False)
