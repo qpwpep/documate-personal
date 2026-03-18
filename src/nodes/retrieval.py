@@ -5,6 +5,19 @@ import logging
 import time
 from typing import Any
 
+from ..contracts.debug import RetrievalDiagnostic
+from ..contracts.graph_state import (
+    GraphState,
+    build_tool_message,
+    coerce_planner_output,
+    debug_state,
+    normalize_state_updates,
+    planner_state,
+    retrieval_state,
+    retry_state,
+    runtime_state,
+)
+from ..contracts.routes import route_for_tool
 from ..evidence import evidence_to_dicts, parse_evidence_payload
 from ..latency import (
     elapsed_ms,
@@ -16,24 +29,9 @@ from ..planner_schema import RetrievalTask
 from ..tools._common import build_retrieval_payload
 from .planner import sanitize_retrieval_query
 from .retry import current_retrieval_attempt
-from .state import (
-    RetrievalDiagnostic,
-    State,
-    build_tool_message,
-    coerce_planner_output,
-    coerce_retry_context,
-)
 
 
 logger = logging.getLogger(__name__)
-
-
-def route_for_tool(tool_name: str) -> str:
-    return {
-        "tavily_search": "docs",
-        "upload_search": "upload",
-        "rag_search": "local",
-    }.get(tool_name, "unknown")
 
 
 def normalize_retrieval_diagnostic(
@@ -57,14 +55,14 @@ def normalize_retrieval_diagnostic(
     status = str(diagnostics.get("status") or ("success" if evidence_count > 0 else "no_result"))
     message = str(diagnostics.get("message") or "")
 
-    return {
-        "tool": str(diagnostics.get("tool") or tool_name),
-        "route": str(diagnostics.get("route") or route or route_for_tool(tool_name)),
-        "status": status,
-        "message": message,
-        "query": str(diagnostics.get("query") or query),
-        "attempt": diagnostic_attempt,
-    }
+    return RetrievalDiagnostic(
+        tool=str(diagnostics.get("tool") or tool_name),
+        route=str(diagnostics.get("route") or route or route_for_tool(tool_name)),
+        status=status,
+        message=message,
+        query=str(diagnostics.get("query") or query),
+        attempt=diagnostic_attempt,
+    )
 
 
 def collect_retrieval_result(
@@ -86,8 +84,8 @@ def collect_retrieval_result(
         attempt=attempt,
         evidence_count=len(payload_dicts),
     )
-    if diagnostic["status"] in {"error", "unavailable"} and diagnostic["message"]:
-        local_errors.append(f"{tool_name}: {diagnostic['message']}")
+    if diagnostic.status in {"error", "unavailable"} and diagnostic.message:
+        local_errors.append(f"{tool_name}: {diagnostic.message}")
     return payload_dicts, diagnostic
 
 
@@ -176,6 +174,7 @@ def _build_reused_retrieval_task_result(
     route_diagnostic["route"] = str(route_diagnostic.get("route") or route)
     route_diagnostic["query"] = str(route_diagnostic.get("query") or task.query)
     route_diagnostic["attempt"] = attempt
+    diagnostic = RetrievalDiagnostic.model_validate(route_diagnostic)
 
     payload = build_retrieval_payload(
         tool=tool_name,
@@ -190,14 +189,14 @@ def _build_reused_retrieval_task_result(
         "tool_name": tool_name,
         "payload": payload,
         "evidence": route_evidence,
-        "diagnostic": route_diagnostic,
+        "diagnostic": diagnostic,
         "errors": [],
         "latency_trace": make_retrieval_route_latency_event(
             route=route,
             tool=tool_name,
             attempt=attempt,
             latency_ms=0,
-            status=str(route_diagnostic.get("status") or ""),
+            status=diagnostic.status,
         ),
     }
 
@@ -242,13 +241,21 @@ def make_retrieve_dispatch_node(
     rag_search_tool: Any,
     verbose: bool,
 ):
-    def retrieve_dispatch(state: State) -> State:
+    def retrieve_dispatch(state: GraphState) -> GraphState:
         stage_started = time.perf_counter()
+        runtime = runtime_state(state)
+        planner = planner_state(state)
+        retrieval = retrieval_state(state)
+        debug = debug_state(state)
         planner_errors: list[str] = []
-        planner_output = coerce_planner_output(state.get("planner_output"), planner_errors)
+        planner_output = coerce_planner_output(planner.output, planner_errors)
         if not planner_output.use_retrieval or not planner_output.tasks:
             if planner_errors:
-                return {"planner_errors": planner_errors}
+                return normalize_state_updates({
+                    "debug": debug.model_copy(
+                        update={"planner_errors": [*debug.planner_errors, *planner_errors]}
+                    )
+                })
             return {}
 
         route_handlers: dict[str, tuple[str, Any]] = {
@@ -261,7 +268,7 @@ def make_retrieve_dispatch_node(
                 lambda task: upload_search_tool.func(
                     query=task.query,
                     k=task.k,
-                    retriever=state.get("retriever"),
+                    retriever=runtime.retriever,
                 ),
             ),
             "local": (
@@ -272,11 +279,11 @@ def make_retrieve_dispatch_node(
 
         local_errors: list[str] = []
         evidence_updates: list[dict[str, Any]] = []
-        retrieval_diagnostics: list[dict[str, Any]] = []
+        retrieval_diagnostics: list[RetrievalDiagnostic] = []
         tool_messages = []
         tool_call_counts: dict[str, int] = {}
         latency_trace: list[dict[str, Any]] = []
-        retry_context = coerce_retry_context(state.get("retry_context"))
+        retry_context = retry_state(state)
         attempt = current_retrieval_attempt(retry_context)
         failed_routes = {
             str(route).strip()
@@ -359,7 +366,7 @@ def make_retrieve_dispatch_node(
             payload = result.get("payload")
             evidence_updates.extend(result.get("evidence") or [])
             diagnostic = result.get("diagnostic")
-            if isinstance(diagnostic, dict):
+            if isinstance(diagnostic, RetrievalDiagnostic):
                 retrieval_diagnostics.append(diagnostic)
             local_errors.extend(str(error) for error in (result.get("errors") or []) if str(error).strip())
             latency_event = result.get("latency_trace")
@@ -373,7 +380,7 @@ def make_retrieve_dispatch_node(
 
         if verbose:
             routes = ",".join(task.route for task in planner_output.tasks)
-            statuses = ",".join(str(item.get("status")) for item in retrieval_diagnostics)
+            statuses = ",".join(item.status for item in retrieval_diagnostics)
             log_event(
                 logger,
                 logging.INFO,
@@ -386,7 +393,7 @@ def make_retrieve_dispatch_node(
 
         stage_status = None
         if retrieval_diagnostics:
-            statuses = {str(item.get("status") or "") for item in retrieval_diagnostics}
+            statuses = {item.status for item in retrieval_diagnostics}
             if statuses.issubset({"success", "no_result"}):
                 stage_status = "success"
             elif statuses.issubset({"error", "unavailable"}):
@@ -402,16 +409,21 @@ def make_retrieve_dispatch_node(
             )
         )
 
-        updates: State = {
-            "retrieved_evidence": evidence_updates,
-            "retrieval_diagnostics": retrieval_diagnostics,
+        updates: GraphState = {
+            "retrieval": retrieval.model_copy(
+                update={"evidence_log": [*retrieval.evidence_log, *evidence_updates]}
+            ),
             "messages": tool_messages,
-            "latency_trace": latency_trace,
         }
-        if planner_errors:
-            updates["planner_errors"] = planner_errors
-        if local_errors:
-            updates["retrieval_errors"] = local_errors
-        return updates
+        if planner_errors or local_errors or retrieval_diagnostics or latency_trace:
+            updates["debug"] = debug.model_copy(
+                update={
+                    "planner_errors": [*debug.planner_errors, *planner_errors],
+                    "retrieval_errors": [*debug.retrieval_errors, *local_errors],
+                    "retrieval_diagnostics": [*debug.retrieval_diagnostics, *retrieval_diagnostics],
+                    "latency_trace": [*debug.latency_trace, *latency_trace],
+                }
+            )
+        return normalize_state_updates(updates)
 
     return retrieve_dispatch

@@ -5,8 +5,9 @@ from typing import Any, List
 
 from langchain_core.messages import AIMessage, AnyMessage, BaseMessage, HumanMessage, SystemMessage
 
+from ..contracts.debug import LLMCallMetadata, build_llm_call_metadata
+from ..contracts.graph_state import GraphState, debug_state, normalize_state_updates, runtime_state
 from ..logging_utils import log_event
-from .state import LLMCallMetadata, State, build_llm_call_metadata
 
 SUMMARY_SYS = (
     "Summarize the older conversation in 4-5 lines.\n"
@@ -18,11 +19,9 @@ SUMMARY_SYS = (
 logger = logging.getLogger(__name__)
 
 
-def add_user_message(state: State) -> State:
-    messages = list(state.get("messages", []))
-    messages.append(HumanMessage(content=state["user_input"]))
-    state["messages"] = messages
-    return state
+def add_user_message(state: GraphState) -> GraphState:
+    runtime = runtime_state(state)
+    return normalize_state_updates({"messages": [HumanMessage(content=runtime.user_input)]})
 
 
 def keep_recent_messages(messages: List[BaseMessage], max_turns: int = 6) -> List[BaseMessage]:
@@ -64,7 +63,7 @@ def latest_previous_ai_answer(messages: list[AnyMessage]) -> str:
 
 
 def make_summarize_node(llm_summarizer: Any, verbose: bool, max_turns: int = 6):
-    def summarize_old_messages(state: State) -> State:
+    def summarize_old_messages(state: GraphState) -> GraphState:
         messages: List[BaseMessage] = state.get("messages", [])
         recent_window = keep_recent_messages(messages, max_turns=max_turns)
         if len(recent_window) == len(messages):
@@ -92,18 +91,22 @@ def make_summarize_node(llm_summarizer: Any, verbose: bool, max_turns: int = 6):
         except Exception as exc:
             if verbose:
                 log_event(logger, logging.WARNING, "summary_failed", error=exc)
-            return {"messages": recent_messages}
+            return normalize_state_updates({"messages": recent_messages})
 
-        previous_summary = (state.get("memory_summary") or "").strip()
+        runtime = runtime_state(state)
+        debug = debug_state(state)
+        previous_summary = (runtime.memory_summary or "").strip()
         merged_summary = (previous_summary + ("\n" if previous_summary else "") + summary).strip()
-        updates: State = {
-            "memory_summary": merged_summary,
+        updates: GraphState = {
+            "runtime": runtime.model_copy(update={"memory_summary": merged_summary}),
             "messages": recent_messages,
         }
         if llm_calls:
-            updates["llm_calls"] = llm_calls
+            updates["debug"] = debug.model_copy(
+                update={"llm_calls": [*debug.llm_calls, *llm_calls]}
+            )
         if verbose:
             log_event(logger, logging.INFO, "summary_merged", cutoff=cutoff)
-        return updates
+        return normalize_state_updates(updates)
 
     return summarize_old_messages

@@ -1,6 +1,14 @@
 import time
 from typing import Any
 
+from .contracts.graph_state import (
+    GraphState,
+    debug_state,
+    normalize_state_updates,
+    planner_state,
+    response_state,
+    retry_state,
+)
 from .latency import elapsed_ms, make_stage_latency_event
 from .llm import build_llm_registry
 from .make_graph import build_graph
@@ -8,7 +16,6 @@ from .nodes.actions import make_action_postprocess_node
 from .nodes.planner import make_planner_node
 from .nodes.retrieval import make_retrieve_dispatch_node
 from .nodes.session import add_user_message, make_summarize_node
-from .nodes.state import State, coerce_retry_context
 from .nodes.synthesis import make_synthesize_node
 from .nodes.validation import make_validate_evidence_node
 from .settings import AppSettings, get_settings
@@ -23,28 +30,28 @@ class StageExecutionError(RuntimeError):
         self.cause = cause
 
 
-def _resolve_stage_attempt(stage: str, state: State, updates: State) -> int:
+def _resolve_stage_attempt(stage: str, state: GraphState, updates: GraphState) -> int:
     if stage in {"planner"}:
-        retry_context = coerce_retry_context(state.get("retry_context"))
-        return int(retry_context.get("attempt", 0)) + 1
+        retry_context = retry_state(state)
+        return int(retry_context.attempt) + 1
     if stage == "validation":
-        return max(1, int(state.get("synthesis_attempt", 0) or 0))
+        return max(1, int(response_state(state).synthesis_attempt or 0))
     if stage == "action_postprocess":
-        return max(1, int(state.get("synthesis_attempt", 0) or 1))
+        return max(1, int(response_state(state).synthesis_attempt or 1))
     return 1
 
 
-def _resolve_stage_status(stage: str, updates: State) -> str | None:
+def _resolve_stage_status(stage: str, updates: GraphState) -> str | None:
     if stage == "planner":
-        status = updates.get("planner_status")
+        status = planner_state(updates).status
         return str(status) if status else None
     if stage == "validation":
-        return "retry" if bool(updates.get("needs_retry")) else "pass"
+        return "retry" if retry_state(updates).needs_retry else "pass"
     return None
 
 
 def _instrument_stage_node(stage: str, node: Any):
-    def wrapped(state: State) -> State:
+    def wrapped(state: GraphState) -> GraphState:
         started = time.perf_counter()
         try:
             updates = node(state)
@@ -57,17 +64,17 @@ def _instrument_stage_node(stage: str, node: Any):
         if not isinstance(updates, dict):
             return updates
 
-        latency_trace = list(updates.get("latency_trace") or [])
-        latency_trace.append(
-            make_stage_latency_event(
-                stage=stage,  # type: ignore[arg-type]
-                attempt=_resolve_stage_attempt(stage, state, updates),
-                latency_ms=elapsed_ms(started, time.perf_counter()),
-                status=_resolve_stage_status(stage, updates),
-            )
+        debug = debug_state(updates)
+        latency_event = make_stage_latency_event(
+            stage=stage,  # type: ignore[arg-type]
+            attempt=_resolve_stage_attempt(stage, state, updates),
+            latency_ms=elapsed_ms(started, time.perf_counter()),
+            status=_resolve_stage_status(stage, updates),
         )
-        updates["latency_trace"] = latency_trace
-        return updates
+        updates["debug"] = debug.model_copy(
+            update={"latency_trace": [*debug.latency_trace, latency_event]}
+        )
+        return normalize_state_updates(updates)
 
     return wrapped
 
@@ -120,7 +127,7 @@ def build_agent_graph(settings: AppSettings | None = None):
     )
 
     graph_object = build_graph(
-        state_type=State,
+        state_type=GraphState,
         add_user_node=add_user_message,
         summarize_node=summarize_node,
         planner_node=planner_node,
