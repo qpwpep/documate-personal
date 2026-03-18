@@ -115,6 +115,28 @@ class _FakeGraphWithLlmCalls:
         }
 
 
+class _FakeGraphWithAiMessageMetadata:
+    def invoke(self, state: dict) -> dict:
+        _ = state
+        return {
+            "messages": [
+                HumanMessage(content="question"),
+                AIMessage(
+                    content="final answer",
+                    response_metadata={"model_name": "gpt-5-mini"},
+                    usage_metadata={"input_tokens": 14, "output_tokens": 6, "total_tokens": 20},
+                ),
+            ],
+            "response_payload": {
+                "answer": "final answer",
+                "claims": [],
+                "evidence": [],
+                "confidence": None,
+            },
+            "synthesis_attempt": 1,
+        }
+
+
 class _FakeGraphWithSave:
     def invoke(self, state: dict) -> dict:
         _ = state
@@ -565,6 +587,24 @@ class EvidencePipelineTest(unittest.TestCase):
         self.assertEqual(result["debug"]["model_name"], "gpt-5-mini")
         self.assertEqual(result["debug"]["models_used"], ["gpt-5-nano", "gpt-5-mini"])
         self.assertEqual(len(result["debug"]["llm_calls"]), 2)
+
+    def test_agent_manager_falls_back_to_current_turn_ai_message_metadata(self) -> None:
+        manager = AgentFlowManager.__new__(AgentFlowManager)
+        manager.settings = AppSettings(openai_api_key="test", tavily_api_key="test")
+        manager.graph = _FakeGraphWithAiMessageMetadata()
+        manager.messages = []
+        manager.upload_retriever_handle = None
+        manager.upload_file_path = None
+
+        result = manager.run_agent_flow("question")
+
+        self.assertEqual(result["debug"]["token_usage"]["prompt_tokens"], 14)
+        self.assertEqual(result["debug"]["token_usage"]["completion_tokens"], 6)
+        self.assertEqual(result["debug"]["token_usage"]["total_tokens"], 20)
+        self.assertEqual(result["debug"]["model_name"], "gpt-5-mini")
+        self.assertEqual(result["debug"]["models_used"], ["gpt-5-mini"])
+        self.assertEqual(len(result["debug"]["llm_calls"]), 1)
+        self.assertEqual(result["debug"]["llm_calls"][0]["path"], "direct")
 
     @patch("src.agent_manager.build_temp_retriever")
     def test_agent_manager_passes_api_key_to_temp_retriever(self, mock_build_temp_retriever) -> None:
