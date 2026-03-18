@@ -30,9 +30,8 @@ LLMCallPath = Literal[
     "structured_compact_fallback",
     "plain_summary_attach_fallback",
 ]
-LOW_SCORE_THRESHOLD = 0.5
 DEFAULT_MAX_RETRIES = 1
-RETRYABLE_REASONS: set[RetryReason] = {"no_evidence"}
+RETRYABLE_REASONS: set[RetryReason] = {"no_evidence", "low_score", "tool_error"}
 ROUTE_ORDER: tuple[str, ...] = ("docs", "upload", "local")
 
 
@@ -45,6 +44,9 @@ class RetryContext(TypedDict, total=False):
     retrieval_error_start_index: int
     retrieval_diagnostic_start_index: int
     score_avg: float | None
+    failed_routes: list[str]
+    preserved_evidence: list[dict[str, Any]]
+    preserved_retrieval_diagnostics: list[dict[str, Any]]
 
 
 class PlannerDiagnostic(TypedDict, total=False):
@@ -134,6 +136,9 @@ def coerce_retry_context(value: Any) -> RetryContext:
         "retrieval_error_start_index": 0,
         "retrieval_diagnostic_start_index": 0,
         "score_avg": None,
+        "failed_routes": [],
+        "preserved_evidence": [],
+        "preserved_retrieval_diagnostics": [],
     }
     if not isinstance(value, dict):
         return context
@@ -177,6 +182,30 @@ def coerce_retry_context(value: Any) -> RetryContext:
         context["score_avg"] = float(score_avg)
     elif score_avg is None:
         context["score_avg"] = None
+
+    failed_routes = value.get("failed_routes")
+    if isinstance(failed_routes, list):
+        context["failed_routes"] = [
+            str(route).strip()
+            for route in failed_routes
+            if str(route).strip()
+        ]
+
+    preserved_evidence = value.get("preserved_evidence")
+    if isinstance(preserved_evidence, list):
+        context["preserved_evidence"] = [
+            json_safe_deep_copy(item)
+            for item in preserved_evidence
+            if isinstance(item, dict)
+        ]
+
+    preserved_retrieval_diagnostics = value.get("preserved_retrieval_diagnostics")
+    if isinstance(preserved_retrieval_diagnostics, list):
+        context["preserved_retrieval_diagnostics"] = [
+            json_safe_deep_copy(item)
+            for item in preserved_retrieval_diagnostics
+            if isinstance(item, dict)
+        ]
 
     return context
 

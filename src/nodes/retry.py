@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from typing import Any
+
+from ..evidence import EvidenceItem, evidence_to_dicts
 from ..planner_schema import PlannerOutput
 from .state import (
     DEFAULT_MAX_RETRIES,
@@ -9,6 +12,46 @@ from .state import (
     State,
     coerce_planner_output,
 )
+
+
+def _route_for_tool(tool_name: str) -> str:
+    return {
+        "tavily_search": "docs",
+        "upload_search": "upload",
+        "rag_search": "local",
+    }.get(str(tool_name or ""), "")
+
+
+def _normalize_failed_routes(value: set[str] | list[str] | tuple[str, ...] | None) -> list[str]:
+    if not value:
+        return []
+    normalized = {
+        str(route).strip()
+        for route in value
+        if str(route).strip()
+    }
+    return [route for route in ("docs", "upload", "local") if route in normalized]
+
+
+def _preserve_successful_route_payload(
+    *,
+    current_attempt_evidence: list[EvidenceItem],
+    current_attempt_retrieval_diagnostics: list[dict[str, Any]],
+    failed_routes: set[str],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    preserved_evidence = evidence_to_dicts(
+        [
+            item
+            for item in current_attempt_evidence
+            if _route_for_tool(item.tool) and _route_for_tool(item.tool) not in failed_routes
+        ]
+    )
+    preserved_diagnostics = [
+        dict(item)
+        for item in current_attempt_retrieval_diagnostics
+        if str(item.get("route") or "").strip() not in failed_routes
+    ]
+    return preserved_evidence, preserved_diagnostics
 
 
 def format_retry_context_for_planner(state: State, retry_context: RetryContext) -> str | None:
@@ -27,12 +70,14 @@ def format_retry_context_for_planner(state: State, retry_context: RetryContext) 
         previous_routes = ", ".join(task.route for task in previous_output.tasks)
     else:
         previous_routes = "none"
+    failed_routes = ", ".join(retry_context.get("failed_routes", [])) or "none"
 
     return (
         "[Retry Context]\n"
         f"attempt={attempt}/{max_retries}\n"
         f"reason={retry_reason}\n"
         f"previous_routes={previous_routes}\n"
+        f"failed_routes={failed_routes}\n"
         f"score_avg={score_text}\n"
         "Use a shorter, route-specific query."
     )
@@ -142,6 +187,9 @@ def build_retry_update(
     planner_output: PlannerOutput,
     retrieval_errors: list[str],
     score_avg: float | None,
+    failed_routes: set[str] | list[str] | tuple[str, ...] | None = None,
+    current_attempt_evidence: list[EvidenceItem] | None = None,
+    current_attempt_retrieval_diagnostics: list[dict[str, Any]] | None = None,
 ) -> tuple[bool, RetryContext, str]:
     max_retries = int(retry_context.get("max_retries", DEFAULT_MAX_RETRIES))
     used_retries = int(retry_context.get("attempt", 0))
@@ -153,6 +201,7 @@ def build_retry_update(
     next_retry_context["score_avg"] = score_avg
 
     selected_routes = {task.route for task in planner_output.tasks}
+    normalized_failed_routes = set(_normalize_failed_routes(failed_routes))
 
     if retry_reason is not None:
         retrieval_feedback = build_retrieval_feedback(
@@ -161,18 +210,36 @@ def build_retry_update(
             retrieval_errors=retrieval_errors,
             score_avg=score_avg,
         )
-        if (
-            retry_reason in RETRYABLE_REASONS
-            and selected_routes == {"docs"}
-            and used_retries < max_retries
-        ):
+        if retry_reason in RETRYABLE_REASONS and used_retries < max_retries:
+            if selected_routes == {"docs"}:
+                needs_retry = True
+            elif selected_routes == {"docs", "upload"} and normalized_failed_routes == {"docs"}:
+                needs_retry = True
+        if needs_retry:
             needs_retry = True
             used_retries += 1
         next_retry_context["retry_reason"] = retry_reason
         next_retry_context["retrieval_feedback"] = retrieval_feedback
+        next_retry_context["failed_routes"] = _normalize_failed_routes(
+            normalized_failed_routes or selected_routes
+        )
+        if needs_retry and selected_routes == {"docs", "upload"} and normalized_failed_routes == {"docs"}:
+            preserved_evidence, preserved_diagnostics = _preserve_successful_route_payload(
+                current_attempt_evidence=current_attempt_evidence or [],
+                current_attempt_retrieval_diagnostics=current_attempt_retrieval_diagnostics or [],
+                failed_routes=normalized_failed_routes,
+            )
+            next_retry_context["preserved_evidence"] = preserved_evidence
+            next_retry_context["preserved_retrieval_diagnostics"] = preserved_diagnostics
+        else:
+            next_retry_context["preserved_evidence"] = []
+            next_retry_context["preserved_retrieval_diagnostics"] = []
     else:
         next_retry_context["retrieval_feedback"] = ""
         next_retry_context.pop("retry_reason", None)
+        next_retry_context["failed_routes"] = []
+        next_retry_context["preserved_evidence"] = []
+        next_retry_context["preserved_retrieval_diagnostics"] = []
 
     next_retry_context["attempt"] = used_retries
     return needs_retry, next_retry_context, retrieval_feedback
