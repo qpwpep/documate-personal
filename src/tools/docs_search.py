@@ -8,82 +8,16 @@ from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field
 
 from ..answer_schema import normalize_confidence
+from ..rules import get_rules_config
 from ..settings import AppSettings
 from ._common import build_evidence_item, build_retrieval_payload, dedupe_evidence_dicts
 
 
 TAVILY_SEARCH_API_URL = "https://api.tavily.com/search"
-_DOCS_QUERY_HINTS: tuple[tuple[tuple[str, ...], str, tuple[str, ...], tuple[str, ...]], ...] = (
-    (
-        ("train_test_split",),
-        "scikit-learn",
-        ("scikit-learn.org",),
-        ("train_test_split sklearn.model_selection",),
-    ),
-    (
-        ("standardscaler",),
-        "scikit-learn",
-        ("scikit-learn.org",),
-        ("StandardScaler sklearn.preprocessing",),
-    ),
-    (
-        ("logisticregression",),
-        "scikit-learn",
-        ("scikit-learn.org",),
-        ("LogisticRegression sklearn.linear_model",),
-    ),
-    (
-        ("pipeline",),
-        "scikit-learn",
-        ("scikit-learn.org",),
-        ("Pipeline sklearn.pipeline",),
-    ),
-    (("response_model",), "fastapi", ("fastapi.tiangolo.com",), ("response_model fastapi",)),
-    (
-        ("merge",),
-        "pandas",
-        ("pandas.pydata.org",),
-        ("pandas merge user guide", "pandas merging user guide"),
-    ),
-    (
-        ("groupby",),
-        "pandas",
-        ("pandas.pydata.org",),
-        ("pandas groupby user guide",),
-    ),
-    (
-        ("concat",),
-        "pandas",
-        ("pandas.pydata.org",),
-        ("pandas concat user guide",),
-    ),
-    (("broadcasting",), "numpy", ("numpy.org",), ("broadcasting numpy",)),
-    (("dataloader", "dataset"), "pytorch", ("docs.pytorch.org",), ("DataLoader torch.utils.data",)),
-)
-_ALLOWED_DOC_PATH_PREFIXES: dict[str, tuple[str, ...]] = {
-    "docs.python.org": ("/3/",),
-    "git-scm.com": ("/docs/",),
-    "python.langchain.com": ("/docs/",),
-    "matplotlib.org": ("/stable/",),
-    "numpy.org": ("/doc/stable/",),
-    "pandas.pydata.org": ("/docs/",),
-    "docs.pytorch.org": ("/docs/stable/",),
-    "huggingface.co": ("/docs/",),
-    "fastapi.tiangolo.com": ("/",),
-    "crummy.com": ("/software/BeautifulSoup/bs4/doc/",),
-    "docs.streamlit.io": ("/",),
-    "gradio.app": ("/docs/",),
-    "scikit-learn.org": ("/stable/",),
-    "docs.pydantic.dev": ("/latest/",),
-}
-_ERROR_PAGE_MARKERS: tuple[str, ...] = (
-    "404",
-    "page not found",
-    "github pages",
-    "does not exist",
-    "not found",
-    "requested file",
-)
+
+
+def _docs_search_rules():
+    return get_rules_config().docs_search
 
 
 class TavilyArgs(BaseModel):
@@ -129,7 +63,7 @@ def is_allowed_doc_url(url: str) -> bool:
     domain = parsed.netloc.strip().lower()
     if domain.startswith("www."):
         domain = domain[4:]
-    allowed_prefixes = _ALLOWED_DOC_PATH_PREFIXES.get(domain)
+    allowed_prefixes = _docs_search_rules().allowed_doc_path_prefixes.get(domain)
     if not allowed_prefixes:
         return False
     normalized_path = _normalize_path_prefix(parsed.path or "/")
@@ -148,7 +82,7 @@ def is_valid_doc_result(*, url: str, title: Any, snippet: Any) -> bool:
     if not combined:
         return False
 
-    return not any(marker in combined for marker in _ERROR_PAGE_MARKERS)
+    return not any(marker in combined for marker in _docs_search_rules().error_page_markers)
 
 
 def request_tavily_search(
@@ -207,14 +141,14 @@ def request_tavily_search(
 
 def infer_docs_query_hint(query: str) -> tuple[str, list[str], list[str]] | None:
     lowered = str(query or "").lower()
-    for identifiers, library_name, domains, fallback_queries in _DOCS_QUERY_HINTS:
-        if any(identifier in lowered for identifier in identifiers):
-            return library_name, list(domains), list(fallback_queries)
+    for hint in _docs_search_rules().query_hints:
+        if any(identifier in lowered for identifier in hint.identifiers):
+            return hint.library_name, list(hint.domains), list(hint.fallback_queries)
     return None
 
 
 def build_docs_search_tool(settings: AppSettings) -> Any:
-    default_domains = list(_ALLOWED_DOC_PATH_PREFIXES.keys())
+    default_domains = list(_docs_search_rules().allowed_doc_path_prefixes.keys())
 
     def tavily_search(
         query: str,

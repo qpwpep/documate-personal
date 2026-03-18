@@ -1,15 +1,11 @@
 from __future__ import annotations
 
-from typing import Literal
-
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-
-PlannerRoute = Literal["docs", "upload", "local"]
-
+from .contracts.routes import RouteName
 
 class RetrievalTask(BaseModel):
-    route: PlannerRoute
+    route: RouteName
     query: str = Field(min_length=1)
     k: int = Field(default=4, ge=1, le=10)
 

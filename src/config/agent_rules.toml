@@ -1,0 +1,219 @@
+[intents]
+docs_patterns = [
+  "\\b(latest|official|docs?|documentation|reference|api|syntax|parameter|manual)\\b",
+  "(공식|문서|레퍼런스|참고\\s*자료|최신|API)",
+]
+explicit_docs_keywords = [
+  "official",
+  "docs",
+  "documentation",
+  "reference",
+  "api",
+  "manual",
+  "공식",
+  "문서",
+  "레퍼런스",
+  "참고 자료",
+  "최신",
+]
+local_patterns = [
+  "\\b(example|sample|notebook|project|implementation|practice|baseline)\\b",
+  "(예제|노트북|프로젝트|구현|실습|샘플|베이스라인)",
+]
+save_patterns = [
+  "\\b(save|export|write|download|txt|text file)\\b",
+  "(저장|텍스트\\s*파일|txt로|내보내|다운로드)",
+]
+slack_patterns = [
+  "\\b(slack|dm|direct message|channel)\\b",
+  "(슬랙|DM|채널|다이렉트\\s*메시지).*(보내|전송|공유|전달)",
+  "(보내|전송|공유|전달).*(슬랙|DM|채널)",
+]
+
+[planner]
+upload_keywords = [
+  "upload",
+  "uploaded",
+  "current file",
+  "current notebook",
+  "this file",
+  "this notebook",
+  ".ipynb",
+  ".py",
+  "업로드",
+  "업로드한",
+  "현재 파일",
+  "이 파일",
+  "이 노트북",
+]
+auxiliary_markers = [
+  "추가 조건",
+  "추가 지시",
+  "부가 조건",
+  "additional condition",
+  "additional instruction",
+  "extra condition",
+  "extra instruction",
+]
+action_clause_pattern = "(?i)\\b(save|export|write|download|slack|dm|channel|share|send)\\b|저장|슬랙|공유|전송|텍스트\\s*파일"
+docs_clause_pattern = "(?i)\\b(official|docs?|documentation|reference|manual|api|latest)\\b|공식|문서|레퍼런스|참고\\s*자료|최신"
+compare_clause_pattern = "(?i)\\b(compare|comparison|versus|vs\\.?|along with|together)\\b|비교|함께|같이"
+trailing_docs_stop_phrases = [
+  "공식 문서 기준으로",
+  "공식 레퍼런스 기준으로",
+  "공식 문서로",
+  "공식 레퍼런스로",
+  "based on official docs",
+  "according to official docs",
+  "공식 문서",
+  "공식 레퍼런스",
+  "설명하고",
+  "설명해줘",
+  "알려줘",
+  "보여줘",
+  "찾아줘",
+  "요약해줘",
+  "정리해줘",
+]
+docs_identifier_pattern = "\\b(?:[A-Za-z][A-Za-z0-9._-]*|v\\d+)\\b"
+docs_identifier_stopwords = [
+  "from",
+  "official",
+  "docs",
+  "doc",
+  "documentation",
+  "reference",
+  "with",
+  "the",
+  "it",
+  "and",
+]
+
+[validation]
+code_identifier_pattern = "\\b[A-Za-z_][A-Za-z0-9_]{1,}\\b"
+keyword_pattern = "[A-Za-z_][A-Za-z0-9_]{1,}|[가-힣]{2,}"
+keyword_stopwords = [
+  "official",
+  "docs",
+  "documentation",
+  "reference",
+  "latest",
+  "upload",
+  "uploaded",
+  "current",
+  "file",
+  "notebook",
+  "code",
+  "example",
+  "examples",
+  "local",
+  "find",
+  "show",
+  "tell",
+  "explain",
+  "describe",
+  "how",
+  "what",
+  "where",
+  "using",
+  "used",
+  "usage",
+  "based",
+  "공식",
+  "문서",
+  "최신",
+  "업로드",
+  "업로드한",
+  "파일",
+  "노트북",
+  "코드",
+  "예제",
+  "설명",
+  "문법",
+  "사용",
+  "위치",
+  "찾아줘",
+  "알려줘",
+  "기준",
+  "실제",
+  "부분",
+]
+
+[docs_search]
+error_page_markers = ["404", "page not found", "github pages", "does not exist", "not found", "requested file"]
+
+[docs_search.allowed_doc_path_prefixes]
+"docs.python.org" = ["/3/"]
+"git-scm.com" = ["/docs/"]
+"python.langchain.com" = ["/docs/"]
+"matplotlib.org" = ["/stable/"]
+"numpy.org" = ["/doc/stable/"]
+"pandas.pydata.org" = ["/docs/"]
+"docs.pytorch.org" = ["/docs/stable/"]
+"huggingface.co" = ["/docs/"]
+"fastapi.tiangolo.com" = ["/"]
+"crummy.com" = ["/software/BeautifulSoup/bs4/doc/"]
+"docs.streamlit.io" = ["/"]
+"gradio.app" = ["/docs/"]
+"scikit-learn.org" = ["/stable/"]
+"docs.pydantic.dev" = ["/latest/"]
+
+[[docs_search.query_hints]]
+identifiers = ["train_test_split"]
+library_name = "scikit-learn"
+domains = ["scikit-learn.org"]
+fallback_queries = ["train_test_split sklearn.model_selection"]
+
+[[docs_search.query_hints]]
+identifiers = ["standardscaler"]
+library_name = "scikit-learn"
+domains = ["scikit-learn.org"]
+fallback_queries = ["StandardScaler sklearn.preprocessing"]
+
+[[docs_search.query_hints]]
+identifiers = ["logisticregression"]
+library_name = "scikit-learn"
+domains = ["scikit-learn.org"]
+fallback_queries = ["LogisticRegression sklearn.linear_model"]
+
+[[docs_search.query_hints]]
+identifiers = ["pipeline"]
+library_name = "scikit-learn"
+domains = ["scikit-learn.org"]
+fallback_queries = ["Pipeline sklearn.pipeline"]
+
+[[docs_search.query_hints]]
+identifiers = ["response_model"]
+library_name = "fastapi"
+domains = ["fastapi.tiangolo.com"]
+fallback_queries = ["response_model fastapi"]
+
+[[docs_search.query_hints]]
+identifiers = ["merge"]
+library_name = "pandas"
+domains = ["pandas.pydata.org"]
+fallback_queries = ["pandas merge user guide", "pandas merging user guide"]
+
+[[docs_search.query_hints]]
+identifiers = ["groupby"]
+library_name = "pandas"
+domains = ["pandas.pydata.org"]
+fallback_queries = ["pandas groupby user guide"]
+
+[[docs_search.query_hints]]
+identifiers = ["concat"]
+library_name = "pandas"
+domains = ["pandas.pydata.org"]
+fallback_queries = ["pandas concat user guide"]
+
+[[docs_search.query_hints]]
+identifiers = ["broadcasting"]
+library_name = "numpy"
+domains = ["numpy.org"]
+fallback_queries = ["broadcasting numpy"]
+
+[[docs_search.query_hints]]
+identifiers = ["dataloader", "dataset"]
+library_name = "pytorch"
+domains = ["docs.pytorch.org"]
+fallback_queries = ["DataLoader torch.utils.data"]

@@ -5,15 +5,19 @@ from typing import Any
 
 from langchain_core.messages import AnyMessage
 
-from ..logging_utils import log_event
-from ..prompts import needs_rag, needs_save, needs_search, needs_slack
-from .session import latest_previous_ai_answer
-from .state import (
-    State,
+from ..contracts.graph_state import (
+    GraphState,
     build_tool_message,
     coerce_session_metadata,
     coerce_slack_destination,
+    debug_state,
+    normalize_state_updates,
+    response_state,
+    runtime_state,
 )
+from ..logging_utils import log_event
+from ..prompts import needs_rag, needs_save, needs_search, needs_slack
+from .session import latest_previous_ai_answer
 
 
 logger = logging.getLogger(__name__)
@@ -96,9 +100,12 @@ def make_action_postprocess_node(
     verbose: bool,
     has_default_slack_destination: bool = False,
 ):
-    def action_postprocess(state: State) -> State:
-        user_input = str(state.get("user_input", "") or "")
-        final_answer = str(state.get("final_answer", "") or "")
+    def action_postprocess(state: GraphState) -> GraphState:
+        runtime = runtime_state(state)
+        response = response_state(state)
+        debug = debug_state(state)
+        user_input = runtime.user_input
+        final_answer = response.final_answer
         action_errors: list[str] = []
         tool_messages = []
 
@@ -114,7 +121,7 @@ def make_action_postprocess_node(
             tool_messages.append(build_tool_message("save_text", save_result, 1))
 
         if needs_slack(user_input) and final_answer.strip():
-            destinations = get_slack_destinations(state.get("session_metadata"))
+            destinations = get_slack_destinations(runtime.session_metadata)
             if any(destinations.values()) or has_default_slack_destination:
                 try:
                     slack_result = slack_notify_tool.func(
@@ -133,11 +140,13 @@ def make_action_postprocess_node(
             tool_names = ", ".join(message.name for message in tool_messages if message.name)
             log_event(logger, logging.INFO, "postprocess", tools=tool_names)
 
-        updates: State = {}
+        updates: GraphState = {}
         if tool_messages:
             updates["messages"] = tool_messages
         if action_errors:
-            updates["action_errors"] = action_errors
-        return updates
+            updates["debug"] = debug.model_copy(
+                update={"action_errors": [*debug.action_errors, *action_errors]}
+            )
+        return normalize_state_updates(updates)
 
     return action_postprocess

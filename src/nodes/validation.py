@@ -2,102 +2,76 @@ from __future__ import annotations
 
 import logging
 import re
+from functools import lru_cache
 from typing import Any
 
 from langchain_core.messages import AIMessage
 
 from ..answer_schema import (
     AgentResponsePayloadModel,
+    SynthesisOutput,
     average_claim_confidence,
     build_deterministic_grounded_payload,
     build_empty_response_payload,
     filter_claims_by_evidence,
     render_payload_from_claims,
 )
-from ..evidence import EvidenceItem, parse_evidence_payload
-from ..logging_utils import log_event
-from .retry import build_followup_from_routes, build_retry_update, contains_tool_error
-from .state import (
-    RetryReason,
-    State,
+from ..contracts.debug import RetryReason
+from ..contracts.graph_state import (
+    GraphState,
+    ResponseState,
     coerce_planner_output,
-    coerce_retry_context,
-    safe_list,
+    debug_state,
+    normalize_state_updates,
+    planner_state,
+    response_state,
+    retrieval_state,
+    retry_state,
+    runtime_state,
     slice_from_index,
 )
+from ..contracts.routes import route_for_tool
+from ..evidence import EvidenceItem, parse_evidence_payload
+from ..logging_utils import log_event
+from ..rules import get_rules_config
+from .retry import build_followup_from_routes, build_retry_update, contains_tool_error
 
 
 logger = logging.getLogger(__name__)
 
-_CODE_IDENTIFIER_PATTERN = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]{1,}\b")
-_KEYWORD_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_]{1,}|[가-힣]{2,}")
-_KEYWORD_STOPWORDS = {
-    "official",
-    "docs",
-    "documentation",
-    "reference",
-    "latest",
-    "upload",
-    "uploaded",
-    "current",
-    "file",
-    "notebook",
-    "code",
-    "example",
-    "examples",
-    "local",
-    "find",
-    "show",
-    "tell",
-    "explain",
-    "describe",
-    "how",
-    "what",
-    "where",
-    "using",
-    "used",
-    "usage",
-    "based",
-    "공식",
-    "문서",
-    "최신",
-    "업로드",
-    "업로드한",
-    "파일",
-    "노트북",
-    "코드",
-    "예제",
-    "설명",
-    "문법",
-    "사용",
-    "위치",
-    "찾아줘",
-    "알려줘",
-    "기준",
-    "실제",
-    "부분",
-}
+
+def _validation_rules():
+    return get_rules_config().validation
 
 
-def _coerce_response_payload(raw_payload: object) -> AgentResponsePayloadModel | None:
-    if raw_payload is None:
-        return None
-    try:
-        return AgentResponsePayloadModel.model_validate(raw_payload)
-    except Exception:
-        return None
+@lru_cache(maxsize=1)
+def _code_identifier_pattern():
+    return re.compile(_validation_rules().code_identifier_pattern)
 
 
-def _payload_to_state_dict(payload: AgentResponsePayloadModel) -> dict[str, object]:
-    return payload.model_dump(mode="json")
+@lru_cache(maxsize=1)
+def _keyword_pattern():
+    return re.compile(_validation_rules().keyword_pattern)
 
 
-def _build_followup_updates(answer: str) -> State:
-    payload = build_empty_response_payload(answer=answer)
+def _build_response_payload_updates(
+    payload: AgentResponsePayloadModel,
+    *,
+    attempt: int,
+) -> GraphState:
+    synthesis_output = SynthesisOutput(
+        answer=payload.answer,
+        claims=payload.claims,
+        confidence=payload.confidence,
+    )
     return {
-        "messages": [AIMessage(content=answer)],
-        "final_answer": answer,
-        "response_payload": _payload_to_state_dict(payload),
+        "messages": [AIMessage(content=payload.answer)],
+        "response": ResponseState(
+            final_answer=payload.answer,
+            payload=payload,
+            synthesis_output=synthesis_output,
+            synthesis_attempt=attempt,
+        ),
     }
 
 
@@ -105,35 +79,31 @@ def _coerce_evidence_list(items: list[EvidenceItem]) -> list[EvidenceItem]:
     return [item for item in items if isinstance(item, EvidenceItem)]
 
 
-def _build_response_payload_updates(payload: AgentResponsePayloadModel) -> State:
-    return {
-        "messages": [AIMessage(content=payload.answer)],
-        "final_answer": payload.answer,
-        "response_payload": _payload_to_state_dict(payload),
-    }
+def _build_followup_updates(answer: str, *, attempt: int) -> GraphState:
+    return _build_response_payload_updates(
+        build_empty_response_payload(answer=answer),
+        attempt=attempt,
+    )
 
 
 def _route_for_tool(tool_name: str) -> str:
-    return {
-        "tavily_search": "docs",
-        "upload_search": "upload",
-        "rag_search": "local",
-    }.get(str(tool_name or ""), "")
+    return route_for_tool(str(tool_name or ""))
 
 
 def _extract_code_identifiers(text: str) -> set[str]:
     return {
         token.lower()
-        for token in _CODE_IDENTIFIER_PATTERN.findall(str(text or ""))
-        if token and token.lower() not in _KEYWORD_STOPWORDS
+        for token in _code_identifier_pattern().findall(str(text or ""))
+        if token and token.lower() not in set(_validation_rules().keyword_stopwords)
     }
 
 
 def _extract_keywords(text: str) -> set[str]:
     keywords: set[str] = set()
-    for token in _KEYWORD_PATTERN.findall(str(text or "").lower()):
+    stopwords = set(_validation_rules().keyword_stopwords)
+    for token in _keyword_pattern().findall(str(text or "").lower()):
         normalized = token.strip().lower()
-        if len(normalized) < 2 or normalized in _KEYWORD_STOPWORDS:
+        if len(normalized) < 2 or normalized in stopwords:
             continue
         keywords.add(normalized)
     return keywords
@@ -235,13 +205,18 @@ def _score_avg_for_failed_routes(
 
 
 def make_validate_evidence_node(verbose: bool):
-    def validate_evidence(state: State) -> State:
+    def validate_evidence(state: GraphState) -> GraphState:
         local_errors: list[str] = []
         parse_errors: list[str] = []
+        runtime = runtime_state(state)
+        planner = planner_state(state)
+        retrieval = retrieval_state(state)
+        response = response_state(state)
+        debug = debug_state(state)
 
-        planner_output = coerce_planner_output(state.get("planner_output"), local_errors)
-        retry_context = coerce_retry_context(state.get("retry_context"))
-        guided_followup = str(state.get("guided_followup") or "").strip()
+        planner_output = coerce_planner_output(planner.output, local_errors)
+        retry_context = retry_state(state)
+        guided_followup = str(planner.guided_followup or "").strip()
         if guided_followup:
             needs_retry, next_retry_context, _ = build_retry_update(
                 retry_context=retry_context,
@@ -250,12 +225,11 @@ def make_validate_evidence_node(verbose: bool):
                 retrieval_errors=[],
                 score_avg=None,
             )
-            updates: State = {
-                "needs_retry": needs_retry,
-                "retry_context": next_retry_context,
+            updates: GraphState = {
+                "retry": next_retry_context,
             }
-            updates.update(_build_followup_updates(guided_followup))
-            return updates
+            updates.update(_build_followup_updates(guided_followup, attempt=response.synthesis_attempt))
+            return normalize_state_updates(updates)
 
         evidence_start_index = int(retry_context.get("evidence_start_index", 0))
         retrieval_error_start_index = int(retry_context.get("retrieval_error_start_index", 0))
@@ -264,7 +238,7 @@ def make_validate_evidence_node(verbose: bool):
         )
 
         current_attempt_evidence_payload = slice_from_index(
-            safe_list(state.get("retrieved_evidence")),
+            retrieval.evidence_log,
             evidence_start_index,
         )
         parsed_evidence = _coerce_evidence_list(
@@ -279,7 +253,7 @@ def make_validate_evidence_node(verbose: bool):
         current_attempt_retrieval_errors = [
             str(error)
             for error in slice_from_index(
-                safe_list(state.get("retrieval_errors")),
+                debug.retrieval_errors,
                 retrieval_error_start_index,
             )
             if str(error).strip()
@@ -287,14 +261,14 @@ def make_validate_evidence_node(verbose: bool):
         current_attempt_retrieval_diagnostics = [
             item
             for item in slice_from_index(
-                safe_list(state.get("retrieval_diagnostics")),
+                debug.retrieval_diagnostics,
                 retrieval_diagnostic_start_index,
             )
-            if isinstance(item, dict)
+            if item is not None
         ]
 
         retrieval_required = bool(planner_output.use_retrieval and planner_output.tasks)
-        response_payload = _coerce_response_payload(state.get("response_payload"))
+        response_payload = response.payload
 
         evidence_by_route: dict[str, list[EvidenceItem]] = {"docs": [], "upload": [], "local": []}
         for item in parsed_evidence:
@@ -330,7 +304,7 @@ def make_validate_evidence_node(verbose: bool):
             if not route_items:
                 route_failures[route] = "no_evidence"
                 continue
-            route_query = _route_query_for_validation(route, route_diagnostics, state.get("user_input", ""))
+            route_query = _route_query_for_validation(route, route_diagnostics, runtime.user_input)
             if not _route_passes_validation(route, route_query, route_items):
                 route_failures[route] = "low_score"
 
@@ -411,13 +385,17 @@ def make_validate_evidence_node(verbose: bool):
                 retry_reason=retry_reason,
             )
 
-        updates: State = {
-            "needs_retry": needs_retry,
-            "retry_context": next_retry_context,
+        updates: GraphState = {
+            "retry": next_retry_context,
         }
         if retry_reason is not None and not needs_retry:
             if has_grounded_response_payload and response_payload is not None:
-                updates.update(_build_response_payload_updates(response_payload))
+                updates.update(
+                    _build_response_payload_updates(
+                        response_payload,
+                        attempt=response.synthesis_attempt,
+                    )
+                )
             elif retry_reason == "unsupported_claims" and valid_claims:
                 filtered_confidence = average_claim_confidence(valid_claims)
                 filtered_payload = render_payload_from_claims(
@@ -426,18 +404,35 @@ def make_validate_evidence_node(verbose: bool):
                     confidence=filtered_confidence,
                 )
                 filtered_payload.confidence = filtered_confidence
-                updates.update(_build_response_payload_updates(filtered_payload))
+                updates.update(
+                    _build_response_payload_updates(
+                        filtered_payload,
+                        attempt=response.synthesis_attempt,
+                    )
+                )
             elif retrieval_required and parsed_evidence:
                 grounded_payload = build_deterministic_grounded_payload(
                     evidence_items=parsed_evidence,
                     fallback_answer="",
                 )
-                updates.update(_build_response_payload_updates(grounded_payload))
+                updates.update(
+                    _build_response_payload_updates(
+                        grounded_payload,
+                        attempt=response.synthesis_attempt,
+                    )
+                )
             else:
                 followup_answer = build_followup_from_routes(planner_output, retry_reason)
-                updates.update(_build_followup_updates(followup_answer))
+                updates.update(
+                    _build_followup_updates(
+                        followup_answer,
+                        attempt=response.synthesis_attempt,
+                    )
+                )
         if local_errors:
-            updates["validation_errors"] = local_errors
-        return updates
+            updates["debug"] = debug.model_copy(
+                update={"validation_errors": [*debug.validation_errors, *local_errors]}
+            )
+        return normalize_state_updates(updates)
 
     return validate_evidence
