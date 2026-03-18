@@ -8,6 +8,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
+from ..contracts.debug import LLMCallMetadata, PlannerDiagnostic, RetrievalDiagnostic, TokenUsage
 from ..evidence import EvidenceItem
 from ..latency import LatencyBreakdownModel
 
@@ -57,49 +58,6 @@ class BenchmarkCase(BaseModel):
     require_local_citation: bool = False
     judge_rubric: str = ""
     weight_override: CaseWeightOverride | None = None
-
-
-class TokenUsage(BaseModel):
-    prompt_tokens: int = 0
-    completion_tokens: int = 0
-    total_tokens: int = 0
-
-
-class LLMCallMetadata(BaseModel):
-    stage: Literal["summarize", "planner", "synthesis"]
-    attempt: int = 0
-    path: Literal[
-        "direct",
-        "structured",
-        "plain_fallback",
-        "structured_compact_fallback",
-        "plain_summary_attach_fallback",
-    ]
-    response_metadata: dict[str, Any] = Field(default_factory=dict)
-    usage_metadata: dict[str, Any] = Field(default_factory=dict)
-
-
-class RetrievalDiagnostic(BaseModel):
-    tool: str = ""
-    route: str = ""
-    status: str = ""
-    message: str = ""
-    query: str = ""
-    attempt: int = 0
-
-
-class PlannerDiagnostic(BaseModel):
-    status: str = ""
-    reason: str | None = None
-    fallback_routes: list[str] = Field(default_factory=list)
-    intent_required: bool = False
-    required_routes: list[str] = Field(default_factory=list)
-    override_applied: bool = False
-    override_reason: Literal[
-        "missing_required_retrieval",
-        "missing_required_routes",
-        "upload_retriever_missing",
-    ] | None = None
 
 
 class ScoreWeights(BaseModel):
