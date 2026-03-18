@@ -9,6 +9,7 @@ from langchain_core.embeddings import Embeddings
 from langchain_core.messages import AIMessage, HumanMessage
 
 from src.agent_manager import AgentFlowManager
+from src.contracts.graph_state import ResponseState
 from src.settings import AppSettings
 from src.tools.local_rag import build_temp_retriever
 from src.web.routes import build_session_metadata_snapshot
@@ -30,11 +31,13 @@ class _CapturingGraph:
 
     def invoke(self, state: dict) -> dict:
         self.states.append(dict(state))
+        runtime = state["runtime"]
         return {
             "messages": [
-                HumanMessage(content=state["user_input"]),
+                HumanMessage(content=runtime.user_input),
                 AIMessage(content="ok"),
-            ]
+            ],
+            "response": ResponseState(final_answer="ok", payload={"answer": "ok", "claims": [], "evidence": [], "confidence": None}),
         }
 
 
@@ -105,7 +108,7 @@ class UploadSessionIsolationTest(unittest.TestCase):
 
         self.assertEqual(handle_one.cleanup_calls, 1)
         self.assertIs(manager.upload_retriever_handle, handle_two)
-        self.assertIs(graph.states[-1]["retriever"], handle_two.retriever)
+        self.assertIs(graph.states[-1]["runtime"].retriever, handle_two.retriever)
 
     @patch("src.agent_manager.build_temp_retriever")
     def test_agent_manager_cleans_handle_when_upload_removed(self, mock_build_temp_retriever) -> None:
@@ -119,7 +122,7 @@ class UploadSessionIsolationTest(unittest.TestCase):
 
         self.assertEqual(handle.cleanup_calls, 1)
         self.assertIsNone(manager.upload_retriever_handle)
-        self.assertNotIn("retriever", graph.states[-1])
+        self.assertIsNone(graph.states[-1]["runtime"].retriever)
 
     @patch("src.agent_manager.build_temp_retriever")
     def test_agent_manager_cleans_handle_on_exit(self, mock_build_temp_retriever) -> None:
@@ -163,7 +166,7 @@ class UploadSessionIsolationTest(unittest.TestCase):
         manager.run_agent_flow("send this to slack")
 
         self.assertEqual(
-            graph.states[-1]["session_metadata"]["slack_destination"]["channel_id"],
+            graph.states[-1]["runtime"].session_metadata["slack_destination"]["channel_id"],
             "C123BENCH",
         )
 
@@ -188,7 +191,7 @@ class UploadSessionIsolationTest(unittest.TestCase):
         manager.run_agent_flow("share this to slack")
 
         self.assertEqual(
-            graph.states[-1]["session_metadata"]["slack_destination"]["channel_id"],
+            graph.states[-1]["runtime"].session_metadata["slack_destination"]["channel_id"],
             "C123BENCH",
         )
 
@@ -202,7 +205,7 @@ class UploadSessionIsolationTest(unittest.TestCase):
         )
         manager.run_agent_flow("share this to slack")
 
-        self.assertIsNone(graph.states[-1]["session_metadata"]["slack_destination"])
+        self.assertIsNone(graph.states[-1]["runtime"].session_metadata["slack_destination"])
         self.assertFalse(any(message.__class__.__name__ == "SystemMessage" for message in manager.messages))
 
 
