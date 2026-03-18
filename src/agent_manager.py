@@ -207,6 +207,26 @@ class AgentFlowManager:
 
         return normalized
 
+    @staticmethod
+    def _build_fallback_llm_call_from_ai_message(
+        message: AIMessage,
+        *,
+        attempt: int,
+    ) -> dict[str, Any] | None:
+        response_metadata = getattr(message, "response_metadata", None)
+        usage_metadata = getattr(message, "usage_metadata", None)
+        has_response_metadata = isinstance(response_metadata, dict) and bool(response_metadata)
+        has_usage_metadata = isinstance(usage_metadata, dict) and bool(usage_metadata)
+        if not has_response_metadata and not has_usage_metadata:
+            return None
+        return {
+            "stage": "synthesis",
+            "attempt": max(0, int(attempt)),
+            "path": "direct",
+            "response_metadata": dict(response_metadata) if has_response_metadata else {},
+            "usage_metadata": dict(usage_metadata) if has_usage_metadata else {},
+        }
+
     @classmethod
     def _summarize_llm_calls(
         cls,
@@ -482,7 +502,6 @@ class AgentFlowManager:
         tool_calls: list[str] = []
         debug_errors: list[str] = []
         llm_calls = self._normalize_llm_calls(response.get("llm_calls"))
-        token_usage, model_name, models_used = self._summarize_llm_calls(llm_calls)
         planner_errors = [
             str(error).strip()
             for error in safe_list(response.get("planner_errors"))
@@ -514,6 +533,24 @@ class AgentFlowManager:
             if current_turn_start_index >= 0
             else updated_messages
         )
+
+        if not llm_calls:
+            fallback_llm_calls = [
+                item
+                for item in (
+                    self._build_fallback_llm_call_from_ai_message(
+                        message,
+                        attempt=int(response.get("synthesis_attempt", 0) or 0),
+                    )
+                    for message in current_turn_messages
+                    if isinstance(message, AIMessage)
+                )
+                if item is not None
+            ]
+            if fallback_llm_calls:
+                llm_calls = fallback_llm_calls
+
+        token_usage, model_name, models_used = self._summarize_llm_calls(llm_calls)
 
         for message in current_turn_messages:
             if isinstance(message, AIMessage):

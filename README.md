@@ -1,7 +1,7 @@
 # DocuMate
 > 공식 문서 검색, 로컬 노트북 RAG, 업로드 파일 검색, 멀티턴 세션 메모리를 결합한 LangGraph 기반 학습 보조 에이전트
 
-이 저장소는 2025년 부트캠프 팀 결과물을 바탕으로 현재 런타임 구조와 평가 체계를 분리해 유지보수 중인 개인 리팩터링 버전입니다. 현재 코드는 `src/graph_builder.py`, `src/make_graph.py`, `src/llm.py`, `src/nodes/*` 중심으로 재편되어 있으며, README는 그 구조를 기준 문서로 유지합니다.
+이 저장소는 2025년 부트캠프 팀 결과물을 바탕으로 현재 런타임 구조와 평가 체계를 분리해 유지보수 중인 개인 리팩터링 버전입니다. 현재 기준 문서는 `src/graph_builder.py`, `src/make_graph.py`, `src/llm.py`, `src/nodes/*`, `src/tools/*`, `src/web/*`의 실제 동작을 따릅니다.
 
 - [벤치마크 상세](docs/benchmarking.md)
 - [변경 이력](CHANGELOG.md)
@@ -12,13 +12,15 @@
 | 기능 | 설명 |
 |---|---|
 | 멀티턴 세션 메모리 | 세션별 메시지 히스토리와 요약 메모리를 유지하고, FastAPI 레이어에서 TTL + LRU 캐시로 세션을 관리합니다. |
-| 공식 문서 검색 | `tavily_search`가 `src/domain_docs.py`에 정의된 공식 문서 도메인 집합을 기본 화이트리스트로 사용합니다. |
+| 공식 문서 검색 | `tavily_search`는 `src/tools/docs_search.py`의 도메인 + 경로 prefix allowlist만 통과시키며, `train_test_split`, `groupby`, `broadcasting` 같은 심볼 기반 query hint와 fallback query로 공식 문서 검색을 보정합니다. |
 | 로컬 노트북 RAG | `src/rag_build.py`가 `data/`와 `uploads/` 아래 `.ipynb`를 증분 인덱싱하고, `rag_search`가 `data/index`를 조회합니다. |
 | 업로드 파일 검색 | 현재 세션의 업로드 파일 `.py`, `.ipynb`에 대해 임시 Chroma retriever를 구성하고 `upload_search`로 조회합니다. |
-| 구조화된 evidence 응답 | `/agent`는 `response.answer`와 `response.evidence[]`를 반환하고, `debug.observed_evidence`와 함께 평가에 사용됩니다. |
-| evidence 검증 후 재시도 | evidence가 없거나 점수가 낮으면 planner -> retrieval -> synthesis 흐름을 최대 1회 재시도하고, 실패 시 불확실성 응답을 반환합니다. |
+| 경로별 evidence 검증 | `src/nodes/validation.py`는 `docs`, `upload`, `local` 경로별로 evidence를 검증합니다. `docs`는 점수 또는 lexical match를, `upload`와 `local`은 식별자/키워드 일치 여부를 함께 사용합니다. |
+| 선택적 재시도 | 자동 retrieval 재시도는 `docs` 단독 요청 또는 `docs + upload` 혼합 요청에서 `docs`만 실패한 경우에만 수행합니다. 혼합 요청 재시도 시 성공한 upload evidence와 진단 정보는 내부적으로 보존해 재사용합니다. |
+| 결정적 grounded 응답 | 업로드 중심 요청에서 primary evidence가 1~2개면 `src/nodes/synthesis.py`가 LLM을 거치지 않고 `deterministic_grounded_direct` 경로로 grounded payload를 바로 생성합니다. |
+| 구조화된 API/디버그 응답 | `/agent`는 `response.answer`, `response.claims`, `response.evidence`, `response.confidence`를 반환하고, `debug.retrieval_diagnostics`, `debug.planner_diagnostics`, `debug.retry_context`, `debug.latency_breakdown`으로 내부 동작을 노출합니다. |
 | 후처리 도구 | 사용자가 요청하면 `save_text`로 답변을 `.txt` 파일로 저장하고 `slack_notify`로 Slack DM 또는 채널 전송을 수행합니다. |
-| UTF-8 안전 실행 | `src/runtime_encoding.py`, `src.cli.py`, `src.service_manager.py`가 UTF-8 모드 재실행과 표준 입출력 재설정을 처리합니다. |
+| UTF-8 안전 실행 | `src/runtime_encoding.py`, `src/cli.py`, `src/service_manager.py`가 UTF-8 모드 재실행과 표준 입출력 재설정을 처리합니다. |
 
 ## 2. 현재 아키텍처
 
@@ -26,6 +28,7 @@
 - `src/service_manager.py`: FastAPI/Streamlit 백그라운드 서비스 시작, 중지
 - `src/web/app.py`: lifespan, middleware, router 조립을 담당하는 FastAPI 앱
 - `src/web/routes.py`: `/agent`, `/download/{filename}` 라우터
+- `src/web/schemas.py`: FastAPI 공개 요청/응답 스키마
 - `src/web/session_store.py`: 세션 TTL/LRU 캐시
 - `src/web/cleanup.py`: 업로드/생성 파일 cleanup, path validation
 - `src/web/streamlit_app.py`: 웹 UI
@@ -33,9 +36,12 @@
 - `src/graph_builder.py`: 설정, 도구 레지스트리, LLM 레지스트리, 각 노드 팩토리를 조립하는 진입점
 - `src/llm.py`: planner, synthesizer, summarizer 모델 레지스트리 구성
 - `src/make_graph.py`: LangGraph 노드, 라우터, edge를 정의하는 그래프 토폴로지
+- `src/latency.py`: stage/retrieval/synthesis latency 모델과 집계
+- `src/tools/docs_search.py`: 공식 문서 검색 allowlist, query hint, Tavily 호출
 - `src/nodes/session.py`: `add_user_message`, `summarize_old_messages`
 - `src/nodes/planner.py`: `planner`
 - `src/nodes/retrieval.py`: `retrieve_dispatch`
+- `src/nodes/retry.py`: retry context, retrieval feedback, selective retry 규칙
 - `src/nodes/synthesis.py`: `synthesize`
 - `src/nodes/validation.py`: `validate_evidence`
 - `src/nodes/actions.py`: `action_postprocess`
@@ -61,12 +67,12 @@ flowchart LR
 
 ## 3. 프로젝트 구조
 
+핵심 경로만 발췌하면 다음과 같습니다.
+
 ```text
 .
 ├── CHANGELOG.md
 ├── archive/
-│   ├── legacy_code/
-│   ├── team_docs/
 │   └── README.md
 ├── data/
 │   ├── benchmarks/
@@ -78,31 +84,37 @@ flowchart LR
 │   │   └── benchmark_history.svg
 │   └── benchmarking.md
 ├── output/
-│   ├── runtime/                   # 런타임 로그 및 서비스 상태 파일(기본 git 제외)
-│   ├── benchmarks/                # 온라인 벤치마크 산출물(기본 git 제외)
-│   └── save_text/                 # save_text 결과물(기본 git 제외)
+│   ├── benchmarks/                # 온라인 벤치마크 산출물
+│   ├── runtime/                   # 런타임 로그 및 서비스 상태 파일
+│   └── save_text/                 # save_text 결과물
 ├── script/
 │   └── check_encoding.py
 ├── src/
-│   ├── cli.py
 │   ├── agent_manager.py
-│   ├── domain_docs.py
+│   ├── answer_schema.py
+│   ├── cli.py
 │   ├── evidence.py
 │   ├── graph_builder.py
+│   ├── latency.py
 │   ├── llm.py
 │   ├── make_graph.py
 │   ├── planner_schema.py
-│   ├── prompts.py
 │   ├── rag_build.py
-│   ├── runtime_encoding.py
-│   ├── runtime_paths.py
 │   ├── service_manager.py
 │   ├── settings.py
-│   ├── slack_utils.py
 │   ├── tools/
-│   ├── eval/
+│   │   └── docs_search.py
 │   ├── nodes/
+│   │   ├── planner.py
+│   │   ├── retrieval.py
+│   │   ├── retry.py
+│   │   ├── synthesis.py
+│   │   ├── validation.py
+│   │   └── state.py
 │   └── web/
+│       ├── app.py
+│       ├── routes.py
+│       └── schemas.py
 ├── tests/
 │   ├── core/
 │   ├── eval/
@@ -180,16 +192,21 @@ uv run python -X utf8 -m streamlit run src/web/streamlit_app.py --server.port 85
 
 ## 5. 환경변수
 
+### 5.1 런타임 설정
+
+`src/settings.py` 기준 기본값입니다.
+
 | 이름 | 기본값 | 설명 |
 |---|---|---|
 | `OPENAI_API_KEY` | 없음 | OpenAI 호출에 필요 |
 | `TAVILY_API_KEY` | 없음 | Tavily 검색에 필요 |
 | `CHAT_MODEL` | `gpt-5-mini` | synthesis 모델 |
-| `PLANNER_MODEL` | `gpt-5-nano` | planner 모델 |
+| `PLANNER_MODEL` | `gpt-5-mini` | planner 모델 |
 | `SUMMARY_MODEL` | `gpt-5-mini` | 요약 모델 |
-| `DOCS_SEARCH_TIMEOUT_SECONDS` | `8` | Tavily docs retrieval fail-fast timeout(초) |
-| `SYNTHESIS_TIMEOUT_SECONDS` | `8` | synthesizer timeout(초) |
-| `SYNTHESIS_MAX_RETRIES` | `1` | synthesizer 재시도 횟수 |
+| `PLANNER_MAX_TOKENS` | `1200` | planner structured output 최대 토큰 |
+| `DOCS_SEARCH_TIMEOUT_SECONDS` | `8` | Tavily docs retrieval timeout(초) |
+| `SYNTHESIS_TIMEOUT_SECONDS` | `12` | synthesizer timeout(초) |
+| `SYNTHESIS_MAX_RETRIES` | `0` | LLM synthesis 내부 재시도 횟수. validator 기반 retrieval 재시도와는 별개입니다. |
 | `SYNTHESIS_MAX_TOKENS` | `900` | synthesizer max_tokens |
 | `VERBOSE` | `true` | CLI 및 내부 로깅 상세도 |
 | `FASTAPI_URL` | `http://localhost:8000` | Streamlit에서 사용할 API 주소 |
@@ -201,7 +218,14 @@ uv run python -X utf8 -m streamlit run src/web/streamlit_app.py --server.port 85
 | `SLACK_BOT_TOKEN` | 없음 | Slack 전송용 토큰 |
 | `SLACK_DEFAULT_USER_ID` | 없음 | 기본 DM 대상 |
 | `SLACK_DEFAULT_DM_EMAIL` | 없음 | 기본 DM 이메일 |
-| `JUDGE_MODEL` | `gpt-5-mini` | 벤치마크 judge 모델 |
+
+### 5.2 벤치마크 / Eval 설정
+
+`.env.example`와 `src.eval.main.py` 기준 기본값입니다.
+
+| 이름 | 기본값 | 설명 |
+|---|---|---|
+| `JUDGE_MODEL` | `gpt-5-mini` | 온라인 벤치마크 judge 모델 |
 | `BENCHMARK_ENDPOINT` | `http://localhost:8000` | 벤치마크 기본 대상 |
 | `BENCHMARK_JUDGE_ENABLED` | `true` | judge 사용 여부 |
 
@@ -213,7 +237,7 @@ uv run python -X utf8 -m streamlit run src/web/streamlit_app.py --server.port 85
 - `save_text`가 생성한 파일은 `output/save_text/*.txt`에 저장됩니다.
 - 업로드 디렉터리는 `SESSION_TTL_SECONDS`, 생성 파일은 `GENERATED_FILE_TTL_SECONDS` 기준으로 자동 정리됩니다.
 - 만료된 저장 파일은 `/download/{filename}` 요청 시 `404 Not Found`가 반환될 수 있습니다.
-- `output/`와 `graph` 덤프는 런타임 산출물로 취급하며 기본적으로 git 추적 대상에서 제외합니다.
+- `output/`와 graph dump는 런타임 산출물로 취급하며 기본적으로 git 추적 대상에서 제외합니다.
 
 ## 7. API 계약
 
@@ -223,9 +247,9 @@ uv run python -X utf8 -m streamlit run src/web/streamlit_app.py --server.port 85
 
 ```json
 {
-  "query": "NumPy broadcasting을 간단히 설명해줘",
+  "query": "업로드한 파일에서 groupby가 어디 쓰였는지 보여줘",
   "session_id": "demo-session",
-  "upload_file_path": "uploads/demo-session/sample_pipeline.ipynb",
+  "upload_file_path": "uploads/demo-session/sales_analysis.py",
   "include_debug": true,
   "slack_user_id": "U12345678",
   "slack_email": "user@example.com",
@@ -233,6 +257,7 @@ uv run python -X utf8 -m streamlit run src/web/streamlit_app.py --server.port 85
 }
 ```
 
+- `upload_file_path`는 현재 `session_id` 기준으로 검증되며 `uploads/<session_id>/...` 범위를 벗어날 수 없습니다.
 - `slack_user_id`, `slack_email`, `slack_channel_id`는 세션 메시지 히스토리가 아니라 세션 메타데이터 스냅샷을 갱신합니다.
 - 각 요청은 Slack 목적지의 전체 스냅샷으로 처리됩니다. 필드를 생략하거나 `null`로 보내면 기존 세션 Slack 목적지는 제거됩니다.
 
@@ -241,103 +266,84 @@ uv run python -X utf8 -m streamlit run src/web/streamlit_app.py --server.port 85
 ```json
 {
   "response": {
-    "answer": "NumPy broadcasting은 서로 다른 shape의 배열 연산을 가능하게 하는 규칙입니다.",
+    "answer": "grouped = all_sales.groupby(\"region\")[\"amount\"].sum() [1]",
+    "claims": [
+      {
+        "text": "grouped = all_sales.groupby(\"region\")[\"amount\"].sum()",
+        "evidence_ids": [
+          "path:uploads/demo-session/sales_analysis.py#chunk=0;start=0;end=48"
+        ],
+        "confidence": 0.42
+      }
+    ],
     "evidence": [
       {
-        "kind": "official",
-        "tool": "tavily_search",
-        "source_id": "url:https://numpy.org/doc/stable/user/basics.broadcasting.html",
-        "url_or_path": "https://numpy.org/doc/stable/user/basics.broadcasting.html",
-        "title": "Broadcasting",
-        "snippet": "Broadcasting provides a means of vectorizing array operations...",
-        "score": 0.98
+        "kind": "local",
+        "tool": "upload_search",
+        "source_id": "path:uploads/demo-session/sales_analysis.py#chunk=0;start=0;end=48",
+        "document_id": "path:uploads/demo-session/sales_analysis.py",
+        "url_or_path": "uploads/demo-session/sales_analysis.py",
+        "snippet": "grouped = all_sales.groupby(\"region\")[\"amount\"].sum()",
+        "score": 0.42,
+        "chunk_id": 0,
+        "start_offset": 0,
+        "end_offset": 48
       }
-    ]
+    ],
+    "confidence": 0.42
   },
   "trace": "Session ID: demo-session, Request ID: abcd1234, Agent ID: 12345678",
-  "file_path": "output/save_text/response_20260306_103000.txt",
+  "file_path": null,
   "debug": {
-    "tool_calls": ["tavily_search", "save_text"],
-    "tool_call_count": 2,
-    "latency_ms_server": 1842,
+    "tool_calls": ["upload_search"],
+    "tool_call_count": 1,
+    "latency_ms_server": 120,
     "latency_breakdown": {
-      "server_total_ms": 1842,
-      "graph_total_ms": 1765,
-      "upload_retriever_build_ms": null,
+      "server_total_ms": 120,
+      "graph_total_ms": 90,
+      "upload_retriever_build_ms": 18,
       "stage_totals_ms": {
         "summarize_ms": 0,
-        "planner_ms": 34,
-        "retrieval_total_ms": 911,
-        "synthesis_total_ms": 702,
-        "validation_ms": 81,
-        "action_postprocess_ms": 37
+        "planner_ms": 5,
+        "retrieval_total_ms": 40,
+        "synthesis_total_ms": 12,
+        "validation_ms": 20,
+        "action_postprocess_ms": 13
       },
       "stage_attempts": [
-        {"stage": "planner", "attempt": 1, "latency_ms": 34, "status": "llm"},
-        {"stage": "retrieval", "attempt": 1, "latency_ms": 911, "status": "success"}
+        {"stage": "planner", "attempt": 1, "latency_ms": 5, "status": "deterministic"},
+        {"stage": "retrieval", "attempt": 1, "latency_ms": 40, "status": "success"},
+        {"stage": "synthesis", "attempt": 1, "latency_ms": 12, "status": "deterministic_grounded_direct"}
       ],
       "retrieval_routes": [
-        {"route": "docs", "tool": "tavily_search", "attempt": 1, "latency_ms": 884, "status": "success"}
+        {"route": "upload", "tool": "upload_search", "attempt": 1, "latency_ms": 40, "status": "success"}
       ],
       "synthesis_attempts": [
-        {"attempt": 1, "mode": "structured_only", "structured_ms": 702, "fallback_ms": null, "total_ms": 702}
+        {"attempt": 1, "mode": "deterministic_grounded_direct", "structured_ms": 0, "fallback_ms": null, "total_ms": 12}
       ]
     },
     "token_usage": {
-      "prompt_tokens": 642,
-      "completion_tokens": 153,
-      "total_tokens": 795
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "total_tokens": 0
     },
-    "model_name": "gpt-5-mini",
-    "models_used": ["gpt-5-nano", "gpt-5-mini"],
-    "llm_calls": [
-      {
-        "stage": "planner",
-        "attempt": 1,
-        "path": "structured",
-        "response_metadata": {
-          "model_name": "gpt-5-nano",
-          "token_usage": {
-            "prompt_tokens": 118,
-            "completion_tokens": 21,
-            "total_tokens": 139
-          }
-        },
-        "usage_metadata": {
-          "input_tokens": 118,
-          "output_tokens": 21,
-          "total_tokens": 139
-        }
-      },
-      {
-        "stage": "synthesis",
-        "attempt": 1,
-        "path": "structured",
-        "response_metadata": {
-          "model_name": "gpt-5-mini",
-          "token_usage": {
-            "prompt_tokens": 524,
-            "completion_tokens": 132,
-            "total_tokens": 656
-          }
-        },
-        "usage_metadata": {
-          "input_tokens": 524,
-          "output_tokens": 132,
-          "total_tokens": 656
-        }
-      }
-    ],
+    "model_name": null,
+    "models_used": [],
+    "llm_calls": [],
     "errors": [],
+    "planner_errors": [],
     "observed_evidence": [
       {
-        "kind": "official",
-        "tool": "tavily_search",
-        "source_id": "url:https://numpy.org/doc/stable/user/basics.broadcasting.html",
-        "url_or_path": "https://numpy.org/doc/stable/user/basics.broadcasting.html",
-        "title": "Broadcasting",
-        "snippet": "Broadcasting provides a means of vectorizing array operations...",
-        "score": 0.98
+        "kind": "local",
+        "tool": "upload_search",
+        "source_id": "path:uploads/demo-session/sales_analysis.py#chunk=0;start=0;end=48",
+        "document_id": "path:uploads/demo-session/sales_analysis.py",
+        "url_or_path": "uploads/demo-session/sales_analysis.py",
+        "snippet": "grouped = all_sales.groupby(\"region\")[\"amount\"].sum()",
+        "score": 0.42,
+        "chunk_id": 0,
+        "start_offset": 0,
+        "end_offset": 48
       }
     ],
     "retry_context": {
@@ -347,37 +353,60 @@ uv run python -X utf8 -m streamlit run src/web/streamlit_app.py --server.port 85
       "retrieval_feedback": null,
       "evidence_start_index": 0,
       "retrieval_error_start_index": 0,
+      "retrieval_diagnostic_start_index": 0,
       "score_avg": null
+    },
+    "retrieval_diagnostics": [
+      {
+        "tool": "upload_search",
+        "route": "upload",
+        "status": "success",
+        "message": "",
+        "query": "groupby",
+        "attempt": 1
+      }
+    ],
+    "planner_diagnostics": {
+      "status": "deterministic",
+      "reason": null,
+      "fallback_routes": [],
+      "intent_required": true,
+      "required_routes": ["upload"],
+      "override_applied": false,
+      "override_reason": null
     }
   }
 }
 ```
 
-- `debug.model_name`은 최종 응답을 생성한 synthesis 모델입니다.
-- `debug.models_used`, `debug.llm_calls`는 요청 1회 동안의 전체 LLM 호출 기록입니다.
+- `response.claims[]`는 sentence-level grounded claim이며 각 claim은 정확한 `evidence_ids`를 가집니다.
+- `response.confidence`는 현재 claim confidence 평균 또는 grounded fallback confidence입니다.
+- `debug.retrieval_diagnostics[]`는 경로별 tool, route, status, query, attempt를 담습니다.
+- `debug.planner_diagnostics`는 deterministic/fallback planning 상태와 route override 여부를 담습니다.
+- `debug.retry_context`는 공개 가능한 retry 메타데이터만 포함합니다. 내부 보존 상태인 `failed_routes`, `preserved_evidence`, `preserved_retrieval_diagnostics`는 외부 스키마에 노출하지 않습니다.
+- `debug.latency_breakdown.synthesis_attempts[].mode`는 `structured_only`, `timeout_grounded_fallback`, `structured_error_plain_fallback`, `compact_structured_fallback`, `plain_summary_attach_fallback`, `deterministic_grounded_fallback`, `deterministic_grounded_direct` 중 하나입니다.
+- 구조화된 `llm_calls`가 비어 있어도 현재 턴 `AIMessage.response_metadata` 또는 `usage_metadata`가 있으면 `debug.llm_calls`에 `path="direct"` 형태로 보강될 수 있습니다.
 
 ### 7.2 `GET /download/{filename}`
 
 - `save_text` 결과 파일 다운로드용 엔드포인트입니다.
 - 절대 경로나 상위 디렉터리 탈출 경로는 거부됩니다.
 
-## 8. 검증 현황
+## 8. 검증 및 벤치마크 운영
 
-- 테스트: `./.venv/Scripts/python.exe -m pytest` 기준 현재 저장소에서 `117 passed`
-- 인코딩 검사: `uv run python script/check_encoding.py` 기준 `Encoding check passed. Checked 82 tracked text files.`
-- 온라인 벤치마크: 상세 명령, 최신 저장 런 요약, Hard Gate, 추세는 [docs/benchmarking.md](docs/benchmarking.md)에서 관리합니다.
-- 최신 저장 런 기준 일부 Hard Gate는 아직 미통과 상태입니다.
-
-## 9. 테스트 및 검증
+기본 로컬 검증:
 
 ```bash
 uv run pytest -q
 uv run python script/check_encoding.py
 ```
 
-벤치마크 생성, 실행, 리포트 재생성, 이력 확인 명령은 [docs/benchmarking.md](docs/benchmarking.md)에서 별도로 정리합니다.
+- 최신 저장된 벤치마크 run id는 `output/benchmarks/latest_run.txt`를 source of truth로 봅니다.
+- 기계 판독용 요약은 `output/benchmarks/<run_id>/summary.json`, 사람용 해석은 `output/benchmarks/<run_id>/report.md`를 사용합니다.
+- 현재 저장소의 최신 저장 런 기준으로는 `pass_rate` Hard Gate만 미통과이며, 나머지 Hard Gate는 통과 상태입니다.
+- 벤치마크 생성, 실행, 리포트 재생성, 이력 갱신 명령은 [docs/benchmarking.md](docs/benchmarking.md)에서 별도로 관리합니다.
 
-## 10. 인코딩 정책
+## 9. 인코딩 정책
 
 - 텍스트 파일 기본 인코딩은 UTF-8 no BOM입니다.
 - `.editorconfig`는 `charset = utf-8`을 기본값으로 사용합니다.
@@ -390,7 +419,7 @@ uv run python script/check_encoding.py
 uv run python -X utf8 -c "import sys, locale; print(sys.flags.utf8_mode, sys.stdout.encoding, locale.getpreferredencoding(False))"
 ```
 
-## 11. 참고 링크
+## 10. 참고 링크
 
 - LangChain: https://docs.langchain.com/oss/python/langchain/overview
 - Streamlit: https://docs.streamlit.io/
