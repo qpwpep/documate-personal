@@ -3,10 +3,10 @@ import unittest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from src.make_graph import build_graph
+from src.contracts.graph_state import GraphState, PlannerState, ResponseState, build_graph_state_input, response_state, retrieval_state
 from src.nodes.planner import make_planner_node
 from src.nodes.retrieval import make_retrieve_dispatch_node
 from src.nodes.session import add_user_message
-from src.nodes.state import State
 from src.nodes.validation import make_validate_evidence_node
 from src.planner_schema import PlannerOutput
 
@@ -27,25 +27,23 @@ class GraphRoutingTest(unittest.TestCase):
             return state
 
         graph = build_graph(
-            state_type=State,
+            state_type=GraphState,
             add_user_node=add_user_message,
             summarize_node=_summarize,
-            planner_node=lambda state: {"planner_output": PlannerOutput(use_retrieval=False, tasks=[])},
+            planner_node=lambda state: {"planner": PlannerState(output=PlannerOutput(use_retrieval=False, tasks=[]))},
             retrieve_dispatch_node=lambda state: self.fail("retrieve_dispatch should not run"),
             synthesize_node=lambda state: {
                 "messages": [AIMessage(content="final answer")],
-                "final_answer": "final answer",
-                "synthesis_attempt": 1,
-                "needs_retry": False,
+                "response": ResponseState(final_answer="final answer", synthesis_attempt=1),
             },
             validate_evidence_node=make_validate_evidence_node(verbose=False),
             action_postprocess_node=lambda state: {},
             summary_max_turns=6,
         )
 
-        result = graph.invoke({"user_input": "question", "messages": []})
+        result = graph.invoke(build_graph_state_input(user_input="question", messages=[]))
         self.assertEqual(summary_calls["count"], 0)
-        self.assertEqual(result.get("final_answer"), "final answer")
+        self.assertEqual(result["response"].final_answer, "final answer")
 
     def test_long_conversation_runs_summary_node(self) -> None:
         summary_calls = {"count": 0}
@@ -59,49 +57,45 @@ class GraphRoutingTest(unittest.TestCase):
             return state
 
         graph = build_graph(
-            state_type=State,
+            state_type=GraphState,
             add_user_node=add_user_message,
             summarize_node=_summarize,
-            planner_node=lambda state: {"planner_output": PlannerOutput(use_retrieval=False, tasks=[])},
+            planner_node=lambda state: {"planner": PlannerState(output=PlannerOutput(use_retrieval=False, tasks=[]))},
             retrieve_dispatch_node=lambda state: self.fail("retrieve_dispatch should not run"),
             synthesize_node=lambda state: {
                 "messages": [AIMessage(content="final answer")],
-                "final_answer": "final answer",
-                "synthesis_attempt": 1,
-                "needs_retry": False,
+                "response": ResponseState(final_answer="final answer", synthesis_attempt=1),
             },
             validate_evidence_node=make_validate_evidence_node(verbose=False),
             action_postprocess_node=lambda state: {},
             summary_max_turns=6,
         )
 
-        result = graph.invoke({"user_input": "question", "messages": long_history})
+        result = graph.invoke(build_graph_state_input(user_input="question", messages=long_history))
         self.assertEqual(summary_calls["count"], 1)
-        self.assertEqual(result.get("final_answer"), "final answer")
+        self.assertEqual(result["response"].final_answer, "final answer")
 
     def test_planner_skips_retrieval_dispatch_when_not_required(self) -> None:
         dispatch_calls = {"count": 0}
 
         graph = build_graph(
-            state_type=State,
+            state_type=GraphState,
             add_user_node=add_user_message,
             summarize_node=lambda state: state,
-            planner_node=lambda state: {"planner_output": PlannerOutput(use_retrieval=False, tasks=[])},
+            planner_node=lambda state: {"planner": PlannerState(output=PlannerOutput(use_retrieval=False, tasks=[]))},
             retrieve_dispatch_node=lambda state: dispatch_calls.__setitem__("count", dispatch_calls["count"] + 1),
             synthesize_node=lambda state: {
                 "messages": [AIMessage(content="final answer")],
-                "final_answer": "final answer",
-                "synthesis_attempt": 1,
-                "needs_retry": False,
+                "response": ResponseState(final_answer="final answer", synthesis_attempt=1),
             },
             validate_evidence_node=make_validate_evidence_node(verbose=False),
             action_postprocess_node=lambda state: {},
             summary_max_turns=6,
         )
 
-        result = graph.invoke({"user_input": "question", "messages": []})
+        result = graph.invoke(build_graph_state_input(user_input="question", messages=[]))
         self.assertEqual(dispatch_calls["count"], 0)
-        self.assertEqual(result.get("final_answer"), "final answer")
+        self.assertEqual(result["response"].final_answer, "final answer")
 
     def test_graph_uses_deterministic_docs_route_before_planner_llm(self) -> None:
         docs_calls = {"count": 0}
@@ -129,7 +123,7 @@ class GraphRoutingTest(unittest.TestCase):
             )
 
         graph = build_graph(
-            state_type=State,
+            state_type=GraphState,
             add_user_node=add_user_message,
             summarize_node=lambda state: state,
             planner_node=make_planner_node(capture_planner, verbose=False),
@@ -141,16 +135,19 @@ class GraphRoutingTest(unittest.TestCase):
             ),
             synthesize_node=lambda state: {
                 "messages": [AIMessage(content="final answer")],
-                "final_answer": "final answer",
-                "synthesis_attempt": 1,
-                "needs_retry": False,
+                "response": ResponseState(final_answer="final answer", synthesis_attempt=1),
             },
             validate_evidence_node=make_validate_evidence_node(verbose=False),
             action_postprocess_node=lambda state: {},
             summary_max_turns=6,
         )
 
-        result = graph.invoke({"user_input": "Explain FastAPI response_model from official docs.", "messages": []})
+        result = graph.invoke(
+            build_graph_state_input(
+                user_input="Explain FastAPI response_model from official docs.",
+                messages=[],
+            )
+        )
         self.assertEqual(capture_planner.call_count, 0)
         self.assertEqual(docs_calls["count"], 1)
         self.assertTrue(
@@ -204,40 +201,34 @@ class GraphRoutingTest(unittest.TestCase):
         def _synthesize(state):
             synth_calls["count"] += 1
             answer = f"answer-{synth_calls['count']}"
+            attempt = response_state(state).synthesis_attempt + 1
             if synth_calls["count"] == 1:
                 return {
                     "messages": [AIMessage(content=answer)],
-                    "final_answer": answer,
-                    "response_payload": {
-                        "answer": answer,
-                        "claims": [],
-                        "evidence": [],
-                        "confidence": None,
-                    },
-                    "synthesis_attempt": int(state.get("synthesis_attempt", 0)) + 1,
-                    "needs_retry": False,
+                    "response": ResponseState(final_answer=answer, synthesis_attempt=attempt),
                 }
             return {
                 "messages": [AIMessage(content=f"{answer} [1]")],
-                "final_answer": f"{answer} [1]",
-                "response_payload": {
-                    "answer": f"{answer} [1]",
-                    "claims": [
-                        {
-                            "text": answer,
-                            "evidence_ids": ["url:https://numpy.org/doc/stable/"],
-                            "confidence": 0.92,
-                        }
-                    ],
-                    "evidence": state.get("retrieved_evidence", []),
-                    "confidence": 0.92,
-                },
-                "synthesis_attempt": int(state.get("synthesis_attempt", 0)) + 1,
-                "needs_retry": False,
+                "response": ResponseState(
+                    final_answer=f"{answer} [1]",
+                    payload={
+                        "answer": f"{answer} [1]",
+                        "claims": [
+                            {
+                                "text": answer,
+                                "evidence_ids": ["url:https://numpy.org/doc/stable/"],
+                                "confidence": 0.92,
+                            }
+                        ],
+                        "evidence": retrieval_state(state).evidence_log,
+                        "confidence": 0.92,
+                    },
+                    synthesis_attempt=attempt,
+                ),
             }
 
         graph = build_graph(
-            state_type=State,
+            state_type=GraphState,
             add_user_node=add_user_message,
             summarize_node=lambda state: state,
             planner_node=planner_node,
@@ -248,11 +239,16 @@ class GraphRoutingTest(unittest.TestCase):
             summary_max_turns=6,
         )
 
-        result = graph.invoke({"user_input": "Explain NumPy broadcasting from official docs.", "messages": []})
+        result = graph.invoke(
+            build_graph_state_input(
+                user_input="Explain NumPy broadcasting from official docs.",
+                messages=[],
+            )
+        )
         self.assertEqual(capture_planner.call_count, 0)
         self.assertEqual(docs_calls["count"], 2)
         self.assertEqual(synth_calls["count"], 2)
-        self.assertEqual(result.get("final_answer"), "answer-2 [1]")
+        self.assertEqual(result["response"].final_answer, "answer-2 [1]")
 
 
 if __name__ == "__main__":

@@ -2,10 +2,32 @@ from __future__ import annotations
 
 import logging
 import re
+from functools import lru_cache
 from typing import Any
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 
+from ..contracts.debug import (
+    DEFAULT_MAX_RETRIES,
+    LLMCallMetadata,
+    PlannerDiagnostic,
+    PlannerOverrideReason,
+    PlannerStatus,
+    RetryState,
+    build_llm_call_metadata,
+    empty_planner_diagnostic,
+)
+from ..contracts.graph_state import (
+    GraphState,
+    PlannerState,
+    coerce_planner_output,
+    debug_state,
+    normalize_state_updates,
+    retrieval_state,
+    retry_state,
+    runtime_state,
+)
+from ..contracts.routes import ROUTE_ORDER
 from ..logging_utils import log_event
 from ..planner_schema import PlannerOutput, RetrievalTask
 from ..prompts import (
@@ -16,22 +38,10 @@ from ..prompts import (
     needs_search,
     needs_slack,
 )
+from ..rules import get_rules_config
 from .actions import is_action_only_request
 from .retry import build_missing_upload_followup, format_retry_context_for_planner
 from .session import keep_recent_messages
-from .state import (
-    DEFAULT_MAX_RETRIES,
-    LLMCallMetadata,
-    ROUTE_ORDER,
-    PlannerDiagnostic,
-    PlannerOverrideReason,
-    PlannerStatus,
-    RetryContext,
-    State,
-    build_llm_call_metadata,
-    coerce_retry_context,
-    safe_list,
-)
 
 
 PLANNER_SYS = (
@@ -53,69 +63,29 @@ PLANNER_SYS = (
 
 logger = logging.getLogger(__name__)
 
-_UPLOAD_KEYWORDS = (
-    "upload",
-    "uploaded",
-    "current file",
-    "current notebook",
-    "this file",
-    "this notebook",
-    ".ipynb",
-    ".py",
-    "\uc5c5\ub85c\ub4dc",
-    "\uc5c5\ub85c\ub4dc\ud55c",
-    "\ud604\uc7ac \ud30c\uc77c",
-    "\uc774 \ud30c\uc77c",
-    "\uc774 \ub178\ud2b8\ubd81",
-)
-_AUXILIARY_MARKERS = (
-    "\ucd94\uac00 \uc870\uac74",
-    "\ucd94\uac00 \uc9c0\uc2dc",
-    "\ubd80\uac00 \uc870\uac74",
-    "additional condition",
-    "additional instruction",
-    "extra condition",
-    "extra instruction",
-)
-_ACTION_CLAUSE_PATTERN = re.compile(
-    r"(?i)\b(save|export|write|download|slack|dm|channel|share|send)\b|\uc800\uc7a5|\uc2ac\ub799|\uacf5\uc720|\uc804\uc1a1|\ud14d\uc2a4\ud2b8\s*\ud30c\uc77c"
-)
-_DOCS_CLAUSE_PATTERN = re.compile(
-    r"(?i)\b(official|docs?|documentation|reference|manual|api|latest)\b|\uacf5\uc2dd|\ubb38\uc11c|\ub808\ud37c\ub7f0\uc2a4|\ucc38\uace0\s*\uc790\ub8cc|\ucd5c\uc2e0"
-)
-_COMPARE_CLAUSE_PATTERN = re.compile(
-    r"(?i)\b(compare|comparison|versus|vs\.?|along with|together)\b|\ube44\uad50|\ud568\uaed8|\uac19\uc774"
-)
-_TRAILING_DOCS_STOP_PHRASES = (
-    "\uacf5\uc2dd \ubb38\uc11c \uae30\uc900\uc73c\ub85c",
-    "\uacf5\uc2dd \ub808\ud37c\ub7f0\uc2a4 \uae30\uc900\uc73c\ub85c",
-    "\uacf5\uc2dd \ubb38\uc11c\ub85c",
-    "\uacf5\uc2dd \ub808\ud37c\ub7f0\uc2a4\ub85c",
-    "based on official docs",
-    "according to official docs",
-    "\uacf5\uc2dd \ubb38\uc11c",
-    "\uacf5\uc2dd \ub808\ud37c\ub7f0\uc2a4",
-    "\uc124\uba85\ud558\uace0",
-    "\uc124\uba85\ud574\uc918",
-    "\uc54c\ub824\uc918",
-    "\ubcf4\uc5ec\uc918",
-    "\ucc3e\uc544\uc918",
-    "\uc694\uc57d\ud574\uc918",
-    "\uc815\ub9ac\ud574\uc918",
-)
-_DOCS_IDENTIFIER_PATTERN = re.compile(r"\b(?:[A-Za-z][A-Za-z0-9._-]*|v\d+)\b")
-_DOCS_IDENTIFIER_STOPWORDS = {
-    "from",
-    "official",
-    "docs",
-    "doc",
-    "documentation",
-    "reference",
-    "with",
-    "the",
-    "it",
-    "and",
-}
+
+def _planner_rules():
+    return get_rules_config().planner
+
+
+@lru_cache(maxsize=1)
+def _action_clause_pattern():
+    return re.compile(_planner_rules().action_clause_pattern)
+
+
+@lru_cache(maxsize=1)
+def _docs_clause_pattern():
+    return re.compile(_planner_rules().docs_clause_pattern)
+
+
+@lru_cache(maxsize=1)
+def _compare_clause_pattern():
+    return re.compile(_planner_rules().compare_clause_pattern)
+
+
+@lru_cache(maxsize=1)
+def _docs_identifier_pattern():
+    return re.compile(_planner_rules().docs_identifier_pattern)
 
 
 def _normalize_query_text(text: str) -> str:
@@ -125,7 +95,7 @@ def _normalize_query_text(text: str) -> str:
 
 def has_upload_route_intent(user_input: str) -> bool:
     lowered = str(user_input or "").lower()
-    return bool(lowered.strip()) and any(keyword in lowered for keyword in _UPLOAD_KEYWORDS)
+    return bool(lowered.strip()) and any(keyword in lowered for keyword in _planner_rules().upload_keywords)
 
 
 def needs_upload_followup(user_input: str) -> bool:
@@ -140,7 +110,7 @@ def _strip_auxiliary_clauses(text: str) -> str:
     normalized = str(text or "")
     lowered = normalized.lower()
     cut_index = len(normalized)
-    for marker in _AUXILIARY_MARKERS:
+    for marker in _planner_rules().auxiliary_markers:
         index = lowered.find(marker.lower())
         if index >= 0:
             cut_index = min(cut_index, index)
@@ -152,20 +122,20 @@ def _strip_auxiliary_clauses(text: str) -> str:
 
 def _strip_action_clauses(text: str) -> str:
     parts = re.split(r"(?<=[?.!,])|\band\b|\uadf8\ub9ac\uace0|\ub610\ub294", str(text or ""), flags=re.I)
-    kept = [part.strip() for part in parts if part.strip() and not _ACTION_CLAUSE_PATTERN.search(part)]
+    kept = [part.strip() for part in parts if part.strip() and not _action_clause_pattern().search(part)]
     return _normalize_query_text(" ".join(kept or [str(text or "")]))
 
 
 def _compact_docs_query(text: str) -> str:
     compact = _strip_auxiliary_clauses(_strip_action_clauses(text))
-    compact = re.sub(_COMPARE_CLAUSE_PATTERN, " ", compact)
+    compact = re.sub(_compare_clause_pattern(), " ", compact)
     upload_match = re.search(
         r"(?i)(upload(?:ed)?|current file|current notebook|this file|this notebook|\.ipynb|\.py|\uc5c5\ub85c\ub4dc|\ud604\uc7ac \ud30c\uc77c|\uc774 \ud30c\uc77c|\uc774 \ub178\ud2b8\ubd81)",
         compact,
     )
     if upload_match:
         compact = compact[: upload_match.start()]
-    for phrase in _TRAILING_DOCS_STOP_PHRASES:
+    for phrase in _planner_rules().trailing_docs_stop_phrases:
         compact = re.sub(re.escape(phrase), " ", compact, flags=re.I)
     compact = re.sub(r"(?i)\b(official docs?|official documentation)\b", " ", compact)
     compact = re.sub(
@@ -177,11 +147,11 @@ def _compact_docs_query(text: str) -> str:
     compact = re.sub(r"\s+", " ", compact)
     compact = _normalize_query_text(compact)
 
-    identifier_tokens = _DOCS_IDENTIFIER_PATTERN.findall(compact)
+    identifier_tokens = _docs_identifier_pattern().findall(compact)
     if len(identifier_tokens) >= 2:
         deduped: list[str] = []
         for token in identifier_tokens:
-            if token.lower() in _DOCS_IDENTIFIER_STOPWORDS:
+            if token.lower() in set(_planner_rules().docs_identifier_stopwords):
                 continue
             if token not in deduped:
                 deduped.append(token)
@@ -198,15 +168,15 @@ def _compact_upload_query(text: str) -> str:
     )
     if upload_match:
         compact = compact[upload_match.start() :]
-    compact = re.sub(_DOCS_CLAUSE_PATTERN, " ", compact)
-    compact = re.sub(_COMPARE_CLAUSE_PATTERN, " ", compact)
+    compact = re.sub(_docs_clause_pattern(), " ", compact)
+    compact = re.sub(_compare_clause_pattern(), " ", compact)
     compact = re.sub(r"\s+", " ", compact)
     return _normalize_query_text(compact)
 
 
 def _compact_local_query(text: str) -> str:
     compact = _strip_auxiliary_clauses(_strip_action_clauses(text))
-    compact = re.sub(_DOCS_CLAUSE_PATTERN, " ", compact)
+    compact = re.sub(_docs_clause_pattern(), " ", compact)
     compact = re.sub(r"\s+", " ", compact)
     return _normalize_query_text(compact)
 
@@ -215,7 +185,7 @@ def sanitize_retrieval_query(
     *,
     route: str,
     query: str,
-    retry_context: RetryContext | None = None,
+    retry_context: RetryState | None = None,
 ) -> str:
     base_query = _normalize_query_text(query)
     if route == "docs":
@@ -239,7 +209,7 @@ def sanitize_planner_output_queries(
     planner_output: PlannerOutput,
     *,
     user_input: str,
-    retry_context: RetryContext | None = None,
+    retry_context: RetryState | None = None,
 ) -> PlannerOutput:
     if not planner_output.use_retrieval or not planner_output.tasks:
         return planner_output
@@ -268,15 +238,15 @@ def normalize_planner_diagnostics(
     override_applied: bool = False,
     override_reason: PlannerOverrideReason | None = None,
 ) -> PlannerDiagnostic:
-    return {
-        "status": status,
-        "reason": reason,
-        "fallback_routes": list(fallback_routes or []),
-        "intent_required": bool(intent_required),
-        "required_routes": [route for route in ROUTE_ORDER if route in set(required_routes or [])],
-        "override_applied": bool(override_applied),
-        "override_reason": override_reason,
-    }
+    return PlannerDiagnostic(
+        status=status,
+        reason=reason,
+        fallback_routes=list(fallback_routes or []),
+        intent_required=bool(intent_required),
+        required_routes=[route for route in ROUTE_ORDER if route in set(required_routes or [])],
+        override_applied=bool(override_applied),
+        override_reason=override_reason,
+    )
 
 
 def _build_deterministic_routes(
@@ -515,19 +485,20 @@ def sanitize_planner_output(
         return PlannerOutput.fallback()
 
 
-def build_planner_messages(state: State, max_turns: int = 6) -> list[BaseMessage]:
+def build_planner_messages(state: GraphState, max_turns: int = 6) -> list[BaseMessage]:
+    runtime = runtime_state(state)
+    retry_context = retry_state(state)
     model_messages: list[BaseMessage] = [SystemMessage(content=PLANNER_SYS)]
     model_messages.append(
-        SystemMessage(content=f"[Planner Context]\nretriever_available={bool(state.get('retriever'))}")
+        SystemMessage(content=f"[Planner Context]\nretriever_available={bool(runtime.retriever)}")
     )
 
-    retry_context = coerce_retry_context(state.get("retry_context"))
     retry_context_message = format_retry_context_for_planner(state, retry_context)
     if retry_context_message:
         model_messages.append(SystemMessage(content=retry_context_message))
 
-    if state.get("memory_summary"):
-        model_messages.append(SystemMessage(content=f"[Conversation Summary]\n{state['memory_summary']}"))
+    if runtime.memory_summary:
+        model_messages.append(SystemMessage(content=f"[Conversation Summary]\n{runtime.memory_summary}"))
 
     conversation = [message for message in state.get("messages", []) if not isinstance(message, ToolMessage)]
     conversation = keep_recent_messages(conversation, max_turns=max_turns)
@@ -544,7 +515,7 @@ def build_planner_messages(state: State, max_turns: int = 6) -> list[BaseMessage
     model_messages.extend(latest_conversation)
 
     if not any(isinstance(message, HumanMessage) for message in model_messages):
-        model_messages.append(HumanMessage(content=str(state.get("user_input", "")).strip()))
+        model_messages.append(HumanMessage(content=runtime.user_input.strip()))
     return model_messages
 
 
@@ -582,16 +553,19 @@ def _coerce_structured_planner_result(
 
 
 def make_planner_node(llm_planner: Any, verbose: bool, max_turns: int = 6):
-    def planner(state: State) -> State:
+    def planner(state: GraphState) -> GraphState:
         planner_errors: list[str] = []
         llm_calls: list[LLMCallMetadata] = []
-        existing_retry_context = coerce_retry_context(state.get("retry_context"))
-        user_input = str(state.get("user_input", "") or "")
-        has_retriever = bool(state.get("retriever"))
+        runtime = runtime_state(state)
+        retrieval = retrieval_state(state)
+        debug = debug_state(state)
+        existing_retry_context = retry_state(state)
+        user_input = runtime.user_input
+        has_retriever = bool(runtime.retriever)
         planner_status: PlannerStatus = "llm"
         planner_diagnostics = normalize_planner_diagnostics(status="llm", reason=None, fallback_routes=[])
         guided_followup: str | None = None
-        planner_attempt = int(existing_retry_context.get("attempt", 0)) + 1
+        planner_attempt = int(existing_retry_context.attempt) + 1
 
         deterministic = _build_deterministic_routes(
             user_input=user_input,
@@ -621,14 +595,14 @@ def make_planner_node(llm_planner: Any, verbose: bool, max_turns: int = 6):
                         user_input=user_input,
                         has_retriever=has_retriever,
                     )
-                    planner_status = planner_diagnostics["status"]
+                    planner_status = planner_diagnostics.status  # type: ignore[assignment]
             except Exception as exc:
                 planner_errors.append(f"planner: structured output invocation failed ({exc})")
                 planner_output, planner_diagnostics, guided_followup = build_heuristic_planner_output(
                     user_input=user_input,
                     has_retriever=has_retriever,
                 )
-                planner_status = planner_diagnostics["status"]
+                planner_status = planner_diagnostics.status  # type: ignore[assignment]
 
         planner_output = sanitize_planner_output(
             planner_output,
@@ -657,40 +631,47 @@ def make_planner_node(llm_planner: Any, verbose: bool, max_turns: int = 6):
                 status=planner_status,
                 use_retrieval=planner_output.use_retrieval,
                 task_count=len(planner_output.tasks),
-                required_routes=planner_diagnostics.get("required_routes", []),
-                override=planner_diagnostics.get("override_applied", False),
+                required_routes=planner_diagnostics.required_routes,
+                override=planner_diagnostics.override_applied,
             )
 
-        retry_context: RetryContext = dict(existing_retry_context)
-        retry_context["max_retries"] = int(
-            existing_retry_context.get("max_retries", DEFAULT_MAX_RETRIES)
+        retry_context = existing_retry_context.model_copy(
+            update={
+                "needs_retry": False,
+                "max_retries": int(existing_retry_context.max_retries),
+                "evidence_start_index": len(retrieval.evidence_log),
+                "retrieval_error_start_index": len(debug.retrieval_errors),
+                "retrieval_diagnostic_start_index": len(debug.retrieval_diagnostics),
+            }
         )
-        retry_context["evidence_start_index"] = len(safe_list(state.get("retrieved_evidence")))
-        retry_context["retrieval_error_start_index"] = len(safe_list(state.get("retrieval_errors")))
-        retry_context["retrieval_diagnostic_start_index"] = len(
-            safe_list(state.get("retrieval_diagnostics"))
-        )
-        if int(retry_context.get("attempt", 0)) <= 0:
-            retry_context["retrieval_feedback"] = ""
-            retry_context["score_avg"] = None
-            retry_context.pop("retry_reason", None)
-            retry_context["failed_routes"] = []
-            retry_context["preserved_evidence"] = []
-            retry_context["preserved_retrieval_diagnostics"] = []
+        if int(retry_context.attempt) <= 0:
+            retry_context = retry_context.model_copy(
+                update={
+                    "retrieval_feedback": "",
+                    "score_avg": None,
+                    "retry_reason": None,
+                    "failed_routes": [],
+                    "preserved_evidence": [],
+                    "preserved_retrieval_diagnostics": [],
+                }
+            )
 
-        updates: State = {
-            "planner_output": planner_output,
-            "planner_status": planner_status,
-            "planner_diagnostics": planner_diagnostics,
-            "guided_followup": guided_followup,
-            "synthesis_attempt": int(state.get("synthesis_attempt", 0)),
-            "needs_retry": False,
-            "retry_context": retry_context,
+        updates: GraphState = {
+            "planner": PlannerState(
+                output=planner_output,
+                status=planner_status,
+                diagnostics=planner_diagnostics or empty_planner_diagnostic(status=planner_status),
+                guided_followup=guided_followup,
+            ),
+            "retry": retry_context,
         }
-        if planner_errors:
-            updates["planner_errors"] = planner_errors
-        if llm_calls:
-            updates["llm_calls"] = llm_calls
-        return updates
+        if planner_errors or llm_calls:
+            updates["debug"] = debug.model_copy(
+                update={
+                    "planner_errors": [*debug.planner_errors, *planner_errors],
+                    "llm_calls": [*debug.llm_calls, *llm_calls],
+                }
+            )
+        return normalize_state_updates(updates)
 
     return planner

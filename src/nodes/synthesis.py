@@ -17,6 +17,21 @@ from ..answer_schema import (
     normalize_confidence,
     render_payload_from_claims,
 )
+from ..contracts.debug import LLMCallMetadata, build_llm_call_metadata
+from ..contracts.graph_state import (
+    GraphState,
+    ResponseState,
+    coerce_planner_output,
+    debug_state,
+    normalize_state_updates,
+    planner_state,
+    response_state,
+    retrieval_state,
+    retry_state,
+    runtime_state,
+    slice_from_index,
+)
+from ..contracts.routes import route_for_tool
 from ..evidence import EvidenceItem, dedupe_evidence, evidence_to_dicts, parse_evidence_payload
 from ..latency import (
     elapsed_ms,
@@ -29,15 +44,6 @@ from ..prompts import SYS_POLICY, needs_save, needs_slack
 from .actions import build_action_only_answer, get_slack_destinations, is_action_only_request
 from .retrieval import format_evidence_for_prompt
 from .session import extract_text_content, keep_recent_messages
-from .state import (
-    LLMCallMetadata,
-    State,
-    build_llm_call_metadata,
-    coerce_planner_output,
-    coerce_retry_context,
-    safe_list,
-    slice_from_index,
-)
 
 
 logger = logging.getLogger(__name__)
@@ -134,12 +140,13 @@ def _payload_to_state_dict(payload: AgentResponsePayloadModel) -> dict[str, Any]
 
 def _build_synthesis_messages(
     *,
-    state: State,
+    state: GraphState,
     action_rules: list[str],
     deduped_evidence: list[dict[str, Any]],
     attempt: int,
     max_turns: int,
 ) -> tuple[list[BaseMessage], int, int]:
+    runtime = runtime_state(state)
     history_messages = [
         message for message in state.get("messages", []) if not isinstance(message, ToolMessage)
     ]
@@ -147,8 +154,8 @@ def _build_synthesis_messages(
     trimmed_history = keep_recent_messages(history_messages, max_turns=max_turns)
 
     model_messages: list[BaseMessage] = [SystemMessage(content=SYS_POLICY)]
-    if state.get("memory_summary"):
-        model_messages.append(SystemMessage(content=f"[Conversation Summary]\n{state['memory_summary']}"))
+    if runtime.memory_summary:
+        model_messages.append(SystemMessage(content=f"[Conversation Summary]\n{runtime.memory_summary}"))
     model_messages.extend(trimmed_history)
     if action_rules:
         model_messages.append(SystemMessage(content="[Action Request]\n- " + "\n- ".join(action_rules)))
@@ -213,11 +220,7 @@ def _parse_plain_summary_segments(content: str, *, limit: int) -> list[str]:
 
 
 def _route_for_evidence(item: EvidenceItem) -> str:
-    return {
-        "tavily_search": "docs",
-        "upload_search": "upload",
-        "rag_search": "local",
-    }.get(str(item.tool or ""), "")
+    return route_for_tool(str(item.tool or ""))
 
 
 def _select_primary_evidence_items(
@@ -352,6 +355,54 @@ def _render_synthesis_payload(
     return payload, payload.answer
 
 
+def _build_response_state(
+    *,
+    payload: AgentResponsePayloadModel,
+    synthesis_output: SynthesisOutput,
+    final_answer: str,
+    attempt: int,
+) -> ResponseState:
+    return ResponseState(
+        final_answer=final_answer,
+        payload=payload,
+        synthesis_output=synthesis_output,
+        synthesis_attempt=attempt,
+    )
+
+
+def _build_synthesis_updates(
+    *,
+    debug,
+    payload: AgentResponsePayloadModel,
+    synthesis_output: SynthesisOutput,
+    final_answer: str,
+    attempt: int,
+    latency_trace: list[dict[str, Any]],
+    retrieval_errors: list[str] | None = None,
+    planner_errors: list[str] | None = None,
+    synthesis_errors: list[str] | None = None,
+    llm_calls: list[LLMCallMetadata] | None = None,
+) -> GraphState:
+    return normalize_state_updates({
+        "messages": [AIMessage(content=final_answer)],
+        "response": _build_response_state(
+            payload=payload,
+            synthesis_output=synthesis_output,
+            final_answer=final_answer,
+            attempt=attempt,
+        ),
+        "debug": debug.model_copy(
+            update={
+                "retrieval_errors": [*debug.retrieval_errors, *(retrieval_errors or [])],
+                "planner_errors": [*debug.planner_errors, *(planner_errors or [])],
+                "synthesis_errors": [*debug.synthesis_errors, *(synthesis_errors or [])],
+                "llm_calls": [*debug.llm_calls, *(llm_calls or [])],
+                "latency_trace": [*debug.latency_trace, *latency_trace],
+            }
+        ),
+    })
+
+
 def make_synthesize_node(
     llm_synthesizer: Any,
     llm_synthesizer_compact: Any | None = None,
@@ -362,25 +413,29 @@ def make_synthesize_node(
     structured_synthesizer = _build_structured_synthesizer(llm_synthesizer)
     fallback_llm = llm_synthesizer_compact or llm_synthesizer
 
-    def synthesize(state: State):
+    def synthesize(state: GraphState) -> GraphState:
         stage_started = time.perf_counter()
-        attempt = int(state.get("synthesis_attempt", 0)) + 1
-        user_input = str(state.get("user_input", "") or "")
-        guided_followup = str(state.get("guided_followup") or "").strip()
-        explicit_slack_destinations = get_slack_destinations(state.get("session_metadata"))
+        runtime = runtime_state(state)
+        planner = planner_state(state)
+        retrieval = retrieval_state(state)
+        response = response_state(state)
+        debug = debug_state(state)
+        attempt = int(response.synthesis_attempt) + 1
+        user_input = runtime.user_input
+        guided_followup = str(planner.guided_followup or "").strip()
+        explicit_slack_destinations = get_slack_destinations(runtime.session_metadata)
         slack_target_available = any(explicit_slack_destinations.values()) or has_default_slack_destination
 
         if guided_followup:
             payload = build_empty_response_payload(answer=guided_followup)
-            response = AIMessage(content=guided_followup)
-            return {
-                "messages": [response],
-                "final_answer": guided_followup,
-                "response_payload": _payload_to_state_dict(payload),
-                "synthesis_output": SynthesisOutput(answer=guided_followup).model_dump(mode="json"),
-                "synthesis_attempt": attempt,
-                "needs_retry": False,
-                "latency_trace": [
+            synthesis_output = SynthesisOutput(answer=guided_followup)
+            return _build_synthesis_updates(
+                debug=debug,
+                payload=payload,
+                synthesis_output=synthesis_output,
+                final_answer=guided_followup,
+                attempt=attempt,
+                latency_trace=[
                     make_stage_latency_event(
                         stage="synthesis",
                         attempt=attempt,
@@ -388,7 +443,7 @@ def make_synthesize_node(
                         status="guided_followup",
                     )
                 ],
-            }
+            )
 
         if is_action_only_request(user_input):
             final_answer = build_action_only_answer(
@@ -397,15 +452,14 @@ def make_synthesize_node(
                 slack_target_available=slack_target_available,
             )
             payload = build_empty_response_payload(answer=final_answer)
-            response = AIMessage(content=final_answer)
-            return {
-                "messages": [response],
-                "final_answer": final_answer,
-                "response_payload": _payload_to_state_dict(payload),
-                "synthesis_output": SynthesisOutput(answer=final_answer).model_dump(mode="json"),
-                "synthesis_attempt": attempt,
-                "needs_retry": False,
-                "latency_trace": [
+            synthesis_output = SynthesisOutput(answer=final_answer)
+            return _build_synthesis_updates(
+                debug=debug,
+                payload=payload,
+                synthesis_output=synthesis_output,
+                final_answer=final_answer,
+                attempt=attempt,
+                latency_trace=[
                     make_stage_latency_event(
                         stage="synthesis",
                         attempt=attempt,
@@ -413,7 +467,7 @@ def make_synthesize_node(
                         status="action_only",
                     )
                 ],
-            }
+            )
 
         action_rules: list[str] = []
         if needs_save(user_input):
@@ -434,10 +488,10 @@ def make_synthesize_node(
                     "channel_id, user_id, or email. Do not ask for message content."
                 )
 
-        retry_context = coerce_retry_context(state.get("retry_context"))
+        retry_context = retry_state(state)
         evidence_start_index = int(retry_context.get("evidence_start_index", 0))
         current_attempt_evidence_payload = slice_from_index(
-            safe_list(state.get("retrieved_evidence")),
+            retrieval.evidence_log,
             evidence_start_index,
         )
 
@@ -452,7 +506,7 @@ def make_synthesize_node(
         evidence_items = [item for item in parsed_evidence if isinstance(item, EvidenceItem)]
 
         planner_parse_errors: list[str] = []
-        planner_output = coerce_planner_output(state.get("planner_output"), planner_parse_errors)
+        planner_output = coerce_planner_output(planner.output, planner_parse_errors)
         retrieval_required = bool(planner_output.use_retrieval and planner_output.tasks)
 
         primary_evidence_items = _select_primary_evidence_items(
@@ -474,20 +528,19 @@ def make_synthesize_node(
                 fallback_answer="",
             )
             final_answer = payload.answer
-            response = AIMessage(content=final_answer)
             total_ms = elapsed_ms(stage_started, time.perf_counter())
-            return {
-                "messages": [response],
-                "final_answer": final_answer,
-                "response_payload": _payload_to_state_dict(payload),
-                "synthesis_output": SynthesisOutput(
-                    answer=payload.answer,
-                    claims=payload.claims,
-                    confidence=payload.confidence,
-                ).model_dump(mode="json"),
-                "synthesis_attempt": attempt,
-                "needs_retry": False,
-                "latency_trace": [
+            synthesis_output = SynthesisOutput(
+                answer=payload.answer,
+                claims=payload.claims,
+                confidence=payload.confidence,
+            )
+            return _build_synthesis_updates(
+                debug=debug,
+                payload=payload,
+                synthesis_output=synthesis_output,
+                final_answer=final_answer,
+                attempt=attempt,
+                latency_trace=[
                     make_synthesis_attempt_latency_event(
                         attempt=attempt,
                         mode="deterministic_grounded_direct",
@@ -502,7 +555,7 @@ def make_synthesize_node(
                         status="deterministic_grounded_direct",
                     ),
                 ],
-            }
+            )
 
         model_messages, history_before, history_after = _build_synthesis_messages(
             state=state,
@@ -608,7 +661,6 @@ def make_synthesize_node(
                 final_answer = payload.answer
                 synthesis_mode = "deterministic_grounded_fallback"
 
-        response = AIMessage(content=final_answer)
         total_ms = elapsed_ms(stage_started, time.perf_counter())
         latency_trace = [
             make_synthesis_attempt_latency_event(
@@ -626,24 +678,17 @@ def make_synthesize_node(
             ),
         ]
 
-        updates: State = {
-            "messages": [response],
-            "final_answer": final_answer,
-            "response_payload": _payload_to_state_dict(payload),
-            "synthesis_output": synthesis_output.model_dump(mode="json"),
-            "synthesis_attempt": attempt,
-            "needs_retry": False,
-            "latency_trace": latency_trace,
-        }
-
-        if parse_errors:
-            updates["retrieval_errors"] = parse_errors
-        if planner_parse_errors:
-            updates["planner_errors"] = planner_parse_errors
-        if synthesis_errors:
-            updates["synthesis_errors"] = synthesis_errors
-        if llm_calls:
-            updates["llm_calls"] = llm_calls
-        return updates
+        return _build_synthesis_updates(
+            debug=debug,
+            payload=payload,
+            synthesis_output=synthesis_output,
+            final_answer=final_answer,
+            attempt=attempt,
+            latency_trace=latency_trace,
+            retrieval_errors=parse_errors,
+            planner_errors=planner_parse_errors,
+            synthesis_errors=synthesis_errors,
+            llm_calls=llm_calls,
+        )
 
     return synthesize

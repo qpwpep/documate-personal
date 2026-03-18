@@ -2,35 +2,14 @@ from __future__ import annotations
 
 from typing import Any
 
+from ..contracts.debug import DEFAULT_MAX_RETRIES, RETRYABLE_REASONS, RetryReason, RetryState
+from ..contracts.graph_state import GraphState, coerce_planner_output, planner_state
+from ..contracts.routes import normalize_routes, route_for_tool
 from ..evidence import EvidenceItem, evidence_to_dicts
 from ..planner_schema import PlannerOutput
-from .state import (
-    DEFAULT_MAX_RETRIES,
-    RETRYABLE_REASONS,
-    RetryContext,
-    RetryReason,
-    State,
-    coerce_planner_output,
-)
-
-
-def _route_for_tool(tool_name: str) -> str:
-    return {
-        "tavily_search": "docs",
-        "upload_search": "upload",
-        "rag_search": "local",
-    }.get(str(tool_name or ""), "")
-
 
 def _normalize_failed_routes(value: set[str] | list[str] | tuple[str, ...] | None) -> list[str]:
-    if not value:
-        return []
-    normalized = {
-        str(route).strip()
-        for route in value
-        if str(route).strip()
-    }
-    return [route for route in ("docs", "upload", "local") if route in normalized]
+    return normalize_routes(value)
 
 
 def _preserve_successful_route_payload(
@@ -43,7 +22,7 @@ def _preserve_successful_route_payload(
         [
             item
             for item in current_attempt_evidence
-            if _route_for_tool(item.tool) and _route_for_tool(item.tool) not in failed_routes
+            if route_for_tool(item.tool) and route_for_tool(item.tool) not in failed_routes
         ]
     )
     preserved_diagnostics = [
@@ -54,7 +33,7 @@ def _preserve_successful_route_payload(
     return preserved_evidence, preserved_diagnostics
 
 
-def format_retry_context_for_planner(state: State, retry_context: RetryContext) -> str | None:
+def format_retry_context_for_planner(state: GraphState, retry_context: RetryState) -> str | None:
     attempt = int(retry_context.get("attempt", 0))
     if attempt <= 0:
         return None
@@ -65,7 +44,7 @@ def format_retry_context_for_planner(state: State, retry_context: RetryContext) 
     score_text = f"{score_avg:.3f}" if isinstance(score_avg, (int, float)) else "n/a"
 
     planner_parse_errors: list[str] = []
-    previous_output = coerce_planner_output(state.get("planner_output"), planner_parse_errors)
+    previous_output = planner_state(state).output
     if previous_output.use_retrieval and previous_output.tasks:
         previous_routes = ", ".join(task.route for task in previous_output.tasks)
     else:
@@ -176,13 +155,13 @@ def build_followup_from_routes(
     return f"현재 확인 가능한 근거를 찾지 못했습니다. {route_specific_followup}"
 
 
-def current_retrieval_attempt(retry_context: RetryContext) -> int:
+def current_retrieval_attempt(retry_context: RetryState) -> int:
     return int(retry_context.get("attempt", 0)) + 1
 
 
 def build_retry_update(
     *,
-    retry_context: RetryContext,
+    retry_context: RetryState,
     retry_reason: RetryReason | None,
     planner_output: PlannerOutput,
     retrieval_errors: list[str],
@@ -190,15 +169,19 @@ def build_retry_update(
     failed_routes: set[str] | list[str] | tuple[str, ...] | None = None,
     current_attempt_evidence: list[EvidenceItem] | None = None,
     current_attempt_retrieval_diagnostics: list[dict[str, Any]] | None = None,
-) -> tuple[bool, RetryContext, str]:
+) -> tuple[bool, RetryState, str]:
     max_retries = int(retry_context.get("max_retries", DEFAULT_MAX_RETRIES))
     used_retries = int(retry_context.get("attempt", 0))
     needs_retry = False
     retrieval_feedback = ""
 
-    next_retry_context: RetryContext = dict(retry_context)
-    next_retry_context["max_retries"] = max_retries
-    next_retry_context["score_avg"] = score_avg
+    next_retry_context = retry_context.model_copy(
+        update={
+            "needs_retry": False,
+            "max_retries": max_retries,
+            "score_avg": score_avg,
+        }
+    )
 
     selected_routes = {task.route for task in planner_output.tasks}
     normalized_failed_routes = set(_normalize_failed_routes(failed_routes))
@@ -236,10 +219,11 @@ def build_retry_update(
             next_retry_context["preserved_retrieval_diagnostics"] = []
     else:
         next_retry_context["retrieval_feedback"] = ""
-        next_retry_context.pop("retry_reason", None)
+        next_retry_context["retry_reason"] = None
         next_retry_context["failed_routes"] = []
         next_retry_context["preserved_evidence"] = []
         next_retry_context["preserved_retrieval_diagnostics"] = []
 
     next_retry_context["attempt"] = used_retries
+    next_retry_context["needs_retry"] = needs_retry
     return needs_retry, next_retry_context, retrieval_feedback

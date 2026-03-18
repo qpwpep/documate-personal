@@ -3,7 +3,7 @@ import unittest
 
 from src.nodes.actions import make_action_postprocess_node
 
-from .helpers import _ToolWrapper
+from .helpers import _ToolWrapper, build_legacy_state
 
 
 class ActionsNodeTest(unittest.TestCase):
@@ -19,11 +19,13 @@ class ActionsNodeTest(unittest.TestCase):
         )
 
         updates = action_node(
-            {
-                "user_input": "save this answer to txt",
-                "final_answer": "final answer text",
-                "messages": [],
-            }
+            build_legacy_state(
+                {
+                    "user_input": "save this answer to txt",
+                    "final_answer": "final answer text",
+                    "messages": [],
+                }
+            )
         )
 
         self.assertNotIn("final_answer", updates)
@@ -47,12 +49,14 @@ class ActionsNodeTest(unittest.TestCase):
         )
 
         updates = action_node(
-            {
-                "user_input": "send this to slack",
-                "final_answer": "final answer text",
-                "messages": [],
-                "session_metadata": {"slack_destination": None},
-            }
+            build_legacy_state(
+                {
+                    "user_input": "send this to slack",
+                    "final_answer": "final answer text",
+                    "messages": [],
+                    "session_metadata": {"slack_destination": None},
+                }
+            )
         )
 
         self.assertEqual(calls["count"], 0)
@@ -72,18 +76,20 @@ class ActionsNodeTest(unittest.TestCase):
         )
 
         updates = action_node(
-            {
-                "user_input": "send this to slack",
-                "final_answer": "final answer text",
-                "messages": [],
-                "session_metadata": {
-                    "slack_destination": {
-                        "channel_id": "C123BENCH",
-                        "user_id": None,
-                        "email": None,
-                    }
-                },
-            }
+            build_legacy_state(
+                {
+                    "user_input": "send this to slack",
+                    "final_answer": "final answer text",
+                    "messages": [],
+                    "session_metadata": {
+                        "slack_destination": {
+                            "channel_id": "C123BENCH",
+                            "user_id": None,
+                            "email": None,
+                        }
+                    },
+                }
+            )
         )
 
         self.assertEqual(recorded["channel_id"], "C123BENCH")
