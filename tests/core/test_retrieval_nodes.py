@@ -222,3 +222,99 @@ class RetrievalNodeTest(unittest.TestCase):
             if item.get("kind") == "retrieval_route"
         ]
         self.assertEqual([item["route"] for item in route_events], ["docs", "local"])
+
+    def test_retrieve_dispatch_reuses_preserved_upload_results_on_docs_retry(self) -> None:
+        docs_calls = {"count": 0}
+        upload_calls = {"count": 0}
+
+        def _docs_search(query: str):
+            docs_calls["count"] += 1
+            return _tool_payload(
+                [
+                    {
+                        "kind": "official",
+                        "tool": "tavily_search",
+                        "source_id": "url:https://scikit-learn.org/stable/modules/generated/sklearn.model_selection.train_test_split.html",
+                        "url_or_path": "https://scikit-learn.org/stable/modules/generated/sklearn.model_selection.train_test_split.html",
+                        "title": "train_test_split",
+                        "snippet": "train_test_split splits arrays or matrices.",
+                        "score": 0.9,
+                    }
+                ],
+                tool="tavily_search",
+                route="docs",
+                status="success",
+                message="",
+                query=query,
+            )
+
+        def _upload_search(query: str, k: int, retriever=None):
+            _ = (query, k, retriever)
+            upload_calls["count"] += 1
+            return _tool_payload(
+                [],
+                tool="upload_search",
+                route="upload",
+                status="no_result",
+                message="should not run on retry",
+                query=query,
+            )
+
+        retrieve_dispatch = make_retrieve_dispatch_node(
+            _ToolWrapper(_docs_search),
+            _ToolWrapper(_upload_search),
+            _ToolWrapper(lambda query, k: _tool_payload([], tool="rag_search", route="local", status="no_result", message="", query=query)),
+            verbose=False,
+        )
+
+        updates = retrieve_dispatch(
+            {
+                "planner_output": PlannerOutput(
+                    use_retrieval=True,
+                    tasks=[
+                        RetrievalTask(route="docs", query="train_test_split", k=3),
+                        RetrievalTask(route="upload", query="업로드 노트북 실제 사용 예", k=3),
+                    ],
+                ),
+                "retry_context": {
+                    "attempt": 1,
+                    "failed_routes": ["docs"],
+                    "preserved_evidence": [
+                        {
+                            "kind": "local",
+                            "tool": "upload_search",
+                            "source_id": "path:uploads/demo/sample.ipynb#cell=1;chunk=0;start=0;end=64",
+                            "document_id": "path:uploads/demo/sample.ipynb",
+                            "url_or_path": "uploads/demo/sample.ipynb",
+                            "snippet": "X_train, X_test, y_train, y_test = train_test_split(...)",
+                            "score": 0.0,
+                            "cell_id": 1,
+                            "chunk_id": 0,
+                            "start_offset": 0,
+                            "end_offset": 64,
+                        }
+                    ],
+                    "preserved_retrieval_diagnostics": [
+                        {
+                            "tool": "upload_search",
+                            "route": "upload",
+                            "status": "success",
+                            "message": "",
+                            "query": "업로드 노트북 실제 사용 예",
+                            "attempt": 1,
+                        }
+                    ],
+                },
+            }
+        )
+
+        self.assertEqual(docs_calls["count"], 1)
+        self.assertEqual(upload_calls["count"], 0)
+        self.assertEqual(
+            [item["tool"] for item in updates["retrieved_evidence"]],
+            ["tavily_search", "upload_search"],
+        )
+        self.assertEqual(
+            [item["route"] for item in updates["retrieval_diagnostics"]],
+            ["docs", "upload"],
+        )

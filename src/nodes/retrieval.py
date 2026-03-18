@@ -13,6 +13,7 @@ from ..latency import (
 )
 from ..logging_utils import log_event
 from ..planner_schema import RetrievalTask
+from ..tools._common import build_retrieval_payload
 from .planner import sanitize_retrieval_query
 from .retry import current_retrieval_attempt
 from .state import (
@@ -141,6 +142,66 @@ def _execute_retrieval_task(
     }
 
 
+def _build_reused_retrieval_task_result(
+    *,
+    index: int,
+    task: RetrievalTask,
+    tool_name: str,
+    route: str,
+    attempt: int,
+    preserved_evidence: list[dict[str, Any]],
+    preserved_diagnostics: list[dict[str, Any]],
+) -> dict[str, Any]:
+    route_evidence = [
+        dict(item)
+        for item in preserved_evidence
+        if route_for_tool(str(item.get("tool") or "")) == route
+    ]
+    route_diagnostic = next(
+        (
+            dict(item)
+            for item in preserved_diagnostics
+            if str(item.get("route") or "").strip() == route
+        ),
+        {
+            "tool": tool_name,
+            "route": route,
+            "status": "success" if route_evidence else "no_result",
+            "message": "reused previous successful retrieval result",
+            "query": task.query,
+            "attempt": attempt,
+        },
+    )
+    route_diagnostic["tool"] = str(route_diagnostic.get("tool") or tool_name)
+    route_diagnostic["route"] = str(route_diagnostic.get("route") or route)
+    route_diagnostic["query"] = str(route_diagnostic.get("query") or task.query)
+    route_diagnostic["attempt"] = attempt
+
+    payload = build_retrieval_payload(
+        tool=tool_name,
+        route=route,  # type: ignore[arg-type]
+        query=task.query,
+        evidence=route_evidence,
+        status="success" if route_evidence else "no_result",
+        message="reused previous successful retrieval result" if route_evidence else "no reused evidence found",
+    )
+    return {
+        "index": index,
+        "tool_name": tool_name,
+        "payload": payload,
+        "evidence": route_evidence,
+        "diagnostic": route_diagnostic,
+        "errors": [],
+        "latency_trace": make_retrieval_route_latency_event(
+            route=route,
+            tool=tool_name,
+            attempt=attempt,
+            latency_ms=0,
+            status=str(route_diagnostic.get("status") or ""),
+        ),
+    }
+
+
 def format_evidence_for_prompt(items: list[dict[str, Any]]) -> str:
     if not items:
         return "No retrieved evidence."
@@ -217,7 +278,23 @@ def make_retrieve_dispatch_node(
         latency_trace: list[dict[str, Any]] = []
         retry_context = coerce_retry_context(state.get("retry_context"))
         attempt = current_retrieval_attempt(retry_context)
+        failed_routes = {
+            str(route).strip()
+            for route in retry_context.get("failed_routes", [])
+            if str(route).strip()
+        }
+        preserved_evidence = [
+            item
+            for item in retry_context.get("preserved_evidence", [])
+            if isinstance(item, dict)
+        ]
+        preserved_diagnostics = [
+            item
+            for item in retry_context.get("preserved_retrieval_diagnostics", [])
+            if isinstance(item, dict)
+        ]
         indexed_tasks: list[tuple[int, RetrievalTask, str, Any]] = []
+        reused_results: list[dict[str, Any]] = []
         for index, task in enumerate(planner_output.tasks, start=1):
             handler = route_handlers.get(task.route)
             if handler is None:
@@ -230,9 +307,22 @@ def make_retrieve_dispatch_node(
                 retry_context=retry_context,
             )
             task = RetrievalTask(route=task.route, query=sanitized_query, k=task.k)
+            if failed_routes and task.route not in failed_routes:
+                reused_results.append(
+                    _build_reused_retrieval_task_result(
+                        index=index,
+                        task=task,
+                        tool_name=tool_name,
+                        route=task.route,
+                        attempt=attempt,
+                        preserved_evidence=preserved_evidence,
+                        preserved_diagnostics=preserved_diagnostics,
+                    )
+                )
+                continue
             indexed_tasks.append((index, task, tool_name, invoke_tool))
 
-        task_results: list[dict[str, Any]] = []
+        task_results: list[dict[str, Any]] = list(reused_results)
         if len(indexed_tasks) == 1:
             index, task, tool_name, invoke_tool = indexed_tasks[0]
             task_results.append(
