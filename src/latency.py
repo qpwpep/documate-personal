@@ -21,6 +21,7 @@ SynthesisMode = Literal[
     "compact_structured_fallback",
     "plain_summary_attach_fallback",
     "deterministic_grounded_fallback",
+    "deterministic_grounded_direct",
 ]
 
 LatencyEventKind = Literal["stage", "retrieval_route", "synthesis_attempt"]
