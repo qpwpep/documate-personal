@@ -10,6 +10,13 @@ from typing import Any
 
 import requests
 
+from ..contracts.debug import (
+    coerce_llm_calls,
+    coerce_planner_diagnostic,
+    coerce_retrieval_diagnostics,
+    coerce_retry_state,
+    coerce_token_usage,
+)
 from ..latency import LatencyBreakdownModel
 from .judge_llm import LLMJudge
 from .reporting import build_summary, write_run_outputs
@@ -74,17 +81,7 @@ def _build_error_message_from_response(response: requests.Response) -> str:
 def _parse_token_usage(raw_debug: dict[str, Any] | None) -> TokenUsage | None:
     if not raw_debug:
         return None
-    raw_usage = raw_debug.get("token_usage")
-    if not isinstance(raw_usage, dict):
-        return None
-    try:
-        return TokenUsage(
-            prompt_tokens=int(raw_usage.get("prompt_tokens", 0) or 0),
-            completion_tokens=int(raw_usage.get("completion_tokens", 0) or 0),
-            total_tokens=int(raw_usage.get("total_tokens", 0) or 0),
-        )
-    except (TypeError, ValueError):
-        return None
+    return coerce_token_usage(raw_debug.get("token_usage"))
 
 
 def _parse_llm_calls(
@@ -103,12 +100,7 @@ def _parse_llm_calls(
     for index, item in enumerate(raw_items):
         if not isinstance(item, dict):
             response_errors.append(f"debug.llm_calls[{index}] must be an object")
-            continue
-        try:
-            parsed.append(LLMCallMetadata.model_validate(item))
-        except Exception as exc:
-            response_errors.append(f"debug.llm_calls[{index}] invalid: {exc}")
-    return parsed
+    return coerce_llm_calls(raw_items)
 
 
 def _parse_string_list(
@@ -175,12 +167,7 @@ def _parse_retrieval_diagnostics(
     for index, item in enumerate(raw_items):
         if not isinstance(item, dict):
             response_errors.append(f"debug.retrieval_diagnostics[{index}] must be an object")
-            continue
-        try:
-            parsed.append(RetrievalDiagnostic.model_validate(item))
-        except Exception as exc:
-            response_errors.append(f"debug.retrieval_diagnostics[{index}] invalid: {exc}")
-    return parsed
+    return coerce_retrieval_diagnostics(raw_items)
 
 
 def _parse_planner_diagnostics(
@@ -193,11 +180,7 @@ def _parse_planner_diagnostics(
     if not isinstance(raw_item, dict):
         response_errors.append("debug.planner_diagnostics must be an object")
         return None
-    try:
-        return PlannerDiagnostic.model_validate(raw_item)
-    except Exception as exc:
-        response_errors.append(f"debug.planner_diagnostics invalid: {exc}")
-        return None
+    return coerce_planner_diagnostic(raw_item)
 
 
 def _parse_latency_breakdown(
@@ -228,8 +211,9 @@ def _parse_validator_metadata(
         response_errors.append("debug.retry_context must be an object")
         return None, None
 
-    validator_reason = raw_item.get("retry_reason")
-    validator_feedback = raw_item.get("retrieval_feedback")
+    retry_context = coerce_retry_state(raw_item)
+    validator_reason = retry_context.retry_reason
+    validator_feedback = retry_context.retrieval_feedback
     return (
         str(validator_reason).strip() if validator_reason else None,
         str(validator_feedback).strip() if validator_feedback else None,

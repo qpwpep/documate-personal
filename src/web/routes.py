@@ -7,9 +7,16 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse
 
+from ..contracts.debug import (
+    coerce_llm_calls,
+    coerce_planner_diagnostic,
+    coerce_retrieval_diagnostics,
+    coerce_retry_state,
+    coerce_token_usage,
+)
+from ..contracts.graph_state import SessionMetadata, coerce_slack_destination
 from ..latency import LatencyBreakdownModel
 from ..logging_utils import log_event
-from ..nodes.state import SessionMetadata, coerce_slack_destination
 from ..runtime_paths import get_save_text_output_dir
 from .cleanup import resolve_download_path, validate_upload_file_path
 from .schemas import (
@@ -39,12 +46,7 @@ def normalize_debug_info(raw_debug: dict | None, latency_ms_server: int | None) 
     models_used_raw = debug.get("models_used")
     raw_llm_calls = debug.get("llm_calls")
 
-    token_usage_raw = debug.get("token_usage") or {}
-    token_usage = AgentTokenUsage(
-        prompt_tokens=int(token_usage_raw.get("prompt_tokens", 0) or 0),
-        completion_tokens=int(token_usage_raw.get("completion_tokens", 0) or 0),
-        total_tokens=int(token_usage_raw.get("total_tokens", 0) or 0),
-    )
+    token_usage = coerce_token_usage(debug.get("token_usage")) or AgentTokenUsage()
 
     observed_evidence: list[EvidenceItem] = []
     if isinstance(observed_evidence_raw, list):
@@ -56,42 +58,10 @@ def normalize_debug_info(raw_debug: dict | None, latency_ms_server: int | None) 
             except Exception:
                 continue
 
-    retry_context = None
-    raw_retry_context = debug.get("retry_context")
-    if isinstance(raw_retry_context, dict):
-        try:
-            retry_context = AgentRetryContext.model_validate(raw_retry_context)
-        except Exception:
-            retry_context = None
-
-    retrieval_diagnostics: list[RetrievalDiagnostic] = []
-    raw_retrieval_diagnostics = debug.get("retrieval_diagnostics")
-    if isinstance(raw_retrieval_diagnostics, list):
-        for item in raw_retrieval_diagnostics:
-            if not isinstance(item, dict):
-                continue
-            try:
-                retrieval_diagnostics.append(RetrievalDiagnostic.model_validate(item))
-            except Exception:
-                continue
-
-    planner_diagnostics = None
-    raw_planner_diagnostics = debug.get("planner_diagnostics")
-    if isinstance(raw_planner_diagnostics, dict):
-        try:
-            planner_diagnostics = PlannerDiagnostic.model_validate(raw_planner_diagnostics)
-        except Exception:
-            planner_diagnostics = None
-
-    llm_calls: list[LLMCallMetadata] = []
-    if isinstance(raw_llm_calls, list):
-        for item in raw_llm_calls:
-            if not isinstance(item, dict):
-                continue
-            try:
-                llm_calls.append(LLMCallMetadata.model_validate(item))
-            except Exception:
-                continue
+    retry_context = coerce_retry_state(debug.get("retry_context")) if debug.get("retry_context") else None
+    retrieval_diagnostics = coerce_retrieval_diagnostics(debug.get("retrieval_diagnostics"))
+    planner_diagnostics = coerce_planner_diagnostic(debug.get("planner_diagnostics"))
+    llm_calls = coerce_llm_calls(raw_llm_calls)
 
     models_used = [str(name) for name in models_used_raw if name] if isinstance(models_used_raw, list) else []
     if not models_used and llm_calls:

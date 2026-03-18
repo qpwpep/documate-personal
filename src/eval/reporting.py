@@ -5,6 +5,7 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
+from ..contracts.routes import ROUTE_ORDER, route_for_tool, sort_routes
 from .scoring_rules import tool_confusion_counts
 from .schemas import (
     AnalysisStats,
@@ -27,12 +28,6 @@ from .schemas import (
 )
 
 _CATEGORY_ORDER: tuple[str, ...] = ("docs_only", "rag_only", "hybrid", "tool_action")
-_ROUTE_ORDER: tuple[str, ...] = ("docs", "upload", "local")
-_RETRIEVAL_TOOL_TO_ROUTE: dict[str, str] = {
-    "tavily_search": "docs",
-    "upload_search": "upload",
-    "rag_search": "local",
-}
 _PLANNER_ERROR_ORDER: tuple[str, ...] = (
     "structured_output_invocation_failed",
     "output_validation_failed",
@@ -71,9 +66,9 @@ def _category_sort_key(value: str) -> tuple[int, str]:
 
 
 def _route_sort_key(value: str) -> tuple[int, str]:
-    if value in _ROUTE_ORDER:
-        return (_ROUTE_ORDER.index(value), value)
-    return (len(_ROUTE_ORDER), value)
+    if value in ROUTE_ORDER:
+        return (ROUTE_ORDER.index(value), value)
+    return (len(ROUTE_ORDER), value)
 
 
 def _planner_error_sort_key(value: str) -> tuple[int, str]:
@@ -87,7 +82,7 @@ def _sort_categories(values: set[str] | list[str] | tuple[str, ...]) -> list[str
 
 
 def _sort_routes(values: set[str] | list[str] | tuple[str, ...]) -> list[str]:
-    return sorted({str(value) for value in values if str(value)}, key=_route_sort_key)
+    return sort_routes(values)
 
 
 def _normalize_reason_text(text: str | None, *, max_length: int = 160) -> str:
@@ -134,9 +129,9 @@ def _build_failure_reason(result: CaseResult) -> str:
 def _tool_names_to_routes(tool_names: list[str]) -> list[str]:
     return _sort_routes(
         {
-            _RETRIEVAL_TOOL_TO_ROUTE[tool_name]
+            route_for_tool(tool_name)
             for tool_name in tool_names
-            if tool_name in _RETRIEVAL_TOOL_TO_ROUTE
+            if route_for_tool(tool_name)
         }
     )
 
@@ -144,9 +139,9 @@ def _tool_names_to_routes(tool_names: list[str]) -> list[str]:
 def _observed_routes(result: CaseResult) -> list[str]:
     diagnostic_routes = _sort_routes(
         {
-            str(item.route or _RETRIEVAL_TOOL_TO_ROUTE.get(item.tool, "")).strip()
+            str(item.route or route_for_tool(item.tool or "")).strip()
             for item in result.retrieval_diagnostics
-            if str(item.route or _RETRIEVAL_TOOL_TO_ROUTE.get(item.tool, "")).strip()
+            if str(item.route or route_for_tool(item.tool or "")).strip()
         }
     )
     if diagnostic_routes:
@@ -255,7 +250,7 @@ def _build_retrieval_route_status_histogram(results: list[CaseResult]) -> list[R
     counter: Counter[tuple[str, str, str]] = Counter()
     for result in results:
         for diagnostic in result.retrieval_diagnostics:
-            route = str(diagnostic.route or _RETRIEVAL_TOOL_TO_ROUTE.get(diagnostic.tool, "")).strip()
+            route = str(diagnostic.route or route_for_tool(diagnostic.tool or "")).strip()
             if not route:
                 continue
             status = str(diagnostic.status or "unknown").strip() or "unknown"

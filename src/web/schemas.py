@@ -1,79 +1,17 @@
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from ..answer_schema import ClaimItem
+from ..answer_schema import AgentResponsePayloadModel
+from ..contracts.debug import LLMCallMetadata, PlannerDiagnostic, RetryState, RetrievalDiagnostic, TokenUsage
 from ..evidence import EvidenceItem
 from ..latency import LatencyBreakdownModel
 
-
-class AgentResponsePayload(BaseModel):
-    answer: str = ""
-    claims: list[ClaimItem] = Field(default_factory=list)
-    evidence: list[EvidenceItem] = Field(default_factory=list)
-    confidence: float | None = Field(default=None, ge=0.0, le=1.0)
-
-
-class AgentTokenUsage(BaseModel):
-    prompt_tokens: int = 0
-    completion_tokens: int = 0
-    total_tokens: int = 0
-
-
-class AgentRetryContext(BaseModel):
-    attempt: int = 0
-    max_retries: int = 1
-    retry_reason: Literal[
-        "no_evidence",
-        "low_score",
-        "tool_error",
-        "blocked_missing_upload",
-        "unsupported_claims",
-    ] | None = None
-    retrieval_feedback: str | None = None
-    evidence_start_index: int | None = None
-    retrieval_error_start_index: int | None = None
-    retrieval_diagnostic_start_index: int | None = None
-    score_avg: float | None = None
-
-
-class RetrievalDiagnostic(BaseModel):
-    tool: str = ""
-    route: str = ""
-    status: str = ""
-    message: str = ""
-    query: str = ""
-    attempt: int = 0
-
-
-class PlannerDiagnostic(BaseModel):
-    status: str = ""
-    reason: str | None = None
-    fallback_routes: list[str] = Field(default_factory=list)
-    intent_required: bool = False
-    required_routes: list[str] = Field(default_factory=list)
-    override_applied: bool = False
-    override_reason: Literal[
-        "missing_required_retrieval",
-        "missing_required_routes",
-        "upload_retriever_missing",
-    ] | None = None
-
-
-class LLMCallMetadata(BaseModel):
-    stage: Literal["summarize", "planner", "synthesis"]
-    attempt: int = 0
-    path: Literal[
-        "direct",
-        "structured",
-        "plain_fallback",
-        "structured_compact_fallback",
-        "plain_summary_attach_fallback",
-    ]
-    response_metadata: dict[str, Any] = Field(default_factory=dict)
-    usage_metadata: dict[str, Any] = Field(default_factory=dict)
+AgentResponsePayload = AgentResponsePayloadModel
+AgentTokenUsage = TokenUsage
+AgentRetryContext = RetryState
 
 
 class AgentDebugInfo(BaseModel):
