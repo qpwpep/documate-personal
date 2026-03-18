@@ -674,6 +674,9 @@ def make_planner_node(llm_planner: Any, verbose: bool, max_turns: int = 6):
             retry_context["retrieval_feedback"] = ""
             retry_context["score_avg"] = None
             retry_context.pop("retry_reason", None)
+            retry_context["failed_routes"] = []
+            retry_context["preserved_evidence"] = []
+            retry_context["preserved_retrieval_diagnostics"] = []
 
         updates: State = {
             "planner_output": planner_output,
