@@ -790,6 +790,44 @@ class SynthesisValidationTest(unittest.TestCase):
         ]
         self.assertEqual(synthesis_attempts[0]["mode"], "deterministic_grounded_fallback")
 
+    def test_synthesize_uses_deterministic_grounded_direct_for_upload_routes(self) -> None:
+        capture_llm = _CaptureStructuredSynthesizeLLM(include_raw=True)
+        synthesize_node = make_synthesize_node(capture_llm, verbose=False, max_turns=8)
+
+        updates = synthesize_node(
+            {
+                "messages": [HumanMessage(content="Find groupby in uploaded file.")],
+                "user_input": "Find groupby in uploaded file.",
+                "planner_output": PlannerOutput(
+                    use_retrieval=True,
+                    tasks=[RetrievalTask(route="upload", query="groupby", k=3)],
+                ),
+                "retrieved_evidence": [
+                    {
+                        "kind": "local",
+                        "tool": "upload_search",
+                        "source_id": "path:uploads/demo/sample.py#chunk=0;start=0;end=48",
+                        "document_id": "path:uploads/demo/sample.py",
+                        "url_or_path": "uploads/demo/sample.py",
+                        "snippet": 'grouped = all_sales.groupby("region")["amount"].sum()',
+                        "score": 0.0,
+                        "chunk_id": 0,
+                        "start_offset": 0,
+                        "end_offset": 48,
+                    }
+                ],
+                "synthesis_attempt": 0,
+            }
+        )
+
+        self.assertIsNone(capture_llm.last_messages)
+        self.assertIn("groupby", updates["final_answer"])
+        self.assertNotIn("llm_calls", updates)
+        synthesis_attempts = [
+            item for item in updates["latency_trace"] if item.get("kind") == "synthesis_attempt"
+        ]
+        self.assertEqual(synthesis_attempts[0]["mode"], "deterministic_grounded_direct")
+
 
 if __name__ == "__main__":
     unittest.main()

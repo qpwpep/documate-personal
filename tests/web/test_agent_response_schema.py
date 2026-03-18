@@ -184,6 +184,49 @@ class AgentResponseSchemaTest(unittest.TestCase):
         self.assertEqual(result.debug.latency_breakdown.retrieval_routes[0].route, "docs")
         self.assertEqual(result.debug.latency_breakdown.synthesis_attempts[0].mode, "structured_only")
 
+    def test_debug_latency_breakdown_accepts_deterministic_grounded_direct_mode(self) -> None:
+        payload = {
+            "response": {"answer": "follow up", "claims": [], "evidence": [], "confidence": None},
+            "trace": "trace-id",
+            "file_path": None,
+            "debug": {
+                "tool_calls": ["upload_search"],
+                "tool_call_count": 1,
+                "errors": [],
+                "observed_evidence": [],
+                "latency_ms_server": 120,
+                "latency_breakdown": {
+                    "server_total_ms": 120,
+                    "graph_total_ms": 90,
+                    "upload_retriever_build_ms": None,
+                    "stage_totals_ms": {
+                        "summarize_ms": 0,
+                        "planner_ms": 5,
+                        "retrieval_total_ms": 40,
+                        "synthesis_total_ms": 12,
+                        "validation_ms": 20,
+                        "action_postprocess_ms": 13,
+                    },
+                    "stage_attempts": [
+                        {"stage": "synthesis", "attempt": 1, "latency_ms": 12, "status": "deterministic_grounded_direct"},
+                    ],
+                    "retrieval_routes": [],
+                    "synthesis_attempts": [
+                        {
+                            "attempt": 1,
+                            "mode": "deterministic_grounded_direct",
+                            "structured_ms": 0,
+                            "fallback_ms": None,
+                            "total_ms": 12,
+                        }
+                    ],
+                },
+            },
+        }
+
+        result = AgentResponse.model_validate(payload)
+        self.assertEqual(result.debug.latency_breakdown.synthesis_attempts[0].mode, "deterministic_grounded_direct")
+
     def test_debug_llm_calls_and_models_used_are_optional_and_parseable(self) -> None:
         payload = {
             "response": {"answer": "follow up", "claims": [], "evidence": [], "confidence": None},

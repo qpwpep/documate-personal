@@ -24,6 +24,7 @@ from ..latency import (
     make_synthesis_attempt_latency_event,
 )
 from ..logging_utils import log_event
+from ..planner_schema import PlannerOutput
 from ..prompts import SYS_POLICY, needs_save, needs_slack
 from .actions import build_action_only_answer, get_slack_destinations, is_action_only_request
 from .retrieval import format_evidence_for_prompt
@@ -105,6 +106,8 @@ def _coerce_synthesis_output(raw_value: Any) -> SynthesisOutput:
 def _coerce_structured_synthesis_result(
     result: Any,
 ) -> tuple[Any, AIMessage | None, Exception | None]:
+    if isinstance(result, AIMessage):
+        return result, result, None
     if not isinstance(result, dict):
         return result, None, None
 
@@ -312,6 +315,19 @@ def _build_local_fallback_payload(
     return build_empty_response_payload(answer=generic_answer)
 
 
+def _should_use_deterministic_grounded_direct(
+    *,
+    planner_output: PlannerOutput,
+    evidence_items: list[EvidenceItem],
+) -> bool:
+    if not planner_output.use_retrieval or not planner_output.tasks:
+        return False
+    if not 1 <= len(evidence_items) <= 2:
+        return False
+    selected_routes = {task.route for task in planner_output.tasks}
+    return selected_routes in ({"upload"}, {"docs", "upload"})
+
+
 def _render_synthesis_payload(
     synthesis_output: SynthesisOutput,
     evidence_items: list[EvidenceItem],
@@ -448,6 +464,45 @@ def make_synthesize_node(
             planner_output=planner_output,
         )
         deduped_evidence = evidence_to_dicts(primary_evidence_items)
+
+        if _should_use_deterministic_grounded_direct(
+            planner_output=planner_output,
+            evidence_items=primary_evidence_items,
+        ):
+            payload = build_deterministic_grounded_payload(
+                evidence_items=primary_evidence_items,
+                fallback_answer="",
+            )
+            final_answer = payload.answer
+            response = AIMessage(content=final_answer)
+            total_ms = elapsed_ms(stage_started, time.perf_counter())
+            return {
+                "messages": [response],
+                "final_answer": final_answer,
+                "response_payload": _payload_to_state_dict(payload),
+                "synthesis_output": SynthesisOutput(
+                    answer=payload.answer,
+                    claims=payload.claims,
+                    confidence=payload.confidence,
+                ).model_dump(mode="json"),
+                "synthesis_attempt": attempt,
+                "needs_retry": False,
+                "latency_trace": [
+                    make_synthesis_attempt_latency_event(
+                        attempt=attempt,
+                        mode="deterministic_grounded_direct",
+                        structured_ms=0,
+                        fallback_ms=None,
+                        total_ms=total_ms,
+                    ),
+                    make_stage_latency_event(
+                        stage="synthesis",
+                        attempt=attempt,
+                        latency_ms=total_ms,
+                        status="deterministic_grounded_direct",
+                    ),
+                ],
+            }
 
         model_messages, history_before, history_after = _build_synthesis_messages(
             state=state,
