@@ -7,7 +7,7 @@ from pathlib import Path
 
 from langchain_core.messages import AIMessage
 
-from .contracts.graph_state import build_graph_state_input
+from .contracts.boundary.graph import build_graph_state_input
 from .graph_builder import build_agent_graph
 from .logging_utils import configure_logging, log_event
 from .runtime_encoding import ensure_utf8_stdio, maybe_reexec_with_utf8

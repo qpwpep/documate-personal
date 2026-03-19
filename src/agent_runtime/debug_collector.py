@@ -4,13 +4,14 @@ from typing import Any
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
-from ..contracts.debug import (
-    coerce_llm_calls,
-    coerce_planner_diagnostic,
-    coerce_retrieval_diagnostics,
-    coerce_retry_state,
+from ..contracts.boundary.debug import (
+    get_debug_state,
+    parse_retry_state,
 )
-from ..contracts.graph_state import debug_state, planner_state, response_state, retry_state
+from ..contracts.boundary.graph import get_retry_state
+from ..contracts.boundary.planner import get_planner_state, parse_planner_diagnostic
+from ..contracts.boundary.response import get_response_state
+from ..contracts.boundary.retrieval import parse_retrieval_diagnostics
 from ..evidence import dedupe_evidence, evidence_to_dicts, parse_evidence_payload
 from ..latency import build_latency_breakdown
 
@@ -151,7 +152,7 @@ class DebugCollector:
 
     @staticmethod
     def _normalize_retry_context(raw_retry_context: Any) -> dict[str, Any] | None:
-        retry = coerce_retry_state(raw_retry_context)
+        retry = parse_retry_state(raw_retry_context)
         payload = retry.model_dump(mode="json")
         payload.pop("preserved_evidence", None)
         payload.pop("preserved_retrieval_diagnostics", None)
@@ -168,11 +169,11 @@ class DebugCollector:
 
     @staticmethod
     def _normalize_retrieval_diagnostics(raw_diagnostics: Any) -> list[dict[str, Any]]:
-        return [item.model_dump(mode="json") for item in coerce_retrieval_diagnostics(raw_diagnostics)]
+        return [item.model_dump(mode="json") for item in parse_retrieval_diagnostics(raw_diagnostics)]
 
     @staticmethod
     def _normalize_planner_diagnostics(raw_planner_diagnostics: Any) -> dict[str, Any] | None:
-        diagnostics = coerce_planner_diagnostic(raw_planner_diagnostics)
+        diagnostics = parse_planner_diagnostic(raw_planner_diagnostics)
         return diagnostics.model_dump(mode="json") if diagnostics is not None else None
 
     def build(
@@ -184,10 +185,10 @@ class DebugCollector:
         upload_retriever_build_ms: int | None,
     ) -> dict[str, Any]:
         tool_calls: list[str] = []
-        state_debug = debug_state(response)
-        state_response = response_state(response)
-        state_retry = retry_state(response)
-        state_planner = planner_state(response)
+        state_debug = get_debug_state(response)
+        state_response = get_response_state(response)
+        state_retry = get_retry_state(response)
+        state_planner = get_planner_state(response)
         debug_errors = [
             *state_debug.retrieval_errors,
             *state_debug.synthesis_errors,

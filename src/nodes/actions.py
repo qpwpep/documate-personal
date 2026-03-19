@@ -5,17 +5,12 @@ from typing import Any
 
 from langchain_core.messages import AnyMessage
 
-from ..contracts.graph_state import (
-    GraphState,
-    build_tool_message,
-    coerce_session_metadata,
-    coerce_slack_destination,
-    debug_state,
-    normalize_state_updates,
-    response_state,
-    runtime_state,
-)
+from ..contracts import GraphState, SlackDestination
+from ..contracts.boundary.debug import get_debug_state
+from ..contracts.boundary.response import get_response_state
+from ..contracts.boundary.runtime import get_runtime_state, parse_session_metadata
 from ..logging_utils import log_event
+from ..message_utils import build_tool_message
 from ..prompts import needs_rag, needs_save, needs_search, needs_slack
 from .session import latest_previous_ai_answer
 
@@ -64,9 +59,9 @@ def is_action_only_request(user_input: str) -> bool:
     return not has_action_lookup_intent(user_input)
 
 
-def get_slack_destinations(session_metadata: Any) -> dict[str, str | None]:
-    metadata = coerce_session_metadata(session_metadata)
-    return coerce_slack_destination(metadata.get("slack_destination"))
+def get_slack_destinations(session_metadata: Any) -> SlackDestination:
+    metadata = parse_session_metadata(session_metadata)
+    return metadata.slack_destination or SlackDestination()
 
 
 def build_action_only_answer(
@@ -101,9 +96,9 @@ def make_action_postprocess_node(
     has_default_slack_destination: bool = False,
 ):
     def action_postprocess(state: GraphState) -> GraphState:
-        runtime = runtime_state(state)
-        response = response_state(state)
-        debug = debug_state(state)
+        runtime = get_runtime_state(state)
+        response = get_response_state(state)
+        debug = get_debug_state(state)
         user_input = runtime.user_input
         final_answer = response.final_answer
         action_errors: list[str] = []
@@ -122,13 +117,13 @@ def make_action_postprocess_node(
 
         if needs_slack(user_input) and final_answer.strip():
             destinations = get_slack_destinations(runtime.session_metadata)
-            if any(destinations.values()) or has_default_slack_destination:
+            if destinations.has_destination() or has_default_slack_destination:
                 try:
                     slack_result = slack_notify_tool.func(
                         text=final_answer,
-                        user_id=destinations.get("user_id"),
-                        email=destinations.get("email"),
-                        channel_id=destinations.get("channel_id"),
+                        user_id=destinations.user_id,
+                        email=destinations.email,
+                        channel_id=destinations.channel_id,
                         target="auto",
                     )
                 except Exception as exc:
@@ -147,6 +142,6 @@ def make_action_postprocess_node(
             updates["debug"] = debug.model_copy(
                 update={"action_errors": [*debug.action_errors, *action_errors]}
             )
-        return normalize_state_updates(updates)
+        return updates
 
     return action_postprocess

@@ -7,14 +7,11 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse
 
-from ..contracts.debug import (
-    coerce_llm_calls,
-    coerce_planner_diagnostic,
-    coerce_retrieval_diagnostics,
-    coerce_retry_state,
-    coerce_token_usage,
-)
-from ..contracts.graph_state import SessionMetadata, coerce_slack_destination
+from ..contracts import SessionMetadata
+from ..contracts.boundary.debug import parse_llm_calls, parse_retry_state, parse_token_usage
+from ..contracts.boundary.planner import parse_planner_diagnostic
+from ..contracts.boundary.retrieval import parse_retrieval_diagnostics
+from ..contracts.boundary.runtime import parse_slack_destination
 from ..latency import LatencyBreakdownModel
 from ..logging_utils import log_event
 from ..runtime_paths import get_save_text_output_dir
@@ -46,7 +43,7 @@ def normalize_debug_info(raw_debug: dict | None, latency_ms_server: int | None) 
     models_used_raw = debug.get("models_used")
     raw_llm_calls = debug.get("llm_calls")
 
-    token_usage = coerce_token_usage(debug.get("token_usage")) or AgentTokenUsage()
+    token_usage = parse_token_usage(debug.get("token_usage")) or AgentTokenUsage()
 
     observed_evidence: list[EvidenceItem] = []
     if isinstance(observed_evidence_raw, list):
@@ -58,10 +55,10 @@ def normalize_debug_info(raw_debug: dict | None, latency_ms_server: int | None) 
             except Exception:
                 continue
 
-    retry_context = coerce_retry_state(debug.get("retry_context")) if debug.get("retry_context") else None
-    retrieval_diagnostics = coerce_retrieval_diagnostics(debug.get("retrieval_diagnostics"))
-    planner_diagnostics = coerce_planner_diagnostic(debug.get("planner_diagnostics"))
-    llm_calls = coerce_llm_calls(raw_llm_calls)
+    retry_context = parse_retry_state(debug.get("retry_context")) if debug.get("retry_context") else None
+    retrieval_diagnostics = parse_retrieval_diagnostics(debug.get("retrieval_diagnostics"))
+    planner_diagnostics = parse_planner_diagnostic(debug.get("planner_diagnostics"))
+    llm_calls = parse_llm_calls(raw_llm_calls)
 
     models_used = [str(name) for name in models_used_raw if name] if isinstance(models_used_raw, list) else []
     if not models_used and llm_calls:
@@ -101,16 +98,16 @@ def normalize_debug_info(raw_debug: dict | None, latency_ms_server: int | None) 
 
 
 def build_session_metadata_snapshot(request_data: AgentRequest) -> SessionMetadata:
-    slack_destination = coerce_slack_destination(
+    slack_destination = parse_slack_destination(
         {
             "channel_id": request_data.slack_channel_id,
             "user_id": request_data.slack_user_id,
             "email": request_data.slack_email,
         }
     )
-    return {
-        "slack_destination": slack_destination if any(slack_destination.values()) else None,
-    }
+    return SessionMetadata(
+        slack_destination=slack_destination if slack_destination.has_destination() else None,
+    )
 
 
 @router.get("/")

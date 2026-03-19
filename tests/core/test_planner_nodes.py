@@ -3,6 +3,7 @@ import unittest
 from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import ValidationError
 
+from src.contracts import PlannerDiagnostic, SessionMetadata, SlackDestination
 from src.nodes.planner import make_planner_node
 from src.planner_schema import PlannerOutput, RetrievalTask
 
@@ -10,6 +11,7 @@ from .helpers import _CapturePlannerLLM, _FailingPlannerLLM, _InvalidPlannerLLM,
 
 
 class PlannerNodeTest(unittest.TestCase):
+
 
     def test_planner_deterministically_routes_explicit_docs_request(self) -> None:
         capture_planner = _CapturePlannerLLM(PlannerOutput(use_retrieval=False, tasks=[]))
@@ -130,7 +132,7 @@ class PlannerNodeTest(unittest.TestCase):
 
         self.assertEqual(updates["planner"].status, "heuristic_fallback")
         self.assertEqual([task.route for task in updates["planner"].output.tasks], ["docs"])
-        self.assertTrue(any("planner" in error for error in updates.get("debug", {}).get("planner_errors", [])))
+        self.assertTrue(any("planner" in error for error in updates["debug"].planner_errors))
 
     def test_planner_falls_back_when_schema_invalid(self) -> None:
         planner_node = make_planner_node(_InvalidPlannerLLM(), verbose=False)

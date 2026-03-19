@@ -6,7 +6,8 @@ from typing import Any
 
 from .agent_runtime import DebugCollector, ExecutionRunner, GraphInvocationError, ResponseAssembler, SessionContext
 from .answer_schema import build_empty_response_payload
-from .contracts.graph_state import SessionMetadata, coerce_session_metadata
+from .contracts import SessionMetadata
+from .contracts.boundary.runtime import parse_session_metadata
 from .graph_builder import StageExecutionError, build_agent_graph
 from .latency import build_latency_breakdown, elapsed_ms, make_stage_latency_event
 from .logging_utils import log_event
@@ -70,7 +71,7 @@ class AgentFlowManager:
 
     @session_metadata.setter
     def session_metadata(self, value: SessionMetadata | dict[str, Any] | None) -> None:
-        self._ensure_session().session_metadata = coerce_session_metadata(value)
+        self._ensure_session().session_metadata = parse_session_metadata(value)
 
     @property
     def upload_retriever_handle(self):

@@ -3,7 +3,7 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from ..contracts.graph_state import build_graph_state_input, normalize_state_updates
+from ..contracts.boundary.graph import build_graph_state_input, normalize_graph_update
 from ..latency import elapsed_ms
 from ..settings import AppSettings
 from ..tools.local_rag import build_temp_retriever
@@ -69,7 +69,7 @@ class ExecutionRunner:
             self.session.cleanup_upload_retriever()
             self.session.upload_file_path = None
 
-        return normalize_state_updates(state), upload_retriever_build_ms
+        return normalize_graph_update(state), upload_retriever_build_ms
 
     def invoke_graph(self, state: dict[str, Any]) -> tuple[dict[str, Any], int]:
         graph_started = time.perf_counter()
