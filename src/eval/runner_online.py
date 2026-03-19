@@ -10,13 +10,9 @@ from typing import Any
 
 import requests
 
-from ..contracts.debug import (
-    coerce_llm_calls,
-    coerce_planner_diagnostic,
-    coerce_retrieval_diagnostics,
-    coerce_retry_state,
-    coerce_token_usage,
-)
+from ..contracts.boundary.debug import parse_llm_calls, parse_retry_state, parse_token_usage
+from ..contracts.boundary.planner import parse_planner_diagnostic
+from ..contracts.boundary.retrieval import parse_retrieval_diagnostics
 from ..latency import LatencyBreakdownModel
 from .judge_llm import LLMJudge
 from .reporting import build_summary, write_run_outputs
@@ -81,7 +77,7 @@ def _build_error_message_from_response(response: requests.Response) -> str:
 def _parse_token_usage(raw_debug: dict[str, Any] | None) -> TokenUsage | None:
     if not raw_debug:
         return None
-    return coerce_token_usage(raw_debug.get("token_usage"))
+    return parse_token_usage(raw_debug.get("token_usage"))
 
 
 def _parse_llm_calls(
@@ -100,7 +96,7 @@ def _parse_llm_calls(
     for index, item in enumerate(raw_items):
         if not isinstance(item, dict):
             response_errors.append(f"debug.llm_calls[{index}] must be an object")
-    return coerce_llm_calls(raw_items)
+    return parse_llm_calls(raw_items)
 
 
 def _parse_string_list(
@@ -167,7 +163,7 @@ def _parse_retrieval_diagnostics(
     for index, item in enumerate(raw_items):
         if not isinstance(item, dict):
             response_errors.append(f"debug.retrieval_diagnostics[{index}] must be an object")
-    return coerce_retrieval_diagnostics(raw_items)
+    return parse_retrieval_diagnostics(raw_items)
 
 
 def _parse_planner_diagnostics(
@@ -180,7 +176,7 @@ def _parse_planner_diagnostics(
     if not isinstance(raw_item, dict):
         response_errors.append("debug.planner_diagnostics must be an object")
         return None
-    return coerce_planner_diagnostic(raw_item)
+    return parse_planner_diagnostic(raw_item)
 
 
 def _parse_latency_breakdown(
@@ -211,7 +207,7 @@ def _parse_validator_metadata(
         response_errors.append("debug.retry_context must be an object")
         return None, None
 
-    retry_context = coerce_retry_state(raw_item)
+    retry_context = parse_retry_state(raw_item)
     validator_reason = retry_context.retry_reason
     validator_feedback = retry_context.retrieval_feedback
     return (

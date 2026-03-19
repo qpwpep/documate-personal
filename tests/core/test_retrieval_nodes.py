@@ -4,7 +4,8 @@ import unittest
 
 from langchain_core.messages import AIMessage, ToolMessage
 
-from src.contracts.graph_state import GraphState, PlannerState, ResponseState, build_graph_state_input
+from src.contracts import GraphState, PlannerState, ResponseState
+from src.contracts.boundary.graph import build_graph_state_input
 from src.make_graph import build_graph
 from src.nodes.retrieval import make_retrieve_dispatch_node
 from src.nodes.session import add_user_message

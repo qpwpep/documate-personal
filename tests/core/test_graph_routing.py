@@ -2,8 +2,11 @@ import unittest
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
+from src.contracts import GraphState, PlannerState, ResponseState
+from src.contracts.boundary.graph import build_graph_state_input
+from src.contracts.boundary.response import get_response_state
+from src.contracts.boundary.retrieval import get_retrieval_state
 from src.make_graph import build_graph
-from src.contracts.graph_state import GraphState, PlannerState, ResponseState, build_graph_state_input, response_state, retrieval_state
 from src.nodes.planner import make_planner_node
 from src.nodes.retrieval import make_retrieve_dispatch_node
 from src.nodes.session import add_user_message
@@ -201,7 +204,7 @@ class GraphRoutingTest(unittest.TestCase):
         def _synthesize(state):
             synth_calls["count"] += 1
             answer = f"answer-{synth_calls['count']}"
-            attempt = response_state(state).synthesis_attempt + 1
+            attempt = get_response_state(state).synthesis_attempt + 1
             if synth_calls["count"] == 1:
                 return {
                     "messages": [AIMessage(content=answer)],
@@ -220,7 +223,7 @@ class GraphRoutingTest(unittest.TestCase):
                                 "confidence": 0.92,
                             }
                         ],
-                        "evidence": retrieval_state(state).evidence_log,
+                        "evidence": get_retrieval_state(state).evidence_log,
                         "confidence": 0.92,
                     },
                     synthesis_attempt=attempt,

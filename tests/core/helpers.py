@@ -1,14 +1,13 @@
 from langchain_core.messages import AIMessage
 
-from src.contracts.graph_state import (
+from src.contracts import (
     DebugState,
     PlannerState,
     ResponseState,
     RetrievalState,
     RetryState,
-    build_graph_state_input,
-    normalize_state_updates,
 )
+from src.contracts.boundary.graph import build_graph_state_input, normalize_graph_update
 
 
 def build_test_graph_state(*, user_input: str, messages: list | None = None, **kwargs):
@@ -117,7 +116,7 @@ def build_legacy_state(payload: dict):
         }
         state["debug"] = DebugState.model_validate(debug_payload)
 
-    return normalize_state_updates(state)
+    return normalize_graph_update(state)
 
 
 class _ToolWrapper:
