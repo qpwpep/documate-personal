@@ -4,7 +4,8 @@ from typing import Any
 
 from langgraph.graph import END, StateGraph
 
-from .contracts.graph_state import planner_state, retry_state
+from .contracts.boundary.graph import get_retry_state
+from .contracts.boundary.planner import get_planner_state
 
 def _summary_router(state: dict[str, Any], summary_max_turns: int) -> str:
     messages = state.get("messages")
@@ -17,7 +18,7 @@ def _summary_router(state: dict[str, Any], summary_max_turns: int) -> str:
 
 
 def _planner_router(state: dict[str, Any]) -> str:
-    planner = planner_state(state)
+    planner = get_planner_state(state)
     planner_output = planner.output
     use_retrieval = bool(getattr(planner_output, "use_retrieval", False))
     tasks = getattr(planner_output, "tasks", []) or []
@@ -27,7 +28,7 @@ def _planner_router(state: dict[str, Any]) -> str:
 
 
 def _validate_router(state: dict[str, Any]) -> str:
-    if retry_state(state).needs_retry:
+    if get_retry_state(state).needs_retry:
         return "retry"
     return "postprocess"
 

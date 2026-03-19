@@ -3,6 +3,7 @@ import unittest
 from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import ValidationError
 
+from src.contracts import PlannerDiagnostic, SessionMetadata, SlackDestination
 from src.nodes.planner import make_planner_node
 from src.planner_schema import PlannerOutput, RetrievalTask
 
@@ -10,6 +11,13 @@ from .helpers import _CapturePlannerLLM, _FailingPlannerLLM, _InvalidPlannerLLM,
 
 
 class PlannerNodeTest(unittest.TestCase):
+    def test_nested_state_models_are_not_subscriptable(self) -> None:
+        with self.assertRaises(TypeError):
+            _ = PlannerDiagnostic()["reason"]
+
+        with self.assertRaises(TypeError):
+            _ = SessionMetadata(slack_destination=SlackDestination(channel_id="C123"))["slack_destination"]
+
     def test_planner_schema_rules(self) -> None:
         self.assertEqual(PlannerOutput(use_retrieval=False, tasks=[]).tasks, [])
 
@@ -150,7 +158,7 @@ class PlannerNodeTest(unittest.TestCase):
 
         self.assertEqual(updates["planner"].status, "heuristic_fallback")
         self.assertEqual([task.route for task in updates["planner"].output.tasks], ["docs"])
-        self.assertTrue(any("planner" in error for error in updates.get("debug", {}).get("planner_errors", [])))
+        self.assertTrue(any("planner" in error for error in updates["debug"].planner_errors))
 
     def test_planner_falls_back_when_schema_invalid(self) -> None:
         planner_node = make_planner_node(_InvalidPlannerLLM(), verbose=False)

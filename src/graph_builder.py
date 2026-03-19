@@ -1,14 +1,11 @@
 import time
 from typing import Any
 
-from .contracts.graph_state import (
-    GraphState,
-    debug_state,
-    normalize_state_updates,
-    planner_state,
-    response_state,
-    retry_state,
-)
+from .contracts import GraphState
+from .contracts.boundary.debug import get_debug_state
+from .contracts.boundary.graph import get_retry_state, normalize_graph_update
+from .contracts.boundary.planner import get_planner_state
+from .contracts.boundary.response import get_response_state
 from .latency import elapsed_ms, make_stage_latency_event
 from .llm import build_llm_registry
 from .make_graph import build_graph
@@ -32,22 +29,32 @@ class StageExecutionError(RuntimeError):
 
 def _resolve_stage_attempt(stage: str, state: GraphState, updates: GraphState) -> int:
     if stage in {"planner"}:
-        retry_context = retry_state(state)
+        retry_context = get_retry_state(state)
         return int(retry_context.attempt) + 1
     if stage == "validation":
-        return max(1, int(response_state(state).synthesis_attempt or 0))
+        return max(1, int(get_response_state(state).synthesis_attempt or 0))
     if stage == "action_postprocess":
-        return max(1, int(response_state(state).synthesis_attempt or 1))
+        return max(1, int(get_response_state(state).synthesis_attempt or 1))
     return 1
 
 
 def _resolve_stage_status(stage: str, updates: GraphState) -> str | None:
     if stage == "planner":
-        status = planner_state(updates).status
+        status = get_planner_state(updates).status
         return str(status) if status else None
     if stage == "validation":
-        return "retry" if retry_state(updates).needs_retry else "pass"
+        return "retry" if get_retry_state(updates).needs_retry else "pass"
     return None
+
+
+def _normalize_node(node: Any):
+    def wrapped(state: GraphState) -> GraphState:
+        updates = node(state)
+        if not isinstance(updates, dict):
+            return updates
+        return normalize_graph_update(updates)
+
+    return wrapped
 
 
 def _instrument_stage_node(stage: str, node: Any):
@@ -63,8 +70,9 @@ def _instrument_stage_node(stage: str, node: Any):
             ) from exc
         if not isinstance(updates, dict):
             return updates
+        updates = normalize_graph_update(updates)
 
-        debug = debug_state(updates)
+        debug = get_debug_state(updates)
         latency_event = make_stage_latency_event(
             stage=stage,  # type: ignore[arg-type]
             attempt=_resolve_stage_attempt(stage, state, updates),
@@ -74,7 +82,7 @@ def _instrument_stage_node(stage: str, node: Any):
         updates["debug"] = debug.model_copy(
             update={"latency_trace": [*debug.latency_trace, latency_event]}
         )
-        return normalize_state_updates(updates)
+        return updates
 
     return wrapped
 
@@ -106,6 +114,7 @@ def build_agent_graph(settings: AppSettings | None = None):
         rag_search_tool=tool_registry.rag_search_tool,
         verbose=llm_registry.verbose,
     )
+    retrieve_dispatch_node = _normalize_node(retrieve_dispatch_node)
     synthesize_node = make_synthesize_node(
         llm_synthesizer=llm_registry.llm_synthesizer,
         llm_synthesizer_compact=llm_registry.llm_synthesizer_compact,
@@ -113,6 +122,7 @@ def build_agent_graph(settings: AppSettings | None = None):
         max_turns=6,
         has_default_slack_destination=has_default_slack_destination,
     )
+    synthesize_node = _normalize_node(synthesize_node)
     validate_evidence_node = make_validate_evidence_node(verbose=llm_registry.verbose)
     validate_evidence_node = _instrument_stage_node("validation", validate_evidence_node)
     action_postprocess_node = make_action_postprocess_node(
@@ -125,10 +135,11 @@ def build_agent_graph(settings: AppSettings | None = None):
         "action_postprocess",
         action_postprocess_node,
     )
+    add_user_node = _normalize_node(add_user_message)
 
     graph_object = build_graph(
         state_type=GraphState,
-        add_user_node=add_user_message,
+        add_user_node=add_user_node,
         summarize_node=summarize_node,
         planner_node=planner_node,
         retrieve_dispatch_node=retrieve_dispatch_node,

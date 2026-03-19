@@ -9,7 +9,7 @@ from langchain_core.embeddings import Embeddings
 from langchain_core.messages import AIMessage, HumanMessage
 
 from src.agent_manager import AgentFlowManager
-from src.contracts.graph_state import ResponseState
+from src.contracts import ResponseState
 from src.settings import AppSettings
 from src.tools.local_rag import build_temp_retriever
 from src.web.routes import build_session_metadata_snapshot
@@ -166,13 +166,13 @@ class UploadSessionIsolationTest(unittest.TestCase):
         manager.run_agent_flow("send this to slack")
 
         self.assertEqual(
-            graph.states[-1]["runtime"].session_metadata["slack_destination"]["channel_id"],
+            graph.states[-1]["runtime"].session_metadata.slack_destination.channel_id,
             "C123BENCH",
         )
 
         manager.close()
 
-        self.assertEqual(manager.session_metadata, {"slack_destination": None})
+        self.assertIsNone(manager.session_metadata.slack_destination)
         self.assertEqual(manager.messages, [])
 
     def test_session_metadata_snapshot_replaces_previous_slack_destination(self) -> None:
@@ -191,7 +191,7 @@ class UploadSessionIsolationTest(unittest.TestCase):
         manager.run_agent_flow("share this to slack")
 
         self.assertEqual(
-            graph.states[-1]["runtime"].session_metadata["slack_destination"]["channel_id"],
+            graph.states[-1]["runtime"].session_metadata.slack_destination.channel_id,
             "C123BENCH",
         )
 
@@ -205,7 +205,7 @@ class UploadSessionIsolationTest(unittest.TestCase):
         )
         manager.run_agent_flow("share this to slack")
 
-        self.assertIsNone(graph.states[-1]["runtime"].session_metadata["slack_destination"])
+        self.assertIsNone(graph.states[-1]["runtime"].session_metadata.slack_destination)
         self.assertFalse(any(message.__class__.__name__ == "SystemMessage" for message in manager.messages))
 
 

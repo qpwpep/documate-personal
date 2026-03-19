@@ -5,8 +5,10 @@ from typing import Any, List
 
 from langchain_core.messages import AIMessage, AnyMessage, BaseMessage, HumanMessage, SystemMessage
 
+from ..contracts import GraphState
+from ..contracts.boundary.debug import get_debug_state
+from ..contracts.boundary.runtime import get_runtime_state
 from ..contracts.debug import LLMCallMetadata, build_llm_call_metadata
-from ..contracts.graph_state import GraphState, debug_state, normalize_state_updates, runtime_state
 from ..logging_utils import log_event
 
 SUMMARY_SYS = (
@@ -20,8 +22,8 @@ logger = logging.getLogger(__name__)
 
 
 def add_user_message(state: GraphState) -> GraphState:
-    runtime = runtime_state(state)
-    return normalize_state_updates({"messages": [HumanMessage(content=runtime.user_input)]})
+    runtime = get_runtime_state(state)
+    return {"messages": [HumanMessage(content=runtime.user_input)]}
 
 
 def keep_recent_messages(messages: List[BaseMessage], max_turns: int = 6) -> List[BaseMessage]:
@@ -91,10 +93,10 @@ def make_summarize_node(llm_summarizer: Any, verbose: bool, max_turns: int = 6):
         except Exception as exc:
             if verbose:
                 log_event(logger, logging.WARNING, "summary_failed", error=exc)
-            return normalize_state_updates({"messages": recent_messages})
+            return {"messages": recent_messages}
 
-        runtime = runtime_state(state)
-        debug = debug_state(state)
+        runtime = get_runtime_state(state)
+        debug = get_debug_state(state)
         previous_summary = (runtime.memory_summary or "").strip()
         merged_summary = (previous_summary + ("\n" if previous_summary else "") + summary).strip()
         updates: GraphState = {
@@ -107,6 +109,6 @@ def make_summarize_node(llm_summarizer: Any, verbose: bool, max_turns: int = 6):
             )
         if verbose:
             log_event(logger, logging.INFO, "summary_merged", cutoff=cutoff)
-        return normalize_state_updates(updates)
+        return updates
 
     return summarize_old_messages

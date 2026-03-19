@@ -7,7 +7,7 @@ from typing import Any
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from ..answer_schema import build_empty_response_payload
-from ..contracts.graph_state import response_state
+from ..contracts.boundary.response import get_response_state
 
 
 class ResponseAssembler:
@@ -34,7 +34,7 @@ class ResponseAssembler:
         updated_messages: list[Any],
         debug_info: dict[str, Any],
     ) -> dict[str, Any]:
-        final_answer = response_state(response).final_answer
+        final_answer = get_response_state(response).final_answer
         file_path = ""
 
         for message in reversed(updated_messages):
@@ -59,7 +59,7 @@ class ResponseAssembler:
             if final_answer and file_path:
                 break
 
-        response_payload = response_state(response).payload.model_dump(mode="json")
+        response_payload = get_response_state(response).payload.model_dump(mode="json")
         if not response_payload:
             response_payload = build_empty_response_payload(answer=final_answer).model_dump(mode="json")
 
