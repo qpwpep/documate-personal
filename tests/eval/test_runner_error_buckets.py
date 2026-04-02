@@ -20,7 +20,7 @@ class _FakeResponse:
 
 
 class _DummyJudge:
-    def __init__(self, result: tuple[float | None, str | None, str | None]):
+    def __init__(self, result):
         self._result = result
 
     def score_case(self, case: BenchmarkCase, response_text: str, tool_calls: list[str]):
@@ -57,7 +57,24 @@ class RunnerErrorBucketsTest(unittest.TestCase):
                 "response": "legacy string response",
                 "trace": "x",
                 "file_path": "",
-                "debug": {"tool_calls": [], "token_usage": {}, "observed_evidence": []},
+                "debug": {
+                    "schema_version": 2,
+                    "observability_status": "ok",
+                    "missing_required_debug_fields": [],
+                    "tool_calls": [],
+                    "tool_call_count": 0,
+                    "token_usage": {},
+                    "model_name": None,
+                    "models_used": [],
+                    "llm_calls": [],
+                    "errors": [],
+                    "planner_errors": [],
+                    "observed_evidence": [],
+                    "retry_context": None,
+                    "retrieval_diagnostics": [],
+                    "planner_diagnostics": None,
+                    "latency_breakdown": None,
+                },
             },
         )
         result = _run_single_case(
@@ -81,9 +98,22 @@ class RunnerErrorBucketsTest(unittest.TestCase):
                 "trace": "x",
                 "file_path": "",
                 "debug": {
+                    "schema_version": 2,
+                    "observability_status": "ok",
+                    "missing_required_debug_fields": [],
                     "tool_calls": ["tavily_search"],
+                    "tool_call_count": 1,
                     "token_usage": {},
+                    "model_name": None,
+                    "models_used": [],
+                    "llm_calls": [],
+                    "errors": [],
+                    "planner_errors": [],
                     "observed_evidence": [],
+                    "retry_context": None,
+                    "retrieval_diagnostics": [],
+                    "planner_diagnostics": None,
+                    "latency_breakdown": None,
                 },
             },
         )
@@ -109,8 +139,17 @@ class RunnerErrorBucketsTest(unittest.TestCase):
                 "trace": "x",
                 "file_path": "",
                 "debug": {
+                    "schema_version": 2,
+                    "observability_status": "ok",
+                    "missing_required_debug_fields": [],
                     "tool_calls": ["tavily_search", "upload_search", "rag_search"],
+                    "tool_call_count": 3,
                     "token_usage": {},
+                    "model_name": None,
+                    "models_used": [],
+                    "llm_calls": [],
+                    "errors": [],
+                    "planner_errors": [],
                     "observed_evidence": [],
                     "retrieval_diagnostics": [
                         {
@@ -151,6 +190,8 @@ class RunnerErrorBucketsTest(unittest.TestCase):
                         "reason": "planner_failed_or_invalid",
                         "fallback_routes": ["docs", "upload"],
                     },
+                    "retry_context": None,
+                    "latency_breakdown": None,
                 },
             },
         )
@@ -179,8 +220,17 @@ class RunnerErrorBucketsTest(unittest.TestCase):
                 "trace": "x",
                 "file_path": "",
                 "debug": {
+                    "schema_version": 2,
+                    "observability_status": "ok",
+                    "missing_required_debug_fields": [],
                     "tool_calls": ["tavily_search"],
+                    "tool_call_count": 1,
                     "token_usage": {},
+                    "model_name": None,
+                    "models_used": [],
+                    "llm_calls": [],
+                    "errors": [],
+                    "planner_errors": [],
                     "observed_evidence": [],
                     "retry_context": {
                         "attempt": 1,
@@ -188,6 +238,9 @@ class RunnerErrorBucketsTest(unittest.TestCase):
                         "retry_reason": "no_evidence",
                         "retrieval_feedback": "low evidence confidence; broaden query or switch route.",
                     },
+                    "retrieval_diagnostics": [],
+                    "planner_diagnostics": None,
+                    "latency_breakdown": None,
                 },
             },
         )
@@ -207,6 +260,93 @@ class RunnerErrorBucketsTest(unittest.TestCase):
             result.validator_feedback,
             "low evidence confidence; broaden query or switch route.",
         )
+
+    @patch("src.eval.runner_online.requests.post")
+    def test_runner_marks_missing_critical_debug_fields_as_response_error(self, mock_post) -> None:
+        mock_post.return_value = _FakeResponse(
+            200,
+            {
+                "response": {"answer": "ok", "evidence": []},
+                "trace": "x",
+                "file_path": "",
+                "debug": {
+                    "tool_calls": ["tavily_search"],
+                    "observed_evidence": [],
+                },
+            },
+        )
+
+        result = _run_single_case(
+            run_id="run-debug-contract",
+            endpoint="http://localhost:8000",
+            fixtures_path=self.fixtures_path,
+            case=self.case,
+            timeout_seconds=5,
+            judge=_DummyJudge((None, None, None)),
+            config=self.config,
+        )
+
+        self.assertTrue(any("critical debug fields missing:" in msg for msg in result.response_errors))
+        self.assertFalse(result.passed)
+
+    @patch("src.eval.runner_online.requests.post")
+    def test_runner_applies_docs_judge_min_score_gate(self, mock_post) -> None:
+        mock_post.return_value = _FakeResponse(
+            200,
+            {
+                "response": {"answer": "ok", "evidence": []},
+                "trace": "x",
+                "file_path": "",
+                "debug": {
+                    "schema_version": 2,
+                    "observability_status": "ok",
+                    "missing_required_debug_fields": [],
+                    "tool_calls": ["tavily_search"],
+                    "tool_call_count": 1,
+                    "token_usage": {},
+                    "model_name": None,
+                    "models_used": [],
+                    "llm_calls": [],
+                    "errors": [],
+                    "planner_errors": [],
+                    "observed_evidence": [],
+                    "retry_context": None,
+                    "retrieval_diagnostics": [],
+                    "planner_diagnostics": None,
+                    "latency_breakdown": None,
+                },
+            },
+        )
+
+        result = _run_single_case(
+            run_id="run-judge-gate",
+            endpoint="http://localhost:8000",
+            fixtures_path=self.fixtures_path,
+            case=self.case,
+            timeout_seconds=5,
+            judge=_DummyJudge(
+                (
+                    0.4,
+                    "answer stayed too generic",
+                    None,
+                    {
+                        "answer_quality": 0.4,
+                        "groundedness": 0.5,
+                        "citation_traceability": 0.5,
+                        "tool_choice": 1.0,
+                        "format_language": 0.7,
+                    },
+                )
+            ),
+            config=self.config,
+        )
+
+        self.assertIsNotNone(result.judge_subscores)
+        self.assertEqual(result.judge_score_total, 0.4)
+        self.assertTrue(any("judge_min_score audit failed:" in msg for msg in result.judge_errors))
+        self.assertFalse(result.product_pass)
+        self.assertFalse(result.release_pass)
+        self.assertFalse(result.passed)
 
 
 if __name__ == "__main__":
