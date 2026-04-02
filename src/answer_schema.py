@@ -11,6 +11,58 @@ from .evidence import EvidenceItem
 
 _CITATION_PATTERN = re.compile(r"\s*\[(?:\d+)\]\s*$")
 _LEADING_TITLE_PATTERN = re.compile(r"(?i)^title:\s*")
+_MARKDOWN_LINK_PATTERN = re.compile(r"!?\[([^\]]+)\]\([^)]+\)")
+_MARKDOWN_IMAGE_PATTERN = re.compile(r"!\[([^\]]*)\]\([^)]+\)")
+_HTML_TAG_PATTERN = re.compile(r"<[^>]+>")
+_MARKDOWN_HEADING_PATTERN = re.compile(r"^\s*#{1,6}\s+")
+_LEADING_MARKDOWN_PATTERN = re.compile(r"^\s*(?:#{1,6}\s+|[-*+]\s+|\d+[.)]\s+)")
+_MARKDOWN_DECORATION_PATTERN = re.compile(r"[*~`]+")
+_NAVIGATION_LINE_PATTERNS = (
+    re.compile(r"(?i)^(?:api|api reference|documentation|docs?|guide|reference|tutorials?|user guide)$"),
+    re.compile(r"(?i)^(?:table of contents|contents|on this page|in this article)$"),
+    re.compile(r"(?i)^(?:next|previous|prev|back to top|edit this page|view source|search|skip to content)$"),
+    re.compile(r"(?i)^(?:navigation|menu|breadcrumbs?|home)$"),
+)
+_NAVIGATION_PREFIX_PATTERNS = (
+    re.compile(r"(?i)^(?:table of contents|contents|on this page|in this article)\b"),
+    re.compile(r"(?i)^(?:next|previous|prev)\s*[:\-]?\s+\S"),
+    re.compile(r"(?i)^(?:navigation|menu|breadcrumbs?)\s*[:\-]?\s+\S"),
+)
+_BREADCRUMB_SPLIT_PATTERN = re.compile(r"\s*(?:[>]|[|]|/|›|»)\s*")
+_BREADCRUMB_WORDS = {
+    "api",
+    "article",
+    "back",
+    "content",
+    "reference",
+    "references",
+    "doc",
+    "docs",
+    "documentation",
+    "edit",
+    "guide",
+    "guides",
+    "home",
+    "in",
+    "learn",
+    "navigation",
+    "next",
+    "of",
+    "on",
+    "overview",
+    "page",
+    "previous",
+    "reference",
+    "search",
+    "skip",
+    "source",
+    "this",
+    "to",
+    "tutorial",
+    "tutorials",
+    "user",
+    "view",
+}
 
 
 def normalize_confidence(value: object, *, clamp: bool = False) -> float | None:
@@ -81,10 +133,71 @@ def build_empty_response_payload(
 
 def clean_grounded_text(text: str) -> str:
     cleaned = _LEADING_TITLE_PATTERN.sub("", str(text or "").strip())
-    cleaned = cleaned.replace("\n", " ")
+    if not cleaned:
+        return ""
+
+    filtered_lines: list[str] = []
+    for raw_line in cleaned.replace("\r", "\n").split("\n"):
+        is_markdown_heading = _MARKDOWN_HEADING_PATTERN.match(raw_line) is not None
+        is_markdown_link_only = _MARKDOWN_LINK_PATTERN.fullmatch(raw_line.strip()) is not None
+        line = _MARKDOWN_IMAGE_PATTERN.sub(" ", raw_line)
+        line = _MARKDOWN_LINK_PATTERN.sub(r"\1", line)
+        line = _HTML_TAG_PATTERN.sub(" ", line)
+        line = _LEADING_MARKDOWN_PATTERN.sub("", line).strip()
+        line = _MARKDOWN_DECORATION_PATTERN.sub(" ", line)
+        line = re.sub(r"\s+", " ", line).strip(" -|:")
+        if not line:
+            continue
+        if is_markdown_heading and len(line.split()) <= 8:
+            continue
+        if is_markdown_link_only and len(line.split()) <= 8:
+            continue
+        if _looks_like_navigation_line(line):
+            continue
+        filtered_lines.append(line)
+
+    cleaned = " ".join(filtered_lines)
     cleaned = re.sub(r"\s+", " ", cleaned)
     cleaned = re.sub(r"\s+\.\.\.\s*$", "", cleaned)
     return cleaned.strip()
+
+
+def _looks_like_navigation_line(line: str) -> bool:
+    if any(pattern.fullmatch(line) for pattern in _NAVIGATION_LINE_PATTERNS):
+        return True
+    if any(pattern.match(line) for pattern in _NAVIGATION_PREFIX_PATTERNS):
+        return True
+
+    line_words = {
+        word.lower()
+        for word in re.findall(r"[A-Za-z][A-Za-z0-9-]*", line)
+    }
+    if line_words and len(line_words) <= 8 and line_words.issubset(_BREADCRUMB_WORDS):
+        return True
+
+    breadcrumb_segments = [
+        segment.strip()
+        for segment in _BREADCRUMB_SPLIT_PATTERN.split(line)
+        if segment.strip()
+    ]
+    if len(breadcrumb_segments) <= 1:
+        return False
+    normalized_segments = [re.sub(r"\s+", " ", segment).strip().lower() for segment in breadcrumb_segments]
+    if any(len(segment.split()) > 4 for segment in normalized_segments):
+        return False
+    if normalized_segments[0] == "home":
+        return True
+    if any(segment in _BREADCRUMB_WORDS for segment in normalized_segments[:-1]):
+        return True
+    if all(_looks_like_navigation_line(segment) for segment in breadcrumb_segments):
+        return True
+
+    breadcrumb_words = {
+        word.lower()
+        for segment in breadcrumb_segments
+        for word in re.findall(r"[A-Za-z][A-Za-z0-9-]*", segment)
+    }
+    return bool(breadcrumb_words) and breadcrumb_words.issubset(_BREADCRUMB_WORDS)
 
 
 def _strip_trailing_citations(text: str) -> str:

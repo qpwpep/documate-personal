@@ -31,7 +31,7 @@ class AppSettings(BaseSettings):
         ge=1,
     )
     synthesis_timeout_seconds: int = Field(
-        default=12,
+        default=20,
         alias="SYNTHESIS_TIMEOUT_SECONDS",
         ge=1,
     )
@@ -44,6 +44,11 @@ class AppSettings(BaseSettings):
         default=900,
         alias="SYNTHESIS_MAX_TOKENS",
         ge=1,
+    )
+    synthesis_prompt_snippet_chars: int = Field(
+        default=400,
+        alias="SYNTHESIS_PROMPT_SNIPPET_CHARS",
+        ge=80,
     )
 
     verbose: bool = Field(default=True, alias="VERBOSE")

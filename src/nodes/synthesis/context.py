@@ -101,6 +101,8 @@ def prepare_synthesis_inputs(
     state: GraphState,
     context: SynthesisContext,
     max_turns: int,
+    prompt_snippet_char_limit: int,
+    prompt_evidence_char_budget: int | None,
 ) -> PreparedSynthesisInputs:
     deduped_evidence = evidence_to_dicts(context.primary_evidence_items)
     model_messages, history_before, history_after = build_synthesis_messages(
@@ -112,6 +114,8 @@ def prepare_synthesis_inputs(
         deduped_evidence=deduped_evidence,
         attempt=context.attempt,
         max_turns=max_turns,
+        snippet_char_limit=prompt_snippet_char_limit,
+        evidence_char_budget=prompt_evidence_char_budget,
     )
     return PreparedSynthesisInputs(
         attempt=context.attempt,
