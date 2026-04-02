@@ -160,6 +160,7 @@ class PlannerNodeTest(unittest.TestCase):
         self.assertFalse(updates["planner"].output.use_retrieval)
 
 
+
     def test_planner_includes_retry_context_system_message_on_retry(self) -> None:
         capture_planner = _CapturePlannerLLM(PlannerOutput(use_retrieval=False, tasks=[]))
         planner_node = make_planner_node(capture_planner, verbose=False)

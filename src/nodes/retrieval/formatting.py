@@ -1,9 +1,44 @@
 from __future__ import annotations
 
+import math
 from typing import Any
 
 
-def format_evidence_for_prompt(items: list[dict[str, Any]]) -> str:
+def _truncate_prompt_snippet(value: str, *, max_chars: int) -> str:
+    snippet = str(value or "").strip()
+    if not snippet or max_chars < 1 or len(snippet) <= max_chars:
+        return snippet
+    if max_chars <= 3:
+        return snippet[:max_chars]
+    return snippet[: max_chars - 3].rstrip() + "..."
+
+
+def _normalize_cell_id(value: Any) -> int | None:
+    try:
+        if value is None or value == "":
+            return None
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _normalize_relevance_score(value: Any) -> float | None:
+    try:
+        if value is None or value == "":
+            return None
+        score = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(score):
+        return None
+    return max(0.0, min(1.0, score))
+
+
+def format_evidence_for_prompt(
+    items: list[dict[str, Any]],
+    *,
+    max_snippet_chars: int = 280,
+) -> str:
     if not items:
         return "No retrieved evidence."
 
@@ -13,15 +48,21 @@ def format_evidence_for_prompt(items: list[dict[str, Any]]) -> str:
         source = str(item.get("url_or_path") or "unknown-source")
         source_id = str(item.get("source_id") or "").strip()
         title = str(item.get("title") or "").strip()
-        snippet = str(item.get("snippet") or "").strip()
+        snippet = _truncate_prompt_snippet(
+            str(item.get("snippet") or "").strip(),
+            max_chars=max_snippet_chars,
+        )
+        score = _normalize_relevance_score(item.get("score"))
         chunk_id = item.get("chunk_id")
-        cell_id = item.get("cell_id")
+        cell_id = _normalize_cell_id(item.get("cell_id"))
         start_offset = item.get("start_offset")
         end_offset = item.get("end_offset")
         header = f"{index}. [{kind}] {title} - {source}" if title else f"{index}. [{kind}] {source}"
         lines.append(header)
         if source_id:
             lines.append(f"   source_id: {source_id}")
+        if score is not None:
+            lines.append(f"   relevance_score: {score:.3f}")
         if cell_id is not None or chunk_id is not None:
             location_parts: list[str] = []
             if cell_id is not None:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any, Literal
 from urllib.parse import urlparse
 
@@ -7,10 +8,14 @@ import requests
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field
 
-from ..answer_schema import normalize_confidence
 from ..rules import get_rules_config
 from ..settings import AppSettings
-from ._common import build_evidence_item, build_retrieval_payload, dedupe_evidence_dicts
+from ._common import (
+    build_evidence_item,
+    build_retrieval_payload,
+    dedupe_evidence_dicts,
+    normalize_relevance_score,
+)
 
 
 TAVILY_SEARCH_API_URL = "https://api.tavily.com/search"
@@ -45,6 +50,13 @@ def normalize_include_domains(raw_values: list[str]) -> list[str]:
         if domain and domain not in normalized:
             normalized.append(domain)
     return normalized
+
+
+def _normalize_domain(value: str) -> str:
+    candidate = str(value or "").strip().lower()
+    if candidate.startswith("www."):
+        candidate = candidate[4:]
+    return candidate
 
 
 def _normalize_path_prefix(path: str) -> str:
@@ -83,6 +95,82 @@ def is_valid_doc_result(*, url: str, title: Any, snippet: Any) -> bool:
         return False
 
     return not any(marker in combined for marker in _docs_search_rules().error_page_markers)
+
+
+def _url_domain(url: str) -> str:
+    parsed = urlparse(str(url or "").strip())
+    return _normalize_domain(parsed.netloc)
+
+
+def filter_evidence_to_domains(
+    evidence: list[dict[str, Any]],
+    *,
+    allowed_domains: list[str],
+) -> list[dict[str, Any]]:
+    normalized_domains = _normalized_domain_set(allowed_domains)
+    if not normalized_domains:
+        return evidence
+    return [
+        item
+        for item in evidence
+        if _url_domain(str(item.get("url_or_path") or "")) in normalized_domains
+    ]
+
+
+def _normalized_domain_set(allowed_domains: list[str] | None) -> set[str]:
+    if not allowed_domains:
+        return set()
+    return {_normalize_domain(domain) for domain in allowed_domains if _normalize_domain(domain)}
+
+
+def _result_matches_domains(url: str, allowed_domains: set[str]) -> bool:
+    if not allowed_domains:
+        return True
+    return _url_domain(url) in allowed_domains
+
+
+def _collect_docs_search_evidence(
+    results: list[dict[str, Any]],
+    *,
+    allowed_domains: list[str] | None,
+    retrieval_warnings: list[str],
+) -> tuple[list[Any], list[float]]:
+    evidence_items: list[Any] = []
+    raw_scores: list[float] = []
+    normalized_domains = _normalized_domain_set(allowed_domains)
+    for result in results:
+        if not isinstance(result, dict):
+            continue
+        url = str(result.get("url") or "").strip()
+        if not is_valid_doc_result(
+            url=url,
+            title=result.get("title"),
+            snippet=result.get("content"),
+        ):
+            continue
+        if not _result_matches_domains(url, normalized_domains):
+            if "cross_library_domain_filtered" not in retrieval_warnings:
+                retrieval_warnings.append("cross_library_domain_filtered")
+            continue
+        normalized_score, raw_score = normalize_relevance_score(
+            result.get("score"),
+            warnings=retrieval_warnings,
+        )
+        evidence_item = build_evidence_item(
+            kind="official",
+            tool="tavily_search",
+            url_or_path=url,
+            title=result.get("title"),
+            snippet=result.get("content"),
+            score=normalized_score,
+            metadata={},
+            warnings=retrieval_warnings,
+        )
+        if evidence_item is not None:
+            evidence_items.append(evidence_item)
+            if raw_score is not None:
+                raw_scores.append(raw_score)
+    return evidence_items, raw_scores
 
 
 def request_tavily_search(
@@ -142,9 +230,18 @@ def request_tavily_search(
 def infer_docs_query_hint(query: str) -> tuple[str, list[str], list[str]] | None:
     lowered = str(query or "").lower()
     for hint in _docs_search_rules().query_hints:
-        if any(identifier in lowered for identifier in hint.identifiers):
+        if any(_query_hint_matches(lowered, identifier, match_mode=hint.match_mode) for identifier in hint.identifiers):
             return hint.library_name, list(hint.domains), list(hint.fallback_queries)
     return None
+
+
+def _query_hint_matches(query: str, identifier: str, *, match_mode: Literal["contains", "word"]) -> bool:
+    normalized_identifier = str(identifier or "").strip().lower()
+    if not normalized_identifier:
+        return False
+    if match_mode == "word":
+        return re.search(rf"(?<![A-Za-z0-9_]){re.escape(normalized_identifier)}(?![A-Za-z0-9_])", query) is not None
+    return normalized_identifier in query
 
 
 def build_docs_search_tool(settings: AppSettings) -> Any:
@@ -158,6 +255,7 @@ def build_docs_search_tool(settings: AppSettings) -> Any:
         domains = normalize_include_domains(include_domains or default_domains)
         effective_query = str(query or "").strip()
         fallback_queries: list[str] = []
+        hinted_domains: list[str] | None = None
         if include_domains is None:
             query_hint = infer_docs_query_hint(effective_query)
             if query_hint is not None:
@@ -201,27 +299,15 @@ def build_docs_search_tool(settings: AppSettings) -> Any:
             )
 
         evidence_items = []
-        for result in results:
-            if not isinstance(result, dict):
-                continue
-            url = str(result.get("url") or "").strip()
-            if not is_valid_doc_result(
-                url=url,
-                title=result.get("title"),
-                snippet=result.get("content"),
-            ):
-                continue
-            evidence_item = build_evidence_item(
-                kind="official",
-                tool="tavily_search",
-                url_or_path=url,
-                title=result.get("title"),
-                snippet=result.get("content"),
-                score=normalize_confidence(result.get("score"), clamp=True),
-                metadata={},
-            )
-            if evidence_item is not None:
-                evidence_items.append(evidence_item)
+        retrieval_warnings: list[str] = []
+        raw_scores: list[float] = []
+        batch_evidence, batch_raw_scores = _collect_docs_search_evidence(
+            results,
+            allowed_domains=hinted_domains,
+            retrieval_warnings=retrieval_warnings,
+        )
+        evidence_items.extend(batch_evidence)
+        raw_scores.extend(batch_raw_scores)
 
         for fallback_query in fallback_queries:
             if evidence_items:
@@ -239,27 +325,13 @@ def build_docs_search_tool(settings: AppSettings) -> Any:
             fallback_items = fallback_results.get("results") if isinstance(fallback_results, dict) else None
             if not isinstance(fallback_items, list):
                 continue
-            for result in fallback_items:
-                if not isinstance(result, dict):
-                    continue
-                url = str(result.get("url") or "").strip()
-                if not is_valid_doc_result(
-                    url=url,
-                    title=result.get("title"),
-                    snippet=result.get("content"),
-                ):
-                    continue
-                evidence_item = build_evidence_item(
-                    kind="official",
-                    tool="tavily_search",
-                    url_or_path=url,
-                    title=result.get("title"),
-                    snippet=result.get("content"),
-                    score=normalize_confidence(result.get("score"), clamp=True),
-                    metadata={},
-                )
-                if evidence_item is not None:
-                    evidence_items.append(evidence_item)
+            batch_evidence, batch_raw_scores = _collect_docs_search_evidence(
+                fallback_items,
+                allowed_domains=hinted_domains,
+                retrieval_warnings=retrieval_warnings,
+            )
+            evidence_items.extend(batch_evidence)
+            raw_scores.extend(batch_raw_scores)
 
         evidence = dedupe_evidence_dicts(evidence_items)
         return build_retrieval_payload(
@@ -269,6 +341,8 @@ def build_docs_search_tool(settings: AppSettings) -> Any:
             evidence=evidence,
             status="success" if evidence else "no_result",
             message="" if evidence else "no official documentation evidence found",
+            raw_relevance_score=max(raw_scores) if raw_scores else None,
+            warnings=sorted(set(retrieval_warnings)),
         )
 
     return StructuredTool.from_function(

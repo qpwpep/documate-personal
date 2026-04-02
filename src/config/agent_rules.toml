@@ -157,6 +157,7 @@ error_page_markers = ["404", "page not found", "github pages", "does not exist",
 "gradio.app" = ["/docs/"]
 "scikit-learn.org" = ["/stable/"]
 "docs.pydantic.dev" = ["/latest/"]
+"docs.pears.com" = ["/reference/"]
 
 [[docs_search.query_hints]]
 identifiers = ["train_test_split"]
@@ -187,12 +188,21 @@ identifiers = ["response_model"]
 library_name = "fastapi"
 domains = ["fastapi.tiangolo.com"]
 fallback_queries = ["response_model fastapi"]
+match_mode = "word"
+
+[[docs_search.query_hints]]
+identifiers = ["fastapi"]
+library_name = "fastapi"
+domains = ["fastapi.tiangolo.com"]
+fallback_queries = ["fastapi tutorial", "fastapi reference"]
+match_mode = "word"
 
 [[docs_search.query_hints]]
 identifiers = ["merge"]
 library_name = "pandas"
 domains = ["pandas.pydata.org"]
 fallback_queries = ["pandas merge user guide", "pandas merging user guide"]
+match_mode = "word"
 
 [[docs_search.query_hints]]
 identifiers = ["groupby"]
@@ -201,10 +211,18 @@ domains = ["pandas.pydata.org"]
 fallback_queries = ["pandas groupby user guide"]
 
 [[docs_search.query_hints]]
+identifiers = ["pandas"]
+library_name = "pandas"
+domains = ["pandas.pydata.org"]
+fallback_queries = ["pandas user guide", "pandas api reference"]
+match_mode = "word"
+
+[[docs_search.query_hints]]
 identifiers = ["concat"]
 library_name = "pandas"
 domains = ["pandas.pydata.org"]
 fallback_queries = ["pandas concat user guide"]
+match_mode = "word"
 
 [[docs_search.query_hints]]
 identifiers = ["broadcasting"]
@@ -213,7 +231,21 @@ domains = ["numpy.org"]
 fallback_queries = ["broadcasting numpy"]
 
 [[docs_search.query_hints]]
+identifiers = ["numpy"]
+library_name = "numpy"
+domains = ["numpy.org"]
+fallback_queries = ["numpy user guide", "numpy api reference"]
+match_mode = "word"
+
+[[docs_search.query_hints]]
 identifiers = ["dataloader", "dataset"]
 library_name = "pytorch"
 domains = ["docs.pytorch.org"]
 fallback_queries = ["DataLoader torch.utils.data"]
+
+[[docs_search.query_hints]]
+identifiers = ["bare"]
+library_name = "Bare"
+domains = ["docs.pears.com"]
+fallback_queries = ["Bare runtime API", "Bare Pear docs"]
+match_mode = "word"

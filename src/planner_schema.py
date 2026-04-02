@@ -1,13 +1,26 @@
 from __future__ import annotations
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from typing import Any, Literal
 
-from .contracts.routes import RouteName
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+
+PlannerRouteName = Literal["docs", "upload", "local"]
+PLANNER_ROUTES: tuple[PlannerRouteName, ...] = ("docs", "upload", "local")
+
+
+def normalize_planner_output_input(value: Any) -> Any:
+    if isinstance(value, BaseModel):
+        return value.model_dump(mode="python")
+    return value
+
 
 class RetrievalTask(BaseModel):
-    route: RouteName
-    query: str = Field(min_length=1)
-    k: int = Field(default=4, ge=1, le=10)
+    model_config = ConfigDict(extra="forbid")
+
+    route: PlannerRouteName
+    query: str = Field(..., min_length=1)
+    k: int = Field(..., ge=1, le=10)
 
     @field_validator("query")
     @classmethod
@@ -19,8 +32,10 @@ class RetrievalTask(BaseModel):
 
 
 class PlannerOutput(BaseModel):
-    use_retrieval: bool = False
-    tasks: list[RetrievalTask] = Field(default_factory=list)
+    model_config = ConfigDict(extra="forbid")
+
+    use_retrieval: bool
+    tasks: list[RetrievalTask]
 
     @model_validator(mode="after")
     def validate_rules(self) -> "PlannerOutput":
@@ -33,6 +48,10 @@ class PlannerOutput(BaseModel):
         if len(set(routes)) != len(routes):
             raise ValueError("duplicate routes are not allowed in planner tasks")
         return self
+
+    @classmethod
+    def validate_input(cls, value: Any) -> "PlannerOutput":
+        return cls.model_validate(normalize_planner_output_input(value))
 
     @classmethod
     def fallback(cls) -> "PlannerOutput":

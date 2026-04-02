@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
@@ -22,15 +23,42 @@ def build_retrieval_payload(
     evidence: list[dict[str, Any]] | None = None,
     status: Literal["success", "no_result", "error", "unavailable"] = "success",
     message: str = "",
+    relevance_score: float | None = None,
+    raw_relevance_score: float | None = None,
+    result_count: int | None = None,
+    warnings: list[str] | None = None,
 ) -> dict[str, Any]:
+    evidence_items = list(evidence or [])
+    normalized_relevance = relevance_score
+    if normalized_relevance is None:
+        scores = [
+            float(item.get("score"))
+            for item in evidence_items
+            if isinstance(item, dict) and item.get("score") is not None
+        ]
+        if scores:
+            normalized_relevance = max(0.0, min(1.0, max(scores)))
+    score_values = [
+        float(item.get("score"))
+        for item in evidence_items
+        if isinstance(item, dict) and item.get("score") is not None
+    ]
     return {
-        "evidence": list(evidence or []),
+        "evidence": evidence_items,
         "diagnostics": {
             "tool": tool,
             "route": route,
             "status": status,
             "message": message,
             "query": query,
+            "evidence_count": len(evidence_items),
+            "avg_score": (sum(score_values) / len(score_values)) if score_values else None,
+            "max_score": max(score_values) if score_values else None,
+            "normalized_score": normalized_relevance,
+            "relevance_score": normalized_relevance,
+            "raw_relevance_score": raw_relevance_score,
+            "result_count": len(evidence_items) if result_count is None else max(0, int(result_count)),
+            "warnings": [str(item).strip() for item in (warnings or []) if str(item).strip()],
         },
     }
 
@@ -70,6 +98,56 @@ def to_float_or_none(value: Any) -> float | None:
         return None
 
 
+def normalize_relevance_score(
+    value: Any,
+    *,
+    warnings: list[str] | None = None,
+) -> tuple[float | None, float | None]:
+    raw_score = to_float_or_none(value)
+    if raw_score is None or not math.isfinite(raw_score):
+        if value is not None and warnings is not None:
+            warnings.append("invalid_relevance_score")
+        return None, None
+
+    normalized_score = raw_score
+    if raw_score < 0.0 or raw_score > 1.0:
+        normalized_score = max(0.0, min(1.0, raw_score))
+        if warnings is not None:
+            warnings.append("relevance_score_clamped")
+    return normalized_score, raw_score
+
+
+def normalize_notebook_cell_id(
+    value: Any,
+    *,
+    is_notebook: bool,
+    warnings: list[str] | None = None,
+) -> int | None:
+    if not is_notebook:
+        if value is not None and warnings is not None:
+            warnings.append("non_notebook_cell_id_dropped")
+        return None
+    if value is None:
+        return None
+    try:
+        normalized = int(value)
+    except (TypeError, ValueError):
+        digits = "".join(ch for ch in str(value) if ch.isdigit())
+        if digits:
+            if warnings is not None:
+                warnings.append("notebook_cell_id_normalized")
+            normalized = int(digits)
+        else:
+            if warnings is not None:
+                warnings.append("notebook_cell_id_normalized")
+            return 0
+    if normalized < 0:
+        if warnings is not None:
+            warnings.append("notebook_cell_id_normalized")
+        return 0
+    return normalized
+
+
 def build_evidence_item(
     *,
     kind: Literal["official", "local"],
@@ -79,6 +157,7 @@ def build_evidence_item(
     snippet: Any = None,
     score: Any = None,
     metadata: dict[str, Any] | None = None,
+    warnings: list[str] | None = None,
 ) -> EvidenceItem | None:
     source = str(url_or_path or "").strip()
     if not source:
@@ -90,7 +169,12 @@ def build_evidence_item(
         return None
 
     chunk_id = metadata.get("chunk_id")
-    cell_id = metadata.get("cell_id")
+    is_notebook = str(source).lower().endswith(".ipynb")
+    cell_id = normalize_notebook_cell_id(
+        metadata.get("cell_id"),
+        is_notebook=is_notebook,
+        warnings=warnings,
+    )
     start_offset = metadata.get("start_offset", metadata.get("start_index"))
     end_offset = metadata.get("end_offset")
     if end_offset is None and start_offset is not None:
@@ -103,12 +187,13 @@ def build_evidence_item(
             chunk_id=chunk_id,
             start_offset=start_offset,
             end_offset=end_offset,
-            cell_id=cell_id if str(source).lower().endswith(".ipynb") else None,
+            cell_id=cell_id,
         )
         if not source_id:
             return None
 
     title_text = str(title).strip() if title else None
+    normalized_score, _raw_score = normalize_relevance_score(score, warnings=warnings)
     return EvidenceItem(
         kind=kind,
         tool=tool,
@@ -117,9 +202,9 @@ def build_evidence_item(
         url_or_path=source,
         title=title_text or None,
         snippet=truncate_snippet(str(snippet) if snippet else None),
-        score=to_float_or_none(score),
+        score=normalized_score,
         chunk_id=int(chunk_id) if chunk_id is not None else None,
-        cell_id=int(cell_id) if cell_id is not None else None,
+        cell_id=cell_id,
         start_offset=int(start_offset) if start_offset is not None else None,
         end_offset=int(end_offset) if end_offset is not None else None,
     )

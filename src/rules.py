@@ -5,6 +5,8 @@ import tomllib
 from functools import lru_cache
 from pathlib import Path
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 
@@ -38,6 +40,7 @@ class DocsSearchQueryHint(BaseModel):
     library_name: str
     domains: list[str] = Field(default_factory=list)
     fallback_queries: list[str] = Field(default_factory=list)
+    match_mode: Literal["contains", "word"] = "contains"
 
 
 class DocsSearchRules(BaseModel):
