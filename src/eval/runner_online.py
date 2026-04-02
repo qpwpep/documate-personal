@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import time
 import uuid
@@ -10,6 +11,8 @@ from typing import Any
 
 import requests
 
+from ..answer_schema import ClaimItem, filter_claims_by_evidence
+from ..contracts.debug import DEBUG_CRITICAL_FIELDS, DEBUG_REQUIRED_FIELDS, DEBUG_SCHEMA_VERSION
 from ..contracts.boundary.debug import parse_llm_calls, parse_retry_state, parse_token_usage
 from ..contracts.boundary.planner import parse_planner_diagnostic
 from ..contracts.boundary.retrieval import parse_retrieval_diagnostics
@@ -17,8 +20,8 @@ from ..latency import LatencyBreakdownModel
 from .judge_llm import LLMJudge
 from .reporting import build_summary, write_run_outputs
 from .scoring_rules import (
+    compute_composite_quality_score,
     compute_cost_usd,
-    compute_final_score,
     compute_rule_scores,
     compute_rule_weighted_score,
     resolve_effective_weights,
@@ -28,6 +31,7 @@ from .schemas import (
     BenchmarkConfig,
     CaseResult,
     EvidenceItem,
+    JudgeSubscores,
     LLMCallMetadata,
     PlannerDiagnostic,
     RetrievalDiagnostic,
@@ -35,6 +39,14 @@ from .schemas import (
     TokenUsage,
     load_cases_jsonl,
 )
+
+
+_DEFAULT_JUDGE_MIN_SCORES: dict[str, float] = {
+    "docs_only": 0.70,
+    "hybrid": 0.70,
+}
+_REQUEST_ID_PATTERN = re.compile(r"Request ID:\s*([^,\s]+)")
+_PRODUCT_PASS_FLOOR = 0.75
 
 
 def _utc_now_iso() -> str:
@@ -216,6 +228,81 @@ def _parse_validator_metadata(
     )
 
 
+def _resolve_judge_min_score(case: BenchmarkCase, config: BenchmarkConfig) -> float | None:
+    if case.judge_min_score is not None:
+        return float(case.judge_min_score)
+    configured_threshold = config.judge_min_score.for_category(case.category)
+    if configured_threshold is not None:
+        return float(configured_threshold)
+    return _DEFAULT_JUDGE_MIN_SCORES.get(case.category)
+
+
+def _extract_request_id(trace: str | None) -> str | None:
+    if not trace:
+        return None
+    match = _REQUEST_ID_PATTERN.search(str(trace))
+    if not match:
+        return None
+    request_id = str(match.group(1)).strip()
+    return request_id or None
+
+
+def _extract_request_id_from_response(response: Any, trace: str | None) -> str | None:
+    headers = getattr(response, "headers", None)
+    if isinstance(headers, dict):
+        header_value = headers.get("x-request-id") or headers.get("X-Request-Id")
+        if header_value:
+            return str(header_value).strip()
+    return _extract_request_id(trace)
+
+
+def _parse_claims_from_response_payload(response_payload: dict[str, Any] | None) -> list[ClaimItem]:
+    if not isinstance(response_payload, dict):
+        return []
+    raw_claims = response_payload.get("claims")
+    if not isinstance(raw_claims, list):
+        return []
+    claims: list[ClaimItem] = []
+    for item in raw_claims:
+        if not isinstance(item, dict):
+            continue
+        try:
+            claims.append(ClaimItem.model_validate(item))
+        except Exception:
+            continue
+    return claims
+
+
+def _build_gate_failures(
+    *,
+    runtime_errors: list[str],
+    response_errors: list[str],
+    debug_errors: list[str],
+    missing_required_debug_fields: list[str],
+    product_pass: bool | None,
+    judge_pass: bool | None,
+    judge_errors: list[str],
+) -> list[str]:
+    failures: list[str] = []
+    if runtime_errors:
+        failures.append("runtime_error")
+    if response_errors:
+        failures.append("response_contract_error")
+    if debug_errors:
+        failures.append("debug_error")
+    if missing_required_debug_fields:
+        failures.append("missing_debug_fields")
+    if product_pass is False:
+        failures.append("product_quality_below_floor")
+    if judge_pass is False:
+        failures.append("judge_min_score_audit_failed")
+    if any(str(error).startswith("invalid_eval:") for error in judge_errors):
+        failures.append("invalid_eval")
+    if any("judge payload is incomplete" in str(error) for error in judge_errors):
+        failures.append("judge_input_incomplete")
+    return failures
+
+
 def _run_single_case(
     *,
     run_id: str,
@@ -232,6 +319,7 @@ def _run_single_case(
 
     runtime_errors: list[str] = []
     response_errors: list[str] = []
+    debug_errors: list[str] = []
     judge_errors: list[str] = []
 
     request_payload: dict[str, Any] = {
@@ -264,6 +352,7 @@ def _run_single_case(
     validator_reason: str | None = None
     validator_feedback: str | None = None
     response_trace: str | None = None
+    request_id: str | None = None
     response_file_path: str | None = None
     latency_ms_e2e: int | None = None
     latency_ms_server: int | None = None
@@ -271,9 +360,18 @@ def _run_single_case(
     model_name: str | None = None
     models_used: list[str] = []
     tool_calls: list[str] = []
+    tool_call_count = 0
     token_usage: TokenUsage | None = None
     llm_calls: list[LLMCallMetadata] = []
     planner_errors: list[str] = []
+    debug_schema_version: int | None = None
+    debug_observability_status: str | None = None
+    missing_required_debug_fields: list[str] = []
+    judge_subscores: JudgeSubscores | None = None
+    synthesis_mode: str | None = None
+    judge_input_complete: bool | None = None
+    valid_claim_count = 0
+    invalid_claim_count = 0
 
     if not runtime_errors:
         started = time.monotonic()
@@ -293,6 +391,7 @@ def _run_single_case(
 
                 if isinstance(body, dict):
                     response_trace = body.get("trace")
+                    request_id = _extract_request_id_from_response(response, response_trace)
                     response_file_path = body.get("file_path")
 
                     response_raw = body.get("response")
@@ -316,11 +415,66 @@ def _run_single_case(
 
                     debug_payload = body.get("debug")
                     if isinstance(debug_payload, dict):
+                        present_debug_keys = {str(key) for key in debug_payload.keys()}
+                        missing_required_debug_fields = [
+                            field for field in DEBUG_REQUIRED_FIELDS if field not in present_debug_keys
+                        ]
+                        schema_version_raw = debug_payload.get("schema_version")
+                        if schema_version_raw is None:
+                            response_errors.append("debug.schema_version is missing")
+                        else:
+                            try:
+                                debug_schema_version = int(schema_version_raw)
+                            except (TypeError, ValueError):
+                                response_errors.append("debug.schema_version must be an integer")
+                        if debug_schema_version is not None and debug_schema_version != DEBUG_SCHEMA_VERSION:
+                            response_errors.append(
+                                f"debug.schema_version must be {DEBUG_SCHEMA_VERSION}"
+                            )
+                        observability_status_raw = debug_payload.get("observability_status")
+                        if observability_status_raw is None:
+                            response_errors.append("debug.observability_status is missing")
+                        else:
+                            normalized_observability_status = str(observability_status_raw).strip().lower()
+                            if normalized_observability_status in {"ok", "degraded", "failed"}:
+                                debug_observability_status = normalized_observability_status
+                            else:
+                                response_errors.append(
+                                    "debug.observability_status must be one of ok/degraded/failed"
+                                )
+                        if debug_payload.get("missing_required_debug_fields") is None:
+                            response_errors.append("debug.missing_required_debug_fields is missing")
+                        else:
+                            self_reported_missing_fields = _parse_string_list(
+                                debug_payload.get("missing_required_debug_fields"),
+                                label="debug.missing_required_debug_fields",
+                                response_errors=response_errors,
+                            )
+                            for field_name in self_reported_missing_fields:
+                                if field_name not in missing_required_debug_fields:
+                                    missing_required_debug_fields.append(field_name)
+                        critical_missing_debug_fields = [
+                            field
+                            for field in missing_required_debug_fields
+                            if field in DEBUG_CRITICAL_FIELDS
+                        ]
+                        if critical_missing_debug_fields:
+                            response_errors.append(
+                                "critical debug fields missing: "
+                                + ", ".join(critical_missing_debug_fields)
+                            )
                         tool_calls = [
                             str(name)
                             for name in (debug_payload.get("tool_calls") or [])
                             if name
                         ]
+                        try:
+                            tool_call_count = int(
+                                debug_payload.get("tool_call_count", len(tool_calls)) or len(tool_calls)
+                            )
+                        except (TypeError, ValueError):
+                            response_errors.append("debug.tool_call_count must be an integer")
+                            tool_call_count = len(tool_calls)
                         latency_raw = debug_payload.get("latency_ms_server")
                         if latency_raw is not None:
                             try:
@@ -336,6 +490,11 @@ def _run_single_case(
                         token_usage = _parse_token_usage(debug_payload)
                         llm_calls = _parse_llm_calls(
                             debug_payload.get("llm_calls"),
+                            response_errors=response_errors,
+                        )
+                        debug_errors = _parse_string_list(
+                            debug_payload.get("errors"),
+                            label="debug.errors",
                             response_errors=response_errors,
                         )
                         planner_errors = _parse_string_list(
@@ -371,6 +530,8 @@ def _run_single_case(
                             debug_payload.get("latency_breakdown"),
                             response_errors=response_errors,
                         )
+                        if latency_breakdown is not None and latency_breakdown.synthesis_attempts:
+                            synthesis_mode = latency_breakdown.synthesis_attempts[0].mode
                     else:
                         response_errors.append("debug payload is missing (include_debug=true expected)")
         except requests.Timeout:
@@ -390,14 +551,72 @@ def _run_single_case(
     if weights_error:
         runtime_errors.append(f"weight_override error: {weights_error}")
 
+    response_claims = _parse_claims_from_response_payload(response_payload)
+    if response_claims:
+        valid_claims, invalid_claims = filter_claims_by_evidence(
+            claims=response_claims,
+            evidence_items=observed_evidence or response_evidence,
+        )
+        valid_claim_count = len(valid_claims)
+        invalid_claim_count = len(invalid_claims)
+    retrieval_warnings = sorted(
+        {
+            str(warning).strip()
+            for diagnostic in retrieval_diagnostics
+            for warning in diagnostic.warnings
+            if str(warning).strip()
+        }
+    )
+    if retrieval_warnings:
+        warning_text = ", ".join(retrieval_warnings)
+        if validator_feedback:
+            validator_feedback = f"{validator_feedback} | retrieval_warnings={warning_text}"
+        else:
+            validator_feedback = f"retrieval_warnings={warning_text}"
+
     llm_judge_score: float | None = None
     llm_judge_reason: str | None = None
     if response_text.strip() and config.judge_enabled:
-        llm_judge_score, llm_judge_reason, judge_error = judge.score_case(
+        judge_payload_builder = getattr(judge, "build_case_payload", LLMJudge.build_case_payload)
+        judge_payload_validator = getattr(judge, "is_payload_complete", LLMJudge.is_payload_complete)
+        judge_payload = judge_payload_builder(
             case=case,
             response_text=response_text,
             tool_calls=tool_calls,
+            claims=response_claims,
+            response_evidence=response_evidence,
+            observed_evidence=observed_evidence,
+            retrieval_diagnostics=retrieval_diagnostics,
+            planner_diagnostics=planner_diagnostics,
+            validator_reason=validator_reason,
+            synthesis_mode=synthesis_mode,
+            valid_claim_count=valid_claim_count,
+            invalid_claim_count=invalid_claim_count,
+            tool_call_count=tool_call_count,
         )
+        judge_input_complete = judge_payload_validator(judge_payload)
+        try:
+            judge_result = judge.score_case(
+                case=case,
+                response_text=response_text,
+                tool_calls=tool_calls,
+                claims=response_claims,
+                response_evidence=response_evidence,
+                observed_evidence=observed_evidence,
+                retrieval_diagnostics=retrieval_diagnostics,
+                planner_diagnostics=planner_diagnostics,
+                validator_reason=validator_reason,
+                synthesis_mode=synthesis_mode,
+                valid_claim_count=valid_claim_count,
+                invalid_claim_count=invalid_claim_count,
+                tool_call_count=tool_call_count,
+            )
+        except TypeError:
+            judge_result = judge.score_case(case, response_text, tool_calls)
+        if len(judge_result) >= 4:
+            llm_judge_score, llm_judge_reason, judge_error, judge_subscores = judge_result
+        else:
+            llm_judge_score, llm_judge_reason, judge_error = judge_result[:3]
         if judge_error:
             judge_errors.append(judge_error)
 
@@ -410,15 +629,48 @@ def _run_single_case(
         runtime_errors=runtime_errors,
         response_errors=response_errors,
         judge_errors=judge_errors,
+        validator_reason=validator_reason,
+        response_claims=response_claims,
+        retrieval_diagnostics=retrieval_diagnostics,
+        synthesis_mode=synthesis_mode,
+        valid_claim_count=valid_claim_count,
+        invalid_claim_count=invalid_claim_count,
     )
     rule_weighted = compute_rule_weighted_score(rule_scores, effective_weights)
 
-    final_score = compute_final_score(
+    composite_quality_score = compute_composite_quality_score(
         rule_weighted_score=rule_weighted,
         llm_judge_score=llm_judge_score,
         weights=effective_weights,
     )
-    passed = final_score >= 0.75
+    judge_min_score = _resolve_judge_min_score(case, config)
+    judge_gate_passed: bool | None = None
+    if judge_min_score is not None and response_text.strip():
+        judge_gate_passed = False if llm_judge_score is None else llm_judge_score >= judge_min_score
+    if judge_min_score is not None and llm_judge_score is not None and response_text.strip():
+        judge_gate_passed = llm_judge_score >= judge_min_score
+        if judge_gate_passed is False:
+            judge_errors.append(
+                "judge_min_score audit failed: "
+                f"score={llm_judge_score:.3f} threshold={judge_min_score:.3f}"
+            )
+    product_pass = composite_quality_score >= _PRODUCT_PASS_FLOOR
+    if any(str(error).startswith("invalid_eval:") for error in judge_errors):
+        judge_pass = False
+    else:
+        judge_pass = judge_gate_passed if judge_min_score is not None else (
+            True if (config.judge_enabled and not judge_errors and llm_judge_score is not None) else None
+        )
+    release_pass = bool(product_pass and not runtime_errors and not response_errors)
+    gate_failures = _build_gate_failures(
+        runtime_errors=runtime_errors,
+        response_errors=response_errors,
+        debug_errors=debug_errors,
+        missing_required_debug_fields=missing_required_debug_fields,
+        product_pass=product_pass,
+        judge_pass=judge_pass,
+        judge_errors=judge_errors,
+    )
     cost = compute_cost_usd(
         token_usage=token_usage,
         llm_calls=[call.model_dump() for call in llm_calls],
@@ -435,9 +687,11 @@ def _run_single_case(
         endpoint=endpoint_url,
         upload_fixture=case.upload_fixture,
         request_payload=request_payload,
+        request_id=request_id,
         http_status=http_status,
         response_text=response_text,
         response_payload=response_payload,
+        response_claims=response_claims,
         evidence=response_evidence,
         observed_evidence=observed_evidence,
         retrieval_diagnostics=retrieval_diagnostics,
@@ -448,11 +702,13 @@ def _run_single_case(
         latency_ms_server=latency_ms_server,
         latency_breakdown=latency_breakdown,
         tool_calls=tool_calls,
+        tool_call_count=tool_call_count,
         token_usage=token_usage,
         model_name=model_name,
         models_used=models_used,
         llm_calls=llm_calls,
         planner_errors=planner_errors,
+        debug_errors=debug_errors,
         runtime_errors=runtime_errors,
         response_errors=response_errors,
         judge_errors=judge_errors,
@@ -461,10 +717,27 @@ def _run_single_case(
         effective_weights=effective_weights.as_dict(),
         rule_scores=rule_scores,
         rule_score_total=rule_weighted,
+        debug_schema_version=debug_schema_version,
+        debug_observability_status=debug_observability_status,
+        missing_required_debug_fields=missing_required_debug_fields,
+        judge_subscores=judge_subscores,
+        judge_score_total=llm_judge_score,
         llm_judge_score=llm_judge_score,
         llm_judge_reason=llm_judge_reason,
-        final_score=final_score,
-        passed=passed,
+        judge_min_score_applied=judge_min_score,
+        judge_input_complete=judge_input_complete,
+        judge_gate_passed=judge_gate_passed,
+        invalid_eval=any(str(error).startswith("invalid_eval:") for error in judge_errors),
+        valid_claim_count=valid_claim_count,
+        invalid_claim_count=invalid_claim_count,
+        synthesis_mode=synthesis_mode,
+        gate_failures=gate_failures,
+        composite_quality_score=composite_quality_score,
+        product_pass=product_pass,
+        judge_pass=judge_pass,
+        release_pass=release_pass,
+        final_score=composite_quality_score,
+        passed=release_pass,
         cost_usd=cost,
         created_at_utc=created_at,
     )
@@ -504,7 +777,7 @@ def run_online_benchmark(
         )
         results.append(result)
         print(
-            f"[{index}/{len(cases)}] {case.case_id} score={result.final_score:.3f} "
+            f"[{index}/{len(cases)}] {case.case_id} score={float(result.composite_quality_score or 0.0):.3f} "
             f"status={result.http_status} latency={result.latency_ms_e2e}ms"
         )
 

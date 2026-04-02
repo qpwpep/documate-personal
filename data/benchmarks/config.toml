@@ -1,8 +1,9 @@
 [weights]
-tool_match = 0.30
-content_constraints = 0.25
-citation_compliance = 0.20
-safety_format = 0.05
+answer_quality = 0.20
+groundedness = 0.20
+citation_traceability = 0.20
+tool_choice = 0.15
+format_language = 0.05
 llm_judge = 0.20
 
 [hard_gates]
@@ -12,6 +13,10 @@ tool_recall = 0.85
 citation_compliance = 0.95
 p95_latency_ms = 20000
 avg_cost_per_case_usd = 0.01
+
+[judge_min_score]
+docs_only = 0.70
+hybrid = 0.70
 
 [pricing]
 prompt_per_1k_usd = 0.00015

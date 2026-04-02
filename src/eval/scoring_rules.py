@@ -2,29 +2,34 @@ from __future__ import annotations
 
 import math
 import re
-from typing import Any
+from typing import Any, Iterable
 from urllib.parse import urlparse
 
+from ..answer_schema import ClaimItem
 from ..domain_docs import DEFAULT_DOCS
-from ..evidence import normalize_source_id
-from .schemas import (
-    BenchmarkCase,
-    CaseWeightOverride,
-    EvidenceItem,
-    ModelPricing,
-    Pricing,
-    ScoreWeights,
+from ..evidence import EvidenceItem, normalize_source_id
+from .schemas import BenchmarkCase, CaseWeightOverride, ModelPricing, Pricing, ScoreWeights
+
+_FAILURE_TEXT_PATTERNS = [
+    r"agent execution failed",
+    r"request timeout",
+    r"unexpected error",
+]
+_HANGUL_PATTERN = re.compile(r"[가-힣]")
+_COMPARISON_MARKERS = (
+    "비교",
+    "차이",
+    "반면",
+    "다르",
+    "contrast",
+    "compare",
+    "difference",
+    "however",
+    "whereas",
 )
 
 
-_FAILURE_TEXT_PATTERNS = [
-    r"Agent 호출 실패",
-    r"FastAPI 서버에 연결할 수 없습니다",
-    r"요청이 타임아웃되었습니다",
-]
-
-
-def _contains_any_pattern(text: str, patterns: list[str]) -> bool:
+def _contains_any_pattern(text: str, patterns: Iterable[str]) -> bool:
     return any(re.search(pattern, text, flags=re.I) for pattern in patterns)
 
 
@@ -64,6 +69,14 @@ def _expected_local_citation_tool(case: BenchmarkCase) -> str:
     return "upload_search" if case.upload_fixture else "rag_search"
 
 
+def _contains_hangul(text: str) -> bool:
+    return bool(_HANGUL_PATTERN.search(str(text or "")))
+
+
+def _normalize_text(text: str) -> str:
+    return re.sub(r"\s+", " ", str(text or "").strip().lower())
+
+
 def _collect_valid_source_ids(
     evidence: list[EvidenceItem],
     *,
@@ -89,13 +102,35 @@ def _collect_valid_source_ids(
     return valid_ids
 
 
+def _copy_penalty(response_text: str, observed_evidence: list[EvidenceItem]) -> float:
+    normalized_response = _normalize_text(response_text)
+    if not normalized_response:
+        return 0.0
+    longest_match = 0
+    for item in observed_evidence:
+        snippet = _normalize_text(item.snippet or "")
+        if len(snippet) < 48:
+            continue
+        if snippet and snippet in normalized_response:
+            longest_match = max(longest_match, len(snippet))
+    if longest_match >= 120:
+        return 0.65
+    if longest_match >= 72:
+        return 0.45
+    return 0.0
+
+
+def _hybrid_comparison_present(response_text: str) -> bool:
+    normalized = _normalize_text(response_text)
+    return any(marker in normalized for marker in _COMPARISON_MARKERS)
+
+
 def resolve_effective_weights(
     *,
     base_weights: ScoreWeights,
     case_override: CaseWeightOverride | None,
 ) -> tuple[ScoreWeights, str | None]:
     merged = base_weights.as_dict()
-
     if case_override is not None:
         merged.update(case_override.as_partial_dict())
 
@@ -114,7 +149,7 @@ def resolve_effective_weights(
         return base_weights, f"failed to build normalized weights: {exc}"
 
 
-def score_tool_match(case: BenchmarkCase, called_tools: list[str]) -> float:
+def score_tool_choice(case: BenchmarkCase, called_tools: list[str]) -> float:
     expected = set(case.expected_tools)
     forbidden = set(case.forbidden_tools)
     called = set(called_tools)
@@ -133,10 +168,16 @@ def score_tool_match(case: BenchmarkCase, called_tools: list[str]) -> float:
     return max(0.0, expected_score * (1.0 - forbidden_penalty))
 
 
-def score_content_constraints(case: BenchmarkCase, response_text: str) -> float:
+def score_answer_quality(
+    case: BenchmarkCase,
+    response_text: str,
+    observed_evidence: list[EvidenceItem],
+    *,
+    synthesis_mode: str | None = None,
+) -> float:
     text = response_text or ""
-    if not case.must_include and not case.must_not_include:
-        return 1.0
+    if not text.strip():
+        return 0.0
 
     include_score = 1.0
     if case.must_include:
@@ -148,10 +189,22 @@ def score_content_constraints(case: BenchmarkCase, response_text: str) -> float:
         exclude_violations = sum(1 for needle in case.must_not_include if needle.lower() in text.lower())
         exclude_score = 1.0 - (exclude_violations / len(case.must_not_include))
 
-    return max(0.0, min(1.0, (include_score + exclude_score) / 2.0))
+    quality = max(0.0, min(1.0, (include_score + exclude_score) / 2.0))
+
+    copy_penalty = _copy_penalty(text, observed_evidence)
+    if copy_penalty > 0.0:
+        quality = max(0.0, quality - copy_penalty)
+
+    if case.category == "hybrid" and not _hybrid_comparison_present(text):
+        quality = min(quality, 0.25)
+
+    if case.category in {"docs_only", "hybrid"} and synthesis_mode == "deterministic_grounded_direct":
+        quality = min(quality, 0.2)
+
+    return max(0.0, min(1.0, quality))
 
 
-def score_citation_compliance(
+def score_citation_traceability(
     case: BenchmarkCase,
     response_evidence: list[EvidenceItem],
     observed_evidence: list[EvidenceItem],
@@ -196,20 +249,93 @@ def score_citation_compliance(
     return sum(1 for check in checks if check) / len(checks)
 
 
-def score_safety_format(
+def _claim_support_ratio(
+    response_claims: list[ClaimItem] | None,
+    observed_evidence: list[EvidenceItem],
+) -> float | None:
+    if not response_claims:
+        return None
+    observed_ids = {
+        str(item.source_id or item.document_id or "").strip()
+        for item in observed_evidence
+        if str(item.source_id or item.document_id or "").strip()
+    }
+    if not observed_ids:
+        return 0.0
+    supported = 0
+    for claim in response_claims:
+        if any(evidence_id in observed_ids for evidence_id in claim.evidence_ids):
+            supported += 1
+    return supported / len(response_claims)
+
+
+def score_groundedness(
     *,
+    response_text: str,
+    response_evidence: list[EvidenceItem],
+    observed_evidence: list[EvidenceItem],
+    validator_reason: str | None = None,
+    response_claims: list[ClaimItem] | None = None,
+    invalid_claim_count: int = 0,
+    **_unused: Any,
+) -> float:
+    text = (response_text or "").strip()
+    if not text:
+        return 0.0
+    if not observed_evidence or not response_evidence:
+        return 0.0
+
+    observed_ids = {
+        str(item.source_id or item.document_id or "").strip()
+        for item in observed_evidence
+        if str(item.source_id or item.document_id or "").strip()
+    }
+    response_ids = {
+        str(item.source_id or item.document_id or "").strip()
+        for item in response_evidence
+        if str(item.source_id or item.document_id or "").strip()
+    }
+    if not observed_ids or not response_ids:
+        return 0.0
+
+    score = len(response_ids.intersection(observed_ids)) / len(response_ids)
+    claim_support_ratio = _claim_support_ratio(response_claims, observed_evidence)
+    if claim_support_ratio is not None:
+        score = min(score, claim_support_ratio)
+    if invalid_claim_count > 0:
+        score = min(score, max(0.0, 1.0 - (0.4 * invalid_claim_count)))
+
+    if validator_reason == "no_evidence":
+        return 0.0
+    if validator_reason == "unsupported_claims":
+        score = min(score, 0.2)
+    elif validator_reason == "low_score":
+        score = min(score, 0.35)
+    elif validator_reason == "tool_error":
+        score = min(score, 0.4)
+
+    return max(0.0, min(1.0, score))
+
+
+def score_format_language(
+    *,
+    case: BenchmarkCase,
     runtime_errors: list[str],
     response_errors: list[str],
     judge_errors: list[str],
     response_text: str,
 ) -> float:
-    if runtime_errors or response_errors or judge_errors:
+    if runtime_errors or response_errors:
         return 0.0
 
     text = (response_text or "").strip()
     if not text:
         return 0.0
     if _contains_any_pattern(text, _FAILURE_TEXT_PATTERNS):
+        return 0.0
+    if _contains_hangul(case.query) and not _contains_hangul(text):
+        return 0.0
+    if any(str(error).startswith("invalid_eval:") for error in judge_errors):
         return 0.0
     return 1.0
 
@@ -224,17 +350,39 @@ def compute_rule_scores(
     runtime_errors: list[str],
     response_errors: list[str],
     judge_errors: list[str],
+    validator_reason: str | None = None,
+    response_claims: list[ClaimItem] | None = None,
+    retrieval_diagnostics: list[Any] | None = None,
+    synthesis_mode: str | None = None,
+    valid_claim_count: int = 0,
+    invalid_claim_count: int = 0,
+    **_unused: Any,
 ) -> dict[str, float]:
+    _ = retrieval_diagnostics, valid_claim_count
     return {
-        "tool_match": score_tool_match(case, called_tools),
-        "content_constraints": score_content_constraints(case, response_text),
-        "citation_compliance": score_citation_compliance(
+        "answer_quality": score_answer_quality(
+            case,
+            response_text,
+            observed_evidence,
+            synthesis_mode=synthesis_mode,
+        ),
+        "groundedness": score_groundedness(
+            response_text=response_text,
+            response_evidence=response_evidence,
+            observed_evidence=observed_evidence,
+            validator_reason=validator_reason,
+            response_claims=response_claims,
+            invalid_claim_count=invalid_claim_count,
+        ),
+        "citation_traceability": score_citation_traceability(
             case=case,
             response_evidence=response_evidence,
             observed_evidence=observed_evidence,
             called_tools=called_tools,
         ),
-        "safety_format": score_safety_format(
+        "tool_choice": score_tool_choice(case, called_tools),
+        "format_language": score_format_language(
+            case=case,
             runtime_errors=runtime_errors,
             response_errors=response_errors,
             judge_errors=judge_errors,
@@ -254,7 +402,7 @@ def compute_rule_weighted_score(
     return max(0.0, min(1.0, score))
 
 
-def compute_final_score(
+def compute_composite_quality_score(
     rule_weighted_score: float,
     llm_judge_score: float | None,
     weights: ScoreWeights,
@@ -265,6 +413,56 @@ def compute_final_score(
         normalized = rule_weighted_score / denominator
         return max(0.0, min(1.0, normalized))
     return max(0.0, min(1.0, rule_weighted_score + llm_judge_score * llm_weight))
+
+
+def compute_final_score(
+    rule_weighted_score: float,
+    llm_judge_score: float | None,
+    weights: ScoreWeights,
+) -> float:
+    return compute_composite_quality_score(
+        rule_weighted_score=rule_weighted_score,
+        llm_judge_score=llm_judge_score,
+        weights=weights,
+    )
+
+
+def score_tool_match(case: BenchmarkCase, called_tools: list[str]) -> float:
+    return score_tool_choice(case, called_tools)
+
+
+def score_content_constraints(case: BenchmarkCase, response_text: str) -> float:
+    return score_answer_quality(case, response_text, [])
+
+
+def score_citation_compliance(
+    case: BenchmarkCase,
+    response_evidence: list[EvidenceItem],
+    observed_evidence: list[EvidenceItem],
+    called_tools: list[str],
+) -> float:
+    return score_citation_traceability(
+        case=case,
+        response_evidence=response_evidence,
+        observed_evidence=observed_evidence,
+        called_tools=called_tools,
+    )
+
+
+def score_safety_format(
+    *,
+    runtime_errors: list[str],
+    response_errors: list[str],
+    judge_errors: list[str],
+    response_text: str,
+) -> float:
+    return score_format_language(
+        case=BenchmarkCase(case_id="legacy", category="tool_action", query=""),
+        runtime_errors=runtime_errors,
+        response_errors=response_errors,
+        judge_errors=judge_errors,
+        response_text=response_text,
+    )
 
 
 def _resolve_model_pricing(model_name: str | None, pricing: Pricing) -> ModelPricing:
