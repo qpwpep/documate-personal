@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from pathlib import Path
@@ -8,6 +9,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse
 
 from ..contracts import SessionMetadata
+from ..contracts.debug import DEBUG_CRITICAL_FIELDS, DEBUG_REQUIRED_FIELDS, DEBUG_SCHEMA_VERSION
 from ..contracts.boundary.debug import parse_llm_calls, parse_retry_state, parse_token_usage
 from ..contracts.boundary.planner import parse_planner_diagnostic
 from ..contracts.boundary.retrieval import parse_retrieval_diagnostics
@@ -36,6 +38,19 @@ router = APIRouter()
 
 def normalize_debug_info(raw_debug: dict | None, latency_ms_server: int | None) -> AgentDebugInfo:
     debug = raw_debug or {}
+    present_keys = {str(key) for key in debug.keys()} if isinstance(debug, dict) else set()
+    missing_required_debug_fields = [
+        field for field in DEBUG_REQUIRED_FIELDS if field not in present_keys
+    ]
+    self_reported_missing_fields = [
+        str(field_name)
+        for field_name in (debug.get("missing_required_debug_fields") or [])
+        if str(field_name).strip()
+    ]
+    for field_name in self_reported_missing_fields:
+        if field_name not in missing_required_debug_fields:
+            missing_required_debug_fields.append(field_name)
+    critical_missing = [field for field in missing_required_debug_fields if field in DEBUG_CRITICAL_FIELDS]
     tool_calls = debug.get("tool_calls") or []
     errors = debug.get("errors") or []
     planner_errors_raw = debug.get("planner_errors") or []
@@ -77,7 +92,27 @@ def normalize_debug_info(raw_debug: dict | None, latency_ms_server: int | None) 
         except Exception:
             latency_breakdown = None
 
+    schema_version_raw = debug.get("schema_version", DEBUG_SCHEMA_VERSION)
+    try:
+        schema_version = int(schema_version_raw)
+    except (TypeError, ValueError):
+        schema_version = DEBUG_SCHEMA_VERSION
+    raw_observability_status = str(debug.get("observability_status") or "").strip().lower()
+    if raw_observability_status not in {"ok", "degraded", "failed"}:
+        raw_observability_status = "ok"
+
     return AgentDebugInfo(
+        schema_version=schema_version,
+        observability_status=(
+            "failed"
+            if critical_missing or raw_observability_status == "failed"
+            else (
+                "degraded"
+                if raw_observability_status == "degraded" or missing_required_debug_fields
+                else raw_observability_status
+            )
+        ),
+        missing_required_debug_fields=missing_required_debug_fields,
         tool_calls=[str(name) for name in tool_calls if name],
         tool_call_count=int(debug.get("tool_call_count", len(tool_calls)) or len(tool_calls)),
         latency_ms_server=latency_ms_server,
@@ -128,8 +163,8 @@ async def run_agent_api(
     session_id = request_data.session_id
     cleaner.run_once(force=False, current_session_id=session_id)
     upload_file_path = validate_upload_file_path(request_data.upload_file_path, session_id)
+    session_metadata = build_session_metadata_snapshot(request_data)
     agent_manager = session_store.get_or_create(session_id)
-    agent_manager.set_session_metadata(build_session_metadata_snapshot(request_data))
 
     log_event(
         logger,
@@ -142,9 +177,15 @@ async def run_agent_api(
         upload_file_path=upload_file_path,
     )
 
-    agent_started = time.monotonic()
-    agent_answer = agent_manager.run_agent_flow(user_query, upload_file_path)
-    latency_ms_server = int((time.monotonic() - agent_started) * 1000)
+    started = time.monotonic()
+    agent_manager, agent_answer, session_lock_wait_ms = await asyncio.to_thread(
+        session_store.run_session_request,
+        session_id=session_id,
+        session_metadata=session_metadata,
+        user_input=user_query,
+        upload_file_path=upload_file_path,
+    )
+    latency_ms_server = int((time.monotonic() - started) * 1000)
 
     answer = str(agent_answer.get("message") or "")
     file_path = agent_answer.get("filepath", "")
@@ -175,6 +216,8 @@ async def run_agent_api(
         request_id=request_id,
         agent_id=id(agent_manager),
         latency_ms_server=latency_ms_server,
+        session_lock_wait_ms=session_lock_wait_ms,
+        session_lock_contended=session_lock_wait_ms > 0,
         file_path=file_path,
     )
 

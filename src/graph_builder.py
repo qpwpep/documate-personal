@@ -2,7 +2,7 @@ import time
 from typing import Any
 
 from .contracts import GraphState
-from .contracts.boundary.debug import get_debug_state
+from .contracts.boundary.debug import get_debug_state, parse_debug_state
 from .contracts.boundary.graph import get_retry_state, normalize_graph_update
 from .contracts.boundary.planner import get_planner_state
 from .contracts.boundary.response import get_response_state
@@ -57,6 +57,18 @@ def _normalize_node(node: Any):
     return wrapped
 
 
+def _merge_debug_patch(state: GraphState, raw_debug_patch: Any):
+    base_debug = get_debug_state(state)
+    if raw_debug_patch is None:
+        return base_debug
+    if hasattr(raw_debug_patch, "model_dump"):
+        return parse_debug_state(raw_debug_patch)
+    if isinstance(raw_debug_patch, dict):
+        return base_debug.model_copy(update=dict(raw_debug_patch))
+    else:
+        return base_debug
+
+
 def _instrument_stage_node(stage: str, node: Any):
     def wrapped(state: GraphState) -> GraphState:
         started = time.perf_counter()
@@ -70,9 +82,10 @@ def _instrument_stage_node(stage: str, node: Any):
             ) from exc
         if not isinstance(updates, dict):
             return updates
+        raw_debug_patch = updates.get("debug") if "debug" in updates else None
         updates = normalize_graph_update(updates)
 
-        debug = get_debug_state(updates)
+        debug = _merge_debug_patch(state, raw_debug_patch)
         latency_event = make_stage_latency_event(
             stage=stage,  # type: ignore[arg-type]
             attempt=_resolve_stage_attempt(stage, state, updates),
@@ -120,6 +133,8 @@ def build_agent_graph(settings: AppSettings | None = None):
         llm_synthesizer_compact=llm_registry.llm_synthesizer_compact,
         verbose=llm_registry.verbose,
         max_turns=6,
+        synthesis_max_tokens=app_settings.synthesis_max_tokens,
+        prompt_snippet_char_limit=app_settings.synthesis_prompt_snippet_chars,
         has_default_slack_destination=has_default_slack_destination,
     )
     synthesize_node = _normalize_node(synthesize_node)

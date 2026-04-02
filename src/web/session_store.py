@@ -3,10 +3,12 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from threading import Lock
+from typing import Any
 
 from ..agent_manager import AgentFlowManager
+from ..contracts import SessionMetadata
 from ..logging_utils import log_event
 from ..settings import AppSettings
 
@@ -19,6 +21,8 @@ class SessionEntry:
     agent: AgentFlowManager
     last_accessed_monotonic: float
     created_monotonic: float
+    request_lock: Lock = field(default_factory=Lock)
+    active_request_count: int = 0
 
 
 class InMemorySessionStore:
@@ -39,7 +43,8 @@ class InMemorySessionStore:
             return None
 
         try:
-            entry.agent.close()
+            with entry.request_lock:
+                entry.agent.close()
         except Exception as exc:
             log_event(
                 logger,
@@ -54,7 +59,9 @@ class InMemorySessionStore:
         expired_session_ids = [
             sid
             for sid, entry in self.active_agents.items()
-            if now - entry.last_accessed_monotonic > ttl_seconds
+            if entry.active_request_count <= 0
+            and not entry.request_lock.locked()
+            and now - entry.last_accessed_monotonic > ttl_seconds
         ]
         for sid in expired_session_ids:
             self._pop_session_entry(sid)
@@ -63,8 +70,15 @@ class InMemorySessionStore:
     def evict_lru_if_needed(self, max_active_sessions: int) -> int:
         evicted_count = 0
         while len(self.active_agents) > max_active_sessions:
+            evictable_sessions = [
+                item
+                for item in self.active_agents.items()
+                if item[1].active_request_count <= 0 and not item[1].request_lock.locked()
+            ]
+            if not evictable_sessions:
+                break
             lru_session_id = min(
-                self.active_agents.items(),
+                evictable_sessions,
                 key=lambda item: item[1].last_accessed_monotonic,
             )[0]
             self._pop_session_entry(lru_session_id)
@@ -82,7 +96,7 @@ class InMemorySessionStore:
         self._last_cleanup_monotonic = now
         return expired_removed_count
 
-    def get_or_create(self, session_id: str) -> AgentFlowManager:
+    def get_or_create_entry(self, session_id: str) -> SessionEntry:
         now = time.monotonic()
         with self._lock:
             expired_removed_count = self.maybe_run_cleanup(now=now)
@@ -100,7 +114,7 @@ class InMemorySessionStore:
                     lru_evicted_count=0,
                     active_session_count=len(self.active_agents),
                 )
-                return existing_entry.agent
+                return existing_entry
 
             recreated_agent = self._agent_factory()
             self.active_agents[session_id] = SessionEntry(
@@ -120,7 +134,42 @@ class InMemorySessionStore:
                 lru_evicted_count=lru_evicted_count,
                 active_session_count=len(self.active_agents),
             )
-            return self.active_agents[session_id].agent
+            return self.active_agents[session_id]
+
+    def get_or_create(self, session_id: str) -> AgentFlowManager:
+        return self.get_or_create_entry(session_id).agent
+
+    def run_session_request(
+        self,
+        *,
+        session_id: str,
+        session_metadata: SessionMetadata,
+        user_input: str,
+        upload_file_path: str | None = None,
+    ) -> tuple[AgentFlowManager, dict[str, Any], int]:
+        entry = self.get_or_create_entry(session_id)
+        with self._lock:
+            active_entry = self.active_agents.get(session_id)
+            if active_entry is not None:
+                entry = active_entry
+            entry.active_request_count += 1
+            entry.last_accessed_monotonic = time.monotonic()
+
+        lock_started = time.monotonic()
+        try:
+            with entry.request_lock:
+                session_lock_wait_ms = int((time.monotonic() - lock_started) * 1000)
+                agent_manager = entry.agent
+                agent_manager.set_session_metadata(session_metadata)
+                agent_answer = agent_manager.run_agent_flow(user_input, upload_file_path)
+                return agent_manager, agent_answer, session_lock_wait_ms
+        finally:
+            finished_at = time.monotonic()
+            with self._lock:
+                active_entry = self.active_agents.get(session_id)
+                if active_entry is entry:
+                    active_entry.last_accessed_monotonic = finished_at
+                    active_entry.active_request_count = max(0, active_entry.active_request_count - 1)
 
     def active_session_ids(self) -> set[str]:
         with self._lock:
