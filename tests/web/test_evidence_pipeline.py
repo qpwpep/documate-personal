@@ -10,6 +10,7 @@ from src.contracts.graph_state import DebugState, PlannerState, ResponseState, R
 from src.graph_builder import StageExecutionError
 from src.settings import AppSettings
 from src.tools import build_tool_registry
+from src.tools.docs_search import infer_docs_query_hint
 
 
 class _FakeGraph:
@@ -522,6 +523,82 @@ class EvidencePipelineTest(unittest.TestCase):
         self.assertEqual(kwargs["query"], "train_test_split 공식 문법을 scikit-learn")
         self.assertEqual(mock_request_tavily_search.call_args_list[1].kwargs["query"], "train_test_split sklearn.model_selection")
 
+    @patch("src.tools.docs_search.request_tavily_search")
+    def test_docs_search_applies_bare_library_level_query_hint(self, mock_request_tavily_search) -> None:
+        mock_request_tavily_search.return_value = {"results": []}
+
+        registry = build_tool_registry(AppSettings(openai_api_key="test", tavily_api_key="test"))
+        registry.tavily_search_tool.func(query="bare 공식 문서")
+
+        first_call = mock_request_tavily_search.call_args_list[0]
+        _, kwargs = first_call
+        self.assertEqual(kwargs["include_domains"], ["docs.pears.com"])
+        self.assertEqual(kwargs["query"], "bare 공식 문서")
+        self.assertEqual(mock_request_tavily_search.call_args_list[1].kwargs["query"], "Bare runtime API")
+
+    @patch("src.tools.docs_search.request_tavily_search")
+    def test_docs_search_applies_library_level_query_hints_for_common_libraries(
+        self,
+        mock_request_tavily_search,
+    ) -> None:
+        registry = build_tool_registry(AppSettings(openai_api_key="test", tavily_api_key="test"))
+        cases = [
+            ("numpy", ["numpy.org"], "numpy user guide"),
+            ("pandas", ["pandas.pydata.org"], "pandas user guide"),
+            ("fastapi", ["fastapi.tiangolo.com"], "fastapi tutorial"),
+            ("numpy 공식 문서", ["numpy.org"], "numpy user guide"),
+            ("pandas 공식 문서", ["pandas.pydata.org"], "pandas user guide"),
+            ("fastapi 공식 문서", ["fastapi.tiangolo.com"], "fastapi tutorial"),
+        ]
+
+        for query, expected_domains, fallback_query in cases:
+            with self.subTest(query=query):
+                mock_request_tavily_search.reset_mock()
+                mock_request_tavily_search.return_value = {"results": []}
+
+                registry.tavily_search_tool.func(query=query)
+
+                first_call = mock_request_tavily_search.call_args_list[0]
+                _, kwargs = first_call
+                self.assertEqual(kwargs["include_domains"], expected_domains)
+                self.assertEqual(kwargs["query"], query)
+                self.assertEqual(mock_request_tavily_search.call_args_list[1].kwargs["query"], fallback_query)
+
+    @patch("src.tools.docs_search.request_tavily_search")
+    def test_docs_search_filters_cross_library_docs_results_for_hinted_queries(
+        self,
+        mock_request_tavily_search,
+    ) -> None:
+        mock_request_tavily_search.return_value = {
+            "results": [
+                {
+                    "url": "https://numpy.org/doc/stable/reference/generated/numpy.concatenate.html",
+                    "title": "numpy.concatenate",
+                    "content": "Join a sequence of arrays along an existing axis.",
+                    "score": 0.92,
+                },
+                {
+                    "url": "https://fastapi.tiangolo.com/tutorial/response-model/",
+                    "title": "FastAPI response model",
+                    "content": "FastAPI docs page",
+                    "score": 0.95,
+                },
+            ]
+        }
+
+        registry = build_tool_registry(AppSettings(openai_api_key="test", tavily_api_key="test"))
+        result = registry.tavily_search_tool.func(query="numpy 공식 문서")
+
+        urls = [item["url_or_path"] for item in result["evidence"]]
+        self.assertEqual(
+            urls,
+            ["https://numpy.org/doc/stable/reference/generated/numpy.concatenate.html"],
+        )
+        self.assertIn("cross_library_domain_filtered", result["diagnostics"]["warnings"])
+
+    def test_docs_search_word_match_hint_does_not_match_substring(self) -> None:
+        self.assertIsNone(infer_docs_query_hint("baremetal 공식 문서"))
+
     def test_agent_manager_exposes_retrieval_and_planner_diagnostics(self) -> None:
         evidence_payload = [
             {
@@ -648,6 +725,57 @@ class EvidencePipelineTest(unittest.TestCase):
         self.assertEqual(result["message"], "final answer before save")
         self.assertEqual(result["response_payload"]["answer"], "final answer before save")
         self.assertEqual(result["response_payload"]["claims"], [])
+
+    @patch("src.tools.docs_search.request_tavily_search")
+    def test_docs_search_applies_bare_library_hints_for_numpy_pandas_fastapi(self, mock_request_tavily_search) -> None:
+        mock_request_tavily_search.return_value = {"results": []}
+
+        registry = build_tool_registry(AppSettings(openai_api_key="test", tavily_api_key="test"))
+        registry.tavily_search_tool.func(query="numpy official docs")
+        registry.tavily_search_tool.func(query="pandas official docs")
+        registry.tavily_search_tool.func(query="fastapi official docs")
+
+        first_query = mock_request_tavily_search.call_args_list[0].kwargs
+        fourth_query = mock_request_tavily_search.call_args_list[3].kwargs
+        seventh_query = mock_request_tavily_search.call_args_list[6].kwargs
+        self.assertEqual(first_query["include_domains"], ["numpy.org"])
+        self.assertEqual(first_query["query"], "numpy official docs")
+        self.assertEqual(fourth_query["include_domains"], ["pandas.pydata.org"])
+        self.assertEqual(fourth_query["query"], "pandas official docs")
+        self.assertEqual(seventh_query["include_domains"], ["fastapi.tiangolo.com"])
+        self.assertEqual(seventh_query["query"], "fastapi official docs")
+
+    @patch("src.tools.docs_search.request_tavily_search")
+    def test_docs_search_post_filters_cross_library_domains_for_hinted_queries(self, mock_request_tavily_search) -> None:
+        mock_request_tavily_search.return_value = {
+            "results": [
+                {
+                    "url": "https://pandas.pydata.org/docs/reference/api/pandas.concat.html",
+                    "title": "pandas.concat",
+                    "content": "Concatenate pandas objects.",
+                    "score": 0.92,
+                },
+                {
+                    "url": "https://numpy.org/doc/stable/reference/generated/numpy.concatenate.html",
+                    "title": "numpy.concatenate",
+                    "content": "Join a sequence of arrays.",
+                    "score": 0.95,
+                },
+            ]
+        }
+
+        registry = build_tool_registry(AppSettings(openai_api_key="test", tavily_api_key="test"))
+        result = registry.tavily_search_tool.func(query="pandas official docs")
+
+        self.assertEqual(
+            [item["url_or_path"] for item in result["evidence"]],
+            ["https://pandas.pydata.org/docs/reference/api/pandas.concat.html"],
+        )
+
+    def test_docs_search_word_match_hints_do_not_match_substrings_for_library_names(self) -> None:
+        self.assertIsNone(infer_docs_query_hint("numpydoc official docs"))
+        self.assertIsNone(infer_docs_query_hint("fastapiusers official docs"))
+        self.assertIsNone(infer_docs_query_hint("pandasai official docs"))
 
 
 if __name__ == "__main__":

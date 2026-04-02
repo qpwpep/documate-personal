@@ -2,17 +2,24 @@ from __future__ import annotations
 
 from typing import Any
 
-from ...planner_schema import PlannerOutput
+from ...planner_schema import PlannerOutput, normalize_planner_output_input
 from ..debug import PlannerDiagnostic, empty_planner_diagnostic
 from ..graph_state import PlannerState
 from ..routes import normalize_routes
 
 
-def parse_planner_output(raw: Any, errors: list[str]) -> PlannerOutput:
+def _coerce_planner_payload(raw: Any) -> Any:
     if isinstance(raw, PlannerOutput):
         return raw
+    return normalize_planner_output_input(raw)
+
+
+def parse_planner_output(raw: Any, errors: list[str]) -> PlannerOutput:
+    payload = _coerce_planner_payload(raw)
+    if isinstance(payload, PlannerOutput):
+        return payload
     try:
-        return PlannerOutput.model_validate(raw)
+        return PlannerOutput.validate_input(payload)
     except Exception as exc:
         errors.append(f"planner: output validation failed ({exc})")
         return PlannerOutput.fallback()

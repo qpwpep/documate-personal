@@ -11,7 +11,6 @@ from langchain_core.tools import StructuredTool
 from langchain_openai import OpenAIEmbeddings
 from langgraph.prebuilt import InjectedState
 
-from ..answer_schema import normalize_confidence
 from ..chunking import chunk_notebook, chunk_python_text
 from ..settings import AppSettings
 from ._common import (
@@ -20,6 +19,7 @@ from ._common import (
     build_evidence_item,
     build_retrieval_payload,
     dedupe_evidence_dicts,
+    normalize_relevance_score,
     to_float_or_none,
 )
 
@@ -156,20 +156,29 @@ def build_local_rag_tools(settings: AppSettings) -> tuple[Any, Any]:
                 )
 
         evidence_items = []
+        retrieval_warnings: list[str] = []
+        raw_scores: list[float] = []
         for doc, score in docs_with_scores:
             if not hasattr(doc, "metadata"):
                 continue
             source = doc.metadata.get("source", "notebook")
+            normalized_score, raw_score = normalize_relevance_score(
+                score,
+                warnings=retrieval_warnings,
+            )
             evidence_item = build_evidence_item(
                 kind="local",
                 tool="rag_search",
                 url_or_path=str(source),
                 snippet=(doc.page_content or "").replace("\n", " "),
-                score=normalize_confidence(score, clamp=True),
+                score=normalized_score,
                 metadata=getattr(doc, "metadata", None),
+                warnings=retrieval_warnings,
             )
             if evidence_item is not None:
                 evidence_items.append(evidence_item)
+                if raw_score is not None:
+                    raw_scores.append(raw_score)
 
         evidence = dedupe_evidence_dicts(evidence_items)
         return build_retrieval_payload(
@@ -179,6 +188,8 @@ def build_local_rag_tools(settings: AppSettings) -> tuple[Any, Any]:
             evidence=evidence,
             status="success" if evidence else "no_result",
             message="" if evidence else "no local notebook evidence found",
+            raw_relevance_score=max(raw_scores) if raw_scores else None,
+            warnings=retrieval_warnings,
         )
 
     def upload_search(
@@ -215,20 +226,29 @@ def build_local_rag_tools(settings: AppSettings) -> tuple[Any, Any]:
             )
 
         evidence_items = []
+        retrieval_warnings: list[str] = []
+        raw_scores: list[float] = []
         for doc, score in docs_with_scores:
             if not hasattr(doc, "metadata"):
                 continue
             source = doc.metadata.get("source", "uploaded")
+            normalized_score, raw_score = normalize_relevance_score(
+                score,
+                warnings=retrieval_warnings,
+            )
             evidence_item = build_evidence_item(
                 kind="local",
                 tool="upload_search",
                 url_or_path=str(source),
                 snippet=(doc.page_content or "").replace("\n", " "),
-                score=normalize_confidence(score, clamp=True),
+                score=normalized_score,
                 metadata=getattr(doc, "metadata", None),
+                warnings=retrieval_warnings,
             )
             if evidence_item is not None:
                 evidence_items.append(evidence_item)
+                if raw_score is not None:
+                    raw_scores.append(raw_score)
         evidence = dedupe_evidence_dicts(evidence_items)
         return build_retrieval_payload(
             tool="upload_search",
@@ -237,6 +257,8 @@ def build_local_rag_tools(settings: AppSettings) -> tuple[Any, Any]:
             evidence=evidence,
             status="success" if evidence else "no_result",
             message="" if evidence else "no uploaded file evidence found",
+            raw_relevance_score=max(raw_scores) if raw_scores else None,
+            warnings=retrieval_warnings,
         )
 
     rag_search_tool = StructuredTool.from_function(
