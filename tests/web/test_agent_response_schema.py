@@ -51,12 +51,30 @@ class AgentResponseSchemaTest(unittest.TestCase):
         with self.assertRaises(ValidationError):
             AgentResponse.model_validate(legacy_payload)
 
+    def test_debug_contract_requires_observability_fields(self) -> None:
+        payload = {
+            "response": {"answer": "hello", "claims": [], "evidence": [], "confidence": None},
+            "trace": "trace-id",
+            "file_path": None,
+            "debug": {
+                "tool_calls": [],
+                "tool_call_count": 0,
+                "errors": [],
+                "observed_evidence": [],
+            },
+        }
+        with self.assertRaises(ValidationError):
+            AgentResponse.model_validate(payload)
+
     def test_debug_retry_context_is_optional_and_parseable(self) -> None:
         payload = {
             "response": {"answer": "uncertain", "claims": [], "evidence": [], "confidence": None},
             "trace": "trace-id",
             "file_path": None,
             "debug": {
+                "schema_version": 2,
+                "observability_status": "ok",
+                "missing_required_debug_fields": [],
                 "tool_calls": ["tavily_search"],
                 "tool_call_count": 1,
                 "errors": ["validate_evidence: retry_reason=unsupported_claims"],
@@ -85,6 +103,9 @@ class AgentResponseSchemaTest(unittest.TestCase):
             "trace": "trace-id",
             "file_path": None,
             "debug": {
+                "schema_version": 2,
+                "observability_status": "ok",
+                "missing_required_debug_fields": [],
                 "tool_calls": ["tavily_search"],
                 "tool_call_count": 1,
                 "errors": [],
@@ -133,6 +154,9 @@ class AgentResponseSchemaTest(unittest.TestCase):
             "trace": "trace-id",
             "file_path": None,
             "debug": {
+                "schema_version": 2,
+                "observability_status": "ok",
+                "missing_required_debug_fields": [],
                 "tool_calls": ["tavily_search"],
                 "tool_call_count": 1,
                 "errors": [],
@@ -190,6 +214,9 @@ class AgentResponseSchemaTest(unittest.TestCase):
             "trace": "trace-id",
             "file_path": None,
             "debug": {
+                "schema_version": 2,
+                "observability_status": "ok",
+                "missing_required_debug_fields": [],
                 "tool_calls": ["upload_search"],
                 "tool_call_count": 1,
                 "errors": [],
@@ -233,6 +260,9 @@ class AgentResponseSchemaTest(unittest.TestCase):
             "trace": "trace-id",
             "file_path": None,
             "debug": {
+                "schema_version": 2,
+                "observability_status": "ok",
+                "missing_required_debug_fields": [],
                 "tool_calls": ["tavily_search"],
                 "tool_call_count": 1,
                 "errors": [],

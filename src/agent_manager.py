@@ -7,6 +7,7 @@ from typing import Any
 from .agent_runtime import DebugCollector, ExecutionRunner, GraphInvocationError, ResponseAssembler, SessionContext
 from .answer_schema import build_empty_response_payload
 from .contracts import SessionMetadata
+from .contracts.debug import DEBUG_SCHEMA_VERSION
 from .contracts.boundary.runtime import parse_session_metadata
 from .graph_builder import StageExecutionError, build_agent_graph
 from .latency import build_latency_breakdown, elapsed_ms, make_stage_latency_event
@@ -107,6 +108,9 @@ class AgentFlowManager:
             "response": None,
             "response_payload": build_empty_response_payload(answer=message).model_dump(mode="json"),
             "debug": {
+                "schema_version": DEBUG_SCHEMA_VERSION,
+                "observability_status": "ok",
+                "missing_required_debug_fields": [],
                 "tool_calls": [],
                 "tool_call_count": 0,
                 "token_usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
@@ -154,6 +158,9 @@ class AgentFlowManager:
             "response": None,
             "response_payload": build_empty_response_payload(answer=message).model_dump(mode="json"),
             "debug": {
+                "schema_version": DEBUG_SCHEMA_VERSION,
+                "observability_status": "failed",
+                "missing_required_debug_fields": [],
                 "tool_calls": [],
                 "tool_call_count": 0,
                 "token_usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},

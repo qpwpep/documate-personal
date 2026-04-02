@@ -4,6 +4,7 @@ from typing import Any
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
+from ..contracts.debug import DEBUG_SCHEMA_VERSION
 from ..contracts.boundary.debug import (
     get_debug_state,
     parse_retry_state,
@@ -251,6 +252,9 @@ class DebugCollector:
         )
 
         return {
+            "schema_version": DEBUG_SCHEMA_VERSION,
+            "observability_status": "ok",
+            "missing_required_debug_fields": [],
             "tool_calls": tool_calls,
             "tool_call_count": len(tool_calls),
             "token_usage": token_usage,

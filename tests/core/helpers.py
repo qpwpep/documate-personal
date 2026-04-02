@@ -92,10 +92,13 @@ def build_legacy_state(payload: dict):
         debug_payload = {
             key: raw.pop(key)
             for key in list(raw.keys())
-            if key
-            in {
-                "tool_calls",
-                "tool_call_count",
+                if key
+                in {
+                    "schema_version",
+                    "observability_status",
+                    "missing_required_debug_fields",
+                    "tool_calls",
+                    "tool_call_count",
                 "token_usage",
                 "model_name",
                 "models_used",

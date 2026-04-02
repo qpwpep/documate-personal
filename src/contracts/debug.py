@@ -25,10 +25,41 @@ LLMCallPath = Literal[
     "plain_fallback",
     "structured_compact_fallback",
     "plain_summary_attach_fallback",
+    "korean_template_summary_fallback",
 ]
 
 DEFAULT_MAX_RETRIES = 1
 RETRYABLE_REASONS: set[RetryReason] = {"no_evidence", "low_score", "tool_error"}
+DEBUG_SCHEMA_VERSION = 2
+DebugObservabilityStatus = Literal["ok", "degraded", "failed"]
+DEBUG_REQUIRED_FIELDS: tuple[str, ...] = (
+    "schema_version",
+    "observability_status",
+    "missing_required_debug_fields",
+    "tool_calls",
+    "tool_call_count",
+    "token_usage",
+    "model_name",
+    "models_used",
+    "llm_calls",
+    "errors",
+    "planner_errors",
+    "observed_evidence",
+    "retry_context",
+    "retrieval_diagnostics",
+    "planner_diagnostics",
+    "latency_breakdown",
+)
+DEBUG_CRITICAL_FIELDS: tuple[str, ...] = (
+    "schema_version",
+    "observability_status",
+    "missing_required_debug_fields",
+    "tool_calls",
+    "tool_call_count",
+    "observed_evidence",
+    "retrieval_diagnostics",
+    "latency_breakdown",
+)
 
 
 class TokenUsage(BaseModel):
@@ -69,6 +100,15 @@ class RetrievalDiagnostic(BaseModel):
     message: str = ""
     query: str = ""
     attempt: int = 0
+    evidence_count: int = 0
+    result_count: int = 0
+    avg_score: float | None = None
+    max_score: float | None = None
+    normalized_score: float | None = None
+    relevance_score: float | None = None
+    raw_relevance_score: float | None = None
+    score: float | None = None
+    warnings: list[str] = Field(default_factory=list)
 
 
 class LLMCallMetadata(BaseModel):
@@ -80,6 +120,9 @@ class LLMCallMetadata(BaseModel):
 
 
 class DebugPayload(BaseModel):
+    schema_version: int = DEBUG_SCHEMA_VERSION
+    observability_status: DebugObservabilityStatus = "ok"
+    missing_required_debug_fields: list[str] = Field(default_factory=list)
     tool_calls: list[str] = Field(default_factory=list)
     tool_call_count: int = 0
     token_usage: TokenUsage | None = None

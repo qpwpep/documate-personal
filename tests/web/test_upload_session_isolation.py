@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -44,6 +46,34 @@ class _CapturingGraph:
 class _ExplodingGraph:
     def invoke(self, _state: dict) -> dict:
         raise RuntimeError("boom")
+
+
+class _SlowCapturingGraph:
+    def __init__(self):
+        self.max_concurrent = 0
+        self._current = 0
+        self._lock = threading.Lock()
+
+    def invoke(self, state: dict) -> dict:
+        runtime = state["runtime"]
+        with self._lock:
+            self._current += 1
+            self.max_concurrent = max(self.max_concurrent, self._current)
+        try:
+            time.sleep(0.05)
+            return {
+                "messages": [
+                    HumanMessage(content=runtime.user_input),
+                    AIMessage(content="ok"),
+                ],
+                "response": ResponseState(
+                    final_answer="ok",
+                    payload={"answer": "ok", "claims": [], "evidence": [], "confidence": None},
+                ),
+            }
+        finally:
+            with self._lock:
+                self._current -= 1
 
 
 class _FakeHandle:
@@ -210,6 +240,24 @@ class UploadSessionIsolationTest(unittest.TestCase):
 
 
 class SessionStoreCleanupTest(unittest.TestCase):
+    def test_cleanup_expired_sessions_skips_active_session(self) -> None:
+        store = InMemorySessionStore(
+            settings=AppSettings(openai_api_key="test-key", tavily_api_key="test"),
+            agent_factory=lambda: _make_manager(_CapturingGraph()),
+        )
+        busy_agent = _make_manager(_CapturingGraph())
+        store.active_agents["busy"] = SessionEntry(
+            agent=busy_agent,
+            last_accessed_monotonic=0.0,
+            created_monotonic=0.0,
+            active_request_count=1,
+        )
+
+        removed = store.cleanup_expired(now=100.0, ttl_seconds=10)
+
+        self.assertEqual(removed, 0)
+        self.assertIn("busy", store.active_agents)
+
     def test_cleanup_expired_sessions_calls_agent_close(self) -> None:
         store = InMemorySessionStore(
             settings=AppSettings(openai_api_key="test-key", tavily_api_key="test"),
@@ -267,6 +315,103 @@ class SessionStoreCleanupTest(unittest.TestCase):
             newest_close.assert_not_called()
             self.assertNotIn("oldest", store.active_agents)
             self.assertIn("newest", store.active_agents)
+
+    def test_lru_eviction_skips_locked_sessions(self) -> None:
+        store = InMemorySessionStore(
+            settings=AppSettings(openai_api_key="test-key", tavily_api_key="test"),
+            agent_factory=lambda: _make_manager(_CapturingGraph()),
+        )
+        locked_agent = _make_manager(_CapturingGraph())
+        unlocked_agent = _make_manager(_CapturingGraph())
+        with patch.object(locked_agent, "close") as locked_close, patch.object(
+            unlocked_agent, "close"
+        ) as unlocked_close:
+            store.active_agents["locked"] = SessionEntry(
+                agent=locked_agent,
+                last_accessed_monotonic=1.0,
+                created_monotonic=0.0,
+            )
+            store.active_agents["unlocked"] = SessionEntry(
+                agent=unlocked_agent,
+                last_accessed_monotonic=2.0,
+                created_monotonic=0.0,
+            )
+
+            store.active_agents["locked"].request_lock.acquire()
+            try:
+                evicted = store.evict_lru_if_needed(max_active_sessions=1)
+            finally:
+                store.active_agents["locked"].request_lock.release()
+
+            self.assertEqual(evicted, 1)
+            locked_close.assert_not_called()
+            unlocked_close.assert_called_once_with()
+            self.assertIn("locked", store.active_agents)
+            self.assertNotIn("unlocked", store.active_agents)
+
+    def test_lru_eviction_skips_active_session(self) -> None:
+        store = InMemorySessionStore(
+            settings=AppSettings(openai_api_key="test-key", tavily_api_key="test"),
+            agent_factory=lambda: _make_manager(_CapturingGraph()),
+        )
+        oldest_agent = _make_manager(_CapturingGraph())
+        newest_agent = _make_manager(_CapturingGraph())
+        with patch.object(oldest_agent, "close") as oldest_close, patch.object(
+            newest_agent, "close"
+        ) as newest_close:
+            store.active_agents["oldest"] = SessionEntry(
+                agent=oldest_agent,
+                last_accessed_monotonic=1.0,
+                created_monotonic=0.0,
+                active_request_count=1,
+            )
+            store.active_agents["newest"] = SessionEntry(
+                agent=newest_agent,
+                last_accessed_monotonic=2.0,
+                created_monotonic=0.0,
+            )
+
+            evicted = store.evict_lru_if_needed(max_active_sessions=1)
+
+            self.assertEqual(evicted, 1)
+            oldest_close.assert_not_called()
+            newest_close.assert_called_once_with()
+            self.assertIn("oldest", store.active_agents)
+            self.assertNotIn("newest", store.active_agents)
+
+    def test_session_request_lock_serializes_same_session_requests(self) -> None:
+        store = InMemorySessionStore(
+            settings=AppSettings(openai_api_key="test-key", tavily_api_key="test"),
+            agent_factory=lambda: _make_manager(_SlowCapturingGraph()),
+        )
+        session_entry = store.get_or_create_entry("demo-session")
+        graph = session_entry.agent.graph
+        barrier = threading.Barrier(3)
+        results: list[tuple[int, str]] = []
+
+        def worker(index: int) -> None:
+            barrier.wait()
+            _agent, agent_answer, session_lock_wait_ms = store.run_session_request(
+                session_id="demo-session",
+                session_metadata=build_session_metadata_snapshot(
+                    AgentRequest(query=f"question-{index}", session_id="demo-session")
+                ),
+                user_input=f"question-{index}",
+                upload_file_path=None,
+            )
+            results.append((session_lock_wait_ms, str(agent_answer.get("message") or "")))
+
+        threads = [threading.Thread(target=worker, args=(idx,)) for idx in range(2)]
+        for thread in threads:
+            thread.start()
+        barrier.wait()
+        for thread in threads:
+            thread.join()
+
+        self.assertEqual(graph.max_concurrent, 1)
+        self.assertEqual(sorted(answer for _, answer in results), ["ok", "ok"])
+        self.assertTrue(any(wait_ms > 0 for wait_ms, _ in results))
+        self.assertEqual(session_entry.active_request_count, 0)
 
 
 if __name__ == "__main__":
