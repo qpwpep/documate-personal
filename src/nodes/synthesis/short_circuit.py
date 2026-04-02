@@ -63,6 +63,7 @@ def maybe_short_circuit_synthesis(
         )
 
     if not should_use_deterministic_grounded_direct(
+        user_input=context.user_input,
         planner_output=context.planner_output,
         evidence_items=context.primary_evidence_items,
     ):

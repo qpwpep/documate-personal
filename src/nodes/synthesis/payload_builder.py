@@ -22,6 +22,24 @@ from ..session import extract_text_content
 from .prompt_builder import parse_plain_summary_segments
 
 
+_EXTRACTION_HINTS = (
+    "extract",
+    "quote",
+    "snippet",
+    "cell",
+    "line",
+    "find",
+    "show",
+    "where",
+    "locate",
+    "인용",
+    "추출",
+    "줄",
+    "셀",
+    "코드",
+)
+
+
 @dataclass(slots=True)
 class RenderedSynthesisPayload:
     payload: AgentResponsePayloadModel
@@ -171,6 +189,27 @@ def build_plain_summary_attach_payload(
     return payload
 
 
+def build_korean_template_summary_payload(
+    *,
+    content: str,
+    evidence_items: list[EvidenceItem],
+) -> AgentResponsePayloadModel | None:
+    payload = build_plain_summary_attach_payload(content=content, evidence_items=evidence_items)
+    if payload is None:
+        return None
+    rendered_answer = str(content or "").strip()
+    if rendered_answer:
+        payload.answer = rendered_answer
+    return payload
+
+
+def _looks_like_extraction_request(user_input: str) -> bool:
+    normalized = str(user_input or "").strip().lower()
+    return any(hint in normalized for hint in _EXTRACTION_HINTS) or any(
+        hint in normalized for hint in ("원문", "발췌", "추출", "그대로", "코드", "셀")
+    )
+
+
 def build_local_fallback_payload(
     *,
     evidence_items: list[EvidenceItem],
@@ -189,6 +228,7 @@ def build_local_fallback_payload(
 
 def should_use_deterministic_grounded_direct(
     *,
+    user_input: str,
     planner_output: PlannerOutput,
     evidence_items: list[EvidenceItem],
 ) -> bool:
@@ -197,7 +237,12 @@ def should_use_deterministic_grounded_direct(
     if not 1 <= len(evidence_items) <= 2:
         return False
     selected_routes = {task.route for task in planner_output.tasks}
-    return selected_routes in ({"upload"}, {"docs", "upload"})
+    evidence_kinds = {str(item.kind or "").strip().lower() for item in evidence_items}
+    if "official" in evidence_kinds:
+        return False
+    if not _looks_like_extraction_request(user_input):
+        return False
+    return selected_routes in ({"upload"}, {"local"}) and len(evidence_items) == 1
 
 
 def render_synthesis_payload(

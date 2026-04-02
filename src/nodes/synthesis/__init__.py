@@ -7,7 +7,6 @@ from .payload_builder import (
 )
 from .prompt_builder import (
     PLAIN_SUMMARY_ATTACH_CONTRACT,
-    SYNTHESIS_CONTRACT,
     build_plain_summary_attach_messages,
     build_synthesis_messages,
 )
@@ -15,7 +14,6 @@ from .prompt_builder import (
 __all__ = [
     "PLAIN_SUMMARY_ATTACH_CONTRACT",
     "PreparedSynthesisInputs",
-    "SYNTHESIS_CONTRACT",
     "SynthesisPipelineResult",
     "build_plain_summary_attach_messages",
     "build_structured_synthesizer",
