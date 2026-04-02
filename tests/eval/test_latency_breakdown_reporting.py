@@ -30,6 +30,29 @@ class _DummyJudge:
         return (None, None, None)
 
 
+def _debug_payload(**overrides):
+    payload = {
+        "schema_version": 1,
+        "observability_status": "ok",
+        "missing_required_debug_fields": [],
+        "tool_calls": [],
+        "tool_call_count": 0,
+        "token_usage": {},
+        "model_name": None,
+        "models_used": [],
+        "llm_calls": [],
+        "errors": [],
+        "planner_errors": [],
+        "observed_evidence": [],
+        "retry_context": None,
+        "retrieval_diagnostics": [],
+        "planner_diagnostics": None,
+        "latency_breakdown": None,
+    }
+    payload.update(overrides)
+    return payload
+
+
 class LatencyBreakdownReportingTest(unittest.TestCase):
     @patch("src.eval.runner_online.requests.post")
     def test_run_single_case_parses_latency_breakdown(self, mock_post) -> None:
@@ -39,11 +62,10 @@ class LatencyBreakdownReportingTest(unittest.TestCase):
                 "response": {"answer": "done", "claims": [], "evidence": [], "confidence": None},
                 "trace": "trace-id",
                 "file_path": "",
-                "debug": {
-                    "tool_calls": ["tavily_search"],
-                    "token_usage": {},
-                    "observed_evidence": [],
-                    "latency_breakdown": {
+                "debug": _debug_payload(
+                    tool_calls=["tavily_search"],
+                    tool_call_count=1,
+                    latency_breakdown={
                         "server_total_ms": 1500,
                         "graph_total_ms": 1400,
                         "upload_retriever_build_ms": None,
@@ -59,7 +81,7 @@ class LatencyBreakdownReportingTest(unittest.TestCase):
                         "retrieval_routes": [],
                         "synthesis_attempts": [],
                     },
-                },
+                ),
             },
         )
 
@@ -192,16 +214,17 @@ class LatencyBreakdownReportingTest(unittest.TestCase):
                 "response": {"answer": "done", "claims": [], "evidence": [], "confidence": None},
                 "trace": "trace-id",
                 "file_path": "",
-                "debug": {
-                    "tool_calls": ["tavily_search"],
-                    "token_usage": {
+                "debug": _debug_payload(
+                    tool_calls=["tavily_search"],
+                    tool_call_count=1,
+                    token_usage={
                         "prompt_tokens": 999,
                         "completion_tokens": 999,
                         "total_tokens": 1998,
                     },
-                    "model_name": "gpt-5-mini",
-                    "models_used": ["gpt-5-nano", "gpt-5-mini"],
-                    "llm_calls": [
+                    model_name="gpt-5-mini",
+                    models_used=["gpt-5-nano", "gpt-5-mini"],
+                    llm_calls=[
                         {
                             "stage": "planner",
                             "attempt": 1,
@@ -217,8 +240,7 @@ class LatencyBreakdownReportingTest(unittest.TestCase):
                             "usage_metadata": {"input_tokens": 20, "output_tokens": 5, "total_tokens": 25},
                         },
                     ],
-                    "observed_evidence": [],
-                },
+                ),
             },
         )
 
