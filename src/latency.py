@@ -20,6 +20,7 @@ SynthesisMode = Literal[
     "structured_error_plain_fallback",
     "compact_structured_fallback",
     "plain_summary_attach_fallback",
+    "korean_template_summary_fallback",
     "deterministic_grounded_fallback",
     "deterministic_grounded_direct",
 ]

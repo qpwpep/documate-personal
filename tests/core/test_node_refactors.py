@@ -3,10 +3,15 @@ import unittest
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
-from src.answer_schema import AgentResponsePayloadModel, build_empty_response_payload
+from src.answer_schema import (
+    AgentResponsePayloadModel,
+    build_deterministic_grounded_payload,
+    build_empty_response_payload,
+)
 from src.contracts import RetrievalDiagnostic, RetryState
 from src.evidence import EvidenceItem
 from src.nodes.planner.policy import build_deterministic_planner_decision
+from src.nodes.retrieval import collect_retrieval_result
 from src.nodes.retrieval.node import _collect_retrieval_batch, _execute_retrieval_batch
 from src.nodes.synthesis.payload_builder import build_plain_summary_attach_payload
 from src.nodes.synthesis.prompt_builder import build_synthesis_messages
@@ -183,9 +188,54 @@ class NodeRefactorTest(unittest.TestCase):
         self.assertEqual(model_messages[0].content, SYS_POLICY)
         self.assertTrue(any("[Conversation Summary]" in str(message.content) for message in model_messages))
         self.assertTrue(any("[Retrieved Evidence]" in str(message.content) for message in model_messages))
-        self.assertTrue(any("Retry synthesis after evidence validation failed." in str(message.content) for message in model_messages))
+        self.assertTrue(any("Do not list raw links or search results" in str(message.content) for message in model_messages))
+        self.assertTrue(
+            any(
+                "Retry after evidence validation failed" in str(message.content)
+                for message in model_messages
+            )
+        )
         self.assertFalse(any(isinstance(message, HumanMessage) and message.content == "u1" for message in model_messages))
         self.assertTrue(any(isinstance(message, HumanMessage) and message.content == "u4" for message in model_messages))
+
+    def test_synthesis_prompt_builder_adds_hybrid_guidance_when_official_and_local_evidence_exist(self) -> None:
+        state = build_legacy_state({"messages": [HumanMessage(content="질문")]})
+        model_messages, _, _ = build_synthesis_messages(
+            state=state,
+            action_rules=[],
+            deduped_evidence=[_docs_evidence(), _upload_evidence()],
+            attempt=1,
+            max_turns=2,
+        )
+
+        self.assertTrue(
+            any(
+                "docs plus uploaded/local evidence" in str(message.content)
+                for message in model_messages
+            )
+        )
+
+    def test_synthesis_prompt_builder_truncates_long_evidence_snippets(self) -> None:
+        state = build_legacy_state({"messages": [HumanMessage(content="Explain it.")]})
+        long_snippet = "A" * 400
+
+        model_messages, _, _ = build_synthesis_messages(
+            state=state,
+            action_rules=[],
+            deduped_evidence=[_docs_evidence(snippet=long_snippet)],
+            attempt=1,
+            max_turns=2,
+        )
+
+        retrieved_evidence_messages = [
+            str(message.content)
+            for message in model_messages
+            if isinstance(message, SystemMessage) and "[Retrieved Evidence]" in str(message.content)
+        ]
+        self.assertEqual(len(retrieved_evidence_messages), 1)
+        self.assertIn("A" * 40, retrieved_evidence_messages[0])
+        self.assertNotIn("A" * 320, retrieved_evidence_messages[0])
+        self.assertIn("...", retrieved_evidence_messages[0])
 
     def test_synthesis_payload_builder_adopts_plain_summary_segments(self) -> None:
         evidence_items = [
@@ -318,6 +368,88 @@ class NodeRefactorTest(unittest.TestCase):
         self.assertEqual(updates["response"].final_answer, "kept [1]")
         self.assertEqual(len(updates["response"].payload.claims), 1)
         self.assertEqual(updates["response"].payload.claims[0].evidence_ids, [valid_source])
+
+    def test_deterministic_grounded_payload_strips_markdown_and_navigation_noise(self) -> None:
+        payload = build_deterministic_grounded_payload(
+            evidence_items=[
+                EvidenceItem.model_validate(
+                    _docs_evidence(
+                        snippet=(
+                            "# Table of Contents\n"
+                            "Home > Docs > API > Broadcasting\n"
+                            "[NumPy broadcasting](https://numpy.org/doc/stable/)\n"
+                            "Previous: Installation\n"
+                            "Next: Indexing\n"
+                            "Broadcasting expands compatible array shapes."
+                        )
+                    )
+                )
+            ]
+        )
+
+        self.assertEqual(
+            payload.claims[0].text,
+            "Broadcasting expands compatible array shapes.",
+        )
+        self.assertNotIn("Table of Contents", payload.answer)
+        self.assertNotIn("Home >", payload.answer)
+        self.assertNotIn("Previous", payload.answer)
+        self.assertNotIn("Next", payload.answer)
+
+    def test_deterministic_grounded_payload_drops_pipe_navigation_lines(self) -> None:
+        payload = build_deterministic_grounded_payload(
+            evidence_items=[
+                EvidenceItem.model_validate(
+                    _docs_evidence(
+                        snippet=(
+                            "[API Reference](https://numpy.org/doc/stable/) | "
+                            "[User Guide](https://numpy.org/doc/stable/user/) | Previous | Next\n"
+                            "`numpy.broadcast_to` repeats an array across a new shape."
+                        )
+                    )
+                )
+            ]
+        )
+
+        self.assertEqual(payload.claims[0].text, "numpy.broadcast_to repeats an array across a new shape.")
+        self.assertNotIn("API Reference", payload.answer)
+        self.assertNotIn("Previous", payload.answer)
+
+    def test_collect_retrieval_result_filters_cross_library_docs_domains(self) -> None:
+        payload_dicts, diagnostic = collect_retrieval_result(
+            raw_payload={
+                "evidence": [
+                    _docs_evidence(
+                        source_id="url:https://numpy.org/doc/stable/reference/generated/numpy.concatenate.html",
+                        snippet="Join a sequence of arrays.",
+                    ),
+                    _docs_evidence(
+                        source_id="url:https://pandas.pydata.org/docs/reference/api/pandas.concat.html",
+                        snippet="Concatenate pandas objects.",
+                    ),
+                ],
+                "diagnostics": {
+                    "tool": "tavily_search",
+                    "route": "docs",
+                    "status": "success",
+                    "message": "",
+                    "query": "numpy official docs",
+                    "attempt": 1,
+                },
+            },
+            tool_name="tavily_search",
+            route="docs",
+            query="numpy official docs",
+            attempt=1,
+            local_errors=[],
+        )
+
+        self.assertEqual(len(payload_dicts), 1)
+        self.assertEqual(
+            payload_dicts[0]["url_or_path"],
+            "https://numpy.org/doc/stable/reference/generated/numpy.concatenate.html",
+        )
+        self.assertIn("cross_library_domain_filtered", diagnostic.warnings)
 
 
 if __name__ == "__main__":

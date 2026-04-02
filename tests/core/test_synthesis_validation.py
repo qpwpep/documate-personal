@@ -572,6 +572,32 @@ class SynthesisValidationTest(unittest.TestCase):
         self.assertEqual(len(_debug(updates).llm_calls), 1)
         self.assertEqual(_debug(updates).llm_calls[0].path, "structured")
 
+    def test_synthesize_empty_structured_output_falls_back_to_non_blank_answer(self) -> None:
+        capture_llm = _CaptureStructuredSynthesizeLLM(
+            {
+                "answer": "",
+                "claims": [],
+                "confidence": None,
+            },
+            include_raw=True,
+        )
+        synthesize_node = make_synthesize_node(capture_llm, verbose=False, max_turns=8)
+
+        updates = synthesize_node(
+            _state(
+                {
+                    "messages": [HumanMessage(content="1")],
+                    "user_input": "1",
+                    "retrieved_evidence": [],
+                    "synthesis_attempt": 0,
+                }
+            )
+        )
+
+        self.assertTrue(_response(updates).final_answer.strip())
+        self.assertEqual(_response(updates).payload.answer, _response(updates).final_answer)
+        self.assertIn("structured output was empty", _debug(updates).synthesis_errors[0])
+
     def test_synthesize_uses_only_current_attempt_evidence_window(self) -> None:
         capture_llm = _CaptureSynthesizeLLM()
         synthesize_node = make_synthesize_node(capture_llm, verbose=False, max_turns=8)
@@ -631,14 +657,40 @@ class SynthesisValidationTest(unittest.TestCase):
         self.assertFalse(any(isinstance(message, HumanMessage) and message.content == "u1" for message in sent_messages))
         self.assertTrue(any(isinstance(message, HumanMessage) and message.content == "u4" for message in sent_messages))
 
-    def test_synthesize_uses_plain_summary_attach_fallback(self) -> None:
-        primary_llm = _StructuredThenPlainFallbackSynthesizeLLM()
-        plain_fallback_llm = _CaptureSynthesizeLLM(
-            content="NumPy broadcasting expands compatible shapes.\nIt avoids Python-level loops."
+    def test_synthesize_truncates_long_evidence_snippets_in_prompt(self) -> None:
+        capture_llm = _CaptureStructuredSynthesizeLLM(include_raw=True)
+        synthesize_node = make_synthesize_node(
+            capture_llm,
+            verbose=False,
+            max_turns=6,
+            prompt_snippet_char_limit=40,
         )
+        long_snippet = "Broadcasting expands compatible array shapes across dimensions. " * 4
+
+        updates = synthesize_node(
+            _state(
+                {
+                    "messages": [HumanMessage(content="Explain numpy broadcasting.")],
+                    "retrieved_evidence": [_docs_evidence(snippet=long_snippet)],
+                    "synthesis_attempt": 0,
+                }
+            )
+        )
+
+        self.assertEqual(_response(updates).final_answer, "synth result")
+        retrieved_evidence_messages = [
+            str(message.content)
+            for message in (capture_llm.last_messages or [])
+            if isinstance(message, SystemMessage) and "[Retrieved Evidence]" in str(message.content)
+        ]
+        self.assertEqual(len(retrieved_evidence_messages), 1)
+        self.assertIn("Broadcasting expands compatible array...", retrieved_evidence_messages[0])
+        self.assertNotIn(long_snippet.strip(), retrieved_evidence_messages[0])
+
+    def test_synthesize_uses_local_deterministic_fallback_after_structured_failure(self) -> None:
+        primary_llm = _StructuredThenPlainFallbackSynthesizeLLM()
         synthesize_node = make_synthesize_node(
             primary_llm,
-            llm_synthesizer_compact=plain_fallback_llm,
             verbose=False,
             max_turns=6,
         )
@@ -665,15 +717,54 @@ class SynthesisValidationTest(unittest.TestCase):
             _response(updates).payload.claims[1].evidence_ids,
             ["url:https://numpy.org/doc/stable/broadcasting-2"],
         )
-        self.assertEqual(_debug(updates).llm_calls[-1].path, "plain_summary_attach_fallback")
+        self.assertEqual(len(_debug(updates).llm_calls), 1)
+        self.assertEqual(_debug(updates).llm_calls[-1].path, "structured")
         synthesis_attempts = [
             item for item in _debug(updates).latency_trace if item.get("kind") == "synthesis_attempt"
         ]
-        self.assertEqual(synthesis_attempts[0]["mode"], "plain_summary_attach_fallback")
+        self.assertEqual(synthesis_attempts[0]["mode"], "deterministic_grounded_fallback")
 
-    def test_synthesize_falls_back_to_deterministic_grounded_render_when_plain_attach_fails(self) -> None:
+    def test_synthesize_deterministic_fallback_strips_docs_navigation_chrome(self) -> None:
         primary_llm = _StructuredThenPlainFallbackSynthesizeLLM()
-        failing_plain_llm = _CaptureSynthesizeLLM(content="")
+        synthesize_node = make_synthesize_node(
+            primary_llm,
+            verbose=False,
+            max_turns=6,
+        )
+
+        updates = synthesize_node(
+            _state(
+                {
+                    "messages": [HumanMessage(content="Explain numpy broadcasting.")],
+                    "user_input": "Explain numpy broadcasting.",
+                    "retrieved_evidence": [
+                        _docs_evidence(
+                            snippet=(
+                                "# Broadcasting\n"
+                                "Home > Docs > API\n"
+                                "Table of contents\n"
+                                "Broadcasting expands compatible array shapes across dimensions.\n"
+                                "Previous: Intro"
+                            )
+                        )
+                    ],
+                    "synthesis_attempt": 0,
+                }
+            )
+        )
+
+        self.assertIn(
+            "Broadcasting expands compatible array shapes across dimensions.",
+            _response(updates).final_answer,
+        )
+        self.assertNotIn("Home > Docs > API", _response(updates).final_answer)
+        self.assertNotIn("Table of contents", _response(updates).final_answer)
+        self.assertNotIn("Previous: Intro", _response(updates).final_answer)
+        self.assertNotIn("# Broadcasting", _response(updates).final_answer)
+
+    def test_synthesize_does_not_invoke_secondary_llm_for_fallback(self) -> None:
+        primary_llm = _StructuredThenPlainFallbackSynthesizeLLM()
+        failing_plain_llm = _CaptureSynthesizeLLM(content="should not be used")
         synthesize_node = make_synthesize_node(
             primary_llm,
             llm_synthesizer_compact=failing_plain_llm,
@@ -697,6 +788,7 @@ class SynthesisValidationTest(unittest.TestCase):
         )
 
         self.assertIn("Broadcasting expands compatible array shapes.", _response(updates).final_answer)
+        self.assertIsNone(failing_plain_llm.last_messages)
         synthesis_attempts = [
             item for item in _debug(updates).latency_trace if item.get("kind") == "synthesis_attempt"
         ]

@@ -166,6 +166,10 @@ def route_error_statuses(diagnostics: list[RetrievalDiagnostic]) -> set[str]:
     }
 
 
+def route_has_warning(diagnostics: list[RetrievalDiagnostic]) -> bool:
+    return any(item.warnings for item in diagnostics)
+
+
 def score_avg_for_failed_routes(
     failed_routes: set[str],
     evidence_by_route: dict[str, list[EvidenceItem]],
@@ -244,6 +248,9 @@ def assess_validation(snapshot: ValidationSnapshot) -> ValidationAssessment:
             continue
         route_query = route_query_for_validation(route, route_diagnostics, snapshot.user_input)
         if not route_passes_validation(route, route_query, route_items):
+            route_failures[route] = "low_score"
+            continue
+        if route_has_warning(route_diagnostics) and not route_has_strong_lexical_match(route_query, route_items):
             route_failures[route] = "low_score"
 
     if contains_tool_error(snapshot.current_attempt_retrieval_errors) and not tool_error_routes:

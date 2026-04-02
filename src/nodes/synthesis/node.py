@@ -18,15 +18,30 @@ from .state import build_synthesis_updates
 logger = logging.getLogger(__name__)
 
 
+def _resolve_prompt_evidence_char_budget(
+    *,
+    synthesis_max_tokens: int,
+    prompt_snippet_char_limit: int,
+) -> tuple[int, int]:
+    snippet_limit = min(prompt_snippet_char_limit, max(120, synthesis_max_tokens * 2))
+    evidence_budget = max(700, min(2800, synthesis_max_tokens * 4))
+    return snippet_limit, evidence_budget
+
+
 def make_synthesize_node(
     llm_synthesizer: Any,
     llm_synthesizer_compact: Any | None = None,
     verbose: bool = False,
     max_turns: int = 6,
+    synthesis_max_tokens: int = 900,
+    prompt_snippet_char_limit: int = 400,
     has_default_slack_destination: bool = False,
 ):
     structured_synthesizer = build_structured_synthesizer(llm_synthesizer)
-    fallback_llm = llm_synthesizer_compact or llm_synthesizer
+    effective_snippet_limit, evidence_char_budget = _resolve_prompt_evidence_char_budget(
+        synthesis_max_tokens=synthesis_max_tokens,
+        prompt_snippet_char_limit=prompt_snippet_char_limit,
+    )
 
     def synthesize(state: GraphState) -> GraphState:
         stage_started = time.perf_counter()
@@ -49,6 +64,8 @@ def make_synthesize_node(
             state=state,
             context=context,
             max_turns=max_turns,
+            prompt_snippet_char_limit=effective_snippet_limit,
+            prompt_evidence_char_budget=evidence_char_budget,
         )
         if verbose and prepared.history_before != prepared.history_after:
             log_event(
@@ -61,7 +78,6 @@ def make_synthesize_node(
 
         pipeline_result = run_synthesis_pipeline(
             structured_synthesizer=structured_synthesizer,
-            fallback_llm=fallback_llm,
             prepared=prepared,
             stage_started=stage_started,
         )
