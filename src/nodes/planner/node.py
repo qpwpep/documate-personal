@@ -13,7 +13,7 @@ from ...contracts.boundary.retrieval import get_retrieval_state
 from ...contracts.boundary.runtime import get_runtime_state
 from ...contracts.debug import LLMCallMetadata, RetryState, build_llm_call_metadata, empty_planner_diagnostic
 from ...logging_utils import log_event
-from ...planner_schema import PlannerOutput
+from ...planner_schema import PlannerOutput, normalize_planner_output_input
 from .deterministic import build_deterministic_planner_decision
 from .guardrails import apply_required_route_guardrail, sanitize_planner_output
 from .heuristic import build_heuristic_planner_decision
@@ -32,6 +32,12 @@ class PlannerRunContext:
     planner_attempt: int
 
 
+def _coerce_planner_payload(raw: Any) -> Any:
+    if isinstance(raw, PlannerOutput):
+        return raw
+    return normalize_planner_output_input(raw)
+
+
 def _coerce_structured_planner_result(
     result: Any,
 ) -> tuple[PlannerOutput | None, AIMessage | None, Exception | None]:
@@ -40,12 +46,12 @@ def _coerce_structured_planner_result(
 
     if not isinstance(result, dict):
         try:
-            return PlannerOutput.model_validate(result), None, None
+            return PlannerOutput.validate_input(_coerce_planner_payload(result)), None, None
         except Exception as exc:
             return None, None, exc
 
     raw_message = result.get("raw")
-    parsed = result.get("parsed")
+    parsed = _coerce_planner_payload(result.get("parsed"))
     parsing_error = result.get("parsing_error")
 
     if not isinstance(raw_message, AIMessage):
@@ -60,7 +66,7 @@ def _coerce_structured_planner_result(
         return parsed, raw_message, None
 
     try:
-        return PlannerOutput.model_validate(parsed), raw_message, None
+        return PlannerOutput.validate_input(parsed), raw_message, None
     except Exception as exc:
         return None, raw_message, exc
 

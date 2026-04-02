@@ -206,6 +206,54 @@ class PlannerNodeTest(unittest.TestCase):
         self.assertEqual(updates["debug"].llm_calls[0].stage, "planner")
         self.assertEqual(updates["debug"].llm_calls[0].path, "structured")
 
+    def test_planner_prompt_preserves_library_name_for_docs_queries(self) -> None:
+        capture_planner = _CapturePlannerLLM(
+            PlannerOutput(use_retrieval=True, tasks=[RetrievalTask(route="docs", query="Bare", k=3)])
+        )
+        planner_node = make_planner_node(capture_planner, verbose=False)
+
+        _ = planner_node(
+            build_legacy_state(
+                {
+                    "messages": [HumanMessage(content="bare parameters")],
+                    "user_input": "bare parameters",
+                }
+            )
+        )
+
+        system_prompts = [
+            str(message.content)
+            for message in (capture_planner.last_messages or [])
+            if isinstance(message, SystemMessage)
+        ]
+        self.assertTrue(
+            any("preserve the library/framework name in task.query" in prompt for prompt in system_prompts)
+        )
+
+    def test_planner_accepts_structured_output_model_instances(self) -> None:
+        capture_planner = _CapturePlannerLLM(
+            PlannerOutput(
+                use_retrieval=True,
+                tasks=[{"route": "docs", "query": "numpy", "k": 3}],
+            ),
+            include_raw=True,
+        )
+        planner_node = make_planner_node(capture_planner, verbose=False)
+
+        updates = planner_node(
+            build_legacy_state(
+                {
+                    "messages": [HumanMessage(content="numpy parameters")],
+                    "user_input": "numpy parameters",
+                }
+            )
+        )
+
+        self.assertEqual(updates["planner"].status, "llm")
+        self.assertEqual([task.route for task in updates["planner"].output.tasks], ["docs"])
+        self.assertEqual(updates["planner"].output.tasks[0].query, "numpy")
+        self.assertEqual(updates["debug"].planner_errors, [])
+
     def test_planner_includes_retry_context_system_message_on_retry(self) -> None:
         capture_planner = _CapturePlannerLLM(PlannerOutput(use_retrieval=False, tasks=[]))
         planner_node = make_planner_node(capture_planner, verbose=False)
