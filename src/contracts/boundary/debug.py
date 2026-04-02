@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from ..debug import (
+    DEBUG_SCHEMA_VERSION,
     DebugPayload,
     LLMCallMetadata,
     RetryState,
@@ -110,6 +111,7 @@ def parse_llm_calls(value: Any) -> list[LLMCallMetadata]:
             "plain_fallback",
             "structured_compact_fallback",
             "plain_summary_attach_fallback",
+            "korean_template_summary_fallback",
         }:
             continue
 
@@ -162,7 +164,26 @@ def parse_debug_payload(value: Any) -> DebugPayload:
         if isinstance(value.get("observed_evidence"), list)
         else []
     )
+    raw_schema_version = value.get("schema_version", DEBUG_SCHEMA_VERSION)
+    try:
+        schema_version = int(raw_schema_version)
+    except (TypeError, ValueError):
+        schema_version = DEBUG_SCHEMA_VERSION
+
+    observability_status = str(value.get("observability_status") or "ok").strip().lower()
+    if observability_status not in {"ok", "degraded", "failed"}:
+        observability_status = "ok"
+
     return DebugPayload(
+        schema_version=schema_version,
+        observability_status=observability_status,  # type: ignore[arg-type]
+        missing_required_debug_fields=[
+            str(item)
+            for item in value.get("missing_required_debug_fields", [])
+            if str(item).strip()
+        ]
+        if isinstance(value.get("missing_required_debug_fields"), list)
+        else [],
         tool_calls=[str(item) for item in value.get("tool_calls", []) if str(item).strip()]
         if isinstance(value.get("tool_calls"), list)
         else [],
@@ -193,12 +214,25 @@ def parse_debug_state(value: Any) -> DebugState:
     if isinstance(value, DebugState):
         return value
     if isinstance(value, DebugPayload):
-        payload = value
-    elif not isinstance(value, dict):
+        return DebugState.model_validate(value.model_dump(mode="json"))
+    if not isinstance(value, dict):
         return DebugState()
-    else:
-        payload = parse_debug_payload(value)
-    return DebugState.model_validate(payload.model_dump(mode="json"))
+
+    payload = parse_debug_payload(value).model_dump(mode="json")
+    payload["retrieval_errors"] = [
+        str(item) for item in value.get("retrieval_errors", []) if str(item).strip()
+    ] if isinstance(value.get("retrieval_errors"), list) else []
+    payload["synthesis_errors"] = [
+        str(item) for item in value.get("synthesis_errors", []) if str(item).strip()
+    ] if isinstance(value.get("synthesis_errors"), list) else []
+    payload["validation_errors"] = [
+        str(item) for item in value.get("validation_errors", []) if str(item).strip()
+    ] if isinstance(value.get("validation_errors"), list) else []
+    payload["action_errors"] = [
+        str(item) for item in value.get("action_errors", []) if str(item).strip()
+    ] if isinstance(value.get("action_errors"), list) else []
+    payload["latency_trace"] = list(value.get("latency_trace", [])) if isinstance(value.get("latency_trace"), list) else []
+    return DebugState.model_validate(payload)
 
 
 def get_debug_state(state: dict[str, Any]) -> DebugState:

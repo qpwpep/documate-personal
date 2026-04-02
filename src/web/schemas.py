@@ -15,6 +15,9 @@ AgentRetryContext = RetryState
 
 
 class AgentDebugInfo(BaseModel):
+    schema_version: int
+    observability_status: Literal["ok", "degraded", "failed"]
+    missing_required_debug_fields: list[str] = Field(default_factory=list)
     tool_calls: list[str] = Field(default_factory=list)
     tool_call_count: int = 0
     latency_ms_server: int | None = None
