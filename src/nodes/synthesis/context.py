@@ -86,10 +86,12 @@ def build_synthesis_context(
         planner_output=planner_output,
         retrieval_required=retrieval_required,
         primary_evidence_items=select_primary_evidence_items(
+            user_input=user_input,
             evidence_items=evidence_items,
             planner_output=planner_output,
         ),
         grounded_fallback_evidence_items=select_grounded_fallback_evidence_items(
+            user_input=user_input,
             evidence_items=evidence_items,
             planner_output=planner_output,
         ),

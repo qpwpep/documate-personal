@@ -80,13 +80,20 @@ def build_action_only_answer(
     if previous_answer:
         return previous_answer
 
-    if needs_save(user_input) and needs_slack(user_input):
-        return "요청하신 최종 답변을 저장하고 Slack으로 공유합니다."
-    if needs_save(user_input):
-        return "요청하신 최종 답변을 저장합니다."
-    if needs_slack(user_input):
-        return "요청하신 최종 답변을 Slack으로 공유합니다."
     return ""
+
+
+def should_short_circuit_action_only(
+    *,
+    user_input: str,
+    messages: list[AnyMessage],
+    slack_target_available: bool,
+) -> bool:
+    if not is_action_only_request(user_input):
+        return False
+    if needs_slack(user_input) and not slack_target_available:
+        return True
+    return bool(latest_previous_ai_answer(messages))
 
 
 def make_action_postprocess_node(
