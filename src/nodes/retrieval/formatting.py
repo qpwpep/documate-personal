@@ -10,6 +10,17 @@ def _truncate_prompt_snippet(value: str, *, max_chars: int) -> str:
         return snippet
     if max_chars <= 3:
         return snippet[:max_chars]
+    bridge = " ... "
+    if max_chars <= len(bridge) + 2:
+        return snippet[: max_chars - 3].rstrip() + "..."
+
+    available = max_chars - len(bridge)
+    head_chars = max(1, available // 2)
+    tail_chars = max(1, available - head_chars)
+    head = snippet[:head_chars].rstrip()
+    tail = snippet[-tail_chars:].lstrip()
+    if head and tail:
+        return f"{head}{bridge}{tail}"
     return snippet[: max_chars - 3].rstrip() + "..."
 
 

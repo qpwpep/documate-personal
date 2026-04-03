@@ -83,7 +83,13 @@ def truncate_snippet(text: str | None, *, max_length: int = 500) -> str | None:
     if not snippet:
         return None
     if len(snippet) > max_length:
-        return snippet[:max_length] + " ..."
+        head_length = max(80, int(max_length * 0.4))
+        tail_length = max(80, max_length - head_length - 5)
+        if head_length + tail_length >= len(snippet):
+            return snippet
+        head = snippet[:head_length].rstrip()
+        tail = snippet[-tail_length:].lstrip()
+        return f"{head} ... {tail}"
     return snippet
 
 

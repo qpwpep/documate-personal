@@ -11,11 +11,46 @@ from src.nodes.retrieval import make_retrieve_dispatch_node
 from src.nodes.session import add_user_message
 from src.nodes.validation import make_validate_evidence_node
 from src.planner_schema import PlannerOutput, RetrievalTask
+from src.tools.local_rag import build_local_rag_tools
 
 from .helpers import _ToolWrapper, _tool_payload, build_legacy_state
 
 
 class RetrievalNodeTest(unittest.TestCase):
+    def test_upload_search_reranks_parameter_query_toward_usage_cell(self) -> None:
+        settings = type("Settings", (), {"openai_api_key": "test-key"})()
+        _rag_tool, upload_tool = build_local_rag_tools(settings)
+
+        class _Doc:
+            def __init__(self, text, cell_id):
+                self.page_content = text
+                self.metadata = {
+                    "source": "uploads/demo/sample_pipeline.ipynb",
+                    "cell_id": cell_id,
+                    "chunk_id": 0,
+                    "start_offset": 0,
+                    "end_offset": len(text),
+                }
+
+        class _VectorStore:
+            def similarity_search_with_relevance_scores(self, query, k=4):
+                _ = (query, k)
+                return [
+                    (_Doc("from sklearn.model_selection import train_test_split", 1), 0.30),
+                    (_Doc("train_test_split(X, y, test_size=0.2, random_state=42)", 2), 0.28),
+                ]
+
+        retriever = type("Retriever", (), {"vectorstore": _VectorStore()})()
+        payload = upload_tool.func(
+            query="업로드 노트북에서 train_test_split 파라미터를 찾아줘",
+            k=4,
+            retriever=retriever,
+        )
+
+        evidence = payload["evidence"]
+        self.assertEqual(evidence[0]["cell_id"], 2)
+        self.assertIn("test_size=0.2", evidence[0]["snippet"])
+
     def test_retrieve_dispatch_merges_evidence_and_tool_messages(self) -> None:
         docs_evidence = [
             {
