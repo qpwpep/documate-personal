@@ -6,7 +6,7 @@ from typing import Any
 from ...answer_schema import SynthesisOutput, build_deterministic_grounded_payload, build_empty_response_payload
 from ...contracts import GraphState
 from ...latency import elapsed_ms, make_stage_latency_event, make_synthesis_attempt_latency_event
-from ..actions import build_action_only_answer, is_action_only_request
+from ..actions import build_action_only_answer, should_short_circuit_action_only
 from .models import SynthesisContext
 from .payload_builder import should_use_deterministic_grounded_direct
 from .state import build_synthesis_updates
@@ -38,7 +38,11 @@ def maybe_short_circuit_synthesis(
             ],
         )
 
-    if is_action_only_request(context.user_input):
+    if should_short_circuit_action_only(
+        user_input=context.user_input,
+        messages=context.messages,
+        slack_target_available=context.slack_target_available,
+    ):
         final_answer = build_action_only_answer(
             user_input=context.user_input,
             messages=context.messages,

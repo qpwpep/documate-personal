@@ -17,8 +17,8 @@ from .payload_builder import (
 
 
 _DEFAULT_GENERIC_FALLBACK_ANSWER = (
-    "\uc751\ub2f5 \uc0dd\uc131 \uc911 \uc624\ub958\uac00 \ubc1c\uc0dd\ud588\uc2b5\ub2c8\ub2e4. "
-    "\uc9c8\ubb38 \ubc94\uc704\ub97c \uc870\uae08 \uc881\ud600 \ub2e4\uc2dc \uc2dc\ub3c4\ud574 \uc8fc\uc138\uc694."
+    "응답 생성 중 오류가 발생했습니다. "
+    "질문 범위를 조금 좁혀 다시 시도해 주세요."
 )
 
 

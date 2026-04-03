@@ -51,6 +51,7 @@ class SynthesisPromptBuilderTest(unittest.TestCase):
         self.assertIn("Action requests:", instruction_messages[0])
         self.assertIn("[Hybrid Synthesis]", instruction_messages[0])
         self.assertIn("official takeaway first", instruction_messages[0])
+        self.assertIn("actual message body to save/share now", instruction_messages[0])
         self.assertIn("Ignore markdown formatting, breadcrumbs, navigation labels", instruction_messages[0])
         self.assertIn("Retry after evidence validation failed", instruction_messages[0])
 
