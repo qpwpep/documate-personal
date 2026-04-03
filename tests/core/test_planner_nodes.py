@@ -5,6 +5,7 @@ from pydantic import ValidationError
 
 from src.contracts import PlannerDiagnostic, SessionMetadata, SlackDestination
 from src.nodes.planner import make_planner_node
+from src.nodes.planner.query_sanitizer import sanitize_retrieval_query
 from src.planner_schema import PlannerOutput, RetrievalTask
 
 from .helpers import _CapturePlannerLLM, _FailingPlannerLLM, _InvalidPlannerLLM, build_legacy_state
@@ -74,6 +75,7 @@ class PlannerNodeTest(unittest.TestCase):
         self.assertEqual(capture_planner.call_count, 0)
         self.assertEqual(updates["planner"].status, "deterministic")
         self.assertEqual([task.route for task in updates["planner"].output.tasks], ["upload"])
+        self.assertIn("groupby", updates["planner"].output.tasks[0].query.lower())
 
     def test_planner_deterministically_routes_hybrid_docs_and_upload_request(self) -> None:
         capture_planner = _CapturePlannerLLM(PlannerOutput(use_retrieval=False, tasks=[]))
@@ -93,7 +95,15 @@ class PlannerNodeTest(unittest.TestCase):
         self.assertEqual(updates["planner"].status, "deterministic")
         self.assertEqual([task.route for task in updates["planner"].output.tasks], ["docs", "upload"])
         self.assertEqual(updates["planner"].output.tasks[0].query, "pandas concat")
-        self.assertEqual(updates["planner"].output.tasks[1].query, "uploaded notebook example")
+        self.assertEqual(updates["planner"].output.tasks[1].query, "pandas concat uploaded notebook example")
+
+    def test_upload_query_sanitizer_preserves_missing_identifier_tokens_for_hybrid_requests(self) -> None:
+        sanitized = sanitize_retrieval_query(
+            route="upload",
+            query="train_test_split 공식 문법을 설명하고 업로드 노트북의 실제 사용 예를 찾아줘.",
+        )
+        self.assertIn("train_test_split", sanitized)
+        self.assertIn("업로드", sanitized)
 
     def test_planner_blocks_upload_route_when_retriever_missing(self) -> None:
         capture_planner = _CapturePlannerLLM(PlannerOutput(use_retrieval=False, tasks=[]))
