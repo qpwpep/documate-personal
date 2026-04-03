@@ -46,7 +46,22 @@ def _truncate_prompt_text(text: Any, *, limit: int) -> str:
     normalized = str(text or "").strip()
     if limit <= 0 or len(normalized) <= limit:
         return normalized
-    return normalized[: max(0, limit - 3)].rstrip() + "..."
+    bridge = " ... "
+    if limit <= len(bridge) + 2:
+        return normalized[: max(0, limit - 3)].rstrip() + "..."
+    available = limit - len(bridge)
+    head_chars = max(1, available // 2)
+    tail_chars = max(1, available - head_chars)
+    head = normalized[:head_chars].rstrip()
+    tail = normalized[-tail_chars:].lstrip()
+    if head and tail:
+        return f"{head}{bridge}{tail}"
+    separator = " ... "
+    if limit <= len(separator) + 8:
+        return normalized[:limit].rstrip()
+    head = (limit - len(separator)) // 2
+    tail = limit - len(separator) - head
+    return normalized[:head].rstrip() + separator + normalized[-tail:].lstrip()
 
 
 def _prepare_evidence_for_prompt(
@@ -95,6 +110,8 @@ def _build_synthesis_instruction_block(
         "- Restate the answer in the user's language.",
         "- Prioritize official documentation before secondary detail.",
         "- Ignore markdown formatting, breadcrumbs, navigation labels, and table-of-contents text that may appear in docs snippets.",
+        "- Do not answer with only a file path, a tool name, or an action acknowledgment.",
+        "- For upload/local code evidence, explain the relevant snippet and extract the requested parameters or options instead of pasting raw code only.",
     ]
     if has_hybrid_evidence:
         lines.extend(
@@ -103,6 +120,7 @@ def _build_synthesis_instruction_block(
                 "- For docs plus uploaded/local evidence, explain the official takeaway first.",
                 "- Then add an explicit comparison against the uploaded/local evidence.",
                 "- Keep the official explanation and the comparison as distinct claim groups.",
+                "- Mention the concrete uploaded/local code detail, configuration, or parameter that supports the comparison.",
             ]
         )
     else:
@@ -112,6 +130,10 @@ def _build_synthesis_instruction_block(
     if action_rules:
         lines.append("- Action requests:")
         lines.extend(f"  - {rule}" for rule in action_rules)
+        lines.append("  - Do not merely say that you will save or share the answer; output the exact body now.")
+        lines.append(
+            "- If you are saving or sharing in this turn, return the actual message body to save/share now, not a sentence about performing the action."
+        )
     if attempt > 1:
         lines.append(
             "Retry after evidence validation failed. Stay grounded in retrieved evidence."

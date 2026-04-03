@@ -452,7 +452,7 @@ class SynthesisValidationTest(unittest.TestCase):
         self.assertIsInstance(capture_llm.last_messages[0], SystemMessage)
         self.assertEqual(capture_llm.last_messages[0].content, SYS_POLICY)
 
-    def test_synthesize_short_circuits_action_only_save_request(self) -> None:
+    def test_synthesize_action_only_save_request_uses_llm_when_no_previous_answer_exists(self) -> None:
         capture_llm = _CaptureSynthesizeLLM()
         synthesize_node = make_synthesize_node(capture_llm, verbose=False, max_turns=6)
 
@@ -467,7 +467,8 @@ class SynthesisValidationTest(unittest.TestCase):
             )
         )
 
-        self.assertIsNone(capture_llm.last_messages)
+        self.assertIsNotNone(capture_llm.last_messages)
+        self.assertEqual(_response(updates).final_answer, "synth result")
         self.assertEqual(_response(updates).payload.claims, [])
 
     def test_synthesize_action_only_slack_requests_destination_without_metadata(self) -> None:
@@ -684,7 +685,7 @@ class SynthesisValidationTest(unittest.TestCase):
             if isinstance(message, SystemMessage) and "[Retrieved Evidence]" in str(message.content)
         ]
         self.assertEqual(len(retrieved_evidence_messages), 1)
-        self.assertIn("Broadcasting expands compatible array...", retrieved_evidence_messages[0])
+        self.assertIn("Broadcasting expa ... across dimensions.", retrieved_evidence_messages[0])
         self.assertNotIn(long_snippet.strip(), retrieved_evidence_messages[0])
 
     def test_synthesize_uses_local_deterministic_fallback_after_structured_failure(self) -> None:
@@ -794,15 +795,15 @@ class SynthesisValidationTest(unittest.TestCase):
         ]
         self.assertEqual(synthesis_attempts[0]["mode"], "deterministic_grounded_fallback")
 
-    def test_synthesize_uses_deterministic_grounded_direct_for_upload_routes(self) -> None:
+    def test_synthesize_uses_deterministic_grounded_direct_for_explicit_upload_extraction(self) -> None:
         capture_llm = _CaptureStructuredSynthesizeLLM(include_raw=True)
         synthesize_node = make_synthesize_node(capture_llm, verbose=False, max_turns=8)
 
         updates = synthesize_node(
             _state(
                 {
-                    "messages": [HumanMessage(content="Find groupby in uploaded file.")],
-                    "user_input": "Find groupby in uploaded file.",
+                    "messages": [HumanMessage(content="Extract the exact groupby code snippet from the uploaded file.")],
+                    "user_input": "Extract the exact groupby code snippet from the uploaded file.",
                     "planner_output": PlannerOutput(
                         use_retrieval=True,
                         tasks=[RetrievalTask(route="upload", query="groupby", k=3)],
@@ -833,3 +834,70 @@ class SynthesisValidationTest(unittest.TestCase):
             item for item in _debug(updates).latency_trace if item.get("kind") == "synthesis_attempt"
         ]
         self.assertEqual(synthesis_attempts[0]["mode"], "deterministic_grounded_direct")
+
+    def test_synthesize_keeps_multiple_upload_evidence_items_for_non_extraction_requests(self) -> None:
+        capture_llm = _CaptureStructuredSynthesizeLLM(
+            {
+                "answer": "train_test_split uses test_size=0.2 and random_state=42.",
+                "claims": [
+                    {
+                        "text": "train_test_split uses test_size=0.2 and random_state=42.",
+                        "evidence_ids": [
+                            "path:uploads/demo/sample.ipynb#cell=2;chunk=0;start=0;end=64",
+                        ],
+                        "confidence": 0.8,
+                    }
+                ],
+                "confidence": 0.8,
+            },
+            include_raw=True,
+        )
+        synthesize_node = make_synthesize_node(capture_llm, verbose=False, max_turns=8)
+
+        updates = synthesize_node(
+            _state(
+                {
+                    "messages": [HumanMessage(content="Find the train_test_split parameters in the uploaded notebook.")],
+                    "user_input": "Find the train_test_split parameters in the uploaded notebook.",
+                    "planner_output": PlannerOutput(
+                        use_retrieval=True,
+                        tasks=[RetrievalTask(route="upload", query="train_test_split", k=3)],
+                    ),
+                    "retrieved_evidence": [
+                        {
+                            "kind": "local",
+                            "tool": "upload_search",
+                            "source_id": "path:uploads/demo/sample.ipynb#cell=1;chunk=0;start=0;end=48",
+                            "document_id": "path:uploads/demo/sample.ipynb",
+                            "url_or_path": "uploads/demo/sample.ipynb",
+                            "snippet": "from sklearn.model_selection import train_test_split",
+                            "score": 0.2,
+                            "cell_id": 1,
+                            "chunk_id": 0,
+                            "start_offset": 0,
+                            "end_offset": 48,
+                        },
+                        {
+                            "kind": "local",
+                            "tool": "upload_search",
+                            "source_id": "path:uploads/demo/sample.ipynb#cell=2;chunk=0;start=0;end=64",
+                            "document_id": "path:uploads/demo/sample.ipynb",
+                            "url_or_path": "uploads/demo/sample.ipynb",
+                            "snippet": "X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)",
+                            "score": 0.1,
+                            "cell_id": 2,
+                            "chunk_id": 0,
+                            "start_offset": 0,
+                            "end_offset": 64,
+                        },
+                    ],
+                    "synthesis_attempt": 0,
+                }
+            )
+        )
+
+        self.assertIsNotNone(capture_llm.last_messages)
+        self.assertEqual(
+            _response(updates).final_answer,
+            "train_test_split uses test_size=0.2 and random_state=42. [1]",
+        )
