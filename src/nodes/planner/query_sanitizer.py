@@ -32,6 +32,13 @@ def _docs_identifier_pattern():
     return re.compile(_planner_rules().docs_identifier_pattern)
 
 
+@lru_cache(maxsize=1)
+def _upload_marker_pattern():
+    return re.compile(
+        r"(?i)(upload(?:ed)?|current file|current notebook|this file|this notebook|\.ipynb|\.py|업로드|현재 파일|이 파일|이 노트북)"
+    )
+
+
 def _normalize_query_text(text: str) -> str:
     collapsed = " ".join(str(text or "").replace("\r", "\n").split())
     return collapsed.strip(" ,.;:-")
@@ -52,7 +59,7 @@ def _strip_auxiliary_clauses(text: str) -> str:
 
 
 def _strip_action_clauses(text: str) -> str:
-    parts = re.split(r"(?<=[?.!,])|\band\b|\uadf8\ub9ac\uace0|\ub610\ub294", str(text or ""), flags=re.I)
+    parts = re.split(r"(?<=[?.!,])|\band\b|그리고|또는", str(text or ""), flags=re.I)
     kept = [part.strip() for part in parts if part.strip() and not _action_clause_pattern().search(part)]
     return _normalize_query_text(" ".join(kept or [str(text or "")]))
 
@@ -61,7 +68,7 @@ def _compact_docs_query(text: str) -> str:
     compact = _strip_auxiliary_clauses(_strip_action_clauses(text))
     compact = re.sub(_compare_clause_pattern(), " ", compact)
     upload_match = re.search(
-        r"(?i)(upload(?:ed)?|current file|current notebook|this file|this notebook|\.ipynb|\.py|\uc5c5\ub85c\ub4dc|\ud604\uc7ac \ud30c\uc77c|\uc774 \ud30c\uc77c|\uc774 \ub178\ud2b8\ubd81)",
+        r"(?i)(upload(?:ed)?|current file|current notebook|this file|this notebook|\.ipynb|\.py|업로드|현재 파일|이 파일|이 노트북)",
         compact,
     )
     if upload_match:
@@ -70,7 +77,7 @@ def _compact_docs_query(text: str) -> str:
         compact = re.sub(re.escape(phrase), " ", compact, flags=re.I)
     compact = re.sub(r"(?i)\b(official docs?|official documentation)\b", " ", compact)
     compact = re.sub(
-        r"(?i)\b(explain|describe|summarize|show|find|tell)\b|\uc124\uba85|\uc694\uc57d|\uc815\ub9ac|\ucc3e\uc544|\ubcf4\uc5ec",
+        r"(?i)\b(explain|describe|summarize|show|find|tell)\b|설명|요약|정리|찾아|보여",
         " ",
         compact,
     )
@@ -94,16 +101,63 @@ def _compact_docs_query(text: str) -> str:
 
 def _compact_upload_query(text: str) -> str:
     compact = _strip_auxiliary_clauses(_strip_action_clauses(text))
-    upload_match = re.search(
-        r"(?i)(upload(?:ed)?|current file|current notebook|this file|this notebook|\.ipynb|\.py|\uc5c5\ub85c\ub4dc|\ud604\uc7ac \ud30c\uc77c|\uc774 \ud30c\uc77c|\uc774 \ub178\ud2b8\ubd81)",
-        compact,
-    )
+    upload_match = _upload_marker_pattern().search(compact)
+    prefix = compact[: upload_match.start()] if upload_match else compact
     if upload_match:
         compact = compact[upload_match.start() :]
     compact = re.sub(_docs_clause_pattern(), " ", compact)
     compact = re.sub(_compare_clause_pattern(), " ", compact)
     compact = re.sub(r"\s+", " ", compact)
-    return _normalize_query_text(compact)
+    compact = _normalize_query_text(compact)
+
+    preserved_identifiers = _extract_upload_identifiers(prefix)
+    if preserved_identifiers:
+        compact_identifiers = {
+            token.lower()
+            for token in _docs_identifier_pattern().findall(compact)
+        }
+        missing_identifiers = [
+            token for token in preserved_identifiers if token.lower() not in compact_identifiers
+        ]
+        if missing_identifiers:
+            compact = _normalize_query_text(" ".join([*missing_identifiers[:4], compact]))
+
+    return compact
+
+
+def _extract_upload_identifiers(text: str) -> list[str]:
+    stopwords = {item.lower() for item in _planner_rules().docs_identifier_stopwords}
+    stopwords.update(
+        {
+            "compare",
+            "comparison",
+            "versus",
+            "vs",
+            "upload",
+            "uploaded",
+            "current",
+            "this",
+            "file",
+            "notebook",
+            "find",
+            "show",
+            "tell",
+            "explain",
+            "describe",
+            "usage",
+            "used",
+            "example",
+            "examples",
+        }
+    )
+    identifiers: list[str] = []
+    for token in _docs_identifier_pattern().findall(text):
+        normalized = token.strip()
+        if not normalized or normalized.lower() in stopwords:
+            continue
+        if normalized not in identifiers:
+            identifiers.append(normalized)
+    return identifiers
 
 
 def _compact_local_query(text: str) -> str:
@@ -125,7 +179,7 @@ def sanitize_retrieval_query(
         retry_reason = str(retry_context.retry_reason or "") if retry_context is not None else ""
         if retry_reason == "no_evidence":
             sanitized = re.sub(
-                r"(?i)\b(why|how|explain|describe|summarize)\b|\uc124\uba85|\uc694\uc57d|\uc774\uc720|\uc8fc\uc758\uc810",
+                r"(?i)\b(why|how|explain|describe|summarize)\b|설명|요약|이유|주의점",
                 " ",
                 sanitized,
             )
