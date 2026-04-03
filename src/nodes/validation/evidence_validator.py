@@ -25,6 +25,11 @@ def _code_identifier_pattern():
 
 
 @lru_cache(maxsize=1)
+def _embedded_code_identifier_pattern():
+    return re.compile(r"[A-Za-z_][A-Za-z0-9_]{1,}")
+
+
+@lru_cache(maxsize=1)
 def _keyword_pattern():
     return re.compile(_validation_rules().keyword_pattern)
 
@@ -66,9 +71,11 @@ def route_for_item_tool(tool_name: str) -> str:
 
 
 def extract_code_identifiers(text: str) -> set[str]:
+    matches = set(_code_identifier_pattern().findall(str(text or "")))
+    matches.update(_embedded_code_identifier_pattern().findall(str(text or "")))
     return {
         token.lower()
-        for token in _code_identifier_pattern().findall(str(text or ""))
+        for token in matches
         if token and token.lower() not in set(_validation_rules().keyword_stopwords)
     }
 
@@ -88,7 +95,13 @@ def combine_evidence_text(items: list[EvidenceItem]) -> str:
     return " ".join(
         part.strip().lower()
         for item in items
-        for part in (item.title or "", item.snippet or "", item.url_or_path or "")
+        for part in (
+            item.title or "",
+            item.snippet or "",
+            item.url_or_path or "",
+            item.document_id or "",
+            item.source_id or "",
+        )
         if part and part.strip()
     )
 
