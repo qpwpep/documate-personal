@@ -3,6 +3,7 @@ import unittest
 from src.evidence import truncate_snippet
 from src.nodes.planner.query_sanitizer import sanitize_retrieval_query
 from src.nodes.validation.evidence_validator import route_passes_validation
+from src.tools.local_rag import build_local_rag_tools
 
 
 class BackendRetrievalRegressionTest(unittest.TestCase):
@@ -51,6 +52,41 @@ class BackendRetrievalRegressionTest(unittest.TestCase):
                 evidence_items,
             )
         )
+
+    def test_upload_search_rescales_out_of_range_scores_without_clamp_warning(self) -> None:
+        settings = type("Settings", (), {"openai_api_key": "test-key"})()
+        _rag_tool, upload_tool = build_local_rag_tools(settings)
+
+        class _Doc:
+            def __init__(self, text, cell_id):
+                self.page_content = text
+                self.metadata = {
+                    "source": "uploads/demo/sample_pipeline.ipynb",
+                    "cell_id": cell_id,
+                    "chunk_id": 0,
+                    "start_offset": 0,
+                    "end_offset": len(text),
+                }
+
+        class _VectorStore:
+            def similarity_search_with_relevance_scores(self, query, k=4):
+                _ = (query, k)
+                return [
+                    (_Doc("from sklearn.model_selection import train_test_split", 1), 1.8),
+                    (_Doc("train_test_split(X, y, test_size=0.2, random_state=42)", 2), 1.2),
+                ]
+
+        retriever = type("Retriever", (), {"vectorstore": _VectorStore()})()
+        payload = upload_tool.func(
+            query="업로드 노트북에서 train_test_split 파라미터를 찾아줘",
+            k=4,
+            retriever=retriever,
+        )
+
+        self.assertEqual(payload["diagnostics"]["warnings"], [])
+        scores = [item["score"] for item in payload["evidence"]]
+        self.assertTrue(all(0.0 <= score <= 1.0 for score in scores))
+        self.assertEqual(sorted(scores), [0.0, 1.0])
 
 
 if __name__ == "__main__":
