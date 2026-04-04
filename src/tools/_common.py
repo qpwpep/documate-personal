@@ -64,7 +64,12 @@ def build_retrieval_payload(
 
 
 class SaveArgs(BaseModel):
-    content: str = Field(description="The exact final response text to write into the .txt file.")
+    content: str = Field(
+        description=(
+            "The exact final message body to write into the .txt file. "
+            "When the user asked to save in this turn, this should be the self-contained final answer body generated for that request."
+        )
+    )
     filename_prefix: str | None = Field(
         default="response",
         description="Optional short prefix for the filename (no extension).",
@@ -72,7 +77,12 @@ class SaveArgs(BaseModel):
 
 
 class SlackArgs(BaseModel):
-    text: str = Field(description="Final message to send to Slack (plain text).")
+    text: str = Field(
+        description=(
+            "Final plain-text message body to send to Slack. "
+            "When the user asked to share in this turn, this should be the exact self-contained final answer body generated for that request."
+        )
+    )
     user_id: str | None = Field(default=None, description="Slack Uxxxxx user id for DM.")
     email: str | None = Field(default=None, description="Slack email for DM.")
     channel_id: str | None = Field(default=None, description="Slack channel id (C/G/D...).")
