@@ -38,8 +38,6 @@ _EXTRACTION_HINTS = (
     "추출",
     "원문",
     "그대로",
-    "줄",
-    "셀",
     "코드 조각",
 )
 _EXPLAINER_HINTS = (
@@ -203,6 +201,18 @@ def _score_evidence_candidate(*, user_input: str, candidate: EvidenceItem) -> tu
     return (parameter_boost, identifier_hits, keyword_hits, non_import, numeric_score)
 
 
+def _has_strong_query_match(*, user_input: str, candidate: EvidenceItem) -> bool:
+    parameter_boost, identifier_hits, keyword_hits, non_import, _ = _score_evidence_candidate(
+        user_input=user_input,
+        candidate=candidate,
+    )
+    if identifier_hits > 0:
+        return True
+    if keyword_hits >= 2 and non_import > 0:
+        return True
+    return bool(parameter_boost > 0 and keyword_hits >= 1)
+
+
 def _select_best_evidence_for_query(
     *,
     user_input: str,
@@ -266,9 +276,7 @@ def select_primary_evidence_items(
         )
         if len(requested_routes) == 1 and requested_routes[0] in {"upload", "local"}:
             route = requested_routes[0]
-            route_matches = [
-                item for item in evidence_items if route_for_evidence(item) == route
-            ]
+            route_matches = [item for item in evidence_items if route_for_evidence(item) == route]
             if route_matches:
                 return _select_top_evidence_items(
                     user_input=user_input,
@@ -283,12 +291,20 @@ def select_primary_evidence_items(
             route_matches = [item for item in evidence_items if route_for_evidence(item) == route]
             if route in seen_routes and not is_hybrid_routes:
                 continue
+
             if is_hybrid_routes:
-                per_route_limit = 2
+                strong_route_matches = [
+                    item
+                    for item in route_matches
+                    if _has_strong_query_match(user_input=user_input, candidate=item)
+                ]
+                if not strong_route_matches:
+                    seen_routes.add(route)
+                    continue
                 route_top_matches = _select_top_evidence_items(
                     user_input=user_input,
-                    evidence_items=route_matches,
-                    limit=per_route_limit,
+                    evidence_items=strong_route_matches,
+                    limit=1,
                 )
                 _extend_unique(selected, route_top_matches)
                 seen_routes.add(route)
@@ -301,13 +317,15 @@ def select_primary_evidence_items(
             if match is not None:
                 selected.append(match)
                 seen_routes.add(route)
+        if is_hybrid_routes:
+            return selected[:2]
         if selected:
-            return selected[:4] if is_hybrid_routes else selected[:2]
+            return selected[:2]
 
     return _select_top_evidence_items(
         user_input=user_input,
         evidence_items=evidence_items,
-        limit=4,
+        limit=2,
     )
 
 
@@ -317,14 +335,46 @@ def select_grounded_fallback_evidence_items(
     evidence_items: list[EvidenceItem],
     planner_output: PlannerOutput,
 ) -> list[EvidenceItem]:
-    return select_primary_evidence_items(
+    primary_items = select_primary_evidence_items(
         user_input=user_input,
         evidence_items=evidence_items,
         planner_output=planner_output,
-    ) or _select_top_evidence_items(
+    )
+    if primary_items:
+        return primary_items
+
+    requested_routes: list[str] = []
+    for task in planner_output.tasks or []:
+        route = str(task.route or "")
+        if route and route not in requested_routes:
+            requested_routes.append(route)
+
+    is_hybrid_routes = len(requested_routes) > 1 and "docs" in requested_routes and any(
+        route in {"upload", "local"} for route in requested_routes
+    )
+    if is_hybrid_routes:
+        selected: list[EvidenceItem] = []
+        for route in requested_routes:
+            route_matches = [item for item in evidence_items if route_for_evidence(item) == route]
+            strong_route_matches = [
+                item
+                for item in route_matches
+                if _has_strong_query_match(user_input=user_input, candidate=item)
+            ]
+            if not strong_route_matches:
+                continue
+            match = _select_best_evidence_for_query(
+                user_input=user_input,
+                candidates=strong_route_matches,
+            )
+            if match is not None:
+                _extend_unique(selected, [match])
+        return selected[:2]
+
+    return _select_top_evidence_items(
         user_input=user_input,
         evidence_items=evidence_items,
-        limit=4,
+        limit=2,
     )
 
 
@@ -401,16 +451,6 @@ def _query_identifiers(user_input: str) -> set[str]:
         for token in _ASCII_IDENTIFIER_PATTERN.findall(str(user_input or ""))
         if token and token.lower() not in _QUERY_STOPWORDS
     }
-
-
-def _query_keywords(user_input: str) -> set[str]:
-    keywords: set[str] = set()
-    for token in _KEYWORD_PATTERN.findall(str(user_input or "").lower()):
-        normalized = token.strip().lower()
-        if len(normalized) < 2 or normalized in _QUERY_STOPWORDS:
-            continue
-        keywords.add(normalized)
-    return keywords
 
 
 def _evidence_contains_identifier(user_input: str, evidence_items: list[EvidenceItem]) -> bool:
