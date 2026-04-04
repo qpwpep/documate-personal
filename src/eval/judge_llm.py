@@ -39,6 +39,8 @@ Failure guidance:
 - For docs-focused cases, prioritize official documentation summaries over generic web-style summaries.
 - For hybrid cases, expect the official explanation and the uploaded/local comparison to be clearly separated.
 - For hybrid cases, treat a missing comparison section as a significant quality failure.
+- For tool_action cases, do not expect citations or retrieval grounding when the case itself does not require them.
+- For tool_action cases, prefer responses that contain a usable body first and a clear execution receipt such as a saved path or Slack destination after it.
 - For Korean queries, a non-Korean answer should score 0 on format_language.
 - Use validator_reason, retrieval_diagnostics, planner_diagnostics, and synthesis_mode as evidence when scoring.
 - If the supplied evaluation input is incomplete or inconsistent, reflect that in the reason, but still score the visible response quality.

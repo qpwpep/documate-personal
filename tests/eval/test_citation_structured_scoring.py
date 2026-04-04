@@ -1,6 +1,6 @@
 import unittest
 
-from src.eval.scoring_rules import score_citation_compliance
+from src.eval.scoring_rules import score_citation_compliance, score_groundedness
 from src.eval.schemas import BenchmarkCase, EvidenceItem
 
 
@@ -117,6 +117,15 @@ class CitationStructuredScoringTest(unittest.TestCase):
             response_evidence=[],
             observed_evidence=[],
             called_tools=[],
+        )
+        self.assertAlmostEqual(score, 1.0)
+
+    def test_tool_action_without_retrieval_is_not_penalized_on_groundedness(self) -> None:
+        score = score_groundedness(
+            case=BenchmarkCase(case_id="tool_seed_002", category="tool_action", query="tool"),
+            response_text="공유할 본문\n\n저장 완료: output/save.txt",
+            response_evidence=[],
+            observed_evidence=[],
         )
         self.assertAlmostEqual(score, 1.0)
 
