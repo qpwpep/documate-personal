@@ -230,6 +230,21 @@ def _select_top_evidence_items(
     return ranked[: max(0, limit)]
 
 
+def _extend_unique(selected: list[EvidenceItem], candidates: list[EvidenceItem]) -> None:
+    seen_ids = {
+        str(item.source_id or "").strip()
+        for item in selected
+        if str(item.source_id or "").strip()
+    }
+    for candidate in candidates:
+        source_id = str(candidate.source_id or "").strip()
+        if source_id and source_id in seen_ids:
+            continue
+        selected.append(candidate)
+        if source_id:
+            seen_ids.add(source_id)
+
+
 def select_primary_evidence_items(
     *,
     user_input: str,
@@ -246,6 +261,9 @@ def select_primary_evidence_items(
             if route and route not in requested_routes:
                 requested_routes.append(route)
 
+        is_hybrid_routes = len(requested_routes) > 1 and "docs" in requested_routes and any(
+            route in {"upload", "local"} for route in requested_routes
+        )
         if len(requested_routes) == 1 and requested_routes[0] in {"upload", "local"}:
             route = requested_routes[0]
             route_matches = [
@@ -262,9 +280,20 @@ def select_primary_evidence_items(
         seen_routes: set[str] = set()
         for task in planner_output.tasks:
             route = str(task.route or "")
-            if route in seen_routes:
-                continue
             route_matches = [item for item in evidence_items if route_for_evidence(item) == route]
+            if route in seen_routes and not is_hybrid_routes:
+                continue
+            if is_hybrid_routes:
+                per_route_limit = 2
+                route_top_matches = _select_top_evidence_items(
+                    user_input=user_input,
+                    evidence_items=route_matches,
+                    limit=per_route_limit,
+                )
+                _extend_unique(selected, route_top_matches)
+                seen_routes.add(route)
+                continue
+
             match = _select_best_evidence_for_query(
                 user_input=user_input,
                 candidates=route_matches,
@@ -273,12 +302,12 @@ def select_primary_evidence_items(
                 selected.append(match)
                 seen_routes.add(route)
         if selected:
-            return selected[:2]
+            return selected[:4] if is_hybrid_routes else selected[:2]
 
     return _select_top_evidence_items(
         user_input=user_input,
         evidence_items=evidence_items,
-        limit=2,
+        limit=4,
     )
 
 
@@ -295,7 +324,7 @@ def select_grounded_fallback_evidence_items(
     ) or _select_top_evidence_items(
         user_input=user_input,
         evidence_items=evidence_items,
-        limit=2,
+        limit=4,
     )
 
 
