@@ -18,7 +18,7 @@ def build_save_text_tool():
             normalized_prefix = str(filename_prefix or "response").strip() or "response"
             filename = f"{normalized_prefix}_{ts}.txt"
             filepath = output_path / filename
-            filepath.write_text(content, encoding="utf-8")
+            filepath.write_text(content, encoding="utf-8-sig")
 
             return {
                 "message": f"Saved output to {filename}",

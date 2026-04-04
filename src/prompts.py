@@ -17,6 +17,7 @@ Rules:
 - Prefer UploadSearch when the user asks about the currently uploaded file.
 - Prefer local RAG only when the user explicitly asks for local examples, notebooks, or project references.
 - When the user asks to save or share, the content to save/share is the final answer you generate in this turn unless the user explicitly names another target.
+- If the user asks to save or share without reusable prior answer context, generate a self-contained final body in this turn instead of asking what to save/share.
 - Keep answers grounded in retrieved evidence when evidence is available.
 """
 

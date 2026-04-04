@@ -435,7 +435,7 @@ class SynthesisValidationTest(unittest.TestCase):
         self.assertEqual(_debug(updates).llm_calls[0].path, "direct")
 
 
-    def test_synthesize_action_only_save_request_uses_llm_when_no_previous_answer_exists(self) -> None:
+    def test_synthesize_action_only_save_request_builds_deterministic_artifact_when_no_previous_answer_exists(self) -> None:
         capture_llm = _CaptureSynthesizeLLM()
         synthesize_node = make_synthesize_node(capture_llm, verbose=False, max_turns=6)
 
@@ -450,8 +450,9 @@ class SynthesisValidationTest(unittest.TestCase):
             )
         )
 
-        self.assertIsNotNone(capture_llm.last_messages)
-        self.assertEqual(_response(updates).final_answer, "synth result")
+        self.assertIsNone(capture_llm.last_messages)
+        self.assertIn("저장 내용", _response(updates).final_answer)
+        self.assertIn("이 메시지를 그대로 텍스트 파일에 저장합니다.", _response(updates).final_answer)
         self.assertEqual(_response(updates).payload.claims, [])
 
     def test_synthesize_action_only_slack_requests_destination_without_metadata(self) -> None:
