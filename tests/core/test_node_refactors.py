@@ -15,6 +15,7 @@ from src.nodes.retrieval import collect_retrieval_result
 from src.nodes.retrieval.node import _collect_retrieval_batch, _execute_retrieval_batch
 from src.nodes.synthesis.payload_builder import (
     build_plain_summary_attach_payload,
+    select_grounded_fallback_evidence_items,
     select_primary_evidence_items,
 )
 from src.nodes.synthesis.prompt_builder import build_synthesis_messages
@@ -268,7 +269,7 @@ class NodeRefactorTest(unittest.TestCase):
         self.assertIn("[1]", payload.answer)
         self.assertIn("[2]", payload.answer)
 
-    def test_synthesis_payload_builder_keeps_multiple_upload_items_for_hybrid_requests(self) -> None:
+    def test_synthesis_payload_builder_limits_hybrid_evidence_to_one_per_route(self) -> None:
         planner_output = PlannerOutput(
             use_retrieval=True,
             tasks=[
@@ -279,7 +280,12 @@ class NodeRefactorTest(unittest.TestCase):
         selected = select_primary_evidence_items(
             user_input="train_test_split 공식 문법을 설명하고 업로드 노트북의 실제 사용 예를 찾아줘.",
             evidence_items=[
-                EvidenceItem.model_validate(_docs_evidence()),
+                EvidenceItem.model_validate(
+                    _docs_evidence(
+                        source_id="url:https://scikit-learn.org/stable/modules/generated/sklearn.model_selection.train_test_split.html",
+                        snippet="Split arrays or matrices into random train and test subsets.",
+                    )
+                ),
                 EvidenceItem.model_validate(_upload_evidence()),
                 EvidenceItem.model_validate(
                     _upload_evidence(
@@ -292,8 +298,34 @@ class NodeRefactorTest(unittest.TestCase):
             planner_output=planner_output,
         )
 
-        self.assertEqual(len(selected), 3)
-        self.assertEqual(sum(1 for item in selected if item.tool == "upload_search"), 2)
+        self.assertEqual(len(selected), 2)
+        self.assertEqual(sum(1 for item in selected if item.tool == "upload_search"), 1)
+
+    def test_synthesis_payload_builder_skips_weak_hybrid_route_candidates_without_strong_lexical_hits(self) -> None:
+        planner_output = PlannerOutput(
+            use_retrieval=True,
+            tasks=[
+                RetrievalTask(route="docs", query="train_test_split official docs", k=3),
+                RetrievalTask(route="upload", query="train_test_split uploaded notebook example", k=3),
+            ],
+        )
+        selected = select_grounded_fallback_evidence_items(
+            user_input="train_test_split 공식 문법을 설명하고 업로드 노트북의 실제 사용 예를 찾아줘.",
+            evidence_items=[
+                EvidenceItem.model_validate(
+                    _docs_evidence(
+                        source_id="url:https://example.com/unrelated-docs",
+                        snippet="Completely unrelated reference content.",
+                        score=0.95,
+                    )
+                ),
+                EvidenceItem.model_validate(_upload_evidence()),
+            ],
+            planner_output=planner_output,
+        )
+
+        self.assertEqual(len(selected), 1)
+        self.assertEqual(selected[0].tool, "upload_search")
 
     def test_validation_assessment_flags_only_docs_route_on_hybrid_low_score(self) -> None:
         planner_output = PlannerOutput(

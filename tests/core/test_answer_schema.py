@@ -11,6 +11,7 @@ class AnswerSchemaTest(unittest.TestCase):
                 [
                     "# NumPy broadcasting",
                     "Home > Docs > API",
+                    "Skip to content",
                     "Table of contents",
                     "- Broadcasting expands compatible array shapes.",
                     "Previous: Indexing routines",
@@ -19,6 +20,35 @@ class AnswerSchemaTest(unittest.TestCase):
         )
 
         self.assertEqual(cleaned, "Broadcasting expands compatible array shapes.")
+
+    def test_clean_grounded_text_drops_doc_title_signature_and_section_headings(self) -> None:
+        cleaned = clean_grounded_text(
+            "\n".join(
+                [
+                    "train_test_split",
+                    "train_test_split(*arrays, test_size=None, random_state=None)",
+                    "Parameters",
+                    "Split arrays or matrices into random train and test subsets.",
+                ]
+            )
+        )
+
+        self.assertEqual(cleaned, "Split arrays or matrices into random train and test subsets.")
+
+    def test_clean_grounded_text_drops_doc_titles_toc_fragments_and_broken_signatures(self) -> None:
+        cleaned = clean_grounded_text(
+            "\n".join(
+                [
+                    "Skip to content",
+                    "train_test_split - scikit-learn 1.8.0 documentation",
+                    "Parameters Returns Examples Notes",
+                    r"train\_test\_split#. sklearn.model\_selection.train\_test\_split(*arrays, test_size=None)",
+                    "Split arrays or matrices into random train and test subsets.",
+                ]
+            )
+        )
+
+        self.assertEqual(cleaned, "Split arrays or matrices into random train and test subsets.")
 
     def test_build_deterministic_grounded_payload_uses_cleaned_fallback_claim_text(self) -> None:
         payload = build_deterministic_grounded_payload(
@@ -48,7 +78,7 @@ class AnswerSchemaTest(unittest.TestCase):
             "Use numpy.concatenate to join arrays along an existing axis.",
         )
 
-    def test_build_deterministic_grounded_payload_adds_route_aware_hybrid_prefixes(self) -> None:
+    def test_build_deterministic_grounded_payload_builds_explanatory_hybrid_fallback(self) -> None:
         payload = build_deterministic_grounded_payload(
             evidence_items=[
                 EvidenceItem(
@@ -78,9 +108,10 @@ class AnswerSchemaTest(unittest.TestCase):
             ]
         )
 
-        self.assertIn("공식 문서 기준으로", payload.claims[0].text)
-        self.assertIn("반면 업로드 또는 로컬 예시에서는", payload.claims[1].text)
-        self.assertIn("반면", payload.answer)
+        self.assertEqual(len(payload.claims), 2)
+        self.assertIn("공식 문서 기준으로는", payload.claims[0].text)
+        self.assertIn("업로드 파일에서는", payload.claims[1].text)
+        self.assertIn("근거는 공식 문서 1건과 업로드 파일 1건만 반영했습니다.", payload.answer)
 
 
 if __name__ == "__main__":
