@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -19,7 +20,6 @@ from ._common import (
     build_evidence_item,
     build_retrieval_payload,
     dedupe_evidence_dicts,
-    normalize_relevance_score,
     to_float_or_none,
 )
 
@@ -220,6 +220,38 @@ def _rank_retrieval_rows(
     return sorted(docs_with_scores, key=_sort_key, reverse=True)
 
 
+def _normalize_ranked_scores(
+    docs_with_scores: list[tuple[Any, float | None]],
+) -> list[tuple[Any, float | None, float | None]]:
+    finite_scores = [
+        float(score)
+        for _, score in docs_with_scores
+        if score is not None and math.isfinite(float(score))
+    ]
+    if not finite_scores:
+        return [(doc, None, None) for doc, _ in docs_with_scores]
+
+    min_score = min(finite_scores)
+    max_score = max(finite_scores)
+    requires_rescale = min_score < 0.0 or max_score > 1.0
+    if not requires_rescale:
+        return [(doc, float(score) if score is not None else None, float(score) if score is not None else None) for doc, score in docs_with_scores]
+
+    normalized_rows: list[tuple[Any, float | None, float | None]] = []
+    total_rows = len(docs_with_scores)
+    for index, (doc, score) in enumerate(docs_with_scores):
+        raw_score = float(score) if score is not None else None
+        if raw_score is None or not math.isfinite(raw_score):
+            normalized_rows.append((doc, None, raw_score))
+            continue
+        if total_rows <= 1:
+            normalized_score = max(0.0, min(1.0, raw_score))
+        else:
+            normalized_score = 1.0 - (index / (total_rows - 1))
+        normalized_rows.append((doc, max(0.0, min(1.0, normalized_score)), raw_score))
+    return normalized_rows
+
+
 def _build_query_focused_snippet(text: str, *, query: str, max_length: int = 500) -> str:
     normalized = str(text or "").strip()
     if len(normalized) <= max_length:
@@ -296,14 +328,10 @@ def build_local_rag_tools(settings: AppSettings) -> tuple[Any, Any]:
         evidence_items = []
         retrieval_warnings: list[str] = []
         raw_scores: list[float] = []
-        for doc, score in docs_with_scores:
+        for doc, score, raw_score in _normalize_ranked_scores(docs_with_scores):
             if not hasattr(doc, "metadata"):
                 continue
             source = doc.metadata.get("source", "notebook")
-            normalized_score, raw_score = normalize_relevance_score(
-                score,
-                warnings=retrieval_warnings,
-            )
             evidence_item = build_evidence_item(
                 kind="local",
                 tool="rag_search",
@@ -312,7 +340,7 @@ def build_local_rag_tools(settings: AppSettings) -> tuple[Any, Any]:
                     doc.page_content or "",
                     query=query,
                 ).replace("\n", " "),
-                score=normalized_score,
+                score=score,
                 metadata=getattr(doc, "metadata", None),
                 warnings=retrieval_warnings,
             )
@@ -370,14 +398,10 @@ def build_local_rag_tools(settings: AppSettings) -> tuple[Any, Any]:
         evidence_items = []
         retrieval_warnings: list[str] = []
         raw_scores: list[float] = []
-        for doc, score in docs_with_scores:
+        for doc, score, raw_score in _normalize_ranked_scores(docs_with_scores):
             if not hasattr(doc, "metadata"):
                 continue
             source = doc.metadata.get("source", "uploaded")
-            normalized_score, raw_score = normalize_relevance_score(
-                score,
-                warnings=retrieval_warnings,
-            )
             evidence_item = build_evidence_item(
                 kind="local",
                 tool="upload_search",
@@ -386,7 +410,7 @@ def build_local_rag_tools(settings: AppSettings) -> tuple[Any, Any]:
                     doc.page_content or "",
                     query=query,
                 ).replace("\n", " "),
-                score=normalized_score,
+                score=score,
                 metadata=getattr(doc, "metadata", None),
                 warnings=retrieval_warnings,
             )
