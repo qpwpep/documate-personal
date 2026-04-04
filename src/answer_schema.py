@@ -263,6 +263,12 @@ def build_deterministic_grounded_payload(
     normalized_evidence = [
         item for item in evidence_items if isinstance(item, EvidenceItem)
     ]
+    evidence_kinds = {
+        str(item.kind or "").strip().lower()
+        for item in normalized_evidence
+    }
+    is_hybrid_grounded_payload = "official" in evidence_kinds and "local" in evidence_kinds
+    used_route_prefixes: set[str] = set()
 
     for item in normalized_evidence[:max_claims]:
         source_id = str(item.source_id or "").strip()
@@ -276,6 +282,16 @@ def build_deterministic_grounded_payload(
         )
         if not fallback_text:
             continue
+        if is_hybrid_grounded_payload:
+            route_prefix = ""
+            kind = str(item.kind or "").strip().lower()
+            if kind == "official":
+                route_prefix = "공식 문서 기준으로"
+            elif kind == "local":
+                route_prefix = "반면 업로드 또는 로컬 예시에서는"
+            if route_prefix and route_prefix not in used_route_prefixes:
+                fallback_text = f"{route_prefix} {fallback_text}"
+                used_route_prefixes.add(route_prefix)
 
         grounded_claims.append(
             ClaimItem(

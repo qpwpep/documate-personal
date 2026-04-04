@@ -365,6 +365,68 @@ class SynthesisValidationTest(unittest.TestCase):
         self.assertEqual(_retry(result).retry_reason, "unsupported_claims")
         self.assertEqual(_response(result).payload.claims[0].evidence_ids, [valid_source])
 
+    def test_validate_evidence_unsupported_claims_rebalances_hybrid_routes(self) -> None:
+        validate_node = make_validate_evidence_node(verbose=False)
+        planner_output = PlannerOutput(
+            use_retrieval=True,
+            tasks=[
+                RetrievalTask(route="docs", query="train_test_split official docs", k=3),
+                RetrievalTask(route="upload", query="uploaded notebook example", k=3),
+            ],
+        )
+        result = validate_node(
+            _state(
+                {
+                    "planner_output": planner_output,
+                    "retrieved_evidence": [
+                        _docs_evidence(
+                            source_id="url:https://scikit-learn.org/stable/modules/generated/sklearn.model_selection.train_test_split.html",
+                            snippet="Split arrays or matrices into random train and test subsets.",
+                        ),
+                        _local_evidence(
+                            tool="upload_search",
+                            source_id="path:uploads/demo/sample.ipynb#cell=2;chunk=0;start=0;end=64",
+                            path="uploads/demo/sample.ipynb",
+                            snippet="X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)",
+                            score=0.0,
+                        ),
+                    ],
+                    "response_payload": {
+                        "answer": "local-only answer",
+                        "claims": [
+                            {
+                                "text": "업로드 노트북에서는 test_size=0.2와 random_state=42를 사용합니다.",
+                                "evidence_ids": ["path:uploads/demo/sample.ipynb#cell=2;chunk=0;start=0;end=64"],
+                                "confidence": 0.8,
+                            },
+                            {
+                                "text": "train_test_split 공식 문법은 train_size와 stratify도 지원합니다.",
+                                "evidence_ids": ["url:https://missing.example.com/train_test_split"],
+                                "confidence": 0.6,
+                            },
+                        ],
+                        "evidence": [],
+                        "confidence": 0.7,
+                    },
+                    "retry_context": {
+                        "attempt": 0,
+                        "max_retries": 1,
+                        "evidence_start_index": 0,
+                        "retrieval_error_start_index": 0,
+                    },
+                }
+            )
+        )
+
+        self.assertFalse(_retry(result).needs_retry)
+        self.assertEqual(_retry(result).retry_reason, "unsupported_claims")
+        self.assertIn("공식 문서 기준:", _response(result).final_answer)
+        self.assertIn("반면 업로드 파일에서는", _response(result).final_answer)
+        self.assertEqual(
+            [item.tool for item in _response(result).payload.evidence],
+            ["tavily_search", "upload_search"],
+        )
+
     def test_validate_evidence_filters_to_valid_claims_after_retry_budget(self) -> None:
         validate_node = make_validate_evidence_node(verbose=False)
         planner_output = PlannerOutput(use_retrieval=True, tasks=[RetrievalTask(route="local", query="example", k=3)])

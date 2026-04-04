@@ -13,7 +13,10 @@ from src.evidence import EvidenceItem
 from src.nodes.planner.policy import build_deterministic_planner_decision
 from src.nodes.retrieval import collect_retrieval_result
 from src.nodes.retrieval.node import _collect_retrieval_batch, _execute_retrieval_batch
-from src.nodes.synthesis.payload_builder import build_plain_summary_attach_payload
+from src.nodes.synthesis.payload_builder import (
+    build_plain_summary_attach_payload,
+    select_primary_evidence_items,
+)
 from src.nodes.synthesis.prompt_builder import build_synthesis_messages
 from src.nodes.validation.evidence_validator import assess_validation, build_validation_snapshot
 from src.nodes.validation.recovery import apply_validation_outcome
@@ -264,6 +267,33 @@ class NodeRefactorTest(unittest.TestCase):
         )
         self.assertIn("[1]", payload.answer)
         self.assertIn("[2]", payload.answer)
+
+    def test_synthesis_payload_builder_keeps_multiple_upload_items_for_hybrid_requests(self) -> None:
+        planner_output = PlannerOutput(
+            use_retrieval=True,
+            tasks=[
+                RetrievalTask(route="docs", query="train_test_split official docs", k=3),
+                RetrievalTask(route="upload", query="train_test_split uploaded notebook example", k=3),
+            ],
+        )
+        selected = select_primary_evidence_items(
+            user_input="train_test_split 공식 문법을 설명하고 업로드 노트북의 실제 사용 예를 찾아줘.",
+            evidence_items=[
+                EvidenceItem.model_validate(_docs_evidence()),
+                EvidenceItem.model_validate(_upload_evidence()),
+                EvidenceItem.model_validate(
+                    _upload_evidence(
+                        source_id="path:uploads/demo/sample.ipynb#cell=2;chunk=0;start=0;end=96",
+                        snippet="X_train, X_test = train_test_split(X, y, test_size=0.2, random_state=42)",
+                        score=0.1,
+                    )
+                ),
+            ],
+            planner_output=planner_output,
+        )
+
+        self.assertEqual(len(selected), 3)
+        self.assertEqual(sum(1 for item in selected if item.tool == "upload_search"), 2)
 
     def test_validation_assessment_flags_only_docs_route_on_hybrid_low_score(self) -> None:
         planner_output = PlannerOutput(
