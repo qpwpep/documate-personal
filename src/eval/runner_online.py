@@ -24,6 +24,7 @@ from .scoring_rules import (
     compute_cost_usd,
     compute_rule_scores,
     compute_rule_weighted_score,
+    resolve_base_weights_for_case,
     resolve_effective_weights,
 )
 from .schemas import (
@@ -545,7 +546,11 @@ def _run_single_case(
             runtime_errors.append(f"unexpected error: {exc}")
 
     effective_weights, weights_error = resolve_effective_weights(
-        base_weights=config.weights,
+        case=case,
+        base_weights=resolve_base_weights_for_case(
+            case=case,
+            base_weights=config.weights,
+        ),
         case_override=case.weight_override,
     )
     if weights_error:

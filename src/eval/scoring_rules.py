@@ -127,10 +127,26 @@ def _hybrid_comparison_present(response_text: str) -> bool:
 
 def resolve_effective_weights(
     *,
+    case: BenchmarkCase | None = None,
     base_weights: ScoreWeights,
     case_override: CaseWeightOverride | None,
 ) -> tuple[ScoreWeights, str | None]:
-    merged = base_weights.as_dict()
+    if (
+        case is not None
+        and case.category == "tool_action"
+        and not case.require_official_citation
+        and not case.require_local_citation
+    ):
+        merged = {
+            "answer_quality": 0.40,
+            "groundedness": 0.025,
+            "citation_traceability": 0.025,
+            "tool_choice": 0.30,
+            "format_language": 0.10,
+            "llm_judge": 0.15,
+        }
+    else:
+        merged = base_weights.as_dict()
     if case_override is not None:
         merged.update(case_override.as_partial_dict())
 
@@ -147,6 +163,23 @@ def resolve_effective_weights(
         return ScoreWeights(**normalized), None
     except Exception as exc:
         return base_weights, f"failed to build normalized weights: {exc}"
+
+
+def resolve_base_weights_for_case(
+    *,
+    case: BenchmarkCase,
+    base_weights: ScoreWeights,
+) -> ScoreWeights:
+    if case.category != "tool_action":
+        return base_weights
+    return ScoreWeights(
+        answer_quality=0.35,
+        groundedness=0.10,
+        citation_traceability=0.05,
+        tool_choice=0.25,
+        format_language=0.10,
+        llm_judge=0.15,
+    )
 
 
 def score_tool_choice(case: BenchmarkCase, called_tools: list[str]) -> float:
@@ -271,6 +304,7 @@ def _claim_support_ratio(
 
 def score_groundedness(
     *,
+    case: BenchmarkCase | None = None,
     response_text: str,
     response_evidence: list[EvidenceItem],
     observed_evidence: list[EvidenceItem],
@@ -282,6 +316,12 @@ def score_groundedness(
     text = (response_text or "").strip()
     if not text:
         return 0.0
+    if case is not None and case.category == "tool_action":
+        if not response_evidence:
+            if not observed_evidence:
+                return 1.0
+            if not case.require_official_citation and not case.require_local_citation:
+                return 1.0
     if not observed_evidence or not response_evidence:
         return 0.0
 
@@ -367,6 +407,7 @@ def compute_rule_scores(
             synthesis_mode=synthesis_mode,
         ),
         "groundedness": score_groundedness(
+            case=case,
             response_text=response_text,
             response_evidence=response_evidence,
             observed_evidence=observed_evidence,
