@@ -3,9 +3,10 @@ import unittest
 from src.eval.scoring_rules import (
     compute_final_score,
     compute_rule_weighted_score,
+    resolve_base_weights_for_case,
     resolve_effective_weights,
 )
-from src.eval.schemas import CaseWeightOverride, ScoreWeights
+from src.eval.schemas import BenchmarkCase, CaseWeightOverride, ScoreWeights
 
 
 class WeightOverrideTest(unittest.TestCase):
@@ -62,6 +63,46 @@ class WeightOverrideTest(unittest.TestCase):
 
         self.assertAlmostEqual(llm_off_score, 1.0)
         self.assertAlmostEqual(llm_on_score, 1.0)
+
+    def test_tool_action_uses_less_judge_sensitive_base_weights(self) -> None:
+        case = BenchmarkCase(
+            case_id="tool_action_regression_001",
+            category="tool_action",
+            query="이번 결과를 팀 채널에 공유해줘.",
+            expected_tools=["slack_notify"],
+        )
+
+        effective_base = resolve_base_weights_for_case(case=case, base_weights=ScoreWeights())
+
+        self.assertAlmostEqual(effective_base.answer_quality, 0.35)
+        self.assertAlmostEqual(effective_base.groundedness, 0.10)
+        self.assertAlmostEqual(effective_base.citation_traceability, 0.05)
+        self.assertAlmostEqual(effective_base.tool_choice, 0.25)
+        self.assertAlmostEqual(effective_base.llm_judge, 0.15)
+
+    def test_tool_action_without_citation_requirements_uses_action_friendly_effective_weights(self) -> None:
+        case = BenchmarkCase(
+            case_id="tool_action_regression_001",
+            category="tool_action",
+            query="이번 결과를 팀 채널에 공유해줘.",
+            expected_tools=["slack_notify"],
+            require_official_citation=False,
+            require_local_citation=False,
+        )
+
+        effective, error = resolve_effective_weights(
+            case=case,
+            base_weights=resolve_base_weights_for_case(case=case, base_weights=ScoreWeights()),
+            case_override=None,
+        )
+
+        self.assertIsNone(error)
+        self.assertAlmostEqual(effective.answer_quality, 0.40)
+        self.assertAlmostEqual(effective.groundedness, 0.025)
+        self.assertAlmostEqual(effective.citation_traceability, 0.025)
+        self.assertAlmostEqual(effective.tool_choice, 0.30)
+        self.assertAlmostEqual(effective.format_language, 0.10)
+        self.assertAlmostEqual(effective.llm_judge, 0.15)
 
 
 if __name__ == "__main__":
