@@ -723,6 +723,7 @@ class EvidencePipelineTest(unittest.TestCase):
         result = manager.run_agent_flow("save this")
 
         self.assertEqual(result["message"], "final answer before save")
+        self.assertTrue(result["filepath"].endswith("response_20260101_010101.txt"))
         self.assertEqual(result["response_payload"]["answer"], "final answer before save")
         self.assertEqual(result["response_payload"]["claims"], [])
 
