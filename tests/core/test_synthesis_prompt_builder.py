@@ -51,7 +51,11 @@ class SynthesisPromptBuilderTest(unittest.TestCase):
         self.assertIn("Action requests:", instruction_messages[0])
         self.assertIn("[Hybrid Synthesis]", instruction_messages[0])
         self.assertIn("official takeaway first", instruction_messages[0])
+        self.assertIn("must cite only official docs source_id values", instruction_messages[0])
+        self.assertIn("must cite only uploaded/local source_id values", instruction_messages[0])
+        self.assertIn("Do not collapse the whole answer into only docs or only uploaded/local evidence", instruction_messages[0])
         self.assertIn("actual message body to save/share now", instruction_messages[0])
+        self.assertIn("Do not answer with a checklist about the action itself", instruction_messages[0])
         self.assertIn("Ignore markdown formatting, breadcrumbs, navigation labels", instruction_messages[0])
         self.assertIn("Retry after evidence validation failed", instruction_messages[0])
 

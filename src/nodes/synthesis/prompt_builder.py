@@ -120,7 +120,11 @@ def _build_synthesis_instruction_block(
                 "- For docs plus uploaded/local evidence, explain the official takeaway first.",
                 "- Then add an explicit comparison against the uploaded/local evidence.",
                 "- Keep the official explanation and the comparison as distinct claim groups.",
+                "- The official claim group must cite only official docs source_id values.",
+                "- The uploaded/local claim group must cite only uploaded/local source_id values.",
                 "- Mention the concrete uploaded/local code detail, configuration, or parameter that supports the comparison.",
+                "- Do not collapse the whole answer into only docs or only uploaded/local evidence when both routes are present.",
+                "- If one route is too generic or weak, say that evidence is limited instead of inventing a stronger claim.",
             ]
         )
     else:
@@ -133,6 +137,9 @@ def _build_synthesis_instruction_block(
         lines.append("  - Do not merely say that you will save or share the answer; output the exact body now.")
         lines.append(
             "- If you are saving or sharing in this turn, return the actual message body to save/share now, not a sentence about performing the action."
+        )
+        lines.append(
+            "- Do not answer with a checklist about the action itself unless the user explicitly asked that checklist to be the message body."
         )
     if attempt > 1:
         lines.append(
