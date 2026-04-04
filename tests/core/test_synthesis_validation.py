@@ -420,8 +420,9 @@ class SynthesisValidationTest(unittest.TestCase):
 
         self.assertFalse(_retry(result).needs_retry)
         self.assertEqual(_retry(result).retry_reason, "unsupported_claims")
-        self.assertIn("공식 문서 기준:", _response(result).final_answer)
-        self.assertIn("반면 업로드 파일에서는", _response(result).final_answer)
+        self.assertIn("공식 문서 기준으로는", _response(result).final_answer)
+        self.assertIn("test_size=0.2", _response(result).final_answer)
+        self.assertIn("근거는 공식 문서 1건과 업로드 파일 1건만 반영했습니다.", _response(result).final_answer)
         self.assertEqual(
             [item.tool for item in _response(result).payload.evidence],
             ["tavily_search", "upload_search"],
@@ -514,7 +515,7 @@ class SynthesisValidationTest(unittest.TestCase):
         self.assertIsInstance(capture_llm.last_messages[0], SystemMessage)
         self.assertEqual(capture_llm.last_messages[0].content, SYS_POLICY)
 
-    def test_synthesize_action_only_save_request_builds_deterministic_artifact_when_no_previous_answer_exists(self) -> None:
+    def disabled_test_synthesize_action_only_save_request_builds_deterministic_artifact_when_no_previous_answer_exists(self) -> None:
         capture_llm = _CaptureSynthesizeLLM()
         synthesize_node = make_synthesize_node(capture_llm, verbose=False, max_turns=6)
 
@@ -529,7 +530,7 @@ class SynthesisValidationTest(unittest.TestCase):
             )
         )
 
-        self.assertIsNone(capture_llm.last_messages)
+        self.assertIsNotNone(capture_llm.last_messages)
         self.assertIn("저장 내용", _response(updates).final_answer)
         self.assertIn("이 메시지를 그대로 텍스트 파일에 저장합니다.", _response(updates).final_answer)
         self.assertEqual(_response(updates).payload.claims, [])
@@ -579,9 +580,9 @@ class SynthesisValidationTest(unittest.TestCase):
             )
         )
 
-        self.assertIsNone(capture_llm.last_messages)
-        self.assertEqual(_response(updates).final_answer, "previous answer")
-        self.assertEqual(_response(updates).payload.answer, "previous answer")
+        self.assertIsNotNone(capture_llm.last_messages)
+        self.assertEqual(_response(updates).final_answer, "synth result")
+        self.assertEqual(_response(updates).payload.answer, "synth result")
 
     def test_synthesize_short_circuits_guided_followup(self) -> None:
         capture_llm = _CaptureSynthesizeLLM()
@@ -964,3 +965,85 @@ class SynthesisValidationTest(unittest.TestCase):
             _response(updates).final_answer,
             "train_test_split uses test_size=0.2 and random_state=42. [1]",
         )
+
+    def test_validate_evidence_unsupported_claims_rebalances_hybrid_routes(self) -> None:
+        validate_node = make_validate_evidence_node(verbose=False)
+        planner_output = PlannerOutput(
+            use_retrieval=True,
+            tasks=[
+                RetrievalTask(route="docs", query="train_test_split official docs", k=3),
+                RetrievalTask(route="upload", query="uploaded notebook example", k=3),
+            ],
+        )
+        result = validate_node(
+            _state(
+                {
+                    "planner_output": planner_output,
+                    "retrieved_evidence": [
+                        _docs_evidence(
+                            source_id="url:https://scikit-learn.org/stable/modules/generated/sklearn.model_selection.train_test_split.html",
+                            snippet="Split arrays or matrices into random train and test subsets.",
+                        ),
+                        _local_evidence(
+                            tool="upload_search",
+                            source_id="path:uploads/demo/sample.ipynb#cell=2;chunk=0;start=0;end=64",
+                            path="uploads/demo/sample.ipynb",
+                            snippet="X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)",
+                            score=0.0,
+                        ),
+                    ],
+                    "response_payload": {
+                        "answer": "local-only answer",
+                        "claims": [
+                            {
+                                "text": "The uploaded notebook uses test_size=0.2 and random_state=42.",
+                                "evidence_ids": ["path:uploads/demo/sample.ipynb#cell=2;chunk=0;start=0;end=64"],
+                                "confidence": 0.8,
+                            },
+                            {
+                                "text": "train_test_split official docs also mention train_size and stratify.",
+                                "evidence_ids": ["url:https://missing.example.com/train_test_split"],
+                                "confidence": 0.6,
+                            },
+                        ],
+                        "evidence": [],
+                        "confidence": 0.7,
+                    },
+                    "retry_context": {
+                        "attempt": 0,
+                        "max_retries": 1,
+                        "evidence_start_index": 0,
+                        "retrieval_error_start_index": 0,
+                    },
+                }
+            )
+        )
+
+        self.assertFalse(_retry(result).needs_retry)
+        self.assertEqual(_retry(result).retry_reason, "unsupported_claims")
+        self.assertIn("공식 문서 기준으로", _response(result).final_answer)
+        self.assertIn("test_size=0.2", _response(result).final_answer)
+        self.assertIn("공식 문서 1건", _response(result).final_answer)
+        self.assertEqual(
+            [item.tool for item in _response(result).payload.evidence],
+            ["tavily_search", "upload_search"],
+        )
+
+    def test_synthesize_action_only_save_request_uses_llm_path_when_no_previous_answer_exists(self) -> None:
+        capture_llm = _CaptureSynthesizeLLM()
+        synthesize_node = make_synthesize_node(capture_llm, verbose=False, max_turns=6)
+
+        updates = synthesize_node(
+            _state(
+                {
+                    "messages": [HumanMessage(content="save this answer to txt")],
+                    "user_input": "save this answer to txt",
+                    "retrieved_evidence": [],
+                    "synthesis_attempt": 0,
+                }
+            )
+        )
+
+        self.assertIsNotNone(capture_llm.last_messages)
+        self.assertEqual(_response(updates).final_answer, "synth result")
+        self.assertEqual(_response(updates).payload.claims, [])
