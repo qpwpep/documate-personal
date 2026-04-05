@@ -88,6 +88,7 @@ class RetryState(BaseModel):
     failed_routes: list[str] = Field(default_factory=list)
     preserved_evidence: list[dict[str, Any]] = Field(default_factory=list)
     preserved_retrieval_diagnostics: list[RetrievalDiagnostic] = Field(default_factory=list)
+    retry_scope: Literal["refresh_routes", "reuse_evidence_resynthesize"] = "refresh_routes"
 
 
 class PlannerDiagnostic(BaseModel):
