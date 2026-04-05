@@ -244,6 +244,27 @@ domains = ["docs.pytorch.org"]
 fallback_queries = ["DataLoader torch.utils.data"]
 
 [[docs_search.query_hints]]
+identifiers = ["pie", "matplotlib"]
+library_name = "matplotlib"
+domains = ["matplotlib.org"]
+fallback_queries = ["matplotlib.pyplot.pie api reference", "matplotlib pie chart api reference"]
+match_mode = "word"
+
+[[docs_search.query_hints]]
+identifiers = ["hist", "matplotlib"]
+library_name = "matplotlib"
+domains = ["matplotlib.org"]
+fallback_queries = ["matplotlib.pyplot.hist api reference", "matplotlib hist api reference"]
+match_mode = "word"
+
+[[docs_search.query_hints]]
+identifiers = ["field", "field_validator", "model_validate"]
+library_name = "pydantic"
+domains = ["docs.pydantic.dev"]
+fallback_queries = ["pydantic field concepts", "pydantic field_validator validation", "pydantic model_validate fields"]
+match_mode = "word"
+
+[[docs_search.query_hints]]
 identifiers = ["bare"]
 library_name = "Bare"
 domains = ["docs.pears.com"]
