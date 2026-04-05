@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Annotated, Any
 
 import nbformat
+from nbformat.validator import normalize as normalize_notebook
 from langchain_chroma import Chroma
 from langchain_core.tools import StructuredTool
 from langchain_openai import OpenAIEmbeddings
@@ -144,7 +145,7 @@ def build_temp_retriever(path: str, api_key: str | None = None, k: int = 4) -> U
             chunk_overlap=120,
         )
     elif path_lower.endswith(".ipynb"):
-        notebook = nbformat.read(path, as_version=4)
+        _, notebook = normalize_notebook(nbformat.read(path, as_version=4))
         docs = chunk_notebook(
             path=path,
             notebook=notebook,
@@ -222,6 +223,7 @@ def _rank_retrieval_rows(
 
 def _normalize_ranked_scores(
     docs_with_scores: list[tuple[Any, float | None]],
+    retrieval_warnings: list[str] | None = None,
 ) -> list[tuple[Any, float | None, float | None]]:
     finite_scores = [
         float(score)
@@ -234,20 +236,23 @@ def _normalize_ranked_scores(
     min_score = min(finite_scores)
     max_score = max(finite_scores)
     requires_rescale = min_score < 0.0 or max_score > 1.0
+    warnings = retrieval_warnings if retrieval_warnings is not None else []
     if not requires_rescale:
         return [(doc, float(score) if score is not None else None, float(score) if score is not None else None) for doc, score in docs_with_scores]
+    if "relevance_score_out_of_range" not in warnings:
+        warnings.append("relevance_score_out_of_range")
+
 
     normalized_rows: list[tuple[Any, float | None, float | None]] = []
-    total_rows = len(docs_with_scores)
     for index, (doc, score) in enumerate(docs_with_scores):
         raw_score = float(score) if score is not None else None
         if raw_score is None or not math.isfinite(raw_score):
             normalized_rows.append((doc, None, raw_score))
             continue
-        if total_rows <= 1:
-            normalized_score = max(0.0, min(1.0, raw_score))
+        if max_score == min_score:
+            normalized_score = 1.0
         else:
-            normalized_score = 1.0 - (index / (total_rows - 1))
+            normalized_score = (raw_score - min_score) / (max_score - min_score)
         normalized_rows.append((doc, max(0.0, min(1.0, normalized_score)), raw_score))
     return normalized_rows
 
@@ -328,7 +333,7 @@ def build_local_rag_tools(settings: AppSettings) -> tuple[Any, Any]:
         evidence_items = []
         retrieval_warnings: list[str] = []
         raw_scores: list[float] = []
-        for doc, score, raw_score in _normalize_ranked_scores(docs_with_scores):
+        for doc, score, raw_score in _normalize_ranked_scores(docs_with_scores, retrieval_warnings=retrieval_warnings):
             if not hasattr(doc, "metadata"):
                 continue
             source = doc.metadata.get("source", "notebook")
@@ -398,7 +403,7 @@ def build_local_rag_tools(settings: AppSettings) -> tuple[Any, Any]:
         evidence_items = []
         retrieval_warnings: list[str] = []
         raw_scores: list[float] = []
-        for doc, score, raw_score in _normalize_ranked_scores(docs_with_scores):
+        for doc, score, raw_score in _normalize_ranked_scores(docs_with_scores, retrieval_warnings=retrieval_warnings):
             if not hasattr(doc, "metadata"):
                 continue
             source = doc.metadata.get("source", "uploaded")
