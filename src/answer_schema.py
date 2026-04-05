@@ -155,10 +155,17 @@ class ClaimItem(BaseModel):
         return normalized
 
 
+class AnswerSection(BaseModel):
+    kind: str = Field(min_length=1)
+    heading: str = ""
+    body: str = ""
+
+
 class SynthesisOutput(BaseModel):
     answer: str = ""
     claims: list[ClaimItem] = Field(default_factory=list)
     confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    sections: list[AnswerSection] = Field(default_factory=list)
 
 
 class AgentResponsePayloadModel(BaseModel):
@@ -166,18 +173,21 @@ class AgentResponsePayloadModel(BaseModel):
     claims: list[ClaimItem] = Field(default_factory=list)
     evidence: list[EvidenceItem] = Field(default_factory=list)
     confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    sections: list[AnswerSection] = Field(default_factory=list)
 
 
 def build_empty_response_payload(
     *,
     answer: str = "",
     confidence: float | None = None,
+    sections: list[AnswerSection] | None = None,
 ) -> AgentResponsePayloadModel:
     return AgentResponsePayloadModel(
         answer=str(answer or "").strip(),
         claims=[],
         evidence=[],
         confidence=confidence,
+        sections=list(sections or []),
     )
 
 
@@ -368,6 +378,7 @@ def render_payload_from_claims(
     claims: Iterable[ClaimItem],
     evidence_items: Iterable[EvidenceItem],
     confidence: float | None,
+    sections: Iterable[AnswerSection] | None = None,
 ) -> AgentResponsePayloadModel:
     evidence_by_id = {
         item.source_id: item
@@ -398,11 +409,13 @@ def render_payload_from_claims(
             rendered_parts.append(claim_text)
 
     answer_text = " ".join(part.strip() for part in rendered_parts if part.strip()).strip()
+    normalized_sections = [section for section in (sections or []) if isinstance(section, AnswerSection)]
     return AgentResponsePayloadModel(
         answer=answer_text,
         claims=ordered_claims,
         evidence=adopted_evidence,
         confidence=confidence,
+        sections=normalized_sections,
     )
 
 

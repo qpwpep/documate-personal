@@ -7,6 +7,7 @@ from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage, To
 
 from ...contracts import GraphState
 from ...contracts.boundary.runtime import get_runtime_state
+from ...request_contracts import infer_answer_contract, render_answer_contract_prompt
 from ...prompts import SYS_POLICY
 from ..retrieval import format_evidence_for_prompt
 from ..session import keep_recent_messages
@@ -143,9 +144,23 @@ def _build_synthesis_instruction_block(
         )
     if attempt > 1:
         lines.append(
-            "Retry after evidence validation failed. Stay grounded in retrieved evidence."
+            "Retry after evidence validation failed. Stay grounded in retrieved evidence, keep only supported claims, and satisfy the requested answer structure."
         )
     return "\n".join(lines)
+
+
+def _split_prompt_evidence_by_kind(
+    prompt_evidence: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    official_items = [
+        item for item in prompt_evidence
+        if str(item.get("kind") or "").strip().lower() == "official"
+    ]
+    local_items = [
+        item for item in prompt_evidence
+        if str(item.get("kind") or "").strip().lower() == "local"
+    ]
+    return official_items, local_items
 
 
 def build_synthesis_messages(
@@ -170,6 +185,10 @@ def build_synthesis_messages(
         if isinstance(item, dict)
     }
     has_hybrid_evidence = "official" in evidence_kinds and "local" in evidence_kinds
+    answer_contract = infer_answer_contract(
+        runtime.user_input,
+        ["docs", "upload"] if has_hybrid_evidence else [],
+    )
     history_messages = [
         message for message in state.get("messages", []) if not isinstance(message, ToolMessage)
     ]
@@ -183,6 +202,21 @@ def build_synthesis_messages(
     model_messages.append(
         SystemMessage(content=f"[Retrieved Evidence]\n{format_evidence_for_prompt(prompt_evidence)}")
     )
+    if has_hybrid_evidence:
+        official_evidence, local_evidence = _split_prompt_evidence_by_kind(prompt_evidence)
+        if official_evidence:
+            model_messages.append(
+                SystemMessage(
+                    content=f"[Official Docs Evidence]\n{format_evidence_for_prompt(official_evidence[:2])}"
+                )
+            )
+        if local_evidence:
+            model_messages.append(
+                SystemMessage(
+                    content=f"[Uploaded Code Evidence]\n{format_evidence_for_prompt(local_evidence[:2])}"
+                )
+            )
+    model_messages.append(SystemMessage(content=render_answer_contract_prompt(answer_contract)))
     model_messages.append(
         SystemMessage(
             content=_build_synthesis_instruction_block(

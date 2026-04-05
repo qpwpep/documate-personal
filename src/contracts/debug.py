@@ -11,6 +11,7 @@ RetryReason = Literal[
     "tool_error",
     "blocked_missing_upload",
     "unsupported_claims",
+    "missing",
 ]
 PlannerStatus = Literal["llm", "deterministic", "heuristic_fallback", "fallback_no_routes"]
 PlannerOverrideReason = Literal[
@@ -29,7 +30,13 @@ LLMCallPath = Literal[
 ]
 
 DEFAULT_MAX_RETRIES = 1
-RETRYABLE_REASONS: set[RetryReason] = {"no_evidence", "low_score", "tool_error"}
+RETRYABLE_REASONS: set[RetryReason] = {
+    "no_evidence",
+    "low_score",
+    "tool_error",
+    "unsupported_claims",
+    "missing",
+}
 DEBUG_SCHEMA_VERSION = 2
 DebugObservabilityStatus = Literal["ok", "degraded", "failed"]
 DEBUG_REQUIRED_FIELDS: tuple[str, ...] = (

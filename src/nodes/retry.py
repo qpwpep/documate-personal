@@ -101,6 +101,10 @@ def build_retrieval_feedback(
         return f"query too narrow or domain mismatch on routes: {selected_routes}"
     if reason == "unsupported_claims":
         return "generated claims referenced unsupported evidence ids; keep only grounded claims."
+    if reason in {"missing", "missing_route_coverage"}:
+        return "selected retrieval routes were found, but the answer did not preserve grounded coverage for every required route."
+    if reason == "missing_sections":
+        return "the answer did not satisfy the requested response structure; regenerate using the required sections only."
     if score_avg is not None:
         return f"low evidence confidence(avg_score={score_avg:.3f}); broaden query or switch route."
     return "low evidence confidence; broaden query or switch route."
@@ -127,6 +131,8 @@ def build_route_specific_followup(
         return "검색 경로에서 문제가 있었습니다. 확인할 API 이름이나 비교 대상을 더 구체적으로 알려 주세요."
     if reason == "unsupported_claims":
         return "근거로 확인할 코드 위치나 함수명을 더 구체적으로 알려 주시면, 확인 가능한 내용만 다시 정리하겠습니다."
+    if reason == "missing":
+        return "요청한 구조(예: 비교/체크리스트/해석 분기)와 근거 범위를 유지할 수 있도록, 확인할 API나 비교 대상을 조금 더 구체적으로 알려 주세요."
     if routes == {"docs"}:
         return "공식 문서에서 찾을 라이브러리명이나 API 이름을 더 구체적으로 알려 주세요."
     if routes == {"upload"}:

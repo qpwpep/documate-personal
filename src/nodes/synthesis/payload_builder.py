@@ -97,7 +97,7 @@ def build_structured_synthesizer(llm_synthesizer: Any) -> Any:
             return llm_synthesizer.with_structured_output(
                 SynthesisOutput,
                 method="json_schema",
-                include_raw=True,
+                include_raw=False,
                 strict=True,
             )
         except Exception:
@@ -139,6 +139,9 @@ def coerce_structured_synthesis_result(
     raw_message = result.get("raw")
     parsed = result.get("parsed")
     parsing_error = result.get("parsing_error")
+
+    if isinstance(parsed, SynthesisOutput):
+        parsed = parsed.model_dump(mode="json")
 
     if not isinstance(raw_message, AIMessage):
         raw_message = None
@@ -517,6 +520,7 @@ def render_synthesis_payload(
             claims=synthesis_output.claims,
             evidence_items=evidence_items,
             confidence=payload_confidence,
+            sections=synthesis_output.sections,
         )
         return RenderedSynthesisPayload(
             payload=payload,
@@ -528,6 +532,7 @@ def render_synthesis_payload(
     payload = build_empty_response_payload(
         answer=fallback_answer,
         confidence=payload_confidence,
+        sections=synthesis_output.sections,
     )
     return RenderedSynthesisPayload(
         payload=payload,
