@@ -165,6 +165,12 @@ def current_retrieval_attempt(retry_context: RetryState) -> int:
     return int(retry_context.attempt) + 1
 
 
+def _is_repair_retry_candidate(selected_routes: set[str], retry_reason: RetryReason | None) -> bool:
+    if retry_reason not in {"unsupported_claims", "missing", "missing_route_coverage", "missing_sections"}:
+        return False
+    return selected_routes in ({"docs"}, {"docs", "upload"})
+
+
 def build_retry_update(
     *,
     retry_context: RetryState,
@@ -178,6 +184,12 @@ def build_retry_update(
 ) -> tuple[bool, RetryState, str]:
     max_retries = int(retry_context.max_retries or DEFAULT_MAX_RETRIES)
     used_retries = int(retry_context.attempt)
+
+    def _is_repair_retry_candidate(selected_routes: set[str], reason: RetryReason | None) -> bool:
+        if reason not in {"unsupported_claims", "missing"}:
+            return False
+        return selected_routes in ({"docs"}, {"docs", "upload"})
+
     needs_retry = False
     retrieval_feedback = ""
 
@@ -191,6 +203,7 @@ def build_retry_update(
 
     selected_routes = {task.route for task in planner_output.tasks}
     normalized_failed_routes = set(_normalize_failed_routes(failed_routes))
+    reuse_evidence_only = _is_repair_retry_candidate(selected_routes, retry_reason)
 
     if retry_reason is not None:
         retrieval_feedback = build_retrieval_feedback(
@@ -200,7 +213,9 @@ def build_retry_update(
             score_avg=score_avg,
         )
         if retry_reason in RETRYABLE_REASONS and used_retries < max_retries:
-            if selected_routes == {"docs"}:
+            if reuse_evidence_only:
+                needs_retry = True
+            elif selected_routes == {"docs"}:
                 needs_retry = True
             elif selected_routes == {"docs", "upload"} and normalized_failed_routes == {"docs"}:
                 needs_retry = True
@@ -210,9 +225,24 @@ def build_retry_update(
         retry_update: dict[str, Any] = {
             "retry_reason": retry_reason,
             "retrieval_feedback": retrieval_feedback,
-            "failed_routes": _normalize_failed_routes(normalized_failed_routes or selected_routes),
+            "failed_routes": (
+                        []
+                        if reuse_evidence_only
+                        else _normalize_failed_routes(normalized_failed_routes or selected_routes)
+                    ),
+                    "retry_scope": (
+                        "reuse_evidence_resynthesize"
+                        if reuse_evidence_only
+                        else "refresh_routes"
+                    ),
         }
-        if needs_retry and selected_routes == {"docs", "upload"} and normalized_failed_routes == {"docs"}:
+        if reuse_evidence_only:
+            retry_update["preserved_evidence"] = evidence_to_dicts(current_attempt_evidence or [])
+            retry_update["preserved_retrieval_diagnostics"] = [
+                item.model_copy(deep=True)
+                for item in (current_attempt_retrieval_diagnostics or [])
+            ]
+        elif selected_routes == {"docs", "upload"} and normalized_failed_routes == {"docs"}:
             preserved_evidence, preserved_diagnostics = _preserve_successful_route_payload(
                 current_attempt_evidence=current_attempt_evidence or [],
                 current_attempt_retrieval_diagnostics=current_attempt_retrieval_diagnostics or [],
@@ -230,6 +260,7 @@ def build_retry_update(
             "failed_routes": [],
             "preserved_evidence": [],
             "preserved_retrieval_diagnostics": [],
+            "retry_scope": "refresh_routes",
         }
 
     retry_update["attempt"] = used_retries

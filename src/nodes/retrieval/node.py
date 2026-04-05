@@ -85,14 +85,41 @@ def _collect_retrieval_batch(
         for route in retry_context.failed_routes
         if str(route).strip()
     }
+    retry_scope = str(getattr(retry_context, "retry_scope", "") or "").strip()
     preserved_evidence = [
         item
         for item in retry_context.preserved_evidence
         if isinstance(item, dict)
     ]
     preserved_diagnostics = list(retry_context.preserved_retrieval_diagnostics)
-
     batch_plan = RetrievalBatchPlan(attempt=attempt)
+
+    if retry_scope == "reuse_evidence_resynthesize" and preserved_evidence:
+        for index, task in enumerate(planner_output.tasks, start=1):
+            handler = route_handlers.get(task.route)
+            if handler is None:
+                batch_plan.local_errors.append(f"planner: unsupported route ({task.route})")
+                continue
+            tool_name, _invoke_tool = handler
+            sanitized_query = sanitize_retrieval_query(
+                route=task.route,
+                query=task.query,
+                retry_context=retry_context,
+            )
+            sanitized_task = RetrievalTask(route=task.route, query=sanitized_query, k=task.k)
+            batch_plan.reused_results.append(
+                build_reused_retrieval_task_result(
+                    index=index,
+                    task=sanitized_task,
+                    tool_name=tool_name,
+                    route=sanitized_task.route,
+                    attempt=attempt,
+                    preserved_evidence=preserved_evidence,
+                    preserved_diagnostics=preserved_diagnostics,
+                )
+            )
+        return batch_plan
+
     for index, task in enumerate(planner_output.tasks, start=1):
         handler = route_handlers.get(task.route)
         if handler is None:
