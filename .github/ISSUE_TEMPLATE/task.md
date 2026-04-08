@@ -1,39 +1,45 @@
 ---
-name: Task Template
-about: 작업 예정 내용을 정리해주세요
-title: "작업명을 간단하게 작성해주세요."
-labels: ''
-assignees: ''
-
+name: 작업 템플릿
+about: 작업 목적, 범위, 완료 기준을 정리합니다.
+title: "[Task] "
+labels: ""
+assignees: ""
 ---
 
-### 🎯 목적 (Goal)
-> _이 작업 진행 또는 이슈를 해결해서 **무엇을 달성하고자 하는지** 적어주세요._  
-_예시: "RAG 구조 내 retriever의 검색 기능 구현"_
+## 목적
 
----
+이 작업으로 무엇을 해결하거나 완성하려는지 적어주세요.
 
-### 📝 작업 내용 (To-do)
-> _구체적으로 어떤 작업을 진행할 예정인지 작성해주세요._
-_예시: "RAG 구조 내 retriever의 검색 기능 구현"_
+예시:
 
-- [ ] 작업 내용 1
-- [ ] 작업 내용 2
+- FastAPI 응답 스키마 정리
+- 업로드 파일 검색 정확도 개선
+- benchmark 보고서 포맷 정리
 
----
+## 작업 내용
 
-### ⚙️ 참고 자료 (References)
-> _참고한 문서, 논문, 링크 등을 남겨주세요. (없으면 영역을 제거해주세요.)_  
-> _예시:_   
-> - _[LangChain RAG Docs](https://python.langchain.com/docs/use_cases/question_answering/)_   
-> - _[OpenAI API Reference](https://platform.openai.com/docs/)_   
+구체적으로 수행할 작업을 체크리스트 형태로 적어주세요.
 
-- [참고문서1](link)
-- [참고문서2](link)
+- [ ] 작업 항목 1
+- [ ] 작업 항목 2
+- [ ] 작업 항목 3
 
----
+## 완료 기준
 
-### ⏰ 예상 일정
-- 시작일: YYYY-MM-DD  
-- 마감일: YYYY-MM-DD
+이 작업이 끝났다고 볼 수 있는 조건을 적어주세요.
 
+- [ ] 동작 확인 완료
+- [ ] 테스트 추가 또는 기존 테스트 통과
+- [ ] 문서 반영 완료
+
+## 참고 자료
+
+관련 문서, 이슈, 링크가 있으면 적어주세요.
+
+- [참고 문서 1](https://example.com)
+- [참고 문서 2](https://example.com)
+
+## 일정
+
+- 시작 예정: YYYY-MM-DD
+- 완료 예정: YYYY-MM-DD
