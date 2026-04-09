@@ -39,6 +39,9 @@ def parse_retry_state(value: Any) -> RetryState:
         "tool_error",
         "blocked_missing_upload",
         "unsupported_claims",
+        "missing",
+        "missing_route_coverage",
+        "missing_sections",
     }:
         retry_state.retry_reason = retry_reason
 

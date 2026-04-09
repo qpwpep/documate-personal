@@ -56,6 +56,8 @@ class ValidationAssessment:
     route_failures: dict[str, RetryReason]
     valid_claims: list[Any]
     invalid_claims: list[Any]
+    missing_route_coverage: list[str]
+    missing_sections: list[str]
     has_grounded_response_payload: bool
     unsupported_claims: bool
     retry_reason: RetryReason | None
@@ -71,24 +73,16 @@ def route_for_item_tool(tool_name: str) -> str:
     return route_for_tool(str(tool_name or ""))
 
 
-def _route_from_source_id(source_id: str) -> str:
-    normalized = str(source_id or "").strip()
-    if normalized.startswith("url:"):
-        return "docs"
-    if normalized.startswith("path:"):
-        return "upload"
-    return ""
-
-
 def detect_missing_route_coverage(
     *,
     required_routes: list[str],
     valid_claims: list[Any],
+    route_by_source_id: dict[str, str],
 ) -> list[str]:
     covered_routes: set[str] = set()
     for claim in valid_claims:
         for source_id in getattr(claim, "evidence_ids", []) or []:
-            route = _route_from_source_id(source_id)
+            route = route_by_source_id.get(str(source_id or "").strip(), "")
             if route:
                 covered_routes.add(route)
     return [route for route in required_routes if route not in covered_routes]
@@ -301,9 +295,15 @@ def assess_validation(snapshot: ValidationSnapshot) -> ValidationAssessment:
             evidence_items=snapshot.parsed_evidence,
         )
 
+    route_by_source_id = {
+        str(item.source_id or "").strip(): route_for_item_tool(item.tool)
+        for item in snapshot.parsed_evidence
+        if str(item.source_id or "").strip()
+    }
     missing_route_coverage = detect_missing_route_coverage(
         required_routes=snapshot.required_routes,
         valid_claims=valid_claims,
+        route_by_source_id=route_by_source_id,
     ) if snapshot.retrieval_required else []
 
     answer_contract = infer_answer_contract(snapshot.user_input, snapshot.required_routes)
@@ -322,8 +322,6 @@ def assess_validation(snapshot: ValidationSnapshot) -> ValidationAssessment:
         snapshot.retrieval_required
         and not route_failures
         and not tool_error_routes
-        and not missing_route_coverage
-        and not missing_sections
         and snapshot.response_payload is not None
         and (
             (snapshot.response_payload.answer.strip() and not snapshot.response_payload.claims)
@@ -344,11 +342,14 @@ def assess_validation(snapshot: ValidationSnapshot) -> ValidationAssessment:
         retry_reason = "no_evidence" if any(
             reason == "no_evidence" for reason in route_failures.values()
         ) else "low_score"
-    elif missing_route_coverage or missing_sections:
-        retry_reason = "missing"
-        failed_routes = set()
     elif unsupported_claims:
         retry_reason = "unsupported_claims"
+        failed_routes = set(missing_route_coverage)
+    elif missing_route_coverage:
+        retry_reason = "missing_route_coverage"
+        failed_routes = set(missing_route_coverage)
+    elif missing_sections:
+        retry_reason = "missing_sections"
 
     score_avg = score_avg_for_failed_routes(failed_routes, snapshot.evidence_by_route)
     if score_avg is None:
@@ -360,6 +361,8 @@ def assess_validation(snapshot: ValidationSnapshot) -> ValidationAssessment:
         route_failures=route_failures,
         valid_claims=valid_claims,
         invalid_claims=invalid_claims,
+        missing_route_coverage=missing_route_coverage,
+        missing_sections=missing_sections,
         has_grounded_response_payload=has_grounded_response_payload,
         unsupported_claims=unsupported_claims,
         retry_reason=retry_reason,

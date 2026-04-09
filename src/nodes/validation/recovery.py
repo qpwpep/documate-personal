@@ -7,16 +7,21 @@ from langchain_core.messages import AIMessage
 
 from ...answer_schema import (
     AgentResponsePayloadModel,
+    AnswerSection,
     ClaimItem,
     SynthesisOutput,
     average_claim_confidence,
     build_deterministic_grounded_payload,
     build_empty_response_payload,
     clean_grounded_text,
+    normalize_answer_sections,
     normalize_confidence,
     render_payload_from_claims,
+    render_sections_text,
+    resolve_answer_text,
     summarize_grounded_text,
 )
+from ...request_contracts import infer_answer_contract
 from ...contracts import GraphState, ResponseState
 from ...contracts.debug import RetryReason
 from ...contracts.routes import route_for_tool
@@ -33,6 +38,7 @@ def build_response_payload_updates(
         answer=payload.answer,
         claims=payload.claims,
         confidence=payload.confidence,
+        sections=payload.sections,
     )
     return {
         "messages": [AIMessage(content=payload.answer)],
@@ -50,6 +56,184 @@ def build_followup_updates(answer: str, *, attempt: int) -> GraphState:
         build_empty_response_payload(answer=answer),
         attempt=attempt,
     )
+
+
+def _heading_for_section_kind(kind: str, *, snapshot: ValidationSnapshot) -> str:
+    headings = {
+        "summary": "요약",
+        "checklist": "체크리스트",
+        "steps": "단계별 안내",
+        "official_docs": "공식 문서",
+        "upload_code": "업로드 코드" if "upload" in snapshot.required_routes else "로컬 코드",
+        "comparison": "비교",
+        "interpretation_a": "해석 A",
+        "interpretation_b": "해석 B",
+    }
+    return headings.get(str(kind or "").strip(), str(kind or "").strip())
+
+
+def _ordered_unique_lines(lines: list[str]) -> list[str]:
+    normalized_lines: list[str] = []
+    seen: set[str] = set()
+    for line in lines:
+        normalized = str(line or "").strip()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        normalized_lines.append(normalized)
+    return normalized_lines
+
+
+def _render_claim_lines(
+    *,
+    claims: list[ClaimItem],
+    snapshot: ValidationSnapshot,
+    payload: AgentResponsePayloadModel,
+) -> list[str]:
+    return _ordered_unique_lines(
+        [
+            _summarize_claim(claim=claim, snapshot=snapshot, payload=payload)
+            for claim in claims
+        ]
+    )
+
+
+def _fallback_route_line(
+    *,
+    snapshot: ValidationSnapshot,
+    payload: AgentResponsePayloadModel,
+    routes: set[str],
+) -> str:
+    evidence_item = _top_evidence_item_for_routes(snapshot=snapshot, routes=routes)
+    if evidence_item is None:
+        return ""
+    route = route_for_tool(str(evidence_item.tool or "")) or next(iter(routes), "")
+    claim = _claim_from_evidence_item(evidence_item=evidence_item, route=route)
+    if claim is None:
+        return ""
+    return _summarize_claim(claim=claim, snapshot=snapshot, payload=payload)
+
+
+def _section_body_from_claims(
+    *,
+    snapshot: ValidationSnapshot,
+    payload: AgentResponsePayloadModel,
+    routes: set[str] | None = None,
+    mode: str = "paragraph",
+) -> str:
+    selected_claims = payload.claims
+    if routes is not None:
+        selected_claims = _claims_for_routes(claims=payload.claims, snapshot=snapshot, routes=routes)
+
+    lines = _render_claim_lines(claims=selected_claims, snapshot=snapshot, payload=payload)
+    if not lines and routes is not None:
+        fallback_line = _fallback_route_line(snapshot=snapshot, payload=payload, routes=routes)
+        if fallback_line:
+            lines = [fallback_line]
+    if not lines:
+        return ""
+    if mode == "checklist":
+        return "\n".join(f"- {line}" for line in lines)
+    if mode == "steps":
+        return "\n".join(f"{index}. {line}" for index, line in enumerate(lines, start=1))
+    return "\n".join(lines)
+
+
+def _comparison_section_body(
+    *,
+    snapshot: ValidationSnapshot,
+    payload: AgentResponsePayloadModel,
+) -> str:
+    docs_body = _section_body_from_claims(
+        snapshot=snapshot,
+        payload=payload,
+        routes={"docs"},
+    )
+    local_body = _section_body_from_claims(
+        snapshot=snapshot,
+        payload=payload,
+        routes={"upload", "local"},
+    )
+    comparison_lines = _ordered_unique_lines([docs_body, local_body])
+    if not comparison_lines:
+        return ""
+    local_route = "upload" if "upload" in snapshot.required_routes else "local"
+    comparison_lines.append(_build_hybrid_limit_sentence(local_route))
+    return "\n".join(comparison_lines)
+
+
+def _repair_required_sections(
+    *,
+    payload: AgentResponsePayloadModel,
+    snapshot: ValidationSnapshot,
+) -> AgentResponsePayloadModel:
+    answer_contract = infer_answer_contract(snapshot.user_input, snapshot.required_routes)
+    normalized_sections = normalize_answer_sections(payload.sections)
+    if not answer_contract.required_sections:
+        normalized_answer = resolve_answer_text(answer=payload.answer, sections=normalized_sections)
+        return payload.model_copy(update={"answer": normalized_answer, "sections": normalized_sections})
+
+    existing_by_kind = {section.kind: section for section in normalized_sections}
+    repaired_sections: list[AnswerSection] = []
+    base_answer = resolve_answer_text(answer=payload.answer, sections=normalized_sections)
+    for kind in answer_contract.required_sections:
+        section = existing_by_kind.get(kind)
+        if section is not None:
+            repaired_sections.append(section)
+            continue
+
+        body = ""
+        if kind == "summary":
+            body = base_answer or _section_body_from_claims(
+                snapshot=snapshot,
+                payload=payload,
+            )
+        elif kind == "checklist":
+            body = _section_body_from_claims(
+                snapshot=snapshot,
+                payload=payload,
+                mode="checklist",
+            )
+        elif kind == "steps":
+            body = _section_body_from_claims(
+                snapshot=snapshot,
+                payload=payload,
+                mode="steps",
+            )
+        elif kind == "official_docs":
+            body = _section_body_from_claims(
+                snapshot=snapshot,
+                payload=payload,
+                routes={"docs"},
+            )
+        elif kind == "upload_code":
+            body = _section_body_from_claims(
+                snapshot=snapshot,
+                payload=payload,
+                routes={"upload", "local"},
+            )
+        elif kind == "comparison":
+            body = _comparison_section_body(snapshot=snapshot, payload=payload)
+
+        body = str(body or "").strip()
+        if not body:
+            continue
+        repaired_sections.append(
+            AnswerSection(
+                kind=kind,
+                heading=_heading_for_section_kind(kind, snapshot=snapshot),
+                body=body,
+            )
+        )
+
+    extra_sections = [
+        section
+        for section in normalized_sections
+        if section.kind not in {item.kind for item in repaired_sections}
+    ]
+    final_sections = normalize_answer_sections([*repaired_sections, *extra_sections])
+    final_answer = resolve_answer_text(answer=payload.answer, sections=final_sections)
+    return payload.model_copy(update={"answer": final_answer, "sections": final_sections})
 
 
 def _route_by_source_id(snapshot: ValidationSnapshot) -> dict[str, str]:
@@ -349,31 +533,21 @@ def apply_validation_outcome(
     if retry_reason is None or needs_retry:
         return updates
 
+    next_payload: AgentResponsePayloadModel | None = None
     if assessment.has_grounded_response_payload and snapshot.response_payload is not None:
-        updates.update(
-            build_response_payload_updates(
-                snapshot.response_payload,
-                attempt=attempt,
-            )
-        )
-    elif retry_reason == "unsupported_claims" and assessment.valid_claims:
+        next_payload = snapshot.response_payload.model_copy(deep=True)
+    elif assessment.valid_claims:
         filtered_confidence = average_claim_confidence(assessment.valid_claims)
-        filtered_payload = render_payload_from_claims(
+        next_payload = render_payload_from_claims(
             claims=assessment.valid_claims,
             evidence_items=snapshot.parsed_evidence,
             confidence=filtered_confidence,
         )
-        filtered_payload.confidence = filtered_confidence
-        filtered_payload = _rewrite_filtered_hybrid_payload(
-            payload=filtered_payload,
-            snapshot=snapshot,
-        )
-        updates.update(
-            build_response_payload_updates(
-                filtered_payload,
-                attempt=attempt,
-            )
-        )
+        next_payload.confidence = filtered_confidence
+        if snapshot.response_payload is not None and snapshot.response_payload.sections:
+            next_payload = next_payload.model_copy(update={"sections": snapshot.response_payload.sections})
+    elif retry_reason == "missing_sections" and snapshot.response_payload is not None:
+        next_payload = snapshot.response_payload.model_copy(deep=True)
     elif snapshot.retrieval_required and snapshot.parsed_evidence:
         docs_valid_claims = _claims_for_routes(
             claims=assessment.valid_claims,
@@ -385,18 +559,12 @@ def apply_validation_outcome(
             snapshot=snapshot,
             routes={"upload", "local"},
         )
-        grounded_payload = None
+        next_payload = None
         if not docs_valid_claims and not local_valid_claims:
-            grounded_payload = _build_route_balanced_hybrid_payload(snapshot)
-        grounded_payload = grounded_payload or build_deterministic_grounded_payload(
+            next_payload = _build_route_balanced_hybrid_payload(snapshot)
+        next_payload = next_payload or build_deterministic_grounded_payload(
             evidence_items=snapshot.parsed_evidence,
             fallback_answer="",
-        )
-        updates.update(
-            build_response_payload_updates(
-                grounded_payload,
-                attempt=attempt,
-            )
         )
     else:
         followup_answer = build_followup_from_routes(snapshot.planner_output, retry_reason)
@@ -406,4 +574,31 @@ def apply_validation_outcome(
                 attempt=attempt,
             )
         )
+        return updates
+
+    if next_payload is None:
+        return updates
+
+    if snapshot.response_payload is not None and snapshot.response_payload.sections and not next_payload.sections:
+        next_payload = next_payload.model_copy(update={"sections": snapshot.response_payload.sections})
+
+    if _is_hybrid_retrieval_request(snapshot) and (
+        retry_reason in {"unsupported_claims", "missing_route_coverage"}
+        or bool(assessment.missing_route_coverage)
+    ):
+        next_payload = _rewrite_filtered_hybrid_payload(
+            payload=next_payload,
+            snapshot=snapshot,
+        )
+
+    next_payload = _repair_required_sections(
+        payload=next_payload,
+        snapshot=snapshot,
+    )
+    updates.update(
+        build_response_payload_updates(
+            next_payload,
+            attempt=attempt,
+        )
+    )
     return updates
