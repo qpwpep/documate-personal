@@ -56,6 +56,8 @@ class LLMRegistryTest(unittest.TestCase):
         self.assertEqual(synthesizer_kwargs["timeout"], 9)
         self.assertEqual(synthesizer_kwargs["max_retries"], 1)
         self.assertEqual(synthesizer_kwargs["max_tokens"], 777)
+        self.assertTrue(synthesizer_kwargs["use_responses_api"])
+        self.assertEqual(synthesizer_kwargs["output_version"], "responses/v1")
         self.assertEqual(synthesizer_kwargs["verbose"], False)
         planner_kwargs = _FakeChatOpenAI.created_kwargs[1]
         self.assertEqual(planner_kwargs["max_tokens"], 654)
