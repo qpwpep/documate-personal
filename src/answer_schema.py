@@ -176,18 +176,66 @@ class AgentResponsePayloadModel(BaseModel):
     sections: list[AnswerSection] = Field(default_factory=list)
 
 
+def normalize_answer_sections(
+    sections: Iterable[AnswerSection] | None,
+) -> list[AnswerSection]:
+    normalized_sections: list[AnswerSection] = []
+    for section in sections or []:
+        if not isinstance(section, AnswerSection):
+            continue
+        normalized_section = section.model_copy(
+            update={
+                "kind": str(section.kind or "").strip(),
+                "heading": str(section.heading or "").strip(),
+                "body": str(section.body or "").strip(),
+            }
+        )
+        if not normalized_section.kind:
+            continue
+        if not normalized_section.heading and not normalized_section.body:
+            continue
+        normalized_sections.append(normalized_section)
+    return normalized_sections
+
+
+def render_sections_text(
+    sections: Iterable[AnswerSection] | None,
+) -> str:
+    rendered_blocks: list[str] = []
+    for section in normalize_answer_sections(sections):
+        heading = str(section.heading or "").strip()
+        body = str(section.body or "").strip()
+        if heading and body:
+            rendered_blocks.append(f"{heading}\n{body}")
+        else:
+            rendered_blocks.append(heading or body)
+    return "\n\n".join(block for block in rendered_blocks if block.strip()).strip()
+
+
+def resolve_answer_text(
+    *,
+    answer: str = "",
+    sections: Iterable[AnswerSection] | None = None,
+) -> str:
+    rendered_sections = render_sections_text(sections)
+    if rendered_sections:
+        return rendered_sections
+    return str(answer or "").strip()
+
+
 def build_empty_response_payload(
     *,
     answer: str = "",
     confidence: float | None = None,
     sections: list[AnswerSection] | None = None,
 ) -> AgentResponsePayloadModel:
+    normalized_sections = normalize_answer_sections(sections)
     return AgentResponsePayloadModel(
-        answer=str(answer or "").strip(),
+        answer=resolve_answer_text(answer=answer, sections=normalized_sections),
         claims=[],
         evidence=[],
         confidence=confidence,
-        sections=list(sections or []),
+        sections=normalized_sections,
     )
 
 
@@ -409,9 +457,9 @@ def render_payload_from_claims(
             rendered_parts.append(claim_text)
 
     answer_text = " ".join(part.strip() for part in rendered_parts if part.strip()).strip()
-    normalized_sections = [section for section in (sections or []) if isinstance(section, AnswerSection)]
+    normalized_sections = normalize_answer_sections(sections)
     return AgentResponsePayloadModel(
-        answer=answer_text,
+        answer=resolve_answer_text(answer=answer_text, sections=normalized_sections),
         claims=ordered_claims,
         evidence=adopted_evidence,
         confidence=confidence,
