@@ -5,6 +5,7 @@ import re
 from typing import Any
 
 from langchain_core.messages import AIMessage
+from openai.lib._pydantic import to_strict_json_schema
 
 from ...answer_schema import (
     AgentResponsePayloadModel,
@@ -91,13 +92,23 @@ class RenderedSynthesisPayload:
     synthesis_output: SynthesisOutput
 
 
+def _build_synthesis_response_schema() -> dict[str, Any]:
+    return {
+        # Pass a strict JSON schema dict instead of the Pydantic class itself so
+        # Responses API parsing stays on the non-ParsedResponse path.
+        "name": "SynthesisOutput",
+        "strict": True,
+        "schema": to_strict_json_schema(SynthesisOutput),
+    }
+
+
 def build_structured_synthesizer(llm_synthesizer: Any) -> Any:
     if hasattr(llm_synthesizer, "with_structured_output"):
         try:
             return llm_synthesizer.with_structured_output(
-                SynthesisOutput,
+                _build_synthesis_response_schema(),
                 method="json_schema",
-                include_raw=False,
+                include_raw=True,
                 strict=True,
             )
         except Exception:
