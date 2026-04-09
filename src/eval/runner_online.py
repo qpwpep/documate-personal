@@ -11,7 +11,7 @@ from typing import Any
 
 import requests
 
-from ..answer_schema import ClaimItem, filter_claims_by_evidence
+from ..answer_schema import AnswerSection, ClaimItem, filter_claims_by_evidence
 from ..contracts.debug import DEBUG_CRITICAL_FIELDS, DEBUG_REQUIRED_FIELDS, DEBUG_SCHEMA_VERSION
 from ..contracts.boundary.debug import parse_llm_calls, parse_retry_state, parse_token_usage
 from ..contracts.boundary.planner import parse_planner_diagnostic
@@ -274,6 +274,23 @@ def _parse_claims_from_response_payload(response_payload: dict[str, Any] | None)
     return claims
 
 
+def _parse_sections_from_response_payload(response_payload: dict[str, Any] | None) -> list[AnswerSection]:
+    if not isinstance(response_payload, dict):
+        return []
+    raw_sections = response_payload.get("sections")
+    if not isinstance(raw_sections, list):
+        return []
+    sections: list[AnswerSection] = []
+    for item in raw_sections:
+        if not isinstance(item, dict):
+            continue
+        try:
+            sections.append(AnswerSection.model_validate(item))
+        except Exception:
+            continue
+    return sections
+
+
 def _build_gate_failures(
     *,
     runtime_errors: list[str],
@@ -373,6 +390,7 @@ def _run_single_case(
     judge_input_complete: bool | None = None
     valid_claim_count = 0
     invalid_claim_count = 0
+    response_sections: list[AnswerSection] = []
 
     if not runtime_errors:
         started = time.monotonic()
@@ -557,6 +575,7 @@ def _run_single_case(
         runtime_errors.append(f"weight_override error: {weights_error}")
 
     response_claims = _parse_claims_from_response_payload(response_payload)
+    response_sections = _parse_sections_from_response_payload(response_payload)
     if response_claims:
         valid_claims, invalid_claims = filter_claims_by_evidence(
             claims=response_claims,
@@ -590,6 +609,7 @@ def _run_single_case(
             tool_calls=tool_calls,
             claims=response_claims,
             response_evidence=response_evidence,
+            sections=response_sections,
             observed_evidence=observed_evidence,
             retrieval_diagnostics=retrieval_diagnostics,
             planner_diagnostics=planner_diagnostics,
@@ -607,6 +627,7 @@ def _run_single_case(
                 tool_calls=tool_calls,
                 claims=response_claims,
                 response_evidence=response_evidence,
+                sections=response_sections,
                 observed_evidence=observed_evidence,
                 retrieval_diagnostics=retrieval_diagnostics,
                 planner_diagnostics=planner_diagnostics,
@@ -640,6 +661,7 @@ def _run_single_case(
         synthesis_mode=synthesis_mode,
         valid_claim_count=valid_claim_count,
         invalid_claim_count=invalid_claim_count,
+        response_sections=response_sections,
     )
     rule_weighted = compute_rule_weighted_score(rule_scores, effective_weights)
 

@@ -7,7 +7,7 @@ from typing import Any
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 
-from ..answer_schema import ClaimItem
+from ..answer_schema import AnswerSection, ClaimItem
 from ..evidence import EvidenceItem
 from .schemas import BenchmarkCase, JudgeSubscores
 
@@ -39,6 +39,7 @@ Failure guidance:
 - For docs-focused cases, prioritize official documentation summaries over generic web-style summaries.
 - For hybrid cases, expect the official explanation and the uploaded/local comparison to be clearly separated.
 - For hybrid cases, treat a missing comparison section as a significant quality failure.
+- Use response.sections as the primary structure signal when it is present.
 - For tool_action cases, do not expect citations or retrieval grounding when the case itself does not require them.
 - For tool_action cases, prefer responses that contain a usable body first and a clear execution receipt such as a saved path or Slack destination after it.
 - For Korean queries, a non-Korean answer should score 0 on format_language.
@@ -109,7 +110,7 @@ def _is_payload_complete(payload: dict[str, Any]) -> bool:
     )
     if any(key not in payload for key in required_top_level):
         return False
-    return all(key in response for key in ("text", "claims", "evidence"))
+    return all(key in response for key in ("text", "claims", "evidence", "sections"))
 
 
 def _serialize_claims(claims: list[ClaimItem] | list[dict[str, Any]] | None) -> list[dict[str, Any]]:
@@ -128,6 +129,18 @@ def _serialize_evidence(
     serialized: list[dict[str, Any]] = []
     for item in evidence or []:
         if isinstance(item, EvidenceItem):
+            serialized.append(item.model_dump(mode="json"))
+        elif isinstance(item, dict):
+            serialized.append(_normalize_jsonable(item))
+    return serialized
+
+
+def _serialize_sections(
+    sections: list[AnswerSection] | list[dict[str, Any]] | None,
+) -> list[dict[str, Any]]:
+    serialized: list[dict[str, Any]] = []
+    for item in sections or []:
+        if isinstance(item, AnswerSection):
             serialized.append(item.model_dump(mode="json"))
         elif isinstance(item, dict):
             serialized.append(_normalize_jsonable(item))
@@ -158,6 +171,7 @@ class LLMJudge:
         tool_calls: list[str],
         claims: list[dict[str, Any]] | None = None,
         response_evidence: list[dict[str, Any]] | None = None,
+        sections: list[dict[str, Any]] | None = None,
         observed_evidence: list[dict[str, Any]] | None = None,
         retrieval_diagnostics: list[dict[str, Any]] | None = None,
         planner_diagnostics: dict[str, Any] | None = None,
@@ -178,6 +192,7 @@ class LLMJudge:
             tool_calls=tool_calls,
             claims=claims,
             response_evidence=response_evidence,
+            sections=sections,
             observed_evidence=observed_evidence,
             retrieval_diagnostics=retrieval_diagnostics,
             planner_diagnostics=planner_diagnostics,
@@ -228,6 +243,7 @@ class LLMJudge:
         tool_calls: list[str],
         claims: list[ClaimItem] | list[dict[str, Any]] | None = None,
         response_evidence: list[EvidenceItem] | list[dict[str, Any]] | None = None,
+        sections: list[AnswerSection] | list[dict[str, Any]] | None = None,
         observed_evidence: list[EvidenceItem] | list[dict[str, Any]] | None = None,
         retrieval_diagnostics: list[dict[str, Any]] | list[Any] | None = None,
         planner_diagnostics: dict[str, Any] | Any | None = None,
@@ -251,6 +267,7 @@ class LLMJudge:
                 "text": response_text,
                 "claims": _serialize_claims(claims),
                 "evidence": _serialize_evidence(response_evidence),
+                "sections": _serialize_sections(sections),
             },
             "observed_evidence": _serialize_evidence(observed_evidence),
             "called_tools": list(tool_calls),

@@ -5,7 +5,7 @@ import re
 from typing import Any, Iterable
 from urllib.parse import urlparse
 
-from ..answer_schema import ClaimItem
+from ..answer_schema import AnswerSection, ClaimItem
 from ..domain_docs import DEFAULT_DOCS
 from ..evidence import EvidenceItem, normalize_source_id
 from .schemas import BenchmarkCase, CaseWeightOverride, ModelPricing, Pricing, ScoreWeights
@@ -120,7 +120,12 @@ def _copy_penalty(response_text: str, observed_evidence: list[EvidenceItem]) -> 
     return 0.0
 
 
-def _hybrid_comparison_present(response_text: str) -> bool:
+def _hybrid_comparison_present(
+    response_text: str,
+    response_sections: list[AnswerSection] | None = None,
+) -> bool:
+    if any(str(section.kind or "").strip() == "comparison" for section in (response_sections or [])):
+        return True
     normalized = _normalize_text(response_text)
     return any(marker in normalized for marker in _COMPARISON_MARKERS)
 
@@ -206,6 +211,7 @@ def score_answer_quality(
     response_text: str,
     observed_evidence: list[EvidenceItem],
     *,
+    response_sections: list[AnswerSection] | None = None,
     synthesis_mode: str | None = None,
 ) -> float:
     text = response_text or ""
@@ -228,7 +234,7 @@ def score_answer_quality(
     if copy_penalty > 0.0:
         quality = max(0.0, quality - copy_penalty)
 
-    if case.category == "hybrid" and not _hybrid_comparison_present(text):
+    if case.category == "hybrid" and not _hybrid_comparison_present(text, response_sections):
         quality = min(quality, 0.25)
 
     if case.category in {"docs_only", "hybrid"} and synthesis_mode == "deterministic_grounded_direct":
@@ -396,6 +402,7 @@ def compute_rule_scores(
     synthesis_mode: str | None = None,
     valid_claim_count: int = 0,
     invalid_claim_count: int = 0,
+    response_sections: list[AnswerSection] | None = None,
     **_unused: Any,
 ) -> dict[str, float]:
     _ = retrieval_diagnostics, valid_claim_count
@@ -404,6 +411,7 @@ def compute_rule_scores(
             case,
             response_text,
             observed_evidence,
+            response_sections=response_sections,
             synthesis_mode=synthesis_mode,
         ),
         "groundedness": score_groundedness(
