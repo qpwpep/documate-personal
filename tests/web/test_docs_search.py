@@ -115,6 +115,41 @@ class DocsSearchTest(unittest.TestCase):
         first_kwargs = mock_request_tavily_search.call_args_list[0].kwargs
         self.assertEqual(first_kwargs["include_domains"], ["numpy.org"])
 
+    @patch("src.tools.docs_search.request_tavily_search")
+    def test_docs_search_uses_fallback_when_first_batch_is_docs_chrome_only(self, mock_request_tavily_search) -> None:
+        mock_request_tavily_search.side_effect = [
+            {
+                "results": [
+                    {
+                        "url": "https://numpy.org/doc/stable/user/basics.broadcasting.html",
+                        "title": "Broadcasting",
+                        "content": "Home > Docs > API\nTable of contents\nPrevious: Intro",
+                        "score": 0.91,
+                    }
+                ]
+            },
+            {
+                "results": [
+                    {
+                        "url": "https://numpy.org/doc/stable/user/basics.broadcasting.html",
+                        "title": "Broadcasting",
+                        "content": "Broadcasting stretches compatible array dimensions.",
+                        "score": 0.88,
+                    }
+                ]
+            },
+        ]
+
+        registry = build_tool_registry(AppSettings(openai_api_key="test", tavily_api_key="test"))
+        result = registry.tavily_search_tool.func(query="numpy official docs")
+
+        self.assertGreaterEqual(len(mock_request_tavily_search.call_args_list), 2)
+        self.assertEqual(
+            [item["url_or_path"] for item in result["evidence"]],
+            ["https://numpy.org/doc/stable/user/basics.broadcasting.html"],
+        )
+        self.assertIn("Broadcasting stretches compatible array dimensions.", result["evidence"][0]["snippet"])
+
 
 if __name__ == "__main__":
     unittest.main()

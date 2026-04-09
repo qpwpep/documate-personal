@@ -148,6 +148,10 @@ class RunnerRequestPayloadTest(unittest.TestCase):
                         {"text": "공식 설명", "evidence_ids": ["url:https://numpy.org/doc/stable/"]},
                         {"text": "업로드 비교", "evidence_ids": ["path:uploads/demo/sample.ipynb#cell=0;chunk=0;start=0;end=12"]},
                     ],
+                    "sections": [
+                        {"kind": "official_docs", "heading": "공식 문서", "body": "공식 설명"},
+                        {"kind": "comparison", "heading": "비교", "body": "업로드 비교"},
+                    ],
                     "evidence": [
                         {
                             "kind": "official",
@@ -262,6 +266,8 @@ class RunnerRequestPayloadTest(unittest.TestCase):
         self.assertIsNotNone(judge.kwargs)
         self.assertEqual(len(judge.kwargs["claims"]), 2)
         self.assertEqual(len(judge.kwargs["response_evidence"]), 2)
+        self.assertEqual(len(judge.kwargs["sections"]), 2)
+        self.assertEqual(judge.kwargs["sections"][0].kind, "official_docs")
         self.assertEqual(len(judge.kwargs["observed_evidence"]), 1)
         self.assertEqual(len(judge.kwargs["retrieval_diagnostics"]), 2)
         self.assertEqual(judge.kwargs["validator_reason"], "low_score")

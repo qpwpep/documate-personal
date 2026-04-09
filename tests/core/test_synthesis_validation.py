@@ -637,6 +637,53 @@ class SynthesisValidationTest(unittest.TestCase):
         self.assertEqual(len(_debug(updates).llm_calls), 1)
         self.assertEqual(_debug(updates).llm_calls[0].path, "structured")
 
+    def test_synthesize_prefers_sections_for_rendered_answer(self) -> None:
+        capture_llm = _CaptureStructuredSynthesizeLLM(
+            {
+                "answer": "ignored claim join",
+                "claims": [
+                    {
+                        "text": "Broadcasting expands compatible array shapes.",
+                        "evidence_ids": ["url:https://numpy.org/doc/stable/"],
+                        "confidence": 0.92,
+                    }
+                ],
+                "confidence": 0.92,
+                "sections": [
+                    {
+                        "kind": "summary",
+                        "heading": "요약",
+                        "body": "브로드캐스팅은 호환되는 배열 차원을 확장합니다.",
+                    },
+                    {
+                        "kind": "official_docs",
+                        "heading": "공식 문서",
+                        "body": "NumPy 공식 문서는 브로드캐스팅 규칙을 설명합니다.",
+                    },
+                ],
+            },
+            include_raw=True,
+        )
+        synthesize_node = make_synthesize_node(capture_llm, verbose=False, max_turns=8)
+
+        updates = synthesize_node(
+            _state(
+                {
+                    "messages": [HumanMessage(content="Explain numpy broadcasting.")],
+                    "retrieved_evidence": [_docs_evidence()],
+                    "synthesis_attempt": 0,
+                }
+            )
+        )
+
+        self.assertEqual(
+            _response(updates).final_answer,
+            "요약\n브로드캐스팅은 호환되는 배열 차원을 확장합니다.\n\n공식 문서\nNumPy 공식 문서는 브로드캐스팅 규칙을 설명합니다.",
+        )
+        self.assertEqual(_response(updates).payload.answer, _response(updates).final_answer)
+        self.assertEqual(len(_response(updates).payload.claims), 1)
+        self.assertEqual(len(_response(updates).payload.sections), 2)
+
     def test_synthesize_empty_structured_output_falls_back_to_non_blank_answer(self) -> None:
         capture_llm = _CaptureStructuredSynthesizeLLM(
             {
