@@ -19,18 +19,22 @@ docs_only = 0.70
 hybrid = 0.70
 
 [pricing]
-prompt_per_1k_usd = 0.00015
-completion_per_1k_usd = 0.00060
+prompt_per_1k_usd = 0.00025
+completion_per_1k_usd = 0.00200
 
 [pricing.models."gpt-5-mini"]
-prompt_per_1k_usd = 0.00015
-completion_per_1k_usd = 0.00060
+prompt_per_1k_usd = 0.00025
+completion_per_1k_usd = 0.00200
 
 [pricing.models."gpt-5-nano"]
-prompt_per_1k_usd = 0.00015
-completion_per_1k_usd = 0.00060
+prompt_per_1k_usd = 0.00005
+completion_per_1k_usd = 0.00040
+
+[pricing.models."gpt-5.4-nano"]
+prompt_per_1k_usd = 0.00020
+completion_per_1k_usd = 0.00125
 
 [runtime]
-judge_model = "gpt-5-mini"
+judge_model = "gpt-5.4-nano"
 judge_enabled = true
 request_timeout_seconds = 60
