@@ -30,6 +30,7 @@ def _build_rendered_payload_from_payload(payload: Any) -> RenderedSynthesisPaylo
             answer=payload.answer,
             claims=payload.claims,
             confidence=payload.confidence,
+            sections=payload.sections,
         ),
     )
 
