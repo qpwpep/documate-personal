@@ -12,6 +12,8 @@ RetryReason = Literal[
     "blocked_missing_upload",
     "unsupported_claims",
     "missing",
+    "missing_route_coverage",
+    "missing_sections",
 ]
 PlannerStatus = Literal["llm", "deterministic", "heuristic_fallback", "fallback_no_routes"]
 PlannerOverrideReason = Literal[
@@ -34,7 +36,6 @@ RETRYABLE_REASONS: set[RetryReason] = {
     "no_evidence",
     "low_score",
     "tool_error",
-    "unsupported_claims",
     "missing",
 }
 DEBUG_SCHEMA_VERSION = 2
