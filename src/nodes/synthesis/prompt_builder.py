@@ -5,6 +5,7 @@ from typing import Any
 
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage, ToolMessage
 
+from ...answer_schema import clean_grounded_text
 from ...contracts import GraphState
 from ...contracts.boundary.runtime import get_runtime_state
 from ...request_contracts import infer_answer_contract, render_answer_contract_prompt
@@ -77,6 +78,11 @@ def _prepare_evidence_for_prompt(
         if not isinstance(item, dict):
             continue
         prompt_item = dict(item)
+        if str(prompt_item.get("kind") or "").strip().lower() == "official":
+            cleaned_title = clean_grounded_text(str(prompt_item.get("title") or ""))
+            cleaned_snippet = clean_grounded_text(str(prompt_item.get("snippet") or ""))
+            prompt_item["title"] = cleaned_title
+            prompt_item["snippet"] = cleaned_snippet
         effective_limit = snippet_char_limit
         if remaining_budget is not None:
             if remaining_budget <= 0:
@@ -149,20 +155,6 @@ def _build_synthesis_instruction_block(
     return "\n".join(lines)
 
 
-def _split_prompt_evidence_by_kind(
-    prompt_evidence: list[dict[str, Any]],
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    official_items = [
-        item for item in prompt_evidence
-        if str(item.get("kind") or "").strip().lower() == "official"
-    ]
-    local_items = [
-        item for item in prompt_evidence
-        if str(item.get("kind") or "").strip().lower() == "local"
-    ]
-    return official_items, local_items
-
-
 def build_synthesis_messages(
     *,
     state: GraphState,
@@ -202,20 +194,6 @@ def build_synthesis_messages(
     model_messages.append(
         SystemMessage(content=f"[Retrieved Evidence]\n{format_evidence_for_prompt(prompt_evidence)}")
     )
-    if has_hybrid_evidence:
-        official_evidence, local_evidence = _split_prompt_evidence_by_kind(prompt_evidence)
-        if official_evidence:
-            model_messages.append(
-                SystemMessage(
-                    content=f"[Official Docs Evidence]\n{format_evidence_for_prompt(official_evidence[:2])}"
-                )
-            )
-        if local_evidence:
-            model_messages.append(
-                SystemMessage(
-                    content=f"[Uploaded Code Evidence]\n{format_evidence_for_prompt(local_evidence[:2])}"
-                )
-            )
     model_messages.append(SystemMessage(content=render_answer_contract_prompt(answer_contract)))
     model_messages.append(
         SystemMessage(
