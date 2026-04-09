@@ -48,6 +48,9 @@ class SynthesisPromptBuilderTest(unittest.TestCase):
         ]
         self.assertEqual(len(instruction_messages), 1)
         self.assertTrue(all("[Action Request]" not in content for content in system_messages))
+        self.assertEqual(sum(1 for content in system_messages if "[Retrieved Evidence]" in content), 1)
+        self.assertTrue(all("[Official Docs Evidence]" not in content for content in system_messages))
+        self.assertTrue(all("[Uploaded Code Evidence]" not in content for content in system_messages))
         self.assertIn("Action requests:", instruction_messages[0])
         self.assertIn("[Hybrid Synthesis]", instruction_messages[0])
         self.assertIn("official takeaway first", instruction_messages[0])
