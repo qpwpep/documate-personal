@@ -24,6 +24,8 @@ def build_llm_registry(settings: AppSettings) -> LLMRegistry:
         max_tokens=settings.synthesis_max_tokens,
         timeout=settings.synthesis_timeout_seconds,
         max_retries=settings.synthesis_max_retries,
+        use_responses_api=True,
+        output_version="responses/v1",
         verbose=settings.verbose,
     )
     llm_planner_base = ChatOpenAI(
