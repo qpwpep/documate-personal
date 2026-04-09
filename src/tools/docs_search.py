@@ -8,6 +8,7 @@ import requests
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field
 
+from ..answer_schema import clean_grounded_text
 from ..rules import get_rules_config
 from ..settings import AppSettings
 from ._common import (
@@ -130,10 +131,11 @@ def _result_matches_domains(url: str, allowed_domains: set[str]) -> bool:
 
 
 def _tokenize_topic_terms(text: str) -> set[str]:
+    stopwords = {"official", "docs", "documentation", "reference"}
     return {
         token.lower()
         for token in re.findall(r"[A-Za-z0-9_.:/-]+", str(text or ""))
-        if len(token) >= 2
+        if len(token) >= 2 and token.lower() not in stopwords
     }
 
 
@@ -168,6 +170,8 @@ def _filter_docs_evidence_by_topic_purity(
         key=lambda item: (_entity_hit_score(query, item), float(item.get("score") or 0.0)),
         reverse=True,
     )
+    if _entity_hit_score(query, ranked[0]) <= 0.0:
+        return ranked[:2]
     anchor = ranked[0]
     anchor_cluster = _path_cluster(str(anchor.get("url_or_path") or ""))
     kept = [anchor]
@@ -179,6 +183,63 @@ def _filter_docs_evidence_by_topic_purity(
     if len(kept) < len(evidence_items):
         retrieval_warnings.append("topic_purity_pruned")
     return kept[:2]
+
+
+def _evidence_item_has_grounded_text(item: dict[str, Any]) -> bool:
+    if not isinstance(item, dict):
+        return False
+    cleaned_snippet = clean_grounded_text(str(item.get("snippet") or ""))
+    cleaned_title = clean_grounded_text(str(item.get("title") or ""))
+    if cleaned_snippet or cleaned_title:
+        return True
+    combined_raw = " ".join(
+        part.strip().lower()
+        for part in (str(item.get("title") or ""), str(item.get("snippet") or ""))
+        if part and part.strip()
+    )
+    chrome_markers = (
+        "table of contents",
+        "on this page",
+        "previous:",
+        "next:",
+        "skip to content",
+        "edit this page",
+        "view source",
+        "home >",
+    )
+    return not any(marker in combined_raw for marker in chrome_markers)
+
+
+def _has_meaningful_docs_evidence(evidence_items: list[dict[str, Any]]) -> bool:
+    return any(_evidence_item_has_grounded_text(item) for item in evidence_items)
+
+
+def _docs_evidence_preference(item: Any) -> tuple[int, int, float]:
+    grounded_snippet = clean_grounded_text(str(getattr(item, "snippet", "") or ""))
+    grounded_title = clean_grounded_text(str(getattr(item, "title", "") or ""))
+    score = float(getattr(item, "score", 0.0) or 0.0)
+    return (
+        1 if grounded_snippet or grounded_title else 0,
+        len(grounded_snippet),
+        score,
+    )
+
+
+def _merge_docs_evidence_items(items: list[Any]) -> list[Any]:
+    merged_by_source: dict[str, Any] = {}
+    ordered_source_ids: list[str] = []
+    for item in items:
+        source_id = str(getattr(item, "source_id", "") or "").strip()
+        if not source_id:
+            continue
+        current = merged_by_source.get(source_id)
+        if current is None:
+            merged_by_source[source_id] = item
+            ordered_source_ids.append(source_id)
+            continue
+        if _docs_evidence_preference(item) > _docs_evidence_preference(current):
+            merged_by_source[source_id] = item
+    return [merged_by_source[source_id] for source_id in ordered_source_ids]
 
 
 def _collect_docs_search_evidence(
@@ -362,7 +423,13 @@ def build_docs_search_tool(settings: AppSettings) -> Any:
         raw_scores.extend(batch_raw_scores)
 
         for fallback_query in fallback_queries:
-            if evidence_items:
+            deduped_batch = dedupe_evidence_dicts(evidence_items)
+            filtered_batch = _filter_docs_evidence_by_topic_purity(
+                effective_query,
+                deduped_batch,
+                retrieval_warnings,
+            )
+            if _has_meaningful_docs_evidence(filtered_batch):
                 break
             try:
                 fallback_results = request_tavily_search(
@@ -385,8 +452,11 @@ def build_docs_search_tool(settings: AppSettings) -> Any:
             evidence_items.extend(batch_evidence)
             raw_scores.extend(batch_raw_scores)
 
-        evidence = dedupe_evidence_dicts(evidence_items)
+        evidence = dedupe_evidence_dicts(_merge_docs_evidence_items(evidence_items))
         evidence = _filter_docs_evidence_by_topic_purity(effective_query, evidence, retrieval_warnings)
+        if evidence and not _has_meaningful_docs_evidence(evidence):
+            retrieval_warnings.append("docs_chrome_only")
+            evidence = []
         return build_retrieval_payload(
             tool="tavily_search",
             route="docs",

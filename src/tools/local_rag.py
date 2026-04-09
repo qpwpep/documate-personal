@@ -236,12 +236,8 @@ def _normalize_ranked_scores(
     min_score = min(finite_scores)
     max_score = max(finite_scores)
     requires_rescale = min_score < 0.0 or max_score > 1.0
-    warnings = retrieval_warnings if retrieval_warnings is not None else []
     if not requires_rescale:
         return [(doc, float(score) if score is not None else None, float(score) if score is not None else None) for doc, score in docs_with_scores]
-    if "relevance_score_out_of_range" not in warnings:
-        warnings.append("relevance_score_out_of_range")
-
 
     normalized_rows: list[tuple[Any, float | None, float | None]] = []
     for index, (doc, score) in enumerate(docs_with_scores):
@@ -249,10 +245,15 @@ def _normalize_ranked_scores(
         if raw_score is None or not math.isfinite(raw_score):
             normalized_rows.append((doc, None, raw_score))
             continue
-        if max_score == min_score:
-            normalized_score = 1.0
+        if raw_score < 0.0 and max_score <= 1.0:
+            normalized_score = 0.0
+        elif max_score > 1.0 and min_score >= 0.0:
+            if max_score == min_score:
+                normalized_score = 1.0
+            else:
+                normalized_score = (raw_score - min_score) / (max_score - min_score)
         else:
-            normalized_score = (raw_score - min_score) / (max_score - min_score)
+            normalized_score = raw_score
         normalized_rows.append((doc, max(0.0, min(1.0, normalized_score)), raw_score))
     return normalized_rows
 
