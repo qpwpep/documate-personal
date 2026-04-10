@@ -35,6 +35,9 @@ def _keyword_pattern():
     return re.compile(_validation_rules().keyword_pattern)
 
 
+_HYBRID_LOCAL_MIN_NORMALIZED_SCORE = 0.15
+
+
 @dataclass(slots=True)
 class ValidationSnapshot:
     user_input: str
@@ -71,6 +74,19 @@ def coerce_evidence_list(items: list[EvidenceItem]) -> list[EvidenceItem]:
 
 def route_for_item_tool(tool_name: str) -> str:
     return route_for_tool(str(tool_name or ""))
+
+
+def _clamp_score(value: Any) -> float | None:
+    try:
+        normalized = float(value)
+    except (TypeError, ValueError):
+        return None
+    return max(0.0, min(1.0, normalized))
+
+
+def is_hybrid_compare_routes(required_routes: list[str] | None) -> bool:
+    routes = {str(route or "").strip() for route in (required_routes or []) if str(route or "").strip()}
+    return "docs" in routes and bool(routes.intersection({"upload", "local"}))
 
 
 def detect_missing_route_coverage(
@@ -146,8 +162,25 @@ def has_exact_identifier_hit(query: str, items: list[EvidenceItem]) -> bool:
     return any(identifier in combined_text for identifier in identifiers)
 
 
+def identifier_overlap_count(query: str, items: list[EvidenceItem]) -> int:
+    identifiers = extract_code_identifiers(query)
+    if not identifiers:
+        return 0
+    combined_text = combine_evidence_text(items)
+    return sum(1 for identifier in identifiers if identifier in combined_text)
+
+
 def keyword_overlap_count(query: str, items: list[EvidenceItem]) -> int:
     query_keywords = extract_keywords(query)
+    if not query_keywords:
+        return 0
+    evidence_keywords = extract_keywords(combine_evidence_text(items))
+    return len(query_keywords.intersection(evidence_keywords))
+
+
+def non_identifier_keyword_overlap_count(query: str, items: list[EvidenceItem]) -> int:
+    query_identifiers = extract_code_identifiers(query)
+    query_keywords = extract_keywords(query) - query_identifiers
     if not query_keywords:
         return 0
     evidence_keywords = extract_keywords(combine_evidence_text(items))
@@ -158,20 +191,93 @@ def route_has_strong_lexical_match(query: str, items: list[EvidenceItem]) -> boo
     return has_exact_identifier_hit(query, items) or keyword_overlap_count(query, items) >= 2
 
 
-def route_passes_validation(route: str, query: str, items: list[EvidenceItem]) -> bool:
+def route_has_hybrid_local_lexical_match(query: str, items: list[EvidenceItem]) -> bool:
+    identifier_hits = identifier_overlap_count(query, items)
+    return bool(
+        identifier_hits >= 2
+        or (identifier_hits >= 1 and non_identifier_keyword_overlap_count(query, items) >= 1)
+    )
+
+
+def resolve_validation_query(
+    *,
+    route: str,
+    route_query: str,
+    user_input: str,
+    required_routes: list[str] | None = None,
+) -> str:
+    normalized_query = str(route_query or "").strip()
+    if (
+        route in {"upload", "local"}
+        and is_hybrid_compare_routes(required_routes)
+        and not extract_code_identifiers(normalized_query)
+        and len(extract_keywords(normalized_query)) < 2
+    ):
+        normalized_user_input = str(user_input or "").strip()
+        if normalized_user_input:
+            return normalized_user_input
+    return normalized_query or str(user_input or "").strip()
+
+
+def route_normalized_score(
+    items: list[EvidenceItem],
+    diagnostics: list[RetrievalDiagnostic] | None = None,
+) -> float | None:
+    diagnostic_scores = [
+        _clamp_score(item.normalized_score)
+        for item in (diagnostics or [])
+        if _clamp_score(item.normalized_score) is not None
+    ]
+    if diagnostic_scores:
+        return max(diagnostic_scores)
+
+    max_scores = [
+        _clamp_score(item.max_score)
+        for item in (diagnostics or [])
+        if _clamp_score(item.max_score) is not None
+    ]
+    if max_scores:
+        return max(max_scores)
+
+    return route_max_score(items)
+
+
+def route_passes_validation(
+    route: str,
+    query: str,
+    items: list[EvidenceItem],
+    *,
+    required_routes: list[str] | None = None,
+    diagnostics: list[RetrievalDiagnostic] | None = None,
+    user_input: str | None = None,
+) -> bool:
     if not items:
         return False
-    max_score = route_max_score(items)
+    effective_query = resolve_validation_query(
+        route=route,
+        route_query=query,
+        user_input=user_input or query,
+        required_routes=required_routes,
+    )
+    normalized_score = route_normalized_score(items, diagnostics)
     if route == "docs":
-        return bool((max_score is not None and max_score >= 0.5) or route_has_strong_lexical_match(query, items))
-    query_identifiers = extract_code_identifiers(query)
-    query_keywords = extract_keywords(query)
+        return bool(
+            (normalized_score is not None and normalized_score >= 0.5)
+            or route_has_strong_lexical_match(effective_query, items)
+        )
+    if route in {"upload", "local"} and is_hybrid_compare_routes(required_routes):
+        return bool(
+            (normalized_score is not None and normalized_score >= _HYBRID_LOCAL_MIN_NORMALIZED_SCORE)
+            or route_has_hybrid_local_lexical_match(effective_query, items)
+        )
+    query_identifiers = extract_code_identifiers(effective_query)
+    query_keywords = extract_keywords(effective_query)
     if not query_identifiers and len(query_keywords) < 2:
         return True
     return bool(
-        has_exact_identifier_hit(query, items)
-        or keyword_overlap_count(query, items) >= 2
-        or (max_score is not None and max_score > 0.0)
+        has_exact_identifier_hit(effective_query, items)
+        or keyword_overlap_count(effective_query, items) >= 2
+        or (normalized_score is not None and normalized_score > 0.0)
     )
 
 
@@ -278,10 +384,26 @@ def assess_validation(snapshot: ValidationSnapshot) -> ValidationAssessment:
             route_failures[route] = "no_evidence"
             continue
         route_query = route_query_for_validation(route, route_diagnostics, snapshot.user_input)
-        if not route_passes_validation(route, route_query, route_items):
+        validation_query = resolve_validation_query(
+            route=route,
+            route_query=route_query,
+            user_input=snapshot.user_input,
+            required_routes=snapshot.required_routes,
+        )
+        if not route_passes_validation(
+            route,
+            validation_query,
+            route_items,
+            required_routes=snapshot.required_routes,
+            diagnostics=route_diagnostics,
+        ):
             route_failures[route] = "low_score"
             continue
-        if route_has_warning(route_diagnostics) and not route_has_strong_lexical_match(route_query, route_items):
+        if (
+            route == "docs"
+            and route_has_warning(route_diagnostics)
+            and not route_has_strong_lexical_match(validation_query, route_items)
+        ):
             route_failures[route] = "low_score"
 
     if contains_tool_error(snapshot.current_attempt_retrieval_errors) and not tool_error_routes:

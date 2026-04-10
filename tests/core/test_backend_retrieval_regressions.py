@@ -1,5 +1,6 @@
 import unittest
 
+from src.contracts import RetrievalDiagnostic
 from src.evidence import truncate_snippet
 from src.nodes.planner.query_sanitizer import sanitize_retrieval_query
 from src.nodes.validation.evidence_validator import route_passes_validation
@@ -50,6 +51,123 @@ class BackendRetrievalRegressionTest(unittest.TestCase):
                 "upload",
                 "업로드한 파일에서 groupby를 어떻게 쓰는지 찾아서 설명해줘",
                 evidence_items,
+            )
+        )
+
+    def test_hybrid_upload_validation_rejects_generic_zero_score_match(self) -> None:
+        from src.evidence import EvidenceItem
+
+        evidence_items = [
+            EvidenceItem.model_validate(
+                {
+                    "kind": "local",
+                    "tool": "upload_search",
+                    "source_id": "path:uploads/demo/sample.py#chunk=0;start=0;end=96",
+                    "document_id": "path:uploads/demo/sample.py",
+                    "url_or_path": "uploads/demo/sample.py",
+                    "snippet": 'X_train, X_test = train_test_split(X, y, test_size=0.2, random_state=42)',
+                    "score": 0.0,
+                    "chunk_id": 0,
+                    "start_offset": 0,
+                    "end_offset": 96,
+                }
+            )
+        ]
+
+        self.assertFalse(
+            route_passes_validation(
+                "upload",
+                "uploaded notebook example",
+                evidence_items,
+                required_routes=["docs", "upload"],
+                diagnostics=[
+                    RetrievalDiagnostic(
+                        route="upload",
+                        tool="upload_search",
+                        status="success",
+                        query="uploaded notebook example",
+                        normalized_score=0.0,
+                    )
+                ],
+                user_input="Compare official train_test_split parameters with the uploaded notebook example.",
+            )
+        )
+
+    def test_hybrid_upload_validation_accepts_minimum_normalized_score(self) -> None:
+        from src.evidence import EvidenceItem
+
+        evidence_items = [
+            EvidenceItem.model_validate(
+                {
+                    "kind": "local",
+                    "tool": "upload_search",
+                    "source_id": "path:uploads/demo/sample.py#chunk=0;start=0;end=96",
+                    "document_id": "path:uploads/demo/sample.py",
+                    "url_or_path": "uploads/demo/sample.py",
+                    "snippet": "uploaded notebook result",
+                    "score": 0.15,
+                    "chunk_id": 0,
+                    "start_offset": 0,
+                    "end_offset": 96,
+                }
+            )
+        ]
+
+        self.assertTrue(
+            route_passes_validation(
+                "upload",
+                "uploaded notebook example",
+                evidence_items,
+                required_routes=["docs", "upload"],
+                diagnostics=[
+                    RetrievalDiagnostic(
+                        route="upload",
+                        tool="upload_search",
+                        status="success",
+                        query="uploaded notebook example",
+                        normalized_score=0.15,
+                    )
+                ],
+                user_input="Compare official docs with the uploaded notebook example.",
+            )
+        )
+
+    def test_hybrid_upload_validation_accepts_identifier_plus_keyword(self) -> None:
+        from src.evidence import EvidenceItem
+
+        evidence_items = [
+            EvidenceItem.model_validate(
+                {
+                    "kind": "local",
+                    "tool": "upload_search",
+                    "source_id": "path:uploads/demo/sample.py#chunk=0;start=0;end=96",
+                    "document_id": "path:uploads/demo/sample.py",
+                    "url_or_path": "uploads/demo/sample.py",
+                    "snippet": 'X_train, X_test = train_test_split(X, y, test_size=0.2, random_state=42)',
+                    "score": 0.05,
+                    "chunk_id": 0,
+                    "start_offset": 0,
+                    "end_offset": 96,
+                }
+            )
+        ]
+
+        self.assertTrue(
+            route_passes_validation(
+                "upload",
+                "uploaded notebook example",
+                evidence_items,
+                required_routes=["docs", "upload"],
+                diagnostics=[
+                    RetrievalDiagnostic(
+                        route="upload",
+                        tool="upload_search",
+                        status="success",
+                        query="uploaded notebook example",
+                        normalized_score=0.05,
+                    )
+                ],
+                user_input="Compare official train_test_split random_state guidance with the uploaded notebook example.",
             )
         )
 

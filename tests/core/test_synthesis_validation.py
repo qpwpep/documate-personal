@@ -279,6 +279,7 @@ class SynthesisValidationTest(unittest.TestCase):
         result = validate_node(
             _state(
                 {
+                    "user_input": "Compare official train_test_split docs with the uploaded notebook example.",
                     "planner_output": planner_output,
                     "retrieved_evidence": [
                         _docs_evidence(score=0.1, source_id="url:https://huggingface.co/docs/bad", snippet="unrelated content"),
@@ -289,7 +290,7 @@ class SynthesisValidationTest(unittest.TestCase):
                             "document_id": "path:uploads/demo/sample.ipynb",
                             "url_or_path": "uploads/demo/sample.ipynb",
                             "snippet": "X_train, X_test, y_train, y_test = train_test_split(...)",
-                            "score": 0.0,
+                            "score": 0.2,
                             "cell_id": 1,
                             "chunk_id": 0,
                             "start_offset": 0,
@@ -366,7 +367,7 @@ class SynthesisValidationTest(unittest.TestCase):
         self.assertEqual(_retry(result).retry_reason, "unsupported_claims")
         self.assertEqual(_response(result).payload.claims[0].evidence_ids, [valid_source])
 
-    def test_validate_evidence_unsupported_claims_rebalances_hybrid_routes(self) -> None:
+    def test_validate_evidence_unsupported_claims_rebalances_hybrid_routes_legacy(self) -> None:
         validate_node = make_validate_evidence_node(verbose=False)
         planner_output = PlannerOutput(
             use_retrieval=True,
@@ -378,6 +379,7 @@ class SynthesisValidationTest(unittest.TestCase):
         result = validate_node(
             _state(
                 {
+                    "user_input": "Compare official train_test_split random_state docs with the uploaded notebook example.",
                     "planner_output": planner_output,
                     "retrieved_evidence": [
                         _docs_evidence(
@@ -1108,12 +1110,13 @@ class SynthesisValidationTest(unittest.TestCase):
             use_retrieval=True,
             tasks=[
                 RetrievalTask(route="docs", query="train_test_split official docs", k=3),
-                RetrievalTask(route="upload", query="uploaded notebook example", k=3),
+                RetrievalTask(route="upload", query="train_test_split random_state uploaded notebook example", k=3),
             ],
         )
         result = validate_node(
             _state(
                 {
+                    "user_input": "Compare official train_test_split random_state docs with the uploaded notebook example.",
                     "planner_output": planner_output,
                     "retrieved_evidence": [
                         _docs_evidence(
