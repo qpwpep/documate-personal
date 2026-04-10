@@ -101,7 +101,6 @@ class NodeRefactorTest(unittest.TestCase):
         )
 
     def test_retrieval_batch_reuses_preserved_results_and_keeps_task_order(self) -> None:
-        docs_calls = {"count": 0}
         planner_output = PlannerOutput(
             use_retrieval=True,
             tasks=[
@@ -346,7 +345,7 @@ class NodeRefactorTest(unittest.TestCase):
                         score=0.1,
                     )
                 ),
-                EvidenceItem.model_validate(_upload_evidence()),
+                EvidenceItem.model_validate(_upload_evidence(score=0.2)),
             ],
             current_attempt_retrieval_errors=[],
             current_attempt_retrieval_diagnostics=[
@@ -365,6 +364,7 @@ class NodeRefactorTest(unittest.TestCase):
                     message="",
                     query="uploaded notebook example",
                     attempt=1,
+                    normalized_score=0.2,
                 ),
             ],
             response_payload=build_empty_response_payload(answer="draft"),
