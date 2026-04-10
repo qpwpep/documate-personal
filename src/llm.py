@@ -16,6 +16,13 @@ class LLMRegistry:
     verbose: bool
 
 
+def _derive_compact_synthesis_profile(settings: AppSettings) -> tuple[int, int]:
+    return (
+        max(1, int(settings.synthesis_max_tokens) // 2),
+        max(1, int(settings.synthesis_timeout_seconds) // 2),
+    )
+
+
 def build_llm_registry(settings: AppSettings) -> LLMRegistry:
     llm_synthesizer = ChatOpenAI(
         model=settings.chat_model,
@@ -24,6 +31,18 @@ def build_llm_registry(settings: AppSettings) -> LLMRegistry:
         max_tokens=settings.synthesis_max_tokens,
         timeout=settings.synthesis_timeout_seconds,
         max_retries=settings.synthesis_max_retries,
+        use_responses_api=True,
+        output_version="responses/v1",
+        verbose=settings.verbose,
+    )
+    compact_max_tokens, compact_timeout = _derive_compact_synthesis_profile(settings)
+    llm_synthesizer_compact = ChatOpenAI(
+        model=settings.chat_model,
+        api_key=settings.openai_api_key,
+        temperature=0,
+        max_tokens=compact_max_tokens,
+        timeout=compact_timeout,
+        max_retries=0,
         use_responses_api=True,
         output_version="responses/v1",
         verbose=settings.verbose,
@@ -57,7 +76,7 @@ def build_llm_registry(settings: AppSettings) -> LLMRegistry:
     return LLMRegistry(
         llm_planner=llm_planner,
         llm_synthesizer=llm_synthesizer,
-        llm_synthesizer_compact=None,
+        llm_synthesizer_compact=llm_synthesizer_compact,
         llm_summarizer=llm_summarizer,
         verbose=settings.verbose,
     )

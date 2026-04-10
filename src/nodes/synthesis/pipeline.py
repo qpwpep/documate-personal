@@ -22,6 +22,11 @@ _DEFAULT_GENERIC_FALLBACK_ANSWER = (
 )
 
 
+def _is_timeout_error(exc: Exception) -> bool:
+    lowered = str(exc).lower()
+    return "timeout" in lowered or "timed out" in lowered
+
+
 def _build_rendered_payload_from_payload(payload: Any) -> RenderedSynthesisPayload:
     return RenderedSynthesisPayload(
         payload=payload,
@@ -54,10 +59,45 @@ def _ensure_non_empty_rendered_payload(
     return _build_rendered_payload_from_payload(fallback_payload), True
 
 
-def run_synthesis_pipeline(
+def _invoke_structured_attempt(
     *,
     structured_synthesizer: Any,
     prepared: PreparedSynthesisInputs,
+    llm_calls: list[Any],
+    path: str,
+) -> tuple[RenderedSynthesisPayload, int]:
+    attempt_started = time.perf_counter()
+    structured_result = structured_synthesizer.invoke(prepared.model_messages)
+    attempt_ms = elapsed_ms(attempt_started, time.perf_counter())
+    raw_response_obj, raw_message, structured_error = coerce_structured_synthesis_result(
+        structured_result
+    )
+    if raw_message is not None:
+        llm_calls.append(
+            build_llm_call_metadata(
+                stage="synthesis",
+                attempt=prepared.attempt,
+                path=path,  # type: ignore[arg-type]
+                message=raw_message,
+            )
+        )
+    if structured_error is not None:
+        raise structured_error
+    return (
+        render_synthesis_payload(
+            coerce_synthesis_output(raw_response_obj),
+            prepared.primary_evidence_items,
+        ),
+        attempt_ms,
+    )
+
+
+def run_synthesis_pipeline(
+    *,
+    structured_synthesizer: Any,
+    structured_synthesizer_compact: Any | None,
+    prepared: PreparedSynthesisInputs,
+    compact_prepared: PreparedSynthesisInputs | None,
     stage_started: float,
 ) -> SynthesisPipelineResult:
     synthesis_errors: list[str] = []
@@ -66,27 +106,13 @@ def run_synthesis_pipeline(
     fallback_ms: int | None = None
     synthesis_mode = "structured_only"
 
+    structured_started = time.perf_counter()
     try:
-        structured_started = time.perf_counter()
-        structured_result = structured_synthesizer.invoke(prepared.model_messages)
-        structured_ms = elapsed_ms(structured_started, time.perf_counter())
-        raw_response_obj, raw_message, structured_error = coerce_structured_synthesis_result(
-            structured_result
-        )
-        if raw_message is not None:
-            llm_calls.append(
-                build_llm_call_metadata(
-                    stage="synthesis",
-                    attempt=prepared.attempt,
-                    path="structured",
-                    message=raw_message,
-                )
-            )
-        if structured_error is not None:
-            raise structured_error
-        rendered = render_synthesis_payload(
-            coerce_synthesis_output(raw_response_obj),
-            prepared.primary_evidence_items,
+        rendered, structured_ms = _invoke_structured_attempt(
+            structured_synthesizer=structured_synthesizer,
+            prepared=prepared,
+            llm_calls=llm_calls,
+            path="structured",
         )
         rendered, used_empty_fallback = _ensure_non_empty_rendered_payload(
             rendered=rendered,
@@ -98,23 +124,64 @@ def run_synthesis_pipeline(
             fallback_ms = 0
             synthesis_mode = "structured_empty_fallback"
     except Exception as exc:
-        structured_ms = elapsed_ms(structured_started, time.perf_counter())
+        if structured_ms is None:
+            structured_ms = elapsed_ms(structured_started, time.perf_counter())
         synthesis_errors.append(
             (
                 f"synthesize: structured output timed out ({exc})"
-                if "timeout" in str(exc).lower() or "timed out" in str(exc).lower()
+                if _is_timeout_error(exc)
                 else f"synthesize: structured output failed ({exc})"
             )
         )
-        fallback_started = time.perf_counter()
-        fallback_payload = build_local_fallback_payload(
-            evidence_items=prepared.grounded_fallback_evidence_items,
-            retrieval_required=prepared.retrieval_required,
-            generic_answer=_DEFAULT_GENERIC_FALLBACK_ANSWER,
-        )
-        fallback_ms = elapsed_ms(fallback_started, time.perf_counter())
-        rendered = _build_rendered_payload_from_payload(fallback_payload)
-        synthesis_mode = "deterministic_grounded_fallback"
+        is_timeout = _is_timeout_error(exc)
+        if is_timeout and structured_synthesizer_compact is not None and compact_prepared is not None:
+            compact_started = time.perf_counter()
+            try:
+                rendered, _compact_ms = _invoke_structured_attempt(
+                    structured_synthesizer=structured_synthesizer_compact,
+                    prepared=compact_prepared,
+                    llm_calls=llm_calls,
+                    path="structured_compact_fallback",
+                )
+                rendered, used_empty_fallback = _ensure_non_empty_rendered_payload(
+                    rendered=rendered,
+                    prepared=prepared,
+                    generic_answer=_DEFAULT_GENERIC_FALLBACK_ANSWER,
+                )
+                fallback_ms = elapsed_ms(compact_started, time.perf_counter())
+                if used_empty_fallback:
+                    synthesis_errors.append("synthesize: compact structured output was empty")
+                    synthesis_mode = "timeout_grounded_fallback"
+                else:
+                    synthesis_mode = "compact_structured_fallback"
+            except Exception as compact_exc:
+                synthesis_errors.append(
+                    (
+                        f"synthesize: compact structured output timed out ({compact_exc})"
+                        if _is_timeout_error(compact_exc)
+                        else f"synthesize: compact structured output failed ({compact_exc})"
+                    )
+                )
+                fallback_payload = build_local_fallback_payload(
+                    evidence_items=prepared.grounded_fallback_evidence_items,
+                    retrieval_required=prepared.retrieval_required,
+                    generic_answer=_DEFAULT_GENERIC_FALLBACK_ANSWER,
+                )
+                rendered = _build_rendered_payload_from_payload(fallback_payload)
+                fallback_ms = elapsed_ms(compact_started, time.perf_counter())
+                synthesis_mode = "timeout_grounded_fallback"
+        else:
+            fallback_started = time.perf_counter()
+            fallback_payload = build_local_fallback_payload(
+                evidence_items=prepared.grounded_fallback_evidence_items,
+                retrieval_required=prepared.retrieval_required,
+                generic_answer=_DEFAULT_GENERIC_FALLBACK_ANSWER,
+            )
+            fallback_ms = elapsed_ms(fallback_started, time.perf_counter())
+            rendered = _build_rendered_payload_from_payload(fallback_payload)
+            synthesis_mode = (
+                "timeout_grounded_fallback" if is_timeout else "deterministic_grounded_fallback"
+            )
 
     total_ms = elapsed_ms(stage_started, time.perf_counter())
     return SynthesisPipelineResult(
