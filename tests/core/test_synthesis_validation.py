@@ -13,6 +13,7 @@ from .helpers import (
     _CaptureSummaryLLM,
     _CaptureSynthesizeLLM,
     _StructuredThenPlainFallbackSynthesizeLLM,
+    _TimeoutStructuredSynthesizeLLM,
     build_legacy_state,
 )
 
@@ -835,6 +836,94 @@ class SynthesisValidationTest(unittest.TestCase):
             item for item in _debug(updates).latency_trace if item.get("kind") == "synthesis_attempt"
         ]
         self.assertEqual(synthesis_attempts[0]["mode"], "deterministic_grounded_fallback")
+
+    def test_synthesize_retries_timeout_with_compact_structured_budget(self) -> None:
+        primary_llm = _TimeoutStructuredSynthesizeLLM()
+        compact_llm = _CaptureStructuredSynthesizeLLM(
+            payload={
+                "answer": "Compact retry kept the answer grounded.",
+                "claims": [
+                    {
+                        "text": "Broadcasting expands compatible array shapes across dimensions.",
+                        "evidence_ids": ["url:https://numpy.org/doc/stable/"],
+                        "confidence": 0.9,
+                    }
+                ],
+                "confidence": 0.9,
+            },
+            include_raw=True,
+        )
+        synthesize_node = make_synthesize_node(
+            primary_llm,
+            llm_synthesizer_compact=compact_llm,
+            verbose=False,
+            max_turns=6,
+            synthesis_max_tokens=900,
+            prompt_snippet_char_limit=400,
+        )
+        long_snippet = "Broadcasting expands compatible array shapes across dimensions. " * 20
+
+        updates = synthesize_node(
+            _state(
+                {
+                    "messages": [HumanMessage(content="Explain numpy broadcasting.")],
+                    "user_input": "Explain numpy broadcasting.",
+                    "retrieved_evidence": [_docs_evidence(snippet=long_snippet)],
+                    "synthesis_attempt": 0,
+                }
+            )
+        )
+
+        self.assertEqual(primary_llm.call_count, 1)
+        self.assertIsNotNone(compact_llm.last_messages)
+        self.assertIn("Broadcasting expands compatible array shapes across dimensions.", _response(updates).final_answer)
+        self.assertEqual([item.path for item in _debug(updates).llm_calls], ["structured_compact_fallback"])
+        synthesis_attempts = [
+            item for item in _debug(updates).latency_trace if item.get("kind") == "synthesis_attempt"
+        ]
+        self.assertEqual(synthesis_attempts[0]["mode"], "compact_structured_fallback")
+
+        primary_retrieved = next(
+            str(message.content)
+            for message in (primary_llm.last_messages or [])
+            if isinstance(message, SystemMessage) and "[Retrieved Evidence]" in str(message.content)
+        )
+        compact_retrieved = next(
+            str(message.content)
+            for message in (compact_llm.last_messages or [])
+            if isinstance(message, SystemMessage) and "[Retrieved Evidence]" in str(message.content)
+        )
+        self.assertLess(len(compact_retrieved), len(primary_retrieved))
+
+    def test_synthesize_timeout_uses_deterministic_fallback_only_after_compact_retry_fails(self) -> None:
+        primary_llm = _TimeoutStructuredSynthesizeLLM()
+        compact_llm = _TimeoutStructuredSynthesizeLLM()
+        synthesize_node = make_synthesize_node(
+            primary_llm,
+            llm_synthesizer_compact=compact_llm,
+            verbose=False,
+            max_turns=6,
+        )
+
+        updates = synthesize_node(
+            _state(
+                {
+                    "messages": [HumanMessage(content="Explain numpy broadcasting.")],
+                    "user_input": "Explain numpy broadcasting.",
+                    "retrieved_evidence": [_docs_evidence()],
+                    "synthesis_attempt": 0,
+                }
+            )
+        )
+
+        self.assertEqual(primary_llm.call_count, 1)
+        self.assertEqual(compact_llm.call_count, 1)
+        self.assertIn("Broadcasting expands compatible array shapes.", _response(updates).final_answer)
+        self.assertEqual(len(_debug(updates).llm_calls), 0)
+        synthesis_attempts = [
+            item for item in _debug(updates).latency_trace if item.get("kind") == "synthesis_attempt"
+        ]
+        self.assertEqual(synthesis_attempts[0]["mode"], "timeout_grounded_fallback")
 
     def test_synthesize_deterministic_fallback_strips_docs_navigation_chrome(self) -> None:
         primary_llm = _StructuredThenPlainFallbackSynthesizeLLM()

@@ -50,7 +50,7 @@ class LLMRegistryTest(unittest.TestCase):
 
         registry = build_llm_registry(settings)
 
-        self.assertEqual(len(_FakeChatOpenAI.created_kwargs), 3)
+        self.assertEqual(len(_FakeChatOpenAI.created_kwargs), 4)
         synthesizer_kwargs = _FakeChatOpenAI.created_kwargs[0]
         self.assertEqual(synthesizer_kwargs["temperature"], 0)
         self.assertEqual(synthesizer_kwargs["timeout"], 9)
@@ -59,9 +59,16 @@ class LLMRegistryTest(unittest.TestCase):
         self.assertTrue(synthesizer_kwargs["use_responses_api"])
         self.assertEqual(synthesizer_kwargs["output_version"], "responses/v1")
         self.assertEqual(synthesizer_kwargs["verbose"], False)
-        planner_kwargs = _FakeChatOpenAI.created_kwargs[1]
+        compact_kwargs = _FakeChatOpenAI.created_kwargs[1]
+        self.assertEqual(compact_kwargs["temperature"], 0)
+        self.assertEqual(compact_kwargs["timeout"], 4)
+        self.assertEqual(compact_kwargs["max_retries"], 0)
+        self.assertEqual(compact_kwargs["max_tokens"], 388)
+        self.assertTrue(compact_kwargs["use_responses_api"])
+        self.assertEqual(compact_kwargs["output_version"], "responses/v1")
+        planner_kwargs = _FakeChatOpenAI.created_kwargs[2]
         self.assertEqual(planner_kwargs["max_tokens"], 654)
-        self.assertIsNone(registry.llm_synthesizer_compact)
+        self.assertIsNotNone(registry.llm_synthesizer_compact)
         self.assertEqual(_FakeChatOpenAI.structured_args[0][0], PlannerOutput)
         self.assertEqual(_FakeChatOpenAI.structured_kwargs[0]["include_raw"], True)
 
