@@ -8,7 +8,7 @@ from ...contracts import GraphState
 from ...contracts.boundary.debug import get_debug_state
 from ...logging_utils import log_event
 from .context import build_synthesis_context, prepare_synthesis_inputs
-from .models import PreparedSynthesisInputs, SynthesisPipelineResult
+from .models import PreparedSynthesisInputs
 from .payload_builder import build_structured_synthesizer
 from .pipeline import run_synthesis_pipeline
 from .short_circuit import maybe_short_circuit_synthesis
@@ -28,6 +28,17 @@ def _resolve_prompt_evidence_char_budget(
     return snippet_limit, evidence_budget
 
 
+def _resolve_compact_prompt_budgets(
+    *,
+    snippet_limit: int,
+    evidence_budget: int,
+) -> tuple[int, int]:
+    return (
+        max(80, int(snippet_limit) // 2),
+        max(350, int(evidence_budget) // 2),
+    )
+
+
 def make_synthesize_node(
     llm_synthesizer: Any,
     llm_synthesizer_compact: Any | None = None,
@@ -38,9 +49,18 @@ def make_synthesize_node(
     has_default_slack_destination: bool = False,
 ):
     structured_synthesizer = build_structured_synthesizer(llm_synthesizer)
+    structured_synthesizer_compact = (
+        build_structured_synthesizer(llm_synthesizer_compact)
+        if llm_synthesizer_compact is not None
+        else None
+    )
     effective_snippet_limit, evidence_char_budget = _resolve_prompt_evidence_char_budget(
         synthesis_max_tokens=synthesis_max_tokens,
         prompt_snippet_char_limit=prompt_snippet_char_limit,
+    )
+    compact_snippet_limit, compact_evidence_char_budget = _resolve_compact_prompt_budgets(
+        snippet_limit=effective_snippet_limit,
+        evidence_budget=evidence_char_budget,
     )
 
     def synthesize(state: GraphState) -> GraphState:
@@ -76,9 +96,21 @@ def make_synthesize_node(
                 after=prepared.history_after,
             )
 
+        compact_prepared: PreparedSynthesisInputs | None = None
+        if structured_synthesizer_compact is not None:
+            compact_prepared = prepare_synthesis_inputs(
+                state=state,
+                context=context,
+                max_turns=max_turns,
+                prompt_snippet_char_limit=compact_snippet_limit,
+                prompt_evidence_char_budget=compact_evidence_char_budget,
+            )
+
         pipeline_result = run_synthesis_pipeline(
             structured_synthesizer=structured_synthesizer,
+            structured_synthesizer_compact=structured_synthesizer_compact,
             prepared=prepared,
+            compact_prepared=compact_prepared,
             stage_started=stage_started,
         )
         return build_synthesis_updates(
