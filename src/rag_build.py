@@ -3,14 +3,22 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
-from langchain_chroma import Chroma
-from langchain_openai import OpenAIEmbeddings
-
+from .chroma_store import (
+    CHROMA_DISTANCE_METRIC,
+    INDEX_SCHEMA_VERSION,
+    NORMALIZATION_VERSION,
+    NOTEBOOK_COLLECTION_NAME,
+    build_openai_embeddings,
+    create_chroma_vectorstore,
+)
 from .chunking import chunk_notebook_path
 from .logging_utils import configure_logging, log_event
+from .notebook_loader import is_internal_canonical_path
 from .settings import AppSettings, ConfigurationError, get_settings
 
 
@@ -18,6 +26,13 @@ CHUNK_SIZE = 1000
 CHUNK_OVERLAP = 150
 BATCH_SIZE = 256
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class IndexManifest:
+    files: dict[str, float]
+    is_legacy: bool = False
+    requires_full_rebuild: bool = False
 
 
 @dataclass(frozen=True)
@@ -36,23 +51,62 @@ def _notebook_paths(*, data_dir: Path, uploads_dir: Path) -> dict[str, float]:
         if not root.exists():
             continue
         for path in sorted(root.rglob("*.ipynb")):
+            if is_internal_canonical_path(path):
+                continue
             paths[str(path)] = os.path.getmtime(path)
     return paths
 
 
-def _load_manifest(manifest_path: Path) -> dict[str, float]:
+def _load_manifest(manifest_path: Path) -> IndexManifest:
     if manifest_path.exists():
         try:
-            return json.loads(manifest_path.read_text(encoding="utf-8"))
+            payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+            if (
+                isinstance(payload, dict)
+                and isinstance(payload.get("files"), dict)
+            ):
+                files = {
+                    str(path): float(mtime)
+                    for path, mtime in payload.get("files", {}).items()
+                }
+                requires_full_rebuild = bool(
+                    int(payload.get("index_version", 0) or 0) != INDEX_SCHEMA_VERSION
+                    or str(payload.get("metric") or "").strip().lower() != CHROMA_DISTANCE_METRIC
+                    or int(payload.get("normalization_version", 0) or 0) != NORMALIZATION_VERSION
+                )
+                return IndexManifest(
+                    files=files,
+                    is_legacy=False,
+                    requires_full_rebuild=requires_full_rebuild,
+                )
+            if isinstance(payload, dict):
+                return IndexManifest(
+                    files={
+                        str(path): float(mtime)
+                        for path, mtime in payload.items()
+                    },
+                    is_legacy=True,
+                    requires_full_rebuild=True,
+                )
         except Exception:
-            return {}
-    return {}
+            return IndexManifest(files={}, is_legacy=True, requires_full_rebuild=True)
+    return IndexManifest(files={}, is_legacy=False, requires_full_rebuild=False)
 
 
 def _save_manifest(manifest_path: Path, manifest: dict[str, float]) -> None:
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
     manifest_path.write_text(
-        json.dumps(manifest, ensure_ascii=False, indent=2),
+        json.dumps(
+            {
+                "index_version": INDEX_SCHEMA_VERSION,
+                "metric": CHROMA_DISTANCE_METRIC,
+                "normalization_version": NORMALIZATION_VERSION,
+                "collection_name": NOTEBOOK_COLLECTION_NAME,
+                "files": manifest,
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
         encoding="utf-8",
     )
 
@@ -69,12 +123,11 @@ def _load_ipynb_docs(file_paths: list[str]) -> list:
         )
     return docs
 
-
-def _ensure_chroma(*, embeddings: OpenAIEmbeddings, index_dir: Path) -> Chroma:
-    return Chroma(
-        embedding_function=embeddings,
-        persist_directory=str(index_dir),
-        collection_name="notebooks",
+def _ensure_chroma(*, embeddings: Any, index_dir: Path):
+    return create_chroma_vectorstore(
+        embeddings=embeddings,
+        persist_directory=index_dir,
+        collection_name=NOTEBOOK_COLLECTION_NAME,
     )
 
 
@@ -96,9 +149,17 @@ def build_rag_index(
 
     current = _notebook_paths(data_dir=data_dir, uploads_dir=uploads_dir)
     manifest = _load_manifest(manifest_path)
+    manifest_files = dict(manifest.files)
+    requires_full_rebuild = manifest.is_legacy or manifest.requires_full_rebuild
+    if not manifest_path.exists() and resolved_index_dir.exists() and any(resolved_index_dir.iterdir()):
+        requires_full_rebuild = True
 
-    to_add_or_update = [path for path, mtime in current.items() if manifest.get(path) != mtime]
-    to_delete = [path for path in manifest.keys() if path not in current]
+    if requires_full_rebuild and resolved_index_dir.exists():
+        shutil.rmtree(resolved_index_dir, ignore_errors=True)
+        manifest_files = {}
+
+    to_add_or_update = [path for path, mtime in current.items() if manifest_files.get(path) != mtime]
+    to_delete = [path for path in manifest_files.keys() if path not in current]
 
     log_event(
         logger,
@@ -109,12 +170,10 @@ def build_rag_index(
         reindexed_count=len(to_add_or_update),
         deleted_count=len(to_delete),
         index_dir=resolved_index_dir,
+        requires_full_rebuild=requires_full_rebuild,
     )
 
-    embeddings = OpenAIEmbeddings(
-        model="text-embedding-3-small",
-        api_key=settings.openai_api_key,
-    )
+    embeddings = build_openai_embeddings(settings.openai_api_key)
     chroma = _ensure_chroma(embeddings=embeddings, index_dir=resolved_index_dir)
 
     if to_delete:
@@ -148,11 +207,11 @@ def build_rag_index(
             )
 
         for path in to_add_or_update:
-            manifest[path] = current[path]
+            manifest_files[path] = current[path]
 
     for path in to_delete:
-        manifest.pop(path, None)
-    _save_manifest(manifest_path, manifest)
+        manifest_files.pop(path, None)
+    _save_manifest(manifest_path, manifest_files)
     chroma.get()
 
     summary = BuildSummary(
