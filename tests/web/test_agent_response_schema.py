@@ -72,7 +72,7 @@ class AgentResponseSchemaTest(unittest.TestCase):
             "trace": "trace-id",
             "file_path": None,
             "debug": {
-                "schema_version": 2,
+                "schema_version": 3,
                 "observability_status": "ok",
                 "missing_required_debug_fields": [],
                 "tool_calls": ["tavily_search"],
@@ -103,7 +103,7 @@ class AgentResponseSchemaTest(unittest.TestCase):
             "trace": "trace-id",
             "file_path": None,
             "debug": {
-                "schema_version": 2,
+                "schema_version": 3,
                 "observability_status": "ok",
                 "missing_required_debug_fields": [],
                 "tool_calls": ["tavily_search"],
@@ -154,7 +154,7 @@ class AgentResponseSchemaTest(unittest.TestCase):
             "trace": "trace-id",
             "file_path": None,
             "debug": {
-                "schema_version": 2,
+                "schema_version": 3,
                 "observability_status": "ok",
                 "missing_required_debug_fields": [],
                 "tool_calls": ["tavily_search"],
@@ -214,7 +214,7 @@ class AgentResponseSchemaTest(unittest.TestCase):
             "trace": "trace-id",
             "file_path": None,
             "debug": {
-                "schema_version": 2,
+                "schema_version": 3,
                 "observability_status": "ok",
                 "missing_required_debug_fields": [],
                 "tool_calls": ["upload_search"],
@@ -260,7 +260,7 @@ class AgentResponseSchemaTest(unittest.TestCase):
             "trace": "trace-id",
             "file_path": None,
             "debug": {
-                "schema_version": 2,
+                "schema_version": 3,
                 "observability_status": "ok",
                 "missing_required_debug_fields": [],
                 "tool_calls": ["tavily_search"],

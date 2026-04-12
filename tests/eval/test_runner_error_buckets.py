@@ -58,7 +58,7 @@ class RunnerErrorBucketsTest(unittest.TestCase):
                 "trace": "x",
                 "file_path": "",
                 "debug": {
-                    "schema_version": 2,
+                    "schema_version": 3,
                     "observability_status": "ok",
                     "missing_required_debug_fields": [],
                     "tool_calls": [],
@@ -98,7 +98,7 @@ class RunnerErrorBucketsTest(unittest.TestCase):
                 "trace": "x",
                 "file_path": "",
                 "debug": {
-                    "schema_version": 2,
+                    "schema_version": 3,
                     "observability_status": "ok",
                     "missing_required_debug_fields": [],
                     "tool_calls": ["tavily_search"],
@@ -139,7 +139,7 @@ class RunnerErrorBucketsTest(unittest.TestCase):
                 "trace": "x",
                 "file_path": "",
                 "debug": {
-                    "schema_version": 2,
+                    "schema_version": 3,
                     "observability_status": "ok",
                     "missing_required_debug_fields": [],
                     "tool_calls": ["tavily_search", "upload_search", "rag_search"],
@@ -220,7 +220,7 @@ class RunnerErrorBucketsTest(unittest.TestCase):
                 "trace": "x",
                 "file_path": "",
                 "debug": {
-                    "schema_version": 2,
+                    "schema_version": 3,
                     "observability_status": "ok",
                     "missing_required_debug_fields": [],
                     "tool_calls": ["tavily_search"],
@@ -298,7 +298,7 @@ class RunnerErrorBucketsTest(unittest.TestCase):
                 "trace": "x",
                 "file_path": "",
                 "debug": {
-                    "schema_version": 2,
+                    "schema_version": 3,
                     "observability_status": "ok",
                     "missing_required_debug_fields": [],
                     "tool_calls": ["tavily_search"],

@@ -23,26 +23,27 @@ def build_retrieval_payload(
     evidence: list[dict[str, Any]] | None = None,
     status: Literal["success", "no_result", "error", "unavailable"] = "success",
     message: str = "",
-    relevance_score: float | None = None,
-    raw_relevance_score: float | None = None,
+    normalized_score: float | None = None,
+    raw_score: float | None = None,
     result_count: int | None = None,
+    metric: str | None = None,
+    score_direction: Literal["higher_is_better", "lower_is_better"] | None = None,
     warnings: list[str] | None = None,
 ) -> dict[str, Any]:
     evidence_items = list(evidence or [])
-    normalized_relevance = relevance_score
-    if normalized_relevance is None:
+    resolved_metric = metric or ("provider_score" if route == "docs" else "l2")
+    resolved_score_direction = (
+        score_direction or ("higher_is_better" if route == "docs" else "lower_is_better")
+    )
+    resolved_normalized_score = normalized_score
+    if resolved_normalized_score is None:
         scores = [
             float(item.get("score"))
             for item in evidence_items
             if isinstance(item, dict) and item.get("score") is not None
         ]
         if scores:
-            normalized_relevance = max(0.0, min(1.0, max(scores)))
-    score_values = [
-        float(item.get("score"))
-        for item in evidence_items
-        if isinstance(item, dict) and item.get("score") is not None
-    ]
+            resolved_normalized_score = max(0.0, min(1.0, max(scores)))
     return {
         "evidence": evidence_items,
         "diagnostics": {
@@ -52,11 +53,10 @@ def build_retrieval_payload(
             "message": message,
             "query": query,
             "evidence_count": len(evidence_items),
-            "avg_score": (sum(score_values) / len(score_values)) if score_values else None,
-            "max_score": max(score_values) if score_values else None,
-            "normalized_score": normalized_relevance,
-            "relevance_score": normalized_relevance,
-            "raw_relevance_score": raw_relevance_score,
+            "metric": resolved_metric,
+            "score_direction": resolved_score_direction,
+            "normalized_score": resolved_normalized_score,
+            "raw_score": raw_score,
             "result_count": len(evidence_items) if result_count is None else max(0, int(result_count)),
             "warnings": [str(item).strip() for item in (warnings or []) if str(item).strip()],
         },
