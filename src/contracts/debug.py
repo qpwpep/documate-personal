@@ -38,7 +38,7 @@ RETRYABLE_REASONS: set[RetryReason] = {
     "tool_error",
     "missing",
 }
-DEBUG_SCHEMA_VERSION = 2
+DEBUG_SCHEMA_VERSION = 3
 DebugObservabilityStatus = Literal["ok", "degraded", "failed"]
 DEBUG_REQUIRED_FIELDS: tuple[str, ...] = (
     "schema_version",
@@ -111,12 +111,10 @@ class RetrievalDiagnostic(BaseModel):
     attempt: int = 0
     evidence_count: int = 0
     result_count: int = 0
-    avg_score: float | None = None
-    max_score: float | None = None
+    metric: str = ""
+    score_direction: Literal["higher_is_better", "lower_is_better", ""] = ""
     normalized_score: float | None = None
-    relevance_score: float | None = None
-    raw_relevance_score: float | None = None
-    score: float | None = None
+    raw_score: float | None = None
     warnings: list[str] = Field(default_factory=list)
 
 

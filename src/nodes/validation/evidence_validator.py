@@ -231,14 +231,6 @@ def route_normalized_score(
     if diagnostic_scores:
         return max(diagnostic_scores)
 
-    max_scores = [
-        _clamp_score(item.max_score)
-        for item in (diagnostics or [])
-        if _clamp_score(item.max_score) is not None
-    ]
-    if max_scores:
-        return max(max_scores)
-
     return route_max_score(items)
 
 
