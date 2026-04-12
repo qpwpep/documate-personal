@@ -3,9 +3,10 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-import nbformat
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+
+from .notebook_loader import load_canonical_notebook
 
 
 def _build_splitter(*, chunk_size: int, chunk_overlap: int) -> RecursiveCharacterTextSplitter:
@@ -33,10 +34,11 @@ def chunk_notebook_path(
     path: str,
     chunk_size: int,
     chunk_overlap: int,
+    source_path: str | None = None,
 ) -> list[Document]:
-    notebook = nbformat.read(path, as_version=4)
+    notebook = load_canonical_notebook(path).notebook
     return chunk_notebook(
-        path=path,
+        path=source_path or path,
         notebook=notebook,
         chunk_size=chunk_size,
         chunk_overlap=chunk_overlap,
@@ -64,6 +66,8 @@ def chunk_notebook(
                 metadata={
                     "source": path,
                     "cell_id": cell_index,
+                    "cell_index": cell_index,
+                    "notebook_cell_id": str(cell.get("id") or "").strip() or None,
                     "cell_type": str(cell.get("cell_type") or ""),
                 },
             )
@@ -101,6 +105,10 @@ def _annotate_notebook_chunks(*, path: str, docs: list[Document]) -> list[Docume
         doc.metadata["source"] = normalized_source
         doc.metadata["chunk_id"] = chunk_index
         doc.metadata["cell_id"] = cell_id
+        doc.metadata["cell_index"] = cell_id
+        doc.metadata["notebook_cell_id"] = (
+            str(doc.metadata.get("notebook_cell_id") or "").strip() or None
+        )
         doc.metadata["start_offset"] = start_offset
         doc.metadata["end_offset"] = end_offset
     return docs
