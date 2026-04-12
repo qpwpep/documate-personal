@@ -464,7 +464,7 @@ def build_docs_search_tool(settings: AppSettings) -> Any:
             evidence=evidence,
             status="success" if evidence else "no_result",
             message="" if evidence else "no official documentation evidence found",
-            raw_relevance_score=max(raw_scores) if raw_scores else None,
+            raw_score=max(raw_scores) if raw_scores else None,
             warnings=sorted(set(retrieval_warnings)),
         )
 

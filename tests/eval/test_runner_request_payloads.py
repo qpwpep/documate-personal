@@ -43,7 +43,7 @@ class RunnerRequestPayloadTest(unittest.TestCase):
                 "trace": "trace-id",
                 "file_path": "",
                 "debug": {
-                    "schema_version": 2,
+                    "schema_version": 3,
                     "observability_status": "ok",
                     "missing_required_debug_fields": [],
                     "tool_calls": ["slack_notify"],
@@ -97,7 +97,7 @@ class RunnerRequestPayloadTest(unittest.TestCase):
                 "trace": "trace-id",
                 "file_path": "",
                 "debug": {
-                    "schema_version": 2,
+                    "schema_version": 3,
                     "observability_status": "ok",
                     "missing_required_debug_fields": [],
                     "tool_calls": ["tavily_search"],
@@ -182,7 +182,7 @@ class RunnerRequestPayloadTest(unittest.TestCase):
                 "trace": "Session ID: abc, Request ID: req123, Agent ID: 1",
                 "file_path": "",
                 "debug": {
-                    "schema_version": 2,
+                    "schema_version": 3,
                     "observability_status": "ok",
                     "missing_required_debug_fields": [],
                     "tool_calls": ["tavily_search", "upload_search"],
