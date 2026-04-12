@@ -1,4 +1,5 @@
 import json
+import math
 import unittest
 from unittest.mock import patch
 
@@ -179,7 +180,7 @@ class _FakeGraphWithSave:
 
 
 class _FakeVectorStore:
-    def similarity_search_with_relevance_scores(self, query: str, k: int = 4):
+    def similarity_search_with_score(self, query: str, k: int = 4):
         _ = (query, k)
         return [
             (
@@ -199,7 +200,7 @@ class _FakeVectorStore:
 
 
 class _FakeDedupVectorStore:
-    def similarity_search_with_relevance_scores(self, query: str, k: int = 4):
+    def similarity_search_with_score(self, query: str, k: int = 4):
         _ = (query, k)
         return [
             (
@@ -232,7 +233,7 @@ class _FakeDedupVectorStore:
 
 
 class _FakeNegativeScoreVectorStore:
-    def similarity_search_with_relevance_scores(self, query: str, k: int = 4):
+    def similarity_search_with_score(self, query: str, k: int = 4):
         _ = (query, k)
         return [
             (
@@ -388,6 +389,8 @@ class EvidencePipelineTest(unittest.TestCase):
         )
         evidence = with_retriever["evidence"]
         self.assertEqual(with_retriever["diagnostics"]["status"], "success")
+        self.assertEqual(with_retriever["diagnostics"]["metric"], "l2")
+        self.assertEqual(with_retriever["diagnostics"]["score_direction"], "lower_is_better")
         self.assertEqual(len(evidence), 1)
         self.assertEqual(evidence[0]["kind"], "local")
         self.assertEqual(evidence[0]["tool"], "upload_search")
@@ -401,7 +404,7 @@ class EvidencePipelineTest(unittest.TestCase):
         self.assertEqual(evidence[0]["chunk_id"], 1)
         self.assertEqual(evidence[0]["start_offset"], 12)
         self.assertEqual(evidence[0]["end_offset"], 28)
-        self.assertAlmostEqual(evidence[0]["score"], 0.87)
+        self.assertAlmostEqual(evidence[0]["score"], 1.0 - (0.87 / math.sqrt(2.0)))
 
     def test_upload_search_keeps_multiple_chunks_from_same_document(self) -> None:
         registry = build_tool_registry(AppSettings(openai_api_key="test", tavily_api_key="test"))
@@ -417,10 +420,10 @@ class EvidencePipelineTest(unittest.TestCase):
         self.assertNotEqual(evidence[0]["source_id"], evidence[1]["source_id"])
         self.assertEqual(
             [item["chunk_id"] for item in evidence],
-            [0, 1],
+            [1, 0],
         )
 
-    def test_upload_search_clamps_negative_scores(self) -> None:
+    def test_upload_search_clamps_negative_raw_distances_to_max_similarity(self) -> None:
         registry = build_tool_registry(AppSettings(openai_api_key="test", tavily_api_key="test"))
 
         result = registry.upload_search_tool.func(
@@ -431,7 +434,7 @@ class EvidencePipelineTest(unittest.TestCase):
 
         evidence = result["evidence"]
         self.assertEqual(len(evidence), 1)
-        self.assertEqual(evidence[0]["score"], 0.0)
+        self.assertEqual(evidence[0]["score"], 1.0)
 
     @patch("src.tools.docs_search.request_tavily_search")
     def test_docs_search_filters_to_allowed_doc_prefixes(self, mock_request_tavily_search) -> None:

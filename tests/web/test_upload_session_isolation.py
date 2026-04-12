@@ -98,7 +98,7 @@ def _make_manager(graph: _CapturingGraph) -> AgentFlowManager:
 
 
 class UploadSessionIsolationTest(unittest.TestCase):
-    @patch("src.tools.local_rag.OpenAIEmbeddings", return_value=_FakeEmbeddings())
+    @patch("src.tools.local_rag.build_openai_embeddings", return_value=_FakeEmbeddings())
     def test_build_temp_retriever_isolates_per_session_collection(self, _mock_embeddings) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             uploads_root = Path(tmp_dir) / "uploads"

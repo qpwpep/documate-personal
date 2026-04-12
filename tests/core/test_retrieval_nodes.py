@@ -33,7 +33,7 @@ class RetrievalNodeTest(unittest.TestCase):
                 }
 
         class _VectorStore:
-            def similarity_search_with_relevance_scores(self, query, k=4):
+            def similarity_search_with_score(self, query, k=4):
                 _ = (query, k)
                 return [
                     (_Doc("from sklearn.model_selection import train_test_split", 1), 0.30),
