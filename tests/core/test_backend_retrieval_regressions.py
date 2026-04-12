@@ -171,7 +171,7 @@ class BackendRetrievalRegressionTest(unittest.TestCase):
             )
         )
 
-    def test_upload_search_rescales_out_of_range_scores_without_clamp_warning(self) -> None:
+    def test_upload_search_normalizes_raw_l2_scores_without_warning(self) -> None:
         settings = type("Settings", (), {"openai_api_key": "test-key"})()
         _rag_tool, upload_tool = build_local_rag_tools(settings)
 
@@ -187,7 +187,7 @@ class BackendRetrievalRegressionTest(unittest.TestCase):
                 }
 
         class _VectorStore:
-            def similarity_search_with_relevance_scores(self, query, k=4):
+            def similarity_search_with_score(self, query, k=4):
                 _ = (query, k)
                 return [
                     (_Doc("from sklearn.model_selection import train_test_split", 1), 1.8),
@@ -202,9 +202,13 @@ class BackendRetrievalRegressionTest(unittest.TestCase):
         )
 
         self.assertEqual(payload["diagnostics"]["warnings"], [])
+        self.assertEqual(payload["diagnostics"]["metric"], "l2")
+        self.assertEqual(payload["diagnostics"]["score_direction"], "lower_is_better")
         scores = [item["score"] for item in payload["evidence"]]
         self.assertTrue(all(0.0 <= score <= 1.0 for score in scores))
-        self.assertEqual(sorted(scores), [0.0, 1.0])
+        self.assertEqual(len(scores), 2)
+        self.assertAlmostEqual(max(scores), 0.1514718625761431)
+        self.assertEqual(min(scores), 0.0)
 
 
 if __name__ == "__main__":
