@@ -6,6 +6,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
+from src.chroma_store import CHROMA_DISTANCE_METRIC, INDEX_SCHEMA_VERSION, NORMALIZATION_VERSION
 from src.rag_build import build_rag_index
 from src.settings import AppSettings
 
@@ -50,7 +51,7 @@ def _write_notebook(path: Path, source: str) -> None:
 
 
 class RagBuildTest(unittest.TestCase):
-    @patch("src.rag_build.OpenAIEmbeddings")
+    @patch("src.rag_build.build_openai_embeddings")
     def test_build_rag_index_creates_manifest_and_batches(self, _mock_embeddings) -> None:
         with TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -76,7 +77,7 @@ class RagBuildTest(unittest.TestCase):
             self.assertTrue(fake_chroma.get_called)
             self.assertTrue(fake_chroma.added_batches)
 
-    @patch("src.rag_build.OpenAIEmbeddings")
+    @patch("src.rag_build.build_openai_embeddings")
     def test_build_rag_index_deletes_removed_entries(self, _mock_embeddings) -> None:
         with TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -86,7 +87,18 @@ class RagBuildTest(unittest.TestCase):
             manifest_path = index_dir / "manifest.json"
             index_dir.mkdir(parents=True, exist_ok=True)
             stale_path = str(data_dir / "removed.ipynb")
-            manifest_path.write_text(json.dumps({stale_path: 1.0}), encoding="utf-8")
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        "index_version": INDEX_SCHEMA_VERSION,
+                        "metric": CHROMA_DISTANCE_METRIC,
+                        "normalization_version": NORMALIZATION_VERSION,
+                        "collection_name": "notebooks",
+                        "files": {stale_path: 1.0},
+                    }
+                ),
+                encoding="utf-8",
+            )
             fake_chroma = _FakeChroma()
 
             with patch("src.rag_build._ensure_chroma", return_value=fake_chroma):
@@ -99,6 +111,34 @@ class RagBuildTest(unittest.TestCase):
 
             self.assertEqual(summary.deleted_count, 1)
             self.assertIn({"source": stale_path}, fake_chroma.deleted_filters)
+
+    @patch("src.rag_build.build_openai_embeddings")
+    def test_build_rag_index_treats_legacy_or_missing_manifest_as_full_rebuild(self, _mock_embeddings) -> None:
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            data_dir = root / "data"
+            uploads_dir = root / "uploads"
+            index_dir = data_dir / "index"
+            notebook_path = data_dir / "sample.ipynb"
+            _write_notebook(notebook_path, "hello world")
+            index_dir.mkdir(parents=True, exist_ok=True)
+            (index_dir / "chroma.sqlite3").write_text("legacy-index", encoding="utf-8")
+            fake_chroma = _FakeChroma()
+
+            with patch("src.rag_build._ensure_chroma", return_value=fake_chroma):
+                summary = build_rag_index(
+                    AppSettings(openai_api_key="test-key", tavily_api_key="test"),
+                    data_dir=data_dir,
+                    uploads_dir=uploads_dir,
+                    index_dir=index_dir,
+                )
+
+            manifest = json.loads((index_dir / "manifest.json").read_text(encoding="utf-8"))
+            self.assertEqual(summary.reindexed_count, 1)
+            self.assertEqual(manifest["metric"], CHROMA_DISTANCE_METRIC)
+            self.assertEqual(manifest["index_version"], INDEX_SCHEMA_VERSION)
+            self.assertEqual(manifest["normalization_version"], NORMALIZATION_VERSION)
+            self.assertIn(str(notebook_path), manifest["files"])
 
 
 if __name__ == "__main__":
