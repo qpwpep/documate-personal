@@ -1,19 +1,24 @@
 from __future__ import annotations
 
-import math
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Annotated, Any
 
-import nbformat
-from nbformat.validator import normalize as normalize_notebook
 from langchain_chroma import Chroma
 from langchain_core.tools import StructuredTool
-from langchain_openai import OpenAIEmbeddings
 from langgraph.prebuilt import InjectedState
 
-from ..chunking import chunk_notebook, chunk_python_text
+from ..chroma_store import (
+    CHROMA_DISTANCE_METRIC,
+    CHROMA_SCORE_DIRECTION,
+    NOTEBOOK_COLLECTION_NAME,
+    build_openai_embeddings,
+    create_chroma_vectorstore,
+    normalize_l2_distance,
+)
+from ..chunking import chunk_notebook_path, chunk_python_text
+from ..notebook_loader import ensure_canonical_upload_copy
 from ..settings import AppSettings
 from ._common import (
     RagArgs,
@@ -79,14 +84,11 @@ _PARAMETER_HINT_PATTERN = re.compile(
 
 
 def load_chroma(openai_api_key: str, index_path: Path = INDEX_PATH) -> Chroma:
-    embeddings = OpenAIEmbeddings(
-        model="text-embedding-3-small",
-        api_key=openai_api_key,
-    )
-    return Chroma(
-        embedding_function=embeddings,
-        persist_directory=str(index_path),
-        collection_name="notebooks",
+    embeddings = build_openai_embeddings(openai_api_key)
+    return create_chroma_vectorstore(
+        embeddings=embeddings,
+        persist_directory=index_path,
+        collection_name=NOTEBOOK_COLLECTION_NAME,
     )
 
 
@@ -145,22 +147,23 @@ def build_temp_retriever(path: str, api_key: str | None = None, k: int = 4) -> U
             chunk_overlap=120,
         )
     elif path_lower.endswith(".ipynb"):
-        _, notebook = normalize_notebook(nbformat.read(path, as_version=4))
-        docs = chunk_notebook(
-            path=path,
-            notebook=notebook,
+        canonical_path = ensure_canonical_upload_copy(path)
+        docs = chunk_notebook_path(
+            path=str(canonical_path),
+            source_path=path,
             chunk_size=800,
             chunk_overlap=120,
         )
     else:
         raise ValueError("Unsupported file type (only .py or .ipynb).")
 
-    embeddings = OpenAIEmbeddings(model="text-embedding-3-small", api_key=api_key)
-    vectorstore = Chroma.from_documents(
-        docs,
-        embedding=embeddings,
+    embeddings = build_openai_embeddings(api_key)
+    vectorstore = create_chroma_vectorstore(
+        embeddings=embeddings,
         collection_name=collection_name,
     )
+    if docs:
+        vectorstore.add_documents(docs)
     retriever = vectorstore.as_retriever(search_kwargs={"k": k})
     return UploadedRetrieverHandle(
         retriever=retriever,
@@ -215,47 +218,31 @@ def _rank_retrieval_rows(
         doc, score = item
         content = getattr(doc, "page_content", "")
         lexical = _lexical_query_score(query, str(content or ""))
-        numeric_score = float(score) if score is not None else float("-inf")
-        return (lexical, numeric_score)
+        numeric_score = float(score) if score is not None else float("inf")
+        return (-lexical, numeric_score)
 
-    return sorted(docs_with_scores, key=_sort_key, reverse=True)
+    return sorted(docs_with_scores, key=_sort_key)
 
 
-def _normalize_ranked_scores(
+def _score_ranked_rows(
     docs_with_scores: list[tuple[Any, float | None]],
-    retrieval_warnings: list[str] | None = None,
 ) -> list[tuple[Any, float | None, float | None]]:
-    finite_scores = [
-        float(score)
-        for _, score in docs_with_scores
-        if score is not None and math.isfinite(float(score))
-    ]
-    if not finite_scores:
-        return [(doc, None, None) for doc, _ in docs_with_scores]
+    scored_rows: list[tuple[Any, float | None, float | None]] = []
+    for doc, score in docs_with_scores:
+        raw_score = to_float_or_none(score)
+        scored_rows.append((doc, normalize_l2_distance(raw_score), raw_score))
+    return scored_rows
 
-    min_score = min(finite_scores)
-    max_score = max(finite_scores)
-    requires_rescale = min_score < 0.0 or max_score > 1.0
-    if not requires_rescale:
-        return [(doc, float(score) if score is not None else None, float(score) if score is not None else None) for doc, score in docs_with_scores]
 
-    normalized_rows: list[tuple[Any, float | None, float | None]] = []
-    for index, (doc, score) in enumerate(docs_with_scores):
-        raw_score = float(score) if score is not None else None
-        if raw_score is None or not math.isfinite(raw_score):
-            normalized_rows.append((doc, None, raw_score))
-            continue
-        if raw_score < 0.0 and max_score <= 1.0:
-            normalized_score = 0.0
-        elif max_score > 1.0 and min_score >= 0.0:
-            if max_score == min_score:
-                normalized_score = 1.0
-            else:
-                normalized_score = (raw_score - min_score) / (max_score - min_score)
-        else:
-            normalized_score = raw_score
-        normalized_rows.append((doc, max(0.0, min(1.0, normalized_score)), raw_score))
-    return normalized_rows
+def _search_with_raw_scores(vectorstore: Any, *, query: str, k: int) -> list[tuple[Any, float | None]]:
+    if hasattr(vectorstore, "similarity_search_with_score"):
+        return [
+            (doc, to_float_or_none(score))
+            for doc, score in vectorstore.similarity_search_with_score(query, k=k)
+        ]
+    if hasattr(vectorstore, "similarity_search"):
+        return [(doc, None) for doc in vectorstore.similarity_search(query, k=k)]
+    raise AttributeError("vectorstore does not support raw similarity search")
 
 
 def _build_query_focused_snippet(text: str, *, query: str, max_length: int = 500) -> str:
@@ -314,9 +301,7 @@ def build_local_rag_tools(settings: AppSettings) -> tuple[Any, Any]:
         db = load_chroma(settings.openai_api_key)
         docs_with_scores: list[tuple[Any, float | None]] = []
         try:
-            raw_docs_with_scores = db.similarity_search_with_relevance_scores(query, k=k)
-            for doc, score in raw_docs_with_scores:
-                docs_with_scores.append((doc, to_float_or_none(score)))
+            docs_with_scores = _search_with_raw_scores(db, query=query, k=k)
         except Exception:
             try:
                 docs = db.similarity_search(query, k=k)
@@ -334,7 +319,8 @@ def build_local_rag_tools(settings: AppSettings) -> tuple[Any, Any]:
         evidence_items = []
         retrieval_warnings: list[str] = []
         raw_scores: list[float] = []
-        for doc, score, raw_score in _normalize_ranked_scores(docs_with_scores, retrieval_warnings=retrieval_warnings):
+        normalized_scores: list[float] = []
+        for doc, score, raw_score in _score_ranked_rows(docs_with_scores):
             if not hasattr(doc, "metadata"):
                 continue
             source = doc.metadata.get("source", "notebook")
@@ -354,6 +340,8 @@ def build_local_rag_tools(settings: AppSettings) -> tuple[Any, Any]:
                 evidence_items.append(evidence_item)
                 if raw_score is not None:
                     raw_scores.append(raw_score)
+                if score is not None:
+                    normalized_scores.append(score)
 
         evidence = dedupe_evidence_dicts(evidence_items)
         return build_retrieval_payload(
@@ -363,7 +351,10 @@ def build_local_rag_tools(settings: AppSettings) -> tuple[Any, Any]:
             evidence=evidence,
             status="success" if evidence else "no_result",
             message="" if evidence else "no local notebook evidence found",
-            raw_relevance_score=max(raw_scores) if raw_scores else None,
+            normalized_score=max(normalized_scores) if normalized_scores else None,
+            raw_score=min(raw_scores) if raw_scores else None,
+            metric=CHROMA_DISTANCE_METRIC,
+            score_direction=CHROMA_SCORE_DIRECTION,
             warnings=retrieval_warnings,
         )
 
@@ -384,10 +375,8 @@ def build_local_rag_tools(settings: AppSettings) -> tuple[Any, Any]:
         docs_with_scores: list[tuple[Any, float | None]] = []
         try:
             vectorstore = getattr(retriever, "vectorstore", None)
-            if vectorstore is not None and hasattr(vectorstore, "similarity_search_with_relevance_scores"):
-                raw_docs_with_scores = vectorstore.similarity_search_with_relevance_scores(query, k=k)
-                for doc, score in raw_docs_with_scores:
-                    docs_with_scores.append((doc, to_float_or_none(score)))
+            if vectorstore is not None:
+                docs_with_scores = _search_with_raw_scores(vectorstore, query=query, k=k)
             else:
                 docs = retriever.invoke(query)
                 docs_with_scores = [(doc, None) for doc in docs]
@@ -404,7 +393,8 @@ def build_local_rag_tools(settings: AppSettings) -> tuple[Any, Any]:
         evidence_items = []
         retrieval_warnings: list[str] = []
         raw_scores: list[float] = []
-        for doc, score, raw_score in _normalize_ranked_scores(docs_with_scores, retrieval_warnings=retrieval_warnings):
+        normalized_scores: list[float] = []
+        for doc, score, raw_score in _score_ranked_rows(docs_with_scores):
             if not hasattr(doc, "metadata"):
                 continue
             source = doc.metadata.get("source", "uploaded")
@@ -424,6 +414,8 @@ def build_local_rag_tools(settings: AppSettings) -> tuple[Any, Any]:
                 evidence_items.append(evidence_item)
                 if raw_score is not None:
                     raw_scores.append(raw_score)
+                if score is not None:
+                    normalized_scores.append(score)
         evidence = dedupe_evidence_dicts(evidence_items)
         return build_retrieval_payload(
             tool="upload_search",
@@ -432,7 +424,10 @@ def build_local_rag_tools(settings: AppSettings) -> tuple[Any, Any]:
             evidence=evidence,
             status="success" if evidence else "no_result",
             message="" if evidence else "no uploaded file evidence found",
-            raw_relevance_score=max(raw_scores) if raw_scores else None,
+            normalized_score=max(normalized_scores) if normalized_scores else None,
+            raw_score=min(raw_scores) if raw_scores else None,
+            metric=CHROMA_DISTANCE_METRIC,
+            score_direction=CHROMA_SCORE_DIRECTION,
             warnings=retrieval_warnings,
         )
 
