@@ -20,7 +20,7 @@ from .evidence_validator import (
     build_validation_snapshot,
     coerce_evidence_list,
 )
-from .recovery import apply_validation_outcome, build_followup_updates
+from .policy import apply_validation_outcome, build_followup_updates
 
 
 logger = logging.getLogger(__name__)
