@@ -85,6 +85,23 @@ class NodeRefactorTest(unittest.TestCase):
         self.assertIs(synthesis_module.SynthesisPipelineResult, models_module.SynthesisPipelineResult)
         self.assertIs(synthesis_module.make_synthesize_node, node_module.make_synthesize_node)
 
+    def test_online_runner_package_reexports_case_runner_api(self) -> None:
+        online_runner_module = importlib.import_module("src.eval.online_runner")
+        case_runner_module = importlib.import_module("src.eval.online_runner.case_runner")
+
+        self.assertIs(online_runner_module.run_online_benchmark, case_runner_module.run_online_benchmark)
+        self.assertIs(online_runner_module._run_single_case, case_runner_module._run_single_case)
+
+    def test_reporting_package_reexports_public_helpers(self) -> None:
+        reporting_module = importlib.import_module("src.eval.reporting")
+        markdown_module = importlib.import_module("src.eval.reporting.markdown")
+        summary_module = importlib.import_module("src.eval.reporting.summary")
+        writer_module = importlib.import_module("src.eval.reporting.writer")
+
+        self.assertIs(reporting_module.build_markdown_report, markdown_module.build_markdown_report)
+        self.assertIs(reporting_module.build_summary, summary_module.build_summary)
+        self.assertIs(reporting_module.write_run_outputs, writer_module.write_run_outputs)
+
     def test_planner_policy_builds_deterministic_hybrid_decision(self) -> None:
         decision = build_deterministic_planner_decision(
             user_input="Explain pandas concat from official docs and compare it with the uploaded notebook example.",

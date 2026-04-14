@@ -7,8 +7,8 @@ from pathlib import Path
 
 from .generate_cases import generate_cases_file
 from .history import refresh_history_report
+from .online_runner import run_online_benchmark
 from .reporting import build_markdown_report
-from .runner_online import run_online_benchmark
 from .schemas import BenchmarkConfig, CaseResult, RunSummary, load_config
 
 

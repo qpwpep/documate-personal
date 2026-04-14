@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from src.eval.runner_online import _run_single_case
+from src.eval.online_runner import _run_single_case
 from src.eval.schemas import BenchmarkCase, BenchmarkConfig
 
 
@@ -34,7 +34,7 @@ class _CaptureJudge:
 
 
 class RunnerRequestPayloadTest(unittest.TestCase):
-    @patch("src.eval.runner_online.requests.post")
+    @patch("src.eval.online_runner.case_runner.requests.post")
     def test_slack_destination_fields_are_forwarded(self, mock_post) -> None:
         mock_post.return_value = _FakeResponse(
             200,
@@ -88,7 +88,7 @@ class RunnerRequestPayloadTest(unittest.TestCase):
         self.assertEqual(payload["slack_user_id"], "U123BENCH")
         self.assertEqual(payload["slack_email"], "bench@example.com")
 
-    @patch("src.eval.runner_online.requests.post")
+    @patch("src.eval.online_runner.case_runner.requests.post")
     def test_planner_errors_are_parsed_from_debug_payload(self, mock_post) -> None:
         mock_post.return_value = _FakeResponse(
             200,
@@ -137,7 +137,7 @@ class RunnerRequestPayloadTest(unittest.TestCase):
             ["planner: structured output invocation failed (boom)"],
         )
 
-    @patch("src.eval.runner_online.requests.post")
+    @patch("src.eval.online_runner.case_runner.requests.post")
     def test_judge_payload_includes_structured_fields(self, mock_post) -> None:
         mock_post.return_value = _FakeResponse(
             200,

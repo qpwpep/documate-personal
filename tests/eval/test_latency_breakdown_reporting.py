@@ -3,8 +3,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from src.eval.online_runner import _run_single_case
 from src.eval.reporting import build_markdown_report
-from src.eval.runner_online import _run_single_case
 from src.eval.schemas import (
     BenchmarkCase,
     BenchmarkConfig,
@@ -54,7 +54,7 @@ def _debug_payload(**overrides):
 
 
 class LatencyBreakdownReportingTest(unittest.TestCase):
-    @patch("src.eval.runner_online.requests.post")
+    @patch("src.eval.online_runner.case_runner.requests.post")
     def test_run_single_case_parses_latency_breakdown(self, mock_post) -> None:
         mock_post.return_value = _FakeResponse(
             200,
@@ -206,7 +206,7 @@ class LatencyBreakdownReportingTest(unittest.TestCase):
         self.assertIn("Latency breakdown coverage", report)
         self.assertIn("| retrieval_total_ms | 1 | 600.00 | 600.00 |", report)
 
-    @patch("src.eval.runner_online.requests.post")
+    @patch("src.eval.online_runner.case_runner.requests.post")
     def test_run_single_case_computes_model_specific_cost_from_llm_calls(self, mock_post) -> None:
         mock_post.return_value = _FakeResponse(
             200,

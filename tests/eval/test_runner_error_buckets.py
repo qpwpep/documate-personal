@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 import requests
 
-from src.eval.runner_online import _run_single_case
+from src.eval.online_runner import _run_single_case
 from src.eval.schemas import BenchmarkCase, BenchmarkConfig
 
 
@@ -34,7 +34,7 @@ class RunnerErrorBucketsTest(unittest.TestCase):
         self.config = BenchmarkConfig()
         self.fixtures_path = Path("data/benchmarks/fixtures/cases.generated.jsonl")
 
-    @patch("src.eval.runner_online.requests.post", side_effect=requests.Timeout)
+    @patch("src.eval.online_runner.case_runner.requests.post", side_effect=requests.Timeout)
     def test_timeout_goes_to_runtime_errors(self, _mock_post) -> None:
         result = _run_single_case(
             run_id="run-timeout",
@@ -49,7 +49,7 @@ class RunnerErrorBucketsTest(unittest.TestCase):
         self.assertEqual(result.response_errors, [])
         self.assertEqual(result.judge_errors, [])
 
-    @patch("src.eval.runner_online.requests.post")
+    @patch("src.eval.online_runner.case_runner.requests.post")
     def test_contract_error_goes_to_response_errors(self, mock_post) -> None:
         mock_post.return_value = _FakeResponse(
             200,
@@ -89,7 +89,7 @@ class RunnerErrorBucketsTest(unittest.TestCase):
         self.assertEqual(result.runtime_errors, [])
         self.assertTrue(any("response payload must be an object" in msg for msg in result.response_errors))
 
-    @patch("src.eval.runner_online.requests.post")
+    @patch("src.eval.online_runner.case_runner.requests.post")
     def test_judge_error_goes_to_judge_errors(self, mock_post) -> None:
         mock_post.return_value = _FakeResponse(
             200,
@@ -130,7 +130,7 @@ class RunnerErrorBucketsTest(unittest.TestCase):
         self.assertEqual(result.response_errors, [])
         self.assertIn("judge parse fail", result.judge_errors)
 
-    @patch("src.eval.runner_online.requests.post")
+    @patch("src.eval.online_runner.case_runner.requests.post")
     def test_runner_preserves_retrieval_diagnostic_statuses(self, mock_post) -> None:
         mock_post.return_value = _FakeResponse(
             200,
@@ -211,7 +211,7 @@ class RunnerErrorBucketsTest(unittest.TestCase):
         self.assertIsNotNone(result.planner_diagnostics)
         self.assertEqual(result.planner_diagnostics.status, "heuristic_fallback")
 
-    @patch("src.eval.runner_online.requests.post")
+    @patch("src.eval.online_runner.case_runner.requests.post")
     def test_runner_parses_validator_reason_from_retry_context(self, mock_post) -> None:
         mock_post.return_value = _FakeResponse(
             200,
@@ -261,7 +261,7 @@ class RunnerErrorBucketsTest(unittest.TestCase):
             "low evidence confidence; broaden query or switch route.",
         )
 
-    @patch("src.eval.runner_online.requests.post")
+    @patch("src.eval.online_runner.case_runner.requests.post")
     def test_runner_marks_missing_critical_debug_fields_as_response_error(self, mock_post) -> None:
         mock_post.return_value = _FakeResponse(
             200,
@@ -289,7 +289,7 @@ class RunnerErrorBucketsTest(unittest.TestCase):
         self.assertTrue(any("critical debug fields missing:" in msg for msg in result.response_errors))
         self.assertFalse(result.passed)
 
-    @patch("src.eval.runner_online.requests.post")
+    @patch("src.eval.online_runner.case_runner.requests.post")
     def test_runner_applies_docs_judge_min_score_gate(self, mock_post) -> None:
         mock_post.return_value = _FakeResponse(
             200,
