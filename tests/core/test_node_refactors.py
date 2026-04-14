@@ -20,7 +20,7 @@ from src.nodes.synthesis.payload_builder import (
 )
 from src.nodes.synthesis.prompt_builder import build_synthesis_messages
 from src.nodes.validation.evidence_validator import assess_validation, build_validation_snapshot
-from src.nodes.validation.recovery import apply_validation_outcome
+from src.nodes.validation.policy import apply_validation_outcome
 from src.planner_schema import PlannerOutput, RetrievalTask
 from src.prompts import SYS_POLICY
 
@@ -101,6 +101,14 @@ class NodeRefactorTest(unittest.TestCase):
         self.assertIs(reporting_module.build_markdown_report, markdown_module.build_markdown_report)
         self.assertIs(reporting_module.build_summary, summary_module.build_summary)
         self.assertIs(reporting_module.write_run_outputs, writer_module.write_run_outputs)
+
+    def test_validation_package_exposes_only_public_entrypoints(self) -> None:
+        validation_module = importlib.import_module("src.nodes.validation")
+
+        self.assertTrue(hasattr(validation_module, "ValidationAssessment"))
+        self.assertTrue(hasattr(validation_module, "ValidationSnapshot"))
+        self.assertTrue(hasattr(validation_module, "make_validate_evidence_node"))
+        self.assertFalse(hasattr(validation_module, "apply_validation_outcome"))
 
     def test_planner_policy_builds_deterministic_hybrid_decision(self) -> None:
         decision = build_deterministic_planner_decision(

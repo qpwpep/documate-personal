@@ -4,7 +4,7 @@ from src.answer_schema import AgentResponsePayloadModel
 from src.contracts import RetrievalDiagnostic
 from src.evidence import EvidenceItem
 from src.nodes.validation.evidence_validator import assess_validation, build_validation_snapshot
-from src.nodes.validation.recovery import apply_validation_outcome
+from src.nodes.validation.policy import apply_validation_outcome
 from src.planner_schema import PlannerOutput, RetrievalTask
 
 
