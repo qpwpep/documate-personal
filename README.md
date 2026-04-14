@@ -47,7 +47,7 @@ flowchart LR
 - `src/nodes/planner/`: retrieval 필요 여부와 route를 결정합니다.
 - `src/nodes/retrieval/`: docs, upload, local route를 실행하고 결과를 정규화합니다.
 - `src/nodes/synthesis/`: 구조화된 grounded 응답을 생성합니다.
-- `src/nodes/validation/`: claim/evidence 일치 여부를 검증하고 retry 여부를 결정합니다.
+- `src/nodes/validation/`: claim/evidence 일치 여부를 검증하고 retry 여부를 결정합니다. 공개 엔트리는 `src.nodes.validation`이며 세부 정책은 패키지 내부 모듈로 분리되어 있습니다.
 - `src/nodes/actions.py`: 파일 저장과 Slack 전송 후처리를 담당합니다.
 
 ## 3. 빠른 시작
@@ -260,7 +260,7 @@ UI와 문서 검색 규칙은 아래 파일을 기준으로 관리합니다.
 실제 응답 스키마 기준 파일:
 
 - `src/web/schemas.py`
-- `src/answer_schema.py`
+- `src/answer_schema/`
 
 ### 6.2 `GET /download/{filename}`
 
@@ -312,14 +312,22 @@ UI와 문서 검색 규칙은 아래 파일을 기준으로 관리합니다.
 │  ├─ eval/
 │  │  ├─ history/
 │  │  ├─ reporting/
-│  │  │  └─ __init__.py
-│  │  ├─ runner_online/
+│  │  │  ├─ __init__.py
+│  │  │  ├─ histograms.py
+│  │  │  ├─ markdown.py
+│  │  │  ├─ summary.py
+│  │  │  └─ writer.py
+│  │  ├─ online_runner/
+│  │  │  ├─ __init__.py
+│  │  │  ├─ case_runner.py
+│  │  │  ├─ request_builder.py
+│  │  │  ├─ response_parser.py
+│  │  │  └─ result_builder.py
 │  │  ├─ __init__.py
 │  │  ├─ generate_cases.py
 │  │  ├─ history.py
 │  │  ├─ judge_llm.py
 │  │  ├─ main.py
-│  │  ├─ runner_online.py
 │  │  ├─ schemas.py
 │  │  └─ scoring_rules.py
 │  ├─ nodes/
@@ -352,8 +360,11 @@ UI와 문서 검색 규칙은 아래 파일을 기준으로 관리합니다.
 │  │  ├─ validation/
 │  │  │  ├─ __init__.py
 │  │  │  ├─ evidence_validator.py
+│  │  │  ├─ hybrid_rewrite.py
+│  │  │  ├─ messages_ko.py
 │  │  │  ├─ node.py
-│  │  │  └─ recovery.py
+│  │  │  ├─ policy.py
+│  │  │  └─ repair.py
 │  │  ├─ __init__.py
 │  │  ├─ actions.py
 │  │  ├─ retry.py
@@ -381,7 +392,12 @@ UI와 문서 검색 규칙은 아래 파일을 기준으로 관리합니다.
 │  │  ├─ streamlit_state.py
 │  │  └─ streamlit_upload_handler.py
 │  ├─ agent_manager.py
-│  ├─ answer_schema.py
+│  ├─ answer_schema/
+│  │  ├─ __init__.py
+│  │  ├─ fallbacks.py
+│  │  ├─ models.py
+│  │  ├─ rendering.py
+│  │  └─ text_cleaning.py
 │  ├─ chunking.py
 │  ├─ cli.py
 │  ├─ domain_docs.py
