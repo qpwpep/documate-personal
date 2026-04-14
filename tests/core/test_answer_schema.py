@@ -1,10 +1,16 @@
 import unittest
 
-from src.answer_schema import build_deterministic_grounded_payload, clean_grounded_text
+import src.answer_schema as answer_schema
+from src.answer_schema.fallbacks import build_deterministic_grounded_payload
+from src.answer_schema.text_cleaning import clean_grounded_text
 from src.evidence import EvidenceItem
 
 
 class AnswerSchemaTest(unittest.TestCase):
+    def test_answer_schema_barrel_reexports_split_modules(self) -> None:
+        self.assertIs(answer_schema.build_deterministic_grounded_payload, build_deterministic_grounded_payload)
+        self.assertIs(answer_schema.clean_grounded_text, clean_grounded_text)
+
     def test_clean_grounded_text_removes_markdown_and_navigation_lines(self) -> None:
         cleaned = clean_grounded_text(
             "\n".join(
