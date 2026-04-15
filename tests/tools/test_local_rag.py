@@ -11,12 +11,9 @@ from langchain_core.embeddings import Embeddings
 from src.chroma_store import create_chroma_vectorstore
 from src.chunking import chunk_notebook_path
 from src.settings import AppSettings
-from src.tools.local_rag import (
-    _build_query_focused_snippet,
-    _rank_retrieval_rows,
-    build_local_rag_tools,
-    build_temp_retriever,
-)
+from src.tools.local_rag import build_local_rag_tools, build_temp_retriever
+from src.tools.local_rag.ranking import rank_retrieval_rows
+from src.tools.local_rag.serialization import build_query_focused_snippet
 
 
 class _FakeEmbeddings(Embeddings):
@@ -69,7 +66,7 @@ class LocalRagTest(unittest.TestCase):
             'sales_with_profile = all_sales.merge(profiles, on="user_id", how="left")\n'
         )
 
-        snippet = _build_query_focused_snippet(
+        snippet = build_query_focused_snippet(
             text,
             query="?낅줈?쒗븳 ?뚯씪?먯꽌 groupby瑜??대뼸寃??곕뒗吏 李얠븘???ㅻ챸?댁쨾.",
             max_length=120,
@@ -94,14 +91,14 @@ class LocalRagTest(unittest.TestCase):
             metadata={"cell_id": 2},
         )
 
-        ranked = _rank_retrieval_rows(
+        ranked = rank_retrieval_rows(
             [(import_doc, 0.3), (usage_doc, 0.28)],
             query="sample_pipeline.ipynb 湲곗??쇰줈 train_test_split ?뚮씪誘명꽣瑜?李얠븘以?",
         )
 
         self.assertEqual(ranked[0][0].metadata["cell_id"], 2)
 
-    @patch("src.tools.local_rag.build_openai_embeddings", return_value=_FakeEmbeddings())
+    @patch("src.tools.local_rag.client.build_openai_embeddings", return_value=_FakeEmbeddings())
     def test_local_rag_search_uses_raw_l2_scores_without_userwarning(
         self,
         _mock_local_embeddings,
@@ -131,8 +128,8 @@ class LocalRagTest(unittest.TestCase):
             with warnings.catch_warnings(record=True) as caught:
                 warnings.simplefilter("always")
                 rag_tool, _upload_tool = build_local_rag_tools(settings)
-                with patch("src.tools.local_rag.INDEX_PATH", data_dir), patch(
-                    "src.tools.local_rag.load_chroma",
+                with patch("src.tools.local_rag.client.INDEX_PATH", data_dir), patch(
+                    "src.tools.local_rag.client.load_chroma",
                     return_value=vectorstore,
                 ):
                     payload = rag_tool.func(query="train_test_split parameter", k=2)
@@ -143,7 +140,7 @@ class LocalRagTest(unittest.TestCase):
             self.assertEqual(payload["diagnostics"]["score_direction"], "lower_is_better")
             self.assertTrue(all(0.0 <= item["score"] <= 1.0 for item in payload["evidence"]))
 
-    @patch("src.tools.local_rag.build_openai_embeddings", return_value=_FakeEmbeddings())
+    @patch("src.tools.local_rag.client.build_openai_embeddings", return_value=_FakeEmbeddings())
     def test_upload_rag_search_uses_canonical_copy_and_raw_l2_scores_without_userwarning(
         self,
         _mock_local_embeddings,
