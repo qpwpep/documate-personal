@@ -48,7 +48,7 @@ flowchart LR
 - `src/nodes/retrieval/`: docs, upload, local route를 실행하고 결과를 정규화합니다.
 - `src/nodes/synthesis/`: 구조화된 grounded 응답을 생성합니다.
 - `src/nodes/validation/`: claim/evidence 일치 여부를 검증하고 retry 여부를 결정합니다. 공개 엔트리는 `src.nodes.validation`이며 세부 정책은 패키지 내부 모듈로 분리되어 있습니다.
-- `src/nodes/actions.py`: 파일 저장과 Slack 전송 후처리를 담당합니다.
+- `src/nodes/actions/`: 파일 저장과 Slack 전송 후처리를 담당합니다.
 
 ## 3. 빠른 시작
 
@@ -366,15 +366,15 @@ UI와 문서 검색 규칙은 아래 파일을 기준으로 관리합니다.
 │  │  │  ├─ policy.py
 │  │  │  └─ repair.py
 │  │  ├─ __init__.py
-│  │  ├─ actions.py
+│  │  ├─ actions/
 │  │  ├─ retry.py
 │  │  └─ session.py
 │  ├─ service_manager/
 │  ├─ tools/
 │  │  ├─ __init__.py
 │  │  ├─ _common.py
-│  │  ├─ docs_search.py
-│  │  ├─ local_rag.py
+│  │  ├─ docs_search/
+│  │  ├─ local_rag/
 │  │  ├─ save_text.py
 │  │  └─ slack_notify.py
 │  ├─ web/
@@ -416,7 +416,6 @@ UI와 문서 검색 규칙은 아래 파일을 기준으로 관리합니다.
 │  ├─ runtime_encoding.py
 │  ├─ runtime_paths.py
 │  ├─ sequence_utils.py
-│  ├─ service_manager.py
 │  ├─ settings.py
 │  └─ slack_utils.py
 ├─ tests/
