@@ -6,7 +6,7 @@ from src.tools import build_tool_registry
 
 
 class DocsSearchTest(unittest.TestCase):
-    @patch("src.tools.docs_search.request_tavily_search")
+    @patch("src.tools.docs_search.client.request_tavily_search")
     def test_docs_search_applies_bare_library_hints_for_common_libraries(self, mock_request_tavily_search) -> None:
         mock_request_tavily_search.return_value = {"results": []}
         registry = build_tool_registry(AppSettings(openai_api_key="test", tavily_api_key="test"))
@@ -29,7 +29,7 @@ class DocsSearchTest(unittest.TestCase):
                 self.assertEqual(first_kwargs["query"], query)
                 self.assertEqual(second_kwargs["query"], expected_fallback)
 
-    @patch("src.tools.docs_search.request_tavily_search")
+    @patch("src.tools.docs_search.client.request_tavily_search")
     def test_docs_search_uses_fallback_when_first_batch_is_cross_library_only(self, mock_request_tavily_search) -> None:
         mock_request_tavily_search.side_effect = [
             {
@@ -63,7 +63,7 @@ class DocsSearchTest(unittest.TestCase):
             ["https://numpy.org/doc/stable/user/basics.broadcasting.html"],
         )
 
-    @patch("src.tools.docs_search.request_tavily_search")
+    @patch("src.tools.docs_search.client.request_tavily_search")
     def test_docs_search_adopts_only_same_library_domain_results(self, mock_request_tavily_search) -> None:
         mock_request_tavily_search.return_value = {
             "results": [
@@ -92,7 +92,7 @@ class DocsSearchTest(unittest.TestCase):
             ],
         )
 
-    @patch("src.tools.docs_search.request_tavily_search")
+    @patch("src.tools.docs_search.client.request_tavily_search")
     def test_docs_search_does_not_treat_concatenate_as_pandas_concat(self, mock_request_tavily_search) -> None:
         mock_request_tavily_search.return_value = {
             "results": [
@@ -115,7 +115,7 @@ class DocsSearchTest(unittest.TestCase):
         first_kwargs = mock_request_tavily_search.call_args_list[0].kwargs
         self.assertEqual(first_kwargs["include_domains"], ["numpy.org"])
 
-    @patch("src.tools.docs_search.request_tavily_search")
+    @patch("src.tools.docs_search.client.request_tavily_search")
     def test_docs_search_uses_fallback_when_first_batch_is_docs_chrome_only(self, mock_request_tavily_search) -> None:
         mock_request_tavily_search.side_effect = [
             {

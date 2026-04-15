@@ -436,7 +436,7 @@ class EvidencePipelineTest(unittest.TestCase):
         self.assertEqual(len(evidence), 1)
         self.assertEqual(evidence[0]["score"], 1.0)
 
-    @patch("src.tools.docs_search.request_tavily_search")
+    @patch("src.tools.docs_search.client.request_tavily_search")
     def test_docs_search_filters_to_allowed_doc_prefixes(self, mock_request_tavily_search) -> None:
         mock_request_tavily_search.return_value = {
             "results": [
@@ -469,7 +469,7 @@ class EvidencePipelineTest(unittest.TestCase):
         self.assertIn("https://huggingface.co/docs/transformers/index", urls)
         self.assertNotIn("https://huggingface.co/datasets/foo/bar", urls)
 
-    @patch("src.tools.docs_search.request_tavily_search")
+    @patch("src.tools.docs_search.client.request_tavily_search")
     def test_docs_search_returns_no_result_when_all_urls_are_filtered(self, mock_request_tavily_search) -> None:
         mock_request_tavily_search.return_value = {
             "results": [
@@ -488,7 +488,7 @@ class EvidencePipelineTest(unittest.TestCase):
         self.assertEqual(result["diagnostics"]["status"], "no_result")
         self.assertEqual(result["evidence"], [])
 
-    @patch("src.tools.docs_search.request_tavily_search")
+    @patch("src.tools.docs_search.client.request_tavily_search")
     def test_docs_search_blocks_huggingface_commit_diff_urls(self, mock_request_tavily_search) -> None:
         mock_request_tavily_search.return_value = {
             "results": [
@@ -513,7 +513,7 @@ class EvidencePipelineTest(unittest.TestCase):
         urls = [item["url_or_path"] for item in result["evidence"]]
         self.assertEqual(urls, ["https://huggingface.co/docs/transformers/index"])
 
-    @patch("src.tools.docs_search.request_tavily_search")
+    @patch("src.tools.docs_search.client.request_tavily_search")
     def test_docs_search_applies_symbol_based_query_hint(self, mock_request_tavily_search) -> None:
         mock_request_tavily_search.return_value = {"results": []}
 
@@ -526,7 +526,7 @@ class EvidencePipelineTest(unittest.TestCase):
         self.assertEqual(kwargs["query"], "train_test_split 공식 문법을 scikit-learn")
         self.assertEqual(mock_request_tavily_search.call_args_list[1].kwargs["query"], "train_test_split sklearn.model_selection")
 
-    @patch("src.tools.docs_search.request_tavily_search")
+    @patch("src.tools.docs_search.client.request_tavily_search")
     def test_docs_search_applies_bare_library_level_query_hint(self, mock_request_tavily_search) -> None:
         mock_request_tavily_search.return_value = {"results": []}
 
@@ -539,7 +539,7 @@ class EvidencePipelineTest(unittest.TestCase):
         self.assertEqual(kwargs["query"], "bare 공식 문서")
         self.assertEqual(mock_request_tavily_search.call_args_list[1].kwargs["query"], "Bare runtime API")
 
-    @patch("src.tools.docs_search.request_tavily_search")
+    @patch("src.tools.docs_search.client.request_tavily_search")
     def test_docs_search_applies_library_level_query_hints_for_common_libraries(
         self,
         mock_request_tavily_search,
@@ -567,7 +567,7 @@ class EvidencePipelineTest(unittest.TestCase):
                 self.assertEqual(kwargs["query"], query)
                 self.assertEqual(mock_request_tavily_search.call_args_list[1].kwargs["query"], fallback_query)
 
-    @patch("src.tools.docs_search.request_tavily_search")
+    @patch("src.tools.docs_search.client.request_tavily_search")
     def test_docs_search_filters_cross_library_docs_results_for_hinted_queries(
         self,
         mock_request_tavily_search,
@@ -731,7 +731,7 @@ class EvidencePipelineTest(unittest.TestCase):
         self.assertTrue(result["response_payload"]["answer"].startswith("final answer before save"))
         self.assertEqual(result["response_payload"]["claims"], [])
 
-    @patch("src.tools.docs_search.request_tavily_search")
+    @patch("src.tools.docs_search.client.request_tavily_search")
     def test_docs_search_applies_bare_library_hints_for_numpy_pandas_fastapi(self, mock_request_tavily_search) -> None:
         mock_request_tavily_search.return_value = {"results": []}
 
@@ -750,7 +750,7 @@ class EvidencePipelineTest(unittest.TestCase):
         self.assertEqual(seventh_query["include_domains"], ["fastapi.tiangolo.com"])
         self.assertEqual(seventh_query["query"], "fastapi official docs")
 
-    @patch("src.tools.docs_search.request_tavily_search")
+    @patch("src.tools.docs_search.client.request_tavily_search")
     def test_docs_search_post_filters_cross_library_domains_for_hinted_queries(self, mock_request_tavily_search) -> None:
         mock_request_tavily_search.return_value = {
             "results": [
