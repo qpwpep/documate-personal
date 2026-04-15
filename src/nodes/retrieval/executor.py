@@ -9,8 +9,9 @@ from ...contracts.routes import route_for_tool
 from ...evidence import evidence_to_dicts, parse_evidence_payload
 from ...latency import elapsed_ms, make_retrieval_route_latency_event
 from ...planner_schema import RetrievalTask
-from ...tools.docs_search import filter_evidence_to_domains, infer_docs_query_hint
 from ...tools._common import build_retrieval_payload
+from ...tools.docs_search import infer_docs_query_hint
+from ...tools.docs_search.serialization import filter_evidence_to_domains
 
 
 @dataclass(slots=True)
