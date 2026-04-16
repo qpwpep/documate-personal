@@ -78,21 +78,23 @@ def _prepare_evidence_for_prompt(
         if not isinstance(item, dict):
             continue
         prompt_item = dict(item)
-        if str(prompt_item.get("kind") or "").strip().lower() == "official":
+        kind = str(prompt_item.get("kind") or "").strip().lower()
+        if kind == "official":
             cleaned_title = clean_grounded_text(str(prompt_item.get("title") or ""))
             cleaned_snippet = clean_grounded_text(str(prompt_item.get("snippet") or ""))
             prompt_item["title"] = cleaned_title
             prompt_item["snippet"] = cleaned_snippet
-        effective_limit = snippet_char_limit
-        if remaining_budget is not None:
-            if remaining_budget <= 0:
-                effective_limit = 0
-            else:
-                effective_limit = min(effective_limit, remaining_budget)
-        prompt_item["snippet"] = _truncate_prompt_text(
-            prompt_item.get("snippet"),
-            limit=effective_limit,
-        )
+        if kind != "local":
+            effective_limit = snippet_char_limit
+            if remaining_budget is not None:
+                if remaining_budget <= 0:
+                    effective_limit = 0
+                else:
+                    effective_limit = min(effective_limit, remaining_budget)
+            prompt_item["snippet"] = _truncate_prompt_text(
+                prompt_item.get("snippet"),
+                limit=effective_limit,
+            )
         if remaining_budget is not None:
             remaining_budget -= len(str(prompt_item.get("snippet") or ""))
         prepared_items.append(prompt_item)

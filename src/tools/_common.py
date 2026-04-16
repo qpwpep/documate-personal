@@ -204,6 +204,9 @@ def build_evidence_item(
 
     title_text = str(title).strip() if title else None
     normalized_score, _raw_score = normalize_relevance_score(score, warnings=warnings)
+    snippet_text = str(snippet).strip() if snippet else None
+    if kind != "local":
+        snippet_text = truncate_snippet(snippet_text)
     return EvidenceItem(
         kind=kind,
         tool=tool,
@@ -211,7 +214,7 @@ def build_evidence_item(
         document_id=document_id,
         url_or_path=source,
         title=title_text or None,
-        snippet=truncate_snippet(str(snippet) if snippet else None),
+        snippet=snippet_text,
         score=normalized_score,
         chunk_id=int(chunk_id) if chunk_id is not None else None,
         cell_id=cell_id,
