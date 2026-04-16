@@ -26,7 +26,11 @@ def chunk_python_text(
 ) -> list[Document]:
     splitter = _build_splitter(chunk_size=chunk_size, chunk_overlap=chunk_overlap)
     docs = splitter.create_documents([text], metadatas=[{"source": path}])
-    return _annotate_python_chunks(path=path, docs=docs)
+    return _annotate_python_chunks(
+        path=path,
+        docs=docs,
+        document_char_count=len(text),
+    )
 
 
 def chunk_notebook_path(
@@ -54,12 +58,14 @@ def chunk_notebook(
 ) -> list[Document]:
     splitter = _build_splitter(chunk_size=chunk_size, chunk_overlap=chunk_overlap)
     base_docs: list[Document] = []
+    document_char_count = 0
     for cell_index, cell in enumerate(getattr(notebook, "cells", [])):
         if cell.get("cell_type") not in {"code", "markdown"}:
             continue
         source = str(cell.get("source") or "")
         if not source.strip():
             continue
+        document_char_count += len(source)
         base_docs.append(
             Document(
                 page_content=source,
@@ -77,11 +83,21 @@ def chunk_notebook(
         return []
 
     split_docs = splitter.split_documents(base_docs)
-    return _annotate_notebook_chunks(path=path, docs=split_docs)
+    return _annotate_notebook_chunks(
+        path=path,
+        docs=split_docs,
+        document_char_count=document_char_count,
+    )
 
 
-def _annotate_python_chunks(*, path: str, docs: list[Document]) -> list[Document]:
+def _annotate_python_chunks(
+    *,
+    path: str,
+    docs: list[Document],
+    document_char_count: int,
+) -> list[Document]:
     normalized_source = str(Path(path))
+    document_chunk_count = len(docs)
     for chunk_index, doc in enumerate(docs):
         start_offset = _coerce_non_negative_int(doc.metadata.get("start_index"))
         end_offset = start_offset + len(doc.page_content or "")
@@ -90,12 +106,20 @@ def _annotate_python_chunks(*, path: str, docs: list[Document]) -> list[Document
         doc.metadata["cell_id"] = None
         doc.metadata["start_offset"] = start_offset
         doc.metadata["end_offset"] = end_offset
+        doc.metadata["document_chunk_count"] = document_chunk_count
+        doc.metadata["document_char_count"] = max(0, int(document_char_count))
     return docs
 
 
-def _annotate_notebook_chunks(*, path: str, docs: list[Document]) -> list[Document]:
+def _annotate_notebook_chunks(
+    *,
+    path: str,
+    docs: list[Document],
+    document_char_count: int,
+) -> list[Document]:
     normalized_source = str(Path(path))
     chunk_counters: dict[int, int] = {}
+    document_chunk_count = len(docs)
     for doc in docs:
         cell_id = _coerce_non_negative_int(doc.metadata.get("cell_id"))
         chunk_index = chunk_counters.get(cell_id, 0)
@@ -111,6 +135,8 @@ def _annotate_notebook_chunks(*, path: str, docs: list[Document]) -> list[Docume
         )
         doc.metadata["start_offset"] = start_offset
         doc.metadata["end_offset"] = end_offset
+        doc.metadata["document_chunk_count"] = document_chunk_count
+        doc.metadata["document_char_count"] = max(0, int(document_char_count))
     return docs
 
 
