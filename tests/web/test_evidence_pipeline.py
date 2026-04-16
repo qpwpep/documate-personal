@@ -252,6 +252,29 @@ class _FakeNegativeScoreVectorStore:
         ]
 
 
+class _FakeSingleChunkLongVectorStore:
+    def similarity_search_with_score(self, query: str, k: int = 4):
+        _ = (query, k)
+        long_chunk = "setup = True " + ("x " * 320) + "target_call(random_state=42)"
+        return [
+            (
+                Document(
+                    page_content=long_chunk,
+                    metadata={
+                        "source": "uploads/session/sample_pipeline.py",
+                        "chunk_id": 0,
+                        "cell_id": None,
+                        "start_offset": 0,
+                        "end_offset": len(long_chunk),
+                        "document_chunk_count": 1,
+                        "document_char_count": len(long_chunk),
+                    },
+                ),
+                0.12,
+            )
+        ]
+
+
 class _FakeRetriever:
     def __init__(self, vectorstore=None):
         self.vectorstore = vectorstore or _FakeVectorStore()
@@ -435,6 +458,21 @@ class EvidencePipelineTest(unittest.TestCase):
         evidence = result["evidence"]
         self.assertEqual(len(evidence), 1)
         self.assertEqual(evidence[0]["score"], 1.0)
+
+    def test_upload_search_preserves_full_chunk_for_single_chunk_files(self) -> None:
+        registry = build_tool_registry(AppSettings(openai_api_key="test", tavily_api_key="test"))
+
+        result = registry.upload_search_tool.func(
+            query="random_state parameter",
+            k=4,
+            retriever=_FakeRetriever(vectorstore=_FakeSingleChunkLongVectorStore()),
+        )
+
+        evidence = result["evidence"]
+        self.assertEqual(len(evidence), 1)
+        self.assertGreater(len(evidence[0]["snippet"]), 500)
+        self.assertIn("target_call(random_state=42)", evidence[0]["snippet"])
+        self.assertNotIn("...", evidence[0]["snippet"])
 
     @patch("src.tools.docs_search.client.request_tavily_search")
     def test_docs_search_filters_to_allowed_doc_prefixes(self, mock_request_tavily_search) -> None:

@@ -45,6 +45,10 @@ def _normalize_relevance_score(value: Any) -> float | None:
     return max(0.0, min(1.0, score))
 
 
+def _is_local_evidence(item: dict[str, Any]) -> bool:
+    return str(item.get("kind") or "").strip().lower() == "local"
+
+
 def format_evidence_for_prompt(
     items: list[dict[str, Any]],
     *,
@@ -59,8 +63,9 @@ def format_evidence_for_prompt(
         source = str(item.get("url_or_path") or "unknown-source")
         source_id = str(item.get("source_id") or "").strip()
         title = str(item.get("title") or "").strip()
-        snippet = _truncate_prompt_snippet(
-            str(item.get("snippet") or "").strip(),
+        raw_snippet = str(item.get("snippet") or "").strip()
+        snippet = raw_snippet if _is_local_evidence(item) else _truncate_prompt_snippet(
+            raw_snippet,
             max_chars=max_snippet_chars,
         )
         score = _normalize_relevance_score(item.get("score"))
