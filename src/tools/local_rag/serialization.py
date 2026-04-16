@@ -4,7 +4,11 @@ from typing import Any
 
 from ...chroma_store import normalize_l2_distance
 from .._common import build_evidence_item, dedupe_evidence_dicts, to_float_or_none
-from .ranking import extract_identifiers, extract_keywords
+from .ranking import extract_identifiers, extract_keywords, lexical_query_score
+
+
+SNIPPET_CHAR_LIMIT = 500
+SHORT_DOCUMENT_CHAR_LIMIT = 1200
 
 
 def score_ranked_rows(
@@ -17,38 +21,125 @@ def score_ranked_rows(
     return scored_rows
 
 
-def build_query_focused_snippet(text: str, *, query: str, max_length: int = 500) -> str:
+def build_query_focused_snippet(text: str, *, query: str, max_length: int = SNIPPET_CHAR_LIMIT) -> str:
     normalized = str(text or "").strip()
     if len(normalized) <= max_length:
         return normalized
 
-    query_identifiers = extract_identifiers(query)
-    lowered_text = normalized.lower()
-    best_index: int | None = None
-    for token in query_identifiers:
-        index = lowered_text.find(token.lower())
-        if index < 0:
-            continue
-        best_index = index if best_index is None else min(best_index, index)
-
-    if best_index is None:
-        keywords = sorted(extract_keywords(query), key=len, reverse=True)
-        for keyword in keywords:
-            index = lowered_text.find(keyword.lower())
-            if index < 0:
-                continue
-            best_index = index if best_index is None else min(best_index, index)
-
-    if best_index is None:
+    candidate_starts = _build_candidate_starts(normalized, query=query, max_length=max_length)
+    if not candidate_starts:
         return normalized[:max_length]
 
-    line_start = normalized.rfind("\n", 0, best_index)
+    query_identifiers = extract_identifiers(query)
+    best_window = max(
+        (
+            (
+                lexical_query_score(query, _slice_window(normalized, start=start, max_length=max_length)),
+                _identifier_hit_count(
+                    query_identifiers=query_identifiers,
+                    text=_slice_window(normalized, start=start, max_length=max_length),
+                ),
+                -start,
+                start,
+            )
+            for start in candidate_starts
+        ),
+        key=lambda item: (item[0], item[1], item[2]),
+    )
+    return _slice_window(normalized, start=best_window[3], max_length=max_length)
+
+
+def build_local_snippet(
+    text: str,
+    *,
+    query: str,
+    metadata: dict[str, Any] | None = None,
+    max_length: int = SNIPPET_CHAR_LIMIT,
+) -> str:
+    normalized = str(text or "").strip()
+    if not normalized:
+        return ""
+    metadata = dict(metadata or {})
+    if _should_preserve_full_chunk(metadata=metadata):
+        return normalized
+    return build_query_focused_snippet(normalized, query=query, max_length=max_length)
+
+
+def _should_preserve_full_chunk(*, metadata: dict[str, Any]) -> bool:
+    document_chunk_count = _coerce_non_negative_int(metadata.get("document_chunk_count"))
+    document_char_count = _coerce_non_negative_int(metadata.get("document_char_count"))
+    return document_chunk_count == 1 or (
+        document_char_count > 0 and document_char_count <= SHORT_DOCUMENT_CHAR_LIMIT
+    )
+
+
+def _build_candidate_starts(text: str, *, query: str, max_length: int) -> list[int]:
+    starts = {0}
+    line_starts = _line_start_offsets(text)
+    starts.update(line_starts)
+
+    lowered_text = text.lower()
+    for token in _query_tokens(query):
+        start_index = 0
+        lowered_token = token.lower()
+        while lowered_token:
+            match_index = lowered_text.find(lowered_token, start_index)
+            if match_index < 0:
+                break
+            line_start = _line_start_for_offset(text, match_index)
+            starts.add(line_start)
+            if match_index - line_start >= max_length:
+                starts.add(max(0, match_index - (max_length // 2)))
+            start_index = match_index + len(lowered_token)
+
+    return sorted(start for start in starts if 0 <= start < len(text))
+
+
+def _query_tokens(query: str) -> list[str]:
+    identifiers = extract_identifiers(query)
+    if identifiers:
+        return identifiers
+    return sorted(extract_keywords(query), key=len, reverse=True)
+
+
+def _identifier_hit_count(*, query_identifiers: list[str], text: str) -> int:
+    lowered_text = text.lower()
+    return sum(1 for token in query_identifiers if token.lower() in lowered_text)
+
+
+def _line_start_offsets(text: str) -> list[int]:
+    starts = [0]
+    for index, char in enumerate(text):
+        if char == "\n" and index + 1 < len(text):
+            starts.append(index + 1)
+    return starts
+
+
+def _line_start_for_offset(text: str, offset: int) -> int:
+    line_start = text.rfind("\n", 0, max(0, offset))
     if line_start < 0:
-        line_start = max(0, best_index - (max_length // 3))
-    else:
-        line_start += 1
-    snippet = normalized[line_start : line_start + max_length]
-    return snippet.strip()
+        return 0
+    return line_start + 1
+
+
+def _slice_window(text: str, *, start: int, max_length: int) -> str:
+    end = min(len(text), start + max_length)
+    if end < len(text):
+        line_end = text.rfind("\n", start + 1, end)
+        if line_end > start:
+            end = line_end
+    snippet = text[start:end].strip()
+    if snippet:
+        return snippet
+    return text[start : min(len(text), start + max_length)].strip()
+
+
+def _coerce_non_negative_int(value: Any) -> int:
+    try:
+        coerced = int(value)
+    except (TypeError, ValueError):
+        return 0
+    return max(0, coerced)
 
 
 def build_local_evidence_bundle(
@@ -70,9 +161,10 @@ def build_local_evidence_bundle(
             kind="local",
             tool=tool_name,
             url_or_path=str(source),
-            snippet=build_query_focused_snippet(
+            snippet=build_local_snippet(
                 doc.page_content or "",
                 query=query,
+                metadata=getattr(doc, "metadata", None),
             ).replace("\n", " "),
             score=score,
             metadata=getattr(doc, "metadata", None),

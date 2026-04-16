@@ -9,11 +9,11 @@ from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 
 from src.chroma_store import create_chroma_vectorstore
-from src.chunking import chunk_notebook_path
+from src.chunking import chunk_notebook_path, chunk_python_text
 from src.settings import AppSettings
 from src.tools.local_rag import build_local_rag_tools, build_temp_retriever
 from src.tools.local_rag.ranking import rank_retrieval_rows
-from src.tools.local_rag.serialization import build_query_focused_snippet
+from src.tools.local_rag.serialization import build_local_snippet, build_query_focused_snippet
 
 
 class _FakeEmbeddings(Embeddings):
@@ -74,6 +74,66 @@ class LocalRagTest(unittest.TestCase):
 
         self.assertIn("groupby", snippet)
         self.assertNotIn("sales_q1 = pd.DataFrame", snippet)
+
+    def test_build_query_focused_snippet_prefers_more_relevant_usage_over_earliest_match(self) -> None:
+        text = (
+            "# train_test_split helper notes\n"
+            "from sklearn.model_selection import train_test_split\n"
+            "# later usage\n"
+            "X_train, X_test, y_train, y_test = train_test_split(\n"
+            "    X,\n"
+            "    y,\n"
+            "    test_size=0.2,\n"
+            "    random_state=42,\n"
+            ")\n"
+        )
+
+        snippet = build_query_focused_snippet(
+            text,
+            query="train_test_split random_state parameter",
+            max_length=120,
+        )
+
+        self.assertIn("random_state=42", snippet)
+        self.assertNotIn("helper notes", snippet)
+
+    def test_build_local_snippet_preserves_full_chunk_for_single_chunk_documents(self) -> None:
+        text = "header\n" + ("value = 1\n" * 80) + "target_call(random_state=42)\n"
+
+        snippet = build_local_snippet(
+            text,
+            query="random_state parameter",
+            metadata={"document_chunk_count": 1, "document_char_count": len(text)},
+        )
+
+        self.assertEqual(snippet, text.strip())
+        self.assertGreater(len(snippet), 500)
+
+    def test_build_local_snippet_preserves_full_chunk_for_short_documents(self) -> None:
+        text = "header\n" + ("step = 1\n" * 40) + "target_call(random_state=42)\n"
+
+        snippet = build_local_snippet(
+            text,
+            query="random_state parameter",
+            metadata={"document_chunk_count": 3, "document_char_count": len(text)},
+        )
+
+        self.assertEqual(snippet, text.strip())
+        self.assertLessEqual(len(text), 1200)
+
+    def test_chunk_python_text_annotates_document_counts(self) -> None:
+        text = "line = 1\n" * 240
+
+        docs = chunk_python_text(
+            path="uploads/session/sample.py",
+            text=text,
+            chunk_size=200,
+            chunk_overlap=20,
+        )
+
+        self.assertGreater(len(docs), 1)
+        self.assertTrue(all(doc.metadata["document_chunk_count"] == len(docs) for doc in docs))
+        self.assertTrue(all(doc.metadata["document_char_count"] == len(text) for doc in docs))
 
     def test_rank_retrieval_rows_prefers_parameter_cell_for_parameter_queries(self) -> None:
         import_doc = Document(
