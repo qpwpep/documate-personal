@@ -203,6 +203,8 @@ class ReportingRootCauseTest(unittest.TestCase):
             endpoint="http://localhost:8000",
             fixtures_path="data/benchmarks/fixtures/cases.generated.jsonl",
             config_path="data/benchmarks/config.toml",
+            track="release",
+            requested_limit=None,
             config=BenchmarkConfig(),
             cases=[docs_validator_case, docs_confused_case, hybrid_case, tool_case],
             results=results,

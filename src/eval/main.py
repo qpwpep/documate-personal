@@ -9,12 +9,14 @@ from .generate_cases import generate_cases_file
 from .history import refresh_history_report
 from .online_runner import run_online_benchmark
 from .reporting import build_markdown_report
-from .schemas import BenchmarkConfig, CaseResult, RunSummary, load_config
+from .schemas import BenchmarkConfig, CaseResult, RunSummary, RunTrack, load_config
 
 
 DEFAULT_CONFIG_PATH = Path("data/benchmarks/config.toml")
 DEFAULT_FIXTURES_PATH = Path("data/benchmarks/fixtures/cases.generated.jsonl")
 DEFAULT_OUTPUT_ROOT = Path("output/benchmarks")
+DEFAULT_HISTORY_README = Path("README.md")
+DEFAULT_HISTORY_SVG = Path("docs/assets/benchmark_history.svg")
 
 
 def _str_to_bool(value: str | None, default: bool) -> bool:
@@ -40,6 +42,17 @@ def _load_config_with_env_overrides(config_path: Path) -> BenchmarkConfig:
     return config
 
 
+def resolve_run_track(track: str | None, limit: int | None) -> RunTrack:
+    if track in {"release", "smoke"}:
+        return track
+    return "smoke" if limit is not None and limit > 0 else "release"
+
+
+def validate_history_targets(track: RunTrack, readme_path: Path, svg_path: Path) -> None:
+    if track == "smoke" and (readme_path == DEFAULT_HISTORY_README or svg_path == DEFAULT_HISTORY_SVG):
+        raise ValueError("Smoke history requires explicit --readme and --svg paths to avoid overwriting release artifacts.")
+
+
 def command_generate(args: argparse.Namespace) -> int:
     generated = generate_cases_file(
         seed_path=args.seed,
@@ -58,6 +71,7 @@ def command_run(args: argparse.Namespace) -> int:
 
     endpoint = args.endpoint or os.getenv("BENCHMARK_ENDPOINT", "http://localhost:8000")
     config = _load_config_with_env_overrides(args.config)
+    track = resolve_run_track(args.track, args.limit)
 
     run_dir, _, summary = run_online_benchmark(
         fixtures_path=args.fixtures,
@@ -65,10 +79,12 @@ def command_run(args: argparse.Namespace) -> int:
         config=config,
         config_path=args.config,
         output_root=args.output_root,
+        track=track,
         limit=args.limit,
     )
 
     print(f"Run directory: {run_dir}")
+    print(f"Track: {summary.track}")
     print(f"Overall: {'PASS' if summary.overall_passed else 'FAIL'}")
     return 0
 
@@ -100,12 +116,15 @@ def command_report(args: argparse.Namespace) -> int:
 
 
 def command_history(args: argparse.Namespace) -> int:
+    validate_history_targets(args.track, args.readme, args.svg)
     latest, comparable_runs = refresh_history_report(
         output_root=args.output_root,
         readme_path=args.readme,
         svg_path=args.svg,
+        track=args.track,
     )
     print(f"Updated benchmark history for {len(comparable_runs)} comparable runs.")
+    print(f"Track: {args.track}")
     print(f"Latest run: {latest.run_id}")
     print(f"README: {args.readme}")
     print(f"SVG: {args.svg}")
@@ -155,6 +174,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_OUTPUT_ROOT,
         help=f"Benchmark output root directory (default: {DEFAULT_OUTPUT_ROOT})",
     )
+    parser_run.add_argument(
+        "--track",
+        choices=["release", "smoke"],
+        default=None,
+        help="Run track. Defaults to smoke when --limit is set, otherwise release.",
+    )
     parser_run.add_argument("--limit", type=int, default=None, help="Optional case limit for smoke runs")
     parser_run.set_defaults(func=command_run)
 
@@ -175,14 +200,20 @@ def build_parser() -> argparse.ArgumentParser:
     parser_history.add_argument(
         "--readme",
         type=Path,
-        default=Path("README.md"),
+        default=DEFAULT_HISTORY_README,
         help="README file to refresh",
     )
     parser_history.add_argument(
         "--svg",
         type=Path,
-        default=Path("docs/assets/benchmark_history.svg"),
+        default=DEFAULT_HISTORY_SVG,
         help="SVG output path for the benchmark trend chart",
+    )
+    parser_history.add_argument(
+        "--track",
+        choices=["release", "smoke"],
+        default="release",
+        help="History track to refresh. Smoke runs require explicit --readme and --svg targets.",
     )
     parser_history.set_defaults(func=command_history)
     return parser

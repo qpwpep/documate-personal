@@ -34,11 +34,12 @@ uv run python -m src.eval.main generate \
 ```bash
 uv run python -m src.eval.main run \
   --mode online \
+  --track release \
   --fixtures data/benchmarks/fixtures/cases.generated.jsonl \
   --endpoint http://localhost:8000
 ```
 
-짧은 smoke run이 필요하면 `--limit`을 사용할 수 있습니다.
+짧은 smoke run이 필요하면 `--limit`을 사용할 수 있습니다. `--track`를 생략하면 `--limit` 런은 기본적으로 `smoke`로 분류됩니다.
 
 ```bash
 uv run python -m src.eval.main run \
@@ -59,10 +60,19 @@ uv run python -m src.eval.main report --run output/benchmarks/<run_id>
 uv run python -m src.eval.main history
 ```
 
-이 명령은 아래를 함께 갱신합니다.
+release 기준 정본은 이 명령으로 아래를 함께 갱신합니다.
 
 - `README.md`의 9, 10번 섹션
 - `docs/assets/benchmark_history.svg`
+
+smoke 히스토리는 release README/SVG를 덮어쓰지 않도록 별도 경로를 명시해야 합니다.
+
+```bash
+uv run python -m src.eval.main history \
+  --track smoke \
+  --readme docs/benchmarking_smoke.md \
+  --svg docs/assets/benchmark_history_smoke.svg
+```
 
 ## 3. 출력 산출물
 
@@ -71,13 +81,15 @@ uv run python -m src.eval.main history
 | 파일 | 설명 |
 |---|---|
 | `raw_results.jsonl` | 케이스별 원시 실행 결과 |
-| `summary.json` | 집계 지표, gate 판정, 비용/모델 정보 |
+| `summary.json` | 집계 지표, gate 판정, 비용/모델 정보, `track`, `requested_limit` |
 | `report.md` | 사람이 읽기 쉬운 분석 보고서 |
-| `latest_run.txt` | 최신 run id |
+| `latest_release_run.txt` | 최신 release run id |
+| `latest_smoke_run.txt` | 최신 smoke run id |
 
 실무 기준 source of truth:
 
-- 최신 run 확인: `output/benchmarks/latest_run.txt`
+- 최신 release run 확인: `output/benchmarks/latest_release_run.txt`
+- 최신 smoke run 확인: `output/benchmarks/latest_smoke_run.txt`
 - 자동 판정 확인: `output/benchmarks/<run_id>/summary.json`
 - 상세 해석 확인: `output/benchmarks/<run_id>/report.md`
 
@@ -98,7 +110,7 @@ judge minimum score와 pricing도 같은 파일에서 관리합니다.
 
 ## 5. 환경 변수 override
 
-`src/eval/main.py`는 아래 환경 변수로 일부 설정을 덮어쓸 수 있습니다.
+`src/eval/main.py`는 아래 환경 변수로 일부 설정을 덮어쓸 수 있습니다. 기본값은 `data/benchmarks/config.toml`, override 정의와 `.env.example` 생성 기준은 `src/settings.py`입니다.
 
 | 이름 | 기본값 | 설명 |
 |---|---|---|
@@ -108,8 +120,9 @@ judge minimum score와 pricing도 같은 파일에서 관리합니다.
 
 ## 6. 비교 이력 규칙
 
-`src/eval/history.py`는 모든 run을 같은 기준으로 비교하지 않습니다. 아래 두 조건이 같은 run만 comparable run으로 묶습니다.
+`src/eval/history.py`는 모든 run을 같은 기준으로 비교하지 않습니다. 먼저 `track`을 분리하고, 그 안에서 아래 두 조건이 같은 run만 comparable run으로 묶습니다.
 
+- `track`
 - `fixtures_path`
 - `total_cases`
 
