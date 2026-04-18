@@ -11,6 +11,7 @@ from ..agent_manager import AgentFlowManager
 from ..logging_utils import configure_logging, log_event
 from ..runtime_encoding import ensure_utf8_stdio
 from ..settings import ConfigurationError, get_settings, validate_required_keys
+from .agent_request_service import AgentRequestService
 from .cleanup import RuntimeCleaner
 from .routes import router
 from .session_store import InMemorySessionStore
@@ -49,9 +50,14 @@ async def lifespan(app: FastAPI):
         agent_factory=lambda: AgentFlowManager(settings=settings),
     )
     runtime_cleaner = RuntimeCleaner(settings=settings, session_store=session_store)
+    agent_request_service = AgentRequestService(
+        runtime_cleaner=runtime_cleaner,
+        session_store=session_store,
+    )
     app.state.settings = settings
     app.state.session_store = session_store
     app.state.runtime_cleaner = runtime_cleaner
+    app.state.agent_request_service = agent_request_service
     runtime_cleaner.run_once(force=True, current_session_id=None)
     yield
     session_store.close_all()
