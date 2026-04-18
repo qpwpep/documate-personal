@@ -1,6 +1,6 @@
 import unittest
 
-from src.eval.scoring_rules import compute_rule_scores, score_groundedness
+from src.eval.metric_rules import compute_rule_scores, score_groundedness
 from src.eval.schemas import BenchmarkCase
 
 

@@ -1,6 +1,6 @@
 import unittest
 
-from src.eval.scoring_rules import score_citation_compliance, score_groundedness
+from src.eval.metric_rules import score_citation_compliance, score_groundedness
 from src.eval.schemas import BenchmarkCase, EvidenceItem
 
 

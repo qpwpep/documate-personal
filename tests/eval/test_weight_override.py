@@ -1,6 +1,6 @@
 import unittest
 
-from src.eval.scoring_rules import (
+from src.eval.weighting import (
     compute_final_score,
     compute_rule_weighted_score,
     resolve_base_weights_for_case,
