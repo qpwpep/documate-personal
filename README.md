@@ -432,15 +432,16 @@ UI와 문서 검색 규칙은 아래 파일을 기준으로 관리합니다.
 - `src.service_manager`는 FastAPI와 Streamlit을 함께 띄우고 종료합니다.
 - `src.web.session_store`는 세션별 단일 요청 직렬화 lock을 사용합니다.
 - `src.rag_build`는 증분 인덱싱을 위해 `data/index/manifest.json`을 관리합니다.
-- benchmark 결과의 source of truth는 `output/benchmarks/latest_run.txt`입니다.
+- benchmark 최신 성능 정본은 `output/benchmarks/latest_release_run.txt`입니다.
+- smoke 최신 런 포인터는 `output/benchmarks/latest_smoke_run.txt`로 별도 관리합니다.
 
 ## 9. 최신 벤치마크 결과
 
-이 섹션은 `uv run python -m src.eval.main history` 실행 시 자동으로 갱신됩니다.
+이 섹션은 `uv run python -m src.eval.main history --track release` 실행 시 자동으로 갱신됩니다.
 
 ## 10. 최근 벤치마크 이력 및 추세
 
-이 섹션과 `docs/assets/benchmark_history.svg`도 같은 명령으로 함께 갱신됩니다.
+이 섹션과 `docs/assets/benchmark_history.svg`도 같은 명령으로 함께 갱신됩니다. smoke 히스토리는 별도 `--readme`, `--svg` 경로를 지정해야 합니다.
 
 ## 11. 테스트 및 검증
 

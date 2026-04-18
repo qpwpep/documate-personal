@@ -9,7 +9,7 @@ import requests
 from ..judge_llm import LLMJudge
 from ..reporting.summary import build_summary
 from ..reporting.writer import write_run_outputs
-from ..schemas import BenchmarkCase, BenchmarkConfig, CaseResult, RunSummary, load_cases_jsonl
+from ..schemas import BenchmarkCase, BenchmarkConfig, CaseResult, RunSummary, RunTrack, load_cases_jsonl
 from .request_builder import build_request_context, cleanup_session_upload_dir
 from .response_parser import ParsedResponseData, parse_agent_response
 from .result_builder import build_case_result
@@ -64,6 +64,14 @@ def _run_single_case(
     return result
 
 
+def _normalize_limit(limit: int | None) -> int | None:
+    return limit if limit is not None and limit > 0 else None
+
+
+def latest_run_pointer_path(output_root: Path, track: RunTrack) -> Path:
+    return output_root / f"latest_{track}_run.txt"
+
+
 def run_online_benchmark(
     *,
     fixtures_path: Path,
@@ -71,11 +79,13 @@ def run_online_benchmark(
     config: BenchmarkConfig,
     config_path: Path,
     output_root: Path,
+    track: RunTrack,
     limit: int | None = None,
 ) -> tuple[Path, list[CaseResult], RunSummary]:
     cases = load_cases_jsonl(fixtures_path)
-    if limit is not None and limit > 0:
-        cases = cases[:limit]
+    requested_limit = _normalize_limit(limit)
+    if requested_limit is not None:
+        cases = cases[:requested_limit]
     if not cases:
         raise ValueError("No benchmark cases found.")
 
@@ -104,6 +114,8 @@ def run_online_benchmark(
         endpoint=endpoint,
         fixtures_path=str(fixtures_path),
         config_path=str(config_path),
+        track=track,
+        requested_limit=requested_limit,
         config=config,
         cases=cases,
         results=results,
@@ -111,11 +123,12 @@ def run_online_benchmark(
 
     run_dir = output_root / run_id
     write_run_outputs(output_dir=run_dir, results=results, summary=summary)
-    (output_root / "latest_run.txt").write_text(run_id + "\n", encoding="utf-8")
+    latest_run_pointer_path(output_root, track).write_text(run_id + "\n", encoding="utf-8")
     return run_dir, results, summary
 
 
 __all__ = [
     "_run_single_case",
+    "latest_run_pointer_path",
     "run_online_benchmark",
 ]

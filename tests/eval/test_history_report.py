@@ -12,6 +12,8 @@ def _summary_payload(
     generated_at_utc: str,
     fixtures_path: str = "data\\benchmarks\\fixtures\\cases.generated.jsonl",
     total_cases: int = 120,
+    track: str = "release",
+    requested_limit: int | None = None,
     pass_rate: float,
     tool_precision: float,
     tool_recall: float,
@@ -27,6 +29,8 @@ def _summary_payload(
         "config_path": "data\\benchmarks\\config.toml",
         "generated_at_utc": generated_at_utc,
         "mode": "online",
+        "track": track,
+        "requested_limit": requested_limit,
         "metrics": {
             "total_cases": total_cases,
             "scored_cases": total_cases,
@@ -104,7 +108,7 @@ def _summary_payload(
 
 
 class HistoryReportTest(unittest.TestCase):
-    def test_select_comparable_runs_uses_latest_run_fixture_and_total_cases(self) -> None:
+    def test_select_comparable_runs_uses_release_pointer_and_excludes_smoke(self) -> None:
         with TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             output_root = root / "output" / "benchmarks"
@@ -136,6 +140,8 @@ class HistoryReportTest(unittest.TestCase):
                 _summary_payload(
                     run_id="20260307_120000",
                     generated_at_utc="2026-03-07T12:00:00+00:00",
+                    track="smoke",
+                    requested_limit=10,
                     total_cases=10,
                     pass_rate=0.8,
                     tool_precision=0.9,
@@ -150,15 +156,64 @@ class HistoryReportTest(unittest.TestCase):
                 run_dir.mkdir()
                 (run_dir / "summary.json").write_text(json.dumps(payload), encoding="utf-8")
 
-            (output_root / "latest_run.txt").write_text("20260307_101108\n", encoding="utf-8")
+            (output_root / "latest_release_run.txt").write_text("20260307_101108\n", encoding="utf-8")
+            (output_root / "latest_smoke_run.txt").write_text("20260307_120000\n", encoding="utf-8")
 
             runs = load_history_runs(output_root)
-            latest, comparable = select_comparable_runs(runs, latest_run_id="20260307_101108")
+            latest, comparable = select_comparable_runs(runs, track="release", latest_run_id="20260307_101108")
 
             self.assertEqual(latest.run_id, "20260307_101108")
             self.assertEqual([run.run_id for run in comparable], ["20260306_163931", "20260307_101108"])
 
-    def test_refresh_history_report_updates_readme_and_svg(self) -> None:
+    def test_select_comparable_runs_uses_smoke_pointer(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            output_root = root / "output" / "benchmarks"
+            output_root.mkdir(parents=True)
+
+            for payload in [
+                _summary_payload(
+                    run_id="20260307_120000",
+                    generated_at_utc="2026-03-07T12:00:00+00:00",
+                    track="smoke",
+                    requested_limit=10,
+                    total_cases=10,
+                    pass_rate=0.8,
+                    tool_precision=0.9,
+                    tool_recall=0.9,
+                    citation_compliance=0.9,
+                    p50_latency_ms=1000.0,
+                    p95_latency_ms=2000.0,
+                    avg_cost_per_case_usd=0.0001,
+                ),
+                _summary_payload(
+                    run_id="20260307_130000",
+                    generated_at_utc="2026-03-07T13:00:00+00:00",
+                    track="smoke",
+                    requested_limit=10,
+                    total_cases=10,
+                    pass_rate=0.9,
+                    tool_precision=0.95,
+                    tool_recall=1.0,
+                    citation_compliance=0.95,
+                    p50_latency_ms=900.0,
+                    p95_latency_ms=1800.0,
+                    avg_cost_per_case_usd=0.00009,
+                ),
+            ]:
+                run_dir = output_root / payload["run_id"]
+                run_dir.mkdir()
+                (run_dir / "summary.json").write_text(json.dumps(payload), encoding="utf-8")
+
+            (output_root / "latest_smoke_run.txt").write_text("20260307_130000\n", encoding="utf-8")
+
+            runs = load_history_runs(output_root)
+            latest, comparable = select_comparable_runs(runs, track="smoke", latest_run_id="20260307_130000")
+
+            self.assertEqual(latest.run_id, "20260307_130000")
+            self.assertEqual([run.run_id for run in comparable], ["20260307_120000", "20260307_130000"])
+
+    def test_refresh_history_report_updates_release_readme_and_svg(self) -> None:
         with TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             output_root = root / "output" / "benchmarks"
@@ -193,17 +248,33 @@ class HistoryReportTest(unittest.TestCase):
                     p95_latency_ms=46977.55,
                     avg_cost_per_case_usd=0.00081372,
                 ),
+                _summary_payload(
+                    run_id="20260307_120000",
+                    generated_at_utc="2026-03-07T12:00:00+00:00",
+                    track="smoke",
+                    requested_limit=10,
+                    total_cases=10,
+                    pass_rate=0.8,
+                    tool_precision=0.9,
+                    tool_recall=0.9,
+                    citation_compliance=0.9,
+                    p50_latency_ms=1000.0,
+                    p95_latency_ms=2000.0,
+                    avg_cost_per_case_usd=0.0001,
+                ),
             ]:
                 run_dir = output_root / payload["run_id"]
                 run_dir.mkdir()
                 (run_dir / "summary.json").write_text(json.dumps(payload), encoding="utf-8")
 
-            (output_root / "latest_run.txt").write_text("20260307_101108\n", encoding="utf-8")
+            (output_root / "latest_release_run.txt").write_text("20260307_101108\n", encoding="utf-8")
+            (output_root / "latest_smoke_run.txt").write_text("20260307_120000\n", encoding="utf-8")
 
             latest, comparable = refresh_history_report(
                 output_root=output_root,
                 readme_path=readme_path,
                 svg_path=svg_path,
+                track="release",
             )
 
             readme_text = readme_path.read_text(encoding="utf-8")
@@ -212,10 +283,12 @@ class HistoryReportTest(unittest.TestCase):
             self.assertEqual(latest.run_id, "20260307_101108")
             self.assertEqual(len(comparable), 2)
             self.assertIn("`20260307_101108`", readme_text)
+            self.assertIn("`output/benchmarks/latest_release_run.txt`", readme_text)
             self.assertIn("저장소에 남아 있는 2개 generated-suite 런 기준", readme_text)
             self.assertIn("![DocuMate benchmark history](docs/assets/benchmark_history.svg)", readme_text)
             self.assertIn("20260307_101108", svg_text)
             self.assertIn("20260303_134325", svg_text)
+            self.assertNotIn("20260307_120000", readme_text)
 
 
 if __name__ == "__main__":

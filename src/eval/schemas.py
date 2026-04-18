@@ -16,6 +16,7 @@ from ..latency import LatencyBreakdownModel
 
 CaseCategory = Literal["docs_only", "rag_only", "hybrid", "tool_action"]
 CaseScenario = Literal["seed_mutation", "adversarial", "regression", "ambiguity"]
+RunTrack = Literal["release", "smoke"]
 PlannerErrorCode = Literal[
     "structured_output_invocation_failed",
     "output_validation_failed",
@@ -456,6 +457,8 @@ class RunSummary(BaseModel):
     config_path: str
     generated_at_utc: str
     mode: str = "online"
+    track: RunTrack = "release"
+    requested_limit: int | None = None
     metrics: SummaryStats
     analysis: AnalysisStats | None = None
     gates: list[GateResult]
@@ -466,6 +469,16 @@ class RunSummary(BaseModel):
     judge_enabled: bool
     judge_model: str
     audit_metrics: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_legacy_track_fields(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        payload = dict(value)
+        if payload.get("track") is None:
+            payload["track"] = "smoke" if payload.get("requested_limit") is not None else "release"
+        return payload
 
 
 def load_cases_jsonl(path: Path) -> list[BenchmarkCase]:
