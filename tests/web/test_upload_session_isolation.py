@@ -14,7 +14,7 @@ from src.agent_manager import AgentFlowManager
 from src.contracts import ResponseState
 from src.settings import AppSettings
 from src.tools.local_rag import build_temp_retriever
-from src.web.routes import build_session_metadata_snapshot
+from src.web.agent_request_support import build_session_metadata_snapshot
 from src.web.session_store import InMemorySessionStore, SessionEntry
 from src.web.schemas import AgentRequest
 
