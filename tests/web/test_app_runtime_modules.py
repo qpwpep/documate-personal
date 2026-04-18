@@ -19,6 +19,7 @@ class WebRuntimeModulesTest(unittest.TestCase):
             with TestClient(create_app()) as client:
                 self.assertTrue(hasattr(client.app.state, "session_store"))
                 self.assertTrue(hasattr(client.app.state, "runtime_cleaner"))
+                self.assertTrue(hasattr(client.app.state, "agent_request_service"))
                 response = client.get("/")
 
         self.assertEqual(response.status_code, 200)
