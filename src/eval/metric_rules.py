@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import math
 import re
 from typing import Any, Iterable
 from urllib.parse import urlparse
@@ -8,7 +7,8 @@ from urllib.parse import urlparse
 from ..answer_schema import AnswerSection, ClaimItem
 from ..domain_docs import DEFAULT_DOCS
 from ..evidence import EvidenceItem, normalize_source_id
-from .schemas import BenchmarkCase, CaseWeightOverride, ModelPricing, Pricing, ScoreWeights
+from .schemas import BenchmarkCase
+
 
 _FAILURE_TEXT_PATTERNS = [
     r"agent execution failed",
@@ -27,164 +27,7 @@ _COMPARISON_MARKERS = (
     "however",
     "whereas",
 )
-
-
-def _contains_any_pattern(text: str, patterns: Iterable[str]) -> bool:
-    return any(re.search(pattern, text, flags=re.I) for pattern in patterns)
-
-
-def _normalize_domain(url_or_domain: str) -> str:
-    parsed = urlparse(url_or_domain if "://" in url_or_domain else f"https://{url_or_domain}")
-    domain = (parsed.netloc or parsed.path).strip().lower()
-    if domain.startswith("www."):
-        domain = domain[4:]
-    return domain
-
-
-_ALLOWED_OFFICIAL_DOMAINS = {_normalize_domain(value) for value in DEFAULT_DOCS.values()}
-
-
-def _is_valid_official_source(url_or_path: str) -> bool:
-    parsed = urlparse(str(url_or_path or "").strip())
-    if parsed.scheme.lower() != "https" or not parsed.netloc:
-        return False
-    return _normalize_domain(parsed.netloc) in _ALLOWED_OFFICIAL_DOMAINS
-
-
-def _is_valid_local_source(url_or_path: str) -> bool:
-    raw = str(url_or_path or "").strip()
-    if not raw:
-        return False
-    normalized = raw.replace("\\", "/").lower()
-    return (
-        normalized.endswith(".py")
-        or normalized.endswith(".ipynb")
-        or "/uploads/" in normalized
-        or normalized.startswith("uploads/")
-        or normalized.startswith("data/")
-    )
-
-
-def _expected_local_citation_tool(case: BenchmarkCase) -> str:
-    return "upload_search" if case.upload_fixture else "rag_search"
-
-
-def _contains_hangul(text: str) -> bool:
-    return bool(_HANGUL_PATTERN.search(str(text or "")))
-
-
-def _normalize_text(text: str) -> str:
-    return re.sub(r"\s+", " ", str(text or "").strip().lower())
-
-
-def _collect_valid_source_ids(
-    evidence: list[EvidenceItem],
-    *,
-    required_kind: str,
-    required_tool: str,
-    source_validator: Any,
-) -> set[str]:
-    valid_ids: set[str] = set()
-    for item in evidence:
-        if item.kind != required_kind:
-            continue
-        if item.tool != required_tool:
-            continue
-        source_id = str(item.source_id or "").strip()
-        document_id = str(item.document_id or normalize_source_id(item.url_or_path)).strip()
-        if not source_id or not document_id:
-            continue
-        if document_id != normalize_source_id(item.url_or_path):
-            continue
-        if not source_validator(item.url_or_path):
-            continue
-        valid_ids.add(source_id)
-    return valid_ids
-
-
-def _copy_penalty(response_text: str, observed_evidence: list[EvidenceItem]) -> float:
-    normalized_response = _normalize_text(response_text)
-    if not normalized_response:
-        return 0.0
-    longest_match = 0
-    for item in observed_evidence:
-        snippet = _normalize_text(item.snippet or "")
-        if len(snippet) < 48:
-            continue
-        if snippet and snippet in normalized_response:
-            longest_match = max(longest_match, len(snippet))
-    if longest_match >= 120:
-        return 0.65
-    if longest_match >= 72:
-        return 0.45
-    return 0.0
-
-
-def _hybrid_comparison_present(
-    response_text: str,
-    response_sections: list[AnswerSection] | None = None,
-) -> bool:
-    if any(str(section.kind or "").strip() == "comparison" for section in (response_sections or [])):
-        return True
-    normalized = _normalize_text(response_text)
-    return any(marker in normalized for marker in _COMPARISON_MARKERS)
-
-
-def resolve_effective_weights(
-    *,
-    case: BenchmarkCase | None = None,
-    base_weights: ScoreWeights,
-    case_override: CaseWeightOverride | None,
-) -> tuple[ScoreWeights, str | None]:
-    if (
-        case is not None
-        and case.category == "tool_action"
-        and not case.require_official_citation
-        and not case.require_local_citation
-    ):
-        merged = {
-            "answer_quality": 0.40,
-            "groundedness": 0.025,
-            "citation_traceability": 0.025,
-            "tool_choice": 0.30,
-            "format_language": 0.10,
-            "llm_judge": 0.15,
-        }
-    else:
-        merged = base_weights.as_dict()
-    if case_override is not None:
-        merged.update(case_override.as_partial_dict())
-
-    for key, value in merged.items():
-        if value < 0.0 or not math.isfinite(float(value)):
-            return base_weights, f"invalid weight '{key}': {value}"
-
-    total = float(sum(merged.values()))
-    if total <= 0.0 or not math.isfinite(total):
-        return base_weights, "weight sum must be a positive finite number"
-
-    normalized = {key: float(value) / total for key, value in merged.items()}
-    try:
-        return ScoreWeights(**normalized), None
-    except Exception as exc:
-        return base_weights, f"failed to build normalized weights: {exc}"
-
-
-def resolve_base_weights_for_case(
-    *,
-    case: BenchmarkCase,
-    base_weights: ScoreWeights,
-) -> ScoreWeights:
-    if case.category != "tool_action":
-        return base_weights
-    return ScoreWeights(
-        answer_quality=0.35,
-        groundedness=0.10,
-        citation_traceability=0.05,
-        tool_choice=0.25,
-        format_language=0.10,
-        llm_judge=0.15,
-    )
+_ALLOWED_OFFICIAL_DOMAINS = set()
 
 
 def score_tool_choice(case: BenchmarkCase, called_tools: list[str]) -> float:
@@ -286,26 +129,6 @@ def score_citation_traceability(
         return 1.0
 
     return sum(1 for check in checks if check) / len(checks)
-
-
-def _claim_support_ratio(
-    response_claims: list[ClaimItem] | None,
-    observed_evidence: list[EvidenceItem],
-) -> float | None:
-    if not response_claims:
-        return None
-    observed_ids = {
-        str(item.source_id or item.document_id or "").strip()
-        for item in observed_evidence
-        if str(item.source_id or item.document_id or "").strip()
-    }
-    if not observed_ids:
-        return 0.0
-    supported = 0
-    for claim in response_claims:
-        if any(evidence_id in observed_ids for evidence_id in claim.evidence_ids):
-            supported += 1
-    return supported / len(response_claims)
 
 
 def score_groundedness(
@@ -440,42 +263,6 @@ def compute_rule_scores(
     }
 
 
-def compute_rule_weighted_score(
-    component_scores: dict[str, float],
-    weights: ScoreWeights,
-) -> float:
-    weight_map = weights.as_dict()
-    score = 0.0
-    for key, value in component_scores.items():
-        score += value * float(weight_map.get(key, 0.0))
-    return max(0.0, min(1.0, score))
-
-
-def compute_composite_quality_score(
-    rule_weighted_score: float,
-    llm_judge_score: float | None,
-    weights: ScoreWeights,
-) -> float:
-    llm_weight = float(weights.llm_judge)
-    if llm_judge_score is None:
-        denominator = max(1e-9, 1.0 - llm_weight)
-        normalized = rule_weighted_score / denominator
-        return max(0.0, min(1.0, normalized))
-    return max(0.0, min(1.0, rule_weighted_score + llm_judge_score * llm_weight))
-
-
-def compute_final_score(
-    rule_weighted_score: float,
-    llm_judge_score: float | None,
-    weights: ScoreWeights,
-) -> float:
-    return compute_composite_quality_score(
-        rule_weighted_score=rule_weighted_score,
-        llm_judge_score=llm_judge_score,
-        weights=weights,
-    )
-
-
 def score_tool_match(case: BenchmarkCase, called_tools: list[str]) -> float:
     return score_tool_choice(case, called_tools)
 
@@ -514,83 +301,6 @@ def score_safety_format(
     )
 
 
-def _resolve_model_pricing(model_name: str | None, pricing: Pricing) -> ModelPricing:
-    if model_name:
-        configured_pricing = pricing.models.get(str(model_name))
-        if configured_pricing is not None:
-            return configured_pricing
-    return ModelPricing(
-        prompt_per_1k_usd=float(pricing.prompt_per_1k_usd),
-        completion_per_1k_usd=float(pricing.completion_per_1k_usd),
-    )
-
-
-def _extract_usage_from_llm_call(llm_call: Any) -> tuple[int, int]:
-    if not isinstance(llm_call, dict):
-        return 0, 0
-
-    usage_metadata = llm_call.get("usage_metadata")
-    response_metadata = llm_call.get("response_metadata")
-    usage_candidates = []
-    if isinstance(usage_metadata, dict):
-        usage_candidates.append(usage_metadata)
-    if isinstance(response_metadata, dict):
-        token_usage = response_metadata.get("token_usage")
-        if isinstance(token_usage, dict):
-            usage_candidates.append(token_usage)
-
-    for usage in usage_candidates:
-        try:
-            prompt_tokens = int(usage.get("prompt_tokens", usage.get("input_tokens", 0)) or 0)
-            completion_tokens = int(
-                usage.get("completion_tokens", usage.get("output_tokens", 0)) or 0
-            )
-        except (TypeError, ValueError):
-            continue
-        return max(0, prompt_tokens), max(0, completion_tokens)
-
-    return 0, 0
-
-
-def _extract_model_name_from_llm_call(llm_call: Any) -> str | None:
-    if not isinstance(llm_call, dict):
-        return None
-    response_metadata = llm_call.get("response_metadata")
-    if not isinstance(response_metadata, dict):
-        return None
-    model_name = response_metadata.get("model_name") or response_metadata.get("model")
-    return str(model_name) if model_name else None
-
-
-def compute_cost_usd(
-    *,
-    token_usage: Any,
-    llm_calls: list[Any] | None = None,
-    pricing: Pricing,
-) -> float | None:
-    if llm_calls:
-        total_cost = 0.0
-        has_usage = False
-        for call in llm_calls:
-            prompt_tokens, completion_tokens = _extract_usage_from_llm_call(call)
-            if prompt_tokens <= 0 and completion_tokens <= 0:
-                continue
-            has_usage = True
-            model_pricing = _resolve_model_pricing(_extract_model_name_from_llm_call(call), pricing)
-            total_cost += (prompt_tokens / 1000.0) * float(model_pricing.prompt_per_1k_usd)
-            total_cost += (completion_tokens / 1000.0) * float(model_pricing.completion_per_1k_usd)
-        if has_usage:
-            return round(total_cost, 8)
-
-    if token_usage is None:
-        return None
-    prompt_tokens = int(getattr(token_usage, "prompt_tokens", 0) or 0)
-    completion_tokens = int(getattr(token_usage, "completion_tokens", 0) or 0)
-    prompt_cost = (prompt_tokens / 1000.0) * float(pricing.prompt_per_1k_usd)
-    completion_cost = (completion_tokens / 1000.0) * float(pricing.completion_per_1k_usd)
-    return round(prompt_cost + completion_cost, 8)
-
-
 def tool_confusion_counts(case: BenchmarkCase, called_tools: list[str]) -> tuple[int, int, int]:
     expected = set(case.expected_tools)
     forbidden = set(case.forbidden_tools)
@@ -604,3 +314,125 @@ def tool_confusion_counts(case: BenchmarkCase, called_tools: list[str]) -> tuple
     if expected:
         fp += len(called.difference(expected).difference(forbidden))
     return tp, fp, fn
+
+
+def _contains_any_pattern(text: str, patterns: Iterable[str]) -> bool:
+    return any(re.search(pattern, text, flags=re.I) for pattern in patterns)
+
+
+def _normalize_domain(url_or_domain: str) -> str:
+    parsed = urlparse(url_or_domain if "://" in url_or_domain else f"https://{url_or_domain}")
+    domain = (parsed.netloc or parsed.path).strip().lower()
+    if domain.startswith("www."):
+        domain = domain[4:]
+    return domain
+
+
+for _default_doc in DEFAULT_DOCS.values():
+    _ALLOWED_OFFICIAL_DOMAINS.add(_normalize_domain(_default_doc))
+
+
+def _is_valid_official_source(url_or_path: str) -> bool:
+    parsed = urlparse(str(url_or_path or "").strip())
+    if parsed.scheme.lower() != "https" or not parsed.netloc:
+        return False
+    return _normalize_domain(parsed.netloc) in _ALLOWED_OFFICIAL_DOMAINS
+
+
+def _is_valid_local_source(url_or_path: str) -> bool:
+    raw = str(url_or_path or "").strip()
+    if not raw:
+        return False
+    normalized = raw.replace("\\", "/").lower()
+    return (
+        normalized.endswith(".py")
+        or normalized.endswith(".ipynb")
+        or "/uploads/" in normalized
+        or normalized.startswith("uploads/")
+        or normalized.startswith("data/")
+    )
+
+
+def _expected_local_citation_tool(case: BenchmarkCase) -> str:
+    return "upload_search" if case.upload_fixture else "rag_search"
+
+
+def _contains_hangul(text: str) -> bool:
+    return bool(_HANGUL_PATTERN.search(str(text or "")))
+
+
+def _normalize_text(text: str) -> str:
+    return re.sub(r"\s+", " ", str(text or "").strip().lower())
+
+
+def _collect_valid_source_ids(
+    evidence: list[EvidenceItem],
+    *,
+    required_kind: str,
+    required_tool: str,
+    source_validator: Any,
+) -> set[str]:
+    valid_ids: set[str] = set()
+    for item in evidence:
+        if item.kind != required_kind:
+            continue
+        if item.tool != required_tool:
+            continue
+        source_id = str(item.source_id or "").strip()
+        document_id = str(item.document_id or normalize_source_id(item.url_or_path)).strip()
+        if not source_id or not document_id:
+            continue
+        if document_id != normalize_source_id(item.url_or_path):
+            continue
+        if not source_validator(item.url_or_path):
+            continue
+        valid_ids.add(source_id)
+    return valid_ids
+
+
+def _copy_penalty(response_text: str, observed_evidence: list[EvidenceItem]) -> float:
+    normalized_response = _normalize_text(response_text)
+    if not normalized_response:
+        return 0.0
+    longest_match = 0
+    for item in observed_evidence:
+        snippet = _normalize_text(item.snippet or "")
+        if len(snippet) < 48:
+            continue
+        if snippet and snippet in normalized_response:
+            longest_match = max(longest_match, len(snippet))
+    if longest_match >= 120:
+        return 0.65
+    if longest_match >= 72:
+        return 0.45
+    return 0.0
+
+
+def _hybrid_comparison_present(
+    response_text: str,
+    response_sections: list[AnswerSection] | None = None,
+) -> bool:
+    if any(str(section.kind or "").strip() == "comparison" for section in (response_sections or [])):
+        return True
+    normalized = _normalize_text(response_text)
+    return any(marker in normalized for marker in _COMPARISON_MARKERS)
+
+
+def _claim_support_ratio(
+    response_claims: list[ClaimItem] | None,
+    observed_evidence: list[EvidenceItem],
+) -> float | None:
+    if not response_claims:
+        return None
+    observed_ids = {
+        str(item.source_id or item.document_id or "").strip()
+        for item in observed_evidence
+        if str(item.source_id or item.document_id or "").strip()
+    }
+    if not observed_ids:
+        return 0.0
+    supported = 0
+    for claim in response_claims:
+        if any(evidence_id in observed_ids for evidence_id in claim.evidence_ids):
+            supported += 1
+    return supported / len(response_claims)
