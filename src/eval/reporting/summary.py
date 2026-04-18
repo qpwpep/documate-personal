@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from ..scoring_rules import tool_confusion_counts
+from ..metric_rules import tool_confusion_counts
 from ..schemas import BenchmarkCase, BenchmarkConfig, CaseResult, GateResult, RunSummary, RunTrack, SummaryStats
 from .histograms import build_analysis, build_failure_reason, percentile
 
