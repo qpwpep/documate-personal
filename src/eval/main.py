@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 
 from .generate_cases import generate_cases_file
-from .history import refresh_history_report
+from .history_report import refresh_history_report
 from .online_runner import run_online_benchmark
 from .reporting import build_markdown_report
 from .schemas import BenchmarkConfig, CaseResult, RunSummary, RunTrack, load_config
