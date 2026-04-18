@@ -137,22 +137,23 @@ Windows 환경에서는 `-X utf8` 또는 `PYTHONUTF8=1` 사용을 권장합니�
 
 기준 파일:
 
-- 기본값: `src/settings.py`
-- 예시 환경 파일: `.env.example`
+- 기본값 source of truth: `src/settings.py`
+- 예시 환경 파일: `.env.example` (생성 산출물)
+- 동기화 명령: `uv run python script/sync_env_example.py`
 
 | 이름 | 기본값 | 설명 |
 |---|---|---|
 | `OPENAI_API_KEY` | 없음 | OpenAI 호출과 임베딩 생성에 필요 |
 | `TAVILY_API_KEY` | 없음 | 공식 문서 검색에 필요 |
-| `CHAT_MODEL` | `gpt-5-mini` | synthesis 모델 기본값 |
-| `PLANNER_MODEL` | `gpt-5-mini` | planner 모델 기본값 |
-| `SUMMARY_MODEL` | `gpt-5-mini` | session summary 모델 기본값 |
-| `PLANNER_MAX_TOKENS` | `1200` | planner structured output 최대 토큰 |
+| `CHAT_MODEL` | `gpt-5.4-nano` | synthesis 모델 기본값 |
+| `PLANNER_MODEL` | `gpt-5.4-nano` | planner 모델 기본값 |
+| `SUMMARY_MODEL` | `gpt-5.4-nano` | session summary 모델 기본값 |
+| `PLANNER_MAX_TOKENS` | `1920` | planner structured output 최대 토큰 |
 | `DOCS_SEARCH_TIMEOUT_SECONDS` | `8` | Tavily 검색 timeout |
 | `SYNTHESIS_TIMEOUT_SECONDS` | `20` | synthesis timeout |
 | `SYNTHESIS_MAX_RETRIES` | `0` | synthesis 자체 재시도 횟수 |
-| `SYNTHESIS_MAX_TOKENS` | `900` | synthesis max tokens |
-| `SYNTHESIS_PROMPT_SNIPPET_CHARS` | `400` | evidence snippet 길이 제한 |
+| `SYNTHESIS_MAX_TOKENS` | `1920` | synthesis max tokens |
+| `SYNTHESIS_PROMPT_SNIPPET_CHARS` | `960` | evidence snippet 길이 제한 |
 | `VERBOSE` | `true` | CLI 로그 상세 출력 |
 | `FASTAPI_URL` | `http://localhost:8000` | Streamlit이 호출하는 API 주소 |
 | `SESSION_TTL_SECONDS` | `1800` | 세션 TTL |
@@ -161,23 +162,23 @@ Windows 환경에서는 `-X utf8` 또는 `PYTHONUTF8=1` 사용을 권장합니�
 | `GENERATED_FILE_TTL_SECONDS` | `86400` | `save_text` 결과 파일 TTL |
 | `FILE_CLEANUP_INTERVAL_SECONDS` | `60` | 업로드/생성 파일 정리 주기 |
 | `SLACK_BOT_TOKEN` | 없음 | Slack 전송용 토큰 |
-| `SLACK_DEFAULT_USER_ID` | 없음 | 기본 DM 대상 사용자 |
 | `SLACK_DEFAULT_DM_EMAIL` | 없음 | 기본 DM 대상 이메일 |
-
-`.env.example`는 팀 기본 운영값 예시로 `gpt-5.4-nano`, 더 큰 token budget 등을 제안하지만, 코드 레벨 source of truth는 `src/settings.py`입니다.
+| `SLACK_DEFAULT_USER_ID` | 없음 | 기본 DM 대상 사용자 |
 
 ### 4.2 벤치마크 설정
 
 기준 파일:
 
-- 기본값: `data/benchmarks/config.toml`
-- 환경 변수 override: `.env.example`, `src/eval/main.py`
+- 기본값 source of truth: `data/benchmarks/config.toml`
+- 환경 변수 override 정의: `src/settings.py`
+- 예시 환경 파일: `.env.example` (config 값을 복사한 override 예시)
+- 동기화 명령: `uv run python script/sync_env_example.py`
 
 | 이름 | 기본값 | 설명 |
 |---|---|---|
-| `JUDGE_MODEL` | `gpt-5-mini` | benchmark judge 모델 |
-| `BENCHMARK_ENDPOINT` | `http://localhost:8000` | benchmark 대상 FastAPI 주소 |
-| `BENCHMARK_JUDGE_ENABLED` | `true` | judge 사용 여부 |
+| `JUDGE_MODEL` | `gpt-5.4-nano` | benchmark judge 모델 override |
+| `BENCHMARK_ENDPOINT` | `http://localhost:8000` | benchmark 대상 FastAPI 주소 override |
+| `BENCHMARK_JUDGE_ENABLED` | `true` | judge 사용 여부 override |
 
 ## 5. 검색 소스와 파일 제약
 
@@ -448,6 +449,7 @@ UI와 문서 검색 규칙은 아래 파일을 기준으로 관리합니다.
 ```bash
 uv run pytest -q
 uv run python script/check_encoding.py
+uv run python script/sync_env_example.py --check
 ```
 
 벤치마크 관련 명령은 [docs/benchmarking.md](docs/benchmarking.md)를 참고하세요.
