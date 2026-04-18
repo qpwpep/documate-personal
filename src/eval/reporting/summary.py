@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from ..scoring_rules import tool_confusion_counts
-from ..schemas import BenchmarkCase, BenchmarkConfig, CaseResult, GateResult, RunSummary, SummaryStats
+from ..schemas import BenchmarkCase, BenchmarkConfig, CaseResult, GateResult, RunSummary, RunTrack, SummaryStats
 from .histograms import build_analysis, build_failure_reason, percentile
 
 
@@ -71,6 +71,8 @@ def build_summary(
     endpoint: str,
     fixtures_path: str,
     config_path: str,
+    track: RunTrack,
+    requested_limit: int | None,
     config: BenchmarkConfig,
     cases: list[BenchmarkCase],
     results: list[CaseResult],
@@ -204,6 +206,8 @@ def build_summary(
         config_path=config_path,
         generated_at_utc=datetime.now(timezone.utc).isoformat(),
         mode="online",
+        track=track,
+        requested_limit=requested_limit,
         metrics=metrics,
         analysis=analysis,
         gates=gates,
