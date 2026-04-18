@@ -3,7 +3,8 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from src.eval.history import load_history_runs, refresh_history_report, select_comparable_runs
+from src.eval.history_loader import load_history_runs, select_comparable_runs
+from src.eval.history_report import refresh_history_report
 
 
 def _summary_payload(
