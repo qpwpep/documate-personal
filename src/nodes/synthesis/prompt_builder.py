@@ -194,7 +194,7 @@ def build_synthesis_messages(
         model_messages.append(SystemMessage(content=f"[Conversation Summary]\n{runtime.memory_summary}"))
     model_messages.extend(trimmed_history)
     model_messages.append(
-        SystemMessage(content=f"[Retrieved Evidence]\n{format_evidence_for_prompt(prompt_evidence)}")
+        SystemMessage(content=f"[Retrieved Evidence]\n{format_evidence_for_prompt(prompt_evidence, max_snippet_chars=snippet_char_limit)}")
     )
     model_messages.append(SystemMessage(content=render_answer_contract_prompt(answer_contract)))
     model_messages.append(
@@ -226,7 +226,7 @@ def build_plain_summary_attach_messages(
         SystemMessage(content=SYS_POLICY),
         SystemMessage(content=PLAIN_SUMMARY_ATTACH_CONTRACT),
         HumanMessage(content=normalize_query_text(user_input) or "Summarize the retrieved evidence."),
-        SystemMessage(content=f"[Retrieved Evidence]\n{format_evidence_for_prompt(compact_evidence)}"),
+        SystemMessage(content=f"[Retrieved Evidence]\n{format_evidence_for_prompt(compact_evidence, max_snippet_chars=snippet_char_limit)}"),
     ]
 
 
