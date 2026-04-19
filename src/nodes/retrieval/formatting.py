@@ -49,6 +49,8 @@ def _is_local_evidence(item: dict[str, Any]) -> bool:
     return str(item.get("kind") or "").strip().lower() == "local"
 
 
+# Final guardrail for prompt rendering. Synthesis callers should pass
+# max_snippet_chars explicitly so this formatter stays aligned with upstream budgets.
 def format_evidence_for_prompt(
     items: list[dict[str, Any]],
     *,
