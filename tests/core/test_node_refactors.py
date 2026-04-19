@@ -1,7 +1,7 @@
 import importlib
 import unittest
 
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
 from src.answer_schema import (
     AgentResponsePayloadModel,
@@ -197,8 +197,10 @@ class NodeRefactorTest(unittest.TestCase):
                 "messages": [
                     HumanMessage(content="u1"),
                     AIMessage(content="a1"),
+                    ToolMessage(content='{"status":"ok"}', name="tavily_search", tool_call_id="tool-1"),
                     HumanMessage(content="u2"),
                     AIMessage(content="a2"),
+                    ToolMessage(content='{"status":"ok"}', name="save_text", tool_call_id="tool-2"),
                     HumanMessage(content="u3"),
                     AIMessage(content="a3"),
                     HumanMessage(content="u4"),
@@ -214,7 +216,8 @@ class NodeRefactorTest(unittest.TestCase):
             max_turns=2,
         )
 
-        self.assertGreater(history_before, history_after)
+        self.assertEqual(history_before, 7)
+        self.assertEqual(history_after, 5)
         self.assertIsInstance(model_messages[0], SystemMessage)
         self.assertEqual(model_messages[0].content, SYS_POLICY)
         self.assertTrue(any("[Conversation Summary]" in str(message.content) for message in model_messages))
@@ -227,7 +230,10 @@ class NodeRefactorTest(unittest.TestCase):
             )
         )
         self.assertFalse(any(isinstance(message, HumanMessage) and message.content == "u1" for message in model_messages))
+        self.assertFalse(any(isinstance(message, AIMessage) and message.content == "a1" for message in model_messages))
+        self.assertTrue(any(isinstance(message, HumanMessage) and message.content == "u2" for message in model_messages))
         self.assertTrue(any(isinstance(message, HumanMessage) and message.content == "u4" for message in model_messages))
+
 
     def test_synthesis_prompt_builder_adds_hybrid_guidance_when_official_and_local_evidence_exist(self) -> None:
         state = build_legacy_state({"messages": [HumanMessage(content="질문")]})
@@ -256,6 +262,7 @@ class NodeRefactorTest(unittest.TestCase):
             deduped_evidence=[_docs_evidence(snippet=long_snippet)],
             attempt=1,
             max_turns=2,
+            snippet_char_limit=120,
         )
 
         retrieved_evidence_messages = [

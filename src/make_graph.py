@@ -6,13 +6,14 @@ from langgraph.graph import END, StateGraph
 
 from .contracts.boundary.graph import get_retry_state
 from .contracts.boundary.planner import get_planner_state
+from .nodes.session import keep_recent_messages
 
 def _summary_router(state: dict[str, Any], summary_max_turns: int) -> str:
     messages = state.get("messages")
     if not isinstance(messages, list):
         messages = []
-    window_size = summary_max_turns * 2 + 2
-    if len(messages) > window_size:
+    recent_window = keep_recent_messages(messages, max_turns=summary_max_turns)
+    if len(recent_window) < len(messages):
         return "summarize"
     return "planner"
 
