@@ -3,7 +3,14 @@ from __future__ import annotations
 import logging
 from typing import Any, List
 
-from langchain_core.messages import AIMessage, AnyMessage, BaseMessage, HumanMessage, SystemMessage
+from langchain_core.messages import (
+    AIMessage,
+    AnyMessage,
+    BaseMessage,
+    HumanMessage,
+    SystemMessage,
+    ToolMessage,
+)
 
 from ..contracts import GraphState
 from ..contracts.boundary.debug import get_debug_state
@@ -29,8 +36,14 @@ def add_user_message(state: GraphState) -> GraphState:
 def keep_recent_messages(messages: List[BaseMessage], max_turns: int = 6) -> List[BaseMessage]:
     if not messages:
         return messages
-    window_size = max_turns * 2 + 2
-    return messages[-window_size:]
+    turns_to_keep = max(0, int(max_turns)) + 1
+    human_indices = [
+        index for index, message in enumerate(messages) if isinstance(message, HumanMessage)
+    ]
+    if not human_indices or len(human_indices) <= turns_to_keep:
+        return messages
+    start_index = human_indices[-turns_to_keep]
+    return messages[start_index:]
 
 
 def extract_text_content(content: Any) -> str:
@@ -47,6 +60,30 @@ def extract_text_content(content: Any) -> str:
                     parts.append(str(text))
         return "\n".join(parts)
     return str(content)
+
+
+def _normalize_transcript_text(text: str) -> str:
+    return " ".join(str(text or "").split()).strip()
+
+
+def _summary_role(message: BaseMessage) -> str:
+    if isinstance(message, HumanMessage):
+        return "user"
+    if isinstance(message, AIMessage):
+        return "assistant"
+    return "system"
+
+
+def build_summary_transcript(messages: List[BaseMessage]) -> str:
+    lines: list[str] = []
+    for message in messages:
+        if isinstance(message, ToolMessage):
+            continue
+        text = _normalize_transcript_text(extract_text_content(message.content))
+        if not text:
+            continue
+        lines.append(f"{_summary_role(message)}: {text}")
+    return "\n".join(lines)
 
 
 def latest_previous_ai_answer(messages: list[AnyMessage]) -> str:
@@ -73,12 +110,19 @@ def make_summarize_node(llm_summarizer: Any, verbose: bool, max_turns: int = 6):
 
         cutoff = len(messages) - len(recent_window)
         old_messages = messages[:cutoff]
-        recent_messages = messages[cutoff:]
+        recent_messages = recent_window
         llm_calls: list[LLMCallMetadata] = []
+        summary_transcript = build_summary_transcript(old_messages)
+
+        if not summary_transcript:
+            return {"messages": recent_messages}
 
         try:
             summary_response = llm_summarizer.invoke(
-                [SystemMessage(content=SUMMARY_SYS)] + old_messages
+                [
+                    SystemMessage(content=SUMMARY_SYS),
+                    HumanMessage(content=summary_transcript),
+                ]
             )
             summary = extract_text_content(getattr(summary_response, "content", summary_response)).strip()
             if isinstance(summary_response, AIMessage):

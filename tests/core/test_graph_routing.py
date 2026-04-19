@@ -81,6 +81,42 @@ class GraphRoutingTest(unittest.TestCase):
         self.assertEqual(summary_calls["count"], 1)
         self.assertEqual(result["response"].final_answer, "final answer")
 
+    def test_tool_messages_do_not_force_summary_when_turn_count_fits_window(self) -> None:
+        summary_calls = {"count": 0}
+        history = [
+            HumanMessage(content="user-1"),
+            AIMessage(content="answer-1"),
+            ToolMessage(content='{"status":"ok"}', name="tavily_search", tool_call_id="tool-1"),
+            AIMessage(content="saved to output/response-1.txt"),
+            HumanMessage(content="user-2"),
+            AIMessage(content="answer-2"),
+            ToolMessage(content='{"status":"ok"}', name="save_text", tool_call_id="tool-2"),
+            AIMessage(content="saved to output/response-2.txt"),
+        ]
+
+        def _summarize(state):
+            summary_calls["count"] += 1
+            return state
+
+        graph = build_graph(
+            state_type=GraphState,
+            add_user_node=add_user_message,
+            summarize_node=_summarize,
+            planner_node=lambda state: {"planner": PlannerState(output=PlannerOutput(use_retrieval=False, tasks=[]))},
+            retrieve_dispatch_node=lambda state: self.fail("retrieve_dispatch should not run"),
+            synthesize_node=lambda state: {
+                "messages": [AIMessage(content="final answer")],
+                "response": ResponseState(final_answer="final answer", synthesis_attempt=1),
+            },
+            validate_evidence_node=make_validate_evidence_node(verbose=False),
+            action_postprocess_node=lambda state: {},
+            summary_max_turns=2,
+        )
+
+        result = graph.invoke(build_graph_state_input(user_input="question", messages=history))
+        self.assertEqual(summary_calls["count"], 0)
+        self.assertEqual(result["response"].final_answer, "final answer")
+
     def test_planner_skips_retrieval_dispatch_when_not_required(self) -> None:
         dispatch_calls = {"count": 0}
 
