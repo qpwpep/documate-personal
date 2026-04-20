@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Literal
 
 from pydantic import Field, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
 
 
 DEFAULT_BENCHMARK_CONFIG_PATH = Path("data/benchmarks/config.toml")
@@ -143,6 +143,22 @@ class AppSettings(BaseSettings):
         extra="ignore",
         populate_by_name=True,
     )
+
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls: type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
+        return (
+            init_settings,
+            dotenv_settings,
+            env_settings,
+            file_secret_settings,
+        )
 
     openai_api_key: str | None = Field(default=_app_default("OPENAI_API_KEY"), alias="OPENAI_API_KEY")
     tavily_api_key: str | None = Field(default=_app_default("TAVILY_API_KEY"), alias="TAVILY_API_KEY")
