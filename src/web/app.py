@@ -45,6 +45,13 @@ async def lifespan(app: FastAPI):
         logger.error(str(exc))
         raise RuntimeError(str(exc)) from exc
 
+    log_event(
+        logger,
+        logging.INFO,
+        "fastapi_runtime_settings",
+        chat_model=settings.chat_model,
+    )
+
     session_store = InMemorySessionStore(
         settings=settings,
         agent_factory=lambda: AgentFlowManager(settings=settings),
