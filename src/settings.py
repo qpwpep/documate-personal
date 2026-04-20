@@ -6,11 +6,12 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 DEFAULT_BENCHMARK_CONFIG_PATH = Path("data/benchmarks/config.toml")
+ReasoningEffort = Literal["none", "minimal", "low", "medium", "high", "xhigh"]
 
 
 @dataclass(frozen=True)
@@ -41,6 +42,13 @@ APP_ENV_SPECS = (
         960,
         "evidence snippet 길이 제한",
         example=960,
+    ),
+    EnvVarSpec(
+        "SYNTHESIS_REASONING_EFFORT",
+        "synthesis_reasoning_effort",
+        None,
+        "synthesis reasoning effort override (none/minimal/low/medium/high/xhigh, 빈 값이면 모델 기본값)",
+        example="low",
     ),
     EnvVarSpec("VERBOSE", "verbose", True, "CLI 로그 상세 출력", example=True),
     EnvVarSpec("FASTAPI_URL", "fastapi_url", "http://localhost:8000", "Streamlit이 호출하는 API 주소", example="http://localhost:8000"),
@@ -168,6 +176,10 @@ class AppSettings(BaseSettings):
         alias="SYNTHESIS_PROMPT_SNIPPET_CHARS",
         ge=80,
     )
+    synthesis_reasoning_effort: ReasoningEffort | None = Field(
+        default=_app_default("SYNTHESIS_REASONING_EFFORT"),
+        alias="SYNTHESIS_REASONING_EFFORT",
+    )
 
     verbose: bool = Field(default=_app_default("VERBOSE"), alias="VERBOSE")
     fastapi_url: str = Field(default=_app_default("FASTAPI_URL"), alias="FASTAPI_URL")
@@ -192,6 +204,18 @@ class AppSettings(BaseSettings):
     slack_bot_token: str | None = Field(default=_app_default("SLACK_BOT_TOKEN"), alias="SLACK_BOT_TOKEN")
     slack_default_dm_email: str | None = Field(default=_app_default("SLACK_DEFAULT_DM_EMAIL"), alias="SLACK_DEFAULT_DM_EMAIL")
     slack_default_user_id: str | None = Field(default=_app_default("SLACK_DEFAULT_USER_ID"), alias="SLACK_DEFAULT_USER_ID")
+
+    @field_validator("synthesis_reasoning_effort", mode="before")
+    @classmethod
+    def _normalize_synthesis_reasoning_effort(cls, value: object) -> object:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in {"", "default", "model_default"}:
+                return None
+            return normalized
+        return value
 
 
 @lru_cache(maxsize=1)
