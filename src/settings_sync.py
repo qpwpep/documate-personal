@@ -67,7 +67,7 @@ def build_env_example_text(config_path: Path = DEFAULT_BENCHMARK_CONFIG_PATH) ->
             "# Application settings",
         ]
     )
-    for spec in APP_ENV_SPECS[2:18]:
+    for spec in APP_ENV_SPECS[2:-3]:
         lines.append(f"{spec.env_name}={_serialize_env_value(spec.default)}")
 
     lines.extend(
@@ -76,7 +76,7 @@ def build_env_example_text(config_path: Path = DEFAULT_BENCHMARK_CONFIG_PATH) ->
             "# Slack",
         ]
     )
-    for spec in APP_ENV_SPECS[18:]:
+    for spec in APP_ENV_SPECS[-3:]:
         lines.append(f"{spec.env_name}=")
 
     lines.extend(
