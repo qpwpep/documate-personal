@@ -23,6 +23,12 @@ def _derive_compact_synthesis_profile(settings: AppSettings) -> tuple[int, int]:
     )
 
 
+def _build_synthesis_reasoning_kwargs(settings: AppSettings) -> dict[str, Any]:
+    if not settings.synthesis_reasoning_effort:
+        return {}
+    return {"reasoning": {"effort": settings.synthesis_reasoning_effort}}
+
+
 def build_llm_registry(settings: AppSettings) -> LLMRegistry:
     llm_synthesizer = ChatOpenAI(
         model=settings.chat_model,
@@ -34,6 +40,7 @@ def build_llm_registry(settings: AppSettings) -> LLMRegistry:
         use_responses_api=True,
         output_version="responses/v1",
         verbose=settings.verbose,
+        **_build_synthesis_reasoning_kwargs(settings),
     )
     compact_max_tokens, compact_timeout = _derive_compact_synthesis_profile(settings)
     llm_synthesizer_compact = ChatOpenAI(
@@ -46,6 +53,7 @@ def build_llm_registry(settings: AppSettings) -> LLMRegistry:
         use_responses_api=True,
         output_version="responses/v1",
         verbose=settings.verbose,
+        **_build_synthesis_reasoning_kwargs(settings),
     )
     llm_planner_base = ChatOpenAI(
         model=settings.planner_model,
