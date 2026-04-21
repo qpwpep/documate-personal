@@ -10,6 +10,7 @@ from typing import Any
 from ..agent_manager import AgentFlowManager
 from ..contracts import SessionMetadata
 from ..logging_utils import log_event
+from ..progress import ProgressEmitter
 from ..settings import AppSettings
 
 
@@ -146,6 +147,7 @@ class InMemorySessionStore:
         session_metadata: SessionMetadata,
         user_input: str,
         upload_file_path: str | None = None,
+        progress_emitter: ProgressEmitter | None = None,
     ) -> tuple[AgentFlowManager, dict[str, Any], int]:
         entry = self.get_or_create_entry(session_id)
         with self._lock:
@@ -161,7 +163,11 @@ class InMemorySessionStore:
                 session_lock_wait_ms = int((time.monotonic() - lock_started) * 1000)
                 agent_manager = entry.agent
                 agent_manager.set_session_metadata(session_metadata)
-                agent_answer = agent_manager.run_agent_flow(user_input, upload_file_path)
+                agent_answer = agent_manager.run_agent_flow(
+                    user_input,
+                    upload_file_path,
+                    progress_emitter=progress_emitter,
+                )
                 return agent_manager, agent_answer, session_lock_wait_ms
         finally:
             finished_at = time.monotonic()
