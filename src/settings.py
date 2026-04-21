@@ -226,6 +226,16 @@ class AppSettings(BaseSettings):
     slack_default_dm_email: str | None = Field(default=_app_default("SLACK_DEFAULT_DM_EMAIL"), alias="SLACK_DEFAULT_DM_EMAIL")
     slack_default_user_id: str | None = Field(default=_app_default("SLACK_DEFAULT_USER_ID"), alias="SLACK_DEFAULT_USER_ID")
 
+    def fastapi_runtime_log_fields(self) -> dict[str, str | int]:
+        return {
+            "chat_model": self.chat_model,
+            "planner_model": self.planner_model,
+            "summary_model": self.summary_model,
+            "synthesis_timeout_seconds": self.synthesis_timeout_seconds,
+            "synthesis_max_tokens": self.synthesis_max_tokens,
+            "synthesis_reasoning_effort": self.synthesis_reasoning_effort or "model_default",
+        }
+
     @field_validator("synthesis_reasoning_effort", mode="before")
     @classmethod
     def _normalize_synthesis_reasoning_effort(cls, value: object) -> object:
