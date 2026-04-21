@@ -87,7 +87,7 @@ class LatencyBreakdownReportingTest(unittest.TestCase):
 
         result = _run_single_case(
             run_id="run-latency",
-            endpoint="http://localhost:8000",
+            endpoint="http://127.0.0.1:8000",
             fixtures_path=Path("data/benchmarks/fixtures/cases.generated.jsonl"),
             case=BenchmarkCase(
                 case_id="docs_only_seed_mutation_001",
@@ -108,7 +108,7 @@ class LatencyBreakdownReportingTest(unittest.TestCase):
         summary = RunSummary.model_validate(
             {
                 "run_id": "20260308_000000",
-                "endpoint": "http://localhost:8000",
+                "endpoint": "http://127.0.0.1:8000",
                 "fixtures_path": "data/benchmarks/fixtures/cases.generated.jsonl",
                 "config_path": "data/benchmarks/config.toml",
                 "generated_at_utc": "2026-03-08T00:00:00+00:00",
@@ -246,7 +246,7 @@ class LatencyBreakdownReportingTest(unittest.TestCase):
 
         result = _run_single_case(
             run_id="run-cost",
-            endpoint="http://localhost:8000",
+            endpoint="http://127.0.0.1:8000",
             fixtures_path=Path("data/benchmarks/fixtures/cases.generated.jsonl"),
             case=BenchmarkCase(
                 case_id="docs_only_seed_mutation_001",
@@ -281,7 +281,7 @@ class LatencyBreakdownReportingTest(unittest.TestCase):
     def test_build_markdown_report_marks_legacy_runs_unavailable(self) -> None:
         summary = RunSummary(
             run_id="20260308_legacy",
-            endpoint="http://localhost:8000",
+            endpoint="http://127.0.0.1:8000",
             fixtures_path="data/benchmarks/fixtures/cases.generated.jsonl",
             config_path="data/benchmarks/config.toml",
             generated_at_utc="2026-03-08T00:00:00+00:00",

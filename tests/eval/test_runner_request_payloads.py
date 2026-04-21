@@ -74,7 +74,7 @@ class RunnerRequestPayloadTest(unittest.TestCase):
 
         _run_single_case(
             run_id="run-slack-payload",
-            endpoint="http://localhost:8000",
+            endpoint="http://127.0.0.1:8000",
             fixtures_path=Path("data/benchmarks/fixtures/cases.generated.jsonl"),
             case=case,
             timeout_seconds=5,
@@ -119,7 +119,7 @@ class RunnerRequestPayloadTest(unittest.TestCase):
 
         result = _run_single_case(
             run_id="run-planner-errors",
-            endpoint="http://localhost:8000",
+            endpoint="http://127.0.0.1:8000",
             fixtures_path=Path("data/benchmarks/fixtures/cases.generated.jsonl"),
             case=BenchmarkCase(
                 case_id="docs_only_seed_mutation_001",
@@ -250,7 +250,7 @@ class RunnerRequestPayloadTest(unittest.TestCase):
 
         result = _run_single_case(
             run_id="run-judge-payload",
-            endpoint="http://localhost:8000",
+            endpoint="http://127.0.0.1:8000",
             fixtures_path=Path("data/benchmarks/fixtures/cases.generated.jsonl"),
             case=BenchmarkCase(
                 case_id="hybrid_seed_001",

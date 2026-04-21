@@ -26,7 +26,7 @@ def _make_result(
             "scenario": case.scenario,
             "query": case.query,
             "session_id": f"session-{case.case_id}",
-            "endpoint": "http://localhost:8000/agent",
+        "endpoint": "http://127.0.0.1:8000/agent",
             "request_payload": {"query": case.query},
             "http_status": 200,
             "response_text": "response body",
@@ -200,7 +200,7 @@ class ReportingRootCauseTest(unittest.TestCase):
 
         summary = build_summary(
             run_id="run-root-cause",
-            endpoint="http://localhost:8000",
+        endpoint="http://127.0.0.1:8000",
             fixtures_path="data/benchmarks/fixtures/cases.generated.jsonl",
             config_path="data/benchmarks/config.toml",
             track="release",

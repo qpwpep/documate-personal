@@ -38,7 +38,7 @@ class RunnerErrorBucketsTest(unittest.TestCase):
     def test_timeout_goes_to_runtime_errors(self, _mock_post) -> None:
         result = _run_single_case(
             run_id="run-timeout",
-            endpoint="http://localhost:8000",
+            endpoint="http://127.0.0.1:8000",
             fixtures_path=self.fixtures_path,
             case=self.case,
             timeout_seconds=1,
@@ -79,7 +79,7 @@ class RunnerErrorBucketsTest(unittest.TestCase):
         )
         result = _run_single_case(
             run_id="run-contract",
-            endpoint="http://localhost:8000",
+            endpoint="http://127.0.0.1:8000",
             fixtures_path=self.fixtures_path,
             case=self.case,
             timeout_seconds=5,
@@ -119,7 +119,7 @@ class RunnerErrorBucketsTest(unittest.TestCase):
         )
         result = _run_single_case(
             run_id="run-judge",
-            endpoint="http://localhost:8000",
+            endpoint="http://127.0.0.1:8000",
             fixtures_path=self.fixtures_path,
             case=self.case,
             timeout_seconds=5,
@@ -197,7 +197,7 @@ class RunnerErrorBucketsTest(unittest.TestCase):
         )
         result = _run_single_case(
             run_id="run-diagnostics",
-            endpoint="http://localhost:8000",
+            endpoint="http://127.0.0.1:8000",
             fixtures_path=self.fixtures_path,
             case=self.case,
             timeout_seconds=5,
@@ -247,7 +247,7 @@ class RunnerErrorBucketsTest(unittest.TestCase):
 
         result = _run_single_case(
             run_id="run-validator",
-            endpoint="http://localhost:8000",
+            endpoint="http://127.0.0.1:8000",
             fixtures_path=self.fixtures_path,
             case=self.case,
             timeout_seconds=5,
@@ -278,7 +278,7 @@ class RunnerErrorBucketsTest(unittest.TestCase):
 
         result = _run_single_case(
             run_id="run-debug-contract",
-            endpoint="http://localhost:8000",
+            endpoint="http://127.0.0.1:8000",
             fixtures_path=self.fixtures_path,
             case=self.case,
             timeout_seconds=5,
@@ -320,7 +320,7 @@ class RunnerErrorBucketsTest(unittest.TestCase):
 
         result = _run_single_case(
             run_id="run-judge-gate",
-            endpoint="http://localhost:8000",
+            endpoint="http://127.0.0.1:8000",
             fixtures_path=self.fixtures_path,
             case=self.case,
             timeout_seconds=5,

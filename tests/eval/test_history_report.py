@@ -25,7 +25,7 @@ def _summary_payload(
 ) -> dict:
     return {
         "run_id": run_id,
-        "endpoint": "http://localhost:8000",
+        "endpoint": "http://127.0.0.1:8000",
         "fixtures_path": fixtures_path,
         "config_path": "data\\benchmarks\\config.toml",
         "generated_at_utc": generated_at_utc,
