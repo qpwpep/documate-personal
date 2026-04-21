@@ -5,7 +5,13 @@ from unittest.mock import patch
 
 import requests
 
-from src.web.streamlit_api_client import AgentRequestContext, get_agent_response
+from src.web.streamlit_api_client import (
+    AgentCallResult,
+    AgentRequestContext,
+    _iter_sse_events,
+    get_agent_response,
+    stream_agent_response,
+)
 
 
 class _Response:
@@ -18,6 +24,34 @@ class _Response:
         return self._payload
 
 
+class _StreamResponse:
+    def __init__(self, status_code: int, chunks: list[str], text: str = "") -> None:
+        self.status_code = status_code
+        self._chunks = chunks
+        self.text = text
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def iter_content(self, chunk_size=None, decode_unicode: bool = False):
+        _ = chunk_size, decode_unicode
+        for chunk in self._chunks:
+            yield chunk
+
+
+class _BrokenStreamResponse(_StreamResponse):
+    def iter_content(self, chunk_size=None, decode_unicode: bool = False):
+        yielded = False
+        for chunk in super().iter_content(chunk_size=chunk_size, decode_unicode=decode_unicode):
+            yield chunk
+            yielded = True
+        if yielded:
+            raise RuntimeError("stream broke")
+
+
 class StreamlitApiClientTest(unittest.TestCase):
     @patch("src.web.streamlit_api_client.requests.post")
     def test_get_agent_response_sends_expected_payload(self, mock_post) -> None:
@@ -25,7 +59,7 @@ class StreamlitApiClientTest(unittest.TestCase):
             200,
             {
                 "response": {
-                    "answer": "답변",
+                    "answer": "응답",
                     "evidence": [{"kind": "official", "url_or_path": "https://docs.example.com"}],
                 },
                 "file_path": "output/result.txt",
@@ -57,7 +91,7 @@ class StreamlitApiClientTest(unittest.TestCase):
                 "upload_file_path": "uploads/session-1/sample.py",
             },
         )
-        self.assertEqual(result.answer, "답변")
+        self.assertEqual(result.answer, "응답")
         self.assertEqual(result.file_path, "output/result.txt")
         self.assertEqual(len(result.evidence_items), 1)
 
@@ -124,6 +158,66 @@ class StreamlitApiClientTest(unittest.TestCase):
         )
 
         self.assertEqual(result.answer, "요청 중 예기치 않은 오류가 발생했습니다: boom")
+
+    def test_iter_sse_events_parses_chunked_frames(self) -> None:
+        chunks = [
+            'event: request_started\ndata: {"request_id":"r',
+            'eq-1"}\n\n',
+            'event: final_response\ndata: {"response":{"answer":"응',
+            '답","evidence":[]},"file_path":"output/result.txt"}\n\n',
+        ]
+
+        events = list(_iter_sse_events(chunks))
+
+        self.assertEqual([event.event for event in events], ["request_started", "final_response"])
+        self.assertEqual(events[0].data["request_id"], "req-1")
+        self.assertIsNotNone(events[1].result)
+        self.assertEqual(events[1].result.answer, "응답")
+
+    @patch("src.web.streamlit_api_client.get_agent_response")
+    @patch("src.web.streamlit_api_client.requests.post")
+    def test_stream_agent_response_falls_back_before_first_event(
+        self,
+        mock_post,
+        mock_get_agent_response,
+    ) -> None:
+        mock_post.side_effect = requests.exceptions.ConnectionError()
+        mock_get_agent_response.return_value = AgentCallResult(answer="fallback")
+
+        events = list(
+            stream_agent_response(
+                "질문",
+                AgentRequestContext(
+                    fastapi_url="http://localhost:8000",
+                    session_id="session-1",
+                ),
+            )
+        )
+
+        self.assertEqual([event.event for event in events], ["final_response"])
+        self.assertIsNotNone(events[0].result)
+        self.assertEqual(events[0].result.answer, "fallback")
+
+    @patch("src.web.streamlit_api_client.requests.post")
+    def test_stream_agent_response_emits_error_after_stream_break(self, mock_post) -> None:
+        mock_post.return_value = _BrokenStreamResponse(
+            200,
+            [
+                'event: request_started\ndata: {"request_id":"req-1"}\n\n',
+            ],
+        )
+
+        events = list(
+            stream_agent_response(
+                "질문",
+                AgentRequestContext(
+                    fastapi_url="http://localhost:8000",
+                    session_id="session-1",
+                ),
+            )
+        )
+
+        self.assertEqual([event.event for event in events], ["request_started", "error"])
 
 
 if __name__ == "__main__":
