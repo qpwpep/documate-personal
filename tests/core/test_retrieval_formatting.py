@@ -1,6 +1,6 @@
 import unittest
 
-from src.nodes.retrieval.formatting import format_evidence_for_prompt
+from src.runtime.nodes.retrieval.formatting import format_evidence_for_prompt
 
 
 class RetrievalFormattingTest(unittest.TestCase):

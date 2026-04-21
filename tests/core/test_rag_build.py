@@ -6,9 +6,9 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from src.chroma_store import CHROMA_DISTANCE_METRIC, INDEX_SCHEMA_VERSION, NORMALIZATION_VERSION
-from src.rag_build import build_rag_index
-from src.settings import AppSettings
+from src.infra.chroma_store import CHROMA_DISTANCE_METRIC, INDEX_SCHEMA_VERSION, NORMALIZATION_VERSION
+from src.infra.rag_build import build_rag_index
+from src.infra.settings import AppSettings
 
 
 class _FakeChroma:
@@ -51,7 +51,7 @@ def _write_notebook(path: Path, source: str) -> None:
 
 
 class RagBuildTest(unittest.TestCase):
-    @patch("src.rag_build.build_openai_embeddings")
+    @patch("src.infra.rag_build.build_openai_embeddings")
     def test_build_rag_index_creates_manifest_and_batches(self, _mock_embeddings) -> None:
         with TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -62,7 +62,7 @@ class RagBuildTest(unittest.TestCase):
             _write_notebook(notebook_path, "hello world")
             fake_chroma = _FakeChroma()
 
-            with patch("src.rag_build._ensure_chroma", return_value=fake_chroma):
+            with patch("src.infra.rag_build._ensure_chroma", return_value=fake_chroma):
                 summary = build_rag_index(
                     AppSettings(openai_api_key="test-key", tavily_api_key="test"),
                     data_dir=data_dir,
@@ -77,7 +77,7 @@ class RagBuildTest(unittest.TestCase):
             self.assertTrue(fake_chroma.get_called)
             self.assertTrue(fake_chroma.added_batches)
 
-    @patch("src.rag_build.build_openai_embeddings")
+    @patch("src.infra.rag_build.build_openai_embeddings")
     def test_build_rag_index_deletes_removed_entries(self, _mock_embeddings) -> None:
         with TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -101,7 +101,7 @@ class RagBuildTest(unittest.TestCase):
             )
             fake_chroma = _FakeChroma()
 
-            with patch("src.rag_build._ensure_chroma", return_value=fake_chroma):
+            with patch("src.infra.rag_build._ensure_chroma", return_value=fake_chroma):
                 summary = build_rag_index(
                     AppSettings(openai_api_key="test-key", tavily_api_key="test"),
                     data_dir=data_dir,
@@ -112,7 +112,7 @@ class RagBuildTest(unittest.TestCase):
             self.assertEqual(summary.deleted_count, 1)
             self.assertIn({"source": stale_path}, fake_chroma.deleted_filters)
 
-    @patch("src.rag_build.build_openai_embeddings")
+    @patch("src.infra.rag_build.build_openai_embeddings")
     def test_build_rag_index_treats_legacy_or_missing_manifest_as_full_rebuild(self, _mock_embeddings) -> None:
         with TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -125,7 +125,7 @@ class RagBuildTest(unittest.TestCase):
             (index_dir / "chroma.sqlite3").write_text("legacy-index", encoding="utf-8")
             fake_chroma = _FakeChroma()
 
-            with patch("src.rag_build._ensure_chroma", return_value=fake_chroma):
+            with patch("src.infra.rag_build._ensure_chroma", return_value=fake_chroma):
                 summary = build_rag_index(
                     AppSettings(openai_api_key="test-key", tavily_api_key="test"),
                     data_dir=data_dir,
