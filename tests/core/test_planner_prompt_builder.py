@@ -2,8 +2,8 @@ import unittest
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
-from src.contracts.boundary.graph import build_graph_state_input
-from src.nodes.planner.prompt_builder import build_planner_messages
+from src.core.contracts.boundary.graph import build_graph_state_input
+from src.runtime.nodes.planner.prompt_builder import build_planner_messages
 
 
 class PlannerPromptBuilderTest(unittest.TestCase):

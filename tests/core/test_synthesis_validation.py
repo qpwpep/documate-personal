@@ -2,11 +2,11 @@ import unittest
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
-from src.nodes.session import make_summarize_node
-from src.nodes.synthesis import make_synthesize_node
-from src.nodes.validation import make_validate_evidence_node
-from src.planner_schema import PlannerOutput, RetrievalTask
-from src.prompts import SYS_POLICY
+from src.runtime.nodes.session import make_summarize_node
+from src.runtime.nodes.synthesis import make_synthesize_node
+from src.runtime.nodes.validation import make_validate_evidence_node
+from src.core.planner_schema import PlannerOutput, RetrievalTask
+from src.core.prompts import SYS_POLICY
 
 from .helpers import (
     _CaptureStructuredSynthesizeLLM,

@@ -5,10 +5,10 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
-from src.settings import AppSettings
-from src.web.agent_request_service import AgentRequestResult
-from src.web.app import create_app
-from src.web.schemas import AgentDebugInfo, AgentResponsePayload, AgentRequest, AgentStreamEvent
+from src.infra.settings import AppSettings
+from src.app.web.agent_request_service import AgentRequestResult
+from src.app.web.app import create_app
+from src.app.web.schemas import AgentDebugInfo, AgentResponsePayload, AgentRequest, AgentStreamEvent
 
 
 class _FakeAgentRequestService:
@@ -77,7 +77,7 @@ class AgentRouteServiceDelegationTest(unittest.TestCase):
     def test_agent_route_only_delegates_to_service(self) -> None:
         settings = AppSettings(openai_api_key="test-key", tavily_api_key="test")
         fake_service = _FakeAgentRequestService()
-        with patch("src.web.app.get_settings", return_value=settings):
+        with patch("src.app.web.app.get_settings", return_value=settings):
             with TestClient(create_app()) as client:
                 client.app.state.agent_request_service = fake_service
                 client.app.state.session_store = None
@@ -116,7 +116,7 @@ class AgentRouteServiceDelegationTest(unittest.TestCase):
     def test_agent_stream_route_streams_sse_events(self) -> None:
         settings = AppSettings(openai_api_key="test-key", tavily_api_key="test")
         fake_service = _FakeAgentRequestService()
-        with patch("src.web.app.get_settings", return_value=settings):
+        with patch("src.app.web.app.get_settings", return_value=settings):
             with TestClient(create_app()) as client:
                 client.app.state.agent_request_service = fake_service
                 client.app.state.session_store = None

@@ -1,6 +1,6 @@
 import unittest
 
-from src.prompts import needs_search
+from src.core.prompts import needs_search
 
 
 class PromptsTest(unittest.TestCase):

@@ -1,9 +1,9 @@
 import unittest
 
-import src.answer_schema as answer_schema
-from src.answer_schema.fallbacks import build_deterministic_grounded_payload
-from src.answer_schema.text_cleaning import clean_grounded_text
-from src.evidence import EvidenceItem
+import src.core.answer_schema as answer_schema
+from src.core.answer_schema.fallbacks import build_deterministic_grounded_payload
+from src.core.answer_schema.text_cleaning import clean_grounded_text
+from src.core.evidence import EvidenceItem
 
 
 class AnswerSchemaTest(unittest.TestCase):

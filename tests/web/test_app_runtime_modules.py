@@ -7,9 +7,9 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
-from src.settings import AppSettings
-from src.web.app import create_app
-from src.web.cleanup import resolve_download_path, validate_upload_file_path
+from src.infra.settings import AppSettings
+from src.app.web.app import create_app
+from src.app.web.cleanup import resolve_download_path, validate_upload_file_path
 
 
 class WebRuntimeModulesTest(unittest.TestCase):
@@ -40,7 +40,7 @@ class WebRuntimeModulesTest(unittest.TestCase):
             synthesis_max_tokens=2048,
             synthesis_reasoning_effort="high",
         )
-        with patch("src.web.app.get_settings", return_value=settings):
+        with patch("src.app.web.app.get_settings", return_value=settings):
             with self.assertLogs("uvicorn", level="INFO") as captured_logs:
                 with TestClient(create_app()) as client:
                     self.assertTrue(hasattr(client.app.state, "session_store"))
@@ -68,7 +68,7 @@ class WebRuntimeModulesTest(unittest.TestCase):
             tavily_api_key="test",
             synthesis_reasoning_effort=None,
         )
-        with patch("src.web.app.get_settings", return_value=settings):
+        with patch("src.app.web.app.get_settings", return_value=settings):
             with self.assertLogs("uvicorn", level="INFO") as captured_logs:
                 with TestClient(create_app()):
                     pass
@@ -89,15 +89,12 @@ class WebRuntimeModulesTest(unittest.TestCase):
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text("print('ok')", encoding="utf-8")
 
-            original_cwd = Path.cwd()
-            try:
-                import os
-
-                os.chdir(temp_dir)
-                validated = validate_upload_file_path(str(target), "session-a")
+            with patch("src.app.web.cleanup.get_project_root_path", return_value=Path(temp_dir)), patch(
+                "src.app.web.cleanup.get_upload_session_dir",
+                return_value=target.parent,
+            ):
+                validated = validate_upload_file_path("uploads/session-a/sample.py", "session-a")
                 self.assertEqual(validated, str(target.resolve()))
-            finally:
-                os.chdir(original_cwd)
 
 
 if __name__ == "__main__":

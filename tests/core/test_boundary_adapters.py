@@ -2,13 +2,13 @@ import unittest
 
 from pydantic import ValidationError
 
-from src.answer_schema import AgentResponsePayloadModel
-from src.contracts import PlannerState
-from src.contracts.boundary.debug import parse_debug_state, parse_retry_state
-from src.contracts.boundary.graph import normalize_graph_update
-from src.contracts.boundary.planner import parse_planner_output
-from src.contracts.boundary.response import parse_response_state
-from src.contracts.boundary.runtime import parse_session_metadata, parse_slack_destination
+from src.core.answer_schema import AgentResponsePayloadModel
+from src.core.contracts import PlannerState
+from src.core.contracts.boundary.debug import parse_debug_state, parse_retry_state
+from src.core.contracts.boundary.graph import normalize_graph_update
+from src.core.contracts.boundary.planner import parse_planner_output
+from src.core.contracts.boundary.response import parse_response_state
+from src.core.contracts.boundary.runtime import parse_session_metadata, parse_slack_destination
 
 
 class BoundaryAdaptersTest(unittest.TestCase):

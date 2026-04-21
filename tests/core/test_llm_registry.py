@@ -1,9 +1,9 @@
 import unittest
 from unittest.mock import patch
 
-from src.llm import build_llm_registry
-from src.planner_schema import PlannerOutput
-from src.settings import AppSettings
+from src.infra.llm import build_llm_registry
+from src.core.planner_schema import PlannerOutput
+from src.infra.settings import AppSettings
 
 
 class _FakeChatOpenAI:
@@ -33,7 +33,7 @@ class LLMRegistryTest(unittest.TestCase):
         self.assertIs(task_schema["additionalProperties"], False)
         self.assertEqual(set(task_schema["properties"]["route"]["enum"]), {"docs", "upload", "local"})
 
-    @patch("src.llm.ChatOpenAI", new=_FakeChatOpenAI)
+    @patch("src.infra.llm.ChatOpenAI", new=_FakeChatOpenAI)
     def test_build_llm_registry_applies_explicit_synthesis_policy(self) -> None:
         _FakeChatOpenAI.created_kwargs = []
         _FakeChatOpenAI.structured_args = []
@@ -76,7 +76,7 @@ class LLMRegistryTest(unittest.TestCase):
         self.assertEqual(_FakeChatOpenAI.structured_args[0][0], PlannerOutput)
         self.assertEqual(_FakeChatOpenAI.structured_kwargs[0]["include_raw"], True)
 
-    @patch("src.llm.ChatOpenAI", new=_FakeChatOpenAI)
+    @patch("src.infra.llm.ChatOpenAI", new=_FakeChatOpenAI)
     def test_build_llm_registry_can_apply_reasoning_effort_for_synthesis_only(self) -> None:
         _FakeChatOpenAI.created_kwargs = []
         _FakeChatOpenAI.structured_args = []
@@ -103,7 +103,7 @@ class LLMRegistryTest(unittest.TestCase):
 
         self.assertIsNone(settings.synthesis_reasoning_effort)
 
-    @patch("src.llm.ChatOpenAI", new=_FakeChatOpenAI)
+    @patch("src.infra.llm.ChatOpenAI", new=_FakeChatOpenAI)
     def test_build_llm_registry_preserves_explicit_none_reasoning_override(self) -> None:
         _FakeChatOpenAI.created_kwargs = []
         _FakeChatOpenAI.structured_args = []

@@ -1,11 +1,11 @@
 import unittest
 
-from src.answer_schema import AgentResponsePayloadModel
-from src.contracts import RetrievalDiagnostic
-from src.evidence import EvidenceItem
-from src.nodes.validation.evidence_validator import assess_validation, build_validation_snapshot
-from src.nodes.validation.policy import apply_validation_outcome
-from src.planner_schema import PlannerOutput, RetrievalTask
+from src.core.answer_schema import AgentResponsePayloadModel
+from src.core.contracts import RetrievalDiagnostic
+from src.core.evidence import EvidenceItem
+from src.runtime.nodes.validation.evidence_validator import assess_validation, build_validation_snapshot
+from src.runtime.nodes.validation.policy import apply_validation_outcome
+from src.core.planner_schema import PlannerOutput, RetrievalTask
 
 
 def _docs_evidence() -> dict:

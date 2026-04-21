@@ -5,13 +5,7 @@ from unittest.mock import patch
 
 import requests
 
-from src.web.streamlit_api_client import (
-    AgentCallResult,
-    AgentRequestContext,
-    _iter_sse_events,
-    get_agent_response,
-    stream_agent_response,
-)
+from src.app.web.streamlit_api_client import AgentCallResult, AgentRequestContext, _iter_sse_events, get_agent_response, stream_agent_response
 
 
 class _Response:
@@ -53,7 +47,7 @@ class _BrokenStreamResponse(_StreamResponse):
 
 
 class StreamlitApiClientTest(unittest.TestCase):
-    @patch("src.web.streamlit_api_client.requests.post")
+    @patch("src.app.web.streamlit_api_client.requests.post")
     def test_get_agent_response_sends_expected_payload(self, mock_post) -> None:
         mock_post.return_value = _Response(
             200,
@@ -95,7 +89,7 @@ class StreamlitApiClientTest(unittest.TestCase):
         self.assertEqual(result.file_path, "output/result.txt")
         self.assertEqual(len(result.evidence_items), 1)
 
-    @patch("src.web.streamlit_api_client.requests.post")
+    @patch("src.app.web.streamlit_api_client.requests.post")
     def test_get_agent_response_handles_error_status(self, mock_post) -> None:
         mock_post.return_value = _Response(500, {}, text="server exploded")
 
@@ -115,7 +109,7 @@ class StreamlitApiClientTest(unittest.TestCase):
         self.assertEqual(result.evidence_items, [])
 
     @patch(
-        "src.web.streamlit_api_client.requests.post",
+        "src.app.web.streamlit_api_client.requests.post",
         side_effect=requests.exceptions.Timeout,
     )
     def test_get_agent_response_handles_timeout(self, _mock_post) -> None:
@@ -130,7 +124,7 @@ class StreamlitApiClientTest(unittest.TestCase):
         self.assertEqual(result.answer, "요청이 타임아웃되었습니다. 서버 상태를 확인해 주세요.")
 
     @patch(
-        "src.web.streamlit_api_client.requests.post",
+        "src.app.web.streamlit_api_client.requests.post",
         side_effect=requests.exceptions.ConnectionError,
     )
     def test_get_agent_response_handles_connection_error(self, _mock_post) -> None:
@@ -147,7 +141,7 @@ class StreamlitApiClientTest(unittest.TestCase):
             "FastAPI 서버에 연결할 수 없습니다. 서버(8000번 포트) 실행 여부를 확인해 주세요.",
         )
 
-    @patch("src.web.streamlit_api_client.requests.post", side_effect=RuntimeError("boom"))
+    @patch("src.app.web.streamlit_api_client.requests.post", side_effect=RuntimeError("boom"))
     def test_get_agent_response_handles_unexpected_error(self, _mock_post) -> None:
         result = get_agent_response(
             "질문",
@@ -174,8 +168,8 @@ class StreamlitApiClientTest(unittest.TestCase):
         self.assertIsNotNone(events[1].result)
         self.assertEqual(events[1].result.answer, "응답")
 
-    @patch("src.web.streamlit_api_client.get_agent_response")
-    @patch("src.web.streamlit_api_client.requests.post")
+    @patch("src.app.web.streamlit_api_client.get_agent_response")
+    @patch("src.app.web.streamlit_api_client.requests.post")
     def test_stream_agent_response_falls_back_before_first_event(
         self,
         mock_post,
@@ -198,7 +192,7 @@ class StreamlitApiClientTest(unittest.TestCase):
         self.assertIsNotNone(events[0].result)
         self.assertEqual(events[0].result.answer, "fallback")
 
-    @patch("src.web.streamlit_api_client.requests.post")
+    @patch("src.app.web.streamlit_api_client.requests.post")
     def test_stream_agent_response_emits_error_after_stream_break(self, mock_post) -> None:
         mock_post.return_value = _BrokenStreamResponse(
             200,

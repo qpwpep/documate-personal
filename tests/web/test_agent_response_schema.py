@@ -2,7 +2,7 @@ import unittest
 
 from pydantic import ValidationError
 
-from src.web.schemas import AgentResponse
+from src.app.web.schemas import AgentResponse
 
 
 class AgentResponseSchemaTest(unittest.TestCase):

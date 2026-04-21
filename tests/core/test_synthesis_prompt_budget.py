@@ -2,7 +2,7 @@ import unittest
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from src.nodes.synthesis import make_synthesize_node
+from src.runtime.nodes.synthesis import make_synthesize_node
 
 from .helpers import _CaptureStructuredSynthesizeLLM, build_legacy_state
 

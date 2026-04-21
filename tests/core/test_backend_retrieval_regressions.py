@@ -1,10 +1,10 @@
 import unittest
 
-from src.contracts import RetrievalDiagnostic
-from src.evidence import truncate_snippet
-from src.nodes.planner.query_sanitizer import sanitize_retrieval_query
-from src.nodes.validation.evidence_validator import route_passes_validation
-from src.tools.local_rag import build_local_rag_tools
+from src.core.contracts import RetrievalDiagnostic
+from src.core.evidence import truncate_snippet
+from src.runtime.nodes.planner.query_sanitizer import sanitize_retrieval_query
+from src.runtime.nodes.validation.evidence_validator import route_passes_validation
+from src.infra.tools.local_rag import build_local_rag_tools
 
 
 class BackendRetrievalRegressionTest(unittest.TestCase):
@@ -43,7 +43,7 @@ class BackendRetrievalRegressionTest(unittest.TestCase):
                 "end_offset": 96,
             }
         ]
-        from src.evidence import EvidenceItem
+        from src.core.evidence import EvidenceItem
 
         evidence_items = [EvidenceItem.model_validate(item) for item in items]
         self.assertTrue(
@@ -55,7 +55,7 @@ class BackendRetrievalRegressionTest(unittest.TestCase):
         )
 
     def test_hybrid_upload_validation_rejects_generic_zero_score_match(self) -> None:
-        from src.evidence import EvidenceItem
+        from src.core.evidence import EvidenceItem
 
         evidence_items = [
             EvidenceItem.model_validate(
@@ -94,7 +94,7 @@ class BackendRetrievalRegressionTest(unittest.TestCase):
         )
 
     def test_hybrid_upload_validation_accepts_minimum_normalized_score(self) -> None:
-        from src.evidence import EvidenceItem
+        from src.core.evidence import EvidenceItem
 
         evidence_items = [
             EvidenceItem.model_validate(
@@ -133,7 +133,7 @@ class BackendRetrievalRegressionTest(unittest.TestCase):
         )
 
     def test_hybrid_upload_validation_accepts_identifier_plus_keyword(self) -> None:
-        from src.evidence import EvidenceItem
+        from src.core.evidence import EvidenceItem
 
         evidence_items = [
             EvidenceItem.model_validate(

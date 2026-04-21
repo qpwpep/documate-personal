@@ -2,8 +2,8 @@ import unittest
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from src.contracts.boundary.graph import build_graph_state_input
-from src.nodes.synthesis.prompt_builder import build_synthesis_messages
+from src.core.contracts.boundary.graph import build_graph_state_input
+from src.runtime.nodes.synthesis.prompt_builder import build_synthesis_messages
 
 
 class SynthesisPromptBuilderTest(unittest.TestCase):

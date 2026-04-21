@@ -1,8 +1,8 @@
 import unittest
 from pathlib import Path
 
-from src.settings import APP_ENV_SPECS, APP_ENV_SPEC_BY_NAME, AppSettings, DEFAULT_BENCHMARK_CONFIG_PATH
-from src.settings_sync import build_env_example_text, sync_readme_settings_sections
+from src.infra.settings import APP_ENV_SPECS, APP_ENV_SPEC_BY_NAME, AppSettings, DEFAULT_BENCHMARK_CONFIG_PATH
+from src.infra.settings_sync import build_env_example_text, sync_readme_settings_sections
 
 
 class SettingsSyncTest(unittest.TestCase):

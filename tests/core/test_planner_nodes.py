@@ -3,10 +3,10 @@ import unittest
 from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import ValidationError
 
-from src.contracts import PlannerDiagnostic, SessionMetadata, SlackDestination
-from src.nodes.planner import make_planner_node
-from src.nodes.planner.query_sanitizer import sanitize_retrieval_query
-from src.planner_schema import PlannerOutput, RetrievalTask
+from src.core.contracts import PlannerDiagnostic, SessionMetadata, SlackDestination
+from src.runtime.nodes.planner import make_planner_node
+from src.runtime.nodes.planner.query_sanitizer import sanitize_retrieval_query
+from src.core.planner_schema import PlannerOutput, RetrievalTask
 
 from .helpers import _CapturePlannerLLM, _FailingPlannerLLM, _InvalidPlannerLLM, build_legacy_state
 

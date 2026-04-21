@@ -3,12 +3,8 @@ import unittest
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
-from src.agent_runtime.response_assembler import ResponseAssembler
-from src.nodes.actions import (
-    build_action_only_answer,
-    make_action_postprocess_node,
-    should_short_circuit_action_only,
-)
+from src.runtime.agent_runtime.response_assembler import ResponseAssembler
+from src.runtime.nodes.actions import build_action_only_answer, make_action_postprocess_node, should_short_circuit_action_only
 
 from .helpers import _ToolWrapper, build_legacy_state
 
