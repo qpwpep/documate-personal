@@ -35,10 +35,12 @@ class ExecutionRunner:
         self,
         user_input: str,
         upload_file_path: str | None,
+        progress_emitter: Any | None = None,
     ) -> tuple[dict[str, Any], int | None]:
         state = build_graph_state_input(
             user_input=user_input,
             messages=self.session.messages,
+            progress_emitter=progress_emitter,
             session_metadata=self.session.snapshot_session_metadata(),
         )
         upload_retriever_build_ms: int | None = None
@@ -63,6 +65,7 @@ class ExecutionRunner:
                     user_input=user_input,
                     messages=self.session.messages,
                     retriever=handle.retriever,
+                    progress_emitter=progress_emitter,
                     session_metadata=self.session.snapshot_session_metadata(),
                 )
         else:

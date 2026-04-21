@@ -6,6 +6,7 @@ from .contracts.boundary.debug import get_debug_state, parse_debug_state
 from .contracts.boundary.graph import get_retry_state, normalize_graph_update
 from .contracts.boundary.planner import get_planner_state
 from .contracts.boundary.response import get_response_state
+from .contracts.boundary.runtime import get_runtime_state
 from .latency import elapsed_ms, make_stage_latency_event
 from .llm import build_llm_registry
 from .make_graph import build_graph
@@ -27,10 +28,12 @@ class StageExecutionError(RuntimeError):
         self.cause = cause
 
 
-def _resolve_stage_attempt(stage: str, state: GraphState, updates: GraphState) -> int:
-    if stage in {"planner"}:
+def _resolve_stage_attempt_for_start(stage: str, state: GraphState) -> int:
+    if stage in {"planner", "retrieval"}:
         retry_context = get_retry_state(state)
         return int(retry_context.attempt) + 1
+    if stage == "synthesis":
+        return max(1, int(get_response_state(state).synthesis_attempt or 0) + 1)
     if stage == "validation":
         return max(1, int(get_response_state(state).synthesis_attempt or 0))
     if stage == "action_postprocess":
@@ -45,6 +48,33 @@ def _resolve_stage_status(stage: str, updates: GraphState) -> str | None:
     if stage == "validation":
         return "retry" if get_retry_state(updates).needs_retry else "pass"
     return None
+
+
+def _extract_stage_status_from_debug(stage: str, debug: Any, attempt: int) -> str | None:
+    latency_trace = getattr(debug, "latency_trace", None)
+    if not isinstance(latency_trace, list):
+        return None
+
+    for item in reversed(latency_trace):
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("kind") or "").strip() != "stage":
+            continue
+        if str(item.get("stage") or "").strip() != stage:
+            continue
+        item_attempt = item.get("attempt")
+        try:
+            if item_attempt is not None and int(item_attempt) != int(attempt):
+                continue
+        except (TypeError, ValueError):
+            pass
+        status = item.get("status")
+        return str(status) if status else None
+    return None
+
+
+def _get_progress_emitter(state: GraphState) -> Any | None:
+    return get_runtime_state(state).progress_emitter
 
 
 def _normalize_node(node: Any):
@@ -65,16 +95,27 @@ def _merge_debug_patch(state: GraphState, raw_debug_patch: Any):
         return parse_debug_state(raw_debug_patch)
     if isinstance(raw_debug_patch, dict):
         return base_debug.model_copy(update=dict(raw_debug_patch))
-    else:
-        return base_debug
+    return base_debug
 
 
-def _instrument_stage_node(stage: str, node: Any):
+def _instrument_stage_node(stage: str, node: Any, *, record_latency_trace: bool = True):
     def wrapped(state: GraphState) -> GraphState:
         started = time.perf_counter()
+        attempt = _resolve_stage_attempt_for_start(stage, state)
+        progress_emitter = _get_progress_emitter(state)
+        if progress_emitter is not None:
+            progress_emitter.emit_stage_started(
+                stage=stage,  # type: ignore[arg-type]
+                attempt=attempt,
+            )
         try:
             updates = node(state)
         except Exception as exc:
+            if progress_emitter is not None:
+                progress_emitter.emit_error(
+                    message=str(exc),
+                    stage=stage,  # type: ignore[arg-type]
+                )
             raise StageExecutionError(
                 stage=stage,
                 latency_ms=elapsed_ms(started, time.perf_counter()),
@@ -82,19 +123,33 @@ def _instrument_stage_node(stage: str, node: Any):
             ) from exc
         if not isinstance(updates, dict):
             return updates
+
         raw_debug_patch = updates.get("debug") if "debug" in updates else None
         updates = normalize_graph_update(updates)
-
         debug = _merge_debug_patch(state, raw_debug_patch)
-        latency_event = make_stage_latency_event(
-            stage=stage,  # type: ignore[arg-type]
-            attempt=_resolve_stage_attempt(stage, state, updates),
-            latency_ms=elapsed_ms(started, time.perf_counter()),
-            status=_resolve_stage_status(stage, updates),
+        stage_status = _resolve_stage_status(stage, updates) or _extract_stage_status_from_debug(
+            stage,
+            debug,
+            attempt,
         )
-        updates["debug"] = debug.model_copy(
-            update={"latency_trace": [*debug.latency_trace, latency_event]}
-        )
+        stage_latency_ms = elapsed_ms(started, time.perf_counter())
+        if record_latency_trace:
+            latency_event = make_stage_latency_event(
+                stage=stage,  # type: ignore[arg-type]
+                attempt=attempt,
+                latency_ms=stage_latency_ms,
+                status=stage_status,
+            )
+            updates["debug"] = debug.model_copy(
+                update={"latency_trace": [*debug.latency_trace, latency_event]}
+            )
+        if progress_emitter is not None:
+            progress_emitter.emit_stage_completed(
+                stage=stage,  # type: ignore[arg-type]
+                attempt=attempt,
+                latency_ms=stage_latency_ms,
+                status=stage_status,
+            )
         return updates
 
     return wrapped
@@ -127,7 +182,11 @@ def build_agent_graph(settings: AppSettings | None = None):
         rag_search_tool=tool_registry.rag_search_tool,
         verbose=llm_registry.verbose,
     )
-    retrieve_dispatch_node = _normalize_node(retrieve_dispatch_node)
+    retrieve_dispatch_node = _instrument_stage_node(
+        "retrieval",
+        _normalize_node(retrieve_dispatch_node),
+        record_latency_trace=False,
+    )
     synthesize_node = make_synthesize_node(
         llm_synthesizer=llm_registry.llm_synthesizer,
         llm_synthesizer_compact=llm_registry.llm_synthesizer_compact,
@@ -137,7 +196,11 @@ def build_agent_graph(settings: AppSettings | None = None):
         prompt_snippet_char_limit=app_settings.synthesis_prompt_snippet_chars,
         has_default_slack_destination=has_default_slack_destination,
     )
-    synthesize_node = _normalize_node(synthesize_node)
+    synthesize_node = _instrument_stage_node(
+        "synthesis",
+        _normalize_node(synthesize_node),
+        record_latency_trace=False,
+    )
     validate_evidence_node = make_validate_evidence_node(verbose=llm_registry.verbose)
     validate_evidence_node = _instrument_stage_node("validation", validate_evidence_node)
     action_postprocess_node = make_action_postprocess_node(
