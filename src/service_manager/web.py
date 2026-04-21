@@ -142,8 +142,8 @@ def _start_web_services() -> int:
             logger,
             logging.INFO,
             "services_running",
-            fastapi_url=f"http://localhost:{FASTAPI_PORT}",
-            streamlit_url=f"http://localhost:{STREAMLIT_PORT}",
+            fastapi_url=f"http://127.0.0.1:{FASTAPI_PORT}",
+            streamlit_url=f"http://127.0.0.1:{STREAMLIT_PORT}",
         )
         return 0
     except Exception as exc:

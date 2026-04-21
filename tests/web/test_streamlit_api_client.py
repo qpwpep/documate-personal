@@ -69,7 +69,7 @@ class StreamlitApiClientTest(unittest.TestCase):
         result = get_agent_response(
             "질문",
             AgentRequestContext(
-                fastapi_url="http://localhost:8000",
+                fastapi_url="http://127.0.0.1:8000",
                 session_id="session-1",
                 slack_user_id="U123",
                 slack_email="user@example.com",
@@ -102,7 +102,7 @@ class StreamlitApiClientTest(unittest.TestCase):
         result = get_agent_response(
             "질문",
             AgentRequestContext(
-                fastapi_url="http://localhost:8000",
+                fastapi_url="http://127.0.0.1:8000",
                 session_id="session-1",
             ),
         )
@@ -122,7 +122,7 @@ class StreamlitApiClientTest(unittest.TestCase):
         result = get_agent_response(
             "질문",
             AgentRequestContext(
-                fastapi_url="http://localhost:8000",
+                fastapi_url="http://127.0.0.1:8000",
                 session_id="session-1",
             ),
         )
@@ -137,7 +137,7 @@ class StreamlitApiClientTest(unittest.TestCase):
         result = get_agent_response(
             "질문",
             AgentRequestContext(
-                fastapi_url="http://localhost:8000",
+                fastapi_url="http://127.0.0.1:8000",
                 session_id="session-1",
             ),
         )
@@ -152,7 +152,7 @@ class StreamlitApiClientTest(unittest.TestCase):
         result = get_agent_response(
             "질문",
             AgentRequestContext(
-                fastapi_url="http://localhost:8000",
+                fastapi_url="http://127.0.0.1:8000",
                 session_id="session-1",
             ),
         )
@@ -188,7 +188,7 @@ class StreamlitApiClientTest(unittest.TestCase):
             stream_agent_response(
                 "질문",
                 AgentRequestContext(
-                    fastapi_url="http://localhost:8000",
+                    fastapi_url="http://127.0.0.1:8000",
                     session_id="session-1",
                 ),
             )
@@ -211,7 +211,7 @@ class StreamlitApiClientTest(unittest.TestCase):
             stream_agent_response(
                 "질문",
                 AgentRequestContext(
-                    fastapi_url="http://localhost:8000",
+                    fastapi_url="http://127.0.0.1:8000",
                     session_id="session-1",
                 ),
             )

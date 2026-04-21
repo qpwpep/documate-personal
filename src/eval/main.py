@@ -69,7 +69,7 @@ def command_run(args: argparse.Namespace) -> int:
     if args.mode != "online":
         raise ValueError("Only online mode is supported.")
 
-    endpoint = args.endpoint or os.getenv("BENCHMARK_ENDPOINT", "http://localhost:8000")
+    endpoint = args.endpoint or os.getenv("BENCHMARK_ENDPOINT", "http://127.0.0.1:8000")
     config = _load_config_with_env_overrides(args.config)
     track = resolve_run_track(args.track, args.limit)
 
@@ -166,7 +166,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--endpoint",
         type=str,
         default=None,
-        help="FastAPI base URL. If omitted, use BENCHMARK_ENDPOINT or http://localhost:8000",
+        help="FastAPI base URL. If omitted, use BENCHMARK_ENDPOINT or http://127.0.0.1:8000",
     )
     parser_run.add_argument(
         "--output-root",
