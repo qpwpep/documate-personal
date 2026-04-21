@@ -26,7 +26,7 @@ def _result(run_id: str, case: BenchmarkCase) -> CaseResult:
             "category": case.category,
             "query": case.query,
             "session_id": f"session-{case.case_id}",
-            "endpoint": "http://localhost:8000/agent",
+        "endpoint": "http://127.0.0.1:8000/agent",
             "request_payload": {"query": case.query},
             "http_status": 200,
             "response_text": "ok",
@@ -89,7 +89,7 @@ class RunPointerPolicyTest(unittest.TestCase):
 
             run_dir, _, summary = run_online_benchmark(
                 fixtures_path=fixtures_path,
-                endpoint="http://localhost:8000",
+        endpoint="http://127.0.0.1:8000",
                 config=BenchmarkConfig(judge_enabled=False),
                 config_path=Path("data/benchmarks/config.toml"),
                 output_root=output_root,
@@ -122,7 +122,7 @@ class RunPointerPolicyTest(unittest.TestCase):
 
             run_dir, _, summary = run_online_benchmark(
                 fixtures_path=fixtures_path,
-                endpoint="http://localhost:8000",
+        endpoint="http://127.0.0.1:8000",
                 config=BenchmarkConfig(judge_enabled=False),
                 config_path=Path("data/benchmarks/config.toml"),
                 output_root=output_root,

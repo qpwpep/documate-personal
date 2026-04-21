@@ -72,7 +72,7 @@ class StreamlitChatTest(unittest.TestCase):
             ]
 
             with patch("src.web.streamlit_chat.st", fake_st):
-                render_chat_history(messages, "http://localhost:8000")
+                render_chat_history(messages, "http://127.0.0.1:8000")
 
         self.assertEqual(fake_st.expander_labels, ["근거 보기"])
         self.assertTrue(any("Docs" in body for body, _ in fake_st.markdowns))

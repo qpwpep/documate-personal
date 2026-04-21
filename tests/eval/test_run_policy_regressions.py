@@ -34,7 +34,7 @@ def _result(
             "category": case.category,
             "query": case.query,
             "session_id": f"session-{case.case_id}",
-            "endpoint": "http://localhost:8000/agent",
+            "endpoint": "http://127.0.0.1:8000/agent",
             "request_payload": {"query": case.query},
             "request_id": f"req-{case.case_id}",
             "http_status": 200,
@@ -79,7 +79,7 @@ class RunPolicyRegressionTest(unittest.TestCase):
         docs_b = _case("docs-b", "docs_only")
         summary = build_summary(
             run_id="run-policy",
-            endpoint="http://localhost:8000",
+            endpoint="http://127.0.0.1:8000",
             fixtures_path="data/benchmarks/fixtures/cases.generated.jsonl",
             config_path="data/benchmarks/config.toml",
             track="release",
@@ -100,7 +100,7 @@ class RunPolicyRegressionTest(unittest.TestCase):
         hybrid_c = _case("hybrid-c", "hybrid")
         summary = build_summary(
             run_id="run-policy",
-            endpoint="http://localhost:8000",
+            endpoint="http://127.0.0.1:8000",
             fixtures_path="data/benchmarks/fixtures/cases.generated.jsonl",
             config_path="data/benchmarks/config.toml",
             track="release",
@@ -121,7 +121,7 @@ class RunPolicyRegressionTest(unittest.TestCase):
         case_b = _case("docs-b", "docs_only")
         summary = build_summary(
             run_id="run-policy",
-            endpoint="http://localhost:8000",
+            endpoint="http://127.0.0.1:8000",
             fixtures_path="data/benchmarks/fixtures/cases.generated.jsonl",
             config_path="data/benchmarks/config.toml",
             track="release",
@@ -142,7 +142,7 @@ class RunPolicyRegressionTest(unittest.TestCase):
         case_b = _case("rag-b", "rag_only")
         summary = build_summary(
             run_id="run-policy",
-            endpoint="http://localhost:8000",
+            endpoint="http://127.0.0.1:8000",
             fixtures_path="data/benchmarks/fixtures/cases.generated.jsonl",
             config_path="data/benchmarks/config.toml",
             track="release",
@@ -163,7 +163,7 @@ class RunPolicyRegressionTest(unittest.TestCase):
         case_b = _case("docs-b", "docs_only")
         summary = build_summary(
             run_id="run-policy",
-            endpoint="http://localhost:8000",
+            endpoint="http://127.0.0.1:8000",
             fixtures_path="data/benchmarks/fixtures/cases.generated.jsonl",
             config_path="data/benchmarks/config.toml",
             track="release",
