@@ -1,7 +1,8 @@
 import json
 import unittest
 
-from src.eval.schemas import BenchmarkCase, CaseResult
+from src.eval.config_models import BenchmarkCase
+from src.eval.result_models import CaseResult
 
 
 class BackwardCompatInputsTest(unittest.TestCase):

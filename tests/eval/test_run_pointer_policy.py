@@ -4,9 +4,11 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
+from src.eval.config_models import BenchmarkCase, BenchmarkConfig
+from src.eval.io import dump_jsonl
 from src.eval.main import resolve_run_track, validate_history_targets
 from src.eval.online_runner import latest_run_pointer_path, run_online_benchmark
-from src.eval.schemas import BenchmarkCase, BenchmarkConfig, CaseResult, dump_jsonl
+from src.eval.result_models import CaseResult
 
 
 def _case(case_id: str) -> BenchmarkCase:

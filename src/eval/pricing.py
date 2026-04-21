@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .schemas import ModelPricing, Pricing
+from .config_models import ModelPricing, Pricing
 
 
 def compute_cost_usd(

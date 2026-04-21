@@ -5,7 +5,9 @@ import random
 from collections import defaultdict
 from pathlib import Path
 
-from .schemas import BenchmarkCase, dump_jsonl, load_cases_jsonl
+from src.infra.runtime_paths import get_regression_seed_cases_path
+from .config_models import BenchmarkCase
+from .io import dump_jsonl, load_cases_jsonl
 
 
 _CATEGORY_ORDER = ["docs_only", "rag_only", "hybrid", "tool_action"]
@@ -197,7 +199,7 @@ def generate_cases_file(
     seed_path: Path,
     out_path: Path,
     target: int,
-    regression_seed_path: Path = Path("data/benchmarks/fixtures/cases.regression.seed.jsonl"),
+    regression_seed_path: Path = get_regression_seed_cases_path(),
     random_seed: int = 42,
 ) -> list[BenchmarkCase]:
     if not regression_seed_path.exists():
@@ -223,7 +225,7 @@ def main() -> int:
     parser.add_argument(
         "--regression-seed",
         type=Path,
-        default=Path("data/benchmarks/fixtures/cases.regression.seed.jsonl"),
+        default=get_regression_seed_cases_path(),
         help="Regression seed JSONL path",
     )
     parser.add_argument("--random-seed", type=int, default=42, help="Deterministic random seed")

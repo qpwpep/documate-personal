@@ -3,15 +3,10 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from src.eval.config_models import BenchmarkCase, BenchmarkConfig
 from src.eval.online_runner import _run_single_case
 from src.eval.reporting import build_markdown_report
-from src.eval.schemas import (
-    BenchmarkCase,
-    BenchmarkConfig,
-    GateResult,
-    RunSummary,
-    SummaryStats,
-)
+from src.eval.summary_models import GateResult, RunSummary, SummaryStats
 
 
 class _FakeResponse:

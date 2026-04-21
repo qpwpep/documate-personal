@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from ..schemas import CaseResult, RunSummary
+from ..result_models import CaseResult
+from ..summary_models import RunSummary
 
 
 def _format_metric_value(value: float | int | None, *, decimals: int = 4) -> str:

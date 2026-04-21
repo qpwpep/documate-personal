@@ -4,7 +4,7 @@ from pathlib import Path
 
 from .history_loader import StoredRun, load_history_runs, load_latest_run_id, select_comparable_runs
 from .readme_renderer import build_history_readme_block, replace_history_block
-from .schemas import RunTrack
+from .summary_models import RunTrack
 from .svg_renderer import build_history_svg
 
 

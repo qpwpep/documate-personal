@@ -1,7 +1,7 @@
 import unittest
 
 from src.eval.metric_rules import compute_rule_scores, score_groundedness
-from src.eval.schemas import BenchmarkCase
+from src.eval.config_models import BenchmarkCase
 
 
 class ActionOnlyScoringTest(unittest.TestCase):

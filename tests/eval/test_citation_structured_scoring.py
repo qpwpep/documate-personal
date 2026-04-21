@@ -1,7 +1,8 @@
 import unittest
 
+from src.core.evidence import EvidenceItem
 from src.eval.metric_rules import score_citation_compliance, score_groundedness
-from src.eval.schemas import BenchmarkCase, EvidenceItem
+from src.eval.config_models import BenchmarkCase
 
 
 class CitationStructuredScoringTest(unittest.TestCase):

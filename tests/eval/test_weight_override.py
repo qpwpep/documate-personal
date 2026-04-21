@@ -6,7 +6,7 @@ from src.eval.weighting import (
     resolve_base_weights_for_case,
     resolve_effective_weights,
 )
-from src.eval.schemas import BenchmarkCase, CaseWeightOverride, ScoreWeights
+from src.eval.config_models import BenchmarkCase, CaseWeightOverride, ScoreWeights
 
 
 class WeightOverrideTest(unittest.TestCase):
