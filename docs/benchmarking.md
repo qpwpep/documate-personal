@@ -7,7 +7,7 @@ DocuMate 벤치마크는 FastAPI의 `POST /agent` 엔드포인트를 대상으�
 - FastAPI 서버가 실행 중이어야 합니다.
 - `OPENAI_API_KEY`가 설정되어 있어야 합니다.
 - judge를 사용할 경우 `JUDGE_MODEL` 또는 config의 기본값이 유효해야 합니다.
-- 기본 endpoint는 `http://localhost:8000`입니다.
+- 기본 endpoint는 `http://127.0.0.1:8000`입니다.
 
 권장 실행 순서:
 
@@ -36,7 +36,7 @@ uv run python -m src.eval.main run \
   --mode online \
   --track release \
   --fixtures data/benchmarks/fixtures/cases.generated.jsonl \
-  --endpoint http://localhost:8000
+  --endpoint http://127.0.0.1:8000
 ```
 
 짧은 smoke run이 필요하면 `--limit`을 사용할 수 있습니다. `--track`를 생략하면 `--limit` 런은 기본적으로 `smoke`로 분류됩니다.
@@ -114,7 +114,7 @@ judge minimum score와 pricing도 같은 파일에서 관리합니다.
 
 | 이름 | 기본값 | 설명 |
 |---|---|---|
-| `BENCHMARK_ENDPOINT` | `http://localhost:8000` | run 명령 기본 endpoint |
+| `BENCHMARK_ENDPOINT` | `http://127.0.0.1:8000` | run 명령 기본 endpoint |
 | `JUDGE_MODEL` | config 값 사용 | judge 모델 override |
 | `BENCHMARK_JUDGE_ENABLED` | config 값 사용 | judge 사용 여부 override |
 
