@@ -8,12 +8,13 @@ from fastapi.testclient import TestClient
 from src.settings import AppSettings
 from src.web.agent_request_service import AgentRequestResult
 from src.web.app import create_app
-from src.web.schemas import AgentDebugInfo, AgentResponsePayload, AgentRequest
+from src.web.schemas import AgentDebugInfo, AgentResponsePayload, AgentRequest, AgentStreamEvent
 
 
 class _FakeAgentRequestService:
     def __init__(self) -> None:
         self.calls: list[dict[str, object]] = []
+        self.stream_calls: list[dict[str, object]] = []
 
     async def run(self, *, request_id: str, request_data: AgentRequest) -> AgentRequestResult:
         self.calls.append(
@@ -39,6 +40,37 @@ class _FakeAgentRequestService:
                 else None
             ),
         )
+
+    def stream(self, *, request_id: str, request_data: AgentRequest):
+        self.stream_calls.append(
+            {
+                "request_id": request_id,
+                "request_data": request_data,
+            }
+        )
+
+        async def event_stream():
+            yield AgentStreamEvent(
+                event="request_started",
+                data={"request_id": request_id},
+            )
+            yield AgentStreamEvent(
+                event="final_response",
+                data={
+                    "response": {
+                        "answer": "delegated answer",
+                        "claims": [],
+                        "evidence": [],
+                        "confidence": None,
+                    },
+                    "trace": f"trace-{request_id}",
+                    "file_path": "output/result.txt",
+                    "debug": None,
+                },
+            )
+            yield AgentStreamEvent(event="done", data={})
+
+        return event_stream()
 
 
 class AgentRouteServiceDelegationTest(unittest.TestCase):
@@ -80,6 +112,32 @@ class AgentRouteServiceDelegationTest(unittest.TestCase):
         self.assertEqual(fake_service.calls[0]["request_data"].query, "hello")
         self.assertEqual(fake_service.calls[1]["request_data"].include_debug, True)
         self.assertEqual(len(str(fake_service.calls[0]["request_id"])), 8)
+
+    def test_agent_stream_route_streams_sse_events(self) -> None:
+        settings = AppSettings(openai_api_key="test-key", tavily_api_key="test")
+        fake_service = _FakeAgentRequestService()
+        with patch("src.web.app.get_settings", return_value=settings):
+            with TestClient(create_app()) as client:
+                client.app.state.agent_request_service = fake_service
+                client.app.state.session_store = None
+                client.app.state.runtime_cleaner = None
+
+                with client.stream(
+                    "POST",
+                    "/agent/stream",
+                    json={
+                        "query": "hello",
+                        "session_id": "demo-session",
+                    },
+                ) as response:
+                    body = "".join(response.iter_text())
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("event: request_started", body)
+        self.assertIn("event: final_response", body)
+        self.assertIn("event: done", body)
+        self.assertEqual(len(fake_service.stream_calls), 1)
+        self.assertEqual(fake_service.stream_calls[0]["request_data"].query, "hello")
 
 
 if __name__ == "__main__":

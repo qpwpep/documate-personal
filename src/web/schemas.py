@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
 from ..answer_schema import AgentResponsePayloadModel
 from ..contracts.debug import LLMCallMetadata, PlannerDiagnostic, RetryState, RetrievalDiagnostic, TokenUsage
 from ..evidence import EvidenceItem
-from ..latency import LatencyBreakdownModel
+from ..latency import LatencyBreakdownModel, StageName
 
 AgentResponsePayload = AgentResponsePayloadModel
 AgentTokenUsage = TokenUsage
@@ -49,3 +49,20 @@ class AgentResponse(BaseModel):
     trace: str
     file_path: str | None = None
     debug: AgentDebugInfo | None = None
+
+
+AgentStreamEventName = Literal[
+    "request_started",
+    "stage_started",
+    "stage_completed",
+    "heartbeat",
+    "final_response",
+    "error",
+    "done",
+]
+AgentStreamStageName = StageName
+
+
+class AgentStreamEvent(BaseModel):
+    event: AgentStreamEventName
+    data: dict[str, Any] = Field(default_factory=dict)
