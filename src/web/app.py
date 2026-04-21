@@ -49,7 +49,7 @@ async def lifespan(app: FastAPI):
         logger,
         logging.INFO,
         "fastapi_runtime_settings",
-        chat_model=settings.chat_model,
+        **settings.fastapi_runtime_log_fields(),
     )
 
     session_store = InMemorySessionStore(
