@@ -117,8 +117,8 @@ uv run python -m src.service_manager startweb
 uv run python -m src.service_manager stopweb
 ```
 
-- FastAPI: `http://localhost:8000`
-- Streamlit: `http://localhost:8501`
+- FastAPI: `http://127.0.0.1:8000`
+- Streamlit: `http://127.0.0.1:8501`
 - 런타임 로그: `output/runtime/fastapi.log`, `output/runtime/streamlit.log`
 - 상태 파일: `output/runtime/web_services_state.json`
 
@@ -156,7 +156,7 @@ Windows 환경에서는 `-X utf8` 또는 `PYTHONUTF8=1` 사용을 권장합니�
 | `SYNTHESIS_PROMPT_SNIPPET_CHARS` | `960` | evidence snippet 길이 제한 |
 | `SYNTHESIS_REASONING_EFFORT` | 없음 | synthesis reasoning effort override (none/minimal/low/medium/high/xhigh, 빈 값이면 모델 기본값, none은 명시 override) |
 | `VERBOSE` | `true` | CLI 로그 상세 출력 |
-| `FASTAPI_URL` | `http://localhost:8000` | Streamlit이 호출하는 API 주소 |
+| `FASTAPI_URL` | `http://127.0.0.1:8000` | Streamlit이 호출하는 API 주소 |
 | `SESSION_TTL_SECONDS` | `1800` | 세션 TTL |
 | `MAX_ACTIVE_SESSIONS` | `200` | 최대 활성 세션 수 |
 | `SESSION_CLEANUP_INTERVAL_SECONDS` | `60` | 세션 정리 주기 |
@@ -183,7 +183,7 @@ Windows 환경에서는 `-X utf8` 또는 `PYTHONUTF8=1` 사용을 권장합니�
 | 이름 | 기본값 | 설명 |
 |---|---|---|
 | `JUDGE_MODEL` | `gpt-5.4-nano` | benchmark judge 모델 override |
-| `BENCHMARK_ENDPOINT` | `http://localhost:8000` | benchmark 대상 FastAPI 주소 override |
+| `BENCHMARK_ENDPOINT` | `http://127.0.0.1:8000` | benchmark 대상 FastAPI 주소 override |
 | `BENCHMARK_JUDGE_ENABLED` | `true` | judge 사용 여부 override |
 
 ## 5. 검색 소스와 파일 제약
