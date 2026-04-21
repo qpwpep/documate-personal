@@ -39,6 +39,7 @@ class _FakeSessionStore:
         session_metadata,
         user_input: str,
         upload_file_path: str | None = None,
+        progress_emitter=None,
     ):
         self.run_calls.append(
             {
@@ -46,8 +47,17 @@ class _FakeSessionStore:
                 "session_metadata": session_metadata,
                 "user_input": user_input,
                 "upload_file_path": upload_file_path,
+                "progress_emitter": progress_emitter,
             }
         )
+        if progress_emitter is not None:
+            progress_emitter.emit_stage_started(stage="planner", attempt=1)
+            progress_emitter.emit_stage_completed(
+                stage="planner",
+                attempt=1,
+                latency_ms=10,
+                status="llm",
+            )
         return self.agent_manager, dict(self.agent_answer), 12
 
 
@@ -97,6 +107,7 @@ class AgentRequestServiceTest(unittest.TestCase):
         self.assertEqual(without_debug.response.answer, "fallback answer")
         self.assertEqual(cleaner.calls[0]["current_session_id"], "demo-session")
         self.assertEqual(store.get_calls, ["demo-session", "demo-session"])
+        self.assertIsNone(store.run_calls[0]["progress_emitter"])
 
     def test_service_builds_session_metadata_snapshot_before_dispatch(self) -> None:
         cleaner = _FakeCleaner()
@@ -139,6 +150,59 @@ class AgentRequestServiceTest(unittest.TestCase):
             store.run_calls[0]["session_metadata"].slack_destination.channel_id,
             "C123BENCH",
         )
+
+    def test_stream_emits_progress_then_final_response_then_done(self) -> None:
+        cleaner = _FakeCleaner()
+        store = _FakeSessionStore(
+            {
+                "message": "streamed answer",
+                "response_payload": {
+                    "answer": "streamed answer",
+                    "claims": [],
+                    "evidence": [],
+                    "confidence": None,
+                },
+                "debug": {
+                    "schema_version": 3,
+                    "observability_status": "ok",
+                    "tool_calls": [],
+                    "tool_call_count": 0,
+                    "errors": [],
+                    "observed_evidence": [],
+                },
+            }
+        )
+        service = AgentRequestService(runtime_cleaner=cleaner, session_store=store)
+
+        async def collect_events():
+            return [
+                event
+                async for event in service.stream(
+                    request_id="reqstream",
+                    request_data=AgentRequest(
+                        query="hello",
+                        session_id="demo-session",
+                        include_debug=False,
+                    ),
+                )
+            ]
+
+        events = asyncio.run(collect_events())
+
+        self.assertEqual(
+            [event.event for event in events],
+            [
+                "request_started",
+                "stage_started",
+                "stage_completed",
+                "final_response",
+                "done",
+            ],
+        )
+        self.assertEqual(events[1].data["stage"], "planner")
+        self.assertEqual(events[2].data["status"], "llm")
+        self.assertEqual(events[3].data["response"]["answer"], "streamed answer")
+        self.assertIsNotNone(store.run_calls[0]["progress_emitter"])
 
 
 if __name__ == "__main__":
