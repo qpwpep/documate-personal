@@ -12,6 +12,7 @@ from .contracts.boundary.runtime import parse_session_metadata
 from .graph_builder import StageExecutionError, build_agent_graph
 from .latency import build_latency_breakdown, elapsed_ms, make_stage_latency_event
 from .logging_utils import log_event
+from .progress import ProgressEmitter
 from .settings import AppSettings, get_settings
 from .tools.local_rag import build_temp_retriever
 
@@ -177,7 +178,12 @@ class AgentFlowManager:
             },
         }
 
-    def run_agent_flow(self, user_input: str, upload_file_path: str | None = None) -> dict[str, Any]:
+    def run_agent_flow(
+        self,
+        user_input: str,
+        upload_file_path: str | None = None,
+        progress_emitter: ProgressEmitter | None = None,
+    ) -> dict[str, Any]:
         self._ensure_components()
 
         if user_input.lower() in {"exit", "종료", "quit", "q"}:
@@ -187,7 +193,11 @@ class AgentFlowManager:
         flow_started = time.perf_counter()
         upload_retriever_build_ms: int | None = None
         try:
-            state, upload_retriever_build_ms = self._runner.prepare_graph_state(user_input, upload_file_path)
+            state, upload_retriever_build_ms = self._runner.prepare_graph_state(
+                user_input,
+                upload_file_path,
+                progress_emitter=progress_emitter,
+            )
             response, graph_total_ms = self._runner.invoke_graph(state)
             updated_messages = response["messages"]
             self.messages = updated_messages
@@ -215,6 +225,8 @@ class AgentFlowManager:
             if isinstance(root_exc, StageExecutionError):
                 stage_error = root_exc
                 root_exc = root_exc.cause
+            if progress_emitter is not None and stage_error is None:
+                progress_emitter.emit_error(message=str(root_exc), stage=None)
             log_event(logger, logging.ERROR, "agent_execution_error", error=root_exc)
             return self._error_payload(
                 message=str(root_exc),

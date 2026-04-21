@@ -48,6 +48,7 @@ def parse_runtime_state(value: Any) -> RuntimeState:
             if value.get("memory_summary") is not None
             else None
         ),
+        progress_emitter=value.get("progress_emitter"),
     )
 
 

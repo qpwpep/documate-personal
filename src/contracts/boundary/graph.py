@@ -26,6 +26,7 @@ def build_graph_state_input(
     user_input: str,
     messages: list[AnyMessage] | None = None,
     retriever: Any | None = None,
+    progress_emitter: Any | None = None,
     session_metadata: SessionMetadata | dict[str, Any] | None = None,
     memory_summary: str | None = None,
     planner: PlannerState | dict[str, Any] | None = None,
@@ -41,6 +42,7 @@ def build_graph_state_input(
             retriever=retriever,
             session_metadata=parse_session_metadata(session_metadata),
             memory_summary=memory_summary,
+            progress_emitter=progress_emitter,
         ),
     }
     if planner is not None:
