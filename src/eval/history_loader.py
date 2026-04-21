@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from .schemas import RunSummary, RunTrack
+from .summary_models import RunSummary, RunTrack
 
 
 @dataclass(frozen=True)

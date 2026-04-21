@@ -7,9 +7,10 @@ from typing import Any
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 
-from ..answer_schema import AnswerSection, ClaimItem
-from ..evidence import EvidenceItem
-from .schemas import BenchmarkCase, JudgeSubscores
+from src.core.answer_schema import AnswerSection, ClaimItem
+from src.core.evidence import EvidenceItem
+from .config_models import BenchmarkCase
+from .result_models import JudgeSubscores
 
 _JUDGE_SYSTEM_PROMPT = """You are a strict evaluator for an AI agent benchmark.
 Evaluate the assistant response using the provided case metadata, structured response payload, observed evidence, and runtime diagnostics.

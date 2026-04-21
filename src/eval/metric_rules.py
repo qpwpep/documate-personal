@@ -4,10 +4,10 @@ import re
 from typing import Any, Iterable
 from urllib.parse import urlparse
 
-from ..answer_schema import AnswerSection, ClaimItem
-from ..domain_docs import DEFAULT_DOCS
-from ..evidence import EvidenceItem, normalize_source_id
-from .schemas import BenchmarkCase
+from src.core.answer_schema import AnswerSection, ClaimItem
+from src.core.domain_docs import DEFAULT_DOCS
+from src.core.evidence import EvidenceItem, normalize_source_id
+from .config_models import BenchmarkCase
 
 
 _FAILURE_TEXT_PATTERNS = [

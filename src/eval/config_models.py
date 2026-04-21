@@ -1,0 +1,150 @@
+from __future__ import annotations
+
+import math
+from typing import Any, Literal
+
+from pydantic import BaseModel, Field, model_validator
+
+
+CaseCategory = Literal["docs_only", "rag_only", "hybrid", "tool_action"]
+CaseScenario = Literal["seed_mutation", "adversarial", "regression", "ambiguity"]
+
+
+class CaseWeightOverride(BaseModel):
+    answer_quality: float | None = Field(default=None, ge=0.0)
+    groundedness: float | None = Field(default=None, ge=0.0)
+    citation_traceability: float | None = Field(default=None, ge=0.0)
+    tool_choice: float | None = Field(default=None, ge=0.0)
+    format_language: float | None = Field(default=None, ge=0.0)
+    llm_judge: float | None = Field(default=None, ge=0.0)
+
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_legacy_fields(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        payload = dict(value)
+        legacy_map = {
+            "tool_match": "tool_choice",
+            "content_constraints": "answer_quality",
+            "citation_compliance": "citation_traceability",
+            "safety_format": "format_language",
+        }
+        for legacy_key, new_key in legacy_map.items():
+            if new_key not in payload and legacy_key in payload:
+                payload[new_key] = payload.get(legacy_key)
+        return payload
+
+    @model_validator(mode="after")
+    def validate_finite(self) -> "CaseWeightOverride":
+        for key, value in self.model_dump(exclude_none=True).items():
+            if not math.isfinite(float(value)):
+                raise ValueError(f"weight_override.{key} must be a finite number")
+        return self
+
+    def as_partial_dict(self) -> dict[str, float]:
+        return {k: float(v) for k, v in self.model_dump(exclude_none=True).items()}
+
+
+class BenchmarkCase(BaseModel):
+    case_id: str
+    category: CaseCategory
+    scenario: CaseScenario = "seed_mutation"
+    query: str
+    upload_fixture: str | None = None
+    slack_channel_id: str | None = None
+    slack_user_id: str | None = None
+    slack_email: str | None = None
+    expected_tools: list[str] = Field(default_factory=list)
+    forbidden_tools: list[str] = Field(default_factory=list)
+    must_include: list[str] = Field(default_factory=list)
+    must_not_include: list[str] = Field(default_factory=list)
+    require_official_citation: bool = False
+    require_local_citation: bool = False
+    judge_rubric: str = ""
+    judge_min_score: float | None = Field(default=None, ge=0.0, le=1.0)
+    weight_override: CaseWeightOverride | None = None
+
+
+class ScoreWeights(BaseModel):
+    answer_quality: float = 0.20
+    groundedness: float = 0.20
+    citation_traceability: float = 0.20
+    tool_choice: float = 0.15
+    format_language: float = 0.05
+    llm_judge: float = 0.20
+
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_legacy_fields(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        payload = dict(value)
+        legacy_map = {
+            "tool_match": "tool_choice",
+            "content_constraints": "answer_quality",
+            "citation_compliance": "citation_traceability",
+            "safety_format": "format_language",
+        }
+        for legacy_key, new_key in legacy_map.items():
+            if new_key not in payload and legacy_key in payload:
+                payload[new_key] = payload.get(legacy_key)
+        return payload
+
+    def as_dict(self) -> dict[str, float]:
+        return self.model_dump()
+
+    @property
+    def tool_match(self) -> float:
+        return float(self.tool_choice)
+
+    @property
+    def content_constraints(self) -> float:
+        return float(self.answer_quality)
+
+    @property
+    def citation_compliance(self) -> float:
+        return float(self.citation_traceability)
+
+    @property
+    def safety_format(self) -> float:
+        return float(self.format_language)
+
+
+class HardGates(BaseModel):
+    pass_rate: float = 0.90
+    tool_precision: float = 0.90
+    tool_recall: float = 0.85
+    citation_compliance: float = 0.95
+    p95_latency_ms: int = 20000
+    avg_cost_per_case_usd: float = 0.01
+    cost_gate_min_llm_call_coverage: float = 0.80
+
+
+class ModelPricing(BaseModel):
+    prompt_per_1k_usd: float
+    completion_per_1k_usd: float
+
+
+class Pricing(BaseModel):
+    prompt_per_1k_usd: float = 0.00015
+    completion_per_1k_usd: float = 0.0006
+    models: dict[str, ModelPricing] = Field(default_factory=dict)
+
+
+class JudgeMinScoreConfig(BaseModel):
+    docs_only: float | None = Field(default=None, ge=0.0, le=1.0)
+    hybrid: float | None = Field(default=None, ge=0.0, le=1.0)
+
+    def for_category(self, category: str) -> float | None:
+        return getattr(self, str(category), None)
+
+
+class BenchmarkConfig(BaseModel):
+    weights: ScoreWeights = Field(default_factory=ScoreWeights)
+    hard_gates: HardGates = Field(default_factory=HardGates)
+    pricing: Pricing = Field(default_factory=Pricing)
+    judge_min_score: JudgeMinScoreConfig = Field(default_factory=JudgeMinScoreConfig)
+    judge_model: str = "gpt-5-mini"
+    judge_enabled: bool = True
+    request_timeout_seconds: int = 60

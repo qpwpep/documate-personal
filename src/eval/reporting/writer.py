@@ -3,7 +3,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from ..schemas import CaseResult, RunSummary, dump_jsonl
+from ..io import dump_jsonl
+from ..result_models import CaseResult
+from ..summary_models import RunSummary
 from .markdown import build_markdown_report
 
 

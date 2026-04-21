@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import math
 
-from .schemas import BenchmarkCase, CaseWeightOverride, ScoreWeights
+from .config_models import BenchmarkCase, CaseWeightOverride, ScoreWeights
 
 
 def resolve_effective_weights(
