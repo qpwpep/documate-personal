@@ -8,12 +8,13 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from src.settings import DEFAULT_BENCHMARK_CONFIG_PATH
-from src.settings_sync import build_env_example_text, build_unified_diff, sync_readme_settings_sections
+from src.infra.runtime_paths import get_env_example_path, get_readme_path
+from src.infra.settings import DEFAULT_BENCHMARK_CONFIG_PATH
+from src.infra.settings_sync import build_env_example_text, build_unified_diff, sync_readme_settings_sections
 
 
 def _sync_env_example(check: bool) -> bool:
-    path = Path(".env.example")
+    path = get_env_example_path()
     expected = build_env_example_text(DEFAULT_BENCHMARK_CONFIG_PATH)
     actual = path.read_text(encoding="utf-8") if path.exists() else ""
     if check:
@@ -27,7 +28,7 @@ def _sync_env_example(check: bool) -> bool:
 
 
 def _sync_readme(check: bool) -> bool:
-    path = Path("README.md")
+    path = get_readme_path()
     actual = path.read_text(encoding="utf-8")
     expected = sync_readme_settings_sections(actual, DEFAULT_BENCHMARK_CONFIG_PATH)
     if check:
