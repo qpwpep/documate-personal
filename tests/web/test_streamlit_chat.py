@@ -3,10 +3,9 @@ from __future__ import annotations
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from types import SimpleNamespace
 from unittest.mock import patch
 
-from src.web.streamlit_api_client import AgentCallResult
+from src.web.streamlit_api_client import AgentCallResult, AgentStreamEvent
 from src.web.streamlit_chat import process_chat_prompt, render_chat_history
 
 
@@ -24,7 +23,6 @@ class _FakeStreamlit:
         self.expander_labels: list[str] = []
         self.markdowns: list[tuple[str, bool]] = []
         self.infos: list[str] = []
-        self.spinner_messages: list[str] = []
         self.rerun_calls = 0
 
     def chat_message(self, role: str) -> _NullContext:
@@ -41,9 +39,8 @@ class _FakeStreamlit:
     def info(self, body: str) -> None:
         self.infos.append(body)
 
-    def spinner(self, body: str) -> _NullContext:
-        self.spinner_messages.append(body)
-        return _NullContext()
+    def empty(self):
+        return self
 
     def rerun(self) -> None:
         self.rerun_calls += 1
@@ -82,24 +79,33 @@ class StreamlitChatTest(unittest.TestCase):
         self.assertTrue(any("파일 저장 완료" in body for body in fake_st.infos))
         self.assertEqual(sum("download/answer.txt" in body for body, _ in fake_st.markdowns), 1)
 
-    def test_process_chat_prompt_appends_messages_in_order_and_reruns(self) -> None:
+    def test_process_chat_prompt_streams_progress_before_final_answer(self) -> None:
         fake_st = _FakeStreamlit()
         appended_messages: list[dict[str, object]] = []
 
         def append_message(message):
             appended_messages.append(message)
 
-        def call_agent(user_input: str) -> AgentCallResult:
+        def stream_agent(user_input: str):
             self.assertEqual(user_input, "질문")
-            return AgentCallResult(
-                answer="응답",
-                file_path="output/result.txt",
-                evidence_items=[{"kind": "official"}],
+            yield AgentStreamEvent(event="request_started", data={"request_id": "req123"})
+            yield AgentStreamEvent(event="stage_started", data={"stage": "planner"})
+            yield AgentStreamEvent(
+                event="final_response",
+                data={
+                    "response": {"answer": "응답", "evidence": [{"kind": "official"}]},
+                    "file_path": "output/result.txt",
+                },
+                result=AgentCallResult(
+                    answer="응답",
+                    file_path="output/result.txt",
+                    evidence_items=[{"kind": "official"}],
+                ),
             )
 
         with patch("src.web.streamlit_chat.st", fake_st):
             process_chat_prompt(
-                call_agent=call_agent,
+                stream_agent=stream_agent,
                 prompt="질문",
                 append_user_message=append_message,
                 append_assistant_message=append_message,
@@ -108,8 +114,10 @@ class StreamlitChatTest(unittest.TestCase):
         self.assertEqual([message["role"] for message in appended_messages], ["user", "assistant"])
         self.assertEqual(appended_messages[0]["content"], "질문")
         self.assertEqual(appended_messages[1]["content"], "응답")
-        self.assertEqual(fake_st.chat_roles, ["user"])
-        self.assertEqual(fake_st.spinner_messages, ["Agent가 생각 중입니다..."])
+        self.assertEqual(fake_st.chat_roles, ["user", "assistant"])
+        self.assertTrue(any("요청 접수 중" in body for body, _ in fake_st.markdowns))
+        self.assertTrue(any("질문 분석 중" in body for body, _ in fake_st.markdowns))
+        self.assertTrue(any(body == "응답" for body, _ in fake_st.markdowns))
         self.assertEqual(fake_st.rerun_calls, 1)
 
 

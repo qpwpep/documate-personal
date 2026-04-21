@@ -1,11 +1,12 @@
 import logging
+
 import streamlit as st
 
 from src.domain_docs import DEFAULT_DOCS
 from src.logging_utils import configure_logging
 from src.runtime_encoding import ensure_utf8_stdio
 from src.settings import get_settings
-from src.web.streamlit_api_client import AgentRequestContext, get_agent_response
+from src.web.streamlit_api_client import AgentRequestContext, stream_agent_response
 from src.web.streamlit_chat import process_chat_prompt, render_chat_history
 from src.web.streamlit_page import (
     configure_page,
@@ -42,16 +43,17 @@ def main() -> None:
     render_intro(DEFAULT_DOCS)
     render_chat_history(get_messages(), SETTINGS.fastapi_url)
 
-    prompt = st.chat_input("여기에 질문을 입력하세요...")
+    prompt = st.chat_input("여기에 질문을 입력하세요.")
     if prompt:
-        def call_agent(user_input: str):
+
+        def stream_agent(user_input: str):
             upload_file_name = get_uploaded_file_name()
             upload_file_path = (
                 (session_path / upload_file_name).as_posix()
                 if upload_file_name
                 else None
             )
-            return get_agent_response(
+            return stream_agent_response(
                 user_input,
                 AgentRequestContext(
                     fastapi_url=SETTINGS.fastapi_url,
@@ -64,14 +66,14 @@ def main() -> None:
             )
 
         process_chat_prompt(
-            call_agent=call_agent,
+            stream_agent=stream_agent,
             prompt=prompt,
             append_user_message=append_message,
             append_assistant_message=append_message,
         )
 
     uploaded_file = st.file_uploader(
-        label="파일 업로드 (.py, .ipynb 등 챗봇에게 질문할 때 사용할 파일을 업로드 하세요.)",
+        label=".py 또는 .ipynb 파일을 업로드하면 해당 파일 기준으로 질문할 수 있습니다.",
         type=["ipynb", "py"],
         width=450,
     )
