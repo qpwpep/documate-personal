@@ -5,18 +5,30 @@ import json
 import os
 from pathlib import Path
 
+from src.infra.runtime_paths import (
+    get_benchmark_config_path,
+    get_benchmark_history_svg_path,
+    get_benchmark_output_dir,
+    get_generated_cases_fixture_path,
+    get_readme_path,
+    get_regression_seed_cases_path,
+)
 from .generate_cases import generate_cases_file
 from .history_report import refresh_history_report
+from .io import load_config
 from .online_runner import run_online_benchmark
 from .reporting import build_markdown_report
-from .schemas import BenchmarkConfig, CaseResult, RunSummary, RunTrack, load_config
+from .config_models import BenchmarkConfig
+from .result_models import CaseResult
+from .summary_models import RunSummary, RunTrack
 
 
-DEFAULT_CONFIG_PATH = Path("data/benchmarks/config.toml")
-DEFAULT_FIXTURES_PATH = Path("data/benchmarks/fixtures/cases.generated.jsonl")
-DEFAULT_OUTPUT_ROOT = Path("output/benchmarks")
-DEFAULT_HISTORY_README = Path("README.md")
-DEFAULT_HISTORY_SVG = Path("docs/assets/benchmark_history.svg")
+DEFAULT_CONFIG_PATH = get_benchmark_config_path()
+DEFAULT_FIXTURES_PATH = get_generated_cases_fixture_path()
+DEFAULT_OUTPUT_ROOT = get_benchmark_output_dir()
+DEFAULT_HISTORY_README = get_readme_path()
+DEFAULT_HISTORY_SVG = get_benchmark_history_svg_path()
+DEFAULT_REGRESSION_SEED_PATH = get_regression_seed_cases_path()
 
 
 def _str_to_bool(value: str | None, default: bool) -> bool:
@@ -142,7 +154,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser_generate.add_argument(
         "--regression-seed",
         type=Path,
-        default=Path("data/benchmarks/fixtures/cases.regression.seed.jsonl"),
+        default=DEFAULT_REGRESSION_SEED_PATH,
         help="Regression seed JSONL file path",
     )
     parser_generate.add_argument("--random-seed", type=int, default=42, help="Random seed")

@@ -7,7 +7,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from ..schemas import BenchmarkCase
+from src.infra.runtime_paths import get_upload_session_dir
+from ..config_models import BenchmarkCase
 
 
 @dataclass(slots=True)
@@ -35,7 +36,7 @@ def _build_upload_path(
     if not source.is_file():
         raise FileNotFoundError(f"upload fixture not found: {source}")
 
-    session_dir = (Path("uploads") / session_id).resolve()
+    session_dir = get_upload_session_dir(session_id).resolve()
     session_dir.mkdir(parents=True, exist_ok=True)
     target = session_dir / source.name
     shutil.copy2(source, target)
@@ -77,7 +78,7 @@ def build_request_context(
 
 
 def cleanup_session_upload_dir(session_id: str) -> None:
-    session_dir = Path("uploads") / session_id
+    session_dir = get_upload_session_dir(session_id)
     if session_dir.exists():
         shutil.rmtree(session_dir, ignore_errors=True)
 

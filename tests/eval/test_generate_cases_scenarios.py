@@ -2,8 +2,8 @@ import unittest
 from collections import Counter
 from pathlib import Path
 
+from src.eval.config_models import BenchmarkCase
 from src.eval.generate_cases import build_generated_cases, generate_cases_file
-from src.eval.schemas import BenchmarkCase
 
 
 def _seed_case(case_id: str, category: str) -> BenchmarkCase:

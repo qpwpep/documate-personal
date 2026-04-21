@@ -1,7 +1,8 @@
 import unittest
 
+from src.eval.config_models import BenchmarkCase, BenchmarkConfig
 from src.eval.reporting import build_summary
-from src.eval.schemas import BenchmarkCase, BenchmarkConfig, CaseResult
+from src.eval.result_models import CaseResult
 
 
 def _make_result(

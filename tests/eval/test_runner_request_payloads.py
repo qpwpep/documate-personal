@@ -3,8 +3,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from src.eval.config_models import BenchmarkCase, BenchmarkConfig
 from src.eval.online_runner import _run_single_case
-from src.eval.schemas import BenchmarkCase, BenchmarkConfig
 
 
 class _FakeResponse:

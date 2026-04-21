@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 
 from .history_loader import StoredRun, latest_run_pointer_name, suite_label
-from .schemas import RunSummary, RunTrack
+from .summary_models import RunSummary, RunTrack
 
 
 README_HISTORY_START = "## 9. 최신 벤치마크 결과"

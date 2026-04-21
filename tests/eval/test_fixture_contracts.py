@@ -1,7 +1,7 @@
 import unittest
 from pathlib import Path
 
-from src.eval.schemas import load_cases_jsonl
+from src.eval.io import load_cases_jsonl
 
 
 class FixtureContractsTest(unittest.TestCase):
