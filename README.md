@@ -154,7 +154,7 @@ Windows 환경에서는 `-X utf8` 또는 `PYTHONUTF8=1` 사용을 권장합니�
 | `SYNTHESIS_MAX_RETRIES` | `0` | synthesis 자체 재시도 횟수 |
 | `SYNTHESIS_MAX_TOKENS` | `1920` | synthesis max tokens |
 | `SYNTHESIS_PROMPT_SNIPPET_CHARS` | `960` | evidence snippet 길이 제한 |
-| `SYNTHESIS_REASONING_EFFORT` | 없음 | synthesis reasoning effort override (none/minimal/low/medium/high/xhigh, 빈 값이면 모델 기본값) |
+| `SYNTHESIS_REASONING_EFFORT` | 없음 | synthesis reasoning effort override (none/minimal/low/medium/high/xhigh, 빈 값이면 모델 기본값, none은 명시 override) |
 | `VERBOSE` | `true` | CLI 로그 상세 출력 |
 | `FASTAPI_URL` | `http://localhost:8000` | Streamlit이 호출하는 API 주소 |
 | `SESSION_TTL_SECONDS` | `1800` | 세션 TTL |
@@ -165,6 +165,11 @@ Windows 환경에서는 `-X utf8` 또는 `PYTHONUTF8=1` 사용을 권장합니�
 | `SLACK_BOT_TOKEN` | 없음 | Slack 전송용 토큰 |
 | `SLACK_DEFAULT_DM_EMAIL` | 없음 | 기본 DM 대상 이메일 |
 | `SLACK_DEFAULT_USER_ID` | 없음 | 기본 DM 대상 사용자 |
+
+모델별 reasoning effort override 참고:
+
+- `gpt-5.4-nano`: none, low, medium, high, xhigh
+- `gpt-5-nano`: minimal, low, medium, high
 
 ### 4.2 벤치마크 설정
 
