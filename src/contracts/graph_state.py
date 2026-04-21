@@ -33,6 +33,7 @@ class RuntimeState(BaseModel):
     retriever: Any | None = None
     session_metadata: SessionMetadata = Field(default_factory=SessionMetadata)
     memory_summary: str | None = None
+    progress_emitter: Any | None = None
 
 
 class PlannerState(BaseModel):
