@@ -103,6 +103,23 @@ class LLMRegistryTest(unittest.TestCase):
 
         self.assertIsNone(settings.synthesis_reasoning_effort)
 
+    @patch("src.llm.ChatOpenAI", new=_FakeChatOpenAI)
+    def test_build_llm_registry_preserves_explicit_none_reasoning_override(self) -> None:
+        _FakeChatOpenAI.created_kwargs = []
+        _FakeChatOpenAI.structured_args = []
+        _FakeChatOpenAI.structured_kwargs = []
+        settings = AppSettings(
+            openai_api_key="test-key",
+            tavily_api_key="test-tavily",
+            synthesis_reasoning_effort="none",
+        )
+
+        build_llm_registry(settings)
+
+        self.assertEqual(settings.synthesis_reasoning_effort, "none")
+        self.assertEqual(_FakeChatOpenAI.created_kwargs[0]["reasoning"], {"effort": "none"})
+        self.assertEqual(_FakeChatOpenAI.created_kwargs[1]["reasoning"], {"effort": "none"})
+
 
 if __name__ == "__main__":
     unittest.main()

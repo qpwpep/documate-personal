@@ -35,6 +35,40 @@ def _format_readme_default(value: str | int | bool | None) -> str:
     return f"`{value}`"
 
 
+def _collect_sync_notes(specs: tuple[EnvVarSpec, ...]) -> list[str]:
+    seen: set[str] = set()
+    notes: list[str] = []
+    for spec in specs:
+        for note in spec.sync_notes:
+            if note in seen:
+                continue
+            seen.add(note)
+            notes.append(note)
+    return notes
+
+
+def _render_env_var_lines(spec: EnvVarSpec, value: str | int | bool | None) -> list[str]:
+    lines = [f"# {note}" for note in spec.sync_notes]
+    lines.append(f"{spec.env_name}={_serialize_env_value(value)}")
+    return lines
+
+
+def _render_readme_notes(specs: tuple[EnvVarSpec, ...]) -> list[str]:
+    notes = _collect_sync_notes(specs)
+    if not notes:
+        return []
+
+    lines = [
+        "",
+        "모델별 reasoning effort override 참고:",
+        "",
+    ]
+    for note in notes:
+        model_name, supported_values = note.split(":", maxsplit=1)
+        lines.append(f"- `{model_name}`: {supported_values.strip()}")
+    return lines
+
+
 def _render_settings_table(
     specs: tuple[EnvVarSpec, ...],
     defaults: dict[str, str | int | bool | None] | None = None,
@@ -68,7 +102,7 @@ def build_env_example_text(config_path: Path = DEFAULT_BENCHMARK_CONFIG_PATH) ->
         ]
     )
     for spec in APP_ENV_SPECS[2:-3]:
-        lines.append(f"{spec.env_name}={_serialize_env_value(spec.default)}")
+        lines.extend(_render_env_var_lines(spec, spec.default))
 
     lines.extend(
         [
@@ -86,7 +120,7 @@ def build_env_example_text(config_path: Path = DEFAULT_BENCHMARK_CONFIG_PATH) ->
         ]
     )
     for spec in BENCHMARK_ENV_SPECS:
-        lines.append(f"{spec.env_name}={_serialize_env_value(benchmark_defaults[spec.env_name])}")
+        lines.extend(_render_env_var_lines(spec, benchmark_defaults[spec.env_name]))
     return "\n".join(lines).rstrip() + "\n"
 
 
@@ -102,6 +136,7 @@ def build_readme_app_settings_block() -> str:
         "",
     ]
     lines.extend(_render_settings_table(APP_ENV_SPECS))
+    lines.extend(_render_readme_notes(APP_ENV_SPECS))
     return "\n".join(lines).rstrip() + "\n"
 
 

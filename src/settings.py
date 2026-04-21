@@ -23,6 +23,7 @@ class EnvVarSpec:
     example: str | int | bool | None = None
     section: Literal["app", "benchmark"] = "app"
     config_runtime_key: str | None = None
+    sync_notes: tuple[str, ...] = ()
 
 
 APP_ENV_SPECS = (
@@ -47,8 +48,12 @@ APP_ENV_SPECS = (
         "SYNTHESIS_REASONING_EFFORT",
         "synthesis_reasoning_effort",
         None,
-        "synthesis reasoning effort override (none/minimal/low/medium/high/xhigh, 빈 값이면 모델 기본값)",
+        "synthesis reasoning effort override (none/minimal/low/medium/high/xhigh, 빈 값이면 모델 기본값, none은 명시 override)",
         example="low",
+        sync_notes=(
+            "gpt-5.4-nano: none, low, medium, high, xhigh",
+            "gpt-5-nano: minimal, low, medium, high",
+        ),
     ),
     EnvVarSpec("VERBOSE", "verbose", True, "CLI 로그 상세 출력", example=True),
     EnvVarSpec("FASTAPI_URL", "fastapi_url", "http://localhost:8000", "Streamlit이 호출하는 API 주소", example="http://localhost:8000"),
