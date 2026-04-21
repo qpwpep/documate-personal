@@ -2,7 +2,7 @@
 
 LangGraph 기반 학습 보조 에이전트입니다. 현재 프로젝트는 공식 문서 검색, 로컬 노트북 RAG, 세션 업로드 파일 검색, 구조화된 응답 스키마, 저장/Slack 전송 액션을 하나의 FastAPI + Streamlit 런타임으로 묶어 제공합니다.
 
-현재 문서는 실제 동작 코드를 기준으로 정리되어 있습니다. 주요 기준 경로는 `src/graph_builder.py`, `src/make_graph.py`, `src/tools/*`, `src/nodes/*`, `src/web/*`, `src/eval/*`입니다.
+현재 문서는 실제 동작 코드를 기준으로 정리되어 있습니다. 주요 기준 경로는 `src/runtime/graph_builder.py`, `src/runtime/make_graph.py`, `src/infra/tools/*`, `src/runtime/nodes/*`, `src/app/web/*`, `src/eval/*`입니다.
 
 - [벤치마크 가이드](docs/benchmarking.md)
 - [변경 이력](CHANGELOG.md)
@@ -12,8 +12,8 @@ LangGraph 기반 학습 보조 에이전트입니다. 현재 프로젝트는 공
 
 | 기능 | 설명 |
 |---|---|
-| 공식 문서 검색 | `tavily_search`가 `src/config/agent_rules.toml`의 allowlist와 query hint를 기준으로 공식 문서만 검색합니다. |
-| 로컬 노트북 RAG | `src.rag_build`가 `data/`와 `uploads/` 아래 `.ipynb`를 인덱싱하고 `rag_search`가 `data/index`를 조회합니다. |
+| 공식 문서 검색 | `tavily_search`가 `src/infra/config/agent_rules.toml`의 allowlist와 query hint를 기준으로 공식 문서만 검색합니다. |
+| 로컬 노트북 RAG | `src.app.rag_build` CLI가 `data/`와 `uploads/` 아래 `.ipynb`를 인덱싱하고 실제 구현은 `src/infra/rag_build.py`에 있습니다. `rag_search`는 `data/index`를 조회합니다. |
 | 업로드 파일 검색 | 현재 세션에 업로드된 `.py` 또는 `.ipynb` 파일만 임시 retriever로 검색합니다. |
 | 세션 메모리 | FastAPI 런타임에서 세션별 `AgentFlowManager`를 유지하고 TTL/LRU 기준으로 정리합니다. |
 | grounded 응답 | 응답은 `answer`, `claims`, `evidence`, `confidence`, `sections`를 포함하는 구조화된 페이로드로 반환됩니다. |
@@ -42,13 +42,13 @@ flowchart LR
 
 주요 조립 지점은 다음과 같습니다.
 
-- `src/graph_builder.py`: settings, tool registry, LLM registry, stage instrumentation을 결합합니다.
-- `src/make_graph.py`: LangGraph 노드와 라우팅 규칙을 정의합니다.
-- `src/nodes/planner/`: retrieval 필요 여부와 route를 결정합니다.
-- `src/nodes/retrieval/`: docs, upload, local route를 실행하고 결과를 정규화합니다.
-- `src/nodes/synthesis/`: 구조화된 grounded 응답을 생성합니다.
-- `src/nodes/validation/`: claim/evidence 일치 여부를 검증하고 retry 여부를 결정합니다. 공개 엔트리는 `src.nodes.validation`이며 세부 정책은 패키지 내부 모듈로 분리되어 있습니다.
-- `src/nodes/actions/`: 파일 저장과 Slack 전송 후처리를 담당합니다.
+- `src/runtime/graph_builder.py`: settings, tool registry, LLM registry, stage instrumentation을 결합합니다.
+- `src/runtime/make_graph.py`: LangGraph 노드와 라우팅 규칙을 정의합니다.
+- `src/runtime/nodes/planner/`: retrieval 필요 여부와 route를 결정합니다.
+- `src/runtime/nodes/retrieval/`: docs, upload, local route를 실행하고 결과를 정규화합니다.
+- `src/runtime/nodes/synthesis/`: 구조화된 grounded 응답을 생성합니다.
+- `src/runtime/nodes/validation/`: claim/evidence 일치 여부를 검증하고 retry 여부를 결정합니다. 공개 엔트리는 `src.runtime.nodes.validation`이며 세부 정책은 패키지 내부 모듈로 분리되어 있습니다.
+- `src/runtime/nodes/actions/`: 파일 저장과 Slack 전송 후처리를 담당합니다.
 
 ## 3. 빠른 시작
 
@@ -86,12 +86,12 @@ Copy-Item .env.example .env
 - `SLACK_DEFAULT_USER_ID`
 - `SLACK_DEFAULT_DM_EMAIL`
 
-`src.settings.validate_required_keys()` 때문에 CLI, FastAPI, `startweb` 실행 시 현재는 `OPENAI_API_KEY`와 `TAVILY_API_KEY`가 모두 필요합니다.
+`src.infra.settings.validate_required_keys()` 때문에 CLI, FastAPI, `startweb` 실행 시 현재는 `OPENAI_API_KEY`와 `TAVILY_API_KEY`가 모두 필요합니다.
 
 ### 3.4 로컬 노트북 인덱스 생성
 
 ```bash
-uv run python -m src.rag_build
+uv run python -m src.app.rag_build
 ```
 
 이 명령은 `data/`와 `uploads/` 아래의 `.ipynb` 파일을 스캔해 `data/index`에 Chroma 인덱스를 만듭니다.
@@ -99,13 +99,13 @@ uv run python -m src.rag_build
 ### 3.5 CLI 실행
 
 ```bash
-uv run python -m src.cli
+uv run python -m src.app.cli
 ```
 
 그래프 이미지를 덤프하려면:
 
 ```bash
-uv run python -m src.cli --dump-graph output/runtime/graph.png
+uv run python -m src.app.cli --dump-graph output/runtime/graph.png
 ```
 
 ### 3.6 웹 서비스 실행
@@ -113,8 +113,8 @@ uv run python -m src.cli --dump-graph output/runtime/graph.png
 권장 방식:
 
 ```bash
-uv run python -m src.service_manager startweb
-uv run python -m src.service_manager stopweb
+uv run python -m src.app.service_manager startweb
+uv run python -m src.app.service_manager stopweb
 ```
 
 - FastAPI: `http://127.0.0.1:8000`
@@ -125,11 +125,11 @@ uv run python -m src.service_manager stopweb
 직접 실행도 가능합니다.
 
 ```bash
-uv run python -X utf8 -m uvicorn src.web.app:app --host 0.0.0.0 --port 8000
-uv run python -X utf8 -m streamlit run src/web/streamlit_app.py --server.port 8501
+uv run python -X utf8 -m uvicorn src.app.web.app:app --host 0.0.0.0 --port 8000
+uv run python -X utf8 -m streamlit run src/app/web/streamlit_app.py --server.port 8501
 ```
 
-Windows 환경에서는 `-X utf8` 또는 `PYTHONUTF8=1` 사용을 권장합니다. `src.cli`, `src.service_manager`, `src.web.app`는 UTF-8 실행을 우선하도록 구성돼 있습니다.
+Windows 환경에서는 `-X utf8` 또는 `PYTHONUTF8=1` 사용을 권장합니다. `src.app.cli`, `src.app.service_manager`, `src.app.web.app`는 UTF-8 실행을 우선하도록 구성돼 있습니다.
 
 ## 4. 환경 변수
 
@@ -137,7 +137,7 @@ Windows 환경에서는 `-X utf8` 또는 `PYTHONUTF8=1` 사용을 권장합니�
 
 기준 파일:
 
-- 기본값 source of truth: `src/settings.py`
+- 기본값 source of truth: `src/infra/settings.py`
 - 예시 환경 파일: `.env.example` (생성 산출물)
 - 동기화 명령: `uv run python script/sync_env_example.py`
 
@@ -176,7 +176,7 @@ Windows 환경에서는 `-X utf8` 또는 `PYTHONUTF8=1` 사용을 권장합니�
 기준 파일:
 
 - 기본값 source of truth: `data/benchmarks/config.toml`
-- 환경 변수 override 정의: `src/settings.py`
+- 환경 변수 override 정의: `src/infra/settings.py`
 - 예시 환경 파일: `.env.example` (config 값을 복사한 override 예시)
 - 동기화 명령: `uv run python script/sync_env_example.py`
 
@@ -192,8 +192,8 @@ Windows 환경에서는 `-X utf8` 또는 `PYTHONUTF8=1` 사용을 권장합니�
 
 UI와 문서 검색 규칙은 아래 파일을 기준으로 관리합니다.
 
-- `src/domain_docs.py`: Streamlit 소개 영역에 노출하는 기본 문서 목록
-- `src/config/agent_rules.toml`: docs allowlist, intent rule, query hint 규칙
+- `src/core/domain_docs.py`: Streamlit 소개 영역에 노출하는 기본 문서 목록
+- `src/infra/config/agent_rules.toml`: docs allowlist, intent rule, query hint 규칙
 
 현재 기본 문서 소스는 Python, Git, LangChain, Matplotlib, NumPy, pandas, PyTorch, Hugging Face, FastAPI, BeautifulSoup, Streamlit, Gradio, scikit-learn, Pydantic입니다.
 
@@ -201,7 +201,7 @@ UI와 문서 검색 규칙은 아래 파일을 기준으로 관리합니다.
 
 - 허용 확장자: `.py`, `.ipynb`
 - 허용 위치: `uploads/<session_id>/...`
-- 검증 기준: `src/web/cleanup.py::validate_upload_file_path`
+- 검증 기준: `src/app/web/cleanup.py::validate_upload_file_path`
 - 현재 업로드 검색은 세션에 연결된 단일 파일 컨텍스트만 사용합니다.
 
 ### 5.3 생성 파일과 정리 정책
@@ -210,7 +210,7 @@ UI와 문서 검색 규칙은 아래 파일을 기준으로 관리합니다.
 - 다운로드 엔드포인트: `GET /download/{filename}`
 - 세션 업로드 정리: `SESSION_TTL_SECONDS`
 - 생성 파일 정리: `GENERATED_FILE_TTL_SECONDS`
-- 정리 로직: `src/web/cleanup.py::RuntimeCleaner`
+- 정리 로직: `src/app/web/cleanup.py::RuntimeCleaner`
 
 ## 6. API 계약
 
@@ -266,8 +266,8 @@ UI와 문서 검색 규칙은 아래 파일을 기준으로 관리합니다.
 
 실제 응답 스키마 기준 파일:
 
-- `src/web/schemas.py`
-- `src/answer_schema/`
+- `src/app/web/schemas.py`
+- `src/core/answer_schema/`
 
 ### 6.2 `GET /download/{filename}`
 
@@ -276,168 +276,79 @@ UI와 문서 검색 규칙은 아래 파일을 기준으로 관리합니다.
 - 파일이 없으면 `404 Not Found`를 반환합니다.
 
 ## 7. 프로젝트 구조
-
 ```text
 .
-├─ archive/                    # 보관 코드 및 참고 문서
-├─ data/
-│  └─ benchmarks/              # benchmark config / fixtures
-├─ docs/
-│  ├─ assets/
-│  └─ benchmarking.md
-├─ output/
-│  ├─ benchmarks/              # benchmark 결과물
-│  ├─ runtime/                 # 서비스 로그와 상태 파일
-│  └─ save_text/               # 저장된 응답 파일
-├─ script/
-│  └─ check_encoding.py
-├─ src/
-│  ├─ agent_runtime/
-│  │  ├─ __init__.py
-│  │  ├─ debug_collector.py
-│  │  ├─ execution_runner.py
-│  │  ├─ response_assembler.py
-│  │  └─ session_context.py
-│  ├─ config/
-│  │  └─ agent_rules.toml
-│  ├─ contracts/
-│  │  ├─ boundary/
-│  │  │  ├─ __init__.py
-│  │  │  ├─ debug.py
-│  │  │  ├─ graph.py
-│  │  │  ├─ planner.py
-│  │  │  ├─ response.py
-│  │  │  ├─ retrieval.py
-│  │  │  └─ runtime.py
-│  │  ├─ debug/
-│  │  ├─ io/
-│  │  ├─ state/
-│  │  ├─ __init__.py
-│  │  ├─ debug.py
-│  │  ├─ graph_state.py
-│  │  └─ routes.py
-│  ├─ eval/
-│  │  ├─ history/
-│  │  ├─ reporting/
-│  │  │  ├─ __init__.py
-│  │  │  ├─ histograms.py
-│  │  │  ├─ markdown.py
-│  │  │  ├─ summary.py
-│  │  │  └─ writer.py
-│  │  ├─ online_runner/
-│  │  │  ├─ __init__.py
-│  │  │  ├─ case_runner.py
-│  │  │  ├─ request_builder.py
-│  │  │  ├─ response_parser.py
-│  │  │  └─ result_builder.py
-│  │  ├─ __init__.py
-│  │  ├─ generate_cases.py
-│  │  ├─ history.py
-│  │  ├─ judge_llm.py
-│  │  ├─ main.py
-│  │  ├─ schemas.py
-│  │  └─ scoring_rules.py
-│  ├─ nodes/
-│  │  ├─ planner/
-│  │  │  ├─ __init__.py
-│  │  │  ├─ deterministic.py
-│  │  │  ├─ guardrails.py
-│  │  │  ├─ heuristic.py
-│  │  │  ├─ intents.py
-│  │  │  ├─ models.py
-│  │  │  ├─ node.py
-│  │  │  ├─ policy.py
-│  │  │  ├─ prompt_builder.py
-│  │  │  └─ query_sanitizer.py
-│  │  ├─ retrieval/
-│  │  │  ├─ __init__.py
-│  │  │  ├─ executor.py
-│  │  │  ├─ formatting.py
-│  │  │  └─ node.py
-│  │  ├─ synthesis/
-│  │  │  ├─ __init__.py
-│  │  │  ├─ context.py
-│  │  │  ├─ models.py
-│  │  │  ├─ node.py
-│  │  │  ├─ payload_builder.py
-│  │  │  ├─ pipeline.py
-│  │  │  ├─ prompt_builder.py
-│  │  │  ├─ short_circuit.py
-│  │  │  └─ state.py
-│  │  ├─ validation/
-│  │  │  ├─ __init__.py
-│  │  │  ├─ evidence_validator.py
-│  │  │  ├─ hybrid_rewrite.py
-│  │  │  ├─ messages_ko.py
-│  │  │  ├─ node.py
-│  │  │  ├─ policy.py
-│  │  │  └─ repair.py
-│  │  ├─ __init__.py
-│  │  ├─ actions/
-│  │  ├─ retry.py
-│  │  └─ session.py
-│  ├─ service_manager/
-│  ├─ tools/
-│  │  ├─ __init__.py
-│  │  ├─ _common.py
-│  │  ├─ docs_search/
-│  │  ├─ local_rag/
-│  │  ├─ save_text.py
-│  │  └─ slack_notify.py
-│  ├─ web/
-│  │  ├─ .streamlit/
-│  │  │  └─ config.toml
-│  │  ├─ app.py
-│  │  ├─ cleanup.py
-│  │  ├─ routes.py
-│  │  ├─ schemas.py
-│  │  ├─ session_store.py
-│  │  ├─ streamlit_api_client.py
-│  │  ├─ streamlit_app.py
-│  │  ├─ streamlit_chat.py
-│  │  ├─ streamlit_page.py
-│  │  ├─ streamlit_state.py
-│  │  └─ streamlit_upload_handler.py
-│  ├─ agent_manager.py
-│  ├─ answer_schema/
-│  │  ├─ __init__.py
-│  │  ├─ fallbacks.py
-│  │  ├─ models.py
-│  │  ├─ rendering.py
-│  │  └─ text_cleaning.py
-│  ├─ chunking.py
-│  ├─ cli.py
-│  ├─ domain_docs.py
-│  ├─ evidence.py
-│  ├─ graph_builder.py
-│  ├─ latency.py
-│  ├─ llm.py
-│  ├─ logging_utils.py
-│  ├─ make_graph.py
-│  ├─ message_utils.py
-│  ├─ planner_schema.py
-│  ├─ prompts.py
-│  ├─ rag_build.py
-│  ├─ request_contracts.py
-│  ├─ rules.py
-│  ├─ runtime_encoding.py
-│  ├─ runtime_paths.py
-│  ├─ sequence_utils.py
-│  ├─ settings.py
-│  └─ slack_utils.py
-├─ tests/
-│  ├─ core/
-│  ├─ eval/
-│  ├─ tools/
-│  └─ web/
-└─ uploads/                    # 세션 업로드 파일
+|-- archive/
+|-- data/
+|   `-- benchmarks/
+|-- docs/
+|   |-- assets/
+|   `-- benchmarking.md
+|-- output/
+|   |-- benchmarks/
+|   |-- runtime/
+|   `-- save_text/
+|-- script/
+|   |-- check_encoding.py
+|   `-- sync_env_example.py
+|-- src/
+|   |-- app/
+|   |   |-- service_manager/
+|   |   |-- web/
+|   |   |-- agent_manager.py
+|   |   |-- cli.py
+|   |   `-- rag_build.py
+|   |-- core/
+|   |   |-- answer_schema/
+|   |   |-- contracts/
+|   |   |-- domain_docs.py
+|   |   |-- evidence.py
+|   |   |-- latency.py
+|   |   |-- message_utils.py
+|   |   |-- planner_schema.py
+|   |   |-- prompts.py
+|   |   |-- request_contracts.py
+|   |   |-- rules.py
+|   |   `-- sequence_utils.py
+|   |-- eval/
+|   |   |-- online_runner/
+|   |   |-- reporting/
+|   |   `-- ...
+|   |-- infra/
+|   |   |-- config/
+|   |   |-- tools/
+|   |   |-- chroma_store.py
+|   |   |-- chunking.py
+|   |   |-- llm.py
+|   |   |-- logging_utils.py
+|   |   |-- notebook_loader.py
+|   |   |-- rag_build.py
+|   |   |-- runtime_encoding.py
+|   |   |-- runtime_paths.py
+|   |   |-- settings.py
+|   |   |-- settings_sync.py
+|   |   `-- slack_utils.py
+|   |-- runtime/
+|   |   |-- agent_runtime/
+|   |   |-- nodes/
+|   |   |-- graph_builder.py
+|   |   |-- make_graph.py
+|   |   `-- progress.py
+|   `-- __init__.py
+|-- tests/
+|   |-- core/
+|   |-- eval/
+|   |-- tools/
+|   `-- web/
+`-- uploads/
 ```
+
 
 ## 8. 운영 메모
 
-- `src.service_manager`는 FastAPI와 Streamlit을 함께 띄우고 종료합니다.
-- `src.web.session_store`는 세션별 단일 요청 직렬화 lock을 사용합니다.
-- `src.rag_build`는 증분 인덱싱을 위해 `data/index/manifest.json`을 관리합니다.
+- `src.app.service_manager`는 FastAPI와 Streamlit을 함께 띄우고 종료합니다.
+- `src.app.web.session_store`는 세션별 단일 요청 직렬화 lock을 사용합니다.
+- `src.infra.rag_build`는 증분 인덱싱을 위해 `data/index/manifest.json`을 관리합니다.
 - benchmark 최신 성능 정본은 `output/benchmarks/latest_release_run.txt`입니다.
 - smoke 최신 런 포인터는 `output/benchmarks/latest_smoke_run.txt`로 별도 관리합니다.
 
