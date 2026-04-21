@@ -3,26 +3,19 @@ import unittest
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
-from src.answer_schema import (
-    AgentResponsePayloadModel,
-    build_deterministic_grounded_payload,
-    build_empty_response_payload,
-)
-from src.contracts import RetrievalDiagnostic, RetryState
-from src.evidence import EvidenceItem
-from src.nodes.planner.policy import build_deterministic_planner_decision
-from src.nodes.retrieval import collect_retrieval_result
-from src.nodes.retrieval.node import _collect_retrieval_batch, _execute_retrieval_batch
-from src.nodes.synthesis.payload_builder import (
-    build_plain_summary_attach_payload,
-    select_grounded_fallback_evidence_items,
-    select_primary_evidence_items,
-)
-from src.nodes.synthesis.prompt_builder import build_synthesis_messages
-from src.nodes.validation.evidence_validator import assess_validation, build_validation_snapshot
-from src.nodes.validation.policy import apply_validation_outcome
-from src.planner_schema import PlannerOutput, RetrievalTask
-from src.prompts import SYS_POLICY
+from src.core.answer_schema import AgentResponsePayloadModel, build_deterministic_grounded_payload, build_empty_response_payload
+from src.core.contracts import RetrievalDiagnostic, RetryState
+from src.core.evidence import EvidenceItem
+from src.runtime.nodes.planner.policy import build_deterministic_planner_decision
+from src.runtime.nodes.retrieval import collect_retrieval_result
+from src.runtime.nodes.retrieval.node import _collect_retrieval_batch, _execute_retrieval_batch
+from src.runtime.nodes.synthesis.evidence_selection import select_grounded_fallback_evidence_items, select_primary_evidence_items
+from src.runtime.nodes.synthesis.fallback_renderers import build_plain_summary_attach_payload
+from src.runtime.nodes.synthesis.prompt_builder import build_synthesis_messages
+from src.runtime.nodes.validation.evidence_validator import assess_validation, build_validation_snapshot
+from src.runtime.nodes.validation.policy import apply_validation_outcome
+from src.core.planner_schema import PlannerOutput, RetrievalTask
+from src.core.prompts import SYS_POLICY
 
 from .helpers import build_legacy_state
 
@@ -68,8 +61,8 @@ def _upload_evidence(
 
 class NodeRefactorTest(unittest.TestCase):
     def test_planner_policy_facade_reexports_deterministic_builder(self) -> None:
-        policy_module = importlib.import_module("src.nodes.planner.policy")
-        deterministic_module = importlib.import_module("src.nodes.planner.deterministic")
+        policy_module = importlib.import_module("src.runtime.nodes.planner.policy")
+        deterministic_module = importlib.import_module("src.runtime.nodes.planner.deterministic")
 
         self.assertIs(
             policy_module.build_deterministic_planner_decision,
@@ -77,13 +70,14 @@ class NodeRefactorTest(unittest.TestCase):
         )
 
     def test_synthesis_package_reexports_models_and_factory(self) -> None:
-        synthesis_module = importlib.import_module("src.nodes.synthesis")
-        models_module = importlib.import_module("src.nodes.synthesis.models")
-        node_module = importlib.import_module("src.nodes.synthesis.node")
+        synthesis_module = importlib.import_module("src.runtime.nodes.synthesis")
+        models_module = importlib.import_module("src.runtime.nodes.synthesis.models")
+        node_module = importlib.import_module("src.runtime.nodes.synthesis.node")
 
         self.assertIs(synthesis_module.PreparedSynthesisInputs, models_module.PreparedSynthesisInputs)
         self.assertIs(synthesis_module.SynthesisPipelineResult, models_module.SynthesisPipelineResult)
         self.assertIs(synthesis_module.make_synthesize_node, node_module.make_synthesize_node)
+        self.assertFalse(hasattr(synthesis_module, "build_structured_synthesizer"))
 
     def test_online_runner_package_reexports_case_runner_api(self) -> None:
         online_runner_module = importlib.import_module("src.eval.online_runner")
@@ -103,7 +97,7 @@ class NodeRefactorTest(unittest.TestCase):
         self.assertIs(reporting_module.write_run_outputs, writer_module.write_run_outputs)
 
     def test_validation_package_exposes_only_public_entrypoints(self) -> None:
-        validation_module = importlib.import_module("src.nodes.validation")
+        validation_module = importlib.import_module("src.runtime.nodes.validation")
 
         self.assertTrue(hasattr(validation_module, "ValidationAssessment"))
         self.assertTrue(hasattr(validation_module, "ValidationSnapshot"))

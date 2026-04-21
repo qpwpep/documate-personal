@@ -2,7 +2,7 @@ import unittest
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
-from src.nodes.session import keep_recent_messages, make_summarize_node
+from src.runtime.nodes.session import keep_recent_messages, make_summarize_node
 
 from .helpers import _CaptureSummaryLLM, build_legacy_state
 

@@ -2,7 +2,7 @@ import unittest
 
 from langchain_core.messages import AIMessage, HumanMessage
 
-from src.nodes.synthesis import make_synthesize_node
+from src.runtime.nodes.synthesis import make_synthesize_node
 
 from .helpers import _CaptureSynthesizeLLM, build_legacy_state
 

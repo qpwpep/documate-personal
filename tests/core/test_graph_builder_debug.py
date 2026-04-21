@@ -4,13 +4,13 @@ from unittest.mock import patch
 
 from langchain_core.messages import AIMessage
 
-from src.contracts import PlannerState, ResponseState
-from src.contracts.boundary.debug import get_debug_state
-from src.contracts.boundary.graph import build_graph_state_input
-from src.contracts.boundary.retrieval import get_retrieval_state
-from src.graph_builder import _instrument_stage_node, build_agent_graph
-from src.planner_schema import PlannerOutput, RetrievalTask
-from src.settings import AppSettings
+from src.core.contracts import PlannerState, ResponseState
+from src.core.contracts.boundary.debug import get_debug_state
+from src.core.contracts.boundary.graph import build_graph_state_input
+from src.core.contracts.boundary.retrieval import get_retrieval_state
+from src.runtime.graph_builder import _instrument_stage_node, build_agent_graph
+from src.core.planner_schema import PlannerOutput, RetrievalTask
+from src.infra.settings import AppSettings
 
 from .helpers import _ToolWrapper
 
@@ -122,10 +122,10 @@ class GraphBuilderDebugTest(unittest.TestCase):
         self.assertEqual(debug.validation_errors, ["unsupported evidence id detected"])
         self.assertTrue(any(item.get("stage") == "validation" for item in debug.latency_trace))
 
-    @patch("src.graph_builder.make_synthesize_node")
-    @patch("src.graph_builder.make_planner_node")
-    @patch("src.graph_builder.build_llm_registry")
-    @patch("src.graph_builder.build_tool_registry")
+    @patch("src.runtime.graph_builder.make_synthesize_node")
+    @patch("src.runtime.graph_builder.make_planner_node")
+    @patch("src.runtime.graph_builder.build_llm_registry")
+    @patch("src.runtime.graph_builder.build_tool_registry")
     def test_debug_survives_validation_and_action_postprocess(
         self,
         mock_build_tool_registry,

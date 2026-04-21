@@ -4,14 +4,14 @@ import unittest
 
 from langchain_core.messages import AIMessage, ToolMessage
 
-from src.contracts import GraphState, PlannerState, ResponseState
-from src.contracts.boundary.graph import build_graph_state_input
-from src.make_graph import build_graph
-from src.nodes.retrieval import make_retrieve_dispatch_node
-from src.nodes.session import add_user_message
-from src.nodes.validation import make_validate_evidence_node
-from src.planner_schema import PlannerOutput, RetrievalTask
-from src.tools.local_rag import build_local_rag_tools
+from src.core.contracts import GraphState, PlannerState, ResponseState
+from src.core.contracts.boundary.graph import build_graph_state_input
+from src.runtime.make_graph import build_graph
+from src.runtime.nodes.retrieval import make_retrieve_dispatch_node
+from src.runtime.nodes.session import add_user_message
+from src.runtime.nodes.validation import make_validate_evidence_node
+from src.core.planner_schema import PlannerOutput, RetrievalTask
+from src.infra.tools.local_rag import build_local_rag_tools
 
 from .helpers import _ToolWrapper, _tool_payload, build_legacy_state
 

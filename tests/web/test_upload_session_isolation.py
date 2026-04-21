@@ -10,13 +10,13 @@ from unittest.mock import patch
 from langchain_core.embeddings import Embeddings
 from langchain_core.messages import AIMessage, HumanMessage
 
-from src.agent_manager import AgentFlowManager
-from src.contracts import ResponseState
-from src.settings import AppSettings
-from src.tools.local_rag import build_temp_retriever
-from src.web.agent_request_support import build_session_metadata_snapshot
-from src.web.session_store import InMemorySessionStore, SessionEntry
-from src.web.schemas import AgentRequest
+from src.app.agent_manager import AgentFlowManager
+from src.core.contracts import ResponseState
+from src.infra.settings import AppSettings
+from src.infra.tools.local_rag import build_temp_retriever
+from src.app.web.agent_request_support import build_session_metadata_snapshot
+from src.app.web.session_store import InMemorySessionStore, SessionEntry
+from src.app.web.schemas import AgentRequest
 
 
 class _FakeEmbeddings(Embeddings):
@@ -98,7 +98,7 @@ def _make_manager(graph: _CapturingGraph) -> AgentFlowManager:
 
 
 class UploadSessionIsolationTest(unittest.TestCase):
-    @patch("src.tools.local_rag.client.build_openai_embeddings", return_value=_FakeEmbeddings())
+    @patch("src.infra.tools.local_rag.client.build_openai_embeddings", return_value=_FakeEmbeddings())
     def test_build_temp_retriever_isolates_per_session_collection(self, _mock_embeddings) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             uploads_root = Path(tmp_dir) / "uploads"
@@ -122,7 +122,7 @@ class UploadSessionIsolationTest(unittest.TestCase):
             self.assertEqual(handle_two.collection_name, "upload-session-session-two")
             self.assertEqual(sources, [str(path_two)])
 
-    @patch("src.agent_manager.build_temp_retriever")
+    @patch("src.app.agent_manager.build_temp_retriever")
     def test_agent_manager_cleans_previous_handle_when_upload_changes(
         self,
         mock_build_temp_retriever,
@@ -140,7 +140,7 @@ class UploadSessionIsolationTest(unittest.TestCase):
         self.assertIs(manager.upload_retriever_handle, handle_two)
         self.assertIs(graph.states[-1]["runtime"].retriever, handle_two.retriever)
 
-    @patch("src.agent_manager.build_temp_retriever")
+    @patch("src.app.agent_manager.build_temp_retriever")
     def test_agent_manager_cleans_handle_when_upload_removed(self, mock_build_temp_retriever) -> None:
         graph = _CapturingGraph()
         manager = _make_manager(graph)
@@ -154,7 +154,7 @@ class UploadSessionIsolationTest(unittest.TestCase):
         self.assertIsNone(manager.upload_retriever_handle)
         self.assertIsNone(graph.states[-1]["runtime"].retriever)
 
-    @patch("src.agent_manager.build_temp_retriever")
+    @patch("src.app.agent_manager.build_temp_retriever")
     def test_agent_manager_cleans_handle_on_exit(self, mock_build_temp_retriever) -> None:
         graph = _CapturingGraph()
         manager = _make_manager(graph)
@@ -168,7 +168,7 @@ class UploadSessionIsolationTest(unittest.TestCase):
         self.assertIsNone(manager.upload_retriever_handle)
         self.assertEqual(manager.messages, [])
 
-    @patch("src.agent_manager.build_temp_retriever")
+    @patch("src.app.agent_manager.build_temp_retriever")
     def test_agent_manager_cleans_handle_on_exception(self, mock_build_temp_retriever) -> None:
         manager = _make_manager(_ExplodingGraph())
         handle = _FakeHandle("upload-session-session")

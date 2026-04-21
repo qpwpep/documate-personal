@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from src.web.streamlit_upload_handler import sync_uploaded_file
+from src.app.web.streamlit_upload_handler import sync_uploaded_file
 
 
 class _UploadedFile:

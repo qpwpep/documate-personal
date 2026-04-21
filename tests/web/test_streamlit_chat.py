@@ -5,8 +5,8 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from src.web.streamlit_api_client import AgentCallResult, AgentStreamEvent
-from src.web.streamlit_chat import process_chat_prompt, render_chat_history
+from src.app.web.streamlit_api_client import AgentCallResult, AgentStreamEvent
+from src.app.web.streamlit_chat import process_chat_prompt, render_chat_history
 
 
 class _NullContext:
@@ -71,7 +71,7 @@ class StreamlitChatTest(unittest.TestCase):
                 },
             ]
 
-            with patch("src.web.streamlit_chat.st", fake_st):
+            with patch("src.app.web.streamlit_chat.st", fake_st):
                 render_chat_history(messages, "http://127.0.0.1:8000")
 
         self.assertEqual(fake_st.expander_labels, ["근거 보기"])
@@ -103,7 +103,7 @@ class StreamlitChatTest(unittest.TestCase):
                 ),
             )
 
-        with patch("src.web.streamlit_chat.st", fake_st):
+        with patch("src.app.web.streamlit_chat.st", fake_st):
             process_chat_prompt(
                 stream_agent=stream_agent,
                 prompt="질문",

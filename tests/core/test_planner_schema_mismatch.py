@@ -2,9 +2,9 @@ import unittest
 
 from langchain_core.messages import HumanMessage
 
-from src.contracts.boundary.planner import parse_planner_output
-from src.nodes.planner import make_planner_node
-from src.planner_schema import PlannerOutput
+from src.core.contracts.boundary.planner import parse_planner_output
+from src.runtime.nodes.planner import make_planner_node
+from src.core.planner_schema import PlannerOutput
 
 from .helpers import _CapturePlannerLLM, build_legacy_state
 

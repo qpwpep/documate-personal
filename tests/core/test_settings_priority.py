@@ -6,7 +6,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from src.settings import AppSettings
+from src.infra.settings import AppSettings
 
 
 class SettingsPriorityTest(unittest.TestCase):

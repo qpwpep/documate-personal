@@ -5,7 +5,7 @@ import warnings
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from src.notebook_loader import canonicalize_notebook_payload, load_canonical_notebook
+from src.infra.notebook_loader import canonicalize_notebook_payload, load_canonical_notebook
 
 
 def _raw_notebook_without_ids() -> dict:

@@ -7,12 +7,18 @@ from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from src.service_manager import web as service_web
+from src.app.service_manager import web as service_web
+from src.infra import runtime_paths
 
 
 class ServiceManagerTest(unittest.TestCase):
+    def test_runtime_paths_resolve_repository_root(self) -> None:
+        expected_root = Path(__file__).resolve().parents[2]
+        self.assertEqual(runtime_paths.get_project_root_path(), expected_root)
+        self.assertEqual(runtime_paths.get_output_dir(), expected_root / "output")
+
     def test_start_web_services_rejects_occupied_ports(self) -> None:
-        with patch("src.service_manager.process_client.is_port_open", side_effect=[True, False]):
+        with patch("src.app.service_manager.process_client.is_port_open", side_effect=[True, False]):
             result = service_web._start_web_services()
 
         self.assertEqual(result, 1)
@@ -29,17 +35,17 @@ class ServiceManagerTest(unittest.TestCase):
             fake_fastapi_proc = SimpleNamespace(pid=101)
             fake_streamlit_proc = SimpleNamespace(pid=202)
 
-            with patch("src.service_manager.web.get_project_root_path", return_value=root), patch(
-                "src.service_manager.state.get_service_state_path",
+            with patch("src.app.service_manager.web.get_project_root_path", return_value=root), patch(
+                "src.app.service_manager.state.get_service_state_path",
                 return_value=state_path,
             ), patch(
-                "src.service_manager.web.get_runtime_log_path",
+                "src.app.service_manager.web.get_runtime_log_path",
                 side_effect=[fastapi_log, streamlit_log],
-            ), patch("src.service_manager.process_client.is_port_open", return_value=False), patch(
-                "src.service_manager.process_client.start_background_process",
+            ), patch("src.app.service_manager.process_client.is_port_open", return_value=False), patch(
+                "src.app.service_manager.process_client.start_background_process",
                 side_effect=[fake_fastapi_proc, fake_streamlit_proc],
-            ), patch("src.service_manager.process_client.wait_for_port_open", return_value=True), patch(
-                "src.service_manager.process_client.get_process_create_time",
+            ), patch("src.app.service_manager.process_client.wait_for_port_open", return_value=True), patch(
+                "src.app.service_manager.process_client.get_process_create_time",
                 side_effect=[1.1, 2.2],
             ):
                 result = service_web._start_web_services()
@@ -70,17 +76,17 @@ class ServiceManagerTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("src.service_manager.state.get_service_state_path", return_value=state_path), patch(
-                "src.service_manager.process_client.is_process_alive",
+            with patch("src.app.service_manager.state.get_service_state_path", return_value=state_path), patch(
+                "src.app.service_manager.process_client.is_process_alive",
                 return_value=False,
             ), patch(
-                "src.service_manager.process_client.find_process_pid_by_tokens",
+                "src.app.service_manager.process_client.find_process_pid_by_tokens",
                 side_effect=[111, 222, None, None],
             ), patch(
-                "src.service_manager.process_client.get_process_create_time",
+                "src.app.service_manager.process_client.get_process_create_time",
                 side_effect=[111.0, 222.0],
             ), patch(
-                "src.service_manager.process_client.terminate_process_tree",
+                "src.app.service_manager.process_client.terminate_process_tree",
                 return_value=True,
             ) as mock_terminate:
                 result = service_web._stop_web_services()

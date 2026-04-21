@@ -3,8 +3,8 @@ from __future__ import annotations
 import asyncio
 import unittest
 
-from src.web.agent_request_service import AgentRequestService
-from src.web.schemas import AgentRequest
+from src.app.web.agent_request_service import AgentRequestService
+from src.app.web.schemas import AgentRequest
 
 
 class _FakeCleaner:
