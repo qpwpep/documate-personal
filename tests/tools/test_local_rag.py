@@ -122,6 +122,7 @@ class LocalRagTest(unittest.TestCase):
         self.assertLessEqual(len(text), 1200)
 
 
+
     def test_rank_retrieval_rows_prefers_parameter_cell_for_parameter_queries(self) -> None:
         import_doc = Document(
             page_content=(

@@ -54,7 +54,7 @@ def canonicalize_notebook_payload(payload: dict[str, Any]) -> tuple[dict[str, An
         cell["id"] = _build_deterministic_cell_id(
             cell_index=cell_index,
             cell_type=str(cell.get("cell_type") or ""),
-            source=_normalize_cell_source(cell.get("source")),
+            source=normalize_cell_source(cell.get("source")),
         )
         added += 1
     return notebook, added
@@ -85,7 +85,7 @@ def _build_deterministic_cell_id(*, cell_index: int, cell_type: str, source: str
     return digest[:8]
 
 
-def _normalize_cell_source(source: Any) -> str:
+def normalize_cell_source(source: Any) -> str:
     if isinstance(source, list):
         text = "".join(str(part) for part in source)
     else:
