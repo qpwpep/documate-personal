@@ -4,6 +4,7 @@ import logging
 import socket
 import subprocess
 import time
+from datetime import datetime
 from pathlib import Path
 
 import psutil
@@ -146,6 +147,7 @@ def start_background_process(
 ) -> subprocess.Popen:
     log_path.parent.mkdir(parents=True, exist_ok=True)
     with log_path.open("a", encoding="utf-8") as log_file:
+        _write_startup_marker(log_file=log_file, command=command, cwd=cwd)
         process = subprocess.Popen(
             command,
             cwd=str(cwd),
@@ -159,6 +161,17 @@ def start_background_process(
     if process.poll() is not None:
         raise RuntimeError(f"Process start failed: {' '.join(command)} (log: {log_path})")
     return process
+
+
+def _write_startup_marker(*, log_file, command: list[str], cwd: Path) -> None:
+    if log_file.tell() > 0:
+        log_file.write("\n")
+    timestamp = datetime.now().astimezone().isoformat(timespec="seconds")
+    rendered_command = subprocess.list2cmdline([str(part) for part in command])
+    log_file.write(
+        f"=== DOCUMATE SERVICE START {timestamp} cwd={cwd} command={rendered_command} ===\n"
+    )
+    log_file.flush()
 
 
 def terminate_process_tree(

@@ -4,6 +4,10 @@ import logging
 from typing import Any
 
 
+LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s event=%(event)s %(message)s"
+LOG_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
+
+
 class EventFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
         if not hasattr(record, "event"):
@@ -11,25 +15,26 @@ class EventFormatter(logging.Formatter):
         return super().format(record)
 
 
+def _build_event_formatter() -> EventFormatter:
+    return EventFormatter(LOG_FORMAT, datefmt=LOG_DATE_FORMAT)
+
+
 def configure_logging(level: int = logging.INFO) -> None:
     root_logger = logging.getLogger()
-    if any(getattr(handler, "_documate_handler", False) for handler in root_logger.handlers):
-        root_logger.setLevel(level)
-        return
+    for handler in root_logger.handlers:
+        current_formatter = getattr(handler, "formatter", None)
+        if getattr(handler, "_documate_handler", False) or isinstance(current_formatter, EventFormatter):
+            handler.setFormatter(_build_event_formatter())
+            root_logger.setLevel(level)
+            return
 
     if root_logger.handlers:
-        for handler in root_logger.handlers:
-            current_formatter = getattr(handler, "formatter", None)
-            if isinstance(current_formatter, EventFormatter):
-                root_logger.setLevel(level)
-                return
+        root_logger.setLevel(level)
         return
 
     handler = logging.StreamHandler()
     handler._documate_handler = True  # type: ignore[attr-defined]
-    handler.setFormatter(
-        EventFormatter("%(levelname)s %(name)s event=%(event)s %(message)s")
-    )
+    handler.setFormatter(_build_event_formatter())
     root_logger.addHandler(handler)
     root_logger.setLevel(level)
 
