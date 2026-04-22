@@ -6,7 +6,7 @@ from typing import Any
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-from src.infra.notebook_loader import load_canonical_notebook
+from src.infra.notebook_loader import load_canonical_notebook, normalize_cell_source
 
 
 def _build_splitter(*, chunk_size: int, chunk_overlap: int) -> RecursiveCharacterTextSplitter:
@@ -62,7 +62,7 @@ def chunk_notebook(
     for cell_index, cell in enumerate(getattr(notebook, "cells", [])):
         if cell.get("cell_type") not in {"code", "markdown"}:
             continue
-        source = str(cell.get("source") or "")
+        source = normalize_cell_source(cell.get("source"))
         if not source.strip():
             continue
         document_char_count += len(source)
