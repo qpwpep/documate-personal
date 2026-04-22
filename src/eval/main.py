@@ -60,8 +60,18 @@ def resolve_run_track(track: str | None, limit: int | None) -> RunTrack:
     return "smoke" if limit is not None and limit > 0 else "release"
 
 
+def _paths_reference_same_target(candidate: Path, expected: Path) -> bool:
+    try:
+        return candidate.samefile(expected)
+    except OSError:
+        return candidate.resolve(strict=False) == expected.resolve(strict=False)
+
+
 def validate_history_targets(track: RunTrack, readme_path: Path, svg_path: Path) -> None:
-    if track == "smoke" and (readme_path == DEFAULT_HISTORY_README or svg_path == DEFAULT_HISTORY_SVG):
+    if track == "smoke" and (
+        _paths_reference_same_target(readme_path, DEFAULT_HISTORY_README)
+        or _paths_reference_same_target(svg_path, DEFAULT_HISTORY_SVG)
+    ):
         raise ValueError("Smoke history requires explicit --readme and --svg paths to avoid overwriting release artifacts.")
 
 
