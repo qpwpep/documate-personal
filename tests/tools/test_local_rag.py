@@ -135,6 +135,56 @@ class LocalRagTest(unittest.TestCase):
         self.assertTrue(all(doc.metadata["document_chunk_count"] == len(docs) for doc in docs))
         self.assertTrue(all(doc.metadata["document_char_count"] == len(text) for doc in docs))
 
+    def test_chunk_notebook_path_normalizes_list_sources_without_list_repr(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            notebook_path = Path(temp_dir) / "sample_pipeline.ipynb"
+            notebook_path.write_text(
+                json.dumps(
+                    {
+                        "cells": [
+                            {
+                                "cell_type": "code",
+                                "execution_count": None,
+                                "metadata": {},
+                                "outputs": [],
+                                "source": [
+                                    "from sklearn.preprocessing import StandardScaler\r\n",
+                                    "scaler = StandardScaler()\r\n",
+                                ],
+                            }
+                        ],
+                        "metadata": {},
+                        "nbformat": 4,
+                        "nbformat_minor": 5,
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+
+            docs = chunk_notebook_path(
+                path=str(notebook_path),
+                chunk_size=800,
+                chunk_overlap=120,
+            )
+
+        self.assertEqual(len(docs), 1)
+        expected_source = (
+            "from sklearn.preprocessing import StandardScaler\n"
+            "scaler = StandardScaler()\n"
+        )
+        self.assertEqual(docs[0].page_content, expected_source.strip())
+        self.assertEqual(docs[0].metadata["document_char_count"], len(expected_source))
+        snippet = build_local_snippet(
+            docs[0].page_content,
+            query="StandardScaler initialization",
+            metadata=docs[0].metadata,
+        )
+        self.assertEqual(snippet, expected_source.strip())
+        self.assertNotIn("['from sklearn", docs[0].page_content)
+        self.assertNotIn("['from sklearn", snippet)
+
     def test_rank_retrieval_rows_prefers_parameter_cell_for_parameter_queries(self) -> None:
         import_doc = Document(
             page_content=(
