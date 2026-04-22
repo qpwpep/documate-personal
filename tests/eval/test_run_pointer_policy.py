@@ -72,8 +72,25 @@ class RunPointerPolicyTest(unittest.TestCase):
         self.assertEqual(resolve_run_track("release", 1), "release")
 
     def test_validate_history_targets_rejects_smoke_on_release_outputs(self) -> None:
-        with self.assertRaises(ValueError):
-            validate_history_targets("smoke", Path("README.md"), Path("docs/assets/benchmark_history.svg"))
+        cases = [
+            ("relative_defaults", Path("README.md"), Path("docs/assets/benchmark_history.svg")),
+            ("dot_readme", Path("./README.md"), Path("artifacts/benchmark_history.smoke.svg")),
+            ("normalized_svg", Path("artifacts/README.smoke.md"), Path("docs/assets/../assets/benchmark_history.svg")),
+        ]
+
+        for label, readme_path, svg_path in cases:
+            with self.subTest(label=label):
+                with self.assertRaises(ValueError):
+                    validate_history_targets("smoke", readme_path, svg_path)
+
+    def test_validate_history_targets_allows_explicit_smoke_outputs(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            validate_history_targets(
+                "smoke",
+                root / "README.smoke.md",
+                root / "benchmark_history.smoke.svg",
+            )
 
     @patch("src.eval.online_runner.case_runner._run_single_case")
     def test_limit_run_updates_smoke_pointer_only(self, mock_run_single_case) -> None:
