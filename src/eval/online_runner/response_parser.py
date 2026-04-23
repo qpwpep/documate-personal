@@ -8,11 +8,11 @@ from typing import Any
 import requests
 
 from src.core.answer_schema.models import AnswerSection, ClaimItem
-from src.core.contracts.boundary.debug import parse_llm_calls, parse_token_usage
+from src.core.contracts.boundary.debug import parse_action_results, parse_llm_calls, parse_token_usage
 from src.core.contracts.boundary.planner import parse_planner_diagnostic
 from src.core.contracts.boundary.retrieval import parse_retrieval_diagnostics
 from src.core.contracts.debug import DEBUG_CRITICAL_FIELDS, DEBUG_REQUIRED_FIELDS, DEBUG_SCHEMA_VERSION
-from src.core.contracts.debug import LLMCallMetadata, PlannerDiagnostic, RetrievalDiagnostic, TokenUsage
+from src.core.contracts.debug import ActionResults, LLMCallMetadata, PlannerDiagnostic, RetrievalDiagnostic, TokenUsage
 from src.core.evidence import EvidenceItem
 from src.core.latency import LatencyBreakdownModel
 
@@ -50,6 +50,7 @@ class ParsedResponseData:
     debug_observability_status: str | None = None
     missing_required_debug_fields: list[str] = field(default_factory=list)
     synthesis_mode: str | None = None
+    action_results: ActionResults | None = None
 
 
 def _build_error_message_from_response(response: requests.Response) -> str:
@@ -380,6 +381,11 @@ def parse_agent_response(response: requests.Response) -> ParsedResponseData:
             label="debug.observed_evidence",
             response_errors=parsed.response_errors,
         )
+        raw_action_results = debug_payload.get("action_results")
+        if raw_action_results is not None:
+            parsed.action_results = parse_action_results(raw_action_results)
+            if parsed.action_results is None:
+                parsed.response_errors.append("debug.action_results is invalid")
         parsed.retrieval_diagnostics = _parse_retrieval_diagnostics(
             debug_payload.get("retrieval_diagnostics"),
             response_errors=parsed.response_errors,
