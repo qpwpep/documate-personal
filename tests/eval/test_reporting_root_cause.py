@@ -18,6 +18,8 @@ def _make_result(
     passed: bool,
     latency_breakdown: dict | None = None,
     final_score: float = 0.4,
+    slack_delivery_required: bool = False,
+    slack_delivery_status: str = "not_applicable",
 ) -> CaseResult:
     return CaseResult.model_validate(
         {
@@ -45,6 +47,8 @@ def _make_result(
             "runtime_errors": [],
             "response_errors": [],
             "judge_errors": [],
+            "slack_delivery_required": slack_delivery_required,
+            "slack_delivery_status": slack_delivery_status,
             "validator_reason": validator_reason,
             "validator_feedback": validator_feedback,
             "effective_weights": {
@@ -97,6 +101,12 @@ class ReportingRootCauseTest(unittest.TestCase):
             category="tool_action",
             query="save the answer",
             expected_tools=["save_text"],
+        )
+        tool_slack_case = BenchmarkCase(
+            case_id="tool_slack_case",
+            category="tool_action",
+            query="send to slack",
+            expected_tools=["slack_notify"],
         )
 
         results = [
@@ -197,6 +207,14 @@ class ReportingRootCauseTest(unittest.TestCase):
                 passed=True,
                 final_score=0.9,
             ),
+            _make_result(
+                case=tool_slack_case,
+                tool_calls=["slack_notify"],
+                passed=True,
+                final_score=0.88,
+                slack_delivery_required=True,
+                slack_delivery_status="failed",
+            ),
         ]
 
         summary = build_summary(
@@ -207,7 +225,7 @@ class ReportingRootCauseTest(unittest.TestCase):
             track="release",
             requested_limit=None,
             config=BenchmarkConfig(),
-            cases=[docs_validator_case, docs_confused_case, hybrid_case, tool_case],
+            cases=[docs_validator_case, docs_confused_case, hybrid_case, tool_case, tool_slack_case],
             results=results,
         )
 
@@ -270,10 +288,16 @@ class ReportingRootCauseTest(unittest.TestCase):
         self.assertEqual(validator_buckets[("docs_only", "missing")], (1, 0.5))
         self.assertEqual(validator_buckets[("hybrid", "low_score")], (1, 1.0))
 
+        slack_buckets = {
+            (row.category, row.status): row.count
+            for row in summary.analysis.slack_delivery_status_histogram
+        }
+        self.assertEqual(slack_buckets[("tool_action", "failed")], 1)
+
         self.assertIsNotNone(summary.analysis.latency_breakdown_coverage)
         self.assertEqual(summary.analysis.latency_breakdown_coverage.available_cases, 1)
-        self.assertEqual(summary.analysis.latency_breakdown_coverage.total_cases, 4)
-        self.assertEqual(summary.analysis.latency_breakdown_coverage.coverage_rate, 0.25)
+        self.assertEqual(summary.analysis.latency_breakdown_coverage.total_cases, 5)
+        self.assertEqual(summary.analysis.latency_breakdown_coverage.coverage_rate, 0.2)
 
         stage_rows = {row.stage: row for row in summary.analysis.stage_latency_percentiles}
         self.assertEqual(stage_rows["upload_retriever_build_ms"].sample_count, 1)

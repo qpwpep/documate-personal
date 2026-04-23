@@ -48,13 +48,37 @@ uv run python -m src.eval.main run \
   --limit 10
 ```
 
-### 2.3 기존 run에서 보고서 재생성
+### 2.3 live Slack 전송을 켠 benchmark 실행
+
+실제 Slack 전송은 기본적으로 꺼져 있으며, `--live-slack` 또는 `BENCHMARK_SLACK_ENABLED=true`일 때만 동작합니다.
+
+- benchmark CLI의 override 우선순위는 `CLI > .env > OS env > config.toml`입니다.
+- 즉 `.env`에 `BENCHMARK_SLACK_*`, `BENCHMARK_ENDPOINT`, `JUDGE_MODEL`, `BENCHMARK_JUDGE_ENABLED`를 넣으면 별도 export 없이도 benchmark CLI가 그대로 읽습니다.
+
+- fixture의 `C123BENCH`, `U123BENCH`는 live 모드에서 실제 목적지가 아니라 케이스 분류 힌트로만 사용됩니다.
+- channel 케이스는 `--live-slack-channel-id` 또는 `BENCHMARK_SLACK_CHANNEL_ID`가 필요합니다.
+- DM 케이스는 `--live-slack-user-id`, `--live-slack-email`, `BENCHMARK_SLACK_USER_ID`, `BENCHMARK_SLACK_EMAIL`, 또는 app 기본 DM 설정을 사용합니다.
+
+```bash
+uv run python -m src.eval.main run \
+  --mode online \
+  --track release \
+  --fixtures data/benchmarks/fixtures/cases.generated.jsonl \
+  --endpoint http://127.0.0.1:8000 \
+  --live-slack \
+  --live-slack-channel-id C0123456789 \
+  --live-slack-user-id U0123456789
+```
+
+live Slack 실행에서는 `summary.json`과 `report.md`에 Slack delivery audit 지표가 추가됩니다. 이 지표는 audit-only이며 release gate를 직접 차단하지는 않습니다.
+
+### 2.4 기존 run에서 보고서 재생성
 
 ```bash
 uv run python -m src.eval.main report --run output/benchmarks/<run_id>
 ```
 
-### 2.4 README/SVG 이력 갱신
+### 2.5 README/SVG 이력 갱신
 
 ```bash
 uv run python -m src.eval.main history
@@ -110,13 +134,19 @@ judge minimum score와 pricing도 같은 파일에서 관리합니다.
 
 ## 5. 환경 변수 override
 
-`src/eval/main.py`는 아래 환경 변수로 일부 설정을 덮어쓸 수 있습니다. 기본값은 `data/benchmarks/config.toml`, override 정의와 `.env.example` 생성 기준은 `src/settings.py`입니다.
+`src/eval/main.py`는 아래 환경 변수로 일부 설정을 덮어쓸 수 있습니다. 기본값은 `data/benchmarks/config.toml`, override 정의와 `.env.example` 생성 기준은 `src/infra/settings.py`입니다.
+
+우선순위는 `CLI > .env > OS env > config.toml`입니다.
 
 | 이름 | 기본값 | 설명 |
 |---|---|---|
 | `BENCHMARK_ENDPOINT` | `http://127.0.0.1:8000` | run 명령 기본 endpoint |
 | `JUDGE_MODEL` | config 값 사용 | judge 모델 override |
 | `BENCHMARK_JUDGE_ENABLED` | config 값 사용 | judge 사용 여부 override |
+| `BENCHMARK_SLACK_ENABLED` | `false` | benchmark live Slack 전송 opt-in |
+| `BENCHMARK_SLACK_CHANNEL_ID` | 없음 | live channel 케이스 전송용 Slack channel id |
+| `BENCHMARK_SLACK_USER_ID` | 없음 | live DM 케이스 전송용 Slack user id |
+| `BENCHMARK_SLACK_EMAIL` | 없음 | live DM 케이스 전송용 Slack email |
 
 ## 6. 비교 이력 규칙
 
