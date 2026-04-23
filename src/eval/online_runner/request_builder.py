@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from src.infra.runtime_paths import get_upload_session_dir
-from ..config_models import BenchmarkCase
+from ..config_models import BenchmarkCase, BenchmarkLiveSlackConfig
 
 
 @dataclass(slots=True)
@@ -17,6 +17,7 @@ class RequestContext:
     created_at: str
     request_payload: dict[str, Any]
     runtime_errors: list[str] = field(default_factory=list)
+    slack_delivery_required: bool = False
 
 
 def _utc_now_iso() -> str:
@@ -47,6 +48,7 @@ def build_request_context(
     *,
     fixtures_path: Path,
     case: BenchmarkCase,
+    live_slack: BenchmarkLiveSlackConfig | None = None,
 ) -> RequestContext:
     session_id = str(uuid.uuid4())
     request_payload: dict[str, Any] = {
@@ -54,12 +56,22 @@ def build_request_context(
         "session_id": session_id,
         "include_debug": True,
     }
-    if case.slack_channel_id:
-        request_payload["slack_channel_id"] = case.slack_channel_id
-    if case.slack_user_id:
-        request_payload["slack_user_id"] = case.slack_user_id
-    if case.slack_email:
-        request_payload["slack_email"] = case.slack_email
+    resolved_live_slack = live_slack or BenchmarkLiveSlackConfig()
+    slack_delivery_required = False
+    if resolved_live_slack.applies_to_case(case):
+        slack_delivery_required = True
+        if resolved_live_slack.requires_channel_destination(case):
+            if resolved_live_slack.channel_id:
+                request_payload["slack_channel_id"] = resolved_live_slack.channel_id
+        else:
+            request_payload.update(resolved_live_slack.resolve_dm_payload())
+    else:
+        if case.slack_channel_id:
+            request_payload["slack_channel_id"] = case.slack_channel_id
+        if case.slack_user_id:
+            request_payload["slack_user_id"] = case.slack_user_id
+        if case.slack_email:
+            request_payload["slack_email"] = case.slack_email
 
     runtime_errors: list[str] = []
     try:
@@ -74,6 +86,7 @@ def build_request_context(
         created_at=_utc_now_iso(),
         request_payload=request_payload,
         runtime_errors=runtime_errors,
+        slack_delivery_required=slack_delivery_required,
     )
 
 

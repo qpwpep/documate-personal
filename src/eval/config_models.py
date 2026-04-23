@@ -66,6 +66,53 @@ class BenchmarkCase(BaseModel):
     weight_override: CaseWeightOverride | None = None
 
 
+class BenchmarkLiveSlackConfig(BaseModel):
+    enabled: bool = False
+    channel_id: str | None = None
+    user_id: str | None = None
+    email: str | None = None
+    fallback_user_id: str | None = None
+    fallback_email: str | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_blank_values(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        payload = dict(value)
+        for key in ("channel_id", "user_id", "email", "fallback_user_id", "fallback_email"):
+            item = payload.get(key)
+            if item is None:
+                continue
+            text = str(item).strip()
+            payload[key] = text or None
+        return payload
+
+    def applies_to_case(self, case: BenchmarkCase) -> bool:
+        return self.enabled and "slack_notify" in case.expected_tools
+
+    def requires_channel_destination(self, case: BenchmarkCase) -> bool:
+        return self.applies_to_case(case) and bool(case.slack_channel_id)
+
+    def requires_dm_destination(self, case: BenchmarkCase) -> bool:
+        return self.applies_to_case(case) and not self.requires_channel_destination(case)
+
+    def has_channel_destination(self) -> bool:
+        return bool(self.channel_id)
+
+    def has_dm_destination(self) -> bool:
+        return bool(self.user_id or self.email or self.fallback_user_id or self.fallback_email)
+
+    def resolve_dm_payload(self) -> dict[str, str]:
+        resolved_user_id = self.user_id or self.fallback_user_id
+        if resolved_user_id:
+            return {"slack_user_id": resolved_user_id}
+        resolved_email = self.email or self.fallback_email
+        if resolved_email:
+            return {"slack_email": resolved_email}
+        return {}
+
+
 class ScoreWeights(BaseModel):
     answer_quality: float = 0.20
     groundedness: float = 0.20

@@ -8,6 +8,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 
 from src.core.answer_schema import AnswerSection, ClaimItem
+from src.core.contracts.debug import ActionResults
 from src.core.evidence import EvidenceItem
 from .config_models import BenchmarkCase
 from .result_models import JudgeSubscores
@@ -43,6 +44,7 @@ Failure guidance:
 - Use response.sections as the primary structure signal when it is present.
 - For tool_action cases, do not expect citations or retrieval grounding when the case itself does not require them.
 - For tool_action cases, prefer responses that contain a usable body first and a clear execution receipt such as a saved path or Slack destination after it.
+- For live Slack delivery cases, treat action_results.slack_notify.status of ok/success as completion, and treat skipped/error/unknown as incomplete delivery.
 - For Korean queries, a non-Korean answer should score 0 on format_language.
 - Use validator_reason, retrieval_diagnostics, planner_diagnostics, and synthesis_mode as evidence when scoring.
 - If the supplied evaluation input is incomplete or inconsistent, reflect that in the reason, but still score the visible response quality.
@@ -181,6 +183,8 @@ class LLMJudge:
         valid_claim_count: int | None = None,
         invalid_claim_count: int | None = None,
         tool_call_count: int | None = None,
+        action_results: dict[str, Any] | ActionResults | None = None,
+        slack_delivery_required: bool = False,
     ) -> tuple[float | None, str | None, str | None, JudgeSubscores | None]:
         if not self.enabled:
             return None, None, None, None
@@ -202,6 +206,8 @@ class LLMJudge:
             valid_claim_count=valid_claim_count,
             invalid_claim_count=invalid_claim_count,
             tool_call_count=tool_call_count,
+            action_results=action_results,
+            slack_delivery_required=slack_delivery_required,
         )
         if not self.is_payload_complete(user_prompt):
             return None, None, "invalid_eval: judge payload is incomplete", None
@@ -253,6 +259,8 @@ class LLMJudge:
         valid_claim_count: int | None = None,
         invalid_claim_count: int | None = None,
         tool_call_count: int | None = None,
+        action_results: ActionResults | dict[str, Any] | None = None,
+        slack_delivery_required: bool = False,
     ) -> dict[str, Any]:
         return {
             "case": {
@@ -277,6 +285,8 @@ class LLMJudge:
             "planner_diagnostics": _normalize_jsonable(planner_diagnostics),
             "validator_reason": validator_reason,
             "synthesis_mode": synthesis_mode,
+            "action_results": _normalize_jsonable(action_results),
+            "slack_delivery_required": bool(slack_delivery_required),
             "claim_stats": {
                 "valid_claim_count": int(valid_claim_count or 0),
                 "invalid_claim_count": int(invalid_claim_count or 0),
