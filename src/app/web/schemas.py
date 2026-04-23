@@ -5,7 +5,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 from src.core.answer_schema import AgentResponsePayloadModel
-from src.core.contracts.debug import LLMCallMetadata, PlannerDiagnostic, RetryState, RetrievalDiagnostic, TokenUsage
+from src.core.contracts.debug import ActionResults, LLMCallMetadata, PlannerDiagnostic, RetryState, RetrievalDiagnostic, TokenUsage
 from src.core.evidence import EvidenceItem
 from src.core.latency import LatencyBreakdownModel, StageName
 
@@ -32,6 +32,7 @@ class AgentDebugInfo(BaseModel):
     retry_context: AgentRetryContext | None = None
     retrieval_diagnostics: list[RetrievalDiagnostic] = Field(default_factory=list)
     planner_diagnostics: PlannerDiagnostic | None = None
+    action_results: ActionResults | None = None
 
 
 class AgentRequest(BaseModel):

@@ -126,6 +126,26 @@ class LLMCallMetadata(BaseModel):
     usage_metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class SlackActionResult(BaseModel):
+    status: str = ""
+    channel_id: str | None = None
+    target_type: str | None = None
+    error: str | None = None
+    reason: str | None = None
+
+
+class SaveTextActionResult(BaseModel):
+    status: str = ""
+    file_path: str | None = None
+    error: str | None = None
+    message: str | None = None
+
+
+class ActionResults(BaseModel):
+    slack_notify: SlackActionResult | None = None
+    save_text: SaveTextActionResult | None = None
+
+
 class DebugPayload(BaseModel):
     schema_version: int = DEBUG_SCHEMA_VERSION
     observability_status: DebugObservabilityStatus = "ok"
@@ -143,6 +163,7 @@ class DebugPayload(BaseModel):
     retrieval_diagnostics: list[RetrievalDiagnostic] = Field(default_factory=list)
     planner_diagnostics: PlannerDiagnostic | None = None
     latency_breakdown: dict[str, Any] | None = None
+    action_results: ActionResults | None = None
 
 
 AgentDebugPayload = DebugPayload

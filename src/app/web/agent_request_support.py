@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from src.core.contracts import SessionMetadata
-from src.core.contracts.boundary.debug import parse_llm_calls, parse_retry_state, parse_token_usage
+from src.core.contracts.boundary.debug import parse_action_results, parse_llm_calls, parse_retry_state, parse_token_usage
 from src.core.contracts.boundary.planner import parse_planner_diagnostic
 from src.core.contracts.boundary.retrieval import parse_retrieval_diagnostics
 from src.core.contracts.boundary.runtime import parse_slack_destination
@@ -48,6 +48,7 @@ def normalize_debug_info(raw_debug: dict | None, latency_ms_server: int | None) 
     retrieval_diagnostics = parse_retrieval_diagnostics(debug.get("retrieval_diagnostics"))
     planner_diagnostics = parse_planner_diagnostic(debug.get("planner_diagnostics"))
     llm_calls = parse_llm_calls(raw_llm_calls)
+    action_results = parse_action_results(debug.get("action_results"))
 
     models_used = [str(name) for name in models_used_raw if name] if isinstance(models_used_raw, list) else []
     if not models_used and llm_calls:
@@ -103,6 +104,7 @@ def normalize_debug_info(raw_debug: dict | None, latency_ms_server: int | None) 
         retry_context=retry_context,
         retrieval_diagnostics=retrieval_diagnostics,
         planner_diagnostics=planner_diagnostics,
+        action_results=action_results,
     )
 
 

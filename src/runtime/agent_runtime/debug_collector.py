@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
@@ -15,6 +16,46 @@ from src.core.latency import build_latency_breakdown
 
 
 class DebugCollector:
+    @staticmethod
+    def _parse_tool_payload(message: ToolMessage) -> dict[str, Any]:
+        content = getattr(message, "content", None)
+        if isinstance(content, str):
+            raw_text = content
+        elif isinstance(content, list):
+            raw_text = "\n".join(str(item) for item in content)
+        else:
+            raw_text = str(content or "")
+        try:
+            parsed = json.loads(raw_text)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+
+    @classmethod
+    def _extract_action_results(cls, current_turn_messages: list[Any]) -> dict[str, Any] | None:
+        action_results: dict[str, Any] = {}
+        for message in current_turn_messages:
+            if not isinstance(message, ToolMessage):
+                continue
+            tool_name = str(getattr(message, "name", "") or "").strip()
+            payload = cls._parse_tool_payload(message)
+            if tool_name == "slack_notify":
+                action_results["slack_notify"] = {
+                    "status": str(payload.get("status") or "").strip(),
+                    "channel_id": str(payload.get("channel_id") or "").strip() or None,
+                    "target_type": str(payload.get("target_type") or "").strip() or None,
+                    "error": str(payload.get("error") or "").strip() or None,
+                    "reason": str(payload.get("reason") or "").strip() or None,
+                }
+            elif tool_name == "save_text":
+                action_results["save_text"] = {
+                    "status": str(payload.get("status") or "").strip(),
+                    "file_path": str(payload.get("file_path") or "").strip() or None,
+                    "error": str(payload.get("error") or "").strip() or None,
+                    "message": str(payload.get("message") or "").strip() or None,
+                }
+        return action_results or None
+
     @staticmethod
     def _extract_token_usage_from_llm_call(llm_call: dict[str, Any]) -> dict[str, int]:
         usage_metadata = llm_call.get("usage_metadata")
@@ -242,6 +283,7 @@ class DebugCollector:
         planner_diagnostics = self._normalize_planner_diagnostics(
             state_planner.diagnostics.model_dump(mode="json")
         )
+        action_results = self._extract_action_results(current_turn_messages)
         latency_breakdown = build_latency_breakdown(
             raw_trace=[item for item in state_debug.latency_trace],
             graph_total_ms=graph_total_ms,
@@ -265,4 +307,5 @@ class DebugCollector:
             "retrieval_diagnostics": retrieval_diagnostics,
             "planner_diagnostics": planner_diagnostics,
             "latency_breakdown": latency_breakdown.model_dump(mode="json"),
+            "action_results": action_results,
         }
