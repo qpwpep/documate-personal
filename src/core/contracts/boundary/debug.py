@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from src.core.contracts.debug import DEBUG_SCHEMA_VERSION, DebugPayload, LLMCallMetadata, RetryState, TokenUsage, json_safe_deep_copy
+from src.core.contracts.debug import ActionResults, DEBUG_SCHEMA_VERSION, DebugPayload, LLMCallMetadata, RetryState, SaveTextActionResult, SlackActionResult, TokenUsage, json_safe_deep_copy
 from src.core.contracts.graph_state import DebugState
 from src.core.contracts.routes import normalize_routes
 from src.core.contracts.boundary.planner import parse_planner_diagnostic
@@ -145,6 +145,39 @@ def parse_token_usage(value: Any) -> TokenUsage | None:
         return None
 
 
+def parse_action_results(value: Any) -> ActionResults | None:
+    if isinstance(value, ActionResults):
+        return value
+    if not isinstance(value, dict):
+        return None
+
+    payload: dict[str, Any] = {}
+    slack_payload = value.get("slack_notify")
+    if isinstance(slack_payload, SlackActionResult):
+        payload["slack_notify"] = slack_payload
+    elif isinstance(slack_payload, dict):
+        payload["slack_notify"] = SlackActionResult(
+            status=str(slack_payload.get("status") or "").strip(),
+            channel_id=(str(slack_payload.get("channel_id")).strip() if slack_payload.get("channel_id") else None),
+            target_type=(str(slack_payload.get("target_type")).strip() if slack_payload.get("target_type") else None),
+            error=(str(slack_payload.get("error")).strip() if slack_payload.get("error") else None),
+            reason=(str(slack_payload.get("reason")).strip() if slack_payload.get("reason") else None),
+        )
+
+    save_payload = value.get("save_text")
+    if isinstance(save_payload, SaveTextActionResult):
+        payload["save_text"] = save_payload
+    elif isinstance(save_payload, dict):
+        payload["save_text"] = SaveTextActionResult(
+            status=str(save_payload.get("status") or "").strip(),
+            file_path=(str(save_payload.get("file_path")).strip() if save_payload.get("file_path") else None),
+            error=(str(save_payload.get("error")).strip() if save_payload.get("error") else None),
+            message=(str(save_payload.get("message")).strip() if save_payload.get("message") else None),
+        )
+
+    return ActionResults(**payload) if payload else None
+
+
 def parse_debug_payload(value: Any) -> DebugPayload:
     if isinstance(value, DebugPayload):
         return value
@@ -203,6 +236,7 @@ def parse_debug_payload(value: Any) -> DebugPayload:
         latency_breakdown=dict(value.get("latency_breakdown"))
         if isinstance(value.get("latency_breakdown"), dict)
         else None,
+        action_results=parse_action_results(value.get("action_results")),
     )
 
 
