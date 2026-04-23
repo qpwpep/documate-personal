@@ -20,6 +20,14 @@ class SettingsSyncTest(unittest.TestCase):
         self.assertIn("SYNTHESIS_REASONING_EFFORT=\n", env_example)
         self.assertNotIn("SYNTHESIS_REASONING_EFFORT=none", env_example)
 
+    def test_env_example_includes_benchmark_live_slack_settings(self) -> None:
+        env_example = build_env_example_text(DEFAULT_BENCHMARK_CONFIG_PATH)
+
+        self.assertIn("BENCHMARK_SLACK_ENABLED=false", env_example)
+        self.assertIn("BENCHMARK_SLACK_CHANNEL_ID=", env_example)
+        self.assertIn("BENCHMARK_SLACK_USER_ID=", env_example)
+        self.assertIn("BENCHMARK_SLACK_EMAIL=", env_example)
+
     def test_readme_settings_sections_match_generated_content(self) -> None:
         actual = Path("README.md").read_text(encoding="utf-8")
         expected = sync_readme_settings_sections(actual, DEFAULT_BENCHMARK_CONFIG_PATH)

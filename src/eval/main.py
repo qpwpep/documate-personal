@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 from pathlib import Path
 
 from src.infra.runtime_paths import (
@@ -21,6 +20,7 @@ from .reporting import build_markdown_report
 from .config_models import BenchmarkConfig
 from .result_models import CaseResult
 from .summary_models import RunSummary, RunTrack
+from src.infra.settings import load_benchmark_cli_env_settings
 
 
 DEFAULT_CONFIG_PATH = get_benchmark_config_path()
@@ -30,27 +30,15 @@ DEFAULT_HISTORY_README = get_readme_path()
 DEFAULT_HISTORY_SVG = get_benchmark_history_svg_path()
 DEFAULT_REGRESSION_SEED_PATH = get_regression_seed_cases_path()
 
-
-def _str_to_bool(value: str | None, default: bool) -> bool:
-    if value is None:
-        return default
-    normalized = value.strip().lower()
-    if normalized in {"1", "true", "yes", "on"}:
-        return True
-    if normalized in {"0", "false", "no", "off"}:
-        return False
-    return default
-
-
-def _load_config_with_env_overrides(config_path: Path) -> BenchmarkConfig:
+def _load_config_with_env_overrides(
+    config_path: Path,
+    *,
+    benchmark_env: object | None = None,
+) -> BenchmarkConfig:
     config = load_config(config_path)
-
-    env_judge_model = os.getenv("JUDGE_MODEL")
-    if env_judge_model:
-        config.judge_model = env_judge_model
-
-    env_judge_enabled = os.getenv("BENCHMARK_JUDGE_ENABLED")
-    config.judge_enabled = _str_to_bool(env_judge_enabled, config.judge_enabled)
+    if benchmark_env is not None:
+        config.judge_model = str(getattr(benchmark_env, "judge_model", config.judge_model) or config.judge_model)
+        config.judge_enabled = bool(getattr(benchmark_env, "judge_enabled", config.judge_enabled))
     return config
 
 
@@ -91,8 +79,9 @@ def command_run(args: argparse.Namespace) -> int:
     if args.mode != "online":
         raise ValueError("Only online mode is supported.")
 
-    endpoint = args.endpoint or os.getenv("BENCHMARK_ENDPOINT", "http://127.0.0.1:8000")
-    config = _load_config_with_env_overrides(args.config)
+    benchmark_env = load_benchmark_cli_env_settings(args.config)
+    endpoint = args.endpoint or benchmark_env.endpoint
+    config = _load_config_with_env_overrides(args.config, benchmark_env=benchmark_env)
     track = resolve_run_track(args.track, args.limit)
 
     run_dir, _, summary = run_online_benchmark(
