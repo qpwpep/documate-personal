@@ -180,6 +180,67 @@ class RunPolicyRegressionTest(unittest.TestCase):
         self.assertEqual(completeness_gate.actual, 0.5)
         self.assertFalse(completeness_gate.passed)
 
+    def test_slack_delivery_audit_gate_is_skipped_for_non_live_runs(self) -> None:
+        case = BenchmarkCase(
+            case_id="tool-slack",
+            category="tool_action",
+            query="share to slack",
+            expected_tools=["slack_notify"],
+        )
+        result = _result(case=case, release_pass=True)
+        result.tool_calls = ["slack_notify"]
+        result.slack_delivery_required = False
+        result.slack_delivery_status = "not_applicable"
+
+        summary = build_summary(
+            run_id="run-policy",
+            endpoint="http://127.0.0.1:8000",
+            fixtures_path="data/benchmarks/fixtures/cases.generated.jsonl",
+            config_path="data/benchmarks/config.toml",
+            track="release",
+            requested_limit=None,
+            config=BenchmarkConfig(),
+            cases=[case],
+            results=[result],
+        )
+
+        gate = next(gate for gate in summary.gates if gate.name == "slack_delivery_success_rate")
+        self.assertEqual(gate.status, "skipped_not_live")
+        self.assertTrue(gate.passed)
+        self.assertIsNone(gate.actual)
+
+    def test_slack_delivery_audit_gate_is_evaluated_for_live_runs(self) -> None:
+        case = BenchmarkCase(
+            case_id="tool-slack",
+            category="tool_action",
+            query="share to slack",
+            expected_tools=["slack_notify"],
+        )
+        result = _result(case=case, release_pass=True)
+        result.tool_calls = ["slack_notify"]
+        result.slack_delivery_required = True
+        result.slack_delivery_status = "failed"
+
+        summary = build_summary(
+            run_id="run-policy",
+            endpoint="http://127.0.0.1:8000",
+            fixtures_path="data/benchmarks/fixtures/cases.generated.jsonl",
+            config_path="data/benchmarks/config.toml",
+            track="release",
+            requested_limit=None,
+            config=BenchmarkConfig(),
+            cases=[case],
+            results=[result],
+            slack_live_enabled=True,
+        )
+
+        gate = next(gate for gate in summary.gates if gate.name == "slack_delivery_success_rate")
+        self.assertEqual(gate.status, "evaluated")
+        self.assertEqual(gate.actual, 0.0)
+        self.assertFalse(gate.passed)
+        self.assertEqual(summary.metrics.slack_delivery_required_cases, 1)
+        self.assertEqual(summary.metrics.slack_delivery_success_cases, 0)
+
 
 if __name__ == "__main__":
     unittest.main()
