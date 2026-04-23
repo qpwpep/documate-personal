@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import os
 import tomllib
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, field_validator
+from dotenv import dotenv_values
+from pydantic import BaseModel, Field, field_validator
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
 from src.infra.runtime_paths import get_benchmark_config_path, get_env_file_path
 
@@ -113,6 +115,38 @@ BENCHMARK_ENV_SPECS = (
         section="benchmark",
         config_runtime_key="judge_enabled",
     ),
+    EnvVarSpec(
+        "BENCHMARK_SLACK_ENABLED",
+        None,
+        False,
+        "benchmark live Slack 전송 opt-in",
+        example=False,
+        section="benchmark",
+    ),
+    EnvVarSpec(
+        "BENCHMARK_SLACK_CHANNEL_ID",
+        None,
+        None,
+        "benchmark channel case 전송용 Slack channel id",
+        example="C0123456789",
+        section="benchmark",
+    ),
+    EnvVarSpec(
+        "BENCHMARK_SLACK_USER_ID",
+        None,
+        None,
+        "benchmark DM case 전송용 Slack user id",
+        example="U0123456789",
+        section="benchmark",
+    ),
+    EnvVarSpec(
+        "BENCHMARK_SLACK_EMAIL",
+        None,
+        None,
+        "benchmark DM case 전송용 Slack email",
+        example="bench@example.com",
+        section="benchmark",
+    ),
 )
 
 APP_ENV_SPEC_BY_NAME = {spec.env_name: spec for spec in APP_ENV_SPECS}
@@ -123,8 +157,50 @@ class ConfigurationError(RuntimeError):
     """Raised when required runtime configuration is missing."""
 
 
+class BenchmarkCLIEnvSettings(BaseModel):
+    endpoint: str
+    judge_model: str
+    judge_enabled: bool
+    live_slack_enabled: bool
+    live_slack_channel_id: str | None = None
+    live_slack_user_id: str | None = None
+    live_slack_email: str | None = None
+
+
 def _app_default(env_name: str) -> str | int | bool | None:
     return APP_ENV_SPEC_BY_NAME[env_name].default
+
+
+def _normalize_env_text(value: object) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _str_to_bool(value: str | None, default: bool) -> bool:
+    if value is None:
+        return default
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
+def _resolve_benchmark_env_value(
+    env_name: str,
+    *,
+    dotenv_payload: dict[str, str | None],
+    os_environ: dict[str, str],
+    defaults: dict[str, str | int | bool | None],
+) -> str | int | bool | None:
+    if env_name in dotenv_payload:
+        return dotenv_payload.get(env_name)
+    if env_name in os_environ:
+        return os_environ.get(env_name)
+    return defaults.get(env_name)
 
 
 def load_benchmark_env_defaults(config_path: Path = DEFAULT_BENCHMARK_CONFIG_PATH) -> dict[str, str | int | bool | None]:
@@ -140,6 +216,93 @@ def load_benchmark_env_defaults(config_path: Path = DEFAULT_BENCHMARK_CONFIG_PAT
         else:
             defaults[spec.env_name] = spec.default
     return defaults
+
+
+def load_benchmark_cli_env_settings(
+    config_path: Path = DEFAULT_BENCHMARK_CONFIG_PATH,
+    *,
+    env_path: Path | None = None,
+) -> BenchmarkCLIEnvSettings:
+    defaults = load_benchmark_env_defaults(config_path)
+    resolved_env_path = env_path or get_env_file_path()
+    dotenv_payload = (
+        {
+            str(key): (_normalize_env_text(value) if value is not None else None)
+            for key, value in dotenv_values(resolved_env_path).items()
+        }
+        if resolved_env_path.exists()
+        else {}
+    )
+
+    endpoint = _normalize_env_text(
+        _resolve_benchmark_env_value(
+            "BENCHMARK_ENDPOINT",
+            dotenv_payload=dotenv_payload,
+            os_environ=os.environ,
+            defaults=defaults,
+        )
+    ) or str(defaults["BENCHMARK_ENDPOINT"])
+    judge_model = _normalize_env_text(
+        _resolve_benchmark_env_value(
+            "JUDGE_MODEL",
+            dotenv_payload=dotenv_payload,
+            os_environ=os.environ,
+            defaults=defaults,
+        )
+    ) or str(defaults["JUDGE_MODEL"])
+    judge_enabled = _str_to_bool(
+        _normalize_env_text(
+            _resolve_benchmark_env_value(
+                "BENCHMARK_JUDGE_ENABLED",
+                dotenv_payload=dotenv_payload,
+                os_environ=os.environ,
+                defaults=defaults,
+            )
+        ),
+        bool(defaults["BENCHMARK_JUDGE_ENABLED"]),
+    )
+    live_slack_enabled = _str_to_bool(
+        _normalize_env_text(
+            _resolve_benchmark_env_value(
+                "BENCHMARK_SLACK_ENABLED",
+                dotenv_payload=dotenv_payload,
+                os_environ=os.environ,
+                defaults=defaults,
+            )
+        ),
+        bool(defaults["BENCHMARK_SLACK_ENABLED"]),
+    )
+
+    return BenchmarkCLIEnvSettings(
+        endpoint=endpoint,
+        judge_model=judge_model,
+        judge_enabled=judge_enabled,
+        live_slack_enabled=live_slack_enabled,
+        live_slack_channel_id=_normalize_env_text(
+            _resolve_benchmark_env_value(
+                "BENCHMARK_SLACK_CHANNEL_ID",
+                dotenv_payload=dotenv_payload,
+                os_environ=os.environ,
+                defaults=defaults,
+            )
+        ),
+        live_slack_user_id=_normalize_env_text(
+            _resolve_benchmark_env_value(
+                "BENCHMARK_SLACK_USER_ID",
+                dotenv_payload=dotenv_payload,
+                os_environ=os.environ,
+                defaults=defaults,
+            )
+        ),
+        live_slack_email=_normalize_env_text(
+            _resolve_benchmark_env_value(
+                "BENCHMARK_SLACK_EMAIL",
+                dotenv_payload=dotenv_payload,
+                os_environ=os.environ,
+                defaults=defaults,
+            )
+        ),
+    )
 
 
 class AppSettings(BaseSettings):
@@ -271,12 +434,14 @@ __all__ = [
     "APP_ENV_SPECS",
     "APP_ENV_SPEC_BY_NAME",
     "AppSettings",
+    "BenchmarkCLIEnvSettings",
     "BENCHMARK_ENV_SPECS",
     "BENCHMARK_ENV_SPEC_BY_NAME",
     "ConfigurationError",
     "DEFAULT_BENCHMARK_CONFIG_PATH",
     "EnvVarSpec",
     "get_settings",
+    "load_benchmark_cli_env_settings",
     "load_benchmark_env_defaults",
     "validate_required_keys",
 ]

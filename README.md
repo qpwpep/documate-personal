@@ -185,6 +185,10 @@ Windows 환경에서는 `-X utf8` 또는 `PYTHONUTF8=1` 사용을 권장합니�
 | `JUDGE_MODEL` | `gpt-5.4-nano` | benchmark judge 모델 override |
 | `BENCHMARK_ENDPOINT` | `http://127.0.0.1:8000` | benchmark 대상 FastAPI 주소 override |
 | `BENCHMARK_JUDGE_ENABLED` | `true` | judge 사용 여부 override |
+| `BENCHMARK_SLACK_ENABLED` | `false` | benchmark live Slack 전송 opt-in |
+| `BENCHMARK_SLACK_CHANNEL_ID` | 없음 | benchmark channel case 전송용 Slack channel id |
+| `BENCHMARK_SLACK_USER_ID` | 없음 | benchmark DM case 전송용 Slack user id |
+| `BENCHMARK_SLACK_EMAIL` | 없음 | benchmark DM case 전송용 Slack email |
 
 ## 5. 검색 소스와 파일 제약
 
@@ -371,3 +375,4 @@ uv run python script/sync_env_example.py --check
 ```
 
 벤치마크 관련 명령은 [docs/benchmarking.md](docs/benchmarking.md)를 참고하세요.
+benchmark CLI의 env override 우선순위는 `CLI > .env > OS env > config.toml`입니다.
