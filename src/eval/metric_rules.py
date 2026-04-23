@@ -30,7 +30,13 @@ _COMPARISON_MARKERS = (
 _ALLOWED_OFFICIAL_DOMAINS = set()
 
 
-def score_tool_choice(case: BenchmarkCase, called_tools: list[str]) -> float:
+def score_tool_choice(
+    case: BenchmarkCase,
+    called_tools: list[str],
+    *,
+    slack_delivery_required: bool = False,
+    slack_delivery_status: str = "not_applicable",
+) -> float:
     expected = set(case.expected_tools)
     forbidden = set(case.forbidden_tools)
     called = set(called_tools)
@@ -40,7 +46,16 @@ def score_tool_choice(case: BenchmarkCase, called_tools: list[str]) -> float:
 
     expected_score = 1.0
     if expected:
-        expected_score = len(expected.intersection(called)) / len(expected)
+        matched_expected = 0
+        for tool_name in expected:
+            if tool_name not in called:
+                continue
+            if tool_name == "slack_notify" and slack_delivery_required:
+                if slack_delivery_status == "success":
+                    matched_expected += 1
+                continue
+            matched_expected += 1
+        expected_score = matched_expected / len(expected)
 
     forbidden_penalty = 0.0
     if forbidden:
@@ -226,6 +241,8 @@ def compute_rule_scores(
     valid_claim_count: int = 0,
     invalid_claim_count: int = 0,
     response_sections: list[AnswerSection] | None = None,
+    slack_delivery_required: bool = False,
+    slack_delivery_status: str = "not_applicable",
     **_unused: Any,
 ) -> dict[str, float]:
     _ = retrieval_diagnostics, valid_claim_count
@@ -252,7 +269,12 @@ def compute_rule_scores(
             observed_evidence=observed_evidence,
             called_tools=called_tools,
         ),
-        "tool_choice": score_tool_choice(case, called_tools),
+        "tool_choice": score_tool_choice(
+            case,
+            called_tools,
+            slack_delivery_required=slack_delivery_required,
+            slack_delivery_status=slack_delivery_status,
+        ),
         "format_language": score_format_language(
             case=case,
             runtime_errors=runtime_errors,
@@ -263,8 +285,19 @@ def compute_rule_scores(
     }
 
 
-def score_tool_match(case: BenchmarkCase, called_tools: list[str]) -> float:
-    return score_tool_choice(case, called_tools)
+def score_tool_match(
+    case: BenchmarkCase,
+    called_tools: list[str],
+    *,
+    slack_delivery_required: bool = False,
+    slack_delivery_status: str = "not_applicable",
+) -> float:
+    return score_tool_choice(
+        case,
+        called_tools,
+        slack_delivery_required=slack_delivery_required,
+        slack_delivery_status=slack_delivery_status,
+    )
 
 
 def score_content_constraints(case: BenchmarkCase, response_text: str) -> float:

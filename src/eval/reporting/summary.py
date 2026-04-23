@@ -78,6 +78,7 @@ def build_summary(
     config: BenchmarkConfig,
     cases: list[BenchmarkCase],
     results: list[CaseResult],
+    slack_live_enabled: bool = False,
 ) -> RunSummary:
     case_map = {case.case_id: case for case in cases}
     scored_results = [result for result in results if result.composite_quality_score is not None]
@@ -113,6 +114,15 @@ def build_summary(
     p95_latency = percentile(latencies, 0.95)
     cost_values = [float(result.cost_usd) for result in results if result.cost_usd is not None]
     avg_cost = (sum(cost_values) / len(cost_values)) if cost_values else None
+    slack_delivery_required_results = [result for result in results if result.slack_delivery_required]
+    slack_delivery_success_results = [
+        result for result in slack_delivery_required_results if result.slack_delivery_status == "success"
+    ]
+    slack_delivery_success_rate = (
+        len(slack_delivery_success_results) / len(slack_delivery_required_results)
+        if slack_live_enabled and slack_delivery_required_results
+        else None
+    )
     llm_call_coverage_rate = sum(1 for result in results if result.llm_calls) / len(results) if results else 0.0
     request_id_coverage_rate = sum(1 for result in results if result.request_id) / len(results) if results else 0.0
     judge_input_eligible = [result for result in results if result.judge_input_complete is not None]
@@ -166,6 +176,9 @@ def build_summary(
         p50_latency_ms=round(p50_latency, 2) if p50_latency is not None else None,
         p95_latency_ms=round(p95_latency, 2) if p95_latency is not None else None,
         avg_cost_per_case_usd=round(avg_cost, 8) if avg_cost is not None else None,
+        slack_delivery_required_cases=len(slack_delivery_required_results),
+        slack_delivery_success_cases=len(slack_delivery_success_results),
+        slack_delivery_success_rate=round(slack_delivery_success_rate, 4) if slack_delivery_success_rate is not None else None,
         cost_gate_eligible=cost_gate_eligible,
         llm_call_coverage_rate=round(llm_call_coverage_rate, 4),
         request_id_coverage_rate=round(request_id_coverage_rate, 4),
@@ -199,6 +212,22 @@ def build_summary(
         GateResult(name="judge_input_completeness_rate", threshold=1.0, actual=metrics.judge_input_completeness_rate, passed=metrics.judge_input_completeness_rate is None or metrics.judge_input_completeness_rate >= 1.0, gate_type="audit"),
         GateResult(name="deterministic_direct_usage_rate", threshold=_AUDIT_DETERMINISTIC_DIRECT_USAGE_CEILING, actual=metrics.deterministic_direct_usage_rate, passed=metrics.deterministic_direct_usage_rate <= _AUDIT_DETERMINISTIC_DIRECT_USAGE_CEILING, gate_type="audit"),
         GateResult(name="high_rule_low_judge_divergence_rate", threshold=_AUDIT_HIGH_RULE_LOW_JUDGE_DIVERGENCE_CEILING, actual=metrics.high_rule_low_judge_divergence_rate, passed=metrics.high_rule_low_judge_divergence_rate <= _AUDIT_HIGH_RULE_LOW_JUDGE_DIVERGENCE_CEILING, gate_type="audit"),
+        GateResult(
+            name="slack_delivery_success_rate",
+            threshold=1.0,
+            actual=metrics.slack_delivery_success_rate,
+            passed=(
+                True
+                if not slack_live_enabled or not slack_delivery_required_results
+                else (metrics.slack_delivery_success_rate is not None and metrics.slack_delivery_success_rate >= 1.0)
+            ),
+            gate_type="audit",
+            status=(
+                "skipped_not_live"
+                if not slack_live_enabled
+                else ("skipped_no_required_cases" if not slack_delivery_required_results else "evaluated")
+            ),
+        ),
     ]
     overall_passed = all(gate.passed for gate in gates if gate.gate_type == "release")
     return RunSummary(
@@ -227,6 +256,9 @@ def build_summary(
             "judge_input_completeness_rate": metrics.judge_input_completeness_rate,
             "deterministic_direct_usage_rate": metrics.deterministic_direct_usage_rate,
             "high_rule_low_judge_divergence_rate": metrics.high_rule_low_judge_divergence_rate,
+            "slack_delivery_success_rate": metrics.slack_delivery_success_rate,
+            "slack_delivery_required_cases": metrics.slack_delivery_required_cases,
+            "slack_delivery_success_cases": metrics.slack_delivery_success_cases,
             "cost_gate_eligible": metrics.cost_gate_eligible,
         },
     )

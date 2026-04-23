@@ -114,6 +114,17 @@ def _render_analysis(lines: list[str], summary: RunSummary) -> None:
         lines.append("No synthesis mode diagnostics observed.")
 
     lines.append("")
+    lines.append("### Slack Delivery")
+    lines.append("")
+    if analysis.slack_delivery_status_histogram:
+        lines.append("| category | status | count |")
+        lines.append("|---|---|---:|")
+        for row in analysis.slack_delivery_status_histogram:
+            lines.append(f"| {row.category} | {row.status} | {row.count} |")
+    else:
+        lines.append("No live Slack delivery diagnostics observed.")
+
+    lines.append("")
     lines.append("### Stage Latency")
     lines.append("")
     coverage = analysis.latency_breakdown_coverage
@@ -160,6 +171,9 @@ def build_markdown_report(summary: RunSummary, results: list[CaseResult] | None 
         ("p50_latency_ms", summary.metrics.p50_latency_ms),
         ("p95_latency_ms", summary.metrics.p95_latency_ms),
         ("avg_cost_per_case_usd", summary.metrics.avg_cost_per_case_usd),
+        ("slack_delivery_required_cases", summary.metrics.slack_delivery_required_cases),
+        ("slack_delivery_success_cases", summary.metrics.slack_delivery_success_cases),
+        ("slack_delivery_success_rate", summary.metrics.slack_delivery_success_rate),
         ("cost_gate_eligible", summary.metrics.cost_gate_eligible),
         ("llm_call_coverage_rate", summary.metrics.llm_call_coverage_rate),
         ("request_id_coverage_rate", summary.metrics.request_id_coverage_rate),

@@ -14,6 +14,7 @@ from ..summary_models import (
     RetrievalRouteStatusBucket,
     RetrievalWarningBucket,
     RouteConfusionBucket,
+    SlackDeliveryStatusBucket,
     StageLatencyPercentile,
     SynthesisModeBucket,
     ValidatorReasonBucket,
@@ -357,6 +358,20 @@ def _build_synthesis_mode_histogram(results: list[CaseResult]) -> list[Synthesis
     return rows
 
 
+def _build_slack_delivery_status_histogram(results: list[CaseResult]) -> list[SlackDeliveryStatusBucket]:
+    counter: Counter[tuple[str, str]] = Counter()
+    for result in results:
+        if not result.slack_delivery_required:
+            continue
+        counter[(result.category, str(result.slack_delivery_status or "unknown"))] += 1
+    rows = [
+        SlackDeliveryStatusBucket(category=category, status=status, count=count)
+        for (category, status), count in counter.items()
+    ]
+    rows.sort(key=lambda item: (_category_sort_key(item.category), -item.count, item.status))
+    return rows
+
+
 def _extract_latency_stage_value(result: CaseResult, stage_name: str) -> int | None:
     breakdown = result.latency_breakdown
     if breakdown is None:
@@ -411,6 +426,7 @@ def build_analysis(*, case_map: dict[str, BenchmarkCase], results: list[CaseResu
         route_confusion=_build_route_confusion(case_map=case_map, results=results),
         validator_reason_histogram=_build_validator_reason_histogram(results),
         synthesis_mode_histogram=_build_synthesis_mode_histogram(results),
+        slack_delivery_status_histogram=_build_slack_delivery_status_histogram(results),
         stage_latency_percentiles=stage_latency_percentiles,
         latency_breakdown_coverage=latency_breakdown_coverage,
     )
