@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from src.core.contracts.debug import ActionResults
 from src.core.answer_schema.rendering import filter_claims_by_evidence
 from ..judge_llm import LLMJudge
 from ..metric_rules import compute_rule_scores
@@ -61,6 +62,27 @@ def _build_gate_failures(
     return failures
 
 
+def _resolve_slack_delivery_status(
+    *,
+    slack_delivery_required: bool,
+    action_results: ActionResults | None,
+) -> tuple[str, str | None]:
+    if not slack_delivery_required:
+        return "not_applicable", None
+    if action_results is None or action_results.slack_notify is None:
+        return "unknown", "missing_action_results"
+
+    slack_result = action_results.slack_notify
+    raw_status = str(slack_result.status or "").strip().lower()
+    if raw_status in {"ok", "success"}:
+        return "success", None
+    if raw_status == "skipped":
+        return "skipped", slack_result.reason or slack_result.error
+    if raw_status in {"error", "failed"}:
+        return "failed", slack_result.error or slack_result.reason
+    return "unknown", slack_result.error or slack_result.reason or raw_status or "unknown_status"
+
+
 def build_case_result(
     *,
     run_id: str,
@@ -73,6 +95,7 @@ def build_case_result(
     request_payload: dict,
     latency_ms_e2e: int | None,
     parsed_response: ParsedResponseData,
+    slack_delivery_required: bool = False,
 ) -> CaseResult:
     effective_weights, weights_error = resolve_effective_weights(
         case=case,
@@ -113,6 +136,10 @@ def build_case_result(
             validator_feedback = f"{validator_feedback} | retrieval_warnings={warning_text}"
         else:
             validator_feedback = f"retrieval_warnings={warning_text}"
+    slack_delivery_status, slack_delivery_error = _resolve_slack_delivery_status(
+        slack_delivery_required=slack_delivery_required,
+        action_results=parsed_response.action_results,
+    )
 
     judge_errors: list[str] = []
     llm_judge_score: float | None = None
@@ -137,6 +164,8 @@ def build_case_result(
             valid_claim_count=valid_claim_count,
             invalid_claim_count=invalid_claim_count,
             tool_call_count=parsed_response.tool_call_count,
+            action_results=parsed_response.action_results,
+            slack_delivery_required=slack_delivery_required,
         )
         judge_input_complete = judge_payload_validator(judge_payload)
         try:
@@ -155,6 +184,8 @@ def build_case_result(
                 valid_claim_count=valid_claim_count,
                 invalid_claim_count=invalid_claim_count,
                 tool_call_count=parsed_response.tool_call_count,
+                action_results=parsed_response.action_results,
+                slack_delivery_required=slack_delivery_required,
             )
         except TypeError:
             judge_result = judge.score_case(case, parsed_response.response_text, parsed_response.tool_calls)
@@ -181,6 +212,8 @@ def build_case_result(
         valid_claim_count=valid_claim_count,
         invalid_claim_count=invalid_claim_count,
         response_sections=response_sections,
+        slack_delivery_required=slack_delivery_required,
+        slack_delivery_status=slack_delivery_status,
     )
     rule_weighted = compute_rule_weighted_score(rule_scores, effective_weights)
 
@@ -258,6 +291,10 @@ def build_case_result(
         runtime_errors=runtime_errors,
         response_errors=parsed_response.response_errors,
         judge_errors=judge_errors,
+        action_results=parsed_response.action_results,
+        slack_delivery_status=slack_delivery_status,
+        slack_delivery_required=slack_delivery_required,
+        slack_delivery_error=slack_delivery_error,
         validator_reason=parsed_response.validator_reason,
         validator_feedback=validator_feedback,
         effective_weights=effective_weights.as_dict(),

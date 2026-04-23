@@ -7,7 +7,7 @@ from pathlib import Path
 import requests
 
 from ..judge_llm import LLMJudge
-from ..config_models import BenchmarkCase, BenchmarkConfig
+from ..config_models import BenchmarkCase, BenchmarkConfig, BenchmarkLiveSlackConfig
 from ..io import load_cases_jsonl
 from ..reporting.summary import build_summary
 from ..reporting.writer import write_run_outputs
@@ -27,8 +27,13 @@ def _run_single_case(
     timeout_seconds: int,
     judge: LLMJudge,
     config: BenchmarkConfig,
+    live_slack: BenchmarkLiveSlackConfig | None = None,
 ) -> CaseResult:
-    request_context = build_request_context(fixtures_path=fixtures_path, case=case)
+    request_context = build_request_context(
+        fixtures_path=fixtures_path,
+        case=case,
+        live_slack=live_slack,
+    )
     endpoint_url = endpoint.rstrip("/") + "/agent"
 
     latency_ms_e2e: int | None = None
@@ -62,6 +67,7 @@ def _run_single_case(
         request_payload=request_context.request_payload,
         latency_ms_e2e=latency_ms_e2e,
         parsed_response=parsed_response,
+        slack_delivery_required=request_context.slack_delivery_required,
     )
     cleanup_session_upload_dir(request_context.session_id)
     return result
@@ -75,6 +81,49 @@ def latest_run_pointer_path(output_root: Path, track: RunTrack) -> Path:
     return output_root / f"latest_{track}_run.txt"
 
 
+def _validate_live_slack_targets(
+    *,
+    cases: list[BenchmarkCase],
+    live_slack: BenchmarkLiveSlackConfig | None,
+) -> None:
+    resolved_live_slack = live_slack or BenchmarkLiveSlackConfig()
+    if not resolved_live_slack.enabled:
+        return
+
+    applicable_cases = [case for case in cases if resolved_live_slack.applies_to_case(case)]
+    if not applicable_cases:
+        return
+
+    missing_channel_case = next(
+        (
+            case
+            for case in applicable_cases
+            if resolved_live_slack.requires_channel_destination(case)
+        ),
+        None,
+    )
+    if missing_channel_case and not resolved_live_slack.has_channel_destination():
+        raise ValueError(
+            "Live Slack channel destination is required for benchmark case "
+            f"{missing_channel_case.case_id}. Provide --live-slack-channel-id or BENCHMARK_SLACK_CHANNEL_ID."
+        )
+
+    missing_dm_case = next(
+        (
+            case
+            for case in applicable_cases
+            if resolved_live_slack.requires_dm_destination(case)
+        ),
+        None,
+    )
+    if missing_dm_case and not resolved_live_slack.has_dm_destination():
+        raise ValueError(
+            "Live Slack DM destination is required for benchmark case "
+            f"{missing_dm_case.case_id}. Provide --live-slack-user-id, --live-slack-email, "
+            "BENCHMARK_SLACK_USER_ID, BENCHMARK_SLACK_EMAIL, or app-level DM defaults."
+        )
+
+
 def run_online_benchmark(
     *,
     fixtures_path: Path,
@@ -84,6 +133,7 @@ def run_online_benchmark(
     output_root: Path,
     track: RunTrack,
     limit: int | None = None,
+    live_slack: BenchmarkLiveSlackConfig | None = None,
 ) -> tuple[Path, list[CaseResult], RunSummary]:
     cases = load_cases_jsonl(fixtures_path)
     requested_limit = _normalize_limit(limit)
@@ -91,6 +141,7 @@ def run_online_benchmark(
         cases = cases[:requested_limit]
     if not cases:
         raise ValueError("No benchmark cases found.")
+    _validate_live_slack_targets(cases=cases, live_slack=live_slack)
 
     run_id = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     judge = LLMJudge(model_name=config.judge_model, enabled=config.judge_enabled)
@@ -105,6 +156,7 @@ def run_online_benchmark(
             timeout_seconds=config.request_timeout_seconds,
             judge=judge,
             config=config,
+            live_slack=live_slack,
         )
         results.append(result)
         print(
@@ -122,6 +174,7 @@ def run_online_benchmark(
         config=config,
         cases=cases,
         results=results,
+        slack_live_enabled=bool((live_slack or BenchmarkLiveSlackConfig()).enabled),
     )
 
     run_dir = output_root / run_id

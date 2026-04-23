@@ -17,10 +17,10 @@ from .history_report import refresh_history_report
 from .io import load_config
 from .online_runner import run_online_benchmark
 from .reporting import build_markdown_report
-from .config_models import BenchmarkConfig
+from .config_models import BenchmarkConfig, BenchmarkLiveSlackConfig
 from .result_models import CaseResult
 from .summary_models import RunSummary, RunTrack
-from src.infra.settings import load_benchmark_cli_env_settings
+from src.infra.settings import get_settings, load_benchmark_cli_env_settings
 
 
 DEFAULT_CONFIG_PATH = get_benchmark_config_path()
@@ -83,6 +83,16 @@ def command_run(args: argparse.Namespace) -> int:
     endpoint = args.endpoint or benchmark_env.endpoint
     config = _load_config_with_env_overrides(args.config, benchmark_env=benchmark_env)
     track = resolve_run_track(args.track, args.limit)
+    app_settings = get_settings()
+    live_slack_enabled = bool(args.live_slack) or benchmark_env.live_slack_enabled
+    live_slack = BenchmarkLiveSlackConfig(
+        enabled=live_slack_enabled,
+        channel_id=args.live_slack_channel_id or benchmark_env.live_slack_channel_id,
+        user_id=args.live_slack_user_id or benchmark_env.live_slack_user_id,
+        email=args.live_slack_email or benchmark_env.live_slack_email,
+        fallback_user_id=app_settings.slack_default_user_id,
+        fallback_email=app_settings.slack_default_dm_email,
+    )
 
     run_dir, _, summary = run_online_benchmark(
         fixtures_path=args.fixtures,
@@ -92,6 +102,7 @@ def command_run(args: argparse.Namespace) -> int:
         output_root=args.output_root,
         track=track,
         limit=args.limit,
+        live_slack=live_slack,
     )
 
     print(f"Run directory: {run_dir}")
@@ -192,6 +203,29 @@ def build_parser() -> argparse.ArgumentParser:
         help="Run track. Defaults to smoke when --limit is set, otherwise release.",
     )
     parser_run.add_argument("--limit", type=int, default=None, help="Optional case limit for smoke runs")
+    parser_run.add_argument(
+        "--live-slack",
+        action="store_true",
+        help="Opt in to sending benchmark Slack cases to real Slack destinations.",
+    )
+    parser_run.add_argument(
+        "--live-slack-channel-id",
+        type=str,
+        default=None,
+        help="Live Slack channel destination for benchmark channel cases.",
+    )
+    parser_run.add_argument(
+        "--live-slack-user-id",
+        type=str,
+        default=None,
+        help="Live Slack DM user destination for benchmark DM cases.",
+    )
+    parser_run.add_argument(
+        "--live-slack-email",
+        type=str,
+        default=None,
+        help="Live Slack DM email destination for benchmark DM cases.",
+    )
     parser_run.set_defaults(func=command_run)
 
     parser_report = subparsers.add_parser("report", help="Regenerate markdown report from an existing run")

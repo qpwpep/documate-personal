@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
 from src.core.answer_schema import ClaimItem
-from src.core.contracts.debug import LLMCallMetadata, PlannerDiagnostic, RetrievalDiagnostic, TokenUsage
+from src.core.contracts.debug import ActionResults, LLMCallMetadata, PlannerDiagnostic, RetrievalDiagnostic, TokenUsage
 from src.core.evidence import EvidenceItem
 from src.core.latency import LatencyBreakdownModel
 from .config_models import CaseCategory, CaseScenario
@@ -58,6 +58,10 @@ class CaseResult(BaseModel):
     runtime_errors: list[str] = Field(default_factory=list)
     response_errors: list[str] = Field(default_factory=list)
     judge_errors: list[str] = Field(default_factory=list)
+    action_results: ActionResults | None = None
+    slack_delivery_status: Literal["success", "failed", "skipped", "unknown", "not_applicable"] = "not_applicable"
+    slack_delivery_required: bool = False
+    slack_delivery_error: str | None = None
     validator_reason: str | None = None
     validator_feedback: str | None = None
     effective_weights: dict[str, float] = Field(default_factory=dict)
