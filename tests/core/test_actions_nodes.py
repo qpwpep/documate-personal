@@ -3,6 +3,7 @@ import unittest
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
+from src.runtime.agent_runtime.debug_collector import DebugCollector
 from src.runtime.agent_runtime.response_assembler import ResponseAssembler
 from src.runtime.nodes.actions import build_action_only_answer, make_action_postprocess_node, should_short_circuit_action_only
 
@@ -174,6 +175,49 @@ class ActionsNodeTest(unittest.TestCase):
         self.assertIn("저장 완료:", result["message"])
         self.assertTrue(result["filepath"].endswith("output\\save_text\\response.txt"))
         self.assertEqual(result["response_payload"]["answer"], result["message"])
+
+    def test_debug_collector_extracts_action_results_from_tool_messages(self) -> None:
+        collector = DebugCollector()
+        response = build_legacy_state(
+            {
+                "final_answer": "shared body",
+                "response_payload": {
+                    "answer": "shared body",
+                    "claims": [],
+                    "evidence": [],
+                    "confidence": None,
+                },
+            }
+        )
+        updated_messages = [
+            HumanMessage(content="send this to slack"),
+            AIMessage(content="shared body"),
+            ToolMessage(
+                content=json.dumps({"status": "ok", "channel_id": "C123LIVE", "target_type": "Public Channel"}),
+                name="slack_notify",
+                tool_call_id="tool-1",
+            ),
+            ToolMessage(
+                content=json.dumps({"status": "ok", "file_path": "output/save_text/response.txt"}),
+                name="save_text",
+                tool_call_id="tool-2",
+            ),
+        ]
+
+        debug_info = collector.build(
+            response=response,
+            updated_messages=updated_messages,
+            graph_total_ms=10,
+            upload_retriever_build_ms=None,
+        )
+
+        self.assertIn("action_results", debug_info)
+        self.assertEqual(debug_info["action_results"]["slack_notify"]["status"], "ok")
+        self.assertEqual(debug_info["action_results"]["slack_notify"]["channel_id"], "C123LIVE")
+        self.assertEqual(
+            debug_info["action_results"]["save_text"]["file_path"],
+            "output/save_text/response.txt",
+        )
 
 
 if __name__ == "__main__":
