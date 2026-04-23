@@ -284,8 +284,8 @@ data/*
 *.txt
 
 # uploaded user files (do not commit)
-uploads*
-!uploads/.gitkeep
+/uploads/*
+!/uploads/.gitkeep
 !data/benchmarks/fixtures/uploads/
 !data/benchmarks/fixtures/uploads/**
 
