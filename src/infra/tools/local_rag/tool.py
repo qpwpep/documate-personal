@@ -79,6 +79,7 @@ def build_local_rag_tools(settings: AppSettings) -> tuple[Any, Any]:
                     query=query,
                     status="error",
                     message=f"local similarity search failed ({exc})",
+                    error_code="LOCAL_RAG_FAILED",
                 )
 
         return _build_search_payload(
@@ -119,6 +120,7 @@ def build_local_rag_tools(settings: AppSettings) -> tuple[Any, Any]:
                 query=query,
                 status="error",
                 message=f"uploaded file retrieval failed ({exc})",
+                error_code="LOCAL_RAG_FAILED",
             )
 
         return _build_search_payload(

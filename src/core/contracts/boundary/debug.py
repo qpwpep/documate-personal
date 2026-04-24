@@ -245,6 +245,18 @@ def parse_debug_payload(value: Any) -> DebugPayload:
         if isinstance(value.get("errors"), list)
         else [],
         error_codes=parse_error_codes(value.get("error_codes")),
+        validation_events=[
+            str(item) for item in value.get("validation_events", []) if str(item).strip()
+        ]
+        if isinstance(value.get("validation_events"), list)
+        else [],
+        edge_decisions=[
+            dict(item)
+            for item in value.get("edge_decisions", [])
+            if isinstance(item, dict)
+        ]
+        if isinstance(value.get("edge_decisions"), list)
+        else [],
         planner_errors=[str(item) for item in value.get("planner_errors", []) if str(item).strip()]
         if isinstance(value.get("planner_errors"), list)
         else [],

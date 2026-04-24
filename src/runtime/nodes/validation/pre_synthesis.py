@@ -45,7 +45,12 @@ def make_pre_synthesis_validation_node(verbose: bool):
                         *debug.validation_errors,
                         "pre_synthesis_validation: retry_reason=blocked_missing_upload, "
                         f"failed_routes=['upload'], score_avg=None, feedback={retrieval_feedback}",
-                    ]
+                    ],
+                    "validation_events": [
+                        *debug.validation_events,
+                        "pre_synthesis_validation: retry_reason=blocked_missing_upload, "
+                        f"failed_routes=['upload'], score_avg=None, feedback={retrieval_feedback}",
+                    ],
                 }
             )
             return updates
@@ -97,7 +102,10 @@ def make_pre_synthesis_validation_node(verbose: bool):
             )
         if local_errors:
             updates["debug"] = debug.model_copy(
-                update={"validation_errors": [*debug.validation_errors, *local_errors]}
+                update={
+                    "validation_errors": [*debug.validation_errors, *local_errors],
+                    "validation_events": [*debug.validation_events, *local_errors],
+                }
             )
         return updates
 

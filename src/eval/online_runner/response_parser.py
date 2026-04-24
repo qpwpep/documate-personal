@@ -43,6 +43,8 @@ class ParsedResponseData:
     token_usage: TokenUsage | None = None
     llm_calls: list[LLMCallMetadata] = field(default_factory=list)
     error_codes: list[str] = field(default_factory=list)
+    validation_events: list[str] = field(default_factory=list)
+    edge_decisions: list[dict[str, Any]] = field(default_factory=list)
     planner_errors: list[str] = field(default_factory=list)
     debug_errors: list[str] = field(default_factory=list)
     runtime_errors: list[str] = field(default_factory=list)
@@ -361,6 +363,22 @@ def parse_agent_response(response: requests.Response) -> ParsedResponseData:
             response_errors=parsed.response_errors,
         )
         parsed.error_codes = parse_error_codes(debug_payload.get("error_codes"))
+        parsed.validation_events = _parse_string_list(
+            debug_payload.get("validation_events"),
+            label="debug.validation_events",
+            response_errors=parsed.response_errors,
+        )
+        edge_decisions_raw = debug_payload.get("edge_decisions")
+        if edge_decisions_raw is None:
+            parsed.edge_decisions = []
+        elif not isinstance(edge_decisions_raw, list):
+            parsed.response_errors.append("debug.edge_decisions must be a list")
+        else:
+            for index, item in enumerate(edge_decisions_raw):
+                if not isinstance(item, dict):
+                    parsed.response_errors.append(f"debug.edge_decisions[{index}] must be an object")
+                    continue
+                parsed.edge_decisions.append(dict(item))
         parsed.debug_errors = _parse_string_list(
             debug_payload.get("errors"),
             label="debug.errors",

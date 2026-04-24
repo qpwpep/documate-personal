@@ -52,10 +52,15 @@ class ExecutionRunner:
             ):
                 self.session.cleanup_upload_retriever()
                 build_started = time.perf_counter()
-                self.session.upload_retriever_handle = self._build_temp_retriever(
-                    upload_file_path,
-                    api_key=self.settings.openai_api_key,
-                )
+                try:
+                    self.session.upload_retriever_handle = self._build_temp_retriever(
+                        upload_file_path,
+                        api_key=self.settings.openai_api_key,
+                    )
+                except Exception as exc:
+                    raise RuntimeError(
+                        f"UPLOAD_RETRIEVER_BUILD_FAILED: upload retriever build failed ({exc})"
+                    ) from exc
                 upload_retriever_build_ms = elapsed_ms(build_started, time.perf_counter())
                 self.session.upload_file_path = upload_file_path
 

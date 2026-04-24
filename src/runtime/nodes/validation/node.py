@@ -101,8 +101,15 @@ def make_post_synthesis_validation_node(verbose: bool):
             )
         )
         if local_errors:
+            error_codes = list(debug.error_codes)
+            if assessment.retry_reason == "unsupported_claims" and "VALIDATION_UNSUPPORTED_CLAIMS" not in error_codes:
+                error_codes.append("VALIDATION_UNSUPPORTED_CLAIMS")
             updates["debug"] = debug.model_copy(
-                update={"validation_errors": [*debug.validation_errors, *local_errors]}
+                update={
+                    "validation_errors": [*debug.validation_errors, *local_errors],
+                    "validation_events": [*debug.validation_events, *local_errors],
+                    "error_codes": error_codes,
+                }
             )
         return updates
 
