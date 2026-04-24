@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from src.core.answer_schema import filter_claims_by_evidence
@@ -59,6 +60,90 @@ def _empty_validation_assessment(
         failed_routes=failed_routes or set(),
         score_avg=score_avg if score_avg is not None else route_score_avg(snapshot.parsed_evidence),
     )
+
+
+def _normalize_section_text(text: str) -> str:
+    return re.sub(r"\s+", " ", str(text or "").strip().lower())
+
+
+def _section_body_by_kind(snapshot: ValidationSnapshot) -> dict[str, str]:
+    payload = snapshot.response_payload
+    if payload is None:
+        return {}
+    return {
+        str(section.kind or "").strip(): str(section.body or "").strip()
+        for section in payload.sections
+        if str(section.kind or "").strip()
+    }
+
+
+def _extract_local_option_literals(snapshot: ValidationSnapshot) -> list[str]:
+    options: list[str] = []
+    seen: set[str] = set()
+    for item in snapshot.parsed_evidence:
+        route = route_for_item_tool(item.tool)
+        if route not in {"upload", "local"}:
+            continue
+        snippet = str(item.snippet or "")
+        for match in re.findall(r"\b[A-Za-z_][A-Za-z0-9_]*\s*=\s*[^,\)\]\}\n]+", snippet):
+            option = " ".join(match.strip().split())
+            compact = re.sub(r"\s+", "", option.lower())
+            if compact and compact not in seen:
+                options.append(option)
+                seen.add(compact)
+    return options
+
+
+def _text_contains_any_option(text: str, options: list[str]) -> bool:
+    compact_text = re.sub(r"\s+", "", str(text or "").lower())
+    return any(
+        re.sub(r"\s+", "", option.lower()) in compact_text
+        for option in options
+    )
+
+
+def _hybrid_section_errors(snapshot: ValidationSnapshot) -> list[str]:
+    required_routes = {
+        str(route or "").strip()
+        for route in snapshot.required_routes
+        if str(route or "").strip()
+    }
+    if "docs" not in required_routes or not required_routes.intersection({"upload", "local"}):
+        return []
+    if snapshot.response_payload is None:
+        return []
+
+    bodies = _section_body_by_kind(snapshot)
+    relevant_bodies = {
+        kind: _normalize_section_text(body)
+        for kind, body in bodies.items()
+        if kind in {"official_docs", "upload_code", "comparison"} and body.strip()
+    }
+    errors: list[str] = []
+    seen: dict[str, str] = {}
+    for kind, body in relevant_bodies.items():
+        if body in seen:
+            errors.append(f"hybrid_sections_repeated:{seen[body]}={kind}")
+        else:
+            seen[body] = kind
+
+    comparison_body = bodies.get("comparison", "")
+    comparison_normalized = _normalize_section_text(comparison_body)
+    for kind in ("official_docs", "upload_code"):
+        body = relevant_bodies.get(kind)
+        if body and body == comparison_normalized:
+            errors.append(f"hybrid_comparison_repeats_{kind}")
+
+    local_options = _extract_local_option_literals(snapshot)
+    upload_body = bodies.get("upload_code", "")
+    if "upload_code" in {section.kind for section in snapshot.response_payload.sections}:
+        if local_options and not _text_contains_any_option(upload_body, local_options):
+            errors.append("hybrid_upload_code_missing_actual_option")
+
+    if comparison_body and local_options and not _text_contains_any_option(comparison_body, local_options):
+        errors.append("hybrid_comparison_missing_uploaded_setting")
+
+    return errors
 
 
 def assess_retrieval_quality(snapshot: ValidationSnapshot) -> ValidationAssessment:
@@ -137,6 +222,7 @@ def assess_validation(snapshot: ValidationSnapshot) -> ValidationAssessment:
 
     answer_contract = infer_answer_contract(snapshot.user_input, snapshot.required_routes)
     missing_sections = missing_required_sections(answer_contract, snapshot.response_payload)
+    hybrid_section_errors = _hybrid_section_errors(snapshot)
 
     has_grounded_response_payload = bool(
         snapshot.response_payload is not None
@@ -145,6 +231,7 @@ def assess_validation(snapshot: ValidationSnapshot) -> ValidationAssessment:
         and not invalid_claims
         and not missing_route_coverage
         and not missing_sections
+        and not hybrid_section_errors
     )
 
     unsupported_claims = bool(
@@ -153,6 +240,7 @@ def assess_validation(snapshot: ValidationSnapshot) -> ValidationAssessment:
         and (
             (snapshot.response_payload.answer.strip() and not snapshot.response_payload.claims)
             or bool(invalid_claims)
+            or bool(hybrid_section_errors)
         )
     )
 
@@ -161,6 +249,8 @@ def assess_validation(snapshot: ValidationSnapshot) -> ValidationAssessment:
     if unsupported_claims:
         retry_reason = "unsupported_claims"
         failed_routes = set(missing_route_coverage)
+        if hybrid_section_errors:
+            failed_routes.update(route for route in snapshot.required_routes if route in {"docs", "upload", "local"})
     elif missing_route_coverage:
         retry_reason = "missing_route_coverage"
         failed_routes = set(missing_route_coverage)

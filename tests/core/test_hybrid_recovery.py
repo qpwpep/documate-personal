@@ -21,14 +21,16 @@ def _docs_evidence() -> dict:
     }
 
 
-def _upload_evidence() -> dict:
+def _upload_evidence(
+    snippet: str = "X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)",
+) -> dict:
     return {
         "kind": "local",
         "tool": "upload_search",
         "source_id": "path:uploads/demo/sample_pipeline.ipynb#cell=2;chunk=0;start=0;end=96",
         "document_id": "path:uploads/demo/sample_pipeline.ipynb",
         "url_or_path": "uploads/demo/sample_pipeline.ipynb",
-        "snippet": "X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)",
+        "snippet": snippet,
         "score": 0.81,
         "cell_id": 2,
         "chunk_id": 0,
@@ -37,7 +39,194 @@ def _upload_evidence() -> dict:
     }
 
 
+def _hybrid_snapshot(response_payload: AgentResponsePayloadModel):
+    planner_output = PlannerOutput(
+        use_retrieval=True,
+        tasks=[
+            RetrievalTask(route="docs", query="train_test_split official docs", k=3),
+            RetrievalTask(route="upload", query="train_test_split uploaded notebook example", k=3),
+        ],
+    )
+    parsed_evidence = [
+        EvidenceItem.model_validate(_docs_evidence()),
+        EvidenceItem.model_validate(
+            _upload_evidence(
+                "train_test_split(X, y, test_size=0.2, random_state=42)"
+            )
+        ),
+    ]
+    return build_validation_snapshot(
+        user_input="Compare official train_test_split docs with the uploaded code.",
+        planner_output=planner_output,
+        parsed_evidence=parsed_evidence,
+        current_attempt_retrieval_errors=[],
+        current_attempt_retrieval_diagnostics=[
+            RetrievalDiagnostic(
+                tool="tavily_search",
+                route="docs",
+                status="success",
+                message="",
+                query="train_test_split official docs",
+                attempt=1,
+            ),
+            RetrievalDiagnostic(
+                tool="upload_search",
+                route="upload",
+                status="success",
+                message="",
+                query="train_test_split uploaded notebook example",
+                attempt=1,
+            ),
+        ],
+        response_payload=response_payload,
+    )
+
+
 class HybridRecoveryTest(unittest.TestCase):
+    def test_hybrid_validation_rejects_repeated_section_bodies(self) -> None:
+        repeated = "train_test_split splits arrays into train and test subsets."
+        response_payload = AgentResponsePayloadModel.model_validate(
+            {
+                "answer": repeated,
+                "claims": [
+                    {
+                        "text": repeated,
+                        "evidence_ids": [
+                            "url:https://scikit-learn.org/stable/modules/generated/sklearn.model_selection.train_test_split.html"
+                        ],
+                        "confidence": 0.9,
+                    },
+                    {
+                        "text": "The uploaded code sets test_size=0.2 and random_state=42.",
+                        "evidence_ids": [
+                            "path:uploads/demo/sample_pipeline.ipynb#cell=2;chunk=0;start=0;end=96"
+                        ],
+                        "confidence": 0.8,
+                    },
+                ],
+                "sections": [
+                    {"kind": "official_docs", "heading": "Official", "body": repeated},
+                    {"kind": "upload_code", "heading": "Upload", "body": repeated},
+                    {"kind": "comparison", "heading": "Comparison", "body": repeated},
+                ],
+                "evidence": [],
+                "confidence": 0.85,
+            }
+        )
+
+        assessment = assess_validation(_hybrid_snapshot(response_payload))
+
+        self.assertFalse(assessment.has_grounded_response_payload)
+        self.assertEqual(assessment.retry_reason, "unsupported_claims")
+
+    def test_hybrid_validation_rejects_upload_section_without_actual_options(self) -> None:
+        response_payload = AgentResponsePayloadModel.model_validate(
+            {
+                "answer": "The docs and upload both use train_test_split.",
+                "claims": [
+                    {
+                        "text": "train_test_split splits arrays into train and test subsets.",
+                        "evidence_ids": [
+                            "url:https://scikit-learn.org/stable/modules/generated/sklearn.model_selection.train_test_split.html"
+                        ],
+                        "confidence": 0.9,
+                    },
+                    {
+                        "text": "The uploaded code uses train_test_split.",
+                        "evidence_ids": [
+                            "path:uploads/demo/sample_pipeline.ipynb#cell=2;chunk=0;start=0;end=96"
+                        ],
+                        "confidence": 0.8,
+                    },
+                ],
+                "sections": [
+                    {
+                        "kind": "official_docs",
+                        "heading": "Official",
+                        "body": "The official docs describe train/test splitting.",
+                    },
+                    {
+                        "kind": "upload_code",
+                        "heading": "Upload",
+                        "body": "The uploaded code calls train_test_split.",
+                    },
+                    {
+                        "kind": "comparison",
+                        "heading": "Comparison",
+                        "body": "The uploaded code follows the same train/test split pattern.",
+                    },
+                ],
+                "evidence": [],
+                "confidence": 0.85,
+            }
+        )
+
+        assessment = assess_validation(_hybrid_snapshot(response_payload))
+
+        self.assertFalse(assessment.has_grounded_response_payload)
+        self.assertEqual(assessment.retry_reason, "unsupported_claims")
+
+    def test_hybrid_repair_labels_comparison_as_docs_vs_uploaded_settings(self) -> None:
+        response_payload = AgentResponsePayloadModel.model_validate(
+            {
+                "answer": "The docs and upload both use train_test_split.",
+                "claims": [
+                    {
+                        "text": "train_test_split splits arrays into train and test subsets.",
+                        "evidence_ids": [
+                            "url:https://scikit-learn.org/stable/modules/generated/sklearn.model_selection.train_test_split.html"
+                        ],
+                        "confidence": 0.9,
+                    },
+                    {
+                        "text": "The uploaded code uses train_test_split.",
+                        "evidence_ids": [
+                            "path:uploads/demo/sample_pipeline.ipynb#cell=2;chunk=0;start=0;end=96"
+                        ],
+                        "confidence": 0.8,
+                    },
+                ],
+                "sections": [
+                    {
+                        "kind": "official_docs",
+                        "heading": "Official",
+                        "body": "The official docs describe train/test splitting.",
+                    },
+                    {
+                        "kind": "upload_code",
+                        "heading": "Upload",
+                        "body": "The uploaded code calls train_test_split.",
+                    },
+                    {
+                        "kind": "comparison",
+                        "heading": "Comparison",
+                        "body": "The uploaded code follows the same train/test split pattern.",
+                    },
+                ],
+                "evidence": [],
+                "confidence": 0.85,
+            }
+        )
+        snapshot = _hybrid_snapshot(response_payload)
+        assessment = assess_validation(snapshot)
+
+        updates = apply_validation_outcome(
+            snapshot=snapshot,
+            assessment=assessment,
+            attempt=1,
+            needs_retry=False,
+        )
+
+        sections = {
+            section.kind: section.body
+            for section in updates["response"].payload.sections
+        }
+        self.assertIn("test_size=0.2", sections["upload_code"])
+        self.assertIn("random_state=42", sections["upload_code"])
+        self.assertIn("공식 문서 옵션/기본값:", sections["comparison"])
+        self.assertIn("업로드 코드 실제 설정:", sections["comparison"])
+        self.assertIn("test_size=0.2", sections["comparison"])
+
     def test_hybrid_unsupported_claims_keeps_valid_claims_and_restates_briefly(self) -> None:
         planner_output = PlannerOutput(
             use_retrieval=True,
