@@ -52,6 +52,23 @@ class StreamlitUploadHandlerTest(unittest.TestCase):
             self.assertFalse(old_file.exists())
             self.assertEqual((session_path / "new.py").read_bytes(), b"new content")
 
+    def test_sync_uploaded_file_uses_basename_for_uploaded_filename(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            session_path = Path(temp_dir) / "session"
+            session_path.mkdir()
+            outside_path = session_path.parent / "evil.py"
+
+            result = sync_uploaded_file(
+                uploaded_file=_UploadedFile("../evil.py", b"safe content"),
+                session_path=session_path,
+                current_file_name=None,
+            )
+
+            self.assertTrue(result.changed)
+            self.assertEqual(result.file_name, "evil.py")
+            self.assertEqual((session_path / "evil.py").read_bytes(), b"safe content")
+            self.assertFalse(outside_path.exists())
+
     def test_sync_uploaded_file_removes_file_when_uploader_cleared(self) -> None:
         with TemporaryDirectory() as temp_dir:
             session_path = Path(temp_dir)

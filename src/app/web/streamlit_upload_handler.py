@@ -18,28 +18,39 @@ def sync_uploaded_file(
     session_path: Path,
     current_file_name: str | None,
 ) -> UploadSyncResult:
+    safe_current_file_name = Path(str(current_file_name)).name if current_file_name else None
+
     if uploaded_file is None:
-        if not current_file_name:
+        if not safe_current_file_name or safe_current_file_name in {".", ".."}:
             return UploadSyncResult(file_name=None, changed=False, removed=False)
 
-        old_path = session_path / current_file_name
+        old_path = session_path / safe_current_file_name
         try:
             old_path.unlink()
         except FileNotFoundError:
             pass
         return UploadSyncResult(file_name=None, changed=True, removed=True)
 
-    if uploaded_file.name == current_file_name:
+    safe_file_name = Path(str(uploaded_file.name)).name
+    if safe_file_name in {"", ".", ".."}:
         return UploadSyncResult(
-            file_name=current_file_name,
+            file_name=None,
+            changed=False,
+            removed=False,
+            error_message="Invalid upload filename",
+        )
+
+    if safe_file_name == safe_current_file_name:
+        return UploadSyncResult(
+            file_name=safe_current_file_name,
             changed=False,
             removed=False,
         )
 
-    file_path_on_disk = session_path / uploaded_file.name
+    file_path_on_disk = session_path / safe_file_name
     try:
-        if current_file_name:
-            old_path = session_path / current_file_name
+        if safe_current_file_name and safe_current_file_name not in {".", ".."}:
+            old_path = session_path / safe_current_file_name
             try:
                 old_path.unlink()
             except FileNotFoundError:
@@ -49,7 +60,7 @@ def sync_uploaded_file(
             file_obj.write(uploaded_file.getbuffer())
 
         return UploadSyncResult(
-            file_name=uploaded_file.name,
+            file_name=safe_file_name,
             changed=True,
             removed=False,
         )
