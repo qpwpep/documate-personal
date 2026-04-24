@@ -13,7 +13,7 @@ from src.runtime.nodes.actions import make_action_postprocess_node
 from src.runtime.nodes.planner import make_planner_node
 from src.runtime.nodes.retrieval import make_retrieve_dispatch_node
 from src.runtime.nodes.session import add_user_message
-from src.runtime.nodes.validation import make_validate_evidence_node
+from src.runtime.nodes.validation import make_pre_synthesis_validation_node, make_validate_evidence_node
 from src.core.planner_schema import PlannerOutput, RetrievalTask
 
 from .helpers import (

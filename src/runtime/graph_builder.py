@@ -15,7 +15,7 @@ from src.runtime.nodes.planner import make_planner_node
 from src.runtime.nodes.retrieval import make_retrieve_dispatch_node
 from src.runtime.nodes.session import add_user_message, make_summarize_node
 from src.runtime.nodes.synthesis import make_synthesize_node
-from src.runtime.nodes.validation import make_validate_evidence_node
+from src.runtime.nodes.validation import make_post_synthesis_validation_node, make_pre_synthesis_validation_node
 from src.infra.settings import AppSettings, get_settings
 from src.infra.tools import build_tool_registry
 
@@ -29,12 +29,12 @@ class StageExecutionError(RuntimeError):
 
 
 def _resolve_stage_attempt_for_start(stage: str, state: GraphState) -> int:
-    if stage in {"planner", "retrieval"}:
+    if stage in {"planner", "retrieval", "pre_synthesis_validation"}:
         retry_context = get_retry_state(state)
         return int(retry_context.attempt) + 1
     if stage == "synthesis":
         return max(1, int(get_response_state(state).synthesis_attempt or 0) + 1)
-    if stage == "validation":
+    if stage in {"validation", "post_synthesis_validation"}:
         return max(1, int(get_response_state(state).synthesis_attempt or 0))
     if stage == "action_postprocess":
         return max(1, int(get_response_state(state).synthesis_attempt or 1))
@@ -45,8 +45,19 @@ def _resolve_stage_status(stage: str, updates: GraphState) -> str | None:
     if stage == "planner":
         status = get_planner_state(updates).status
         return str(status) if status else None
-    if stage == "validation":
-        return "retry" if get_retry_state(updates).needs_retry else "pass"
+    if stage == "pre_synthesis_validation":
+        retry_context = get_retry_state(updates)
+        if retry_context.needs_retry:
+            return "retry"
+        response = get_response_state(updates)
+        if str(response.final_answer or "").strip() or str(response.payload.answer or "").strip():
+            return str(retry_context.retry_reason or "terminal")
+        return "pass"
+    if stage in {"validation", "post_synthesis_validation"}:
+        retry_context = get_retry_state(updates)
+        if retry_context.needs_retry:
+            return "retry"
+        return str(retry_context.retry_reason or "pass")
     return None
 
 
@@ -187,6 +198,13 @@ def build_agent_graph(settings: AppSettings | None = None):
         _normalize_node(retrieve_dispatch_node),
         record_latency_trace=False,
     )
+    pre_synthesis_validation_node = make_pre_synthesis_validation_node(
+        verbose=llm_registry.verbose
+    )
+    pre_synthesis_validation_node = _instrument_stage_node(
+        "pre_synthesis_validation",
+        pre_synthesis_validation_node,
+    )
     synthesize_node = make_synthesize_node(
         llm_synthesizer=llm_registry.llm_synthesizer,
         llm_synthesizer_compact=llm_registry.llm_synthesizer_compact,
@@ -201,8 +219,13 @@ def build_agent_graph(settings: AppSettings | None = None):
         _normalize_node(synthesize_node),
         record_latency_trace=False,
     )
-    validate_evidence_node = make_validate_evidence_node(verbose=llm_registry.verbose)
-    validate_evidence_node = _instrument_stage_node("validation", validate_evidence_node)
+    post_synthesis_validation_node = make_post_synthesis_validation_node(
+        verbose=llm_registry.verbose
+    )
+    post_synthesis_validation_node = _instrument_stage_node(
+        "post_synthesis_validation",
+        post_synthesis_validation_node,
+    )
     action_postprocess_node = make_action_postprocess_node(
         save_text_tool=tool_registry.save_text_tool,
         slack_notify_tool=tool_registry.slack_notify_tool,
@@ -222,7 +245,8 @@ def build_agent_graph(settings: AppSettings | None = None):
         planner_node=planner_node,
         retrieve_dispatch_node=retrieve_dispatch_node,
         synthesize_node=synthesize_node,
-        validate_evidence_node=validate_evidence_node,
+        pre_synthesis_validation_node=pre_synthesis_validation_node,
+        post_synthesis_validation_node=post_synthesis_validation_node,
         action_postprocess_node=action_postprocess_node,
         summary_max_turns=6,
     )
