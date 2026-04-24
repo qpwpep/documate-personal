@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 from src.core.answer_schema.models import AgentResponsePayloadModel, AnswerSection, ClaimItem, normalize_answer_sections
 from src.core.answer_schema.rendering import resolve_answer_text
 from src.core.answer_schema.text_cleaning import clean_grounded_text
@@ -93,6 +95,34 @@ def _fallback_route_line(
     return _summarize_claim(claim=claim, snapshot=snapshot, payload=payload)
 
 
+def _extract_local_option_literals(snapshot: ValidationSnapshot) -> list[str]:
+    options: list[str] = []
+    seen: set[str] = set()
+    for item in snapshot.parsed_evidence:
+        route = route_for_tool(str(item.tool or ""))
+        if route not in {"upload", "local"}:
+            continue
+        for match in re.findall(r"\b[A-Za-z_][A-Za-z0-9_]*\s*=\s*[^,\)\]\}\n]+", str(item.snippet or "")):
+            option = " ".join(match.strip().split())
+            compact = re.sub(r"\s+", "", option.lower())
+            if compact and compact not in seen:
+                options.append(option)
+                seen.add(compact)
+    return options
+
+
+def _contains_local_option(text: str, options: list[str]) -> bool:
+    compact_text = re.sub(r"\s+", "", str(text or "").lower())
+    return any(re.sub(r"\s+", "", option.lower()) in compact_text for option in options)
+
+
+def _local_options_text(snapshot: ValidationSnapshot) -> str:
+    options = _extract_local_option_literals(snapshot)
+    if not options:
+        return ""
+    return ", ".join(options[:4])
+
+
 def _section_body_from_claims(
     *,
     snapshot: ValidationSnapshot,
@@ -133,7 +163,16 @@ def _comparison_section_body(
         payload=payload,
         routes={"upload", "local"},
     )
-    comparison_lines = _ordered_unique_lines([docs_body, local_body])
+    local_options_text = _local_options_text(snapshot)
+    if local_options_text and not _contains_local_option(local_body, _extract_local_option_literals(snapshot)):
+        local_body = _ordered_unique_lines([local_options_text, local_body])
+        local_body = "\n".join(local_body)
+    comparison_lines = _ordered_unique_lines(
+        [
+            f"공식 문서 옵션/기본값: {docs_body}" if docs_body else "",
+            f"업로드 코드 실제 설정: {local_body}" if local_body else "",
+        ]
+    )
     if not comparison_lines:
         return ""
     local_route = "upload" if "upload" in snapshot.required_routes else "local"
@@ -196,6 +235,9 @@ def repair_required_sections(
                 payload=payload,
                 routes={"upload", "local"},
             )
+            options_text = _local_options_text(snapshot)
+            if options_text and not _contains_local_option(body, _extract_local_option_literals(snapshot)):
+                body = "\n".join(_ordered_unique_lines([f"업로드 코드의 실제 설정: {options_text}.", body]))
         elif kind == "comparison":
             body = _comparison_section_body(snapshot=snapshot, payload=payload)
 

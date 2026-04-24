@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import re
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
+
+from src.core.rules import get_rules_config
 
 SectionKind = Literal[
     "summary",
@@ -27,6 +30,15 @@ def _has_any(query: str, *markers: str) -> bool:
     return any(marker.lower() in lowered for marker in markers)
 
 
+def _has_explicit_comparison(query: str) -> bool:
+    if _has_any(query, "compare", "comparison", "versus", "vs", "vs."):
+        return True
+    try:
+        return re.search(get_rules_config().planner.compare_clause_pattern, str(query or "")) is not None
+    except re.error:
+        return False
+
+
 def infer_answer_contract(query: str, required_routes: list[str] | None = None) -> AnswerContract:
     required_sections: list[SectionKind] = []
     if _has_any(query, "요약", "summary"):
@@ -38,9 +50,13 @@ def infer_answer_contract(query: str, required_routes: list[str] | None = None) 
     if _has_any(query, "가능한 해석 2가지", "해석 2가지", "two interpretations"):
         required_sections.extend(["interpretation_a", "interpretation_b"])
 
-    split_by_source = set(required_routes or []) == {"docs", "upload"}
+    route_set = {str(route or "").strip() for route in (required_routes or []) if str(route or "").strip()}
+    split_by_source = "docs" in route_set and bool(route_set.intersection({"upload", "local"}))
     if split_by_source:
-        required_sections.extend(["official_docs", "upload_code", "comparison"])
+        if _has_explicit_comparison(query):
+            required_sections.extend(["official_docs", "upload_code", "comparison"])
+        else:
+            required_sections.extend(["official_docs", "comparison"])
 
     deduped_sections: list[SectionKind] = []
     seen: set[str] = set()
@@ -67,7 +83,11 @@ def render_answer_contract_prompt(contract: AnswerContract) -> str:
     lines.append("- Do not omit required sections.")
     if contract.split_by_source:
         lines.append("- For hybrid compare tasks, keep official docs facts and uploaded code facts separate before writing the comparison.")
-        lines.append("- Keep official_docs, upload_code, and comparison section bodies to 2-3 short sentences each.")
+        if "upload_code" in contract.required_sections:
+            lines.append("- Keep official_docs, upload_code, and comparison section bodies to 2-3 short sentences each.")
+        else:
+            lines.append("- Keep official_docs to 2-3 short sentences and comparison to 1-2 short sentences.")
+            lines.append("- Include uploaded/local code details inside comparison in one concrete sentence.")
         lines.append("- Use at most 4 total claims for hybrid answers; prefer 3 claims when possible.")
         lines.append("- Keep the comparison to 1-2 sentences about the official-docs match or difference.")
     return "\n".join(lines)
