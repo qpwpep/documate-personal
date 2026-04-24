@@ -15,6 +15,21 @@ class BackendRetrievalRegressionTest(unittest.TestCase):
         )
         self.assertIn("train_test_split", sanitized)
 
+    def test_docs_query_keeps_identifiers_before_korean_particles(self) -> None:
+        pydantic_query = sanitize_retrieval_query(
+            route="docs",
+            query="Pydantic v2 Field와 validation 방식을 설명해줘.",
+        )
+        pytorch_query = sanitize_retrieval_query(
+            route="docs",
+            query="PyTorch Dataset과 DataLoader 차이를 공식 문서 기준으로 설명해줘.",
+        )
+
+        self.assertIn("Field", pydantic_query)
+        self.assertIn("validation", pydantic_query)
+        self.assertIn("Dataset", pytorch_query)
+        self.assertIn("DataLoader", pytorch_query)
+
     def test_truncate_snippet_preserves_tail_for_long_local_files(self) -> None:
         text = (
             "import pandas as pd\n"
