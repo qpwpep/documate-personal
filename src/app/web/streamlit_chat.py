@@ -13,7 +13,9 @@ _STAGE_MESSAGES = {
     "summarize": "대화 맥락 정리 중...",
     "planner": "질문 분석 중...",
     "retrieval": "근거 수집 중...",
+    "pre_synthesis_validation": "검색 결과 확인 중...",
     "synthesis": "응답 생성 중...",
+    "post_synthesis_validation": "응답 근거 확인 중...",
     "validation": "근거 검증 중...",
     "action_postprocess": "결과 정리 중...",
 }
