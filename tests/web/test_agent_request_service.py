@@ -58,6 +58,11 @@ class _FakeSessionStore:
                 latency_ms=10,
                 status="llm",
             )
+            progress_emitter.emit_progress_snapshot(
+                stage="retrieval",
+                summary="근거 요약: docs 1건",
+                evidence_count=1,
+            )
         return self.agent_manager, dict(self.agent_answer), 12
 
 
@@ -195,13 +200,15 @@ class AgentRequestServiceTest(unittest.TestCase):
                 "request_started",
                 "stage_started",
                 "stage_completed",
+                "progress_snapshot",
                 "final_response",
                 "done",
             ],
         )
         self.assertEqual(events[1].data["stage"], "planner")
         self.assertEqual(events[2].data["status"], "llm")
-        self.assertEqual(events[3].data["response"]["answer"], "streamed answer")
+        self.assertEqual(events[3].data["summary"], "근거 요약: docs 1건")
+        self.assertEqual(events[4].data["response"]["answer"], "streamed answer")
         self.assertIsNotNone(store.run_calls[0]["progress_emitter"])
 
 

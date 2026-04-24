@@ -90,6 +90,7 @@ class StreamlitChatTest(unittest.TestCase):
             self.assertEqual(user_input, "질문")
             yield AgentStreamEvent(event="request_started", data={"request_id": "req123"})
             yield AgentStreamEvent(event="stage_started", data={"stage": "planner"})
+            yield AgentStreamEvent(event="progress_snapshot", data={"summary": "근거 요약: docs 1건"})
             yield AgentStreamEvent(
                 event="final_response",
                 data={
@@ -115,6 +116,7 @@ class StreamlitChatTest(unittest.TestCase):
         self.assertEqual(appended_messages[0]["content"], "질문")
         self.assertEqual(appended_messages[1]["content"], "응답")
         self.assertEqual(fake_st.chat_roles, ["user", "assistant"])
+        self.assertTrue(any("근거 요약: docs 1건" in body for body, _ in fake_st.markdowns))
         self.assertTrue(any("요청 접수 중" in body for body, _ in fake_st.markdowns))
         self.assertTrue(any("질문 분석 중" in body for body, _ in fake_st.markdowns))
         self.assertTrue(any(body == "응답" for body, _ in fake_st.markdowns))
