@@ -66,11 +66,30 @@ def _truncate_prompt_text(text: Any, *, limit: int) -> str:
     return normalized[:head].rstrip() + separator + normalized[-tail:].lstrip()
 
 
+def _is_explicit_code_extraction_request(text: str) -> bool:
+    normalized = str(text or "").strip().lower()
+    return any(
+        marker in normalized
+        for marker in (
+            "extract",
+            "quote",
+            "snippet",
+            "verbatim",
+            "exact",
+            "raw code",
+            "code snippet",
+            "cell",
+            "line",
+        )
+    )
+
+
 def _prepare_evidence_for_prompt(
     items: list[dict[str, Any]],
     *,
     snippet_char_limit: int,
     evidence_char_budget: int | None = None,
+    preserve_local_snippets: bool = False,
 ) -> list[dict[str, Any]]:
     prepared_items: list[dict[str, Any]] = []
     remaining_budget = evidence_char_budget
@@ -84,7 +103,7 @@ def _prepare_evidence_for_prompt(
             cleaned_snippet = clean_grounded_text(str(prompt_item.get("snippet") or ""))
             prompt_item["title"] = cleaned_title
             prompt_item["snippet"] = cleaned_snippet
-        if kind != "local":
+        if kind != "local" or not preserve_local_snippets:
             effective_limit = snippet_char_limit
             if remaining_budget is not None:
                 if remaining_budget <= 0:
@@ -105,6 +124,7 @@ def _build_synthesis_instruction_block(
     *,
     action_rules: list[str],
     has_hybrid_evidence: bool,
+    requires_upload_section: bool,
     attempt: int,
 ) -> str:
     lines = [
@@ -129,16 +149,29 @@ def _build_synthesis_instruction_block(
                 "- For docs plus uploaded/local evidence, explain the official takeaway first.",
                 "- Then add an explicit comparison against the uploaded/local evidence.",
                 "- Keep the official explanation and the comparison as distinct claim groups.",
-                "- Keep official_docs, upload_code, and comparison sections to 2-3 short sentences each.",
                 "- Return at most 4 total claims for hybrid answers; prefer 3 claims.",
                 "- Keep the comparison to 1-2 sentences about the official-docs match or difference.",
                 "- The official claim group must cite only official docs source_id values.",
-                "- The uploaded/local claim group must cite only uploaded/local source_id values.",
                 "- Mention the concrete uploaded/local code detail, configuration, or parameter that supports the comparison.",
                 "- Do not collapse the whole answer into only docs or only uploaded/local evidence when both routes are present.",
                 "- If one route is too generic or weak, say that evidence is limited instead of inventing a stronger claim.",
             ]
         )
+        if requires_upload_section:
+            lines.extend(
+                [
+                    "- Keep official_docs, upload_code, and comparison sections to 2-3 short sentences each.",
+                    "- The uploaded/local claim group must cite only uploaded/local source_id values.",
+                    "- upload_code must extract concrete parameters, options, or settings from uploaded/local evidence.",
+                ]
+            )
+        else:
+            lines.extend(
+                [
+                    "- Return only official_docs and comparison sections unless another requested section is required.",
+                    "- Put uploaded/local details in one concrete comparison sentence instead of a separate upload_code section.",
+                ]
+            )
     else:
         lines.append(
             "- Avoid extraction-only responses unless the user explicitly asked for extraction."
@@ -171,10 +204,12 @@ def build_synthesis_messages(
     evidence_char_budget: int | None = None,
 ) -> tuple[list[BaseMessage], int, int]:
     runtime = get_runtime_state(state)
+    preserve_local_snippets = _is_explicit_code_extraction_request(runtime.user_input)
     prompt_evidence = _prepare_evidence_for_prompt(
         deduped_evidence,
         snippet_char_limit=snippet_char_limit,
         evidence_char_budget=evidence_char_budget,
+        preserve_local_snippets=preserve_local_snippets,
     )
     evidence_kinds = {
         str(item.get("kind") or "").strip().lower()
@@ -186,6 +221,7 @@ def build_synthesis_messages(
         runtime.user_input,
         ["docs", "upload"] if has_hybrid_evidence else [],
     )
+    requires_upload_section = "upload_code" in answer_contract.required_sections
     history_messages = [
         message for message in state.get("messages", []) if not isinstance(message, ToolMessage)
     ]
@@ -196,8 +232,15 @@ def build_synthesis_messages(
     if runtime.memory_summary:
         model_messages.append(SystemMessage(content=f"[Conversation Summary]\n{runtime.memory_summary}"))
     model_messages.extend(trimmed_history)
+    rendered_prompt_evidence = format_evidence_for_prompt(
+        prompt_evidence,
+        max_snippet_chars=snippet_char_limit,
+        preserve_local_snippets=preserve_local_snippets,
+    )
     model_messages.append(
-        SystemMessage(content=f"[Retrieved Evidence]\n{format_evidence_for_prompt(prompt_evidence, max_snippet_chars=snippet_char_limit)}")
+        SystemMessage(
+            content=f"[Retrieved Evidence]\n{rendered_prompt_evidence}"
+        )
     )
     model_messages.append(SystemMessage(content=render_answer_contract_prompt(answer_contract)))
     model_messages.append(
@@ -205,6 +248,7 @@ def build_synthesis_messages(
             content=_build_synthesis_instruction_block(
                 action_rules=action_rules,
                 has_hybrid_evidence=has_hybrid_evidence,
+                requires_upload_section=requires_upload_section,
                 attempt=attempt,
             )
         )
@@ -224,12 +268,21 @@ def build_plain_summary_attach_messages(
         deduped_evidence[:2],
         snippet_char_limit=snippet_char_limit,
         evidence_char_budget=evidence_char_budget,
+        preserve_local_snippets=_is_explicit_code_extraction_request(user_input),
+    )
+    preserve_local_snippets = _is_explicit_code_extraction_request(user_input)
+    rendered_compact_evidence = format_evidence_for_prompt(
+        compact_evidence,
+        max_snippet_chars=snippet_char_limit,
+        preserve_local_snippets=preserve_local_snippets,
     )
     return [
         SystemMessage(content=SYS_POLICY),
         SystemMessage(content=PLAIN_SUMMARY_ATTACH_CONTRACT),
         HumanMessage(content=normalize_query_text(user_input) or "Summarize the retrieved evidence."),
-        SystemMessage(content=f"[Retrieved Evidence]\n{format_evidence_for_prompt(compact_evidence, max_snippet_chars=snippet_char_limit)}"),
+        SystemMessage(
+            content=f"[Retrieved Evidence]\n{rendered_compact_evidence}"
+        ),
     ]
 
 

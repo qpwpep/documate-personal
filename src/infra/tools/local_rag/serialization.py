@@ -9,6 +9,7 @@ from src.infra.tools.local_rag.ranking import extract_identifiers, extract_keywo
 
 SNIPPET_CHAR_LIMIT = 500
 SHORT_DOCUMENT_CHAR_LIMIT = 1200
+QUERY_WINDOW_LINE_LIMIT = 5
 
 
 def score_ranked_rows(
@@ -23,12 +24,17 @@ def score_ranked_rows(
 
 def build_query_focused_snippet(text: str, *, query: str, max_length: int = SNIPPET_CHAR_LIMIT) -> str:
     normalized = str(text or "").strip()
-    if len(normalized) <= max_length:
-        return normalized
-
     candidate_starts = _build_candidate_starts(normalized, query=query, max_length=max_length)
     if not candidate_starts:
-        return normalized[:max_length]
+        return normalized if len(normalized) <= max_length else normalized[:max_length]
+    if len(normalized) <= max_length and len(normalized.splitlines()) <= QUERY_WINDOW_LINE_LIMIT:
+        return normalized
+    query_tokens = _query_tokens(query)
+    if len(normalized) <= max_length and not _has_query_token_hit(
+        text=normalized,
+        query_tokens=query_tokens,
+    ):
+        return normalized
 
     query_identifiers = extract_identifiers(query)
     best_window = max(
@@ -39,7 +45,7 @@ def build_query_focused_snippet(text: str, *, query: str, max_length: int = SNIP
                     query_identifiers=query_identifiers,
                     text=_slice_window(normalized, start=start, max_length=max_length),
                 ),
-                -start,
+                start,
                 start,
             )
             for start in candidate_starts
@@ -60,9 +66,27 @@ def build_local_snippet(
     if not normalized:
         return ""
     metadata = dict(metadata or {})
-    if _should_preserve_full_chunk(metadata=metadata):
+    if _should_preserve_full_chunk(metadata=metadata) and _looks_like_code_extraction_query(query):
         return normalized
     return build_query_focused_snippet(normalized, query=query, max_length=max_length)
+
+
+def _looks_like_code_extraction_query(query: str) -> bool:
+    normalized = str(query or "").strip().lower()
+    return any(
+        marker in normalized
+        for marker in (
+            "extract",
+            "quote",
+            "snippet",
+            "verbatim",
+            "exact",
+            "raw code",
+            "code snippet",
+            "line",
+            "cell",
+        )
+    )
 
 
 def _should_preserve_full_chunk(*, metadata: dict[str, Any]) -> bool:
@@ -102,6 +126,11 @@ def _query_tokens(query: str) -> list[str]:
     return sorted(extract_keywords(query), key=len, reverse=True)
 
 
+def _has_query_token_hit(*, text: str, query_tokens: list[str]) -> bool:
+    lowered_text = text.lower()
+    return any(str(token or "").lower() in lowered_text for token in query_tokens)
+
+
 def _identifier_hit_count(*, query_identifiers: list[str], text: str) -> int:
     lowered_text = text.lower()
     return sum(1 for token in query_identifiers if token.lower() in lowered_text)
@@ -123,7 +152,12 @@ def _line_start_for_offset(text: str, offset: int) -> int:
 
 
 def _slice_window(text: str, *, start: int, max_length: int) -> str:
-    end = min(len(text), start + max_length)
+    line_limited_end = _line_end_after_n_lines(
+        text,
+        start=start,
+        line_limit=QUERY_WINDOW_LINE_LIMIT,
+    )
+    end = min(len(text), start + max_length, line_limited_end)
     if end < len(text):
         line_end = text.rfind("\n", start + 1, end)
         if line_end > start:
@@ -132,6 +166,18 @@ def _slice_window(text: str, *, start: int, max_length: int) -> str:
     if snippet:
         return snippet
     return text[start : min(len(text), start + max_length)].strip()
+
+
+def _line_end_after_n_lines(text: str, *, start: int, line_limit: int) -> int:
+    if line_limit <= 0:
+        return min(len(text), start)
+    current = max(0, start)
+    for _ in range(line_limit):
+        next_newline = text.find("\n", current)
+        if next_newline < 0:
+            return len(text)
+        current = next_newline + 1
+    return current
 
 
 def _coerce_non_negative_int(value: Any) -> int:

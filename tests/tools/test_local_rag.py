@@ -97,7 +97,7 @@ class LocalRagTest(unittest.TestCase):
         self.assertIn("random_state=42", snippet)
         self.assertNotIn("helper notes", snippet)
 
-    def test_build_local_snippet_preserves_full_chunk_for_single_chunk_documents(self) -> None:
+    def test_build_local_snippet_uses_query_window_for_single_chunk_documents(self) -> None:
         text = "header\n" + ("value = 1\n" * 80) + "target_call(random_state=42)\n"
 
         snippet = build_local_snippet(
@@ -106,10 +106,12 @@ class LocalRagTest(unittest.TestCase):
             metadata={"document_chunk_count": 1, "document_char_count": len(text)},
         )
 
-        self.assertEqual(snippet, text.strip())
-        self.assertGreater(len(snippet), 500)
+        self.assertIn("target_call(random_state=42)", snippet)
+        self.assertNotIn("header", snippet)
+        self.assertLess(len(snippet), 500)
+        self.assertLessEqual(len(snippet.splitlines()), 5)
 
-    def test_build_local_snippet_preserves_full_chunk_for_short_documents(self) -> None:
+    def test_build_local_snippet_uses_query_window_for_short_documents(self) -> None:
         text = "header\n" + ("step = 1\n" * 40) + "target_call(random_state=42)\n"
 
         snippet = build_local_snippet(
@@ -118,8 +120,40 @@ class LocalRagTest(unittest.TestCase):
             metadata={"document_chunk_count": 3, "document_char_count": len(text)},
         )
 
-        self.assertEqual(snippet, text.strip())
+        self.assertIn("target_call(random_state=42)", snippet)
+        self.assertNotIn("header", snippet)
+        self.assertLessEqual(len(snippet.splitlines()), 5)
         self.assertLessEqual(len(text), 1200)
+
+    def test_build_local_snippet_preserves_full_chunk_for_explicit_extraction(self) -> None:
+        text = "header\n" + ("step = 1\n" * 40) + "target_call(random_state=42)\n"
+
+        snippet = build_local_snippet(
+            text,
+            query="show the exact code snippet with random_state",
+            metadata={"document_chunk_count": 1, "document_char_count": len(text)},
+        )
+
+        self.assertEqual(snippet, text.strip())
+
+    def test_build_local_snippet_places_concat_window_first_for_short_files(self) -> None:
+        text = (
+            "import pandas as pd\n"
+            + ("setup_value = 1\n" * 32)
+            + "all_sales = pd.concat([sales_q1, sales_q2], ignore_index=True)\n"
+            + "print(all_sales.shape)\n"
+        )
+
+        snippet = build_local_snippet(
+            text,
+            query="concat ignore_index option",
+            metadata={"document_chunk_count": 1, "document_char_count": len(text)},
+            max_length=768,
+        )
+
+        self.assertTrue(snippet.startswith("all_sales = pd.concat"))
+        self.assertIn("ignore_index=True", snippet)
+        self.assertNotIn("import pandas as pd", snippet)
 
     def test_chunk_python_text_annotates_document_counts(self) -> None:
         text = "line = 1\n" * 240
