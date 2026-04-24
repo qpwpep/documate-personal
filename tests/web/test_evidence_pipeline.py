@@ -459,7 +459,7 @@ class EvidencePipelineTest(unittest.TestCase):
         self.assertEqual(len(evidence), 1)
         self.assertEqual(evidence[0]["score"], 1.0)
 
-    def test_upload_search_preserves_full_chunk_for_single_chunk_files(self) -> None:
+    def test_upload_search_uses_query_window_for_single_chunk_files(self) -> None:
         registry = build_tool_registry(AppSettings(openai_api_key="test", tavily_api_key="test"))
 
         result = registry.upload_search_tool.func(
@@ -470,7 +470,7 @@ class EvidencePipelineTest(unittest.TestCase):
 
         evidence = result["evidence"]
         self.assertEqual(len(evidence), 1)
-        self.assertGreater(len(evidence[0]["snippet"]), 500)
+        self.assertLess(len(evidence[0]["snippet"]), 500)
         self.assertIn("target_call(random_state=42)", evidence[0]["snippet"])
         self.assertNotIn("...", evidence[0]["snippet"])
 

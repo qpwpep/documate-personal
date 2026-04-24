@@ -90,6 +90,47 @@ class SynthesisPromptBudgetTest(unittest.TestCase):
         self.assertNotIn(long_snippet.strip(), evidence_messages[0])
         self.assertLess(len(evidence_messages[0]), 900)
 
+    def test_synthesize_node_applies_prompt_budget_to_local_evidence_by_default(self) -> None:
+        capture_llm = _CaptureStructuredSynthesizeLLM(include_raw=True)
+        synthesize_node = make_synthesize_node(
+            capture_llm,
+            verbose=False,
+            synthesis_max_tokens=1920,
+            prompt_snippet_char_limit=160,
+        )
+        long_snippet = "setup line\n" + ("local option detail " * 120) + "\naxis=0\n"
+
+        _ = synthesize_node(
+            build_legacy_state(
+                {
+                    "user_input": "Compare api evidence official docs with uploaded local option detail axis.",
+                    "messages": [HumanMessage(content="Compare api evidence official docs with uploaded local option detail axis.")],
+                    "planner_output": PlannerOutput(
+                        use_retrieval=True,
+                        tasks=[
+                            RetrievalTask(route="docs", query="api evidence official docs", k=3),
+                            RetrievalTask(route="upload", query="local option detail axis", k=3),
+                        ],
+                    ),
+                    "retrieved_evidence": [
+                        _docs_evidence("official docs evidence"),
+                        _upload_evidence(long_snippet),
+                    ],
+                    "synthesis_attempt": 0,
+                }
+            )
+        )
+
+        evidence_messages = [
+            str(message.content)
+            for message in (capture_llm.last_messages or [])
+            if isinstance(message, SystemMessage) and "[Retrieved Evidence]" in str(message.content)
+        ]
+        self.assertEqual(len(evidence_messages), 1)
+        self.assertIn("source_id: path:uploads/demo.py#chunk=0;start=0;end=80", evidence_messages[0])
+        self.assertNotIn(long_snippet.strip(), evidence_messages[0])
+        self.assertLess(len(evidence_messages[0]), 700)
+
     def test_synthesize_node_binds_category_specific_token_budget(self) -> None:
         capture_llm = _BindableCaptureStructuredSynthesizeLLM(include_raw=True)
         synthesize_node = make_synthesize_node(
