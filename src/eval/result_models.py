@@ -49,11 +49,13 @@ class CaseResult(BaseModel):
     latency_breakdown: LatencyBreakdownModel | None = None
     tool_calls: list[str] = Field(default_factory=list)
     token_usage: TokenUsage | None = None
+    output_tokens: int = 0
     model_name: str | None = None
     models_used: list[str] = Field(default_factory=list)
     llm_calls: list[LLMCallMetadata] = Field(default_factory=list)
     tool_call_count: int = 0
     planner_errors: list[str] = Field(default_factory=list)
+    error_codes: list[str] = Field(default_factory=list)
     debug_errors: list[str] = Field(default_factory=list)
     runtime_errors: list[str] = Field(default_factory=list)
     response_errors: list[str] = Field(default_factory=list)
@@ -80,6 +82,7 @@ class CaseResult(BaseModel):
     invalid_eval: bool = False
     valid_claim_count: int = 0
     invalid_claim_count: int = 0
+    section_count: int = 0
     synthesis_mode: str | None = None
     gate_failures: list[str] = Field(default_factory=list)
     composite_quality_score: float | None = None
@@ -142,6 +145,12 @@ class CaseResult(BaseModel):
                     self.response_claims = []
         if self.tool_call_count <= 0 and self.tool_calls:
             self.tool_call_count = len(self.tool_calls)
+        if self.output_tokens <= 0 and self.token_usage is not None:
+            self.output_tokens = int(self.token_usage.completion_tokens or 0)
+        if self.section_count <= 0 and isinstance(self.response_payload, dict):
+            sections = self.response_payload.get("sections")
+            if isinstance(sections, list):
+                self.section_count = len([item for item in sections if isinstance(item, dict)])
         if self.synthesis_mode is None and self.latency_breakdown and self.latency_breakdown.synthesis_attempts:
             self.synthesis_mode = self.latency_breakdown.synthesis_attempts[0].mode
         return self

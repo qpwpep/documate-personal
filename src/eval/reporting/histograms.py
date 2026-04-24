@@ -8,6 +8,7 @@ from ..result_models import CaseResult
 from ..summary_models import (
     AnalysisStats,
     CategoryPassRate,
+    ErrorCodeBucket,
     LatencyBreakdownCoverage,
     PlannerDiagnosticsBucket,
     PlannerErrorBucket,
@@ -23,6 +24,7 @@ from ..summary_models import (
 
 _CATEGORY_ORDER: tuple[str, ...] = ("docs_only", "rag_only", "hybrid", "tool_action")
 _PLANNER_ERROR_ORDER: tuple[str, ...] = (
+    "PLANNER_SCHEMA_INVALID",
     "structured_output_invocation_failed",
     "output_validation_failed",
     "sanitized_output_validation_failed",
@@ -217,6 +219,8 @@ def _normalize_planner_error_code(error: str) -> str | None:
     normalized = str(error or "").strip().lower()
     if not normalized:
         return None
+    if normalized == "planner_schema_invalid" or "planner_schema_invalid" in normalized:
+        return "PLANNER_SCHEMA_INVALID"
     if "structured_output_invocation_failed" in normalized or "structured output invocation failed" in normalized:
         return "structured_output_invocation_failed"
     if "sanitized_output_validation_failed" in normalized or "sanitized output validation failed" in normalized:
@@ -228,15 +232,62 @@ def _normalize_planner_error_code(error: str) -> str | None:
     return None
 
 
+def _normalize_standard_error_code(error: str) -> str | None:
+    normalized = str(error or "").strip().upper()
+    known_codes = {
+        "PLANNER_SCHEMA_INVALID",
+        "RETRIEVAL_DOCS_TIMEOUT",
+        "RETRIEVAL_DOCS_FAILED",
+        "RAG_INDEX_MISSING",
+        "LLM_STRUCTURED_EMPTY",
+        "SYNTHESIS_TIMEOUT",
+        "SLACK_AUTH_FAILED",
+        "SLACK_DESTINATION_MISSING",
+        "UPLOAD_PATH_INVALID",
+    }
+    for code in known_codes:
+        if code in normalized:
+            return code
+    return _normalize_planner_error_code(error)
+
+
 def _build_planner_error_histogram(results: list[CaseResult]) -> list[PlannerErrorBucket]:
     counter: Counter[tuple[str, str]] = Counter()
     for result in results:
+        planner_error_codes = [
+            error_code
+            for error_code in result.error_codes
+            if error_code == "PLANNER_SCHEMA_INVALID"
+        ]
+        if planner_error_codes:
+            for error_code in planner_error_codes:
+                counter[(result.category, error_code)] += 1
+            continue
         for error in result.planner_errors:
             code = _normalize_planner_error_code(error)
             if code is not None:
                 counter[(result.category, code)] += 1
     rows = [PlannerErrorBucket(category=category, error_code=error_code, count=count) for (category, error_code), count in counter.items()]
     rows.sort(key=lambda item: (_category_sort_key(item.category), _planner_error_sort_key(item.error_code), -item.count))
+    return rows
+
+
+def _build_error_code_histogram(results: list[CaseResult]) -> list[ErrorCodeBucket]:
+    counter: Counter[tuple[str, str]] = Counter()
+    for result in results:
+        if result.error_codes:
+            for error_code in result.error_codes:
+                counter[(result.category, str(error_code))] += 1
+            continue
+        for error in [*result.runtime_errors, *result.response_errors, *result.debug_errors, *result.planner_errors]:
+            code = _normalize_standard_error_code(error)
+            if code:
+                counter[(result.category, code)] += 1
+    rows = [
+        ErrorCodeBucket(category=category, error_code=error_code, count=count)
+        for (category, error_code), count in counter.items()
+    ]
+    rows.sort(key=lambda item: (_category_sort_key(item.category), -item.count, item.error_code))
     return rows
 
 
@@ -423,6 +474,7 @@ def build_analysis(*, case_map: dict[str, BenchmarkCase], results: list[CaseResu
         category_pass_rates=_build_category_pass_rates(results),
         planner_diagnostics_histogram=_build_planner_diagnostics_histogram(results),
         planner_error_histogram=_build_planner_error_histogram(results),
+        error_code_histogram=_build_error_code_histogram(results),
         retrieval_route_status_histogram=_build_retrieval_route_status_histogram(results),
         retrieval_warning_histogram=_build_retrieval_warning_histogram(results),
         route_confusion=_build_route_confusion(case_map=case_map, results=results),
