@@ -134,6 +134,8 @@ def _error_codes_from_planner_errors(errors: list[str]) -> list[str]:
             or "schema" in lowered
         ) and "PLANNER_SCHEMA_INVALID" not in codes:
             codes.append("PLANNER_SCHEMA_INVALID")
+        if ("timeout" in lowered or "timed out" in lowered) and "PLANNER_TIMEOUT" not in codes:
+            codes.append("PLANNER_TIMEOUT")
     return codes
 
 

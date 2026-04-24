@@ -119,6 +119,8 @@ class AgentFlowManager:
                 "models_used": [],
                 "llm_calls": [],
                 "errors": [],
+                "validation_events": [],
+                "edge_decisions": [],
                 "planner_errors": [],
                 "observed_evidence": [],
                 "retry_context": None,
@@ -136,6 +138,7 @@ class AgentFlowManager:
         flow_started: float,
         upload_retriever_build_ms: int | None,
         stage_error: StageExecutionError | None,
+        error_code: str | None = None,
     ) -> dict[str, Any]:
         raw_trace: list[dict[str, Any]] = []
         if stage_error is not None:
@@ -169,6 +172,9 @@ class AgentFlowManager:
                 "models_used": [],
                 "llm_calls": [],
                 "errors": [message],
+                "error_codes": [error_code] if error_code else [],
+                "validation_events": [],
+                "edge_decisions": [],
                 "planner_errors": [],
                 "observed_evidence": [],
                 "retry_context": None,
@@ -225,6 +231,9 @@ class AgentFlowManager:
             if isinstance(root_exc, StageExecutionError):
                 stage_error = root_exc
                 root_exc = root_exc.cause
+            error_code = None
+            if "UPLOAD_RETRIEVER_BUILD_FAILED" in str(root_exc):
+                error_code = "UPLOAD_RETRIEVER_BUILD_FAILED"
             if progress_emitter is not None and stage_error is None:
                 progress_emitter.emit_error(message=str(root_exc), stage=None)
             log_event(logger, logging.ERROR, "agent_execution_error", error=root_exc)
@@ -234,4 +243,5 @@ class AgentFlowManager:
                 flow_started=flow_started,
                 upload_retriever_build_ms=upload_retriever_build_ms,
                 stage_error=stage_error,
+                error_code=error_code,
             )

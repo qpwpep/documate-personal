@@ -244,12 +244,18 @@ class DebugCollector:
             lowered = str(error or "").lower()
             if "output validation failed" in lowered or "schema" in lowered:
                 add("PLANNER_SCHEMA_INVALID")
+            if "timeout" in lowered or "timed out" in lowered:
+                add("PLANNER_TIMEOUT")
         for error in debug_errors:
             lowered = str(error or "").lower()
             if "structured output was empty" in lowered:
                 add("LLM_STRUCTURED_EMPTY")
             if "timed out" in lowered or "timeout" in lowered:
                 add("SYNTHESIS_TIMEOUT")
+            if "local_rag_failed" in lowered or "local similarity search failed" in lowered:
+                add("LOCAL_RAG_FAILED")
+            if "upload_retriever_build_failed" in lowered:
+                add("UPLOAD_RETRIEVER_BUILD_FAILED")
         return codes
 
     def build(
@@ -268,7 +274,6 @@ class DebugCollector:
         debug_errors = [
             *state_debug.retrieval_errors,
             *state_debug.synthesis_errors,
-            *state_debug.validation_errors,
             *state_debug.action_errors,
         ]
         llm_calls = [item.model_dump(mode="json") for item in state_debug.llm_calls]
@@ -346,6 +351,8 @@ class DebugCollector:
             "llm_calls": llm_calls,
             "errors": debug_errors,
             "error_codes": error_codes,
+            "validation_events": list(state_debug.validation_events or []),
+            "edge_decisions": list(state_debug.edge_decisions or []),
             "planner_errors": planner_errors,
             "observed_evidence": observed_evidence,
             "retry_context": retry_context,

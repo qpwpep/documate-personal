@@ -4,10 +4,30 @@ from typing import Any
 
 from langgraph.graph import END, StateGraph
 
+from src.core.contracts.boundary.debug import get_debug_state
 from src.core.contracts.boundary.graph import get_retry_state
 from src.core.contracts.boundary.planner import get_planner_state
 from src.core.contracts.boundary.response import get_response_state
 from src.runtime.nodes.session import keep_recent_messages
+
+
+def _record_edge_decision(
+    state: dict[str, Any],
+    *,
+    source: str,
+    decision: str,
+    reason: str,
+) -> None:
+    debug = get_debug_state(state)
+    decision_event = {
+        "source": source,
+        "decision": decision,
+        "reason": reason,
+    }
+    state["debug"] = debug.model_copy(
+        update={"edge_decisions": [*debug.edge_decisions, decision_event]}
+    )
+
 
 def _summary_router(state: dict[str, Any], summary_max_turns: int) -> str:
     messages = state.get("messages")
@@ -15,34 +35,94 @@ def _summary_router(state: dict[str, Any], summary_max_turns: int) -> str:
         messages = []
     recent_window = keep_recent_messages(messages, max_turns=summary_max_turns)
     if len(recent_window) < len(messages):
+        _record_edge_decision(
+            state,
+            source="add_user_message",
+            decision="summarize",
+            reason="history_exceeds_summary_window",
+        )
         return "summarize"
+    _record_edge_decision(
+        state,
+        source="add_user_message",
+        decision="planner",
+        reason="history_within_summary_window",
+    )
     return "planner"
 
 
 def _planner_router(state: dict[str, Any]) -> str:
     planner = get_planner_state(state)
     if str(planner.guided_followup or "").strip():
+        _record_edge_decision(
+            state,
+            source="planner",
+            decision="pre_validate",
+            reason="guided_followup_present",
+        )
         return "pre_validate"
     planner_output = planner.output
     use_retrieval = bool(getattr(planner_output, "use_retrieval", False))
     tasks = getattr(planner_output, "tasks", []) or []
     if use_retrieval and tasks:
+        _record_edge_decision(
+            state,
+            source="planner",
+            decision="retrieve",
+            reason=f"retrieval_required:{len(tasks)}_task(s)",
+        )
         return "retrieve"
+    _record_edge_decision(
+        state,
+        source="planner",
+        decision="synthesize",
+        reason="retrieval_not_required",
+    )
     return "synthesize"
 
 
 def _pre_synthesis_router(state: dict[str, Any]) -> str:
     if get_retry_state(state).needs_retry:
+        _record_edge_decision(
+            state,
+            source="pre_synthesis_validation",
+            decision="retry",
+            reason=str(get_retry_state(state).retry_reason or "retry_requested"),
+        )
         return "retry"
     response = get_response_state(state)
     if str(response.final_answer or "").strip() or str(response.payload.answer or "").strip():
+        _record_edge_decision(
+            state,
+            source="pre_synthesis_validation",
+            decision="postprocess",
+            reason="terminal_response_available",
+        )
         return "postprocess"
+    _record_edge_decision(
+        state,
+        source="pre_synthesis_validation",
+        decision="synthesize",
+        reason="validation_passed",
+    )
     return "synthesize"
 
 
 def _post_synthesis_router(state: dict[str, Any]) -> str:
     if get_retry_state(state).needs_retry:
+        _record_edge_decision(
+            state,
+            source="post_synthesis_validation",
+            decision="retry",
+            reason=str(get_retry_state(state).retry_reason or "retry_requested"),
+        )
         return "retry"
+    _record_edge_decision(
+        state,
+        source="post_synthesis_validation",
+        decision="postprocess",
+        reason=str(get_retry_state(state).retry_reason or "validation_passed"),
+    )
     return "postprocess"
 
 

@@ -2,12 +2,13 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, HumanMessage
 
 from src.core.contracts import PlannerState, ResponseState
 from src.core.contracts.boundary.debug import get_debug_state
 from src.core.contracts.boundary.graph import build_graph_state_input
 from src.core.contracts.boundary.retrieval import get_retrieval_state
+from src.runtime.agent_runtime.debug_collector import DebugCollector
 from src.runtime.graph_builder import _instrument_stage_node, build_agent_graph
 from src.core.planner_schema import PlannerOutput, RetrievalTask
 from src.infra.settings import AppSettings
@@ -124,6 +125,28 @@ class GraphBuilderDebugTest(unittest.TestCase):
             any(item.get("stage") == "post_synthesis_validation" for item in debug.latency_trace)
         )
 
+    def test_debug_collector_keeps_validation_events_out_of_runtime_errors(self) -> None:
+        debug = DebugCollector().build(
+            response=build_graph_state_input(
+                user_input="question",
+                messages=[],
+                debug={
+                    "retrieval_errors": ["tavily_search: failed (timeout)"],
+                    "validation_errors": ["validate_evidence: retry_reason=unsupported_claims"],
+                    "validation_events": ["validate_evidence: retry_reason=unsupported_claims"],
+                },
+            ),
+            updated_messages=[HumanMessage(content="question")],
+            graph_total_ms=10,
+            upload_retriever_build_ms=None,
+        )
+
+        self.assertEqual(debug["errors"], ["tavily_search: failed (timeout)"])
+        self.assertEqual(
+            debug["validation_events"],
+            ["validate_evidence: retry_reason=unsupported_claims"],
+        )
+
     @patch("src.runtime.graph_builder.make_synthesize_node")
     @patch("src.runtime.graph_builder.make_planner_node")
     @patch("src.runtime.graph_builder.build_llm_registry")
@@ -229,6 +252,12 @@ class GraphBuilderDebugTest(unittest.TestCase):
         self.assertTrue(any(item.get("stage") == "pre_synthesis_validation" for item in stage_events))
         self.assertTrue(any(item.get("stage") == "post_synthesis_validation" for item in stage_events))
         self.assertTrue(any(item.get("stage") == "action_postprocess" for item in stage_events))
+        self.assertTrue(
+            any(
+                item.get("source") == "planner" and item.get("decision") == "retrieve"
+                for item in debug.edge_decisions
+            )
+        )
         self.assertEqual(debug.planner_errors, [])
         self.assertTrue(result["response"].final_answer)
 
