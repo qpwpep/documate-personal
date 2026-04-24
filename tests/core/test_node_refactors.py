@@ -12,7 +12,7 @@ from src.runtime.nodes.retrieval.node import _collect_retrieval_batch, _execute_
 from src.runtime.nodes.synthesis.evidence_selection import select_grounded_fallback_evidence_items, select_primary_evidence_items
 from src.runtime.nodes.synthesis.fallback_renderers import build_plain_summary_attach_payload
 from src.runtime.nodes.synthesis.prompt_builder import build_synthesis_messages
-from src.runtime.nodes.validation.evidence_validator import assess_validation, build_validation_snapshot
+from src.runtime.nodes.validation.evidence_validator import assess_retrieval_quality, assess_validation, build_validation_snapshot
 from src.runtime.nodes.validation.policy import apply_validation_outcome
 from src.core.planner_schema import PlannerOutput, RetrievalTask
 from src.core.prompts import SYS_POLICY
@@ -101,6 +101,8 @@ class NodeRefactorTest(unittest.TestCase):
 
         self.assertTrue(hasattr(validation_module, "ValidationAssessment"))
         self.assertTrue(hasattr(validation_module, "ValidationSnapshot"))
+        self.assertTrue(hasattr(validation_module, "make_pre_synthesis_validation_node"))
+        self.assertTrue(hasattr(validation_module, "make_post_synthesis_validation_node"))
         self.assertTrue(hasattr(validation_module, "make_validate_evidence_node"))
         self.assertFalse(hasattr(validation_module, "apply_validation_outcome"))
 
@@ -352,7 +354,7 @@ class NodeRefactorTest(unittest.TestCase):
         self.assertEqual(len(selected), 1)
         self.assertEqual(selected[0].tool, "upload_search")
 
-    def test_validation_assessment_flags_only_docs_route_on_hybrid_low_score(self) -> None:
+    def test_retrieval_quality_allows_hybrid_low_score_when_evidence_exists(self) -> None:
         planner_output = PlannerOutput(
             use_retrieval=True,
             tasks=[
@@ -396,9 +398,9 @@ class NodeRefactorTest(unittest.TestCase):
             response_payload=build_empty_response_payload(answer="draft"),
         )
 
-        assessment = assess_validation(snapshot)
-        self.assertEqual(assessment.retry_reason, "low_score")
-        self.assertEqual(assessment.failed_routes, {"docs"})
+        assessment = assess_retrieval_quality(snapshot)
+        self.assertIsNone(assessment.retry_reason)
+        self.assertEqual(assessment.failed_routes, set())
         self.assertFalse(assessment.blocked_missing_upload)
 
     def test_validation_recovery_filters_unsupported_claims_to_grounded_subset(self) -> None:

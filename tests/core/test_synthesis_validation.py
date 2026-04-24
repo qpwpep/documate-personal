@@ -4,7 +4,7 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from src.runtime.nodes.session import make_summarize_node
 from src.runtime.nodes.synthesis import make_synthesize_node
-from src.runtime.nodes.validation import make_validate_evidence_node
+from src.runtime.nodes.validation import make_pre_synthesis_validation_node, make_validate_evidence_node
 from src.core.planner_schema import PlannerOutput, RetrievalTask
 from src.core.prompts import SYS_POLICY
 
@@ -76,8 +76,8 @@ def _local_evidence(
 
 
 class SynthesisValidationTest(unittest.TestCase):
-    def test_validate_evidence_retries_once_for_docs_only_no_evidence(self) -> None:
-        validate_node = make_validate_evidence_node(verbose=False)
+    def test_pre_synthesis_validation_retries_once_for_docs_only_no_evidence(self) -> None:
+        validate_node = make_pre_synthesis_validation_node(verbose=False)
         planner_output = PlannerOutput(use_retrieval=True, tasks=[RetrievalTask(route="docs", query="numpy docs", k=3)])
 
         result = validate_node(
@@ -100,8 +100,8 @@ class SynthesisValidationTest(unittest.TestCase):
         self.assertEqual(_retry(result).retry_reason, "no_evidence")
         self.assertNotIn("response", result)
 
-    def test_validate_evidence_sets_tool_error_reason(self) -> None:
-        validate_node = make_validate_evidence_node(verbose=False)
+    def test_pre_synthesis_validation_sets_tool_error_reason(self) -> None:
+        validate_node = make_pre_synthesis_validation_node(verbose=False)
         planner_output = PlannerOutput(use_retrieval=True, tasks=[RetrievalTask(route="docs", query="numpy docs", k=3)])
         result = validate_node(
             _state(
@@ -124,8 +124,8 @@ class SynthesisValidationTest(unittest.TestCase):
         self.assertEqual(_retry(result).retry_reason, "tool_error")
         self.assertNotIn("response", result)
 
-    def test_validate_evidence_does_not_treat_planner_errors_as_tool_errors(self) -> None:
-        validate_node = make_validate_evidence_node(verbose=False)
+    def test_pre_synthesis_validation_does_not_treat_planner_errors_as_tool_errors(self) -> None:
+        validate_node = make_pre_synthesis_validation_node(verbose=False)
         planner_output = PlannerOutput(use_retrieval=True, tasks=[RetrievalTask(route="docs", query="numpy docs", k=3)])
         result = validate_node(
             _state(
@@ -147,8 +147,8 @@ class SynthesisValidationTest(unittest.TestCase):
         self.assertTrue(_retry(result).needs_retry)
         self.assertEqual(_retry(result).retry_reason, "no_evidence")
 
-    def test_validate_evidence_retries_docs_only_tool_error_even_with_grounded_payload(self) -> None:
-        validate_node = make_validate_evidence_node(verbose=False)
+    def test_pre_synthesis_validation_retries_docs_only_tool_error_even_with_grounded_payload(self) -> None:
+        validate_node = make_pre_synthesis_validation_node(verbose=False)
         planner_output = PlannerOutput(use_retrieval=True, tasks=[RetrievalTask(route="docs", query="numpy docs", k=3)])
         result = validate_node(
             _state(
@@ -173,8 +173,8 @@ class SynthesisValidationTest(unittest.TestCase):
         self.assertEqual(_retry(result).retry_reason, "tool_error")
         self.assertNotIn("response", result)
 
-    def test_validate_evidence_maps_upload_unavailable_to_blocked_missing_upload(self) -> None:
-        validate_node = make_validate_evidence_node(verbose=False)
+    def test_pre_synthesis_validation_maps_upload_unavailable_to_blocked_missing_upload(self) -> None:
+        validate_node = make_pre_synthesis_validation_node(verbose=False)
         planner_output = PlannerOutput(use_retrieval=True, tasks=[RetrievalTask(route="upload", query="groupby", k=3)])
         result = validate_node(
             _state(
@@ -206,8 +206,8 @@ class SynthesisValidationTest(unittest.TestCase):
         self.assertEqual(_retry(result).retry_reason, "blocked_missing_upload")
         self.assertIn("response", result)
 
-    def test_validate_evidence_retries_docs_only_low_score(self) -> None:
-        validate_node = make_validate_evidence_node(verbose=False)
+    def test_pre_synthesis_validation_allows_docs_only_low_score(self) -> None:
+        validate_node = make_pre_synthesis_validation_node(verbose=False)
         planner_output = PlannerOutput(use_retrieval=True, tasks=[RetrievalTask(route="docs", query="numpy docs", k=3)])
         result = validate_node(
             _state(
@@ -225,9 +225,9 @@ class SynthesisValidationTest(unittest.TestCase):
             )
         )
 
-        self.assertTrue(_retry(result).needs_retry)
-        self.assertEqual(_retry(result).attempt, 1)
-        self.assertEqual(_retry(result).retry_reason, "low_score")
+        self.assertFalse(_retry(result).needs_retry)
+        self.assertEqual(_retry(result).attempt, 0)
+        self.assertIsNone(_retry(result).retry_reason)
         self.assertAlmostEqual(_retry(result).score_avg, 0.2)
         self.assertNotIn("response", result)
 
@@ -267,8 +267,8 @@ class SynthesisValidationTest(unittest.TestCase):
         self.assertEqual(_retry(result).retry_reason, "unsupported_claims")
         self.assertIn("groupby", _response(result).final_answer)
 
-    def test_validate_evidence_retries_docs_half_of_docs_upload_and_preserves_upload_context(self) -> None:
-        validate_node = make_validate_evidence_node(verbose=False)
+    def test_pre_synthesis_validation_retries_docs_half_of_docs_upload_and_preserves_upload_context(self) -> None:
+        validate_node = make_pre_synthesis_validation_node(verbose=False)
         planner_output = PlannerOutput(
             use_retrieval=True,
             tasks=[
@@ -282,7 +282,6 @@ class SynthesisValidationTest(unittest.TestCase):
                     "user_input": "Compare official train_test_split docs with the uploaded notebook example.",
                     "planner_output": planner_output,
                     "retrieved_evidence": [
-                        _docs_evidence(score=0.1, source_id="url:https://huggingface.co/docs/bad", snippet="unrelated content"),
                         {
                             "kind": "local",
                             "tool": "upload_search",
@@ -301,8 +300,8 @@ class SynthesisValidationTest(unittest.TestCase):
                         {
                             "tool": "tavily_search",
                             "route": "docs",
-                            "status": "success",
-                            "message": "",
+                            "status": "no_result",
+                            "message": "no docs found",
                             "query": "train_test_split official docs",
                             "attempt": 1,
                         },
@@ -327,7 +326,7 @@ class SynthesisValidationTest(unittest.TestCase):
         )
 
         self.assertTrue(_retry(result).needs_retry)
-        self.assertEqual(_retry(result).retry_reason, "low_score")
+        self.assertEqual(_retry(result).retry_reason, "no_evidence")
         self.assertEqual(_retry(result).failed_routes, ["docs"])
         self.assertEqual(len(_retry(result).preserved_evidence), 1)
         self.assertEqual(_retry(result).preserved_evidence[0]["tool"], "upload_search")
@@ -712,6 +711,10 @@ class SynthesisValidationTest(unittest.TestCase):
         self.assertTrue(_response(updates).final_answer.strip())
         self.assertEqual(_response(updates).payload.answer, _response(updates).final_answer)
         self.assertIn("structured output was empty", _debug(updates).synthesis_errors[0])
+        synthesis_attempts = [
+            item for item in _debug(updates).latency_trace if item.get("kind") == "synthesis_attempt"
+        ]
+        self.assertEqual(synthesis_attempts[0]["mode"], "structured_empty_fallback")
 
     def test_synthesize_uses_only_current_attempt_evidence_window(self) -> None:
         capture_llm = _CaptureSynthesizeLLM()
