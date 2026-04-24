@@ -9,6 +9,7 @@ from src.core.answer_schema import AgentResponsePayloadModel, SynthesisOutput
 from src.core.contracts.debug import LLMCallMetadata
 from src.core.evidence import EvidenceItem
 from src.core.planner_schema import PlannerOutput
+from src.runtime.nodes.synthesis.budgets import SynthesisBudgetProfile
 
 
 @dataclass(slots=True)
@@ -30,6 +31,7 @@ class SynthesisContext:
 class PreparedSynthesisInputs:
     attempt: int
     user_input: str
+    budget_profile: SynthesisBudgetProfile
     parse_errors: list[str]
     planner_parse_errors: list[str]
     retrieval_required: bool
