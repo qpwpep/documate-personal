@@ -7,6 +7,7 @@ import requests
 
 from src.eval.config_models import BenchmarkCase, BenchmarkConfig
 from src.eval.online_runner import _run_single_case
+from src.eval.reporting.histograms import build_analysis
 
 
 class _FakeResponse:
@@ -347,6 +348,75 @@ class RunnerErrorBucketsTest(unittest.TestCase):
         self.assertFalse(result.product_pass)
         self.assertFalse(result.release_pass)
         self.assertFalse(result.passed)
+
+    @patch("src.eval.online_runner.case_runner.requests.post")
+    def test_runner_parses_standard_error_codes_and_output_shape_metrics(self, mock_post) -> None:
+        mock_post.return_value = _FakeResponse(
+            200,
+            {
+                "response": {
+                    "answer": "ok",
+                    "claims": [],
+                    "sections": [
+                        {"kind": "summary", "heading": "Summary", "body": "ok"},
+                        {"kind": "comparison", "heading": "Compare", "body": "same"},
+                    ],
+                    "evidence": [],
+                },
+                "trace": "x",
+                "file_path": "",
+                "debug": {
+                    "schema_version": 3,
+                    "observability_status": "ok",
+                    "missing_required_debug_fields": [],
+                    "tool_calls": ["tavily_search"],
+                    "tool_call_count": 1,
+                    "token_usage": {
+                        "prompt_tokens": 10,
+                        "completion_tokens": 21,
+                        "total_tokens": 31,
+                    },
+                    "model_name": None,
+                    "models_used": [],
+                    "llm_calls": [],
+                    "errors": [],
+                    "error_codes": ["RETRIEVAL_DOCS_TIMEOUT"],
+                    "planner_errors": [],
+                    "observed_evidence": [],
+                    "retry_context": None,
+                    "retrieval_diagnostics": [
+                        {
+                            "tool": "tavily_search",
+                            "route": "docs",
+                            "status": "error",
+                            "message": "invoke failed",
+                            "error_code": "RETRIEVAL_DOCS_TIMEOUT",
+                            "query": "docs query",
+                            "attempt": 1,
+                        }
+                    ],
+                    "planner_diagnostics": None,
+                    "latency_breakdown": None,
+                },
+            },
+        )
+
+        result = _run_single_case(
+            run_id="run-error-codes",
+            endpoint="http://127.0.0.1:8000",
+            fixtures_path=self.fixtures_path,
+            case=self.case,
+            timeout_seconds=5,
+            judge=_DummyJudge((None, None, None)),
+            config=self.config,
+        )
+
+        self.assertEqual(result.error_codes, ["RETRIEVAL_DOCS_TIMEOUT"])
+        self.assertEqual(result.retrieval_diagnostics[0].error_code, "RETRIEVAL_DOCS_TIMEOUT")
+        self.assertEqual(result.output_tokens, 21)
+        self.assertEqual(result.section_count, 2)
+        analysis = build_analysis(case_map={self.case.case_id: self.case}, results=[result])
+        self.assertEqual(analysis.error_code_histogram[0].error_code, "RETRIEVAL_DOCS_TIMEOUT")
 
 
 if __name__ == "__main__":

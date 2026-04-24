@@ -83,6 +83,31 @@ def _resolve_slack_delivery_status(
     return "unknown", slack_result.error or slack_result.reason or raw_status or "unknown_status"
 
 
+def _extract_output_tokens(parsed_response: ParsedResponseData) -> int:
+    if parsed_response.token_usage is not None and parsed_response.token_usage.completion_tokens > 0:
+        return int(parsed_response.token_usage.completion_tokens)
+    total = 0
+    for call in parsed_response.llm_calls:
+        if str(call.stage) != "synthesis":
+            continue
+        usage = call.usage_metadata or {}
+        response_usage = call.response_metadata.get("token_usage")
+        if not isinstance(response_usage, dict):
+            response_usage = {}
+        raw_output = (
+            usage.get("output_tokens")
+            or usage.get("completion_tokens")
+            or response_usage.get("completion_tokens")
+            or response_usage.get("output_tokens")
+            or 0
+        )
+        try:
+            total += max(0, int(raw_output or 0))
+        except (TypeError, ValueError):
+            continue
+    return total
+
+
 def build_case_result(
     *,
     run_id: str,
@@ -112,6 +137,8 @@ def build_case_result(
     response_payload = parsed_response.response_payload
     response_claims = parse_claims_from_response_payload(response_payload)
     response_sections = parse_sections_from_response_payload(response_payload)
+    section_count = len(response_sections)
+    output_tokens = _extract_output_tokens(parsed_response)
     valid_claim_count = 0
     invalid_claim_count = 0
     if response_claims:
@@ -283,10 +310,12 @@ def build_case_result(
         tool_calls=parsed_response.tool_calls,
         tool_call_count=parsed_response.tool_call_count,
         token_usage=parsed_response.token_usage,
+        output_tokens=output_tokens,
         model_name=parsed_response.model_name,
         models_used=parsed_response.models_used,
         llm_calls=parsed_response.llm_calls,
         planner_errors=parsed_response.planner_errors,
+        error_codes=parsed_response.error_codes,
         debug_errors=parsed_response.debug_errors,
         runtime_errors=runtime_errors,
         response_errors=parsed_response.response_errors,
@@ -313,6 +342,7 @@ def build_case_result(
         invalid_eval=any(str(error).startswith("invalid_eval:") for error in judge_errors),
         valid_claim_count=valid_claim_count,
         invalid_claim_count=invalid_claim_count,
+        section_count=section_count,
         synthesis_mode=parsed_response.synthesis_mode,
         gate_failures=gate_failures,
         composite_quality_score=composite_quality_score,

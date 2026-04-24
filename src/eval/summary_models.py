@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field, model_validator
 
 RunTrack = Literal["release", "smoke"]
 PlannerErrorCode = Literal[
+    "PLANNER_SCHEMA_INVALID",
     "structured_output_invocation_failed",
     "output_validation_failed",
     "sanitized_output_validation_failed",
@@ -97,6 +98,12 @@ class PlannerErrorBucket(BaseModel):
     count: int
 
 
+class ErrorCodeBucket(BaseModel):
+    category: str
+    error_code: str
+    count: int
+
+
 class RetrievalRouteStatusBucket(BaseModel):
     category: str
     route: str
@@ -157,6 +164,7 @@ class AnalysisStats(BaseModel):
     category_pass_rates: list[CategoryPassRate] = Field(default_factory=list)
     planner_diagnostics_histogram: list[PlannerDiagnosticsBucket] = Field(default_factory=list)
     planner_error_histogram: list[PlannerErrorBucket] = Field(default_factory=list)
+    error_code_histogram: list[ErrorCodeBucket] = Field(default_factory=list)
     retrieval_route_status_histogram: list[RetrievalRouteStatusBucket] = Field(default_factory=list)
     retrieval_warning_histogram: list[RetrievalWarningBucket] = Field(default_factory=list)
     route_confusion: list[RouteConfusionBucket] = Field(default_factory=list)
