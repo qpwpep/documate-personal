@@ -84,6 +84,67 @@ def _extract_stage_status_from_debug(stage: str, debug: Any, attempt: int) -> st
     return None
 
 
+def _edge_decision_for_stage(stage: str, updates: GraphState) -> dict[str, str] | None:
+    if stage == "planner":
+        planner = get_planner_state(updates)
+        if str(planner.guided_followup or "").strip():
+            return {
+                "source": "planner",
+                "decision": "pre_validate",
+                "reason": "guided_followup_present",
+            }
+        planner_output = planner.output
+        tasks = getattr(planner_output, "tasks", []) or []
+        if bool(getattr(planner_output, "use_retrieval", False)) and tasks:
+            return {
+                "source": "planner",
+                "decision": "retrieve",
+                "reason": f"retrieval_required:{len(tasks)}_task(s)",
+            }
+        return {
+            "source": "planner",
+            "decision": "synthesize",
+            "reason": "retrieval_not_required",
+        }
+
+    if stage == "pre_synthesis_validation":
+        retry_context = get_retry_state(updates)
+        if retry_context.needs_retry:
+            return {
+                "source": "pre_synthesis_validation",
+                "decision": "retry",
+                "reason": str(retry_context.retry_reason or "retry_requested"),
+            }
+        response = get_response_state(updates)
+        if str(response.final_answer or "").strip() or str(response.payload.answer or "").strip():
+            return {
+                "source": "pre_synthesis_validation",
+                "decision": "postprocess",
+                "reason": "terminal_response_available",
+            }
+        return {
+            "source": "pre_synthesis_validation",
+            "decision": "synthesize",
+            "reason": "validation_passed",
+        }
+
+    if stage == "post_synthesis_validation":
+        retry_context = get_retry_state(updates)
+        if retry_context.needs_retry:
+            return {
+                "source": "post_synthesis_validation",
+                "decision": "retry",
+                "reason": str(retry_context.retry_reason or "retry_requested"),
+            }
+        return {
+            "source": "post_synthesis_validation",
+            "decision": "postprocess",
+            "reason": str(retry_context.retry_reason or "validation_passed"),
+        }
+
+    return None
+
+
 def _get_progress_emitter(state: GraphState) -> Any | None:
     return get_runtime_state(state).progress_emitter
 
@@ -144,6 +205,10 @@ def _instrument_stage_node(stage: str, node: Any, *, record_latency_trace: bool 
             attempt,
         )
         stage_latency_ms = elapsed_ms(started, time.perf_counter())
+        debug_updates: dict[str, Any] = {}
+        edge_decision = _edge_decision_for_stage(stage, updates)
+        if edge_decision is not None:
+            debug_updates["edge_decisions"] = [*debug.edge_decisions, edge_decision]
         if record_latency_trace:
             latency_event = make_stage_latency_event(
                 stage=stage,  # type: ignore[arg-type]
@@ -151,9 +216,9 @@ def _instrument_stage_node(stage: str, node: Any, *, record_latency_trace: bool 
                 latency_ms=stage_latency_ms,
                 status=stage_status,
             )
-            updates["debug"] = debug.model_copy(
-                update={"latency_trace": [*debug.latency_trace, latency_event]}
-            )
+            debug_updates["latency_trace"] = [*debug.latency_trace, latency_event]
+        if debug_updates:
+            updates["debug"] = debug.model_copy(update=debug_updates)
         if progress_emitter is not None:
             progress_emitter.emit_stage_completed(
                 stage=stage,  # type: ignore[arg-type]

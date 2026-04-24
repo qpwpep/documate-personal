@@ -236,11 +236,16 @@ def _normalize_standard_error_code(error: str) -> str | None:
     normalized = str(error or "").strip().upper()
     known_codes = {
         "PLANNER_SCHEMA_INVALID",
+        "PLANNER_TIMEOUT",
         "RETRIEVAL_DOCS_TIMEOUT",
         "RETRIEVAL_DOCS_FAILED",
         "RAG_INDEX_MISSING",
+        "LOCAL_RAG_FAILED",
+        "UPLOAD_RETRIEVER_BUILD_FAILED",
         "LLM_STRUCTURED_EMPTY",
         "SYNTHESIS_TIMEOUT",
+        "VALIDATION_UNSUPPORTED_CLAIMS",
+        "DEBUG_NORMALIZATION_FAILED",
         "SLACK_AUTH_FAILED",
         "SLACK_DESTINATION_MISSING",
         "UPLOAD_PATH_INVALID",

@@ -97,6 +97,40 @@ class AgentResponseSchemaTest(unittest.TestCase):
         self.assertEqual(result.debug.retry_context.retry_reason, "unsupported_claims")
         self.assertEqual(result.debug.retry_context.retrieval_diagnostic_start_index, 0)
 
+    def test_debug_validation_events_and_edge_decisions_are_parseable(self) -> None:
+        payload = {
+            "response": {"answer": "ok", "claims": [], "evidence": [], "confidence": None},
+            "trace": "trace-id",
+            "file_path": None,
+            "debug": {
+                "schema_version": 3,
+                "observability_status": "ok",
+                "missing_required_debug_fields": [],
+                "tool_calls": [],
+                "tool_call_count": 0,
+                "errors": [],
+                "validation_events": ["validate_evidence: retry_reason=unsupported_claims"],
+                "edge_decisions": [
+                    {
+                        "source": "planner",
+                        "decision": "retrieve",
+                        "reason": "retrieval_required:2_task(s)",
+                    }
+                ],
+                "observed_evidence": [],
+            },
+        }
+
+        result = AgentResponse.model_validate(payload)
+
+        self.assertIsNotNone(result.debug)
+        self.assertEqual(
+            result.debug.validation_events,
+            ["validate_evidence: retry_reason=unsupported_claims"],
+        )
+        self.assertEqual(result.debug.errors, [])
+        self.assertEqual(result.debug.edge_decisions[0]["decision"], "retrieve")
+
     def test_debug_diagnostics_are_optional_and_parseable(self) -> None:
         payload = {
             "response": {"answer": "follow up", "claims": [], "evidence": [], "confidence": None},

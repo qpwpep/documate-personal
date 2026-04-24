@@ -56,6 +56,8 @@ class CaseResult(BaseModel):
     tool_call_count: int = 0
     planner_errors: list[str] = Field(default_factory=list)
     error_codes: list[str] = Field(default_factory=list)
+    validation_events: list[str] = Field(default_factory=list)
+    edge_decisions: list[dict[str, Any]] = Field(default_factory=list)
     debug_errors: list[str] = Field(default_factory=list)
     runtime_errors: list[str] = Field(default_factory=list)
     response_errors: list[str] = Field(default_factory=list)

@@ -380,7 +380,19 @@ class RunnerErrorBucketsTest(unittest.TestCase):
                     "models_used": [],
                     "llm_calls": [],
                     "errors": [],
-                    "error_codes": ["RETRIEVAL_DOCS_TIMEOUT"],
+                    "error_codes": [
+                        "RETRIEVAL_DOCS_TIMEOUT",
+                        "LOCAL_RAG_FAILED",
+                        "VALIDATION_UNSUPPORTED_CLAIMS",
+                    ],
+                    "validation_events": ["validate_evidence: retry_reason=unsupported_claims"],
+                    "edge_decisions": [
+                        {
+                            "source": "planner",
+                            "decision": "retrieve",
+                            "reason": "retrieval_required:1_task(s)",
+                        }
+                    ],
                     "planner_errors": [],
                     "observed_evidence": [],
                     "retry_context": None,
@@ -411,12 +423,31 @@ class RunnerErrorBucketsTest(unittest.TestCase):
             config=self.config,
         )
 
-        self.assertEqual(result.error_codes, ["RETRIEVAL_DOCS_TIMEOUT"])
+        self.assertEqual(
+            result.error_codes,
+            [
+                "RETRIEVAL_DOCS_TIMEOUT",
+                "LOCAL_RAG_FAILED",
+                "VALIDATION_UNSUPPORTED_CLAIMS",
+            ],
+        )
+        self.assertEqual(
+            result.validation_events,
+            ["validate_evidence: retry_reason=unsupported_claims"],
+        )
+        self.assertEqual(result.edge_decisions[0]["decision"], "retrieve")
         self.assertEqual(result.retrieval_diagnostics[0].error_code, "RETRIEVAL_DOCS_TIMEOUT")
         self.assertEqual(result.output_tokens, 21)
         self.assertEqual(result.section_count, 2)
         analysis = build_analysis(case_map={self.case.case_id: self.case}, results=[result])
-        self.assertEqual(analysis.error_code_histogram[0].error_code, "RETRIEVAL_DOCS_TIMEOUT")
+        self.assertEqual(
+            {item.error_code for item in analysis.error_code_histogram},
+            {
+                "RETRIEVAL_DOCS_TIMEOUT",
+                "LOCAL_RAG_FAILED",
+                "VALIDATION_UNSUPPORTED_CLAIMS",
+            },
+        )
 
 
 if __name__ == "__main__":

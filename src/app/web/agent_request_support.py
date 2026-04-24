@@ -27,7 +27,9 @@ def normalize_debug_info(raw_debug: dict | None, latency_ms_server: int | None) 
     critical_missing = [field for field in missing_required_debug_fields if field in DEBUG_CRITICAL_FIELDS]
     tool_calls = debug.get("tool_calls") or []
     errors = debug.get("errors") or []
-    error_codes_raw = debug.get("error_codes") or []
+    error_codes = parse_error_codes(debug.get("error_codes") or [])
+    validation_events_raw = debug.get("validation_events") or []
+    edge_decisions_raw = debug.get("edge_decisions") or []
     planner_errors_raw = debug.get("planner_errors") or []
     observed_evidence_raw = debug.get("observed_evidence") or []
     models_used_raw = debug.get("models_used")
@@ -67,6 +69,8 @@ def normalize_debug_info(raw_debug: dict | None, latency_ms_server: int | None) 
             latency_breakdown = LatencyBreakdownModel.model_validate(latency_payload)
         except Exception:
             latency_breakdown = None
+            if "DEBUG_NORMALIZATION_FAILED" not in error_codes:
+                error_codes.append("DEBUG_NORMALIZATION_FAILED")  # type: ignore[arg-type]
 
     schema_version_raw = debug.get("schema_version", DEBUG_SCHEMA_VERSION)
     try:
@@ -98,7 +102,19 @@ def normalize_debug_info(raw_debug: dict | None, latency_ms_server: int | None) 
         models_used=models_used,
         llm_calls=llm_calls,
         errors=[str(error) for error in errors if error],
-        error_codes=parse_error_codes(error_codes_raw),
+        error_codes=error_codes,
+        validation_events=[
+            str(event) for event in validation_events_raw if str(event).strip()
+        ]
+        if isinstance(validation_events_raw, list)
+        else [],
+        edge_decisions=[
+            dict(item)
+            for item in edge_decisions_raw
+            if isinstance(item, dict)
+        ]
+        if isinstance(edge_decisions_raw, list)
+        else [],
         planner_errors=[str(error) for error in planner_errors_raw if error]
         if isinstance(planner_errors_raw, list)
         else [],

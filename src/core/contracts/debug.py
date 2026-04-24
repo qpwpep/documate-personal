@@ -7,11 +7,16 @@ from pydantic import BaseModel, Field
 
 ErrorCode = Literal[
     "PLANNER_SCHEMA_INVALID",
+    "PLANNER_TIMEOUT",
     "RETRIEVAL_DOCS_TIMEOUT",
     "RETRIEVAL_DOCS_FAILED",
     "RAG_INDEX_MISSING",
+    "LOCAL_RAG_FAILED",
+    "UPLOAD_RETRIEVER_BUILD_FAILED",
     "LLM_STRUCTURED_EMPTY",
     "SYNTHESIS_TIMEOUT",
+    "VALIDATION_UNSUPPORTED_CLAIMS",
+    "DEBUG_NORMALIZATION_FAILED",
     "SLACK_AUTH_FAILED",
     "SLACK_DESTINATION_MISSING",
     "UPLOAD_PATH_INVALID",
@@ -172,6 +177,8 @@ class DebugPayload(BaseModel):
     llm_calls: list[LLMCallMetadata] = Field(default_factory=list)
     errors: list[str] = Field(default_factory=list)
     error_codes: list[ErrorCode] = Field(default_factory=list)
+    validation_events: list[str] = Field(default_factory=list)
+    edge_decisions: list[dict[str, Any]] = Field(default_factory=list)
     planner_errors: list[str] = Field(default_factory=list)
     observed_evidence: list[dict[str, Any]] = Field(default_factory=list)
     retry_context: RetryState | None = None

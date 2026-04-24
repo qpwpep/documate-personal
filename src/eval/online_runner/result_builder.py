@@ -316,6 +316,8 @@ def build_case_result(
         llm_calls=parsed_response.llm_calls,
         planner_errors=parsed_response.planner_errors,
         error_codes=parsed_response.error_codes,
+        validation_events=parsed_response.validation_events,
+        edge_decisions=parsed_response.edge_decisions,
         debug_errors=parsed_response.debug_errors,
         runtime_errors=runtime_errors,
         response_errors=parsed_response.response_errors,
