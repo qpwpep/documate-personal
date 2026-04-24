@@ -4,11 +4,12 @@ from typing import Any, Literal
 
 from langchain_core.tools import StructuredTool
 
+from src.core.evidence import evidence_to_dicts
 from src.infra.settings import AppSettings
-from src.infra.tools._common import build_retrieval_payload, dedupe_evidence_dicts
+from src.infra.tools._common import build_retrieval_payload
 from src.infra.tools.docs_search import client
 from src.infra.tools.docs_search.policy import docs_search_rules, infer_docs_query_hint, normalize_include_domains
-from src.infra.tools.docs_search.ranking import filter_docs_evidence_by_topic_purity, has_meaningful_docs_evidence, merge_docs_evidence_items
+from src.infra.tools.docs_search.ranking import filter_docs_evidence_by_topic_purity, has_exact_identifier_coverage, has_meaningful_docs_evidence, merge_docs_evidence_items
 from src.infra.tools.docs_search.schemas import TavilyArgs
 from src.infra.tools.docs_search.serialization import collect_docs_search_evidence
 
@@ -25,6 +26,7 @@ def build_docs_search_tool(settings: AppSettings) -> Any:
         effective_query = str(query or "").strip()
         fallback_queries: list[str] = []
         hinted_domains: list[str] | None = None
+        library_name = ""
         if include_domains is None:
             query_hint = infer_docs_query_hint(effective_query)
             if query_hint is not None:
@@ -83,14 +85,19 @@ def build_docs_search_tool(settings: AppSettings) -> Any:
         raw_scores.extend(batch_raw_scores)
 
         for fallback_query in fallback_queries:
-            deduped_batch = dedupe_evidence_dicts(evidence_items)
+            deduped_batch = evidence_to_dicts(merge_docs_evidence_items(evidence_items))
             filtered_batch = filter_docs_evidence_by_topic_purity(
                 effective_query,
                 deduped_batch,
                 retrieval_warnings,
             )
             if has_meaningful_docs_evidence(filtered_batch):
-                break
+                if has_exact_identifier_coverage(
+                    effective_query,
+                    filtered_batch,
+                    library_name=library_name,
+                ):
+                    break
             try:
                 fallback_results = client.request_tavily_search(
                     query=fallback_query,
@@ -112,10 +119,17 @@ def build_docs_search_tool(settings: AppSettings) -> Any:
             evidence_items.extend(batch_evidence)
             raw_scores.extend(batch_raw_scores)
 
-        evidence = dedupe_evidence_dicts(merge_docs_evidence_items(evidence_items))
+        evidence = evidence_to_dicts(merge_docs_evidence_items(evidence_items))
         evidence = filter_docs_evidence_by_topic_purity(effective_query, evidence, retrieval_warnings)
         if evidence and not has_meaningful_docs_evidence(evidence):
             retrieval_warnings.append("docs_chrome_only")
+            evidence = []
+        if evidence and not has_exact_identifier_coverage(
+            effective_query,
+            evidence,
+            library_name=library_name,
+        ):
+            retrieval_warnings.append("identifier_coverage_incomplete")
             evidence = []
         return build_retrieval_payload(
             tool="tavily_search",

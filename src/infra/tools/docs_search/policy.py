@@ -84,9 +84,31 @@ def result_matches_domains(url: str, allowed_domains: set[str]) -> bool:
 
 def infer_docs_query_hint(query: str) -> tuple[str, list[str], list[str]] | None:
     lowered = str(query or "").lower()
+    best_match: tuple[tuple[int, int, int], tuple[str, list[str], list[str]]] | None = None
     for hint in docs_search_rules().query_hints:
-        if any(query_hint_matches(lowered, identifier, match_mode=hint.match_mode) for identifier in hint.identifiers):
-            return hint.library_name, list(hint.domains), list(hint.fallback_queries)
+        matched_identifiers = [
+            identifier
+            for identifier in hint.identifiers
+            if query_hint_matches(lowered, identifier, match_mode=hint.match_mode)
+        ]
+        if not matched_identifiers:
+            continue
+        library_name = str(hint.library_name or "").strip().lower()
+        non_library_matches = [
+            identifier
+            for identifier in matched_identifiers
+            if str(identifier or "").strip().lower() != library_name
+        ]
+        score = (
+            1 if non_library_matches else 0,
+            len(matched_identifiers),
+            max(len(str(identifier or "")) for identifier in matched_identifiers),
+        )
+        candidate = (hint.library_name, list(hint.domains), list(hint.fallback_queries))
+        if best_match is None or score > best_match[0]:
+            best_match = (score, candidate)
+    if best_match is not None:
+        return best_match[1]
     return None
 
 

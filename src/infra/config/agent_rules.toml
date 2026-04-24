@@ -75,7 +75,7 @@ trailing_docs_stop_phrases = [
   "요약해줘",
   "정리해줘",
 ]
-docs_identifier_pattern = "\\b(?:[A-Za-z][A-Za-z0-9._-]*|v\\d+)\\b"
+docs_identifier_pattern = "(?<![A-Za-z0-9_])(?:[A-Za-z][A-Za-z0-9._-]*|v\\d+)(?![A-Za-z0-9_])"
 docs_identifier_stopwords = [
   "from",
   "official",
@@ -221,7 +221,7 @@ match_mode = "word"
 identifiers = ["concat"]
 library_name = "pandas"
 domains = ["pandas.pydata.org"]
-fallback_queries = ["pandas concat user guide"]
+fallback_queries = ["pandas.concat api reference", "pandas concat user guide"]
 match_mode = "word"
 
 [[docs_search.query_hints]]
@@ -241,13 +241,22 @@ match_mode = "word"
 identifiers = ["dataloader", "dataset"]
 library_name = "pytorch"
 domains = ["docs.pytorch.org"]
-fallback_queries = ["DataLoader torch.utils.data"]
+fallback_queries = [
+  "torch.utils.data Dataset DataLoader",
+  "torch.utils.data.Dataset",
+  "torch.utils.data.DataLoader",
+  "DataLoader torch.utils.data",
+]
 
 [[docs_search.query_hints]]
 identifiers = ["pie", "matplotlib"]
 library_name = "matplotlib"
 domains = ["matplotlib.org"]
-fallback_queries = ["matplotlib.pyplot.pie api reference", "matplotlib pie chart api reference"]
+fallback_queries = [
+  "matplotlib.pyplot.pie parameters",
+  "matplotlib.pyplot.pie api reference",
+  "matplotlib pie chart api reference",
+]
 match_mode = "word"
 
 [[docs_search.query_hints]]
@@ -261,7 +270,12 @@ match_mode = "word"
 identifiers = ["field", "field_validator", "model_validate"]
 library_name = "pydantic"
 domains = ["docs.pydantic.dev"]
-fallback_queries = ["pydantic field concepts", "pydantic field_validator validation", "pydantic model_validate fields"]
+fallback_queries = [
+  "pydantic Field validation validator",
+  "pydantic field concepts",
+  "pydantic field_validator validation",
+  "pydantic model_validate fields",
+]
 match_mode = "word"
 
 [[docs_search.query_hints]]
