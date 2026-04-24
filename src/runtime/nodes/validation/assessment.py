@@ -8,7 +8,7 @@ from src.core.evidence import EvidenceItem
 from src.core.request_contracts import infer_answer_contract, missing_required_sections
 from src.runtime.nodes.retry import contains_tool_error
 from src.runtime.nodes.validation.models import ValidationAssessment, ValidationSnapshot
-from src.runtime.nodes.validation.route_policy import route_error_statuses, route_has_strong_lexical_match, route_has_warning, route_passes_validation, route_query_for_validation, route_score_avg, resolve_validation_query
+from src.runtime.nodes.validation.route_policy import route_error_statuses, route_score_avg
 from src.runtime.nodes.validation.snapshot import detect_missing_route_coverage, route_for_item_tool
 
 
@@ -29,10 +29,44 @@ def score_avg_for_failed_routes(
     return sum(scores) / len(scores)
 
 
-def assess_validation(snapshot: ValidationSnapshot) -> ValidationAssessment:
+def _empty_validation_assessment(
+    snapshot: ValidationSnapshot,
+    *,
+    blocked_missing_upload: bool = False,
+    tool_error_routes: set[str] | None = None,
+    route_failures: dict[str, RetryReason] | None = None,
+    valid_claims: list[Any] | None = None,
+    invalid_claims: list[Any] | None = None,
+    missing_route_coverage: list[str] | None = None,
+    missing_sections: list[str] | None = None,
+    has_grounded_response_payload: bool = False,
+    unsupported_claims: bool = False,
+    retry_reason: RetryReason | None = None,
+    failed_routes: set[str] | None = None,
+    score_avg: float | None = None,
+) -> ValidationAssessment:
+    return ValidationAssessment(
+        blocked_missing_upload=blocked_missing_upload,
+        tool_error_routes=tool_error_routes or set(),
+        route_failures=route_failures or {},
+        valid_claims=valid_claims or [],
+        invalid_claims=invalid_claims or [],
+        missing_route_coverage=missing_route_coverage or [],
+        missing_sections=missing_sections or [],
+        has_grounded_response_payload=has_grounded_response_payload,
+        unsupported_claims=unsupported_claims,
+        retry_reason=retry_reason,
+        failed_routes=failed_routes or set(),
+        score_avg=score_avg if score_avg is not None else route_score_avg(snapshot.parsed_evidence),
+    )
+
+
+def assess_retrieval_quality(snapshot: ValidationSnapshot) -> ValidationAssessment:
+    if not snapshot.retrieval_required:
+        return _empty_validation_assessment(snapshot)
+
     blocked_missing_upload = bool(
-        snapshot.retrieval_required
-        and "upload" in snapshot.required_routes
+        "upload" in snapshot.required_routes
         and any(
             str(item.status or "") == "unavailable"
             for item in snapshot.diagnostics_by_route.get("upload", [])
@@ -50,33 +84,38 @@ def assess_validation(snapshot: ValidationSnapshot) -> ValidationAssessment:
             continue
         if not route_items:
             route_failures[route] = "no_evidence"
-            continue
-        route_query = route_query_for_validation(route, route_diagnostics, snapshot.user_input)
-        validation_query = resolve_validation_query(
-            route=route,
-            route_query=route_query,
-            user_input=snapshot.user_input,
-            required_routes=snapshot.required_routes,
-        )
-        if not route_passes_validation(
-            route,
-            validation_query,
-            route_items,
-            required_routes=snapshot.required_routes,
-            diagnostics=route_diagnostics,
-        ):
-            route_failures[route] = "low_score"
-            continue
-        if (
-            route == "docs"
-            and route_has_warning(route_diagnostics)
-            and not route_has_strong_lexical_match(validation_query, route_items)
-        ):
-            route_failures[route] = "low_score"
 
     if contains_tool_error(snapshot.current_attempt_retrieval_errors) and not tool_error_routes:
         tool_error_routes = set(snapshot.required_routes)
 
+    retry_reason: RetryReason | None = None
+    failed_routes: set[str] = set()
+    if blocked_missing_upload:
+        retry_reason = "blocked_missing_upload"
+        failed_routes = {"upload"}
+    elif tool_error_routes:
+        retry_reason = "tool_error"
+        failed_routes = set(tool_error_routes)
+    elif route_failures:
+        retry_reason = "no_evidence"
+        failed_routes = set(route_failures)
+
+    score_avg = score_avg_for_failed_routes(failed_routes, snapshot.evidence_by_route)
+    if score_avg is None:
+        score_avg = route_score_avg(snapshot.parsed_evidence)
+
+    return _empty_validation_assessment(
+        snapshot,
+        blocked_missing_upload=blocked_missing_upload,
+        tool_error_routes=tool_error_routes,
+        route_failures=route_failures,
+        retry_reason=retry_reason,
+        failed_routes=failed_routes,
+        score_avg=score_avg,
+    )
+
+
+def assess_validation(snapshot: ValidationSnapshot) -> ValidationAssessment:
     valid_claims: list[Any] = []
     invalid_claims: list[Any] = []
     if snapshot.retrieval_required and snapshot.response_payload is not None:
@@ -110,8 +149,6 @@ def assess_validation(snapshot: ValidationSnapshot) -> ValidationAssessment:
 
     unsupported_claims = bool(
         snapshot.retrieval_required
-        and not route_failures
-        and not tool_error_routes
         and snapshot.response_payload is not None
         and (
             (snapshot.response_payload.answer.strip() and not snapshot.response_payload.claims)
@@ -121,18 +158,7 @@ def assess_validation(snapshot: ValidationSnapshot) -> ValidationAssessment:
 
     retry_reason: RetryReason | None = None
     failed_routes: set[str] = set()
-    if blocked_missing_upload:
-        retry_reason = "blocked_missing_upload"
-        failed_routes = {"upload"}
-    elif tool_error_routes:
-        retry_reason = "tool_error"
-        failed_routes = set(tool_error_routes)
-    elif route_failures:
-        failed_routes = set(route_failures)
-        retry_reason = "no_evidence" if any(
-            reason == "no_evidence" for reason in route_failures.values()
-        ) else "low_score"
-    elif unsupported_claims:
+    if unsupported_claims:
         retry_reason = "unsupported_claims"
         failed_routes = set(missing_route_coverage)
     elif missing_route_coverage:
@@ -145,10 +171,8 @@ def assess_validation(snapshot: ValidationSnapshot) -> ValidationAssessment:
     if score_avg is None:
         score_avg = route_score_avg(snapshot.parsed_evidence)
 
-    return ValidationAssessment(
-        blocked_missing_upload=blocked_missing_upload,
-        tool_error_routes=tool_error_routes,
-        route_failures=route_failures,
+    return _empty_validation_assessment(
+        snapshot,
         valid_claims=valid_claims,
         invalid_claims=invalid_claims,
         missing_route_coverage=missing_route_coverage,

@@ -5,75 +5,14 @@ import logging
 from src.core.contracts import GraphState
 from src.core.contracts.boundary.debug import get_debug_state
 from src.core.contracts.boundary.graph import get_retry_state
-from src.core.contracts.boundary.planner import get_planner_state, parse_planner_output
 from src.core.contracts.boundary.response import get_response_state
-from src.core.contracts.boundary.retrieval import get_retrieval_state
-from src.core.contracts.boundary.runtime import get_runtime_state
 from src.infra.logging_utils import log_event
-from src.core.evidence import parse_evidence_payload
-from src.core.sequence_utils import slice_from_index
 from src.runtime.nodes.retry import build_retry_update
-from src.runtime.nodes.validation.evidence_validator import ValidationAssessment, ValidationSnapshot, assess_validation, build_validation_snapshot, coerce_evidence_list
-from src.runtime.nodes.validation.policy import apply_validation_outcome, build_followup_updates
+from src.runtime.nodes.validation.evidence_validator import ValidationAssessment, ValidationSnapshot, assess_validation, collect_validation_snapshot
+from src.runtime.nodes.validation.policy import apply_validation_outcome
 
 
 logger = logging.getLogger(__name__)
-
-
-def _collect_validation_snapshot(state: GraphState) -> tuple[ValidationSnapshot, list[str]]:
-    local_errors: list[str] = []
-    parse_errors: list[str] = []
-    runtime = get_runtime_state(state)
-    planner = get_planner_state(state)
-    retrieval = get_retrieval_state(state)
-    response = get_response_state(state)
-    debug = get_debug_state(state)
-    retry_context = get_retry_state(state)
-
-    planner_output = parse_planner_output(planner.output, local_errors)
-    evidence_start_index = int(retry_context.evidence_start_index)
-    retrieval_error_start_index = int(retry_context.retrieval_error_start_index)
-    retrieval_diagnostic_start_index = int(retry_context.retrieval_diagnostic_start_index)
-
-    current_attempt_evidence_payload = slice_from_index(
-        retrieval.evidence_log,
-        evidence_start_index,
-    )
-    parsed_evidence = coerce_evidence_list(
-        parse_evidence_payload(
-            current_attempt_evidence_payload,
-            context="retrieved_evidence",
-            errors=parse_errors,
-        )
-    )
-    local_errors.extend(parse_errors)
-
-    current_attempt_retrieval_errors = [
-        str(error)
-        for error in slice_from_index(
-            debug.retrieval_errors,
-            retrieval_error_start_index,
-        )
-        if str(error).strip()
-    ]
-    current_attempt_retrieval_diagnostics = [
-        item
-        for item in slice_from_index(
-            debug.retrieval_diagnostics,
-            retrieval_diagnostic_start_index,
-        )
-        if item is not None
-    ]
-
-    snapshot = build_validation_snapshot(
-        user_input=runtime.user_input,
-        planner_output=planner_output,
-        parsed_evidence=parsed_evidence,
-        current_attempt_retrieval_errors=[*current_attempt_retrieval_errors, *parse_errors],
-        current_attempt_retrieval_diagnostics=current_attempt_retrieval_diagnostics,
-        response_payload=response.payload,
-    )
-    return snapshot, local_errors
 
 
 def _assess_route_failures(snapshot: ValidationSnapshot) -> ValidationAssessment:
@@ -123,31 +62,13 @@ def _apply_validation_outcome(
     )
 
 
-def make_validate_evidence_node(verbose: bool):
-    def validate_evidence(state: GraphState) -> GraphState:
-        planner = get_planner_state(state)
+def make_post_synthesis_validation_node(verbose: bool):
+    def post_synthesis_validation(state: GraphState) -> GraphState:
         response = get_response_state(state)
         debug = get_debug_state(state)
         retry_context = get_retry_state(state)
-        guided_followup = str(planner.guided_followup or "").strip()
 
-        planner_output = parse_planner_output(planner.output, [])
-        if guided_followup:
-            needs_retry, next_retry_context, _ = build_retry_update(
-                retry_context=retry_context,
-                retry_reason="blocked_missing_upload",
-                planner_output=planner_output,
-                retrieval_errors=[],
-                score_avg=None,
-            )
-            _ = needs_retry
-            updates: GraphState = {
-                "retry": next_retry_context,
-            }
-            updates.update(build_followup_updates(guided_followup, attempt=response.synthesis_attempt))
-            return updates
-
-        snapshot, local_errors = _collect_validation_snapshot(state)
+        snapshot, local_errors = collect_validation_snapshot(state)
         assessment = _assess_route_failures(snapshot)
         needs_retry, next_retry_context, retrieval_feedback, retry_errors = _decide_retry_outcome(
             snapshot=snapshot,
@@ -160,7 +81,7 @@ def make_validate_evidence_node(verbose: bool):
             log_event(
                 logger,
                 logging.INFO,
-                "validate_evidence",
+                "post_synthesis_validation",
                 retrieval_required=snapshot.retrieval_required,
                 evidence_count=len(snapshot.parsed_evidence),
                 needs_retry=needs_retry,
@@ -185,4 +106,8 @@ def make_validate_evidence_node(verbose: bool):
             )
         return updates
 
-    return validate_evidence
+    return post_synthesis_validation
+
+
+def make_validate_evidence_node(verbose: bool):
+    return make_post_synthesis_validation_node(verbose)
