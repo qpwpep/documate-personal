@@ -232,6 +232,33 @@ def _build_retrieval_updates(
     return updates
 
 
+def _emit_retrieval_progress_snapshot(
+    *,
+    progress_emitter: Any | None,
+    batch_result: RetrievalBatchResult,
+) -> None:
+    if progress_emitter is None or not hasattr(progress_emitter, "emit_progress_snapshot"):
+        return
+    route_counts: dict[str, int] = {}
+    for item in batch_result.retrieval_diagnostics:
+        route = str(item.route or "").strip()
+        if route:
+            route_counts[route] = route_counts.get(route, 0) + int(item.evidence_count or 0)
+    summary_parts = [
+        f"{route} {count}건"
+        for route, count in route_counts.items()
+        if count > 0
+    ]
+    summary = "근거 요약: " + (", ".join(summary_parts) if summary_parts else "관련 근거 없음")
+    progress_emitter.emit_progress_snapshot(
+        stage="retrieval",
+        summary=summary,
+        evidence_count=sum(route_counts.values()),
+        routes=route_counts,
+        statuses=[str(item.status or "") for item in batch_result.retrieval_diagnostics],
+    )
+
+
 def make_retrieve_dispatch_node(
     tavily_search_tool: Any,
     upload_search_tool: Any,
@@ -267,6 +294,10 @@ def make_retrieve_dispatch_node(
             route_handlers=route_handlers,
         )
         batch_result = _execute_retrieval_batch(batch_plan)
+        _emit_retrieval_progress_snapshot(
+            progress_emitter=getattr(runtime, "progress_emitter", None),
+            batch_result=batch_result,
+        )
 
         if verbose:
             routes = ",".join(task.route for task in planner_output.tasks)

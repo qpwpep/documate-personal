@@ -106,6 +106,9 @@ def process_chat_prompt(
 def _progress_message_for_event(event: AgentStreamEvent) -> str:
     if event.event == "request_started":
         return "요청 접수 중..."
+    if event.event == "progress_snapshot":
+        summary = str(event.data.get("summary") or "").strip()
+        return summary or "응답 준비 중..."
     if event.event not in {"stage_started", "heartbeat"}:
         return ""
     stage = str(event.data.get("stage") or "").strip()

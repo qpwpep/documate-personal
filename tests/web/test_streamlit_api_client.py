@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import unittest
 from unittest.mock import patch
@@ -157,16 +157,18 @@ class StreamlitApiClientTest(unittest.TestCase):
         chunks = [
             'event: request_started\ndata: {"request_id":"r',
             'eq-1"}\n\n',
+            'event: progress_snapshot\ndata: {"summary":"docs ready"}\n\n',
             'event: final_response\ndata: {"response":{"answer":"응',
             '답","evidence":[]},"file_path":"output/result.txt"}\n\n',
         ]
 
         events = list(_iter_sse_events(chunks))
 
-        self.assertEqual([event.event for event in events], ["request_started", "final_response"])
+        self.assertEqual([event.event for event in events], ["request_started", "progress_snapshot", "final_response"])
         self.assertEqual(events[0].data["request_id"], "req-1")
-        self.assertIsNotNone(events[1].result)
-        self.assertEqual(events[1].result.answer, "응답")
+        self.assertEqual(events[1].data["summary"], "docs ready")
+        self.assertIsNotNone(events[2].result)
+        self.assertEqual(events[2].result.answer, "응답")
 
     @patch("src.app.web.streamlit_api_client.get_agent_response")
     @patch("src.app.web.streamlit_api_client.requests.post")
