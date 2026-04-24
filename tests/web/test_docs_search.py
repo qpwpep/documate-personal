@@ -30,6 +30,100 @@ class DocsSearchTest(unittest.TestCase):
                 self.assertEqual(second_kwargs["query"], expected_fallback)
 
     @patch("src.infra.tools.docs_search.client.request_tavily_search")
+    def test_docs_search_applies_specific_fallback_hints(self, mock_request_tavily_search) -> None:
+        mock_request_tavily_search.return_value = {"results": []}
+        registry = build_tool_registry(AppSettings(openai_api_key="test", tavily_api_key="test"))
+
+        cases = [
+            (
+                "PyTorch Dataset DataLoader official docs",
+                "docs.pytorch.org",
+                "torch.utils.data Dataset DataLoader",
+            ),
+            (
+                "Pydantic v2 Field validation official docs",
+                "docs.pydantic.dev",
+                "pydantic Field validation validator",
+            ),
+            (
+                "pandas concat official docs",
+                "pandas.pydata.org",
+                "pandas.concat api reference",
+            ),
+            (
+                "matplotlib pie official docs",
+                "matplotlib.org",
+                "matplotlib.pyplot.pie parameters",
+            ),
+        ]
+
+        for query, expected_domain, expected_fallback in cases:
+            with self.subTest(query=query):
+                mock_request_tavily_search.reset_mock()
+                registry.tavily_search_tool.func(query=query)
+
+                self.assertGreaterEqual(len(mock_request_tavily_search.call_args_list), 2)
+                first_kwargs = mock_request_tavily_search.call_args_list[0].kwargs
+                second_kwargs = mock_request_tavily_search.call_args_list[1].kwargs
+                self.assertEqual(first_kwargs["include_domains"], [expected_domain])
+                self.assertEqual(second_kwargs["query"], expected_fallback)
+
+    @patch("src.infra.tools.docs_search.client.request_tavily_search")
+    def test_docs_search_continues_fallback_until_identifier_coverage_is_complete(self, mock_request_tavily_search) -> None:
+        mock_request_tavily_search.side_effect = [
+            {
+                "results": [
+                    {
+                        "url": "https://docs.pytorch.org/docs/stable/data.html#torch.utils.data.Dataset",
+                        "title": "torch.utils.data.Dataset",
+                        "content": "Dataset represents a dataset.",
+                        "score": 0.91,
+                    }
+                ]
+            },
+            {
+                "results": [
+                    {
+                        "url": "https://docs.pytorch.org/docs/stable/data.html#torch.utils.data.DataLoader",
+                        "title": "torch.utils.data.DataLoader",
+                        "content": "DataLoader loads data from a Dataset.",
+                        "score": 0.9,
+                    }
+                ]
+            },
+        ]
+
+        registry = build_tool_registry(AppSettings(openai_api_key="test", tavily_api_key="test"))
+        result = registry.tavily_search_tool.func(query="PyTorch Dataset DataLoader official docs")
+
+        self.assertEqual(len(mock_request_tavily_search.call_args_list), 2)
+        combined = " ".join(item["snippet"] for item in result["evidence"])
+        self.assertEqual(result["diagnostics"]["status"], "success")
+        self.assertIn("Dataset", combined)
+        self.assertIn("DataLoader", combined)
+
+    @patch("src.infra.tools.docs_search.client.request_tavily_search")
+    def test_docs_search_returns_no_result_when_identifier_coverage_stays_incomplete(self, mock_request_tavily_search) -> None:
+        dataset_only = {
+            "results": [
+                {
+                    "url": "https://docs.pytorch.org/docs/stable/data.html#torch.utils.data.Dataset",
+                    "title": "torch.utils.data.Dataset",
+                    "content": "Dataset represents a dataset.",
+                    "score": 0.91,
+                }
+            ]
+        }
+        mock_request_tavily_search.side_effect = [dataset_only, dataset_only, dataset_only, dataset_only, dataset_only]
+
+        registry = build_tool_registry(AppSettings(openai_api_key="test", tavily_api_key="test"))
+        result = registry.tavily_search_tool.func(query="PyTorch Dataset DataLoader official docs")
+
+        self.assertEqual(result["diagnostics"]["status"], "no_result")
+        self.assertEqual(result["evidence"], [])
+        self.assertIn("identifier_coverage_incomplete", result["diagnostics"]["warnings"])
+
+    @patch("src.infra.tools.docs_search.client.request_tavily_search")
     def test_docs_search_uses_fallback_when_first_batch_is_cross_library_only(self, mock_request_tavily_search) -> None:
         mock_request_tavily_search.side_effect = [
             {
