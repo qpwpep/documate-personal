@@ -79,7 +79,7 @@ def _upload_payload(query: str) -> dict:
 class GraphBuilderDebugTest(unittest.TestCase):
     def test_partial_debug_patch_preserves_existing_debug_fields(self) -> None:
         wrapped = _instrument_stage_node(
-            "validation",
+            "post_synthesis_validation",
             lambda _state: {
                 "debug": {
                     "validation_errors": ["unsupported evidence id detected"],
@@ -120,7 +120,9 @@ class GraphBuilderDebugTest(unittest.TestCase):
         self.assertEqual(len(debug.retrieval_diagnostics), 1)
         self.assertEqual(debug.retrieval_diagnostics[0].route, "docs")
         self.assertEqual(debug.validation_errors, ["unsupported evidence id detected"])
-        self.assertTrue(any(item.get("stage") == "validation" for item in debug.latency_trace))
+        self.assertTrue(
+            any(item.get("stage") == "post_synthesis_validation" for item in debug.latency_trace)
+        )
 
     @patch("src.runtime.graph_builder.make_synthesize_node")
     @patch("src.runtime.graph_builder.make_planner_node")
@@ -224,7 +226,8 @@ class GraphBuilderDebugTest(unittest.TestCase):
         stage_events = [
             item for item in debug.latency_trace if isinstance(item, dict) and item.get("kind") == "stage"
         ]
-        self.assertTrue(any(item.get("stage") == "validation" for item in stage_events))
+        self.assertTrue(any(item.get("stage") == "pre_synthesis_validation" for item in stage_events))
+        self.assertTrue(any(item.get("stage") == "post_synthesis_validation" for item in stage_events))
         self.assertTrue(any(item.get("stage") == "action_postprocess" for item in stage_events))
         self.assertEqual(debug.planner_errors, [])
         self.assertTrue(result["response"].final_answer)

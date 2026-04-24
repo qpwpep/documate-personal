@@ -13,7 +13,7 @@ from src.runtime.nodes.actions import make_action_postprocess_node
 from src.runtime.nodes.planner import make_planner_node
 from src.runtime.nodes.retrieval import make_retrieve_dispatch_node
 from src.runtime.nodes.session import add_user_message
-from src.runtime.nodes.validation import make_validate_evidence_node
+from src.runtime.nodes.validation import make_pre_synthesis_validation_node, make_validate_evidence_node
 from src.core.planner_schema import PlannerOutput, RetrievalTask
 
 from .helpers import (
@@ -179,6 +179,7 @@ class GraphRoutingTest(unittest.TestCase):
                 "messages": [AIMessage(content="final answer")],
                 "response": ResponseState(final_answer="final answer", synthesis_attempt=1),
             },
+            pre_synthesis_validation_node=make_pre_synthesis_validation_node(verbose=False),
             validate_evidence_node=make_validate_evidence_node(verbose=False),
             action_postprocess_node=lambda state: {},
             summary_max_turns=6,
@@ -244,11 +245,6 @@ class GraphRoutingTest(unittest.TestCase):
             synth_calls["count"] += 1
             answer = f"answer-{synth_calls['count']}"
             attempt = get_response_state(state).synthesis_attempt + 1
-            if synth_calls["count"] == 1:
-                return {
-                    "messages": [AIMessage(content=answer)],
-                    "response": ResponseState(final_answer=answer, synthesis_attempt=attempt),
-                }
             return {
                 "messages": [AIMessage(content=f"{answer} [1]")],
                 "response": ResponseState(
@@ -276,6 +272,7 @@ class GraphRoutingTest(unittest.TestCase):
             planner_node=planner_node,
             retrieve_dispatch_node=retrieve_dispatch,
             synthesize_node=_synthesize,
+            pre_synthesis_validation_node=make_pre_synthesis_validation_node(verbose=False),
             validate_evidence_node=make_validate_evidence_node(verbose=False),
             action_postprocess_node=lambda state: {},
             summary_max_turns=6,
@@ -289,8 +286,8 @@ class GraphRoutingTest(unittest.TestCase):
         )
         self.assertEqual(capture_planner.call_count, 0)
         self.assertEqual(docs_calls["count"], 2)
-        self.assertEqual(synth_calls["count"], 2)
-        self.assertEqual(result["response"].final_answer, "answer-2 [1]")
+        self.assertEqual(synth_calls["count"], 1)
+        self.assertEqual(result["response"].final_answer, "answer-1 [1]")
 
     def test_debug_survives_validation_and_action_stage_instrumentation(self) -> None:
         retrieve_dispatch = make_retrieve_dispatch_node(
@@ -376,7 +373,14 @@ class GraphRoutingTest(unittest.TestCase):
                 ),
             }
 
-        validate_node = _instrument_stage_node("validation", make_validate_evidence_node(verbose=False))
+        pre_validate_node = _instrument_stage_node(
+            "pre_synthesis_validation",
+            make_pre_synthesis_validation_node(verbose=False),
+        )
+        validate_node = _instrument_stage_node(
+            "post_synthesis_validation",
+            make_validate_evidence_node(verbose=False),
+        )
         action_node = _instrument_stage_node(
             "action_postprocess",
             make_action_postprocess_node(
@@ -400,6 +404,7 @@ class GraphRoutingTest(unittest.TestCase):
             },
             retrieve_dispatch_node=retrieve_dispatch,
             synthesize_node=_synthesize,
+            pre_synthesis_validation_node=pre_validate_node,
             validate_evidence_node=validate_node,
             action_postprocess_node=action_node,
             summary_max_turns=6,
@@ -416,6 +421,8 @@ class GraphRoutingTest(unittest.TestCase):
         self.assertEqual([item.tool for item in debug.retrieval_diagnostics], ["tavily_search"])
         self.assertEqual([item.stage for item in debug.llm_calls], ["synthesis"])
         stage_events = [item for item in debug.latency_trace if item.get("kind") == "stage"]
+        self.assertTrue(any(item.get("stage") == "pre_synthesis_validation" for item in stage_events))
+        self.assertTrue(any(item.get("stage") == "post_synthesis_validation" for item in stage_events))
         self.assertTrue(any(item.get("stage") == "action_postprocess" for item in stage_events))
         self.assertEqual(result["response"].final_answer, "NumPy broadcasting keeps compatible dimensions aligned [1]")
 
