@@ -125,3 +125,13 @@ class BoundaryAdaptersTest(unittest.TestCase):
 
         self.assertIsNone(retry_state.score_avg)
         self.assertEqual(retry_state.failed_routes, [])
+
+    def test_parse_retry_state_preserves_valid_retry_scope(self) -> None:
+        retry_state = parse_retry_state({"retry_scope": "reuse_evidence_resynthesize"})
+
+        self.assertEqual(retry_state.retry_scope, "reuse_evidence_resynthesize")
+
+    def test_parse_retry_state_ignores_invalid_retry_scope(self) -> None:
+        retry_state = parse_retry_state({"retry_scope": "unknown"})
+
+        self.assertEqual(retry_state.retry_scope, "refresh_routes")

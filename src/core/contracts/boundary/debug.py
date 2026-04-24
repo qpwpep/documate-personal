@@ -66,6 +66,10 @@ def parse_retry_state(value: Any) -> RetryState:
     if isinstance(failed_routes, list):
         retry_state.failed_routes = normalize_routes(failed_routes)
 
+    retry_scope = value.get("retry_scope")
+    if retry_scope in {"refresh_routes", "reuse_evidence_resynthesize"}:
+        retry_state.retry_scope = retry_scope
+
     preserved_evidence = value.get("preserved_evidence")
     if isinstance(preserved_evidence, list):
         retry_state.preserved_evidence = [
