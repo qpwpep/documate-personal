@@ -125,6 +125,18 @@ def _resolve_planner_strategy(
     return decision, planner_errors, llm_calls
 
 
+def _error_codes_from_planner_errors(errors: list[str]) -> list[str]:
+    codes: list[str] = []
+    for error in errors:
+        lowered = str(error or "").lower()
+        if (
+            "output validation failed" in lowered
+            or "schema" in lowered
+        ) and "PLANNER_SCHEMA_INVALID" not in codes:
+            codes.append("PLANNER_SCHEMA_INVALID")
+    return codes
+
+
 def _apply_planner_guardrail(
     *,
     decision: PlannerDecision,
@@ -241,9 +253,18 @@ def make_planner_node(llm_planner: Any, verbose: bool, max_turns: int = 6):
             "retry": retry_context,
         }
         if planner_errors or llm_calls:
+            planner_error_codes = _error_codes_from_planner_errors(planner_errors)
             updates["debug"] = debug.model_copy(
                 update={
                     "planner_errors": [*debug.planner_errors, *planner_errors],
+                    "error_codes": [
+                        *debug.error_codes,
+                        *[
+                            code
+                            for code in planner_error_codes
+                            if code not in debug.error_codes
+                        ],
+                    ],
                     "llm_calls": [*debug.llm_calls, *llm_calls],
                 }
             )

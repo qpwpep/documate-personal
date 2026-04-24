@@ -53,6 +53,7 @@ def build_local_rag_tools(settings: AppSettings) -> tuple[Any, Any]:
                 query=query,
                 status="unavailable",
                 message="local notebook index is unavailable",
+                error_code="RAG_INDEX_MISSING",
             )
         if not settings.openai_api_key:
             return build_retrieval_payload(

@@ -8,6 +8,24 @@ from src.core.contracts.debug import RetrievalDiagnostic
 from src.core.contracts.graph_state import RetrievalState
 
 
+_ERROR_CODES = {
+    "PLANNER_SCHEMA_INVALID",
+    "RETRIEVAL_DOCS_TIMEOUT",
+    "RETRIEVAL_DOCS_FAILED",
+    "RAG_INDEX_MISSING",
+    "LLM_STRUCTURED_EMPTY",
+    "SYNTHESIS_TIMEOUT",
+    "SLACK_AUTH_FAILED",
+    "SLACK_DESTINATION_MISSING",
+    "UPLOAD_PATH_INVALID",
+}
+
+
+def _parse_error_code(value: Any) -> str | None:
+    code = str(value or "").strip().upper()
+    return code if code in _ERROR_CODES else None
+
+
 def parse_retrieval_diagnostic(value: Any) -> RetrievalDiagnostic | None:
     if isinstance(value, RetrievalDiagnostic):
         return value
@@ -50,6 +68,7 @@ def parse_retrieval_diagnostic(value: Any) -> RetrievalDiagnostic | None:
         route=str(value.get("route") or "").strip(),
         status=str(value.get("status") or "").strip(),
         message=str(value.get("message") or ""),
+        error_code=_parse_error_code(value.get("error_code")),  # type: ignore[arg-type]
         query=str(value.get("query") or ""),
         attempt=max(0, attempt),
         evidence_count=max(0, evidence_count),
