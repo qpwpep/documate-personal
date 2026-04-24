@@ -67,6 +67,9 @@ def render_answer_contract_prompt(contract: AnswerContract) -> str:
     lines.append("- Do not omit required sections.")
     if contract.split_by_source:
         lines.append("- For hybrid compare tasks, keep official docs facts and uploaded code facts separate before writing the comparison.")
+        lines.append("- Keep official_docs, upload_code, and comparison section bodies to 2-3 short sentences each.")
+        lines.append("- Use at most 4 total claims for hybrid answers; prefer 3 claims when possible.")
+        lines.append("- Keep the comparison to 1-2 sentences about the official-docs match or difference.")
     return "\n".join(lines)
 
 

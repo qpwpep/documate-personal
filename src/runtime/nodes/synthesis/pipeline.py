@@ -6,7 +6,7 @@ from typing import Any
 from src.core.answer_schema import SynthesisOutput, build_empty_response_payload
 from src.core.contracts.debug import build_llm_call_metadata
 from src.core.latency import elapsed_ms, make_stage_latency_event, make_synthesis_attempt_latency_event
-from src.runtime.nodes.synthesis.fallback_renderers import RenderedSynthesisPayload, build_local_fallback_payload, render_synthesis_payload
+from src.runtime.nodes.synthesis.fallback_renderers import RenderedSynthesisPayload, build_local_fallback_payload, enforce_synthesis_output_budget, render_synthesis_payload
 from src.runtime.nodes.synthesis.models import PreparedSynthesisInputs, SynthesisPipelineResult
 from src.runtime.nodes.synthesis.schema_adapter import coerce_structured_synthesis_result, coerce_synthesis_output
 
@@ -114,6 +114,11 @@ def run_synthesis_pipeline(
             prepared=prepared,
             generic_answer=_DEFAULT_GENERIC_FALLBACK_ANSWER,
         )
+        rendered = enforce_synthesis_output_budget(
+            rendered=rendered,
+            evidence_items=prepared.primary_evidence_items,
+            budget_profile=prepared.budget_profile,
+        )
         if used_empty_fallback:
             synthesis_errors.append("synthesize: structured output was empty")
             fallback_ms = 0
@@ -142,6 +147,11 @@ def run_synthesis_pipeline(
                     rendered=rendered,
                     prepared=prepared,
                     generic_answer=_DEFAULT_GENERIC_FALLBACK_ANSWER,
+                )
+                rendered = enforce_synthesis_output_budget(
+                    rendered=rendered,
+                    evidence_items=prepared.primary_evidence_items,
+                    budget_profile=prepared.budget_profile,
                 )
                 fallback_ms = elapsed_ms(compact_started, time.perf_counter())
                 if used_empty_fallback:
