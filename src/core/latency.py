@@ -9,13 +9,16 @@ StageName = Literal[
     "summarize",
     "planner",
     "retrieval",
+    "pre_synthesis_validation",
     "synthesis",
+    "post_synthesis_validation",
     "validation",
     "action_postprocess",
 ]
 
 SynthesisMode = Literal[
     "structured_only",
+    "structured_empty_fallback",
     "timeout_grounded_fallback",
     "structured_error_plain_fallback",
     "compact_structured_fallback",
@@ -31,7 +34,9 @@ _STAGE_TOTAL_FIELD_BY_NAME: dict[StageName, str] = {
     "summarize": "summarize_ms",
     "planner": "planner_ms",
     "retrieval": "retrieval_total_ms",
+    "pre_synthesis_validation": "pre_synthesis_validation_ms",
     "synthesis": "synthesis_total_ms",
+    "post_synthesis_validation": "post_synthesis_validation_ms",
     "validation": "validation_ms",
     "action_postprocess": "action_postprocess_ms",
 }
@@ -41,7 +46,9 @@ class StageTotalsModel(BaseModel):
     summarize_ms: int = 0
     planner_ms: int = 0
     retrieval_total_ms: int = 0
+    pre_synthesis_validation_ms: int = 0
     synthesis_total_ms: int = 0
+    post_synthesis_validation_ms: int = 0
     validation_ms: int = 0
     action_postprocess_ms: int = 0
 

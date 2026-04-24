@@ -33,7 +33,9 @@ _LATENCY_STAGE_FIELDS: tuple[str, ...] = (
     "summarize_ms",
     "planner_ms",
     "retrieval_total_ms",
+    "pre_synthesis_validation_ms",
     "synthesis_total_ms",
+    "post_synthesis_validation_ms",
     "validation_ms",
     "action_postprocess_ms",
 )
