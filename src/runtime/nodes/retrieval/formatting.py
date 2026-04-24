@@ -55,6 +55,7 @@ def format_evidence_for_prompt(
     items: list[dict[str, Any]],
     *,
     max_snippet_chars: int = 280,
+    preserve_local_snippets: bool = False,
 ) -> str:
     if not items:
         return "No retrieved evidence."
@@ -66,7 +67,7 @@ def format_evidence_for_prompt(
         source_id = str(item.get("source_id") or "").strip()
         title = str(item.get("title") or "").strip()
         raw_snippet = str(item.get("snippet") or "").strip()
-        snippet = raw_snippet if _is_local_evidence(item) else _truncate_prompt_snippet(
+        snippet = raw_snippet if preserve_local_snippets and _is_local_evidence(item) else _truncate_prompt_snippet(
             raw_snippet,
             max_chars=max_snippet_chars,
         )
