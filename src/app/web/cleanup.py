@@ -50,16 +50,16 @@ def validate_upload_file_path(upload_file_path: str | None, session_id: str) -> 
         else:
             candidate_path = candidate_path.resolve()
     except Exception as exc:
-        raise HTTPException(status_code=400, detail="Invalid upload_file_path") from exc
+        raise HTTPException(status_code=400, detail="UPLOAD_PATH_INVALID: Invalid upload_file_path") from exc
 
     if session_upload_dir not in candidate_path.parents:
-        raise HTTPException(status_code=400, detail="Invalid upload file location")
+        raise HTTPException(status_code=400, detail="UPLOAD_PATH_INVALID: Invalid upload file location")
 
     if candidate_path.suffix.lower() not in ALLOWED_UPLOAD_SUFFIXES:
-        raise HTTPException(status_code=400, detail="Unsupported upload file type")
+        raise HTTPException(status_code=400, detail="UPLOAD_PATH_INVALID: Unsupported upload file type")
 
     if not candidate_path.is_file():
-        raise HTTPException(status_code=400, detail="Upload file not found")
+        raise HTTPException(status_code=400, detail="UPLOAD_PATH_INVALID: Upload file not found")
 
     return str(candidate_path)
 

@@ -5,6 +5,17 @@ from typing import Any, Literal
 from langchain_core.messages import AIMessage
 from pydantic import BaseModel, Field
 
+ErrorCode = Literal[
+    "PLANNER_SCHEMA_INVALID",
+    "RETRIEVAL_DOCS_TIMEOUT",
+    "RETRIEVAL_DOCS_FAILED",
+    "RAG_INDEX_MISSING",
+    "LLM_STRUCTURED_EMPTY",
+    "SYNTHESIS_TIMEOUT",
+    "SLACK_AUTH_FAILED",
+    "SLACK_DESTINATION_MISSING",
+    "UPLOAD_PATH_INVALID",
+]
 RetryReason = Literal[
     "no_evidence",
     "low_score",
@@ -107,6 +118,7 @@ class RetrievalDiagnostic(BaseModel):
     route: str = ""
     status: str = ""
     message: str = ""
+    error_code: ErrorCode | None = None
     query: str = ""
     attempt: int = 0
     evidence_count: int = 0
@@ -132,6 +144,7 @@ class SlackActionResult(BaseModel):
     target_type: str | None = None
     error: str | None = None
     reason: str | None = None
+    error_code: ErrorCode | None = None
 
 
 class SaveTextActionResult(BaseModel):
@@ -139,6 +152,7 @@ class SaveTextActionResult(BaseModel):
     file_path: str | None = None
     error: str | None = None
     message: str | None = None
+    error_code: ErrorCode | None = None
 
 
 class ActionResults(BaseModel):
@@ -157,6 +171,7 @@ class DebugPayload(BaseModel):
     models_used: list[str] = Field(default_factory=list)
     llm_calls: list[LLMCallMetadata] = Field(default_factory=list)
     errors: list[str] = Field(default_factory=list)
+    error_codes: list[ErrorCode] = Field(default_factory=list)
     planner_errors: list[str] = Field(default_factory=list)
     observed_evidence: list[dict[str, Any]] = Field(default_factory=list)
     retry_context: RetryState | None = None

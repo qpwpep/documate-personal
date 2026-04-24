@@ -54,6 +54,7 @@ def normalize_retrieval_diagnostic(
         route=str(diagnostics.get("route") or route or route_for_tool(tool_name)),
         status=status,
         message=message,
+        error_code=diagnostics.get("error_code"),
         query=str(diagnostics.get("query") or query),
         attempt=diagnostic_attempt,
         evidence_count=int(diagnostics.get("evidence_count", evidence_count) or evidence_count),
@@ -140,6 +141,7 @@ def execute_retrieval_task(
                 "route": route,
                 "status": "error",
                 "message": f"tool invocation failed ({exc})",
+                "error_code": "RETRIEVAL_DOCS_FAILED" if route == "docs" else None,
                 "query": task.query,
             },
         }

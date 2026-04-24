@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from src.core.contracts.debug import ActionResults, DEBUG_SCHEMA_VERSION, DebugPayload, LLMCallMetadata, RetryState, SaveTextActionResult, SlackActionResult, TokenUsage, json_safe_deep_copy
+from src.core.contracts.debug import ActionResults, DEBUG_SCHEMA_VERSION, DebugPayload, ErrorCode, LLMCallMetadata, RetryState, SaveTextActionResult, SlackActionResult, TokenUsage, json_safe_deep_copy
 from src.core.contracts.graph_state import DebugState
 from src.core.contracts.routes import normalize_routes
 from src.core.contracts.boundary.planner import parse_planner_diagnostic
@@ -134,6 +134,18 @@ def parse_llm_calls(value: Any) -> list[LLMCallMetadata]:
     return calls
 
 
+def parse_error_codes(value: Any) -> list[ErrorCode]:
+    allowed = set(ErrorCode.__args__)  # type: ignore[attr-defined]
+    if not isinstance(value, list):
+        return []
+    parsed: list[ErrorCode] = []
+    for item in value:
+        code = str(item or "").strip().upper()
+        if code in allowed and code not in parsed:
+            parsed.append(code)  # type: ignore[arg-type]
+    return parsed
+
+
 def parse_token_usage(value: Any) -> TokenUsage | None:
     if isinstance(value, TokenUsage):
         return value
@@ -166,6 +178,7 @@ def parse_action_results(value: Any) -> ActionResults | None:
             target_type=(str(slack_payload.get("target_type")).strip() if slack_payload.get("target_type") else None),
             error=(str(slack_payload.get("error")).strip() if slack_payload.get("error") else None),
             reason=(str(slack_payload.get("reason")).strip() if slack_payload.get("reason") else None),
+            error_code=(parse_error_codes([slack_payload.get("error_code")]) or [None])[0],
         )
 
     save_payload = value.get("save_text")
@@ -177,6 +190,7 @@ def parse_action_results(value: Any) -> ActionResults | None:
             file_path=(str(save_payload.get("file_path")).strip() if save_payload.get("file_path") else None),
             error=(str(save_payload.get("error")).strip() if save_payload.get("error") else None),
             message=(str(save_payload.get("message")).strip() if save_payload.get("message") else None),
+            error_code=(parse_error_codes([save_payload.get("error_code")]) or [None])[0],
         )
 
     return ActionResults(**payload) if payload else None
@@ -230,6 +244,7 @@ def parse_debug_payload(value: Any) -> DebugPayload:
         errors=[str(item) for item in value.get("errors", []) if str(item).strip()]
         if isinstance(value.get("errors"), list)
         else [],
+        error_codes=parse_error_codes(value.get("error_codes")),
         planner_errors=[str(item) for item in value.get("planner_errors", []) if str(item).strip()]
         if isinstance(value.get("planner_errors"), list)
         else [],

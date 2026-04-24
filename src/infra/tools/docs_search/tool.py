@@ -41,12 +41,14 @@ def build_docs_search_tool(settings: AppSettings) -> Any:
                 timeout_seconds=settings.docs_search_timeout_seconds,
             )
         except Exception as exc:
+            is_timeout = isinstance(exc, TimeoutError) or "timeout" in str(exc).lower() or "timed out" in str(exc).lower()
             return build_retrieval_payload(
                 tool="tavily_search",
                 route="docs",
                 query=effective_query,
                 status="error",
                 message=f"invoke failed ({exc})",
+                error_code="RETRIEVAL_DOCS_TIMEOUT" if is_timeout else "RETRIEVAL_DOCS_FAILED",
             )
 
         if not isinstance(raw_results, dict):
@@ -56,6 +58,7 @@ def build_docs_search_tool(settings: AppSettings) -> Any:
                 query=effective_query,
                 status="error",
                 message="unexpected response type from Tavily",
+                error_code="RETRIEVAL_DOCS_FAILED",
             )
         results = raw_results.get("results")
         if not isinstance(results, list):
@@ -65,6 +68,7 @@ def build_docs_search_tool(settings: AppSettings) -> Any:
                 query=effective_query,
                 status="error",
                 message="missing or invalid Tavily results payload",
+                error_code="RETRIEVAL_DOCS_FAILED",
             )
 
         evidence_items = []
