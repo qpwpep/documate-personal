@@ -85,6 +85,16 @@ class ProgressEmitter:
             payload["status"] = str(status)
         self._publish("stage_completed", payload)
 
+    def emit_progress_snapshot(self, *, stage: StageName, summary: str, **data: Any) -> None:
+        payload = {
+            "stage": stage,
+            "summary": str(summary or "").strip(),
+        }
+        for key, value in data.items():
+            if value is not None:
+                payload[str(key)] = value
+        self._publish("progress_snapshot", payload)
+
     def emit_error(self, *, message: str, stage: StageName | None = None) -> None:
         with self._lock:
             active_stage = stage or self._current_stage

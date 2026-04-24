@@ -6,6 +6,8 @@ from typing import Any
 
 from src.core.contracts import GraphState
 from src.core.contracts.boundary.debug import get_debug_state
+from src.core.contracts.boundary.runtime import get_runtime_state
+from src.core.request_contracts import infer_answer_contract
 from src.infra.logging_utils import log_event
 from src.runtime.nodes.synthesis.budgets import compact_synthesis_budget_profile, resolve_synthesis_budget_profile
 from src.runtime.nodes.synthesis.context import build_synthesis_context, prepare_synthesis_inputs
@@ -93,6 +95,21 @@ def make_synthesize_node(
             prompt_snippet_char_limit=min(prompt_snippet_char_limit, budget_profile.snippet_chars),
             prompt_evidence_char_budget=budget_profile.evidence_chars,
         )
+        progress_emitter = get_runtime_state(state).progress_emitter
+        if progress_emitter is not None and hasattr(progress_emitter, "emit_progress_snapshot"):
+            required_routes = [task.route for task in context.planner_output.tasks]
+            contract = infer_answer_contract(context.user_input, required_routes)
+            sections = list(contract.required_sections)
+            progress_emitter.emit_progress_snapshot(
+                stage="synthesis",
+                summary=(
+                    "답변 섹션 준비: " + ", ".join(sections)
+                    if sections
+                    else "답변 근거를 종합하는 중..."
+                ),
+                sections=sections,
+                evidence_count=len(prepared.deduped_evidence),
+            )
         if verbose and prepared.history_before != prepared.history_after:
             log_event(
                 logger,

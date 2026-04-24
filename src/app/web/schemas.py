@@ -28,6 +28,8 @@ class AgentDebugInfo(BaseModel):
     llm_calls: list[LLMCallMetadata] = Field(default_factory=list)
     errors: list[str] = Field(default_factory=list)
     error_codes: list[ErrorCode] = Field(default_factory=list)
+    validation_events: list[str] = Field(default_factory=list)
+    edge_decisions: list[dict[str, Any]] = Field(default_factory=list)
     planner_errors: list[str] = Field(default_factory=list)
     observed_evidence: list[EvidenceItem] = Field(default_factory=list)
     retry_context: AgentRetryContext | None = None
@@ -58,6 +60,7 @@ AgentStreamEventName = Literal[
     "stage_started",
     "stage_completed",
     "heartbeat",
+    "progress_snapshot",
     "final_response",
     "error",
     "done",
