@@ -8,7 +8,7 @@ from typing import Any
 import requests
 
 from src.core.answer_schema.models import AnswerSection, ClaimItem
-from src.core.contracts.boundary.debug import parse_action_results, parse_llm_calls, parse_token_usage
+from src.core.contracts.boundary.debug import parse_action_results, parse_error_codes, parse_llm_calls, parse_token_usage
 from src.core.contracts.boundary.planner import parse_planner_diagnostic
 from src.core.contracts.boundary.retrieval import parse_retrieval_diagnostics
 from src.core.contracts.debug import DEBUG_CRITICAL_FIELDS, DEBUG_REQUIRED_FIELDS, DEBUG_SCHEMA_VERSION
@@ -42,6 +42,7 @@ class ParsedResponseData:
     tool_call_count: int = 0
     token_usage: TokenUsage | None = None
     llm_calls: list[LLMCallMetadata] = field(default_factory=list)
+    error_codes: list[str] = field(default_factory=list)
     planner_errors: list[str] = field(default_factory=list)
     debug_errors: list[str] = field(default_factory=list)
     runtime_errors: list[str] = field(default_factory=list)
@@ -359,6 +360,7 @@ def parse_agent_response(response: requests.Response) -> ParsedResponseData:
             debug_payload.get("llm_calls"),
             response_errors=parsed.response_errors,
         )
+        parsed.error_codes = parse_error_codes(debug_payload.get("error_codes"))
         parsed.debug_errors = _parse_string_list(
             debug_payload.get("errors"),
             label="debug.errors",

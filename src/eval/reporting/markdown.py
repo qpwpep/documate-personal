@@ -49,6 +49,17 @@ def _render_analysis(lines: list[str], summary: RunSummary) -> None:
         lines.append("No planner errors observed.")
 
     lines.append("")
+    lines.append("### Error Codes")
+    lines.append("")
+    if analysis.error_code_histogram:
+        lines.append("| category | error_code | count |")
+        lines.append("|---|---|---:|")
+        for row in analysis.error_code_histogram:
+            lines.append(f"| {row.category} | {row.error_code} | {row.count} |")
+    else:
+        lines.append("No standardized error codes observed.")
+
+    lines.append("")
     lines.append("### Retrieval Diagnostics")
     lines.append("")
     if analysis.retrieval_route_status_histogram:
