@@ -10,6 +10,7 @@ from src.core.evidence import EvidenceItem, dedupe_evidence, evidence_to_dicts, 
 from src.core.prompts import needs_save, needs_slack
 from src.core.sequence_utils import slice_from_index
 from src.runtime.nodes.actions import get_slack_destinations
+from src.runtime.nodes.synthesis.budgets import SynthesisBudgetProfile
 from src.runtime.nodes.synthesis.evidence_selection import select_grounded_fallback_evidence_items, select_primary_evidence_items
 from src.runtime.nodes.synthesis.models import PreparedSynthesisInputs, SynthesisContext
 from src.runtime.nodes.synthesis.prompt_builder import build_synthesis_messages
@@ -102,11 +103,14 @@ def prepare_synthesis_inputs(
     *,
     state: GraphState,
     context: SynthesisContext,
+    budget_profile: SynthesisBudgetProfile,
     max_turns: int,
     prompt_snippet_char_limit: int,
     prompt_evidence_char_budget: int | None,
 ) -> PreparedSynthesisInputs:
-    deduped_evidence = evidence_to_dicts(context.primary_evidence_items)
+    deduped_evidence = evidence_to_dicts(
+        context.primary_evidence_items[: max(0, int(budget_profile.max_evidence_items))]
+    )
     model_messages, history_before, history_after = build_synthesis_messages(
         state=state,
         action_rules=_build_action_rules(
@@ -122,6 +126,7 @@ def prepare_synthesis_inputs(
     return PreparedSynthesisInputs(
         attempt=context.attempt,
         user_input=context.user_input,
+        budget_profile=budget_profile,
         parse_errors=context.parse_errors,
         planner_parse_errors=context.planner_parse_errors,
         retrieval_required=context.retrieval_required,
