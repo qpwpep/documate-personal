@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from src.core.contracts import SessionMetadata
-from src.core.contracts.boundary.debug import parse_action_results, parse_llm_calls, parse_retry_state, parse_token_usage
+from src.core.contracts.boundary.debug import parse_action_results, parse_error_codes, parse_llm_calls, parse_retry_state, parse_token_usage
 from src.core.contracts.boundary.planner import parse_planner_diagnostic
 from src.core.contracts.boundary.retrieval import parse_retrieval_diagnostics
 from src.core.contracts.boundary.runtime import parse_slack_destination
@@ -27,6 +27,7 @@ def normalize_debug_info(raw_debug: dict | None, latency_ms_server: int | None) 
     critical_missing = [field for field in missing_required_debug_fields if field in DEBUG_CRITICAL_FIELDS]
     tool_calls = debug.get("tool_calls") or []
     errors = debug.get("errors") or []
+    error_codes_raw = debug.get("error_codes") or []
     planner_errors_raw = debug.get("planner_errors") or []
     observed_evidence_raw = debug.get("observed_evidence") or []
     models_used_raw = debug.get("models_used")
@@ -97,6 +98,7 @@ def normalize_debug_info(raw_debug: dict | None, latency_ms_server: int | None) 
         models_used=models_used,
         llm_calls=llm_calls,
         errors=[str(error) for error in errors if error],
+        error_codes=parse_error_codes(error_codes_raw),
         planner_errors=[str(error) for error in planner_errors_raw if error]
         if isinstance(planner_errors_raw, list)
         else [],

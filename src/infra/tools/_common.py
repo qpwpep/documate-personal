@@ -22,6 +22,7 @@ def build_retrieval_payload(
     metric: str | None = None,
     score_direction: Literal["higher_is_better", "lower_is_better"] | None = None,
     warnings: list[str] | None = None,
+    error_code: str | None = None,
 ) -> dict[str, Any]:
     evidence_items = list(evidence or [])
     resolved_metric = metric or ("provider_score" if route == "docs" else "l2")
@@ -44,6 +45,7 @@ def build_retrieval_payload(
             "route": route,
             "status": status,
             "message": message,
+            "error_code": str(error_code or "").strip().upper() or None,
             "query": query,
             "evidence_count": len(evidence_items),
             "metric": resolved_metric,

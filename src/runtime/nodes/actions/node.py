@@ -71,7 +71,11 @@ def make_action_postprocess_node(
                     target="auto",
                 )
             except Exception as exc:
-                slack_result = {"status": "error", "error": str(exc)}
+                slack_result = {
+                    "status": "error",
+                    "error": str(exc),
+                    "error_code": "SLACK_AUTH_FAILED",
+                }
                 action_errors.append(f"slack_notify: failed ({exc})")
             tool_messages.append(build_tool_message("slack_notify", slack_result, 1))
             slack_receipt = build_slack_receipt(slack_result=slack_result, destinations=destinations)
@@ -101,8 +105,22 @@ def make_action_postprocess_node(
         if response_override_messages or tool_messages:
             updates["messages"] = [*response_override_messages, *tool_messages]
         if action_errors:
+            action_error_codes = []
+            for result in (locals().get("slack_result"), locals().get("save_result")):
+                if isinstance(result, dict) and result.get("error_code") and result.get("error_code") not in action_error_codes:
+                    action_error_codes.append(result.get("error_code"))
             updates["debug"] = debug.model_copy(
-                update={"action_errors": [*debug.action_errors, *action_errors]}
+                update={
+                    "action_errors": [*debug.action_errors, *action_errors],
+                    "error_codes": [
+                        *debug.error_codes,
+                        *[
+                            code
+                            for code in action_error_codes
+                            if code not in debug.error_codes
+                        ],
+                    ],
+                }
             )
         return updates
 

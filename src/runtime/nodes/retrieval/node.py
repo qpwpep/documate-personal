@@ -208,11 +208,24 @@ def _build_retrieval_updates(
         "messages": batch_result.tool_messages,
     }
     if planner_errors or batch_result.local_errors or batch_result.retrieval_diagnostics or batch_result.latency_trace:
+        retrieval_error_codes = [
+            diagnostic.error_code
+            for diagnostic in batch_result.retrieval_diagnostics
+            if diagnostic.error_code
+        ]
         updates["debug"] = debug.model_copy(
             update={
                 "planner_errors": [*debug.planner_errors, *planner_errors],
                 "retrieval_errors": [*debug.retrieval_errors, *batch_result.local_errors],
                 "retrieval_diagnostics": [*debug.retrieval_diagnostics, *batch_result.retrieval_diagnostics],
+                "error_codes": [
+                    *debug.error_codes,
+                    *[
+                        code
+                        for code in retrieval_error_codes
+                        if code not in debug.error_codes
+                    ],
+                ],
                 "latency_trace": [*debug.latency_trace, *batch_result.latency_trace],
             }
         )

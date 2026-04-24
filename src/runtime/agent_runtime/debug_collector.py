@@ -46,6 +46,7 @@ class DebugCollector:
                     "target_type": str(payload.get("target_type") or "").strip() or None,
                     "error": str(payload.get("error") or "").strip() or None,
                     "reason": str(payload.get("reason") or "").strip() or None,
+                    "error_code": str(payload.get("error_code") or "").strip().upper() or None,
                 }
             elif tool_name == "save_text":
                 action_results["save_text"] = {
@@ -53,6 +54,7 @@ class DebugCollector:
                     "file_path": str(payload.get("file_path") or "").strip() or None,
                     "error": str(payload.get("error") or "").strip() or None,
                     "message": str(payload.get("message") or "").strip() or None,
+                    "error_code": str(payload.get("error_code") or "").strip().upper() or None,
                 }
         return action_results or None
 
@@ -215,6 +217,41 @@ class DebugCollector:
         diagnostics = parse_planner_diagnostic(raw_planner_diagnostics)
         return diagnostics.model_dump(mode="json") if diagnostics is not None else None
 
+    @staticmethod
+    def _collect_error_codes(
+        *,
+        state_error_codes: list[str],
+        retrieval_diagnostics: list[dict[str, Any]],
+        action_results: dict[str, Any] | None,
+        planner_errors: list[str],
+        debug_errors: list[str],
+    ) -> list[str]:
+        codes: list[str] = []
+
+        def add(code: Any) -> None:
+            normalized = str(code or "").strip().upper()
+            if normalized and normalized not in codes:
+                codes.append(normalized)
+
+        for code in state_error_codes:
+            add(code)
+        for diagnostic in retrieval_diagnostics:
+            add(diagnostic.get("error_code"))
+        for result in (action_results or {}).values():
+            if isinstance(result, dict):
+                add(result.get("error_code"))
+        for error in planner_errors:
+            lowered = str(error or "").lower()
+            if "output validation failed" in lowered or "schema" in lowered:
+                add("PLANNER_SCHEMA_INVALID")
+        for error in debug_errors:
+            lowered = str(error or "").lower()
+            if "structured output was empty" in lowered:
+                add("LLM_STRUCTURED_EMPTY")
+            if "timed out" in lowered or "timeout" in lowered:
+                add("SYNTHESIS_TIMEOUT")
+        return codes
+
     def build(
         self,
         *,
@@ -284,6 +321,13 @@ class DebugCollector:
             state_planner.diagnostics.model_dump(mode="json")
         )
         action_results = self._extract_action_results(current_turn_messages)
+        error_codes = self._collect_error_codes(
+            state_error_codes=list(state_debug.error_codes),
+            retrieval_diagnostics=retrieval_diagnostics,
+            action_results=action_results,
+            planner_errors=planner_errors,
+            debug_errors=debug_errors,
+        )
         latency_breakdown = build_latency_breakdown(
             raw_trace=[item for item in state_debug.latency_trace],
             graph_total_ms=graph_total_ms,
@@ -301,6 +345,7 @@ class DebugCollector:
             "models_used": models_used,
             "llm_calls": llm_calls,
             "errors": debug_errors,
+            "error_codes": error_codes,
             "planner_errors": planner_errors,
             "observed_evidence": observed_evidence,
             "retry_context": retry_context,

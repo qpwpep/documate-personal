@@ -23,7 +23,11 @@ def build_slack_notify_tool(settings: AppSettings) -> Any:
         _ = target
 
         if not slack_client:
-            return {"status": "skipped", "reason": "SLACK_BOT_TOKEN not set"}
+            return {
+                "status": "skipped",
+                "reason": "SLACK_BOT_TOKEN not set",
+                "error_code": "SLACK_AUTH_FAILED",
+            }
 
         resolved_id, target_type = resolve_destination(
             slack_client=slack_client,
@@ -35,13 +39,17 @@ def build_slack_notify_tool(settings: AppSettings) -> Any:
         )
 
         if not resolved_id:
-            return {"status": "skipped", "reason": "No valid Slack destination resolved"}
+            return {
+                "status": "skipped",
+                "reason": "No valid Slack destination resolved",
+                "error_code": "SLACK_DESTINATION_MISSING",
+            }
 
         try:
             slack_client.chat_postMessage(channel=resolved_id, text=text)
             return {"status": "ok", "channel_id": resolved_id, "target_type": target_type}
         except SlackApiError as exc:
-            return {"status": "error", "error": str(exc)}
+            return {"status": "error", "error": str(exc), "error_code": "SLACK_AUTH_FAILED"}
 
     return StructuredTool.from_function(
         name="slack_notify",
