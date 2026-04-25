@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import math
 from typing import Any
 
@@ -49,6 +50,65 @@ def _is_local_evidence(item: dict[str, Any]) -> bool:
     return str(item.get("kind") or "").strip().lower() == "local"
 
 
+def _coerce_code_metadata(value: Any) -> dict[str, Any]:
+    payload = value
+    if isinstance(value, str):
+        try:
+            payload = json.loads(value)
+        except json.JSONDecodeError:
+            return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _option_literals_from_code_metadata(code_metadata: dict[str, Any]) -> list[str]:
+    options: list[str] = []
+    seen: set[str] = set()
+    for option in code_metadata.get("option_literals") or []:
+        option_text = " ".join(str(option or "").split())
+        compact = "".join(option_text.lower().split())
+        if not option_text or compact in seen:
+            continue
+        options.append(option_text)
+        seen.add(compact)
+    return options
+
+
+def _call_candidate(call: dict[str, Any]) -> str:
+    call_name = str(call.get("call_name") or "").strip()
+    if not call_name:
+        return ""
+    kwargs = call.get("kwargs")
+    if not isinstance(kwargs, dict) or not kwargs:
+        return call_name
+    rendered_kwargs = ", ".join(
+        f"{key}={value}"
+        for key, value in kwargs.items()
+        if str(key).strip() and str(value).strip()
+    )
+    return f"{call_name}({rendered_kwargs})" if rendered_kwargs else call_name
+
+
+def _candidate_facts_for_item(
+    item: dict[str, Any],
+    *,
+    snippet: str,
+    code_metadata: dict[str, Any],
+    max_snippet_chars: int,
+) -> list[str]:
+    if _is_local_evidence(item):
+        facts = _option_literals_from_code_metadata(code_metadata)
+        if not facts:
+            facts = [
+                _call_candidate(call)
+                for call in code_metadata.get("calls") or []
+                if isinstance(call, dict)
+            ]
+        return [fact for fact in facts if fact][:4]
+
+    fact = _truncate_prompt_snippet(snippet, max_chars=min(max_snippet_chars, 220))
+    return [fact] if fact else []
+
+
 # Final guardrail for prompt rendering. Synthesis callers should pass
 # max_snippet_chars explicitly so this formatter stays aligned with upstream budgets.
 def format_evidence_for_prompt(
@@ -71,6 +131,13 @@ def format_evidence_for_prompt(
             raw_snippet,
             max_chars=max_snippet_chars,
         )
+        code_metadata = _coerce_code_metadata(item.get("code_metadata"))
+        candidate_facts = _candidate_facts_for_item(
+            item,
+            snippet=snippet,
+            code_metadata=code_metadata,
+            max_snippet_chars=max_snippet_chars,
+        )
         score = _normalize_relevance_score(item.get("score"))
         chunk_id = item.get("chunk_id")
         cell_id = _normalize_cell_id(item.get("cell_id"))
@@ -92,6 +159,13 @@ def format_evidence_for_prompt(
                 location_parts.append(f"offsets={start_offset}-{end_offset}")
             if location_parts:
                 lines.append(f"   location: {', '.join(location_parts)}")
+        if candidate_facts:
+            lines.append(f"   candidate_facts: {'; '.join(candidate_facts)}")
+        if code_metadata:
+            lines.append(
+                "   code_metadata: "
+                + json.dumps(code_metadata, ensure_ascii=False, sort_keys=True)
+            )
         if snippet:
             lines.append(f"   snippet: {snippet}")
     return "\n".join(lines)
