@@ -839,7 +839,10 @@ class SynthesisValidationTest(unittest.TestCase):
         self.assertEqual(_response(updates).final_answer, "synth result")
         sent_messages = capture_llm.last_messages or []
         self.assertEqual(str(sent_messages[0].content), SYS_POLICY)
-        self.assertIn("[Conversation Summary]", str(sent_messages[1].content))
+        self.assertIn("[Synthesis Output Template]", str(sent_messages[1].content))
+        self.assertIn("[Selection And Assembly Mode]", str(sent_messages[2].content))
+        self.assertIn("[Turn Contract]", str(sent_messages[3].content))
+        self.assertIn("[Conversation Summary]", str(sent_messages[4].content))
         self.assertFalse(any(isinstance(message, HumanMessage) and message.content == "u1" for message in sent_messages))
         self.assertTrue(any(isinstance(message, HumanMessage) and message.content == "u4" for message in sent_messages))
 

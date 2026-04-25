@@ -8,25 +8,27 @@ from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage, To
 from src.core.answer_schema import clean_grounded_text
 from src.core.contracts import GraphState
 from src.core.contracts.boundary.runtime import get_runtime_state
-from src.core.request_contracts import infer_answer_contract, render_answer_contract_prompt
+from src.core.request_contracts import AnswerContract, infer_answer_contract
 from src.core.prompts import SYS_POLICY
 from src.runtime.nodes.retrieval import format_evidence_for_prompt
 from src.runtime.nodes.session import keep_recent_messages
 
 
-SYNTHESIS_CONTRACT = (
-    "[Synthesis Contract]\n"
-    "- Return structured output only.\n"
-    "- claims must be sentence-level.\n"
-    "- Each claim must cite one or more exact evidence source_id values from Retrieved Evidence.\n"
-    "- Do not invent evidence ids.\n"
-    "- If the evidence is insufficient, return claims=[].\n"
-    "- Do not embed citation numbers like [1] in claim text; the renderer adds them.\n"
-    "- Do not list raw links or search results instead of synthesizing.\n"
-    "- Restate the answer in the user's language.\n"
-    "- Prioritize official documentation before secondary detail.\n"
-    "- Ignore markdown formatting, breadcrumbs, navigation labels, and table-of-contents text that may appear in docs snippets.\n"
-    "- For docs and hybrid evidence, avoid extraction-only responses unless the user explicitly asked for extraction."
+SYNTHESIS_OUTPUT_TEMPLATE = (
+    "[Synthesis Output Template]\n"
+    "Return exactly one structured SynthesisOutput object.\n"
+    "answer: concise response in the user's language.\n"
+    "claims: 1-4 sentence-level claims, each with exact Retrieved Evidence source_id values.\n"
+    "sections: include only requested section kinds and keep each body short.\n"
+    "confidence: 0.0-1.0 when supported, otherwise null.\n"
+    "Citations are supplied through evidence_ids; the renderer adds citation labels."
+)
+SYNTHESIS_SELECTION_TEMPLATE = (
+    "[Selection And Assembly Mode]\n"
+    "Treat Retrieved Evidence as a candidate pool, not as prose to rewrite freely.\n"
+    "Prefer candidate_facts and code_metadata over raw snippets for code/options.\n"
+    "Select supported facts, assemble short claims, then map them into requested sections.\n"
+    "For hybrid docs plus upload/local answers: official_docs first, uploaded/local detail next, comparison last."
 )
 PLAIN_SUMMARY_ATTACH_CONTRACT = (
     "[Plain Summary Attach Fallback]\n"
@@ -120,76 +122,37 @@ def _prepare_evidence_for_prompt(
     return prepared_items
 
 
-def _build_synthesis_instruction_block(
+def _render_sections(sections: list[str]) -> str:
+    return ", ".join(sections) if sections else "none"
+
+
+def _build_turn_contract_block(
     *,
+    answer_contract: AnswerContract,
     action_rules: list[str],
     has_hybrid_evidence: bool,
     requires_upload_section: bool,
     attempt: int,
 ) -> str:
     lines = [
-        "[Synthesis Instructions]",
-        "- Return structured output only.",
-        "- claims must be sentence-level.",
-        "- Each claim must cite one or more exact evidence source_id values from Retrieved Evidence.",
-        "- Do not invent evidence ids.",
-        "- If the evidence is insufficient, return claims=[].",
-        "- Do not embed citation numbers like [1] in claim text; the renderer adds them.",
-        "- Do not list raw links or search results instead of synthesizing.",
-        "- Restate the answer in the user's language.",
-        "- Prioritize official documentation before secondary detail.",
-        "- Ignore markdown formatting, breadcrumbs, navigation labels, and table-of-contents text that may appear in docs snippets.",
-        "- Do not answer with only a file path, a tool name, or an action acknowledgment.",
-        "- For upload/local code evidence, explain the relevant snippet and extract the requested parameters or options instead of pasting raw code only.",
+        "[Turn Contract]",
+        f"- required_sections={_render_sections(answer_contract.required_sections)}",
+        f"- ordered_steps={str(answer_contract.ordered_steps).lower()}",
+        f"- split_by_source={str(answer_contract.split_by_source).lower()}",
+        f"- hybrid_evidence={str(has_hybrid_evidence).lower()}",
+        f"- upload_section_required={str(requires_upload_section).lower()}",
     ]
     if has_hybrid_evidence:
-        lines.extend(
-            [
-                "[Hybrid Synthesis]",
-                "- For docs plus uploaded/local evidence, explain the official takeaway first.",
-                "- Then add an explicit comparison against the uploaded/local evidence.",
-                "- Keep the official explanation and the comparison as distinct claim groups.",
-                "- Return at most 4 total claims for hybrid answers; prefer 3 claims.",
-                "- Keep the comparison to 1-2 sentences about the official-docs match or difference.",
-                "- The official claim group must cite only official docs source_id values.",
-                "- Mention the concrete uploaded/local code detail, configuration, or parameter that supports the comparison.",
-                "- Do not collapse the whole answer into only docs or only uploaded/local evidence when both routes are present.",
-                "- If one route is too generic or weak, say that evidence is limited instead of inventing a stronger claim.",
-            ]
-        )
+        lines.append("- hybrid_layout=official_docs -> upload/local detail -> comparison")
         if requires_upload_section:
-            lines.extend(
-                [
-                    "- Keep official_docs, upload_code, and comparison sections to 2-3 short sentences each.",
-                    "- The uploaded/local claim group must cite only uploaded/local source_id values.",
-                    "- upload_code must extract concrete parameters, options, or settings from uploaded/local evidence.",
-                ]
-            )
+            lines.append("- upload_code uses local/upload option_literals or call kwargs when present")
         else:
-            lines.extend(
-                [
-                    "- Return only official_docs and comparison sections unless another requested section is required.",
-                    "- Put uploaded/local details in one concrete comparison sentence instead of a separate upload_code section.",
-                ]
-            )
-    else:
-        lines.append(
-            "- Avoid extraction-only responses unless the user explicitly asked for extraction."
-        )
+            lines.append("- put uploaded/local details inside the comparison section")
     if action_rules:
-        lines.append("- Action requests:")
+        lines.append("- action_rules:")
         lines.extend(f"  - {rule}" for rule in action_rules)
-        lines.append("  - Do not merely say that you will save or share the answer; output the exact body now.")
-        lines.append(
-            "- If you are saving or sharing in this turn, return the actual message body to save/share now, not a sentence about performing the action."
-        )
-        lines.append(
-            "- Do not answer with a checklist about the action itself unless the user explicitly asked that checklist to be the message body."
-        )
     if attempt > 1:
-        lines.append(
-            "Retry after evidence validation failed. Stay grounded in retrieved evidence, keep only supported claims, and satisfy the requested answer structure."
-        )
+        lines.append("- retry_note=evidence validation failed previously; keep only supported claims")
     return "\n".join(lines)
 
 
@@ -228,7 +191,20 @@ def build_synthesis_messages(
     history_before = len(history_messages)
     trimmed_history = keep_recent_messages(history_messages, max_turns=max_turns)
 
-    model_messages: list[BaseMessage] = [SystemMessage(content=SYS_POLICY)]
+    model_messages: list[BaseMessage] = [
+        SystemMessage(content=SYS_POLICY),
+        SystemMessage(content=SYNTHESIS_OUTPUT_TEMPLATE),
+        SystemMessage(content=SYNTHESIS_SELECTION_TEMPLATE),
+        SystemMessage(
+            content=_build_turn_contract_block(
+                answer_contract=answer_contract,
+                action_rules=action_rules,
+                has_hybrid_evidence=has_hybrid_evidence,
+                requires_upload_section=requires_upload_section,
+                attempt=attempt,
+            )
+        ),
+    ]
     if runtime.memory_summary:
         model_messages.append(SystemMessage(content=f"[Conversation Summary]\n{runtime.memory_summary}"))
     model_messages.extend(trimmed_history)
@@ -240,17 +216,6 @@ def build_synthesis_messages(
     model_messages.append(
         SystemMessage(
             content=f"[Retrieved Evidence]\n{rendered_prompt_evidence}"
-        )
-    )
-    model_messages.append(SystemMessage(content=render_answer_contract_prompt(answer_contract)))
-    model_messages.append(
-        SystemMessage(
-            content=_build_synthesis_instruction_block(
-                action_rules=action_rules,
-                has_hybrid_evidence=has_hybrid_evidence,
-                requires_upload_section=requires_upload_section,
-                attempt=attempt,
-            )
         )
     )
 
