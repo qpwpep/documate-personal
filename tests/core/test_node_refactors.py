@@ -216,12 +216,14 @@ class NodeRefactorTest(unittest.TestCase):
         self.assertEqual(history_after, 5)
         self.assertIsInstance(model_messages[0], SystemMessage)
         self.assertEqual(model_messages[0].content, SYS_POLICY)
+        self.assertIn("[Synthesis Output Template]", str(model_messages[1].content))
+        self.assertIn("[Selection And Assembly Mode]", str(model_messages[2].content))
+        self.assertIn("[Turn Contract]", str(model_messages[3].content))
         self.assertTrue(any("[Conversation Summary]" in str(message.content) for message in model_messages))
         self.assertTrue(any("[Retrieved Evidence]" in str(message.content) for message in model_messages))
-        self.assertTrue(any("Do not list raw links or search results" in str(message.content) for message in model_messages))
         self.assertTrue(
             any(
-                "Retry after evidence validation failed" in str(message.content)
+                "retry_note=evidence validation failed previously" in str(message.content)
                 for message in model_messages
             )
         )
@@ -243,7 +245,7 @@ class NodeRefactorTest(unittest.TestCase):
 
         self.assertTrue(
             any(
-                "docs plus uploaded/local evidence" in str(message.content)
+                "hybrid_layout=official_docs -> upload/local detail -> comparison" in str(message.content)
                 for message in model_messages
             )
         )

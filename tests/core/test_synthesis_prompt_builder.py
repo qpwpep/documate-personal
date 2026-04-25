@@ -32,6 +32,16 @@ class SynthesisPromptBuilderTest(unittest.TestCase):
                     "url_or_path": "uploads/demo.ipynb",
                     "snippet": "Notebook example",
                     "score": 0.8,
+                    "code_metadata": {
+                        "cell_id": 2,
+                        "calls": [
+                            {
+                                "call_name": "LogisticRegression",
+                                "kwargs": {"max_iter": "200"},
+                            }
+                        ],
+                        "option_literals": ["max_iter=200"],
+                    },
                 },
             ],
             attempt=2,
@@ -43,24 +53,29 @@ class SynthesisPromptBuilderTest(unittest.TestCase):
         system_messages = [
             str(message.content) for message in messages if isinstance(message, SystemMessage)
         ]
-        instruction_messages = [
-            content for content in system_messages if "[Synthesis Instructions]" in content
-        ]
-        self.assertEqual(len(instruction_messages), 1)
+        self.assertIn("[Synthesis Output Template]", system_messages[1])
+        self.assertIn("[Selection And Assembly Mode]", system_messages[2])
+        turn_messages = [content for content in system_messages if "[Turn Contract]" in content]
+        self.assertEqual(len(turn_messages), 1)
+        self.assertLess(
+            system_messages.index(turn_messages[0]),
+            next(
+                index
+                for index, message in enumerate(system_messages)
+                if "[Retrieved Evidence]" in message
+            ),
+        )
         self.assertTrue(all("[Action Request]" not in content for content in system_messages))
         self.assertEqual(sum(1 for content in system_messages if "[Retrieved Evidence]" in content), 1)
         self.assertTrue(all("[Official Docs Evidence]" not in content for content in system_messages))
         self.assertTrue(all("[Uploaded Code Evidence]" not in content for content in system_messages))
-        self.assertIn("Action requests:", instruction_messages[0])
-        self.assertIn("[Hybrid Synthesis]", instruction_messages[0])
-        self.assertIn("official takeaway first", instruction_messages[0])
-        self.assertIn("must cite only official docs source_id values", instruction_messages[0])
-        self.assertIn("must cite only uploaded/local source_id values", instruction_messages[0])
-        self.assertIn("Do not collapse the whole answer into only docs or only uploaded/local evidence", instruction_messages[0])
-        self.assertIn("actual message body to save/share now", instruction_messages[0])
-        self.assertIn("Do not answer with a checklist about the action itself", instruction_messages[0])
-        self.assertIn("Ignore markdown formatting, breadcrumbs, navigation labels", instruction_messages[0])
-        self.assertIn("Retry after evidence validation failed", instruction_messages[0])
+        self.assertIn("action_rules:", turn_messages[0])
+        self.assertIn("hybrid_layout=official_docs -> upload/local detail -> comparison", turn_messages[0])
+        self.assertIn("upload_code uses local/upload option_literals", turn_messages[0])
+        self.assertIn("retry_note=evidence validation failed previously", turn_messages[0])
+        evidence_message = next(content for content in system_messages if "[Retrieved Evidence]" in content)
+        self.assertIn("candidate_facts: max_iter=200", evidence_message)
+        self.assertLess(evidence_message.index("code_metadata:"), evidence_message.index("snippet:"))
 
 
 if __name__ == "__main__":
