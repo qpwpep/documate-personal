@@ -77,6 +77,20 @@ def _section_body_by_kind(snapshot: ValidationSnapshot) -> dict[str, str]:
     }
 
 
+def _code_metadata_option_literals(item: EvidenceItem) -> list[str]:
+    code_metadata = item.code_metadata if isinstance(item.code_metadata, dict) else {}
+    options: list[str] = []
+    seen: set[str] = set()
+    for option in code_metadata.get("option_literals") or []:
+        option_text = " ".join(str(option or "").split())
+        compact = re.sub(r"\s+", "", option_text.lower())
+        if not option_text or compact in seen:
+            continue
+        options.append(option_text)
+        seen.add(compact)
+    return options
+
+
 def _extract_local_option_literals(snapshot: ValidationSnapshot) -> list[str]:
     options: list[str] = []
     seen: set[str] = set()
@@ -84,6 +98,11 @@ def _extract_local_option_literals(snapshot: ValidationSnapshot) -> list[str]:
         route = route_for_item_tool(item.tool)
         if route not in {"upload", "local"}:
             continue
+        for option in _code_metadata_option_literals(item):
+            compact = re.sub(r"\s+", "", option.lower())
+            if compact and compact not in seen:
+                options.append(option)
+                seen.add(compact)
         snippet = str(item.snippet or "")
         for match in re.findall(r"\b[A-Za-z_][A-Za-z0-9_]*\s*=\s*[^,\)\]\}\n]+", snippet):
             option = " ".join(match.strip().split())

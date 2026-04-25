@@ -54,6 +54,7 @@ def combine_evidence_text(items: list[EvidenceItem]) -> str:
         for part in (
             item.title or "",
             item.snippet or "",
+            str(item.code_metadata or ""),
             item.url_or_path or "",
             item.document_id or "",
             item.source_id or "",
