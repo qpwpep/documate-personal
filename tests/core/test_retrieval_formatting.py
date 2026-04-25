@@ -75,6 +75,34 @@ class RetrievalFormattingTest(unittest.TestCase):
         self.assertIn("final official detail", formatted)
         self.assertIn("...", formatted)
 
+    def test_format_evidence_for_prompt_renders_code_metadata_before_snippet(self) -> None:
+        formatted = format_evidence_for_prompt(
+            [
+                {
+                    "kind": "local",
+                    "tool": "upload_search",
+                    "source_id": "path:uploads/demo/sample.py#chunk=0;start=0;end=120",
+                    "url_or_path": "uploads/demo/sample.py",
+                    "snippet": "model = LogisticRegression(max_iter=200)",
+                    "score": 0.9,
+                    "code_metadata": {
+                        "calls": [
+                            {
+                                "call_name": "LogisticRegression",
+                                "kwargs": {"max_iter": "200"},
+                            }
+                        ],
+                        "option_literals": ["max_iter=200"],
+                    },
+                }
+            ],
+            max_snippet_chars=120,
+        )
+
+        self.assertIn("candidate_facts: max_iter=200", formatted)
+        self.assertIn('"call_name": "LogisticRegression"', formatted)
+        self.assertLess(formatted.index("code_metadata:"), formatted.index("snippet:"))
+
 
 if __name__ == "__main__":
     unittest.main()

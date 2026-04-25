@@ -2,11 +2,18 @@ import unittest
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
-from src.runtime.nodes.session import make_summarize_node
-from src.runtime.nodes.synthesis import make_synthesize_node
-from src.runtime.nodes.validation import make_pre_synthesis_validation_node, make_validate_evidence_node
+from src.core.answer_schema import AgentResponsePayloadModel, AnswerSection, ClaimItem
+from src.core.evidence import EvidenceItem
 from src.core.planner_schema import PlannerOutput, RetrievalTask
 from src.core.prompts import SYS_POLICY
+from src.runtime.nodes.session import make_summarize_node
+from src.runtime.nodes.synthesis import make_synthesize_node
+from src.runtime.nodes.validation import (
+    ValidationSnapshot,
+    make_pre_synthesis_validation_node,
+    make_validate_evidence_node,
+)
+from src.runtime.nodes.validation.assessment import assess_validation
 
 from .helpers import (
     _CaptureStructuredSynthesizeLLM,
@@ -59,6 +66,7 @@ def _local_evidence(
     path: str = "data/notebooks/example.ipynb",
     snippet: str = "example snippet",
     score: float = 0.9,
+    code_metadata: dict | None = None,
 ):
     return {
         "kind": "local",
@@ -72,10 +80,70 @@ def _local_evidence(
         "chunk_id": 0,
         "start_offset": 0,
         "end_offset": 12,
+        **({"code_metadata": code_metadata} if code_metadata is not None else {}),
     }
 
 
 class SynthesisValidationTest(unittest.TestCase):
+    def test_hybrid_validator_uses_code_metadata_option_literals(self) -> None:
+        docs = EvidenceItem.model_validate(_docs_evidence())
+        upload = EvidenceItem.model_validate(
+            _local_evidence(
+                tool="upload_search",
+                source_id="path:uploads/demo.py#chunk=0;start=0;end=80",
+                path="uploads/demo.py",
+                snippet="",
+                code_metadata={
+                    "calls": [
+                        {
+                            "call_name": "LogisticRegression",
+                            "kwargs": {"max_iter": "200"},
+                        }
+                    ],
+                    "option_literals": ["max_iter=200"],
+                },
+            )
+        )
+        payload = AgentResponsePayloadModel(
+            answer="Official docs and uploaded code are compared.",
+            claims=[
+                ClaimItem(text="Official docs describe the estimator.", evidence_ids=[docs.source_id]),
+                ClaimItem(text="Uploaded code sets max_iter=200.", evidence_ids=[upload.source_id]),
+            ],
+            evidence=[docs, upload],
+            sections=[
+                AnswerSection(kind="official_docs", body="Official docs describe the estimator."),
+                AnswerSection(kind="upload_code", body="Uploaded code sets max_iter=200."),
+                AnswerSection(
+                    kind="comparison",
+                    body="The uploaded max_iter=200 setting is the concrete local detail.",
+                ),
+            ],
+        )
+        snapshot = ValidationSnapshot(
+            user_input="Compare official docs with uploaded code.",
+            planner_output=PlannerOutput(
+                use_retrieval=True,
+                tasks=[
+                    RetrievalTask(route="docs", query="official docs", k=3),
+                    RetrievalTask(route="upload", query="uploaded code", k=3),
+                ],
+            ),
+            retrieval_required=True,
+            parsed_evidence=[docs, upload],
+            current_attempt_retrieval_errors=[],
+            current_attempt_retrieval_diagnostics=[],
+            response_payload=payload,
+            evidence_by_route={"docs": [docs], "upload": [upload], "local": []},
+            diagnostics_by_route={"docs": [], "upload": [], "local": []},
+            required_routes=["docs", "upload"],
+        )
+
+        assessment = assess_validation(snapshot)
+
+        self.assertFalse(assessment.unsupported_claims)
+        self.assertIsNone(assessment.retry_reason)
+
     def test_pre_synthesis_validation_retries_once_for_docs_only_no_evidence(self) -> None:
         validate_node = make_pre_synthesis_validation_node(verbose=False)
         planner_output = PlannerOutput(use_retrieval=True, tasks=[RetrievalTask(route="docs", query="numpy docs", k=3)])

@@ -95,6 +95,20 @@ def _fallback_route_line(
     return _summarize_claim(claim=claim, snapshot=snapshot, payload=payload)
 
 
+def _code_metadata_option_literals(item) -> list[str]:
+    code_metadata = item.code_metadata if isinstance(item.code_metadata, dict) else {}
+    options: list[str] = []
+    seen: set[str] = set()
+    for option in code_metadata.get("option_literals") or []:
+        option_text = " ".join(str(option or "").split())
+        compact = re.sub(r"\s+", "", option_text.lower())
+        if not option_text or compact in seen:
+            continue
+        options.append(option_text)
+        seen.add(compact)
+    return options
+
+
 def _extract_local_option_literals(snapshot: ValidationSnapshot) -> list[str]:
     options: list[str] = []
     seen: set[str] = set()
@@ -102,6 +116,11 @@ def _extract_local_option_literals(snapshot: ValidationSnapshot) -> list[str]:
         route = route_for_tool(str(item.tool or ""))
         if route not in {"upload", "local"}:
             continue
+        for option in _code_metadata_option_literals(item):
+            compact = re.sub(r"\s+", "", option.lower())
+            if compact and compact not in seen:
+                options.append(option)
+                seen.add(compact)
         for match in re.findall(r"\b[A-Za-z_][A-Za-z0-9_]*\s*=\s*[^,\)\]\}\n]+", str(item.snippet or "")):
             option = " ".join(match.strip().split())
             compact = re.sub(r"\s+", "", option.lower())
