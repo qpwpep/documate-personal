@@ -35,26 +35,32 @@ class ExecutionRunner:
         self,
         user_input: str,
         upload_file_path: str | None,
+        *,
+        upload_file_paths: list[str] | None = None,
+        planner_mode: str = "auto",
+        eval_faults: dict[str, str] | None = None,
         progress_emitter: Any | None = None,
     ) -> tuple[dict[str, Any], int | None]:
-        state = build_graph_state_input(
-            user_input=user_input,
-            messages=self.session.messages,
-            progress_emitter=progress_emitter,
-            session_metadata=self.session.snapshot_session_metadata(),
-        )
         upload_retriever_build_ms: int | None = None
+        requested_upload_paths = self._normalize_requested_upload_paths(
+            upload_file_path=upload_file_path,
+            upload_file_paths=upload_file_paths,
+        )
 
-        if upload_file_path is not None:
-            if (
-                self.session.upload_file_path != upload_file_path
+        if requested_upload_paths is not None:
+            if not requested_upload_paths:
+                self.session.cleanup_upload_retriever()
+                self.session.upload_file_path = None
+                self.session.upload_file_paths = ()
+            elif (
+                self.session.upload_file_paths != requested_upload_paths
                 or self.session.upload_retriever_handle is None
             ):
                 self.session.cleanup_upload_retriever()
                 build_started = time.perf_counter()
                 try:
                     self.session.upload_retriever_handle = self._build_temp_retriever(
-                        upload_file_path,
+                        list(requested_upload_paths),
                         api_key=self.settings.openai_api_key,
                     )
                 except Exception as exc:
@@ -62,22 +68,47 @@ class ExecutionRunner:
                         f"UPLOAD_RETRIEVER_BUILD_FAILED: upload retriever build failed ({exc})"
                     ) from exc
                 upload_retriever_build_ms = elapsed_ms(build_started, time.perf_counter())
-                self.session.upload_file_path = upload_file_path
+                self.session.upload_file_paths = requested_upload_paths
+                self.session.upload_file_path = requested_upload_paths[0]
 
-            handle = self.session.upload_retriever_handle
-            if handle is not None:
-                state = build_graph_state_input(
-                    user_input=user_input,
-                    messages=self.session.messages,
-                    retriever=handle.retriever,
-                    progress_emitter=progress_emitter,
-                    session_metadata=self.session.snapshot_session_metadata(),
-                )
-        else:
-            self.session.cleanup_upload_retriever()
-            self.session.upload_file_path = None
+        handle = self.session.upload_retriever_handle
+        retriever = handle.retriever if handle is not None else None
+        state = build_graph_state_input(
+            user_input=user_input,
+            messages=self.session.messages,
+            retriever=retriever,
+            progress_emitter=progress_emitter,
+            session_metadata=self.session.snapshot_session_metadata(),
+            planner_mode=planner_mode,
+            eval_faults=eval_faults,
+        )
 
         return normalize_graph_update(state), upload_retriever_build_ms
+
+    @staticmethod
+    def _normalize_requested_upload_paths(
+        *,
+        upload_file_path: str | None,
+        upload_file_paths: list[str] | None,
+    ) -> tuple[str, ...] | None:
+        if upload_file_paths is None and upload_file_path is None:
+            return None
+        raw_paths: list[str] = []
+        if upload_file_path:
+            raw_paths.append(upload_file_path)
+        if upload_file_paths is not None:
+            raw_paths.extend(str(path) for path in upload_file_paths if str(path).strip())
+        if upload_file_paths == [] and upload_file_path is None:
+            return ()
+        seen: set[str] = set()
+        normalized_paths: list[str] = []
+        for raw_path in raw_paths:
+            text = str(raw_path).strip()
+            if not text or text in seen:
+                continue
+            normalized_paths.append(text)
+            seen.add(text)
+        return tuple(normalized_paths)
 
     def invoke_graph(self, state: dict[str, Any]) -> tuple[dict[str, Any], int]:
         graph_started = time.perf_counter()

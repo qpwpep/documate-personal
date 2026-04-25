@@ -39,6 +39,9 @@ class _FakeSessionStore:
         session_metadata,
         user_input: str,
         upload_file_path: str | None = None,
+        upload_file_paths: list[str] | None = None,
+        planner_mode: str = "auto",
+        eval_faults: dict[str, str] | None = None,
         progress_emitter=None,
     ):
         self.run_calls.append(
@@ -47,6 +50,9 @@ class _FakeSessionStore:
                 "session_metadata": session_metadata,
                 "user_input": user_input,
                 "upload_file_path": upload_file_path,
+                "upload_file_paths": upload_file_paths,
+                "planner_mode": planner_mode,
+                "eval_faults": dict(eval_faults or {}),
                 "progress_emitter": progress_emitter,
             }
         )
@@ -155,6 +161,43 @@ class AgentRequestServiceTest(unittest.TestCase):
             store.run_calls[0]["session_metadata"].slack_destination.channel_id,
             "C123BENCH",
         )
+
+    def test_service_forwards_planner_mode_faults_and_reset_metadata(self) -> None:
+        cleaner = _FakeCleaner()
+        store = _FakeSessionStore(
+            {
+                "message": "ok",
+                "response_payload": {"answer": "ok", "claims": [], "evidence": [], "confidence": None},
+                "debug": {
+                    "schema_version": 4,
+                    "observability_status": "ok",
+                    "tool_calls": [],
+                    "tool_call_count": 0,
+                    "errors": [],
+                    "observed_evidence": [],
+                },
+            }
+        )
+        service = AgentRequestService(runtime_cleaner=cleaner, session_store=store)
+
+        asyncio.run(
+            service.run(
+                request_id="req00004",
+                request_data=AgentRequest(
+                    query="force planner",
+                    session_id="demo-session",
+                    reset_slack_destination=True,
+                    planner_mode="force_llm",
+                    eval_faults={"tavily": "timeout"},
+                    include_debug=True,
+                ),
+            )
+        )
+
+        self.assertEqual(store.run_calls[0]["planner_mode"], "force_llm")
+        self.assertEqual(store.run_calls[0]["eval_faults"], {"tavily": "timeout"})
+        self.assertIsNotNone(store.run_calls[0]["session_metadata"])
+        self.assertIsNone(store.run_calls[0]["session_metadata"].slack_destination)
 
     def test_stream_emits_progress_then_final_response_then_done(self) -> None:
         cleaner = _FakeCleaner()

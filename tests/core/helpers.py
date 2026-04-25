@@ -20,6 +20,8 @@ def build_legacy_state(payload: dict):
         retriever=raw.pop("retriever", None),
         session_metadata=raw.pop("session_metadata", None),
         memory_summary=raw.pop("memory_summary", None),
+        planner_mode=raw.pop("planner_mode", "auto"),
+        eval_faults=raw.pop("eval_faults", None),
     )
 
     if "planner" in raw:

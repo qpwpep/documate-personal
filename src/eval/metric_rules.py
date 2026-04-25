@@ -101,6 +101,119 @@ def score_answer_quality(
     return max(0.0, min(1.0, quality))
 
 
+def score_criteria_coverage(case: BenchmarkCase, response_text: str) -> float:
+    text = response_text or ""
+    normalized_text = text.lower()
+    criteria = case.golden_criteria
+
+    for critical_error in criteria.critical_errors:
+        if str(critical_error).strip().lower() in normalized_text:
+            return 0.0
+
+    required_facts = list(criteria.required_facts)
+    if not required_facts:
+        return 1.0
+
+    total_weight = sum(max(0.0, float(fact.weight)) for fact in required_facts)
+    use_equal_weights = total_weight <= 0.0
+    if use_equal_weights:
+        total_weight = float(len(required_facts))
+
+    covered_weight = 0.0
+    for fact in required_facts:
+        fact_weight = 1.0 if use_equal_weights else max(0.0, float(fact.weight))
+        terms = [
+            str(term).strip()
+            for term in [*fact.acceptable_terms, fact.description]
+            if str(term).strip()
+        ]
+        if any(term.lower() in normalized_text for term in terms):
+            covered_weight += fact_weight
+    return max(0.0, min(1.0, covered_weight / total_weight))
+
+
+def score_uncertainty_handling(
+    *,
+    case: BenchmarkCase,
+    response_text: str,
+    runtime_errors: list[str],
+    response_errors: list[str],
+    error_codes: list[str],
+    retrieval_diagnostics: list[Any] | None = None,
+) -> float:
+    text = _normalize_text(response_text)
+    if not text and case.expected_behavior != "handled_tool_failure":
+        return 0.0
+
+    actual_error_codes = {str(code).strip().upper() for code in error_codes if str(code).strip()}
+    for diagnostic in retrieval_diagnostics or []:
+        code = getattr(diagnostic, "error_code", None)
+        if code:
+            actual_error_codes.add(str(code).strip().upper())
+    combined_errors = " ".join([*runtime_errors, *response_errors]).upper()
+    for expected_code in case.expected_error_codes:
+        if expected_code.upper() in combined_errors:
+            actual_error_codes.add(expected_code.upper())
+
+    if case.expected_behavior == "answer":
+        return 1.0
+
+    if case.expected_behavior == "handled_tool_failure":
+        expected_codes = {str(code).strip().upper() for code in case.expected_error_codes if str(code).strip()}
+        if expected_codes and expected_codes.issubset(actual_error_codes):
+            return 1.0
+        failure_markers = (
+            "실패",
+            "시간 초과",
+            "누락",
+            "사용할 수 없",
+            "확인할 수 없",
+            "failed",
+            "timeout",
+            "missing",
+            "unavailable",
+        )
+        return 0.5 if any(marker in text for marker in failure_markers) else 0.0
+
+    if case.expected_behavior == "needs_clarification":
+        clarification_markers = (
+            "확인",
+            "어떤",
+            "어느",
+            "범위",
+            "명확",
+            "추가 정보",
+            "clarify",
+            "which",
+            "what exactly",
+            "need more",
+        )
+        return 1.0 if any(marker in text for marker in clarification_markers) else 0.0
+
+    if case.expected_behavior in {"insufficient_evidence", "cannot_verify"}:
+        uncertainty_markers = (
+            "근거",
+            "확인할 수",
+            "찾지 못",
+            "충분하지",
+            "알 수 없",
+            "모르",
+            "insufficient",
+            "cannot verify",
+            "can't verify",
+            "not enough",
+            "do not know",
+            "don't know",
+        )
+        return 1.0 if any(marker in text for marker in uncertainty_markers) else 0.0
+
+    if case.expected_behavior == "refuse":
+        refusal_markers = ("할 수 없", "제공할 수 없", "cannot", "can't", "unable")
+        return 1.0 if any(marker in text for marker in refusal_markers) else 0.0
+
+    return 1.0
+
+
 def score_citation_traceability(
     case: BenchmarkCase,
     response_evidence: list[EvidenceItem],
@@ -237,6 +350,7 @@ def compute_rule_scores(
     validator_reason: str | None = None,
     response_claims: list[ClaimItem] | None = None,
     retrieval_diagnostics: list[Any] | None = None,
+    error_codes: list[str] | None = None,
     synthesis_mode: str | None = None,
     valid_claim_count: int = 0,
     invalid_claim_count: int = 0,
@@ -254,6 +368,7 @@ def compute_rule_scores(
             response_sections=response_sections,
             synthesis_mode=synthesis_mode,
         ),
+        "criteria_coverage": score_criteria_coverage(case, response_text),
         "groundedness": score_groundedness(
             case=case,
             response_text=response_text,
@@ -274,6 +389,14 @@ def compute_rule_scores(
             called_tools,
             slack_delivery_required=slack_delivery_required,
             slack_delivery_status=slack_delivery_status,
+        ),
+        "uncertainty_handling": score_uncertainty_handling(
+            case=case,
+            response_text=response_text,
+            runtime_errors=runtime_errors,
+            response_errors=response_errors,
+            error_codes=error_codes or [],
+            retrieval_diagnostics=retrieval_diagnostics,
         ),
         "format_language": score_format_language(
             case=case,
@@ -387,7 +510,7 @@ def _is_valid_local_source(url_or_path: str) -> bool:
 
 
 def _expected_local_citation_tool(case: BenchmarkCase) -> str:
-    return "upload_search" if case.upload_fixture else "rag_search"
+    return "upload_search" if (case.upload_fixture or case.upload_fixtures) else "rag_search"
 
 
 def _contains_hangul(text: str) -> bool:

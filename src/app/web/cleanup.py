@@ -64,6 +64,39 @@ def validate_upload_file_path(upload_file_path: str | None, session_id: str) -> 
     return str(candidate_path)
 
 
+def validate_upload_file_paths(
+    *,
+    upload_file_path: str | None,
+    upload_file_paths: list[str] | None,
+    session_id: str,
+) -> list[str] | None:
+    """Normalize legacy single upload and v0.3 multi-upload request fields.
+
+    `None` means the request did not express an upload change, while an empty
+    list means the caller explicitly wants to clear the current upload context.
+    """
+    if upload_file_paths is None and upload_file_path is None:
+        return None
+    if upload_file_paths == [] and upload_file_path is None:
+        return []
+
+    raw_paths: list[str] = []
+    if upload_file_path:
+        raw_paths.append(upload_file_path)
+    if upload_file_paths is not None:
+        raw_paths.extend(str(path) for path in upload_file_paths if str(path).strip())
+
+    validated_paths: list[str] = []
+    seen: set[str] = set()
+    for raw_path in raw_paths:
+        validated_path = validate_upload_file_path(raw_path, session_id)
+        if validated_path is None or validated_path in seen:
+            continue
+        validated_paths.append(validated_path)
+        seen.add(validated_path)
+    return validated_paths
+
+
 class RuntimeCleaner:
     def __init__(self, settings: AppSettings, session_store: InMemorySessionStore) -> None:
         self.settings = settings

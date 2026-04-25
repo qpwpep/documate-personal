@@ -345,7 +345,7 @@ class RunnerErrorBucketsTest(unittest.TestCase):
         self.assertIsNotNone(result.judge_subscores)
         self.assertEqual(result.judge_score_total, 0.4)
         self.assertTrue(any("judge_min_score audit failed:" in msg for msg in result.judge_errors))
-        self.assertFalse(result.product_pass)
+        self.assertFalse(result.judge_pass)
         self.assertFalse(result.release_pass)
         self.assertFalse(result.passed)
 

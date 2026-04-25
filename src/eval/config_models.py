@@ -8,13 +8,69 @@ from pydantic import BaseModel, Field, model_validator
 
 CaseCategory = Literal["docs_only", "rag_only", "hybrid", "tool_action"]
 CaseScenario = Literal["seed_mutation", "adversarial", "regression", "ambiguity"]
+ExpectedBehavior = Literal[
+    "answer",
+    "needs_clarification",
+    "insufficient_evidence",
+    "cannot_verify",
+    "handled_tool_failure",
+    "refuse",
+]
+PlannerMode = Literal["auto", "force_llm"]
+BENCHMARK_FIXTURE_SCHEMA_VERSION = 2
+
+
+class GoldenFact(BaseModel):
+    id: str
+    description: str
+    acceptable_terms: list[str] = Field(default_factory=list)
+    weight: float = Field(default=1.0, ge=0.0)
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_string_fact(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            text = value.strip()
+            return {"id": text[:40] or "fact", "description": text, "acceptable_terms": [text]}
+        return value
+
+
+class GoldenCriteria(BaseModel):
+    required_facts: list[GoldenFact] = Field(default_factory=list)
+    acceptable_phrasings: list[str] = Field(default_factory=list)
+    critical_errors: list[str] = Field(default_factory=list)
+
+
+class BenchmarkStep(BaseModel):
+    step_id: str | None = None
+    query: str
+    upload_fixture: str | None = None
+    upload_fixtures: list[str] | None = None
+    clear_uploads: bool = False
+    slack_channel_id: str | None = None
+    slack_user_id: str | None = None
+    slack_email: str | None = None
+    reset_slack_destination: bool = False
+    expected_tools: list[str] | None = None
+    forbidden_tools: list[str] | None = None
+    must_include: list[str] | None = None
+    must_not_include: list[str] | None = None
+    require_official_citation: bool | None = None
+    require_local_citation: bool | None = None
+    golden_criteria: GoldenCriteria | None = None
+    expected_behavior: ExpectedBehavior | None = None
+    expected_error_codes: list[str] = Field(default_factory=list)
+    planner_mode: PlannerMode | None = None
+    faults: dict[str, str] | None = None
 
 
 class CaseWeightOverride(BaseModel):
     answer_quality: float | None = Field(default=None, ge=0.0)
+    criteria_coverage: float | None = Field(default=None, ge=0.0)
     groundedness: float | None = Field(default=None, ge=0.0)
     citation_traceability: float | None = Field(default=None, ge=0.0)
     tool_choice: float | None = Field(default=None, ge=0.0)
+    uncertainty_handling: float | None = Field(default=None, ge=0.0)
     format_language: float | None = Field(default=None, ge=0.0)
     llm_judge: float | None = Field(default=None, ge=0.0)
 
@@ -47,23 +103,50 @@ class CaseWeightOverride(BaseModel):
 
 
 class BenchmarkCase(BaseModel):
+    schema_version: int = BENCHMARK_FIXTURE_SCHEMA_VERSION
+    benchmark_fixture_schema_version: int = BENCHMARK_FIXTURE_SCHEMA_VERSION
     case_id: str
     category: CaseCategory
     scenario: CaseScenario = "seed_mutation"
     query: str
     upload_fixture: str | None = None
+    upload_fixtures: list[str] = Field(default_factory=list)
     slack_channel_id: str | None = None
     slack_user_id: str | None = None
     slack_email: str | None = None
+    reset_slack_destination: bool = False
     expected_tools: list[str] = Field(default_factory=list)
     forbidden_tools: list[str] = Field(default_factory=list)
     must_include: list[str] = Field(default_factory=list)
     must_not_include: list[str] = Field(default_factory=list)
     require_official_citation: bool = False
     require_local_citation: bool = False
+    golden_criteria: GoldenCriteria = Field(default_factory=GoldenCriteria)
+    expected_behavior: ExpectedBehavior = "answer"
+    expected_error_codes: list[str] = Field(default_factory=list)
+    steps: list[BenchmarkStep] = Field(default_factory=list)
+    planner_mode: PlannerMode = "auto"
+    faults: dict[str, str] = Field(default_factory=dict)
     judge_rubric: str = ""
     judge_min_score: float | None = Field(default=None, ge=0.0, le=1.0)
     weight_override: CaseWeightOverride | None = None
+
+    @model_validator(mode="after")
+    def normalize_v2_fields(self) -> "BenchmarkCase":
+        if self.upload_fixture and not self.upload_fixtures:
+            self.upload_fixtures = [self.upload_fixture]
+        if self.upload_fixtures and not self.upload_fixture:
+            self.upload_fixture = self.upload_fixtures[0]
+        if not self.golden_criteria.required_facts and self.must_include:
+            self.golden_criteria.required_facts = [
+                GoldenFact(
+                    id=f"must_include_{index}",
+                    description=needle,
+                    acceptable_terms=[needle],
+                )
+                for index, needle in enumerate(self.must_include, start=1)
+            ]
+        return self
 
 
 class BenchmarkLiveSlackConfig(BaseModel):
@@ -89,7 +172,11 @@ class BenchmarkLiveSlackConfig(BaseModel):
         return payload
 
     def applies_to_case(self, case: BenchmarkCase) -> bool:
-        return self.enabled and "slack_notify" in case.expected_tools
+        return (
+            self.enabled
+            and "slack_notify" in case.expected_tools
+            and "SLACK_DESTINATION_MISSING" not in case.expected_error_codes
+        )
 
     def requires_channel_destination(self, case: BenchmarkCase) -> bool:
         return self.applies_to_case(case) and bool(case.slack_channel_id)
@@ -114,12 +201,14 @@ class BenchmarkLiveSlackConfig(BaseModel):
 
 
 class ScoreWeights(BaseModel):
-    answer_quality: float = 0.20
-    groundedness: float = 0.20
-    citation_traceability: float = 0.20
-    tool_choice: float = 0.15
-    format_language: float = 0.05
-    llm_judge: float = 0.20
+    answer_quality: float = 0.15
+    criteria_coverage: float = 0.20
+    groundedness: float = 0.17
+    citation_traceability: float = 0.14
+    tool_choice: float = 0.12
+    uncertainty_handling: float = 0.10
+    format_language: float = 0.04
+    llm_judge: float = 0.08
 
     @model_validator(mode="before")
     @classmethod

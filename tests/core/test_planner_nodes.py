@@ -58,6 +58,26 @@ class PlannerNodeTest(unittest.TestCase):
         self.assertEqual([task.route for task in updates["planner"].output.tasks], ["docs"])
         self.assertEqual(updates["planner"].output.tasks[0].query, "FastAPI response_model")
 
+    def test_force_llm_planner_mode_skips_deterministic_slice(self) -> None:
+        capture_planner = _CapturePlannerLLM(
+            PlannerOutput(use_retrieval=True, tasks=[RetrievalTask(route="docs", query="forced llm", k=3)])
+        )
+        planner_node = make_planner_node(capture_planner, verbose=False)
+
+        updates = planner_node(
+            build_legacy_state(
+                {
+                    "messages": [HumanMessage(content="Explain FastAPI response_model from official docs.")],
+                    "user_input": "Explain FastAPI response_model from official docs.",
+                    "planner_mode": "force_llm",
+                }
+            )
+        )
+
+        self.assertEqual(capture_planner.call_count, 1)
+        self.assertEqual(updates["planner"].status, "llm")
+        self.assertEqual(updates["planner"].output.tasks[0].query, "forced llm")
+
     def test_planner_deterministically_routes_upload_request(self) -> None:
         capture_planner = _CapturePlannerLLM(PlannerOutput(use_retrieval=False, tasks=[]))
         planner_node = make_planner_node(capture_planner, verbose=False)

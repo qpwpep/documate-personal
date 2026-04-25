@@ -59,6 +59,10 @@ class NotebookLoaderTest(unittest.TestCase):
 
         for notebook_path in notebook_paths:
             with self.subTest(notebook=notebook_path.name):
+                if notebook_path.name == "broken_upload.ipynb":
+                    with self.assertRaises(json.JSONDecodeError):
+                        json.loads(notebook_path.read_text(encoding="utf-8"))
+                    continue
                 original = json.loads(notebook_path.read_text(encoding="utf-8"))
                 self.assertTrue(all(str(cell.get("id") or "").strip() for cell in original.get("cells", [])))
 

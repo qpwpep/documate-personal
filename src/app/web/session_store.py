@@ -144,9 +144,12 @@ class InMemorySessionStore:
         self,
         *,
         session_id: str,
-        session_metadata: SessionMetadata,
+        session_metadata: SessionMetadata | None,
         user_input: str,
         upload_file_path: str | None = None,
+        upload_file_paths: list[str] | None = None,
+        planner_mode: str = "auto",
+        eval_faults: dict[str, str] | None = None,
         progress_emitter: ProgressEmitter | None = None,
     ) -> tuple[AgentFlowManager, dict[str, Any], int]:
         entry = self.get_or_create_entry(session_id)
@@ -162,10 +165,14 @@ class InMemorySessionStore:
             with entry.request_lock:
                 session_lock_wait_ms = int((time.monotonic() - lock_started) * 1000)
                 agent_manager = entry.agent
-                agent_manager.set_session_metadata(session_metadata)
+                if session_metadata is not None:
+                    agent_manager.set_session_metadata(session_metadata)
                 agent_answer = agent_manager.run_agent_flow(
                     user_input,
                     upload_file_path,
+                    upload_file_paths=upload_file_paths,
+                    planner_mode=planner_mode,
+                    eval_faults=eval_faults,
                     progress_emitter=progress_emitter,
                 )
                 return agent_manager, agent_answer, session_lock_wait_ms

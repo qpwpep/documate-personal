@@ -12,6 +12,7 @@ from src.core.latency import LatencyBreakdownModel, StageName
 AgentResponsePayload = AgentResponsePayloadModel
 AgentTokenUsage = TokenUsage
 AgentRetryContext = RetryState
+PlannerMode = Literal["auto", "force_llm"]
 
 
 class AgentDebugInfo(BaseModel):
@@ -45,6 +46,10 @@ class AgentRequest(BaseModel):
     slack_email: str | None = None
     slack_channel_id: str | None = None
     upload_file_path: str | None = None
+    upload_file_paths: list[str] | None = None
+    reset_slack_destination: bool = False
+    planner_mode: PlannerMode = "auto"
+    eval_faults: dict[str, str] = Field(default_factory=dict)
     include_debug: bool = False
 
 

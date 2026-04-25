@@ -21,18 +21,22 @@ Return ONLY JSON with this schema:
   "reason": "<short reason>",
   "subscores": {
     "answer_quality": <float 0..1>,
+    "criteria_coverage": <float 0..1>,
     "groundedness": <float 0..1>,
     "citation_traceability": <float 0..1>,
     "tool_choice": <float 0..1>,
+    "uncertainty_handling": <float 0..1>,
     "format_language": <float 0..1>
   }
 }
 
 Scoring guidance:
 - answer_quality: whether the response actually answers the user's request with useful substance rather than copying snippets.
+- criteria_coverage: whether all required golden_criteria facts are judged, while avoiding critical_errors.
 - groundedness: whether the claims stay supported by the supplied evidence and diagnostics.
 - citation_traceability: whether claims can be traced to response evidence and observed evidence.
 - tool_choice: whether the executed tools and retrieval routes match case expectations.
+- uncertainty_handling: whether the response appropriately asks for clarification, says it cannot verify, or stops on insufficient evidence when expected_behavior requires it.
 - format_language: whether the response follows the requested structure and restates in the user's language.
 
 Failure guidance:
@@ -265,10 +269,14 @@ class LLMJudge:
         return {
             "case": {
                 "case_id": case.case_id,
+                "schema_version": case.schema_version,
                 "category": case.category,
                 "query": case.query,
                 "expected_tools": case.expected_tools,
                 "forbidden_tools": case.forbidden_tools,
+                "golden_criteria": _normalize_jsonable(case.golden_criteria),
+                "expected_behavior": case.expected_behavior,
+                "expected_error_codes": case.expected_error_codes,
                 "judge_rubric": case.judge_rubric,
                 "judge_min_score": case.judge_min_score,
             },

@@ -126,7 +126,10 @@ def normalize_debug_info(raw_debug: dict | None, latency_ms_server: int | None) 
     )
 
 
-def build_session_metadata_snapshot(request_data: AgentRequest) -> SessionMetadata:
+def build_session_metadata_snapshot(request_data: AgentRequest) -> SessionMetadata | None:
+    if request_data.reset_slack_destination:
+        return SessionMetadata(slack_destination=None)
+
     slack_destination = parse_slack_destination(
         {
             "channel_id": request_data.slack_channel_id,
@@ -134,6 +137,8 @@ def build_session_metadata_snapshot(request_data: AgentRequest) -> SessionMetada
             "email": request_data.slack_email,
         }
     )
+    if not slack_destination.has_destination():
+        return None
     return SessionMetadata(
-        slack_destination=slack_destination if slack_destination.has_destination() else None,
+        slack_destination=slack_destination,
     )

@@ -90,6 +90,18 @@ class AgentFlowManager:
     @upload_file_path.setter
     def upload_file_path(self, value: str | None) -> None:
         self._ensure_session().upload_file_path = value
+        self._ensure_session().upload_file_paths = (value,) if value else ()
+
+    @property
+    def upload_file_paths(self) -> tuple[str, ...]:
+        return self._ensure_session().upload_file_paths
+
+    @upload_file_paths.setter
+    def upload_file_paths(self, value: list[str] | tuple[str, ...] | None) -> None:
+        paths = tuple(str(path) for path in (value or []) if str(path).strip())
+        session = self._ensure_session()
+        session.upload_file_paths = paths
+        session.upload_file_path = paths[0] if paths else None
 
     def set_session_metadata(self, session_metadata: SessionMetadata | None) -> None:
         self._ensure_session().set_session_metadata(session_metadata)
@@ -188,6 +200,10 @@ class AgentFlowManager:
         self,
         user_input: str,
         upload_file_path: str | None = None,
+        *,
+        upload_file_paths: list[str] | None = None,
+        planner_mode: str = "auto",
+        eval_faults: dict[str, str] | None = None,
         progress_emitter: ProgressEmitter | None = None,
     ) -> dict[str, Any]:
         self._ensure_components()
@@ -202,6 +218,9 @@ class AgentFlowManager:
             state, upload_retriever_build_ms = self._runner.prepare_graph_state(
                 user_input,
                 upload_file_path,
+                upload_file_paths=upload_file_paths,
+                planner_mode=planner_mode,
+                eval_faults=eval_faults,
                 progress_emitter=progress_emitter,
             )
             response, graph_total_ms = self._runner.invoke_graph(state)
@@ -222,6 +241,7 @@ class AgentFlowManager:
         except Exception as exc:
             self._ensure_session().cleanup_upload_retriever()
             self.upload_file_path = None
+            self.upload_file_paths = ()
             graph_total_ms = None
             stage_error = None
             root_exc = exc

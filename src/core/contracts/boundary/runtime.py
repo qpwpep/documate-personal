@@ -39,6 +39,15 @@ def parse_runtime_state(value: Any) -> RuntimeState:
         return value
     if not isinstance(value, dict):
         return RuntimeState()
+    planner_mode = str(value.get("planner_mode") or "auto").strip()
+    if planner_mode not in {"auto", "force_llm"}:
+        planner_mode = "auto"
+    raw_eval_faults = value.get("eval_faults")
+    eval_faults = {
+        str(key): str(item)
+        for key, item in raw_eval_faults.items()
+        if str(key).strip() and str(item).strip()
+    } if isinstance(raw_eval_faults, dict) else {}
     return RuntimeState(
         user_input=str(value.get("user_input", "") or ""),
         retriever=value.get("retriever"),
@@ -49,6 +58,8 @@ def parse_runtime_state(value: Any) -> RuntimeState:
             else None
         ),
         progress_emitter=value.get("progress_emitter"),
+        planner_mode=planner_mode,  # type: ignore[arg-type]
+        eval_faults=eval_faults,
     )
 
 

@@ -38,7 +38,7 @@ def _seed_case(case_id: str, category: str) -> BenchmarkCase:
 
 
 class GenerateCasesScenarioTest(unittest.TestCase):
-    def test_target_120_balances_category_and_scenario(self) -> None:
+    def test_target_320_balances_category_and_scenario(self) -> None:
         seed_cases = [
             _seed_case("seed_docs", "docs_only"),
             _seed_case("seed_rag", "rag_only"),
@@ -55,21 +55,20 @@ class GenerateCasesScenarioTest(unittest.TestCase):
         generated = build_generated_cases(
             seed_cases=seed_cases,
             regression_seed_cases=regression_cases,
-            target=120,
+            target=320,
             random_seed=42,
         )
-        self.assertEqual(len(generated), 120)
+        self.assertEqual(len(generated), 320)
 
         category_counts = Counter(case.category for case in generated)
         scenario_counts = Counter(case.scenario for case in generated)
         cell_counts = Counter((case.category, case.scenario) for case in generated)
 
         for category in ["docs_only", "rag_only", "hybrid", "tool_action"]:
-            self.assertEqual(category_counts[category], 30)
+            self.assertEqual(category_counts[category], 80)
         for scenario in ["seed_mutation", "adversarial", "regression", "ambiguity"]:
-            self.assertEqual(scenario_counts[scenario], 30)
-        self.assertEqual(min(cell_counts.values()), 7)
-        self.assertEqual(max(cell_counts.values()), 8)
+            self.assertEqual(scenario_counts[scenario], 80)
+        self.assertEqual(set(cell_counts.values()), {20})
 
     def test_missing_regression_seed_file_fails_fast(self) -> None:
         with self.assertRaises(FileNotFoundError):

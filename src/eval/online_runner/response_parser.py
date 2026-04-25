@@ -300,8 +300,14 @@ def parse_agent_response(response: requests.Response) -> ParsedResponseData:
                 parsed.debug_schema_version = int(schema_version_raw)
             except (TypeError, ValueError):
                 parsed.response_errors.append("debug.schema_version must be an integer")
-        if parsed.debug_schema_version is not None and parsed.debug_schema_version != DEBUG_SCHEMA_VERSION:
-            parsed.response_errors.append(f"debug.schema_version must be {DEBUG_SCHEMA_VERSION}")
+        accepted_schema_versions = {DEBUG_SCHEMA_VERSION, 3}
+        if (
+            parsed.debug_schema_version is not None
+            and parsed.debug_schema_version not in accepted_schema_versions
+        ):
+            parsed.response_errors.append(
+                f"debug.schema_version must be one of {sorted(accepted_schema_versions)}"
+            )
         observability_status_raw = debug_payload.get("observability_status")
         if observability_status_raw is None:
             parsed.response_errors.append("debug.observability_status is missing")

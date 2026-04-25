@@ -1,10 +1,12 @@
 [weights]
-answer_quality = 0.20
-groundedness = 0.20
-citation_traceability = 0.20
-tool_choice = 0.15
-format_language = 0.05
-llm_judge = 0.20
+answer_quality = 0.15
+criteria_coverage = 0.20
+groundedness = 0.17
+citation_traceability = 0.14
+tool_choice = 0.12
+uncertainty_handling = 0.10
+format_language = 0.04
+llm_judge = 0.08
 
 [hard_gates]
 pass_rate = 0.90

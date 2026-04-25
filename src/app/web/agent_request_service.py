@@ -12,7 +12,7 @@ from typing import Any
 from src.infra.logging_utils import log_event
 from src.runtime.progress import ProgressEmitter
 from src.app.web.agent_request_support import build_session_metadata_snapshot, normalize_debug_info
-from src.app.web.cleanup import RuntimeCleaner, validate_upload_file_path
+from src.app.web.cleanup import RuntimeCleaner, validate_upload_file_paths
 from src.app.web.schemas import AgentDebugInfo, AgentRequest, AgentResponse, AgentResponsePayload, AgentStreamEvent
 from src.app.web.session_store import InMemorySessionStore
 
@@ -119,7 +119,11 @@ class AgentRequestService:
         user_query = request_data.query
         session_id = request_data.session_id
         self._runtime_cleaner.run_once(force=False, current_session_id=session_id)
-        upload_file_path = validate_upload_file_path(request_data.upload_file_path, session_id)
+        upload_file_paths = validate_upload_file_paths(
+            upload_file_path=request_data.upload_file_path,
+            upload_file_paths=request_data.upload_file_paths,
+            session_id=session_id,
+        )
         session_metadata = build_session_metadata_snapshot(request_data)
         agent_manager = self._session_store.get_or_create(session_id)
 
@@ -131,7 +135,8 @@ class AgentRequestService:
             request_id=request_id,
             agent_id=id(agent_manager),
             query=user_query[:60],
-            upload_file_path=upload_file_path,
+            upload_file_paths=upload_file_paths,
+            planner_mode=request_data.planner_mode,
         )
 
         started = time.monotonic()
@@ -139,7 +144,9 @@ class AgentRequestService:
             "session_id": session_id,
             "session_metadata": session_metadata,
             "user_input": user_query,
-            "upload_file_path": upload_file_path,
+            "upload_file_paths": upload_file_paths,
+            "planner_mode": request_data.planner_mode,
+            "eval_faults": request_data.eval_faults if request_data.include_debug else {},
         }
         if progress_emitter is not None:
             run_request_kwargs["progress_emitter"] = progress_emitter

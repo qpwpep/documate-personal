@@ -30,6 +30,7 @@ class PlannerRunContext:
     user_input: str
     has_retriever: bool
     planner_attempt: int
+    planner_mode: str = "auto"
 
 
 def _coerce_planner_payload(raw: Any) -> Any:
@@ -81,12 +82,13 @@ def _resolve_planner_strategy(
     planner_errors: list[str] = []
     llm_calls: list[LLMCallMetadata] = []
 
-    deterministic = build_deterministic_planner_decision(
-        user_input=context.user_input,
-        has_retriever=context.has_retriever,
-    )
-    if deterministic is not None:
-        return deterministic, planner_errors, llm_calls
+    if context.planner_mode != "force_llm":
+        deterministic = build_deterministic_planner_decision(
+            user_input=context.user_input,
+            has_retriever=context.has_retriever,
+        )
+        if deterministic is not None:
+            return deterministic, planner_errors, llm_calls
 
     try:
         planner_raw = llm_planner.invoke(build_planner_messages(state, max_turns=max_turns))
@@ -211,6 +213,7 @@ def make_planner_node(llm_planner: Any, verbose: bool, max_turns: int = 6):
             user_input=runtime.user_input,
             has_retriever=bool(runtime.retriever),
             planner_attempt=int(existing_retry_context.attempt) + 1,
+            planner_mode=runtime.planner_mode,
         )
 
         decision, planner_errors, llm_calls = _resolve_planner_strategy(

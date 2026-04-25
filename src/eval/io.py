@@ -29,7 +29,7 @@ def dump_jsonl(path: Path, records: list[BaseModel | dict[str, Any]]) -> None:
         else:
             payload = record
         lines.append(json.dumps(payload, ensure_ascii=False))
-    path.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
+    path.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8", newline="\n")
 
 
 def load_config(path: Path) -> BenchmarkConfig:

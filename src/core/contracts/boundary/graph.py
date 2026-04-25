@@ -21,6 +21,8 @@ def build_graph_state_input(
     progress_emitter: Any | None = None,
     session_metadata: SessionMetadata | dict[str, Any] | None = None,
     memory_summary: str | None = None,
+    planner_mode: str = "auto",
+    eval_faults: dict[str, str] | None = None,
     planner: PlannerState | dict[str, Any] | None = None,
     retrieval: RetrievalState | dict[str, Any] | None = None,
     retry: RetryState | dict[str, Any] | None = None,
@@ -35,6 +37,8 @@ def build_graph_state_input(
             session_metadata=parse_session_metadata(session_metadata),
             memory_summary=memory_summary,
             progress_emitter=progress_emitter,
+            planner_mode=planner_mode,  # type: ignore[arg-type]
+            eval_faults=dict(eval_faults or {}),
         ),
     }
     if planner is not None:

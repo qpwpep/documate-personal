@@ -235,6 +235,7 @@ def build_case_result(
         validator_reason=parsed_response.validator_reason,
         response_claims=response_claims,
         retrieval_diagnostics=parsed_response.retrieval_diagnostics,
+        error_codes=parsed_response.error_codes,
         synthesis_mode=parsed_response.synthesis_mode,
         valid_claim_count=valid_claim_count,
         invalid_claim_count=invalid_claim_count,
@@ -267,7 +268,12 @@ def build_case_result(
         judge_pass = judge_gate_passed if judge_min_score is not None else (
             True if (config.judge_enabled and not judge_errors and llm_judge_score is not None) else None
         )
-    release_pass = bool(product_pass and not runtime_errors and not parsed_response.response_errors)
+    release_pass = bool(
+        product_pass
+        and not runtime_errors
+        and not parsed_response.response_errors
+        and judge_pass is not False
+    )
     gate_failures = _build_gate_failures(
         runtime_errors=runtime_errors,
         response_errors=parsed_response.response_errors,
@@ -292,6 +298,9 @@ def build_case_result(
         session_id=session_id,
         endpoint=endpoint_url,
         upload_fixture=case.upload_fixture,
+        upload_fixtures=case.upload_fixtures,
+        expected_behavior=case.expected_behavior,
+        expected_error_codes=case.expected_error_codes,
         request_payload=request_payload,
         request_id=parsed_response.request_id,
         http_status=parsed_response.http_status,

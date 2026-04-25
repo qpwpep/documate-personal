@@ -16,6 +16,7 @@ from src.core.latency import elapsed_ms, make_stage_latency_event
 from src.infra.logging_utils import log_event
 from src.core.message_utils import build_tool_message
 from src.core.planner_schema import RetrievalTask
+from src.infra.tools._common import build_retrieval_payload
 from src.runtime.nodes.planner import sanitize_retrieval_query
 from src.runtime.nodes.retry import current_retrieval_attempt
 from src.runtime.nodes.retrieval.executor import RetrievalTaskResult, build_reused_retrieval_task_result, execute_retrieval_task
@@ -49,22 +50,75 @@ def _build_route_handlers(
     rag_search_tool: Any,
     runtime: Any,
 ) -> dict[str, tuple[str, Any]]:
+    faults = getattr(runtime, "eval_faults", {}) or {}
+    if not isinstance(faults, dict):
+        faults = {}
+
+    def injected_fault_payload(route: str, tool_name: str, task: Any) -> dict[str, Any] | None:
+        docs_fault = str(faults.get("tavily") or faults.get("docs") or "").strip().lower()
+        local_fault = str(faults.get("rag_index") or faults.get("local") or "").strip().lower()
+        upload_fault = str(faults.get("upload") or "").strip().lower()
+        if route == "docs" and docs_fault:
+            is_timeout = docs_fault == "timeout"
+            return build_retrieval_payload(
+                tool=tool_name,
+                route="docs",
+                query=task.query,
+                status="error",
+                message="benchmark injected Tavily timeout" if is_timeout else "benchmark injected Tavily failure",
+                error_code="RETRIEVAL_DOCS_TIMEOUT" if is_timeout else "RETRIEVAL_DOCS_FAILED",
+            )
+        if route == "local" and local_fault:
+            return build_retrieval_payload(
+                tool=tool_name,
+                route="local",
+                query=task.query,
+                status="unavailable" if local_fault == "missing" else "error",
+                message="benchmark injected local RAG index missing"
+                if local_fault == "missing"
+                else "benchmark injected local RAG failure",
+                error_code="RAG_INDEX_MISSING" if local_fault == "missing" else "LOCAL_RAG_FAILED",
+            )
+        if route == "upload" and upload_fault:
+            return build_retrieval_payload(
+                tool=tool_name,
+                route="upload",
+                query=task.query,
+                status="unavailable" if upload_fault == "missing" else "error",
+                message="benchmark injected upload retriever failure",
+                error_code="LOCAL_RAG_FAILED",
+            )
+        return None
+
+    def with_fault(route: str, tool_name: str, invoke_tool: Any) -> Any:
+        def wrapped(task: Any) -> Any:
+            payload = injected_fault_payload(route, tool_name, task)
+            if payload is not None:
+                return payload
+            return invoke_tool(task)
+
+        return wrapped
+
     return {
         "docs": (
             "tavily_search",
-            lambda task: tavily_search_tool.func(query=task.query),
+            with_fault("docs", "tavily_search", lambda task: tavily_search_tool.func(query=task.query)),
         ),
         "upload": (
             "upload_search",
-            lambda task: upload_search_tool.func(
-                query=task.query,
-                k=task.k,
-                retriever=runtime.retriever,
+            with_fault(
+                "upload",
+                "upload_search",
+                lambda task: upload_search_tool.func(
+                    query=task.query,
+                    k=task.k,
+                    retriever=runtime.retriever,
+                ),
             ),
         ),
         "local": (
             "rag_search",
-            lambda task: rag_search_tool.func(query=task.query, k=task.k),
+            with_fault("local", "rag_search", lambda task: rag_search_tool.func(query=task.query, k=task.k)),
         ),
     }
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 from langchain_chroma import Chroma
 
@@ -55,32 +55,44 @@ class UploadedRetrieverHandle:
         self._cleaned_up = True
 
 
-def build_temp_retriever(
-    path: str,
-    api_key: str | None = None,
-    k: int = 4,
-) -> UploadedRetrieverHandle:
-    session_id = extract_upload_session_id(path)
-    collection_name = build_upload_collection_name(session_id)
-
+def _chunk_upload_path(path: str) -> list[Any]:
     path_lower = str(path).lower()
     if path_lower.endswith(".py"):
-        docs = chunk_python_text(
+        return chunk_python_text(
             path=path,
             text=_extract_text_from_py(path),
             chunk_size=800,
             chunk_overlap=120,
         )
-    elif path_lower.endswith(".ipynb"):
+    if path_lower.endswith(".ipynb"):
         canonical_path = ensure_canonical_upload_copy(path)
-        docs = chunk_notebook_path(
+        return chunk_notebook_path(
             path=str(canonical_path),
             source_path=path,
             chunk_size=800,
             chunk_overlap=120,
         )
-    else:
-        raise ValueError("Unsupported file type (only .py or .ipynb).")
+    raise ValueError("Unsupported file type (only .py or .ipynb).")
+
+
+def build_temp_retriever(
+    path: str | Sequence[str],
+    api_key: str | None = None,
+    k: int = 4,
+) -> UploadedRetrieverHandle:
+    paths = [str(path)] if isinstance(path, str) else [str(item) for item in path]
+    if not paths:
+        raise ValueError("At least one upload path is required.")
+
+    session_ids = {extract_upload_session_id(item) for item in paths}
+    if len(session_ids) != 1:
+        raise ValueError("All upload paths must belong to the same upload session.")
+    session_id = next(iter(session_ids))
+    collection_name = build_upload_collection_name(session_id)
+
+    docs: list[Any] = []
+    for item in paths:
+        docs.extend(_chunk_upload_path(item))
 
     embeddings = client.build_openai_embeddings(api_key)
     vectorstore = create_chroma_vectorstore(

@@ -13,17 +13,21 @@ from .config_models import CaseCategory, CaseScenario
 
 class JudgeSubscores(BaseModel):
     answer_quality: float = Field(ge=0.0, le=1.0)
+    criteria_coverage: float = Field(default=1.0, ge=0.0, le=1.0)
     groundedness: float = Field(ge=0.0, le=1.0)
     citation_traceability: float = Field(ge=0.0, le=1.0)
     tool_choice: float = Field(ge=0.0, le=1.0)
+    uncertainty_handling: float = Field(default=1.0, ge=0.0, le=1.0)
     format_language: float = Field(ge=0.0, le=1.0)
 
     def average(self) -> float:
-        values = self.model_dump().values()
-        return sum(float(value) for value in values) / 5.0
+        values = list(self.model_dump().values())
+        return sum(float(value) for value in values) / max(1, len(values))
 
 
 class CaseResult(BaseModel):
+    schema_version: int = 2
+    benchmark_fixture_schema_version: int = 2
     run_id: str
     case_id: str
     category: CaseCategory
@@ -32,6 +36,10 @@ class CaseResult(BaseModel):
     session_id: str
     endpoint: str
     upload_fixture: str | None = None
+    upload_fixtures: list[str] = Field(default_factory=list)
+    expected_behavior: str | None = None
+    expected_error_codes: list[str] = Field(default_factory=list)
+    step_results: list[dict[str, Any]] = Field(default_factory=list)
     request_payload: dict[str, Any]
     request_id: str | None = None
     http_status: int

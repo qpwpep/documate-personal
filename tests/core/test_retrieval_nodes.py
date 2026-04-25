@@ -203,6 +203,38 @@ class RetrievalNodeTest(unittest.TestCase):
         self.assertEqual(payload["diagnostics"]["status"], "error")
         self.assertEqual(updates["debug"].retrieval_diagnostics[0].status, "error")
 
+    def test_retrieve_dispatch_injects_benchmark_faults_without_calling_tool(self) -> None:
+        docs_calls = {"count": 0}
+
+        def _docs_search(query: str):
+            docs_calls["count"] += 1
+            return _tool_payload([], tool="tavily_search", route="docs", status="success", message="", query=query)
+
+        retrieve_dispatch = make_retrieve_dispatch_node(
+            _ToolWrapper(_docs_search),
+            _ToolWrapper(lambda query, k, retriever=None: _tool_payload([], tool="upload_search", route="upload", status="no_result", message="", query=query)),
+            _ToolWrapper(lambda query, k: _tool_payload([], tool="rag_search", route="local", status="no_result", message="", query=query)),
+            verbose=False,
+        )
+
+        updates = retrieve_dispatch(
+            build_legacy_state(
+                {
+                    "planner_output": PlannerOutput(
+                        use_retrieval=True,
+                        tasks=[RetrievalTask(route="docs", query="numpy docs", k=3)],
+                    ),
+                    "retry_context": {"attempt": 0},
+                    "eval_faults": {"tavily": "timeout"},
+                }
+            )
+        )
+
+        payload = json.loads(updates["messages"][0].content)
+        self.assertEqual(docs_calls["count"], 0)
+        self.assertEqual(payload["diagnostics"]["error_code"], "RETRIEVAL_DOCS_TIMEOUT")
+        self.assertIn("RETRIEVAL_DOCS_TIMEOUT", updates["debug"].error_codes)
+
     def test_retrieve_dispatch_preserves_planner_task_order_under_parallel_execution(self) -> None:
         def _docs_search(query: str):
             time.sleep(0.05)

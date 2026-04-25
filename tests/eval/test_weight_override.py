@@ -41,8 +41,9 @@ class WeightOverrideTest(unittest.TestCase):
 
         self.assertIsNone(error)
         self.assertAlmostEqual(sum(effective.as_dict().values()), 1.0, places=8)
-        self.assertAlmostEqual(effective.citation_traceability, 0.5 / 1.2, places=8)
-        self.assertAlmostEqual(effective.llm_judge, 0.1 / 1.2, places=8)
+        expected_total = 1.0 - 0.14 - 0.08 + 0.5 + 0.1
+        self.assertAlmostEqual(effective.citation_traceability, 0.5 / expected_total, places=8)
+        self.assertAlmostEqual(effective.llm_judge, 0.1 / expected_total, places=8)
 
     def test_final_score_consistency_with_llm_on_off(self) -> None:
         base = ScoreWeights()
@@ -51,9 +52,11 @@ class WeightOverrideTest(unittest.TestCase):
 
         component_scores = {
             "answer_quality": 1.0,
+            "criteria_coverage": 1.0,
             "groundedness": 1.0,
             "citation_traceability": 1.0,
             "tool_choice": 1.0,
+            "uncertainty_handling": 1.0,
             "format_language": 1.0,
         }
         rule_weighted = compute_rule_weighted_score(component_scores, effective)
@@ -74,11 +77,13 @@ class WeightOverrideTest(unittest.TestCase):
 
         effective_base = resolve_base_weights_for_case(case=case, base_weights=ScoreWeights())
 
-        self.assertAlmostEqual(effective_base.answer_quality, 0.35)
-        self.assertAlmostEqual(effective_base.groundedness, 0.10)
-        self.assertAlmostEqual(effective_base.citation_traceability, 0.05)
-        self.assertAlmostEqual(effective_base.tool_choice, 0.25)
-        self.assertAlmostEqual(effective_base.llm_judge, 0.15)
+        self.assertAlmostEqual(effective_base.answer_quality, 0.25)
+        self.assertAlmostEqual(effective_base.criteria_coverage, 0.20)
+        self.assertAlmostEqual(effective_base.groundedness, 0.08)
+        self.assertAlmostEqual(effective_base.citation_traceability, 0.04)
+        self.assertAlmostEqual(effective_base.tool_choice, 0.22)
+        self.assertAlmostEqual(effective_base.uncertainty_handling, 0.10)
+        self.assertAlmostEqual(effective_base.llm_judge, 0.07)
 
     def test_tool_action_without_citation_requirements_uses_action_friendly_effective_weights(self) -> None:
         case = BenchmarkCase(
@@ -97,12 +102,14 @@ class WeightOverrideTest(unittest.TestCase):
         )
 
         self.assertIsNone(error)
-        self.assertAlmostEqual(effective.answer_quality, 0.40)
+        self.assertAlmostEqual(effective.answer_quality, 0.25)
+        self.assertAlmostEqual(effective.criteria_coverage, 0.20)
         self.assertAlmostEqual(effective.groundedness, 0.025)
         self.assertAlmostEqual(effective.citation_traceability, 0.025)
-        self.assertAlmostEqual(effective.tool_choice, 0.30)
-        self.assertAlmostEqual(effective.format_language, 0.10)
-        self.assertAlmostEqual(effective.llm_judge, 0.15)
+        self.assertAlmostEqual(effective.tool_choice, 0.25)
+        self.assertAlmostEqual(effective.uncertainty_handling, 0.10)
+        self.assertAlmostEqual(effective.format_language, 0.05)
+        self.assertAlmostEqual(effective.llm_judge, 0.10)
 
 
 if __name__ == "__main__":

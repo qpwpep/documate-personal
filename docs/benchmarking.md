@@ -26,8 +26,10 @@ uv run python -m src.eval.main generate \
   --seed data/benchmarks/fixtures/cases.seed.jsonl \
   --regression-seed data/benchmarks/fixtures/cases.regression.seed.jsonl \
   --out data/benchmarks/fixtures/cases.generated.jsonl \
-  --target 120
+  --target 320
 ```
+
+v0.3.0 release fixture는 `schema_version=2` / `benchmark_fixture_schema_version=2`이며, generated suite는 카테고리와 시나리오 조합별 20개씩 총 320개를 기준으로 합니다.
 
 ### 2.2 온라인 벤치마크 실행
 

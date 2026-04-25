@@ -122,6 +122,25 @@ class UploadSessionIsolationTest(unittest.TestCase):
             self.assertEqual(handle_two.collection_name, "upload-session-session-two")
             self.assertEqual(sources, [str(path_two)])
 
+    @patch("src.infra.tools.local_rag.client.build_openai_embeddings", return_value=_FakeEmbeddings())
+    def test_build_temp_retriever_indexes_multiple_files_for_same_session(self, _mock_embeddings) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            session_dir = Path(tmp_dir) / "uploads" / "session-multi"
+            path_one = session_dir / "sample_one.py"
+            path_two = session_dir / "sample_two.py"
+            session_dir.mkdir(parents=True, exist_ok=True)
+            path_one.write_text("alpha = df.groupby('segment').sum()", encoding="utf-8")
+            path_two.write_text("beta = df.merge(other, on='id')", encoding="utf-8")
+
+            handle = build_temp_retriever([str(path_one), str(path_two)], api_key="test-key")
+            self.addCleanup(handle.cleanup)
+
+            metadatas = handle.retriever.vectorstore.get().get("metadatas", [])
+            sources = {item.get("source") for item in metadatas}
+
+            self.assertEqual(handle.collection_name, "upload-session-session-multi")
+            self.assertEqual(sources, {str(path_one), str(path_two)})
+
     @patch("src.app.agent_manager.build_temp_retriever")
     def test_agent_manager_cleans_previous_handle_when_upload_changes(
         self,
@@ -141,7 +160,7 @@ class UploadSessionIsolationTest(unittest.TestCase):
         self.assertIs(graph.states[-1]["runtime"].retriever, handle_two.retriever)
 
     @patch("src.app.agent_manager.build_temp_retriever")
-    def test_agent_manager_cleans_handle_when_upload_removed(self, mock_build_temp_retriever) -> None:
+    def test_agent_manager_preserves_handle_when_upload_omitted(self, mock_build_temp_retriever) -> None:
         graph = _CapturingGraph()
         manager = _make_manager(graph)
         handle = _FakeHandle("upload-session-session")
@@ -149,6 +168,20 @@ class UploadSessionIsolationTest(unittest.TestCase):
 
         manager.run_agent_flow("with upload", upload_file_path="uploads/session/file.py")
         manager.run_agent_flow("without upload")
+
+        self.assertEqual(handle.cleanup_calls, 0)
+        self.assertIs(manager.upload_retriever_handle, handle)
+        self.assertIs(graph.states[-1]["runtime"].retriever, handle.retriever)
+
+    @patch("src.app.agent_manager.build_temp_retriever")
+    def test_agent_manager_cleans_handle_when_uploads_explicitly_cleared(self, mock_build_temp_retriever) -> None:
+        graph = _CapturingGraph()
+        manager = _make_manager(graph)
+        handle = _FakeHandle("upload-session-session")
+        mock_build_temp_retriever.return_value = handle
+
+        manager.run_agent_flow("with upload", upload_file_path="uploads/session/file.py")
+        manager.run_agent_flow("clear upload", upload_file_paths=[])
 
         self.assertEqual(handle.cleanup_calls, 1)
         self.assertIsNone(manager.upload_retriever_handle)

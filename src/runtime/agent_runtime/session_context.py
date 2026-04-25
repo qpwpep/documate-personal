@@ -18,6 +18,7 @@ class SessionContext:
         self.session_metadata: SessionMetadata = parse_session_metadata(None)
         self.upload_retriever_handle: UploadedRetrieverHandle | None = None
         self.upload_file_path: str | None = None
+        self.upload_file_paths: tuple[str, ...] = ()
 
     def set_session_metadata(self, session_metadata: SessionMetadata | None) -> None:
         self.session_metadata = parse_session_metadata(session_metadata)
@@ -46,5 +47,6 @@ class SessionContext:
     def close(self) -> None:
         self.cleanup_upload_retriever()
         self.upload_file_path = None
+        self.upload_file_paths = ()
         self.messages = []
         self.session_metadata = parse_session_metadata(None)

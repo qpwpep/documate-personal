@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from langchain_core.messages import AnyMessage
 from langgraph.graph import add_messages
@@ -34,6 +34,8 @@ class RuntimeState(BaseModel):
     session_metadata: SessionMetadata = Field(default_factory=SessionMetadata)
     memory_summary: str | None = None
     progress_emitter: Any | None = None
+    planner_mode: Literal["auto", "force_llm"] = "auto"
+    eval_faults: dict[str, str] = Field(default_factory=dict)
 
 
 class PlannerState(BaseModel):

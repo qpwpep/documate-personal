@@ -18,12 +18,14 @@ def resolve_effective_weights(
         and not case.require_local_citation
     ):
         merged = {
-            "answer_quality": 0.40,
+            "answer_quality": 0.25,
+            "criteria_coverage": 0.20,
             "groundedness": 0.025,
             "citation_traceability": 0.025,
-            "tool_choice": 0.30,
-            "format_language": 0.10,
-            "llm_judge": 0.15,
+            "tool_choice": 0.25,
+            "uncertainty_handling": 0.10,
+            "format_language": 0.05,
+            "llm_judge": 0.10,
         }
     else:
         merged = base_weights.as_dict()
@@ -53,12 +55,14 @@ def resolve_base_weights_for_case(
     if case.category != "tool_action":
         return base_weights
     return ScoreWeights(
-        answer_quality=0.35,
-        groundedness=0.10,
-        citation_traceability=0.05,
-        tool_choice=0.25,
-        format_language=0.10,
-        llm_judge=0.15,
+        answer_quality=0.25,
+        criteria_coverage=0.20,
+        groundedness=0.08,
+        citation_traceability=0.04,
+        tool_choice=0.22,
+        uncertainty_handling=0.10,
+        format_language=0.04,
+        llm_judge=0.07,
     )
 
 

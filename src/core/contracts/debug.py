@@ -54,7 +54,7 @@ RETRYABLE_REASONS: set[RetryReason] = {
     "tool_error",
     "missing",
 }
-DEBUG_SCHEMA_VERSION = 3
+DEBUG_SCHEMA_VERSION = 4
 DebugObservabilityStatus = Literal["ok", "degraded", "failed"]
 DEBUG_REQUIRED_FIELDS: tuple[str, ...] = (
     "schema_version",
