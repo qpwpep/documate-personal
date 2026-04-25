@@ -24,6 +24,7 @@ class EvidenceItem(BaseModel):
     cell_id: int | None = None
     start_offset: int | None = None
     end_offset: int | None = None
+    code_metadata: dict[str, Any] | None = None
 
     @model_validator(mode="after")
     def populate_document_id(self) -> "EvidenceItem":

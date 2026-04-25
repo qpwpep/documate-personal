@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import math
 from typing import Any, Literal
 
@@ -153,6 +154,69 @@ def normalize_notebook_cell_id(
     return normalized
 
 
+def normalize_code_metadata(value: Any) -> dict[str, Any] | None:
+    payload = value
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return None
+        try:
+            payload = json.loads(stripped)
+        except json.JSONDecodeError:
+            return None
+    if not isinstance(payload, dict):
+        return None
+
+    normalized: dict[str, Any] = {}
+    cell_id = payload.get("cell_id")
+    if cell_id is not None:
+        try:
+            normalized["cell_id"] = max(0, int(cell_id))
+        except (TypeError, ValueError):
+            pass
+
+    calls = []
+    for call in payload.get("calls") or []:
+        if not isinstance(call, dict):
+            continue
+        call_name = str(call.get("call_name") or "").strip()
+        if not call_name:
+            continue
+        call_payload: dict[str, Any] = {"call_name": call_name}
+        kwargs = call.get("kwargs")
+        if isinstance(kwargs, dict):
+            normalized_kwargs = {
+                str(key): str(item)
+                for key, item in kwargs.items()
+                if str(key).strip() and str(item).strip()
+            }
+            if normalized_kwargs:
+                call_payload["kwargs"] = normalized_kwargs
+        line = call.get("line")
+        try:
+            if line is not None:
+                call_payload["line"] = max(1, int(line))
+        except (TypeError, ValueError):
+            pass
+        calls.append(call_payload)
+    if calls:
+        normalized["calls"] = calls
+
+    option_literals = []
+    seen_options: set[str] = set()
+    for option in payload.get("option_literals") or []:
+        option_text = " ".join(str(option or "").split())
+        compact = "".join(option_text.lower().split())
+        if not option_text or compact in seen_options:
+            continue
+        option_literals.append(option_text)
+        seen_options.add(compact)
+    if option_literals:
+        normalized["option_literals"] = option_literals
+
+    return normalized or None
+
+
 def build_evidence_item(
     *,
     kind: Literal["official", "local"],
@@ -202,6 +266,7 @@ def build_evidence_item(
     snippet_text = str(snippet).strip() if snippet else None
     if kind != "local":
         snippet_text = truncate_snippet(snippet_text)
+    code_metadata = normalize_code_metadata(metadata.get("code_metadata"))
     return EvidenceItem(
         kind=kind,
         tool=tool,
@@ -215,6 +280,7 @@ def build_evidence_item(
         cell_id=cell_id,
         start_offset=int(start_offset) if start_offset is not None else None,
         end_offset=int(end_offset) if end_offset is not None else None,
+        code_metadata=code_metadata,
     )
 
 
