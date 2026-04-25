@@ -169,6 +169,49 @@ class LocalRagTest(unittest.TestCase):
         self.assertTrue(all(doc.metadata["document_chunk_count"] == len(docs) for doc in docs))
         self.assertTrue(all(doc.metadata["document_char_count"] == len(text) for doc in docs))
 
+    def test_chunk_python_text_adds_ast_code_metadata(self) -> None:
+        docs = chunk_python_text(
+            path="uploads/session/model.py",
+            text=(
+                "from sklearn.linear_model import LogisticRegression\n"
+                "model = LogisticRegression(max_iter=200, random_state=42)\n"
+            ),
+            chunk_size=800,
+            chunk_overlap=120,
+        )
+
+        metadata = json.loads(docs[0].metadata["code_metadata"])
+        self.assertEqual(metadata["calls"][0]["call_name"], "LogisticRegression")
+        self.assertEqual(metadata["calls"][0]["kwargs"]["max_iter"], "200")
+        self.assertIn("max_iter=200", metadata["option_literals"])
+
+    def test_chunk_notebook_path_adds_cell_ast_code_metadata(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            notebook_path = Path(temp_dir) / "sample_pipeline.ipynb"
+            _write_notebook(
+                notebook_path,
+                "# Sample pipeline",
+                "print('setup')\n",
+                "from sklearn.linear_model import LogisticRegression\n"
+                "model = LogisticRegression(max_iter=200)\n",
+            )
+
+            docs = chunk_notebook_path(
+                path=str(notebook_path),
+                chunk_size=800,
+                chunk_overlap=120,
+            )
+
+        matching = [
+            json.loads(doc.metadata["code_metadata"])
+            for doc in docs
+            if "code_metadata" in doc.metadata
+            and "LogisticRegression" in doc.metadata["code_metadata"]
+        ]
+        self.assertEqual(matching[0]["cell_id"], 2)
+        self.assertEqual(matching[0]["calls"][0]["call_name"], "LogisticRegression")
+        self.assertEqual(matching[0]["calls"][0]["kwargs"]["max_iter"], "200")
+
     def test_chunk_notebook_path_normalizes_list_sources_without_list_repr(self) -> None:
         with TemporaryDirectory() as temp_dir:
             notebook_path = Path(temp_dir) / "sample_pipeline.ipynb"
