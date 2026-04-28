@@ -81,6 +81,7 @@ def build_history_readme_block(
     lines.append(f"- generated_at_utc: `{latest.summary.generated_at_utc}`")
     lines.append(f"- endpoint: `{latest.summary.endpoint}`")
     lines.append(f"- fixtures: `{latest.summary.fixtures_path}`")
+    lines.append(f"- judge_model: `{latest.summary.judge_model}`")
     lines.append(f"- overall: `{'PASS' if latest.summary.overall_passed else 'FAIL'}`")
     lines.append("")
     lines.append("### 9.1 Metrics")

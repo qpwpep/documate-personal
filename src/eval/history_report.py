@@ -37,7 +37,8 @@ def refresh_history_report(
     readme_path.write_text(
         replace_history_block(readme_text, readme_block),
         encoding="utf-8",
+        newline="\n",
     )
     svg_path.parent.mkdir(parents=True, exist_ok=True)
-    svg_path.write_text(svg_content, encoding="utf-8")
+    svg_path.write_text(svg_content, encoding="utf-8", newline="\n")
     return latest, comparable_runs
