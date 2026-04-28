@@ -8,6 +8,23 @@ LangGraph 기반 학습 보조 에이전트입니다. 현재 프로젝트는 공
 - [변경 이력](CHANGELOG.md)
 - [보관 자료 안내](archive/README.md)
 
+## 원본 팀 프로젝트와 개인화 범위
+
+비교 기준은 [AIBootcamp14/langchainproject-new-langchainproject_3](https://github.com/AIBootcamp14/langchainproject-new-langchainproject_3)입니다. 원본 팀 프로젝트 발표 자료는 `archive/team_docs/Langchain_Project_Team_3.pdf`에 보관되어 있습니다. 이 저장소의 현재 유지보수 기준은 `src/`, `tests/`, `docs/`, `data/benchmarks/`이며, `archive/`는 참고용 보관 영역으로 현재 실행 경로에 포함되지 않습니다.
+
+개인화 범위는 FastAPI + Streamlit 런타임 정리, LangGraph 실행 경로 정리, RAG/업로드 검색, 구조화 응답, 벤치마크/문서/테스트 정비를 중심으로 합니다.
+
+| 구분 | 팀 프로젝트 원형 | 개인화 후 구조 | 내가 한 일 |
+|---|---|---|---|
+| 프로젝트 구조 | flat `src` 구조에 주요 agent, graph, tool, web 모듈이 함께 배치 | `app`, `core`, `infra`, `runtime`, `eval` 계층으로 역할 분리 | 실행 진입점, 도메인 계약, 인프라 도구, LangGraph 런타임, 평가 파이프라인을 분리해 유지보수 기준을 재정리 |
+| LangGraph 흐름 | `chatbot + ToolNode` 반복 구조에서 LLM의 tool call에 실행을 위임 | `planner`, `retrieval`, `validation`, `synthesis`, `action` 단계형 graph pipeline | planner가 검색 route를 결정하고 각 단계가 명시적 상태 계약을 주고받도록 그래프를 재구성 |
+| 검색 도구 | 공식 문서 검색과 로컬 RAG 도구를 단일 tool set으로 연결 | `docs`, `local`, `upload` route를 분리하고 결과를 evidence payload로 정규화 | Tavily 공식 문서 검색, Chroma 로컬 노트북 RAG, 세션 업로드 파일 검색을 route별로 분리 |
+| 응답 형식 | 자연어 답변 중심 | `answer`, `claims`, `evidence`, `confidence`, `sections` 구조화 응답 | claim과 evidence를 함께 반환하는 grounded response schema를 설계 |
+| 검증/재시도 | 모델 응답과 tool 결과에 주로 의존 | evidence 품질, route coverage, unsupported claim을 검증하고 선택적으로 retry | pre/post synthesis validation과 retry context를 추가해 근거 부족 시 재검색 또는 후속 질문으로 전환 |
+| 웹 런타임 | 기본 FastAPI + Streamlit 실행 | 세션 TTL/LRU, 세션별 요청 lock, SSE progress, 업로드/생성 파일 cleanup 포함 | 세션별 `AgentFlowManager` 캐시, 스트리밍 API, 파일 경로 검증과 정리 정책을 구현 |
+| 관측성 | 제한적 로그 중심 | latency, tool call, error code, retry/debug payload를 단계별 수집 | `include_debug=true` 응답에서 planner/retrieval diagnostics와 latency breakdown을 확인할 수 있게 구성 |
+| 평가/테스트 | 별도 자동 테스트 없음 | pytest 325개, 120-case benchmark, release hard gate 운영 | 회귀 테스트와 온라인 benchmark CLI를 추가해 pass rate, citation compliance, latency, 비용을 추적 |
+
 ## 1. 핵심 기능
 
 | 기능 | 설명 |
@@ -26,18 +43,42 @@ LangGraph 기반 학습 보조 에이전트입니다. 현재 프로젝트는 공
 현재 그래프는 아래 순서로 동작합니다.
 
 ```mermaid
-flowchart LR
-    A["add_user_message"] --> B{"summarize?"}
-    B -- yes --> C["summarize_old_messages"]
-    B -- no --> D["planner"]
-    C --> D
-    D --> E{"use_retrieval and tasks?"}
-    E -- yes --> F["retrieve_dispatch"]
-    E -- no --> G["synthesize"]
-    F --> G
-    G --> H["validate_evidence"]
-    H -- retry --> D
-    H -- pass --> I["action_postprocess"]
+flowchart TD
+    User["User / API / Streamlit 요청"] --> Service["AgentRequestService / SessionStore"]
+    Service --> Prep["prepare_graph_state<br/>session, upload retriever, metadata"]
+    Prep --> Add["add_user_message"]
+
+    Add --> SummaryRoute{"대화 요약 필요?"}
+    SummaryRoute -- yes --> Summary["summarize_old_messages"]
+    SummaryRoute -- no --> Planner["planner"]
+    Summary --> Planner
+
+    Planner --> PlannerRoute{"planner decision"}
+    PlannerRoute -- guided_followup --> PreValidation["pre_synthesis_validation"]
+    PlannerRoute -- retrieval required --> Retrieval["retrieve_dispatch"]
+    PlannerRoute -- retrieval not required --> Synthesis["synthesize"]
+
+    Retrieval --> Routes["docs / upload / local tasks<br/>내부 병렬 실행, 실패 route 재시도, evidence 누적"]
+    Routes --> PreValidation
+
+    PreValidation --> PreRoute{"pre validation 결과"}
+    PreRoute -- retry planner --> Planner
+    PreRoute -- terminal follow-up --> Action["action_postprocess"]
+    PreRoute -- pass --> Synthesis
+
+    Synthesis --> PostValidation["post_synthesis_validation"]
+    PostValidation --> PostRoute{"post validation 결과"}
+    PostRoute -- retry planner --> Planner
+    PostRoute -- pass / repair --> Action
+
+    Action --> ToolChoice{"요청 의도"}
+    ToolChoice -- save 필요 --> SaveText["save_text"]
+    ToolChoice -- slack 필요 --> Slack["slack_notify"]
+    ToolChoice -- 없음 --> Assemble["ResponseAssembler"]
+
+    SaveText --> Assemble
+    Slack --> Assemble
+    Assemble --> Final["API final response<br/>answer, payload, file_path, debug"]
 ```
 
 주요 조립 지점은 다음과 같습니다.
@@ -355,14 +396,20 @@ UI와 문서 검색 규칙은 아래 파일을 기준으로 관리합니다.
 - `src.infra.rag_build`는 증분 인덱싱을 위해 `data/index/manifest.json`을 관리합니다.
 - benchmark 최신 성능 정본은 `output/benchmarks/latest_release_run.txt`입니다.
 - smoke 최신 런 포인터는 `output/benchmarks/latest_smoke_run.txt`로 별도 관리합니다.
+- 공개용 benchmark 요약은 [벤치마크 결과](docs/benchmark_results.md)에 별도 정리합니다.
 
 ## 9. 최신 벤치마크 결과
 
-이 섹션은 `uv run python -m src.eval.main history --track release` 실행 시 자동으로 갱신됩니다.
+최신 release benchmark 요약:
+
+- 테스트: `325 passed, 18 subtests passed`
+- release benchmark: `120/120` cases passed
+- 상세 결과와 해석: [docs/benchmark_results.md](docs/benchmark_results.md)
 
 ## 10. 최근 벤치마크 이력 및 추세
 
-이 섹션과 `docs/assets/benchmark_history.svg`도 같은 명령으로 함께 갱신됩니다. smoke 히스토리는 별도 `--readme`, `--svg` 경로를 지정해야 합니다.
+벤치마크 실행 방법은 [벤치마크 가이드](docs/benchmarking.md)를 참고하세요.
+추세 그래프는 [docs/assets/benchmark_history.svg](docs/assets/benchmark_history.svg)에 보관합니다.
 
 ## 11. 테스트 및 검증
 
@@ -374,5 +421,5 @@ uv run python script/check_encoding.py
 uv run python script/sync_env_example.py --check
 ```
 
-벤치마크 관련 명령은 [docs/benchmarking.md](docs/benchmarking.md)를 참고하세요.
+벤치마크 관련 명령은 [docs/benchmarking.md](docs/benchmarking.md), 최신 결과는 [docs/benchmark_results.md](docs/benchmark_results.md)를 참고하세요.
 benchmark CLI의 env override 우선순위는 `CLI > .env > OS env > config.toml`입니다.

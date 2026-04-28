@@ -13,7 +13,7 @@ DocuMate 벤치마크는 FastAPI의 `POST /agent` 엔드포인트를 대상으�
 
 1. `uv sync`
 2. `.env` 준비
-3. `uv run python -m src.service_manager startweb`
+3. `uv run python -m src.app.service_manager startweb`
 4. benchmark fixture 생성 또는 기존 fixture 확인
 5. benchmark 실행
 
@@ -78,13 +78,13 @@ live Slack 실행에서는 `summary.json`과 `report.md`에 Slack delivery audit
 uv run python -m src.eval.main report --run output/benchmarks/<run_id>
 ```
 
-### 2.5 README/SVG 이력 갱신
+### 2.5 결과 문서와 SVG 이력 갱신
 
 ```bash
 uv run python -m src.eval.main history
 ```
 
-release 기준 정본은 이 명령으로 아래를 함께 갱신합니다.
+release 기준 README 요약과 SVG 추세는 이 명령으로 아래를 함께 갱신할 수 있습니다. 다만 공개용 상세 결과는 README에 긴 표를 직접 넣지 않고 [벤치마크 결과](benchmark_results.md)에 별도로 정리합니다.
 
 - `README.md`의 9, 10번 섹션
 - `docs/assets/benchmark_history.svg`
@@ -150,16 +150,17 @@ judge minimum score와 pricing도 같은 파일에서 관리합니다.
 
 ## 6. 비교 이력 규칙
 
-`src/eval/history.py`는 모든 run을 같은 기준으로 비교하지 않습니다. 먼저 `track`을 분리하고, 그 안에서 아래 두 조건이 같은 run만 comparable run으로 묶습니다.
+history 리포터는 모든 run을 같은 기준으로 비교하지 않습니다. 먼저 `track`을 분리하고, 그 안에서 아래 두 조건이 같은 run만 comparable run으로 묶습니다.
 
 - `track`
 - `fixtures_path`
 - `total_cases`
 
-즉, fixture 파일이나 케이스 수가 다르면 README 추세표와 SVG에는 함께 들어가지 않을 수 있습니다.
+즉, fixture 파일이나 케이스 수가 다르면 README 요약과 SVG에는 함께 들어가지 않을 수 있습니다.
 
 ## 7. 운영 메모
 
 - benchmark는 현재 `online` 모드만 지원합니다.
 - `report` 명령은 기존 `summary.json`과 `raw_results.jsonl`이 있어야 합니다.
 - `history` 명령은 README 안의 자동 갱신 마커를 기준으로 동작하므로, `README.md`의 `## 9. 최신 벤치마크 결과`와 `## 11. 테스트 및 검증` 제목은 유지해야 합니다.
+- 최신 release 결과를 채용/포트폴리오용으로 자세히 보여줄 때는 [벤치마크 결과](benchmark_results.md)를 갱신합니다.
