@@ -89,6 +89,10 @@ release 기준 README 요약과 SVG 추세는 이 명령으로 아래를 함께 
 - `README.md`의 9, 10번 섹션
 - `docs/assets/benchmark_history.svg`
 
+README와 [벤치마크 결과](benchmark_results.md)를 문서만 최신화할 때는 full release benchmark를 새로 돌리지 않아도 됩니다. 이 경우 `output/benchmarks/latest_release_run.txt`가 가리키는 run의 `summary.json`과 `report.md`를 기준으로 수치를 확인하고, `uv run pytest -q` 결과만 최신 테스트 수치로 반영합니다. 새 release 수치가 필요할 때만 2.2의 `run` 명령으로 전체 benchmark를 재실행합니다.
+
+스크린샷과 데모 GIF는 `history` 명령이 갱신하지 않습니다. 실제 앱 캡처를 갱신한 뒤 공개용 자산만 `docs/assets/demo-final.png`, `docs/assets/demo-flow.gif`로 별도 저장하고 README에서 이 경로를 참조합니다.
+
 smoke 히스토리는 release README/SVG를 덮어쓰지 않도록 별도 경로를 명시해야 합니다.
 
 ```bash
@@ -110,6 +114,8 @@ uv run python -m src.eval.main history \
 | `latest_release_run.txt` | 최신 release run id |
 | `latest_smoke_run.txt` | 최신 smoke run id |
 
+`summary.json`의 `judge_model`은 config와 환경 변수 override를 모두 반영해 실제 실행에 적용된 effective judge model입니다.
+
 실무 기준 source of truth:
 
 - 최신 release run 확인: `output/benchmarks/latest_release_run.txt`
@@ -130,7 +136,7 @@ uv run python -m src.eval.main history \
 | `p95_latency_ms` | `20000` |
 | `avg_cost_per_case_usd` | `0.01` |
 
-judge minimum score와 pricing도 같은 파일에서 관리합니다.
+judge minimum score와 pricing도 같은 파일에서 관리합니다. 비용 지표는 app 응답 생성 LLM 호출 비용 기준이며, 현재 judge 호출 비용은 benchmark cost gate에 포함하지 않습니다.
 
 ## 5. 환경 변수 override
 
@@ -164,3 +170,4 @@ history 리포터는 모든 run을 같은 기준으로 비교하지 않습니다
 - `report` 명령은 기존 `summary.json`과 `raw_results.jsonl`이 있어야 합니다.
 - `history` 명령은 README 안의 자동 갱신 마커를 기준으로 동작하므로, `README.md`의 `## 9. 최신 벤치마크 결과`와 `## 11. 테스트 및 검증` 제목은 유지해야 합니다.
 - 최신 release 결과를 채용/포트폴리오용으로 자세히 보여줄 때는 [벤치마크 결과](benchmark_results.md)를 갱신합니다.
+- 기존 latest release run을 재사용한 문서 갱신은 benchmark 재실행이 아니므로, 결과 문서에 pytest 검증일과 명령 결과를 함께 적어 benchmark 수치와 테스트 수치의 출처를 분리합니다.

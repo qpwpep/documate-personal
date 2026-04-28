@@ -5,14 +5,25 @@ LangGraph 기반 학습 보조 에이전트입니다. 현재 프로젝트는 공
 현재 문서는 실제 동작 코드를 기준으로 정리되어 있습니다. 주요 기준 경로는 `src/runtime/graph_builder.py`, `src/runtime/make_graph.py`, `src/infra/tools/*`, `src/runtime/nodes/*`, `src/app/web/*`, `src/eval/*`입니다.
 
 - [벤치마크 가이드](docs/benchmarking.md)
+- [Design Rationale](docs/design_rationale.md)
 - [변경 이력](CHANGELOG.md)
 - [보관 자료 안내](archive/README.md)
 
-## 원본 팀 프로젝트와 개인화 범위
+## 실제 앱 데모
+
+아래 GIF는 2026-04-29 KST에 `output/browser_capture_actual_utf8/`에서 캡처한 Streamlit 실제 실행 흐름입니다. 세션 업로드 파일 검색, 공식 문서 검색, 구조화 답변, evidence 확인 흐름을 함께 보여줍니다.
+
+![DocuMate actual app demo](docs/assets/demo-flow.gif)
+
+최종 응답 화면은 정적 스크린샷으로도 확인할 수 있습니다.
+
+![DocuMate final answer screenshot](docs/assets/demo-final.png)
+
+## 팀 프로젝트 원형 → 개인 프로젝트 개선 범위
 
 비교 기준은 [AIBootcamp14/langchainproject-new-langchainproject_3](https://github.com/AIBootcamp14/langchainproject-new-langchainproject_3)입니다. 원본 팀 프로젝트 발표 자료는 `archive/team_docs/Langchain_Project_Team_3.pdf`에 보관되어 있습니다. 이 저장소의 현재 유지보수 기준은 `src/`, `tests/`, `docs/`, `data/benchmarks/`이며, `archive/`는 참고용 보관 영역으로 현재 실행 경로에 포함되지 않습니다.
 
-개인화 범위는 FastAPI + Streamlit 런타임 정리, LangGraph 실행 경로 정리, RAG/업로드 검색, 구조화 응답, 벤치마크/문서/테스트 정비를 중심으로 합니다.
+이 저장소는 팀 프로젝트 원형을 그대로 유지하는 보관본이 아니라, 개인 프로젝트로 분리한 뒤 실행 경로와 검증 체계를 다시 설계한 개선본입니다. 개인 프로젝트 개선 범위는 FastAPI + Streamlit 런타임 정리, LangGraph 실행 경로 정리, RAG/업로드 검색, 구조화 응답, 벤치마크/문서/테스트 정비를 중심으로 합니다.
 
 | 구분 | 팀 프로젝트 원형 | 개인화 후 구조 | 내가 한 일 |
 |---|---|---|---|
@@ -23,7 +34,7 @@ LangGraph 기반 학습 보조 에이전트입니다. 현재 프로젝트는 공
 | 검증/재시도 | 모델 응답과 tool 결과에 주로 의존 | evidence 품질, route coverage, unsupported claim을 검증하고 선택적으로 retry | pre/post synthesis validation과 retry context를 추가해 근거 부족 시 재검색 또는 후속 질문으로 전환 |
 | 웹 런타임 | 기본 FastAPI + Streamlit 실행 | 세션 TTL/LRU, 세션별 요청 lock, SSE progress, 업로드/생성 파일 cleanup 포함 | 세션별 `AgentFlowManager` 캐시, 스트리밍 API, 파일 경로 검증과 정리 정책을 구현 |
 | 관측성 | 제한적 로그 중심 | latency, tool call, error code, retry/debug payload를 단계별 수집 | `include_debug=true` 응답에서 planner/retrieval diagnostics와 latency breakdown을 확인할 수 있게 구성 |
-| 평가/테스트 | 별도 자동 테스트 없음 | pytest 325개, 120-case benchmark, release hard gate 운영 | 회귀 테스트와 온라인 benchmark CLI를 추가해 pass rate, citation compliance, latency, 비용을 추적 |
+| 평가/테스트 | 별도 자동 테스트 없음 | pytest 326개, 18 subtests, 120-case release benchmark, release hard gate 운영 | 회귀 테스트와 온라인 benchmark CLI를 추가해 pass rate, citation compliance, latency, 비용을 추적 |
 
 ## 1. 핵심 기능
 
@@ -231,7 +242,7 @@ Windows 환경에서는 `-X utf8` 또는 `PYTHONUTF8=1` 사용을 권장합니�
 
 | 이름 | 기본값 | 설명 |
 |---|---|---|
-| `JUDGE_MODEL` | `gpt-5.4-nano` | benchmark judge 모델 override |
+| `JUDGE_MODEL` | `gpt-5.4-mini` | benchmark judge 모델 override |
 | `BENCHMARK_ENDPOINT` | `http://127.0.0.1:8000` | benchmark 대상 FastAPI 주소 override |
 | `BENCHMARK_JUDGE_ENABLED` | `true` | judge 사용 여부 override |
 | `BENCHMARK_SLACK_ENABLED` | `false` | benchmark live Slack 전송 opt-in |
@@ -410,7 +421,7 @@ UI와 문서 검색 규칙은 아래 파일을 기준으로 관리합니다.
 
 최신 release benchmark 요약:
 
-- 테스트: `325 passed, 18 subtests passed`
+- 테스트: `326 passed, 18 subtests passed`
 - release benchmark: `120/120` cases passed
 - 상세 결과와 해석: [docs/benchmark_results.md](docs/benchmark_results.md)
 
