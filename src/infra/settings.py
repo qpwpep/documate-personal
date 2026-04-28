@@ -92,9 +92,9 @@ BENCHMARK_ENV_SPECS = (
     EnvVarSpec(
         "JUDGE_MODEL",
         None,
-        "gpt-5-mini",
+        "gpt-5.4-mini",
         "benchmark judge 모델 override",
-        example="gpt-5.4-nano",
+        example="gpt-5.4-mini",
         section="benchmark",
         config_runtime_key="judge_model",
     ),

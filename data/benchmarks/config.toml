@@ -35,6 +35,6 @@ prompt_per_1k_usd = 0.00020
 completion_per_1k_usd = 0.00125
 
 [runtime]
-judge_model = "gpt-5.4-nano"
+judge_model = "gpt-5.4-mini"
 judge_enabled = true
 request_timeout_seconds = 60
