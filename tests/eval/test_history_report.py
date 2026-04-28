@@ -104,7 +104,7 @@ def _summary_payload(
             "completion_per_1k_usd": 0.0006,
         },
         "judge_enabled": True,
-        "judge_model": "gpt-5-mini",
+        "judge_model": "gpt-5.4-mini",
     }
 
 
@@ -285,6 +285,7 @@ class HistoryReportTest(unittest.TestCase):
             self.assertEqual(len(comparable), 2)
             self.assertIn("`20260307_101108`", readme_text)
             self.assertIn("`output/benchmarks/latest_release_run.txt`", readme_text)
+            self.assertIn("- judge_model: `gpt-5.4-mini`", readme_text)
             self.assertIn("저장소에 남아 있는 2개 generated-suite 런 기준", readme_text)
             self.assertIn("![DocuMate benchmark history](docs/assets/benchmark_history.svg)", readme_text)
             self.assertIn("20260307_101108", svg_text)
