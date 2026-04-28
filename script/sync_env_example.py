@@ -22,7 +22,7 @@ def _sync_env_example(check: bool) -> bool:
             print(build_unified_diff(path, actual, expected))
             return False
         return True
-    path.write_text(expected, encoding="utf-8")
+    path.write_text(expected, encoding="utf-8", newline="\n")
     print(f"Updated {path}")
     return True
 
@@ -36,7 +36,7 @@ def _sync_readme(check: bool) -> bool:
             print(build_unified_diff(path, actual, expected))
             return False
         return True
-    path.write_text(expected, encoding="utf-8")
+    path.write_text(expected, encoding="utf-8", newline="\n")
     print(f"Updated {path}")
     return True
 

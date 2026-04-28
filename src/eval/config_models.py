@@ -192,6 +192,6 @@ class BenchmarkConfig(BaseModel):
     hard_gates: HardGates = Field(default_factory=HardGates)
     pricing: Pricing = Field(default_factory=Pricing)
     judge_min_score: JudgeMinScoreConfig = Field(default_factory=JudgeMinScoreConfig)
-    judge_model: str = "gpt-5-mini"
+    judge_model: str = "gpt-5.4-mini"
     judge_enabled: bool = True
     request_timeout_seconds: int = 60

@@ -6,9 +6,15 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from src.eval.config_models import BenchmarkCase, BenchmarkConfig, BenchmarkLiveSlackConfig
+from src.eval.io import load_config
 from src.eval.main import command_run
 from src.eval.online_runner import run_online_benchmark
-from src.infra.settings import DEFAULT_BENCHMARK_CONFIG_PATH, BenchmarkCLIEnvSettings, load_benchmark_cli_env_settings
+from src.infra.settings import (
+    DEFAULT_BENCHMARK_CONFIG_PATH,
+    BenchmarkCLIEnvSettings,
+    load_benchmark_cli_env_settings,
+    load_benchmark_env_defaults,
+)
 
 
 class _FakeResponse:
@@ -22,6 +28,20 @@ class _FakeResponse:
 
 
 class BenchmarkCLIEnvResolutionTest(unittest.TestCase):
+    def test_canonical_judge_model_defaults_match_latest_release_runs(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            missing_env_path = Path(temp_dir) / ".env"
+            with patch.dict("os.environ", {}, clear=True):
+                cli_settings = load_benchmark_cli_env_settings(
+                    DEFAULT_BENCHMARK_CONFIG_PATH,
+                    env_path=missing_env_path,
+                )
+
+        self.assertEqual(BenchmarkConfig().judge_model, "gpt-5.4-mini")
+        self.assertEqual(load_config(DEFAULT_BENCHMARK_CONFIG_PATH).judge_model, "gpt-5.4-mini")
+        self.assertEqual(load_benchmark_env_defaults(DEFAULT_BENCHMARK_CONFIG_PATH)["JUDGE_MODEL"], "gpt-5.4-mini")
+        self.assertEqual(cli_settings.judge_model, "gpt-5.4-mini")
+
     def test_load_benchmark_cli_env_settings_reads_dotenv_when_os_env_is_empty(self) -> None:
         with TemporaryDirectory() as temp_dir:
             env_path = Path(temp_dir) / ".env"
