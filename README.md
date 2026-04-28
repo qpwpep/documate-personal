@@ -102,8 +102,16 @@ flowchart TD
 
 ### 3.2 설치
 
+개발 환경:
+
 ```bash
 uv sync
+```
+
+런타임 의존성만 설치:
+
+```bash
+uv sync --no-dev
 ```
 
 ### 3.3 환경 변수 준비
