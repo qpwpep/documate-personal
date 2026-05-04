@@ -54,6 +54,7 @@ class SynthesisPromptBuilderTest(unittest.TestCase):
             str(message.content) for message in messages if isinstance(message, SystemMessage)
         ]
         self.assertIn("[Synthesis Output Template]", system_messages[1])
+        self.assertIn("use [] unless Turn Contract required_sections lists section kinds", system_messages[1])
         self.assertIn("[Selection And Assembly Mode]", system_messages[2])
         turn_messages = [content for content in system_messages if "[Turn Contract]" in content]
         self.assertEqual(len(turn_messages), 1)
@@ -76,6 +77,38 @@ class SynthesisPromptBuilderTest(unittest.TestCase):
         evidence_message = next(content for content in system_messages if "[Retrieved Evidence]" in content)
         self.assertIn("candidate_facts: max_iter=200", evidence_message)
         self.assertLess(evidence_message.index("code_metadata:"), evidence_message.index("snippet:"))
+
+    def test_code_example_request_requires_fenced_code_block_in_turn_contract(self) -> None:
+        state = build_graph_state_input(
+            user_input="BeautifulSoup으로 특정 태그 찾는 예제를 보여줘",
+            messages=[HumanMessage(content="BeautifulSoup으로 특정 태그 찾는 예제를 보여줘")],
+        )
+
+        messages, _history_before, _history_after = build_synthesis_messages(
+            state=state,
+            action_rules=[],
+            deduped_evidence=[
+                {
+                    "kind": "official",
+                    "source_id": "url:https://www.crummy.com/software/BeautifulSoup/bs4/doc/",
+                    "url_or_path": "https://www.crummy.com/software/BeautifulSoup/bs4/doc/",
+                    "title": "Beautiful Soup Documentation",
+                    "snippet": "Use find() and find_all() to search the parse tree.",
+                    "score": 0.9,
+                }
+            ],
+            attempt=1,
+            max_turns=6,
+        )
+
+        system_messages = [
+            str(message.content) for message in messages if isinstance(message, SystemMessage)
+        ]
+        turn_message = next(content for content in system_messages if "[Turn Contract]" in content)
+        self.assertIn("required_sections=code_example", turn_message)
+        self.assertIn("code_block_required=true", turn_message)
+        self.assertIn("fenced code block", turn_message)
+        self.assertIn("do not answer with prose only", turn_message)
 
 
 if __name__ == "__main__":

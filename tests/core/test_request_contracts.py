@@ -4,6 +4,20 @@ from src.core.request_contracts import infer_answer_contract
 
 
 class RequestContractsTest(unittest.TestCase):
+    def test_code_example_markers_require_code_example_section(self) -> None:
+        examples = [
+            "BeautifulSoup으로 특정 태그 찾는 예제를 보여줘",
+            "BeautifulSoup 샘플 코드 보여줘",
+            "Show a BeautifulSoup code example.",
+            "Show sample code for BeautifulSoup.",
+        ]
+
+        for query in examples:
+            with self.subTest(query=query):
+                contract = infer_answer_contract(query, ["docs"])
+
+                self.assertEqual(contract.required_sections, ["code_example"])
+
     def test_hybrid_contract_requires_upload_section_for_explicit_comparison(self) -> None:
         contract = infer_answer_contract(
             "Compare official docs with the uploaded code.",

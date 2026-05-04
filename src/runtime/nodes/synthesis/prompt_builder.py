@@ -19,7 +19,7 @@ SYNTHESIS_OUTPUT_TEMPLATE = (
     "Return exactly one structured SynthesisOutput object.\n"
     "answer: concise response in the user's language.\n"
     "claims: 1-4 sentence-level claims, each with exact Retrieved Evidence source_id values.\n"
-    "sections: include only requested section kinds and keep each body short.\n"
+    "sections: use [] unless Turn Contract required_sections lists section kinds; include only those exact kinds.\n"
     "confidence: 0.0-1.0 when supported, otherwise null.\n"
     "Citations are supplied through evidence_ids; the renderer adds citation labels."
 )
@@ -148,6 +148,10 @@ def _build_turn_contract_block(
             lines.append("- upload_code uses local/upload option_literals or call kwargs when present")
         else:
             lines.append("- put uploaded/local details inside the comparison section")
+    if "code_example" in answer_contract.required_sections:
+        lines.append("- code_block_required=true")
+        lines.append("- code_example section must include at least one fenced code block with concrete sample code")
+        lines.append("- explain the code briefly outside the code block; do not answer with prose only")
     if action_rules:
         lines.append("- action_rules:")
         lines.extend(f"  - {rule}" for rule in action_rules)
