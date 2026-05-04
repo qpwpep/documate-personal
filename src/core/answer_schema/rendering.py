@@ -4,7 +4,7 @@ import re
 from typing import Iterable
 
 from src.core.evidence import EvidenceItem
-from src.core.answer_schema.models import AgentResponsePayloadModel, AnswerSection, ClaimItem, normalize_answer_sections
+from src.core.answer_schema.models import AgentResponsePayloadModel, AnswerSection, ClaimItem, is_placeholder_reference_text, normalize_answer_sections
 
 
 _CITATION_PATTERN = re.compile(r"\s*\[(?:\d+)\]\s*$")
@@ -32,7 +32,10 @@ def resolve_answer_text(
     rendered_sections = render_sections_text(sections)
     if rendered_sections:
         return rendered_sections
-    return str(answer or "").strip()
+    fallback_answer = str(answer or "").strip()
+    if is_placeholder_reference_text(fallback_answer):
+        return ""
+    return fallback_answer
 
 
 def build_empty_response_payload(

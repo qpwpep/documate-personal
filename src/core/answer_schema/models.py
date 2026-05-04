@@ -1,11 +1,64 @@
 from __future__ import annotations
 
 import math
+import re
 from typing import Iterable
 
 from pydantic import BaseModel, Field, field_validator
 
 from src.core.evidence import EvidenceItem
+
+_PLACEHOLDER_REFERENCE_PATTERN = re.compile(
+    r"(?:"
+    r"(?:위|아래|앞(?:의)?|다음|상기)\s*(?:코드|예제|내용|자료|문서|결과|설명)\s*(?:를|을)?\s*(?:참고|참조|보세요|확인)"
+    r"|(?:see|refer to|as shown in|shown in|use)\s+(?:the\s+)?(?:above|below|previous|following)\s+"
+    r"(?:code|example|content|text|result)"
+    r"|(?:above|below|previous|following)\s+(?:code|example|content|text|result)"
+    r")",
+    flags=re.I,
+)
+_COMPACT_PLACEHOLDER_PHRASES = {
+    "위코드참고",
+    "위코드참조",
+    "아래코드참고",
+    "아래코드참조",
+    "위예제참고",
+    "위내용참고",
+    "상기내용참고",
+    "seeabovecode",
+    "refertoabovecode",
+    "aboveexample",
+}
+_CODE_DETAIL_PATTERN = re.compile(
+    r"```|`[^`]+`|"
+    r"\b[A-Za-z_][A-Za-z0-9_.]*\s*\(|"
+    r"\b[A-Za-z_][A-Za-z0-9_]*\s*=|"
+    r"</?[A-Za-z][^>]*>",
+    flags=re.M,
+)
+
+
+def _compact_text(text: str) -> str:
+    return re.sub(r"\s+", "", str(text or "").strip().lower())
+
+
+def _has_code_or_substantial_detail(text: str) -> bool:
+    normalized = " ".join(str(text or "").split())
+    if _CODE_DETAIL_PATTERN.search(normalized):
+        return True
+    return len(normalized) >= 80
+
+
+def is_placeholder_reference_text(text: str) -> bool:
+    normalized = str(text or "").strip()
+    if not normalized:
+        return False
+    compact = _compact_text(normalized)
+    has_placeholder_phrase = any(phrase in compact for phrase in _COMPACT_PLACEHOLDER_PHRASES)
+    has_placeholder_phrase = has_placeholder_phrase or bool(_PLACEHOLDER_REFERENCE_PATTERN.search(normalized))
+    if not has_placeholder_phrase:
+        return False
+    return not _has_code_or_substantial_detail(normalized)
 
 
 def normalize_confidence(value: object, *, clamp: bool = False) -> float | None:
@@ -85,7 +138,9 @@ def normalize_answer_sections(
         )
         if not normalized_section.kind:
             continue
-        if not normalized_section.heading and not normalized_section.body:
+        if not normalized_section.body:
+            continue
+        if is_placeholder_reference_text(normalized_section.body):
             continue
         normalized_sections.append(normalized_section)
     return normalized_sections
@@ -96,6 +151,7 @@ __all__ = [
     "AnswerSection",
     "ClaimItem",
     "SynthesisOutput",
+    "is_placeholder_reference_text",
     "normalize_answer_sections",
     "normalize_confidence",
 ]

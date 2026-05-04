@@ -754,6 +754,53 @@ class SynthesisValidationTest(unittest.TestCase):
         self.assertEqual(len(_response(updates).payload.claims), 1)
         self.assertEqual(len(_response(updates).payload.sections), 2)
 
+    def test_synthesize_drops_placeholder_code_section_and_renders_claim(self) -> None:
+        source_id = "url:https://www.crummy.com/software/BeautifulSoup/bs4/doc/#searching-the-tree"
+        capture_llm = _CaptureStructuredSynthesizeLLM(
+            {
+                "answer": "",
+                "claims": [
+                    {
+                        "text": "BeautifulSoup에서는 find_all()로 특정 태그를 찾을 수 있습니다.",
+                        "evidence_ids": [source_id],
+                        "confidence": 0.93,
+                    }
+                ],
+                "confidence": 0.93,
+                "sections": [
+                    {
+                        "kind": "code",
+                        "heading": "특정 태그 찾기 예제",
+                        "body": "위 코드 참고",
+                    }
+                ],
+            },
+            include_raw=True,
+        )
+        synthesize_node = make_synthesize_node(capture_llm, verbose=False, max_turns=8)
+
+        updates = synthesize_node(
+            _state(
+                {
+                    "messages": [HumanMessage(content="BeautifulSoup으로 특정 태그 찾는 예제를 보여줘")],
+                    "user_input": "BeautifulSoup으로 특정 태그 찾는 예제를 보여줘",
+                    "retrieved_evidence": [
+                        _docs_evidence(
+                            source_id=source_id,
+                            snippet="The find_all method looks through a tag's descendants and retrieves matching tags.",
+                        )
+                    ],
+                    "synthesis_attempt": 0,
+                }
+            )
+        )
+
+        self.assertEqual(
+            _response(updates).final_answer,
+            "BeautifulSoup에서는 find_all()로 특정 태그를 찾을 수 있습니다. [1]",
+        )
+        self.assertEqual(_response(updates).payload.sections, [])
+
     def test_synthesize_empty_structured_output_falls_back_to_non_blank_answer(self) -> None:
         capture_llm = _CaptureStructuredSynthesizeLLM(
             {

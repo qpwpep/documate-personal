@@ -1,7 +1,9 @@
 import unittest
 
 import src.core.answer_schema as answer_schema
+from src.core.answer_schema import AnswerSection, ClaimItem
 from src.core.answer_schema.fallbacks import build_deterministic_grounded_payload
+from src.core.answer_schema.rendering import build_empty_response_payload, render_payload_from_claims
 from src.core.answer_schema.text_cleaning import clean_grounded_text
 from src.core.evidence import EvidenceItem
 
@@ -10,6 +12,60 @@ class AnswerSchemaTest(unittest.TestCase):
     def test_answer_schema_barrel_reexports_split_modules(self) -> None:
         self.assertIs(answer_schema.build_deterministic_grounded_payload, build_deterministic_grounded_payload)
         self.assertIs(answer_schema.clean_grounded_text, clean_grounded_text)
+
+    def test_placeholder_reference_sections_do_not_override_grounded_claims(self) -> None:
+        evidence = EvidenceItem(
+            kind="official",
+            tool="tavily_search",
+            source_id="url:https://www.crummy.com/software/BeautifulSoup/bs4/doc/#searching-the-tree",
+            document_id="url:https://www.crummy.com/software/BeautifulSoup/bs4/doc/#searching-the-tree",
+            url_or_path="https://www.crummy.com/software/BeautifulSoup/bs4/doc/#searching-the-tree",
+            title="Beautiful Soup Documentation",
+            snippet="The find_all method looks through a tag's descendants and retrieves matching tags.",
+            score=0.93,
+        )
+
+        payload = render_payload_from_claims(
+            claims=[
+                ClaimItem(
+                    text="BeautifulSoup에서는 find_all()로 특정 태그를 찾을 수 있습니다.",
+                    evidence_ids=[evidence.source_id],
+                )
+            ],
+            evidence_items=[evidence],
+            confidence=0.93,
+            sections=[
+                AnswerSection(
+                    kind="code",
+                    heading="특정 태그 찾기 예제",
+                    body="위 코드 참고",
+                )
+            ],
+        )
+
+        self.assertEqual(
+            payload.answer,
+            "BeautifulSoup에서는 find_all()로 특정 태그를 찾을 수 있습니다. [1]",
+        )
+        self.assertEqual(payload.sections, [])
+
+    def test_placeholder_reference_answer_is_treated_as_empty(self) -> None:
+        payload = build_empty_response_payload(answer="특정 태그 찾기 예제\n위 코드 참고")
+
+        self.assertEqual(payload.answer, "")
+
+    def test_reference_section_with_actual_code_is_kept(self) -> None:
+        payload = build_empty_response_payload(
+            sections=[
+                AnswerSection(
+                    kind="summary",
+                    heading="예제",
+                    body="아래 코드 참고:\n```python\nsoup.find_all('a')\n```",
+                )
+            ]
+        )
+
+        self.assertIn("soup.find_all('a')", payload.answer)
 
     def test_clean_grounded_text_removes_markdown_and_navigation_lines(self) -> None:
         cleaned = clean_grounded_text(

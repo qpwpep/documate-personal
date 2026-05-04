@@ -55,6 +55,7 @@ class SynthesisPromptBuilderTest(unittest.TestCase):
         ]
         self.assertIn("[Synthesis Output Template]", system_messages[1])
         self.assertIn("use [] unless Turn Contract required_sections lists section kinds", system_messages[1])
+        self.assertIn("Never write placeholder references", system_messages[1])
         self.assertIn("[Selection And Assembly Mode]", system_messages[2])
         turn_messages = [content for content in system_messages if "[Turn Contract]" in content]
         self.assertEqual(len(turn_messages), 1)
