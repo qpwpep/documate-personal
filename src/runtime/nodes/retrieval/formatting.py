@@ -60,6 +60,16 @@ def _coerce_code_metadata(value: Any) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
+def _coerce_doc_metadata(value: Any) -> dict[str, Any]:
+    payload = value
+    if isinstance(value, str):
+        try:
+            payload = json.loads(value)
+        except json.JSONDecodeError:
+            return {}
+    return payload if isinstance(payload, dict) else {}
+
+
 def _option_literals_from_code_metadata(code_metadata: dict[str, Any]) -> list[str]:
     options: list[str] = []
     seen: set[str] = set()
@@ -88,6 +98,46 @@ def _call_candidate(call: dict[str, Any]) -> str:
     return f"{call_name}({rendered_kwargs})" if rendered_kwargs else call_name
 
 
+def _doc_entry_fact(prefix: str, entry: dict[str, Any]) -> str:
+    name = str(entry.get("name") or "").strip()
+    if not name:
+        return ""
+    detail = str(
+        entry.get("description")
+        or entry.get("type")
+        or entry.get("default")
+        or ""
+    ).strip()
+    return f"{prefix} {name}: {detail}" if detail else f"{prefix} {name}"
+
+
+def _candidate_facts_from_doc_metadata(doc_metadata: dict[str, Any]) -> list[str]:
+    facts: list[str] = []
+    signature = str(doc_metadata.get("signature") or "").strip()
+    if signature:
+        facts.append(f"signature: {signature}")
+    for key, prefix in (
+        ("parameters", "param"),
+        ("options", "option"),
+        ("returns", "return"),
+    ):
+        for entry in doc_metadata.get(key) or []:
+            if not isinstance(entry, dict):
+                continue
+            fact = _doc_entry_fact(prefix, entry)
+            if fact:
+                facts.append(fact)
+            if len(facts) >= 10:
+                return facts
+    for note in doc_metadata.get("notes") or []:
+        note_text = " ".join(str(note or "").split()).strip()
+        if note_text:
+            facts.append(f"note: {note_text}")
+        if len(facts) >= 10:
+            break
+    return facts
+
+
 def _candidate_facts_for_item(
     item: dict[str, Any],
     *,
@@ -104,6 +154,12 @@ def _candidate_facts_for_item(
                 if isinstance(call, dict)
             ]
         return [fact for fact in facts if fact][:4]
+
+    doc_metadata = _coerce_doc_metadata(item.get("doc_metadata"))
+    if doc_metadata:
+        facts = _candidate_facts_from_doc_metadata(doc_metadata)
+        if facts:
+            return facts
 
     fact = _truncate_prompt_snippet(snippet, max_chars=min(max_snippet_chars, 220))
     return [fact] if fact else []
@@ -132,6 +188,7 @@ def format_evidence_for_prompt(
             max_chars=max_snippet_chars,
         )
         code_metadata = _coerce_code_metadata(item.get("code_metadata"))
+        doc_metadata = _coerce_doc_metadata(item.get("doc_metadata"))
         candidate_facts = _candidate_facts_for_item(
             item,
             snippet=snippet,
@@ -161,6 +218,30 @@ def format_evidence_for_prompt(
                 lines.append(f"   location: {', '.join(location_parts)}")
         if candidate_facts:
             lines.append(f"   candidate_facts: {'; '.join(candidate_facts)}")
+        if doc_metadata:
+            doc_family = str(doc_metadata.get("doc_family") or "").strip()
+            symbol = str(doc_metadata.get("symbol") or "").strip()
+            signature = str(doc_metadata.get("signature") or "").strip()
+            if doc_family:
+                lines.append(f"   doc_family: {doc_family}")
+            if symbol:
+                lines.append(f"   api_symbol: {symbol}")
+            if signature:
+                lines.append(f"   signature: {signature}")
+            parameter_facts = [
+                _doc_entry_fact("param", entry)
+                for entry in doc_metadata.get("parameters") or []
+                if isinstance(entry, dict)
+            ]
+            option_facts = [
+                _doc_entry_fact("option", entry)
+                for entry in doc_metadata.get("options") or []
+                if isinstance(entry, dict)
+            ]
+            if parameter_facts:
+                lines.append(f"   parameter_facts: {'; '.join(parameter_facts[:10])}")
+            if option_facts:
+                lines.append(f"   option_facts: {'; '.join(option_facts[:10])}")
         if code_metadata:
             lines.append(
                 "   code_metadata: "
