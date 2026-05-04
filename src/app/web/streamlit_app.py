@@ -20,6 +20,7 @@ from src.app.web.streamlit_state import (
     get_session_id,
     get_session_path,
     get_uploaded_file_name,
+    reset_chat_session,
     set_uploaded_file_name,
 )
 from src.app.web.streamlit_upload_handler import sync_uploaded_file
@@ -40,10 +41,14 @@ def main() -> None:
     warn_if_utf8_mode_disabled_once()
     ensure_session_state(logger)
 
-    session_path = get_session_path()
     sidebar_inputs = render_sidebar(get_uploaded_file_name())
+    if sidebar_inputs.new_chat_requested:
+        reset_chat_session(logger)
+        st.rerun()
+
     render_theme_styles(sidebar_inputs.theme_mode)
 
+    session_path = get_session_path()
     messages = get_messages()
     selected_prompt = render_intro(DEFAULT_DOCS) if len(messages) <= 1 else None
     render_chat_history(messages, SETTINGS.fastapi_url)

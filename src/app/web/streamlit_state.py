@@ -20,9 +20,7 @@ class ChatMessage(TypedDict):
 
 def ensure_session_state(logger: logging.Logger) -> None:
     if "session_id" not in st.session_state:
-        session_id = str(uuid.uuid4())
-        st.session_state["session_id"] = session_id
-        log_event(logger, logging.INFO, "streamlit_session_start", session_id=session_id[:8])
+        _start_new_session(logger, "streamlit_session_start")
 
     if "uploaded_file_name" not in st.session_state:
         st.session_state["uploaded_file_name"] = None
@@ -62,6 +60,19 @@ def get_messages() -> list[ChatMessage]:
 
 def append_message(message: ChatMessage) -> None:
     get_messages().append(message)
+
+
+def reset_chat_session(logger: logging.Logger) -> None:
+    _start_new_session(logger, "streamlit_session_reset")
+    st.session_state["uploaded_file_name"] = None
+    st.session_state["messages"] = [_build_default_assistant_message()]
+    get_session_path().mkdir(parents=True, exist_ok=True)
+
+
+def _start_new_session(logger: logging.Logger, event_name: str) -> None:
+    session_id = str(uuid.uuid4())
+    st.session_state["session_id"] = session_id
+    log_event(logger, logging.INFO, event_name, session_id=session_id[:8])
 
 
 def _build_default_assistant_message() -> ChatMessage:

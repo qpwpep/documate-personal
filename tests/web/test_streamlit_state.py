@@ -56,6 +56,39 @@ class StreamlitStateTest(unittest.TestCase):
             streamlit_state.clear_uploaded_file_name()
             self.assertIsNone(streamlit_state.get_uploaded_file_name())
 
+    def test_reset_chat_session_starts_clean_conversation(self) -> None:
+        fake_st = SimpleNamespace(
+            session_state={
+                "session_id": "old-session",
+                "uploaded_file_name": "sample.py",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": "previous",
+                        "file_path": "",
+                        "evidence": [],
+                    }
+                ],
+            }
+        )
+        with TemporaryDirectory() as temp_dir:
+            uploads_dir = Path(temp_dir) / "uploads"
+            with patch.object(streamlit_state, "st", fake_st), patch(
+                "src.app.web.streamlit_state.get_uploads_dir",
+                return_value=uploads_dir,
+            ), patch(
+                "src.app.web.streamlit_state.uuid.uuid4",
+                return_value="new-session",
+            ), patch("src.app.web.streamlit_state.log_event") as mock_log_event:
+                streamlit_state.reset_chat_session(streamlit_state.logging.getLogger(__name__))
+
+                self.assertEqual(streamlit_state.get_session_id(), "new-session")
+                self.assertIsNone(streamlit_state.get_uploaded_file_name())
+                self.assertEqual(len(streamlit_state.get_messages()), 1)
+                self.assertEqual(streamlit_state.get_messages()[0]["role"], "assistant")
+                self.assertTrue((uploads_dir / "new-session").exists())
+                mock_log_event.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()
