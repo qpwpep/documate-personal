@@ -6,7 +6,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-from src.core.evidence import EvidenceItem, build_local_source_id, dedupe_evidence, evidence_to_dicts, normalize_source_id, truncate_snippet
+from src.core.evidence import DocMetadata, EvidenceItem, build_local_source_id, dedupe_evidence, evidence_to_dicts, normalize_source_id, truncate_snippet
 
 
 def build_retrieval_payload(
@@ -217,6 +217,39 @@ def normalize_code_metadata(value: Any) -> dict[str, Any] | None:
     return normalized or None
 
 
+def normalize_doc_metadata(value: Any) -> DocMetadata | None:
+    payload = value
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return None
+        try:
+            payload = json.loads(stripped)
+        except json.JSONDecodeError:
+            return None
+    if not isinstance(payload, dict):
+        return None
+    try:
+        metadata = DocMetadata.model_validate(payload)
+    except Exception:
+        return None
+    if not any(
+        (
+            metadata.doc_family,
+            metadata.symbol,
+            metadata.signature,
+            metadata.parameters,
+            metadata.returns,
+            metadata.options,
+            metadata.examples,
+            metadata.notes,
+            metadata.source_sections,
+        )
+    ):
+        return None
+    return metadata
+
+
 def build_evidence_item(
     *,
     kind: Literal["official", "local"],
@@ -267,6 +300,7 @@ def build_evidence_item(
     if kind != "local":
         snippet_text = truncate_snippet(snippet_text)
     code_metadata = normalize_code_metadata(metadata.get("code_metadata"))
+    doc_metadata = normalize_doc_metadata(metadata.get("doc_metadata"))
     return EvidenceItem(
         kind=kind,
         tool=tool,
@@ -281,6 +315,7 @@ def build_evidence_item(
         start_offset=int(start_offset) if start_offset is not None else None,
         end_offset=int(end_offset) if end_offset is not None else None,
         code_metadata=code_metadata,
+        doc_metadata=doc_metadata,
     )
 
 

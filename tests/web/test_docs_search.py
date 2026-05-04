@@ -340,6 +340,7 @@ class DocsSearchTest(unittest.TestCase):
             [item["url_or_path"] for item in result["evidence"]],
             ["https://numpy.org/doc/stable/reference/generated/numpy.reshape.html"],
         )
+        self.assertEqual(result["evidence"][0]["title"], "numpy.reshape - NumPy Manual")
 
     @patch("src.infra.tools.docs_search.client.request_tavily_search")
     def test_docs_search_uses_fallback_when_first_batch_is_docs_chrome_only(self, mock_request_tavily_search) -> None:
@@ -399,6 +400,98 @@ class DocsSearchTest(unittest.TestCase):
             [item["url_or_path"] for item in result["evidence"]],
             ["https://www.crummy.com/software/BeautifulSoup/bs4/doc/#searching-the-tree"],
         )
+
+    @patch("src.infra.tools.docs_search.client.request_tavily_search")
+    def test_docs_search_extracts_structured_api_metadata_from_raw_content(self, mock_request_tavily_search) -> None:
+        mock_request_tavily_search.return_value = {
+            "results": [
+                {
+                    "url": "https://matplotlib.org/stable/api/_as_gen/matplotlib.pyplot.pie.html",
+                    "title": "matplotlib.pyplot.pie — Matplotlib documentation",
+                    "content": "Plot a pie chart.",
+                    "raw_content": "\n".join(
+                        [
+                            "# matplotlib.pyplot.pie",
+                            "matplotlib.pyplot.pie(x, *, labels=None, autopct=None, startangle=0, wedgeprops=None)",
+                            "Plot a pie chart.",
+                            "Parameters:",
+                            "x 1D array-like",
+                            "The wedge sizes.",
+                            "labels list, default: None",
+                            "A sequence of strings providing the labels for each wedge.",
+                            "autopct None or str or callable, default: None",
+                            "If not None, autopct is used to label the wedges with their numeric value.",
+                            "startangle float, default: 0 degrees",
+                            "The angle by which the start of the pie is rotated.",
+                            "wedgeprops dict, default: None",
+                            "Dict of arguments passed to each Wedge of the pie.",
+                            "Returns:",
+                            "patches list",
+                            "A sequence of Wedge instances.",
+                        ]
+                    ),
+                    "score": 0.95,
+                }
+            ]
+        }
+
+        registry = build_tool_registry(AppSettings(openai_api_key="test", tavily_api_key="test"))
+        result = registry.tavily_search_tool.func(query="matplotlib pie 차트 옵션을 정리해줘")
+
+        first_kwargs = mock_request_tavily_search.call_args_list[0].kwargs
+        self.assertEqual(first_kwargs["include_raw_content"], "markdown")
+        self.assertEqual(result["diagnostics"]["status"], "success")
+        metadata = result["evidence"][0]["doc_metadata"]
+        self.assertEqual(metadata["doc_family"], "sphinx_api")
+        self.assertEqual(metadata["symbol"], "matplotlib.pyplot.pie")
+        parameter_names = [item["name"] for item in metadata["parameters"]]
+        self.assertIn("labels", parameter_names)
+        self.assertIn("autopct", parameter_names)
+        self.assertIn("wedgeprops", parameter_names)
+        self.assertIn("param autopct", result["evidence"][0]["snippet"])
+
+    @patch("src.infra.tools.docs_search.client.request_tavily_search")
+    def test_docs_search_prefers_api_reference_for_matplotlib_option_requests(self, mock_request_tavily_search) -> None:
+        mock_request_tavily_search.return_value = {
+            "results": [
+                {
+                    "url": "https://matplotlib.org/stable/plot_types/stats/pie.html",
+                    "title": "pie(x) — Matplotlib documentation",
+                    "content": "Plot a pie chart. See pie.",
+                    "score": 0.99,
+                },
+                {
+                    "url": "https://matplotlib.org/stable/api/_as_gen/matplotlib.pyplot.pie.html",
+                    "title": "matplotlib.pyplot.pie — Matplotlib documentation",
+                    "content": "Plot a pie chart.",
+                    "raw_content": "\n".join(
+                        [
+                            "# matplotlib.pyplot.pie",
+                            "matplotlib.pyplot.pie(x, *, labels=None, autopct=None, startangle=0, wedgeprops=None)",
+                            "Parameters:",
+                            "x 1D array-like",
+                            "The wedge sizes.",
+                            "autopct None or str or callable, default: None",
+                            "If not None, autopct is used to label the wedges with their numeric value.",
+                            "wedgeprops dict, default: None",
+                            "Dict of arguments passed to each Wedge of the pie.",
+                        ]
+                    ),
+                    "score": 0.82,
+                },
+            ]
+        }
+
+        registry = build_tool_registry(AppSettings(openai_api_key="test", tavily_api_key="test"))
+        result = registry.tavily_search_tool.func(query="matplotlib pie 차트 옵션을 정리해줘")
+
+        first_kwargs = mock_request_tavily_search.call_args_list[0].kwargs
+        self.assertEqual(first_kwargs["include_raw_content"], "markdown")
+        self.assertEqual(
+            result["evidence"][0]["url_or_path"],
+            "https://matplotlib.org/stable/api/_as_gen/matplotlib.pyplot.pie.html",
+        )
+        self.assertIn("autopct", result["evidence"][0]["snippet"])
 
 
 if __name__ == "__main__":

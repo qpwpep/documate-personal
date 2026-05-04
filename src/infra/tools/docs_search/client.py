@@ -16,6 +16,7 @@ def request_tavily_search(
     search_depth: Literal["basic", "advanced", "fast", "ultra-fast"],
     timeout_seconds: int,
     max_results: int = 3,
+    include_raw_content: Literal[False, "markdown", "text"] = False,
 ) -> dict[str, Any]:
     if not tavily_api_key:
         raise RuntimeError("TAVILY_API_KEY is not configured")
@@ -32,6 +33,8 @@ def request_tavily_search(
         "topic": "general",
         "include_domains": include_domains,
     }
+    if include_raw_content:
+        payload["include_raw_content"] = include_raw_content
 
     try:
         response = requests.post(

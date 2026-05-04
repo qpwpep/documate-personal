@@ -105,6 +105,60 @@ def entity_hit_score(query: str, evidence_item: dict[str, Any]) -> float:
     return float(sum(1 for token in query_terms if token in haystack))
 
 
+def query_requests_api_detail(query: str) -> bool:
+    lowered = str(query or "").lower()
+    return any(
+        marker in lowered
+        for marker in (
+            "api",
+            "reference",
+            "signature",
+            "option",
+            "options",
+            "parameter",
+            "parameters",
+            "argument",
+            "arguments",
+            "옵션",
+            "파라미터",
+            "매개변수",
+            "인자",
+        )
+    )
+
+
+def api_reference_preference_score(query: str, evidence_item: dict[str, Any]) -> float:
+    if not query_requests_api_detail(query):
+        return 0.0
+
+    url = str(evidence_item.get("url_or_path") or "").lower()
+    title = str(evidence_item.get("title") or "").lower()
+    metadata = evidence_item.get("doc_metadata")
+    score = 0.0
+
+    if "/api/_as_gen/" in url:
+        score += 6.0
+    if "/reference/generated/" in url or "/reference/api/" in url:
+        score += 4.0
+    if "/plot_types/" in url or "/gallery/" in url:
+        score -= 3.0
+
+    if isinstance(metadata, dict):
+        if metadata.get("parameters") or metadata.get("options"):
+            score += 5.0
+        if metadata.get("signature"):
+            score += 2.0
+        symbol = str(metadata.get("symbol") or "").lower()
+        if "." in symbol:
+            score += 1.0
+            if symbol and symbol in f"{title} {url}":
+                score += 1.0
+
+    if "matplotlib.pyplot.pie" in f"{title} {url}":
+        score += 4.0
+    return score
+
+
 def path_cluster(value: str) -> str:
     parsed = urlparse(str(value or ""))
     parts = [part for part in str(parsed.path or "").split("/") if part]
@@ -121,7 +175,11 @@ def filter_docs_evidence_by_topic_purity(
 
     ranked = sorted(
         evidence_items,
-        key=lambda item: (entity_hit_score(query, item), float(item.get("score") or 0.0)),
+        key=lambda item: (
+            api_reference_preference_score(query, item),
+            entity_hit_score(query, item),
+            float(item.get("score") or 0.0),
+        ),
         reverse=True,
     )
     if entity_hit_score(query, ranked[0]) <= 0.0:

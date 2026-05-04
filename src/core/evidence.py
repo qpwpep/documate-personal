@@ -5,10 +5,29 @@ import re
 from typing import Any, Iterable, Literal
 from urllib.parse import urlparse
 
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, Field, model_validator
 
 
 EvidenceKind = Literal["official", "local"]
+
+
+class DocEntry(BaseModel):
+    name: str = ""
+    type: str = ""
+    default: str = ""
+    description: str = ""
+
+
+class DocMetadata(BaseModel):
+    doc_family: str = ""
+    symbol: str = ""
+    signature: str = ""
+    parameters: list[DocEntry] = Field(default_factory=list)
+    returns: list[DocEntry] = Field(default_factory=list)
+    options: list[DocEntry] = Field(default_factory=list)
+    examples: list[str] = Field(default_factory=list)
+    notes: list[str] = Field(default_factory=list)
+    source_sections: list[str] = Field(default_factory=list)
 
 
 class EvidenceItem(BaseModel):
@@ -25,6 +44,7 @@ class EvidenceItem(BaseModel):
     start_offset: int | None = None
     end_offset: int | None = None
     code_metadata: dict[str, Any] | None = None
+    doc_metadata: DocMetadata | None = None
 
     @model_validator(mode="after")
     def populate_document_id(self) -> "EvidenceItem":
