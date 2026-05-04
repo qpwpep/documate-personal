@@ -468,6 +468,14 @@ div.stButton > button:focus {
     line-height: 1.72;
 }
 
+[data-testid="stChatMessage"] [data-testid="stMarkdownContainer"] > :first-child {
+    margin-top: 0;
+}
+
+[data-testid="stChatMessage"] [data-testid="stMarkdownContainer"] > :last-child {
+    margin-bottom: 0;
+}
+
 [data-testid="stChatMessage"] [data-testid="stChatMessageAvatarUser"] {
     background: var(--dm-mark-bg);
     color: var(--dm-mark-text);
@@ -482,6 +490,10 @@ div.stButton > button:focus {
     background: var(--dm-user);
     border: 1px solid var(--dm-user-border);
     border-radius: 1.1rem;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    min-height: 3.35rem;
     padding: 0.82rem 1rem;
 }
 
@@ -491,6 +503,10 @@ div.stButton > button:focus {
     border: 1px solid var(--dm-assistant-border);
     border-radius: 1.1rem;
     box-shadow: var(--dm-assistant-shadow);
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    min-height: 3.35rem;
     padding: 0.9rem 1rem;
 }
 
@@ -555,10 +571,62 @@ div.stButton > button:focus {
 }
 
 [data-testid="stExpander"] {
-    background: var(--dm-panel);
-    border: 1px solid var(--dm-border);
+    background: var(--dm-assistant-bg);
+    border: 1px solid var(--dm-assistant-border);
     border-radius: 0.9rem;
-    box-shadow: none;
+    box-shadow: var(--dm-assistant-shadow);
+    overflow: hidden;
+}
+
+[data-testid="stExpander"] details {
+    background: transparent;
+}
+
+[data-testid="stExpander"] summary {
+    background: transparent !important;
+    color: var(--dm-text) !important;
+    min-height: 3.1rem;
+    padding: 0.68rem 0.9rem !important;
+}
+
+[data-testid="stExpander"] summary:hover {
+    background: var(--dm-focus-ring) !important;
+}
+
+[data-testid="stExpander"] summary p,
+[data-testid="stExpander"] summary span,
+[data-testid="stExpander"] summary svg {
+    color: var(--dm-text) !important;
+    fill: currentColor !important;
+    opacity: 1 !important;
+    -webkit-text-fill-color: var(--dm-text) !important;
+}
+
+[data-testid="stExpander"] summary [data-testid="stMarkdownContainer"] {
+    background: transparent !important;
+    border: 0 !important;
+    box-shadow: none !important;
+    display: block;
+    min-height: 0;
+    padding: 0 !important;
+}
+
+[data-testid="stExpander"] summary [data-testid="stMarkdownContainer"] p {
+    margin: 0;
+}
+
+[data-testid="stExpanderDetails"] {
+    background: transparent !important;
+    border-top: 1px solid var(--dm-divider);
+    color: var(--dm-text) !important;
+}
+
+[data-testid="stExpanderDetails"] [data-testid="stMarkdownContainer"] {
+    background: var(--dm-assistant-bg);
+    border: 1px solid var(--dm-assistant-border);
+    border-radius: 0.9rem;
+    color: var(--dm-text);
+    padding: 0.85rem 1rem;
 }
 
 [data-testid="stChatInput"] {
@@ -595,8 +663,11 @@ div.stButton > button:focus {
 
 [data-testid="stChatInput"] [data-baseweb="textarea"],
 [data-testid="stChatInput"] [data-baseweb="base-input"] {
+    align-items: center !important;
     background-color: transparent !important;
     border-radius: 0.9rem !important;
+    display: flex !important;
+    min-height: 3.2rem;
     overflow: visible !important;
 }
 
@@ -619,7 +690,9 @@ div.stButton > button:focus {
     border-radius: 0.9rem !important;
     box-shadow: none !important;
     color: var(--dm-text) !important;
+    line-height: 1.45 !important;
     min-height: 3.2rem;
+    padding: 0.84rem 0.75rem !important;
 }
 
 [data-testid="stChatInput"] textarea:focus,
