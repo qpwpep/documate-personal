@@ -4,7 +4,8 @@ from typing import Any
 from urllib.parse import urlparse
 
 from src.infra.tools._common import build_evidence_item, normalize_relevance_score
-from src.infra.tools.docs_search.policy import canonicalize_doc_url, is_valid_doc_result, normalize_domain, normalized_domain_set, result_matches_domains
+from src.infra.tools.docs_search.extraction import extract_doc_content
+from src.infra.tools.docs_search.policy import canonicalize_doc_title, canonicalize_doc_url, is_valid_doc_result, normalize_domain, normalized_domain_set, result_matches_domains
 
 
 def url_domain(url: str) -> str:
@@ -32,6 +33,7 @@ def collect_docs_search_evidence(
     *,
     allowed_domains: list[str] | None,
     retrieval_warnings: list[str],
+    query: str = "",
 ) -> tuple[list[Any], list[float]]:
     evidence_items: list[Any] = []
     raw_scores: list[float] = []
@@ -39,10 +41,16 @@ def collect_docs_search_evidence(
     for result in results:
         if not isinstance(result, dict):
             continue
-        url = canonicalize_doc_url(str(result.get("url") or "").strip())
+        original_url = str(result.get("url") or "").strip()
+        url = canonicalize_doc_url(original_url)
+        title = canonicalize_doc_title(
+            title=result.get("title"),
+            original_url=original_url,
+            canonical_url=url,
+        )
         if not is_valid_doc_result(
             url=url,
-            title=result.get("title"),
+            title=title,
             snippet=result.get("content"),
         ):
             continue
@@ -54,14 +62,30 @@ def collect_docs_search_evidence(
             result.get("score"),
             warnings=retrieval_warnings,
         )
+        metadata: dict[str, Any] = {}
+        snippet = result.get("content")
+        raw_content = result.get("raw_content")
+        if raw_content:
+            doc_metadata, structured_snippet = extract_doc_content(
+                url=url,
+                title=title,
+                content=raw_content,
+                query=query,
+            )
+            if doc_metadata:
+                metadata["doc_metadata"] = doc_metadata
+                if structured_snippet:
+                    snippet = structured_snippet
+            elif structured_snippet:
+                snippet = structured_snippet
         evidence_item = build_evidence_item(
             kind="official",
             tool="tavily_search",
             url_or_path=url,
-            title=result.get("title"),
-            snippet=result.get("content"),
+            title=title,
+            snippet=snippet,
             score=normalized_score,
-            metadata={},
+            metadata=metadata,
             warnings=retrieval_warnings,
         )
         if evidence_item is not None:

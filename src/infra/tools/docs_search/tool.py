@@ -8,6 +8,7 @@ from src.core.evidence import evidence_to_dicts
 from src.infra.settings import AppSettings
 from src.infra.tools._common import build_retrieval_payload
 from src.infra.tools.docs_search import client
+from src.infra.tools.docs_search.extraction import should_extract_doc_content
 from src.infra.tools.docs_search.policy import docs_search_rules, infer_docs_query_hint, normalize_include_domains
 from src.infra.tools.docs_search.ranking import filter_docs_evidence_by_topic_purity, has_exact_identifier_coverage, has_meaningful_docs_evidence, merge_docs_evidence_items
 from src.infra.tools.docs_search.schemas import TavilyArgs
@@ -34,6 +35,7 @@ def build_docs_search_tool(settings: AppSettings) -> Any:
                 domains = normalize_include_domains(hinted_domains)
                 if library_name.lower() not in effective_query.lower():
                     effective_query = f"{effective_query} {library_name}".strip()
+        include_raw_content = "markdown" if should_extract_doc_content(effective_query) else False
         try:
             raw_results = client.request_tavily_search(
                 query=effective_query,
@@ -41,6 +43,7 @@ def build_docs_search_tool(settings: AppSettings) -> Any:
                 include_domains=domains,
                 search_depth=search_depth,
                 timeout_seconds=settings.docs_search_timeout_seconds,
+                include_raw_content=include_raw_content,
             )
         except Exception as exc:
             is_timeout = isinstance(exc, TimeoutError) or "timeout" in str(exc).lower() or "timed out" in str(exc).lower()
@@ -80,6 +83,7 @@ def build_docs_search_tool(settings: AppSettings) -> Any:
             results,
             allowed_domains=hinted_domains,
             retrieval_warnings=retrieval_warnings,
+            query=effective_query,
         )
         evidence_items.extend(batch_evidence)
         raw_scores.extend(batch_raw_scores)
@@ -99,12 +103,18 @@ def build_docs_search_tool(settings: AppSettings) -> Any:
                 ):
                     break
             try:
+                fallback_include_raw_content = (
+                    "markdown"
+                    if include_raw_content or should_extract_doc_content(fallback_query)
+                    else False
+                )
                 fallback_results = client.request_tavily_search(
                     query=fallback_query,
                     tavily_api_key=settings.tavily_api_key,
                     include_domains=domains,
                     search_depth=search_depth,
                     timeout_seconds=settings.docs_search_timeout_seconds,
+                    include_raw_content=fallback_include_raw_content,
                 )
             except Exception:
                 continue
@@ -115,6 +125,7 @@ def build_docs_search_tool(settings: AppSettings) -> Any:
                 fallback_items,
                 allowed_domains=hinted_domains,
                 retrieval_warnings=retrieval_warnings,
+                query=fallback_query,
             )
             evidence_items.extend(batch_evidence)
             raw_scores.extend(batch_raw_scores)

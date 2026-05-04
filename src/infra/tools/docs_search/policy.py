@@ -8,6 +8,10 @@ from src.core.rules import get_rules_config
 
 
 _NUMPY_VERSIONED_DOC_PATH_PATTERN = re.compile(r"^/doc/\d+(?:\.\d+)*/")
+_NUMPY_DOC_TITLE_VERSION_PATTERN = re.compile(
+    r"(\bNumPy)\s+v?\d+(?:\.\d+)*(?:[A-Za-z0-9.+-]*)?(\s+Manual\b)",
+    re.IGNORECASE,
+)
 
 
 def docs_search_rules():
@@ -57,6 +61,23 @@ def canonicalize_doc_url(url: str) -> str:
         if stable_path != parsed.path:
             return urlunparse(parsed._replace(path=stable_path))
     return candidate
+
+
+def canonicalize_doc_title(*, title: Any, original_url: str, canonical_url: str) -> Any:
+    title_text = str(title).strip() if title else ""
+    if not title_text:
+        return title
+
+    original = str(original_url or "").strip()
+    canonical = str(canonical_url or "").strip()
+    if original == canonical:
+        return title
+
+    parsed = urlparse(canonical)
+    if normalize_domain(parsed.netloc) == "numpy.org" and parsed.path.startswith("/doc/stable/"):
+        normalized_title = _NUMPY_DOC_TITLE_VERSION_PATTERN.sub(r"\1\2", title_text)
+        return " ".join(normalized_title.split())
+    return title
 
 
 def is_allowed_doc_url(url: str) -> bool:
