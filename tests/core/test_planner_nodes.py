@@ -139,6 +139,22 @@ class PlannerNodeTest(unittest.TestCase):
         self.assertEqual(capture_planner.call_count, 0)
         self.assertEqual([task.route for task in updates["planner"].output.tasks], ["local"])
 
+    def test_planner_does_not_treat_generic_example_as_local_rag_intent(self) -> None:
+        planner_node = make_planner_node(_FailingPlannerLLM(), verbose=False)
+
+        updates = planner_node(
+            build_legacy_state(
+                {
+                    "messages": [HumanMessage(content="BeautifulSoup으로 특정 태그 찾는 예제를 보여줘")],
+                    "user_input": "BeautifulSoup으로 특정 태그 찾는 예제를 보여줘",
+                }
+            )
+        )
+
+        self.assertEqual(updates["planner"].status, "heuristic_fallback")
+        self.assertEqual([task.route for task in updates["planner"].output.tasks], ["docs"])
+        self.assertNotIn("local", [task.route for task in updates["planner"].output.tasks])
+
     def test_planner_does_not_open_local_route_when_docs_intent_is_explicit(self) -> None:
         capture_planner = _CapturePlannerLLM(PlannerOutput(use_retrieval=False, tasks=[]))
         planner_node = make_planner_node(capture_planner, verbose=False)

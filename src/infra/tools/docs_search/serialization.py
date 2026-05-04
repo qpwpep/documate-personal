@@ -4,7 +4,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from src.infra.tools._common import build_evidence_item, normalize_relevance_score
-from src.infra.tools.docs_search.policy import is_valid_doc_result, normalize_domain, normalized_domain_set, result_matches_domains
+from src.infra.tools.docs_search.policy import canonicalize_doc_url, is_valid_doc_result, normalize_domain, normalized_domain_set, result_matches_domains
 
 
 def url_domain(url: str) -> str:
@@ -39,7 +39,7 @@ def collect_docs_search_evidence(
     for result in results:
         if not isinstance(result, dict):
             continue
-        url = str(result.get("url") or "").strip()
+        url = canonicalize_doc_url(str(result.get("url") or "").strip())
         if not is_valid_doc_result(
             url=url,
             title=result.get("title"),

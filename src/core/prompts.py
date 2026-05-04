@@ -21,7 +21,7 @@ Rules:
 - Keep answers grounded in retrieved evidence when evidence is available.
 """
 
-_ASCII_IDENTIFIER_PATTERN = re.compile(r"\b[A-Za-z][A-Za-z0-9._-]{1,}\b")
+_ASCII_IDENTIFIER_PATTERN = re.compile(r"(?<![A-Za-z0-9_])[A-Za-z][A-Za-z0-9._-]{1,}(?![A-Za-z0-9_])")
 _TECHNICAL_EXPLAINER_PATTERNS = (
     r"\b(explain|overview|intro(?:duction)?|usage|how\s+to\s+use|guide|tutorial|best practice|performance|optimi[sz]ation)\b",
     r"(알려줘|설명(?:해줘)?|소개(?:해줘)?|개요|기본\s*사용법|사용법|문법|파라미터|매개변수|옵션|예제|예시|성능\s*최적화|최적화|가이드|튜토리얼)",
