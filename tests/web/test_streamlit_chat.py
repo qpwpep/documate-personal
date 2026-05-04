@@ -56,7 +56,7 @@ class StreamlitChatTest(unittest.TestCase):
             messages = [
                 {
                     "role": "assistant",
-                    "content": "answer",
+                    "content": f"answer\n\n저장 완료: {saved_file}",
                     "file_path": str(saved_file),
                     "evidence": [
                         {"kind": "official", "title": "Docs", "url_or_path": "https://docs.example.com"},
@@ -76,7 +76,9 @@ class StreamlitChatTest(unittest.TestCase):
 
         self.assertEqual(fake_st.expander_labels, ["근거 보기"])
         self.assertTrue(any("Docs" in body for body, _ in fake_st.markdowns))
-        self.assertTrue(any("파일 저장 완료" in body for body in fake_st.infos))
+        self.assertTrue(any("파일 저장 완료" in body for body, _ in fake_st.markdowns))
+        self.assertTrue(any("dm-save-note" in body for body, _ in fake_st.markdowns))
+        self.assertFalse(any(str(saved_file) in body for body, _ in fake_st.markdowns))
         self.assertEqual(sum("download/answer.txt" in body for body, _ in fake_st.markdowns), 1)
 
     def test_process_chat_prompt_streams_progress_before_final_answer(self) -> None:
@@ -98,7 +100,7 @@ class StreamlitChatTest(unittest.TestCase):
                     "file_path": "output/result.txt",
                 },
                 result=AgentCallResult(
-                    answer="응답",
+                    answer="응답\n\n저장 완료: output/result.txt",
                     file_path="output/result.txt",
                     evidence_items=[{"kind": "official"}],
                 ),
@@ -117,9 +119,10 @@ class StreamlitChatTest(unittest.TestCase):
         self.assertEqual(appended_messages[1]["content"], "응답")
         self.assertEqual(fake_st.chat_roles, ["user", "assistant"])
         self.assertTrue(any("근거 요약: docs 1건" in body for body, _ in fake_st.markdowns))
-        self.assertTrue(any("요청 접수 중" in body for body, _ in fake_st.markdowns))
-        self.assertTrue(any("질문 분석 중" in body for body, _ in fake_st.markdowns))
+        self.assertTrue(any("요청을 접수했습니다." in body for body, _ in fake_st.markdowns))
+        self.assertTrue(any("질문을 분석하고 있습니다." in body for body, _ in fake_st.markdowns))
         self.assertTrue(any(body == "응답" for body, _ in fake_st.markdowns))
+        self.assertFalse(any("저장 완료: output/result.txt" in body for body, _ in fake_st.markdowns))
         self.assertEqual(fake_st.rerun_calls, 1)
 
 
