@@ -80,7 +80,7 @@ def render_payload_from_claims(
 
     citation_numbers: dict[str, int] = {}
     adopted_evidence: list[EvidenceItem] = []
-    rendered_parts: list[str] = []
+    renderable_claims: list[tuple[str, tuple[str, ...]]] = []
 
     for claim in ordered_claims:
         labels: list[str] = []
@@ -94,7 +94,12 @@ def render_payload_from_claims(
             labels.append(f"[{citation_numbers[evidence_id]}]")
 
         claim_text = _strip_trailing_citations(claim.text)
-        if labels:
+        renderable_claims.append((claim_text, tuple(labels)))
+
+    rendered_parts: list[str] = []
+    for index, (claim_text, labels) in enumerate(renderable_claims):
+        next_labels = renderable_claims[index + 1][1] if index + 1 < len(renderable_claims) else ()
+        if labels and labels != next_labels:
             rendered_parts.append(f"{claim_text} {' '.join(labels)}")
         else:
             rendered_parts.append(claim_text)
