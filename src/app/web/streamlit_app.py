@@ -5,13 +5,11 @@ import streamlit as st
 
 from src.app.web.streamlit_api_client import AgentRequestContext, stream_agent_response
 from src.app.web.streamlit_chat import process_chat_prompt, render_chat_history
-from src.app.web.streamlit_page import (
-    configure_page,
-    render_intro,
-    render_sidebar,
-    render_theme_styles,
-    warn_if_utf8_mode_disabled_once,
-)
+from src.app.web.streamlit_intro import render_intro
+from src.app.web.streamlit_page import warn_if_utf8_mode_disabled_once
+from src.app.web.streamlit_sidebar import render_sidebar
+from src.app.web.streamlit_styles import configure_page
+from src.app.web.streamlit_theme import render_theme_styles
 from src.app.web.streamlit_state import (
     append_message,
     clear_uploaded_file_name,
