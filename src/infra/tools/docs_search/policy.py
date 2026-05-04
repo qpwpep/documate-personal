@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import re
 from typing import Any, Literal
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlunparse
 
 from src.core.rules import get_rules_config
+
+
+_NUMPY_VERSIONED_DOC_PATH_PATTERN = re.compile(r"^/doc/\d+(?:\.\d+)*/")
 
 
 def docs_search_rules():
@@ -42,8 +45,22 @@ def normalize_path_prefix(path: str) -> str:
     return normalized if normalized.endswith("/") else normalized + "/"
 
 
+def canonicalize_doc_url(url: str) -> str:
+    candidate = str(url or "").strip()
+    if not candidate:
+        return ""
+
+    parsed = urlparse(candidate)
+    domain = normalize_domain(parsed.netloc)
+    if domain == "numpy.org":
+        stable_path = _NUMPY_VERSIONED_DOC_PATH_PATTERN.sub("/doc/stable/", parsed.path)
+        if stable_path != parsed.path:
+            return urlunparse(parsed._replace(path=stable_path))
+    return candidate
+
+
 def is_allowed_doc_url(url: str) -> bool:
-    parsed = urlparse(str(url or "").strip())
+    parsed = urlparse(canonicalize_doc_url(url))
     if parsed.scheme.lower() != "https" or not parsed.netloc:
         return False
     domain = normalize_domain(parsed.netloc)
