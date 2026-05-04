@@ -103,6 +103,45 @@ class RetrievalFormattingTest(unittest.TestCase):
         self.assertIn('"call_name": "LogisticRegression"', formatted)
         self.assertLess(formatted.index("code_metadata:"), formatted.index("snippet:"))
 
+    def test_format_evidence_for_prompt_renders_doc_metadata_before_snippet(self) -> None:
+        formatted = format_evidence_for_prompt(
+            [
+                {
+                    "kind": "official",
+                    "tool": "tavily_search",
+                    "source_id": "url:https://matplotlib.org/stable/api/_as_gen/matplotlib.pyplot.pie.html",
+                    "url_or_path": "https://matplotlib.org/stable/api/_as_gen/matplotlib.pyplot.pie.html",
+                    "title": "matplotlib.pyplot.pie",
+                    "snippet": "Fallback snippet",
+                    "score": 0.9,
+                    "doc_metadata": {
+                        "doc_family": "sphinx_api",
+                        "symbol": "matplotlib.pyplot.pie",
+                        "signature": "matplotlib.pyplot.pie(x, *, labels=None, autopct=None)",
+                        "parameters": [
+                            {
+                                "name": "labels",
+                                "type": "list, default: None",
+                                "description": "A sequence of strings providing labels.",
+                            },
+                            {
+                                "name": "autopct",
+                                "type": "None or str or callable, default: None",
+                                "description": "Labels wedges with their numeric value.",
+                            },
+                        ],
+                    },
+                }
+            ],
+            max_snippet_chars=120,
+        )
+
+        self.assertIn("candidate_facts: signature: matplotlib.pyplot.pie", formatted)
+        self.assertIn("doc_family: sphinx_api", formatted)
+        self.assertIn("api_symbol: matplotlib.pyplot.pie", formatted)
+        self.assertIn("parameter_facts: param labels", formatted)
+        self.assertLess(formatted.index("parameter_facts:"), formatted.index("snippet:"))
+
 
 if __name__ == "__main__":
     unittest.main()

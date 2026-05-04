@@ -127,6 +127,29 @@ def _render_sections(sections: list[str]) -> str:
     return ", ".join(sections) if sections else "none"
 
 
+def _infer_required_routes_from_evidence(items: list[dict[str, Any]]) -> list[str]:
+    routes: list[str] = []
+    has_official = any(
+        str(item.get("kind") or "").strip().lower() == "official"
+        for item in items
+        if isinstance(item, dict)
+    )
+    if has_official:
+        routes.append("docs")
+
+    local_tools = {
+        str(item.get("tool") or "").strip()
+        for item in items
+        if isinstance(item, dict)
+        and str(item.get("kind") or "").strip().lower() == "local"
+    }
+    if "upload_search" in local_tools:
+        routes.append("upload")
+    elif local_tools:
+        routes.append("local")
+    return routes
+
+
 def _build_turn_contract_block(
     *,
     answer_contract: AnswerContract,
@@ -153,6 +176,10 @@ def _build_turn_contract_block(
         lines.append("- code_block_required=true")
         lines.append("- code_example section must include at least one fenced code block with concrete sample code")
         lines.append("- explain the code briefly outside the code block; do not answer with prose only")
+    if "options" in answer_contract.required_sections:
+        lines.append("- options_section_required=true")
+        lines.append("- options section should be grouped concise bullets, not one long paragraph")
+        lines.append("- use exact option/parameter names from candidate_facts or doc_metadata when available")
     if action_rules:
         lines.append("- action_rules:")
         lines.extend(f"  - {rule}" for rule in action_rules)
@@ -187,7 +214,7 @@ def build_synthesis_messages(
     has_hybrid_evidence = "official" in evidence_kinds and "local" in evidence_kinds
     answer_contract = infer_answer_contract(
         runtime.user_input,
-        ["docs", "upload"] if has_hybrid_evidence else [],
+        _infer_required_routes_from_evidence(prompt_evidence),
     )
     requires_upload_section = "upload_code" in answer_contract.required_sections
     history_messages = [

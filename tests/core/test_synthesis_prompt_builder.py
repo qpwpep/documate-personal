@@ -79,6 +79,41 @@ class SynthesisPromptBuilderTest(unittest.TestCase):
         self.assertIn("candidate_facts: max_iter=200", evidence_message)
         self.assertLess(evidence_message.index("code_metadata:"), evidence_message.index("snippet:"))
 
+    def test_docs_only_option_request_requires_options_section(self) -> None:
+        state = build_graph_state_input(
+            user_input="matplotlib pie 차트 옵션을 정리해줘",
+            messages=[HumanMessage(content="matplotlib pie 차트 옵션을 정리해줘")],
+        )
+
+        messages, _history_before, _history_after = build_synthesis_messages(
+            state=state,
+            action_rules=[],
+            deduped_evidence=[
+                {
+                    "kind": "official",
+                    "source_id": "url:https://matplotlib.org/stable/api/_as_gen/matplotlib.pyplot.pie.html",
+                    "url_or_path": "https://matplotlib.org/stable/api/_as_gen/matplotlib.pyplot.pie.html",
+                    "title": "matplotlib.pyplot.pie",
+                    "snippet": "Plot a pie chart.",
+                    "score": 0.95,
+                    "doc_metadata": {
+                        "symbol": "matplotlib.pyplot.pie",
+                        "parameters": [{"name": "autopct", "description": "Controls numeric labels."}],
+                    },
+                }
+            ],
+            attempt=1,
+            max_turns=6,
+        )
+
+        system_messages = [
+            str(message.content) for message in messages if isinstance(message, SystemMessage)
+        ]
+        turn_message = next(content for content in system_messages if "[Turn Contract]" in content)
+        self.assertIn("required_sections=options", turn_message)
+        self.assertIn("options_section_required=true", turn_message)
+        self.assertIn("candidate_facts or doc_metadata", turn_message)
+
     def test_code_example_request_requires_fenced_code_block_in_turn_contract(self) -> None:
         state = build_graph_state_input(
             user_input="BeautifulSoup으로 특정 태그 찾는 예제를 보여줘",

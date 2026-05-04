@@ -12,6 +12,7 @@ SectionKind = Literal[
     "checklist",
     "steps",
     "code_example",
+    "options",
     "official_docs",
     "upload_code",
     "comparison",
@@ -60,6 +61,22 @@ def is_code_example_request(query: str) -> bool:
     )
 
 
+def is_options_summary_request(query: str) -> bool:
+    return _has_any(
+        query,
+        "option",
+        "options",
+        "parameter",
+        "parameters",
+        "argument",
+        "arguments",
+        "옵션",
+        "파라미터",
+        "매개변수",
+        "인자",
+    )
+
+
 def infer_answer_contract(query: str, required_routes: list[str] | None = None) -> AnswerContract:
     required_sections: list[SectionKind] = []
     if _has_any(query, "요약", "summary"):
@@ -75,6 +92,8 @@ def infer_answer_contract(query: str, required_routes: list[str] | None = None) 
 
     route_set = {str(route or "").strip() for route in (required_routes or []) if str(route or "").strip()}
     split_by_source = "docs" in route_set and bool(route_set.intersection({"upload", "local"}))
+    if "docs" in route_set and not split_by_source and is_options_summary_request(query):
+        required_sections.append("options")
     if split_by_source:
         if _has_explicit_comparison(query):
             required_sections.extend(["official_docs", "upload_code", "comparison"])
@@ -106,6 +125,9 @@ def render_answer_contract_prompt(contract: AnswerContract) -> str:
     lines.append("- Do not omit required sections.")
     if "code_example" in contract.required_sections:
         lines.append("- The code_example section must include at least one fenced code block with runnable sample code.")
+    if "options" in contract.required_sections:
+        lines.append("- The options section must group API parameters/options into concise bullets by purpose.")
+        lines.append("- Prefer exact parameter names from Retrieved Evidence candidate_facts or doc_metadata.")
     if contract.split_by_source:
         lines.append("- For hybrid compare tasks, keep official docs facts and uploaded code facts separate before writing the comparison.")
         if "upload_code" in contract.required_sections:
