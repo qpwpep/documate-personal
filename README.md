@@ -11,11 +11,11 @@ LangGraph 기반 학습 보조 에이전트입니다. 현재 프로젝트는 공
 
 ## 실제 앱 데모
 
-아래 GIF는 2026-04-29 KST에 `output/browser_capture_actual_utf8/`에서 캡처한 Streamlit 실제 실행 흐름입니다. 세션 업로드 파일 검색, 공식 문서 검색, 구조화 답변, evidence 확인 흐름을 함께 보여줍니다.
+아래 GIF는 2026-05-04 KST에 현재 Streamlit 화면을 실제 Edge 렌더링으로 캡처한 데모입니다. 라이트/다크 테마, 질문 입력창 옆 파일 첨부, 사이드바를 접은 상태의 질문 제출과 답변 수신 흐름을 함께 보여줍니다.
 
 ![DocuMate actual app demo](docs/assets/demo-flow.gif)
 
-최종 응답 화면은 정적 스크린샷으로도 확인할 수 있습니다.
+사이드바를 접은 상태로 질문에 대한 답변을 받은 최종 화면은 정적 스크린샷으로도 확인할 수 있습니다.
 
 ![DocuMate final answer screenshot](docs/assets/demo-final.png)
 
