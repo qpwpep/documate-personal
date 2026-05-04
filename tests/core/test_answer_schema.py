@@ -54,6 +54,34 @@ class AnswerSchemaTest(unittest.TestCase):
 
         self.assertEqual(payload.answer, "")
 
+    def test_render_payload_collapses_consecutive_repeated_citations(self) -> None:
+        evidence = EvidenceItem(
+            kind="official",
+            tool="tavily_search",
+            source_id="url:https://matplotlib.org/stable/api/_as_gen/matplotlib.pyplot.pie.html",
+            document_id="url:https://matplotlib.org/stable/api/_as_gen/matplotlib.pyplot.pie.html",
+            url_or_path="https://matplotlib.org/stable/api/_as_gen/matplotlib.pyplot.pie.html",
+            title="matplotlib.pyplot.pie",
+            snippet="Plot a pie chart.",
+            score=0.95,
+        )
+
+        payload = render_payload_from_claims(
+            claims=[
+                ClaimItem(text="pie uses x for wedge sizes.", evidence_ids=[evidence.source_id]),
+                ClaimItem(text="labels supplies text for wedges.", evidence_ids=[evidence.source_id]),
+                ClaimItem(text="autopct controls numeric wedge labels.", evidence_ids=[evidence.source_id]),
+            ],
+            evidence_items=[evidence],
+            confidence=0.95,
+        )
+
+        self.assertEqual(
+            payload.answer,
+            "pie uses x for wedge sizes. labels supplies text for wedges. "
+            "autopct controls numeric wedge labels. [1]",
+        )
+
     def test_reference_section_with_actual_code_is_kept(self) -> None:
         payload = build_empty_response_payload(
             sections=[
