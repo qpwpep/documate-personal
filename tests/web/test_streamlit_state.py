@@ -61,6 +61,7 @@ class StreamlitStateTest(unittest.TestCase):
             session_state={
                 "session_id": "old-session",
                 "uploaded_file_name": "sample.py",
+                "documate_quick_prompts": ["old prompt"],
                 "messages": [
                     {
                         "role": "user",
@@ -84,6 +85,7 @@ class StreamlitStateTest(unittest.TestCase):
 
                 self.assertEqual(streamlit_state.get_session_id(), "new-session")
                 self.assertIsNone(streamlit_state.get_uploaded_file_name())
+                self.assertNotIn("documate_quick_prompts", fake_st.session_state)
                 self.assertEqual(len(streamlit_state.get_messages()), 1)
                 self.assertEqual(streamlit_state.get_messages()[0]["role"], "assistant")
                 self.assertTrue((uploads_dir / "new-session").exists())

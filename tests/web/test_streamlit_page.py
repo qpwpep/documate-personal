@@ -67,6 +67,29 @@ class StreamlitPageTest(unittest.TestCase):
 
         self.assertEqual(fake_st.session_state["documate_theme_mode"], "다크")
 
+    def test_quick_prompts_are_sampled_once_per_session(self) -> None:
+        fake_st = _FakeStreamlit()
+        sampled_prompts = [
+            "추천 1",
+            "추천 2",
+            "추천 3",
+            "추천 4",
+        ]
+
+        with patch.object(streamlit_page, "st", fake_st), patch(
+            "src.app.web.streamlit_page.random.sample",
+            return_value=sampled_prompts,
+        ) as mock_sample:
+            first_prompts = streamlit_page._get_quick_prompts_for_session()
+            second_prompts = streamlit_page._get_quick_prompts_for_session()
+
+        self.assertEqual(first_prompts, sampled_prompts)
+        self.assertEqual(second_prompts, sampled_prompts)
+        mock_sample.assert_called_once_with(
+            streamlit_page._QUICK_PROMPTS,
+            streamlit_page._QUICK_PROMPT_COUNT,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
