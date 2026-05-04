@@ -11,6 +11,9 @@ from src.infra.logging_utils import log_event
 from src.infra.runtime_paths import get_uploads_dir
 
 
+QUICK_PROMPTS_STATE_KEY = "documate_quick_prompts"
+
+
 class ChatMessage(TypedDict):
     role: str
     content: str
@@ -66,6 +69,7 @@ def reset_chat_session(logger: logging.Logger) -> None:
     _start_new_session(logger, "streamlit_session_reset")
     st.session_state["uploaded_file_name"] = None
     st.session_state["messages"] = [_build_default_assistant_message()]
+    st.session_state.pop(QUICK_PROMPTS_STATE_KEY, None)
     get_session_path().mkdir(parents=True, exist_ok=True)
 
 
