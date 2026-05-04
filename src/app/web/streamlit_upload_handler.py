@@ -76,5 +76,5 @@ def sync_uploaded_file(
             file_name=None,
             changed=False,
             removed=False,
-            error_message=f"파일 업로드 실패 : {exc}",
+            error_message=f"파일 업로드 실패: {exc}",
         )
