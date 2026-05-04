@@ -58,7 +58,7 @@ DocuMate는 포트폴리오 프로젝트이지만, 검색 품질과 근거 검�
 
 개인 프로젝트에서 120-case release benchmark와 pytest 기반 회귀 테스트를 유지하는 것은 비용이 있습니다. fixture 관리, judge 설정, latency 및 비용 지표 확인이 필요하기 때문입니다.
 
-대신 변경 후 품질을 감으로 판단하지 않아도 됩니다. 현재 문서화된 최신 release benchmark는 120개 케이스 통과, release pass rate `1.0000`, citation compliance `1.0000`, p95 latency `9354.0 ms`를 기록했고, 테스트는 `326 passed, 18 subtests passed`로 검증되었습니다.
+대신 변경 후 품질을 감으로 판단하지 않아도 됩니다. 현재 문서화된 최신 release benchmark는 120개 케이스 통과, release pass rate `1.0000`, citation compliance `1.0000`, p95 latency `9354.0 ms`를 기록했고, 테스트는 `347 passed, 49 subtests passed`로 검증되었습니다.
 
 ## 4. 가장 어려웠던 문제: Latency와 Retrieval 품질
 
