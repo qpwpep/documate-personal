@@ -11,6 +11,7 @@ SectionKind = Literal[
     "summary",
     "checklist",
     "steps",
+    "code_example",
     "official_docs",
     "upload_code",
     "comparison",
@@ -39,6 +40,26 @@ def _has_explicit_comparison(query: str) -> bool:
         return False
 
 
+def is_code_example_request(query: str) -> bool:
+    return _has_any(
+        query,
+        "code example",
+        "code examples",
+        "example code",
+        "sample code",
+        "code sample",
+        "code samples",
+        "예제",
+        "예시",
+        "코드 예제",
+        "코드예제",
+        "샘플 코드",
+        "샘플코드",
+        "코드 샘플",
+        "코드샘플",
+    )
+
+
 def infer_answer_contract(query: str, required_routes: list[str] | None = None) -> AnswerContract:
     required_sections: list[SectionKind] = []
     if _has_any(query, "요약", "summary"):
@@ -47,6 +68,8 @@ def infer_answer_contract(query: str, required_routes: list[str] | None = None) 
         required_sections.append("checklist")
     if _has_any(query, "단계별", "step by step", "초보자"):
         required_sections.append("steps")
+    if is_code_example_request(query):
+        required_sections.append("code_example")
     if _has_any(query, "가능한 해석 2가지", "해석 2가지", "two interpretations"):
         required_sections.extend(["interpretation_a", "interpretation_b"])
 
@@ -81,6 +104,8 @@ def render_answer_contract_prompt(contract: AnswerContract) -> str:
     lines.append(f"- split_by_source={str(contract.split_by_source).lower()}")
     lines.append("- Return `sections` whose `kind` values exactly match the required sections when they are requested.")
     lines.append("- Do not omit required sections.")
+    if "code_example" in contract.required_sections:
+        lines.append("- The code_example section must include at least one fenced code block with runnable sample code.")
     if contract.split_by_source:
         lines.append("- For hybrid compare tasks, keep official docs facts and uploaded code facts separate before writing the comparison.")
         if "upload_code" in contract.required_sections:
