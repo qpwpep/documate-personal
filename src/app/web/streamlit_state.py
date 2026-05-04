@@ -67,7 +67,7 @@ def append_message(message: ChatMessage) -> None:
 def _build_default_assistant_message() -> ChatMessage:
     return {
         "role": "assistant",
-        "content": "안녕하세요! 질문을 입력해주세요.",
+        "content": "안녕하세요. 질문을 입력하거나 왼쪽에서 코드 파일을 업로드해 주세요.",
         "file_path": "",
         "evidence": [],
     }
