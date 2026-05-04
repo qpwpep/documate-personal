@@ -20,6 +20,7 @@ SYNTHESIS_OUTPUT_TEMPLATE = (
     "answer: concise response in the user's language.\n"
     "claims: 1-4 sentence-level claims, each with exact Retrieved Evidence source_id values.\n"
     "sections: use [] unless Turn Contract required_sections lists section kinds; include only those exact kinds.\n"
+    "Never write placeholder references such as 'see above code' or '위 코드 참고'; include the concrete content instead.\n"
     "confidence: 0.0-1.0 when supported, otherwise null.\n"
     "Citations are supplied through evidence_ids; the renderer adds citation labels."
 )
