@@ -180,6 +180,10 @@ def _build_turn_contract_block(
         lines.append("- options_section_required=true")
         lines.append("- options section should be grouped concise bullets, not one long paragraph")
         lines.append("- use exact option/parameter names from candidate_facts or doc_metadata when available")
+        lines.append("- options_answer_policy=answer first with confirmed items, then note evidence gaps")
+        lines.append("- do not replace the requested options summary with a refusal or broad insufficiency caveat")
+        lines.append("- if evidence is partial, list supported options/parameters and mark only uncertain entries as needs_more_evidence")
+        lines.append("- if evidence shows a wrapper/delegated API relationship, mention it and use the delegated API docs when available")
     if action_rules:
         lines.append("- action_rules:")
         lines.extend(f"  - {rule}" for rule in action_rules)

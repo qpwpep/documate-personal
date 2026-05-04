@@ -113,6 +113,10 @@ class SynthesisPromptBuilderTest(unittest.TestCase):
         self.assertIn("required_sections=options", turn_message)
         self.assertIn("options_section_required=true", turn_message)
         self.assertIn("candidate_facts or doc_metadata", turn_message)
+        self.assertIn("options_answer_policy=answer first with confirmed items", turn_message)
+        self.assertIn("do not replace the requested options summary", turn_message)
+        self.assertIn("needs_more_evidence", turn_message)
+        self.assertIn("wrapper/delegated API relationship", turn_message)
 
     def test_code_example_request_requires_fenced_code_block_in_turn_contract(self) -> None:
         state = build_graph_state_input(
