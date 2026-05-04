@@ -315,8 +315,8 @@ button[data-testid="stExpandSidebarButton"]:hover {
 
 .dm-sidebar-brand {
     border-bottom: 1px solid var(--dm-strong-divider);
-    margin-bottom: 1.1rem;
-    padding-bottom: 1rem;
+    margin-bottom: 0.9rem;
+    padding-bottom: 0.95rem;
 }
 
 .dm-sidebar-brand .dm-mark {
@@ -343,7 +343,8 @@ button[data-testid="stExpandSidebarButton"]:hover {
     font-size: 0.78rem;
     font-weight: 700;
     letter-spacing: 0.04em;
-    margin: 1.05rem 0 0.45rem;
+    line-height: 1.2;
+    margin: 0.95rem 0 0.42rem;
     text-transform: uppercase;
 }
 
@@ -354,8 +355,21 @@ button[data-testid="stExpandSidebarButton"]:hover {
     color: var(--dm-muted);
     font-size: 0.86rem;
     line-height: 1.5;
-    margin-top: 0.7rem;
+    margin: 0 0 1rem;
     padding: 0.72rem 0.8rem;
+}
+
+[data-testid="stSidebar"] div.stButton > button {
+    min-height: 3rem;
+}
+
+[data-testid="stSidebar"] [data-testid="stElementContainer"]:has(div.stButton),
+[data-testid="stSidebar"] [data-testid="stElementContainer"]:has([data-testid="stRadio"]) {
+    margin-bottom: 0;
+}
+
+[data-testid="stSidebar"] [data-testid="stRadio"] {
+    margin: 0;
 }
 
 .dm-intro {
@@ -636,19 +650,57 @@ div.stButton > button:focus {
 }
 
 [data-testid="stRadio"] [role="radiogroup"] {
+    align-items: center !important;
     background: var(--dm-panel);
     border: 1px solid var(--dm-border);
     border-radius: 0.85rem;
-    gap: 0.25rem;
-    padding: 0.24rem;
+    box-sizing: border-box;
+    display: flex !important;
+    flex-wrap: nowrap !important;
+    gap: 0.18rem !important;
+    justify-content: flex-start !important;
+    padding: 0.3rem 0.38rem;
+    width: 100%;
 }
 
-[data-testid="stRadio"] [role="radio"] {
-    color: var(--dm-muted);
-}
-
-[data-testid="stRadio"] [role="radio"] * {
+[data-testid="stRadio"] [role="radiogroup"] label,
+[data-testid="stRadio"] [role="radiogroup"] label div,
+[data-testid="stRadio"] [role="radiogroup"] label span,
+[data-testid="stRadio"] [role="radiogroup"] label p {
     color: var(--dm-muted) !important;
+    font-size: 0.9rem !important;
+    line-height: 1.35 !important;
+    opacity: 1 !important;
+    white-space: nowrap !important;
+    -webkit-text-fill-color: var(--dm-muted) !important;
+}
+
+[data-testid="stRadio"] [role="radiogroup"] label {
+    align-items: center !important;
+    display: inline-flex !important;
+    flex: 0 0 auto !important;
+    gap: 0.18rem !important;
+    margin: 0 !important;
+    min-width: 0 !important;
+    padding: 0.12rem 0.16rem !important;
+}
+
+[data-testid="stRadio"] [role="radiogroup"] label > div {
+    margin: 0 !important;
+    padding: 0 !important;
+}
+
+[data-testid="stRadio"] [role="radiogroup"] label:has(input:checked),
+[data-testid="stRadio"] [role="radiogroup"] label:has(input:checked) div,
+[data-testid="stRadio"] [role="radiogroup"] label:has(input:checked) span,
+[data-testid="stRadio"] [role="radiogroup"] label:has(input:checked) p {
+    color: var(--dm-text) !important;
+    font-weight: 700;
+    -webkit-text-fill-color: var(--dm-text) !important;
+}
+
+[data-testid="stRadio"] input[type="radio"] {
+    accent-color: var(--dm-accent) !important;
 }
 
 [data-testid="stRadio"] [aria-checked="true"] {
@@ -736,6 +788,7 @@ class SidebarInputs:
     slack_email: str
     slack_channel_id: str
     theme_mode: str
+    new_chat_requested: bool
 
 
 def configure_page() -> None:
@@ -788,6 +841,12 @@ def render_sidebar(current_file_name: str | None = None) -> SidebarInputs:
             unsafe_allow_html=True,
         )
 
+        new_chat_requested = st.button(
+            "새 채팅",
+            key="documate_new_chat",
+            use_container_width=True,
+        )
+
         st.markdown('<div class="dm-sidebar-section">현재 파일</div>', unsafe_allow_html=True)
         uploaded_label = escape(current_file_name or "아직 업로드된 파일이 없습니다.")
         st.markdown(
@@ -815,6 +874,7 @@ def render_sidebar(current_file_name: str | None = None) -> SidebarInputs:
         slack_email=slack_email,
         slack_channel_id=slack_channel_id,
         theme_mode=theme_mode,
+        new_chat_requested=new_chat_requested,
     )
 
 
