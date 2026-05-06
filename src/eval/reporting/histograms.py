@@ -135,6 +135,8 @@ def build_failure_reason(result: CaseResult) -> str:
         return ", ".join(result.response_errors)
     if result.judge_errors:
         return ", ".join(result.judge_errors)
+    if result.judge_audit_failures:
+        return ", ".join(result.judge_audit_failures)
     warnings = _result_retrieval_warnings(result)
     if warnings:
         return "retrieval_warning:" + ", ".join(warnings)

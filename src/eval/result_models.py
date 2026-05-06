@@ -63,6 +63,7 @@ class CaseResult(BaseModel):
     runtime_errors: list[str] = Field(default_factory=list)
     response_errors: list[str] = Field(default_factory=list)
     judge_errors: list[str] = Field(default_factory=list)
+    judge_audit_failures: list[str] = Field(default_factory=list)
     action_results: ActionResults | None = None
     slack_delivery_status: Literal["success", "failed", "skipped", "unknown", "not_applicable"] = "not_applicable"
     slack_delivery_required: bool = False
@@ -121,6 +122,29 @@ class CaseResult(BaseModel):
             response_payload = payload.get("response_payload")
             if isinstance(response_payload, dict) and isinstance(response_payload.get("claims"), list):
                 payload["response_claims"] = response_payload.get("claims")
+        judge_errors = payload.get("judge_errors")
+        if isinstance(judge_errors, list):
+            audit_failures = [
+                str(item)
+                for item in judge_errors
+                if "judge_min_score audit failed" in str(item)
+            ]
+            if audit_failures:
+                existing_audit_failures = payload.get("judge_audit_failures")
+                merged_audit_failures = [
+                    str(item)
+                    for item in (existing_audit_failures if isinstance(existing_audit_failures, list) else [])
+                    if str(item).strip()
+                ]
+                for item in audit_failures:
+                    if item not in merged_audit_failures:
+                        merged_audit_failures.append(item)
+                payload["judge_audit_failures"] = merged_audit_failures
+                payload["judge_errors"] = [
+                    item
+                    for item in judge_errors
+                    if "judge_min_score audit failed" not in str(item)
+                ]
         return payload
 
     @model_validator(mode="after")
