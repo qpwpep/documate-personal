@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import time
 from collections.abc import AsyncIterator
@@ -19,6 +20,15 @@ from src.app.web.session_store import InMemorySessionStore
 
 logger = logging.getLogger(__name__)
 _STREAM_DONE = object()
+
+
+def _query_log_fields(query: str) -> dict[str, Any]:
+    normalized_query = str(query or "")
+    return {
+        "query": normalized_query[:240],
+        "query_length": len(normalized_query),
+        "query_hash": hashlib.sha256(normalized_query.encode("utf-8")).hexdigest(),
+    }
 
 
 @dataclass(frozen=True)
@@ -130,7 +140,7 @@ class AgentRequestService:
             session_id=session_id[:8],
             request_id=request_id,
             agent_id=id(agent_manager),
-            query=user_query[:60],
+            **_query_log_fields(user_query),
             upload_file_path=upload_file_path,
         )
 
