@@ -12,7 +12,7 @@ from src.infra.tools.docs_search.extraction import should_extract_doc_content
 from src.infra.tools.docs_search.policy import docs_search_rules, infer_docs_query_hint, normalize_include_domains
 from src.infra.tools.docs_search.ranking import filter_docs_evidence_by_topic_purity, has_exact_identifier_coverage, has_meaningful_docs_evidence, merge_docs_evidence_items
 from src.infra.tools.docs_search.schemas import TavilyArgs
-from src.infra.tools.docs_search.serialization import collect_docs_search_evidence
+from src.infra.tools.docs_search.serialization import DocsSearchFilterCounters, collect_docs_search_evidence
 
 
 def build_docs_search_tool(settings: AppSettings) -> Any:
@@ -79,11 +79,13 @@ def build_docs_search_tool(settings: AppSettings) -> Any:
         evidence_items = []
         retrieval_warnings: list[str] = []
         raw_scores: list[float] = []
+        filter_counters = DocsSearchFilterCounters()
         batch_evidence, batch_raw_scores = collect_docs_search_evidence(
             results,
             allowed_domains=hinted_domains,
             retrieval_warnings=retrieval_warnings,
             query=effective_query,
+            filter_counters=filter_counters,
         )
         evidence_items.extend(batch_evidence)
         raw_scores.extend(batch_raw_scores)
@@ -126,6 +128,7 @@ def build_docs_search_tool(settings: AppSettings) -> Any:
                 allowed_domains=hinted_domains,
                 retrieval_warnings=retrieval_warnings,
                 query=fallback_query,
+                filter_counters=filter_counters,
             )
             evidence_items.extend(batch_evidence)
             raw_scores.extend(batch_raw_scores)
@@ -150,6 +153,11 @@ def build_docs_search_tool(settings: AppSettings) -> Any:
             status="success" if evidence else "no_result",
             message="" if evidence else "no official documentation evidence found",
             raw_score=max(raw_scores) if raw_scores else None,
+            provider_result_count=filter_counters.provider_result_count,
+            filtered_invalid_url_count=filter_counters.filtered_invalid_url_count,
+            filtered_path_prefix_count=filter_counters.filtered_path_prefix_count,
+            filtered_cross_domain_count=filter_counters.filtered_cross_domain_count,
+            final_evidence_count=len(evidence),
             warnings=sorted(set(retrieval_warnings)),
         )
 

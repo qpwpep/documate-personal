@@ -25,6 +25,13 @@ class RetrievalTaskResult:
     latency_trace: dict[str, Any]
 
 
+def _non_negative_int(value: Any, default: int = 0) -> int:
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return max(0, default)
+
+
 def normalize_retrieval_diagnostic(
     raw_payload: Any,
     *,
@@ -63,6 +70,11 @@ def normalize_retrieval_diagnostic(
         normalized_score=diagnostics.get("normalized_score"),
         raw_score=diagnostics.get("raw_score"),
         result_count=int(diagnostics.get("result_count", evidence_count) or evidence_count),
+        provider_result_count=_non_negative_int(diagnostics.get("provider_result_count", 0), default=0),
+        filtered_invalid_url_count=_non_negative_int(diagnostics.get("filtered_invalid_url_count", 0), default=0),
+        filtered_path_prefix_count=_non_negative_int(diagnostics.get("filtered_path_prefix_count", 0), default=0),
+        filtered_cross_domain_count=_non_negative_int(diagnostics.get("filtered_cross_domain_count", 0), default=0),
+        final_evidence_count=_non_negative_int(diagnostics.get("final_evidence_count", evidence_count), default=evidence_count),
         warnings=[str(item).strip() for item in warnings if str(item).strip()],
     )
 
@@ -79,23 +91,32 @@ def collect_retrieval_result(
     parsed_items = parse_evidence_payload(raw_payload, context=f"tool:{tool_name}", errors=local_errors)
     payload_dicts = evidence_to_dicts(parsed_items)
     warnings: list[str] = []
+    filtered_cross_domain_count = 0
     if route == "docs":
         hinted_domains = []
         if query_hint := infer_docs_query_hint(query):
             _library_name, hinted_domains, _fallback_queries = query_hint
         if hinted_domains:
+            pre_filter_count = len(payload_dicts)
             filtered_payload_dicts = filter_evidence_to_domains(
                 payload_dicts,
                 allowed_domains=hinted_domains,
             )
             if len(filtered_payload_dicts) != len(payload_dicts):
+                filtered_cross_domain_count = pre_filter_count - len(filtered_payload_dicts)
                 warnings.append("cross_library_domain_filtered")
                 payload_dicts = filtered_payload_dicts
 
     if isinstance(raw_payload, dict) and isinstance(raw_payload.get("diagnostics"), dict):
         diagnostics = raw_payload["diagnostics"]
         diagnostics["warnings"] = sorted(set([*diagnostics.get("warnings", []), *warnings]))
-        if route == "docs" and len(payload_dicts) != int(diagnostics.get("result_count", len(payload_dicts)) or len(payload_dicts)):
+        if route == "docs":
+            diagnostics["filtered_cross_domain_count"] = _non_negative_int(
+                diagnostics.get("filtered_cross_domain_count", 0),
+                default=0,
+            ) + filtered_cross_domain_count
+            diagnostics["final_evidence_count"] = len(payload_dicts)
+        if route == "docs" and filtered_cross_domain_count > 0:
             diagnostics["status"] = "success" if payload_dicts else "no_result"
             if not payload_dicts and not str(diagnostics.get("message") or "").strip():
                 diagnostics["message"] = "no official documentation evidence found"
@@ -221,6 +242,11 @@ def build_reused_retrieval_task_result(
         normalized_score=diagnostic.normalized_score,
         raw_score=diagnostic.raw_score,
         result_count=diagnostic.result_count,
+        provider_result_count=diagnostic.provider_result_count,
+        filtered_invalid_url_count=diagnostic.filtered_invalid_url_count,
+        filtered_path_prefix_count=diagnostic.filtered_path_prefix_count,
+        filtered_cross_domain_count=diagnostic.filtered_cross_domain_count,
+        final_evidence_count=diagnostic.final_evidence_count,
         metric=diagnostic.metric or None,
         score_direction=diagnostic.score_direction or None,
         warnings=diagnostic.warnings,

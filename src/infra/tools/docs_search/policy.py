@@ -14,6 +14,7 @@ _NUMPY_DOC_TITLE_VERSION_PATTERN = re.compile(
     r"(\bNumPy)\s+v?\d+(?:\.\d+)*(?:[A-Za-z0-9.+-]*)?(\s+Manual\b)",
     re.IGNORECASE,
 )
+DocUrlFilterReason = Literal["invalid_url", "path_prefix"]
 
 
 def docs_search_rules():
@@ -91,15 +92,22 @@ def canonicalize_doc_title(*, title: Any, original_url: str, canonical_url: str)
 
 
 def is_allowed_doc_url(url: str) -> bool:
+    return doc_url_filter_reason(url) is None
+
+
+def doc_url_filter_reason(url: str) -> DocUrlFilterReason | None:
     parsed = urlparse(canonicalize_doc_url(url))
     if parsed.scheme.lower() != "https" or not parsed.netloc:
-        return False
+        return "invalid_url"
     domain = normalize_domain(parsed.netloc)
     allowed_prefixes = docs_search_rules().allowed_doc_path_prefixes.get(domain)
     if not allowed_prefixes:
-        return False
+        return "invalid_url"
     normalized_path = normalize_path_prefix(parsed.path or "/")
-    return any(normalized_path.startswith(prefix) for prefix in allowed_prefixes)
+    normalized_allowed_prefixes = [normalize_path_prefix(prefix) for prefix in allowed_prefixes]
+    if any(normalized_path.startswith(prefix) for prefix in normalized_allowed_prefixes):
+        return None
+    return "path_prefix"
 
 
 def is_valid_doc_result(*, url: str, title: Any, snippet: Any) -> bool:
