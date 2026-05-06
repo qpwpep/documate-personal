@@ -331,6 +331,10 @@ class DocsSearchTest(unittest.TestCase):
             [item["url_or_path"] for item in result["evidence"]],
             ["https://numpy.org/doc/stable/reference/generated/numpy.concatenate.html"],
         )
+        self.assertIn("provider_ms", result["diagnostics"])
+        self.assertIn("url_validation_ms", result["diagnostics"])
+        self.assertIn("post_filter_ms", result["diagnostics"])
+        self.assertFalse(result["diagnostics"]["include_raw_content_requested"])
         first_kwargs = mock_request_tavily_search.call_args_list[0].kwargs
         self.assertEqual(first_kwargs["include_domains"], ["numpy.org"])
 
@@ -589,6 +593,7 @@ class DocsSearchTest(unittest.TestCase):
 
         first_kwargs = mock_request_tavily_search.call_args_list[0].kwargs
         self.assertEqual(first_kwargs["include_raw_content"], "markdown")
+        self.assertTrue(result["diagnostics"]["include_raw_content_requested"])
         self.assertEqual(result["diagnostics"]["status"], "success")
         metadata = result["evidence"][0]["doc_metadata"]
         self.assertEqual(metadata["doc_family"], "sphinx_api")

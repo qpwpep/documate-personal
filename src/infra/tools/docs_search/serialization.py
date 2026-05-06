@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import time
 from typing import Any
 from urllib.parse import urlparse
 
+from src.core.latency import elapsed_ms
 from src.infra.tools._common import build_evidence_item, normalize_relevance_score
 from src.infra.tools.docs_search.extraction import extract_doc_content
 from src.infra.tools.docs_search.policy import (
@@ -29,6 +31,7 @@ class DocsSearchFilterCounters:
     filtered_url_request_failed_count: int = 0
     filtered_identifier_mismatch_count: int = 0
     validated_url_count: int = 0
+    url_validation_ms: int = 0
 
     def record_url_filter(self, reason: str | None) -> None:
         if reason == "invalid_url":
@@ -100,7 +103,10 @@ def collect_docs_search_evidence(
                 if filter_counters is not None:
                     filter_counters.record_url_filter(url_filter_reason)
                 continue
+            validation_started = time.perf_counter()
             validation = validate_doc_url(candidate_url)
+            if filter_counters is not None:
+                filter_counters.url_validation_ms += elapsed_ms(validation_started, time.perf_counter())
             if not validation.ok:
                 if filter_counters is not None:
                     filter_counters.record_validation_filter(validation.reason)

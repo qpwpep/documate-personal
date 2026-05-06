@@ -144,6 +144,10 @@ class RetrievalDiagnostic(BaseModel):
     score_direction: Literal["higher_is_better", "lower_is_better", ""] = ""
     normalized_score: float | None = None
     raw_score: float | None = None
+    provider_ms: int = 0
+    url_validation_ms: int = 0
+    post_filter_ms: int = 0
+    include_raw_content_requested: bool = False
     warnings: list[str] = Field(default_factory=list)
 
 
