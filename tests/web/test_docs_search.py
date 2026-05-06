@@ -26,7 +26,7 @@ class DocsSearchTest(unittest.TestCase):
             ("streamlit official docs", "docs.streamlit.io", "streamlit api reference"),
             ("gradio official docs", "gradio.app", "gradio docs"),
             ("scikit-learn official docs", "scikit-learn.org", "scikit-learn user guide"),
-            ("Pydantic official docs", "docs.pydantic.dev", "pydantic concepts documentation"),
+            ("Pydantic official docs", ["docs.pydantic.dev", "pydantic.dev"], "pydantic concepts documentation"),
         ]
 
         for query, expected_domain, expected_fallback in cases:
@@ -37,7 +37,8 @@ class DocsSearchTest(unittest.TestCase):
                 self.assertGreaterEqual(len(mock_request_tavily_search.call_args_list), 2)
                 first_kwargs = mock_request_tavily_search.call_args_list[0].kwargs
                 second_kwargs = mock_request_tavily_search.call_args_list[1].kwargs
-                self.assertEqual(first_kwargs["include_domains"], [expected_domain])
+                expected_domains = expected_domain if isinstance(expected_domain, list) else [expected_domain]
+                self.assertEqual(first_kwargs["include_domains"], expected_domains)
                 self.assertEqual(first_kwargs["query"], query)
                 self.assertEqual(second_kwargs["query"], expected_fallback)
 
@@ -114,7 +115,7 @@ class DocsSearchTest(unittest.TestCase):
             ),
             (
                 "Pydantic BaseModel model_validate official docs",
-                "docs.pydantic.dev",
+                ["docs.pydantic.dev", "pydantic.dev"],
                 "pydantic model_validate documentation",
             ),
         ]
@@ -127,7 +128,8 @@ class DocsSearchTest(unittest.TestCase):
                 self.assertGreaterEqual(len(mock_request_tavily_search.call_args_list), 2)
                 first_kwargs = mock_request_tavily_search.call_args_list[0].kwargs
                 second_kwargs = mock_request_tavily_search.call_args_list[1].kwargs
-                self.assertEqual(first_kwargs["include_domains"], [expected_domain])
+                expected_domains = expected_domain if isinstance(expected_domain, list) else [expected_domain]
+                self.assertEqual(first_kwargs["include_domains"], expected_domains)
                 self.assertEqual(second_kwargs["query"], expected_fallback)
 
     @patch("src.infra.tools.docs_search.client.request_tavily_search")
@@ -143,8 +145,8 @@ class DocsSearchTest(unittest.TestCase):
             ),
             (
                 "Pydantic v2 Field validation official docs",
-                "docs.pydantic.dev",
-                "pydantic Field validation validator",
+                ["docs.pydantic.dev", "pydantic.dev"],
+                "pydantic Field fields concepts",
             ),
             (
                 "pandas concat official docs",
@@ -176,7 +178,8 @@ class DocsSearchTest(unittest.TestCase):
                 self.assertGreaterEqual(len(mock_request_tavily_search.call_args_list), 2)
                 first_kwargs = mock_request_tavily_search.call_args_list[0].kwargs
                 second_kwargs = mock_request_tavily_search.call_args_list[1].kwargs
-                self.assertEqual(first_kwargs["include_domains"], [expected_domain])
+                expected_domains = expected_domain if isinstance(expected_domain, list) else [expected_domain]
+                self.assertEqual(first_kwargs["include_domains"], expected_domains)
                 self.assertEqual(second_kwargs["query"], expected_fallback)
 
     @patch("src.infra.tools.docs_search.client.request_tavily_search")
