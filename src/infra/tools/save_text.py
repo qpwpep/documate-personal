@@ -19,10 +19,13 @@ def build_save_text_tool():
             filename = f"{normalized_prefix}_{ts}.txt"
             filepath = output_path / filename
             filepath.write_text(content, encoding="utf-8-sig")
+            byte_count = len(str(content or "").encode("utf-8-sig"))
 
             return {
+                "status": "success",
                 "message": f"Saved output to {filename}",
                 "file_path": str(filepath),
+                "bytes": byte_count,
             }
         except Exception as exc:
             raise RuntimeError(f"Failed to save file: {exc}") from exc

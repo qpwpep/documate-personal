@@ -160,6 +160,14 @@ def parse_token_usage(value: Any) -> TokenUsage | None:
     except (TypeError, ValueError):
         return None
 
+
+def _parse_non_negative_int(value: Any, default: int = 0) -> int:
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return max(0, default)
+
+
 def parse_model_usage_status(value: Any, *, has_llm_usage: bool, has_debug_payload: bool = True) -> ModelUsageStatus:
     status = str(value or "").strip().lower()
     if status in {"llm_used", "deterministic", "missing_debug"}:
@@ -167,7 +175,6 @@ def parse_model_usage_status(value: Any, *, has_llm_usage: bool, has_debug_paylo
     if not has_debug_payload:
         return "missing_debug"
     return "llm_used" if has_llm_usage else "deterministic"
-
 
 
 def parse_action_results(value: Any) -> ActionResults | None:
@@ -197,6 +204,7 @@ def parse_action_results(value: Any) -> ActionResults | None:
         payload["save_text"] = SaveTextActionResult(
             status=str(save_payload.get("status") or "").strip(),
             file_path=(str(save_payload.get("file_path")).strip() if save_payload.get("file_path") else None),
+            bytes=_parse_non_negative_int(save_payload.get("bytes", 0), default=0),
             error=(str(save_payload.get("error")).strip() if save_payload.get("error") else None),
             message=(str(save_payload.get("message")).strip() if save_payload.get("message") else None),
             error_code=(parse_error_codes([save_payload.get("error_code")]) or [None])[0],
@@ -229,12 +237,12 @@ def parse_debug_payload(value: Any) -> DebugPayload:
     observability_status = str(value.get("observability_status") or "ok").strip().lower()
     if observability_status not in {"ok", "degraded", "failed"}:
         observability_status = "ok"
+
     llm_calls = parse_llm_calls(value.get("llm_calls"))
     models_used = [str(item) for item in value.get("models_used", []) if str(item).strip()] if isinstance(value.get("models_used"), list) else []
     model_name = str(value.get("model_name")) if value.get("model_name") else None
     token_usage = parse_token_usage(value.get("token_usage"))
     has_llm_usage = bool(llm_calls or models_used or model_name or (token_usage is not None and token_usage.total_tokens > 0))
-
 
     return DebugPayload(
         schema_version=schema_version,
