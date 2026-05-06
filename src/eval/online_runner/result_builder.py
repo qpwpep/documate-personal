@@ -41,6 +41,7 @@ def _build_gate_failures(
     product_pass: bool | None,
     judge_pass: bool | None,
     judge_errors: list[str],
+    judge_audit_failures: list[str],
 ) -> list[str]:
     failures: list[str] = []
     if runtime_errors:
@@ -54,6 +55,8 @@ def _build_gate_failures(
     if product_pass is False:
         failures.append("product_quality_below_floor")
     if judge_pass is False:
+        failures.append("judge_min_score_audit_failed")
+    if judge_audit_failures and "judge_min_score_audit_failed" not in failures:
         failures.append("judge_min_score_audit_failed")
     if any(str(error).startswith("invalid_eval:") for error in judge_errors):
         failures.append("invalid_eval")
@@ -169,6 +172,7 @@ def build_case_result(
     )
 
     judge_errors: list[str] = []
+    judge_audit_failures: list[str] = []
     llm_judge_score: float | None = None
     llm_judge_reason: str | None = None
     judge_subscores: JudgeSubscores | None = None
@@ -256,7 +260,7 @@ def build_case_result(
     if judge_min_score is not None and llm_judge_score is not None and parsed_response.response_text.strip():
         judge_gate_passed = llm_judge_score >= judge_min_score
         if judge_gate_passed is False:
-            judge_errors.append(
+            judge_audit_failures.append(
                 "judge_min_score audit failed: "
                 f"score={llm_judge_score:.3f} threshold={judge_min_score:.3f}"
             )
@@ -276,6 +280,7 @@ def build_case_result(
         product_pass=product_pass,
         judge_pass=judge_pass,
         judge_errors=judge_errors,
+        judge_audit_failures=judge_audit_failures,
     )
     cost = compute_cost_usd(
         token_usage=parsed_response.token_usage,
@@ -323,6 +328,7 @@ def build_case_result(
         runtime_errors=runtime_errors,
         response_errors=parsed_response.response_errors,
         judge_errors=judge_errors,
+        judge_audit_failures=judge_audit_failures,
         action_results=parsed_response.action_results,
         slack_delivery_status=slack_delivery_status,
         slack_delivery_required=slack_delivery_required,
