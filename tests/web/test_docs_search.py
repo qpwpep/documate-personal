@@ -3,6 +3,7 @@ from unittest.mock import patch
 
 from src.infra.settings import AppSettings
 from src.infra.tools import build_tool_registry
+from src.infra.tools.docs_search.policy import canonicalize_doc_url, is_allowed_doc_url
 
 
 class DocsSearchTest(unittest.TestCase):
@@ -341,6 +342,31 @@ class DocsSearchTest(unittest.TestCase):
             ["https://numpy.org/doc/stable/reference/generated/numpy.reshape.html"],
         )
         self.assertEqual(result["evidence"][0]["title"], "numpy.reshape - NumPy Manual")
+
+    def test_docs_search_canonicalizes_pytorch_versioned_docs_urls_to_stable(self) -> None:
+        self.assertEqual(
+            canonicalize_doc_url("https://docs.pytorch.org/docs/2.9/generated/torch.Tensor.html"),
+            "https://docs.pytorch.org/docs/stable/generated/torch.Tensor.html",
+        )
+        self.assertEqual(
+            canonicalize_doc_url("https://docs.pytorch.org/docs/2.9/_sources/generated/torch.Tensor.rst.txt"),
+            "https://docs.pytorch.org/docs/stable/_sources/generated/torch.Tensor.rst.txt",
+        )
+
+    def test_docs_search_allows_pytorch_tutorial_urls(self) -> None:
+        self.assertTrue(
+            is_allowed_doc_url("https://docs.pytorch.org/tutorials/beginner/basics/intro.html")
+        )
+
+    def test_docs_search_canonicalizes_pydantic_v2_urls_to_latest(self) -> None:
+        self.assertEqual(
+            canonicalize_doc_url("https://docs.pydantic.dev/2.10/concepts/models/"),
+            "https://docs.pydantic.dev/latest/concepts/models/",
+        )
+        self.assertEqual(
+            canonicalize_doc_url("https://docs.pydantic.dev/2.x/concepts/validators/"),
+            "https://docs.pydantic.dev/latest/concepts/validators/",
+        )
 
     @patch("src.infra.tools.docs_search.client.request_tavily_search")
     def test_docs_search_uses_fallback_when_first_batch_is_docs_chrome_only(self, mock_request_tavily_search) -> None:
