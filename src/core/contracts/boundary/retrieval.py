@@ -26,23 +26,29 @@ def _parse_error_code(value: Any) -> str | None:
     return code if code in _ERROR_CODES else None
 
 
+def _parse_non_negative_int(value: Any, default: int = 0) -> int:
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return max(0, default)
+
+
 def parse_retrieval_diagnostic(value: Any) -> RetrievalDiagnostic | None:
     if isinstance(value, RetrievalDiagnostic):
         return value
     if not isinstance(value, dict):
         return None
-    try:
-        attempt = int(value.get("attempt", 0) or 0)
-    except (TypeError, ValueError):
-        attempt = 0
-    try:
-        result_count = int(value.get("result_count", 0) or 0)
-    except (TypeError, ValueError):
-        result_count = 0
-    try:
-        evidence_count = int(value.get("evidence_count", result_count) or result_count)
-    except (TypeError, ValueError):
-        evidence_count = result_count
+    attempt = _parse_non_negative_int(value.get("attempt", 0), default=0)
+    result_count = _parse_non_negative_int(value.get("result_count", 0), default=0)
+    evidence_count = _parse_non_negative_int(
+        value.get("evidence_count", result_count),
+        default=result_count,
+    )
+    provider_result_count = _parse_non_negative_int(value.get("provider_result_count", 0), default=0)
+    filtered_invalid_url_count = _parse_non_negative_int(value.get("filtered_invalid_url_count", 0), default=0)
+    filtered_path_prefix_count = _parse_non_negative_int(value.get("filtered_path_prefix_count", 0), default=0)
+    filtered_cross_domain_count = _parse_non_negative_int(value.get("filtered_cross_domain_count", 0), default=0)
+    final_evidence_count = _parse_non_negative_int(value.get("final_evidence_count", evidence_count), default=evidence_count)
     normalized_score = value.get("normalized_score")
     raw_score = value.get("raw_score")
     try:
@@ -70,13 +76,18 @@ def parse_retrieval_diagnostic(value: Any) -> RetrievalDiagnostic | None:
         message=str(value.get("message") or ""),
         error_code=_parse_error_code(value.get("error_code")),  # type: ignore[arg-type]
         query=str(value.get("query") or ""),
-        attempt=max(0, attempt),
-        evidence_count=max(0, evidence_count),
+        attempt=attempt,
+        evidence_count=evidence_count,
         metric=str(value.get("metric") or "").strip(),
         score_direction=score_direction,  # type: ignore[arg-type]
         normalized_score=normalized_score_value,
         raw_score=raw_score_value,
-        result_count=max(0, result_count),
+        result_count=result_count,
+        provider_result_count=provider_result_count,
+        filtered_invalid_url_count=filtered_invalid_url_count,
+        filtered_path_prefix_count=filtered_path_prefix_count,
+        filtered_cross_domain_count=filtered_cross_domain_count,
+        final_evidence_count=final_evidence_count,
         warnings=[str(item).strip() for item in warnings if str(item).strip()],
     )
 

@@ -128,6 +128,11 @@ class RetrievalDiagnostic(BaseModel):
     attempt: int = 0
     evidence_count: int = 0
     result_count: int = 0
+    provider_result_count: int = 0
+    filtered_invalid_url_count: int = 0
+    filtered_path_prefix_count: int = 0
+    filtered_cross_domain_count: int = 0
+    final_evidence_count: int = 0
     metric: str = ""
     score_direction: Literal["higher_is_better", "lower_is_better", ""] = ""
     normalized_score: float | None = None

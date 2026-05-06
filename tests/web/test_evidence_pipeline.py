@@ -525,6 +525,9 @@ class EvidencePipelineTest(unittest.TestCase):
 
         self.assertEqual(result["diagnostics"]["status"], "no_result")
         self.assertEqual(result["evidence"], [])
+        self.assertEqual(result["diagnostics"]["provider_result_count"], 1)
+        self.assertEqual(result["diagnostics"]["filtered_path_prefix_count"], 1)
+        self.assertEqual(result["diagnostics"]["final_evidence_count"], 0)
 
     @patch("src.infra.tools.docs_search.client.request_tavily_search")
     def test_docs_search_blocks_huggingface_commit_diff_urls(self, mock_request_tavily_search) -> None:
@@ -636,6 +639,9 @@ class EvidencePipelineTest(unittest.TestCase):
             ["https://numpy.org/doc/stable/reference/generated/numpy.concatenate.html"],
         )
         self.assertIn("cross_library_domain_filtered", result["diagnostics"]["warnings"])
+        self.assertEqual(result["diagnostics"]["provider_result_count"], 2)
+        self.assertEqual(result["diagnostics"]["filtered_cross_domain_count"], 1)
+        self.assertEqual(result["diagnostics"]["final_evidence_count"], 1)
 
     def test_docs_search_word_match_hint_does_not_match_substring(self) -> None:
         self.assertIsNone(infer_docs_query_hint("baremetal 공식 문서"))

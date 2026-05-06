@@ -545,6 +545,8 @@ class NodeRefactorTest(unittest.TestCase):
             "https://numpy.org/doc/stable/reference/generated/numpy.concatenate.html",
         )
         self.assertIn("cross_library_domain_filtered", diagnostic.warnings)
+        self.assertEqual(diagnostic.filtered_cross_domain_count, 1)
+        self.assertEqual(diagnostic.final_evidence_count, 1)
 
 
 if __name__ == "__main__":
