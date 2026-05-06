@@ -4,21 +4,11 @@ import math
 from typing import Any
 
 from src.core.sequence_utils import safe_list
-from src.core.contracts.debug import RetrievalDiagnostic
+from src.core.contracts.debug import ErrorCode, RetrievalDiagnostic
 from src.core.contracts.graph_state import RetrievalState
 
 
-_ERROR_CODES = {
-    "PLANNER_SCHEMA_INVALID",
-    "RETRIEVAL_DOCS_TIMEOUT",
-    "RETRIEVAL_DOCS_FAILED",
-    "RAG_INDEX_MISSING",
-    "LLM_STRUCTURED_EMPTY",
-    "SYNTHESIS_TIMEOUT",
-    "SLACK_AUTH_FAILED",
-    "SLACK_DESTINATION_MISSING",
-    "UPLOAD_PATH_INVALID",
-}
+_ERROR_CODES = set(ErrorCode.__args__)  # type: ignore[attr-defined]
 
 
 def _parse_error_code(value: Any) -> str | None:
@@ -54,6 +44,9 @@ def parse_retrieval_diagnostic(value: Any) -> RetrievalDiagnostic | None:
     filtered_identifier_mismatch_count = _parse_non_negative_int(value.get("filtered_identifier_mismatch_count", 0), default=0)
     validated_url_count = _parse_non_negative_int(value.get("validated_url_count", 0), default=0)
     final_evidence_count = _parse_non_negative_int(value.get("final_evidence_count", evidence_count), default=evidence_count)
+    provider_ms = _parse_non_negative_int(value.get("provider_ms", 0), default=0)
+    url_validation_ms = _parse_non_negative_int(value.get("url_validation_ms", 0), default=0)
+    post_filter_ms = _parse_non_negative_int(value.get("post_filter_ms", 0), default=0)
     normalized_score = value.get("normalized_score")
     raw_score = value.get("raw_score")
     try:
@@ -87,6 +80,10 @@ def parse_retrieval_diagnostic(value: Any) -> RetrievalDiagnostic | None:
         score_direction=score_direction,  # type: ignore[arg-type]
         normalized_score=normalized_score_value,
         raw_score=raw_score_value,
+        provider_ms=provider_ms,
+        url_validation_ms=url_validation_ms,
+        post_filter_ms=post_filter_ms,
+        include_raw_content_requested=bool(value.get("include_raw_content_requested", False)),
         result_count=result_count,
         provider_result_count=provider_result_count,
         filtered_invalid_url_count=filtered_invalid_url_count,

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import time
 from typing import Annotated, Any
 
 from langchain_core.tools import StructuredTool
 from langgraph.prebuilt import InjectedState
 
+from src.core.latency import elapsed_ms
 from src.infra.chroma_store import CHROMA_DISTANCE_METRIC, CHROMA_SCORE_DIRECTION
 from src.infra.settings import AppSettings
 from src.infra.tools._common import RagArgs, UploadArgs, build_retrieval_payload
@@ -21,7 +23,9 @@ def _build_search_payload(
     route: str,
     no_result_message: str,
     default_source: str,
+    provider_ms: int = 0,
 ) -> dict[str, Any]:
+    post_started = time.perf_counter()
     ranked_rows = rank_retrieval_rows(docs_with_scores, query=query)
     evidence, normalized_scores, raw_scores, retrieval_warnings = build_local_evidence_bundle(
         ranked_rows,
@@ -29,6 +33,7 @@ def _build_search_payload(
         tool_name=tool_name,
         default_source=default_source,
     )
+    post_filter_ms = elapsed_ms(post_started, time.perf_counter())
     return build_retrieval_payload(
         tool=tool_name,
         route=route,
@@ -38,6 +43,8 @@ def _build_search_payload(
         message="" if evidence else no_result_message,
         normalized_score=max(normalized_scores) if normalized_scores else None,
         raw_score=min(raw_scores) if raw_scores else None,
+        provider_ms=provider_ms,
+        post_filter_ms=post_filter_ms,
         metric=CHROMA_DISTANCE_METRIC,
         score_direction=CHROMA_SCORE_DIRECTION,
         warnings=retrieval_warnings,
@@ -66,19 +73,28 @@ def build_local_rag_tools(settings: AppSettings) -> tuple[Any, Any]:
 
         db = client.load_chroma(settings.openai_api_key)
         docs_with_scores: list[tuple[Any, float | None]] = []
+        provider_ms = 0
+        provider_started = time.perf_counter()
         try:
+            provider_started = time.perf_counter()
             docs_with_scores = client.search_with_raw_scores(db, query=query, k=k)
+            provider_ms += elapsed_ms(provider_started, time.perf_counter())
         except Exception:
             try:
+                provider_ms += elapsed_ms(provider_started, time.perf_counter())
+                provider_started = time.perf_counter()
                 docs = db.similarity_search(query, k=k)
                 docs_with_scores = [(doc, None) for doc in docs]
+                provider_ms += elapsed_ms(provider_started, time.perf_counter())
             except Exception as exc:
+                provider_ms += elapsed_ms(provider_started, time.perf_counter())
                 return build_retrieval_payload(
                     tool="rag_search",
                     route="local",
                     query=query,
                     status="error",
                     message=f"local similarity search failed ({exc})",
+                    provider_ms=provider_ms,
                     error_code="LOCAL_RAG_FAILED",
                 )
 
@@ -89,6 +105,7 @@ def build_local_rag_tools(settings: AppSettings) -> tuple[Any, Any]:
             route="local",
             no_result_message="no local notebook evidence found",
             default_source="notebook",
+            provider_ms=provider_ms,
         )
 
     def upload_search(
@@ -106,20 +123,26 @@ def build_local_rag_tools(settings: AppSettings) -> tuple[Any, Any]:
             )
 
         docs_with_scores: list[tuple[Any, float | None]] = []
+        provider_ms = 0
+        provider_started = time.perf_counter()
         try:
             vectorstore = getattr(retriever, "vectorstore", None)
+            provider_started = time.perf_counter()
             if vectorstore is not None:
                 docs_with_scores = client.search_with_raw_scores(vectorstore, query=query, k=k)
             else:
                 docs = retriever.invoke(query)
                 docs_with_scores = [(doc, None) for doc in docs]
+            provider_ms += elapsed_ms(provider_started, time.perf_counter())
         except Exception as exc:
+            provider_ms += elapsed_ms(provider_started, time.perf_counter())
             return build_retrieval_payload(
                 tool="upload_search",
                 route="upload",
                 query=query,
                 status="error",
                 message=f"uploaded file retrieval failed ({exc})",
+                provider_ms=provider_ms,
                 error_code="LOCAL_RAG_FAILED",
             )
 
@@ -130,6 +153,7 @@ def build_local_rag_tools(settings: AppSettings) -> tuple[Any, Any]:
             route="upload",
             no_result_message="no uploaded file evidence found",
             default_source="uploaded",
+            provider_ms=provider_ms,
         )
 
     rag_search_tool = StructuredTool.from_function(
