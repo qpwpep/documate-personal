@@ -29,6 +29,9 @@ class StreamlitPageTest(unittest.TestCase):
         self.assertIn("--dm-bg: #f7f5ef;", body)
         self.assertIn("--dm-text: #202124;", body)
         self.assertIn("--dm-chat-input-bg: #fffdfa;", body)
+        self.assertIn("--dm-chat-attachment-bg: #f8f6f1;", body)
+        self.assertIn("--dm-chat-attachment-text: #202124;", body)
+        self.assertIn("--dm-chat-icon: #276f66;", body)
         self.assertIn("--dm-assistant-bg:", body)
         self.assertIn("--dm-inline-code-bg: rgba(39, 111, 102, 0.10);", body)
 
@@ -44,6 +47,9 @@ class StreamlitPageTest(unittest.TestCase):
         self.assertIn("--dm-bg: #101214;", body)
         self.assertIn("--dm-text: #f5f1e8;", body)
         self.assertIn("--dm-chat-input-bg: #1d1e20;", body)
+        self.assertIn("--dm-chat-attachment-bg: #242827;", body)
+        self.assertIn("--dm-chat-attachment-text: #f5f1e8;", body)
+        self.assertIn("--dm-chat-icon: #78d1c1;", body)
         self.assertIn("--dm-assistant-bg:", body)
         self.assertIn("--dm-inline-code-bg: rgba(120, 209, 193, 0.12);", body)
 
@@ -56,6 +62,14 @@ class StreamlitPageTest(unittest.TestCase):
         self.assertEqual(fake_st.markdowns, [])
         self.assertIn("@media (prefers-color-scheme: dark)", streamlit_page._APP_CSS)
         self.assertIn('[data-testid="stChatInput"] > div:focus-within', streamlit_page._APP_CSS)
+        self.assertIn("caret-color: var(--dm-accent) !important;", streamlit_page._APP_CSS)
+        self.assertIn("--dm-chat-attachment-text: #202124;", streamlit_page._APP_CSS)
+        self.assertIn("--dm-chat-icon: #276f66;", streamlit_page._APP_CSS)
+        self.assertIn('[data-testid="stChatInput"] button svg', streamlit_page._APP_CSS)
+        self.assertIn(
+            '[data-testid="stChatInput"] [data-testid="stChatInputFile"] > div:first-child',
+            streamlit_page._APP_CSS,
+        )
         self.assertIn(".dm-save-note", streamlit_page._APP_CSS)
 
     def test_sync_theme_from_query_params_sets_session_theme(self) -> None:

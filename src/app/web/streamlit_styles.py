@@ -39,6 +39,13 @@ _APP_CSS = """
     --dm-chat-input-bg: #fffdfa;
     --dm-chat-input-gradient: linear-gradient(180deg, rgba(247, 245, 239, 0), rgba(247, 245, 239, 0.95) 22%);
     --dm-upload-border: rgba(39, 111, 102, 0.35);
+    --dm-chat-attachment-bg: #f8f6f1;
+    --dm-chat-attachment-text: #202124;
+    --dm-chat-attachment-muted: #6d675e;
+    --dm-chat-attachment-border: rgba(39, 111, 102, 0.18);
+    --dm-chat-attachment-shadow: 0 6px 16px rgba(32, 33, 36, 0.08);
+    --dm-chat-icon: #276f66;
+    --dm-chat-icon-muted: #6d675e;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -76,6 +83,13 @@ _APP_CSS = """
         --dm-chat-input-bg: #1d1e20;
         --dm-chat-input-gradient: linear-gradient(180deg, rgba(16, 18, 20, 0), rgba(16, 18, 20, 0.96) 22%);
         --dm-upload-border: rgba(120, 209, 193, 0.35);
+        --dm-chat-attachment-bg: #242827;
+        --dm-chat-attachment-text: #f5f1e8;
+        --dm-chat-attachment-muted: #b6afa4;
+        --dm-chat-attachment-border: rgba(120, 209, 193, 0.24);
+        --dm-chat-attachment-shadow: 0 6px 16px rgba(0, 0, 0, 0.18);
+        --dm-chat-icon: #78d1c1;
+        --dm-chat-icon-muted: #b6afa4;
     }
 }
 
@@ -565,6 +579,7 @@ div.stButton > button:focus {
     border: 0 !important;
     border-radius: 0.9rem !important;
     box-shadow: none !important;
+    caret-color: var(--dm-accent) !important;
     color: var(--dm-text) !important;
     line-height: 1.45 !important;
     min-height: 3.2rem;
@@ -587,7 +602,73 @@ div.stButton > button:focus {
 [data-testid="stChatInput"] button {
     background: var(--dm-accent-soft) !important;
     border-radius: 0.72rem !important;
-    color: var(--dm-accent) !important;
+    color: var(--dm-chat-icon) !important;
+}
+
+[data-testid="stChatInput"] button *,
+[data-testid="stChatInput"] button svg {
+    color: var(--dm-chat-icon) !important;
+    opacity: 1 !important;
+    -webkit-text-fill-color: var(--dm-chat-icon) !important;
+}
+
+[data-testid="stChatInput"] button:disabled,
+[data-testid="stChatInput"] button:disabled *,
+[data-testid="stChatInput"] button[disabled],
+[data-testid="stChatInput"] button[disabled] * {
+    color: var(--dm-chat-icon-muted) !important;
+    opacity: 0.68 !important;
+    -webkit-text-fill-color: var(--dm-chat-icon-muted) !important;
+}
+
+[data-testid="stChatInput"] [data-testid="stUploadedFile"],
+[data-testid="stChatInput"] [data-testid="stFileUploaderFile"],
+[data-testid="stChatInput"] [data-testid="stChatInputFile"] {
+    background: var(--dm-chat-attachment-bg) !important;
+    border: 1px solid var(--dm-chat-attachment-border) !important;
+    border-radius: 0.6rem !important;
+    box-shadow: var(--dm-chat-attachment-shadow) !important;
+    color: var(--dm-chat-attachment-text) !important;
+}
+
+[data-testid="stChatInput"] [data-testid="stUploadedFile"] *,
+[data-testid="stChatInput"] [data-testid="stFileUploaderFile"] *,
+[data-testid="stChatInput"] [data-testid="stChatInputFile"] * {
+    color: var(--dm-chat-attachment-text) !important;
+    fill: currentColor !important;
+    opacity: 1 !important;
+    -webkit-text-fill-color: var(--dm-chat-attachment-text) !important;
+}
+
+[data-testid="stChatInput"] [data-testid="stUploadedFile"] > div:first-child,
+[data-testid="stChatInput"] [data-testid="stFileUploaderFile"] > div:first-child,
+[data-testid="stChatInput"] [data-testid="stChatInputFile"] > div:first-child {
+    background: var(--dm-accent-soft) !important;
+    border: 1px solid var(--dm-chat-attachment-border) !important;
+    color: var(--dm-chat-icon) !important;
+}
+
+[data-testid="stChatInput"] [data-testid="stUploadedFile"] svg,
+[data-testid="stChatInput"] [data-testid="stFileUploaderFile"] svg,
+[data-testid="stChatInput"] [data-testid="stChatInputFile"] svg,
+[data-testid="stChatInput"] [data-testid="stUploadedFile"] img,
+[data-testid="stChatInput"] [data-testid="stFileUploaderFile"] img,
+[data-testid="stChatInput"] [data-testid="stChatInputFile"] img,
+[data-testid="stChatInput"] [data-testid="stUploadedFile"] [data-testid="stIconMaterial"],
+[data-testid="stChatInput"] [data-testid="stFileUploaderFile"] [data-testid="stIconMaterial"],
+[data-testid="stChatInput"] [data-testid="stChatInputFile"] [data-testid="stIconMaterial"] {
+    color: var(--dm-chat-icon) !important;
+    -webkit-text-fill-color: var(--dm-chat-icon) !important;
+}
+
+[data-testid="stChatInput"] [data-testid="stUploadedFile"] small,
+[data-testid="stChatInput"] [data-testid="stFileUploaderFile"] small,
+[data-testid="stChatInput"] [data-testid="stChatInputFile"] small,
+[data-testid="stChatInput"] [data-testid="stUploadedFile"] [data-testid="stUploadedFileSize"],
+[data-testid="stChatInput"] [data-testid="stFileUploaderFile"] [data-testid="stUploadedFileSize"],
+[data-testid="stChatInput"] [data-testid="stChatInputFile"] [data-testid="stUploadedFileSize"] {
+    color: var(--dm-chat-attachment-muted) !important;
+    -webkit-text-fill-color: var(--dm-chat-attachment-muted) !important;
 }
 
 [data-testid="stFileUploader"] {
