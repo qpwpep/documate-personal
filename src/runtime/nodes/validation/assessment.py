@@ -4,7 +4,7 @@ import re
 from typing import Any
 
 from src.core.answer_schema import filter_claims_by_evidence
-from src.core.contracts.debug import RetryReason
+from src.core.contracts.debug import ErrorCode, RetryReason
 from src.core.evidence import EvidenceItem
 from src.core.request_contracts import infer_answer_contract, missing_required_sections
 from src.runtime.nodes.retry import contains_tool_error
@@ -45,6 +45,7 @@ def _empty_validation_assessment(
     retry_reason: RetryReason | None = None,
     failed_routes: set[str] | None = None,
     score_avg: float | None = None,
+    error_codes: list[ErrorCode] | None = None,
 ) -> ValidationAssessment:
     return ValidationAssessment(
         blocked_missing_upload=blocked_missing_upload,
@@ -59,6 +60,7 @@ def _empty_validation_assessment(
         retry_reason=retry_reason,
         failed_routes=failed_routes or set(),
         score_avg=score_avg if score_avg is not None else route_score_avg(snapshot.parsed_evidence),
+        error_codes=error_codes or [],
     )
 
 
@@ -165,6 +167,23 @@ def _hybrid_section_errors(snapshot: ValidationSnapshot) -> list[str]:
     return errors
 
 
+def _hybrid_error_codes(errors: list[str]) -> list[ErrorCode]:
+    codes: list[ErrorCode] = []
+
+    def add(code: ErrorCode) -> None:
+        if code not in codes:
+            codes.append(code)
+
+    for error in errors:
+        if error.startswith("hybrid_sections_repeated") or error.startswith("hybrid_comparison_repeats_"):
+            add("HYBRID_SECTION_REPEATED")
+        elif error == "hybrid_upload_code_missing_actual_option":
+            add("HYBRID_UPLOAD_SETTING_MISSING")
+        elif error == "hybrid_comparison_missing_uploaded_setting":
+            add("HYBRID_COMPARISON_WEAK")
+    return codes
+
+
 def assess_retrieval_quality(snapshot: ValidationSnapshot) -> ValidationAssessment:
     if not snapshot.retrieval_required:
         return _empty_validation_assessment(snapshot)
@@ -242,6 +261,7 @@ def assess_validation(snapshot: ValidationSnapshot) -> ValidationAssessment:
     answer_contract = infer_answer_contract(snapshot.user_input, snapshot.required_routes)
     missing_sections = missing_required_sections(answer_contract, snapshot.response_payload)
     hybrid_section_errors = _hybrid_section_errors(snapshot)
+    hybrid_error_codes = _hybrid_error_codes(hybrid_section_errors)
 
     has_grounded_response_payload = bool(
         snapshot.response_payload is not None
@@ -262,6 +282,13 @@ def assess_validation(snapshot: ValidationSnapshot) -> ValidationAssessment:
             or bool(hybrid_section_errors)
         )
     )
+    validation_error_codes: list[ErrorCode] = []
+    if snapshot.retrieval_required and snapshot.response_payload is not None:
+        if (snapshot.response_payload.answer.strip() and not snapshot.response_payload.claims) or invalid_claims:
+            validation_error_codes.append("VALIDATION_UNSUPPORTED_CLAIMS")
+        for code in hybrid_error_codes:
+            if code not in validation_error_codes:
+                validation_error_codes.append(code)
 
     retry_reason: RetryReason | None = None
     failed_routes: set[str] = set()
@@ -291,4 +318,5 @@ def assess_validation(snapshot: ValidationSnapshot) -> ValidationAssessment:
         retry_reason=retry_reason,
         failed_routes=failed_routes,
         score_avg=score_avg,
+        error_codes=validation_error_codes,
     )

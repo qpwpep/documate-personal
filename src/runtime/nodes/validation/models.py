@@ -5,7 +5,7 @@ from typing import Any
 
 from src.core.answer_schema import AgentResponsePayloadModel
 from src.core.contracts import RetrievalDiagnostic
-from src.core.contracts.debug import RetryReason
+from src.core.contracts.debug import ErrorCode, RetryReason
 from src.core.evidence import EvidenceItem
 from src.core.planner_schema import PlannerOutput
 
@@ -38,3 +38,4 @@ class ValidationAssessment:
     retry_reason: RetryReason | None
     failed_routes: set[str]
     score_avg: float | None
+    error_codes: list[ErrorCode] = field(default_factory=list)

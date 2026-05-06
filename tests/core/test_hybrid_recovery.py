@@ -118,6 +118,8 @@ class HybridRecoveryTest(unittest.TestCase):
 
         self.assertFalse(assessment.has_grounded_response_payload)
         self.assertEqual(assessment.retry_reason, "unsupported_claims")
+        self.assertIn("HYBRID_SECTION_REPEATED", assessment.error_codes)
+        self.assertNotIn("VALIDATION_UNSUPPORTED_CLAIMS", assessment.error_codes)
 
     def test_hybrid_validation_rejects_upload_section_without_actual_options(self) -> None:
         response_payload = AgentResponsePayloadModel.model_validate(
@@ -165,6 +167,9 @@ class HybridRecoveryTest(unittest.TestCase):
 
         self.assertFalse(assessment.has_grounded_response_payload)
         self.assertEqual(assessment.retry_reason, "unsupported_claims")
+        self.assertIn("HYBRID_UPLOAD_SETTING_MISSING", assessment.error_codes)
+        self.assertIn("HYBRID_COMPARISON_WEAK", assessment.error_codes)
+        self.assertNotIn("VALIDATION_UNSUPPORTED_CLAIMS", assessment.error_codes)
 
     def test_hybrid_repair_labels_comparison_as_docs_vs_uploaded_settings(self) -> None:
         response_payload = AgentResponsePayloadModel.model_validate(
