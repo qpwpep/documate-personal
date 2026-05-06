@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -22,6 +23,9 @@ def write_run_outputs(*, output_dir: Path, results: list[CaseResult], summary: R
                 "case_id": result.case_id,
                 "session_id": result.session_id,
                 "request_id": result.request_id,
+                "query": result.query[:240],
+                "query_length": len(result.query),
+                "query_hash": hashlib.sha256(result.query.encode("utf-8")).hexdigest(),
                 "trace": result.trace,
                 "created_at_utc": result.created_at_utc,
             }
