@@ -157,6 +157,7 @@ error_page_markers = ["404", "page not found", "github pages", "does not exist",
 "gradio.app" = ["/docs/"]
 "scikit-learn.org" = ["/stable/"]
 "docs.pydantic.dev" = ["/latest/"]
+"pydantic.dev" = ["/docs/validation/latest/"]
 "docs.pears.com" = ["/reference/"]
 
 [[docs_search.query_hints]]
@@ -424,14 +425,14 @@ match_mode = "word"
 [[docs_search.query_hints]]
 identifiers = ["pydantic"]
 library_name = "pydantic"
-domains = ["docs.pydantic.dev"]
+domains = ["docs.pydantic.dev", "pydantic.dev"]
 fallback_queries = ["pydantic concepts documentation", "pydantic api documentation"]
 match_mode = "word"
 
 [[docs_search.query_hints]]
 identifiers = ["basemodel"]
 library_name = "pydantic"
-domains = ["docs.pydantic.dev"]
+domains = ["docs.pydantic.dev", "pydantic.dev"]
 fallback_queries = [
   "pydantic BaseModel documentation",
   "pydantic model_validate documentation",
@@ -441,7 +442,7 @@ match_mode = "word"
 [[docs_search.query_hints]]
 identifiers = ["model_validate"]
 library_name = "pydantic"
-domains = ["docs.pydantic.dev"]
+domains = ["docs.pydantic.dev", "pydantic.dev"]
 fallback_queries = [
   "pydantic model_validate documentation",
   "pydantic BaseModel documentation",
@@ -451,12 +452,12 @@ match_mode = "word"
 [[docs_search.query_hints]]
 identifiers = ["field", "field_validator"]
 library_name = "pydantic"
-domains = ["docs.pydantic.dev"]
+domains = ["docs.pydantic.dev", "pydantic.dev"]
 fallback_queries = [
-  "pydantic Field validation validator",
-  "pydantic field concepts",
-  "pydantic field_validator validation",
-  "pydantic model_validate fields",
+  "pydantic Field fields concepts",
+  "pydantic Field API fields",
+  "pydantic field_validator validators",
+  "pydantic functional validators field_validator",
 ]
 match_mode = "word"
 
