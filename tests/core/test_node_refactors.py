@@ -43,8 +43,9 @@ def _upload_evidence(
     source_id: str = "path:uploads/demo/sample.ipynb#cell=1;chunk=0;start=0;end=64",
     snippet: str = "X_train, X_test = train_test_split(...)",
     score: float = 0.0,
+    code_metadata: dict | None = None,
 ) -> dict:
-    return {
+    payload = {
         "kind": "local",
         "tool": "upload_search",
         "source_id": source_id,
@@ -57,6 +58,9 @@ def _upload_evidence(
         "start_offset": 0,
         "end_offset": 64,
     }
+    if code_metadata is not None:
+        payload["code_metadata"] = code_metadata
+    return payload
 
 
 class NodeRefactorTest(unittest.TestCase):
@@ -329,6 +333,52 @@ class NodeRefactorTest(unittest.TestCase):
 
         self.assertEqual(len(selected), 2)
         self.assertEqual(sum(1 for item in selected if item.tool == "upload_search"), 1)
+
+    def test_upload_only_evidence_selection_uses_code_metadata_option_literals(self) -> None:
+        planner_output = PlannerOutput(
+            use_retrieval=True,
+            tasks=[RetrievalTask(route="upload", query="matplotlib pie uploaded notebook", k=3)],
+        )
+        hist_cell = EvidenceItem.model_validate(
+            _upload_evidence(
+                source_id="path:uploads/demo/sample.ipynb#cell=1;chunk=0;start=0;end=64",
+                snippet="plt.hist(values, bins=20)",
+                score=0.95,
+                code_metadata={
+                    "calls": [{"call_name": "plt.hist", "kwargs": {"bins": "20"}}],
+                    "option_literals": ["bins=20"],
+                },
+            )
+        )
+        pie_cell = EvidenceItem.model_validate(
+            _upload_evidence(
+                source_id="path:uploads/demo/sample.ipynb#cell=2;chunk=0;start=0;end=64",
+                snippet="chart formatting cell",
+                score=0.1,
+                code_metadata={
+                    "calls": [
+                        {
+                            "call_name": "plt.pie",
+                            "kwargs": {
+                                "labels": "labels",
+                                "autopct": "'%1.1f%%'",
+                                "startangle": "90",
+                            },
+                        }
+                    ],
+                    "option_literals": ["labels=labels", "autopct='%1.1f%%'", "startangle=90"],
+                },
+            )
+        )
+
+        selected = select_primary_evidence_items(
+            user_input="uploaded notebook plt.pie labels autopct startangle options",
+            evidence_items=[hist_cell, pie_cell],
+            planner_output=planner_output,
+        )
+
+        self.assertGreaterEqual(len(selected), 1)
+        self.assertEqual(selected[0].source_id, pie_cell.source_id)
 
     def test_synthesis_payload_builder_skips_weak_hybrid_route_candidates_without_strong_lexical_hits(self) -> None:
         planner_output = PlannerOutput(

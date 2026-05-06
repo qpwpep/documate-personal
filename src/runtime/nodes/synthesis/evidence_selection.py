@@ -66,14 +66,51 @@ def _is_import_only_snippet(text: str) -> bool:
     return _IMPORT_ONLY_PATTERN.match(compact) is not None
 
 
+def _code_metadata_search_text(candidate: EvidenceItem) -> str:
+    metadata = candidate.code_metadata
+    if not isinstance(metadata, dict):
+        return ""
+
+    parts: list[str] = []
+    for option in metadata.get("option_literals") or []:
+        option_text = " ".join(str(option or "").split()).strip()
+        if option_text:
+            parts.append(option_text)
+
+    for call in metadata.get("calls") or []:
+        if not isinstance(call, dict):
+            continue
+        call_name = str(call.get("call_name") or "").strip()
+        if call_name:
+            parts.append(call_name)
+        kwargs = call.get("kwargs")
+        if isinstance(kwargs, dict):
+            for key, value in kwargs.items():
+                key_text = str(key or "").strip()
+                value_text = str(value or "").strip()
+                if key_text:
+                    parts.append(key_text)
+                if key_text and value_text:
+                    parts.append(f"{key_text}={value_text}")
+                elif value_text:
+                    parts.append(value_text)
+    return " ".join(parts)
+
+
 def _score_evidence_candidate(
     *,
     user_input: str,
     candidate: EvidenceItem,
-) -> tuple[int, int, int, int, float]:
+) -> tuple[int, int, int, int, int, float]:
+    code_metadata_text = _code_metadata_search_text(candidate)
     combined_text = " ".join(
         part.strip()
-        for part in (candidate.title or "", candidate.snippet or "", candidate.url_or_path or "")
+        for part in (
+            candidate.title or "",
+            candidate.snippet or "",
+            candidate.url_or_path or "",
+            code_metadata_text,
+        )
         if part and part.strip()
     )
     lowered_text = combined_text.lower()
@@ -81,16 +118,19 @@ def _score_evidence_candidate(
         1 for token in _extract_identifier_tokens(user_input) if token.lower() in lowered_text
     )
     keyword_hits = len(_extract_keyword_tokens(user_input).intersection(_extract_keyword_tokens(combined_text)))
+    code_metadata_hits = len(
+        _extract_keyword_tokens(user_input).intersection(_extract_keyword_tokens(code_metadata_text))
+    )
     parameter_boost = 0
-    if any(hint in user_input.lower() for hint in _PARAMETER_HINTS) and "=" in combined_text and "(" in combined_text:
+    if any(hint in user_input.lower() for hint in _PARAMETER_HINTS) and "=" in combined_text and ("(" in combined_text or code_metadata_text):
         parameter_boost = 1
     non_import = 0 if _is_import_only_snippet(combined_text) else 1
     numeric_score = float(candidate.score) if candidate.score is not None else float("-inf")
-    return (parameter_boost, identifier_hits, keyword_hits, non_import, numeric_score)
+    return (parameter_boost, identifier_hits, keyword_hits, code_metadata_hits, non_import, numeric_score)
 
 
 def _has_strong_query_match(*, user_input: str, candidate: EvidenceItem) -> bool:
-    parameter_boost, identifier_hits, keyword_hits, non_import, _ = _score_evidence_candidate(
+    parameter_boost, identifier_hits, keyword_hits, _code_metadata_hits, non_import, _ = _score_evidence_candidate(
         user_input=user_input,
         candidate=candidate,
     )
