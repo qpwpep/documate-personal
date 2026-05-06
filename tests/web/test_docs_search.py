@@ -4,9 +4,20 @@ from unittest.mock import patch
 from src.infra.settings import AppSettings
 from src.infra.tools import build_tool_registry
 from src.infra.tools.docs_search.policy import canonicalize_doc_url, is_allowed_doc_url
+from src.infra.tools.docs_search.url_validation import DocUrlValidationResult
 
 
 class DocsSearchTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self._url_validation_patcher = patch("src.infra.tools.docs_search.serialization.validate_doc_url")
+        self.mock_validate_doc_url = self._url_validation_patcher.start()
+        self.mock_validate_doc_url.side_effect = lambda url: DocUrlValidationResult(
+            ok=True,
+            final_url=url,
+            status_code=200,
+        )
+        self.addCleanup(self._url_validation_patcher.stop)
+
     @patch("src.infra.tools.docs_search.client.request_tavily_search")
     def test_docs_search_applies_bare_library_hints_for_common_libraries(self, mock_request_tavily_search) -> None:
         mock_request_tavily_search.return_value = {"results": []}
@@ -370,6 +381,94 @@ class DocsSearchTest(unittest.TestCase):
             canonicalize_doc_url("https://docs.pydantic.dev/2.x/concepts/validators/"),
             "https://docs.pydantic.dev/latest/concepts/validators/",
         )
+
+    @patch("src.infra.tools.docs_search.client.request_tavily_search")
+    def test_docs_search_filters_http_error_urls(self, mock_request_tavily_search) -> None:
+        mock_request_tavily_search.return_value = {
+            "results": [
+                {
+                    "url": "https://docs.pydantic.dev/latest/usage/types/uuids/",
+                    "title": "Types/uuids",
+                    "content": "UUID parsing details.",
+                    "score": 0.92,
+                }
+            ]
+        }
+        self.mock_validate_doc_url.side_effect = lambda url: DocUrlValidationResult(
+            ok=False,
+            final_url="https://pydantic.dev/docs/validation/latest/usage/types/uuids/",
+            status_code=404,
+            reason="http_error",
+        )
+
+        registry = build_tool_registry(AppSettings(openai_api_key="test", tavily_api_key="test"))
+        result = registry.tavily_search_tool.func(
+            query="Pydantic UUID official docs",
+            include_domains=["docs.pydantic.dev"],
+        )
+
+        self.assertEqual(result["diagnostics"]["status"], "no_result")
+        self.assertEqual(result["evidence"], [])
+        self.assertEqual(result["diagnostics"]["filtered_http_error_count"], 1)
+        self.assertIn("url_http_error_filtered", result["diagnostics"]["warnings"])
+
+    @patch("src.infra.tools.docs_search.client.request_tavily_search")
+    def test_docs_search_accepts_allowed_redirect_final_url(self, mock_request_tavily_search) -> None:
+        mock_request_tavily_search.return_value = {
+            "results": [
+                {
+                    "url": "https://docs.pydantic.dev/latest/concepts/fields/",
+                    "title": "Fields",
+                    "content": "Field customizes model fields, default values, and validation constraints.",
+                    "score": 0.93,
+                }
+            ]
+        }
+        self.mock_validate_doc_url.side_effect = lambda url: DocUrlValidationResult(
+            ok=True,
+            final_url="https://pydantic.dev/docs/validation/latest/concepts/fields/",
+            status_code=200,
+        )
+
+        registry = build_tool_registry(AppSettings(openai_api_key="test", tavily_api_key="test"))
+        result = registry.tavily_search_tool.func(query="Pydantic Field official docs")
+
+        self.assertEqual(result["diagnostics"]["status"], "success")
+        self.assertEqual(
+            [item["url_or_path"] for item in result["evidence"]],
+            ["https://pydantic.dev/docs/validation/latest/concepts/fields/"],
+        )
+        self.assertEqual(result["diagnostics"]["validated_url_count"], 1)
+
+    @patch("src.infra.tools.docs_search.client.request_tavily_search")
+    def test_docs_search_rejects_redirects_outside_allowed_docs(self, mock_request_tavily_search) -> None:
+        mock_request_tavily_search.return_value = {
+            "results": [
+                {
+                    "url": "https://docs.pydantic.dev/latest/concepts/fields/",
+                    "title": "Fields",
+                    "content": "Field customizes model fields.",
+                    "score": 0.93,
+                }
+            ]
+        }
+        self.mock_validate_doc_url.side_effect = lambda url: DocUrlValidationResult(
+            ok=False,
+            final_url="https://example.com/docs/fields/",
+            status_code=200,
+            reason="redirect_policy",
+        )
+
+        registry = build_tool_registry(AppSettings(openai_api_key="test", tavily_api_key="test"))
+        result = registry.tavily_search_tool.func(
+            query="Pydantic Field official docs",
+            include_domains=["docs.pydantic.dev"],
+        )
+
+        self.assertEqual(result["diagnostics"]["status"], "no_result")
+        self.assertEqual(result["evidence"], [])
+        self.assertEqual(result["diagnostics"]["filtered_redirect_policy_count"], 1)
+        self.assertIn("url_redirect_policy_filtered", result["diagnostics"]["warnings"])
 
     @patch("src.infra.tools.docs_search.client.request_tavily_search")
     def test_docs_search_uses_fallback_when_first_batch_is_docs_chrome_only(self, mock_request_tavily_search) -> None:

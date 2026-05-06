@@ -132,6 +132,11 @@ class RetrievalDiagnostic(BaseModel):
     filtered_invalid_url_count: int = 0
     filtered_path_prefix_count: int = 0
     filtered_cross_domain_count: int = 0
+    filtered_http_error_count: int = 0
+    filtered_redirect_policy_count: int = 0
+    filtered_url_request_failed_count: int = 0
+    filtered_identifier_mismatch_count: int = 0
+    validated_url_count: int = 0
     final_evidence_count: int = 0
     metric: str = ""
     score_direction: Literal["higher_is_better", "lower_is_better", ""] = ""

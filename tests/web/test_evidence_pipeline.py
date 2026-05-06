@@ -12,6 +12,7 @@ from src.runtime.graph_builder import StageExecutionError
 from src.infra.settings import AppSettings
 from src.infra.tools import build_tool_registry
 from src.infra.tools.docs_search import infer_docs_query_hint
+from src.infra.tools.docs_search.url_validation import DocUrlValidationResult
 
 
 class _FakeGraph:
@@ -297,6 +298,16 @@ class _FailingGraph:
 
 
 class EvidencePipelineTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self._url_validation_patcher = patch("src.infra.tools.docs_search.serialization.validate_doc_url")
+        self.mock_validate_doc_url = self._url_validation_patcher.start()
+        self.mock_validate_doc_url.side_effect = lambda url: DocUrlValidationResult(
+            ok=True,
+            final_url=url,
+            status_code=200,
+        )
+        self.addCleanup(self._url_validation_patcher.stop)
+
     def test_extract_observed_evidence_uses_tool_native_payloads(self) -> None:
         tavily_item = {
             "kind": "official",
