@@ -157,6 +157,11 @@ def build_docs_search_tool(settings: AppSettings) -> Any:
             filtered_invalid_url_count=filter_counters.filtered_invalid_url_count,
             filtered_path_prefix_count=filter_counters.filtered_path_prefix_count,
             filtered_cross_domain_count=filter_counters.filtered_cross_domain_count,
+            filtered_http_error_count=filter_counters.filtered_http_error_count,
+            filtered_redirect_policy_count=filter_counters.filtered_redirect_policy_count,
+            filtered_url_request_failed_count=filter_counters.filtered_url_request_failed_count,
+            filtered_identifier_mismatch_count=filter_counters.filtered_identifier_mismatch_count,
+            validated_url_count=filter_counters.validated_url_count,
             final_evidence_count=len(evidence),
             warnings=sorted(set(retrieval_warnings)),
         )

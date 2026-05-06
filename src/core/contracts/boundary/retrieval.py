@@ -48,6 +48,11 @@ def parse_retrieval_diagnostic(value: Any) -> RetrievalDiagnostic | None:
     filtered_invalid_url_count = _parse_non_negative_int(value.get("filtered_invalid_url_count", 0), default=0)
     filtered_path_prefix_count = _parse_non_negative_int(value.get("filtered_path_prefix_count", 0), default=0)
     filtered_cross_domain_count = _parse_non_negative_int(value.get("filtered_cross_domain_count", 0), default=0)
+    filtered_http_error_count = _parse_non_negative_int(value.get("filtered_http_error_count", 0), default=0)
+    filtered_redirect_policy_count = _parse_non_negative_int(value.get("filtered_redirect_policy_count", 0), default=0)
+    filtered_url_request_failed_count = _parse_non_negative_int(value.get("filtered_url_request_failed_count", 0), default=0)
+    filtered_identifier_mismatch_count = _parse_non_negative_int(value.get("filtered_identifier_mismatch_count", 0), default=0)
+    validated_url_count = _parse_non_negative_int(value.get("validated_url_count", 0), default=0)
     final_evidence_count = _parse_non_negative_int(value.get("final_evidence_count", evidence_count), default=evidence_count)
     normalized_score = value.get("normalized_score")
     raw_score = value.get("raw_score")
@@ -87,6 +92,11 @@ def parse_retrieval_diagnostic(value: Any) -> RetrievalDiagnostic | None:
         filtered_invalid_url_count=filtered_invalid_url_count,
         filtered_path_prefix_count=filtered_path_prefix_count,
         filtered_cross_domain_count=filtered_cross_domain_count,
+        filtered_http_error_count=filtered_http_error_count,
+        filtered_redirect_policy_count=filtered_redirect_policy_count,
+        filtered_url_request_failed_count=filtered_url_request_failed_count,
+        filtered_identifier_mismatch_count=filtered_identifier_mismatch_count,
+        validated_url_count=validated_url_count,
         final_evidence_count=final_evidence_count,
         warnings=[str(item).strip() for item in warnings if str(item).strip()],
     )
