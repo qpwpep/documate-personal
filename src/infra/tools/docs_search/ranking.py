@@ -70,7 +70,7 @@ def has_exact_identifier_coverage(
     library_name: str = "",
 ) -> bool:
     required_identifiers = extract_exact_identifier_terms(query, library_name=library_name)
-    if len(required_identifiers) < 2:
+    if not required_identifiers:
         return True
     combined_text = " ".join(
         part

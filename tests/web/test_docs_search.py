@@ -471,6 +471,27 @@ class DocsSearchTest(unittest.TestCase):
         self.assertIn("url_redirect_policy_filtered", result["diagnostics"]["warnings"])
 
     @patch("src.infra.tools.docs_search.client.request_tavily_search")
+    def test_docs_search_rejects_single_identifier_mismatch(self, mock_request_tavily_search) -> None:
+        mock_request_tavily_search.return_value = {
+            "results": [
+                {
+                    "url": "https://docs.pydantic.dev/latest/usage/types/uuids/",
+                    "title": "Types/uuids",
+                    "content": "UUID values are parsed from strings and bytes.",
+                    "score": 0.95,
+                }
+            ]
+        }
+
+        registry = build_tool_registry(AppSettings(openai_api_key="test", tavily_api_key="test"))
+        result = registry.tavily_search_tool.func(query="Pydantic v2 Field validation official docs")
+
+        self.assertEqual(result["diagnostics"]["status"], "no_result")
+        self.assertEqual(result["evidence"], [])
+        self.assertEqual(result["diagnostics"]["filtered_identifier_mismatch_count"], 1)
+        self.assertIn("identifier_coverage_incomplete", result["diagnostics"]["warnings"])
+
+    @patch("src.infra.tools.docs_search.client.request_tavily_search")
     def test_docs_search_uses_fallback_when_first_batch_is_docs_chrome_only(self, mock_request_tavily_search) -> None:
         mock_request_tavily_search.side_effect = [
             {
