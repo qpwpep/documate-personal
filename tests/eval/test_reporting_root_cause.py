@@ -224,7 +224,12 @@ class ReportingRootCauseTest(unittest.TestCase):
             config_path="data/benchmarks/config.toml",
             track="release",
             requested_limit=None,
-            config=BenchmarkConfig(),
+            config=BenchmarkConfig(
+                hard_gates={
+                    "hybrid_p95_latency_ms": 20000,
+                    "docs_only_p95_latency_ms": 20000,
+                }
+            ),
             cases=[docs_validator_case, docs_confused_case, hybrid_case, tool_case, tool_slack_case],
             results=results,
         )
@@ -303,6 +308,13 @@ class ReportingRootCauseTest(unittest.TestCase):
         self.assertEqual(stage_rows["upload_retriever_build_ms"].sample_count, 1)
         self.assertEqual(stage_rows["upload_retriever_build_ms"].p50_latency_ms, 35.0)
         self.assertEqual(stage_rows["retrieval_total_ms"].p95_latency_ms, 400.0)
+        self.assertEqual(summary.metrics.docs_only_p95_latency_ms, 1200.0)
+        self.assertEqual(summary.metrics.hybrid_p95_latency_ms, 1200.0)
+        gates = {gate.name: gate for gate in summary.gates}
+        self.assertTrue(gates["docs_only_p95_latency_ms"].passed)
+        self.assertEqual(gates["docs_only_p95_latency_ms"].actual, 1200.0)
+        self.assertTrue(gates["hybrid_p95_latency_ms"].passed)
+        self.assertEqual(gates["hybrid_p95_latency_ms"].actual, 1200.0)
 
         failure_reasons = {item["case_id"]: item["reason"] for item in summary.metrics.failures}
         self.assertEqual(failure_reasons["docs_validator_case"], "validator:no_evidence")

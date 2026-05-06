@@ -31,6 +31,8 @@ class SummaryStats(BaseModel):
     citation_compliance: float
     p50_latency_ms: float | None = None
     p95_latency_ms: float | None = None
+    hybrid_p95_latency_ms: float | None = None
+    docs_only_p95_latency_ms: float | None = None
     avg_cost_per_case_usd: float | None = None
     slack_delivery_required_cases: int = 0
     slack_delivery_success_cases: int = 0
@@ -177,7 +179,7 @@ class AnalysisStats(BaseModel):
 
 class GateResult(BaseModel):
     name: str
-    threshold: float | int
+    threshold: float | int | None
     actual: float | int | None
     passed: bool
     gate_type: Literal["release", "audit"] = "release"
@@ -199,7 +201,7 @@ class RunSummary(BaseModel):
     gates: list[GateResult]
     overall_passed: bool
     weights: dict[str, float]
-    hard_gates: dict[str, float | int]
+    hard_gates: dict[str, float | int | None]
     pricing: dict[str, Any]
     judge_enabled: bool
     judge_model: str
