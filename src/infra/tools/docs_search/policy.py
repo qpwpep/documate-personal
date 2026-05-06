@@ -8,6 +8,8 @@ from src.core.rules import get_rules_config
 
 
 _NUMPY_VERSIONED_DOC_PATH_PATTERN = re.compile(r"^/doc/\d+(?:\.\d+)*/")
+_PYTORCH_VERSIONED_DOC_PATH_PATTERN = re.compile(r"^/docs/(?!stable/)[^/]+/")
+_PYDANTIC_V2_DOC_PATH_PATTERN = re.compile(r"^/2(?:\.\d+|\.x)?/")
 _NUMPY_DOC_TITLE_VERSION_PATTERN = re.compile(
     r"(\bNumPy)\s+v?\d+(?:\.\d+)*(?:[A-Za-z0-9.+-]*)?(\s+Manual\b)",
     re.IGNORECASE,
@@ -60,6 +62,14 @@ def canonicalize_doc_url(url: str) -> str:
         stable_path = _NUMPY_VERSIONED_DOC_PATH_PATTERN.sub("/doc/stable/", parsed.path)
         if stable_path != parsed.path:
             return urlunparse(parsed._replace(path=stable_path))
+    if domain == "docs.pytorch.org":
+        stable_path = _PYTORCH_VERSIONED_DOC_PATH_PATTERN.sub("/docs/stable/", parsed.path)
+        if stable_path != parsed.path:
+            return urlunparse(parsed._replace(path=stable_path))
+    if domain == "docs.pydantic.dev":
+        latest_path = _PYDANTIC_V2_DOC_PATH_PATTERN.sub("/latest/", parsed.path)
+        if latest_path != parsed.path:
+            return urlunparse(parsed._replace(path=latest_path))
     return candidate
 
 
