@@ -144,6 +144,7 @@ def build_docs_search_tool(settings: AppSettings) -> Any:
             library_name=library_name,
         ):
             retrieval_warnings.append("identifier_coverage_incomplete")
+            filter_counters.filtered_identifier_mismatch_count += len(evidence)
             evidence = []
         return build_retrieval_payload(
             tool="tavily_search",
