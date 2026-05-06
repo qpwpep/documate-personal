@@ -53,6 +53,13 @@ _LIGHT_THEME_VARS = {
         "rgba(247, 245, 239, 0.95) 22%)"
     ),
     "dm-upload-border": "rgba(39, 111, 102, 0.35)",
+    "dm-chat-attachment-bg": "#f8f6f1",
+    "dm-chat-attachment-text": "#202124",
+    "dm-chat-attachment-muted": "#6d675e",
+    "dm-chat-attachment-border": "rgba(39, 111, 102, 0.18)",
+    "dm-chat-attachment-shadow": "0 6px 16px rgba(32, 33, 36, 0.08)",
+    "dm-chat-icon": "#276f66",
+    "dm-chat-icon-muted": "#6d675e",
 }
 
 _DARK_THEME_VARS = {
@@ -95,6 +102,13 @@ _DARK_THEME_VARS = {
         "rgba(16, 18, 20, 0.96) 22%)"
     ),
     "dm-upload-border": "rgba(120, 209, 193, 0.35)",
+    "dm-chat-attachment-bg": "#242827",
+    "dm-chat-attachment-text": "#f5f1e8",
+    "dm-chat-attachment-muted": "#b6afa4",
+    "dm-chat-attachment-border": "rgba(120, 209, 193, 0.24)",
+    "dm-chat-attachment-shadow": "0 6px 16px rgba(0, 0, 0, 0.18)",
+    "dm-chat-icon": "#78d1c1",
+    "dm-chat-icon-muted": "#b6afa4",
 }
 
 
