@@ -164,6 +164,8 @@ class HardGates(BaseModel):
     tool_recall: float = 0.85
     citation_compliance: float = 0.95
     p95_latency_ms: int = 20000
+    hybrid_p95_latency_ms: int | None = None
+    docs_only_p95_latency_ms: int | None = None
     avg_cost_per_case_usd: float = 0.01
     cost_gate_min_llm_call_coverage: float = 0.80
 

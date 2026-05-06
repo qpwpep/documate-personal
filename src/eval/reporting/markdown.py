@@ -181,6 +181,8 @@ def build_markdown_report(summary: RunSummary, results: list[CaseResult] | None 
         ("citation_compliance", summary.metrics.citation_compliance),
         ("p50_latency_ms", summary.metrics.p50_latency_ms),
         ("p95_latency_ms", summary.metrics.p95_latency_ms),
+        ("hybrid_p95_latency_ms", summary.metrics.hybrid_p95_latency_ms),
+        ("docs_only_p95_latency_ms", summary.metrics.docs_only_p95_latency_ms),
         ("avg_cost_per_case_usd", summary.metrics.avg_cost_per_case_usd),
         ("slack_delivery_required_cases", summary.metrics.slack_delivery_required_cases),
         ("slack_delivery_success_cases", summary.metrics.slack_delivery_success_cases),

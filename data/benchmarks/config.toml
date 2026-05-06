@@ -12,6 +12,8 @@ tool_precision = 0.90
 tool_recall = 0.85
 citation_compliance = 0.95
 p95_latency_ms = 20000
+hybrid_p95_latency_ms = 20000
+docs_only_p95_latency_ms = 20000
 avg_cost_per_case_usd = 0.01
 
 [judge_min_score]
