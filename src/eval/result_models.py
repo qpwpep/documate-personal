@@ -5,7 +5,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field, model_validator
 
 from src.core.answer_schema import ClaimItem
-from src.core.contracts.debug import ActionResults, LLMCallMetadata, PlannerDiagnostic, RetrievalDiagnostic, TokenUsage
+from src.core.contracts.debug import ActionResults, LLMCallMetadata, ModelUsageStatus, PlannerDiagnostic, RetrievalDiagnostic, TokenUsage
 from src.core.evidence import EvidenceItem
 from src.core.latency import LatencyBreakdownModel
 from .config_models import CaseCategory, CaseScenario
@@ -52,6 +52,7 @@ class CaseResult(BaseModel):
     output_tokens: int = 0
     model_name: str | None = None
     models_used: list[str] = Field(default_factory=list)
+    model_usage_status: ModelUsageStatus = "missing_debug"
     llm_calls: list[LLMCallMetadata] = Field(default_factory=list)
     tool_call_count: int = 0
     planner_errors: list[str] = Field(default_factory=list)

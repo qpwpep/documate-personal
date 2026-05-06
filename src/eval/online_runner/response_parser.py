@@ -8,11 +8,11 @@ from typing import Any
 import requests
 
 from src.core.answer_schema.models import AnswerSection, ClaimItem
-from src.core.contracts.boundary.debug import parse_action_results, parse_error_codes, parse_llm_calls, parse_token_usage
+from src.core.contracts.boundary.debug import parse_action_results, parse_error_codes, parse_llm_calls, parse_model_usage_status, parse_token_usage
 from src.core.contracts.boundary.planner import parse_planner_diagnostic
 from src.core.contracts.boundary.retrieval import parse_retrieval_diagnostics
 from src.core.contracts.debug import DEBUG_CRITICAL_FIELDS, DEBUG_REQUIRED_FIELDS, DEBUG_SCHEMA_VERSION
-from src.core.contracts.debug import ActionResults, LLMCallMetadata, PlannerDiagnostic, RetrievalDiagnostic, TokenUsage
+from src.core.contracts.debug import ActionResults, LLMCallMetadata, ModelUsageStatus, PlannerDiagnostic, RetrievalDiagnostic, TokenUsage
 from src.core.evidence import EvidenceItem
 from src.core.latency import LatencyBreakdownModel
 
@@ -38,6 +38,7 @@ class ParsedResponseData:
     latency_breakdown: LatencyBreakdownModel | None = None
     model_name: str | None = None
     models_used: list[str] = field(default_factory=list)
+    model_usage_status: ModelUsageStatus = "missing_debug"
     tool_calls: list[str] = field(default_factory=list)
     tool_call_count: int = 0
     token_usage: TokenUsage | None = None
@@ -300,7 +301,7 @@ def parse_agent_response(response: requests.Response) -> ParsedResponseData:
                 parsed.debug_schema_version = int(schema_version_raw)
             except (TypeError, ValueError):
                 parsed.response_errors.append("debug.schema_version must be an integer")
-        if parsed.debug_schema_version is not None and parsed.debug_schema_version != DEBUG_SCHEMA_VERSION:
+        if parsed.debug_schema_version is not None and parsed.debug_schema_version > DEBUG_SCHEMA_VERSION:
             parsed.response_errors.append(f"debug.schema_version must be {DEBUG_SCHEMA_VERSION}")
         observability_status_raw = debug_payload.get("observability_status")
         if observability_status_raw is None:
@@ -396,6 +397,15 @@ def parse_agent_response(response: requests.Response) -> ParsedResponseData:
                 model_name_candidate = response_metadata.get("model_name") or response_metadata.get("model")
                 if model_name_candidate and model_name_candidate not in parsed.models_used:
                     parsed.models_used.append(str(model_name_candidate))
+        parsed.model_usage_status = parse_model_usage_status(
+            debug_payload.get("model_usage_status"),
+            has_llm_usage=bool(
+                parsed.llm_calls
+                or parsed.models_used
+                or parsed.model_name
+                or (parsed.token_usage is not None and parsed.token_usage.total_tokens > 0)
+            ),
+        )
         parsed.observed_evidence = _parse_evidence_items(
             debug_payload.get("observed_evidence"),
             label="debug.observed_evidence",

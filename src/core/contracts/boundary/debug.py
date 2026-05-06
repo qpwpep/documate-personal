@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from src.core.contracts.debug import ActionResults, DEBUG_SCHEMA_VERSION, DebugPayload, ErrorCode, LLMCallMetadata, RetryState, SaveTextActionResult, SlackActionResult, TokenUsage, json_safe_deep_copy
+from src.core.contracts.debug import ActionResults, DEBUG_SCHEMA_VERSION, DebugPayload, ErrorCode, LLMCallMetadata, ModelUsageStatus, RetryState, SaveTextActionResult, SlackActionResult, TokenUsage, json_safe_deep_copy
 from src.core.contracts.graph_state import DebugState
 from src.core.contracts.routes import normalize_routes
 from src.core.contracts.boundary.planner import parse_planner_diagnostic
@@ -160,6 +160,15 @@ def parse_token_usage(value: Any) -> TokenUsage | None:
     except (TypeError, ValueError):
         return None
 
+def parse_model_usage_status(value: Any, *, has_llm_usage: bool, has_debug_payload: bool = True) -> ModelUsageStatus:
+    status = str(value or "").strip().lower()
+    if status in {"llm_used", "deterministic", "missing_debug"}:
+        return status  # type: ignore[return-value]
+    if not has_debug_payload:
+        return "missing_debug"
+    return "llm_used" if has_llm_usage else "deterministic"
+
+
 
 def parse_action_results(value: Any) -> ActionResults | None:
     if isinstance(value, ActionResults):
@@ -220,6 +229,12 @@ def parse_debug_payload(value: Any) -> DebugPayload:
     observability_status = str(value.get("observability_status") or "ok").strip().lower()
     if observability_status not in {"ok", "degraded", "failed"}:
         observability_status = "ok"
+    llm_calls = parse_llm_calls(value.get("llm_calls"))
+    models_used = [str(item) for item in value.get("models_used", []) if str(item).strip()] if isinstance(value.get("models_used"), list) else []
+    model_name = str(value.get("model_name")) if value.get("model_name") else None
+    token_usage = parse_token_usage(value.get("token_usage"))
+    has_llm_usage = bool(llm_calls or models_used or model_name or (token_usage is not None and token_usage.total_tokens > 0))
+
 
     return DebugPayload(
         schema_version=schema_version,
@@ -235,12 +250,14 @@ def parse_debug_payload(value: Any) -> DebugPayload:
         if isinstance(value.get("tool_calls"), list)
         else [],
         tool_call_count=int(value.get("tool_call_count", 0) or 0),
-        token_usage=parse_token_usage(value.get("token_usage")),
-        model_name=str(value.get("model_name")) if value.get("model_name") else None,
-        models_used=[str(item) for item in value.get("models_used", []) if str(item).strip()]
-        if isinstance(value.get("models_used"), list)
-        else [],
-        llm_calls=parse_llm_calls(value.get("llm_calls")),
+        token_usage=token_usage,
+        model_name=model_name,
+        models_used=models_used,
+        model_usage_status=parse_model_usage_status(
+            value.get("model_usage_status"),
+            has_llm_usage=has_llm_usage,
+        ),
+        llm_calls=llm_calls,
         errors=[str(item) for item in value.get("errors", []) if str(item).strip()]
         if isinstance(value.get("errors"), list)
         else [],
