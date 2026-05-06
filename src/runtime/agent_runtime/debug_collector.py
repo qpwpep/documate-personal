@@ -307,6 +307,7 @@ class DebugCollector:
                 llm_calls = fallback_llm_calls
 
         token_usage, model_name, models_used = self._summarize_llm_calls(llm_calls)
+        model_usage_status = "llm_used" if llm_calls or models_used or model_name or token_usage["total_tokens"] > 0 else "deterministic"
 
         for message in current_turn_messages:
             if isinstance(message, AIMessage):
@@ -348,6 +349,7 @@ class DebugCollector:
             "token_usage": token_usage,
             "model_name": model_name,
             "models_used": models_used,
+            "model_usage_status": model_usage_status,
             "llm_calls": llm_calls,
             "errors": debug_errors,
             "error_codes": error_codes,

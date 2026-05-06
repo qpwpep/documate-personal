@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from src.core.contracts import SessionMetadata
-from src.core.contracts.boundary.debug import parse_action_results, parse_error_codes, parse_llm_calls, parse_retry_state, parse_token_usage
+from src.core.contracts.boundary.debug import parse_action_results, parse_error_codes, parse_llm_calls, parse_model_usage_status, parse_retry_state, parse_token_usage
 from src.core.contracts.boundary.planner import parse_planner_diagnostic
 from src.core.contracts.boundary.retrieval import parse_retrieval_diagnostics
 from src.core.contracts.boundary.runtime import parse_slack_destination
@@ -59,6 +59,17 @@ def normalize_debug_info(raw_debug: dict | None, latency_ms_server: int | None) 
             model_name = llm_call.response_metadata.get("model_name") or llm_call.response_metadata.get("model")
             if model_name and str(model_name) not in models_used:
                 models_used.append(str(model_name))
+    has_llm_usage = bool(
+        llm_calls
+        or models_used
+        or debug.get("model_name")
+        or (token_usage is not None and token_usage.total_tokens > 0)
+    )
+    model_usage_status = parse_model_usage_status(
+        debug.get("model_usage_status"),
+        has_llm_usage=has_llm_usage,
+        has_debug_payload=isinstance(raw_debug, dict),
+    )
 
     latency_breakdown = None
     raw_latency_breakdown = debug.get("latency_breakdown")
@@ -100,6 +111,7 @@ def normalize_debug_info(raw_debug: dict | None, latency_ms_server: int | None) 
         token_usage=token_usage,
         model_name=(str(debug.get("model_name")) if debug.get("model_name") else None),
         models_used=models_used,
+        model_usage_status=model_usage_status,
         llm_calls=llm_calls,
         errors=[str(error) for error in errors if error],
         error_codes=error_codes,

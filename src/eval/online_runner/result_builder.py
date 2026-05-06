@@ -313,6 +313,7 @@ def build_case_result(
         output_tokens=output_tokens,
         model_name=parsed_response.model_name,
         models_used=parsed_response.models_used,
+        model_usage_status=parsed_response.model_usage_status,
         llm_calls=parsed_response.llm_calls,
         planner_errors=parsed_response.planner_errors,
         error_codes=parsed_response.error_codes,

@@ -303,6 +303,7 @@ class AgentResponseSchemaTest(unittest.TestCase):
                 "observed_evidence": [],
                 "model_name": "gpt-5-mini",
                 "models_used": ["gpt-5-nano", "gpt-5-mini"],
+                "model_usage_status": "llm_used",
                 "llm_calls": [
                     {
                         "stage": "planner",
@@ -326,6 +327,7 @@ class AgentResponseSchemaTest(unittest.TestCase):
         self.assertIsNotNone(result.debug)
         self.assertEqual(result.debug.model_name, "gpt-5-mini")
         self.assertEqual(result.debug.models_used, ["gpt-5-nano", "gpt-5-mini"])
+        self.assertEqual(result.debug.model_usage_status, "llm_used")
         self.assertEqual(len(result.debug.llm_calls), 2)
         self.assertEqual(result.debug.llm_calls[0].stage, "planner")
         self.assertEqual(result.debug.llm_calls[1].usage_metadata["total_tokens"], 25)

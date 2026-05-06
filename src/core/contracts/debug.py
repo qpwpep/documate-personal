@@ -54,8 +54,9 @@ RETRYABLE_REASONS: set[RetryReason] = {
     "tool_error",
     "missing",
 }
-DEBUG_SCHEMA_VERSION = 3
+DEBUG_SCHEMA_VERSION = 4
 DebugObservabilityStatus = Literal["ok", "degraded", "failed"]
+ModelUsageStatus = Literal["llm_used", "deterministic", "missing_debug"]
 DEBUG_REQUIRED_FIELDS: tuple[str, ...] = (
     "schema_version",
     "observability_status",
@@ -65,6 +66,7 @@ DEBUG_REQUIRED_FIELDS: tuple[str, ...] = (
     "token_usage",
     "model_name",
     "models_used",
+    "model_usage_status",
     "llm_calls",
     "errors",
     "planner_errors",
@@ -184,6 +186,7 @@ class DebugPayload(BaseModel):
     token_usage: TokenUsage | None = None
     model_name: str | None = None
     models_used: list[str] = Field(default_factory=list)
+    model_usage_status: ModelUsageStatus = "deterministic"
     llm_calls: list[LLMCallMetadata] = Field(default_factory=list)
     errors: list[str] = Field(default_factory=list)
     error_codes: list[ErrorCode] = Field(default_factory=list)

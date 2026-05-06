@@ -5,7 +5,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 from src.core.answer_schema import AgentResponsePayloadModel
-from src.core.contracts.debug import ActionResults, ErrorCode, LLMCallMetadata, PlannerDiagnostic, RetryState, RetrievalDiagnostic, TokenUsage
+from src.core.contracts.debug import ActionResults, ErrorCode, LLMCallMetadata, ModelUsageStatus, PlannerDiagnostic, RetryState, RetrievalDiagnostic, TokenUsage
 from src.core.evidence import EvidenceItem
 from src.core.latency import LatencyBreakdownModel, StageName
 
@@ -25,6 +25,7 @@ class AgentDebugInfo(BaseModel):
     token_usage: AgentTokenUsage | None = None
     model_name: str | None = None
     models_used: list[str] = Field(default_factory=list)
+    model_usage_status: ModelUsageStatus = "missing_debug"
     llm_calls: list[LLMCallMetadata] = Field(default_factory=list)
     errors: list[str] = Field(default_factory=list)
     error_codes: list[ErrorCode] = Field(default_factory=list)
