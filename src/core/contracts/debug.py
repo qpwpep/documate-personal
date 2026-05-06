@@ -171,6 +171,7 @@ class SlackActionResult(BaseModel):
 class SaveTextActionResult(BaseModel):
     status: str = ""
     file_path: str | None = None
+    bytes: int = 0
     error: str | None = None
     message: str | None = None
     error_code: ErrorCode | None = None

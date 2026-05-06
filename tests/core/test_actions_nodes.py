@@ -198,7 +198,7 @@ class ActionsNodeTest(unittest.TestCase):
                 tool_call_id="tool-1",
             ),
             ToolMessage(
-                content=json.dumps({"status": "ok", "file_path": "output/save_text/response.txt"}),
+                content=json.dumps({"status": "success", "file_path": "output/save_text/response.txt", "bytes": 42}),
                 name="save_text",
                 tool_call_id="tool-2",
             ),
@@ -218,6 +218,7 @@ class ActionsNodeTest(unittest.TestCase):
             debug_info["action_results"]["save_text"]["file_path"],
             "output/save_text/response.txt",
         )
+        self.assertEqual(debug_info["action_results"]["save_text"]["bytes"], 42)
 
 
 if __name__ == "__main__":

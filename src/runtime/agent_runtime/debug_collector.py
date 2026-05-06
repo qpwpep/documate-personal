@@ -49,9 +49,14 @@ class DebugCollector:
                     "error_code": str(payload.get("error_code") or "").strip().upper() or None,
                 }
             elif tool_name == "save_text":
+                try:
+                    saved_bytes = max(0, int(payload.get("bytes", 0) or 0))
+                except (TypeError, ValueError):
+                    saved_bytes = 0
                 action_results["save_text"] = {
                     "status": str(payload.get("status") or "").strip(),
                     "file_path": str(payload.get("file_path") or "").strip() or None,
+                    "bytes": saved_bytes,
                     "error": str(payload.get("error") or "").strip() or None,
                     "message": str(payload.get("message") or "").strip() or None,
                     "error_code": str(payload.get("error_code") or "").strip().upper() or None,
