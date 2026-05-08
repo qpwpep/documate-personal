@@ -5,11 +5,13 @@ from typing import Any, Literal
 from urllib.parse import urlparse, urlunparse
 
 from src.core.rules import get_rules_config
+from src.infra.tools.docs_search.normalization import canonicalize_docs_query_text
 
 
 _NUMPY_VERSIONED_DOC_PATH_PATTERN = re.compile(r"^/doc/\d+(?:\.\d+)*/")
 _PYTORCH_VERSIONED_DOC_PATH_PATTERN = re.compile(r"^/docs/(?!stable/)[^/]+/")
 _PYDANTIC_V2_DOC_PATH_PATTERN = re.compile(r"^/2(?:\.\d+|\.x)?/")
+_STABLE_ALIAS_ROOT_PATH_PATTERN = re.compile(r"^/(?:dev|\d+(?:\.\d+|\.x)*)/")
 _NUMPY_DOC_TITLE_VERSION_PATTERN = re.compile(
     r"(\bNumPy)\s+v?\d+(?:\.\d+)*(?:[A-Za-z0-9.+-]*)?(\s+Manual\b)",
     re.IGNORECASE,
@@ -71,7 +73,16 @@ def canonicalize_doc_url(url: str) -> str:
         latest_path = _PYDANTIC_V2_DOC_PATH_PATTERN.sub("/latest/", parsed.path)
         if latest_path != parsed.path:
             return urlunparse(parsed._replace(path=latest_path))
+    if _domain_allows_stable_root(domain):
+        stable_path = _STABLE_ALIAS_ROOT_PATH_PATTERN.sub("/stable/", parsed.path)
+        if stable_path != parsed.path:
+            return urlunparse(parsed._replace(path=stable_path))
     return candidate
+
+
+def _domain_allows_stable_root(domain: str) -> bool:
+    allowed_prefixes = docs_search_rules().allowed_doc_path_prefixes.get(domain) or []
+    return any(normalize_path_prefix(prefix) == "/stable/" for prefix in allowed_prefixes)
 
 
 def canonicalize_doc_title(*, title: Any, original_url: str, canonical_url: str) -> Any:
@@ -139,7 +150,7 @@ def result_matches_domains(url: str, allowed_domains: set[str]) -> bool:
 
 
 def infer_docs_query_hint(query: str) -> tuple[str, list[str], list[str]] | None:
-    lowered = str(query or "").lower()
+    lowered = canonicalize_docs_query_text(query).lower()
     best_match: tuple[tuple[int, int, int], tuple[str, list[str], list[str]]] | None = None
     for hint in docs_search_rules().query_hints:
         matched_identifiers = [

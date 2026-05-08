@@ -6,6 +6,10 @@ from urllib.parse import urlparse
 
 from src.core.answer_schema import clean_grounded_text
 from src.core.rules import get_rules_config
+from src.infra.tools.docs_search.normalization import (
+    normalize_identifier_reference_text,
+    normalize_identifier_token,
+)
 
 
 def tokenize_topic_terms(text: str) -> set[str]:
@@ -43,8 +47,9 @@ def extract_exact_identifier_terms(query: str, *, library_name: str = "") -> lis
     identifiers: list[str] = []
     seen: set[str] = set()
     stopwords = _identifier_stopwords(library_name=library_name)
-    for token in _ASCII_IDENTIFIER_PATTERN.findall(str(query or "")):
-        normalized = token.strip()
+    normalized_query = normalize_identifier_reference_text(query)
+    for token in _ASCII_IDENTIFIER_PATTERN.findall(normalized_query):
+        normalized = normalize_identifier_token(token)
         lowered = normalized.lower()
         if not normalized or lowered in stopwords:
             continue
@@ -82,10 +87,11 @@ def has_exact_identifier_coverage(
         )
         if part
     )
+    normalized_combined_text = normalize_identifier_reference_text(combined_text)
     return all(
         re.search(
             rf"(?<![A-Za-z0-9_]){re.escape(identifier)}(?![A-Za-z0-9_])",
-            combined_text,
+            normalized_combined_text,
             flags=re.I,
         )
         is not None

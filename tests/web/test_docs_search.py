@@ -4,6 +4,7 @@ from unittest.mock import patch
 from src.infra.settings import AppSettings
 from src.infra.tools import build_tool_registry
 from src.infra.tools.docs_search.policy import canonicalize_doc_url, is_allowed_doc_url
+from src.infra.tools.docs_search.ranking import extract_exact_identifier_terms, has_exact_identifier_coverage
 from src.infra.tools.docs_search.url_validation import DocUrlValidationResult
 
 
@@ -194,6 +195,29 @@ class DocsSearchTest(unittest.TestCase):
                 self.assertEqual(second_kwargs["query"], expected_fallback)
 
     @patch("src.infra.tools.docs_search.client.request_tavily_search")
+    def test_docs_search_canonicalizes_spaced_dotted_query_tokens(self, mock_request_tavily_search) -> None:
+        mock_request_tavily_search.return_value = {"results": []}
+        registry = build_tool_registry(AppSettings(openai_api_key="test", tavily_api_key="test"))
+
+        cases = [
+            ("pandas. concat official docs", "pandas concat official docs", ["pandas.pydata.org"]),
+            ("pandas. DataFrame. merge official docs", "pandas.DataFrame.merge official docs", ["pandas.pydata.org"]),
+            ("matplotlib. pyplot. hist official docs", "matplotlib.pyplot.hist official docs", ["matplotlib.org"]),
+            ("Standard. Scaler official docs", "StandardScaler official docs scikit-learn", ["scikit-learn.org"]),
+            ("Git. Reset official docs", "Git Reset official docs", ["git-scm.com"]),
+        ]
+
+        for query, expected_query, expected_domains in cases:
+            with self.subTest(query=query):
+                mock_request_tavily_search.reset_mock()
+
+                registry.tavily_search_tool.func(query=query)
+
+                first_kwargs = mock_request_tavily_search.call_args_list[0].kwargs
+                self.assertEqual(first_kwargs["query"], expected_query)
+                self.assertEqual(first_kwargs["include_domains"], expected_domains)
+
+    @patch("src.infra.tools.docs_search.client.request_tavily_search")
     def test_docs_search_continues_fallback_until_identifier_coverage_is_complete(self, mock_request_tavily_search) -> None:
         mock_request_tavily_search.side_effect = [
             {
@@ -312,6 +336,64 @@ class DocsSearchTest(unittest.TestCase):
         )
 
     @patch("src.infra.tools.docs_search.client.request_tavily_search")
+    def test_docs_search_keeps_scikit_learn_version_alias_results(self, mock_request_tavily_search) -> None:
+        mock_request_tavily_search.return_value = {
+            "results": [
+                {
+                    "url": "https://scikit-learn.org/1.6/modules/generated/sklearn.model_selection.train_test_split.html",
+                    "title": "train_test_split",
+                    "content": "Split arrays or matrices into random train and test subsets.",
+                    "score": 0.95,
+                }
+            ]
+        }
+
+        registry = build_tool_registry(AppSettings(openai_api_key="test", tavily_api_key="test"))
+        result = registry.tavily_search_tool.func(query="train_test_split official docs")
+
+        self.assertEqual(result["diagnostics"]["status"], "success")
+        self.assertEqual(
+            [item["url_or_path"] for item in result["evidence"]],
+            [
+                "https://scikit-learn.org/stable/modules/generated/sklearn.model_selection.train_test_split.html"
+            ],
+        )
+
+    @patch("src.infra.tools.docs_search.client.request_tavily_search")
+    def test_docs_search_keeps_validated_original_url_when_canonical_alias_fails(self, mock_request_tavily_search) -> None:
+        original_url = "https://scikit-learn.org/dev/modules/generated/sklearn.preprocessing.StandardScaler.html"
+        stable_url = "https://scikit-learn.org/stable/modules/generated/sklearn.preprocessing.StandardScaler.html"
+        mock_request_tavily_search.return_value = {
+            "results": [
+                {
+                    "url": original_url,
+                    "title": "StandardScaler",
+                    "content": "Standardize features by removing the mean and scaling to unit variance.",
+                    "score": 0.95,
+                }
+            ]
+        }
+        self.mock_validate_doc_url.side_effect = [
+            DocUrlValidationResult(
+                ok=False,
+                final_url=stable_url,
+                status_code=404,
+                reason="http_error",
+            ),
+            DocUrlValidationResult(
+                ok=True,
+                final_url=original_url,
+                status_code=200,
+            ),
+        ]
+
+        registry = build_tool_registry(AppSettings(openai_api_key="test", tavily_api_key="test"))
+        result = registry.tavily_search_tool.func(query="Standard. Scaler official docs")
+
+        self.assertEqual(result["diagnostics"]["status"], "success")
+        self.assertEqual([item["url_or_path"] for item in result["evidence"]], [original_url])
+
+    @patch("src.infra.tools.docs_search.client.request_tavily_search")
     def test_docs_search_does_not_treat_concatenate_as_pandas_concat(self, mock_request_tavily_search) -> None:
         mock_request_tavily_search.return_value = {
             "results": [
@@ -369,6 +451,25 @@ class DocsSearchTest(unittest.TestCase):
         self.assertEqual(
             canonicalize_doc_url("https://docs.pytorch.org/docs/2.9/_sources/generated/torch.Tensor.rst.txt"),
             "https://docs.pytorch.org/docs/stable/_sources/generated/torch.Tensor.rst.txt",
+        )
+
+    def test_docs_search_canonicalizes_stable_root_version_aliases(self) -> None:
+        self.assertEqual(
+            canonicalize_doc_url(
+                "https://scikit-learn.org/1.6/modules/generated/sklearn.model_selection.train_test_split.html"
+            ),
+            "https://scikit-learn.org/stable/modules/generated/sklearn.model_selection.train_test_split.html",
+        )
+        self.assertEqual(
+            canonicalize_doc_url(
+                "https://scikit-learn.org/dev/modules/generated/sklearn.preprocessing.StandardScaler.html"
+            ),
+            "https://scikit-learn.org/stable/modules/generated/sklearn.preprocessing.StandardScaler.html",
+        )
+        self.assertTrue(
+            is_allowed_doc_url(
+                "https://scikit-learn.org/1.x/modules/generated/sklearn.pipeline.Pipeline.html"
+            )
         )
 
     def test_docs_search_allows_pytorch_tutorial_urls(self) -> None:
@@ -494,6 +595,42 @@ class DocsSearchTest(unittest.TestCase):
         self.assertEqual(result["evidence"], [])
         self.assertEqual(result["diagnostics"]["filtered_identifier_mismatch_count"], 1)
         self.assertIn("identifier_coverage_incomplete", result["diagnostics"]["warnings"])
+
+    def test_exact_identifier_coverage_ignores_trailing_dot_tokens(self) -> None:
+        self.assertEqual(
+            extract_exact_identifier_terms("pandas. concat official docs", library_name="pandas"),
+            [],
+        )
+        self.assertTrue(
+            has_exact_identifier_coverage(
+                "pandas. DataFrame. merge official docs",
+                [
+                    {
+                        "title": "pandas.DataFrame.merge",
+                        "url_or_path": "https://pandas.pydata.org/docs/reference/api/pandas.DataFrame.merge.html",
+                        "snippet": "Merge DataFrame objects.",
+                    }
+                ],
+                library_name="pandas",
+            )
+        )
+        self.assertEqual(
+            extract_exact_identifier_terms("Standard. Scaler official docs", library_name="scikit-learn"),
+            ["StandardScaler"],
+        )
+        self.assertTrue(
+            has_exact_identifier_coverage(
+                "Standard. Scaler official docs",
+                [
+                    {
+                        "title": "StandardScaler",
+                        "url_or_path": "https://scikit-learn.org/stable/modules/generated/sklearn.preprocessing.StandardScaler.html",
+                        "snippet": "Standardize features.",
+                    }
+                ],
+                library_name="scikit-learn",
+            )
+        )
 
     @patch("src.infra.tools.docs_search.client.request_tavily_search")
     def test_docs_search_uses_fallback_when_first_batch_is_docs_chrome_only(self, mock_request_tavily_search) -> None:
