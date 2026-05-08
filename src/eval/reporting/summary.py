@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import datetime, timezone
 
 from src.core.planner_schema import PLANNER_WARNING_DUPLICATE_ROUTE_MERGED
@@ -9,6 +10,7 @@ from ..metric_rules import tool_confusion_counts
 from ..result_models import CaseResult
 from ..summary_models import GateResult, RunSummary, RunTrack, SummaryStats
 from .histograms import build_analysis, build_failure_reason, percentile
+from .latency_values import result_latency_breakdown_stage_ms, result_server_latency_ms
 
 
 _AUDIT_DETERMINISTIC_DIRECT_USAGE_CEILING = 0.35
@@ -107,14 +109,32 @@ def _compute_synthesis_structured_success_rate(results: list[CaseResult]) -> flo
     return round(successes / len(eligible), 4)
 
 
-def _category_p95_latency(results: list[CaseResult], category: str) -> float | None:
-    values = [
-        int(result.latency_ms_e2e)
-        for result in results
-        if result.category == category and result.latency_ms_e2e is not None
-    ]
+def _rounded_p95(values: list[int]) -> float | None:
     value = percentile(values, 0.95)
     return round(value, 2) if value is not None else None
+
+
+def _category_p95_metric(
+    results: list[CaseResult],
+    category: str,
+    value_getter: Callable[[CaseResult], int | None],
+) -> float | None:
+    values: list[int] = []
+    for result in results:
+        if result.category != category:
+            continue
+        value = value_getter(result)
+        if value is not None:
+            values.append(int(value))
+    return _rounded_p95(values)
+
+
+def _result_e2e_latency_ms(result: CaseResult) -> int | None:
+    return result.latency_ms_e2e
+
+
+def _category_p95_latency(results: list[CaseResult], category: str) -> float | None:
+    return _category_p95_metric(results, category, _result_e2e_latency_ms)
 
 
 def _build_category_latency_gate(
@@ -197,6 +217,17 @@ def build_summary(
     p50_latency = percentile(latencies, 0.50)
     p95_latency = percentile(latencies, 0.95)
     hybrid_p95_latency = _category_p95_latency(results, "hybrid")
+    hybrid_p95_server = _category_p95_metric(results, "hybrid", result_server_latency_ms)
+    hybrid_p95_synthesis = _category_p95_metric(
+        results,
+        "hybrid",
+        lambda result: result_latency_breakdown_stage_ms(result, "synthesis_total_ms"),
+    )
+    hybrid_p95_retrieval = _category_p95_metric(
+        results,
+        "hybrid",
+        lambda result: result_latency_breakdown_stage_ms(result, "retrieval_total_ms"),
+    )
     docs_only_p95_latency = _category_p95_latency(results, "docs_only")
     cost_values = [float(result.cost_usd) for result in results if result.cost_usd is not None]
     avg_cost = (sum(cost_values) / len(cost_values)) if cost_values else None
@@ -262,6 +293,9 @@ def build_summary(
         p50_latency_ms=round(p50_latency, 2) if p50_latency is not None else None,
         p95_latency_ms=round(p95_latency, 2) if p95_latency is not None else None,
         hybrid_p95_latency_ms=hybrid_p95_latency,
+        hybrid_p95_server_ms=hybrid_p95_server,
+        hybrid_p95_synthesis_ms=hybrid_p95_synthesis,
+        hybrid_p95_retrieval_ms=hybrid_p95_retrieval,
         docs_only_p95_latency_ms=docs_only_p95_latency,
         avg_cost_per_case_usd=round(avg_cost, 8) if avg_cost is not None else None,
         slack_delivery_required_cases=len(slack_delivery_required_results),

@@ -381,6 +381,9 @@ class ReportingRootCauseTest(unittest.TestCase):
         self.assertEqual(stage_rows["retrieval_total_ms"].p95_latency_ms, 400.0)
         self.assertEqual(summary.metrics.docs_only_p95_latency_ms, 1200.0)
         self.assertEqual(summary.metrics.hybrid_p95_latency_ms, 1200.0)
+        self.assertEqual(summary.metrics.hybrid_p95_server_ms, 900.0)
+        self.assertEqual(summary.metrics.hybrid_p95_synthesis_ms, 220.0)
+        self.assertEqual(summary.metrics.hybrid_p95_retrieval_ms, 400.0)
         gates = {gate.name: gate for gate in summary.gates}
         self.assertTrue(gates["docs_only_p95_latency_ms"].passed)
         self.assertEqual(gates["docs_only_p95_latency_ms"].actual, 1200.0)
@@ -394,6 +397,49 @@ class ReportingRootCauseTest(unittest.TestCase):
             failure_reasons["docs_confused_case"],
         )
         self.assertNotIn("save_text", str(summary.analysis.route_confusion))
+
+    def test_hybrid_stage_p95_ignores_unavailable_stage_fields(self) -> None:
+        hybrid_case = BenchmarkCase(
+            case_id="hybrid_partial_latency_case",
+            category="hybrid",
+            query="compare docs and uploaded notes",
+            expected_tools=["tavily_search", "upload_search"],
+        )
+        result = _make_result(
+            case=hybrid_case,
+            tool_calls=["tavily_search", "upload_search"],
+            passed=True,
+            latency_breakdown={
+                "server_total_ms": 900,
+                "graph_total_ms": 850,
+                "stage_totals_ms": {},
+                "stage_attempts": [],
+                "retrieval_routes": [],
+                "synthesis_attempts": [],
+            },
+            final_score=0.9,
+        )
+
+        summary = build_summary(
+            run_id="run-partial-latency",
+            endpoint="http://127.0.0.1:8000",
+            fixtures_path="data/benchmarks/fixtures/cases.generated.jsonl",
+            config_path="data/benchmarks/config.toml",
+            track="release",
+            requested_limit=None,
+            config=BenchmarkConfig(),
+            cases=[hybrid_case],
+            results=[result],
+        )
+
+        self.assertEqual(summary.metrics.hybrid_p95_latency_ms, 1200.0)
+        self.assertEqual(summary.metrics.hybrid_p95_server_ms, 900.0)
+        self.assertIsNone(summary.metrics.hybrid_p95_synthesis_ms)
+        self.assertIsNone(summary.metrics.hybrid_p95_retrieval_ms)
+        self.assertIsNotNone(summary.analysis)
+        stage_rows = {row.stage: row for row in summary.analysis.stage_latency_percentiles}
+        self.assertNotIn("synthesis_total_ms", stage_rows)
+        self.assertNotIn("retrieval_total_ms", stage_rows)
 
 
 if __name__ == "__main__":

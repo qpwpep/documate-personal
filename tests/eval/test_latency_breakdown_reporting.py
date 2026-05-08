@@ -117,6 +117,10 @@ class LatencyBreakdownReportingTest(unittest.TestCase):
                     citation_compliance=1.0,
                     p50_latency_ms=1000.0,
                     p95_latency_ms=1000.0,
+                    hybrid_p95_latency_ms=1000.0,
+                    hybrid_p95_server_ms=900.0,
+                    hybrid_p95_synthesis_ms=600.0,
+                    hybrid_p95_retrieval_ms=250.0,
                     avg_cost_per_case_usd=0.0001,
                     failures=[],
                 ).model_dump(),
@@ -199,6 +203,9 @@ class LatencyBreakdownReportingTest(unittest.TestCase):
         self.assertIn("### Planner Errors", report)
         self.assertIn("### Stage Latency", report)
         self.assertIn("Latency breakdown coverage", report)
+        self.assertIn("| hybrid_p95_server_ms | 900.0 |", report)
+        self.assertIn("| hybrid_p95_synthesis_ms | 600.0 |", report)
+        self.assertIn("| hybrid_p95_retrieval_ms | 250.0 |", report)
         self.assertIn("| retrieval_total_ms | 1 | 600.00 | 600.00 |", report)
 
     @patch("src.eval.online_runner.case_runner.requests.post")

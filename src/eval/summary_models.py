@@ -32,6 +32,9 @@ class SummaryStats(BaseModel):
     p50_latency_ms: float | None = None
     p95_latency_ms: float | None = None
     hybrid_p95_latency_ms: float | None = None
+    hybrid_p95_server_ms: float | None = None
+    hybrid_p95_synthesis_ms: float | None = None
+    hybrid_p95_retrieval_ms: float | None = None
     docs_only_p95_latency_ms: float | None = None
     avg_cost_per_case_usd: float | None = None
     slack_delivery_required_cases: int = 0

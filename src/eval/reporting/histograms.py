@@ -20,6 +20,7 @@ from ..summary_models import (
     SynthesisModeBucket,
     ValidatorReasonBucket,
 )
+from .latency_values import result_latency_breakdown_stage_ms
 
 
 _CATEGORY_ORDER: tuple[str, ...] = ("docs_only", "rag_only", "hybrid", "tool_action")
@@ -436,12 +437,7 @@ def _build_slack_delivery_status_histogram(results: list[CaseResult]) -> list[Sl
 
 
 def _extract_latency_stage_value(result: CaseResult, stage_name: str) -> int | None:
-    breakdown = result.latency_breakdown
-    if breakdown is None:
-        return None
-    if stage_name == "upload_retriever_build_ms":
-        return breakdown.upload_retriever_build_ms
-    return int(getattr(breakdown.stage_totals_ms, stage_name, 0) or 0)
+    return result_latency_breakdown_stage_ms(result, stage_name)
 
 
 def _build_stage_latency_analysis(
