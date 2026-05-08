@@ -191,6 +191,14 @@ class RuntimeCleaner:
 
         return stats
 
+    @staticmethod
+    def file_cleanup_event_log_level(*, force: bool, result: dict[str, int | bool]) -> int:
+        deleted_count = int(result["upload_dirs_deleted"]) + int(result["generated_files_deleted"])
+        error_count = int(result["errors"])
+        if force or deleted_count > 0 or error_count > 0:
+            return logging.INFO
+        return logging.DEBUG
+
     def run_once(self, *, force: bool, current_session_id: str | None = None) -> dict[str, int | bool]:
         now_monotonic = time.monotonic()
         result: dict[str, int | bool] = {
@@ -243,7 +251,7 @@ class RuntimeCleaner:
 
         log_event(
             logger,
-            logging.INFO,
+            self.file_cleanup_event_log_level(force=force, result=result),
             "file_cleanup_event",
             force=force,
             interval_skipped=result["interval_skipped"],
