@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+from src.core.planner_schema import PLANNER_WARNING_DUPLICATE_ROUTE_MERGED
+
 from ..config_models import BenchmarkCase, BenchmarkConfig
 from ..metric_rules import tool_confusion_counts
 from ..result_models import CaseResult
@@ -30,31 +32,69 @@ def _compute_planner_deterministic_rate(results: list[CaseResult]) -> float:
 
 
 def _compute_planner_llm_attempt_count(results: list[CaseResult]) -> int:
-    attempt_count = 0
-    for result in results:
-        if any(call.stage == "planner" for call in result.llm_calls):
-            attempt_count += 1
-            continue
-        if result.planner_errors:
-            attempt_count += 1
-            continue
-        if result.planner_diagnostics is not None and str(result.planner_diagnostics.status or "") not in {"deterministic", "missing"}:
-            attempt_count += 1
-    return attempt_count
+    return sum(1 for result in results if _planner_llm_attempted(result))
+
+
+def _planner_llm_attempted(result: CaseResult) -> bool:
+    if any(call.stage == "planner" for call in result.llm_calls):
+        return True
+    if result.planner_errors:
+        return True
+    if result.planner_diagnostics is None:
+        return False
+    return str(result.planner_diagnostics.status or "") not in {"deterministic", "missing"}
 
 
 def _compute_planner_structured_success_rate(results: list[CaseResult]) -> float:
     eligible = [
         result
         for result in _structured_success_cases(results)
-        if result.planner_diagnostics is None or str(result.planner_diagnostics.status or "") != "deterministic"
+        if _planner_llm_attempted(result)
     ]
     if not eligible:
         return 1.0
     successes = sum(
         1
         for result in eligible
-        if result.planner_diagnostics is not None and str(result.planner_diagnostics.status or "") == "llm"
+        if result.planner_diagnostics is not None
+        and str(result.planner_diagnostics.status or "") == "llm"
+        and not result.planner_errors
+    )
+    return round(successes / len(eligible), 4)
+
+
+def _planner_warnings(result: CaseResult) -> list[str]:
+    if result.planner_diagnostics is None:
+        return []
+    return [
+        str(warning).strip()
+        for warning in result.planner_diagnostics.planner_warnings
+        if str(warning).strip()
+    ]
+
+
+def _compute_planner_warning_count(results: list[CaseResult]) -> int:
+    return sum(len(_planner_warnings(result)) for result in results)
+
+
+def _compute_planner_duplicate_route_merge_count(results: list[CaseResult]) -> int:
+    return sum(
+        1
+        for result in results
+        if PLANNER_WARNING_DUPLICATE_ROUTE_MERGED in set(_planner_warnings(result))
+    )
+
+
+def _compute_planner_final_success_rate(results: list[CaseResult]) -> float:
+    eligible = _structured_success_cases(results)
+    if not eligible:
+        return 1.0
+    successes = sum(
+        1
+        for result in eligible
+        if result.planner_diagnostics is not None
+        and str(result.planner_diagnostics.status or "") in {"llm", "deterministic", "heuristic_fallback"}
+        and not result.planner_errors
     )
     return round(successes / len(eligible), 4)
 
@@ -237,6 +277,11 @@ def build_summary(
         planner_deterministic_rate=_compute_planner_deterministic_rate(results),
         planner_llm_attempt_count=_compute_planner_llm_attempt_count(results),
         planner_structured_success_rate=_compute_planner_structured_success_rate(results),
+        planner_error_count=sum(len(result.planner_errors) for result in results),
+        planner_error_case_count=sum(1 for result in results if result.planner_errors),
+        planner_warning_count=_compute_planner_warning_count(results),
+        planner_duplicate_route_merge_count=_compute_planner_duplicate_route_merge_count(results),
+        planner_final_success_rate=_compute_planner_final_success_rate(results),
         synthesis_structured_success_rate=_compute_synthesis_structured_success_rate(results),
         failures=failures[:50],
     )
@@ -318,6 +363,11 @@ def build_summary(
             "judge_input_completeness_rate": metrics.judge_input_completeness_rate,
             "deterministic_direct_usage_rate": metrics.deterministic_direct_usage_rate,
             "high_rule_low_judge_divergence_rate": metrics.high_rule_low_judge_divergence_rate,
+            "planner_error_count": metrics.planner_error_count,
+            "planner_error_case_count": metrics.planner_error_case_count,
+            "planner_warning_count": metrics.planner_warning_count,
+            "planner_duplicate_route_merge_count": metrics.planner_duplicate_route_merge_count,
+            "planner_final_success_rate": metrics.planner_final_success_rate,
             "slack_delivery_success_rate": metrics.slack_delivery_success_rate,
             "slack_delivery_required_cases": metrics.slack_delivery_required_cases,
             "slack_delivery_success_cases": metrics.slack_delivery_success_cases,

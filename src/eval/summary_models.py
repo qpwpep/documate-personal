@@ -47,6 +47,11 @@ class SummaryStats(BaseModel):
     planner_deterministic_rate: float | None = None
     planner_llm_attempt_count: int | None = None
     planner_structured_success_rate: float | None = None
+    planner_error_count: int = 0
+    planner_error_case_count: int = 0
+    planner_warning_count: int = 0
+    planner_duplicate_route_merge_count: int = 0
+    planner_final_success_rate: float | None = None
     synthesis_structured_success_rate: float | None = None
     failures: list[dict[str, str]] = Field(default_factory=list)
 

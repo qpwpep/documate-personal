@@ -197,6 +197,11 @@ def build_markdown_report(summary: RunSummary, results: list[CaseResult] | None 
         ("planner_deterministic_rate", summary.metrics.planner_deterministic_rate),
         ("planner_llm_attempt_count", summary.metrics.planner_llm_attempt_count),
         ("planner_structured_success_rate", summary.metrics.planner_structured_success_rate),
+        ("planner_error_count", summary.metrics.planner_error_count),
+        ("planner_error_case_count", summary.metrics.planner_error_case_count),
+        ("planner_warning_count", summary.metrics.planner_warning_count),
+        ("planner_duplicate_route_merge_count", summary.metrics.planner_duplicate_route_merge_count),
+        ("planner_final_success_rate", summary.metrics.planner_final_success_rate),
         ("synthesis_structured_success_rate", summary.metrics.synthesis_structured_success_rate),
     ):
         lines.append(f"| {key} | {value} |")
