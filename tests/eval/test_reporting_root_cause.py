@@ -76,6 +76,77 @@ def _make_result(
 
 
 class ReportingRootCauseTest(unittest.TestCase):
+    def test_planner_success_metrics_count_planner_errors_and_warnings(self) -> None:
+        clean_case = BenchmarkCase(
+            case_id="docs_clean",
+            category="docs_only",
+            query="numpy docs",
+            expected_tools=["tavily_search"],
+        )
+        errored_case = BenchmarkCase(
+            case_id="docs_error",
+            category="docs_only",
+            query="pandas docs",
+            expected_tools=["tavily_search"],
+        )
+        results = [
+            _make_result(
+                case=clean_case,
+                tool_calls=["tavily_search"],
+                planner_diagnostics={
+                    "status": "llm",
+                    "reason": None,
+                    "fallback_routes": [],
+                    "intent_required": True,
+                    "required_routes": ["docs"],
+                    "override_applied": False,
+                    "override_reason": None,
+                    "planner_warnings": ["duplicate_route_merged"],
+                },
+                passed=True,
+                final_score=0.95,
+            ),
+            _make_result(
+                case=errored_case,
+                tool_calls=["tavily_search"],
+                planner_diagnostics={
+                    "status": "deterministic",
+                    "reason": None,
+                    "fallback_routes": ["docs"],
+                    "intent_required": True,
+                    "required_routes": ["docs"],
+                    "override_applied": False,
+                    "override_reason": None,
+                },
+                planner_errors=[
+                    "planner: output validation failed (duplicate routes)",
+                    "planner: sanitized output validation failed (empty tasks)",
+                ],
+                passed=True,
+                final_score=0.92,
+            ),
+        ]
+
+        summary = build_summary(
+            run_id="run-planner-metrics",
+            endpoint="http://127.0.0.1:8000",
+            fixtures_path="data/benchmarks/fixtures/cases.generated.jsonl",
+            config_path="data/benchmarks/config.toml",
+            track="release",
+            requested_limit=None,
+            config=BenchmarkConfig(),
+            cases=[clean_case, errored_case],
+            results=results,
+        )
+
+        self.assertEqual(summary.metrics.planner_llm_attempt_count, 2)
+        self.assertEqual(summary.metrics.planner_structured_success_rate, 0.5)
+        self.assertEqual(summary.metrics.planner_error_count, 2)
+        self.assertEqual(summary.metrics.planner_error_case_count, 1)
+        self.assertEqual(summary.metrics.planner_warning_count, 1)
+        self.assertEqual(summary.metrics.planner_duplicate_route_merge_count, 1)
+        self.assertEqual(summary.metrics.planner_final_success_rate, 0.5)
+
     def test_build_summary_adds_root_cause_analysis(self) -> None:
         docs_validator_case = BenchmarkCase(
             case_id="docs_validator_case",

@@ -49,6 +49,7 @@ class BackwardCompatInputsTest(unittest.TestCase):
                 "required_routes": ["docs"],
                 "override_applied": True,
                 "override_reason": "missing_required_retrieval",
+                "planner_warnings": ["duplicate_route_merged"],
             },
             "created_at_utc": "2026-01-01T00:00:00+00:00",
         }
@@ -57,6 +58,7 @@ class BackwardCompatInputsTest(unittest.TestCase):
         self.assertTrue(parsed.planner_diagnostics.intent_required)
         self.assertEqual(parsed.planner_diagnostics.required_routes, ["docs"])
         self.assertEqual(parsed.planner_diagnostics.override_reason, "missing_required_retrieval")
+        self.assertEqual(parsed.planner_diagnostics.planner_warnings, ["duplicate_route_merged"])
 
 
 if __name__ == "__main__":
