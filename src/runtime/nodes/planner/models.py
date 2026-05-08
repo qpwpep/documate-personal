@@ -24,7 +24,13 @@ def normalize_planner_diagnostics(
     required_routes: list[str] | None = None,
     override_applied: bool = False,
     override_reason: PlannerOverrideReason | None = None,
+    planner_warnings: list[str] | None = None,
 ) -> PlannerDiagnostic:
+    warnings: list[str] = []
+    for warning in planner_warnings or []:
+        normalized = str(warning or "").strip()
+        if normalized and normalized not in warnings:
+            warnings.append(normalized)
     return PlannerDiagnostic(
         status=status,
         reason=reason,
@@ -33,4 +39,5 @@ def normalize_planner_diagnostics(
         required_routes=[route for route in ROUTE_ORDER if route in set(required_routes or [])],
         override_applied=bool(override_applied),
         override_reason=override_reason,
+        planner_warnings=warnings,
     )
