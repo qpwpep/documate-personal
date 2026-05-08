@@ -11,6 +11,7 @@ from src.infra.settings import AppSettings
 from src.infra.tools._common import build_retrieval_payload
 from src.infra.tools.docs_search import client
 from src.infra.tools.docs_search.extraction import should_extract_doc_content
+from src.infra.tools.docs_search.normalization import canonicalize_docs_query_text
 from src.infra.tools.docs_search.policy import docs_search_rules, infer_docs_query_hint, normalize_include_domains
 from src.infra.tools.docs_search.ranking import filter_docs_evidence_by_topic_purity, has_exact_identifier_coverage, has_meaningful_docs_evidence, merge_docs_evidence_items
 from src.infra.tools.docs_search.schemas import TavilyArgs
@@ -26,7 +27,7 @@ def build_docs_search_tool(settings: AppSettings) -> Any:
         include_domains: list[str] | None = None,
     ) -> dict[str, Any]:
         domains = normalize_include_domains(include_domains or default_domains)
-        effective_query = str(query or "").strip()
+        effective_query = canonicalize_docs_query_text(query)
         fallback_queries: list[str] = []
         hinted_domains: list[str] | None = None
         library_name = ""
