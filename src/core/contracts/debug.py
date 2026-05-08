@@ -121,6 +121,7 @@ class PlannerDiagnostic(BaseModel):
     required_routes: list[str] = Field(default_factory=list)
     override_applied: bool = False
     override_reason: PlannerOverrideReason | None = None
+    planner_warnings: list[str] = Field(default_factory=list)
 
 
 class RetrievalDiagnostic(BaseModel):
@@ -231,6 +232,7 @@ def empty_planner_diagnostic(*, status: str = "llm") -> PlannerDiagnostic:
         required_routes=[],
         override_applied=False,
         override_reason=None,
+        planner_warnings=[],
     )
 
 

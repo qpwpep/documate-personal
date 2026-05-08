@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 import logging
 from typing import Any
 
@@ -14,6 +15,7 @@ from src.core.contracts.boundary.runtime import get_runtime_state
 from src.core.contracts.debug import LLMCallMetadata, RetryState, build_llm_call_metadata, empty_planner_diagnostic
 from src.infra.logging_utils import log_event
 from src.core.planner_schema import PlannerOutput, normalize_planner_output_input
+from src.runtime.nodes.actions import is_action_only_request
 from src.runtime.nodes.planner.deterministic import build_deterministic_planner_decision
 from src.runtime.nodes.planner.guardrails import apply_required_route_guardrail, sanitize_planner_output
 from src.runtime.nodes.planner.heuristic import build_heuristic_planner_decision
@@ -38,17 +40,108 @@ def _coerce_planner_payload(raw: Any) -> Any:
     return normalize_planner_output_input(raw)
 
 
+def _content_text_candidates(content: Any) -> list[str]:
+    if isinstance(content, str):
+        return [content]
+    if not isinstance(content, list):
+        return []
+
+    candidates: list[str] = []
+    for part in content:
+        if isinstance(part, str):
+            candidates.append(part)
+            continue
+        if not isinstance(part, dict):
+            continue
+        text = part.get("text") or part.get("content")
+        if isinstance(text, str):
+            candidates.append(text)
+    return candidates
+
+
+def _json_payload_from_text(text: str) -> Any | None:
+    stripped = str(text or "").strip()
+    if not stripped:
+        return None
+    try:
+        return json.loads(stripped)
+    except json.JSONDecodeError:
+        pass
+
+    start = stripped.find("{")
+    end = stripped.rfind("}")
+    if start < 0 or end <= start:
+        return None
+    try:
+        return json.loads(stripped[start : end + 1])
+    except json.JSONDecodeError:
+        return None
+
+
+def _looks_like_planner_payload(value: Any) -> bool:
+    return isinstance(value, dict) and ("use_retrieval" in value or "tasks" in value)
+
+
+def _find_planner_payload(value: Any) -> Any | None:
+    if _looks_like_planner_payload(value):
+        return value
+
+    if isinstance(value, str):
+        parsed = _json_payload_from_text(value)
+        if _looks_like_planner_payload(parsed):
+            return parsed
+        return None
+
+    if isinstance(value, dict):
+        for item in value.values():
+            found = _find_planner_payload(item)
+            if found is not None:
+                return found
+        return None
+
+    if isinstance(value, (list, tuple)):
+        for item in value:
+            found = _find_planner_payload(item)
+            if found is not None:
+                return found
+    return None
+
+
+def _coerce_planner_payload_from_raw_message(raw_message: AIMessage | None) -> Any | None:
+    if raw_message is None:
+        return None
+    for text in _content_text_candidates(raw_message.content):
+        payload = _json_payload_from_text(text)
+        if _looks_like_planner_payload(payload):
+            return payload
+    for attribute_name in ("additional_kwargs", "response_metadata"):
+        payload = _find_planner_payload(getattr(raw_message, attribute_name, None))
+        if payload is not None:
+            return payload
+    return None
+
+
+def _validate_planner_payload(payload: Any) -> tuple[PlannerOutput | None, list[str], Exception | None]:
+    warnings: list[str] = []
+    try:
+        return PlannerOutput.validate_input(_coerce_planner_payload(payload), warnings=warnings), warnings, None
+    except Exception as exc:
+        return None, warnings, exc
+
+
 def _coerce_structured_planner_result(
     result: Any,
-) -> tuple[PlannerOutput | None, AIMessage | None, Exception | None]:
+) -> tuple[PlannerOutput | None, AIMessage | None, Exception | None, list[str]]:
     if isinstance(result, PlannerOutput):
-        return result, None, None
+        return result, None, None, []
 
     if not isinstance(result, dict):
-        try:
-            return PlannerOutput.validate_input(_coerce_planner_payload(result)), None, None
-        except Exception as exc:
-            return None, None, exc
+        planner_output, warnings, error = _validate_planner_payload(result)
+        return planner_output, None, error, warnings
+
+    if "use_retrieval" in result or "tasks" in result:
+        planner_output, warnings, error = _validate_planner_payload(result)
+        return planner_output, None, error, warnings
 
     raw_message = result.get("raw")
     parsed = _coerce_planner_payload(result.get("parsed"))
@@ -57,18 +150,34 @@ def _coerce_structured_planner_result(
     if not isinstance(raw_message, AIMessage):
         raw_message = None
 
+    if parsed is not None:
+        planner_output, warnings, error = _validate_planner_payload(parsed)
+        if planner_output is not None:
+            return planner_output, raw_message, None, warnings
+    else:
+        error = None
+
     if parsing_error is not None and isinstance(parsing_error, Exception):
-        return None, raw_message, parsing_error
+        raw_payload = _coerce_planner_payload_from_raw_message(raw_message)
+        if raw_payload is not None:
+            planner_output, warnings, raw_error = _validate_planner_payload(raw_payload)
+            if planner_output is not None:
+                return planner_output, raw_message, None, warnings
+            error = raw_error
+        return None, raw_message, parsing_error if error is None else error, []
     if parsing_error is not None:
-        return None, raw_message, RuntimeError(str(parsing_error))
+        raw_payload = _coerce_planner_payload_from_raw_message(raw_message)
+        if raw_payload is not None:
+            planner_output, warnings, raw_error = _validate_planner_payload(raw_payload)
+            if planner_output is not None:
+                return planner_output, raw_message, None, warnings
+            error = raw_error
+        return None, raw_message, RuntimeError(str(parsing_error) if error is None else str(error)), []
 
     if isinstance(parsed, PlannerOutput):
-        return parsed, raw_message, None
+        return parsed, raw_message, None, []
 
-    try:
-        return PlannerOutput.validate_input(parsed), raw_message, None
-    except Exception as exc:
-        return None, raw_message, exc
+    return None, raw_message, error, []
 
 
 def _resolve_planner_strategy(
@@ -81,16 +190,9 @@ def _resolve_planner_strategy(
     planner_errors: list[str] = []
     llm_calls: list[LLMCallMetadata] = []
 
-    deterministic = build_deterministic_planner_decision(
-        user_input=context.user_input,
-        has_retriever=context.has_retriever,
-    )
-    if deterministic is not None:
-        return deterministic, planner_errors, llm_calls
-
     try:
         planner_raw = llm_planner.invoke(build_planner_messages(state, max_turns=max_turns))
-        planner_output, raw_message, parse_error = _coerce_structured_planner_result(planner_raw)
+        planner_output, raw_message, parse_error, planner_warnings = _coerce_structured_planner_result(planner_raw)
         if raw_message is not None:
             llm_calls.append(
                 build_llm_call_metadata(
@@ -108,6 +210,7 @@ def _resolve_planner_strategy(
                         status="llm",
                         reason=None,
                         fallback_routes=[],
+                        planner_warnings=planner_warnings,
                     ),
                     status="llm",
                 ),
@@ -117,6 +220,13 @@ def _resolve_planner_strategy(
         planner_errors.append(f"planner: output validation failed ({parse_error})")
     except Exception as exc:
         planner_errors.append(f"planner: structured output invocation failed ({exc})")
+
+    deterministic = build_deterministic_planner_decision(
+        user_input=context.user_input,
+        has_retriever=context.has_retriever,
+    )
+    if deterministic is not None:
+        return deterministic, planner_errors, llm_calls
 
     decision = build_heuristic_planner_decision(
         user_input=context.user_input,
@@ -151,6 +261,18 @@ def _apply_planner_guardrail(
         has_retriever=context.has_retriever,
         errors=planner_errors,
     )
+    if is_action_only_request(context.user_input) and planner_output.use_retrieval:
+        return PlannerDecision(
+            output=PlannerOutput.fallback(),
+            diagnostics=normalize_planner_diagnostics(
+                status=decision.status,
+                reason="action_only",
+                fallback_routes=[],
+                planner_warnings=decision.diagnostics.planner_warnings,
+            ),
+            guided_followup=decision.guided_followup,
+            status=decision.status,
+        )
     planner_output = sanitize_planner_output_queries(
         planner_output,
         user_input=context.user_input,

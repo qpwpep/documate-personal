@@ -1,12 +1,12 @@
 import unittest
 
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from pydantic import ValidationError
 
 from src.core.contracts import PlannerDiagnostic, SessionMetadata, SlackDestination
 from src.runtime.nodes.planner import make_planner_node
 from src.runtime.nodes.planner.query_sanitizer import sanitize_retrieval_query
-from src.core.planner_schema import PlannerOutput, RetrievalTask
+from src.core.planner_schema import PLANNER_WARNING_DUPLICATE_ROUTE_MERGED, PlannerOutput, RetrievalTask
 
 from .helpers import _CapturePlannerLLM, _FailingPlannerLLM, _InvalidPlannerLLM, build_legacy_state
 
@@ -40,7 +40,7 @@ class PlannerNodeTest(unittest.TestCase):
                 ],
             )
 
-    def test_planner_deterministically_routes_explicit_docs_request(self) -> None:
+    def test_planner_uses_llm_and_guardrail_for_explicit_docs_request(self) -> None:
         capture_planner = _CapturePlannerLLM(PlannerOutput(use_retrieval=False, tasks=[]))
         planner_node = make_planner_node(capture_planner, verbose=False)
 
@@ -53,12 +53,12 @@ class PlannerNodeTest(unittest.TestCase):
             )
         )
 
-        self.assertEqual(capture_planner.call_count, 0)
-        self.assertEqual(updates["planner"].status, "deterministic")
+        self.assertEqual(capture_planner.call_count, 1)
+        self.assertEqual(updates["planner"].status, "llm")
         self.assertEqual([task.route for task in updates["planner"].output.tasks], ["docs"])
         self.assertEqual(updates["planner"].output.tasks[0].query, "FastAPI response_model")
 
-    def test_planner_deterministically_routes_upload_request(self) -> None:
+    def test_planner_uses_llm_and_guardrail_for_upload_request(self) -> None:
         capture_planner = _CapturePlannerLLM(PlannerOutput(use_retrieval=False, tasks=[]))
         planner_node = make_planner_node(capture_planner, verbose=False)
 
@@ -72,12 +72,12 @@ class PlannerNodeTest(unittest.TestCase):
             )
         )
 
-        self.assertEqual(capture_planner.call_count, 0)
-        self.assertEqual(updates["planner"].status, "deterministic")
+        self.assertEqual(capture_planner.call_count, 1)
+        self.assertEqual(updates["planner"].status, "llm")
         self.assertEqual([task.route for task in updates["planner"].output.tasks], ["upload"])
         self.assertIn("groupby", updates["planner"].output.tasks[0].query.lower())
 
-    def test_planner_deterministically_routes_hybrid_docs_and_upload_request(self) -> None:
+    def test_planner_uses_llm_and_guardrail_for_hybrid_docs_and_upload_request(self) -> None:
         capture_planner = _CapturePlannerLLM(PlannerOutput(use_retrieval=False, tasks=[]))
         planner_node = make_planner_node(capture_planner, verbose=False)
 
@@ -91,8 +91,8 @@ class PlannerNodeTest(unittest.TestCase):
             )
         )
 
-        self.assertEqual(capture_planner.call_count, 0)
-        self.assertEqual(updates["planner"].status, "deterministic")
+        self.assertEqual(capture_planner.call_count, 1)
+        self.assertEqual(updates["planner"].status, "llm")
         self.assertEqual([task.route for task in updates["planner"].output.tasks], ["docs", "upload"])
         self.assertEqual(updates["planner"].output.tasks[0].query, "pandas concat")
         self.assertEqual(updates["planner"].output.tasks[1].query, "pandas concat uploaded notebook example")
@@ -119,7 +119,8 @@ class PlannerNodeTest(unittest.TestCase):
         )
 
         self.assertFalse(updates["planner"].output.use_retrieval)
-        self.assertEqual(updates["planner"].status, "deterministic")
+        self.assertEqual(capture_planner.call_count, 1)
+        self.assertEqual(updates["planner"].status, "llm")
         self.assertEqual(updates["planner"].diagnostics.override_reason, "upload_retriever_missing")
         self.assertIsNotNone(updates["planner"].guided_followup)
 
@@ -136,7 +137,8 @@ class PlannerNodeTest(unittest.TestCase):
             )
         )
 
-        self.assertEqual(capture_planner.call_count, 0)
+        self.assertEqual(capture_planner.call_count, 1)
+        self.assertEqual(updates["planner"].status, "llm")
         self.assertEqual([task.route for task in updates["planner"].output.tasks], ["local"])
 
     def test_planner_does_not_treat_generic_example_as_local_rag_intent(self) -> None:
@@ -168,7 +170,8 @@ class PlannerNodeTest(unittest.TestCase):
             )
         )
 
-        self.assertEqual(capture_planner.call_count, 0)
+        self.assertEqual(capture_planner.call_count, 1)
+        self.assertEqual(updates["planner"].status, "llm")
         self.assertEqual([task.route for task in updates["planner"].output.tasks], ["docs"])
 
     def test_planner_uses_heuristic_fallback_when_llm_fails_on_non_deterministic_docs_like_query(self) -> None:
@@ -193,7 +196,7 @@ class PlannerNodeTest(unittest.TestCase):
         self.assertFalse(updates["planner"].output.use_retrieval)
         self.assertTrue(any("validation failed" in error for error in updates["debug"].planner_errors))
 
-    def test_planner_skips_llm_for_action_only_request(self) -> None:
+    def test_planner_uses_llm_but_blocks_retrieval_for_action_only_request(self) -> None:
         capture_planner = _CapturePlannerLLM(
             PlannerOutput(use_retrieval=True, tasks=[RetrievalTask(route="docs", query="numpy", k=3)])
         )
@@ -208,7 +211,8 @@ class PlannerNodeTest(unittest.TestCase):
             )
         )
 
-        self.assertEqual(capture_planner.call_count, 0)
+        self.assertEqual(capture_planner.call_count, 1)
+        self.assertEqual(updates["planner"].status, "llm")
         self.assertFalse(updates["planner"].output.use_retrieval)
 
     def test_planner_records_llm_call_metadata_when_llm_path_is_used(self) -> None:
@@ -279,6 +283,42 @@ class PlannerNodeTest(unittest.TestCase):
         self.assertEqual([task.route for task in updates["planner"].output.tasks], ["docs"])
         self.assertEqual(updates["planner"].output.tasks[0].query, "numpy")
         self.assertEqual(updates["debug"].planner_errors, [])
+
+    def test_planner_merges_duplicate_routes_from_raw_structured_output(self) -> None:
+        raw_payload = {
+            "use_retrieval": True,
+            "tasks": [
+                {"route": "docs", "query": "numpy", "k": 3},
+                {"route": "docs", "query": "pandas", "k": 5},
+            ],
+        }
+        capture_planner = _CapturePlannerLLM(
+            None,
+            include_raw=True,
+            raw_message=AIMessage(content="", additional_kwargs={"parsed": raw_payload}),
+            parsing_error=ValueError("duplicate routes are not allowed in planner tasks"),
+        )
+        planner_node = make_planner_node(capture_planner, verbose=False)
+
+        updates = planner_node(
+            build_legacy_state(
+                {
+                    "messages": [HumanMessage(content="Compare numpy and pandas docs.")],
+                    "user_input": "Compare numpy and pandas docs.",
+                }
+            )
+        )
+
+        self.assertEqual(capture_planner.call_count, 1)
+        self.assertEqual(updates["planner"].status, "llm")
+        self.assertEqual(updates["debug"].planner_errors, [])
+        self.assertEqual([task.route for task in updates["planner"].output.tasks], ["docs"])
+        self.assertIn("numpy", updates["planner"].output.tasks[0].query)
+        self.assertIn("pandas", updates["planner"].output.tasks[0].query)
+        self.assertEqual(
+            updates["planner"].diagnostics.planner_warnings,
+            [PLANNER_WARNING_DUPLICATE_ROUTE_MERGED],
+        )
 
     def test_planner_includes_retry_context_system_message_on_retry(self) -> None:
         capture_planner = _CapturePlannerLLM(PlannerOutput(use_retrieval=False, tasks=[]))

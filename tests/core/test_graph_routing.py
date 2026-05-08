@@ -139,7 +139,7 @@ class GraphRoutingTest(unittest.TestCase):
         self.assertEqual(dispatch_calls["count"], 0)
         self.assertEqual(result["response"].final_answer, "final answer")
 
-    def test_graph_uses_deterministic_docs_route_before_planner_llm(self) -> None:
+    def test_graph_uses_llm_planner_with_docs_guardrail(self) -> None:
         docs_calls = {"count": 0}
         capture_planner = _CapturePlannerLLM(PlannerOutput(use_retrieval=False, tasks=[]))
 
@@ -191,7 +191,7 @@ class GraphRoutingTest(unittest.TestCase):
                 messages=[],
             )
         )
-        self.assertEqual(capture_planner.call_count, 0)
+        self.assertEqual(capture_planner.call_count, 1)
         self.assertEqual(docs_calls["count"], 1)
         self.assertTrue(
             any(message.name == "tavily_search" for message in result["messages"] if isinstance(message, ToolMessage))
@@ -284,7 +284,7 @@ class GraphRoutingTest(unittest.TestCase):
                 messages=[],
             )
         )
-        self.assertEqual(capture_planner.call_count, 0)
+        self.assertEqual(capture_planner.call_count, 2)
         self.assertEqual(docs_calls["count"], 2)
         self.assertEqual(synth_calls["count"], 1)
         self.assertEqual(result["response"].final_answer, "answer-1 [1]")

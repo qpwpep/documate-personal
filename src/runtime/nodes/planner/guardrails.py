@@ -44,6 +44,7 @@ def build_required_route_guardrail_decision(
         required_routes=required_routes,
         override_applied=planner_diagnostics.override_applied,
         override_reason=planner_diagnostics.override_reason,
+        planner_warnings=planner_diagnostics.planner_warnings,
     )
 
     if not required_routes:

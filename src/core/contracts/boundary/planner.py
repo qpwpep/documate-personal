@@ -14,12 +14,12 @@ def _coerce_planner_payload(raw: Any) -> Any:
     return normalize_planner_output_input(raw)
 
 
-def parse_planner_output(raw: Any, errors: list[str]) -> PlannerOutput:
+def parse_planner_output(raw: Any, errors: list[str], warnings: list[str] | None = None) -> PlannerOutput:
     payload = _coerce_planner_payload(raw)
     if isinstance(payload, PlannerOutput):
         return payload
     try:
-        return PlannerOutput.validate_input(payload)
+        return PlannerOutput.validate_input(payload, warnings=warnings)
     except Exception as exc:
         errors.append(f"planner: output validation failed ({exc})")
         return PlannerOutput.fallback()
@@ -38,6 +38,7 @@ def parse_planner_diagnostic(value: Any) -> PlannerDiagnostic | None:
     status = value.get("status")
     reason = value.get("reason")
     override_reason = value.get("override_reason")
+    planner_warnings = value.get("planner_warnings")
     if override_reason not in {
         "missing_required_retrieval",
         "missing_required_routes",
@@ -53,6 +54,13 @@ def parse_planner_diagnostic(value: Any) -> PlannerDiagnostic | None:
         required_routes=normalize_routes(required_routes) if isinstance(required_routes, list) else [],
         override_applied=bool(value.get("override_applied", False)),
         override_reason=override_reason,
+        planner_warnings=[
+            str(warning).strip()
+            for warning in planner_warnings
+            if str(warning).strip()
+        ]
+        if isinstance(planner_warnings, list)
+        else [],
     )
 
 
@@ -63,13 +71,24 @@ def parse_planner_state(value: Any) -> PlannerState:
         return PlannerState()
 
     planner_errors: list[str] = []
+    planner_warnings: list[str] = []
     diagnostics = value.get("diagnostics")
     status = value.get("status")
     if status not in {"llm", "deterministic", "heuristic_fallback", "fallback_no_routes"}:
         status = "llm"
     planner_diagnostics = parse_planner_diagnostic(diagnostics)
+    output = parse_planner_output(value.get("output"), planner_errors, planner_warnings)
+    if planner_warnings:
+        merged_warnings = list(planner_diagnostics.planner_warnings) if planner_diagnostics else []
+        for warning in planner_warnings:
+            if warning not in merged_warnings:
+                merged_warnings.append(warning)
+        base_diagnostics = planner_diagnostics or empty_planner_diagnostic(status=status)
+        planner_diagnostics = base_diagnostics.model_copy(
+            update={"planner_warnings": merged_warnings}
+        )
     return PlannerState(
-        output=parse_planner_output(value.get("output"), planner_errors),
+        output=output,
         status=status,
         diagnostics=planner_diagnostics or empty_planner_diagnostic(status=status),
         guided_followup=(
