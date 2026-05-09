@@ -104,15 +104,16 @@ uv run python -m src.eval.main history \
 
 ## 3. 출력 산출물
 
-각 run은 `output/benchmarks/<run_id>/` 아래에 저장됩니다.
+각 run은 `output/benchmarks/<run_id>/` 아래에 저장됩니다. 최신 run 포인터는 run 디렉터리 안이 아니라 `output/benchmarks/` 루트에 저장됩니다.
 
 | 파일 | 설명 |
 |---|---|
 | `raw_results.jsonl` | 케이스별 원시 실행 결과 |
 | `summary.json` | 집계 지표, gate 판정, 비용/모델 정보, `track`, `requested_limit` |
 | `report.md` | 사람이 읽기 쉬운 분석 보고서 |
-| `latest_release_run.txt` | 최신 release run id |
-| `latest_smoke_run.txt` | 최신 smoke run id |
+| `request_map.jsonl` | 케이스별 `session_id`, `request_id`, query hash, trace 매핑 |
+| `output/benchmarks/latest_release_run.txt` | 최신 release run id를 가리키는 루트 포인터 |
+| `output/benchmarks/latest_smoke_run.txt` | 최신 smoke run id를 가리키는 루트 포인터 |
 
 `summary.json`의 `judge_model`은 config와 환경 변수 override를 모두 반영해 실제 실행에 적용된 effective judge model입니다.
 
@@ -133,10 +134,11 @@ uv run python -m src.eval.main history \
 | `tool_precision` | `0.90` |
 | `tool_recall` | `0.85` |
 | `citation_compliance` | `0.95` |
-| `p95_latency_ms` | `20000` |
+| `p95_latency_ms` | `10000` |
 | `avg_cost_per_case_usd` | `0.01` |
+| `cost_gate_min_llm_call_coverage` | `0.80` |
 
-judge minimum score와 pricing도 같은 파일에서 관리합니다. 비용 지표는 app 응답 생성 LLM 호출 비용 기준이며, 현재 judge 호출 비용은 benchmark cost gate에 포함하지 않습니다.
+judge minimum score와 pricing도 같은 파일에서 관리합니다. `cost_gate_min_llm_call_coverage`는 `src/eval/config_models.py::HardGates`의 기본값이며, config에 명시하지 않으면 `0.80`이 적용됩니다. 비용 지표는 app 응답 생성 LLM 호출 비용 기준이며, 현재 judge 호출 비용은 benchmark cost gate에 포함하지 않습니다.
 
 ## 5. 환경 변수 override
 
