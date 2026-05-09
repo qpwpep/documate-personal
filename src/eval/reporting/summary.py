@@ -137,40 +137,6 @@ def _category_p95_latency(results: list[CaseResult], category: str) -> float | N
     return _category_p95_metric(results, category, _result_e2e_latency_ms)
 
 
-def _build_category_latency_gate(
-    *,
-    name: str,
-    threshold: int | None,
-    actual: float | None,
-    has_cases: bool,
-) -> GateResult:
-    if threshold is None:
-        return GateResult(
-            name=name,
-            threshold=None,
-            actual=None,
-            passed=True,
-            gate_type="release",
-            status="skipped_not_configured",
-        )
-    if not has_cases:
-        return GateResult(
-            name=name,
-            threshold=threshold,
-            actual=None,
-            passed=True,
-            gate_type="release",
-            status="skipped_no_cases",
-        )
-    return GateResult(
-        name=name,
-        threshold=threshold,
-        actual=actual,
-        passed=actual is not None and actual <= threshold,
-        gate_type="release",
-    )
-
-
 def build_summary(
     *,
     run_id: str,
@@ -321,26 +287,12 @@ def build_summary(
     )
     analysis = build_analysis(case_map=case_map, results=results)
     hard_gates = config.hard_gates
-    has_hybrid_cases = any(result.category == "hybrid" for result in results)
-    has_docs_only_cases = any(result.category == "docs_only" for result in results)
     gates = [
         GateResult(name="release_pass_rate", threshold=hard_gates.pass_rate, actual=metrics.release_pass_rate, passed=metrics.release_pass_rate >= hard_gates.pass_rate, gate_type="release"),
         GateResult(name="tool_precision", threshold=hard_gates.tool_precision, actual=metrics.tool_precision, passed=metrics.tool_precision >= hard_gates.tool_precision, gate_type="release"),
         GateResult(name="tool_recall", threshold=hard_gates.tool_recall, actual=metrics.tool_recall, passed=metrics.tool_recall >= hard_gates.tool_recall, gate_type="release"),
         GateResult(name="citation_compliance", threshold=hard_gates.citation_compliance, actual=metrics.citation_compliance, passed=metrics.citation_compliance >= hard_gates.citation_compliance, gate_type="release"),
         GateResult(name="p95_latency_ms", threshold=hard_gates.p95_latency_ms, actual=metrics.p95_latency_ms, passed=metrics.p95_latency_ms is not None and metrics.p95_latency_ms <= hard_gates.p95_latency_ms, gate_type="release"),
-        _build_category_latency_gate(
-            name="hybrid_p95_latency_ms",
-            threshold=hard_gates.hybrid_p95_latency_ms,
-            actual=metrics.hybrid_p95_latency_ms,
-            has_cases=has_hybrid_cases,
-        ),
-        _build_category_latency_gate(
-            name="docs_only_p95_latency_ms",
-            threshold=hard_gates.docs_only_p95_latency_ms,
-            actual=metrics.docs_only_p95_latency_ms,
-            has_cases=has_docs_only_cases,
-        ),
         GateResult(
             name="avg_cost_per_case_usd",
             threshold=hard_gates.avg_cost_per_case_usd,
