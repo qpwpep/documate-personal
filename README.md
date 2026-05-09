@@ -129,7 +129,7 @@ flowchart LR
 | p95 latency | `9435.9 ms` |
 | avg cost per case | `$0.00523362` |
 
-상세 결과와 해석은 [벤치마크 결과](docs/benchmark_results.md), 실행 방법은 [벤치마크 가이드](docs/benchmarking.md)를 참고하세요.
+최근 comparable generated-suite 기준으로 pass rate는 `0.3833`에서 `0.9667`로, citation compliance는 `0.3056`에서 `0.9556`으로 올라갔고 p95 latency는 `62063.0 ms`에서 `9435.9 ms`로 줄었습니다. 상세 trend 해석은 [벤치마크 결과](docs/benchmark_results.md), 실행 방법은 [벤치마크 가이드](docs/benchmarking.md)를 참고하세요.
 
 ## 문서
 
