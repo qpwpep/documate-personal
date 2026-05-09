@@ -1,4 +1,6 @@
 import unittest
+import threading
+import time
 from unittest.mock import patch
 
 from src.infra.settings import AppSettings
@@ -147,7 +149,13 @@ class DocsSearchTest(unittest.TestCase):
     @patch("src.infra.tools.docs_search.client.request_tavily_search")
     def test_docs_search_applies_specific_fallback_hints(self, mock_request_tavily_search) -> None:
         mock_request_tavily_search.return_value = {"results": []}
-        registry = build_tool_registry(AppSettings(openai_api_key="test", tavily_api_key="test"))
+        registry = build_tool_registry(
+            AppSettings(
+                openai_api_key="test",
+                tavily_api_key="test",
+                docs_search_hedge_delay_seconds=0.01,
+            )
+        )
 
         cases = [
             (
@@ -419,6 +427,78 @@ class DocsSearchTest(unittest.TestCase):
         self.assertFalse(result["diagnostics"]["include_raw_content_requested"])
         first_kwargs = mock_request_tavily_search.call_args_list[0].kwargs
         self.assertEqual(first_kwargs["include_domains"], ["numpy.org"])
+
+    @patch("src.infra.tools.docs_search.client.request_tavily_search")
+    def test_docs_search_reports_provider_hedge_diagnostics(self, mock_request_tavily_search) -> None:
+        mock_request_tavily_search.return_value = {
+            "results": [],
+            "_tail_hedge": {
+                "hedge_started": True,
+                "hedge_dropped": True,
+                "hedge_winner": "hedge_2",
+                "hedge_attempts_started": 2,
+                "hedge_attempts_dropped": 1,
+            },
+        }
+        registry = build_tool_registry(AppSettings(openai_api_key="test", tavily_api_key="test"))
+
+        result = registry.tavily_search_tool.func(
+            query="custom docs",
+            include_domains=["numpy.org"],
+        )
+
+        diagnostics = result["diagnostics"]
+        self.assertTrue(diagnostics["hedge_started"])
+        self.assertTrue(diagnostics["hedge_dropped"])
+        self.assertEqual(diagnostics["hedge_winner"], "hedge_2")
+        self.assertEqual(diagnostics["hedge_attempts_started"], 2)
+        self.assertEqual(diagnostics["hedge_attempts_dropped"], 1)
+
+    @patch("src.infra.tools.docs_search.client.request_tavily_search")
+    def test_docs_search_overlaps_fallback_query_with_primary(self, mock_request_tavily_search) -> None:
+        fallback_started = threading.Event()
+        primary_release = threading.Event()
+
+        def request_side_effect(*, query: str, **_kwargs):
+            if query == "numpy official docs":
+                self.assertTrue(fallback_started.wait(timeout=1.0))
+                primary_release.wait(timeout=1.0)
+                return {"results": []}
+            fallback_started.set()
+            return {
+                "results": [
+                    {
+                        "url": "https://numpy.org/doc/stable/user/basics.broadcasting.html",
+                        "title": "Broadcasting",
+                        "content": "NumPy broadcasting stretches compatible array dimensions.",
+                        "score": 0.88,
+                    }
+                ]
+            }
+
+        mock_request_tavily_search.side_effect = request_side_effect
+        registry = build_tool_registry(
+            AppSettings(
+                openai_api_key="test",
+                tavily_api_key="test",
+                docs_search_hedge_delay_seconds=0.01,
+            )
+        )
+
+        started = time.perf_counter()
+        try:
+            result = registry.tavily_search_tool.func(query="numpy official docs")
+        finally:
+            primary_release.set()
+        elapsed = time.perf_counter() - started
+
+        self.assertTrue(fallback_started.is_set())
+        self.assertLess(elapsed, 0.5)
+        self.assertEqual(result["diagnostics"]["status"], "success")
+        self.assertEqual(
+            [item["url_or_path"] for item in result["evidence"]],
+            ["https://numpy.org/doc/stable/user/basics.broadcasting.html"],
+        )
 
     @patch("src.infra.tools.docs_search.client.request_tavily_search")
     def test_docs_search_canonicalizes_numpy_versioned_urls_to_stable(self, mock_request_tavily_search) -> None:

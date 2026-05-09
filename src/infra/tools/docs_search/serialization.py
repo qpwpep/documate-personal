@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 import time
 from typing import Any
@@ -48,6 +49,74 @@ class DocsSearchFilterCounters:
             self.filtered_url_request_failed_count += 1
 
 
+@dataclass(slots=True)
+class _DocsResultCandidate:
+    result: dict[str, Any]
+    original_url: str
+    candidates: list[str]
+    resolved_url: str = ""
+
+
+def _validate_candidate_urls(
+    candidates: list[_DocsResultCandidate],
+    *,
+    retrieval_warnings: list[str],
+    filter_counters: DocsSearchFilterCounters | None,
+) -> None:
+    max_candidate_count = max((len(item.candidates) for item in candidates), default=0)
+    for candidate_index in range(max_candidate_count):
+        jobs: list[tuple[int, str]] = []
+        for index, item in enumerate(candidates):
+            if item.resolved_url or candidate_index >= len(item.candidates):
+                continue
+            candidate_url = item.candidates[candidate_index]
+            url_filter_reason = doc_url_filter_reason(candidate_url)
+            if url_filter_reason is not None:
+                if filter_counters is not None:
+                    filter_counters.record_url_filter(url_filter_reason)
+                continue
+            jobs.append((index, candidate_url))
+
+        if not jobs:
+            continue
+
+        validation_started = time.perf_counter()
+        if len(jobs) == 1:
+            validations = [(jobs[0][0], jobs[0][1], validate_doc_url(jobs[0][1]))]
+        else:
+            max_workers = min(4, len(jobs))
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                future_by_job = {
+                    executor.submit(validate_doc_url, candidate_url): (index, candidate_url)
+                    for index, candidate_url in jobs
+                }
+                validation_by_index = {
+                    index: (candidate_url, future.result())
+                    for future, (index, candidate_url) in future_by_job.items()
+                }
+            validations = [
+                (index, candidate_url, validation_by_index[index][1])
+                for index, candidate_url in jobs
+            ]
+        if filter_counters is not None:
+            filter_counters.url_validation_ms += elapsed_ms(validation_started, time.perf_counter())
+
+        for index, _candidate_url, validation in validations:
+            item = candidates[index]
+            if item.resolved_url:
+                continue
+            if not validation.ok:
+                if filter_counters is not None:
+                    filter_counters.record_validation_filter(validation.reason)
+                warning = f"url_{validation.reason}_filtered" if validation.reason else "url_validation_filtered"
+                if warning not in retrieval_warnings:
+                    retrieval_warnings.append(warning)
+                continue
+            if filter_counters is not None:
+                filter_counters.validated_url_count += 1
+            item.resolved_url = validation.final_url
+
+
 def url_domain(url: str) -> str:
     parsed = urlparse(str(url or "").strip())
     return normalize_domain(parsed.netloc)
@@ -90,34 +159,32 @@ def collect_docs_search_evidence(
     normalized_domains = normalized_domain_set(allowed_domains)
     if filter_counters is not None:
         filter_counters.provider_result_count += len(results)
+
+    candidates: list[_DocsResultCandidate] = []
     for result in results:
         if not isinstance(result, dict):
             if filter_counters is not None:
                 filter_counters.filtered_invalid_url_count += 1
             continue
         original_url = str(result.get("url") or "").strip()
-        url = ""
-        for candidate_url in _candidate_doc_urls(original_url):
-            url_filter_reason = doc_url_filter_reason(candidate_url)
-            if url_filter_reason is not None:
-                if filter_counters is not None:
-                    filter_counters.record_url_filter(url_filter_reason)
-                continue
-            validation_started = time.perf_counter()
-            validation = validate_doc_url(candidate_url)
-            if filter_counters is not None:
-                filter_counters.url_validation_ms += elapsed_ms(validation_started, time.perf_counter())
-            if not validation.ok:
-                if filter_counters is not None:
-                    filter_counters.record_validation_filter(validation.reason)
-                warning = f"url_{validation.reason}_filtered" if validation.reason else "url_validation_filtered"
-                if warning not in retrieval_warnings:
-                    retrieval_warnings.append(warning)
-                continue
-            if filter_counters is not None:
-                filter_counters.validated_url_count += 1
-            url = validation.final_url
-            break
+        candidates.append(
+            _DocsResultCandidate(
+                result=result,
+                original_url=original_url,
+                candidates=_candidate_doc_urls(original_url),
+            )
+        )
+
+    _validate_candidate_urls(
+        candidates,
+        retrieval_warnings=retrieval_warnings,
+        filter_counters=filter_counters,
+    )
+
+    for candidate in candidates:
+        result = candidate.result
+        original_url = candidate.original_url
+        url = candidate.resolved_url
         if not url:
             continue
         title = canonicalize_doc_title(
