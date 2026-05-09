@@ -43,6 +43,14 @@ class _CapturingGraph:
         }
 
 
+class _ResolvingGraph(_CapturingGraph):
+    def invoke(self, state: dict) -> dict:
+        runtime = state["runtime"]
+        if runtime.retriever is not None:
+            runtime.retriever.invoke("probe")
+        return super().invoke(state)
+
+
 class _ExplodingGraph:
     def invoke(self, _state: dict) -> dict:
         raise RuntimeError("boom")
@@ -79,8 +87,15 @@ class _SlowCapturingGraph:
 class _FakeHandle:
     def __init__(self, collection_name: str):
         self.collection_name = collection_name
-        self.retriever = object()
+        self.retriever = self
         self.cleanup_calls = 0
+
+    @property
+    def vectorstore(self):
+        return None
+
+    def invoke(self, _query: str):
+        return []
 
     def cleanup(self) -> None:
         self.cleanup_calls += 1
@@ -127,7 +142,7 @@ class UploadSessionIsolationTest(unittest.TestCase):
         self,
         mock_build_temp_retriever,
     ) -> None:
-        graph = _CapturingGraph()
+        graph = _ResolvingGraph()
         manager = _make_manager(graph)
         handle_one = _FakeHandle("upload-session-session")
         handle_two = _FakeHandle("upload-session-session")
@@ -138,7 +153,47 @@ class UploadSessionIsolationTest(unittest.TestCase):
 
         self.assertEqual(handle_one.cleanup_calls, 1)
         self.assertIs(manager.upload_retriever_handle, handle_two)
-        self.assertIs(graph.states[-1]["runtime"].retriever, handle_two.retriever)
+        self.assertIsNotNone(graph.states[-1]["runtime"].retriever)
+
+    @patch("src.app.agent_manager.build_temp_retriever")
+    def test_agent_manager_overlaps_upload_retriever_build_with_graph(
+        self,
+        mock_build_temp_retriever,
+    ) -> None:
+        graph_started = threading.Event()
+        handle = _FakeHandle("upload-session-session")
+        test_case = self
+
+        def build_retriever(*_args, **_kwargs):
+            self.assertTrue(graph_started.wait(timeout=1.0))
+            return handle
+
+        class _Graph(_CapturingGraph):
+            def invoke(self, state: dict) -> dict:
+                self.states.append(dict(state))
+                test_case.assertIsNone(manager.upload_retriever_handle)
+                test_case.assertIsNotNone(state["runtime"].retriever)
+                graph_started.set()
+                state["runtime"].retriever.invoke("probe")
+                return {
+                    "messages": [
+                        HumanMessage(content=state["runtime"].user_input),
+                        AIMessage(content="ok"),
+                    ],
+                    "response": ResponseState(
+                        final_answer="ok",
+                        payload={"answer": "ok", "claims": [], "evidence": [], "confidence": None},
+                    ),
+                }
+
+        graph = _Graph()
+        manager = _make_manager(graph)
+        mock_build_temp_retriever.side_effect = build_retriever
+
+        manager.run_agent_flow("with upload", upload_file_path="uploads/session/file.py")
+
+        self.assertIs(manager.upload_retriever_handle, handle)
+        self.assertEqual(mock_build_temp_retriever.call_count, 1)
 
     @patch("src.app.agent_manager.build_temp_retriever")
     def test_agent_manager_cleans_handle_when_upload_removed(self, mock_build_temp_retriever) -> None:

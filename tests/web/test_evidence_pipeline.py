@@ -778,7 +778,7 @@ class EvidencePipelineTest(unittest.TestCase):
 
         _, kwargs = mock_build_temp_retriever.call_args
         self.assertEqual(kwargs["api_key"], "test-key")
-        self.assertIsNotNone(result["debug"]["latency_breakdown"]["upload_retriever_build_ms"])
+        self.assertIsNone(result["debug"]["latency_breakdown"]["upload_retriever_build_ms"])
 
     def test_save_tool_message_does_not_override_final_answer(self) -> None:
         manager = AgentFlowManager.__new__(AgentFlowManager)
