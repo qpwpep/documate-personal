@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1000" viewBox="0 0 1200 1000" role="img" aria-labelledby="title desc">
   <title id="title">DocuMate benchmark history</title>
-  <desc id="desc">Stored benchmark runs 20260307_101108, 20260425_062457 across pass rate, tool precision, tool recall, citation compliance, p95 latency, and average cost.</desc>
+  <desc id="desc">Stored benchmark runs 20260303_134325, 20260509_043436 across pass rate, tool precision, tool recall, citation compliance, p95 latency, and average cost.</desc>
   <defs>
     <style>
       .bg { fill: #f5f1e8; }
@@ -24,11 +24,11 @@
   <text class="title" x="60" y="58">DocuMate Benchmark Trend</text>
   <text class="subtitle" x="60" y="86">2 comparable generated-suite runs, 6 key metrics.</text>
   <circle cx="60" cy="118" r="7" fill="#b07a4f" stroke="#8c5d36" stroke-width="1.5"/>
-  <text class="legend" x="76" y="122">20260307_101108</text>
-  <text class="legend-sub" x="76" y="139">03-07 11:08, FAIL</text>
+  <text class="legend" x="76" y="122">20260303_134325</text>
+  <text class="legend-sub" x="76" y="139">03-04 00:45, FAIL</text>
   <circle cx="420" cy="118" r="7" fill="#6b7280" stroke="#4b5563" stroke-width="1.5"/>
-  <text class="legend" x="436" y="122">20260425_062457</text>
-  <text class="legend-sub" x="436" y="139">04-25 06:39, PASS</text>
+  <text class="legend" x="436" y="122">20260509_043436</text>
+  <text class="legend-sub" x="436" y="139">05-09 04:48, PASS</text>
   <g transform="translate(0,0)">
     <rect class="panel" x="40" y="190" width="540" height="230" rx="18"/>
     <text class="metric" x="66" y="224">pass_rate</text>
@@ -40,15 +40,15 @@
     <text class="gate-label" x="508" y="253.8">gate 0.90</text>
     <text class="axis" x="96" y="378">0.0</text>
     <text class="axis" x="96" y="240">1.0</text>
-    <path class="trend" d="M150.0 323.4 L480.0 236.0"/>
+    <path class="trend" d="M150.0 321.1 L480.0 240.6"/>
     <line class="guide" x1="150.0" y1="236" x2="150.0" y2="374" opacity="0.35"/>
-    <circle cx="150.0" cy="323.4" r="6" fill="#b07a4f" stroke="#8c5d36" stroke-width="1.5"/>
-    <text class="value" x="150.0" y="313.4" text-anchor="middle">0.3667</text>
-    <text class="tick" x="150.0" y="398" text-anchor="middle">03-07 11:08</text>
+    <circle cx="150.0" cy="321.1" r="6" fill="#b07a4f" stroke="#8c5d36" stroke-width="1.5"/>
+    <text class="value" x="150.0" y="311.1" text-anchor="middle">0.3833</text>
+    <text class="tick" x="150.0" y="398" text-anchor="middle">03-04 00:45</text>
     <line class="guide" x1="480.0" y1="236" x2="480.0" y2="374" opacity="0.35"/>
-    <circle cx="480.0" cy="236.0" r="6" fill="#6b7280" stroke="#4b5563" stroke-width="1.5"/>
-    <text class="value" x="480.0" y="254.0" text-anchor="middle">1.0000</text>
-    <text class="tick" x="480.0" y="398" text-anchor="middle">04-25 06:39</text>
+    <circle cx="480.0" cy="240.6" r="6" fill="#6b7280" stroke="#4b5563" stroke-width="1.5"/>
+    <text class="value" x="480.0" y="258.6" text-anchor="middle">0.9667</text>
+    <text class="tick" x="480.0" y="398" text-anchor="middle">05-09 04:48</text>
   </g>
 
   <g transform="translate(0,0)">
@@ -62,15 +62,15 @@
     <text class="gate-label" x="1088" y="253.8">gate 0.90</text>
     <text class="axis" x="676" y="378">0.0</text>
     <text class="axis" x="676" y="240">1.0</text>
-    <path class="trend" d="M730.0 248.5 L1060.0 239.6"/>
+    <path class="trend" d="M730.0 262.9 L1060.0 240.5"/>
     <line class="guide" x1="730.0" y1="236" x2="730.0" y2="374" opacity="0.35"/>
-    <circle cx="730.0" cy="248.5" r="6" fill="#b07a4f" stroke="#8c5d36" stroke-width="1.5"/>
-    <text class="value" x="730.0" y="266.5" text-anchor="middle">0.9091</text>
-    <text class="tick" x="730.0" y="398" text-anchor="middle">03-07 11:08</text>
+    <circle cx="730.0" cy="262.9" r="6" fill="#b07a4f" stroke="#8c5d36" stroke-width="1.5"/>
+    <text class="value" x="730.0" y="252.9" text-anchor="middle">0.8049</text>
+    <text class="tick" x="730.0" y="398" text-anchor="middle">03-04 00:45</text>
     <line class="guide" x1="1060.0" y1="236" x2="1060.0" y2="374" opacity="0.35"/>
-    <circle cx="1060.0" cy="239.6" r="6" fill="#6b7280" stroke="#4b5563" stroke-width="1.5"/>
-    <text class="value" x="1060.0" y="257.6" text-anchor="middle">0.9740</text>
-    <text class="tick" x="1060.0" y="398" text-anchor="middle">04-25 06:39</text>
+    <circle cx="1060.0" cy="240.5" r="6" fill="#6b7280" stroke="#4b5563" stroke-width="1.5"/>
+    <text class="value" x="1060.0" y="258.5" text-anchor="middle">0.9677</text>
+    <text class="tick" x="1060.0" y="398" text-anchor="middle">05-09 04:48</text>
   </g>
 
   <g transform="translate(0,0)">
@@ -84,15 +84,15 @@
     <text class="gate-label" x="508" y="530.7">gate 0.85</text>
     <text class="axis" x="96" y="648">0.0</text>
     <text class="axis" x="96" y="510">1.0</text>
-    <path class="trend" d="M150.0 506.0 L480.0 506.0"/>
+    <path class="trend" d="M150.0 583.3 L480.0 506.0"/>
     <line class="guide" x1="150.0" y1="506" x2="150.0" y2="644" opacity="0.35"/>
-    <circle cx="150.0" cy="506.0" r="6" fill="#b07a4f" stroke="#8c5d36" stroke-width="1.5"/>
-    <text class="value" x="150.0" y="524.0" text-anchor="middle">1.0000</text>
-    <text class="tick" x="150.0" y="668" text-anchor="middle">03-07 11:08</text>
+    <circle cx="150.0" cy="583.3" r="6" fill="#b07a4f" stroke="#8c5d36" stroke-width="1.5"/>
+    <text class="value" x="150.0" y="573.3" text-anchor="middle">0.4400</text>
+    <text class="tick" x="150.0" y="668" text-anchor="middle">03-04 00:45</text>
     <line class="guide" x1="480.0" y1="506" x2="480.0" y2="644" opacity="0.35"/>
     <circle cx="480.0" cy="506.0" r="6" fill="#6b7280" stroke="#4b5563" stroke-width="1.5"/>
     <text class="value" x="480.0" y="524.0" text-anchor="middle">1.0000</text>
-    <text class="tick" x="480.0" y="668" text-anchor="middle">04-25 06:39</text>
+    <text class="tick" x="480.0" y="668" text-anchor="middle">05-09 04:48</text>
   </g>
 
   <g transform="translate(0,0)">
@@ -106,15 +106,15 @@
     <text class="gate-label" x="1088" y="516.9">gate 0.95</text>
     <text class="axis" x="676" y="648">0.0</text>
     <text class="axis" x="676" y="510">1.0</text>
-    <path class="trend" d="M730.0 531.3 L1060.0 506.0"/>
+    <path class="trend" d="M730.0 601.8 L1060.0 512.1"/>
     <line class="guide" x1="730.0" y1="506" x2="730.0" y2="644" opacity="0.35"/>
-    <circle cx="730.0" cy="531.3" r="6" fill="#b07a4f" stroke="#8c5d36" stroke-width="1.5"/>
-    <text class="value" x="730.0" y="521.3" text-anchor="middle">0.8167</text>
-    <text class="tick" x="730.0" y="668" text-anchor="middle">03-07 11:08</text>
+    <circle cx="730.0" cy="601.8" r="6" fill="#b07a4f" stroke="#8c5d36" stroke-width="1.5"/>
+    <text class="value" x="730.0" y="591.8" text-anchor="middle">0.3056</text>
+    <text class="tick" x="730.0" y="668" text-anchor="middle">03-04 00:45</text>
     <line class="guide" x1="1060.0" y1="506" x2="1060.0" y2="644" opacity="0.35"/>
-    <circle cx="1060.0" cy="506.0" r="6" fill="#6b7280" stroke="#4b5563" stroke-width="1.5"/>
-    <text class="value" x="1060.0" y="524.0" text-anchor="middle">1.0000</text>
-    <text class="tick" x="1060.0" y="668" text-anchor="middle">04-25 06:39</text>
+    <circle cx="1060.0" cy="512.1" r="6" fill="#6b7280" stroke="#4b5563" stroke-width="1.5"/>
+    <text class="value" x="1060.0" y="530.1" text-anchor="middle">0.9556</text>
+    <text class="tick" x="1060.0" y="668" text-anchor="middle">05-09 04:48</text>
   </g>
 
   <g transform="translate(0,0)">
@@ -124,19 +124,19 @@
     <line class="guide" x1="130" y1="914" x2="500" y2="914"/>
     <line class="guide" x1="130" y1="776" x2="130" y2="914"/>
     <line class="guide" x1="130" y1="776" x2="500" y2="776"/>
-    <line class="gate" x1="130" y1="863.8" x2="500" y2="863.8"/>
-    <text class="gate-label" x="508" y="867.8">gate 20000</text>
+    <line class="gate" x1="130" y1="894.3" x2="500" y2="894.3"/>
+    <text class="gate-label" x="508" y="898.3">gate 10000</text>
     <text class="axis" x="96" y="918">0</text>
-    <text class="axis" x="96" y="780">55000</text>
-    <path class="trend" d="M150.0 796.1 L480.0 890.5"/>
+    <text class="axis" x="96" y="780">70000</text>
+    <path class="trend" d="M150.0 791.6 L480.0 895.4"/>
     <line class="guide" x1="150.0" y1="776" x2="150.0" y2="914" opacity="0.35"/>
-    <circle cx="150.0" cy="796.1" r="6" fill="#b07a4f" stroke="#8c5d36" stroke-width="1.5"/>
-    <text class="value" x="150.0" y="786.1" text-anchor="middle">46977.6</text>
-    <text class="tick" x="150.0" y="938" text-anchor="middle">03-07 11:08</text>
+    <circle cx="150.0" cy="791.6" r="6" fill="#b07a4f" stroke="#8c5d36" stroke-width="1.5"/>
+    <text class="value" x="150.0" y="809.6" text-anchor="middle">62063.0</text>
+    <text class="tick" x="150.0" y="938" text-anchor="middle">03-04 00:45</text>
     <line class="guide" x1="480.0" y1="776" x2="480.0" y2="914" opacity="0.35"/>
-    <circle cx="480.0" cy="890.5" r="6" fill="#6b7280" stroke="#4b5563" stroke-width="1.5"/>
-    <text class="value" x="480.0" y="908.5" text-anchor="middle">9354.0</text>
-    <text class="tick" x="480.0" y="938" text-anchor="middle">04-25 06:39</text>
+    <circle cx="480.0" cy="895.4" r="6" fill="#6b7280" stroke="#4b5563" stroke-width="1.5"/>
+    <text class="value" x="480.0" y="913.4" text-anchor="middle">9435.9</text>
+    <text class="tick" x="480.0" y="938" text-anchor="middle">05-09 04:48</text>
   </g>
 
   <g transform="translate(0,0)">
@@ -147,16 +147,16 @@
     <line class="guide" x1="710" y1="776" x2="710" y2="914"/>
     <line class="guide" x1="710" y1="776" x2="1080" y2="776"/>
     <text class="axis" x="676" y="918">0</text>
-    <text class="axis" x="676" y="780">0.0016</text>
-    <path class="trend" d="M730.0 843.8 L1060.0 800.0"/>
+    <text class="axis" x="676" y="780">0.0062</text>
+    <path class="trend" d="M730.0 865.2 L1060.0 797.5"/>
     <line class="guide" x1="730.0" y1="776" x2="730.0" y2="914" opacity="0.35"/>
-    <circle cx="730.0" cy="843.8" r="6" fill="#b07a4f" stroke="#8c5d36" stroke-width="1.5"/>
-    <text class="value" x="730.0" y="833.8" text-anchor="middle">0.00081372</text>
-    <text class="tick" x="730.0" y="938" text-anchor="middle">03-07 11:08</text>
+    <circle cx="730.0" cy="865.2" r="6" fill="#b07a4f" stroke="#8c5d36" stroke-width="1.5"/>
+    <text class="value" x="730.0" y="855.2" text-anchor="middle">0.00219042</text>
+    <text class="tick" x="730.0" y="938" text-anchor="middle">03-04 00:45</text>
     <line class="guide" x1="1060.0" y1="776" x2="1060.0" y2="914" opacity="0.35"/>
-    <circle cx="1060.0" cy="800.0" r="6" fill="#6b7280" stroke="#4b5563" stroke-width="1.5"/>
-    <text class="value" x="1060.0" y="818.0" text-anchor="middle">0.00132187</text>
-    <text class="tick" x="1060.0" y="938" text-anchor="middle">04-25 06:39</text>
+    <circle cx="1060.0" cy="797.5" r="6" fill="#6b7280" stroke="#4b5563" stroke-width="1.5"/>
+    <text class="value" x="1060.0" y="815.5" text-anchor="middle">0.00523362</text>
+    <text class="tick" x="1060.0" y="938" text-anchor="middle">05-09 04:48</text>
   </g>
 
 </svg>
