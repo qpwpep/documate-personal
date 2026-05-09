@@ -6,9 +6,9 @@ from pathlib import Path
 from src.infra.settings import APP_ENV_SPECS, BENCHMARK_ENV_SPECS, DEFAULT_BENCHMARK_CONFIG_PATH, EnvVarSpec, load_benchmark_env_defaults
 
 
-README_APP_SETTINGS_HEADING = "### 4.1 애플리케이션 설정"
-README_BENCHMARK_SETTINGS_HEADING = "### 4.2 벤치마크 설정"
-README_SETTINGS_END_HEADING = "## 5. 검색 소스와 파일 제약"
+RUNTIME_REFERENCE_APP_SETTINGS_HEADING = "### 2.1 애플리케이션 설정"
+RUNTIME_REFERENCE_BENCHMARK_SETTINGS_HEADING = "### 2.2 벤치마크 설정"
+RUNTIME_REFERENCE_SETTINGS_END_HEADING = "## 3. 검색 소스와 파일 제약"
 
 
 def _serialize_env_value(value: str | int | float | bool | None) -> str:
@@ -118,9 +118,9 @@ def build_env_example_text(config_path: Path = DEFAULT_BENCHMARK_CONFIG_PATH) ->
     return "\n".join(lines).rstrip() + "\n"
 
 
-def build_readme_app_settings_block() -> str:
+def build_runtime_reference_app_settings_block() -> str:
     lines = [
-        README_APP_SETTINGS_HEADING,
+        RUNTIME_REFERENCE_APP_SETTINGS_HEADING,
         "",
         "기준 파일:",
         "",
@@ -134,9 +134,9 @@ def build_readme_app_settings_block() -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
-def build_readme_benchmark_settings_block(config_path: Path = DEFAULT_BENCHMARK_CONFIG_PATH) -> str:
+def build_runtime_reference_benchmark_settings_block(config_path: Path = DEFAULT_BENCHMARK_CONFIG_PATH) -> str:
     lines = [
-        README_BENCHMARK_SETTINGS_HEADING,
+        RUNTIME_REFERENCE_BENCHMARK_SETTINGS_HEADING,
         "",
         "기준 파일:",
         "",
@@ -154,28 +154,43 @@ def _replace_between(text: str, start_heading: str, end_heading: str, replacemen
     start_index = text.find(start_heading)
     end_index = text.find(end_heading)
     if start_index < 0 or end_index < 0 or end_index <= start_index:
-        raise ValueError(f"README section markers were not found: {start_heading!r} -> {end_heading!r}")
+        raise ValueError(f"Document section markers were not found: {start_heading!r} -> {end_heading!r}")
     prefix = text[:start_index].rstrip()
     suffix = text[end_index:].lstrip("\n")
     return prefix + "\n\n" + replacement_block.rstrip() + "\n\n" + suffix
+
+
+def sync_runtime_reference_settings_sections(
+    document_text: str,
+    config_path: Path = DEFAULT_BENCHMARK_CONFIG_PATH,
+) -> str:
+    synced = _replace_between(
+        document_text,
+        RUNTIME_REFERENCE_APP_SETTINGS_HEADING,
+        RUNTIME_REFERENCE_BENCHMARK_SETTINGS_HEADING,
+        build_runtime_reference_app_settings_block(),
+    )
+    return _replace_between(
+        synced,
+        RUNTIME_REFERENCE_BENCHMARK_SETTINGS_HEADING,
+        RUNTIME_REFERENCE_SETTINGS_END_HEADING,
+        build_runtime_reference_benchmark_settings_block(config_path),
+    )
+
+
+def build_readme_app_settings_block() -> str:
+    return build_runtime_reference_app_settings_block()
+
+
+def build_readme_benchmark_settings_block(config_path: Path = DEFAULT_BENCHMARK_CONFIG_PATH) -> str:
+    return build_runtime_reference_benchmark_settings_block(config_path)
 
 
 def sync_readme_settings_sections(
     readme_text: str,
     config_path: Path = DEFAULT_BENCHMARK_CONFIG_PATH,
 ) -> str:
-    synced = _replace_between(
-        readme_text,
-        README_APP_SETTINGS_HEADING,
-        README_BENCHMARK_SETTINGS_HEADING,
-        build_readme_app_settings_block(),
-    )
-    return _replace_between(
-        synced,
-        README_BENCHMARK_SETTINGS_HEADING,
-        README_SETTINGS_END_HEADING,
-        build_readme_benchmark_settings_block(config_path),
-    )
+    return sync_runtime_reference_settings_sections(readme_text, config_path)
 
 
 def build_unified_diff(path: Path, actual: str, expected: str) -> str:
@@ -194,6 +209,9 @@ __all__ = [
     "build_env_example_text",
     "build_readme_app_settings_block",
     "build_readme_benchmark_settings_block",
+    "build_runtime_reference_app_settings_block",
+    "build_runtime_reference_benchmark_settings_block",
     "build_unified_diff",
     "sync_readme_settings_sections",
+    "sync_runtime_reference_settings_sections",
 ]

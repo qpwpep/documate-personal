@@ -86,7 +86,7 @@ uv run python -m src.eval.main history
 
 release 기준 README 요약과 SVG 추세는 이 명령으로 아래를 함께 갱신할 수 있습니다. 다만 공개용 상세 결과는 README에 긴 표를 직접 넣지 않고 [벤치마크 결과](benchmark_results.md)에 별도로 정리합니다.
 
-- `README.md`의 9, 10번 섹션
+- `README.md`의 `## 검증 결과` 섹션
 - `docs/assets/benchmark_history.svg`
 
 README와 [벤치마크 결과](benchmark_results.md)를 문서만 최신화할 때는 full release benchmark를 새로 돌리지 않아도 됩니다. 이 경우 `output/benchmarks/latest_release_run.txt`가 가리키는 run의 `summary.json`과 `report.md`를 기준으로 수치를 확인하고, `uv run pytest -q` 결과만 최신 테스트 수치로 반영합니다. 새 release 수치가 필요할 때만 2.2의 `run` 명령으로 전체 benchmark를 재실행합니다.
@@ -170,6 +170,6 @@ history 리포터는 모든 run을 같은 기준으로 비교하지 않습니다
 
 - benchmark는 현재 `online` 모드만 지원합니다.
 - `report` 명령은 기존 `summary.json`과 `raw_results.jsonl`이 있어야 합니다.
-- `history` 명령은 README 안의 자동 갱신 마커를 기준으로 동작하므로, `README.md`의 `## 9. 최신 벤치마크 결과`와 `## 11. 테스트 및 검증` 제목은 유지해야 합니다.
+- `history` 명령은 README 안의 자동 갱신 마커를 기준으로 동작하므로, `README.md`의 `## 검증 결과`와 `## 문서` 제목은 유지해야 합니다.
 - 최신 release 결과를 채용/포트폴리오용으로 자세히 보여줄 때는 [벤치마크 결과](benchmark_results.md)를 갱신합니다.
 - 기존 latest release run을 재사용한 문서 갱신은 benchmark 재실행이 아니므로, 결과 문서에 pytest 검증일과 명령 결과를 함께 적어 benchmark 수치와 테스트 수치의 출처를 분리합니다.
