@@ -380,6 +380,62 @@ class NodeRefactorTest(unittest.TestCase):
         self.assertGreaterEqual(len(selected), 1)
         self.assertEqual(selected[0].source_id, pie_cell.source_id)
 
+    def test_hybrid_evidence_selection_uses_route_query_for_local_code_match(self) -> None:
+        planner_output = PlannerOutput(
+            use_retrieval=True,
+            tasks=[
+                RetrievalTask(route="docs", query="matplotlib pie chart options", k=2),
+                RetrievalTask(route="upload", query="uploaded notebook code pie chart options", k=3),
+            ],
+        )
+        docs_item = EvidenceItem.model_validate(
+            _docs_evidence(
+                source_id="url:https://matplotlib.org/stable/api/_as_gen/matplotlib.pyplot.pie.html",
+                snippet="matplotlib.pyplot.pie supports labels, autopct, and startangle.",
+            )
+        )
+        hist_cell = EvidenceItem.model_validate(
+            _upload_evidence(
+                source_id="path:uploads/demo/sample.ipynb#cell=1;chunk=0;start=0;end=64",
+                snippet="plt.hist(values, bins=5)",
+                score=0.95,
+                code_metadata={
+                    "calls": [{"call_name": "plt.hist", "kwargs": {"bins": "5"}}],
+                    "option_literals": ["bins=5"],
+                },
+            )
+        )
+        pie_cell = EvidenceItem.model_validate(
+            _upload_evidence(
+                source_id="path:uploads/demo/sample.ipynb#cell=2;chunk=0;start=0;end=64",
+                snippet="chart formatting cell",
+                score=0.1,
+                code_metadata={
+                    "calls": [
+                        {
+                            "call_name": "plt.pie",
+                            "kwargs": {
+                                "labels": "labels",
+                                "autopct": "'%1.1f%%'",
+                                "startangle": "90",
+                            },
+                        }
+                    ],
+                    "option_literals": ["labels=labels", "autopct='%1.1f%%'", "startangle=90"],
+                },
+            )
+        )
+
+        selected = select_primary_evidence_items(
+            user_input="공식 문서와 업로드 노트북 코드를 비교해줘.",
+            evidence_items=[docs_item, hist_cell, pie_cell],
+            planner_output=planner_output,
+        )
+
+        self.assertEqual(len(selected), 2)
+        self.assertIn(pie_cell.source_id, {item.source_id for item in selected})
+        self.assertNotIn(hist_cell.source_id, {item.source_id for item in selected})
+
     def test_synthesis_payload_builder_skips_weak_hybrid_route_candidates_without_strong_lexical_hits(self) -> None:
         planner_output = PlannerOutput(
             use_retrieval=True,

@@ -118,6 +118,45 @@ class SynthesisPromptBuilderTest(unittest.TestCase):
         self.assertIn("needs_more_evidence", turn_message)
         self.assertIn("wrapper/delegated API relationship", turn_message)
 
+    def test_hybrid_presentation_request_preserves_source_comparison_layout(self) -> None:
+        state = build_graph_state_input(
+            user_input="Compare official docs with uploaded code as a summary and checklist.",
+            messages=[HumanMessage(content="Compare official docs with uploaded code as a summary and checklist.")],
+        )
+
+        messages, _history_before, _history_after = build_synthesis_messages(
+            state=state,
+            action_rules=[],
+            deduped_evidence=[
+                {
+                    "kind": "official",
+                    "source_id": "url:https://docs.example.com",
+                    "url_or_path": "https://docs.example.com",
+                    "title": "Official Docs",
+                    "snippet": "Official guidance.",
+                    "score": 0.9,
+                },
+                {
+                    "kind": "local",
+                    "tool": "upload_search",
+                    "source_id": "path:uploads/demo.py#chunk=0",
+                    "url_or_path": "uploads/demo.py",
+                    "snippet": "Uploaded code.",
+                    "score": 0.8,
+                },
+            ],
+            attempt=1,
+            max_turns=6,
+        )
+
+        system_messages = [
+            str(message.content) for message in messages if isinstance(message, SystemMessage)
+        ]
+        turn_message = next(content for content in system_messages if "[Turn Contract]" in content)
+        self.assertIn("required_sections=summary, checklist, official_docs, upload_code, comparison", turn_message)
+        self.assertIn("hybrid_layout=official_docs -> upload/local detail -> comparison", turn_message)
+        self.assertIn("upload_code uses local/upload option_literals", turn_message)
+
     def test_code_example_request_requires_fenced_code_block_in_turn_contract(self) -> None:
         state = build_graph_state_input(
             user_input="BeautifulSoup으로 특정 태그 찾는 예제를 보여줘",

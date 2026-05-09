@@ -157,7 +157,7 @@ class SynthesisPromptBudgetTest(unittest.TestCase):
 
         self.assertEqual(capture_llm.bound_max_tokens[0], 1024)
 
-    def test_synthesize_node_clamps_hybrid_claims_and_section_bodies(self) -> None:
+    def test_synthesize_node_preserves_hybrid_claims_and_section_bodies(self) -> None:
         claims = [
             ClaimItem(text=f"Claim {index}.", evidence_ids=["url:https://docs.example.com/api"])
             for index in range(1, 6)
@@ -208,10 +208,10 @@ class SynthesisPromptBudgetTest(unittest.TestCase):
         )
 
         response = get_response_state(result)
-        self.assertEqual(len(response.payload.claims), 4)
+        self.assertEqual(len(response.payload.claims), 5)
         section_bodies = {section.kind: section.body for section in response.payload.sections}
-        self.assertEqual(section_bodies["official_docs"], "One. Two. Three.")
-        self.assertEqual(section_bodies["comparison"], "A. B.")
+        self.assertEqual(section_bodies["official_docs"], "One. Two. Three. Four.")
+        self.assertEqual(section_bodies["comparison"], "A. B. C.")
 
 
 if __name__ == "__main__":

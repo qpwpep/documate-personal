@@ -40,6 +40,18 @@ class RequestContractsTest(unittest.TestCase):
             ["official_docs", "comparison"],
         )
 
+    def test_hybrid_contract_preserves_source_sections_with_requested_presentation_sections(self) -> None:
+        contract = infer_answer_contract(
+            "Compare official docs with the uploaded code as a summary and checklist.",
+            ["docs", "upload"],
+        )
+
+        self.assertEqual(
+            contract.required_sections,
+            ["summary", "checklist", "official_docs", "upload_code", "comparison"],
+        )
+        self.assertTrue(contract.split_by_source)
+
 
 if __name__ == "__main__":
     unittest.main()

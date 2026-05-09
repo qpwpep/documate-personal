@@ -25,6 +25,8 @@ PLANNER_SYS = (
     "- For docs tasks, preserve the library/framework name in task.query, even for bare library-level requests.\n"
     "- If the request is only asking to save/share/send the current answer, retrieval is unnecessary.\n"
     "- If retriever_available=true and the user is asking about the currently uploaded file, prefer upload over local.\n"
+    "- If the user asks only about the currently uploaded file/code, choose upload only; do not add docs unless official/current/latest documentation is explicitly requested.\n"
+    "- For docs plus uploaded-file comparisons, choose docs and upload only; do not add local unless the user separately asks for the local notebook/vector index.\n"
     "- Do not include actions for save/slack; only retrieval planning."
 )
 _CONTEXT_DEPENDENT_FOLLOWUP_PATTERN = re.compile(

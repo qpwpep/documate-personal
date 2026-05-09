@@ -25,6 +25,13 @@ class PlannerPromptBuilderTest(unittest.TestCase):
                 for content in system_messages
             )
         )
+        self.assertTrue(
+            any(
+                "choose docs and upload only" in content
+                and "do not add local" in content
+                for content in system_messages
+            )
+        )
 
     def test_build_planner_messages_keeps_recent_context_for_numeric_followup(self) -> None:
         state = build_graph_state_input(

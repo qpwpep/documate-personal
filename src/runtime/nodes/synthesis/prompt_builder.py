@@ -166,11 +166,19 @@ def _build_turn_contract_block(
         f"- hybrid_evidence={str(has_hybrid_evidence).lower()}",
         f"- upload_section_required={str(requires_upload_section).lower()}",
     ]
+    if answer_contract.required_sections:
+        lines.append("- answer_field=overview; put source-specific details in sections")
+        lines.append("- do not duplicate section bodies in answer")
     if has_hybrid_evidence:
-        lines.append("- hybrid_layout=official_docs -> upload/local detail -> comparison")
+        has_comparison_section = "comparison" in answer_contract.required_sections
+        if has_comparison_section:
+            lines.append("- hybrid_layout=official_docs -> upload/local detail -> comparison")
+        else:
+            lines.append("- hybrid_layout=cover official docs and upload/local details inside the requested sections")
+        lines.append("- each hybrid section should include the necessary supported details without duplicating other sections")
         if requires_upload_section:
             lines.append("- upload_code uses local/upload option_literals or call kwargs when present")
-        else:
+        elif has_comparison_section:
             lines.append("- put uploaded/local details inside the comparison section")
     if "code_example" in answer_contract.required_sections:
         lines.append("- code_block_required=true")
