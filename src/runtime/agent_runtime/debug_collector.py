@@ -105,6 +105,23 @@ class DebugCollector:
         return str(model_name) if model_name else None
 
     @staticmethod
+    def _is_hedge_duplicate_estimate(llm_call: dict[str, Any]) -> bool:
+        response_metadata = llm_call.get("response_metadata")
+        return isinstance(response_metadata, dict) and bool(response_metadata.get("hedge_duplicate_estimate"))
+
+    @classmethod
+    def _usage_multiplier_for_llm_call(cls, llm_call: dict[str, Any]) -> int:
+        if not cls._is_hedge_duplicate_estimate(llm_call):
+            return 1
+        response_metadata = llm_call.get("response_metadata")
+        if not isinstance(response_metadata, dict):
+            return 1
+        try:
+            return max(1, int(response_metadata.get("hedge_attempts_started") or 1))
+        except (TypeError, ValueError):
+            return 1
+
+    @staticmethod
     def _build_fallback_llm_call_from_ai_message(message: AIMessage, *, attempt: int) -> dict[str, Any] | None:
         response_metadata = getattr(message, "response_metadata", None)
         usage_metadata = getattr(message, "usage_metadata", None)
@@ -133,9 +150,10 @@ class DebugCollector:
 
         for call in llm_calls:
             usage = cls._extract_token_usage_from_llm_call(call)
-            total_prompt_tokens += usage["prompt_tokens"]
-            total_completion_tokens += usage["completion_tokens"]
-            total_tokens += usage["total_tokens"]
+            usage_multiplier = cls._usage_multiplier_for_llm_call(call)
+            total_prompt_tokens += usage["prompt_tokens"] * usage_multiplier
+            total_completion_tokens += usage["completion_tokens"] * usage_multiplier
+            total_tokens += usage["total_tokens"] * usage_multiplier
             model_name = cls._extract_model_name_from_llm_call(call)
             if model_name and model_name not in models_used:
                 models_used.append(model_name)

@@ -241,6 +241,16 @@ class LatencyBreakdownReportingTest(unittest.TestCase):
                             "response_metadata": {"model_name": "gpt-5-mini"},
                             "usage_metadata": {"input_tokens": 20, "output_tokens": 5, "total_tokens": 25},
                         },
+                        {
+                            "stage": "synthesis",
+                            "attempt": 1,
+                            "path": "structured_hedge",
+                            "response_metadata": {
+                                "model_name": "gpt-5-mini",
+                                "hedge_duplicate_estimate": True,
+                            },
+                            "usage_metadata": {"input_tokens": 20, "output_tokens": 5, "total_tokens": 25},
+                        },
                     ],
                 ),
             },
@@ -277,8 +287,8 @@ class LatencyBreakdownReportingTest(unittest.TestCase):
         )
 
         self.assertEqual(result.models_used, ["gpt-5-nano", "gpt-5-mini"])
-        self.assertEqual(len(result.llm_calls), 2)
-        self.assertAlmostEqual(result.cost_usd, 0.000094, places=8)
+        self.assertEqual(len(result.llm_calls), 3)
+        self.assertAlmostEqual(result.cost_usd, 0.000174, places=8)
 
     def test_build_markdown_report_marks_legacy_runs_unavailable(self) -> None:
         summary = RunSummary(

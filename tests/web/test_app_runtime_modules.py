@@ -37,6 +37,8 @@ class WebRuntimeModulesTest(unittest.TestCase):
             planner_model="gpt-5.4-mini",
             summary_model="gpt-5.4-nano",
             synthesis_timeout_seconds=42,
+            synthesis_hedge_delay_seconds=3,
+            synthesis_hedge_max_attempts=5,
             synthesis_max_tokens=2048,
             synthesis_reasoning_effort="high",
         )
@@ -57,6 +59,9 @@ class WebRuntimeModulesTest(unittest.TestCase):
                 "planner_model": "gpt-5.4-mini",
                 "summary_model": "gpt-5.4-nano",
                 "synthesis_timeout_seconds": "42",
+                "synthesis_hedge_delay_seconds": "3.0",
+                "synthesis_hedge_max_attempts": "5",
+                "synthesis_use_responses_api": "false",
                 "synthesis_max_tokens": "2048",
                 "synthesis_reasoning_effort": "high",
             },

@@ -57,8 +57,8 @@ class LLMRegistryTest(unittest.TestCase):
         self.assertEqual(synthesizer_kwargs["timeout"], 9)
         self.assertEqual(synthesizer_kwargs["max_retries"], 1)
         self.assertEqual(synthesizer_kwargs["max_tokens"], 777)
-        self.assertTrue(synthesizer_kwargs["use_responses_api"])
-        self.assertEqual(synthesizer_kwargs["output_version"], "responses/v1")
+        self.assertEqual(synthesizer_kwargs["use_responses_api"], False)
+        self.assertNotIn("output_version", synthesizer_kwargs)
         self.assertEqual(synthesizer_kwargs["verbose"], False)
         self.assertNotIn("reasoning", synthesizer_kwargs)
         compact_kwargs = _FakeChatOpenAI.created_kwargs[1]
@@ -66,15 +66,37 @@ class LLMRegistryTest(unittest.TestCase):
         self.assertEqual(compact_kwargs["timeout"], 4)
         self.assertEqual(compact_kwargs["max_retries"], 0)
         self.assertEqual(compact_kwargs["max_tokens"], 388)
-        self.assertTrue(compact_kwargs["use_responses_api"])
-        self.assertEqual(compact_kwargs["output_version"], "responses/v1")
+        self.assertEqual(compact_kwargs["use_responses_api"], False)
+        self.assertNotIn("output_version", compact_kwargs)
         self.assertNotIn("reasoning", compact_kwargs)
         planner_kwargs = _FakeChatOpenAI.created_kwargs[2]
         self.assertEqual(planner_kwargs["max_tokens"], 654)
+        self.assertEqual(planner_kwargs["max_retries"], 0)
         self.assertNotIn("reasoning", planner_kwargs)
         self.assertIsNotNone(registry.llm_synthesizer_compact)
-        self.assertEqual(_FakeChatOpenAI.structured_args[0][0], PlannerOutput)
+        planner_schema = _FakeChatOpenAI.structured_args[0][0]
+        self.assertEqual(planner_schema["name"], "PlannerOutput")
+        self.assertTrue(planner_schema["strict"])
+        self.assertIn("schema", planner_schema)
         self.assertEqual(_FakeChatOpenAI.structured_kwargs[0]["include_raw"], True)
+
+    @patch("src.infra.llm.ChatOpenAI", new=_FakeChatOpenAI)
+    def test_build_llm_registry_can_opt_into_synthesis_responses_api(self) -> None:
+        _FakeChatOpenAI.created_kwargs = []
+        _FakeChatOpenAI.structured_args = []
+        _FakeChatOpenAI.structured_kwargs = []
+        settings = AppSettings(
+            openai_api_key="test-key",
+            tavily_api_key="test-tavily",
+            synthesis_use_responses_api=True,
+        )
+
+        build_llm_registry(settings)
+
+        self.assertTrue(_FakeChatOpenAI.created_kwargs[0]["use_responses_api"])
+        self.assertEqual(_FakeChatOpenAI.created_kwargs[0]["output_version"], "responses/v1")
+        self.assertTrue(_FakeChatOpenAI.created_kwargs[1]["use_responses_api"])
+        self.assertEqual(_FakeChatOpenAI.created_kwargs[1]["output_version"], "responses/v1")
 
     @patch("src.infra.llm.ChatOpenAI", new=_FakeChatOpenAI)
     def test_build_llm_registry_can_apply_reasoning_effort_for_synthesis_only(self) -> None:
@@ -89,8 +111,10 @@ class LLMRegistryTest(unittest.TestCase):
 
         build_llm_registry(settings)
 
-        self.assertEqual(_FakeChatOpenAI.created_kwargs[0]["reasoning"], {"effort": "xhigh"})
-        self.assertEqual(_FakeChatOpenAI.created_kwargs[1]["reasoning"], {"effort": "xhigh"})
+        self.assertEqual(_FakeChatOpenAI.created_kwargs[0]["reasoning_effort"], "xhigh")
+        self.assertEqual(_FakeChatOpenAI.created_kwargs[1]["reasoning_effort"], "xhigh")
+        self.assertNotIn("reasoning", _FakeChatOpenAI.created_kwargs[0])
+        self.assertNotIn("reasoning", _FakeChatOpenAI.created_kwargs[1])
         self.assertNotIn("reasoning", _FakeChatOpenAI.created_kwargs[2])
         self.assertNotIn("reasoning", _FakeChatOpenAI.created_kwargs[3])
 
@@ -117,8 +141,8 @@ class LLMRegistryTest(unittest.TestCase):
         build_llm_registry(settings)
 
         self.assertEqual(settings.synthesis_reasoning_effort, "none")
-        self.assertEqual(_FakeChatOpenAI.created_kwargs[0]["reasoning"], {"effort": "none"})
-        self.assertEqual(_FakeChatOpenAI.created_kwargs[1]["reasoning"], {"effort": "none"})
+        self.assertEqual(_FakeChatOpenAI.created_kwargs[0]["reasoning_effort"], "none")
+        self.assertEqual(_FakeChatOpenAI.created_kwargs[1]["reasoning_effort"], "none")
 
 
 if __name__ == "__main__":

@@ -21,9 +21,9 @@ ReasoningEffort = Literal["none", "minimal", "low", "medium", "high", "xhigh"]
 class EnvVarSpec:
     env_name: str
     field_name: str | None
-    default: str | int | bool | None
+    default: str | int | float | bool | None
     description: str
-    example: str | int | bool | None = None
+    example: str | int | float | bool | None = None
     section: Literal["app", "benchmark"] = "app"
     config_runtime_key: str | None = None
     sync_notes: tuple[str, ...] = ()
@@ -36,8 +36,15 @@ APP_ENV_SPECS = (
     EnvVarSpec("PLANNER_MODEL", "planner_model", "gpt-5.4-nano", "planner 모델 기본값", example="gpt-5.4-nano"),
     EnvVarSpec("SUMMARY_MODEL", "summary_model", "gpt-5.4-nano", "session summary 모델 기본값", example="gpt-5.4-nano"),
     EnvVarSpec("PLANNER_MAX_TOKENS", "planner_max_tokens", 1920, "planner structured output 최대 토큰", example=1920),
-    EnvVarSpec("DOCS_SEARCH_TIMEOUT_SECONDS", "docs_search_timeout_seconds", 8, "Tavily 검색 timeout", example=8),
+    EnvVarSpec("TAIL_HEDGE_MAX_CONCURRENCY", "tail_hedge_max_concurrency", 8, "tail latency hedge max concurrency", example=8),
+    EnvVarSpec("TAIL_HEDGE_MAX_ATTEMPTS", "tail_hedge_max_attempts", 3, "tail latency hedge max attempts per call", example=3),
+    EnvVarSpec("PLANNER_HEDGE_DELAY_SECONDS", "planner_hedge_delay_seconds", 0.5, "planner tail latency hedge delay", example=0.5),
+    EnvVarSpec("DOCS_SEARCH_TIMEOUT_SECONDS", "docs_search_timeout_seconds", 5, "Tavily 검색 timeout", example=5),
+    EnvVarSpec("DOCS_SEARCH_HEDGE_DELAY_SECONDS", "docs_search_hedge_delay_seconds", 0.5, "Tavily 검색 tail latency hedge delay", example=0.5),
     EnvVarSpec("SYNTHESIS_TIMEOUT_SECONDS", "synthesis_timeout_seconds", 20, "synthesis timeout", example=20),
+    EnvVarSpec("SYNTHESIS_HEDGE_DELAY_SECONDS", "synthesis_hedge_delay_seconds", 0.2, "synthesis tail latency hedge delay", example=0.2),
+    EnvVarSpec("SYNTHESIS_HEDGE_MAX_ATTEMPTS", "synthesis_hedge_max_attempts", 4, "synthesis tail latency hedge max attempts", example=4),
+    EnvVarSpec("SYNTHESIS_USE_RESPONSES_API", "synthesis_use_responses_api", False, "synthesis Responses API 사용 여부", example=False),
     EnvVarSpec("SYNTHESIS_MAX_RETRIES", "synthesis_max_retries", 0, "synthesis 자체 재시도 횟수", example=0),
     EnvVarSpec("SYNTHESIS_MAX_TOKENS", "synthesis_max_tokens", 1920, "synthesis max tokens", example=1920),
     EnvVarSpec(
@@ -167,7 +174,7 @@ class BenchmarkCLIEnvSettings(BaseModel):
     live_slack_email: str | None = None
 
 
-def _app_default(env_name: str) -> str | int | bool | None:
+def _app_default(env_name: str) -> str | int | float | bool | None:
     return APP_ENV_SPEC_BY_NAME[env_name].default
 
 
@@ -194,8 +201,8 @@ def _resolve_benchmark_env_value(
     *,
     dotenv_payload: dict[str, str | None],
     os_environ: dict[str, str],
-    defaults: dict[str, str | int | bool | None],
-) -> str | int | bool | None:
+    defaults: dict[str, str | int | float | bool | None],
+) -> str | int | float | bool | None:
     if env_name in dotenv_payload:
         return dotenv_payload.get(env_name)
     if env_name in os_environ:
@@ -203,13 +210,13 @@ def _resolve_benchmark_env_value(
     return defaults.get(env_name)
 
 
-def load_benchmark_env_defaults(config_path: Path = DEFAULT_BENCHMARK_CONFIG_PATH) -> dict[str, str | int | bool | None]:
-    runtime: dict[str, str | int | bool | None] = {}
+def load_benchmark_env_defaults(config_path: Path = DEFAULT_BENCHMARK_CONFIG_PATH) -> dict[str, str | int | float | bool | None]:
+    runtime: dict[str, str | int | float | bool | None] = {}
     if config_path.exists():
         payload = tomllib.loads(config_path.read_text(encoding="utf-8"))
         runtime = payload.get("runtime", {})
 
-    defaults: dict[str, str | int | bool | None] = {}
+    defaults: dict[str, str | int | float | bool | None] = {}
     for spec in BENCHMARK_ENV_SPECS:
         if spec.config_runtime_key:
             defaults[spec.env_name] = runtime.get(spec.config_runtime_key, spec.default)
@@ -336,15 +343,49 @@ class AppSettings(BaseSettings):
     planner_model: str = Field(default=_app_default("PLANNER_MODEL"), alias="PLANNER_MODEL")
     summary_model: str = Field(default=_app_default("SUMMARY_MODEL"), alias="SUMMARY_MODEL")
     planner_max_tokens: int = Field(default=_app_default("PLANNER_MAX_TOKENS"), alias="PLANNER_MAX_TOKENS", ge=1)
+    tail_hedge_max_concurrency: int = Field(
+        default=_app_default("TAIL_HEDGE_MAX_CONCURRENCY"),
+        alias="TAIL_HEDGE_MAX_CONCURRENCY",
+        ge=0,
+    )
+    tail_hedge_max_attempts: int = Field(
+        default=_app_default("TAIL_HEDGE_MAX_ATTEMPTS"),
+        alias="TAIL_HEDGE_MAX_ATTEMPTS",
+        ge=1,
+    )
+    planner_hedge_delay_seconds: float = Field(
+        default=_app_default("PLANNER_HEDGE_DELAY_SECONDS"),
+        alias="PLANNER_HEDGE_DELAY_SECONDS",
+        ge=0,
+    )
     docs_search_timeout_seconds: int = Field(
         default=_app_default("DOCS_SEARCH_TIMEOUT_SECONDS"),
         alias="DOCS_SEARCH_TIMEOUT_SECONDS",
         ge=1,
     )
+    docs_search_hedge_delay_seconds: float = Field(
+        default=_app_default("DOCS_SEARCH_HEDGE_DELAY_SECONDS"),
+        alias="DOCS_SEARCH_HEDGE_DELAY_SECONDS",
+        ge=0,
+    )
     synthesis_timeout_seconds: int = Field(
         default=_app_default("SYNTHESIS_TIMEOUT_SECONDS"),
         alias="SYNTHESIS_TIMEOUT_SECONDS",
         ge=1,
+    )
+    synthesis_hedge_delay_seconds: float = Field(
+        default=_app_default("SYNTHESIS_HEDGE_DELAY_SECONDS"),
+        alias="SYNTHESIS_HEDGE_DELAY_SECONDS",
+        ge=0,
+    )
+    synthesis_hedge_max_attempts: int = Field(
+        default=_app_default("SYNTHESIS_HEDGE_MAX_ATTEMPTS"),
+        alias="SYNTHESIS_HEDGE_MAX_ATTEMPTS",
+        ge=1,
+    )
+    synthesis_use_responses_api: bool = Field(
+        default=_app_default("SYNTHESIS_USE_RESPONSES_API"),
+        alias="SYNTHESIS_USE_RESPONSES_API",
     )
     synthesis_max_retries: int = Field(
         default=_app_default("SYNTHESIS_MAX_RETRIES"),
@@ -365,7 +406,6 @@ class AppSettings(BaseSettings):
         default=_app_default("SYNTHESIS_REASONING_EFFORT"),
         alias="SYNTHESIS_REASONING_EFFORT",
     )
-
     verbose: bool = Field(default=_app_default("VERBOSE"), alias="VERBOSE")
     fastapi_url: str = Field(default=_app_default("FASTAPI_URL"), alias="FASTAPI_URL")
     session_ttl_seconds: int = Field(default=_app_default("SESSION_TTL_SECONDS"), alias="SESSION_TTL_SECONDS", ge=1)
@@ -396,6 +436,9 @@ class AppSettings(BaseSettings):
             "planner_model": self.planner_model,
             "summary_model": self.summary_model,
             "synthesis_timeout_seconds": self.synthesis_timeout_seconds,
+            "synthesis_hedge_delay_seconds": self.synthesis_hedge_delay_seconds,
+            "synthesis_hedge_max_attempts": self.synthesis_hedge_max_attempts,
+            "synthesis_use_responses_api": str(self.synthesis_use_responses_api).lower(),
             "synthesis_max_tokens": self.synthesis_max_tokens,
             "synthesis_reasoning_effort": self.synthesis_reasoning_effort or "model_default",
         }

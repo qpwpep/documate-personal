@@ -124,6 +124,16 @@ class _FakeGraphWithLlmCalls:
                         "response_metadata": {"model_name": "gpt-5-mini"},
                         "usage_metadata": {"input_tokens": 20, "output_tokens": 5, "total_tokens": 25},
                     },
+                    {
+                        "stage": "synthesis",
+                        "attempt": 1,
+                        "path": "structured_hedge",
+                        "response_metadata": {
+                            "model_name": "gpt-5-mini",
+                            "hedge_duplicate_estimate": True,
+                        },
+                        "usage_metadata": {"input_tokens": 20, "output_tokens": 5, "total_tokens": 25},
+                    },
                 ]
             ),
         }
@@ -728,12 +738,12 @@ class EvidencePipelineTest(unittest.TestCase):
 
         result = manager.run_agent_flow("question")
 
-        self.assertEqual(result["debug"]["token_usage"]["prompt_tokens"], 32)
-        self.assertEqual(result["debug"]["token_usage"]["completion_tokens"], 8)
-        self.assertEqual(result["debug"]["token_usage"]["total_tokens"], 40)
+        self.assertEqual(result["debug"]["token_usage"]["prompt_tokens"], 52)
+        self.assertEqual(result["debug"]["token_usage"]["completion_tokens"], 13)
+        self.assertEqual(result["debug"]["token_usage"]["total_tokens"], 65)
         self.assertEqual(result["debug"]["model_name"], "gpt-5-mini")
         self.assertEqual(result["debug"]["models_used"], ["gpt-5-nano", "gpt-5-mini"])
-        self.assertEqual(len(result["debug"]["llm_calls"]), 2)
+        self.assertEqual(len(result["debug"]["llm_calls"]), 3)
 
     def test_agent_manager_falls_back_to_current_turn_ai_message_metadata(self) -> None:
         manager = AgentFlowManager.__new__(AgentFlowManager)

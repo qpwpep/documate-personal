@@ -1,3 +1,5 @@
+import threading
+import time
 import unittest
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
@@ -236,6 +238,69 @@ class PlannerNodeTest(unittest.TestCase):
         self.assertEqual(updates["debug"].llm_calls[0].stage, "planner")
         self.assertEqual(updates["debug"].llm_calls[0].path, "structured")
 
+    def test_planner_uses_hedged_structured_call_when_primary_is_slow(self) -> None:
+        class _SlowFirstPlannerLLM:
+            def __init__(self) -> None:
+                self.call_count = 0
+                self.last_messages = None
+                self._lock = threading.Lock()
+
+            def invoke(self, messages):
+                self.last_messages = messages
+                with self._lock:
+                    self.call_count += 1
+                    call_index = self.call_count
+                if call_index == 1:
+                    time.sleep(0.05)
+                    query = "slow primary"
+                else:
+                    query = "fast hedge"
+                return {
+                    "raw": AIMessage(
+                        content="",
+                        response_metadata={
+                            "model_name": "gpt-5-nano",
+                            "token_usage": {
+                                "prompt_tokens": 7,
+                                "completion_tokens": 2,
+                                "total_tokens": 9,
+                            },
+                        },
+                        usage_metadata={
+                            "input_tokens": 7,
+                            "output_tokens": 2,
+                            "total_tokens": 9,
+                        },
+                    ),
+                    "parsed": PlannerOutput(
+                        use_retrieval=True,
+                        tasks=[RetrievalTask(route="docs", query=query, k=3)],
+                    ),
+                    "parsing_error": None,
+                }
+
+        capture_planner = _SlowFirstPlannerLLM()
+        planner_node = make_planner_node(
+            capture_planner,
+            verbose=False,
+            planner_hedge_delay_seconds=0.005,
+        )
+
+        updates = planner_node(
+            build_legacy_state(
+                {
+                    "messages": [HumanMessage(content="Explain numpy parameters from official docs.")],
+                    "user_input": "Explain numpy parameters from official docs.",
+                }
+            )
+        )
+
+        self.assertEqual(capture_planner.call_count, 2)
+        self.assertEqual(updates["planner"].status, "llm")
+        self.assertEqual(updates["planner"].output.tasks[0].query, "fast hedge")
+        self.assertEqual([item.path for item in updates["debug"].llm_calls], ["structured", "structured_hedge"])
+        self.assertEqual(updates["debug"].llm_calls[1].response_metadata["hedge_winner"], "hedge")
+
     def test_planner_prompt_preserves_library_name_for_docs_queries(self) -> None:
         capture_planner = _CapturePlannerLLM(
             PlannerOutput(use_retrieval=True, tasks=[RetrievalTask(route="docs", query="Bare", k=3)])
@@ -312,6 +377,39 @@ class PlannerNodeTest(unittest.TestCase):
         self.assertEqual(capture_planner.call_count, 1)
         self.assertEqual(updates["planner"].status, "llm")
         self.assertEqual(updates["debug"].planner_errors, [])
+        self.assertEqual([task.route for task in updates["planner"].output.tasks], ["docs"])
+        self.assertIn("numpy", updates["planner"].output.tasks[0].query)
+        self.assertIn("pandas", updates["planner"].output.tasks[0].query)
+        self.assertEqual(
+            updates["planner"].diagnostics.planner_warnings,
+            [PLANNER_WARNING_DUPLICATE_ROUTE_MERGED],
+        )
+
+    def test_planner_merges_duplicate_routes_from_parsed_payload_without_langchain_validation(self) -> None:
+        raw_payload = {
+            "use_retrieval": True,
+            "tasks": [
+                {"route": "docs", "query": "numpy", "k": 3},
+                {"route": "docs", "query": "pandas", "k": 5},
+            ],
+        }
+        capture_planner = _CapturePlannerLLM(
+            raw_payload,
+            include_raw=True,
+        )
+        planner_node = make_planner_node(capture_planner, verbose=False)
+
+        updates = planner_node(
+            build_legacy_state(
+                {
+                    "messages": [HumanMessage(content="Compare numpy and pandas docs.")],
+                    "user_input": "Compare numpy and pandas docs.",
+                }
+            )
+        )
+
+        self.assertEqual(capture_planner.call_count, 1)
+        self.assertEqual(updates["planner"].status, "llm")
         self.assertEqual([task.route for task in updates["planner"].output.tasks], ["docs"])
         self.assertIn("numpy", updates["planner"].output.tasks[0].query)
         self.assertIn("pandas", updates["planner"].output.tasks[0].query)

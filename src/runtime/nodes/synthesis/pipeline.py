@@ -3,9 +3,10 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from src.core.answer_schema import SynthesisOutput, build_empty_response_payload
+from src.core.answer_schema import SynthesisOutput, build_empty_response_payload, normalize_answer_sections
 from src.core.contracts.debug import build_llm_call_metadata
 from src.core.latency import elapsed_ms, make_stage_latency_event, make_synthesis_attempt_latency_event
+from src.infra.tail_latency import invoke_with_optional_hedge
 from src.runtime.nodes.synthesis.fallback_renderers import RenderedSynthesisPayload, build_local_fallback_payload, enforce_synthesis_output_budget, render_synthesis_payload
 from src.runtime.nodes.synthesis.models import PreparedSynthesisInputs, SynthesisPipelineResult
 from src.runtime.nodes.synthesis.schema_adapter import coerce_structured_synthesis_result, coerce_synthesis_output
@@ -35,6 +36,19 @@ def _build_rendered_payload_from_payload(payload: Any) -> RenderedSynthesisPaylo
     )
 
 
+def _is_structured_synthesis_success(result: Any) -> bool:
+    raw_response_obj, _raw_message, structured_error = coerce_structured_synthesis_result(result)
+    if structured_error is not None:
+        return False
+    output = coerce_synthesis_output(raw_response_obj)
+    has_renderable_section = bool(normalize_answer_sections(output.sections))
+    return bool(
+        str(output.answer or "").strip()
+        or output.claims
+        or has_renderable_section
+    )
+
+
 def _ensure_non_empty_rendered_payload(
     *,
     rendered: RenderedSynthesisPayload,
@@ -60,22 +74,58 @@ def _invoke_structured_attempt(
     prepared: PreparedSynthesisInputs,
     llm_calls: list[Any],
     path: str,
+    hedge_delay_seconds: float = 0.0,
+    hedge_max_attempts: int = 2,
+    hedge_overall_timeout_seconds: float | None = None,
 ) -> tuple[RenderedSynthesisPayload, int]:
     attempt_started = time.perf_counter()
-    structured_result = structured_synthesizer.invoke(prepared.model_messages)
+    hedge_result = invoke_with_optional_hedge(
+        lambda: structured_synthesizer.invoke(prepared.model_messages),
+        hedge_delay_seconds=hedge_delay_seconds,
+        max_attempts=hedge_max_attempts,
+        is_success=_is_structured_synthesis_success,
+        overall_timeout_seconds=hedge_overall_timeout_seconds,
+    )
+    structured_result = hedge_result.value
     attempt_ms = elapsed_ms(attempt_started, time.perf_counter())
     raw_response_obj, raw_message, structured_error = coerce_structured_synthesis_result(
         structured_result
     )
     if raw_message is not None:
-        llm_calls.append(
-            build_llm_call_metadata(
-                stage="synthesis",
-                attempt=prepared.attempt,
-                path=path,  # type: ignore[arg-type]
-                message=raw_message,
-            )
+        call_metadata = build_llm_call_metadata(
+            stage="synthesis",
+            attempt=prepared.attempt,
+            path=path,  # type: ignore[arg-type]
+            message=raw_message,
         )
+        if hedge_result.hedge_dropped:
+            call_metadata = call_metadata.model_copy(
+                update={
+                        "response_metadata": {
+                            **call_metadata.response_metadata,
+                            "hedge_dropped": True,
+                            "hedge_attempts_started": hedge_result.hedges_started,
+                            "hedge_attempts_dropped": hedge_result.hedges_dropped,
+                        }
+                    }
+                )
+        llm_calls.append(call_metadata)
+        if hedge_result.hedge_started:
+            llm_calls.append(
+                call_metadata.model_copy(
+                    update={
+                        "path": "structured_hedge",
+                        "response_metadata": {
+                            **call_metadata.response_metadata,
+                            "hedge_winner": hedge_result.winner,
+                            "hedge_dropped": hedge_result.hedge_dropped,
+                            "hedge_attempts_started": hedge_result.hedges_started,
+                            "hedge_attempts_dropped": hedge_result.hedges_dropped,
+                            "hedge_duplicate_estimate": True,
+                        },
+                    }
+                )
+            )
     if structured_error is not None:
         raise structured_error
     return (
@@ -94,6 +144,9 @@ def run_synthesis_pipeline(
     prepared: PreparedSynthesisInputs,
     compact_prepared: PreparedSynthesisInputs | None,
     stage_started: float,
+    hedge_delay_seconds: float = 0.0,
+    hedge_max_attempts: int = 2,
+    hedge_overall_timeout_seconds: float | None = None,
 ) -> SynthesisPipelineResult:
     synthesis_errors: list[str] = []
     llm_calls = []
@@ -108,6 +161,9 @@ def run_synthesis_pipeline(
             prepared=prepared,
             llm_calls=llm_calls,
             path="structured",
+            hedge_delay_seconds=hedge_delay_seconds,
+            hedge_max_attempts=hedge_max_attempts,
+            hedge_overall_timeout_seconds=hedge_overall_timeout_seconds,
         )
         rendered, used_empty_fallback = _ensure_non_empty_rendered_payload(
             rendered=rendered,

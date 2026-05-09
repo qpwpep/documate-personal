@@ -17,6 +17,7 @@ from src.runtime.nodes.session import add_user_message, make_summarize_node
 from src.runtime.nodes.synthesis import make_synthesize_node
 from src.runtime.nodes.validation import make_post_synthesis_validation_node, make_pre_synthesis_validation_node
 from src.infra.settings import AppSettings, get_settings
+from src.infra.tail_latency import configure_tail_hedge
 from src.infra.tools import build_tool_registry
 
 
@@ -233,6 +234,7 @@ def _instrument_stage_node(stage: str, node: Any, *, record_latency_trace: bool 
 
 def build_agent_graph(settings: AppSettings | None = None):
     app_settings = settings or get_settings()
+    configure_tail_hedge(max_concurrency=app_settings.tail_hedge_max_concurrency)
     has_default_slack_destination = bool(
         app_settings.slack_default_user_id or app_settings.slack_default_dm_email
     )
@@ -250,6 +252,9 @@ def build_agent_graph(settings: AppSettings | None = None):
         llm_planner=llm_registry.llm_planner,
         verbose=llm_registry.verbose,
         max_turns=6,
+        planner_hedge_delay_seconds=app_settings.planner_hedge_delay_seconds,
+        planner_hedge_max_attempts=app_settings.tail_hedge_max_attempts,
+        planner_timeout_seconds=30,
     )
     planner_node = _instrument_stage_node("planner", planner_node)
     retrieve_dispatch_node = make_retrieve_dispatch_node(
@@ -278,6 +283,9 @@ def build_agent_graph(settings: AppSettings | None = None):
         synthesis_max_tokens=app_settings.synthesis_max_tokens,
         prompt_snippet_char_limit=app_settings.synthesis_prompt_snippet_chars,
         has_default_slack_destination=has_default_slack_destination,
+        synthesis_hedge_delay_seconds=app_settings.synthesis_hedge_delay_seconds,
+        synthesis_hedge_max_attempts=app_settings.synthesis_hedge_max_attempts,
+        synthesis_timeout_seconds=app_settings.synthesis_timeout_seconds,
     )
     synthesize_node = _instrument_stage_node(
         "synthesis",

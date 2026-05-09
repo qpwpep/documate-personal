@@ -28,6 +28,7 @@ class SynthesisPayloadBuilderTest(unittest.TestCase):
         self.assertEqual(schema["name"], "SynthesisOutput")
         self.assertTrue(schema["strict"])
         self.assertIn("schema", schema)
+        self.assertIn("properties", schema["schema"])
         self.assertEqual(llm.kwargs["method"], "json_schema")
         self.assertTrue(llm.kwargs["include_raw"])
         self.assertTrue(llm.kwargs["strict"])

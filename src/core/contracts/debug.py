@@ -44,6 +44,7 @@ LLMCallStage = Literal["summarize", "planner", "synthesis"]
 LLMCallPath = Literal[
     "direct",
     "structured",
+    "structured_hedge",
     "plain_fallback",
     "structured_compact_fallback",
     "plain_summary_attach_fallback",
@@ -152,6 +153,11 @@ class RetrievalDiagnostic(BaseModel):
     url_validation_ms: int = 0
     post_filter_ms: int = 0
     include_raw_content_requested: bool = False
+    hedge_started: bool = False
+    hedge_dropped: bool = False
+    hedge_winner: str | None = None
+    hedge_attempts_started: int = 0
+    hedge_attempts_dropped: int = 0
     warnings: list[str] = Field(default_factory=list)
 
 
