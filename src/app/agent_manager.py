@@ -207,6 +207,9 @@ class AgentFlowManager:
                 progress_emitter=progress_emitter,
             )
             response, graph_total_ms = self._runner.invoke_graph(state)
+            finalized_build_ms = self._runner.finalize_pending_upload_retriever(wait=False)
+            if finalized_build_ms is not None:
+                upload_retriever_build_ms = finalized_build_ms
             updated_messages = response["messages"]
             self.messages = updated_messages
             debug_info = self._debug_collector.build(
@@ -222,6 +225,7 @@ class AgentFlowManager:
             )
 
         except Exception as exc:
+            self._runner.cancel_pending_upload_retriever()
             self._ensure_session().cleanup_upload_retriever()
             self.upload_file_path = None
             graph_total_ms = None
