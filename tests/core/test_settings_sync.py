@@ -2,7 +2,7 @@ import unittest
 from pathlib import Path
 
 from src.infra.settings import APP_ENV_SPECS, APP_ENV_SPEC_BY_NAME, AppSettings, DEFAULT_BENCHMARK_CONFIG_PATH
-from src.infra.settings_sync import build_env_example_text, sync_readme_settings_sections
+from src.infra.settings_sync import build_env_example_text, sync_runtime_reference_settings_sections
 
 
 class SettingsSyncTest(unittest.TestCase):
@@ -28,14 +28,14 @@ class SettingsSyncTest(unittest.TestCase):
         self.assertIn("BENCHMARK_SLACK_USER_ID=", env_example)
         self.assertIn("BENCHMARK_SLACK_EMAIL=", env_example)
 
-    def test_readme_settings_sections_match_generated_content(self) -> None:
-        actual = Path("README.md").read_text(encoding="utf-8")
-        expected = sync_readme_settings_sections(actual, DEFAULT_BENCHMARK_CONFIG_PATH)
+    def test_runtime_reference_settings_sections_match_generated_content(self) -> None:
+        actual = Path("docs/runtime_reference.md").read_text(encoding="utf-8")
+        expected = sync_runtime_reference_settings_sections(actual, DEFAULT_BENCHMARK_CONFIG_PATH)
         self.assertEqual(actual, expected)
 
-    def test_readme_settings_sections_document_reasoning_effort_contract(self) -> None:
-        actual = Path("README.md").read_text(encoding="utf-8")
-        synced = sync_readme_settings_sections(actual, DEFAULT_BENCHMARK_CONFIG_PATH)
+    def test_runtime_reference_settings_sections_document_reasoning_effort_contract(self) -> None:
+        actual = Path("docs/runtime_reference.md").read_text(encoding="utf-8")
+        synced = sync_runtime_reference_settings_sections(actual, DEFAULT_BENCHMARK_CONFIG_PATH)
 
         self.assertIn("빈 값이면 모델 기본값", synced)
         self.assertIn("none은 명시 override", synced)

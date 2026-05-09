@@ -62,6 +62,10 @@ def get_docs_dir() -> Path:
     return get_project_root_path() / "docs"
 
 
+def get_runtime_reference_path() -> Path:
+    return get_docs_dir() / "runtime_reference.md"
+
+
 def get_benchmark_history_svg_path() -> Path:
     return get_docs_dir() / "assets" / "benchmark_history.svg"
 

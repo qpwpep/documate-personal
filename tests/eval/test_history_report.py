@@ -222,7 +222,7 @@ class HistoryReportTest(unittest.TestCase):
             svg_path = root / "docs" / "assets" / "benchmark_history.svg"
             readme_path = root / "README.md"
             readme_path.write_text(
-                "# Demo\n\n## 9. 최신 벤치마크 결과\n\nold\n\n## 11. 테스트 및 검증\n\nkeep\n",
+                "# Demo\n\n## 검증 결과\n\nold\n\n## 문서\n\nkeep\n",
                 encoding="utf-8",
             )
 
@@ -285,9 +285,8 @@ class HistoryReportTest(unittest.TestCase):
             self.assertEqual(len(comparable), 2)
             self.assertIn("`20260307_101108`", readme_text)
             self.assertIn("`output/benchmarks/latest_release_run.txt`", readme_text)
-            self.assertIn("- judge_model: `gpt-5.4-mini`", readme_text)
-            self.assertIn("저장소에 남아 있는 2개 generated-suite 런 기준", readme_text)
-            self.assertIn("![DocuMate benchmark history](docs/assets/benchmark_history.svg)", readme_text)
+            self.assertIn("비교 가능한 2개 generated-suite 런 기준", readme_text)
+            self.assertIn("[docs/assets/benchmark_history.svg](docs/assets/benchmark_history.svg)", readme_text)
             self.assertIn("20260307_101108", svg_text)
             self.assertIn("20260303_134325", svg_text)
             self.assertNotIn("20260307_120000", readme_text)
