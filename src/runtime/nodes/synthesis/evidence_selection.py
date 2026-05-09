@@ -204,10 +204,11 @@ def select_primary_evidence_items(
         )
         if len(requested_routes) == 1 and requested_routes[0] in {"upload", "local"}:
             route = requested_routes[0]
+            selection_query = str(planner_output.tasks[0].query or "").strip() or user_input
             route_matches = [item for item in evidence_items if route_for_evidence(item) == route]
             if route_matches:
                 return _select_top_evidence_items(
-                    user_input=user_input,
+                    user_input=selection_query,
                     evidence_items=route_matches,
                     limit=2,
                 )
@@ -216,6 +217,7 @@ def select_primary_evidence_items(
         seen_routes: set[str] = set()
         for task in planner_output.tasks:
             route = str(task.route or "")
+            selection_query = str(task.query or "").strip() or user_input
             route_matches = [item for item in evidence_items if route_for_evidence(item) == route]
             if route in seen_routes and not is_hybrid_routes:
                 continue
@@ -224,13 +226,13 @@ def select_primary_evidence_items(
                 strong_route_matches = [
                     item
                     for item in route_matches
-                    if _has_strong_query_match(user_input=user_input, candidate=item)
+                    if _has_strong_query_match(user_input=selection_query, candidate=item)
                 ]
                 if not strong_route_matches:
                     seen_routes.add(route)
                     continue
                 route_top_matches = _select_top_evidence_items(
-                    user_input=user_input,
+                    user_input=selection_query,
                     evidence_items=strong_route_matches,
                     limit=1,
                 )
@@ -239,7 +241,7 @@ def select_primary_evidence_items(
                 continue
 
             match = _select_best_evidence_for_query(
-                user_input=user_input,
+                user_input=selection_query,
                 candidates=route_matches,
             )
             if match is not None:
@@ -283,16 +285,20 @@ def select_grounded_fallback_evidence_items(
     if is_hybrid_routes:
         selected: list[EvidenceItem] = []
         for route in requested_routes:
+            matching_tasks = [task for task in planner_output.tasks or [] if str(task.route or "") == route]
+            selection_query = str(matching_tasks[0].query or "").strip() if matching_tasks else ""
+            if not selection_query:
+                selection_query = user_input
             route_matches = [item for item in evidence_items if route_for_evidence(item) == route]
             strong_route_matches = [
                 item
                 for item in route_matches
-                if _has_strong_query_match(user_input=user_input, candidate=item)
+                if _has_strong_query_match(user_input=selection_query, candidate=item)
             ]
             if not strong_route_matches:
                 continue
             match = _select_best_evidence_for_query(
-                user_input=user_input,
+                user_input=selection_query,
                 candidates=strong_route_matches,
             )
             if match is not None:

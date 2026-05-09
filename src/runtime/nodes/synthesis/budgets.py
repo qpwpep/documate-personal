@@ -53,8 +53,6 @@ _HYBRID_PROFILE = SynthesisBudgetProfile(
     snippet_chars=260,
     evidence_chars=1100,
     max_evidence_items=2,
-    max_claims=4,
-    max_section_sentences=3,
 )
 _GENERAL_PROFILE = SynthesisBudgetProfile(
     category="general",
