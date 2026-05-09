@@ -327,20 +327,40 @@ UI와 문서 검색 규칙은 아래 파일을 기준으로 관리합니다.
 
 `debug`에는 아래 정보가 포함될 수 있습니다.
 
+- `schema_version`, `observability_status`, `missing_required_debug_fields`
 - `tool_calls`, `tool_call_count`
 - `latency_ms_server`, `latency_breakdown`
-- `token_usage`, `model_name`, `models_used`, `llm_calls`
+- `token_usage`, `model_name`, `models_used`, `model_usage_status`, `llm_calls`
+- `errors`, `error_codes`, `validation_events`, `edge_decisions`
 - `observed_evidence`
 - `retry_context`
 - `retrieval_diagnostics`
 - `planner_diagnostics`
+- `action_results`
 
 실제 응답 스키마 기준 파일:
 
 - `src/app/web/schemas.py`
 - `src/core/answer_schema/`
 
-### 6.2 `GET /download/{filename}`
+### 6.2 `POST /agent/stream`
+
+`POST /agent`와 같은 요청 스키마를 사용하지만, 응답은 `text/event-stream` 형식의 SSE로 반환합니다. Streamlit 클라이언트는 우선 이 엔드포인트를 호출하고, 스트리밍이 실패하면 일반 `/agent` 호출로 fallback합니다.
+
+이벤트 이름:
+
+- `request_started`
+- `stage_started`
+- `stage_completed`
+- `heartbeat`
+- `progress_snapshot`
+- `final_response`
+- `error`
+- `done`
+
+`final_response` 이벤트의 `data`는 일반 `POST /agent` 응답과 같은 `response`, `trace`, `file_path`, `debug` 구조를 담습니다.
+
+### 6.3 `GET /download/{filename}`
 
 - `save_text`가 만든 텍스트 파일을 다운로드합니다.
 - 경로 순회와 절대 경로는 차단됩니다.
