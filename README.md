@@ -6,7 +6,7 @@ LangGraph 기반 학습 보조 에이전트입니다. 공식 문서 검색, 로�
 
 ## 로컬 데모 빠른 실행
 
-이 프로젝트는 상시 클라우드 배포 대신, FastAPI 백엔드와 Streamlit 데모 UI를 로컬에서 재현 가능하게 실행하는 방식을 기준으로 문서화했습니다. 처음 확인하는 사람은 아래 순서만으로 데모 화면까지 접근할 수 있습니다.
+이 프로젝트는 FastAPI 백엔드와 Streamlit 데모 UI를 로컬에서 재현 가능하게 실행하는 방식을 기준으로 문서화했습니다.
 
 ```bash
 uv sync
@@ -47,7 +47,7 @@ uv run python -m src.app.service_manager stopweb
 
 ![DocuMate final answer screenshot](docs/assets/demo-final.png)
 
-## 포트폴리오 핵심
+## 주요 개선 포인트
 
 DocuMate에서 중점적으로 개선한 범위는 단순한 챗봇 구현보다, 실행 경로와 검증 기준을 다시 세운 것입니다. 원본의 tool-call 중심 흐름을 `src/runtime`의 단계형 LangGraph 런타임으로 바꾸고, `src/eval`과 `data/benchmarks` 기반 120-case benchmark로 품질 변화를 비교 가능하게 만들었습니다.
 
