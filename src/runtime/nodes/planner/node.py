@@ -13,6 +13,7 @@ from src.core.contracts.boundary.graph import get_retry_state
 from src.core.contracts.boundary.retrieval import get_retrieval_state
 from src.core.contracts.boundary.runtime import get_runtime_state
 from src.core.contracts.debug import LLMCallMetadata, RetryState, build_llm_call_metadata, empty_planner_diagnostic
+from src.infra.tail_latency import invoke_with_optional_hedge
 from src.infra.logging_utils import log_event
 from src.core.planner_schema import PlannerOutput, normalize_planner_output_input
 from src.runtime.nodes.actions import is_action_only_request
@@ -180,28 +181,70 @@ def _coerce_structured_planner_result(
     return None, raw_message, error, []
 
 
+def _is_structured_planner_success(result: Any) -> bool:
+    planner_output, _raw_message, parse_error, _warnings = _coerce_structured_planner_result(result)
+    return planner_output is not None and parse_error is None
+
+
 def _resolve_planner_strategy(
     *,
     llm_planner: Any,
     state: GraphState,
     context: PlannerRunContext,
     max_turns: int,
+    hedge_delay_seconds: float = 0.0,
+    hedge_max_attempts: int = 2,
+    hedge_overall_timeout_seconds: float | None = None,
 ) -> tuple[PlannerDecision, list[str], list[LLMCallMetadata]]:
     planner_errors: list[str] = []
     llm_calls: list[LLMCallMetadata] = []
 
     try:
-        planner_raw = llm_planner.invoke(build_planner_messages(state, max_turns=max_turns))
+        planner_messages = build_planner_messages(state, max_turns=max_turns)
+        hedge_result = invoke_with_optional_hedge(
+            lambda: llm_planner.invoke(planner_messages),
+            hedge_delay_seconds=hedge_delay_seconds,
+            max_attempts=hedge_max_attempts,
+            is_success=_is_structured_planner_success,
+            overall_timeout_seconds=hedge_overall_timeout_seconds,
+        )
+        planner_raw = hedge_result.value
         planner_output, raw_message, parse_error, planner_warnings = _coerce_structured_planner_result(planner_raw)
         if raw_message is not None:
-            llm_calls.append(
-                build_llm_call_metadata(
-                    stage="planner",
-                    attempt=context.planner_attempt,
-                    path="structured",
-                    message=raw_message,
-                )
+            call_metadata = build_llm_call_metadata(
+                stage="planner",
+                attempt=context.planner_attempt,
+                path="structured",
+                message=raw_message,
             )
+            if hedge_result.hedge_dropped:
+                call_metadata = call_metadata.model_copy(
+                    update={
+                        "response_metadata": {
+                            **call_metadata.response_metadata,
+                            "hedge_dropped": True,
+                            "hedge_attempts_started": hedge_result.hedges_started,
+                            "hedge_attempts_dropped": hedge_result.hedges_dropped,
+                        }
+                    }
+                )
+            llm_calls.append(call_metadata)
+            if hedge_result.hedge_started:
+                llm_calls.append(
+                    call_metadata.model_copy(
+                        update={
+                            "path": "structured_hedge",
+                            "response_metadata": {
+                                **call_metadata.response_metadata,
+                                "hedge_winner": hedge_result.winner,
+                                "hedge_dropped": hedge_result.hedge_dropped,
+                                "hedge_attempts_started": hedge_result.hedges_started,
+                                "hedge_attempts_dropped": hedge_result.hedges_dropped,
+                                "hedge_duplicate_estimate": True,
+                            },
+                        }
+                    )
+                )
         if planner_output is not None:
             return (
                 PlannerDecision(
@@ -323,7 +366,14 @@ def _reset_retry_window(
     return retry_context
 
 
-def make_planner_node(llm_planner: Any, verbose: bool, max_turns: int = 6):
+def make_planner_node(
+    llm_planner: Any,
+    verbose: bool,
+    max_turns: int = 6,
+    planner_hedge_delay_seconds: float = 0.0,
+    planner_hedge_max_attempts: int = 2,
+    planner_timeout_seconds: float | None = 30.0,
+):
     def planner(state: GraphState) -> GraphState:
         runtime = get_runtime_state(state)
         retrieval = get_retrieval_state(state)
@@ -340,6 +390,9 @@ def make_planner_node(llm_planner: Any, verbose: bool, max_turns: int = 6):
             state=state,
             context=context,
             max_turns=max_turns,
+            hedge_delay_seconds=planner_hedge_delay_seconds,
+            hedge_max_attempts=planner_hedge_max_attempts,
+            hedge_overall_timeout_seconds=planner_timeout_seconds,
         )
         decision = _apply_planner_guardrail(
             decision=decision,

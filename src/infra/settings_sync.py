@@ -11,7 +11,7 @@ README_BENCHMARK_SETTINGS_HEADING = "### 4.2 벤치마크 설정"
 README_SETTINGS_END_HEADING = "## 5. 검색 소스와 파일 제약"
 
 
-def _serialize_env_value(value: str | int | bool | None) -> str:
+def _serialize_env_value(value: str | int | float | bool | None) -> str:
     if value is None:
         return ""
     if isinstance(value, bool):
@@ -21,7 +21,7 @@ def _serialize_env_value(value: str | int | bool | None) -> str:
     return f'"{value}"'
 
 
-def _format_readme_default(value: str | int | bool | None) -> str:
+def _format_readme_default(value: str | int | float | bool | None) -> str:
     if value is None:
         return "없음"
     if isinstance(value, bool):
@@ -41,7 +41,7 @@ def _collect_sync_notes(specs: tuple[EnvVarSpec, ...]) -> list[str]:
     return notes
 
 
-def _render_env_var_lines(spec: EnvVarSpec, value: str | int | bool | None) -> list[str]:
+def _render_env_var_lines(spec: EnvVarSpec, value: str | int | float | bool | None) -> list[str]:
     lines = [f"# {note}" for note in spec.sync_notes]
     lines.append(f"{spec.env_name}={_serialize_env_value(value)}")
     return lines
@@ -65,7 +65,7 @@ def _render_readme_notes(specs: tuple[EnvVarSpec, ...]) -> list[str]:
 
 def _render_settings_table(
     specs: tuple[EnvVarSpec, ...],
-    defaults: dict[str, str | int | bool | None] | None = None,
+    defaults: dict[str, str | int | float | bool | None] | None = None,
 ) -> list[str]:
     lines = [
         "| 이름 | 기본값 | 설명 |",

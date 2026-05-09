@@ -19,9 +19,10 @@ def compute_cost_usd(
             if prompt_tokens <= 0 and completion_tokens <= 0:
                 continue
             has_usage = True
+            usage_multiplier = _usage_multiplier_for_llm_call(call)
             model_pricing = _resolve_model_pricing(_extract_model_name_from_llm_call(call), pricing)
-            total_cost += (prompt_tokens / 1000.0) * float(model_pricing.prompt_per_1k_usd)
-            total_cost += (completion_tokens / 1000.0) * float(model_pricing.completion_per_1k_usd)
+            total_cost += (prompt_tokens * usage_multiplier / 1000.0) * float(model_pricing.prompt_per_1k_usd)
+            total_cost += (completion_tokens * usage_multiplier / 1000.0) * float(model_pricing.completion_per_1k_usd)
         if has_usage:
             return round(total_cost, 8)
 
@@ -70,6 +71,27 @@ def _extract_usage_from_llm_call(llm_call: Any) -> tuple[int, int]:
         return max(0, prompt_tokens), max(0, completion_tokens)
 
     return 0, 0
+
+
+def _is_hedge_duplicate_estimate(llm_call: Any) -> bool:
+    if not isinstance(llm_call, dict):
+        return False
+    response_metadata = llm_call.get("response_metadata")
+    return isinstance(response_metadata, dict) and bool(response_metadata.get("hedge_duplicate_estimate"))
+
+
+def _usage_multiplier_for_llm_call(llm_call: Any) -> int:
+    if not _is_hedge_duplicate_estimate(llm_call):
+        return 1
+    if not isinstance(llm_call, dict):
+        return 1
+    response_metadata = llm_call.get("response_metadata")
+    if not isinstance(response_metadata, dict):
+        return 1
+    try:
+        return max(1, int(response_metadata.get("hedge_attempts_started") or 1))
+    except (TypeError, ValueError):
+        return 1
 
 
 def _extract_model_name_from_llm_call(llm_call: Any) -> str | None:

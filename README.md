@@ -209,8 +209,15 @@ Windows 환경에서는 `-X utf8` 또는 `PYTHONUTF8=1` 사용을 권장합니�
 | `PLANNER_MODEL` | `gpt-5.4-nano` | planner 모델 기본값 |
 | `SUMMARY_MODEL` | `gpt-5.4-nano` | session summary 모델 기본값 |
 | `PLANNER_MAX_TOKENS` | `1920` | planner structured output 최대 토큰 |
-| `DOCS_SEARCH_TIMEOUT_SECONDS` | `8` | Tavily 검색 timeout |
+| `TAIL_HEDGE_MAX_CONCURRENCY` | `8` | tail latency hedge max concurrency |
+| `TAIL_HEDGE_MAX_ATTEMPTS` | `3` | tail latency hedge max attempts per call |
+| `PLANNER_HEDGE_DELAY_SECONDS` | `0.5` | planner tail latency hedge delay |
+| `DOCS_SEARCH_TIMEOUT_SECONDS` | `5` | Tavily 검색 timeout |
+| `DOCS_SEARCH_HEDGE_DELAY_SECONDS` | `0.5` | Tavily 검색 tail latency hedge delay |
 | `SYNTHESIS_TIMEOUT_SECONDS` | `20` | synthesis timeout |
+| `SYNTHESIS_HEDGE_DELAY_SECONDS` | `0.2` | synthesis tail latency hedge delay |
+| `SYNTHESIS_HEDGE_MAX_ATTEMPTS` | `4` | synthesis tail latency hedge max attempts |
+| `SYNTHESIS_USE_RESPONSES_API` | `false` | synthesis Responses API 사용 여부 |
 | `SYNTHESIS_MAX_RETRIES` | `0` | synthesis 자체 재시도 횟수 |
 | `SYNTHESIS_MAX_TOKENS` | `1920` | synthesis max tokens |
 | `SYNTHESIS_PROMPT_SNIPPET_CHARS` | `960` | evidence snippet 길이 제한 |

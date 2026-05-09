@@ -10,12 +10,14 @@ from src.runtime.nodes.session import extract_text_content
 
 
 def _build_synthesis_response_schema() -> dict[str, Any]:
+    schema = to_strict_json_schema(SynthesisOutput)
+
     return {
         # Pass a strict JSON schema dict instead of the Pydantic class itself so
         # Responses API parsing stays on the non-ParsedResponse path.
         "name": "SynthesisOutput",
         "strict": True,
-        "schema": to_strict_json_schema(SynthesisOutput),
+        "schema": schema,
     }
 
 
