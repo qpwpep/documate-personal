@@ -234,6 +234,7 @@ def _instrument_stage_node(stage: str, node: Any, *, record_latency_trace: bool 
 
 def build_agent_graph(settings: AppSettings | None = None):
     app_settings = settings or get_settings()
+    memory_policy = app_settings.conversation_memory_policy()
     configure_tail_hedge(max_concurrency=app_settings.tail_hedge_max_concurrency)
     has_default_slack_destination = bool(
         app_settings.slack_default_user_id or app_settings.slack_default_dm_email
@@ -245,13 +246,14 @@ def build_agent_graph(settings: AppSettings | None = None):
     summarize_node = make_summarize_node(
         llm_summarizer=llm_registry.llm_summarizer,
         verbose=llm_registry.verbose,
-        max_turns=6,
+        max_turns=memory_policy.low_water_turns,
+        policy=memory_policy,
     )
     summarize_node = _instrument_stage_node("summarize", summarize_node)
     planner_node = make_planner_node(
         llm_planner=llm_registry.llm_planner,
         verbose=llm_registry.verbose,
-        max_turns=6,
+        max_turns=memory_policy.low_water_turns,
         planner_hedge_delay_seconds=app_settings.planner_hedge_delay_seconds,
         planner_hedge_max_attempts=app_settings.tail_hedge_max_attempts,
         planner_timeout_seconds=30,
@@ -279,7 +281,7 @@ def build_agent_graph(settings: AppSettings | None = None):
         llm_synthesizer=llm_registry.llm_synthesizer,
         llm_synthesizer_compact=llm_registry.llm_synthesizer_compact,
         verbose=llm_registry.verbose,
-        max_turns=6,
+        max_turns=memory_policy.low_water_turns,
         synthesis_max_tokens=app_settings.synthesis_max_tokens,
         prompt_snippet_char_limit=app_settings.synthesis_prompt_snippet_chars,
         has_default_slack_destination=has_default_slack_destination,
@@ -321,6 +323,7 @@ def build_agent_graph(settings: AppSettings | None = None):
         pre_synthesis_validation_node=pre_synthesis_validation_node,
         post_synthesis_validation_node=post_synthesis_validation_node,
         action_postprocess_node=action_postprocess_node,
-        summary_max_turns=6,
+        summary_max_turns=memory_policy.low_water_turns,
+        memory_policy=memory_policy,
     )
     return graph_object

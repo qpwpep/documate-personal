@@ -48,6 +48,49 @@ class SettingsSyncTest(unittest.TestCase):
         for field_name, expected_value in defaults.items():
             self.assertEqual(getattr(settings, field_name), expected_value)
 
+    def test_env_registry_groups_are_explicit_and_unique(self) -> None:
+        env_names = [spec.env_name for spec in APP_ENV_SPECS]
+        field_names = [spec.field_name for spec in APP_ENV_SPECS if spec.field_name]
+
+        self.assertEqual(len(env_names), len(set(env_names)))
+        self.assertEqual(len(field_names), len(set(field_names)))
+        self.assertEqual(
+            {spec.example_group for spec in APP_ENV_SPECS},
+            {"required_secrets", "application_settings", "slack"},
+        )
+        for spec in APP_ENV_SPECS:
+            assert spec.field_name is not None
+            self.assertEqual(
+                AppSettings.model_fields[spec.field_name].alias,
+                spec.env_name,
+            )
+
+    def test_memory_policy_rejects_low_watermark_at_or_above_high_watermark(self) -> None:
+        with self.assertRaises(ValueError):
+            AppSettings(
+                _env_file=None,
+                memory_high_water_tokens=100,
+                memory_low_water_tokens=100,
+            )
+
+    def test_memory_policy_rejects_limits_that_cannot_hold_one_complete_turn(self) -> None:
+        with self.assertRaises(ValueError):
+            AppSettings(
+                _env_file=None,
+                memory_high_water_messages=2,
+                memory_low_water_messages=1,
+            )
+
+    def test_generated_memory_settings_stay_in_application_group(self) -> None:
+        env_example = build_env_example_text(DEFAULT_BENCHMARK_CONFIG_PATH)
+        application_index = env_example.index("# Application settings")
+        memory_index = env_example.index("MEMORY_HIGH_WATER_TURNS=8")
+        slack_index = env_example.index("# Slack")
+
+        self.assertLess(application_index, memory_index)
+        self.assertLess(memory_index, slack_index)
+        self.assertEqual(env_example.count("MEMORY_HARD_MAX_BYTES="), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -64,6 +64,17 @@ class WebRuntimeModulesTest(unittest.TestCase):
                 "synthesis_use_responses_api": "false",
                 "synthesis_max_tokens": "2048",
                 "synthesis_reasoning_effort": "high",
+                "memory_high_water_turns": "8",
+                "memory_low_water_turns": "6",
+                "memory_high_water_tokens": "32000",
+                "memory_low_water_tokens": "16000",
+                "memory_high_water_bytes": "98304",
+                "memory_low_water_bytes": "49152",
+                "memory_high_water_messages": "18",
+                "memory_low_water_messages": "14",
+                "memory_summary_max_tokens": "256",
+                "memory_summary_max_bytes": "4096",
+                "memory_hard_max_bytes": "131072",
             },
         )
 

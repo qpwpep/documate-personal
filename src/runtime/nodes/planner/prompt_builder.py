@@ -4,6 +4,7 @@ import re
 
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage, ToolMessage
 
+from src.core.conversation_memory import build_untrusted_memory_prompt_messages
 from src.core.contracts import GraphState
 from src.core.contracts.boundary.graph import get_retry_state
 from src.core.contracts.boundary.runtime import get_runtime_state
@@ -85,7 +86,9 @@ def build_planner_messages(state: GraphState, max_turns: int = 6) -> list[BaseMe
         model_messages.append(SystemMessage(content=retry_context_message))
 
     if runtime.memory_summary:
-        model_messages.append(SystemMessage(content=f"[Conversation Summary]\n{runtime.memory_summary}"))
+        model_messages.extend(
+            build_untrusted_memory_prompt_messages(runtime.memory_summary)
+        )
 
     conversation = [message for message in state.get("messages", []) if not isinstance(message, ToolMessage)]
     conversation = keep_recent_messages(conversation, max_turns=max_turns)

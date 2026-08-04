@@ -210,9 +210,30 @@ class UploadSessionIsolationTest(unittest.TestCase):
         self.assertIsNone(graph.states[-1]["runtime"].retriever)
 
     @patch("src.app.agent_manager.build_temp_retriever")
+    def test_memory_summary_reaches_plain_new_and_reused_upload_paths(
+        self,
+        mock_build_temp_retriever,
+    ) -> None:
+        graph = _ResolvingGraph()
+        manager = _make_manager(graph)
+        manager.memory_summary = "stable upload summary"
+        handle = _FakeHandle("upload-session-session")
+        mock_build_temp_retriever.return_value = handle
+
+        manager.run_agent_flow("new upload", upload_file_path="uploads/session/file.py")
+        manager.run_agent_flow("reuse upload", upload_file_path="uploads/session/file.py")
+        manager.run_agent_flow("plain request")
+
+        self.assertEqual(
+            [state["runtime"].memory_summary for state in graph.states],
+            ["stable upload summary"] * 3,
+        )
+
+    @patch("src.app.agent_manager.build_temp_retriever")
     def test_agent_manager_cleans_handle_on_exit(self, mock_build_temp_retriever) -> None:
         graph = _CapturingGraph()
         manager = _make_manager(graph)
+        manager.memory_summary = "summary to clear"
         handle = _FakeHandle("upload-session-session")
         mock_build_temp_retriever.return_value = handle
 
@@ -222,10 +243,17 @@ class UploadSessionIsolationTest(unittest.TestCase):
         self.assertEqual(handle.cleanup_calls, 1)
         self.assertIsNone(manager.upload_retriever_handle)
         self.assertEqual(manager.messages, [])
+        self.assertIsNone(manager.memory_summary)
 
     @patch("src.app.agent_manager.build_temp_retriever")
     def test_agent_manager_cleans_handle_on_exception(self, mock_build_temp_retriever) -> None:
         manager = _make_manager(_ExplodingGraph())
+        manager.messages = [
+            HumanMessage(content="stable request"),
+            AIMessage(content="stable answer"),
+        ]
+        manager.memory_summary = "stable summary"
+        before = manager._ensure_session().snapshot_conversation_memory()
         handle = _FakeHandle("upload-session-session")
         mock_build_temp_retriever.return_value = handle
 
@@ -234,6 +262,7 @@ class UploadSessionIsolationTest(unittest.TestCase):
         self.assertEqual(result["message"], "boom")
         self.assertEqual(handle.cleanup_calls, 1)
         self.assertIsNone(manager.upload_retriever_handle)
+        self.assertEqual(manager._ensure_session().snapshot_conversation_memory(), before)
 
     def test_agent_manager_passes_session_metadata_to_graph_and_clears_on_close(self) -> None:
         graph = _CapturingGraph()

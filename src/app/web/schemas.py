@@ -2,9 +2,13 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from src.core.answer_schema import AgentResponsePayloadModel
+from src.core.conversation_memory import (
+    DEFAULT_QUERY_MAX_CHARS,
+    validate_query_text,
+)
 from src.core.contracts.debug import ActionResults, ErrorCode, LLMCallMetadata, ModelUsageStatus, PlannerDiagnostic, RetryState, RetrievalDiagnostic, TokenUsage
 from src.core.evidence import EvidenceItem
 from src.core.latency import LatencyBreakdownModel, StageName
@@ -40,13 +44,18 @@ class AgentDebugInfo(BaseModel):
 
 
 class AgentRequest(BaseModel):
-    query: str
+    query: str = Field(min_length=1, max_length=DEFAULT_QUERY_MAX_CHARS)
     session_id: str
     slack_user_id: str | None = None
     slack_email: str | None = None
     slack_channel_id: str | None = None
     upload_file_path: str | None = None
     include_debug: bool = False
+
+    @field_validator("query")
+    @classmethod
+    def _validate_query(cls, value: str) -> str:
+        return validate_query_text(value)
 
 
 class AgentResponse(BaseModel):

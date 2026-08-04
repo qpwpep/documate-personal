@@ -223,7 +223,21 @@ class NodeRefactorTest(unittest.TestCase):
         self.assertIn("[Synthesis Output Template]", str(model_messages[1].content))
         self.assertIn("[Selection And Assembly Mode]", str(model_messages[2].content))
         self.assertIn("[Turn Contract]", str(model_messages[3].content))
-        self.assertTrue(any("[Conversation Summary]" in str(message.content) for message in model_messages))
+        self.assertTrue(
+            any(
+                "[Conversation Memory Policy]" in str(message.content)
+                for message in model_messages
+                if isinstance(message, SystemMessage)
+            )
+        )
+        self.assertTrue(
+            any(
+                '"kind":"untrusted_conversation_memory"' in str(message.content)
+                and "older summary" in str(message.content)
+                for message in model_messages
+                if isinstance(message, AIMessage)
+            )
+        )
         self.assertTrue(any("[Retrieved Evidence]" in str(message.content) for message in model_messages))
         self.assertTrue(
             any(

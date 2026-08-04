@@ -9,6 +9,7 @@ from src.infra.settings import AppSettings
 from src.app.web.agent_request_service import AgentRequestResult
 from src.app.web.app import create_app
 from src.app.web.schemas import AgentDebugInfo, AgentResponsePayload, AgentRequest, AgentStreamEvent
+from src.core.conversation_memory import DEFAULT_QUERY_MAX_CHARS
 
 
 class _FakeAgentRequestService:
@@ -74,6 +75,30 @@ class _FakeAgentRequestService:
 
 
 class AgentRouteServiceDelegationTest(unittest.TestCase):
+    def test_oversized_queries_are_rejected_before_route_delegation(self) -> None:
+        settings = AppSettings(openai_api_key="test-key", tavily_api_key="test")
+        fake_service = _FakeAgentRequestService()
+        oversized_query = "x" * (DEFAULT_QUERY_MAX_CHARS + 1)
+        with patch("src.app.web.app.get_settings", return_value=settings):
+            with TestClient(create_app()) as client:
+                client.app.state.agent_request_service = fake_service
+                client.app.state.session_store = None
+                client.app.state.runtime_cleaner = None
+
+                response = client.post(
+                    "/agent",
+                    json={"query": oversized_query, "session_id": "demo-session"},
+                )
+                stream_response = client.post(
+                    "/agent/stream",
+                    json={"query": oversized_query, "session_id": "demo-session"},
+                )
+
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(stream_response.status_code, 422)
+        self.assertEqual(fake_service.calls, [])
+        self.assertEqual(fake_service.stream_calls, [])
+
     def test_agent_route_only_delegates_to_service(self) -> None:
         settings = AppSettings(openai_api_key="test-key", tavily_api_key="test")
         fake_service = _FakeAgentRequestService()

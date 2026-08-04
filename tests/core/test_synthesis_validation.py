@@ -891,7 +891,10 @@ class SynthesisValidationTest(unittest.TestCase):
         self.assertIn("[Synthesis Output Template]", str(sent_messages[1].content))
         self.assertIn("[Selection And Assembly Mode]", str(sent_messages[2].content))
         self.assertIn("[Turn Contract]", str(sent_messages[3].content))
-        self.assertIn("[Conversation Summary]", str(sent_messages[4].content))
+        self.assertIn("[Conversation Memory Policy]", str(sent_messages[4].content))
+        self.assertIsInstance(sent_messages[5], AIMessage)
+        self.assertIn('"kind":"untrusted_conversation_memory"', str(sent_messages[5].content))
+        self.assertIn("older summary", str(sent_messages[5].content))
         self.assertFalse(any(isinstance(message, HumanMessage) and message.content == "u1" for message in sent_messages))
         self.assertTrue(any(isinstance(message, HumanMessage) and message.content == "u4" for message in sent_messages))
 

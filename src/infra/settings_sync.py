@@ -86,7 +86,9 @@ def build_env_example_text(config_path: Path = DEFAULT_BENCHMARK_CONFIG_PATH) ->
         "",
         "# Required secrets",
     ]
-    for spec in APP_ENV_SPECS[:2]:
+    for spec in APP_ENV_SPECS:
+        if spec.example_group != "required_secrets":
+            continue
         lines.append(f"{spec.env_name}=")
 
     lines.extend(
@@ -95,7 +97,9 @@ def build_env_example_text(config_path: Path = DEFAULT_BENCHMARK_CONFIG_PATH) ->
             "# Application settings",
         ]
     )
-    for spec in APP_ENV_SPECS[2:-3]:
+    for spec in APP_ENV_SPECS:
+        if spec.example_group != "application_settings":
+            continue
         lines.extend(_render_env_var_lines(spec, spec.default))
 
     lines.extend(
@@ -104,7 +108,9 @@ def build_env_example_text(config_path: Path = DEFAULT_BENCHMARK_CONFIG_PATH) ->
             "# Slack",
         ]
     )
-    for spec in APP_ENV_SPECS[-3:]:
+    for spec in APP_ENV_SPECS:
+        if spec.example_group != "slack":
+            continue
         lines.append(f"{spec.env_name}=")
 
     lines.extend(

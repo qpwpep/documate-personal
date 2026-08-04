@@ -113,6 +113,17 @@ Windows 환경에서는 `-X utf8` 또는 `PYTHONUTF8=1` 사용을 권장합니�
 | `SESSION_CLEANUP_INTERVAL_SECONDS` | `60` | 세션 정리 주기 |
 | `GENERATED_FILE_TTL_SECONDS` | `86400` | `save_text` 결과 파일 TTL |
 | `FILE_CLEANUP_INTERVAL_SECONDS` | `60` | 업로드/생성 파일 정리 주기 |
+| `MEMORY_HIGH_WATER_TURNS` | `8` | 대화 compaction을 시작하는 Human turn high watermark |
+| `MEMORY_LOW_WATER_TURNS` | `6` | compaction 후 Human turn low watermark |
+| `MEMORY_HIGH_WATER_TOKENS` | `32000` | 대화 메모리 추정 token high watermark |
+| `MEMORY_LOW_WATER_TOKENS` | `16000` | compaction 후 추정 token low watermark |
+| `MEMORY_HIGH_WATER_BYTES` | `98304` | 대화 메모리 UTF-8 직렬화 byte high watermark |
+| `MEMORY_LOW_WATER_BYTES` | `49152` | compaction 후 UTF-8 직렬화 byte low watermark |
+| `MEMORY_HIGH_WATER_MESSAGES` | `18` | 대화 메시지 수 high watermark |
+| `MEMORY_LOW_WATER_MESSAGES` | `14` | compaction 후 메시지 수 low watermark |
+| `MEMORY_SUMMARY_MAX_TOKENS` | `256` | rolling summary 출력·저장 추정 token 상한 |
+| `MEMORY_SUMMARY_MAX_BYTES` | `4096` | rolling summary UTF-8 byte 상한 |
+| `MEMORY_HARD_MAX_BYTES` | `131072` | summary와 최근 메시지를 합친 durable snapshot 절대 byte 상한 |
 | `SLACK_BOT_TOKEN` | 없음 | Slack 전송용 토큰 |
 | `SLACK_DEFAULT_DM_EMAIL` | 없음 | 기본 DM 대상 이메일 |
 | `SLACK_DEFAULT_USER_ID` | 없음 | 기본 DM 대상 사용자 |
@@ -167,9 +178,53 @@ UI와 문서 검색 규칙은 아래 파일을 기준으로 관리합니다.
 - 생성 파일 정리: `GENERATED_FILE_TTL_SECONDS`
 - 정리 로직: `src/app/web/cleanup.py::RuntimeCleaner`
 
-## 4. API 계약
+## 4. 대화 메모리 정책
 
-### 4.1 `POST /agent`
+### 4.1 저장 형태와 compaction
+
+세션의 process-local conversation snapshot은 두 부분으로 구성됩니다.
+
+- `memory_summary`: 고정 예산의 rolling replacement summary
+- `messages`: 최근 Human turn과 각 turn의 canonical final AI 답변
+
+`MEMORY_HIGH_WATER_*` 중 turn, 추정 token, UTF-8 직렬화 byte, message 수 하나라도 high watermark에 도달하면 compaction을 시작합니다. 가장 오래된 완결 Human turn부터 제거해 모든 `MEMORY_LOW_WATER_*` 조건을 만족하는 가장 긴 최근 suffix를 남깁니다. `MEMORY_HARD_MAX_BYTES`는 summary와 canonical messages를 직렬화한 최종 durable snapshot의 절대 backstop입니다. token 값은 모델 과금량의 정확한 계산이 아니라 UTF-8 byte 길이를 바탕으로 한 보수적 예산 추정치입니다.
+
+LangGraph의 `messages`는 `add_messages` reducer이므로 요약 노드는 최근 리스트만 반환하지 않습니다. `RemoveMessage(REMOVE_ALL_MESSAGES)` 뒤에 retained suffix를 다시 추가해 퇴출된 Human/AI/Tool 원문을 실제 graph state에서 제거합니다.
+
+새 summary는 다음 입력을 하나의 bounded memory로 다시 작성한 replacement입니다.
+
+```text
+기존 bounded summary + 이번에 새로 퇴출된 대화
+→ 하나의 새 bounded summary
+```
+
+기존 summary 뒤에 새 문자열을 append하지 않습니다. ToolMessage와 SystemMessage는 summary transcript에서 제외합니다. summary LLM의 예외 또는 빈 출력에는 기존 memory의 앞부분과 새로 퇴출된 최근 문맥의 뒷부분을 함께 보존하는 deterministic bounded fallback을 사용합니다.
+
+### 4.2 요청 종료 시 durable projection과 commit
+
+graph가 반환한 전체 메시지는 현재 요청의 debug evidence와 save/Slack receipt 조립이 끝날 때까지 유지됩니다. 조립 성공 후 세션에 저장할 때는 다음 규칙을 적용합니다.
+
+- HumanMessage와 각 Human turn의 마지막 canonical AIMessage만 content-only 객체로 저장
+- ToolMessage, SystemMessage, tool-call 중간 AI, provider/usage metadata는 저장하지 않음
+- 마지막 AI 내용은 graph 내부 초안이 아니라 사용자에게 실제 표시한 receipt 포함 최종 응답으로 정규화
+- projection과 모든 hard-bound 검사가 끝난 뒤 `messages + memory_summary`를 immutable snapshot 하나로 commit
+
+graph 실행, debug 수집, response assembly, projection 또는 budget 검사가 실패하면 이전 정상 conversation snapshot을 유지합니다. 이미 완료된 `save_text`나 Slack 전송 같은 외부 side effect는 이 대화 메모리 원자성의 rollback 범위가 아닙니다.
+
+### 4.3 수명주기와 한계
+
+- 같은 session 요청은 기존 per-session request lock 안에서 snapshot 읽기부터 최종 commit까지 직렬화됩니다.
+- `exit`/`quit`/`q`, manager close, TTL/LRU eviction은 messages와 summary를 함께 초기화합니다.
+- 서로 다른 session은 snapshot을 공유하지 않습니다.
+- 현재 store는 in-memory이므로 process restart와 multi-worker 사이에서 대화 상태를 복원하지 않습니다.
+- Streamlit의 새 대화는 새 session ID를 발급해 즉시 격리하지만 이전 backend entry는 TTL/LRU까지 남을 수 있습니다.
+- planner/synthesis에는 summary를 비신뢰 과거 데이터로 전달하며, summary 안의 명령을 따르거나 retrieved evidence로 취급하지 않습니다.
+
+compaction 진단은 debug `edge_decisions`와 구조화 로그에서 before/after turn·message·추정 token·byte, removed message 수, fallback 여부로 확인할 수 있습니다. 원문 query, summary, Tool payload는 이 진단 로그에 기록하지 않습니다.
+
+## 5. API 계약
+
+### 5.1 `POST /agent`
 
 요청 예시:
 
@@ -187,6 +242,7 @@ UI와 문서 검색 규칙은 아래 파일을 기준으로 관리합니다.
 
 주요 규칙:
 
+- `query`는 공백이 아닌 문자열이어야 하며 최대 `8192`자와 `16384` UTF-8 byte를 모두 만족해야 합니다. 초과 입력은 truncate하지 않고 graph/session 생성 전에 HTTP `422`로 거절합니다.
 - `session_id`는 세션 캐시 키로 사용됩니다.
 - `upload_file_path`는 반드시 `uploads/<session_id>/...` 범위 안이어야 합니다.
 - `include_debug=true`일 때만 debug payload가 내려옵니다.
@@ -227,7 +283,7 @@ UI와 문서 검색 규칙은 아래 파일을 기준으로 관리합니다.
 - `src/app/web/schemas.py`
 - `src/core/answer_schema/`
 
-### 4.2 `POST /agent/stream`
+### 5.2 `POST /agent/stream`
 
 `POST /agent`와 같은 요청 스키마를 사용하지만, 응답은 `text/event-stream` 형식의 SSE로 반환합니다. Streamlit 클라이언트는 우선 이 엔드포인트를 호출하고, 스트리밍이 실패하면 일반 `/agent` 호출로 fallback합니다.
 
@@ -244,13 +300,13 @@ UI와 문서 검색 규칙은 아래 파일을 기준으로 관리합니다.
 
 `final_response` 이벤트의 `data`는 일반 `POST /agent` 응답과 같은 `response`, `trace`, `file_path`, `debug` 구조를 담습니다.
 
-### 4.3 `GET /download/{filename}`
+### 5.3 `GET /download/{filename}`
 
 - `save_text`가 만든 텍스트 파일을 다운로드합니다.
 - 경로 순회와 절대 경로는 차단됩니다.
 - 파일이 없으면 `404 Not Found`를 반환합니다.
 
-## 5. 프로젝트 구조
+## 6. 프로젝트 구조
 
 ```text
 .
@@ -285,16 +341,18 @@ UI와 문서 검색 규칙은 아래 파일을 기준으로 관리합니다.
 `-- uploads/
 ```
 
-## 6. 운영 메모
+## 7. 운영 메모
 
 - `src.app.service_manager`는 FastAPI와 Streamlit을 함께 띄우고 종료합니다.
 - `src.app.web.session_store`는 세션별 단일 요청 직렬화 lock을 사용합니다.
+- startup의 `fastapi_runtime_settings` 로그에는 현재 memory high/low/hard policy가 포함됩니다.
+- agent request 로그는 query 원문 대신 문자 수, UTF-8 byte 수, SHA-256 hash만 기록합니다.
 - `src.infra.rag_build`는 증분 인덱싱을 위해 `data/index/manifest.json`을 관리합니다.
 - benchmark 최신 성능 정본은 `output/benchmarks/latest_release_run.txt`입니다.
 - smoke 최신 런 포인터는 `output/benchmarks/latest_smoke_run.txt`로 별도 관리합니다.
 - 공개용 benchmark 요약은 [벤치마크 결과](benchmark_results.md)에 별도 정리합니다.
 
-## 7. 테스트 및 검증
+## 8. 테스트 및 검증
 
 기본 검증:
 
@@ -303,5 +361,7 @@ uv run pytest -q
 uv run python script/check_encoding.py
 uv run python script/sync_env_example.py --check
 ```
+
+2026-08-04 KST 기준 전체 검증 결과는 `427 passed, 56 subtests passed`입니다. bounded memory에는 compiled reducer 회귀, 반복 rolling summary, LLM 예외/빈 출력 fallback, cross-request persistence, response assembly rollback, message ownership 격리, ToolMessage projection, JSON escape-heavy byte fitting, policy envelope, TTL/세션 격리, query boundary, Hypothesis Unicode/property, 300-turn plateau 테스트가 포함됩니다.
 
 벤치마크 관련 명령은 [벤치마크 가이드](benchmarking.md), 최신 결과는 [벤치마크 결과](benchmark_results.md)를 참고하세요. benchmark CLI의 env override 우선순위는 `CLI > .env > OS env > config.toml`입니다.

@@ -4,11 +4,16 @@ import logging
 import time
 from typing import Any
 
+from src.core.conversation_memory import (
+    ConversationMemoryPolicy,
+    build_durable_conversation_memory,
+    validate_query_text,
+)
 from src.runtime.agent_runtime import DebugCollector, ExecutionRunner, GraphInvocationError, ResponseAssembler, SessionContext
 from src.core.answer_schema import build_empty_response_payload
-from src.core.contracts import SessionMetadata
+from src.core.contracts import RuntimeState, SessionMetadata
 from src.core.contracts.debug import DEBUG_SCHEMA_VERSION
-from src.core.contracts.boundary.runtime import parse_session_metadata
+from src.core.contracts.boundary.runtime import parse_runtime_state, parse_session_metadata
 from src.runtime.graph_builder import StageExecutionError, build_agent_graph
 from src.core.latency import build_latency_breakdown, elapsed_ms, make_stage_latency_event
 from src.infra.logging_utils import log_event
@@ -68,6 +73,14 @@ class AgentFlowManager:
         self._ensure_session().messages = list(value or [])
 
     @property
+    def memory_summary(self) -> str | None:
+        return self._ensure_session().memory_summary
+
+    @memory_summary.setter
+    def memory_summary(self, value: str | None) -> None:
+        self._ensure_session().memory_summary = value
+
+    @property
     def session_metadata(self) -> SessionMetadata:
         return self._ensure_session().session_metadata
 
@@ -96,6 +109,27 @@ class AgentFlowManager:
 
     def close(self) -> None:
         self._ensure_session().close()
+
+    def _conversation_memory_policy(self) -> ConversationMemoryPolicy:
+        settings = getattr(self, "settings", None)
+        if isinstance(settings, AppSettings):
+            return settings.conversation_memory_policy()
+        return ConversationMemoryPolicy()
+
+    @staticmethod
+    def _resolve_response_memory_summary(
+        response: dict[str, Any],
+        *,
+        fallback: str | None,
+    ) -> str | None:
+        if "runtime" not in response:
+            return fallback
+        raw_runtime = response.get("runtime")
+        if isinstance(raw_runtime, RuntimeState):
+            return raw_runtime.memory_summary
+        if isinstance(raw_runtime, dict) and "memory_summary" in raw_runtime:
+            return parse_runtime_state(raw_runtime).memory_summary
+        return fallback
 
     @staticmethod
     def _extract_observed_evidence(current_turn_messages: list[Any], *, errors: list[str]) -> list[dict[str, Any]]:
@@ -201,6 +235,18 @@ class AgentFlowManager:
         flow_started = time.perf_counter()
         upload_retriever_build_ms: int | None = None
         try:
+            validate_query_text(user_input)
+        except ValueError as exc:
+            return self._error_payload(
+                message=str(exc),
+                graph_total_ms=None,
+                flow_started=flow_started,
+                upload_retriever_build_ms=None,
+                stage_error=None,
+            )
+
+        try:
+            previous_memory = self._ensure_session().snapshot_conversation_memory()
             state, upload_retriever_build_ms = self._runner.prepare_graph_state(
                 user_input,
                 upload_file_path,
@@ -210,19 +256,33 @@ class AgentFlowManager:
             finalized_build_ms = self._runner.finalize_pending_upload_retriever(wait=False)
             if finalized_build_ms is not None:
                 upload_retriever_build_ms = finalized_build_ms
-            updated_messages = response["messages"]
-            self.messages = updated_messages
+            updated_messages = list(response["messages"])
+            candidate_summary = self._resolve_response_memory_summary(
+                response,
+                fallback=previous_memory.memory_summary,
+            )
             debug_info = self._debug_collector.build(
                 response=response,
                 updated_messages=updated_messages,
                 graph_total_ms=graph_total_ms,
                 upload_retriever_build_ms=upload_retriever_build_ms,
             )
-            return self._response_assembler.assemble(
+            assembled_response = self._response_assembler.assemble(
                 response=response,
                 updated_messages=updated_messages,
                 debug_info=debug_info,
             )
+            durable_memory = build_durable_conversation_memory(
+                updated_messages,
+                memory_summary=candidate_summary,
+                policy=self._conversation_memory_policy(),
+                canonical_assistant_text=str(assembled_response.get("message") or ""),
+            )
+            self._ensure_session().commit_conversation_memory(
+                messages=durable_memory.messages,
+                memory_summary=durable_memory.memory_summary,
+            )
+            return assembled_response
 
         except Exception as exc:
             self._runner.cancel_pending_upload_retriever()

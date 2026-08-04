@@ -45,6 +45,7 @@ class LLMRegistryTest(unittest.TestCase):
             synthesis_timeout_seconds=9,
             synthesis_max_retries=1,
             synthesis_max_tokens=777,
+            memory_summary_max_tokens=123,
             synthesis_reasoning_effort=None,
             verbose=False,
         )
@@ -73,6 +74,8 @@ class LLMRegistryTest(unittest.TestCase):
         self.assertEqual(planner_kwargs["max_tokens"], 654)
         self.assertEqual(planner_kwargs["max_retries"], 0)
         self.assertNotIn("reasoning", planner_kwargs)
+        summary_kwargs = _FakeChatOpenAI.created_kwargs[3]
+        self.assertEqual(summary_kwargs["max_tokens"], 123)
         self.assertIsNotNone(registry.llm_synthesizer_compact)
         planner_schema = _FakeChatOpenAI.structured_args[0][0]
         self.assertEqual(planner_schema["name"], "PlannerOutput")
