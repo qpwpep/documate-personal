@@ -65,7 +65,7 @@ APP_ENV_SPECS = (
             "gpt-5-nano: minimal, low, medium, high",
         ),
     ),
-    EnvVarSpec("VERBOSE", "verbose", True, "CLI 로그 상세 출력", example=True),
+    EnvVarSpec("VERBOSE", "verbose", True, "에이전트 런타임 상세 로그 출력", example=True),
     EnvVarSpec("FASTAPI_URL", "fastapi_url", "http://127.0.0.1:8000", "Streamlit이 호출하는 API 주소", example="http://127.0.0.1:8000"),
     EnvVarSpec("SESSION_TTL_SECONDS", "session_ttl_seconds", 1800, "세션 TTL", example=1800),
     EnvVarSpec("MAX_ACTIVE_SESSIONS", "max_active_sessions", 200, "최대 활성 세션 수", example=200),

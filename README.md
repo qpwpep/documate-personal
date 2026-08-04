@@ -109,7 +109,7 @@ flowchart LR
 
 주요 기준 경로는 `src/runtime/graph_builder.py`, `src/runtime/make_graph.py`, `src/infra/tools/*`, `src/runtime/nodes/*`, `src/app/web/*`, `src/eval/*`입니다.
 
-- `src/app/`: CLI, FastAPI/Streamlit 웹 런타임, 서비스 매니저, 세션별 `AgentFlowManager`
+- `src/app/`: FastAPI/Streamlit 웹 런타임, 서비스 매니저, 세션별 `AgentFlowManager`
 - `src/core/`: `GraphState`, planner/response/debug 계약, evidence 모델, 응답 스키마
 - `src/infra/`: 설정, LLM registry, Chroma/RAG, Tavily docs search, Slack/save 도구
 - `src/runtime/`: LangGraph 조립과 session/planner/retrieval/validation/synthesis/action 노드

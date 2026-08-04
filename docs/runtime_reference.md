@@ -42,7 +42,7 @@ cp .env.example .env
 - `SLACK_DEFAULT_USER_ID`
 - `SLACK_DEFAULT_DM_EMAIL`
 
-`src.infra.settings.validate_required_keys()` 때문에 CLI, FastAPI, `startweb` 실행 시 현재는 `OPENAI_API_KEY`와 `TAVILY_API_KEY`가 모두 필요합니다.
+`src.infra.settings.validate_required_keys()` 때문에 FastAPI와 `startweb` 실행 시 현재는 `OPENAI_API_KEY`와 `TAVILY_API_KEY`가 모두 필요합니다.
 
 ### 1.4 로컬 노트북 인덱스 생성
 
@@ -52,19 +52,7 @@ uv run python -m src.app.rag_build
 
 이 명령은 `data/`와 `uploads/` 아래의 `.ipynb` 파일을 스캔해 `data/index`에 Chroma 인덱스를 만듭니다.
 
-### 1.5 CLI 실행
-
-```bash
-uv run python -m src.app.cli
-```
-
-그래프 이미지를 덤프하려면:
-
-```bash
-uv run python -m src.app.cli --dump-graph output/runtime/graph.png
-```
-
-### 1.6 웹 서비스 실행
+### 1.5 웹 서비스 실행
 
 권장 방식:
 
@@ -85,7 +73,7 @@ uv run python -X utf8 -m uvicorn src.app.web.app:app --host 0.0.0.0 --port 8000
 uv run python -X utf8 -m streamlit run src/app/web/streamlit_app.py --server.port 8501
 ```
 
-Windows 환경에서는 `-X utf8` 또는 `PYTHONUTF8=1` 사용을 권장합니다. `src.app.cli`, `src.app.service_manager`, `src.app.web.app`는 UTF-8 실행을 우선하도록 구성돼 있습니다.
+Windows 환경에서는 `-X utf8` 또는 `PYTHONUTF8=1` 사용을 권장합니다. `src.app.service_manager`와 `src.app.web.app`는 UTF-8 실행을 우선하도록 구성돼 있습니다.
 
 ## 2. 환경 변수
 
@@ -118,7 +106,7 @@ Windows 환경에서는 `-X utf8` 또는 `PYTHONUTF8=1` 사용을 권장합니�
 | `SYNTHESIS_MAX_TOKENS` | `1920` | synthesis max tokens |
 | `SYNTHESIS_PROMPT_SNIPPET_CHARS` | `960` | evidence snippet 길이 제한 |
 | `SYNTHESIS_REASONING_EFFORT` | 없음 | synthesis reasoning effort override (none/minimal/low/medium/high/xhigh, 빈 값이면 모델 기본값, none은 명시 override) |
-| `VERBOSE` | `true` | CLI 로그 상세 출력 |
+| `VERBOSE` | `true` | 에이전트 런타임 상세 로그 출력 |
 | `FASTAPI_URL` | `http://127.0.0.1:8000` | Streamlit이 호출하는 API 주소 |
 | `SESSION_TTL_SECONDS` | `1800` | 세션 TTL |
 | `MAX_ACTIVE_SESSIONS` | `200` | 최대 활성 세션 수 |
