@@ -222,7 +222,9 @@ class HistoryReportTest(unittest.TestCase):
             svg_path = root / "docs" / "assets" / "benchmark_history.svg"
             readme_path = root / "README.md"
             readme_path.write_text(
-                "# Demo\n\n## 검증 결과\n\nold\n\n## 문서\n\nkeep\n",
+                "# Demo\n\n## 검증 결과\n\n"
+                "| 테스트 | `123 passed, 4 subtests passed` |\n\n"
+                "old\n\n## 문서\n\nkeep\n",
                 encoding="utf-8",
             )
 
@@ -283,6 +285,7 @@ class HistoryReportTest(unittest.TestCase):
 
             self.assertEqual(latest.run_id, "20260307_101108")
             self.assertEqual(len(comparable), 2)
+            self.assertIn("`123 passed, 4 subtests passed`", readme_text)
             self.assertIn("`20260307_101108`", readme_text)
             self.assertIn("`output/benchmarks/latest_release_run.txt`", readme_text)
             self.assertIn("비교 가능한 2개 generated-suite 런 기준", readme_text)
