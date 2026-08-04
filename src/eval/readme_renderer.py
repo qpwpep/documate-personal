@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 
 from .history_loader import StoredRun, latest_run_pointer_name, suite_label
@@ -18,6 +19,21 @@ HISTORY_TABLE_METRICS = [
     "p95_latency_ms",
     "avg_cost_per_case_usd",
 ]
+README_TEST_RESULT_PATTERN = re.compile(
+    r"^\| [^|]+ \| `(?P<result>\d+ passed, \d+ subtests passed)` \|$",
+    re.MULTILINE,
+)
+
+
+def _existing_test_result(readme_path: Path) -> str:
+    try:
+        readme_text = readme_path.read_text(encoding="utf-8")
+    except OSError:
+        return "pytest result not recorded"
+    match = README_TEST_RESULT_PATTERN.search(readme_text)
+    if match is None:
+        return "pytest result not recorded"
+    return match.group("result")
 
 
 def format_metric_value(metric_key: str, value: float | int | None) -> str:
@@ -70,6 +86,7 @@ def build_history_readme_block(
     passed_gates, failed_gates = _gate_lists(latest.summary)
     svg_markdown_path = _relative_markdown_path(svg_path, readme_path.parent)
     pointer_name = latest_run_pointer_name(track)
+    test_result = _existing_test_result(readme_path)
 
     lines: list[str] = []
     lines.append("## 검증 결과")
@@ -78,7 +95,7 @@ def build_history_readme_block(
     lines.append("")
     lines.append("| 항목 | 결과 |")
     lines.append("|---|---:|")
-    lines.append("| 테스트 | `390 passed, 54 subtests passed` |")
+    lines.append(f"| 테스트 | `{test_result}` |")
     lines.append(f"| release benchmark | `{latest.metrics.passed_cases}/{latest.metrics.total_cases}` cases passed |")
     lines.append(f"| release pass rate | `{format_metric_value('pass_rate', latest.metrics.pass_rate)}` |")
     lines.append(
