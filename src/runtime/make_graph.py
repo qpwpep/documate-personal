@@ -4,11 +4,16 @@ from typing import Any
 
 from langgraph.graph import END, StateGraph
 
+from src.core.conversation_memory import (
+    ConversationMemoryPolicy,
+    legacy_conversation_memory_policy,
+    plan_compaction,
+)
 from src.core.contracts.boundary.debug import get_debug_state
 from src.core.contracts.boundary.graph import get_retry_state
 from src.core.contracts.boundary.planner import get_planner_state
 from src.core.contracts.boundary.response import get_response_state
-from src.runtime.nodes.session import keep_recent_messages
+from src.core.contracts.boundary.runtime import get_runtime_state
 
 
 def _record_edge_decision(
@@ -29,24 +34,33 @@ def _record_edge_decision(
     )
 
 
-def _summary_router(state: dict[str, Any], summary_max_turns: int) -> str:
+def _summary_router(
+    state: dict[str, Any],
+    summary_max_turns: int,
+    memory_policy: ConversationMemoryPolicy | None = None,
+) -> str:
     messages = state.get("messages")
     if not isinstance(messages, list):
         messages = []
-    recent_window = keep_recent_messages(messages, max_turns=summary_max_turns)
-    if len(recent_window) < len(messages):
+    policy = memory_policy or legacy_conversation_memory_policy(summary_max_turns)
+    plan = plan_compaction(
+        messages,
+        get_runtime_state(state).memory_summary,
+        policy,
+    )
+    if plan.should_compact:
         _record_edge_decision(
             state,
             source="add_user_message",
             decision="summarize",
-            reason="history_exceeds_summary_window",
+            reason=f"memory_high_watermark:{','.join(plan.trigger_reasons)}",
         )
         return "summarize"
     _record_edge_decision(
         state,
         source="add_user_message",
         decision="planner",
-        reason="history_within_summary_window",
+        reason="memory_below_high_watermarks",
     )
     return "planner"
 
@@ -137,6 +151,7 @@ def build_graph(
     action_postprocess_node: Any | None = None,
     summary_max_turns: int = 6,
     *,
+    memory_policy: ConversationMemoryPolicy | None = None,
     pre_synthesis_validation_node: Any | None = None,
     post_synthesis_validation_node: Any | None = None,
 ):
@@ -158,7 +173,7 @@ def build_graph(
 
     builder.add_conditional_edges(
         "add_user_message",
-        lambda state: _summary_router(state, summary_max_turns),
+        lambda state: _summary_router(state, summary_max_turns, memory_policy),
         {
             "summarize": "summarize_old_messages",
             "planner": "planner",

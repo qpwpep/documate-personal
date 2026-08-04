@@ -163,12 +163,20 @@ class ExecutionRunner:
         progress_emitter: Any | None = None,
     ) -> tuple[dict[str, Any], int | None]:
         self._pending_upload_retriever = None
-        state = build_graph_state_input(
-            user_input=user_input,
-            messages=self.session.messages,
-            progress_emitter=progress_emitter,
-            session_metadata=self.session.snapshot_session_metadata(),
-        )
+        conversation = self.session.snapshot_conversation_memory()
+        session_metadata = self.session.snapshot_session_metadata()
+
+        def build_state(retriever: Any | None = None) -> dict[str, Any]:
+            return build_graph_state_input(
+                user_input=user_input,
+                messages=list(conversation.messages),
+                retriever=retriever,
+                progress_emitter=progress_emitter,
+                memory_summary=conversation.memory_summary,
+                session_metadata=session_metadata,
+            )
+
+        state = build_state()
         upload_retriever_build_ms: int | None = None
 
         if upload_file_path is not None:
@@ -179,24 +187,12 @@ class ExecutionRunner:
                 self.session.cleanup_upload_retriever()
                 pending_retriever = self._start_upload_retriever_build(upload_file_path)
                 self._pending_upload_retriever = pending_retriever
-                state = build_graph_state_input(
-                    user_input=user_input,
-                    messages=self.session.messages,
-                    retriever=pending_retriever,
-                    progress_emitter=progress_emitter,
-                    session_metadata=self.session.snapshot_session_metadata(),
-                )
+                state = build_state(pending_retriever)
                 return normalize_graph_update(state), upload_retriever_build_ms
 
             handle = self.session.upload_retriever_handle
             if handle is not None:
-                state = build_graph_state_input(
-                    user_input=user_input,
-                    messages=self.session.messages,
-                    retriever=handle.retriever,
-                    progress_emitter=progress_emitter,
-                    session_metadata=self.session.snapshot_session_metadata(),
-                )
+                state = build_state(handle.retriever)
         else:
             self.session.cleanup_upload_retriever()
             self.session.upload_file_path = None

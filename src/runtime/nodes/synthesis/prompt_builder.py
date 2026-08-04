@@ -6,6 +6,7 @@ from typing import Any
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage, ToolMessage
 
 from src.core.answer_schema import clean_grounded_text
+from src.core.conversation_memory import build_untrusted_memory_prompt_messages
 from src.core.contracts import GraphState
 from src.core.contracts.boundary.runtime import get_runtime_state
 from src.core.request_contracts import AnswerContract, infer_answer_contract
@@ -250,7 +251,9 @@ def build_synthesis_messages(
         ),
     ]
     if runtime.memory_summary:
-        model_messages.append(SystemMessage(content=f"[Conversation Summary]\n{runtime.memory_summary}"))
+        model_messages.extend(
+            build_untrusted_memory_prompt_messages(runtime.memory_summary)
+        )
     model_messages.extend(trimmed_history)
     rendered_prompt_evidence = format_evidence_for_prompt(
         prompt_evidence,

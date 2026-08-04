@@ -8,13 +8,16 @@ from pathlib import Path
 from typing import Literal
 
 from dotenv import dotenv_values
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
+
+from src.core.conversation_memory import ConversationMemoryPolicy
 from src.infra.runtime_paths import get_benchmark_config_path, get_env_file_path
 
 
 DEFAULT_BENCHMARK_CONFIG_PATH = get_benchmark_config_path()
 ReasoningEffort = Literal["none", "minimal", "low", "medium", "high", "xhigh"]
+EnvExampleGroup = Literal["required_secrets", "application_settings", "slack"]
 
 
 @dataclass(frozen=True)
@@ -27,11 +30,24 @@ class EnvVarSpec:
     section: Literal["app", "benchmark"] = "app"
     config_runtime_key: str | None = None
     sync_notes: tuple[str, ...] = ()
+    example_group: EnvExampleGroup = "application_settings"
 
 
 APP_ENV_SPECS = (
-    EnvVarSpec("OPENAI_API_KEY", "openai_api_key", None, "OpenAI 호출과 임베딩 생성에 필요"),
-    EnvVarSpec("TAVILY_API_KEY", "tavily_api_key", None, "공식 문서 검색에 필요"),
+    EnvVarSpec(
+        "OPENAI_API_KEY",
+        "openai_api_key",
+        None,
+        "OpenAI 호출과 임베딩 생성에 필요",
+        example_group="required_secrets",
+    ),
+    EnvVarSpec(
+        "TAVILY_API_KEY",
+        "tavily_api_key",
+        None,
+        "공식 문서 검색에 필요",
+        example_group="required_secrets",
+    ),
     EnvVarSpec("CHAT_MODEL", "chat_model", "gpt-5.4-nano", "synthesis 모델 기본값", example="gpt-5.4-nano"),
     EnvVarSpec("PLANNER_MODEL", "planner_model", "gpt-5.4-nano", "planner 모델 기본값", example="gpt-5.4-nano"),
     EnvVarSpec("SUMMARY_MODEL", "summary_model", "gpt-5.4-nano", "session summary 모델 기본값", example="gpt-5.4-nano"),
@@ -90,9 +106,104 @@ APP_ENV_SPECS = (
         "업로드/생성 파일 정리 주기",
         example=60,
     ),
-    EnvVarSpec("SLACK_BOT_TOKEN", "slack_bot_token", None, "Slack 전송용 토큰"),
-    EnvVarSpec("SLACK_DEFAULT_DM_EMAIL", "slack_default_dm_email", None, "기본 DM 대상 이메일"),
-    EnvVarSpec("SLACK_DEFAULT_USER_ID", "slack_default_user_id", None, "기본 DM 대상 사용자"),
+    EnvVarSpec(
+        "MEMORY_HIGH_WATER_TURNS",
+        "memory_high_water_turns",
+        8,
+        "대화 compaction을 시작하는 Human turn high watermark",
+        example=8,
+    ),
+    EnvVarSpec(
+        "MEMORY_LOW_WATER_TURNS",
+        "memory_low_water_turns",
+        6,
+        "compaction 후 Human turn low watermark",
+        example=6,
+    ),
+    EnvVarSpec(
+        "MEMORY_HIGH_WATER_TOKENS",
+        "memory_high_water_tokens",
+        32000,
+        "대화 메모리 추정 token high watermark",
+        example=32000,
+    ),
+    EnvVarSpec(
+        "MEMORY_LOW_WATER_TOKENS",
+        "memory_low_water_tokens",
+        16000,
+        "compaction 후 추정 token low watermark",
+        example=16000,
+    ),
+    EnvVarSpec(
+        "MEMORY_HIGH_WATER_BYTES",
+        "memory_high_water_bytes",
+        98304,
+        "대화 메모리 UTF-8 직렬화 byte high watermark",
+        example=98304,
+    ),
+    EnvVarSpec(
+        "MEMORY_LOW_WATER_BYTES",
+        "memory_low_water_bytes",
+        49152,
+        "compaction 후 UTF-8 직렬화 byte low watermark",
+        example=49152,
+    ),
+    EnvVarSpec(
+        "MEMORY_HIGH_WATER_MESSAGES",
+        "memory_high_water_messages",
+        18,
+        "대화 메시지 수 high watermark",
+        example=18,
+    ),
+    EnvVarSpec(
+        "MEMORY_LOW_WATER_MESSAGES",
+        "memory_low_water_messages",
+        14,
+        "compaction 후 메시지 수 low watermark",
+        example=14,
+    ),
+    EnvVarSpec(
+        "MEMORY_SUMMARY_MAX_TOKENS",
+        "memory_summary_max_tokens",
+        256,
+        "rolling summary 출력·저장 추정 token 상한",
+        example=256,
+    ),
+    EnvVarSpec(
+        "MEMORY_SUMMARY_MAX_BYTES",
+        "memory_summary_max_bytes",
+        4096,
+        "rolling summary UTF-8 byte 상한",
+        example=4096,
+    ),
+    EnvVarSpec(
+        "MEMORY_HARD_MAX_BYTES",
+        "memory_hard_max_bytes",
+        131072,
+        "summary와 최근 메시지를 합친 durable snapshot 절대 byte 상한",
+        example=131072,
+    ),
+    EnvVarSpec(
+        "SLACK_BOT_TOKEN",
+        "slack_bot_token",
+        None,
+        "Slack 전송용 토큰",
+        example_group="slack",
+    ),
+    EnvVarSpec(
+        "SLACK_DEFAULT_DM_EMAIL",
+        "slack_default_dm_email",
+        None,
+        "기본 DM 대상 이메일",
+        example_group="slack",
+    ),
+    EnvVarSpec(
+        "SLACK_DEFAULT_USER_ID",
+        "slack_default_user_id",
+        None,
+        "기본 DM 대상 사용자",
+        example_group="slack",
+    ),
 )
 
 BENCHMARK_ENV_SPECS = (
@@ -425,6 +536,61 @@ class AppSettings(BaseSettings):
         alias="FILE_CLEANUP_INTERVAL_SECONDS",
         ge=1,
     )
+    memory_high_water_turns: int = Field(
+        default=_app_default("MEMORY_HIGH_WATER_TURNS"),
+        alias="MEMORY_HIGH_WATER_TURNS",
+        ge=1,
+    )
+    memory_low_water_turns: int = Field(
+        default=_app_default("MEMORY_LOW_WATER_TURNS"),
+        alias="MEMORY_LOW_WATER_TURNS",
+        ge=1,
+    )
+    memory_high_water_tokens: int = Field(
+        default=_app_default("MEMORY_HIGH_WATER_TOKENS"),
+        alias="MEMORY_HIGH_WATER_TOKENS",
+        ge=1,
+    )
+    memory_low_water_tokens: int = Field(
+        default=_app_default("MEMORY_LOW_WATER_TOKENS"),
+        alias="MEMORY_LOW_WATER_TOKENS",
+        ge=1,
+    )
+    memory_high_water_bytes: int = Field(
+        default=_app_default("MEMORY_HIGH_WATER_BYTES"),
+        alias="MEMORY_HIGH_WATER_BYTES",
+        ge=1,
+    )
+    memory_low_water_bytes: int = Field(
+        default=_app_default("MEMORY_LOW_WATER_BYTES"),
+        alias="MEMORY_LOW_WATER_BYTES",
+        ge=1,
+    )
+    memory_high_water_messages: int = Field(
+        default=_app_default("MEMORY_HIGH_WATER_MESSAGES"),
+        alias="MEMORY_HIGH_WATER_MESSAGES",
+        ge=1,
+    )
+    memory_low_water_messages: int = Field(
+        default=_app_default("MEMORY_LOW_WATER_MESSAGES"),
+        alias="MEMORY_LOW_WATER_MESSAGES",
+        ge=1,
+    )
+    memory_summary_max_tokens: int = Field(
+        default=_app_default("MEMORY_SUMMARY_MAX_TOKENS"),
+        alias="MEMORY_SUMMARY_MAX_TOKENS",
+        ge=1,
+    )
+    memory_summary_max_bytes: int = Field(
+        default=_app_default("MEMORY_SUMMARY_MAX_BYTES"),
+        alias="MEMORY_SUMMARY_MAX_BYTES",
+        ge=1,
+    )
+    memory_hard_max_bytes: int = Field(
+        default=_app_default("MEMORY_HARD_MAX_BYTES"),
+        alias="MEMORY_HARD_MAX_BYTES",
+        ge=1,
+    )
 
     slack_bot_token: str | None = Field(default=_app_default("SLACK_BOT_TOKEN"), alias="SLACK_BOT_TOKEN")
     slack_default_dm_email: str | None = Field(default=_app_default("SLACK_DEFAULT_DM_EMAIL"), alias="SLACK_DEFAULT_DM_EMAIL")
@@ -441,7 +607,38 @@ class AppSettings(BaseSettings):
             "synthesis_use_responses_api": str(self.synthesis_use_responses_api).lower(),
             "synthesis_max_tokens": self.synthesis_max_tokens,
             "synthesis_reasoning_effort": self.synthesis_reasoning_effort or "model_default",
+            "memory_high_water_turns": self.memory_high_water_turns,
+            "memory_low_water_turns": self.memory_low_water_turns,
+            "memory_high_water_tokens": self.memory_high_water_tokens,
+            "memory_low_water_tokens": self.memory_low_water_tokens,
+            "memory_high_water_bytes": self.memory_high_water_bytes,
+            "memory_low_water_bytes": self.memory_low_water_bytes,
+            "memory_high_water_messages": self.memory_high_water_messages,
+            "memory_low_water_messages": self.memory_low_water_messages,
+            "memory_summary_max_tokens": self.memory_summary_max_tokens,
+            "memory_summary_max_bytes": self.memory_summary_max_bytes,
+            "memory_hard_max_bytes": self.memory_hard_max_bytes,
         }
+
+    def conversation_memory_policy(self) -> ConversationMemoryPolicy:
+        return ConversationMemoryPolicy(
+            high_water_turns=self.memory_high_water_turns,
+            low_water_turns=self.memory_low_water_turns,
+            high_water_tokens=self.memory_high_water_tokens,
+            low_water_tokens=self.memory_low_water_tokens,
+            high_water_bytes=self.memory_high_water_bytes,
+            low_water_bytes=self.memory_low_water_bytes,
+            high_water_messages=self.memory_high_water_messages,
+            low_water_messages=self.memory_low_water_messages,
+            summary_max_tokens=self.memory_summary_max_tokens,
+            summary_max_bytes=self.memory_summary_max_bytes,
+            hard_max_bytes=self.memory_hard_max_bytes,
+        )
+
+    @model_validator(mode="after")
+    def _validate_conversation_memory_policy(self) -> "AppSettings":
+        self.conversation_memory_policy()
+        return self
 
     @field_validator("synthesis_reasoning_effort", mode="before")
     @classmethod

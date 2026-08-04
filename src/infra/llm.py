@@ -93,7 +93,7 @@ def build_llm_registry(settings: AppSettings) -> LLMRegistry:
         model=settings.summary_model,
         api_key=settings.openai_api_key,
         temperature=0,
-        max_tokens=250,
+        max_tokens=settings.memory_summary_max_tokens,
         timeout=60,
         max_retries=2,
         verbose=settings.verbose,

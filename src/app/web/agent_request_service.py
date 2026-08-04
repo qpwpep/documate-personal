@@ -24,10 +24,11 @@ _STREAM_DONE = object()
 
 def _query_log_fields(query: str) -> dict[str, Any]:
     normalized_query = str(query or "")
+    encoded_query = normalized_query.encode("utf-8", errors="replace")
     return {
-        "query": normalized_query[:240],
         "query_length": len(normalized_query),
-        "query_hash": hashlib.sha256(normalized_query.encode("utf-8")).hexdigest(),
+        "query_utf8_bytes": len(encoded_query),
+        "query_hash": hashlib.sha256(encoded_query).hexdigest(),
     }
 
 
