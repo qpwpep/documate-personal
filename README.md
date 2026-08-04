@@ -55,6 +55,7 @@ DocuMate에서 중점적으로 개선한 범위는 단순한 챗봇 구현보다
 - 공식 문서 검색, 로컬 노트북 RAG, 업로드 파일 검색을 `docs`, `local`, `upload` route로 분리하고 evidence payload와 diagnostics를 정규화했습니다.
 - 최종 답변을 `answer`, `claims`, `evidence`, `confidence`, `sections` 기반의 grounded response schema로 정리했습니다.
 - FastAPI와 Streamlit을 같은 런타임 경로에 연결하고, 세션 TTL/LRU, 요청 lock, SSE progress, 업로드/생성 파일 cleanup을 구현했습니다.
+- 장기 대화는 고정 예산 rolling summary와 최근 canonical Human/AI 메시지로 유지하며, LangGraph reducer에서 퇴출 원문을 실제 삭제하고 응답 조립 성공 후에만 원자적으로 세션에 반영합니다.
 - 120-case online release benchmark와 pytest 회귀 테스트를 통해 pass rate, citation compliance, latency, 비용을 추적합니다.
 
 구조를 이렇게 나눈 이유와 주요 트레이드오프는 [설계 판단 기록](docs/design_rationale.md)에 정리했습니다. 실행 방법, 환경 변수, API 계약, 파일 제약, 운영 메모는 [런타임 참고 문서](docs/runtime_reference.md)를 참고하세요.
@@ -70,6 +71,7 @@ DocuMate에서 중점적으로 개선한 범위는 단순한 챗봇 구현보다
 | 답변 형식 | 자연어 응답 중심 | `answer`, `claims`, `evidence`, `confidence`, `sections` 구조화 payload | citation 검증과 Slack/save 액션 후처리를 같은 계약으로 처리 |
 | 웹 런타임 | 데모 UI와 백엔드 실행 기준이 느슨하게 분리 | FastAPI `POST /agent`와 Streamlit 데모가 같은 agent runtime 사용 | 화면 동작과 benchmark 대상이 같은 경로를 공유 |
 | 세션/파일 처리 | 업로드 파일과 생성 파일의 수명 관리가 약함 | 세션별 manager cache, TTL/LRU, 요청 lock, 업로드/출력 cleanup | 사용자별 업로드 격리와 반복 실행 안정성 강화 |
+| 장기 대화 메모리 | 원문 history가 계속 누적되거나 생성한 summary가 다음 요청에서 사라질 수 있음 | high/low watermark, bounded rolling summary, reducer 삭제, canonical Human/AI projection, atomic commit | 장기 세션의 prompt·프로세스 메모리에 검증 가능한 상한을 두고 Tool payload 재주입을 차단 |
 | 검증 체계 | 수동 확인과 일부 실험 결과 중심 | pytest 회귀 테스트 + 120-case online release benchmark | pass rate, citation compliance, latency, 비용을 변경마다 비교 가능 |
 
 ### 핵심 graph 다이어그램
@@ -78,16 +80,20 @@ DocuMate에서 중점적으로 개선한 범위는 단순한 챗봇 구현보다
 flowchart LR
     User["사용자 질문/파일 업로드"] --> API["FastAPI / Streamlit 런타임"]
     API --> Session["세션 관리<br/>TTL/LRU, request lock, upload cleanup"]
-    Session --> Graph["LangGraph agent runtime"]
-
-    Graph --> Planner["planner<br/>의도/route 결정"]
+    Session --> Memory["bounded conversation snapshot<br/>rolling summary + recent Human/AI"]
+    Memory --> Add["add_user_message"]
+    Add --> Compact["memory policy<br/>high → low watermark compaction"]
+    Compact --> Planner["planner<br/>의도/route 결정"]
     Planner --> Retrieval["retrieve_dispatch<br/>docs/local/upload 병렬 검색"]
     Retrieval --> Evidence["evidence + diagnostics<br/>출처, warning, latency"]
     Evidence --> PreCheck["pre-synthesis validation<br/>근거 품질/route coverage"]
     PreCheck --> Synthesis["synthesis<br/>grounded response payload"]
     Synthesis --> PostCheck["post-synthesis validation<br/>unsupported claim 점검"]
     PostCheck --> Action["action_postprocess<br/>save_text / Slack"]
-    Action --> Response["최종 응답<br/>answer, claims, evidence, confidence"]
+    Action --> Assembly["response assembly<br/>Tool receipt/debug 소비"]
+    Assembly --> Response["최종 응답<br/>answer, claims, evidence, confidence"]
+    Assembly --> Commit["canonical projection + atomic commit"]
+    Commit --> Memory
 
     PreCheck -. "필요 시 선택적 재검색" .-> Planner
     PostCheck -. "필요 시 repair/retry" .-> Planner
@@ -103,6 +109,7 @@ flowchart LR
 | 구조화 응답 | claim과 evidence를 함께 유지하는 grounded response payload를 반환합니다. |
 | 검증/재시도 | evidence 품질과 route coverage를 확인하고 필요한 경우 선택적으로 재검색합니다. |
 | 액션 후처리 | 요청에 따라 답변을 텍스트 파일로 저장하거나 Slack에 전송합니다. |
+| bounded 대화 메모리 | rolling summary와 최근 Human/AI turn을 token·UTF-8 byte·message·turn 예산 안에 유지하고, 오래된 Tool payload는 세션에 저장하지 않습니다. |
 | 관측성 | `include_debug=true`에서 latency breakdown, diagnostics, retry context, LLM call metadata를 확인할 수 있습니다. |
 
 ## 구현 개요
@@ -110,7 +117,7 @@ flowchart LR
 주요 기준 경로는 `src/runtime/graph_builder.py`, `src/runtime/make_graph.py`, `src/infra/tools/*`, `src/runtime/nodes/*`, `src/app/web/*`, `src/eval/*`입니다.
 
 - `src/app/`: FastAPI/Streamlit 웹 런타임, 서비스 매니저, 세션별 `AgentFlowManager`
-- `src/core/`: `GraphState`, planner/response/debug 계약, evidence 모델, 응답 스키마
+- `src/core/`: `GraphState`, bounded conversation memory 정책, planner/response/debug 계약, evidence 모델, 응답 스키마
 - `src/infra/`: 설정, LLM registry, Chroma/RAG, Tavily docs search, Slack/save 도구
 - `src/runtime/`: LangGraph 조립과 session/planner/retrieval/validation/synthesis/action 노드
 - `src/eval/`: online benchmark, scoring, report/history 생성
@@ -121,7 +128,7 @@ flowchart LR
 
 | 항목 | 결과 |
 |---|---:|
-| 테스트 | `390 passed, 54 subtests passed` |
+| 테스트 | `427 passed, 56 subtests passed` |
 | release benchmark | `116/120` cases passed |
 | release pass rate | `0.9667` |
 | tool precision / recall | `0.9677` / `1.0000` |

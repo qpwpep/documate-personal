@@ -16,6 +16,16 @@ DocuMate는 LangGraph 기반 학습 보조 에이전트입니다. 현재 구조�
 
 이 구조의 목표는 각 단계가 명확한 상태 계약을 주고받게 만드는 것입니다. `GraphState`는 `runtime`, `planner`, `retrieval`, `retry`, `response`, `debug` 영역으로 나뉘며, boundary adapter가 dict와 Pydantic 모델 사이의 상태를 정규화합니다. planner는 검색 필요 여부와 route를 결정하고, retrieval은 route별 evidence와 diagnostics를 모으며, validation은 근거 품질과 route coverage를 확인하고, synthesis는 최종 답변을 구조화합니다.
 
+### 유한한 장기 대화 메모리
+
+대화 메모리는 `bounded rolling summary + bounded recent canonical messages`라는 두 부분으로 나눴습니다. `ConversationMemoryPolicy`가 Human turn, 추정 token, UTF-8 직렬화 byte, message 수의 high/low watermark와 최종 hard byte limit을 한곳에서 관리합니다. 어느 high watermark든 도달하면 가장 오래된 완결 turn부터 퇴출해 모든 low watermark를 만족하는 가장 긴 최근 suffix를 남깁니다. 정확한 모델 tokenizer가 없어도 실제 크기 상한이 유지되도록 token 값은 보수적인 추정치로 사용하고, UTF-8 직렬화 byte를 독립적인 backstop으로 검사합니다.
+
+`GraphState.messages`는 LangGraph의 `add_messages` reducer를 사용하므로 최근 리스트만 반환해서는 누락된 과거 메시지가 삭제되지 않습니다. 요약 노드는 `RemoveMessage(id=REMOVE_ALL_MESSAGES)`와 retained suffix를 함께 반환해 reducer에 전체 교체 의도를 명시합니다. router와 요약 노드는 같은 pure compaction plan을 사용하므로 trigger 판단과 실제 퇴출 범위가 어긋나지 않습니다.
+
+summary도 별도로 bounded합니다. 새 summary는 `기존 bounded summary + 이번에 새로 퇴출된 대화`를 하나의 replacement memory로 다시 작성한 결과이며, 이전 summary 뒤에 새 문자열을 append하지 않습니다. Tool/System payload는 요약 입력에서 제외합니다. summarizer 예외나 빈 출력에는 기존 summary와 새 transcript의 head/tail을 함께 보존하는 deterministic fallback을 적용하고, 결과를 token·byte 상한에 다시 맞춥니다. fallback 사용 여부와 before/after 크기는 기록하지만 대화 내용은 로그에 남기지 않습니다.
+
+planner와 synthesis에 전달되는 summary는 과거 사용자 입력에서 유래한 비신뢰 데이터입니다. 고정 System policy가 그 안의 명령을 따르거나 검색 evidence로 취급하지 말라고 명시하고, 실제 summary payload는 system instruction이 아닌 별도 assistant data message로 전달합니다.
+
 ### 검색 route 분리
 
 검색 소스는 `docs`, `local`, `upload` route로 분리했습니다. 공식 문서 검색, 로컬 노트북 RAG, 세션 업로드 파일 검색은 데이터 출처와 신뢰 기준이 다르기 때문입니다.
@@ -44,6 +54,8 @@ FastAPI는 실제 API 실행과 세션 관리를 담당하고, Streamlit은 사�
 
 세션별 manager cache, TTL/LRU 기반 정리, 요청 lock, SSE progress, 업로드/생성 파일 cleanup을 포함해 데모 UI와 실제 실행 경로가 같은 런타임을 바라보게 했습니다. `/agent/stream`은 `ProgressEmitter`로 request, stage, progress snapshot, final response, error, done 이벤트를 내보냅니다.
 
+`SessionContext`는 최근 messages와 `memory_summary`를 하나의 immutable conversation snapshot으로 소유합니다. graph가 반환한 전체 메시지는 먼저 debug와 response assembly가 사용합니다. 사용자가 볼 응답까지 정상적으로 조립된 뒤에만 Tool/System/중간 AI를 제거하고 각 Human turn과 canonical final AI를 남겨 summary와 함께 단일 참조 교체로 commit합니다. graph, debug, assembly, projection 중 하나라도 실패하면 이전 정상 snapshot은 그대로 유지됩니다. 이 원자성은 대화 메모리에 한정되며 이미 실행된 파일 저장·Slack 전송 같은 외부 side effect까지 rollback하지는 않습니다.
+
 이 구조는 포트폴리오 데모와 백엔드 검증을 분리하지 않기 위한 선택입니다. 화면에서 보이는 동작이 테스트 및 benchmark 대상인 `POST /agent` 흐름과 이어져 있어야 유지보수 기준이 단순해집니다.
 
 ## 3. 주요 트레이드오프
@@ -60,11 +72,17 @@ DocuMate는 포트폴리오 프로젝트이지만, 검색 품질과 근거 검�
 
 현재 구조는 route별 처리 비용이 조금 더 들지만, evidence 출처와 진단 정보를 명확히 남기는 쪽을 우선했습니다. `RetrievalDiagnostic`에는 route status, error code, provider time, URL validation time, filtering count, warning, hedge metadata가 남기 때문에 benchmark와 debug payload에서 실패 원인을 좁히기 쉽습니다.
 
+### 원문 전체 보존보다 bounded rolling memory를 선택
+
+요약은 본질적으로 손실 압축이므로 오래된 원문을 전부 보존하는 것과 같은 의미 충실도를 보장하지 않습니다. 대신 process-local session memory와 다음 prompt 크기, 요약 호출 비용에 명시적인 상한을 둘 수 있습니다. high/low watermark를 사용해 한 번의 compaction에서 target까지 내리므로 window가 찬 뒤 매 요청마다 한 turn만 요약하는 진동도 줄였습니다.
+
+ToolMessage 원문과 provider metadata를 durable snapshot에 저장하지 않는 선택 역시 같은 트레이드오프입니다. 현재 요청의 response assembly와 debug에는 전체 payload를 사용하지만 다음 요청에는 사용자 질문과 실제 표시된 assistant 답변만 넘깁니다. 완전한 event replay 가능성은 줄어드는 대신 검색 원문·파일 내용·tool receipt가 장기 대화에 반복 주입되는 비용과 개인정보 노출 면적을 줄입니다.
+
 ### 테스트와 benchmark에 운영 비용을 투자
 
 개인 프로젝트에서 120-case release benchmark와 pytest 기반 회귀 테스트를 유지하는 것은 비용이 있습니다. fixture 관리, judge 설정, latency 및 비용 지표 확인이 필요하기 때문입니다.
 
-대신 변경 후 품질을 감으로 판단하지 않아도 됩니다. 현재 문서화된 최신 release benchmark는 `20260509_043436` 런 기준 120개 중 116개 케이스 통과, release pass rate `0.9667`, tool precision `0.9677`, tool recall `1.0000`, citation compliance `0.9556`, p95 latency `9435.9 ms`, 평균 cost `$0.00523362`를 기록했고, 테스트는 `390 passed, 54 subtests passed`로 검증되었습니다.
+대신 변경 후 품질을 감으로 판단하지 않아도 됩니다. 현재 문서화된 최신 release benchmark는 `20260509_043436` 런 기준 120개 중 116개 케이스 통과, release pass rate `0.9667`, tool precision `0.9677`, tool recall `1.0000`, citation compliance `0.9556`, p95 latency `9435.9 ms`, 평균 cost `$0.00523362`를 기록했고, 테스트는 `427 passed, 56 subtests passed`로 검증되었습니다.
 
 ## 4. 가장 어려웠던 문제: Latency와 Retrieval 품질
 
@@ -100,9 +118,11 @@ synthesis 단계에서는 category별 prompt budget을 적용했습니다. `docs
 
 현재 debug schema version은 `4`입니다. debug payload에는 tool call, token usage, model usage status, validation events, edge decisions, observed evidence, action results, stage별 latency, retrieval route latency, synthesis attempt mode가 포함됩니다. 이 정보는 일반 사용자 답변이 아니라 회귀 분석과 benchmark 해석을 위한 진단 계층입니다.
 
+대화 compaction은 `edge_decisions`에 trigger 차원, before/after turn·message·추정 token·직렬화 byte, removed message 수, fallback 여부를 남깁니다. fallback은 `validation_events`에도 degraded 신호로 기록합니다. 이 진단과 구조화 로그에는 원문 query, summary, ToolMessage content를 포함하지 않습니다.
+
 ### 세션 단위 격리
 
-업로드 파일 검색과 대화 상태는 세션 단위로 다룹니다. 세션별 manager cache, TTL/LRU 정리, 요청 lock을 두어 한 사용자의 업로드나 실행 상태가 다른 흐름과 섞이지 않게 관리합니다.
+업로드 파일 검색과 대화 상태는 세션 단위로 다룹니다. 세션별 manager cache, TTL/LRU 정리, 요청 lock을 두어 한 사용자의 업로드나 실행 상태가 다른 흐름과 섞이지 않게 관리합니다. close, exit, TTL/LRU eviction은 messages와 summary를 함께 제거합니다. 현재 store는 process-local in-memory 구현이므로 서버 재시작이나 여러 worker 사이에서 대화 상태를 복원하지는 않습니다.
 
 업로드 파일은 `uploads/<session_id>/...` 아래의 `.py` 또는 `.ipynb`만 허용합니다. 세션 디렉터리 밖 경로는 `validate_upload_file_path()`에서 차단하고, 다운로드도 `output/save_text` 아래 상대 경로만 허용합니다. 업로드 retriever는 세션별 Chroma collection으로 만들고, 세션 종료나 파일 교체 시 cleanup합니다.
 
@@ -121,3 +141,6 @@ DocuMate의 다음 개선 방향은 더 많은 기능을 붙이는 것보다, �
 - Streamlit 데모에서 evidence와 claim의 관계를 더 직관적으로 확인할 수 있는 표시 방식을 개선합니다.
 - upload retriever build와 synthesis fallback의 비용/지연을 benchmark summary에서 더 세밀하게 분리합니다.
 - benchmark fixture를 주기적으로 보강해 공식 문서 검색, 로컬 RAG, 업로드 검색, tool action 흐름의 회귀 범위를 넓힙니다.
+- rolling summary의 사실 보존율을 장기 대화 전용 eval fixture로 계측하고, 모델별 tokenizer를 알 수 있을 때 현재 보수적 추정기를 교정합니다.
+- 인증·소유권과 암호화를 포함한 외부 session store가 필요해지면 process restart와 multi-worker를 지원하는 별도 persistence 계층을 도입합니다.
+- Streamlit의 새 대화 동작이 이전 backend session을 TTL까지 남겨 두지 않고 즉시 폐기하도록 reset API의 동시성·멱등성 계약을 설계합니다.
