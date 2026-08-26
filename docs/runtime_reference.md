@@ -93,16 +93,10 @@ Windows 환경에서는 `-X utf8` 또는 `PYTHONUTF8=1` 사용을 권장합니�
 | `PLANNER_MODEL` | `gpt-5.4-nano` | planner 모델 기본값 |
 | `SUMMARY_MODEL` | `gpt-5.4-nano` | session summary 모델 기본값 |
 | `PLANNER_MAX_TOKENS` | `1920` | planner structured output 최대 토큰 |
-| `TAIL_HEDGE_MAX_CONCURRENCY` | `8` | tail latency hedge max concurrency |
-| `TAIL_HEDGE_MAX_ATTEMPTS` | `3` | tail latency hedge max attempts per call |
-| `PLANNER_HEDGE_DELAY_SECONDS` | `0.5` | planner tail latency hedge delay |
-| `DOCS_SEARCH_TIMEOUT_SECONDS` | `5` | Tavily 검색 timeout |
-| `DOCS_SEARCH_HEDGE_DELAY_SECONDS` | `0.5` | Tavily 검색 tail latency hedge delay |
-| `SYNTHESIS_TIMEOUT_SECONDS` | `20` | synthesis timeout |
-| `SYNTHESIS_HEDGE_DELAY_SECONDS` | `0.2` | synthesis tail latency hedge delay |
-| `SYNTHESIS_HEDGE_MAX_ATTEMPTS` | `4` | synthesis tail latency hedge max attempts |
+| `DOCS_SEARCH_TIMEOUT_SECONDS` | `5` | Tavily 요청별 timeout |
+| `SYNTHESIS_TIMEOUT_SECONDS` | `20` | synthesis provider 요청 timeout |
 | `SYNTHESIS_USE_RESPONSES_API` | `false` | synthesis Responses API 사용 여부 |
-| `SYNTHESIS_MAX_RETRIES` | `0` | synthesis 자체 재시도 횟수 |
+| `SYNTHESIS_MAX_RETRIES` | `0` | synthesis provider SDK 재시도 횟수 |
 | `SYNTHESIS_MAX_TOKENS` | `1920` | synthesis max tokens |
 | `SYNTHESIS_PROMPT_SNIPPET_CHARS` | `960` | evidence snippet 길이 제한 |
 | `SYNTHESIS_REASONING_EFFORT` | 없음 | synthesis reasoning effort override (none/minimal/low/medium/high/xhigh, 빈 값이면 모델 기본값, none은 명시 override) |
@@ -162,6 +156,8 @@ UI와 문서 검색 규칙은 아래 파일을 기준으로 관리합니다.
 - `src/infra/config/agent_rules.toml`: docs allowlist, intent rule, query hint 규칙
 
 현재 기본 문서 소스는 Python, Git, LangChain, Matplotlib, NumPy, pandas, PyTorch, Hugging Face, FastAPI, BeautifulSoup, Streamlit, Gradio, scikit-learn, Pydantic입니다.
+
+`docs` route는 query 하나당 Tavily 요청을 한 번 수행합니다. 첫 검색으로 유효한 evidence나 필요한 identifier coverage를 확보하지 못하면 query hint의 fallback을 정의된 순서대로 하나씩 실행하고, 충분한 근거를 확보하는 즉시 중단합니다. `DOCS_SEARCH_TIMEOUT_SECONDS`는 이 개별 Tavily 요청 각각에 적용되며 route 전체를 하나의 deadline으로 제한하는 값은 아닙니다.
 
 ### 3.2 업로드 파일
 
@@ -345,7 +341,9 @@ compaction 진단은 debug `edge_decisions`와 구조화 로그에서 before/aft
 
 - `src.app.service_manager`는 FastAPI와 Streamlit을 함께 띄우고 종료합니다.
 - `src.app.web.session_store`는 세션별 단일 요청 직렬화 lock을 사용합니다.
-- startup의 `fastapi_runtime_settings` 로그에는 현재 memory high/low/hard policy가 포함됩니다.
+- planner 구조화 요청은 OpenAI client의 요청별 30초 timeout과 최대 2회 SDK 재시도를 사용합니다. 이 값은 stage 전체 deadline이 아니므로 재시도와 SDK backoff를 포함한 총 실행 시간은 30초를 넘을 수 있습니다.
+- synthesis 구조화 요청은 요청별 `SYNTHESIS_TIMEOUT_SECONDS`와 `SYNTHESIS_MAX_RETRIES`를 사용합니다. 재시도를 허용하면 primary synthesis의 총 실행 시간은 설정된 요청별 timeout을 넘을 수 있으며, compact fallback은 절반의 token·timeout budget과 SDK 재시도 0회를 사용합니다.
+- startup의 `fastapi_runtime_settings` 로그에는 모델, Docs/Synthesis timeout, Synthesis SDK retry, memory high/low/hard policy가 포함됩니다.
 - agent request 로그는 query 원문 대신 문자 수, UTF-8 byte 수, SHA-256 hash만 기록합니다.
 - `src.infra.rag_build`는 증분 인덱싱을 위해 `data/index/manifest.json`을 관리합니다.
 - benchmark 최신 성능 정본은 `output/benchmarks/latest_release_run.txt`입니다.
@@ -362,6 +360,6 @@ uv run python script/check_encoding.py
 uv run python script/sync_env_example.py --check
 ```
 
-2026-08-04 KST 기준 전체 검증 결과는 `427 passed, 56 subtests passed`입니다. bounded memory에는 compiled reducer 회귀, 반복 rolling summary, LLM 예외/빈 출력 fallback, cross-request persistence, response assembly rollback, message ownership 격리, ToolMessage projection, JSON escape-heavy byte fitting, policy envelope, TTL/세션 격리, query boundary, Hypothesis Unicode/property, 300-turn plateau 테스트가 포함됩니다.
+2026-08-26 KST 기준 전체 검증 결과는 `429 passed, 56 subtests passed`입니다. bounded memory에는 compiled reducer 회귀, 반복 rolling summary, LLM 예외/빈 출력 fallback, cross-request persistence, response assembly rollback, message ownership 격리, ToolMessage projection, JSON escape-heavy byte fitting, policy envelope, TTL/세션 격리, query boundary, Hypothesis Unicode/property, 300-turn plateau 테스트가 포함됩니다.
 
 벤치마크 관련 명령은 [벤치마크 가이드](benchmarking.md), 최신 결과는 [벤치마크 결과](benchmark_results.md)를 참고하세요. benchmark CLI의 env override 우선순위는 `CLI > .env > OS env > config.toml`입니다.
