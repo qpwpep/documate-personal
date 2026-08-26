@@ -128,7 +128,7 @@ flowchart LR
 
 | 항목 | 결과 |
 |---|---:|
-| 테스트 | `427 passed, 56 subtests passed` |
+| 테스트 | `429 passed, 56 subtests passed` |
 | release benchmark | `116/120` cases passed |
 | release pass rate | `0.9667` |
 | tool precision / recall | `0.9677` / `1.0000` |
@@ -136,14 +136,13 @@ flowchart LR
 | p95 latency | `9435.9 ms` |
 | avg cost per case | `$0.00523362` |
 
-최근 comparable generated-suite 기준으로 pass rate는 `0.3833`에서 `0.9667`로, citation compliance는 `0.3056`에서 `0.9556`으로 올라갔고 p95 latency는 `62063.0 ms`에서 `9435.9 ms`로 줄었습니다. 상세 trend 해석은 [벤치마크 결과](docs/benchmark_results.md), 실행 방법은 [벤치마크 가이드](docs/benchmarking.md)를 참고하세요.
+최근 comparable generated-suite 기준으로 pass rate는 `0.3833`에서 `0.9667`로, citation compliance는 `0.3056`에서 `0.9556`으로 올라갔고 p95 latency는 `62063.0 ms`에서 `9435.9 ms`로 줄었습니다. 실행 방법은 [벤치마크 가이드](docs/benchmarking.md)를 참고하세요.
 
 ## 문서
 
 - [런타임 참고 문서](docs/runtime_reference.md): 설치, 실행, 환경 변수, API 계약, 파일 제약, 운영 메모
 - [설계 판단 기록](docs/design_rationale.md): 구조를 나눈 이유, latency/retrieval 품질 문제, 주요 트레이드오프
 - [벤치마크 가이드](docs/benchmarking.md): online benchmark 실행과 report/history 생성
-- [벤치마크 결과](docs/benchmark_results.md): 최신 release run 지표와 해석
 - [에러 코드](docs/error_codes.md): debug payload와 benchmark에서 쓰는 주요 error code
 - [변경 이력](CHANGELOG.md): 현재 baseline과 변경 내역
 - [보관 자료 안내](archive/README.md): 팀 프로젝트 원형과 legacy 자료 위치

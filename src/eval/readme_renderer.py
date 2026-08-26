@@ -153,7 +153,7 @@ def build_history_readme_block(
     ]
     lines.append(
         f"추세 그래프는 [{svg_markdown_path}]({svg_markdown_path})에 보관합니다. "
-        f"상세 결과와 해석은 [벤치마크 결과](docs/benchmark_results.md), 실행 방법은 [벤치마크 가이드](docs/benchmarking.md)를 참고하세요. "
+        f"실행 방법은 [벤치마크 가이드](docs/benchmarking.md)를 참고하세요. "
         f"로컬 상세 리포트는 {', '.join(report_links)}에서 다시 확인할 수 있습니다."
     )
     return "\n".join(lines).rstrip() + "\n"
