@@ -47,8 +47,6 @@ def parse_retrieval_diagnostic(value: Any) -> RetrievalDiagnostic | None:
     provider_ms = _parse_non_negative_int(value.get("provider_ms", 0), default=0)
     url_validation_ms = _parse_non_negative_int(value.get("url_validation_ms", 0), default=0)
     post_filter_ms = _parse_non_negative_int(value.get("post_filter_ms", 0), default=0)
-    hedge_attempts_started = _parse_non_negative_int(value.get("hedge_attempts_started", 0), default=0)
-    hedge_attempts_dropped = _parse_non_negative_int(value.get("hedge_attempts_dropped", 0), default=0)
     normalized_score = value.get("normalized_score")
     raw_score = value.get("raw_score")
     try:
@@ -86,11 +84,6 @@ def parse_retrieval_diagnostic(value: Any) -> RetrievalDiagnostic | None:
         url_validation_ms=url_validation_ms,
         post_filter_ms=post_filter_ms,
         include_raw_content_requested=bool(value.get("include_raw_content_requested", False)),
-        hedge_started=bool(value.get("hedge_started", False)),
-        hedge_dropped=bool(value.get("hedge_dropped", False)),
-        hedge_winner=str(value.get("hedge_winner") or "").strip() or None,
-        hedge_attempts_started=hedge_attempts_started,
-        hedge_attempts_dropped=hedge_attempts_dropped,
         result_count=result_count,
         provider_result_count=provider_result_count,
         filtered_invalid_url_count=filtered_invalid_url_count,
