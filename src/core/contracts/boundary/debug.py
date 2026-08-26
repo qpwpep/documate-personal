@@ -108,7 +108,6 @@ def parse_llm_calls(value: Any) -> list[LLMCallMetadata]:
         if path not in {
             "direct",
             "structured",
-            "structured_hedge",
             "plain_fallback",
             "structured_compact_fallback",
             "plain_summary_attach_fallback",
