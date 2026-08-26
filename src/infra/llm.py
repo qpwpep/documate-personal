@@ -79,7 +79,7 @@ def build_llm_registry(settings: AppSettings) -> LLMRegistry:
         temperature=0,
         max_tokens=settings.planner_max_tokens,
         timeout=30,
-        max_retries=0 if settings.planner_hedge_delay_seconds > 0 else 2,
+        max_retries=2,
         verbose=settings.verbose,
     )
     llm_planner = llm_planner_base.with_structured_output(

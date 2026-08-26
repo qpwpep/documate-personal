@@ -1,16 +1,23 @@
-import threading
-import time
 import unittest
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from pydantic import ValidationError
 
 from src.core.contracts import PlannerDiagnostic, SessionMetadata, SlackDestination
+from src.core.planner_schema import (
+    PLANNER_WARNING_DUPLICATE_ROUTE_MERGED,
+    PlannerOutput,
+    RetrievalTask,
+)
 from src.runtime.nodes.planner import make_planner_node
 from src.runtime.nodes.planner.query_sanitizer import sanitize_retrieval_query
-from src.core.planner_schema import PLANNER_WARNING_DUPLICATE_ROUTE_MERGED, PlannerOutput, RetrievalTask
 
-from .helpers import _CapturePlannerLLM, _FailingPlannerLLM, _InvalidPlannerLLM, build_legacy_state
+from .helpers import (
+    _CapturePlannerLLM,
+    _FailingPlannerLLM,
+    _InvalidPlannerLLM,
+    build_legacy_state,
+)
 
 
 class PlannerNodeTest(unittest.TestCase):
@@ -238,53 +245,15 @@ class PlannerNodeTest(unittest.TestCase):
         self.assertEqual(updates["debug"].llm_calls[0].stage, "planner")
         self.assertEqual(updates["debug"].llm_calls[0].path, "structured")
 
-    def test_planner_uses_hedged_structured_call_when_primary_is_slow(self) -> None:
-        class _SlowFirstPlannerLLM:
-            def __init__(self) -> None:
-                self.call_count = 0
-                self.last_messages = None
-                self._lock = threading.Lock()
-
-            def invoke(self, messages):
-                self.last_messages = messages
-                with self._lock:
-                    self.call_count += 1
-                    call_index = self.call_count
-                if call_index == 1:
-                    time.sleep(0.05)
-                    query = "slow primary"
-                else:
-                    query = "fast hedge"
-                return {
-                    "raw": AIMessage(
-                        content="",
-                        response_metadata={
-                            "model_name": "gpt-5-nano",
-                            "token_usage": {
-                                "prompt_tokens": 7,
-                                "completion_tokens": 2,
-                                "total_tokens": 9,
-                            },
-                        },
-                        usage_metadata={
-                            "input_tokens": 7,
-                            "output_tokens": 2,
-                            "total_tokens": 9,
-                        },
-                    ),
-                    "parsed": PlannerOutput(
-                        use_retrieval=True,
-                        tasks=[RetrievalTask(route="docs", query=query, k=3)],
-                    ),
-                    "parsing_error": None,
-                }
-
-        capture_planner = _SlowFirstPlannerLLM()
-        planner_node = make_planner_node(
-            capture_planner,
-            verbose=False,
-            planner_hedge_delay_seconds=0.005,
+    def test_planner_uses_one_structured_request(self) -> None:
+        capture_planner = _CapturePlannerLLM(
+            PlannerOutput(
+                use_retrieval=True,
+                tasks=[RetrievalTask(route="docs", query="numpy parameters", k=3)],
+            ),
+            include_raw=True,
         )
+        planner_node = make_planner_node(capture_planner, verbose=False)
 
         updates = planner_node(
             build_legacy_state(
@@ -295,11 +264,10 @@ class PlannerNodeTest(unittest.TestCase):
             )
         )
 
-        self.assertEqual(capture_planner.call_count, 2)
+        self.assertEqual(capture_planner.call_count, 1)
         self.assertEqual(updates["planner"].status, "llm")
-        self.assertEqual(updates["planner"].output.tasks[0].query, "fast hedge")
-        self.assertEqual([item.path for item in updates["debug"].llm_calls], ["structured", "structured_hedge"])
-        self.assertEqual(updates["debug"].llm_calls[1].response_metadata["hedge_winner"], "hedge")
+        self.assertEqual(updates["planner"].output.tasks[0].query, "numpy parameters")
+        self.assertEqual([item.path for item in updates["debug"].llm_calls], ["structured"])
 
     def test_planner_prompt_preserves_library_name_for_docs_queries(self) -> None:
         capture_planner = _CapturePlannerLLM(

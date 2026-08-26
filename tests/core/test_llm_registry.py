@@ -1,8 +1,8 @@
 import unittest
 from unittest.mock import patch
 
-from src.infra.llm import build_llm_registry
 from src.core.planner_schema import PlannerOutput
+from src.infra.llm import build_llm_registry
 from src.infra.settings import AppSettings
 
 
@@ -72,7 +72,8 @@ class LLMRegistryTest(unittest.TestCase):
         self.assertNotIn("reasoning", compact_kwargs)
         planner_kwargs = _FakeChatOpenAI.created_kwargs[2]
         self.assertEqual(planner_kwargs["max_tokens"], 654)
-        self.assertEqual(planner_kwargs["max_retries"], 0)
+        self.assertEqual(planner_kwargs["timeout"], 30)
+        self.assertEqual(planner_kwargs["max_retries"], 2)
         self.assertNotIn("reasoning", planner_kwargs)
         summary_kwargs = _FakeChatOpenAI.created_kwargs[3]
         self.assertEqual(summary_kwargs["max_tokens"], 123)

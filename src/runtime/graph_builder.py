@@ -254,9 +254,6 @@ def build_agent_graph(settings: AppSettings | None = None):
         llm_planner=llm_registry.llm_planner,
         verbose=llm_registry.verbose,
         max_turns=memory_policy.low_water_turns,
-        planner_hedge_delay_seconds=app_settings.planner_hedge_delay_seconds,
-        planner_hedge_max_attempts=app_settings.tail_hedge_max_attempts,
-        planner_timeout_seconds=30,
     )
     planner_node = _instrument_stage_node("planner", planner_node)
     retrieve_dispatch_node = make_retrieve_dispatch_node(
