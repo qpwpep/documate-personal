@@ -52,16 +52,10 @@ APP_ENV_SPECS = (
     EnvVarSpec("PLANNER_MODEL", "planner_model", "gpt-5.4-nano", "planner 모델 기본값", example="gpt-5.4-nano"),
     EnvVarSpec("SUMMARY_MODEL", "summary_model", "gpt-5.4-nano", "session summary 모델 기본값", example="gpt-5.4-nano"),
     EnvVarSpec("PLANNER_MAX_TOKENS", "planner_max_tokens", 1920, "planner structured output 최대 토큰", example=1920),
-    EnvVarSpec("TAIL_HEDGE_MAX_CONCURRENCY", "tail_hedge_max_concurrency", 8, "tail latency hedge max concurrency", example=8),
-    EnvVarSpec("TAIL_HEDGE_MAX_ATTEMPTS", "tail_hedge_max_attempts", 3, "tail latency hedge max attempts per call", example=3),
-    EnvVarSpec("PLANNER_HEDGE_DELAY_SECONDS", "planner_hedge_delay_seconds", 0.5, "planner tail latency hedge delay", example=0.5),
-    EnvVarSpec("DOCS_SEARCH_TIMEOUT_SECONDS", "docs_search_timeout_seconds", 5, "Tavily 검색 timeout", example=5),
-    EnvVarSpec("DOCS_SEARCH_HEDGE_DELAY_SECONDS", "docs_search_hedge_delay_seconds", 0.5, "Tavily 검색 tail latency hedge delay", example=0.5),
-    EnvVarSpec("SYNTHESIS_TIMEOUT_SECONDS", "synthesis_timeout_seconds", 20, "synthesis timeout", example=20),
-    EnvVarSpec("SYNTHESIS_HEDGE_DELAY_SECONDS", "synthesis_hedge_delay_seconds", 0.2, "synthesis tail latency hedge delay", example=0.2),
-    EnvVarSpec("SYNTHESIS_HEDGE_MAX_ATTEMPTS", "synthesis_hedge_max_attempts", 4, "synthesis tail latency hedge max attempts", example=4),
+    EnvVarSpec("DOCS_SEARCH_TIMEOUT_SECONDS", "docs_search_timeout_seconds", 5, "Tavily 요청별 timeout", example=5),
+    EnvVarSpec("SYNTHESIS_TIMEOUT_SECONDS", "synthesis_timeout_seconds", 20, "synthesis provider 요청 timeout", example=20),
     EnvVarSpec("SYNTHESIS_USE_RESPONSES_API", "synthesis_use_responses_api", False, "synthesis Responses API 사용 여부", example=False),
-    EnvVarSpec("SYNTHESIS_MAX_RETRIES", "synthesis_max_retries", 0, "synthesis 자체 재시도 횟수", example=0),
+    EnvVarSpec("SYNTHESIS_MAX_RETRIES", "synthesis_max_retries", 0, "synthesis provider SDK 재시도 횟수", example=0),
     EnvVarSpec("SYNTHESIS_MAX_TOKENS", "synthesis_max_tokens", 1920, "synthesis max tokens", example=1920),
     EnvVarSpec(
         "SYNTHESIS_PROMPT_SNIPPET_CHARS",
@@ -454,44 +448,14 @@ class AppSettings(BaseSettings):
     planner_model: str = Field(default=_app_default("PLANNER_MODEL"), alias="PLANNER_MODEL")
     summary_model: str = Field(default=_app_default("SUMMARY_MODEL"), alias="SUMMARY_MODEL")
     planner_max_tokens: int = Field(default=_app_default("PLANNER_MAX_TOKENS"), alias="PLANNER_MAX_TOKENS", ge=1)
-    tail_hedge_max_concurrency: int = Field(
-        default=_app_default("TAIL_HEDGE_MAX_CONCURRENCY"),
-        alias="TAIL_HEDGE_MAX_CONCURRENCY",
-        ge=0,
-    )
-    tail_hedge_max_attempts: int = Field(
-        default=_app_default("TAIL_HEDGE_MAX_ATTEMPTS"),
-        alias="TAIL_HEDGE_MAX_ATTEMPTS",
-        ge=1,
-    )
-    planner_hedge_delay_seconds: float = Field(
-        default=_app_default("PLANNER_HEDGE_DELAY_SECONDS"),
-        alias="PLANNER_HEDGE_DELAY_SECONDS",
-        ge=0,
-    )
     docs_search_timeout_seconds: int = Field(
         default=_app_default("DOCS_SEARCH_TIMEOUT_SECONDS"),
         alias="DOCS_SEARCH_TIMEOUT_SECONDS",
         ge=1,
     )
-    docs_search_hedge_delay_seconds: float = Field(
-        default=_app_default("DOCS_SEARCH_HEDGE_DELAY_SECONDS"),
-        alias="DOCS_SEARCH_HEDGE_DELAY_SECONDS",
-        ge=0,
-    )
     synthesis_timeout_seconds: int = Field(
         default=_app_default("SYNTHESIS_TIMEOUT_SECONDS"),
         alias="SYNTHESIS_TIMEOUT_SECONDS",
-        ge=1,
-    )
-    synthesis_hedge_delay_seconds: float = Field(
-        default=_app_default("SYNTHESIS_HEDGE_DELAY_SECONDS"),
-        alias="SYNTHESIS_HEDGE_DELAY_SECONDS",
-        ge=0,
-    )
-    synthesis_hedge_max_attempts: int = Field(
-        default=_app_default("SYNTHESIS_HEDGE_MAX_ATTEMPTS"),
-        alias="SYNTHESIS_HEDGE_MAX_ATTEMPTS",
         ge=1,
     )
     synthesis_use_responses_api: bool = Field(
@@ -601,10 +565,10 @@ class AppSettings(BaseSettings):
             "chat_model": self.chat_model,
             "planner_model": self.planner_model,
             "summary_model": self.summary_model,
+            "docs_search_timeout_seconds": self.docs_search_timeout_seconds,
             "synthesis_timeout_seconds": self.synthesis_timeout_seconds,
-            "synthesis_hedge_delay_seconds": self.synthesis_hedge_delay_seconds,
-            "synthesis_hedge_max_attempts": self.synthesis_hedge_max_attempts,
             "synthesis_use_responses_api": str(self.synthesis_use_responses_api).lower(),
+            "synthesis_max_retries": self.synthesis_max_retries,
             "synthesis_max_tokens": self.synthesis_max_tokens,
             "synthesis_reasoning_effort": self.synthesis_reasoning_effort or "model_default",
             "memory_high_water_turns": self.memory_high_water_turns,

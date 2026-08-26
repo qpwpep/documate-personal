@@ -9,6 +9,8 @@ from src.core.contracts.boundary.response import get_response_state
 from src.core.contracts.boundary.runtime import get_runtime_state
 from src.core.latency import elapsed_ms, make_stage_latency_event
 from src.infra.llm import build_llm_registry
+from src.infra.settings import AppSettings, get_settings
+from src.infra.tools import build_tool_registry
 from src.runtime.make_graph import build_graph
 from src.runtime.nodes.actions import make_action_postprocess_node
 from src.runtime.nodes.planner import make_planner_node
@@ -16,9 +18,6 @@ from src.runtime.nodes.retrieval import make_retrieve_dispatch_node
 from src.runtime.nodes.session import add_user_message, make_summarize_node
 from src.runtime.nodes.synthesis import make_synthesize_node
 from src.runtime.nodes.validation import make_post_synthesis_validation_node, make_pre_synthesis_validation_node
-from src.infra.settings import AppSettings, get_settings
-from src.infra.tail_latency import configure_tail_hedge
-from src.infra.tools import build_tool_registry
 
 
 class StageExecutionError(RuntimeError):
@@ -235,7 +234,6 @@ def _instrument_stage_node(stage: str, node: Any, *, record_latency_trace: bool 
 def build_agent_graph(settings: AppSettings | None = None):
     app_settings = settings or get_settings()
     memory_policy = app_settings.conversation_memory_policy()
-    configure_tail_hedge(max_concurrency=app_settings.tail_hedge_max_concurrency)
     has_default_slack_destination = bool(
         app_settings.slack_default_user_id or app_settings.slack_default_dm_email
     )
