@@ -282,9 +282,6 @@ def build_agent_graph(settings: AppSettings | None = None):
         synthesis_max_tokens=app_settings.synthesis_max_tokens,
         prompt_snippet_char_limit=app_settings.synthesis_prompt_snippet_chars,
         has_default_slack_destination=has_default_slack_destination,
-        synthesis_hedge_delay_seconds=app_settings.synthesis_hedge_delay_seconds,
-        synthesis_hedge_max_attempts=app_settings.synthesis_hedge_max_attempts,
-        synthesis_timeout_seconds=app_settings.synthesis_timeout_seconds,
     )
     synthesize_node = _instrument_stage_node(
         "synthesis",

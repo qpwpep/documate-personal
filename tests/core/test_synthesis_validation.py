@@ -1,5 +1,3 @@
-import time
-import threading
 import unittest
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
@@ -1313,26 +1311,18 @@ class SynthesisValidationTest(unittest.TestCase):
         self.assertEqual(_response(updates).final_answer, "synth result")
         self.assertEqual(_response(updates).payload.claims, [])
 
-    def test_synthesize_hedges_slow_structured_call_with_same_contract(self) -> None:
-        class _SlowFirstStructuredLLM:
+    def test_synthesize_uses_one_structured_request(self) -> None:
+        class _SingleStructuredLLM:
             def __init__(self) -> None:
                 self.call_count = 0
                 self.last_messages = None
-                self._lock = threading.Lock()
 
             def with_structured_output(self, *_args, **_kwargs):
                 return self
 
             def invoke(self, messages):
-                with self._lock:
-                    self.call_count += 1
-                    call_number = self.call_count
+                self.call_count += 1
                 self.last_messages = messages
-                if call_number == 1:
-                    time.sleep(0.05)
-                    answer = "slow result"
-                else:
-                    answer = "fast result"
                 return {
                     "raw": AIMessage(
                         content="",
@@ -1351,20 +1341,15 @@ class SynthesisValidationTest(unittest.TestCase):
                         },
                     ),
                     "parsed": {
-                        "answer": answer,
+                        "answer": "single result",
                         "claims": [],
                         "confidence": None,
                     },
                     "parsing_error": None,
                 }
 
-        capture_llm = _SlowFirstStructuredLLM()
-        synthesize_node = make_synthesize_node(
-            capture_llm,
-            verbose=False,
-            max_turns=6,
-            synthesis_hedge_delay_seconds=0.005,
-        )
+        capture_llm = _SingleStructuredLLM()
+        synthesize_node = make_synthesize_node(capture_llm, verbose=False, max_turns=6)
 
         updates = synthesize_node(
             _state(
@@ -1377,6 +1362,6 @@ class SynthesisValidationTest(unittest.TestCase):
             )
         )
 
-        self.assertEqual(_response(updates).final_answer, "fast result")
-        self.assertEqual(capture_llm.call_count, 2)
-        self.assertEqual([item.path for item in _debug(updates).llm_calls], ["structured", "structured_hedge"])
+        self.assertEqual(_response(updates).final_answer, "single result")
+        self.assertEqual(capture_llm.call_count, 1)
+        self.assertEqual([item.path for item in _debug(updates).llm_calls], ["structured"])
