@@ -44,7 +44,7 @@ route를 분리하면 응답 단계에서 evidence의 출처를 더 명확히 �
 
 검색 결과가 있더라도 최종 답변이 항상 충분히 grounded하다고 볼 수는 없습니다. 그래서 synthesis 전후에 validation 단계를 두고, evidence 품질이나 unsupported claim이 문제가 될 때 planner로 되돌아가 재검색할 수 있게 했습니다.
 
-이 흐름은 모든 실패를 무조건 재시도하지 않습니다. `RetryState`는 failed route, preserved evidence, preserved retrieval diagnostics, retry scope를 보존합니다. 그래서 일부 route만 실패한 경우에는 성공한 route의 evidence를 재사용하고 실패 route만 다시 호출합니다. unsupported claim이나 section 누락처럼 검색 실패보다 synthesis repair에 가까운 문제는 기존 evidence를 바탕으로 다시 합성하거나 payload를 repair합니다.
+이 흐름은 모든 실패를 무조건 재시도하지 않습니다. `RetryState`는 failed route, preserved evidence, preserved retrieval diagnostics, retry scope를 보존합니다. 그래서 일부 route만 실패한 경우에는 성공한 route의 evidence를 재사용하고 실패 route만 다시 호출합니다. unsupported claim이나 section 누락처럼 검색 실패보다 response repair에 가까운 문제는 기존 evidence를 기준으로 payload를 결정적으로 보정합니다.
 
 사용자의 의도가 불명확하거나 업로드 파일이 필요한데 retriever가 없는 경우에는 후속 질문으로 전환할 수 있도록 두어, 잘못된 확신을 가진 답변을 줄이는 방향을 선택했습니다.
 
@@ -70,7 +70,7 @@ DocuMate는 포트폴리오 프로젝트이지만, 검색 품질과 근거 검�
 
 공식 문서, 로컬 RAG, 업로드 파일을 하나의 retriever처럼 다루면 인터페이스는 단순해집니다. 하지만 답변이 어떤 근거를 사용했는지 설명하기 어렵고, 실패 원인을 route별로 추적하기도 어렵습니다.
 
-현재 구조는 route별 처리 비용이 조금 더 들지만, evidence 출처와 진단 정보를 명확히 남기는 쪽을 우선했습니다. `RetrievalDiagnostic`에는 route status, error code, provider time, URL validation time, filtering count, warning, hedge metadata가 남기 때문에 benchmark와 debug payload에서 실패 원인을 좁히기 쉽습니다.
+현재 구조는 route별 처리 비용이 조금 더 들지만, evidence 출처와 진단 정보를 명확히 남기는 쪽을 우선했습니다. `RetrievalDiagnostic`에는 route status, error code, provider time, URL validation time, filtering count, warning이 남기 때문에 benchmark와 debug payload에서 실패 원인을 좁히기 쉽습니다.
 
 ### 원문 전체 보존보다 bounded rolling memory를 선택
 
@@ -82,7 +82,7 @@ ToolMessage 원문과 provider metadata를 durable snapshot에 저장하지 않�
 
 개인 프로젝트에서 120-case release benchmark와 pytest 기반 회귀 테스트를 유지하는 것은 비용이 있습니다. fixture 관리, judge 설정, latency 및 비용 지표 확인이 필요하기 때문입니다.
 
-대신 변경 후 품질을 감으로 판단하지 않아도 됩니다. 현재 문서화된 최신 release benchmark는 `20260509_043436` 런 기준 120개 중 116개 케이스 통과, release pass rate `0.9667`, tool precision `0.9677`, tool recall `1.0000`, citation compliance `0.9556`, p95 latency `9435.9 ms`, 평균 cost `$0.00523362`를 기록했고, 테스트는 `427 passed, 56 subtests passed`로 검증되었습니다.
+대신 변경 후 품질을 감으로 판단하지 않아도 됩니다. 현재 문서화된 최신 release benchmark는 `20260509_043436` 런 기준 120개 중 116개 케이스 통과, release pass rate `0.9667`, tool precision `0.9677`, tool recall `1.0000`, citation compliance `0.9556`, p95 latency `9435.9 ms`, 평균 cost `$0.00523362`를 기록했고, 테스트는 `429 passed, 56 subtests passed`로 검증되었습니다.
 
 ## 4. 가장 어려웠던 문제: Latency와 Retrieval 품질
 
@@ -90,11 +90,11 @@ DocuMate에서 가장 까다로웠던 문제는 "더 빠른 응답"과 "더 믿�
 
 그래서 이 문제를 단순 최적화가 아니라, latency와 retrieval quality 사이의 균형을 계측 가능한 시스템 문제로 다시 정의했습니다. 전체 응답 시간을 하나의 숫자로 보지 않고 `summarize`, `planner`, `retrieval`, `pre_synthesis_validation`, `synthesis`, `post_synthesis_validation`, `action_postprocess` 단계로 나누어 latency trace를 남겼습니다. retrieval도 route별 latency와 status를 기록해 `docs`, `upload`, `local` 중 어느 경로가 병목인지, no result인지, timeout인지 debug payload와 benchmark output에서 바로 추적할 수 있게 했습니다.
 
-응답 속도 개선은 "덜 찾기"보다 "필요한 것을 동시에, 제한 시간 안에서 찾기"에 가깝게 접근했습니다. hybrid 질문에서 여러 retrieval task가 필요할 때는 `ThreadPoolExecutor`로 route fan-out을 병렬 실행하고, 결과는 planner task 순서대로 다시 정렬합니다. 외부 검색인 docs route에는 `DOCS_SEARCH_TIMEOUT_SECONDS`를 두어 Tavily 호출이 전체 agent 응답을 과도하게 붙잡지 않도록 했고, timeout은 `RETRIEVAL_DOCS_TIMEOUT` error code와 diagnostics로 남겨 원인 분석이 가능하게 했습니다.
+응답 속도 개선은 "덜 찾기"보다 "필요한 것을 동시에, 제한 시간 안에서 찾기"에 가깝게 접근했습니다. hybrid 질문에서 여러 retrieval task가 필요할 때는 `ThreadPoolExecutor`로 route fan-out을 병렬 실행하고, 결과는 planner task 순서대로 다시 정렬합니다. 외부 검색인 docs route에는 개별 Tavily 요청마다 `DOCS_SEARCH_TIMEOUT_SECONDS`를 적용하고, timeout은 `RETRIEVAL_DOCS_TIMEOUT` error code와 diagnostics로 남겨 원인 분석이 가능하게 했습니다.
 
-긴 꼬리 지연에는 제한적인 hedge를 적용했습니다. planner, docs search, synthesis는 설정된 delay 이후 중복 호출을 경쟁시킬 수 있고, `TAIL_HEDGE_MAX_CONCURRENCY`와 attempt 수로 전체 비용을 제한합니다. hedge가 실제로 시작됐는지, 어떤 시도가 이겼는지, 중복 시도가 drop됐는지는 LLM call metadata와 retrieval diagnostics에 남깁니다.
+planner와 synthesis는 각각 하나의 구조화 모델 호출 경로를 사용하며 provider의 요청별 timeout과 순차 SDK retry 정책을 호출 경계에 명시합니다. 요청별 timeout은 stage 전체 deadline이 아니므로, 재시도를 허용한 호출의 총 실행 시간은 해당 timeout보다 길 수 있습니다. docs search도 query 하나당 Tavily 요청을 한 번만 보내고, 첫 결과의 근거 품질이나 identifier coverage가 부족할 때만 query hint의 fallback을 정의된 순서대로 실행합니다. 충분한 evidence를 확보하면 남은 fallback은 실행하지 않습니다.
 
-재시도 전략도 latency 관점에서 다시 설계했습니다. validation 실패 후 모든 route를 매번 다시 호출하면 품질을 올리려는 시도가 곧바로 비용과 지연으로 이어집니다. 그래서 retry context에 failed route, preserved evidence, preserved retrieval diagnostics를 보존하고, 실패하지 않은 route의 evidence는 재사용합니다. 예를 들어 `docs + upload` hybrid 흐름에서 docs만 실패하면 upload evidence는 유지하고 docs route만 다시 시도합니다. unsupported claim이나 section 누락처럼 검색 실패가 아니라 synthesis repair에 가까운 문제는 기존 evidence를 바탕으로 다시 합성하도록 분리했습니다.
+재시도 전략도 latency 관점에서 다시 설계했습니다. validation 실패 후 모든 route를 매번 다시 호출하면 품질을 올리려는 시도가 곧바로 비용과 지연으로 이어집니다. 그래서 retry context에 failed route, preserved evidence, preserved retrieval diagnostics를 보존하고, 실패하지 않은 route의 evidence는 재사용합니다. 예를 들어 `docs + upload` hybrid 흐름에서 docs만 실패하면 upload evidence는 유지하고 docs route만 다시 시도합니다. unsupported claim이나 section 누락처럼 검색 실패가 아니라 response repair에 가까운 문제는 기존 evidence를 기준으로 claim을 필터링하고 답변이나 section을 결정적으로 보정합니다.
 
 retrieval 품질은 "높은 score의 결과를 많이 가져오기"가 아니라 "답변에 실제로 쓸 수 있는 근거만 남기기"로 정의했습니다. docs route는 공식 문서 domain/path prefix를 통과한 결과만 evidence로 사용하고, query hint와 fallback query로 라이브러리별 검색 범위를 좁힙니다. 이후 topic purity, exact identifier coverage, chrome-only page 여부를 확인해 근거로 쓰기 어려운 결과를 제거합니다.
 
@@ -116,7 +116,7 @@ synthesis 단계에서는 category별 prompt budget을 적용했습니다. `docs
 
 사용자에게는 간결한 답변을 제공하되, `include_debug=true`에서는 latency, planner/retrieval diagnostics, retry context, LLM call metadata를 확인할 수 있게 했습니다. 일반 응답 품질과 개발자 관측성을 같은 메시지에 섞지 않기 위한 기준입니다.
 
-현재 debug schema version은 `4`입니다. debug payload에는 tool call, token usage, model usage status, validation events, edge decisions, observed evidence, action results, stage별 latency, retrieval route latency, synthesis attempt mode가 포함됩니다. 이 정보는 일반 사용자 답변이 아니라 회귀 분석과 benchmark 해석을 위한 진단 계층입니다.
+현재 debug schema version은 `5`입니다. debug payload에는 tool call, token usage, model usage status, validation events, edge decisions, observed evidence, action results, stage별 latency, retrieval route latency, synthesis attempt mode가 포함됩니다. 이 정보는 일반 사용자 답변이 아니라 회귀 분석과 benchmark 해석을 위한 진단 계층입니다.
 
 대화 compaction은 `edge_decisions`에 trigger 차원, before/after turn·message·추정 token·직렬화 byte, removed message 수, fallback 여부를 남깁니다. fallback은 `validation_events`에도 degraded 신호로 기록합니다. 이 진단과 구조화 로그에는 원문 query, summary, ToolMessage content를 포함하지 않습니다.
 
