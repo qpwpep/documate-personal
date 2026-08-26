@@ -9,14 +9,19 @@ from src.core.contracts.boundary.debug import get_debug_state
 from src.core.contracts.boundary.runtime import get_runtime_state
 from src.core.request_contracts import infer_answer_contract
 from src.infra.logging_utils import log_event
-from src.runtime.nodes.synthesis.budgets import compact_synthesis_budget_profile, resolve_synthesis_budget_profile
-from src.runtime.nodes.synthesis.context import build_synthesis_context, prepare_synthesis_inputs
+from src.runtime.nodes.synthesis.budgets import (
+    compact_synthesis_budget_profile,
+    resolve_synthesis_budget_profile,
+)
+from src.runtime.nodes.synthesis.context import (
+    build_synthesis_context,
+    prepare_synthesis_inputs,
+)
 from src.runtime.nodes.synthesis.models import PreparedSynthesisInputs
 from src.runtime.nodes.synthesis.pipeline import run_synthesis_pipeline
 from src.runtime.nodes.synthesis.schema_adapter import build_structured_synthesizer
 from src.runtime.nodes.synthesis.short_circuit import maybe_short_circuit_synthesis
 from src.runtime.nodes.synthesis.state import build_synthesis_updates
-
 
 logger = logging.getLogger(__name__)
 
@@ -38,9 +43,6 @@ def make_synthesize_node(
     synthesis_max_tokens: int = 900,
     prompt_snippet_char_limit: int = 400,
     has_default_slack_destination: bool = False,
-    synthesis_hedge_delay_seconds: float = 0.0,
-    synthesis_hedge_max_attempts: int = 2,
-    synthesis_timeout_seconds: float | None = None,
 ):
     structured_synthesizer_cache: dict[int, Any] = {}
     compact_structured_synthesizer_cache: dict[int, Any] = {}
@@ -139,9 +141,6 @@ def make_synthesize_node(
             prepared=prepared,
             compact_prepared=compact_prepared,
             stage_started=stage_started,
-            hedge_delay_seconds=synthesis_hedge_delay_seconds,
-            hedge_max_attempts=synthesis_hedge_max_attempts,
-            hedge_overall_timeout_seconds=synthesis_timeout_seconds,
         )
         return build_synthesis_updates(
             debug=debug,
