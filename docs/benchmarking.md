@@ -75,36 +75,36 @@ live Slack 실행에서는 `summary.json`과 `report.md`에 Slack delivery audit
 ### 2.4 기존 run에서 보고서 재생성
 
 ```bash
-uv run python -m src.eval.main report --run output/benchmarks/<run_id>
+run_id="$(<output/benchmarks/latest_release_run.txt)"
+uv run python -m src.eval.main report --run "output/benchmarks/$run_id"
 ```
 
-### 2.5 결과 문서와 SVG 이력 갱신
+`run` 명령이 갱신한 release 포인터를 사용하는 예시입니다. smoke 보고서를 재생성하려면 `latest_smoke_run.txt`를 읽습니다. `report`는 대상 run에 `summary.json`과 `raw_results.jsonl`이 모두 있는지 검증한 뒤 같은 디렉터리의 `report.md`만 다시 씁니다.
+
+### 2.5 release 요약과 benchmark history SVG 갱신
 
 ```bash
-uv run python -m src.eval.main history
+uv run python -m src.eval.main history --track release
 ```
 
-release 기준 README 요약과 SVG 추세는 이 명령으로 아래를 함께 갱신할 수 있습니다. 다만 공개용 상세 결과는 README에 긴 표를 직접 넣지 않고 [벤치마크 결과](benchmark_results.md)에 별도로 정리합니다.
+`history`는 로컬 `output/benchmarks/*/summary.json`을 읽고 release run을 선택해 저장소에서 유지하는 두 공개 산출물을 함께 갱신합니다.
 
 - `README.md`의 `## 검증 결과` 섹션
 - `docs/assets/benchmark_history.svg`
 
-README와 [벤치마크 결과](benchmark_results.md)를 문서만 최신화할 때는 full release benchmark를 새로 돌리지 않아도 됩니다. 이 경우 `output/benchmarks/latest_release_run.txt`가 가리키는 run의 `summary.json`과 `report.md`를 기준으로 수치를 확인하고, `uv run pytest -q` 결과만 최신 테스트 수치로 반영합니다. 새 release 수치가 필요할 때만 2.2의 `run` 명령으로 전체 benchmark를 재실행합니다.
+최신 release 선택에는 `output/benchmarks/latest_release_run.txt`를 우선 사용합니다. 포인터가 없거나 가리키는 release run을 찾지 못하면 release track에서 전체 케이스 수가 가장 큰 run들 중 가장 최근 `summary.json`으로 fallback합니다. README 요약과 SVG의 지표는 `summary.json`에서 읽으며, `report.md`는 history 입력이 아니라 사람이 확인하거나 `report` 명령으로 재생성하는 로컬 상세 보고서입니다.
+
+이미 존재하는 release run을 공개 요약에 반영할 때는 full benchmark를 다시 실행할 필요가 없습니다. 새 release 수치가 필요할 때만 2.2의 `run` 명령을 먼저 실행합니다. `history`는 pytest를 실행하지 않고 README 표에 기록된 기존 테스트 결과를 보존하므로, 테스트 수치를 바꾸려면 `uv run pytest -q`로 별도 검증한 뒤 README의 테스트 행을 갱신해야 합니다.
+
+SVG는 현재 로컬에 남아 있는 comparable release summary만으로 다시 생성됩니다. 의도한 과거 release run의 `summary.json`이 모두 있는지 확인한 뒤 실행해야 기존 추세 지점이 빠지지 않습니다.
 
 스크린샷과 데모 GIF는 `history` 명령이 갱신하지 않습니다. 실제 앱 캡처를 갱신한 뒤 공개용 자산만 `docs/assets/demo-final.png`, `docs/assets/demo-flow.gif`로 별도 저장하고 README에서 이 경로를 참조합니다.
 
-smoke 히스토리는 release README/SVG를 덮어쓰지 않도록 별도 경로를 명시해야 합니다.
-
-```bash
-uv run python -m src.eval.main history \
-  --track smoke \
-  --readme docs/benchmarking_smoke.md \
-  --svg docs/assets/benchmark_history_smoke.svg
-```
+저장소는 별도 smoke history 문서나 SVG를 유지하지 않습니다. smoke 결과는 해당 run의 `summary.json`과 `report.md`에서 확인하며, 일반적인 smoke 실행 뒤에는 `history`를 실행하지 않습니다. CLI도 smoke track이 기본 release README 또는 SVG를 덮어쓰지 못하게 차단합니다.
 
 ## 3. 출력 산출물
 
-각 run은 `output/benchmarks/<run_id>/` 아래에 저장됩니다. 최신 run 포인터는 run 디렉터리 안이 아니라 `output/benchmarks/` 루트에 저장됩니다.
+각 run은 `output/benchmarks/<run_id>/` 아래에 저장됩니다. 최신 run 포인터는 run 디렉터리 안이 아니라 `output/benchmarks/` 루트에 저장됩니다. `output/` 전체는 Git 추적 대상이 아닌 로컬 실행 산출물입니다.
 
 | 파일 | 설명 |
 |---|---|
@@ -117,12 +117,13 @@ uv run python -m src.eval.main history \
 
 `summary.json`의 `judge_model`은 config와 환경 변수 override를 모두 반영해 실제 실행에 적용된 effective judge model입니다.
 
-실무 기준 source of truth:
+산출물 역할:
 
-- 최신 release run 확인: `output/benchmarks/latest_release_run.txt`
-- 최신 smoke run 확인: `output/benchmarks/latest_smoke_run.txt`
-- 자동 판정 확인: `output/benchmarks/<run_id>/summary.json`
-- 상세 해석 확인: `output/benchmarks/<run_id>/report.md`
+- 공개 release 요약: `README.md`의 `## 검증 결과`
+- 공개 release 추세: `docs/assets/benchmark_history.svg`
+- 로컬 최신 run 선택: `output/benchmarks/latest_release_run.txt`, `output/benchmarks/latest_smoke_run.txt`
+- 로컬 기계 판정과 집계 정본: `output/benchmarks/<run_id>/summary.json`
+- 로컬 상세 분석: `output/benchmarks/<run_id>/report.md`
 
 ## 4. Hard Gate 기준
 
@@ -158,7 +159,7 @@ judge minimum score와 pricing도 같은 파일에서 관리합니다. `cost_gat
 
 ## 6. 비교 이력 규칙
 
-history 리포터는 모든 run을 같은 기준으로 비교하지 않습니다. 먼저 `track`을 분리하고, 그 안에서 아래 두 조건이 같은 run만 comparable run으로 묶습니다.
+history 리포터는 모든 run을 같은 기준으로 비교하지 않습니다. 아래 세 조건이 모두 같은 run만 comparable run으로 묶습니다.
 
 - `track`
 - `fixtures_path`
@@ -169,7 +170,5 @@ history 리포터는 모든 run을 같은 기준으로 비교하지 않습니다
 ## 7. 운영 메모
 
 - benchmark는 현재 `online` 모드만 지원합니다.
-- `report` 명령은 기존 `summary.json`과 `raw_results.jsonl`이 있어야 합니다.
 - `history` 명령은 README 안의 자동 갱신 마커를 기준으로 동작하므로, `README.md`의 `## 검증 결과`와 `## 문서` 제목은 유지해야 합니다.
-- 최신 release 결과를 채용/포트폴리오용으로 자세히 보여줄 때는 [벤치마크 결과](benchmark_results.md)를 갱신합니다.
-- 기존 latest release run을 재사용한 문서 갱신은 benchmark 재실행이 아니므로, 결과 문서에 pytest 검증일과 명령 결과를 함께 적어 benchmark 수치와 테스트 수치의 출처를 분리합니다.
+- 공개 release 결과의 정본은 README 요약이고, 비교 추세는 기존 benchmark history SVG에 유지합니다. 별도 결과 문서나 smoke history 파일은 만들지 않습니다.
