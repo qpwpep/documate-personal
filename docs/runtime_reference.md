@@ -311,8 +311,10 @@ compaction 진단은 debug `edge_decisions`와 구조화 로그에서 before/aft
 |   `-- benchmarks/
 |-- docs/
 |   |-- assets/
+|   |   |-- benchmark_history.svg
+|   |   |-- demo-final.png
+|   |   `-- demo-flow.gif
 |   |-- benchmarking.md
-|   |-- benchmark_results.md
 |   |-- design_rationale.md
 |   |-- error_codes.md
 |   `-- runtime_reference.md
@@ -346,9 +348,9 @@ compaction 진단은 debug `edge_decisions`와 구조화 로그에서 before/aft
 - startup의 `fastapi_runtime_settings` 로그에는 모델, Docs/Synthesis timeout, Synthesis SDK retry, memory high/low/hard policy가 포함됩니다.
 - agent request 로그는 query 원문 대신 문자 수, UTF-8 byte 수, SHA-256 hash만 기록합니다.
 - `src.infra.rag_build`는 증분 인덱싱을 위해 `data/index/manifest.json`을 관리합니다.
-- benchmark 최신 성능 정본은 `output/benchmarks/latest_release_run.txt`입니다.
-- smoke 최신 런 포인터는 `output/benchmarks/latest_smoke_run.txt`로 별도 관리합니다.
-- 공개용 benchmark 요약은 [벤치마크 결과](benchmark_results.md)에 별도 정리합니다.
+- benchmark run 산출물과 `latest_release_run.txt`, `latest_smoke_run.txt` 포인터는 Git으로 추적하지 않는 `output/benchmarks/` 아래에 로컬로 유지합니다.
+- run별 자동 판정과 상세 분석은 각각 `output/benchmarks/<run_id>/summary.json`, `output/benchmarks/<run_id>/report.md`에서 확인합니다.
+- 저장소에 공개하는 release 요약의 정본은 [README의 검증 결과](../README.md#검증-결과)이며, 비교 추세는 [benchmark history SVG](assets/benchmark_history.svg)에 유지합니다.
 
 ## 8. 테스트 및 검증
 
@@ -362,4 +364,4 @@ uv run python script/sync_env_example.py --check
 
 2026-08-26 KST 기준 전체 검증 결과는 `429 passed, 56 subtests passed`입니다. bounded memory에는 compiled reducer 회귀, 반복 rolling summary, LLM 예외/빈 출력 fallback, cross-request persistence, response assembly rollback, message ownership 격리, ToolMessage projection, JSON escape-heavy byte fitting, policy envelope, TTL/세션 격리, query boundary, Hypothesis Unicode/property, 300-turn plateau 테스트가 포함됩니다.
 
-벤치마크 관련 명령은 [벤치마크 가이드](benchmarking.md), 최신 결과는 [벤치마크 결과](benchmark_results.md)를 참고하세요. benchmark CLI의 env override 우선순위는 `CLI > .env > OS env > config.toml`입니다.
+벤치마크 관련 명령과 로컬 산출물 정책은 [벤치마크 가이드](benchmarking.md), 공개 release 요약은 [README의 검증 결과](../README.md#검증-결과), 비교 추세는 [benchmark history SVG](assets/benchmark_history.svg)를 참고하세요. benchmark CLI의 env override 우선순위는 `CLI > .env > OS env > config.toml`입니다.
