@@ -86,12 +86,18 @@ def build_history_readme_block(
     passed_gates, failed_gates = _gate_lists(latest.summary)
     svg_markdown_path = _relative_markdown_path(svg_path, readme_path.parent)
     pointer_name = latest_run_pointer_name(track)
+    local_output_root = _relative_markdown_path(output_root, readme_path.parent)
+    local_pointer_path = f"{local_output_root}/{pointer_name}"
+    local_run_output = f"{local_output_root}/<run_id>"
     test_result = _existing_test_result(readme_path)
 
     lines: list[str] = []
     lines.append("## 검증 결과")
     lines.append("")
-    lines.append(f"최신 문서화된 `{track}` benchmark는 `output/benchmarks/{pointer_name}`가 가리키는 `{latest.run_id}` 런입니다.")
+    lines.append(
+        f"최신 문서화된 `{track}` benchmark는 `{latest.run_id}` 런입니다. "
+        f"로컬 benchmark 실행은 `{local_pointer_path}`를 최신 `{track}` run 포인터로 갱신합니다."
+    )
     lines.append("")
     lines.append("| 항목 | 결과 |")
     lines.append("|---|---:|")
@@ -147,14 +153,11 @@ def build_history_readme_block(
         )
     lines.append("")
 
-    report_links = [
-        f"[run {run.run_id}]({_relative_markdown_path(output_root / run.run_id / 'report.md', readme_path.parent)})"
-        for run in comparable_runs
-    ]
     lines.append(
         f"추세 그래프는 [{svg_markdown_path}]({svg_markdown_path})에 보관합니다. "
         f"실행 방법은 [벤치마크 가이드](docs/benchmarking.md)를 참고하세요. "
-        f"로컬 상세 리포트는 {', '.join(report_links)}에서 다시 확인할 수 있습니다."
+        f"로컬 run의 기계 판독 결과와 상세 분석은 각각 `{local_run_output}/summary.json`, "
+        f"`{local_run_output}/report.md`에서 확인합니다."
     )
     return "\n".join(lines).rstrip() + "\n"
 
