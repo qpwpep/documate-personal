@@ -287,9 +287,15 @@ class HistoryReportTest(unittest.TestCase):
             self.assertEqual(len(comparable), 2)
             self.assertIn("`123 passed, 4 subtests passed`", readme_text)
             self.assertIn("`20260307_101108`", readme_text)
-            self.assertIn("`output/benchmarks/latest_release_run.txt`", readme_text)
+            self.assertIn(
+                "로컬 benchmark 실행은 `output/benchmarks/latest_release_run.txt`를",
+                readme_text,
+            )
             self.assertIn("비교 가능한 2개 generated-suite 런 기준", readme_text)
             self.assertIn("[docs/assets/benchmark_history.svg](docs/assets/benchmark_history.svg)", readme_text)
+            self.assertIn("`output/benchmarks/<run_id>/summary.json`", readme_text)
+            self.assertIn("`output/benchmarks/<run_id>/report.md`", readme_text)
+            self.assertNotIn("](output/benchmarks/", readme_text)
             self.assertIn("20260307_101108", svg_text)
             self.assertIn("20260303_134325", svg_text)
             self.assertNotIn("20260307_120000", readme_text)
