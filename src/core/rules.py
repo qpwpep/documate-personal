@@ -12,20 +12,12 @@ from pydantic import BaseModel, Field
 
 class IntentRules(BaseModel):
     docs_patterns: list[str] = Field(default_factory=list)
-    explicit_docs_keywords: list[str] = Field(default_factory=list)
-    local_patterns: list[str] = Field(default_factory=list)
     save_patterns: list[str] = Field(default_factory=list)
     slack_patterns: list[str] = Field(default_factory=list)
 
 
 class PlannerRules(BaseModel):
-    upload_keywords: list[str] = Field(default_factory=list)
-    auxiliary_markers: list[str] = Field(default_factory=list)
-    action_clause_pattern: str
-    docs_clause_pattern: str
     compare_clause_pattern: str
-    trailing_docs_stop_phrases: list[str] = Field(default_factory=list)
-    docs_identifier_pattern: str
     docs_identifier_stopwords: list[str] = Field(default_factory=list)
 
 

@@ -6,7 +6,6 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, Tool
 from src.core.answer_schema import AgentResponsePayloadModel, build_deterministic_grounded_payload, build_empty_response_payload
 from src.core.contracts import RetrievalDiagnostic, RetryState
 from src.core.evidence import EvidenceItem
-from src.runtime.nodes.planner.policy import build_deterministic_planner_decision
 from src.runtime.nodes.retrieval import collect_retrieval_result
 from src.runtime.nodes.retrieval.node import _collect_retrieval_batch, _execute_retrieval_batch
 from src.runtime.nodes.synthesis.evidence_selection import select_grounded_fallback_evidence_items, select_primary_evidence_items
@@ -64,14 +63,6 @@ def _upload_evidence(
 
 
 class NodeRefactorTest(unittest.TestCase):
-    def test_planner_policy_facade_reexports_deterministic_builder(self) -> None:
-        policy_module = importlib.import_module("src.runtime.nodes.planner.policy")
-        deterministic_module = importlib.import_module("src.runtime.nodes.planner.deterministic")
-
-        self.assertIs(
-            policy_module.build_deterministic_planner_decision,
-            deterministic_module.build_deterministic_planner_decision,
-        )
 
     def test_synthesis_package_reexports_models_and_factory(self) -> None:
         synthesis_module = importlib.import_module("src.runtime.nodes.synthesis")
@@ -110,20 +101,6 @@ class NodeRefactorTest(unittest.TestCase):
         self.assertTrue(hasattr(validation_module, "make_validate_evidence_node"))
         self.assertFalse(hasattr(validation_module, "apply_validation_outcome"))
 
-    def test_planner_policy_builds_deterministic_hybrid_decision(self) -> None:
-        decision = build_deterministic_planner_decision(
-            user_input="Explain pandas concat from official docs and compare it with the uploaded notebook example.",
-            has_retriever=True,
-        )
-
-        self.assertIsNotNone(decision)
-        self.assertEqual(decision.status, "deterministic")
-        self.assertEqual([task.route for task in decision.output.tasks], ["docs", "upload"])
-        self.assertEqual(decision.output.tasks[0].query, "Explain pandas concat from official docs and compare it with the uploaded notebook example.")
-        self.assertEqual(
-            decision.output.tasks[1].query,
-            "Explain pandas concat from official docs and compare it with the uploaded notebook example.",
-        )
 
     def test_retrieval_batch_reuses_preserved_results_and_keeps_task_order(self) -> None:
         planner_output = PlannerOutput(
