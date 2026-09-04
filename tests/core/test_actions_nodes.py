@@ -1,16 +1,148 @@
 import json
+from pathlib import Path
+from tempfile import TemporaryDirectory
 import unittest
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
+from src.core.contracts.boundary.debug import get_debug_state
 from src.runtime.agent_runtime.debug_collector import DebugCollector
 from src.runtime.agent_runtime.response_assembler import ResponseAssembler
 from src.runtime.nodes.actions import build_action_only_answer, make_action_postprocess_node, should_short_circuit_action_only
+from src.runtime.nodes.validation import make_pre_synthesis_validation_node
 
 from .helpers import _ToolWrapper, build_legacy_state
 
 
 class ActionsNodeTest(unittest.TestCase):
+    def test_action_delivery_stays_empty_when_planner_requires_followup(self) -> None:
+        for reason, followup in (
+            ("planner_unavailable", "검색 계획을 만들지 못했습니다. 다시 요청해 주세요."),
+            ("upload_retriever_missing", "확인할 파일을 먼저 업로드해 주세요."),
+        ):
+            with self.subTest(reason=reason), TemporaryDirectory() as directory:
+                delivered: list[str] = []
+                destination = Path(directory) / "answer.txt"
+
+                def save_text(content: str, filename_prefix: str):
+                    destination.write_text(content, encoding="utf-8")
+                    return {"status": "ok", "file_path": str(destination)}
+
+                def notify_slack(**kwargs):
+                    delivered.append(kwargs["text"])
+                    return {"status": "ok"}
+
+                action_node = make_action_postprocess_node(
+                    save_text_tool=_ToolWrapper(save_text),
+                    slack_notify_tool=_ToolWrapper(notify_slack),
+                    verbose=False,
+                    has_default_slack_destination=True,
+                )
+                state = build_legacy_state(
+                    {
+                        "user_input": "방금 답변을 txt로 저장하고 슬랙으로 보내줘",
+                        "messages": [
+                            HumanMessage(content="이전 질문"),
+                            AIMessage(content="이전 답변"),
+                            HumanMessage(content="방금 답변을 txt로 저장하고 슬랙으로 보내줘"),
+                        ],
+                        "planner_diagnostics": {"reason": reason},
+                        "guided_followup": followup,
+                        "final_answer": followup,
+                    }
+                )
+
+                updates = action_node(state)
+
+                self.assertEqual(
+                    {"files": list(Path(directory).iterdir()), "delivered": delivered, "updates": updates},
+                    {"files": [], "delivered": [], "updates": {}},
+                )
+
+    def test_followup_retains_planning_failure_when_retrieval_did_not_start(self) -> None:
+        followup = "검색 계획을 만들지 못했습니다. 다시 요청해 주세요."
+        state = build_legacy_state(
+            {
+                "user_input": "최근 권장 방식을 확인하고 결과를 저장해줘",
+                "planner_status": "fallback_no_routes",
+                "planner_diagnostics": {"reason": "planner_unavailable"},
+                "guided_followup": followup,
+                "retry_context": {
+                    "attempt": 1,
+                    "needs_retry": True,
+                    "retry_reason": "no_evidence",
+                    "failed_routes": ["docs"],
+                    "retrieval_feedback": "이전 시도의 검색 피드백",
+                },
+            }
+        )
+
+        updates = make_pre_synthesis_validation_node(verbose=False)(state)
+
+        self.assertEqual(
+            {
+                "answer": updates["response"].final_answer,
+                "payload_answer": updates["response"].payload.answer,
+                "needs_retry": updates["retry"].needs_retry,
+                "retry_reason": updates["retry"].retry_reason,
+                "failed_routes": updates["retry"].failed_routes,
+                "retrieval_feedback": updates["retry"].retrieval_feedback,
+                "validation_errors": get_debug_state(updates).validation_errors,
+            },
+            {
+                "answer": followup,
+                "payload_answer": followup,
+                "needs_retry": False,
+                "retry_reason": None,
+                "failed_routes": [],
+                "retrieval_feedback": "",
+                "validation_errors": [],
+            },
+        )
+
+    def test_action_delivery_uses_new_answer_when_planner_selected_retrieval(self) -> None:
+        current_answer = "방금 확인한 멱등성 키 처리 결과"
+        with TemporaryDirectory() as directory:
+            destination = Path(directory) / "answer.txt"
+            delivered: list[str] = []
+
+            def save_text(content: str, filename_prefix: str):
+                destination.write_text(content, encoding="utf-8")
+                return {"status": "ok", "file_path": str(destination)}
+
+            def notify_slack(**kwargs):
+                delivered.append(kwargs["text"])
+                return {"status": "ok"}
+
+            action_node = make_action_postprocess_node(
+                save_text_tool=_ToolWrapper(save_text),
+                slack_notify_tool=_ToolWrapper(notify_slack),
+                verbose=False,
+                has_default_slack_destination=True,
+            )
+            action_node(
+                build_legacy_state(
+                    {
+                        "user_input": "그 안의 멱등성 키 처리를 살펴보고 txt로 저장한 뒤 슬랙으로 보내줘",
+                        "messages": [
+                            HumanMessage(content="이전 질문"),
+                            AIMessage(content="이전 답변"),
+                            HumanMessage(content="그 안의 멱등성 키 처리를 살펴보고 txt로 저장한 뒤 슬랙으로 보내줘"),
+                        ],
+                        "planner_output": {
+                            "use_retrieval": True,
+                            "tasks": [{"route": "upload", "query": "멱등성 키 처리", "k": 4}],
+                        },
+                        "final_answer": current_answer,
+                    }
+                )
+            )
+
+            self.assertEqual(
+                {"saved": destination.read_text(encoding="utf-8"), "delivered": delivered},
+                {"saved": current_answer, "delivered": [current_answer]},
+            )
+
     def test_action_postprocess_save_adds_tool_message_without_touching_answer(self) -> None:
         recorded = {}
 

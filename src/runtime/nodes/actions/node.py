@@ -7,6 +7,7 @@ from langchain_core.messages import AIMessage
 
 from src.core.contracts import GraphState
 from src.core.contracts.boundary.debug import get_debug_state
+from src.core.contracts.boundary.planner import get_planner_state
 from src.core.contracts.boundary.response import get_response_state
 from src.core.contracts.boundary.runtime import get_runtime_state
 from src.infra.logging_utils import log_event
@@ -28,6 +29,10 @@ def make_action_postprocess_node(
     has_default_slack_destination: bool = False,
 ):
     def action_postprocess(state: GraphState) -> GraphState:
+        planner = get_planner_state(state)
+        if str(planner.guided_followup or "").strip():
+            return {}
+
         runtime = get_runtime_state(state)
         response = get_response_state(state)
         debug = get_debug_state(state)
@@ -35,12 +40,15 @@ def make_action_postprocess_node(
         previous_answer = latest_previous_ai_answer(state.get("messages", []))
         destinations = get_slack_destinations(runtime.session_metadata)
         slack_target_available = destinations.has_destination() or has_default_slack_destination
-        delivery_body = resolve_action_delivery_answer(
-            user_input=user_input,
-            final_answer=response.final_answer,
-            previous_answer=previous_answer,
-            slack_target_available=slack_target_available,
-        )
+        if planner.output.use_retrieval:
+            delivery_body = response.final_answer
+        else:
+            delivery_body = resolve_action_delivery_answer(
+                user_input=user_input,
+                final_answer=response.final_answer,
+                previous_answer=previous_answer,
+                slack_target_available=slack_target_available,
+            )
 
         action_errors: list[str] = []
         tool_messages = []
