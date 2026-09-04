@@ -88,7 +88,3 @@ def get_generated_cases_fixture_path() -> Path:
 
 def get_regression_seed_cases_path() -> Path:
     return get_benchmark_fixtures_dir() / "cases.regression.seed.jsonl"
-
-
-def get_local_rag_index_dir() -> Path:
-    return get_data_dir() / "index"
