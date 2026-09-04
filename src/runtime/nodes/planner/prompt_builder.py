@@ -25,11 +25,18 @@ PLANNER_SYS = (
     "- Keep each task.query short and route-specific.\n"
     "- For docs tasks, preserve the library/framework name in task.query, even for bare library-level requests.\n"
     "- If the request is only asking to save/share/send the current answer, retrieval is unnecessary.\n"
-    "- If retriever_available=true and the user is asking about the currently uploaded file, prefer upload over local.\n"
+    "- Plan the sources the answer requires, independently of tool or file availability. Include upload even when the referenced file has not been provided; the executor will request the missing file.\n"
+    "- Distinguish a technical topic from evidence to inspect: describing a file format or an API does not require the user's files, while reporting what their code or notebook contains does.\n"
+    "- General questions about file operations, upload APIs, file formats, or a future project are docs topics and do not require a user file.\n"
+    "- Resolve references, negation, scope, and later corrections across the whole request. Omit any excluded source, whether docs or upload. A source named only to exclude it is not a requested source.\n"
+    "- For search queries preserve the actual subject, identifiers, Korean terms, and comparison targets; omit delivery instructions and source-exclusion wording.\n"
+    "- UploadSearch can search only the current uploaded file, not an entire project or a separate notebook index.\n"
     "- If the user asks only about the currently uploaded file/code, choose upload only; do not add docs unless official/current/latest documentation is explicitly requested.\n"
-    "- For docs plus uploaded-file comparisons, choose docs and upload only; do not add local unless the user separately asks for the local notebook/vector index.\n"
+    "- For official docs plus file comparisons, choose docs and upload.\n"
     "- Do not include actions for save/slack; only retrieval planning."
 )
+
+
 _CONTEXT_DEPENDENT_FOLLOWUP_PATTERN = re.compile(
     r"^\s*(?:\d+\s*(?:번)?|첫\s*번째|두\s*번째|세\s*번째|그거|그것|이거|저거|위에\s*것|앞에\s*것)\s*$",
     flags=re.I,
@@ -77,9 +84,6 @@ def build_planner_messages(state: GraphState, max_turns: int = 6) -> list[BaseMe
     runtime = get_runtime_state(state)
     retry_context = get_retry_state(state)
     model_messages: list[BaseMessage] = [SystemMessage(content=PLANNER_SYS)]
-    model_messages.append(
-        SystemMessage(content=f"[Planner Context]\nretriever_available={bool(runtime.retriever)}")
-    )
 
     retry_context_message = format_retry_context_for_planner(state, retry_context)
     if retry_context_message:

@@ -1,5 +1,6 @@
 import unittest
 
+from hypothesis import given, strategies as st
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from pydantic import ValidationError
 
@@ -21,6 +22,51 @@ from .helpers import (
 
 
 class PlannerNodeTest(unittest.TestCase):
+    @given(
+        query=st.one_of(st.text(min_size=1, max_size=120), st.sampled_from([
+            "official docs", "공식 문서는 제외해", "save this to txt", "the uploaded notebook",
+        ])),
+        routes=st.sampled_from([[], ["docs"], ["upload"], ["docs", "upload"], ["upload", "docs"]]),
+        has_retriever=st.booleans(),
+    )
+    def test_valid_source_plan_survives_user_wording(self, query, routes, has_retriever) -> None:
+        requested = PlannerOutput(use_retrieval=bool(routes), tasks=[
+            RetrievalTask(route=route, query="멱등성 키 및 빈 문자열 비교", k=3) for route in routes
+        ])
+        result = make_planner_node(_CapturePlannerLLM(requested), verbose=False)(build_legacy_state({
+            "user_input": query, "messages": [HumanMessage(content=query)],
+            "retriever": object() if has_retriever else None,
+        }))["planner"]
+        missing_file = "upload" in routes and not has_retriever
+        self.assertEqual(
+            {"plan": result.output, "followup": bool(result.guided_followup)},
+            {"plan": PlannerOutput.fallback() if missing_file else requested, "followup": missing_file},
+        )
+
+    @given(query=st.sampled_from([
+        "이번 세션에 Python 결제 API 코드를 담은 .py 파일을 올려 뒀어. 그 코드에서 멱등성 키를 어떻게 처리하는지 찾아줘.",
+        "Summarize the notebook (.ipynb) I uploaded. Exclude official documentation.",
+        "공식 문서는 제외하고 그 코드에 적힌 내용만 확인해 주세요.",
+    ]))
+    def test_reviewed_upload_plan_does_not_gain_keyword_docs(self, query) -> None:
+        requested = PlannerOutput(use_retrieval=True, tasks=[RetrievalTask(route="upload", query="결제 코드 멱등성 키", k=4)])
+        result = make_planner_node(_CapturePlannerLLM(requested), verbose=False)(build_legacy_state({
+            "user_input": query, "messages": [HumanMessage(content=query)], "retriever": object(),
+        }))["planner"]
+        self.assertEqual(result.output, requested)
+
+    @given(query=st.sampled_from([
+        "공식 문서만으로 설명해줘", "내 파일에서 찾아줘", "검토한 뒤 저장해줘",
+    ]))
+    def test_planning_failure_requests_retry_without_guessing_sources(self, query) -> None:
+        result = make_planner_node(_FailingPlannerLLM(), verbose=False)(build_legacy_state({
+            "user_input": query, "messages": [HumanMessage(content=query)], "retriever": object(),
+        }))["planner"]
+        self.assertEqual(
+            {"plan": result.output, "reason": result.diagnostics.reason, "followup": bool(result.guided_followup)},
+            {"plan": PlannerOutput.fallback(), "reason": "planner_unavailable", "followup": True},
+        )
+
     def test_nested_state_models_are_not_subscriptable(self) -> None:
         with self.assertRaises(TypeError):
             _ = PlannerDiagnostic()["reason"]
@@ -49,8 +95,8 @@ class PlannerNodeTest(unittest.TestCase):
                 ],
             )
 
-    def test_planner_uses_llm_and_guardrail_for_explicit_docs_request(self) -> None:
-        capture_planner = _CapturePlannerLLM(PlannerOutput(use_retrieval=False, tasks=[]))
+    def test_planner_preserves_docs_search_from_model(self) -> None:
+        capture_planner = _CapturePlannerLLM(PlannerOutput(use_retrieval=True, tasks=[RetrievalTask(route="docs", query="FastAPI response_model", k=4)]))
         planner_node = make_planner_node(capture_planner, verbose=False)
 
         updates = planner_node(
@@ -65,10 +111,10 @@ class PlannerNodeTest(unittest.TestCase):
         self.assertEqual(capture_planner.call_count, 1)
         self.assertEqual(updates["planner"].status, "llm")
         self.assertEqual([task.route for task in updates["planner"].output.tasks], ["docs"])
-        self.assertEqual(updates["planner"].output.tasks[0].query, "Explain FastAPI response_model from official docs.")
+        self.assertEqual(updates["planner"].output.tasks[0].query, "FastAPI response_model")
 
-    def test_planner_uses_llm_and_guardrail_for_upload_request(self) -> None:
-        capture_planner = _CapturePlannerLLM(PlannerOutput(use_retrieval=False, tasks=[]))
+    def test_planner_preserves_upload_search_from_model(self) -> None:
+        capture_planner = _CapturePlannerLLM(PlannerOutput(use_retrieval=True, tasks=[RetrievalTask(route="upload", query="groupby usage", k=4)]))
         planner_node = make_planner_node(capture_planner, verbose=False)
 
         updates = planner_node(
@@ -86,8 +132,8 @@ class PlannerNodeTest(unittest.TestCase):
         self.assertEqual([task.route for task in updates["planner"].output.tasks], ["upload"])
         self.assertIn("groupby", updates["planner"].output.tasks[0].query.lower())
 
-    def test_planner_uses_llm_and_guardrail_for_hybrid_docs_and_upload_request(self) -> None:
-        capture_planner = _CapturePlannerLLM(PlannerOutput(use_retrieval=False, tasks=[]))
+    def test_planner_preserves_hybrid_search_from_model(self) -> None:
+        capture_planner = _CapturePlannerLLM(PlannerOutput(use_retrieval=True, tasks=[RetrievalTask(route="docs", query="pandas concat", k=4), RetrievalTask(route="upload", query="pandas concat uploaded notebook example", k=4)]))
         planner_node = make_planner_node(capture_planner, verbose=False)
 
         updates = planner_node(
@@ -103,8 +149,8 @@ class PlannerNodeTest(unittest.TestCase):
         self.assertEqual(capture_planner.call_count, 1)
         self.assertEqual(updates["planner"].status, "llm")
         self.assertEqual([task.route for task in updates["planner"].output.tasks], ["docs", "upload"])
-        self.assertEqual(updates["planner"].output.tasks[0].query, "Explain pandas concat from official docs and compare it with the uploaded notebook example.")
-        self.assertEqual(updates["planner"].output.tasks[1].query, "Explain pandas concat from official docs and compare it with the uploaded notebook example.")
+        self.assertEqual(updates["planner"].output.tasks[0].query, "pandas concat")
+        self.assertEqual(updates["planner"].output.tasks[1].query, "pandas concat uploaded notebook example")
 
     def test_upload_query_sanitizer_preserves_missing_identifier_tokens_for_hybrid_requests(self) -> None:
         sanitized = sanitize_retrieval_query(
@@ -115,7 +161,7 @@ class PlannerNodeTest(unittest.TestCase):
         self.assertIn("업로드", sanitized)
 
     def test_planner_blocks_upload_route_when_retriever_missing(self) -> None:
-        capture_planner = _CapturePlannerLLM(PlannerOutput(use_retrieval=False, tasks=[]))
+        capture_planner = _CapturePlannerLLM(PlannerOutput(use_retrieval=True, tasks=[RetrievalTask(route="upload", query="groupby usage", k=4)]))
         planner_node = make_planner_node(capture_planner, verbose=False)
 
         updates = planner_node(
@@ -133,8 +179,8 @@ class PlannerNodeTest(unittest.TestCase):
         self.assertEqual(updates["planner"].diagnostics.override_reason, "upload_retriever_missing")
         self.assertIsNotNone(updates["planner"].guided_followup)
 
-    def test_planner_uses_local_route_only_for_explicit_local_intent(self) -> None:
-        capture_planner = _CapturePlannerLLM(PlannerOutput(use_retrieval=False, tasks=[]))
+    def test_planner_requests_upload_when_local_notebook_is_not_available(self) -> None:
+        capture_planner = _CapturePlannerLLM(PlannerOutput(use_retrieval=True, tasks=[RetrievalTask(route="upload", query="dataframe joins example", k=4)]))
         planner_node = make_planner_node(capture_planner, verbose=False)
 
         updates = planner_node(
@@ -146,28 +192,37 @@ class PlannerNodeTest(unittest.TestCase):
             )
         )
 
-        self.assertEqual(capture_planner.call_count, 1)
-        self.assertEqual(updates["planner"].status, "llm")
-        self.assertEqual([task.route for task in updates["planner"].output.tasks], ["local"])
+        self.assertEqual(updates["planner"].output, PlannerOutput.fallback())
+        self.assertEqual(updates["planner"].diagnostics.required_routes, ["upload"])
+        self.assertIsNotNone(updates["planner"].guided_followup)
 
-    def test_planner_does_not_treat_generic_example_as_local_rag_intent(self) -> None:
-        planner_node = make_planner_node(_FailingPlannerLLM(), verbose=False)
 
-        updates = planner_node(
-            build_legacy_state(
-                {
-                    "messages": [HumanMessage(content="BeautifulSoup으로 특정 태그 찾는 예제를 보여줘")],
-                    "user_input": "BeautifulSoup으로 특정 태그 찾는 예제를 보여줘",
-                }
-            )
-        )
+    @given(route=st.one_of(st.just("archive"), st.text().filter(lambda value: value not in {"docs", "upload", "local"})))
+    def test_planner_schema_rejects_unsupported_retrieval_routes(self, route: str) -> None:
+        with self.assertRaises(ValidationError):
+            RetrievalTask(route=route, query="pandas merge", k=4)
 
-        self.assertEqual(updates["planner"].status, "heuristic_fallback")
-        self.assertEqual([task.route for task in updates["planner"].output.tasks], ["docs"])
-        self.assertNotIn("local", [task.route for task in updates["planner"].output.tasks])
+    def test_planner_reports_failure_when_model_selects_unsupported_route(self) -> None:
+        query = "Find pandas merge in my project code."
+        planner = make_planner_node(_CapturePlannerLLM({
+            "use_retrieval": True,
+            "tasks": [{"route": "archive", "query": "pandas merge", "k": 4}],
+        }), verbose=False)
 
-    def test_planner_does_not_open_local_route_when_docs_intent_is_explicit(self) -> None:
-        capture_planner = _CapturePlannerLLM(PlannerOutput(use_retrieval=False, tasks=[]))
+        result = planner(build_legacy_state({
+            "user_input": query,
+            "messages": [HumanMessage(content=query)],
+            "retriever": object(),
+        }))
+
+        self.assertEqual(result["planner"].output, PlannerOutput.fallback())
+        self.assertEqual(result["planner"].diagnostics.reason, "planner_unavailable")
+        self.assertTrue(result["planner"].guided_followup)
+        self.assertIn("PLANNER_SCHEMA_INVALID", result["debug"].error_codes)
+
+
+    def test_planner_uses_docs_when_no_file_source_is_requested(self) -> None:
+        capture_planner = _CapturePlannerLLM(PlannerOutput(use_retrieval=True, tasks=[RetrievalTask(route="docs", query="pandas merge examples", k=4)]))
         planner_node = make_planner_node(capture_planner, verbose=False)
 
         updates = planner_node(
@@ -183,20 +238,44 @@ class PlannerNodeTest(unittest.TestCase):
         self.assertEqual(updates["planner"].status, "llm")
         self.assertEqual([task.route for task in updates["planner"].output.tasks], ["docs"])
 
-    def test_planner_uses_heuristic_fallback_when_llm_fails_on_non_deterministic_docs_like_query(self) -> None:
-        planner_node = make_planner_node(_FailingPlannerLLM(), verbose=False)
-        updates = planner_node(
-            build_legacy_state(
-                {
-                    "messages": [HumanMessage(content="pandas merge parameter")],
-                    "user_input": "pandas merge parameter",
-                }
-            )
+
+
+    @given(has_retriever=st.booleans(), compare_docs=st.booleans())
+    def test_planner_requests_missing_file_when_only_llm_recognizes_source(
+        self, has_retriever: bool, compare_docs: bool,
+    ) -> None:
+        query = "Review the material I just sent."
+        if compare_docs:
+            query += " Compare with official docs."
+        routes = ["docs", "upload"] if compare_docs else ["upload"]
+        llm = _CapturePlannerLLM(PlannerOutput(
+            use_retrieval=True,
+            tasks=[RetrievalTask(route=route, query=query, k=4) for route in routes],
+        ))
+
+        result = make_planner_node(llm, verbose=False)(build_legacy_state({
+            "user_input": query,
+            "messages": [HumanMessage(content=query)],
+            "retriever": object() if has_retriever else None,
+        }))["planner"]
+
+        self.assertEqual(
+            {"routes": [task.route for task in result.output.tasks], "needs_file": bool(result.guided_followup)},
+            {"routes": routes if has_retriever else [], "needs_file": not has_retriever},
         )
 
-        self.assertEqual(updates["planner"].status, "heuristic_fallback")
-        self.assertEqual([task.route for task in updates["planner"].output.tasks], ["docs"])
-        self.assertTrue(any("planner" in error for error in updates["debug"].planner_errors))
+
+    @given(case=st.sampled_from([
+        ("Explain Python file upload handling from official docs.", {"python", "upload"}),
+        ("FastAPI 파일 업로드 API를 공식 문서 기준으로 설명해줘.", {"fastapi", "업로드"}),
+        ("Explain the difference between .py and .ipynb files using official docs.", {".py", ".ipynb"}),
+        ("업로드 파일은 사용하지 말고 pandas merge를 공식 문서만으로 설명해줘.", {"pandas", "merge"}),
+    ]))
+    def test_docs_query_preserves_subject_when_file_terms_are_topics(self, case: tuple) -> None:
+        query, subjects = case
+        sanitized = sanitize_retrieval_query(route="docs", query=query).lower()
+        self.assertEqual({subject for subject in subjects if subject in sanitized}, subjects)
+
 
     def test_planner_falls_back_when_schema_invalid(self) -> None:
         planner_node = make_planner_node(_InvalidPlannerLLM(), verbose=False)
@@ -205,9 +284,9 @@ class PlannerNodeTest(unittest.TestCase):
         self.assertFalse(updates["planner"].output.use_retrieval)
         self.assertTrue(any("validation failed" in error for error in updates["debug"].planner_errors))
 
-    def test_planner_uses_llm_but_blocks_retrieval_for_action_only_request(self) -> None:
+    def test_planner_preserves_no_retrieval_for_answer_delivery(self) -> None:
         capture_planner = _CapturePlannerLLM(
-            PlannerOutput(use_retrieval=True, tasks=[RetrievalTask(route="docs", query="numpy", k=3)])
+            PlannerOutput.fallback()
         )
         planner_node = make_planner_node(capture_planner, verbose=False)
 

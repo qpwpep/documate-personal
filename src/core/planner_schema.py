@@ -100,10 +100,12 @@ class RetrievalTask(BaseModel):
 
 
 class PlannerOutput(BaseModel):
+    """Sources needed to answer the request, before checking execution availability."""
+
     model_config = ConfigDict(extra="forbid")
 
-    use_retrieval: bool
-    tasks: list[RetrievalTask]
+    use_retrieval: bool = Field(description="Whether the requested answer needs retrieved evidence.")
+    tasks: list[RetrievalTask] = Field(description="Required source searches. Include upload when the user's file is needed, even if no file is currently available. Omit sources the user excludes.")
 
     @model_validator(mode="after")
     def validate_rules(self) -> "PlannerOutput":

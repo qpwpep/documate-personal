@@ -139,9 +139,12 @@ class GraphRoutingTest(unittest.TestCase):
         self.assertEqual(dispatch_calls["count"], 0)
         self.assertEqual(result["response"].final_answer, "final answer")
 
-    def test_graph_uses_llm_planner_with_docs_guardrail(self) -> None:
+    def test_graph_retrieves_docs_selected_by_planner(self) -> None:
         docs_calls = {"count": 0}
-        capture_planner = _CapturePlannerLLM(PlannerOutput(use_retrieval=False, tasks=[]))
+        capture_planner = _CapturePlannerLLM(PlannerOutput(
+            use_retrieval=True,
+            tasks=[RetrievalTask(route="docs", query="FastAPI response_model", k=4)],
+        ))
 
         def _docs_search(query: str):
             docs_calls["count"] += 1
@@ -198,7 +201,10 @@ class GraphRoutingTest(unittest.TestCase):
         )
 
     def test_retry_path_reruns_docs_retrieval_and_synthesis(self) -> None:
-        capture_planner = _CapturePlannerLLM(PlannerOutput(use_retrieval=False, tasks=[]))
+        capture_planner = _CapturePlannerLLM(PlannerOutput(
+            use_retrieval=True,
+            tasks=[RetrievalTask(route="docs", query="NumPy broadcasting", k=4)],
+        ))
         planner_node = make_planner_node(capture_planner, verbose=False)
 
         docs_calls = {"count": 0}

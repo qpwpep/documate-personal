@@ -7,6 +7,12 @@ from src.runtime.nodes.planner.prompt_builder import build_planner_messages
 
 
 class PlannerPromptBuilderTest(unittest.TestCase):
+    def test_source_planning_prompt_is_independent_of_upload_availability(self) -> None:
+        query = "그 노트북과 공식 문서를 비교해줘"
+        without_file = build_graph_state_input(user_input=query, messages=[HumanMessage(content=query)])
+        with_file = build_graph_state_input(user_input=query, messages=[HumanMessage(content=query)], retriever=object())
+        self.assertEqual(build_planner_messages(without_file), build_planner_messages(with_file))
+
     def test_memory_summary_is_supplied_as_untrusted_data_not_system_instructions(self) -> None:
         state = build_graph_state_input(
             user_input="continue",
@@ -52,8 +58,8 @@ class PlannerPromptBuilderTest(unittest.TestCase):
         )
         self.assertTrue(
             any(
-                "choose docs and upload only" in content
-                and "do not add local" in content
+                "choose docs and upload" in content
+                and "independently of tool or file availability" in content
                 for content in system_messages
             )
         )
