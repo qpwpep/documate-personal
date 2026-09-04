@@ -1,397 +1,181 @@
 import json
-import time
 import unittest
+from threading import Event
+from types import SimpleNamespace
+from unittest.mock import patch
 
-from langchain_core.messages import AIMessage, ToolMessage
+import requests
+from langchain_core.documents import Document
 
-from src.core.contracts import GraphState, PlannerState, ResponseState
 from src.core.contracts.boundary.graph import build_graph_state_input
-from src.runtime.make_graph import build_graph
-from src.runtime.nodes.retrieval import make_retrieve_dispatch_node
-from src.runtime.nodes.session import add_user_message
-from src.runtime.nodes.validation import make_validate_evidence_node
 from src.core.planner_schema import PlannerOutput, RetrievalTask
+from src.infra.settings import AppSettings
+from src.infra.tools import build_tool_registry
+from src.infra.tools.docs_search.url_validation import validate_doc_url
 from src.infra.tools.local_rag import build_local_rag_tools
+from src.runtime.nodes.retrieval import make_retrieve_dispatch_node
 
-from .helpers import _ToolWrapper, _tool_payload, build_legacy_state
+
+def _http_response(url: str, payload: dict | None = None) -> requests.Response:
+    response = requests.Response()
+    response.status_code = 200
+    response.url = url
+    response._content = json.dumps(payload or {}).encode()
+    response._content_consumed = True
+    return response
+
+
+def _upload_document() -> Document:
+    text = "train_test_split(X, y, test_size=0.2, random_state=42)"
+    return Document(
+        page_content=text,
+        metadata={
+            "source": "uploads/demo/sample_pipeline.ipynb",
+            "cell_id": 2,
+            "chunk_id": 0,
+            "start_offset": 0,
+            "end_offset": len(text),
+        },
+    )
+
+
+class _VectorStore:
+    def __init__(self, *, completed: Event | None = None, unavailable: bool = False):
+        self.completed = completed
+        self.unavailable = unavailable
+
+    def similarity_search_with_score(self, query: str, k: int = 4):
+        if self.unavailable:
+            raise AssertionError("Preserved upload results must avoid another database read")
+        if self.completed is not None:
+            self.completed.set()
+        return [(_upload_document(), 0.2)]
 
 
 class RetrievalNodeTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.settings = AppSettings(openai_api_key="test-key", tavily_api_key="test-key")
+        self.registry = build_tool_registry(self.settings)
+        validate_doc_url.cache_clear()
+        self.addCleanup(validate_doc_url.cache_clear)
+        head = patch("requests.head", side_effect=lambda url, **kwargs: _http_response(url))
+        head.start()
+        self.addCleanup(head.stop)
+        post = patch("requests.post", side_effect=self._docs_response)
+        self.http_post = post.start()
+        self.addCleanup(post.stop)
+
+    @staticmethod
+    def _docs_response(url: str, **kwargs) -> requests.Response:
+        return _http_response(
+            url,
+            {"results": [{
+                "url": "https://scikit-learn.org/stable/modules/generated/sklearn.model_selection.train_test_split.html",
+                "title": "train_test_split",
+                "content": "train_test_split splits arrays or matrices into random train and test subsets.",
+                "score": 0.99,
+            }]},
+        )
+
+    def _dispatch(self):
+        return make_retrieve_dispatch_node(
+            self.registry.tavily_search_tool,
+            self.registry.upload_search_tool,
+            verbose=False,
+        )
+
+    @staticmethod
+    def _state(*, retry: dict | None = None, vectorstore=None, routes=("docs", "upload")):
+        return build_graph_state_input(
+            user_input="Compare official train_test_split docs with my uploaded notebook.",
+            messages=[],
+            retriever=SimpleNamespace(vectorstore=vectorstore or _VectorStore()),
+            planner={"output": PlannerOutput(
+                use_retrieval=True,
+                tasks=[RetrievalTask(route=route, query="train_test_split", k=3) for route in routes],
+            )},
+            retry=retry or {},
+        )
+
     def test_upload_search_reranks_parameter_query_toward_usage_cell(self) -> None:
-        settings = type("Settings", (), {"openai_api_key": "test-key"})()
-        _rag_tool, upload_tool = build_local_rag_tools(settings)
+        class _UsageVectorStore:
+            def similarity_search_with_score(self, query: str, k: int = 4):
+                usage = _upload_document()
+                imported = Document(
+                    page_content="from sklearn.model_selection import train_test_split",
+                    metadata={**usage.metadata, "cell_id": 1},
+                )
+                return [(imported, 0.30), (usage, 0.28)]
 
-        class _Doc:
-            def __init__(self, text, cell_id):
-                self.page_content = text
-                self.metadata = {
-                    "source": "uploads/demo/sample_pipeline.ipynb",
-                    "cell_id": cell_id,
-                    "chunk_id": 0,
-                    "start_offset": 0,
-                    "end_offset": len(text),
-                }
-
-        class _VectorStore:
-            def similarity_search_with_score(self, query, k=4):
-                _ = (query, k)
-                return [
-                    (_Doc("from sklearn.model_selection import train_test_split", 1), 0.30),
-                    (_Doc("train_test_split(X, y, test_size=0.2, random_state=42)", 2), 0.28),
-                ]
-
-        retriever = type("Retriever", (), {"vectorstore": _VectorStore()})()
-        payload = upload_tool.func(
+        payload = build_local_rag_tools(self.settings)[1].func(
             query="업로드 노트북에서 train_test_split 파라미터를 찾아줘",
             k=4,
-            retriever=retriever,
+            retriever=SimpleNamespace(vectorstore=_UsageVectorStore()),
         )
 
-        evidence = payload["evidence"]
-        self.assertEqual(evidence[0]["cell_id"], 2)
-        self.assertIn("test_size=0.2", evidence[0]["snippet"])
+        self.assertEqual(payload["evidence"][0]["cell_id"], 2)
+        self.assertIn("test_size=0.2", payload["evidence"][0]["snippet"])
 
-    def test_retrieve_dispatch_merges_evidence_and_tool_messages(self) -> None:
-        docs_evidence = [
-            {
-                "kind": "official",
-                "tool": "tavily_search",
-                "source_id": "url:https://numpy.org/doc/stable/",
-                "url_or_path": "https://numpy.org/doc/stable/",
-                "title": "NumPy Docs",
-                "snippet": "official docs",
-                "score": 0.99,
-            }
-        ]
-        local_evidence = [
-            {
-                "kind": "local",
-                "tool": "rag_search",
-                "source_id": "path:data/notebooks/example.ipynb",
-                "url_or_path": "data/notebooks/example.ipynb",
-                "title": None,
-                "snippet": "local snippet",
-                "score": 0.88,
-            }
-        ]
+    def test_retrieve_dispatch_merges_docs_and_upload_evidence_with_tool_messages(self) -> None:
+        updates = self._dispatch()(self._state())
 
-        docs_calls = {"count": 0}
-        upload_calls = {"count": 0}
-        local_calls = {"count": 0}
-
-        def _docs_search(query: str):
-            docs_calls["count"] += 1
-            return _tool_payload(
-                docs_evidence if query else [],
-                tool="tavily_search",
-                route="docs",
-                status="success" if query else "no_result",
-                message="",
-                query=query,
-            )
-
-        def _upload_search(query: str, k: int, retriever=None):
-            _ = (query, k, retriever)
-            upload_calls["count"] += 1
-            return _tool_payload(
-                [],
-                tool="upload_search",
-                route="upload",
-                status="no_result",
-                message="no uploaded evidence found",
-                query=query,
-            )
-
-        def _local_search(query: str, k: int):
-            _ = k
-            local_calls["count"] += 1
-            return _tool_payload(
-                local_evidence if query else [],
-                tool="rag_search",
-                route="local",
-                status="success" if query else "no_result",
-                message="",
-                query=query,
-            )
-
-        retrieve_dispatch = make_retrieve_dispatch_node(
-            _ToolWrapper(_docs_search),
-            _ToolWrapper(_upload_search),
-            _ToolWrapper(_local_search),
-            verbose=False,
+        self.assertEqual(
+            [(item["tool"], item["kind"]) for item in updates["retrieval"].evidence_log],
+            [("tavily_search", "official"), ("upload_search", "local")],
         )
-
-        planner_output = PlannerOutput(
-            use_retrieval=True,
-            tasks=[
-                RetrievalTask(route="docs", query="numpy docs", k=3),
-                RetrievalTask(route="local", query="numpy notebook", k=3),
-            ],
+        self.assertEqual([message.name for message in updates["messages"]], ["tavily_search", "upload_search"])
+        self.assertEqual(
+            [(item.route, item.status) for item in updates["debug"].retrieval_diagnostics],
+            [("docs", "success"), ("upload", "success")],
         )
+        self.assertEqual(updates["retrieval"].evidence_log[1]["cell_id"], 2)
 
-        graph = build_graph(
-            state_type=GraphState,
-            add_user_node=add_user_message,
-            summarize_node=lambda state: state,
-            planner_node=lambda state: {"planner": PlannerState(output=planner_output)},
-            retrieve_dispatch_node=retrieve_dispatch,
-            synthesize_node=lambda state: {
-                "messages": [AIMessage(content="final answer")],
-                "response": ResponseState(final_answer="final answer", synthesis_attempt=1),
-            },
-            validate_evidence_node=make_validate_evidence_node(verbose=False),
-            action_postprocess_node=lambda state: {},
-            summary_max_turns=6,
-        )
+    def test_retrieve_dispatch_records_error_diagnostics_when_provider_fails(self) -> None:
+        self.http_post.side_effect = requests.ConnectionError("boom")
 
-        result = graph.invoke(build_graph_state_input(user_input="question", messages=[]))
-        retrieved = result["retrieval"].evidence_log
-        self.assertEqual(len(retrieved), 2)
-        self.assertEqual(docs_calls["count"], 1)
-        self.assertEqual(local_calls["count"], 1)
-        self.assertEqual(upload_calls["count"], 0)
-
-        tool_messages = [
-            message for message in result["messages"] if isinstance(message, ToolMessage) and getattr(message, "name", "")
-        ]
-        tool_names = {message.name for message in tool_messages}
-        self.assertIn("tavily_search", tool_names)
-        self.assertIn("rag_search", tool_names)
-        self.assertNotIn("upload_search", tool_names)
-        self.assertEqual(result["debug"].retrieval_diagnostics[0].status, "success")
-        self.assertEqual(result["debug"].retrieval_diagnostics[1].status, "success")
-
-    def test_retrieve_dispatch_records_error_diagnostics(self) -> None:
-        retrieve_dispatch = make_retrieve_dispatch_node(
-            _ToolWrapper(lambda query: (_ for _ in ()).throw(RuntimeError("boom"))),
-            _ToolWrapper(
-                lambda query, k, retriever=None: _tool_payload(
-                    [],
-                    tool="upload_search",
-                    route="upload",
-                    status="no_result",
-                    message="",
-                    query=query,
-                )
-            ),
-            _ToolWrapper(
-                lambda query, k: _tool_payload(
-                    [],
-                    tool="rag_search",
-                    route="local",
-                    status="no_result",
-                    message="",
-                    query=query,
-                )
-            ),
-            verbose=False,
-        )
-
-        updates = retrieve_dispatch(
-            build_legacy_state(
-                {
-                    "planner_output": PlannerOutput(
-                        use_retrieval=True,
-                        tasks=[RetrievalTask(route="docs", query="numpy docs", k=3)],
-                    ),
-                    "retry_context": {"attempt": 0},
-                }
-            )
-        )
+        updates = self._dispatch()(self._state(routes=("docs",)))
 
         payload = json.loads(updates["messages"][0].content)
         self.assertEqual(payload["diagnostics"]["status"], "error")
         self.assertEqual(updates["debug"].retrieval_diagnostics[0].status, "error")
+        self.assertEqual(updates["retrieval"].evidence_log, [])
 
-    def test_retrieve_dispatch_preserves_planner_task_order_under_parallel_execution(self) -> None:
-        def _docs_search(query: str):
-            time.sleep(0.05)
-            return _tool_payload(
-                [
-                    {
-                        "kind": "official",
-                        "tool": "tavily_search",
-                        "source_id": "url:https://docs.example.com/",
-                        "url_or_path": "https://docs.example.com/",
-                        "title": "Docs",
-                        "snippet": "docs snippet",
-                        "score": 0.8,
-                    }
-                ],
-                tool="tavily_search",
-                route="docs",
-                status="success",
-                message="",
-                query=query,
-            )
+    def test_retrieve_dispatch_preserves_planner_task_order_when_upload_finishes_first(self) -> None:
+        upload_completed = Event()
 
-        def _local_search(query: str, k: int):
-            _ = k
-            return _tool_payload(
-                [
-                    {
-                        "kind": "local",
-                        "tool": "rag_search",
-                        "source_id": "path:data/example.ipynb#chunk=0;start=0;end=10",
-                        "url_or_path": "data/example.ipynb",
-                        "title": None,
-                        "snippet": "local snippet",
-                        "score": 0.7,
-                    }
-                ],
-                tool="rag_search",
-                route="local",
-                status="success",
-                message="",
-                query=query,
-            )
+        def _wait_for_upload(url: str, **kwargs) -> requests.Response:
+            self.assertTrue(upload_completed.wait(timeout=2), "Retrieval routes must run concurrently")
+            return self._docs_response(url, **kwargs)
 
-        retrieve_dispatch = make_retrieve_dispatch_node(
-            _ToolWrapper(_docs_search),
-            _ToolWrapper(
-                lambda query, k, retriever=None: _tool_payload(
-                    [],
-                    tool="upload_search",
-                    route="upload",
-                    status="no_result",
-                    message="",
-                    query=query,
-                )
-            ),
-            _ToolWrapper(_local_search),
-            verbose=False,
-        )
-
-        updates = retrieve_dispatch(
-            build_legacy_state(
-                {
-                    "planner_output": PlannerOutput(
-                        use_retrieval=True,
-                        tasks=[
-                            RetrievalTask(route="docs", query="docs query", k=3),
-                            RetrievalTask(route="local", query="local query", k=3),
-                        ],
-                    ),
-                    "retry_context": {"attempt": 0},
-                }
-            )
-        )
+        self.http_post.side_effect = _wait_for_upload
+        updates = self._dispatch()(self._state(vectorstore=_VectorStore(completed=upload_completed)))
 
         self.assertEqual(
-            [item.route for item in updates["debug"].retrieval_diagnostics],
-            ["docs", "local"],
-        )
-        route_events = [
-            item
-            for item in updates["debug"].latency_trace
-            if item.get("kind") == "retrieval_route"
-        ]
-        self.assertEqual([item["route"] for item in route_events], ["docs", "local"])
-
-    def test_retrieve_dispatch_reuses_preserved_upload_results_on_docs_retry(self) -> None:
-        docs_calls = {"count": 0}
-        upload_calls = {"count": 0}
-
-        def _docs_search(query: str):
-            docs_calls["count"] += 1
-            return _tool_payload(
-                [
-                    {
-                        "kind": "official",
-                        "tool": "tavily_search",
-                        "source_id": "url:https://scikit-learn.org/stable/modules/generated/sklearn.model_selection.train_test_split.html",
-                        "url_or_path": "https://scikit-learn.org/stable/modules/generated/sklearn.model_selection.train_test_split.html",
-                        "title": "train_test_split",
-                        "snippet": "train_test_split splits arrays or matrices.",
-                        "score": 0.9,
-                    }
-                ],
-                tool="tavily_search",
-                route="docs",
-                status="success",
-                message="",
-                query=query,
-            )
-
-        def _upload_search(query: str, k: int, retriever=None):
-            _ = (query, k, retriever)
-            upload_calls["count"] += 1
-            return _tool_payload(
-                [],
-                tool="upload_search",
-                route="upload",
-                status="no_result",
-                message="should not run on retry",
-                query=query,
-            )
-
-        retrieve_dispatch = make_retrieve_dispatch_node(
-            _ToolWrapper(_docs_search),
-            _ToolWrapper(_upload_search),
-            _ToolWrapper(
-                lambda query, k: _tool_payload(
-                    [],
-                    tool="rag_search",
-                    route="local",
-                    status="no_result",
-                    message="",
-                    query=query,
-                )
-            ),
-            verbose=False,
-        )
-
-        upload_query = "uploaded notebook example"
-        updates = retrieve_dispatch(
-            build_legacy_state(
-                {
-                    "planner_output": PlannerOutput(
-                        use_retrieval=True,
-                        tasks=[
-                            RetrievalTask(route="docs", query="train_test_split", k=3),
-                            RetrievalTask(route="upload", query=upload_query, k=3),
-                        ],
-                    ),
-                    "retry_context": {
-                        "attempt": 1,
-                        "failed_routes": ["docs"],
-                        "preserved_evidence": [
-                            {
-                                "kind": "local",
-                                "tool": "upload_search",
-                                "source_id": "path:uploads/demo/sample.ipynb#cell=1;chunk=0;start=0;end=64",
-                                "document_id": "path:uploads/demo/sample.ipynb",
-                                "url_or_path": "uploads/demo/sample.ipynb",
-                                "snippet": "X_train, X_test, y_train, y_test = train_test_split(...)",
-                                "score": 0.0,
-                                "cell_id": 1,
-                                "chunk_id": 0,
-                                "start_offset": 0,
-                                "end_offset": 64,
-                            }
-                        ],
-                        "preserved_retrieval_diagnostics": [
-                            {
-                                "tool": "upload_search",
-                                "route": "upload",
-                                "status": "success",
-                                "message": "",
-                                "query": upload_query,
-                                "attempt": 1,
-                            }
-                        ],
-                    },
-                }
-            )
-        )
-
-        self.assertEqual(docs_calls["count"], 1)
-        self.assertEqual(upload_calls["count"], 0)
-        self.assertEqual(
-            [item["tool"] for item in updates["retrieval"].evidence_log],
-            ["tavily_search", "upload_search"],
+            [(item.route, item.status) for item in updates["debug"].retrieval_diagnostics],
+            [("docs", "success"), ("upload", "success")],
         )
         self.assertEqual(
-            [item.route for item in updates["debug"].retrieval_diagnostics],
+            [event["route"] for event in updates["debug"].latency_trace if event.get("kind") == "retrieval_route"],
             ["docs", "upload"],
         )
+
+    def test_retrieve_dispatch_reuses_preserved_upload_results_on_docs_retry(self) -> None:
+        initial = self._dispatch()(self._state(routes=("upload",)))
+        upload_evidence = initial["retrieval"].evidence_log
+        diagnostic = initial["debug"].retrieval_diagnostics[0].model_dump()
+        updates = self._dispatch()(self._state(
+            vectorstore=_VectorStore(unavailable=True),
+            retry={
+                "attempt": 1,
+                "failed_routes": ["docs"],
+                "preserved_evidence": upload_evidence,
+                "preserved_retrieval_diagnostics": [diagnostic],
+            },
+        ))
+
+        self.assertEqual(updates["retrieval"].evidence_log[1:], upload_evidence)
+        self.assertEqual(
+            [(item.route, item.status) for item in updates["debug"].retrieval_diagnostics],
+            [("docs", "success"), ("upload", "success")],
+        )
+        self.assertEqual(updates["debug"].retrieval_errors, [])

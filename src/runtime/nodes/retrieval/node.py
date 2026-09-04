@@ -46,7 +46,6 @@ def _build_route_handlers(
     *,
     tavily_search_tool: Any,
     upload_search_tool: Any,
-    rag_search_tool: Any,
     runtime: Any,
 ) -> dict[str, tuple[str, Any]]:
     return {
@@ -61,10 +60,6 @@ def _build_route_handlers(
                 k=task.k,
                 retriever=runtime.retriever,
             ),
-        ),
-        "local": (
-            "rag_search",
-            lambda task: rag_search_tool.func(query=task.query, k=task.k),
         ),
     }
 
@@ -262,7 +257,6 @@ def _emit_retrieval_progress_snapshot(
 def make_retrieve_dispatch_node(
     tavily_search_tool: Any,
     upload_search_tool: Any,
-    rag_search_tool: Any,
     verbose: bool,
 ):
     def retrieve_dispatch(state: GraphState) -> GraphState:
@@ -285,7 +279,6 @@ def make_retrieve_dispatch_node(
         route_handlers = _build_route_handlers(
             tavily_search_tool=tavily_search_tool,
             upload_search_tool=upload_search_tool,
-            rag_search_tool=rag_search_tool,
             runtime=runtime,
         )
         batch_plan = _collect_retrieval_batch(

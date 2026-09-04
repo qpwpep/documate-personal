@@ -1,80 +1,47 @@
+import json
 import unittest
+
+import requests
+from langchain_core.documents import Document
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import HumanMessage
 
-from src.core.contracts import PlannerState, ResponseState
 from src.core.contracts.boundary.debug import get_debug_state
 from src.core.contracts.boundary.graph import build_graph_state_input
-from src.core.contracts.boundary.retrieval import get_retrieval_state
 from src.runtime.agent_runtime.debug_collector import DebugCollector
 from src.runtime.graph_builder import _instrument_stage_node, build_agent_graph
-from src.core.planner_schema import PlannerOutput, RetrievalTask
 from src.infra.settings import AppSettings
 
-from .helpers import _ToolWrapper
+from .helpers import _CaptureStructuredSynthesizeLLM
+from src.infra.tools.docs_search.url_validation import validate_doc_url
 
 
-class _NeverCallLLM:
-    def with_structured_output(self, *_args, **_kwargs):
-        return self
-
-    def invoke(self, _messages):
-        raise AssertionError("LLM should not be invoked in this deterministic graph test")
-
-
-def _docs_payload(query: str) -> dict:
-    return {
-        "evidence": [
-            {
-                "kind": "official",
-                "tool": "tavily_search",
-                "source_id": "url:https://numpy.org/doc/stable/reference/generated/numpy.concatenate.html",
-                "document_id": "url:https://numpy.org/doc/stable/reference/generated/numpy.concatenate.html",
-                "url_or_path": "https://numpy.org/doc/stable/reference/generated/numpy.concatenate.html",
-                "title": "NumPy concatenate",
-                "snippet": "Join a sequence of arrays along an existing axis.",
-                "score": 0.94,
-            }
-        ],
-        "diagnostics": {
-            "tool": "tavily_search",
-            "route": "docs",
-            "status": "success",
-            "message": "",
-            "query": query,
-            "attempt": 1,
-        },
-    }
+def _http_response(url: str, payload: dict | None = None) -> requests.Response:
+    response = requests.Response()
+    response.status_code = 200
+    response.url = url
+    response._content = json.dumps(payload or {}).encode()
+    response._content_consumed = True
+    return response
 
 
-def _upload_payload(query: str) -> dict:
-    return {
-        "evidence": [
-            {
-                "kind": "local",
-                "tool": "upload_search",
-                "source_id": "path:uploads/demo/sample_pipeline.ipynb#cell=1;chunk=0;start=0;end=64",
-                "document_id": "path:uploads/demo/sample_pipeline.ipynb",
-                "url_or_path": "uploads/demo/sample_pipeline.ipynb",
-                "snippet": "X = np.concatenate([train, test], axis=0)",
-                "score": 0.88,
-                "cell_id": 1,
-                "chunk_id": 0,
-                "start_offset": 0,
-                "end_offset": 64,
-            }
-        ],
-        "diagnostics": {
-            "tool": "upload_search",
-            "route": "upload",
-            "status": "success",
-            "message": "",
-            "query": query,
-            "attempt": 1,
-        },
-    }
+class _UploadVectorStore:
+    def similarity_search_with_score(self, query: str, k: int = 4):
+        return [(
+            Document(
+                page_content="X = np.concatenate([train, test], axis=0)",
+                metadata={
+                    "source": "uploads/demo/sample_pipeline.ipynb",
+                    "cell_id": 1,
+                    "chunk_id": 0,
+                    "start_offset": 0,
+                    "end_offset": 64,
+                },
+            ),
+            0.2,
+        )]
 
 
 class GraphBuilderDebugTest(unittest.TestCase):
@@ -147,99 +114,59 @@ class GraphBuilderDebugTest(unittest.TestCase):
             ["validate_evidence: retry_reason=unsupported_claims"],
         )
 
-    @patch("src.runtime.graph_builder.make_synthesize_node")
-    @patch("src.runtime.graph_builder.make_planner_node")
-    @patch("src.runtime.graph_builder.build_llm_registry")
-    @patch("src.runtime.graph_builder.build_tool_registry")
+    @patch("requests.head")
+    @patch("requests.post")
+    @patch("src.infra.llm.ChatOpenAI")
     def test_debug_survives_validation_and_action_postprocess(
         self,
-        mock_build_tool_registry,
-        mock_build_llm_registry,
-        mock_make_planner_node,
-        mock_make_synthesize_node,
+        provider_model,
+        http_post,
+        http_head,
     ) -> None:
-        mock_build_llm_registry.return_value = SimpleNamespace(
-            llm_summarizer=_NeverCallLLM(),
-            llm_planner=_NeverCallLLM(),
-            llm_synthesizer=_NeverCallLLM(),
-            llm_synthesizer_compact=_NeverCallLLM(),
-            verbose=False,
+        validate_doc_url.cache_clear()
+        self.addCleanup(validate_doc_url.cache_clear)
+        http_head.side_effect = lambda url, **kwargs: _http_response(url)
+        http_post.side_effect = lambda url, **kwargs: _http_response(
+            url,
+            {"results": [{
+                "url": "https://numpy.org/doc/stable/reference/generated/numpy.concatenate.html",
+                "title": "NumPy concatenate",
+                "content": "NumPy concatenate joins a sequence of arrays along an existing axis.",
+                "score": 0.94,
+            }]},
         )
-        mock_make_planner_node.return_value = lambda _state: {
-            "planner": PlannerState(
-                output=PlannerOutput(
-                    use_retrieval=True,
-                    tasks=[
-                        RetrievalTask(route="docs", query="numpy concatenate official docs", k=3),
-                        RetrievalTask(route="upload", query="uploaded concat example", k=3),
-                    ],
-                ),
-                status="deterministic",
-                diagnostics={
-                    "status": "deterministic",
-                    "reason": None,
-                    "fallback_routes": ["docs", "upload"],
-                    "intent_required": True,
-                    "required_routes": ["docs", "upload"],
-                    "override_applied": False,
-                    "override_reason": None,
-                },
-            )
-        }
-        mock_make_synthesize_node.return_value = lambda state: {
-            "messages": [AIMessage(content="공식 설명과 업로드 비교를 정리했습니다.")],
-            "response": ResponseState(
-                final_answer="공식 설명과 업로드 비교를 정리했습니다.",
-                payload={
-                    "answer": "공식 설명과 업로드 비교를 정리했습니다.",
-                    "claims": [
-                        {
-                            "text": "NumPy concatenate는 기존 축을 따라 배열 시퀀스를 결합한다.",
-                            "evidence_ids": [
-                                "url:https://numpy.org/doc/stable/reference/generated/numpy.concatenate.html"
-                            ],
-                            "confidence": 0.94,
-                        },
-                        {
-                            "text": "업로드 파일은 axis=0으로 train/test를 이어 붙이는 예시를 사용한다.",
-                            "evidence_ids": [
-                                "path:uploads/demo/sample_pipeline.ipynb#cell=1;chunk=0;start=0;end=64"
-                            ],
-                            "confidence": 0.88,
-                        },
-                    ],
-                    "evidence": get_retrieval_state(state).evidence_log,
-                    "confidence": 0.91,
-                },
-                synthesis_attempt=1,
-            ),
-        }
-        mock_build_tool_registry.return_value = SimpleNamespace(
-            tavily_search_tool=_ToolWrapper(lambda query: _docs_payload(query)),
-            upload_search_tool=_ToolWrapper(lambda query, k, retriever=None: _upload_payload(query)),
-            rag_search_tool=_ToolWrapper(
-                lambda query, k: {
-                    "evidence": [],
-                    "diagnostics": {
-                        "tool": "rag_search",
-                        "route": "local",
-                        "status": "no_result",
-                        "message": "",
-                        "query": query,
-                        "attempt": 1,
+        settings = AppSettings(openai_api_key="test", tavily_api_key="test")
+        provider_model.side_effect = lambda **kwargs: _CaptureStructuredSynthesizeLLM(
+            payload={
+                "use_retrieval": True,
+                "tasks": [
+                    {"route": "docs", "query": "numpy concatenate official docs", "k": 3},
+                    {"route": "upload", "query": "numpy concatenate uploaded example", "k": 3},
+                ],
+            } if kwargs.get("model") == settings.planner_model else {
+                "answer": "공식 설명과 업로드 비교를 정리했습니다.",
+                "claims": [
+                    {
+                        "text": "NumPy concatenate는 기존 축을 따라 배열 시퀀스를 결합한다.",
+                        "evidence_ids": ["url:https://numpy.org/doc/stable/reference/generated/numpy.concatenate.html"],
+                        "confidence": 0.94,
                     },
-                }
-            ),
-            save_text_tool=_ToolWrapper(lambda **_kwargs: self.fail("save_text should not run")),
-            slack_notify_tool=_ToolWrapper(lambda **_kwargs: self.fail("slack_notify should not run")),
+                    {
+                        "text": "업로드 파일은 axis=0으로 train/test를 이어 붙이는 예시를 사용한다.",
+                        "evidence_ids": ["path:uploads/demo/sample_pipeline.ipynb#cell=1;chunk=0;start=0;end=64"],
+                        "confidence": 0.88,
+                    },
+                ],
+                "confidence": 0.91,
+            },
         )
 
-        graph = build_agent_graph(AppSettings(openai_api_key="test", tavily_api_key="test"))
+        graph = build_agent_graph(settings)
         result = graph.invoke(
             build_graph_state_input(
-                user_input="Explain from official docs and compare it with the uploaded file example.",
+                user_input="Explain NumPy concatenate from official docs and compare it with the uploaded file example.",
                 messages=[],
-                retriever=object(),
+                retriever=SimpleNamespace(vectorstore=_UploadVectorStore()),
             )
         )
 
@@ -259,6 +186,13 @@ class GraphBuilderDebugTest(unittest.TestCase):
             )
         )
         self.assertEqual(debug.planner_errors, [])
+        self.assertEqual(
+            {source_id for claim in result["response"].payload.claims for source_id in claim.evidence_ids},
+            {
+                "url:https://numpy.org/doc/stable/reference/generated/numpy.concatenate.html",
+                "path:uploads/demo/sample_pipeline.ipynb#cell=1;chunk=0;start=0;end=64",
+            },
+        )
         self.assertTrue(result["response"].final_answer)
 
 

@@ -1,183 +1,195 @@
 import json
 import math
 import unittest
+from io import BytesIO
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
 from unittest.mock import patch
+
+import httpx
+import requests
 
 from langchain_core.documents import Document
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_openai import ChatOpenAI
+from langgraph.graph import END, START, StateGraph
 
 from src.app.agent_manager import AgentFlowManager
+from src.core.contracts import GraphState
 from src.core.contracts.graph_state import DebugState, PlannerState, ResponseState, RetrievalState
-from src.runtime.graph_builder import StageExecutionError
+from src.runtime.agent_runtime import DebugCollector, ExecutionRunner, ResponseAssembler, SessionContext
+from src.runtime.graph_builder import _instrument_stage_node
 from src.infra.settings import AppSettings
 from src.infra.tools import build_tool_registry
 from src.infra.tools.docs_search import infer_docs_query_hint
-from src.infra.tools.docs_search.url_validation import DocUrlValidationResult
+from src.infra.tools.docs_search.url_validation import validate_doc_url
 
 
-class _FakeGraph:
-    def __init__(self, evidence_payload: list[dict]):
-        self._evidence_payload = evidence_payload
-
-    def invoke(self, state: dict) -> dict:
-        runtime = state["runtime"]
-        query = runtime.user_input
-        return {
-            "messages": [
-                HumanMessage(content=query),
-                ToolMessage(
-                    content=json.dumps(
-                        {
-                            "evidence": self._evidence_payload,
-                            "diagnostics": {
-                                "tool": "tavily_search",
-                                "route": "docs",
-                                "status": "success",
-                                "message": "",
-                                "query": query,
-                                "attempt": 1,
-                            },
-                        },
-                        ensure_ascii=False,
-                    ),
-                    name="tavily_search",
-                    tool_call_id="call-1",
-                ),
-                AIMessage(content="final answer [1]"),
-            ],
-            "retrieval": RetrievalState(evidence_log=self._evidence_payload),
-            "response": ResponseState(
-                final_answer="final answer [1]",
-                payload={
-                    "answer": "final answer [1]",
-                    "claims": [
-                        {
-                            "text": "final answer",
-                            "evidence_ids": ["url:https://numpy.org/doc/stable/"],
-                            "confidence": 0.88,
-                        }
-                    ],
-                    "evidence": self._evidence_payload,
-                    "confidence": 0.88,
-                },
-            ),
-            "planner": PlannerState(
-                diagnostics={
-                    "status": "heuristic_fallback",
-                    "reason": "planner_failed_or_invalid",
-                    "fallback_routes": ["docs"],
-                    "intent_required": True,
-                    "required_routes": ["docs"],
-                    "override_applied": False,
-                    "override_reason": None,
-                }
-            ),
-            "debug": DebugState(
-                retrieval_diagnostics=[
+def _evidence_response(evidence_payload: list[dict]) -> dict:
+    query = "question"
+    return {
+        "messages": [
+            HumanMessage(content=query),
+            ToolMessage(
+                content=json.dumps(
                     {
-                        "tool": "tavily_search",
-                        "route": "docs",
-                        "status": "success",
-                        "message": "",
-                        "query": query,
-                        "attempt": 1,
+                        "evidence": evidence_payload,
+                        "diagnostics": {
+                            "tool": "tavily_search",
+                            "route": "docs",
+                            "status": "success",
+                            "message": "",
+                            "query": query,
+                            "attempt": 1,
+                        },
+                    },
+                    ensure_ascii=False,
+                ),
+                name="tavily_search",
+                tool_call_id="call-1",
+            ),
+            AIMessage(content="final answer [1]"),
+        ],
+        "retrieval": RetrievalState(evidence_log=evidence_payload),
+        "response": ResponseState(
+            final_answer="final answer [1]",
+            payload={
+                "answer": "final answer [1]",
+                "claims": [
+                    {
+                        "text": "final answer",
+                        "evidence_ids": ["url:https://numpy.org/doc/stable/"],
+                        "confidence": 0.88,
                     }
                 ],
-                latency_trace=[
-                    {"kind": "stage", "stage": "planner", "attempt": 1, "latency_ms": 12, "status": "heuristic_fallback"},
-                    {"kind": "retrieval_route", "route": "docs", "tool": "tavily_search", "attempt": 1, "latency_ms": 48, "status": "success"},
-                    {"kind": "stage", "stage": "retrieval", "attempt": 1, "latency_ms": 50, "status": "success"},
-                    {"kind": "synthesis_attempt", "attempt": 1, "mode": "structured_only", "structured_ms": 22, "fallback_ms": None, "total_ms": 22},
-                    {"kind": "stage", "stage": "synthesis", "attempt": 1, "latency_ms": 22, "status": "structured_only"},
-                    {"kind": "stage", "stage": "validation", "attempt": 1, "latency_ms": 3, "status": "pass"},
-                ],
-            ),
-        }
-
-
-class _FakeGraphWithLlmCalls:
-    def invoke(self, state: dict) -> dict:
-        _ = state
-        return {
-            "messages": [
-                HumanMessage(content="question"),
-                ToolMessage(content=json.dumps({"evidence": [], "diagnostics": {}}, ensure_ascii=False), name="tavily_search", tool_call_id="call-1"),
-                AIMessage(content="final answer"),
+                "evidence": evidence_payload,
+                "confidence": 0.88,
+            },
+        ),
+        "planner": PlannerState(
+            diagnostics={
+                "status": "heuristic_fallback",
+                "reason": "planner_failed_or_invalid",
+                "fallback_routes": ["docs"],
+                "intent_required": True,
+                "required_routes": ["docs"],
+                "override_applied": False,
+                "override_reason": None,
+            }
+        ),
+        "debug": DebugState(
+            retrieval_diagnostics=[
+                {
+                    "tool": "tavily_search",
+                    "route": "docs",
+                    "status": "success",
+                    "message": "",
+                    "query": query,
+                    "attempt": 1,
+                }
             ],
-            "response": ResponseState(
-                final_answer="final answer",
-                payload={"answer": "final answer", "claims": [], "evidence": [], "confidence": None},
-            ),
-            "debug": DebugState(
-                llm_calls=[
-                    {
-                        "stage": "planner",
-                        "attempt": 1,
-                        "path": "structured",
-                        "response_metadata": {"model_name": "gpt-5-nano"},
-                        "usage_metadata": {"input_tokens": 12, "output_tokens": 3, "total_tokens": 15},
-                    },
-                    {
-                        "stage": "synthesis",
-                        "attempt": 1,
-                        "path": "structured",
-                        "response_metadata": {"model_name": "gpt-5-mini"},
-                        "usage_metadata": {"input_tokens": 20, "output_tokens": 5, "total_tokens": 25},
-                    },
-                ]
-            ),
-        }
-
-
-class _FakeGraphWithAiMessageMetadata:
-    def invoke(self, state: dict) -> dict:
-        _ = state
-        return {
-            "messages": [
-                HumanMessage(content="question"),
-                AIMessage(
-                    content="final answer",
-                    response_metadata={"model_name": "gpt-5-mini"},
-                    usage_metadata={"input_tokens": 14, "output_tokens": 6, "total_tokens": 20},
-                ),
+            latency_trace=[
+                {"kind": "stage", "stage": "planner", "attempt": 1, "latency_ms": 12, "status": "heuristic_fallback"},
+                {"kind": "retrieval_route", "route": "docs", "tool": "tavily_search", "attempt": 1, "latency_ms": 48, "status": "success"},
+                {"kind": "stage", "stage": "retrieval", "attempt": 1, "latency_ms": 50, "status": "success"},
+                {"kind": "synthesis_attempt", "attempt": 1, "mode": "structured_only", "structured_ms": 22, "fallback_ms": None, "total_ms": 22},
+                {"kind": "stage", "stage": "synthesis", "attempt": 1, "latency_ms": 22, "status": "structured_only"},
+                {"kind": "stage", "stage": "validation", "attempt": 1, "latency_ms": 3, "status": "pass"},
             ],
-            "response": ResponseState(
-                final_answer="final answer",
-                payload={"answer": "final answer", "claims": [], "evidence": [], "confidence": None},
-                synthesis_attempt=1,
-            ),
-        }
+        ),
+    }
 
 
-class _FakeGraphWithSave:
-    def invoke(self, state: dict) -> dict:
-        _ = state
-        return {
-            "messages": [
-                HumanMessage(content="question"),
-                AIMessage(content="final answer before save"),
-                ToolMessage(
-                    content=json.dumps(
-                        {
-                            "message": "Saved output to response_20260101_010101.txt",
-                            "file_path": "output/save_text/response_20260101_010101.txt",
-                        },
-                        ensure_ascii=False,
-                    ),
-                    name="save_text",
-                    tool_call_id="save-1",
-                ),
-            ],
-            "response": ResponseState(
-                final_answer="final answer before save",
-                payload={
-                    "answer": "final answer before save",
-                    "claims": [],
-                    "evidence": [],
-                    "confidence": None,
+def _response_with_llm_calls() -> dict:
+    return {
+        "messages": [
+            HumanMessage(content="question"),
+            ToolMessage(content=json.dumps({"evidence": [], "diagnostics": {}}, ensure_ascii=False), name="tavily_search", tool_call_id="call-1"),
+            AIMessage(content="final answer"),
+        ],
+        "response": ResponseState(
+            final_answer="final answer",
+            payload={"answer": "final answer", "claims": [], "evidence": [], "confidence": None},
+        ),
+        "debug": DebugState(
+            llm_calls=[
+                {
+                    "stage": "planner",
+                    "attempt": 1,
+                    "path": "structured",
+                    "response_metadata": {"model_name": "gpt-5-nano"},
+                    "usage_metadata": {"input_tokens": 12, "output_tokens": 3, "total_tokens": 15},
                 },
+                {
+                    "stage": "synthesis",
+                    "attempt": 1,
+                    "path": "structured",
+                    "response_metadata": {"model_name": "gpt-5-mini"},
+                    "usage_metadata": {"input_tokens": 20, "output_tokens": 5, "total_tokens": 25},
+                },
+            ]
+        ),
+    }
+
+
+def _response_with_ai_metadata() -> dict:
+    return {
+        "messages": [
+            HumanMessage(content="question"),
+            AIMessage(
+                content="final answer",
+                response_metadata={"model_name": "gpt-5-mini"},
+                usage_metadata={"input_tokens": 14, "output_tokens": 6, "total_tokens": 20},
             ),
-        }
+        ],
+        "response": ResponseState(
+            final_answer="final answer",
+            payload={"answer": "final answer", "claims": [], "evidence": [], "confidence": None},
+            synthesis_attempt=1,
+        ),
+    }
+
+
+def _response_with_save_receipt() -> dict:
+    return {
+        "messages": [
+            HumanMessage(content="question"),
+            AIMessage(content="final answer before save"),
+            ToolMessage(
+                content=json.dumps(
+                    {
+                        "message": "Saved output to response_20260101_010101.txt",
+                        "file_path": "output/save_text/response_20260101_010101.txt",
+                    },
+                    ensure_ascii=False,
+                ),
+                name="save_text",
+                tool_call_id="save-1",
+            ),
+        ],
+        "response": ResponseState(
+            final_answer="final answer before save",
+            payload={
+                "answer": "final answer before save",
+                "claims": [],
+                "evidence": [],
+                "confidence": None,
+            },
+        ),
+    }
+
+
+def _assemble_response(response: dict) -> dict:
+    debug = DebugCollector().build(
+        response=response,
+        updated_messages=response["messages"],
+        graph_total_ms=100,
+        upload_retriever_build_ms=None,
+    )
+    return ResponseAssembler().assemble(
+        response=response, updated_messages=response["messages"], debug_info=debug,
+    )
 
 
 class _FakeVectorStore:
@@ -281,32 +293,30 @@ class _FakeRetriever:
         self.vectorstore = vectorstore or _FakeVectorStore()
 
 
-class _FakeRetrieverHandle:
-    def __init__(self, retriever=None, collection_name: str = "upload-session-session"):
-        self.retriever = retriever or _FakeRetriever()
-        self.collection_name = collection_name
-        self.cleanup_calls = 0
-
-    def cleanup(self) -> None:
-        self.cleanup_calls += 1
-
-
-class _FailingGraph:
-    def invoke(self, state: dict) -> dict:
-        _ = state
-        raise StageExecutionError(stage="synthesis", latency_ms=17, cause=RuntimeError("boom"))
-
-
 class EvidencePipelineTest(unittest.TestCase):
     def setUp(self) -> None:
-        self._url_validation_patcher = patch("src.infra.tools.docs_search.serialization.validate_doc_url")
-        self.mock_validate_doc_url = self._url_validation_patcher.start()
-        self.mock_validate_doc_url.side_effect = lambda url: DocUrlValidationResult(
-            ok=True,
-            final_url=url,
-            status_code=200,
-        )
-        self.addCleanup(self._url_validation_patcher.stop)
+        self.tavily_payload = {"results": []}
+        self.search_responder = None
+        validate_doc_url.cache_clear()
+        self.addCleanup(validate_doc_url.cache_clear)
+
+        def respond(method, url, **kwargs):
+            response = requests.Response()
+            response.status_code = 200
+            response.url = url
+            if method.lower() == "post" and url == "https://api.tavily.com/search":
+                payload = self.search_responder(kwargs["json"]) if self.search_responder else self.tavily_payload
+                response._content = json.dumps(payload).encode("utf-8")
+            elif method.lower() == "head":
+                response._content = b""
+            else:
+                raise AssertionError(f"unexpected HTTP request: {method} {url}")
+            response.raw = BytesIO(response.content)
+            return response
+
+        http_patcher = patch("requests.sessions.Session.request", side_effect=respond)
+        http_patcher.start()
+        self.addCleanup(http_patcher.stop)
 
     def test_extract_observed_evidence_uses_tool_native_payloads(self) -> None:
         tavily_item = {
@@ -319,9 +329,9 @@ class EvidencePipelineTest(unittest.TestCase):
             "snippet": "broadcasting",
             "score": 0.98,
         }
-        rag_item = {
+        upload_item = {
             "kind": "local",
-            "tool": "rag_search",
+            "tool": "upload_search",
             "source_id": "path:uploads/s1/sample.ipynb#cell=0;chunk=1;start=0;end=16",
             "document_id": "path:uploads/s1/sample.ipynb",
             "url_or_path": "uploads/s1/sample.ipynb",
@@ -355,33 +365,33 @@ class EvidencePipelineTest(unittest.TestCase):
             ToolMessage(
                 content=json.dumps(
                     {
-                        "evidence": [rag_item],
+                        "evidence": [upload_item],
                         "diagnostics": {
-                            "tool": "rag_search",
-                            "route": "local",
+                            "tool": "upload_search",
+                            "route": "upload",
                             "status": "success",
                             "message": "",
-                            "query": "local",
+                            "query": "uploaded file",
                             "attempt": 1,
                         },
                     }
                 ),
-                name="rag_search",
+                name="upload_search",
                 tool_call_id="2",
             ),
             ToolMessage(content="not-json", name="upload_search", tool_call_id="3"),
-            ToolMessage(content=json.dumps([rag_item]), name="save_text", tool_call_id="4"),
+            ToolMessage(content=json.dumps([upload_item]), name="save_text", tool_call_id="4"),
         ]
-        errors: list[str] = []
-
-        observed = AgentFlowManager._extract_observed_evidence(messages, errors=errors)
+        debug = DebugCollector().build(response={}, updated_messages=messages, graph_total_ms=0, upload_retriever_build_ms=None)
+        observed = debug["observed_evidence"]
+        errors = debug["errors"]
 
         self.assertEqual(len(observed), 2)
         self.assertTrue(any(item["tool"] == "tavily_search" for item in observed))
-        self.assertTrue(any(item["tool"] == "rag_search" for item in observed))
+        self.assertTrue(any(item["tool"] == "upload_search" for item in observed))
         self.assertTrue(any("tool:upload_search" in error for error in errors))
 
-    def test_response_payload_uses_adopted_evidence_not_observed_evidence_identity(self) -> None:
+    def test_response_payload_excludes_observed_evidence_when_it_was_not_adopted(self) -> None:
         evidence_payload = [
             {
                 "kind": "official",
@@ -395,16 +405,22 @@ class EvidencePipelineTest(unittest.TestCase):
             }
         ]
 
-        manager = AgentFlowManager.__new__(AgentFlowManager)
-        manager.settings = None
-        manager.graph = _FakeGraph(evidence_payload)
-        manager.messages = []
-        manager.upload_retriever_handle = None
-        manager.upload_file_path = None
+        response = _evidence_response(evidence_payload)
+        unused_evidence = {
+            **evidence_payload[0],
+            "source_id": "url:https://pandas.pydata.org/docs/",
+            "document_id": "url:https://pandas.pydata.org/docs/",
+            "url_or_path": "https://pandas.pydata.org/docs/",
+            "title": "Pandas docs",
+        }
+        response["messages"][1] = ToolMessage(
+            content=json.dumps({"evidence": [*evidence_payload, unused_evidence]}),
+            name="tavily_search", tool_call_id="call-1",
+        )
+        result = _assemble_response(response)
 
-        result = manager.run_agent_flow("question")
-
-        self.assertIsNot(result["response_payload"]["evidence"], result["debug"]["observed_evidence"])
+        self.assertEqual(len(result["response_payload"]["evidence"]), 1)
+        self.assertEqual(len(result["debug"]["observed_evidence"]), 2)
         self.assertEqual(result["response_payload"]["answer"], "final answer [1]")
         self.assertEqual(result["response_payload"]["claims"][0]["evidence_ids"], ["url:https://numpy.org/doc/stable/"])
         self.assertEqual(result["response_payload"]["evidence"][0]["url_or_path"], "https://numpy.org/doc/stable/")
@@ -485,9 +501,8 @@ class EvidencePipelineTest(unittest.TestCase):
         self.assertIn("target_call(random_state=42)", evidence[0]["snippet"])
         self.assertNotIn("...", evidence[0]["snippet"])
 
-    @patch("src.infra.tools.docs_search.client.request_tavily_search")
-    def test_docs_search_filters_to_allowed_doc_prefixes(self, mock_request_tavily_search) -> None:
-        mock_request_tavily_search.return_value = {
+    def test_docs_search_filters_to_allowed_doc_prefixes(self) -> None:
+        self.tavily_payload = {
             "results": [
                 {
                     "url": "https://fastapi.tiangolo.com/ko/tutorial/response-model",
@@ -518,9 +533,8 @@ class EvidencePipelineTest(unittest.TestCase):
         self.assertIn("https://huggingface.co/docs/transformers/index", urls)
         self.assertNotIn("https://huggingface.co/datasets/foo/bar", urls)
 
-    @patch("src.infra.tools.docs_search.client.request_tavily_search")
-    def test_docs_search_returns_no_result_when_all_urls_are_filtered(self, mock_request_tavily_search) -> None:
-        mock_request_tavily_search.return_value = {
+    def test_docs_search_returns_no_result_when_all_urls_are_filtered(self) -> None:
+        self.tavily_payload = {
             "results": [
                 {
                     "url": "https://huggingface.co/datasets/foo/bar",
@@ -540,9 +554,8 @@ class EvidencePipelineTest(unittest.TestCase):
         self.assertEqual(result["diagnostics"]["filtered_path_prefix_count"], 1)
         self.assertEqual(result["diagnostics"]["final_evidence_count"], 0)
 
-    @patch("src.infra.tools.docs_search.client.request_tavily_search")
-    def test_docs_search_blocks_huggingface_commit_diff_urls(self, mock_request_tavily_search) -> None:
-        mock_request_tavily_search.return_value = {
+    def test_docs_search_blocks_huggingface_commit_diff_urls(self) -> None:
+        self.tavily_payload = {
             "results": [
                 {
                     "url": "https://huggingface.co/user/repo/commit/abc123.diff?file=tokenizer.json",
@@ -565,66 +578,33 @@ class EvidencePipelineTest(unittest.TestCase):
         urls = [item["url_or_path"] for item in result["evidence"]]
         self.assertEqual(urls, ["https://huggingface.co/docs/transformers/index"])
 
-    @patch("src.infra.tools.docs_search.client.request_tavily_search")
-    def test_docs_search_applies_symbol_based_query_hint(self, mock_request_tavily_search) -> None:
-        mock_request_tavily_search.return_value = {"results": []}
-
-        registry = build_tool_registry(AppSettings(openai_api_key="test", tavily_api_key="test"))
-        registry.tavily_search_tool.func(query="train_test_split 공식 문법을")
-
-        first_call = mock_request_tavily_search.call_args_list[0]
-        _, kwargs = first_call
-        self.assertEqual(kwargs["include_domains"], ["scikit-learn.org"])
-        self.assertEqual(kwargs["query"], "train_test_split 공식 문법을 scikit-learn")
-        self.assertEqual(mock_request_tavily_search.call_args_list[1].kwargs["query"], "train_test_split sklearn.model_selection")
-
-    @patch("src.infra.tools.docs_search.client.request_tavily_search")
-    def test_docs_search_applies_bare_library_level_query_hint(self, mock_request_tavily_search) -> None:
-        mock_request_tavily_search.return_value = {"results": []}
-
-        registry = build_tool_registry(AppSettings(openai_api_key="test", tavily_api_key="test"))
-        registry.tavily_search_tool.func(query="bare 공식 문서")
-
-        first_call = mock_request_tavily_search.call_args_list[0]
-        _, kwargs = first_call
-        self.assertEqual(kwargs["include_domains"], ["docs.pears.com"])
-        self.assertEqual(kwargs["query"], "bare 공식 문서")
-        self.assertEqual(mock_request_tavily_search.call_args_list[1].kwargs["query"], "Bare runtime API")
-
-    @patch("src.infra.tools.docs_search.client.request_tavily_search")
-    def test_docs_search_applies_library_level_query_hints_for_common_libraries(
-        self,
-        mock_request_tavily_search,
-    ) -> None:
-        registry = build_tool_registry(AppSettings(openai_api_key="test", tavily_api_key="test"))
+    def test_docs_search_returns_matching_evidence_when_library_fallback_finds_results(self) -> None:
         cases = [
-            ("numpy", ["numpy.org"], "numpy user guide"),
-            ("pandas", ["pandas.pydata.org"], "pandas user guide"),
-            ("fastapi", ["fastapi.tiangolo.com"], "fastapi tutorial"),
-            ("numpy 공식 문서", ["numpy.org"], "numpy user guide"),
-            ("pandas 공식 문서", ["pandas.pydata.org"], "pandas user guide"),
-            ("fastapi 공식 문서", ["fastapi.tiangolo.com"], "fastapi tutorial"),
+            ("train_test_split 공식 문법을", ["scikit-learn.org"], "train_test_split sklearn.model_selection", "https://scikit-learn.org/stable/modules/generated/sklearn.model_selection.train_test_split.html"),
+            ("bare 공식 문서", ["docs.pears.com"], "Bare runtime API", "https://docs.pears.com/reference/bare/"),
+            ("numpy", ["numpy.org"], "numpy user guide", "https://numpy.org/doc/stable/"),
+            ("pandas", ["pandas.pydata.org"], "pandas user guide", "https://pandas.pydata.org/docs/"),
+            ("fastapi", ["fastapi.tiangolo.com"], "fastapi tutorial", "https://fastapi.tiangolo.com/tutorial/"),
         ]
-
-        for query, expected_domains, fallback_query in cases:
+        registry = build_tool_registry(AppSettings(openai_api_key="test", tavily_api_key="test"))
+        for query, domains, fallback_query, url in cases:
             with self.subTest(query=query):
-                mock_request_tavily_search.reset_mock()
-                mock_request_tavily_search.return_value = {"results": []}
+                def respond(payload):
+                    if payload["query"] != fallback_query or payload["include_domains"] != domains:
+                        return {"results": []}
+                    return {"results": [{"url": url, "title": fallback_query, "content": fallback_query + " API reference and usage examples.", "score": 0.92}]}
+                self.search_responder = respond
 
-                registry.tavily_search_tool.func(query=query)
+                result = registry.tavily_search_tool.func(query=query)
 
-                first_call = mock_request_tavily_search.call_args_list[0]
-                _, kwargs = first_call
-                self.assertEqual(kwargs["include_domains"], expected_domains)
-                self.assertEqual(kwargs["query"], query)
-                self.assertEqual(mock_request_tavily_search.call_args_list[1].kwargs["query"], fallback_query)
+                self.assertEqual(result["diagnostics"]["status"], "success")
+                self.assertEqual([item["url_or_path"] for item in result["evidence"]], [url])
 
-    @patch("src.infra.tools.docs_search.client.request_tavily_search")
+
     def test_docs_search_filters_cross_library_docs_results_for_hinted_queries(
         self,
-        mock_request_tavily_search,
     ) -> None:
-        mock_request_tavily_search.return_value = {
+        self.tavily_payload = {
             "results": [
                 {
                     "url": "https://numpy.org/doc/stable/reference/generated/numpy.concatenate.html",
@@ -657,7 +637,7 @@ class EvidencePipelineTest(unittest.TestCase):
     def test_docs_search_word_match_hint_does_not_match_substring(self) -> None:
         self.assertIsNone(infer_docs_query_hint("baremetal 공식 문서"))
 
-    def test_agent_manager_exposes_retrieval_and_planner_diagnostics(self) -> None:
+    def test_debug_exposes_retrieval_and_planner_diagnostics(self) -> None:
         evidence_payload = [
             {
                 "kind": "official",
@@ -671,29 +651,17 @@ class EvidencePipelineTest(unittest.TestCase):
             }
         ]
 
-        manager = AgentFlowManager.__new__(AgentFlowManager)
-        manager.settings = None
-        manager.graph = _FakeGraph(evidence_payload)
-        manager.messages = []
-        manager.upload_retriever_handle = None
-        manager.upload_file_path = None
-
-        result = manager.run_agent_flow("question")
+        response = _evidence_response(evidence_payload)
+        result = _assemble_response(response)
 
         self.assertEqual(result["debug"]["retrieval_diagnostics"][0]["status"], "success")
         self.assertEqual(result["debug"]["planner_diagnostics"]["status"], "heuristic_fallback")
         self.assertTrue(result["debug"]["planner_diagnostics"]["intent_required"])
         self.assertEqual(result["debug"]["planner_diagnostics"]["required_routes"], ["docs"])
 
-    def test_agent_manager_exposes_latency_breakdown(self) -> None:
-        manager = AgentFlowManager.__new__(AgentFlowManager)
-        manager.settings = AppSettings(openai_api_key="test", tavily_api_key="test")
-        manager.graph = _FakeGraph([])
-        manager.messages = []
-        manager.upload_retriever_handle = None
-        manager.upload_file_path = None
-
-        result = manager.run_agent_flow("question")
+    def test_debug_exposes_latency_breakdown(self) -> None:
+        response = _evidence_response([])
+        result = _assemble_response(response)
 
         latency_breakdown = result["debug"]["latency_breakdown"]
         self.assertIsNotNone(latency_breakdown)
@@ -702,31 +670,49 @@ class EvidencePipelineTest(unittest.TestCase):
         self.assertEqual(latency_breakdown["retrieval_routes"][0]["route"], "docs")
         self.assertEqual(latency_breakdown["synthesis_attempts"][0]["mode"], "structured_only")
 
-    def test_agent_manager_exception_path_still_returns_latency_breakdown(self) -> None:
-        manager = AgentFlowManager.__new__(AgentFlowManager)
-        manager.settings = AppSettings(openai_api_key="test", tavily_api_key="test")
-        manager.graph = _FailingGraph()
-        manager.messages = []
-        manager.upload_retriever_handle = None
-        manager.upload_file_path = None
+    def test_agent_manager_returns_error_latency_when_query_is_blank(self) -> None:
+        manager = AgentFlowManager(AppSettings(openai_api_key="test", tavily_api_key="test"))
+        self.addCleanup(manager.close)
+
+        result = manager.run_agent_flow("   ")
+
+        self.assertEqual(result["response_payload"]["answer"], "query must not be blank")
+        self.assertEqual(result["debug"]["observability_status"], "failed")
+        self.assertGreaterEqual(result["debug"]["latency_breakdown"]["server_total_ms"], 0)
+
+    @patch("httpx.Client.send", side_effect=httpx.ReadTimeout("synthesis unavailable"))
+    def test_agent_manager_preserves_synthesis_error_latency_when_model_request_fails(self, _send) -> None:
+        settings = AppSettings(openai_api_key="test", tavily_api_key="test")
+        model = ChatOpenAI(model="gpt-5-mini", api_key="test", max_retries=0)
+
+        def synthesize(state: GraphState) -> dict:
+            answer = model.invoke([HumanMessage(content=state["runtime"].user_input)])
+            return {"messages": [answer]}
+
+        graph = StateGraph(GraphState)
+        graph.add_node("synthesis", _instrument_stage_node("synthesis", synthesize))
+        graph.add_edge(START, "synthesis")
+        graph.add_edge("synthesis", END)
+        manager = AgentFlowManager(settings)
+        manager.graph = graph.compile()
+        self.addCleanup(manager.close)
 
         result = manager.run_agent_flow("question")
 
-        latency_breakdown = result["debug"]["latency_breakdown"]
-        self.assertIsNotNone(latency_breakdown)
-        self.assertGreaterEqual(latency_breakdown["server_total_ms"], 0)
-        self.assertEqual(latency_breakdown["stage_attempts"][0]["stage"], "synthesis")
-        self.assertEqual(latency_breakdown["stage_attempts"][0]["status"], "error")
+        self.assertEqual(result["debug"]["observability_status"], "failed")
+        self.assertIn("timed out", result["message"].lower())
+        latency = result["debug"]["latency_breakdown"]
+        self.assertEqual(
+            [(event["stage"], event["status"]) for event in latency["stage_attempts"]],
+            [("synthesis", "error")],
+        )
+        self.assertGreaterEqual(latency["stage_attempts"][0]["latency_ms"], 0)
+        self.assertGreaterEqual(latency["graph_total_ms"], 0)
+        self.assertGreaterEqual(latency["server_total_ms"], 0)
 
-    def test_agent_manager_aggregates_llm_calls_into_debug_metadata(self) -> None:
-        manager = AgentFlowManager.__new__(AgentFlowManager)
-        manager.settings = AppSettings(openai_api_key="test", tavily_api_key="test")
-        manager.graph = _FakeGraphWithLlmCalls()
-        manager.messages = []
-        manager.upload_retriever_handle = None
-        manager.upload_file_path = None
-
-        result = manager.run_agent_flow("question")
+    def test_debug_aggregates_llm_calls_into_debug_metadata(self) -> None:
+        response = _response_with_llm_calls()
+        result = _assemble_response(response)
 
         self.assertEqual(result["debug"]["token_usage"]["prompt_tokens"], 32)
         self.assertEqual(result["debug"]["token_usage"]["completion_tokens"], 8)
@@ -739,15 +725,9 @@ class EvidencePipelineTest(unittest.TestCase):
             ["structured", "structured"],
         )
 
-    def test_agent_manager_falls_back_to_current_turn_ai_message_metadata(self) -> None:
-        manager = AgentFlowManager.__new__(AgentFlowManager)
-        manager.settings = AppSettings(openai_api_key="test", tavily_api_key="test")
-        manager.graph = _FakeGraphWithAiMessageMetadata()
-        manager.messages = []
-        manager.upload_retriever_handle = None
-        manager.upload_file_path = None
-
-        result = manager.run_agent_flow("question")
+    def test_debug_falls_back_to_current_turn_ai_message_metadata(self) -> None:
+        response = _response_with_ai_metadata()
+        result = _assemble_response(response)
 
         self.assertEqual(result["debug"]["token_usage"]["prompt_tokens"], 14)
         self.assertEqual(result["debug"]["token_usage"]["completion_tokens"], 6)
@@ -757,32 +737,40 @@ class EvidencePipelineTest(unittest.TestCase):
         self.assertEqual(len(result["debug"]["llm_calls"]), 1)
         self.assertEqual(result["debug"]["llm_calls"][0]["path"], "direct")
 
-    @patch("src.app.agent_manager.build_temp_retriever")
-    def test_agent_manager_passes_api_key_to_temp_retriever(self, mock_build_temp_retriever) -> None:
-        mock_build_temp_retriever.return_value = _FakeRetrieverHandle()
+    @patch("openai.resources.embeddings.Embeddings.create", autospec=True)
+    def test_upload_is_searchable_when_session_builds_with_configured_credentials(self, embed_request) -> None:
+        def embed(client, *, input, **kwargs):
+            if client._client.api_key != "test-key":
+                raise ValueError("wrong embedding credentials")
+            return {"data": [{"embedding": [1.0, 0.0, 0.0], "index": index} for index, _ in enumerate(input)]}
 
-        manager = AgentFlowManager.__new__(AgentFlowManager)
-        manager.settings = AppSettings(openai_api_key="test-key", tavily_api_key="test")
-        manager.graph = _FakeGraph([])
-        manager.messages = []
-        manager.upload_retriever_handle = None
-        manager.upload_file_path = None
-
-        result = manager.run_agent_flow("question", upload_file_path="uploads/session/sample_pipeline.ipynb")
-
-        _, kwargs = mock_build_temp_retriever.call_args
-        self.assertEqual(kwargs["api_key"], "test-key")
-        self.assertIsNone(result["debug"]["latency_breakdown"]["upload_retriever_build_ms"])
+        # Only the external embedding request is replaced; files, Chroma and session state are real.
+        embed_request.side_effect = embed
+        settings = AppSettings(openai_api_key="test-key", tavily_api_key="test")
+        with TemporaryDirectory() as root:
+            upload = Path(root) / "uploads" / "evidence-pipeline" / "sample.py"
+            upload.parent.mkdir(parents=True)
+            upload.write_text("target_call(random_state=42)\n", encoding="utf-8")
+            session = SessionContext()
+            runner = ExecutionRunner(settings=settings, graph=None, session=session)
+            try:
+                state, build_ms = runner.prepare_graph_state("random_state", str(upload))
+                self.assertIsNone(build_ms)
+                result = build_tool_registry(settings).upload_search_tool.func(
+                    query="random_state", retriever=state["runtime"].retriever,
+                )
+                self.assertEqual(result["diagnostics"]["status"], "success")
+                self.assertEqual(result["evidence"][0]["kind"], "local")
+                self.assertEqual(result["evidence"][0]["url_or_path"], str(upload))
+                self.assertIn("random_state=42", result["evidence"][0]["snippet"])
+                self.assertGreaterEqual(runner.finalize_pending_upload_retriever(), 0)
+            finally:
+                runner.cancel_pending_upload_retriever()
+                session.close()
 
     def test_save_tool_message_does_not_override_final_answer(self) -> None:
-        manager = AgentFlowManager.__new__(AgentFlowManager)
-        manager.settings = None
-        manager.graph = _FakeGraphWithSave()
-        manager.messages = []
-        manager.upload_retriever_handle = None
-        manager.upload_file_path = None
-
-        result = manager.run_agent_flow("save this")
+        response = _response_with_save_receipt()
+        result = _assemble_response(response)
 
         self.assertTrue(result["message"].startswith("final answer before save"))
         self.assertIn("저장 완료:", result["message"])
@@ -790,28 +778,9 @@ class EvidencePipelineTest(unittest.TestCase):
         self.assertTrue(result["response_payload"]["answer"].startswith("final answer before save"))
         self.assertEqual(result["response_payload"]["claims"], [])
 
-    @patch("src.infra.tools.docs_search.client.request_tavily_search")
-    def test_docs_search_applies_bare_library_hints_for_numpy_pandas_fastapi(self, mock_request_tavily_search) -> None:
-        mock_request_tavily_search.return_value = {"results": []}
 
-        registry = build_tool_registry(AppSettings(openai_api_key="test", tavily_api_key="test"))
-        registry.tavily_search_tool.func(query="numpy official docs")
-        registry.tavily_search_tool.func(query="pandas official docs")
-        registry.tavily_search_tool.func(query="fastapi official docs")
-
-        first_query = mock_request_tavily_search.call_args_list[0].kwargs
-        fourth_query = mock_request_tavily_search.call_args_list[3].kwargs
-        seventh_query = mock_request_tavily_search.call_args_list[6].kwargs
-        self.assertEqual(first_query["include_domains"], ["numpy.org"])
-        self.assertEqual(first_query["query"], "numpy official docs")
-        self.assertEqual(fourth_query["include_domains"], ["pandas.pydata.org"])
-        self.assertEqual(fourth_query["query"], "pandas official docs")
-        self.assertEqual(seventh_query["include_domains"], ["fastapi.tiangolo.com"])
-        self.assertEqual(seventh_query["query"], "fastapi official docs")
-
-    @patch("src.infra.tools.docs_search.client.request_tavily_search")
-    def test_docs_search_post_filters_cross_library_domains_for_hinted_queries(self, mock_request_tavily_search) -> None:
-        mock_request_tavily_search.return_value = {
+    def test_docs_search_post_filters_cross_library_domains_for_hinted_queries(self) -> None:
+        self.tavily_payload = {
             "results": [
                 {
                     "url": "https://pandas.pydata.org/docs/reference/api/pandas.concat.html",

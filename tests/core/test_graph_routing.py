@@ -175,7 +175,6 @@ class GraphRoutingTest(unittest.TestCase):
             retrieve_dispatch_node=make_retrieve_dispatch_node(
                 _ToolWrapper(_docs_search),
                 _ToolWrapper(lambda query, k, retriever=None: _tool_payload([], tool="upload_search", route="upload", status="no_result", message="", query=query)),
-                _ToolWrapper(lambda query, k: _tool_payload([], tool="rag_search", route="local", status="no_result", message="", query=query)),
                 verbose=False,
             ),
             synthesize_node=lambda state: {
@@ -243,7 +242,6 @@ class GraphRoutingTest(unittest.TestCase):
         retrieve_dispatch = make_retrieve_dispatch_node(
             _ToolWrapper(_docs_search),
             _ToolWrapper(lambda query, k, retriever=None: _tool_payload([], tool="upload_search", route="upload", status="no_result", message="", query=query)),
-            _ToolWrapper(lambda query, k: _tool_payload([], tool="rag_search", route="local", status="no_result", message="", query=query)),
             verbose=False,
         )
 
@@ -323,16 +321,6 @@ class GraphRoutingTest(unittest.TestCase):
                     [],
                     tool="upload_search",
                     route="upload",
-                    status="no_result",
-                    message="",
-                    query=query,
-                )
-            ),
-            _ToolWrapper(
-                lambda query, k: _tool_payload(
-                    [],
-                    tool="rag_search",
-                    route="local",
                     status="no_result",
                     message="",
                     query=query,
