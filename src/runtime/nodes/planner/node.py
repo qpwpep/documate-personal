@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from langchain_core.messages import AIMessage
@@ -20,13 +20,7 @@ from src.core.contracts.debug import (
 )
 from src.core.planner_schema import PlannerOutput, normalize_planner_output_input
 from src.infra.logging_utils import log_event
-from src.runtime.nodes.actions import is_action_only_request
-from src.runtime.nodes.planner.deterministic import build_deterministic_planner_decision
-from src.runtime.nodes.planner.guardrails import (
-    apply_required_route_guardrail,
-    sanitize_planner_output,
-)
-from src.runtime.nodes.planner.heuristic import build_heuristic_planner_decision
+from src.runtime.nodes.planner.guardrails import apply_retrieval_availability
 from src.runtime.nodes.planner.models import (
     PlannerDecision,
     normalize_planner_diagnostics,
@@ -232,16 +226,14 @@ def _resolve_planner_strategy(
     except Exception as exc:
         planner_errors.append(f"planner: structured output invocation failed ({exc})")
 
-    deterministic = build_deterministic_planner_decision(
-        user_input=context.user_input,
-        has_retriever=context.has_retriever,
-    )
-    if deterministic is not None:
-        return deterministic, planner_errors, llm_calls
-
-    decision = build_heuristic_planner_decision(
-        user_input=context.user_input,
-        has_retriever=context.has_retriever,
+    decision = PlannerDecision(
+        output=PlannerOutput.fallback(),
+        diagnostics=normalize_planner_diagnostics(
+            status="fallback_no_routes",
+            reason="planner_unavailable",
+        ),
+        guided_followup="요청에 필요한 검색 출처를 판단하지 못했습니다. 잠시 후 다시 요청해 주세요.",
+        status="fallback_no_routes",
     )
     return decision, planner_errors, llm_calls
 
@@ -265,42 +257,15 @@ def _apply_planner_guardrail(
     decision: PlannerDecision,
     context: PlannerRunContext,
     retry_context: RetryState,
-    planner_errors: list[str],
 ) -> PlannerDecision:
-    planner_output = sanitize_planner_output(
-        decision.output,
-        has_retriever=context.has_retriever,
-        errors=planner_errors,
-    )
-    if is_action_only_request(context.user_input) and planner_output.use_retrieval:
-        return PlannerDecision(
-            output=PlannerOutput.fallback(),
-            diagnostics=normalize_planner_diagnostics(
-                status=decision.status,
-                reason="action_only",
-                fallback_routes=[],
-                planner_warnings=decision.diagnostics.planner_warnings,
-            ),
-            guided_followup=decision.guided_followup,
-            status=decision.status,
-        )
     planner_output = sanitize_planner_output_queries(
-        planner_output,
+        decision.output,
         user_input=context.user_input,
         retry_context=retry_context,
     )
-    planner_output, planner_diagnostics, guardrail_followup = apply_required_route_guardrail(
-        planner_output=planner_output,
-        planner_status=decision.status,
-        planner_diagnostics=decision.diagnostics,
-        user_input=context.user_input,
+    return apply_retrieval_availability(
+        replace(decision, output=planner_output),
         has_retriever=context.has_retriever,
-    )
-    return PlannerDecision(
-        output=planner_output,
-        diagnostics=planner_diagnostics,
-        guided_followup=guardrail_followup or decision.guided_followup,
-        status=decision.status,
     )
 
 
@@ -360,7 +325,6 @@ def make_planner_node(
             decision=decision,
             context=context,
             retry_context=existing_retry_context,
-            planner_errors=planner_errors,
         )
 
         if verbose:

@@ -4,7 +4,7 @@ from typing import Any
 
 from src.core.contracts import SlackDestination
 from src.core.contracts.boundary.runtime import parse_session_metadata
-from src.core.prompts import needs_rag, needs_save, needs_search, needs_slack
+from src.core.prompts import needs_save, needs_search, needs_slack
 
 
 def has_action_lookup_intent(user_input: str) -> bool:
@@ -41,7 +41,7 @@ def has_action_lookup_intent(user_input: str) -> bool:
 def is_action_only_request(user_input: str) -> bool:
     if not (needs_save(user_input) or needs_slack(user_input)):
         return False
-    if needs_search(user_input) or needs_rag(user_input):
+    if needs_search(user_input):
         return False
     return not has_action_lookup_intent(user_input)
 
