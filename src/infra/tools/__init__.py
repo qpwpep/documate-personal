@@ -5,7 +5,7 @@ from typing import Any
 
 from src.infra.settings import AppSettings
 from src.infra.tools.docs_search import build_docs_search_tool
-from src.infra.tools.local_rag import build_local_rag_tools
+from src.infra.tools.local_rag import build_upload_search_tool
 from src.infra.tools.save_text import build_save_text_tool
 from src.infra.tools.slack_notify import build_slack_notify_tool
 
@@ -21,7 +21,7 @@ class ToolRegistry:
 
 def build_tool_registry(settings: AppSettings) -> ToolRegistry:
     tavily_search_tool = build_docs_search_tool(settings)
-    _, upload_search_tool = build_local_rag_tools(settings)
+    upload_search_tool = build_upload_search_tool(settings)
     save_text_tool = build_save_text_tool()
     slack_notify_tool = build_slack_notify_tool(settings)
     all_tools = [
