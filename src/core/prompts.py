@@ -55,19 +55,6 @@ def needs_search(text: str) -> bool:
     return _matches_any(text, get_rules_config().intents.docs_patterns) or _looks_like_docs_explainer_request(text)
 
 
-def has_explicit_docs_intent(text: str) -> bool:
-    lowered = str(text or "").lower()
-    return any(keyword in lowered for keyword in get_rules_config().intents.explicit_docs_keywords)
-
-
-def has_explicit_local_intent(text: str) -> bool:
-    return _matches_any(text, get_rules_config().intents.local_patterns)
-
-
-def needs_rag(text: str) -> bool:
-    return has_explicit_local_intent(text) and not has_explicit_docs_intent(text)
-
-
 def needs_save(text: str) -> bool:
     return _matches_any(text, get_rules_config().intents.save_patterns)
 
