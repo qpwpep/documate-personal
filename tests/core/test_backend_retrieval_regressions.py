@@ -1,13 +1,100 @@
 import unittest
 
+from hypothesis import given, strategies as st
+
 from src.core.contracts import RetrievalDiagnostic
+from src.core.contracts.debug import RetryState
 from src.core.evidence import truncate_snippet
-from src.runtime.nodes.planner.query_sanitizer import sanitize_retrieval_query
+from src.core.planner_schema import PlannerOutput, RetrievalTask
+from src.runtime.nodes.planner.query_sanitizer import (
+    sanitize_planner_output_queries,
+    sanitize_retrieval_query,
+)
 from src.runtime.nodes.validation.evidence_validator import route_passes_validation
 from src.infra.tools.local_rag import build_local_rag_tools
 
 
 class BackendRetrievalRegressionTest(unittest.TestCase):
+    def test_query_preserves_topic_when_identifiers_and_korean_terms_are_mixed(self) -> None:
+        queries = (
+            "Python 결제 API 멱등성 키 설계 공식 문서 기술 레퍼런스",
+            "PyMuPDF 공식 문서 PDF 글꼴 추출 및 포함 글꼴 확인",
+            "Python json.loads 공식 문서 null 빈 문자열 예제",
+        )
+        for query in queries:
+            for route in ("docs", "upload"):
+                for retry_context in (None, RetryState(retry_reason="no_evidence")):
+                    with self.subTest(query=query, route=route, retry=retry_context):
+                        self.assertEqual(
+                            sanitize_retrieval_query(
+                                route=route, query=query, retry_context=retry_context,
+                            ),
+                            query,
+                        )
+
+    @given(
+        query=st.text(min_size=1, max_size=500).filter(
+            lambda text: any(not char.isspace() for char in text)
+        ),
+        route=st.sampled_from(("docs", "upload")),
+        retry=st.booleans(),
+    )
+    def test_query_preserves_non_whitespace_content_when_normalized_repeatedly(
+        self, query: str, route: str, retry: bool,
+    ) -> None:
+        retry_context = RetryState(retry_reason="no_evidence") if retry else None
+        sanitized = sanitize_retrieval_query(
+            route=route, query=query, retry_context=retry_context,
+        )
+        self.assertEqual(
+            [char for char in sanitized if not char.isspace()],
+            [char for char in query if not char.isspace()],
+        )
+        self.assertFalse(any(char.isspace() and char != " " for char in sanitized))
+        self.assertNotIn("  ", sanitized)
+        self.assertEqual(sanitized, sanitized.strip())
+        self.assertEqual(
+            sanitize_retrieval_query(
+                route=route, query=sanitized, retry_context=retry_context,
+            ),
+            sanitized,
+        )
+
+    def test_plan_preserves_route_queries_and_limits_when_whitespace_is_normalized(self) -> None:
+        planner_output = PlannerOutput(
+            use_retrieval=True,
+            tasks=[
+                RetrievalTask(
+                    route="docs", query="  Python\tjson.loads: null\n빈 문자열?  ", k=4,
+                ),
+                RetrievalTask(
+                    route="upload", query="  .py / .ipynb\n결제 API: 멱등성 키;  ", k=7,
+                ),
+            ],
+        )
+        self.assertEqual(
+            sanitize_planner_output_queries(
+                planner_output,
+                user_input="공식 문서와 파일을 비교해줘.",
+                retry_context=RetryState(retry_reason="no_evidence"),
+            ),
+            PlannerOutput(
+                use_retrieval=True,
+                tasks=[
+                    RetrievalTask(
+                        route="docs", query="Python json.loads: null 빈 문자열?", k=4,
+                    ),
+                    RetrievalTask(
+                        route="upload", query=".py / .ipynb 결제 API: 멱등성 키;", k=7,
+                    ),
+                ],
+            ),
+        )
+
+    def test_query_rejects_unsupported_retrieval_route(self) -> None:
+        with self.assertRaisesRegex(ValueError, "Unsupported retrieval route: archive"):
+            sanitize_retrieval_query(route="archive", query="Python json.loads")
+
     def test_upload_query_keeps_identifier_for_hybrid_requests(self) -> None:
         sanitized = sanitize_retrieval_query(
             route="upload",

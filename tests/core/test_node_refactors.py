@@ -119,10 +119,10 @@ class NodeRefactorTest(unittest.TestCase):
         self.assertIsNotNone(decision)
         self.assertEqual(decision.status, "deterministic")
         self.assertEqual([task.route for task in decision.output.tasks], ["docs", "upload"])
-        self.assertEqual(decision.output.tasks[0].query, "pandas concat")
+        self.assertEqual(decision.output.tasks[0].query, "Explain pandas concat from official docs and compare it with the uploaded notebook example.")
         self.assertEqual(
             decision.output.tasks[1].query,
-            "pandas concat uploaded notebook example",
+            "Explain pandas concat from official docs and compare it with the uploaded notebook example.",
         )
 
     def test_retrieval_batch_reuses_preserved_results_and_keeps_task_order(self) -> None:

@@ -65,7 +65,7 @@ class PlannerNodeTest(unittest.TestCase):
         self.assertEqual(capture_planner.call_count, 1)
         self.assertEqual(updates["planner"].status, "llm")
         self.assertEqual([task.route for task in updates["planner"].output.tasks], ["docs"])
-        self.assertEqual(updates["planner"].output.tasks[0].query, "FastAPI response_model")
+        self.assertEqual(updates["planner"].output.tasks[0].query, "Explain FastAPI response_model from official docs.")
 
     def test_planner_uses_llm_and_guardrail_for_upload_request(self) -> None:
         capture_planner = _CapturePlannerLLM(PlannerOutput(use_retrieval=False, tasks=[]))
@@ -103,8 +103,8 @@ class PlannerNodeTest(unittest.TestCase):
         self.assertEqual(capture_planner.call_count, 1)
         self.assertEqual(updates["planner"].status, "llm")
         self.assertEqual([task.route for task in updates["planner"].output.tasks], ["docs", "upload"])
-        self.assertEqual(updates["planner"].output.tasks[0].query, "pandas concat")
-        self.assertEqual(updates["planner"].output.tasks[1].query, "pandas concat uploaded notebook example")
+        self.assertEqual(updates["planner"].output.tasks[0].query, "Explain pandas concat from official docs and compare it with the uploaded notebook example.")
+        self.assertEqual(updates["planner"].output.tasks[1].query, "Explain pandas concat from official docs and compare it with the uploaded notebook example.")
 
     def test_upload_query_sanitizer_preserves_missing_identifier_tokens_for_hybrid_requests(self) -> None:
         sanitized = sanitize_retrieval_query(
