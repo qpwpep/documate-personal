@@ -44,15 +44,7 @@ cp .env.example .env
 
 `src.infra.settings.validate_required_keys()` 때문에 FastAPI와 `startweb` 실행 시 현재는 `OPENAI_API_KEY`와 `TAVILY_API_KEY`가 모두 필요합니다.
 
-### 1.4 로컬 노트북 인덱스 생성
-
-```bash
-uv run python -m src.app.rag_build
-```
-
-이 명령은 `data/`와 `uploads/` 아래의 `.ipynb` 파일을 스캔해 `data/index`에 Chroma 인덱스를 만듭니다.
-
-### 1.5 웹 서비스 실행
+### 1.4 웹 서비스 실행
 
 권장 방식:
 
@@ -153,7 +145,11 @@ Windows 환경에서는 `-X utf8` 또는 `PYTHONUTF8=1` 사용을 권장합니�
 UI와 문서 검색 규칙은 아래 파일을 기준으로 관리합니다.
 
 - `src/core/domain_docs.py`: Streamlit 소개 영역에 노출하는 기본 문서 목록
-- `src/infra/config/agent_rules.toml`: docs allowlist, intent rule, query hint 규칙
+- `src/infra/config/agent_rules.toml`: docs allowlist, query hint, 저장·전송 요청 감지 규칙
+
+`RULES_CONFIG_PATH`로 규칙 파일을 지정할 수 있습니다. 필요한 검색 출처는 업로드 가용성과 무관하게 LLM이 선택하고, 스키마 검증을 통과한 `PlannerOutput.tasks`를 기준으로 실행합니다. [planner 지침](../src/runtime/nodes/planner/prompt_builder.py)은 일반 기술 설명과 실제 파일 조회를 구분하고 출처 제외 지시를 반영합니다. 파일 조회에 필요한 업로드가 없으면 검색을 진행하지 않고 업로드를 안내합니다.
+
+검색어 후처리는 공백만 정규화해 한국어 주제와 식별자를 보존합니다. LLM 호출이나 출력 검증이 실패하면 `planner_diagnostics.reason="planner_unavailable"`로 기록하고 재요청을 안내하며, 검색·저장·전송을 실행하지 않습니다.
 
 현재 기본 문서 소스는 Python, Git, LangChain, Matplotlib, NumPy, pandas, PyTorch, Hugging Face, FastAPI, BeautifulSoup, Streamlit, Gradio, scikit-learn, Pydantic입니다.
 
@@ -165,6 +161,8 @@ UI와 문서 검색 규칙은 아래 파일을 기준으로 관리합니다.
 - 허용 위치: `uploads/<session_id>/...`
 - 검증 기준: `src/app/web/cleanup.py::validate_upload_file_path`
 - 현재 업로드 검색은 세션에 연결된 단일 파일 컨텍스트만 사용합니다.
+
+`upload` route는 업로드 파일에서 만든 세션별 임시 Chroma retriever를 검색합니다. 파일 기반 질문에는 해당 파일을 현재 세션에 업로드해야 합니다. 검색 근거는 `tool="upload_search"`, `kind="local"`로 반환되며, `kind`는 파일 근거의 유형이고 검색 route는 `upload`입니다.
 
 ### 3.3 생성 파일과 정리 정책
 
@@ -347,7 +345,6 @@ compaction 진단은 debug `edge_decisions`와 구조화 로그에서 before/aft
 - synthesis 구조화 요청은 요청별 `SYNTHESIS_TIMEOUT_SECONDS`와 `SYNTHESIS_MAX_RETRIES`를 사용합니다. 재시도를 허용하면 primary synthesis의 총 실행 시간은 설정된 요청별 timeout을 넘을 수 있으며, compact fallback은 절반의 token·timeout budget과 SDK 재시도 0회를 사용합니다.
 - startup의 `fastapi_runtime_settings` 로그에는 모델, Docs/Synthesis timeout, Synthesis SDK retry, memory high/low/hard policy가 포함됩니다.
 - agent request 로그는 query 원문 대신 문자 수, UTF-8 byte 수, SHA-256 hash만 기록합니다.
-- `src.infra.rag_build`는 증분 인덱싱을 위해 `data/index/manifest.json`을 관리합니다.
 - benchmark run 산출물과 `latest_release_run.txt`, `latest_smoke_run.txt` 포인터는 Git으로 추적하지 않는 `output/benchmarks/` 아래에 로컬로 유지합니다.
 - run별 자동 판정과 상세 분석은 각각 `output/benchmarks/<run_id>/summary.json`, `output/benchmarks/<run_id>/report.md`에서 확인합니다.
 - 저장소에 공개하는 release 요약의 정본은 [README의 검증 결과](../README.md#검증-결과)이며, 비교 추세는 [benchmark history SVG](assets/benchmark_history.svg)에 유지합니다.
@@ -362,6 +359,6 @@ uv run python script/check_encoding.py
 uv run python script/sync_env_example.py --check
 ```
 
-2026-08-26 KST 기준 전체 검증 결과는 `429 passed, 56 subtests passed`입니다. bounded memory에는 compiled reducer 회귀, 반복 rolling summary, LLM 예외/빈 출력 fallback, cross-request persistence, response assembly rollback, message ownership 격리, ToolMessage projection, JSON escape-heavy byte fitting, policy envelope, TTL/세션 격리, query boundary, Hypothesis Unicode/property, 300-turn plateau 테스트가 포함됩니다.
+최신 회귀 테스트 결과는 [README의 검증 결과](../README.md#검증-결과)를 기준으로 합니다. 파일 검색은 업로드 유무, 일반 파일 API 설명과의 구분, 인용과 세션 격리, 과거 벤치마크 읽기 호환성을 검증합니다. bounded memory에는 compiled reducer 회귀, 반복 rolling summary, LLM 예외/빈 출력 fallback, cross-request persistence, response assembly rollback, message ownership 격리, ToolMessage projection, JSON escape-heavy byte fitting, policy envelope, TTL/세션 격리, query boundary, Hypothesis Unicode/property, 300-turn plateau 테스트가 포함됩니다.
 
 벤치마크 관련 명령과 로컬 산출물 정책은 [벤치마크 가이드](benchmarking.md), 공개 release 요약은 [README의 검증 결과](../README.md#검증-결과), 비교 추세는 [benchmark history SVG](assets/benchmark_history.svg)를 참고하세요. benchmark CLI의 env override 우선순위는 `CLI > .env > OS env > config.toml`입니다.

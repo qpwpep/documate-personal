@@ -33,7 +33,7 @@ def render_intro(default_docs: dict[str, str]) -> str | None:
         <section class="dm-intro">
             <div class="dm-intro-kicker">DocuMate</div>
             <h1>무엇을 도와드릴까요?</h1>
-            <p>공식 문서, 로컬 인덱스, 업로드한 코드 파일을 함께 확인해 근거가 남는 답변을 만듭니다.</p>
+            <p>공식 문서와 업로드한 코드 파일을 함께 확인해 근거가 남는 답변을 만듭니다.</p>
             <div class="dm-docs-row">{docs_badges}</div>
         </section>
         """,
@@ -62,4 +62,3 @@ def _get_quick_prompts_for_session() -> list[str]:
     selected_prompts = random.sample(_QUICK_PROMPTS, prompt_count)
     st.session_state[QUICK_PROMPTS_STATE_KEY] = selected_prompts
     return selected_prompts
-

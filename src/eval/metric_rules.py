@@ -387,6 +387,7 @@ def _is_valid_local_source(url_or_path: str) -> bool:
 
 
 def _expected_local_citation_tool(case: BenchmarkCase) -> str:
+    # Upload evidence uses kind="local"; rag_search remains valid for legacy benchmark cases.
     return "upload_search" if case.upload_fixture else "rag_search"
 
 

@@ -1,6 +1,6 @@
 # DocuMate
 
-LangGraph 기반 학습 보조 에이전트입니다. 공식 문서 검색, 로컬 노트북 RAG, 세션 업로드 파일 검색, 구조화된 grounded 응답, 저장/Slack 전송 액션을 하나의 FastAPI + Streamlit 런타임으로 묶어 제공합니다.
+LangGraph 기반 학습 보조 에이전트입니다. 공식 문서 검색, 세션 업로드 파일 검색, 구조화된 grounded 응답, 저장/Slack 전송 액션을 하나의 FastAPI + Streamlit 런타임으로 묶어 제공합니다.
 
 이 저장소는 팀 프로젝트 원형을 그대로 보관한 자료가 아니라, 원본 팀 프로젝트를 단계형 LangGraph 런타임과 120-case benchmark 체계로 재설계한 포트폴리오 개선본입니다. 현재 유지보수 기준은 `src/`, `tests/`, `docs/`, `data/benchmarks/`이며, `archive/`는 원본/legacy 참고 자료를 보관하는 영역입니다.
 
@@ -13,11 +13,7 @@ uv sync
 cp .env.example .env
 ```
 
-`.env`에는 최소 `OPENAI_API_KEY`, `TAVILY_API_KEY`를 입력해야 합니다. 로컬 노트북 RAG까지 확인하려면 인덱스를 먼저 생성합니다.
-
-```bash
-uv run python -m src.app.rag_build
-```
+`.env`에는 최소 `OPENAI_API_KEY`, `TAVILY_API_KEY`를 입력해야 합니다. 파일 기반 질문은 실행 후 현재 세션에 `.py` 또는 `.ipynb` 파일을 업로드해 확인합니다.
 
 FastAPI와 Streamlit을 함께 실행합니다.
 
@@ -52,7 +48,7 @@ uv run python -m src.app.service_manager stopweb
 DocuMate에서 중점적으로 개선한 범위는 단순한 챗봇 구현보다, 실행 경로와 검증 기준을 다시 세운 것입니다. 원본의 tool-call 중심 흐름을 `src/runtime`의 단계형 LangGraph 런타임으로 바꾸고, `src/eval`과 `data/benchmarks` 기반 120-case benchmark로 품질 변화를 비교 가능하게 만들었습니다.
 
 - `chatbot + ToolNode` 중심 흐름을 `planner → retrieval → validation → synthesis → action` 단계형 LangGraph 파이프라인으로 재구성했습니다.
-- 공식 문서 검색, 로컬 노트북 RAG, 업로드 파일 검색을 `docs`, `local`, `upload` route로 분리하고 evidence payload와 diagnostics를 정규화했습니다.
+- 공식 문서 검색과 업로드 파일 검색을 `docs`, `upload` route로 분리하고 evidence payload와 diagnostics를 정규화했습니다.
 - 최종 답변을 `answer`, `claims`, `evidence`, `confidence`, `sections` 기반의 grounded response schema로 정리했습니다.
 - FastAPI와 Streamlit을 같은 런타임 경로에 연결하고, 세션 TTL/LRU, 요청 lock, SSE progress, 업로드/생성 파일 cleanup을 구현했습니다.
 - 장기 대화는 고정 예산 rolling summary와 최근 canonical Human/AI 메시지로 유지하며, LangGraph reducer에서 퇴출 원문을 실제 삭제하고 응답 조립 성공 후에만 원자적으로 세션에 반영합니다.
@@ -67,7 +63,7 @@ DocuMate에서 중점적으로 개선한 범위는 단순한 챗봇 구현보다
 | 비교 항목 | Before: 원형/legacy 기준 | After: 현재 포트폴리오 기준 | 개선 효과 |
 |---|---|---|---|
 | 실행 흐름 | 모델 tool call과 개별 라우터 실험 중심 | `planner → retrieval → validation → synthesis → action` LangGraph 파이프라인 | 단계별 책임과 재시도 조건을 추적 가능 |
-| 검색 출처 | 검색/RAG 결과가 한 흐름에 섞이기 쉬움 | `docs`, `local`, `upload` route와 diagnostics 분리 | evidence 출처, 실패 원인, route별 지연을 분리해서 분석 |
+| 검색 출처 | 검색/RAG 결과가 한 흐름에 섞이기 쉬움 | `docs`, `upload` route와 diagnostics 분리 | evidence 출처, 실패 원인, route별 지연을 분리해서 분석 |
 | 답변 형식 | 자연어 응답 중심 | `answer`, `claims`, `evidence`, `confidence`, `sections` 구조화 payload | citation 검증과 Slack/save 액션 후처리를 같은 계약으로 처리 |
 | 웹 런타임 | 데모 UI와 백엔드 실행 기준이 느슨하게 분리 | FastAPI `POST /agent`와 Streamlit 데모가 같은 agent runtime 사용 | 화면 동작과 benchmark 대상이 같은 경로를 공유 |
 | 세션/파일 처리 | 업로드 파일과 생성 파일의 수명 관리가 약함 | 세션별 manager cache, TTL/LRU, 요청 lock, 업로드/출력 cleanup | 사용자별 업로드 격리와 반복 실행 안정성 강화 |
@@ -84,7 +80,7 @@ flowchart LR
     Memory --> Add["add_user_message"]
     Add --> Compact["memory policy<br/>high → low watermark compaction"]
     Compact --> Planner["planner<br/>의도/route 결정"]
-    Planner --> Retrieval["retrieve_dispatch<br/>docs/local/upload 병렬 검색"]
+    Planner --> Retrieval["retrieve_dispatch<br/>docs/upload 병렬 검색"]
     Retrieval --> Evidence["evidence + diagnostics<br/>출처, warning, latency"]
     Evidence --> PreCheck["pre-synthesis validation<br/>근거 품질/route coverage"]
     PreCheck --> Synthesis["synthesis<br/>grounded response payload"]
@@ -104,7 +100,6 @@ flowchart LR
 | 기능 | 설명 |
 |---|---|
 | 공식 문서 검색 | allowlist와 query hint를 기준으로 공식 문서 결과만 evidence로 사용합니다. |
-| 로컬 노트북 RAG | `data/index` Chroma 인덱스를 통해 로컬 노트북 지식을 검색합니다. |
 | 업로드 파일 검색 | 현재 세션에 업로드된 `.py` 또는 `.ipynb` 파일만 임시 retriever로 검색합니다. |
 | 구조화 응답 | claim과 evidence를 함께 유지하는 grounded response payload를 반환합니다. |
 | 검증/재시도 | evidence 품질과 route coverage를 확인하고 필요한 경우 선택적으로 재검색합니다. |
@@ -118,17 +113,17 @@ flowchart LR
 
 - `src/app/`: FastAPI/Streamlit 웹 런타임, 서비스 매니저, 세션별 `AgentFlowManager`
 - `src/core/`: `GraphState`, bounded conversation memory 정책, planner/response/debug 계약, evidence 모델, 응답 스키마
-- `src/infra/`: 설정, LLM registry, Chroma/RAG, Tavily docs search, Slack/save 도구
+- `src/infra/`: 설정, LLM registry, Chroma 기반 업로드 검색, Tavily docs search, Slack/save 도구
 - `src/runtime/`: LangGraph 조립과 session/planner/retrieval/validation/synthesis/action 노드
 - `src/eval/`: online benchmark, scoring, report/history 생성
 
 ## 검증 결과
 
-최신 문서화된 `release` benchmark는 `20260509_043436` 런입니다. 로컬 benchmark 실행은 `output/benchmarks/latest_release_run.txt`를 최신 `release` run 포인터로 갱신합니다.
+회귀 테스트는 2026-09-04 KST 기준이며, 아래 `release` benchmark 수치는 `20260509_043436` 런의 기록입니다. 로컬 benchmark 실행은 `output/benchmarks/latest_release_run.txt`를 최신 `release` run 포인터로 갱신합니다.
 
 | 항목 | 결과 |
 |---|---:|
-| 테스트 | `429 passed, 56 subtests passed` |
+| 테스트 | `432 passed, 55 subtests passed` |
 | release benchmark | `116/120` cases passed |
 | release pass rate | `0.9667` |
 | tool precision / recall | `0.9677` / `1.0000` |
