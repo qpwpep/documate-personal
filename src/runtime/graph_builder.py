@@ -257,7 +257,6 @@ def build_agent_graph(settings: AppSettings | None = None):
     retrieve_dispatch_node = make_retrieve_dispatch_node(
         tavily_search_tool=tool_registry.tavily_search_tool,
         upload_search_tool=tool_registry.upload_search_tool,
-        rag_search_tool=tool_registry.rag_search_tool,
         verbose=llm_registry.verbose,
     )
     retrieve_dispatch_node = _instrument_stage_node(
