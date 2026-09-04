@@ -213,6 +213,8 @@ graph 실행, debug 수집, response assembly, projection 또는 budget 검사�
 - 현재 store는 in-memory이므로 process restart와 multi-worker 사이에서 대화 상태를 복원하지 않습니다.
 - Streamlit의 새 대화는 새 session ID를 발급해 즉시 격리하지만 이전 backend entry는 TTL/LRU까지 남을 수 있습니다.
 - planner/synthesis에는 summary를 비신뢰 과거 데이터로 전달하며, summary 안의 명령을 따르거나 retrieved evidence로 취급하지 않습니다.
+- planner는 최근 턴 제한 안에서 최신 사용자 질문까지의 Human/AI 대화를 순서대로 전달합니다. 질문 표현으로 문맥을 생략하지 않으며, 도구 호출 중간 메시지와 현재 질문 뒤에 붙은 재시도 답변은 제외합니다.
+- 앞선 대화는 후속 질문의 지시 대상과 이어지는 출처 제한을 해석하는 데 사용합니다. 현재 질문의 명시적인 출처 변경이 우선하며, 관계없는 새 작업에는 이전 검색 요구를 적용하지 않습니다.
 
 compaction 진단은 debug `edge_decisions`와 구조화 로그에서 before/after turn·message·추정 token·byte, removed message 수, fallback 여부로 확인할 수 있습니다. 원문 query, summary, Tool payload는 이 진단 로그에 기록하지 않습니다.
 
@@ -358,6 +360,14 @@ uv run pytest -q
 uv run python script/check_encoding.py
 uv run python script/sync_env_example.py --check
 ```
+
+실제 설정된 planner 모델로 출처 판별을 검증하려면 API 호출을 명시적으로 활성화합니다. 기본 회귀에서는 이 검사를 건너뜁니다.
+
+```bash
+LIVE_TEST=true uv run pytest tests/core/test_prompts.py -k live_source_selection -q
+```
+
+이 검사는 단일 요청과 대화 후속 질문의 출처 유지·변경, 주제 전환, 업로드 부재 안내를 확인합니다. 외부 문서 검색이나 파일 검색 도구는 실행하지 않습니다.
 
 최신 회귀 테스트 결과는 [README의 검증 결과](../README.md#검증-결과)를 기준으로 합니다. 파일 검색은 업로드 유무, 일반 파일 API 설명과의 구분, 인용과 세션 격리, 과거 벤치마크 읽기 호환성을 검증합니다. bounded memory에는 compiled reducer 회귀, 반복 rolling summary, LLM 예외/빈 출력 fallback, cross-request persistence, response assembly rollback, message ownership 격리, ToolMessage projection, JSON escape-heavy byte fitting, policy envelope, TTL/세션 격리, query boundary, Hypothesis Unicode/property, 300-turn plateau 테스트가 포함됩니다.
 

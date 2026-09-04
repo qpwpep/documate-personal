@@ -3,6 +3,9 @@ import unittest
 
 import pytest
 
+from langchain_core.messages import AIMessage, HumanMessage
+
+from src.core.planner_schema import PlannerOutput
 from src.core.prompts import needs_search
 from src.core.contracts.boundary.graph import build_graph_state_input
 from src.infra.llm import build_llm_registry
@@ -97,6 +100,150 @@ LIVE_SOURCE_CASES = [
 ]
 
 
+# Source expectations were assigned before live calls. Context pairs deliberately
+# reuse the same follow-up with different preceding source restrictions.
+LIVE_CONTEXT_CASES = [
+    {
+        "id": "ctx_ko_upload",
+        "history": [
+            {"role": "user", "content": "이 대화에 올린 db_probe.py에 적힌 연결 설정을 확인하려고 해. 공식 문서는 제외하고 이 파일 안의 값만 근거로 삼아줘."},
+            {"role": "assistant", "content": "연결 설정 중 어떤 항목을 확인할까요?"},
+        ],
+        "query": "그중 연결 제한 시간의 기본값을 찾아줘.",
+        "expected_routes": ["upload"],
+    },
+    {
+        "id": "ctx_ko_docs",
+        "history": [
+            {"role": "user", "content": "첨부 파일은 보지 말고 Python sqlite3 공식 문서만 근거로 연결 설정을 살펴보자."},
+            {"role":"assistant","content":"연결 설정 중 어떤 항목을 확인할까요?"},
+        ],
+        "query": "그중 연결 제한 시간의 기본값을 찾아줘.",
+        "expected_routes": ["docs"],
+        "query_identifiers": ["sqlite3"],
+    },
+    {
+        "id": "ctx_en_upload",
+        "history": [
+            {"role": "user", "content": "I attached archive_probe.py. Examine the archive-writing helper in that file only; do not consult documentation."},
+            {"role": "assistant", "content": "Which aspect of the helper would you like me to check?"},
+        ],
+        "query": "Which compression method does it use when none is specified?",
+        "expected_routes": ["upload"],
+    },
+    {
+        "id": "ctx_en_docs",
+        "history": [
+            {"role": "user", "content": "Use only the official Python zipfile documentation to explain ZipFile; leave my uploaded scripts out of this."},
+            {"role": "assistant", "content": "Which aspect of ZipFile would you like me to check?"},
+        ],
+        "query": "Which compression method does it use when none is specified?",
+        "expected_routes": ["docs"],
+        "query_identifiers": ["zipfile"],
+    },
+    {
+        "id": "ctx_quote_inline",
+        "history": [
+            {"role": "user", "content": "여기에 붙인 문장 '결과는 /tmp/report.csv에 저장됩니다'만 텍스트로 다뤄줘. 업로드 파일과 외부 문서는 모두 사용하지 마."},
+            {"role": "assistant", "content": "이 문장에서 어떤 부분을 추출할까요?"},
+        ],
+        "query": "거기서 파일 경로를 가리키는 부분만 뽑아줘.",
+        "expected_routes": [],
+    },
+    {
+        "id": "ctx_quote_upload",
+        "history": [
+            {"role": "user", "content": "이번 대화에 첨부한 exporter.py의 안내 메시지 문자열을 살펴봐줘. 다른 자료는 보지 말고 그 파일만 사용해."},
+            {"role": "assistant", "content": "안내 메시지에서 어떤 부분을 추출할까요?"},
+        ],
+        "query": "거기서 파일 경로를 가리키는 부분만 뽑아줘.",
+        "expected_routes": ["upload"],
+    },
+    {
+        "id": "holdout_en_upload",
+        "history": [
+            {"role": "user", "content": "I uploaded resource_scope.py, which uses contextlib. For this discussion, use only that uploaded file as your source."},
+            {"role": "assistant", "content": "Understood. I will base this discussion only on resource_scope.py."},
+            {"role": "user", "content": "Focus on the managed_connection context manager, especially what happens when the code inside the with block fails."},
+            {"role": "assistant", "content": "I will focus on managed_connection and the failure path through its with block."},
+        ],
+        "query": "When that happens, which cleanup steps does it actually run?",
+        "expected_routes": ["upload"],
+    },
+    {
+        "id": "holdout_ko_upload",
+        "history": [
+            {"role": "user", "content": "업로드한 csv_reader.ipynb의 CSV 처리 과정을 살펴보자. 이 대화에서는 이 노트북만 근거로 삼아줘."},
+            {"role": "assistant", "content": "csv_reader.ipynb만 근거로 CSV 처리 과정을 살펴보겠습니다."},
+        ],
+        "query": "거기서는 빈 필드와 열이 누락된 행을 각각 어떻게 처리하고 있어?",
+        "expected_routes": ["upload"],
+    },
+    {
+        "id": "holdout_en_docs",
+        "history": [
+            {"role": "user", "content": "Let's discuss collections.Counter. Throughout this discussion, use only the official Python documentation."},
+            {"role": "assistant", "content": "I will use only the official Python documentation for our discussion of collections.Counter."},
+            {"role": "user", "content": "The part I want to understand is subtract(), specifically when the counts go below zero."},
+            {"role": "assistant", "content": "I will focus on subtract() and its treatment of counts below zero."},
+        ],
+        "query": "Does it keep those negative counts in the result?",
+        "expected_routes": ["docs"],
+    },
+    {
+        "id": "holdout_ko_docs",
+        "history": [
+            {"role": "user", "content": "dataclasses의 frozen=True를 이해하고 싶어. 이 주제는 Python 공식 문서만 근거로 설명해줘."},
+            {"role": "assistant", "content": "Python 공식 문서만 근거로 frozen=True의 동작을 설명하겠습니다."},
+        ],
+        "query": "그 옵션을 켠 인스턴스에서 필드에 다른 값을 대입하면 어떤 예외가 발생해?",
+        "expected_routes": ["docs"],
+    },
+    {
+        "id": "holdout_en_switch",
+        "history": [
+            {"role": "user", "content": "I uploaded logging_setup.py. Use only that file to investigate its logging configuration."},
+            {"role": "assistant", "content": "I will use only logging_setup.py to investigate the configuration."},
+        ],
+        "query": "For this question, switch to the official Python documentation only and do not use the uploaded file: what does logging.basicConfig(force=True) do to existing handlers on the root logger?",
+        "expected_routes": ["docs"],
+    },
+    {
+        "id": "holdout_ko_switch",
+        "history": [
+            {"role": "user", "content": "functools의 캐시 기능을 살펴보자. 답변은 Python 공식 문서만 근거로 해줘."},
+            {"role": "assistant", "content": "Python 공식 문서만 근거로 functools의 캐시 기능을 살펴보겠습니다."},
+        ],
+        "query": "이번 질문은 공식 문서를 쓰지 말고 업로드한 cached_lookup.py만 확인해줘. 이 파일에서 캐시를 비우는 코드는 어떤 조건에서 실행돼?",
+        "expected_routes": ["upload"],
+    },
+    {
+        "id": "holdout_en_new_task",
+        "history": [
+            {"role": "user", "content": "Inspect the uploaded path_report.py to find how it uses pathlib. Use only that uploaded file."},
+            {"role": "assistant", "content": "I will inspect path_report.py and use only that file as the source."},
+        ],
+        "query": "New task: translate only this quoted sentence into Korean, without looking anything up: \"The old bridge is closed until Monday.\"",
+        "expected_routes": [],
+    },
+    {
+        "id": "holdout_ko_new_task",
+        "history": [
+            {"role": "user", "content": "itertools의 조합 관련 함수를 조사해줘. Python 공식 문서만 사용해줘."},
+            {"role": "assistant", "content": "Python 공식 문서만 사용해 itertools의 조합 관련 함수를 살펴보겠습니다."},
+        ],
+        "query": "새 요청이야. 문서 조회나 코드 설명은 필요 없어. 다음 입력값만 숫자 기준 오름차순으로 정렬해서 목록으로 반환해줘: [12, -3, 7, 0, 7].",
+        "expected_routes": [],
+    },
+]
+
+LIVE_SOURCE_CASES += [
+    {**case, "id": f"{case['id']}_{'with_file' if available else 'without_file'}", "available": available}
+    for case in LIVE_CONTEXT_CASES
+    for available in (True, False)
+]
+
+
 class PromptsTest(unittest.TestCase):
     def test_needs_search_matches_library_explainer_request(self) -> None:
         self.assertTrue(needs_search("pandas에 대해 알려줘"))
@@ -122,7 +269,13 @@ def live_planner():
 @pytest.mark.parametrize("case", LIVE_SOURCE_CASES, ids=lambda case: case["id"])
 def test_live_source_selection(case, live_planner):
     # A retriever handle is availability context only; no retrieval tool runs.
-    state = build_graph_state_input(user_input=case["query"], messages=[], retriever=object())
+    available = case.get("available", True)
+    messages = [
+        HumanMessage(content=item["content"]) if item["role"] == "user" else AIMessage(content=item["content"])
+        for item in case.get("history", [])
+    ]
+    messages.append(HumanMessage(content=case["query"]))
+    state = build_graph_state_input(user_input=case["query"], messages=messages, retriever=object() if available else None)
     result = live_planner(state)
     planner = result["planner"]
     assert planner.status == "llm"
@@ -130,7 +283,15 @@ def test_live_source_selection(case, live_planner):
     # requests a technical explanation without specifying its evidence source.
     required = set(case["expected_routes"])
     allowed = required | set(case.get("optional_routes", []))
-    actual = {task.route for task in planner.output.tasks}
+    actual = set(planner.diagnostics.required_routes)
     assert required <= actual <= allowed, (case["query"], actual, required, allowed)
-    assert planner.guided_followup is None
+    if "upload" in actual and not available:
+        assert planner.output == PlannerOutput.fallback()
+        assert planner.guided_followup
+        assert planner.diagnostics.reason == "upload_retriever_missing"
+    else:
+        assert {task.route for task in planner.output.tasks} == actual
+        assert planner.guided_followup is None
+        queries = " ".join(task.query for task in planner.output.tasks).casefold()
+        assert all(identifier.casefold() in queries for identifier in case.get("query_identifiers", [])), queries
     assert result["debug"].llm_calls, "A real provider response must be recorded"
