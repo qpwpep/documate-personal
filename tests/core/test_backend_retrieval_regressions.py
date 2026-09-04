@@ -11,7 +11,7 @@ from src.runtime.nodes.planner.query_sanitizer import (
     sanitize_retrieval_query,
 )
 from src.runtime.nodes.validation.evidence_validator import route_passes_validation
-from src.infra.tools.local_rag import build_local_rag_tools
+from src.infra.tools.local_rag import build_upload_search_tool
 
 
 class BackendRetrievalRegressionTest(unittest.TestCase):
@@ -275,7 +275,7 @@ class BackendRetrievalRegressionTest(unittest.TestCase):
 
     def test_upload_search_normalizes_raw_l2_scores_without_warning(self) -> None:
         settings = type("Settings", (), {"openai_api_key": "test-key"})()
-        _rag_tool, upload_tool = build_local_rag_tools(settings)
+        upload_tool = build_upload_search_tool(settings)
 
         class _Doc:
             def __init__(self, text, cell_id):

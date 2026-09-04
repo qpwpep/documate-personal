@@ -9,7 +9,7 @@ from langgraph.prebuilt import InjectedState
 from src.core.latency import elapsed_ms
 from src.infra.chroma_store import CHROMA_DISTANCE_METRIC, CHROMA_SCORE_DIRECTION
 from src.infra.settings import AppSettings
-from src.infra.tools._common import RagArgs, UploadArgs, build_retrieval_payload
+from src.infra.tools._common import UploadArgs, build_retrieval_payload
 from src.infra.tools.local_rag import client
 from src.infra.tools.local_rag.ranking import rank_retrieval_rows
 from src.infra.tools.local_rag.serialization import build_local_evidence_bundle
@@ -19,10 +19,6 @@ def _build_search_payload(
     *,
     query: str,
     docs_with_scores: list[tuple[Any, float | None]],
-    tool_name: str,
-    route: str,
-    no_result_message: str,
-    default_source: str,
     provider_ms: int = 0,
 ) -> dict[str, Any]:
     post_started = time.perf_counter()
@@ -30,17 +26,17 @@ def _build_search_payload(
     evidence, normalized_scores, raw_scores, retrieval_warnings = build_local_evidence_bundle(
         ranked_rows,
         query=query,
-        tool_name=tool_name,
-        default_source=default_source,
+        tool_name="upload_search",
+        default_source="uploaded",
     )
     post_filter_ms = elapsed_ms(post_started, time.perf_counter())
     return build_retrieval_payload(
-        tool=tool_name,
-        route=route,
+        tool="upload_search",
+        route="upload",
         query=query,
         evidence=evidence,
         status="success" if evidence else "no_result",
-        message="" if evidence else no_result_message,
+        message="" if evidence else "no uploaded file evidence found",
         normalized_score=max(normalized_scores) if normalized_scores else None,
         raw_score=min(raw_scores) if raw_scores else None,
         provider_ms=provider_ms,
@@ -51,63 +47,7 @@ def _build_search_payload(
     )
 
 
-def build_local_rag_tools(settings: AppSettings) -> tuple[Any, Any]:
-    def rag_search(query: str, k: int = 4) -> dict[str, Any]:
-        if not client.INDEX_PATH.is_dir():
-            return build_retrieval_payload(
-                tool="rag_search",
-                route="local",
-                query=query,
-                status="unavailable",
-                message="local notebook index is unavailable",
-                error_code="RAG_INDEX_MISSING",
-            )
-        if not settings.openai_api_key:
-            return build_retrieval_payload(
-                tool="rag_search",
-                route="local",
-                query=query,
-                status="unavailable",
-                message="OPENAI_API_KEY is not configured for local retrieval",
-            )
-
-        db = client.load_chroma(settings.openai_api_key)
-        docs_with_scores: list[tuple[Any, float | None]] = []
-        provider_ms = 0
-        provider_started = time.perf_counter()
-        try:
-            provider_started = time.perf_counter()
-            docs_with_scores = client.search_with_raw_scores(db, query=query, k=k)
-            provider_ms += elapsed_ms(provider_started, time.perf_counter())
-        except Exception:
-            try:
-                provider_ms += elapsed_ms(provider_started, time.perf_counter())
-                provider_started = time.perf_counter()
-                docs = db.similarity_search(query, k=k)
-                docs_with_scores = [(doc, None) for doc in docs]
-                provider_ms += elapsed_ms(provider_started, time.perf_counter())
-            except Exception as exc:
-                provider_ms += elapsed_ms(provider_started, time.perf_counter())
-                return build_retrieval_payload(
-                    tool="rag_search",
-                    route="local",
-                    query=query,
-                    status="error",
-                    message=f"local similarity search failed ({exc})",
-                    provider_ms=provider_ms,
-                    error_code="LOCAL_RAG_FAILED",
-                )
-
-        return _build_search_payload(
-            query=query,
-            docs_with_scores=docs_with_scores,
-            tool_name="rag_search",
-            route="local",
-            no_result_message="no local notebook evidence found",
-            default_source="notebook",
-            provider_ms=provider_ms,
-        )
-
+def build_upload_search_tool(settings: AppSettings) -> Any:
     def upload_search(
         query: str,
         k: int = 4,
@@ -149,23 +89,10 @@ def build_local_rag_tools(settings: AppSettings) -> tuple[Any, Any]:
         return _build_search_payload(
             query=query,
             docs_with_scores=docs_with_scores,
-            tool_name="upload_search",
-            route="upload",
-            no_result_message="no uploaded file evidence found",
-            default_source="uploaded",
             provider_ms=provider_ms,
         )
 
-    rag_search_tool = StructuredTool.from_function(
-        name="rag_search",
-        description=(
-            "Search local .ipynb notebooks (vector index) and return structured evidence items. "
-            "Use this when the question is covered by our local documents."
-        ),
-        func=rag_search,
-        args_schema=RagArgs,
-    )
-    upload_search_tool = StructuredTool.from_function(
+    return StructuredTool.from_function(
         name="upload_search",
         description=(
             "Search only the currently uploaded file context and return structured evidence items. "
@@ -174,4 +101,3 @@ def build_local_rag_tools(settings: AppSettings) -> tuple[Any, Any]:
         func=upload_search,
         args_schema=UploadArgs,
     )
-    return rag_search_tool, upload_search_tool

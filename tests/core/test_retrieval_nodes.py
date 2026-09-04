@@ -12,7 +12,7 @@ from src.core.planner_schema import PlannerOutput, RetrievalTask
 from src.infra.settings import AppSettings
 from src.infra.tools import build_tool_registry
 from src.infra.tools.docs_search.url_validation import validate_doc_url
-from src.infra.tools.local_rag import build_local_rag_tools
+from src.infra.tools.local_rag import build_upload_search_tool
 from src.runtime.nodes.retrieval import make_retrieve_dispatch_node
 
 
@@ -107,7 +107,7 @@ class RetrievalNodeTest(unittest.TestCase):
                 )
                 return [(imported, 0.30), (usage, 0.28)]
 
-        payload = build_local_rag_tools(self.settings)[1].func(
+        payload = build_upload_search_tool(self.settings).func(
             query="업로드 노트북에서 train_test_split 파라미터를 찾아줘",
             k=4,
             retriever=SimpleNamespace(vectorstore=_UsageVectorStore()),

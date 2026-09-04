@@ -8,10 +8,9 @@ from unittest.mock import patch
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 
-from src.infra.chroma_store import create_chroma_vectorstore
 from src.infra.chunking import chunk_notebook_path, chunk_python_text
 from src.infra.settings import AppSettings
-from src.infra.tools.local_rag import build_local_rag_tools, build_temp_retriever
+from src.infra.tools.local_rag import build_temp_retriever, build_upload_search_tool
 from src.infra.tools.local_rag.ranking import rank_retrieval_rows
 from src.infra.tools.local_rag.serialization import build_local_snippet, build_query_focused_snippet
 
@@ -285,52 +284,10 @@ class LocalRagTest(unittest.TestCase):
 
         self.assertEqual(ranked[0][0].metadata["cell_id"], 2)
 
-    @patch("src.infra.tools.local_rag.client.build_openai_embeddings", return_value=_FakeEmbeddings())
-    def test_local_rag_search_uses_raw_l2_scores_without_userwarning(
-        self,
-        _mock_local_embeddings,
-    ) -> None:
-        with TemporaryDirectory() as temp_dir:
-            root = Path(temp_dir)
-            data_dir = root / "data"
-            notebook_path = data_dir / "sample_pipeline.ipynb"
-            _write_notebook(
-                notebook_path,
-                "# Sample pipeline",
-                "from sklearn.model_selection import train_test_split\n"
-                "X_train, X_test = train_test_split(X, y, test_size=0.2, random_state=42)\n",
-            )
-
-            settings = AppSettings(openai_api_key="test-key", tavily_api_key="test")
-            docs = chunk_notebook_path(
-                path=str(notebook_path),
-                chunk_size=800,
-                chunk_overlap=120,
-            )
-            vectorstore = create_chroma_vectorstore(
-                embeddings=_FakeEmbeddings(),
-                collection_name="local-rag-test",
-            )
-            vectorstore.add_documents(docs)
-            with warnings.catch_warnings(record=True) as caught:
-                warnings.simplefilter("always")
-                rag_tool, _upload_tool = build_local_rag_tools(settings)
-                with patch("src.infra.tools.local_rag.client.INDEX_PATH", data_dir), patch(
-                    "src.infra.tools.local_rag.client.load_chroma",
-                    return_value=vectorstore,
-                ):
-                    payload = rag_tool.func(query="train_test_split parameter", k=2)
-            vectorstore.delete_collection()
-
-            self.assertEqual(caught, [])
-            self.assertEqual(payload["diagnostics"]["metric"], "l2")
-            self.assertEqual(payload["diagnostics"]["score_direction"], "lower_is_better")
-            self.assertTrue(all(0.0 <= item["score"] <= 1.0 for item in payload["evidence"]))
-
-    @patch("src.infra.tools.local_rag.client.build_openai_embeddings", return_value=_FakeEmbeddings())
+    @patch("src.infra.chroma_store.OpenAIEmbeddings", return_value=_FakeEmbeddings())
     def test_upload_rag_search_uses_canonical_copy_and_raw_l2_scores_without_userwarning(
         self,
-        _mock_local_embeddings,
+        _mock_openai_embeddings,
     ) -> None:
         with TemporaryDirectory() as temp_dir:
             uploads_root = Path(temp_dir) / "uploads" / "session-a"
@@ -347,7 +304,7 @@ class LocalRagTest(unittest.TestCase):
                 warnings.simplefilter("always")
                 handle = build_temp_retriever(str(notebook_path), api_key="test-key")
                 try:
-                    _rag_tool, upload_tool = build_local_rag_tools(settings)
+                    upload_tool = build_upload_search_tool(settings)
                     payload = upload_tool.func(
                         query="train_test_split parameter",
                         k=2,
@@ -361,7 +318,15 @@ class LocalRagTest(unittest.TestCase):
             self.assertTrue(canonical_path.exists())
             self.assertEqual(payload["diagnostics"]["metric"], "l2")
             self.assertEqual(payload["diagnostics"]["score_direction"], "lower_is_better")
-            self.assertEqual(payload["evidence"][0]["url_or_path"], str(notebook_path))
+            self.assertEqual(payload["diagnostics"]["route"], "upload")
+            self.assertEqual(
+                {
+                    (item["kind"], item["tool"], item["url_or_path"])
+                    for item in payload["evidence"]
+                },
+                {("local", "upload_search", str(notebook_path))},
+            )
+            self.assertTrue(all(0.0 <= item["score"] <= 1.0 for item in payload["evidence"]))
 
 
 if __name__ == "__main__":

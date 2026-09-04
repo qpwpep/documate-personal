@@ -12,7 +12,7 @@ from src.core.evidence import DocMetadata, EvidenceItem, build_local_source_id, 
 def build_retrieval_payload(
     *,
     tool: str,
-    route: Literal["docs", "upload", "local"],
+    route: Literal["docs", "upload"],
     query: str,
     evidence: list[dict[str, Any]] | None = None,
     status: Literal["success", "no_result", "error", "unavailable"] = "success",
@@ -111,11 +111,6 @@ class SlackArgs(BaseModel):
     email: str | None = Field(default=None, description="Slack email for DM.")
     channel_id: str | None = Field(default=None, description="Slack channel id (C/G/D...).")
     target: str = Field(default="auto", description="auto|dm|channel|group")
-
-
-class RagArgs(BaseModel):
-    query: str = Field(description="The user's information need to search over local notebooks.")
-    k: int = Field(default=4, ge=1, le=10, description="Number of chunks to return.")
 
 
 class UploadArgs(BaseModel):
