@@ -31,7 +31,7 @@ class LLMRegistryTest(unittest.TestCase):
         task_schema = schema["$defs"]["RetrievalTask"]
         self.assertEqual(set(task_schema["required"]), {"route", "query", "k"})
         self.assertIs(task_schema["additionalProperties"], False)
-        self.assertEqual(set(task_schema["properties"]["route"]["enum"]), {"docs", "upload", "local"})
+        self.assertEqual(set(task_schema["properties"]["route"]["enum"]), {"docs", "upload"})
 
     @patch("src.infra.llm.ChatOpenAI", new=_FakeChatOpenAI)
     def test_build_llm_registry_applies_explicit_synthesis_policy(self) -> None:

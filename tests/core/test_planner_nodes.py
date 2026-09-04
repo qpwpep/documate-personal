@@ -197,16 +197,16 @@ class PlannerNodeTest(unittest.TestCase):
         self.assertIsNotNone(updates["planner"].guided_followup)
 
 
-    @given(route=st.one_of(st.just("archive"), st.text().filter(lambda value: value not in {"docs", "upload", "local"})))
+    @given(route=st.one_of(st.just("local"), st.text().filter(lambda value: value not in {"docs", "upload"})))
     def test_planner_schema_rejects_unsupported_retrieval_routes(self, route: str) -> None:
         with self.assertRaises(ValidationError):
             RetrievalTask(route=route, query="pandas merge", k=4)
 
-    def test_planner_reports_failure_when_model_selects_unsupported_route(self) -> None:
+    def test_planner_reports_failure_when_model_selects_retired_route(self) -> None:
         query = "Find pandas merge in my project code."
         planner = make_planner_node(_CapturePlannerLLM({
             "use_retrieval": True,
-            "tasks": [{"route": "archive", "query": "pandas merge", "k": 4}],
+            "tasks": [{"route": "local", "query": "pandas merge", "k": 4}],
         }), verbose=False)
 
         result = planner(build_legacy_state({
