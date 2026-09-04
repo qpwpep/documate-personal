@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any, Iterable, Literal
 
 from langchain_core.messages import AIMessage
 from pydantic import BaseModel, Field
@@ -10,7 +10,7 @@ ErrorCode = Literal[
     "PLANNER_TIMEOUT",
     "RETRIEVAL_DOCS_TIMEOUT",
     "RETRIEVAL_DOCS_FAILED",
-    "RAG_INDEX_MISSING",
+    "RAG_INDEX_MISSING",  # Retained for reading historical benchmark diagnostics.
     "LOCAL_RAG_FAILED",
     "UPLOAD_RETRIEVER_BUILD_FAILED",
     "LLM_STRUCTURED_EMPTY",
@@ -58,6 +58,8 @@ RETRYABLE_REASONS: set[RetryReason] = {
     "missing",
 }
 DEBUG_SCHEMA_VERSION = 5
+# Historical diagnostics can contain retired routes; these never enable execution.
+RECORDED_ROUTE_ORDER: tuple[str, ...] = ("docs", "upload", "local")
 DebugObservabilityStatus = Literal["ok", "degraded", "failed"]
 ModelUsageStatus = Literal["llm_used", "deterministic", "missing_debug"]
 DEBUG_REQUIRED_FIELDS: tuple[str, ...] = (
@@ -211,6 +213,11 @@ class DebugPayload(BaseModel):
 
 
 AgentDebugPayload = DebugPayload
+
+
+def normalize_recorded_routes(values: Iterable[str] | None) -> list[str]:
+    normalized = {str(value).strip() for value in values or []}
+    return [route for route in RECORDED_ROUTE_ORDER if route in normalized]
 
 
 def json_safe_deep_copy(value: Any) -> Any:

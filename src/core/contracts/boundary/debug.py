@@ -2,9 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from src.core.contracts.debug import ActionResults, DEBUG_SCHEMA_VERSION, DebugPayload, ErrorCode, LLMCallMetadata, ModelUsageStatus, RetryState, SaveTextActionResult, SlackActionResult, TokenUsage, json_safe_deep_copy
+from src.core.contracts.debug import ActionResults, DEBUG_SCHEMA_VERSION, DebugPayload, ErrorCode, LLMCallMetadata, ModelUsageStatus, RetryState, SaveTextActionResult, SlackActionResult, TokenUsage, json_safe_deep_copy, normalize_recorded_routes
 from src.core.contracts.graph_state import DebugState
-from src.core.contracts.routes import normalize_routes
 from src.core.contracts.boundary.planner import parse_planner_diagnostic
 from src.core.contracts.boundary.retrieval import parse_retrieval_diagnostic, parse_retrieval_diagnostics
 
@@ -64,7 +63,7 @@ def parse_retry_state(value: Any) -> RetryState:
 
     failed_routes = value.get("failed_routes")
     if isinstance(failed_routes, list):
-        retry_state.failed_routes = normalize_routes(failed_routes)
+        retry_state.failed_routes = normalize_recorded_routes(failed_routes)
 
     retry_scope = value.get("retry_scope")
     if retry_scope in {"refresh_routes", "reuse_evidence_resynthesize"}:
