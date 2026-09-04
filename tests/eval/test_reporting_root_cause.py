@@ -1,3 +1,4 @@
+import json
 import unittest
 
 from src.eval.config_models import BenchmarkCase, BenchmarkConfig
@@ -76,6 +77,71 @@ def _make_result(
 
 
 class ReportingRootCauseTest(unittest.TestCase):
+    def test_summary_retains_local_diagnostics_when_reading_legacy_raw_result(self) -> None:
+        case = BenchmarkCase(
+            case_id="legacy-local",
+            category="rag_only",
+            query="saved notebook query",
+            expected_tools=["rag_search"],
+            require_local_citation=True,
+        )
+        result = CaseResult.model_validate_json(json.dumps({
+            "run_id": "legacy-run",
+            "case_id": case.case_id,
+            "category": "rag_only",
+            "query": case.query,
+            "session_id": "legacy-session",
+            "endpoint": "http://127.0.0.1:8000/agent",
+            "request_payload": {"query": case.query},
+            "http_status": 200,
+            "tool_calls": ["rag_search"],
+            "retrieval_diagnostics": [{
+                "tool": "rag_search",
+                "status": "error",
+                "error_code": "RAG_INDEX_MISSING",
+            }],
+            "planner_diagnostics": {
+                "status": "llm",
+                "planned_routes": ["local"],
+                "required_routes": ["local"],
+                "fallback_routes": ["local"],
+            },
+            "runtime_errors": ["RAG_INDEX_MISSING"],
+            "passed": False,
+            "created_at_utc": "2026-05-08T12:29:41+00:00",
+        }))
+
+        summary = build_summary(
+            run_id=result.run_id,
+            endpoint=result.endpoint,
+            fixtures_path="legacy-cases.jsonl",
+            config_path="data/benchmarks/config.toml",
+            track="release",
+            requested_limit=None,
+            config=BenchmarkConfig(),
+            cases=[case],
+            results=[result],
+        )
+
+        self.assertEqual(
+            {
+                "category": result.category,
+                "tool_calls": result.tool_calls,
+                "required_routes": result.planner_diagnostics.required_routes,
+                "retrieval": [row.model_dump() for row in summary.analysis.retrieval_route_status_histogram],
+                "errors": [row.model_dump() for row in summary.analysis.error_code_histogram],
+                "route_confusion": summary.analysis.route_confusion,
+            },
+            {
+                "category": "rag_only",
+                "tool_calls": ["rag_search"],
+                "required_routes": ["local"],
+                "retrieval": [{"category": "rag_only", "route": "local", "status": "error", "count": 1}],
+                "errors": [{"category": "rag_only", "error_code": "RAG_INDEX_MISSING", "count": 1}],
+                "route_confusion": [],
+            },
+        )
+
     def test_planner_success_metrics_count_planner_errors_and_warnings(self) -> None:
         clean_case = BenchmarkCase(
             case_id="docs_clean",

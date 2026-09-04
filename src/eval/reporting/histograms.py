@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from collections import Counter, defaultdict
 
-from src.core.contracts.routes import ROUTE_ORDER, route_for_tool, sort_routes
+from src.core.contracts.debug import RECORDED_ROUTE_ORDER
+from src.core.contracts.routes import route_for_tool
 from ..config_models import BenchmarkCase
 from ..result_models import CaseResult
 from ..summary_models import (
@@ -64,9 +65,9 @@ def _category_sort_key(value: str) -> tuple[int, str]:
 
 
 def _route_sort_key(value: str) -> tuple[int, str]:
-    if value in ROUTE_ORDER:
-        return (ROUTE_ORDER.index(value), value)
-    return (len(ROUTE_ORDER), value)
+    if value in RECORDED_ROUTE_ORDER:
+        return (RECORDED_ROUTE_ORDER.index(value), value)
+    return (len(RECORDED_ROUTE_ORDER), value)
 
 
 def _planner_error_sort_key(value: str) -> tuple[int, str]:
@@ -80,7 +81,7 @@ def _sort_categories(values: set[str] | list[str] | tuple[str, ...]) -> list[str
 
 
 def _sort_routes(values: set[str] | list[str] | tuple[str, ...]) -> list[str]:
-    return sort_routes(values)
+    return sorted({str(value).strip() for value in values if str(value).strip()}, key=_route_sort_key)
 
 
 def _normalize_reason_text(text: str | None, *, max_length: int = 160) -> str:
@@ -150,16 +151,23 @@ def build_failure_reason(result: CaseResult) -> str:
     return _build_rule_score_signature(result)
 
 
+def _recorded_route_for_tool(tool_name: str) -> str:
+    # Historical reports still include the retired notebook search tool.
+    if str(tool_name or "").strip() == "rag_search":
+        return "local"
+    return route_for_tool(tool_name)
+
+
 def _tool_names_to_routes(tool_names: list[str]) -> list[str]:
-    return _sort_routes({route_for_tool(tool_name) for tool_name in tool_names if route_for_tool(tool_name)})
+    return _sort_routes({route for tool_name in tool_names if (route := _recorded_route_for_tool(tool_name))})
 
 
 def _observed_routes(result: CaseResult) -> list[str]:
     diagnostic_routes = _sort_routes(
         {
-            str(item.route or route_for_tool(item.tool or "")).strip()
+            str(item.route or _recorded_route_for_tool(item.tool or "")).strip()
             for item in result.retrieval_diagnostics
-            if str(item.route or route_for_tool(item.tool or "")).strip()
+            if str(item.route or _recorded_route_for_tool(item.tool or "")).strip()
         }
     )
     if diagnostic_routes:
@@ -306,7 +314,7 @@ def _build_retrieval_route_status_histogram(results: list[CaseResult]) -> list[R
     counter: Counter[tuple[str, str, str]] = Counter()
     for result in results:
         for diagnostic in result.retrieval_diagnostics:
-            route = str(diagnostic.route or route_for_tool(diagnostic.tool or "")).strip()
+            route = str(diagnostic.route or _recorded_route_for_tool(diagnostic.tool or "")).strip()
             if not route:
                 continue
             status = str(diagnostic.status or "unknown").strip() or "unknown"
@@ -320,7 +328,7 @@ def _build_retrieval_warning_histogram(results: list[CaseResult]) -> list[Retrie
     counter: Counter[tuple[str, str, str]] = Counter()
     for result in results:
         for diagnostic in result.retrieval_diagnostics:
-            route = str(diagnostic.route or route_for_tool(diagnostic.tool or "")).strip()
+            route = str(diagnostic.route or _recorded_route_for_tool(diagnostic.tool or "")).strip()
             if not route:
                 continue
             for warning in diagnostic.warnings:

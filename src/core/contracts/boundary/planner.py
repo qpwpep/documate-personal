@@ -3,9 +3,8 @@ from __future__ import annotations
 from typing import Any
 
 from src.core.planner_schema import PlannerOutput, normalize_planner_output_input
-from src.core.contracts.debug import PlannerDiagnostic, empty_planner_diagnostic
+from src.core.contracts.debug import PlannerDiagnostic, empty_planner_diagnostic, normalize_recorded_routes
 from src.core.contracts.graph_state import PlannerState
-from src.core.contracts.routes import normalize_routes
 
 
 def _coerce_planner_payload(raw: Any) -> Any:
@@ -49,9 +48,9 @@ def parse_planner_diagnostic(value: Any) -> PlannerDiagnostic | None:
     return PlannerDiagnostic(
         status=str(status) if status is not None else "",
         reason=str(reason) if reason is not None else None,
-        fallback_routes=normalize_routes(fallback_routes) if isinstance(fallback_routes, list) else [],
+        fallback_routes=normalize_recorded_routes(fallback_routes) if isinstance(fallback_routes, list) else [],
         intent_required=bool(value.get("intent_required", False)),
-        required_routes=normalize_routes(required_routes) if isinstance(required_routes, list) else [],
+        required_routes=normalize_recorded_routes(required_routes) if isinstance(required_routes, list) else [],
         override_applied=bool(value.get("override_applied", False)),
         override_reason=override_reason,
         planner_warnings=[

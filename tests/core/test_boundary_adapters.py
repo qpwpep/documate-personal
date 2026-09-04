@@ -4,6 +4,8 @@ from pydantic import ValidationError
 
 from src.core.answer_schema import AgentResponsePayloadModel
 from src.core.contracts import PlannerState
+from src.core.contracts.debug import PlannerDiagnostic, RetrievalDiagnostic, RetryState
+from src.core.contracts.graph_state import DebugState
 from src.core.contracts.boundary.debug import parse_debug_state, parse_retry_state
 from src.core.contracts.boundary.graph import normalize_graph_update
 from src.core.contracts.boundary.planner import parse_planner_output
@@ -110,6 +112,46 @@ class BoundaryAdaptersTest(unittest.TestCase):
         self.assertEqual(normalized["retry"].attempt, 2)
         self.assertEqual(normalized["retry"].failed_routes, ["upload"])
         self.assertEqual(normalized["messages"], [])
+
+    def test_debug_payload_preserves_local_records_when_reading_legacy_benchmarks(self) -> None:
+        debug = parse_debug_state(
+            {
+                "error_codes": ["RAG_INDEX_MISSING"],
+                "planner_diagnostics": {
+                    "required_routes": ["local", "docs", "local", "unknown"],
+                    "fallback_routes": ["local"],
+                },
+                "retry_context": {"failed_routes": ["local", "unknown", "local"]},
+                "retrieval_diagnostics": [
+                    {
+                        "tool": "rag_search",
+                        "route": "local",
+                        "status": "unavailable",
+                        "error_code": "RAG_INDEX_MISSING",
+                    }
+                ],
+            }
+        )
+
+        self.assertEqual(
+            debug,
+            DebugState(
+                error_codes=["RAG_INDEX_MISSING"],
+                planner_diagnostics=PlannerDiagnostic(
+                    required_routes=["docs", "local"],
+                    fallback_routes=["local"],
+                ),
+                retry_context=RetryState(failed_routes=["local"]),
+                retrieval_diagnostics=[
+                    RetrievalDiagnostic(
+                        tool="rag_search",
+                        route="local",
+                        status="unavailable",
+                        error_code="RAG_INDEX_MISSING",
+                    )
+                ],
+            ),
+        )
 
     def test_typed_state_construction_raises_instead_of_silent_fallback(self) -> None:
         with self.assertRaises(ValidationError):
