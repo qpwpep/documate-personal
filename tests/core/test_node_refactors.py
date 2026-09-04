@@ -503,10 +503,10 @@ class NodeRefactorTest(unittest.TestCase):
         self.assertFalse(assessment.blocked_missing_upload)
 
     def test_validation_recovery_filters_unsupported_claims_to_grounded_subset(self) -> None:
-        valid_source = "path:data/notebooks/example.ipynb#cell=0;chunk=0;start=0;end=12"
+        valid_source = "path:uploads/demo/example.ipynb#cell=0;chunk=0;start=0;end=12"
         planner_output = PlannerOutput(
             use_retrieval=True,
-            tasks=[RetrievalTask(route="local", query="example", k=3)],
+            tasks=[RetrievalTask(route="upload", query="example", k=3)],
         )
         response_payload = AgentResponsePayloadModel.model_validate(
             {
@@ -515,7 +515,7 @@ class NodeRefactorTest(unittest.TestCase):
                     {"text": "kept", "evidence_ids": [valid_source], "confidence": 0.9},
                     {
                         "text": "dropped",
-                        "evidence_ids": ["path:data/notebooks/example.ipynb#cell=0;chunk=99;start=0;end=12"],
+                        "evidence_ids": ["path:uploads/demo/example.ipynb#cell=0;chunk=99;start=0;end=12"],
                         "confidence": 0.1,
                     },
                 ],
@@ -524,16 +524,16 @@ class NodeRefactorTest(unittest.TestCase):
             }
         )
         snapshot = build_validation_snapshot(
-            user_input="Explain the local example.",
+            user_input="Explain the uploaded example.",
             planner_output=planner_output,
             parsed_evidence=[
                 EvidenceItem.model_validate(
                     {
                         "kind": "local",
-                        "tool": "rag_search",
+                        "tool": "upload_search",
                         "source_id": valid_source,
-                        "document_id": "path:data/notebooks/example.ipynb",
-                        "url_or_path": "data/notebooks/example.ipynb",
+                        "document_id": "path:uploads/demo/example.ipynb",
+                        "url_or_path": "uploads/demo/example.ipynb",
                         "snippet": "example snippet",
                         "score": 0.9,
                         "cell_id": 0,

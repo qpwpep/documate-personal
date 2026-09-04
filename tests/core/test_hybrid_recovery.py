@@ -312,7 +312,7 @@ class HybridRecoveryTest(unittest.TestCase):
             },
         )
 
-    def test_hybrid_recovery_keeps_surviving_docs_claim_and_only_supplements_missing_local_route(self) -> None:
+    def test_hybrid_recovery_keeps_surviving_docs_claim_and_only_supplements_missing_upload_route(self) -> None:
         planner_output = PlannerOutput(
             use_retrieval=True,
             tasks=[

@@ -75,13 +75,13 @@ def apply_validation_outcome(
             snapshot=snapshot,
             routes={"docs"},
         )
-        local_valid_claims = claims_for_routes(
+        upload_valid_claims = claims_for_routes(
             claims=assessment.valid_claims,
             snapshot=snapshot,
-            routes={"upload", "local"},
+            routes={"upload"},
         )
         next_payload = None
-        if not docs_valid_claims and not local_valid_claims:
+        if not docs_valid_claims and not upload_valid_claims:
             next_payload = build_route_balanced_hybrid_payload(snapshot)
         next_payload = next_payload or build_deterministic_grounded_payload(
             evidence_items=snapshot.parsed_evidence,

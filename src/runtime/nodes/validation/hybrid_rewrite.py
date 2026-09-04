@@ -9,7 +9,7 @@ from src.core.answer_schema.rendering import average_claim_confidence, render_pa
 from src.core.answer_schema.text_cleaning import clean_grounded_text, summarize_grounded_text
 from src.core.contracts.routes import route_for_tool
 from src.runtime.nodes.validation.evidence_validator import ValidationSnapshot
-from src.runtime.nodes.validation.messages_ko import ROUTE_PREFIX_PATTERN, hybrid_docs_prefix, hybrid_limit_sentence, hybrid_local_prefix, route_prefix
+from src.runtime.nodes.validation.messages_ko import ROUTE_PREFIX_PATTERN, hybrid_docs_prefix, hybrid_limit_sentence, hybrid_upload_prefix, route_prefix
 
 
 def _ensure_sentence(text: str) -> str:
@@ -61,7 +61,7 @@ def is_hybrid_retrieval_request(snapshot: ValidationSnapshot) -> bool:
         for route in snapshot.required_routes
         if str(route or "").strip()
     }
-    return "docs" in required_routes and bool(required_routes.intersection({"upload", "local"}))
+    return {"docs", "upload"}.issubset(required_routes)
 
 
 def claim_from_evidence_item(
@@ -145,8 +145,8 @@ def rewrite_filtered_hybrid_payload(
         return payload
 
     docs_claim = next(iter(claims_for_routes(claims=payload.claims, snapshot=snapshot, routes={"docs"})), None)
-    local_claim = next(
-        iter(claims_for_routes(claims=payload.claims, snapshot=snapshot, routes={"upload", "local"})),
+    upload_claim = next(
+        iter(claims_for_routes(claims=payload.claims, snapshot=snapshot, routes={"upload"})),
         None,
     )
     if docs_claim is None:
@@ -155,14 +155,12 @@ def rewrite_filtered_hybrid_payload(
             docs_claim = claim_from_evidence_item(evidence_item=official_item, route="docs")
     else:
         docs_claim = _normalize_claim_for_route(claim=docs_claim, route="docs")
-    if local_claim is None:
-        local_item = top_evidence_item_for_routes(snapshot=snapshot, routes={"upload", "local"})
-        if local_item is not None:
-            local_route = route_for_tool(str(local_item.tool or ""))
-            local_claim = claim_from_evidence_item(evidence_item=local_item, route=local_route)
+    if upload_claim is None:
+        upload_item = top_evidence_item_for_routes(snapshot=snapshot, routes={"upload"})
+        if upload_item is not None:
+            upload_claim = claim_from_evidence_item(evidence_item=upload_item, route="upload")
     else:
-        local_route = claim_route(claim=local_claim, snapshot=snapshot) or "upload"
-        local_claim = _normalize_claim_for_route(claim=local_claim, route=local_route)
+        upload_claim = _normalize_claim_for_route(claim=upload_claim, route="upload")
 
     if docs_claim is not None:
         cleaned = summarize_grounded_text(_strip_route_prefix(docs_claim.text))
@@ -172,17 +170,16 @@ def rewrite_filtered_hybrid_payload(
                 evidence_ids=docs_claim.evidence_ids,
                 confidence=docs_claim.confidence,
             )
-    if local_claim is not None:
-        cleaned = summarize_grounded_text(_strip_route_prefix(local_claim.text))
+    if upload_claim is not None:
+        cleaned = summarize_grounded_text(_strip_route_prefix(upload_claim.text))
         if cleaned:
-            local_route = claim_route(claim=local_claim, snapshot=snapshot)
-            local_claim = ClaimItem(
-                text=f"{hybrid_local_prefix(local_route)} {cleaned}",
-                evidence_ids=local_claim.evidence_ids,
-                confidence=local_claim.confidence,
+            upload_claim = ClaimItem(
+                text=f"{hybrid_upload_prefix()} {cleaned}",
+                evidence_ids=upload_claim.evidence_ids,
+                confidence=upload_claim.confidence,
             )
 
-    rebuilt_claims = [claim for claim in (docs_claim, local_claim) if claim is not None]
+    rebuilt_claims = [claim for claim in (docs_claim, upload_claim) if claim is not None]
     if not rebuilt_claims:
         return payload
 
@@ -191,8 +188,7 @@ def rewrite_filtered_hybrid_payload(
         evidence_items=snapshot.parsed_evidence,
         confidence=average_claim_confidence(rebuilt_claims),
     )
-    local_route = claim_route(claim=local_claim, snapshot=snapshot) if local_claim is not None else "upload"
-    rebuilt_payload.answer = f"{rebuilt_payload.answer} {hybrid_limit_sentence(local_route)}".strip()
+    rebuilt_payload.answer = f"{rebuilt_payload.answer} {hybrid_limit_sentence()}".strip()
     rebuilt_payload.confidence = average_claim_confidence(rebuilt_claims)
     return rebuilt_payload
 
@@ -204,12 +200,12 @@ def build_route_balanced_hybrid_payload(
         return None
 
     official_item = top_evidence_item_for_routes(snapshot=snapshot, routes={"docs"})
-    local_item = top_evidence_item_for_routes(snapshot=snapshot, routes={"upload", "local"})
-    if official_item is None or local_item is None:
+    upload_item = top_evidence_item_for_routes(snapshot=snapshot, routes={"upload"})
+    if official_item is None or upload_item is None:
         return None
 
     return build_deterministic_grounded_payload(
-        evidence_items=[official_item, local_item],
+        evidence_items=[official_item, upload_item],
         max_claims=2,
         fallback_answer="",
     )

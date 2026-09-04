@@ -59,11 +59,11 @@ def _docs_evidence(
     }
 
 
-def _local_evidence(
+def _upload_evidence(
     *,
-    tool: str = "rag_search",
-    source_id: str = "path:data/notebooks/example.ipynb#cell=0;chunk=0;start=0;end=12",
-    path: str = "data/notebooks/example.ipynb",
+    tool: str = "upload_search",
+    source_id: str = "path:uploads/example.ipynb#cell=0;chunk=0;start=0;end=12",
+    path: str = "uploads/example.ipynb",
     snippet: str = "example snippet",
     score: float = 0.9,
     code_metadata: dict | None = None,
@@ -88,7 +88,7 @@ class SynthesisValidationTest(unittest.TestCase):
     def test_hybrid_validator_uses_code_metadata_option_literals(self) -> None:
         docs = EvidenceItem.model_validate(_docs_evidence())
         upload = EvidenceItem.model_validate(
-            _local_evidence(
+            _upload_evidence(
                 tool="upload_search",
                 source_id="path:uploads/demo.py#chunk=0;start=0;end=80",
                 path="uploads/demo.py",
@@ -134,8 +134,8 @@ class SynthesisValidationTest(unittest.TestCase):
             current_attempt_retrieval_errors=[],
             current_attempt_retrieval_diagnostics=[],
             response_payload=payload,
-            evidence_by_route={"docs": [docs], "upload": [upload], "local": []},
-            diagnostics_by_route={"docs": [], "upload": [], "local": []},
+            evidence_by_route={"docs": [docs], "upload": [upload]},
+            diagnostics_by_route={"docs": [], "upload": []},
             required_routes=["docs", "upload"],
         )
 
@@ -401,19 +401,19 @@ class SynthesisValidationTest(unittest.TestCase):
 
     def test_validate_evidence_unsupported_claims_falls_back_to_grounded_payload(self) -> None:
         validate_node = make_validate_evidence_node(verbose=False)
-        planner_output = PlannerOutput(use_retrieval=True, tasks=[RetrievalTask(route="local", query="example", k=3)])
-        valid_source = "path:data/notebooks/example.ipynb#cell=0;chunk=0;start=0;end=12"
+        planner_output = PlannerOutput(use_retrieval=True, tasks=[RetrievalTask(route="upload", query="example", k=3)])
+        valid_source = "path:uploads/example.ipynb#cell=0;chunk=0;start=0;end=12"
         result = validate_node(
             _state(
                 {
                     "planner_output": planner_output,
-                    "retrieved_evidence": [_local_evidence(source_id=valid_source)],
+                    "retrieved_evidence": [_upload_evidence(source_id=valid_source)],
                     "response_payload": {
                         "answer": "unsupported answer",
                         "claims": [
                             {
                                 "text": "unsupported answer",
-                                "evidence_ids": ["path:data/notebooks/example.ipynb#cell=0;chunk=99;start=0;end=12"],
+                                "evidence_ids": ["path:uploads/example.ipynb#cell=0;chunk=99;start=0;end=12"],
                                 "confidence": 0.6,
                             }
                         ],
@@ -453,7 +453,7 @@ class SynthesisValidationTest(unittest.TestCase):
                             source_id="url:https://scikit-learn.org/stable/modules/generated/sklearn.model_selection.train_test_split.html",
                             snippet="Split arrays or matrices into random train and test subsets.",
                         ),
-                        _local_evidence(
+                        _upload_evidence(
                             tool="upload_search",
                             source_id="path:uploads/demo/sample.ipynb#cell=2;chunk=0;start=0;end=64",
                             path="uploads/demo/sample.ipynb",
@@ -500,20 +500,20 @@ class SynthesisValidationTest(unittest.TestCase):
 
     def test_validate_evidence_filters_to_valid_claims_after_retry_budget(self) -> None:
         validate_node = make_validate_evidence_node(verbose=False)
-        planner_output = PlannerOutput(use_retrieval=True, tasks=[RetrievalTask(route="local", query="example", k=3)])
-        valid_source = "path:data/notebooks/example.ipynb#cell=0;chunk=0;start=0;end=12"
+        planner_output = PlannerOutput(use_retrieval=True, tasks=[RetrievalTask(route="upload", query="example", k=3)])
+        valid_source = "path:uploads/example.ipynb#cell=0;chunk=0;start=0;end=12"
         result = validate_node(
             _state(
                 {
                     "planner_output": planner_output,
-                    "retrieved_evidence": [_local_evidence(source_id=valid_source)],
+                    "retrieved_evidence": [_upload_evidence(source_id=valid_source)],
                     "response_payload": {
                         "answer": "kept [1] dropped [2]",
                         "claims": [
                             {"text": "kept", "evidence_ids": [valid_source], "confidence": 0.9},
                             {
                                 "text": "dropped",
-                                "evidence_ids": ["path:data/notebooks/example.ipynb#cell=0;chunk=99;start=0;end=12"],
+                                "evidence_ids": ["path:uploads/example.ipynb#cell=0;chunk=99;start=0;end=12"],
                                 "confidence": 0.1,
                             },
                         ],
@@ -1247,7 +1247,7 @@ class SynthesisValidationTest(unittest.TestCase):
                             source_id="url:https://scikit-learn.org/stable/modules/generated/sklearn.model_selection.train_test_split.html",
                             snippet="Split arrays or matrices into random train and test subsets.",
                         ),
-                        _local_evidence(
+                        _upload_evidence(
                             tool="upload_search",
                             source_id="path:uploads/demo/sample.ipynb#cell=2;chunk=0;start=0;end=64",
                             path="uploads/demo/sample.ipynb",

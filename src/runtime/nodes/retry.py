@@ -94,7 +94,7 @@ def build_retrieval_feedback(
             "upload" in str(error).lower() and "unavailable" in str(error).lower()
             for error in retrieval_errors
         ):
-            return "upload retriever unavailable; switch to docs/local routes."
+            return "upload retriever unavailable; ask the user to upload the file again."
         return "retrieval tool error detected; broaden query and simplify route strategy."
     if reason == "no_evidence":
         selected_routes = ", ".join(task.route for task in planner_output.tasks) if planner_output.tasks else "none"
@@ -126,8 +126,6 @@ def build_route_specific_followup(
             return "공식 문서 조회 중 문제가 있었습니다. 라이브러리명이나 API 이름을 더 구체적으로 알려 주세요."
         if routes == {"upload"}:
             return "업로드 파일 검색 중 문제가 있었습니다. 파일을 다시 올리거나 찾을 함수명을 더 구체적으로 알려 주세요."
-        if routes == {"local"}:
-            return "로컬 예제 검색 중 문제가 있었습니다. 찾고 싶은 함수명이나 노트북 주제를 더 구체적으로 알려 주세요."
         return "검색 경로에서 문제가 있었습니다. 확인할 API 이름이나 비교 대상을 더 구체적으로 알려 주세요."
     if reason == "unsupported_claims":
         return "근거로 확인할 코드 위치나 함수명을 더 구체적으로 알려 주시면, 확인 가능한 내용만 다시 정리하겠습니다."
@@ -137,12 +135,8 @@ def build_route_specific_followup(
         return "공식 문서에서 찾을 라이브러리명이나 API 이름을 더 구체적으로 알려 주세요."
     if routes == {"upload"}:
         return "업로드한 파일에서 찾을 함수명이나 코드 위치를 더 구체적으로 알려 주세요."
-    if routes == {"local"}:
-        return "로컬 예제에서 찾을 함수명이나 노트북 주제를 더 구체적으로 알려 주세요."
     if routes == {"docs", "upload"}:
         return "공식 문서와 업로드 파일에서 함께 확인할 API나 함수명을 더 구체적으로 알려 주세요."
-    if routes == {"docs", "local"}:
-        return "공식 문서와 로컬 예제에서 함께 확인할 API나 함수명을 더 구체적으로 알려 주세요."
     return "찾고 싶은 대상과 범위를 조금 더 구체적으로 알려 주세요."
 
 

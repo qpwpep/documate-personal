@@ -98,7 +98,7 @@ def _extract_local_option_literals(snapshot: ValidationSnapshot) -> list[str]:
     seen: set[str] = set()
     for item in snapshot.parsed_evidence:
         route = route_for_item_tool(item.tool)
-        if route not in {"upload", "local"}:
+        if route != "upload":
             continue
         for option in _code_metadata_option_literals(item):
             compact = re.sub(r"\s+", "", option.lower())
@@ -129,7 +129,7 @@ def _hybrid_section_errors(snapshot: ValidationSnapshot) -> list[str]:
         for route in snapshot.required_routes
         if str(route or "").strip()
     }
-    if "docs" not in required_routes or not required_routes.intersection({"upload", "local"}):
+    if not {"docs", "upload"}.issubset(required_routes):
         return []
     if snapshot.response_payload is None:
         return []
@@ -296,7 +296,7 @@ def assess_validation(snapshot: ValidationSnapshot) -> ValidationAssessment:
         retry_reason = "unsupported_claims"
         failed_routes = set(missing_route_coverage)
         if hybrid_section_errors:
-            failed_routes.update(route for route in snapshot.required_routes if route in {"docs", "upload", "local"})
+            failed_routes.update(snapshot.required_routes)
     elif missing_route_coverage:
         retry_reason = "missing_route_coverage"
         failed_routes = set(missing_route_coverage)
