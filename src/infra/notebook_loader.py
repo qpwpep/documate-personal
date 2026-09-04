@@ -74,10 +74,6 @@ def ensure_canonical_upload_copy(path: str | Path) -> Path:
     return canonical_path
 
 
-def is_internal_canonical_path(path: str | Path) -> bool:
-    return CANONICAL_UPLOAD_DIRNAME in Path(path).parts
-
-
 def _build_deterministic_cell_id(*, cell_index: int, cell_type: str, source: str) -> str:
     digest = hashlib.sha1(
         f"{cell_index}:{cell_type}:{source}".encode("utf-8")
