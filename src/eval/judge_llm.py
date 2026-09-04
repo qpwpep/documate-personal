@@ -39,7 +39,7 @@ Failure guidance:
 - Penalize heavily if the response mainly lists links or pasted snippets instead of synthesizing.
 - Penalize if the response does not restate in the user's language.
 - For docs-focused cases, prioritize official documentation summaries over generic web-style summaries.
-- For hybrid cases, expect the official explanation and the uploaded/local comparison to be clearly separated.
+- For hybrid cases, expect the official explanation and the comparison with the case's code evidence to be clearly separated.
 - For hybrid cases, treat a missing comparison section as a significant quality failure.
 - Use response.sections as the primary structure signal when it is present.
 - For tool_action cases, do not expect citations or retrieval grounding when the case itself does not require them.

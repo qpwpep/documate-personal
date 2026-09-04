@@ -2,6 +2,8 @@
 
 DocuMate 벤치마크는 FastAPI의 `POST /agent` 엔드포인트를 대상으로 하는 온라인 평가만 지원합니다. 실행 진입점은 `src/eval/main.py`이며, 설정 기준은 `data/benchmarks/config.toml`입니다.
 
+평가 category는 `docs_only`, `rag_only`, `hybrid`, `tool_action`입니다. `rag_only`는 기존 fixture와 결과의 호환성을 위한 분류명이며, 현재 fixture의 `rag_only`와 `hybrid` 파일 검색은 `upload_search`를 기대합니다. 런타임 검색 route는 `docs`, `upload`이고, 업로드 evidence의 `kind="local"`과 fixture의 `require_local_citation`은 파일 근거 인용을 나타냅니다. 과거 결과에 남은 `local` route와 `rag_search` 호출은 당시 실행 기록으로 해석합니다.
+
 ## 1. 사전 준비
 
 - FastAPI 서버가 실행 중이어야 합니다.

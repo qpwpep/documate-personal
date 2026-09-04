@@ -6,7 +6,7 @@ DocuMate의 설계 판단과 기술적 선택
 
 이 문서는 DocuMate를 원본 팀 프로젝트에서 단계형 LangGraph 런타임과 120-case benchmark 체계를 갖춘 포트폴리오 개선본으로 재설계하면서, 어떤 기준으로 구조를 바꾸고 기능을 확장했는지 설명합니다. 단순히 기능 목록을 나열하기보다, 실행 경로를 안정적으로 만들기 위해 어떤 문제를 분리했고 어떤 트레이드오프를 받아들였는지 기록하는 데 목적이 있습니다.
 
-DocuMate는 LangGraph 기반 학습 보조 에이전트입니다. 현재 구조는 공식 문서 검색, 로컬 노트북 RAG, 세션 업로드 파일 검색, 구조화된 응답, 저장 및 Slack 전송 액션을 FastAPI와 Streamlit 런타임 위에서 함께 제공합니다. 실행 기준 코드는 `src/app`, `src/core`, `src/infra`, `src/runtime`, `src/eval` 계층으로 분리되어 있고, `archive`는 현재 실행 경로가 아니라 팀 프로젝트 원형과 참고 자료를 보관하는 영역입니다.
+DocuMate는 LangGraph 기반 학습 보조 에이전트입니다. 현재 구조는 공식 문서 검색, 세션 업로드 파일 검색, 구조화된 응답, 저장 및 Slack 전송 액션을 FastAPI와 Streamlit 런타임 위에서 함께 제공합니다. 실행 기준 코드는 `src/app`, `src/core`, `src/infra`, `src/runtime`, `src/eval` 계층으로 분리되어 있고, `archive`는 현재 실행 경로가 아니라 팀 프로젝트 원형과 참고 자료를 보관하는 영역입니다.
 
 ## 2. 핵심 설계 판단
 
@@ -28,9 +28,9 @@ planner와 synthesis에 전달되는 summary는 과거 사용자 입력에서 �
 
 ### 검색 route 분리
 
-검색 소스는 `docs`, `local`, `upload` route로 분리했습니다. 공식 문서 검색, 로컬 노트북 RAG, 세션 업로드 파일 검색은 데이터 출처와 신뢰 기준이 다르기 때문입니다.
+검색 소스는 `docs`, `upload` route로 분리했습니다. 공식 문서 검색과 세션 업로드 파일 검색은 데이터 출처와 신뢰 기준이 다르기 때문입니다. 필요한 출처는 업로드 가용성과 무관하게 LLM이 판단하고, 스키마 검증을 통과한 `PlannerOutput.tasks`를 기준으로 실행합니다. 검색어 후처리는 공백만 정규화해 주제와 식별자를 언어에 관계없이 보존합니다.
 
-`docs` route는 Tavily 검색을 사용하되 `agent_rules.toml`의 allowlist, query hint, domain/path prefix, URL 검증, topic purity, exact identifier coverage를 통과한 결과만 evidence로 사용합니다. `local` route는 `data/index`의 Chroma 인덱스를 조회하고, `upload` route는 현재 세션에 업로드된 `.py` 또는 `.ipynb` 파일에서 만든 임시 retriever만 사용합니다.
+`docs` route는 Tavily 검색을 사용하되 [agent_rules.toml](../src/infra/config/agent_rules.toml)의 allowlist, query hint, domain/path prefix, URL 검증, topic purity, exact identifier coverage를 통과한 결과만 evidence로 사용합니다. `upload` route는 현재 세션에 업로드된 `.py` 또는 `.ipynb` 파일에서 만든 임시 Chroma retriever만 사용합니다. 파일 기반 근거의 범위를 사용자가 해당 세션에 제공한 파일로 한정하는 것이 이 경계의 기준입니다.
 
 route를 분리하면 응답 단계에서 evidence의 출처를 더 명확히 다룰 수 있고, 특정 소스가 실패해도 전체 흐름을 바로 중단하지 않고 다른 route 결과를 활용할 수 있습니다. 현재 `retrieve_dispatch`는 여러 route task가 필요한 경우 `ThreadPoolExecutor`로 병렬 실행하고, 결과는 planner task 순서대로 다시 정렬합니다.
 
@@ -46,7 +46,7 @@ route를 분리하면 응답 단계에서 evidence의 출처를 더 명확히 �
 
 이 흐름은 모든 실패를 무조건 재시도하지 않습니다. `RetryState`는 failed route, preserved evidence, preserved retrieval diagnostics, retry scope를 보존합니다. 그래서 일부 route만 실패한 경우에는 성공한 route의 evidence를 재사용하고 실패 route만 다시 호출합니다. unsupported claim이나 section 누락처럼 검색 실패보다 response repair에 가까운 문제는 기존 evidence를 기준으로 payload를 결정적으로 보정합니다.
 
-사용자의 의도가 불명확하거나 업로드 파일이 필요한데 retriever가 없는 경우에는 후속 질문으로 전환할 수 있도록 두어, 잘못된 확신을 가진 답변을 줄이는 방향을 선택했습니다.
+LLM 호출이나 출력 검증이 실패하면 `planner_unavailable`로 기록하고 재요청을 안내합니다. 필요한 업로드 파일의 retriever가 없으면 파일 업로드를 안내합니다. 두 경우 모두 검색·저장·Slack 전송을 중단해, 실패 안내나 이전 답변이 요청한 결과물로 전달되지 않도록 합니다.
 
 ### FastAPI + Streamlit 런타임 분리
 
@@ -68,7 +68,7 @@ DocuMate는 포트폴리오 프로젝트이지만, 검색 품질과 근거 검�
 
 ### 여러 검색 소스를 하나로 합치지 않음
 
-공식 문서, 로컬 RAG, 업로드 파일을 하나의 retriever처럼 다루면 인터페이스는 단순해집니다. 하지만 답변이 어떤 근거를 사용했는지 설명하기 어렵고, 실패 원인을 route별로 추적하기도 어렵습니다.
+공식 문서와 업로드 파일을 하나의 retriever처럼 다루면 인터페이스는 단순해집니다. 하지만 답변이 어떤 근거를 사용했는지 설명하기 어렵고, 실패 원인을 route별로 추적하기도 어렵습니다.
 
 현재 구조는 route별 처리 비용이 조금 더 들지만, evidence 출처와 진단 정보를 명확히 남기는 쪽을 우선했습니다. `RetrievalDiagnostic`에는 route status, error code, provider time, URL validation time, filtering count, warning이 남기 때문에 benchmark와 debug payload에서 실패 원인을 좁히기 쉽습니다.
 
@@ -88,7 +88,7 @@ ToolMessage 원문과 provider metadata를 durable snapshot에 저장하지 않�
 
 DocuMate에서 가장 까다로웠던 문제는 "더 빠른 응답"과 "더 믿을 수 있는 근거"가 자주 반대 방향으로 움직인다는 점이었습니다. evidence를 넉넉히 모으면 citation compliance와 답변 신뢰도는 좋아지지만, 검색 시간이 늘고 synthesis prompt가 무거워집니다. 반대로 속도만 보고 route나 context를 줄이면 필요한 근거를 놓쳐 tool recall과 최종 답변 품질이 흔들릴 수 있습니다.
 
-그래서 이 문제를 단순 최적화가 아니라, latency와 retrieval quality 사이의 균형을 계측 가능한 시스템 문제로 다시 정의했습니다. 전체 응답 시간을 하나의 숫자로 보지 않고 `summarize`, `planner`, `retrieval`, `pre_synthesis_validation`, `synthesis`, `post_synthesis_validation`, `action_postprocess` 단계로 나누어 latency trace를 남겼습니다. retrieval도 route별 latency와 status를 기록해 `docs`, `upload`, `local` 중 어느 경로가 병목인지, no result인지, timeout인지 debug payload와 benchmark output에서 바로 추적할 수 있게 했습니다.
+그래서 이 문제를 단순 최적화가 아니라, latency와 retrieval quality 사이의 균형을 계측 가능한 시스템 문제로 다시 정의했습니다. 전체 응답 시간을 하나의 숫자로 보지 않고 `summarize`, `planner`, `retrieval`, `pre_synthesis_validation`, `synthesis`, `post_synthesis_validation`, `action_postprocess` 단계로 나누어 latency trace를 남겼습니다. retrieval도 route별 latency와 status를 기록해 `docs`, `upload` 중 어느 경로가 병목인지, no result인지, timeout인지 debug payload와 benchmark output에서 바로 추적할 수 있게 했습니다.
 
 응답 속도 개선은 "덜 찾기"보다 "필요한 것을 동시에, 제한 시간 안에서 찾기"에 가깝게 접근했습니다. hybrid 질문에서 여러 retrieval task가 필요할 때는 `ThreadPoolExecutor`로 route fan-out을 병렬 실행하고, 결과는 planner task 순서대로 다시 정렬합니다. 외부 검색인 docs route에는 개별 Tavily 요청마다 `DOCS_SEARCH_TIMEOUT_SECONDS`를 적용하고, timeout은 `RETRIEVAL_DOCS_TIMEOUT` error code와 diagnostics로 남겨 원인 분석이 가능하게 했습니다.
 
@@ -98,9 +98,9 @@ planner와 synthesis는 각각 하나의 구조화 모델 호출 경로를 사�
 
 retrieval 품질은 "높은 score의 결과를 많이 가져오기"가 아니라 "답변에 실제로 쓸 수 있는 근거만 남기기"로 정의했습니다. docs route는 공식 문서 domain/path prefix를 통과한 결과만 evidence로 사용하고, query hint와 fallback query로 라이브러리별 검색 범위를 좁힙니다. 이후 topic purity, exact identifier coverage, chrome-only page 여부를 확인해 근거로 쓰기 어려운 결과를 제거합니다.
 
-local/upload route에는 vector score에 lexical signal을 결합했습니다. query의 identifier, keyword, parameter hint를 기준으로 검색 결과를 rerank하고, 긴 chunk는 질문 토큰이 실제로 등장하는 주변 window로 압축합니다. 코드 추출처럼 원문 보존이 중요한 질문은 예외로 처리해, prompt budget을 줄이면서도 사용자가 찾는 코드 맥락은 잃지 않게 했습니다.
+upload route에는 vector score에 lexical signal을 결합했습니다. query의 identifier, keyword, parameter hint를 기준으로 검색 결과를 rerank하고, 긴 chunk는 질문 토큰이 실제로 등장하는 주변 window로 압축합니다. 코드 추출처럼 원문 보존이 중요한 질문은 예외로 처리해, prompt budget을 줄이면서도 사용자가 찾는 코드 맥락은 잃지 않게 했습니다.
 
-synthesis 단계에서는 category별 prompt budget을 적용했습니다. `docs_only`, `rag_only`, `upload_only`, `hybrid`, `tool_action`에 따라 evidence 개수, snippet 길이, 출력 token 상한을 다르게 두었습니다. hybrid 답변은 source coverage가 핵심이므로 docs와 upload/local evidence를 균형 있게 남기고, 단일 route나 action 중심 요청은 더 작은 budget으로 불필요한 context를 줄였습니다. structured synthesis가 timeout되면 compact structured fallback 또는 deterministic grounded fallback으로 내려가도록 해, 빈 응답이나 과도한 실패 전파를 줄였습니다.
+synthesis 단계에서는 category별 prompt budget을 적용했습니다. `docs_only`, `upload_only`, `hybrid`, `tool_action`에 따라 evidence 개수, snippet 길이, 출력 token 상한을 다르게 두었습니다. hybrid 답변은 source coverage가 핵심이므로 docs와 upload evidence를 균형 있게 남기고, 단일 route나 action 중심 요청은 더 작은 budget으로 불필요한 context를 줄였습니다. structured synthesis가 timeout되면 compact structured fallback 또는 deterministic grounded fallback으로 내려가도록 해, 빈 응답이나 과도한 실패 전파를 줄였습니다.
 
 최종적으로 이 문제의 성공 기준은 "빠르다" 하나가 아니었습니다. release pass rate, tool precision, tool recall, citation compliance, p95 latency, 평균 cost를 함께 보며 변경을 평가했습니다. latency를 줄이는 변경이 근거 품질을 훼손하지 않는지, retrieval 필터링을 강화한 변경이 recall을 떨어뜨리지 않는지 benchmark로 확인하는 흐름을 만든 것이 이 프로젝트에서 가장 중요한 엔지니어링 판단이었습니다.
 
@@ -130,7 +130,7 @@ synthesis 단계에서는 category별 prompt budget을 적용했습니다. `docs
 
 기능 추가 자체보다 release gate를 통과하는 재현 가능한 상태를 우선합니다. benchmark CLI와 `uv run pytest -q` 결과를 문서화해, 프로젝트가 어느 기준에서 정상 동작하는지 확인할 수 있게 했습니다.
 
-평가 파이프라인은 실제 FastAPI `POST /agent`를 호출하는 online benchmark를 기준으로 합니다. `docs_only`, `rag_only`, `hybrid`, `tool_action` category를 나누고, rule 기반 지표와 LLM judge를 함께 사용합니다. hard gate는 `data/benchmarks/config.toml`에서 관리하며, report와 history 산출물은 `src/eval`에서 생성합니다.
+평가 파이프라인은 실제 FastAPI `POST /agent`를 호출하는 online benchmark를 기준으로 합니다. `docs_only`, `rag_only`, `hybrid`, `tool_action` category를 나누고, rule 기반 지표와 LLM judge를 함께 사용합니다. 평가의 `rag_only`는 기존 fixture와 결과를 읽기 위해 유지하는 분류명이며, 현재 fixture에서는 업로드 검색을 평가합니다. 검색 route 및 인용 유형과의 구분은 [벤치마크 가이드](benchmarking.md)에 정리했습니다. hard gate는 `data/benchmarks/config.toml`에서 관리하며, report와 history 산출물은 `src/eval`에서 생성합니다.
 
 ## 6. 개선 방향
 
@@ -140,7 +140,7 @@ DocuMate의 다음 개선 방향은 더 많은 기능을 붙이는 것보다, �
 - retrieval route별 warning, error code, latency breakdown을 더 쉽게 비교할 수 있게 report를 정리합니다.
 - Streamlit 데모에서 evidence와 claim의 관계를 더 직관적으로 확인할 수 있는 표시 방식을 개선합니다.
 - upload retriever build와 synthesis fallback의 비용/지연을 benchmark summary에서 더 세밀하게 분리합니다.
-- benchmark fixture를 주기적으로 보강해 공식 문서 검색, 로컬 RAG, 업로드 검색, tool action 흐름의 회귀 범위를 넓힙니다.
+- benchmark fixture를 주기적으로 보강해 공식 문서 검색, 업로드 검색, tool action 흐름의 회귀 범위를 넓힙니다.
 - rolling summary의 사실 보존율을 장기 대화 전용 eval fixture로 계측하고, 모델별 tokenizer를 알 수 있을 때 현재 보수적 추정기를 교정합니다.
 - 인증·소유권과 암호화를 포함한 외부 session store가 필요해지면 process restart와 multi-worker를 지원하는 별도 persistence 계층을 도입합니다.
 - Streamlit의 새 대화 동작이 이전 backend session을 TTL까지 남겨 두지 않고 즉시 폐기하도록 reset API의 동시성·멱등성 계약을 설계합니다.

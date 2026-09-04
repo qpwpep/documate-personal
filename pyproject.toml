@@ -1,7 +1,7 @@
 [project]
 name = "DocuMate"
 version = "0.2.0"
-description = "DocuMate: a LangGraph-based learning assistant combining official-doc search, local RAG, and session chat."
+description = "DocuMate: a LangGraph-based learning assistant combining official-doc search, session upload retrieval, and chat."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
