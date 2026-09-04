@@ -38,7 +38,7 @@ def maybe_short_circuit_synthesis(
             ],
         )
 
-    if should_short_circuit_action_only(
+    if not context.retrieval_required and should_short_circuit_action_only(
         user_input=context.user_input,
         messages=context.messages,
         slack_target_available=context.slack_target_available,

@@ -26,19 +26,22 @@ def make_pre_synthesis_validation_node(verbose: bool):
 
         if guided_followup:
             planner_output = parse_planner_output(planner.output, [])
+            planner_unavailable = planner.diagnostics.reason == "planner_unavailable"
             needs_retry, next_retry_context, retrieval_feedback = build_retry_update(
                 retry_context=retry_context,
-                retry_reason="blocked_missing_upload",
+                retry_reason=None if planner_unavailable else "blocked_missing_upload",
                 planner_output=planner_output,
                 retrieval_errors=[],
                 score_avg=None,
-                failed_routes={"upload"},
+                failed_routes=set() if planner_unavailable else {"upload"},
             )
             _ = needs_retry
             updates: GraphState = {
                 "retry": next_retry_context,
             }
             updates.update(build_followup_updates(guided_followup, attempt=response.synthesis_attempt))
+            if planner_unavailable:
+                return updates
             updates["debug"] = debug.model_copy(
                 update={
                     "validation_errors": [
