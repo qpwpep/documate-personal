@@ -59,6 +59,7 @@ class SynthesisPromptBuilderTest(unittest.TestCase):
                 },
                 {
                     "kind": "local",
+                    "tool": "upload_search",
                     "source_id": "path:uploads/demo.ipynb#chunk=0",
                     "url_or_path": "uploads/demo.ipynb",
                     "snippet": "Notebook example",
@@ -103,8 +104,8 @@ class SynthesisPromptBuilderTest(unittest.TestCase):
         self.assertTrue(all("[Official Docs Evidence]" not in content for content in system_messages))
         self.assertTrue(all("[Uploaded Code Evidence]" not in content for content in system_messages))
         self.assertIn("action_rules:", turn_messages[0])
-        self.assertIn("hybrid_layout=official_docs -> upload/local detail -> comparison", turn_messages[0])
-        self.assertIn("upload_code uses local/upload option_literals", turn_messages[0])
+        self.assertIn("hybrid_layout=official_docs -> upload detail -> comparison", turn_messages[0])
+        self.assertIn("upload_code uses upload option_literals", turn_messages[0])
         self.assertIn("retry_note=evidence validation failed previously", turn_messages[0])
         evidence_message = next(content for content in system_messages if "[Retrieved Evidence]" in content)
         self.assertIn("candidate_facts: max_iter=200", evidence_message)
@@ -185,8 +186,8 @@ class SynthesisPromptBuilderTest(unittest.TestCase):
         ]
         turn_message = next(content for content in system_messages if "[Turn Contract]" in content)
         self.assertIn("required_sections=summary, checklist, official_docs, upload_code, comparison", turn_message)
-        self.assertIn("hybrid_layout=official_docs -> upload/local detail -> comparison", turn_message)
-        self.assertIn("upload_code uses local/upload option_literals", turn_message)
+        self.assertIn("hybrid_layout=official_docs -> upload detail -> comparison", turn_message)
+        self.assertIn("upload_code uses upload option_literals", turn_message)
 
     def test_code_example_request_requires_fenced_code_block_in_turn_contract(self) -> None:
         state = build_graph_state_input(

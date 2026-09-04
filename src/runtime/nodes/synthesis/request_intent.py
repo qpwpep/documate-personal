@@ -87,4 +87,4 @@ def should_use_deterministic_grounded_direct(
         return False
     if not _evidence_contains_identifier(user_input, evidence_items):
         return False
-    return selected_routes in ({"upload"}, {"local"}) and len(evidence_items) == 1
+    return selected_routes == {"upload"} and len(evidence_items) == 1

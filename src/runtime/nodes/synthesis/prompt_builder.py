@@ -30,7 +30,7 @@ SYNTHESIS_SELECTION_TEMPLATE = (
     "Treat Retrieved Evidence as a candidate pool, not as prose to rewrite freely.\n"
     "Prefer candidate_facts and code_metadata over raw snippets for code/options.\n"
     "Select supported facts, assemble short claims, then map them into requested sections.\n"
-    "For hybrid docs plus upload/local answers: official_docs first, uploaded/local detail next, comparison last."
+    "For hybrid docs plus upload answers: official_docs first, uploaded detail next, comparison last."
 )
 PLAIN_SUMMARY_ATTACH_CONTRACT = (
     "[Plain Summary Attach Fallback]\n"
@@ -146,8 +146,6 @@ def _infer_required_routes_from_evidence(items: list[dict[str, Any]]) -> list[st
     }
     if "upload_search" in local_tools:
         routes.append("upload")
-    elif local_tools:
-        routes.append("local")
     return routes
 
 
@@ -173,14 +171,14 @@ def _build_turn_contract_block(
     if has_hybrid_evidence:
         has_comparison_section = "comparison" in answer_contract.required_sections
         if has_comparison_section:
-            lines.append("- hybrid_layout=official_docs -> upload/local detail -> comparison")
+            lines.append("- hybrid_layout=official_docs -> upload detail -> comparison")
         else:
-            lines.append("- hybrid_layout=cover official docs and upload/local details inside the requested sections")
+            lines.append("- hybrid_layout=cover official docs and upload details inside the requested sections")
         lines.append("- each hybrid section should include the necessary supported details without duplicating other sections")
         if requires_upload_section:
-            lines.append("- upload_code uses local/upload option_literals or call kwargs when present")
+            lines.append("- upload_code uses upload option_literals or call kwargs when present")
         elif has_comparison_section:
-            lines.append("- put uploaded/local details inside the comparison section")
+            lines.append("- put uploaded details inside the comparison section")
     if "code_example" in answer_contract.required_sections:
         lines.append("- code_block_required=true")
         lines.append("- code_example section must include at least one fenced code block with concrete sample code")

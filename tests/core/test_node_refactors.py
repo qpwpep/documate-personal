@@ -240,7 +240,7 @@ class NodeRefactorTest(unittest.TestCase):
 
         self.assertTrue(
             any(
-                "hybrid_layout=official_docs -> upload/local detail -> comparison" in str(message.content)
+                "hybrid_layout=official_docs -> upload detail -> comparison" in str(message.content)
                 for message in model_messages
             )
         )

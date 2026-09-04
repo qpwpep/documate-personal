@@ -1,9 +1,14 @@
 import unittest
 
-from src.core.request_contracts import infer_answer_contract
+from src.core.request_contracts import AnswerContract, infer_answer_contract
 
 
 class RequestContractsTest(unittest.TestCase):
+    def test_answer_contract_requires_no_upload_section_when_only_legacy_local_route_is_present(self) -> None:
+        contract = infer_answer_contract("Compare official docs with local code.", ["docs", "local"])
+
+        self.assertEqual(contract, AnswerContract())
+
     def test_code_example_markers_require_code_example_section(self) -> None:
         examples = [
             "BeautifulSoup으로 특정 태그 찾는 예제를 보여줘",
