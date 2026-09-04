@@ -6,8 +6,8 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
-PlannerRouteName = Literal["docs", "upload", "local"]
-PLANNER_ROUTES: tuple[PlannerRouteName, ...] = ("docs", "upload", "local")
+PlannerRouteName = Literal["docs", "upload"]
+PLANNER_ROUTES: tuple[PlannerRouteName, ...] = ("docs", "upload")
 PLANNER_WARNING_DUPLICATE_ROUTE_MERGED = "duplicate_route_merged"
 
 

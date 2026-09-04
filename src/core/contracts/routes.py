@@ -1,15 +1,16 @@
 from __future__ import annotations
 
-from typing import Iterable, Literal
+from typing import Iterable
+
+from src.core.planner_schema import PLANNER_ROUTES, PlannerRouteName
 
 
-RouteName = Literal["docs", "upload", "local"]
+RouteName = PlannerRouteName
 
-ROUTE_ORDER: tuple[RouteName, ...] = ("docs", "upload", "local")
+ROUTE_ORDER = PLANNER_ROUTES
 TOOL_TO_ROUTE: dict[str, RouteName] = {
     "tavily_search": "docs",
     "upload_search": "upload",
-    "rag_search": "local",
 }
 
 

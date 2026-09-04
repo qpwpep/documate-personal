@@ -177,6 +177,7 @@ class DebugCollector:
         errors: list[str],
     ) -> list[dict[str, Any]]:
         collected = []
+        # Read evidence in legacy traces as well as the currently executable tools.
         evidence_tools = {"tavily_search", "rag_search", "upload_search"}
 
         for message in current_turn_messages:

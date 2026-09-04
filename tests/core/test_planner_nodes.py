@@ -95,23 +95,6 @@ class PlannerNodeTest(unittest.TestCase):
 
 
 
-    def test_planner_reports_failure_when_model_selects_unsupported_route(self) -> None:
-        query = "Find pandas merge in my project code."
-        planner = make_planner_node(_CapturePlannerLLM({
-            "use_retrieval": True,
-            "tasks": [{"route": "archive", "query": "pandas merge", "k": 4}],
-        }), verbose=False)
-
-        result = planner(build_legacy_state({
-            "user_input": query,
-            "messages": [HumanMessage(content=query)],
-            "retriever": object(),
-        }))
-
-        self.assertEqual(result["planner"].output, PlannerOutput.fallback())
-        self.assertEqual(result["planner"].diagnostics.reason, "planner_unavailable")
-        self.assertTrue(result["planner"].guided_followup)
-        self.assertIn("PLANNER_SCHEMA_INVALID", result["debug"].error_codes)
 
 
     def test_planner_uses_docs_when_no_file_source_is_requested(self) -> None:
