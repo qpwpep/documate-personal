@@ -91,7 +91,7 @@ def infer_answer_contract(query: str, required_routes: list[str] | None = None) 
         required_sections.extend(["interpretation_a", "interpretation_b"])
 
     route_set = {str(route or "").strip() for route in (required_routes or []) if str(route or "").strip()}
-    split_by_source = "docs" in route_set and bool(route_set.intersection({"upload", "local"}))
+    split_by_source = {"docs", "upload"}.issubset(route_set)
     if "docs" in route_set and not split_by_source and is_options_summary_request(query):
         required_sections.append("options")
     if split_by_source:
@@ -134,7 +134,7 @@ def render_answer_contract_prompt(contract: AnswerContract) -> str:
             lines.append("- Keep official_docs, upload_code, and comparison section bodies to 2-3 short sentences each.")
         else:
             lines.append("- Keep official_docs to 2-3 short sentences and comparison to 1-2 short sentences.")
-            lines.append("- Include uploaded/local code details inside comparison in one concrete sentence.")
+            lines.append("- Include uploaded code details inside comparison in one concrete sentence.")
         lines.append("- Use at most 4 total claims for hybrid answers; prefer 3 claims when possible.")
         lines.append("- Keep the comparison to 1-2 sentences about the official-docs match or difference.")
     return "\n".join(lines)

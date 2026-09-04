@@ -199,10 +199,8 @@ def select_primary_evidence_items(
             if route and route not in requested_routes:
                 requested_routes.append(route)
 
-        is_hybrid_routes = len(requested_routes) > 1 and "docs" in requested_routes and any(
-            route in {"upload", "local"} for route in requested_routes
-        )
-        if len(requested_routes) == 1 and requested_routes[0] in {"upload", "local"}:
+        is_hybrid_routes = {"docs", "upload"}.issubset(requested_routes)
+        if requested_routes == ["upload"]:
             route = requested_routes[0]
             selection_query = str(planner_output.tasks[0].query or "").strip() or user_input
             route_matches = [item for item in evidence_items if route_for_evidence(item) == route]
@@ -279,9 +277,7 @@ def select_grounded_fallback_evidence_items(
         if route and route not in requested_routes:
             requested_routes.append(route)
 
-    is_hybrid_routes = len(requested_routes) > 1 and "docs" in requested_routes and any(
-        route in {"upload", "local"} for route in requested_routes
-    )
+    is_hybrid_routes = {"docs", "upload"}.issubset(requested_routes)
     if is_hybrid_routes:
         selected: list[EvidenceItem] = []
         for route in requested_routes:

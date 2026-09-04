@@ -32,13 +32,6 @@ _STANDARD_PROFILE_BY_CATEGORY: dict[str, SynthesisBudgetProfile] = {
         evidence_chars=1200,
         max_evidence_items=1,
     ),
-    "rag_only": SynthesisBudgetProfile(
-        category="rag_only",
-        max_tokens=1024,
-        snippet_chars=300,
-        evidence_chars=1200,
-        max_evidence_items=1,
-    ),
     "upload_only": SynthesisBudgetProfile(
         category="upload_only",
         max_tokens=1024,
@@ -99,12 +92,10 @@ def resolve_synthesis_budget_profile(
     else:
         routes = _requested_routes(planner_output)
         route_set = set(routes)
-        if "docs" in route_set and route_set.intersection({"upload", "local"}):
+        if {"docs", "upload"}.issubset(route_set):
             base_profile = _HYBRID_PROFILE
         elif route_set == {"docs"}:
             base_profile = _STANDARD_PROFILE_BY_CATEGORY["docs_only"]
-        elif route_set == {"local"}:
-            base_profile = _STANDARD_PROFILE_BY_CATEGORY["rag_only"]
         elif route_set == {"upload"}:
             base_profile = _STANDARD_PROFILE_BY_CATEGORY["upload_only"]
         else:
@@ -112,7 +103,7 @@ def resolve_synthesis_budget_profile(
 
     max_evidence_items = base_profile.max_evidence_items
     if (
-        base_profile.category in {"docs_only", "rag_only", "upload_only"}
+        base_profile.category in {"docs_only", "upload_only"}
         and _allows_two_standard_evidence_items(user_input)
     ):
         max_evidence_items = 2
