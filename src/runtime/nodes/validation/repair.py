@@ -114,7 +114,7 @@ def _extract_local_option_literals(snapshot: ValidationSnapshot) -> list[str]:
     seen: set[str] = set()
     for item in snapshot.parsed_evidence:
         route = route_for_tool(str(item.tool or ""))
-        if route not in {"upload", "local"}:
+        if route != "upload":
             continue
         for option in _code_metadata_option_literals(item):
             compact = re.sub(r"\s+", "", option.lower())
@@ -180,7 +180,7 @@ def _comparison_section_body(
     local_body = _section_body_from_claims(
         snapshot=snapshot,
         payload=payload,
-        routes={"upload", "local"},
+        routes={"upload"},
     )
     local_options_text = _local_options_text(snapshot)
     if local_options_text and not _contains_local_option(local_body, _extract_local_option_literals(snapshot)):
@@ -194,8 +194,7 @@ def _comparison_section_body(
     )
     if not comparison_lines:
         return ""
-    local_route = "upload" if "upload" in snapshot.required_routes else "local"
-    comparison_lines.append(hybrid_limit_sentence(local_route))
+    comparison_lines.append(hybrid_limit_sentence())
     return "\n".join(comparison_lines)
 
 
@@ -213,11 +212,6 @@ def repair_required_sections(
     existing_by_kind = {section.kind: section for section in normalized_sections}
     repaired_sections: list[AnswerSection] = []
     base_answer = resolve_answer_text(answer=payload.answer, sections=normalized_sections)
-    required_routes = {
-        str(route or "").strip()
-        for route in snapshot.required_routes
-        if str(route or "").strip()
-    }
     for kind in answer_contract.required_sections:
         section = existing_by_kind.get(kind)
         if section is not None:
@@ -252,7 +246,7 @@ def repair_required_sections(
             body = _section_body_from_claims(
                 snapshot=snapshot,
                 payload=payload,
-                routes={"upload", "local"},
+                routes={"upload"},
             )
             options_text = _local_options_text(snapshot)
             if options_text and not _contains_local_option(body, _extract_local_option_literals(snapshot)):
@@ -266,7 +260,7 @@ def repair_required_sections(
         repaired_sections.append(
             AnswerSection(
                 kind=kind,
-                heading=section_heading(kind, required_routes=required_routes),
+                heading=section_heading(kind),
                 body=body,
             )
         )

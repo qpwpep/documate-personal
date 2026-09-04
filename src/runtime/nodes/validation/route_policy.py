@@ -20,7 +20,7 @@ def clamp_score(value: Any) -> float | None:
 
 def is_hybrid_compare_routes(required_routes: list[str] | None) -> bool:
     routes = {str(route or "").strip() for route in (required_routes or []) if str(route or "").strip()}
-    return "docs" in routes and bool(routes.intersection({"upload", "local"}))
+    return {"docs", "upload"}.issubset(routes)
 
 
 def route_max_score(items: list[EvidenceItem]) -> float | None:
@@ -58,7 +58,7 @@ def resolve_validation_query(
 ) -> str:
     normalized_query = str(route_query or "").strip()
     if (
-        route in {"upload", "local"}
+        route == "upload"
         and is_hybrid_compare_routes(required_routes)
         and not extract_code_identifiers(normalized_query)
         and len(extract_keywords(normalized_query)) < 2
@@ -107,7 +107,7 @@ def route_passes_validation(
             (normalized_score is not None and normalized_score >= 0.5)
             or route_has_strong_lexical_match(effective_query, items)
         )
-    if route in {"upload", "local"} and is_hybrid_compare_routes(required_routes):
+    if route == "upload" and is_hybrid_compare_routes(required_routes):
         return bool(
             (normalized_score is not None and normalized_score >= HYBRID_LOCAL_MIN_NORMALIZED_SCORE)
             or route_has_hybrid_local_lexical_match(effective_query, items)

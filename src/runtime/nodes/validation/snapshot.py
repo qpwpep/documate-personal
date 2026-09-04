@@ -50,13 +50,13 @@ def build_validation_snapshot(
     response_payload: AgentResponsePayloadModel | None,
 ) -> ValidationSnapshot:
     retrieval_required = bool(planner_output.use_retrieval and planner_output.tasks)
-    evidence_by_route: dict[str, list[EvidenceItem]] = {"docs": [], "upload": [], "local": []}
+    evidence_by_route: dict[str, list[EvidenceItem]] = {"docs": [], "upload": []}
     for item in parsed_evidence:
         route = route_for_item_tool(item.tool)
         if route:
             evidence_by_route.setdefault(route, []).append(item)
 
-    diagnostics_by_route: dict[str, list[RetrievalDiagnostic]] = {"docs": [], "upload": [], "local": []}
+    diagnostics_by_route: dict[str, list[RetrievalDiagnostic]] = {"docs": [], "upload": []}
     for item in current_attempt_retrieval_diagnostics:
         route = str(item.route or "").strip()
         if route:
