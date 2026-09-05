@@ -184,21 +184,6 @@ def sync_runtime_reference_settings_sections(
     )
 
 
-def build_readme_app_settings_block() -> str:
-    return build_runtime_reference_app_settings_block()
-
-
-def build_readme_benchmark_settings_block(config_path: Path = DEFAULT_BENCHMARK_CONFIG_PATH) -> str:
-    return build_runtime_reference_benchmark_settings_block(config_path)
-
-
-def sync_readme_settings_sections(
-    readme_text: str,
-    config_path: Path = DEFAULT_BENCHMARK_CONFIG_PATH,
-) -> str:
-    return sync_runtime_reference_settings_sections(readme_text, config_path)
-
-
 def build_unified_diff(path: Path, actual: str, expected: str) -> str:
     return "\n".join(
         difflib.unified_diff(
@@ -213,11 +198,8 @@ def build_unified_diff(path: Path, actual: str, expected: str) -> str:
 
 __all__ = [
     "build_env_example_text",
-    "build_readme_app_settings_block",
-    "build_readme_benchmark_settings_block",
     "build_runtime_reference_app_settings_block",
     "build_runtime_reference_benchmark_settings_block",
     "build_unified_diff",
-    "sync_readme_settings_sections",
     "sync_runtime_reference_settings_sections",
 ]
