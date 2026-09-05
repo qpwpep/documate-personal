@@ -12,12 +12,8 @@ from src.runtime.nodes.actions.policy import is_action_only_request
 CHECKLIST_HINTS = ("checklist", "체크리스트")
 SUMMARY_HINTS = ("summary", "요약")
 PRACTICAL_HINTS = ("실무", "practical")
-BEGINNER_HINTS = ("초보", "beginner", "단계별", "step-by-step")
 ASSUMPTION_HINTS = ("가정", "assumption", "assumptions")
-AMBIGUITY_HINTS = ("모호", "해석 2가지")
-CLARIFICATION_HINTS = ("확인 질문", "clarification")
 CONSTRAINT_HINTS = ("제약", "용어 정의")
-PITFALL_HINTS = ("실수하기 쉬운 사안", "pitfall", "pitfalls")
 LOW_SIGNAL_ACTION_PATTERNS = (
     "현재 대화에는",
     "이전 답변 본문이 없습니다",
@@ -92,10 +88,6 @@ def needs_action_body_rewrite(*, user_input: str, final_answer: str) -> bool:
     if any(marker in lowered for marker in LOW_SIGNAL_ACTION_PATTERNS):
         return True
     return looks_like_meta_only_checklist(stripped)
-
-
-def delivery_label(*, user_input: str) -> str:
-    return "공유용 본문" if needs_slack(user_input) else "저장용 본문"
 
 
 def infer_delivery_subject(*, user_input: str) -> str:
