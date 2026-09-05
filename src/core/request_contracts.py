@@ -114,32 +114,6 @@ def infer_answer_contract(query: str, required_routes: list[str] | None = None) 
     )
 
 
-def render_answer_contract_prompt(contract: AnswerContract) -> str:
-    lines = ["[Answer Contract]"]
-    lines.append(
-        "- required_sections=" + (", ".join(contract.required_sections) if contract.required_sections else "none")
-    )
-    lines.append(f"- ordered_steps={str(contract.ordered_steps).lower()}")
-    lines.append(f"- split_by_source={str(contract.split_by_source).lower()}")
-    lines.append("- Return `sections` whose `kind` values exactly match the required sections when they are requested.")
-    lines.append("- Do not omit required sections.")
-    if "code_example" in contract.required_sections:
-        lines.append("- The code_example section must include at least one fenced code block with runnable sample code.")
-    if "options" in contract.required_sections:
-        lines.append("- The options section must group API parameters/options into concise bullets by purpose.")
-        lines.append("- Prefer exact parameter names from Retrieved Evidence candidate_facts or doc_metadata.")
-    if contract.split_by_source:
-        lines.append("- For hybrid compare tasks, keep official docs facts and uploaded code facts separate before writing the comparison.")
-        if "upload_code" in contract.required_sections:
-            lines.append("- Keep official_docs, upload_code, and comparison section bodies to 2-3 short sentences each.")
-        else:
-            lines.append("- Keep official_docs to 2-3 short sentences and comparison to 1-2 short sentences.")
-            lines.append("- Include uploaded code details inside comparison in one concrete sentence.")
-        lines.append("- Use at most 4 total claims for hybrid answers; prefer 3 claims when possible.")
-        lines.append("- Keep the comparison to 1-2 sentences about the official-docs match or difference.")
-    return "\n".join(lines)
-
-
 def _iter_present_section_kinds(output: Any) -> set[str]:
     if output is None:
         return set()
