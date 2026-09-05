@@ -4,10 +4,15 @@ from pathlib import Path
 from unittest.mock import patch
 
 import requests
+from langchain_core.messages import AIMessage
 
 from src.eval.config_models import BenchmarkCase, BenchmarkConfig
+from src.eval.judge_llm import LLMJudge
 from src.eval.online_runner import _run_single_case
+from src.eval.online_runner.response_parser import ParsedResponseData
+from src.eval.online_runner.result_builder import build_case_result
 from src.eval.reporting.histograms import build_analysis
+from src.eval.result_models import JudgeSubscores
 
 
 class _FakeResponse:
@@ -20,11 +25,11 @@ class _FakeResponse:
         return self._payload
 
 
-class _DummyJudge:
+class _DummyJudge(LLMJudge):
     def __init__(self, result):
         self._result = result
 
-    def score_case(self, case: BenchmarkCase, response_text: str, tool_calls: list[str]):
+    def score_case(self, *, case: BenchmarkCase, response_text: str, tool_calls: list[str], **kwargs):
         _ = (case, response_text, tool_calls)
         return self._result
 
@@ -35,6 +40,42 @@ class RunnerErrorBucketsTest(unittest.TestCase):
         self.config = BenchmarkConfig()
         self.fixtures_path = Path("data/benchmarks/fixtures/cases.generated.jsonl")
 
+    @patch("src.eval.judge_llm.ChatOpenAI")
+    def test_judge_processing_type_error_is_not_hidden_by_rescoring(self, mock_client_factory) -> None:
+        class MalformedResponse:
+            @property
+            def content(self):
+                raise TypeError("malformed judge response")
+
+        mock_client_factory.return_value.invoke.side_effect = [
+            MalformedResponse(),
+            AIMessage(content=json.dumps({
+                "score": 1.0,
+                "subscores": {
+                    "answer_quality": 1.0,
+                    "groundedness": 1.0,
+                    "citation_traceability": 1.0,
+                    "tool_choice": 1.0,
+                    "format_language": 1.0,
+                },
+            })),
+        ]
+        judge = LLMJudge(model_name="test-model")
+
+        with self.assertRaisesRegex(TypeError, "malformed judge response"):
+            build_case_result(
+                run_id="run-judge-processing-error",
+                endpoint_url="http://127.0.0.1:8000/agent",
+                case=self.case,
+                judge=judge,
+                config=self.config,
+                session_id="session-judge-processing-error",
+                created_at="2026-01-01T00:00:00+00:00",
+                request_payload={"query": self.case.query},
+                latency_ms_e2e=1,
+                parsed_response=ParsedResponseData(response_text="answer"),
+            )
+
     @patch("src.eval.online_runner.case_runner.requests.post", side_effect=requests.Timeout)
     def test_timeout_goes_to_runtime_errors(self, _mock_post) -> None:
         result = _run_single_case(
@@ -43,7 +84,7 @@ class RunnerErrorBucketsTest(unittest.TestCase):
             fixtures_path=self.fixtures_path,
             case=self.case,
             timeout_seconds=1,
-            judge=_DummyJudge((None, None, None)),
+            judge=LLMJudge(model_name="test-model", enabled=False),
             config=self.config,
         )
         self.assertTrue(any("request timeout" in msg for msg in result.runtime_errors))
@@ -84,7 +125,7 @@ class RunnerErrorBucketsTest(unittest.TestCase):
             fixtures_path=self.fixtures_path,
             case=self.case,
             timeout_seconds=5,
-            judge=_DummyJudge((None, None, None)),
+            judge=LLMJudge(model_name="test-model", enabled=False),
             config=self.config,
         )
         self.assertEqual(result.runtime_errors, [])
@@ -124,7 +165,7 @@ class RunnerErrorBucketsTest(unittest.TestCase):
             fixtures_path=self.fixtures_path,
             case=self.case,
             timeout_seconds=5,
-            judge=_DummyJudge((None, None, "judge parse fail")),
+            judge=_DummyJudge((None, None, "judge parse fail", None)),
             config=self.config,
         )
         self.assertEqual(result.runtime_errors, [])
@@ -202,7 +243,7 @@ class RunnerErrorBucketsTest(unittest.TestCase):
             fixtures_path=self.fixtures_path,
             case=self.case,
             timeout_seconds=5,
-            judge=_DummyJudge((None, None, None)),
+            judge=LLMJudge(model_name="test-model", enabled=False),
             config=self.config,
         )
         self.assertEqual(
@@ -252,7 +293,7 @@ class RunnerErrorBucketsTest(unittest.TestCase):
             fixtures_path=self.fixtures_path,
             case=self.case,
             timeout_seconds=5,
-            judge=_DummyJudge((None, None, None)),
+            judge=LLMJudge(model_name="test-model", enabled=False),
             config=self.config,
         )
 
@@ -283,7 +324,7 @@ class RunnerErrorBucketsTest(unittest.TestCase):
             fixtures_path=self.fixtures_path,
             case=self.case,
             timeout_seconds=5,
-            judge=_DummyJudge((None, None, None)),
+            judge=LLMJudge(model_name="test-model", enabled=False),
             config=self.config,
         )
 
@@ -330,13 +371,13 @@ class RunnerErrorBucketsTest(unittest.TestCase):
                     0.4,
                     "answer stayed too generic",
                     None,
-                    {
-                        "answer_quality": 0.4,
-                        "groundedness": 0.5,
-                        "citation_traceability": 0.5,
-                        "tool_choice": 1.0,
-                        "format_language": 0.7,
-                    },
+                    JudgeSubscores(
+                        answer_quality=0.4,
+                        groundedness=0.5,
+                        citation_traceability=0.5,
+                        tool_choice=1.0,
+                        format_language=0.7,
+                    ),
                 )
             ),
             config=self.config,
@@ -420,7 +461,7 @@ class RunnerErrorBucketsTest(unittest.TestCase):
             fixtures_path=self.fixtures_path,
             case=self.case,
             timeout_seconds=5,
-            judge=_DummyJudge((None, None, None)),
+            judge=LLMJudge(model_name="test-model", enabled=False),
             config=self.config,
         )
 

@@ -5,6 +5,7 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from src.eval.config_models import BenchmarkCase, BenchmarkConfig, BenchmarkLiveSlackConfig
+from src.eval.judge_llm import LLMJudge
 from src.eval.online_runner import _run_single_case, run_online_benchmark
 
 
@@ -18,17 +19,11 @@ class _FakeResponse:
         return self._payload
 
 
-class _DummyJudge:
-    def score_case(self, case, response_text, tool_calls):
-        _ = (case, response_text, tool_calls)
-        return (None, None, None)
-
-
-class _CaptureJudge:
+class _CaptureJudge(LLMJudge):
     def __init__(self) -> None:
         self.kwargs = None
 
-    def score_case(self, case, response_text, tool_calls, **kwargs):
+    def score_case(self, *, case, response_text, tool_calls, **kwargs):
         _ = (case, response_text, tool_calls)
         self.kwargs = kwargs
         return (0.8, "ok", None, None)
@@ -79,7 +74,7 @@ class RunnerRequestPayloadTest(unittest.TestCase):
             fixtures_path=Path("data/benchmarks/fixtures/cases.generated.jsonl"),
             case=case,
             timeout_seconds=5,
-            judge=_DummyJudge(),
+            judge=LLMJudge(model_name="test-model", enabled=False),
             config=BenchmarkConfig(),
         )
 
@@ -131,7 +126,7 @@ class RunnerRequestPayloadTest(unittest.TestCase):
             fixtures_path=Path("data/benchmarks/fixtures/cases.generated.jsonl"),
             case=case,
             timeout_seconds=5,
-            judge=_DummyJudge(),
+            judge=LLMJudge(model_name="test-model", enabled=False),
             config=BenchmarkConfig(),
             live_slack=BenchmarkLiveSlackConfig(enabled=True, channel_id="C999LIVE"),
         )
@@ -184,7 +179,7 @@ class RunnerRequestPayloadTest(unittest.TestCase):
             fixtures_path=Path("data/benchmarks/fixtures/cases.generated.jsonl"),
             case=case,
             timeout_seconds=5,
-            judge=_DummyJudge(),
+            judge=LLMJudge(model_name="test-model", enabled=False),
             config=BenchmarkConfig(),
             live_slack=BenchmarkLiveSlackConfig(enabled=True, user_id="U999LIVE"),
         )
@@ -243,7 +238,7 @@ class RunnerRequestPayloadTest(unittest.TestCase):
                 slack_channel_id="C123BENCH",
             ),
             timeout_seconds=5,
-            judge=_DummyJudge(),
+            judge=LLMJudge(model_name="test-model", enabled=False),
             config=BenchmarkConfig(),
             live_slack=BenchmarkLiveSlackConfig(enabled=True, channel_id="C999LIVE"),
         )
@@ -317,7 +312,7 @@ class RunnerRequestPayloadTest(unittest.TestCase):
                 expected_tools=["tavily_search"],
             ),
             timeout_seconds=5,
-            judge=_DummyJudge(),
+            judge=LLMJudge(model_name="test-model", enabled=False),
             config=BenchmarkConfig(),
         )
 

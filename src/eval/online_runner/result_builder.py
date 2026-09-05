@@ -178,9 +178,7 @@ def build_case_result(
     judge_subscores: JudgeSubscores | None = None
     judge_input_complete: bool | None = None
     if parsed_response.response_text.strip() and config.judge_enabled:
-        judge_payload_builder = getattr(judge, "build_case_payload", LLMJudge.build_case_payload)
-        judge_payload_validator = getattr(judge, "is_payload_complete", LLMJudge.is_payload_complete)
-        judge_payload = judge_payload_builder(
+        judge_payload = judge.build_case_payload(
             case=case,
             response_text=parsed_response.response_text,
             tool_calls=parsed_response.tool_calls,
@@ -198,32 +196,25 @@ def build_case_result(
             action_results=parsed_response.action_results,
             slack_delivery_required=slack_delivery_required,
         )
-        judge_input_complete = judge_payload_validator(judge_payload)
-        try:
-            judge_result = judge.score_case(
-                case=case,
-                response_text=parsed_response.response_text,
-                tool_calls=parsed_response.tool_calls,
-                claims=response_claims,
-                response_evidence=parsed_response.response_evidence,
-                sections=response_sections,
-                observed_evidence=parsed_response.observed_evidence,
-                retrieval_diagnostics=parsed_response.retrieval_diagnostics,
-                planner_diagnostics=parsed_response.planner_diagnostics,
-                validator_reason=parsed_response.validator_reason,
-                synthesis_mode=parsed_response.synthesis_mode,
-                valid_claim_count=valid_claim_count,
-                invalid_claim_count=invalid_claim_count,
-                tool_call_count=parsed_response.tool_call_count,
-                action_results=parsed_response.action_results,
-                slack_delivery_required=slack_delivery_required,
-            )
-        except TypeError:
-            judge_result = judge.score_case(case, parsed_response.response_text, parsed_response.tool_calls)
-        if len(judge_result) >= 4:
-            llm_judge_score, llm_judge_reason, judge_error, judge_subscores = judge_result
-        else:
-            llm_judge_score, llm_judge_reason, judge_error = judge_result[:3]
+        judge_input_complete = judge.is_payload_complete(judge_payload)
+        llm_judge_score, llm_judge_reason, judge_error, judge_subscores = judge.score_case(
+            case=case,
+            response_text=parsed_response.response_text,
+            tool_calls=parsed_response.tool_calls,
+            claims=response_claims,
+            response_evidence=parsed_response.response_evidence,
+            sections=response_sections,
+            observed_evidence=parsed_response.observed_evidence,
+            retrieval_diagnostics=parsed_response.retrieval_diagnostics,
+            planner_diagnostics=parsed_response.planner_diagnostics,
+            validator_reason=parsed_response.validator_reason,
+            synthesis_mode=parsed_response.synthesis_mode,
+            valid_claim_count=valid_claim_count,
+            invalid_claim_count=invalid_claim_count,
+            tool_call_count=parsed_response.tool_call_count,
+            action_results=parsed_response.action_results,
+            slack_delivery_required=slack_delivery_required,
+        )
         if judge_error:
             judge_errors.append(judge_error)
 

@@ -4,6 +4,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from src.eval.config_models import BenchmarkCase, BenchmarkConfig
+from src.eval.judge_llm import LLMJudge
 from src.eval.online_runner import _run_single_case
 from src.eval.reporting import build_markdown_report
 from src.eval.summary_models import GateResult, RunSummary, SummaryStats
@@ -17,12 +18,6 @@ class _FakeResponse:
 
     def json(self) -> dict:
         return self._payload
-
-
-class _DummyJudge:
-    def score_case(self, case, response_text, tool_calls):
-        _ = (case, response_text, tool_calls)
-        return (None, None, None)
 
 
 def _debug_payload(**overrides):
@@ -91,7 +86,7 @@ class LatencyBreakdownReportingTest(unittest.TestCase):
                 expected_tools=["tavily_search"],
             ),
             timeout_seconds=5,
-            judge=_DummyJudge(),
+            judge=LLMJudge(model_name="test-model", enabled=False),
             config=BenchmarkConfig(),
         )
 
@@ -257,7 +252,7 @@ class LatencyBreakdownReportingTest(unittest.TestCase):
                 expected_tools=["tavily_search"],
             ),
             timeout_seconds=5,
-            judge=_DummyJudge(),
+            judge=LLMJudge(model_name="test-model", enabled=False),
             config=BenchmarkConfig(
                 pricing={
                     "prompt_per_1k_usd": 0.00015,
