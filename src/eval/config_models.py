@@ -141,22 +141,6 @@ class ScoreWeights(BaseModel):
     def as_dict(self) -> dict[str, float]:
         return self.model_dump()
 
-    @property
-    def tool_match(self) -> float:
-        return float(self.tool_choice)
-
-    @property
-    def content_constraints(self) -> float:
-        return float(self.answer_quality)
-
-    @property
-    def citation_compliance(self) -> float:
-        return float(self.citation_traceability)
-
-    @property
-    def safety_format(self) -> float:
-        return float(self.format_language)
-
 
 class HardGates(BaseModel):
     pass_rate: float = 0.90

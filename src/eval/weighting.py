@@ -84,15 +84,3 @@ def compute_composite_quality_score(
         normalized = rule_weighted_score / denominator
         return max(0.0, min(1.0, normalized))
     return max(0.0, min(1.0, rule_weighted_score + llm_judge_score * llm_weight))
-
-
-def compute_final_score(
-    rule_weighted_score: float,
-    llm_judge_score: float | None,
-    weights: ScoreWeights,
-) -> float:
-    return compute_composite_quality_score(
-        rule_weighted_score=rule_weighted_score,
-        llm_judge_score=llm_judge_score,
-        weights=weights,
-    )
