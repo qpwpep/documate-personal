@@ -1,7 +1,7 @@
 import unittest
 
 from src.eval.weighting import (
-    compute_final_score,
+    compute_composite_quality_score,
     compute_rule_weighted_score,
     resolve_base_weights_for_case,
     resolve_effective_weights,
@@ -44,7 +44,7 @@ class WeightOverrideTest(unittest.TestCase):
         self.assertAlmostEqual(effective.citation_traceability, 0.5 / 1.2, places=8)
         self.assertAlmostEqual(effective.llm_judge, 0.1 / 1.2, places=8)
 
-    def test_final_score_consistency_with_llm_on_off(self) -> None:
+    def test_composite_quality_score_consistency_with_llm_on_off(self) -> None:
         base = ScoreWeights()
         effective, error = resolve_effective_weights(base_weights=base, case_override=None)
         self.assertIsNone(error)
@@ -58,8 +58,8 @@ class WeightOverrideTest(unittest.TestCase):
         }
         rule_weighted = compute_rule_weighted_score(component_scores, effective)
 
-        llm_off_score = compute_final_score(rule_weighted_score=rule_weighted, llm_judge_score=None, weights=effective)
-        llm_on_score = compute_final_score(rule_weighted_score=rule_weighted, llm_judge_score=1.0, weights=effective)
+        llm_off_score = compute_composite_quality_score(rule_weighted_score=rule_weighted, llm_judge_score=None, weights=effective)
+        llm_on_score = compute_composite_quality_score(rule_weighted_score=rule_weighted, llm_judge_score=1.0, weights=effective)
 
         self.assertAlmostEqual(llm_off_score, 1.0)
         self.assertAlmostEqual(llm_on_score, 1.0)

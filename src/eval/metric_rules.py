@@ -155,7 +155,6 @@ def score_groundedness(
     validator_reason: str | None = None,
     response_claims: list[ClaimItem] | None = None,
     invalid_claim_count: int = 0,
-    **_unused: Any,
 ) -> float:
     text = (response_text or "").strip()
     if not text:
@@ -236,16 +235,12 @@ def compute_rule_scores(
     judge_errors: list[str],
     validator_reason: str | None = None,
     response_claims: list[ClaimItem] | None = None,
-    retrieval_diagnostics: list[Any] | None = None,
     synthesis_mode: str | None = None,
-    valid_claim_count: int = 0,
     invalid_claim_count: int = 0,
     response_sections: list[AnswerSection] | None = None,
     slack_delivery_required: bool = False,
     slack_delivery_status: str = "not_applicable",
-    **_unused: Any,
 ) -> dict[str, float]:
-    _ = retrieval_diagnostics, valid_claim_count
     return {
         "answer_quality": score_answer_quality(
             case,
@@ -283,55 +278,6 @@ def compute_rule_scores(
             response_text=response_text,
         ),
     }
-
-
-def score_tool_match(
-    case: BenchmarkCase,
-    called_tools: list[str],
-    *,
-    slack_delivery_required: bool = False,
-    slack_delivery_status: str = "not_applicable",
-) -> float:
-    return score_tool_choice(
-        case,
-        called_tools,
-        slack_delivery_required=slack_delivery_required,
-        slack_delivery_status=slack_delivery_status,
-    )
-
-
-def score_content_constraints(case: BenchmarkCase, response_text: str) -> float:
-    return score_answer_quality(case, response_text, [])
-
-
-def score_citation_compliance(
-    case: BenchmarkCase,
-    response_evidence: list[EvidenceItem],
-    observed_evidence: list[EvidenceItem],
-    called_tools: list[str],
-) -> float:
-    return score_citation_traceability(
-        case=case,
-        response_evidence=response_evidence,
-        observed_evidence=observed_evidence,
-        called_tools=called_tools,
-    )
-
-
-def score_safety_format(
-    *,
-    runtime_errors: list[str],
-    response_errors: list[str],
-    judge_errors: list[str],
-    response_text: str,
-) -> float:
-    return score_format_language(
-        case=BenchmarkCase(case_id="legacy", category="tool_action", query=""),
-        runtime_errors=runtime_errors,
-        response_errors=response_errors,
-        judge_errors=judge_errors,
-        response_text=response_text,
-    )
 
 
 def tool_confusion_counts(case: BenchmarkCase, called_tools: list[str]) -> tuple[int, int, int]:

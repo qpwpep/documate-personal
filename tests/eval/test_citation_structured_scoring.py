@@ -1,7 +1,7 @@
 import unittest
 
 from src.core.evidence import EvidenceItem
-from src.eval.metric_rules import score_citation_compliance, score_groundedness
+from src.eval.metric_rules import score_citation_traceability, score_groundedness
 from src.eval.config_models import BenchmarkCase
 
 
@@ -62,7 +62,7 @@ class CitationStructuredScoringTest(unittest.TestCase):
         )
 
     def test_full_compliance_scores_one(self) -> None:
-        score = score_citation_compliance(
+        score = score_citation_traceability(
             case=self.upload_case,
             response_evidence=[self.official, self.upload_local],
             observed_evidence=[self.official, self.upload_local],
@@ -71,7 +71,7 @@ class CitationStructuredScoringTest(unittest.TestCase):
         self.assertAlmostEqual(score, 1.0)
 
     def test_missing_one_tool_call_scores_partial(self) -> None:
-        score = score_citation_compliance(
+        score = score_citation_traceability(
             case=self.upload_case,
             response_evidence=[self.official, self.upload_local],
             observed_evidence=[self.official, self.upload_local],
@@ -80,7 +80,7 @@ class CitationStructuredScoringTest(unittest.TestCase):
         self.assertAlmostEqual(score, 0.5)
 
     def test_local_index_case_still_accepts_rag_search(self) -> None:
-        score = score_citation_compliance(
+        score = score_citation_traceability(
             case=self.local_index_case,
             response_evidence=[self.local_index],
             observed_evidence=[self.local_index],
@@ -98,7 +98,7 @@ class CitationStructuredScoringTest(unittest.TestCase):
             snippet=None,
             score=None,
         )
-        score = score_citation_compliance(
+        score = score_citation_traceability(
             case=BenchmarkCase(
                 case_id="docs_seed_001",
                 category="docs_only",
@@ -113,7 +113,7 @@ class CitationStructuredScoringTest(unittest.TestCase):
         self.assertAlmostEqual(score, 0.0)
 
     def test_non_citation_case_is_one(self) -> None:
-        score = score_citation_compliance(
+        score = score_citation_traceability(
             case=BenchmarkCase(case_id="tool_seed_001", category="tool_action", query="tool"),
             response_evidence=[],
             observed_evidence=[],
@@ -161,7 +161,7 @@ class CitationStructuredScoringTest(unittest.TestCase):
                 end_offset=64,
             )
         ]
-        score = score_citation_compliance(
+        score = score_citation_traceability(
             case=BenchmarkCase(
                 case_id="upload_chunk_case",
                 category="hybrid",
