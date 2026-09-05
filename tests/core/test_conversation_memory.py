@@ -13,10 +13,8 @@ from src.core.conversation_memory import (
     build_durable_conversation_memory,
     build_untrusted_memory_prompt_messages,
     estimate_text_tokens,
-    legacy_conversation_memory_policy,
     measure_conversation,
     plan_compaction,
-    project_durable_messages,
 )
 
 
@@ -39,6 +37,7 @@ def _policy(**overrides: int) -> ConversationMemoryPolicy:
 
 
 class ConversationMemoryPolicyTest(unittest.TestCase):
+    pass
 
 
 
@@ -48,21 +47,6 @@ class ConversationMemoryPolicyTest(unittest.TestCase):
 
 
 
-    def test_legacy_nonpositive_window_compacts_two_turns_to_the_latest_turn(self) -> None:
-        policy = legacy_conversation_memory_policy(0)
-        messages = [
-            HumanMessage(content="old request"),
-            AIMessage(content="old answer"),
-            HumanMessage(content="latest request"),
-        ]
-
-        plan = plan_compaction(messages, memory_summary=None, policy=policy)
-
-        self.assertTrue(plan.should_compact)
-        self.assertEqual(
-            [message.content for message in plan.retained_messages],
-            ["latest request"],
-        )
 
 
 _unicode_text = st.text(
@@ -119,11 +103,11 @@ def test_durable_projection_stays_within_every_hard_bound_for_unicode_history(
     assert usage.serialized_bytes <= policy.hard_max_bytes
     assert all(isinstance(message, (HumanMessage, AIMessage)) for message in projected)
     assert any(isinstance(message, HumanMessage) for message in projected)
-    projected_again = project_durable_messages(
+    projected_again = build_durable_conversation_memory(
         projected,
         memory_summary=memory.memory_summary,
         policy=policy,
-    )
+    ).messages
     assert [
         (type(message), str(message.content)) for message in projected_again
     ] == [(type(message), str(message.content)) for message in projected]

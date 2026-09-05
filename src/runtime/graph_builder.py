@@ -244,7 +244,6 @@ def build_agent_graph(settings: AppSettings | None = None):
     summarize_node = make_summarize_node(
         llm_summarizer=llm_registry.llm_summarizer,
         verbose=llm_registry.verbose,
-        max_turns=memory_policy.low_water_turns,
         policy=memory_policy,
     )
     summarize_node = _instrument_stage_node("summarize", summarize_node)
@@ -314,7 +313,6 @@ def build_agent_graph(settings: AppSettings | None = None):
         pre_synthesis_validation_node=pre_synthesis_validation_node,
         post_synthesis_validation_node=post_synthesis_validation_node,
         action_postprocess_node=action_postprocess_node,
-        summary_max_turns=memory_policy.low_water_turns,
         memory_policy=memory_policy,
     )
     return graph_object

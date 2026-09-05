@@ -4,6 +4,7 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from src.core.answer_schema import AgentResponsePayloadModel, AnswerSection, ClaimItem
 from src.core.evidence import EvidenceItem
+from src.core.conversation_memory import ConversationMemoryPolicy
 from src.core.planner_schema import PlannerOutput, RetrievalTask
 from src.core.prompts import SYS_POLICY
 from src.runtime.nodes.session import make_summarize_node
@@ -543,7 +544,10 @@ class SynthesisValidationTest(unittest.TestCase):
 
     def test_summarize_node_records_llm_call_metadata(self) -> None:
         summarize_llm = _CaptureSummaryLLM()
-        summarize_node = make_summarize_node(summarize_llm, verbose=False, max_turns=2)
+        summarize_node = make_summarize_node(
+            summarize_llm, verbose=False,
+            policy=ConversationMemoryPolicy(high_water_turns=4, low_water_turns=3),
+        )
 
         updates = summarize_node(
             _state(

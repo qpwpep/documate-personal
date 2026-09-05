@@ -2,6 +2,7 @@ import unittest
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
+from src.core.conversation_memory import ConversationMemoryPolicy
 from src.core.contracts import GraphState, LLMCallMetadata, PlannerState, ResponseState
 from src.core.contracts.boundary.debug import get_debug_state
 from src.core.contracts.boundary.graph import build_graph_state_input

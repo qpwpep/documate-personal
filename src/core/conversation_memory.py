@@ -102,14 +102,6 @@ class ConversationMemoryPolicy:
             )
 
 
-def legacy_conversation_memory_policy(max_turns: int) -> ConversationMemoryPolicy:
-    retained_turns = max(1, int(max_turns) + 1)
-    return ConversationMemoryPolicy(
-        high_water_turns=retained_turns + 1,
-        low_water_turns=retained_turns,
-    )
-
-
 @dataclass(frozen=True, slots=True)
 class MemoryUsage:
     turn_count: int
@@ -585,23 +577,6 @@ def build_durable_conversation_memory(
     )
 
 
-def project_durable_messages(
-    messages: Sequence[AnyMessage],
-    *,
-    memory_summary: str | None,
-    policy: ConversationMemoryPolicy,
-    canonical_assistant_text: str | None = None,
-) -> list[AnyMessage]:
-    return list(
-        build_durable_conversation_memory(
-            messages,
-            memory_summary=memory_summary,
-            policy=policy,
-            canonical_assistant_text=canonical_assistant_text,
-        ).messages
-    )
-
-
 def validate_query_text(query: str) -> str:
     text = str(query)
     if not text.strip():
@@ -629,9 +604,7 @@ __all__ = [
     "build_untrusted_memory_prompt_messages",
     "estimate_text_tokens",
     "extract_memory_text",
-    "legacy_conversation_memory_policy",
     "measure_conversation",
     "plan_compaction",
-    "project_durable_messages",
     "validate_query_text",
 ]
