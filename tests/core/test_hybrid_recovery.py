@@ -5,6 +5,7 @@ from src.core.contracts import RetrievalDiagnostic
 from src.core.evidence import EvidenceItem
 from src.runtime.nodes.validation.evidence_validator import assess_validation, build_validation_snapshot
 from src.runtime.nodes.validation.policy import apply_validation_outcome
+from src.runtime.nodes.validation.repair import repair_required_sections
 from src.core.planner_schema import PlannerOutput, RetrievalTask
 
 
@@ -231,6 +232,48 @@ class HybridRecoveryTest(unittest.TestCase):
         self.assertIn("공식 문서 옵션/기본값:", sections["comparison"])
         self.assertIn("업로드 코드 실제 설정:", sections["comparison"])
         self.assertIn("test_size=0.2", sections["comparison"])
+
+    def test_hybrid_repair_preserves_uploaded_option_order_and_ignores_docs_options(self) -> None:
+        docs = EvidenceItem.model_validate({
+            **_docs_evidence(),
+            "code_metadata": {"option_literals": ["docs_default=True"]},
+        })
+        upload = EvidenceItem.model_validate({
+            **_upload_evidence("train_test_split(X, y, test_size=0.2, random_state=42)"),
+            "code_metadata": {
+                "option_literals": [" test_size = 0.2 ", "TEST_SIZE=0.2", "shuffle=True"],
+            },
+        })
+        payload = AgentResponsePayloadModel.model_validate({
+            "answer": "Official documentation and uploaded code are compared.",
+            "claims": [
+                {"text": "Official docs describe splitting arrays.", "evidence_ids": [docs.source_id]},
+                {"text": "Uploaded code calls train_test_split.", "evidence_ids": [upload.source_id]},
+            ],
+            "evidence": [docs, upload],
+        })
+        snapshot = build_validation_snapshot(
+            user_input="Compare official train_test_split docs with the uploaded code.",
+            planner_output=PlannerOutput(use_retrieval=True, tasks=[
+                RetrievalTask(route="docs", query="train_test_split official docs", k=3),
+                RetrievalTask(route="upload", query="train_test_split uploaded code", k=3),
+            ]),
+            parsed_evidence=[docs, upload],
+            current_attempt_retrieval_errors=[],
+            current_attempt_retrieval_diagnostics=[],
+            response_payload=payload,
+        )
+
+        repaired = repair_required_sections(payload=payload, snapshot=snapshot)
+
+        sections = {section.kind: section.body for section in repaired.sections}
+        expected_options = "test_size = 0.2, shuffle=True, random_state=42"
+        self.assertEqual(
+            sections["upload_code"].splitlines()[0],
+            f"업로드 코드의 실제 설정: {expected_options}.",
+        )
+        self.assertIn(expected_options, sections["comparison"])
+        self.assertNotIn("docs_default", repaired.answer)
 
     def test_hybrid_unsupported_claims_keeps_valid_claims_and_restates_briefly(self) -> None:
         planner_output = PlannerOutput(

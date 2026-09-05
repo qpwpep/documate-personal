@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import re
-
 from src.core.answer_schema.models import AgentResponsePayloadModel, AnswerSection, ClaimItem, normalize_answer_sections
 from src.core.answer_schema.rendering import resolve_answer_text
 from src.core.answer_schema.text_cleaning import clean_grounded_text
@@ -10,6 +8,7 @@ from src.core.request_contracts import infer_answer_contract
 from src.runtime.nodes.validation.evidence_validator import ValidationSnapshot
 from src.runtime.nodes.validation.hybrid_rewrite import claim_from_evidence_item, claims_for_routes, top_evidence_item_for_routes
 from src.runtime.nodes.validation.messages_ko import hybrid_limit_sentence, section_heading
+from src.runtime.nodes.validation.option_literals import contains_option_literal, extract_uploaded_option_literals
 
 
 def _ensure_sentence(text: str) -> str:
@@ -95,48 +94,8 @@ def _fallback_route_line(
     return _summarize_claim(claim=claim, snapshot=snapshot, payload=payload)
 
 
-def _code_metadata_option_literals(item) -> list[str]:
-    code_metadata = item.code_metadata if isinstance(item.code_metadata, dict) else {}
-    options: list[str] = []
-    seen: set[str] = set()
-    for option in code_metadata.get("option_literals") or []:
-        option_text = " ".join(str(option or "").split())
-        compact = re.sub(r"\s+", "", option_text.lower())
-        if not option_text or compact in seen:
-            continue
-        options.append(option_text)
-        seen.add(compact)
-    return options
-
-
-def _extract_local_option_literals(snapshot: ValidationSnapshot) -> list[str]:
-    options: list[str] = []
-    seen: set[str] = set()
-    for item in snapshot.parsed_evidence:
-        route = route_for_tool(str(item.tool or ""))
-        if route != "upload":
-            continue
-        for option in _code_metadata_option_literals(item):
-            compact = re.sub(r"\s+", "", option.lower())
-            if compact and compact not in seen:
-                options.append(option)
-                seen.add(compact)
-        for match in re.findall(r"\b[A-Za-z_][A-Za-z0-9_]*\s*=\s*[^,\)\]\}\n]+", str(item.snippet or "")):
-            option = " ".join(match.strip().split())
-            compact = re.sub(r"\s+", "", option.lower())
-            if compact and compact not in seen:
-                options.append(option)
-                seen.add(compact)
-    return options
-
-
-def _contains_local_option(text: str, options: list[str]) -> bool:
-    compact_text = re.sub(r"\s+", "", str(text or "").lower())
-    return any(re.sub(r"\s+", "", option.lower()) in compact_text for option in options)
-
-
 def _local_options_text(snapshot: ValidationSnapshot) -> str:
-    options = _extract_local_option_literals(snapshot)
+    options = extract_uploaded_option_literals(snapshot.parsed_evidence)
     if not options:
         return ""
     return ", ".join(options[:4])
@@ -183,7 +142,7 @@ def _comparison_section_body(
         routes={"upload"},
     )
     local_options_text = _local_options_text(snapshot)
-    if local_options_text and not _contains_local_option(local_body, _extract_local_option_literals(snapshot)):
+    if local_options_text and not contains_option_literal(local_body, extract_uploaded_option_literals(snapshot.parsed_evidence)):
         local_body = _ordered_unique_lines([local_options_text, local_body])
         local_body = "\n".join(local_body)
     comparison_lines = _ordered_unique_lines(
@@ -249,7 +208,7 @@ def repair_required_sections(
                 routes={"upload"},
             )
             options_text = _local_options_text(snapshot)
-            if options_text and not _contains_local_option(body, _extract_local_option_literals(snapshot)):
+            if options_text and not contains_option_literal(body, extract_uploaded_option_literals(snapshot.parsed_evidence)):
                 body = "\n".join(_ordered_unique_lines([f"업로드 코드의 실제 설정: {options_text}.", body]))
         elif kind == "comparison":
             body = _comparison_section_body(snapshot=snapshot, payload=payload)
