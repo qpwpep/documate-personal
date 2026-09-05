@@ -333,7 +333,6 @@ class SessionStoreCleanupTest(unittest.TestCase):
         store.active_agents["busy"] = SessionEntry(
             agent=busy_agent,
             last_accessed_monotonic=0.0,
-            created_monotonic=0.0,
             active_request_count=1,
         )
 
@@ -355,12 +354,10 @@ class SessionStoreCleanupTest(unittest.TestCase):
             store.active_agents["stale"] = SessionEntry(
                 agent=stale_agent,
                 last_accessed_monotonic=0.0,
-                created_monotonic=0.0,
             )
             store.active_agents["fresh"] = SessionEntry(
                 agent=fresh_agent,
                 last_accessed_monotonic=95.0,
-                created_monotonic=0.0,
             )
 
             removed = store.cleanup_expired(now=100.0, ttl_seconds=10)
@@ -384,12 +381,10 @@ class SessionStoreCleanupTest(unittest.TestCase):
             store.active_agents["oldest"] = SessionEntry(
                 agent=oldest_agent,
                 last_accessed_monotonic=1.0,
-                created_monotonic=0.0,
             )
             store.active_agents["newest"] = SessionEntry(
                 agent=newest_agent,
                 last_accessed_monotonic=2.0,
-                created_monotonic=0.0,
             )
 
             evicted = store.evict_lru_if_needed(max_active_sessions=1)
@@ -413,12 +408,10 @@ class SessionStoreCleanupTest(unittest.TestCase):
             store.active_agents["locked"] = SessionEntry(
                 agent=locked_agent,
                 last_accessed_monotonic=1.0,
-                created_monotonic=0.0,
             )
             store.active_agents["unlocked"] = SessionEntry(
                 agent=unlocked_agent,
                 last_accessed_monotonic=2.0,
-                created_monotonic=0.0,
             )
 
             store.active_agents["locked"].request_lock.acquire()
@@ -446,13 +439,11 @@ class SessionStoreCleanupTest(unittest.TestCase):
             store.active_agents["oldest"] = SessionEntry(
                 agent=oldest_agent,
                 last_accessed_monotonic=1.0,
-                created_monotonic=0.0,
                 active_request_count=1,
             )
             store.active_agents["newest"] = SessionEntry(
                 agent=newest_agent,
                 last_accessed_monotonic=2.0,
-                created_monotonic=0.0,
             )
 
             evicted = store.evict_lru_if_needed(max_active_sessions=1)
