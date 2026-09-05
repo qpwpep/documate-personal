@@ -144,17 +144,13 @@ def build_graph(
     planner_node: Any,
     retrieve_dispatch_node: Any,
     synthesize_node: Any,
-    validate_evidence_node: Any | None = None,
-    action_postprocess_node: Any | None = None,
     *,
     memory_policy: ConversationMemoryPolicy,
-    pre_synthesis_validation_node: Any | None = None,
-    post_synthesis_validation_node: Any | None = None,
+    pre_synthesis_validation_node: Any,
+    post_synthesis_validation_node: Any,
+    action_postprocess_node: Any,
 ):
     builder = StateGraph(state_type)
-    pre_synthesis_validation_node = pre_synthesis_validation_node or (lambda _state: {})
-    post_synthesis_validation_node = post_synthesis_validation_node or validate_evidence_node or (lambda _state: {})
-    action_postprocess_node = action_postprocess_node or (lambda _state: {})
 
     builder.add_node("add_user_message", add_user_node)
     builder.set_entry_point("add_user_message")
