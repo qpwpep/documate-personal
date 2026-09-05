@@ -15,8 +15,8 @@ from src.infra.tools.slack_notify import build_slack_notify_tool
 class ToolRegistry:
     tavily_search_tool: Callable[..., dict[str, Any]]
     upload_search_tool: Callable[..., dict[str, Any]]
-    save_text_tool: Any
-    slack_notify_tool: Any
+    save_text_tool: Callable[..., dict[str, Any]]
+    slack_notify_tool: Callable[..., dict[str, Any]]
 
 
 def build_tool_registry(settings: AppSettings) -> ToolRegistry:

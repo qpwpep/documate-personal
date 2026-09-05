@@ -117,9 +117,6 @@ def build_legacy_state(payload: dict):
     return normalize_graph_update(state)
 
 
-class _ToolWrapper:
-    def __init__(self, func):
-        self.func = func
 
 
 class _FailingPlannerLLM:
