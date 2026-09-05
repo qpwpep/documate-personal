@@ -166,7 +166,7 @@ class LLMJudge:
             max_retries=2,
         )
 
-    def score_case_detailed(
+    def score_case(
         self,
         *,
         case: BenchmarkCase,
@@ -296,17 +296,3 @@ class LLMJudge:
     @staticmethod
     def is_payload_complete(payload: dict[str, Any]) -> bool:
         return _is_payload_complete(payload)
-
-    def score_case(
-        self,
-        case: BenchmarkCase,
-        response_text: str,
-        tool_calls: list[str],
-        **kwargs: Any,
-    ) -> tuple[float | None, str | None, str | None, JudgeSubscores | None]:
-        return self.score_case_detailed(
-            case=case,
-            response_text=response_text,
-            tool_calls=tool_calls,
-            **kwargs,
-        )
