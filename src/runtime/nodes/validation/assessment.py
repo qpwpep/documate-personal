@@ -9,6 +9,7 @@ from src.core.evidence import EvidenceItem
 from src.core.request_contracts import infer_answer_contract, missing_required_sections
 from src.runtime.nodes.retry import contains_tool_error
 from src.runtime.nodes.validation.models import ValidationAssessment, ValidationSnapshot
+from src.runtime.nodes.validation.option_literals import contains_option_literal, extract_uploaded_option_literals
 from src.runtime.nodes.validation.route_policy import route_error_statuses, route_score_avg
 from src.runtime.nodes.validation.snapshot import detect_missing_route_coverage, route_for_item_tool
 
@@ -79,50 +80,6 @@ def _section_body_by_kind(snapshot: ValidationSnapshot) -> dict[str, str]:
     }
 
 
-def _code_metadata_option_literals(item: EvidenceItem) -> list[str]:
-    code_metadata = item.code_metadata if isinstance(item.code_metadata, dict) else {}
-    options: list[str] = []
-    seen: set[str] = set()
-    for option in code_metadata.get("option_literals") or []:
-        option_text = " ".join(str(option or "").split())
-        compact = re.sub(r"\s+", "", option_text.lower())
-        if not option_text or compact in seen:
-            continue
-        options.append(option_text)
-        seen.add(compact)
-    return options
-
-
-def _extract_local_option_literals(snapshot: ValidationSnapshot) -> list[str]:
-    options: list[str] = []
-    seen: set[str] = set()
-    for item in snapshot.parsed_evidence:
-        route = route_for_item_tool(item.tool)
-        if route != "upload":
-            continue
-        for option in _code_metadata_option_literals(item):
-            compact = re.sub(r"\s+", "", option.lower())
-            if compact and compact not in seen:
-                options.append(option)
-                seen.add(compact)
-        snippet = str(item.snippet or "")
-        for match in re.findall(r"\b[A-Za-z_][A-Za-z0-9_]*\s*=\s*[^,\)\]\}\n]+", snippet):
-            option = " ".join(match.strip().split())
-            compact = re.sub(r"\s+", "", option.lower())
-            if compact and compact not in seen:
-                options.append(option)
-                seen.add(compact)
-    return options
-
-
-def _text_contains_any_option(text: str, options: list[str]) -> bool:
-    compact_text = re.sub(r"\s+", "", str(text or "").lower())
-    return any(
-        re.sub(r"\s+", "", option.lower()) in compact_text
-        for option in options
-    )
-
-
 def _hybrid_section_errors(snapshot: ValidationSnapshot) -> list[str]:
     required_routes = {
         str(route or "").strip()
@@ -155,13 +112,13 @@ def _hybrid_section_errors(snapshot: ValidationSnapshot) -> list[str]:
         if body and body == comparison_normalized:
             errors.append(f"hybrid_comparison_repeats_{kind}")
 
-    local_options = _extract_local_option_literals(snapshot)
+    local_options = extract_uploaded_option_literals(snapshot.parsed_evidence)
     upload_body = bodies.get("upload_code", "")
     if "upload_code" in {section.kind for section in snapshot.response_payload.sections}:
-        if local_options and not _text_contains_any_option(upload_body, local_options):
+        if local_options and not contains_option_literal(upload_body, local_options):
             errors.append("hybrid_upload_code_missing_actual_option")
 
-    if comparison_body and local_options and not _text_contains_any_option(comparison_body, local_options):
+    if comparison_body and local_options and not contains_option_literal(comparison_body, local_options):
         errors.append("hybrid_comparison_missing_uploaded_setting")
 
     return errors
