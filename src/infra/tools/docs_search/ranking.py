@@ -5,6 +5,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from src.core.answer_schema import clean_grounded_text
+from src.core.evidence import EvidenceItem
 from src.core.rules import get_rules_config
 from src.infra.tools.docs_search.normalization import (
     normalize_identifier_reference_text,
@@ -232,22 +233,11 @@ def has_meaningful_docs_evidence(evidence_items: list[dict[str, Any]]) -> bool:
     return any(evidence_item_has_grounded_text(item) for item in evidence_items)
 
 
-def docs_evidence_preference(item: Any) -> tuple[int, int, float]:
-    grounded_snippet = clean_grounded_text(str(getattr(item, "snippet", "") or ""))
-    grounded_title = clean_grounded_text(str(getattr(item, "title", "") or ""))
-    score = float(getattr(item, "score", 0.0) or 0.0)
-    return (
-        1 if grounded_snippet or grounded_title else 0,
-        len(grounded_snippet),
-        score,
-    )
-
-
-def merge_docs_evidence_items(items: list[Any]) -> list[Any]:
-    merged_by_source: dict[str, Any] = {}
+def merge_docs_evidence_items(items: list[EvidenceItem]) -> list[EvidenceItem]:
+    merged_by_source: dict[str, EvidenceItem] = {}
     ordered_source_ids: list[str] = []
     for item in items:
-        source_id = str(getattr(item, "source_id", "") or "").strip()
+        source_id = str(item.source_id or "").strip()
         if not source_id:
             continue
         current = merged_by_source.get(source_id)
@@ -257,21 +247,18 @@ def merge_docs_evidence_items(items: list[Any]) -> list[Any]:
             continue
         merged_updates = {
             "title": _merge_unique_text(
-                getattr(current, "title", None),
-                getattr(item, "title", None),
+                current.title,
+                item.title,
             )
             or None,
             "snippet": _merge_unique_text(
-                getattr(current, "snippet", None),
-                getattr(item, "snippet", None),
+                current.snippet,
+                item.snippet,
             )
             or None,
-            "score": max(float(getattr(current, "score", 0.0) or 0.0), float(getattr(item, "score", 0.0) or 0.0)),
+            "score": max(float(current.score or 0.0), float(item.score or 0.0)),
         }
-        if hasattr(current, "model_copy"):
-            merged_by_source[source_id] = current.model_copy(update=merged_updates)
-        elif docs_evidence_preference(item) > docs_evidence_preference(current):
-            merged_by_source[source_id] = item
+        merged_by_source[source_id] = current.model_copy(update=merged_updates)
     return [merged_by_source[source_id] for source_id in ordered_source_ids]
 
 
