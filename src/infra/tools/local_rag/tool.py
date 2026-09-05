@@ -1,15 +1,12 @@
 from __future__ import annotations
 
 import time
-from typing import Annotated, Any
-
-from langchain_core.tools import StructuredTool
-from langgraph.prebuilt import InjectedState
+from collections.abc import Callable
+from typing import Any
 
 from src.core.latency import elapsed_ms
 from src.infra.chroma_store import CHROMA_DISTANCE_METRIC, CHROMA_SCORE_DIRECTION
-from src.infra.settings import AppSettings
-from src.infra.tools._common import UploadArgs, build_retrieval_payload
+from src.infra.tools._common import build_retrieval_payload
 from src.infra.tools.local_rag import client
 from src.infra.tools.local_rag.ranking import rank_retrieval_rows
 from src.infra.tools.local_rag.serialization import build_local_evidence_bundle
@@ -47,11 +44,11 @@ def _build_search_payload(
     )
 
 
-def build_upload_search_tool(settings: AppSettings) -> Any:
+def build_upload_search_tool() -> Callable[..., dict[str, Any]]:
     def upload_search(
         query: str,
         k: int = 4,
-        retriever: Annotated[Any, InjectedState("retriever")] = None,
+        retriever: Any = None,
     ) -> dict[str, Any]:
         if retriever is None:
             return build_retrieval_payload(
@@ -92,12 +89,4 @@ def build_upload_search_tool(settings: AppSettings) -> Any:
             provider_ms=provider_ms,
         )
 
-    return StructuredTool.from_function(
-        name="upload_search",
-        description=(
-            "Search only the currently uploaded file context and return structured evidence items. "
-            "Use this when user asks about uploaded file content."
-        ),
-        func=upload_search,
-        args_schema=UploadArgs,
-    )
+    return upload_search

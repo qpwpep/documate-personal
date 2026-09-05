@@ -1,9 +1,8 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from typing import Any, Literal
-
-from langchain_core.tools import StructuredTool
 
 from src.core.latency import elapsed_ms
 from src.core.evidence import evidence_to_dicts
@@ -14,11 +13,10 @@ from src.infra.tools.docs_search.extraction import should_extract_doc_content
 from src.infra.tools.docs_search.normalization import canonicalize_docs_query_text
 from src.infra.tools.docs_search.policy import docs_search_rules, infer_docs_query_hint, normalize_include_domains
 from src.infra.tools.docs_search.ranking import filter_docs_evidence_by_topic_purity, has_exact_identifier_coverage, has_meaningful_docs_evidence, merge_docs_evidence_items
-from src.infra.tools.docs_search.schemas import TavilyArgs
 from src.infra.tools.docs_search.serialization import DocsSearchFilterCounters, collect_docs_search_evidence
 
 
-def build_docs_search_tool(settings: AppSettings) -> Any:
+def build_docs_search_tool(settings: AppSettings) -> Callable[..., dict[str, Any]]:
     default_domains = list(docs_search_rules().allowed_doc_path_prefixes.keys())
 
     def _request_docs_search(query_text: str, domains: list[str], search_depth: str, include_raw_content: Any) -> dict[str, Any]:
@@ -215,12 +213,4 @@ def build_docs_search_tool(settings: AppSettings) -> Any:
             error_code=fallback_failure_code,
         )
 
-    return StructuredTool.from_function(
-        name="tavily_search",
-        description=(
-            "Search official documentation on the web and return structured evidence items. "
-            "Use this for current or official references."
-        ),
-        func=tavily_search,
-        args_schema=TavilyArgs,
-    )
+    return tavily_search
