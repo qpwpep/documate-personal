@@ -3,10 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 import re
 
-from src.core.answer_schema import AgentResponsePayloadModel, AnswerSection, ClaimItem, SynthesisOutput, average_claim_confidence, build_deterministic_grounded_payload, build_empty_response_payload, normalize_confidence, render_payload_from_claims
+from src.core.answer_schema import AgentResponsePayloadModel, AnswerSection, SynthesisOutput, average_claim_confidence, build_deterministic_grounded_payload, build_empty_response_payload, render_payload_from_claims
 from src.core.evidence import EvidenceItem
 from src.runtime.nodes.synthesis.budgets import SynthesisBudgetProfile
-from src.runtime.nodes.synthesis.prompt_builder import parse_plain_summary_segments
 
 
 _SENTENCE_SPLIT_PATTERN = re.compile(r"(?<=[.!?。！？])\s+")
@@ -17,63 +16,6 @@ class RenderedSynthesisPayload:
     payload: AgentResponsePayloadModel
     final_answer: str
     synthesis_output: SynthesisOutput
-
-
-def build_plain_summary_attach_payload(
-    *,
-    content: str,
-    evidence_items: list[EvidenceItem],
-) -> AgentResponsePayloadModel | None:
-    if not evidence_items:
-        return None
-
-    limited_evidence = evidence_items[:2]
-    segments = parse_plain_summary_segments(content, limit=len(limited_evidence))
-    if not segments:
-        return None
-
-    adopted_pairs = list(zip(segments[: len(limited_evidence)], limited_evidence))
-    if not adopted_pairs:
-        return None
-
-    claims: list[ClaimItem] = []
-    for segment, evidence_item in adopted_pairs:
-        source_id = str(evidence_item.source_id or "").strip()
-        if not source_id:
-            continue
-        claims.append(
-            ClaimItem(
-                text=segment,
-                evidence_ids=[source_id],
-                confidence=normalize_confidence(evidence_item.score, clamp=True),
-            )
-        )
-
-    if not claims:
-        return None
-
-    confidence = average_claim_confidence(claims)
-    payload = render_payload_from_claims(
-        claims=claims,
-        evidence_items=limited_evidence,
-        confidence=confidence,
-    )
-    payload.confidence = confidence
-    return payload
-
-
-def build_korean_template_summary_payload(
-    *,
-    content: str,
-    evidence_items: list[EvidenceItem],
-) -> AgentResponsePayloadModel | None:
-    payload = build_plain_summary_attach_payload(content=content, evidence_items=evidence_items)
-    if payload is None:
-        return None
-    rendered_answer = str(content or "").strip()
-    if rendered_answer:
-        payload.answer = rendered_answer
-    return payload
 
 
 def build_local_fallback_payload(
