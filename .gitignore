@@ -289,9 +289,5 @@ data/*
 !data/benchmarks/fixtures/uploads/
 !data/benchmarks/fixtures/uploads/**
 
-# runtime service state and generated outputs
+# legacy local service state
 script/web_services_state.json
-output/save_text/
-output/benchmarks/**
-!output/benchmarks/**/
-!output/benchmarks/**/report.md
