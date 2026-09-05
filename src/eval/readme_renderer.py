@@ -10,15 +10,6 @@ from .summary_models import RunSummary, RunTrack
 
 README_HISTORY_START = "## 검증 결과"
 README_HISTORY_END = "## 문서"
-HISTORY_TABLE_METRICS = [
-    "pass_rate",
-    "tool_precision",
-    "tool_recall",
-    "citation_compliance",
-    "p50_latency_ms",
-    "p95_latency_ms",
-    "avg_cost_per_case_usd",
-]
 README_TEST_RESULT_PATTERN = re.compile(
     r"^\| [^|]+ \| `(?P<result>\d+ passed, \d+ subtests passed)` \|$",
     re.MULTILINE,
@@ -175,22 +166,6 @@ def replace_history_block(readme_text: str, history_block: str) -> str:
 
 def _relative_markdown_path(path: Path, base_dir: Path) -> str:
     return Path(os.path.relpath(path, base_dir)).as_posix()
-
-
-def _build_delta_text(current: StoredRun, previous: StoredRun | None) -> str:
-    if previous is None:
-        return "기준 런"
-
-    parts: list[str] = []
-    for metric_key in HISTORY_TABLE_METRICS:
-        current_value = getattr(current.metrics, metric_key)
-        previous_value = getattr(previous.metrics, metric_key)
-        if current_value is None or previous_value is None:
-            continue
-        parts.append(
-            f"{metric_key} {format_delta(metric_key, float(current_value) - float(previous_value))}"
-        )
-    return "`" + "; ".join(parts) + "`"
 
 
 def _gate_lists(summary: RunSummary) -> tuple[list[str], list[str]]:

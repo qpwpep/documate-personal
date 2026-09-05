@@ -24,17 +24,16 @@ SVG_COLORS = [
 class MetricSpec:
     key: str
     direction: str
-    higher_is_better: bool
     gate_key: str | None = None
 
 
 SVG_METRICS = [
-    MetricSpec("pass_rate", "higher is better", True, "pass_rate"),
-    MetricSpec("tool_precision", "higher is better", True, "tool_precision"),
-    MetricSpec("tool_recall", "higher is better", True, "tool_recall"),
-    MetricSpec("citation_compliance", "higher is better", True, "citation_compliance"),
-    MetricSpec("p95_latency_ms", "lower is better", False, "p95_latency_ms"),
-    MetricSpec("avg_cost_per_case_usd", "lower is better", False, "avg_cost_per_case_usd"),
+    MetricSpec("pass_rate", "higher is better", "pass_rate"),
+    MetricSpec("tool_precision", "higher is better", "tool_precision"),
+    MetricSpec("tool_recall", "higher is better", "tool_recall"),
+    MetricSpec("citation_compliance", "higher is better", "citation_compliance"),
+    MetricSpec("p95_latency_ms", "lower is better", "p95_latency_ms"),
+    MetricSpec("avg_cost_per_case_usd", "lower is better", "avg_cost_per_case_usd"),
 ]
 
 
