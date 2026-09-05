@@ -60,7 +60,7 @@ def make_action_postprocess_node(
 
         if needs_save(user_input) and delivery_body.strip():
             try:
-                save_result = save_text_tool.func(content=delivery_body, filename_prefix="response")
+                save_result = save_text_tool(content=delivery_body, filename_prefix="response")
             except Exception as exc:
                 save_result = {"status": "error", "error": str(exc)}
                 action_errors.append(f"save_text: failed ({exc})")
@@ -71,12 +71,11 @@ def make_action_postprocess_node(
 
         if needs_slack(user_input) and delivery_body.strip() and slack_target_available:
             try:
-                slack_result = slack_notify_tool.func(
+                slack_result = slack_notify_tool(
                     text=delivery_body,
                     user_id=destinations.user_id,
                     email=destinations.email,
                     channel_id=destinations.channel_id,
-                    target="auto",
                 )
             except Exception as exc:
                 slack_result = {

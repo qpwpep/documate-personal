@@ -4,8 +4,6 @@ import json
 import math
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
-
 from src.core.evidence import DocMetadata, EvidenceItem, build_local_source_id, dedupe_evidence, evidence_to_dicts, normalize_source_id, truncate_snippet
 
 
@@ -85,34 +83,6 @@ def build_retrieval_payload(
             "warnings": [str(item).strip() for item in (warnings or []) if str(item).strip()],
         },
     }
-
-
-class SaveArgs(BaseModel):
-    content: str = Field(
-        description=(
-            "The exact final message body to write into the .txt file. "
-            "When the user asked to save in this turn, this should be the self-contained final answer body generated for that request."
-        )
-    )
-    filename_prefix: str | None = Field(
-        default="response",
-        description="Optional short prefix for the filename (no extension).",
-    )
-
-
-class SlackArgs(BaseModel):
-    text: str = Field(
-        description=(
-            "Final plain-text message body to send to Slack. "
-            "When the user asked to share in this turn, this should be the exact self-contained final answer body generated for that request."
-        )
-    )
-    user_id: str | None = Field(default=None, description="Slack Uxxxxx user id for DM.")
-    email: str | None = Field(default=None, description="Slack email for DM.")
-    channel_id: str | None = Field(default=None, description="Slack channel id (C/G/D...).")
-    target: str = Field(default="auto", description="auto|dm|channel|group")
-
-
 
 
 def to_float_or_none(value: Any) -> float | None:

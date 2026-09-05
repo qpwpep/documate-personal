@@ -1,16 +1,15 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
-from langchain_core.tools import StructuredTool
 from slack_sdk.errors import SlackApiError
 
 from src.infra.settings import AppSettings
 from src.infra.slack_utils import create_slack_client, resolve_destination
-from src.infra.tools._common import SlackArgs
 
 
-def build_slack_notify_tool(settings: AppSettings) -> Any:
+def build_slack_notify_tool(settings: AppSettings) -> Callable[..., dict[str, Any]]:
     slack_client = create_slack_client(settings.slack_bot_token)
 
     def slack_notify(
@@ -18,10 +17,7 @@ def build_slack_notify_tool(settings: AppSettings) -> Any:
         user_id: str | None = None,
         email: str | None = None,
         channel_id: str | None = None,
-        target: str = "auto",
-    ) -> dict:
-        _ = target
-
+    ) -> dict[str, Any]:
         if not slack_client:
             return {
                 "status": "skipped",
@@ -51,13 +47,4 @@ def build_slack_notify_tool(settings: AppSettings) -> Any:
         except SlackApiError as exc:
             return {"status": "error", "error": str(exc), "error_code": "SLACK_AUTH_FAILED"}
 
-    return StructuredTool.from_function(
-        name="slack_notify",
-        description=(
-            "Send a message to Slack. Use when the user asks to DM or post the answer to Slack. "
-            "Provide either channel_id (C/G/D...) or a user_id/email for DM. "
-            "If neither is present, the tool tries environment defaults."
-        ),
-        func=slack_notify,
-        args_schema=SlackArgs,
-    )
+    return slack_notify

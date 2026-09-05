@@ -19,7 +19,6 @@ from src.core.planner_schema import PlannerOutput, RetrievalTask
 from .helpers import (
     _CapturePlannerLLM,
     _FailingPlannerLLM,
-    _ToolWrapper,
     _tool_payload,
 )
 
@@ -374,8 +373,8 @@ class GraphRoutingTest(unittest.TestCase):
         action_node = _instrument_stage_node(
             "action_postprocess",
             make_action_postprocess_node(
-                save_text_tool=_ToolWrapper(lambda content, filename_prefix: {"status": "ok"}),
-                slack_notify_tool=_ToolWrapper(lambda text, **kwargs: {"status": "ok"}),
+                save_text_tool=lambda content, filename_prefix: {"status": "ok"},
+                slack_notify_tool=lambda text, **kwargs: {"status": "ok"},
                 verbose=False,
             ),
         )

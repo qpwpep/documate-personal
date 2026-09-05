@@ -1,15 +1,14 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import datetime
-
-from langchain_core.tools import StructuredTool
+from typing import Any
 
 from src.infra.runtime_paths import get_save_text_output_dir
-from src.infra.tools._common import SaveArgs
 
 
-def build_save_text_tool():
-    def save_text_to_file(content: str, filename_prefix: str = "response") -> dict:
+def build_save_text_tool() -> Callable[..., dict[str, Any]]:
+    def save_text_to_file(content: str, filename_prefix: str = "response") -> dict[str, Any]:
         try:
             ts = datetime.now().strftime("%Y%m%d_%H%M%S")
             output_path = get_save_text_output_dir()
@@ -30,12 +29,4 @@ def build_save_text_tool():
         except Exception as exc:
             raise RuntimeError(f"Failed to save file: {exc}") from exc
 
-    return StructuredTool.from_function(
-        name="save_text",
-        description=(
-            "Save the given final response text into a timestamped .txt file in the current directory. "
-            "Call this at most ONCE per user request. If you already saved, do not call again."
-        ),
-        func=save_text_to_file,
-        args_schema=SaveArgs,
-    )
+    return save_text_to_file
