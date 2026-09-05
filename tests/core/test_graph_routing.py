@@ -14,7 +14,7 @@ from src.runtime.nodes.actions import make_action_postprocess_node
 from src.runtime.nodes.planner import make_planner_node
 from src.runtime.nodes.retrieval import make_retrieve_dispatch_node
 from src.runtime.nodes.session import add_user_message
-from src.runtime.nodes.validation import make_pre_synthesis_validation_node, make_validate_evidence_node
+from src.runtime.nodes.validation import make_post_synthesis_validation_node, make_pre_synthesis_validation_node
 from src.core.planner_schema import PlannerOutput, RetrievalTask
 
 from .helpers import (
@@ -42,7 +42,8 @@ class GraphRoutingTest(unittest.TestCase):
                 "messages": [AIMessage(content="final answer")],
                 "response": ResponseState(final_answer="final answer", synthesis_attempt=1),
             },
-            validate_evidence_node=make_validate_evidence_node(verbose=False),
+            pre_synthesis_validation_node=make_pre_synthesis_validation_node(verbose=False),
+            post_synthesis_validation_node=make_post_synthesis_validation_node(verbose=False),
             action_postprocess_node=lambda state: {},
             memory_policy=ConversationMemoryPolicy(),
         )
@@ -72,7 +73,8 @@ class GraphRoutingTest(unittest.TestCase):
                 "messages": [AIMessage(content="final answer")],
                 "response": ResponseState(final_answer="final answer", synthesis_attempt=1),
             },
-            validate_evidence_node=make_validate_evidence_node(verbose=False),
+            pre_synthesis_validation_node=make_pre_synthesis_validation_node(verbose=False),
+            post_synthesis_validation_node=make_post_synthesis_validation_node(verbose=False),
             action_postprocess_node=lambda state: {},
             memory_policy=ConversationMemoryPolicy(),
         )
@@ -108,7 +110,8 @@ class GraphRoutingTest(unittest.TestCase):
                 "messages": [AIMessage(content="final answer")],
                 "response": ResponseState(final_answer="final answer", synthesis_attempt=1),
             },
-            validate_evidence_node=make_validate_evidence_node(verbose=False),
+            pre_synthesis_validation_node=make_pre_synthesis_validation_node(verbose=False),
+            post_synthesis_validation_node=make_post_synthesis_validation_node(verbose=False),
             action_postprocess_node=lambda state: {},
             memory_policy=ConversationMemoryPolicy(high_water_turns=4, low_water_turns=3),
         )
@@ -130,7 +133,8 @@ class GraphRoutingTest(unittest.TestCase):
                 "messages": [AIMessage(content="final answer")],
                 "response": ResponseState(final_answer="final answer", synthesis_attempt=1),
             },
-            validate_evidence_node=make_validate_evidence_node(verbose=False),
+            pre_synthesis_validation_node=make_pre_synthesis_validation_node(verbose=False),
+            post_synthesis_validation_node=make_post_synthesis_validation_node(verbose=False),
             action_postprocess_node=lambda state: {},
             memory_policy=ConversationMemoryPolicy(),
         )
@@ -182,7 +186,7 @@ class GraphRoutingTest(unittest.TestCase):
                 "response": ResponseState(final_answer="final answer", synthesis_attempt=1),
             },
             pre_synthesis_validation_node=make_pre_synthesis_validation_node(verbose=False),
-            validate_evidence_node=make_validate_evidence_node(verbose=False),
+            post_synthesis_validation_node=make_post_synthesis_validation_node(verbose=False),
             action_postprocess_node=lambda state: {},
             memory_policy=ConversationMemoryPolicy(),
         )
@@ -277,7 +281,7 @@ class GraphRoutingTest(unittest.TestCase):
             retrieve_dispatch_node=retrieve_dispatch,
             synthesize_node=_synthesize,
             pre_synthesis_validation_node=make_pre_synthesis_validation_node(verbose=False),
-            validate_evidence_node=make_validate_evidence_node(verbose=False),
+            post_synthesis_validation_node=make_post_synthesis_validation_node(verbose=False),
             action_postprocess_node=lambda state: {},
             memory_policy=ConversationMemoryPolicy(),
         )
@@ -296,32 +300,32 @@ class GraphRoutingTest(unittest.TestCase):
     def test_debug_survives_validation_and_action_stage_instrumentation(self) -> None:
         retrieve_dispatch = make_retrieve_dispatch_node(
             lambda query: _tool_payload(
-                    [
-                        {
-                            "kind": "official",
-                            "tool": "tavily_search",
-                            "source_id": "url:https://numpy.org/doc/stable/",
-                            "document_id": "url:https://numpy.org/doc/stable/",
-                            "url_or_path": "https://numpy.org/doc/stable/",
-                            "title": "NumPy docs",
-                            "snippet": "broadcasting official reference",
-                            "score": 0.94,
-                        }
-                    ],
-                    tool="tavily_search",
-                    route="docs",
-                    status="success",
-                    message="",
-                    query=query,
-                ),
+                [
+                    {
+                        "kind": "official",
+                        "tool": "tavily_search",
+                        "source_id": "url:https://numpy.org/doc/stable/",
+                        "document_id": "url:https://numpy.org/doc/stable/",
+                        "url_or_path": "https://numpy.org/doc/stable/",
+                        "title": "NumPy docs",
+                        "snippet": "broadcasting official reference",
+                        "score": 0.94,
+                    }
+                ],
+                tool="tavily_search",
+                route="docs",
+                status="success",
+                message="",
+                query=query,
+            ),
             lambda query, k, retriever=None: _tool_payload(
-                    [],
-                    tool="upload_search",
-                    route="upload",
-                    status="no_result",
-                    message="",
-                    query=query,
-                ),
+                [],
+                tool="upload_search",
+                route="upload",
+                status="no_result",
+                message="",
+                query=query,
+            ),
             verbose=False,
         )
 
@@ -369,7 +373,7 @@ class GraphRoutingTest(unittest.TestCase):
         )
         validate_node = _instrument_stage_node(
             "post_synthesis_validation",
-            make_validate_evidence_node(verbose=False),
+            make_post_synthesis_validation_node(verbose=False),
         )
         action_node = _instrument_stage_node(
             "action_postprocess",
@@ -395,7 +399,7 @@ class GraphRoutingTest(unittest.TestCase):
             retrieve_dispatch_node=retrieve_dispatch,
             synthesize_node=_synthesize,
             pre_synthesis_validation_node=pre_validate_node,
-            validate_evidence_node=validate_node,
+            post_synthesis_validation_node=validate_node,
             action_postprocess_node=action_node,
             memory_policy=ConversationMemoryPolicy(),
         )

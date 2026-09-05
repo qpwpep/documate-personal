@@ -12,7 +12,7 @@ from src.runtime.nodes.synthesis import make_synthesize_node
 from src.runtime.nodes.validation import (
     ValidationSnapshot,
     make_pre_synthesis_validation_node,
-    make_validate_evidence_node,
+    make_post_synthesis_validation_node,
 )
 from src.runtime.nodes.validation.assessment import assess_validation
 
@@ -301,7 +301,7 @@ class SynthesisValidationTest(unittest.TestCase):
         self.assertNotIn("response", result)
 
     def test_validate_evidence_salvages_upload_low_score_without_retry(self) -> None:
-        validate_node = make_validate_evidence_node(verbose=False)
+        validate_node = make_post_synthesis_validation_node(verbose=False)
         planner_output = PlannerOutput(use_retrieval=True, tasks=[RetrievalTask(route="upload", query="groupby", k=3)])
         result = validate_node(
             _state(
@@ -401,7 +401,7 @@ class SynthesisValidationTest(unittest.TestCase):
         self.assertEqual(_retry(result).preserved_evidence[0]["tool"], "upload_search")
 
     def test_validate_evidence_unsupported_claims_falls_back_to_grounded_payload(self) -> None:
-        validate_node = make_validate_evidence_node(verbose=False)
+        validate_node = make_post_synthesis_validation_node(verbose=False)
         planner_output = PlannerOutput(use_retrieval=True, tasks=[RetrievalTask(route="upload", query="example", k=3)])
         valid_source = "path:uploads/example.ipynb#cell=0;chunk=0;start=0;end=12"
         result = validate_node(
@@ -436,7 +436,7 @@ class SynthesisValidationTest(unittest.TestCase):
         self.assertEqual(_response(result).payload.claims[0].evidence_ids, [valid_source])
 
     def test_validate_evidence_unsupported_claims_rebalances_hybrid_routes_legacy(self) -> None:
-        validate_node = make_validate_evidence_node(verbose=False)
+        validate_node = make_post_synthesis_validation_node(verbose=False)
         planner_output = PlannerOutput(
             use_retrieval=True,
             tasks=[
@@ -500,7 +500,7 @@ class SynthesisValidationTest(unittest.TestCase):
         )
 
     def test_validate_evidence_filters_to_valid_claims_after_retry_budget(self) -> None:
-        validate_node = make_validate_evidence_node(verbose=False)
+        validate_node = make_post_synthesis_validation_node(verbose=False)
         planner_output = PlannerOutput(use_retrieval=True, tasks=[RetrievalTask(route="upload", query="example", k=3)])
         valid_source = "path:uploads/example.ipynb#cell=0;chunk=0;start=0;end=12"
         result = validate_node(
@@ -537,7 +537,7 @@ class SynthesisValidationTest(unittest.TestCase):
         self.assertEqual(len(_response(result).payload.evidence), 1)
 
     def test_validate_evidence_passes_when_retrieval_not_required(self) -> None:
-        validate_node = make_validate_evidence_node(verbose=False)
+        validate_node = make_post_synthesis_validation_node(verbose=False)
         planner_output = PlannerOutput(use_retrieval=False, tasks=[])
         result = validate_node(_state({"planner_output": planner_output, "retrieved_evidence": [], "synthesis_attempt": 1}))
         self.assertFalse(_retry(result).needs_retry)
@@ -1233,7 +1233,7 @@ class SynthesisValidationTest(unittest.TestCase):
         )
 
     def test_validate_evidence_unsupported_claims_rebalances_hybrid_routes(self) -> None:
-        validate_node = make_validate_evidence_node(verbose=False)
+        validate_node = make_post_synthesis_validation_node(verbose=False)
         planner_output = PlannerOutput(
             use_retrieval=True,
             tasks=[

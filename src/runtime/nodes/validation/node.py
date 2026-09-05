@@ -115,7 +115,3 @@ def make_post_synthesis_validation_node(verbose: bool):
         return updates
 
     return post_synthesis_validation
-
-
-def make_validate_evidence_node(verbose: bool):
-    return make_post_synthesis_validation_node(verbose)

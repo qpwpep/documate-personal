@@ -98,7 +98,6 @@ class NodeRefactorTest(unittest.TestCase):
         self.assertTrue(hasattr(validation_module, "ValidationSnapshot"))
         self.assertTrue(hasattr(validation_module, "make_pre_synthesis_validation_node"))
         self.assertTrue(hasattr(validation_module, "make_post_synthesis_validation_node"))
-        self.assertTrue(hasattr(validation_module, "make_validate_evidence_node"))
         self.assertFalse(hasattr(validation_module, "apply_validation_outcome"))
 
 
