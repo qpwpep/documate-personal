@@ -44,8 +44,7 @@ def process_chat_prompt(
     prompt: str,
     append_user_message: Callable[[ChatMessage], None],
     append_assistant_message: Callable[[ChatMessage], None],
-    stream_agent: Callable[[str], Iterable[AgentStreamEvent]] | None = None,
-    call_agent: Callable[[str], AgentCallResult] | None = None,
+    stream_agent: Callable[[str], Iterable[AgentStreamEvent]],
 ) -> None:
     append_user_message(
         {
@@ -64,22 +63,7 @@ def process_chat_prompt(
     with st.chat_message("assistant"):
         status_placeholder = st.empty() if hasattr(st, "empty") else st
         status_placeholder.markdown("요청을 접수했습니다.")
-        event_source = stream_agent
-        if event_source is None and call_agent is not None:
-
-            def _single_result_stream(user_input: str) -> Iterable[AgentStreamEvent]:
-                yield AgentStreamEvent(
-                    event="final_response",
-                    data={},
-                    result=call_agent(user_input),
-                )
-
-            event_source = _single_result_stream
-
-        if event_source is None:
-            raise ValueError("stream_agent or call_agent must be provided")
-
-        for event in event_source(prompt):
+        for event in stream_agent(prompt):
             if event.event == "final_response" and event.result is not None:
                 result = event.result
                 display_answer = _clean_saved_file_notice(result.answer, result.file_path or "")

@@ -1,27 +1,46 @@
 from __future__ import annotations
 
 import unittest
+from contextlib import nullcontext
 from unittest.mock import patch
 
-from src.app.web import streamlit_page
+from src.app.web import streamlit_intro, streamlit_sidebar, streamlit_styles, streamlit_theme
 
 
 class _FakeStreamlit:
     def __init__(self) -> None:
         self.markdowns: list[tuple[str, bool]] = []
         self.query_params: dict[str, str] = {}
-        self.session_state: dict[str, str] = {}
+        self.session_state: dict[str, object] = {}
+        self.button_labels: list[str] = []
+        self.sidebar = nullcontext()
+
+    def set_page_config(self, **kwargs) -> None:
+        pass
 
     def markdown(self, body: str, unsafe_allow_html: bool = False) -> None:
         self.markdowns.append((body, unsafe_allow_html))
+
+    def columns(self, count: int):
+        return [nullcontext() for _ in range(count)]
+
+    def button(self, label: str, **kwargs) -> bool:
+        self.button_labels.append(label)
+        return False
+
+    def radio(self, label: str, *, options, index: int, key: str, **kwargs):
+        return self.session_state.get(key, options[index])
+
+    def text_input(self, label: str, *, value: str, **kwargs) -> str:
+        return value
 
 
 class StreamlitPageTest(unittest.TestCase):
     def test_render_theme_styles_emits_light_override(self) -> None:
         fake_st = _FakeStreamlit()
 
-        with patch.object(streamlit_page, "st", fake_st):
-            streamlit_page.render_theme_styles("라이트")
+        with patch.object(streamlit_theme, "st", fake_st):
+            streamlit_theme.render_theme_styles("라이트")
 
         self.assertEqual(len(fake_st.markdowns), 1)
         body, unsafe = fake_st.markdowns[0]
@@ -38,8 +57,8 @@ class StreamlitPageTest(unittest.TestCase):
     def test_render_theme_styles_emits_dark_override(self) -> None:
         fake_st = _FakeStreamlit()
 
-        with patch.object(streamlit_page, "st", fake_st):
-            streamlit_page.render_theme_styles("다크")
+        with patch.object(streamlit_theme, "st", fake_st):
+            streamlit_theme.render_theme_styles("다크")
 
         self.assertEqual(len(fake_st.markdowns), 1)
         body, unsafe = fake_st.markdowns[0]
@@ -56,30 +75,38 @@ class StreamlitPageTest(unittest.TestCase):
     def test_render_theme_styles_keeps_system_mode_css_media_query(self) -> None:
         fake_st = _FakeStreamlit()
 
-        with patch.object(streamlit_page, "st", fake_st):
-            streamlit_page.render_theme_styles("시스템")
+        with patch.object(streamlit_styles, "st", fake_st), patch.object(
+            streamlit_theme, "st", fake_st
+        ):
+            streamlit_styles.configure_page()
+            base_markdowns = list(fake_st.markdowns)
+            streamlit_theme.render_theme_styles("시스템")
 
-        self.assertEqual(fake_st.markdowns, [])
-        self.assertIn("@media (prefers-color-scheme: dark)", streamlit_page._APP_CSS)
-        self.assertIn('[data-testid="stChatInput"] > div:focus-within', streamlit_page._APP_CSS)
-        self.assertIn("caret-color: var(--dm-accent) !important;", streamlit_page._APP_CSS)
-        self.assertIn("--dm-chat-attachment-text: #202124;", streamlit_page._APP_CSS)
-        self.assertIn("--dm-chat-icon: #276f66;", streamlit_page._APP_CSS)
-        self.assertIn('[data-testid="stChatInput"] button svg', streamlit_page._APP_CSS)
+        self.assertEqual(fake_st.markdowns, base_markdowns)
+        rendered_page = "\n".join(body for body, _ in fake_st.markdowns)
+        self.assertIn("@media (prefers-color-scheme: dark)", rendered_page)
+        self.assertIn('[data-testid="stChatInput"] > div:focus-within', rendered_page)
+        self.assertIn("caret-color: var(--dm-accent) !important;", rendered_page)
+        self.assertIn("--dm-chat-attachment-text: #202124;", rendered_page)
+        self.assertIn("--dm-chat-icon: #276f66;", rendered_page)
+        self.assertIn('[data-testid="stChatInput"] button svg', rendered_page)
         self.assertIn(
             '[data-testid="stChatInput"] [data-testid="stChatInputFile"] > div:first-child',
-            streamlit_page._APP_CSS,
+            rendered_page,
         )
-        self.assertIn(".dm-save-note", streamlit_page._APP_CSS)
+        self.assertIn(".dm-save-note", rendered_page)
 
-    def test_sync_theme_from_query_params_sets_session_theme(self) -> None:
+    def test_sidebar_uses_theme_from_query_params(self) -> None:
         fake_st = _FakeStreamlit()
         fake_st.query_params["theme"] = "dark"
 
-        with patch.object(streamlit_page, "st", fake_st):
-            streamlit_page._sync_theme_from_query_params()
+        with patch.object(streamlit_sidebar, "st", fake_st), patch.object(
+            streamlit_theme, "st", fake_st
+        ):
+            sidebar_inputs = streamlit_sidebar.render_sidebar()
 
         self.assertEqual(fake_st.session_state["documate_theme_mode"], "다크")
+        self.assertEqual(sidebar_inputs.theme_mode, "다크")
 
     def test_quick_prompts_are_sampled_once_per_session(self) -> None:
         fake_st = _FakeStreamlit()
@@ -90,19 +117,17 @@ class StreamlitPageTest(unittest.TestCase):
             "추천 4",
         ]
 
-        with patch.object(streamlit_page, "st", fake_st), patch(
-            "src.app.web.streamlit_page.random.sample",
-            return_value=sampled_prompts,
-        ) as mock_sample:
-            first_prompts = streamlit_page._get_quick_prompts_for_session()
-            second_prompts = streamlit_page._get_quick_prompts_for_session()
+        with patch.object(streamlit_intro, "st", fake_st), patch(
+            "src.app.web.streamlit_intro.random.sample",
+            side_effect=[
+                sampled_prompts,
+                ["다른 추천 1", "다른 추천 2", "다른 추천 3", "다른 추천 4"],
+            ],
+        ):
+            streamlit_intro.render_intro({})
+            streamlit_intro.render_intro({})
 
-        self.assertEqual(first_prompts, sampled_prompts)
-        self.assertEqual(second_prompts, sampled_prompts)
-        mock_sample.assert_called_once_with(
-            streamlit_page._QUICK_PROMPTS,
-            streamlit_page._QUICK_PROMPT_COUNT,
-        )
+        self.assertEqual(fake_st.button_labels, sampled_prompts + sampled_prompts)
 
 
 if __name__ == "__main__":
