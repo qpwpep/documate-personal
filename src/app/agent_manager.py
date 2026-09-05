@@ -132,10 +132,6 @@ class AgentFlowManager:
         return fallback
 
     @staticmethod
-    def _extract_observed_evidence(current_turn_messages: list[Any], *, errors: list[str]) -> list[dict[str, Any]]:
-        return DebugCollector._extract_observed_evidence(current_turn_messages, errors=errors)
-
-    @staticmethod
     def _exit_payload(message: str) -> dict[str, Any]:
         return {
             "message": message,

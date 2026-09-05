@@ -25,13 +25,6 @@ def as_int(value: object) -> int | None:
         return None
 
 
-def as_float(value: object) -> float | None:
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
-
-
 def normalize_cmd_token(value: str) -> str:
     normalized = value.strip().lower().replace("\\", "/")
     while "//" in normalized:

@@ -21,7 +21,6 @@ logger = logging.getLogger(__name__)
 class SessionEntry:
     agent: AgentFlowManager
     last_accessed_monotonic: float
-    created_monotonic: float
     request_lock: Lock = field(default_factory=Lock)
     active_request_count: int = 0
 
@@ -120,7 +119,6 @@ class InMemorySessionStore:
             recreated_agent = self._agent_factory()
             self.active_agents[session_id] = SessionEntry(
                 agent=recreated_agent,
-                created_monotonic=now,
                 last_accessed_monotonic=now,
             )
             lru_evicted_count = self.evict_lru_if_needed(self.settings.max_active_sessions)

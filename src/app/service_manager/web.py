@@ -163,14 +163,14 @@ def _stop_web_services() -> int:
 
     streamlit_pid, streamlit_create_time = process_client.resolve_service_process(
         name="Streamlit",
-        pid=process_client.as_int(state.streamlit_pid) if state is not None else None,
-        create_time=process_client.as_float(state.streamlit_create_time) if state is not None else None,
+        pid=state.streamlit_pid if state is not None else None,
+        create_time=state.streamlit_create_time if state is not None else None,
         fallback_tokens=STREAMLIT_PROCESS_TOKENS,
     )
     fastapi_pid, fastapi_create_time = process_client.resolve_service_process(
         name="FastAPI",
-        pid=process_client.as_int(state.fastapi_pid) if state is not None else None,
-        create_time=process_client.as_float(state.fastapi_create_time) if state is not None else None,
+        pid=state.fastapi_pid if state is not None else None,
+        create_time=state.fastapi_create_time if state is not None else None,
         fallback_tokens=FASTAPI_PROCESS_TOKENS,
     )
 
