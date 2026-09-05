@@ -13,10 +13,8 @@ from src.core.conversation_memory import (
     build_durable_conversation_memory,
     build_untrusted_memory_prompt_messages,
     estimate_text_tokens,
-    legacy_conversation_memory_policy,
     measure_conversation,
     plan_compaction,
-    project_durable_messages,
 )
 
 
@@ -86,12 +84,12 @@ class ConversationMemoryPolicyTest(unittest.TestCase):
             AIMessage(content="raw graph answer", response_metadata={"large": "metadata"}),
         ]
 
-        projected = project_durable_messages(
+        projected = build_durable_conversation_memory(
             messages,
             memory_summary="bounded summary",
             policy=_policy(),
             canonical_assistant_text="answer shown to the user\n\n저장 완료: output/result.txt",
-        )
+        ).messages
 
         self.assertEqual(len(projected), 2)
         self.assertIsInstance(projected[0], HumanMessage)
@@ -187,8 +185,8 @@ class ConversationMemoryPolicyTest(unittest.TestCase):
         self.assertLess(memory.usage.serialized_bytes, policy.high_water_bytes)
         self.assertLessEqual(memory.usage.serialized_bytes, policy.low_water_bytes)
 
-    def test_legacy_nonpositive_window_compacts_two_turns_to_the_latest_turn(self) -> None:
-        policy = legacy_conversation_memory_policy(0)
+    def test_single_turn_target_compacts_two_turns_to_the_latest_turn(self) -> None:
+        policy = ConversationMemoryPolicy(high_water_turns=2, low_water_turns=1)
         messages = [
             HumanMessage(content="old request"),
             AIMessage(content="old answer"),
@@ -258,11 +256,11 @@ def test_durable_projection_stays_within_every_hard_bound_for_unicode_history(
     assert usage.serialized_bytes <= policy.hard_max_bytes
     assert all(isinstance(message, (HumanMessage, AIMessage)) for message in projected)
     assert any(isinstance(message, HumanMessage) for message in projected)
-    projected_again = project_durable_messages(
+    projected_again = build_durable_conversation_memory(
         projected,
         memory_summary=memory.memory_summary,
         policy=policy,
-    )
+    ).messages
     assert [
         (type(message), str(message.content)) for message in projected_again
     ] == [(type(message), str(message.content)) for message in projected]

@@ -2,6 +2,7 @@ import unittest
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
+from src.core.conversation_memory import ConversationMemoryPolicy
 from src.core.contracts import GraphState, LLMCallMetadata, PlannerState, ResponseState
 from src.core.contracts.boundary.debug import get_debug_state
 from src.core.contracts.boundary.graph import build_graph_state_input
@@ -43,7 +44,7 @@ class GraphRoutingTest(unittest.TestCase):
             },
             validate_evidence_node=make_validate_evidence_node(verbose=False),
             action_postprocess_node=lambda state: {},
-            summary_max_turns=6,
+            memory_policy=ConversationMemoryPolicy(),
         )
 
         result = graph.invoke(build_graph_state_input(user_input="question", messages=[]))
@@ -73,7 +74,7 @@ class GraphRoutingTest(unittest.TestCase):
             },
             validate_evidence_node=make_validate_evidence_node(verbose=False),
             action_postprocess_node=lambda state: {},
-            summary_max_turns=6,
+            memory_policy=ConversationMemoryPolicy(),
         )
 
         result = graph.invoke(build_graph_state_input(user_input="question", messages=long_history))
@@ -109,7 +110,7 @@ class GraphRoutingTest(unittest.TestCase):
             },
             validate_evidence_node=make_validate_evidence_node(verbose=False),
             action_postprocess_node=lambda state: {},
-            summary_max_turns=2,
+            memory_policy=ConversationMemoryPolicy(high_water_turns=4, low_water_turns=3),
         )
 
         result = graph.invoke(build_graph_state_input(user_input="question", messages=history))
@@ -131,7 +132,7 @@ class GraphRoutingTest(unittest.TestCase):
             },
             validate_evidence_node=make_validate_evidence_node(verbose=False),
             action_postprocess_node=lambda state: {},
-            summary_max_turns=6,
+            memory_policy=ConversationMemoryPolicy(),
         )
 
         result = graph.invoke(build_graph_state_input(user_input="question", messages=[]))
@@ -183,7 +184,7 @@ class GraphRoutingTest(unittest.TestCase):
             pre_synthesis_validation_node=make_pre_synthesis_validation_node(verbose=False),
             validate_evidence_node=make_validate_evidence_node(verbose=False),
             action_postprocess_node=lambda state: {},
-            summary_max_turns=6,
+            memory_policy=ConversationMemoryPolicy(),
         )
 
         result = graph.invoke(
@@ -278,7 +279,7 @@ class GraphRoutingTest(unittest.TestCase):
             pre_synthesis_validation_node=make_pre_synthesis_validation_node(verbose=False),
             validate_evidence_node=make_validate_evidence_node(verbose=False),
             action_postprocess_node=lambda state: {},
-            summary_max_turns=6,
+            memory_policy=ConversationMemoryPolicy(),
         )
 
         result = graph.invoke(
@@ -396,7 +397,7 @@ class GraphRoutingTest(unittest.TestCase):
             pre_synthesis_validation_node=pre_validate_node,
             validate_evidence_node=validate_node,
             action_postprocess_node=action_node,
-            summary_max_turns=6,
+            memory_policy=ConversationMemoryPolicy(),
         )
 
         result = graph.invoke(

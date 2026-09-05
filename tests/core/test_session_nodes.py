@@ -15,7 +15,11 @@ from .helpers import _CaptureSummaryLLM, build_legacy_state
 class SessionNodeTest(unittest.TestCase):
     def test_compiled_graph_removes_evicted_messages_after_summary(self) -> None:
         summarize_llm = _CaptureSummaryLLM()
-        summarize_node = make_summarize_node(summarize_llm, verbose=False, max_turns=1)
+        summarize_node = make_summarize_node(
+            summarize_llm,
+            verbose=False,
+            policy=ConversationMemoryPolicy(high_water_turns=3, low_water_turns=2),
+        )
         builder = StateGraph(GraphState)
         builder.add_node("summarize_old_messages", summarize_node)
         builder.set_entry_point("summarize_old_messages")
@@ -64,7 +68,11 @@ class SessionNodeTest(unittest.TestCase):
 
     def test_summarize_node_uses_transcript_without_tool_payloads(self) -> None:
         summarize_llm = _CaptureSummaryLLM()
-        summarize_node = make_summarize_node(summarize_llm, verbose=False, max_turns=1)
+        summarize_node = make_summarize_node(
+            summarize_llm,
+            verbose=False,
+            policy=ConversationMemoryPolicy(high_water_turns=3, low_water_turns=2),
+        )
 
         updates = summarize_node(
             build_legacy_state(
@@ -105,7 +113,11 @@ class SessionNodeTest(unittest.TestCase):
 
     def test_summarize_node_skips_llm_when_transcript_is_blank(self) -> None:
         summarize_llm = _CaptureSummaryLLM()
-        summarize_node = make_summarize_node(summarize_llm, verbose=False, max_turns=1)
+        summarize_node = make_summarize_node(
+            summarize_llm,
+            verbose=False,
+            policy=ConversationMemoryPolicy(high_water_turns=3, low_water_turns=2),
+        )
 
         updates = summarize_node(
             build_legacy_state(
@@ -134,7 +146,7 @@ class SessionNodeTest(unittest.TestCase):
         summarize_node = make_summarize_node(
             summarize_llm,
             verbose=False,
-            max_turns=1,
+            policy=ConversationMemoryPolicy(high_water_turns=3, low_water_turns=2),
         )
 
         updates = summarize_node(

@@ -18,7 +18,6 @@ from src.core.conversation_memory import (
     ConversationMemoryPolicy,
     bound_utf8_text,
     build_bounded_fallback_summary,
-    legacy_conversation_memory_policy,
     measure_conversation,
     plan_compaction,
 )
@@ -117,16 +116,13 @@ def latest_previous_ai_answer(messages: list[AnyMessage]) -> str:
 def make_summarize_node(
     llm_summarizer: Any,
     verbose: bool,
-    max_turns: int = 6,
     *,
-    policy: ConversationMemoryPolicy | None = None,
+    policy: ConversationMemoryPolicy,
 ):
-    memory_policy = policy or legacy_conversation_memory_policy(max_turns)
-
     def summarize_old_messages(state: GraphState) -> GraphState:
         messages: List[BaseMessage] = state.get("messages", [])
         runtime = get_runtime_state(state)
-        plan = plan_compaction(messages, runtime.memory_summary, memory_policy)
+        plan = plan_compaction(messages, runtime.memory_summary, policy)
         if not plan.should_compact:
             return {}
 
@@ -135,12 +131,12 @@ def make_summarize_node(
         llm_calls: list[LLMCallMetadata] = []
         summary_transcript = bound_utf8_text(
             build_summary_transcript(old_messages),
-            max_bytes=memory_policy.low_water_bytes,
+            max_bytes=policy.low_water_bytes,
         ).strip()
         previous_summary = build_bounded_fallback_summary(
             existing_summary=runtime.memory_summary,
             evicted_transcript="",
-            policy=memory_policy,
+            policy=policy,
         )
         next_summary = previous_summary
         fallback_reason: str | None = None
@@ -175,7 +171,7 @@ def make_summarize_node(
                     next_summary = build_bounded_fallback_summary(
                         existing_summary=None,
                         evicted_transcript=generated_summary,
-                        policy=memory_policy,
+                        policy=policy,
                     )
                 else:
                     fallback_reason = "blank_output"
@@ -188,7 +184,7 @@ def make_summarize_node(
                 next_summary = build_bounded_fallback_summary(
                     existing_summary=previous_summary,
                     evicted_transcript=summary_transcript,
-                    policy=memory_policy,
+                    policy=policy,
                 )
 
         debug = get_debug_state(state)

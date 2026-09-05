@@ -6,7 +6,6 @@ from langgraph.graph import END, StateGraph
 
 from src.core.conversation_memory import (
     ConversationMemoryPolicy,
-    legacy_conversation_memory_policy,
     plan_compaction,
 )
 from src.core.contracts.boundary.debug import get_debug_state
@@ -36,17 +35,15 @@ def _record_edge_decision(
 
 def _summary_router(
     state: dict[str, Any],
-    summary_max_turns: int,
-    memory_policy: ConversationMemoryPolicy | None = None,
+    memory_policy: ConversationMemoryPolicy,
 ) -> str:
     messages = state.get("messages")
     if not isinstance(messages, list):
         messages = []
-    policy = memory_policy or legacy_conversation_memory_policy(summary_max_turns)
     plan = plan_compaction(
         messages,
         get_runtime_state(state).memory_summary,
-        policy,
+        memory_policy,
     )
     if plan.should_compact:
         _record_edge_decision(
@@ -149,9 +146,8 @@ def build_graph(
     synthesize_node: Any,
     validate_evidence_node: Any | None = None,
     action_postprocess_node: Any | None = None,
-    summary_max_turns: int = 6,
     *,
-    memory_policy: ConversationMemoryPolicy | None = None,
+    memory_policy: ConversationMemoryPolicy,
     pre_synthesis_validation_node: Any | None = None,
     post_synthesis_validation_node: Any | None = None,
 ):
@@ -173,7 +169,7 @@ def build_graph(
 
     builder.add_conditional_edges(
         "add_user_message",
-        lambda state: _summary_router(state, summary_max_turns, memory_policy),
+        lambda state: _summary_router(state, memory_policy),
         {
             "summarize": "summarize_old_messages",
             "planner": "planner",
