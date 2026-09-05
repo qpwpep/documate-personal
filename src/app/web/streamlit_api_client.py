@@ -114,14 +114,13 @@ def _build_payload(user_input: str, context: AgentRequestContext) -> dict[str, A
 
 def _parse_agent_response_data(data: Any) -> AgentCallResult:
     payload = data if isinstance(data, dict) else {}
-    response_payload = payload.get("response") or {}
-    if isinstance(response_payload, dict):
-        answer = str(response_payload.get("answer", "") or "")
-        evidence = response_payload.get("evidence")
-        evidence_items = evidence if isinstance(evidence, list) else []
-    else:
-        answer = str(response_payload)
-        evidence_items = []
+    response_payload = payload.get("response")
+    if not isinstance(response_payload, dict):
+        raise ValueError("API 응답의 response는 객체여야 합니다.")
+
+    answer = str(response_payload.get("answer", "") or "")
+    evidence = response_payload.get("evidence")
+    evidence_items = evidence if isinstance(evidence, list) else []
 
     return AgentCallResult(
         answer=answer,
