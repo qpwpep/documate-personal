@@ -108,6 +108,28 @@ class StreamlitApiClientTest(unittest.TestCase):
         self.assertIsNone(result.file_path)
         self.assertEqual(result.evidence_items, [])
 
+    @patch("requests.sessions.Session.request")
+    def test_get_agent_response_rejects_plain_string_response(self, mock_request) -> None:
+        response = requests.Response()
+        response.status_code = 200
+        response._content = b'{"response": "legacy string response"}'
+        mock_request.return_value = response
+
+        result = get_agent_response(
+            "질문",
+            AgentRequestContext(
+                fastapi_url="http://127.0.0.1:8000",
+                session_id="session-1",
+            ),
+        )
+
+        self.assertEqual(
+            result,
+            AgentCallResult(
+                answer="요청 중 예기치 않은 오류가 발생했습니다: API 응답의 response는 객체여야 합니다.",
+            ),
+        )
+
     @patch(
         "src.app.web.streamlit_api_client.requests.post",
         side_effect=requests.exceptions.Timeout,
