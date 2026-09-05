@@ -28,56 +28,6 @@ docs_identifier_stopwords = [
   "and",
 ]
 
-[validation]
-code_identifier_pattern = "\\b[A-Za-z_][A-Za-z0-9_]{1,}\\b"
-keyword_pattern = "[A-Za-z_][A-Za-z0-9_]{1,}|[가-힣]{2,}"
-keyword_stopwords = [
-  "official",
-  "docs",
-  "documentation",
-  "reference",
-  "latest",
-  "upload",
-  "uploaded",
-  "current",
-  "file",
-  "notebook",
-  "code",
-  "example",
-  "examples",
-  "local",
-  "find",
-  "show",
-  "tell",
-  "explain",
-  "describe",
-  "how",
-  "what",
-  "where",
-  "using",
-  "used",
-  "usage",
-  "based",
-  "공식",
-  "문서",
-  "최신",
-  "업로드",
-  "업로드한",
-  "파일",
-  "노트북",
-  "코드",
-  "예제",
-  "설명",
-  "문법",
-  "사용",
-  "위치",
-  "찾아줘",
-  "알려줘",
-  "기준",
-  "실제",
-  "부분",
-]
-
 [docs_search]
 error_page_markers = ["404", "page not found", "github pages", "does not exist", "not found", "requested file"]
 

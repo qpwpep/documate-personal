@@ -21,12 +21,6 @@ class PlannerRules(BaseModel):
     docs_identifier_stopwords: list[str] = Field(default_factory=list)
 
 
-class ValidationRules(BaseModel):
-    code_identifier_pattern: str
-    keyword_pattern: str
-    keyword_stopwords: list[str] = Field(default_factory=list)
-
-
 class DocsSearchQueryHint(BaseModel):
     identifiers: list[str] = Field(default_factory=list)
     library_name: str
@@ -44,7 +38,6 @@ class DocsSearchRules(BaseModel):
 class RulesConfig(BaseModel):
     intents: IntentRules
     planner: PlannerRules
-    validation: ValidationRules
     docs_search: DocsSearchRules
 
 
