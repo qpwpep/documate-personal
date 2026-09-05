@@ -274,8 +274,7 @@ class BackendRetrievalRegressionTest(unittest.TestCase):
         )
 
     def test_upload_search_normalizes_raw_l2_scores_without_warning(self) -> None:
-        settings = type("Settings", (), {"openai_api_key": "test-key"})()
-        upload_tool = build_upload_search_tool(settings)
+        upload_tool = build_upload_search_tool()
 
         class _Doc:
             def __init__(self, text, cell_id):
@@ -297,7 +296,7 @@ class BackendRetrievalRegressionTest(unittest.TestCase):
                 ]
 
         retriever = type("Retriever", (), {"vectorstore": _VectorStore()})()
-        payload = upload_tool.func(
+        payload = upload_tool(
             query="업로드 노트북에서 train_test_split 파라미터를 찾아줘",
             k=4,
             retriever=retriever,

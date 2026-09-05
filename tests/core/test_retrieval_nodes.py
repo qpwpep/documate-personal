@@ -107,7 +107,7 @@ class RetrievalNodeTest(unittest.TestCase):
                 )
                 return [(imported, 0.30), (usage, 0.28)]
 
-        payload = build_upload_search_tool(self.settings).func(
+        payload = build_upload_search_tool()(
             query="업로드 노트북에서 train_test_split 파라미터를 찾아줘",
             k=4,
             retriever=SimpleNamespace(vectorstore=_UsageVectorStore()),

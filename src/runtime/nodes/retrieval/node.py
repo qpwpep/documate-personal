@@ -51,11 +51,11 @@ def _build_route_handlers(
     return {
         "docs": (
             "tavily_search",
-            lambda task: tavily_search_tool.func(query=task.query),
+            lambda task: tavily_search_tool(query=task.query),
         ),
         "upload": (
             "upload_search",
-            lambda task: upload_search_tool.func(
+            lambda task: upload_search_tool(
                 query=task.query,
                 k=task.k,
                 retriever=runtime.retriever,

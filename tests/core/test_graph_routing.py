@@ -173,8 +173,8 @@ class GraphRoutingTest(unittest.TestCase):
             summarize_node=lambda state: state,
             planner_node=make_planner_node(capture_planner, verbose=False),
             retrieve_dispatch_node=make_retrieve_dispatch_node(
-                _ToolWrapper(_docs_search),
-                _ToolWrapper(lambda query, k, retriever=None: _tool_payload([], tool="upload_search", route="upload", status="no_result", message="", query=query)),
+                _docs_search,
+                lambda query, k, retriever=None: _tool_payload([], tool="upload_search", route="upload", status="no_result", message="", query=query),
                 verbose=False,
             ),
             synthesize_node=lambda state: {
@@ -240,8 +240,8 @@ class GraphRoutingTest(unittest.TestCase):
             )
 
         retrieve_dispatch = make_retrieve_dispatch_node(
-            _ToolWrapper(_docs_search),
-            _ToolWrapper(lambda query, k, retriever=None: _tool_payload([], tool="upload_search", route="upload", status="no_result", message="", query=query)),
+            _docs_search,
+            lambda query, k, retriever=None: _tool_payload([], tool="upload_search", route="upload", status="no_result", message="", query=query),
             verbose=False,
         )
 
@@ -295,8 +295,7 @@ class GraphRoutingTest(unittest.TestCase):
 
     def test_debug_survives_validation_and_action_stage_instrumentation(self) -> None:
         retrieve_dispatch = make_retrieve_dispatch_node(
-            _ToolWrapper(
-                lambda query: _tool_payload(
+            lambda query: _tool_payload(
                     [
                         {
                             "kind": "official",
@@ -314,18 +313,15 @@ class GraphRoutingTest(unittest.TestCase):
                     status="success",
                     message="",
                     query=query,
-                )
-            ),
-            _ToolWrapper(
-                lambda query, k, retriever=None: _tool_payload(
+                ),
+            lambda query, k, retriever=None: _tool_payload(
                     [],
                     tool="upload_search",
                     route="upload",
                     status="no_result",
                     message="",
                     query=query,
-                )
-            ),
+                ),
             verbose=False,
         )
 

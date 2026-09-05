@@ -9,7 +9,6 @@ from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 
 from src.infra.chunking import chunk_notebook_path, chunk_python_text
-from src.infra.settings import AppSettings
 from src.infra.tools.local_rag import build_temp_retriever, build_upload_search_tool
 from src.infra.tools.local_rag.ranking import rank_retrieval_rows
 from src.infra.tools.local_rag.serialization import build_local_snippet, build_query_focused_snippet
@@ -299,13 +298,12 @@ class LocalRagTest(unittest.TestCase):
                 "X_train, X_test = train_test_split(X, y, test_size=0.2, random_state=42)\n",
             )
 
-            settings = AppSettings(openai_api_key="test-key", tavily_api_key="test")
             with warnings.catch_warnings(record=True) as caught:
                 warnings.simplefilter("always")
                 handle = build_temp_retriever(str(notebook_path), api_key="test-key")
                 try:
-                    upload_tool = build_upload_search_tool(settings)
-                    payload = upload_tool.func(
+                    upload_tool = build_upload_search_tool()
+                    payload = upload_tool(
                         query="train_test_split parameter",
                         k=2,
                         retriever=handle.retriever,

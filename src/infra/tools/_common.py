@@ -113,9 +113,6 @@ class SlackArgs(BaseModel):
     target: str = Field(default="auto", description="auto|dm|channel|group")
 
 
-class UploadArgs(BaseModel):
-    query: str = Field(description="The user's information need to search over uploaded files.")
-    k: int = Field(default=4, ge=1, le=10, description="Number of chunks to return.")
 
 
 def to_float_or_none(value: Any) -> float | None:

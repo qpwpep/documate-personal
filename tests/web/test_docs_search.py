@@ -53,7 +53,7 @@ class DocsSearchTest(unittest.TestCase):
         for query, expected_domain, expected_fallback in cases:
             with self.subTest(query=query):
                 mock_request_tavily_search.reset_mock()
-                registry.tavily_search_tool.func(query=query)
+                registry.tavily_search_tool(query=query)
 
                 self.assertGreaterEqual(len(mock_request_tavily_search.call_args_list), 2)
                 first_kwargs = mock_request_tavily_search.call_args_list[0].kwargs
@@ -144,7 +144,7 @@ class DocsSearchTest(unittest.TestCase):
         for query, expected_domain, expected_fallback in cases:
             with self.subTest(query=query):
                 mock_request_tavily_search.reset_mock()
-                registry.tavily_search_tool.func(query=query)
+                registry.tavily_search_tool(query=query)
 
                 self.assertGreaterEqual(len(mock_request_tavily_search.call_args_list), 2)
                 first_kwargs = mock_request_tavily_search.call_args_list[0].kwargs
@@ -199,7 +199,7 @@ class DocsSearchTest(unittest.TestCase):
         for query, expected_domain, expected_fallback in cases:
             with self.subTest(query=query):
                 mock_request_tavily_search.reset_mock()
-                registry.tavily_search_tool.func(query=query)
+                registry.tavily_search_tool(query=query)
 
                 self.assertGreaterEqual(len(mock_request_tavily_search.call_args_list), 2)
                 first_kwargs = mock_request_tavily_search.call_args_list[0].kwargs
@@ -225,7 +225,7 @@ class DocsSearchTest(unittest.TestCase):
             with self.subTest(query=query):
                 mock_request_tavily_search.reset_mock()
 
-                registry.tavily_search_tool.func(query=query)
+                registry.tavily_search_tool(query=query)
 
                 first_kwargs = mock_request_tavily_search.call_args_list[0].kwargs
                 self.assertEqual(first_kwargs["query"], expected_query)
@@ -257,7 +257,7 @@ class DocsSearchTest(unittest.TestCase):
         ]
 
         registry = build_tool_registry(AppSettings(openai_api_key="test", tavily_api_key="test"))
-        result = registry.tavily_search_tool.func(query="PyTorch Dataset DataLoader official docs")
+        result = registry.tavily_search_tool(query="PyTorch Dataset DataLoader official docs")
 
         self.assertEqual(len(mock_request_tavily_search.call_args_list), 2)
         combined = " ".join(item["snippet"] for item in result["evidence"])
@@ -280,7 +280,7 @@ class DocsSearchTest(unittest.TestCase):
         mock_request_tavily_search.side_effect = [dataset_only, dataset_only, dataset_only, dataset_only, dataset_only]
 
         registry = build_tool_registry(AppSettings(openai_api_key="test", tavily_api_key="test"))
-        result = registry.tavily_search_tool.func(query="PyTorch Dataset DataLoader official docs")
+        result = registry.tavily_search_tool(query="PyTorch Dataset DataLoader official docs")
 
         self.assertEqual(result["diagnostics"]["status"], "no_result")
         self.assertEqual(result["evidence"], [])
@@ -312,7 +312,7 @@ class DocsSearchTest(unittest.TestCase):
         ]
 
         registry = build_tool_registry(AppSettings(openai_api_key="test", tavily_api_key="test"))
-        result = registry.tavily_search_tool.func(query="numpy official docs")
+        result = registry.tavily_search_tool(query="numpy official docs")
 
         self.assertEqual(len(mock_request_tavily_search.call_args_list), 2)
         self.assertEqual(
@@ -340,7 +340,7 @@ class DocsSearchTest(unittest.TestCase):
         }
 
         registry = build_tool_registry(AppSettings(openai_api_key="test", tavily_api_key="test"))
-        result = registry.tavily_search_tool.func(query="train_test_split official docs")
+        result = registry.tavily_search_tool(query="train_test_split official docs")
 
         self.assertEqual(
             [item["url_or_path"] for item in result["evidence"]],
@@ -363,7 +363,7 @@ class DocsSearchTest(unittest.TestCase):
         }
 
         registry = build_tool_registry(AppSettings(openai_api_key="test", tavily_api_key="test"))
-        result = registry.tavily_search_tool.func(query="train_test_split official docs")
+        result = registry.tavily_search_tool(query="train_test_split official docs")
 
         self.assertEqual(result["diagnostics"]["status"], "success")
         self.assertEqual(
@@ -402,7 +402,7 @@ class DocsSearchTest(unittest.TestCase):
         ]
 
         registry = build_tool_registry(AppSettings(openai_api_key="test", tavily_api_key="test"))
-        result = registry.tavily_search_tool.func(query="Standard. Scaler official docs")
+        result = registry.tavily_search_tool(query="Standard. Scaler official docs")
 
         self.assertEqual(result["diagnostics"]["status"], "success")
         self.assertEqual([item["url_or_path"] for item in result["evidence"]], [original_url])
@@ -421,7 +421,7 @@ class DocsSearchTest(unittest.TestCase):
         }
 
         registry = build_tool_registry(AppSettings(openai_api_key="test", tavily_api_key="test"))
-        result = registry.tavily_search_tool.func(query="numpy concatenate official docs")
+        result = registry.tavily_search_tool(query="numpy concatenate official docs")
 
         self.assertEqual(
             [item["url_or_path"] for item in result["evidence"]],
@@ -453,7 +453,7 @@ class DocsSearchTest(unittest.TestCase):
         )
         registry = build_tool_registry(AppSettings(openai_api_key="test", tavily_api_key="test"))
 
-        result = registry.tavily_search_tool.func(
+        result = registry.tavily_search_tool(
             query="numpy broadcasting official docs",
             include_domains=["numpy.org"],
         )
@@ -488,7 +488,7 @@ class DocsSearchTest(unittest.TestCase):
         mock_post.side_effect = request_side_effect
         registry = build_tool_registry(AppSettings(openai_api_key="test", tavily_api_key="test"))
 
-        result = registry.tavily_search_tool.func(query="numpy official docs")
+        result = registry.tavily_search_tool(query="numpy official docs")
 
         self.assertEqual(completed_queries, ["numpy official docs", "numpy user guide"])
         self.assertEqual(result["diagnostics"]["status"], "success")
@@ -509,7 +509,7 @@ class DocsSearchTest(unittest.TestCase):
         ]
         registry = build_tool_registry(AppSettings(openai_api_key="test", tavily_api_key="test"))
 
-        result = registry.tavily_search_tool.func(query="numpy official docs")
+        result = registry.tavily_search_tool(query="numpy official docs")
 
         self.assertEqual(len(mock_post.call_args_list), 3)
         self.assertEqual(result["evidence"], [])
@@ -529,7 +529,7 @@ class DocsSearchTest(unittest.TestCase):
         ]
         registry = build_tool_registry(AppSettings(openai_api_key="test", tavily_api_key="test"))
 
-        result = registry.tavily_search_tool.func(query="numpy official docs")
+        result = registry.tavily_search_tool(query="numpy official docs")
 
         self.assertEqual(len(mock_post.call_args_list), 3)
         self.assertEqual(result["evidence"], [])
@@ -542,7 +542,7 @@ class DocsSearchTest(unittest.TestCase):
         mock_post.side_effect = requests.Timeout("provider timeout")
         registry = build_tool_registry(AppSettings(openai_api_key="test", tavily_api_key="test"))
 
-        result = registry.tavily_search_tool.func(
+        result = registry.tavily_search_tool(
             query="custom docs",
             include_domains=["numpy.org"],
         )
@@ -557,7 +557,7 @@ class DocsSearchTest(unittest.TestCase):
         mock_post.side_effect = requests.ConnectionError("connection refused")
         registry = build_tool_registry(AppSettings(openai_api_key="test", tavily_api_key="test"))
 
-        result = registry.tavily_search_tool.func(
+        result = registry.tavily_search_tool(
             query="custom docs",
             include_domains=["numpy.org"],
         )
@@ -575,7 +575,7 @@ class DocsSearchTest(unittest.TestCase):
         mock_post.return_value = response
         registry = build_tool_registry(AppSettings(openai_api_key="test", tavily_api_key="test"))
 
-        result = registry.tavily_search_tool.func(
+        result = registry.tavily_search_tool(
             query="custom docs",
             include_domains=["numpy.org"],
         )
@@ -600,7 +600,7 @@ class DocsSearchTest(unittest.TestCase):
         }
 
         registry = build_tool_registry(AppSettings(openai_api_key="test", tavily_api_key="test"))
-        result = registry.tavily_search_tool.func(query="NumPy reshape array official docs")
+        result = registry.tavily_search_tool(query="NumPy reshape array official docs")
 
         self.assertEqual(result["diagnostics"]["status"], "success")
         self.assertEqual(
@@ -673,7 +673,7 @@ class DocsSearchTest(unittest.TestCase):
         )
 
         registry = build_tool_registry(AppSettings(openai_api_key="test", tavily_api_key="test"))
-        result = registry.tavily_search_tool.func(
+        result = registry.tavily_search_tool(
             query="Pydantic UUID official docs",
             include_domains=["docs.pydantic.dev"],
         )
@@ -702,7 +702,7 @@ class DocsSearchTest(unittest.TestCase):
         )
 
         registry = build_tool_registry(AppSettings(openai_api_key="test", tavily_api_key="test"))
-        result = registry.tavily_search_tool.func(query="Pydantic Field official docs")
+        result = registry.tavily_search_tool(query="Pydantic Field official docs")
 
         self.assertEqual(result["diagnostics"]["status"], "success")
         self.assertEqual(
@@ -731,7 +731,7 @@ class DocsSearchTest(unittest.TestCase):
         )
 
         registry = build_tool_registry(AppSettings(openai_api_key="test", tavily_api_key="test"))
-        result = registry.tavily_search_tool.func(
+        result = registry.tavily_search_tool(
             query="Pydantic Field official docs",
             include_domains=["docs.pydantic.dev"],
         )
@@ -755,7 +755,7 @@ class DocsSearchTest(unittest.TestCase):
         }
 
         registry = build_tool_registry(AppSettings(openai_api_key="test", tavily_api_key="test"))
-        result = registry.tavily_search_tool.func(query="Pydantic v2 Field validation official docs")
+        result = registry.tavily_search_tool(query="Pydantic v2 Field validation official docs")
 
         self.assertEqual(result["diagnostics"]["status"], "no_result")
         self.assertEqual(result["evidence"], [])
@@ -824,7 +824,7 @@ class DocsSearchTest(unittest.TestCase):
         ]
 
         registry = build_tool_registry(AppSettings(openai_api_key="test", tavily_api_key="test"))
-        result = registry.tavily_search_tool.func(query="numpy official docs")
+        result = registry.tavily_search_tool(query="numpy official docs")
 
         self.assertGreaterEqual(len(mock_request_tavily_search.call_args_list), 2)
         self.assertEqual(
@@ -847,7 +847,7 @@ class DocsSearchTest(unittest.TestCase):
         }
 
         registry = build_tool_registry(AppSettings(openai_api_key="test", tavily_api_key="test"))
-        result = registry.tavily_search_tool.func(query="BeautifulSoup으로 특정 태그 찾는 예제를 보여줘")
+        result = registry.tavily_search_tool(query="BeautifulSoup으로 특정 태그 찾는 예제를 보여줘")
 
         first_kwargs = mock_request_tavily_search.call_args_list[0].kwargs
         self.assertEqual(first_kwargs["include_domains"], ["crummy.com"])
@@ -892,7 +892,7 @@ class DocsSearchTest(unittest.TestCase):
         }
 
         registry = build_tool_registry(AppSettings(openai_api_key="test", tavily_api_key="test"))
-        result = registry.tavily_search_tool.func(query="matplotlib pie 차트 옵션을 정리해줘")
+        result = registry.tavily_search_tool(query="matplotlib pie 차트 옵션을 정리해줘")
 
         first_kwargs = mock_request_tavily_search.call_args_list[0].kwargs
         self.assertEqual(first_kwargs["include_raw_content"], "markdown")
@@ -940,7 +940,7 @@ class DocsSearchTest(unittest.TestCase):
         }
 
         registry = build_tool_registry(AppSettings(openai_api_key="test", tavily_api_key="test"))
-        result = registry.tavily_search_tool.func(query="matplotlib pie 차트 옵션을 정리해줘")
+        result = registry.tavily_search_tool(query="matplotlib pie 차트 옵션을 정리해줘")
 
         first_kwargs = mock_request_tavily_search.call_args_list[0].kwargs
         self.assertEqual(first_kwargs["include_raw_content"], "markdown")

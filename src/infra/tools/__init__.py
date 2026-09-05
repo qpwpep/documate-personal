@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -12,15 +13,15 @@ from src.infra.tools.slack_notify import build_slack_notify_tool
 
 @dataclass(frozen=True)
 class ToolRegistry:
-    tavily_search_tool: Any
-    upload_search_tool: Any
+    tavily_search_tool: Callable[..., dict[str, Any]]
+    upload_search_tool: Callable[..., dict[str, Any]]
     save_text_tool: Any
     slack_notify_tool: Any
 
 
 def build_tool_registry(settings: AppSettings) -> ToolRegistry:
     tavily_search_tool = build_docs_search_tool(settings)
-    upload_search_tool = build_upload_search_tool(settings)
+    upload_search_tool = build_upload_search_tool()
     save_text_tool = build_save_text_tool()
     slack_notify_tool = build_slack_notify_tool(settings)
     return ToolRegistry(

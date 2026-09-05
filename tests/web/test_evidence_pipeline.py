@@ -428,11 +428,11 @@ class EvidencePipelineTest(unittest.TestCase):
     def test_upload_search_returns_typed_chunk_evidence_and_handles_missing_retriever(self) -> None:
         registry = build_tool_registry(AppSettings(openai_api_key="test", tavily_api_key="test"))
 
-        no_retriever = registry.upload_search_tool.func(query="uploaded info", k=3, retriever=None)
+        no_retriever = registry.upload_search_tool(query="uploaded info", k=3, retriever=None)
         self.assertEqual(no_retriever["diagnostics"]["status"], "unavailable")
         self.assertEqual(no_retriever["evidence"], [])
 
-        with_retriever = registry.upload_search_tool.func(
+        with_retriever = registry.upload_search_tool(
             query="uploaded info",
             k=3,
             retriever=_FakeRetriever(),
@@ -459,7 +459,7 @@ class EvidencePipelineTest(unittest.TestCase):
     def test_upload_search_keeps_multiple_chunks_from_same_document(self) -> None:
         registry = build_tool_registry(AppSettings(openai_api_key="test", tavily_api_key="test"))
 
-        result = registry.upload_search_tool.func(
+        result = registry.upload_search_tool(
             query="uploaded info",
             k=4,
             retriever=_FakeRetriever(vectorstore=_FakeDedupVectorStore()),
@@ -476,7 +476,7 @@ class EvidencePipelineTest(unittest.TestCase):
     def test_upload_search_clamps_negative_raw_distances_to_max_similarity(self) -> None:
         registry = build_tool_registry(AppSettings(openai_api_key="test", tavily_api_key="test"))
 
-        result = registry.upload_search_tool.func(
+        result = registry.upload_search_tool(
             query="uploaded info",
             k=4,
             retriever=_FakeRetriever(vectorstore=_FakeNegativeScoreVectorStore()),
@@ -489,7 +489,7 @@ class EvidencePipelineTest(unittest.TestCase):
     def test_upload_search_uses_query_window_for_single_chunk_files(self) -> None:
         registry = build_tool_registry(AppSettings(openai_api_key="test", tavily_api_key="test"))
 
-        result = registry.upload_search_tool.func(
+        result = registry.upload_search_tool(
             query="random_state parameter",
             k=4,
             retriever=_FakeRetriever(vectorstore=_FakeSingleChunkLongVectorStore()),
@@ -526,7 +526,7 @@ class EvidencePipelineTest(unittest.TestCase):
         }
 
         registry = build_tool_registry(AppSettings(openai_api_key="test", tavily_api_key="test"))
-        result = registry.tavily_search_tool.func(query="official docs")
+        result = registry.tavily_search_tool(query="official docs")
 
         urls = [item["url_or_path"] for item in result["evidence"]]
         self.assertIn("https://fastapi.tiangolo.com/ko/tutorial/response-model", urls)
@@ -546,7 +546,7 @@ class EvidencePipelineTest(unittest.TestCase):
         }
 
         registry = build_tool_registry(AppSettings(openai_api_key="test", tavily_api_key="test"))
-        result = registry.tavily_search_tool.func(query="official docs")
+        result = registry.tavily_search_tool(query="official docs")
 
         self.assertEqual(result["diagnostics"]["status"], "no_result")
         self.assertEqual(result["evidence"], [])
@@ -573,7 +573,7 @@ class EvidencePipelineTest(unittest.TestCase):
         }
 
         registry = build_tool_registry(AppSettings(openai_api_key="test", tavily_api_key="test"))
-        result = registry.tavily_search_tool.func(query="official docs")
+        result = registry.tavily_search_tool(query="official docs")
 
         urls = [item["url_or_path"] for item in result["evidence"]]
         self.assertEqual(urls, ["https://huggingface.co/docs/transformers/index"])
@@ -595,7 +595,7 @@ class EvidencePipelineTest(unittest.TestCase):
                     return {"results": [{"url": url, "title": fallback_query, "content": fallback_query + " API reference and usage examples.", "score": 0.92}]}
                 self.search_responder = respond
 
-                result = registry.tavily_search_tool.func(query=query)
+                result = registry.tavily_search_tool(query=query)
 
                 self.assertEqual(result["diagnostics"]["status"], "success")
                 self.assertEqual([item["url_or_path"] for item in result["evidence"]], [url])
@@ -622,7 +622,7 @@ class EvidencePipelineTest(unittest.TestCase):
         }
 
         registry = build_tool_registry(AppSettings(openai_api_key="test", tavily_api_key="test"))
-        result = registry.tavily_search_tool.func(query="numpy 공식 문서")
+        result = registry.tavily_search_tool(query="numpy 공식 문서")
 
         urls = [item["url_or_path"] for item in result["evidence"]]
         self.assertEqual(
@@ -756,7 +756,7 @@ class EvidencePipelineTest(unittest.TestCase):
             try:
                 state, build_ms = runner.prepare_graph_state("random_state", str(upload))
                 self.assertIsNone(build_ms)
-                result = build_tool_registry(settings).upload_search_tool.func(
+                result = build_tool_registry(settings).upload_search_tool(
                     query="random_state", retriever=state["runtime"].retriever,
                 )
                 self.assertEqual(result["diagnostics"]["status"], "success")
@@ -798,7 +798,7 @@ class EvidencePipelineTest(unittest.TestCase):
         }
 
         registry = build_tool_registry(AppSettings(openai_api_key="test", tavily_api_key="test"))
-        result = registry.tavily_search_tool.func(query="pandas official docs")
+        result = registry.tavily_search_tool(query="pandas official docs")
 
         self.assertEqual(
             [item["url_or_path"] for item in result["evidence"]],
