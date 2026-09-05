@@ -9,7 +9,6 @@ from src.core.evidence import EvidenceItem
 from src.runtime.nodes.retrieval import collect_retrieval_result
 from src.runtime.nodes.retrieval.node import _collect_retrieval_batch, _execute_retrieval_batch
 from src.runtime.nodes.synthesis.evidence_selection import select_grounded_fallback_evidence_items, select_primary_evidence_items
-from src.runtime.nodes.synthesis.fallback_renderers import build_plain_summary_attach_payload
 from src.runtime.nodes.synthesis.prompt_builder import build_synthesis_messages
 from src.runtime.nodes.validation.evidence_validator import assess_retrieval_quality, assess_validation, build_validation_snapshot
 from src.runtime.nodes.validation.policy import apply_validation_outcome
@@ -266,31 +265,6 @@ class NodeRefactorTest(unittest.TestCase):
         self.assertIn("A" * 40, retrieved_evidence_messages[0])
         self.assertNotIn("A" * 320, retrieved_evidence_messages[0])
         self.assertIn("...", retrieved_evidence_messages[0])
-
-    def test_synthesis_payload_builder_adopts_plain_summary_segments(self) -> None:
-        evidence_items = [
-            EvidenceItem.model_validate(_docs_evidence()),
-            EvidenceItem.model_validate(
-                _docs_evidence(
-                    source_id="url:https://numpy.org/doc/stable/broadcasting-2",
-                    snippet="Broadcasting keeps loops in C.",
-                )
-            ),
-        ]
-        payload = build_plain_summary_attach_payload(
-            content="NumPy broadcasting expands compatible shapes.\nIt avoids Python-level loops.",
-            evidence_items=evidence_items,
-        )
-
-        self.assertIsNotNone(payload)
-        assert payload is not None
-        self.assertEqual(payload.claims[0].evidence_ids, ["url:https://numpy.org/doc/stable/"])
-        self.assertEqual(
-            payload.claims[1].evidence_ids,
-            ["url:https://numpy.org/doc/stable/broadcasting-2"],
-        )
-        self.assertIn("[1]", payload.answer)
-        self.assertIn("[2]", payload.answer)
 
     def test_synthesis_payload_builder_limits_hybrid_evidence_to_one_per_route(self) -> None:
         planner_output = PlannerOutput(

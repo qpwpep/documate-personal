@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-import re
 from typing import Any
 
-from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.messages import BaseMessage, SystemMessage, ToolMessage
 
 from src.core.answer_schema import clean_grounded_text
 from src.core.conversation_memory import build_untrusted_memory_prompt_messages
@@ -32,22 +31,6 @@ SYNTHESIS_SELECTION_TEMPLATE = (
     "Select supported facts, assemble short claims, then map them into requested sections.\n"
     "For hybrid docs plus upload answers: official_docs first, uploaded detail next, comparison last."
 )
-PLAIN_SUMMARY_ATTACH_CONTRACT = (
-    "[Plain Summary Attach Fallback]\n"
-    "- Use only Retrieved Evidence.\n"
-    "- Return plain text only.\n"
-    "- Return at most 4 short lines.\n"
-    "- Keep the answer grounded in the same order as Retrieved Evidence.\n"
-    "- Do not include citations, bullets, numbering, JSON, or markdown."
-)
-_LEADING_BULLET_PATTERN = re.compile(r"^\s*(?:[-*]|\d+[.)])\s*")
-_SENTENCE_SPLIT_PATTERN = re.compile(r"(?<=[.!?])\s+")
-
-
-def normalize_query_text(text: str) -> str:
-    return " ".join(str(text or "").replace("\r", "\n").split()).strip(" ,.;:-")
-
-
 def _truncate_prompt_text(text: Any, *, limit: int) -> str:
     normalized = str(text or "").strip()
     if limit <= 0 or len(normalized) <= limit:
@@ -265,61 +248,3 @@ def build_synthesis_messages(
     )
 
     return model_messages, history_before, len(trimmed_history)
-
-
-def build_plain_summary_attach_messages(
-    *,
-    user_input: str,
-    deduped_evidence: list[dict[str, Any]],
-    snippet_char_limit: int = 400,
-    evidence_char_budget: int | None = None,
-) -> list[BaseMessage]:
-    compact_evidence = _prepare_evidence_for_prompt(
-        deduped_evidence[:2],
-        snippet_char_limit=snippet_char_limit,
-        evidence_char_budget=evidence_char_budget,
-        preserve_local_snippets=_is_explicit_code_extraction_request(user_input),
-    )
-    preserve_local_snippets = _is_explicit_code_extraction_request(user_input)
-    rendered_compact_evidence = format_evidence_for_prompt(
-        compact_evidence,
-        max_snippet_chars=snippet_char_limit,
-        preserve_local_snippets=preserve_local_snippets,
-    )
-    return [
-        SystemMessage(content=SYS_POLICY),
-        SystemMessage(content=PLAIN_SUMMARY_ATTACH_CONTRACT),
-        HumanMessage(content=normalize_query_text(user_input) or "Summarize the retrieved evidence."),
-        SystemMessage(
-            content=f"[Retrieved Evidence]\n{rendered_compact_evidence}"
-        ),
-    ]
-
-
-def parse_plain_summary_segments(content: str, *, limit: int) -> list[str]:
-    raw_lines = str(content or "").replace("\r", "\n").splitlines()
-    line_segments: list[str] = []
-    for line in raw_lines:
-        stripped = _LEADING_BULLET_PATTERN.sub("", line).strip()
-        if not stripped:
-            continue
-        line_segments.append(stripped)
-        if len(line_segments) >= limit:
-            break
-    if len(line_segments) >= limit or len(line_segments) > 1:
-        return line_segments[:limit]
-
-    normalized = " ".join(str(content or "").replace("\r", "\n").split()).strip()
-    if not normalized:
-        return []
-
-    sentence_segments = [
-        segment.strip()
-        for segment in _SENTENCE_SPLIT_PATTERN.split(normalized)
-        if segment.strip()
-    ]
-    if len(sentence_segments) >= 2:
-        return sentence_segments[:limit]
-    if line_segments:
-        return line_segments[:1]
-    return sentence_segments[:limit] if sentence_segments else [normalized]

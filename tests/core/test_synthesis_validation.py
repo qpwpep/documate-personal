@@ -20,7 +20,6 @@ from .helpers import (
     _CaptureStructuredSynthesizeLLM,
     _CaptureSummaryLLM,
     _CaptureSynthesizeLLM,
-    _StructuredThenPlainFallbackSynthesizeLLM,
     _TimeoutStructuredSynthesizeLLM,
     build_legacy_state,
 )
@@ -931,7 +930,9 @@ class SynthesisValidationTest(unittest.TestCase):
         self.assertNotIn(long_snippet.strip(), retrieved_evidence_messages[0])
 
     def test_synthesize_uses_local_deterministic_fallback_after_structured_failure(self) -> None:
-        primary_llm = _StructuredThenPlainFallbackSynthesizeLLM()
+        primary_llm = _CaptureStructuredSynthesizeLLM(
+            include_raw=True, parsing_error=ValueError("schema mismatch"),
+        )
         synthesize_node = make_synthesize_node(
             primary_llm,
             verbose=False,
@@ -960,6 +961,8 @@ class SynthesisValidationTest(unittest.TestCase):
             _response(updates).payload.claims[1].evidence_ids,
             ["url:https://numpy.org/doc/stable/broadcasting-2"],
         )
+        self.assertIn("[1]", _response(updates).final_answer)
+        self.assertIn("[2]", _response(updates).final_answer)
         self.assertEqual(len(_debug(updates).llm_calls), 1)
         self.assertEqual(_debug(updates).llm_calls[-1].path, "structured")
         synthesis_attempts = [
@@ -1056,7 +1059,9 @@ class SynthesisValidationTest(unittest.TestCase):
         self.assertEqual(synthesis_attempts[0]["mode"], "timeout_grounded_fallback")
 
     def test_synthesize_deterministic_fallback_strips_docs_navigation_chrome(self) -> None:
-        primary_llm = _StructuredThenPlainFallbackSynthesizeLLM()
+        primary_llm = _CaptureStructuredSynthesizeLLM(
+            include_raw=True, parsing_error=ValueError("schema mismatch"),
+        )
         synthesize_node = make_synthesize_node(
             primary_llm,
             verbose=False,
@@ -1094,7 +1099,9 @@ class SynthesisValidationTest(unittest.TestCase):
         self.assertNotIn("# Broadcasting", _response(updates).final_answer)
 
     def test_synthesize_does_not_invoke_secondary_llm_for_fallback(self) -> None:
-        primary_llm = _StructuredThenPlainFallbackSynthesizeLLM()
+        primary_llm = _CaptureStructuredSynthesizeLLM(
+            include_raw=True, parsing_error=ValueError("schema mismatch"),
+        )
         failing_plain_llm = _CaptureSynthesizeLLM(content="should not be used")
         synthesize_node = make_synthesize_node(
             primary_llm,

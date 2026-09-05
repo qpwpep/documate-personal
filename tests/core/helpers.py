@@ -117,8 +117,6 @@ def build_legacy_state(payload: dict):
     return normalize_graph_update(state)
 
 
-
-
 class _FailingPlannerLLM:
     def invoke(self, _messages):
         raise RuntimeError("planner exploded")
@@ -217,60 +215,6 @@ class _TimeoutStructuredSynthesizeLLM:
         self.last_messages = messages
         self.call_count += 1
         raise TimeoutError("structured timeout")
-
-
-class _StructuredThenPlainFallbackSynthesizeLLM:
-    def __init__(self):
-        self.structured_messages = None
-        self.plain_messages = None
-
-    def with_structured_output(self, *_args, **_kwargs):
-        parent = self
-
-        class _StructuredWrapper:
-            def invoke(self, messages):
-                parent.structured_messages = messages
-                return {
-                    "raw": AIMessage(
-                        content="",
-                        response_metadata={
-                            "model_name": "gpt-5-mini",
-                            "token_usage": {
-                                "prompt_tokens": 9,
-                                "completion_tokens": 2,
-                                "total_tokens": 11,
-                            },
-                        },
-                        usage_metadata={
-                            "input_tokens": 9,
-                            "output_tokens": 2,
-                            "total_tokens": 11,
-                        },
-                    ),
-                    "parsed": None,
-                    "parsing_error": ValueError("schema mismatch"),
-                }
-
-        return _StructuredWrapper()
-
-    def invoke(self, messages):
-        self.plain_messages = messages
-        return AIMessage(
-            content="plain fallback answer",
-            response_metadata={
-                "model_name": "gpt-5-mini",
-                "token_usage": {
-                    "prompt_tokens": 15,
-                    "completion_tokens": 6,
-                    "total_tokens": 21,
-                },
-            },
-            usage_metadata={
-                "input_tokens": 15,
-                "output_tokens": 6,
-                "total_tokens": 21,
-            },
-        )
 
 
 class _CapturePlannerLLM:
