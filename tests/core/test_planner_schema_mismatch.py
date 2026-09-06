@@ -6,7 +6,7 @@ from src.core.contracts.boundary.planner import parse_planner_output, parse_plan
 from src.runtime.nodes.planner import make_planner_node
 from src.core.planner_schema import PLANNER_WARNING_DUPLICATE_ROUTE_MERGED, PlannerOutput
 
-from .helpers import _CapturePlannerLLM, build_legacy_state
+from .helpers import _CapturePlannerLLM, build_test_state
 
 
 class PlannerSchemaMismatchTest(unittest.TestCase):
@@ -86,7 +86,7 @@ class PlannerSchemaMismatchTest(unittest.TestCase):
         planner_node = make_planner_node(capture_planner, verbose=False)
 
         updates = planner_node(
-            build_legacy_state(
+            build_test_state(
                 {
                     "messages": [HumanMessage(content="numpy parameters")],
                     "user_input": "numpy parameters",
