@@ -1,22 +1,19 @@
-import json
 from pathlib import Path
-from tempfile import TemporaryDirectory
-import unittest
 
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.messages import HumanMessage, ToolMessage
 
-from src.core.contracts.boundary.debug import get_debug_state
-from src.runtime.agent_runtime.debug_collector import DebugCollector
-from src.runtime.agent_runtime.response_assembler import ResponseAssembler
-from src.runtime.nodes.actions import build_action_only_answer, make_action_postprocess_node, should_short_circuit_action_only
-from src.runtime.nodes.validation import make_pre_synthesis_validation_node
-
-from .helpers import build_legacy_state
+from src.core.answer_schema import export_answer_text, finalize_answer, text_document
+from src.core.contracts import GraphState, PlannerState, ResponseState, RuntimeState
+from src.runtime.nodes.actions import make_action_postprocess_node, should_short_circuit_action_only
 
 
-class ActionsNodeTest(unittest.TestCase):
-    pass
-
+def _state(text: str, request: str = "결과를 txt로 저장해줘") -> GraphState:
+    return {
+        "runtime": RuntimeState(user_input=request),
+        "planner": PlannerState(),
+        "response": ResponseState(result=finalize_answer(text_document(text), [])),
+        "messages": [HumanMessage(content=request)],
+    }
 
 
 
@@ -27,5 +24,7 @@ class ActionsNodeTest(unittest.TestCase):
 
 
 
-if __name__ == "__main__":
-    unittest.main()
+
+
+
+

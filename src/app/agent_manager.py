@@ -10,7 +10,7 @@ from src.core.conversation_memory import (
     validate_query_text,
 )
 from src.runtime.agent_runtime import DebugCollector, ExecutionRunner, GraphInvocationError, ResponseAssembler, SessionContext
-from src.core.answer_schema import build_empty_response_payload
+from src.core.answer_schema import AnswerResponse, finalize_answer, text_document, export_answer_text
 from src.core.contracts import RuntimeState, SessionMetadata
 from src.core.contracts.debug import DEBUG_SCHEMA_VERSION
 from src.core.contracts.boundary.runtime import parse_runtime_state, parse_session_metadata
@@ -134,10 +134,7 @@ class AgentFlowManager:
     @staticmethod
     def _exit_payload(message: str) -> dict[str, Any]:
         return {
-            "message": message,
-            "filepath": "",
-            "response": None,
-            "response_payload": build_empty_response_payload(answer=message).model_dump(mode="json"),
+            "response": finalize_answer(text_document(message), []).model_dump(mode="json"),
             "debug": {
                 "schema_version": DEBUG_SCHEMA_VERSION,
                 "observability_status": "ok",
@@ -153,7 +150,7 @@ class AgentFlowManager:
                 "validation_events": [],
                 "edge_decisions": [],
                 "planner_errors": [],
-                "observed_evidence": [],
+                "observed_hits": [],
                 "retry_context": None,
                 "retrieval_diagnostics": [],
                 "planner_diagnostics": None,
@@ -188,10 +185,7 @@ class AgentFlowManager:
             upload_retriever_build_ms=upload_retriever_build_ms,
         )
         return {
-            "message": message,
-            "filepath": "",
-            "response": None,
-            "response_payload": build_empty_response_payload(answer=message).model_dump(mode="json"),
+            "response": finalize_answer(text_document(message), []).model_dump(mode="json"),
             "debug": {
                 "schema_version": DEBUG_SCHEMA_VERSION,
                 "observability_status": "failed",
@@ -208,7 +202,7 @@ class AgentFlowManager:
                 "validation_events": [],
                 "edge_decisions": [],
                 "planner_errors": [],
-                "observed_evidence": [],
+                "observed_hits": [],
                 "retry_context": None,
                 "retrieval_diagnostics": [],
                 "planner_diagnostics": None,
@@ -265,19 +259,19 @@ class AgentFlowManager:
             )
             assembled_response = self._response_assembler.assemble(
                 response=response,
-                updated_messages=updated_messages,
                 debug_info=debug_info,
             )
             durable_memory = build_durable_conversation_memory(
                 updated_messages,
                 memory_summary=candidate_summary,
                 policy=self._conversation_memory_policy(),
-                canonical_assistant_text=str(assembled_response.get("message") or ""),
+                canonical_assistant_text=export_answer_text(AnswerResponse.model_validate(assembled_response["response"])),
             )
             self._ensure_session().commit_conversation_memory(
                 messages=durable_memory.messages,
                 memory_summary=durable_memory.memory_summary,
             )
+            self._ensure_session().previous_response = AnswerResponse.model_validate(assembled_response["response"])
             return assembled_response
 
         except Exception as exc:
