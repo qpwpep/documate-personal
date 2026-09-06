@@ -3,8 +3,12 @@ from __future__ import annotations
 import asyncio
 import unittest
 
+from pydantic import ValidationError
+
 from src.app.web.agent_request_service import AgentRequestService
 from src.app.web.schemas import AgentRequest
+from src.core.answer_schema import export_answer_text
+from tests.web.answer_fixtures import response_payload
 
 
 class _FakeCleaner:
@@ -67,19 +71,27 @@ class _FakeSessionStore:
 
 
 class AgentRequestServiceTest(unittest.TestCase):
+    def test_invalid_runtime_response_does_not_silently_fall_back_to_message(self) -> None:
+        """A broken response contract is reported instead of discarding source metadata."""
+        service = AgentRequestService(
+            runtime_cleaner=_FakeCleaner(),
+            session_store=_FakeSessionStore({"response": {"answer": "obsolete"}, "message": "fallback"}),
+        )
+        with self.assertRaises(ValidationError):
+            asyncio.run(service.run(request_id="bad", request_data=AgentRequest(query="hello", session_id="s1")))
+
     def test_include_debug_only_changes_debug_field(self) -> None:
         cleaner = _FakeCleaner()
         store = _FakeSessionStore(
             {
-                "message": "fallback answer",
-                "filepath": "output/result.txt",
+                "response": response_payload("fallback answer"),
                 "debug": {
                     "schema_version": 3,
                     "observability_status": "ok",
                     "tool_calls": ["tavily_search"],
                     "tool_call_count": 1,
                     "errors": [],
-                    "observed_evidence": [],
+                    "observed_hits": [],
                 },
             }
         )
@@ -109,7 +121,7 @@ class AgentRequestServiceTest(unittest.TestCase):
         self.assertEqual(without_debug.response.model_dump(), with_debug.response.model_dump())
         self.assertIsNone(without_debug.debug)
         self.assertIsNotNone(with_debug.debug)
-        self.assertEqual(without_debug.response.answer, "fallback answer")
+        self.assertEqual(export_answer_text(without_debug.response), "fallback answer")
         self.assertEqual(cleaner.calls[0]["current_session_id"], "demo-session")
         self.assertEqual(store.get_calls, ["demo-session", "demo-session"])
         self.assertIsNone(store.run_calls[0]["progress_emitter"])
@@ -118,20 +130,14 @@ class AgentRequestServiceTest(unittest.TestCase):
         cleaner = _FakeCleaner()
         store = _FakeSessionStore(
             {
-                "message": "structured answer",
-                "response_payload": {
-                    "answer": "structured answer",
-                    "claims": [],
-                    "evidence": [],
-                    "confidence": None,
-                },
+                "response": response_payload("structured answer"),
                 "debug": {
                     "schema_version": 3,
                     "observability_status": "ok",
                     "tool_calls": [],
                     "tool_call_count": 0,
                     "errors": [],
-                    "observed_evidence": [],
+                    "observed_hits": [],
                 },
             }
         )
@@ -149,7 +155,7 @@ class AgentRequestServiceTest(unittest.TestCase):
             )
         )
 
-        self.assertEqual(result.response.answer, "structured answer")
+        self.assertEqual(export_answer_text(result.response), "structured answer")
         self.assertEqual(store.run_calls[0]["user_input"], "share this")
         self.assertEqual(
             store.run_calls[0]["session_metadata"].slack_destination.channel_id,
@@ -160,20 +166,14 @@ class AgentRequestServiceTest(unittest.TestCase):
         cleaner = _FakeCleaner()
         store = _FakeSessionStore(
             {
-                "message": "streamed answer",
-                "response_payload": {
-                    "answer": "streamed answer",
-                    "claims": [],
-                    "evidence": [],
-                    "confidence": None,
-                },
+                "response": response_payload("streamed answer"),
                 "debug": {
                     "schema_version": 3,
                     "observability_status": "ok",
                     "tool_calls": [],
                     "tool_call_count": 0,
                     "errors": [],
-                    "observed_evidence": [],
+                    "observed_hits": [],
                 },
             }
         )
@@ -208,7 +208,7 @@ class AgentRequestServiceTest(unittest.TestCase):
         self.assertEqual(events[1].data["stage"], "planner")
         self.assertEqual(events[2].data["status"], "llm")
         self.assertEqual(events[3].data["summary"], "근거 요약: docs 1건")
-        self.assertEqual(events[4].data["response"]["answer"], "streamed answer")
+        self.assertEqual(events[4].data["response"], response_payload("streamed answer"))
         self.assertIsNotNone(store.run_calls[0]["progress_emitter"])
 
 

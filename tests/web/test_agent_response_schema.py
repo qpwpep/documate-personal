@@ -3,49 +3,20 @@ import unittest
 from pydantic import ValidationError
 
 from src.app.web.schemas import AgentResponse
+from tests.web.answer_fixtures import cited_response, response_payload
 
 
 class AgentResponseSchemaTest(unittest.TestCase):
     def test_structured_response_payload_is_valid(self) -> None:
-        payload = {
-            "response": {
-                "answer": "hello [1]",
-                "claims": [
-                    {
-                        "text": "hello",
-                        "evidence_ids": ["url:https://numpy.org/doc/stable/"],
-                        "confidence": 0.8,
-                    }
-                ],
-                "evidence": [
-                    {
-                        "kind": "official",
-                        "tool": "tavily_search",
-                        "source_id": "url:https://numpy.org/doc/stable/",
-                        "document_id": "url:https://numpy.org/doc/stable/",
-                        "url_or_path": "https://numpy.org/doc/stable/",
-                        "title": "NumPy Docs",
-                        "snippet": "broadcasting rule",
-                        "score": 0.99,
-                    }
-                ],
-                "confidence": 0.8,
-            },
-            "trace": "trace-id",
-            "file_path": None,
-            "debug": None,
-        }
-        result = AgentResponse.model_validate(payload)
-        self.assertEqual(result.response.answer, "hello [1]")
-        self.assertEqual(len(result.response.claims), 1)
-        self.assertEqual(result.response.claims[0].evidence_ids, ["url:https://numpy.org/doc/stable/"])
-        self.assertEqual(len(result.response.evidence), 1)
+        expected = cited_response()
+        result = AgentResponse.model_validate({"response": expected.model_dump(mode="json"), "trace": "trace-id", "debug": None})
+        self.assertEqual(result.response, expected)
+        self.assertNotIn("file_path", result.model_dump())
 
     def test_plain_string_response_is_rejected(self) -> None:
         legacy_payload = {
             "response": "legacy string response",
             "trace": "trace-id",
-            "file_path": None,
             "debug": None,
         }
         with self.assertRaises(ValidationError):
@@ -53,14 +24,13 @@ class AgentResponseSchemaTest(unittest.TestCase):
 
     def test_debug_contract_requires_observability_fields(self) -> None:
         payload = {
-            "response": {"answer": "hello", "claims": [], "evidence": [], "confidence": None},
+            "response": response_payload("hello"),
             "trace": "trace-id",
-            "file_path": None,
             "debug": {
                 "tool_calls": [],
                 "tool_call_count": 0,
                 "errors": [],
-                "observed_evidence": [],
+                "observed_hits": [],
             },
         }
         with self.assertRaises(ValidationError):
@@ -68,23 +38,22 @@ class AgentResponseSchemaTest(unittest.TestCase):
 
     def test_debug_retry_context_is_optional_and_parseable(self) -> None:
         payload = {
-            "response": {"answer": "uncertain", "claims": [], "evidence": [], "confidence": None},
+            "response": response_payload("uncertain"),
             "trace": "trace-id",
-            "file_path": None,
             "debug": {
                 "schema_version": 3,
                 "observability_status": "ok",
                 "missing_required_debug_fields": [],
                 "tool_calls": ["tavily_search"],
                 "tool_call_count": 1,
-                "errors": ["validate_evidence: retry_reason=unsupported_claims"],
-                "observed_evidence": [],
+                "errors": ["validate_evidence: retry_reason=unresolved_references"],
+                "observed_hits": [],
                 "retry_context": {
                     "attempt": 1,
                     "max_retries": 1,
-                    "retry_reason": "unsupported_claims",
-                    "retrieval_feedback": "generated claims referenced unsupported evidence ids",
-                    "evidence_start_index": 0,
+                    "retry_reason": "unresolved_references",
+                    "retrieval_feedback": "displayed content referenced unresolved evidence ids",
+                    "hit_start_index": 0,
                     "retrieval_error_start_index": 0,
                     "retrieval_diagnostic_start_index": 0,
                     "score_avg": None,
@@ -94,14 +63,13 @@ class AgentResponseSchemaTest(unittest.TestCase):
         result = AgentResponse.model_validate(payload)
         self.assertIsNotNone(result.debug)
         self.assertIsNotNone(result.debug.retry_context)
-        self.assertEqual(result.debug.retry_context.retry_reason, "unsupported_claims")
+        self.assertEqual(result.debug.retry_context.retry_reason, "unresolved_references")
         self.assertEqual(result.debug.retry_context.retrieval_diagnostic_start_index, 0)
 
     def test_debug_validation_events_and_edge_decisions_are_parseable(self) -> None:
         payload = {
-            "response": {"answer": "ok", "claims": [], "evidence": [], "confidence": None},
+            "response": response_payload("ok"),
             "trace": "trace-id",
-            "file_path": None,
             "debug": {
                 "schema_version": 3,
                 "observability_status": "ok",
@@ -109,7 +77,7 @@ class AgentResponseSchemaTest(unittest.TestCase):
                 "tool_calls": [],
                 "tool_call_count": 0,
                 "errors": [],
-                "validation_events": ["validate_evidence: retry_reason=unsupported_claims"],
+                "validation_events": ["validate_evidence: retry_reason=unresolved_references"],
                 "edge_decisions": [
                     {
                         "source": "planner",
@@ -117,7 +85,7 @@ class AgentResponseSchemaTest(unittest.TestCase):
                         "reason": "retrieval_required:2_task(s)",
                     }
                 ],
-                "observed_evidence": [],
+                "observed_hits": [],
             },
         }
 
@@ -126,16 +94,15 @@ class AgentResponseSchemaTest(unittest.TestCase):
         self.assertIsNotNone(result.debug)
         self.assertEqual(
             result.debug.validation_events,
-            ["validate_evidence: retry_reason=unsupported_claims"],
+            ["validate_evidence: retry_reason=unresolved_references"],
         )
         self.assertEqual(result.debug.errors, [])
         self.assertEqual(result.debug.edge_decisions[0]["decision"], "retrieve")
 
     def test_debug_diagnostics_are_optional_and_parseable(self) -> None:
         payload = {
-            "response": {"answer": "follow up", "claims": [], "evidence": [], "confidence": None},
+            "response": response_payload("follow up"),
             "trace": "trace-id",
-            "file_path": None,
             "debug": {
                 "schema_version": 3,
                 "observability_status": "ok",
@@ -144,7 +111,7 @@ class AgentResponseSchemaTest(unittest.TestCase):
                 "tool_call_count": 1,
                 "errors": [],
                 "planner_errors": ["planner: structured output invocation failed (boom)"],
-                "observed_evidence": [],
+                "observed_hits": [],
                 "retrieval_diagnostics": [
                     {
                         "tool": "tavily_search",
@@ -184,9 +151,8 @@ class AgentResponseSchemaTest(unittest.TestCase):
 
     def test_debug_latency_breakdown_is_optional_and_parseable(self) -> None:
         payload = {
-            "response": {"answer": "follow up", "claims": [], "evidence": [], "confidence": None},
+            "response": response_payload("follow up"),
             "trace": "trace-id",
-            "file_path": None,
             "debug": {
                 "schema_version": 3,
                 "observability_status": "ok",
@@ -194,7 +160,7 @@ class AgentResponseSchemaTest(unittest.TestCase):
                 "tool_calls": ["tavily_search"],
                 "tool_call_count": 1,
                 "errors": [],
-                "observed_evidence": [],
+                "observed_hits": [],
                 "latency_ms_server": 1250,
                 "latency_breakdown": {
                     "server_total_ms": 1250,
@@ -244,9 +210,8 @@ class AgentResponseSchemaTest(unittest.TestCase):
 
     def test_debug_latency_breakdown_accepts_deterministic_grounded_direct_mode(self) -> None:
         payload = {
-            "response": {"answer": "follow up", "claims": [], "evidence": [], "confidence": None},
+            "response": response_payload("follow up"),
             "trace": "trace-id",
-            "file_path": None,
             "debug": {
                 "schema_version": 3,
                 "observability_status": "ok",
@@ -254,7 +219,7 @@ class AgentResponseSchemaTest(unittest.TestCase):
                 "tool_calls": ["upload_search"],
                 "tool_call_count": 1,
                 "errors": [],
-                "observed_evidence": [],
+                "observed_hits": [],
                 "latency_ms_server": 120,
                 "latency_breakdown": {
                     "server_total_ms": 120,
@@ -290,9 +255,8 @@ class AgentResponseSchemaTest(unittest.TestCase):
 
     def test_debug_llm_calls_and_models_used_are_optional_and_parseable(self) -> None:
         payload = {
-            "response": {"answer": "follow up", "claims": [], "evidence": [], "confidence": None},
+            "response": response_payload("follow up"),
             "trace": "trace-id",
-            "file_path": None,
             "debug": {
                 "schema_version": 3,
                 "observability_status": "ok",
@@ -300,7 +264,7 @@ class AgentResponseSchemaTest(unittest.TestCase):
                 "tool_calls": ["tavily_search"],
                 "tool_call_count": 1,
                 "errors": [],
-                "observed_evidence": [],
+                "observed_hits": [],
                 "model_name": "gpt-5-mini",
                 "models_used": ["gpt-5-nano", "gpt-5-mini"],
                 "model_usage_status": "llm_used",

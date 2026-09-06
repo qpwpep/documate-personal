@@ -8,8 +8,9 @@ from fastapi.testclient import TestClient
 from src.infra.settings import AppSettings
 from src.app.web.agent_request_service import AgentRequestResult
 from src.app.web.app import create_app
-from src.app.web.schemas import AgentDebugInfo, AgentResponsePayload, AgentRequest, AgentStreamEvent
+from src.app.web.schemas import AgentDebugInfo, AgentRequest, AgentStreamEvent
 from src.core.conversation_memory import DEFAULT_QUERY_MAX_CHARS
+from tests.web.answer_fixtures import answer_response, response_payload
 
 
 class _FakeAgentRequestService:
@@ -25,16 +26,8 @@ class _FakeAgentRequestService:
             }
         )
         return AgentRequestResult(
-            response=AgentResponsePayload.model_validate(
-                {
-                    "answer": "delegated answer",
-                    "claims": [],
-                    "evidence": [],
-                    "confidence": None,
-                }
-            ),
+            response=answer_response("delegated answer"),
             trace=f"trace-{request_id}",
-            file_path="output/result.txt",
             debug=(
                 AgentDebugInfo(schema_version=3, observability_status="ok")
                 if request_data.include_debug
@@ -58,14 +51,8 @@ class _FakeAgentRequestService:
             yield AgentStreamEvent(
                 event="final_response",
                 data={
-                    "response": {
-                        "answer": "delegated answer",
-                        "claims": [],
-                        "evidence": [],
-                        "confidence": None,
-                    },
+                    "response": response_payload("delegated answer"),
                     "trace": f"trace-{request_id}",
-                    "file_path": "output/result.txt",
                     "debug": None,
                 },
             )
