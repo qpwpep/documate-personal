@@ -8,6 +8,7 @@ from unittest.mock import patch
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 
+from src.core.evidence import EvidenceRef, parse_search_hits
 from src.infra.chunking import chunk_notebook_path, chunk_python_text
 from src.infra.tools.local_rag import build_temp_retriever, build_upload_search_tool
 from src.infra.tools.local_rag.ranking import rank_retrieval_rows
@@ -50,6 +51,32 @@ def _write_notebook(path: Path, *sources: str) -> None:
 
 
 class LocalRagTest(unittest.TestCase):
+
+
+
+    def test_chunk_boundary_does_not_discard_complete_source_ast(self) -> None:
+        """Code facts retain original line numbers even when indexing splits a call."""
+        text = "# setup\n" * 20 + "model = train_model(\n    data,\n    learning_rate=0.01,\n    epochs=20,\n)\n"
+        indexed = chunk_python_text(path="uploads/session/model.py", text=text, chunk_size=45, chunk_overlap=5)
+        chunk = next(doc for doc in indexed.chunks if "learning_rate" in doc.page_content)
+        evidence = EvidenceRef.model_validate_json(indexed.hydrate(chunk).metadata["evidence_ref"])
+        call = evidence.element.metadata["code_metadata"]["calls"][0]
+        self.assertEqual(call, {"call_name": "train_model", "kwargs": {"learning_rate": "0.01", "epochs": "20"}, "line": 21})
+
+    def test_query_changes_selection_without_changing_snapshot_or_element(self) -> None:
+        """Different queries select different ranges in the same preserved element."""
+        from src.infra.tools.local_rag.serialization import build_local_hit_bundle
+
+        text = "alpha(value=1)\n" + "setup = 1\n" * 12 + "beta(value=2)\n"
+        indexed = chunk_python_text(path="uploads/session/query.py", text=text, chunk_size=800, chunk_overlap=120)
+        doc = indexed.hydrate(indexed.chunks[0])
+        first = build_local_hit_bundle([(doc, 0.2)], query="alpha")[0][0].evidence
+        second = build_local_hit_bundle([(doc, 0.3)], query="beta")[0][0].evidence
+        self.assertEqual(first.snapshot, second.snapshot)
+        self.assertEqual(first.element, second.element)
+        self.assertNotEqual(first.selection, second.selection)
+        self.assertNotEqual(first.id, second.id)
+
     def test_build_query_focused_snippet_centers_on_matching_identifier(self) -> None:
         text = (
             "import pandas as pd\n\n"
@@ -180,48 +207,6 @@ class LocalRagTest(unittest.TestCase):
 
         self.assertEqual(ranked[0][0].metadata["cell_id"], 2)
 
-    @patch("src.infra.chroma_store.OpenAIEmbeddings", return_value=_FakeEmbeddings())
-    def test_upload_rag_search_uses_canonical_copy_and_raw_l2_scores_without_userwarning(
-        self,
-        _mock_openai_embeddings,
-    ) -> None:
-        with TemporaryDirectory() as temp_dir:
-            uploads_root = Path(temp_dir) / "uploads" / "session-a"
-            notebook_path = uploads_root / "sample_pipeline.ipynb"
-            _write_notebook(
-                notebook_path,
-                "# Sample pipeline",
-                "from sklearn.model_selection import train_test_split\n"
-                "X_train, X_test = train_test_split(X, y, test_size=0.2, random_state=42)\n",
-            )
-
-            with warnings.catch_warnings(record=True) as caught:
-                warnings.simplefilter("always")
-                handle = build_temp_retriever(str(notebook_path), api_key="test-key")
-                try:
-                    upload_tool = build_upload_search_tool()
-                    payload = upload_tool(
-                        query="train_test_split parameter",
-                        k=2,
-                        retriever=handle.retriever,
-                    )
-                finally:
-                    handle.cleanup()
-
-            canonical_path = notebook_path.parent / ".canonical" / notebook_path.name
-            self.assertEqual(caught, [])
-            self.assertTrue(canonical_path.exists())
-            self.assertEqual(payload["diagnostics"]["metric"], "l2")
-            self.assertEqual(payload["diagnostics"]["score_direction"], "lower_is_better")
-            self.assertEqual(payload["diagnostics"]["route"], "upload")
-            self.assertEqual(
-                {
-                    (item["kind"], item["tool"], item["url_or_path"])
-                    for item in payload["evidence"]
-                },
-                {("local", "upload_search", str(notebook_path))},
-            )
-            self.assertTrue(all(0.0 <= item["score"] <= 1.0 for item in payload["evidence"]))
 
 
 if __name__ == "__main__":

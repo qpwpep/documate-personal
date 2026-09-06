@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import ast
 import json
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
+from src.core.documents import DocumentElement, ParsedDocument, SourceAnchor, build_snapshot
+from src.core.evidence import build_evidence
 from src.infra.notebook_loader import load_canonical_notebook, normalize_cell_source
 
 _MAX_CODE_METADATA_CALLS = 8
@@ -15,11 +18,46 @@ _MAX_CODE_METADATA_KWARGS = 12
 _MAX_LITERAL_CHARS = 120
 
 
+@dataclass
+class ChunkedDocument:
+    """One source registry and lightweight text windows ready for indexing."""
+
+    parsed: ParsedDocument
+    chunks: list[Document]
+    _elements: dict[str, DocumentElement] = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        self._elements = {element.element_id: element for element in self.parsed.elements}
+
+    def hydrate(self, chunk: Document) -> Document:
+        metadata = chunk.metadata
+        if metadata.get("snapshot_id") != self.parsed.snapshot.snapshot_id:
+            raise ValueError("Indexed chunk belongs to a different source revision")
+        element = self._elements.get(str(metadata.get("element_id") or ""))
+        if element is None:
+            raise ValueError("Indexed chunk points to an unknown source element")
+        evidence = build_evidence(
+            snapshot=self.parsed.snapshot, element=element,
+            start=int(metadata["start"]), end=int(metadata["end"]),
+        )
+        if evidence.excerpt != chunk.page_content:
+            raise ValueError("Indexed text differs from its source range")
+        return Document(page_content=chunk.page_content,
+                        metadata={**metadata, "evidence_ref": evidence.model_dump_json()})
+
+    def release(self) -> None:
+        """Release index-owned source data; previously returned evidence is independent."""
+        self._elements.clear()
+        self.parsed.elements.clear()
+        self.chunks.clear()
+
+
 def _build_splitter(*, chunk_size: int, chunk_overlap: int) -> RecursiveCharacterTextSplitter:
     return RecursiveCharacterTextSplitter(
         chunk_size=chunk_size,
         chunk_overlap=chunk_overlap,
         add_start_index=True,
+        strip_whitespace=False,
     )
 
 
@@ -29,14 +67,21 @@ def chunk_python_text(
     text: str,
     chunk_size: int,
     chunk_overlap: int,
-) -> list[Document]:
-    splitter = _build_splitter(chunk_size=chunk_size, chunk_overlap=chunk_overlap)
-    docs = splitter.create_documents([text], metadatas=[{"source": path}])
-    return _annotate_python_chunks(
-        path=path,
-        docs=docs,
-        document_char_count=len(text),
+    source_content: bytes | None = None,
+) -> ChunkedDocument:
+    snapshot = build_snapshot(
+        source_uri=path, title=Path(path).name, media_type="text/x-python",
+        source_type="upload", content=source_content if source_content is not None else text,
+        parser="python-ast", parser_version="1",
     )
+    element = DocumentElement(
+        element_id="python-source", kind="code", text=text, language="python",
+        anchors=[SourceAnchor(kind="code", start=0, end=len(text), line_start=1,
+                              line_end=max(1, len(text.splitlines())), precision="exact")],
+        metadata={"code_metadata": _build_code_metadata(source=text)},
+    )
+    return chunk_parsed_document(ParsedDocument(snapshot=snapshot, elements=[element]),
+                                 chunk_size=chunk_size, chunk_overlap=chunk_overlap)
 
 
 def chunk_notebook_path(
@@ -44,14 +89,14 @@ def chunk_notebook_path(
     path: str,
     chunk_size: int,
     chunk_overlap: int,
-    source_path: str | None = None,
-) -> list[Document]:
-    notebook = load_canonical_notebook(path).notebook
+) -> ChunkedDocument:
+    loaded = load_canonical_notebook(path)
     return chunk_notebook(
-        path=source_path or path,
-        notebook=notebook,
+        path=path,
+        notebook=loaded.notebook,
         chunk_size=chunk_size,
         chunk_overlap=chunk_overlap,
+        source_content=loaded.source_content,
     )
 
 
@@ -61,39 +106,33 @@ def chunk_notebook(
     notebook: Any,
     chunk_size: int,
     chunk_overlap: int,
-) -> list[Document]:
-    splitter = _build_splitter(chunk_size=chunk_size, chunk_overlap=chunk_overlap)
-    base_docs: list[Document] = []
-    document_char_count = 0
+    source_content: bytes | str | None = None,
+) -> ChunkedDocument:
+    snapshot = build_snapshot(
+        source_uri=path, title=Path(path).name, media_type="application/x-ipynb+json",
+        source_type="upload", content=source_content if source_content is not None else json.dumps(notebook, ensure_ascii=False),
+        parser="notebook-source", parser_version="1", parser_config={"line_endings": "LF"},
+    )
+    elements: list[DocumentElement] = []
     for cell_index, cell in enumerate(getattr(notebook, "cells", [])):
         if cell.get("cell_type") not in {"code", "markdown"}:
             continue
         source = normalize_cell_source(cell.get("source"))
         if not source.strip():
             continue
-        document_char_count += len(source)
-        base_docs.append(
-            Document(
-                page_content=source,
-                metadata={
-                    "source": path,
-                    "cell_id": cell_index,
-                    "cell_index": cell_index,
-                    "notebook_cell_id": str(cell.get("id") or "").strip() or None,
-                    "cell_type": str(cell.get("cell_type") or ""),
-                },
-            )
-        )
-
-    if not base_docs:
-        return []
-
-    split_docs = splitter.split_documents(base_docs)
-    return _annotate_notebook_chunks(
-        path=path,
-        docs=split_docs,
-        document_char_count=document_char_count,
-    )
+        native_id = str(cell.get("id") or "").strip() or f"cell-{cell_index}"
+        is_code = cell.get("cell_type") == "code"
+        elements.append(DocumentElement(
+            element_id=f"cell-{native_id}", kind="code" if is_code else "paragraph",
+            text=source, order=cell_index, language="python" if is_code else None,
+            anchors=[SourceAnchor(kind="notebook", start=0, end=len(source),
+                                  line_start=1, line_end=max(1, len(source.splitlines())),
+                                  cell_id=native_id, cell_index=cell_index, precision="exact")],
+            metadata={"cell_type": str(cell.get("cell_type")),
+                      "code_metadata": _build_code_metadata(source=source, cell_id=cell_index) if is_code else {}},
+        ))
+    return chunk_parsed_document(ParsedDocument(snapshot=snapshot, elements=elements),
+                                 chunk_size=chunk_size, chunk_overlap=chunk_overlap)
 
 
 def _call_name(node: ast.AST) -> str:
@@ -179,77 +218,31 @@ def _build_code_metadata(*, source: str, cell_id: int | None = None) -> dict[str
     return metadata
 
 
-def _serialize_code_metadata(*, source: str, cell_id: int | None = None) -> str | None:
-    metadata = _build_code_metadata(source=source, cell_id=cell_id)
-    if not metadata or not metadata.get("calls"):
-        return None
-    return json.dumps(metadata, ensure_ascii=False, sort_keys=True)
-
-
-def _annotate_python_chunks(
-    *,
-    path: str,
-    docs: list[Document],
-    document_char_count: int,
-) -> list[Document]:
-    normalized_source = str(Path(path))
-    document_chunk_count = len(docs)
-    for chunk_index, doc in enumerate(docs):
-        start_offset = _coerce_non_negative_int(doc.metadata.get("start_index"))
-        end_offset = start_offset + len(doc.page_content or "")
-        code_metadata = _serialize_code_metadata(source=doc.page_content or "")
-        doc.metadata["source"] = normalized_source
-        doc.metadata["chunk_id"] = chunk_index
-        doc.metadata["cell_id"] = None
-        doc.metadata["start_offset"] = start_offset
-        doc.metadata["end_offset"] = end_offset
-        doc.metadata["document_chunk_count"] = document_chunk_count
-        doc.metadata["document_char_count"] = max(0, int(document_char_count))
-        if code_metadata:
-            doc.metadata["code_metadata"] = code_metadata
-    return docs
-
-
-def _annotate_notebook_chunks(
-    *,
-    path: str,
-    docs: list[Document],
-    document_char_count: int,
-) -> list[Document]:
-    normalized_source = str(Path(path))
-    chunk_counters: dict[int, int] = {}
-    document_chunk_count = len(docs)
+def chunk_parsed_document(
+    parsed: ParsedDocument, *, chunk_size: int, chunk_overlap: int,
+) -> ChunkedDocument:
+    """Store each source element once and index only its stable location."""
+    splitter = _build_splitter(chunk_size=chunk_size, chunk_overlap=chunk_overlap)
+    docs: list[Document] = []
+    document_char_count = sum(len(element.text) for element in parsed.elements)
+    for element in parsed.elements:
+        for chunk in splitter.create_documents([element.text]):
+            start = int(chunk.metadata.get("start_index", -1))
+            end = start + len(chunk.page_content)
+            if start < 0 or element.text[start:end] != chunk.page_content:
+                raise ValueError("Chunk text does not resolve to its source element")
+            metadata: dict[str, Any] = {
+                "source": parsed.snapshot.source_uri,
+                "snapshot_id": parsed.snapshot.snapshot_id,
+                "element_id": element.element_id,
+                "start": start,
+                "end": end,
+                "document_char_count": document_char_count,
+            }
+            anchor = next((anchor for anchor in element.anchors if anchor.kind == "notebook"), None)
+            if anchor is not None:
+                metadata["cell_index"] = anchor.cell_index
+            docs.append(Document(page_content=chunk.page_content, metadata=metadata))
     for doc in docs:
-        cell_id = _coerce_non_negative_int(doc.metadata.get("cell_id"))
-        chunk_index = chunk_counters.get(cell_id, 0)
-        chunk_counters[cell_id] = chunk_index + 1
-        start_offset = _coerce_non_negative_int(doc.metadata.get("start_index"))
-        end_offset = start_offset + len(doc.page_content or "")
-        code_metadata = None
-        if str(doc.metadata.get("cell_type") or "") == "code":
-            code_metadata = _serialize_code_metadata(
-                source=doc.page_content or "",
-                cell_id=cell_id,
-            )
-        doc.metadata["source"] = normalized_source
-        doc.metadata["chunk_id"] = chunk_index
-        doc.metadata["cell_id"] = cell_id
-        doc.metadata["cell_index"] = cell_id
-        doc.metadata["notebook_cell_id"] = (
-            str(doc.metadata.get("notebook_cell_id") or "").strip() or None
-        )
-        doc.metadata["start_offset"] = start_offset
-        doc.metadata["end_offset"] = end_offset
-        doc.metadata["document_chunk_count"] = document_chunk_count
-        doc.metadata["document_char_count"] = max(0, int(document_char_count))
-        if code_metadata:
-            doc.metadata["code_metadata"] = code_metadata
-    return docs
-
-
-def _coerce_non_negative_int(value: Any) -> int:
-    try:
-        coerced = int(value)
-    except (TypeError, ValueError):
-        return 0
-    return max(0, coerced)
+        doc.metadata["document_chunk_count"] = len(docs)
+    return ChunkedDocument(parsed=parsed.model_copy(deep=True), chunks=docs)

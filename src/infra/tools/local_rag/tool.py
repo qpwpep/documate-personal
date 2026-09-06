@@ -9,7 +9,7 @@ from src.infra.chroma_store import CHROMA_DISTANCE_METRIC, CHROMA_SCORE_DIRECTIO
 from src.infra.tools._common import build_retrieval_payload
 from src.infra.tools.local_rag import client
 from src.infra.tools.local_rag.ranking import rank_retrieval_rows
-from src.infra.tools.local_rag.serialization import build_local_evidence_bundle
+from src.infra.tools.local_rag.serialization import build_local_hit_bundle
 
 
 def _build_search_payload(
@@ -20,20 +20,18 @@ def _build_search_payload(
 ) -> dict[str, Any]:
     post_started = time.perf_counter()
     ranked_rows = rank_retrieval_rows(docs_with_scores, query=query)
-    evidence, normalized_scores, raw_scores, retrieval_warnings = build_local_evidence_bundle(
+    hits, normalized_scores, raw_scores, retrieval_warnings = build_local_hit_bundle(
         ranked_rows,
         query=query,
-        tool_name="upload_search",
-        default_source="uploaded",
     )
     post_filter_ms = elapsed_ms(post_started, time.perf_counter())
     return build_retrieval_payload(
         tool="upload_search",
         route="upload",
         query=query,
-        evidence=evidence,
-        status="success" if evidence else "no_result",
-        message="" if evidence else "no uploaded file evidence found",
+        hits=hits,
+        status="success" if hits else "no_result",
+        message="" if hits else "no uploaded file evidence found",
         normalized_score=max(normalized_scores) if normalized_scores else None,
         raw_score=min(raw_scores) if raw_scores else None,
         provider_ms=provider_ms,
