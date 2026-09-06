@@ -1,17 +1,18 @@
+"""Original-source selections and query-specific retrieval scores."""
+
 from __future__ import annotations
 
+import hashlib
 import json
-import re
 from typing import Any, Iterable, Literal
-from urllib.parse import urlparse
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
-
-EvidenceKind = Literal["official", "local"]
+from src.core.documents import DocumentElement, DocumentSnapshot
 
 
 class DocEntry(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     name: str = ""
     type: str = ""
     default: str = ""
@@ -19,6 +20,7 @@ class DocEntry(BaseModel):
 
 
 class DocMetadata(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     doc_family: str = ""
     symbol: str = ""
     signature: str = ""
@@ -30,156 +32,138 @@ class DocMetadata(BaseModel):
     source_sections: list[str] = Field(default_factory=list)
 
 
-class EvidenceItem(BaseModel):
-    kind: EvidenceKind
-    tool: str
-    source_id: str
-    document_id: str | None = None
-    url_or_path: str
-    title: str | None = None
-    snippet: str | None = None
-    score: float | None = None
-    chunk_id: int | None = None
-    cell_id: int | None = None
-    start_offset: int | None = None
-    end_offset: int | None = None
-    code_metadata: dict[str, Any] | None = None
-    doc_metadata: DocMetadata | None = None
+class SourceSelection(BaseModel):
+    """Half-open offsets in element.text, or structured table cell IDs."""
+
+    model_config = ConfigDict(extra="forbid")
+    start: int = Field(default=0, ge=0)
+    end: int | None = Field(default=None, ge=0)
+    cell_ids: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
-    def populate_document_id(self) -> "EvidenceItem":
-        if not self.document_id and self.url_or_path:
-            self.document_id = normalize_source_id(self.url_or_path)
+    def validate_range(self) -> SourceSelection:
+        if self.end is not None and self.end < self.start:
+            raise ValueError("selection end must not precede start")
+        if self.cell_ids and (self.start != 0 or self.end is not None):
+            raise ValueError("cell selection cannot also select text offsets")
+        if len(self.cell_ids) != len(set(self.cell_ids)):
+            raise ValueError("selection cell IDs must be unique")
         return self
 
 
-def normalize_source_id(url_or_path: str) -> str:
-    raw = str(url_or_path or "").strip()
-    if not raw:
-        return ""
+class EvidenceRef(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    id: str = Field(min_length=1)
+    snapshot: DocumentSnapshot
+    element: DocumentElement
+    selection: SourceSelection = Field(default_factory=SourceSelection)
 
-    parsed = urlparse(raw)
-    if parsed.scheme.lower() in {"http", "https"} and parsed.netloc:
-        host = parsed.netloc.lower()
-        if host.startswith("www."):
-            host = host[4:]
-        path = re.sub(r"/+", "/", parsed.path or "/")
-        if not path.startswith("/"):
-            path = "/" + path
-        return f"url:{parsed.scheme.lower()}://{host}{path}"
+    @model_validator(mode="after")
+    def validate_selection(self) -> EvidenceRef:
+        selection = self.selection
+        if selection.cell_ids:
+            if self.element.table is None:
+                raise ValueError("cell selection requires a table element")
+            known = {cell.cell_id for cell in self.element.table.cells}
+            if not set(selection.cell_ids).issubset(known):
+                raise ValueError("selection contains an unknown table cell")
+        else:
+            length = len(self.element.text)
+            if selection.start > length or (selection.end is not None and selection.end > length):
+                raise ValueError("selection exceeds original element text")
+        if self.id != _evidence_id(self.snapshot, self.element, self.selection):
+            raise ValueError("evidence identity does not match its captured source and selection")
+        return self
 
-    normalized_path = re.sub(r"/+", "/", raw.replace("\\", "/")).strip().lower()
-    return f"path:{normalized_path}"
+    @property
+    def excerpt(self) -> str:
+        if self.selection.cell_ids:
+            selected = set(self.selection.cell_ids)
+            cells = sorted((cell for cell in self.element.table.cells if cell.cell_id in selected), key=lambda cell: (cell.row, cell.col))
+            rows: dict[int, list[str]] = {}
+            for cell in cells:
+                rows.setdefault(cell.row, []).append(cell.text)
+            return "\n".join(" | ".join(values) for values in rows.values())
+        return self.element.text[self.selection.start:self.selection.end]
 
-
-def build_local_source_id(
-    *,
-    url_or_path: str,
-    chunk_id: Any,
-    start_offset: Any,
-    end_offset: Any,
-    cell_id: Any = None,
-) -> str:
-    document_id = normalize_source_id(url_or_path)
-    if not document_id:
-        return ""
-
-    chunk_value = _coerce_non_negative_int(chunk_id)
-    start_value = _coerce_non_negative_int(start_offset)
-    end_value = max(start_value, _coerce_non_negative_int(end_offset))
-
-    if cell_id is not None:
-        cell_value = _coerce_non_negative_int(cell_id)
-        return (
-            f"{document_id}#cell={cell_value};chunk={chunk_value};"
-            f"start={start_value};end={end_value}"
-        )
-    return f"{document_id}#chunk={chunk_value};start={start_value};end={end_value}"
+    @property
+    def route(self) -> Literal["docs", "upload"]:
+        return "docs" if self.snapshot.source_type == "official" else "upload"
 
 
-def truncate_snippet(text: str | None, *, max_length: int = 500) -> str | None:
-    if text is None:
-        return None
-    snippet = str(text).strip()
-    if not snippet:
-        return None
-    if len(snippet) > max_length:
-        head_length = max(80, int(max_length * 0.4))
-        tail_length = max(80, max_length - head_length - 5)
-        if head_length + tail_length >= len(snippet):
-            return snippet
-        head = snippet[:head_length].rstrip()
-        tail = snippet[-tail_length:].lstrip()
-        return f"{head} ... {tail}"
-    return snippet
+class RetrievalScore(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    metric: str = Field(min_length=1)
+    raw: float | None = Field(default=None, allow_inf_nan=False)
+    direction: Literal["higher", "lower"]
+    normalized: float | None = Field(default=None, ge=0, le=1, allow_inf_nan=False)
 
 
-def dedupe_evidence(items: Iterable[EvidenceItem]) -> list[EvidenceItem]:
-    deduped: list[EvidenceItem] = []
-    seen: set[tuple[str, str, str]] = set()
-    for item in items:
-        key = (item.kind, item.tool, item.source_id)
-        if key in seen:
-            continue
-        seen.add(key)
-        deduped.append(item)
-    return deduped
+class SearchHit(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    evidence: EvidenceRef
+    score: RetrievalScore
+    rank: int = Field(ge=1)
 
 
-def _coerce_non_negative_int(value: Any) -> int:
-    try:
-        coerced = int(value)
-    except (TypeError, ValueError):
-        return 0
-    return max(0, coerced)
+def _evidence_id(snapshot: DocumentSnapshot, element: DocumentElement, selection: SourceSelection) -> str:
+    identity = json.dumps(
+        {"snapshot": snapshot.model_dump(mode="json"), "element": element.model_dump(mode="json"), "selection": selection.model_dump(mode="json")},
+        ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False,
+    )
+    return "ref:" + hashlib.sha256(identity.encode("utf-8")).hexdigest()
 
 
-def evidence_to_dicts(items: Iterable[EvidenceItem]) -> list[dict[str, Any]]:
-    return [item.model_dump(mode="json") for item in items]
+def build_evidence(
+    *, snapshot: DocumentSnapshot, element: DocumentElement,
+    start: int = 0, end: int | None = None, cell_ids: list[str] | None = None,
+) -> EvidenceRef:
+    """Bind a source range to its version, independently of search chunk IDs."""
+    if cell_ids is None and element.table is not None and start == 0 and end is None:
+        cell_ids = [cell.cell_id for cell in element.table.cells]
+    cells = sorted(set(cell_ids or []))
+    selection = SourceSelection(start=start, end=end, cell_ids=cells)
+    if not cells:
+        selection = SourceSelection(start=start, end=len(element.text) if end is None else end)
+    return EvidenceRef(
+        id=_evidence_id(snapshot, element, selection),
+        snapshot=snapshot.model_copy(deep=True), element=element.model_copy(deep=True), selection=selection,
+    )
 
 
-def parse_evidence_payload(
-    raw_payload: Any,
-    *,
-    context: str,
-    errors: list[str] | None = None,
-) -> list[EvidenceItem]:
-    payload = raw_payload
-    if isinstance(raw_payload, str):
-        stripped = raw_payload.strip()
-        if not stripped:
+def dedupe_search_hits(hits: Iterable[SearchHit]) -> list[SearchHit]:
+    result: list[SearchHit] = []
+    seen: set[str] = set()
+    for hit in hits:
+        if hit.evidence.id not in seen:
+            result.append(hit)
+            seen.add(hit.evidence.id)
+    return result
+
+
+def parse_search_hits(value: Any, errors: list[str] | None = None) -> list[SearchHit]:
+    """Read tool hits, retaining valid items and reporting malformed entries."""
+    payload = value
+    if isinstance(payload, str):
+        if not payload.strip():
             return []
         try:
-            payload = json.loads(stripped)
+            payload = json.loads(payload)
         except json.JSONDecodeError as exc:
             if errors is not None:
-                errors.append(f"{context}: invalid JSON payload ({exc})")
+                errors.append(f"search hits: invalid JSON ({exc})")
             return []
-
     if isinstance(payload, dict):
-        maybe_list = payload.get("evidence")
-        if isinstance(maybe_list, list):
-            payload = maybe_list
-        else:
-            if errors is not None:
-                errors.append(f"{context}: payload must be a list of evidence objects")
-            return []
-
+        payload = payload.get("hits")
     if not isinstance(payload, list):
         if errors is not None:
-            errors.append(f"{context}: payload must be a list of evidence objects")
+            errors.append("search hits: expected a list or an object containing hits")
         return []
-
-    parsed: list[EvidenceItem] = []
+    result = []
     for index, item in enumerate(payload):
-        if not isinstance(item, dict):
-            if errors is not None:
-                errors.append(f"{context}[{index}]: item must be an object")
-            continue
         try:
-            parsed.append(EvidenceItem.model_validate(item))
-        except Exception as exc:
+            result.append(item if isinstance(item, SearchHit) else SearchHit.model_validate(item))
+        except (ValidationError, TypeError, ValueError) as exc:
             if errors is not None:
-                errors.append(f"{context}[{index}]: invalid evidence item ({exc})")
-
-    return dedupe_evidence(parsed)
+                errors.append(f"search hits[{index}]: invalid item ({exc})")
+    return dedupe_search_hits(result)
