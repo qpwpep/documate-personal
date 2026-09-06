@@ -102,7 +102,7 @@ def _pre_synthesis_router(state: dict[str, Any]) -> str:
         )
         return "retry"
     response = get_response_state(state)
-    if str(response.final_answer or "").strip() or str(response.payload.answer or "").strip():
+    if response.result.content.blocks:
         _record_edge_decision(
             state,
             source="pre_synthesis_validation",
@@ -120,14 +120,16 @@ def _pre_synthesis_router(state: dict[str, Any]) -> str:
 
 
 def _post_synthesis_router(state: dict[str, Any]) -> str:
-    if get_retry_state(state).needs_retry:
+    retry = get_retry_state(state)
+    if retry.needs_retry:
+        decision = "resynthesize" if retry.retry_scope == "reuse_hits_resynthesize" else "retry"
         _record_edge_decision(
             state,
             source="post_synthesis_validation",
-            decision="retry",
-            reason=str(get_retry_state(state).retry_reason or "retry_requested"),
+            decision=decision,
+            reason=str(retry.retry_reason or "retry_requested"),
         )
-        return "retry"
+        return decision
     _record_edge_decision(
         state,
         source="post_synthesis_validation",
@@ -197,6 +199,7 @@ def build_graph(
         _post_synthesis_router,
         {
             "retry": "planner",
+            "resynthesize": "synthesize",
             "postprocess": "action_postprocess",
         },
     )

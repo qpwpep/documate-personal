@@ -280,7 +280,7 @@ def _reset_retry_window(
         update={
             "needs_retry": False,
             "max_retries": int(existing_retry_context.max_retries),
-            "evidence_start_index": retrieval_evidence_count,
+            "hit_start_index": retrieval_evidence_count,
             "retrieval_error_start_index": retrieval_error_count,
             "retrieval_diagnostic_start_index": retrieval_diagnostic_count,
         }
@@ -292,7 +292,7 @@ def _reset_retry_window(
                 "score_avg": None,
                 "retry_reason": None,
                 "failed_routes": [],
-                "preserved_evidence": [],
+                "preserved_hits": [],
                 "preserved_retrieval_diagnostics": [],
             }
         )
@@ -341,7 +341,7 @@ def make_planner_node(
 
         retry_context = _reset_retry_window(
             existing_retry_context=existing_retry_context,
-            retrieval_evidence_count=len(retrieval.evidence_log),
+            retrieval_evidence_count=len(retrieval.hit_log),
             retrieval_error_count=len(debug.retrieval_errors),
             retrieval_diagnostic_count=len(debug.retrieval_diagnostics),
         )

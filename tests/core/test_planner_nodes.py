@@ -17,7 +17,7 @@ from .helpers import (
     _CapturePlannerLLM,
     _FailingPlannerLLM,
     _InvalidPlannerLLM,
-    build_legacy_state,
+    build_test_state,
 )
 
 
@@ -30,7 +30,7 @@ class PlannerNodeTest(unittest.TestCase):
     ]))
     def test_reviewed_upload_plan_does_not_gain_keyword_docs(self, query) -> None:
         requested = PlannerOutput(use_retrieval=True, tasks=[RetrievalTask(route="upload", query="결제 코드 멱등성 키", k=4)])
-        result = make_planner_node(_CapturePlannerLLM(requested), verbose=False)(build_legacy_state({
+        result = make_planner_node(_CapturePlannerLLM(requested), verbose=False)(build_test_state({
             "user_input": query, "messages": [HumanMessage(content=query)], "retriever": object(),
         }))["planner"]
         self.assertEqual(result.output, requested)
@@ -39,7 +39,7 @@ class PlannerNodeTest(unittest.TestCase):
         "공식 문서만으로 설명해줘", "내 파일에서 찾아줘", "검토한 뒤 저장해줘",
     ]))
     def test_planning_failure_requests_retry_without_guessing_sources(self, query) -> None:
-        result = make_planner_node(_FailingPlannerLLM(), verbose=False)(build_legacy_state({
+        result = make_planner_node(_FailingPlannerLLM(), verbose=False)(build_test_state({
             "user_input": query, "messages": [HumanMessage(content=query)], "retriever": object(),
         }))["planner"]
         self.assertEqual(
@@ -62,7 +62,7 @@ class PlannerNodeTest(unittest.TestCase):
         planner_node = make_planner_node(capture_planner, verbose=False)
 
         updates = planner_node(
-            build_legacy_state(
+            build_test_state(
                 {
                     "messages": [HumanMessage(content="Find groupby usage in the uploaded notebook.")],
                     "user_input": "Find groupby usage in the uploaded notebook.",
@@ -81,7 +81,7 @@ class PlannerNodeTest(unittest.TestCase):
         planner_node = make_planner_node(capture_planner, verbose=False)
 
         updates = planner_node(
-            build_legacy_state(
+            build_test_state(
                 {
                     "messages": [HumanMessage(content="Show a local notebook example for dataframe joins.")],
                     "user_input": "Show a local notebook example for dataframe joins.",
@@ -102,7 +102,7 @@ class PlannerNodeTest(unittest.TestCase):
         planner_node = make_planner_node(capture_planner, verbose=False)
 
         updates = planner_node(
-            build_legacy_state(
+            build_test_state(
                 {
                     "messages": [HumanMessage(content="Explain pandas merge from official docs with an example.")],
                     "user_input": "Explain pandas merge from official docs with an example.",
@@ -129,7 +129,7 @@ class PlannerNodeTest(unittest.TestCase):
             tasks=[RetrievalTask(route=route, query=query, k=4) for route in routes],
         ))
 
-        result = make_planner_node(llm, verbose=False)(build_legacy_state({
+        result = make_planner_node(llm, verbose=False)(build_test_state({
             "user_input": query,
             "messages": [HumanMessage(content=query)],
             "retriever": object() if has_retriever else None,
@@ -155,7 +155,7 @@ class PlannerNodeTest(unittest.TestCase):
 
     def test_planner_falls_back_when_schema_invalid(self) -> None:
         planner_node = make_planner_node(_InvalidPlannerLLM(), verbose=False)
-        updates = planner_node(build_legacy_state({"messages": [HumanMessage(content="hi")], "user_input": "hi"}))
+        updates = planner_node(build_test_state({"messages": [HumanMessage(content="hi")], "user_input": "hi"}))
 
         self.assertFalse(updates["planner"].output.use_retrieval)
         self.assertTrue(any("validation failed" in error for error in updates["debug"].planner_errors))
@@ -177,7 +177,7 @@ class PlannerNodeTest(unittest.TestCase):
         planner_node = make_planner_node(capture_planner, verbose=False)
 
         updates = planner_node(
-            build_legacy_state(
+            build_test_state(
                 {
                     "messages": [HumanMessage(content="Compare numpy and pandas docs.")],
                     "user_input": "Compare numpy and pandas docs.",
@@ -211,7 +211,7 @@ class PlannerNodeTest(unittest.TestCase):
         planner_node = make_planner_node(capture_planner, verbose=False)
 
         updates = planner_node(
-            build_legacy_state(
+            build_test_state(
                 {
                     "messages": [HumanMessage(content="Compare numpy and pandas docs.")],
                     "user_input": "Compare numpy and pandas docs.",
@@ -234,7 +234,7 @@ class PlannerNodeTest(unittest.TestCase):
         planner_node = make_planner_node(capture_planner, verbose=False)
 
         _ = planner_node(
-            build_legacy_state(
+            build_test_state(
                 {
                     "messages": [HumanMessage(content="numpy parameters")],
                     "user_input": "numpy parameters",

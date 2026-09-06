@@ -50,7 +50,7 @@ def _resolve_stage_status(stage: str, updates: GraphState) -> str | None:
         if retry_context.needs_retry:
             return "retry"
         response = get_response_state(updates)
-        if str(response.final_answer or "").strip() or str(response.payload.answer or "").strip():
+        if response.result.content.blocks:
             return str(retry_context.retry_reason or "terminal")
         return "pass"
     if stage in {"validation", "post_synthesis_validation"}:
@@ -116,7 +116,7 @@ def _edge_decision_for_stage(stage: str, updates: GraphState) -> dict[str, str] 
                 "reason": str(retry_context.retry_reason or "retry_requested"),
             }
         response = get_response_state(updates)
-        if str(response.final_answer or "").strip() or str(response.payload.answer or "").strip():
+        if response.result.content.blocks:
             return {
                 "source": "pre_synthesis_validation",
                 "decision": "postprocess",
