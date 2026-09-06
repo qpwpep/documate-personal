@@ -162,9 +162,29 @@ UI와 문서 검색 규칙은 아래 파일을 기준으로 관리합니다.
 - 검증 기준: `src/app/web/cleanup.py::validate_upload_file_path`
 - 현재 업로드 검색은 세션에 연결된 단일 파일 컨텍스트만 사용합니다.
 
-`upload` route는 업로드 파일에서 만든 세션별 임시 Chroma retriever를 검색합니다. 파일 기반 질문에는 해당 파일을 현재 세션에 업로드해야 합니다. 검색 근거는 `tool="upload_search"`, `kind="local"`로 반환되며, `kind`는 파일 근거의 유형이고 검색 route는 `upload`입니다.
+`upload` route는 업로드 파일에서 만든 세션별 임시 Chroma retriever를 검색합니다. 파일 기반 질문에는 해당 파일을 현재 세션에 업로드해야 합니다. 도구 이름은 `upload_search`이고, 근거 snapshot의 `source_type`은 `upload`입니다. 같은 파일 경로라도 원본 내용 hash가 바뀌면 retriever를 다시 생성합니다.
 
-### 3.3 생성 파일과 정리 정책
+### 3.3 문서·검색·근거 계약
+
+문서 모델은 특정 변환 라이브러리에 종속되지 않습니다. 기준은 `src/core/documents.py`, `src/core/evidence.py`입니다.
+
+| 모델 | 책임 |
+|---|---|
+| `DocumentSnapshot` | 출처 URI·유형으로 문서를 식별하고, 원본 내용 hash·parser 버전·설정·수집 범위로 변환 revision을 식별 |
+| `ParsedDocument` / `DocumentElement` | 제목 level·부모 관계·읽기 순서·제목 경로·원문 텍스트·코드 언어·표 셀과 병합 범위 보존 |
+| `SourceAnchor` | 원본 줄, Notebook cell ID·index, 페이지·bbox·좌표계·위치 정밀도. 한 요소에 복수 위치 허용 |
+| `SourceSelection` / `EvidenceRef` | snapshot과 원문 요소 안에서 인용한 문자 범위 또는 표 셀을 선택. 당시의 원문 요소 전체를 함께 보존 |
+| `SearchHit` / `RetrievalScore` | 근거 후보에 이번 검색의 순위·점수·점수 방향을 연결. 답변 신뢰도로 사용하지 않음 |
+
+문자 선택은 저장한 `element.text`의 `[start, end)` 범위입니다. 원본 줄·페이지는 1부터, Notebook cell index는 0부터 셉니다. 제목이나 API 옵션 정보를 붙인 검색 문자열과 원문 발췌를 구분하며, 검색 chunk 순번을 인용의 버전 식별자로 사용하지 않습니다.
+
+`.py`·`.ipynb`는 기존 파서에서 새 문서 모델로 변환합니다. 공식 문서의 Tavily `content`·`raw_content`는 모두 `capture_scope="provider_excerpt"`로 기록합니다. provider가 반환한 내용만 수집했으므로 웹 문서 전체나 실제 HTML 좌표를 확보했다고 간주하지 않습니다.
+
+업로드의 `ChunkedDocument`는 `ParsedDocument` 원문 구조를 한 번 보관하고 검색용 chunk를 만듭니다. Chroma에는 chunk 텍스트와 snapshot·element·선택 범위 참조만 넣으며, 검색된 결과만 `hydrate()`로 당시 원문을 가진 `EvidenceRef`로 복원합니다. 이 원문 보관은 retriever가 소유하는 process-local 상태입니다. cleanup은 인덱스와 보관 상태를 해제하지만 이미 응답에 포함한 원문 근거는 유지됩니다.
+
+현재 구현은 인용한 원문 요소를 응답에 포함해 파일 교체·삭제 후에도 당시 근거를 보여줍니다. 원본 파일 bytes의 영구 보관소나 별도 문서 조회 API는 제공하지 않습니다. Docling 설치·변환, PDF 입력, 페이지 이미지 강조 표시는 후속 범위입니다. 향후 adapter가 `ParsedDocument`를 만들면 제목 계층·표·페이지·위치 정보를 기존 핵심 모델로 전달할 수 있습니다.
+
+### 3.4 생성 파일과 정리 정책
 
 - `save_text` 결과: `output/save_text/*.txt`
 - 다운로드 엔드포인트: `GET /download/{filename}`
@@ -196,14 +216,16 @@ LangGraph의 `messages`는 `add_messages` reducer이므로 요약 노드는 최�
 
 ### 4.2 요청 종료 시 durable projection과 commit
 
-graph가 반환한 전체 메시지는 현재 요청의 debug evidence와 save/Slack receipt 조립이 끝날 때까지 유지됩니다. 조립 성공 후 세션에 저장할 때는 다음 규칙을 적용합니다.
+graph가 반환한 전체 메시지는 현재 요청의 debug 검색 결과와 save/Slack receipt 조립이 끝날 때까지 유지됩니다. 조립 성공 후 세션에 저장할 때는 다음 규칙을 적용합니다.
 
 - HumanMessage와 각 Human turn의 마지막 canonical AIMessage만 content-only 객체로 저장
 - ToolMessage, SystemMessage, tool-call 중간 AI, provider/usage metadata는 저장하지 않음
-- 마지막 AI 내용은 graph 내부 초안이 아니라 사용자에게 실제 표시한 receipt 포함 최종 응답으로 정규화
+- 마지막 AI 내용은 확정된 `AnswerDocument`에서 export한 본문으로 정규화
 - projection과 모든 hard-bound 검사가 끝난 뒤 `messages + memory_summary`를 immutable snapshot 하나로 commit
 
 graph 실행, debug 수집, response assembly, projection 또는 budget 검사가 실패하면 이전 정상 conversation snapshot을 유지합니다. 이미 완료된 `save_text`나 Slack 전송 같은 외부 side effect는 이 대화 메모리 원자성의 rollback 범위가 아닙니다.
+
+세션은 직전 `AnswerResponse`를 `previous_response`로 별도 보존합니다. “이 답변을 저장해줘” 같은 후속 액션은 문자열 대화 이력에서 근거를 복원하지 않고, 직전 구조화 본문과 원문 인용을 그대로 사용합니다. 실행 receipt는 본문에 덧붙이지 않고 `actions`에서 관리합니다.
 
 ### 4.3 수명주기와 한계
 
@@ -244,22 +266,52 @@ compaction 진단은 debug `edge_decisions`와 구조화 로그에서 before/aft
 - `include_debug=true`일 때만 debug payload가 내려옵니다.
 - Slack 필드는 세션 메타데이터로 저장되며 후속 요청에서 재사용될 수 있습니다.
 
-응답 구조:
+응답 구조의 최소 예시:
 
 ```json
 {
   "response": {
-    "answer": "문장 단위 답변 [1]",
-    "claims": [],
-    "evidence": [],
-    "confidence": 0.42,
-    "sections": []
+    "content": {
+      "blocks": [
+        {
+          "type": "paragraph",
+          "content": [
+            {"text": "확인할 파일을 업로드해 주세요.", "basis": "interaction", "refs": []}
+          ]
+        }
+      ]
+    },
+    "citations": [],
+    "checks": [
+      {
+        "unit_id": "b0.content.0",
+        "reference_status": "not_required",
+        "support_status": "not_evaluated",
+        "issues": []
+      }
+    ],
+    "issues": [],
+    "actions": [],
+    "content_hash": "765c737a8f27b2aae412cfa87b2cb432840f4f6e9fa645419cfa8dd3a4f4c766",
+    "retrieval_required": false
   },
   "trace": "Session ID: ..., Request ID: ..., Agent ID: ...",
-  "file_path": null,
   "debug": null
 }
 ```
+
+`response`는 `AnswerResponse`입니다. LLM 출력은 `content`에 해당하는 `AnswerDocument` 하나이며, 나머지는 서버가 생성합니다.
+
+- `blocks`: `paragraph`, `heading`, `list`, `code`, `table`. 문장·제목·목록 항목·코드·표 헤더와 셀의 `ContentUnit`은 모두 동일한 검증 순회 대상입니다.
+- `basis`: `source`, `inference`, `example`, `interaction`, `excerpt`. 모델의 표현 분류이며 정확성 판정이 아닙니다.
+- `refs`: synthesis에 실제 제공한 근거 ID. 서버가 최초 등장 순서대로 `citations.number`를 붙이고 사용한 `EvidenceRef`만 응답에 포함합니다.
+- `checks`: 내용 위치 ID에 대응하는 참조 상태와 확인 상태. 일반 설명·해석의 의미적 지지는 `not_evaluated`이며, `excerpt`는 단일 원문 발췌와 정확히 일치할 때만 `exact_match`입니다.
+- `issues`: 생성 실패·불완전한 답변 등 실제 제한. 전체 confidence 수치는 제공하지 않습니다.
+- `content_hash`: 검사한 본문의 revision. 내용이 바뀌면 검사를 다시 수행해야 합니다.
+- `retrieval_required`: 이 응답을 다시 검사할 때 유지할 출처 요구 조건. 검색 기반 응답의 생성 예시에도 참조가 필요한지 판단하는 데 사용합니다.
+- `actions`: 실제 저장·전송 결과의 `kind`, `status`, `message`·`error`, `target`, `file_path`. 다운로드 경로는 성공한 `save_text` receipt에 있습니다.
+
+예를 들어 `citations[0].evidence`에는 `snapshot`의 source URI·내용 hash·parser revision, `element`의 원문과 anchors, `selection`이 함께 있습니다. 클라이언트는 현재 업로드 파일을 다시 읽어 인용을 해석하지 않습니다. 모델이 생성한 별도 답변 문자열이나 주장 목록을 클라이언트에서 재조합하지도 않습니다.
 
 `debug`에는 아래 정보가 포함될 수 있습니다.
 
@@ -268,11 +320,15 @@ compaction 진단은 debug `edge_decisions`와 구조화 로그에서 before/aft
 - `latency_ms_server`, `latency_breakdown`
 - `token_usage`, `model_name`, `models_used`, `model_usage_status`, `llm_calls`
 - `errors`, `error_codes`, `validation_events`, `edge_decisions`
-- `observed_evidence`
+- `observed_hits`: 이번 실행에서 수집한 `SearchHit` 목록. 답변이 실제 사용한 `citations`와 구분
 - `retry_context`
 - `retrieval_diagnostics`
 - `planner_diagnostics`
 - `action_results`
+
+현재 debug schema version은 `6`입니다. `retry_context.hit_start_index`는 현재 시도의 검색 결과 시작 위치, `preserved_hits`는 성공한 route의 보존 결과입니다. `retry_scope`는 실패 route만 다시 조회하는 `refresh_routes` 또는 기존 결과를 사용해 본문을 다시 생성하는 `reuse_hits_resynthesize`입니다.
+
+post-synthesis 검사에서 참조·내용 문제가 있고 원문 검색 결과가 남아 있으면 planner·검색을 다시 실행하지 않고 synthesis로 직접 돌아갑니다. docs·upload·hybrid 모두 같은 제한된 재합성 경로를 사용합니다. 기본 재시도 상한은 1회이고 `max_retries=0`이면 재합성도 실행하지 않습니다. 새 시도의 참조는 그 시도에서 모델에 실제 제공한 packet으로 검사합니다.
 
 실제 응답 스키마 기준 파일:
 
@@ -294,13 +350,19 @@ compaction 진단은 debug `edge_decisions`와 구조화 로그에서 before/aft
 - `error`
 - `done`
 
-`final_response` 이벤트의 `data`는 일반 `POST /agent` 응답과 같은 `response`, `trace`, `file_path`, `debug` 구조를 담습니다.
+`final_response` 이벤트의 `data`는 일반 `POST /agent` 응답과 같은 `response`, `trace`, `debug` 구조를 담습니다.
 
 ### 5.3 `GET /download/{filename}`
 
 - `save_text`가 만든 텍스트 파일을 다운로드합니다.
 - 경로 순회와 절대 경로는 차단됩니다.
 - 파일이 없으면 `404 Not Found`를 반환합니다.
+
+### 5.4 Streamlit 표시와 export
+
+Streamlit은 `AnswerResponse` 전체를 채팅 기록에 보존합니다. 본문 옆의 번호별 근거 popover에서 당시 발췌, 전체 원문 요소, 제목 경로·원본 줄·cell·페이지 위치와 내용 hash를 확인할 수 있습니다. 표는 병합 셀과 선택 셀을 보존해 표시합니다. 페이지 bbox는 좌표 메타데이터로 보여주며 PDF 페이지 이미지 뷰어는 아직 없습니다.
+
+해석·생성 예시·원문 발췌는 표현 성격을 표시하고, “근거 확인 범위”는 출처 연결 확인과 의미적 지지 평가를 구분합니다. 저장·Slack 전송은 같은 본문의 공통 text exporter를 사용해 출처·원문 위치·참고 및 제한을 함께 보존하며, 실행 결과는 본문과 별도 UI에 표시합니다.
 
 ## 6. 프로젝트 구조
 
@@ -369,6 +431,8 @@ LIVE_TEST=true uv run pytest tests/core/test_prompts.py -k live_source_selection
 
 이 검사는 단일 요청과 대화 후속 질문의 출처 유지·변경, 주제 전환, 업로드 부재 안내를 확인합니다. 외부 문서 검색이나 파일 검색 도구는 실행하지 않습니다.
 
-최신 회귀 테스트 결과는 [README의 검증 결과](../README.md#검증-결과)를 기준으로 합니다. 파일 검색은 업로드 유무, 일반 파일 API 설명과의 구분, 인용과 세션 격리, 과거 벤치마크 읽기 호환성을 검증합니다. bounded memory에는 compiled reducer 회귀, 반복 rolling summary, LLM 예외/빈 출력 fallback, cross-request persistence, response assembly rollback, message ownership 격리, ToolMessage projection, JSON escape-heavy byte fitting, policy envelope, TTL/세션 격리, query boundary, Hypothesis Unicode/property, 300-turn plateau 테스트가 포함됩니다.
+최신 회귀 테스트 결과는 [README의 검증 결과](../README.md#검증-결과)를 기준으로 합니다. 문서·응답 검사는 원문 내용이나 parser 설정 변경에 따른 snapshot 식별, 재청킹과 원문 참조의 분리, 코드·Notebook 위치, 표 셀 선택, 실제 표시 내용의 참조 검사와 발췌 일치, invalid 내용 제거 후 재파생, UI·저장·전송의 동일 본문 사용을 다룹니다. 파일 검색은 업로드 유무, 일반 파일 API 설명과의 구분, 인용과 세션 격리를 검증합니다.
+
+bounded memory에는 compiled reducer 회귀, 반복 rolling summary, LLM 예외/빈 출력 fallback, cross-request persistence, response assembly rollback, message ownership 격리, ToolMessage projection, JSON escape-heavy byte fitting, policy envelope, TTL/세션 격리, query boundary, Hypothesis Unicode/property, 300-turn plateau 테스트가 포함됩니다.
 
 벤치마크 관련 명령과 로컬 산출물 정책은 [벤치마크 가이드](benchmarking.md), 공개 release 요약은 [README의 검증 결과](../README.md#검증-결과), 비교 추세는 [benchmark history SVG](assets/benchmark_history.svg)를 참고하세요. benchmark CLI의 env override 우선순위는 `CLI > .env > OS env > config.toml`입니다.

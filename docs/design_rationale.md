@@ -4,7 +4,7 @@ DocuMate의 설계 판단과 기술적 선택
 
 ## 1. 문서 목적
 
-이 문서는 DocuMate를 원본 팀 프로젝트에서 단계형 LangGraph 런타임과 120-case benchmark 체계를 갖춘 포트폴리오 개선본으로 재설계하면서, 어떤 기준으로 구조를 바꾸고 기능을 확장했는지 설명합니다. 단순히 기능 목록을 나열하기보다, 실행 경로를 안정적으로 만들기 위해 어떤 문제를 분리했고 어떤 트레이드오프를 받아들였는지 기록하는 데 목적이 있습니다.
+이 문서는 DocuMate의 문서·검색·답변·검증 경계를 나눈 이유와 현재 구현의 트레이드오프를 설명합니다. 제품의 목적은 공식 문서와 사용자 자료를 이해하고 설명하며, 사용자가 설명에서 당시 원문으로 돌아가 확인할 수 있게 하는 것입니다.
 
 DocuMate는 LangGraph 기반 학습 보조 에이전트입니다. 현재 구조는 공식 문서 검색, 세션 업로드 파일 검색, 구조화된 응답, 저장 및 Slack 전송 액션을 FastAPI와 Streamlit 런타임 위에서 함께 제공합니다. 실행 기준 코드는 `src/app`, `src/core`, `src/infra`, `src/runtime`, `src/eval` 계층으로 분리되어 있고, `archive`는 현재 실행 경로가 아니라 팀 프로젝트 원형과 참고 자료를 보관하는 영역입니다.
 
@@ -14,7 +14,7 @@ DocuMate는 LangGraph 기반 학습 보조 에이전트입니다. 현재 구조�
 
 초기 구조처럼 모델의 tool call 흐름에만 실행을 맡기면 검색, 검증, 액션의 책임 경계가 흐려지기 쉽습니다. 그래서 현재 그래프는 `add_user_message`, `summarize_old_messages`, `planner`, `retrieve_dispatch`, `pre_synthesis_validation`, `synthesize`, `post_synthesis_validation`, `action_postprocess` 단계로 나누었습니다.
 
-이 구조의 목표는 각 단계가 명확한 상태 계약을 주고받게 만드는 것입니다. `GraphState`는 `runtime`, `planner`, `retrieval`, `retry`, `response`, `debug` 영역으로 나뉘며, boundary adapter가 dict와 Pydantic 모델 사이의 상태를 정규화합니다. planner는 검색 필요 여부와 route를 결정하고, retrieval은 route별 evidence와 diagnostics를 모으며, validation은 근거 품질과 route coverage를 확인하고, synthesis는 최종 답변을 구조화합니다.
+이 구조의 목표는 각 단계가 명확한 상태 계약을 주고받게 만드는 것입니다. `GraphState`는 `runtime`, `planner`, `retrieval`, `retry`, `response`, `debug` 영역으로 나뉘며, boundary adapter가 dict와 Pydantic 모델 사이의 상태를 정규화합니다. planner는 검색 필요 여부와 route를 결정하고, retrieval은 route별 `SearchHit`와 diagnostics를 모읍니다. synthesis는 표시할 본문을 한 번 생성하고, validation은 그 본문의 원문 참조·발췌 일치·요청 충족 여부를 확인합니다.
 
 ### 유한한 장기 대화 메모리
 
@@ -34,17 +34,47 @@ planner와 synthesis에 전달되는 summary는 과거 사용자 입력에서 �
 
 route를 분리하면 응답 단계에서 evidence의 출처를 더 명확히 다룰 수 있고, 특정 소스가 실패해도 전체 흐름을 바로 중단하지 않고 다른 route 결과를 활용할 수 있습니다. 현재 `retrieve_dispatch`는 여러 route task가 필요한 경우 `ThreadPoolExecutor`로 병렬 실행하고, 결과는 planner task 순서대로 다시 정렬합니다.
 
-### Grounded 응답 스키마
+### 문서 원문과 검색 결과의 분리
 
-최종 응답은 자연어 하나로만 끝내지 않고 `answer`, `claims`, `evidence`, `confidence`, `sections`를 포함하는 구조화된 페이로드로 반환하도록 설계했습니다. 현재 기준 모델은 `AgentResponsePayloadModel`이며, API 응답에서는 `AgentResponsePayload`로 노출됩니다.
+원문의 정체성과 검색 편의를 서로 다른 계약으로 관리합니다. [`documents.py`](../src/core/documents.py)의 `DocumentSnapshot`은 출처 URI·유형, 내용 hash, parser 이름·버전·설정, 수집 범위를 식별합니다. `ParsedDocument`와 `DocumentElement`는 부모 관계·제목 level·읽기 순서·제목 경로, 코드와 표 셀을 표현합니다. `SourceAnchor`는 여러 페이지·영역·원본 줄·Notebook cell 등 확보한 위치만 기록합니다. 좌표가 없으면 원문 요소나 문서 수준으로 남기며 정밀 위치를 추정해 채우지 않습니다.
 
-이 선택은 답변 품질을 사람이 읽는 느낌에만 맡기지 않기 위한 것입니다. claim과 evidence를 함께 유지하면, 이후 검증 로직과 벤치마크에서 답변이 실제 검색 결과에 근거하는지 확인할 수 있습니다. 저장이나 Slack 전송처럼 액션이 붙는 경우에도 `ResponseAssembler`가 최종 답변과 receipt를 같은 payload 흐름 안에서 정리합니다.
+[`evidence.py`](../src/core/evidence.py)의 `EvidenceRef`는 snapshot, 당시 원문 요소 전체, 해당 요소 안의 문자 또는 표 셀 선택을 묶습니다. ID는 이 데이터에 따라 결정되므로 같은 경로의 파일을 바꾸거나 검색 chunk 크기를 바꾸어도 이전 인용이 새 내용으로 조용히 연결되지 않습니다. `SearchHit`는 여기에 질의별 순위와 `RetrievalScore`를 붙인 검색 결과입니다. 검색 점수는 결과를 고르는 데 사용하며 답변의 정답 확률로 표시하지 않습니다.
+
+현재 `.py`·`.ipynb` 경로는 기존 파서와 Chroma 검색을 사용하면서 이 모델로 원문을 전달합니다. 검색용 제목·옵션 요약을 추가하더라도 인용 발췌는 저장한 원문 요소의 범위에서 얻습니다. synthesis의 문자 예산 때문에 범위를 줄이면 줄인 범위를 가리키는 새 근거 ID를 만들고, 모델에 보내지 않은 범위의 근거 ID가 답변을 해석하는 데 사용되지 않도록 합니다.
+
+전체 원문을 모든 chunk의 metadata에 복제하면 작은 파일도 인덱스와 메모리를 크게 늘릴 수 있습니다. [`ChunkedDocument`](../src/infra/chunking.py)는 `ParsedDocument`를 한 번 보관하고, Chroma에는 chunk 텍스트와 snapshot·element·범위 참조만 저장합니다. 검색된 범위만 원문과 대조해 `EvidenceRef`로 복원합니다. 이 보관은 process-local retriever 수명에 한정되지만 이미 반환된 근거는 독립적으로 원문 요소를 보존하므로 인덱스 cleanup이 과거 답변을 손상하지 않습니다.
+
+웹 검색 결과는 provider의 `content`·`raw_content` 모두 `provider_excerpt`입니다. 외부 URL의 전체 문서나 변환 결과를 확보한 것으로 간주하지 않습니다. 사용자는 수집 당시의 발췌와 현재 URL을 구분해서 볼 수 있습니다.
+
+### 표시하는 내용을 유일한 응답 본문으로 사용
+
+LLM은 [`AnswerDocument`](../src/core/answer_schema/models.py)의 `blocks`만 생성합니다. 문단·제목·목록·코드·표 안의 각 `ContentUnit`에 실제 표시할 `text`, 표현 성격인 `basis`, 사용한 근거 `refs`를 붙입니다. 문단은 지지 근거나 표현 성격이 달라지는 지점에서 나누고, UI에서는 한 문단으로 읽을 수 있게 이어 붙입니다. 독립적인 주장 목록이나 요약 문자열을 별도로 생성하지 않습니다.
+
+[`iter_content_units()`](../src/core/answer_schema/models.py)는 문장뿐 아니라 제목·표 헤더·표 셀·코드도 같은 읽기 순서로 순회합니다. 검증, 인용 번호, UI, export가 이 본문을 기준으로 동작합니다. 모델이 사실을 다른 필드에 반복해 쓰거나 검증한 내용과 다른 문자열을 마지막에 선택하는 경로를 두지 않습니다.
+
+서버는 `AnswerResponse`에 `content`, `citations`, `checks`, `issues`, `actions`, `content_hash`, `retrieval_required`를 구성합니다. `citations`에는 실제 사용한 원문 참조만 남기고 최초 사용 순서로 번호를 붙입니다. 검사는 내용 위치 ID에 연결하고 본문 hash로 revision을 확인합니다. `retrieval_required`는 재검증에 필요한 출처 요구 조건을 보존합니다. 저장·Slack·대화용 문자열은 같은 본문에서 export하며 별도 생성 텍스트를 저장하지 않습니다.
+
+### 원문 연결 확인과 의미적 지지 평가의 구분
+
+참조 ID가 존재한다고 설명이 사실이거나 근거가 충분하다고 단정할 수는 없습니다. 서버의 기본 검사는 이번 synthesis에 실제 제공한 근거에 참조가 연결되는지, 문자 범위·표 셀이 유효한지, `excerpt` 내용이 하나의 원문 발췌와 정확히 일치하는지를 확인합니다. 일반 설명·해석은 `support_status="not_evaluated"`로 남고, 정확히 일치한 원문 발췌만 `exact_match`입니다.
+
+`basis`의 `source`, `inference`, `example`, `interaction`, `excerpt`는 모델이 제안한 표현 구분입니다. 이를 사실 판정이나 검증 면제 인증으로 사용하지 않습니다. 프롬프트는 사실을 `interaction`으로 위장하지 않도록 지시하지만, 현재 런타임이 모든 자연어 사실 주장을 의미적으로 판별하지는 않습니다. 이 한계는 UI의 “근거 확인 범위”에 명시하고 benchmark의 LLM judge에서 별도로 평가합니다.
+
+전체 confidence 수치는 제공하지 않습니다. 원문 수집 범위·품질 진단, 참조 연결 상태, 원문 발췌 일치, 생성 실패·불완전함을 각각 전달합니다. 생성 코드에는 예시임을 표시하며, 코드 실행 도구를 호출하지 않은 응답을 실행 검증된 결과로 간주하지 않습니다.
+
+### 본문 가까이에서 원문을 확인하는 UI
+
+Streamlit은 `AnswerResponse` 전체를 채팅 기록에 보존하고, 각 블록 아래의 인용 popover에서 발췌와 원문 요소를 보여줍니다. 제목 경로·줄·Notebook cell·페이지 메타데이터·내용 hash가 발췌와 연결됩니다. 표는 병합과 선택 셀을 보존하며 코드의 줄바꿈·들여쓰기를 유지합니다. 원문을 현재 업로드 파일에서 다시 읽는 방식이 아니므로 파일이 바뀐 뒤에도 이전 답변의 근거를 확인할 수 있습니다.
+
+저장과 전송 결과는 `ActionReceipt`로 분리합니다. 성공·실패·보류 상태와 다운로드를 본문과 구분해 표시하고, 도구 실행 결과를 답변 문장에 끼워 넣지 않습니다. 후속 저장·전송 요청은 typed `previous_response`를 사용해 직전 본문과 근거를 함께 전달합니다.
 
 ### 검증과 선택적 재시도
 
-검색 결과가 있더라도 최종 답변이 항상 충분히 grounded하다고 볼 수는 없습니다. 그래서 synthesis 전후에 validation 단계를 두고, evidence 품질이나 unsupported claim이 문제가 될 때 planner로 되돌아가 재검색할 수 있게 했습니다.
+검색 결과가 있어도 필요한 출처나 내용이 모두 포함되는 것은 아닙니다. synthesis 전에는 route 실패·업로드 가용성·검색 결과를 확인하고, synthesis 후에는 확정할 본문의 참조·발췌와 요청한 구조·출처 범위를 확인합니다. 코드 예제 요청은 코드 블록, 단계 요청은 순서 있는 목록, 체크리스트 요청은 목록처럼 관찰 가능한 형식을 검사합니다. 비교·옵션 설명 요구는 프롬프트에 전달하되 의미적 충족까지 결정적으로 검증했다고 간주하지 않습니다. 서로 다른 출처를 사용했다는 이유만으로 고정된 출처별 섹션을 강제하지 않습니다.
 
-이 흐름은 모든 실패를 무조건 재시도하지 않습니다. `RetryState`는 failed route, preserved evidence, preserved retrieval diagnostics, retry scope를 보존합니다. 그래서 일부 route만 실패한 경우에는 성공한 route의 evidence를 재사용하고 실패 route만 다시 호출합니다. unsupported claim이나 section 누락처럼 검색 실패보다 response repair에 가까운 문제는 기존 evidence를 기준으로 payload를 결정적으로 보정합니다.
+`RetryState`는 `hit_start_index`, `preserved_hits`, 보존한 route 진단과 retry scope를 관리합니다. 일부 route가 실패하면 `refresh_routes`에서 해당 route만 다시 호출합니다. 본문 참조나 요청 충족 문제가 있고 원문 검색 결과가 남아 있으면 `reuse_hits_resynthesize`에서 synthesis로 직접 돌아가 표시 내용과 참조를 함께 다시 생성합니다. docs·upload·hybrid에 같은 정책을 적용하며 planner·검색을 반복하지 않습니다. 기본 재시도 상한은 1회이고 `max_retries=0`도 존중합니다. 각 시도의 검증은 그 시도에서 실제 제공한 packet에 한정합니다.
+
+재시도 후에도 참조가 잘못되거나 발췌가 일치하지 않으면 같은 본문의 해당 단위를 제거하고 검사·인용을 다시 생성합니다. 필요한 내용을 충족하지 못하면 보관한 원문 발췌를 제공하고 답변이 불완전함을 명시합니다. 근거 없는 요약을 새로운 답변으로 만들어 덮어쓰지 않습니다.
 
 LLM 호출이나 출력 검증이 실패하면 `planner_unavailable`로 기록하고 재요청을 안내합니다. 필요한 업로드 파일의 retriever가 없으면 파일 업로드를 안내합니다. 두 경우 모두 검색·저장·Slack 전송을 중단해, 실패 안내나 이전 답변이 요청한 결과물로 전달되지 않도록 합니다.
 
@@ -82,11 +112,17 @@ ToolMessage 원문과 provider metadata를 durable snapshot에 저장하지 않�
 
 개인 프로젝트에서 120-case release benchmark와 pytest 기반 회귀 테스트를 유지하는 것은 비용이 있습니다. fixture 관리, judge 설정, latency 및 비용 지표 확인이 필요하기 때문입니다.
 
-대신 변경 후 품질을 감으로 판단하지 않아도 됩니다. 현재 문서화된 최신 release benchmark는 `20260509_043436` 런 기준 120개 중 116개 케이스 통과, release pass rate `0.9667`, tool precision `0.9677`, tool recall `1.0000`, citation compliance `0.9556`, p95 latency `9435.9 ms`, 평균 cost `$0.00523362`를 기록했고, 테스트는 `429 passed, 56 subtests passed`로 검증되었습니다.
+대신 변경 후 품질을 감으로 판단하지 않아도 됩니다. 회귀 테스트의 실제 결과와 기록된 release benchmark는 [README의 검증 결과](../README.md#검증-결과)에서 확인합니다. 문서에 결과를 중복 복사하지 않으며, 평가 계약 변경 전의 기록을 새 계약의 검증 결과로 간주하지 않습니다.
+
+### 작은 내부 모델과 parser 경계
+
+Docling의 제목 계층·표·코드·provenance를 수용할 수 있도록 문서 요소와 위치 모델을 갖췄지만, Docling 자체를 설치하거나 연동하지는 않았습니다. 향후 adapter가 `ParsedDocument`를 반환하도록 연결하며 DoclingDocument 타입을 답변·API·검색 계약에 노출하지 않습니다. parser별 세부 정보는 element metadata와 snapshot parser 설정에 남길 수 있습니다.
+
+현재 구현은 사용한 원문 요소를 응답에 보존합니다. 원본 bytes를 영구 저장하는 artifact store, 전체 문서 조회 API, PDF 페이지 이미지 뷰어는 아직 없습니다. 장기 보관·다중 문서 탐색이 필요해지면 원본 보관 수명과 소유권을 포함해 확장해야 합니다. 현재 규모에서는 별도 그래프 DB, 문장 주장 그래프, 범용 문서 편집 AST, parser 플러그인 프레임워크를 두지 않습니다.
 
 ## 4. 가장 어려웠던 문제: Latency와 Retrieval 품질
 
-DocuMate에서 가장 까다로웠던 문제는 "더 빠른 응답"과 "더 믿을 수 있는 근거"가 자주 반대 방향으로 움직인다는 점이었습니다. evidence를 넉넉히 모으면 citation compliance와 답변 신뢰도는 좋아지지만, 검색 시간이 늘고 synthesis prompt가 무거워집니다. 반대로 속도만 보고 route나 context를 줄이면 필요한 근거를 놓쳐 tool recall과 최종 답변 품질이 흔들릴 수 있습니다.
+DocuMate에서 가장 까다로웠던 문제는 "더 빠른 응답"과 "더 충분한 근거"가 자주 반대 방향으로 움직인다는 점이었습니다. 관련 근거를 넉넉히 모으면 답변을 뒷받침할 가능성은 높아지지만, 검색 시간이 늘고 synthesis prompt가 무거워집니다. 반대로 속도만 보고 route나 context를 줄이면 필요한 근거를 놓쳐 tool recall과 최종 답변 품질이 흔들릴 수 있습니다. 근거 개수나 높은 검색 점수가 의미적 정확성을 보장하는 것은 아닙니다.
 
 그래서 이 문제를 단순 최적화가 아니라, latency와 retrieval quality 사이의 균형을 계측 가능한 시스템 문제로 다시 정의했습니다. 전체 응답 시간을 하나의 숫자로 보지 않고 `summarize`, `planner`, `retrieval`, `pre_synthesis_validation`, `synthesis`, `post_synthesis_validation`, `action_postprocess` 단계로 나누어 latency trace를 남겼습니다. retrieval도 route별 latency와 status를 기록해 `docs`, `upload` 중 어느 경로가 병목인지, no result인지, timeout인지 debug payload와 benchmark output에서 바로 추적할 수 있게 했습니다.
 
@@ -94,13 +130,13 @@ DocuMate에서 가장 까다로웠던 문제는 "더 빠른 응답"과 "더 믿�
 
 planner와 synthesis는 각각 하나의 구조화 모델 호출 경로를 사용하며 provider의 요청별 timeout과 순차 SDK retry 정책을 호출 경계에 명시합니다. 요청별 timeout은 stage 전체 deadline이 아니므로, 재시도를 허용한 호출의 총 실행 시간은 해당 timeout보다 길 수 있습니다. docs search도 query 하나당 Tavily 요청을 한 번만 보내고, 첫 결과의 근거 품질이나 identifier coverage가 부족할 때만 query hint의 fallback을 정의된 순서대로 실행합니다. 충분한 evidence를 확보하면 남은 fallback은 실행하지 않습니다.
 
-재시도 전략도 latency 관점에서 다시 설계했습니다. validation 실패 후 모든 route를 매번 다시 호출하면 품질을 올리려는 시도가 곧바로 비용과 지연으로 이어집니다. 그래서 retry context에 failed route, preserved evidence, preserved retrieval diagnostics를 보존하고, 실패하지 않은 route의 evidence는 재사용합니다. 예를 들어 `docs + upload` hybrid 흐름에서 docs만 실패하면 upload evidence는 유지하고 docs route만 다시 시도합니다. unsupported claim이나 section 누락처럼 검색 실패가 아니라 response repair에 가까운 문제는 기존 evidence를 기준으로 claim을 필터링하고 답변이나 section을 결정적으로 보정합니다.
+재시도 전략도 latency 관점에서 설계했습니다. validation 실패 후 모든 route를 매번 다시 호출하면 품질을 올리려는 시도가 곧바로 비용과 지연으로 이어집니다. 그래서 retry context에 failed route, `preserved_hits`, 보존할 diagnostics를 남깁니다. 예를 들어 `docs + upload` hybrid 흐름에서 docs만 실패하면 upload 결과를 유지하고 docs route만 다시 시도합니다. 응답의 참조·구성 문제라면 검색 결과를 재사용해 같은 본문 구조에서 다시 생성·검사합니다.
 
 retrieval 품질은 "높은 score의 결과를 많이 가져오기"가 아니라 "답변에 실제로 쓸 수 있는 근거만 남기기"로 정의했습니다. docs route는 공식 문서 domain/path prefix를 통과한 결과만 evidence로 사용하고, query hint와 fallback query로 라이브러리별 검색 범위를 좁힙니다. 이후 topic purity, exact identifier coverage, chrome-only page 여부를 확인해 근거로 쓰기 어려운 결과를 제거합니다.
 
-upload route에는 vector score에 lexical signal을 결합했습니다. query의 identifier, keyword, parameter hint를 기준으로 검색 결과를 rerank하고, 긴 chunk는 질문 토큰이 실제로 등장하는 주변 window로 압축합니다. 코드 추출처럼 원문 보존이 중요한 질문은 예외로 처리해, prompt budget을 줄이면서도 사용자가 찾는 코드 맥락은 잃지 않게 했습니다.
+upload route에는 vector score에 lexical signal을 결합했습니다. query의 identifier, keyword, parameter hint를 기준으로 검색 결과를 rerank하고, 긴 원문은 질문 토큰이 실제로 등장하는 주변 범위를 선택합니다. 원문 텍스트 자체를 평탄화하지 않고 선택 범위를 따로 관리해 코드 줄바꿈·들여쓰기와 위치를 보존합니다.
 
-synthesis 단계에서는 category별 prompt budget을 적용했습니다. `docs_only`, `upload_only`, `hybrid`, `tool_action`에 따라 evidence 개수, snippet 길이, 출력 token 상한을 다르게 두었습니다. hybrid 답변은 source coverage가 핵심이므로 docs와 upload evidence를 균형 있게 남기고, 단일 route나 action 중심 요청은 더 작은 budget으로 불필요한 context를 줄였습니다. structured synthesis가 timeout되면 compact structured fallback 또는 deterministic grounded fallback으로 내려가도록 해, 빈 응답이나 과도한 실패 전파를 줄였습니다.
+synthesis 단계에서는 검색 route에 따라 근거 예산을 적용합니다. 기본적으로 최대 6건·총 6,000자, hybrid는 최대 8건·총 8,000자를 사용하고, 개별 원문 선택 범위는 설정된 snippet 상한을 따릅니다. 저장·전송을 함께 요청했다는 이유로 답변의 근거 예산을 줄이지 않습니다. hybrid는 docs와 upload 자료가 packet에 함께 남도록 선택합니다. structured synthesis가 timeout되면 token·문자 예산을 줄인 compact structured 호출을 시도하고, 실패하면 같은 `AnswerDocument` 형태의 원문 발췌 fallback으로 내려갑니다. 이 응답은 요청한 설명을 완성한 것처럼 표시하지 않습니다.
 
 최종적으로 이 문제의 성공 기준은 "빠르다" 하나가 아니었습니다. release pass rate, tool precision, tool recall, citation compliance, p95 latency, 평균 cost를 함께 보며 변경을 평가했습니다. latency를 줄이는 변경이 근거 품질을 훼손하지 않는지, retrieval 필터링을 강화한 변경이 recall을 떨어뜨리지 않는지 benchmark로 확인하는 흐름을 만든 것이 이 프로젝트에서 가장 중요한 엔지니어링 판단이었습니다.
 
@@ -116,7 +152,7 @@ synthesis 단계에서는 category별 prompt budget을 적용했습니다. `docs
 
 사용자에게는 간결한 답변을 제공하되, `include_debug=true`에서는 latency, planner/retrieval diagnostics, retry context, LLM call metadata를 확인할 수 있게 했습니다. 일반 응답 품질과 개발자 관측성을 같은 메시지에 섞지 않기 위한 기준입니다.
 
-현재 debug schema version은 `5`입니다. debug payload에는 tool call, token usage, model usage status, validation events, edge decisions, observed evidence, action results, stage별 latency, retrieval route latency, synthesis attempt mode가 포함됩니다. 이 정보는 일반 사용자 답변이 아니라 회귀 분석과 benchmark 해석을 위한 진단 계층입니다.
+현재 debug schema version은 `6`입니다. debug payload에는 tool call, token usage, model usage status, validation events, edge decisions, `observed_hits`, action results, stage별 latency, retrieval route latency, synthesis attempt mode가 포함됩니다. `observed_hits`는 검색 과정에서 본 자료이며, 사용자 응답의 `citations`는 실제 표시 내용이 채택한 원문입니다. 이 정보는 일반 사용자 답변이 아니라 회귀 분석과 benchmark 해석을 위한 진단 계층입니다.
 
 대화 compaction은 `edge_decisions`에 trigger 차원, before/after turn·message·추정 token·직렬화 byte, removed message 수, fallback 여부를 남깁니다. fallback은 `validation_events`에도 degraded 신호로 기록합니다. 이 진단과 구조화 로그에는 원문 query, summary, ToolMessage content를 포함하지 않습니다.
 
@@ -130,7 +166,7 @@ synthesis 단계에서는 category별 prompt budget을 적용했습니다. `docs
 
 기능 추가 자체보다 release gate를 통과하는 재현 가능한 상태를 우선합니다. benchmark CLI와 `uv run pytest -q` 결과를 문서화해, 프로젝트가 어느 기준에서 정상 동작하는지 확인할 수 있게 했습니다.
 
-평가 파이프라인은 실제 FastAPI `POST /agent`를 호출하는 online benchmark를 기준으로 합니다. `docs_only`, `rag_only`, `hybrid`, `tool_action` category를 나누고, rule 기반 지표와 LLM judge를 함께 사용합니다. 평가의 `rag_only`는 기존 fixture와 결과를 읽기 위해 유지하는 분류명이며, 현재 fixture에서는 업로드 검색을 평가합니다. 검색 route 및 인용 유형과의 구분은 [벤치마크 가이드](benchmarking.md)에 정리했습니다. hard gate는 `data/benchmarks/config.toml`에서 관리하며, report와 history 산출물은 `src/eval`에서 생성합니다.
+평가 파이프라인은 실제 FastAPI `POST /agent`를 호출하는 online benchmark를 기준으로 합니다. `docs_only`, `rag_only`, `hybrid`, `tool_action` category를 나누고, rule 기반 지표와 LLM judge를 함께 사용합니다. `rag_only`는 fixture의 분류명이며 현재 업로드 검색을 평가합니다. deterministic `reference_coverage`는 표시한 내용의 참조가 실제 검색 결과에 연결되는지를 측정하고, 설명의 의미적 지지는 judge가 평가합니다. `not_evaluated`를 근거가 없는 답변의 점수로 취급하지 않습니다. hard gate는 `data/benchmarks/config.toml`에서 관리하며 자세한 지표는 [벤치마크 가이드](benchmarking.md)에 정리했습니다.
 
 ## 6. 개선 방향
 
@@ -138,7 +174,9 @@ DocuMate의 다음 개선 방향은 더 많은 기능을 붙이는 것보다, �
 
 - judge minimum score audit에서 기준을 넘지 못한 docs/hybrid 케이스를 분석해 답변 품질 개선 후보로 관리합니다.
 - retrieval route별 warning, error code, latency breakdown을 더 쉽게 비교할 수 있게 report를 정리합니다.
-- Streamlit 데모에서 evidence와 claim의 관계를 더 직관적으로 확인할 수 있는 표시 방식을 개선합니다.
+- 실제 문서 표본으로 Docling adapter를 검증하고, 추출한 제목 계층·표 병합·여러 페이지 위치가 현재 문서 모델과 정확히 연결되는지 확인합니다.
+- 원본 보관 수명·소유권과 문서 조회 계약을 정의한 뒤 PDF 페이지 뷰어와 위치 강조를 추가합니다.
+- 설명의 의미적 지지 검사를 런타임에 추가할 경우 검사 비용·범위·실패 상태를 명시하고, 인용 연결 확인과 분리해 평가합니다.
 - upload retriever build와 synthesis fallback의 비용/지연을 benchmark summary에서 더 세밀하게 분리합니다.
 - benchmark fixture를 주기적으로 보강해 공식 문서 검색, 업로드 검색, tool action 흐름의 회귀 범위를 넓힙니다.
 - rolling summary의 사실 보존율을 장기 대화 전용 eval fixture로 계측하고, 모델별 tokenizer를 알 수 있을 때 현재 보수적 추정기를 교정합니다.
