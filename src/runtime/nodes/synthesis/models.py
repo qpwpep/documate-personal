@@ -5,9 +5,9 @@ from typing import Any
 
 from langchain_core.messages import BaseMessage
 
-from src.core.answer_schema import AgentResponsePayloadModel, SynthesisOutput
+from src.core.answer_schema import AnswerResponse
 from src.core.contracts.debug import LLMCallMetadata
-from src.core.evidence import EvidenceItem
+from src.core.evidence import EvidenceRef, SearchHit
 from src.core.planner_schema import PlannerOutput
 from src.runtime.nodes.synthesis.budgets import SynthesisBudgetProfile
 
@@ -23,8 +23,7 @@ class SynthesisContext:
     planner_parse_errors: list[str]
     planner_output: PlannerOutput
     retrieval_required: bool
-    primary_evidence_items: list[EvidenceItem]
-    grounded_fallback_evidence_items: list[EvidenceItem]
+    hits: list[SearchHit]
 
 
 @dataclass(slots=True)
@@ -35,9 +34,7 @@ class PreparedSynthesisInputs:
     parse_errors: list[str]
     planner_parse_errors: list[str]
     retrieval_required: bool
-    primary_evidence_items: list[EvidenceItem]
-    grounded_fallback_evidence_items: list[EvidenceItem]
-    deduped_evidence: list[dict[str, Any]]
+    evidence_packet: list[EvidenceRef]
     model_messages: list[BaseMessage]
     history_before: int
     history_after: int
@@ -45,9 +42,8 @@ class PreparedSynthesisInputs:
 
 @dataclass(slots=True)
 class SynthesisPipelineResult:
-    payload: AgentResponsePayloadModel
-    synthesis_output: SynthesisOutput
-    final_answer: str
+    result: AnswerResponse
+    evidence_packet: list[EvidenceRef]
     latency_trace: list[dict[str, Any]]
     retrieval_errors: list[str] = field(default_factory=list)
     planner_errors: list[str] = field(default_factory=list)
