@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-from src.core.contracts.debug import ActionResults
-from src.core.answer_schema.rendering import filter_claims_by_evidence
+from src.core.answer_schema import ActionReceipt, iter_content_units
 from ..judge_llm import LLMJudge
 from ..metric_rules import compute_rule_scores
 from ..pricing import compute_cost_usd
@@ -13,7 +12,7 @@ from ..weighting import (
     resolve_base_weights_for_case,
     resolve_effective_weights,
 )
-from .response_parser import ParsedResponseData, parse_claims_from_response_payload, parse_sections_from_response_payload
+from .response_parser import ParsedResponseData
 
 
 _DEFAULT_JUDGE_MIN_SCORES: dict[str, float] = {
@@ -68,22 +67,18 @@ def _build_gate_failures(
 def _resolve_slack_delivery_status(
     *,
     slack_delivery_required: bool,
-    action_results: ActionResults | None,
+    actions: list[ActionReceipt],
 ) -> tuple[str, str | None]:
     if not slack_delivery_required:
         return "not_applicable", None
-    if action_results is None or action_results.slack_notify is None:
-        return "unknown", "missing_action_results"
-
-    slack_result = action_results.slack_notify
-    raw_status = str(slack_result.status or "").strip().lower()
-    if raw_status in {"ok", "success"}:
+    receipt = next((action for action in reversed(actions) if action.kind == "slack_notify"), None)
+    if receipt is None:
+        return "unknown", "missing_action_receipt"
+    if receipt.status == "success":
         return "success", None
-    if raw_status == "skipped":
-        return "skipped", slack_result.reason or slack_result.error
-    if raw_status in {"error", "failed"}:
-        return "failed", slack_result.error or slack_result.reason
-    return "unknown", slack_result.error or slack_result.reason or raw_status or "unknown_status"
+    if receipt.status == "skipped":
+        return "skipped", receipt.message or receipt.error
+    return "failed", receipt.error or receipt.message
 
 
 def _extract_output_tokens(parsed_response: ParsedResponseData) -> int:
@@ -137,20 +132,16 @@ def build_case_result(
     if weights_error:
         runtime_errors.append(f"weight_override error: {weights_error}")
 
-    response_payload = parsed_response.response_payload
-    response_claims = parse_claims_from_response_payload(response_payload)
-    response_sections = parse_sections_from_response_payload(response_payload)
-    section_count = len(response_sections)
+    response = parsed_response.response
     output_tokens = _extract_output_tokens(parsed_response)
-    valid_claim_count = 0
-    invalid_claim_count = 0
-    if response_claims:
-        valid_claims, invalid_claims = filter_claims_by_evidence(
-            claims=response_claims,
-            evidence_items=parsed_response.observed_evidence or parsed_response.response_evidence,
-        )
-        valid_claim_count = len(valid_claims)
-        invalid_claim_count = len(invalid_claims)
+    checks = response.checks if response is not None else []
+    resolved_unit_count = sum(check.reference_status == "resolved" for check in checks)
+    missing_reference_unit_count = sum(check.reference_status == "missing" for check in checks)
+    factual_paths = {path for path, unit in iter_content_units(response.content) if unit.basis != "interaction"} if response is not None else set()
+    unchecked_unit_count = sum(check.unit_id in factual_paths and check.support_status == "not_evaluated" for check in checks)
+    exact_match_unit_count = sum(check.support_status == "exact_match" for check in checks)
+    unsupported_unit_count = sum(check.support_status == "unsupported" for check in checks)
+    block_count = len(response.content.blocks) if response is not None else 0
     retrieval_warnings = sorted(
         {
             str(warning).strip()
@@ -168,7 +159,7 @@ def build_case_result(
             validator_feedback = f"retrieval_warnings={warning_text}"
     slack_delivery_status, slack_delivery_error = _resolve_slack_delivery_status(
         slack_delivery_required=slack_delivery_required,
-        action_results=parsed_response.action_results,
+        actions=parsed_response.actions,
     )
 
     judge_errors: list[str] = []
@@ -180,39 +171,33 @@ def build_case_result(
     if parsed_response.response_text.strip() and config.judge_enabled:
         judge_payload = judge.build_case_payload(
             case=case,
-            response_text=parsed_response.response_text,
             tool_calls=parsed_response.tool_calls,
-            claims=response_claims,
-            response_evidence=parsed_response.response_evidence,
-            sections=response_sections,
-            observed_evidence=parsed_response.observed_evidence,
+            response=response,
+            observed_hits=parsed_response.observed_hits,
             retrieval_diagnostics=parsed_response.retrieval_diagnostics,
             planner_diagnostics=parsed_response.planner_diagnostics,
             validator_reason=parsed_response.validator_reason,
             synthesis_mode=parsed_response.synthesis_mode,
-            valid_claim_count=valid_claim_count,
-            invalid_claim_count=invalid_claim_count,
+            resolved_unit_count=resolved_unit_count,
+            missing_reference_unit_count=missing_reference_unit_count,
+            unchecked_unit_count=unchecked_unit_count,
             tool_call_count=parsed_response.tool_call_count,
-            action_results=parsed_response.action_results,
             slack_delivery_required=slack_delivery_required,
         )
         judge_input_complete = judge.is_payload_complete(judge_payload)
         llm_judge_score, llm_judge_reason, judge_error, judge_subscores = judge.score_case(
             case=case,
-            response_text=parsed_response.response_text,
             tool_calls=parsed_response.tool_calls,
-            claims=response_claims,
-            response_evidence=parsed_response.response_evidence,
-            sections=response_sections,
-            observed_evidence=parsed_response.observed_evidence,
+            response=response,
+            observed_hits=parsed_response.observed_hits,
             retrieval_diagnostics=parsed_response.retrieval_diagnostics,
             planner_diagnostics=parsed_response.planner_diagnostics,
             validator_reason=parsed_response.validator_reason,
             synthesis_mode=parsed_response.synthesis_mode,
-            valid_claim_count=valid_claim_count,
-            invalid_claim_count=invalid_claim_count,
+            resolved_unit_count=resolved_unit_count,
+            missing_reference_unit_count=missing_reference_unit_count,
+            unchecked_unit_count=unchecked_unit_count,
             tool_call_count=parsed_response.tool_call_count,
-            action_results=parsed_response.action_results,
             slack_delivery_required=slack_delivery_required,
         )
         if judge_error:
@@ -220,18 +205,14 @@ def build_case_result(
 
     rule_scores = compute_rule_scores(
         case=case,
-        response_text=parsed_response.response_text,
+        response=response,
         called_tools=parsed_response.tool_calls,
-        response_evidence=parsed_response.response_evidence,
-        observed_evidence=parsed_response.observed_evidence,
+        observed_hits=parsed_response.observed_hits,
         runtime_errors=runtime_errors,
         response_errors=parsed_response.response_errors,
         judge_errors=judge_errors,
         validator_reason=parsed_response.validator_reason,
-        response_claims=response_claims,
         synthesis_mode=parsed_response.synthesis_mode,
-        invalid_claim_count=invalid_claim_count,
-        response_sections=response_sections,
         slack_delivery_required=slack_delivery_required,
         slack_delivery_status=slack_delivery_status,
     )
@@ -290,13 +271,10 @@ def build_case_result(
         request_id=parsed_response.request_id,
         http_status=parsed_response.http_status,
         response_text=parsed_response.response_text,
-        response_payload=response_payload,
-        response_claims=response_claims,
-        evidence=parsed_response.response_evidence,
-        observed_evidence=parsed_response.observed_evidence,
+        response=response,
+        observed_hits=parsed_response.observed_hits,
         retrieval_diagnostics=parsed_response.retrieval_diagnostics,
         planner_diagnostics=parsed_response.planner_diagnostics,
-        file_path=parsed_response.response_file_path,
         trace=parsed_response.response_trace,
         latency_ms_e2e=latency_ms_e2e,
         latency_ms_server=parsed_response.latency_ms_server,
@@ -318,7 +296,7 @@ def build_case_result(
         response_errors=parsed_response.response_errors,
         judge_errors=judge_errors,
         judge_audit_failures=judge_audit_failures,
-        action_results=parsed_response.action_results,
+        actions=parsed_response.actions,
         slack_delivery_status=slack_delivery_status,
         slack_delivery_required=slack_delivery_required,
         slack_delivery_error=slack_delivery_error,
@@ -338,9 +316,12 @@ def build_case_result(
         judge_input_complete=judge_input_complete,
         judge_gate_passed=judge_gate_passed,
         invalid_eval=any(str(error).startswith("invalid_eval:") for error in judge_errors),
-        valid_claim_count=valid_claim_count,
-        invalid_claim_count=invalid_claim_count,
-        section_count=section_count,
+        resolved_unit_count=resolved_unit_count,
+        missing_reference_unit_count=missing_reference_unit_count,
+        unchecked_unit_count=unchecked_unit_count,
+        block_count=block_count,
+        exact_match_unit_count=exact_match_unit_count,
+        unsupported_unit_count=unsupported_unit_count,
         synthesis_mode=parsed_response.synthesis_mode,
         gate_failures=gate_failures,
         composite_quality_score=composite_quality_score,

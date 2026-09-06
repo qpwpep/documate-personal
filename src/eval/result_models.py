@@ -4,9 +4,9 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
-from src.core.answer_schema import ClaimItem
-from src.core.contracts.debug import ActionResults, LLMCallMetadata, ModelUsageStatus, PlannerDiagnostic, RetrievalDiagnostic, TokenUsage
-from src.core.evidence import EvidenceItem
+from src.core.answer_schema import AnswerResponse, ActionReceipt
+from src.core.contracts.debug import LLMCallMetadata, ModelUsageStatus, PlannerDiagnostic, RetrievalDiagnostic, TokenUsage
+from src.core.evidence import SearchHit
 from src.core.latency import LatencyBreakdownModel
 from .config_models import CaseCategory, CaseScenario
 
@@ -36,13 +36,10 @@ class CaseResult(BaseModel):
     request_id: str | None = None
     http_status: int
     response_text: str = ""
-    response_payload: dict[str, Any] | None = None
-    response_claims: list[ClaimItem] = Field(default_factory=list)
-    evidence: list[EvidenceItem] = Field(default_factory=list)
-    observed_evidence: list[EvidenceItem] = Field(default_factory=list)
+    response: AnswerResponse | None = None
+    observed_hits: list[SearchHit] = Field(default_factory=list)
     retrieval_diagnostics: list[RetrievalDiagnostic] = Field(default_factory=list)
     planner_diagnostics: PlannerDiagnostic | None = None
-    file_path: str | None = None
     trace: str | None = None
     latency_ms_e2e: int | None = None
     latency_ms_server: int | None = None
@@ -64,7 +61,7 @@ class CaseResult(BaseModel):
     response_errors: list[str] = Field(default_factory=list)
     judge_errors: list[str] = Field(default_factory=list)
     judge_audit_failures: list[str] = Field(default_factory=list)
-    action_results: ActionResults | None = None
+    actions: list[ActionReceipt] = Field(default_factory=list)
     slack_delivery_status: Literal["success", "failed", "skipped", "unknown", "not_applicable"] = "not_applicable"
     slack_delivery_required: bool = False
     slack_delivery_error: str | None = None
@@ -84,9 +81,12 @@ class CaseResult(BaseModel):
     judge_min_score_applied: float | None = None
     judge_gate_passed: bool | None = None
     invalid_eval: bool = False
-    valid_claim_count: int = 0
-    invalid_claim_count: int = 0
-    section_count: int = 0
+    resolved_unit_count: int = 0
+    missing_reference_unit_count: int = 0
+    unchecked_unit_count: int = 0
+    exact_match_unit_count: int = 0
+    unsupported_unit_count: int = 0
+    block_count: int = 0
     synthesis_mode: str | None = None
     gate_failures: list[str] = Field(default_factory=list)
     composite_quality_score: float | None = None
@@ -118,10 +118,6 @@ class CaseResult(BaseModel):
             payload["judge_pass"] = payload.get("judge_gate_passed")
         if payload.get("judge_gate_passed") is None and payload.get("judge_pass") is not None:
             payload["judge_gate_passed"] = payload.get("judge_pass")
-        if "response_claims" not in payload:
-            response_payload = payload.get("response_payload")
-            if isinstance(response_payload, dict) and isinstance(response_payload.get("claims"), list):
-                payload["response_claims"] = response_payload.get("claims")
         judge_errors = payload.get("judge_errors")
         if isinstance(judge_errors, list):
             audit_failures = [
@@ -163,21 +159,10 @@ class CaseResult(BaseModel):
             self.judge_pass = self.judge_gate_passed
         if self.judge_gate_passed is None and self.judge_pass is not None:
             self.judge_gate_passed = self.judge_pass
-        if not self.response_claims and isinstance(self.response_payload, dict):
-            claims = self.response_payload.get("claims")
-            if isinstance(claims, list):
-                try:
-                    self.response_claims = [ClaimItem.model_validate(item) for item in claims]
-                except Exception:
-                    self.response_claims = []
         if self.tool_call_count <= 0 and self.tool_calls:
             self.tool_call_count = len(self.tool_calls)
         if self.output_tokens <= 0 and self.token_usage is not None:
             self.output_tokens = int(self.token_usage.completion_tokens or 0)
-        if self.section_count <= 0 and isinstance(self.response_payload, dict):
-            sections = self.response_payload.get("sections")
-            if isinstance(sections, list):
-                self.section_count = len([item for item in sections if isinstance(item, dict)])
         if self.synthesis_mode is None and self.latency_breakdown and self.latency_breakdown.synthesis_attempts:
             self.synthesis_mode = self.latency_breakdown.synthesis_attempts[0].mode
         return self
