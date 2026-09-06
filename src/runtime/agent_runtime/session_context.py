@@ -5,6 +5,7 @@ import logging
 from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
+from src.core.answer_schema import AnswerResponse
 
 from src.core.contracts import SessionMetadata
 from src.core.contracts.boundary.runtime import parse_session_metadata
@@ -31,6 +32,8 @@ class SessionContext:
         self.session_metadata: SessionMetadata = parse_session_metadata(None)
         self.upload_retriever_handle: UploadedRetrieverHandle | None = None
         self.upload_file_path: str | None = None
+        self.upload_content_hash: str | None = None
+        self.previous_response: AnswerResponse | None = None
 
     @property
     def messages(self) -> list[Any]:
@@ -75,6 +78,7 @@ class SessionContext:
 
     def reset_conversation_memory(self) -> None:
         self._conversation_memory = ConversationMemorySnapshot()
+        self.previous_response = None
 
     def set_session_metadata(self, session_metadata: SessionMetadata | None) -> None:
         self.session_metadata = parse_session_metadata(session_metadata)

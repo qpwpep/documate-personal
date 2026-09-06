@@ -4,6 +4,8 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from threading import Lock
 import time
+import hashlib
+from pathlib import Path
 from typing import Any
 
 from src.core.contracts.boundary.graph import build_graph_state_input, normalize_graph_update
@@ -34,11 +36,13 @@ class PendingUploadedRetriever:
         executor: ThreadPoolExecutor,
         session: SessionContext,
         upload_file_path: str,
+        upload_content_hash: str,
     ) -> None:
         self._future = future
         self._executor = executor
         self._session = session
         self._upload_file_path = upload_file_path
+        self._upload_content_hash = upload_content_hash
         self._lock = Lock()
         self._result: _UploadedRetrieverBuildResult | None = None
         self._executor_closed = False
@@ -77,6 +81,7 @@ class PendingUploadedRetriever:
                 self._result = result
                 self._session.upload_retriever_handle = result.handle
                 self._session.upload_file_path = self._upload_file_path
+                self._session.upload_content_hash = self._upload_content_hash
                 self._shutdown_executor()
             return self._result
 
@@ -111,7 +116,7 @@ class ExecutionRunner:
         self._build_temp_retriever = build_temp_retriever_fn
         self._pending_upload_retriever: PendingUploadedRetriever | None = None
 
-    def _start_upload_retriever_build(self, upload_file_path: str) -> PendingUploadedRetriever:
+    def _start_upload_retriever_build(self, upload_file_path: str, upload_content_hash: str) -> PendingUploadedRetriever:
         executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="documate-upload-build")
 
         def build() -> _UploadedRetrieverBuildResult:
@@ -131,6 +136,7 @@ class ExecutionRunner:
             executor=executor,
             session=self.session,
             upload_file_path=upload_file_path,
+            upload_content_hash=upload_content_hash,
         )
 
     def finalize_pending_upload_retriever(self, *, wait: bool = True) -> int | None:
@@ -174,18 +180,21 @@ class ExecutionRunner:
                 progress_emitter=progress_emitter,
                 memory_summary=conversation.memory_summary,
                 session_metadata=session_metadata,
+                previous_response=self.session.previous_response,
             )
 
         state = build_state()
         upload_retriever_build_ms: int | None = None
 
         if upload_file_path is not None:
+            upload_content_hash = hashlib.sha256(Path(upload_file_path).read_bytes()).hexdigest()
             if (
                 self.session.upload_file_path != upload_file_path
+                or self.session.upload_content_hash != upload_content_hash
                 or self.session.upload_retriever_handle is None
             ):
                 self.session.cleanup_upload_retriever()
-                pending_retriever = self._start_upload_retriever_build(upload_file_path)
+                pending_retriever = self._start_upload_retriever_build(upload_file_path, upload_content_hash)
                 self._pending_upload_retriever = pending_retriever
                 state = build_state(pending_retriever)
                 return normalize_graph_update(state), upload_retriever_build_ms

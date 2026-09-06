@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import unittest
-from unittest.mock import patch
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from pydantic import ValidationError
@@ -11,6 +10,7 @@ from src.app.agent_manager import AgentFlowManager
 from src.app.web.session_store import InMemorySessionStore
 from src.app.web.schemas import AgentRequest
 from src.core.contracts import ResponseState
+from src.core.answer_schema import ActionReceipt, AnswerResponse, export_answer_text, finalize_answer, text_document
 from src.core.conversation_memory import (
     DEFAULT_QUERY_MAX_CHARS,
     DEFAULT_QUERY_MAX_UTF8_BYTES,
@@ -18,16 +18,8 @@ from src.core.conversation_memory import (
 from src.infra.settings import AppSettings
 
 
-def _response(answer: str) -> ResponseState:
-    return ResponseState(
-        final_answer=answer,
-        payload={
-            "answer": answer,
-            "claims": [],
-            "evidence": [],
-            "confidence": None,
-        },
-    )
+def _response(answer: str, *, actions: list[ActionReceipt] | None = None) -> ResponseState:
+    return ResponseState(result=finalize_answer(text_document(answer), [], actions=actions))
 
 
 class _RollingSummaryGraph:
@@ -64,7 +56,7 @@ class _RollingSummaryGraph:
             "runtime": runtime.model_copy(
                 update={"memory_summary": f"summary-{turn}"}
             ),
-            "response": _response(answer),
+            "response": _response(answer, actions=[ActionReceipt(kind="save_text", status="success", file_path="output/result.txt")] if self.include_save_receipt else []),
         }
 
 
@@ -86,6 +78,16 @@ class _MutatingFailureGraph:
         state["messages"][0].content = "mutated by failed graph"
         state["messages"][0].id = "mutated-id"
         raise RuntimeError("graph failed after mutating its input")
+
+
+class _InvalidResponseGraph(_RollingSummaryGraph):
+    def invoke(self, state: dict) -> dict:
+        result = super().invoke(state)
+        # A graph boundary can return a valid-looking revision whose body changed.
+        response = result["response"].model_dump(mode="json")
+        response["result"]["content"]["blocks"][0]["content"][0]["text"] = "unvalidated replacement"
+        result["response"] = response
+        return result
 
 
 def _make_manager(graph) -> AgentFlowManager:
@@ -127,30 +129,26 @@ class ConversationMemoryLifecycleTest(unittest.TestCase):
 
         self.assertEqual(manager.memory_summary, "stable summary")
 
-    def test_tool_payload_is_used_for_the_response_but_not_persisted(self) -> None:
+    def test_action_receipt_is_retained_separately_from_conversation_text(self) -> None:
         manager = _make_manager(_RollingSummaryGraph(include_save_receipt=True))
 
         result = manager.run_agent_flow("save this")
 
-        self.assertTrue(
-            any(
-                isinstance(message, ToolMessage)
-                for message in result["response"]["messages"]
-            )
-        )
-        self.assertIn("저장 완료:", result["message"])
-        self.assertTrue(result["filepath"])
+        response = AnswerResponse.model_validate(result["response"])
+        self.assertEqual(response.actions, [ActionReceipt(kind="save_text", status="success", file_path="output/result.txt")])
+        self.assertEqual(export_answer_text(response), "answer-1")
+        self.assertEqual(manager._ensure_session().previous_response, response)
         self.assertFalse(any(isinstance(message, ToolMessage) for message in manager.messages))
         self.assertEqual(
             [(type(message), str(message.content)) for message in manager.messages],
             [
                 (HumanMessage, "save this"),
-                (AIMessage, result["message"]),
+                (AIMessage, "answer-1"),
             ],
         )
 
     def test_response_assembly_failure_preserves_the_previous_snapshot(self) -> None:
-        manager = _make_manager(_RollingSummaryGraph(include_save_receipt=True))
+        manager = _make_manager(_InvalidResponseGraph())
         manager.messages = [
             HumanMessage(content="stable request"),
             AIMessage(content="stable answer"),
@@ -158,18 +156,14 @@ class ConversationMemoryLifecycleTest(unittest.TestCase):
         manager.memory_summary = "stable summary"
         before = manager._ensure_session().snapshot_conversation_memory()
 
-        with patch(
-            "src.runtime.agent_runtime.response_assembler.Path.resolve",
-            side_effect=OSError("filesystem unavailable"),
-        ):
-            result = manager.run_agent_flow("new request")
+        result = manager.run_agent_flow("new request")
 
         self.assertEqual(
             manager._ensure_session().snapshot_conversation_memory(),
             before,
         )
         self.assertEqual(result["debug"]["observability_status"], "failed")
-        self.assertIn("filesystem unavailable", result["message"])
+        self.assertIn("content changed", export_answer_text(AnswerResponse.model_validate(result["response"])))
 
     def test_failed_graph_cannot_mutate_the_previous_snapshot_through_shared_messages(self) -> None:
         manager = _make_manager(_MutatingFailureGraph())

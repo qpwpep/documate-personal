@@ -9,7 +9,7 @@ from src.core.contracts import GraphState
 from src.core.contracts.boundary.graph import build_graph_state_input
 from src.runtime.nodes.session import keep_recent_messages, make_summarize_node
 
-from .helpers import _CaptureSummaryLLM, build_legacy_state
+from .helpers import _CaptureSummaryLLM, build_test_state
 
 
 class SessionNodeTest(unittest.TestCase):
@@ -75,7 +75,7 @@ class SessionNodeTest(unittest.TestCase):
         )
 
         updates = summarize_node(
-            build_legacy_state(
+            build_test_state(
                 {
                     "messages": [
                         HumanMessage(content="first request"),
@@ -120,7 +120,7 @@ class SessionNodeTest(unittest.TestCase):
         )
 
         updates = summarize_node(
-            build_legacy_state(
+            build_test_state(
                 {
                     "memory_summary": "existing summary",
                     "messages": [
@@ -150,7 +150,7 @@ class SessionNodeTest(unittest.TestCase):
         )
 
         updates = summarize_node(
-            build_legacy_state(
+            build_test_state(
                 {
                     "memory_summary": "PRIOR_FACT: Python 3.12",
                     "messages": [
@@ -204,7 +204,7 @@ class SessionNodeTest(unittest.TestCase):
                     policy=policy,
                 )
                 updates = summarize_node(
-                    build_legacy_state(
+                    build_test_state(
                         {
                             "memory_summary": "PRIOR_FACT",
                             "messages": [
