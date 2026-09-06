@@ -2,7 +2,9 @@
 
 DocuMate 벤치마크는 FastAPI의 `POST /agent` 엔드포인트를 대상으로 하는 온라인 평가만 지원합니다. 실행 진입점은 `src/eval/main.py`이며, 설정 기준은 `data/benchmarks/config.toml`입니다.
 
-평가 category는 `docs_only`, `rag_only`, `hybrid`, `tool_action`입니다. `rag_only`는 기존 fixture와 결과의 호환성을 위한 분류명이며, 현재 fixture의 `rag_only`와 `hybrid` 파일 검색은 `upload_search`를 기대합니다. 런타임 검색 route는 `docs`, `upload`이고, 업로드 evidence의 `kind="local"`과 fixture의 `require_local_citation`은 파일 근거 인용을 나타냅니다. 과거 결과에 남은 `local` route와 `rag_search` 호출은 당시 실행 기록으로 해석합니다.
+평가 category는 `docs_only`, `rag_only`, `hybrid`, `tool_action`입니다. `rag_only`와 fixture의 `require_local_citation`은 파일 검색·인용을 평가하는 분류명입니다. 현재 파일 검색 도구는 `upload_search`, 검색 route와 snapshot의 source type은 `upload`입니다. 과거 결과에 남은 `local` route와 `rag_search` 호출은 당시 실행 기록이며 새 실행의 업로드 검색 충족으로 인정하지 않습니다.
+
+온라인 평가 입력은 `AnswerResponse`입니다. 실제 표시한 `content.blocks`, 사용한 `citations`, 내용별 `checks`, `issues`, `actions`를 읽고 debug `observed_hits`와 비교합니다. 별도 답변 문자열이나 주장 목록을 추출해 대신 평가하지 않습니다.
 
 ## 1. 사전 준비
 
@@ -143,6 +145,21 @@ SVG는 현재 로컬에 남아 있는 comparable release summary만으로 다시
 
 judge minimum score와 pricing도 같은 파일에서 관리합니다. `cost_gate_min_llm_call_coverage`는 `src/eval/config_models.py::HardGates`의 기본값이며, config에 명시하지 않으면 `0.80`이 적용됩니다. 비용 지표는 app 응답 생성 LLM 호출 비용 기준이며, 현재 judge 호출 비용은 benchmark cost gate에 포함하지 않습니다.
 
+### 4.1 참조 연결과 의미적 지지의 구분
+
+| 지표·입력 | 측정 범위 |
+|---|---|
+| `reference_coverage` | `interaction`을 제외한 실제 내용 단위 중 refs가 있고, 모든 참조가 수집한 검색 근거로 추적되는 비율. rule 가중치는 `0.20` |
+| `citation_traceability` | 요청한 docs/upload 출처 범위, 실제 검색 도구 실행, 사용한 참조가 관찰한 원문에 연결되는지 확인 |
+| `checks.reference_status` | 런타임의 참조 연결 결과. `resolved`는 의미적 정확성 판정이 아님 |
+| `checks.support_status` | `not_evaluated`, `exact_match`, `unsupported` 개수를 별도 집계. `not_evaluated`를 자동으로 0점 처리하지 않음 |
+| LLM judge의 groundedness | 실제 표시 본문과 연결된 근거가 설명·해석을 의미적으로 뒷받침하는지 평가 |
+| `actions`와 도구 실행 기록 | 저장·전송 성공 여부와 목표 도구 동작을 확인. 본문에 성공 문구가 있다는 이유로 액션 성공으로 판단하지 않음 |
+
+근거 추적은 snapshot과 원문 element가 같고, 인용 범위가 `observed_hits`의 선택 범위에 포함되는지를 확인합니다. synthesis 예산에 맞춰 더 작은 범위를 선택하면 근거 ID는 달라질 수 있으므로 ID 문자열만 비교하지 않습니다. 문자 범위의 포함 관계 또는 표 cell ID 부분집합으로 추적하며, 페이지 bbox가 없더라도 snapshot·요소·선택 범위가 유효하면 원문 연결을 인정합니다.
+
+runtime의 exact excerpt 검사는 발췌와 원문의 일치만 보장합니다. 인용된 원문 자체의 진실성이나 답변 전체의 충분함까지 보장하지 않으므로, rule 지표와 judge 결과를 함께 해석해야 합니다.
+
 ## 5. 환경 변수 override
 
 `src/eval/main.py`는 아래 환경 변수로 일부 설정을 덮어쓸 수 있습니다. 기본값은 `data/benchmarks/config.toml`, override 정의와 `.env.example` 생성 기준은 `src/infra/settings.py`입니다.
@@ -168,6 +185,8 @@ history 리포터는 모든 run을 같은 기준으로 비교하지 않습니다
 - `total_cases`
 
 즉, fixture 파일이나 케이스 수가 다르면 README 요약과 SVG에는 함께 들어가지 않을 수 있습니다.
+
+이 자동 분류는 평가 계약까지 동일하다는 보장은 아닙니다. 현재 rule의 `reference_coverage`는 의미적 groundedness를 측정하지 않으며, 새 본문·인용 계약으로 평가합니다. 스키마·rule이 달랐던 과거 release 수치는 실행 이력으로 보존하지만 새 계약의 검증 결과나 직접적인 품질 상승·하락 근거로 사용하지 않습니다. 비교할 변경은 같은 코드의 평가 계약과 fixture로 다시 실행해야 합니다.
 
 ## 7. 운영 메모
 

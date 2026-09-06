@@ -1,6 +1,6 @@
 # DocuMate
 
-LangGraph 기반 학습 보조 에이전트입니다. 공식 문서 검색, 세션 업로드 파일 검색, 구조화된 grounded 응답, 저장/Slack 전송 액션을 하나의 FastAPI + Streamlit 런타임으로 묶어 제공합니다.
+LangGraph 기반 학습 보조 에이전트입니다. 웹상의 공식 문서와 업로드 파일을 검색해 답변하고, 답변의 각 내용에서 사용한 자료 버전과 원문 위치를 확인할 수 있습니다. FastAPI + Streamlit 런타임에서 같은 답변을 화면에 표시하고 파일 저장·Slack 전송에 사용합니다.
 
 이 저장소는 팀 프로젝트 원형을 그대로 보관한 자료가 아니라, 원본 팀 프로젝트를 단계형 LangGraph 런타임과 120-case benchmark 체계로 재설계한 포트폴리오 개선본입니다. 현재 유지보수 기준은 `src/`, `tests/`, `docs/`, `data/benchmarks/`이며, `archive/`는 원본/legacy 참고 자료를 보관하는 영역입니다.
 
@@ -35,7 +35,7 @@ uv run python -m src.app.service_manager stopweb
 
 ## 실제 앱 데모
 
-아래 GIF는 2026-05-05 KST에 현재 Streamlit 화면을 실제 Edge 렌더링으로 캡처한 데모입니다. 라이트/다크 테마, 질문 입력창 옆 파일 첨부, 사이드바를 접은 상태의 질문 제출과 답변 수신 흐름을 함께 보여줍니다.
+아래 GIF는 2026-05-05 KST에 Streamlit 화면을 실제 Edge 렌더링으로 캡처한 데모입니다. 라이트/다크 테마, 질문 입력창 옆 파일 첨부, 사이드바를 접은 상태의 질문 제출과 답변 수신 흐름을 보여줍니다. 현재의 본문별 인용·원문 위치 표시가 적용되기 전 화면이며, 현재 응답 계약은 [런타임 참고 문서](docs/runtime_reference.md#5-api-계약)를 기준으로 합니다.
 
 ![DocuMate actual app demo](docs/assets/demo-flow.gif)
 
@@ -48,8 +48,10 @@ uv run python -m src.app.service_manager stopweb
 DocuMate에서 중점적으로 개선한 범위는 단순한 챗봇 구현보다, 실행 경로와 검증 기준을 다시 세운 것입니다. 원본의 tool-call 중심 흐름을 `src/runtime`의 단계형 LangGraph 런타임으로 바꾸고, `src/eval`과 `data/benchmarks` 기반 120-case benchmark로 품질 변화를 비교 가능하게 만들었습니다.
 
 - `chatbot + ToolNode` 중심 흐름을 `planner → retrieval → validation → synthesis → action` 단계형 LangGraph 파이프라인으로 재구성했습니다.
-- 공식 문서 검색과 업로드 파일 검색을 `docs`, `upload` route로 분리하고 evidence payload와 diagnostics를 정규화했습니다.
-- 최종 답변을 `answer`, `claims`, `evidence`, `confidence`, `sections` 기반의 grounded response schema로 정리했습니다.
+- 공식 문서 검색과 업로드 파일 검색을 `docs`, `upload` route로 분리하고, 검색 순위·점수와 원문 근거를 구분했습니다.
+- LLM은 `AnswerDocument.blocks`에 표시할 내용을 한 번만 생성합니다. 서버는 같은 문장·코드·목록 항목·표 셀·제목을 검사해 인용, 확인 상태, 제한 사항을 파생합니다.
+- 인용은 내용 hash와 parser 설정으로 식별한 문서 snapshot, 원문 요소, 선택 범위를 보존합니다. 검색 범위를 줄이거나 업로드 파일을 바꿔도 기존 답변의 근거가 다른 원문으로 바뀌지 않습니다.
+- 업로드 인덱스는 원문을 chunk마다 복제하지 않습니다. 원문 구조를 한 번 보관하고 검색된 범위만 근거로 복원해 인용에 연결합니다.
 - FastAPI와 Streamlit을 같은 런타임 경로에 연결하고, 세션 TTL/LRU, 요청 lock, SSE progress, 업로드/생성 파일 cleanup을 구현했습니다.
 - 장기 대화는 고정 예산 rolling summary와 최근 canonical Human/AI 메시지로 유지하며, LangGraph reducer에서 퇴출 원문을 실제 삭제하고 응답 조립 성공 후에만 원자적으로 세션에 반영합니다.
 - 120-case online release benchmark와 pytest 회귀 테스트를 통해 pass rate, citation compliance, latency, 비용을 추적합니다.
@@ -63,8 +65,8 @@ DocuMate에서 중점적으로 개선한 범위는 단순한 챗봇 구현보다
 | 비교 항목 | Before: 원형/legacy 기준 | After: 현재 포트폴리오 기준 | 개선 효과 |
 |---|---|---|---|
 | 실행 흐름 | 모델 tool call과 개별 라우터 실험 중심 | `planner → retrieval → validation → synthesis → action` LangGraph 파이프라인 | 단계별 책임과 재시도 조건을 추적 가능 |
-| 검색 출처 | 검색/RAG 결과가 한 흐름에 섞이기 쉬움 | `docs`, `upload` route와 diagnostics 분리 | evidence 출처, 실패 원인, route별 지연을 분리해서 분석 |
-| 답변 형식 | 자연어 응답 중심 | `answer`, `claims`, `evidence`, `confidence`, `sections` 구조화 payload | citation 검증과 Slack/save 액션 후처리를 같은 계약으로 처리 |
+| 검색 출처 | 검색/RAG 결과가 한 흐름에 섞이기 쉬움 | `docs`, `upload` route와 diagnostics, 문서 snapshot·원문 선택·검색 점수 분리 | 자료 버전·위치와 검색 실패·지연을 각각 추적 |
+| 답변 형식 | 자연어 응답 중심 | `AnswerDocument` 본문과 서버가 만든 citations·checks·issues·actions | 표시하는 내용을 직접 검사하고 UI·저장·전송에 같은 본문 사용 |
 | 웹 런타임 | 데모 UI와 백엔드 실행 기준이 느슨하게 분리 | FastAPI `POST /agent`와 Streamlit 데모가 같은 agent runtime 사용 | 화면 동작과 benchmark 대상이 같은 경로를 공유 |
 | 세션/파일 처리 | 업로드 파일과 생성 파일의 수명 관리가 약함 | 세션별 manager cache, TTL/LRU, 요청 lock, 업로드/출력 cleanup | 사용자별 업로드 격리와 반복 실행 안정성 강화 |
 | 장기 대화 메모리 | 원문 history가 계속 누적되거나 생성한 summary가 다음 요청에서 사라질 수 있음 | high/low watermark, bounded rolling summary, reducer 삭제, canonical Human/AI projection, atomic commit | 장기 세션의 prompt·프로세스 메모리에 검증 가능한 상한을 두고 Tool payload 재주입을 차단 |
@@ -81,29 +83,29 @@ flowchart LR
     Add --> Compact["memory policy<br/>high → low watermark compaction"]
     Compact --> Planner["planner<br/>의도/route 결정"]
     Planner --> Retrieval["retrieve_dispatch<br/>docs/upload 병렬 검색"]
-    Retrieval --> Evidence["evidence + diagnostics<br/>출처, warning, latency"]
-    Evidence --> PreCheck["pre-synthesis validation<br/>근거 품질/route coverage"]
-    PreCheck --> Synthesis["synthesis<br/>grounded response payload"]
-    Synthesis --> PostCheck["post-synthesis validation<br/>unsupported claim 점검"]
+    Retrieval --> Evidence["SearchHit + diagnostics<br/>원문 snapshot·위치 / 검색 점수"]
+    Evidence --> PreCheck["pre-synthesis validation<br/>검색 가용성 / route coverage"]
+    PreCheck --> Synthesis["synthesis<br/>AnswerDocument.blocks + refs"]
+    Synthesis --> PostCheck["post-synthesis validation<br/>표시 내용의 참조 / 발췌 일치 검사"]
     PostCheck --> Action["action_postprocess<br/>save_text / Slack"]
     Action --> Assembly["response assembly<br/>Tool receipt/debug 소비"]
-    Assembly --> Response["최종 응답<br/>answer, claims, evidence, confidence"]
+    Assembly --> Response["AnswerResponse<br/>content, citations, checks, issues, actions"]
     Assembly --> Commit["canonical projection + atomic commit"]
     Commit --> Memory
 
     PreCheck -. "필요 시 선택적 재검색" .-> Planner
-    PostCheck -. "필요 시 repair/retry" .-> Planner
+    PostCheck -. "원문 재사용 재합성" .-> Synthesis
 ```
 
 ## 핵심 기능
 
 | 기능 | 설명 |
 |---|---|
-| 공식 문서 검색 | allowlist와 query hint를 기준으로 공식 문서 결과만 evidence로 사용합니다. |
-| 업로드 파일 검색 | 현재 세션에 업로드된 `.py` 또는 `.ipynb` 파일만 임시 retriever로 검색합니다. |
-| 구조화 응답 | claim과 evidence를 함께 유지하는 grounded response payload를 반환합니다. |
-| 검증/재시도 | evidence 품질과 route coverage를 확인하고 필요한 경우 선택적으로 재검색합니다. |
-| 액션 후처리 | 요청에 따라 답변을 텍스트 파일로 저장하거나 Slack에 전송합니다. |
+| 공식 문서 검색 | allowlist와 query hint를 기준으로 공식 문서 결과를 검색하며, provider가 제공한 발췌의 snapshot과 수집 범위를 보존합니다. |
+| 업로드 파일 검색 | 현재 세션의 `.py` 또는 `.ipynb` 파일을 임시 retriever로 검색하고 원문 줄·Notebook cell ID·선택 범위를 연결합니다. |
+| 구조화 응답 | 단일 본문을 문단·제목·목록·코드·표로 표시하고 관련 내용 옆에서 인용한 원문을 확인합니다. |
+| 검증/재시도 | 같은 본문의 참조 유효성, 원문 발췌 일치, 요청한 형식·출처 범위를 검사합니다. 일반 설명의 의미적 근거성은 별도 평가하지 않았다고 표시합니다. |
+| 액션 후처리 | 같은 본문과 출처를 텍스트 파일·Slack으로 내보내고 실제 실행 결과는 별도 receipt로 표시합니다. |
 | bounded 대화 메모리 | rolling summary와 최근 Human/AI turn을 token·UTF-8 byte·message·turn 예산 안에 유지하고, 오래된 Tool payload는 세션에 저장하지 않습니다. |
 | 관측성 | `include_debug=true`에서 latency breakdown, diagnostics, retry context, LLM call metadata를 확인할 수 있습니다. |
 
@@ -112,18 +114,20 @@ flowchart LR
 주요 기준 경로는 `src/runtime/graph_builder.py`, `src/runtime/make_graph.py`, `src/infra/tools/*`, `src/runtime/nodes/*`, `src/app/web/*`, `src/eval/*`입니다.
 
 - `src/app/`: FastAPI/Streamlit 웹 런타임, 서비스 매니저, 세션별 `AgentFlowManager`
-- `src/core/`: `GraphState`, bounded conversation memory 정책, planner/response/debug 계약, evidence 모델, 응답 스키마
+- `src/core/`: `GraphState`, bounded conversation memory 정책, parser 독립 문서·근거 모델, `AnswerDocument`와 응답·진단 계약
 - `src/infra/`: 설정, LLM registry, Chroma 기반 업로드 검색, Tavily docs search, Slack/save 도구
 - `src/runtime/`: LangGraph 조립과 session/planner/retrieval/validation/synthesis/action 노드
 - `src/eval/`: online benchmark, scoring, report/history 생성
 
+문서 모델은 제목 계층·표 셀과 병합·코드·페이지·좌표를 수용하지만 현재 입력은 `.py`·`.ipynb`와 공식 문서 검색 결과입니다. Docling은 설치하거나 연동하지 않았습니다. 현재 인용은 사용한 원문 요소를 응답에 보존하며, 원본 파일 전체를 영구 보관하는 저장소나 PDF 페이지 뷰어는 포함하지 않습니다.
+
 ## 검증 결과
 
-회귀 테스트는 2026-09-04 KST 기준이며, 아래 `release` benchmark 수치는 `20260509_043436` 런의 기록입니다. 로컬 benchmark 실행은 `output/benchmarks/latest_release_run.txt`를 최신 `release` run 포인터로 갱신합니다.
+회귀 테스트는 2026-09-07 KST 기준이며, 아래 `release` benchmark 수치는 `20260509_043436` 런의 기록입니다. 이 release 기록은 현재 응답·평가 계약으로 실행한 결과가 아닙니다. 새 계약의 품질은 별도 release run으로 확인해야 하며, 평가 기준이 다른 수치를 직접 비교하지 않습니다. 로컬 benchmark 실행은 `output/benchmarks/latest_release_run.txt`를 최신 `release` run 포인터로 갱신합니다.
 
 | 항목 | 결과 |
 |---|---:|
-| 테스트 | `432 passed, 55 subtests passed` |
+| 테스트 | `508 passed, 108 skipped, 67 subtests passed` |
 | release benchmark | `116/120` cases passed |
 | release pass rate | `0.9667` |
 | tool precision / recall | `0.9677` / `1.0000` |
@@ -131,7 +135,7 @@ flowchart LR
 | p95 latency | `9435.9 ms` |
 | avg cost per case | `$0.00523362` |
 
-최근 comparable generated-suite 기준으로 pass rate는 `0.3833`에서 `0.9667`로, citation compliance는 `0.3056`에서 `0.9556`으로 올라갔고 p95 latency는 `62063.0 ms`에서 `9435.9 ms`로 줄었습니다.
+기록된 당시의 comparable generated-suite에서 pass rate는 `0.3833`에서 `0.9667`로, citation compliance는 `0.3056`에서 `0.9556`으로 올라갔고 p95 latency는 `62063.0 ms`에서 `9435.9 ms`로 줄었습니다.
 
 추세 그래프는 [docs/assets/benchmark_history.svg](docs/assets/benchmark_history.svg)에 보관합니다. 실행 방법은 [벤치마크 가이드](docs/benchmarking.md)를 참고하세요. 로컬 run의 기계 판독 결과와 상세 분석은 각각 `output/benchmarks/<run_id>/summary.json`, `output/benchmarks/<run_id>/report.md`에서 확인합니다.
 
