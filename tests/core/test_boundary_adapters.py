@@ -2,7 +2,7 @@ import unittest
 
 from pydantic import ValidationError
 
-from src.core.answer_schema import AgentResponsePayloadModel
+from src.core.answer_schema import AnswerResponse, finalize_answer, text_document
 from src.core.contracts import PlannerState
 from src.core.contracts.debug import PlannerDiagnostic, RetrievalDiagnostic, RetryState
 from src.core.contracts.graph_state import DebugState
@@ -51,18 +51,16 @@ class BoundaryAdaptersTest(unittest.TestCase):
         self.assertEqual(output.tasks, [])
         self.assertEqual(len(errors), 1)
 
-    def test_parse_response_state_falls_back_to_empty_payload_for_invalid_raw_payload(self) -> None:
-        response = parse_response_state(
-            {
-                "final_answer": "answer",
-                "payload": {"claims": "invalid"},
-                "synthesis_attempt": "2",
-            }
-        )
+    def test_parse_response_state_rejects_invalid_or_replaced_contracts(self) -> None:
+        with self.assertRaises(ValidationError):
+            parse_response_state({"payload": {"claims": "invalid"}})
+        with self.assertRaises(ValidationError):
+            parse_response_state({"result": {"content": {"blocks": "invalid"}}})
 
-        self.assertEqual(response.final_answer, "answer")
-        self.assertIsInstance(response.payload, AgentResponsePayloadModel)
-        self.assertEqual(response.payload.answer, "")
+    def test_parse_response_state_preserves_checked_document(self) -> None:
+        result = finalize_answer(text_document("answer"), [])
+        response = parse_response_state({"result": result.model_dump(), "synthesis_attempt": 2})
+        self.assertEqual(response.result, result)
         self.assertEqual(response.synthesis_attempt, 2)
 
     def test_parse_debug_state_normalizes_nested_retry_and_messages(self) -> None:
@@ -169,9 +167,9 @@ class BoundaryAdaptersTest(unittest.TestCase):
         self.assertEqual(retry_state.failed_routes, [])
 
     def test_parse_retry_state_preserves_valid_retry_scope(self) -> None:
-        retry_state = parse_retry_state({"retry_scope": "reuse_evidence_resynthesize"})
+        retry_state = parse_retry_state({"retry_scope": "reuse_hits_resynthesize"})
 
-        self.assertEqual(retry_state.retry_scope, "reuse_evidence_resynthesize")
+        self.assertEqual(retry_state.retry_scope, "reuse_hits_resynthesize")
 
     def test_parse_retry_state_ignores_invalid_retry_scope(self) -> None:
         retry_state = parse_retry_state({"retry_scope": "unknown"})

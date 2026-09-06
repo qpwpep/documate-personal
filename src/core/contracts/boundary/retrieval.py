@@ -115,11 +115,11 @@ def parse_retrieval_state(value: Any) -> RetrievalState:
         return value
     if not isinstance(value, dict):
         return RetrievalState()
-    evidence_log = value.get("evidence_log")
+    hit_log = value.get("hit_log")
     return RetrievalState(
-        evidence_log=[
+        hit_log=[
             item
-            for item in safe_list(evidence_log)
+            for item in safe_list(hit_log)
             if isinstance(item, dict)
         ]
     )

@@ -12,7 +12,7 @@ def build_test_graph_state(*, user_input: str, messages: list | None = None, **k
     )
 
 
-def build_legacy_state(payload: dict):
+def build_test_state(payload: dict):
     raw = dict(payload)
     state = build_graph_state_input(
         user_input=str(raw.pop("user_input", "") or ""),
@@ -20,8 +20,8 @@ def build_legacy_state(payload: dict):
         retriever=raw.pop("retriever", None),
         session_metadata=raw.pop("session_metadata", None),
         memory_summary=raw.pop("memory_summary", None),
+        previous_response=raw.pop("previous_response", None),
     )
-
     if "planner" in raw:
         state["planner"] = PlannerState.model_validate(raw.pop("planner"))
     elif any(key in raw for key in ("planner_output", "planner_status", "planner_diagnostics", "guided_followup")):
@@ -31,89 +31,32 @@ def build_legacy_state(payload: dict):
             diagnostics=raw.pop("planner_diagnostics", None) or PlannerState().diagnostics,
             guided_followup=raw.pop("guided_followup", None),
         )
-
     if "retrieval" in raw:
         state["retrieval"] = RetrievalState.model_validate(raw.pop("retrieval"))
-    elif "retrieved_evidence" in raw:
-        state["retrieval"] = RetrievalState(evidence_log=raw.pop("retrieved_evidence"))
-
+    elif "retrieved_hits" in raw:
+        state["retrieval"] = RetrievalState(hit_log=raw.pop("retrieved_hits"))
     if "retry" in raw:
         state["retry"] = RetryState.model_validate(raw.pop("retry"))
-    elif any(key in raw for key in ("retry_context", "needs_retry")):
-        retry_payload = raw.pop("retry_context", {}) or {}
-        if not isinstance(retry_payload, dict):
-            retry_payload = {}
+    elif "retry_context" in raw or "needs_retry" in raw:
+        retry = dict(raw.pop("retry_context", {}) or {})
         if "needs_retry" in raw:
-            retry_payload = dict(retry_payload)
-            retry_payload["needs_retry"] = bool(raw.pop("needs_retry"))
-        state["retry"] = RetryState.model_validate(retry_payload)
-
+            retry["needs_retry"] = raw.pop("needs_retry")
+        state["retry"] = RetryState.model_validate(retry)
     if "response" in raw:
         state["response"] = ResponseState.model_validate(raw.pop("response"))
-    elif any(key in raw for key in ("final_answer", "response_payload", "synthesis_output", "synthesis_attempt")):
+    elif any(key in raw for key in ("result", "evidence_packet", "synthesis_attempt")):
         state["response"] = ResponseState(
-            final_answer=raw.pop("final_answer", "") or "",
-            payload=raw.pop("response_payload", None) or ResponseState().payload,
-            synthesis_output=raw.pop("synthesis_output", None) or ResponseState().synthesis_output,
+            result=raw.pop("result", None) or ResponseState().result,
+            evidence_packet=raw.pop("evidence_packet", []),
             synthesis_attempt=int(raw.pop("synthesis_attempt", 0) or 0),
         )
-
-    if "debug" in raw:
-        state["debug"] = DebugState.model_validate(raw.pop("debug"))
-    elif any(
-        key in raw
-        for key in (
-            "tool_calls",
-            "tool_call_count",
-            "token_usage",
-            "model_name",
-            "models_used",
-            "llm_calls",
-            "errors",
-            "planner_errors",
-            "observed_evidence",
-            "retry_context",
-            "retrieval_diagnostics",
-                    "planner_diagnostics",
-                    "latency_breakdown",
-                    "action_results",
-                    "retrieval_errors",
-            "synthesis_errors",
-            "validation_errors",
-            "action_errors",
-            "latency_trace",
-        )
-    ):
-        debug_payload = {
-            key: raw.pop(key)
-            for key in list(raw.keys())
-                if key
-                in {
-                    "schema_version",
-                    "observability_status",
-                    "missing_required_debug_fields",
-                    "tool_calls",
-                    "tool_call_count",
-                "token_usage",
-                "model_name",
-                "models_used",
-                "llm_calls",
-                "errors",
-                "planner_errors",
-                "observed_evidence",
-                "retry_context",
-                "retrieval_diagnostics",
-                "planner_diagnostics",
-                "latency_breakdown",
-                "retrieval_errors",
-                "synthesis_errors",
-                "validation_errors",
-                "action_errors",
-                "latency_trace",
-            }
-        }
-        state["debug"] = DebugState.model_validate(debug_payload)
-
+    debug = raw.pop("debug", None)
+    if debug is None:
+        debug = {key: raw.pop(key) for key in list(raw) if key in DebugState.model_fields}
+    if debug:
+        state["debug"] = DebugState.model_validate(debug)
+    if raw:
+        raise ValueError(f"Unknown test state fields: {sorted(raw)}")
     return normalize_graph_update(state)
 
 
@@ -165,10 +108,8 @@ class _CaptureStructuredSynthesizeLLM:
         parsing_error: Exception | None = None,
     ):
         self.last_messages = None
-        self.payload = payload or {
-            "answer": "synth result",
-            "claims": [],
-            "confidence": None,
+        self.payload = payload if payload is not None else {
+            "blocks": [{"type": "paragraph", "content": [{"text": "synth result", "basis": "interaction", "refs": []}]}],
         }
         self.include_raw = include_raw
         self.raw_message = raw_message or AIMessage(
@@ -285,8 +226,8 @@ class _CaptureSummaryLLM:
         )
 
 
-def _tool_payload(evidence: list[dict] | None = None, **diagnostics):
+def _tool_payload(hits: list[dict] | None = None, **diagnostics):
     return {
-        "evidence": list(evidence or []),
+        "hits": list(hits or []),
         "diagnostics": diagnostics,
     }

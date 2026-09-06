@@ -4,10 +4,11 @@ from typing import Annotated, Any
 
 from langchain_core.messages import AnyMessage
 from langgraph.graph import add_messages
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from typing_extensions import TypedDict
 
-from src.core.answer_schema import AgentResponsePayloadModel, SynthesisOutput, build_empty_response_payload
+from src.core.answer_schema import AnswerResponse
+from src.core.evidence import EvidenceRef
 from src.core.planner_schema import PlannerOutput
 from src.core.contracts.debug import DebugPayload, LLMCallMetadata, PlannerDiagnostic, PlannerStatus, RetryState, RetrievalDiagnostic, empty_planner_diagnostic
 
@@ -34,6 +35,7 @@ class RuntimeState(BaseModel):
     session_metadata: SessionMetadata = Field(default_factory=SessionMetadata)
     memory_summary: str | None = None
     progress_emitter: Any | None = None
+    previous_response: AnswerResponse | None = None
 
 
 class PlannerState(BaseModel):
@@ -44,13 +46,13 @@ class PlannerState(BaseModel):
 
 
 class RetrievalState(BaseModel):
-    evidence_log: list[dict[str, Any]] = Field(default_factory=list)
+    hit_log: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class ResponseState(BaseModel):
-    final_answer: str = ""
-    payload: AgentResponsePayloadModel = Field(default_factory=build_empty_response_payload)
-    synthesis_output: SynthesisOutput = Field(default_factory=SynthesisOutput)
+    model_config = ConfigDict(extra="forbid")
+    result: AnswerResponse = Field(default_factory=AnswerResponse)
+    evidence_packet: list[EvidenceRef] = Field(default_factory=list)
     synthesis_attempt: int = 0
 
 

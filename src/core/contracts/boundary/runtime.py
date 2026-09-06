@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
+from src.core.answer_schema import AnswerResponse
 
 from src.core.contracts.graph_state import RuntimeState, SessionMetadata, SlackDestination
 
@@ -49,6 +50,7 @@ def parse_runtime_state(value: Any) -> RuntimeState:
             else None
         ),
         progress_emitter=value.get("progress_emitter"),
+        previous_response=(AnswerResponse.model_validate(value["previous_response"]) if value.get("previous_response") is not None else None),
     )
 
 
