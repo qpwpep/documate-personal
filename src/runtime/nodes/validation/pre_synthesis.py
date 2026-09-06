@@ -67,7 +67,7 @@ def make_pre_synthesis_validation_node(verbose: bool):
             retrieval_errors=snapshot.current_attempt_retrieval_errors,
             score_avg=assessment.score_avg,
             failed_routes=assessment.failed_routes,
-            current_attempt_evidence=snapshot.parsed_evidence,
+            current_attempt_hits=snapshot.parsed_hits,
             current_attempt_retrieval_diagnostics=snapshot.current_attempt_retrieval_diagnostics,
         )
 
@@ -84,7 +84,7 @@ def make_pre_synthesis_validation_node(verbose: bool):
                 logging.INFO,
                 "pre_synthesis_validation",
                 retrieval_required=snapshot.retrieval_required,
-                evidence_count=len(snapshot.parsed_evidence),
+                evidence_count=len(snapshot.parsed_hits),
                 needs_retry=needs_retry,
                 retry_reason=assessment.retry_reason,
             )
