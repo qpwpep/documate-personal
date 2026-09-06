@@ -1,3 +1,4 @@
+from tests.eval.response_fixtures import plain_response
 import json
 import unittest
 
@@ -34,9 +35,9 @@ def _make_result(
             "request_payload": {"query": case.query},
             "http_status": 200,
             "response_text": "response body",
-            "response_payload": {"answer": "response body", "evidence": []},
+            "response": plain_response('response body'),
             "evidence": [],
-            "observed_evidence": [],
+            "observed_hits": [],
             "retrieval_diagnostics": retrieval_diagnostics or [],
             "planner_diagnostics": planner_diagnostics,
             "latency_ms_e2e": 1200,

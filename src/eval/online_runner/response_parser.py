@@ -7,13 +7,13 @@ from typing import Any
 
 import requests
 
-from src.core.answer_schema.models import AnswerSection, ClaimItem
-from src.core.contracts.boundary.debug import parse_action_results, parse_error_codes, parse_llm_calls, parse_model_usage_status, parse_token_usage
+from src.core.answer_schema import AnswerResponse, ActionReceipt, export_answer_text
+from src.core.contracts.boundary.debug import parse_error_codes, parse_llm_calls, parse_model_usage_status, parse_token_usage
 from src.core.contracts.boundary.planner import parse_planner_diagnostic
 from src.core.contracts.boundary.retrieval import parse_retrieval_diagnostics
 from src.core.contracts.debug import DEBUG_CRITICAL_FIELDS, DEBUG_REQUIRED_FIELDS, DEBUG_SCHEMA_VERSION
-from src.core.contracts.debug import ActionResults, LLMCallMetadata, ModelUsageStatus, PlannerDiagnostic, RetrievalDiagnostic, TokenUsage
-from src.core.evidence import EvidenceItem
+from src.core.contracts.debug import LLMCallMetadata, ModelUsageStatus, PlannerDiagnostic, RetrievalDiagnostic, TokenUsage
+from src.core.evidence import SearchHit
 from src.core.latency import LatencyBreakdownModel
 
 
@@ -24,16 +24,14 @@ _REQUEST_ID_PATTERN = re.compile(r"Request ID:\s*([^,\s]+)")
 class ParsedResponseData:
     http_status: int = 0
     response_text: str = ""
-    response_payload: dict[str, Any] | None = None
-    response_evidence: list[EvidenceItem] = field(default_factory=list)
-    observed_evidence: list[EvidenceItem] = field(default_factory=list)
+    response: AnswerResponse | None = None
+    observed_hits: list[SearchHit] = field(default_factory=list)
     retrieval_diagnostics: list[RetrievalDiagnostic] = field(default_factory=list)
     planner_diagnostics: PlannerDiagnostic | None = None
     validator_reason: str | None = None
     validator_feedback: str | None = None
     response_trace: str | None = None
     request_id: str | None = None
-    response_file_path: str | None = None
     latency_ms_server: int | None = None
     latency_breakdown: LatencyBreakdownModel | None = None
     model_name: str | None = None
@@ -54,7 +52,7 @@ class ParsedResponseData:
     debug_observability_status: str | None = None
     missing_required_debug_fields: list[str] = field(default_factory=list)
     synthesis_mode: str | None = None
-    action_results: ActionResults | None = None
+    actions: list[ActionReceipt] = field(default_factory=list)
 
 
 def _build_error_message_from_response(response: requests.Response) -> str:
@@ -112,13 +110,13 @@ def _parse_string_list(
     return parsed
 
 
-def _parse_evidence_items(
+def _parse_search_hits(
     raw_items: Any,
     *,
     label: str,
     response_errors: list[str],
-) -> list[EvidenceItem]:
-    parsed: list[EvidenceItem] = []
+) -> list[SearchHit]:
+    parsed: list[SearchHit] = []
     if raw_items is None:
         return parsed
 
@@ -131,7 +129,7 @@ def _parse_evidence_items(
             response_errors.append(f"{label}[{index}] must be an object")
             continue
         try:
-            parsed.append(EvidenceItem.model_validate(item))
+            parsed.append(SearchHit.model_validate(item))
         except Exception as exc:
             response_errors.append(f"{label}[{index}] invalid: {exc}")
     return parsed
@@ -214,40 +212,6 @@ def _extract_request_id_from_response(response: Any, trace: str | None) -> str |
     return _extract_request_id(trace)
 
 
-def parse_claims_from_response_payload(response_payload: dict[str, Any] | None) -> list[ClaimItem]:
-    if not isinstance(response_payload, dict):
-        return []
-    raw_claims = response_payload.get("claims")
-    if not isinstance(raw_claims, list):
-        return []
-    claims: list[ClaimItem] = []
-    for item in raw_claims:
-        if not isinstance(item, dict):
-            continue
-        try:
-            claims.append(ClaimItem.model_validate(item))
-        except Exception:
-            continue
-    return claims
-
-
-def parse_sections_from_response_payload(response_payload: dict[str, Any] | None) -> list[AnswerSection]:
-    if not isinstance(response_payload, dict):
-        return []
-    raw_sections = response_payload.get("sections")
-    if not isinstance(raw_sections, list):
-        return []
-    sections: list[AnswerSection] = []
-    for item in raw_sections:
-        if not isinstance(item, dict):
-            continue
-        try:
-            sections.append(AnswerSection.model_validate(item))
-        except Exception:
-            continue
-    return sections
-
-
 def parse_agent_response(response: requests.Response) -> ParsedResponseData:
     parsed = ParsedResponseData(http_status=response.status_code)
     if response.status_code != 200:
@@ -266,26 +230,19 @@ def parse_agent_response(response: requests.Response) -> ParsedResponseData:
 
     parsed.response_trace = body.get("trace")
     parsed.request_id = _extract_request_id_from_response(response, parsed.response_trace)
-    parsed.response_file_path = body.get("file_path")
 
     response_raw = body.get("response")
     if not isinstance(response_raw, dict):
         parsed.response_errors.append("response payload must be an object")
     else:
-        parsed.response_payload = response_raw
-        answer = response_raw.get("answer")
-        if isinstance(answer, str):
-            parsed.response_text = answer
-        else:
-            parsed.response_errors.append("response.answer must be a string")
-        if not parsed.response_text.strip():
-            parsed.response_errors.append("response.answer is empty")
-
-        parsed.response_evidence = _parse_evidence_items(
-            response_raw.get("evidence"),
-            label="response.evidence",
-            response_errors=parsed.response_errors,
-        )
+        try:
+            parsed.response = AnswerResponse.model_validate(response_raw)
+            parsed.response_text = export_answer_text(parsed.response)
+            parsed.actions = list(parsed.response.actions)
+            if not parsed.response_text.strip() and not parsed.actions:
+                parsed.response_errors.append("response.content is empty")
+        except Exception as exc:
+            parsed.response_errors.append(f"response invalid: {exc}")
 
     debug_payload = body.get("debug")
     if isinstance(debug_payload, dict):
@@ -301,7 +258,7 @@ def parse_agent_response(response: requests.Response) -> ParsedResponseData:
                 parsed.debug_schema_version = int(schema_version_raw)
             except (TypeError, ValueError):
                 parsed.response_errors.append("debug.schema_version must be an integer")
-        if parsed.debug_schema_version is not None and parsed.debug_schema_version > DEBUG_SCHEMA_VERSION:
+        if parsed.debug_schema_version is not None and parsed.debug_schema_version != DEBUG_SCHEMA_VERSION:
             parsed.response_errors.append(f"debug.schema_version must be {DEBUG_SCHEMA_VERSION}")
         observability_status_raw = debug_payload.get("observability_status")
         if observability_status_raw is None:
@@ -406,16 +363,11 @@ def parse_agent_response(response: requests.Response) -> ParsedResponseData:
                 or (parsed.token_usage is not None and parsed.token_usage.total_tokens > 0)
             ),
         )
-        parsed.observed_evidence = _parse_evidence_items(
-            debug_payload.get("observed_evidence"),
-            label="debug.observed_evidence",
+        parsed.observed_hits = _parse_search_hits(
+            debug_payload.get("observed_hits"),
+            label="debug.observed_hits",
             response_errors=parsed.response_errors,
         )
-        raw_action_results = debug_payload.get("action_results")
-        if raw_action_results is not None:
-            parsed.action_results = parse_action_results(raw_action_results)
-            if parsed.action_results is None:
-                parsed.response_errors.append("debug.action_results is invalid")
         parsed.retrieval_diagnostics = _parse_retrieval_diagnostics(
             debug_payload.get("retrieval_diagnostics"),
             response_errors=parsed.response_errors,
@@ -443,6 +395,4 @@ def parse_agent_response(response: requests.Response) -> ParsedResponseData:
 __all__ = [
     "ParsedResponseData",
     "parse_agent_response",
-    "parse_claims_from_response_payload",
-    "parse_sections_from_response_payload",
 ]

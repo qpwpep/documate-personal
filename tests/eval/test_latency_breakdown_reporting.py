@@ -1,3 +1,4 @@
+from tests.eval.response_fixtures import plain_response
 import json
 import unittest
 from pathlib import Path
@@ -33,7 +34,7 @@ def _debug_payload(**overrides):
         "llm_calls": [],
         "errors": [],
         "planner_errors": [],
-        "observed_evidence": [],
+        "observed_hits": [],
         "retry_context": None,
         "retrieval_diagnostics": [],
         "planner_diagnostics": None,
@@ -49,9 +50,8 @@ class LatencyBreakdownReportingTest(unittest.TestCase):
         mock_post.return_value = _FakeResponse(
             200,
             {
-                "response": {"answer": "done", "claims": [], "evidence": [], "confidence": None},
+                "response": plain_response('done'),
                 "trace": "trace-id",
-                "file_path": "",
                 "debug": _debug_payload(
                     tool_calls=["tavily_search"],
                     tool_call_count=1,
@@ -208,9 +208,8 @@ class LatencyBreakdownReportingTest(unittest.TestCase):
         mock_post.return_value = _FakeResponse(
             200,
             {
-                "response": {"answer": "done", "claims": [], "evidence": [], "confidence": None},
+                "response": plain_response('done'),
                 "trace": "trace-id",
-                "file_path": "",
                 "debug": _debug_payload(
                     tool_calls=["tavily_search"],
                     tool_call_count=1,
