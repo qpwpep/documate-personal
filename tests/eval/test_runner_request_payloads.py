@@ -1,3 +1,6 @@
+from src.core.contracts.debug import DEBUG_SCHEMA_VERSION
+from tests.eval.response_fixtures import source_hit
+from tests.eval.response_fixtures import comparison_response, plain_response
 import json
 import unittest
 from pathlib import Path
@@ -23,9 +26,9 @@ class _CaptureJudge(LLMJudge):
     def __init__(self) -> None:
         self.kwargs = None
 
-    def score_case(self, *, case, response_text, tool_calls, **kwargs):
-        _ = (case, response_text, tool_calls)
-        self.kwargs = kwargs
+    def score_case(self, *, case, response, tool_calls, **kwargs):
+        _ = (case, tool_calls)
+        self.kwargs = {"response": response, **kwargs}
         return (0.8, "ok", None, None)
 
 
@@ -35,11 +38,10 @@ class RunnerRequestPayloadTest(unittest.TestCase):
         mock_post.return_value = _FakeResponse(
             200,
             {
-                "response": {"answer": "shared", "evidence": []},
+                "response": plain_response('shared'),
                 "trace": "trace-id",
-                "file_path": "",
                 "debug": {
-                    "schema_version": 3,
+                    "schema_version": DEBUG_SCHEMA_VERSION,
                     "observability_status": "ok",
                     "missing_required_debug_fields": [],
                     "tool_calls": ["slack_notify"],
@@ -50,7 +52,7 @@ class RunnerRequestPayloadTest(unittest.TestCase):
                     "llm_calls": [],
                     "errors": [],
                     "planner_errors": [],
-                    "observed_evidence": [],
+                    "observed_hits": [],
                     "retry_context": None,
                     "retrieval_diagnostics": [],
                     "planner_diagnostics": None,
@@ -89,11 +91,10 @@ class RunnerRequestPayloadTest(unittest.TestCase):
         mock_post.return_value = _FakeResponse(
             200,
             {
-                "response": {"answer": "shared", "evidence": []},
+                "response": plain_response('shared'),
                 "trace": "trace-id",
-                "file_path": "",
                 "debug": {
-                    "schema_version": 3,
+                    "schema_version": DEBUG_SCHEMA_VERSION,
                     "observability_status": "ok",
                     "missing_required_debug_fields": [],
                     "tool_calls": ["slack_notify"],
@@ -104,7 +105,7 @@ class RunnerRequestPayloadTest(unittest.TestCase):
                     "llm_calls": [],
                     "errors": [],
                     "planner_errors": [],
-                    "observed_evidence": [],
+                    "observed_hits": [],
                     "retry_context": None,
                     "retrieval_diagnostics": [],
                     "planner_diagnostics": None,
@@ -142,11 +143,10 @@ class RunnerRequestPayloadTest(unittest.TestCase):
         mock_post.return_value = _FakeResponse(
             200,
             {
-                "response": {"answer": "shared", "evidence": []},
+                "response": plain_response('shared'),
                 "trace": "trace-id",
-                "file_path": "",
                 "debug": {
-                    "schema_version": 3,
+                    "schema_version": DEBUG_SCHEMA_VERSION,
                     "observability_status": "ok",
                     "missing_required_debug_fields": [],
                     "tool_calls": ["slack_notify"],
@@ -157,7 +157,7 @@ class RunnerRequestPayloadTest(unittest.TestCase):
                     "llm_calls": [],
                     "errors": [],
                     "planner_errors": [],
-                    "observed_evidence": [],
+                    "observed_hits": [],
                     "retry_context": None,
                     "retrieval_diagnostics": [],
                     "planner_diagnostics": None,
@@ -191,15 +191,14 @@ class RunnerRequestPayloadTest(unittest.TestCase):
         self.assertNotIn("slack_email", payload)
 
     @patch("src.eval.online_runner.case_runner.requests.post")
-    def test_action_results_are_parsed_from_debug_payload(self, mock_post) -> None:
+    def test_actions_are_parsed_from_public_response(self, mock_post) -> None:
         mock_post.return_value = _FakeResponse(
             200,
             {
-                "response": {"answer": "shared", "evidence": []},
+                "response": {**plain_response('shared'), "actions": [{'kind': 'slack_notify', 'status': 'success', 'target': 'C999LIVE', 'message': None, 'error': None}]},
                 "trace": "trace-id",
-                "file_path": "",
                 "debug": {
-                    "schema_version": 3,
+                    "schema_version": DEBUG_SCHEMA_VERSION,
                     "observability_status": "ok",
                     "missing_required_debug_fields": [],
                     "tool_calls": ["slack_notify"],
@@ -210,18 +209,12 @@ class RunnerRequestPayloadTest(unittest.TestCase):
                     "llm_calls": [],
                     "errors": [],
                     "planner_errors": [],
-                    "observed_evidence": [],
+                    "observed_hits": [],
                     "retry_context": None,
                     "retrieval_diagnostics": [],
                     "planner_diagnostics": None,
                     "latency_breakdown": None,
-                    "action_results": {
-                        "slack_notify": {
-                            "status": "ok",
-                            "channel_id": "C999LIVE",
-                            "target_type": "Public Channel",
-                        }
-                    },
+
                 },
             },
         )
@@ -243,8 +236,8 @@ class RunnerRequestPayloadTest(unittest.TestCase):
             live_slack=BenchmarkLiveSlackConfig(enabled=True, channel_id="C999LIVE"),
         )
 
-        self.assertIsNotNone(result.action_results)
-        self.assertEqual(result.action_results.slack_notify.status, "ok")
+        self.assertIsNotNone(result.actions)
+        self.assertEqual(result.actions[0].status, "success")
         self.assertTrue(result.slack_delivery_required)
         self.assertEqual(result.slack_delivery_status, "success")
 
@@ -277,11 +270,10 @@ class RunnerRequestPayloadTest(unittest.TestCase):
         mock_post.return_value = _FakeResponse(
             200,
             {
-                "response": {"answer": "shared", "evidence": []},
+                "response": plain_response('shared'),
                 "trace": "trace-id",
-                "file_path": "",
                 "debug": {
-                    "schema_version": 3,
+                    "schema_version": DEBUG_SCHEMA_VERSION,
                     "observability_status": "ok",
                     "missing_required_debug_fields": [],
                     "tool_calls": ["tavily_search"],
@@ -291,7 +283,7 @@ class RunnerRequestPayloadTest(unittest.TestCase):
                     "models_used": [],
                     "llm_calls": [],
                     "errors": [],
-                    "observed_evidence": [],
+                    "observed_hits": [],
                     "planner_errors": ["planner: structured output invocation failed (boom)"],
                     "retry_context": None,
                     "retrieval_diagnostics": [],
@@ -326,47 +318,10 @@ class RunnerRequestPayloadTest(unittest.TestCase):
         mock_post.return_value = _FakeResponse(
             200,
             {
-                "response": {
-                    "answer": "공식 설명 [1] 업로드 비교 [2]",
-                    "claims": [
-                        {"text": "공식 설명", "evidence_ids": ["url:https://numpy.org/doc/stable/"]},
-                        {"text": "업로드 비교", "evidence_ids": ["path:uploads/demo/sample.ipynb#cell=0;chunk=0;start=0;end=12"]},
-                    ],
-                    "sections": [
-                        {"kind": "official_docs", "heading": "공식 문서", "body": "공식 설명"},
-                        {"kind": "comparison", "heading": "비교", "body": "업로드 비교"},
-                    ],
-                    "evidence": [
-                        {
-                            "kind": "official",
-                            "tool": "tavily_search",
-                            "source_id": "url:https://numpy.org/doc/stable/",
-                            "document_id": "url:https://numpy.org/doc/stable/",
-                            "url_or_path": "https://numpy.org/doc/stable/",
-                            "title": "NumPy Docs",
-                            "snippet": "official snippet",
-                            "score": 0.9,
-                        },
-                        {
-                            "kind": "local",
-                            "tool": "upload_search",
-                            "source_id": "path:uploads/demo/sample.ipynb#cell=0;chunk=0;start=0;end=12",
-                            "document_id": "path:uploads/demo/sample.ipynb",
-                            "url_or_path": "uploads/demo/sample.ipynb",
-                            "title": "Notebook",
-                            "snippet": "local snippet",
-                            "score": 0.8,
-                            "cell_id": 0,
-                            "chunk_id": 0,
-                            "start_offset": 0,
-                            "end_offset": 12,
-                        },
-                    ],
-                },
+                "response": comparison_response(),
                 "trace": "Session ID: abc, Request ID: req123, Agent ID: 1",
-                "file_path": "",
                 "debug": {
-                    "schema_version": 3,
+                    "schema_version": DEBUG_SCHEMA_VERSION,
                     "observability_status": "ok",
                     "missing_required_debug_fields": [],
                     "tool_calls": ["tavily_search", "upload_search"],
@@ -377,17 +332,8 @@ class RunnerRequestPayloadTest(unittest.TestCase):
                     "llm_calls": [],
                     "errors": [],
                     "planner_errors": [],
-                    "observed_evidence": [
-                        {
-                            "kind": "official",
-                            "tool": "tavily_search",
-                            "source_id": "url:https://numpy.org/doc/stable/",
-                            "document_id": "url:https://numpy.org/doc/stable/",
-                            "url_or_path": "https://numpy.org/doc/stable/",
-                            "title": "NumPy Docs",
-                            "snippet": "official snippet",
-                            "score": 0.9,
-                        }
+                    "observed_hits": [
+                        source_hit().model_dump(mode="json")
                     ],
                     "retry_context": {"retry_reason": "low_score", "retrieval_feedback": "compare more explicitly"},
                     "retrieval_diagnostics": [
@@ -448,11 +394,10 @@ class RunnerRequestPayloadTest(unittest.TestCase):
         )
 
         self.assertIsNotNone(judge.kwargs)
-        self.assertEqual(len(judge.kwargs["claims"]), 2)
-        self.assertEqual(len(judge.kwargs["response_evidence"]), 2)
-        self.assertEqual(len(judge.kwargs["sections"]), 2)
-        self.assertEqual(judge.kwargs["sections"][0].kind, "official_docs")
-        self.assertEqual(len(judge.kwargs["observed_evidence"]), 1)
+        self.assertEqual(len(judge.kwargs["response"].citations), 2)
+        self.assertEqual(len(judge.kwargs["response"].content.blocks), 2)
+        self.assertEqual(judge.kwargs["response"].content.blocks[0].type, "paragraph")
+        self.assertEqual(len(judge.kwargs["observed_hits"]), 1)
         self.assertEqual(len(judge.kwargs["retrieval_diagnostics"]), 2)
         self.assertEqual(judge.kwargs["validator_reason"], "low_score")
         self.assertEqual(judge.kwargs["synthesis_mode"], "structured_only")
@@ -460,15 +405,14 @@ class RunnerRequestPayloadTest(unittest.TestCase):
         self.assertEqual(result.request_id, "req123")
 
     @patch("src.eval.online_runner.case_runner.requests.post")
-    def test_judge_payload_includes_action_results_for_live_slack_cases(self, mock_post) -> None:
+    def test_judge_payload_includes_public_actions_for_live_slack_cases(self, mock_post) -> None:
         mock_post.return_value = _FakeResponse(
             200,
             {
-                "response": {"answer": "shared", "claims": [], "evidence": []},
+                "response": {**plain_response('shared'), "actions": [{'kind': 'slack_notify', 'status': 'error', 'target': 'C999LIVE', 'message': None, 'error': 'channel_not_found'}]},
                 "trace": "trace-id",
-                "file_path": "",
                 "debug": {
-                    "schema_version": 3,
+                    "schema_version": DEBUG_SCHEMA_VERSION,
                     "observability_status": "ok",
                     "missing_required_debug_fields": [],
                     "tool_calls": ["slack_notify"],
@@ -479,19 +423,12 @@ class RunnerRequestPayloadTest(unittest.TestCase):
                     "llm_calls": [],
                     "errors": [],
                     "planner_errors": [],
-                    "observed_evidence": [],
+                    "observed_hits": [],
                     "retry_context": None,
                     "retrieval_diagnostics": [],
                     "planner_diagnostics": None,
                     "latency_breakdown": None,
-                    "action_results": {
-                        "slack_notify": {
-                            "status": "error",
-                            "channel_id": "C999LIVE",
-                            "target_type": "Public Channel",
-                            "error": "channel_not_found",
-                        }
-                    },
+
                 },
             },
         )
@@ -516,7 +453,7 @@ class RunnerRequestPayloadTest(unittest.TestCase):
 
         self.assertIsNotNone(judge.kwargs)
         self.assertTrue(judge.kwargs["slack_delivery_required"])
-        self.assertEqual(judge.kwargs["action_results"].slack_notify.status, "error")
+        self.assertEqual(judge.kwargs["response"].actions[0].status, "error")
 
 
 if __name__ == "__main__":

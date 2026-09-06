@@ -1,3 +1,5 @@
+from src.core.contracts.debug import DEBUG_SCHEMA_VERSION
+from tests.eval.response_fixtures import plain_response
 import json
 import unittest
 from pathlib import Path
@@ -186,11 +188,10 @@ class BenchmarkCLIEnvResolutionTest(unittest.TestCase):
         mock_post.return_value = _FakeResponse(
             200,
             {
-                "response": {"answer": "shared", "evidence": []},
+                "response": {**plain_response('shared'), "actions": [{'kind': 'slack_notify', 'status': 'success', 'target': 'CENVLIVE', 'message': None, 'error': None}]},
                 "trace": "trace-id",
-                "file_path": "",
                 "debug": {
-                    "schema_version": 3,
+                    "schema_version": DEBUG_SCHEMA_VERSION,
                     "observability_status": "ok",
                     "missing_required_debug_fields": [],
                     "tool_calls": ["slack_notify"],
@@ -201,18 +202,12 @@ class BenchmarkCLIEnvResolutionTest(unittest.TestCase):
                     "llm_calls": [],
                     "errors": [],
                     "planner_errors": [],
-                    "observed_evidence": [],
+                    "observed_hits": [],
                     "retry_context": None,
                     "retrieval_diagnostics": [],
                     "planner_diagnostics": None,
                     "latency_breakdown": None,
-                    "action_results": {
-                        "slack_notify": {
-                            "status": "ok",
-                            "channel_id": "CENVLIVE",
-                            "target_type": "Public Channel",
-                        }
-                    },
+
                 },
             },
         )

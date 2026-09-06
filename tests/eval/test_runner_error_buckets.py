@@ -1,3 +1,6 @@
+from src.core.contracts.debug import DEBUG_SCHEMA_VERSION
+from src.core.answer_schema import AnswerResponse
+from tests.eval.response_fixtures import plain_response
 import json
 import unittest
 from pathlib import Path
@@ -29,8 +32,8 @@ class _DummyJudge(LLMJudge):
     def __init__(self, result):
         self._result = result
 
-    def score_case(self, *, case: BenchmarkCase, response_text: str, tool_calls: list[str], **kwargs):
-        _ = (case, response_text, tool_calls)
+    def score_case(self, *, case: BenchmarkCase, response, tool_calls: list[str], **kwargs):
+        _ = (case, tool_calls)
         return self._result
 
 
@@ -73,7 +76,7 @@ class RunnerErrorBucketsTest(unittest.TestCase):
                 created_at="2026-01-01T00:00:00+00:00",
                 request_payload={"query": self.case.query},
                 latency_ms_e2e=1,
-                parsed_response=ParsedResponseData(response_text="answer"),
+                parsed_response=ParsedResponseData(response_text="answer", response=AnswerResponse.model_validate(plain_response("answer"))),
             )
 
     @patch("src.eval.online_runner.case_runner.requests.post", side_effect=requests.Timeout)
@@ -98,9 +101,8 @@ class RunnerErrorBucketsTest(unittest.TestCase):
             {
                 "response": "legacy string response",
                 "trace": "x",
-                "file_path": "",
                 "debug": {
-                    "schema_version": 3,
+                    "schema_version": DEBUG_SCHEMA_VERSION,
                     "observability_status": "ok",
                     "missing_required_debug_fields": [],
                     "tool_calls": [],
@@ -111,7 +113,7 @@ class RunnerErrorBucketsTest(unittest.TestCase):
                     "llm_calls": [],
                     "errors": [],
                     "planner_errors": [],
-                    "observed_evidence": [],
+                    "observed_hits": [],
                     "retry_context": None,
                     "retrieval_diagnostics": [],
                     "planner_diagnostics": None,
@@ -136,11 +138,10 @@ class RunnerErrorBucketsTest(unittest.TestCase):
         mock_post.return_value = _FakeResponse(
             200,
             {
-                "response": {"answer": "ok", "evidence": []},
+                "response": plain_response('ok'),
                 "trace": "x",
-                "file_path": "",
                 "debug": {
-                    "schema_version": 3,
+                    "schema_version": DEBUG_SCHEMA_VERSION,
                     "observability_status": "ok",
                     "missing_required_debug_fields": [],
                     "tool_calls": ["tavily_search"],
@@ -151,7 +152,7 @@ class RunnerErrorBucketsTest(unittest.TestCase):
                     "llm_calls": [],
                     "errors": [],
                     "planner_errors": [],
-                    "observed_evidence": [],
+                    "observed_hits": [],
                     "retry_context": None,
                     "retrieval_diagnostics": [],
                     "planner_diagnostics": None,
@@ -177,11 +178,10 @@ class RunnerErrorBucketsTest(unittest.TestCase):
         mock_post.return_value = _FakeResponse(
             200,
             {
-                "response": {"answer": "ok", "evidence": []},
+                "response": plain_response('ok'),
                 "trace": "x",
-                "file_path": "",
                 "debug": {
-                    "schema_version": 3,
+                    "schema_version": DEBUG_SCHEMA_VERSION,
                     "observability_status": "ok",
                     "missing_required_debug_fields": [],
                     "tool_calls": ["tavily_search", "upload_search", "rag_search"],
@@ -192,7 +192,7 @@ class RunnerErrorBucketsTest(unittest.TestCase):
                     "llm_calls": [],
                     "errors": [],
                     "planner_errors": [],
-                    "observed_evidence": [],
+                    "observed_hits": [],
                     "retrieval_diagnostics": [
                         {
                             "tool": "tavily_search",
@@ -258,11 +258,10 @@ class RunnerErrorBucketsTest(unittest.TestCase):
         mock_post.return_value = _FakeResponse(
             200,
             {
-                "response": {"answer": "need more evidence", "evidence": []},
+                "response": plain_response('need more evidence'),
                 "trace": "x",
-                "file_path": "",
                 "debug": {
-                    "schema_version": 3,
+                    "schema_version": DEBUG_SCHEMA_VERSION,
                     "observability_status": "ok",
                     "missing_required_debug_fields": [],
                     "tool_calls": ["tavily_search"],
@@ -273,7 +272,7 @@ class RunnerErrorBucketsTest(unittest.TestCase):
                     "llm_calls": [],
                     "errors": [],
                     "planner_errors": [],
-                    "observed_evidence": [],
+                    "observed_hits": [],
                     "retry_context": {
                         "attempt": 1,
                         "max_retries": 1,
@@ -308,12 +307,11 @@ class RunnerErrorBucketsTest(unittest.TestCase):
         mock_post.return_value = _FakeResponse(
             200,
             {
-                "response": {"answer": "ok", "evidence": []},
+                "response": plain_response('ok'),
                 "trace": "x",
-                "file_path": "",
                 "debug": {
                     "tool_calls": ["tavily_search"],
-                    "observed_evidence": [],
+                    "observed_hits": [],
                 },
             },
         )
@@ -336,11 +334,10 @@ class RunnerErrorBucketsTest(unittest.TestCase):
         mock_post.return_value = _FakeResponse(
             200,
             {
-                "response": {"answer": "ok", "evidence": []},
+                "response": plain_response('ok'),
                 "trace": "x",
-                "file_path": "",
                 "debug": {
-                    "schema_version": 3,
+                    "schema_version": DEBUG_SCHEMA_VERSION,
                     "observability_status": "ok",
                     "missing_required_debug_fields": [],
                     "tool_calls": ["tavily_search"],
@@ -351,7 +348,7 @@ class RunnerErrorBucketsTest(unittest.TestCase):
                     "llm_calls": [],
                     "errors": [],
                     "planner_errors": [],
-                    "observed_evidence": [],
+                    "observed_hits": [],
                     "retry_context": None,
                     "retrieval_diagnostics": [],
                     "planner_diagnostics": None,
@@ -396,19 +393,10 @@ class RunnerErrorBucketsTest(unittest.TestCase):
         mock_post.return_value = _FakeResponse(
             200,
             {
-                "response": {
-                    "answer": "ok",
-                    "claims": [],
-                    "sections": [
-                        {"kind": "summary", "heading": "Summary", "body": "ok"},
-                        {"kind": "comparison", "heading": "Compare", "body": "same"},
-                    ],
-                    "evidence": [],
-                },
+                "response": plain_response(['ok', 'same']),
                 "trace": "x",
-                "file_path": "",
                 "debug": {
-                    "schema_version": 3,
+                    "schema_version": DEBUG_SCHEMA_VERSION,
                     "observability_status": "ok",
                     "missing_required_debug_fields": [],
                     "tool_calls": ["tavily_search"],
@@ -425,9 +413,9 @@ class RunnerErrorBucketsTest(unittest.TestCase):
                     "error_codes": [
                         "RETRIEVAL_DOCS_TIMEOUT",
                         "LOCAL_RAG_FAILED",
-                        "VALIDATION_UNSUPPORTED_CLAIMS",
+                        "VALIDATION_UNRESOLVED_REFERENCES",
                     ],
-                    "validation_events": ["validate_evidence: retry_reason=unsupported_claims"],
+                    "validation_events": ["validate_evidence: retry_reason=unresolved_references"],
                     "edge_decisions": [
                         {
                             "source": "planner",
@@ -436,7 +424,7 @@ class RunnerErrorBucketsTest(unittest.TestCase):
                         }
                     ],
                     "planner_errors": [],
-                    "observed_evidence": [],
+                    "observed_hits": [],
                     "retry_context": None,
                     "retrieval_diagnostics": [
                         {
@@ -470,24 +458,24 @@ class RunnerErrorBucketsTest(unittest.TestCase):
             [
                 "RETRIEVAL_DOCS_TIMEOUT",
                 "LOCAL_RAG_FAILED",
-                "VALIDATION_UNSUPPORTED_CLAIMS",
+                "VALIDATION_UNRESOLVED_REFERENCES",
             ],
         )
         self.assertEqual(
             result.validation_events,
-            ["validate_evidence: retry_reason=unsupported_claims"],
+            ["validate_evidence: retry_reason=unresolved_references"],
         )
         self.assertEqual(result.edge_decisions[0]["decision"], "retrieve")
         self.assertEqual(result.retrieval_diagnostics[0].error_code, "RETRIEVAL_DOCS_TIMEOUT")
         self.assertEqual(result.output_tokens, 21)
-        self.assertEqual(result.section_count, 2)
+        self.assertEqual(result.block_count, 2)
         analysis = build_analysis(case_map={self.case.case_id: self.case}, results=[result])
         self.assertEqual(
             {item.error_code for item in analysis.error_code_histogram},
             {
                 "RETRIEVAL_DOCS_TIMEOUT",
                 "LOCAL_RAG_FAILED",
-                "VALIDATION_UNSUPPORTED_CLAIMS",
+                "VALIDATION_UNRESOLVED_REFERENCES",
             },
         )
 

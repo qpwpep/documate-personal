@@ -1,3 +1,4 @@
+from tests.eval.response_fixtures import plain_response
 import unittest
 
 from src.eval.config_models import BenchmarkCase, BenchmarkConfig
@@ -40,7 +41,7 @@ def _result(
             "request_id": f"req-{case.case_id}",
             "http_status": 200,
             "response_text": "응답",
-            "response_payload": {"answer": "응답", "claims": [], "evidence": []},
+            "response": plain_response('응답'),
             "tool_calls": list(case.expected_tools),
             "tool_call_count": len(case.expected_tools),
             "effective_weights": {

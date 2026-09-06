@@ -1,3 +1,4 @@
+from tests.eval.response_fixtures import plain_response
 import json
 import unittest
 from pathlib import Path
@@ -32,7 +33,7 @@ def _result(run_id: str, case: BenchmarkCase) -> CaseResult:
             "request_payload": {"query": case.query},
             "http_status": 200,
             "response_text": "ok",
-            "response_payload": {"answer": "ok", "claims": [], "evidence": []},
+            "response": plain_response('ok'),
             "tool_calls": list(case.expected_tools),
             "tool_call_count": len(case.expected_tools),
             "effective_weights": {
