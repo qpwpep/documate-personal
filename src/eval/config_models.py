@@ -12,7 +12,7 @@ CaseScenario = Literal["seed_mutation", "adversarial", "regression", "ambiguity"
 
 class CaseWeightOverride(BaseModel):
     answer_quality: float | None = Field(default=None, ge=0.0)
-    groundedness: float | None = Field(default=None, ge=0.0)
+    reference_coverage: float | None = Field(default=None, ge=0.0)
     citation_traceability: float | None = Field(default=None, ge=0.0)
     tool_choice: float | None = Field(default=None, ge=0.0)
     format_language: float | None = Field(default=None, ge=0.0)
@@ -115,7 +115,7 @@ class BenchmarkLiveSlackConfig(BaseModel):
 
 class ScoreWeights(BaseModel):
     answer_quality: float = 0.20
-    groundedness: float = 0.20
+    reference_coverage: float = 0.20
     citation_traceability: float = 0.20
     tool_choice: float = 0.15
     format_language: float = 0.05

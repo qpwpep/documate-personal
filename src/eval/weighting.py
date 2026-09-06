@@ -19,7 +19,7 @@ def resolve_effective_weights(
     ):
         merged = {
             "answer_quality": 0.40,
-            "groundedness": 0.025,
+            "reference_coverage": 0.025,
             "citation_traceability": 0.025,
             "tool_choice": 0.30,
             "format_language": 0.10,
@@ -54,7 +54,7 @@ def resolve_base_weights_for_case(
         return base_weights
     return ScoreWeights(
         answer_quality=0.35,
-        groundedness=0.10,
+        reference_coverage=0.10,
         citation_traceability=0.05,
         tool_choice=0.25,
         format_language=0.10,
