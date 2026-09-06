@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Iterable
+from typing import Iterable
 from urllib.parse import urlparse
 
-from src.core.answer_schema import AnswerSection, ClaimItem
+from src.core.answer_schema import AnswerResponse, export_answer_text, iter_content_units
 from src.core.domain_docs import DEFAULT_DOCS
-from src.core.evidence import EvidenceItem, normalize_source_id
+from src.core.evidence import EvidenceRef, SearchHit
 from .config_models import BenchmarkCase
 
 
@@ -67,9 +67,8 @@ def score_tool_choice(
 def score_answer_quality(
     case: BenchmarkCase,
     response_text: str,
-    observed_evidence: list[EvidenceItem],
+    observed_hits: list[SearchHit],
     *,
-    response_sections: list[AnswerSection] | None = None,
     synthesis_mode: str | None = None,
 ) -> float:
     text = response_text or ""
@@ -88,11 +87,11 @@ def score_answer_quality(
 
     quality = max(0.0, min(1.0, (include_score + exclude_score) / 2.0))
 
-    copy_penalty = _copy_penalty(text, observed_evidence)
+    copy_penalty = _copy_penalty(text, observed_hits)
     if copy_penalty > 0.0:
         quality = max(0.0, quality - copy_penalty)
 
-    if case.category == "hybrid" and not _hybrid_comparison_present(text, response_sections):
+    if case.category == "hybrid" and not _hybrid_comparison_present(text):
         quality = min(quality, 0.25)
 
     if case.category in {"docs_only", "hybrid"} and synthesis_mode == "deterministic_grounded_direct":
@@ -101,103 +100,82 @@ def score_answer_quality(
     return max(0.0, min(1.0, quality))
 
 
+def _source_selection_contains(observed: EvidenceRef, cited: EvidenceRef) -> bool:
+    """A prompt may narrow a hit; it cannot change its source or expand its range."""
+    if observed.snapshot != cited.snapshot or observed.element != cited.element:
+        return False
+    observed_cells = set(observed.selection.cell_ids)
+    cited_cells = set(cited.selection.cell_ids)
+    if observed_cells or cited_cells:
+        return bool(cited_cells) and cited_cells.issubset(observed_cells)
+    observed_end = len(observed.element.text) if observed.selection.end is None else observed.selection.end
+    cited_end = len(cited.element.text) if cited.selection.end is None else cited.selection.end
+    return observed.selection.start <= cited.selection.start < cited_end <= observed_end
+
+
+def _traceable_refs(response: AnswerResponse, observed_hits: list[SearchHit]) -> set[str]:
+    used = {ref for _, unit in iter_content_units(response.content) for ref in unit.refs}
+    return {
+        citation.evidence.id
+        for citation in response.citations
+        if citation.evidence.id in used
+        and any(_source_selection_contains(hit.evidence, citation.evidence) for hit in observed_hits)
+    }
+
+
 def score_citation_traceability(
+    *,
     case: BenchmarkCase,
-    response_evidence: list[EvidenceItem],
-    observed_evidence: list[EvidenceItem],
+    response: AnswerResponse | None,
+    observed_hits: list[SearchHit],
     called_tools: list[str],
 ) -> float:
-    checks: list[bool] = []
-
+    required_routes = []
     if case.require_official_citation:
-        response_ids = _collect_valid_source_ids(
-            response_evidence,
-            required_kind="official",
-            required_tool="tavily_search",
-            source_validator=_is_valid_official_source,
-        )
-        observed_ids = _collect_valid_source_ids(
-            observed_evidence,
-            required_kind="official",
-            required_tool="tavily_search",
-            source_validator=_is_valid_official_source,
-        )
-        checks.append(("tavily_search" in called_tools) and bool(response_ids.intersection(observed_ids)))
-
+        required_routes.append("docs")
     if case.require_local_citation:
-        expected_local_tool = _expected_local_citation_tool(case)
-        response_ids = _collect_valid_source_ids(
-            response_evidence,
-            required_kind="local",
-            required_tool=expected_local_tool,
-            source_validator=_is_valid_local_source,
-        )
-        observed_ids = _collect_valid_source_ids(
-            observed_evidence,
-            required_kind="local",
-            required_tool=expected_local_tool,
-            source_validator=_is_valid_local_source,
-        )
-        checks.append((expected_local_tool in called_tools) and bool(response_ids.intersection(observed_ids)))
-
-    if not checks:
+        required_routes.append("upload")
+    if not required_routes:
         return 1.0
+    if response is None:
+        return 0.0
+    traceable = _traceable_refs(response, observed_hits)
+    route_tools = {"docs": "tavily_search", "upload": "upload_search"}
+    valid_routes = {
+        citation.evidence.route
+        for citation in response.citations
+        if citation.evidence.id in traceable
+        and (
+            citation.evidence.snapshot.source_type != "official"
+            or _is_valid_official_source(citation.evidence.snapshot.source_uri)
+        )
+    }
+    used = {ref for _, unit in iter_content_units(response.content) for ref in unit.refs}
+    coverage = len(used.intersection(traceable)) / len(used) if used else 0.0
+    route_coverage = sum(
+        route in valid_routes and route_tools[route] in called_tools for route in required_routes
+    ) / len(required_routes)
+    return min(coverage, route_coverage)
 
-    return sum(1 for check in checks if check) / len(checks)
 
-
-def score_groundedness(
+def score_reference_coverage(
     *,
     case: BenchmarkCase | None = None,
-    response_text: str,
-    response_evidence: list[EvidenceItem],
-    observed_evidence: list[EvidenceItem],
+    response: AnswerResponse | None,
+    observed_hits: list[SearchHit],
     validator_reason: str | None = None,
-    response_claims: list[ClaimItem] | None = None,
-    invalid_claim_count: int = 0,
 ) -> float:
-    text = (response_text or "").strip()
-    if not text:
+    """Measure reference coverage only; semantic groundedness belongs to the judge."""
+    if response is None or not export_answer_text(response).strip():
         return 0.0
     if case is not None and case.category == "tool_action":
-        if not response_evidence:
-            if not observed_evidence:
-                return 1.0
-            if not case.require_official_citation and not case.require_local_citation:
-                return 1.0
-    if not observed_evidence or not response_evidence:
+        if not case.require_official_citation and not case.require_local_citation:
+            return 1.0
+    units = [unit for _, unit in iter_content_units(response.content) if unit.basis != "interaction"]
+    if not units or validator_reason == "no_evidence":
         return 0.0
-
-    observed_ids = {
-        str(item.source_id or item.document_id or "").strip()
-        for item in observed_evidence
-        if str(item.source_id or item.document_id or "").strip()
-    }
-    response_ids = {
-        str(item.source_id or item.document_id or "").strip()
-        for item in response_evidence
-        if str(item.source_id or item.document_id or "").strip()
-    }
-    if not observed_ids or not response_ids:
-        return 0.0
-
-    score = len(response_ids.intersection(observed_ids)) / len(response_ids)
-    claim_support_ratio = _claim_support_ratio(response_claims, observed_evidence)
-    if claim_support_ratio is not None:
-        score = min(score, claim_support_ratio)
-    if invalid_claim_count > 0:
-        score = min(score, max(0.0, 1.0 - (0.4 * invalid_claim_count)))
-
-    if validator_reason == "no_evidence":
-        return 0.0
-    if validator_reason == "unsupported_claims":
-        score = min(score, 0.2)
-    elif validator_reason == "low_score":
-        score = min(score, 0.35)
-    elif validator_reason == "tool_error":
-        score = min(score, 0.4)
-
-    return max(0.0, min(1.0, score))
+    traceable = _traceable_refs(response, observed_hits)
+    return sum(bool(unit.refs) and all(ref in traceable for ref in unit.refs) for unit in units) / len(units)
 
 
 def score_format_language(
@@ -226,57 +204,24 @@ def score_format_language(
 def compute_rule_scores(
     *,
     case: BenchmarkCase,
-    response_text: str,
+    response: AnswerResponse | None,
     called_tools: list[str],
-    response_evidence: list[EvidenceItem],
-    observed_evidence: list[EvidenceItem],
+    observed_hits: list[SearchHit],
     runtime_errors: list[str],
     response_errors: list[str],
     judge_errors: list[str],
     validator_reason: str | None = None,
-    response_claims: list[ClaimItem] | None = None,
     synthesis_mode: str | None = None,
-    invalid_claim_count: int = 0,
-    response_sections: list[AnswerSection] | None = None,
     slack_delivery_required: bool = False,
     slack_delivery_status: str = "not_applicable",
 ) -> dict[str, float]:
+    response_text = export_answer_text(response) if response is not None else ""
     return {
-        "answer_quality": score_answer_quality(
-            case,
-            response_text,
-            observed_evidence,
-            response_sections=response_sections,
-            synthesis_mode=synthesis_mode,
-        ),
-        "groundedness": score_groundedness(
-            case=case,
-            response_text=response_text,
-            response_evidence=response_evidence,
-            observed_evidence=observed_evidence,
-            validator_reason=validator_reason,
-            response_claims=response_claims,
-            invalid_claim_count=invalid_claim_count,
-        ),
-        "citation_traceability": score_citation_traceability(
-            case=case,
-            response_evidence=response_evidence,
-            observed_evidence=observed_evidence,
-            called_tools=called_tools,
-        ),
-        "tool_choice": score_tool_choice(
-            case,
-            called_tools,
-            slack_delivery_required=slack_delivery_required,
-            slack_delivery_status=slack_delivery_status,
-        ),
-        "format_language": score_format_language(
-            case=case,
-            runtime_errors=runtime_errors,
-            response_errors=response_errors,
-            judge_errors=judge_errors,
-            response_text=response_text,
-        ),
+        "answer_quality": score_answer_quality(case, response_text, observed_hits, synthesis_mode=synthesis_mode),
+        "reference_coverage": score_reference_coverage(case=case, response=response, observed_hits=observed_hits, validator_reason=validator_reason),
+        "citation_traceability": score_citation_traceability(case=case, response=response, observed_hits=observed_hits, called_tools=called_tools),
+        "tool_choice": score_tool_choice(case, called_tools, slack_delivery_required=slack_delivery_required, slack_delivery_status=slack_delivery_status),
+        "format_language": score_format_language(case=case, runtime_errors=runtime_errors, response_errors=response_errors, judge_errors=judge_errors, response_text=response_text),
     }
 
 
@@ -318,25 +263,6 @@ def _is_valid_official_source(url_or_path: str) -> bool:
     return _normalize_domain(parsed.netloc) in _ALLOWED_OFFICIAL_DOMAINS
 
 
-def _is_valid_local_source(url_or_path: str) -> bool:
-    raw = str(url_or_path or "").strip()
-    if not raw:
-        return False
-    normalized = raw.replace("\\", "/").lower()
-    return (
-        normalized.endswith(".py")
-        or normalized.endswith(".ipynb")
-        or "/uploads/" in normalized
-        or normalized.startswith("uploads/")
-        or normalized.startswith("data/")
-    )
-
-
-def _expected_local_citation_tool(case: BenchmarkCase) -> str:
-    # Upload evidence uses kind="local"; rag_search remains valid for legacy benchmark cases.
-    return "upload_search" if case.upload_fixture else "rag_search"
-
-
 def _contains_hangul(text: str) -> bool:
     return bool(_HANGUL_PATTERN.search(str(text or "")))
 
@@ -345,38 +271,13 @@ def _normalize_text(text: str) -> str:
     return re.sub(r"\s+", " ", str(text or "").strip().lower())
 
 
-def _collect_valid_source_ids(
-    evidence: list[EvidenceItem],
-    *,
-    required_kind: str,
-    required_tool: str,
-    source_validator: Any,
-) -> set[str]:
-    valid_ids: set[str] = set()
-    for item in evidence:
-        if item.kind != required_kind:
-            continue
-        if item.tool != required_tool:
-            continue
-        source_id = str(item.source_id or "").strip()
-        document_id = str(item.document_id or normalize_source_id(item.url_or_path)).strip()
-        if not source_id or not document_id:
-            continue
-        if document_id != normalize_source_id(item.url_or_path):
-            continue
-        if not source_validator(item.url_or_path):
-            continue
-        valid_ids.add(source_id)
-    return valid_ids
-
-
-def _copy_penalty(response_text: str, observed_evidence: list[EvidenceItem]) -> float:
+def _copy_penalty(response_text: str, observed_hits: list[SearchHit]) -> float:
     normalized_response = _normalize_text(response_text)
     if not normalized_response:
         return 0.0
     longest_match = 0
-    for item in observed_evidence:
-        snippet = _normalize_text(item.snippet or "")
+    for hit in observed_hits:
+        snippet = _normalize_text(hit.evidence.excerpt)
         if len(snippet) < 48:
             continue
         if snippet and snippet in normalized_response:
@@ -388,31 +289,6 @@ def _copy_penalty(response_text: str, observed_evidence: list[EvidenceItem]) -> 
     return 0.0
 
 
-def _hybrid_comparison_present(
-    response_text: str,
-    response_sections: list[AnswerSection] | None = None,
-) -> bool:
-    if any(str(section.kind or "").strip() == "comparison" for section in (response_sections or [])):
-        return True
+def _hybrid_comparison_present(response_text: str) -> bool:
     normalized = _normalize_text(response_text)
     return any(marker in normalized for marker in _COMPARISON_MARKERS)
-
-
-def _claim_support_ratio(
-    response_claims: list[ClaimItem] | None,
-    observed_evidence: list[EvidenceItem],
-) -> float | None:
-    if not response_claims:
-        return None
-    observed_ids = {
-        str(item.source_id or item.document_id or "").strip()
-        for item in observed_evidence
-        if str(item.source_id or item.document_id or "").strip()
-    }
-    if not observed_ids:
-        return 0.0
-    supported = 0
-    for claim in response_claims:
-        if any(evidence_id in observed_ids for evidence_id in claim.evidence_ids):
-            supported += 1
-    return supported / len(response_claims)
