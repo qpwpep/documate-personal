@@ -2,18 +2,17 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from src.core.answer_schema import AgentResponsePayloadModel
+from src.core.answer_schema import AnswerResponse
 from src.core.conversation_memory import (
     DEFAULT_QUERY_MAX_CHARS,
     validate_query_text,
 )
 from src.core.contracts.debug import ActionResults, ErrorCode, LLMCallMetadata, ModelUsageStatus, PlannerDiagnostic, RetryState, RetrievalDiagnostic, TokenUsage
-from src.core.evidence import EvidenceItem
+from src.core.evidence import SearchHit
 from src.core.latency import LatencyBreakdownModel, StageName
 
-AgentResponsePayload = AgentResponsePayloadModel
 AgentTokenUsage = TokenUsage
 AgentRetryContext = RetryState
 
@@ -36,7 +35,7 @@ class AgentDebugInfo(BaseModel):
     validation_events: list[str] = Field(default_factory=list)
     edge_decisions: list[dict[str, Any]] = Field(default_factory=list)
     planner_errors: list[str] = Field(default_factory=list)
-    observed_evidence: list[EvidenceItem] = Field(default_factory=list)
+    observed_hits: list[SearchHit] = Field(default_factory=list)
     retry_context: AgentRetryContext | None = None
     retrieval_diagnostics: list[RetrievalDiagnostic] = Field(default_factory=list)
     planner_diagnostics: PlannerDiagnostic | None = None
@@ -59,9 +58,10 @@ class AgentRequest(BaseModel):
 
 
 class AgentResponse(BaseModel):
-    response: AgentResponsePayload
+    model_config = ConfigDict(extra="forbid")
+
+    response: AnswerResponse
     trace: str
-    file_path: str | None = None
     debug: AgentDebugInfo | None = None
 
 

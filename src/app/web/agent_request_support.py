@@ -7,7 +7,8 @@ from src.core.contracts.boundary.retrieval import parse_retrieval_diagnostics
 from src.core.contracts.boundary.runtime import parse_slack_destination
 from src.core.contracts.debug import DEBUG_CRITICAL_FIELDS, DEBUG_REQUIRED_FIELDS, DEBUG_SCHEMA_VERSION
 from src.core.latency import LatencyBreakdownModel
-from src.app.web.schemas import AgentDebugInfo, AgentRequest, AgentTokenUsage, EvidenceItem
+from src.app.web.schemas import AgentDebugInfo, AgentRequest, AgentTokenUsage
+from src.core.evidence import SearchHit
 
 
 def normalize_debug_info(raw_debug: dict | None, latency_ms_server: int | None) -> AgentDebugInfo:
@@ -31,19 +32,19 @@ def normalize_debug_info(raw_debug: dict | None, latency_ms_server: int | None) 
     validation_events_raw = debug.get("validation_events") or []
     edge_decisions_raw = debug.get("edge_decisions") or []
     planner_errors_raw = debug.get("planner_errors") or []
-    observed_evidence_raw = debug.get("observed_evidence") or []
+    observed_hits_raw = debug.get("observed_hits") or []
     models_used_raw = debug.get("models_used")
     raw_llm_calls = debug.get("llm_calls")
 
     token_usage = parse_token_usage(debug.get("token_usage")) or AgentTokenUsage()
 
-    observed_evidence: list[EvidenceItem] = []
-    if isinstance(observed_evidence_raw, list):
-        for item in observed_evidence_raw:
+    observed_hits: list[SearchHit] = []
+    if isinstance(observed_hits_raw, list):
+        for item in observed_hits_raw:
             if not isinstance(item, dict):
                 continue
             try:
-                observed_evidence.append(EvidenceItem.model_validate(item))
+                observed_hits.append(SearchHit.model_validate(item))
             except Exception:
                 continue
 
@@ -130,7 +131,7 @@ def normalize_debug_info(raw_debug: dict | None, latency_ms_server: int | None) 
         planner_errors=[str(error) for error in planner_errors_raw if error]
         if isinstance(planner_errors_raw, list)
         else [],
-        observed_evidence=observed_evidence,
+        observed_hits=observed_hits,
         retry_context=retry_context,
         retrieval_diagnostics=retrieval_diagnostics,
         planner_diagnostics=planner_diagnostics,

@@ -14,7 +14,8 @@ from src.infra.logging_utils import log_event
 from src.runtime.progress import ProgressEmitter
 from src.app.web.agent_request_support import build_session_metadata_snapshot, normalize_debug_info
 from src.app.web.cleanup import RuntimeCleaner, validate_upload_file_path
-from src.app.web.schemas import AgentDebugInfo, AgentRequest, AgentResponse, AgentResponsePayload, AgentStreamEvent
+from src.app.web.schemas import AgentDebugInfo, AgentRequest, AgentResponse, AgentStreamEvent
+from src.core.answer_schema import AnswerResponse
 from src.app.web.session_store import InMemorySessionStore
 
 
@@ -34,16 +35,14 @@ def _query_log_fields(query: str) -> dict[str, Any]:
 
 @dataclass(frozen=True)
 class AgentRequestResult:
-    response: AgentResponsePayload
+    response: AnswerResponse
     trace: str
-    file_path: str | None = None
     debug: AgentDebugInfo | None = None
 
     def to_response(self) -> AgentResponse:
         return AgentResponse(
             response=self.response,
             trace=self.trace,
-            file_path=self.file_path,
             debug=self.debug,
         )
 
@@ -159,7 +158,6 @@ class AgentRequestService:
         )
         latency_ms_server = int((time.monotonic() - started) * 1000)
 
-        file_path = agent_answer.get("filepath", "")
         response_payload = _build_response_payload(agent_answer)
         debug_info = normalize_debug_info(
             raw_debug=agent_answer.get("debug"),
@@ -176,28 +174,14 @@ class AgentRequestService:
             latency_ms_server=latency_ms_server,
             session_lock_wait_ms=session_lock_wait_ms,
             session_lock_contended=session_lock_wait_ms > 0,
-            file_path=file_path,
         )
 
         return AgentRequestResult(
             response=response_payload,
             trace=f"Session ID: {session_id}, Request ID: {request_id}, Agent ID: {id(agent_manager)}",
-            file_path=file_path,
             debug=debug_info if request_data.include_debug else None,
         )
 
 
-def _build_response_payload(agent_answer: dict[str, Any]) -> AgentResponsePayload:
-    answer = str(agent_answer.get("message") or "")
-    response_payload_raw = agent_answer.get("response_payload")
-    fallback_payload = {
-        "answer": answer,
-        "claims": [],
-        "evidence": [],
-        "confidence": None,
-    }
-    payload_candidate = response_payload_raw if isinstance(response_payload_raw, dict) else fallback_payload
-    try:
-        return AgentResponsePayload.model_validate(payload_candidate)
-    except Exception:
-        return AgentResponsePayload.model_validate(fallback_payload)
+def _build_response_payload(agent_answer: dict[str, Any]) -> AnswerResponse:
+    return AnswerResponse.model_validate(agent_answer["response"])
