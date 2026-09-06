@@ -12,6 +12,8 @@ from langchain_core.messages import AIMessage, HumanMessage
 
 from src.app.agent_manager import AgentFlowManager
 from src.core.contracts import ResponseState
+from src.core.answer_schema import AnswerResponse, export_answer_text
+from tests.web.answer_fixtures import answer_response
 from src.infra.settings import AppSettings
 from src.infra.tools.local_rag import build_temp_retriever
 from src.app.web.agent_request_support import build_session_metadata_snapshot
@@ -39,7 +41,7 @@ class _CapturingGraph:
                 HumanMessage(content=runtime.user_input),
                 AIMessage(content="ok"),
             ],
-            "response": ResponseState(final_answer="ok", payload={"answer": "ok", "claims": [], "evidence": [], "confidence": None}),
+            "response": ResponseState(result=answer_response("ok")),
         }
 
 
@@ -52,7 +54,9 @@ class _ResolvingGraph(_CapturingGraph):
 
 
 class _ExplodingGraph:
-    def invoke(self, _state: dict) -> dict:
+    def invoke(self, state: dict) -> dict:
+        if state["runtime"].retriever is not None:
+            state["runtime"].retriever.invoke("probe")
         raise RuntimeError("boom")
 
 
@@ -74,10 +78,7 @@ class _SlowCapturingGraph:
                     HumanMessage(content=runtime.user_input),
                     AIMessage(content="ok"),
                 ],
-                "response": ResponseState(
-                    final_answer="ok",
-                    payload={"answer": "ok", "claims": [], "evidence": [], "confidence": None},
-                ),
+                "response": ResponseState(result=answer_response("ok")),
             }
         finally:
             with self._lock:
@@ -113,6 +114,14 @@ def _make_manager(graph: _CapturingGraph) -> AgentFlowManager:
 
 
 class UploadSessionIsolationTest(unittest.TestCase):
+    def _upload(self, filename: str = "file.py", content: str = "value = 1\n") -> str:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        path = Path(directory.name) / "uploads" / "session" / filename
+        path.parent.mkdir(parents=True)
+        path.write_text(content, encoding="utf-8")
+        return str(path)
+
     @patch("src.infra.tools.local_rag.client.build_openai_embeddings", return_value=_FakeEmbeddings())
     def test_build_temp_retriever_isolates_per_session_collection(self, _mock_embeddings) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -148,8 +157,8 @@ class UploadSessionIsolationTest(unittest.TestCase):
         handle_two = _FakeHandle("upload-session-session")
         mock_build_temp_retriever.side_effect = [handle_one, handle_two]
 
-        manager.run_agent_flow("first", upload_file_path="uploads/session/file_one.py")
-        manager.run_agent_flow("second", upload_file_path="uploads/session/file_two.py")
+        manager.run_agent_flow("first", upload_file_path=self._upload("file_one.py"))
+        manager.run_agent_flow("second", upload_file_path=self._upload("file_two.py"))
 
         self.assertEqual(handle_one.cleanup_calls, 1)
         self.assertIs(manager.upload_retriever_handle, handle_two)
@@ -180,29 +189,26 @@ class UploadSessionIsolationTest(unittest.TestCase):
                         HumanMessage(content=state["runtime"].user_input),
                         AIMessage(content="ok"),
                     ],
-                    "response": ResponseState(
-                        final_answer="ok",
-                        payload={"answer": "ok", "claims": [], "evidence": [], "confidence": None},
-                    ),
+                    "response": ResponseState(result=answer_response("ok")),
                 }
 
         graph = _Graph()
         manager = _make_manager(graph)
         mock_build_temp_retriever.side_effect = build_retriever
 
-        manager.run_agent_flow("with upload", upload_file_path="uploads/session/file.py")
+        manager.run_agent_flow("with upload", upload_file_path=self._upload())
 
         self.assertIs(manager.upload_retriever_handle, handle)
         self.assertEqual(mock_build_temp_retriever.call_count, 1)
 
     @patch("src.app.agent_manager.build_temp_retriever")
     def test_agent_manager_cleans_handle_when_upload_removed(self, mock_build_temp_retriever) -> None:
-        graph = _CapturingGraph()
+        graph = _ResolvingGraph()
         manager = _make_manager(graph)
         handle = _FakeHandle("upload-session-session")
         mock_build_temp_retriever.return_value = handle
 
-        manager.run_agent_flow("with upload", upload_file_path="uploads/session/file.py")
+        manager.run_agent_flow("with upload", upload_file_path=self._upload())
         manager.run_agent_flow("without upload")
 
         self.assertEqual(handle.cleanup_calls, 1)
@@ -220,8 +226,9 @@ class UploadSessionIsolationTest(unittest.TestCase):
         handle = _FakeHandle("upload-session-session")
         mock_build_temp_retriever.return_value = handle
 
-        manager.run_agent_flow("new upload", upload_file_path="uploads/session/file.py")
-        manager.run_agent_flow("reuse upload", upload_file_path="uploads/session/file.py")
+        upload_path = self._upload()
+        manager.run_agent_flow("new upload", upload_file_path=upload_path)
+        manager.run_agent_flow("reuse upload", upload_file_path=upload_path)
         manager.run_agent_flow("plain request")
 
         self.assertEqual(
@@ -231,13 +238,13 @@ class UploadSessionIsolationTest(unittest.TestCase):
 
     @patch("src.app.agent_manager.build_temp_retriever")
     def test_agent_manager_cleans_handle_on_exit(self, mock_build_temp_retriever) -> None:
-        graph = _CapturingGraph()
+        graph = _ResolvingGraph()
         manager = _make_manager(graph)
         manager.memory_summary = "summary to clear"
         handle = _FakeHandle("upload-session-session")
         mock_build_temp_retriever.return_value = handle
 
-        manager.run_agent_flow("with upload", upload_file_path="uploads/session/file.py")
+        manager.run_agent_flow("with upload", upload_file_path=self._upload())
         manager.run_agent_flow("exit")
 
         self.assertEqual(handle.cleanup_calls, 1)
@@ -257,12 +264,32 @@ class UploadSessionIsolationTest(unittest.TestCase):
         handle = _FakeHandle("upload-session-session")
         mock_build_temp_retriever.return_value = handle
 
-        result = manager.run_agent_flow("with upload", upload_file_path="uploads/session/file.py")
+        result = manager.run_agent_flow("with upload", upload_file_path=self._upload())
 
-        self.assertEqual(result["message"], "boom")
+        self.assertEqual(export_answer_text(AnswerResponse.model_validate(result["response"])), "boom")
         self.assertEqual(handle.cleanup_calls, 1)
         self.assertIsNone(manager.upload_retriever_handle)
         self.assertEqual(manager._ensure_session().snapshot_conversation_memory(), before)
+
+    @patch("src.app.agent_manager.build_temp_retriever")
+    def test_replacing_bytes_at_the_same_upload_path_rebuilds_retrieval(self, build_retriever) -> None:
+        """A new document revision replaces retrieval even when its filename is unchanged."""
+        graph = _ResolvingGraph()
+        manager = _make_manager(graph)
+        first = _FakeHandle("first-version")
+        second = _FakeHandle("second-version")
+        build_retriever.side_effect = [first, second]
+        upload_path = self._upload(content="value = 1\n")
+
+        manager.run_agent_flow("initial", upload_file_path=upload_path)
+        manager.run_agent_flow("same bytes", upload_file_path=upload_path)
+        self.assertIs(manager.upload_retriever_handle, first)
+        Path(upload_path).write_text("value = 2\n", encoding="utf-8")
+        manager.run_agent_flow("new bytes", upload_file_path=upload_path)
+
+        self.assertIs(manager.upload_retriever_handle, second)
+        self.assertEqual(first.cleanup_calls, 1)
+        self.assertEqual([state["runtime"].user_input for state in graph.states], ["initial", "same bytes", "new bytes"])
 
     def test_agent_manager_passes_session_metadata_to_graph_and_clears_on_close(self) -> None:
         graph = _CapturingGraph()
@@ -474,7 +501,7 @@ class SessionStoreCleanupTest(unittest.TestCase):
                 user_input=f"question-{index}",
                 upload_file_path=None,
             )
-            results.append((session_lock_wait_ms, str(agent_answer.get("message") or "")))
+            results.append((session_lock_wait_ms, export_answer_text(AnswerResponse.model_validate(agent_answer["response"]))))
 
         threads = [threading.Thread(target=worker, args=(idx,)) for idx in range(2)]
         for thread in threads:

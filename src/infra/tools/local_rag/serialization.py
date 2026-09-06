@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from typing import Any
+import math
 
+from src.core.evidence import EvidenceRef, RetrievalScore, SearchHit, build_evidence, dedupe_search_hits
 from src.infra.chroma_store import normalize_l2_distance
-from src.infra.tools._common import build_evidence_item, dedupe_evidence_dicts, to_float_or_none
+from src.infra.tools._common import to_float_or_none
 from src.infra.tools.local_rag.ranking import extract_identifiers, extract_keywords, lexical_query_score
 
 
@@ -18,23 +20,26 @@ def score_ranked_rows(
     scored_rows: list[tuple[Any, float | None, float | None]] = []
     for doc, score in docs_with_scores:
         raw_score = to_float_or_none(score)
+        if raw_score is not None and not math.isfinite(raw_score):
+            raw_score = None
         scored_rows.append((doc, normalize_l2_distance(raw_score), raw_score))
     return scored_rows
 
 
-def build_query_focused_snippet(text: str, *, query: str, max_length: int = SNIPPET_CHAR_LIMIT) -> str:
-    normalized = str(text or "").strip()
+def query_focused_range(text: str, *, query: str, max_length: int = SNIPPET_CHAR_LIMIT) -> tuple[int, int]:
+    """Return a range in the supplied text; never normalize or reconstruct source code."""
+    normalized = str(text or "")
     candidate_starts = _build_candidate_starts(normalized, query=query, max_length=max_length)
     if not candidate_starts:
-        return normalized if len(normalized) <= max_length else normalized[:max_length]
+        return (0, min(len(normalized), max_length))
     if len(normalized) <= max_length and len(normalized.splitlines()) <= QUERY_WINDOW_LINE_LIMIT:
-        return normalized
+        return _window_bounds(normalized, start=0, max_length=max_length)
     query_tokens = _query_tokens(query)
     if len(normalized) <= max_length and not _has_query_token_hit(
         text=normalized,
         query_tokens=query_tokens,
     ):
-        return normalized
+        return _window_bounds(normalized, start=0, max_length=max_length)
 
     query_identifiers = extract_identifiers(query)
     best_window = max(
@@ -52,7 +57,12 @@ def build_query_focused_snippet(text: str, *, query: str, max_length: int = SNIP
         ),
         key=lambda item: (item[0], item[1], item[2]),
     )
-    return _slice_window(normalized, start=best_window[3], max_length=max_length)
+    return _window_bounds(normalized, start=best_window[3], max_length=max_length)
+
+
+def build_query_focused_snippet(text: str, *, query: str, max_length: int = SNIPPET_CHAR_LIMIT) -> str:
+    start, end = query_focused_range(text, query=query, max_length=max_length)
+    return text[start:end]
 
 
 def build_local_snippet(
@@ -62,12 +72,12 @@ def build_local_snippet(
     metadata: dict[str, Any] | None = None,
     max_length: int = SNIPPET_CHAR_LIMIT,
 ) -> str:
-    normalized = str(text or "").strip()
+    normalized = str(text or "")
     if not normalized:
         return ""
     metadata = dict(metadata or {})
     if _should_preserve_full_chunk(metadata=metadata) and _looks_like_code_extraction_query(query):
-        return normalized
+        return normalized.strip("\r\n")
     return build_query_focused_snippet(normalized, query=query, max_length=max_length)
 
 
@@ -85,6 +95,7 @@ def _looks_like_code_extraction_query(query: str) -> bool:
             "code snippet",
             "line",
             "cell",
+            "인용", "발췌", "추출", "원문", "그대로", "코드 조각",
         )
     )
 
@@ -152,6 +163,11 @@ def _line_start_for_offset(text: str, offset: int) -> int:
 
 
 def _slice_window(text: str, *, start: int, max_length: int) -> str:
+    start, end = _window_bounds(text, start=start, max_length=max_length)
+    return text[start:end]
+
+
+def _window_bounds(text: str, *, start: int, max_length: int) -> tuple[int, int]:
     line_limited_end = _line_end_after_n_lines(
         text,
         start=start,
@@ -162,10 +178,11 @@ def _slice_window(text: str, *, start: int, max_length: int) -> str:
         line_end = text.rfind("\n", start + 1, end)
         if line_end > start:
             end = line_end
-    snippet = text[start:end].strip()
-    if snippet:
-        return snippet
-    return text[start : min(len(text), start + max_length)].strip()
+    while start < end and text[start] in "\r\n":
+        start += 1
+    while end > start and text[end - 1] in "\r\n":
+        end -= 1
+    return start, end
 
 
 def _line_end_after_n_lines(text: str, *, start: int, line_limit: int) -> int:
@@ -188,38 +205,37 @@ def _coerce_non_negative_int(value: Any) -> int:
     return max(0, coerced)
 
 
-def build_local_evidence_bundle(
+def build_local_hit_bundle(
     docs_with_scores: list[tuple[Any, float | None]],
     *,
     query: str,
-    tool_name: str,
-    default_source: str,
-) -> tuple[list[dict[str, Any]], list[float], list[float], list[str]]:
-    evidence_items = []
+) -> tuple[list[SearchHit], list[float], list[float], list[str]]:
+    hits: list[SearchHit] = []
     retrieval_warnings: list[str] = []
     raw_scores: list[float] = []
     normalized_scores: list[float] = []
-    for doc, score, raw_score in score_ranked_rows(docs_with_scores):
-        if not hasattr(doc, "metadata"):
+    for rank, (doc, score, raw_score) in enumerate(score_ranked_rows(docs_with_scores), start=1):
+        metadata = getattr(doc, "metadata", {})
+        try:
+            indexed = EvidenceRef.model_validate_json(metadata["evidence_ref"])
+            chunk_text = indexed.excerpt
+            if str(doc.page_content or "") != chunk_text:
+                raise ValueError("Indexed text differs from its source range")
+            if _should_preserve_full_chunk(metadata=metadata) and _looks_like_code_extraction_query(query):
+                start, end = 0, len(chunk_text)
+            else:
+                start, end = query_focused_range(chunk_text, query=query)
+            evidence = build_evidence(
+                snapshot=indexed.snapshot, element=indexed.element,
+                start=indexed.selection.start + start, end=indexed.selection.start + end,
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            retrieval_warnings.append(f"invalid_source_reference: {exc}")
             continue
-        source = doc.metadata.get("source", default_source)
-        evidence_item = build_evidence_item(
-            kind="local",
-            tool=tool_name,
-            url_or_path=str(source),
-            snippet=build_local_snippet(
-                doc.page_content or "",
-                query=query,
-                metadata=getattr(doc, "metadata", None),
-            ).replace("\n", " "),
-            score=score,
-            metadata=getattr(doc, "metadata", None),
-            warnings=retrieval_warnings,
-        )
-        if evidence_item is not None:
-            evidence_items.append(evidence_item)
-            if raw_score is not None:
-                raw_scores.append(raw_score)
-            if score is not None:
-                normalized_scores.append(score)
-    return dedupe_evidence_dicts(evidence_items), normalized_scores, raw_scores, retrieval_warnings
+        hits.append(SearchHit(evidence=evidence, score=RetrievalScore(
+            metric="l2", raw=raw_score, normalized=score, direction="lower"), rank=rank))
+        if raw_score is not None:
+            raw_scores.append(raw_score)
+        if score is not None:
+            normalized_scores.append(score)
+    return dedupe_search_hits(hits), normalized_scores, raw_scores, retrieval_warnings

@@ -8,6 +8,7 @@ from unittest.mock import patch
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 
+from src.core.evidence import EvidenceRef, parse_search_hits
 from src.infra.chunking import chunk_notebook_path, chunk_python_text
 from src.infra.tools.local_rag import build_temp_retriever, build_upload_search_tool
 from src.infra.tools.local_rag.ranking import rank_retrieval_rows
@@ -50,6 +51,91 @@ def _write_notebook(path: Path, *sources: str) -> None:
 
 
 class LocalRagTest(unittest.TestCase):
+    @patch("src.infra.chroma_store.OpenAIEmbeddings", return_value=_FakeEmbeddings())
+    def test_index_metadata_stays_compact_and_returned_citations_survive_cleanup(self, _embeddings) -> None:
+        """The real index stores lightweight locations while returned citations own their source."""
+        text = ("# source marker\n" + ("value = 123456789\n" * 1400))[:20480]
+        with TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "uploads" / "compact-index" / "source.py"
+            path.parent.mkdir(parents=True)
+            path.write_bytes(text.encode("utf-8"))
+            handle = build_temp_retriever(str(path), api_key="test-key")
+            try:
+                stored = handle.retriever.vectorstore.get()["metadatas"]
+                self.assertTrue(stored)
+                self.assertTrue(all("evidence_ref" not in metadata for metadata in stored))
+                metadata_bytes = sum(len(json.dumps(metadata).encode("utf-8")) for metadata in stored)
+                self.assertLess(metadata_bytes, len(text.encode("utf-8")) * 2)
+                payload = build_upload_search_tool()(query="value", k=2, retriever=handle.retriever)
+                returned = parse_search_hits(payload)
+                direct = handle.retriever.invoke("value")
+                self.assertTrue(direct)
+                self.assertTrue(all(EvidenceRef.model_validate_json(doc.metadata["evidence_ref"]).element.text == text for doc in direct))
+            finally:
+                handle.cleanup()
+            path.unlink()
+        self.assertTrue(returned)
+        self.assertTrue(all(hit.evidence.element.text == text for hit in returned))
+        self.assertTrue(all(hit.evidence.excerpt == text[hit.evidence.selection.start:hit.evidence.selection.end] for hit in returned))
+
+    def test_selected_hit_retains_exact_source_text_after_file_removal(self) -> None:
+        """A query excerpt keeps its exact range and complete element after the source disappears."""
+        from src.infra.tools.local_rag.serialization import build_local_hit_bundle
+
+        text = "# 한글 원문\r\n" + ("setup = 1\r\n" * 60) + "if ready:\r\n    target_call(\r\n        random_state=42\r\n    )\r\n"
+        with TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "source.py"
+            path.write_bytes(text.encode("utf-8"))
+            indexed = chunk_python_text(path=str(path), text=text, chunk_size=1000, chunk_overlap=100)
+            target = next(doc for doc in indexed.chunks if "target_call" in doc.page_content)
+            hits, _, _, errors = build_local_hit_bundle([(indexed.hydrate(target), 0.2)], query="target_call random_state")
+            path.unlink()
+        self.assertEqual(errors, [])
+        hit = hits[0]
+        self.assertEqual(hit.evidence.element.text, text)
+        self.assertEqual(hit.evidence.excerpt, text[hit.evidence.selection.start:hit.evidence.selection.end])
+        self.assertIn("    target_call(", hit.evidence.excerpt)
+        self.assertIn("\r\n", hit.evidence.excerpt)
+        self.assertEqual(hit.score.raw, 0.2)
+
+    def test_same_path_changed_content_has_new_snapshot_identity(self) -> None:
+        """Source identity distinguishes different bytes saved at the same path."""
+        from src.infra.tools.local_rag.serialization import build_local_hit_bundle
+
+        def snapshot(text):
+            indexed = chunk_python_text(path="uploads/session/code.py", text=text, chunk_size=800, chunk_overlap=120)
+            hits, _, _, _ = build_local_hit_bundle([(indexed.hydrate(indexed.chunks[0]), None)], query="target")
+            return hits[0].evidence.snapshot
+
+        original = snapshot("target = 1\n")
+        changed = snapshot("target = 2\n")
+        self.assertEqual(original.document_id, changed.document_id)
+        self.assertNotEqual(original.snapshot_id, changed.snapshot_id)
+        self.assertNotEqual(original.content_hash, changed.content_hash)
+
+    def test_chunk_boundary_does_not_discard_complete_source_ast(self) -> None:
+        """Code facts retain original line numbers even when indexing splits a call."""
+        text = "# setup\n" * 20 + "model = train_model(\n    data,\n    learning_rate=0.01,\n    epochs=20,\n)\n"
+        indexed = chunk_python_text(path="uploads/session/model.py", text=text, chunk_size=45, chunk_overlap=5)
+        chunk = next(doc for doc in indexed.chunks if "learning_rate" in doc.page_content)
+        evidence = EvidenceRef.model_validate_json(indexed.hydrate(chunk).metadata["evidence_ref"])
+        call = evidence.element.metadata["code_metadata"]["calls"][0]
+        self.assertEqual(call, {"call_name": "train_model", "kwargs": {"learning_rate": "0.01", "epochs": "20"}, "line": 21})
+
+    def test_query_changes_selection_without_changing_snapshot_or_element(self) -> None:
+        """Different queries select different ranges in the same preserved element."""
+        from src.infra.tools.local_rag.serialization import build_local_hit_bundle
+
+        text = "alpha(value=1)\n" + "setup = 1\n" * 12 + "beta(value=2)\n"
+        indexed = chunk_python_text(path="uploads/session/query.py", text=text, chunk_size=800, chunk_overlap=120)
+        doc = indexed.hydrate(indexed.chunks[0])
+        first = build_local_hit_bundle([(doc, 0.2)], query="alpha")[0][0].evidence
+        second = build_local_hit_bundle([(doc, 0.3)], query="beta")[0][0].evidence
+        self.assertEqual(first.snapshot, second.snapshot)
+        self.assertEqual(first.element, second.element)
+        self.assertNotEqual(first.selection, second.selection)
+        self.assertNotEqual(first.id, second.id)
+
     def test_build_query_focused_snippet_centers_on_matching_identifier(self) -> None:
         text = (
             "import pandas as pd\n\n"
@@ -156,19 +242,20 @@ class LocalRagTest(unittest.TestCase):
     def test_chunk_python_text_annotates_document_counts(self) -> None:
         text = "line = 1\n" * 240
 
-        docs = chunk_python_text(
+        indexed = chunk_python_text(
             path="uploads/session/sample.py",
             text=text,
             chunk_size=200,
             chunk_overlap=20,
         )
 
+        docs = indexed.chunks
         self.assertGreater(len(docs), 1)
         self.assertTrue(all(doc.metadata["document_chunk_count"] == len(docs) for doc in docs))
         self.assertTrue(all(doc.metadata["document_char_count"] == len(text) for doc in docs))
 
     def test_chunk_python_text_adds_ast_code_metadata(self) -> None:
-        docs = chunk_python_text(
+        indexed = chunk_python_text(
             path="uploads/session/model.py",
             text=(
                 "from sklearn.linear_model import LogisticRegression\n"
@@ -178,7 +265,7 @@ class LocalRagTest(unittest.TestCase):
             chunk_overlap=120,
         )
 
-        metadata = json.loads(docs[0].metadata["code_metadata"])
+        metadata = indexed.parsed.elements[0].metadata["code_metadata"]
         self.assertEqual(metadata["calls"][0]["call_name"], "LogisticRegression")
         self.assertEqual(metadata["calls"][0]["kwargs"]["max_iter"], "200")
         self.assertIn("max_iter=200", metadata["option_literals"])
@@ -194,17 +281,16 @@ class LocalRagTest(unittest.TestCase):
                 "model = LogisticRegression(max_iter=200)\n",
             )
 
-            docs = chunk_notebook_path(
+            indexed = chunk_notebook_path(
                 path=str(notebook_path),
                 chunk_size=800,
                 chunk_overlap=120,
             )
 
         matching = [
-            json.loads(doc.metadata["code_metadata"])
-            for doc in docs
-            if "code_metadata" in doc.metadata
-            and "LogisticRegression" in doc.metadata["code_metadata"]
+            element.metadata["code_metadata"]
+            for element in indexed.parsed.elements
+            if "LogisticRegression" in element.text
         ]
         self.assertEqual(matching[0]["cell_id"], 2)
         self.assertEqual(matching[0]["calls"][0]["call_name"], "LogisticRegression")
@@ -238,18 +324,19 @@ class LocalRagTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            docs = chunk_notebook_path(
+            indexed = chunk_notebook_path(
                 path=str(notebook_path),
                 chunk_size=800,
                 chunk_overlap=120,
             )
 
+        docs = indexed.chunks
         self.assertEqual(len(docs), 1)
         expected_source = (
             "from sklearn.preprocessing import StandardScaler\n"
             "scaler = StandardScaler()\n"
         )
-        self.assertEqual(docs[0].page_content, expected_source.strip())
+        self.assertEqual(docs[0].page_content, expected_source)
         self.assertEqual(docs[0].metadata["document_char_count"], len(expected_source))
         snippet = build_local_snippet(
             docs[0].page_content,
@@ -284,7 +371,7 @@ class LocalRagTest(unittest.TestCase):
         self.assertEqual(ranked[0][0].metadata["cell_id"], 2)
 
     @patch("src.infra.chroma_store.OpenAIEmbeddings", return_value=_FakeEmbeddings())
-    def test_upload_rag_search_uses_canonical_copy_and_raw_l2_scores_without_userwarning(
+    def test_upload_rag_search_preserves_notebook_snapshot_and_raw_l2_scores_without_userwarning(
         self,
         _mock_openai_embeddings,
     ) -> None:
@@ -311,20 +398,17 @@ class LocalRagTest(unittest.TestCase):
                 finally:
                     handle.cleanup()
 
-            canonical_path = notebook_path.parent / ".canonical" / notebook_path.name
             self.assertEqual(caught, [])
-            self.assertTrue(canonical_path.exists())
+            self.assertFalse((notebook_path.parent / ".canonical").exists())
             self.assertEqual(payload["diagnostics"]["metric"], "l2")
             self.assertEqual(payload["diagnostics"]["score_direction"], "lower_is_better")
             self.assertEqual(payload["diagnostics"]["route"], "upload")
-            self.assertEqual(
-                {
-                    (item["kind"], item["tool"], item["url_or_path"])
-                    for item in payload["evidence"]
-                },
-                {("local", "upload_search", str(notebook_path))},
-            )
-            self.assertTrue(all(0.0 <= item["score"] <= 1.0 for item in payload["evidence"]))
+            hits = parse_search_hits(payload)
+            self.assertEqual({(hit.evidence.snapshot.source_type, hit.evidence.snapshot.source_uri) for hit in hits},
+                             {("upload", str(notebook_path))})
+            self.assertTrue(all(0.0 <= hit.score.normalized <= 1.0 for hit in hits))
+            self.assertTrue(all(hit.evidence.element.anchors[0].cell_id for hit in hits))
+            self.assertTrue(all(hit.evidence.snapshot.capture_scope == "full_document" for hit in hits))
 
 
 if __name__ == "__main__":
