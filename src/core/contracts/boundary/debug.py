@@ -30,10 +30,10 @@ def parse_retry_state(value: Any) -> RetryState:
         "low_score",
         "tool_error",
         "blocked_missing_upload",
-        "unsupported_claims",
+        "unresolved_references",
         "missing",
         "missing_route_coverage",
-        "missing_sections",
+        "missing_content",
     }:
         retry_state.retry_reason = retry_reason
 
@@ -43,9 +43,9 @@ def parse_retry_state(value: Any) -> RetryState:
     if retrieval_feedback is not None:
         retry_state.retrieval_feedback = str(retrieval_feedback).strip()
 
-    evidence_start_index = value.get("evidence_start_index")
-    if isinstance(evidence_start_index, int) and evidence_start_index >= 0:
-        retry_state.evidence_start_index = evidence_start_index
+    hit_start_index = value.get("hit_start_index")
+    if isinstance(hit_start_index, int) and hit_start_index >= 0:
+        retry_state.hit_start_index = hit_start_index
 
     retrieval_error_start_index = value.get("retrieval_error_start_index")
     if isinstance(retrieval_error_start_index, int) and retrieval_error_start_index >= 0:
@@ -66,14 +66,14 @@ def parse_retry_state(value: Any) -> RetryState:
         retry_state.failed_routes = normalize_recorded_routes(failed_routes)
 
     retry_scope = value.get("retry_scope")
-    if retry_scope in {"refresh_routes", "reuse_evidence_resynthesize"}:
+    if retry_scope in {"refresh_routes", "reuse_hits_resynthesize"}:
         retry_state.retry_scope = retry_scope
 
-    preserved_evidence = value.get("preserved_evidence")
-    if isinstance(preserved_evidence, list):
-        retry_state.preserved_evidence = [
+    preserved_hits = value.get("preserved_hits")
+    if isinstance(preserved_hits, list):
+        retry_state.preserved_hits = [
             json_safe_deep_copy(item)
-            for item in preserved_evidence
+            for item in preserved_hits
             if isinstance(item, dict)
         ]
 
@@ -218,13 +218,13 @@ def parse_debug_payload(value: Any) -> DebugPayload:
     if not isinstance(value, dict):
         return DebugPayload()
 
-    observed_evidence = (
+    observed_hits = (
         [
             dict(item)
-            for item in value.get("observed_evidence", [])
+            for item in value.get("observed_hits", [])
             if isinstance(item, dict)
         ]
-        if isinstance(value.get("observed_evidence"), list)
+        if isinstance(value.get("observed_hits"), list)
         else []
     )
     raw_schema_version = value.get("schema_version", DEBUG_SCHEMA_VERSION)
@@ -284,7 +284,7 @@ def parse_debug_payload(value: Any) -> DebugPayload:
         planner_errors=[str(item) for item in value.get("planner_errors", []) if str(item).strip()]
         if isinstance(value.get("planner_errors"), list)
         else [],
-        observed_evidence=observed_evidence,
+        observed_hits=observed_hits,
         retry_context=parse_retry_state(value.get("retry_context")) if value.get("retry_context") else None,
         retrieval_diagnostics=parse_retrieval_diagnostics(value.get("retrieval_diagnostics")),
         planner_diagnostics=parse_planner_diagnostic(value.get("planner_diagnostics")),

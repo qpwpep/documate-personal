@@ -2,13 +2,14 @@ import json
 import unittest
 
 import requests
-from langchain_core.documents import Document
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage
 
+from src.core.answer_schema import export_answer_text
 from src.core.contracts.boundary.debug import get_debug_state
+from src.infra.chunking import chunk_python_text
 from src.core.contracts.boundary.graph import build_graph_state_input
 from src.runtime.agent_runtime.debug_collector import DebugCollector
 from src.runtime.graph_builder import _instrument_stage_node, build_agent_graph
@@ -29,19 +30,28 @@ def _http_response(url: str, payload: dict | None = None) -> requests.Response:
 
 class _UploadVectorStore:
     def similarity_search_with_score(self, query: str, k: int = 4):
-        return [(
-            Document(
-                page_content="X = np.concatenate([train, test], axis=0)",
-                metadata={
-                    "source": "uploads/demo/sample_pipeline.ipynb",
-                    "cell_id": 1,
-                    "chunk_id": 0,
-                    "start_offset": 0,
-                    "end_offset": 64,
-                },
-            ),
-            0.2,
-        )]
+        documents = chunk_python_text(
+            path="uploads/demo/sample_pipeline.py",
+            text="X = np.concatenate([train, test], axis=0)",
+            chunk_size=800, chunk_overlap=120,
+        )
+        return [(documents.hydrate(document), 0.2) for document in documents.chunks]
+
+
+class _EvidenceAwareSynthesisLLM(_CaptureStructuredSynthesizeLLM):
+    def invoke(self, messages):
+        packet_text = next(message.content for message in messages if str(message.content).startswith("[Evidence Packet]"))
+        packet = json.loads(packet_text.split("\n", 2)[2])
+        docs = next(item for item in packet if item["source_type"] == "official")
+        upload = next(item for item in packet if item["source_type"] == "upload")
+        self.payload = {"blocks": [
+            {"type": "paragraph", "content": [
+                {"text": "NumPy concatenate joins arrays along an existing axis.", "basis": "source", "refs": [docs["id"]]},
+                {"text": "The uploaded code combines train and test using axis=0.", "basis": "inference", "refs": [docs["id"], upload["id"]]},
+            ]},
+            {"type": "code", "language": "python", "content": {"text": upload["excerpt"], "basis": "excerpt", "refs": [upload["id"]]}},
+        ]}
+        return super().invoke(messages)
 
 
 class GraphBuilderDebugTest(unittest.TestCase):
@@ -99,8 +109,8 @@ class GraphBuilderDebugTest(unittest.TestCase):
                 messages=[],
                 debug={
                     "retrieval_errors": ["tavily_search: failed (timeout)"],
-                    "validation_errors": ["validate_evidence: retry_reason=unsupported_claims"],
-                    "validation_events": ["validate_evidence: retry_reason=unsupported_claims"],
+                    "validation_errors": ["validate_evidence: retry_reason=unresolved_references"],
+                    "validation_events": ["validate_evidence: retry_reason=unresolved_references"],
                 },
             ),
             updated_messages=[HumanMessage(content="question")],
@@ -111,7 +121,7 @@ class GraphBuilderDebugTest(unittest.TestCase):
         self.assertEqual(debug["errors"], ["tavily_search: failed (timeout)"])
         self.assertEqual(
             debug["validation_events"],
-            ["validate_evidence: retry_reason=unsupported_claims"],
+            ["validate_evidence: retry_reason=unresolved_references"],
         )
 
     @patch("requests.head")
@@ -136,30 +146,18 @@ class GraphBuilderDebugTest(unittest.TestCase):
             }]},
         )
         settings = AppSettings(openai_api_key="test", tavily_api_key="test")
-        provider_model.side_effect = lambda **kwargs: _CaptureStructuredSynthesizeLLM(
-            payload={
-                "use_retrieval": True,
-                "tasks": [
-                    {"route": "docs", "query": "numpy concatenate official docs", "k": 3},
-                    {"route": "upload", "query": "numpy concatenate uploaded example", "k": 3},
-                ],
-            } if kwargs.get("model") == settings.planner_model else {
-                "answer": "공식 설명과 업로드 비교를 정리했습니다.",
-                "claims": [
-                    {
-                        "text": "NumPy concatenate는 기존 축을 따라 배열 시퀀스를 결합한다.",
-                        "evidence_ids": ["url:https://numpy.org/doc/stable/reference/generated/numpy.concatenate.html"],
-                        "confidence": 0.94,
-                    },
-                    {
-                        "text": "업로드 파일은 axis=0으로 train/test를 이어 붙이는 예시를 사용한다.",
-                        "evidence_ids": ["path:uploads/demo/sample_pipeline.ipynb#cell=1;chunk=0;start=0;end=64"],
-                        "confidence": 0.88,
-                    },
-                ],
-                "confidence": 0.91,
-            },
-        )
+        def provider(**kwargs):
+            if kwargs.get("model") == settings.planner_model:
+                return _CaptureStructuredSynthesizeLLM(payload={
+                    "use_retrieval": True,
+                    "tasks": [
+                        {"route": "docs", "query": "numpy concatenate official docs", "k": 3},
+                        {"route": "upload", "query": "numpy concatenate uploaded example", "k": 3},
+                    ],
+                }, include_raw=True)
+            return _EvidenceAwareSynthesisLLM(include_raw=True)
+
+        provider_model.side_effect = provider
 
         graph = build_agent_graph(settings)
         result = graph.invoke(
@@ -187,13 +185,17 @@ class GraphBuilderDebugTest(unittest.TestCase):
         )
         self.assertEqual(debug.planner_errors, [])
         self.assertEqual(
-            {source_id for claim in result["response"].payload.claims for source_id in claim.evidence_ids},
-            {
-                "url:https://numpy.org/doc/stable/reference/generated/numpy.concatenate.html",
-                "path:uploads/demo/sample_pipeline.ipynb#cell=1;chunk=0;start=0;end=64",
-            },
+            {citation.evidence.snapshot.source_type for citation in result["response"].result.citations},
+            {"official", "upload"},
         )
-        self.assertTrue(result["response"].final_answer)
+        self.assertTrue(export_answer_text(result["response"].result))
+        self.assertEqual(
+            [message.content for message in result["messages"] if isinstance(message, AIMessage)],
+            [export_answer_text(result["response"].result)],
+        )
+        self.assertTrue(all(check.reference_status != "missing" for check in result["response"].result.checks))
+        self.assertIn("exact_match", {check.support_status for check in result["response"].result.checks})
+
 
 
 if __name__ == "__main__":

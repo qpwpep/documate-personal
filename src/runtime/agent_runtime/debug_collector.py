@@ -11,7 +11,7 @@ from src.core.contracts.boundary.graph import get_retry_state
 from src.core.contracts.boundary.planner import get_planner_state, parse_planner_diagnostic
 from src.core.contracts.boundary.response import get_response_state
 from src.core.contracts.boundary.retrieval import parse_retrieval_diagnostics
-from src.core.evidence import dedupe_evidence, evidence_to_dicts, parse_evidence_payload
+from src.core.evidence import dedupe_search_hits, parse_search_hits
 from src.core.latency import build_latency_breakdown
 
 
@@ -171,14 +171,14 @@ class DebugCollector:
         return tool_names
 
     @staticmethod
-    def _extract_observed_evidence(
+    def _extract_observed_hits(
         current_turn_messages: list[Any],
         *,
         errors: list[str],
     ) -> list[dict[str, Any]]:
         collected = []
-        # Read evidence in legacy traces as well as the currently executable tools.
-        evidence_tools = {"tavily_search", "rag_search", "upload_search"}
+        # Only this turn's retrieval tool results count as observed sources.
+        evidence_tools = {"tavily_search", "upload_search"}
 
         for message in current_turn_messages:
             if not isinstance(message, ToolMessage):
@@ -188,24 +188,23 @@ class DebugCollector:
             if tool_name not in evidence_tools:
                 continue
 
-            parsed_items = parse_evidence_payload(
+            parsed_items = parse_search_hits(
                 getattr(message, "content", None),
-                context=f"tool:{tool_name}",
                 errors=errors,
             )
             collected.extend(parsed_items)
 
-        return evidence_to_dicts(dedupe_evidence(collected))
+        return [hit.model_dump(mode="json") for hit in dedupe_search_hits(collected)]
 
     @staticmethod
     def _normalize_retry_context(raw_retry_context: Any) -> dict[str, Any] | None:
         retry = parse_retry_state(raw_retry_context)
         payload = retry.model_dump(mode="json")
-        payload.pop("preserved_evidence", None)
+        payload.pop("preserved_hits", None)
         payload.pop("preserved_retrieval_diagnostics", None)
         if not retry.needs_retry and retry.attempt <= 0 and retry.retry_reason is None and not retry.retrieval_feedback:
             if (
-                retry.evidence_start_index == 0
+                retry.hit_start_index == 0
                 and retry.retrieval_error_start_index == 0
                 and retry.retrieval_diagnostic_start_index == 0
                 and retry.score_avg is None
@@ -321,7 +320,7 @@ class DebugCollector:
             elif isinstance(message, ToolMessage) and getattr(message, "name", ""):
                 tool_calls.append(str(message.name))
 
-        observed_evidence = self._extract_observed_evidence(
+        observed_hits = self._extract_observed_hits(
             current_turn_messages,
             errors=debug_errors,
         )
@@ -362,7 +361,7 @@ class DebugCollector:
             "validation_events": list(state_debug.validation_events or []),
             "edge_decisions": list(state_debug.edge_decisions or []),
             "planner_errors": planner_errors,
-            "observed_evidence": observed_evidence,
+            "observed_hits": observed_hits,
             "retry_context": retry_context,
             "retrieval_diagnostics": retrieval_diagnostics,
             "planner_diagnostics": planner_diagnostics,

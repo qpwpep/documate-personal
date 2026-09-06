@@ -15,10 +15,8 @@ ErrorCode = Literal[
     "UPLOAD_RETRIEVER_BUILD_FAILED",
     "LLM_STRUCTURED_EMPTY",
     "SYNTHESIS_TIMEOUT",
-    "VALIDATION_UNSUPPORTED_CLAIMS",
-    "HYBRID_SECTION_REPEATED",
-    "HYBRID_UPLOAD_SETTING_MISSING",
-    "HYBRID_COMPARISON_WEAK",
+    "VALIDATION_UNRESOLVED_REFERENCES",
+    "VALIDATION_MISSING_CONTENT",
     "DEBUG_NORMALIZATION_FAILED",
     "SLACK_AUTH_FAILED",
     "SLACK_DESTINATION_MISSING",
@@ -29,10 +27,10 @@ RetryReason = Literal[
     "low_score",
     "tool_error",
     "blocked_missing_upload",
-    "unsupported_claims",
+    "unresolved_references",
     "missing",
     "missing_route_coverage",
-    "missing_sections",
+    "missing_content",
 ]
 PlannerStatus = Literal["llm", "deterministic", "heuristic_fallback", "fallback_no_routes"]
 PlannerOverrideReason = Literal[
@@ -56,8 +54,11 @@ RETRYABLE_REASONS: set[RetryReason] = {
     "low_score",
     "tool_error",
     "missing",
+    "unresolved_references",
+    "missing_content",
+    "missing_route_coverage",
 }
-DEBUG_SCHEMA_VERSION = 5
+DEBUG_SCHEMA_VERSION = 6
 # Historical diagnostics can contain retired routes; these never enable execution.
 RECORDED_ROUTE_ORDER: tuple[str, ...] = ("docs", "upload", "local")
 DebugObservabilityStatus = Literal["ok", "degraded", "failed"]
@@ -75,7 +76,7 @@ DEBUG_REQUIRED_FIELDS: tuple[str, ...] = (
     "llm_calls",
     "errors",
     "planner_errors",
-    "observed_evidence",
+    "observed_hits",
     "retry_context",
     "retrieval_diagnostics",
     "planner_diagnostics",
@@ -87,7 +88,7 @@ DEBUG_CRITICAL_FIELDS: tuple[str, ...] = (
     "missing_required_debug_fields",
     "tool_calls",
     "tool_call_count",
-    "observed_evidence",
+    "observed_hits",
     "retrieval_diagnostics",
     "latency_breakdown",
 )
@@ -105,14 +106,14 @@ class RetryState(BaseModel):
     max_retries: int = DEFAULT_MAX_RETRIES
     retry_reason: RetryReason | None = None
     retrieval_feedback: str = ""
-    evidence_start_index: int = 0
+    hit_start_index: int = 0
     retrieval_error_start_index: int = 0
     retrieval_diagnostic_start_index: int = 0
     score_avg: float | None = None
     failed_routes: list[str] = Field(default_factory=list)
-    preserved_evidence: list[dict[str, Any]] = Field(default_factory=list)
+    preserved_hits: list[dict[str, Any]] = Field(default_factory=list)
     preserved_retrieval_diagnostics: list[RetrievalDiagnostic] = Field(default_factory=list)
-    retry_scope: Literal["refresh_routes", "reuse_evidence_resynthesize"] = "refresh_routes"
+    retry_scope: Literal["refresh_routes", "reuse_hits_resynthesize"] = "refresh_routes"
 
 
 class PlannerDiagnostic(BaseModel):
@@ -204,7 +205,7 @@ class DebugPayload(BaseModel):
     validation_events: list[str] = Field(default_factory=list)
     edge_decisions: list[dict[str, Any]] = Field(default_factory=list)
     planner_errors: list[str] = Field(default_factory=list)
-    observed_evidence: list[dict[str, Any]] = Field(default_factory=list)
+    observed_hits: list[dict[str, Any]] = Field(default_factory=list)
     retry_context: RetryState | None = None
     retrieval_diagnostics: list[RetrievalDiagnostic] = Field(default_factory=list)
     planner_diagnostics: PlannerDiagnostic | None = None
