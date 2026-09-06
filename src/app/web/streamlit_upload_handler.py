@@ -40,24 +40,21 @@ def sync_uploaded_file(
             error_message="Invalid upload filename",
         )
 
-    if safe_file_name == safe_current_file_name:
-        return UploadSyncResult(
-            file_name=safe_current_file_name,
-            changed=False,
-            removed=False,
-        )
-
     file_path_on_disk = session_path / safe_file_name
     try:
-        if safe_current_file_name and safe_current_file_name not in {".", ".."}:
+        content = bytes(uploaded_file.getbuffer())
+        if safe_file_name == safe_current_file_name and file_path_on_disk.is_file():
+            if file_path_on_disk.read_bytes() == content:
+                return UploadSyncResult(file_name=safe_file_name, changed=False, removed=False)
+
+        file_path_on_disk.write_bytes(content)
+
+        if safe_current_file_name and safe_current_file_name not in {safe_file_name, ".", ".."}:
             old_path = session_path / safe_current_file_name
             try:
                 old_path.unlink()
             except FileNotFoundError:
                 pass
-
-        with open(file_path_on_disk, "wb") as file_obj:
-            file_obj.write(uploaded_file.getbuffer())
 
         return UploadSyncResult(
             file_name=safe_file_name,
