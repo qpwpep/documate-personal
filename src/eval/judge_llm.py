@@ -7,9 +7,8 @@ from typing import Any
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 
-from src.core.answer_schema import AnswerSection, ClaimItem
-from src.core.contracts.debug import ActionResults
-from src.core.evidence import EvidenceItem
+from src.core.answer_schema import AnswerResponse
+from src.core.evidence import SearchHit
 from .config_models import BenchmarkCase
 from .result_models import JudgeSubscores
 
@@ -30,8 +29,8 @@ Return ONLY JSON with this schema:
 
 Scoring guidance:
 - answer_quality: whether the response actually answers the user's request with useful substance rather than copying snippets.
-- groundedness: whether the claims stay supported by the supplied evidence and diagnostics.
-- citation_traceability: whether claims can be traced to response evidence and observed evidence.
+- groundedness: whether the exact displayed content units are supported by their referenced source snapshots. Resolved references are not semantic proof; not_evaluated means no support assessment has run.
+- citation_traceability: whether displayed refs resolve to the same versioned source and canonical element in observed hits, with cited text ranges or table cells contained in the observed selection. Budgeted subranges have different reference IDs but remain traceable. Logical element positions are valid even when physical page coordinates are unavailable.
 - tool_choice: whether the executed tools and retrieval routes match case expectations.
 - format_language: whether the response follows the requested structure and restates in the user's language.
 
@@ -39,12 +38,11 @@ Failure guidance:
 - Penalize heavily if the response mainly lists links or pasted snippets instead of synthesizing.
 - Penalize if the response does not restate in the user's language.
 - For docs-focused cases, prioritize official documentation summaries over generic web-style summaries.
-- For hybrid cases, expect the official explanation and the comparison with the case's code evidence to be clearly separated.
-- For hybrid cases, treat a missing comparison section as a significant quality failure.
-- Use response.sections as the primary structure signal when it is present.
+- For hybrid cases, assess whether the displayed content actually compares the official source and uploaded code; no particular block title or layout is required.
+- Evaluate response.content directly. It is the exact document rendered to the user and exported for delivery.
 - For tool_action cases, do not expect citations or retrieval grounding when the case itself does not require them.
-- For tool_action cases, prefer responses that contain a usable body first and a clear execution receipt such as a saved path or Slack destination after it.
-- For live Slack delivery cases, treat action_results.slack_notify.status of ok/success as completion, and treat skipped/error/unknown as incomplete delivery.
+- For tool_action cases, expect usable content and a separate action receipt; do not require a receipt appended to the body.
+- For live Slack delivery cases, a slack_notify action with status success is completion; skipped/error or a missing action is incomplete delivery.
 - For Korean queries, a non-Korean answer should score 0 on format_language.
 - Use validator_reason, retrieval_diagnostics, planner_diagnostics, and synthesis_mode as evidence when scoring.
 - If the supplied evaluation input is incomplete or inconsistent, reflect that in the reason, but still score the visible response quality.
@@ -105,7 +103,7 @@ def _is_payload_complete(payload: dict[str, Any]) -> bool:
     required_top_level = (
         "case",
         "response",
-        "observed_evidence",
+        "observed_hits",
         "retrieval_diagnostics",
         "planner_diagnostics",
         "validator_reason",
@@ -113,41 +111,7 @@ def _is_payload_complete(payload: dict[str, Any]) -> bool:
     )
     if any(key not in payload for key in required_top_level):
         return False
-    return all(key in response for key in ("text", "claims", "evidence", "sections"))
-
-
-def _serialize_claims(claims: list[ClaimItem] | list[dict[str, Any]] | None) -> list[dict[str, Any]]:
-    serialized: list[dict[str, Any]] = []
-    for item in claims or []:
-        if isinstance(item, ClaimItem):
-            serialized.append(item.model_dump(mode="json"))
-        elif isinstance(item, dict):
-            serialized.append(_normalize_jsonable(item))
-    return serialized
-
-
-def _serialize_evidence(
-    evidence: list[EvidenceItem] | list[dict[str, Any]] | None,
-) -> list[dict[str, Any]]:
-    serialized: list[dict[str, Any]] = []
-    for item in evidence or []:
-        if isinstance(item, EvidenceItem):
-            serialized.append(item.model_dump(mode="json"))
-        elif isinstance(item, dict):
-            serialized.append(_normalize_jsonable(item))
-    return serialized
-
-
-def _serialize_sections(
-    sections: list[AnswerSection] | list[dict[str, Any]] | None,
-) -> list[dict[str, Any]]:
-    serialized: list[dict[str, Any]] = []
-    for item in sections or []:
-        if isinstance(item, AnswerSection):
-            serialized.append(item.model_dump(mode="json"))
-        elif isinstance(item, dict):
-            serialized.append(_normalize_jsonable(item))
-    return serialized
+    return all(key in response for key in ("content", "citations", "checks", "actions", "content_hash"))
 
 
 class LLMJudge:
@@ -170,20 +134,17 @@ class LLMJudge:
         self,
         *,
         case: BenchmarkCase,
-        response_text: str,
         tool_calls: list[str],
-        claims: list[dict[str, Any]] | None = None,
-        response_evidence: list[dict[str, Any]] | None = None,
-        sections: list[dict[str, Any]] | None = None,
-        observed_evidence: list[dict[str, Any]] | None = None,
+        response: AnswerResponse | None,
+        observed_hits: list[SearchHit] | None = None,
         retrieval_diagnostics: list[dict[str, Any]] | None = None,
         planner_diagnostics: dict[str, Any] | None = None,
         validator_reason: str | None = None,
         synthesis_mode: str | None = None,
-        valid_claim_count: int | None = None,
-        invalid_claim_count: int | None = None,
+        resolved_unit_count: int = 0,
+        missing_reference_unit_count: int = 0,
+        unchecked_unit_count: int = 0,
         tool_call_count: int | None = None,
-        action_results: dict[str, Any] | ActionResults | None = None,
         slack_delivery_required: bool = False,
     ) -> tuple[float | None, str | None, str | None, JudgeSubscores | None]:
         if not self.enabled:
@@ -193,20 +154,17 @@ class LLMJudge:
 
         user_prompt = self.build_case_payload(
             case=case,
-            response_text=response_text,
             tool_calls=tool_calls,
-            claims=claims,
-            response_evidence=response_evidence,
-            sections=sections,
-            observed_evidence=observed_evidence,
+            response=response,
+            observed_hits=observed_hits,
             retrieval_diagnostics=retrieval_diagnostics,
             planner_diagnostics=planner_diagnostics,
             validator_reason=validator_reason,
             synthesis_mode=synthesis_mode,
-            valid_claim_count=valid_claim_count,
-            invalid_claim_count=invalid_claim_count,
+            resolved_unit_count=resolved_unit_count,
+            missing_reference_unit_count=missing_reference_unit_count,
+            unchecked_unit_count=unchecked_unit_count,
             tool_call_count=tool_call_count,
-            action_results=action_results,
             slack_delivery_required=slack_delivery_required,
         )
         if not self.is_payload_complete(user_prompt):
@@ -246,20 +204,17 @@ class LLMJudge:
     def build_case_payload(
         *,
         case: BenchmarkCase,
-        response_text: str,
         tool_calls: list[str],
-        claims: list[ClaimItem] | list[dict[str, Any]] | None = None,
-        response_evidence: list[EvidenceItem] | list[dict[str, Any]] | None = None,
-        sections: list[AnswerSection] | list[dict[str, Any]] | None = None,
-        observed_evidence: list[EvidenceItem] | list[dict[str, Any]] | None = None,
+        response: AnswerResponse | None,
+        observed_hits: list[SearchHit] | None = None,
         retrieval_diagnostics: list[dict[str, Any]] | list[Any] | None = None,
         planner_diagnostics: dict[str, Any] | Any | None = None,
         validator_reason: str | None = None,
         synthesis_mode: str | None = None,
-        valid_claim_count: int | None = None,
-        invalid_claim_count: int | None = None,
+        resolved_unit_count: int = 0,
+        missing_reference_unit_count: int = 0,
+        unchecked_unit_count: int = 0,
         tool_call_count: int | None = None,
-        action_results: ActionResults | dict[str, Any] | None = None,
         slack_delivery_required: bool = False,
     ) -> dict[str, Any]:
         return {
@@ -272,24 +227,19 @@ class LLMJudge:
                 "judge_rubric": case.judge_rubric,
                 "judge_min_score": case.judge_min_score,
             },
-            "response": {
-                "text": response_text,
-                "claims": _serialize_claims(claims),
-                "evidence": _serialize_evidence(response_evidence),
-                "sections": _serialize_sections(sections),
-            },
-            "observed_evidence": _serialize_evidence(observed_evidence),
+            "response": _normalize_jsonable(response),
+            "observed_hits": _normalize_jsonable(observed_hits or []),
             "called_tools": list(tool_calls),
             "tool_call_count": int(tool_call_count or len(tool_calls)),
             "retrieval_diagnostics": _normalize_jsonable(retrieval_diagnostics or []),
             "planner_diagnostics": _normalize_jsonable(planner_diagnostics),
             "validator_reason": validator_reason,
             "synthesis_mode": synthesis_mode,
-            "action_results": _normalize_jsonable(action_results),
             "slack_delivery_required": bool(slack_delivery_required),
-            "claim_stats": {
-                "valid_claim_count": int(valid_claim_count or 0),
-                "invalid_claim_count": int(invalid_claim_count or 0),
+            "content_stats": {
+                "resolved_unit_count": resolved_unit_count,
+                "missing_reference_unit_count": missing_reference_unit_count,
+                "unchecked_unit_count": unchecked_unit_count,
             },
         }
 

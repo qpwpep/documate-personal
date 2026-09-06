@@ -1,11 +1,13 @@
+from src.core.answer_schema import AnswerResponse
+from tests.eval.response_fixtures import plain_response
 import unittest
 
-from src.eval.metric_rules import compute_rule_scores, score_groundedness
+from src.eval.metric_rules import compute_rule_scores, score_reference_coverage
 from src.eval.config_models import BenchmarkCase
 
 
 class ActionOnlyScoringTest(unittest.TestCase):
-    def test_tool_action_groundedness_is_not_penalized_without_retrieval(self) -> None:
+    def test_tool_action_reference_coverage_is_not_penalized_without_retrieval(self) -> None:
         case = BenchmarkCase(
             case_id="tool_action_regression",
             category="tool_action",
@@ -14,16 +16,15 @@ class ActionOnlyScoringTest(unittest.TestCase):
         )
 
         self.assertEqual(
-            score_groundedness(
+            score_reference_coverage(
                 case=case,
-                response_text="저장용 본문\n\n저장 완료: output/response.txt",
-                response_evidence=[],
-                observed_evidence=[],
+                response=AnswerResponse.model_validate(plain_response("저장용 본문\n\n저장 완료: output/response.txt")),
+                observed_hits=[],
             ),
             1.0,
         )
 
-    def test_tool_action_rule_scores_keep_groundedness_at_one(self) -> None:
+    def test_tool_action_rule_scores_keep_reference_coverage_at_one(self) -> None:
         case = BenchmarkCase(
             case_id="tool_action_regression",
             category="tool_action",
@@ -33,16 +34,15 @@ class ActionOnlyScoringTest(unittest.TestCase):
 
         scores = compute_rule_scores(
             case=case,
-            response_text="공유용 본문\n\n전송 완료: Slack (C123BENCH)",
+            response=AnswerResponse.model_validate(plain_response("공유용 본문\n\n전송 완료: Slack (C123BENCH)")),
             called_tools=["slack_notify"],
-            response_evidence=[],
-            observed_evidence=[],
+            observed_hits=[],
             runtime_errors=[],
             response_errors=[],
             judge_errors=[],
         )
 
-        self.assertEqual(scores["groundedness"], 1.0)
+        self.assertEqual(scores["reference_coverage"], 1.0)
         self.assertEqual(scores["citation_traceability"], 1.0)
 
     def test_live_slack_required_case_needs_delivery_success_for_tool_choice(self) -> None:
@@ -55,10 +55,9 @@ class ActionOnlyScoringTest(unittest.TestCase):
 
         failed_scores = compute_rule_scores(
             case=case,
-            response_text="공유 본문\n\n전송 실패",
+            response=AnswerResponse.model_validate(plain_response("공유 본문\n\n전송 실패")),
             called_tools=["slack_notify"],
-            response_evidence=[],
-            observed_evidence=[],
+            observed_hits=[],
             runtime_errors=[],
             response_errors=[],
             judge_errors=[],
@@ -67,10 +66,9 @@ class ActionOnlyScoringTest(unittest.TestCase):
         )
         success_scores = compute_rule_scores(
             case=case,
-            response_text="공유 본문\n\n전송 완료",
+            response=AnswerResponse.model_validate(plain_response("공유 본문\n\n전송 완료")),
             called_tools=["slack_notify"],
-            response_evidence=[],
-            observed_evidence=[],
+            observed_hits=[],
             runtime_errors=[],
             response_errors=[],
             judge_errors=[],
@@ -91,10 +89,9 @@ class ActionOnlyScoringTest(unittest.TestCase):
 
         scores = compute_rule_scores(
             case=case,
-            response_text="공유 본문",
+            response=AnswerResponse.model_validate(plain_response("공유 본문")),
             called_tools=["slack_notify"],
-            response_evidence=[],
-            observed_evidence=[],
+            observed_hits=[],
             runtime_errors=[],
             response_errors=[],
             judge_errors=[],

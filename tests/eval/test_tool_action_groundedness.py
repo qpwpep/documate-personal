@@ -1,42 +1,14 @@
 import unittest
 
-from src.core.evidence import EvidenceItem
-from src.eval.metric_rules import score_groundedness
+from src.core.answer_schema import finalize_answer, text_document
+from src.eval.metric_rules import score_reference_coverage
 from src.eval.config_models import BenchmarkCase
+from tests.eval.response_fixtures import source_hit
 
 
 class ToolActionGroundednessTest(unittest.TestCase):
-    def test_tool_action_without_evidence_is_not_penalized(self) -> None:
-        score = score_groundedness(
-            case=BenchmarkCase(case_id="tool-action-1", category="tool_action", query="save this"),
-            response_text="전달할 본문\n\n저장 완료: C:\\output\\response.txt",
-            response_evidence=[],
-            observed_evidence=[],
-        )
-
-        self.assertEqual(score, 1.0)
-
-    def test_tool_action_without_response_evidence_keeps_full_score_even_if_observed_evidence_exists(self) -> None:
-        score = score_groundedness(
-            case=BenchmarkCase(case_id="tool-action-2", category="tool_action", query="share this"),
-            response_text="전달할 본문\n\n전송 완료: Slack (C123BENCH)",
-            response_evidence=[],
-            observed_evidence=[
-                EvidenceItem(
-                    kind="official",
-                    tool="tavily_search",
-                    source_id="url:https://example.com/reference",
-                    document_id="url:https://example.com/reference",
-                    url_or_path="https://example.com/reference",
-                    title="reference",
-                    snippet="reference snippet",
-                    score=0.5,
-                )
-            ],
-        )
-
-        self.assertEqual(score, 1.0)
-
-
-if __name__ == "__main__":
-    unittest.main()
+    def test_action_body_does_not_inherit_unrelated_search_requirements(self) -> None:
+        """Incidental retrieval does not impose citations on a delivery-only body."""
+        response = finalize_answer(text_document("전달할 본문"), [])
+        case = BenchmarkCase(case_id="tool-action", category="tool_action", query="share this")
+        self.assertEqual(score_reference_coverage(case=case, response=response, observed_hits=[source_hit()]), 1.0)
