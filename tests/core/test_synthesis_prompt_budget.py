@@ -1,218 +1,82 @@
-import unittest
+import json
 
-from langchain_core.messages import HumanMessage, SystemMessage
-
-from src.core.answer_schema import AnswerSection, ClaimItem
-from src.core.contracts.boundary.response import get_response_state
+from src.core.documents import DocumentElement, TableCell, TableData, build_snapshot
+from src.core.evidence import build_evidence
 from src.core.planner_schema import PlannerOutput, RetrievalTask
-from src.runtime.nodes.synthesis import make_synthesize_node
-
-from .helpers import _CaptureStructuredSynthesizeLLM, build_legacy_state
-
-
-class _BindableCaptureStructuredSynthesizeLLM(_CaptureStructuredSynthesizeLLM):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.bound_max_tokens: list[int] = []
-
-    def bind(self, **kwargs):
-        max_tokens = kwargs.get("max_tokens")
-        if max_tokens is not None:
-            self.bound_max_tokens.append(int(max_tokens))
-        return self
+from src.runtime.nodes.synthesis.budgets import resolve_synthesis_budget_profile
+from src.runtime.nodes.synthesis.prompt_builder import build_synthesis_messages, prepare_evidence_packet
+from src.core.contracts.boundary.graph import build_graph_state_input
 
 
-def _docs_evidence(snippet: str = "official docs evidence") -> dict:
-    return {
-        "kind": "official",
-        "tool": "tavily_search",
-        "source_id": "url:https://docs.example.com/api",
-        "document_id": "url:https://docs.example.com/api",
-        "url_or_path": "https://docs.example.com/api",
-        "title": "Official Docs",
-        "snippet": snippet,
-        "score": 0.95,
-    }
+def evidence(text, *, source="upload"):
+    snapshot = build_snapshot(
+        source_uri="uploads/example.py", title="example.py", media_type="text/x-python",
+        source_type=source, content=text, parser="test", parser_version="1",
+    )
+    return build_evidence(snapshot=snapshot, element=DocumentElement(element_id="code", kind="code", text=text))
 
 
-def _upload_evidence(snippet: str = "uploaded code evidence") -> dict:
-    return {
-        "kind": "local",
-        "tool": "upload_search",
-        "source_id": "path:uploads/demo.py#chunk=0;start=0;end=80",
-        "document_id": "path:uploads/demo.py",
-        "url_or_path": "uploads/demo.py",
-        "title": "demo.py",
-        "snippet": snippet,
-        "score": 0.9,
-    }
+def test_prompt_budget_changes_the_actual_reference_range_and_preserves_code():
+    """A shortened prompt reference resolves to precisely its visible original source range."""
+    original = evidence("def run():\n    retries = 3\n    return retries\n")
+    packet = prepare_evidence_packet([original], max_items=6, snippet_char_limit=26, evidence_char_budget=26)
+    assert len(packet) == 1
+    selected = packet[0]
+    assert selected.id != original.id
+    assert selected.snapshot == original.snapshot
+    assert selected.excerpt == original.element.text[:26]
+    assert selected.selection.start == 0
+    assert selected.selection.end == 26
+    assert "\n    " in selected.excerpt
+    messages, _, _ = build_synthesis_messages(
+        state=build_graph_state_input(user_input="Explain run"), action_rules=[],
+        evidence_packet=packet, attempt=1, max_turns=6,
+    )
+    rendered = str(messages[-1].content)
+    prompt_packet = json.loads(rendered[rendered.index("[", len("[Evidence Packet]")):])
+    assert [(item["id"], item["excerpt"]) for item in prompt_packet] == [(selected.id, selected.excerpt)]
+    assert original.id not in rendered
 
 
-class SynthesisPromptBudgetTest(unittest.TestCase):
-    def test_synthesize_node_truncates_prompt_evidence_for_small_token_budget(self) -> None:
-        capture_llm = _CaptureStructuredSynthesizeLLM(include_raw=True)
-        synthesize_node = make_synthesize_node(
-            capture_llm,
-            verbose=False,
-            synthesis_max_tokens=100,
-            prompt_snippet_char_limit=400,
-        )
-        long_snippet = "broadcast " * 300
-
-        _ = synthesize_node(
-            build_legacy_state(
-                {
-                    "messages": [HumanMessage(content="Explain numpy broadcasting.")],
-                    "retrieved_evidence": [
-                        {
-                            "kind": "official",
-                            "tool": "tavily_search",
-                            "source_id": "url:https://numpy.org/doc/stable/",
-                            "document_id": "url:https://numpy.org/doc/stable/",
-                            "url_or_path": "https://numpy.org/doc/stable/",
-                            "title": "NumPy Docs",
-                            "snippet": long_snippet,
-                            "score": 0.95,
-                        }
-                    ],
-                    "synthesis_attempt": 0,
-                }
-            )
-        )
-
-        evidence_messages = [
-            str(message.content)
-            for message in (capture_llm.last_messages or [])
-            if isinstance(message, SystemMessage) and "[Retrieved Evidence]" in str(message.content)
-        ]
-        self.assertEqual(len(evidence_messages), 1)
-        self.assertIn("source_id: url:https://numpy.org/doc/stable/", evidence_messages[0])
-        self.assertNotIn(long_snippet.strip(), evidence_messages[0])
-        self.assertLess(len(evidence_messages[0]), 900)
-
-    def test_synthesize_node_applies_prompt_budget_to_local_evidence_by_default(self) -> None:
-        capture_llm = _CaptureStructuredSynthesizeLLM(include_raw=True)
-        synthesize_node = make_synthesize_node(
-            capture_llm,
-            verbose=False,
-            synthesis_max_tokens=1920,
-            prompt_snippet_char_limit=160,
-        )
-        long_snippet = "setup line\n" + ("local option detail " * 120) + "\naxis=0\n"
-
-        _ = synthesize_node(
-            build_legacy_state(
-                {
-                    "user_input": "Compare api evidence official docs with uploaded local option detail axis.",
-                    "messages": [HumanMessage(content="Compare api evidence official docs with uploaded local option detail axis.")],
-                    "planner_output": PlannerOutput(
-                        use_retrieval=True,
-                        tasks=[
-                            RetrievalTask(route="docs", query="api evidence official docs", k=3),
-                            RetrievalTask(route="upload", query="local option detail axis", k=3),
-                        ],
-                    ),
-                    "retrieved_evidence": [
-                        _docs_evidence("official docs evidence"),
-                        _upload_evidence(long_snippet),
-                    ],
-                    "synthesis_attempt": 0,
-                }
-            )
-        )
-
-        evidence_messages = [
-            str(message.content)
-            for message in (capture_llm.last_messages or [])
-            if isinstance(message, SystemMessage) and "[Retrieved Evidence]" in str(message.content)
-        ]
-        self.assertEqual(len(evidence_messages), 1)
-        self.assertIn("source_id: path:uploads/demo.py#chunk=0;start=0;end=80", evidence_messages[0])
-        self.assertNotIn(long_snippet.strip(), evidence_messages[0])
-        self.assertLess(len(evidence_messages[0]), 700)
-
-    def test_synthesize_node_binds_category_specific_token_budget(self) -> None:
-        capture_llm = _BindableCaptureStructuredSynthesizeLLM(include_raw=True)
-        synthesize_node = make_synthesize_node(
-            capture_llm,
-            verbose=False,
-            synthesis_max_tokens=1920,
-            prompt_snippet_char_limit=400,
-        )
-
-        _ = synthesize_node(
-            build_legacy_state(
-                {
-                    "user_input": "Explain official docs.",
-                    "messages": [HumanMessage(content="Explain official docs.")],
-                    "planner_output": PlannerOutput(
-                        use_retrieval=True,
-                        tasks=[RetrievalTask(route="docs", query="official docs", k=3)],
-                    ),
-                    "retrieved_evidence": [_docs_evidence()],
-                    "synthesis_attempt": 0,
-                }
-            )
-        )
-
-        self.assertEqual(capture_llm.bound_max_tokens[0], 1024)
-
-    def test_synthesize_node_preserves_hybrid_claims_and_section_bodies(self) -> None:
-        claims = [
-            ClaimItem(text=f"Claim {index}.", evidence_ids=["url:https://docs.example.com/api"])
-            for index in range(1, 6)
-        ]
-        payload = {
-            "answer": "",
-            "claims": [claim.model_dump(mode="json") for claim in claims],
-            "sections": [
-                AnswerSection(
-                    kind="official_docs",
-                    heading="Official",
-                    body="One. Two. Three. Four.",
-                ).model_dump(mode="json"),
-                AnswerSection(
-                    kind="comparison",
-                    heading="Comparison",
-                    body="A. B. C.",
-                ).model_dump(mode="json"),
-            ],
-            "confidence": None,
-        }
-        synthesize_node = make_synthesize_node(
-            _CaptureStructuredSynthesizeLLM(payload=payload, include_raw=True),
-            verbose=False,
-            synthesis_max_tokens=1920,
-            prompt_snippet_char_limit=400,
-        )
-
-        result = synthesize_node(
-            build_legacy_state(
-                {
-                    "user_input": "Compare official docs with uploaded code.",
-                    "messages": [HumanMessage(content="Compare official docs with uploaded code.")],
-                    "planner_output": PlannerOutput(
-                        use_retrieval=True,
-                        tasks=[
-                            RetrievalTask(route="docs", query="api official docs", k=3),
-                            RetrievalTask(route="upload", query="api uploaded code", k=3),
-                        ],
-                    ),
-                    "retrieved_evidence": [
-                        _docs_evidence("api official docs"),
-                        _upload_evidence("api uploaded code"),
-                    ],
-                    "synthesis_attempt": 0,
-                }
-            )
-        )
-
-        response = get_response_state(result)
-        self.assertEqual(len(response.payload.claims), 5)
-        section_bodies = {section.kind: section.body for section in response.payload.sections}
-        self.assertEqual(section_bodies["official_docs"], "One. Two. Three. Four.")
-        self.assertEqual(section_bodies["comparison"], "A. B. C.")
+def test_zero_remaining_budget_never_expands_to_the_full_source():
+    """An exhausted evidence budget excludes source text instead of accidentally disabling truncation."""
+    assert prepare_evidence_packet([evidence("private source" )], max_items=6, snippet_char_limit=100, evidence_char_budget=0) == []
 
 
-if __name__ == "__main__":
-    unittest.main()
+def test_source_packet_can_contain_multiple_parts_of_a_document():
+    """The answer may use more than two original ranges when the evidence budget allows it."""
+    entries = [evidence(f"setting_{number} = {number}\n") for number in range(5)]
+    packet = prepare_evidence_packet(entries, max_items=6, snippet_char_limit=100, evidence_char_budget=1000)
+    assert packet == entries
+
+
+def test_saving_a_researched_answer_keeps_the_retrieval_budget():
+    """A save request does not discard supporting material from the answer being saved."""
+    planner = PlannerOutput(use_retrieval=True, tasks=[RetrievalTask(route="docs", query="settings", k=4)])
+    normal = resolve_synthesis_budget_profile(user_input="Explain settings", planner_output=planner, synthesis_max_tokens=1800)
+    save = resolve_synthesis_budget_profile(user_input="Explain settings and save to txt", planner_output=planner, synthesis_max_tokens=1800)
+    assert save == normal
+    assert normal.max_tokens == 1800
+    assert normal.max_evidence_items >= 4
+
+
+def test_selected_table_cells_reach_generation_with_their_structure():
+    """A table citation carries selected cells and spans without exposing unselected source values."""
+    snapshot = evidence("table source").snapshot
+    element = DocumentElement(element_id="table", kind="table", table=TableData(cells=[
+        TableCell(cell_id="label", row=0, col=0, col_span=2, text="Retry settings", is_header=True),
+        TableCell(cell_id="value", row=1, col=0, text="3"),
+        TableCell(cell_id="unselected", row=1, col=1, text="not supplied"),
+    ]))
+    selected = build_evidence(snapshot=snapshot, element=element, cell_ids=["label", "value"])
+    messages, _, _ = build_synthesis_messages(
+        state=build_graph_state_input(user_input="Explain retry settings"), action_rules=[],
+        evidence_packet=[selected], attempt=1, max_turns=6,
+    )
+    raw = str(messages[-1].content)
+    packet = json.loads(raw[raw.index("[", len("[Evidence Packet]")):])
+    assert packet[0]["table_cells"] == [
+        {"cell_id": "label", "row": 0, "col": 0, "row_span": 1, "col_span": 2, "text": "Retry settings", "is_header": True},
+        {"cell_id": "value", "row": 1, "col": 0, "row_span": 1, "col_span": 1, "text": "3", "is_header": False},
+    ]
+    assert "not supplied" not in raw
