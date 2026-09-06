@@ -2,131 +2,87 @@ from __future__ import annotations
 
 from langchain_core.messages import AIMessage
 
-from src.core.answer_schema.fallbacks import build_deterministic_grounded_payload
-from src.core.answer_schema.models import AgentResponsePayloadModel, SynthesisOutput
-from src.core.answer_schema.rendering import average_claim_confidence, build_empty_response_payload, render_payload_from_claims
+from src.core.answer_schema import (
+    AnswerResponse, ResponseIssue, build_grounded_response, export_answer_text,
+    filter_document_units, finalize_answer, text_document,
+)
 from src.core.contracts import GraphState, ResponseState
-from src.core.contracts.debug import RetryReason
+from src.core.evidence import EvidenceRef
+from src.core.request_contracts import infer_answer_contract, missing_required_content
 from src.runtime.nodes.retry import build_followup_from_routes
-from src.runtime.nodes.validation.evidence_validator import ValidationAssessment, ValidationSnapshot
-from src.runtime.nodes.validation.hybrid_rewrite import build_route_balanced_hybrid_payload, claims_for_routes, is_hybrid_retrieval_request, rewrite_filtered_hybrid_payload
-from src.runtime.nodes.validation.repair import repair_required_sections
+from src.runtime.nodes.validation.models import ValidationAssessment, ValidationSnapshot
+from src.runtime.nodes.validation.snapshot import detect_missing_route_coverage
 
 
-def build_response_payload_updates(
-    payload: AgentResponsePayloadModel,
-    *,
-    attempt: int,
+def build_response_updates(
+    result: AnswerResponse, *, attempt: int, evidence_packet: list[EvidenceRef],
 ) -> GraphState:
-    synthesis_output = SynthesisOutput(
-        answer=payload.answer,
-        claims=payload.claims,
-        confidence=payload.confidence,
-        sections=payload.sections,
-    )
     return {
-        "messages": [AIMessage(content=payload.answer)],
-        "response": ResponseState(
-            final_answer=payload.answer,
-            payload=payload,
-            synthesis_output=synthesis_output,
-            synthesis_attempt=attempt,
-        ),
+        "messages": [AIMessage(content=export_answer_text(result))],
+        "response": ResponseState(result=result, evidence_packet=evidence_packet, synthesis_attempt=attempt),
     }
 
 
 def build_followup_updates(answer: str, *, attempt: int) -> GraphState:
-    return build_response_payload_updates(
-        build_empty_response_payload(answer=answer),
-        attempt=attempt,
+    return build_response_updates(
+        finalize_answer(text_document(answer), []), attempt=attempt, evidence_packet=[],
     )
 
 
 def apply_validation_outcome(
-    *,
-    snapshot: ValidationSnapshot,
-    assessment: ValidationAssessment,
-    attempt: int,
-    needs_retry: bool,
+    *, snapshot: ValidationSnapshot, assessment: ValidationAssessment,
+    attempt: int, needs_retry: bool,
 ) -> GraphState:
-    updates: GraphState = {}
-    retry_reason: RetryReason | None = assessment.retry_reason
-    if retry_reason is None or needs_retry:
-        return updates
+    if needs_retry:
+        return {}
+    result = assessment.checked_result
+    packet = snapshot.evidence_packet
+    if assessment.retry_reason is None and result is not None:
+        return build_response_updates(result, attempt=attempt, evidence_packet=packet)
 
-    next_payload: AgentResponsePayloadModel | None = None
-    if assessment.has_grounded_response_payload and snapshot.response_payload is not None:
-        next_payload = snapshot.response_payload.model_copy(deep=True)
-    elif assessment.valid_claims:
-        filtered_confidence = average_claim_confidence(assessment.valid_claims)
-        next_payload = render_payload_from_claims(
-            claims=assessment.valid_claims,
-            evidence_items=snapshot.parsed_evidence,
-            confidence=filtered_confidence,
+    retained_issues = [
+        issue for issue in (snapshot.response_result.issues if snapshot.response_result else [])
+        if issue.unit_id is None
+    ]
+    if result is not None and assessment.invalid_unit_paths:
+        document = filter_document_units(result.content, assessment.valid_unit_paths)
+        result = finalize_answer(
+            document, packet, retrieval_required=result.retrieval_required,
+            actions=result.actions,
+            issues=[*retained_issues, ResponseIssue(
+                code="invalid_content_removed",
+                message="원문 근거를 연결할 수 없거나 발췌와 일치하지 않는 내용을 제외했습니다.",
+            )],
         )
-        next_payload.confidence = filtered_confidence
-        if snapshot.response_payload is not None and snapshot.response_payload.sections:
-            next_payload = next_payload.model_copy(update={"sections": snapshot.response_payload.sections})
-    elif retry_reason == "missing_sections" and snapshot.response_payload is not None:
-        next_payload = snapshot.response_payload.model_copy(deep=True)
-    elif snapshot.retrieval_required and snapshot.parsed_evidence:
-        docs_valid_claims = claims_for_routes(
-            claims=assessment.valid_claims,
-            snapshot=snapshot,
-            routes={"docs"},
+        valid_paths = {check.unit_id for check in result.checks if check.reference_status != "missing"}
+        missing_routes = detect_missing_route_coverage(
+            required_routes=snapshot.required_routes, result=result,
+            evidence_packet=packet, valid_unit_paths=valid_paths,
+        ) if snapshot.retrieval_required else []
+        missing_content = missing_required_content(
+            infer_answer_contract(snapshot.user_input), document,
         )
-        upload_valid_claims = claims_for_routes(
-            claims=assessment.valid_claims,
-            snapshot=snapshot,
-            routes={"upload"},
-        )
-        next_payload = None
-        if not docs_valid_claims and not upload_valid_claims:
-            next_payload = build_route_balanced_hybrid_payload(snapshot)
-        next_payload = next_payload or build_deterministic_grounded_payload(
-            evidence_items=snapshot.parsed_evidence,
-            fallback_answer="",
-        )
-    else:
-        followup_answer = build_followup_from_routes(snapshot.planner_output, retry_reason)
-        updates.update(
-            build_followup_updates(
-                followup_answer,
-                attempt=attempt,
-            )
-        )
-        return updates
+        if document.blocks and not missing_routes and not missing_content:
+            return build_response_updates(result, attempt=attempt, evidence_packet=packet)
 
-    if next_payload is None:
-        return updates
-
-    if snapshot.response_payload is not None and snapshot.response_payload.sections and not next_payload.sections:
-        next_payload = next_payload.model_copy(update={"sections": snapshot.response_payload.sections})
-
-    if is_hybrid_retrieval_request(snapshot) and (
-        retry_reason in {"unsupported_claims", "missing_route_coverage"}
-        or bool(assessment.missing_route_coverage)
-    ):
-        next_payload = rewrite_filtered_hybrid_payload(
-            payload=next_payload,
-            snapshot=snapshot,
+    if snapshot.parsed_hits:
+        packet = list({hit.evidence.id: hit.evidence for hit in snapshot.parsed_hits}.values())
+        result = build_grounded_response(
+            packet,
+            message="요청한 답변을 충분히 구성하지 못해, 확인 가능한 원문 발췌를 제공합니다.",
         )
+        issues = [*retained_issues, *result.issues, ResponseIssue(
+            code="answer_incomplete",
+            message="아래 발췌는 요청 전체에 대한 설명이나 비교가 아닙니다.",
+        )]
+        result = finalize_answer(
+            result.content, packet, retrieval_required=True,
+            actions=snapshot.response_result.actions if snapshot.response_result else [],
+            issues=issues,
+        )
+        return build_response_updates(result, attempt=attempt, evidence_packet=packet)
 
-    next_payload = repair_required_sections(
-        payload=next_payload,
-        snapshot=snapshot,
+    return build_followup_updates(
+        build_followup_from_routes(snapshot.planner_output, assessment.retry_reason or "missing_content"),
+        attempt=attempt,
     )
-    updates.update(
-        build_response_payload_updates(
-            next_payload,
-            attempt=attempt,
-        )
-    )
-    return updates
-
-
-__all__ = [
-    "apply_validation_outcome",
-    "build_followup_updates",
-    "build_response_payload_updates",
-]

@@ -1,279 +1,81 @@
 from __future__ import annotations
 
-import re
-from typing import Any
-
-from src.core.answer_schema import filter_claims_by_evidence
-from src.core.contracts.debug import ErrorCode, RetryReason
-from src.core.evidence import EvidenceItem
-from src.core.request_contracts import infer_answer_contract, missing_required_sections
+from src.core.answer_schema import finalize_answer
+from src.core.request_contracts import infer_answer_contract, missing_required_content
 from src.runtime.nodes.retry import contains_tool_error
 from src.runtime.nodes.validation.models import ValidationAssessment, ValidationSnapshot
-from src.runtime.nodes.validation.option_literals import contains_option_literal, extract_uploaded_option_literals
-from src.runtime.nodes.validation.route_policy import route_error_statuses, route_score_avg
-from src.runtime.nodes.validation.snapshot import detect_missing_route_coverage, route_for_item_tool
-
-
-def score_avg_for_failed_routes(
-    failed_routes: set[str],
-    evidence_by_route: dict[str, list[EvidenceItem]],
-) -> float | None:
-    if not failed_routes:
-        return None
-    scores = [
-        float(item.score)
-        for route in failed_routes
-        for item in evidence_by_route.get(route, [])
-        if item.score is not None
-    ]
-    if not scores:
-        return None
-    return sum(scores) / len(scores)
-
-
-def _empty_validation_assessment(
-    snapshot: ValidationSnapshot,
-    *,
-    blocked_missing_upload: bool = False,
-    tool_error_routes: set[str] | None = None,
-    route_failures: dict[str, RetryReason] | None = None,
-    valid_claims: list[Any] | None = None,
-    invalid_claims: list[Any] | None = None,
-    missing_route_coverage: list[str] | None = None,
-    missing_sections: list[str] | None = None,
-    has_grounded_response_payload: bool = False,
-    unsupported_claims: bool = False,
-    retry_reason: RetryReason | None = None,
-    failed_routes: set[str] | None = None,
-    score_avg: float | None = None,
-    error_codes: list[ErrorCode] | None = None,
-) -> ValidationAssessment:
-    return ValidationAssessment(
-        blocked_missing_upload=blocked_missing_upload,
-        tool_error_routes=tool_error_routes or set(),
-        route_failures=route_failures or {},
-        valid_claims=valid_claims or [],
-        invalid_claims=invalid_claims or [],
-        missing_route_coverage=missing_route_coverage or [],
-        missing_sections=missing_sections or [],
-        has_grounded_response_payload=has_grounded_response_payload,
-        unsupported_claims=unsupported_claims,
-        retry_reason=retry_reason,
-        failed_routes=failed_routes or set(),
-        score_avg=score_avg if score_avg is not None else route_score_avg(snapshot.parsed_evidence),
-        error_codes=error_codes or [],
-    )
-
-
-def _normalize_section_text(text: str) -> str:
-    return re.sub(r"\s+", " ", str(text or "").strip().lower())
-
-
-def _section_body_by_kind(snapshot: ValidationSnapshot) -> dict[str, str]:
-    payload = snapshot.response_payload
-    if payload is None:
-        return {}
-    return {
-        str(section.kind or "").strip(): str(section.body or "").strip()
-        for section in payload.sections
-        if str(section.kind or "").strip()
-    }
-
-
-def _hybrid_section_errors(snapshot: ValidationSnapshot) -> list[str]:
-    required_routes = {
-        str(route or "").strip()
-        for route in snapshot.required_routes
-        if str(route or "").strip()
-    }
-    if not {"docs", "upload"}.issubset(required_routes):
-        return []
-    if snapshot.response_payload is None:
-        return []
-
-    bodies = _section_body_by_kind(snapshot)
-    relevant_bodies = {
-        kind: _normalize_section_text(body)
-        for kind, body in bodies.items()
-        if kind in {"official_docs", "upload_code", "comparison"} and body.strip()
-    }
-    errors: list[str] = []
-    seen: dict[str, str] = {}
-    for kind, body in relevant_bodies.items():
-        if body in seen:
-            errors.append(f"hybrid_sections_repeated:{seen[body]}={kind}")
-        else:
-            seen[body] = kind
-
-    comparison_body = bodies.get("comparison", "")
-    comparison_normalized = _normalize_section_text(comparison_body)
-    for kind in ("official_docs", "upload_code"):
-        body = relevant_bodies.get(kind)
-        if body and body == comparison_normalized:
-            errors.append(f"hybrid_comparison_repeats_{kind}")
-
-    local_options = extract_uploaded_option_literals(snapshot.parsed_evidence)
-    upload_body = bodies.get("upload_code", "")
-    if "upload_code" in {section.kind for section in snapshot.response_payload.sections}:
-        if local_options and not contains_option_literal(upload_body, local_options):
-            errors.append("hybrid_upload_code_missing_actual_option")
-
-    if comparison_body and local_options and not contains_option_literal(comparison_body, local_options):
-        errors.append("hybrid_comparison_missing_uploaded_setting")
-
-    return errors
-
-
-def _hybrid_error_codes(errors: list[str]) -> list[ErrorCode]:
-    codes: list[ErrorCode] = []
-
-    def add(code: ErrorCode) -> None:
-        if code not in codes:
-            codes.append(code)
-
-    for error in errors:
-        if error.startswith("hybrid_sections_repeated") or error.startswith("hybrid_comparison_repeats_"):
-            add("HYBRID_SECTION_REPEATED")
-        elif error == "hybrid_upload_code_missing_actual_option":
-            add("HYBRID_UPLOAD_SETTING_MISSING")
-        elif error == "hybrid_comparison_missing_uploaded_setting":
-            add("HYBRID_COMPARISON_WEAK")
-    return codes
+from src.runtime.nodes.validation.route_policy import route_error_statuses
+from src.runtime.nodes.validation.snapshot import detect_missing_route_coverage
 
 
 def assess_retrieval_quality(snapshot: ValidationSnapshot) -> ValidationAssessment:
+    assessment = ValidationAssessment()
     if not snapshot.retrieval_required:
-        return _empty_validation_assessment(snapshot)
-
-    blocked_missing_upload = bool(
+        return assessment
+    assessment.blocked_missing_upload = bool(
         "upload" in snapshot.required_routes
-        and any(
-            str(item.status or "") == "unavailable"
-            for item in snapshot.diagnostics_by_route.get("upload", [])
-        )
+        and any(item.status == "unavailable" for item in snapshot.diagnostics_by_route.get("upload", []))
     )
-
-    tool_error_routes: set[str] = set()
-    route_failures: dict[str, RetryReason] = {}
     for route in snapshot.required_routes:
-        route_items = snapshot.evidence_by_route.get(route, [])
-        route_diagnostics = snapshot.diagnostics_by_route.get(route, [])
-        statuses = route_error_statuses(route_diagnostics)
+        statuses = route_error_statuses(snapshot.diagnostics_by_route.get(route, []))
         if "error" in statuses or ("unavailable" in statuses and route != "upload"):
-            tool_error_routes.add(route)
-            continue
-        if not route_items:
-            route_failures[route] = "no_evidence"
-
-    if contains_tool_error(snapshot.current_attempt_retrieval_errors) and not tool_error_routes:
-        tool_error_routes = set(snapshot.required_routes)
-
-    retry_reason: RetryReason | None = None
-    failed_routes: set[str] = set()
-    if blocked_missing_upload:
-        retry_reason = "blocked_missing_upload"
-        failed_routes = {"upload"}
-    elif tool_error_routes:
-        retry_reason = "tool_error"
-        failed_routes = set(tool_error_routes)
-    elif route_failures:
-        retry_reason = "no_evidence"
-        failed_routes = set(route_failures)
-
-    score_avg = score_avg_for_failed_routes(failed_routes, snapshot.evidence_by_route)
-    if score_avg is None:
-        score_avg = route_score_avg(snapshot.parsed_evidence)
-
-    return _empty_validation_assessment(
-        snapshot,
-        blocked_missing_upload=blocked_missing_upload,
-        tool_error_routes=tool_error_routes,
-        route_failures=route_failures,
-        retry_reason=retry_reason,
-        failed_routes=failed_routes,
-        score_avg=score_avg,
-    )
+            assessment.tool_error_routes.add(route)
+        elif not snapshot.evidence_by_route.get(route):
+            assessment.route_failures[route] = "no_evidence"
+    if contains_tool_error(snapshot.current_attempt_retrieval_errors) and not assessment.tool_error_routes:
+        assessment.tool_error_routes = set(snapshot.required_routes)
+    if assessment.blocked_missing_upload:
+        assessment.retry_reason = "blocked_missing_upload"
+        assessment.failed_routes = {"upload"}
+    elif assessment.tool_error_routes:
+        assessment.retry_reason = "tool_error"
+        assessment.failed_routes = set(assessment.tool_error_routes)
+    elif assessment.route_failures:
+        assessment.retry_reason = "no_evidence"
+        assessment.failed_routes = set(assessment.route_failures)
+    return assessment
 
 
 def assess_validation(snapshot: ValidationSnapshot) -> ValidationAssessment:
-    valid_claims: list[Any] = []
-    invalid_claims: list[Any] = []
-    if snapshot.retrieval_required and snapshot.response_payload is not None:
-        valid_claims, invalid_claims = filter_claims_by_evidence(
-            claims=snapshot.response_payload.claims,
-            evidence_items=snapshot.parsed_evidence,
+    assessment = ValidationAssessment()
+    if snapshot.response_result is None:
+        assessment.retry_reason = "missing_content"
+        assessment.missing_content = ["answer"]
+        assessment.error_codes = ["VALIDATION_MISSING_CONTENT"]
+        return assessment
+
+    # A retrieved hit that was not supplied to synthesis cannot resolve its references.
+    result = finalize_answer(
+        snapshot.response_result.content, snapshot.evidence_packet,
+        retrieval_required=snapshot.retrieval_required or snapshot.response_result.retrieval_required,
+        actions=snapshot.response_result.actions, issues=snapshot.response_result.issues,
+    )
+    assessment.checked_result = result
+    for check in result.checks:
+        if check.reference_status == "missing" or check.support_status == "unsupported":
+            assessment.invalid_unit_paths.add(check.unit_id)
+        else:
+            assessment.valid_unit_paths.add(check.unit_id)
+    if snapshot.retrieval_required:
+        assessment.missing_route_coverage = detect_missing_route_coverage(
+            required_routes=snapshot.required_routes, result=result,
+            evidence_packet=snapshot.evidence_packet, valid_unit_paths=assessment.valid_unit_paths,
         )
-
-    route_by_source_id = {
-        str(item.source_id or "").strip(): route_for_item_tool(item.tool)
-        for item in snapshot.parsed_evidence
-        if str(item.source_id or "").strip()
-    }
-    missing_route_coverage = detect_missing_route_coverage(
-        required_routes=snapshot.required_routes,
-        valid_claims=valid_claims,
-        route_by_source_id=route_by_source_id,
-    ) if snapshot.retrieval_required else []
-
-    answer_contract = infer_answer_contract(snapshot.user_input, snapshot.required_routes)
-    missing_sections = missing_required_sections(answer_contract, snapshot.response_payload)
-    hybrid_section_errors = _hybrid_section_errors(snapshot)
-    hybrid_error_codes = _hybrid_error_codes(hybrid_section_errors)
-
-    has_grounded_response_payload = bool(
-        snapshot.response_payload is not None
-        and snapshot.response_payload.answer.strip()
-        and valid_claims
-        and not invalid_claims
-        and not missing_route_coverage
-        and not missing_sections
-        and not hybrid_section_errors
+    assessment.missing_content = missing_required_content(
+        infer_answer_contract(snapshot.user_input), result.content,
     )
-
-    unsupported_claims = bool(
-        snapshot.retrieval_required
-        and snapshot.response_payload is not None
-        and (
-            (snapshot.response_payload.answer.strip() and not snapshot.response_payload.claims)
-            or bool(invalid_claims)
-            or bool(hybrid_section_errors)
-        )
-    )
-    validation_error_codes: list[ErrorCode] = []
-    if snapshot.retrieval_required and snapshot.response_payload is not None:
-        if (snapshot.response_payload.answer.strip() and not snapshot.response_payload.claims) or invalid_claims:
-            validation_error_codes.append("VALIDATION_UNSUPPORTED_CLAIMS")
-        for code in hybrid_error_codes:
-            if code not in validation_error_codes:
-                validation_error_codes.append(code)
-
-    retry_reason: RetryReason | None = None
-    failed_routes: set[str] = set()
-    if unsupported_claims:
-        retry_reason = "unsupported_claims"
-        failed_routes = set(missing_route_coverage)
-        if hybrid_section_errors:
-            failed_routes.update(snapshot.required_routes)
-    elif missing_route_coverage:
-        retry_reason = "missing_route_coverage"
-        failed_routes = set(missing_route_coverage)
-    elif missing_sections:
-        retry_reason = "missing_sections"
-
-    score_avg = score_avg_for_failed_routes(failed_routes, snapshot.evidence_by_route)
-    if score_avg is None:
-        score_avg = route_score_avg(snapshot.parsed_evidence)
-
-    return _empty_validation_assessment(
-        snapshot,
-        valid_claims=valid_claims,
-        invalid_claims=invalid_claims,
-        missing_route_coverage=missing_route_coverage,
-        missing_sections=missing_sections,
-        has_grounded_response_payload=has_grounded_response_payload,
-        unsupported_claims=unsupported_claims,
-        retry_reason=retry_reason,
-        failed_routes=failed_routes,
-        score_avg=score_avg,
-        error_codes=validation_error_codes,
-    )
+    if not result.content.blocks:
+        assessment.missing_content = list(dict.fromkeys(["answer", *assessment.missing_content]))
+    if any(check.reference_status == "missing" for check in result.checks):
+        assessment.retry_reason = "unresolved_references"
+        assessment.error_codes.append("VALIDATION_UNRESOLVED_REFERENCES")
+    elif assessment.invalid_unit_paths:
+        assessment.retry_reason = "missing_content"
+    elif assessment.missing_route_coverage:
+        assessment.retry_reason = "missing_route_coverage"
+    elif assessment.missing_content:
+        assessment.retry_reason = "missing_content"
+    if assessment.retry_reason in {"missing_content", "missing_route_coverage"}:
+        assessment.error_codes.append("VALIDATION_MISSING_CONTENT")
+    assessment.failed_routes = set(assessment.missing_route_coverage)
+    return assessment
