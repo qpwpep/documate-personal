@@ -17,6 +17,9 @@ from langgraph.graph import END, START, StateGraph
 
 from src.app.agent_manager import AgentFlowManager
 from src.core.contracts import GraphState
+from src.core.documents import DocumentElement, SourceAnchor, build_snapshot
+from src.core.evidence import RetrievalScore, SearchHit, build_evidence, parse_search_hits
+from src.core.answer_schema import ActionReceipt, AnswerResponse, finalize_answer, export_answer_text, text_document
 from src.core.contracts.graph_state import DebugState, PlannerState, ResponseState, RetrievalState
 from src.runtime.agent_runtime import DebugCollector, ExecutionRunner, ResponseAssembler, SessionContext
 from src.runtime.graph_builder import _instrument_stage_node
@@ -26,266 +29,108 @@ from src.infra.tools.docs_search import infer_docs_query_hint
 from src.infra.tools.docs_search.url_validation import validate_doc_url
 
 
-def _evidence_response(evidence_payload: list[dict]) -> dict:
-    query = "question"
+def _hit(text="broadcasting", *, uri="https://numpy.org/doc/stable/", source_type="official", score=0.98):
+    snapshot = build_snapshot(source_uri=uri, title="Source", media_type="text/plain", source_type=source_type,
+                              content=text, parser="fixture", parser_version="1")
+    element = DocumentElement(element_id="body", kind="paragraph", text=text)
+    return SearchHit(evidence=build_evidence(snapshot=snapshot, element=element),
+                     score=RetrievalScore(metric="provider_score", raw=score, normalized=score, direction="higher"), rank=1)
+
+
+def _response_with_hits(hits):
+    evidence = [hit.evidence for hit in hits]
+    result = finalize_answer(text_document("final answer", basis="source" if evidence else "interaction",
+                                           refs=[evidence[0].id] if evidence else []), evidence)
     return {
-        "messages": [
-            HumanMessage(content=query),
-            ToolMessage(
-                content=json.dumps(
-                    {
-                        "evidence": evidence_payload,
-                        "diagnostics": {
-                            "tool": "tavily_search",
-                            "route": "docs",
-                            "status": "success",
-                            "message": "",
-                            "query": query,
-                            "attempt": 1,
-                        },
-                    },
-                    ensure_ascii=False,
-                ),
-                name="tavily_search",
-                tool_call_id="call-1",
-            ),
-            AIMessage(content="final answer [1]"),
-        ],
-        "retrieval": RetrievalState(evidence_log=evidence_payload),
-        "response": ResponseState(
-            final_answer="final answer [1]",
-            payload={
-                "answer": "final answer [1]",
-                "claims": [
-                    {
-                        "text": "final answer",
-                        "evidence_ids": ["url:https://numpy.org/doc/stable/"],
-                        "confidence": 0.88,
-                    }
-                ],
-                "evidence": evidence_payload,
-                "confidence": 0.88,
-            },
-        ),
-        "planner": PlannerState(
-            diagnostics={
-                "status": "heuristic_fallback",
-                "reason": "planner_failed_or_invalid",
-                "fallback_routes": ["docs"],
-                "intent_required": True,
-                "required_routes": ["docs"],
-                "override_applied": False,
-                "override_reason": None,
-            }
-        ),
-        "debug": DebugState(
-            retrieval_diagnostics=[
-                {
-                    "tool": "tavily_search",
-                    "route": "docs",
-                    "status": "success",
-                    "message": "",
-                    "query": query,
-                    "attempt": 1,
-                }
-            ],
-            latency_trace=[
-                {"kind": "stage", "stage": "planner", "attempt": 1, "latency_ms": 12, "status": "heuristic_fallback"},
-                {"kind": "retrieval_route", "route": "docs", "tool": "tavily_search", "attempt": 1, "latency_ms": 48, "status": "success"},
-                {"kind": "stage", "stage": "retrieval", "attempt": 1, "latency_ms": 50, "status": "success"},
-                {"kind": "synthesis_attempt", "attempt": 1, "mode": "structured_only", "structured_ms": 22, "fallback_ms": None, "total_ms": 22},
-                {"kind": "stage", "stage": "synthesis", "attempt": 1, "latency_ms": 22, "status": "structured_only"},
-                {"kind": "stage", "stage": "validation", "attempt": 1, "latency_ms": 3, "status": "pass"},
-            ],
-        ),
+        "messages": [HumanMessage(content="question"),
+                     ToolMessage(content=json.dumps({"hits": [hit.model_dump(mode="json") for hit in hits],
+                                                      "diagnostics": {"tool": "tavily_search", "route": "docs", "status": "success"}}),
+                                 name="tavily_search", tool_call_id="call-1"),
+                     AIMessage(content="This later string must not replace the checked document.")],
+        "retrieval": RetrievalState(hit_log=[hit.model_dump(mode="json") for hit in hits]),
+        "response": ResponseState(result=result, evidence_packet=evidence),
+        "planner": PlannerState(diagnostics={
+            "status": "heuristic_fallback", "reason": "planner_failed_or_invalid", "fallback_routes": ["docs"],
+            "intent_required": True, "required_routes": ["docs"], "override_applied": False, "override_reason": None,
+        }),
+        "debug": DebugState(retrieval_diagnostics=[{"tool": "tavily_search", "route": "docs", "status": "success", "query": "question", "attempt": 1}],
+                            latency_trace=[
+            {"kind": "stage", "stage": "planner", "attempt": 1, "latency_ms": 12, "status": "heuristic_fallback"},
+            {"kind": "retrieval_route", "route": "docs", "tool": "tavily_search", "attempt": 1, "latency_ms": 48, "status": "success"},
+            {"kind": "stage", "stage": "retrieval", "attempt": 1, "latency_ms": 50, "status": "success"},
+            {"kind": "synthesis_attempt", "attempt": 1, "mode": "structured_only", "structured_ms": 22, "fallback_ms": None, "total_ms": 22},
+            {"kind": "stage", "stage": "synthesis", "attempt": 1, "latency_ms": 22, "status": "structured_only"},
+            {"kind": "stage", "stage": "validation", "attempt": 1, "latency_ms": 3, "status": "pass"},
+        ]),
     }
 
 
-def _response_with_llm_calls() -> dict:
-    return {
-        "messages": [
-            HumanMessage(content="question"),
-            ToolMessage(content=json.dumps({"evidence": [], "diagnostics": {}}, ensure_ascii=False), name="tavily_search", tool_call_id="call-1"),
-            AIMessage(content="final answer"),
-        ],
-        "response": ResponseState(
-            final_answer="final answer",
-            payload={"answer": "final answer", "claims": [], "evidence": [], "confidence": None},
-        ),
-        "debug": DebugState(
-            llm_calls=[
-                {
-                    "stage": "planner",
-                    "attempt": 1,
-                    "path": "structured",
-                    "response_metadata": {"model_name": "gpt-5-nano"},
-                    "usage_metadata": {"input_tokens": 12, "output_tokens": 3, "total_tokens": 15},
-                },
-                {
-                    "stage": "synthesis",
-                    "attempt": 1,
-                    "path": "structured",
-                    "response_metadata": {"model_name": "gpt-5-mini"},
-                    "usage_metadata": {"input_tokens": 20, "output_tokens": 5, "total_tokens": 25},
-                },
-            ]
-        ),
-    }
+def _response_with_llm_calls():
+    response = _response_with_hits([])
+    response["debug"] = DebugState(llm_calls=[
+        {"stage": "planner", "attempt": 1, "path": "structured", "response_metadata": {"model_name": "gpt-5-nano"},
+         "usage_metadata": {"input_tokens": 12, "output_tokens": 3, "total_tokens": 15}},
+        {"stage": "synthesis", "attempt": 1, "path": "structured", "response_metadata": {"model_name": "gpt-5-mini"},
+         "usage_metadata": {"input_tokens": 20, "output_tokens": 5, "total_tokens": 25}},
+    ])
+    return response
 
 
-def _response_with_ai_metadata() -> dict:
-    return {
-        "messages": [
-            HumanMessage(content="question"),
-            AIMessage(
-                content="final answer",
-                response_metadata={"model_name": "gpt-5-mini"},
-                usage_metadata={"input_tokens": 14, "output_tokens": 6, "total_tokens": 20},
-            ),
-        ],
-        "response": ResponseState(
-            final_answer="final answer",
-            payload={"answer": "final answer", "claims": [], "evidence": [], "confidence": None},
-            synthesis_attempt=1,
-        ),
-    }
+def _response_with_ai_metadata():
+    return {"messages": [HumanMessage(content="question"), AIMessage(
+        content="final answer", response_metadata={"model_name": "gpt-5-mini"},
+        usage_metadata={"input_tokens": 14, "output_tokens": 6, "total_tokens": 20})],
+        "response": ResponseState(result=finalize_answer(text_document("final answer"), []), synthesis_attempt=1)}
 
 
-def _response_with_save_receipt() -> dict:
-    return {
-        "messages": [
-            HumanMessage(content="question"),
-            AIMessage(content="final answer before save"),
-            ToolMessage(
-                content=json.dumps(
-                    {
-                        "message": "Saved output to response_20260101_010101.txt",
-                        "file_path": "output/save_text/response_20260101_010101.txt",
-                    },
-                    ensure_ascii=False,
-                ),
-                name="save_text",
-                tool_call_id="save-1",
-            ),
-        ],
-        "response": ResponseState(
-            final_answer="final answer before save",
-            payload={
-                "answer": "final answer before save",
-                "claims": [],
-                "evidence": [],
-                "confidence": None,
-            },
-        ),
-    }
+def _response_with_save_receipt():
+    receipt = ActionReceipt(kind="save_text", status="success", file_path="output/save_text/response_20260101_010101.txt", message="Saved output")
+    return {"messages": [HumanMessage(content="question"), AIMessage(content="final answer before save"),
+                         ToolMessage(content=json.dumps({"message": "Saved output", "file_path": receipt.file_path}),
+                                     name="save_text", tool_call_id="save-1")],
+            "response": ResponseState(result=finalize_answer(text_document("final answer before save"), [], actions=[receipt]))}
 
 
-def _assemble_response(response: dict) -> dict:
-    debug = DebugCollector().build(
-        response=response,
-        updated_messages=response["messages"],
-        graph_total_ms=100,
-        upload_retriever_build_ms=None,
-    )
-    return ResponseAssembler().assemble(
-        response=response, updated_messages=response["messages"], debug_info=debug,
-    )
+def _assemble_response(response):
+    debug = DebugCollector().build(response=response, updated_messages=response["messages"],
+                                   graph_total_ms=100, upload_retriever_build_ms=None)
+    return ResponseAssembler().assemble(response=response, debug_info=debug)
+
+
+def _answer_text(result):
+    return export_answer_text(AnswerResponse.model_validate(result["response"]))
+
+
+def _indexed(text, *, start=0, end=None, cell_index=2, uri="uploads/session/sample_pipeline.ipynb"):
+    snapshot = build_snapshot(source_uri=uri, title=Path(uri).name, media_type="text/plain", source_type="upload",
+                              content=text, parser="fixture", parser_version="1")
+    element = DocumentElement(element_id="source-cell", kind="code", text=text, language="python",
+                              anchors=[SourceAnchor(kind="notebook", cell_id=f"native-{cell_index}", cell_index=cell_index)])
+    ref = build_evidence(snapshot=snapshot, element=element, start=start, end=end)
+    return Document(page_content=ref.excerpt, metadata={"source": uri, "evidence_ref": ref.model_dump_json(),
+                                                     "document_chunk_count": 1, "document_char_count": len(text)})
 
 
 class _FakeVectorStore:
-    def similarity_search_with_score(self, query: str, k: int = 4):
-        _ = (query, k)
-        return [
-            (
-                Document(
-                    page_content="uploaded snippet",
-                    metadata={
-                        "source": "uploads/session/sample_pipeline.ipynb",
-                        "cell_id": 2,
-                        "chunk_id": 1,
-                        "start_offset": 12,
-                        "end_offset": 28,
-                    },
-                ),
-                0.87,
-            )
-        ]
+    def similarity_search_with_score(self, query, k=4):
+        return [(_indexed("setup value uploaded snippet", start=12), 0.87)]
 
 
 class _FakeDedupVectorStore:
-    def similarity_search_with_score(self, query: str, k: int = 4):
-        _ = (query, k)
-        return [
-            (
-                Document(
-                    page_content="first chunk",
-                    metadata={
-                        "source": "uploads/session/sample_pipeline.ipynb",
-                        "cell_id": 0,
-                        "chunk_id": 0,
-                        "start_offset": 0,
-                        "end_offset": 10,
-                    },
-                ),
-                0.81,
-            ),
-            (
-                Document(
-                    page_content="second chunk",
-                    metadata={
-                        "source": "uploads/session/sample_pipeline.ipynb",
-                        "cell_id": 0,
-                        "chunk_id": 1,
-                        "start_offset": 10,
-                        "end_offset": 22,
-                    },
-                ),
-                0.79,
-            ),
-        ]
+    def similarity_search_with_score(self, query, k=4):
+        text = "first chunk\nsecond chunk"
+        return [(_indexed(text, end=11, cell_index=0), 0.81), (_indexed(text, start=12, cell_index=0), 0.79)]
 
 
 class _FakeNegativeScoreVectorStore:
-    def similarity_search_with_score(self, query: str, k: int = 4):
-        _ = (query, k)
-        return [
-            (
-                Document(
-                    page_content="negative score snippet",
-                    metadata={
-                        "source": "uploads/session/sample_pipeline.ipynb",
-                        "cell_id": 1,
-                        "chunk_id": 0,
-                        "start_offset": 0,
-                        "end_offset": 20,
-                    },
-                ),
-                -0.24,
-            )
-        ]
+    def similarity_search_with_score(self, query, k=4):
+        return [(_indexed("negative score snippet", cell_index=1), -0.24)]
 
 
 class _FakeSingleChunkLongVectorStore:
-    def similarity_search_with_score(self, query: str, k: int = 4):
-        _ = (query, k)
-        long_chunk = "setup = True " + ("x " * 320) + "target_call(random_state=42)"
-        return [
-            (
-                Document(
-                    page_content=long_chunk,
-                    metadata={
-                        "source": "uploads/session/sample_pipeline.py",
-                        "chunk_id": 0,
-                        "cell_id": None,
-                        "start_offset": 0,
-                        "end_offset": len(long_chunk),
-                        "document_chunk_count": 1,
-                        "document_char_count": len(long_chunk),
-                    },
-                ),
-                0.12,
-            )
-        ]
+    def similarity_search_with_score(self, query, k=4):
+        text = "setup = True " + ("x " * 320) + "target_call(random_state=42)"
+        return [(_indexed(text, uri="uploads/session/sample_pipeline.py"), 0.12)]
 
 
 class _FakeRetriever:
@@ -318,188 +163,79 @@ class EvidencePipelineTest(unittest.TestCase):
         http_patcher.start()
         self.addCleanup(http_patcher.stop)
 
-    def test_extract_observed_evidence_uses_tool_native_payloads(self) -> None:
-        tavily_item = {
-            "kind": "official",
-            "tool": "tavily_search",
-            "source_id": "url:https://numpy.org/doc/stable/",
-            "document_id": "url:https://numpy.org/doc/stable/",
-            "url_or_path": "https://numpy.org/doc/stable/",
-            "title": "NumPy docs",
-            "snippet": "broadcasting",
-            "score": 0.98,
-        }
-        upload_item = {
-            "kind": "local",
-            "tool": "upload_search",
-            "source_id": "path:uploads/s1/sample.ipynb#cell=0;chunk=1;start=0;end=16",
-            "document_id": "path:uploads/s1/sample.ipynb",
-            "url_or_path": "uploads/s1/sample.ipynb",
-            "title": None,
-            "snippet": "local snippet",
-            "score": 0.71,
-            "chunk_id": 1,
-            "cell_id": 0,
-            "start_offset": 0,
-            "end_offset": 16,
-        }
-
+    def test_extract_observed_hits_uses_tool_native_payloads(self) -> None:
+        """Only retrieval messages contribute distinct observed hits; malformed payloads are reported."""
+        docs = _hit().model_dump(mode="json")
+        upload = _hit("local snippet", uri="uploads/s1/sample.ipynb", source_type="upload", score=0.71).model_dump(mode="json")
         messages = [
-            ToolMessage(
-                content=json.dumps(
-                    {
-                        "evidence": [tavily_item, tavily_item],
-                        "diagnostics": {
-                            "tool": "tavily_search",
-                            "route": "docs",
-                            "status": "success",
-                            "message": "",
-                            "query": "numpy",
-                            "attempt": 1,
-                        },
-                    }
-                ),
-                name="tavily_search",
-                tool_call_id="1",
-            ),
-            ToolMessage(
-                content=json.dumps(
-                    {
-                        "evidence": [upload_item],
-                        "diagnostics": {
-                            "tool": "upload_search",
-                            "route": "upload",
-                            "status": "success",
-                            "message": "",
-                            "query": "uploaded file",
-                            "attempt": 1,
-                        },
-                    }
-                ),
-                name="upload_search",
-                tool_call_id="2",
-            ),
+            ToolMessage(content=json.dumps({"hits": [docs, docs]}), name="tavily_search", tool_call_id="1"),
+            ToolMessage(content=json.dumps({"hits": [upload]}), name="upload_search", tool_call_id="2"),
             ToolMessage(content="not-json", name="upload_search", tool_call_id="3"),
-            ToolMessage(content=json.dumps([upload_item]), name="save_text", tool_call_id="4"),
+            ToolMessage(content=json.dumps({"hits": [upload]}), name="save_text", tool_call_id="4"),
         ]
         debug = DebugCollector().build(response={}, updated_messages=messages, graph_total_ms=0, upload_retriever_build_ms=None)
-        observed = debug["observed_evidence"]
-        errors = debug["errors"]
+        self.assertEqual(debug["observed_hits"], [docs, upload])
+        self.assertTrue(any("invalid JSON" in error for error in debug["errors"]))
 
-        self.assertEqual(len(observed), 2)
-        self.assertTrue(any(item["tool"] == "tavily_search" for item in observed))
-        self.assertTrue(any(item["tool"] == "upload_search" for item in observed))
-        self.assertTrue(any("tool:upload_search" in error for error in errors))
-
-    def test_response_payload_excludes_observed_evidence_when_it_was_not_adopted(self) -> None:
-        evidence_payload = [
-            {
-                "kind": "official",
-                "tool": "tavily_search",
-                "source_id": "url:https://numpy.org/doc/stable/",
-                "document_id": "url:https://numpy.org/doc/stable/",
-                "url_or_path": "https://numpy.org/doc/stable/",
-                "title": "NumPy docs",
-                "snippet": "broadcasting",
-                "score": 0.99,
-            }
-        ]
-
-        response = _evidence_response(evidence_payload)
-        unused_evidence = {
-            **evidence_payload[0],
-            "source_id": "url:https://pandas.pydata.org/docs/",
-            "document_id": "url:https://pandas.pydata.org/docs/",
-            "url_or_path": "https://pandas.pydata.org/docs/",
-            "title": "Pandas docs",
-        }
-        response["messages"][1] = ToolMessage(
-            content=json.dumps({"evidence": [*evidence_payload, unused_evidence]}),
-            name="tavily_search", tool_call_id="call-1",
-        )
+    def test_response_keeps_canonical_document_and_excludes_unused_observed_hits(self) -> None:
+        """Response citations derive from the checked content, independently of observed or later chat text."""
+        adopted = _hit()
+        unused = _hit("pandas", uri="https://pandas.pydata.org/docs/")
+        response = _response_with_hits([adopted])
+        response["messages"][1] = ToolMessage(content=json.dumps({"hits": [item.model_dump(mode="json") for item in (adopted, unused)]}),
+                                               name="tavily_search", tool_call_id="call-1")
         result = _assemble_response(response)
+        self.assertEqual(result["response"], response["response"].result.model_dump(mode="json"))
+        self.assertEqual(len(result["debug"]["observed_hits"]), 2)
+        self.assertEqual(_answer_text(result), "final answer [1]")
+        self.assertEqual([citation["evidence"]["id"] for citation in result["response"]["citations"]], [adopted.evidence.id])
 
-        self.assertEqual(len(result["response_payload"]["evidence"]), 1)
-        self.assertEqual(len(result["debug"]["observed_evidence"]), 2)
-        self.assertEqual(result["response_payload"]["answer"], "final answer [1]")
-        self.assertEqual(result["response_payload"]["claims"][0]["evidence_ids"], ["url:https://numpy.org/doc/stable/"])
-        self.assertEqual(result["response_payload"]["evidence"][0]["url_or_path"], "https://numpy.org/doc/stable/")
-
-    def test_upload_search_returns_typed_chunk_evidence_and_handles_missing_retriever(self) -> None:
+    def test_upload_search_returns_typed_source_range_and_handles_missing_retriever(self) -> None:
         registry = build_tool_registry(AppSettings(openai_api_key="test", tavily_api_key="test"))
+        unavailable = registry.upload_search_tool(query="uploaded info", k=3, retriever=None)
+        self.assertEqual(unavailable["diagnostics"]["status"], "unavailable")
+        self.assertEqual(unavailable["hits"], [])
+        payload = registry.upload_search_tool(query="uploaded info", k=3, retriever=_FakeRetriever())
+        self.assertEqual(payload["diagnostics"]["status"], "success")
+        self.assertEqual(payload["diagnostics"]["metric"], "l2")
+        self.assertEqual(payload["diagnostics"]["score_direction"], "lower_is_better")
+        hits = parse_search_hits(payload)
+        self.assertEqual(len(hits), 1)
+        ref = hits[0].evidence
+        self.assertEqual(ref.snapshot.source_type, "upload")
+        self.assertEqual(ref.snapshot.source_uri, "uploads/session/sample_pipeline.ipynb")
+        self.assertEqual(ref.element.anchors[0].cell_index, 2)
+        self.assertEqual(ref.element.anchors[0].cell_id, "native-2")
+        self.assertEqual((ref.selection.start, ref.selection.end), (12, 28))
+        self.assertEqual(ref.excerpt, "uploaded snippet")
+        self.assertEqual(ref.element.text[ref.selection.start:ref.selection.end], ref.excerpt)
+        self.assertAlmostEqual(hits[0].score.normalized, 1.0 - (0.87 / math.sqrt(2.0)))
 
-        no_retriever = registry.upload_search_tool(query="uploaded info", k=3, retriever=None)
-        self.assertEqual(no_retriever["diagnostics"]["status"], "unavailable")
-        self.assertEqual(no_retriever["evidence"], [])
-
-        with_retriever = registry.upload_search_tool(
-            query="uploaded info",
-            k=3,
-            retriever=_FakeRetriever(),
-        )
-        evidence = with_retriever["evidence"]
-        self.assertEqual(with_retriever["diagnostics"]["status"], "success")
-        self.assertEqual(with_retriever["diagnostics"]["metric"], "l2")
-        self.assertEqual(with_retriever["diagnostics"]["score_direction"], "lower_is_better")
-        self.assertEqual(len(evidence), 1)
-        self.assertEqual(evidence[0]["kind"], "local")
-        self.assertEqual(evidence[0]["tool"], "upload_search")
-        self.assertEqual(evidence[0]["url_or_path"], "uploads/session/sample_pipeline.ipynb")
-        self.assertEqual(evidence[0]["document_id"], "path:uploads/session/sample_pipeline.ipynb")
-        self.assertEqual(
-            evidence[0]["source_id"],
-            "path:uploads/session/sample_pipeline.ipynb#cell=2;chunk=1;start=12;end=28",
-        )
-        self.assertEqual(evidence[0]["cell_id"], 2)
-        self.assertEqual(evidence[0]["chunk_id"], 1)
-        self.assertEqual(evidence[0]["start_offset"], 12)
-        self.assertEqual(evidence[0]["end_offset"], 28)
-        self.assertAlmostEqual(evidence[0]["score"], 1.0 - (0.87 / math.sqrt(2.0)))
-
-    def test_upload_search_keeps_multiple_chunks_from_same_document(self) -> None:
+    def test_upload_search_keeps_multiple_source_ranges_from_same_snapshot(self) -> None:
         registry = build_tool_registry(AppSettings(openai_api_key="test", tavily_api_key="test"))
+        result = registry.upload_search_tool(query="uploaded info", k=4, retriever=_FakeRetriever(vectorstore=_FakeDedupVectorStore()))
+        hits = parse_search_hits(result)
+        self.assertEqual(len(hits), 2)
+        self.assertEqual(hits[0].evidence.snapshot, hits[1].evidence.snapshot)
+        self.assertNotEqual(hits[0].evidence.id, hits[1].evidence.id)
+        self.assertEqual([hit.evidence.selection.start for hit in hits], [12, 0])
 
-        result = registry.upload_search_tool(
-            query="uploaded info",
-            k=4,
-            retriever=_FakeRetriever(vectorstore=_FakeDedupVectorStore()),
-        )
-
-        evidence = result["evidence"]
-        self.assertEqual(len(evidence), 2)
-        self.assertNotEqual(evidence[0]["source_id"], evidence[1]["source_id"])
-        self.assertEqual(
-            [item["chunk_id"] for item in evidence],
-            [1, 0],
-        )
-
-    def test_upload_search_clamps_negative_raw_distances_to_max_similarity(self) -> None:
+    def test_upload_search_clamps_normalized_distance_without_losing_raw_value(self) -> None:
         registry = build_tool_registry(AppSettings(openai_api_key="test", tavily_api_key="test"))
+        result = registry.upload_search_tool(query="uploaded info", k=4, retriever=_FakeRetriever(vectorstore=_FakeNegativeScoreVectorStore()))
+        hits = parse_search_hits(result)
+        self.assertEqual(len(hits), 1)
+        self.assertEqual(hits[0].score.normalized, 1.0)
+        self.assertEqual(hits[0].score.raw, -0.24)
 
-        result = registry.upload_search_tool(
-            query="uploaded info",
-            k=4,
-            retriever=_FakeRetriever(vectorstore=_FakeNegativeScoreVectorStore()),
-        )
-
-        evidence = result["evidence"]
-        self.assertEqual(len(evidence), 1)
-        self.assertEqual(evidence[0]["score"], 1.0)
-
-    def test_upload_search_uses_query_window_for_single_chunk_files(self) -> None:
+    def test_upload_search_uses_exact_query_window_for_single_chunk_files(self) -> None:
         registry = build_tool_registry(AppSettings(openai_api_key="test", tavily_api_key="test"))
-
-        result = registry.upload_search_tool(
-            query="random_state parameter",
-            k=4,
-            retriever=_FakeRetriever(vectorstore=_FakeSingleChunkLongVectorStore()),
-        )
-
-        evidence = result["evidence"]
-        self.assertEqual(len(evidence), 1)
-        self.assertLess(len(evidence[0]["snippet"]), 500)
-        self.assertIn("target_call(random_state=42)", evidence[0]["snippet"])
-        self.assertNotIn("...", evidence[0]["snippet"])
+        result = registry.upload_search_tool(query="random_state parameter", k=4, retriever=_FakeRetriever(vectorstore=_FakeSingleChunkLongVectorStore()))
+        refs = [hit.evidence for hit in parse_search_hits(result)]
+        self.assertEqual(len(refs), 1)
+        self.assertLess(len(refs[0].excerpt), 500)
+        self.assertIn("target_call(random_state=42)", refs[0].excerpt)
+        self.assertEqual(refs[0].excerpt, refs[0].element.text[refs[0].selection.start:refs[0].selection.end])
 
     def test_docs_search_filters_to_allowed_doc_prefixes(self) -> None:
         self.tavily_payload = {
@@ -528,7 +264,7 @@ class EvidencePipelineTest(unittest.TestCase):
         registry = build_tool_registry(AppSettings(openai_api_key="test", tavily_api_key="test"))
         result = registry.tavily_search_tool(query="official docs")
 
-        urls = [item["url_or_path"] for item in result["evidence"]]
+        urls = [item["evidence"]["snapshot"]["source_uri"] for item in result["hits"]]
         self.assertIn("https://fastapi.tiangolo.com/ko/tutorial/response-model", urls)
         self.assertIn("https://huggingface.co/docs/transformers/index", urls)
         self.assertNotIn("https://huggingface.co/datasets/foo/bar", urls)
@@ -549,7 +285,7 @@ class EvidencePipelineTest(unittest.TestCase):
         result = registry.tavily_search_tool(query="official docs")
 
         self.assertEqual(result["diagnostics"]["status"], "no_result")
-        self.assertEqual(result["evidence"], [])
+        self.assertEqual(result["hits"], [])
         self.assertEqual(result["diagnostics"]["provider_result_count"], 1)
         self.assertEqual(result["diagnostics"]["filtered_path_prefix_count"], 1)
         self.assertEqual(result["diagnostics"]["final_evidence_count"], 0)
@@ -575,7 +311,7 @@ class EvidencePipelineTest(unittest.TestCase):
         registry = build_tool_registry(AppSettings(openai_api_key="test", tavily_api_key="test"))
         result = registry.tavily_search_tool(query="official docs")
 
-        urls = [item["url_or_path"] for item in result["evidence"]]
+        urls = [item["evidence"]["snapshot"]["source_uri"] for item in result["hits"]]
         self.assertEqual(urls, ["https://huggingface.co/docs/transformers/index"])
 
     def test_docs_search_returns_matching_evidence_when_library_fallback_finds_results(self) -> None:
@@ -598,7 +334,7 @@ class EvidencePipelineTest(unittest.TestCase):
                 result = registry.tavily_search_tool(query=query)
 
                 self.assertEqual(result["diagnostics"]["status"], "success")
-                self.assertEqual([item["url_or_path"] for item in result["evidence"]], [url])
+                self.assertEqual([item["evidence"]["snapshot"]["source_uri"] for item in result["hits"]], [url])
 
 
     def test_docs_search_filters_cross_library_docs_results_for_hinted_queries(
@@ -624,7 +360,7 @@ class EvidencePipelineTest(unittest.TestCase):
         registry = build_tool_registry(AppSettings(openai_api_key="test", tavily_api_key="test"))
         result = registry.tavily_search_tool(query="numpy 공식 문서")
 
-        urls = [item["url_or_path"] for item in result["evidence"]]
+        urls = [item["evidence"]["snapshot"]["source_uri"] for item in result["hits"]]
         self.assertEqual(
             urls,
             ["https://numpy.org/doc/stable/reference/generated/numpy.concatenate.html"],
@@ -638,29 +374,14 @@ class EvidencePipelineTest(unittest.TestCase):
         self.assertIsNone(infer_docs_query_hint("baremetal 공식 문서"))
 
     def test_debug_exposes_retrieval_and_planner_diagnostics(self) -> None:
-        evidence_payload = [
-            {
-                "kind": "official",
-                "tool": "tavily_search",
-                "source_id": "url:https://numpy.org/doc/stable/",
-                "document_id": "url:https://numpy.org/doc/stable/",
-                "url_or_path": "https://numpy.org/doc/stable/",
-                "title": "NumPy docs",
-                "snippet": "broadcasting",
-                "score": 0.99,
-            }
-        ]
-
-        response = _evidence_response(evidence_payload)
-        result = _assemble_response(response)
-
+        result = _assemble_response(_response_with_hits([_hit()]))
         self.assertEqual(result["debug"]["retrieval_diagnostics"][0]["status"], "success")
         self.assertEqual(result["debug"]["planner_diagnostics"]["status"], "heuristic_fallback")
         self.assertTrue(result["debug"]["planner_diagnostics"]["intent_required"])
         self.assertEqual(result["debug"]["planner_diagnostics"]["required_routes"], ["docs"])
 
     def test_debug_exposes_latency_breakdown(self) -> None:
-        response = _evidence_response([])
+        response = _response_with_hits([])
         result = _assemble_response(response)
 
         latency_breakdown = result["debug"]["latency_breakdown"]
@@ -676,7 +397,7 @@ class EvidencePipelineTest(unittest.TestCase):
 
         result = manager.run_agent_flow("   ")
 
-        self.assertEqual(result["response_payload"]["answer"], "query must not be blank")
+        self.assertEqual(_answer_text(result), "query must not be blank")
         self.assertEqual(result["debug"]["observability_status"], "failed")
         self.assertGreaterEqual(result["debug"]["latency_breakdown"]["server_total_ms"], 0)
 
@@ -700,7 +421,7 @@ class EvidencePipelineTest(unittest.TestCase):
         result = manager.run_agent_flow("question")
 
         self.assertEqual(result["debug"]["observability_status"], "failed")
-        self.assertIn("timed out", result["message"].lower())
+        self.assertIn("timed out", _answer_text(result).lower())
         latency = result["debug"]["latency_breakdown"]
         self.assertEqual(
             [(event["stage"], event["status"]) for event in latency["stage_attempts"]],
@@ -760,23 +481,21 @@ class EvidencePipelineTest(unittest.TestCase):
                     query="random_state", retriever=state["runtime"].retriever,
                 )
                 self.assertEqual(result["diagnostics"]["status"], "success")
-                self.assertEqual(result["evidence"][0]["kind"], "local")
-                self.assertEqual(result["evidence"][0]["url_or_path"], str(upload))
-                self.assertIn("random_state=42", result["evidence"][0]["snippet"])
+                self.assertEqual(result["hits"][0]["evidence"]["snapshot"]["source_type"], "upload")
+                self.assertEqual(result["hits"][0]["evidence"]["snapshot"]["source_uri"], str(upload))
+                self.assertIn("random_state=42", parse_search_hits(result)[0].evidence.excerpt)
                 self.assertGreaterEqual(runner.finalize_pending_upload_retriever(), 0)
             finally:
                 runner.cancel_pending_upload_retriever()
                 session.close()
 
-    def test_save_tool_message_does_not_override_final_answer(self) -> None:
+    def test_save_receipt_is_separate_from_canonical_answer(self) -> None:
         response = _response_with_save_receipt()
         result = _assemble_response(response)
-
-        self.assertTrue(result["message"].startswith("final answer before save"))
-        self.assertIn("저장 완료:", result["message"])
-        self.assertTrue(result["filepath"].endswith("response_20260101_010101.txt"))
-        self.assertTrue(result["response_payload"]["answer"].startswith("final answer before save"))
-        self.assertEqual(result["response_payload"]["claims"], [])
+        self.assertEqual(_answer_text(result), "final answer before save")
+        self.assertEqual(result["response"], response["response"].result.model_dump(mode="json"))
+        self.assertEqual(result["response"]["actions"][0]["status"], "success")
+        self.assertTrue(result["response"]["actions"][0]["file_path"].endswith("response_20260101_010101.txt"))
 
 
     def test_docs_search_post_filters_cross_library_domains_for_hinted_queries(self) -> None:
@@ -801,7 +520,7 @@ class EvidencePipelineTest(unittest.TestCase):
         result = registry.tavily_search_tool(query="pandas official docs")
 
         self.assertEqual(
-            [item["url_or_path"] for item in result["evidence"]],
+            [item["evidence"]["snapshot"]["source_uri"] for item in result["hits"]],
             ["https://pandas.pydata.org/docs/reference/api/pandas.concat.html"],
         )
 

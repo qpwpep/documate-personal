@@ -5,7 +5,8 @@ from hypothesis import given, strategies as st
 from src.core.contracts import RetrievalDiagnostic
 from src.core.contracts.debug import RetryState
 from src.core.contracts.boundary.graph import build_graph_state_input
-from src.core.evidence import truncate_snippet
+from src.core.documents import DocumentElement, build_snapshot
+from src.core.evidence import RetrievalScore, SearchHit, build_evidence, parse_search_hits
 from src.core.planner_schema import PlannerOutput, RetrievalTask
 from src.runtime.nodes.planner.query_sanitizer import (
     sanitize_planner_output_queries,
@@ -13,6 +14,17 @@ from src.runtime.nodes.planner.query_sanitizer import (
 )
 from src.runtime.nodes.validation import make_pre_synthesis_validation_node
 from src.infra.tools.local_rag import build_upload_search_tool
+from src.infra.chunking import chunk_python_text
+from src.infra.tools.local_rag.serialization import build_query_focused_snippet
+
+
+def _hit(text: str, *, source_type: str, score: float) -> dict:
+    uri = "https://numpy.org/doc/stable/" if source_type == "official" else "uploads/demo/sample.py"
+    snapshot = build_snapshot(source_uri=uri, title="Test source", media_type="text/plain", source_type=source_type,
+                              content=text, parser="test", parser_version="1")
+    element = DocumentElement(element_id="source", kind="paragraph", text=text)
+    return SearchHit(evidence=build_evidence(snapshot=snapshot, element=element),
+                     score=RetrievalScore(metric="test-relevance", raw=score, normalized=score, direction="higher"), rank=1).model_dump(mode="json")
 
 
 class BackendRetrievalRegressionTest(unittest.TestCase):
@@ -118,16 +130,15 @@ class BackendRetrievalRegressionTest(unittest.TestCase):
         self.assertIn("Dataset", pytorch_query)
         self.assertIn("DataLoader", pytorch_query)
 
-    def test_truncate_snippet_preserves_tail_for_long_local_files(self) -> None:
+    def test_query_excerpt_is_contiguous_source_text_in_long_local_files(self) -> None:
         text = (
             "import pandas as pd\n"
             + ("x = 1\n" * 120)
             + 'grouped = all_sales.groupby("region", as_index=False)["amount"].sum()\n'
             + 'sales_with_profile = all_sales.merge(profiles, on="user_id", how="left")\n'
         )
-        truncated = truncate_snippet(text, max_length=220)
-        self.assertIsNotNone(truncated)
-        self.assertIn("import pandas as pd", truncated)
+        truncated = build_query_focused_snippet(text, query="groupby merge", max_length=220)
+        self.assertIn(truncated, text)
         self.assertIn("groupby", truncated)
         self.assertIn("merge", truncated)
 
@@ -146,21 +157,9 @@ class BackendRetrievalRegressionTest(unittest.TestCase):
                         RetrievalTask(route="docs", query="official docs", k=3),
                         RetrievalTask(route="upload", query=upload_query, k=3),
                     ])},
-                    retrieval={"evidence_log": [
-                        {
-                            "kind": "official", "tool": "tavily_search",
-                            "source_id": "url:https://numpy.org/doc/stable/",
-                            "url_or_path": "https://numpy.org/doc/stable/",
-                            "snippet": "Official documentation describes the operation.", "score": 0.9,
-                        },
-                        {
-                            "kind": "local", "tool": "upload_search",
-                            "source_id": "path:uploads/demo/sample.py#chunk=0;start=0;end=96",
-                            "document_id": "path:uploads/demo/sample.py",
-                            "url_or_path": "uploads/demo/sample.py",
-                            "snippet": "train_test_split(X, y, test_size=0.2, random_state=42)",
-                            "score": score, "chunk_id": 0, "start_offset": 0, "end_offset": 96,
-                        },
+                    retrieval={"hit_log": [
+                        _hit("Official documentation describes the operation.", source_type="official", score=0.9),
+                        _hit("train_test_split(X, y, test_size=0.2, random_state=42)", source_type="upload", score=score),
                     ]},
                     debug={"retrieval_diagnostics": [RetrievalDiagnostic(
                         route="upload", tool="upload_search", status="success",
@@ -173,29 +172,21 @@ class BackendRetrievalRegressionTest(unittest.TestCase):
                 self.assertFalse(updates["retry"].needs_retry)
                 self.assertIsNone(updates["retry"].retry_reason)
                 self.assertEqual(updates["retry"].attempt, 0)
-                self.assertAlmostEqual(updates["retry"].score_avg, (0.9 + score) / 2)
                 self.assertNotIn("response", updates)
 
     def test_upload_search_normalizes_raw_l2_scores_without_warning(self) -> None:
         upload_tool = build_upload_search_tool()
 
-        class _Doc:
-            def __init__(self, text, cell_id):
-                self.page_content = text
-                self.metadata = {
-                    "source": "uploads/demo/sample_pipeline.ipynb",
-                    "cell_id": cell_id,
-                    "chunk_id": 0,
-                    "start_offset": 0,
-                    "end_offset": len(text),
-                }
+        def document(text):
+            indexed = chunk_python_text(path="uploads/demo/sample.py", text=text, chunk_size=800, chunk_overlap=120)
+            return indexed.hydrate(indexed.chunks[0])
 
         class _VectorStore:
             def similarity_search_with_score(self, query, k=4):
                 _ = (query, k)
                 return [
-                    (_Doc("from sklearn.model_selection import train_test_split", 1), 1.8),
-                    (_Doc("train_test_split(X, y, test_size=0.2, random_state=42)", 2), 1.2),
+                    (document("from sklearn.model_selection import train_test_split"), 1.8),
+                    (document("train_test_split(X, y, test_size=0.2, random_state=42)"), 1.2),
                 ]
 
         retriever = type("Retriever", (), {"vectorstore": _VectorStore()})()
@@ -208,7 +199,7 @@ class BackendRetrievalRegressionTest(unittest.TestCase):
         self.assertEqual(payload["diagnostics"]["warnings"], [])
         self.assertEqual(payload["diagnostics"]["metric"], "l2")
         self.assertEqual(payload["diagnostics"]["score_direction"], "lower_is_better")
-        scores = [item["score"] for item in payload["evidence"]]
+        scores = [hit.score.normalized for hit in parse_search_hits(payload)]
         self.assertTrue(all(0.0 <= score <= 1.0 for score in scores))
         self.assertEqual(len(scores), 2)
         self.assertAlmostEqual(max(scores), 0.1514718625761431)

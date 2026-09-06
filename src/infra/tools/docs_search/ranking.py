@@ -1,11 +1,9 @@
 from __future__ import annotations
 
 import re
-from typing import Any
 from urllib.parse import urlparse
 
-from src.core.answer_schema import clean_grounded_text
-from src.core.evidence import EvidenceItem
+from src.core.evidence import SearchHit
 from src.core.rules import get_rules_config
 from src.infra.tools.docs_search.normalization import (
     normalize_identifier_reference_text,
@@ -71,7 +69,7 @@ def extract_exact_identifier_terms(query: str, *, library_name: str = "") -> lis
 
 def has_exact_identifier_coverage(
     query: str,
-    evidence_items: list[dict[str, Any]],
+    hits: list[SearchHit],
     *,
     library_name: str = "",
 ) -> bool:
@@ -80,11 +78,11 @@ def has_exact_identifier_coverage(
         return True
     combined_text = " ".join(
         part
-        for item in evidence_items
+        for item in hits
         for part in (
-            str(item.get("title") or ""),
-            str(item.get("url_or_path") or ""),
-            str(item.get("snippet") or ""),
+            item.evidence.snapshot.title,
+            item.evidence.snapshot.source_uri,
+            item.evidence.excerpt,
         )
         if part
     )
@@ -100,13 +98,13 @@ def has_exact_identifier_coverage(
     )
 
 
-def entity_hit_score(query: str, evidence_item: dict[str, Any]) -> float:
+def entity_hit_score(query: str, hit: SearchHit) -> float:
     query_terms = tokenize_topic_terms(query)
     haystack = " ".join(
         [
-            str(evidence_item.get("title") or ""),
-            str(evidence_item.get("url_or_path") or ""),
-            str(evidence_item.get("snippet") or ""),
+            hit.evidence.snapshot.title,
+            hit.evidence.snapshot.source_uri,
+            hit.evidence.excerpt,
         ]
     ).lower()
     return float(sum(1 for token in query_terms if token in haystack))
@@ -134,13 +132,13 @@ def query_requests_api_detail(query: str) -> bool:
     )
 
 
-def api_reference_preference_score(query: str, evidence_item: dict[str, Any]) -> float:
+def api_reference_preference_score(query: str, hit: SearchHit) -> float:
     if not query_requests_api_detail(query):
         return 0.0
 
-    url = str(evidence_item.get("url_or_path") or "").lower()
-    title = str(evidence_item.get("title") or "").lower()
-    metadata = evidence_item.get("doc_metadata")
+    url = hit.evidence.snapshot.source_uri.lower()
+    title = hit.evidence.snapshot.title.lower()
+    metadata = hit.evidence.element.metadata.get("doc_metadata")
     score = 0.0
 
     if "/api/_as_gen/" in url:
@@ -172,51 +170,45 @@ def path_cluster(value: str) -> str:
     return "/".join(parts[:4]).lower()
 
 
-def filter_docs_evidence_by_topic_purity(
+def filter_docs_hits_by_topic_purity(
     query: str,
-    evidence_items: list[dict[str, Any]],
+    hits: list[SearchHit],
     retrieval_warnings: list[str],
-) -> list[dict[str, Any]]:
-    if len(evidence_items) <= 1:
-        return evidence_items
+) -> list[SearchHit]:
+    meaningful_hits = [item for item in hits if hit_has_grounded_text(item)]
+    if len(meaningful_hits) < len(hits):
+        retrieval_warnings.append("docs_chrome_only")
+    hits = meaningful_hits
+    if len(hits) <= 1:
+        return hits
 
     ranked = sorted(
-        evidence_items,
+        hits,
         key=lambda item: (
             api_reference_preference_score(query, item),
             entity_hit_score(query, item),
-            float(item.get("score") or 0.0),
+            float(item.score.normalized or 0.0) if item.score else 0.0,
         ),
         reverse=True,
     )
     if entity_hit_score(query, ranked[0]) <= 0.0:
         return ranked[:2]
     anchor = ranked[0]
-    anchor_cluster = path_cluster(str(anchor.get("url_or_path") or ""))
+    anchor_cluster = path_cluster(anchor.evidence.snapshot.source_uri)
     kept = [anchor]
     for item in ranked[1:]:
-        same_cluster = path_cluster(str(item.get("url_or_path") or "")) == anchor_cluster
+        same_cluster = path_cluster(item.evidence.snapshot.source_uri) == anchor_cluster
         strong_entity_match = entity_hit_score(query, item) >= 2.0
         if same_cluster or strong_entity_match:
             kept.append(item)
-    if len(kept) < len(evidence_items):
+    if len(kept) < len(hits):
         retrieval_warnings.append("topic_purity_pruned")
     return kept[:2]
 
 
-def evidence_item_has_grounded_text(item: dict[str, Any]) -> bool:
-    if not isinstance(item, dict):
-        return False
-    cleaned_snippet = clean_grounded_text(str(item.get("snippet") or ""))
-    cleaned_title = clean_grounded_text(str(item.get("title") or ""))
-    if cleaned_snippet or cleaned_title:
-        return True
-    combined_raw = " ".join(
-        part.strip().lower()
-        for part in (str(item.get("title") or ""), str(item.get("snippet") or ""))
-        if part and part.strip()
-    )
-    chrome_markers = (
+def hit_has_grounded_text(hit: SearchHit) -> bool:
+    """Check returned source text, never treat a document title as factual support."""
+    navigation_prefixes = (
         "table of contents",
         "on this page",
         "previous:",
@@ -225,53 +217,37 @@ def evidence_item_has_grounded_text(item: dict[str, Any]) -> bool:
         "edit this page",
         "view source",
         "home >",
+        "navigation",
+        "back to top",
     )
-    return not any(marker in combined_raw for marker in chrome_markers)
-
-
-def has_meaningful_docs_evidence(evidence_items: list[dict[str, Any]]) -> bool:
-    return any(evidence_item_has_grounded_text(item) for item in evidence_items)
-
-
-def merge_docs_evidence_items(items: list[EvidenceItem]) -> list[EvidenceItem]:
-    merged_by_source: dict[str, EvidenceItem] = {}
-    ordered_source_ids: list[str] = []
-    for item in items:
-        source_id = str(item.source_id or "").strip()
-        if not source_id:
+    section_names = {"parameters", "returns", "examples", "notes", "contents", "api reference", "reference"}
+    for raw_line in hit.evidence.excerpt.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or line.lower().startswith(navigation_prefixes):
             continue
-        current = merged_by_source.get(source_id)
-        if current is None:
-            merged_by_source[source_id] = item
-            ordered_source_ids.append(source_id)
+        if line.rstrip(":").lower() in section_names:
             continue
-        merged_updates = {
-            "title": _merge_unique_text(
-                current.title,
-                item.title,
-            )
-            or None,
-            "snippet": _merge_unique_text(
-                current.snippet,
-                item.snippet,
-            )
-            or None,
-            "score": max(float(current.score or 0.0), float(item.score or 0.0)),
-        }
-        merged_by_source[source_id] = current.model_copy(update=merged_updates)
-    return [merged_by_source[source_id] for source_id in ordered_source_ids]
+        if re.fullmatch(r"\[[^]]+\]\([^)]+\)", line):
+            continue
+        if line.lower() == hit.evidence.snapshot.title.lower():
+            continue
+        if re.search(r"[A-Za-z가-힣0-9]", line):
+            return True
+    return False
 
 
-def _merge_unique_text(*values: Any) -> str:
-    lines: list[str] = []
-    seen: set[str] = set()
-    for value in values:
-        normalized = " ".join(str(value or "").split()).strip()
-        if not normalized:
-            continue
-        key = normalized.lower()
-        if key in seen:
-            continue
-        lines.append(normalized)
-        seen.add(key)
-    return "\n".join(lines)
+def has_meaningful_docs_hits(hits: list[SearchHit]) -> bool:
+    return any(hit_has_grounded_text(item) for item in hits)
+
+
+def dedupe_docs_hits(items: list[SearchHit]) -> list[SearchHit]:
+    """Deduplicate exact source selections without concatenating different excerpts."""
+    by_evidence: dict[str, SearchHit] = {}
+    for hit in items:
+        key = hit.evidence.id
+        current = by_evidence.get(key)
+        score = hit.score.normalized if hit.score else None
+        current_score = current.score.normalized if current and current.score else None
+        if current is None or (score is not None and (current_score is None or score > current_score)):
+            by_evidence[key] = hit
+    return [hit.model_copy(update={"rank": index}) for index, hit in enumerate(by_evidence.values(), start=1)]

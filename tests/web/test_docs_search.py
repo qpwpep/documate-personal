@@ -3,6 +3,8 @@ from unittest.mock import Mock, patch
 
 import requests
 
+from src.core.documents import DocumentElement, SourceAnchor, build_snapshot
+from src.core.evidence import RetrievalScore, SearchHit, build_evidence
 from src.infra.settings import AppSettings
 from src.infra.tools import build_tool_registry
 from src.infra.tools.docs_search.client import request_tavily_search
@@ -12,6 +14,20 @@ from src.infra.tools.docs_search.url_validation import DocUrlValidationResult
 
 
 class DocsSearchTest(unittest.TestCase):
+    def _hit(self, *, title: str, url: str, content: str) -> SearchHit:
+        snapshot = build_snapshot(
+            source_uri=url, title=title, media_type="text/plain", source_type="official",
+            content=content, parser="test", parser_version="1", capture_scope="provider_excerpt",
+        )
+        element = DocumentElement(
+            element_id=f"{snapshot.snapshot_id}:body", kind="paragraph", text=content,
+            anchors=[SourceAnchor(kind="web", start=0, end=len(content), precision="exact")],
+        )
+        return SearchHit(
+            evidence=build_evidence(snapshot=snapshot, element=element), rank=1,
+            score=RetrievalScore(metric="provider_score", raw=0.8, normalized=0.8, direction="higher"),
+        )
+
     def setUp(self) -> None:
         self._url_validation_patcher = patch("src.infra.tools.docs_search.serialization.validate_doc_url")
         self.mock_validate_doc_url = self._url_validation_patcher.start()
@@ -260,7 +276,7 @@ class DocsSearchTest(unittest.TestCase):
         result = registry.tavily_search_tool(query="PyTorch Dataset DataLoader official docs")
 
         self.assertEqual(len(mock_request_tavily_search.call_args_list), 2)
-        combined = " ".join(item["snippet"] for item in result["evidence"])
+        combined = " ".join(SearchHit.model_validate(item).evidence.excerpt for item in result["hits"])
         self.assertEqual(result["diagnostics"]["status"], "success")
         self.assertIn("Dataset", combined)
         self.assertIn("DataLoader", combined)
@@ -283,7 +299,7 @@ class DocsSearchTest(unittest.TestCase):
         result = registry.tavily_search_tool(query="PyTorch Dataset DataLoader official docs")
 
         self.assertEqual(result["diagnostics"]["status"], "no_result")
-        self.assertEqual(result["evidence"], [])
+        self.assertEqual(result["hits"], [])
         self.assertIn("identifier_coverage_incomplete", result["diagnostics"]["warnings"])
 
     @patch("src.infra.tools.docs_search.client.request_tavily_search")
@@ -316,7 +332,7 @@ class DocsSearchTest(unittest.TestCase):
 
         self.assertEqual(len(mock_request_tavily_search.call_args_list), 2)
         self.assertEqual(
-            [item["url_or_path"] for item in result["evidence"]],
+            [item["evidence"]["snapshot"]["source_uri"] for item in result["hits"]],
             ["https://numpy.org/doc/stable/user/basics.broadcasting.html"],
         )
 
@@ -343,7 +359,7 @@ class DocsSearchTest(unittest.TestCase):
         result = registry.tavily_search_tool(query="train_test_split official docs")
 
         self.assertEqual(
-            [item["url_or_path"] for item in result["evidence"]],
+            [item["evidence"]["snapshot"]["source_uri"] for item in result["hits"]],
             [
                 "https://scikit-learn.org/stable/modules/generated/sklearn.model_selection.train_test_split.html"
             ],
@@ -367,9 +383,9 @@ class DocsSearchTest(unittest.TestCase):
 
         self.assertEqual(result["diagnostics"]["status"], "success")
         self.assertEqual(
-            [item["url_or_path"] for item in result["evidence"]],
+            [item["evidence"]["snapshot"]["source_uri"] for item in result["hits"]],
             [
-                "https://scikit-learn.org/stable/modules/generated/sklearn.model_selection.train_test_split.html"
+                "https://scikit-learn.org/1.6/modules/generated/sklearn.model_selection.train_test_split.html"
             ],
         )
 
@@ -405,7 +421,7 @@ class DocsSearchTest(unittest.TestCase):
         result = registry.tavily_search_tool(query="Standard. Scaler official docs")
 
         self.assertEqual(result["diagnostics"]["status"], "success")
-        self.assertEqual([item["url_or_path"] for item in result["evidence"]], [original_url])
+        self.assertEqual([item["evidence"]["snapshot"]["source_uri"] for item in result["hits"]], [original_url])
 
     @patch("src.infra.tools.docs_search.client.request_tavily_search")
     def test_docs_search_does_not_treat_concatenate_as_pandas_concat(self, mock_request_tavily_search) -> None:
@@ -424,7 +440,7 @@ class DocsSearchTest(unittest.TestCase):
         result = registry.tavily_search_tool(query="numpy concatenate official docs")
 
         self.assertEqual(
-            [item["url_or_path"] for item in result["evidence"]],
+            [item["evidence"]["snapshot"]["source_uri"] for item in result["hits"]],
             ["https://numpy.org/doc/stable/reference/generated/numpy.concatenate.html"],
         )
         self.assertIn("provider_ms", result["diagnostics"])
@@ -493,7 +509,7 @@ class DocsSearchTest(unittest.TestCase):
         self.assertEqual(completed_queries, ["numpy official docs", "numpy user guide"])
         self.assertEqual(result["diagnostics"]["status"], "success")
         self.assertEqual(
-            [item["url_or_path"] for item in result["evidence"]],
+            [item["evidence"]["snapshot"]["source_uri"] for item in result["hits"]],
             ["https://numpy.org/doc/stable/user/basics.broadcasting.html"],
         )
 
@@ -512,7 +528,7 @@ class DocsSearchTest(unittest.TestCase):
         result = registry.tavily_search_tool(query="numpy official docs")
 
         self.assertEqual(len(mock_post.call_args_list), 3)
-        self.assertEqual(result["evidence"], [])
+        self.assertEqual(result["hits"], [])
         self.assertEqual(result["diagnostics"]["status"], "error")
         self.assertEqual(result["diagnostics"]["error_code"], "RETRIEVAL_DOCS_TIMEOUT")
         self.assertIn("timed out", result["diagnostics"]["message"])
@@ -532,7 +548,7 @@ class DocsSearchTest(unittest.TestCase):
         result = registry.tavily_search_tool(query="numpy official docs")
 
         self.assertEqual(len(mock_post.call_args_list), 3)
-        self.assertEqual(result["evidence"], [])
+        self.assertEqual(result["hits"], [])
         self.assertEqual(result["diagnostics"]["status"], "error")
         self.assertEqual(result["diagnostics"]["error_code"], "RETRIEVAL_DOCS_FAILED")
         self.assertIn("invalid Tavily results payload", result["diagnostics"]["message"])
@@ -548,7 +564,7 @@ class DocsSearchTest(unittest.TestCase):
         )
 
         self.assertEqual(len(mock_post.call_args_list), 1)
-        self.assertEqual(result["evidence"], [])
+        self.assertEqual(result["hits"], [])
         self.assertEqual(result["diagnostics"]["status"], "error")
         self.assertEqual(result["diagnostics"]["error_code"], "RETRIEVAL_DOCS_TIMEOUT")
 
@@ -563,7 +579,7 @@ class DocsSearchTest(unittest.TestCase):
         )
 
         self.assertEqual(len(mock_post.call_args_list), 1)
-        self.assertEqual(result["evidence"], [])
+        self.assertEqual(result["hits"], [])
         self.assertEqual(result["diagnostics"]["status"], "error")
         self.assertEqual(result["diagnostics"]["error_code"], "RETRIEVAL_DOCS_FAILED")
 
@@ -581,13 +597,13 @@ class DocsSearchTest(unittest.TestCase):
         )
 
         self.assertEqual(len(mock_post.call_args_list), 1)
-        self.assertEqual(result["evidence"], [])
+        self.assertEqual(result["hits"], [])
         self.assertEqual(result["diagnostics"]["status"], "error")
         self.assertEqual(result["diagnostics"]["error_code"], "RETRIEVAL_DOCS_FAILED")
         self.assertIn("invalid Tavily results payload", result["diagnostics"]["message"])
 
     @patch("src.infra.tools.docs_search.client.request_tavily_search")
-    def test_docs_search_canonicalizes_numpy_versioned_urls_to_stable(self, mock_request_tavily_search) -> None:
+    def test_docs_search_preserves_numpy_provider_version_when_stable_alias_validates(self, mock_request_tavily_search) -> None:
         mock_request_tavily_search.return_value = {
             "results": [
                 {
@@ -604,10 +620,10 @@ class DocsSearchTest(unittest.TestCase):
 
         self.assertEqual(result["diagnostics"]["status"], "success")
         self.assertEqual(
-            [item["url_or_path"] for item in result["evidence"]],
-            ["https://numpy.org/doc/stable/reference/generated/numpy.reshape.html"],
+            [item["evidence"]["snapshot"]["source_uri"] for item in result["hits"]],
+            ["https://numpy.org/doc/2.3/reference/generated/numpy.reshape.html"],
         )
-        self.assertEqual(result["evidence"][0]["title"], "numpy.reshape - NumPy Manual")
+        self.assertEqual(result["hits"][0]["evidence"]["snapshot"]["title"], "numpy.reshape - NumPy v2.3 Manual")
 
     def test_docs_search_canonicalizes_pytorch_versioned_docs_urls_to_stable(self) -> None:
         self.assertEqual(
@@ -679,12 +695,12 @@ class DocsSearchTest(unittest.TestCase):
         )
 
         self.assertEqual(result["diagnostics"]["status"], "no_result")
-        self.assertEqual(result["evidence"], [])
+        self.assertEqual(result["hits"], [])
         self.assertEqual(result["diagnostics"]["filtered_http_error_count"], 1)
         self.assertIn("url_http_error_filtered", result["diagnostics"]["warnings"])
 
     @patch("src.infra.tools.docs_search.client.request_tavily_search")
-    def test_docs_search_accepts_allowed_redirect_final_url(self, mock_request_tavily_search) -> None:
+    def test_docs_search_records_allowed_redirect_without_reassigning_provider_content(self, mock_request_tavily_search) -> None:
         mock_request_tavily_search.return_value = {
             "results": [
                 {
@@ -706,8 +722,12 @@ class DocsSearchTest(unittest.TestCase):
 
         self.assertEqual(result["diagnostics"]["status"], "success")
         self.assertEqual(
-            [item["url_or_path"] for item in result["evidence"]],
-            ["https://pydantic.dev/docs/validation/latest/concepts/fields/"],
+            [item["evidence"]["snapshot"]["source_uri"] for item in result["hits"]],
+            ["https://docs.pydantic.dev/latest/concepts/fields/"],
+        )
+        self.assertEqual(
+            result["hits"][0]["evidence"]["element"]["metadata"]["validated_url"],
+            "https://pydantic.dev/docs/validation/latest/concepts/fields/",
         )
         self.assertEqual(result["diagnostics"]["validated_url_count"], 1)
 
@@ -737,7 +757,7 @@ class DocsSearchTest(unittest.TestCase):
         )
 
         self.assertEqual(result["diagnostics"]["status"], "no_result")
-        self.assertEqual(result["evidence"], [])
+        self.assertEqual(result["hits"], [])
         self.assertEqual(result["diagnostics"]["filtered_redirect_policy_count"], 1)
         self.assertIn("url_redirect_policy_filtered", result["diagnostics"]["warnings"])
 
@@ -758,7 +778,7 @@ class DocsSearchTest(unittest.TestCase):
         result = registry.tavily_search_tool(query="Pydantic v2 Field validation official docs")
 
         self.assertEqual(result["diagnostics"]["status"], "no_result")
-        self.assertEqual(result["evidence"], [])
+        self.assertEqual(result["hits"], [])
         self.assertEqual(result["diagnostics"]["filtered_identifier_mismatch_count"], 1)
         self.assertIn("identifier_coverage_incomplete", result["diagnostics"]["warnings"])
 
@@ -771,11 +791,11 @@ class DocsSearchTest(unittest.TestCase):
             has_exact_identifier_coverage(
                 "pandas. DataFrame. merge official docs",
                 [
-                    {
-                        "title": "pandas.DataFrame.merge",
-                        "url_or_path": "https://pandas.pydata.org/docs/reference/api/pandas.DataFrame.merge.html",
-                        "snippet": "Merge DataFrame objects.",
-                    }
+                    self._hit(
+                        title="pandas.DataFrame.merge",
+                        url="https://pandas.pydata.org/docs/reference/api/pandas.DataFrame.merge.html",
+                        content="Merge DataFrame objects.",
+                    )
                 ],
                 library_name="pandas",
             )
@@ -788,11 +808,11 @@ class DocsSearchTest(unittest.TestCase):
             has_exact_identifier_coverage(
                 "Standard. Scaler official docs",
                 [
-                    {
-                        "title": "StandardScaler",
-                        "url_or_path": "https://scikit-learn.org/stable/modules/generated/sklearn.preprocessing.StandardScaler.html",
-                        "snippet": "Standardize features.",
-                    }
+                    self._hit(
+                        title="StandardScaler",
+                        url="https://scikit-learn.org/stable/modules/generated/sklearn.preprocessing.StandardScaler.html",
+                        content="Standardize features.",
+                    )
                 ],
                 library_name="scikit-learn",
             )
@@ -828,10 +848,10 @@ class DocsSearchTest(unittest.TestCase):
 
         self.assertGreaterEqual(len(mock_request_tavily_search.call_args_list), 2)
         self.assertEqual(
-            [item["url_or_path"] for item in result["evidence"]],
+            [item["evidence"]["snapshot"]["source_uri"] for item in result["hits"]],
             ["https://numpy.org/doc/stable/user/basics.broadcasting.html"],
         )
-        self.assertIn("Broadcasting stretches compatible array dimensions.", result["evidence"][0]["snippet"])
+        self.assertIn("Broadcasting stretches compatible array dimensions.", SearchHit.model_validate(result["hits"][0]).evidence.excerpt)
 
     @patch("src.infra.tools.docs_search.client.request_tavily_search")
     def test_docs_search_adopts_beautifulsoup_official_docs_for_korean_example_request(self, mock_request_tavily_search) -> None:
@@ -853,7 +873,7 @@ class DocsSearchTest(unittest.TestCase):
         self.assertEqual(first_kwargs["include_domains"], ["crummy.com"])
         self.assertEqual(result["diagnostics"]["status"], "success")
         self.assertEqual(
-            [item["url_or_path"] for item in result["evidence"]],
+            [item["evidence"]["snapshot"]["source_uri"] for item in result["hits"]],
             ["https://www.crummy.com/software/BeautifulSoup/bs4/doc/#searching-the-tree"],
         )
 
@@ -898,14 +918,14 @@ class DocsSearchTest(unittest.TestCase):
         self.assertEqual(first_kwargs["include_raw_content"], "markdown")
         self.assertTrue(result["diagnostics"]["include_raw_content_requested"])
         self.assertEqual(result["diagnostics"]["status"], "success")
-        metadata = result["evidence"][0]["doc_metadata"]
+        metadata = result["hits"][0]["evidence"]["element"]["metadata"]["doc_metadata"]
         self.assertEqual(metadata["doc_family"], "sphinx_api")
         self.assertEqual(metadata["symbol"], "matplotlib.pyplot.pie")
         parameter_names = [item["name"] for item in metadata["parameters"]]
         self.assertIn("labels", parameter_names)
         self.assertIn("autopct", parameter_names)
         self.assertIn("wedgeprops", parameter_names)
-        self.assertIn("param autopct", result["evidence"][0]["snippet"])
+        self.assertIn("autopct None or str or callable", SearchHit.model_validate(result["hits"][0]).evidence.excerpt)
 
     @patch("src.infra.tools.docs_search.client.request_tavily_search")
     def test_docs_search_prefers_api_reference_for_matplotlib_option_requests(self, mock_request_tavily_search) -> None:
@@ -945,10 +965,10 @@ class DocsSearchTest(unittest.TestCase):
         first_kwargs = mock_request_tavily_search.call_args_list[0].kwargs
         self.assertEqual(first_kwargs["include_raw_content"], "markdown")
         self.assertEqual(
-            result["evidence"][0]["url_or_path"],
+            result["hits"][0]["evidence"]["snapshot"]["source_uri"],
             "https://matplotlib.org/stable/api/_as_gen/matplotlib.pyplot.pie.html",
         )
-        self.assertIn("autopct", result["evidence"][0]["snippet"])
+        self.assertIn("autopct", SearchHit.model_validate(result["hits"][0]).evidence.excerpt)
 
 
 class TavilyClientTest(unittest.TestCase):

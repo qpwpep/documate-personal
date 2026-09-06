@@ -5,15 +5,14 @@ from collections.abc import Callable
 from typing import Any, Literal
 
 from src.core.latency import elapsed_ms
-from src.core.evidence import evidence_to_dicts
 from src.infra.settings import AppSettings
 from src.infra.tools._common import build_retrieval_payload
 from src.infra.tools.docs_search import client
 from src.infra.tools.docs_search.extraction import should_extract_doc_content
 from src.infra.tools.docs_search.normalization import canonicalize_docs_query_text
 from src.infra.tools.docs_search.policy import docs_search_rules, infer_docs_query_hint, normalize_include_domains
-from src.infra.tools.docs_search.ranking import filter_docs_evidence_by_topic_purity, has_exact_identifier_coverage, has_meaningful_docs_evidence, merge_docs_evidence_items
-from src.infra.tools.docs_search.serialization import DocsSearchFilterCounters, collect_docs_search_evidence
+from src.infra.tools.docs_search.ranking import filter_docs_hits_by_topic_purity, has_exact_identifier_coverage, has_meaningful_docs_hits, dedupe_docs_hits
+from src.infra.tools.docs_search.serialization import DocsSearchFilterCounters, collect_docs_search_hits
 
 
 def build_docs_search_tool(settings: AppSettings) -> Callable[..., dict[str, Any]]:
@@ -102,34 +101,34 @@ def build_docs_search_tool(settings: AppSettings) -> Callable[..., dict[str, Any
 
         results = raw_results.get("results")
 
-        evidence_items = []
+        hits = []
         retrieval_warnings: list[str] = []
         raw_scores: list[float] = []
         filter_counters = DocsSearchFilterCounters()
         post_started = time.perf_counter()
-        batch_evidence, batch_raw_scores = collect_docs_search_evidence(
+        batch_hits, batch_raw_scores = collect_docs_search_hits(
             results,
-            allowed_domains=hinted_domains,
+            allowed_domains=domains,
             retrieval_warnings=retrieval_warnings,
             query=effective_query,
             filter_counters=filter_counters,
         )
         post_processing_ms += elapsed_ms(post_started, time.perf_counter())
-        evidence_items.extend(batch_evidence)
+        hits.extend(batch_hits)
         raw_scores.extend(batch_raw_scores)
 
         fallback_errors: list[Exception] = []
         fallback_success_count = 0
         for fallback_query, fallback_include_raw_content in fallback_plan:
             post_started = time.perf_counter()
-            deduped_batch = evidence_to_dicts(merge_docs_evidence_items(evidence_items))
-            filtered_batch = filter_docs_evidence_by_topic_purity(
+            deduped_batch = dedupe_docs_hits(hits)
+            filtered_batch = filter_docs_hits_by_topic_purity(
                 effective_query,
                 deduped_batch,
                 retrieval_warnings,
             )
             post_processing_ms += elapsed_ms(post_started, time.perf_counter())
-            if has_meaningful_docs_evidence(filtered_batch):
+            if has_meaningful_docs_hits(filtered_batch):
                 if has_exact_identifier_coverage(
                     effective_query,
                     filtered_batch,
@@ -147,33 +146,30 @@ def build_docs_search_tool(settings: AppSettings) -> Callable[..., dict[str, Any
             fallback_success_count += 1
             fallback_items = fallback_results["results"]
             post_started = time.perf_counter()
-            batch_evidence, batch_raw_scores = collect_docs_search_evidence(
+            batch_hits, batch_raw_scores = collect_docs_search_hits(
                 fallback_items,
-                allowed_domains=hinted_domains,
+                allowed_domains=domains,
                 retrieval_warnings=retrieval_warnings,
                 query=fallback_query,
                 filter_counters=filter_counters,
             )
             post_processing_ms += elapsed_ms(post_started, time.perf_counter())
-            evidence_items.extend(batch_evidence)
+            hits.extend(batch_hits)
             raw_scores.extend(batch_raw_scores)
 
         post_started = time.perf_counter()
-        evidence = evidence_to_dicts(merge_docs_evidence_items(evidence_items))
-        evidence = filter_docs_evidence_by_topic_purity(effective_query, evidence, retrieval_warnings)
-        if evidence and not has_meaningful_docs_evidence(evidence):
-            retrieval_warnings.append("docs_chrome_only")
-            evidence = []
-        if evidence and not has_exact_identifier_coverage(
+        hits = dedupe_docs_hits(hits)
+        hits = filter_docs_hits_by_topic_purity(effective_query, hits, retrieval_warnings)
+        if hits and not has_exact_identifier_coverage(
             effective_query,
-            evidence,
+            hits,
             library_name=library_name,
         ):
             retrieval_warnings.append("identifier_coverage_incomplete")
-            filter_counters.filtered_identifier_mismatch_count += len(evidence)
-            evidence = []
+            filter_counters.filtered_identifier_mismatch_count += len(hits)
+            hits = []
         post_processing_ms += elapsed_ms(post_started, time.perf_counter())
-        fallback_failure = bool(not evidence and fallback_errors and fallback_success_count == 0)
+        fallback_failure = bool(not hits and fallback_errors and fallback_success_count == 0)
         fallback_failure_message = ""
         fallback_failure_code: str | None = None
         if fallback_failure:
@@ -183,15 +179,16 @@ def build_docs_search_tool(settings: AppSettings) -> Callable[..., dict[str, Any
                 if all(is_timeout_error(exc) for exc in fallback_errors)
                 else "RETRIEVAL_DOCS_FAILED"
             )
+        hits = [hit.model_copy(update={"rank": index}) for index, hit in enumerate(hits, start=1)]
         return build_retrieval_payload(
             tool="tavily_search",
             route="docs",
             query=effective_query,
-            evidence=evidence,
-            status="success" if evidence else ("error" if fallback_failure else "no_result"),
+            hits=hits,
+            status="success" if hits else ("error" if fallback_failure else "no_result"),
             message=(
                 ""
-                if evidence
+                if hits
                 else fallback_failure_message or "no official documentation evidence found"
             ),
             raw_score=max(raw_scores) if raw_scores else None,
@@ -208,7 +205,7 @@ def build_docs_search_tool(settings: AppSettings) -> Callable[..., dict[str, Any
             filtered_url_request_failed_count=filter_counters.filtered_url_request_failed_count,
             filtered_identifier_mismatch_count=filter_counters.filtered_identifier_mismatch_count,
             validated_url_count=filter_counters.validated_url_count,
-            final_evidence_count=len(evidence),
+            final_evidence_count=len(hits),
             warnings=sorted(set(retrieval_warnings)),
             error_code=fallback_failure_code,
         )

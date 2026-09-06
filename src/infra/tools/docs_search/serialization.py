@@ -2,15 +2,17 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+import re
 import time
 from typing import Any
 from urllib.parse import urlparse
 
 from src.core.latency import elapsed_ms
-from src.infra.tools._common import build_evidence_item, normalize_relevance_score
+from src.core.documents import DocumentElement, SourceAnchor, build_snapshot
+from src.core.evidence import RetrievalScore, SearchHit, build_evidence
+from src.infra.tools._common import normalize_relevance_score
 from src.infra.tools.docs_search.extraction import extract_doc_content
 from src.infra.tools.docs_search.policy import (
-    canonicalize_doc_title,
     canonicalize_doc_url,
     doc_url_filter_reason,
     is_valid_doc_result,
@@ -122,18 +124,18 @@ def url_domain(url: str) -> str:
     return normalize_domain(parsed.netloc)
 
 
-def filter_evidence_to_domains(
-    evidence: list[dict[str, Any]],
+def filter_hits_to_domains(
+    hits: list[dict[str, Any]],
     *,
     allowed_domains: list[str],
 ) -> list[dict[str, Any]]:
     normalized_domains = normalized_domain_set(allowed_domains)
     if not normalized_domains:
-        return evidence
+        return hits
     return [
         item
-        for item in evidence
-        if url_domain(str(item.get("url_or_path") or "")) in normalized_domains
+        for item in hits
+        if url_domain(str(item["evidence"]["snapshot"]["source_uri"])) in normalized_domains
     ]
 
 
@@ -146,15 +148,15 @@ def _candidate_doc_urls(original_url: str) -> list[str]:
     return candidates
 
 
-def collect_docs_search_evidence(
+def collect_docs_search_hits(
     results: list[dict[str, Any]],
     *,
     allowed_domains: list[str] | None,
     retrieval_warnings: list[str],
     query: str = "",
     filter_counters: DocsSearchFilterCounters | None = None,
-) -> tuple[list[Any], list[float]]:
-    evidence_items: list[Any] = []
+) -> tuple[list[SearchHit], list[float]]:
+    hits: list[SearchHit] = []
     raw_scores: list[float] = []
     normalized_domains = normalized_domain_set(allowed_domains)
     if filter_counters is not None:
@@ -187,11 +189,7 @@ def collect_docs_search_evidence(
         url = candidate.resolved_url
         if not url:
             continue
-        title = canonicalize_doc_title(
-            title=result.get("title"),
-            original_url=original_url,
-            canonical_url=url,
-        )
+        title = str(result.get("title") or "").strip() or original_url
         if not is_valid_doc_result(
             url=url,
             title=title,
@@ -208,34 +206,74 @@ def collect_docs_search_evidence(
             result.get("score"),
             warnings=retrieval_warnings,
         )
-        metadata: dict[str, Any] = {}
-        snippet = result.get("content")
+        # Validation may choose a stable alias; the provider's content still
+        # belongs to the URL/version it actually returned.
+        if not result_matches_domains(original_url, normalized_domains):
+            if filter_counters is not None:
+                filter_counters.filtered_cross_domain_count += 1
+            if "cross_library_domain_filtered" not in retrieval_warnings:
+                retrieval_warnings.append("cross_library_domain_filtered")
+            continue
+        metadata: dict[str, Any] = {"validated_url": url}
         raw_content = result.get("raw_content")
-        if raw_content:
+        provider_field = "raw_content" if isinstance(raw_content, str) and raw_content.strip() else "content"
+        content = result.get(provider_field)
+        if not isinstance(content, str) or not content.strip():
+            continue
+        if provider_field == "raw_content":
             doc_metadata, structured_snippet = extract_doc_content(
-                url=url,
+                url=original_url,
                 title=title,
-                content=raw_content,
-                query=query,
+                content=content,
+                query="",
             )
             if doc_metadata:
                 metadata["doc_metadata"] = doc_metadata
-                if structured_snippet:
-                    snippet = structured_snippet
-            elif structured_snippet:
-                snippet = structured_snippet
-        evidence_item = build_evidence_item(
-            kind="official",
-            tool="tavily_search",
-            url_or_path=url,
+            if structured_snippet:
+                metadata["search_summary"] = structured_snippet
+        snapshot = build_snapshot(
+            source_uri=original_url,
             title=title,
-            snippet=snippet,
-            score=normalized_score,
-            metadata=metadata,
-            warnings=retrieval_warnings,
+            media_type="text/markdown" if provider_field == "raw_content" else "text/plain",
+            source_type="official",
+            content=content,
+            parser="tavily",
+            parser_version="1",
+            parser_config={"provider_field": provider_field},
+            capture_scope="provider_excerpt",
         )
-        if evidence_item is not None:
-            evidence_items.append(evidence_item)
-            if raw_score is not None:
-                raw_scores.append(raw_score)
-    return evidence_items, raw_scores
+        element = DocumentElement(
+            element_id=f"{snapshot.snapshot_id}:body",
+            kind="paragraph",
+            text=content,
+            order=0,
+            anchors=[SourceAnchor(kind="web", start=0, end=len(content), precision="exact")],
+            metadata=metadata,
+        )
+        start, end = _select_excerpt_range(content, query=query)
+        hits.append(SearchHit(
+            evidence=build_evidence(snapshot=snapshot, element=element, start=start, end=end),
+            score=RetrievalScore(metric="provider_score", raw=raw_score, direction="higher", normalized=normalized_score),
+            rank=len(hits) + 1,
+        ))
+        if raw_score is not None:
+            raw_scores.append(raw_score)
+    return hits, raw_scores
+
+
+def _select_excerpt_range(text: str, *, query: str, max_chars: int = 3200) -> tuple[int, int]:
+    """Select one contiguous range; the citation remains a slice of provider text."""
+    if len(text) <= max_chars:
+        return 0, len(text)
+    identifiers = re.findall(r"[A-Za-z_][A-Za-z0-9_.-]{2,}", query)
+    ignored = {"official", "documentation", "reference", "docs", "parameters", "options"}
+    positions = [
+        position
+        for token in identifiers
+        if token.lower() not in ignored
+        for position in [text.lower().find(token.lower())]
+        if position >= 0
+    ]
+    target = min(positions, default=0)
+    start = max(0, min(target - max_chars // 4, len(text) - max_chars))
+    return start, min(len(text), start + max_chars)
