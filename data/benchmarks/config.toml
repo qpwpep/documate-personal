@@ -1,6 +1,6 @@
 [weights]
 answer_quality = 0.20
-groundedness = 0.20
+reference_coverage = 0.20
 citation_traceability = 0.20
 tool_choice = 0.15
 format_language = 0.05
