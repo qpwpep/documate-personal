@@ -7,6 +7,8 @@ from typing import Any
 
 import requests
 
+from src.core.answer_schema import AnswerResponse, finalize_answer, text_document
+
 
 @dataclass
 class AgentRequestContext:
@@ -20,9 +22,7 @@ class AgentRequestContext:
 
 @dataclass
 class AgentCallResult:
-    answer: str
-    file_path: str | None = None
-    evidence_items: list[Any] = field(default_factory=list)
+    response: AnswerResponse
 
 
 @dataclass(frozen=True)
@@ -40,25 +40,19 @@ def get_agent_response(user_input: str, context: AgentRequestContext) -> AgentCa
         if resp.status_code == 200:
             return _parse_agent_response_data(resp.json())
 
-        return AgentCallResult(
-            answer=(
+        return _error_result(
+            (
                 f"Agent 호출 실패: 상태 코드 {resp.status_code}\n"
                 f"응답: {resp.text}"
-            ),
+            )
         )
 
     except requests.exceptions.Timeout:
-        return AgentCallResult(
-            answer="요청이 타임아웃되었습니다. 서버 상태를 확인해 주세요.",
-        )
+        return _error_result("요청이 타임아웃되었습니다. 서버 상태를 확인해 주세요.")
     except requests.exceptions.ConnectionError:
-        return AgentCallResult(
-            answer="FastAPI 서버에 연결할 수 없습니다. 서버(8000번 포트) 실행 여부를 확인해 주세요.",
-        )
+        return _error_result("FastAPI 서버에 연결할 수 없습니다. 서버(8000번 포트) 실행 여부를 확인해 주세요.")
     except Exception as exc:
-        return AgentCallResult(
-            answer=f"요청 중 예기치 않은 오류가 발생했습니다: {exc}",
-        )
+        return _error_result(f"요청 중 예기치 않은 오류가 발생했습니다: {exc}")
 
 
 def stream_agent_response(
@@ -118,29 +112,19 @@ def _parse_agent_response_data(data: Any) -> AgentCallResult:
     if not isinstance(response_payload, dict):
         raise ValueError("API 응답의 response는 객체여야 합니다.")
 
-    answer = str(response_payload.get("answer", "") or "")
-    evidence = response_payload.get("evidence")
-    evidence_items = evidence if isinstance(evidence, list) else []
+    return AgentCallResult(response=AnswerResponse.model_validate(response_payload))
 
-    return AgentCallResult(
-        answer=answer,
-        file_path=payload.get("file_path"),
-        evidence_items=evidence_items,
-    )
+
+def _error_result(message: str) -> AgentCallResult:
+    return AgentCallResult(response=finalize_answer(text_document(message), []))
 
 
 def _build_final_response_event(result: AgentCallResult) -> AgentStreamEvent:
     return AgentStreamEvent(
         event="final_response",
         data={
-            "response": {
-                "answer": result.answer,
-                "claims": [],
-                "evidence": result.evidence_items,
-                "confidence": None,
-            },
+            "response": result.response.model_dump(mode="json"),
             "trace": "",
-            "file_path": result.file_path,
             "debug": None,
         },
         result=result,

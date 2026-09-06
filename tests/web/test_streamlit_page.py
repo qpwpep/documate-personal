@@ -94,7 +94,6 @@ class StreamlitPageTest(unittest.TestCase):
             '[data-testid="stChatInput"] [data-testid="stChatInputFile"] > div:first-child',
             rendered_page,
         )
-        self.assertIn(".dm-save-note", rendered_page)
 
     def test_sidebar_uses_theme_from_query_params(self) -> None:
         fake_st = _FakeStreamlit()

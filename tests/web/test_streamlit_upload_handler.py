@@ -19,7 +19,7 @@ class _UploadedFile:
 
 
 class StreamlitUploadHandlerTest(unittest.TestCase):
-    def test_sync_uploaded_file_skips_same_file(self) -> None:
+    def test_sync_uploaded_file_replaces_same_name_when_bytes_change(self) -> None:
         with TemporaryDirectory() as temp_dir:
             session_path = Path(temp_dir)
             existing = session_path / "sample.py"
@@ -31,9 +31,30 @@ class StreamlitUploadHandlerTest(unittest.TestCase):
                 current_file_name="sample.py",
             )
 
-            self.assertFalse(result.changed)
+            self.assertTrue(result.changed)
             self.assertEqual(result.file_name, "sample.py")
-            self.assertEqual(existing.read_text(encoding="utf-8"), "print('ok')")
+            self.assertEqual(existing.read_text(encoding="utf-8"), "print('changed')")
+
+    def test_sync_uploaded_file_skips_identical_bytes_at_same_name(self) -> None:
+        """An unchanged upload does not trigger a new document revision."""
+        with TemporaryDirectory() as temp_dir:
+            session_path = Path(temp_dir)
+            existing = session_path / "sample.py"
+            existing.write_bytes(b"value = 3\n")
+
+            result = sync_uploaded_file(_UploadedFile("sample.py", b"value = 3\n"), session_path, "sample.py")
+
+            self.assertFalse(result.changed)
+            self.assertEqual(existing.read_bytes(), b"value = 3\n")
+
+    def test_sync_uploaded_file_recreates_missing_current_upload(self) -> None:
+        """A current filename alone cannot suppress restoring a missing upload."""
+        with TemporaryDirectory() as temp_dir:
+            session_path = Path(temp_dir)
+            result = sync_uploaded_file(_UploadedFile("sample.py", b"value = 3\n"), session_path, "sample.py")
+
+            self.assertTrue(result.changed)
+            self.assertEqual((session_path / "sample.py").read_bytes(), b"value = 3\n")
 
     def test_sync_uploaded_file_replaces_previous_file(self) -> None:
         with TemporaryDirectory() as temp_dir:
@@ -101,7 +122,7 @@ class StreamlitUploadHandlerTest(unittest.TestCase):
             self.assertIsNone(result.file_name)
             self.assertFalse(result.changed)
             self.assertEqual(result.error_message, "파일 업로드 실패 (내용 오류): bad upload")
-            self.assertFalse(old_file.exists())
+            self.assertEqual(old_file.read_text(encoding="utf-8"), "old")
 
 
 if __name__ == "__main__":

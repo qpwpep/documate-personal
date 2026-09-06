@@ -387,7 +387,7 @@ div.stButton > button:focus {
     padding: 0.82rem 1rem;
 }
 
-[data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarAssistant"]) [data-testid="stMarkdownContainer"] {
+[data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarAssistant"]) [data-testid="stChatMessageContent"] {
     backdrop-filter: blur(10px);
     background: var(--dm-assistant-bg);
     border: 1px solid var(--dm-assistant-border);
@@ -444,20 +444,6 @@ div.stButton > button:focus {
     background: var(--dm-inline-code-bg) !important;
     border: 1px solid var(--dm-inline-code-border);
     color: var(--dm-inline-code-text) !important;
-}
-
-[data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarAssistant"]) [data-testid="stMarkdownContainer"]:has(.dm-download-button) {
-    background: transparent;
-    border: 0;
-    box-shadow: none;
-    padding: 0.28rem 0 0;
-}
-
-[data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarAssistant"]) [data-testid="stMarkdownContainer"]:has(.dm-save-note) {
-    background: transparent;
-    border: 0;
-    box-shadow: none;
-    padding: 0.28rem 0 0;
 }
 
 [data-testid="stExpander"] {
@@ -752,36 +738,6 @@ div.stButton > button:focus {
 
 [data-testid="stRadio"] [aria-checked="true"] * {
     color: var(--dm-accent) !important;
-}
-
-.dm-download-button {
-    background-color: var(--dm-accent);
-    border: none;
-    border-radius: 0.95rem;
-    color: var(--dm-accent-contrast);
-    cursor: pointer;
-    font-size: 0.95rem;
-    padding: 0.75rem 1rem;
-    width: 100%;
-}
-
-.dm-save-note {
-    backdrop-filter: blur(10px);
-    background: var(--dm-assistant-bg);
-    border: 1px solid var(--dm-assistant-border);
-    border-radius: 1rem;
-    box-shadow: var(--dm-assistant-shadow);
-    color: var(--dm-text);
-    margin: 0 0 0.75rem;
-    padding: 0.9rem 1rem;
-}
-
-.dm-save-note code {
-    background: var(--dm-inline-code-bg) !important;
-    border: 1px solid var(--dm-inline-code-border);
-    border-radius: 0.34rem;
-    color: var(--dm-inline-code-text) !important;
-    padding: 0.08rem 0.28rem;
 }
 
 .stAlert {

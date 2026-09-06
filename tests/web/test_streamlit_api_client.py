@@ -1,242 +1,133 @@
 from __future__ import annotations
 
-import unittest
+import json
 from unittest.mock import patch
 
+import pytest
 import requests
 
-from src.app.web.streamlit_api_client import AgentCallResult, AgentRequestContext, _iter_sse_events, get_agent_response, stream_agent_response
+from src.app.web.streamlit_api_client import (
+    AgentCallResult, AgentRequestContext, _iter_sse_events, get_agent_response, stream_agent_response,
+)
+from src.core.answer_schema import export_answer_text
+from tests.web.answer_fixtures import answer_response, cited_response
 
 
-class _Response:
-    def __init__(self, status_code: int, payload: object, text: str = "") -> None:
-        self.status_code = status_code
-        self._payload = payload
-        self.text = text
-
-    def json(self) -> object:
-        return self._payload
-
-
-class _StreamResponse:
-    def __init__(self, status_code: int, chunks: list[str], text: str = "") -> None:
-        self.status_code = status_code
-        self._chunks = chunks
-        self.text = text
+class StreamResponse:
+    def __init__(self, frames, *, broken=False):
+        self.status_code = 200
+        self.frames = frames
+        self.broken = broken
 
     def __enter__(self):
         return self
 
-    def __exit__(self, exc_type, exc, tb):
+    def __exit__(self, *_):
         return False
 
-    def iter_content(self, chunk_size=None, decode_unicode: bool = False):
-        _ = chunk_size, decode_unicode
-        for chunk in self._chunks:
-            yield chunk
-
-
-class _BrokenStreamResponse(_StreamResponse):
-    def iter_content(self, chunk_size=None, decode_unicode: bool = False):
-        yielded = False
-        for chunk in super().iter_content(chunk_size=chunk_size, decode_unicode=decode_unicode):
-            yield chunk
-            yielded = True
-        if yielded:
+    def iter_content(self, **_):
+        yield from self.frames
+        if self.broken:
             raise RuntimeError("stream broke")
 
 
-class StreamlitApiClientTest(unittest.TestCase):
-    @patch("src.app.web.streamlit_api_client.requests.post")
-    def test_get_agent_response_sends_expected_payload(self, mock_post) -> None:
-        mock_post.return_value = _Response(
-            200,
-            {
-                "response": {
-                    "answer": "응답",
-                    "evidence": [{"kind": "official", "url_or_path": "https://docs.example.com"}],
-                },
-                "file_path": "output/result.txt",
-            },
-        )
+def context():
+    return AgentRequestContext(fastapi_url="http://localhost:8000", session_id="session-1")
 
-        result = get_agent_response(
-            "질문",
-            AgentRequestContext(
-                fastapi_url="http://127.0.0.1:8000",
-                session_id="session-1",
-                slack_user_id="U123",
-                slack_email="user@example.com",
-                slack_channel_id="C123",
-                upload_file_path="uploads/session-1/sample.py",
-            ),
-        )
 
-        _, kwargs = mock_post.call_args
-        self.assertEqual(kwargs["timeout"], 60)
-        self.assertEqual(
-            kwargs["json"],
-            {
-                "query": "질문",
-                "session_id": "session-1",
-                "slack_user_id": "U123",
-                "slack_email": "user@example.com",
-                "slack_channel_id": "C123",
-                "upload_file_path": "uploads/session-1/sample.py",
-            },
-        )
-        self.assertEqual(result.answer, "응답")
-        self.assertEqual(result.file_path, "output/result.txt")
-        self.assertEqual(len(result.evidence_items), 1)
+def http_response(payload, status=200):
+    response = requests.Response()
+    response.status_code = status
+    response._content = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    return response
 
-    @patch("src.app.web.streamlit_api_client.requests.post")
-    def test_get_agent_response_handles_error_status(self, mock_post) -> None:
-        mock_post.return_value = _Response(500, {}, text="server exploded")
 
-        result = get_agent_response(
-            "질문",
-            AgentRequestContext(
-                fastapi_url="http://127.0.0.1:8000",
-                session_id="session-1",
-            ),
-        )
+def test_http_response_retains_document_citations_checks_and_actions():
+    """HTTP preserves the complete final response, including source snapshots and actions."""
+    expected = cited_response()
+    with patch("requests.sessions.Session.request", return_value=http_response({"response": expected.model_dump(mode="json"), "trace": "t", "debug": None})):
+        result = get_agent_response("질문", context())
+    assert result == AgentCallResult(response=expected)
 
-        self.assertEqual(
-            result.answer,
-            "Agent 호출 실패: 상태 코드 500\n응답: server exploded",
-        )
-        self.assertIsNone(result.file_path)
-        self.assertEqual(result.evidence_items, [])
 
-    @patch("requests.sessions.Session.request")
-    def test_get_agent_response_rejects_plain_string_response(self, mock_request) -> None:
-        response = requests.Response()
-        response.status_code = 200
-        response._content = b'{"response": "legacy string response"}'
-        mock_request.return_value = response
+def test_request_preserves_session_and_upload_context():
+    """The public HTTP request carries the selected session, upload and Slack target."""
+    captured = []
+    def request(_session, method, url, **kwargs):
+        captured.append(kwargs["json"])
+        return http_response({"response": answer_response().model_dump(mode="json")})
 
-        result = get_agent_response(
-            "질문",
-            AgentRequestContext(
-                fastapi_url="http://127.0.0.1:8000",
-                session_id="session-1",
-            ),
-        )
-
-        self.assertEqual(
-            result,
-            AgentCallResult(
-                answer="요청 중 예기치 않은 오류가 발생했습니다: API 응답의 response는 객체여야 합니다.",
-            ),
-        )
-
-    @patch(
-        "src.app.web.streamlit_api_client.requests.post",
-        side_effect=requests.exceptions.Timeout,
+    request_context = AgentRequestContext(
+        fastapi_url="http://localhost:8000", session_id="session-1",
+        slack_user_id="U123", slack_email="test@example.com", slack_channel_id="C123",
+        upload_file_path="uploads/session-1/code.py",
     )
-    def test_get_agent_response_handles_timeout(self, _mock_post) -> None:
-        result = get_agent_response(
-            "질문",
-            AgentRequestContext(
-                fastapi_url="http://127.0.0.1:8000",
-                session_id="session-1",
-            ),
-        )
-
-        self.assertEqual(result.answer, "요청이 타임아웃되었습니다. 서버 상태를 확인해 주세요.")
-
-    @patch(
-        "src.app.web.streamlit_api_client.requests.post",
-        side_effect=requests.exceptions.ConnectionError,
-    )
-    def test_get_agent_response_handles_connection_error(self, _mock_post) -> None:
-        result = get_agent_response(
-            "질문",
-            AgentRequestContext(
-                fastapi_url="http://127.0.0.1:8000",
-                session_id="session-1",
-            ),
-        )
-
-        self.assertEqual(
-            result.answer,
-            "FastAPI 서버에 연결할 수 없습니다. 서버(8000번 포트) 실행 여부를 확인해 주세요.",
-        )
-
-    @patch("src.app.web.streamlit_api_client.requests.post", side_effect=RuntimeError("boom"))
-    def test_get_agent_response_handles_unexpected_error(self, _mock_post) -> None:
-        result = get_agent_response(
-            "질문",
-            AgentRequestContext(
-                fastapi_url="http://127.0.0.1:8000",
-                session_id="session-1",
-            ),
-        )
-
-        self.assertEqual(result.answer, "요청 중 예기치 않은 오류가 발생했습니다: boom")
-
-    def test_iter_sse_events_parses_chunked_frames(self) -> None:
-        chunks = [
-            'event: request_started\ndata: {"request_id":"r',
-            'eq-1"}\n\n',
-            'event: progress_snapshot\ndata: {"summary":"docs ready"}\n\n',
-            'event: final_response\ndata: {"response":{"answer":"응',
-            '답","evidence":[]},"file_path":"output/result.txt"}\n\n',
-        ]
-
-        events = list(_iter_sse_events(chunks))
-
-        self.assertEqual([event.event for event in events], ["request_started", "progress_snapshot", "final_response"])
-        self.assertEqual(events[0].data["request_id"], "req-1")
-        self.assertEqual(events[1].data["summary"], "docs ready")
-        self.assertIsNotNone(events[2].result)
-        self.assertEqual(events[2].result.answer, "응답")
-
-    @patch("src.app.web.streamlit_api_client.get_agent_response")
-    @patch("src.app.web.streamlit_api_client.requests.post")
-    def test_stream_agent_response_falls_back_before_first_event(
-        self,
-        mock_post,
-        mock_get_agent_response,
-    ) -> None:
-        mock_post.side_effect = requests.exceptions.ConnectionError()
-        mock_get_agent_response.return_value = AgentCallResult(answer="fallback")
-
-        events = list(
-            stream_agent_response(
-                "질문",
-                AgentRequestContext(
-                    fastapi_url="http://127.0.0.1:8000",
-                    session_id="session-1",
-                ),
-            )
-        )
-
-        self.assertEqual([event.event for event in events], ["final_response"])
-        self.assertIsNotNone(events[0].result)
-        self.assertEqual(events[0].result.answer, "fallback")
-
-    @patch("src.app.web.streamlit_api_client.requests.post")
-    def test_stream_agent_response_emits_error_after_stream_break(self, mock_post) -> None:
-        mock_post.return_value = _BrokenStreamResponse(
-            200,
-            [
-                'event: request_started\ndata: {"request_id":"req-1"}\n\n',
-            ],
-        )
-
-        events = list(
-            stream_agent_response(
-                "질문",
-                AgentRequestContext(
-                    fastapi_url="http://127.0.0.1:8000",
-                    session_id="session-1",
-                ),
-            )
-        )
-
-        self.assertEqual([event.event for event in events], ["request_started", "error"])
+    with patch("requests.sessions.Session.request", request):
+        result = get_agent_response("질문", request_context)
+    assert result.response == answer_response()
+    assert captured == [{
+        "query": "질문", "session_id": "session-1", "slack_user_id": "U123",
+        "slack_email": "test@example.com", "slack_channel_id": "C123",
+        "upload_file_path": "uploads/session-1/code.py",
+    }]
 
 
-if __name__ == "__main__":
-    unittest.main()
+@pytest.mark.parametrize("error, expected", [
+    (requests.exceptions.Timeout(), "요청이 타임아웃되었습니다"),
+    (requests.exceptions.ConnectionError(), "FastAPI 서버에 연결할 수 없습니다"),
+    (RuntimeError("boom"), "boom"),
+])
+def test_transport_failure_returns_displayable_document(error, expected):
+    """Transport failures remain readable through the same typed response path."""
+    with patch("requests.sessions.Session.request", side_effect=error):
+        result = get_agent_response("질문", context())
+    assert expected in export_answer_text(result.response)
+    assert result.response.citations == []
+
+
+@pytest.mark.parametrize("payload", [
+    {"response": "plain string"},
+    {"response": {"answer": "old payload", "claims": [], "evidence": [], "confidence": None}},
+])
+def test_invalid_response_is_reported_without_partial_legacy_parsing(payload):
+    """Malformed or obsolete payloads cannot silently lose structured information."""
+    with patch("requests.sessions.Session.request", return_value=http_response(payload)):
+        result = get_agent_response("질문", context())
+    assert "오류" in export_answer_text(result.response)
+
+
+def test_http_error_status_is_visible():
+    """An unsuccessful HTTP response is rendered as a typed error document."""
+    with patch("requests.sessions.Session.request", return_value=http_response({"error":"server exploded"}, 500)):
+        result = get_agent_response("질문", context())
+    assert "상태 코드 500" in export_answer_text(result.response)
+
+
+def test_chunked_sse_restores_same_response_as_http():
+    """Arbitrarily split SSE frames retain the complete response, not only body text."""
+    expected = cited_response()
+    frame = "event: final_response\ndata: " + json.dumps({"response":expected.model_dump(mode="json"), "trace":"t", "debug":None}, ensure_ascii=False) + "\n\n"
+    events = list(_iter_sse_events([frame[:17], frame[17:67], frame[67:]]))
+    assert len(events) == 1
+    assert events[0].result == AgentCallResult(response=expected)
+
+
+def test_stream_fallback_keeps_citations_checks_and_actions():
+    """Fallback before the first event keeps the same public response fields."""
+    expected = AgentCallResult(response=cited_response())
+    with patch("src.app.web.streamlit_api_client.requests.post", side_effect=requests.exceptions.ConnectionError()), patch(
+        "src.app.web.streamlit_api_client.get_agent_response", return_value=expected,
+    ):
+        events = list(stream_agent_response("질문", context()))
+    assert len(events) == 1
+    assert events[0].result == expected
+    assert events[0].data["response"] == expected.response.model_dump(mode="json")
+
+
+def test_stream_break_after_progress_reports_error_without_repeating_request():
+    """A broken active stream produces an error rather than repeating the user action."""
+    response = StreamResponse(['event: request_started\ndata: {"request_id":"r1"}\n\n'], broken=True)
+    with patch("src.app.web.streamlit_api_client.requests.post", return_value=response):
+        events = list(stream_agent_response("질문", context()))
+    assert [event.event for event in events] == ["request_started", "error"]
+    assert "stream broke" in events[-1].data["message"]

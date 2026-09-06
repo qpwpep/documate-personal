@@ -1,130 +1,174 @@
 from __future__ import annotations
 
-import unittest
-from pathlib import Path
-from tempfile import TemporaryDirectory
-from unittest.mock import patch
+from streamlit.testing.v1 import AppTest
 
-from src.app.web.streamlit_api_client import AgentCallResult, AgentStreamEvent
+
+def test_document_renders_content_once_and_keeps_code_layout():
+    """The displayed document preserves block order and code without a duplicate answer."""
+    app = AppTest.from_string('''
+from src.app.web.streamlit_chat import render_chat_history
+from src.core.answer_schema import AnswerDocument, ContentUnit, ParagraphBlock, CodeBlock, finalize_answer
+
+document = AnswerDocument(blocks=[
+    ParagraphBlock(content=[ContentUnit(text="한 번만 표시할 설명", basis="interaction", refs=[])]),
+    CodeBlock(language="python", content=ContentUnit(text="def value():\\n    return 2\\n", basis="example", refs=[])),
+])
+render_chat_history([{"role":"assistant", "response":finalize_answer(document, [])}], "http://localhost:8000")
+''').run()
+
+    assert not app.exception
+    assert [item.value for item in app.markdown].count("한 번만 표시할 설명") == 1
+    assert [item.value for item in app.code] == ["def value():\n    return 2\n"]
+    assert any(item.value == "코드 예시 · 실행 확인 안 됨" for item in app.caption)
+
+
+def test_chat_history_displays_typed_user_and_assistant_messages():
+    """User text and the assistant document survive the same history render."""
+    app = AppTest.from_string('''
+from src.app.web.streamlit_chat import render_chat_history
+from src.core.answer_schema import finalize_answer, text_document
+
+render_chat_history([
+    {"role":"user", "content":"질문입니다"},
+    {"role":"assistant", "response":finalize_answer(text_document("답변입니다"), [])},
+], "http://localhost:8000")
+''').run()
+
+    assert not app.exception
+    assert [item.value for item in app.markdown] == ["질문입니다", "답변입니다"]
+
+
+def test_stream_completion_preserves_full_response_in_history():
+    """The final stream response reaches history without flattening its typed content."""
+    app = AppTest.from_string('''
+import streamlit as st
 from src.app.web.streamlit_chat import process_chat_prompt, render_chat_history
+from src.app.web.streamlit_api_client import AgentCallResult, AgentStreamEvent
+from src.core.answer_schema import finalize_answer, text_document
+
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+
+def stream_agent(prompt):
+    yield AgentStreamEvent(event="stage_started", data={"stage":"synthesis"})
+    response = finalize_answer(text_document("완료된 답변"), [])
+    yield AgentStreamEvent(event="final_response", result=AgentCallResult(response=response))
+
+if not st.session_state.messages:
+    process_chat_prompt("질문", st.session_state.messages.append, st.session_state.messages.append, stream_agent)
+else:
+    render_chat_history(st.session_state.messages, "http://localhost:8000")
+''').run()
+
+    assert not app.exception
+    assert [item.value for item in app.markdown] == ["질문", "완료된 답변"]
+    assert list(app.session_state.messages[1]) == ["role", "response"]
 
 
-class _NullContext:
-    def __enter__(self):
-        return self
+def test_action_failure_is_separate_from_answer_content():
+    """A delivery failure is visible without modifying the canonical answer."""
+    app = AppTest.from_string('''
+from src.app.web.streamlit_chat import render_chat_history
+from src.core.answer_schema import ActionReceipt, finalize_answer, text_document
 
-    def __exit__(self, exc_type, exc, tb):
-        return False
+response = finalize_answer(text_document("본문입니다"), [], actions=[ActionReceipt(kind="slack_notify", status="error", error="채널을 찾을 수 없습니다")])
+render_chat_history([{"role":"assistant", "response":response}], "http://localhost:8000")
+''').run()
 
-
-class _FakeStreamlit:
-    def __init__(self) -> None:
-        self.chat_roles: list[str] = []
-        self.expander_labels: list[str] = []
-        self.markdowns: list[tuple[str, bool]] = []
-        self.infos: list[str] = []
-        self.rerun_calls = 0
-
-    def chat_message(self, role: str) -> _NullContext:
-        self.chat_roles.append(role)
-        return _NullContext()
-
-    def expander(self, label: str) -> _NullContext:
-        self.expander_labels.append(label)
-        return _NullContext()
-
-    def markdown(self, body: str, unsafe_allow_html: bool = False) -> None:
-        self.markdowns.append((body, unsafe_allow_html))
-
-    def info(self, body: str) -> None:
-        self.infos.append(body)
-
-    def empty(self):
-        return self
-
-    def rerun(self) -> None:
-        self.rerun_calls += 1
+    assert not app.exception
+    assert [item.value for item in app.markdown] == ["본문입니다"]
+    assert any("채널을 찾을 수 없습니다" in item.value for item in app.error)
 
 
-class StreamlitChatTest(unittest.TestCase):
-    def test_render_chat_history_renders_evidence_and_existing_download_only(self) -> None:
-        fake_st = _FakeStreamlit()
-        with TemporaryDirectory() as temp_dir:
-            saved_file = Path(temp_dir) / "answer.txt"
-            saved_file.write_text("saved", encoding="utf-8")
+def test_numbered_citations_open_the_matching_snapshot_and_explain_check_limits():
+    """The source control at each block exposes its source and the actual check scope."""
+    app = AppTest.from_string('''
+from src.app.web.streamlit_chat import render_chat_history
+from tests.web.answer_fixtures import cited_response
+render_chat_history([{"role":"assistant", "response":cited_response()}], "http://localhost:8000")
+''').run()
 
-            messages = [
-                {
-                    "role": "assistant",
-                    "content": f"answer\n\n저장 완료: {saved_file}",
-                    "file_path": str(saved_file),
-                    "evidence": [
-                        {"kind": "official", "title": "Docs", "url_or_path": "https://docs.example.com"},
-                        "skip-me",
-                    ],
-                },
-                {
-                    "role": "assistant",
-                    "content": "missing file",
-                    "file_path": str(saved_file.parent / "missing.txt"),
-                    "evidence": [],
-                },
-            ]
-
-            with patch("src.app.web.streamlit_chat.st", fake_st):
-                render_chat_history(messages, "http://127.0.0.1:8000")
-
-        self.assertEqual(fake_st.expander_labels, ["근거 보기"])
-        self.assertTrue(any("Docs" in body for body, _ in fake_st.markdowns))
-        self.assertTrue(any("파일 저장 완료" in body for body, _ in fake_st.markdowns))
-        self.assertTrue(any("dm-save-note" in body for body, _ in fake_st.markdowns))
-        self.assertFalse(any(str(saved_file) in body for body, _ in fake_st.markdowns))
-        self.assertEqual(sum("download/answer.txt" in body for body, _ in fake_st.markdowns), 1)
-
-    def test_process_chat_prompt_streams_progress_before_final_answer(self) -> None:
-        fake_st = _FakeStreamlit()
-        appended_messages: list[dict[str, object]] = []
-
-        def append_message(message):
-            appended_messages.append(message)
-
-        def stream_agent(user_input: str):
-            self.assertEqual(user_input, "질문")
-            yield AgentStreamEvent(event="request_started", data={"request_id": "req123"})
-            yield AgentStreamEvent(event="stage_started", data={"stage": "planner"})
-            yield AgentStreamEvent(event="progress_snapshot", data={"summary": "근거 요약: docs 1건"})
-            yield AgentStreamEvent(
-                event="final_response",
-                data={
-                    "response": {"answer": "응답", "evidence": [{"kind": "official"}]},
-                    "file_path": "output/result.txt",
-                },
-                result=AgentCallResult(
-                    answer="응답\n\n저장 완료: output/result.txt",
-                    file_path="output/result.txt",
-                    evidence_items=[{"kind": "official"}],
-                ),
-            )
-
-        with patch("src.app.web.streamlit_chat.st", fake_st):
-            process_chat_prompt(
-                stream_agent=stream_agent,
-                prompt="질문",
-                append_user_message=append_message,
-                append_assistant_message=append_message,
-            )
-
-        self.assertEqual([message["role"] for message in appended_messages], ["user", "assistant"])
-        self.assertEqual(appended_messages[0]["content"], "질문")
-        self.assertEqual(appended_messages[1]["content"], "응답")
-        self.assertEqual(fake_st.chat_roles, ["user", "assistant"])
-        self.assertTrue(any("근거 요약: docs 1건" in body for body, _ in fake_st.markdowns))
-        self.assertTrue(any("요청을 접수했습니다." in body for body, _ in fake_st.markdowns))
-        self.assertTrue(any("질문을 분석하고 있습니다." in body for body, _ in fake_st.markdowns))
-        self.assertTrue(any(body == "응답" for body, _ in fake_st.markdowns))
-        self.assertFalse(any("저장 완료: output/result.txt" in body for body, _ in fake_st.markdowns))
-        self.assertEqual(fake_st.rerun_calls, 1)
+    assert not app.exception
+    popovers = app.get("popover")
+    assert [item.proto.popover.label for item in popovers] == ["근거 [1]", "근거 [1]"]
+    for item in popovers:
+        assert item.code[0].value == "def value():\n    return 3\n"
+        assert any("7–8행" in caption.value for caption in item.caption)
+        assert item.expander[0].label == "당시 원문과 위치 보기"
+    assert any("별도로 평가하지 않았습니다" in item.value for item in app.caption)
+    assert any("파일 다운로드" in item.value and "/download/result.txt" in item.value for item in app.markdown)
 
 
-if __name__ == "__main__":
-    unittest.main()
+def test_missing_reference_is_visible_next_to_affected_content():
+    """An unresolved reference is displayed as a limitation rather than a fake citation."""
+    app = AppTest.from_string('''
+from src.app.web.streamlit_chat import render_chat_history
+from src.core.answer_schema import finalize_answer, text_document
+response = finalize_answer(text_document("확인이 필요한 내용", basis="source", refs=["missing"]), [])
+render_chat_history([{"role":"assistant", "response":response}], "http://localhost:8000")
+''').run()
+
+    assert not app.exception
+    assert [item.value for item in app.markdown] == ["확인이 필요한 내용"]
+    assert [item.value for item in app.warning] == ["이 내용에 연결된 근거를 찾지 못했습니다."]
+    assert not app.get("popover")
+
+
+def test_heading_list_and_table_keep_document_order_and_cell_boundaries():
+    """Non-prose blocks retain their structure, including pipes inside a table cell."""
+    app = AppTest.from_string('''
+from src.app.web.streamlit_chat import render_chat_history
+from src.core.answer_schema import AnswerDocument, ContentUnit, HeadingBlock, ListBlock, TableBlock, finalize_answer
+
+def unit(text):
+    return ContentUnit(text=text)
+document = AnswerDocument(blocks=[
+    HeadingBlock(level=2, content=unit("설정")),
+    ListBlock(ordered=True, items=[unit("첫 단계"), unit("다음 단계")]),
+    TableBlock(columns=[unit("옵션"), unit("설명")], rows=[[unit("a | b"), unit("첫 줄\\n둘째 줄")]]),
+])
+render_chat_history([{"role":"assistant", "response":finalize_answer(document, [])}], "http://localhost:8000")
+''').run()
+
+    assert not app.exception
+    assert [item.value for item in app.markdown] == [
+        "## 설정",
+        "1. 첫 단계\n2. 다음 단계",
+        "| 옵션 | 설명 |\n| --- | --- |\n| a \\| b | 첫 줄<br>둘째 줄 |",
+    ]
+
+
+def test_unit_limitation_is_placed_after_its_block():
+    """A limitation follows the content it qualifies instead of an unrelated opening."""
+    app = AppTest.from_string('''
+from src.app.web.streamlit_chat import render_answer_response
+from src.core.answer_schema import AnswerDocument, ContentUnit, ParagraphBlock, ResponseIssue, finalize_answer
+document = AnswerDocument(blocks=[ParagraphBlock(content=[ContentUnit(text="먼저 설명")]), ParagraphBlock(content=[ContentUnit(text="범위가 제한된 설명")])])
+response = finalize_answer(document, [], issues=[ResponseIssue(code="limited", message="두 번째 내용의 제한", unit_id="b1.content.0")])
+render_answer_response(response, "http://localhost:8000")
+''').run()
+
+    assert not app.exception
+    assert [item.type for item in app.main.children.values()] == ["markdown", "markdown", "warning"]
+    assert app.warning[0].value == "두 번째 내용의 제한"
+
+
+def test_mutated_checked_body_is_rejected_before_any_content_is_displayed():
+    """The UI cannot display changed text under a previous revision's checks."""
+    app = AppTest.from_string('''
+import streamlit as st
+from pydantic import ValidationError
+from src.app.web.streamlit_chat import render_answer_response
+from src.core.answer_schema import finalize_answer, text_document
+
+response = finalize_answer(text_document("검사 당시 내용"), [])
+response.content.blocks[0].content[0].text = "검사 후 변조된 내용"
+try:
+    render_answer_response(response, "http://localhost:8000")
+except ValidationError:
+    st.error("답변 내용의 변경이 감지되었습니다.")
+''').run()
+
+    assert not app.exception
+    assert not app.markdown
+    assert [item.value for item in app.error] == ["답변 내용의 변경이 감지되었습니다."]

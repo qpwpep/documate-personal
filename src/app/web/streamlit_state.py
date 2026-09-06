@@ -3,22 +3,29 @@ from __future__ import annotations
 import logging
 import uuid
 from pathlib import Path
-from typing import Any, TypedDict
+from typing import Literal, TypedDict
 
 import streamlit as st
 
 from src.infra.logging_utils import log_event
 from src.infra.runtime_paths import get_uploads_dir
+from src.core.answer_schema import AnswerResponse, finalize_answer, text_document
 
 
 QUICK_PROMPTS_STATE_KEY = "documate_quick_prompts"
 
 
-class ChatMessage(TypedDict):
-    role: str
+class UserChatMessage(TypedDict):
+    role: Literal["user"]
     content: str
-    file_path: str
-    evidence: list[Any]
+
+
+class AssistantChatMessage(TypedDict):
+    role: Literal["assistant"]
+    response: AnswerResponse
+
+
+ChatMessage = UserChatMessage | AssistantChatMessage
 
 
 def ensure_session_state(logger: logging.Logger) -> None:
@@ -82,7 +89,8 @@ def _start_new_session(logger: logging.Logger, event_name: str) -> None:
 def _build_default_assistant_message() -> ChatMessage:
     return {
         "role": "assistant",
-        "content": "안녕하세요. 질문을 입력하거나 왼쪽에서 코드 파일을 업로드해 주세요.",
-        "file_path": "",
-        "evidence": [],
+        "response": finalize_answer(
+            text_document("안녕하세요. 공식 문서에 대해 질문하거나 코드 파일을 첨부해 주세요."),
+            [],
+        ),
     }

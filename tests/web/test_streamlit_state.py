@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from src.app.web import streamlit_state
+from tests.web.answer_fixtures import answer_response
 
 
 class StreamlitStateTest(unittest.TestCase):
@@ -46,12 +47,11 @@ class StreamlitStateTest(unittest.TestCase):
             streamlit_state.append_message(
                 {
                     "role": "assistant",
-                    "content": "hello",
-                    "file_path": "",
-                    "evidence": [],
+                    "response": answer_response("hello"),
                 }
             )
             self.assertEqual(len(streamlit_state.get_messages()), 1)
+            self.assertEqual(streamlit_state.get_messages()[0]["response"], answer_response("hello"))
 
             streamlit_state.clear_uploaded_file_name()
             self.assertIsNone(streamlit_state.get_uploaded_file_name())
@@ -66,8 +66,6 @@ class StreamlitStateTest(unittest.TestCase):
                     {
                         "role": "user",
                         "content": "previous",
-                        "file_path": "",
-                        "evidence": [],
                     }
                 ],
             }
