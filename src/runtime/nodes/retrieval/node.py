@@ -35,7 +35,7 @@ class RetrievalBatchPlan:
 
 @dataclass(slots=True)
 class RetrievalBatchResult:
-    evidence_updates: list[dict[str, Any]] = field(default_factory=list)
+    hit_updates: list[dict[str, Any]] = field(default_factory=list)
     retrieval_diagnostics: list[RetrievalDiagnostic] = field(default_factory=list)
     tool_messages: list[Any] = field(default_factory=list)
     local_errors: list[str] = field(default_factory=list)
@@ -77,15 +77,15 @@ def _collect_retrieval_batch(
         if str(route).strip()
     }
     retry_scope = str(getattr(retry_context, "retry_scope", "") or "").strip()
-    preserved_evidence = [
+    preserved_hits = [
         item
-        for item in retry_context.preserved_evidence
+        for item in retry_context.preserved_hits
         if isinstance(item, dict)
     ]
     preserved_diagnostics = list(retry_context.preserved_retrieval_diagnostics)
     batch_plan = RetrievalBatchPlan(attempt=attempt)
 
-    if retry_scope == "reuse_evidence_resynthesize" and preserved_evidence:
+    if retry_scope == "reuse_hits_resynthesize" and preserved_hits:
         for index, task in enumerate(planner_output.tasks, start=1):
             handler = route_handlers.get(task.route)
             if handler is None:
@@ -105,7 +105,7 @@ def _collect_retrieval_batch(
                     tool_name=tool_name,
                     route=sanitized_task.route,
                     attempt=attempt,
-                    preserved_evidence=preserved_evidence,
+                    preserved_hits=preserved_hits,
                     preserved_diagnostics=preserved_diagnostics,
                 )
             )
@@ -131,7 +131,7 @@ def _collect_retrieval_batch(
                     tool_name=tool_name,
                     route=sanitized_task.route,
                     attempt=attempt,
-                    preserved_evidence=preserved_evidence,
+                    preserved_hits=preserved_hits,
                     preserved_diagnostics=preserved_diagnostics,
                 )
             )
@@ -177,7 +177,7 @@ def _execute_retrieval_batch(batch_plan: RetrievalBatchPlan) -> RetrievalBatchRe
     result = RetrievalBatchResult(local_errors=list(batch_plan.local_errors))
     tool_call_counts: dict[str, int] = {}
     for item in task_results:
-        result.evidence_updates.extend(item.evidence)
+        result.hit_updates.extend(item.hits)
         result.retrieval_diagnostics.append(item.diagnostic)
         result.local_errors.extend(str(error) for error in item.errors if str(error).strip())
         result.latency_trace.append(item.latency_trace)
@@ -198,7 +198,7 @@ def _build_retrieval_updates(
 ) -> GraphState:
     updates: GraphState = {
         "retrieval": retrieval.model_copy(
-            update={"evidence_log": [*retrieval.evidence_log, *batch_result.evidence_updates]}
+            update={"hit_log": [*retrieval.hit_log, *batch_result.hit_updates]}
         ),
         "messages": batch_result.tool_messages,
     }
@@ -301,7 +301,7 @@ def make_retrieve_dispatch_node(
                 "retrieve_dispatch",
                 task_count=len(planner_output.tasks),
                 routes=routes,
-                evidence_count=len(batch_result.evidence_updates),
+                evidence_count=len(batch_result.hit_updates),
                 statuses=statuses,
             )
 

@@ -6,12 +6,12 @@ from typing import Any
 
 from src.core.contracts import RetrievalDiagnostic
 from src.core.contracts.routes import route_for_tool
-from src.core.evidence import evidence_to_dicts, parse_evidence_payload
+from src.core.evidence import parse_search_hits
 from src.core.latency import elapsed_ms, make_retrieval_route_latency_event
 from src.core.planner_schema import RetrievalTask
 from src.infra.tools._common import build_retrieval_payload
 from src.infra.tools.docs_search import infer_docs_query_hint
-from src.infra.tools.docs_search.serialization import filter_evidence_to_domains
+from src.infra.tools.docs_search.serialization import filter_hits_to_domains
 
 
 @dataclass(slots=True)
@@ -19,7 +19,7 @@ class RetrievalTaskResult:
     index: int
     tool_name: str
     payload: Any
-    evidence: list[dict[str, Any]]
+    hits: list[dict[str, Any]]
     diagnostic: RetrievalDiagnostic
     errors: list[str]
     latency_trace: dict[str, Any]
@@ -64,7 +64,7 @@ def normalize_retrieval_diagnostic(
         error_code=diagnostics.get("error_code"),
         query=str(diagnostics.get("query") or query),
         attempt=diagnostic_attempt,
-        evidence_count=int(diagnostics.get("evidence_count", evidence_count) or evidence_count),
+        evidence_count=evidence_count,
         metric=str(diagnostics.get("metric") or ""),
         score_direction=str(diagnostics.get("score_direction") or ""),  # type: ignore[arg-type]
         normalized_score=diagnostics.get("normalized_score"),
@@ -83,7 +83,7 @@ def normalize_retrieval_diagnostic(
         filtered_url_request_failed_count=_non_negative_int(diagnostics.get("filtered_url_request_failed_count", 0), default=0),
         filtered_identifier_mismatch_count=_non_negative_int(diagnostics.get("filtered_identifier_mismatch_count", 0), default=0),
         validated_url_count=_non_negative_int(diagnostics.get("validated_url_count", 0), default=0),
-        final_evidence_count=_non_negative_int(diagnostics.get("final_evidence_count", evidence_count), default=evidence_count),
+        final_evidence_count=evidence_count,
         warnings=[str(item).strip() for item in warnings if str(item).strip()],
     )
 
@@ -97,8 +97,11 @@ def collect_retrieval_result(
     attempt: int,
     local_errors: list[str],
 ) -> tuple[list[dict[str, Any]], RetrievalDiagnostic]:
-    parsed_items = parse_evidence_payload(raw_payload, context=f"tool:{tool_name}", errors=local_errors)
-    payload_dicts = evidence_to_dicts(parsed_items)
+    try:
+        parsed_items = parse_search_hits(raw_payload, errors=local_errors)
+    except (TypeError, ValueError) as exc:
+        local_errors.append(f"tool:{tool_name}: invalid search hits ({exc})")
+        parsed_items = []
     warnings: list[str] = []
     filtered_cross_domain_count = 0
     if route == "docs":
@@ -106,15 +109,17 @@ def collect_retrieval_result(
         if query_hint := infer_docs_query_hint(query):
             _library_name, hinted_domains, _fallback_queries = query_hint
         if hinted_domains:
-            pre_filter_count = len(payload_dicts)
-            filtered_payload_dicts = filter_evidence_to_domains(
-                payload_dicts,
+            pre_filter_count = len(parsed_items)
+            filtered_items = parse_search_hits(filter_hits_to_domains(
+                [hit.model_dump(mode="json") for hit in parsed_items],
                 allowed_domains=hinted_domains,
-            )
-            if len(filtered_payload_dicts) != len(payload_dicts):
-                filtered_cross_domain_count = pre_filter_count - len(filtered_payload_dicts)
+            ))
+            if len(filtered_items) != len(parsed_items):
+                filtered_cross_domain_count = pre_filter_count - len(filtered_items)
                 warnings.append("cross_library_domain_filtered")
-                payload_dicts = filtered_payload_dicts
+                parsed_items = filtered_items
+
+    payload_dicts = [item.model_dump(mode="json") for item in parsed_items]
 
     if isinstance(raw_payload, dict) and isinstance(raw_payload.get("diagnostics"), dict):
         diagnostics = raw_payload["diagnostics"]
@@ -130,10 +135,12 @@ def collect_retrieval_result(
             if not payload_dicts and not str(diagnostics.get("message") or "").strip():
                 diagnostics["message"] = "no official documentation evidence found"
             diagnostics["normalized_score"] = max(
-                (float(item["score"]) for item in payload_dicts if item.get("score") is not None),
+                (item.score.normalized for item in parsed_items if item.score.normalized is not None),
                 default=None,
             )
-            diagnostics["raw_score"] = diagnostics.get("normalized_score")
+            diagnostics["raw_score"] = max(
+                (item.score.raw for item in parsed_items if item.score.raw is not None), default=None,
+            )
             diagnostics["result_count"] = len(payload_dicts)
             diagnostics["evidence_count"] = len(payload_dicts)
 
@@ -165,7 +172,7 @@ def execute_retrieval_task(
         payload = invoke_tool(task)
     except Exception as exc:
         payload = {
-            "evidence": [],
+            "hits": [],
             "diagnostics": {
                 "tool": tool_name,
                 "route": route,
@@ -185,11 +192,12 @@ def execute_retrieval_task(
         attempt=attempt,
         local_errors=local_errors,
     )
+    payload = {"hits": payload_dicts, "diagnostics": diagnostic.model_dump(mode="json")}
     return RetrievalTaskResult(
         index=index,
         tool_name=tool_name,
         payload=payload,
-        evidence=payload_dicts,
+        hits=payload_dicts,
         diagnostic=diagnostic,
         errors=local_errors,
         latency_trace=make_retrieval_route_latency_event(
@@ -209,14 +217,10 @@ def build_reused_retrieval_task_result(
     tool_name: str,
     route: str,
     attempt: int,
-    preserved_evidence: list[dict[str, Any]],
+    preserved_hits: list[dict[str, Any]],
     preserved_diagnostics: list[RetrievalDiagnostic],
 ) -> RetrievalTaskResult:
-    route_evidence = [
-        dict(item)
-        for item in preserved_evidence
-        if route_for_tool(str(item.get("tool") or "")) == route
-    ]
+    route_hits = [hit for hit in parse_search_hits(preserved_hits) if hit.evidence.route == route]
     route_diagnostic = next(
         (
             item.model_copy(deep=True)
@@ -226,7 +230,7 @@ def build_reused_retrieval_task_result(
         RetrievalDiagnostic(
             tool=tool_name,
             route=route,
-            status="success" if route_evidence else "no_result",
+            status="success" if route_hits else "no_result",
             message="reused previous successful retrieval result",
             query=task.query,
             attempt=attempt,
@@ -245,9 +249,9 @@ def build_reused_retrieval_task_result(
         tool=tool_name,
         route=route,  # type: ignore[arg-type]
         query=task.query,
-        evidence=route_evidence,
-        status="success" if route_evidence else "no_result",
-        message="reused previous successful retrieval result" if route_evidence else "no reused evidence found",
+        hits=route_hits,
+        status="success" if route_hits else "no_result",
+        message="reused previous successful retrieval result" if route_hits else "no reused search hits found",
         normalized_score=diagnostic.normalized_score,
         raw_score=diagnostic.raw_score,
         provider_ms=diagnostic.provider_ms,
@@ -273,7 +277,7 @@ def build_reused_retrieval_task_result(
         index=index,
         tool_name=tool_name,
         payload=payload,
-        evidence=route_evidence,
+        hits=[item.model_dump(mode="json") for item in route_hits],
         diagnostic=diagnostic,
         errors=[],
         latency_trace=make_retrieval_route_latency_event(
