@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from langchain_core.messages import AnyMessage
+from src.core.answer_schema import AnswerResponse
 
 from src.core.contracts.debug import RetryState
 from src.core.contracts.graph_state import DebugState, GraphState, PlannerState, ResponseState, RetrievalState, RuntimeState, SessionMetadata
@@ -21,6 +22,7 @@ def build_graph_state_input(
     progress_emitter: Any | None = None,
     session_metadata: SessionMetadata | dict[str, Any] | None = None,
     memory_summary: str | None = None,
+    previous_response: AnswerResponse | None = None,
     planner: PlannerState | dict[str, Any] | None = None,
     retrieval: RetrievalState | dict[str, Any] | None = None,
     retry: RetryState | dict[str, Any] | None = None,
@@ -35,6 +37,7 @@ def build_graph_state_input(
             session_metadata=parse_session_metadata(session_metadata),
             memory_summary=memory_summary,
             progress_emitter=progress_emitter,
+            previous_response=previous_response,
         ),
     }
     if planner is not None:
