@@ -1,78 +1,71 @@
-import unittest
+from langchain_core.messages import HumanMessage
 
-from langchain_core.messages import AIMessage, HumanMessage
-
-from src.runtime.nodes.synthesis import make_synthesize_node
-from src.core.contracts.graph_state import DebugState
+from src.core.answer_schema import ActionReceipt, export_answer_text, finalize_answer, text_document
+from src.core.contracts import PlannerState
+from src.core.contracts.boundary.graph import build_graph_state_input
+from src.core.documents import DocumentElement, build_snapshot
+from src.core.evidence import build_evidence
 from src.core.planner_schema import PlannerOutput, RetrievalTask
-from src.runtime.nodes.synthesis.models import SynthesisContext
-from src.runtime.nodes.synthesis.short_circuit import maybe_short_circuit_synthesis
-
-from .helpers import _CaptureSynthesizeLLM, build_legacy_state
+from src.runtime.nodes.synthesis import make_synthesize_node
 
 
-def _response(result):
-    return result["response"]
+class ModelBoundary:
+    def __init__(self, *, unavailable=False):
+        self.unavailable = unavailable
+
+    def invoke(self, messages):
+        if self.unavailable:
+            raise AssertionError("This action reuses an existing document")
+        return text_document("현재 전달할 답변입니다.").model_dump(mode="json")
 
 
-class ActionOnlySynthesisTest(unittest.TestCase):
-    def test_retrieval_plan_reaches_synthesis_despite_action_wording(self) -> None:
-        context = SynthesisContext(
-            attempt=1, user_input="그 항목을 확인해서 슬랙으로 보내줘", messages=[],
-            guided_followup="", slack_target_available=False, parse_errors=[], planner_parse_errors=[],
-            planner_output=PlannerOutput(use_retrieval=True, tasks=[RetrievalTask(route="upload", query="항목 확인", k=4)]),
-            retrieval_required=True, primary_evidence_items=[], grounded_fallback_evidence_items=[],
-        )
-        result = maybe_short_circuit_synthesis(state={}, debug=DebugState(), context=context, stage_started=0.0)
-        self.assertIsNone(result)
-
-    def test_action_only_save_without_previous_answer_reaches_llm(self) -> None:
-        capture_llm = _CaptureSynthesizeLLM()
-        synthesize_node = make_synthesize_node(capture_llm, verbose=False, max_turns=6)
-
-        updates = synthesize_node(
-            build_legacy_state(
-                {
-                    "messages": [HumanMessage(content="save this answer to txt")],
-                    "user_input": "save this answer to txt",
-                    "retrieved_evidence": [],
-                    "synthesis_attempt": 0,
-                }
-            )
-        )
-
-        self.assertIsNotNone(capture_llm.last_messages)
-        self.assertEqual(_response(updates).final_answer, "synth result")
-
-    def test_action_only_slack_with_previous_answer_reaches_llm_before_postprocess(self) -> None:
-        capture_llm = _CaptureSynthesizeLLM()
-        synthesize_node = make_synthesize_node(capture_llm, verbose=False, max_turns=6)
-
-        updates = synthesize_node(
-            build_legacy_state(
-                {
-                    "messages": [
-                        HumanMessage(content="Explain numpy broadcasting."),
-                        AIMessage(content="previous answer"),
-                        HumanMessage(content="send this to slack"),
-                    ],
-                    "user_input": "send this to slack",
-                    "retrieved_evidence": [],
-                    "synthesis_attempt": 0,
-                    "session_metadata": {
-                        "slack_destination": {
-                            "channel_id": "C123BENCH",
-                            "user_id": None,
-                            "email": None,
-                        }
-                    },
-                }
-            )
-        )
-
-        self.assertIsNotNone(capture_llm.last_messages)
-        self.assertEqual(_response(updates).final_answer, "synth result")
+def _state(query, **kwargs):
+    return build_graph_state_input(
+        user_input=query, messages=[HumanMessage(content=query)],
+        planner=PlannerState(output=PlannerOutput(use_retrieval=False, tasks=[])), **kwargs,
+    )
 
 
-if __name__ == "__main__":
-    unittest.main()
+def test_save_without_previous_response_generates_current_document():
+    """Saving without an earlier answer still produces a self-contained body in this turn."""
+    updates = make_synthesize_node(ModelBoundary())(_state("save this answer to txt"))
+    assert export_answer_text(updates["response"].result) == "현재 전달할 답변입니다."
+
+
+def test_missing_slack_destination_is_a_typed_followup():
+    """A missing send destination is a single interaction document rather than a delivery receipt."""
+    updates = make_synthesize_node(ModelBoundary(unavailable=True))(_state("send this to slack"))
+    result = updates["response"].result
+    assert "channel_id" in export_answer_text(result)
+    assert result.citations == []
+    assert result.actions == []
+    assert updates["debug"].synthesis_errors == []
+
+
+def test_saving_previous_response_preserves_its_body_and_source_revision():
+    """Reusing an answer preserves its cited document and drops receipts from the earlier turn."""
+    snapshot = build_snapshot(
+        source_uri="https://docs.example.com", title="Docs", media_type="text/plain",
+        source_type="official", content="The value is 3.", parser="test", parser_version="1",
+    )
+    evidence = build_evidence(snapshot=snapshot, element=DocumentElement(element_id="p1", kind="paragraph", text="The value is 3."))
+    previous = finalize_answer(
+        text_document("The value is 3.", basis="source", refs=[evidence.id]), [evidence],
+        actions=[ActionReceipt(kind="save_text", status="success", file_path="old.txt")],
+    )
+    updates = make_synthesize_node(ModelBoundary(unavailable=True))(_state("save this answer to txt", previous_response=previous))
+    result = updates["response"].result
+    assert result.content == previous.content
+    assert result.citations == previous.citations
+    assert result.actions == []
+    assert export_answer_text(result) == export_answer_text(previous)
+    assert updates["response"].evidence_packet == [evidence]
+    assert updates["debug"].synthesis_errors == []
+
+
+def test_retrieval_plan_is_not_short_circuited_by_save_wording():
+    """A request for new source analysis does not silently reuse the previous answer."""
+    state = _state("항목을 확인해서 저장해줘", previous_response=finalize_answer(text_document("previous"), []))
+    state["planner"] = PlannerState(output=PlannerOutput(use_retrieval=True, tasks=[RetrievalTask(route="upload", query="항목", k=4)]))
+    result = make_synthesize_node(ModelBoundary())(state)["response"].result
+    assert export_answer_text(result) == "현재 전달할 답변입니다."
