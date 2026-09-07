@@ -8,6 +8,7 @@ from typing import Any
 from langchain_chroma import Chroma
 from langchain_core.documents import Document
 
+from src.core.documents import ParsedDocument
 from src.infra.chroma_store import create_chroma_vectorstore
 from src.infra.chunking import ChunkedDocument, chunk_notebook_path, chunk_python_text
 
@@ -78,6 +79,11 @@ class _SourceAwareRetriever:
         self._retriever = retriever
         self._document = document
         self.vectorstore = _SourceAwareVectorStore(vectorstore, document)
+
+    @property
+    def source_document(self) -> ParsedDocument | None:
+        """The current session's preserved source; no filesystem or cross-session lookup."""
+        return self._document.parsed if self._document.parsed.elements else None
 
     def invoke(self, *args: Any, **kwargs: Any) -> list[Document]:
         return [self._document.hydrate(chunk) for chunk in self._retriever.invoke(*args, **kwargs)]
