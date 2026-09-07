@@ -5,7 +5,7 @@ from src.core.request_contracts import infer_answer_contract, missing_required_c
 from src.runtime.nodes.retry import contains_tool_error
 from src.runtime.nodes.validation.models import ValidationAssessment, ValidationSnapshot
 from src.runtime.nodes.validation.route_policy import route_error_statuses
-from src.runtime.nodes.validation.snapshot import detect_missing_route_coverage
+from src.runtime.nodes.validation.snapshot import detect_missing_route_coverage, detect_missing_requirement_coverage
 
 
 def assess_retrieval_quality(snapshot: ValidationSnapshot) -> ValidationAssessment:
@@ -70,6 +70,13 @@ def assess_validation(snapshot: ValidationSnapshot) -> ValidationAssessment:
             required_routes=snapshot.required_routes, result=result,
             evidence_packet=snapshot.evidence_packet, valid_unit_paths=assessment.valid_unit_paths,
         )
+        assessment.failed_requirement_ids = set(detect_missing_requirement_coverage(
+            snapshot=snapshot, result=result, valid_unit_paths=assessment.valid_unit_paths,
+        ))
+        assessment.missing_route_coverage = list(dict.fromkeys([
+            *assessment.missing_route_coverage,
+            *(task.route for task in snapshot.planner_output.tasks if task.requirement_id in assessment.failed_requirement_ids),
+        ]))
     assessment.missing_content = missing_required_content(
         infer_answer_contract(snapshot.user_input), result.content,
     )

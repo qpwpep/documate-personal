@@ -22,6 +22,7 @@ class ValidationSnapshot:
     evidence_by_route: dict[str, list[EvidenceRef]] = field(default_factory=dict)
     diagnostics_by_route: dict[str, list[RetrievalDiagnostic]] = field(default_factory=dict)
     required_routes: list[str] = field(default_factory=list)
+    evidence_requirement_map: dict[str, list[str]] = field(default_factory=dict)
 
 
 @dataclass(slots=True)

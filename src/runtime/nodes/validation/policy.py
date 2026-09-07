@@ -11,15 +11,17 @@ from src.core.evidence import EvidenceRef
 from src.core.request_contracts import infer_answer_contract, missing_required_content
 from src.runtime.nodes.retry import build_followup_from_routes
 from src.runtime.nodes.validation.models import ValidationAssessment, ValidationSnapshot
-from src.runtime.nodes.validation.snapshot import detect_missing_route_coverage
+from src.runtime.nodes.validation.snapshot import detect_missing_route_coverage, detect_missing_requirement_coverage
 
 
 def build_response_updates(
     result: AnswerResponse, *, attempt: int, evidence_packet: list[EvidenceRef],
+    evidence_requirement_map: dict[str, list[str]] | None = None,
 ) -> GraphState:
     return {
         "messages": [AIMessage(content=export_answer_text(result))],
-        "response": ResponseState(result=result, evidence_packet=evidence_packet, synthesis_attempt=attempt),
+        "response": ResponseState(result=result, evidence_packet=evidence_packet, synthesis_attempt=attempt,
+                                  evidence_requirement_map=evidence_requirement_map or {}),
     }
 
 
@@ -38,7 +40,8 @@ def apply_validation_outcome(
     result = assessment.checked_result
     packet = snapshot.evidence_packet
     if assessment.retry_reason is None and result is not None:
-        return build_response_updates(result, attempt=attempt, evidence_packet=packet)
+        return build_response_updates(result, attempt=attempt, evidence_packet=packet,
+                                      evidence_requirement_map=snapshot.evidence_requirement_map)
 
     retained_issues = [
         issue for issue in (snapshot.response_result.issues if snapshot.response_result else [])
@@ -62,8 +65,10 @@ def apply_validation_outcome(
         missing_content = missing_required_content(
             infer_answer_contract(snapshot.user_input), document,
         )
-        if document.blocks and not missing_routes and not missing_content:
-            return build_response_updates(result, attempt=attempt, evidence_packet=packet)
+        missing_requirements = detect_missing_requirement_coverage(snapshot=snapshot, result=result, valid_unit_paths=valid_paths)
+        if document.blocks and not missing_routes and not missing_content and not missing_requirements:
+            return build_response_updates(result, attempt=attempt, evidence_packet=packet,
+                                          evidence_requirement_map=snapshot.evidence_requirement_map)
 
     if snapshot.parsed_hits:
         packet = list({hit.evidence.id: hit.evidence for hit in snapshot.parsed_hits}.values())
@@ -80,7 +85,11 @@ def apply_validation_outcome(
             actions=snapshot.response_result.actions if snapshot.response_result else [],
             issues=issues,
         )
-        return build_response_updates(result, attempt=attempt, evidence_packet=packet)
+        requirement_map: dict[str, list[str]] = {}
+        for hit in snapshot.parsed_hits:
+            if hit.requirement_id:
+                requirement_map.setdefault(hit.evidence.id, []).append(hit.requirement_id)
+        return build_response_updates(result, attempt=attempt, evidence_packet=packet, evidence_requirement_map=requirement_map)
 
     return build_followup_updates(
         build_followup_from_routes(snapshot.planner_output, assessment.retry_reason or "missing_content"),

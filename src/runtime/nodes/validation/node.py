@@ -33,6 +33,7 @@ def _decide_retry_outcome(
         retrieval_errors=snapshot.current_attempt_retrieval_errors,
         score_avg=assessment.score_avg,
         failed_routes=assessment.failed_routes,
+        failed_requirement_ids=assessment.failed_requirement_ids,
         current_attempt_hits=snapshot.parsed_hits,
         current_attempt_retrieval_diagnostics=snapshot.current_attempt_retrieval_diagnostics,
     )

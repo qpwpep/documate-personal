@@ -10,9 +10,9 @@ from src.core.evidence import SearchHit
 from src.core.prompts import needs_save, needs_slack
 from src.runtime.nodes.actions.policy import get_slack_destinations
 from src.runtime.nodes.synthesis.budgets import SynthesisBudgetProfile
-from src.runtime.nodes.synthesis.evidence_selection import select_evidence_hits
+from src.runtime.nodes.synthesis.evidence_selection import select_evidence_hits, tasks_for_hit
 from src.runtime.nodes.synthesis.models import PreparedSynthesisInputs, SynthesisContext
-from src.runtime.nodes.synthesis.prompt_builder import build_synthesis_messages, prepare_evidence_packet
+from src.runtime.nodes.synthesis.prompt_builder import build_synthesis_messages, select_evidence_packet
 
 
 def _build_action_rules(*, user_input: str, slack_target_available: bool) -> list[str]:
@@ -60,11 +60,18 @@ def prepare_synthesis_inputs(
     *, state: GraphState, context: SynthesisContext, budget_profile: SynthesisBudgetProfile,
     max_turns: int, prompt_snippet_char_limit: int, prompt_evidence_char_budget: int | None,
 ) -> PreparedSynthesisInputs:
-    packet = prepare_evidence_packet(
+    requirements_by_evidence = {}
+    for hit in context.hits:
+        associated = requirements_by_evidence.setdefault(hit.evidence.id, {})
+        for task in tasks_for_hit(hit, context.planner_output):
+            associated.setdefault(task.requirement_id, task)
+    packet, requirement_ids = select_evidence_packet(
         [hit.evidence for hit in context.hits],
         max_items=budget_profile.max_evidence_items,
         snippet_char_limit=prompt_snippet_char_limit,
         evidence_char_budget=budget_profile.evidence_chars if prompt_evidence_char_budget is None else prompt_evidence_char_budget,
+        query=context.user_input,
+        requirements_by_evidence={key: list(tasks.values()) for key, tasks in requirements_by_evidence.items()},
     )
     messages, before, after = build_synthesis_messages(
         state=state,
@@ -72,10 +79,12 @@ def prepare_synthesis_inputs(
         evidence_packet=packet,
         attempt=context.attempt,
         max_turns=max_turns,
+        requirement_ids_by_evidence=requirement_ids,
     )
     return PreparedSynthesisInputs(
         attempt=context.attempt, user_input=context.user_input, budget_profile=budget_profile,
         parse_errors=context.parse_errors, planner_parse_errors=context.planner_parse_errors,
         retrieval_required=context.retrieval_required, evidence_packet=packet,
+        evidence_requirement_map=requirement_ids,
         model_messages=messages, history_before=before, history_after=after,
     )
