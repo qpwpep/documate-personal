@@ -115,8 +115,8 @@ def _assert_repair_flow(routes, defect, max_retries, persistent):
         summarize_node=lambda state: {},
         planner_node=make_planner_node(planner_llm, verbose=False),
         retrieve_dispatch_node=make_retrieve_dispatch_node(
-            lambda query: search("docs", query),
-            lambda query, k, retriever=None: search("upload", query),
+            lambda query, **kwargs: search("docs", query),
+            lambda query, k, retriever=None, **kwargs: search("upload", query),
             verbose=False,
         ),
         synthesize_node=make_synthesize_node(RepairingLLM(), verbose=False),

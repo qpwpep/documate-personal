@@ -16,9 +16,10 @@ from src.core.latency import elapsed_ms, make_stage_latency_event
 from src.infra.logging_utils import log_event
 from src.core.message_utils import build_tool_message
 from src.core.planner_schema import RetrievalTask
+from src.core.evidence import parse_search_hits
 from src.runtime.nodes.planner import sanitize_retrieval_query
 from src.runtime.nodes.retry import current_retrieval_attempt
-from src.runtime.nodes.retrieval.executor import RetrievalTaskResult, build_reused_retrieval_task_result, execute_retrieval_task
+from src.runtime.nodes.retrieval.executor import RetrievalTaskResult, build_reused_retrieval_task_result, execute_retrieval_task, retrieval_fingerprint
 
 
 logger = logging.getLogger(__name__)
@@ -47,11 +48,22 @@ def _build_route_handlers(
     tavily_search_tool: Any,
     upload_search_tool: Any,
     runtime: Any,
+    prior_diagnostics: list[RetrievalDiagnostic] | None = None,
+    prior_hits: list[dict[str, Any]] | None = None,
 ) -> dict[str, tuple[str, Any]]:
+    def docs_search(task: RetrievalTask):
+        attempted = [query for d in (prior_diagnostics or [])
+                     if d.requirement_id == task.requirement_id and d.status != "error"
+                     for query in d.attempted_queries]
+        return tavily_search_tool(query=task.query, k=task.k,
+                                  requirement=task.requirement if task.requirement.specified else None,
+                                  attempted_queries=attempted,
+                                  previous_hits=[hit for hit in parse_search_hits(prior_hits or []) if hit.requirement_id == task.requirement_id])
+
     return {
         "docs": (
             "tavily_search",
-            lambda task: tavily_search_tool(query=task.query),
+            docs_search,
         ),
         "upload": (
             "upload_search",
@@ -59,6 +71,7 @@ def _build_route_handlers(
                 query=task.query,
                 k=task.k,
                 retriever=runtime.retriever,
+                requirement=task.requirement if task.requirement.specified else None,
             ),
         ),
     }
@@ -69,6 +82,8 @@ def _collect_retrieval_batch(
     planner_output: Any,
     retry_context: Any,
     route_handlers: dict[str, tuple[str, Any]],
+    prior_diagnostics: list[RetrievalDiagnostic] | None = None,
+    prior_hits: list[dict[str, Any]] | None = None,
 ) -> RetrievalBatchPlan:
     attempt = current_retrieval_attempt(retry_context)
     failed_routes = {
@@ -85,60 +100,39 @@ def _collect_retrieval_batch(
     preserved_diagnostics = list(retry_context.preserved_retrieval_diagnostics)
     batch_plan = RetrievalBatchPlan(attempt=attempt)
 
-    if retry_scope == "reuse_hits_resynthesize" and preserved_hits:
-        for index, task in enumerate(planner_output.tasks, start=1):
-            handler = route_handlers.get(task.route)
-            if handler is None:
-                batch_plan.local_errors.append(f"planner: unsupported route ({task.route})")
-                continue
-            tool_name, _invoke_tool = handler
-            sanitized_query = sanitize_retrieval_query(
-                route=task.route,
-                query=task.query,
-                retry_context=retry_context,
-            )
-            sanitized_task = RetrievalTask(route=task.route, query=sanitized_query, k=task.k)
-            batch_plan.reused_results.append(
-                build_reused_retrieval_task_result(
-                    index=index,
-                    task=sanitized_task,
-                    tool_name=tool_name,
-                    route=sanitized_task.route,
-                    attempt=attempt,
-                    preserved_hits=preserved_hits,
-                    preserved_diagnostics=preserved_diagnostics,
-                )
-            )
-        return batch_plan
-
+    failed_ids = set(retry_context.failed_requirement_ids)
     for index, task in enumerate(planner_output.tasks, start=1):
         handler = route_handlers.get(task.route)
         if handler is None:
             batch_plan.local_errors.append(f"planner: unsupported route ({task.route})")
             continue
         tool_name, invoke_tool = handler
-        sanitized_query = sanitize_retrieval_query(
-            route=task.route,
-            query=task.query,
-            retry_context=retry_context,
+        sanitized_task = task.model_copy(update={"query": sanitize_retrieval_query(
+            route=task.route, query=task.query, retry_context=retry_context,
+        )})
+        preserve = (
+            (retry_scope == "reuse_hits_resynthesize" and bool(preserved_hits))
+            or (bool(failed_ids) and task.requirement_id not in failed_ids)
+            or (not failed_ids and bool(failed_routes) and task.route not in failed_routes)
         )
-        sanitized_task = RetrievalTask(route=task.route, query=sanitized_query, k=task.k)
-        if failed_routes and sanitized_task.route not in failed_routes:
-            batch_plan.reused_results.append(
-                build_reused_retrieval_task_result(
-                    index=index,
-                    task=sanitized_task,
-                    tool_name=tool_name,
-                    route=sanitized_task.route,
-                    attempt=attempt,
-                    preserved_hits=preserved_hits,
-                    preserved_diagnostics=preserved_diagnostics,
-                )
+        duplicate = next((d for d in reversed(prior_diagnostics or [])
+                          if d.status != "error" and d.request_fingerprint
+                          and d.request_fingerprint == retrieval_fingerprint(sanitized_task)), None)
+        if preserve or duplicate is not None:
+            result = build_reused_retrieval_task_result(
+                index=index, task=sanitized_task, tool_name=tool_name, route=task.route,
+                attempt=attempt, preserved_hits=preserved_hits if preserve else list(prior_hits or []),
+                preserved_diagnostics=preserved_diagnostics if preserve else [duplicate],
             )
+            if duplicate is not None and not preserve:
+                result.diagnostic = result.diagnostic.model_copy(update={
+                    "warnings": list(dict.fromkeys([*result.diagnostic.warnings, "duplicate_request_reused"])),
+                })
+                result.payload["diagnostics"] = result.diagnostic.model_dump(mode="json")
+            batch_plan.reused_results.append(result)
             continue
         batch_plan.indexed_tasks.append((index, sanitized_task, tool_name, invoke_tool))
     return batch_plan
-
 
 def _execute_retrieval_batch(batch_plan: RetrievalBatchPlan) -> RetrievalBatchResult:
     task_results: list[RetrievalTaskResult] = list(batch_plan.reused_results)
@@ -156,7 +150,7 @@ def _execute_retrieval_batch(batch_plan: RetrievalBatchPlan) -> RetrievalBatchRe
             )
         )
     elif batch_plan.indexed_tasks:
-        with ThreadPoolExecutor(max_workers=len(batch_plan.indexed_tasks)) as executor:
+        with ThreadPoolExecutor(max_workers=min(4, len(batch_plan.indexed_tasks))) as executor:
             futures = {
                 executor.submit(
                     execute_retrieval_task,
@@ -280,11 +274,15 @@ def make_retrieve_dispatch_node(
             tavily_search_tool=tavily_search_tool,
             upload_search_tool=upload_search_tool,
             runtime=runtime,
+            prior_diagnostics=debug.retrieval_diagnostics,
+            prior_hits=retrieval.hit_log,
         )
         batch_plan = _collect_retrieval_batch(
             planner_output=planner_output,
             retry_context=get_retry_state(state),
             route_handlers=route_handlers,
+            prior_diagnostics=debug.retrieval_diagnostics,
+            prior_hits=retrieval.hit_log,
         )
         batch_result = _execute_retrieval_batch(batch_plan)
         _emit_retrieval_progress_snapshot(

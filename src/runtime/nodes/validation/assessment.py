@@ -16,12 +16,21 @@ def assess_retrieval_quality(snapshot: ValidationSnapshot) -> ValidationAssessme
         "upload" in snapshot.required_routes
         and any(item.status == "unavailable" for item in snapshot.diagnostics_by_route.get("upload", []))
     )
-    for route in snapshot.required_routes:
-        statuses = route_error_statuses(snapshot.diagnostics_by_route.get(route, []))
+    for task in snapshot.planner_output.tasks:
+        route = task.route
+        single_route_task = sum(item.route == route for item in snapshot.planner_output.tasks) == 1
+        diagnostics = [d for d in snapshot.current_attempt_retrieval_diagnostics
+                       if d.requirement_id == task.requirement_id or (not d.requirement_id and d.route == route and single_route_task)]
+        hits = [h for h in snapshot.parsed_hits if h.requirement_id == task.requirement_id
+                or (not h.requirement_id and h.evidence.route == route and single_route_task)]
+        statuses = route_error_statuses(diagnostics)
         if "error" in statuses or ("unavailable" in statuses and route != "upload"):
             assessment.tool_error_routes.add(route)
-        elif not snapshot.evidence_by_route.get(route):
+            assessment.failed_requirement_ids.add(task.requirement_id)
+        elif (not hits or any(d.answerability in {"missing", "partial"} for d in diagnostics)
+              or (task.requirement.specified and not any(d.answerability == "covered" for d in diagnostics))):
             assessment.route_failures[route] = "no_evidence"
+            assessment.failed_requirement_ids.add(task.requirement_id)
     if contains_tool_error(snapshot.current_attempt_retrieval_errors) and not assessment.tool_error_routes:
         assessment.tool_error_routes = set(snapshot.required_routes)
     if assessment.blocked_missing_upload:

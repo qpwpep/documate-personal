@@ -74,6 +74,7 @@ def make_pre_synthesis_validation_node(verbose: bool):
             retrieval_errors=snapshot.current_attempt_retrieval_errors,
             score_avg=assessment.score_avg,
             failed_routes=assessment.failed_routes,
+            failed_requirement_ids=assessment.failed_requirement_ids,
             current_attempt_hits=snapshot.parsed_hits,
             current_attempt_retrieval_diagnostics=snapshot.current_attempt_retrieval_diagnostics,
         )
@@ -104,6 +105,21 @@ def make_pre_synthesis_validation_node(verbose: bool):
                 snapshot.planner_output,
                 assessment.retry_reason,
             )
+            if assessment.retry_reason == "no_evidence" and assessment.failed_requirement_ids:
+                notices = []
+                for task in snapshot.planner_output.tasks:
+                    if task.requirement_id not in assessment.failed_requirement_ids:
+                        continue
+                    diagnostics = [d for d in snapshot.current_attempt_retrieval_diagnostics if d.requirement_id == task.requirement_id]
+                    subjects = ", ".join(task.requirement.symbols) or task.requirement.library or task.query
+                    if task.route == "upload" and any(d.answerability == "missing" for d in diagnostics):
+                        label = "정의" if task.requirement.match == "definition" else "대상"
+                        notices.append(f"현재 업로드 파일에서 {subjects} {label}를 찾지 못했습니다.")
+                    else:
+                        version = f" {task.requirement.version} 버전" if task.requirement.version else ""
+                        source = "공식 문서" if task.route == "docs" else "업로드 파일"
+                        notices.append(f"{source}에서 {subjects}{version}에 필요한 근거를 충분히 확인하지 못했습니다.")
+                followup_answer = " ".join(notices) or followup_answer
             updates.update(
                 build_followup_updates(
                     followup_answer,
