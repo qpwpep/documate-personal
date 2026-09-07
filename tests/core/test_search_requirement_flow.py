@@ -40,10 +40,44 @@ def _official_hit(task):
 
 
 
+def test_replanning_changes_queries_without_dropping_original_sources_or_versions():
+    """A retry cannot silently remove or weaken an original evidence requirement."""
+    first = RetrievalTask(route="docs", query="numpy reshape old", k=1, requirement_id="numpy",
+                          requirement={"library": "numpy", "symbols": ["numpy.reshape"], "version": "1.26"})
+    second = RetrievalTask(route="docs", query="pandas concat", k=1, requirement_id="pandas",
+                           requirement={"library": "pandas", "symbols": ["pandas.concat"]})
+    revised = first.model_copy(update={"query": "numpy reshape reference", "requirement": first.requirement.model_copy(update={"version": None})})
+    state = build_test_state({"user_input": "Compare requested sources", "retry_context": {
+        "attempt": 1, "original_tasks": [first.model_dump(), second.model_dump()],
+    }})
+    result = make_planner_node(_CapturePlannerLLM(PlannerOutput(use_retrieval=True, tasks=[revised])), False)(state)
+    tasks = result["planner"].output.tasks
+    assert [(task.requirement_id, task.requirement) for task in tasks] == [(first.requirement_id, first.requirement), (second.requirement_id, second.requirement)]
+    assert tasks[0].query == "numpy reshape reference"
 
 
+def test_planner_does_not_promote_guessed_parameter_values_to_required_evidence():
+    """Unrequested model guesses cannot make a valid source fail a harder invented requirement."""
+    query = "engine.reshape의 mode 매개변수를 설명해줘"
+    guessed = PlannerOutput(use_retrieval=True, tasks=[RetrievalTask(
+        route="docs", query="engine.reshape mode invented_value documentation", k=3,
+        requirement={"symbols": ["engine.reshape"], "aspects": ["mode", "invented_value"], "match": "symbol"},
+    )])
+    result = make_planner_node(_CapturePlannerLLM(guessed), False)(build_test_state({"user_input": query}))
+    task = result["planner"].output.tasks[0]
+    assert task.requirement.aspects == ["mode"]
+    assert task.query == guessed.tasks[0].query
 
 
+def test_explicitly_requested_parameter_value_survives_requirement_grounding():
+    """The same term remains a real requirement when the user actually asks about it."""
+    query = "engine.reshape mode=invented_value의 지원 여부를 확인해줘"
+    requested = PlannerOutput(use_retrieval=True, tasks=[RetrievalTask(
+        route="docs", query=query, k=3,
+        requirement={"symbols": ["engine.reshape"], "aspects": ["mode", "invented_value"], "match": "symbol"},
+    )])
+    result = make_planner_node(_CapturePlannerLLM(requested), False)(build_test_state({"user_input": query}))
+    assert result["planner"].output.tasks[0].requirement == requested.tasks[0].requirement
 
 
 def test_one_planned_requirement_cannot_mix_an_enclosing_definition_and_a_callee():
@@ -64,3 +98,37 @@ def test_planner_keeps_independent_official_sources_on_the_same_route():
     assert [(t.route, t.query, t.k) for t in plan.tasks] == [
         ("docs", "numpy.concatenate axis", 2), ("docs", "pandas.concat axis", 3),
     ]
+
+
+def test_planner_returns_the_missing_reference_question_without_retrieval():
+    """An unresolved referent produces the intended clarification, not a failed search."""
+    question = "어떤 라이브러리와 버전을 비교할까요?"
+    model = _CapturePlannerLLM({"use_retrieval": False, "tasks": [], "clarification_question": question})
+    result = make_planner_node(model, verbose=False)(build_test_state({
+        "user_input": "그거 최신 버전에서 어떻게 바뀌었어?",
+        "messages": [HumanMessage(content="그거 최신 버전에서 어떻게 바뀌었어?")],
+    }))
+    assert result["planner"].guided_followup == question
+    assert result["planner"].diagnostics.reason == "clarification_required"
+    assert not result["planner"].output.use_retrieval
+
+
+def test_retry_prompt_exposes_prior_query_and_filter_failure_without_source_text():
+    """Replanning receives the failed request and cause rather than just its route."""
+    state = build_test_state({
+        "user_input": "NumPy reshape의 order를 설명해줘",
+        "planner_output": PlannerOutput(use_retrieval=True, tasks=[
+            {"route": "docs", "query": "np.reshape order", "k": 3},
+        ]),
+        "debug": {"retrieval_diagnostics": [RetrievalDiagnostic(
+            route="docs", query="np.reshape order", status="no_result",
+            warnings=["identifier_coverage_incomplete"], provider_result_count=3,
+        )]},
+    })
+    prompt = format_retry_context_for_planner(state, RetryState(
+        attempt=1, retry_reason="no_evidence", failed_routes=["docs"],
+        retrieval_feedback="identifier missing after filtering",
+    ))
+    assert "np.reshape order" in prompt
+    assert "identifier_coverage_incomplete" in prompt
+    assert "identifier missing after filtering" in prompt
