@@ -198,6 +198,7 @@ def build_retry_update(
     retrieval_errors: list[str],
     score_avg: float | None,
     failed_routes: set[str] | list[str] | tuple[str, ...] | None = None,
+    failed_requirement_ids: set[str] | list[str] | None = None,
     current_attempt_hits: list[SearchHit] | None = None,
     current_attempt_retrieval_diagnostics: list[RetrievalDiagnostic] | None = None,
 ) -> tuple[bool, RetryState, str]:
@@ -217,6 +218,7 @@ def build_retry_update(
 
     selected_routes = {task.route for task in planner_output.tasks}
     normalized_failed_routes = set(_normalize_failed_routes(failed_routes))
+    failed_ids = set(failed_requirement_ids or [])
     reuse_hits_only = _is_repair_retry_candidate(selected_routes, retry_reason) and bool(current_attempt_hits)
 
     if retry_reason is not None:
@@ -246,6 +248,7 @@ def build_retry_update(
                 else _normalize_failed_routes(normalized_failed_routes or selected_routes)
             ),
             "retry_scope": "reuse_hits_resynthesize" if reuse_hits_only else "refresh_routes",
+            "failed_requirement_ids": sorted(failed_ids),
         }
         if reuse_hits_only:
             retry_update["preserved_hits"] = [hit.model_dump(mode="json") for hit in (current_attempt_hits or [])]
@@ -253,6 +256,9 @@ def build_retry_update(
                 item.model_copy(deep=True)
                 for item in (current_attempt_retrieval_diagnostics or [])
             ]
+        elif failed_ids:
+            retry_update["preserved_hits"] = [hit.model_dump(mode="json") for hit in (current_attempt_hits or []) if hit.requirement_id not in failed_ids]
+            retry_update["preserved_retrieval_diagnostics"] = [d.model_copy(deep=True) for d in (current_attempt_retrieval_diagnostics or []) if d.requirement_id not in failed_ids]
         elif selected_routes == {"docs", "upload"} and normalized_failed_routes == {"docs"}:
             preserved_hits, preserved_diagnostics = _preserve_successful_route_payload(
                 current_attempt_hits=current_attempt_hits or [],
@@ -269,6 +275,7 @@ def build_retry_update(
             "retrieval_feedback": "",
             "retry_reason": None,
             "failed_routes": [],
+            "failed_requirement_ids": [],
             "preserved_hits": [],
             "preserved_retrieval_diagnostics": [],
             "retry_scope": "refresh_routes",

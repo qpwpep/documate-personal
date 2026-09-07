@@ -32,12 +32,54 @@ def _official_hit(task):
                      requirement_id=task.requirement_id)
 
 
+def test_validation_keeps_successful_requirement_when_another_docs_requirement_is_missing():
+    """A NumPy hit cannot satisfy pandas, and remains available during pandas recovery."""
+    numpy = RetrievalTask(route="docs", query="numpy.concatenate", k=2,
+                          requirement={"library": "numpy", "symbols": ["numpy.concatenate"], "match": "symbol"})
+    pandas = RetrievalTask(route="docs", query="pandas.concat", k=2,
+                           requirement={"library": "pandas", "symbols": ["pandas.concat"], "match": "symbol"})
+    hit = _official_hit(numpy)
+    result = make_pre_synthesis_validation_node(verbose=False)(build_test_state({
+        "user_input": "Compare both official sources", "planner_output": PlannerOutput(use_retrieval=True, tasks=[numpy, pandas]),
+        "retrieved_hits": [hit.model_dump()], "debug": {"retrieval_diagnostics": [
+            RetrievalDiagnostic(route="docs", status="success", answerability="covered", requirement_id=numpy.requirement_id, evidence_count=1),
+            RetrievalDiagnostic(route="docs", status="no_result", answerability="missing", requirement_id=pandas.requirement_id),
+        ]},
+    }))
+    assert result["retry"].failed_requirement_ids == [pandas.requirement_id]
+    assert result["retry"].preserved_hits == [hit.model_dump(mode="json")]
+    assert result["retry"].needs_retry
 
 
 
 
 
 
+def test_identical_failed_search_is_reused_without_a_second_paid_request_batch(monkeypatch):
+    """Repeated deterministic no-result plans cannot incur another identical API batch."""
+    paid_queries = []
+    def empty_search(url, **kwargs):
+        paid_queries.append(kwargs["json"]["query"])
+        response = requests.Response()
+        response.status_code = 200
+        response.url = url
+        response._content = json.dumps({"results": []}).encode()
+        return response
+    monkeypatch.setattr(requests, "post", empty_search)
+    registry = build_tool_registry(AppSettings(openai_api_key="test", tavily_api_key="test"))
+    dispatch = make_retrieve_dispatch_node(registry.tavily_search_tool, registry.upload_search_tool, False)
+    task = RetrievalTask(route="docs", query="numpy absent_symbol", k=2,
+                         requirement={"library": "numpy", "symbols": ["numpy.absent_symbol"], "match": "symbol"})
+    state = build_test_state({"user_input": task.query, "planner_output": PlannerOutput(use_retrieval=True, tasks=[task])})
+    state.update(dispatch(state))
+    first_queries = list(paid_queries)
+    state["retry"] = RetryState(attempt=1, failed_routes=["docs"], failed_requirement_ids=[task.requirement_id])
+    result = dispatch(state)
+    assert first_queries and len(set(first_queries)) == len(first_queries)
+    assert paid_queries == first_queries
+    assert result["debug"].retrieval_diagnostics[-1].reused
+    assert result["debug"].retrieval_diagnostics[-1].answerability == "missing"
+    assert result["retrieval"].hit_log == []
 
 
 def test_replanning_changes_queries_without_dropping_original_sources_or_versions():

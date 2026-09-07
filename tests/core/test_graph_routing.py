@@ -164,7 +164,7 @@ class GraphRoutingTest(unittest.TestCase):
             tasks=[RetrievalTask(route="docs", query="FastAPI response_model", k=4)],
         ))
 
-        def _docs_search(query: str):
+        def _docs_search(query: str, **kwargs):
             docs_calls["count"] += 1
             return _tool_payload(
                 [
@@ -184,7 +184,7 @@ class GraphRoutingTest(unittest.TestCase):
             planner_node=make_planner_node(capture_planner, verbose=False),
             retrieve_dispatch_node=make_retrieve_dispatch_node(
                 _docs_search,
-                lambda query, k, retriever=None: _tool_payload([], tool="upload_search", route="upload", status="no_result", message="", query=query),
+                lambda query, k, retriever=None, **kwargs: _tool_payload([], tool="upload_search", route="upload", status="no_result", message="", query=query),
                 verbose=False,
             ),
             synthesize_node=lambda state: {
@@ -208,7 +208,7 @@ class GraphRoutingTest(unittest.TestCase):
             any(message.name == "tavily_search" for message in result["messages"] if isinstance(message, ToolMessage))
         )
 
-    def test_retry_path_reruns_docs_retrieval_and_synthesis(self) -> None:
+    def test_retry_path_recovers_transient_docs_error_and_synthesizes(self) -> None:
         capture_planner = _CapturePlannerLLM(PlannerOutput(
             use_retrieval=True,
             tasks=[RetrievalTask(route="docs", query="NumPy broadcasting", k=4)],
@@ -218,15 +218,15 @@ class GraphRoutingTest(unittest.TestCase):
         docs_calls = {"count": 0}
         synth_calls = {"count": 0}
 
-        def _docs_search(query: str):
+        def _docs_search(query: str, **kwargs):
             docs_calls["count"] += 1
             if docs_calls["count"] == 1:
                 return _tool_payload(
                     [],
                     tool="tavily_search",
                     route="docs",
-                    status="no_result",
-                    message="no docs yet",
+                    status="error",
+                    message="temporary provider error",
                     query=query,
                 )
             return _tool_payload(
@@ -242,7 +242,7 @@ class GraphRoutingTest(unittest.TestCase):
 
         retrieve_dispatch = make_retrieve_dispatch_node(
             _docs_search,
-            lambda query, k, retriever=None: _tool_payload([], tool="upload_search", route="upload", status="no_result", message="", query=query),
+            lambda query, k, retriever=None, **kwargs: _tool_payload([], tool="upload_search", route="upload", status="no_result", message="", query=query),
             verbose=False,
         )
 
@@ -280,7 +280,7 @@ class GraphRoutingTest(unittest.TestCase):
 
     def test_debug_survives_validation_and_action_stage_instrumentation(self) -> None:
         retrieve_dispatch = make_retrieve_dispatch_node(
-            lambda query: _tool_payload(
+            lambda query, **kwargs: _tool_payload(
                 [
                     _official_hit(uri='https://numpy.org/doc/stable/', title='NumPy docs', excerpt='broadcasting official reference', score=0.94)
                 ],
@@ -290,7 +290,7 @@ class GraphRoutingTest(unittest.TestCase):
                 message="",
                 query=query,
             ),
-            lambda query, k, retriever=None: _tool_payload(
+            lambda query, k, retriever=None, **kwargs: _tool_payload(
                 [],
                 tool="upload_search",
                 route="upload",
@@ -449,8 +449,8 @@ def _assert_repair_flow(routes, defect, max_retries, persistent):
         summarize_node=lambda state: {},
         planner_node=make_planner_node(planner_llm, verbose=False),
         retrieve_dispatch_node=make_retrieve_dispatch_node(
-            lambda query: search("docs", query),
-            lambda query, k, retriever=None: search("upload", query),
+            lambda query, **kwargs: search("docs", query),
+            lambda query, k, retriever=None, **kwargs: search("upload", query),
             verbose=False,
         ),
         synthesize_node=make_synthesize_node(RepairingLLM(), verbose=False),

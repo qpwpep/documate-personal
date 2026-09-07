@@ -36,5 +36,6 @@ class ValidationAssessment:
     checked_result: AnswerResponse | None = None
     retry_reason: RetryReason | None = None
     failed_routes: set[str] = field(default_factory=set)
+    failed_requirement_ids: set[str] = field(default_factory=set)
     score_avg: float | None = None
     error_codes: list[ErrorCode] = field(default_factory=list)
