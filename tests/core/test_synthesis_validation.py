@@ -2,7 +2,7 @@ import json
 
 from langchain_core.messages import AIMessage, HumanMessage
 
-from src.core.answer_schema import export_answer_text, iter_content_units, text_document
+from src.core.answer_schema import export_answer_text, finalize_answer, iter_content_units, text_document
 from src.core.contracts import PlannerState, RetrievalState, DebugState, RetrievalDiagnostic
 from src.core.contracts.boundary.graph import build_graph_state_input
 from src.core.documents import DocumentElement, SourceAnchor, build_snapshot
@@ -76,7 +76,13 @@ def test_only_the_packet_provided_to_the_model_is_accepted_for_citations():
     hit = _hit("First sentence.\nSecond sentence with further detail.")
     model = ModelBoundary()
     response = make_synthesize_node(model, prompt_snippet_char_limit=16)(_state([hit]))["response"]
-    assert [item.id for item in response.evidence_packet] == [item["id"] for item in model.packet]
+    assert [item["id"] for item in model.packet] == ["e1"]
+    selected = response.evidence_packet[0]
+    assert response.result == finalize_answer(
+        text_document(model.packet[0]["excerpt"], basis="excerpt", refs=[selected.id]),
+        [selected], retrieval_required=True,
+    )
+    assert model.packet[0]["selection"] == selected.selection.model_dump(mode="json")
     assert response.evidence_packet[0].id != hit.evidence.id
     assert response.result.citations[0].evidence.excerpt == hit.evidence.element.text[:16]
     assert response.result.citations[0].evidence.selection.end == 16
@@ -101,9 +107,15 @@ def test_timeout_uses_compact_model_and_its_actual_source_ranges():
     updates = make_synthesize_node(ModelBoundary(error=TimeoutError("structured timeout")), compact)(_state([hit]))
     response = updates["response"]
     assert response.evidence_packet[0].excerpt == compact.packet[0]["excerpt"]
-    assert response.evidence_packet[0].id == compact.packet[0]["id"]
+    assert compact.packet[0]["id"] == "e1"
+    selected = response.evidence_packet[0]
+    assert response.result == finalize_answer(
+        text_document(compact.packet[0]["excerpt"], basis="excerpt", refs=[selected.id]),
+        [selected], retrieval_required=True,
+    )
+    assert compact.packet[0]["selection"] == selected.selection.model_dump(mode="json")
     assert len(response.evidence_packet[0].excerpt) == 900
-    assert response.result.citations[0].evidence.id == compact.packet[0]["id"]
+    assert response.result.citations[0].evidence.snapshot == hit.evidence.snapshot
     assert "SYNTHESIS_TIMEOUT" in updates["debug"].error_codes
 
 

@@ -164,4 +164,4 @@ def test_item_budget_exposes_an_omitted_aspect_in_the_model_requirements():
         "evidence_ids": [packet[0]["id"]], "present_aspects": ["order"],
         "missing_aspects": ["copy"], "is_partial": True,
     }
-    assert prepared.evidence_requirement_map == {packet[0]["id"]: [task.requirement_id]}
+    assert prepared.evidence_requirement_map == {prepared.reference_aliases[packet[0]["id"]]: [task.requirement_id]}
