@@ -13,7 +13,7 @@ def apply_retrieval_availability(
     has_retriever: bool,
 ) -> PlannerDecision:
     """Check execution prerequisites without reinterpreting the requested sources."""
-    required_routes = [task.route for task in decision.output.tasks]
+    required_routes = list(dict.fromkeys(task.route for task in decision.output.tasks))
     diagnostics = decision.diagnostics.model_copy(update={
         "intent_required": bool(required_routes),
         "required_routes": required_routes,

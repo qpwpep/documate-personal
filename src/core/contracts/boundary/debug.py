@@ -64,6 +64,10 @@ def parse_retry_state(value: Any) -> RetryState:
     failed_routes = value.get("failed_routes")
     if isinstance(failed_routes, list):
         retry_state.failed_routes = normalize_recorded_routes(failed_routes)
+    if isinstance(value.get("failed_requirement_ids"), list):
+        retry_state.failed_requirement_ids = [str(item) for item in value["failed_requirement_ids"] if str(item).strip()]
+    if isinstance(value.get("original_tasks"), list):
+        retry_state.original_tasks = [json_safe_deep_copy(item) for item in value["original_tasks"] if isinstance(item, dict)]
 
     retry_scope = value.get("retry_scope")
     if retry_scope in {"refresh_routes", "reuse_hits_resynthesize"}:

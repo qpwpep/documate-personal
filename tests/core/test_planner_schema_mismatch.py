@@ -4,7 +4,7 @@ from langchain_core.messages import HumanMessage
 
 from src.core.contracts.boundary.planner import parse_planner_output, parse_planner_state
 from src.runtime.nodes.planner import make_planner_node
-from src.core.planner_schema import PLANNER_WARNING_DUPLICATE_ROUTE_MERGED, PlannerOutput
+from src.core.planner_schema import PlannerOutput
 
 from .helpers import _CapturePlannerLLM, build_test_state
 
@@ -24,7 +24,7 @@ class PlannerSchemaMismatchTest(unittest.TestCase):
         self.assertTrue(result.use_retrieval)
         self.assertEqual([task.route for task in result.tasks], ["docs"])
 
-    def test_parse_planner_output_merges_duplicate_routes_before_validation(self) -> None:
+    def test_parse_planner_output_preserves_independent_source_requirements(self) -> None:
         errors: list[str] = []
         warnings: list[str] = []
         result = parse_planner_output(
@@ -40,13 +40,12 @@ class PlannerSchemaMismatchTest(unittest.TestCase):
         )
 
         self.assertEqual(errors, [])
-        self.assertEqual(warnings, [PLANNER_WARNING_DUPLICATE_ROUTE_MERGED])
+        self.assertEqual(warnings, [])
         self.assertTrue(result.use_retrieval)
-        self.assertEqual([task.route for task in result.tasks], ["docs"])
-        self.assertEqual(result.tasks[0].query, "numpy; pandas")
-        self.assertEqual(result.tasks[0].k, 3)
+        self.assertEqual([(task.route, task.query, task.k) for task in result.tasks],
+                         [("docs", "numpy", 3), ("docs", "pandas", 5)])
 
-    def test_parse_planner_state_preserves_duplicate_route_merge_warning(self) -> None:
+    def test_parse_planner_state_keeps_two_sources_without_merge_warning(self) -> None:
         state = parse_planner_state(
             {
                 "status": "llm",
@@ -69,11 +68,8 @@ class PlannerSchemaMismatchTest(unittest.TestCase):
             }
         )
 
-        self.assertEqual([task.route for task in state.output.tasks], ["docs"])
-        self.assertEqual(
-            state.diagnostics.planner_warnings,
-            [PLANNER_WARNING_DUPLICATE_ROUTE_MERGED],
-        )
+        self.assertEqual([task.route for task in state.output.tasks], ["docs", "docs"])
+        self.assertEqual(state.diagnostics.planner_warnings, [])
 
     def test_planner_node_accepts_planner_schema_from_structured_wrapper(self) -> None:
         capture_planner = _CapturePlannerLLM(

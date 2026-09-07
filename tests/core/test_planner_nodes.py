@@ -6,7 +6,6 @@ from pydantic import ValidationError
 
 from src.core.contracts import PlannerDiagnostic, SessionMetadata, SlackDestination
 from src.core.planner_schema import (
-    PLANNER_WARNING_DUPLICATE_ROUTE_MERGED,
     PlannerOutput,
     RetrievalTask,
 )
@@ -91,7 +90,7 @@ class PlannerNodeTest(unittest.TestCase):
                 use_retrieval=True,
                 tasks=[
                     RetrievalTask(route="docs", query="numpy", k=4),
-                    RetrievalTask(route="docs", query="python", k=4),
+                    RetrievalTask(route="docs", query="numpy", k=4),
                 ],
             )
 
@@ -396,7 +395,7 @@ class PlannerNodeTest(unittest.TestCase):
         self.assertEqual(updates["planner"].output.tasks[0].query, "numpy")
         self.assertEqual(updates["debug"].planner_errors, [])
 
-    def test_planner_merges_duplicate_routes_from_raw_structured_output(self) -> None:
+    def test_planner_preserves_independent_routes_from_raw_structured_output(self) -> None:
         raw_payload = {
             "use_retrieval": True,
             "tasks": [
@@ -424,15 +423,11 @@ class PlannerNodeTest(unittest.TestCase):
         self.assertEqual(capture_planner.call_count, 1)
         self.assertEqual(updates["planner"].status, "llm")
         self.assertEqual(updates["debug"].planner_errors, [])
-        self.assertEqual([task.route for task in updates["planner"].output.tasks], ["docs"])
-        self.assertIn("numpy", updates["planner"].output.tasks[0].query)
-        self.assertIn("pandas", updates["planner"].output.tasks[0].query)
-        self.assertEqual(
-            updates["planner"].diagnostics.planner_warnings,
-            [PLANNER_WARNING_DUPLICATE_ROUTE_MERGED],
-        )
+        self.assertEqual([(task.route, task.query, task.k) for task in updates["planner"].output.tasks],
+                         [("docs", "numpy", 3), ("docs", "pandas", 5)])
+        self.assertEqual(updates["planner"].diagnostics.planner_warnings, [])
 
-    def test_planner_merges_duplicate_routes_from_parsed_payload_without_langchain_validation(self) -> None:
+    def test_planner_preserves_independent_routes_from_parsed_payload_without_langchain_validation(self) -> None:
         raw_payload = {
             "use_retrieval": True,
             "tasks": [
@@ -457,13 +452,9 @@ class PlannerNodeTest(unittest.TestCase):
 
         self.assertEqual(capture_planner.call_count, 1)
         self.assertEqual(updates["planner"].status, "llm")
-        self.assertEqual([task.route for task in updates["planner"].output.tasks], ["docs"])
-        self.assertIn("numpy", updates["planner"].output.tasks[0].query)
-        self.assertIn("pandas", updates["planner"].output.tasks[0].query)
-        self.assertEqual(
-            updates["planner"].diagnostics.planner_warnings,
-            [PLANNER_WARNING_DUPLICATE_ROUTE_MERGED],
-        )
+        self.assertEqual([(task.route, task.query, task.k) for task in updates["planner"].output.tasks],
+                         [("docs", "numpy", 3), ("docs", "pandas", 5)])
+        self.assertEqual(updates["planner"].diagnostics.planner_warnings, [])
 
     def test_planner_includes_retry_context_system_message_on_retry(self) -> None:
         capture_planner = _CapturePlannerLLM(PlannerOutput(use_retrieval=False, tasks=[]))

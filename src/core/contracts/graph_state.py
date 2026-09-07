@@ -53,6 +53,7 @@ class ResponseState(BaseModel):
     model_config = ConfigDict(extra="forbid")
     result: AnswerResponse = Field(default_factory=AnswerResponse)
     evidence_packet: list[EvidenceRef] = Field(default_factory=list)
+    evidence_requirement_map: dict[str, list[str]] = Field(default_factory=dict)
     synthesis_attempt: int = 0
 
 

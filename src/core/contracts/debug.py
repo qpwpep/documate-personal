@@ -111,6 +111,8 @@ class RetryState(BaseModel):
     retrieval_diagnostic_start_index: int = 0
     score_avg: float | None = None
     failed_routes: list[str] = Field(default_factory=list)
+    failed_requirement_ids: list[str] = Field(default_factory=list)
+    original_tasks: list[dict[str, Any]] = Field(default_factory=list)
     preserved_hits: list[dict[str, Any]] = Field(default_factory=list)
     preserved_retrieval_diagnostics: list[RetrievalDiagnostic] = Field(default_factory=list)
     retry_scope: Literal["refresh_routes", "reuse_hits_resynthesize"] = "refresh_routes"
@@ -134,6 +136,13 @@ class RetrievalDiagnostic(BaseModel):
     message: str = ""
     error_code: ErrorCode | None = None
     query: str = ""
+    requirement_id: str = ""
+    answerability: Literal["covered", "partial", "missing", "unknown"] = "unknown"
+    missing_requirements: list[str] = Field(default_factory=list)
+    candidate_count: int = 0
+    attempted_queries: list[str] = Field(default_factory=list)
+    request_fingerprint: str = ""
+    reused: bool = False
     attempt: int = 0
     evidence_count: int = 0
     result_count: int = 0
