@@ -147,13 +147,31 @@ UI와 문서 검색 규칙은 아래 파일을 기준으로 관리합니다.
 - `src/core/domain_docs.py`: Streamlit 소개 영역에 노출하는 기본 문서 목록
 - `src/infra/config/agent_rules.toml`: docs allowlist, query hint, 저장·전송 요청 감지 규칙
 
-`RULES_CONFIG_PATH`로 규칙 파일을 지정할 수 있습니다. 필요한 검색 출처는 업로드 가용성과 무관하게 LLM이 선택하고, 스키마 검증을 통과한 `PlannerOutput.tasks`를 기준으로 실행합니다. [planner 지침](../src/runtime/nodes/planner/prompt_builder.py)은 일반 기술 설명과 실제 파일 조회를 구분하고 출처 제외 지시를 반영합니다. 파일 조회에 필요한 업로드가 없으면 검색을 진행하지 않고 업로드를 안내합니다.
+`RULES_CONFIG_PATH`로 규칙 파일을 지정할 수 있습니다. 필요한 검색 출처는 업로드 가용성과 무관하게 LLM이 선택하고, 스키마 검증을 통과한 `PlannerOutput.tasks`를 기준으로 실행합니다. [planner 지침](../src/runtime/nodes/planner/prompt_builder.py)은 일반 기술 설명과 실제 파일 조회를 구분하고 출처 제외 지시를 반영합니다.
 
-검색어 후처리는 공백만 정규화해 한국어 주제와 식별자를 보존합니다. LLM 호출이나 출력 검증이 실패하면 `planner_diagnostics.reason="planner_unavailable"`로 기록하고 재요청을 안내하며, 검색·저장·전송을 실행하지 않습니다.
+각 task는 독립적인 근거 요구입니다. 같은 `docs` route라도 라이브러리·대상·버전이 다르면 여러 task로 유지하며 검색어를 하나로 합치지 않습니다. 한 계획에는 최대 8개 task를 둘 수 있습니다. 계약 기준은 `src/core/planner_schema.py`입니다.
+
+| 필드 | 의미 |
+|---|---|
+| `requirement_id` | 검색·재시도·본문 근거 연결에 사용하는 요구 식별자. 같은 계획 안에서 고유하며 재시도 중 유지 |
+| `route`, `query`, `k` | 검색 소스, provider에 보낼 질의, 검색 결과 수 한도. `k` 범위는 1–10 |
+| `requirement.library` | 공식 문서의 소유 라이브러리. upload 또는 소유 라이브러리가 불명확하면 `null` |
+| `requirement.symbols` | 계획 task마다 최대 한 개의 주 대상. 공식 API의 qualified name 또는 업로드 코드의 정확한 심볼이며, 함수 안에서 확인할 호출은 그 함수의 `aspects`로 구분 |
+| `requirement.version` | 명시적으로 요청한 버전. 제약이 없으면 `null`이며 다른 버전으로 대체하지 않음 |
+| `requirement.aspects` | 사용자 대화에서 명시적으로 요청한 원문의 식별자·매개변수. 모델이 추정한 옵션값을 필수 조건으로 추가하지 않으며, 일반 설명과 검색용 추정 용어는 `query`에 유지 |
+| `requirement.match` | 넓은 설명은 `topic`, API·심볼 사용은 `symbol`, 업로드 함수·클래스 구현은 `definition` |
+
+대화로도 대상이나 비교 버전을 정할 수 없으면 `clarification_question`과 함께 `use_retrieval=false`, `tasks=[]`를 반환하고 확인 질문을 전달합니다. 이는 모델 호출 실패인 `planner_diagnostics.reason="planner_unavailable"`과 구분합니다. 파일 조회에 필요한 업로드가 없으면 업로드를 안내합니다. planner 호출·출력 검증 실패나 미해결 확인 질문에서는 검색·저장·전송을 진행하지 않습니다.
+
+planner 검색어 후처리는 공백을 정규화해 한국어 주제와 식별자를 보존합니다. 별도로 `aspects`를 최근 사용자 대화의 명시적 표현과 대조하므로, 모델이 추정한 허용값이 답변에 필요한 필수 근거 조건으로 승격되지 않습니다. 검색 질의의 보조 용어와 사용자가 요구한 제약은 구분합니다. docs 도구는 알려진 라이브러리·API 별칭을 정규화하되 명시된 라이브러리, 심볼, 버전, aspect를 검색과 후보 검사의 기준으로 유지합니다.
 
 현재 기본 문서 소스는 Python, Git, LangChain, Matplotlib, NumPy, pandas, PyTorch, Hugging Face, FastAPI, BeautifulSoup, Streamlit, Gradio, scikit-learn, Pydantic입니다.
 
-`docs` route는 query 하나당 Tavily 요청을 한 번 수행합니다. 첫 검색으로 유효한 evidence나 필요한 identifier coverage를 확보하지 못하면 query hint의 fallback을 정의된 순서대로 하나씩 실행하고, 충분한 근거를 확보하는 즉시 중단합니다. `DOCS_SEARCH_TIMEOUT_SECONDS`는 이 개별 Tavily 요청 각각에 적용되며 route 전체를 하나의 deadline으로 제한하는 값은 아닙니다.
+docs 도구는 task의 `k`를 Tavily `max_results`와 반환 evidence 한도에 적용합니다. 명시된 라이브러리의 domain을 우선하고, 해당 소스를 지원하지 않으면 다른 라이브러리 문서로 대신 답하지 않습니다. 후보는 domain/path prefix·URL·원문 유효성뿐 아니라 요청 심볼의 문서 소유권, 버전, 실제 발췌에 남은 aspect를 확인합니다. 다른 API 문서에 이름이 언급됐다는 사실만으로 해당 API의 근거를 확보했다고 판단하지 않습니다.
+
+도구 호출마다 최초 query와 이를 요구사항에 맞춰 재구성한 fallback query를 최대 한 번씩 계획합니다. 충분한 근거를 확보하면 즉시 중단하고, 이미 `attempted_queries`에 기록된 query는 다시 구매하지 않습니다. 고정된 라이브러리별 fallback 목록을 순회하지 않습니다. `DOCS_SEARCH_TIMEOUT_SECONDS`는 개별 Tavily 요청마다 적용되며 route 전체의 deadline은 아닙니다.
+
+재시도에는 현재 요청의 같은 `requirement_id`에서 확보한 부분 후보를 `previous_hits`로 전달합니다. 기존·신규 후보를 합친 뒤 원래 라이브러리·domain·심볼·버전·aspect와 `k`에 맞게 다시 검사합니다. 다른 대상이나 버전의 후보는 재사용 근거로 인정하지 않으며, 이미 충분하면 추가 HTTP 호출 없이 반환합니다.
 
 ### 3.2 업로드 파일
 
@@ -163,6 +181,10 @@ UI와 문서 검색 규칙은 아래 파일을 기준으로 관리합니다.
 - 현재 업로드 검색은 세션에 연결된 단일 파일 컨텍스트만 사용합니다.
 
 `upload` route는 업로드 파일에서 만든 세션별 임시 Chroma retriever를 검색합니다. 파일 기반 질문에는 해당 파일을 현재 세션에 업로드해야 합니다. 도구 이름은 `upload_search`이고, 근거 snapshot의 `source_type`은 `upload`입니다. 같은 파일 경로라도 원본 내용 hash가 바뀌면 retriever를 다시 생성합니다.
+
+명시된 코드 심볼은 retriever가 보존한 전체 source registry에서 AST로 조회합니다. 함수·클래스·메서드 정의와 호출·사용을 구분하므로, 주석이나 호출에 이름이 있다는 이유로 함수 구현을 발췌하지 않습니다. 정확한 심볼 조회는 vector top-k 밖의 원문도 찾으며, 요구한 정의와 Notebook의 별도 정의 cell을 `k` 때문에 잘라내지 않습니다. 일반 topic 검색은 기존 Chroma 후보와 lexical reranking을 사용합니다.
+
+정의 발췌는 decorator와 본문을 포함한 원래 문자 범위를 보존합니다. AST의 UTF-8 byte 열 위치는 원문 문자 offset으로 변환하며, Notebook cell ID·index와 줄바꿈·들여쓰기를 유지합니다. 전체 registry에서 확인한 부재와 일부 검색 후보에서 찾지 못한 상태는 구분합니다. registry가 없거나 AST를 분석할 수 없으면 부재를 단정하지 않고 `unknown`을 반환합니다. 코드의 구체 aspect는 주석이 아닌 구문에서 확인하며, 명시 버전의 근거가 없을 때도 `unknown`으로 남깁니다.
 
 ### 3.3 문서·검색·근거 계약
 
@@ -174,13 +196,15 @@ UI와 문서 검색 규칙은 아래 파일을 기준으로 관리합니다.
 | `ParsedDocument` / `DocumentElement` | 제목 level·부모 관계·읽기 순서·제목 경로·원문 텍스트·코드 언어·표 셀과 병합 범위 보존 |
 | `SourceAnchor` | 원본 줄, Notebook cell ID·index, 페이지·bbox·좌표계·위치 정밀도. 한 요소에 복수 위치 허용 |
 | `SourceSelection` / `EvidenceRef` | snapshot과 원문 요소 안에서 인용한 문자 범위 또는 표 셀을 선택. 당시의 원문 요소 전체를 함께 보존 |
-| `SearchHit` / `RetrievalScore` | 근거 후보에 이번 검색의 순위·점수·점수 방향을 연결. 답변 신뢰도로 사용하지 않음 |
+| `SearchHit` / `RetrievalScore` | 근거 후보에 `requirement_id`와 이번 검색의 순위·점수·점수 방향을 연결. 답변 신뢰도로 사용하지 않음 |
 
 문자 선택은 저장한 `element.text`의 `[start, end)` 범위입니다. 원본 줄·페이지는 1부터, Notebook cell index는 0부터 셉니다. 제목이나 API 옵션 정보를 붙인 검색 문자열과 원문 발췌를 구분하며, 검색 chunk 순번을 인용의 버전 식별자로 사용하지 않습니다.
 
 `.py`·`.ipynb`는 기존 파서에서 새 문서 모델로 변환합니다. 공식 문서의 Tavily `content`·`raw_content`는 모두 `capture_scope="provider_excerpt"`로 기록합니다. provider가 반환한 내용만 수집했으므로 웹 문서 전체나 실제 HTML 좌표를 확보했다고 간주하지 않습니다.
 
-업로드의 `ChunkedDocument`는 `ParsedDocument` 원문 구조를 한 번 보관하고 검색용 chunk를 만듭니다. Chroma에는 chunk 텍스트와 snapshot·element·선택 범위 참조만 넣으며, 검색된 결과만 `hydrate()`로 당시 원문을 가진 `EvidenceRef`로 복원합니다. 이 원문 보관은 retriever가 소유하는 process-local 상태입니다. cleanup은 인덱스와 보관 상태를 해제하지만 이미 응답에 포함한 원문 근거는 유지됩니다.
+업로드의 `ChunkedDocument`는 `ParsedDocument` 원문 구조를 한 번 보관하고 검색용 chunk를 만듭니다. Chroma에는 chunk 텍스트와 snapshot·element·선택 범위 참조만 넣으며, vector 검색 결과는 `hydrate()`로 당시 원문을 가진 `EvidenceRef`로 복원합니다. 심볼 조회는 같은 registry에서 정확한 원문 범위를 선택합니다. 이 원문 보관은 현재 세션의 retriever가 소유하는 process-local 상태입니다. cleanup은 인덱스와 보관 상태를 해제하지만 이미 응답에 포함한 원문 근거는 유지됩니다.
+
+synthesis는 요구별 후보를 먼저 배분하고, 문자·항목 예산 안에서 관련 문단·문장·코드 범위를 선택합니다. 실제 모델에 보낸 범위만 evidence packet에 남기며, 범위가 달라지면 새 evidence ID를 사용합니다. 내부 `ResponseState.evidence_requirement_map`은 이 ID와 원래 requirement ID의 연결을 보존합니다. 모델 입출력에서만 `e1`, `e2` 같은 짧은 별칭을 사용하고, 서버가 참조 필드를 원래 ID로 복원한 뒤 검증합니다. 일반·compact 입력은 각자의 매핑을 사용하며 알 수 없는 별칭은 검증을 통과하지 못합니다. 최종 인용의 ID·원문·hash·offset은 이 별칭 때문에 바뀌지 않습니다. 모델 입력에는 선택 범위의 `is_partial`, `capture_scope`와 요구별 남은 aspect·빠진 aspect를 함께 전달합니다. 이 map은 검색 유래를 나타내며, 참조를 붙였다는 사실만으로 설명의 의미적 충분함을 증명하지 않습니다.
 
 현재 구현은 인용한 원문 요소를 응답에 포함해 파일 교체·삭제 후에도 당시 근거를 보여줍니다. 원본 파일 bytes의 영구 보관소나 별도 문서 조회 API는 제공하지 않습니다. Docling 설치·변환, PDF 입력, 페이지 이미지 강조 표시는 후속 범위입니다. 향후 adapter가 `ParsedDocument`를 만들면 제목 계층·표·페이지·위치 정보를 기존 핵심 모델로 전달할 수 있습니다.
 
@@ -326,9 +350,20 @@ compaction 진단은 debug `edge_decisions`와 구조화 로그에서 before/aft
 - `planner_diagnostics`
 - `action_results`
 
-현재 debug schema version은 `6`입니다. `retry_context.hit_start_index`는 현재 시도의 검색 결과 시작 위치, `preserved_hits`는 성공한 route의 보존 결과입니다. `retry_scope`는 실패 route만 다시 조회하는 `refresh_routes` 또는 기존 결과를 사용해 본문을 다시 생성하는 `reuse_hits_resynthesize`입니다.
+현재 debug schema version은 `6`입니다. `RetrievalDiagnostic`은 도구 실행 `status`와 근거 요구의 `answerability`를 구분합니다.
 
-post-synthesis 검사에서 참조·내용 문제가 있고 원문 검색 결과가 남아 있으면 planner·검색을 다시 실행하지 않고 synthesis로 직접 돌아갑니다. docs·upload·hybrid 모두 같은 제한된 재합성 경로를 사용합니다. 기본 재시도 상한은 1회이고 `max_retries=0`이면 재합성도 실행하지 않습니다. 새 시도의 참조는 그 시도에서 모델에 실제 제공한 packet으로 검사합니다.
+| `answerability` | 확인 범위 |
+|---|---|
+| `covered` | 명시된 대상·제약에 대응하는 근거를 확보. 자연어 설명 전체의 정확성 판정은 아님 |
+| `partial` | 사용 가능한 근거는 있으나 일부 명시 요구가 미충족 |
+| `missing` | 현재 검색에서 필요한 근거를 확보하지 못함. upload 심볼의 부재는 전체 source를 검사한 경우에만 단정 |
+| `unknown` | 분석 범위·source·실행 상태 때문에 충족이나 부재를 확인하지 못함 |
+
+진단에는 `requirement_id`, `missing_requirements`, `candidate_count`, `attempted_queries`, `request_fingerprint`, `reused`도 포함됩니다. synthesis 전 검사는 같은 route의 task도 ID별로 나누어 결과와 진단을 확인합니다. 명시된 requirement는 `covered` 없이 통과하지 않습니다. 제약이 없는 일반 topic은 유효 검색 결과가 있으면 생성으로 진행할 수 있지만, 이를 명시 대상 검증 완료로 기록하지는 않습니다.
+
+`retry_context.hit_start_index`는 현재 시도의 검색 결과 시작 위치입니다. `failed_requirement_ids`, `original_tasks`, `preserved_hits`, 보존 진단은 실패 요구와 이미 확보한 근거를 추적합니다. `refresh_routes`는 실패한 요구의 검색을 다시 계획하며 성공한 다른 요구는 같은 route에 있어도 재사용합니다. 재계획에는 실제 query·필터 실패·시도한 query가 전달되고 원래 ID·라이브러리·심볼·버전·aspect를 유지합니다. 같은 요청 fingerprint의 완료 결과를 다시 실행하지 않으며 일시적 도구 오류는 재시도할 수 있습니다.
+
+post-synthesis 검사에서 참조·내용·requirement coverage 문제가 있고 원문 검색 결과가 남아 있으면 `reuse_hits_resynthesize`로 synthesis에 직접 돌아갑니다. docs·upload·hybrid 모두 planner·검색을 반복하지 않는 제한된 재합성 경로를 사용합니다. 기본 재시도 상한은 1회이고 `max_retries=0`이면 재합성도 실행하지 않습니다. 각 시도의 검사는 실제 제공한 packet과 본문이 인용한 범위로 수행합니다. 잘못된 내용 단위를 제거한 뒤에도 요구별 coverage를 다시 확인하고, 남은 근거로 요청을 충족하지 못하면 불완전함을 표시합니다. literal aspect·참조 연결 검사는 의미적 지지 평가와 별개입니다.
 
 실제 응답 스키마 기준 파일:
 
