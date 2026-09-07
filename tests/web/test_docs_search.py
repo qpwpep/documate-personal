@@ -45,28 +45,28 @@ class DocsSearchTest(unittest.TestCase):
         return response
 
     @patch("src.infra.tools.docs_search.client.request_tavily_search")
-    def test_docs_search_applies_bare_library_hints_for_common_libraries(self, mock_request_tavily_search) -> None:
+    def test_docs_search_preserves_library_when_reformulating_general_query(self, mock_request_tavily_search) -> None:
         mock_request_tavily_search.return_value = {"results": []}
         registry = build_tool_registry(AppSettings(openai_api_key="test", tavily_api_key="test"))
 
         cases = [
-            ("python official docs", "docs.python.org", "python asyncio task documentation"),
-            ("git official docs", "git-scm.com", "git rebase documentation"),
-            ("LangChain official docs", "python.langchain.com", "LangChain retrievers docs"),
-            ("pandas official docs", "pandas.pydata.org", "pandas user guide"),
-            ("numpy official docs", "numpy.org", "numpy user guide"),
-            ("matplotlib official docs", "matplotlib.org", "matplotlib api reference"),
-            ("PyTorch official docs", "docs.pytorch.org", "PyTorch torch.Tensor documentation"),
-            ("Hugging Face official docs", "huggingface.co", "Hugging Face Transformers tokenizer padding docs"),
-            ("fastapi official docs", "fastapi.tiangolo.com", "fastapi tutorial"),
-            ("BeautifulSoup official docs", "crummy.com", "BeautifulSoup find find_all select official docs"),
-            ("streamlit official docs", "docs.streamlit.io", "streamlit api reference"),
-            ("gradio official docs", "gradio.app", "gradio docs"),
-            ("scikit-learn official docs", "scikit-learn.org", "scikit-learn user guide"),
-            ("Pydantic official docs", ["docs.pydantic.dev", "pydantic.dev"], "pydantic concepts documentation"),
+            ("python official docs", "docs.python.org"),
+            ("git official docs", "git-scm.com"),
+            ("LangChain official docs", "python.langchain.com"),
+            ("pandas official docs", "pandas.pydata.org"),
+            ("numpy official docs", "numpy.org"),
+            ("matplotlib official docs", "matplotlib.org"),
+            ("PyTorch official docs", "docs.pytorch.org"),
+            ("Hugging Face official docs", "huggingface.co"),
+            ("fastapi official docs", "fastapi.tiangolo.com"),
+            ("BeautifulSoup official docs", "crummy.com"),
+            ("streamlit official docs", "docs.streamlit.io"),
+            ("gradio official docs", "gradio.app"),
+            ("scikit-learn official docs", "scikit-learn.org"),
+            ("Pydantic official docs", ["docs.pydantic.dev", "pydantic.dev"]),
         ]
 
-        for query, expected_domain, expected_fallback in cases:
+        for query, expected_domain in cases:
             with self.subTest(query=query):
                 mock_request_tavily_search.reset_mock()
                 registry.tavily_search_tool(query=query)
@@ -77,87 +77,32 @@ class DocsSearchTest(unittest.TestCase):
                 expected_domains = expected_domain if isinstance(expected_domain, list) else [expected_domain]
                 self.assertEqual(first_kwargs["include_domains"], expected_domains)
                 self.assertEqual(first_kwargs["query"], query)
-                self.assertEqual(second_kwargs["query"], expected_fallback)
+                self.assertIn(first_kwargs["query"], second_kwargs["query"].replace('"', ""))
+                self.assertEqual(len(mock_request_tavily_search.call_args_list), 2)
 
     @patch("src.infra.tools.docs_search.client.request_tavily_search")
-    def test_docs_search_applies_user_like_feature_hints_for_supported_sites(self, mock_request_tavily_search) -> None:
+    def test_docs_search_preserves_feature_subject_when_reformulating_query(self, mock_request_tavily_search) -> None:
         mock_request_tavily_search.return_value = {"results": []}
         registry = build_tool_registry(AppSettings(openai_api_key="test", tavily_api_key="test"))
 
         cases = [
-            (
-                "python asyncio task cancellation official docs",
-                "docs.python.org",
-                "python asyncio task documentation",
-            ),
-            (
-                "git rebase conflict resolution official docs",
-                "git-scm.com",
-                "git rebase documentation",
-            ),
-            (
-                "LangChain retriever usage official docs",
-                "python.langchain.com",
-                "LangChain retrievers docs",
-            ),
-            (
-                "matplotlib histogram bins official docs",
-                "matplotlib.org",
-                "matplotlib.pyplot.hist api reference",
-            ),
-            (
-                "NumPy reshape array official docs",
-                "numpy.org",
-                "numpy reshape documentation",
-            ),
-            (
-                "pandas groupby aggregate official docs",
-                "pandas.pydata.org",
-                "pandas groupby user guide",
-            ),
-            (
-                "PyTorch DataLoader dataset official docs",
-                "docs.pytorch.org",
-                "torch.utils.data Dataset DataLoader",
-            ),
-            (
-                "Hugging Face tokenizer padding official docs",
-                "huggingface.co",
-                "Hugging Face Transformers tokenizer padding docs",
-            ),
-            (
-                "FastAPI Depends dependency official docs",
-                "fastapi.tiangolo.com",
-                "FastAPI Depends reference",
-            ),
-            (
-                "BeautifulSoup find_all CSS selector official docs",
-                "crummy.com",
-                "BeautifulSoup find find_all select official docs",
-            ),
-            (
-                "streamlit st.session_state widget official docs",
-                "docs.streamlit.io",
-                "streamlit st.session_state docs",
-            ),
-            (
-                "gradio Blocks click event official docs",
-                "gradio.app",
-                "gradio Blocks docs",
-            ),
-            (
-                "scikit-learn train_test_split stratify official docs",
-                "scikit-learn.org",
-                "train_test_split sklearn.model_selection",
-            ),
-            (
-                "Pydantic BaseModel model_validate official docs",
-                ["docs.pydantic.dev", "pydantic.dev"],
-                "pydantic model_validate documentation",
-            ),
+            ("python asyncio task cancellation official docs", "docs.python.org"),
+            ("git rebase conflict resolution official docs", "git-scm.com"),
+            ("LangChain retriever usage official docs", "python.langchain.com"),
+            ("matplotlib histogram bins official docs", "matplotlib.org"),
+            ("NumPy reshape array official docs", "numpy.org"),
+            ("pandas groupby aggregate official docs", "pandas.pydata.org"),
+            ("PyTorch DataLoader dataset official docs", "docs.pytorch.org"),
+            ("Hugging Face tokenizer padding official docs", "huggingface.co"),
+            ("FastAPI Depends dependency official docs", "fastapi.tiangolo.com"),
+            ("BeautifulSoup find_all CSS selector official docs", "crummy.com"),
+            ("streamlit st.session_state widget official docs", "docs.streamlit.io"),
+            ("gradio Blocks click event official docs", "gradio.app"),
+            ("scikit-learn train_test_split stratify official docs", "scikit-learn.org"),
+            ("Pydantic BaseModel model_validate official docs", ["docs.pydantic.dev", "pydantic.dev"]),
         ]
 
-        for query, expected_domain, expected_fallback in cases:
+        for query, expected_domain in cases:
             with self.subTest(query=query):
                 mock_request_tavily_search.reset_mock()
                 registry.tavily_search_tool(query=query)
@@ -167,10 +112,11 @@ class DocsSearchTest(unittest.TestCase):
                 second_kwargs = mock_request_tavily_search.call_args_list[1].kwargs
                 expected_domains = expected_domain if isinstance(expected_domain, list) else [expected_domain]
                 self.assertEqual(first_kwargs["include_domains"], expected_domains)
-                self.assertEqual(second_kwargs["query"], expected_fallback)
+                self.assertIn(first_kwargs["query"], second_kwargs["query"].replace('"', ""))
+                self.assertEqual(len(mock_request_tavily_search.call_args_list), 2)
 
     @patch("src.infra.tools.docs_search.client.request_tavily_search")
-    def test_docs_search_applies_specific_fallback_hints(self, mock_request_tavily_search) -> None:
+    def test_docs_search_preserves_subject_when_reformulating_symbol_query(self, mock_request_tavily_search) -> None:
         mock_request_tavily_search.return_value = {"results": []}
         registry = build_tool_registry(
             AppSettings(
@@ -180,39 +126,15 @@ class DocsSearchTest(unittest.TestCase):
         )
 
         cases = [
-            (
-                "PyTorch Dataset DataLoader official docs",
-                "docs.pytorch.org",
-                "torch.utils.data Dataset DataLoader",
-            ),
-            (
-                "Pydantic v2 Field validation official docs",
-                ["docs.pydantic.dev", "pydantic.dev"],
-                "pydantic Field fields concepts",
-            ),
-            (
-                "pandas concat official docs",
-                "pandas.pydata.org",
-                "pandas.concat api reference",
-            ),
-            (
-                "matplotlib pie official docs",
-                "matplotlib.org",
-                "matplotlib.pyplot.pie parameters",
-            ),
-            (
-                "BeautifulSoup으로 특정 태그 찾는 예제를 보여줘",
-                "crummy.com",
-                "BeautifulSoup find find_all select official docs",
-            ),
-            (
-                "find_all official docs",
-                "crummy.com",
-                "BeautifulSoup find find_all select official docs",
-            ),
+            ("PyTorch Dataset DataLoader official docs", "docs.pytorch.org"),
+            ("Pydantic v2 Field validation official docs", ["docs.pydantic.dev", "pydantic.dev"]),
+            ("pandas concat official docs", "pandas.pydata.org"),
+            ("matplotlib pie official docs", "matplotlib.org"),
+            ("BeautifulSoup으로 특정 태그 찾는 예제를 보여줘", "crummy.com"),
+            ("find_all official docs", "crummy.com"),
         ]
 
-        for query, expected_domain, expected_fallback in cases:
+        for query, expected_domain in cases:
             with self.subTest(query=query):
                 mock_request_tavily_search.reset_mock()
                 registry.tavily_search_tool(query=query)
@@ -222,7 +144,8 @@ class DocsSearchTest(unittest.TestCase):
                 second_kwargs = mock_request_tavily_search.call_args_list[1].kwargs
                 expected_domains = expected_domain if isinstance(expected_domain, list) else [expected_domain]
                 self.assertEqual(first_kwargs["include_domains"], expected_domains)
-                self.assertEqual(second_kwargs["query"], expected_fallback)
+                self.assertIn(first_kwargs["query"], second_kwargs["query"].replace('"', ""))
+                self.assertEqual(len(mock_request_tavily_search.call_args_list), 2)
 
     @patch("src.infra.tools.docs_search.client.request_tavily_search")
     def test_docs_search_canonicalizes_spaced_dotted_query_tokens(self, mock_request_tavily_search) -> None:
@@ -282,7 +205,7 @@ class DocsSearchTest(unittest.TestCase):
         self.assertIn("DataLoader", combined)
 
     @patch("src.infra.tools.docs_search.client.request_tavily_search")
-    def test_docs_search_returns_no_result_when_identifier_coverage_stays_incomplete(self, mock_request_tavily_search) -> None:
+    def test_docs_search_preserves_partial_evidence_when_identifier_coverage_stays_incomplete(self, mock_request_tavily_search) -> None:
         dataset_only = {
             "results": [
                 {
@@ -298,8 +221,9 @@ class DocsSearchTest(unittest.TestCase):
         registry = build_tool_registry(AppSettings(openai_api_key="test", tavily_api_key="test"))
         result = registry.tavily_search_tool(query="PyTorch Dataset DataLoader official docs")
 
-        self.assertEqual(result["diagnostics"]["status"], "no_result")
-        self.assertEqual(result["hits"], [])
+        self.assertEqual(result["diagnostics"]["answerability"], "partial")
+        self.assertEqual(len(result["hits"]), 1)
+        self.assertEqual(result["diagnostics"]["missing_requirements"], ["symbol:DataLoader"])
         self.assertIn("identifier_coverage_incomplete", result["diagnostics"]["warnings"])
 
     @patch("src.infra.tools.docs_search.client.request_tavily_search")
@@ -506,7 +430,7 @@ class DocsSearchTest(unittest.TestCase):
 
         result = registry.tavily_search_tool(query="numpy official docs")
 
-        self.assertEqual(completed_queries, ["numpy official docs", "numpy user guide"])
+        self.assertEqual(completed_queries, ["numpy official docs", "numpy official docs API reference"])
         self.assertEqual(result["diagnostics"]["status"], "success")
         self.assertEqual(
             [item["evidence"]["snapshot"]["source_uri"] for item in result["hits"]],
@@ -527,7 +451,7 @@ class DocsSearchTest(unittest.TestCase):
 
         result = registry.tavily_search_tool(query="numpy official docs")
 
-        self.assertEqual(len(mock_post.call_args_list), 3)
+        self.assertEqual(len(mock_post.call_args_list), 2)
         self.assertEqual(result["hits"], [])
         self.assertEqual(result["diagnostics"]["status"], "error")
         self.assertEqual(result["diagnostics"]["error_code"], "RETRIEVAL_DOCS_TIMEOUT")
@@ -547,7 +471,7 @@ class DocsSearchTest(unittest.TestCase):
 
         result = registry.tavily_search_tool(query="numpy official docs")
 
-        self.assertEqual(len(mock_post.call_args_list), 3)
+        self.assertEqual(len(mock_post.call_args_list), 2)
         self.assertEqual(result["hits"], [])
         self.assertEqual(result["diagnostics"]["status"], "error")
         self.assertEqual(result["diagnostics"]["error_code"], "RETRIEVAL_DOCS_FAILED")
@@ -718,7 +642,7 @@ class DocsSearchTest(unittest.TestCase):
         )
 
         registry = build_tool_registry(AppSettings(openai_api_key="test", tavily_api_key="test"))
-        result = registry.tavily_search_tool(query="Pydantic Field official docs")
+        result = registry.tavily_search_tool(query="Pydantic fields official docs")
 
         self.assertEqual(result["diagnostics"]["status"], "success")
         self.assertEqual(

@@ -142,6 +142,7 @@ class EvidencePipelineTest(unittest.TestCase):
     def setUp(self) -> None:
         self.tavily_payload = {"results": []}
         self.search_responder = None
+        self.search_requests = []
         validate_doc_url.cache_clear()
         self.addCleanup(validate_doc_url.cache_clear)
 
@@ -150,6 +151,7 @@ class EvidencePipelineTest(unittest.TestCase):
             response.status_code = 200
             response.url = url
             if method.lower() == "post" and url == "https://api.tavily.com/search":
+                self.search_requests.append(kwargs["json"])
                 payload = self.search_responder(kwargs["json"]) if self.search_responder else self.tavily_payload
                 response._content = json.dumps(payload).encode("utf-8")
             elif method.lower() == "head":
@@ -270,6 +272,7 @@ class EvidencePipelineTest(unittest.TestCase):
         self.assertNotIn("https://huggingface.co/datasets/foo/bar", urls)
 
     def test_docs_search_returns_no_result_when_all_urls_are_filtered(self) -> None:
+        """Bounded reformulation cannot promote non-document URLs into evidence."""
         self.tavily_payload = {
             "results": [
                 {
@@ -285,10 +288,18 @@ class EvidencePipelineTest(unittest.TestCase):
         result = registry.tavily_search_tool(query="official docs")
 
         self.assertEqual(result["diagnostics"]["status"], "no_result")
+        self.assertEqual(result["diagnostics"]["answerability"], "missing")
+        self.assertEqual(result["diagnostics"]["missing_requirements"], ["topic"])
         self.assertEqual(result["hits"], [])
-        self.assertEqual(result["diagnostics"]["provider_result_count"], 1)
-        self.assertEqual(result["diagnostics"]["filtered_path_prefix_count"], 1)
+        self.assertEqual(result["diagnostics"]["provider_result_count"], 2)
+        self.assertEqual(result["diagnostics"]["filtered_path_prefix_count"], 2)
         self.assertEqual(result["diagnostics"]["final_evidence_count"], 0)
+        self.assertEqual(len(self.search_requests), 2)
+        for request in self.search_requests:
+            self.assertIn("official docs", request["query"])
+            self.assertEqual(request["include_domains"], self.search_requests[0]["include_domains"])
+        self.assertEqual(result["diagnostics"]["attempted_queries"],
+                         [request["query"] for request in self.search_requests])
 
     def test_docs_search_blocks_huggingface_commit_diff_urls(self) -> None:
         self.tavily_payload = {
@@ -314,27 +325,48 @@ class EvidencePipelineTest(unittest.TestCase):
         urls = [item["evidence"]["snapshot"]["source_uri"] for item in result["hits"]]
         self.assertEqual(urls, ["https://huggingface.co/docs/transformers/index"])
 
-    def test_docs_search_returns_matching_evidence_when_library_fallback_finds_results(self) -> None:
+    def test_docs_search_recovers_evidence_with_bounded_subject_preserving_reformulation(self) -> None:
+        """After an empty search, one reformulation preserves the subject and official domain."""
         cases = [
-            ("train_test_split 공식 문법을", ["scikit-learn.org"], "train_test_split sklearn.model_selection", "https://scikit-learn.org/stable/modules/generated/sklearn.model_selection.train_test_split.html"),
-            ("bare 공식 문서", ["docs.pears.com"], "Bare runtime API", "https://docs.pears.com/reference/bare/"),
-            ("numpy", ["numpy.org"], "numpy user guide", "https://numpy.org/doc/stable/"),
-            ("pandas", ["pandas.pydata.org"], "pandas user guide", "https://pandas.pydata.org/docs/"),
-            ("fastapi", ["fastapi.tiangolo.com"], "fastapi tutorial", "https://fastapi.tiangolo.com/tutorial/"),
+            ("train_test_split 공식 문법을", ["scikit-learn.org"], "sklearn.model_selection.train_test_split",
+             "https://scikit-learn.org/stable/modules/generated/sklearn.model_selection.train_test_split.html",
+             "Split arrays into train and test subsets."),
+            ("bare 공식 문서", ["docs.pears.com"], "Bare runtime API",
+             "https://docs.pears.com/reference/bare/", "Bare provides a JavaScript runtime."),
+            ("numpy", ["numpy.org"], "NumPy manual",
+             "https://numpy.org/doc/stable/", "NumPy provides array operations and numerical routines."),
+            ("pandas", ["pandas.pydata.org"], "pandas documentation",
+             "https://pandas.pydata.org/docs/", "pandas provides labeled data structures."),
+            ("fastapi", ["fastapi.tiangolo.com"], "FastAPI tutorial",
+             "https://fastapi.tiangolo.com/tutorial/", "FastAPI declares API routes with Python type annotations."),
         ]
         registry = build_tool_registry(AppSettings(openai_api_key="test", tavily_api_key="test"))
-        for query, domains, fallback_query, url in cases:
+        for query, domains, title, url, content in cases:
             with self.subTest(query=query):
-                def respond(payload):
-                    if payload["query"] != fallback_query or payload["include_domains"] != domains:
+                self.search_requests.clear()
+
+                def respond(_payload):
+                    if len(self.search_requests) == 1:
                         return {"results": []}
-                    return {"results": [{"url": url, "title": fallback_query, "content": fallback_query + " API reference and usage examples.", "score": 0.92}]}
+                    return {"results": [{"url": url, "title": title, "content": content, "score": 0.92}]}
                 self.search_responder = respond
 
                 result = registry.tavily_search_tool(query=query)
 
                 self.assertEqual(result["diagnostics"]["status"], "success")
-                self.assertEqual([item["evidence"]["snapshot"]["source_uri"] for item in result["hits"]], [url])
+                self.assertEqual(result["diagnostics"]["answerability"], "covered")
+                self.assertEqual(result["diagnostics"]["missing_requirements"], [])
+                hits = parse_search_hits(result)
+                self.assertEqual([(hit.evidence.snapshot.source_uri, hit.evidence.snapshot.title,
+                                   hit.evidence.excerpt) for hit in hits], [(url, title, content)])
+                self.assertEqual(result["diagnostics"]["provider_result_count"], 1)
+                self.assertEqual(len(self.search_requests), 2)
+                for request in self.search_requests:
+                    self.assertIn(query, request["query"].replace('"', ""))
+                    self.assertEqual(request["include_domains"], domains)
+                self.assertNotEqual(self.search_requests[0]["query"], self.search_requests[1]["query"])
+                self.assertEqual(result["diagnostics"]["attempted_queries"],
+                                 [request["query"] for request in self.search_requests])
 
 
     def test_docs_search_filters_cross_library_docs_results_for_hinted_queries(
