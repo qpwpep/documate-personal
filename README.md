@@ -127,7 +127,7 @@ flowchart LR
 
 | 항목 | 결과 |
 |---|---:|
-| 테스트 | `508 passed, 108 skipped, 67 subtests passed` |
+| 테스트 | `576 passed, 108 skipped, 67 subtests passed` |
 | release benchmark | `116/120` cases passed |
 | release pass rate | `0.9667` |
 | tool precision / recall | `0.9677` / `1.0000` |
