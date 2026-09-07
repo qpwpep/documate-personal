@@ -151,7 +151,7 @@ def result_matches_domains(url: str, allowed_domains: set[str]) -> bool:
 
 def infer_docs_query_hint(query: str) -> tuple[str, list[str], list[str]] | None:
     lowered = canonicalize_docs_query_text(query).lower()
-    best_match: tuple[tuple[int, int, int], tuple[str, list[str], list[str]]] | None = None
+    best_match: tuple[tuple[int, int, int, int], tuple[str, list[str], list[str]]] | None = None
     for hint in docs_search_rules().query_hints:
         matched_identifiers = [
             identifier
@@ -167,6 +167,7 @@ def infer_docs_query_hint(query: str) -> tuple[str, list[str], list[str]] | None
             if str(identifier or "").strip().lower() != library_name
         ]
         score = (
+            1 if query_hint_matches(lowered, library_name, match_mode="word") else 0,
             1 if non_library_matches else 0,
             len(matched_identifiers),
             max(len(str(identifier or "")) for identifier in matched_identifiers),

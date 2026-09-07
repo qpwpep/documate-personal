@@ -174,6 +174,8 @@ def filter_docs_hits_by_topic_purity(
     query: str,
     hits: list[SearchHit],
     retrieval_warnings: list[str],
+    *,
+    limit: int = 2,
 ) -> list[SearchHit]:
     meaningful_hits = [item for item in hits if hit_has_grounded_text(item)]
     if len(meaningful_hits) < len(hits):
@@ -192,7 +194,7 @@ def filter_docs_hits_by_topic_purity(
         reverse=True,
     )
     if entity_hit_score(query, ranked[0]) <= 0.0:
-        return ranked[:2]
+        return ranked[:limit]
     anchor = ranked[0]
     anchor_cluster = path_cluster(anchor.evidence.snapshot.source_uri)
     kept = [anchor]
@@ -203,7 +205,7 @@ def filter_docs_hits_by_topic_purity(
             kept.append(item)
     if len(kept) < len(hits):
         retrieval_warnings.append("topic_purity_pruned")
-    return kept[:2]
+    return kept[:limit]
 
 
 def hit_has_grounded_text(hit: SearchHit) -> bool:
