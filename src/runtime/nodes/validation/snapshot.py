@@ -12,6 +12,7 @@ from src.core.evidence import EvidenceRef, SearchHit
 from src.core.planner_schema import PlannerOutput
 from src.core.sequence_utils import slice_from_index
 from src.runtime.nodes.validation.models import ValidationSnapshot
+from src.runtime.nodes.synthesis.evidence_selection import missing_literal_aspects
 
 
 def detect_missing_route_coverage(
@@ -29,11 +30,27 @@ def detect_missing_route_coverage(
     return [route for route in required_routes if route not in covered_routes]
 
 
+def detect_missing_requirement_coverage(
+    *, snapshot: ValidationSnapshot, result: AnswerResponse, valid_unit_paths: set[str],
+) -> list[str]:
+    if not snapshot.evidence_requirement_map and not any(task.requirement.specified for task in snapshot.planner_output.tasks):
+        return []
+    cited = {ref for path, unit in iter_content_units(result.content) if path in valid_unit_paths for ref in unit.refs}
+    missing = []
+    for task in snapshot.planner_output.tasks:
+        excerpts = [item.excerpt for item in snapshot.evidence_packet
+                    if item.id in cited and task.requirement_id in snapshot.evidence_requirement_map.get(item.id, [])]
+        if not excerpts or missing_literal_aspects(task.requirement.aspects, excerpts):
+            missing.append(task.requirement_id)
+    return missing
+
+
 def build_validation_snapshot(
     *, user_input: str, planner_output: PlannerOutput, parsed_hits: list[SearchHit],
     current_attempt_retrieval_errors: list[str],
     current_attempt_retrieval_diagnostics: list[RetrievalDiagnostic],
     response_result: AnswerResponse | None, evidence_packet: list[EvidenceRef],
+    evidence_requirement_map: dict[str, list[str]] | None = None,
 ) -> ValidationSnapshot:
     retrieval_required = bool(planner_output.use_retrieval and planner_output.tasks)
     evidence_by_route: dict[str, list[EvidenceRef]] = {"docs": [], "upload": []}
@@ -50,6 +67,7 @@ def build_validation_snapshot(
         response_result=response_result, evidence_packet=evidence_packet,
         evidence_by_route=evidence_by_route, diagnostics_by_route=diagnostics_by_route,
         required_routes=list(dict.fromkeys(task.route for task in planner_output.tasks)) if retrieval_required else [],
+        evidence_requirement_map=evidence_requirement_map or {},
     )
 
 
@@ -80,5 +98,6 @@ def collect_validation_snapshot(state: GraphState) -> tuple[ValidationSnapshot, 
             if item is not None
         ],
         response_result=response.result, evidence_packet=response.evidence_packet,
+        evidence_requirement_map=response.evidence_requirement_map,
     )
     return snapshot, local_errors

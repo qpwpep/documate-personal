@@ -51,8 +51,42 @@ def test_validation_keeps_successful_requirement_when_another_docs_requirement_i
     assert result["retry"].needs_retry
 
 
+def test_removing_invalid_content_cannot_hide_an_unanswered_requirement():
+    """Filtering invalid references must preserve an explicit incomplete-answer result."""
+    first = RetrievalTask(route="docs", query="first API", k=1)
+    second = RetrievalTask(route="docs", query="second API", k=1)
+    hit = _official_hit(first)
+    document = AnswerDocument.model_validate({"blocks": [{"type": "paragraph", "content": [
+        {"text": "first supported answer", "basis": "source", "refs": [hit.evidence.id]},
+        {"text": "second unsupported answer", "basis": "source", "refs": ["ref:missing"]},
+    ]}]})
+    state = build_test_state({
+        "user_input": "Compare both APIs", "planner_output": PlannerOutput(use_retrieval=True, tasks=[first, second]),
+        "retrieved_hits": [hit.model_dump()], "retry_context": {"max_retries": 0},
+        "response": {"result": finalize_answer(document, [hit.evidence], retrieval_required=True),
+                     "evidence_packet": [hit.evidence], "evidence_requirement_map": {hit.evidence.id: [first.requirement_id]}},
+    })
+    result = make_post_synthesis_validation_node(verbose=False)(state)
+    assert "answer_incomplete" in [issue.code for issue in result["response"].result.issues]
 
 
+def test_post_validation_detects_an_aspect_lost_from_the_actual_model_packet():
+    """A provenance ID alone cannot make an omitted parameter count as covered."""
+    task = RetrievalTask(route="docs", query="numpy concatenate axis and dtype", k=1,
+                         requirement={"library": "numpy", "symbols": ["numpy.concatenate"], "aspects": ["axis", "dtype"]})
+    hit = _official_hit(task)
+    document = AnswerDocument.model_validate({"blocks": [{"type": "paragraph", "content": [
+        {"text": "arrays join along axis", "basis": "source", "refs": [hit.evidence.id]},
+    ]}]})
+    state = build_test_state({
+        "user_input": task.query, "planner_output": PlannerOutput(use_retrieval=True, tasks=[task]),
+        "retrieved_hits": [hit.model_dump()], "retry_context": {"max_retries": 0},
+        "response": {"result": finalize_answer(document, [hit.evidence], retrieval_required=True),
+                     "evidence_packet": [hit.evidence], "evidence_requirement_map": {hit.evidence.id: [task.requirement_id]}},
+    })
+    result = make_post_synthesis_validation_node(verbose=False)(state)
+    assert result["retry"].failed_requirement_ids == [task.requirement_id]
+    assert "answer_incomplete" in [issue.code for issue in result["response"].result.issues]
 
 
 def test_identical_failed_search_is_reused_without_a_second_paid_request_batch(monkeypatch):

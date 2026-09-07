@@ -34,8 +34,11 @@ def maybe_short_circuit_synthesis(
             mode = "action_only"
     elif (
         context.retrieval_required and len(context.hits) == 1
+        and len(context.planner_output.tasks) == 1
         and context.hits[0].evidence.route == "upload"
         and is_explicit_source_extraction(context.user_input)
+        and any(d.requirement_id == context.hits[0].requirement_id and d.answerability == "covered"
+                for d in debug.retrieval_diagnostics)
     ):
         packet = [context.hits[0].evidence]
         result = build_grounded_response(packet, message="요청한 자료의 원문 발췌입니다.")
@@ -50,4 +53,6 @@ def maybe_short_circuit_synthesis(
         )],
         retrieval_errors=context.parse_errors,
         planner_errors=context.planner_parse_errors,
+        evidence_requirement_map={item.id: [hit.requirement_id for hit in context.hits if hit.evidence.id == item.id and hit.requirement_id]
+                                  for item in packet},
     )

@@ -38,6 +38,7 @@ class PreparedSynthesisInputs:
     model_messages: list[BaseMessage]
     history_before: int
     history_after: int
+    evidence_requirement_map: dict[str, list[str]] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -45,6 +46,7 @@ class SynthesisPipelineResult:
     result: AnswerResponse
     evidence_packet: list[EvidenceRef]
     latency_trace: list[dict[str, Any]]
+    evidence_requirement_map: dict[str, list[str]] = field(default_factory=dict)
     retrieval_errors: list[str] = field(default_factory=list)
     planner_errors: list[str] = field(default_factory=list)
     synthesis_errors: list[str] = field(default_factory=list)

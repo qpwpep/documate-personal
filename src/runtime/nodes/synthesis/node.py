@@ -80,5 +80,6 @@ def make_synthesize_node(
             attempt=prepared.attempt, latency_trace=outcome.latency_trace,
             retrieval_errors=outcome.retrieval_errors, planner_errors=outcome.planner_errors,
             synthesis_errors=outcome.synthesis_errors, llm_calls=outcome.llm_calls,
+            evidence_requirement_map=outcome.evidence_requirement_map,
         )
     return synthesize

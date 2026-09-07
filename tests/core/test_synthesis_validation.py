@@ -3,7 +3,7 @@ import json
 from langchain_core.messages import AIMessage, HumanMessage
 
 from src.core.answer_schema import export_answer_text, iter_content_units, text_document
-from src.core.contracts import PlannerState, RetrievalState
+from src.core.contracts import PlannerState, RetrievalState, DebugState, RetrievalDiagnostic
 from src.core.contracts.boundary.graph import build_graph_state_input
 from src.core.documents import DocumentElement, SourceAnchor, build_snapshot
 from src.core.evidence import RetrievalScore, SearchHit, build_evidence
@@ -122,7 +122,13 @@ def test_exhausted_timeout_fallback_keeps_source_version_and_location():
 def test_exact_upload_extraction_needs_no_model_generation():
     """Explicit source extraction uses the same checked document contract without rewriting code."""
     hit = _hit("retries = 3\n", source="upload")
-    updates = make_synthesize_node(ModelBoundary(error=AssertionError("model should not run")))(_state([hit], query="retries 코드를 원문 그대로 발췌해줘"))
+    state = _state([hit], query="retries 코드를 원문 그대로 발췌해줘")
+    task = state["planner"].output.tasks[0]
+    state["retrieval"] = RetrievalState(hit_log=[hit.model_copy(update={"requirement_id": task.requirement_id}).model_dump(mode="json")])
+    state["debug"] = DebugState(retrieval_diagnostics=[RetrievalDiagnostic(
+        route="upload", requirement_id=task.requirement_id, status="success", answerability="covered", evidence_count=1,
+    )])
+    updates = make_synthesize_node(ModelBoundary(error=AssertionError("model should not run")))(state)
     assert updates["debug"].synthesis_errors == []
     assert any(check.support_status == "exact_match" for check in updates["response"].result.checks)
     assert updates["response"].result.citations[0].evidence.excerpt == hit.evidence.excerpt

@@ -81,6 +81,7 @@ def run_synthesis_pipeline(
     total = elapsed_ms(stage_started, time.perf_counter())
     return SynthesisPipelineResult(
         result=result, evidence_packet=used.evidence_packet,
+        evidence_requirement_map=used.evidence_requirement_map,
         latency_trace=[
             make_synthesis_attempt_latency_event(
                 attempt=prepared.attempt, mode=mode, structured_ms=structured_ms,
