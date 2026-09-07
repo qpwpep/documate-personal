@@ -4,11 +4,14 @@ import time
 from collections.abc import Callable
 from typing import Any
 
+from src.core.documents import ParsedDocument
 from src.core.latency import elapsed_ms
+from src.core.planner_schema import RetrievalRequirement
 from src.infra.chroma_store import CHROMA_DISTANCE_METRIC, CHROMA_SCORE_DIRECTION
 from src.infra.tools._common import build_retrieval_payload
 from src.infra.tools.local_rag import client
 from src.infra.tools.local_rag.ranking import rank_retrieval_rows
+from src.infra.tools.local_rag.requirements import infer_legacy_requirement, resolve_source_requirement
 from src.infra.tools.local_rag.serialization import build_local_hit_bundle
 
 
@@ -25,7 +28,7 @@ def _build_search_payload(
         query=query,
     )
     post_filter_ms = elapsed_ms(post_started, time.perf_counter())
-    return build_retrieval_payload(
+    payload = build_retrieval_payload(
         tool="upload_search",
         route="upload",
         query=query,
@@ -40,6 +43,28 @@ def _build_search_payload(
         score_direction=CHROMA_SCORE_DIRECTION,
         warnings=retrieval_warnings,
     )
+    payload["diagnostics"].update(answerability="unknown", missing_requirements=[], candidate_count=len(docs_with_scores))
+    return payload
+
+
+def _build_requirement_payload(
+    *, query: str, requirement: RetrievalRequirement, source_document: ParsedDocument | None,
+    docs_with_scores: list[tuple[Any, float | None]], provider_ms: int = 0,
+) -> dict[str, Any]:
+    started = time.perf_counter()
+    result = resolve_source_requirement(requirement=requirement, source_document=source_document,
+                                        candidate_rows=docs_with_scores)
+    payload = build_retrieval_payload(
+        tool="upload_search", route="upload", query=query, hits=result.hits,
+        status="success" if result.hits else "no_result",
+        message="" if result.answerability == "covered" else f"uploaded source requirement {result.answerability}",
+        provider_ms=provider_ms, post_filter_ms=elapsed_ms(started, time.perf_counter()),
+        metric="source_symbol", score_direction="higher_is_better", warnings=result.warnings,
+    )
+    payload["diagnostics"].update(answerability=result.answerability,
+                                  missing_requirements=result.missing_requirements,
+                                  candidate_count=result.candidate_count)
+    return payload
 
 
 def build_upload_search_tool() -> Callable[..., dict[str, Any]]:
@@ -47,6 +72,8 @@ def build_upload_search_tool() -> Callable[..., dict[str, Any]]:
         query: str,
         k: int = 4,
         retriever: Any = None,
+        *,
+        requirement: RetrievalRequirement | None = None,
     ) -> dict[str, Any]:
         if retriever is None:
             return build_retrieval_payload(
@@ -56,6 +83,15 @@ def build_upload_search_tool() -> Callable[..., dict[str, Any]]:
                 status="unavailable",
                 message="upload retriever is unavailable; upload a .py or .ipynb file first",
             )
+
+        if requirement is None or not requirement.specified:
+            requirement = infer_legacy_requirement(query)
+        source_document = getattr(retriever, "source_document", None)
+        if not isinstance(source_document, ParsedDocument):
+            source_document = None
+        if requirement is not None and requirement.symbols and source_document is not None:
+            return _build_requirement_payload(query=query, requirement=requirement,
+                                              source_document=source_document, docs_with_scores=[])
 
         docs_with_scores: list[tuple[Any, float | None]] = []
         provider_ms = 0
@@ -80,6 +116,11 @@ def build_upload_search_tool() -> Callable[..., dict[str, Any]]:
                 provider_ms=provider_ms,
                 error_code="LOCAL_RAG_FAILED",
             )
+
+        if requirement is not None and requirement.symbols:
+            return _build_requirement_payload(query=query, requirement=requirement,
+                                              source_document=None, docs_with_scores=docs_with_scores,
+                                              provider_ms=provider_ms)
 
         return _build_search_payload(
             query=query,
