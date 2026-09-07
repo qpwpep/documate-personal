@@ -74,6 +74,13 @@ def parse_retrieval_diagnostic(value: Any) -> RetrievalDiagnostic | None:
         message=str(value.get("message") or ""),
         error_code=_parse_error_code(value.get("error_code")),  # type: ignore[arg-type]
         query=str(value.get("query") or ""),
+        requirement_id=str(value.get("requirement_id") or ""),
+        answerability=value.get("answerability") if value.get("answerability") in {"covered", "partial", "missing", "unknown"} else "unknown",
+        missing_requirements=[str(item) for item in safe_list(value.get("missing_requirements"))],
+        candidate_count=_parse_non_negative_int(value.get("candidate_count", 0)),
+        attempted_queries=[str(item) for item in safe_list(value.get("attempted_queries"))],
+        request_fingerprint=str(value.get("request_fingerprint") or ""),
+        reused=bool(value.get("reused", False)),
         attempt=attempt,
         evidence_count=evidence_count,
         metric=str(value.get("metric") or "").strip(),

@@ -104,6 +104,7 @@ class SearchHit(BaseModel):
     evidence: EvidenceRef
     score: RetrievalScore
     rank: int = Field(ge=1)
+    requirement_id: str = ""
 
 
 def _evidence_id(snapshot: DocumentSnapshot, element: DocumentElement, selection: SourceSelection) -> str:
@@ -133,11 +134,12 @@ def build_evidence(
 
 def dedupe_search_hits(hits: Iterable[SearchHit]) -> list[SearchHit]:
     result: list[SearchHit] = []
-    seen: set[str] = set()
+    seen: set[tuple[str, str]] = set()
     for hit in hits:
-        if hit.evidence.id not in seen:
+        key = (hit.requirement_id, hit.evidence.id)
+        if key not in seen:
             result.append(hit)
-            seen.add(hit.evidence.id)
+            seen.add(key)
     return result
 
 

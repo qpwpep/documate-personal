@@ -6,7 +6,6 @@ from pydantic import ValidationError
 
 from src.core.contracts import PlannerDiagnostic, SessionMetadata, SlackDestination
 from src.core.planner_schema import (
-    PLANNER_WARNING_DUPLICATE_ROUTE_MERGED,
     PlannerOutput,
     RetrievalTask,
 )
@@ -159,75 +158,6 @@ class PlannerNodeTest(unittest.TestCase):
 
         self.assertFalse(updates["planner"].output.use_retrieval)
         self.assertTrue(any("validation failed" in error for error in updates["debug"].planner_errors))
-
-    def test_planner_merges_duplicate_routes_from_raw_structured_output(self) -> None:
-        raw_payload = {
-            "use_retrieval": True,
-            "tasks": [
-                {"route": "docs", "query": "numpy", "k": 3},
-                {"route": "docs", "query": "pandas", "k": 5},
-            ],
-        }
-        capture_planner = _CapturePlannerLLM(
-            None,
-            include_raw=True,
-            raw_message=AIMessage(content="", additional_kwargs={"parsed": raw_payload}),
-            parsing_error=ValueError("duplicate routes are not allowed in planner tasks"),
-        )
-        planner_node = make_planner_node(capture_planner, verbose=False)
-
-        updates = planner_node(
-            build_test_state(
-                {
-                    "messages": [HumanMessage(content="Compare numpy and pandas docs.")],
-                    "user_input": "Compare numpy and pandas docs.",
-                }
-            )
-        )
-
-        self.assertEqual(capture_planner.call_count, 1)
-        self.assertEqual(updates["planner"].status, "llm")
-        self.assertEqual(updates["debug"].planner_errors, [])
-        self.assertEqual([task.route for task in updates["planner"].output.tasks], ["docs"])
-        self.assertIn("numpy", updates["planner"].output.tasks[0].query)
-        self.assertIn("pandas", updates["planner"].output.tasks[0].query)
-        self.assertEqual(
-            updates["planner"].diagnostics.planner_warnings,
-            [PLANNER_WARNING_DUPLICATE_ROUTE_MERGED],
-        )
-
-    def test_planner_merges_duplicate_routes_from_parsed_payload_without_langchain_validation(self) -> None:
-        raw_payload = {
-            "use_retrieval": True,
-            "tasks": [
-                {"route": "docs", "query": "numpy", "k": 3},
-                {"route": "docs", "query": "pandas", "k": 5},
-            ],
-        }
-        capture_planner = _CapturePlannerLLM(
-            raw_payload,
-            include_raw=True,
-        )
-        planner_node = make_planner_node(capture_planner, verbose=False)
-
-        updates = planner_node(
-            build_test_state(
-                {
-                    "messages": [HumanMessage(content="Compare numpy and pandas docs.")],
-                    "user_input": "Compare numpy and pandas docs.",
-                }
-            )
-        )
-
-        self.assertEqual(capture_planner.call_count, 1)
-        self.assertEqual(updates["planner"].status, "llm")
-        self.assertEqual([task.route for task in updates["planner"].output.tasks], ["docs"])
-        self.assertIn("numpy", updates["planner"].output.tasks[0].query)
-        self.assertIn("pandas", updates["planner"].output.tasks[0].query)
-        self.assertEqual(
-            updates["planner"].diagnostics.planner_warnings,
-            [PLANNER_WARNING_DUPLICATE_ROUTE_MERGED],
-        )
 
     def test_planner_includes_retry_context_system_message_on_retry(self) -> None:
         capture_planner = _CapturePlannerLLM(PlannerOutput(use_retrieval=False, tasks=[]))
