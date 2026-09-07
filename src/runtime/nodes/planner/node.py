@@ -5,7 +5,7 @@ import logging
 from dataclasses import dataclass, replace
 from typing import Any
 
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, HumanMessage
 
 from src.core.contracts import GraphState, PlannerState
 from src.core.contracts.boundary.debug import get_debug_state
@@ -18,7 +18,7 @@ from src.core.contracts.debug import (
     build_llm_call_metadata,
     empty_planner_diagnostic,
 )
-from src.core.planner_schema import PlannerOutput, normalize_planner_output_input
+from src.core.planner_schema import PlannerOutput, RetrievalTask, normalize_planner_output_input
 from src.infra.logging_utils import log_event
 from src.runtime.nodes.planner.guardrails import apply_retrieval_availability
 from src.runtime.nodes.planner.models import (
@@ -36,6 +36,7 @@ class PlannerRunContext:
     user_input: str
     has_retriever: bool
     planner_attempt: int
+    constraint_context: str = ""
 
 
 def _coerce_planner_payload(raw: Any) -> Any:
@@ -213,11 +214,12 @@ def _resolve_planner_strategy(
                     output=planner_output,
                     diagnostics=normalize_planner_diagnostics(
                         status="llm",
-                        reason=None,
+                        reason="clarification_required" if planner_output.clarification_question else None,
                         fallback_routes=[],
                         planner_warnings=planner_warnings,
                     ),
                     status="llm",
+                    guided_followup=planner_output.clarification_question,
                 ),
                 planner_errors,
                 llm_calls,
@@ -262,7 +264,25 @@ def _apply_planner_guardrail(
         decision.output,
         user_input=context.user_input,
         retry_context=retry_context,
+        constraint_context=context.constraint_context,
     )
+    if [task.requirement.aspects for task in planner_output.tasks] != [task.requirement.aspects for task in decision.output.tasks]:
+        decision = replace(decision, diagnostics=decision.diagnostics.model_copy(update={
+            "planner_warnings": list(dict.fromkeys([*decision.diagnostics.planner_warnings, "unrequested_constraints_removed"])),
+        }))
+    if retry_context.attempt > 0 and retry_context.original_tasks and decision.status == "llm":
+        original = [RetrievalTask.model_validate(task) for task in retry_context.original_tasks]
+        revised = {task.requirement_id: task for task in planner_output.tasks}
+        retained = []
+        for task in original:
+            candidate = revised.get(task.requirement_id)
+            if candidate is None:
+                matches = [item for item in planner_output.tasks if item.route == task.route and item.requirement == task.requirement]
+                candidate = matches[0] if len(matches) == 1 else None
+            retained.append(task.model_copy(update={"query": candidate.query, "k": candidate.k}) if candidate else task)
+        planner_output = PlannerOutput(use_retrieval=True, tasks=retained)
+        decision = replace(decision, guided_followup=None,
+                           diagnostics=decision.diagnostics.model_copy(update={"reason": None}))
     return apply_retrieval_availability(
         replace(decision, output=planner_output),
         has_retriever=context.has_retriever,
@@ -292,6 +312,7 @@ def _reset_retry_window(
                 "score_avg": None,
                 "retry_reason": None,
                 "failed_routes": [],
+                "failed_requirement_ids": [],
                 "preserved_hits": [],
                 "preserved_retrieval_diagnostics": [],
             }
@@ -313,6 +334,10 @@ def make_planner_node(
             user_input=runtime.user_input,
             has_retriever=bool(runtime.retriever),
             planner_attempt=int(existing_retry_context.attempt) + 1,
+            constraint_context="\n".join([runtime.user_input, *[
+                str(message.content) for message in state.get("messages", [])[-(max_turns + 1) * 2:]
+                if isinstance(message, HumanMessage)
+            ]]),
         )
 
         decision, planner_errors, llm_calls = _resolve_planner_strategy(
@@ -345,6 +370,10 @@ def make_planner_node(
             retrieval_error_count=len(debug.retrieval_errors),
             retrieval_diagnostic_count=len(debug.retrieval_diagnostics),
         )
+        if not retry_context.original_tasks and decision.output.use_retrieval:
+            retry_context = retry_context.model_copy(update={
+                "original_tasks": [task.model_dump(mode="json") for task in decision.output.tasks],
+            })
 
         updates: GraphState = {
             "planner": PlannerState(

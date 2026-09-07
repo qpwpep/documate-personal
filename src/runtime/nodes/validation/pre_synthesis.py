@@ -25,6 +25,13 @@ def make_pre_synthesis_validation_node(verbose: bool):
         guided_followup = str(planner.guided_followup or "").strip()
 
         if guided_followup:
+            if planner.diagnostics.reason != "upload_retriever_missing":
+                updates = {"retry": retry_context.model_copy(update={
+                    "needs_retry": False, "retry_reason": None, "failed_routes": [],
+                    "failed_requirement_ids": [], "retrieval_feedback": "",
+                })}
+                updates.update(build_followup_updates(guided_followup, attempt=response.synthesis_attempt))
+                return updates
             planner_output = parse_planner_output(planner.output, [])
             planner_unavailable = planner.diagnostics.reason == "planner_unavailable"
             needs_retry, next_retry_context, retrieval_feedback = build_retry_update(
