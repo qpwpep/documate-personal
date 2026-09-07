@@ -138,6 +138,7 @@ def _build_turn_contract_block(contract: AnswerContract, action_rules: list[str]
 
 def _requirement_prompt_record(
     task: RetrievalTask, evidence_packet: list[EvidenceRef], requirement_ids_by_evidence: dict[str, list[str]],
+    reference_ids: dict[str, str] | None = None,
 ) -> dict:
     associated = [
         item for item in evidence_packet
@@ -148,7 +149,7 @@ def _requirement_prompt_record(
         "id": task.requirement_id, "route": task.route, "query": task.query,
         "requirement": task.requirement.model_dump(mode="json"),
         "coverage": {
-            "evidence_ids": [item.id for item in associated],
+            "evidence_ids": [(reference_ids or {}).get(item.id, item.id) for item in associated],
             "present_aspects": [aspect for aspect in task.requirement.aspects if aspect not in missing],
             "missing_aspects": missing, "is_partial": not associated or bool(missing),
         },
@@ -159,8 +160,10 @@ def build_synthesis_messages(
     *, state: GraphState, action_rules: list[str], evidence_packet: list[EvidenceRef],
     attempt: int, max_turns: int,
     requirement_ids_by_evidence: dict[str, list[str]] | None = None,
+    reference_aliases: dict[str, str] | None = None,
 ) -> tuple[list[BaseMessage], int, int]:
     runtime = get_runtime_state(state)
+    reference_ids = {source_id: alias for alias, source_id in (reference_aliases or {}).items()}
     history = [message for message in state.get("messages", []) if not isinstance(message, ToolMessage)]
     trimmed = keep_recent_messages(history, max_turns=max_turns)
     messages: list[BaseMessage] = [
@@ -168,6 +171,11 @@ def build_synthesis_messages(
         SystemMessage(content=SYNTHESIS_OUTPUT_TEMPLATE),
         SystemMessage(content=_build_turn_contract_block(infer_answer_contract(runtime.user_input), action_rules, attempt)),
     ]
+    if reference_ids:
+        messages.append(SystemMessage(content=(
+            "Use the short source id values such as e1 from the Evidence Packet in refs. "
+            "snapshot_id and requirement_ids are metadata, not reference targets."
+        )))
     if runtime.memory_summary:
         messages.extend(build_untrusted_memory_prompt_messages(runtime.memory_summary))
     messages.extend(trimmed)
@@ -181,14 +189,14 @@ def build_synthesis_messages(
             "Coverage reports literal anchor presence only, not complete supporting explanations. "
             "Explicitly identify missing_aspects; do not infer their answers from omitted source text.\n"
             + json.dumps([
-                _requirement_prompt_record(task, evidence_packet, requirement_ids_by_evidence or {})
+                _requirement_prompt_record(task, evidence_packet, requirement_ids_by_evidence or {}, reference_ids)
                 for task in tasks
             ], ensure_ascii=False)
         )))
     packet = []
     for item in evidence_packet:
         source = {
-            "id": item.id,
+            "id": reference_ids.get(item.id, item.id),
             "source_type": item.snapshot.source_type,
             "title": item.snapshot.title,
             "snapshot_id": item.snapshot.snapshot_id,

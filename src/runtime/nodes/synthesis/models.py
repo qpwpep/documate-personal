@@ -39,6 +39,7 @@ class PreparedSynthesisInputs:
     history_before: int
     history_after: int
     evidence_requirement_map: dict[str, list[str]] = field(default_factory=dict)
+    reference_aliases: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(slots=True)

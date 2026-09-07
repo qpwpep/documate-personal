@@ -73,6 +73,7 @@ def prepare_synthesis_inputs(
         query=context.user_input,
         requirements_by_evidence={key: list(tasks.values()) for key, tasks in requirements_by_evidence.items()},
     )
+    reference_aliases = {f"e{index}": source.id for index, source in enumerate(packet, 1)}
     messages, before, after = build_synthesis_messages(
         state=state,
         action_rules=_build_action_rules(user_input=context.user_input, slack_target_available=context.slack_target_available),
@@ -80,11 +81,13 @@ def prepare_synthesis_inputs(
         attempt=context.attempt,
         max_turns=max_turns,
         requirement_ids_by_evidence=requirement_ids,
+        reference_aliases=reference_aliases,
     )
     return PreparedSynthesisInputs(
         attempt=context.attempt, user_input=context.user_input, budget_profile=budget_profile,
         parse_errors=context.parse_errors, planner_parse_errors=context.planner_parse_errors,
         retrieval_required=context.retrieval_required, evidence_packet=packet,
         evidence_requirement_map=requirement_ids,
+        reference_aliases=reference_aliases,
         model_messages=messages, history_before=before, history_after=after,
     )

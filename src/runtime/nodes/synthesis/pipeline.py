@@ -3,7 +3,7 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from src.core.answer_schema import AnswerResponse, finalize_answer
+from src.core.answer_schema import AnswerResponse, finalize_answer, iter_content_units
 from src.core.contracts.debug import build_llm_call_metadata
 from src.core.latency import elapsed_ms, make_stage_latency_event, make_synthesis_attempt_latency_event
 from src.runtime.nodes.synthesis.fallbacks import build_synthesis_fallback
@@ -31,6 +31,10 @@ def _invoke_structured_attempt(
     document = coerce_answer_document(parsed)
     if not document.blocks:
         raise ValueError("structured output was empty")
+    if prepared.reference_aliases:
+        document = document.model_copy(deep=True)
+        for _path, unit in iter_content_units(document):
+            unit.refs = [prepared.reference_aliases.get(reference, reference) for reference in unit.refs]
     return finalize_answer(document, prepared.evidence_packet, retrieval_required=prepared.retrieval_required)
 
 

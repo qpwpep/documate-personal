@@ -2,7 +2,7 @@ import json
 
 from langchain_core.messages import AIMessage, HumanMessage
 
-from src.core.answer_schema import export_answer_text, iter_content_units, text_document
+from src.core.answer_schema import export_answer_text, finalize_answer, iter_content_units, text_document
 from src.core.contracts import PlannerState, RetrievalState, DebugState, RetrievalDiagnostic
 from src.core.contracts.boundary.graph import build_graph_state_input
 from src.core.documents import DocumentElement, SourceAnchor, build_snapshot
