@@ -1,5 +1,5 @@
+from tests.eval.response_fixtures import sse_http_response
 from tests.eval.response_fixtures import plain_response
-import json
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -9,16 +9,6 @@ from src.eval.judge_llm import LLMJudge
 from src.eval.online_runner import _run_single_case
 from src.eval.reporting import build_markdown_report
 from src.eval.summary_models import GateResult, RunSummary, SummaryStats
-
-
-class _FakeResponse:
-    def __init__(self, status_code: int, payload: dict):
-        self.status_code = status_code
-        self._payload = payload
-        self.text = json.dumps(payload, ensure_ascii=False)
-
-    def json(self) -> dict:
-        return self._payload
 
 
 def _debug_payload(**overrides):
@@ -47,7 +37,7 @@ def _debug_payload(**overrides):
 class LatencyBreakdownReportingTest(unittest.TestCase):
     @patch("src.eval.online_runner.case_runner.requests.post")
     def test_run_single_case_parses_latency_breakdown(self, mock_post) -> None:
-        mock_post.return_value = _FakeResponse(
+        mock_post.return_value = sse_http_response(
             200,
             {
                 "response": plain_response('done'),
@@ -205,7 +195,7 @@ class LatencyBreakdownReportingTest(unittest.TestCase):
 
     @patch("src.eval.online_runner.case_runner.requests.post")
     def test_run_single_case_computes_model_specific_cost_from_llm_calls(self, mock_post) -> None:
-        mock_post.return_value = _FakeResponse(
+        mock_post.return_value = sse_http_response(
             200,
             {
                 "response": plain_response('done'),

@@ -1,6 +1,6 @@
+from tests.eval.response_fixtures import sse_http_response
 from src.core.contracts.debug import DEBUG_SCHEMA_VERSION
 from tests.eval.response_fixtures import plain_response
-import json
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -18,16 +18,6 @@ from src.infra.settings import (
     load_benchmark_cli_env_settings,
     load_benchmark_env_defaults,
 )
-
-
-class _FakeResponse:
-    def __init__(self, status_code: int, payload: dict):
-        self.status_code = status_code
-        self._payload = payload
-        self.text = json.dumps(payload, ensure_ascii=False)
-
-    def json(self) -> dict:
-        return self._payload
 
 
 class BenchmarkCLIEnvResolutionTest(unittest.TestCase):
@@ -222,7 +212,7 @@ class BenchmarkCLIEnvResolutionTest(unittest.TestCase):
                 slack_channel_id="C123BENCH",
             )
         ]
-        mock_post.return_value = _FakeResponse(
+        mock_post.return_value = sse_http_response(
             200,
             {
                 "response": {**plain_response('shared'), "actions": [{'kind': 'slack_notify', 'status': 'success', 'target': 'CENVLIVE', 'message': None, 'error': None}]},

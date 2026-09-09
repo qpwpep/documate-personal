@@ -170,7 +170,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser_generate.add_argument("--random-seed", type=int, default=42, help="Random seed")
     parser_generate.set_defaults(func=command_generate)
 
-    parser_run = subparsers.add_parser("run", help="Run online benchmark against FastAPI /agent")
+    parser_run = subparsers.add_parser("run", help="Run online benchmark against FastAPI /agent/stream (SSE)")
     parser_run.add_argument("--mode", choices=["online"], required=True, help="Execution mode")
     parser_run.add_argument(
         "--fixtures",

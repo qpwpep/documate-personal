@@ -1,6 +1,45 @@
+import io
+import json
+from collections.abc import Iterable
+
+import requests
+
 from src.core.answer_schema import AnswerDocument, finalize_answer, text_document
 from src.core.documents import DocumentElement, SourceAnchor, build_snapshot
 from src.core.evidence import RetrievalScore, SearchHit, build_evidence
+
+
+def sse_frame(event: str, data: dict) -> bytes:
+    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n".encode("utf-8")
+
+
+def sse_http_response(
+    status_code: int,
+    payload: dict | None = None,
+    *,
+    chunks: Iterable[bytes] | None = None,
+    headers: dict[str, str] | None = None,
+) -> requests.Response:
+    """Supply a real requests response at the HTTP boundary with an SSE body."""
+    response = requests.Response()
+    response.status_code = status_code
+    response.headers.update({"content-type": "text/event-stream; charset=utf-8"})
+    response.headers.update(headers or {})
+    if status_code != 200:
+        response.headers["content-type"] = "application/json"
+        response._content = json.dumps(payload or {}, ensure_ascii=False).encode("utf-8")
+        response._content_consumed = True
+        return response
+
+    class StreamBody(io.BytesIO):
+        def stream(self, chunk_size, decode_content=True):
+            yield from chunks if chunks is not None else (
+                sse_frame("final_response", payload or {}),
+                sse_frame("done", {}),
+            )
+
+    response.raw = StreamBody()
+    return response
 
 
 def plain_response(text: str | list[str]) -> dict:

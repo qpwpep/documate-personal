@@ -1,7 +1,7 @@
+from tests.eval.response_fixtures import sse_http_response
 from src.core.contracts.debug import DEBUG_SCHEMA_VERSION
 from tests.eval.response_fixtures import source_hit
 from tests.eval.response_fixtures import comparison_response, plain_response
-import json
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -10,16 +10,6 @@ from unittest.mock import patch
 from src.eval.config_models import BenchmarkCase, BenchmarkConfig, BenchmarkLiveSlackConfig
 from src.eval.judge_llm import LLMJudge
 from src.eval.online_runner import _run_single_case, run_online_benchmark
-
-
-class _FakeResponse:
-    def __init__(self, status_code: int, payload: dict):
-        self.status_code = status_code
-        self._payload = payload
-        self.text = json.dumps(payload, ensure_ascii=False)
-
-    def json(self) -> dict:
-        return self._payload
 
 
 class _CaptureJudge(LLMJudge):
@@ -35,7 +25,7 @@ class _CaptureJudge(LLMJudge):
 class RunnerRequestPayloadTest(unittest.TestCase):
     @patch("src.eval.online_runner.case_runner.requests.post")
     def test_slack_destination_fields_are_forwarded(self, mock_post) -> None:
-        mock_post.return_value = _FakeResponse(
+        mock_post.return_value = sse_http_response(
             200,
             {
                 "response": plain_response('shared'),
@@ -88,7 +78,7 @@ class RunnerRequestPayloadTest(unittest.TestCase):
 
     @patch("src.eval.online_runner.case_runner.requests.post")
     def test_live_slack_channel_cases_use_live_channel_destination(self, mock_post) -> None:
-        mock_post.return_value = _FakeResponse(
+        mock_post.return_value = sse_http_response(
             200,
             {
                 "response": plain_response('shared'),
@@ -140,7 +130,7 @@ class RunnerRequestPayloadTest(unittest.TestCase):
 
     @patch("src.eval.online_runner.case_runner.requests.post")
     def test_live_slack_dm_cases_use_live_dm_destination(self, mock_post) -> None:
-        mock_post.return_value = _FakeResponse(
+        mock_post.return_value = sse_http_response(
             200,
             {
                 "response": plain_response('shared'),
@@ -192,7 +182,7 @@ class RunnerRequestPayloadTest(unittest.TestCase):
 
     @patch("src.eval.online_runner.case_runner.requests.post")
     def test_actions_are_parsed_from_public_response(self, mock_post) -> None:
-        mock_post.return_value = _FakeResponse(
+        mock_post.return_value = sse_http_response(
             200,
             {
                 "response": {**plain_response('shared'), "actions": [{'kind': 'slack_notify', 'status': 'success', 'target': 'C999LIVE', 'message': None, 'error': None}]},
@@ -267,7 +257,7 @@ class RunnerRequestPayloadTest(unittest.TestCase):
 
     @patch("src.eval.online_runner.case_runner.requests.post")
     def test_planner_errors_are_parsed_from_debug_payload(self, mock_post) -> None:
-        mock_post.return_value = _FakeResponse(
+        mock_post.return_value = sse_http_response(
             200,
             {
                 "response": plain_response('shared'),
@@ -315,7 +305,7 @@ class RunnerRequestPayloadTest(unittest.TestCase):
 
     @patch("src.eval.online_runner.case_runner.requests.post")
     def test_judge_payload_includes_structured_fields(self, mock_post) -> None:
-        mock_post.return_value = _FakeResponse(
+        mock_post.return_value = sse_http_response(
             200,
             {
                 "response": comparison_response(),
@@ -406,7 +396,7 @@ class RunnerRequestPayloadTest(unittest.TestCase):
 
     @patch("src.eval.online_runner.case_runner.requests.post")
     def test_judge_payload_includes_public_actions_for_live_slack_cases(self, mock_post) -> None:
-        mock_post.return_value = _FakeResponse(
+        mock_post.return_value = sse_http_response(
             200,
             {
                 "response": {**plain_response('shared'), "actions": [{'kind': 'slack_notify', 'status': 'error', 'target': 'C999LIVE', 'message': None, 'error': 'channel_not_found'}]},

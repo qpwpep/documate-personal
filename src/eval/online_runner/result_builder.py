@@ -272,6 +272,7 @@ def build_case_result(
         http_status=parsed_response.http_status,
         response_text=parsed_response.response_text,
         response=response,
+        debug=parsed_response.debug,
         observed_hits=parsed_response.observed_hits,
         retrieval_diagnostics=parsed_response.retrieval_diagnostics,
         planner_diagnostics=parsed_response.planner_diagnostics,

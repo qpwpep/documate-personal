@@ -1,8 +1,5 @@
 from src.core.answer_schema import AnswerResponse
-import json
 import unittest
-
-import requests
 
 from src.core.answer_schema import AnswerDocument, AnswerResponse, finalize_answer, text_document
 from src.core.evidence import SearchHit, RetrievalScore
@@ -46,13 +43,10 @@ class CitationStructuredScoringTest(unittest.TestCase):
         """Tampered selection metadata cannot pass by retaining a valid reference ID."""
         changed = self.official.model_copy(update={"selection": self.official.selection.model_copy(update={"end": 1})})
         changed_hit = self.hits[0].model_copy(update={"evidence": changed})
-        http_response = requests.Response()
-        http_response.status_code = 200
-        http_response._content = json.dumps({
+        parsed = parse_agent_response({
             "response": self.response.model_dump(mode="json"),
             "debug": DebugPayload(observed_hits=[changed_hit.model_dump(mode="json"), self.hits[1].model_dump(mode="json")]).model_dump(mode="json"),
-        }).encode("utf-8")
-        parsed = parse_agent_response(http_response)
+        })
         self.assertTrue(any("debug.observed_hits[0] invalid" in error for error in parsed.response_errors))
         self.assertEqual(self.score(hits=parsed.observed_hits), 0.5)
 

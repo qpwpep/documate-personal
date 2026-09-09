@@ -1,3 +1,4 @@
+from tests.eval.response_fixtures import sse_http_response
 from src.core.contracts.debug import DEBUG_SCHEMA_VERSION
 from src.core.answer_schema import AnswerResponse
 from tests.eval.response_fixtures import plain_response
@@ -16,16 +17,6 @@ from src.eval.online_runner.response_parser import ParsedResponseData
 from src.eval.online_runner.result_builder import build_case_result
 from src.eval.reporting.histograms import build_analysis
 from src.eval.result_models import JudgeSubscores
-
-
-class _FakeResponse:
-    def __init__(self, status_code: int, payload: dict):
-        self.status_code = status_code
-        self._payload = payload
-        self.text = json.dumps(payload, ensure_ascii=False)
-
-    def json(self) -> dict:
-        return self._payload
 
 
 class _DummyJudge(LLMJudge):
@@ -96,7 +87,7 @@ class RunnerErrorBucketsTest(unittest.TestCase):
 
     @patch("src.eval.online_runner.case_runner.requests.post")
     def test_contract_error_goes_to_response_errors(self, mock_post) -> None:
-        mock_post.return_value = _FakeResponse(
+        mock_post.return_value = sse_http_response(
             200,
             {
                 "response": "legacy string response",
@@ -135,7 +126,7 @@ class RunnerErrorBucketsTest(unittest.TestCase):
 
     @patch("src.eval.online_runner.case_runner.requests.post")
     def test_judge_error_goes_to_judge_errors(self, mock_post) -> None:
-        mock_post.return_value = _FakeResponse(
+        mock_post.return_value = sse_http_response(
             200,
             {
                 "response": plain_response('ok'),
@@ -175,7 +166,7 @@ class RunnerErrorBucketsTest(unittest.TestCase):
 
     @patch("src.eval.online_runner.case_runner.requests.post")
     def test_runner_preserves_retrieval_diagnostic_statuses(self, mock_post) -> None:
-        mock_post.return_value = _FakeResponse(
+        mock_post.return_value = sse_http_response(
             200,
             {
                 "response": plain_response('ok'),
@@ -255,7 +246,7 @@ class RunnerErrorBucketsTest(unittest.TestCase):
 
     @patch("src.eval.online_runner.case_runner.requests.post")
     def test_runner_parses_validator_reason_from_retry_context(self, mock_post) -> None:
-        mock_post.return_value = _FakeResponse(
+        mock_post.return_value = sse_http_response(
             200,
             {
                 "response": plain_response('need more evidence'),
@@ -304,7 +295,7 @@ class RunnerErrorBucketsTest(unittest.TestCase):
 
     @patch("src.eval.online_runner.case_runner.requests.post")
     def test_runner_marks_missing_critical_debug_fields_as_response_error(self, mock_post) -> None:
-        mock_post.return_value = _FakeResponse(
+        mock_post.return_value = sse_http_response(
             200,
             {
                 "response": plain_response('ok'),
@@ -331,7 +322,7 @@ class RunnerErrorBucketsTest(unittest.TestCase):
 
     @patch("src.eval.online_runner.case_runner.requests.post")
     def test_runner_applies_docs_judge_min_score_gate(self, mock_post) -> None:
-        mock_post.return_value = _FakeResponse(
+        mock_post.return_value = sse_http_response(
             200,
             {
                 "response": plain_response('ok'),
@@ -390,7 +381,7 @@ class RunnerErrorBucketsTest(unittest.TestCase):
 
     @patch("src.eval.online_runner.case_runner.requests.post")
     def test_runner_parses_standard_error_codes_and_output_shape_metrics(self, mock_post) -> None:
-        mock_post.return_value = _FakeResponse(
+        mock_post.return_value = sse_http_response(
             200,
             {
                 "response": plain_response(['ok', 'same']),

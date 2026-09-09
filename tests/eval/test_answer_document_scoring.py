@@ -1,7 +1,4 @@
-import json
 import unittest
-
-import requests
 
 from src.core.answer_schema import ActionReceipt, AnswerDocument, export_answer_text, finalize_answer, text_document
 from src.core.contracts.debug import DebugPayload
@@ -39,7 +36,7 @@ class AnswerDocumentScoringTest(unittest.TestCase):
             "content": {"text": "def run():\n    return 3\n", "basis": "example", "refs": []},
         }]})
         response = finalize_answer(content, [], actions=[ActionReceipt(kind="save_text", status="success", file_path="output/result.txt")])
-        parsed = parse_agent_response(self.http_response(response.model_dump(mode="json")))
+        parsed = parse_agent_response(self.final_response_data(response.model_dump(mode="json")))
         self.assertEqual(parsed.response_errors, [])
         self.assertEqual(parsed.response, response)
         self.assertEqual(parsed.response_text, export_answer_text(response))
@@ -48,13 +45,10 @@ class AnswerDocumentScoringTest(unittest.TestCase):
 
     def test_parser_rejects_the_retired_answer_schema(self) -> None:
         """A legacy answer payload fails explicitly instead of silently losing its body."""
-        parsed = parse_agent_response(self.http_response({"answer": "old body", "claims": [], "evidence": []}))
+        parsed = parse_agent_response(self.final_response_data({"answer": "old body", "claims": [], "evidence": []}))
         self.assertIsNone(parsed.response)
         self.assertTrue(any("response invalid" in error for error in parsed.response_errors))
 
     @staticmethod
-    def http_response(payload: dict) -> requests.Response:
-        response = requests.Response()
-        response.status_code = 200
-        response._content = json.dumps({"response": payload, "debug": DebugPayload().model_dump(mode="json")}).encode("utf-8")
-        return response
+    def final_response_data(payload: dict) -> dict:
+        return {"response": payload, "debug": DebugPayload().model_dump(mode="json")}
