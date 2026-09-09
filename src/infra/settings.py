@@ -17,7 +17,11 @@ from src.infra.runtime_paths import get_benchmark_config_path, get_env_file_path
 
 DEFAULT_BENCHMARK_CONFIG_PATH = get_benchmark_config_path()
 ReasoningEffort = Literal["none", "minimal", "low", "medium", "high", "xhigh", "max"]
-EnvExampleGroup = Literal["required_secrets", "application_settings", "slack"]
+EnvExampleGroup = Literal[
+    "required_secrets", "models", "planning_summary", "synthesis", "search",
+    "application_settings", "sessions", "files", "memory", "slack",
+    "benchmark", "benchmark_slack",
+]
 
 
 @dataclass(frozen=True)
@@ -48,23 +52,24 @@ APP_ENV_SPECS = (
         "공식 문서 검색에 필요",
         example_group="required_secrets",
     ),
-    EnvVarSpec("CHAT_MODEL", "chat_model", "gpt-5.6-luna", "synthesis 모델 기본값", example="gpt-5.6-luna"),
-    EnvVarSpec("PLANNER_MODEL", "planner_model", "gpt-5.6-luna", "planner 모델 기본값", example="gpt-5.6-luna"),
-    EnvVarSpec("SUMMARY_MODEL", "summary_model", "gpt-5.6-luna", "session summary 모델 기본값", example="gpt-5.6-luna"),
-    EnvVarSpec("SUMMARY_MAX_TOKENS", "summary_max_tokens", 1024, "요약 LLM 생성 토큰 상한; 저장 요약 예산과 독립", example=1024),
-    EnvVarSpec("PLANNER_MAX_TOKENS", "planner_max_tokens", 1920, "planner structured output 최대 토큰", example=1920),
-    EnvVarSpec("DOCS_SEARCH_TIMEOUT_SECONDS", "docs_search_timeout_seconds", 5, "Tavily 요청별 timeout", example=5),
-    EnvVarSpec("SYNTHESIS_TIMEOUT_SECONDS", "synthesis_timeout_seconds", 20, "synthesis provider 요청 timeout", example=20),
-    EnvVarSpec("SYNTHESIS_USE_RESPONSES_API", "synthesis_use_responses_api", False, "synthesis Responses API 사용 여부", example=False),
-    EnvVarSpec("SYNTHESIS_MAX_RETRIES", "synthesis_max_retries", 0, "synthesis provider SDK 재시도 횟수", example=0),
-    EnvVarSpec("SYNTHESIS_MAX_TOKENS", "synthesis_max_tokens", 4096, "일반 synthesis 생성 토큰 상한", example=4096),
-    EnvVarSpec("SYNTHESIS_COMPACT_MAX_TOKENS", "synthesis_compact_max_tokens", 960, "timeout 복구용 synthesis 생성 토큰 상한; 일반 상한과 독립", example=960),
+    EnvVarSpec("CHAT_MODEL", "chat_model", "gpt-5.6-luna", "synthesis 모델 기본값", example="gpt-5.6-luna", example_group="models"),
+    EnvVarSpec("PLANNER_MODEL", "planner_model", "gpt-5.6-luna", "planner 모델 기본값", example="gpt-5.6-luna", example_group="models"),
+    EnvVarSpec("SUMMARY_MODEL", "summary_model", "gpt-5.6-luna", "session summary 모델 기본값", example="gpt-5.6-luna", example_group="models"),
+    EnvVarSpec("SUMMARY_MAX_TOKENS", "summary_max_tokens", 1024, "요약 LLM 생성 토큰 상한; 저장 요약 예산과 독립", example=1024, example_group="planning_summary"),
+    EnvVarSpec("PLANNER_MAX_TOKENS", "planner_max_tokens", 1920, "planner structured output 최대 토큰", example=1920, example_group="planning_summary"),
+    EnvVarSpec("DOCS_SEARCH_TIMEOUT_SECONDS", "docs_search_timeout_seconds", 5, "Tavily 요청별 timeout", example=5, example_group="search"),
+    EnvVarSpec("SYNTHESIS_TIMEOUT_SECONDS", "synthesis_timeout_seconds", 20, "synthesis provider 요청 timeout", example=20, example_group="synthesis"),
+    EnvVarSpec("SYNTHESIS_USE_RESPONSES_API", "synthesis_use_responses_api", False, "synthesis Responses API 사용 여부", example=False, example_group="synthesis"),
+    EnvVarSpec("SYNTHESIS_MAX_RETRIES", "synthesis_max_retries", 0, "synthesis provider SDK 재시도 횟수", example=0, example_group="synthesis"),
+    EnvVarSpec("SYNTHESIS_MAX_TOKENS", "synthesis_max_tokens", 4096, "일반 synthesis 생성 토큰 상한", example=4096, example_group="synthesis"),
+    EnvVarSpec("SYNTHESIS_COMPACT_MAX_TOKENS", "synthesis_compact_max_tokens", 960, "timeout 복구용 synthesis 생성 토큰 상한; 일반 상한과 독립", example=960, example_group="synthesis"),
     EnvVarSpec(
         "SYNTHESIS_PROMPT_SNIPPET_CHARS",
         "synthesis_prompt_snippet_chars",
         1800,
         "evidence snippet 길이 제한",
         example=1800,
+        example_group="synthesis",
     ),
     EnvVarSpec(
         "SYNTHESIS_COMPACT_PROMPT_SNIPPET_CHARS",
@@ -72,6 +77,7 @@ APP_ENV_SPECS = (
         900,
         "timeout 복구용 evidence snippet 길이 제한; 일반 설정보다 확대하지 않음",
         example=900,
+        example_group="synthesis",
     ),
     EnvVarSpec(
         "SYNTHESIS_REASONING_EFFORT",
@@ -83,17 +89,19 @@ APP_ENV_SPECS = (
             "gpt-5.6-luna: none, low, medium, high, xhigh, max",
             "gpt-5-nano: minimal, low, medium, high",
         ),
+        example_group="synthesis",
     ),
     EnvVarSpec("VERBOSE", "verbose", True, "에이전트 런타임 상세 로그 출력", example=True),
     EnvVarSpec("FASTAPI_URL", "fastapi_url", "http://127.0.0.1:8000", "Streamlit이 호출하는 API 주소", example="http://127.0.0.1:8000"),
-    EnvVarSpec("SESSION_TTL_SECONDS", "session_ttl_seconds", 1800, "세션 TTL", example=1800),
-    EnvVarSpec("MAX_ACTIVE_SESSIONS", "max_active_sessions", 200, "최대 활성 세션 수", example=200),
+    EnvVarSpec("SESSION_TTL_SECONDS", "session_ttl_seconds", 1800, "세션 TTL", example=1800, example_group="sessions"),
+    EnvVarSpec("MAX_ACTIVE_SESSIONS", "max_active_sessions", 200, "최대 활성 세션 수", example=200, example_group="sessions"),
     EnvVarSpec(
         "SESSION_CLEANUP_INTERVAL_SECONDS",
         "session_cleanup_interval_seconds",
         60,
         "세션 정리 주기",
         example=60,
+        example_group="sessions",
     ),
     EnvVarSpec(
         "GENERATED_FILE_TTL_SECONDS",
@@ -101,6 +109,7 @@ APP_ENV_SPECS = (
         86400,
         "`save_text` 결과 파일 TTL",
         example=86400,
+        example_group="files",
     ),
     EnvVarSpec(
         "FILE_CLEANUP_INTERVAL_SECONDS",
@@ -108,6 +117,7 @@ APP_ENV_SPECS = (
         60,
         "업로드/생성 파일 정리 주기",
         example=60,
+        example_group="files",
     ),
     EnvVarSpec(
         "MEMORY_HIGH_WATER_TURNS",
@@ -115,6 +125,7 @@ APP_ENV_SPECS = (
         8,
         "대화 compaction을 시작하는 Human turn high watermark",
         example=8,
+        example_group="memory",
     ),
     EnvVarSpec(
         "MEMORY_LOW_WATER_TURNS",
@@ -122,6 +133,7 @@ APP_ENV_SPECS = (
         6,
         "compaction 후 Human turn low watermark",
         example=6,
+        example_group="memory",
     ),
     EnvVarSpec(
         "MEMORY_HIGH_WATER_TOKENS",
@@ -129,6 +141,7 @@ APP_ENV_SPECS = (
         32000,
         "대화 메모리 추정 token high watermark",
         example=32000,
+        example_group="memory",
     ),
     EnvVarSpec(
         "MEMORY_LOW_WATER_TOKENS",
@@ -136,6 +149,7 @@ APP_ENV_SPECS = (
         16000,
         "compaction 후 추정 token low watermark",
         example=16000,
+        example_group="memory",
     ),
     EnvVarSpec(
         "MEMORY_HIGH_WATER_BYTES",
@@ -143,6 +157,7 @@ APP_ENV_SPECS = (
         98304,
         "대화 메모리 UTF-8 직렬화 byte high watermark",
         example=98304,
+        example_group="memory",
     ),
     EnvVarSpec(
         "MEMORY_LOW_WATER_BYTES",
@@ -150,6 +165,7 @@ APP_ENV_SPECS = (
         49152,
         "compaction 후 UTF-8 직렬화 byte low watermark",
         example=49152,
+        example_group="memory",
     ),
     EnvVarSpec(
         "MEMORY_HIGH_WATER_MESSAGES",
@@ -157,6 +173,7 @@ APP_ENV_SPECS = (
         18,
         "대화 메시지 수 high watermark",
         example=18,
+        example_group="memory",
     ),
     EnvVarSpec(
         "MEMORY_LOW_WATER_MESSAGES",
@@ -164,6 +181,7 @@ APP_ENV_SPECS = (
         14,
         "compaction 후 메시지 수 low watermark",
         example=14,
+        example_group="memory",
     ),
     EnvVarSpec(
         "MEMORY_SUMMARY_MAX_TOKENS",
@@ -171,6 +189,7 @@ APP_ENV_SPECS = (
         256,
         "저장할 rolling summary의 추정 token 상한; LLM 생성 예산과 독립",
         example=256,
+        example_group="memory",
     ),
     EnvVarSpec(
         "MEMORY_SUMMARY_MAX_BYTES",
@@ -178,6 +197,7 @@ APP_ENV_SPECS = (
         4096,
         "rolling summary UTF-8 byte 상한",
         example=4096,
+        example_group="memory",
     ),
     EnvVarSpec(
         "MEMORY_HARD_MAX_BYTES",
@@ -185,6 +205,7 @@ APP_ENV_SPECS = (
         131072,
         "summary와 최근 메시지를 합친 durable snapshot 절대 byte 상한",
         example=131072,
+        example_group="memory",
     ),
     EnvVarSpec(
         "SLACK_BOT_TOKEN",
@@ -218,6 +239,7 @@ BENCHMARK_ENV_SPECS = (
         example="gpt-5.6-luna",
         section="benchmark",
         config_runtime_key="judge_model",
+        example_group="benchmark",
     ),
     EnvVarSpec(
         "BENCHMARK_ENDPOINT",
@@ -226,6 +248,7 @@ BENCHMARK_ENV_SPECS = (
         "benchmark 대상 FastAPI 주소 override",
         example="http://127.0.0.1:8000",
         section="benchmark",
+        example_group="benchmark",
     ),
     EnvVarSpec(
         "BENCHMARK_JUDGE_ENABLED",
@@ -235,6 +258,7 @@ BENCHMARK_ENV_SPECS = (
         example=True,
         section="benchmark",
         config_runtime_key="judge_enabled",
+        example_group="benchmark",
     ),
     EnvVarSpec(
         "BENCHMARK_SLACK_ENABLED",
@@ -243,6 +267,7 @@ BENCHMARK_ENV_SPECS = (
         "benchmark live Slack 전송 opt-in",
         example=False,
         section="benchmark",
+        example_group="benchmark_slack",
     ),
     EnvVarSpec(
         "BENCHMARK_SLACK_CHANNEL_ID",
@@ -251,6 +276,7 @@ BENCHMARK_ENV_SPECS = (
         "benchmark channel case 전송용 Slack channel id",
         example="C0123456789",
         section="benchmark",
+        example_group="benchmark_slack",
     ),
     EnvVarSpec(
         "BENCHMARK_SLACK_USER_ID",
@@ -259,6 +285,7 @@ BENCHMARK_ENV_SPECS = (
         "benchmark DM case 전송용 Slack user id",
         example="U0123456789",
         section="benchmark",
+        example_group="benchmark_slack",
     ),
     EnvVarSpec(
         "BENCHMARK_SLACK_EMAIL",
@@ -267,6 +294,7 @@ BENCHMARK_ENV_SPECS = (
         "benchmark DM case 전송용 Slack email",
         example="bench@example.com",
         section="benchmark",
+        example_group="benchmark_slack",
     ),
 )
 

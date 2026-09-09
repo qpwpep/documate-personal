@@ -54,10 +54,6 @@ class SettingsSyncTest(unittest.TestCase):
 
         self.assertEqual(len(env_names), len(set(env_names)))
         self.assertEqual(len(field_names), len(set(field_names)))
-        self.assertEqual(
-            {spec.example_group for spec in APP_ENV_SPECS},
-            {"required_secrets", "application_settings", "slack"},
-        )
         for spec in APP_ENV_SPECS:
             assert spec.field_name is not None
             self.assertEqual(
@@ -81,15 +77,44 @@ class SettingsSyncTest(unittest.TestCase):
                 memory_low_water_messages=1,
             )
 
-    def test_generated_memory_settings_stay_in_application_group(self) -> None:
+    def test_generated_settings_are_grouped_by_purpose_without_duplicates(self) -> None:
+        """The generated template puts every variable in exactly one purpose-specific section."""
         env_example = build_env_example_text(DEFAULT_BENCHMARK_CONFIG_PATH)
-        application_index = env_example.index("# Application settings")
-        memory_index = env_example.index("MEMORY_HIGH_WATER_TURNS=8")
-        slack_index = env_example.index("# Slack")
-
-        self.assertLess(application_index, memory_index)
-        self.assertLess(memory_index, slack_index)
-        self.assertEqual(env_example.count("MEMORY_HARD_MAX_BYTES="), 1)
+        expected = {
+            "Required secrets": ["OPENAI_API_KEY", "TAVILY_API_KEY"],
+            "Model selection": ["CHAT_MODEL", "PLANNER_MODEL", "SUMMARY_MODEL"],
+            "Planning and summary generation": ["SUMMARY_MAX_TOKENS", "PLANNER_MAX_TOKENS"],
+            "Answer generation": [
+                "SYNTHESIS_TIMEOUT_SECONDS", "SYNTHESIS_USE_RESPONSES_API", "SYNTHESIS_MAX_RETRIES",
+                "SYNTHESIS_MAX_TOKENS", "SYNTHESIS_COMPACT_MAX_TOKENS", "SYNTHESIS_PROMPT_SNIPPET_CHARS",
+                "SYNTHESIS_COMPACT_PROMPT_SNIPPET_CHARS", "SYNTHESIS_REASONING_EFFORT",
+            ],
+            "Document search": ["DOCS_SEARCH_TIMEOUT_SECONDS"],
+            "Server and logging": ["VERBOSE", "FASTAPI_URL"],
+            "Session lifecycle": ["SESSION_TTL_SECONDS", "MAX_ACTIVE_SESSIONS", "SESSION_CLEANUP_INTERVAL_SECONDS"],
+            "File retention and cleanup": ["GENERATED_FILE_TTL_SECONDS", "FILE_CLEANUP_INTERVAL_SECONDS"],
+            "Conversation memory": [
+                "MEMORY_HIGH_WATER_TURNS", "MEMORY_LOW_WATER_TURNS", "MEMORY_HIGH_WATER_TOKENS",
+                "MEMORY_LOW_WATER_TOKENS", "MEMORY_HIGH_WATER_BYTES", "MEMORY_LOW_WATER_BYTES",
+                "MEMORY_HIGH_WATER_MESSAGES", "MEMORY_LOW_WATER_MESSAGES", "MEMORY_SUMMARY_MAX_TOKENS",
+                "MEMORY_SUMMARY_MAX_BYTES", "MEMORY_HARD_MAX_BYTES",
+            ],
+            "Slack delivery": ["SLACK_BOT_TOKEN", "SLACK_DEFAULT_DM_EMAIL", "SLACK_DEFAULT_USER_ID"],
+            "Benchmark / Eval overrides": ["JUDGE_MODEL", "BENCHMARK_ENDPOINT", "BENCHMARK_JUDGE_ENABLED"],
+            "Benchmark Slack delivery": [
+                "BENCHMARK_SLACK_ENABLED", "BENCHMARK_SLACK_CHANNEL_ID", "BENCHMARK_SLACK_USER_ID", "BENCHMARK_SLACK_EMAIL",
+            ],
+        }
+        actual: dict[str, list[str]] = {}
+        section = ""
+        for line in env_example.splitlines():
+            if line.removeprefix("# ") in expected:
+                section = line.removeprefix("# ")
+                self.assertNotIn(section, actual)
+                actual[section] = []
+            elif line and not line.startswith("#"):
+                actual.setdefault(section, []).append(line.split("=", 1)[0])
+        self.assertEqual(actual, expected)
 
 
 if __name__ == "__main__":
