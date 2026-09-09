@@ -84,13 +84,16 @@ Windows 환경에서는 `-X utf8` 또는 `PYTHONUTF8=1` 사용을 권장합니�
 | `CHAT_MODEL` | `gpt-5.4-nano` | synthesis 모델 기본값 |
 | `PLANNER_MODEL` | `gpt-5.4-nano` | planner 모델 기본값 |
 | `SUMMARY_MODEL` | `gpt-5.4-nano` | session summary 모델 기본값 |
+| `SUMMARY_MAX_TOKENS` | `1024` | 요약 LLM 생성 토큰 상한; 저장 요약 예산과 독립 |
 | `PLANNER_MAX_TOKENS` | `1920` | planner structured output 최대 토큰 |
 | `DOCS_SEARCH_TIMEOUT_SECONDS` | `5` | Tavily 요청별 timeout |
 | `SYNTHESIS_TIMEOUT_SECONDS` | `20` | synthesis provider 요청 timeout |
 | `SYNTHESIS_USE_RESPONSES_API` | `false` | synthesis Responses API 사용 여부 |
 | `SYNTHESIS_MAX_RETRIES` | `0` | synthesis provider SDK 재시도 횟수 |
-| `SYNTHESIS_MAX_TOKENS` | `1920` | synthesis max tokens |
-| `SYNTHESIS_PROMPT_SNIPPET_CHARS` | `960` | evidence snippet 길이 제한 |
+| `SYNTHESIS_MAX_TOKENS` | `4096` | 일반 synthesis 생성 토큰 상한 |
+| `SYNTHESIS_COMPACT_MAX_TOKENS` | `960` | timeout 복구용 synthesis 생성 토큰 상한; 일반 상한과 독립 |
+| `SYNTHESIS_PROMPT_SNIPPET_CHARS` | `1800` | evidence snippet 길이 제한 |
+| `SYNTHESIS_COMPACT_PROMPT_SNIPPET_CHARS` | `900` | timeout 복구용 evidence snippet 길이 제한; 일반 설정보다 확대하지 않음 |
 | `SYNTHESIS_REASONING_EFFORT` | 없음 | synthesis reasoning effort override (none/minimal/low/medium/high/xhigh, 빈 값이면 모델 기본값, none은 명시 override) |
 | `VERBOSE` | `true` | 에이전트 런타임 상세 로그 출력 |
 | `FASTAPI_URL` | `http://127.0.0.1:8000` | Streamlit이 호출하는 API 주소 |
@@ -107,7 +110,7 @@ Windows 환경에서는 `-X utf8` 또는 `PYTHONUTF8=1` 사용을 권장합니�
 | `MEMORY_LOW_WATER_BYTES` | `49152` | compaction 후 UTF-8 직렬화 byte low watermark |
 | `MEMORY_HIGH_WATER_MESSAGES` | `18` | 대화 메시지 수 high watermark |
 | `MEMORY_LOW_WATER_MESSAGES` | `14` | compaction 후 메시지 수 low watermark |
-| `MEMORY_SUMMARY_MAX_TOKENS` | `256` | rolling summary 출력·저장 추정 token 상한 |
+| `MEMORY_SUMMARY_MAX_TOKENS` | `256` | 저장할 rolling summary의 추정 token 상한; LLM 생성 예산과 독립 |
 | `MEMORY_SUMMARY_MAX_BYTES` | `4096` | rolling summary UTF-8 byte 상한 |
 | `MEMORY_HARD_MAX_BYTES` | `131072` | summary와 최근 메시지를 합친 durable snapshot 절대 byte 상한 |
 | `SLACK_BOT_TOKEN` | 없음 | Slack 전송용 토큰 |
@@ -204,7 +207,9 @@ docs 도구는 task의 `k`를 Tavily `max_results`와 반환 evidence 한도에 
 
 업로드의 `ChunkedDocument`는 `ParsedDocument` 원문 구조를 한 번 보관하고 검색용 chunk를 만듭니다. Chroma에는 chunk 텍스트와 snapshot·element·선택 범위 참조만 넣으며, vector 검색 결과는 `hydrate()`로 당시 원문을 가진 `EvidenceRef`로 복원합니다. 심볼 조회는 같은 registry에서 정확한 원문 범위를 선택합니다. 이 원문 보관은 현재 세션의 retriever가 소유하는 process-local 상태입니다. cleanup은 인덱스와 보관 상태를 해제하지만 이미 응답에 포함한 원문 근거는 유지됩니다.
 
-synthesis는 요구별 후보를 먼저 배분하고, 문자·항목 예산 안에서 관련 문단·문장·코드 범위를 선택합니다. 실제 모델에 보낸 범위만 evidence packet에 남기며, 범위가 달라지면 새 evidence ID를 사용합니다. 내부 `ResponseState.evidence_requirement_map`은 이 ID와 원래 requirement ID의 연결을 보존합니다. 모델 입출력에서만 `e1`, `e2` 같은 짧은 별칭을 사용하고, 서버가 참조 필드를 원래 ID로 복원한 뒤 검증합니다. 일반·compact 입력은 각자의 매핑을 사용하며 알 수 없는 별칭은 검증을 통과하지 못합니다. 최종 인용의 ID·원문·hash·offset은 이 별칭 때문에 바뀌지 않습니다. 모델 입력에는 선택 범위의 `is_partial`, `capture_scope`와 요구별 남은 aspect·빠진 aspect를 함께 전달합니다. 이 map은 검색 유래를 나타내며, 참조를 붙였다는 사실만으로 설명의 의미적 충분함을 증명하지 않습니다.
+synthesis는 planner와 공유하는 `MAX_PLANNER_TASKS`에 맞춰 최대 8개 근거를 선택합니다. 일반 excerpt 합계는 6,000자, docs+upload 혼합은 8,000자이며 compact는 각각 3,000자와 4,000자입니다. 일반 snippet은 `SYNTHESIS_PROMPT_SNIPPET_CHARS`, compact는 일반 설정과 `SYNTHESIS_COMPACT_PROMPT_SNIPPET_CHARS` 중 작은 값을 사용합니다. 별도의 숨은 1,800자 ceiling은 없습니다. 요구별 후보에 예산을 먼저 배분하므로 실제 선택은 개별 상한보다 짧을 수 있으며, 최대 8개를 허용해도 문자 예산 때문에 모든 요구가 충족된다는 보장은 없습니다. 표는 개별 snippet 대신 배정된 문자 예산 안에 전체 excerpt가 들어가는지 검사합니다. 이 예산은 excerpt만 계산하며 system prompt, 대화, JSON 메타데이터와 별도 표 셀 직렬화를 포함한 전체 입력 토큰 한도는 아닙니다.
+
+실제 모델에 보낸 범위만 evidence packet에 남기며, 범위가 달라지면 새 evidence ID를 사용합니다. 내부 `ResponseState.evidence_requirement_map`은 이 ID와 원래 requirement ID의 연결을 보존합니다. 모델 입출력에서만 `e1`, `e2` 같은 짧은 별칭을 사용하고, 서버가 참조 필드를 원래 ID로 복원한 뒤 검증합니다. 일반·compact 입력은 각자의 매핑을 사용하며 알 수 없는 별칭은 검증을 통과하지 못합니다. 최종 인용의 ID·원문·hash·offset은 이 별칭 때문에 바뀌지 않습니다. 모델 입력에는 선택 범위의 `is_partial`, `capture_scope`와 요구별 남은 aspect·빠진 aspect를 함께 전달합니다. 이 map은 검색 유래를 나타내며, 참조를 붙였다는 사실만으로 설명의 의미적 충분함을 증명하지 않습니다.
 
 현재 구현은 인용한 원문 요소를 응답에 포함해 파일 교체·삭제 후에도 당시 근거를 보여줍니다. 원본 파일 bytes의 영구 보관소나 별도 문서 조회 API는 제공하지 않습니다. Docling 설치·변환, PDF 입력, 페이지 이미지 강조 표시는 후속 범위입니다. 향후 adapter가 `ParsedDocument`를 만들면 제목 계층·표·페이지·위치 정보를 기존 핵심 모델로 전달할 수 있습니다.
 
@@ -237,6 +242,8 @@ LangGraph의 `messages`는 `add_messages` reducer이므로 요약 노드는 최�
 ```
 
 기존 summary 뒤에 새 문자열을 append하지 않습니다. ToolMessage와 SystemMessage는 summary transcript에서 제외합니다. summary LLM의 예외 또는 빈 출력에는 기존 memory의 앞부분과 새로 퇴출된 최근 문맥의 뒷부분을 함께 보존하는 deterministic bounded fallback을 사용합니다.
+
+`SUMMARY_MAX_TOKENS`는 요약 LLM의 생성 예산이고 `MEMORY_SUMMARY_MAX_TOKENS`와 `MEMORY_SUMMARY_MAX_BYTES`는 저장 예산입니다. 생성 예산 기본값 1,024는 조정 시작값이며 저장 예산과 독립적입니다. 저장 본문은 `min(MEMORY_SUMMARY_MAX_BYTES, MEMORY_SUMMARY_MAX_TOKENS × 3)`에 맞추므로 기본 256 추정 토큰·4,096바이트 설정의 실효 본문 예산은 768 UTF-8 바이트입니다. durable 저장 전에는 JSON escaping 크기도 검사합니다. 생성 예산을 늘려도 저장 길이나 전체 메모리 high/low·hard 한도는 바뀌지 않습니다. 요약에 넣는 퇴출 transcript는 `MEMORY_LOW_WATER_BYTES`로 별도 제한하며, 기존 요약과 system prompt는 그 뒤에 추가됩니다.
 
 ### 4.2 요청 종료 시 durable projection과 commit
 
@@ -441,7 +448,8 @@ Streamlit은 `AnswerResponse` 전체를 채팅 기록에 보존합니다. 본문
 - `src.app.service_manager`는 FastAPI와 Streamlit을 함께 띄우고 종료합니다.
 - `src.app.web.session_store`는 세션별 단일 요청 직렬화 lock을 사용합니다.
 - planner 구조화 요청은 OpenAI client의 요청별 30초 timeout과 최대 2회 SDK 재시도를 사용합니다. 이 값은 stage 전체 deadline이 아니므로 재시도와 SDK backoff를 포함한 총 실행 시간은 30초를 넘을 수 있습니다.
-- synthesis 구조화 요청은 요청별 `SYNTHESIS_TIMEOUT_SECONDS`와 `SYNTHESIS_MAX_RETRIES`를 사용합니다. 재시도를 허용하면 primary synthesis의 총 실행 시간은 설정된 요청별 timeout을 넘을 수 있으며, compact fallback은 절반의 token·timeout budget과 SDK 재시도 0회를 사용합니다.
+- 출력 토큰 한도는 `src/infra/llm.py`의 LLM 생성부에서만 적용합니다. planner는 `PLANNER_MAX_TOKENS`, 일반 synthesis는 `SYNTHESIS_MAX_TOKENS`, compact는 독립된 `SYNTHESIS_COMPACT_MAX_TOKENS`, 요약 생성은 `SUMMARY_MAX_TOKENS`를 사용합니다. synthesis 노드는 입력 예산만 관리하며 출력 cap을 다시 bind하지 않습니다. 설치된 SDK는 Chat Completions의 `max_completion_tokens`, Responses의 `max_output_tokens`로 전달합니다. 생성 한도에는 reasoning과 구조화 JSON도 포함되며 요청·세션 전체의 누적 사용량 상한은 아닙니다.
+- synthesis 구조화 요청은 요청별 `SYNTHESIS_TIMEOUT_SECONDS`와 `SYNTHESIS_MAX_RETRIES`를 사용합니다. 재시도를 허용하면 primary synthesis의 총 실행 시간은 설정된 요청별 timeout을 넘을 수 있습니다. timeout에만 시도하는 compact fallback은 독립 출력 cap, 일반의 절반인 요청별 timeout, SDK 재시도 0회를 사용합니다. 일반 출력 cap을 올려도 compact 출력 cap은 늘지 않습니다.
 - startup의 `fastapi_runtime_settings` 로그에는 모델, Docs/Synthesis timeout, Synthesis SDK retry, memory high/low/hard policy가 포함됩니다.
 - agent request 로그는 query 원문 대신 문자 수, UTF-8 byte 수, SHA-256 hash만 기록합니다.
 - benchmark run 산출물과 `latest_release_run.txt`, `latest_smoke_run.txt` 포인터는 Git으로 추적하지 않는 `output/benchmarks/` 아래에 로컬로 유지합니다.

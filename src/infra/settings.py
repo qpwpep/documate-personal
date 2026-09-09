@@ -51,18 +51,27 @@ APP_ENV_SPECS = (
     EnvVarSpec("CHAT_MODEL", "chat_model", "gpt-5.4-nano", "synthesis 모델 기본값", example="gpt-5.4-nano"),
     EnvVarSpec("PLANNER_MODEL", "planner_model", "gpt-5.4-nano", "planner 모델 기본값", example="gpt-5.4-nano"),
     EnvVarSpec("SUMMARY_MODEL", "summary_model", "gpt-5.4-nano", "session summary 모델 기본값", example="gpt-5.4-nano"),
+    EnvVarSpec("SUMMARY_MAX_TOKENS", "summary_max_tokens", 1024, "요약 LLM 생성 토큰 상한; 저장 요약 예산과 독립", example=1024),
     EnvVarSpec("PLANNER_MAX_TOKENS", "planner_max_tokens", 1920, "planner structured output 최대 토큰", example=1920),
     EnvVarSpec("DOCS_SEARCH_TIMEOUT_SECONDS", "docs_search_timeout_seconds", 5, "Tavily 요청별 timeout", example=5),
     EnvVarSpec("SYNTHESIS_TIMEOUT_SECONDS", "synthesis_timeout_seconds", 20, "synthesis provider 요청 timeout", example=20),
     EnvVarSpec("SYNTHESIS_USE_RESPONSES_API", "synthesis_use_responses_api", False, "synthesis Responses API 사용 여부", example=False),
     EnvVarSpec("SYNTHESIS_MAX_RETRIES", "synthesis_max_retries", 0, "synthesis provider SDK 재시도 횟수", example=0),
-    EnvVarSpec("SYNTHESIS_MAX_TOKENS", "synthesis_max_tokens", 1920, "synthesis max tokens", example=1920),
+    EnvVarSpec("SYNTHESIS_MAX_TOKENS", "synthesis_max_tokens", 4096, "일반 synthesis 생성 토큰 상한", example=4096),
+    EnvVarSpec("SYNTHESIS_COMPACT_MAX_TOKENS", "synthesis_compact_max_tokens", 960, "timeout 복구용 synthesis 생성 토큰 상한; 일반 상한과 독립", example=960),
     EnvVarSpec(
         "SYNTHESIS_PROMPT_SNIPPET_CHARS",
         "synthesis_prompt_snippet_chars",
-        960,
+        1800,
         "evidence snippet 길이 제한",
-        example=960,
+        example=1800,
+    ),
+    EnvVarSpec(
+        "SYNTHESIS_COMPACT_PROMPT_SNIPPET_CHARS",
+        "synthesis_compact_prompt_snippet_chars",
+        900,
+        "timeout 복구용 evidence snippet 길이 제한; 일반 설정보다 확대하지 않음",
+        example=900,
     ),
     EnvVarSpec(
         "SYNTHESIS_REASONING_EFFORT",
@@ -160,7 +169,7 @@ APP_ENV_SPECS = (
         "MEMORY_SUMMARY_MAX_TOKENS",
         "memory_summary_max_tokens",
         256,
-        "rolling summary 출력·저장 추정 token 상한",
+        "저장할 rolling summary의 추정 token 상한; LLM 생성 예산과 독립",
         example=256,
     ),
     EnvVarSpec(
@@ -447,6 +456,7 @@ class AppSettings(BaseSettings):
     chat_model: str = Field(default=_app_default("CHAT_MODEL"), alias="CHAT_MODEL")
     planner_model: str = Field(default=_app_default("PLANNER_MODEL"), alias="PLANNER_MODEL")
     summary_model: str = Field(default=_app_default("SUMMARY_MODEL"), alias="SUMMARY_MODEL")
+    summary_max_tokens: int = Field(default=_app_default("SUMMARY_MAX_TOKENS"), alias="SUMMARY_MAX_TOKENS", ge=1)
     planner_max_tokens: int = Field(default=_app_default("PLANNER_MAX_TOKENS"), alias="PLANNER_MAX_TOKENS", ge=1)
     docs_search_timeout_seconds: int = Field(
         default=_app_default("DOCS_SEARCH_TIMEOUT_SECONDS"),
@@ -472,9 +482,19 @@ class AppSettings(BaseSettings):
         alias="SYNTHESIS_MAX_TOKENS",
         ge=1,
     )
+    synthesis_compact_max_tokens: int = Field(
+        default=_app_default("SYNTHESIS_COMPACT_MAX_TOKENS"),
+        alias="SYNTHESIS_COMPACT_MAX_TOKENS",
+        ge=1,
+    )
     synthesis_prompt_snippet_chars: int = Field(
         default=_app_default("SYNTHESIS_PROMPT_SNIPPET_CHARS"),
         alias="SYNTHESIS_PROMPT_SNIPPET_CHARS",
+        ge=80,
+    )
+    synthesis_compact_prompt_snippet_chars: int = Field(
+        default=_app_default("SYNTHESIS_COMPACT_PROMPT_SNIPPET_CHARS"),
+        alias="SYNTHESIS_COMPACT_PROMPT_SNIPPET_CHARS",
         ge=80,
     )
     synthesis_reasoning_effort: ReasoningEffort | None = Field(
@@ -565,11 +585,16 @@ class AppSettings(BaseSettings):
             "chat_model": self.chat_model,
             "planner_model": self.planner_model,
             "summary_model": self.summary_model,
+            "planner_max_tokens": self.planner_max_tokens,
+            "summary_max_tokens": self.summary_max_tokens,
             "docs_search_timeout_seconds": self.docs_search_timeout_seconds,
             "synthesis_timeout_seconds": self.synthesis_timeout_seconds,
             "synthesis_use_responses_api": str(self.synthesis_use_responses_api).lower(),
             "synthesis_max_retries": self.synthesis_max_retries,
             "synthesis_max_tokens": self.synthesis_max_tokens,
+            "synthesis_compact_max_tokens": self.synthesis_compact_max_tokens,
+            "synthesis_prompt_snippet_chars": self.synthesis_prompt_snippet_chars,
+            "synthesis_compact_prompt_snippet_chars": self.synthesis_compact_prompt_snippet_chars,
             "synthesis_reasoning_effort": self.synthesis_reasoning_effort or "model_default",
             "memory_high_water_turns": self.memory_high_water_turns,
             "memory_low_water_turns": self.memory_low_water_turns,

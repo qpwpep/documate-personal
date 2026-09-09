@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from langchain_core.messages import AIMessage, HumanMessage
 
 from src.core.answer_schema import export_answer_text, finalize_answer, iter_content_units, text_document
@@ -7,7 +9,7 @@ from src.core.contracts import PlannerState, RetrievalState, DebugState, Retriev
 from src.core.contracts.boundary.graph import build_graph_state_input
 from src.core.documents import DocumentElement, SourceAnchor, build_snapshot
 from src.core.evidence import RetrievalScore, SearchHit, build_evidence
-from src.core.planner_schema import PlannerOutput, RetrievalTask
+from src.core.planner_schema import PlannerOutput, RetrievalRequirement, RetrievalTask
 from src.runtime.nodes.synthesis import make_synthesize_node
 
 
@@ -55,6 +57,12 @@ class ModelBoundary:
         else:
             document = text_document("현재 답변입니다.")
         return {"parsed": document.model_dump(mode="json"), "raw": AIMessage(content=""), "parsing_error": None}
+
+
+
+
+
+
 
 
 

@@ -22,7 +22,7 @@ DocuMate는 LangGraph 기반 학습 보조 에이전트입니다. 현재 구조�
 
 `GraphState.messages`는 LangGraph의 `add_messages` reducer를 사용하므로 최근 리스트만 반환해서는 누락된 과거 메시지가 삭제되지 않습니다. 요약 노드는 `RemoveMessage(id=REMOVE_ALL_MESSAGES)`와 retained suffix를 함께 반환해 reducer에 전체 교체 의도를 명시합니다. router와 요약 노드는 같은 pure compaction plan을 사용하므로 trigger 판단과 실제 퇴출 범위가 어긋나지 않습니다.
 
-summary도 별도로 bounded합니다. 새 summary는 `기존 bounded summary + 이번에 새로 퇴출된 대화`를 하나의 replacement memory로 다시 작성한 결과이며, 이전 summary 뒤에 새 문자열을 append하지 않습니다. Tool/System payload는 요약 입력에서 제외합니다. summarizer 예외나 빈 출력에는 기존 summary와 새 transcript의 head/tail을 함께 보존하는 deterministic fallback을 적용하고, 결과를 token·byte 상한에 다시 맞춥니다. fallback 사용 여부와 before/after 크기는 기록하지만 대화 내용은 로그에 남기지 않습니다.
+summary도 별도로 bounded합니다. 새 summary는 `기존 bounded summary + 이번에 새로 퇴출된 대화`를 하나의 replacement memory로 다시 작성한 결과이며, 이전 summary 뒤에 새 문자열을 append하지 않습니다. `SUMMARY_MAX_TOKENS`는 LLM 생성 여유를, `MEMORY_SUMMARY_MAX_TOKENS`와 `MEMORY_SUMMARY_MAX_BYTES`는 저장 길이를 관리하므로 생성 예산 조정이 대화 메모리 보존량을 암묵적으로 바꾸지 않습니다. Tool/System payload는 요약 입력에서 제외합니다. summarizer 예외나 빈 출력에는 기존 summary와 새 transcript의 head/tail을 함께 보존하는 deterministic fallback을 적용하고, 결과를 token·byte 상한에 다시 맞춥니다. fallback 사용 여부와 before/after 크기는 기록하지만 대화 내용은 로그에 남기지 않습니다.
 
 planner와 synthesis에 전달되는 summary는 과거 사용자 입력에서 유래한 비신뢰 데이터입니다. 고정 System policy가 그 안의 명령을 따르거나 검색 evidence로 취급하지 말라고 명시하고, 실제 summary payload는 system instruction이 아닌 별도 assistant data message로 전달합니다.
 
@@ -142,7 +142,9 @@ docs 품질 검사는 공식 domain/path prefix와 URL·원문 유효성에 더�
 
 upload의 일반 검색은 vector 후보를 identifier·keyword·parameter signal로 rerank합니다. 정확한 심볼 요청은 전체 source registry의 AST 조회로 바꾸어 top-k 후보 밖의 정의도 찾습니다. 사용과 정의를 구분하고, 정의의 decorator·본문·Notebook cell 및 정확한 원문 offset을 유지합니다. source 전체를 확인할 수 없으면 부재를 단정하지 않고 `unknown`으로 남깁니다. 이 경로는 임의의 유사도 임계값 없이 이름이 없는 함수의 오발췌를 막으며, source에 명시된 정적 코드 범위만 확인한다는 한계를 갖습니다.
 
-synthesis 근거 예산은 기본 최대 6건·총 6,000자, hybrid 최대 8건·총 8,000자이며 개별 범위는 설정된 snippet 상한을 따릅니다. 요구별 대표 후보를 먼저 배분하고 같은 source의 떨어진 aspect는 별도 passage로 선택합니다. 긴 문서·코드의 앞부분을 일괄 자르지 않고 관련 문단·문장·코드 행을 원문 offset으로 전달하며, 예산으로 빠진 aspect와 부분 선택을 모델과 최종 검증에 남깁니다. 저장·전송 요청은 근거 예산을 줄이지 않습니다. structured synthesis timeout 시 compact 호출을 사용하고, 실패하면 불완전함을 명시한 원문 발췌 fallback을 제공합니다. 각 경로의 검사 기준은 해당 호출에 실제 제공한 packet입니다.
+synthesis 근거 수는 planner 최대 독립 요구 수와 같은 상수를 사용해 일반·hybrid 모두 최대 8건을 허용합니다. 총 excerpt 예산은 일반 6,000자·hybrid 8,000자를 유지하며, 개별 범위는 설정된 snippet 상한을 따릅니다. 요구별 대표 후보를 먼저 배분하고 같은 source의 떨어진 aspect는 별도 passage로 선택합니다. 긴 문서·코드의 앞부분을 일괄 자르지 않고 관련 문단·문장·코드 행을 원문 offset으로 전달하며, 예산으로 빠진 aspect와 부분 선택을 모델과 최종 검증에 남깁니다. 저장·전송 요청은 근거 예산을 줄이지 않습니다. structured synthesis timeout 시 compact 호출을 사용하고, 실패하면 불완전함을 명시한 원문 발췌 fallback을 제공합니다. 각 경로의 검사 기준은 해당 호출에 실제 제공한 packet입니다.
+
+출력 한도는 LLM registry 생성부에서만 설정하고 synthesis 입력 프로필에서는 재지정하지 않습니다. 일반 출력과 snippet의 초기 조정값은 각각 4,096토큰과 1,800자이며, compact는 독립된 960토큰·900자 설정과 축소된 총 excerpt 예산을 사용합니다. 두 설정의 변경은 HTTP 요청·원문 범위에서 따로 검증하며 실제 답변 품질·지연·비용은 별도 온라인 평가가 필요합니다. 이 분리는 일반 응답의 생성 여유를 늘릴 때 복구 비용이나 저장 메모리까지 함께 늘어나는 것을 피하기 위한 것입니다.
 
 최종적으로 이 문제의 성공 기준은 "빠르다" 하나가 아니었습니다. release pass rate, tool precision, tool recall, citation compliance, p95 latency, 평균 cost를 함께 보며 변경을 평가했습니다. latency를 줄이는 변경이 근거 품질을 훼손하지 않는지, retrieval 필터링을 강화한 변경이 recall을 떨어뜨리지 않는지 benchmark로 확인하는 흐름을 만든 것이 이 프로젝트에서 가장 중요한 엔지니어링 판단이었습니다.
 
