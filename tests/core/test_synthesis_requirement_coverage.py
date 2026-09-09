@@ -40,7 +40,7 @@ def _prepare(tasks, hits, *, budget=6000, snippet=960, max_items=6):
     context = build_synthesis_context(state=state, has_default_slack_destination=False)
     prepared = prepare_synthesis_inputs(
         state=state, context=context,
-        budget_profile=SynthesisBudgetProfile("docs", 900, snippet, budget, max_items),
+        budget_profile=SynthesisBudgetProfile("docs", snippet, budget, max_items),
         max_turns=6, prompt_snippet_char_limit=snippet, prompt_evidence_char_budget=budget,
     )
     raw = str(prepared.model_messages[-1].content)

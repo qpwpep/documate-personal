@@ -15,7 +15,7 @@ def _prepare(hits, *, limit=1800):
     context = build_synthesis_context(state=state, has_default_slack_destination=False)
     prepared = prepare_synthesis_inputs(
         state=state, context=context,
-        budget_profile=SynthesisBudgetProfile("docs", 900, limit, limit * 6, 6),
+        budget_profile=SynthesisBudgetProfile("docs", limit, limit * 6, 6),
         max_turns=6, prompt_snippet_char_limit=limit, prompt_evidence_char_budget=limit * 6,
     )
     return state, prepared

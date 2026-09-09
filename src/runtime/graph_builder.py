@@ -275,8 +275,8 @@ def build_agent_graph(settings: AppSettings | None = None):
         llm_synthesizer_compact=llm_registry.llm_synthesizer_compact,
         verbose=llm_registry.verbose,
         max_turns=memory_policy.low_water_turns,
-        synthesis_max_tokens=app_settings.synthesis_max_tokens,
         prompt_snippet_char_limit=app_settings.synthesis_prompt_snippet_chars,
+        compact_prompt_snippet_char_limit=app_settings.synthesis_compact_prompt_snippet_chars,
         has_default_slack_destination=has_default_slack_destination,
     )
     synthesize_node = _instrument_stage_node(

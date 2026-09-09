@@ -31,6 +31,7 @@ class WebRuntimeModulesTest(unittest.TestCase):
 
     def test_create_app_lifespan_initializes_state(self) -> None:
         settings = AppSettings(
+            _env_file=None,
             openai_api_key="test-key",
             tavily_api_key="test",
             chat_model="gpt-5.4",
@@ -58,11 +59,16 @@ class WebRuntimeModulesTest(unittest.TestCase):
                 "chat_model": "gpt-5.4",
                 "planner_model": "gpt-5.4-mini",
                 "summary_model": "gpt-5.4-nano",
+                "planner_max_tokens": "1920",
+                "summary_max_tokens": "1024",
                 "docs_search_timeout_seconds": "7",
                 "synthesis_timeout_seconds": "42",
                 "synthesis_use_responses_api": "false",
                 "synthesis_max_retries": "2",
                 "synthesis_max_tokens": "2048",
+                "synthesis_compact_max_tokens": "960",
+                "synthesis_prompt_snippet_chars": "1800",
+                "synthesis_compact_prompt_snippet_chars": "900",
                 "synthesis_reasoning_effort": "high",
                 "memory_high_water_turns": "8",
                 "memory_low_water_turns": "6",

@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 PlannerRouteName = Literal["docs", "upload"]
 PLANNER_ROUTES: tuple[PlannerRouteName, ...] = ("docs", "upload")
+MAX_PLANNER_TASKS = 8
 # Historical benchmark diagnostics still use this value; new plans preserve tasks.
 PLANNER_WARNING_DUPLICATE_ROUTE_MERGED = "duplicate_route_merged"
 
@@ -86,7 +87,7 @@ class PlannerOutput(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
     use_retrieval: bool = Field(description="Whether a sufficiently resolved request needs retrieved evidence.")
-    tasks: list[RetrievalTask] = Field(max_length=8, description="One task per independent source/subject/version requirement. Multiple tasks may share a route. Include upload even if the file is missing; omit excluded sources.")
+    tasks: list[RetrievalTask] = Field(max_length=MAX_PLANNER_TASKS, description="One task per independent source/subject/version requirement. Multiple tasks may share a route. Include upload even if the file is missing; omit excluded sources.")
     clarification_question: str | None = Field(default=None, description="Ask for the missing referent/subject/version when the request cannot be resolved from dialogue. Then use_retrieval=false and tasks=[]. Otherwise null.")
 
     @model_validator(mode="after")

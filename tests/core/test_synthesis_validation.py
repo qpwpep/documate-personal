@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from langchain_core.messages import AIMessage, HumanMessage
 
 from src.core.answer_schema import export_answer_text, finalize_answer, iter_content_units, text_document
@@ -7,7 +9,7 @@ from src.core.contracts import PlannerState, RetrievalState, DebugState, Retriev
 from src.core.contracts.boundary.graph import build_graph_state_input
 from src.core.documents import DocumentElement, SourceAnchor, build_snapshot
 from src.core.evidence import RetrievalScore, SearchHit, build_evidence
-from src.core.planner_schema import PlannerOutput, RetrievalTask
+from src.core.planner_schema import PlannerOutput, RetrievalRequirement, RetrievalTask
 from src.runtime.nodes.synthesis import make_synthesize_node
 
 
@@ -86,6 +88,71 @@ def test_only_the_packet_provided_to_the_model_is_accepted_for_citations():
     assert response.evidence_packet[0].id != hit.evidence.id
     assert response.result.citations[0].evidence.excerpt == hit.evidence.element.text[:16]
     assert response.result.citations[0].evidence.selection.end == 16
+
+
+@pytest.mark.parametrize("timeout", [False, True])
+def test_eight_independent_requirements_keep_their_evidence_in_generation(timeout):
+    """Every independent requirement accepted by the planner retains model-visible evidence."""
+    tasks = [RetrievalTask(
+        route="docs", query=f"Explain setting_{index}", k=1,
+        requirement=RetrievalRequirement(aspects=[f"setting_{index}"]),
+    ) for index in range(8)]
+    hits = [_hit(f"setting_{index} defaults to {index}.").model_copy(update={
+        "requirement_id": task.requirement_id,
+    }) for index, task in enumerate(tasks)]
+    state = build_graph_state_input(
+        user_input="Compare all eight settings", messages=[HumanMessage(content="Compare all eight settings")],
+        planner=PlannerState(output=PlannerOutput(use_retrieval=True, tasks=tasks)),
+        retrieval=RetrievalState(hit_log=[hit.model_dump(mode="json") for hit in hits]),
+    )
+    normal = ModelBoundary(error=TimeoutError("timeout") if timeout else None)
+    compact = ModelBoundary() if timeout else None
+
+    response = make_synthesize_node(normal, compact)(state)["response"]
+    model = compact if timeout else normal
+
+    assert len(model.packet) == 8
+    assert {requirement for item in model.packet for requirement in item["requirement_ids"]} == {
+        task.requirement_id for task in tasks
+    }
+    assert response.evidence_packet == [hit.evidence for hit in hits]
+
+
+def test_configured_snippet_above_eighteen_hundred_reaches_generation_and_citations():
+    """A configured larger snippet preserves its exact source range without a hidden ceiling."""
+    hit = _hit("source detail " * 400)
+    model = ModelBoundary()
+
+    response = make_synthesize_node(model, prompt_snippet_char_limit=2400)(_state([hit]))["response"]
+
+    selected = response.evidence_packet[0]
+    assert model.packet[0]["excerpt"] == hit.evidence.excerpt[:2400]
+    assert selected.selection.start == 0
+    assert selected.selection.end == 2400
+    assert response.result.citations[0].evidence == selected
+    assert response.result.checks[0].support_status == "exact_match"
+
+
+@pytest.mark.parametrize("normal_limit, compact_limit, expected", [(2400, 1200, 1200), (600, 900, 600)])
+def test_compact_snippet_setting_preserves_exact_citations_without_expanding_normal_input(
+    normal_limit, compact_limit, expected,
+):
+    """Compact generation uses its configured source range capped by the normal snippet size."""
+    hit = _hit("source detail " * 400)
+    compact = ModelBoundary()
+
+    response = make_synthesize_node(
+        ModelBoundary(error=TimeoutError("timeout")), compact,
+        prompt_snippet_char_limit=normal_limit, compact_prompt_snippet_char_limit=compact_limit,
+    )(_state([hit]))["response"]
+
+    selected = response.evidence_packet[0]
+    assert compact.packet[0]["excerpt"] == hit.evidence.excerpt[:expected]
+    assert compact.packet[0]["selection"] == selected.selection.model_dump(mode="json")
+    assert selected.selection.start == 0
+    assert selected.selection.end == expected
+    assert response.result.citations[0].evidence == selected
+    assert response.result.checks[0].support_status == "exact_match"
 
 
 def test_malformed_generation_becomes_explicit_original_source_fallback():

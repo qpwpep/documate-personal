@@ -55,11 +55,9 @@ def test_source_packet_can_contain_multiple_parts_of_a_document():
 def test_saving_a_researched_answer_keeps_the_retrieval_budget():
     """A save request does not discard supporting material from the answer being saved."""
     planner = PlannerOutput(use_retrieval=True, tasks=[RetrievalTask(route="docs", query="settings", k=4)])
-    normal = resolve_synthesis_budget_profile(user_input="Explain settings", planner_output=planner, synthesis_max_tokens=1800)
-    save = resolve_synthesis_budget_profile(user_input="Explain settings and save to txt", planner_output=planner, synthesis_max_tokens=1800)
+    normal = resolve_synthesis_budget_profile(user_input="Explain settings", planner_output=planner, snippet_char_limit=1800)
+    save = resolve_synthesis_budget_profile(user_input="Explain settings and save to txt", planner_output=planner, snippet_char_limit=1800)
     assert save == normal
-    assert normal.max_tokens == 1800
-    assert normal.max_evidence_items >= 4
 
 
 def test_selected_table_cells_reach_generation_with_their_structure():
