@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import uuid
 from pathlib import Path
-from typing import Literal, TypedDict
+from typing import Literal, NotRequired, TypedDict
 
 import streamlit as st
 
@@ -23,6 +23,7 @@ class UserChatMessage(TypedDict):
 class AssistantChatMessage(TypedDict):
     role: Literal["assistant"]
     response: AnswerResponse
+    error_messages: NotRequired[list[str]]
 
 
 ChatMessage = UserChatMessage | AssistantChatMessage
