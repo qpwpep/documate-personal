@@ -1,17 +1,19 @@
 # 벤치마크 가이드
 
-DocuMate 벤치마크는 FastAPI의 `POST /agent` 엔드포인트를 대상으로 하는 온라인 평가만 지원합니다. 실행 진입점은 `src/eval/main.py`이며, 설정 기준은 `data/benchmarks/config.toml`입니다.
+DocuMate 벤치마크는 Streamlit과 같은 FastAPI `POST /agent/stream` 엔드포인트를 대상으로 하는 온라인 평가만 지원합니다. 실행 진입점은 `src/eval/main.py`이며, 설정 기준은 `data/benchmarks/config.toml`입니다.
 
 평가 category는 `docs_only`, `rag_only`, `hybrid`, `tool_action`입니다. `rag_only`와 fixture의 `require_local_citation`은 파일 검색·인용을 평가하는 분류명입니다. 현재 파일 검색 도구는 `upload_search`, 검색 route와 snapshot의 source type은 `upload`입니다. 과거 결과에 남은 `local` route와 `rag_search` 호출은 당시 실행 기록이며 새 실행의 업로드 검색 충족으로 인정하지 않습니다.
 
-온라인 평가 입력은 `AnswerResponse`입니다. 실제 표시한 `content.blocks`, 사용한 `citations`, 내용별 `checks`, `issues`, `actions`를 읽고 debug `observed_hits`와 비교합니다. 별도 답변 문자열이나 주장 목록을 추출해 대신 평가하지 않습니다.
+온라인 평가는 SSE `final_response.data`의 `response`, `trace`, `debug` 전체를 읽습니다. 답변 평가 입력인 `response`는 `AnswerResponse`이며, 실제 표시한 `content.blocks`, 사용한 `citations`, 내용별 `checks`, `issues`, `actions`를 debug `observed_hits`와 비교합니다. 별도 답변 문자열이나 주장 목록을 추출해 대신 평가하지 않습니다.
+
+runner는 `include_debug=true`로 요청하고 `final_response` 수신까지의 클라이언트 latency를 측정합니다. HTTP `200`, 첫 진행 이벤트, `done` 수신만으로 실행 성공을 판정하지 않습니다. HTTP 오류, SSE `error`, 연결 단절, 최종 응답 누락을 구분해 기록하며, `error` 뒤에 최종 응답이 오면 앞선 오류와 최종 응답의 debug를 모두 보존합니다. 유효한 최종 응답을 수신해도 오류와 품질 지표를 함께 평가하므로 benchmark 통과를 의미하지는 않습니다. 요청을 자동으로 재전송하지 않습니다.
 
 ## 1. 사전 준비
 
 - FastAPI 서버가 실행 중이어야 합니다.
 - `OPENAI_API_KEY`가 설정되어 있어야 합니다.
 - judge를 사용할 경우 `JUDGE_MODEL` 또는 config의 기본값이 유효해야 합니다.
-- 기본 endpoint는 `http://127.0.0.1:8000`입니다.
+- 기본 endpoint는 `http://127.0.0.1:8000`입니다. `--endpoint`와 `BENCHMARK_ENDPOINT`에는 FastAPI 기본 주소를 지정하며 runner가 `/agent/stream`을 붙입니다.
 
 권장 실행 순서:
 
@@ -168,7 +170,7 @@ runtime의 exact excerpt 검사는 발췌와 원문의 일치만 보장합니다
 
 | 이름 | 기본값 | 설명 |
 |---|---|---|
-| `BENCHMARK_ENDPOINT` | `http://127.0.0.1:8000` | run 명령 기본 endpoint |
+| `BENCHMARK_ENDPOINT` | `http://127.0.0.1:8000` | `/agent/stream`을 붙여 호출할 FastAPI 기본 주소 |
 | `JUDGE_MODEL` | config 값 사용 | judge 모델 override |
 | `BENCHMARK_JUDGE_ENABLED` | config 값 사용 | judge 사용 여부 override |
 | `BENCHMARK_SLACK_ENABLED` | `false` | benchmark live Slack 전송 opt-in |

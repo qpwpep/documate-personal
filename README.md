@@ -52,7 +52,7 @@ DocuMate에서 중점적으로 개선한 범위는 단순한 챗봇 구현보다
 - LLM은 `AnswerDocument.blocks`에 표시할 내용을 한 번만 생성합니다. 서버는 같은 문장·코드·목록 항목·표 셀·제목을 검사해 인용, 확인 상태, 제한 사항을 파생합니다.
 - 인용은 내용 hash와 parser 설정으로 식별한 문서 snapshot, 원문 요소, 선택 범위를 보존합니다. 검색 범위를 줄이거나 업로드 파일을 바꿔도 기존 답변의 근거가 다른 원문으로 바뀌지 않습니다.
 - 업로드 인덱스는 원문을 chunk마다 복제하지 않습니다. 원문 구조를 한 번 보관하고 검색된 범위만 근거로 복원해 인용에 연결합니다.
-- FastAPI와 Streamlit을 같은 런타임 경로에 연결하고, 세션 TTL/LRU, 요청 lock, SSE progress, 업로드/생성 파일 cleanup을 구현했습니다.
+- Streamlit과 online benchmark를 FastAPI의 `POST /agent/stream`에 연결하고, 세션 TTL/LRU, 요청 lock, SSE progress, 업로드/생성 파일 cleanup을 구현했습니다.
 - 장기 대화는 고정 예산 rolling summary와 최근 canonical Human/AI 메시지로 유지하며, LangGraph reducer에서 퇴출 원문을 실제 삭제하고 응답 조립 성공 후에만 원자적으로 세션에 반영합니다.
 - 120-case online release benchmark와 pytest 회귀 테스트를 통해 pass rate, citation compliance, latency, 비용을 추적합니다.
 
@@ -67,7 +67,7 @@ DocuMate에서 중점적으로 개선한 범위는 단순한 챗봇 구현보다
 | 실행 흐름 | 모델 tool call과 개별 라우터 실험 중심 | `planner → retrieval → validation → synthesis → action` LangGraph 파이프라인 | 단계별 책임과 재시도 조건을 추적 가능 |
 | 검색 출처 | 검색/RAG 결과가 한 흐름에 섞이기 쉬움 | `docs`, `upload` route와 diagnostics, 문서 snapshot·원문 선택·검색 점수 분리 | 자료 버전·위치와 검색 실패·지연을 각각 추적 |
 | 답변 형식 | 자연어 응답 중심 | `AnswerDocument` 본문과 서버가 만든 citations·checks·issues·actions | 표시하는 내용을 직접 검사하고 UI·저장·전송에 같은 본문 사용 |
-| 웹 런타임 | 데모 UI와 백엔드 실행 기준이 느슨하게 분리 | FastAPI `POST /agent`와 Streamlit 데모가 같은 agent runtime 사용 | 화면 동작과 benchmark 대상이 같은 경로를 공유 |
+| 웹 런타임 | 데모 UI와 백엔드 실행 기준이 느슨하게 분리 | Streamlit 데모와 benchmark가 FastAPI `POST /agent/stream` 사용 | 화면 동작과 평가가 같은 SSE 실행·응답 계약을 공유 |
 | 세션/파일 처리 | 업로드 파일과 생성 파일의 수명 관리가 약함 | 세션별 manager cache, TTL/LRU, 요청 lock, 업로드/출력 cleanup | 사용자별 업로드 격리와 반복 실행 안정성 강화 |
 | 장기 대화 메모리 | 원문 history가 계속 누적되거나 생성한 summary가 다음 요청에서 사라질 수 있음 | high/low watermark, bounded rolling summary, reducer 삭제, canonical Human/AI projection, atomic commit | 장기 세션의 prompt·프로세스 메모리에 검증 가능한 상한을 두고 Tool payload 재주입을 차단 |
 | 검증 체계 | 수동 확인과 일부 실험 결과 중심 | pytest 회귀 테스트 + 120-case online release benchmark | pass rate, citation compliance, latency, 비용을 변경마다 비교 가능 |

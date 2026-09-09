@@ -273,7 +273,9 @@ compaction 진단은 debug `edge_decisions`와 구조화 로그에서 before/aft
 
 ## 5. API 계약
 
-### 5.1 `POST /agent`
+### 5.1 `POST /agent/stream`
+
+Streamlit과 online benchmark는 이 엔드포인트에 JSON 요청을 보내고 `text/event-stream` 형식의 SSE 응답을 읽습니다. 진행 상황과 최종 응답은 별도 이벤트로 전달됩니다.
 
 요청 예시:
 
@@ -297,7 +299,31 @@ compaction 진단은 debug `edge_decisions`와 구조화 로그에서 before/aft
 - `include_debug=true`일 때만 debug payload가 내려옵니다.
 - Slack 필드는 세션 메타데이터로 저장되며 후속 요청에서 재사용될 수 있습니다.
 
-응답 구조의 최소 예시:
+SSE의 `event:`는 아래 이벤트 이름이며, `data:`는 해당 이벤트의 JSON 객체입니다. 이벤트 사이에는 빈 줄이 있습니다.
+
+| 이벤트 | 의미 |
+|---|---|
+| `request_started` | 요청 시작과 `request_id` |
+| `stage_started`, `stage_completed` | graph 단계의 시작·완료 정보 |
+| `heartbeat` | 실행 중 연결 유지 신호 |
+| `progress_snapshot` | 현재 단계와 근거 수 등 진행 상황 |
+| `final_response` | `response`, `trace`, `debug`를 담은 최종 응답 |
+| `error` | 실행 중 오류 정보. 이후 `final_response`가 올 수도 있음 |
+| `done` | 이벤트 전송 종료. 요청 성공을 뜻하지 않음 |
+
+OpenAPI의 HTTP `200` 응답은 `text/event-stream`의 `x-sse-events` 확장에 각 이벤트의 `data` 스키마를 제공하며, `final_response`는 `AgentResponse`를 `$ref`로 참조합니다.
+
+요청 스키마 오류는 스트림 시작 전에 HTTP `422`로 반환합니다. 업로드 경로 검증이나 graph 실행처럼 스트림을 시작한 뒤 발생한 오류는 HTTP `200` 상태에서 SSE `error`로 전달될 수 있습니다. 따라서 클라이언트는 HTTP 상태와 SSE 이벤트를 함께 확인해야 합니다.
+
+HTTP `200`이나 `done`만으로 성공 처리하지 않습니다. 유효한 `final_response`가 있어야 최종 답변을 사용할 수 있으며, 답변의 제한 사항·액션 실패·debug 오류도 별도로 확인합니다. 클라이언트는 `error` 뒤에도 최종 응답 수신을 계속하며, 최종 응답 없이 종료되거나 연결이 끊기면 답변 수신 실패로 처리합니다.
+
+전송 계층은 최종 `response`, `trace`, `debug` 전체를 전달하고, benchmark는 이 값들과 앞서 수신한 오류를 결과에 보존합니다. Streamlit은 최종 `AnswerResponse`와 오류 메시지를 대화 기록에 보존하며, `trace`와 `debug`는 대화 기록에 저장하지 않습니다.
+
+Streamlit은 첫 이벤트 전 오류를 포함해 요청 실패를 화면에 표시하며 자동으로 재요청하지 않습니다. 이미 실행된 파일 저장·Slack 전송의 중복 실행을 피하기 위해 일반 JSON 엔드포인트로의 fallback도 사용하지 않습니다.
+
+### 5.2 최종 응답과 debug
+
+`final_response` 이벤트의 `data`는 `AgentResponse`이며 `response`, `trace`, `debug` 전체를 담습니다. 다음 JSON은 SSE 스트림 전체가 아니라 이 `data` 객체의 최소 예시입니다.
 
 ```json
 {
@@ -376,23 +402,6 @@ post-synthesis 검사에서 참조·내용·requirement coverage 문제가 있�
 
 - `src/app/web/schemas.py`
 - `src/core/answer_schema/`
-
-### 5.2 `POST /agent/stream`
-
-`POST /agent`와 같은 요청 스키마를 사용하지만, 응답은 `text/event-stream` 형식의 SSE로 반환합니다. Streamlit 클라이언트는 우선 이 엔드포인트를 호출하고, 스트리밍이 실패하면 일반 `/agent` 호출로 fallback합니다.
-
-이벤트 이름:
-
-- `request_started`
-- `stage_started`
-- `stage_completed`
-- `heartbeat`
-- `progress_snapshot`
-- `final_response`
-- `error`
-- `done`
-
-`final_response` 이벤트의 `data`는 일반 `POST /agent` 응답과 같은 `response`, `trace`, `debug` 구조를 담습니다.
 
 ### 5.3 `GET /download/{filename}`
 
