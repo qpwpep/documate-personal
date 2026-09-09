@@ -1,11 +1,8 @@
 from __future__ import annotations
 
-import json
 import re
 from dataclasses import dataclass, field
 from typing import Any
-
-import requests
 
 from src.core.answer_schema import AnswerResponse, ActionReceipt, export_answer_text
 from src.core.contracts.boundary.debug import parse_error_codes, parse_llm_calls, parse_model_usage_status, parse_token_usage
@@ -25,6 +22,7 @@ class ParsedResponseData:
     http_status: int = 0
     response_text: str = ""
     response: AnswerResponse | None = None
+    debug: dict[str, Any] | None = None
     observed_hits: list[SearchHit] = field(default_factory=list)
     retrieval_diagnostics: list[RetrievalDiagnostic] = field(default_factory=list)
     planner_diagnostics: PlannerDiagnostic | None = None
@@ -53,13 +51,6 @@ class ParsedResponseData:
     missing_required_debug_fields: list[str] = field(default_factory=list)
     synthesis_mode: str | None = None
     actions: list[ActionReceipt] = field(default_factory=list)
-
-
-def _build_error_message_from_response(response: requests.Response) -> str:
-    body = response.text.strip()
-    if len(body) > 300:
-        body = body[:300] + " ..."
-    return f"HTTP {response.status_code}: {body}"
 
 
 def _parse_token_usage(raw_debug: dict[str, Any] | None) -> TokenUsage | None:
@@ -203,33 +194,20 @@ def _extract_request_id(trace: str | None) -> str | None:
     return request_id or None
 
 
-def _extract_request_id_from_response(response: Any, trace: str | None) -> str | None:
-    headers = getattr(response, "headers", None)
-    if isinstance(headers, dict):
-        header_value = headers.get("x-request-id") or headers.get("X-Request-Id")
-        if header_value:
-            return str(header_value).strip()
-    return _extract_request_id(trace)
-
-
-def parse_agent_response(response: requests.Response) -> ParsedResponseData:
-    parsed = ParsedResponseData(http_status=response.status_code)
-    if response.status_code != 200:
-        parsed.runtime_errors.append(_build_error_message_from_response(response))
-        return parsed
-
-    try:
-        body = response.json()
-    except json.JSONDecodeError:
-        parsed.response_errors.append("response is not valid JSON")
-        body = {}
-
+def parse_agent_response(
+    body: dict[str, Any],
+    *,
+    http_status: int = 200,
+    request_id: str | None = None,
+) -> ParsedResponseData:
+    """Parse the complete data object from an SSE final_response event."""
+    parsed = ParsedResponseData(http_status=http_status)
     if not isinstance(body, dict):
         parsed.response_errors.append("response body must be an object")
         return parsed
 
     parsed.response_trace = body.get("trace")
-    parsed.request_id = _extract_request_id_from_response(response, parsed.response_trace)
+    parsed.request_id = request_id or _extract_request_id(parsed.response_trace)
 
     response_raw = body.get("response")
     if not isinstance(response_raw, dict):
@@ -246,6 +224,7 @@ def parse_agent_response(response: requests.Response) -> ParsedResponseData:
 
     debug_payload = body.get("debug")
     if isinstance(debug_payload, dict):
+        parsed.debug = debug_payload
         present_debug_keys = {str(key) for key in debug_payload.keys()}
         parsed.missing_required_debug_fields = [
             field for field in DEBUG_REQUIRED_FIELDS if field not in present_debug_keys

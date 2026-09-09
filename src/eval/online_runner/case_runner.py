@@ -5,6 +5,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import requests
+from urllib3.exceptions import ReadTimeoutError
+
+from src.infra.sse import iter_sse_events
 
 from ..judge_llm import LLMJudge
 from ..config_models import BenchmarkCase, BenchmarkConfig, BenchmarkLiveSlackConfig
@@ -34,25 +37,75 @@ def _run_single_case(
         case=case,
         live_slack=live_slack,
     )
-    endpoint_url = endpoint.rstrip("/") + "/agent"
+    endpoint_url = endpoint.rstrip("/") + "/agent/stream"
 
     latency_ms_e2e: int | None = None
     parsed_response = ParsedResponseData()
     if not request_context.runtime_errors:
         started = time.monotonic()
+        stream_opened = False
         try:
-            response = requests.post(endpoint_url, json=request_context.request_payload, timeout=timeout_seconds)
-            latency_ms_e2e = int((time.monotonic() - started) * 1000)
-            parsed_response = parse_agent_response(response)
+            with requests.post(
+                endpoint_url,
+                json=request_context.request_payload,
+                timeout=timeout_seconds,
+                headers={"Accept": "text/event-stream"},
+                stream=True,
+                allow_redirects=False,
+            ) as response:
+                parsed_response.http_status = response.status_code
+                parsed_response.request_id = str(response.headers.get("x-request-id") or "").strip() or None
+                if response.status_code != 200:
+                    body = response.text.strip()
+                    if len(body) > 300:
+                        body = body[:300] + " ..."
+                    parsed_response.runtime_errors.append(f"HTTP {response.status_code}: {body}")
+                else:
+                    content_type = response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+                    if content_type != "text/event-stream":
+                        raise ValueError(f"expected text/event-stream, received {content_type or 'missing Content-Type'}")
+                    stream_opened = True
+                    received_event = False
+                    final_received = False
+                    done_received = False
+                    for event in iter_sse_events(response.iter_content(chunk_size=None)):
+                        received_event = True
+                        if event.event == "error":
+                            message = str(event.data.get("message") or "server reported an error")
+                            parsed_response.runtime_errors.append(f"SSE error: {message}")
+                        elif event.event == "final_response":
+                            latency_ms_e2e = int((time.monotonic() - started) * 1000)
+                            final = parse_agent_response(
+                                event.data,
+                                http_status=response.status_code,
+                                request_id=parsed_response.request_id,
+                            )
+                            final.runtime_errors.extend(parsed_response.runtime_errors)
+                            parsed_response = final
+                            final_received = True
+                            break
+                        elif event.event == "done":
+                            done_received = True
+                            break
+                    if not final_received:
+                        reason = "done received" if done_received else ("stream ended" if received_event else "empty stream")
+                        parsed_response.response_errors.append(f"SSE final_response missing ({reason})")
         except requests.Timeout:
-            latency_ms_e2e = int((time.monotonic() - started) * 1000)
-            parsed_response.runtime_errors.append("request timeout")
+            message = "SSE stream timeout before final_response" if stream_opened else "request timeout"
+            parsed_response.runtime_errors.append(message)
         except requests.RequestException as exc:
-            latency_ms_e2e = int((time.monotonic() - started) * 1000)
-            parsed_response.runtime_errors.append(f"request failed: {exc}")
+            if stream_opened and any(isinstance(reason, ReadTimeoutError) for reason in exc.args):
+                parsed_response.runtime_errors.append("SSE stream timeout before final_response")
+            else:
+                prefix = "SSE stream disconnected before final_response" if stream_opened else "request failed"
+                parsed_response.runtime_errors.append(f"{prefix}: {exc}")
+        except ValueError as exc:
+            parsed_response.response_errors.append(f"SSE protocol error: {exc}")
         except Exception as exc:
-            latency_ms_e2e = int((time.monotonic() - started) * 1000)
             parsed_response.runtime_errors.append(f"unexpected error: {exc}")
+        finally:
+            if latency_ms_e2e is None:
+                latency_ms_e2e = int((time.monotonic() - started) * 1000)
     else:
         parsed_response.runtime_errors.extend(request_context.runtime_errors)
 

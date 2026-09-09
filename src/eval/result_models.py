@@ -37,6 +37,7 @@ class CaseResult(BaseModel):
     http_status: int
     response_text: str = ""
     response: AnswerResponse | None = None
+    debug: dict[str, Any] | None = None
     observed_hits: list[SearchHit] = Field(default_factory=list)
     retrieval_diagnostics: list[RetrievalDiagnostic] = Field(default_factory=list)
     planner_diagnostics: PlannerDiagnostic | None = None
