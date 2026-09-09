@@ -11,6 +11,7 @@ from src.eval.config_models import BenchmarkCase, BenchmarkConfig, BenchmarkLive
 from src.eval.io import load_config
 from src.eval.main import command_run
 from src.eval.online_runner import run_online_benchmark
+from src.eval.pricing import compute_cost_usd
 from src.infra.settings import (
     DEFAULT_BENCHMARK_CONFIG_PATH,
     BenchmarkCLIEnvSettings,
@@ -30,7 +31,8 @@ class _FakeResponse:
 
 
 class BenchmarkCLIEnvResolutionTest(unittest.TestCase):
-    def test_canonical_judge_model_defaults_match_latest_release_runs(self) -> None:
+    def test_canonical_judge_model_defaults_use_luna(self) -> None:
+        """All canonical benchmark configuration entry points select the requested judge model."""
         with TemporaryDirectory() as temp_dir:
             missing_env_path = Path(temp_dir) / ".env"
             with patch.dict("os.environ", {}, clear=True):
@@ -39,10 +41,45 @@ class BenchmarkCLIEnvResolutionTest(unittest.TestCase):
                     env_path=missing_env_path,
                 )
 
-        self.assertEqual(BenchmarkConfig().judge_model, "gpt-5.4-mini")
-        self.assertEqual(load_config(DEFAULT_BENCHMARK_CONFIG_PATH).judge_model, "gpt-5.4-mini")
-        self.assertEqual(load_benchmark_env_defaults(DEFAULT_BENCHMARK_CONFIG_PATH)["JUDGE_MODEL"], "gpt-5.4-mini")
-        self.assertEqual(cli_settings.judge_model, "gpt-5.4-mini")
+        self.assertEqual(BenchmarkConfig().judge_model, "gpt-5.6-luna")
+        self.assertEqual(load_config(DEFAULT_BENCHMARK_CONFIG_PATH).judge_model, "gpt-5.6-luna")
+        self.assertEqual(load_benchmark_env_defaults(DEFAULT_BENCHMARK_CONFIG_PATH)["JUDGE_MODEL"], "gpt-5.6-luna")
+        self.assertEqual(cli_settings.judge_model, "gpt-5.6-luna")
+
+    def test_missing_judge_configuration_falls_back_to_luna(self) -> None:
+        """Missing config files and omitted runtime settings retain the same judge fallback."""
+        with TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "config.toml"
+            env_path = Path(temp_dir) / ".env"
+            with patch.dict("os.environ", {}, clear=True):
+                missing_config_settings = load_benchmark_cli_env_settings(config_path, env_path=env_path)
+                config_path.write_text("", encoding="utf-8")
+                empty_config = load_config(config_path)
+                empty_config_settings = load_benchmark_cli_env_settings(config_path, env_path=env_path)
+
+        self.assertEqual(missing_config_settings.judge_model, "gpt-5.6-luna")
+        self.assertEqual(empty_config.judge_model, "gpt-5.6-luna")
+        self.assertEqual(empty_config_settings.judge_model, "gpt-5.6-luna")
+
+    def test_canonical_pricing_charges_luna_and_preserves_existing_model_rates(self) -> None:
+        """Canonical pricing charges mixed current and older calls at their respective model rates."""
+        config = load_config(DEFAULT_BENCHMARK_CONFIG_PATH)
+        cost = compute_cost_usd(
+            token_usage=None,
+            llm_calls=[
+                {
+                    "response_metadata": {"model_name": "gpt-5.6-luna"},
+                    "usage_metadata": {"input_tokens": 2000, "output_tokens": 3000},
+                },
+                {
+                    "response_metadata": {"model_name": "gpt-5.4-nano"},
+                    "usage_metadata": {"input_tokens": 1000, "output_tokens": 2000},
+                },
+            ],
+            pricing=config.pricing,
+        )
+
+        self.assertAlmostEqual(cost, 0.0067, places=8)
 
     def test_load_benchmark_cli_env_settings_reads_dotenv_when_os_env_is_empty(self) -> None:
         with TemporaryDirectory() as temp_dir:

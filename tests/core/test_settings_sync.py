@@ -39,7 +39,7 @@ class SettingsSyncTest(unittest.TestCase):
 
         self.assertIn("빈 값이면 모델 기본값", synced)
         self.assertIn("none은 명시 override", synced)
-        self.assertIn("`gpt-5.4-nano`: none, low, medium, high, xhigh", synced)
+        self.assertIn("`gpt-5.6-luna`: none, low, medium, high, xhigh, max", synced)
         self.assertIn("`gpt-5-nano`: minimal, low, medium, high", synced)
 
     def test_app_settings_defaults_match_registry(self) -> None:

@@ -108,6 +108,32 @@ def _settings(**overrides) -> AppSettings:
     return AppSettings(_env_file=None, **(values | overrides))
 
 
+def test_default_models_reach_every_application_llm_request(provider):
+    """Default configuration uses Luna for planning, both answer paths, and summarization."""
+    requests, _ = provider
+    settings = AppSettings(_env_file=None, openai_api_key="test-key", verbose=False)
+    registry = build_llm_registry(settings)
+    messages = [HumanMessage(content="Hello")]
+    plan = registry.llm_planner.invoke(messages)
+    assert PlannerOutput.model_validate(plan["parsed"]) == PlannerOutput(use_retrieval=False, tasks=[])
+    for model in (registry.llm_synthesizer, registry.llm_synthesizer_compact, registry.llm_summarizer):
+        assert model.invoke(messages).content == text_document("Hello.").model_dump_json()
+    assert [request["model"] for request in requests] == ["gpt-5.6-luna"] * 4
+
+
+@pytest.mark.parametrize("responses_api", [False, True], ids=["chat", "responses"])
+def test_luna_max_reasoning_override_reaches_http(provider, responses_api):
+    """Luna's max reasoning override is accepted and sent using the selected endpoint's field."""
+    requests, _ = provider
+    settings = _settings(synthesis_use_responses_api=responses_api, synthesis_reasoning_effort="max")
+    response = _synthesize(settings)["response"]
+    assert response.result.checks[0].support_status == "exact_match"
+    if responses_api:
+        assert requests[0]["reasoning"] == {"effort": "max"}
+    else:
+        assert requests[0]["reasoning_effort"] == "max"
+
+
 def _state():
     text = "The configuration keeps the original source range. " * 100
     snapshot = build_snapshot(

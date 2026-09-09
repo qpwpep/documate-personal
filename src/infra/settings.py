@@ -16,7 +16,7 @@ from src.infra.runtime_paths import get_benchmark_config_path, get_env_file_path
 
 
 DEFAULT_BENCHMARK_CONFIG_PATH = get_benchmark_config_path()
-ReasoningEffort = Literal["none", "minimal", "low", "medium", "high", "xhigh"]
+ReasoningEffort = Literal["none", "minimal", "low", "medium", "high", "xhigh", "max"]
 EnvExampleGroup = Literal["required_secrets", "application_settings", "slack"]
 
 
@@ -48,9 +48,9 @@ APP_ENV_SPECS = (
         "공식 문서 검색에 필요",
         example_group="required_secrets",
     ),
-    EnvVarSpec("CHAT_MODEL", "chat_model", "gpt-5.4-nano", "synthesis 모델 기본값", example="gpt-5.4-nano"),
-    EnvVarSpec("PLANNER_MODEL", "planner_model", "gpt-5.4-nano", "planner 모델 기본값", example="gpt-5.4-nano"),
-    EnvVarSpec("SUMMARY_MODEL", "summary_model", "gpt-5.4-nano", "session summary 모델 기본값", example="gpt-5.4-nano"),
+    EnvVarSpec("CHAT_MODEL", "chat_model", "gpt-5.6-luna", "synthesis 모델 기본값", example="gpt-5.6-luna"),
+    EnvVarSpec("PLANNER_MODEL", "planner_model", "gpt-5.6-luna", "planner 모델 기본값", example="gpt-5.6-luna"),
+    EnvVarSpec("SUMMARY_MODEL", "summary_model", "gpt-5.6-luna", "session summary 모델 기본값", example="gpt-5.6-luna"),
     EnvVarSpec("SUMMARY_MAX_TOKENS", "summary_max_tokens", 1024, "요약 LLM 생성 토큰 상한; 저장 요약 예산과 독립", example=1024),
     EnvVarSpec("PLANNER_MAX_TOKENS", "planner_max_tokens", 1920, "planner structured output 최대 토큰", example=1920),
     EnvVarSpec("DOCS_SEARCH_TIMEOUT_SECONDS", "docs_search_timeout_seconds", 5, "Tavily 요청별 timeout", example=5),
@@ -77,10 +77,10 @@ APP_ENV_SPECS = (
         "SYNTHESIS_REASONING_EFFORT",
         "synthesis_reasoning_effort",
         None,
-        "synthesis reasoning effort override (none/minimal/low/medium/high/xhigh, 빈 값이면 모델 기본값, none은 명시 override)",
+        "synthesis reasoning effort override (none/minimal/low/medium/high/xhigh/max, 빈 값이면 모델 기본값, none은 명시 override)",
         example="low",
         sync_notes=(
-            "gpt-5.4-nano: none, low, medium, high, xhigh",
+            "gpt-5.6-luna: none, low, medium, high, xhigh, max",
             "gpt-5-nano: minimal, low, medium, high",
         ),
     ),
@@ -213,9 +213,9 @@ BENCHMARK_ENV_SPECS = (
     EnvVarSpec(
         "JUDGE_MODEL",
         None,
-        "gpt-5.4-mini",
+        "gpt-5.6-luna",
         "benchmark judge 모델 override",
-        example="gpt-5.4-mini",
+        example="gpt-5.6-luna",
         section="benchmark",
         config_runtime_key="judge_model",
     ),

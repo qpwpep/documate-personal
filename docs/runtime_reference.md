@@ -81,9 +81,9 @@ Windows 환경에서는 `-X utf8` 또는 `PYTHONUTF8=1` 사용을 권장합니�
 |---|---|---|
 | `OPENAI_API_KEY` | 없음 | OpenAI 호출과 임베딩 생성에 필요 |
 | `TAVILY_API_KEY` | 없음 | 공식 문서 검색에 필요 |
-| `CHAT_MODEL` | `gpt-5.4-nano` | synthesis 모델 기본값 |
-| `PLANNER_MODEL` | `gpt-5.4-nano` | planner 모델 기본값 |
-| `SUMMARY_MODEL` | `gpt-5.4-nano` | session summary 모델 기본값 |
+| `CHAT_MODEL` | `gpt-5.6-luna` | synthesis 모델 기본값 |
+| `PLANNER_MODEL` | `gpt-5.6-luna` | planner 모델 기본값 |
+| `SUMMARY_MODEL` | `gpt-5.6-luna` | session summary 모델 기본값 |
 | `SUMMARY_MAX_TOKENS` | `1024` | 요약 LLM 생성 토큰 상한; 저장 요약 예산과 독립 |
 | `PLANNER_MAX_TOKENS` | `1920` | planner structured output 최대 토큰 |
 | `DOCS_SEARCH_TIMEOUT_SECONDS` | `5` | Tavily 요청별 timeout |
@@ -94,7 +94,7 @@ Windows 환경에서는 `-X utf8` 또는 `PYTHONUTF8=1` 사용을 권장합니�
 | `SYNTHESIS_COMPACT_MAX_TOKENS` | `960` | timeout 복구용 synthesis 생성 토큰 상한; 일반 상한과 독립 |
 | `SYNTHESIS_PROMPT_SNIPPET_CHARS` | `1800` | evidence snippet 길이 제한 |
 | `SYNTHESIS_COMPACT_PROMPT_SNIPPET_CHARS` | `900` | timeout 복구용 evidence snippet 길이 제한; 일반 설정보다 확대하지 않음 |
-| `SYNTHESIS_REASONING_EFFORT` | 없음 | synthesis reasoning effort override (none/minimal/low/medium/high/xhigh, 빈 값이면 모델 기본값, none은 명시 override) |
+| `SYNTHESIS_REASONING_EFFORT` | 없음 | synthesis reasoning effort override (none/minimal/low/medium/high/xhigh/max, 빈 값이면 모델 기본값, none은 명시 override) |
 | `VERBOSE` | `true` | 에이전트 런타임 상세 로그 출력 |
 | `FASTAPI_URL` | `http://127.0.0.1:8000` | Streamlit이 호출하는 API 주소 |
 | `SESSION_TTL_SECONDS` | `1800` | 세션 TTL |
@@ -119,7 +119,7 @@ Windows 환경에서는 `-X utf8` 또는 `PYTHONUTF8=1` 사용을 권장합니�
 
 모델별 reasoning effort override 참고:
 
-- `gpt-5.4-nano`: none, low, medium, high, xhigh
+- `gpt-5.6-luna`: none, low, medium, high, xhigh, max
 - `gpt-5-nano`: minimal, low, medium, high
 
 ### 2.2 벤치마크 설정
@@ -133,7 +133,7 @@ Windows 환경에서는 `-X utf8` 또는 `PYTHONUTF8=1` 사용을 권장합니�
 
 | 이름 | 기본값 | 설명 |
 |---|---|---|
-| `JUDGE_MODEL` | `gpt-5.4-mini` | benchmark judge 모델 override |
+| `JUDGE_MODEL` | `gpt-5.6-luna` | benchmark judge 모델 override |
 | `BENCHMARK_ENDPOINT` | `http://127.0.0.1:8000` | benchmark 대상 FastAPI 주소 override |
 | `BENCHMARK_JUDGE_ENABLED` | `true` | judge 사용 여부 override |
 | `BENCHMARK_SLACK_ENABLED` | `false` | benchmark live Slack 전송 opt-in |
