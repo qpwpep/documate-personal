@@ -34,7 +34,11 @@ completion_per_1k_usd = 0.00040
 prompt_per_1k_usd = 0.00020
 completion_per_1k_usd = 0.00125
 
+[pricing.models."gpt-5.6-luna"]
+prompt_per_1k_usd = 0.00020
+completion_per_1k_usd = 0.00120
+
 [runtime]
-judge_model = "gpt-5.4-mini"
+judge_model = "gpt-5.6-luna"
 judge_enabled = true
 request_timeout_seconds = 60
