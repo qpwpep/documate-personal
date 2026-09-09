@@ -65,6 +65,116 @@ else:
     assert list(app.session_state.messages[1]) == ["role", "response"]
 
 
+def test_stream_errors_remain_visible_beside_unchanged_final_response_after_rerun():
+    """Distinct stream errors survive rerun beside the complete, unmodified final answer."""
+    from tests.web.answer_fixtures import cited_response
+
+    app = AppTest.from_string('''
+import streamlit as st
+from src.app.web.streamlit_chat import process_chat_prompt, render_chat_history
+from src.app.web.streamlit_api_client import AgentCallResult, AgentStreamEvent
+from tests.web.answer_fixtures import cited_response
+
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+
+def stream_agent(prompt):
+    for message in ["검색 단계에서 오류가 발생했습니다.", "검색 단계에서 오류가 발생했습니다.", "일부 근거를 읽지 못했습니다."]:
+        yield AgentStreamEvent(event="error", data={"message": message})
+    response = cited_response()
+    st.session_state.final_data = {
+        "response": response.model_dump(mode="json"),
+        "trace": "planner -> synthesis",
+        "debug": {"runtime_error": "retrieval failed", "metrics": {"total_tokens": 42}},
+    }
+    yield AgentStreamEvent(event="final_response", data=st.session_state.final_data, result=AgentCallResult(response=response))
+
+if not st.session_state.messages:
+    process_chat_prompt("질문", st.session_state.messages.append, st.session_state.messages.append, stream_agent)
+else:
+    render_chat_history(st.session_state.messages, "http://localhost:8000")
+''').run()
+
+    assert not app.exception
+    expected_errors = ["검색 단계에서 오류가 발생했습니다.", "일부 근거를 읽지 못했습니다."]
+    assert [item.value for item in app.error] == expected_errors
+    assert app.session_state.messages[1] == {
+        "role": "assistant",
+        "response": cited_response(),
+        "error_messages": expected_errors,
+    }
+    assert app.session_state.final_data == {
+        "response": cited_response().model_dump(mode="json"),
+        "trace": "planner -> synthesis",
+        "debug": {"runtime_error": "retrieval failed", "metrics": {"total_tokens": 42}},
+    }
+    assert [item.value for item in app.markdown].count("함수는 3을 반환합니다. [1]") == 1
+
+
+def test_stream_errors_without_final_response_are_displayed_once_in_fallback_document():
+    """Without a final answer each distinct error is preserved once in the error document."""
+    app = AppTest.from_string('''
+import streamlit as st
+from src.app.web.streamlit_chat import process_chat_prompt, render_chat_history
+from src.app.web.streamlit_api_client import AgentStreamEvent
+
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+
+def stream_agent(prompt):
+    for message in ["서버 처리 오류", "연결이 끊어졌습니다.", "연결이 끊어졌습니다."]:
+        yield AgentStreamEvent(event="error", data={"message": message})
+
+if not st.session_state.messages:
+    process_chat_prompt("질문", st.session_state.messages.append, st.session_state.messages.append, stream_agent)
+else:
+    render_chat_history(st.session_state.messages, "http://localhost:8000")
+''').run()
+
+    assert not app.exception
+    displayed_text = "\n".join(item.value for item in app.markdown)
+    assert displayed_text.count("서버 처리 오류") == 1
+    assert displayed_text.count("연결이 끊어졌습니다.") == 1
+    assert not app.error
+
+
+def test_failed_stream_displays_error_in_history_without_resending_on_rerun():
+    """An initial connection failure reaches chat history without rerunning the request."""
+    app = AppTest.from_string('''
+import requests
+import streamlit as st
+from unittest.mock import patch
+from src.app.web.streamlit_chat import process_chat_prompt, render_chat_history
+from src.app.web.streamlit_api_client import AgentRequestContext, stream_agent_response
+
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+    st.session_state.requests_sent = 0
+
+def request(*args, **kwargs):
+    st.session_state.requests_sent += 1
+    raise requests.exceptions.ConnectionError("connection lost")
+
+def stream_agent(prompt):
+    context = AgentRequestContext(fastapi_url="http://localhost:8000", session_id="session-1")
+    return stream_agent_response(prompt, context)
+
+with patch("requests.sessions.Session.request", request):
+    if not st.session_state.messages:
+        process_chat_prompt("질문", st.session_state.messages.append, st.session_state.messages.append, stream_agent)
+    else:
+        render_chat_history(st.session_state.messages, "http://localhost:8000")
+''').run()
+
+    assert not app.exception
+    assert len(app.markdown) == 2
+    assert app.markdown[0].value == "질문"
+    assert "첫 이벤트" in app.markdown[1].value
+    assert "서버에서 요청이 처리되었을 수" in app.markdown[1].value
+    assert app.session_state.requests_sent == 1
+    assert len(app.session_state.messages) == 2
+
+
 def test_action_failure_is_separate_from_answer_content():
     """A delivery failure is visible without modifying the canonical answer."""
     app = AppTest.from_string('''

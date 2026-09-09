@@ -8,7 +8,7 @@ import streamlit as st
 
 from src.app.web.streamlit_api_client import AgentCallResult, AgentStreamEvent
 from src.app.web.streamlit_sources import render_code, render_evidence
-from src.app.web.streamlit_state import ChatMessage
+from src.app.web.streamlit_state import AssistantChatMessage, ChatMessage
 from src.core.answer_schema import AnswerResponse, ContentUnit, finalize_answer, iter_content_units, text_document
 
 
@@ -32,6 +32,8 @@ def render_chat_history(messages: list[ChatMessage], fastapi_url: str) -> None:
             if message["role"] == "user":
                 st.markdown(message["content"])
             else:
+                for error_message in message.get("error_messages", []):
+                    st.error(error_message)
                 render_answer_response(message["response"], fastapi_url)
 
 
@@ -140,7 +142,7 @@ def process_chat_prompt(
         st.markdown(prompt)
 
     result: AgentCallResult | None = None
-    last_error_message = _DEFAULT_ERROR_MESSAGE
+    error_messages: list[str] = []
     with st.chat_message("assistant"):
         status_placeholder = st.empty()
         status_placeholder.markdown("요청을 접수했습니다.")
@@ -148,8 +150,10 @@ def process_chat_prompt(
             if event.event == "final_response" and event.result is not None:
                 result = event.result
             elif event.event == "error":
-                last_error_message = str(event.data.get("message") or "응답 처리 중 오류가 발생했습니다.")
-                status_placeholder.markdown(last_error_message)
+                error_message = str(event.data.get("message") or "응답 처리 중 오류가 발생했습니다.")
+                if error_message not in error_messages:
+                    error_messages.append(error_message)
+                status_placeholder.markdown(error_message)
             else:
                 progress = _progress_message_for_event(event)
                 if progress:
@@ -157,8 +161,16 @@ def process_chat_prompt(
         status_placeholder.empty()
 
     if result is None:
-        result = AgentCallResult(response=finalize_answer(text_document(last_error_message), []))
-    append_assistant_message({"role": "assistant", "response": result.response})
+        error_text = "\n\n".join(error_messages) or _DEFAULT_ERROR_MESSAGE
+        append_assistant_message({
+            "role": "assistant",
+            "response": finalize_answer(text_document(error_text), []),
+        })
+    else:
+        assistant_message: AssistantChatMessage = {"role": "assistant", "response": result.response}
+        if error_messages:
+            assistant_message["error_messages"] = error_messages
+        append_assistant_message(assistant_message)
     st.rerun()
 
 
