@@ -9,7 +9,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from src.infra.logging_utils import log_event
 from src.infra.runtime_paths import get_save_text_output_dir
 from src.app.web.cleanup import resolve_download_path
-from src.app.web.schemas import AgentRequest, AgentResponse, AgentStreamEvent
+from src.app.web.schemas import AGENT_STREAM_EVENT_SCHEMAS, AgentRequest, AgentStreamEvent
 
 
 logger = logging.getLogger(__name__)
@@ -26,20 +26,33 @@ async def root():
     return {"message": "Hello World"}
 
 
-@router.post("/agent", response_model=AgentResponse)
-async def run_agent_api(
-    request: Request,
-    request_data: AgentRequest,
-):
-    request_id = str(request.state.request_id)[:8]
-    result = await request.app.state.agent_request_service.run(
-        request_id=request_id,
-        request_data=request_data,
-    )
-    return result.to_response()
-
-
-@router.post("/agent/stream")
+@router.post(
+    "/agent/stream",
+    response_class=StreamingResponse,
+    responses={
+        200: {
+            "description": (
+                "UTF-8 SSE frames: event: <name>\\ndata: <JSON object>\\n\\n. "
+                "A valid final_response carries response, trace and debug. HTTP 200 and done "
+                "alone do not indicate success. An error event may precede a final_response; "
+                "preserve both the error and any final diagnostics. Clients must not automatically "
+                "resubmit interrupted requests because agent actions may already have executed. "
+                "x-sse-events maps each event name to its data schema."
+            ),
+            "content": {
+                "text/event-stream": {
+                    "schema": {"type": "string"},
+                    "x-sse-events": AGENT_STREAM_EVENT_SCHEMAS,
+                    "example": (
+                        'event: request_started\ndata: {"request_id":"abc12345","session_id":"demo"}\n\n'
+                        'event: error\ndata: {"message":"UPLOAD_PATH_INVALID: Upload file not found"}\n\n'
+                        'event: done\ndata: {}\n\n'
+                    ),
+                },
+            },
+        },
+    },
+)
 async def run_agent_stream_api(
     request: Request,
     request_data: AgentRequest,

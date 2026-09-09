@@ -3,10 +3,8 @@ from __future__ import annotations
 import asyncio
 import unittest
 
-from pydantic import ValidationError
-
 from src.app.web.agent_request_service import AgentRequestService
-from src.app.web.schemas import AgentRequest
+from src.app.web.schemas import AgentRequest, AgentResponse
 from src.core.answer_schema import export_answer_text
 from tests.web.answer_fixtures import response_payload
 
@@ -70,6 +68,11 @@ class _FakeSessionStore:
         return self.agent_manager, dict(self.agent_answer), 12
 
 
+async def _final_response(service: AgentRequestService, *, request_id: str, request_data: AgentRequest):
+    events = [event async for event in service.stream(request_id=request_id, request_data=request_data)]
+    return AgentResponse.model_validate(next(event.data for event in events if event.event == "final_response"))
+
+
 class AgentRequestServiceTest(unittest.TestCase):
     def test_invalid_runtime_response_does_not_silently_fall_back_to_message(self) -> None:
         """A broken response contract is reported instead of discarding source metadata."""
@@ -77,8 +80,15 @@ class AgentRequestServiceTest(unittest.TestCase):
             runtime_cleaner=_FakeCleaner(),
             session_store=_FakeSessionStore({"response": {"answer": "obsolete"}, "message": "fallback"}),
         )
-        with self.assertRaises(ValidationError):
-            asyncio.run(service.run(request_id="bad", request_data=AgentRequest(query="hello", session_id="s1")))
+        async def collect_events():
+            return [event async for event in service.stream(
+                request_id="bad", request_data=AgentRequest(query="hello", session_id="s1"),
+            )]
+
+        events = asyncio.run(collect_events())
+        self.assertEqual([event.event for event in events][-2:], ["error", "done"])
+        self.assertFalse(any(event.event == "final_response" for event in events))
+        self.assertIn("validation error", events[-2].data["message"])
 
     def test_include_debug_only_changes_debug_field(self) -> None:
         cleaner = _FakeCleaner()
@@ -98,7 +108,7 @@ class AgentRequestServiceTest(unittest.TestCase):
         service = AgentRequestService(runtime_cleaner=cleaner, session_store=store)
 
         without_debug = asyncio.run(
-            service.run(
+            _final_response(service,
                 request_id="req00001",
                 request_data=AgentRequest(
                     query="hello",
@@ -108,7 +118,7 @@ class AgentRequestServiceTest(unittest.TestCase):
             )
         )
         with_debug = asyncio.run(
-            service.run(
+            _final_response(service,
                 request_id="req00002",
                 request_data=AgentRequest(
                     query="hello",
@@ -124,7 +134,7 @@ class AgentRequestServiceTest(unittest.TestCase):
         self.assertEqual(export_answer_text(without_debug.response), "fallback answer")
         self.assertEqual(cleaner.calls[0]["current_session_id"], "demo-session")
         self.assertEqual(store.get_calls, ["demo-session", "demo-session"])
-        self.assertIsNone(store.run_calls[0]["progress_emitter"])
+        self.assertIsNotNone(store.run_calls[0]["progress_emitter"])
 
     def test_service_builds_session_metadata_snapshot_before_dispatch(self) -> None:
         cleaner = _FakeCleaner()
@@ -144,7 +154,7 @@ class AgentRequestServiceTest(unittest.TestCase):
         service = AgentRequestService(runtime_cleaner=cleaner, session_store=store)
 
         result = asyncio.run(
-            service.run(
+            _final_response(service,
                 request_id="req00003",
                 request_data=AgentRequest(
                     query="share this",

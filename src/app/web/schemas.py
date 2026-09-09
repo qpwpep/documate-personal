@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any, Literal, get_args
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -81,3 +81,37 @@ AgentStreamStageName = StageName
 class AgentStreamEvent(BaseModel):
     event: AgentStreamEventName
     data: dict[str, Any] = Field(default_factory=dict)
+
+
+def _event_data_schema(required: list[str], **properties: Any) -> dict[str, Any]:
+    return {"type": "object", "properties": properties, "required": required}
+
+
+_STREAM_STAGE_SCHEMA = {"type": "string", "enum": list(get_args(StageName))}
+_STRING_SCHEMA = {"type": "string"}
+_INTEGER_SCHEMA = {"type": "integer"}
+
+# Each entry describes the JSON value in the named SSE frame's data field.
+# final_response refers to the same runtime model used by response assembly.
+AGENT_STREAM_EVENT_SCHEMAS = {
+    "request_started": _event_data_schema(
+        ["request_id", "session_id"], request_id=_STRING_SCHEMA, session_id=_STRING_SCHEMA,
+    ),
+    "stage_started": _event_data_schema(
+        ["stage", "attempt"], stage=_STREAM_STAGE_SCHEMA, attempt=_INTEGER_SCHEMA,
+    ),
+    "stage_completed": _event_data_schema(
+        ["stage", "attempt"], stage=_STREAM_STAGE_SCHEMA, attempt=_INTEGER_SCHEMA,
+        latency_ms=_INTEGER_SCHEMA, status=_STRING_SCHEMA,
+    ),
+    "heartbeat": _event_data_schema(
+        ["stage", "attempt", "elapsed_ms"], stage=_STREAM_STAGE_SCHEMA,
+        attempt=_INTEGER_SCHEMA, elapsed_ms=_INTEGER_SCHEMA,
+    ),
+    "progress_snapshot": _event_data_schema(
+        ["stage", "summary"], stage=_STREAM_STAGE_SCHEMA, summary=_STRING_SCHEMA,
+    ),
+    "final_response": {"$ref": "#/components/schemas/AgentResponse"},
+    "error": _event_data_schema(["message"], message=_STRING_SCHEMA, stage=_STREAM_STAGE_SCHEMA),
+    "done": {"type": "object", "maxProperties": 0},
+}

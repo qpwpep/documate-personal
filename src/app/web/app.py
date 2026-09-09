@@ -14,6 +14,7 @@ from src.infra.settings import ConfigurationError, get_settings, validate_requir
 from src.app.web.agent_request_service import AgentRequestService
 from src.app.web.cleanup import RuntimeCleaner
 from src.app.web.routes import router
+from src.app.web.schemas import AgentResponse
 from src.app.web.session_store import InMemorySessionStore
 
 
@@ -97,6 +98,23 @@ def create_app() -> FastAPI:
         return response
 
     app.include_router(router)
+
+    default_openapi = app.openapi
+
+    def stream_openapi():
+        if app.openapi_schema is None:
+            schema = default_openapi()
+            # SSE carries this model inside event data, outside FastAPI's JSON
+            # response_model handling. Keep its referenced schemas discoverable.
+            final_response_schema = AgentResponse.model_json_schema(
+                ref_template="#/components/schemas/{model}", mode="serialization",
+            )
+            components = schema.setdefault("components", {}).setdefault("schemas", {})
+            components.update(final_response_schema.pop("$defs", {}))
+            components["AgentResponse"] = final_response_schema
+        return app.openapi_schema
+
+    app.openapi = stream_openapi
     return app
 
 

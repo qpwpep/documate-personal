@@ -57,19 +57,6 @@ class AgentRequestService:
         self._runtime_cleaner = runtime_cleaner
         self._session_store = session_store
 
-    async def run(
-        self,
-        *,
-        request_id: str,
-        request_data: AgentRequest,
-    ) -> AgentRequestResult:
-        return await asyncio.to_thread(
-            self._execute_request,
-            request_id=request_id,
-            request_data=request_data,
-            progress_emitter=None,
-        )
-
     def stream(
         self,
         *,

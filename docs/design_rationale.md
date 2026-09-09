@@ -92,7 +92,7 @@ FastAPI는 실제 API 실행과 세션 관리를 담당하고, Streamlit은 사�
 
 `SessionContext`는 최근 messages와 `memory_summary`를 하나의 immutable conversation snapshot으로 소유합니다. graph가 반환한 전체 메시지는 먼저 debug와 response assembly가 사용합니다. 사용자가 볼 응답까지 정상적으로 조립된 뒤에만 Tool/System/중간 AI를 제거하고 각 Human turn과 canonical final AI를 남겨 summary와 함께 단일 참조 교체로 commit합니다. graph, debug, assembly, projection 중 하나라도 실패하면 이전 정상 snapshot은 그대로 유지됩니다. 이 원자성은 대화 메모리에 한정되며 이미 실행된 파일 저장·Slack 전송 같은 외부 side effect까지 rollback하지는 않습니다.
 
-이 구조는 포트폴리오 데모와 백엔드 검증을 분리하지 않기 위한 선택입니다. 화면에서 보이는 동작이 테스트 및 benchmark 대상인 `POST /agent` 흐름과 이어져 있어야 유지보수 기준이 단순해집니다.
+Streamlit과 online benchmark는 `POST /agent/stream`으로 같은 진행 이벤트와 최종 응답을 받습니다. 전송 계층은 `final_response.data`의 `response`, `trace`, `debug` 전체를 전달하고, benchmark는 이 값들을 결과에 보존합니다. Streamlit 대화 기록에는 최종 `AnswerResponse`와 오류 메시지를 유지합니다. HTTP `200`이나 `done`만으로 성공을 판정하지 않으며, 실행 중 오류 뒤에 최종 응답이 오는 경우에도 오류 진단을 보존합니다. Streamlit은 통신 실패 때 요청을 자동으로 다시 보내지 않아 이미 실행된 저장·Slack 전송이 중복되지 않도록 합니다.
 
 ## 3. 주요 트레이드오프
 
@@ -174,7 +174,7 @@ synthesis 근거 수는 planner 최대 독립 요구 수와 같은 상수를 사
 
 기능 추가 자체보다 release gate를 통과하는 재현 가능한 상태를 우선합니다. benchmark CLI와 `uv run pytest -q` 결과를 문서화해, 프로젝트가 어느 기준에서 정상 동작하는지 확인할 수 있게 했습니다.
 
-평가 파이프라인은 실제 FastAPI `POST /agent`를 호출하는 online benchmark를 기준으로 합니다. `docs_only`, `rag_only`, `hybrid`, `tool_action` category를 나누고, rule 기반 지표와 LLM judge를 함께 사용합니다. `rag_only`는 fixture의 분류명이며 현재 업로드 검색을 평가합니다. deterministic `reference_coverage`는 표시한 내용의 참조가 실제 검색 결과에 연결되는지를 측정하고, 설명의 의미적 지지는 judge가 평가합니다. `not_evaluated`를 근거가 없는 답변의 점수로 취급하지 않습니다. hard gate는 `data/benchmarks/config.toml`에서 관리하며 자세한 지표는 [벤치마크 가이드](benchmarking.md)에 정리했습니다.
+평가 파이프라인은 실제 FastAPI `POST /agent/stream`을 호출하고 최종 응답 수신까지의 latency를 측정하는 online benchmark를 기준으로 합니다. HTTP 오류, SSE 오류, 연결 단절, 최종 응답 누락을 구분하고, 수신한 최종 응답의 debug도 평가에 유지합니다. `docs_only`, `rag_only`, `hybrid`, `tool_action` category를 나누고, rule 기반 지표와 LLM judge를 함께 사용합니다. `rag_only`는 fixture의 분류명이며 현재 업로드 검색을 평가합니다. deterministic `reference_coverage`는 표시한 내용의 참조가 실제 검색 결과에 연결되는지를 측정하고, 설명의 의미적 지지는 judge가 평가합니다. `not_evaluated`를 근거가 없는 답변의 점수로 취급하지 않습니다. hard gate는 `data/benchmarks/config.toml`에서 관리하며 자세한 지표는 [벤치마크 가이드](benchmarking.md)에 정리했습니다.
 
 ## 6. 개선 방향
 
