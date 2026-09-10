@@ -6,7 +6,7 @@ from src.core.contracts import RetrievalDiagnostic, RetryState
 from src.core.planner_schema import PlannerOutput
 from src.core.request_contracts import RequestContract, WireRequestContract, UnresolvedBody, MissingInformation
 from src.runtime.nodes.planner import make_planner_node
-from src.runtime.nodes.retry import format_retry_context_for_planner
+from src.runtime.nodes.retry import build_retrieval_feedback, format_retry_context_for_planner
 from tests.core.helpers import _CapturePlannerLLM, build_test_state
 from src.core.documents import DocumentElement, build_snapshot
 from src.core.evidence import SearchHit, RetrievalScore, build_evidence
@@ -60,6 +60,8 @@ def test_planner_keeps_independent_official_sources_on_the_same_route():
     assert [(t.route, t.query, t.k) for t in plan.tasks] == [
         ("docs", "numpy.concatenate axis", 2), ("docs", "pandas.concat axis", 3),
     ]
+
+
 
 
 

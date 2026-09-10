@@ -69,6 +69,10 @@ Windows 환경에서는 `-X utf8` 또는 `PYTHONUTF8=1` 사용을 권장합니�
 
 ## 2. 환경 변수
 
+세 GPT-5.6 모델은 역할별 환경 변수로 선택하며 같은 프롬프트와 출력 계약을 사용합니다. 공식 문서는 [Luna](https://developers.openai.com/api/docs/models/gpt-5.6-luna)를 비용 중심, [Terra](https://developers.openai.com/api/docs/models/gpt-5.6-terra)를 성능·비용 균형, [Sol](https://developers.openai.com/api/docs/models/gpt-5.6-sol)을 복잡한 전문 작업용으로 설명하며 모두 구조화 출력을 지원합니다. 이 구분만으로 서로 다른 지시문이 필요하다고 판단하지 않습니다. 모델별 분기는 같은 대표 입력에서 계약 준수·완결성·비용 차이가 확인될 때 검토합니다. [GPT-5.6 프롬프트 지침](https://developers.openai.com/api/docs/guides/latest-model?model=gpt-5.6)에 따라 중복 지시를 줄이면서 도메인 제약과 기존 회귀 사례를 보존합니다.
+
+프롬프트 책임은 요청 해석·검색 계획([planner](../src/runtime/nodes/planner/prompt_builder.py)), 검색 실패 피드백([retry](../src/runtime/nodes/retry.py)), 답변 합성([공통 정책](../src/core/prompts.py), [synthesis](../src/runtime/nodes/synthesis/prompt_builder.py)), 대화 요약([session](../src/runtime/nodes/session.py)), 평가용 심사([judge](../src/eval/judge_llm.py))로 나뉩니다. planner와 synthesis는 도구를 직접 호출하지 않고 서버가 출력 계약에 따라 검색·저장·전송을 실행합니다. 평가용 심사의 점수 기준은 생성 프롬프트와 독립적으로 유지합니다.
+
 ### 2.1 애플리케이션 설정
 
 기준 파일:
@@ -231,7 +235,9 @@ docs 도구는 task의 `k`를 Tavily `max_results`와 반환 evidence 한도에 
 
 synthesis는 planner와 공유하는 `MAX_PLANNER_TASKS`에 맞춰 최대 8개 근거를 선택합니다. 일반 excerpt 합계는 6,000자, docs+upload 혼합은 8,000자이며 compact는 각각 3,000자와 4,000자입니다. 일반 snippet은 `SYNTHESIS_PROMPT_SNIPPET_CHARS`, compact는 일반 설정과 `SYNTHESIS_COMPACT_PROMPT_SNIPPET_CHARS` 중 작은 값을 사용합니다. 별도의 숨은 1,800자 ceiling은 없습니다. 요구별 후보에 예산을 먼저 배분하므로 실제 선택은 개별 상한보다 짧을 수 있으며, 최대 8개를 허용해도 문자 예산 때문에 모든 요구가 충족된다는 보장은 없습니다. 표는 개별 snippet 대신 배정된 문자 예산 안에 전체 excerpt가 들어가는지 검사합니다. 이 예산은 excerpt만 계산하며 system prompt, 대화, JSON 메타데이터와 별도 표 셀 직렬화를 포함한 전체 입력 토큰 한도는 아닙니다.
 
-실제 모델에 보낸 범위만 evidence packet에 남기며, 범위가 달라지면 새 evidence ID를 사용합니다. 내부 `ResponseState.evidence_requirement_map`은 이 ID와 원래 requirement ID의 연결을 보존합니다. 모델 입출력에서만 `e1`, `e2` 같은 짧은 별칭을 사용하고, 서버가 참조 필드를 원래 ID로 복원한 뒤 검증합니다. 일반·compact 입력은 각자의 매핑을 사용하며 알 수 없는 별칭은 검증을 통과하지 못합니다. 최종 인용의 ID·원문·hash·offset은 이 별칭 때문에 바뀌지 않습니다. 모델 입력에는 선택 범위의 `is_partial`, `capture_scope`와 요구별 남은 aspect·빠진 aspect를 함께 전달합니다. 이 map은 검색 유래를 나타내며, 참조를 붙였다는 사실만으로 설명의 의미적 충분함을 증명하지 않습니다.
+실제 모델에 보낸 범위만 evidence packet에 남기며, 범위가 달라지면 새 evidence ID를 사용합니다. 내부 `ResponseState.evidence_requirement_map`은 이 ID와 원래 requirement ID의 연결을 보존합니다. 모델 입출력에서만 `e1`, `e2` 같은 짧은 별칭을 사용하고, 서버가 참조 필드를 원래 ID로 복원한 뒤 검증합니다. 이전 답변을 변환할 때도 모델에 제공하는 원문 사본의 refs에 같은 별칭을 적용하며 저장된 원문과 revision은 유지합니다. 일반·compact 입력은 각자의 매핑을 사용하며 알 수 없는 별칭은 검증을 통과하지 못합니다. 최종 인용의 ID·원문·hash·offset은 이 별칭 때문에 바뀌지 않습니다. 모델 입력에는 선택 범위의 `is_partial`, `capture_scope`와 요구별 남은 aspect·빠진 aspect를 함께 전달합니다. 이 map은 검색 유래를 나타내며, 참조를 붙였다는 사실만으로 설명의 의미적 충분함을 증명하지 않습니다.
+
+합성의 `[Reference Policy]`에는 최종 검증과 동일한 `retrieval_required`를 전달합니다. `source`·`inference`·`excerpt`에는 항상 유효한 refs가 필요하며 검색이 필요한 답변의 `example`에도 필요합니다. 이전 검색 답변의 변환은 이 조건을 상속합니다. `excerpt` 검증은 하나의 선택 범위 전체와 공백·줄바꿈까지 일치할 때만 `exact_match`입니다. 일부 인용이나 재서술은 `source`로 표시하며 의미적 근거성은 별도 평가 대상입니다.
 
 현재 구현은 인용한 원문 요소를 응답에 포함해 파일 교체·삭제 후에도 당시 근거를 보여줍니다. 원본 파일 bytes의 영구 보관소나 별도 문서 조회 API는 제공하지 않습니다. Docling 설치·변환, PDF 입력, 페이지 이미지 강조 표시는 후속 범위입니다. 향후 adapter가 `ParsedDocument`를 만들면 제목 계층·표·페이지·위치 정보를 기존 핵심 모델로 전달할 수 있습니다.
 

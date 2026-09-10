@@ -92,6 +92,9 @@ def prepare_synthesis_inputs(
             *packet, *(citation.evidence for citation in context.source_response.citations),
         ]}.values())
     reference_aliases = {f"e{index}": source.id for index, source in enumerate(packet, 1)}
+    retrieval_required = context.retrieval_required or bool(
+        context.source_response and context.source_response.retrieval_required
+    )
     messages, before, after = build_synthesis_messages(
         state=state,
         action_rules=_build_action_rules(contract=context.request_contract),
@@ -101,11 +104,12 @@ def prepare_synthesis_inputs(
         requirement_ids_by_evidence=requirement_ids,
         reference_aliases=reference_aliases,
         source_response=context.source_response,
+        retrieval_required=retrieval_required,
     )
     return PreparedSynthesisInputs(
         attempt=context.attempt, user_input=context.user_input, budget_profile=budget_profile,
         parse_errors=context.parse_errors, planner_parse_errors=context.planner_parse_errors,
-        retrieval_required=context.retrieval_required or bool(context.source_response and context.source_response.retrieval_required), evidence_packet=packet,
+        retrieval_required=retrieval_required, evidence_packet=packet,
         evidence_requirement_map=requirement_ids,
         reference_aliases=reference_aliases,
         model_messages=messages, history_before=before, history_after=after,
