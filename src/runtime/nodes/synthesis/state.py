@@ -25,10 +25,14 @@ def build_synthesis_updates(
     planner_errors: list[str] | None = None, synthesis_errors: list[str] | None = None,
     llm_calls: list[LLMCallMetadata] | None = None,
     evidence_requirement_map: dict[str, list[str]] | None = None,
+    kind: str = "draft",
+    request_id: str | None = None,
+    contract_revision: int = 0,
 ) -> GraphState:
     return {
         "response": ResponseState(result=result, evidence_packet=evidence_packet, synthesis_attempt=attempt,
-                                  evidence_requirement_map=evidence_requirement_map or {}),
+                                  evidence_requirement_map=evidence_requirement_map or {}, kind=kind,
+                                  request_id=request_id, contract_revision=contract_revision),
         "debug": debug.model_copy(update={
             "retrieval_errors": [*debug.retrieval_errors, *(retrieval_errors or [])],
             "planner_errors": [*debug.planner_errors, *(planner_errors or [])],

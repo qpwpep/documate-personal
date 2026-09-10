@@ -73,12 +73,14 @@ def run_synthesis_pipeline(
                 result = build_synthesis_fallback(
                     evidence_packet=used.evidence_packet, retrieval_required=used.retrieval_required,
                     message=_FALLBACK_NOTICE,
+                    request_contract=used.request_contract,
                 )
                 mode = "timeout_grounded_fallback"
         else:
             result = build_synthesis_fallback(
                 evidence_packet=used.evidence_packet, retrieval_required=used.retrieval_required,
                 message=_FALLBACK_NOTICE,
+                request_contract=used.request_contract,
             )
             mode = "timeout_grounded_fallback" if _is_timeout_error(exc) else "deterministic_grounded_fallback"
         fallback_ms = elapsed_ms(fallback_started, time.perf_counter())
@@ -95,4 +97,5 @@ def run_synthesis_pipeline(
         ],
         retrieval_errors=prepared.parse_errors, planner_errors=prepared.planner_parse_errors,
         synthesis_errors=errors, llm_calls=llm_calls,
+        kind="failure" if mode in {"timeout_grounded_fallback", "deterministic_grounded_fallback"} else "draft",
     )

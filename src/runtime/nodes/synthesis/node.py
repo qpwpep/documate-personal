@@ -74,5 +74,8 @@ def make_synthesize_node(
             retrieval_errors=outcome.retrieval_errors, planner_errors=outcome.planner_errors,
             synthesis_errors=outcome.synthesis_errors, llm_calls=outcome.llm_calls,
             evidence_requirement_map=outcome.evidence_requirement_map,
+            kind=outcome.kind,
+            request_id=prepared.request_contract.request_id,
+            contract_revision=prepared.request_contract.revision,
         )
     return synthesize
