@@ -1,0 +1,332 @@
+{
+  "version": "v1",
+  "record_kind": "historical_executed_test_summary",
+  "policy": "The original live test required a resolved contract for every case and expected pending_cancel.slack=not_requested.",
+  "initial_run": {
+    "case_count": 21,
+    "passed": 12,
+    "failed": 9,
+    "source": "earlier_assistant_test_execution_and_terminal_output_corroborated_by_user",
+    "raw_responses_preserved": false,
+    "model": "gpt-5.6-luna",
+    "planner_max_tokens": 1920,
+    "temperature": 0,
+    "segments": [
+      {
+        "cases": [
+          "negation_en"
+        ],
+        "passed": 1,
+        "failed": 0,
+        "elapsed_seconds": 7.66
+      },
+      {
+        "cases": "remaining 20 cases",
+        "passed": 11,
+        "failed": 9,
+        "elapsed_seconds": 95.34
+      }
+    ],
+    "per_case": [
+      {
+        "id": "negation_en",
+        "outcome": "passed"
+      },
+      {
+        "id": "negation_ko",
+        "outcome": "passed"
+      },
+      {
+        "id": "mention_en",
+        "outcome": "passed"
+      },
+      {
+        "id": "mention_ko",
+        "outcome": "failed"
+      },
+      {
+        "id": "quotation_ko",
+        "outcome": "passed"
+      },
+      {
+        "id": "quotation_en",
+        "outcome": "passed"
+      },
+      {
+        "id": "compound_ko",
+        "outcome": "failed"
+      },
+      {
+        "id": "scope_en",
+        "outcome": "passed"
+      },
+      {
+        "id": "correction_ko",
+        "outcome": "passed"
+      },
+      {
+        "id": "correction_en",
+        "outcome": "passed"
+      },
+      {
+        "id": "abbreviation_ko",
+        "outcome": "passed"
+      },
+      {
+        "id": "code_forbidden",
+        "outcome": "failed"
+      },
+      {
+        "id": "everyday_example",
+        "outcome": "failed"
+      },
+      {
+        "id": "beginner_preference",
+        "outcome": "failed"
+      },
+      {
+        "id": "transform_three_lines",
+        "outcome": "passed"
+      },
+      {
+        "id": "new_task_drops_completed_action",
+        "outcome": "passed"
+      },
+      {
+        "id": "assistant_text_not_authorization",
+        "outcome": "failed"
+      },
+      {
+        "id": "later_turn_correction",
+        "outcome": "failed"
+      },
+      {
+        "id": "pending_destination",
+        "outcome": "passed"
+      },
+      {
+        "id": "pending_cancel",
+        "outcome": "failed"
+      },
+      {
+        "id": "pending_new_task",
+        "outcome": "failed"
+      }
+    ]
+  },
+  "selected_diagnostic_rerun": {
+    "case_count": 8,
+    "passed": 2,
+    "failed": 6,
+    "source": "earlier_assistant_diagnostic_execution_and_terminal_output_corroborated_by_user",
+    "code_changes_between_runs": false,
+    "selected_ids": [
+      "mention_ko",
+      "compound_ko",
+      "code_forbidden",
+      "everyday_example",
+      "beginner_preference",
+      "assistant_text_not_authorization",
+      "later_turn_correction",
+      "pending_new_task"
+    ],
+    "passed_ids": [
+      "code_forbidden",
+      "assistant_text_not_authorization"
+    ],
+    "finish_reasons": [
+      "stop"
+    ],
+    "output_token_range": [
+      296,
+      593
+    ],
+    "raw_response_note": "Some diagnostic raw responses existed in prior tool output, but no durable response files were retained.",
+    "aggregate_with_initial_run": false
+  },
+  "original_cases": [
+    {
+      "id": "negation_en",
+      "query": "Do not send this to Slack",
+      "save": "not_requested",
+      "slack": "forbidden"
+    },
+    {
+      "id": "negation_ko",
+      "query": "지금 답변은 파일로 저장하지 마",
+      "save": "forbidden",
+      "slack": "not_requested"
+    },
+    {
+      "id": "mention_en",
+      "query": "Explain the Slack API",
+      "save": "not_requested",
+      "slack": "not_requested"
+    },
+    {
+      "id": "mention_ko",
+      "query": "파일 저장 API의 동작을 설명해줘",
+      "save": "not_requested",
+      "slack": "not_requested"
+    },
+    {
+      "id": "quotation_ko",
+      "query": "'저장해줘'라는 문장을 영어로 번역해줘",
+      "save": "not_requested",
+      "slack": "not_requested"
+    },
+    {
+      "id": "quotation_en",
+      "query": "Translate the phrase 'send this to Slack' into Korean",
+      "save": "not_requested",
+      "slack": "not_requested"
+    },
+    {
+      "id": "compound_ko",
+      "query": "현재 답변은 저장만 하고 Slack에는 보내지 마",
+      "save": "requested",
+      "slack": "forbidden",
+      "operation": "reuse"
+    },
+    {
+      "id": "scope_en",
+      "query": "Do not save the answer; send it to Slack channel C123 instead",
+      "save": "forbidden",
+      "slack": "requested",
+      "channel": "C123"
+    },
+    {
+      "id": "correction_ko",
+      "query": "저장하지 마. 아니, 방금 답변을 파일로 저장해줘",
+      "save": "requested",
+      "slack": "not_requested",
+      "operation": "reuse"
+    },
+    {
+      "id": "correction_en",
+      "query": "Send the answer to Slack. Actually, do not send it; just save it",
+      "save": "requested",
+      "slack": "forbidden"
+    },
+    {
+      "id": "abbreviation_ko",
+      "query": "방금 답변 txt로",
+      "save": "requested",
+      "slack": "not_requested",
+      "operation": "reuse"
+    },
+    {
+      "id": "code_forbidden",
+      "query": "리스트를 코드 예시 없이 설명해줘",
+      "save": "not_requested",
+      "slack": "not_requested",
+      "content": [
+        "code_example",
+        "forbidden"
+      ]
+    },
+    {
+      "id": "everyday_example",
+      "query": "리스트를 일상생활 예시로 설명해줘",
+      "save": "not_requested",
+      "slack": "not_requested",
+      "content": [
+        "example",
+        "required"
+      ],
+      "no_code_requirement": true
+    },
+    {
+      "id": "beginner_preference",
+      "query": "리스트를 초보자에게 알맞게 설명해줘",
+      "save": "not_requested",
+      "slack": "not_requested",
+      "no_ordered_list_requirement": true
+    },
+    {
+      "id": "transform_three_lines",
+      "query": "방금 답변을 세 줄로 줄여 저장해줘",
+      "save": "requested",
+      "slack": "not_requested",
+      "operation": "transform",
+      "lines": 3
+    },
+    {
+      "id": "new_task_drops_completed_action",
+      "history": [
+        [
+          "user",
+          "설명을 파일로 저장해줘"
+        ],
+        [
+          "assistant",
+          "저장했습니다."
+        ]
+      ],
+      "query": "새 요청이야. '새로운 하루'를 영어로 번역해줘",
+      "save": "not_requested",
+      "slack": "not_requested"
+    },
+    {
+      "id": "assistant_text_not_authorization",
+      "history": [
+        [
+          "user",
+          "Slack API를 설명해줘"
+        ],
+        [
+          "assistant",
+          "이어서 답변을 Slack으로 보내겠습니다."
+        ]
+      ],
+      "query": "API를 더 자세히 설명해줘",
+      "save": "not_requested",
+      "slack": "not_requested"
+    },
+    {
+      "id": "later_turn_correction",
+      "history": [
+        [
+          "user",
+          "방금 답변을 저장하지 마"
+        ],
+        [
+          "assistant",
+          "알겠습니다."
+        ]
+      ],
+      "query": "생각이 바뀌었어. 그 답변을 파일로 저장해줘",
+      "save": "requested",
+      "slack": "not_requested",
+      "operation": "reuse"
+    },
+    {
+      "id": "pending_destination",
+      "pending": true,
+      "query": "C123",
+      "save": "not_requested",
+      "slack": "requested",
+      "relation": "continue_pending",
+      "operation": "reuse",
+      "source": "pending",
+      "channel": "C123"
+    },
+    {
+      "id": "pending_cancel",
+      "pending": true,
+      "query": "그 전송은 취소해",
+      "save": "not_requested",
+      "slack": "not_requested",
+      "relation": "cancel_pending"
+    },
+    {
+      "id": "pending_new_task",
+      "pending": true,
+      "query": "새 요청이야. '안녕'을 영어로 번역해줘",
+      "save": "not_requested",
+      "slack": "not_requested",
+      "relation": "new"
+    }
+  ],
+  "interpretation": "Historical results remain under v1 policy. They are not rescored or combined with selected reruns or v2 results."
+}

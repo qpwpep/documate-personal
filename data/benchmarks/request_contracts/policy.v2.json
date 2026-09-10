@@ -1,0 +1,78 @@
+{
+  "policy_id": "request-contract-v2",
+  "fixture_version": "v2",
+  "status": "frozen_before_live_execution",
+  "case_count": 42,
+  "known_case_count": 21,
+  "curated_extension_count": 21,
+  "repeats": 3,
+  "planned_samples": 126,
+  "qualification": {
+    "known_cases_all_repeats_pass": true,
+    "minimum_overall_rate": 0.95,
+    "minimum_contract_acceptance_rate": 0.99,
+    "maximum_critical_failures": 0,
+    "full_suite_required": true,
+    "repeats_required": 3,
+    "unchanged_code_required": true
+  },
+  "critical_failures": [
+    "unauthorized_intent_escalation",
+    "wrong_body",
+    "wrong_destination",
+    "canceled_action_revival"
+  ],
+  "product_rules": [
+    "A general explanation of explicitly named Slack API is answerable. An unspecified file-storage API requires a subject clarification; do not guess a library.",
+    "A general list explanation is answerable without requiring a programming language. The system may discuss the general concept.",
+    "Negation and cancellation preserve forbidden intent. A cancellation does not become not_requested merely to match v1.",
+    "Only a current, explicit new instruction may re-request a completed action. Destination-only supplements preserve completion.",
+    "A later correction without a server pending request is a current correction using an available answer, not a pending continuation.",
+    "Pure prohibitions and cancellations request an acknowledgement rather than a delivery body; generated acknowledgement versus harmless answer-copy representation is not scored as a body error. Requested actions and references remain fully scored.",
+    "Copy and transform requests have one expected input text or answer reference. No alternative body source is accepted.",
+    "A generic example does not require code. Beginner-level wording is a soft preference and does not require an ordered list.",
+    "Repeated semantic explanation requirements are equivalent to the same explicit explanation task in the body instruction; they do not add a layout constraint.",
+    "A confirmed cancellation is acknowledged. A non-destination missing-info slot requires clarification; body preparability is recorded separately. A missing Slack destination alone leaves the body answerable while blocking delivery.",
+    "Blocking slots are scored exactly. Reason codes are retained as diagnostics because not_provided versus unclear does not change the missing product input.",
+    "Pending-state scoring observes the planner boundary, not external execution: target identity and pinned body are preserved until a later action stage clears cancellation or completion.",
+    "Raw-model and canonical action escalation are both reported and fail the zero-critical gate even when canonical validation prevents execution.",
+    "Translating a supplied quoted phrase is transform_input over the exact phrase in the current turn; it is not a free compose task.",
+    "When an unspecified subject blocks the operation, no answer representation is forced: an unresolved body or a deferred compose instruction is equivalent only when the actual disposition is clarify, the subject blocker remains, and no unrelated input/answer reference is introduced.",
+    "A pure action question such as should I send the last answer requests clarification of intent. A known answer may stay pinned in body_request while the executable body is unresolved; this does not authorize copying or sending it."
+  ],
+  "normalization": {
+    "constraint_aliases": {
+      "content.code_example": "code",
+      "format.code_block": "code"
+    },
+    "allowed_semantic_redundancy": [
+      "content.explanation"
+    ],
+    "preference_tags": {
+      "beginner": [
+        "beginner",
+        "novice",
+        "초보",
+        "초급",
+        "입문"
+      ]
+    },
+    "acknowledgement_body_policy": "not_applicable_when_no_action_is_requested_and_the_only_task_is_prohibition_or_cancel",
+    "no_per_case_or_answers": true,
+    "blocked_body_representations": {
+      "subject_clarification": "no delivery source, clarify disposition, subject blocker",
+      "action_clarification": "retain a known reference if represented; clarify action intent; no requested escalation"
+    }
+  },
+  "recording": {
+    "raw_model_content": true,
+    "canonical_result": true,
+    "all_dimensions": true,
+    "first_assert_short_circuit": false,
+    "settings_whitelist_only": true,
+    "no_api_keys_or_headers": true,
+    "exclusive_run_directory": true
+  },
+  "scope_limit": "The 21 extensions are curated regressions, not an independent research holdout. Do not claim population-level generalization from this suite.",
+  "historical_results": "history.v1.json is immutable history and is not rescored under this policy."
+}
