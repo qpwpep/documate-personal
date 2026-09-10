@@ -53,7 +53,8 @@ DocuMate에서 중점적으로 개선한 범위는 단순한 챗봇 구현보다
 - 인용은 내용 hash와 parser 설정으로 식별한 문서 snapshot, 원문 요소, 선택 범위를 보존합니다. 검색 범위를 줄이거나 업로드 파일을 바꿔도 기존 답변의 근거가 다른 원문으로 바뀌지 않습니다.
 - 업로드 인덱스는 원문을 chunk마다 복제하지 않습니다. 원문 구조를 한 번 보관하고 검색된 범위만 근거로 복원해 인용에 연결합니다.
 - Streamlit과 online benchmark를 FastAPI의 `POST /agent/stream`에 연결하고, 세션 TTL/LRU, 요청 lock, SSE progress, 업로드/생성 파일 cleanup을 구현했습니다.
-- 장기 대화는 고정 예산 rolling summary와 최근 canonical Human/AI 메시지로 유지하며, LangGraph reducer에서 퇴출 원문을 실제 삭제하고 응답 조립 성공 후에만 원자적으로 세션에 반영합니다.
+- 장기 대화는 고정 예산 rolling summary와 최근 canonical Human/AI 메시지로 유지합니다. 발화 ID와 정확한 원문은 최근 16개 및 보류 계약이 참조하는 발화를 별도로 보존하고, 응답 조립 성공 후에만 세션에 반영합니다.
+- 모델은 본문 작업 타입·사용자 의도·참조 선택자를 해석하고, 서버는 원문 범위·답변 hash·요청 revision을 확정합니다. 부족한 정보가 있어도 이미 확인한 금지·의사·출력 조건을 보존하며 재검색·재합성·전달은 같은 계약을 소비합니다.
 - 120-case online release benchmark와 pytest 회귀 테스트를 통해 pass rate, citation compliance, latency, 비용을 추적합니다.
 
 구조를 이렇게 나눈 이유와 주요 트레이드오프는 [설계 판단 기록](docs/design_rationale.md)에 정리했습니다. 실행 방법, 환경 변수, API 계약, 파일 제약, 운영 메모는 [런타임 참고 문서](docs/runtime_reference.md)를 참고하세요.
@@ -69,7 +70,7 @@ DocuMate에서 중점적으로 개선한 범위는 단순한 챗봇 구현보다
 | 답변 형식 | 자연어 응답 중심 | `AnswerDocument` 본문과 서버가 만든 citations·checks·issues·actions | 표시하는 내용을 직접 검사하고 UI·저장·전송에 같은 본문 사용 |
 | 웹 런타임 | 데모 UI와 백엔드 실행 기준이 느슨하게 분리 | Streamlit 데모와 benchmark가 FastAPI `POST /agent/stream` 사용 | 화면 동작과 평가가 같은 SSE 실행·응답 계약을 공유 |
 | 세션/파일 처리 | 업로드 파일과 생성 파일의 수명 관리가 약함 | 세션별 manager cache, TTL/LRU, 요청 lock, 업로드/출력 cleanup | 사용자별 업로드 격리와 반복 실행 안정성 강화 |
-| 장기 대화 메모리 | 원문 history가 계속 누적되거나 생성한 summary가 다음 요청에서 사라질 수 있음 | high/low watermark, bounded rolling summary, reducer 삭제, canonical Human/AI projection, atomic commit | 장기 세션의 prompt·프로세스 메모리에 검증 가능한 상한을 두고 Tool payload 재주입을 차단 |
+| 장기 대화 메모리 | 원문 history가 계속 누적되거나 생성한 summary가 다음 요청에서 사라질 수 있음 | high/low watermark, bounded rolling summary, reducer 삭제, canonical Human/AI projection, atomic commit | 대화 prompt·요약의 예산을 검증하고 Tool payload 재주입을 차단. 정확한 참조용 원문은 최근 16개와 보류 계약의 참조 발화를 별도 보존 |
 | 검증 체계 | 수동 확인과 일부 실험 결과 중심 | pytest 회귀 테스트 + 120-case online release benchmark | pass rate, citation compliance, latency, 비용을 변경마다 비교 가능 |
 
 ### 핵심 graph 다이어그램
@@ -123,11 +124,11 @@ flowchart LR
 
 ## 검증 결과
 
-회귀 테스트는 2026-09-07 KST 기준이며, 아래 `release` benchmark 수치는 `20260509_043436` 런의 기록입니다. 이 release 기록은 현재 응답·평가 계약으로 실행한 결과가 아닙니다. 새 계약의 품질은 별도 release run으로 확인해야 하며, 평가 기준이 다른 수치를 직접 비교하지 않습니다. 로컬 benchmark 실행은 `output/benchmarks/latest_release_run.txt`를 최신 `release` run 포인터로 갱신합니다.
+회귀 테스트는 2026-09-10 KST 기준이며, 아래 `release` benchmark 수치는 `20260509_043436` 런의 기록입니다. 이 release 기록은 현재 응답·평가 계약으로 실행한 결과가 아닙니다. 새 계약의 품질은 별도 release run으로 확인해야 하며, 평가 기준이 다른 수치를 직접 비교하지 않습니다. 로컬 benchmark 실행은 `output/benchmarks/latest_release_run.txt`를 최신 `release` run 포인터로 갱신합니다.
 
 | 항목 | 결과 |
 |---|---:|
-| 테스트 | `576 passed, 108 skipped, 67 subtests passed` |
+| 테스트 | `838 passed, 109 skipped, 67 subtests passed` |
 | release benchmark | `116/120` cases passed |
 | release pass rate | `0.9667` |
 | tool precision / recall | `0.9677` / `1.0000` |
@@ -138,6 +139,12 @@ flowchart LR
 기록된 당시의 comparable generated-suite에서 pass rate는 `0.3833`에서 `0.9667`로, citation compliance는 `0.3056`에서 `0.9556`으로 올라갔고 p95 latency는 `62063.0 ms`에서 `9435.9 ms`로 줄었습니다.
 
 추세 그래프는 [docs/assets/benchmark_history.svg](docs/assets/benchmark_history.svg)에 보관합니다. 실행 방법은 [벤치마크 가이드](docs/benchmarking.md)를 참고하세요. 로컬 run의 기계 판독 결과와 상세 분석은 각각 `output/benchmarks/<run_id>/summary.json`, `output/benchmarks/<run_id>/report.md`에서 확인합니다.
+
+## 요청 계약 검증
+
+RequestContract v2 해석 평가에서는 `gpt-5.6-luna`, 출력 한도 1920, `temperature=0`으로 42개 사례를 각 3회 실행했습니다. 두 전체 배치 결과는 각각 **88/126**, 구조 수정 후 **103/126** 통과이며, 두 번째 계약 수용률은 **122/126**입니다. 사전에 정한 전체 성공률 95%·계약 수용률 99%·기존 사례 모두 3/3 성공 기준에는 미달했습니다. 금지 행동 승격 등 심각 실패는 두 배치에서 0건이었습니다.
+
+마지막 목적지 보존 수정 후 같은 원시 응답을 재검증한 **105/126**은 새 모델 호출이 없는 오프라인 결과입니다. 최초 v1 **12/21 통과·9/21 실패**는 별도 정책 이력으로 유지하며 v2와 직접 비교하지 않습니다. 이 평가는 planner 해석 범위이며 현재 계약으로 전체 120-case release benchmark를 다시 실행한 결과가 아닙니다. 실행별 근거와 한계는 [요청 계약 평가 기록](docs/benchmarking.md#261-현재-검증-기록)에 정리했습니다.
 
 ## 문서
 

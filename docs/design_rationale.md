@@ -26,13 +26,23 @@ summary도 별도로 bounded합니다. 새 summary는 `기존 bounded summary + 
 
 planner와 synthesis에 전달되는 summary는 과거 사용자 입력에서 유래한 비신뢰 데이터입니다. 고정 System policy가 그 안의 명령을 따르거나 검색 evidence로 취급하지 말라고 명시하고, 실제 summary payload는 system instruction이 아닌 별도 assistant data message로 전달합니다.
 
+### 요청 계약과 실행 의사의 분리
+
+최초 planner 호출은 검색 계획과 [`WireRequestContract`](../src/core/request_contracts.py)를 함께 생성합니다. 별도의 의도 판별 모델은 호출하지 않습니다. 서버는 사용자 발화 ID·정확한 원문 구절·적용 범위·해석 종류를 검증하고, 원문 선택 범위와 기존 답변 hash를 연결한 `RequestContract`를 `RuntimeState.request_contract`에 확정합니다. 요청 ID와 revision은 서버가 소유하며 실제 보류 요청에 대한 새 발화의 보충·정정만 revision을 올립니다. 이후 검색 재시도와 재합성은 이 계약을 그대로 사용합니다. 저장·Slack·코드 예시 등의 단어를 후속 단계가 다시 해석해 행동이나 필수 형식을 추가하지 않습니다.
+
+액션은 `requested`, `forbidden`, `not_requested`, `unresolved`를 구분합니다. 본문은 신규 작성, 사용자 입력 복사·변환, 기존 답변 복사·변환, 검색 원문 발췌, 단순 확인, 미해결의 타입으로 나눕니다. 단순 금지 확인은 전달 본문을 필요로 하지 않으므로 `acknowledge`로 표현하고 고정 확인문만 반환합니다. 입력 작업에 답변 참조를 붙이거나 줄 수에 숫자를 누락하는 등의 정적 오류를 모델 생성 스키마와 서버 타입이 함께 거부합니다. 입력 선택은 서버가 실제 발화에서 확정하며 이전·보류 답변 참조는 `content_hash`에 연결합니다. `missing_info`와 본문·행동 준비 상태를 분리해 질문이 필요해도 이미 해석된 금지·의사·출력 조건을 잃지 않습니다. 내용 요구와 출력 형식은 독립적이며 각각 필수·금지·선호를 표현합니다. 일반 예시는 코드를 요구하지 않고, 초보자라는 독자 수준은 순서 목록을 강제하지 않습니다. 인용·단순 언급이나 다른 범위의 근거를 액션과 필수 형식의 지시로 승격하는 자기모순 계약은 거부합니다. 원문 구절의 존재만으로 자연어 해석의 정확성이 증명되지는 않으므로 실제 모델 평가는 별도로 수행합니다.
+
+근거 ID도 모델이 선택한 원문과 서버가 보관하는 식별자를 나눕니다. 모델의 한 응답 안에서만 유효한 임시 ID를 서버가 요청·revision·발화 범위로 바인딩하고, 보류 계약의 기존 근거와 완료 상태는 서버가 승계합니다. 보류 문맥에는 확정 사실을 제공하며 기존 근거 레코드를 모델이 재생성하게 하지 않습니다. 이렇게 해야 의미를 바꾸지 않고 적용 범위를 다시 표현한 모델 출력이 기존 ID를 덮거나 충돌하지 않습니다. 같은 응답 안의 잘못된 참조, 원문 불일치, 현재 사용자 근거 없는 행동 변경은 계속 거부합니다.
+
+실행 노드는 명시적으로 요청된 행동, 확정된 본문·목적지, 계약 검사를 통과한 `ResponseState.kind="answer"`와 일치하는 요청 ID·revision을 요구합니다. 초안·보충 질문·실패 안내는 전달하지 않습니다. 계약 누락이나 파싱 오류를 정규식으로 복구하는 경로는 없습니다. 목적지 설정은 이미 요청된 전송의 대상을 채우며 전송 의사를 만들지 않습니다.
+
 ### 검색 소스와 근거 요구의 분리
 
 검색 소스는 `docs`, `upload` route로 분리했습니다. 공식 문서 검색과 세션 업로드 파일 검색은 데이터 출처와 확인 기준이 다르기 때문입니다. route는 도구 선택 기준이고, 답변에 필요한 근거의 단위는 `RetrievalTask`입니다. NumPy와 pandas를 비교하는 질문처럼 같은 route에 여러 대상이 있어도 task를 합치지 않습니다. 계획은 최대 8개 독립 task를 유지하며 `requirement_id`로 검색·재시도·본문 근거를 연결합니다.
 
 `RetrievalRequirement`에는 소유 라이브러리 `library`, 정확한 대상 `symbols`, 명시 버전 `version`, 확인할 구체 식별자·매개변수 `aspects`, 근거 종류 `match`를 둡니다. `topic`은 넓은 설명, `symbol`은 API·코드 사용, `definition`은 업로드 함수·클래스 구현입니다. 검색 문자열 `query`를 바꾸더라도 이 요구가 사라지지 않게 하는 것이 별도 계약을 둔 이유입니다. 일반적인 설명·표현 지시는 query에 남기고, 사용자 대화에 명시된 literal anchor만 aspects의 필수 조건으로 인정합니다. 모델이 예상한 옵션값까지 필수 조건으로 만들면 올바른 문서도 거절할 수 있으므로, 검색 가설과 사용자 제약을 구분합니다. task의 `k`도 도구에 전달합니다.
 
-필요한 출처는 업로드 가용성과 무관하게 LLM이 판단합니다. 다만 대화로도 지시 대상이나 비교 버전을 정하지 못하면 `clarification_question`과 검색 없는 계획을 반환합니다. 파일이 없다는 실행 제약, 질문이 미해결인 상태, planner 호출·출력 실패를 서로 구분합니다. planner의 검색어 후처리는 공백만 정규화하며, docs 도구의 별칭 정규화도 원래 대상·버전 요구를 유지합니다.
+필요한 출처는 업로드 가용성과 무관하게 LLM이 판단합니다. 다만 대화로도 지시 대상이나 비교 버전을 정하지 못하면 계약의 `missing_info`와 검색 없는 계획을 반환하고 서버가 질문을 파생합니다. 파일이 없다는 실행 제약, 본문 대상이 미해결인 상태, 행동 의사·목적지만 부족한 상태, planner 호출·출력 실패를 서로 구분합니다. planner의 검색어 후처리는 공백만 정규화하며, docs 도구의 별칭 정규화도 원래 대상·버전 요구를 유지합니다.
 
 `docs` route는 Tavily와 [agent_rules.toml](../src/infra/config/agent_rules.toml)의 허용 source를 사용합니다. 명시 라이브러리의 domain을 먼저 고르고, URL·path prefix·원문 유효성과 함께 심볼의 문서 소유권·요청 버전·발췌의 aspect를 검사합니다. 다른 API를 설명하는 문서에 요청 이름이 언급됐다는 이유만으로 해당 API 근거를 확보한 것으로 취급하지 않습니다. `upload` route는 현재 세션의 단일 `.py` 또는 `.ipynb`에 한정합니다. 일반 질문은 Chroma 후보를 검색하고, 명시 코드 심볼은 같은 retriever의 전체 source registry를 AST로 조회합니다.
 
@@ -70,19 +80,19 @@ LLM은 [`AnswerDocument`](../src/core/answer_schema/models.py)의 `blocks`만 �
 
 Streamlit은 `AnswerResponse` 전체를 채팅 기록에 보존하고, 각 블록 아래의 인용 popover에서 발췌와 원문 요소를 보여줍니다. 제목 경로·줄·Notebook cell·페이지 메타데이터·내용 hash가 발췌와 연결됩니다. 표는 병합과 선택 셀을 보존하며 코드의 줄바꿈·들여쓰기를 유지합니다. 원문을 현재 업로드 파일에서 다시 읽는 방식이 아니므로 파일이 바뀐 뒤에도 이전 답변의 근거를 확인할 수 있습니다.
 
-저장과 전송 결과는 `ActionReceipt`로 분리합니다. 성공·실패·보류 상태와 다운로드를 본문과 구분해 표시하고, 도구 실행 결과를 답변 문장에 끼워 넣지 않습니다. 후속 저장·전송 요청은 typed `previous_response`를 사용해 직전 본문과 근거를 함께 전달합니다.
+저장과 전송 결과는 `ActionReceipt`로 분리합니다. 성공·실패·보류 상태와 다운로드를 본문과 구분해 표시하고, 도구 실행 결과를 답변 문장에 끼워 넣지 않습니다. 완성된 `previous_response`만 후속 재사용·수정의 원본이 됩니다. 목적지가 없으면 원 본문을 유지한 채 receipt에서 목적지를 묻고, `PendingAction`이 원 본문·인용·계약·이미 성공한 행동을 보존합니다. 보충 질문은 원본을 덮지 않으며, 목적지 보충 시 먼저 성공한 저장을 반복하지 않습니다. 취소와 별개의 새 작업은 보류 요청과 구분합니다.
 
 ### 검증과 선택적 재시도
 
 검색 결과가 있어도 필요한 대상이나 조건이 모두 포함되는 것은 아닙니다. synthesis 전에는 requirement별 결과·가용성·도구 오류와 `answerability`를 검사합니다. `covered`는 명시 대상·제약에 대응하는 근거 확보, `partial`은 일부 미충족, `missing`은 현재 검색에서 근거 미확보, `unknown`은 충족이나 부재를 판단할 수 없는 상태입니다. upload에서 대상 부재를 단정하려면 전체 source를 검사해야 합니다. 명시 요구는 `covered`가 필요하지만 제약 없는 일반 topic에는 유효한 검색 후보로 설명을 생성할 수 있습니다. 이 구분은 검색 점수 임계값으로 대체하지 않습니다.
 
-synthesis 후에는 실제 packet과 본문이 인용한 범위에서 참조·발췌 일치, requirement 연결, literal aspect와 요청한 출력 구조를 확인합니다. 모델 입력에도 요구별 근거 ID·남은 aspect·빠진 aspect와 각 source의 `is_partial`을 전달합니다. map은 검색 유래를 기록하므로, 그 ID 하나를 인용한 사실만으로 모든 aspect가 남아 있다고 보지 않습니다. 코드 예제는 코드 블록, 단계는 순서 있는 목록, 체크리스트는 목록처럼 관찰 가능한 형식을 검사하며, 자연어 설명의 의미적 충족은 별도 평가 영역으로 남깁니다. 고정된 출처별 섹션을 강제하지 않습니다.
+synthesis 후에는 실제 packet과 본문이 인용한 범위에서 참조·발췌 일치, requirement 연결, literal aspect와 확정 계약의 조건을 확인합니다. 모델 입력에도 요구별 근거 ID·남은 aspect·빠진 aspect와 각 source의 `is_partial`을 전달합니다. map은 검색 유래를 기록하므로, 그 ID 하나를 인용한 사실만으로 모든 aspect가 남아 있다고 보지 않습니다. 공통 계약 검사는 필수 누락과 금지 위반을 구분하고 선호 미충족을 재생성 조건으로 만들지 않습니다. 코드 금지는 코드 블록·문단 안 Markdown 코드 fence·참조한 코드 원문과 동일한 문단에도 적용하지만, 코드 근거를 인용한 자연어 설명은 허용합니다. 줄 수는 인용 부록과 receipt를 제외한 본문의 비어 있지 않은 줄로 검사합니다. 비교·설명의 의미 충족은 구조 검사로 입증하지 않습니다.
 
 `RetryState`는 현재 시도 시작 위치, 원래 task, `failed_requirement_ids`, `preserved_hits`, 보존 진단과 retry scope를 관리합니다. `refresh_routes`에서는 실패한 요구의 query를 다시 계획하고 같은 route의 성공한 다른 요구도 보존합니다. 재계획에는 실제 query·실패 진단·이미 시도한 query를 제공하며, 원래 ID·라이브러리·심볼·버전·aspect는 유지합니다. docs 도구는 같은 요구의 부분 후보도 새 후보와 합쳐 동일한 대상·버전·source 범위로 다시 검사합니다. 재사용은 점수가 높았다는 이유로 검사를 생략하는 경로가 아닙니다.
 
-본문 참조나 요구 coverage 문제가 있고 원문 검색 결과가 남아 있으면 `reuse_hits_resynthesize`에서 planner·검색을 반복하지 않고 synthesis로 직접 돌아갑니다. docs·upload·hybrid에 같은 제한된 재합성 정책을 적용합니다. 기본 재시도 상한은 1회이고 `max_retries=0`도 존중합니다. 재시도 후 잘못된 내용 단위를 제거하면 참조·인용뿐 아니라 남은 requirement coverage도 다시 검사합니다. 필요한 내용을 충족하지 못하면 확인 가능한 발췌와 불완전함을 표시합니다.
+본문 참조나 요구 coverage 문제가 있고 원문 검색 결과가 남아 있으면 `reuse_hits_resynthesize`에서 planner·검색을 반복하지 않고 synthesis로 직접 돌아갑니다. 검색이 필요 없는 신규 작성과 기존 답변 수정도 확정 계약을 유지하며 한 번 재합성할 수 있습니다. 기본 재시도 상한은 1회이고 `max_retries=0`도 존중합니다. 재시도 후 잘못된 내용 단위를 제거하면 참조·인용뿐 아니라 남은 requirement coverage와 필수·금지 조건도 다시 검사합니다. 원문 fallback이 같은 조건을 충족하지 못하거나 의미 요구를 확인할 수 없으면 실패 안내만 반환합니다. 불완전한 발췌가 표시되더라도 완료된 전달 본문으로 승인하지 않습니다.
 
-planner 호출이나 출력 검증 실패는 `planner_unavailable`, 해석되지 않은 질문은 `clarification_question`, 업로드 부재는 파일 안내로 구분합니다. 필요한 입력을 해결하기 전에는 검색·저장·Slack 전송을 진행하지 않아, 실패 안내나 이전 답변이 요청한 결과물로 전달되지 않도록 합니다.
+planner 호출이나 출력 검증 실패는 `planner_unavailable`, 미해결 정보는 계약의 `missing_info`, 업로드 부재는 파일 안내로 구분합니다. 본문에 필요한 입력이 부족하면 생성·전달을 보류하고, 행동 의사·목적지만 부족하면 가능한 본문을 준비한 뒤 해당 행동만 보류합니다. 실패 안내나 변환 전 원본은 완료된 결과물로 전달하지 않습니다.
 
 ### FastAPI + Streamlit 런타임 분리
 
@@ -90,7 +100,7 @@ FastAPI는 실제 API 실행과 세션 관리를 담당하고, Streamlit은 사�
 
 세션별 manager cache, TTL/LRU 기반 정리, 요청 lock, SSE progress, 업로드/생성 파일 cleanup을 포함해 데모 UI와 실제 실행 경로가 같은 런타임을 바라보게 했습니다. `/agent/stream`은 `ProgressEmitter`로 request, stage, progress snapshot, final response, error, done 이벤트를 내보냅니다.
 
-`SessionContext`는 최근 messages와 `memory_summary`를 하나의 immutable conversation snapshot으로 소유합니다. graph가 반환한 전체 메시지는 먼저 debug와 response assembly가 사용합니다. 사용자가 볼 응답까지 정상적으로 조립된 뒤에만 Tool/System/중간 AI를 제거하고 각 Human turn과 canonical final AI를 남겨 summary와 함께 단일 참조 교체로 commit합니다. graph, debug, assembly, projection 중 하나라도 실패하면 이전 정상 snapshot은 그대로 유지됩니다. 이 원자성은 대화 메모리에 한정되며 이미 실행된 파일 저장·Slack 전송 같은 외부 side effect까지 rollback하지는 않습니다.
+`SessionContext`는 최근 messages, `memory_summary`, 발화 ID와 원문의 `user_turns`를 하나의 immutable conversation snapshot으로 소유합니다. 발화 ID는 요청 진입에서 한 번 부여하고 projection·길이 제한·재시도에서 유지합니다. 원문은 최근 16개와 보류 계약이 참조하는 발화를 보존하며 요약이나 잘린 표시 문자열로 대체하지 않습니다. summary·messages의 기존 byte 예산은 대화 부분에 적용하고 원문 ledger와 보류 본문은 별도 상태로 관리합니다. graph가 반환한 전체 메시지는 먼저 debug와 response assembly가 사용합니다. 사용자가 볼 응답까지 정상적으로 조립된 뒤에만 Tool/System/중간 AI를 제거하고 각 Human turn과 canonical final AI를 남겨 원문 ledger와 함께 단일 참조 교체로 commit합니다. graph, debug, assembly, projection 중 하나라도 실패하면 이전 정상 snapshot은 그대로 유지됩니다. 이 원자성은 대화 메모리에 한정되며 이미 실행된 파일 저장·Slack 전송 같은 외부 side effect까지 rollback하지는 않습니다.
 
 Streamlit과 online benchmark는 `POST /agent/stream`으로 같은 진행 이벤트와 최종 응답을 받습니다. 전송 계층은 `final_response.data`의 `response`, `trace`, `debug` 전체를 전달하고, benchmark는 이 값들을 결과에 보존합니다. Streamlit 대화 기록에는 최종 `AnswerResponse`와 오류 메시지를 유지합니다. HTTP `200`이나 `done`만으로 성공을 판정하지 않으며, 실행 중 오류 뒤에 최종 응답이 오는 경우에도 오류 진단을 보존합니다. Streamlit은 통신 실패 때 요청을 자동으로 다시 보내지 않아 이미 실행된 저장·Slack 전송이 중복되지 않도록 합니다.
 
