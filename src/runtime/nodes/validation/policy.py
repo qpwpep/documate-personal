@@ -8,7 +8,7 @@ from src.core.answer_schema import (
 )
 from src.core.contracts import GraphState, ResponseState
 from src.core.evidence import EvidenceRef
-from src.core.request_contracts import infer_answer_contract, missing_required_content
+from src.core._legacy_request_contracts import infer_answer_contract, missing_required_content
 from src.runtime.nodes.retry import build_followup_from_routes
 from src.runtime.nodes.validation.models import ValidationAssessment, ValidationSnapshot
 from src.runtime.nodes.validation.snapshot import detect_missing_route_coverage, detect_missing_requirement_coverage

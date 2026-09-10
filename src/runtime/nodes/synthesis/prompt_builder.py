@@ -11,7 +11,7 @@ from src.core.conversation_memory import build_untrusted_memory_prompt_messages
 from src.core.evidence import EvidenceRef
 from src.core.planner_schema import RetrievalTask
 from src.core.prompts import SYS_POLICY
-from src.core.request_contracts import AnswerContract, infer_answer_contract
+from src.core._legacy_request_contracts import AnswerContract, infer_answer_contract
 from src.runtime.nodes.session import keep_recent_messages
 from src.runtime.nodes.synthesis.evidence_selection import missing_literal_aspects, select_evidence_range
 

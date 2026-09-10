@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from src.core.answer_schema import finalize_answer
-from src.core.request_contracts import infer_answer_contract, missing_required_content
+from src.core._legacy_request_contracts import infer_answer_contract, missing_required_content
 from src.runtime.nodes.retry import contains_tool_error
 from src.runtime.nodes.validation.models import ValidationAssessment, ValidationSnapshot
 from src.runtime.nodes.validation.route_policy import route_error_statuses
