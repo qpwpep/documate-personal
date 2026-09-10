@@ -12,8 +12,6 @@ from pydantic import BaseModel, Field
 
 class IntentRules(BaseModel):
     docs_patterns: list[str] = Field(default_factory=list)
-    save_patterns: list[str] = Field(default_factory=list)
-    slack_patterns: list[str] = Field(default_factory=list)
 
 
 class PlannerRules(BaseModel):

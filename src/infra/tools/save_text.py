@@ -17,7 +17,7 @@ def build_save_text_tool() -> Callable[..., dict[str, Any]]:
             normalized_prefix = str(filename_prefix or "response").strip() or "response"
             filename = f"{normalized_prefix}_{ts}.txt"
             filepath = output_path / filename
-            filepath.write_text(content, encoding="utf-8-sig")
+            filepath.write_text(content, encoding="utf-8-sig", newline="")
             byte_count = len(str(content or "").encode("utf-8-sig"))
 
             return {

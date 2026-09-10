@@ -53,11 +53,3 @@ def _looks_like_docs_explainer_request(text: str) -> bool:
 
 def needs_search(text: str) -> bool:
     return _matches_any(text, get_rules_config().intents.docs_patterns) or _looks_like_docs_explainer_request(text)
-
-
-def needs_save(text: str) -> bool:
-    return _matches_any(text, get_rules_config().intents.save_patterns)
-
-
-def needs_slack(text: str) -> bool:
-    return _matches_any(text, get_rules_config().intents.slack_patterns)

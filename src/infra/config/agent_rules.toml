@@ -3,15 +3,6 @@ docs_patterns = [
   "\\b(latest|official|docs?|documentation|reference|api|syntax|parameter|manual)\\b",
   "(공식|문서|레퍼런스|참고\\s*자료|최신|API)",
 ]
-save_patterns = [
-  "\\b(save|export|write|download|txt|text file)\\b",
-  "(저장|텍스트\\s*파일|txt로|내보내|다운로드)",
-]
-slack_patterns = [
-  "\\b(slack|dm|direct message|channel)\\b",
-  "(슬랙|DM|채널|다이렉트\\s*메시지).*(보내|전송|공유|전달)",
-  "(보내|전송|공유|전달).*(슬랙|DM|채널)",
-]
 
 [planner]
 compare_clause_pattern = "(?i)\\b(compare|comparison|versus|vs\\.?|along with|together)\\b|비교|함께|같이"

@@ -10,7 +10,6 @@ from src.core.prompts import needs_search
 from src.core.contracts.boundary.graph import build_graph_state_input
 from src.infra.llm import build_llm_registry
 from src.infra.settings import get_settings
-from src.runtime.nodes.actions import is_action_only_request
 from src.runtime.nodes.planner import make_planner_node
 
 
@@ -251,13 +250,6 @@ class PromptsTest(unittest.TestCase):
     def test_needs_search_matches_korean_technical_request(self) -> None:
         self.assertTrue(needs_search("판다스의 성능 최적화를 알려줘"))
 
-    def test_saving_an_answer_to_a_local_file_is_action_only(self) -> None:
-        self.assertTrue(is_action_only_request("최종 답변을 로컬 파일로 저장해줘"))
-
-    def test_project_lookup_before_saving_is_not_action_only(self) -> None:
-        self.assertFalse(is_action_only_request("내 프로젝트 코드에서 merge 사용을 찾아서 저장해줘"))
-
-
 @pytest.fixture(scope="module")
 def live_planner():
     settings = get_settings().model_copy(update={"verbose": False})
@@ -286,7 +278,7 @@ def test_live_source_selection(case, live_planner):
     actual = set(planner.diagnostics.required_routes)
     assert required <= actual <= allowed, (case["query"], actual, required, allowed)
     if "upload" in actual and not available:
-        assert planner.output == PlannerOutput.fallback()
+        assert planner.output == PlannerOutput.fallback(request_contract=result["runtime"].request_contract)
         assert planner.guided_followup
         assert planner.diagnostics.reason == "upload_retriever_missing"
     else:

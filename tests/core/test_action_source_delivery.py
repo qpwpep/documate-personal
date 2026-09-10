@@ -9,11 +9,14 @@ from src.core.answer_schema import (
     ResponseIssue,
     export_answer_text,
     finalize_answer,
+    text_document,
 )
 from src.core.contracts import GraphState, PlannerState, ResponseState, RuntimeState
 from src.core.documents import DocumentElement, SourceAnchor, build_snapshot
 from src.core.evidence import build_evidence
+from src.infra.tools.save_text import build_save_text_tool
 from src.runtime.nodes.actions import make_action_postprocess_node
+from .test_actions_nodes import _contract
 
 
 def test_save_and_slack_retain_source_selection_and_limitations_without_mutating_answer(tmp_path: Path):
@@ -40,10 +43,12 @@ def test_save_and_slack_retain_source_selection_and_limitations_without_mutating
     original_content = answer.content.model_dump(mode="json")
     original_hash = answer.content_hash
     request = "결과를 txt로 저장하고 슬랙으로 보내줘"
+    contract = _contract(save="requested", slack="requested")
     state: GraphState = {
-        "runtime": RuntimeState(user_input=request),
+        "runtime": RuntimeState(user_input=request, request_contract=contract),
         "planner": PlannerState(),
-        "response": ResponseState(result=answer, evidence_packet=[evidence]),
+        "response": ResponseState(result=answer, evidence_packet=[evidence], kind="answer",
+                                  request_id=contract.request_id, contract_revision=contract.revision),
         "messages": [HumanMessage(content=request)],
     }
     destination = tmp_path / "answer.txt"
@@ -81,3 +86,62 @@ def test_save_and_slack_retain_source_selection_and_limitations_without_mutating
     assert [(receipt.kind, receipt.status) for receipt in final.actions] == [
         ("save_text", "success"), ("slack_notify", "success"),
     ]
+
+
+def _code_source_answer(text: str, *, basis: str):
+    code = "def retry():\n    return 3\n"
+    snapshot = build_snapshot(
+        source_uri="https://docs.example.com/retry.py", title="Retry configuration",
+        media_type="text/x-python", source_type="official", content=code,
+        parser="python", parser_version="1",
+    )
+    evidence = build_evidence(
+        snapshot=snapshot,
+        element=DocumentElement(element_id="retry-code", kind="code", text=code, language="python"),
+    )
+    return finalize_answer(text_document(text, basis=basis, refs=[evidence.id]), [evidence])
+
+
+def _no_code_save_state(answer):
+    contract = _contract(save="requested", answer={
+        "content": [{"kind": "code_example", "mode": "forbidden", "evidence_ids": ["request"]}],
+    })
+    return {
+        "runtime": RuntimeState(request_contract=contract),
+        "planner": PlannerState(),
+        # Delivery must use the checked citations even if transient retrieval
+        # state is unavailable after a previous-answer reuse.
+        "response": ResponseState(result=answer, kind="answer", request_id=contract.request_id, contract_revision=contract.revision),
+    }
+
+
+def test_forbidden_source_code_wrapped_as_paragraph_is_not_saved(tmp_path: Path, monkeypatch):
+    """코드 원문을 일반 문단으로 감싸도 코드 금지 조건을 우회하여 저장할 수 없다."""
+    output = tmp_path / "saved"
+    monkeypatch.setattr("src.infra.tools.save_text.get_save_text_output_dir", lambda: output)
+    answer = _code_source_answer("def retry():\n    return 3\n", basis="excerpt")
+
+    updates = make_action_postprocess_node(build_save_text_tool(), lambda **kwargs: {}, False)(
+        _no_code_save_state(answer)
+    )
+
+    assert not output.exists()
+    assert "response" not in updates
+
+
+def test_explanation_citing_code_is_saved_when_code_is_forbidden(tmp_path: Path, monkeypatch):
+    """코드 출처를 근거로 설명한 일반 문장은 코드 자체로 오인하여 저장을 막지 않는다."""
+    output = tmp_path / "saved"
+    monkeypatch.setattr("src.infra.tools.save_text.get_save_text_output_dir", lambda: output)
+    answer = _code_source_answer("이 함수는 재시도 횟수로 세 번을 반환합니다.", basis="source")
+
+    updates = make_action_postprocess_node(build_save_text_tool(), lambda **kwargs: {}, False)(
+        _no_code_save_state(answer)
+    )
+
+    files = list(output.glob("*.txt"))
+    assert len(files) == 1
+    assert files[0].read_text(encoding="utf-8-sig") == export_answer_text(answer, include_sources=True)
+    assert updates["response"].result.content == answer.content
+    assert updates["response"].result.citations == answer.citations
+    assert updates["response"].result.actions[0].status == "success"
