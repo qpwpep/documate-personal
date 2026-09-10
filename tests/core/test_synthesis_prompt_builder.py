@@ -36,6 +36,26 @@ def test_request_for_code_asks_for_a_real_code_block_and_honest_basis():
     assert "not an executed result" in prompt
 
 
+def test_code_only_contract_does_not_add_an_explanation_instruction():
+    """A code request with forbidden explanation reaches generation without contradictory prose guidance."""
+    contract = RequestContract(
+        answer=AnswerContract(content=(
+            ContentRequirement(kind="code_example", mode="required", evidence_ids=("r1",)),
+            ContentRequirement(kind="explanation", mode="forbidden", evidence_ids=("r2",)),
+        )),
+        evidence=(
+            ContractEvidence(id="r1", turn_id="current", quote="코드만", scope="answer.content.code_example", interpretation="instruction"),
+            ContractEvidence(id="r2", turn_id="current", quote="설명 없이", scope="answer.content.explanation", interpretation="negation"),
+        ),
+    )
+    messages = _messages("설명 없이 코드만 보여줘", request_contract=contract)
+    prompt = "\n".join(str(message.content) for message in messages)
+
+    assert "concrete code in a code block with basis=example" in prompt
+    assert "and explain it briefly" not in prompt
+    assert '"kind": "explanation", "mode": "forbidden"' in prompt
+
+
 def test_comparison_attaches_each_source_to_the_displayed_unit():
     """A comparison is requested as content with evidence, not as source-category sections."""
     prompt = "\n".join(str(message.content) for message in _messages(

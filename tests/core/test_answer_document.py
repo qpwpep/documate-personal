@@ -143,11 +143,12 @@ def test_source_summary_never_inherits_exact_match_or_semantic_verification():
         AnswerResponse.model_validate(payload)
 
 
-def test_exact_excerpt_check_is_recomputed_from_the_retained_source():
+@pytest.mark.parametrize("changed_text", ["retries = 5\nmode = safe\n", "retries = 3", "retries = 3\nmode = safe"])
+def test_exact_excerpt_check_is_recomputed_from_the_retained_source(changed_text):
     """Only an unchanged verbatim source selection earns exact_match."""
-    item = source()
+    item = source("retries = 3\nmode = safe\n")
     exact = finalize_answer(text_document(item.excerpt, basis="excerpt", refs=[item.id]), [item])
-    changed = finalize_answer(text_document("retries = 5", basis="excerpt", refs=[item.id]), [item])
+    changed = finalize_answer(text_document(changed_text, basis="excerpt", refs=[item.id]), [item])
     assert exact.checks[0].support_status == "exact_match"
     assert changed.checks[0].support_status == "unsupported"
     assert changed.checks[0].issues == ["excerpt_does_not_match_source"]

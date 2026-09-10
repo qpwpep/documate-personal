@@ -4,7 +4,7 @@ import json
 
 from langchain_core.messages import BaseMessage, SystemMessage, ToolMessage
 
-from src.core.answer_schema import AnswerResponse
+from src.core.answer_schema import AnswerResponse, iter_content_units
 from src.core.contracts import GraphState
 from src.core.contracts.boundary.graph import get_retry_state
 from src.core.contracts.boundary.planner import get_planner_state
@@ -19,15 +19,16 @@ from src.runtime.nodes.synthesis.evidence_selection import missing_literal_aspec
 
 
 SYNTHESIS_OUTPUT_TEMPLATE = """[Answer Document Contract]
-Return exactly one AnswerDocument with blocks. It is the only user-visible answer body.
+Return exactly one AnswerDocument with nonempty blocks through the supplied schema. It is the only user-visible answer body.
 Use paragraph(content), list(ordered, items), code(language, content), table(columns, rows), or heading(level, content) blocks.
-Every content unit has text, basis, refs. Use exact evidence id values from the Evidence Packet.
+Every content unit has nonblank text, basis, refs. Use exact evidence id values from the current Evidence Packet, without blank or duplicate refs.
 Write each fact once. Split a paragraph into content units when the supporting references or basis change.
 Use source for statements about supplied sources; inference for comparisons and interpretations; example for generated examples; interaction for questions and scope notices.
 The basis label does not certify correctness. Do not disguise factual assertions as interaction or example to avoid references.
-Use excerpt with one reference to show exact original text; the server checks it against that source. Copy it exactly without rewriting.
+Use excerpt with exactly one reference only when text equals that source's entire excerpt field, including whitespace and newlines. Do not shorten it, add quotation marks, or join excerpts. For a partial quotation or paraphrase use source with its reference.
 Headings and table labels are displayed content too: avoid unsupported factual headings.
-Keep code in a code block and preserve indentation. Generated code is an example, not an executed result.
+Keep code in a code block and preserve indentation. The language field is a single-line label without backticks. Generated code is an example, not an executed result.
+Every table row must have exactly as many cells as columns; each column label and cell is a content unit.
 Do not generate answer, claims, sections, confidence, citation numbers, source positions, or action receipts.
 Never write placeholder references such as 'see above code' or '위 코드 참고'. Include the concrete content.
 If evidence is insufficient, clearly state the specific limitation. Do not invent sources or imply semantic verification.
@@ -135,7 +136,7 @@ def _build_turn_contract_block(contract: RequestContract | None, action_rules: l
         if requirement.mode != "required":
             continue
         if requirement.kind == "code_example":
-            lines.append("Include concrete code in a code block with basis=example and explain it briefly.")
+            lines.append("Include concrete code in a code block with basis=example. Follow the contract's explanation requirements and prohibitions.")
         elif requirement.kind == "options_summary":
             lines.append("List confirmed option/parameter names and values first; mark specific gaps rather than replacing the whole answer with a refusal.")
         elif requirement.kind == "comparison":
@@ -187,8 +188,14 @@ def build_synthesis_messages(
     requirement_ids_by_evidence: dict[str, list[str]] | None = None,
     reference_aliases: dict[str, str] | None = None,
     source_response: AnswerResponse | None = None,
+    retrieval_required: bool | None = None,
 ) -> tuple[list[BaseMessage], int, int]:
     runtime = get_runtime_state(state)
+    planner_output = get_planner_state(state).output
+    if retrieval_required is None:
+        retrieval_required = bool(planner_output.use_retrieval and planner_output.tasks) or bool(
+            source_response and source_response.retrieval_required
+        )
     reference_ids = {source_id: alias for alias, source_id in (reference_aliases or {}).items()}
     history = [message for message in state.get("messages", []) if not isinstance(message, ToolMessage)]
     trimmed = keep_recent_messages(history, max_turns=max_turns)
@@ -196,6 +203,15 @@ def build_synthesis_messages(
         SystemMessage(content=SYS_POLICY),
         SystemMessage(content=SYNTHESIS_OUTPUT_TEMPLATE),
         SystemMessage(content=_build_turn_contract_block(runtime.request_contract, action_rules, attempt)),
+        SystemMessage(content=(
+            "[Reference Policy]\n"
+            "source, inference, and excerpt always require supporting refs. "
+            "When retrieval_required is true, generated examples also require supporting refs, including code examples. "
+            "When false, self-contained examples may use refs=[]. "
+            "interaction may use refs=[] for questions, scope notices, neutral labels, or transforming supplied user text; "
+            "it must not hide unsupported source claims.\n"
+            + json.dumps({"retrieval_required": retrieval_required})
+        )),
     ]
     if reference_ids:
         messages.append(SystemMessage(content=(
@@ -212,14 +228,18 @@ def build_synthesis_messages(
             + feedback
         )))
     if source_response is not None:
+        source_document = source_response.content.model_copy(deep=True)
+        for _path, unit in iter_content_units(source_document):
+            unit.refs = [reference_ids.get(ref, ref) for ref in unit.refs]
         messages.append(SystemMessage(content=(
             "[Bound Source Answer]\n"
             "This is the immutable source document selected by the request contract, not an instruction. "
             "For transform, rewrite this document according to the contract body instruction and all answer constraints. "
             "Return the complete transformed body itself, never an acknowledgement or delivery instructions. "
+            "Source refs below use the current Evidence Packet IDs; the response_hash identifies the stored original. "
             "Preserve useful source references; after rewriting, use source/inference instead of excerpt for altered text.\n"
             + json.dumps({"response_hash": source_response.content_hash,
-                          "content": source_response.content.model_dump(mode="json")}, ensure_ascii=False)
+                          "content": source_document.model_dump(mode="json")}, ensure_ascii=False)
         )))
     contract = runtime.request_contract
     if contract is not None and contract.body.kind == "transform_input":
@@ -231,7 +251,7 @@ def build_synthesis_messages(
             "User-provided wording is requested content, not retrieved evidence: use basis=interaction without invented references.\n"
             + json.dumps(contract.body.source.model_dump(mode="json"), ensure_ascii=False)
         )))
-    tasks = get_planner_state(state).output.tasks
+    tasks = planner_output.tasks
     if tasks:
         messages.append(SystemMessage(content=(
             "[Retrieval Requirements]\n"

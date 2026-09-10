@@ -2,7 +2,10 @@
 import json
 import time
 
+import pytest
+
 from src.core.answer_schema import AnswerDocument, finalize_answer, iter_content_units, text_document
+from src.core.request_contracts import BoundAnswerReference, RequestContract, TransformAnswerBody
 from src.runtime.nodes.synthesis.budgets import SynthesisBudgetProfile
 from src.runtime.nodes.synthesis.context import build_synthesis_context, prepare_synthesis_inputs
 from src.runtime.nodes.synthesis.pipeline import run_synthesis_pipeline
@@ -121,3 +124,57 @@ def test_direct_prompt_builder_without_aliases_keeps_the_existing_reference_cont
         state=_state([hit]), action_rules=[], evidence_packet=[hit.evidence], attempt=1, max_turns=6,
     )
     assert _json_block(messages, "[Evidence Packet]")[0]["id"] == hit.evidence.id
+
+
+@pytest.mark.parametrize("mode", ["general", "retrieval", "transform"])
+def test_model_reference_policy_matches_the_final_answer_checks(mode):
+    """Generated examples inherit the same reference requirement in the prompt and finalized response."""
+    hit = _hit()
+    state = _state([hit] if mode == "retrieval" else [])
+    if mode == "transform":
+        previous = finalize_answer(text_document(hit.evidence.excerpt, basis="source", refs=[hit.evidence.id]),
+                                   [hit.evidence], retrieval_required=True)
+        state["runtime"] = state["runtime"].model_copy(update={
+            "previous_response": previous,
+            "request_contract": RequestContract(body=TransformAnswerBody(
+                source=BoundAnswerReference(ref="previous", response_hash=previous.content_hash),
+                instruction="Add a generated example.",
+            )),
+        })
+    context = build_synthesis_context(state=state, has_default_slack_destination=False)
+    prepared = prepare_synthesis_inputs(
+        state=state, context=context, budget_profile=SynthesisBudgetProfile("docs", 1800, 6000, 6),
+        max_turns=6, prompt_snippet_char_limit=1800, prompt_evidence_char_budget=6000,
+    )
+    policy = next(str(message.content) for message in prepared.model_messages
+                  if str(message.content).startswith("[Reference Policy]"))
+    policy_data = json.loads(policy[policy.index("{"):])
+    outcome = run_synthesis_pipeline(
+        structured_synthesizer=ModelBoundary(malformed=text_document("generated_example()", basis="example")),
+        structured_synthesizer_compact=None, prepared=prepared, compact_prepared=None,
+        stage_started=time.perf_counter(),
+    )
+
+    assert policy_data == {"retrieval_required": mode != "general"}
+    assert outcome.result.retrieval_required == policy_data["retrieval_required"]
+    assert outcome.result.checks[0].reference_status == ("not_required" if mode == "general" else "missing")
+
+
+def test_transformation_source_uses_packet_aliases_without_changing_stored_response():
+    """A prior answer's refs and the current packet use the same model-visible IDs without changing its revision."""
+    hit = _hit("Keep e1 as literal source text.")
+    previous = finalize_answer(text_document(hit.evidence.excerpt, basis="source", refs=[hit.evidence.id]),
+                               [hit.evidence], retrieval_required=True)
+    original = previous.model_dump(mode="json")
+    messages, _, _ = build_synthesis_messages(
+        state=_state([]), action_rules=[], evidence_packet=[hit.evidence], attempt=1, max_turns=6,
+        reference_aliases={"e1": hit.evidence.id}, source_response=previous,
+    )
+    source_message = next(str(message.content) for message in messages
+                          if str(message.content).startswith("[Bound Source Answer]"))
+    source_data = json.loads(source_message[source_message.index("{"):])
+    expected = text_document(hit.evidence.excerpt, basis="source", refs=["e1"])
+
+    assert source_data == {"response_hash": previous.content_hash, "content": expected.model_dump(mode="json")}
+    assert _json_block(messages, "[Evidence Packet]")[0]["id"] == "e1"
+    assert previous.model_dump(mode="json") == original
