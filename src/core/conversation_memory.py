@@ -173,6 +173,7 @@ def _canonical_payload(
             {
                 "role": _message_role(message),
                 "content": extract_memory_text(message.content),
+                **({"id": message.id} if message.id is not None else {}),
             }
             for message in messages
         ],
@@ -433,7 +434,7 @@ def _canonical_dialogue_messages(
     for message in messages:
         if isinstance(message, HumanMessage):
             finish_turn()
-            current_human = HumanMessage(content=extract_memory_text(message.content))
+            current_human = HumanMessage(id=message.id, content=extract_memory_text(message.content))
             continue
         if current_human is None or not isinstance(message, AIMessage):
             continue
@@ -491,7 +492,7 @@ def _fit_latest_messages(
         for message, text, budget in zip(messages, texts, budgets, strict=True):
             bounded = bound_utf8_text(text, max_bytes=budget)
             if isinstance(message, HumanMessage):
-                candidate.append(HumanMessage(content=bounded))
+                candidate.append(HumanMessage(id=message.id, content=bounded))
             elif isinstance(message, AIMessage):
                 candidate.append(AIMessage(content=bounded))
         return candidate

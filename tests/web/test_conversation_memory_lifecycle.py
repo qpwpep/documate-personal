@@ -16,10 +16,11 @@ from src.core.conversation_memory import (
     DEFAULT_QUERY_MAX_UTF8_BYTES,
 )
 from src.infra.settings import AppSettings
+from src.runtime.nodes.session import add_user_message
 
 
 def _response(answer: str, *, actions: list[ActionReceipt] | None = None) -> ResponseState:
-    return ResponseState(result=finalize_answer(text_document(answer), [], actions=actions))
+    return ResponseState(result=finalize_answer(text_document(answer), [], actions=actions), kind="answer")
 
 
 class _RollingSummaryGraph:
@@ -30,11 +31,12 @@ class _RollingSummaryGraph:
     def invoke(self, state: dict) -> dict:
         self.states.append(dict(state))
         turn = len(self.states)
-        runtime = state["runtime"]
+        added = add_user_message(state)
+        runtime = added["runtime"]
         answer = f"answer-{turn}"
         messages = [
             *state.get("messages", []),
-            HumanMessage(content=runtime.user_input),
+            *added["messages"],
             AIMessage(content=answer),
         ]
         if self.include_save_receipt:
@@ -87,6 +89,13 @@ class _InvalidResponseGraph(_RollingSummaryGraph):
         response = result["response"].model_dump(mode="json")
         response["result"]["content"]["blocks"][0]["content"][0]["text"] = "unvalidated replacement"
         result["response"] = response
+        return result
+
+
+class _InvalidRuntimeGraph(_RollingSummaryGraph):
+    def invoke(self, state: dict) -> dict:
+        result = super().invoke(state)
+        result["runtime"] = {"previous_response": {"content": text_document("unchecked runtime body").model_dump(mode="json")}}
         return result
 
 
@@ -165,6 +174,21 @@ class ConversationMemoryLifecycleTest(unittest.TestCase):
         self.assertEqual(result["debug"]["observability_status"], "failed")
         self.assertIn("content changed", export_answer_text(AnswerResponse.model_validate(result["response"])))
 
+    def test_invalid_returned_runtime_preserves_conversation_and_previous_answer(self) -> None:
+        """잘못된 반환 runtime은 대화 기록 일부만 새 요청으로 교체하지 않는다."""
+        manager = _make_manager(_InvalidRuntimeGraph())
+        manager.messages = [HumanMessage(content="stable request"), AIMessage(content="stable answer")]
+        manager.memory_summary = "stable summary"
+        previous = finalize_answer(text_document("stable answer"), [])
+        manager._ensure_session().previous_response = previous
+        before = manager._ensure_session().snapshot_conversation_memory()
+
+        result = manager.run_agent_flow("new request")
+
+        self.assertEqual(result["debug"]["observability_status"], "failed")
+        self.assertEqual(manager._ensure_session().snapshot_conversation_memory(), before)
+        self.assertEqual(manager._ensure_session().previous_response, previous)
+
     def test_failed_graph_cannot_mutate_the_previous_snapshot_through_shared_messages(self) -> None:
         manager = _make_manager(_MutatingFailureGraph())
         manager.messages = [
@@ -172,12 +196,12 @@ class ConversationMemoryLifecycleTest(unittest.TestCase):
             AIMessage(content="stable answer"),
         ]
         manager.memory_summary = "stable summary"
+        before = manager._ensure_session().snapshot_conversation_memory()
 
         result = manager.run_agent_flow("new request")
 
         self.assertEqual(
-            [(message.content, message.id) for message in manager.messages],
-            [("stable request", None), ("stable answer", None)],
+            manager._ensure_session().snapshot_conversation_memory(), before,
         )
         self.assertEqual(manager.memory_summary, "stable summary")
         self.assertEqual(result["debug"]["observability_status"], "failed")
@@ -246,6 +270,21 @@ class ConversationMemoryLifecycleTest(unittest.TestCase):
             [str(message.content) for message in manager_b.messages],
             ["beta", "answer-1"],
         )
+
+    def test_next_request_receives_the_previous_exact_original_and_same_turn_id(self) -> None:
+        graph = _RollingSummaryGraph()
+        manager = _make_manager(graph)
+        original = "  인용 원문\n줄바꿈도 보존  "
+
+        manager.run_agent_flow(original)
+        first = manager._ensure_session().snapshot_conversation_memory()
+        manager.run_agent_flow("그 문장을 번역해줘")
+
+        runtime = graph.states[1]["runtime"]
+        self.assertEqual(runtime.user_turns, first.user_turns)
+        self.assertEqual(runtime.user_turns[0].text, original)
+        self.assertEqual(runtime.user_turns[0].turn_id, first.messages[0].id)
+        self.assertNotEqual(runtime.current_turn_id, first.messages[0].id)
 
 
 class AgentRequestMemoryBoundaryTest(unittest.TestCase):

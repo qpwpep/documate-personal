@@ -7,6 +7,7 @@ import time
 import hashlib
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from src.core.contracts.boundary.graph import build_graph_state_input, normalize_graph_update
 from src.core.latency import elapsed_ms
@@ -171,16 +172,20 @@ class ExecutionRunner:
         self._pending_upload_retriever = None
         conversation = self.session.snapshot_conversation_memory()
         session_metadata = self.session.snapshot_session_metadata()
+        current_turn_id = f"user:{uuid4().hex}"
 
         def build_state(retriever: Any | None = None) -> dict[str, Any]:
             return build_graph_state_input(
                 user_input=user_input,
+                current_turn_id=current_turn_id,
+                user_turns=conversation.user_turns,
                 messages=list(conversation.messages),
                 retriever=retriever,
                 progress_emitter=progress_emitter,
                 memory_summary=conversation.memory_summary,
                 session_metadata=session_metadata,
-                previous_response=self.session.previous_response,
+                previous_response=(self.session.previous_response.model_copy(deep=True) if self.session.previous_response is not None else None),
+                pending_action=(self.session.pending_action.model_copy(deep=True) if self.session.pending_action is not None else None),
             )
 
         state = build_state()

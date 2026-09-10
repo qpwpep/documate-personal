@@ -1,28 +1,34 @@
 from __future__ import annotations
 
 from typing import Any
+from uuid import uuid4
 
 from langchain_core.messages import AnyMessage
 from src.core.answer_schema import AnswerResponse
 
 from src.core.contracts.debug import RetryState
-from src.core.contracts.graph_state import DebugState, GraphState, PlannerState, ResponseState, RetrievalState, RuntimeState, SessionMetadata
+from src.core.contracts.graph_state import DebugState, GraphState, PendingAction, PlannerState, ResponseState, RetrievalState, RuntimeState, SessionMetadata
+from src.core.request_contracts import RequestContract, UserTurnSnapshot
 from src.core.contracts.boundary.debug import parse_debug_state, parse_retry_state
 from src.core.contracts.boundary.planner import parse_planner_state
 from src.core.contracts.boundary.response import parse_response_state
 from src.core.contracts.boundary.retrieval import parse_retrieval_state
-from src.core.contracts.boundary.runtime import parse_runtime_state, parse_session_metadata
+from src.core.contracts.boundary.runtime import parse_request_contract, parse_runtime_state, parse_session_metadata
 
 
 def build_graph_state_input(
     *,
     user_input: str,
+    current_turn_id: str | None = None,
+    user_turns: tuple[UserTurnSnapshot, ...] = (),
     messages: list[AnyMessage] | None = None,
     retriever: Any | None = None,
     progress_emitter: Any | None = None,
     session_metadata: SessionMetadata | dict[str, Any] | None = None,
     memory_summary: str | None = None,
     previous_response: AnswerResponse | None = None,
+    request_contract: RequestContract | dict[str, Any] | None = None,
+    pending_action: PendingAction | None = None,
     planner: PlannerState | dict[str, Any] | None = None,
     retrieval: RetrievalState | dict[str, Any] | None = None,
     retry: RetryState | dict[str, Any] | None = None,
@@ -33,11 +39,15 @@ def build_graph_state_input(
         "messages": list(messages or []),
         "runtime": RuntimeState(
             user_input=str(user_input or ""),
+            current_turn_id=current_turn_id or f"user:{uuid4().hex}",
+            user_turns=user_turns,
             retriever=retriever,
             session_metadata=parse_session_metadata(session_metadata),
             memory_summary=memory_summary,
             progress_emitter=progress_emitter,
             previous_response=previous_response,
+            request_contract=parse_request_contract(request_contract),
+            pending_action=pending_action,
         ),
     }
     if planner is not None:

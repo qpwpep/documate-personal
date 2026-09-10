@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from typing import Any, List
+from uuid import uuid4
 
 from langchain_core.messages import (
     AIMessage,
@@ -22,6 +23,7 @@ from src.core.conversation_memory import (
     plan_compaction,
 )
 from src.core.contracts import GraphState
+from src.core.request_contracts import UserTurnSnapshot
 from src.core.contracts.boundary.debug import get_debug_state
 from src.core.contracts.boundary.runtime import get_runtime_state
 from src.core.contracts.debug import LLMCallMetadata, build_llm_call_metadata
@@ -42,7 +44,16 @@ logger = logging.getLogger(__name__)
 
 def add_user_message(state: GraphState) -> GraphState:
     runtime = get_runtime_state(state)
-    return {"messages": [HumanMessage(content=runtime.user_input)]}
+    turn_id = runtime.current_turn_id or f"user:{uuid4().hex}"
+    turns = {turn.turn_id: turn for turn in runtime.user_turns}
+    existing = turns.get(turn_id)
+    if existing is not None and existing.text != runtime.user_input:
+        raise ValueError("user turn ID cannot be reused for different original text")
+    turns[turn_id] = UserTurnSnapshot(turn_id=turn_id, text=runtime.user_input)
+    return {
+        "runtime": runtime.model_copy(update={"current_turn_id": turn_id, "user_turns": tuple(turns.values())}),
+        "messages": [HumanMessage(id=turn_id, content=runtime.user_input)],
+    }
 
 
 def keep_recent_messages(messages: List[BaseMessage], max_turns: int = 6) -> List[BaseMessage]:
