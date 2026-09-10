@@ -514,6 +514,15 @@ LIVE_TEST=true uv run pytest tests/core/test_prompts.py -k live_source_selection
 
 이 검사는 단일 요청과 대화 후속 질문의 출처 유지·변경, 주제 전환, 업로드 부재 안내를 확인합니다. 외부 문서 검색이나 파일 검색 도구는 실행하지 않습니다.
 
+세 GPT-5.6 모델의 공통 프롬프트를 같은 대표 입력으로 점검하려면 다음 opt-in 검사를 사용합니다. planner·synthesis·summary 모델만 호출하며 검색·저장·Slack 도구는 실행하지 않습니다. 실행별 원시 출력, 프롬프트·스키마 hash, 판정 결과는 `output/prompt_comparison/`에 보존합니다.
+
+```bash
+LIVE_TEST=true PROMPT_COMPARISON_PHASE=current PROMPT_COMPARISON_RUN_ID="$(date +%Y%m%dT%H%M%S)" \
+  uv run pytest tests/core/test_prompt_model_compatibility_live.py -q -s
+```
+
+`PROMPT_COMPARISON_STAGES=planner`로 변경된 단계만 다시 검사할 수 있습니다. 전후 비교는 `PROMPT_COMPARISON_BASE_REF`에 수정 전 commit을 지정하고 `PROMPT_COMPARISON_PHASE`를 생략합니다. 각 사례는 한 번 호출하므로 이 표본은 전체 benchmark 성공률을 대체하지 않습니다. 요약은 비어 있지 않은지만 자동 검사하며 제약·정정·불확실성 보존은 원문 출력에서 별도로 확인해야 합니다.
+
 요청 계약의 자연어 해석은 별도 모델 평가로 실행합니다.
 
 ```bash
