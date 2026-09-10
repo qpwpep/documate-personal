@@ -1,15 +1,16 @@
 from __future__ import annotations
 
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from langchain_core.messages import AnyMessage
 from langgraph.graph import add_messages
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from typing_extensions import TypedDict
 
 from src.core.answer_schema import AnswerResponse
 from src.core.evidence import EvidenceRef
 from src.core.planner_schema import PlannerOutput
+from src.core.request_contracts import RequestContract, UserTurnSnapshot
 from src.core.contracts.debug import DebugPayload, LLMCallMetadata, PlannerDiagnostic, PlannerStatus, RetryState, RetrievalDiagnostic, empty_planner_diagnostic
 
 
@@ -29,13 +30,35 @@ class SessionMetadata(BaseModel):
     slack_destination: SlackDestination | None = None
 
 
+class PendingAction(BaseModel):
+    """An unfinished request owns its requirements and any checked body."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    contract: RequestContract
+    response: AnswerResponse | None = None
+    body_prepared: bool = False
+    phase: Literal["awaiting_input", "awaiting_body", "awaiting_destination", "awaiting_delivery"] = "awaiting_destination"
+    completed_actions: tuple[Literal["save_text", "slack_notify"], ...] = ()
+
+
 class RuntimeState(BaseModel):
     user_input: str = ""
+    current_turn_id: str = ""
+    user_turns: tuple[UserTurnSnapshot, ...] = ()
     retriever: Any | None = None
     session_metadata: SessionMetadata = Field(default_factory=SessionMetadata)
     memory_summary: str | None = None
     progress_emitter: Any | None = None
     previous_response: AnswerResponse | None = None
+    request_contract: RequestContract | None = None
+    pending_action: PendingAction | None = None
+
+    @field_validator("user_turns")
+    @classmethod
+    def unique_original_turn_ids(cls, value: tuple[UserTurnSnapshot, ...]) -> tuple[UserTurnSnapshot, ...]:
+        if len({turn.turn_id for turn in value}) != len(value):
+            raise ValueError("duplicate user turn ID in original snapshots")
+        return value
 
 
 class PlannerState(BaseModel):
@@ -55,6 +78,9 @@ class ResponseState(BaseModel):
     evidence_packet: list[EvidenceRef] = Field(default_factory=list)
     evidence_requirement_map: dict[str, list[str]] = Field(default_factory=dict)
     synthesis_attempt: int = 0
+    kind: Literal["draft", "answer", "clarification", "failure"] = "draft"
+    request_id: str | None = None
+    contract_revision: int = 0
 
 
 class DebugState(DebugPayload):

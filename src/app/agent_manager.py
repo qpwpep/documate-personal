@@ -11,9 +11,11 @@ from src.core.conversation_memory import (
 )
 from src.runtime.agent_runtime import DebugCollector, ExecutionRunner, GraphInvocationError, ResponseAssembler, SessionContext
 from src.core.answer_schema import AnswerResponse, finalize_answer, text_document, export_answer_text
+from src.core.request_contracts import required_contract_turn_ids
 from src.core.contracts import RuntimeState, SessionMetadata
 from src.core.contracts.debug import DEBUG_SCHEMA_VERSION
 from src.core.contracts.boundary.runtime import parse_runtime_state, parse_session_metadata
+from src.core.contracts.boundary.response import get_response_state
 from src.runtime.graph_builder import StageExecutionError, build_agent_graph
 from src.core.latency import build_latency_breakdown, elapsed_ms, make_stage_latency_event
 from src.infra.logging_utils import log_event
@@ -261,6 +263,8 @@ class AgentFlowManager:
                 response=response,
                 debug_info=debug_info,
             )
+            final_runtime = parse_runtime_state(response.get("runtime", state.get("runtime")))
+            final_response_state = get_response_state(response)
             durable_memory = build_durable_conversation_memory(
                 updated_messages,
                 memory_summary=candidate_summary,
@@ -270,8 +274,17 @@ class AgentFlowManager:
             self._ensure_session().commit_conversation_memory(
                 messages=durable_memory.messages,
                 memory_summary=durable_memory.memory_summary,
+                user_turns=final_runtime.user_turns,
+                preserve_turn_ids=required_contract_turn_ids(final_runtime.pending_action.contract)
+                if final_runtime.pending_action is not None else (),
             )
-            self._ensure_session().previous_response = AnswerResponse.model_validate(assembled_response["response"])
+            # Only completed answers become the referent of "the previous answer".
+            # A destination question or failure must not replace a pending document.
+            self._ensure_session().commit_response_state(
+                response=AnswerResponse.model_validate(assembled_response["response"]),
+                response_kind=final_response_state.kind,
+                pending_action=final_runtime.pending_action,
+            )
             return assembled_response
 
         except Exception as exc:

@@ -16,10 +16,11 @@ from src.core.conversation_memory import (
     DEFAULT_QUERY_MAX_UTF8_BYTES,
 )
 from src.infra.settings import AppSettings
+from src.runtime.nodes.session import add_user_message
 
 
 def _response(answer: str, *, actions: list[ActionReceipt] | None = None) -> ResponseState:
-    return ResponseState(result=finalize_answer(text_document(answer), [], actions=actions))
+    return ResponseState(result=finalize_answer(text_document(answer), [], actions=actions), kind="answer")
 
 
 class _RollingSummaryGraph:
@@ -30,11 +31,12 @@ class _RollingSummaryGraph:
     def invoke(self, state: dict) -> dict:
         self.states.append(dict(state))
         turn = len(self.states)
-        runtime = state["runtime"]
+        added = add_user_message(state)
+        runtime = added["runtime"]
         answer = f"answer-{turn}"
         messages = [
             *state.get("messages", []),
-            HumanMessage(content=runtime.user_input),
+            *added["messages"],
             AIMessage(content=answer),
         ]
         if self.include_save_receipt:
@@ -90,6 +92,13 @@ class _InvalidResponseGraph(_RollingSummaryGraph):
         return result
 
 
+class _InvalidRuntimeGraph(_RollingSummaryGraph):
+    def invoke(self, state: dict) -> dict:
+        result = super().invoke(state)
+        result["runtime"] = {"previous_response": {"content": text_document("unchecked runtime body").model_dump(mode="json")}}
+        return result
+
+
 def _make_manager(graph) -> AgentFlowManager:
     manager = AgentFlowManager.__new__(AgentFlowManager)
     manager.settings = AppSettings(
@@ -107,6 +116,21 @@ class ConversationMemoryLifecycleTest(unittest.TestCase):
 
 
 
+
+    def test_invalid_returned_runtime_preserves_conversation_and_previous_answer(self) -> None:
+        """잘못된 반환 runtime은 대화 기록 일부만 새 요청으로 교체하지 않는다."""
+        manager = _make_manager(_InvalidRuntimeGraph())
+        manager.messages = [HumanMessage(content="stable request"), AIMessage(content="stable answer")]
+        manager.memory_summary = "stable summary"
+        previous = finalize_answer(text_document("stable answer"), [])
+        manager._ensure_session().previous_response = previous
+        before = manager._ensure_session().snapshot_conversation_memory()
+
+        result = manager.run_agent_flow("new request")
+
+        self.assertEqual(result["debug"]["observability_status"], "failed")
+        self.assertEqual(manager._ensure_session().snapshot_conversation_memory(), before)
+        self.assertEqual(manager._ensure_session().previous_response, previous)
 
 
 
@@ -132,6 +156,7 @@ class ConversationMemoryLifecycleTest(unittest.TestCase):
             [str(message.content) for message in manager_b.messages],
             ["beta", "answer-1"],
         )
+
 
 
 class AgentRequestMemoryBoundaryTest(unittest.TestCase):
