@@ -17,7 +17,7 @@ class PlannerPromptBuilderTest(unittest.TestCase):
         history = [message for user, answer in turns for message in (HumanMessage(content=user), AIMessage(content=answer))]
         current = HumanMessage(content=query)
         state = build_graph_state_input(user_input=query, messages=[*history, current])
-        actual = [message for message in build_planner_messages(state, max_turns=max_turns) if not isinstance(message, SystemMessage)]
+        actual = [message for message in build_planner_messages(state, max_turns=max_turns) if not isinstance(message, SystemMessage) and message.name != "request_context"]
         expected_history = history[-2 * max_turns:] if max_turns else []
         self.assertEqual(actual, [*expected_history, current])
 
@@ -33,16 +33,16 @@ class PlannerPromptBuilderTest(unittest.TestCase):
             ToolMessage(content="Current search result", tool_call_id="current-search"),
         ])
         actual = build_planner_messages(state)
-        self.assertEqual(actual[1:], [prior, answer, current])
+        self.assertEqual([message for message in actual if not isinstance(message, SystemMessage) and message.name != "request_context"], [prior, answer, current])
 
     def test_request_dialogue_uses_current_input_when_no_user_message_exists(self) -> None:
         state = build_graph_state_input(user_input="새 질문", messages=[AIMessage(content="Orphaned prior output")])
-        self.assertEqual(build_planner_messages(state)[1:], [HumanMessage(content="새 질문")])
+        self.assertEqual([message for message in build_planner_messages(state) if not isinstance(message, SystemMessage) and message.name != "request_context"], [HumanMessage(content="새 질문")])
 
     def test_source_planning_prompt_is_independent_of_upload_availability(self) -> None:
         query = "그 노트북과 공식 문서를 비교해줘"
-        without_file = build_graph_state_input(user_input=query, messages=[HumanMessage(content=query)])
-        with_file = build_graph_state_input(user_input=query, messages=[HumanMessage(content=query)], retriever=object())
+        without_file = build_graph_state_input(user_input=query, current_turn_id="current", messages=[HumanMessage(content=query)])
+        with_file = build_graph_state_input(user_input=query, current_turn_id="current", messages=[HumanMessage(content=query)], retriever=object())
         self.assertEqual(build_planner_messages(without_file), build_planner_messages(with_file))
 
     def test_memory_summary_is_supplied_as_untrusted_data_not_system_instructions(self) -> None:
@@ -110,7 +110,7 @@ class PlannerPromptBuilderTest(unittest.TestCase):
         conversation_messages = [
             message
             for message in messages
-            if not isinstance(message, SystemMessage)
+            if not isinstance(message, SystemMessage) and message.name != "request_context"
         ]
 
         self.assertEqual(len(conversation_messages), 3)

@@ -19,6 +19,7 @@ from src.core.contracts.debug import (
     empty_planner_diagnostic,
 )
 from src.core.planner_schema import PlannerOutput, RetrievalTask, normalize_planner_output_input
+from src.core.request_contracts import RequestContract
 from src.infra.logging_utils import log_event
 from src.runtime.nodes.planner.guardrails import apply_retrieval_availability
 from src.runtime.nodes.planner.models import (
@@ -27,6 +28,7 @@ from src.runtime.nodes.planner.models import (
 )
 from src.runtime.nodes.planner.prompt_builder import build_planner_messages
 from src.runtime.nodes.planner.query_sanitizer import sanitize_planner_output_queries
+from src.runtime.nodes.planner.request_resolution import resolve_request_contract
 
 logger = logging.getLogger(__name__)
 
@@ -214,12 +216,12 @@ def _resolve_planner_strategy(
                     output=planner_output,
                     diagnostics=normalize_planner_diagnostics(
                         status="llm",
-                        reason="clarification_required" if planner_output.clarification_question else None,
+                        reason=None,
                         fallback_routes=[],
                         planner_warnings=planner_warnings,
                     ),
                     status="llm",
-                    guided_followup=planner_output.clarification_question,
+                    guided_followup=None,
                 ),
                 planner_errors,
                 llm_calls,
@@ -280,7 +282,7 @@ def _apply_planner_guardrail(
                 matches = [item for item in planner_output.tasks if item.route == task.route and item.requirement == task.requirement]
                 candidate = matches[0] if len(matches) == 1 else None
             retained.append(task.model_copy(update={"query": candidate.query, "k": candidate.k}) if candidate else task)
-        planner_output = PlannerOutput(use_retrieval=True, tasks=retained)
+        planner_output = PlannerOutput(use_retrieval=True, tasks=retained, request_contract=planner_output.request_contract)
         decision = replace(decision, guided_followup=None,
                            diagnostics=decision.diagnostics.model_copy(update={"reason": None}))
     return apply_retrieval_availability(
@@ -346,6 +348,24 @@ def make_planner_node(
             context=context,
             max_turns=max_turns,
         )
+        try:
+            contract = resolve_request_contract(decision.output.request_contract, state, max_turns=max_turns)
+            decision = replace(decision, output=decision.output.model_copy(update={"request_contract": contract.to_wire()}))
+            if contract.can_acknowledge() or contract.can_cancel_pending():
+                decision = replace(decision, output=PlannerOutput.fallback(request_contract=contract.to_wire()), guided_followup=None,
+                                   diagnostics=decision.diagnostics.model_copy(update={"reason": None}))
+            elif not contract.can_prepare_body():
+                question = contract.clarification_question or "요청의 작업과 대상을 더 구체적으로 알려 주세요."
+                decision = replace(decision, output=PlannerOutput.fallback(request_contract=contract.to_wire()),
+                                   guided_followup=question,
+                                   diagnostics=decision.diagnostics.model_copy(update={"reason": "clarification_required"}))
+        except (TypeError, ValueError) as exc:
+            planner_errors.append(f"planner: request contract output validation failed ({exc})")
+            contract = RequestContract.invalid()
+            decision = replace(decision, output=PlannerOutput.fallback(request_contract=contract.to_wire()),
+                               guided_followup="요청의 작업과 조건을 해석하지 못했습니다. 요청을 다시 알려 주세요.",
+                               status="fallback_no_routes",
+                               diagnostics=decision.diagnostics.model_copy(update={"status": "fallback_no_routes", "reason": "planner_unavailable"}))
         decision = _apply_planner_guardrail(
             decision=decision,
             context=context,
@@ -375,7 +395,18 @@ def make_planner_node(
                 "original_tasks": [task.model_dump(mode="json") for task in decision.output.tasks],
             })
 
+        runtime_updates = {"request_contract": contract}
+        if (runtime.pending_action is not None and contract.relation in {"correction", "supplement"}
+                and contract.target_request_id == runtime.pending_action.contract.request_id and contract.failure is None):
+            completed = tuple(name for name in runtime.pending_action.completed_actions
+                              if getattr(contract.actions, name).intent != "requested")
+            pending_updates = {"contract": contract, "completed_actions": completed}
+            if contract.body.kind != "copy_answer":
+                pending_updates["body_prepared"] = False
+                pending_updates["phase"] = "awaiting_body" if contract.can_prepare_body() else "awaiting_input"
+            runtime_updates["pending_action"] = runtime.pending_action.model_copy(update=pending_updates)
         updates: GraphState = {
+            "runtime": runtime.model_copy(update=runtime_updates),
             "planner": PlannerState(
                 output=decision.output,
                 status=decision.status,

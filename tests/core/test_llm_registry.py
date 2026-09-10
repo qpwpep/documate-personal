@@ -84,6 +84,8 @@ class LLMRegistryTest(unittest.TestCase):
         self.assertEqual(planner_schema["name"], "PlannerOutput")
         self.assertTrue(planner_schema["strict"])
         self.assertIn("schema", planner_schema)
+        self.assertIn("request_contract", planner_schema["schema"]["required"])
+        self.assertIn("WireRequestContract", planner_schema["schema"]["$defs"])
         self.assertEqual(_FakeChatOpenAI.structured_kwargs[0]["include_raw"], True)
 
     @patch("src.infra.llm.ChatOpenAI", new=_FakeChatOpenAI)

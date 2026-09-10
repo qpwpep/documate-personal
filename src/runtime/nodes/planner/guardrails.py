@@ -21,7 +21,7 @@ def apply_retrieval_availability(
     if "upload" in required_routes and not has_retriever:
         return replace(
             decision,
-            output=PlannerOutput.fallback(),
+            output=PlannerOutput.fallback(request_contract=decision.output.request_contract),
             diagnostics=diagnostics.model_copy(update={
                 "reason": "upload_retriever_missing",
                 "override_applied": True,

@@ -4,6 +4,7 @@ from langchain_core.messages import HumanMessage
 from src.core.contracts.boundary.planner import parse_planner_output
 from src.core.contracts import RetrievalDiagnostic, RetryState
 from src.core.planner_schema import PlannerOutput
+from src.core.request_contracts import RequestContract, WireRequestContract, UnresolvedBody, MissingInformation
 from src.runtime.nodes.planner import make_planner_node
 from src.runtime.nodes.retry import format_retry_context_for_planner
 from tests.core.helpers import _CapturePlannerLLM, build_test_state
@@ -60,10 +61,13 @@ def test_removing_invalid_content_cannot_hide_an_unanswered_requirement():
         {"text": "first supported answer", "basis": "source", "refs": [hit.evidence.id]},
         {"text": "second unsupported answer", "basis": "source", "refs": ["ref:missing"]},
     ]}]})
+    contract = RequestContract()
     state = build_test_state({
-        "user_input": "Compare both APIs", "planner_output": PlannerOutput(use_retrieval=True, tasks=[first, second]),
+        "user_input": "Compare both APIs", "request_contract": contract,
+        "planner_output": PlannerOutput(use_retrieval=True, tasks=[first, second]),
         "retrieved_hits": [hit.model_dump()], "retry_context": {"max_retries": 0},
         "response": {"result": finalize_answer(document, [hit.evidence], retrieval_required=True),
+                     "request_id": contract.request_id, "contract_revision": contract.revision,
                      "evidence_packet": [hit.evidence], "evidence_requirement_map": {hit.evidence.id: [first.requirement_id]}},
     })
     result = make_post_synthesis_validation_node(verbose=False)(state)
@@ -78,10 +82,13 @@ def test_post_validation_detects_an_aspect_lost_from_the_actual_model_packet():
     document = AnswerDocument.model_validate({"blocks": [{"type": "paragraph", "content": [
         {"text": "arrays join along axis", "basis": "source", "refs": [hit.evidence.id]},
     ]}]})
+    contract = RequestContract()
     state = build_test_state({
-        "user_input": task.query, "planner_output": PlannerOutput(use_retrieval=True, tasks=[task]),
+        "user_input": task.query, "request_contract": contract,
+        "planner_output": PlannerOutput(use_retrieval=True, tasks=[task]),
         "retrieved_hits": [hit.model_dump()], "retry_context": {"max_retries": 0},
         "response": {"result": finalize_answer(document, [hit.evidence], retrieval_required=True),
+                     "request_id": contract.request_id, "contract_revision": contract.revision,
                      "evidence_packet": [hit.evidence], "evidence_requirement_map": {hit.evidence.id: [task.requirement_id]}},
     })
     result = make_post_synthesis_validation_node(verbose=False)(state)
@@ -179,7 +186,10 @@ def test_planner_keeps_independent_official_sources_on_the_same_route():
 def test_planner_returns_the_missing_reference_question_without_retrieval():
     """An unresolved referent produces the intended clarification, not a failed search."""
     question = "어떤 라이브러리와 버전을 비교할까요?"
-    model = _CapturePlannerLLM({"use_retrieval": False, "tasks": [], "clarification_question": question})
+    model = _CapturePlannerLLM({"use_retrieval": False, "tasks": [], "request_contract": WireRequestContract(
+        body=UnresolvedBody(question=question),
+        missing_info=(MissingInformation(slot="subject", reason="unclear", question=question),),
+    ).model_dump(mode="json")})
     result = make_planner_node(model, verbose=False)(build_test_state({
         "user_input": "그거 최신 버전에서 어떻게 바뀌었어?",
         "messages": [HumanMessage(content="그거 최신 버전에서 어떻게 바뀌었어?")],

@@ -9,6 +9,7 @@ from src.core.planner_schema import (
     PlannerOutput,
     RetrievalTask,
 )
+from src.core.request_contracts import RequestContract, WireRequestContract
 from src.runtime.nodes.planner import make_planner_node
 from src.runtime.nodes.planner.query_sanitizer import sanitize_retrieval_query
 
@@ -39,7 +40,7 @@ class PlannerNodeTest(unittest.TestCase):
         missing_file = "upload" in routes and not has_retriever
         self.assertEqual(
             {"plan": result.output, "followup": bool(result.guided_followup)},
-            {"plan": PlannerOutput.fallback() if missing_file else requested, "followup": missing_file},
+            {"plan": PlannerOutput.fallback(request_contract=requested.request_contract) if missing_file else requested, "followup": missing_file},
         )
 
     @given(query=st.sampled_from([
@@ -63,7 +64,7 @@ class PlannerNodeTest(unittest.TestCase):
         }))["planner"]
         self.assertEqual(
             {"plan": result.output, "reason": result.diagnostics.reason, "followup": bool(result.guided_followup)},
-            {"plan": PlannerOutput.fallback(), "reason": "planner_unavailable", "followup": True},
+            {"plan": PlannerOutput.fallback(request_contract=RequestContract.invalid().to_wire()), "reason": "planner_unavailable", "followup": True},
         )
 
     def test_nested_state_models_are_not_subscriptable(self) -> None:
@@ -191,7 +192,7 @@ class PlannerNodeTest(unittest.TestCase):
             )
         )
 
-        self.assertEqual(updates["planner"].output, PlannerOutput.fallback())
+        self.assertEqual(updates["planner"].output, PlannerOutput.fallback(request_contract=WireRequestContract()))
         self.assertEqual(updates["planner"].diagnostics.required_routes, ["upload"])
         self.assertIsNotNone(updates["planner"].guided_followup)
 
@@ -214,7 +215,7 @@ class PlannerNodeTest(unittest.TestCase):
             "retriever": object(),
         }))
 
-        self.assertEqual(result["planner"].output, PlannerOutput.fallback())
+        self.assertEqual(result["planner"].output, PlannerOutput.fallback(request_contract=RequestContract.invalid().to_wire()))
         self.assertEqual(result["planner"].diagnostics.reason, "planner_unavailable")
         self.assertTrue(result["planner"].guided_followup)
         self.assertIn("PLANNER_SCHEMA_INVALID", result["debug"].error_codes)
@@ -398,6 +399,7 @@ class PlannerNodeTest(unittest.TestCase):
     def test_planner_preserves_independent_routes_from_raw_structured_output(self) -> None:
         raw_payload = {
             "use_retrieval": True,
+            "request_contract": WireRequestContract().model_dump(),
             "tasks": [
                 {"route": "docs", "query": "numpy", "k": 3},
                 {"route": "docs", "query": "pandas", "k": 5},

@@ -8,6 +8,7 @@ from unittest.mock import patch
 from langchain_core.messages import AIMessage, HumanMessage
 
 from src.core.answer_schema import export_answer_text
+from src.core.request_contracts import RequestContract
 from src.core.contracts.boundary.debug import get_debug_state
 from src.infra.chunking import chunk_python_text
 from src.core.contracts.boundary.graph import build_graph_state_input
@@ -149,6 +150,7 @@ class GraphBuilderDebugTest(unittest.TestCase):
         def provider(**kwargs):
             if kwargs.get("model") == settings.planner_model:
                 return _CaptureStructuredSynthesizeLLM(payload={
+                    "request_contract": RequestContract().to_wire().model_dump(mode="json"),
                     "use_retrieval": True,
                     "tasks": [
                         {"route": "docs", "query": "numpy concatenate official docs", "k": 3},

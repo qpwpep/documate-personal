@@ -20,6 +20,7 @@ from src.runtime.nodes.retrieval import make_retrieve_dispatch_node
 from src.runtime.nodes.session import add_user_message
 from src.runtime.nodes.validation import make_post_synthesis_validation_node, make_pre_synthesis_validation_node
 from src.core.planner_schema import PlannerOutput, RetrievalTask
+from src.core.request_contracts import RequestContract
 
 from .helpers import (
     _CapturePlannerLLM,
@@ -39,7 +40,18 @@ def _official_hit(*, uri, title, excerpt, score):
 def _response(text, *, state=None, attempt=1):
     evidence = [SearchHit.model_validate(hit).evidence for hit in get_retrieval_state(state).hit_log] if state else []
     document = text_document(text, basis="source" if evidence else "interaction", refs=[item.id for item in evidence])
-    return ResponseState(result=finalize_answer(document, evidence), evidence_packet=evidence, synthesis_attempt=attempt)
+    contract = state["runtime"].request_contract if state else None
+    return ResponseState(result=finalize_answer(document, evidence), evidence_packet=evidence, synthesis_attempt=attempt,
+                         request_id=contract.request_id if contract else None, contract_revision=contract.revision if contract else 0)
+
+
+def _neutral_planner_update(state, plan=None):
+    contract = state["runtime"].request_contract or RequestContract()
+    plan = plan or PlannerOutput(use_retrieval=False, tasks=[])
+    return {
+        "runtime": state["runtime"].model_copy(update={"request_contract": contract}),
+        "planner": PlannerState(output=plan.model_copy(update={"request_contract": contract.to_wire()})),
+    }
 
 
 class GraphRoutingTest(unittest.TestCase):
@@ -54,7 +66,7 @@ class GraphRoutingTest(unittest.TestCase):
             state_type=GraphState,
             add_user_node=add_user_message,
             summarize_node=_summarize,
-            planner_node=lambda state: {"planner": PlannerState(output=PlannerOutput(use_retrieval=False, tasks=[]))},
+            planner_node=_neutral_planner_update,
             retrieve_dispatch_node=lambda state: self.fail("retrieve_dispatch should not run"),
             synthesize_node=lambda state: {
                 "response": _response("final answer", state=state),
@@ -84,7 +96,7 @@ class GraphRoutingTest(unittest.TestCase):
             state_type=GraphState,
             add_user_node=add_user_message,
             summarize_node=_summarize,
-            planner_node=lambda state: {"planner": PlannerState(output=PlannerOutput(use_retrieval=False, tasks=[]))},
+            planner_node=_neutral_planner_update,
             retrieve_dispatch_node=lambda state: self.fail("retrieve_dispatch should not run"),
             synthesize_node=lambda state: {
                 "response": _response("final answer", state=state),
@@ -120,7 +132,7 @@ class GraphRoutingTest(unittest.TestCase):
             state_type=GraphState,
             add_user_node=add_user_message,
             summarize_node=_summarize,
-            planner_node=lambda state: {"planner": PlannerState(output=PlannerOutput(use_retrieval=False, tasks=[]))},
+            planner_node=_neutral_planner_update,
             retrieve_dispatch_node=lambda state: self.fail("retrieve_dispatch should not run"),
             synthesize_node=lambda state: {
                 "response": _response("final answer", state=state),
@@ -142,7 +154,7 @@ class GraphRoutingTest(unittest.TestCase):
             state_type=GraphState,
             add_user_node=add_user_message,
             summarize_node=lambda state: state,
-            planner_node=lambda state: {"planner": PlannerState(output=PlannerOutput(use_retrieval=False, tasks=[]))},
+            planner_node=_neutral_planner_update,
             retrieve_dispatch_node=lambda state: dispatch_calls.__setitem__("count", dispatch_calls["count"] + 1),
             synthesize_node=lambda state: {
                 "response": _response("final answer", state=state),
@@ -343,14 +355,10 @@ class GraphRoutingTest(unittest.TestCase):
             state_type=GraphState,
             add_user_node=add_user_message,
             summarize_node=lambda state: state,
-            planner_node=lambda state: {
-                "planner": PlannerState(
-                    output=PlannerOutput(
-                        use_retrieval=True,
-                        tasks=[RetrievalTask(route="docs", query="numpy broadcasting official docs", k=3)],
-                    )
-                )
-            },
+            planner_node=lambda state: _neutral_planner_update(state, PlannerOutput(
+                use_retrieval=True,
+                tasks=[RetrievalTask(route="docs", query="numpy broadcasting official docs", k=3)],
+            )),
             retrieve_dispatch_node=retrieve_dispatch,
             synthesize_node=_synthesize,
             pre_synthesis_validation_node=pre_validate_node,
@@ -439,11 +447,16 @@ def _assert_repair_flow(routes, defect, max_retries, persistent):
                 }]}
             return AnswerDocument.model_validate(document).model_dump(mode="json")
 
-    plan = PlannerOutput(use_retrieval=True, tasks=[RetrievalTask(route=route, query=route, k=3) for route in routes])
-    planner_llm = _CapturePlannerLLM(plan)
     request = "업로드 코드 예시를 설명해줘" if defect == "code" else (
         "공식 문서와 업로드 자료를 비교해줘" if len(routes) == 2 else "공식 문서를 설명해줘"
     )
+    contract = RequestContract.model_validate({
+        "answer": {"content": [{"kind": "code_example", "mode": "required", "evidence_ids": ["code"]}]},
+        "evidence": [{"id": "code", "turn_id": "request", "quote": request,
+                      "scope": "answer.content.code_example", "interpretation": "instruction"}],
+    }) if defect == "code" else RequestContract()
+    plan = PlannerOutput(use_retrieval=True, tasks=[RetrievalTask(route=route, query=route, k=3) for route in routes], request_contract=contract.to_wire())
+    planner_llm = _CapturePlannerLLM(plan)
     graph = build_graph(
         state_type=GraphState, add_user_node=add_user_message,
         summarize_node=lambda state: {},
@@ -461,7 +474,7 @@ def _assert_repair_flow(routes, defect, max_retries, persistent):
     )
 
     state = graph.invoke(build_graph_state_input(
-        user_input=request, messages=[], retriever=object() if "upload" in routes else None,
+        user_input=request, current_turn_id="request", messages=[], retriever=object() if "upload" in routes else None,
         retry={"max_retries": max_retries},
     ))
 

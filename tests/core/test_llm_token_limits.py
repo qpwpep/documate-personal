@@ -14,6 +14,7 @@ from src.core.contracts.boundary.graph import build_graph_state_input
 from src.core.documents import DocumentElement, build_snapshot
 from src.core.evidence import RetrievalScore, SearchHit, build_evidence
 from src.core.planner_schema import PlannerOutput, RetrievalTask
+from src.core.request_contracts import RequestContract, WireRequestContract
 from src.infra.llm import build_llm_registry
 from src.infra.settings import APP_ENV_SPEC_BY_NAME, AppSettings
 from src.runtime.nodes.synthesis import make_synthesize_node
@@ -74,7 +75,10 @@ def provider(monkeypatch):
             document = text_document(packet[0]["excerpt"], basis="excerpt", refs=[packet[0]["id"]])
             content = document.model_dump_json()
         elif payload.get("response_format", {}).get("json_schema", {}).get("name") == "PlannerOutput":
-            content = json.dumps({"use_retrieval": False, "tasks": [], "clarification_question": None})
+            content = json.dumps({
+                "use_retrieval": False, "tasks": [],
+                "request_contract": WireRequestContract().model_dump(mode="json"),
+            })
         else:
             content = text_document("Hello.").model_dump_json()
         if behavior["invalid_content"] is not None:
@@ -115,7 +119,7 @@ def test_default_models_reach_every_application_llm_request(provider):
     registry = build_llm_registry(settings)
     messages = [HumanMessage(content="Hello")]
     plan = registry.llm_planner.invoke(messages)
-    assert PlannerOutput.model_validate(plan["parsed"]) == PlannerOutput(use_retrieval=False, tasks=[])
+    assert PlannerOutput.model_validate(plan["parsed"]) == PlannerOutput(use_retrieval=False, tasks=[], request_contract=WireRequestContract())
     for model in (registry.llm_synthesizer, registry.llm_synthesizer_compact, registry.llm_summarizer):
         assert model.invoke(messages).content == text_document("Hello.").model_dump_json()
     assert [request["model"] for request in requests] == ["gpt-5.6-luna"] * 4
@@ -146,6 +150,7 @@ def _state():
                     score=RetrievalScore(metric="test", raw=1, normalized=1, direction="higher"))
     return build_graph_state_input(
         user_input=task.query, messages=[HumanMessage(content=task.query)],
+        request_contract=RequestContract(request_id="token-budget-request"),
         planner=PlannerState(output=PlannerOutput(use_retrieval=True, tasks=[task])),
         retrieval=RetrievalState(hit_log=[hit.model_dump(mode="json")]),
     )
@@ -238,7 +243,7 @@ def test_planner_output_cap_reaches_http_without_synthesis_settings(provider):
     result = registry.llm_planner.invoke([HumanMessage(content="Hello")])
     assert requests[0]["max_completion_tokens"] == 654
     assert requests[0]["response_format"]["json_schema"]["name"] == "PlannerOutput"
-    assert PlannerOutput.model_validate(result["parsed"]) == PlannerOutput(use_retrieval=False, tasks=[])
+    assert PlannerOutput.model_validate(result["parsed"]) == PlannerOutput(use_retrieval=False, tasks=[], request_contract=WireRequestContract())
 
 
 @pytest.mark.parametrize("empty_output", [False, True], ids=["truncated-json", "no-visible-output"])

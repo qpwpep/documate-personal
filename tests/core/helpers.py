@@ -1,7 +1,29 @@
-from langchain_core.messages import AIMessage
+import hashlib
+
+from langchain_core.messages import AIMessage, HumanMessage
 
 from src.core.contracts import DebugState, PlannerState, ResponseState, RetrievalState, RetryState
 from src.core.contracts.boundary.graph import build_graph_state_input, normalize_graph_update
+from src.core.planner_schema import PlannerOutput
+from src.core.request_contracts import (
+    BoundAnswerReference, BoundInputText, CopyAnswerBody, RequestContract,
+    TransformAnswerBody, UserTurnSnapshot, WireRequestContract,
+)
+
+
+def neutral_contract(*, request_id="test-request", **kwargs):
+    return RequestContract(request_id=request_id, **kwargs)
+
+
+def bound_answer_body(response, transform=None, ref="previous", evidence_ids=()):
+    source = BoundAnswerReference(ref=ref, response_hash=response.content_hash)
+    return (TransformAnswerBody(source=source, instruction=transform, evidence_ids=evidence_ids)
+            if transform is not None else CopyAnswerBody(source=source))
+
+
+def bound_input_text(text, *, turn_id="current", start=0):
+    return BoundInputText(turn_id=turn_id, text=text, start=start, end=start + len(text),
+                          content_hash=hashlib.sha256(text.encode("utf-8")).hexdigest())
 
 
 def build_test_graph_state(*, user_input: str, messages: list | None = None, **kwargs):
@@ -14,13 +36,24 @@ def build_test_graph_state(*, user_input: str, messages: list | None = None, **k
 
 def build_test_state(payload: dict):
     raw = dict(payload)
+    user_input = str(raw.pop("user_input", "") or "")
+    messages = raw.pop("messages", []) or []
+    users = [message for message in messages if isinstance(message, HumanMessage)]
+    current_turn_id = raw.pop("current_turn_id", None) or (users[-1].id if users and users[-1].id else f"user:{max(0, len(users)-1)}")
+    user_turns = raw.pop("user_turns", None)
+    if user_turns is None:
+        user_turns = tuple(UserTurnSnapshot(turn_id=message.id or f"user:{index}", text=str(message.content)) for index, message in enumerate(users))
+        if not user_turns:
+            user_turns = (UserTurnSnapshot(turn_id=current_turn_id, text=user_input),)
     state = build_graph_state_input(
-        user_input=str(raw.pop("user_input", "") or ""),
-        messages=raw.pop("messages", []) or [],
+        user_input=user_input, current_turn_id=current_turn_id, user_turns=user_turns,
+        messages=messages,
         retriever=raw.pop("retriever", None),
         session_metadata=raw.pop("session_metadata", None),
         memory_summary=raw.pop("memory_summary", None),
         previous_response=raw.pop("previous_response", None),
+        request_contract=raw.pop("request_contract", None),
+        pending_action=raw.pop("pending_action", None),
     )
     if "planner" in raw:
         state["planner"] = PlannerState.model_validate(raw.pop("planner"))
@@ -167,6 +200,15 @@ class _CapturePlannerLLM:
         raw_message: AIMessage | None = None,
         parsing_error: Exception | None = None,
     ):
+        # Retrieval-only fixtures still supply an explicit neutral interpretation.
+        # Missing-contract tests use an unadapted model boundary of their own.
+        if isinstance(planner_output, PlannerOutput) and planner_output.request_contract is None:
+            planner_output.request_contract = WireRequestContract()
+        elif isinstance(planner_output, PlannerOutput) and isinstance(planner_output.request_contract, RequestContract):
+            planner_output.request_contract = planner_output.request_contract.to_wire()
+        elif isinstance(planner_output, dict):
+            planner_output = dict(planner_output)
+            planner_output.setdefault("request_contract", WireRequestContract().model_dump(mode="json"))
         self.planner_output = planner_output
         self.last_messages = None
         self.call_count = 0
