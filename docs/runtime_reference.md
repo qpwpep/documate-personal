@@ -148,9 +148,31 @@ Windows 환경에서는 `-X utf8` 또는 `PYTHONUTF8=1` 사용을 권장합니�
 UI와 문서 검색 규칙은 아래 파일을 기준으로 관리합니다.
 
 - `src/core/domain_docs.py`: Streamlit 소개 영역에 노출하는 기본 문서 목록
-- `src/infra/config/agent_rules.toml`: docs allowlist, query hint, 저장·전송 요청 감지 규칙
+- `src/infra/config/agent_rules.toml`: docs allowlist와 query hint
 
 `RULES_CONFIG_PATH`로 규칙 파일을 지정할 수 있습니다. 필요한 검색 출처는 업로드 가용성과 무관하게 LLM이 선택하고, 스키마 검증을 통과한 `PlannerOutput.tasks`를 기준으로 실행합니다. [planner 지침](../src/runtime/nodes/planner/prompt_builder.py)은 일반 기술 설명과 실제 파일 조회를 구분하고 출처 제외 지시를 반영합니다.
+
+최초 planner 출력에는 `request_contract`도 포함됩니다. 모델은 [`WireRequestContract`](../src/core/request_contracts.py)로 사용자 의도와 참조 선택자를 반환합니다. 서버가 원문·기존 답변·보류 상태와 대조해 [`RequestContract`](../src/core/request_contracts.py)를 확정하고 `RuntimeState.request_contract`에 고정합니다.
+
+| 필드 | 의미 |
+| --- | --- |
+| `request_id`, `revision` | 서버가 부여하는 요청 식별자와 revision. 모델 출력에는 포함하지 않음 |
+| `actions` | 저장·Slack 각각의 `requested`, `forbidden`, `not_requested`, `unresolved` |
+| `body` | `compose`, `copy_input`, `transform_input`, `copy_answer`, `transform_answer`, `extract`, `acknowledge`, `unresolved`의 타입별 합집합. 각 타입이 유효한 출처와 필요한 작업 지시만 허용 |
+| `answer` | 내용 요구·출력 형식별 필수/금지/선호 및 일반 선호 |
+| `evidence` | 실제 사용자 발화 ID·원문 구절·적용 범위와 지시/부정/언급/인용/정정/참조 구분 |
+| `relation`, `target_request_id` | 새 요청 `new`, 정정 `correction`, 실제 미완료 요청 보충 `supplement`, 취소 `cancel`. 보류 요청 ID가 일치할 때만 같은 요청의 다음 revision으로 반영 |
+| `slack_destination` | 사용자 대화로 해석한 목적지. 목적지 존재는 전송 요청을 뜻하지 않음 |
+| `missing_info` | 부족한 정보의 slot·원인·질문. 이미 해석된 행동 의사와 출력 요구를 유지 |
+| `status`, 준비 상태 | 서버 파생값. 본문 준비 가능성과 각 행동의 실행 준비를 별도로 계산 |
+
+입력 복사·번역·수정은 `turn_id`, 원문 `quote`, 필요 시 1부터 세는 `occurrence`로 선택합니다. 서버는 정확히 일치하는 원문만 선택해 Unicode 문자 기준 `[start, end)`, 원문 텍스트, SHA-256을 확정합니다. 알 수 없는 발화 ID, 없는 구절, 여러 위치에 일치하는 구절을 구분하며 유사 문자열로 대체하지 않습니다. 이전·보류 답변은 서버가 해당 `AnswerResponse.content_hash`에 연결합니다. 모델 스키마에도 본문 타입별 유효한 참조 조합을 표현하며 서버 전용 hash·offset·실행 준비값을 모델에 생성시키지 않습니다.
+
+액션과 답변 요구의 근거는 해당 범위 또는 그 상위 범위에 속해야 하며, `current_request`는 전체 요청 범위입니다. 인용·단순 언급은 실행이나 강제 출력 조건의 근거가 될 수 없습니다. 계약을 누락하거나 해석하지 못하면 검색·저장·전송을 중단하며 키워드 fallback을 사용하지 않습니다. 이 계약은 내부 실행 상태이고 외부 `AnswerResponse` 스키마는 유지합니다.
+
+모델의 evidence ID는 한 응답 안의 임시 참조입니다. 서버가 요청·revision·발화 범위에 속한 ID로 바인딩하고 기존 보류 계약의 근거를 직접 승계합니다. 모델에 기존 근거 ID를 복사하거나 기존 계약을 재작성하도록 요구하지 않습니다. 원문 인용·현재 발화의 변경 권한은 별도로 검증하며, 재검색에서는 모델이 계약을 재출력하지 않아도 고정된 서버 계약을 사용합니다.
+
+`acknowledge`는 단순 금지·취소에 대한 확인이며 새 전달 본문이 아닙니다. 추가 질문이나 본문 생성 없이 확인하고 이전 완료 답변을 보존합니다. 출력 형식은 일반 layout과 줄 수를 타입으로 분리해, `line_count`에는 양의 정수를 요구하고 그 외 형식에는 숫자를 허용하지 않습니다. 저장 파일명은 서버가 자동 생성하므로 파일명·경로 부재를 저장 의사의 미해결로 취급하지 않습니다.
 
 각 task는 독립적인 근거 요구입니다. 같은 `docs` route라도 라이브러리·대상·버전이 다르면 여러 task로 유지하며 검색어를 하나로 합치지 않습니다. 한 계획에는 최대 8개 task를 둘 수 있습니다. 계약 기준은 `src/core/planner_schema.py`입니다.
 
@@ -164,7 +186,7 @@ UI와 문서 검색 규칙은 아래 파일을 기준으로 관리합니다.
 | `requirement.aspects` | 사용자 대화에서 명시적으로 요청한 원문의 식별자·매개변수. 모델이 추정한 옵션값을 필수 조건으로 추가하지 않으며, 일반 설명과 검색용 추정 용어는 `query`에 유지 |
 | `requirement.match` | 넓은 설명은 `topic`, API·심볼 사용은 `symbol`, 업로드 함수·클래스 구현은 `definition` |
 
-대화로도 대상이나 비교 버전을 정할 수 없으면 `clarification_question`과 함께 `use_retrieval=false`, `tasks=[]`를 반환하고 확인 질문을 전달합니다. 이는 모델 호출 실패인 `planner_diagnostics.reason="planner_unavailable"`과 구분합니다. 파일 조회에 필요한 업로드가 없으면 업로드를 안내합니다. planner 호출·출력 검증 실패나 미해결 확인 질문에서는 검색·저장·전송을 진행하지 않습니다.
+대화로도 대상이나 비교 버전을 정할 수 없으면 계약의 `missing_info`에 부족한 정보와 질문을 남기고 `use_retrieval=false`, `tasks=[]`로 반환합니다. 최상위 별도 질문 필드는 사용하지 않습니다. 서버가 본문 준비 상태에서 확인 질문을 파생하며, 이는 모델 호출 실패인 `planner_diagnostics.reason="planner_unavailable"`과 구분합니다. 파일 조회에 필요한 업로드가 없으면 업로드를 안내합니다. 행동 의사·목적지만 미해결이면 준비 가능한 본문을 작성하고 해당 행동을 보류합니다. 본문 대상이 미해결이거나 planner 호출·출력 검증이 실패하면 검색·저장·전송을 진행하지 않습니다.
 
 planner 검색어 후처리는 공백을 정규화해 한국어 주제와 식별자를 보존합니다. 별도로 `aspects`를 최근 사용자 대화의 명시적 표현과 대조하므로, 모델이 추정한 허용값이 답변에 필요한 필수 근거 조건으로 승격되지 않습니다. 검색 질의의 보조 용어와 사용자가 요구한 제약은 구분합니다. docs 도구는 알려진 라이브러리·API 별칭을 정규화하되 명시된 라이브러리, 심볼, 버전, aspect를 검색과 후보 검사의 기준으로 유지합니다.
 
@@ -225,12 +247,13 @@ synthesis는 planner와 공유하는 `MAX_PLANNER_TASKS`에 맞춰 최대 8개 �
 
 ### 4.1 저장 형태와 compaction
 
-세션의 process-local conversation snapshot은 두 부분으로 구성됩니다.
+세션의 process-local conversation snapshot은 다음 정보를 보존합니다.
 
 - `memory_summary`: 고정 예산의 rolling replacement summary
 - `messages`: 최근 Human turn과 각 turn의 canonical final AI 답변
+- `user_turns`: 안정적인 발화 ID와 정확한 원문. 최근 16개와 보류 계약이 참조하는 발화를 보존하며, 대화 요약으로 원문을 복원하지 않음
 
-`MEMORY_HIGH_WATER_*` 중 turn, 추정 token, UTF-8 직렬화 byte, message 수 하나라도 high watermark에 도달하면 compaction을 시작합니다. 가장 오래된 완결 Human turn부터 제거해 모든 `MEMORY_LOW_WATER_*` 조건을 만족하는 가장 긴 최근 suffix를 남깁니다. `MEMORY_HARD_MAX_BYTES`는 summary와 canonical messages를 직렬화한 최종 durable snapshot의 절대 backstop입니다. token 값은 모델 과금량의 정확한 계산이 아니라 UTF-8 byte 길이를 바탕으로 한 보수적 예산 추정치입니다.
+`MEMORY_HIGH_WATER_*` 중 turn, 추정 token, UTF-8 직렬화 byte, message 수 하나라도 high watermark에 도달하면 compaction을 시작합니다. 가장 오래된 완결 Human turn부터 제거해 모든 `MEMORY_LOW_WATER_*` 조건을 만족하는 가장 긴 최근 suffix를 남깁니다. `MEMORY_HARD_MAX_BYTES`는 summary와 canonical messages를 직렬화한 대화 부분의 절대 backstop입니다. 원문 참조용 `user_turns`와 보류 계약·본문은 별도 상태이며 이 byte 예산에 포함하지 않습니다. token 값은 모델 과금량의 정확한 계산이 아니라 UTF-8 byte 길이를 바탕으로 한 보수적 예산 추정치입니다.
 
 LangGraph의 `messages`는 `add_messages` reducer이므로 요약 노드는 최근 리스트만 반환하지 않습니다. `RemoveMessage(REMOVE_ALL_MESSAGES)` 뒤에 retained suffix를 다시 추가해 퇴출된 Human/AI/Tool 원문을 실제 graph state에서 제거합니다.
 
@@ -249,14 +272,16 @@ LangGraph의 `messages`는 `add_messages` reducer이므로 요약 노드는 최�
 
 graph가 반환한 전체 메시지는 현재 요청의 debug 검색 결과와 save/Slack receipt 조립이 끝날 때까지 유지됩니다. 조립 성공 후 세션에 저장할 때는 다음 규칙을 적용합니다.
 
-- HumanMessage와 각 Human turn의 마지막 canonical AIMessage만 content-only 객체로 저장
+- HumanMessage의 ID·content와 각 Human turn의 마지막 canonical AIMessage content를 저장
 - ToolMessage, SystemMessage, tool-call 중간 AI, provider/usage metadata는 저장하지 않음
 - 마지막 AI 내용은 확정된 `AnswerDocument`에서 export한 본문으로 정규화
-- projection과 모든 hard-bound 검사가 끝난 뒤 `messages + memory_summary`를 immutable snapshot 하나로 commit
+- projection과 대화 예산 검사가 끝난 뒤 `messages + memory_summary + user_turns`를 immutable snapshot 하나로 commit
 
 graph 실행, debug 수집, response assembly, projection 또는 budget 검사가 실패하면 이전 정상 conversation snapshot을 유지합니다. 이미 완료된 `save_text`나 Slack 전송 같은 외부 side effect는 이 대화 메모리 원자성의 rollback 범위가 아닙니다.
 
-세션은 직전 `AnswerResponse`를 `previous_response`로 별도 보존합니다. “이 답변을 저장해줘” 같은 후속 액션은 문자열 대화 이력에서 근거를 복원하지 않고, 직전 구조화 본문과 원문 인용을 그대로 사용합니다. 실행 receipt는 본문에 덧붙이지 않고 `actions`에서 관리합니다.
+세션은 완료된 `AnswerResponse`만 `previous_response`로 별도 보존합니다. 내부 `ResponseState.kind`는 `draft`, `answer`, `clarification`, `failure`를 구분하며 검증을 통과한 `answer`만 전달할 수 있습니다. “이 답변을 저장해줘”는 계약에 고정한 기존 본문과 원문 인용을 사용하고, “세 줄로 줄여 저장해줘”는 같은 원본을 수정해 검증한 새 본문을 저장합니다. 실행 receipt는 본문에 덧붙이지 않고 `actions`에서 관리합니다.
+
+`PendingAction`은 정보가 부족한 `awaiting_input`, 생성이 필요한 `awaiting_body`, 목적지가 필요한 `awaiting_destination`, 전달 실패 후 재개를 기다리는 `awaiting_delivery`를 구분합니다. 본문이 없어도 확정된 요구를 보존하고, `body_prepared`가 변환할 원본과 검증을 마친 결과를 구분합니다. 완성된 뒤에는 원문 인용·계약·이미 성공한 행동을 함께 보존합니다. Slack 목적지가 없으면 본문 준비를 진행하고 목적지 질문을 실행 receipt에 표시합니다. 저장 성공 후 Slack이 실패하면 준비된 본문과 저장 완료 상태를 보존하며 다음 보충에서 저장을 반복하지 않습니다. 보충 질문·실패 안내가 원본을 덮지 않고, 잘못된 보류 요청 ID도 기존 원본을 교체하지 않습니다. 후속 금지·불명확함·본문 수정은 과거 전송 의사로 덮어쓰지 않습니다. 새 발화의 보충·정정만 명시적인 revision을 만들며 재검색·재합성은 같은 계약을 유지합니다. 검증된 `ResponseState`의 요청 ID·revision이 현재 계약과 일치해야 실행할 수 있습니다. graph에는 이전·보류 본문의 깊은 복사본을 전달해 실패한 실행의 변경이 세션 원본을 오염시키지 않게 합니다.
 
 ### 4.3 수명주기와 한계
 
@@ -396,7 +421,7 @@ Streamlit은 첫 이벤트 전 오류를 포함해 요청 실패를 화면에 �
 
 `retry_context.hit_start_index`는 현재 시도의 검색 결과 시작 위치입니다. `failed_requirement_ids`, `original_tasks`, `preserved_hits`, 보존 진단은 실패 요구와 이미 확보한 근거를 추적합니다. `refresh_routes`는 실패한 요구의 검색을 다시 계획하며 성공한 다른 요구는 같은 route에 있어도 재사용합니다. 재계획에는 실제 query·필터 실패·시도한 query가 전달되고 원래 ID·라이브러리·심볼·버전·aspect를 유지합니다. 같은 요청 fingerprint의 완료 결과를 다시 실행하지 않으며 일시적 도구 오류는 재시도할 수 있습니다.
 
-post-synthesis 검사에서 참조·내용·requirement coverage 문제가 있고 원문 검색 결과가 남아 있으면 `reuse_hits_resynthesize`로 synthesis에 직접 돌아갑니다. docs·upload·hybrid 모두 planner·검색을 반복하지 않는 제한된 재합성 경로를 사용합니다. 기본 재시도 상한은 1회이고 `max_retries=0`이면 재합성도 실행하지 않습니다. 각 시도의 검사는 실제 제공한 packet과 본문이 인용한 범위로 수행합니다. 잘못된 내용 단위를 제거한 뒤에도 요구별 coverage를 다시 확인하고, 남은 근거로 요청을 충족하지 못하면 불완전함을 표시합니다. literal aspect·참조 연결 검사는 의미적 지지 평가와 별개입니다.
+post-synthesis 검사에서 참조·내용·requirement coverage 문제가 있고 원문 검색 결과가 남아 있으면 `reuse_hits_resynthesize`로 synthesis에 직접 돌아갑니다. 검색 없는 신규 생성·기존 답변 수정도 확정 계약을 유지하며 재합성할 수 있습니다. planner·검색을 반복하지 않는 이 경로의 기본 재시도 상한은 1회이고 `max_retries=0`이면 실행하지 않습니다. 각 시도는 동일 계약의 필수 누락·금지 위반을 검사하며, 선호 미충족만으로 실패하지 않습니다. 코드 원문을 그대로 복사한 일반 문단도 코드 금지 검사에 포함합니다. 줄 수는 출처 부록·receipt를 제외한 본문의 비어 있지 않은 줄입니다. 잘못된 내용 제거와 원문 fallback에도 같은 조건을 적용하며 불완전한 fallback은 저장·전송하지 않습니다. 비교·설명 등 의미 요구의 충족은 구조 검사로 증명하지 않습니다.
 
 실제 응답 스키마 기준 파일:
 
@@ -482,6 +507,14 @@ LIVE_TEST=true uv run pytest tests/core/test_prompts.py -k live_source_selection
 ```
 
 이 검사는 단일 요청과 대화 후속 질문의 출처 유지·변경, 주제 전환, 업로드 부재 안내를 확인합니다. 외부 문서 검색이나 파일 검색 도구는 실행하지 않습니다.
+
+요청 계약의 자연어 해석은 별도 모델 평가로 실행합니다.
+
+```bash
+uv run python -m src.eval.request_contract_eval --live --run-id v2_run_01 --repeats 3
+```
+
+이 평가는 실제 설정된 planner 모델만 호출하며 부정·언급·인용·복합 요청·정정·축약·목적지 보충을 실행 전에 고정한 42개 기대값과 각 3회 비교합니다. 실행 ID별 manifest·모델 원문·계약·오류·차원별 결과를 모두 보존합니다. 반복 횟수와 통과 기준, v1의 12/21 이력 보존 규칙은 [벤치마크 가이드](benchmarking.md#26-요청-계약-실제-모델-평가)를 참고하세요. 검색·합성·파일 생성·Slack 전송은 실행하지 않습니다. 기본 회귀의 계약 소비 테스트는 정답 계약과 모델 응답 fixture를 사용하므로 자연어 해석 정확도를 증명하지 않습니다. 소비 테스트는 실제 임시 파일과 localhost Slack HTTP 대체 서버로 수정 본문·인용·보류/완료/취소·재시도·오류 차단을 검증합니다.
 
 최신 회귀 테스트 결과는 [README의 검증 결과](../README.md#검증-결과)를 기준으로 합니다. 문서·응답 검사는 원문 내용이나 parser 설정 변경에 따른 snapshot 식별, 재청킹과 원문 참조의 분리, 코드·Notebook 위치, 표 셀 선택, 실제 표시 내용의 참조 검사와 발췌 일치, invalid 내용 제거 후 재파생, UI·저장·전송의 동일 본문 사용을 다룹니다. 파일 검색은 업로드 유무, 일반 파일 API 설명과의 구분, 인용과 세션 격리를 검증합니다.
 
