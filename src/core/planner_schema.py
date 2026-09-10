@@ -85,13 +85,12 @@ class RetrievalTask(BaseModel):
 
 
 class PlannerOutput(BaseModel):
-    """Independent evidence requirements or an explicit clarification decision."""
+    """One interpretation of the request and its independent evidence requirements."""
 
     model_config = ConfigDict(extra="forbid")
     use_retrieval: bool = Field(description="Whether a sufficiently resolved request needs retrieved evidence.")
     tasks: list[RetrievalTask] = Field(max_length=MAX_PLANNER_TASKS, description="One task per independent source/subject/version requirement. Multiple tasks may share a route. Include upload even if the file is missing; omit excluded sources.")
-    request_contract: WireRequestContract | None = None
-    clarification_question: str | None = Field(default=None, description="Ask for the missing referent/subject/version when the request cannot be resolved from dialogue. Then use_retrieval=false and tasks=[]. Otherwise null.")
+    request_contract: WireRequestContract | None = Field(default=None, description="Interpret the current user request once, with locally defined evidence and offered body references. Do not invent server identities, hashes or readiness. Required on the initial plan; return null on retrieval retries because the server preserves the already bound facts.")
 
     @model_validator(mode="after")
     def validate_rules(self) -> "PlannerOutput":
@@ -99,10 +98,6 @@ class PlannerOutput(BaseModel):
             raise ValueError("tasks must be empty when use_retrieval is false")
         if self.use_retrieval and not self.tasks:
             raise ValueError("tasks must contain at least one requirement when use_retrieval is true")
-        if self.clarification_question is not None:
-            self.clarification_question = self.clarification_question.strip() or None
-        if self.clarification_question and self.use_retrieval:
-            raise ValueError("clarification must be resolved before retrieval")
         identities = [task.requirement_id for task in self.tasks]
         if len(set(identities)) != len(identities):
             raise ValueError("each independent requirement must have a unique ID")
@@ -113,5 +108,5 @@ class PlannerOutput(BaseModel):
         return cls.model_validate(normalize_planner_output_input(value))
 
     @classmethod
-    def fallback(cls) -> "PlannerOutput":
-        return cls(use_retrieval=False, tasks=[])
+    def fallback(cls, request_contract: WireRequestContract | None = None) -> "PlannerOutput":
+        return cls(use_retrieval=False, tasks=[], request_contract=request_contract)

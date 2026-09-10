@@ -9,6 +9,7 @@ from src.core.planner_schema import (
     PlannerOutput,
     RetrievalTask,
 )
+from src.core.request_contracts import RequestContract, WireRequestContract
 from src.runtime.nodes.planner import make_planner_node
 from src.runtime.nodes.planner.query_sanitizer import sanitize_retrieval_query
 
@@ -43,7 +44,7 @@ class PlannerNodeTest(unittest.TestCase):
         }))["planner"]
         self.assertEqual(
             {"plan": result.output, "reason": result.diagnostics.reason, "followup": bool(result.guided_followup)},
-            {"plan": PlannerOutput.fallback(), "reason": "planner_unavailable", "followup": True},
+            {"plan": PlannerOutput.fallback(request_contract=RequestContract.invalid().to_wire()), "reason": "planner_unavailable", "followup": True},
         )
 
 
@@ -88,7 +89,7 @@ class PlannerNodeTest(unittest.TestCase):
             )
         )
 
-        self.assertEqual(updates["planner"].output, PlannerOutput.fallback())
+        self.assertEqual(updates["planner"].output, PlannerOutput.fallback(request_contract=WireRequestContract()))
         self.assertEqual(updates["planner"].diagnostics.required_routes, ["upload"])
         self.assertIsNotNone(updates["planner"].guided_followup)
 
