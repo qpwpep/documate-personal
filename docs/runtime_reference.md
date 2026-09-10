@@ -73,6 +73,19 @@ Windows 환경에서는 `-X utf8` 또는 `PYTHONUTF8=1` 사용을 권장합니�
 
 프롬프트 책임은 요청 해석·검색 계획([planner](../src/runtime/nodes/planner/prompt_builder.py)), 검색 실패 피드백([retry](../src/runtime/nodes/retry.py)), 답변 합성([공통 정책](../src/core/prompts.py), [synthesis](../src/runtime/nodes/synthesis/prompt_builder.py)), 대화 요약([session](../src/runtime/nodes/session.py)), 평가용 심사([judge](../src/eval/judge_llm.py))로 나뉩니다. planner와 synthesis는 도구를 직접 호출하지 않고 서버가 출력 계약에 따라 검색·저장·전송을 실행합니다. 평가용 심사의 점수 기준은 생성 프롬프트와 독립적으로 유지합니다.
 
+planner의 추론 수준은 `PLANNER_REASONING_EFFORT`로 지정합니다. 빈 값, `default`, `model_default`는 API 요청에서 effort를 생략해 모델 기본값을 사용하며 `none`은 명시적으로 전달합니다. 입력은 앞뒤 공백을 제거하고 소문자로 정규화합니다. 설정 타입은 `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`를 허용하며 `SYNTHESIS_REASONING_EFFORT`는 별도로 적용합니다.
+
+planner 설정은 정확한 모델명이 `gpt-5.6-luna`, `gpt-5.6-terra`, `gpt-5.6-sol`, `gpt-5.6`인 경우 `none`, `low`, `medium`, `high`, `xhigh`, `max`만 허용합니다. 이 모델에 `minimal`을 지정하면 설정 로딩 단계에서 허용값을 포함한 오류가 발생합니다. 그 밖의 모델명은 날짜 suffix나 사용자 정의 이름을 포함해 설정 타입에 맞는 값을 그대로 전달하고 실제 지원 여부는 API가 판단합니다. 지원하지 않는 값을 다른 수준으로 자동 변경하지 않습니다. 아래의 모델별 참고 목록과 planner의 사전 검증 범위는 구분합니다.
+
+예를 들어 프로젝트 루트 `.env`에서 다음처럼 설정하면 planner에 `high`를 적용합니다.
+
+```dotenv
+PLANNER_MODEL="gpt-5.6-luna"
+PLANNER_REASONING_EFFORT=high
+```
+
+애플리케이션 설정 우선순위는 `AppSettings` 생성자 인자 > 프로젝트 루트 `.env` > 프로세스 환경 변수 > 파일 기반 secrets > 코드 기본값입니다. `.env`에 해당 항목이 있으면 셸 환경 변수보다 우선합니다. `get_settings()`와 세션별 graph가 설정을 보관하므로 변경 후 백엔드를 재시작해야 합니다. 서비스 관리자를 사용한다면 `stopweb` 후 `startweb`으로 다시 실행합니다. 시작 로그의 `planner_reasoning_effort`에서 명시값 또는 `model_default`를 확인할 수 있습니다.
+
 ### 2.1 애플리케이션 설정
 
 기준 파일:
@@ -90,6 +103,7 @@ Windows 환경에서는 `-X utf8` 또는 `PYTHONUTF8=1` 사용을 권장합니�
 | `SUMMARY_MODEL` | `gpt-5.6-luna` | session summary 모델 기본값 |
 | `SUMMARY_MAX_TOKENS` | `1024` | 요약 LLM 생성 토큰 상한; 저장 요약 예산과 독립 |
 | `PLANNER_MAX_TOKENS` | `1920` | planner structured output 최대 토큰 |
+| `PLANNER_REASONING_EFFORT` | 없음 | planner reasoning effort override (none/minimal/low/medium/high/xhigh/max, 빈 값이면 모델 기본값, none은 명시 override) |
 | `DOCS_SEARCH_TIMEOUT_SECONDS` | `5` | Tavily 요청별 timeout |
 | `SYNTHESIS_TIMEOUT_SECONDS` | `20` | synthesis provider 요청 timeout |
 | `SYNTHESIS_USE_RESPONSES_API` | `false` | synthesis Responses API 사용 여부 |
@@ -124,6 +138,9 @@ Windows 환경에서는 `-X utf8` 또는 `PYTHONUTF8=1` 사용을 권장합니�
 모델별 reasoning effort override 참고:
 
 - `gpt-5.6-luna`: none, low, medium, high, xhigh, max
+- `gpt-5.6-terra`: none, low, medium, high, xhigh, max
+- `gpt-5.6-sol`: none, low, medium, high, xhigh, max
+- `gpt-5.6`: none, low, medium, high, xhigh, max
 - `gpt-5-nano`: minimal, low, medium, high
 
 ### 2.2 벤치마크 설정
@@ -488,9 +505,9 @@ Streamlit은 `AnswerResponse` 전체를 채팅 기록에 보존합니다. 본문
 - `src.app.service_manager`는 FastAPI와 Streamlit을 함께 띄우고 종료합니다.
 - `src.app.web.session_store`는 세션별 단일 요청 직렬화 lock을 사용합니다.
 - planner 구조화 요청은 OpenAI client의 요청별 30초 timeout과 최대 2회 SDK 재시도를 사용합니다. 이 값은 stage 전체 deadline이 아니므로 재시도와 SDK backoff를 포함한 총 실행 시간은 30초를 넘을 수 있습니다.
-- 출력 토큰 한도는 `src/infra/llm.py`의 LLM 생성부에서만 적용합니다. planner는 `PLANNER_MAX_TOKENS`, 일반 synthesis는 `SYNTHESIS_MAX_TOKENS`, compact는 독립된 `SYNTHESIS_COMPACT_MAX_TOKENS`, 요약 생성은 `SUMMARY_MAX_TOKENS`를 사용합니다. synthesis 노드는 입력 예산만 관리하며 출력 cap을 다시 bind하지 않습니다. 설치된 SDK는 Chat Completions의 `max_completion_tokens`, Responses의 `max_output_tokens`로 전달합니다. 생성 한도에는 reasoning과 구조화 JSON도 포함되며 요청·세션 전체의 누적 사용량 상한은 아닙니다.
+- 출력 토큰 한도는 `src/infra/llm.py`의 LLM 생성부에서만 적용합니다. planner는 `PLANNER_MAX_TOKENS`, 일반 synthesis는 `SYNTHESIS_MAX_TOKENS`, compact는 독립된 `SYNTHESIS_COMPACT_MAX_TOKENS`, 요약 생성은 `SUMMARY_MAX_TOKENS`를 사용합니다. synthesis 노드는 입력 예산만 관리하며 출력 cap을 다시 bind하지 않습니다. 설치된 SDK는 Chat Completions의 `max_completion_tokens`, Responses의 `max_output_tokens`로 전달합니다. 생성 한도에는 reasoning과 구조화 JSON도 포함되며 요청·세션 전체의 누적 사용량 상한은 아닙니다. planner effort를 높여도 기본 `1920` 토큰 상한과 요청별 `30`초 timeout은 자동으로 늘어나지 않으므로 출력 완결성·지연·timeout을 함께 확인해야 합니다.
 - synthesis 구조화 요청은 요청별 `SYNTHESIS_TIMEOUT_SECONDS`와 `SYNTHESIS_MAX_RETRIES`를 사용합니다. 재시도를 허용하면 primary synthesis의 총 실행 시간은 설정된 요청별 timeout을 넘을 수 있습니다. timeout에만 시도하는 compact fallback은 독립 출력 cap, 일반의 절반인 요청별 timeout, SDK 재시도 0회를 사용합니다. 일반 출력 cap을 올려도 compact 출력 cap은 늘지 않습니다.
-- startup의 `fastapi_runtime_settings` 로그에는 모델, Docs/Synthesis timeout, Synthesis SDK retry, memory high/low/hard policy가 포함됩니다.
+- startup의 `fastapi_runtime_settings` 로그에는 모델, Planner/Synthesis reasoning effort, 출력 토큰 한도, Docs/Synthesis timeout, Synthesis SDK retry, memory high/low/hard policy가 포함됩니다. reasoning effort를 생략한 단계는 `model_default`, 명시한 단계는 `none`을 포함한 설정값을 기록합니다.
 - agent request 로그는 query 원문 대신 문자 수, UTF-8 byte 수, SHA-256 hash만 기록합니다.
 - benchmark run 산출물과 `latest_release_run.txt`, `latest_smoke_run.txt` 포인터는 Git으로 추적하지 않는 `output/benchmarks/` 아래에 로컬로 유지합니다.
 - run별 자동 판정과 상세 분석은 각각 `output/benchmarks/<run_id>/summary.json`, `output/benchmarks/<run_id>/report.md`에서 확인합니다.

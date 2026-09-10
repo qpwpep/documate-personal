@@ -62,11 +62,13 @@ def provider(monkeypatch):
     monkeypatch.setenv("LANGSMITH_TRACING", "false")
     monkeypatch.setenv("LANGCHAIN_TRACING_V2", "false")
     requests: list[dict] = []
-    behavior = {"timeout_once": False, "invalid_content": None, "finish_reason": "stop", "empty_output": False}
+    behavior = {"timeout_once": False, "invalid_content": None, "finish_reason": "stop", "empty_output": False,
+                "request_paths": []}
 
     def handle(request: httpx.Request) -> httpx.Response:
         payload = json.loads(request.content)
         requests.append(payload)
+        behavior["request_paths"].append(request.url.path)
         if behavior["timeout_once"]:
             behavior["timeout_once"] = False
             raise httpx.ReadTimeout("provider timed out", request=request)
@@ -161,6 +163,16 @@ def test_timeout_uses_independent_compact_output_cap(provider, responses_api):
     assert response.result == finalize_answer(
         text_document(selected.excerpt, basis="excerpt", refs=[selected.id]), [selected], retrieval_required=True,
     )
+
+
+
+
+
+
+
+
+
+
 
 
 

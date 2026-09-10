@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Literal
 
 from dotenv import dotenv_values
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, ValidationInfo, field_validator, model_validator
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
 
 from src.core.conversation_memory import ConversationMemoryPolicy
@@ -17,6 +17,11 @@ from src.infra.runtime_paths import get_benchmark_config_path, get_env_file_path
 
 DEFAULT_BENCHMARK_CONFIG_PATH = get_benchmark_config_path()
 ReasoningEffort = Literal["none", "minimal", "low", "medium", "high", "xhigh", "max"]
+# Exact names verified in the GPT-5.6 model docs; other names defer to the provider.
+_PLANNER_MODEL_REASONING_EFFORTS: dict[str, tuple[ReasoningEffort, ...]] = dict.fromkeys(
+    ("gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol", "gpt-5.6"),
+    ("none", "low", "medium", "high", "xhigh", "max"),
+)
 EnvExampleGroup = Literal[
     "required_secrets", "models", "planning_summary", "synthesis", "search",
     "application_settings", "sessions", "files", "memory", "slack",
@@ -57,6 +62,18 @@ APP_ENV_SPECS = (
     EnvVarSpec("SUMMARY_MODEL", "summary_model", "gpt-5.6-luna", "session summary 모델 기본값", example="gpt-5.6-luna", example_group="models"),
     EnvVarSpec("SUMMARY_MAX_TOKENS", "summary_max_tokens", 1024, "요약 LLM 생성 토큰 상한; 저장 요약 예산과 독립", example=1024, example_group="planning_summary"),
     EnvVarSpec("PLANNER_MAX_TOKENS", "planner_max_tokens", 1920, "planner structured output 최대 토큰", example=1920, example_group="planning_summary"),
+    EnvVarSpec(
+        "PLANNER_REASONING_EFFORT",
+        "planner_reasoning_effort",
+        None,
+        "planner reasoning effort override (none/minimal/low/medium/high/xhigh/max, 빈 값이면 모델 기본값, none은 명시 override)",
+        example="high",
+        sync_notes=tuple(
+            f"{model}: {', '.join(efforts)}"
+            for model, efforts in _PLANNER_MODEL_REASONING_EFFORTS.items()
+        ),
+        example_group="planning_summary",
+    ),
     EnvVarSpec("DOCS_SEARCH_TIMEOUT_SECONDS", "docs_search_timeout_seconds", 5, "Tavily 요청별 timeout", example=5, example_group="search"),
     EnvVarSpec("SYNTHESIS_TIMEOUT_SECONDS", "synthesis_timeout_seconds", 20, "synthesis provider 요청 timeout", example=20, example_group="synthesis"),
     EnvVarSpec("SYNTHESIS_USE_RESPONSES_API", "synthesis_use_responses_api", False, "synthesis Responses API 사용 여부", example=False, example_group="synthesis"),
@@ -486,6 +503,10 @@ class AppSettings(BaseSettings):
     summary_model: str = Field(default=_app_default("SUMMARY_MODEL"), alias="SUMMARY_MODEL")
     summary_max_tokens: int = Field(default=_app_default("SUMMARY_MAX_TOKENS"), alias="SUMMARY_MAX_TOKENS", ge=1)
     planner_max_tokens: int = Field(default=_app_default("PLANNER_MAX_TOKENS"), alias="PLANNER_MAX_TOKENS", ge=1)
+    planner_reasoning_effort: ReasoningEffort | None = Field(
+        default=_app_default("PLANNER_REASONING_EFFORT"),
+        alias="PLANNER_REASONING_EFFORT",
+    )
     docs_search_timeout_seconds: int = Field(
         default=_app_default("DOCS_SEARCH_TIMEOUT_SECONDS"),
         alias="DOCS_SEARCH_TIMEOUT_SECONDS",
@@ -614,6 +635,7 @@ class AppSettings(BaseSettings):
             "planner_model": self.planner_model,
             "summary_model": self.summary_model,
             "planner_max_tokens": self.planner_max_tokens,
+            "planner_reasoning_effort": self.planner_reasoning_effort or "model_default",
             "summary_max_tokens": self.summary_max_tokens,
             "docs_search_timeout_seconds": self.docs_search_timeout_seconds,
             "synthesis_timeout_seconds": self.synthesis_timeout_seconds,
@@ -657,9 +679,9 @@ class AppSettings(BaseSettings):
         self.conversation_memory_policy()
         return self
 
-    @field_validator("synthesis_reasoning_effort", mode="before")
+    @field_validator("planner_reasoning_effort", "synthesis_reasoning_effort", mode="before")
     @classmethod
-    def _normalize_synthesis_reasoning_effort(cls, value: object) -> object:
+    def _normalize_reasoning_effort(cls, value: object) -> object:
         if value is None:
             return None
         if isinstance(value, str):
@@ -667,6 +689,19 @@ class AppSettings(BaseSettings):
             if normalized in {"", "default", "model_default"}:
                 return None
             return normalized
+        return value
+
+    @field_validator("planner_reasoning_effort")
+    @classmethod
+    def _validate_planner_reasoning_effort(cls, value: ReasoningEffort | None, info: ValidationInfo) -> ReasoningEffort | None:
+        model = info.data.get("planner_model")
+        supported = _PLANNER_MODEL_REASONING_EFFORTS.get(model)
+        if value is not None and supported is not None and value not in supported:
+            raise ValueError(
+                f"PLANNER_REASONING_EFFORT={value!r} is not supported "
+                f"by PLANNER_MODEL={model!r}; supported values: {', '.join(supported)}. "
+                "Leave PLANNER_REASONING_EFFORT blank to use the model default."
+            )
         return value
 
 
