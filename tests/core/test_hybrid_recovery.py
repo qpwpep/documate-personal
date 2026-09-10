@@ -1,6 +1,7 @@
 from src.core.answer_schema import AnswerDocument, finalize_answer, iter_content_units
 from src.core.contracts import RetrievalDiagnostic
 from src.core.planner_schema import PlannerOutput, RetrievalTask
+from src.core.request_contracts import RequestContract
 from src.runtime.nodes.retry import build_retry_update
 from src.core.contracts.debug import RetryState
 from src.runtime.nodes.validation.evidence_validator import assess_retrieval_quality, assess_validation, build_validation_snapshot
@@ -9,6 +10,7 @@ from tests.core.test_answer_validation import _evidence, _hit
 
 
 def _snapshot(document, docs, upload):
+    contract = RequestContract()
     return build_validation_snapshot(
         user_input="공식 자료와 업로드 자료의 차이를 설명해 주세요.",
         planner_output=PlannerOutput(use_retrieval=True, tasks=[
@@ -19,6 +21,9 @@ def _snapshot(document, docs, upload):
         current_attempt_retrieval_diagnostics=[],
         response_result=finalize_answer(document, [docs, upload], retrieval_required=True),
         evidence_packet=[docs, upload],
+        request_contract=contract,
+        response_request_id=contract.request_id,
+        response_contract_revision=contract.revision,
     )
 
 

@@ -7,6 +7,7 @@ from src.core.contracts.boundary.debug import get_debug_state
 from src.core.contracts.boundary.graph import get_retry_state
 from src.core.contracts.boundary.planner import get_planner_state, parse_planner_output
 from src.core.contracts.boundary.response import get_response_state
+from src.core.contracts.boundary.runtime import get_runtime_state
 from src.infra.logging_utils import log_event
 from src.runtime.nodes.retry import build_followup_from_routes, build_retry_update
 from src.runtime.nodes.validation.evidence_validator import assess_retrieval_quality, collect_validation_snapshot
@@ -23,6 +24,12 @@ def make_pre_synthesis_validation_node(verbose: bool):
         debug = get_debug_state(state)
         retry_context = get_retry_state(state)
         guided_followup = str(planner.guided_followup or "").strip()
+        contract = get_runtime_state(state).request_contract
+        stamp = {"request_id": contract.request_id if contract else None,
+                 "contract_revision": contract.revision if contract else 0}
+        if (contract is not None and contract.can_prepare_body()
+                and planner.diagnostics.reason not in {"upload_retriever_missing", "planner_unavailable"}):
+            guided_followup = ""
 
         if guided_followup:
             if planner.diagnostics.reason != "upload_retriever_missing":
@@ -30,7 +37,7 @@ def make_pre_synthesis_validation_node(verbose: bool):
                     "needs_retry": False, "retry_reason": None, "failed_routes": [],
                     "failed_requirement_ids": [], "retrieval_feedback": "",
                 })}
-                updates.update(build_followup_updates(guided_followup, attempt=response.synthesis_attempt))
+                updates.update(build_followup_updates(guided_followup, attempt=response.synthesis_attempt, **stamp))
                 return updates
             planner_output = parse_planner_output(planner.output, [])
             planner_unavailable = planner.diagnostics.reason == "planner_unavailable"
@@ -41,12 +48,13 @@ def make_pre_synthesis_validation_node(verbose: bool):
                 retrieval_errors=[],
                 score_avg=None,
                 failed_routes=set() if planner_unavailable else {"upload"},
+                request_contract=contract,
             )
             _ = needs_retry
             updates: GraphState = {
                 "retry": next_retry_context,
             }
-            updates.update(build_followup_updates(guided_followup, attempt=response.synthesis_attempt))
+            updates.update(build_followup_updates(guided_followup, attempt=response.synthesis_attempt, **stamp))
             if planner_unavailable:
                 return updates
             updates["debug"] = debug.model_copy(
@@ -77,6 +85,7 @@ def make_pre_synthesis_validation_node(verbose: bool):
             failed_requirement_ids=assessment.failed_requirement_ids,
             current_attempt_hits=snapshot.parsed_hits,
             current_attempt_retrieval_diagnostics=snapshot.current_attempt_retrieval_diagnostics,
+            request_contract=snapshot.request_contract,
         )
 
         if assessment.retry_reason is not None:
@@ -124,6 +133,7 @@ def make_pre_synthesis_validation_node(verbose: bool):
                 build_followup_updates(
                     followup_answer,
                     attempt=response.synthesis_attempt,
+                    **stamp,
                 )
             )
         if local_errors:

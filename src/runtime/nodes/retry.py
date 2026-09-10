@@ -10,6 +10,7 @@ from src.core.contracts.debug import RETRYABLE_REASONS, RetryReason, RetryState
 from src.core.contracts.routes import normalize_routes
 from src.core.evidence import SearchHit
 from src.core.planner_schema import PlannerOutput
+from src.core.request_contracts import RequestContract
 
 
 CONTENT_REPAIR_REASONS: set[RetryReason] = {
@@ -129,7 +130,7 @@ def build_retrieval_feedback(
     if reason in {"missing", "missing_route_coverage"}:
         return "selected retrieval routes were found, but the answer did not preserve grounded coverage for every required route."
     if reason == "missing_content":
-        return "the answer did not contain the requested content; regenerate the requested code, list, or other content."
+        return "the answer violated its confirmed content or format constraints; repair the body while preserving all required and forbidden conditions."
     if score_avg is not None:
         return f"low retrieval relevance(avg_score={score_avg:.3f}); broaden query or switch route."
     return "low retrieval relevance; broaden query or switch route."
@@ -198,6 +199,7 @@ def build_retry_update(
     retrieval_errors: list[str],
     score_avg: float | None,
     failed_routes: set[str] | list[str] | tuple[str, ...] | None = None,
+    request_contract: RequestContract | None = None,
     failed_requirement_ids: set[str] | list[str] | None = None,
     current_attempt_hits: list[SearchHit] | None = None,
     current_attempt_retrieval_diagnostics: list[RetrievalDiagnostic] | None = None,
@@ -219,7 +221,17 @@ def build_retry_update(
     selected_routes = {task.route for task in planner_output.tasks}
     normalized_failed_routes = set(_normalize_failed_routes(failed_routes))
     failed_ids = set(failed_requirement_ids or [])
-    reuse_hits_only = _is_repair_retry_candidate(selected_routes, retry_reason) and bool(current_attempt_hits)
+    # A request that needs no retrieval can still repair a generated or
+    # transformed body. Re-enter synthesis, never reinterpret the request.
+    contract = request_contract
+    repair_without_retrieval = (
+        not selected_routes and retry_reason in CONTENT_REPAIR_REASONS
+        and contract is not None and contract.can_prepare_body()
+        and contract.body.kind in {"compose", "transform_input", "transform_answer"}
+    )
+    reuse_hits_only = repair_without_retrieval or (
+        _is_repair_retry_candidate(selected_routes, retry_reason) and bool(current_attempt_hits)
+    )
 
     if retry_reason is not None:
         retrieval_feedback = build_retrieval_feedback(

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from src.core.answer_schema import finalize_answer
-from src.core._legacy_request_contracts import infer_answer_contract, missing_required_content
+from src.core.request_contracts import check_answer_contract
 from src.runtime.nodes.retry import contains_tool_error
 from src.runtime.nodes.validation.models import ValidationAssessment, ValidationSnapshot
 from src.runtime.nodes.validation.route_policy import route_error_statuses
@@ -60,6 +60,8 @@ def assess_validation(snapshot: ValidationSnapshot) -> ValidationAssessment:
         actions=snapshot.response_result.actions, issues=snapshot.response_result.issues,
     )
     assessment.checked_result = result
+    if snapshot.response_kind in {"clarification", "failure"}:
+        return assessment
     for check in result.checks:
         if check.reference_status == "missing" or check.support_status == "unsupported":
             assessment.invalid_unit_paths.add(check.unit_id)
@@ -77,9 +79,16 @@ def assess_validation(snapshot: ValidationSnapshot) -> ValidationAssessment:
             *assessment.missing_route_coverage,
             *(task.route for task in snapshot.planner_output.tasks if task.requirement_id in assessment.failed_requirement_ids),
         ]))
-    assessment.missing_content = missing_required_content(
-        infer_answer_contract(snapshot.user_input), result.content,
-    )
+    contract = snapshot.request_contract
+    if contract is None or not contract.can_prepare_body():
+        assessment.missing_content = ["prepared_body_request"]
+    elif (snapshot.response_request_id != contract.request_id
+          or snapshot.response_contract_revision != contract.revision):
+        assessment.missing_content = ["current_contract_revision"]
+    else:
+        contract_check = check_answer_contract(snapshot.request_contract.answer, result.content, evidence=snapshot.evidence_packet)
+        assessment.missing_content = contract_check.missing_required
+        assessment.forbidden_content = contract_check.forbidden_present
     if not result.content.blocks:
         assessment.missing_content = list(dict.fromkeys(["answer", *assessment.missing_content]))
     if any(check.reference_status == "missing" for check in result.checks):
@@ -89,7 +98,7 @@ def assess_validation(snapshot: ValidationSnapshot) -> ValidationAssessment:
         assessment.retry_reason = "missing_content"
     elif assessment.missing_route_coverage:
         assessment.retry_reason = "missing_route_coverage"
-    elif assessment.missing_content:
+    elif assessment.missing_content or assessment.forbidden_content:
         assessment.retry_reason = "missing_content"
     if assessment.retry_reason in {"missing_content", "missing_route_coverage"}:
         assessment.error_codes.append("VALIDATION_MISSING_CONTENT")

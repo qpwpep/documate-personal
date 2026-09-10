@@ -2,11 +2,13 @@ from src.core.answer_schema import AnswerDocument, export_answer_text, finalize_
 from src.core.documents import DocumentElement, SourceAnchor, build_snapshot
 from src.core.evidence import RetrievalScore, SearchHit, build_evidence
 from src.core.planner_schema import PlannerOutput
+from src.core.request_contracts import AnswerContract, ContentRequirement, ContractEvidence, RequestContract
 from src.runtime.nodes.validation.evidence_validator import assess_validation, build_validation_snapshot
 from src.runtime.nodes.validation.policy import apply_validation_outcome
 
 
 def _snapshot(document: AnswerDocument):
+    contract = RequestContract(request_id="validation-test")
     return build_validation_snapshot(
         user_input="자료를 설명해 주세요",
         planner_output=PlannerOutput(use_retrieval=False, tasks=[]),
@@ -15,6 +17,9 @@ def _snapshot(document: AnswerDocument):
         current_attempt_retrieval_diagnostics=[],
         response_result=finalize_answer(document, []),
         evidence_packet=[],
+        request_contract=contract,
+        response_request_id=contract.request_id,
+        response_contract_revision=contract.revision,
     )
 
 
@@ -189,6 +194,11 @@ def test_recovery_does_not_silently_drop_requested_code():
     ]})
     snapshot = _snapshot(document)
     snapshot.user_input = "코드 예시를 보여줘"
+    snapshot.request_contract = RequestContract(
+        request_id="validation-test",
+        answer=AnswerContract(content=(ContentRequirement(kind="code_example", mode="required", evidence_ids=("r1",)),)),
+        evidence=(ContractEvidence(id="r1", turn_id="current", quote="코드 예시를 보여줘", scope="answer.content.code_example", interpretation="instruction"),),
+    )
     snapshot.parsed_hits = [_hit(evidence)]
     snapshot.evidence_packet = [evidence]
 
@@ -207,7 +217,9 @@ def test_post_validation_records_reference_failure_as_validation_diagnostic():
     document = AnswerDocument.model_validate({"blocks": [{
         "type": "paragraph", "content": [{"text": "bad", "basis": "source", "refs": ["missing"]}],
     }]})
-    state = {"runtime": RuntimeState(user_input="설명해줘"), "response": ResponseState(result=finalize_answer(document, []))}
+    contract = RequestContract()
+    state = {"runtime": RuntimeState(user_input="설명해줘", request_contract=contract),
+             "response": ResponseState(result=finalize_answer(document, []), request_id=contract.request_id, contract_revision=contract.revision)}
 
     updates = make_post_synthesis_validation_node(False)(state)
 

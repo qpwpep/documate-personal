@@ -10,6 +10,7 @@ from src.core.contracts.boundary.retrieval import get_retrieval_state
 from src.core.contracts.boundary.runtime import get_runtime_state
 from src.core.evidence import EvidenceRef, SearchHit
 from src.core.planner_schema import PlannerOutput
+from src.core.request_contracts import RequestContract
 from src.core.sequence_utils import slice_from_index
 from src.runtime.nodes.validation.models import ValidationSnapshot
 from src.runtime.nodes.synthesis.evidence_selection import missing_literal_aspects
@@ -51,6 +52,10 @@ def build_validation_snapshot(
     current_attempt_retrieval_diagnostics: list[RetrievalDiagnostic],
     response_result: AnswerResponse | None, evidence_packet: list[EvidenceRef],
     evidence_requirement_map: dict[str, list[str]] | None = None,
+    request_contract: RequestContract | None = None,
+    response_kind: str = "draft",
+    response_request_id: str | None = None,
+    response_contract_revision: int = 0,
 ) -> ValidationSnapshot:
     retrieval_required = bool(planner_output.use_retrieval and planner_output.tasks)
     evidence_by_route: dict[str, list[EvidenceRef]] = {"docs": [], "upload": []}
@@ -68,6 +73,10 @@ def build_validation_snapshot(
         evidence_by_route=evidence_by_route, diagnostics_by_route=diagnostics_by_route,
         required_routes=list(dict.fromkeys(task.route for task in planner_output.tasks)) if retrieval_required else [],
         evidence_requirement_map=evidence_requirement_map or {},
+        request_contract=request_contract,
+        response_kind=response_kind,
+        response_request_id=response_request_id,
+        response_contract_revision=response_contract_revision,
     )
 
 
@@ -99,5 +108,9 @@ def collect_validation_snapshot(state: GraphState) -> tuple[ValidationSnapshot, 
         ],
         response_result=response.result, evidence_packet=response.evidence_packet,
         evidence_requirement_map=response.evidence_requirement_map,
+        request_contract=runtime.request_contract,
+        response_kind=response.kind,
+        response_request_id=response.request_id,
+        response_contract_revision=response.contract_revision,
     )
     return snapshot, local_errors
