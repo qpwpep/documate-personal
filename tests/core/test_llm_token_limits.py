@@ -62,11 +62,13 @@ def provider(monkeypatch):
     monkeypatch.setenv("LANGSMITH_TRACING", "false")
     monkeypatch.setenv("LANGCHAIN_TRACING_V2", "false")
     requests: list[dict] = []
-    behavior = {"timeout_once": False, "invalid_content": None, "finish_reason": "stop", "empty_output": False}
+    behavior = {"timeout_once": False, "invalid_content": None, "finish_reason": "stop", "empty_output": False,
+                "request_paths": []}
 
     def handle(request: httpx.Request) -> httpx.Response:
         payload = json.loads(request.content)
         requests.append(payload)
+        behavior["request_paths"].append(request.url.path)
         if behavior["timeout_once"]:
             behavior["timeout_once"] = False
             raise httpx.ReadTimeout("provider timed out", request=request)
@@ -244,6 +246,103 @@ def test_planner_output_cap_reaches_http_without_synthesis_settings(provider):
     assert requests[0]["max_completion_tokens"] == 654
     assert requests[0]["response_format"]["json_schema"]["name"] == "PlannerOutput"
     assert PlannerOutput.model_validate(result["parsed"]) == PlannerOutput(use_retrieval=False, tasks=[], request_contract=WireRequestContract())
+
+
+@pytest.mark.parametrize("overrides", [
+    {}, {"planner_reasoning_effort": None}, {"planner_reasoning_effort": ""},
+    {"planner_reasoning_effort": "default"}, {"planner_reasoning_effort": "model_default"},
+], ids=["omitted", "none-value", "blank", "default", "model-default"])
+def test_planner_model_default_reasoning_omits_http_override(provider, overrides):
+    """Every model-default spelling leaves the provider's planner reasoning policy unspecified."""
+    requests, behavior = provider
+    registry = build_llm_registry(_settings(**overrides))
+
+    registry.llm_planner.invoke([HumanMessage(content="Hello")])
+
+    assert len(requests) == 1
+    assert {key: value for key, value in requests[0].items() if key in {"reasoning_effort", "reasoning"}} == {}
+    assert behavior["request_paths"] == ["/v1/chat/completions"]
+
+
+@pytest.mark.parametrize("effort", ["high", "max", "none"])
+def test_explicit_planner_reasoning_reaches_http_and_preserves_structured_output(provider, effort):
+    """Explicit planner effort changes its request policy while retaining the strict schema and parsed plan."""
+    requests, behavior = provider
+    messages = [HumanMessage(content="Hello")]
+    baseline = build_llm_registry(_settings()).llm_planner.invoke(messages)
+    configured = build_llm_registry(_settings(planner_reasoning_effort=effort)).llm_planner.invoke(messages)
+
+    baseline_payload, configured_payload = requests
+    expected_payload = baseline_payload | {"reasoning_effort": effort}
+    if effort == "none":
+        # The real SDK retains the configured temperature only when reasoning is disabled.
+        expected_payload["temperature"] = 0
+    assert configured_payload == expected_payload
+    assert behavior["request_paths"] == ["/v1/chat/completions"] * 2
+    assert configured_payload["response_format"]["type"] == "json_schema"
+    schema = configured_payload["response_format"]["json_schema"]
+    assert schema["name"] == "PlannerOutput"
+    assert schema["strict"] is True
+    assert schema["schema"]["additionalProperties"] is False
+    expected_plan = PlannerOutput(use_retrieval=False, tasks=[], request_contract=WireRequestContract())
+    assert configured["parsing_error"] is None
+    assert PlannerOutput.model_validate(configured["parsed"]) == PlannerOutput.model_validate(baseline["parsed"]) == expected_plan
+
+
+@pytest.mark.parametrize("responses_api", [False, True], ids=["chat", "responses"])
+def test_planner_and_synthesis_reasoning_overrides_keep_role_requests_independent(provider, responses_api):
+    """Planner tuning leaves both synthesis requests and summarization unchanged, and synthesis tuning stays out of planning."""
+    requests, behavior = provider
+    messages = [HumanMessage(content="Hello")]
+    for effort in (None, "max"):
+        registry = build_llm_registry(_settings(
+            planner_reasoning_effort=effort, synthesis_reasoning_effort="low",
+            synthesis_use_responses_api=responses_api,
+        ))
+        for model in (registry.llm_planner, registry.llm_synthesizer,
+                      registry.llm_synthesizer_compact, registry.llm_summarizer):
+            model.invoke(messages)
+
+    baseline, configured = requests[:4], requests[4:]
+    assert configured[0] == baseline[0] | {"reasoning_effort": "max"}
+    assert configured[1:] == baseline[1:]
+    assert {key: value for key, value in baseline[0].items() if key in {"reasoning_effort", "reasoning"}} == {}
+    assert {key: value for key, value in configured[3].items() if key in {"reasoning_effort", "reasoning"}} == {}
+    expected_reasoning = {"reasoning": {"effort": "low"}} if responses_api else {"reasoning_effort": "low"}
+    for payload in configured[1:3]:
+        assert {key: value for key, value in payload.items() if key in {"reasoning_effort", "reasoning"}} == expected_reasoning
+    synthesis_path = "/v1/responses" if responses_api else "/v1/chat/completions"
+    assert behavior["request_paths"] == [
+        "/v1/chat/completions", synthesis_path, synthesis_path, "/v1/chat/completions",
+    ] * 2
+
+
+def test_planner_reasoning_environment_override_reaches_compiled_graph(provider, monkeypatch):
+    """An environment override reaches the compiled graph's planner without changing synthesis's endpoint or effort."""
+    requests, behavior = provider
+    monkeypatch.setenv("PLANNER_REASONING_EFFORT", "high")
+    settings = _settings(synthesis_use_responses_api=True, synthesis_reasoning_effort="low")
+
+    result = build_agent_graph(settings).invoke(build_graph_state_input(user_input="Hello"))
+
+    assert len(requests) == 2
+    assert requests[0]["reasoning_effort"] == "high"
+    assert requests[1]["reasoning"] == {"effort": "low"}
+    assert behavior["request_paths"] == ["/v1/chat/completions", "/v1/responses"]
+    assert result["planner"].status == "llm"
+    assert result["debug"].planner_errors == []
+    assert export_answer_text(result["response"].result) == "Hello."
+
+
+def test_unknown_planner_model_passes_valid_reasoning_override_to_provider(provider):
+    """Unknown model names retain a valid requested effort without silently downgrading it."""
+    requests, _ = provider
+    registry = build_llm_registry(_settings(planner_model="future-planner-model", planner_reasoning_effort="xhigh"))
+
+    registry.llm_planner.invoke([HumanMessage(content="Hello")])
+
+    assert requests[0]["model"] == "future-planner-model"
+    assert requests[0]["reasoning_effort"] == "xhigh"
 
 
 @pytest.mark.parametrize("empty_output", [False, True], ids=["truncated-json", "no-visible-output"])

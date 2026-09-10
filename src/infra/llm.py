@@ -65,6 +65,11 @@ def build_llm_registry(settings: AppSettings) -> LLMRegistry:
         **_build_synthesis_api_kwargs(settings),
         **_build_synthesis_reasoning_kwargs(settings),
     )
+    planner_reasoning_kwargs = (
+        {"reasoning_effort": settings.planner_reasoning_effort}
+        if settings.planner_reasoning_effort is not None
+        else {}
+    )
     llm_planner_base = ChatOpenAI(
         model=settings.planner_model,
         api_key=settings.openai_api_key,
@@ -73,6 +78,7 @@ def build_llm_registry(settings: AppSettings) -> LLMRegistry:
         timeout=30,
         max_retries=2,
         verbose=settings.verbose,
+        **planner_reasoning_kwargs,
     )
     llm_planner = llm_planner_base.with_structured_output(
         _build_planner_response_schema(),

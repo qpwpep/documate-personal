@@ -12,13 +12,15 @@ class SettingsSyncTest(unittest.TestCase):
         self.assertEqual(actual, expected)
 
     def test_env_example_keeps_reasoning_effort_blank_with_model_notes(self) -> None:
+        """Generated reasoning overrides leave each stage on its model default."""
         env_example = build_env_example_text(DEFAULT_BENCHMARK_CONFIG_PATH)
-        reasoning_spec = APP_ENV_SPEC_BY_NAME["SYNTHESIS_REASONING_EFFORT"]
-
-        for note in reasoning_spec.sync_notes:
-            self.assertIn(f"# {note}\n", env_example)
-        self.assertIn("SYNTHESIS_REASONING_EFFORT=\n", env_example)
-        self.assertNotIn("SYNTHESIS_REASONING_EFFORT=none", env_example)
+        for env_name in ("PLANNER_REASONING_EFFORT", "SYNTHESIS_REASONING_EFFORT"):
+            with self.subTest(env_name=env_name):
+                reasoning_spec = APP_ENV_SPEC_BY_NAME[env_name]
+                for note in reasoning_spec.sync_notes:
+                    self.assertIn(f"# {note}\n", env_example)
+                self.assertIn(f"{env_name}=\n", env_example)
+                self.assertNotIn(f"{env_name}=none", env_example)
 
     def test_env_example_includes_benchmark_live_slack_settings(self) -> None:
         env_example = build_env_example_text(DEFAULT_BENCHMARK_CONFIG_PATH)
@@ -34,9 +36,11 @@ class SettingsSyncTest(unittest.TestCase):
         self.assertEqual(actual, expected)
 
     def test_runtime_reference_settings_sections_document_reasoning_effort_contract(self) -> None:
+        """Generated settings explain planner overrides and preserve explicit none."""
         actual = Path("docs/runtime_reference.md").read_text(encoding="utf-8")
         synced = sync_runtime_reference_settings_sections(actual, DEFAULT_BENCHMARK_CONFIG_PATH)
 
+        self.assertIn("| `PLANNER_REASONING_EFFORT` | 없음 |", synced)
         self.assertIn("빈 값이면 모델 기본값", synced)
         self.assertIn("none은 명시 override", synced)
         self.assertIn("`gpt-5.6-luna`: none, low, medium, high, xhigh, max", synced)
@@ -83,7 +87,7 @@ class SettingsSyncTest(unittest.TestCase):
         expected = {
             "Required secrets": ["OPENAI_API_KEY", "TAVILY_API_KEY"],
             "Model selection": ["CHAT_MODEL", "PLANNER_MODEL", "SUMMARY_MODEL"],
-            "Planning and summary generation": ["SUMMARY_MAX_TOKENS", "PLANNER_MAX_TOKENS"],
+            "Planning and summary generation": ["SUMMARY_MAX_TOKENS", "PLANNER_MAX_TOKENS", "PLANNER_REASONING_EFFORT"],
             "Answer generation": [
                 "SYNTHESIS_TIMEOUT_SECONDS", "SYNTHESIS_USE_RESPONSES_API", "SYNTHESIS_MAX_RETRIES",
                 "SYNTHESIS_MAX_TOKENS", "SYNTHESIS_COMPACT_MAX_TOKENS", "SYNTHESIS_PROMPT_SNIPPET_CHARS",

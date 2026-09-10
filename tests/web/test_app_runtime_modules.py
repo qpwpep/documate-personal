@@ -13,6 +13,17 @@ from src.app.web.cleanup import resolve_download_path, validate_upload_file_path
 
 
 class WebRuntimeModulesTest(unittest.TestCase):
+    def setUp(self) -> None:
+        runtime_root = Path(self.enterContext(TemporaryDirectory()))
+        for function_name, directory_name in (
+            ("get_uploads_dir", "uploads"),
+            ("get_save_text_output_dir", "save_text"),
+        ):
+            self.enterContext(patch(
+                f"src.app.web.cleanup.{function_name}",
+                return_value=runtime_root / directory_name,
+            ))
+
     @staticmethod
     def _runtime_settings_payload(records: list[object]) -> dict[str, str]:
         runtime_records = [
@@ -36,6 +47,7 @@ class WebRuntimeModulesTest(unittest.TestCase):
             tavily_api_key="test",
             chat_model="gpt-5.4",
             planner_model="gpt-5.4-mini",
+            planner_reasoning_effort="high",
             summary_model="gpt-5.4-nano",
             docs_search_timeout_seconds=7,
             synthesis_timeout_seconds=42,
@@ -60,6 +72,7 @@ class WebRuntimeModulesTest(unittest.TestCase):
                 "planner_model": "gpt-5.4-mini",
                 "summary_model": "gpt-5.4-nano",
                 "planner_max_tokens": "1920",
+                "planner_reasoning_effort": "high",
                 "summary_max_tokens": "1024",
                 "docs_search_timeout_seconds": "7",
                 "synthesis_timeout_seconds": "42",
@@ -85,9 +98,12 @@ class WebRuntimeModulesTest(unittest.TestCase):
         )
 
     def test_create_app_logs_model_default_reasoning_effort(self) -> None:
+        """Startup reports model_default when no reasoning override is configured."""
         settings = AppSettings(
+            _env_file=None,
             openai_api_key="test-key",
             tavily_api_key="test",
+            planner_reasoning_effort=None,
             synthesis_reasoning_effort=None,
         )
         with patch("src.app.web.app.get_settings", return_value=settings):
@@ -96,7 +112,24 @@ class WebRuntimeModulesTest(unittest.TestCase):
                     pass
 
         payload = self._runtime_settings_payload(captured_logs.records)
+        self.assertEqual(payload["planner_reasoning_effort"], "model_default")
         self.assertEqual(payload["synthesis_reasoning_effort"], "model_default")
+
+    def test_create_app_logs_explicit_none_planner_reasoning_effort(self) -> None:
+        """Startup preserves explicit none instead of reporting a model default."""
+        settings = AppSettings(
+            _env_file=None,
+            openai_api_key="test-key",
+            tavily_api_key="test",
+            planner_reasoning_effort="none",
+        )
+        with patch("src.app.web.app.get_settings", return_value=settings):
+            with self.assertLogs("uvicorn", level="INFO") as captured_logs:
+                with TestClient(create_app()):
+                    pass
+
+        payload = self._runtime_settings_payload(captured_logs.records)
+        self.assertEqual(payload["planner_reasoning_effort"], "none")
 
     def test_resolve_download_path_rejects_traversal(self) -> None:
         with TemporaryDirectory() as temp_dir:
