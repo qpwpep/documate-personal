@@ -1,10 +1,12 @@
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from src.core.contracts.boundary.graph import build_graph_state_input
+from src.core.request_contracts import AnswerContract, ContentRequirement, ContractEvidence, FormatRequirement, RequestContract
 from src.runtime.nodes.synthesis.prompt_builder import build_synthesis_messages
 
 
 def _messages(query, **kwargs):
+    kwargs.setdefault("request_contract", RequestContract())
     state = build_graph_state_input(user_input=query, messages=[HumanMessage(content=query)], **kwargs)
     messages, _, _ = build_synthesis_messages(
         state=state, action_rules=[], evidence_packet=[], attempt=1, max_turns=6,
@@ -23,14 +25,26 @@ def test_prompt_does_not_duplicate_the_body_or_certify_model_confidence():
 
 def test_request_for_code_asks_for_a_real_code_block_and_honest_basis():
     """A code-example request still produces concrete code and does not claim execution."""
-    prompt = "\n".join(str(message.content) for message in _messages("BeautifulSoup 샘플 코드 보여줘"))
+    prompt = "\n".join(str(message.content) for message in _messages(
+        "BeautifulSoup 샘플 코드 보여줘",
+        request_contract=RequestContract(
+            answer=AnswerContract(content=(ContentRequirement(kind="code_example", mode="required", evidence_ids=("r1",)),)),
+            evidence=(ContractEvidence(id="r1", turn_id="current", quote="샘플 코드 보여줘", scope="answer.content.code_example", interpretation="instruction"),),
+        ),
+    ))
     assert "concrete code in a code block with basis=example" in prompt
     assert "not an executed result" in prompt
 
 
 def test_comparison_attaches_each_source_to_the_displayed_unit():
     """A comparison is requested as content with evidence, not as source-category sections."""
-    prompt = "\n".join(str(message.content) for message in _messages("Compare settings as a checklist."))
+    prompt = "\n".join(str(message.content) for message in _messages(
+        "Compare settings as a checklist.",
+        request_contract=RequestContract(answer=AnswerContract(
+            content=(ContentRequirement(kind="comparison", mode="required", evidence_ids=("r1",)),),
+            format=(FormatRequirement(kind="list", mode="required", evidence_ids=("r1",)),),
+        ), evidence=(ContractEvidence(id="r1", turn_id="current", quote="Compare settings as a checklist.", scope="answer", interpretation="instruction"),)),
+    ))
     assert "Use a list for the requested checklist" in prompt
     assert "Attach each source to the corresponding content unit" in prompt
     assert "required_sections" not in prompt

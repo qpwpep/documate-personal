@@ -8,6 +8,7 @@ from src.core.documents import DocumentElement, build_snapshot
 from src.core.evidence import RetrievalScore, SearchHit, build_evidence
 from src.core.planner_schema import PlannerOutput, RetrievalTask
 from src.core.prompts import SYS_POLICY
+from src.core.request_contracts import RequestContract
 from src.runtime.nodes.retrieval import collect_retrieval_result
 from src.runtime.nodes.synthesis.evidence_selection import select_evidence_hits
 from src.runtime.nodes.synthesis.prompt_builder import build_synthesis_messages
@@ -57,7 +58,7 @@ def test_validation_package_exposes_only_public_entrypoints():
 
 def test_prompt_preserves_current_question_and_contract_while_trimming_history():
     """History trimming removes old turns and tool messages while retaining source and question contracts."""
-    state = build_graph_state_input(user_input="u4", memory_summary="older summary", messages=[
+    state = build_graph_state_input(user_input="u4", memory_summary="older summary", request_contract=RequestContract(), messages=[
         HumanMessage(content="u1"), AIMessage(content="a1"),
         ToolMessage(content="tool output", name="tavily_search", tool_call_id="1"),
         HumanMessage(content="u2"), AIMessage(content="a2"),

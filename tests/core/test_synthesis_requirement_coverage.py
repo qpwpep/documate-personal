@@ -5,6 +5,7 @@ from src.core.contracts.boundary.graph import build_graph_state_input
 from src.core.documents import DocumentElement, build_snapshot
 from src.core.evidence import RetrievalScore, SearchHit, build_evidence
 from src.core.planner_schema import PlannerOutput, RetrievalRequirement, RetrievalTask
+from src.core.request_contracts import RequestContract
 from src.runtime.nodes.synthesis.budgets import SynthesisBudgetProfile
 from src.runtime.nodes.synthesis.context import build_synthesis_context, prepare_synthesis_inputs
 from src.runtime.nodes.synthesis.evidence_selection import select_evidence_hits
@@ -35,6 +36,7 @@ def _prepare(tasks, hits, *, budget=6000, snippet=960, max_items=6):
     plan = PlannerOutput(use_retrieval=True, tasks=tasks)
     state = build_graph_state_input(
         user_input="Compare the requested settings", planner=PlannerState(output=plan),
+        request_contract=RequestContract(),
         retrieval={"hit_log": [hit.model_dump(mode="json") for hit in hits]},
     )
     context = build_synthesis_context(state=state, has_default_slack_destination=False)

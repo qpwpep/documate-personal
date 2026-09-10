@@ -6,6 +6,7 @@ from src.core.contracts.boundary.graph import build_graph_state_input
 from src.core.documents import DocumentElement, build_snapshot
 from src.core.evidence import build_evidence
 from src.core.planner_schema import PlannerOutput, RetrievalTask
+from src.core.request_contracts import ActionContract, ActionRequest, BoundAnswerReference, CopyAnswerBody, ContractEvidence, RequestContract
 from src.runtime.nodes.synthesis import make_synthesize_node
 
 
@@ -20,6 +21,7 @@ class ModelBoundary:
 
 
 def _state(query, **kwargs):
+    kwargs.setdefault("request_contract", RequestContract())
     return build_graph_state_input(
         user_input=query, messages=[HumanMessage(content=query)],
         planner=PlannerState(output=PlannerOutput(use_retrieval=False, tasks=[])), **kwargs,
@@ -32,11 +34,16 @@ def test_save_without_previous_response_generates_current_document():
     assert export_answer_text(updates["response"].result) == "현재 전달할 답변입니다."
 
 
-def test_missing_slack_destination_is_a_typed_followup():
-    """A missing send destination is a single interaction document rather than a delivery receipt."""
-    updates = make_synthesize_node(ModelBoundary(unavailable=True))(_state("send this to slack"))
+def test_missing_slack_destination_preserves_the_generated_body_for_actions():
+    """A destination supplement is handled after producing the body that will be delivered."""
+    updates = make_synthesize_node(ModelBoundary())(_state(
+        "send this to slack", request_contract=RequestContract(
+            actions=ActionContract(slack_notify=ActionRequest(intent="requested", evidence_ids=("r1",))),
+            evidence=(ContractEvidence(id="r1", turn_id="current", quote="send this to slack", scope="actions.slack_notify", interpretation="instruction"),),
+        ),
+    ))
     result = updates["response"].result
-    assert "channel_id" in export_answer_text(result)
+    assert export_answer_text(result) == "현재 전달할 답변입니다."
     assert result.citations == []
     assert result.actions == []
     assert updates["debug"].synthesis_errors == []
@@ -53,7 +60,10 @@ def test_saving_previous_response_preserves_its_body_and_source_revision():
         text_document("The value is 3.", basis="source", refs=[evidence.id]), [evidence],
         actions=[ActionReceipt(kind="save_text", status="success", file_path="old.txt")],
     )
-    updates = make_synthesize_node(ModelBoundary(unavailable=True))(_state("save this answer to txt", previous_response=previous))
+    updates = make_synthesize_node(ModelBoundary(unavailable=True))(_state(
+        "save this answer to txt", previous_response=previous,
+        request_contract=RequestContract(body=CopyAnswerBody(source=BoundAnswerReference(ref="previous", response_hash=previous.content_hash))),
+    ))
     result = updates["response"].result
     assert result.content == previous.content
     assert result.citations == previous.citations

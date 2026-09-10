@@ -10,6 +10,7 @@ from src.core.contracts.boundary.graph import build_graph_state_input
 from src.core.documents import DocumentElement, SourceAnchor, build_snapshot
 from src.core.evidence import RetrievalScore, SearchHit, build_evidence
 from src.core.planner_schema import PlannerOutput, RetrievalRequirement, RetrievalTask
+from src.core.request_contracts import ExtractBody, RequestContract
 from src.runtime.nodes.synthesis import make_synthesize_node
 
 
@@ -31,6 +32,7 @@ def _state(hits, query="Explain the setting"):
     routes = list(dict.fromkeys(hit.evidence.route for hit in hits))
     return build_graph_state_input(
         user_input=query, messages=[HumanMessage(content=query)],
+        request_contract=RequestContract(),
         planner=PlannerState(output=PlannerOutput(use_retrieval=bool(routes), tasks=[RetrievalTask(route=route, query=query, k=4) for route in routes])),
         retrieval=RetrievalState(hit_log=[hit.model_dump(mode="json") for hit in hits]),
     )
@@ -102,6 +104,7 @@ def test_eight_independent_requirements_keep_their_evidence_in_generation(timeou
     }) for index, task in enumerate(tasks)]
     state = build_graph_state_input(
         user_input="Compare all eight settings", messages=[HumanMessage(content="Compare all eight settings")],
+        request_contract=RequestContract(),
         planner=PlannerState(output=PlannerOutput(use_retrieval=True, tasks=tasks)),
         retrieval=RetrievalState(hit_log=[hit.model_dump(mode="json") for hit in hits]),
     )
@@ -202,6 +205,9 @@ def test_exact_upload_extraction_needs_no_model_generation():
     """Explicit source extraction uses the same checked document contract without rewriting code."""
     hit = _hit("retries = 3\n", source="upload")
     state = _state([hit], query="retries 코드를 원문 그대로 발췌해줘")
+    state["runtime"] = state["runtime"].model_copy(update={
+        "request_contract": RequestContract(body=ExtractBody()),
+    })
     task = state["planner"].output.tasks[0]
     state["retrieval"] = RetrievalState(hit_log=[hit.model_copy(update={"requirement_id": task.requirement_id}).model_dump(mode="json")])
     state["debug"] = DebugState(retrieval_diagnostics=[RetrievalDiagnostic(
