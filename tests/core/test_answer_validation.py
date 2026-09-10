@@ -2,11 +2,13 @@ from src.core.answer_schema import AnswerDocument, export_answer_text, finalize_
 from src.core.documents import DocumentElement, SourceAnchor, build_snapshot
 from src.core.evidence import RetrievalScore, SearchHit, build_evidence
 from src.core.planner_schema import PlannerOutput
+from src.core.request_contracts import AnswerContract, ContentRequirement, ContractEvidence, RequestContract
 from src.runtime.nodes.validation.evidence_validator import assess_validation, build_validation_snapshot
 from src.runtime.nodes.validation.policy import apply_validation_outcome
 
 
 def _snapshot(document: AnswerDocument):
+    contract = RequestContract(request_id="validation-test")
     return build_validation_snapshot(
         user_input="자료를 설명해 주세요",
         planner_output=PlannerOutput(use_retrieval=False, tasks=[]),
@@ -15,6 +17,9 @@ def _snapshot(document: AnswerDocument):
         current_attempt_retrieval_diagnostics=[],
         response_result=finalize_answer(document, []),
         evidence_packet=[],
+        request_contract=contract,
+        response_request_id=contract.request_id,
+        response_contract_revision=contract.revision,
     )
 
 

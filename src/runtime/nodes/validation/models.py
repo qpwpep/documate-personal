@@ -7,6 +7,7 @@ from src.core.contracts import RetrievalDiagnostic
 from src.core.contracts.debug import ErrorCode, RetryReason
 from src.core.evidence import EvidenceRef, SearchHit
 from src.core.planner_schema import PlannerOutput
+from src.core.request_contracts import RequestContract
 
 
 @dataclass(slots=True)
@@ -23,6 +24,10 @@ class ValidationSnapshot:
     diagnostics_by_route: dict[str, list[RetrievalDiagnostic]] = field(default_factory=dict)
     required_routes: list[str] = field(default_factory=list)
     evidence_requirement_map: dict[str, list[str]] = field(default_factory=dict)
+    request_contract: RequestContract | None = None
+    response_kind: str = "draft"
+    response_request_id: str | None = None
+    response_contract_revision: int = 0
 
 
 @dataclass(slots=True)
@@ -34,6 +39,7 @@ class ValidationAssessment:
     invalid_unit_paths: set[str] = field(default_factory=set)
     missing_route_coverage: list[str] = field(default_factory=list)
     missing_content: list[str] = field(default_factory=list)
+    forbidden_content: list[str] = field(default_factory=list)
     checked_result: AnswerResponse | None = None
     retry_reason: RetryReason | None = None
     failed_routes: set[str] = field(default_factory=set)

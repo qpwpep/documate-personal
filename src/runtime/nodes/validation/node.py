@@ -36,7 +36,15 @@ def _decide_retry_outcome(
         failed_requirement_ids=assessment.failed_requirement_ids,
         current_attempt_hits=snapshot.parsed_hits,
         current_attempt_retrieval_diagnostics=snapshot.current_attempt_retrieval_diagnostics,
+        request_contract=snapshot.request_contract,
     )
+    if assessment.missing_content or assessment.forbidden_content:
+        retrieval_feedback += (
+            f" Missing required: {assessment.missing_content}."
+            f" Forbidden present: {assessment.forbidden_content}."
+            " Keep the confirmed request contract unchanged when repairing the body."
+        )
+        next_retry_context = next_retry_context.model_copy(update={"retrieval_feedback": retrieval_feedback})
 
     local_errors: list[str] = []
     if assessment.retry_reason is not None:
