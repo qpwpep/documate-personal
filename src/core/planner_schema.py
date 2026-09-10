@@ -6,6 +6,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from src.core.request_contracts import WireRequestContract
+
 PlannerRouteName = Literal["docs", "upload"]
 PLANNER_ROUTES: tuple[PlannerRouteName, ...] = ("docs", "upload")
 MAX_PLANNER_TASKS = 8
@@ -88,6 +90,7 @@ class PlannerOutput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     use_retrieval: bool = Field(description="Whether a sufficiently resolved request needs retrieved evidence.")
     tasks: list[RetrievalTask] = Field(max_length=MAX_PLANNER_TASKS, description="One task per independent source/subject/version requirement. Multiple tasks may share a route. Include upload even if the file is missing; omit excluded sources.")
+    request_contract: WireRequestContract | None = None
     clarification_question: str | None = Field(default=None, description="Ask for the missing referent/subject/version when the request cannot be resolved from dialogue. Then use_retrieval=false and tasks=[]. Otherwise null.")
 
     @model_validator(mode="after")
