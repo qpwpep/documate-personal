@@ -8,9 +8,9 @@ from dataclasses import dataclass, field
 from threading import Lock
 from typing import Any
 
-from src.app.agent_manager import AgentFlowManager
+from src.app.agent_manager import AgentFlowManager, is_session_reset_command
 from src.core.contracts import SessionMetadata
-from src.core.uploads import validate_session_id
+from src.core.uploads import UploadContext, UploadManifest, validate_session_id
 from src.infra.logging_utils import log_event
 from src.runtime.progress import ProgressEmitter
 from src.infra.settings import AppSettings
@@ -167,34 +167,26 @@ class InMemorySessionStore:
         user_input: str,
         upload_file_path: str | None = None,
         progress_emitter: ProgressEmitter | None = None,
-    ) -> tuple[AgentFlowManager, dict[str, Any], int]:
-        entry = self.get_or_create_entry(session_id)
-        with self._lock:
-            active_entry = self.active_agents.get(session_id)
-            if active_entry is not None:
-                entry = active_entry
-            entry.active_request_count += 1
-            entry.last_accessed_monotonic = time.monotonic()
+        uploads: UploadContext | None = None,
+    ) -> tuple[AgentFlowManager, dict[str, Any], int, UploadManifest]:
+        from src.app.web.upload_service import UploadService
 
-        lock_started = time.monotonic()
-        try:
-            with entry.request_lock:
-                session_lock_wait_ms = int((time.monotonic() - lock_started) * 1000)
-                agent_manager = entry.agent
-                agent_manager.set_session_metadata(session_metadata)
-                agent_answer = agent_manager.run_agent_flow(
-                    user_input,
-                    upload_file_path,
-                    progress_emitter=progress_emitter,
-                )
-                return agent_manager, agent_answer, session_lock_wait_ms
-        finally:
-            finished_at = time.monotonic()
-            with self._lock:
-                active_entry = self.active_agents.get(session_id)
-                if active_entry is entry:
-                    active_entry.last_accessed_monotonic = finished_at
-                    active_entry.active_request_count = max(0, active_entry.active_request_count - 1)
+        session_id = validate_session_id(session_id)
+        with self.locked_session(session_id) as (entry, session_lock_wait_ms):
+            agent_manager = entry.agent
+            service = UploadService(settings=self.settings, session_store=self)
+            if uploads is not None:
+                service.check_context(agent_manager._ensure_session(), uploads)
+            elif not is_session_reset_command(user_input):
+                uploads = service.sync_legacy_locked(session_id, agent_manager, upload_file_path)
+            agent_manager.set_session_metadata(session_metadata)
+            agent_answer = agent_manager.run_agent_flow(
+                user_input, progress_emitter=progress_emitter, uploads=uploads,
+            )
+            # Capture completion state before releasing the lock: another request
+            # may replace attachments or reset the epoch before this answer is sent.
+            upload_manifest = agent_manager._ensure_session().upload_manifest()
+            return agent_manager, agent_answer, session_lock_wait_ms, upload_manifest
 
     def active_session_ids(self) -> set[str]:
         with self._lock:

@@ -14,6 +14,7 @@ from src.core.latency import elapsed_ms
 from src.infra.settings import AppSettings
 from src.infra.tools.local_rag import build_temp_retriever
 from src.runtime.agent_runtime.session_context import SessionContext
+from src.core.uploads import UploadContext
 
 
 class GraphInvocationError(RuntimeError):
@@ -168,6 +169,7 @@ class ExecutionRunner:
         user_input: str,
         upload_file_path: str | None,
         progress_emitter: Any | None = None,
+        *, uploads: UploadContext | None = None,
     ) -> tuple[dict[str, Any], int | None]:
         self._pending_upload_retriever = None
         conversation = self.session.snapshot_conversation_memory()
@@ -181,6 +183,7 @@ class ExecutionRunner:
                 user_turns=conversation.user_turns,
                 messages=list(conversation.messages),
                 retriever=retriever,
+                upload_files=tuple(record.public_info() for record in self.session.upload_records),
                 progress_emitter=progress_emitter,
                 memory_summary=conversation.memory_summary,
                 session_metadata=session_metadata,
@@ -188,8 +191,21 @@ class ExecutionRunner:
                 pending_action=(self.session.pending_action.model_copy(deep=True) if self.session.pending_action is not None else None),
             )
 
-        state = build_state()
         upload_retriever_build_ms: int | None = None
+
+        if uploads is not None:
+            if uploads.epoch != self.session.upload_epoch or uploads.revision != self.session.upload_revision:
+                raise ValueError("UPLOAD_REVISION_CONFLICT: attachment set changed")
+            # A legacy retriever is outside the versioned manifest's file set.
+            handle = self.session.upload_retriever_handle if self.session.upload_records else None
+            return normalize_graph_update(build_state(handle.retriever if handle is not None else None)), None
+
+        if self.session.upload_records:
+            # A direct legacy call replaces the managed set, including its
+            # manifest and owned originals. Retire its context before execution.
+            self.session.release_upload_resources()
+            self.session.upload_revision += 1
+        state = build_state()
 
         if upload_file_path is not None:
             upload_content_hash = hashlib.sha256(Path(upload_file_path).read_bytes()).hexdigest()

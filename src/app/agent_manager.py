@@ -22,9 +22,15 @@ from src.infra.logging_utils import log_event
 from src.runtime.progress import ProgressEmitter
 from src.infra.settings import AppSettings, get_settings
 from src.infra.tools.local_rag import build_temp_retriever
+from src.core.uploads import UploadContext
 
 
 logger = logging.getLogger(__name__)
+
+
+def is_session_reset_command(user_input: str) -> bool:
+    """Identify explicit reset commands before preparing attachment changes."""
+    return user_input.lower() in {"exit", "종료", "quit", "q"}
 
 
 class AgentFlowManager:
@@ -217,16 +223,16 @@ class AgentFlowManager:
         user_input: str,
         upload_file_path: str | None = None,
         progress_emitter: ProgressEmitter | None = None,
+        *, uploads: UploadContext | None = None,
     ) -> dict[str, Any]:
         self._ensure_components()
-
-        if user_input.lower() in {"exit", "종료", "quit", "q"}:
-            self.close()
-            return self._exit_payload("Chat session has been reset. Start again.")
 
         flow_started = time.perf_counter()
         upload_retriever_build_ms: int | None = None
         try:
+            session = self._ensure_session()
+            if uploads is not None and (uploads.epoch != session.upload_epoch or uploads.revision != session.upload_revision):
+                raise ValueError("UPLOAD_REVISION_CONFLICT: attachment set changed")
             validate_query_text(user_input)
         except ValueError as exc:
             return self._error_payload(
@@ -237,12 +243,17 @@ class AgentFlowManager:
                 stage_error=None,
             )
 
+        if is_session_reset_command(user_input):
+            self.close()
+            return self._exit_payload("Chat session has been reset. Start again.")
+
         try:
             previous_memory = self._ensure_session().snapshot_conversation_memory()
             state, upload_retriever_build_ms = self._runner.prepare_graph_state(
                 user_input,
                 upload_file_path,
                 progress_emitter=progress_emitter,
+                uploads=uploads,
             )
             response, graph_total_ms = self._runner.invoke_graph(state)
             finalized_build_ms = self._runner.finalize_pending_upload_retriever(wait=False)
@@ -289,8 +300,10 @@ class AgentFlowManager:
 
         except Exception as exc:
             self._runner.cancel_pending_upload_retriever()
-            self._ensure_session().cleanup_upload_retriever()
-            self.upload_file_path = None
+            # Committed attachments outlive an individual answer/LLM failure.
+            if uploads is None:
+                self._ensure_session().cleanup_upload_retriever()
+                self.upload_file_path = None
             graph_total_ms = None
             stage_error = None
             root_exc = exc
