@@ -1,0 +1,185 @@
+"""Multiple uploads retain file boundaries through retrieval and old citations."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from contextlib import contextmanager
+from uuid import uuid4
+
+import pytest
+from langchain_core.embeddings import Embeddings
+
+from src.core.evidence import parse_search_hits
+from src.core.planner_schema import RetrievalRequirement
+from src.infra.tools.local_rag import build_upload_search_tool
+
+
+class LengthEmbeddings(Embeddings):
+    def embed_documents(self, texts):
+        return [[float(len(text)), 0.0] for text in texts]
+
+    def embed_query(self, text):
+        return [float(len(text)), 0.0]
+
+
+@pytest.fixture
+def uploads(tmp_path, monkeypatch):
+    monkeypatch.setattr("src.infra.chroma_store.OpenAIEmbeddings", lambda **kwargs: LengthEmbeddings())
+
+    def record(name, content, *, file_id=None, session="multi"):
+        from src.core.uploads import UploadRecord
+
+        file_id = file_id or uuid4().hex
+        data = content.encode("utf-8")
+        path = tmp_path / "uploads" / session / uuid4().hex / name
+        path.parent.mkdir(parents=True)
+        path.write_bytes(data)
+        return UploadRecord(file_id=file_id, name=name, path=str(path), size_bytes=len(data),
+                            content_hash="sha256:" + hashlib.sha256(data).hexdigest(),
+                            source_uri=f"upload://{session}/{file_id}")
+
+    @contextmanager
+    def indexed(files, *, session="multi", generation=None):
+        from src.infra.tools.local_rag.uploads import build_upload_retriever
+
+        handle = build_upload_retriever(files, session_id=session, generation=generation or uuid4().hex,
+                                       api_key="test-key")
+        try:
+            yield handle
+        finally:
+            handle.cleanup()
+
+    return record, indexed
+
+
+def test_same_content_in_different_files_has_distinct_citations(uploads):
+    """Equal text and overlapping element IDs still resolve to each file's original source."""
+    record, indexed = uploads
+    first = record("first.py", "def load():\n    return 1\n")
+    second = record("second.py", "def load():\n    return 1\n")
+    with indexed([first, second]) as handle:
+        payload = build_upload_search_tool()(query="load definition", retriever=handle.retriever,
+                                            requirement=RetrievalRequirement(symbols=["load"], match="definition"))
+        direct = handle.retriever.invoke("load")
+        assert len(direct) == 2
+        assert len(handle.retriever.source_documents) == 2
+    hits = parse_search_hits(payload)
+    assert {hit.evidence.snapshot.title for hit in hits} == {"first.py", "second.py"}
+    assert {hit.evidence.element.metadata["file_id"] for hit in hits} == {first.file_id, second.file_id}
+    assert len({hit.evidence.id for hit in hits}) == 2
+    assert all(hit.evidence.excerpt == "def load():\n    return 1" for hit in hits)
+
+
+@pytest.mark.parametrize("symbols", [[], ["load"]])
+def test_explicit_file_scope_applies_to_semantic_and_exact_search(uploads, symbols):
+    """A requested file scope prevents another active file from supplying the evidence."""
+    record, indexed = uploads
+    first = record("first.py", "def load():\n    return 'first'\n")
+    second = record("second.py", "def load():\n    return 'second'\n")
+    with indexed([first, second]) as handle:
+        payload = build_upload_search_tool()(query="load", retriever=handle.retriever,
+            requirement=RetrievalRequirement(symbols=symbols, match="definition", file_ids=[second.file_id]))
+    hits = parse_search_hits(payload)
+    assert hits
+    assert {hit.evidence.snapshot.title for hit in hits} == {"second.py"}
+
+
+def test_unknown_file_scope_is_rejected_without_unscoped_fallback(uploads):
+    """A foreign or stale file ID yields an error instead of searching all active files."""
+    record, indexed = uploads
+    with indexed([record("first.py", "value = 1\n")]) as handle:
+        payload = build_upload_search_tool()(query="value", retriever=handle.retriever,
+            requirement=RetrievalRequirement(file_ids=["foreign-file"]))
+    assert payload["hits"] == []
+    assert payload["diagnostics"]["status"] == "error"
+    assert payload["diagnostics"]["error_code"] == "UPLOAD_FILE_SCOPE_INVALID"
+
+
+def test_explicit_multi_file_scope_reserves_candidates_for_every_file(uploads):
+    """A larger file cannot consume all candidates in an explicit multi-file comparison."""
+    record, indexed = uploads
+    first = record("large.py", "value = 1\n" * 300)
+    second = record("small.py", "other_value = 2\n")
+    with indexed([first, second]) as handle:
+        payload = build_upload_search_tool()(query="compare values", k=1, retriever=handle.retriever,
+            requirement=RetrievalRequirement(file_ids=[first.file_id, second.file_id]))
+    assert {hit.evidence.snapshot.title for hit in parse_search_hits(payload)} == {"large.py", "small.py"}
+    assert payload["diagnostics"]["answerability"] == "covered"
+    assert payload["diagnostics"]["missing_requirements"] == []
+
+
+
+
+def test_scoped_candidates_preserve_filters_reserved_sources_and_raw_distances(uploads):
+    """Scoped retrieval reserves each source before filling the budget by raw distance within both filters."""
+    from src.core.evidence import EvidenceRef
+
+    def notebook(cells):
+        return json.dumps({"nbformat": 4, "nbformat_minor": 5, "metadata": {}, "cells": [
+            {"id": f"cell-{index}", "cell_type": "code", "source": source, "metadata": {},
+             "execution_count": None, "outputs": []} for index, source in enumerate(cells)
+        ]})
+
+    record, indexed = uploads
+    first = record("first.ipynb", notebook([
+        "value = 0\n", "other = 0\n", "value = 111\n", "value = 11111\n", "value = 11111111111\n",
+    ]))
+    second = record("second.ipynb", notebook([
+        "value = 0\n", "value = 2\n", "value = 222222\n", "value = 2222222222222\n",
+    ]))
+    excluded = record("excluded.ipynb", notebook(["value = 0\n", "value\n"]))
+    with indexed([first, second, excluded]) as handle:
+        rows = handle.retriever.vectorstore.similarity_search_with_score(
+            query="value", k=4, file_ids=[first.file_id, second.file_id],
+            filter={"cell_index": {"$gte": 1}}, where_document={"$contains": "value"},
+        )
+    assert [(doc.page_content, score) for doc, score in rows] == [
+        ("value = 111\n", 49.0), ("value = 2\n", 25.0),
+        ("value = 11111\n", 81.0), ("value = 222222\n", 100.0),
+    ]
+    evidence = [EvidenceRef.model_validate_json(doc.metadata["evidence_ref"]) for doc, _score in rows]
+    assert [(item.snapshot.title, item.element.metadata["file_id"], item.element.anchors[0].cell_index, item.excerpt)
+            for item in evidence] == [
+        ("first.ipynb", first.file_id, 2, "value = 111\n"),
+        ("second.ipynb", second.file_id, 1, "value = 2\n"),
+        ("first.ipynb", first.file_id, 3, "value = 11111\n"),
+        ("second.ipynb", second.file_id, 2, "value = 222222\n"),
+    ]
+
+
+def test_file_coverage_does_not_establish_an_unverified_code_aspect(uploads):
+    """File-scoped semantic candidates do not prove additional explicit code constraints."""
+    record, indexed = uploads
+    first = record("first.py", "value = 1\n")
+    with indexed([first]) as handle:
+        payload = build_upload_search_tool()(query="value axis", retriever=handle.retriever,
+            requirement=RetrievalRequirement(file_ids=[first.file_id], aspects=["axis"]))
+    assert payload["diagnostics"]["answerability"] == "unknown"
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+def test_source_resolver_enforces_scope_when_called_directly(uploads):
+    """The source resolver does not return definitions outside its explicit file constraint."""
+    from src.infra.tools.local_rag.requirements import resolve_source_requirement
+
+    record, indexed = uploads
+    first = record("first.py", "def load():\n    return 1\n")
+    second = record("second.py", "def load():\n    return 2\n")
+    with indexed([first, second]) as handle:
+        result = resolve_source_requirement(source_documents=handle.retriever.source_documents,
+            candidate_rows=[], requirement=RetrievalRequirement(symbols=["load"], match="definition", file_ids=[second.file_id]))
+    assert {hit.evidence.snapshot.title for hit in result.hits} == {"second.py"}

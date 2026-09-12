@@ -184,18 +184,31 @@ def _candidate_sources(rows: list[tuple[Any, float | None]]) -> list[_Source]:
 
 
 def resolve_source_requirement(
-    *, requirement: RetrievalRequirement, source_document: ParsedDocument | None,
+    *, requirement: RetrievalRequirement, source_document: ParsedDocument | None = None,
     candidate_rows: list[tuple[Any, float | None]],
+    source_documents: tuple[ParsedDocument, ...] | None = None,
 ) -> SourceRequirementResult:
     """A complete registry proves absence; vector candidates alone never do."""
-    exhaustive = source_document is not None and source_document.snapshot.capture_scope == "full_document"
-    sources = ([_Source(source_document.snapshot, element) for element in source_document.elements]
-               if source_document is not None else _candidate_sources(candidate_rows))
+    documents = source_documents if source_documents is not None else ((source_document,) if source_document else None)
+    if documents is not None and requirement.file_ids:
+        documents = tuple(document for document in documents
+                          if any(element.metadata.get("file_id") in requirement.file_ids
+                                 for element in document.elements))
+    exhaustive = bool(documents) and all(document.snapshot.capture_scope == "full_document" for document in documents)
+    sources = ([_Source(document.snapshot, element) for document in documents for element in document.elements]
+               if documents is not None else _candidate_sources(candidate_rows))
+    if requirement.file_ids:
+        sources = [source for source in sources if source.element.metadata.get("file_id") in requirement.file_ids]
     symbols = list(dict.fromkeys(requirement.symbols))
     by_symbol: dict[str, list[tuple[int, _Source, _Occurrence, tuple[int, int]]]] = {name: [] for name in symbols}
     warnings: list[str] = []
     aliases: dict[str, str] = {}
+    alias_snapshot: str | None = None
     for source in sources:
+        if source.snapshot.snapshot_id != alias_snapshot:
+            # Notebook cells share imports; separate files never share lexical scope.
+            aliases = {}
+            alias_snapshot = source.snapshot.snapshot_id
         if source.element.kind != "code":
             continue
         try:
@@ -217,31 +230,47 @@ def resolve_source_requirement(
 
     hits: list[SearchHit] = []
     covered_aspects: set[str] = set()
+    aspects_by_file: dict[str, set[str]] = {file_id: set() for file_id in requirement.file_ids}
     for matches in by_symbol.values():
         if not matches:
             continue
-        preferred = min(item[0] for item in matches)
+        # Explicit file comparisons keep the best occurrence from each file.
+        scoped = bool(requirement.file_ids)
+        preferred_by_file = {}
+        for priority, source, _occurrence, _bounds in matches:
+            key = source.snapshot.snapshot_id if scoped else "all"
+            preferred_by_file[key] = min(priority, preferred_by_file.get(key, priority))
         for priority, source, occurrence, (start, end) in matches:
-            if priority != preferred:
+            if priority != preferred_by_file[source.snapshot.snapshot_id if scoped else "all"]:
                 continue
             evidence = build_evidence(snapshot=source.snapshot, element=source.element, start=start, end=end)
             hits.append(SearchHit(evidence=evidence, score=RetrievalScore(metric="source_symbol", direction="higher"), rank=len(hits) + 1))
-            covered_aspects.update(_code_terms(occurrence.node))
+            terms = _code_terms(occurrence.node)
+            covered_aspects.update(terms)
+            if source.element.metadata.get("file_id") in aspects_by_file:
+                aspects_by_file[source.element.metadata["file_id"]].update(terms)
     hits = [hit.model_copy(update={"rank": rank}) for rank, hit in enumerate(dedupe_search_hits(hits), start=1)]
     unresolved = [name for name, matches in by_symbol.items() if not matches]
+    if requirement.file_ids:
+        unresolved = [f"file:{file_id}:{name}" for file_id in requirement.file_ids
+                      for name, matches in by_symbol.items()
+                      if not any(source.element.metadata.get("file_id") == file_id
+                                 for _priority, source, _occurrence, _bounds in matches)]
     if not unresolved:
         answerability = "covered"
     elif not exhaustive:
         answerability = "unknown"
     else:
         answerability = "partial" if hits else "missing"
-    if answerability == "covered" and (requirement.version or any(aspect not in covered_aspects for aspect in requirement.aspects)):
+    aspects_unverified = any(aspect not in terms for terms in (list(aspects_by_file.values()) or [covered_aspects])
+                             for aspect in requirement.aspects)
+    if answerability == "covered" and (requirement.version or aspects_unverified):
         answerability = "unknown"
         warnings.append("source_requirement_constraints_unverified")
     return SourceRequirementResult(
         hits=hits,
         answerability=answerability,
         missing_requirements=unresolved if exhaustive else [],
-        candidate_count=len(candidate_rows) if source_document is None else len(hits),
+        candidate_count=len(candidate_rows) if documents is None else len(hits),
         warnings=list(dict.fromkeys(warnings)),
     )

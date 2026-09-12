@@ -20,6 +20,7 @@ def _build_search_payload(
     query: str,
     docs_with_scores: list[tuple[Any, float | None]],
     provider_ms: int = 0,
+    requirement: RetrievalRequirement | None = None,
 ) -> dict[str, Any]:
     post_started = time.perf_counter()
     ranked_rows = rank_retrieval_rows(docs_with_scores, query=query)
@@ -44,15 +45,24 @@ def _build_search_payload(
         warnings=retrieval_warnings,
     )
     payload["diagnostics"].update(answerability="unknown", missing_requirements=[], candidate_count=len(docs_with_scores))
+    if (requirement is not None and requirement.file_ids and requirement.match == "topic"
+            and not (requirement.symbols or requirement.aspects or requirement.version or requirement.library)):
+        # For a topic constrained only by files, coverage means candidates from
+        # every requested source. Additional code/version constraints stay unknown.
+        covered_files = {hit.evidence.element.metadata.get("file_id") for hit in hits}
+        missing_files = [file_id for file_id in requirement.file_ids if file_id not in covered_files]
+        payload["diagnostics"].update(
+            answerability="covered" if not missing_files else ("partial" if hits else "missing"),
+            missing_requirements=[f"file:{file_id}" for file_id in missing_files])
     return payload
 
 
 def _build_requirement_payload(
-    *, query: str, requirement: RetrievalRequirement, source_document: ParsedDocument | None,
+    *, query: str, requirement: RetrievalRequirement, source_documents: tuple[ParsedDocument, ...] | None,
     docs_with_scores: list[tuple[Any, float | None]], provider_ms: int = 0,
 ) -> dict[str, Any]:
     started = time.perf_counter()
-    result = resolve_source_requirement(requirement=requirement, source_document=source_document,
+    result = resolve_source_requirement(requirement=requirement, source_documents=source_documents,
                                         candidate_rows=docs_with_scores)
     payload = build_retrieval_payload(
         tool="upload_search", route="upload", query=query, hits=result.hits,
@@ -86,12 +96,27 @@ def build_upload_search_tool() -> Callable[..., dict[str, Any]]:
 
         if requirement is None or not requirement.specified:
             requirement = infer_legacy_requirement(query)
-        source_document = getattr(retriever, "source_document", None)
-        if not isinstance(source_document, ParsedDocument):
-            source_document = None
-        if requirement is not None and requirement.symbols and source_document is not None:
+        file_ids = requirement.file_ids if requirement is not None else []
+        upload_files = getattr(retriever, "upload_files", ())
+        if set(file_ids).difference(file.file_id for file in upload_files):
+            return build_retrieval_payload(
+                tool="upload_search", route="upload", query=query, status="error",
+                message="requested upload file is not active in this session",
+                error_code="UPLOAD_FILE_SCOPE_INVALID")
+        registry = getattr(retriever, "source_documents", None)
+        source_documents = (tuple(document for document in registry if isinstance(document, ParsedDocument))
+                            if isinstance(registry, (tuple, list)) else None)
+        if source_documents is None:
+            source_document = getattr(retriever, "source_document", None)
+            if isinstance(source_document, ParsedDocument):
+                source_documents = (source_document,)
+        if source_documents is not None and file_ids:
+            sources = {file.source_uri for file in upload_files if file.file_id in file_ids}
+            source_documents = tuple(document for document in source_documents
+                                     if document.snapshot.source_uri in sources)
+        if requirement is not None and requirement.symbols and source_documents is not None:
             return _build_requirement_payload(query=query, requirement=requirement,
-                                              source_document=source_document, docs_with_scores=[])
+                                              source_documents=source_documents, docs_with_scores=[])
 
         docs_with_scores: list[tuple[Any, float | None]] = []
         provider_ms = 0
@@ -100,8 +125,13 @@ def build_upload_search_tool() -> Callable[..., dict[str, Any]]:
             vectorstore = getattr(retriever, "vectorstore", None)
             provider_started = time.perf_counter()
             if vectorstore is not None:
-                docs_with_scores = client.search_with_raw_scores(vectorstore, query=query, k=k)
+                if file_ids:
+                    docs_with_scores = vectorstore.similarity_search_with_score(query, k=k, file_ids=file_ids)
+                else:
+                    docs_with_scores = client.search_with_raw_scores(vectorstore, query=query, k=k)
             else:
+                if file_ids:
+                    raise ValueError("Upload retriever does not support scoped retrieval")
                 docs = retriever.invoke(query)
                 docs_with_scores = [(doc, None) for doc in docs]
             provider_ms += elapsed_ms(provider_started, time.perf_counter())
@@ -119,13 +149,14 @@ def build_upload_search_tool() -> Callable[..., dict[str, Any]]:
 
         if requirement is not None and requirement.symbols:
             return _build_requirement_payload(query=query, requirement=requirement,
-                                              source_document=None, docs_with_scores=docs_with_scores,
+                                              source_documents=None, docs_with_scores=docs_with_scores,
                                               provider_ms=provider_ms)
 
         return _build_search_payload(
             query=query,
             docs_with_scores=docs_with_scores,
             provider_ms=provider_ms,
+            requirement=requirement,
         )
 
     return upload_search
