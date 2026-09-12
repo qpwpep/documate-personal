@@ -88,6 +88,7 @@ def run_synthesis_pipeline(
     return SynthesisPipelineResult(
         result=result, evidence_packet=used.evidence_packet,
         evidence_requirement_map=used.evidence_requirement_map,
+        normal_evidence_missing_requirement_ids=prepared.missing_requirement_ids,
         latency_trace=[
             make_synthesis_attempt_latency_event(
                 attempt=prepared.attempt, mode=mode, structured_ms=structured_ms,

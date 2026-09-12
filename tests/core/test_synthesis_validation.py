@@ -5,13 +5,14 @@ import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 
 from src.core.answer_schema import export_answer_text, finalize_answer, iter_content_units, text_document
-from src.core.contracts import PlannerState, RetrievalState, DebugState, RetrievalDiagnostic
+from src.core.contracts import PlannerState, ResponseState, RetrievalState, DebugState, RetrievalDiagnostic
 from src.core.contracts.boundary.graph import build_graph_state_input
 from src.core.documents import DocumentElement, SourceAnchor, build_snapshot
 from src.core.evidence import RetrievalScore, SearchHit, build_evidence
 from src.core.planner_schema import PlannerOutput, RetrievalRequirement, RetrievalTask
 from src.core.request_contracts import ExtractBody, RequestContract
 from src.runtime.nodes.synthesis import make_synthesize_node
+from src.runtime.nodes.validation.node import make_post_synthesis_validation_node
 
 
 def _hit(text="Default mode is safe.", *, source="official", rank=1):
@@ -59,6 +60,136 @@ class ModelBoundary:
         else:
             document = text_document("현재 답변입니다.")
         return {"parsed": document.model_dump(mode="json"), "raw": AIMessage(content=""), "parsing_error": None}
+
+
+@pytest.mark.parametrize("compact_only", [False, True])
+def test_packet_gaps_retry_only_when_the_normal_packet_can_supply_the_missing_anchor(compact_only):
+    """An impossible normal packet stops repair, while a compact-only omission can retry normal synthesis."""
+    task = RetrievalTask(route="docs", query="setting_0", k=1, requirement={"aspects": ["setting_0"]})
+    hit = _hit("setting_0 defaults to zero.").model_copy(update={"requirement_id": task.requirement_id})
+    state = _state([hit])
+    state["planner"] = PlannerState(output=PlannerOutput(use_retrieval=True, tasks=[task]))
+    normal = ModelBoundary(error=TimeoutError("timeout") if compact_only else None)
+    updates = make_synthesize_node(
+        normal, ModelBoundary() if compact_only else None,
+        prompt_snippet_char_limit=100 if compact_only else 1,
+        compact_prompt_snippet_char_limit=1,
+    )(state)
+
+    validated = make_post_synthesis_validation_node(False)({**state, **updates})
+
+    assert validated["retry"].needs_retry is compact_only
+    assert validated["retry"].attempt == (1 if compact_only else 0)
+    assert updates["response"].normal_evidence_missing_requirement_ids == (
+        [] if compact_only else [task.requirement_id])
+    if not compact_only:
+        assert validated["response"].kind == "failure"
+        issue_codes = {issue.code for issue in validated["response"].result.issues}
+        assert {"answer_incomplete", "evidence_packet_incomplete"}.issubset(issue_codes)
+        assert "retrieved_evidence_incomplete" not in issue_codes
+        assert "packet" in validated["retry"].retrieval_feedback
+
+
+@pytest.mark.parametrize("tagged", [False, True])
+@pytest.mark.parametrize("compact_only", [False, True])
+def test_generic_packet_omission_preserves_its_requirement_and_only_retries_a_complete_normal_packet(
+    tagged, compact_only,
+):
+    """Current synthesis tracks a generic task even when zero capacity removes every source association."""
+    hit = _hit()
+    state = _state([hit])
+    task = state["planner"].output.tasks[0]
+    if tagged:
+        hit = hit.model_copy(update={"requirement_id": task.requirement_id})
+        state["retrieval"] = RetrievalState(hit_log=[hit.model_dump(mode="json")])
+    normal = ModelBoundary(error=TimeoutError("timeout") if compact_only else None)
+    compact = ModelBoundary() if compact_only else None
+
+    draft = make_synthesize_node(
+        normal, compact, prompt_snippet_char_limit=100 if compact_only else 0,
+        compact_prompt_snippet_char_limit=0,
+    )(state)
+    validated = make_post_synthesis_validation_node(False)({**state, **draft})
+
+    assert draft["response"].evidence_packet == []
+    assert draft["response"].evidence_requirement_map == {}
+    assert draft["response"].normal_evidence_missing_requirement_ids == (
+        [] if compact_only else [task.requirement_id])
+    assert validated["retry"].failed_requirement_ids == [task.requirement_id]
+    assert validated["retry"].needs_retry is compact_only
+    assert "packet" in validated["retry"].retrieval_feedback
+    assert task.requirement_id in validated["retry"].retrieval_feedback
+    if not compact_only:
+        response = validated["response"]
+        assert response.kind == "failure"
+        assert {"answer_incomplete", "evidence_packet_incomplete"}.issubset(
+            {issue.code for issue in response.result.issues})
+        assert "retrieved_evidence_incomplete" not in {issue.code for issue in response.result.issues}
+        assert [citation.evidence for citation in response.result.citations] == [hit.evidence]
+
+
+def test_legacy_untagged_packet_without_coverage_metadata_keeps_route_only_validation():
+    """A historical packet with no requirement associations still accepts a valid source citation."""
+    hit = _hit()
+    state = _state([hit])
+    contract = state["runtime"].request_contract
+    result = finalize_answer(
+        text_document(hit.evidence.excerpt, basis="excerpt", refs=[hit.evidence.id]),
+        [hit.evidence], retrieval_required=True,
+    )
+    state["response"] = ResponseState(
+        result=result, evidence_packet=[hit.evidence], request_id=contract.request_id,
+        contract_revision=contract.revision,
+    )
+
+    validated = make_post_synthesis_validation_node(False)(state)
+
+    assert validated["retry"].failed_requirement_ids == []
+    assert not validated["retry"].needs_retry
+    assert validated["response"].kind == "answer"
+    assert validated["response"].normal_evidence_missing_requirement_ids is None
+    assert validated["response"].result == result
+
+
+def test_a_missing_retrieved_anchor_is_not_reported_as_a_packet_budget_omission():
+    """An anchor absent from the retrieved ranges remains a source gap rather than a selection failure."""
+    task = RetrievalTask(route="docs", query="setting_0", k=1, requirement={"aspects": ["setting_0"]})
+    hit = _hit("Only a different setting is documented.").model_copy(update={"requirement_id": task.requirement_id})
+    state = _state([hit])
+    state["planner"] = PlannerState(output=PlannerOutput(use_retrieval=True, tasks=[task]))
+    updates = make_synthesize_node(ModelBoundary())(state)
+
+    validated = make_post_synthesis_validation_node(False)({**state, **updates})
+
+    issue_codes = {issue.code for issue in validated["response"].result.issues}
+    assert "retrieved_evidence_incomplete" in issue_codes
+    assert "evidence_packet_incomplete" not in issue_codes
+    assert not validated["retry"].needs_retry
+
+
+@pytest.mark.parametrize("specified", [False, True])
+def test_complete_packet_allows_repair_when_the_answer_omits_a_required_citation(specified):
+    """Model omission can be repaired under the same complete packet without changing retrieval requirements."""
+    tasks = [RetrievalTask(route="docs", query=f"setting_{index}", k=1,
+                           requirement={"aspects": [f"setting_{index}"]} if specified else {}) for index in range(2)]
+    hits = [_hit(f"setting_{index} defaults to {index}.").model_copy(update={"requirement_id": task.requirement_id})
+            for index, task in enumerate(tasks)]
+    state = _state(hits)
+    state["planner"] = PlannerState(output=PlannerOutput(use_retrieval=True, tasks=tasks))
+    draft = make_synthesize_node(ModelBoundary())(state)
+    validate = make_post_synthesis_validation_node(False)
+
+    retry = validate({**state, **draft})
+    repaired = make_synthesize_node(ModelBoundary(malformed=text_document(
+        "The settings differ.", basis="inference", refs=["e1", "e2"],
+    )))({**state, **draft, **retry})
+    final = validate({**state, **repaired, **retry})
+
+    assert retry["retry"].needs_retry
+    assert retry["retry"].attempt == 1
+    assert final["response"].kind == "answer"
+    assert not final["retry"].needs_retry
+    assert len(final["response"].result.citations) == 2
 
 
 def test_synthesis_displays_and_checks_the_same_units():

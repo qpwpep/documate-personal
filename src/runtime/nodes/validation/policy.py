@@ -11,8 +11,9 @@ from src.core.evidence import EvidenceRef
 from src.core.request_contracts import check_answer_contract
 from src.runtime.nodes.retry import build_followup_from_routes
 from src.runtime.nodes.synthesis.fallbacks import build_synthesis_fallback
+from src.runtime.nodes.synthesis.evidence_selection import select_evidence_hits
 from src.runtime.nodes.validation.models import ValidationAssessment, ValidationSnapshot
-from src.runtime.nodes.validation.snapshot import detect_missing_route_coverage, detect_missing_requirement_coverage
+from src.runtime.nodes.validation.snapshot import detect_missing_route_coverage, detect_missing_requirement_coverage, detect_packet_coverage_gaps
 
 
 def build_response_updates(
@@ -21,11 +22,13 @@ def build_response_updates(
     kind: str = "answer",
     request_id: str | None = None,
     contract_revision: int = 0,
+    normal_evidence_missing_requirement_ids: list[str] | None = None,
 ) -> GraphState:
     return {
         "messages": [AIMessage(content=export_answer_text(result))],
         "response": ResponseState(result=result, evidence_packet=evidence_packet, synthesis_attempt=attempt,
                                   evidence_requirement_map=evidence_requirement_map or {}, kind=kind,
+                                  normal_evidence_missing_requirement_ids=normal_evidence_missing_requirement_ids,
                                   request_id=request_id, contract_revision=contract_revision),
     }
 
@@ -56,6 +59,7 @@ def apply_validation_outcome(
     if assessment.retry_reason is None and result is not None:
         return build_response_updates(result, attempt=attempt, evidence_packet=packet,
                                       evidence_requirement_map=snapshot.evidence_requirement_map,
+                                      normal_evidence_missing_requirement_ids=snapshot.normal_evidence_missing_requirement_ids,
                                       kind=snapshot.response_kind if snapshot.response_kind in {"clarification", "failure"} else "answer",
                                       **stamp)
 
@@ -90,10 +94,27 @@ def apply_validation_outcome(
         missing_requirements = detect_missing_requirement_coverage(snapshot=snapshot, result=result, valid_unit_paths=valid_paths)
         if document.blocks and not missing_routes and contract_check.valid and not missing_requirements:
             return build_response_updates(result, attempt=attempt, evidence_packet=packet,
-                                          evidence_requirement_map=snapshot.evidence_requirement_map, **stamp)
+                                          evidence_requirement_map=snapshot.evidence_requirement_map,
+                                          normal_evidence_missing_requirement_ids=snapshot.normal_evidence_missing_requirement_ids,
+                                          **stamp)
 
-    if snapshot.parsed_hits:
-        packet = list({hit.evidence.id: hit.evidence for hit in snapshot.parsed_hits}.values())
+    fallback_hits = select_evidence_hits(
+        user_input=snapshot.user_input, hits=snapshot.parsed_hits,
+        planner_output=snapshot.planner_output,
+    )
+    if fallback_hits:
+        retrieved_missing, packet_omitted = detect_packet_coverage_gaps(snapshot)
+        if packet_omitted:
+            retained_issues.append(ResponseIssue(
+                code="evidence_packet_incomplete",
+                message="검색한 원문 중 필요한 내용을 답변 준비 범위에 모두 담지 못했습니다.",
+            ))
+        if retrieved_missing:
+            retained_issues.append(ResponseIssue(
+                code="retrieved_evidence_incomplete",
+                message="검색한 원문에서 요청에 필요한 근거를 모두 확인하지 못했습니다.",
+            ))
+        packet = list({hit.evidence.id: hit.evidence for hit in fallback_hits}.values())
         result = build_synthesis_fallback(
             evidence_packet=packet, retrieval_required=True,
             message="요청한 답변을 충분히 구성하지 못해, 확인 가능한 원문 발췌를 제공합니다.",
@@ -110,11 +131,13 @@ def apply_validation_outcome(
             issues=issues,
         )
         requirement_map: dict[str, list[str]] = {}
-        for hit in snapshot.parsed_hits:
+        for hit in fallback_hits:
             if hit.requirement_id:
                 requirement_map.setdefault(hit.evidence.id, []).append(hit.requirement_id)
         return build_response_updates(result, attempt=attempt, evidence_packet=packet,
-                                      evidence_requirement_map=requirement_map, kind="failure", **stamp)
+                                      evidence_requirement_map=requirement_map, kind="failure",
+                                      normal_evidence_missing_requirement_ids=snapshot.normal_evidence_missing_requirement_ids,
+                                      **stamp)
 
     return build_followup_updates(
         ("요청의 필수·금지 조건을 충족하는 답변을 완성하지 못했습니다. 다시 요청해 주세요."

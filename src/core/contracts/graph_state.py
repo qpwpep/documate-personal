@@ -79,6 +79,7 @@ class ResponseState(BaseModel):
     result: AnswerResponse = Field(default_factory=AnswerResponse)
     evidence_packet: list[EvidenceRef] = Field(default_factory=list)
     evidence_requirement_map: dict[str, list[str]] = Field(default_factory=dict)
+    normal_evidence_missing_requirement_ids: list[str] | None = None
     synthesis_attempt: int = 0
     kind: Literal["draft", "answer", "clarification", "failure"] = "draft"
     request_id: str | None = None

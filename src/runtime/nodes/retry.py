@@ -203,6 +203,7 @@ def build_retry_update(
     failed_requirement_ids: set[str] | list[str] | None = None,
     current_attempt_hits: list[SearchHit] | None = None,
     current_attempt_retrieval_diagnostics: list[RetrievalDiagnostic] | None = None,
+    content_repair_available: bool = True,
 ) -> tuple[bool, RetryState, str]:
     max_retries = max(0, int(retry_context.max_retries))
     used_retries = int(retry_context.attempt)
@@ -245,7 +246,7 @@ def build_retry_update(
         retry_limit = min(max_retries, 1) if retry_reason in CONTENT_REPAIR_REASONS else max_retries
         if retry_reason in RETRYABLE_REASONS and used_retries < retry_limit:
             if retry_reason in CONTENT_REPAIR_REASONS:
-                needs_retry = reuse_hits_only
+                needs_retry = reuse_hits_only and content_repair_available
             elif selected_routes == {"docs"}:
                 needs_retry = True
             elif selected_routes == {"docs", "upload"} and normalized_failed_routes == {"docs"}:

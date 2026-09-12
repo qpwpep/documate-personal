@@ -13,7 +13,7 @@ from src.core.planner_schema import PlannerOutput
 from src.core.request_contracts import RequestContract
 from src.core.sequence_utils import slice_from_index
 from src.runtime.nodes.validation.models import ValidationSnapshot
-from src.runtime.nodes.synthesis.evidence_selection import missing_literal_aspects
+from src.runtime.nodes.synthesis.evidence_selection import missing_evidence_requirement_ids, tasks_for_hit
 
 
 def detect_missing_route_coverage(
@@ -34,16 +34,32 @@ def detect_missing_route_coverage(
 def detect_missing_requirement_coverage(
     *, snapshot: ValidationSnapshot, result: AnswerResponse, valid_unit_paths: set[str],
 ) -> list[str]:
-    if not snapshot.evidence_requirement_map and not any(task.requirement.specified for task in snapshot.planner_output.tasks):
-        return []
     cited = {ref for path, unit in iter_content_units(result.content) if path in valid_unit_paths for ref in unit.refs}
-    missing = []
-    for task in snapshot.planner_output.tasks:
-        excerpts = [item.excerpt for item in snapshot.evidence_packet
-                    if item.id in cited and task.requirement_id in snapshot.evidence_requirement_map.get(item.id, [])]
-        if not excerpts or missing_literal_aspects(task.requirement.aspects, excerpts):
-            missing.append(task.requirement_id)
-    return missing
+    return missing_evidence_requirement_ids(
+        snapshot.planner_output,
+        [item for item in snapshot.evidence_packet if item.id in cited],
+        snapshot.evidence_requirement_map,
+        strict=snapshot.normal_evidence_missing_requirement_ids is not None,
+    )
+
+
+def detect_packet_coverage_gaps(snapshot: ValidationSnapshot) -> tuple[list[str], list[str]]:
+    """Separate missing retrieved anchors from requirements lost while selecting the packet."""
+    # A known normal-packet result distinguishes current preparation from legacy
+    # untagged packets, even when selection removed every source association.
+    strict = snapshot.normal_evidence_missing_requirement_ids is not None
+    packet_missing = missing_evidence_requirement_ids(snapshot.planner_output, snapshot.evidence_packet,
+                                                     snapshot.evidence_requirement_map, strict=strict)
+    retrieved_map: dict[str, list[str]] = {}
+    for hit in snapshot.parsed_hits:
+        associated = retrieved_map.setdefault(hit.evidence.id, [])
+        associated.extend(task.requirement_id for task in tasks_for_hit(hit, snapshot.planner_output)
+                          if task.requirement_id not in associated)
+    retrieved_missing = missing_evidence_requirement_ids(snapshot.planner_output,
+                                                        [hit.evidence for hit in snapshot.parsed_hits], retrieved_map,
+                                                        strict=strict)
+    return ([item for item in packet_missing if item in retrieved_missing],
+            [item for item in packet_missing if item not in retrieved_missing])
 
 
 def build_validation_snapshot(
@@ -56,6 +72,7 @@ def build_validation_snapshot(
     response_kind: str = "draft",
     response_request_id: str | None = None,
     response_contract_revision: int = 0,
+    normal_evidence_missing_requirement_ids: list[str] | None = None,
 ) -> ValidationSnapshot:
     retrieval_required = bool(planner_output.use_retrieval and planner_output.tasks)
     evidence_by_route: dict[str, list[EvidenceRef]] = {"docs": [], "upload": []}
@@ -77,6 +94,7 @@ def build_validation_snapshot(
         response_kind=response_kind,
         response_request_id=response_request_id,
         response_contract_revision=response_contract_revision,
+        normal_evidence_missing_requirement_ids=normal_evidence_missing_requirement_ids,
     )
 
 
@@ -112,5 +130,6 @@ def collect_validation_snapshot(state: GraphState) -> tuple[ValidationSnapshot, 
         response_kind=response.kind,
         response_request_id=response.request_id,
         response_contract_revision=response.contract_revision,
+        normal_evidence_missing_requirement_ids=response.normal_evidence_missing_requirement_ids,
     )
     return snapshot, local_errors
