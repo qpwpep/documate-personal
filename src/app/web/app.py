@@ -66,6 +66,8 @@ async def lifespan(app: FastAPI):
     app.state.session_store = session_store
     app.state.runtime_cleaner = runtime_cleaner
     app.state.agent_request_service = agent_request_service
+    from src.app.web.upload_service import UploadService
+    app.state.upload_service = UploadService(settings=settings, session_store=session_store)
     runtime_cleaner.run_once(force=True, current_session_id=None)
     yield
     session_store.close_all()
