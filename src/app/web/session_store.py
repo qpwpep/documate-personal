@@ -3,12 +3,14 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import Callable
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from threading import Lock
 from typing import Any
 
 from src.app.agent_manager import AgentFlowManager
 from src.core.contracts import SessionMetadata
+from src.core.uploads import validate_session_id
 from src.infra.logging_utils import log_event
 from src.runtime.progress import ProgressEmitter
 from src.infra.settings import AppSettings
@@ -96,12 +98,15 @@ class InMemorySessionStore:
         self._last_cleanup_monotonic = now
         return expired_removed_count
 
-    def get_or_create_entry(self, session_id: str) -> SessionEntry:
+    def get_or_create_entry(self, session_id: str, *, activate_request: bool = False) -> SessionEntry:
+        session_id = validate_session_id(session_id)
         now = time.monotonic()
         with self._lock:
             expired_removed_count = self.maybe_run_cleanup(now=now)
             existing_entry = self.active_agents.get(session_id)
             if existing_entry is not None:
+                if activate_request:
+                    existing_entry.active_request_count += 1
                 existing_entry.last_accessed_monotonic = now
                 log_event(
                     logger,
@@ -120,6 +125,7 @@ class InMemorySessionStore:
             self.active_agents[session_id] = SessionEntry(
                 agent=recreated_agent,
                 last_accessed_monotonic=now,
+                active_request_count=1 if activate_request else 0,
             )
             lru_evicted_count = self.evict_lru_if_needed(self.settings.max_active_sessions)
             log_event(
@@ -137,6 +143,21 @@ class InMemorySessionStore:
 
     def get_or_create(self, session_id: str) -> AgentFlowManager:
         return self.get_or_create_entry(session_id).agent
+
+    @contextmanager
+    def locked_session(self, session_id: str):
+        """Pin a session before queueing for its lock, including attachment operations."""
+        session_id = validate_session_id(session_id)
+        entry = self.get_or_create_entry(session_id, activate_request=True)
+        lock_started = time.monotonic()
+        try:
+            with entry.request_lock:
+                yield entry, int((time.monotonic() - lock_started) * 1000)
+        finally:
+            with self._lock:
+                if self.active_agents.get(session_id) is entry:
+                    entry.last_accessed_monotonic = time.monotonic()
+                    entry.active_request_count = max(0, entry.active_request_count - 1)
 
     def run_session_request(
         self,

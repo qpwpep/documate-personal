@@ -16,6 +16,7 @@ from src.infra.runtime_paths import (
     get_uploads_dir,
 )
 from src.infra.settings import AppSettings
+from src.core.uploads import validate_session_id
 from src.app.web.session_store import InMemorySessionStore
 
 
@@ -43,7 +44,10 @@ def validate_upload_file_path(upload_file_path: str | None, session_id: str) -> 
         return None
 
     try:
+        session_id = validate_session_id(session_id)
         session_upload_dir = get_upload_session_dir(session_id).resolve()
+        if not session_upload_dir.is_relative_to(get_uploads_dir().resolve()):
+            raise ValueError("Session directory is outside uploads")
         candidate_path = Path(upload_file_path).expanduser()
         if not candidate_path.is_absolute():
             candidate_path = (get_project_root_path() / candidate_path).resolve()
@@ -132,7 +136,7 @@ class RuntimeCleaner:
 
             stats["scanned"] += 1
             session_id = session_dir.name
-            if session_id in protected_session_ids:
+            if session_id.casefold() in {value.casefold() for value in protected_session_ids}:
                 stats["skipped_active_dirs"] += 1
                 continue
 
