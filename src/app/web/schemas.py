@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Literal, get_args
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from src.core.answer_schema import AnswerResponse
 from src.core.conversation_memory import (
@@ -11,6 +11,7 @@ from src.core.conversation_memory import (
 )
 from src.core.contracts.debug import ActionResults, ErrorCode, LLMCallMetadata, ModelUsageStatus, PlannerDiagnostic, RetryState, RetrievalDiagnostic, TokenUsage
 from src.core.evidence import SearchHit
+from src.core.uploads import UploadContext, UploadManifest, validate_session_id
 from src.core.latency import LatencyBreakdownModel, StageName
 
 AgentTokenUsage = TokenUsage
@@ -49,7 +50,22 @@ class AgentRequest(BaseModel):
     slack_email: str | None = None
     slack_channel_id: str | None = None
     upload_file_path: str | None = None
+    uploads: UploadContext | None = None
     include_debug: bool = False
+
+    @field_validator("session_id")
+    @classmethod
+    def _validate_session(cls, value: str) -> str:
+        return validate_session_id(value)
+
+    @model_validator(mode="after")
+    def _validate_upload_contract(self) -> AgentRequest:
+        if "uploads" in self.model_fields_set:
+            if self.uploads is None:
+                raise ValueError("uploads must specify an epoch and revision")
+            if "upload_file_path" in self.model_fields_set:
+                raise ValueError("uploads and upload_file_path cannot be combined")
+        return self
 
     @field_validator("query")
     @classmethod
@@ -63,6 +79,10 @@ class AgentResponse(BaseModel):
     response: AnswerResponse
     trace: str
     debug: AgentDebugInfo | None = None
+    upload_manifest: UploadManifest | None = Field(
+        default=None,
+        description="Attachment state captured under the session lock after this request; absent in older responses.",
+    )
 
 
 AgentStreamEventName = Literal[
