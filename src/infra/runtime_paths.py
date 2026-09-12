@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from src.core.uploads import validate_session_id
+
 
 _CURRENT_FILE_PATH = Path(__file__).resolve()
 
@@ -31,7 +33,7 @@ def get_uploads_dir() -> Path:
 
 
 def get_upload_session_dir(session_id: str) -> Path:
-    return get_uploads_dir() / session_id
+    return get_uploads_dir() / validate_session_id(session_id)
 
 
 def get_output_dir() -> Path:
