@@ -112,6 +112,9 @@ APP_ENV_SPECS = (
     EnvVarSpec("FASTAPI_URL", "fastapi_url", "http://127.0.0.1:8000", "Streamlit이 호출하는 API 주소", example="http://127.0.0.1:8000"),
     EnvVarSpec("SESSION_TTL_SECONDS", "session_ttl_seconds", 1800, "세션 TTL", example=1800, example_group="sessions"),
     EnvVarSpec("MAX_ACTIVE_SESSIONS", "max_active_sessions", 200, "최대 활성 세션 수", example=200, example_group="sessions"),
+    EnvVarSpec("UPLOAD_MAX_FILES", "upload_max_files", 10, "세션별 활성 업로드 파일 개수", example=10, example_group="sessions"),
+    EnvVarSpec("UPLOAD_MAX_FILE_MIB", "upload_max_file_mib", 10, "업로드 파일당 크기 상한 (MiB)", example=10, example_group="sessions"),
+    EnvVarSpec("UPLOAD_MAX_TOTAL_MIB", "upload_max_total_mib", 50, "세션별 활성 업로드 합계 상한 (MiB)", example=50, example_group="sessions"),
     EnvVarSpec(
         "SESSION_CLEANUP_INTERVAL_SECONDS",
         "session_cleanup_interval_seconds",
@@ -554,6 +557,9 @@ class AppSettings(BaseSettings):
     fastapi_url: str = Field(default=_app_default("FASTAPI_URL"), alias="FASTAPI_URL")
     session_ttl_seconds: int = Field(default=_app_default("SESSION_TTL_SECONDS"), alias="SESSION_TTL_SECONDS", ge=1)
     max_active_sessions: int = Field(default=_app_default("MAX_ACTIVE_SESSIONS"), alias="MAX_ACTIVE_SESSIONS", ge=1)
+    upload_max_files: int = Field(default=_app_default("UPLOAD_MAX_FILES"), alias="UPLOAD_MAX_FILES", ge=1, le=100)
+    upload_max_file_mib: int = Field(default=_app_default("UPLOAD_MAX_FILE_MIB"), alias="UPLOAD_MAX_FILE_MIB", ge=1)
+    upload_max_total_mib: int = Field(default=_app_default("UPLOAD_MAX_TOTAL_MIB"), alias="UPLOAD_MAX_TOTAL_MIB", ge=1)
     session_cleanup_interval_seconds: int = Field(
         default=_app_default("SESSION_CLEANUP_INTERVAL_SECONDS"),
         alias="SESSION_CLEANUP_INTERVAL_SECONDS",

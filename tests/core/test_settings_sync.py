@@ -95,7 +95,7 @@ class SettingsSyncTest(unittest.TestCase):
             ],
             "Document search": ["DOCS_SEARCH_TIMEOUT_SECONDS"],
             "Server and logging": ["VERBOSE", "FASTAPI_URL"],
-            "Session lifecycle": ["SESSION_TTL_SECONDS", "MAX_ACTIVE_SESSIONS", "SESSION_CLEANUP_INTERVAL_SECONDS"],
+            "Session lifecycle": ["SESSION_TTL_SECONDS", "MAX_ACTIVE_SESSIONS", "UPLOAD_MAX_FILES", "UPLOAD_MAX_FILE_MIB", "UPLOAD_MAX_TOTAL_MIB", "SESSION_CLEANUP_INTERVAL_SECONDS"],
             "File retention and cleanup": ["GENERATED_FILE_TTL_SECONDS", "FILE_CLEANUP_INTERVAL_SECONDS"],
             "Conversation memory": [
                 "MEMORY_HIGH_WATER_TURNS", "MEMORY_LOW_WATER_TURNS", "MEMORY_HIGH_WATER_TOKENS",

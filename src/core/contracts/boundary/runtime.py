@@ -64,6 +64,7 @@ def parse_runtime_state(value: Any) -> RuntimeState:
         current_turn_id=str(value.get("current_turn_id", "") or ""),
         user_turns=tuple(UserTurnSnapshot.model_validate(turn) for turn in value.get("user_turns", ())),
         retriever=value.get("retriever"),
+        upload_files=tuple(value.get("upload_files", ())),
         session_metadata=parse_session_metadata(value.get("session_metadata")),
         memory_summary=(
             str(value.get("memory_summary")).strip()

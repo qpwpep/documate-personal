@@ -117,6 +117,9 @@ PLANNER_REASONING_EFFORT=high
 | `FASTAPI_URL` | `http://127.0.0.1:8000` | Streamlit이 호출하는 API 주소 |
 | `SESSION_TTL_SECONDS` | `1800` | 세션 TTL |
 | `MAX_ACTIVE_SESSIONS` | `200` | 최대 활성 세션 수 |
+| `UPLOAD_MAX_FILES` | `10` | 세션별 활성 업로드 파일 개수 |
+| `UPLOAD_MAX_FILE_MIB` | `10` | 업로드 파일당 크기 상한 (MiB) |
+| `UPLOAD_MAX_TOTAL_MIB` | `50` | 세션별 활성 업로드 합계 상한 (MiB) |
 | `SESSION_CLEANUP_INTERVAL_SECONDS` | `60` | 세션 정리 주기 |
 | `GENERATED_FILE_TTL_SECONDS` | `86400` | `save_text` 결과 파일 TTL |
 | `FILE_CLEANUP_INTERVAL_SECONDS` | `60` | 업로드/생성 파일 정리 주기 |
