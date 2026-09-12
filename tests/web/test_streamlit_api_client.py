@@ -12,6 +12,7 @@ from src.app.web.streamlit_api_client import (
     _iter_sse_events,
     stream_agent_response,
 )
+from src.core.uploads import UploadManifest
 from tests.web.answer_fixtures import answer_response, cited_response
 
 
@@ -67,10 +68,12 @@ def frame(event, data):
 def test_stream_preserves_complete_final_response_and_stops_without_done(transport):
     """A valid final response preserves all fields and completes without another read."""
     expected = cited_response()
+    manifest = UploadManifest(epoch="reset-epoch", revision=0, files=[])
     payload = {
         "response": expected.model_dump(mode="json"),
         "trace": "planner -> synthesis",
         "debug": {"metrics": {"total_tokens": 42}, "retrieval": {"query": "질문"}},
+        "upload_manifest": manifest.model_dump(mode="json"),
     }
     response = StreamResponse([
         frame("final_response", payload),
@@ -83,7 +86,7 @@ def test_stream_preserves_complete_final_response_and_stops_without_done(transpo
     assert len(events) == 1
     assert events[0].event == "final_response"
     assert events[0].data == payload
-    assert events[0].result == AgentCallResult(response=expected)
+    assert events[0].result == AgentCallResult(response=expected, upload_manifest=manifest)
     assert response.frames_read == 1
     assert response.closed
     assert len(calls) == 1
@@ -339,6 +342,22 @@ def test_invalid_final_response_is_reported_without_partial_parsing(transport, p
     assert events[0].result is None
 
 
+@pytest.mark.parametrize("manifest", [[], {"epoch": "epoch", "revision": -1, "files": []}])
+def test_invalid_final_manifest_does_not_confirm_a_partial_response(transport, manifest):
+    """An invalid attachment snapshot rejects the final response without confirming stale state."""
+    calls = transport(StreamResponse([frame("final_response", {
+        "response": answer_response().model_dump(mode="json"),
+        "upload_manifest": manifest,
+    })]))
+
+    events = list(stream_agent_response("질문", context()))
+
+    assert [event.event for event in events] == ["error"]
+    assert events[0].data["code"] == "invalid_stream"
+    assert events[0].result is None
+    assert len(calls) == 1
+
+
 @pytest.mark.parametrize("encoded", [
     "event: request_started\ndata: not-json\n\n",
     "event: request_started\ndata: []\n\n",
@@ -367,3 +386,44 @@ def test_chunked_sse_preserves_response_trace_and_debug():
     assert len(events) == 1
     assert events[0].data == payload
     assert events[0].result == AgentCallResult(response=expected)
+
+
+def test_question_sends_confirmed_upload_revision_without_legacy_path(transport):
+    """A question pins the confirmed attachment generation even when it has no new files."""
+    from src.core.uploads import UploadContext
+    calls = transport(StreamResponse([frame("final_response", {"response": answer_response().model_dump(mode="json")})]))
+    request_context = AgentRequestContext(fastapi_url="http://localhost:8000", session_id="session-1", uploads=UploadContext(epoch="epoch-one", revision=2))
+    events = list(stream_agent_response("두 파일을 비교해줘", request_context))
+    assert events[0].result.response == answer_response()
+    assert calls[0]["json"] == {"query": "두 파일을 비교해줘", "session_id": "session-1", "uploads": {"epoch": "epoch-one", "revision": 2}}
+
+
+def test_upload_sync_failure_preserves_file_errors_and_does_not_retry(transport):
+    """A failed attachment batch exposes per-file errors without silently replaying it."""
+    from src.app.web.streamlit_api_client import UploadAPIError, sync_uploads
+    response = requests.Response()
+    response.status_code = 400
+    detail = {"code": "UPLOAD_INVALID", "message": "첨부 실패", "files": [{"name": "bad.py", "code": "INVALID_UTF8", "message": "UTF-8 오류"}]}
+    response._content = json.dumps({"detail": detail}).encode()
+    calls = transport(response)
+    with pytest.raises(UploadAPIError) as raised:
+        sync_uploads("http://localhost:8000", "session-1", {"operation_id": "operation-1"})
+    assert raised.value.status_code == 400
+    assert raised.value.code == "UPLOAD_INVALID"
+    assert raised.value.files == detail["files"]
+    assert len(calls) == 1
+
+
+def test_upload_sync_returns_server_confirmed_manifest(transport):
+    """The UI receives the authoritative committed set after a successful sync."""
+    from src.app.web.streamlit_api_client import sync_uploads
+    response = requests.Response()
+    response.status_code = 200
+    expected = {"epoch": "epoch-one", "revision": 3, "files": []}
+    response._content = json.dumps({"manifest": expected, "changed": True, "unchanged_names": []}).encode()
+    calls = transport(response)
+    result = sync_uploads("http://localhost:8000/", "session-1", {"operation_id": "operation-1"})
+    assert result.manifest.model_dump(mode="json") == expected
+    assert result.changed is True
+    assert calls[0]["url"] == "http://localhost:8000/sessions/session-1/uploads/sync"
+    assert calls[0]["allow_redirects"] is False

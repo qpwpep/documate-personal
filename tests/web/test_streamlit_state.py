@@ -62,6 +62,8 @@ class StreamlitStateTest(unittest.TestCase):
                 "session_id": "old-session",
                 "uploaded_file_name": "sample.py",
                 "documate_quick_prompts": ["old prompt"],
+                "upload_saved_prompt": "old held question",
+                "upload_followup_prompt": "old queued question",
                 "messages": [
                     {
                         "role": "user",
@@ -84,6 +86,8 @@ class StreamlitStateTest(unittest.TestCase):
                 self.assertEqual(streamlit_state.get_session_id(), "new-session")
                 self.assertIsNone(streamlit_state.get_uploaded_file_name())
                 self.assertNotIn("documate_quick_prompts", fake_st.session_state)
+                self.assertNotIn("upload_saved_prompt", fake_st.session_state)
+                self.assertNotIn("upload_followup_prompt", fake_st.session_state)
                 self.assertEqual(len(streamlit_state.get_messages()), 1)
                 self.assertEqual(streamlit_state.get_messages()[0]["role"], "assistant")
                 self.assertTrue((uploads_dir / "new-session").exists())
@@ -92,3 +96,41 @@ class StreamlitStateTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_confirmed_upload_state_changes_without_erasing_conversation(monkeypatch):
+    """Attachment changes replace the confirmed manifest while preserving past answers."""
+    from src.core.uploads import UploadManifest
+    fake_st = SimpleNamespace(session_state={"messages": [{"role": "user", "content": "keep"}]})
+    monkeypatch.setattr(streamlit_state, "st", fake_st)
+    manifest = UploadManifest(epoch="epoch-one", revision=2, files=[])
+    streamlit_state.set_upload_manifest(manifest)
+    assert streamlit_state.get_upload_manifest() == manifest
+    assert streamlit_state.get_messages() == [{"role": "user", "content": "keep"}]
+
+
+def test_pending_upload_keeps_operation_id_across_reruns(monkeypatch):
+    """A retry retains the same operation identity while confirmed files stay unchanged."""
+    from src.app.web.streamlit_upload_handler import PendingUploadOperation
+    fake_st = SimpleNamespace(session_state={})
+    monkeypatch.setattr(streamlit_state, "st", fake_st)
+    pending = PendingUploadOperation(epoch="epoch-one", expected_revision=1)
+    streamlit_state.set_pending_upload(pending)
+    assert streamlit_state.get_pending_upload().operation_id == pending.operation_id
+    streamlit_state.set_pending_upload(None)
+    assert streamlit_state.get_pending_upload() is None
+
+
+def test_invalidating_upload_confirmation_preserves_conversation(monkeypatch):
+    """An uncertain server result requires a fresh manifest without erasing visible answers."""
+    from src.core.uploads import UploadManifest
+    messages = [{"role": "user", "content": "keep"}]
+    fake_st = SimpleNamespace(session_state={
+        "messages": messages, "upload_manifest": UploadManifest(epoch="old-epoch", revision=1),
+    })
+    monkeypatch.setattr(streamlit_state, "st", fake_st)
+
+    streamlit_state.set_upload_manifest(None)
+
+    assert streamlit_state.get_upload_manifest() is None
+    assert streamlit_state.get_messages() == messages

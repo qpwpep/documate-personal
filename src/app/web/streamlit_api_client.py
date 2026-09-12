@@ -3,11 +3,13 @@ from __future__ import annotations
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
 from typing import Any
+from urllib.parse import quote
 
 import requests
 from urllib3.exceptions import ReadTimeoutError
 
 from src.core.answer_schema import AnswerResponse
+from src.core.uploads import UploadContext, UploadManifest, UploadSyncResponse
 from src.infra.sse import iter_sse_events
 
 
@@ -19,11 +21,59 @@ class AgentRequestContext:
     slack_email: str = ""
     slack_channel_id: str = ""
     upload_file_path: str | None = None
+    uploads: UploadContext | None = None
+
+
+class UploadAPIError(RuntimeError):
+    def __init__(self, message: str, *, status_code: int | None = None, code: str = "UPLOAD_REQUEST_FAILED", files: list[dict[str, Any]] | None = None):
+        super().__init__(message)
+        self.status_code = status_code
+        self.code = code
+        self.files = files or []
+
+
+def _upload_request(method: str, endpoint: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    try:
+        timeout = (5, 15) if method == "get" else (10, 180)
+        with requests.request(method, endpoint, json=payload, timeout=timeout, allow_redirects=False) as response:
+            try:
+                data = response.json()
+            except ValueError as exc:
+                raise UploadAPIError("첨부 서버의 응답 형식을 확인할 수 없습니다.", status_code=response.status_code) from exc
+            if response.status_code != 200:
+                detail = data.get("detail", data) if isinstance(data, dict) else data
+                if isinstance(detail, dict):
+                    raise UploadAPIError(str(detail.get("message", "첨부 변경에 실패했습니다.")), status_code=response.status_code,
+                                         code=str(detail.get("code", "UPLOAD_REQUEST_FAILED")), files=detail.get("files", []))
+                raise UploadAPIError(str(detail), status_code=response.status_code)
+            if not isinstance(data, dict):
+                raise UploadAPIError("첨부 서버가 객체 형식의 응답을 반환하지 않았습니다.")
+            return data
+    except requests.RequestException as exc:
+        raise UploadAPIError("첨부 서버와 연결하지 못했습니다. 처리 여부를 확인하거나 같은 변경을 다시 시도해 주세요.") from exc
+
+
+def fetch_upload_manifest(fastapi_url: str, session_id: str) -> UploadManifest:
+    endpoint = f"{fastapi_url.rstrip('/')}/sessions/{quote(session_id, safe='')}/uploads"
+    try:
+        return UploadManifest.model_validate(_upload_request("get", endpoint))
+    except ValueError as exc:
+        raise UploadAPIError("첨부 목록의 응답 형식이 올바르지 않습니다.") from exc
+
+
+def sync_uploads(fastapi_url: str, session_id: str, payload: dict[str, Any]) -> UploadSyncResponse:
+    endpoint = f"{fastapi_url.rstrip('/')}/sessions/{quote(session_id, safe='')}/uploads/sync"
+    data = _upload_request("post", endpoint, payload)
+    try:
+        return UploadSyncResponse.model_validate(data)
+    except (KeyError, ValueError, TypeError) as exc:
+        raise UploadAPIError("첨부 변경 결과의 응답 형식이 올바르지 않습니다.") from exc
 
 
 @dataclass
 class AgentCallResult:
     response: AnswerResponse
+    upload_manifest: UploadManifest | None = None
 
 
 @dataclass(frozen=True)
@@ -121,6 +171,8 @@ def _stream_error(code: str, message: str, **details: Any) -> AgentStreamEvent:
 
 
 def _build_payload(user_input: str, context: AgentRequestContext) -> dict[str, Any]:
+    if context.uploads is not None and context.upload_file_path is not None:
+        raise ValueError("uploads와 upload_file_path를 동시에 보낼 수 없습니다.")
     payload: dict[str, Any] = {
         "query": user_input,
         "session_id": context.session_id,
@@ -134,6 +186,8 @@ def _build_payload(user_input: str, context: AgentRequestContext) -> dict[str, A
         payload["slack_channel_id"] = context.slack_channel_id
     if context.upload_file_path:
         payload["upload_file_path"] = context.upload_file_path
+    if context.uploads is not None:
+        payload["uploads"] = context.uploads.model_dump(mode="json")
     return payload
 
 
@@ -142,7 +196,11 @@ def _parse_agent_response_data(data: dict[str, Any]) -> AgentCallResult:
     if not isinstance(response_payload, dict):
         raise ValueError("API 응답의 response는 객체여야 합니다.")
 
-    return AgentCallResult(response=AnswerResponse.model_validate(response_payload))
+    manifest_payload = data.get("upload_manifest")
+    return AgentCallResult(
+        response=AnswerResponse.model_validate(response_payload),
+        upload_manifest=UploadManifest.model_validate(manifest_payload) if manifest_payload is not None else None,
+    )
 
 
 def _iter_sse_events(chunks: Iterable[str | bytes]) -> Iterator[AgentStreamEvent]:

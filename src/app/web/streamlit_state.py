@@ -10,6 +10,8 @@ import streamlit as st
 from src.infra.logging_utils import log_event
 from src.infra.runtime_paths import get_uploads_dir
 from src.core.answer_schema import AnswerResponse, finalize_answer, text_document
+from src.core.uploads import UploadManifest
+from src.app.web.streamlit_upload_handler import PendingUploadOperation
 
 
 QUICK_PROMPTS_STATE_KEY = "documate_quick_prompts"
@@ -35,6 +37,8 @@ def ensure_session_state(logger: logging.Logger) -> None:
 
     if "uploaded_file_name" not in st.session_state:
         st.session_state["uploaded_file_name"] = None
+    st.session_state.setdefault("upload_manifest", None)
+    st.session_state.setdefault("pending_upload", None)
 
     if "messages" not in st.session_state:
         st.session_state["messages"] = [_build_default_assistant_message()]
@@ -65,6 +69,22 @@ def clear_uploaded_file_name() -> None:
     st.session_state["uploaded_file_name"] = None
 
 
+def get_upload_manifest() -> UploadManifest | None:
+    return st.session_state.get("upload_manifest")
+
+
+def set_upload_manifest(manifest: UploadManifest | None) -> None:
+    st.session_state["upload_manifest"] = manifest.model_copy(deep=True) if manifest is not None else None
+
+
+def get_pending_upload() -> PendingUploadOperation | None:
+    return st.session_state.get("pending_upload")
+
+
+def set_pending_upload(operation: PendingUploadOperation | None) -> None:
+    st.session_state["pending_upload"] = operation
+
+
 def get_messages() -> list[ChatMessage]:
     return st.session_state["messages"]
 
@@ -76,8 +96,12 @@ def append_message(message: ChatMessage) -> None:
 def reset_chat_session(logger: logging.Logger) -> None:
     _start_new_session(logger, "streamlit_session_reset")
     st.session_state["uploaded_file_name"] = None
+    st.session_state["upload_manifest"] = None
+    st.session_state["pending_upload"] = None
     st.session_state["messages"] = [_build_default_assistant_message()]
     st.session_state.pop(QUICK_PROMPTS_STATE_KEY, None)
+    st.session_state.pop("upload_saved_prompt", None)
+    st.session_state.pop("upload_followup_prompt", None)
     get_session_path().mkdir(parents=True, exist_ok=True)
 
 
