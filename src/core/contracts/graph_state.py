@@ -11,6 +11,7 @@ from src.core.answer_schema import AnswerResponse
 from src.core.evidence import EvidenceRef
 from src.core.planner_schema import PlannerOutput
 from src.core.request_contracts import RequestContract, UserTurnSnapshot
+from src.core.uploads import UploadFileInfo
 from src.core.contracts.debug import DebugPayload, LLMCallMetadata, PlannerDiagnostic, PlannerStatus, RetryState, RetrievalDiagnostic, empty_planner_diagnostic
 
 
@@ -46,6 +47,7 @@ class RuntimeState(BaseModel):
     current_turn_id: str = ""
     user_turns: tuple[UserTurnSnapshot, ...] = ()
     retriever: Any | None = None
+    upload_files: tuple[UploadFileInfo, ...] = ()
     session_metadata: SessionMetadata = Field(default_factory=SessionMetadata)
     memory_summary: str | None = None
     progress_emitter: Any | None = None

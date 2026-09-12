@@ -9,6 +9,7 @@ from src.core.answer_schema import AnswerResponse
 from src.core.contracts.debug import RetryState
 from src.core.contracts.graph_state import DebugState, GraphState, PendingAction, PlannerState, ResponseState, RetrievalState, RuntimeState, SessionMetadata
 from src.core.request_contracts import RequestContract, UserTurnSnapshot
+from src.core.uploads import UploadFileInfo
 from src.core.contracts.boundary.debug import parse_debug_state, parse_retry_state
 from src.core.contracts.boundary.planner import parse_planner_state
 from src.core.contracts.boundary.response import parse_response_state
@@ -23,6 +24,7 @@ def build_graph_state_input(
     user_turns: tuple[UserTurnSnapshot, ...] = (),
     messages: list[AnyMessage] | None = None,
     retriever: Any | None = None,
+    upload_files: tuple[UploadFileInfo, ...] = (),
     progress_emitter: Any | None = None,
     session_metadata: SessionMetadata | dict[str, Any] | None = None,
     memory_summary: str | None = None,
@@ -42,6 +44,7 @@ def build_graph_state_input(
             current_turn_id=current_turn_id or f"user:{uuid4().hex}",
             user_turns=user_turns,
             retriever=retriever,
+            upload_files=upload_files,
             session_metadata=parse_session_metadata(session_metadata),
             memory_summary=memory_summary,
             progress_emitter=progress_emitter,
