@@ -10,6 +10,7 @@ from src.infra.logging_utils import log_event
 from src.runtime.nodes.retry import build_retry_update
 from src.runtime.nodes.validation.evidence_validator import ValidationAssessment, ValidationSnapshot, assess_validation, collect_validation_snapshot
 from src.runtime.nodes.validation.policy import apply_validation_outcome
+from src.runtime.nodes.validation.snapshot import detect_packet_coverage_gaps
 
 
 logger = logging.getLogger(__name__)
@@ -26,6 +27,11 @@ def _decide_retry_outcome(
     state: GraphState,
 ) -> tuple[bool, object, str, list[str]]:
     retry_context = get_retry_state(state)
+    retrieved_missing, packet_omitted = detect_packet_coverage_gaps(snapshot)
+    # A compact omission can still recover using a complete normal packet.
+    # Unknown metadata preserves the retry behavior of older/short-circuit states.
+    content_repair_available = not (
+        (retrieved_missing or packet_omitted) and snapshot.normal_evidence_missing_requirement_ids)
     needs_retry, next_retry_context, retrieval_feedback = build_retry_update(
         retry_context=retry_context,
         retry_reason=assessment.retry_reason,
@@ -37,7 +43,16 @@ def _decide_retry_outcome(
         current_attempt_hits=snapshot.parsed_hits,
         current_attempt_retrieval_diagnostics=snapshot.current_attempt_retrieval_diagnostics,
         request_contract=snapshot.request_contract,
+        content_repair_available=content_repair_available,
     )
+    if retrieved_missing or packet_omitted:
+        retrieval_feedback += (
+            f" Missing from retrieved source ranges: {retrieved_missing}."
+            f" Omitted from the evidence packet by range/item/text limits: {packet_omitted}."
+        )
+        if not content_repair_available:
+            retrieval_feedback += " The normal evidence packet also lacks required coverage; repeating generation cannot restore it."
+        next_retry_context = next_retry_context.model_copy(update={"retrieval_feedback": retrieval_feedback})
     if assessment.missing_content or assessment.forbidden_content:
         retrieval_feedback += (
             f" Missing required: {assessment.missing_content}."

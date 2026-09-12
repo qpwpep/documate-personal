@@ -10,7 +10,7 @@ from src.core.answer_schema import AnswerResponse
 from src.core.evidence import SearchHit
 from src.core.request_contracts import RequestContract, resolve_body_response
 from src.runtime.nodes.synthesis.budgets import SynthesisBudgetProfile
-from src.runtime.nodes.synthesis.evidence_selection import select_evidence_hits, tasks_for_hit
+from src.runtime.nodes.synthesis.evidence_selection import missing_evidence_requirement_ids, select_evidence_hits, tasks_for_hit
 from src.runtime.nodes.synthesis.models import PreparedSynthesisInputs, SynthesisContext
 from src.runtime.nodes.synthesis.prompt_builder import build_synthesis_messages, select_evidence_packet
 
@@ -114,4 +114,7 @@ def prepare_synthesis_inputs(
         reference_aliases=reference_aliases,
         model_messages=messages, history_before=before, history_after=after,
         request_contract=context.request_contract,
+        missing_requirement_ids=missing_evidence_requirement_ids(
+            context.planner_output, packet, requirement_ids, strict=True,
+        ),
     )

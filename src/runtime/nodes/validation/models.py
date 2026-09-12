@@ -28,6 +28,7 @@ class ValidationSnapshot:
     response_kind: str = "draft"
     response_request_id: str | None = None
     response_contract_revision: int = 0
+    normal_evidence_missing_requirement_ids: list[str] | None = None
 
 
 @dataclass(slots=True)

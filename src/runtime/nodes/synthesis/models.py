@@ -44,6 +44,7 @@ class PreparedSynthesisInputs:
     request_contract: RequestContract
     evidence_requirement_map: dict[str, list[str]] = field(default_factory=dict)
     reference_aliases: dict[str, str] = field(default_factory=dict)
+    missing_requirement_ids: list[str] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -57,3 +58,4 @@ class SynthesisPipelineResult:
     synthesis_errors: list[str] = field(default_factory=list)
     llm_calls: list[LLMCallMetadata] = field(default_factory=list)
     kind: str = "draft"
+    normal_evidence_missing_requirement_ids: list[str] | None = None

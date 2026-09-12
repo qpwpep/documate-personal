@@ -5,13 +5,14 @@ import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 
 from src.core.answer_schema import export_answer_text, finalize_answer, iter_content_units, text_document
-from src.core.contracts import PlannerState, RetrievalState, DebugState, RetrievalDiagnostic
+from src.core.contracts import PlannerState, ResponseState, RetrievalState, DebugState, RetrievalDiagnostic
 from src.core.contracts.boundary.graph import build_graph_state_input
 from src.core.documents import DocumentElement, SourceAnchor, build_snapshot
 from src.core.evidence import RetrievalScore, SearchHit, build_evidence
 from src.core.planner_schema import PlannerOutput, RetrievalRequirement, RetrievalTask
 from src.core.request_contracts import ExtractBody, RequestContract
 from src.runtime.nodes.synthesis import make_synthesize_node
+from src.runtime.nodes.validation.node import make_post_synthesis_validation_node
 
 
 def _hit(text="Default mode is safe.", *, source="official", rank=1):
@@ -59,6 +60,37 @@ class ModelBoundary:
         else:
             document = text_document("현재 답변입니다.")
         return {"parsed": document.model_dump(mode="json"), "raw": AIMessage(content=""), "parsing_error": None}
+
+
+
+
+
+
+def test_legacy_untagged_packet_without_coverage_metadata_keeps_route_only_validation():
+    """A historical packet with no requirement associations still accepts a valid source citation."""
+    hit = _hit()
+    state = _state([hit])
+    contract = state["runtime"].request_contract
+    result = finalize_answer(
+        text_document(hit.evidence.excerpt, basis="excerpt", refs=[hit.evidence.id]),
+        [hit.evidence], retrieval_required=True,
+    )
+    state["response"] = ResponseState(
+        result=result, evidence_packet=[hit.evidence], request_id=contract.request_id,
+        contract_revision=contract.revision,
+    )
+
+    validated = make_post_synthesis_validation_node(False)(state)
+
+    assert validated["retry"].failed_requirement_ids == []
+    assert not validated["retry"].needs_retry
+    assert validated["response"].kind == "answer"
+    assert validated["response"].normal_evidence_missing_requirement_ids is None
+    assert validated["response"].result == result
+
+
+
+
 
 
 
