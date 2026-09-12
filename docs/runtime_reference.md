@@ -8,6 +8,7 @@ DocuMate 실행, 환경 변수, API 계약, 파일 제약, 운영 메모를 모�
 
 - Python 3.12 이상
 - `uv`
+- Streamlit 1.54.0 이상 (`uv sync`로 설치)
 - OpenAI API 키
 - Tavily API 키
 
@@ -24,6 +25,8 @@ uv sync
 ```bash
 uv sync --no-dev
 ```
+
+지원하는 의존성 범위는 `pyproject.toml`, 재현할 설치 버전은 `uv.lock`으로 관리합니다. `uv run`은 프로젝트 환경을 동기화하며, 서비스 관리자도 같은 Python으로 Streamlit을 실행합니다. 의존성 하한을 바꿀 때는 `uv lock`으로 잠금 메타데이터를 갱신하고, 필요한 변경 외에 패키지 버전이 바뀌지 않았는지 확인합니다.
 
 ### 1.3 환경 변수 준비
 
@@ -227,11 +230,22 @@ docs 도구는 task의 `k`를 Tavily `max_results`와 반환 evidence 한도에 
 - 허용 확장자: `.py`, `.ipynb`
 - 허용 위치: `uploads/<session_id>/...`
 - 검증 기준: `src/app/web/cleanup.py::validate_upload_file_path`
-- 현재 업로드 검색은 세션에 연결된 단일 파일 컨텍스트만 사용합니다.
+- 기본 한도: 세션당 10개, 파일당 10 MiB, 활성 파일 합계 50 MiB. `UPLOAD_MAX_FILES`, `UPLOAD_MAX_FILE_MIB`, `UPLOAD_MAX_TOTAL_MIB`로 조정합니다.
+- 파일 내용은 UTF-8로 읽습니다. 비어 있거나 검색할 코드·markdown 원문이 없는 파일은 첨부 반영 전에 거부합니다.
 
-`upload` route는 업로드 파일에서 만든 세션별 임시 Chroma retriever를 검색합니다. 파일 기반 질문에는 해당 파일을 현재 세션에 업로드해야 합니다. 도구 이름은 `upload_search`이고, 근거 snapshot의 `source_type`은 `upload`입니다. 같은 파일 경로라도 원본 내용 hash가 바뀌면 retriever를 다시 생성합니다.
+Streamlit은 여러 파일을 한 번에 선택하고 기존 첨부에 추가합니다. 같은 이름과 내용은 재전송해도 중복 추가하지 않고, 같은 이름의 다른 내용은 명시적인 교체가 필요합니다. 이름 비교는 Unicode NFC와 대소문자 정규화를 사용합니다. 다른 이름의 동일 내용은 별도 출처로 유지합니다. 개별 삭제와 전체 첨부 해제는 이후 검색에서 해당 자료를 제외하며 대화와 기존 답변의 인용은 보존합니다.
 
-명시된 코드 심볼은 retriever가 보존한 전체 source registry에서 AST로 조회합니다. 함수·클래스·메서드 정의와 호출·사용을 구분하므로, 주석이나 호출에 이름이 있다는 이유로 함수 구현을 발췌하지 않습니다. 정확한 심볼 조회는 vector top-k 밖의 원문도 찾으며, 요구한 정의와 Notebook의 별도 정의 cell을 `k` 때문에 잘라내지 않습니다. 일반 topic 검색은 기존 Chroma 후보와 lexical reranking을 사용합니다.
+`upload` route는 현재 세션의 활성 파일들을 하나의 임시 Chroma 인덱스로 검색합니다. 파일별 원문과 snapshot은 별도로 보관하고, 검색 청크의 snapshot ID에 맞는 원문을 복원합니다. 도구 이름은 `upload_search`이고 근거 snapshot의 `source_type`은 `upload`입니다. `requirement.file_ids`가 비어 있으면 전체 활성 파일을 검색하며, 파일을 지정하면 그 범위만 검색합니다. 명시적으로 비교하는 파일마다 근거를 배정하고, 확보하지 못한 파일은 누락으로 표시합니다. 파일 사이의 import 별칭은 공유하지 않지만 같은 Notebook의 셀 사이에서는 유지합니다.
+
+UI가 만든 고유 staging 파일은 반영 대기와 재시도 입력입니다. 서버는 검증한 바이트를 `objects/<file_id>/<version>/...`에 복사하고 새 세대 인덱스를 완성한 뒤 활성 목록과 함께 전환합니다. 확정 전에는 변경 작업이 신규 원본·후보 인덱스를 소유하고, 확정 후에는 세션이 관리 원본·활성 인덱스를 소유합니다. 실패한 배치는 이번에 만든 자원만 정리하고 기존 첨부를 유지합니다. 성공한 교체는 새 집합에서 사용하지 않는 이전 원본만 해제하므로, 변경하지 않은 파일은 다음 통합 인덱스에서도 재사용합니다. 같은 파일 집합은 다시 등록하거나 임베딩하지 않으며, 실제 변경에는 변경하지 않은 파일의 재임베딩 비용도 발생합니다.
+
+첨부 전체 해제와 세션 종료는 같은 자원 해제 규칙을 사용합니다. `exit`·TTL·LRU·서버 정상 종료 시 확정 관리 원본과 인덱스를 해제하고, 이미 응답에 포함한 인용은 보존합니다. 답변 생성 실패는 첨부 수명의 끝이 아니므로 확정 첨부를 지우지 않습니다. HTTP의 기존 단일 파일 요청도 서버가 만든 관리 복사본에 이 규칙을 적용하지만, 런타임에 직접 전달한 legacy 입력 원본은 빌려 읽는 파일이므로 삭제하지 않습니다.
+
+퇴역 관리 인덱스의 삭제가 실패하면 서버는 컬렉션 식별자를 보관하고 이후 관리 요청에서 제한된 수씩 재시도합니다. 이름이 같은 새 컬렉션은 삭제하지 않습니다. 미회수 인덱스가 계속 누적되지 않도록 삭제 실패가 남아 있는 동안 이 프로세스의 신규 관리 인덱스 생성을 `503`으로 거절합니다. 기존 첨부의 검색과 전체 해제는 유지되지만, 추가·교체와 남은 파일의 재인덱싱이 필요한 부분 삭제는 정리 장애가 해소될 때까지 실패할 수 있습니다.
+
+UI와 서버 모두 파일 크기를 검사합니다. 서버는 실제 바이트를 기준으로 해시와 크기를 계산하고, 추가·교체 후보를 읽는 중에도 전체 한도를 검사합니다. staging과 서버 원본의 합계 저장 공간은 활성 합계 한도의 3배로 제한하며, 공간을 줄이는 개별 삭제나 전체 해제는 허용합니다. 목록 조회·변경 시 같은 세션 락 안에서 활성 목록이 참조하지 않는 관리 원본을 회수하므로, 이전 세션이나 비정상 종료·삭제 실패로 남은 원본도 다시 정리합니다. 삭제 실패로 이미 확정한 목록과 revision을 되돌리지는 않습니다. 현재 요청의 입력 경로와 활성 원본은 보호하고, staging은 `SESSION_TTL_SECONDS`보다 오래된 미사용 배치만 정리하여 최근 쓰기와 재시도 입력을 보존합니다. 경로 경계를 벗어나는 링크와 알 수 없는 저장 구조는 삭제하지 않습니다. 실제 디스크 사용량을 계속 검사하며 기존 단일 파일 API에도 같은 용량 한도를 적용합니다.
+
+명시된 코드 심볼은 retriever가 보존한 전체 source registry에서 AST로 조회합니다. 함수·클래스·메서드 정의와 호출·사용을 구분하므로, 주석이나 호출에 이름이 있다는 이유로 함수 구현을 발췌하지 않습니다. 정확한 심볼 조회는 vector top-k 밖의 원문도 찾으며, 요구한 정의와 Notebook의 별도 정의 cell을 `k` 때문에 잘라내지 않습니다. 일반 topic 검색은 Chroma 후보와 lexical reranking을 사용합니다. 파일 범위가 있는 의미 검색은 `_SourceAwareVectorStore`가 검색 호출마다 쿼리 임베딩을 한 번 계산하고 파일별 필터 조회에 같은 벡터를 전달합니다. 각 파일의 첫 후보를 확보한 뒤 나머지 후보를 원시 거리 오름차순으로 선택하여 `max(k, 명시 파일 수)` 예산을 채웁니다. 기존 metadata·문서 필터, 점수 정규화와 인용 원문 복원은 유지하며, 다른 검색 호출이나 세션에 쿼리 벡터를 캐시하지 않습니다.
 
 정의 발췌는 decorator와 본문을 포함한 원래 문자 범위를 보존합니다. AST의 UTF-8 byte 열 위치는 원문 문자 offset으로 변환하며, Notebook cell ID·index와 줄바꿈·들여쓰기를 유지합니다. 전체 registry에서 확인한 부재와 일부 검색 후보에서 찾지 못한 상태는 구분합니다. registry가 없거나 AST를 분석할 수 없으면 부재를 단정하지 않고 `unknown`을 반환합니다. 코드의 구체 aspect는 주석이 아닌 구문에서 확인하며, 명시 버전의 근거가 없을 때도 `unknown`으로 남깁니다.
 
@@ -253,7 +267,9 @@ docs 도구는 task의 `k`를 Tavily `max_results`와 반환 evidence 한도에 
 
 업로드의 `ChunkedDocument`는 `ParsedDocument` 원문 구조를 한 번 보관하고 검색용 chunk를 만듭니다. Chroma에는 chunk 텍스트와 snapshot·element·선택 범위 참조만 넣으며, vector 검색 결과는 `hydrate()`로 당시 원문을 가진 `EvidenceRef`로 복원합니다. 심볼 조회는 같은 registry에서 정확한 원문 범위를 선택합니다. 이 원문 보관은 현재 세션의 retriever가 소유하는 process-local 상태입니다. cleanup은 인덱스와 보관 상태를 해제하지만 이미 응답에 포함한 원문 근거는 유지됩니다.
 
-synthesis는 planner와 공유하는 `MAX_PLANNER_TASKS`에 맞춰 최대 8개 근거를 선택합니다. 일반 excerpt 합계는 6,000자, docs+upload 혼합은 8,000자이며 compact는 각각 3,000자와 4,000자입니다. 일반 snippet은 `SYNTHESIS_PROMPT_SNIPPET_CHARS`, compact는 일반 설정과 `SYNTHESIS_COMPACT_PROMPT_SNIPPET_CHARS` 중 작은 값을 사용합니다. 별도의 숨은 1,800자 ceiling은 없습니다. 요구별 후보에 예산을 먼저 배분하므로 실제 선택은 개별 상한보다 짧을 수 있으며, 최대 8개를 허용해도 문자 예산 때문에 모든 요구가 충족된다는 보장은 없습니다. 표는 개별 snippet 대신 배정된 문자 예산 안에 전체 excerpt가 들어가는지 검사합니다. 이 예산은 excerpt만 계산하며 system prompt, 대화, JSON 메타데이터와 별도 표 셀 직렬화를 포함한 전체 입력 토큰 한도는 아닙니다.
+synthesis의 기본 근거 개수 상한은 8개이며, 요구사항별 `max(1, 명시 파일 수) × max(1, aspect 수)`의 합이 더 크면 그 합만큼 항목 여유를 둡니다. 같은 파일도 독립 요구사항마다 배분 대상이며, 떨어진 aspect에는 여러 발췌가 필요할 수 있습니다. 실제로 같은 선택 범위를 공유하면 한 번만 포함하고 검색에서 확인한 요구사항 연결을 합칩니다. planner의 `MAX_PLANNER_TASKS=8`은 유지하며 파일마다 태스크를 늘리지 않습니다.
+
+일반 excerpt 합계는 6,000자, docs+upload 혼합은 8,000자이며 compact는 각각 3,000자와 4,000자입니다. 일반 snippet은 `SYNTHESIS_PROMPT_SNIPPET_CHARS`, compact는 일반 설정과 `SYNTHESIS_COMPACT_PROMPT_SNIPPET_CHARS` 중 작은 값을 사용합니다. 요구사항·명시 파일별로 빠진 근거와 literal aspect를 채우는 최소 관련 범위를 먼저 확보한 뒤 남은 예산으로 주변 문맥을 확장합니다. 프롬프트 coverage와 최종 검증은 같은 계산을 사용하되, 각각 실제 packet 전체와 유효하게 인용한 부분집합을 검사합니다. 검색 성공만으로 모델에 전달하지 않은 범위를 충족했다고 판단하지 않습니다. 표는 배정된 문자 예산 안에 전체 excerpt가 들어가야 하며 코드 범위는 완전한 구문·행을 보존합니다. 모든 요구가 예산 안에 들어간다는 보장은 없고, 이 예산은 excerpt만 계산하므로 system prompt·대화·JSON 메타데이터·별도 표 셀을 포함한 전체 입력 토큰 한도도 아닙니다.
 
 실제 모델에 보낸 범위만 evidence packet에 남기며, 범위가 달라지면 새 evidence ID를 사용합니다. 내부 `ResponseState.evidence_requirement_map`은 이 ID와 원래 requirement ID의 연결을 보존합니다. 모델 입출력에서만 `e1`, `e2` 같은 짧은 별칭을 사용하고, 서버가 참조 필드를 원래 ID로 복원한 뒤 검증합니다. 이전 답변을 변환할 때도 모델에 제공하는 원문 사본의 refs에 같은 별칭을 적용하며 저장된 원문과 revision은 유지합니다. 일반·compact 입력은 각자의 매핑을 사용하며 알 수 없는 별칭은 검증을 통과하지 못합니다. 최종 인용의 ID·원문·hash·offset은 이 별칭 때문에 바뀌지 않습니다. 모델 입력에는 선택 범위의 `is_partial`, `capture_scope`와 요구별 남은 aspect·빠진 aspect를 함께 전달합니다. 이 map은 검색 유래를 나타내며, 참조를 붙였다는 사실만으로 설명의 의미적 충분함을 증명하지 않습니다.
 
@@ -328,7 +344,7 @@ compaction 진단은 debug `edge_decisions`와 구조화 로그에서 before/aft
 
 Streamlit과 online benchmark는 이 엔드포인트에 JSON 요청을 보내고 `text/event-stream` 형식의 SSE 응답을 읽습니다. 진행 상황과 최종 응답은 별도 이벤트로 전달됩니다.
 
-요청 예시:
+기존 단일 파일 요청 예시:
 
 ```json
 {
@@ -345,8 +361,10 @@ Streamlit과 online benchmark는 이 엔드포인트에 JSON 요청을 보내고
 주요 규칙:
 
 - `query`는 공백이 아닌 문자열이어야 하며 최대 `8192`자와 `16384` UTF-8 byte를 모두 만족해야 합니다. 초과 입력은 truncate하지 않고 graph/session 생성 전에 HTTP `422`로 거절합니다.
-- `session_id`는 세션 캐시 키로 사용됩니다.
-- `upload_file_path`는 반드시 `uploads/<session_id>/...` 범위 안이어야 합니다.
+- `session_id`는 영문·숫자·밑줄·하이픈 1~128자로 제한하고 대소문자를 구분하지 않는 세션 키로 정규화합니다. Windows에서 대소문자만 다른 ID가 같은 파일 디렉터리를 별도 세션으로 공유하지 않게 합니다.
+- `upload_file_path`는 반드시 `uploads/<session_id>/...` 범위 안이어야 합니다. 이 구 필드는 현재 첨부 집합을 해당 파일 하나로 교체하며, 필드 생략·`null`은 기존 의미대로 검색 첨부를 해제합니다.
+- 새 UI는 대신 `"uploads": {"epoch": "서버가 반환한 값", "revision": 1}`을 보냅니다. 이 요청은 이미 확정된 첨부 집합을 사용하고 변경하지 않습니다. 두 계약을 함께 보내거나 `uploads=null`을 보내면 HTTP `422`입니다.
+- 첨부 버전 검사는 세션 락 안에서 다시 수행합니다. 오래된 `uploads` 컨텍스트는 SSE `UPLOAD_REVISION_CONFLICT` 오류로 반환하며, 클라이언트는 목록을 갱신하고 질문을 자동 재전송하지 않습니다.
 - `include_debug=true`일 때만 debug payload가 내려옵니다.
 - Slack 필드는 세션 메타데이터로 저장되며 후속 요청에서 재사용될 수 있습니다.
 
@@ -358,7 +376,7 @@ SSE의 `event:`는 아래 이벤트 이름이며, `data:`는 해당 이벤트의
 | `stage_started`, `stage_completed` | graph 단계의 시작·완료 정보 |
 | `heartbeat` | 실행 중 연결 유지 신호 |
 | `progress_snapshot` | 현재 단계와 근거 수 등 진행 상황 |
-| `final_response` | `response`, `trace`, `debug`를 담은 최종 응답 |
+| `final_response` | `response`, `trace`, `debug`, 처리 후 `upload_manifest`를 담은 최종 응답 |
 | `error` | 실행 중 오류 정보. 이후 `final_response`가 올 수도 있음 |
 | `done` | 이벤트 전송 종료. 요청 성공을 뜻하지 않음 |
 
@@ -368,13 +386,42 @@ OpenAPI의 HTTP `200` 응답은 `text/event-stream`의 `x-sse-events` 확장에 
 
 HTTP `200`이나 `done`만으로 성공 처리하지 않습니다. 유효한 `final_response`가 있어야 최종 답변을 사용할 수 있으며, 답변의 제한 사항·액션 실패·debug 오류도 별도로 확인합니다. 클라이언트는 `error` 뒤에도 최종 응답 수신을 계속하며, 최종 응답 없이 종료되거나 연결이 끊기면 답변 수신 실패로 처리합니다.
 
-전송 계층은 최종 `response`, `trace`, `debug` 전체를 전달하고, benchmark는 이 값들과 앞서 수신한 오류를 결과에 보존합니다. Streamlit은 최종 `AnswerResponse`와 오류 메시지를 대화 기록에 보존하며, `trace`와 `debug`는 대화 기록에 저장하지 않습니다.
+전송 계층은 최종 `response`, `trace`, `debug`, `upload_manifest`를 전달하고, benchmark는 답변·trace·debug와 앞서 수신한 오류를 결과에 보존합니다. 서버는 요청 처리 후 세션 락을 풀기 전에 `UploadManifest` 스냅샷을 확보하며, 답변 품질이나 debug 표시 여부와 관계없이 최종 응답에 포함합니다. Streamlit은 검증된 manifest를 최종 이벤트 소비 전에 세션 상태에 적용하고, 답변 저장 후 기존 rerun으로 첨부 목록을 갱신합니다. 정상 종료 응답에는 새 epoch·revision 0·빈 목록이 포함되므로 추가 GET이나 질문 재전송 없이 다음 질문을 처리합니다. 최종 `AnswerResponse`와 오류 메시지는 대화 기록에, manifest는 현재 첨부 상태에 보관하며 `trace`와 `debug`는 대화 기록에 저장하지 않습니다.
 
-Streamlit은 첫 이벤트 전 오류를 포함해 요청 실패를 화면에 표시하며 자동으로 재요청하지 않습니다. 이미 실행된 파일 저장·Slack 전송의 중복 실행을 피하기 위해 일반 JSON 엔드포인트로의 fallback도 사용하지 않습니다.
+Streamlit은 첫 이벤트 전 오류를 포함해 요청 실패를 화면에 표시하며 자동으로 재요청하지 않습니다. 최종 응답을 받지 못했거나 구 응답에 manifest가 없으면 첨부 캐시를 미확인 상태로 바꾸고 입력을 받기 전에 기존 목록 GET으로 복구합니다. 조회 실패 시 재연결을 기다리며 질문 POST를 반복하지 않습니다. 명시된 manifest의 형식 오류는 스트림 오류로 처리하고 일부 상태만 적용하지 않습니다. 이미 실행된 파일 저장·Slack 전송의 중복 실행을 피하기 위해 일반 JSON 엔드포인트로의 fallback도 사용하지 않습니다.
+
+### 5.1.1 첨부 목록 조회·변경
+
+`GET /sessions/{session_id}/uploads`는 `{epoch, revision, files}`를 반환합니다. 각 파일에는 `file_id`, `name`, `size_bytes`, `content_hash`, `source_uri`가 있으며 물리 저장 경로는 노출하지 않습니다. 서버 재시작이나 세션 TTL/LRU 만료 후에는 새 epoch가 발급됩니다. 오래된 UI는 목록을 다시 확인하고 필요한 자료를 다시 첨부해야 합니다.
+
+`POST /sessions/{session_id}/uploads/sync`는 공유 파일시스템에 저장한 파일의 참조를 받아 첨부 집합을 갱신합니다. 파일 바이트는 Streamlit의 내장 업로드 경로로 수신하며 이 API는 JSON을 받습니다.
+
+```json
+{
+  "epoch": "GET에서 받은 epoch",
+  "expected_revision": 0,
+  "operation_id": "각 변경에 부여한 고유 ID",
+  "add": [
+    {"path": "uploads/demo-session/staging/batch-a/alpha.py", "name": "alpha.py"},
+    {"path": "uploads/demo-session/staging/batch-b/beta.py", "name": "beta.py"}
+  ],
+  "remove": [],
+  "clear": false
+}
+```
+
+- 교체는 `add` 항목에 기존 `replace_file_id`를 지정합니다. 파일명은 기존과 같아야 하며 논리 파일 ID·원본 URI는 유지하고 새 내용 hash/snapshot을 만듭니다.
+- 개별 삭제는 `remove`에 파일 ID를 넣습니다. 전체 해제는 `clear=true`이며 `add`·`remove`와 함께 사용할 수 없습니다.
+- 성공은 HTTP `200`과 `{manifest, changed, unchanged_names}`입니다. 동일 파일만 재전송하면 `changed=false`이고 revision은 바뀌지 않습니다.
+- 같은 세션 생애에서 최근 64개 성공 작업의 `operation_id`와 요청 내용을 보관합니다. 동일 작업 재전송은 원래 응답을 반환하며 같은 ID로 다른 내용을 보내면 HTTP `409`입니다. 이전 성공 뒤 다른 변경이 있었다면 원래 응답이 현재 목록보다 오래될 수 있으므로 GET으로 확인합니다.
+- 오래된 epoch/revision, 이름 충돌은 HTTP `409`; 개수·용량 초과는 `413`; 잘못된 내용은 `422`; 인덱스 생성 장애는 `503`입니다. 오류의 `detail`에는 `code`, `message`, 가능한 파일별 `files` 오류가 있습니다. 실패 시 기존 확정 목록과 검색 인덱스는 유지됩니다.
+- 첨부 반영은 질문 제출과 독립적입니다. 실패 후 재시도에 성공해도 보류한 질문을 자동 실행하지 않습니다.
+
+첨부 변경과 질문 실행은 같은 세션 락으로 직렬화합니다. 락 대기와 인덱스 생성 중에도 세션을 활성 상태로 보호합니다. 한 질문은 시작할 때 확정한 파일 집합만 사용합니다. 현재 store·인덱스는 단일 FastAPI 프로세스의 메모리 상태이며 다중 worker의 공유 세션을 제공하지 않습니다.
 
 ### 5.2 최종 응답과 debug
 
-`final_response` 이벤트의 `data`는 `AgentResponse`이며 `response`, `trace`, `debug` 전체를 담습니다. 다음 JSON은 SSE 스트림 전체가 아니라 이 `data` 객체의 최소 예시입니다.
+`final_response` 이벤트의 `data`는 `AgentResponse`이며 `response`, `trace`, `debug`, `upload_manifest`를 담습니다. `upload_manifest`는 기존 목록 조회와 같은 `{epoch, revision, files}`이고 물리 저장 경로를 노출하지 않습니다. 이전 응답과의 파싱 호환성을 위해 스키마 기본값은 `null`이지만 현재 서버는 모든 최종 응답에 처리 후 스냅샷을 채웁니다. 다음 JSON은 SSE 스트림 전체가 아니라 이 `data` 객체의 최소 예시입니다.
 
 ```json
 {
@@ -404,7 +451,8 @@ Streamlit은 첫 이벤트 전 오류를 포함해 요청 실패를 화면에 �
     "retrieval_required": false
   },
   "trace": "Session ID: ..., Request ID: ..., Agent ID: ...",
-  "debug": null
+  "debug": null,
+  "upload_manifest": {"epoch": "session-epoch", "revision": 0, "files": []}
 }
 ```
 
@@ -447,7 +495,7 @@ Streamlit은 첫 이벤트 전 오류를 포함해 요청 실패를 화면에 �
 
 `retry_context.hit_start_index`는 현재 시도의 검색 결과 시작 위치입니다. `failed_requirement_ids`, `original_tasks`, `preserved_hits`, 보존 진단은 실패 요구와 이미 확보한 근거를 추적합니다. `refresh_routes`는 실패한 요구의 검색을 다시 계획하며 성공한 다른 요구는 같은 route에 있어도 재사용합니다. 재계획에는 실제 query·필터 실패·시도한 query가 전달되고 원래 ID·라이브러리·심볼·버전·aspect를 유지합니다. 같은 요청 fingerprint의 완료 결과를 다시 실행하지 않으며 일시적 도구 오류는 재시도할 수 있습니다.
 
-post-synthesis 검사에서 참조·내용·requirement coverage 문제가 있고 원문 검색 결과가 남아 있으면 `reuse_hits_resynthesize`로 synthesis에 직접 돌아갑니다. 검색 없는 신규 생성·기존 답변 수정도 확정 계약을 유지하며 재합성할 수 있습니다. planner·검색을 반복하지 않는 이 경로의 기본 재시도 상한은 1회이고 `max_retries=0`이면 실행하지 않습니다. 각 시도는 동일 계약의 필수 누락·금지 위반을 검사하며, 선호 미충족만으로 실패하지 않습니다. 코드 원문을 그대로 복사한 일반 문단도 코드 금지 검사에 포함합니다. 줄 수는 출처 부록·receipt를 제외한 본문의 비어 있지 않은 줄입니다. 잘못된 내용 제거와 원문 fallback에도 같은 조건을 적용하며 불완전한 fallback은 저장·전송하지 않습니다. 비교·설명 등 의미 요구의 충족은 구조 검사로 증명하지 않습니다.
+post-synthesis 검사에서 참조·내용·requirement coverage 문제가 있고 원문 검색 결과가 남아 있으면 `reuse_hits_resynthesize`로 synthesis에 직접 돌아갑니다. 실제 packet에는 필요한 근거가 있지만 답변이 인용하지 않은 경우에는 이 재합성이 유효합니다. 일반 packet부터 근거가 빠져 같은 준비·예산으로 회복할 수 없는 경우는 재생성을 반복하지 않고 불완전한 원문 fallback으로 처리하며, packet의 누락과 검색 부재를 구분합니다. timeout 후 compact packet만 부족하고 일반 packet은 충분하면 기존 한도 안에서 일반 입력으로 재합성할 수 있습니다. 검색 없는 신규 생성·기존 답변 수정도 확정 계약을 유지하며 재합성할 수 있습니다. planner·검색을 반복하지 않는 이 경로의 기본 재시도 상한은 1회이고 `max_retries=0`이면 실행하지 않습니다. 각 시도는 동일 계약의 필수 누락·금지 위반을 검사하며, 선호 미충족만으로 실패하지 않습니다. 코드 원문을 그대로 복사한 일반 문단도 코드 금지 검사에 포함합니다. 줄 수는 출처 부록·receipt를 제외한 본문의 비어 있지 않은 줄입니다. 잘못된 내용 제거와 원문 fallback에도 같은 조건을 적용하며 불완전한 fallback은 저장·전송하지 않습니다. 비교·설명 등 의미 요구의 충족은 구조 검사로 증명하지 않습니다.
 
 실제 응답 스키마 기준 파일:
 
@@ -518,13 +566,19 @@ Streamlit은 `AnswerResponse` 전체를 채팅 기록에 보존합니다. 본문
 
 ## 8. 테스트 및 검증
 
-기본 검증:
+잠금 환경과 Streamlit 최소 지원 버전을 함께 검증합니다.
 
 ```bash
-uv run pytest -q
-uv run python script/check_encoding.py
-uv run python script/sync_env_example.py --check
+uv lock --check
+uv run --locked pytest -q
+uv run --locked python script/check_encoding.py
+uv run --locked python script/sync_env_example.py --check
+uv run --no-project python script/check_streamlit_compatibility.py
 ```
+
+`--locked`는 잠금 파일 갱신이 필요하면 실패하지만, 코드가 사용하는 API의 호환성까지 검사하지는 않습니다. `check_streamlit_compatibility.py`는 `pyproject.toml`의 `streamlit>=X.Y.Z`에서 하한을 읽고, 프로젝트 잠금 환경을 기준으로 해당 버전의 격리 환경을 구성합니다. 실제 설치 버전이 하한과 일치하는지 확인한 뒤 기존 UI 테스트 5개 파일을 실행하며, 실패 종료 코드를 그대로 전달합니다. 프로젝트의 `.venv`와 `uv.lock`은 변경하지 않습니다.
+
+Streamlit API 사용이나 의존성을 변경할 때 이 검증을 함께 실행합니다. 잠금 버전만 올라가도 하한 검증은 선언된 버전을 계속 사용합니다. 기존 `AppTest`가 정상 첨부 목록을 받은 화면을 렌더링하고 첨부·교체·삭제 흐름을 검사하므로, 서버 포트가 열리는지만 확인하는 기동 검사로 대체하지 않습니다. `>=X.Y.Z` 외의 선언 형식으로 바꾸면 검증 스크립트도 해당 하한을 명확히 해석하도록 함께 수정해야 합니다.
 
 실제 설정된 planner 모델로 출처 판별을 검증하려면 API 호출을 명시적으로 활성화합니다. 기본 회귀에서는 이 검사를 건너뜁니다.
 

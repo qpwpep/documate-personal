@@ -102,7 +102,7 @@ FastAPI는 실제 API 실행과 세션 관리를 담당하고, Streamlit은 사�
 
 `SessionContext`는 최근 messages, `memory_summary`, 발화 ID와 원문의 `user_turns`를 하나의 immutable conversation snapshot으로 소유합니다. 발화 ID는 요청 진입에서 한 번 부여하고 projection·길이 제한·재시도에서 유지합니다. 원문은 최근 16개와 보류 계약이 참조하는 발화를 보존하며 요약이나 잘린 표시 문자열로 대체하지 않습니다. summary·messages의 기존 byte 예산은 대화 부분에 적용하고 원문 ledger와 보류 본문은 별도 상태로 관리합니다. graph가 반환한 전체 메시지는 먼저 debug와 response assembly가 사용합니다. 사용자가 볼 응답까지 정상적으로 조립된 뒤에만 Tool/System/중간 AI를 제거하고 각 Human turn과 canonical final AI를 남겨 원문 ledger와 함께 단일 참조 교체로 commit합니다. graph, debug, assembly, projection 중 하나라도 실패하면 이전 정상 snapshot은 그대로 유지됩니다. 이 원자성은 대화 메모리에 한정되며 이미 실행된 파일 저장·Slack 전송 같은 외부 side effect까지 rollback하지는 않습니다.
 
-Streamlit과 online benchmark는 `POST /agent/stream`으로 같은 진행 이벤트와 최종 응답을 받습니다. 전송 계층은 `final_response.data`의 `response`, `trace`, `debug` 전체를 전달하고, benchmark는 이 값들을 결과에 보존합니다. Streamlit 대화 기록에는 최종 `AnswerResponse`와 오류 메시지를 유지합니다. HTTP `200`이나 `done`만으로 성공을 판정하지 않으며, 실행 중 오류 뒤에 최종 응답이 오는 경우에도 오류 진단을 보존합니다. Streamlit은 통신 실패 때 요청을 자동으로 다시 보내지 않아 이미 실행된 저장·Slack 전송이 중복되지 않도록 합니다.
+Streamlit과 online benchmark는 `POST /agent/stream`으로 같은 진행 이벤트와 최종 응답을 받습니다. 전송 계층은 `final_response.data`의 답변·trace·debug와 요청 처리 후의 `upload_manifest`를 전달합니다. 세션 실행 계층이 락 안에서 첨부 스냅샷을 확보하고 UI는 이를 다음 질문의 context로 적용하므로, 종료 명령으로 epoch가 바뀌어도 명령별 UI 처리나 별도 성공 후 GET이 필요하지 않습니다. benchmark는 답변·trace·debug와 오류 진단을 결과에 보존하고, Streamlit은 최종 `AnswerResponse`와 오류 메시지는 대화 기록에, manifest는 첨부 상태에 보관합니다. HTTP `200`이나 `done`만으로 성공을 판정하지 않으며, 실행 중 오류 뒤에 최종 응답이 오는 경우에도 오류 진단을 보존합니다. 최종 응답이나 manifest를 확인하지 못하면 목록을 다시 조회한 뒤 새 입력을 받으며, 실패한 질문은 자동 재전송하지 않아 이미 실행된 저장·Slack 전송이 중복되지 않도록 합니다.
 
 ## 3. 주요 트레이드오프
 
@@ -150,9 +150,11 @@ planner와 synthesis는 구조화 모델 호출 경로를 사용하며 provider�
 
 docs 품질 검사는 공식 domain/path prefix와 URL·원문 유효성에 더해 대상 문서 소유권, 요청 버전, 실제 발췌의 aspect를 확인합니다. 단순한 이름 언급과 대상 API의 문서를 구분하고, 부분 근거를 확보한 상태와 요구 전체를 충족한 상태를 구분합니다. 이 검사는 모든 설명의 의미적 충분성을 보증하지 않으므로 자연어 평가와 함께 해석합니다.
 
-upload의 일반 검색은 vector 후보를 identifier·keyword·parameter signal로 rerank합니다. 정확한 심볼 요청은 전체 source registry의 AST 조회로 바꾸어 top-k 후보 밖의 정의도 찾습니다. 사용과 정의를 구분하고, 정의의 decorator·본문·Notebook cell 및 정확한 원문 offset을 유지합니다. source 전체를 확인할 수 없으면 부재를 단정하지 않고 `unknown`으로 남깁니다. 이 경로는 임의의 유사도 임계값 없이 이름이 없는 함수의 오발췌를 막으며, source에 명시된 정적 코드 범위만 확인한다는 한계를 갖습니다.
+upload의 일반 검색은 vector 후보를 identifier·keyword·parameter signal로 rerank합니다. 명시한 파일별 후보를 확보하는 어댑터가 한 검색 호출의 쿼리 임베딩을 계산하고 파일별 조회에 공유합니다. 벡터 재사용은 그 호출 안에 한정하며 파일별 후보 예약, 원시 거리 기반 추가 후보 선택, 후속 정렬과 인용 의미를 유지합니다. 정확한 심볼 요청은 전체 source registry의 AST 조회로 바꾸어 top-k 후보 밖의 정의도 찾습니다. 사용과 정의를 구분하고, 정의의 decorator·본문·Notebook cell 및 정확한 원문 offset을 유지합니다. source 전체를 확인할 수 없으면 부재를 단정하지 않고 `unknown`으로 남깁니다. 이 경로는 임의의 유사도 임계값 없이 이름이 없는 함수의 오발췌를 막으며, source에 명시된 정적 코드 범위만 확인한다는 한계를 갖습니다.
 
-synthesis 근거 수는 planner 최대 독립 요구 수와 같은 상수를 사용해 일반·hybrid 모두 최대 8건을 허용합니다. 총 excerpt 예산은 일반 6,000자·hybrid 8,000자를 유지하며, 개별 범위는 설정된 snippet 상한을 따릅니다. 요구별 대표 후보를 먼저 배분하고 같은 source의 떨어진 aspect는 별도 passage로 선택합니다. 긴 문서·코드의 앞부분을 일괄 자르지 않고 관련 문단·문장·코드 행을 원문 offset으로 전달하며, 예산으로 빠진 aspect와 부분 선택을 모델과 최종 검증에 남깁니다. 저장·전송 요청은 근거 예산을 줄이지 않습니다. structured synthesis timeout 시 compact 호출을 사용하고, 실패하면 불완전함을 명시한 원문 발췌 fallback을 제공합니다. 각 경로의 검사 기준은 해당 호출에 실제 제공한 packet입니다.
+synthesis는 기본 8건을 기준으로 요구사항별 파일·aspect 조합에 필요한 항목 여유를 확보합니다. planner의 태스크 수와 답변에 필요한 발췌 수를 구분하며, 같은 파일의 독립 요구나 떨어진 aspect도 각각 배분합니다. 총 excerpt 예산은 일반 6,000자·hybrid 8,000자를 유지하고 개별 범위는 설정된 snippet 상한을 따릅니다. 필요한 최소 관련 문단·문장·코드 구문을 먼저 확보한 뒤 남은 예산으로 문맥을 확장하며, 동일한 선택 범위의 비용은 한 번만 계산하고 검색 연결을 합칩니다. 완전한 코드 구문·행을 우선하고, 초기 균등 배분에서 보류한 요구에도 잔여 예산의 몫을 유지해 재배분합니다. 검색 범위가 줄 중간에서 끝나거나 완전한 단위가 예산에 들어가지 않으면, 선택적 문맥보다 먼저 관련 부분 원문을 배분합니다. 이 범위는 검색된 원문 안에 한정하며 정확한 발췌가 독립 실행 가능한 코드를 뜻하지는 않습니다. 프롬프트와 최종 검증은 같은 커버리지 기준을 실제 packet 전체와 유효 인용 부분집합에 각각 적용합니다. 저장·전송 요청은 근거 예산을 줄이지 않습니다.
+
+structured synthesis timeout 시 compact 호출을 사용하고, 실패하면 불완전함을 명시한 원문 발췌 fallback을 제공합니다. 각 경로의 검사 기준은 해당 호출에 실제 제공한 packet입니다. 현행 준비 과정에서 packet과 요구 연결이 모두 비어진 경우에도 누락을 계산하며, 커버리지 계산 정보가 없는 구형 상태와 구분합니다. 일반 packet부터 부족한 근거는 같은 입력으로 재생성해도 회복되지 않으므로 불완전 결과로 처리하고, 모델의 인용 누락이나 일반 packet으로 회복할 수 있는 compact의 누락은 제한된 재합성으로 처리합니다. 예산으로 잘린 범위를 원문에 없다고 단정하거나, 누락 안내만으로 완성된 답변으로 승인하지 않습니다.
 
 출력 한도는 LLM registry 생성부에서만 설정하고 synthesis 입력 프로필에서는 재지정하지 않습니다. 일반 출력과 snippet의 초기 조정값은 각각 4,096토큰과 1,800자이며, compact는 독립된 960토큰·900자 설정과 축소된 총 excerpt 예산을 사용합니다. 두 설정의 변경은 HTTP 요청·원문 범위에서 따로 검증하며 실제 답변 품질·지연·비용은 별도 온라인 평가가 필요합니다. 이 분리는 일반 응답의 생성 여유를 늘릴 때 복구 비용이나 저장 메모리까지 함께 늘어나는 것을 피하기 위한 것입니다.
 
@@ -178,7 +180,9 @@ synthesis 근거 수는 planner 최대 독립 요구 수와 같은 상수를 사
 
 업로드 파일 검색과 대화 상태는 세션 단위로 다룹니다. 세션별 manager cache, TTL/LRU 정리, 요청 lock을 두어 한 사용자의 업로드나 실행 상태가 다른 흐름과 섞이지 않게 관리합니다. close, exit, TTL/LRU eviction은 messages와 summary를 함께 제거합니다. 현재 store는 process-local in-memory 구현이므로 서버 재시작이나 여러 worker 사이에서 대화 상태를 복원하지는 않습니다.
 
-업로드 파일은 `uploads/<session_id>/...` 아래의 `.py` 또는 `.ipynb`만 허용합니다. 세션 디렉터리 밖 경로는 `validate_upload_file_path()`에서 차단하고, 다운로드도 `output/save_text` 아래 상대 경로만 허용합니다. 업로드 retriever는 세션별 Chroma collection으로 만들고, 세션 종료나 파일 교체 시 cleanup합니다.
+업로드 파일은 `uploads/<session_id>/...` 아래의 `.py` 또는 `.ipynb`만 허용합니다. 세션 디렉터리 밖 경로는 `validate_upload_file_path()`에서 차단하고, 다운로드도 `output/save_text` 아래 상대 경로만 허용합니다. UI의 staging은 재시도 입력이고, 서버의 관리 원본과 인덱스는 후보 생성 중에는 변경 작업이, 확정 후에는 세션이 소유합니다. 확정·종료는 공통 자원 교체·해제를 사용하되 후보 실패는 신규 자원만, 성공한 교체는 새 집합이 사용하지 않는 이전 자원만 해제합니다. 답변 실패는 확정 첨부를 해제하지 않습니다.
+
+세션 락 안에서 현재 참조와 요청 입력을 제외한 미사용 관리 원본을 대조 정리하여 이전 세션이나 삭제 실패로 남은 파일을 회수합니다. 실패한 물리 삭제 때문에 확정한 목록을 되돌리지 않으며, 실제 디스크 사용량을 계속 제한합니다. 활성 요청과 최근 staging은 보호하고 이미 응답에 담은 인용은 원본 해제 뒤에도 유지합니다. 이 수명 관리는 단일 프로세스와 기존 락을 사용하며 별도 영구 manifest나 분산 참조 관리가 필요하지 않습니다.
 
 ### 검증 가능한 결과를 우선
 
