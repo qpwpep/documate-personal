@@ -147,6 +147,8 @@ class WebRuntimeModulesTest(unittest.TestCase):
             with patch("src.app.web.cleanup.get_project_root_path", return_value=Path(temp_dir)), patch(
                 "src.app.web.cleanup.get_upload_session_dir",
                 return_value=target.parent,
+            ), patch(
+                "src.app.web.cleanup.get_uploads_dir", return_value=uploads_root,
             ):
                 validated = validate_upload_file_path("uploads/session-a/sample.py", "session-a")
                 self.assertEqual(validated, str(target.resolve()))
