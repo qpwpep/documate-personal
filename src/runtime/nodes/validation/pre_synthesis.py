@@ -12,6 +12,7 @@ from src.infra.logging_utils import log_event
 from src.runtime.nodes.retry import build_followup_from_routes, build_retry_update
 from src.runtime.nodes.validation.evidence_validator import assess_retrieval_quality, collect_validation_snapshot
 from src.runtime.nodes.validation.policy import build_followup_updates
+from src.runtime.nodes.synthesis.evidence_selection import upload_file_id
 
 
 logger = logging.getLogger(__name__)
@@ -24,11 +25,12 @@ def make_pre_synthesis_validation_node(verbose: bool):
         debug = get_debug_state(state)
         retry_context = get_retry_state(state)
         guided_followup = str(planner.guided_followup or "").strip()
-        contract = get_runtime_state(state).request_contract
+        runtime = get_runtime_state(state)
+        contract = runtime.request_contract
         stamp = {"request_id": contract.request_id if contract else None,
                  "contract_revision": contract.revision if contract else 0}
         if (contract is not None and contract.can_prepare_body()
-                and planner.diagnostics.reason not in {"upload_retriever_missing", "planner_unavailable"}):
+                and planner.diagnostics.reason not in {"upload_retriever_missing", "upload_file_scope_invalid", "planner_unavailable"}):
             guided_followup = ""
 
         if guided_followup:
@@ -121,6 +123,18 @@ def make_pre_synthesis_validation_node(verbose: bool):
                         continue
                     diagnostics = [d for d in snapshot.current_attempt_retrieval_diagnostics if d.requirement_id == task.requirement_id]
                     subjects = ", ".join(task.requirement.symbols) or task.requirement.library or task.query
+                    if task.requirement.file_ids:
+                        observed_files = {upload_file_id(hit.evidence) for hit in snapshot.parsed_hits
+                                          if hit.requirement_id == task.requirement_id}
+                        missing = [item for diagnostic in diagnostics for item in diagnostic.missing_requirements]
+                        file_ids = [file_id for file_id in task.requirement.file_ids
+                                    if file_id not in observed_files or any(
+                                        item == f"file:{file_id}" or item.startswith(f"file:{file_id}:") for item in missing)]
+                        names = {item.file_id: item.name for item in runtime.upload_files}
+                        labels = ", ".join(f"{names.get(file_id, file_id)} ({file_id})"
+                                           for file_id in file_ids or task.requirement.file_ids)
+                        notices.append(f"첨부 파일 {labels}에서 {subjects}에 필요한 근거를 충분히 확인하지 못했습니다.")
+                        continue
                     if task.route == "upload" and any(d.answerability == "missing" for d in diagnostics):
                         label = "정의" if task.requirement.match == "definition" else "대상"
                         notices.append(f"현재 업로드 파일에서 {subjects} {label}를 찾지 못했습니다.")

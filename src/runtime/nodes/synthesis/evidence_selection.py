@@ -39,6 +39,10 @@ def route_for_evidence(item: EvidenceRef) -> str:
     return item.route
 
 
+def upload_file_id(item: EvidenceRef) -> str:
+    return str(item.element.metadata.get("file_id") or "") if item.route == "upload" else ""
+
+
 def tasks_for_hit(hit: SearchHit, planner_output: PlannerOutput) -> list[RetrievalTask]:
     """Keep the retrieval requirement attached to a hit; old untagged hits use their route."""
     return [

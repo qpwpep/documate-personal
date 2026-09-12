@@ -56,7 +56,7 @@ def build_synthesis_context(*, state: GraphState, has_default_slack_destination:
         user_input=runtime.user_input,
         messages=list(state.get("messages", [])),
         guided_followup=str(planner.guided_followup or "").strip(),
-        planner_blocked=planner.diagnostics.reason in {"upload_retriever_missing", "planner_unavailable"},
+        planner_blocked=planner.diagnostics.reason in {"upload_retriever_missing", "upload_file_scope_invalid", "planner_unavailable"},
         parse_errors=parse_errors,
         planner_parse_errors=planner_errors,
         planner_output=plan,

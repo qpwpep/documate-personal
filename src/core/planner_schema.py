@@ -27,12 +27,18 @@ class RetrievalRequirement(BaseModel):
     symbols: list[str] = Field(default_factory=list, description="Exact API/code symbols to find, preferably fully qualified official names.")
     version: str | None = Field(default=None, description="Explicit requested version; null when unconstrained. Never substitute another version.")
     aspects: list[str] = Field(default_factory=list, description="Literal parameter/code anchors explicitly requested in the user's dialogue. Do not guess allowable values or add requirements from model knowledge. General explanation instructions belong in query.")
+    file_ids: list[str] = Field(default_factory=list, description="Upload file IDs from the active catalog whose evidence is explicitly requested. Empty searches all active uploads without requiring every file in the answer. For a comparison or inspection of all attachments, include every requested file ID in one task. Empty for docs.")
     match: Literal["topic", "symbol", "definition"] = Field(default="topic", description="topic for broad explanation, symbol for API/usage references, definition for the implementation of a named uploaded function/class.")
 
     @field_validator("symbols", "aspects")
     @classmethod
     def clean_terms(cls, values: list[str]) -> list[str]:
         return list(dict.fromkeys(value.strip() for value in values if value.strip()))
+
+    @field_validator("file_ids")
+    @classmethod
+    def clean_file_ids(cls, values: list[str]) -> list[str]:
+        return sorted({value.strip() for value in values if value.strip()})
 
     @field_validator("library", "version")
     @classmethod
@@ -41,7 +47,7 @@ class RetrievalRequirement(BaseModel):
 
     @property
     def specified(self) -> bool:
-        return bool(self.library or self.symbols or self.version or self.aspects or self.match != "topic")
+        return bool(self.library or self.symbols or self.version or self.aspects or self.file_ids or self.match != "topic")
 
 
 class PlannedRequirement(RetrievalRequirement):
@@ -74,6 +80,8 @@ class RetrievalTask(BaseModel):
 
     @model_validator(mode="after")
     def assign_requirement_identity(self) -> "RetrievalTask":
+        if self.route != "upload" and self.requirement.file_ids:
+            raise ValueError("file_ids apply only to uploaded-file retrieval")
         if not self.requirement_id.strip():
             identity = {"route": self.route, "requirement": self.requirement.model_dump()}
             if not self.requirement.specified:
