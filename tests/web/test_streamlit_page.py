@@ -128,6 +128,24 @@ class StreamlitPageTest(unittest.TestCase):
 
         self.assertEqual(fake_st.button_labels, sampled_prompts + sampled_prompts)
 
+    def test_sidebar_lists_confirmed_files_and_removes_only_selected_file(self) -> None:
+        """An individual removal identifies one confirmed file without requesting a new chat."""
+        from src.core.uploads import UploadFileInfo, UploadManifest
+        fake_st = _FakeStreamlit()
+        fake_st.button = lambda label, **kwargs: kwargs.get("key") == "documate_remove_upload_a"
+        manifest = UploadManifest(epoch="epoch", revision=1, files=[
+            UploadFileInfo(file_id=key, name=f"{key}.py", size_bytes=3, content_hash="sha256:" + key * 64, source_uri=f"upload://session/{key}")
+            for key in ["a", "b"]
+        ])
+        with patch.object(streamlit_sidebar, "st", fake_st), patch.object(streamlit_theme, "st", fake_st):
+            result = streamlit_sidebar.render_sidebar(manifest=manifest)
+        self.assertEqual(result.remove_file_id, "a")
+        self.assertFalse(result.clear_uploads_requested)
+        self.assertFalse(result.new_chat_requested)
+        rendered = "\n".join(body for body, _ in fake_st.markdowns)
+        self.assertIn("a.py", rendered)
+        self.assertIn("b.py", rendered)
+
 
 if __name__ == "__main__":
     unittest.main()

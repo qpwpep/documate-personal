@@ -258,6 +258,18 @@ button[data-testid="stExpandSidebarButton"]:hover {
     line-height: 1.5;
     margin: 0 0 1rem;
     padding: 0.72rem 0.8rem;
+    overflow-wrap: anywhere;
+}
+
+.dm-upload-summary {
+    color: var(--dm-text);
+    margin: 0;
+}
+
+.dm-upload-help {
+    color: var(--dm-muted);
+    line-height: 1.55;
+    overflow-wrap: anywhere;
 }
 
 [data-testid="stSidebar"] div.stButton > button {
