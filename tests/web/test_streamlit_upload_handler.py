@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from types import SimpleNamespace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -127,3 +128,106 @@ class StreamlitUploadHandlerTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_staging_adds_multiple_files_without_replacing_existing_bytes(tmp_path):
+    """Staging additions keeps every existing source intact until server confirmation."""
+    from src.app.web.streamlit_upload_handler import stage_uploaded_files
+    old = tmp_path / "old.py"
+    old.write_bytes(b"old")
+    result = stage_uploaded_files(
+        [_UploadedFile("one.py", b"one"), _UploadedFile("two.py", b"two")], tmp_path,
+        existing_files=[], max_files=10, max_file_mib=10, max_total_mib=50,
+    )
+    assert result.errors == []
+    assert [(item.name, Path(item.path).read_bytes()) for item in result.files] == [("one.py", b"one"), ("two.py", b"two")]
+    assert all(Path(item.path).is_relative_to(tmp_path / "staging") for item in result.files)
+    assert old.read_bytes() == b"old"
+
+
+def test_staging_same_name_changed_bytes_requires_explicit_replacement(tmp_path):
+    """A name collision is staged as a conflict rather than silently replacing the file."""
+    import hashlib
+    from src.app.web.streamlit_upload_handler import stage_uploaded_files
+    existing = SimpleNamespace(file_id="original", name="sample.py", size_bytes=3, content_hash="sha256:" + hashlib.sha256(b"old").hexdigest())
+    result = stage_uploaded_files([_UploadedFile("sample.py", b"new")], tmp_path, existing_files=[existing], max_files=10, max_file_mib=10, max_total_mib=50)
+    assert result.errors == []
+    assert result.files[0].conflicting_file_id == "original"
+    assert result.files[0].replace_file_id is None
+
+
+def test_staging_same_name_same_bytes_skips_but_different_name_keeps_file(tmp_path):
+    """A duplicate name and content is a no-op, while a distinct filename remains distinct."""
+    import hashlib
+    from src.app.web.streamlit_upload_handler import stage_uploaded_files
+    existing = SimpleNamespace(file_id="original", name="sample.py", size_bytes=3, content_hash="sha256:" + hashlib.sha256(b"old").hexdigest())
+    result = stage_uploaded_files([_UploadedFile("sample.py", b"old"), _UploadedFile("other.py", b"old")], tmp_path, existing_files=[existing], max_files=10, max_file_mib=10, max_total_mib=50)
+    assert result.errors == []
+    assert result.unchanged_names == ["sample.py"]
+    assert [item.name for item in result.files] == ["other.py"]
+
+
+def test_staging_invalid_batch_does_not_publish_partial_files(tmp_path):
+    """A failed file prevents the whole staging batch from being sent for indexing."""
+    from src.app.web.streamlit_upload_handler import stage_uploaded_files
+    result = stage_uploaded_files([_UploadedFile("ok.py", b"ok"), _UploadedFile("bad.py", ValueError("broken"))], tmp_path, existing_files=[], max_files=10, max_file_mib=10, max_total_mib=50)
+    assert result.files == []
+    assert "bad.py" in result.errors[0]
+    assert not list(tmp_path.rglob("*.py"))
+
+
+def test_staging_enforces_file_count(tmp_path):
+    """The entire proposed attachment set must fit the session file count limit."""
+    from src.app.web.streamlit_upload_handler import stage_uploaded_files
+    result = stage_uploaded_files([_UploadedFile("a.py", b"x"), _UploadedFile("b.py", b"x")], tmp_path, existing_files=[], max_files=1, max_file_mib=10, max_total_mib=50)
+    assert result.files == []
+    assert result.errors
+
+
+def test_staging_enforces_combined_size(tmp_path):
+    """Individually valid files are rejected together if their total exceeds the session limit."""
+    from src.app.web.streamlit_upload_handler import stage_uploaded_files
+    result = stage_uploaded_files([_UploadedFile("a.py", b"x" * (1024 * 1024)), _UploadedFile("b.py", b"x")], tmp_path, existing_files=[], max_files=10, max_file_mib=10, max_total_mib=1)
+    assert result.files == []
+    assert result.errors
+
+
+def test_staging_rejects_two_different_versions_of_one_name_in_either_order(tmp_path):
+    """Conflicting versions in a single selection are ambiguous regardless of selection order."""
+    import hashlib
+    from src.app.web.streamlit_upload_handler import stage_uploaded_files
+    existing = SimpleNamespace(file_id="original", name="sample.py", size_bytes=3, content_hash="sha256:" + hashlib.sha256(b"old").hexdigest())
+    for payloads in [(b"old", b"new"), (b"new", b"old")]:
+        result = stage_uploaded_files([_UploadedFile("sample.py", payload) for payload in payloads], tmp_path, existing_files=[existing], max_files=10, max_file_mib=10, max_total_mib=50)
+        assert result.files == []
+        assert result.errors
+
+
+def test_staging_stops_reading_after_candidate_bytes_exceed_total_limit(tmp_path):
+    """An oversized batch keeps existing files intact and does not load later upload buffers."""
+    import hashlib
+    from src.app.web.streamlit_upload_handler import stage_uploaded_files
+
+    class LaterUpload(_UploadedFile):
+        was_read = False
+
+        def getbuffer(self):
+            self.was_read = True
+            return super().getbuffer()
+
+    old = tmp_path / "existing.py"
+    old.write_bytes(b"old")
+    existing = SimpleNamespace(file_id="original", name=old.name, size_bytes=3,
+                               content_hash="sha256:" + hashlib.sha256(b"old").hexdigest())
+    later = LaterUpload("later.py", b"later")
+    result = stage_uploaded_files([
+        _UploadedFile("one.py", b"a" * (512 * 1024)),
+        _UploadedFile("two.py", b"b" * (512 * 1024 + 1)),
+        later,
+    ], tmp_path, existing_files=[existing], max_files=10, max_file_mib=1, max_total_mib=1)
+
+    assert result.files == []
+    assert result.errors == ["전체 첨부 크기는 1 MiB 이하여야 합니다."]
+    assert old.read_bytes() == b"old"
+    assert not (tmp_path / "staging").exists()
+    assert later.was_read is False
