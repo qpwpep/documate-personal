@@ -1,6 +1,7 @@
 import json
 
 import pytest
+from hypothesis import given, strategies as st
 
 from src.core.documents import DocumentElement, TableCell, TableData, build_snapshot
 from src.core.evidence import build_evidence
@@ -224,3 +225,115 @@ def test_ast_definition_end_before_a_line_ending_keeps_the_last_requested_call(n
     assert selected.excerpt == source[selected.selection.start:selected.selection.end]
     assert selected.snapshot == original.snapshot
     assert selected.element == original.element
+
+
+@pytest.mark.parametrize("newline", ["\n", "\r\n", ""])
+@pytest.mark.parametrize("clipped", [False, True])
+def test_long_code_line_keeps_its_related_partial_range(newline, clipped):
+    """An oversized or already clipped line keeps its anchor and exact source offsets."""
+    text = 'settings = "한글\t' + "prefix " * 40 + "target_call" + " suffix" * 40 + '"' + newline
+    captured = evidence(text)
+    original = build_evidence(
+        snapshot=captured.snapshot, element=captured.element,
+        start=40 if clipped else 0, end=len(text) - 40 if clipped else len(text),
+    )
+    task = RetrievalTask(route="upload", query="Explain target_call", k=1,
+                         requirement={"aspects": ["target_call"]})
+
+    packet = prepare_evidence_packet(
+        [original], max_items=1, snippet_char_limit=80, evidence_char_budget=80,
+        query=task.query, requirements_by_evidence={original.id: [task]},
+    )
+
+    assert len(packet) == 1
+    selected = packet[0]
+    assert "target_call" in selected.excerpt
+    assert 0 < len(selected.excerpt) <= 80
+    assert original.selection.start <= selected.selection.start < selected.selection.end <= original.selection.end
+    assert selected.excerpt == text[selected.selection.start:selected.selection.end]
+    assert selected.snapshot == original.snapshot
+    assert selected.element == original.element
+
+
+@pytest.mark.parametrize("language", ["python", "javascript"])
+def test_related_partial_line_precedes_an_unrelated_complete_line(language):
+    """A complete unrelated line cannot displace the requested anchor in a clipped line."""
+    text = 'unrelated = 1\nPROMPT = "' + "context " * 100 + '"\n'
+    captured = evidence(text)
+    element = captured.element.model_copy(update={"language": language})
+    original = build_evidence(snapshot=captured.snapshot, element=element, end=500)
+    task = RetrievalTask(route="upload", query="Explain PROMPT", k=1,
+                         requirement={"aspects": ["PROMPT"]})
+
+    packet = prepare_evidence_packet(
+        [original], max_items=1, snippet_char_limit=80, evidence_char_budget=80,
+        query=task.query, requirements_by_evidence={original.id: [task]},
+    )
+
+    assert len(packet) == 1
+    assert "PROMPT" in packet[0].excerpt
+    assert len(packet[0].excerpt) <= 80
+    assert packet[0].excerpt == text[packet[0].selection.start:packet[0].selection.end]
+    assert packet[0].selection.end <= original.selection.end
+
+
+@given(
+    prefix=st.text(alphabet="abc 한글\t\n\r()", max_size=80),
+    suffix=st.text(alphabet="xyz 한글\t\n\r()", max_size=80),
+    budget=st.integers(min_value=len("target_call"), max_value=100),
+)
+def test_partial_code_selection_preserves_an_available_anchor_within_its_source(prefix, suffix, budget):
+    """Arbitrary clipped code keeps a fitting literal anchor without changing or widening its source."""
+    text = "unselected_prefix" + prefix + " target_call " + suffix + "unselected_suffix"
+    captured = evidence(text)
+    original = build_evidence(snapshot=captured.snapshot, element=captured.element,
+                              start=len("unselected_prefix"), end=len(text) - len("unselected_suffix"))
+    task = RetrievalTask(route="upload", query="target_call", k=1, requirement={"aspects": ["target_call"]})
+
+    packet = prepare_evidence_packet(
+        [original], max_items=1, snippet_char_limit=budget, evidence_char_budget=budget,
+        query=task.query, requirements_by_evidence={original.id: [task]},
+    )
+
+    assert len(packet) == 1
+    selected = packet[0]
+    assert "target_call" in selected.excerpt
+    assert len(selected.excerpt) <= budget
+    assert original.selection.start <= selected.selection.start < selected.selection.end <= original.selection.end
+    assert selected.excerpt == text[selected.selection.start:selected.selection.end]
+    assert selected.snapshot == original.snapshot
+    assert selected.element == original.element
+
+
+def test_partial_code_keeps_a_literal_anchor_across_source_lines():
+    """An anchor accepted by whitespace-normalized coverage also survives source range selection."""
+    text = 'PROMPT = """' + "prefix " * 40 + "target\ncall" + " suffix" * 40 + '"""\n'
+    original = evidence(text)
+    task = RetrievalTask(route="upload", query="target call", k=1, requirement={"aspects": ["target call"]})
+
+    packet = prepare_evidence_packet(
+        [original], max_items=1, snippet_char_limit=80, evidence_char_budget=80,
+        query=task.query, requirements_by_evidence={original.id: [task]},
+    )
+
+    assert len(packet) == 1
+    assert "target\ncall" in packet[0].excerpt
+    assert packet[0].excerpt == text[packet[0].selection.start:packet[0].selection.end]
+    assert len(packet[0].excerpt) <= 80
+
+
+def test_topic_selection_keeps_the_requested_suffix_of_a_qualified_identifier():
+    """A generic query focuses the actual requested identifier even when its qualifier exceeds the budget."""
+    text = "result = " + "namespace." * 8 + "target_call(" + "parameter," * 30 + ")\n"
+    original = evidence(text)
+    task = RetrievalTask(route="upload", query="target_call", k=1)
+
+    packet = prepare_evidence_packet(
+        [original], max_items=1, snippet_char_limit=24, evidence_char_budget=24,
+        query=task.query, requirements_by_evidence={original.id: [task]},
+    )
+
+    assert len(packet) == 1
+    assert "target_call" in packet[0].excerpt
+    assert packet[0].excerpt == text[packet[0].selection.start:packet[0].selection.end]
+    assert len(packet[0].excerpt) <= 24
