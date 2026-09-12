@@ -68,9 +68,11 @@ def chunk_python_text(
     chunk_size: int,
     chunk_overlap: int,
     source_content: bytes | None = None,
+    source_uri: str | None = None,
+    title: str | None = None,
 ) -> ChunkedDocument:
     snapshot = build_snapshot(
-        source_uri=path, title=Path(path).name, media_type="text/x-python",
+        source_uri=source_uri or path, title=title or Path(path).name, media_type="text/x-python",
         source_type="upload", content=source_content if source_content is not None else text,
         parser="python-ast", parser_version="1",
     )
@@ -107,9 +109,11 @@ def chunk_notebook(
     chunk_size: int,
     chunk_overlap: int,
     source_content: bytes | str | None = None,
+    source_uri: str | None = None,
+    title: str | None = None,
 ) -> ChunkedDocument:
     snapshot = build_snapshot(
-        source_uri=path, title=Path(path).name, media_type="application/x-ipynb+json",
+        source_uri=source_uri or path, title=title or Path(path).name, media_type="application/x-ipynb+json",
         source_type="upload", content=source_content if source_content is not None else json.dumps(notebook, ensure_ascii=False),
         parser="notebook-source", parser_version="1", parser_config={"line_endings": "LF"},
     )

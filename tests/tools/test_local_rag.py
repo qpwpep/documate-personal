@@ -52,6 +52,91 @@ def _write_notebook(path: Path, *sources: str) -> None:
 
 class LocalRagTest(unittest.TestCase):
     @patch("src.infra.chroma_store.OpenAIEmbeddings", return_value=_FakeEmbeddings())
+    def test_long_line_search_excerpt_survives_synthesis_and_exact_citation(self, _embeddings) -> None:
+        """A retrieved fragment of a long source line remains model-visible and exactly citable."""
+        import time
+
+        from src.core.answer_schema import AnswerDocument, CodeBlock, ContentUnit, UnitCheck
+        from src.core.contracts import PlannerState
+        from src.core.contracts.boundary.graph import build_graph_state_input
+        from src.core.planner_schema import PlannerOutput, RetrievalTask
+        from src.core.request_contracts import RequestContract
+        from src.runtime.nodes.retrieval.executor import collect_retrieval_result
+        from src.runtime.nodes.synthesis.budgets import resolve_synthesis_budget_profile
+        from src.runtime.nodes.synthesis.context import build_synthesis_context, prepare_synthesis_inputs
+        from src.runtime.nodes.synthesis.pipeline import run_synthesis_pipeline
+
+        class ExcerptSynthesizer:
+            def __init__(self):
+                self.packet = []
+
+            def invoke(self, messages):
+                raw = str(messages[-1].content)
+                self.packet = json.loads(raw[raw.index("[", len("[Evidence Packet]")):])
+                source = self.packet[0]
+                return AnswerDocument(blocks=[CodeBlock(language="python", content=ContentUnit(
+                    text=source["excerpt"], basis="excerpt", refs=[source["id"]],
+                ))])
+
+        text = "PROMPT = " + repr("explain something " * 300)
+        task = RetrievalTask(route="upload", query="explain PROMPT", k=4)
+        with TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "uploads" / "long-line-synthesis" / "source.py"
+            path.parent.mkdir(parents=True)
+            path.write_text(text, encoding="utf-8")
+            handle = build_temp_retriever(str(path), api_key="test-key")
+            try:
+                payload = build_upload_search_tool()(query=task.query, k=task.k, retriever=handle.retriever)
+            finally:
+                handle.cleanup()
+        errors = []
+        hit_payloads, diagnostic = collect_retrieval_result(
+            raw_payload=payload, tool_name="upload_search", route="upload", query=task.query,
+            attempt=1, local_errors=errors, task=task,
+        )
+        hits = parse_search_hits(hit_payloads)
+        self.assertEqual(errors, [])
+        self.assertEqual(diagnostic.status, "success")
+        self.assertTrue(hits)
+        self.assertEqual({len(hit.evidence.excerpt) for hit in hits}, {500})
+
+        plan = PlannerOutput(use_retrieval=True, tasks=[task])
+        state = build_graph_state_input(
+            user_input=task.query, planner=PlannerState(output=plan), request_contract=RequestContract(),
+            retrieval={"hit_log": hit_payloads},
+        )
+        context = build_synthesis_context(state=state, has_default_slack_destination=False)
+        profile = resolve_synthesis_budget_profile(
+            user_input=task.query, planner_output=plan, snippet_char_limit=1800,
+        )
+        prepared = prepare_synthesis_inputs(
+            state=state, context=context, budget_profile=profile, max_turns=6,
+            prompt_snippet_char_limit=profile.snippet_chars, prompt_evidence_char_budget=profile.evidence_chars,
+        )
+        self.assertTrue(prepared.evidence_packet)
+        synthesizer = ExcerptSynthesizer()
+        outcome = run_synthesis_pipeline(
+            structured_synthesizer=synthesizer, structured_synthesizer_compact=None,
+            prepared=prepared, compact_prepared=None, stage_started=time.perf_counter(),
+        )
+        self.assertEqual(outcome.synthesis_errors, [])
+        self.assertTrue(synthesizer.packet[0]["is_partial"])
+        evidence = prepared.evidence_packet[0]
+        self.assertTrue(any(
+            evidence.snapshot == hit.evidence.snapshot and evidence.element == hit.evidence.element
+            and hit.evidence.selection.start <= evidence.selection.start < evidence.selection.end <= hit.evidence.selection.end
+            for hit in hits
+        ))
+        self.assertEqual(synthesizer.packet[0]["excerpt"], text[evidence.selection.start:evidence.selection.end])
+        self.assertEqual([citation.evidence for citation in outcome.result.citations], [evidence])
+        self.assertEqual(outcome.result.content.blocks[0].content, ContentUnit(
+            text=evidence.excerpt, basis="excerpt", refs=[evidence.id],
+        ))
+        self.assertEqual(outcome.result.checks, [UnitCheck(
+            unit_id="b0.content", reference_status="resolved", support_status="exact_match",
+        )])
+
+    @patch("src.infra.chroma_store.OpenAIEmbeddings", return_value=_FakeEmbeddings())
     def test_index_metadata_stays_compact_and_returned_citations_survive_cleanup(self, _embeddings) -> None:
         """The real index stores lightweight locations while returned citations own their source."""
         text = ("# source marker\n" + ("value = 123456789\n" * 1400))[:20480]
