@@ -6,6 +6,7 @@ import unittest
 from src.app.web.agent_request_service import AgentRequestService
 from src.app.web.schemas import AgentRequest, AgentResponse
 from src.core.answer_schema import export_answer_text
+from src.core.uploads import UploadManifest
 from tests.web.answer_fixtures import response_payload
 
 
@@ -27,12 +28,7 @@ class _FakeSessionStore:
     def __init__(self, agent_answer: dict[str, object]) -> None:
         self.agent_answer = agent_answer
         self.agent_manager = object()
-        self.get_calls: list[str] = []
         self.run_calls: list[dict[str, object]] = []
-
-    def get_or_create(self, session_id: str):
-        self.get_calls.append(session_id)
-        return self.agent_manager
 
     def run_session_request(
         self,
@@ -65,7 +61,7 @@ class _FakeSessionStore:
                 summary="근거 요약: docs 1건",
                 evidence_count=1,
             )
-        return self.agent_manager, dict(self.agent_answer), 12
+        return self.agent_manager, dict(self.agent_answer), 12, UploadManifest(epoch="session-epoch", revision=0)
 
 
 async def _final_response(service: AgentRequestService, *, request_id: str, request_data: AgentRequest):
@@ -129,11 +125,12 @@ class AgentRequestServiceTest(unittest.TestCase):
         )
 
         self.assertEqual(without_debug.response.model_dump(), with_debug.response.model_dump())
+        self.assertEqual(without_debug.upload_manifest, UploadManifest(epoch="session-epoch", revision=0))
+        self.assertEqual(without_debug.upload_manifest, with_debug.upload_manifest)
         self.assertIsNone(without_debug.debug)
         self.assertIsNotNone(with_debug.debug)
         self.assertEqual(export_answer_text(without_debug.response), "fallback answer")
         self.assertEqual(cleaner.calls[0]["current_session_id"], "demo-session")
-        self.assertEqual(store.get_calls, ["demo-session", "demo-session"])
         self.assertIsNotNone(store.run_calls[0]["progress_emitter"])
 
     def test_service_builds_session_metadata_snapshot_before_dispatch(self) -> None:

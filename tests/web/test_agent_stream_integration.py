@@ -26,9 +26,7 @@ def agent_server(tmp_path, monkeypatch):
         slack_bot_token="", slack_default_user_id="", slack_default_dm_email="",
     )
     monkeypatch.setattr("src.app.web.app.get_settings", lambda: settings)
-    monkeypatch.setattr("src.infra.runtime_paths.get_uploads_dir", lambda: tmp_path / "uploads")
-    monkeypatch.setattr("src.app.web.cleanup.get_uploads_dir", lambda: tmp_path / "uploads")
-    monkeypatch.setattr("src.app.web.cleanup.get_save_text_output_dir", lambda: tmp_path / "save_text")
+    monkeypatch.setattr("src.infra.runtime_paths.get_project_root_path", lambda: tmp_path)
     monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
     monkeypatch.setenv("LANGSMITH_TRACING", "false")
     monkeypatch.setenv("LANGCHAIN_TRACING_V2", "false")

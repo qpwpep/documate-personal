@@ -4,8 +4,12 @@ import tempfile
 import threading
 import time
 import unittest
+import json
 from pathlib import Path
 from unittest.mock import patch
+from uuid import uuid4
+
+import pytest
 
 from langchain_core.embeddings import Embeddings
 from langchain_core.messages import AIMessage, HumanMessage
@@ -19,6 +23,9 @@ from src.infra.tools.local_rag import build_temp_retriever
 from src.app.web.agent_request_support import build_session_metadata_snapshot
 from src.app.web.session_store import InMemorySessionStore, SessionEntry
 from src.app.web.schemas import AgentRequest
+from src.app.web.upload_service import UploadService
+from src.core.request_contracts import WireRequestContract
+from src.core.uploads import UploadAddition, UploadContext, UploadSyncRequest
 
 
 class _FakeEmbeddings(Embeddings):
@@ -146,6 +153,22 @@ class UploadSessionIsolationTest(unittest.TestCase):
             self.assertEqual(handle_two.collection_name, "upload-session-session-two")
             self.assertEqual(sources, [str(path_two)])
 
+    @patch("src.infra.tools.local_rag.client.build_openai_embeddings", return_value=_FakeEmbeddings())
+    def test_failed_legacy_cleanup_cannot_later_delete_a_reused_collection(self, _mock_embeddings) -> None:
+        """Legacy collection names are reused, so failed disposal must not become a delayed deletion."""
+        original = build_temp_retriever(self._upload("old.py"), api_key="test-key")
+        database = original._vectorstore._client
+        with patch.object(database, "delete_collection", side_effect=RuntimeError("unavailable")):
+            with self.assertRaises(RuntimeError):
+                original.cleanup()
+        current = build_temp_retriever(self._upload("new.py", "value = 2\n"), api_key="test-key")
+        try:
+            original.cleanup()
+            self.assertEqual(database.get_collection(current.collection_name).name, current.collection_name)
+        finally:
+            if current.collection_name in {collection.name for collection in database.list_collections()}:
+                current.cleanup()
+
     @patch("src.app.agent_manager.build_temp_retriever")
     def test_agent_manager_cleans_previous_handle_when_upload_changes(
         self,
@@ -244,13 +267,15 @@ class UploadSessionIsolationTest(unittest.TestCase):
         handle = _FakeHandle("upload-session-session")
         mock_build_temp_retriever.return_value = handle
 
-        manager.run_agent_flow("with upload", upload_file_path=self._upload())
+        borrowed_path = self._upload()
+        manager.run_agent_flow("with upload", upload_file_path=borrowed_path)
         manager.run_agent_flow("exit")
 
         self.assertEqual(handle.cleanup_calls, 1)
         self.assertIsNone(manager.upload_retriever_handle)
         self.assertEqual(manager.messages, [])
         self.assertIsNone(manager.memory_summary)
+        self.assertTrue(Path(borrowed_path).is_file())
 
     @patch("src.app.agent_manager.build_temp_retriever")
     def test_agent_manager_cleans_handle_on_exception(self, mock_build_temp_retriever) -> None:
@@ -493,7 +518,7 @@ class SessionStoreCleanupTest(unittest.TestCase):
 
         def worker(index: int) -> None:
             barrier.wait()
-            _agent, agent_answer, session_lock_wait_ms = store.run_session_request(
+            _agent, agent_answer, session_lock_wait_ms, _manifest = store.run_session_request(
                 session_id="demo-session",
                 session_metadata=build_session_metadata_snapshot(
                     AgentRequest(query=f"question-{index}", session_id="demo-session")
@@ -514,6 +539,109 @@ class SessionStoreCleanupTest(unittest.TestCase):
         self.assertEqual(sorted(answer for _, answer in results), ["ok", "ok"])
         self.assertTrue(any(wait_ms > 0 for wait_ms, _ in results))
         self.assertEqual(session_entry.active_request_count, 0)
+
+
+class _UploadContractChatModel:
+    """Deterministic model boundary for real manager, graph and retrieval calls."""
+
+    def __init__(self, schema_name=""):
+        self.schema_name = schema_name
+
+    def with_structured_output(self, schema, **_kwargs):
+        return _UploadContractChatModel(schema["name"])
+
+    def invoke(self, messages):
+        if self.schema_name == "PlannerOutput":
+            parsed = {
+                "use_retrieval": True,
+                "tasks": [{"route": "upload", "query": "read source", "k": 4}],
+                "request_contract": WireRequestContract().model_dump(mode="json"),
+            }
+        elif self.schema_name == "AnswerDocument":
+            packet = json.loads(str(messages[-1].content).split("\n", 2)[2])
+            parsed = {"blocks": [{"type": "code", "language": "python", "content": {
+                "text": item["excerpt"], "basis": "excerpt", "refs": [item["id"]],
+            }} for item in packet]}
+        else:
+            return AIMessage(content="Conversation summary.")
+        return {"parsed": parsed, "parsing_error": None, "raw": AIMessage(content="")}
+
+
+@pytest.fixture
+def managed_upload_agent(tmp_path, monkeypatch):
+    monkeypatch.setattr("src.infra.runtime_paths.get_project_root_path", lambda: tmp_path)
+    monkeypatch.setattr("src.app.web.cleanup.get_project_root_path", lambda: tmp_path)
+    monkeypatch.setattr("src.app.web.upload_service.get_project_root_path", lambda: tmp_path)
+    monkeypatch.setattr("src.infra.tools.local_rag.client.build_openai_embeddings", lambda _key: _FakeEmbeddings())
+    monkeypatch.setattr("src.infra.chroma_store.OpenAIEmbeddings", lambda **_kwargs: _FakeEmbeddings())
+    monkeypatch.setattr("src.infra.llm.ChatOpenAI", lambda **_kwargs: _UploadContractChatModel())
+    monkeypatch.setenv("LANGSMITH_TRACING", "false")
+    monkeypatch.setenv("LANGCHAIN_TRACING_V2", "false")
+    settings = AppSettings(_env_file=None, openai_api_key="test-key", tavily_api_key="test")
+    store = InMemorySessionStore(settings, lambda: AgentFlowManager(settings))
+    service = UploadService(settings=settings, session_store=store)
+    source = tmp_path / "uploads" / "session-a" / "staging" / "source.py"
+    source.parent.mkdir(parents=True)
+    source.write_text("managed_value = 1\n", encoding="utf-8")
+    before = service.get_manifest("session-a")
+    before = service.sync("session-a", UploadSyncRequest(
+        epoch=before.epoch, expected_revision=before.revision, operation_id=uuid4().hex,
+        add=[UploadAddition(path=str(source), name=source.name)],
+    )).manifest
+    agent = store.get_or_create("session-a")
+    owned = Path(agent._ensure_session().upload_records[0].path)
+    try:
+        yield agent, service, before, source, owned
+    finally:
+        store.close_all()
+
+
+@pytest.mark.parametrize("legacy_path_present", [False, True])
+def test_direct_legacy_transition_retires_managed_uploads_and_rejects_old_context(
+    managed_upload_agent, legacy_path_present,
+):
+    """Changing from managed attachments to a legacy call retires their source set and version together."""
+    agent, service, before, source, owned = managed_upload_agent
+    borrowed = source.with_name("borrowed.py")
+    borrowed.write_text("borrowed_value = 2\n", encoding="utf-8")
+    original = agent.run_agent_flow("read uploads", uploads=before.context())
+    assert {item.evidence.snapshot.title for item in AnswerResponse.model_validate(original["response"]).citations} == {"source.py"}
+    result = agent.run_agent_flow("read uploads", upload_file_path=str(borrowed) if legacy_path_present else None)
+    after = service.get_manifest("session-a")
+    assert after.files == []
+    assert after.epoch == before.epoch and after.revision > before.revision
+    assert not owned.exists() and source.is_file() and borrowed.is_file()
+    response = AnswerResponse.model_validate(result["response"])
+    assert {item.evidence.snapshot.title for item in response.citations} == ({"borrowed.py"} if legacy_path_present else set())
+
+    stale = agent.run_agent_flow("read uploads", uploads=before.context())
+    assert "UPLOAD_REVISION_CONFLICT" in export_answer_text(AnswerResponse.model_validate(stale["response"]))
+    assert service.get_manifest("session-a") == after
+    empty_context = agent.run_agent_flow("read uploads", uploads=after.context())
+    assert AnswerResponse.model_validate(empty_context["response"]).citations == []
+    if legacy_path_present:
+        repeated = agent.run_agent_flow("read uploads", upload_file_path=str(borrowed))
+        assert {item.evidence.snapshot.title for item in AnswerResponse.model_validate(repeated["response"]).citations} == {"borrowed.py"}
+        borrowed.write_text("borrowed_value = 3\n", encoding="utf-8")
+        replaced = agent.run_agent_flow("read uploads", upload_file_path=str(borrowed))
+        assert "borrowed_value = 3" in export_answer_text(AnswerResponse.model_validate(replaced["response"]))
+        cleared = agent.run_agent_flow("read uploads")
+        assert AnswerResponse.model_validate(cleared["response"]).citations == []
+        assert borrowed.is_file()
+
+
+def test_direct_stale_context_cannot_reset_current_managed_uploads(managed_upload_agent):
+    """A stale versioned reset preserves the current epoch, files and searchable source."""
+    agent, service, before, _source, owned = managed_upload_agent
+    stale_context = UploadContext(epoch=before.epoch, revision=before.revision - 1)
+
+    reset = agent.run_agent_flow("exit", uploads=stale_context)
+
+    assert "UPLOAD_REVISION_CONFLICT" in export_answer_text(AnswerResponse.model_validate(reset["response"]))
+    assert service.get_manifest("session-a") == before
+    assert owned.is_file()
+    current = agent.run_agent_flow("read uploads", uploads=before.context())
+    assert {item.evidence.snapshot.title for item in AnswerResponse.model_validate(current["response"]).citations} == {"source.py"}
 
 
 if __name__ == "__main__":

@@ -16,6 +16,7 @@ from src.app.web.agent_request_support import build_session_metadata_snapshot, n
 from src.app.web.cleanup import RuntimeCleaner, validate_upload_file_path
 from src.app.web.schemas import AgentDebugInfo, AgentRequest, AgentResponse, AgentStreamEvent
 from src.core.answer_schema import AnswerResponse
+from src.core.uploads import UploadManifest
 from src.app.web.session_store import InMemorySessionStore
 
 
@@ -37,12 +38,14 @@ def _query_log_fields(query: str) -> dict[str, Any]:
 class AgentRequestResult:
     response: AnswerResponse
     trace: str
+    upload_manifest: UploadManifest
     debug: AgentDebugInfo | None = None
 
     def to_response(self) -> AgentResponse:
         return AgentResponse(
             response=self.response,
             trace=self.trace,
+            upload_manifest=self.upload_manifest,
             debug=self.debug,
         )
 
@@ -116,9 +119,10 @@ class AgentRequestService:
         user_query = request_data.query
         session_id = request_data.session_id
         self._runtime_cleaner.run_once(force=False, current_session_id=session_id)
+        # Reject invalid legacy paths before allocating a session; validation is repeated
+        # under the session lock immediately before capturing immutable bytes.
         upload_file_path = validate_upload_file_path(request_data.upload_file_path, session_id)
         session_metadata = build_session_metadata_snapshot(request_data)
-        agent_manager = self._session_store.get_or_create(session_id)
 
         log_event(
             logger,
@@ -126,7 +130,6 @@ class AgentRequestService:
             "agent_request",
             session_id=session_id[:8],
             request_id=request_id,
-            agent_id=id(agent_manager),
             **_query_log_fields(user_query),
             upload_file_path=upload_file_path,
         )
@@ -140,7 +143,9 @@ class AgentRequestService:
         }
         if progress_emitter is not None:
             run_request_kwargs["progress_emitter"] = progress_emitter
-        agent_manager, agent_answer, session_lock_wait_ms = self._session_store.run_session_request(
+        if request_data.uploads is not None:
+            run_request_kwargs["uploads"] = request_data.uploads
+        agent_manager, agent_answer, session_lock_wait_ms, upload_manifest = self._session_store.run_session_request(
             **run_request_kwargs
         )
         latency_ms_server = int((time.monotonic() - started) * 1000)
@@ -166,6 +171,7 @@ class AgentRequestService:
         return AgentRequestResult(
             response=response_payload,
             trace=f"Session ID: {session_id}, Request ID: {request_id}, Agent ID: {id(agent_manager)}",
+            upload_manifest=upload_manifest,
             debug=debug_info if request_data.include_debug else None,
         )
 

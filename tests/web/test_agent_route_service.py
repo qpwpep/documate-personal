@@ -100,8 +100,9 @@ class AgentRouteServiceDelegationTest(unittest.TestCase):
         })
         self.assertEqual(stream["x-sse-events"]["final_response"], {"$ref": "#/components/schemas/AgentResponse"})
         final = schema["components"]["schemas"]["AgentResponse"]
-        self.assertEqual(set(final["properties"]), {"response", "trace", "debug"})
+        self.assertEqual(set(final["properties"]), {"response", "trace", "debug", "upload_manifest"})
         self.assertIn("AgentDebugInfo", schema["components"]["schemas"])
+        self.assertIn("UploadManifest", schema["components"]["schemas"])
 
 
 if __name__ == "__main__":
