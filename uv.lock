@@ -353,7 +353,7 @@ requires-dist = [
     { name = "python-dotenv", specifier = ">=1.2.1" },
     { name = "requests", specifier = ">=2.32.5" },
     { name = "slack-sdk", specifier = ">=3.37.0" },
-    { name = "streamlit", specifier = ">=1.50.0" },
+    { name = "streamlit", specifier = ">=1.54.0" },
     { name = "uvicorn", specifier = ">=0.38.0" },
 ]
 
