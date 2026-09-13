@@ -8,6 +8,7 @@ from src.core.answer_schema import AnswerResponse, export_answer_text, iter_cont
 from src.core.domain_docs import DEFAULT_DOCS
 from src.core.evidence import EvidenceRef, SearchHit
 from .config_models import BenchmarkCase
+from .result_models import EvidenceAssessment
 
 
 _FAILURE_TEXT_PATTERNS = [
@@ -113,8 +114,15 @@ def _source_selection_contains(observed: EvidenceRef, cited: EvidenceRef) -> boo
     return observed.selection.start <= cited.selection.start < cited_end <= observed_end
 
 
-def _traceable_refs(response: AnswerResponse, observed_hits: list[SearchHit]) -> set[str]:
+def _traceable_refs(response: AnswerResponse, observed_hits: list[SearchHit],
+                    evidence_scope: EvidenceAssessment | None = None) -> set[str]:
     used = {ref for _, unit in iter_content_units(response.content) for ref in unit.refs}
+    if evidence_scope is not None:
+        if evidence_scope.status != "complete":
+            return set()
+        verified = {item.id: item for item in evidence_scope.verified_evidence}
+        return {citation.evidence.id for citation in response.citations
+                if citation.evidence.id in used and verified.get(citation.evidence.id) == citation.evidence}
     return {
         citation.evidence.id
         for citation in response.citations
@@ -129,6 +137,7 @@ def score_citation_traceability(
     response: AnswerResponse | None,
     observed_hits: list[SearchHit],
     called_tools: list[str],
+    evidence_scope: EvidenceAssessment | None = None,
 ) -> float:
     required_routes = []
     if case.require_official_citation:
@@ -139,7 +148,7 @@ def score_citation_traceability(
         return 1.0
     if response is None:
         return 0.0
-    traceable = _traceable_refs(response, observed_hits)
+    traceable = _traceable_refs(response, observed_hits, evidence_scope)
     route_tools = {"docs": "tavily_search", "upload": "upload_search"}
     valid_routes = {
         citation.evidence.route
@@ -153,7 +162,8 @@ def score_citation_traceability(
     used = {ref for _, unit in iter_content_units(response.content) for ref in unit.refs}
     coverage = len(used.intersection(traceable)) / len(used) if used else 0.0
     route_coverage = sum(
-        route in valid_routes and route_tools[route] in called_tools for route in required_routes
+        route in valid_routes and (evidence_scope is not None or route_tools[route] in called_tools)
+        for route in required_routes
     ) / len(required_routes)
     return min(coverage, route_coverage)
 
@@ -164,6 +174,7 @@ def score_reference_coverage(
     response: AnswerResponse | None,
     observed_hits: list[SearchHit],
     validator_reason: str | None = None,
+    evidence_scope: EvidenceAssessment | None = None,
 ) -> float:
     """Measure reference coverage only; semantic groundedness belongs to the judge."""
     if response is None or not export_answer_text(response).strip():
@@ -174,7 +185,7 @@ def score_reference_coverage(
     units = [unit for _, unit in iter_content_units(response.content) if unit.basis != "interaction"]
     if not units or validator_reason == "no_evidence":
         return 0.0
-    traceable = _traceable_refs(response, observed_hits)
+    traceable = _traceable_refs(response, observed_hits, evidence_scope)
     return sum(bool(unit.refs) and all(ref in traceable for ref in unit.refs) for unit in units) / len(units)
 
 
@@ -214,12 +225,13 @@ def compute_rule_scores(
     synthesis_mode: str | None = None,
     slack_delivery_required: bool = False,
     slack_delivery_status: str = "not_applicable",
+    evidence_scope: EvidenceAssessment | None = None,
 ) -> dict[str, float]:
     response_text = export_answer_text(response) if response is not None else ""
     return {
         "answer_quality": score_answer_quality(case, response_text, observed_hits, synthesis_mode=synthesis_mode),
-        "reference_coverage": score_reference_coverage(case=case, response=response, observed_hits=observed_hits, validator_reason=validator_reason),
-        "citation_traceability": score_citation_traceability(case=case, response=response, observed_hits=observed_hits, called_tools=called_tools),
+        "reference_coverage": score_reference_coverage(case=case, response=response, observed_hits=observed_hits, validator_reason=validator_reason, evidence_scope=evidence_scope),
+        "citation_traceability": score_citation_traceability(case=case, response=response, observed_hits=observed_hits, called_tools=called_tools, evidence_scope=evidence_scope),
         "tool_choice": score_tool_choice(case, called_tools, slack_delivery_required=slack_delivery_required, slack_delivery_status=slack_delivery_status),
         "format_language": score_format_language(case=case, runtime_errors=runtime_errors, response_errors=response_errors, judge_errors=judge_errors, response_text=response_text),
     }

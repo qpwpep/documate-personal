@@ -10,8 +10,10 @@ from src.core.contracts.boundary.planner import parse_planner_diagnostic
 from src.core.contracts.boundary.retrieval import parse_retrieval_diagnostics
 from src.core.contracts.debug import DEBUG_CRITICAL_FIELDS, DEBUG_REQUIRED_FIELDS, DEBUG_SCHEMA_VERSION
 from src.core.contracts.debug import LLMCallMetadata, ModelUsageStatus, PlannerDiagnostic, RetrievalDiagnostic, TokenUsage
+from src.core.contracts.provenance import AnswerProvenance
 from src.core.evidence import SearchHit
 from src.core.latency import LatencyBreakdownModel
+from ..result_models import EvidenceAssessment
 
 
 _REQUEST_ID_PATTERN = re.compile(r"Request ID:\s*([^,\s]+)")
@@ -23,6 +25,8 @@ class ParsedResponseData:
     response_text: str = ""
     response: AnswerResponse | None = None
     debug: dict[str, Any] | None = None
+    answer_provenance: AnswerProvenance | None = None
+    evidence_assessment: EvidenceAssessment | None = None
     observed_hits: list[SearchHit] = field(default_factory=list)
     retrieval_diagnostics: list[RetrievalDiagnostic] = field(default_factory=list)
     planner_diagnostics: PlannerDiagnostic | None = None
@@ -53,10 +57,19 @@ class ParsedResponseData:
     actions: list[ActionReceipt] = field(default_factory=list)
 
 
-def _parse_token_usage(raw_debug: dict[str, Any] | None) -> TokenUsage | None:
+def _parse_token_usage(raw_debug: dict[str, Any] | None, *, response_errors: list[str]) -> TokenUsage | None:
     if not raw_debug:
         return None
-    return parse_token_usage(raw_debug.get("token_usage"))
+    raw_usage = raw_debug.get("token_usage")
+    if raw_usage is None:
+        return None
+    try:
+        usage = parse_token_usage(raw_usage)
+    except (TypeError, ValueError, OverflowError):
+        usage = None
+    if usage is None:
+        response_errors.append("debug.token_usage must contain finite integer token counts")
+    return usage
 
 
 def _parse_llm_calls(
@@ -75,7 +88,24 @@ def _parse_llm_calls(
     for index, item in enumerate(raw_items):
         if not isinstance(item, dict):
             response_errors.append(f"debug.llm_calls[{index}] must be an object")
-    return parse_llm_calls(raw_items)
+            continue
+        try:
+            calls = parse_llm_calls([item])
+            if not calls:
+                raise ValueError("call stage or path is invalid")
+            for call in calls:
+                usage_sources = [call.usage_metadata, call.response_metadata.get("token_usage")]
+                for usage in usage_sources:
+                    if not isinstance(usage, dict):
+                        continue
+                    for key in ("input_tokens", "output_tokens", "prompt_tokens", "completion_tokens", "total_tokens"):
+                        if key in usage and usage[key] is not None:
+                            if int(usage[key]) < 0:
+                                raise ValueError(f"{key} must be non-negative")
+            parsed.extend(calls)
+        except (TypeError, ValueError, OverflowError) as exc:
+            response_errors.append(f"debug.llm_calls[{index}] invalid: {exc}")
+    return parsed
 
 
 def _parse_string_list(
@@ -83,9 +113,10 @@ def _parse_string_list(
     *,
     label: str,
     response_errors: list[str],
+    allow_none: bool = True,
 ) -> list[str]:
     parsed: list[str] = []
-    if raw_items is None:
+    if raw_items is None and allow_none:
         return parsed
 
     if not isinstance(raw_items, list):
@@ -93,11 +124,10 @@ def _parse_string_list(
         return parsed
 
     for index, item in enumerate(raw_items):
-        text = str(item or "").strip()
-        if not text:
+        if not isinstance(item, str) or not item.strip():
             response_errors.append(f"{label}[{index}] must be a non-empty string")
             continue
-        parsed.append(text)
+        parsed.append(item.strip())
     return parsed
 
 
@@ -136,7 +166,16 @@ def _parse_retrieval_diagnostics(
     if not isinstance(raw_items, list):
         response_errors.append("debug.retrieval_diagnostics must be a list")
         return []
-    return parse_retrieval_diagnostics(raw_items)
+    parsed: list[RetrievalDiagnostic] = []
+    for index, item in enumerate(raw_items):
+        if not isinstance(item, dict):
+            response_errors.append(f"debug.retrieval_diagnostics[{index}] must be an object")
+            continue
+        try:
+            parsed.extend(parse_retrieval_diagnostics([item]))
+        except (TypeError, ValueError, OverflowError) as exc:
+            response_errors.append(f"debug.retrieval_diagnostics[{index}] invalid: {exc}")
+    return parsed
 
 
 def _parse_planner_diagnostics(
@@ -149,7 +188,11 @@ def _parse_planner_diagnostics(
     if not isinstance(raw_item, dict):
         response_errors.append("debug.planner_diagnostics must be an object")
         return None
-    return parse_planner_diagnostic(raw_item)
+    try:
+        return parse_planner_diagnostic(raw_item)
+    except (TypeError, ValueError, OverflowError) as exc:
+        response_errors.append(f"debug.planner_diagnostics invalid: {exc}")
+        return None
 
 
 def _parse_latency_breakdown(
@@ -199,6 +242,7 @@ def parse_agent_response(
     *,
     http_status: int = 200,
     request_id: str | None = None,
+    validated_response: AnswerResponse | None = None,
 ) -> ParsedResponseData:
     """Parse the complete data object from an SSE final_response event."""
     parsed = ParsedResponseData(http_status=http_status)
@@ -206,7 +250,11 @@ def parse_agent_response(
         parsed.response_errors.append("response body must be an object")
         return parsed
 
-    parsed.response_trace = body.get("trace")
+    trace_raw = body.get("trace")
+    if trace_raw is None or isinstance(trace_raw, str):
+        parsed.response_trace = trace_raw
+    else:
+        parsed.response_errors.append("trace must be a string")
     parsed.request_id = request_id or _extract_request_id(parsed.response_trace)
 
     response_raw = body.get("response")
@@ -214,7 +262,7 @@ def parse_agent_response(
         parsed.response_errors.append("response payload must be an object")
     else:
         try:
-            parsed.response = AnswerResponse.model_validate(response_raw)
+            parsed.response = validated_response if validated_response is not None else AnswerResponse.model_validate(response_raw)
             parsed.response_text = export_answer_text(parsed.response)
             parsed.actions = list(parsed.response.actions)
             if not parsed.response_text.strip() and not parsed.actions:
@@ -225,6 +273,16 @@ def parse_agent_response(
     debug_payload = body.get("debug")
     if isinstance(debug_payload, dict):
         parsed.debug = debug_payload
+        raw_provenance = debug_payload.get("answer_provenance")
+        if raw_provenance is None:
+            parsed.response_errors.append("debug.answer_provenance is missing")
+        else:
+            try:
+                parsed.answer_provenance = AnswerProvenance.model_validate(raw_provenance)
+            except (TypeError, ValueError) as exc:
+                error = f"debug.answer_provenance invalid: {exc}"
+                parsed.response_errors.append(error)
+                parsed.evidence_assessment = EvidenceAssessment(status="invalid", errors=[error])
         present_debug_keys = {str(key) for key in debug_payload.keys()}
         parsed.missing_required_debug_fields = [
             field for field in DEBUG_REQUIRED_FIELDS if field not in present_debug_keys
@@ -235,7 +293,7 @@ def parse_agent_response(
         else:
             try:
                 parsed.debug_schema_version = int(schema_version_raw)
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, OverflowError):
                 parsed.response_errors.append("debug.schema_version must be an integer")
         if parsed.debug_schema_version is not None and parsed.debug_schema_version != DEBUG_SCHEMA_VERSION:
             parsed.response_errors.append(f"debug.schema_version must be {DEBUG_SCHEMA_VERSION}")
@@ -270,23 +328,22 @@ def parse_agent_response(
             parsed.response_errors.append(
                 "critical debug fields missing: " + ", ".join(critical_missing_debug_fields)
             )
-        parsed.tool_calls = [
-            str(name)
-            for name in (debug_payload.get("tool_calls") or [])
-            if name
-        ]
+        parsed.tool_calls = _parse_string_list(
+            debug_payload.get("tool_calls"), label="debug.tool_calls",
+            response_errors=parsed.response_errors, allow_none=False,
+        )
         try:
             parsed.tool_call_count = int(
                 debug_payload.get("tool_call_count", len(parsed.tool_calls)) or len(parsed.tool_calls)
             )
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             parsed.response_errors.append("debug.tool_call_count must be an integer")
             parsed.tool_call_count = len(parsed.tool_calls)
         latency_raw = debug_payload.get("latency_ms_server")
         if latency_raw is not None:
             try:
                 parsed.latency_ms_server = int(latency_raw)
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, OverflowError):
                 parsed.response_errors.append("debug.latency_ms_server must be an integer")
         parsed.model_name = str(debug_payload.get("model_name")) if debug_payload.get("model_name") else None
         models_used_raw = debug_payload.get("models_used")
@@ -294,7 +351,7 @@ def parse_agent_response(
             parsed.models_used = [str(name) for name in models_used_raw if name]
         elif parsed.model_name:
             parsed.models_used = [parsed.model_name]
-        parsed.token_usage = _parse_token_usage(debug_payload)
+        parsed.token_usage = _parse_token_usage(debug_payload, response_errors=parsed.response_errors)
         parsed.llm_calls = _parse_llm_calls(
             debug_payload.get("llm_calls"),
             response_errors=parsed.response_errors,

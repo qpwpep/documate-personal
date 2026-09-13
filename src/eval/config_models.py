@@ -51,6 +51,7 @@ class BenchmarkCase(BaseModel):
     category: CaseCategory
     scenario: CaseScenario = "seed_mutation"
     query: str
+    setup_turns: list[str] = Field(default_factory=list)
     upload_fixture: str | None = None
     slack_channel_id: str | None = None
     slack_user_id: str | None = None

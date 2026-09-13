@@ -4,7 +4,8 @@ from collections.abc import Iterable
 
 import requests
 
-from src.core.answer_schema import AnswerDocument, finalize_answer, text_document
+from src.core.answer_schema import AnswerDocument, AnswerResponse, finalize_answer, text_document
+from src.core.contracts.provenance import AnswerProvenance, AnswerSource
 from src.core.documents import DocumentElement, SourceAnchor, build_snapshot
 from src.core.evidence import RetrievalScore, SearchHit, build_evidence
 
@@ -51,6 +52,17 @@ def plain_response(text: str | list[str]) -> dict:
         ],
     })
     return finalize_answer(document, []).model_dump(mode="json")
+
+
+def answer_provenance(response, *, source=None, body_kind="compose", evidence_packet=None) -> dict:
+    """Explicitly declare the construction inputs of a valid HTTP fixture answer."""
+    answer = response if isinstance(response, AnswerResponse) else AnswerResponse.model_validate(response)
+    parent = AnswerSource.model_validate(source) if source is not None else None
+    return AnswerProvenance(
+        body_kind=body_kind, response_hash=answer.content_hash, source=parent,
+        evidence_packet=([citation.evidence for citation in answer.citations]
+                         if evidence_packet is None else evidence_packet),
+    ).model_dump(mode="json")
 
 
 def source_evidence(*, official: bool = True, text: str = "공식 설명", source_uri: str | None = None):
