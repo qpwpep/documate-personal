@@ -6,7 +6,8 @@ from pydantic import BaseModel, Field, model_validator
 
 from src.core.answer_schema import AnswerResponse, ActionReceipt
 from src.core.contracts.debug import LLMCallMetadata, ModelUsageStatus, PlannerDiagnostic, RetrievalDiagnostic, TokenUsage
-from src.core.evidence import SearchHit
+from src.core.contracts.provenance import AnswerProvenance
+from src.core.evidence import EvidenceRef, SearchHit
 from src.core.latency import LatencyBreakdownModel
 from .config_models import CaseCategory, CaseScenario
 
@@ -21,6 +22,28 @@ class JudgeSubscores(BaseModel):
     def average(self) -> float:
         values = self.model_dump().values()
         return sum(float(value) for value in values) / 5.0
+
+
+class EvidenceAssessment(BaseModel):
+    status: Literal["complete", "unavailable", "invalid"]
+    errors: list[str] = Field(default_factory=list)
+    verified_evidence: list[EvidenceRef] = Field(default_factory=list)
+
+
+class ScenarioTurnResult(BaseModel):
+    query: str
+    request_payload: dict[str, Any]
+    http_status: int = 0
+    request_id: str | None = None
+    response: AnswerResponse | None = None
+    trace: str | None = None
+    debug: dict[str, Any] | None = None
+    answer_provenance: AnswerProvenance | None = None
+    evidence_assessment: EvidenceAssessment | None = None
+    observed_hits: list[SearchHit] = Field(default_factory=list)
+    tool_calls: list[str] = Field(default_factory=list)
+    runtime_errors: list[str] = Field(default_factory=list)
+    response_errors: list[str] = Field(default_factory=list)
 
 
 class CaseResult(BaseModel):
@@ -38,6 +61,8 @@ class CaseResult(BaseModel):
     response_text: str = ""
     response: AnswerResponse | None = None
     debug: dict[str, Any] | None = None
+    answer_provenance: AnswerProvenance | None = None
+    evidence_assessment: EvidenceAssessment | None = None
     observed_hits: list[SearchHit] = Field(default_factory=list)
     retrieval_diagnostics: list[RetrievalDiagnostic] = Field(default_factory=list)
     planner_diagnostics: PlannerDiagnostic | None = None

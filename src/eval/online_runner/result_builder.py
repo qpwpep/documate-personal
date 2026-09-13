@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from src.core.answer_schema import ActionReceipt, iter_content_units
 from ..judge_llm import LLMJudge
+from ..evidence_scope import assess_evidence_scope
 from ..metric_rules import compute_rule_scores
 from ..pricing import compute_cost_usd
 from ..config_models import BenchmarkCase, BenchmarkConfig
-from ..result_models import CaseResult, JudgeSubscores
+from ..result_models import CaseResult, JudgeSubscores, ScenarioTurnResult
 from ..weighting import (
     compute_composite_quality_score,
     compute_rule_weighted_score,
@@ -119,6 +120,7 @@ def build_case_result(
     latency_ms_e2e: int | None,
     parsed_response: ParsedResponseData,
     slack_delivery_required: bool = False,
+    prior_turns: list[ScenarioTurnResult] | None = None,
 ) -> CaseResult:
     effective_weights, weights_error = resolve_effective_weights(
         case=case,
@@ -129,6 +131,7 @@ def build_case_result(
         case_override=case.weight_override,
     )
     runtime_errors = list(parsed_response.runtime_errors)
+    response_errors = list(parsed_response.response_errors)
     if weights_error:
         runtime_errors.append(f"weight_override error: {weights_error}")
 
@@ -168,6 +171,22 @@ def build_case_result(
     llm_judge_reason: str | None = None
     judge_subscores: JudgeSubscores | None = None
     judge_input_complete: bool | None = None
+    evidence_scope = parsed_response.evidence_assessment
+    if evidence_scope is None and response is not None and (
+        parsed_response.answer_provenance is not None or prior_turns is not None
+    ):
+        evidence_scope = assess_evidence_scope(
+            response=response, provenance=parsed_response.answer_provenance,
+            observed_hits=parsed_response.observed_hits, tool_calls=parsed_response.tool_calls,
+            session_id=session_id, prior_turns=prior_turns or [],
+        )
+    if evidence_scope is not None:
+        for error in evidence_scope.errors:
+            message = f"evidence scope: {error}"
+            if error not in response_errors and message not in response_errors:
+                response_errors.append(message)
+    conversation = [{"query": turn.query, "response": turn.response,
+                     "observed_hits": (turn.debug or {}).get("observed_hits", [])} for turn in (prior_turns or [])]
     if parsed_response.response_text.strip() and config.judge_enabled:
         judge_payload = judge.build_case_payload(
             case=case,
@@ -183,6 +202,9 @@ def build_case_result(
             unchecked_unit_count=unchecked_unit_count,
             tool_call_count=parsed_response.tool_call_count,
             slack_delivery_required=slack_delivery_required,
+            conversation=conversation,
+            evidence_scope=evidence_scope.model_dump(mode="json") if evidence_scope is not None else None,
+            answer_provenance=parsed_response.answer_provenance,
         )
         judge_input_complete = judge.is_payload_complete(judge_payload)
         llm_judge_score, llm_judge_reason, judge_error, judge_subscores = judge.score_case(
@@ -199,6 +221,9 @@ def build_case_result(
             unchecked_unit_count=unchecked_unit_count,
             tool_call_count=parsed_response.tool_call_count,
             slack_delivery_required=slack_delivery_required,
+            conversation=conversation,
+            evidence_scope=evidence_scope.model_dump(mode="json") if evidence_scope is not None else None,
+            answer_provenance=parsed_response.answer_provenance,
         )
         if judge_error:
             judge_errors.append(judge_error)
@@ -209,12 +234,13 @@ def build_case_result(
         called_tools=parsed_response.tool_calls,
         observed_hits=parsed_response.observed_hits,
         runtime_errors=runtime_errors,
-        response_errors=parsed_response.response_errors,
+        response_errors=response_errors,
         judge_errors=judge_errors,
         validator_reason=parsed_response.validator_reason,
         synthesis_mode=parsed_response.synthesis_mode,
         slack_delivery_required=slack_delivery_required,
         slack_delivery_status=slack_delivery_status,
+        evidence_scope=evidence_scope,
     )
     rule_weighted = compute_rule_weighted_score(rule_scores, effective_weights)
 
@@ -241,10 +267,10 @@ def build_case_result(
         judge_pass = judge_gate_passed if judge_min_score is not None else (
             True if (config.judge_enabled and not judge_errors and llm_judge_score is not None) else None
         )
-    release_pass = bool(product_pass and not runtime_errors and not parsed_response.response_errors)
+    release_pass = bool(product_pass and not runtime_errors and not response_errors)
     gate_failures = _build_gate_failures(
         runtime_errors=runtime_errors,
-        response_errors=parsed_response.response_errors,
+        response_errors=response_errors,
         debug_errors=parsed_response.debug_errors,
         missing_required_debug_fields=parsed_response.missing_required_debug_fields,
         product_pass=product_pass,
@@ -273,6 +299,8 @@ def build_case_result(
         response_text=parsed_response.response_text,
         response=response,
         debug=parsed_response.debug,
+        answer_provenance=parsed_response.answer_provenance,
+        evidence_assessment=evidence_scope,
         observed_hits=parsed_response.observed_hits,
         retrieval_diagnostics=parsed_response.retrieval_diagnostics,
         planner_diagnostics=parsed_response.planner_diagnostics,
@@ -294,7 +322,7 @@ def build_case_result(
         edge_decisions=parsed_response.edge_decisions,
         debug_errors=parsed_response.debug_errors,
         runtime_errors=runtime_errors,
-        response_errors=parsed_response.response_errors,
+        response_errors=response_errors,
         judge_errors=judge_errors,
         judge_audit_failures=judge_audit_failures,
         actions=parsed_response.actions,

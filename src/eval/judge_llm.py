@@ -8,6 +8,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 
 from src.core.answer_schema import AnswerResponse
+from src.core.contracts.provenance import AnswerProvenance
 from src.core.evidence import SearchHit
 from .config_models import BenchmarkCase
 from .result_models import JudgeSubscores
@@ -30,8 +31,8 @@ Return ONLY JSON with this schema:
 Scoring guidance:
 - answer_quality: whether the response actually answers the user's request with useful substance rather than copying snippets.
 - groundedness: whether the exact displayed content units are supported by their referenced source snapshots. Resolved references are not semantic proof; not_evaluated means no support assessment has run.
-- citation_traceability: whether displayed refs resolve to the same versioned source and canonical element in observed hits, with cited text ranges or table cells contained in the observed selection. Budgeted subranges have different reference IDs but remain traceable. Logical element positions are valid even when physical page coordinates are unavailable.
-- tool_choice: whether the executed tools and retrieval routes match case expectations.
+- citation_traceability: use evidence_scope.verified_evidence when supplied. These are final citations independently traced through the final construction packet to current observations or the server-selected source answer. A reused citation does not require another search in the final turn. Logical element positions are valid even when physical page coordinates are unavailable. For legacy inputs without evidence_scope, compare the versioned sources and contained ranges in observed_hits.
+- tool_choice: compare only called_tools and current-turn retrieval routes with case expectations. Preparation-turn searches never satisfy or violate the final question's expected or forbidden tools.
 - format_language: whether the response follows the requested structure and restates in the user's language.
 
 Failure guidance:
@@ -42,6 +43,9 @@ Failure guidance:
 - Evaluate response.content directly. It is the exact document rendered to the user and exported for delivery.
 - For tool_action cases, do not expect citations or retrieval grounding when the case itself does not require them.
 - For tool_action cases, expect usable content and a separate action receipt; do not require a receipt appended to the body.
+- For follow-up requests, use conversation (the actual preceding questions and answers) to check that the referenced body and citations were preserved or transformed as requested.
+- answer_provenance.source identifies the server-selected source by body hash and its actual citation IDs. Conversation provides intent context, not a union of allowed sources. Evidence removed by an intermediate answer or absent from the final packet is not available through that answer.
+- When copying an existing answer is requested, assess faithful preservation rather than penalizing that requested copy as a failure to synthesize. Transformations must still satisfy the requested change and remain semantically supported by their verified references.
 - For live Slack delivery cases, a slack_notify action with status success is completion; skipped/error or a missing action is incomplete delivery.
 - For Korean queries, a non-Korean answer should score 0 on format_language.
 - Use validator_reason, retrieval_diagnostics, planner_diagnostics, and synthesis_mode as evidence when scoring.
@@ -111,6 +115,24 @@ def _is_payload_complete(payload: dict[str, Any]) -> bool:
     )
     if any(key not in payload for key in required_top_level):
         return False
+    setup_turns = payload.get("case", {}).get("setup_turns", [])
+    conversation = payload.get("conversation", [])
+    if setup_turns and (len(conversation) != len(setup_turns) or any(
+        turn.get("query") != query or not isinstance(turn.get("response"), dict)
+        for query, turn in zip(setup_turns, conversation, strict=True)
+    )):
+        return False
+    scope = payload.get("evidence_scope")
+    if scope is not None:
+        if (not isinstance(scope, dict) or scope.get("status") != "complete"
+                or scope.get("errors") != [] or not isinstance(scope.get("verified_evidence"), list)):
+            return False
+        try:
+            provenance = AnswerProvenance.model_validate(payload.get("answer_provenance"))
+        except (TypeError, ValueError):
+            return False
+        if provenance.response_hash != response.get("content_hash"):
+            return False
     return all(key in response for key in ("content", "citations", "checks", "actions", "content_hash"))
 
 
@@ -146,6 +168,9 @@ class LLMJudge:
         unchecked_unit_count: int = 0,
         tool_call_count: int | None = None,
         slack_delivery_required: bool = False,
+        conversation: list[dict[str, Any]] | None = None,
+        evidence_scope: dict[str, Any] | None = None,
+        answer_provenance: AnswerProvenance | dict[str, Any] | None = None,
     ) -> tuple[float | None, str | None, str | None, JudgeSubscores | None]:
         if not self.enabled:
             return None, None, None, None
@@ -166,6 +191,9 @@ class LLMJudge:
             unchecked_unit_count=unchecked_unit_count,
             tool_call_count=tool_call_count,
             slack_delivery_required=slack_delivery_required,
+            conversation=conversation,
+            evidence_scope=evidence_scope,
+            answer_provenance=answer_provenance,
         )
         if not self.is_payload_complete(user_prompt):
             return None, None, "invalid_eval: judge payload is incomplete", None
@@ -216,18 +244,27 @@ class LLMJudge:
         unchecked_unit_count: int = 0,
         tool_call_count: int | None = None,
         slack_delivery_required: bool = False,
+        conversation: list[dict[str, Any]] | None = None,
+        evidence_scope: dict[str, Any] | None = None,
+        answer_provenance: AnswerProvenance | dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         return {
             "case": {
                 "case_id": case.case_id,
                 "category": case.category,
                 "query": case.query,
+                "setup_turns": case.setup_turns,
                 "expected_tools": case.expected_tools,
                 "forbidden_tools": case.forbidden_tools,
+                "require_official_citation": case.require_official_citation,
+                "require_local_citation": case.require_local_citation,
                 "judge_rubric": case.judge_rubric,
                 "judge_min_score": case.judge_min_score,
             },
             "response": _normalize_jsonable(response),
+            "conversation": _normalize_jsonable(conversation or []),
+            "evidence_scope": _normalize_jsonable(evidence_scope),
+            "answer_provenance": _normalize_jsonable(answer_provenance),
             "observed_hits": _normalize_jsonable(observed_hits or []),
             "called_tools": list(tool_calls),
             "tool_call_count": int(tool_call_count or len(tool_calls)),
