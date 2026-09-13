@@ -221,14 +221,17 @@ def build_local_hit_bundle(
             chunk_text = indexed.excerpt
             if str(doc.page_content or "") != chunk_text:
                 raise ValueError("Indexed text differs from its source range")
-            if _should_preserve_full_chunk(metadata=metadata) and _looks_like_code_extraction_query(query):
-                start, end = 0, len(chunk_text)
+            if indexed.selection.cell_ids:
+                evidence = indexed
             else:
-                start, end = query_focused_range(chunk_text, query=query)
-            evidence = build_evidence(
-                snapshot=indexed.snapshot, element=indexed.element,
-                start=indexed.selection.start + start, end=indexed.selection.start + end,
-            )
+                if _should_preserve_full_chunk(metadata=metadata) and _looks_like_code_extraction_query(query):
+                    start, end = 0, len(chunk_text)
+                else:
+                    start, end = query_focused_range(chunk_text, query=query)
+                evidence = build_evidence(
+                    snapshot=indexed.snapshot, element=indexed.element,
+                    start=indexed.selection.start + start, end=indexed.selection.start + end,
+                )
         except (KeyError, TypeError, ValueError) as exc:
             retrieval_warnings.append(f"invalid_source_reference: {exc}")
             continue

@@ -11,6 +11,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from src.core.documents import DocumentElement, ParsedDocument, SourceAnchor, build_snapshot
 from src.core.evidence import build_evidence
+from src.core.table_selection import table_excerpt, table_row_units
 from src.infra.notebook_loader import load_canonical_notebook, normalize_cell_source
 
 _MAX_CODE_METADATA_CALLS = 8
@@ -36,10 +37,23 @@ class ChunkedDocument:
         element = self._elements.get(str(metadata.get("element_id") or ""))
         if element is None:
             raise ValueError("Indexed chunk points to an unknown source element")
-        evidence = build_evidence(
-            snapshot=self.parsed.snapshot, element=element,
-            start=int(metadata["start"]), end=int(metadata["end"]),
-        )
+        if metadata.get("selection_kind") == "table_cells":
+            try:
+                cell_ids = json.loads(metadata["cell_ids_json"])
+            except (KeyError, TypeError, json.JSONDecodeError) as exc:
+                raise ValueError("Indexed table selection is invalid") from exc
+            if (not isinstance(cell_ids, list) or not cell_ids
+                    or any(not isinstance(cell_id, str) for cell_id in cell_ids)
+                    or len(cell_ids) != len(set(cell_ids))):
+                raise ValueError("Indexed table selection requires unique cell IDs")
+            evidence = build_evidence(snapshot=self.parsed.snapshot, element=element, cell_ids=cell_ids)
+        else:
+            if element.table is not None:
+                raise ValueError("Indexed table is missing its cell selection")
+            evidence = build_evidence(
+                snapshot=self.parsed.snapshot, element=element,
+                start=int(metadata["start"]), end=int(metadata["end"]),
+            )
         if evidence.excerpt != chunk.page_content:
             raise ValueError("Indexed text differs from its source range")
         return Document(page_content=chunk.page_content,
@@ -228,8 +242,35 @@ def chunk_parsed_document(
     """Store each source element once and index only its stable location."""
     splitter = _build_splitter(chunk_size=chunk_size, chunk_overlap=chunk_overlap)
     docs: list[Document] = []
-    document_char_count = sum(len(element.text) for element in parsed.elements)
+    document_char_count = sum(len(table_excerpt(element.table, [cell.cell_id for cell in element.table.cells]))
+                              if element.table is not None else len(element.text) for element in parsed.elements)
     for element in parsed.elements:
+        if element.table is not None:
+            groups: list[list[str]] = []
+            pending: list[str] = []
+            for unit in table_row_units(element):
+                combined = list(dict.fromkeys([*pending, *unit]))
+                content = table_excerpt(element.table, combined)
+                if pending and len(content) > chunk_size:
+                    groups.append(pending)
+                    pending = unit
+                else:
+                    pending = combined
+            if pending:
+                groups.append(pending)
+            for cell_ids in groups:
+                content = table_excerpt(element.table, cell_ids)
+                if not content.strip():
+                    continue
+                docs.append(Document(page_content=content, metadata={
+                    "source": parsed.snapshot.source_uri,
+                    "snapshot_id": parsed.snapshot.snapshot_id,
+                    "element_id": element.element_id,
+                    "selection_kind": "table_cells",
+                    "cell_ids_json": json.dumps(sorted(cell_ids), ensure_ascii=False),
+                    "document_char_count": document_char_count,
+                }))
+            continue
         for chunk in splitter.create_documents([element.text]):
             start = int(chunk.metadata.get("start_index", -1))
             end = start + len(chunk.page_content)
