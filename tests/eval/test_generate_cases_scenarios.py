@@ -38,6 +38,29 @@ def _seed_case(case_id: str, category: str) -> BenchmarkCase:
 
 
 class GenerateCasesScenarioTest(unittest.TestCase):
+    def test_generated_scenarios_preserve_preparation_and_attachments(self) -> None:
+        seed_cases = [
+            _seed_case("seed_docs", "docs_only"),
+            _seed_case("seed_rag", "rag_only"),
+            _seed_case("seed_hybrid", "hybrid"),
+            BenchmarkCase(
+                case_id="seed_tool", category="tool_action", query="방금 답변을 저장해줘.",
+                setup_turns=["첫 파일을 설명해줘.", "두 번째 파일과 비교해줘."],
+                upload_fixtures=["first.py", "second.py"], expected_tools=["save_text"],
+            ),
+        ]
+        generated = build_generated_cases(
+            seed_cases=seed_cases, regression_seed_cases=seed_cases,
+            target=120, random_seed=42,
+        )
+        action_cases = [case for case in generated if case.category == "tool_action"]
+        self.assertEqual({case.scenario for case in action_cases}, {
+            "seed_mutation", "adversarial", "regression", "ambiguity",
+        })
+        for case in action_cases:
+            self.assertEqual(case.setup_turns, seed_cases[-1].setup_turns)
+            self.assertEqual(case.resolved_upload_fixtures, ["first.py", "second.py"])
+
     def test_target_120_balances_category_and_scenario(self) -> None:
         seed_cases = [
             _seed_case("seed_docs", "docs_only"),
