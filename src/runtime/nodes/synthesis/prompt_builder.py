@@ -10,14 +10,14 @@ from src.core.contracts.boundary.graph import get_retry_state
 from src.core.contracts.boundary.planner import get_planner_state
 from src.core.contracts.boundary.runtime import get_runtime_state
 from src.core.conversation_memory import build_untrusted_memory_prompt_messages
-from src.core.evidence import EvidenceRef
+from src.core.evidence import EvidenceRef, selected_source_anchors
 from src.core.planner_schema import RetrievalTask
 from src.core.prompts import SYS_POLICY
 from src.core.request_contracts import RequestContract
 from src.runtime.nodes.session import keep_recent_messages
 from src.runtime.nodes.synthesis.evidence_selection import (
     contains_evidence_range, matches_file_scope, missing_literal_aspects, requirement_coverage,
-    select_evidence_range, upload_file_id,
+    select_evidence_range, select_table_evidence, upload_file_id,
 )
 
 
@@ -36,6 +36,7 @@ Do not generate answer, claims, sections, confidence, citation numbers, source p
 Never write placeholder references such as 'see above code' or '위 코드 참고'. Include the concrete content.
 If evidence is insufficient, clearly state the specific limitation. Do not invent sources or imply semantic verification.
 Source selections marked is_partial omit captured text. Do not infer that omitted information is absent from the original source.
+quality_issues describe conversion limits; a complete capture does not guarantee correct extraction. source_locations are the known source regions, not character-accurate highlights of the excerpt.
 Code excerpts may begin or end inside a line or statement. Describe them as source fragments, never as independently executable complete code; do not invent missing syntax in an excerpt.
 """
 
@@ -125,9 +126,11 @@ def select_evidence_packet(
         if len(packet) >= max(0, max_items) or allowance <= 0:
             return
         if item.element.kind == "table":
-            if len(item.excerpt) > allowance:
+            selected = select_table_evidence(
+                item, limit=min(max(0, snippet_char_limit), allowance), query=query, task=task,
+            )
+            if selected is None:
                 return
-            selected = item
         else:
             limit = min(max(0, snippet_char_limit), allowance)
             if not limit:
@@ -364,6 +367,8 @@ def build_synthesis_messages(
                 item.selection.start > 0 or item.selection.end != len(item.element.text)
             ),
             "capture_scope": item.snapshot.capture_scope,
+            "quality_issues": list(item.snapshot.quality_issues),
+            "source_locations": [anchor.model_dump(mode="json") for anchor in selected_source_anchors(item)],
         }
         if item.element.table is not None and item.selection.cell_ids:
             selected_ids = set(item.selection.cell_ids)

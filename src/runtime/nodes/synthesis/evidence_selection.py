@@ -7,6 +7,7 @@ import textwrap
 
 from src.core.evidence import EvidenceRef, SearchHit, build_evidence
 from src.core.planner_schema import PlannerOutput, RetrievalTask
+from src.core.table_selection import table_excerpt, table_row_units
 
 _TOKEN_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_.-]*|[가-힣]{2,}")
 _STOPWORDS = {
@@ -245,6 +246,34 @@ def _bounded_code_range(
             (index for index, char in enumerate(text[left:right]) if not char.isspace()), 0)
         offset = max(left, min(target, right - width))
     return offset, offset + width
+
+
+def select_table_evidence(
+    item: EvidenceRef, *, limit: int, query: str = "", task: RetrievalTask | None = None,
+) -> EvidenceRef | None:
+    """Fit complete row/header units inside the retrieved cell selection."""
+    if item.element.table is None or not item.selection.cell_ids or limit <= 0:
+        return None
+    if len(item.excerpt) <= limit:
+        return item
+    topics = _tokens(query) | (_task_tokens(task) if task is not None else set())
+    topics.update(re.findall(r"\d+(?:[.,]\d+)*", query + (" " + task.query if task is not None else "")))
+    aspects = task.requirement.aspects if task is not None else []
+    units = table_row_units(item.element, allowed_cell_ids=item.selection.cell_ids)
+
+    def rank(unit: list[str]) -> tuple[int, int, int]:
+        text = table_excerpt(item.element.table, unit)
+        terms = _tokens(text) | set(re.findall(r"\d+(?:[.,]\d+)*", text))
+        return (len(aspects) - len(missing_literal_aspects(aspects, [text])), len(terms & topics), -len(text))
+
+    selected_ids: list[str] = []
+    for unit in sorted(units, key=rank, reverse=True):
+        combined = list(dict.fromkeys([*selected_ids, *unit]))
+        if len(table_excerpt(item.element.table, combined)) <= limit:
+            selected_ids = combined
+    if not selected_ids:
+        return None
+    return build_evidence(snapshot=item.snapshot, element=item.element, cell_ids=selected_ids)
 
 
 def select_evidence_range(
