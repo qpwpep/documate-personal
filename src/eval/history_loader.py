@@ -110,12 +110,24 @@ def select_comparable_runs(
 
     fixtures_path = latest.summary.fixtures_path
     total_cases = latest.metrics.total_cases
+    comparison_contract = (
+        latest.summary.execution_contract_version,
+        latest.summary.measurement_contract_version,
+        latest.summary.suite_fingerprint,
+        latest.summary.evaluation_fingerprint,
+    )
+    if any(comparison_contract) and not all(comparison_contract):
+        return latest, [latest]
     comparable = [
         run
         for run in runs
         if run.track == latest.track
         and run.summary.fixtures_path == fixtures_path
         and run.metrics.total_cases == total_cases
+        and run.summary.execution_contract_version == latest.summary.execution_contract_version
+        and run.summary.measurement_contract_version == latest.summary.measurement_contract_version
+        and run.summary.suite_fingerprint == latest.summary.suite_fingerprint
+        and run.summary.evaluation_fingerprint == latest.summary.evaluation_fingerprint
     ]
     comparable.sort(key=lambda item: item.generated_at)
     return latest, comparable

@@ -33,7 +33,7 @@ def format_metric_value(metric_key: str, value: float | int | None) -> str:
     numeric = float(value)
     if metric_key in {"pass_rate", "tool_precision", "tool_recall", "citation_compliance"}:
         return f"{numeric:.4f}"
-    if metric_key in {"p50_latency_ms", "p95_latency_ms"}:
+    if metric_key.endswith("_ms"):
         return f"{numeric:.1f}"
     if metric_key == "avg_cost_per_case_usd":
         return f"{numeric:.8f}"
@@ -56,7 +56,7 @@ def format_gate_threshold(metric_key: str, value: float | int) -> str:
 def format_delta(metric_key: str, value: float) -> str:
     if metric_key in {"pass_rate", "tool_precision", "tool_recall", "citation_compliance"}:
         return f"{value:+.4f}"
-    if metric_key in {"p50_latency_ms", "p95_latency_ms"}:
+    if metric_key.endswith("_ms"):
         return f"{value:+.1f}"
     if metric_key == "avg_cost_per_case_usd":
         return f"{value:+.8f}"
@@ -104,10 +104,21 @@ def build_history_readme_block(
         f"| citation compliance | `{format_metric_value('citation_compliance', latest.metrics.citation_compliance)}` |"
     )
     lines.append(f"| p95 latency | `{format_metric_value('p95_latency_ms', latest.metrics.p95_latency_ms)} ms` |")
+    if latest.summary.measurement_contract_version is not None:
+        for key in ("p95_attachment_setup_ms", "p95_question_response_ms", "p95_scenario_total_ms"):
+            lines.append(f"| {key} | `{format_metric_value(key, getattr(latest.metrics, key))} ms` |")
     lines.append(
         f"| avg cost per case | `${format_metric_value('avg_cost_per_case_usd', latest.metrics.avg_cost_per_case_usd)}` |"
     )
     lines.append("")
+    if latest.summary.measurement_contract_version is not None:
+        lines.append(
+            f"측정 기준은 `{latest.summary.measurement_contract_version}`입니다. "
+            "첨부 준비·동기화, 최종 질문 응답, 선행 대화를 포함한 전체 시나리오를 각각 측정합니다. "
+            "채점과 정리 시간은 제외하며, `p95_latency_ms` gate는 최종 질문 응답을 평가합니다. "
+            "실행·측정 버전과 fixture·첨부 내용·평가 설정 fingerprint가 모두 같은 런만 자동 비교합니다."
+        )
+        lines.append("")
     lines.append(
         "최신 런은 {passed} Hard Gate를 통과했으며 {failed}는 추가 확인 대상입니다.".format(
             passed=_quoted_metric_names(passed_gates) if passed_gates else "아직 어떤",
