@@ -13,7 +13,7 @@ uv sync
 cp .env.example .env
 ```
 
-`.env`에는 최소 `OPENAI_API_KEY`, `TAVILY_API_KEY`를 입력해야 합니다. 파일 기반 질문은 실행 후 현재 세션에 `.py` 또는 `.ipynb` 파일을 업로드해 확인합니다.
+`.env`에는 최소 `OPENAI_API_KEY`, `TAVILY_API_KEY`를 입력해야 합니다. 기본 파일 입력은 `.py`·`.ipynb`입니다. PDF·DOCX·스캔 PDF·이미지의 본문과 표를 검색하려면 [문서 변환 안내](docs/document_ingestion.md)에 따라 `docling` 선택 의존성과 모델을 준비하고 `DOCLING_ENABLED=true`로 실행합니다.
 
 FastAPI와 Streamlit을 함께 실행합니다.
 
@@ -103,7 +103,7 @@ flowchart LR
 | 기능 | 설명 |
 |---|---|
 | 공식 문서 검색 | allowlist와 query hint를 기준으로 공식 문서 결과를 검색하며, provider가 제공한 발췌의 snapshot과 수집 범위를 보존합니다. |
-| 업로드 파일 검색 | 여러 `.py`·`.ipynb` 파일을 한 세션에 추가·삭제·교체하고 함께 검색합니다. 파일별 원문 줄·Notebook cell ID·자료 버전을 인용하며, 기본 한도는 10개·파일당 10 MiB·합계 50 MiB입니다. |
+| 업로드 파일 검색 | `.py`·`.ipynb` 및 선택적으로 PDF·DOCX·이미지를 한 세션에 추가·삭제·교체하고 검색합니다. 코드 원문 줄·Notebook cell ID·문서 페이지·표 셀과 자료 버전을 보존합니다. 기본 한도는 10개·파일당 10 MiB·합계 50 MiB입니다. |
 | 구조화 응답 | 단일 본문을 문단·제목·목록·코드·표로 표시하고 관련 내용 옆에서 인용한 원문을 확인합니다. |
 | 검증/재시도 | 같은 본문의 참조 유효성, 원문 발췌 일치, 요청한 형식·출처 범위를 검사합니다. 일반 설명의 의미적 근거성은 별도 평가하지 않았다고 표시합니다. |
 | 액션 후처리 | 같은 본문과 출처를 텍스트 파일·Slack으로 내보내고 실제 실행 결과는 별도 receipt로 표시합니다. |
@@ -120,15 +120,15 @@ flowchart LR
 - `src/runtime/`: LangGraph 조립과 session/planner/retrieval/validation/synthesis/action 노드
 - `src/eval/`: 공용 클라이언트 기반 시나리오 재생·결과 수집, scoring, report/history 생성. 첨부·질문·전체 시나리오 시간을 구분하고 실행·측정 계약과 fixture fingerprint가 같은 이력만 비교
 
-문서 모델은 제목 계층·표 셀과 병합·코드·페이지·좌표를 수용하지만 현재 입력은 `.py`·`.ipynb`와 공식 문서 검색 결과입니다. Docling은 설치하거나 연동하지 않았습니다. 현재 인용은 사용한 원문 요소를 응답에 보존하며, 원본 파일 전체를 영구 보관하는 저장소나 PDF 페이지 뷰어는 포함하지 않습니다.
+Docling은 요청에 종속된 로컬 프로세스에서 문서를 변환하고 기존 `ParsedDocument`로 연결합니다. 기본 OCR은 실제 한영 표본에서 비교한 RapidOCR 한국어 모델이며, 인식 오류·누락 가능성을 생성과 출처 표시에 전달합니다. 변환·임베딩 캐시는 세션 안에서만 공유하고 파일별 식별자를 다시 연결합니다. 실패·부분 성공·시간 초과는 기존 첨부를 유지합니다. 인용한 원문 요소는 응답에 보존하지만 원본 파일의 영구 보관소와 PDF 페이지 뷰어는 제공하지 않습니다. 구현 계약·OCR 측정 범위·재현 방법은 [문서 변환 안내](docs/document_ingestion.md)를 참고하세요.
 
 ## 검증 결과
 
-회귀 테스트는 2026-09-13 KST에 `LIVE_TEST=false`로 실행한 결과이며, 아래 `release` benchmark 수치는 `20260509_043436` 런의 기록입니다. 이 release 기록은 현재 응답·평가 계약이나 공용 클라이언트 시나리오로 실행한 결과가 아닙니다. 새 계약의 품질은 별도 release run으로 확인해야 하며, 평가 기준이 다른 수치를 직접 비교하지 않습니다. 로컬 benchmark 실행은 `output/benchmarks/latest_release_run.txt`를 최신 `release` run 포인터로 갱신합니다.
+회귀 테스트는 2026-09-13 KST에 Docling 선택 의존성을 설치하고 `LIVE_TEST=false`, `RUN_DOCLING_TESTS=0`으로 실행한 결과입니다. 별도로 실제 로컬 모델을 사용하는 문서 변환·검색·인용 검증은 `19 passed`였고, Docling을 제거한 기본 설치에서도 앱 생성과 회귀 검사(`1218 passed, 117 skipped, 69 subtests passed`)를 확인했습니다. 아래 `release` benchmark 수치는 `20260509_043436` 런의 기록입니다. 이 release 기록은 현재 응답·평가 계약이나 공용 클라이언트 시나리오로 실행한 결과가 아닙니다. 새 계약의 품질은 별도 release run으로 확인해야 하며, 평가 기준이 다른 수치를 직접 비교하지 않습니다. 로컬 benchmark 실행은 `output/benchmarks/latest_release_run.txt`를 최신 `release` run 포인터로 갱신합니다.
 
 | 항목 | 결과 |
 |---|---:|
-| 테스트 | `1143 passed, 115 skipped, 69 subtests passed` |
+| 테스트 | `1239 passed, 120 skipped, 69 subtests passed` |
 | release benchmark | `116/120` cases passed |
 | release pass rate | `0.9667` |
 | tool precision / recall | `0.9677` / `1.0000` |

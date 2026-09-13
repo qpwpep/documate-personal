@@ -44,7 +44,7 @@ planner와 synthesis에 전달되는 summary는 과거 사용자 입력에서 �
 
 필요한 출처는 업로드 가용성과 무관하게 LLM이 판단합니다. 다만 대화로도 지시 대상이나 비교 버전을 정하지 못하면 계약의 `missing_info`와 검색 없는 계획을 반환하고 서버가 질문을 파생합니다. 파일이 없다는 실행 제약, 본문 대상이 미해결인 상태, 행동 의사·목적지만 부족한 상태, planner 호출·출력 실패를 서로 구분합니다. planner의 검색어 후처리는 공백만 정규화하며, docs 도구의 별칭 정규화도 원래 대상·버전 요구를 유지합니다.
 
-`docs` route는 Tavily와 [agent_rules.toml](../src/infra/config/agent_rules.toml)의 허용 source를 사용합니다. 명시 라이브러리의 domain을 먼저 고르고, URL·path prefix·원문 유효성과 함께 심볼의 문서 소유권·요청 버전·발췌의 aspect를 검사합니다. 다른 API를 설명하는 문서에 요청 이름이 언급됐다는 이유만으로 해당 API 근거를 확보한 것으로 취급하지 않습니다. `upload` route는 현재 세션의 단일 `.py` 또는 `.ipynb`에 한정합니다. 일반 질문은 Chroma 후보를 검색하고, 명시 코드 심볼은 같은 retriever의 전체 source registry를 AST로 조회합니다.
+`docs` route는 Tavily와 [agent_rules.toml](../src/infra/config/agent_rules.toml)의 허용 source를 사용합니다. 명시 라이브러리의 domain을 먼저 고르고, URL·path prefix·원문 유효성과 함께 심볼의 문서 소유권·요청 버전·발췌의 aspect를 검사합니다. 다른 API를 설명하는 문서에 요청 이름이 언급됐다는 이유만으로 해당 API 근거를 확보한 것으로 취급하지 않습니다. `upload` route는 현재 세션의 활성 첨부 집합을 검색합니다. `.py`·`.ipynb`와 함께 Docling 기능을 활성화한 환경에서는 PDF·DOCX·스캔 PDF·단일 프레임 PNG/JPEG/TIFF/WebP/BMP를 처리합니다. 일반 질문은 Chroma 후보를 검색하고, 명시한 파일 범위는 현재 세션의 파일 ID로 제한합니다. 정확한 코드 심볼은 Python·Notebook source registry의 AST로 조회하며 PDF에서 추출한 코드에 같은 분석 보장을 적용하지 않습니다.
 
 `retrieve_dispatch`는 독립 task를 병렬 실행한 뒤 planner 순서로 결과를 정렬합니다. 성공과 실패를 requirement ID로 구분하므로, 같은 docs route의 한 대상만 실패해도 다른 대상의 근거는 재사용할 수 있습니다. 실행 `status`와 별도로 `answerability`를 `covered`, `partial`, `missing`, `unknown`으로 기록해, 결과 개수나 route 실행 성공을 답변 가능성과 혼동하지 않습니다.
 
@@ -54,9 +54,11 @@ planner와 synthesis에 전달되는 summary는 과거 사용자 입력에서 �
 
 [`evidence.py`](../src/core/evidence.py)의 `EvidenceRef`는 snapshot, 당시 원문 요소 전체, 해당 요소 안의 문자 또는 표 셀 선택을 묶습니다. ID는 이 데이터에 따라 결정되므로 같은 경로의 파일을 바꾸거나 검색 chunk 크기를 바꾸어도 이전 인용이 새 내용으로 조용히 연결되지 않습니다. `SearchHit`는 여기에 `requirement_id`, 질의별 순위와 `RetrievalScore`를 붙인 검색 결과입니다. 같은 원문이 여러 요구를 지원해도 검색 유래를 각각 보존합니다. 검색 점수는 답변의 정답 확률로 표시하지 않습니다.
 
-현재 `.py`·`.ipynb` 경로는 기존 파서와 Chroma 검색·AST 조회를 사용하면서 이 모델로 원문을 전달합니다. 검색용 제목·옵션 요약을 추가하더라도 인용 발췌는 저장한 원문 요소의 범위에서 얻습니다. synthesis의 문자 예산 때문에 범위를 줄이면 줄인 범위를 가리키는 새 근거 ID를 만들고, `evidence_requirement_map`도 실제 packet ID에 연결합니다. 원래 source element를 보관하고 있더라도 모델에 보내지 않은 범위를 해당 답변의 근거로 인정하지 않습니다.
+`.py`·`.ipynb`는 기존 파서가, PDF·DOCX·이미지는 [`docling_adapter.py`](../src/infra/docling_adapter.py)가 같은 `ParsedDocument` 모델로 원문을 전달합니다. Docling 요소의 `self_ref`, 제목 계층과 읽기 순서, 표 셀·병합·열/행/구역 헤더, 알려진 페이지 위치를 보존합니다. 표 청크는 필요한 행과 헤더의 셀 ID를 선택하며 검색 후 같은 셀에서 본문을 복원합니다. 검색용 제목·옵션 요약을 추가하더라도 인용 발췌는 저장한 원문 요소의 범위에서 얻습니다. synthesis의 문자 예산 때문에 범위를 줄이면 줄인 범위를 가리키는 새 근거 ID를 만들고, `evidence_requirement_map`도 실제 packet ID에 연결합니다. 원래 source element를 보관하고 있더라도 모델에 보내지 않은 범위를 해당 답변의 근거로 인정하지 않습니다.
 
-전체 원문을 모든 chunk의 metadata에 복제하면 작은 파일도 인덱스와 메모리를 크게 늘릴 수 있습니다. [`ChunkedDocument`](../src/infra/chunking.py)는 `ParsedDocument`를 한 번 보관하고, Chroma에는 chunk 텍스트와 snapshot·element·범위 참조만 저장합니다. vector 검색 범위는 원문과 대조해 `EvidenceRef`로 복원하고, 정확한 코드 심볼은 같은 source registry에서 범위를 선택합니다. 이 보관은 현재 세션의 process-local retriever 수명에 한정되지만 이미 반환된 근거는 독립적으로 원문 요소를 보존하므로 인덱스 cleanup이 과거 답변을 손상하지 않습니다.
+전체 원문을 모든 chunk의 metadata에 복제하면 작은 파일도 인덱스와 메모리를 크게 늘릴 수 있습니다. [`ChunkedDocument`](../src/infra/chunking.py)는 `ParsedDocument`를 한 번 보관하고, Chroma에는 chunk 텍스트와 snapshot·element·문자 범위 또는 셀 ID 참조만 저장합니다. vector 검색 범위는 원문과 대조해 `EvidenceRef`로 복원하고, 정확한 코드 심볼은 같은 source registry에서 범위를 선택합니다. 검색용 registry는 현재 세션의 process-local retriever 수명에 한정되지만 이미 반환된 근거는 독립적으로 원문 요소를 보존하므로 인덱스나 변환 캐시 cleanup이 과거 답변을 손상하지 않습니다.
+
+`capture_scope="full_document"`는 provider 발췌가 아니라 입력 파일 전체를 변환 대상으로 삼았다는 뜻입니다. OCR의 글자·문단 누락이나 시각적 내용의 완전한 복원을 보장하지 않습니다. Docling의 부분 성공·오류·페이지 누락은 실패로 처리하고, 성공 결과에도 실제 OCR 설정과 그림·수식 처리 범위에 따른 `quality_issues`를 남깁니다. `exact_match`도 저장된 추출문과 답변 발췌의 일치이며 시각적 원본의 인식 정확성과 구분합니다.
 
 웹 검색 결과는 provider의 `content`·`raw_content` 모두 `provider_excerpt`입니다. 외부 URL의 전체 문서나 변환 결과를 확보한 것으로 간주하지 않습니다. 사용자는 수집 당시의 발췌와 현재 URL을 구분해서 볼 수 있습니다.
 
@@ -134,9 +136,13 @@ fixture 관리, judge 설정과 다중 턴 호출에는 비용이 있습니다. 
 
 ### 작은 내부 모델과 parser 경계
 
-Docling의 제목 계층·표·코드·provenance를 수용할 수 있도록 문서 요소와 위치 모델을 갖췄지만, Docling 자체를 설치하거나 연동하지는 않았습니다. 향후 adapter가 `ParsedDocument`를 반환하도록 연결하며 DoclingDocument 타입을 답변·API·검색 계약에 노출하지 않습니다. parser별 세부 정보는 element metadata와 snapshot parser 설정에 남길 수 있습니다.
+Docling은 선택 의존성과 로컬 변환 어댑터로 연동합니다. `DoclingDocument`는 변환 경계 안에서만 사용하고 답변·API·검색에는 기존 `ParsedDocument`를 전달합니다. Python·Notebook의 원문·AST 경로를 유지하면서 새 형식을 추가할 수 있고, parser별 정보는 element metadata와 snapshot parser 설정에 남깁니다. Docling의 chunker나 LangChain loader를 그대로 연결하는 대신 현재 원문 선택·표 셀 인용 계약을 사용하는 이유도 이 경계를 유지하기 위해서입니다.
 
-현재 구현은 사용한 원문 요소를 응답에 보존합니다. 원본 bytes를 영구 저장하는 artifact store, 전체 문서 조회 API, PDF 페이지 이미지 뷰어는 아직 없습니다. 장기 보관·다중 문서 탐색이 필요해지면 원본 보관 수명과 소유권을 포함해 확장해야 합니다. 현재 규모에서는 별도 그래프 DB, 문장 주장 그래프, 범용 문서 편집 AST, parser 플러그인 프레임워크를 두지 않습니다.
+기본 변환은 사전 준비한 로컬 모델과 RapidOCR의 한국어 모델, CPU 4스레드, 전체 페이지 OCR 강제 비활성화, accurate 표 구조 인식을 사용합니다. 한영 합성 표본과 보관 문서의 스캔 표본을 비교해 본문 누락이 적은 설정을 선택했지만 복잡한 슬라이드의 문단 누락과 일부 표제어 오인식은 남았습니다. 모델·의존성·메모리 비용을 감수하는 대신 페이지·표 구조를 다루며, 모든 문서를 손실 없이 읽는 범용 변환기로 취급하지 않습니다. 지원 범위, 설정과 실제 측정은 [문서 변환과 OCR](document_ingestion.md)에 정리합니다.
+
+변환은 감독되는 별도 worker 프로세스에서 실행하고 파일·페이지·이미지 픽셀·출력·메모리·시간을 제한합니다. worker는 문서 결과만 반환하며 활성 첨부나 검색 색인을 변경하지 않습니다. 변환·청킹·임베딩을 모두 마친 후보만 세션에 커밋하고, 타임아웃·부분 변환·실패는 신규 후보를 폐기해 기존 첨부를 유지합니다. 로컬 OCR과 기존 외부 임베딩·LLM 호출의 실행 위치도 구분합니다.
+
+현재 구현은 관리 원본을 세션 수명에 맞춰 보관하고, 사용한 원문 요소를 응답에 독립적으로 보존합니다. 원본 bytes를 영구 저장하는 artifact store, 전체 문서 조회 API, PDF 페이지 이미지 뷰어는 아직 없습니다. 세션 종료 후에도 원본 조회가 필요해지면 장기 보관 수명과 소유권을 포함해 확장해야 합니다. 현재 규모에서는 별도 그래프 DB, 문장 주장 그래프, 범용 문서 편집 AST, parser 플러그인 프레임워크를 두지 않습니다.
 
 ## 4. 가장 어려웠던 문제: Latency와 Retrieval 품질
 
@@ -153,6 +159,8 @@ planner와 synthesis는 구조화 모델 호출 경로를 사용하며 provider�
 docs 품질 검사는 공식 domain/path prefix와 URL·원문 유효성에 더해 대상 문서 소유권, 요청 버전, 실제 발췌의 aspect를 확인합니다. 단순한 이름 언급과 대상 API의 문서를 구분하고, 부분 근거를 확보한 상태와 요구 전체를 충족한 상태를 구분합니다. 이 검사는 모든 설명의 의미적 충분성을 보증하지 않으므로 자연어 평가와 함께 해석합니다.
 
 upload의 일반 검색은 vector 후보를 identifier·keyword·parameter signal로 rerank합니다. 명시한 파일별 후보를 확보하는 어댑터가 한 검색 호출의 쿼리 임베딩을 계산하고 파일별 조회에 공유합니다. 벡터 재사용은 그 호출 안에 한정하며 파일별 후보 예약, 원시 거리 기반 추가 후보 선택, 후속 정렬과 인용 의미를 유지합니다. 정확한 심볼 요청은 전체 source registry의 AST 조회로 바꾸어 top-k 후보 밖의 정의도 찾습니다. 사용과 정의를 구분하고, 정의의 decorator·본문·Notebook cell 및 정확한 원문 offset을 유지합니다. source 전체를 확인할 수 없으면 부재를 단정하지 않고 `unknown`으로 남깁니다. 이 경로는 임의의 유사도 임계값 없이 이름이 없는 함수의 오발췌를 막으며, source에 명시된 정적 코드 범위만 확인한다는 한계를 갖습니다.
+
+문서 재첨부 비용은 세션별 변환·문서 임베딩 캐시로 줄입니다. 변환 키에는 원본 해시·형식·추출 설정·어댑터와 runtime 버전·모델 파일 해시를, 임베딩 키에는 정확한 청크 텍스트와 청킹·임베딩 모델 설정까지 반영합니다. query 임베딩은 디스크에 캐시하지 않습니다. 변환 캐시를 읽을 때 현재 원본 bytes·파일명·source URI로 새 snapshot을 만들므로 다른 이름의 첨부에 이전 파일 ID나 인용을 재사용하지 않습니다. 현재 입력·페이지·출력 한도도 다시 검사합니다. TTL·용량 한도로 보관 비용을 제한하며 캐시 손상이나 쓰기 실패가 정상 변환 결과를 무효화하지 않게 했습니다.
 
 synthesis는 기본 8건을 기준으로 요구사항별 파일·aspect 조합에 필요한 항목 여유를 확보합니다. planner의 태스크 수와 답변에 필요한 발췌 수를 구분하며, 같은 파일의 독립 요구나 떨어진 aspect도 각각 배분합니다. 총 excerpt 예산은 일반 6,000자·hybrid 8,000자를 유지하고 개별 범위는 설정된 snippet 상한을 따릅니다. 필요한 최소 관련 문단·문장·코드 구문을 먼저 확보한 뒤 남은 예산으로 문맥을 확장하며, 동일한 선택 범위의 비용은 한 번만 계산하고 검색 연결을 합칩니다. 완전한 코드 구문·행을 우선하고, 초기 균등 배분에서 보류한 요구에도 잔여 예산의 몫을 유지해 재배분합니다. 검색 범위가 줄 중간에서 끝나거나 완전한 단위가 예산에 들어가지 않으면, 선택적 문맥보다 먼저 관련 부분 원문을 배분합니다. 이 범위는 검색된 원문 안에 한정하며 정확한 발췌가 독립 실행 가능한 코드를 뜻하지는 않습니다. 프롬프트와 최종 검증은 같은 커버리지 기준을 실제 packet 전체와 유효 인용 부분집합에 각각 적용합니다. 저장·전송 요청은 근거 예산을 줄이지 않습니다.
 
@@ -184,13 +192,13 @@ structured synthesis timeout 시 compact 호출을 사용하고, 실패하면 �
 
 업로드 파일 검색과 대화 상태는 세션 단위로 다룹니다. 세션별 manager cache, TTL/LRU 정리, 요청 lock을 두어 한 사용자의 업로드나 실행 상태가 다른 흐름과 섞이지 않게 관리합니다. close, exit, TTL/LRU eviction은 messages와 summary를 함께 제거합니다. 현재 store는 process-local in-memory 구현이므로 서버 재시작이나 여러 worker 사이에서 대화 상태를 복원하지는 않습니다.
 
-업로드 파일은 `uploads/<session_id>/...` 아래의 `.py` 또는 `.ipynb`만 허용합니다. 세션 디렉터리 밖 경로는 `validate_upload_file_path()`에서 차단하고, 다운로드도 `output/save_text` 아래 상대 경로만 허용합니다. UI의 staging은 재시도 입력이고, 서버의 관리 원본과 인덱스는 후보 생성 중에는 변경 작업이, 확정 후에는 세션이 소유합니다. 확정·종료는 공통 자원 교체·해제를 사용하되 후보 실패는 신규 자원만, 성공한 교체는 새 집합이 사용하지 않는 이전 자원만 해제합니다. 답변 실패는 확정 첨부를 해제하지 않습니다.
+업로드는 `uploads/<session_id>/...` 안의 지원 형식만 소유하며, 새 문서 형식 접수 여부는 Docling 활성화 설정으로 결정합니다. 형식 목록은 [`upload_formats.py`](../src/core/upload_formats.py)를 공유하고 기능을 꺼도 기존 관리 원본의 소유권·정리 범위는 유지합니다. 새 문서 형식은 첨부 목록 API로 추가하며 기존 `upload_file_path` 호환 경로는 `.py`·`.ipynb`만 받습니다. 세션 디렉터리 밖 경로는 `validate_upload_file_path()`에서 차단하고, 다운로드도 `output/save_text` 아래 상대 경로만 허용합니다. UI의 staging은 재시도 입력이고, 서버의 관리 원본과 인덱스는 후보 생성 중에는 변경 작업이, 확정 후에는 세션이 소유합니다. 확정·종료는 공통 자원 교체·해제를 사용하되 후보 실패는 신규 자원만, 성공한 교체는 새 집합이 사용하지 않는 이전 자원만 해제합니다. 답변 실패는 확정 첨부를 해제하지 않습니다.
 
-세션 락 안에서 현재 참조와 요청 입력을 제외한 미사용 관리 원본을 대조 정리하여 이전 세션이나 삭제 실패로 남은 파일을 회수합니다. 실패한 물리 삭제 때문에 확정한 목록을 되돌리지 않으며, 실제 디스크 사용량을 계속 제한합니다. 활성 요청과 최근 staging은 보호하고 이미 응답에 담은 인용은 원본 해제 뒤에도 유지합니다. 이 수명 관리는 단일 프로세스와 기존 락을 사용하며 별도 영구 manifest나 분산 참조 관리가 필요하지 않습니다.
+세션 락 안에서 현재 참조와 요청 입력을 제외한 미사용 관리 원본을 대조 정리하여 이전 세션이나 삭제 실패로 남은 파일을 회수합니다. 실패한 물리 삭제 때문에 확정한 목록을 되돌리지 않으며, 실제 디스크 사용량을 계속 제한합니다. 활성 요청과 최근 staging은 보호하고 이미 응답에 담은 인용은 원본 해제 뒤에도 유지합니다. 변환 작업 공간과 캐시도 같은 세션 아래에 두며, 전체 첨부 해제와 세션 종료·reset은 캐시를 지웁니다. 개별 삭제·교체의 캐시는 TTL·용량 한도까지 남아 재첨부에 사용할 수 있습니다. 세션 소유권과 자원 교체는 한 API 프로세스의 기존 락이, 변환 worker 수명은 supervisor가 관리하며 별도 영구 manifest나 분산 참조 관리는 두지 않습니다.
 
 ### 검증 가능한 결과를 우선
 
-기능 추가 자체보다 release gate를 통과하는 재현 가능한 상태를 우선합니다. benchmark CLI와 `uv run pytest -q` 결과를 문서화해, 프로젝트가 어느 기준에서 정상 동작하는지 확인할 수 있게 했습니다.
+기능 추가 자체보다 release gate를 통과하는 재현 가능한 상태를 우선합니다. benchmark CLI와 `uv run --no-sync pytest -q` 결과를 문서화해, 프로젝트가 어느 기준에서 정상 동작하는지 확인할 수 있게 했습니다. 실제 로컬 문서 변환은 `RUN_DOCLING_TESTS=1`로 실행하고 유료 API 평가와 분리합니다.
 
 평가 파이프라인은 실제 FastAPI `POST /agent/stream`을 호출하고 최종 응답 수신까지의 latency를 측정하는 online benchmark를 기준으로 합니다. HTTP 오류, SSE 오류, 연결 단절, 최종 응답 누락을 구분하고, 수신한 최종 응답의 debug도 평가에 유지합니다. `docs_only`, `rag_only`, `hybrid`, `tool_action` category를 나누고, rule 기반 지표와 LLM judge를 함께 사용합니다. `rag_only`는 fixture의 분류명이며 현재 업로드 검색을 평가합니다. deterministic `reference_coverage`는 표시한 내용의 참조가 현재 검색 또는 선택한 선행 답변의 검증된 인용에서 최종 packet으로 연결되는지를 측정하고, 설명의 의미적 지지는 judge가 평가합니다. 필요한 provenance가 누락되면 관측·응답 계약 실패로 남기며, `not_evaluated`를 근거가 없는 답변의 점수로 취급하지 않습니다. hard gate는 `data/benchmarks/config.toml`에서 관리하며 자세한 지표는 [벤치마크 가이드](benchmarking.md)에 정리했습니다.
 
@@ -200,8 +208,8 @@ DocuMate의 다음 개선 방향은 더 많은 기능을 붙이는 것보다, �
 
 - judge minimum score audit에서 기준을 넘지 못한 docs/hybrid 케이스를 분석해 답변 품질 개선 후보로 관리합니다.
 - retrieval route별 warning, error code, latency breakdown을 더 쉽게 비교할 수 있게 report를 정리합니다.
-- 실제 문서 표본으로 Docling adapter를 검증하고, 추출한 제목 계층·표 병합·여러 페이지 위치가 현재 문서 모델과 정확히 연결되는지 확인합니다.
-- 원본 보관 수명·소유권과 문서 조회 계약을 정의한 뒤 PDF 페이지 뷰어와 위치 강조를 추가합니다.
+- 한영 혼합 스캔·저해상도 문서·복잡한 표 등 실제 표본을 넓혀 OCR 누락과 표제어 오인식을 계측하고, 현재 어댑터의 제목 계층·표 병합·페이지 위치 회귀를 보강합니다.
+- 세션 이후 장기 보관 수명·소유권과 원문 조회 계약을 정의한 뒤 PDF 페이지 뷰어와 위치 강조를 추가합니다.
 - 설명의 의미적 지지 검사를 런타임에 추가할 경우 검사 비용·범위·실패 상태를 명시하고, 인용 연결 확인과 분리해 평가합니다.
 - upload retriever build와 synthesis fallback의 비용/지연을 benchmark summary에서 더 세밀하게 분리합니다.
 - benchmark fixture를 주기적으로 보강해 공식 문서 검색, 업로드 검색, tool action 흐름의 회귀 범위를 넓힙니다.
