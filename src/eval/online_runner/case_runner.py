@@ -17,6 +17,7 @@ from ..io import load_cases_jsonl
 from ..reporting.summary import build_summary
 from ..reporting.writer import write_run_outputs
 from ..result_models import CaseResult, ScenarioTurnResult
+from ..pricing import compute_cost_usd
 from ..summary_models import RunSummary, RunTrack
 from .scenario_inputs import case_context, resolve_fixture_uploads
 from .response_parser import ParsedResponseData, parse_agent_response
@@ -131,6 +132,7 @@ def _run_single_case(
     config: BenchmarkConfig,
     live_slack: BenchmarkLiveSlackConfig | None = None,
 ) -> CaseResult:
+    started = time.monotonic()
     created_at = datetime.now(timezone.utc).isoformat()
     session_id = str(uuid4())
     resolved_live_slack = live_slack or BenchmarkLiveSlackConfig()
@@ -140,6 +142,8 @@ def _run_single_case(
     endpoint_url = endpoint.rstrip("/") + "/agent/stream"
     parsed_response = ParsedResponseData()
     turns: list[ScenarioTurnResult] = []
+    turn_costs: list[float | None] = []
+    attachment_setup_ms = None
     question_response_ms = None
     request_payload = build_agent_payload(case.query, context)
     files = []
@@ -158,9 +162,13 @@ def _run_single_case(
             client.sync_uploads(PendingUploadOperation(epoch=manifest.epoch, expected_revision=manifest.revision,
                                                         files=staged.files))
             discard_staged_files(staged.files, get_upload_session_dir(session_id))
+        attachment_setup_ms = round((time.monotonic() - started) * 1000)
         for index, query in enumerate([*case.setup_turns, case.query]):
             parsed, turn = _run_turn(client, query, prior_turns=turns)
             turns.append(turn)
+            turn_costs.append(0.0 if parsed.model_usage_status == "deterministic" and not parsed.llm_calls else
+                              compute_cost_usd(token_usage=parsed.token_usage,
+                                               llm_calls=[call.model_dump() for call in parsed.llm_calls], pricing=config.pricing))
             if index == len(case.setup_turns):
                 parsed_response = parsed
                 request_payload = turn.request_payload
@@ -185,6 +193,10 @@ def _run_single_case(
         parsed_response.runtime_errors.append(f"scenario preparation failed: {exc}")
     except Exception as exc:
         parsed_response.runtime_errors.append(f"unexpected error: {exc}")
+    finally:
+        if attachment_setup_ms is None:
+            attachment_setup_ms = round((time.monotonic() - started) * 1000)
+    scenario_total_ms = round((time.monotonic() - started) * 1000)
     cleanup_errors = []
     # Only confirmed state can be cleaned synchronously. After an uncertain POST,
     # leave resources to the server's normal TTL/LRU cleanup; never replay it.
@@ -208,9 +220,15 @@ def _run_single_case(
         slack_delivery_required=resolved_live_slack.applies_to_case(case),
         prior_turns=turns[:len(case.setup_turns)],
     )
+    result.attachment_setup_ms = attachment_setup_ms
     result.question_response_ms = question_response_ms
+    result.scenario_total_ms = scenario_total_ms
     result.scenario_turns = turns
+    result.attachment_fingerprints = ({name: upload.fingerprint for name, upload in
+                                      zip(case.resolved_upload_fixtures, files, strict=True) if upload.fingerprint is not None}
+                                     if files else {})
     result.cleanup_errors = cleanup_errors
+    result.cost_usd = round(sum(turn_costs), 8) if turn_costs and all(cost is not None for cost in turn_costs) else None
     return result
 
 
@@ -316,6 +334,9 @@ def run_online_benchmark(
         cases=cases,
         results=results,
         slack_live_enabled=bool((live_slack or BenchmarkLiveSlackConfig()).enabled),
+        attachment_fingerprints={f"{result.case_id}/{name}": digest for result in results
+                                 for name, digest in result.attachment_fingerprints.items()},
+        execution_options=(live_slack or BenchmarkLiveSlackConfig()).model_dump(mode="json"),
     )
 
     run_dir = output_root / run_id

@@ -31,6 +31,12 @@ class SummaryStats(BaseModel):
     citation_compliance: float
     p50_latency_ms: float | None = None
     p95_latency_ms: float | None = None
+    p50_attachment_setup_ms: float | None = None
+    p95_attachment_setup_ms: float | None = None
+    p50_question_response_ms: float | None = None
+    p95_question_response_ms: float | None = None
+    p50_scenario_total_ms: float | None = None
+    p95_scenario_total_ms: float | None = None
     hybrid_p95_latency_ms: float | None = None
     hybrid_p95_server_ms: float | None = None
     hybrid_p95_synthesis_ms: float | None = None
@@ -204,6 +210,10 @@ class RunSummary(BaseModel):
     mode: str = "online"
     track: RunTrack = "release"
     requested_limit: int | None = None
+    execution_contract_version: str | None = None
+    measurement_contract_version: str | None = None
+    suite_fingerprint: str | None = None
+    evaluation_fingerprint: str | None = None
     metrics: SummaryStats
     analysis: AnalysisStats | None = None
     gates: list[GateResult]

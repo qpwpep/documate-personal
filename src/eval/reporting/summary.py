@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from datetime import datetime, timezone
+import hashlib
+import json
+from typing import Any
 
 from src.core.planner_schema import PLANNER_WARNING_DUPLICATE_ROUTE_MERGED
 
@@ -16,6 +19,65 @@ from .latency_values import result_latency_breakdown_stage_ms, result_server_lat
 _AUDIT_DETERMINISTIC_DIRECT_USAGE_CEILING = 0.35
 _AUDIT_HIGH_RULE_LOW_JUDGE_DIVERGENCE_CEILING = 0.10
 _HIGH_RULE_LOW_JUDGE_DIVERGENCE_MARGIN = 0.35
+EXECUTION_CONTRACT_VERSION = "shared-client-scenario-v1"
+MEASUREMENT_CONTRACT_VERSION = "attachment-question-scenario-v1"
+SCORING_CONTRACT_VERSION = "answer-provenance-v1"
+
+
+def _fingerprint(value: Any) -> str:
+    canonical = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _scenario_latency_metrics(results: list[CaseResult]) -> dict[str, float | None]:
+    metrics: dict[str, float | None] = {}
+    for field in ("attachment_setup_ms", "question_response_ms", "scenario_total_ms"):
+        values = [int(value) for result in results if (value := getattr(result, field)) is not None]
+        for name, quantile in (("p50", 0.50), ("p95", 0.95)):
+            value = percentile(values, quantile)
+            metrics[f"{name}_{field}"] = round(value, 2) if value is not None else None
+    return metrics
+
+
+def _call_has_usage(call: Any) -> bool:
+    if not isinstance(call, dict):
+        return False
+    response_metadata = call.get("response_metadata")
+    candidates = [call.get("usage_metadata")]
+    if isinstance(response_metadata, dict):
+        candidates.append(response_metadata.get("token_usage"))
+    for usage in candidates:
+        if not isinstance(usage, dict):
+            continue
+        prompt = usage.get("input_tokens", usage.get("prompt_tokens"))
+        completion = usage.get("output_tokens", usage.get("completion_tokens"))
+        if isinstance(prompt, int) and not isinstance(prompt, bool) and prompt >= 0:
+            if isinstance(completion, int) and not isinstance(completion, bool) and completion >= 0:
+                return True
+    return False
+
+
+def _has_llm_coverage(result: CaseResult) -> bool:
+    if not result.scenario_turns:
+        return bool(result.llm_calls)
+    has_calls = False
+    for turn in result.scenario_turns:
+        debug = turn.debug
+        if not debug or debug.get("missing_required_debug_fields"):
+            return False
+        calls = debug.get("llm_calls")
+        if debug.get("model_usage_status") == "deterministic" and calls == []:
+            continue
+        if not isinstance(calls, list) or not calls or not all(_call_has_usage(call) for call in calls):
+            return False
+        has_calls = True
+    return has_calls
+
+
+def _has_request_id_coverage(result: CaseResult) -> bool:
+    if result.scenario_turns:
+        return all(bool(turn.request_id) for turn in result.scenario_turns)
+    return bool(result.request_id)
 
 
 def _structured_success_cases(results: list[CaseResult]) -> list[CaseResult]:
@@ -149,6 +211,8 @@ def build_summary(
     cases: list[BenchmarkCase],
     results: list[CaseResult],
     slack_live_enabled: bool = False,
+    attachment_fingerprints: dict[str, str] | None = None,
+    execution_options: dict[str, Any] | None = None,
 ) -> RunSummary:
     case_map = {case.case_id: case for case in cases}
     scored_results = [result for result in results if result.composite_quality_score is not None]
@@ -206,8 +270,8 @@ def build_summary(
         if slack_live_enabled and slack_delivery_required_results
         else None
     )
-    llm_call_coverage_rate = sum(1 for result in results if result.llm_calls) / len(results) if results else 0.0
-    request_id_coverage_rate = sum(1 for result in results if result.request_id) / len(results) if results else 0.0
+    llm_call_coverage_rate = sum(1 for result in results if _has_llm_coverage(result)) / len(results) if results else 0.0
+    request_id_coverage_rate = sum(1 for result in results if _has_request_id_coverage(result)) / len(results) if results else 0.0
     judge_input_eligible = [result for result in results if result.judge_input_complete is not None]
     judge_input_completeness_rate = (
         sum(1 for result in judge_input_eligible if result.judge_input_complete) / len(judge_input_eligible)
@@ -258,6 +322,7 @@ def build_summary(
         citation_compliance=round(citation_compliance, 4),
         p50_latency_ms=round(p50_latency, 2) if p50_latency is not None else None,
         p95_latency_ms=round(p95_latency, 2) if p95_latency is not None else None,
+        **_scenario_latency_metrics(results),
         hybrid_p95_latency_ms=hybrid_p95_latency,
         hybrid_p95_server_ms=hybrid_p95_server,
         hybrid_p95_synthesis_ms=hybrid_p95_synthesis,
@@ -332,6 +397,18 @@ def build_summary(
         mode="online",
         track=track,
         requested_limit=requested_limit,
+        execution_contract_version=EXECUTION_CONTRACT_VERSION,
+        measurement_contract_version=MEASUREMENT_CONTRACT_VERSION,
+        suite_fingerprint=_fingerprint({
+            "cases": [case.model_dump(mode="json") for case in cases],
+            "attachments": attachment_fingerprints or {},
+        }),
+        evaluation_fingerprint=_fingerprint({
+            "scoring_contract_version": SCORING_CONTRACT_VERSION,
+            "config": config.model_dump(mode="json"),
+            "slack_live_enabled": slack_live_enabled,
+            "execution_options": execution_options or {},
+        }),
         metrics=metrics,
         analysis=analysis,
         gates=gates,
@@ -342,6 +419,7 @@ def build_summary(
         judge_enabled=config.judge_enabled,
         judge_model=config.judge_model,
         audit_metrics={
+            "scoring_contract_version": SCORING_CONTRACT_VERSION,
             "judge_min_score_pass_rate": metrics.judge_pass_rate,
             "judge_min_score_failures": metrics.judge_min_score_failures,
             "llm_call_coverage_rate": metrics.llm_call_coverage_rate,
