@@ -1,7 +1,9 @@
-from tests.eval.response_fixtures import sse_http_response
+from tests.eval.response_fixtures import answer_provenance, sse_http_response
 from src.core.contracts.debug import DEBUG_SCHEMA_VERSION
 from tests.eval.response_fixtures import plain_response
 import unittest
+
+import pytest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
@@ -18,6 +20,9 @@ from src.infra.settings import (
     load_benchmark_cli_env_settings,
     load_benchmark_env_defaults,
 )
+
+
+pytestmark = pytest.mark.usefixtures("empty_upload_manifest_http")
 
 
 class BenchmarkCLIEnvResolutionTest(unittest.TestCase):
@@ -196,7 +201,7 @@ class BenchmarkCLIEnvResolutionTest(unittest.TestCase):
         self.assertEqual(kwargs["live_slack"].user_id, "UCLI")
         self.assertEqual(kwargs["live_slack"].email, "cli@example.com")
 
-    @patch("src.eval.online_runner.case_runner.requests.post")
+    @patch("src.app.client.requests.post")
     @patch("src.eval.online_runner.case_runner.load_cases_jsonl")
     def test_dotenv_live_slack_settings_rewrite_payload_and_enable_audit_gate(
         self,
@@ -230,6 +235,7 @@ class BenchmarkCLIEnvResolutionTest(unittest.TestCase):
                     "errors": [],
                     "planner_errors": [],
                     "observed_hits": [],
+                    "answer_provenance": answer_provenance(plain_response("shared")),
                     "retry_context": None,
                     "retrieval_diagnostics": [],
                     "planner_diagnostics": None,

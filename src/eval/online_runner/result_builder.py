@@ -293,6 +293,7 @@ def build_case_result(
         session_id=session_id,
         endpoint=endpoint_url,
         upload_fixture=case.upload_fixture,
+        upload_fixtures=case.resolved_upload_fixtures,
         request_payload=request_payload,
         request_id=parsed_response.request_id,
         http_status=parsed_response.http_status,

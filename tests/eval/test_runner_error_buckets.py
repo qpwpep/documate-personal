@@ -1,9 +1,11 @@
-from tests.eval.response_fixtures import sse_http_response
+from tests.eval.response_fixtures import answer_provenance, sse_http_response
 from src.core.contracts.debug import DEBUG_SCHEMA_VERSION
 from src.core.answer_schema import AnswerResponse
 from tests.eval.response_fixtures import plain_response
 import json
 import unittest
+
+import pytest
 from pathlib import Path
 from unittest.mock import patch
 
@@ -17,6 +19,9 @@ from src.eval.online_runner.response_parser import ParsedResponseData
 from src.eval.online_runner.result_builder import build_case_result
 from src.eval.reporting.histograms import build_analysis
 from src.eval.result_models import JudgeSubscores
+
+
+pytestmark = pytest.mark.usefixtures("empty_upload_manifest_http")
 
 
 class _DummyJudge(LLMJudge):
@@ -70,7 +75,7 @@ class RunnerErrorBucketsTest(unittest.TestCase):
                 parsed_response=ParsedResponseData(response_text="answer", response=AnswerResponse.model_validate(plain_response("answer"))),
             )
 
-    @patch("src.eval.online_runner.case_runner.requests.post", side_effect=requests.Timeout)
+    @patch("src.app.client.requests.post", side_effect=requests.Timeout)
     def test_timeout_goes_to_runtime_errors(self, _mock_post) -> None:
         result = _run_single_case(
             run_id="run-timeout",
@@ -85,7 +90,7 @@ class RunnerErrorBucketsTest(unittest.TestCase):
         self.assertEqual(result.response_errors, [])
         self.assertEqual(result.judge_errors, [])
 
-    @patch("src.eval.online_runner.case_runner.requests.post")
+    @patch("src.app.client.requests.post")
     def test_contract_error_goes_to_response_errors(self, mock_post) -> None:
         mock_post.return_value = sse_http_response(
             200,
@@ -124,7 +129,7 @@ class RunnerErrorBucketsTest(unittest.TestCase):
         self.assertEqual(result.runtime_errors, [])
         self.assertTrue(any("response payload must be an object" in msg for msg in result.response_errors))
 
-    @patch("src.eval.online_runner.case_runner.requests.post")
+    @patch("src.app.client.requests.post")
     def test_judge_error_goes_to_judge_errors(self, mock_post) -> None:
         mock_post.return_value = sse_http_response(
             200,
@@ -132,6 +137,7 @@ class RunnerErrorBucketsTest(unittest.TestCase):
                 "response": plain_response('ok'),
                 "trace": "x",
                 "debug": {
+                    "answer_provenance": answer_provenance(plain_response('ok')),
                     "schema_version": DEBUG_SCHEMA_VERSION,
                     "observability_status": "ok",
                     "missing_required_debug_fields": [],
@@ -164,7 +170,7 @@ class RunnerErrorBucketsTest(unittest.TestCase):
         self.assertEqual(result.response_errors, [])
         self.assertIn("judge parse fail", result.judge_errors)
 
-    @patch("src.eval.online_runner.case_runner.requests.post")
+    @patch("src.app.client.requests.post")
     def test_runner_preserves_retrieval_diagnostic_statuses(self, mock_post) -> None:
         mock_post.return_value = sse_http_response(
             200,
@@ -172,6 +178,7 @@ class RunnerErrorBucketsTest(unittest.TestCase):
                 "response": plain_response('ok'),
                 "trace": "x",
                 "debug": {
+                    "answer_provenance": answer_provenance(plain_response('ok')),
                     "schema_version": DEBUG_SCHEMA_VERSION,
                     "observability_status": "ok",
                     "missing_required_debug_fields": [],
@@ -244,7 +251,7 @@ class RunnerErrorBucketsTest(unittest.TestCase):
         self.assertIsNotNone(result.planner_diagnostics)
         self.assertEqual(result.planner_diagnostics.status, "heuristic_fallback")
 
-    @patch("src.eval.online_runner.case_runner.requests.post")
+    @patch("src.app.client.requests.post")
     def test_runner_parses_validator_reason_from_retry_context(self, mock_post) -> None:
         mock_post.return_value = sse_http_response(
             200,
@@ -252,6 +259,7 @@ class RunnerErrorBucketsTest(unittest.TestCase):
                 "response": plain_response('need more evidence'),
                 "trace": "x",
                 "debug": {
+                    "answer_provenance": answer_provenance(plain_response('need more evidence')),
                     "schema_version": DEBUG_SCHEMA_VERSION,
                     "observability_status": "ok",
                     "missing_required_debug_fields": [],
@@ -293,7 +301,7 @@ class RunnerErrorBucketsTest(unittest.TestCase):
             "low evidence confidence; broaden query or switch route.",
         )
 
-    @patch("src.eval.online_runner.case_runner.requests.post")
+    @patch("src.app.client.requests.post")
     def test_runner_marks_missing_critical_debug_fields_as_response_error(self, mock_post) -> None:
         mock_post.return_value = sse_http_response(
             200,
@@ -320,7 +328,7 @@ class RunnerErrorBucketsTest(unittest.TestCase):
         self.assertTrue(any("critical debug fields missing:" in msg for msg in result.response_errors))
         self.assertFalse(result.passed)
 
-    @patch("src.eval.online_runner.case_runner.requests.post")
+    @patch("src.app.client.requests.post")
     def test_runner_applies_docs_judge_min_score_gate(self, mock_post) -> None:
         mock_post.return_value = sse_http_response(
             200,
@@ -328,6 +336,7 @@ class RunnerErrorBucketsTest(unittest.TestCase):
                 "response": plain_response('ok'),
                 "trace": "x",
                 "debug": {
+                    "answer_provenance": answer_provenance(plain_response('ok')),
                     "schema_version": DEBUG_SCHEMA_VERSION,
                     "observability_status": "ok",
                     "missing_required_debug_fields": [],
@@ -379,7 +388,7 @@ class RunnerErrorBucketsTest(unittest.TestCase):
         self.assertFalse(result.release_pass)
         self.assertFalse(result.passed)
 
-    @patch("src.eval.online_runner.case_runner.requests.post")
+    @patch("src.app.client.requests.post")
     def test_runner_parses_standard_error_codes_and_output_shape_metrics(self, mock_post) -> None:
         mock_post.return_value = sse_http_response(
             200,
@@ -387,6 +396,7 @@ class RunnerErrorBucketsTest(unittest.TestCase):
                 "response": plain_response(['ok', 'same']),
                 "trace": "x",
                 "debug": {
+                    "answer_provenance": answer_provenance(plain_response(['ok', 'same'])),
                     "schema_version": DEBUG_SCHEMA_VERSION,
                     "observability_status": "ok",
                     "missing_required_debug_fields": [],

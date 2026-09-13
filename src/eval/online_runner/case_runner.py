@@ -3,22 +3,121 @@ from __future__ import annotations
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from uuid import uuid4
 
-import requests
-from urllib3.exceptions import ReadTimeoutError
-
-from src.infra.sse import iter_sse_events
+from src.app.client import AgentSessionClient, AgentStreamEvent, UploadAPIError, build_agent_payload
+from src.app.uploads import PendingUploadOperation, discard_staged_files
+from src.infra.runtime_paths import get_upload_session_dir
+from src.infra.settings import get_settings
 
 from ..judge_llm import LLMJudge
+from ..evidence_scope import assess_evidence_scope
 from ..config_models import BenchmarkCase, BenchmarkConfig, BenchmarkLiveSlackConfig
 from ..io import load_cases_jsonl
 from ..reporting.summary import build_summary
 from ..reporting.writer import write_run_outputs
-from ..result_models import CaseResult
+from ..result_models import CaseResult, ScenarioTurnResult
 from ..summary_models import RunSummary, RunTrack
-from .request_builder import build_request_context, cleanup_session_upload_dir
+from .scenario_inputs import case_context, resolve_fixture_uploads
 from .response_parser import ParsedResponseData, parse_agent_response
 from .result_builder import build_case_result
+
+
+def _parse_final(body: dict, *, previous: ParsedResponseData, validated_response=None) -> ParsedResponseData:
+    try:
+        return parse_agent_response(body, http_status=previous.http_status, request_id=previous.request_id,
+                                    validated_response=validated_response)
+    except Exception as exc:
+        # Diagnostics are external input too. An unexpected shape must not lose
+        # the case, its original debug data, or subsequent scenario results.
+        return ParsedResponseData(http_status=previous.http_status, request_id=previous.request_id,
+                                  response=validated_response,
+                                  debug=body.get("debug") if isinstance(body.get("debug"), dict) else None,
+                                  response_trace=body.get("trace") if isinstance(body.get("trace"), str) else None,
+                                  runtime_errors=[f"unexpected error parsing evaluation diagnostics: {exc}"])
+
+
+def _record_client_error(event: AgentStreamEvent, parsed: ParsedResponseData, *, done_received: bool) -> None:
+    """Keep evaluation error buckets while the app owns transport and validation."""
+    observation = event.observation
+    code = event.data.get("code")
+    detail = observation.exception_detail or event.data.get("message", "")
+    if observation.error_source == "server":
+        parsed.runtime_errors.append(f"SSE error: {event.data.get('message') or 'server reported an error'}")
+    elif code == "http_error":
+        body = (observation.http_body or "").strip()
+        parsed.runtime_errors.append(f"HTTP {parsed.http_status}: {body[:300] + ' ...' if len(body) > 300 else body}")
+    elif code in {"empty_stream", "missing_final_response"}:
+        reason = "done received" if done_received else ("empty stream" if code == "empty_stream" else "stream ended")
+        parsed.response_errors.append(f"SSE final_response missing ({reason})")
+    elif code == "timeout":
+        parsed.runtime_errors.append("SSE stream timeout before final_response" if observation.stream_opened else "request timeout")
+    elif code in {"connection_error", "connection_interrupted"}:
+        prefix = "SSE stream disconnected before final_response" if observation.stream_opened else "request failed"
+        parsed.runtime_errors.append(f"{prefix}: {detail}")
+    elif code == "invalid_stream":
+        parsed.response_errors.append(f"SSE protocol error: {detail}")
+    else:
+        parsed.runtime_errors.append(f"unexpected error: {detail}")
+
+
+def _run_turn(client: AgentSessionClient, query: str, *,
+              prior_turns: list[ScenarioTurnResult] | None = None) -> tuple[ParsedResponseData, ScenarioTurnResult]:
+    payload = build_agent_payload(query, client.request_context())
+    parsed = ParsedResponseData()
+    elapsed = None
+    done_received = False
+    final_received = False
+    client_failed = False
+    raw_final = None
+    for event in client.stream(query):
+        observation = event.observation
+        parsed.http_status = observation.http_status or parsed.http_status
+        parsed.request_id = observation.request_id or parsed.request_id
+        elapsed = round(observation.elapsed_ms)
+        if event.event == "final_response" and event.result is not None:
+            final = _parse_final(event.data, previous=parsed, validated_response=event.result.response)
+            final.runtime_errors.extend(parsed.runtime_errors)
+            final.response_errors.extend(parsed.response_errors)
+            parsed = final
+            final_received = True
+        elif event.event == "done":
+            done_received = True
+        elif event.event == "error":
+            client_failed = client_failed or observation.error_source != "server"
+            raw_final = event.data.get("raw_final_response")
+            if isinstance(raw_final, dict):
+                # Malformed public responses stay unusable; keep their diagnostics
+                # and raw envelope so contract failures do not hide model usage.
+                rejected = _parse_final(raw_final, previous=parsed)
+                rejected.response = None
+                rejected.response_text = ""
+                rejected.actions = []
+                rejected.runtime_errors.extend(parsed.runtime_errors)
+                rejected.response_errors.extend(parsed.response_errors)
+                parsed = rejected
+            _record_client_error(event, parsed, done_received=done_received)
+    if not final_received and not parsed.response_errors and not client_failed:
+        parsed.response_errors.append(f"SSE final_response missing ({'done received' if done_received else 'stream ended'})")
+    if parsed.response is not None:
+        if parsed.evidence_assessment is None:
+            parsed.evidence_assessment = assess_evidence_scope(
+                response=parsed.response, provenance=parsed.answer_provenance,
+                observed_hits=parsed.observed_hits, tool_calls=parsed.tool_calls,
+                session_id=payload["session_id"], prior_turns=prior_turns or [],
+            )
+        parsed.response_errors.extend(f"evidence scope: {error}" for error in parsed.evidence_assessment.errors
+                                      if error not in parsed.response_errors)
+    turn = ScenarioTurnResult(
+        query=query, request_payload=payload, http_status=parsed.http_status, request_id=parsed.request_id,
+        response=parsed.response, trace=parsed.response_trace, debug=parsed.debug,
+        upload_manifest=client.manifest, question_response_ms=elapsed,
+        runtime_errors=parsed.runtime_errors, response_errors=parsed.response_errors,
+        raw_final_response=raw_final,
+        answer_provenance=parsed.answer_provenance, evidence_assessment=parsed.evidence_assessment,
+        observed_hits=parsed.observed_hits, tool_calls=parsed.tool_calls,
+    )
+    return parsed, turn
 
 
 def _run_single_case(
@@ -32,97 +131,86 @@ def _run_single_case(
     config: BenchmarkConfig,
     live_slack: BenchmarkLiveSlackConfig | None = None,
 ) -> CaseResult:
-    request_context = build_request_context(
-        fixtures_path=fixtures_path,
-        case=case,
-        live_slack=live_slack,
-    )
+    created_at = datetime.now(timezone.utc).isoformat()
+    session_id = str(uuid4())
+    resolved_live_slack = live_slack or BenchmarkLiveSlackConfig()
+    context = case_context(endpoint=endpoint, session_id=session_id, case=case,
+                           timeout_seconds=timeout_seconds, live_slack=resolved_live_slack)
+    client = AgentSessionClient(context)
     endpoint_url = endpoint.rstrip("/") + "/agent/stream"
-
-    latency_ms_e2e: int | None = None
     parsed_response = ParsedResponseData()
-    if not request_context.runtime_errors:
-        started = time.monotonic()
-        stream_opened = False
+    turns: list[ScenarioTurnResult] = []
+    question_response_ms = None
+    request_payload = build_agent_payload(case.query, context)
+    files = []
+    staged = None
+    try:
+        client.refresh_uploads()
+        files = resolve_fixture_uploads(fixtures_path, case)
+        if files:
+            settings = get_settings()
+            staged = client.stage_files(files, get_upload_session_dir(session_id),
+                                        max_files=settings.upload_max_files, max_file_mib=settings.upload_max_file_mib,
+                                        max_total_mib=settings.upload_max_total_mib)
+            if staged.errors:
+                raise ValueError("; ".join(staged.errors))
+            manifest = client.manifest
+            client.sync_uploads(PendingUploadOperation(epoch=manifest.epoch, expected_revision=manifest.revision,
+                                                        files=staged.files))
+            discard_staged_files(staged.files, get_upload_session_dir(session_id))
+        for index, query in enumerate([*case.setup_turns, case.query]):
+            parsed, turn = _run_turn(client, query, prior_turns=turns)
+            turns.append(turn)
+            if index == len(case.setup_turns):
+                parsed_response = parsed
+                request_payload = turn.request_payload
+                question_response_ms = turn.question_response_ms
+            elif (parsed.response is None or parsed.runtime_errors or parsed.response_errors
+                  or parsed.debug_errors or parsed.planner_errors or parsed.missing_required_debug_fields
+                  or parsed.debug_observability_status == "failed"):
+                parsed_response = ParsedResponseData(
+                    http_status=parsed.http_status,
+                    runtime_errors=[f"setup turn {index + 1} failed; dependent question was not sent",
+                                    *parsed.runtime_errors],
+                    response_errors=list(parsed.response_errors),
+                )
+                break
+    except UploadAPIError as exc:
+        parsed_response.http_status = exc.status_code or 0
+        parsed_response.runtime_errors.append(f"attachment error {exc.code}: {exc}")
+        if staged is not None and (exc.status_code in {400, 409, 413, 422}
+                                   or (exc.status_code == 503 and exc.code == "UPLOAD_INDEX_FAILED")):
+            discard_staged_files(staged.files, get_upload_session_dir(session_id))
+    except (OSError, ValueError) as exc:
+        parsed_response.runtime_errors.append(f"scenario preparation failed: {exc}")
+    except Exception as exc:
+        parsed_response.runtime_errors.append(f"unexpected error: {exc}")
+    cleanup_errors = []
+    # Only confirmed state can be cleaned synchronously. After an uncertain POST,
+    # leave resources to the server's normal TTL/LRU cleanup; never replay it.
+    if client.manifest is not None and client.manifest.files:
         try:
-            with requests.post(
-                endpoint_url,
-                json=request_context.request_payload,
-                timeout=timeout_seconds,
-                headers={"Accept": "text/event-stream"},
-                stream=True,
-                allow_redirects=False,
-            ) as response:
-                parsed_response.http_status = response.status_code
-                parsed_response.request_id = str(response.headers.get("x-request-id") or "").strip() or None
-                if response.status_code != 200:
-                    body = response.text.strip()
-                    if len(body) > 300:
-                        body = body[:300] + " ..."
-                    parsed_response.runtime_errors.append(f"HTTP {response.status_code}: {body}")
-                else:
-                    content_type = response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
-                    if content_type != "text/event-stream":
-                        raise ValueError(f"expected text/event-stream, received {content_type or 'missing Content-Type'}")
-                    stream_opened = True
-                    received_event = False
-                    final_received = False
-                    done_received = False
-                    for event in iter_sse_events(response.iter_content(chunk_size=None)):
-                        received_event = True
-                        if event.event == "error":
-                            message = str(event.data.get("message") or "server reported an error")
-                            parsed_response.runtime_errors.append(f"SSE error: {message}")
-                        elif event.event == "final_response":
-                            latency_ms_e2e = int((time.monotonic() - started) * 1000)
-                            final = parse_agent_response(
-                                event.data,
-                                http_status=response.status_code,
-                                request_id=parsed_response.request_id,
-                            )
-                            final.runtime_errors.extend(parsed_response.runtime_errors)
-                            parsed_response = final
-                            final_received = True
-                            break
-                        elif event.event == "done":
-                            done_received = True
-                            break
-                    if not final_received:
-                        reason = "done received" if done_received else ("stream ended" if received_event else "empty stream")
-                        parsed_response.response_errors.append(f"SSE final_response missing ({reason})")
-        except requests.Timeout:
-            message = "SSE stream timeout before final_response" if stream_opened else "request timeout"
-            parsed_response.runtime_errors.append(message)
-        except requests.RequestException as exc:
-            if stream_opened and any(isinstance(reason, ReadTimeoutError) for reason in exc.args):
-                parsed_response.runtime_errors.append("SSE stream timeout before final_response")
-            else:
-                prefix = "SSE stream disconnected before final_response" if stream_opened else "request failed"
-                parsed_response.runtime_errors.append(f"{prefix}: {exc}")
-        except ValueError as exc:
-            parsed_response.response_errors.append(f"SSE protocol error: {exc}")
-        except Exception as exc:
-            parsed_response.runtime_errors.append(f"unexpected error: {exc}")
-        finally:
-            if latency_ms_e2e is None:
-                latency_ms_e2e = int((time.monotonic() - started) * 1000)
-    else:
-        parsed_response.runtime_errors.extend(request_context.runtime_errors)
-
+            client.sync_uploads(PendingUploadOperation(epoch=client.manifest.epoch,
+                                                        expected_revision=client.manifest.revision, clear=True))
+        except UploadAPIError as exc:
+            cleanup_errors.append(f"{exc.code}: {exc}")
     result = build_case_result(
         run_id=run_id,
         endpoint_url=endpoint_url,
         case=case,
         judge=judge,
         config=config,
-        session_id=request_context.session_id,
-        created_at=request_context.created_at,
-        request_payload=request_context.request_payload,
-        latency_ms_e2e=latency_ms_e2e,
+        session_id=session_id,
+        created_at=created_at,
+        request_payload=request_payload,
+        latency_ms_e2e=question_response_ms,
         parsed_response=parsed_response,
-        slack_delivery_required=request_context.slack_delivery_required,
+        slack_delivery_required=resolved_live_slack.applies_to_case(case),
+        prior_turns=turns[:len(case.setup_turns)],
     )
-    cleanup_session_upload_dir(request_context.session_id)
+    result.question_response_ms = question_response_ms
+    result.scenario_turns = turns
+    result.cleanup_errors = cleanup_errors
     return result
 
 

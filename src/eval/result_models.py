@@ -9,6 +9,7 @@ from src.core.contracts.debug import LLMCallMetadata, ModelUsageStatus, PlannerD
 from src.core.contracts.provenance import AnswerProvenance
 from src.core.evidence import EvidenceRef, SearchHit
 from src.core.latency import LatencyBreakdownModel
+from src.core.uploads import UploadManifest
 from .config_models import CaseCategory, CaseScenario
 
 
@@ -36,12 +37,15 @@ class ScenarioTurnResult(BaseModel):
     http_status: int = 0
     request_id: str | None = None
     response: AnswerResponse | None = None
+    raw_final_response: dict[str, Any] | None = None
     trace: str | None = None
     debug: dict[str, Any] | None = None
     answer_provenance: AnswerProvenance | None = None
     evidence_assessment: EvidenceAssessment | None = None
     observed_hits: list[SearchHit] = Field(default_factory=list)
     tool_calls: list[str] = Field(default_factory=list)
+    upload_manifest: UploadManifest | None = None
+    question_response_ms: int | None = Field(default=None, ge=0)
     runtime_errors: list[str] = Field(default_factory=list)
     response_errors: list[str] = Field(default_factory=list)
 
@@ -55,6 +59,7 @@ class CaseResult(BaseModel):
     session_id: str
     endpoint: str
     upload_fixture: str | None = None
+    upload_fixtures: list[str] = Field(default_factory=list)
     request_payload: dict[str, Any]
     request_id: str | None = None
     http_status: int
@@ -68,6 +73,8 @@ class CaseResult(BaseModel):
     planner_diagnostics: PlannerDiagnostic | None = None
     trace: str | None = None
     latency_ms_e2e: int | None = None
+    question_response_ms: int | None = Field(default=None, ge=0)
+    scenario_turns: list[ScenarioTurnResult] = Field(default_factory=list)
     latency_ms_server: int | None = None
     latency_breakdown: LatencyBreakdownModel | None = None
     tool_calls: list[str] = Field(default_factory=list)
@@ -84,6 +91,7 @@ class CaseResult(BaseModel):
     edge_decisions: list[dict[str, Any]] = Field(default_factory=list)
     debug_errors: list[str] = Field(default_factory=list)
     runtime_errors: list[str] = Field(default_factory=list)
+    cleanup_errors: list[str] = Field(default_factory=list)
     response_errors: list[str] = Field(default_factory=list)
     judge_errors: list[str] = Field(default_factory=list)
     judge_audit_failures: list[str] = Field(default_factory=list)

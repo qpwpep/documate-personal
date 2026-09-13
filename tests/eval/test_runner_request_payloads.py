@@ -1,8 +1,10 @@
-from tests.eval.response_fixtures import sse_http_response
+from tests.eval.response_fixtures import answer_provenance, sse_http_response
 from src.core.contracts.debug import DEBUG_SCHEMA_VERSION
 from tests.eval.response_fixtures import source_hit
 from tests.eval.response_fixtures import comparison_response, plain_response
 import unittest
+
+import pytest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
@@ -10,6 +12,9 @@ from unittest.mock import patch
 from src.eval.config_models import BenchmarkCase, BenchmarkConfig, BenchmarkLiveSlackConfig
 from src.eval.judge_llm import LLMJudge
 from src.eval.online_runner import _run_single_case, run_online_benchmark
+
+
+pytestmark = pytest.mark.usefixtures("empty_upload_manifest_http")
 
 
 class _CaptureJudge(LLMJudge):
@@ -23,7 +28,7 @@ class _CaptureJudge(LLMJudge):
 
 
 class RunnerRequestPayloadTest(unittest.TestCase):
-    @patch("src.eval.online_runner.case_runner.requests.post")
+    @patch("src.app.client.requests.post")
     def test_slack_destination_fields_are_forwarded(self, mock_post) -> None:
         mock_post.return_value = sse_http_response(
             200,
@@ -31,6 +36,7 @@ class RunnerRequestPayloadTest(unittest.TestCase):
                 "response": plain_response('shared'),
                 "trace": "trace-id",
                 "debug": {
+                    "answer_provenance": answer_provenance(plain_response('shared')),
                     "schema_version": DEBUG_SCHEMA_VERSION,
                     "observability_status": "ok",
                     "missing_required_debug_fields": [],
@@ -76,7 +82,7 @@ class RunnerRequestPayloadTest(unittest.TestCase):
         self.assertEqual(payload["slack_user_id"], "U123BENCH")
         self.assertEqual(payload["slack_email"], "bench@example.com")
 
-    @patch("src.eval.online_runner.case_runner.requests.post")
+    @patch("src.app.client.requests.post")
     def test_live_slack_channel_cases_use_live_channel_destination(self, mock_post) -> None:
         mock_post.return_value = sse_http_response(
             200,
@@ -84,6 +90,7 @@ class RunnerRequestPayloadTest(unittest.TestCase):
                 "response": plain_response('shared'),
                 "trace": "trace-id",
                 "debug": {
+                    "answer_provenance": answer_provenance(plain_response('shared')),
                     "schema_version": DEBUG_SCHEMA_VERSION,
                     "observability_status": "ok",
                     "missing_required_debug_fields": [],
@@ -128,7 +135,7 @@ class RunnerRequestPayloadTest(unittest.TestCase):
         self.assertNotIn("slack_user_id", payload)
         self.assertNotIn("slack_email", payload)
 
-    @patch("src.eval.online_runner.case_runner.requests.post")
+    @patch("src.app.client.requests.post")
     def test_live_slack_dm_cases_use_live_dm_destination(self, mock_post) -> None:
         mock_post.return_value = sse_http_response(
             200,
@@ -136,6 +143,7 @@ class RunnerRequestPayloadTest(unittest.TestCase):
                 "response": plain_response('shared'),
                 "trace": "trace-id",
                 "debug": {
+                    "answer_provenance": answer_provenance(plain_response('shared')),
                     "schema_version": DEBUG_SCHEMA_VERSION,
                     "observability_status": "ok",
                     "missing_required_debug_fields": [],
@@ -180,7 +188,7 @@ class RunnerRequestPayloadTest(unittest.TestCase):
         self.assertNotIn("slack_channel_id", payload)
         self.assertNotIn("slack_email", payload)
 
-    @patch("src.eval.online_runner.case_runner.requests.post")
+    @patch("src.app.client.requests.post")
     def test_actions_are_parsed_from_public_response(self, mock_post) -> None:
         mock_post.return_value = sse_http_response(
             200,
@@ -188,6 +196,7 @@ class RunnerRequestPayloadTest(unittest.TestCase):
                 "response": {**plain_response('shared'), "actions": [{'kind': 'slack_notify', 'status': 'success', 'target': 'C999LIVE', 'message': None, 'error': None}]},
                 "trace": "trace-id",
                 "debug": {
+                    "answer_provenance": answer_provenance({**plain_response('shared'), "actions": [{'kind': 'slack_notify', 'status': 'success', 'target': 'C999LIVE', 'message': None, 'error': None}]}),
                     "schema_version": DEBUG_SCHEMA_VERSION,
                     "observability_status": "ok",
                     "missing_required_debug_fields": [],
@@ -255,7 +264,7 @@ class RunnerRequestPayloadTest(unittest.TestCase):
                     live_slack=BenchmarkLiveSlackConfig(enabled=True),
                 )
 
-    @patch("src.eval.online_runner.case_runner.requests.post")
+    @patch("src.app.client.requests.post")
     def test_planner_errors_are_parsed_from_debug_payload(self, mock_post) -> None:
         mock_post.return_value = sse_http_response(
             200,
@@ -263,6 +272,7 @@ class RunnerRequestPayloadTest(unittest.TestCase):
                 "response": plain_response('shared'),
                 "trace": "trace-id",
                 "debug": {
+                    "answer_provenance": answer_provenance(plain_response('shared')),
                     "schema_version": DEBUG_SCHEMA_VERSION,
                     "observability_status": "ok",
                     "missing_required_debug_fields": [],
@@ -303,7 +313,7 @@ class RunnerRequestPayloadTest(unittest.TestCase):
             ["planner: structured output invocation failed (boom)"],
         )
 
-    @patch("src.eval.online_runner.case_runner.requests.post")
+    @patch("src.app.client.requests.post")
     def test_judge_payload_includes_structured_fields(self, mock_post) -> None:
         mock_post.return_value = sse_http_response(
             200,
@@ -311,6 +321,7 @@ class RunnerRequestPayloadTest(unittest.TestCase):
                 "response": comparison_response(),
                 "trace": "Session ID: abc, Request ID: req123, Agent ID: 1",
                 "debug": {
+                    "answer_provenance": answer_provenance(comparison_response()),
                     "schema_version": DEBUG_SCHEMA_VERSION,
                     "observability_status": "ok",
                     "missing_required_debug_fields": [],
@@ -323,7 +334,8 @@ class RunnerRequestPayloadTest(unittest.TestCase):
                     "errors": [],
                     "planner_errors": [],
                     "observed_hits": [
-                        source_hit().model_dump(mode="json")
+                        source_hit().model_dump(mode="json"),
+                        source_hit(official=False, text="업로드 비교").model_dump(mode="json"),
                     ],
                     "retry_context": {"retry_reason": "low_score", "retrieval_feedback": "compare more explicitly"},
                     "retrieval_diagnostics": [
@@ -387,14 +399,14 @@ class RunnerRequestPayloadTest(unittest.TestCase):
         self.assertEqual(len(judge.kwargs["response"].citations), 2)
         self.assertEqual(len(judge.kwargs["response"].content.blocks), 2)
         self.assertEqual(judge.kwargs["response"].content.blocks[0].type, "paragraph")
-        self.assertEqual(len(judge.kwargs["observed_hits"]), 1)
+        self.assertEqual(len(judge.kwargs["observed_hits"]), 2)
         self.assertEqual(len(judge.kwargs["retrieval_diagnostics"]), 2)
         self.assertEqual(judge.kwargs["validator_reason"], "low_score")
         self.assertEqual(judge.kwargs["synthesis_mode"], "structured_only")
         self.assertTrue(result.judge_input_complete)
         self.assertEqual(result.request_id, "req123")
 
-    @patch("src.eval.online_runner.case_runner.requests.post")
+    @patch("src.app.client.requests.post")
     def test_judge_payload_includes_public_actions_for_live_slack_cases(self, mock_post) -> None:
         mock_post.return_value = sse_http_response(
             200,
@@ -402,6 +414,7 @@ class RunnerRequestPayloadTest(unittest.TestCase):
                 "response": {**plain_response('shared'), "actions": [{'kind': 'slack_notify', 'status': 'error', 'target': 'C999LIVE', 'message': None, 'error': 'channel_not_found'}]},
                 "trace": "trace-id",
                 "debug": {
+                    "answer_provenance": answer_provenance({**plain_response('shared'), "actions": [{'kind': 'slack_notify', 'status': 'error', 'target': 'C999LIVE', 'message': None, 'error': 'channel_not_found'}]}),
                     "schema_version": DEBUG_SCHEMA_VERSION,
                     "observability_status": "ok",
                     "missing_required_debug_fields": [],

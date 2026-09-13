@@ -52,6 +52,7 @@ class BenchmarkCase(BaseModel):
     scenario: CaseScenario = "seed_mutation"
     query: str
     setup_turns: list[str] = Field(default_factory=list)
+    upload_fixtures: list[str] = Field(default_factory=list)
     upload_fixture: str | None = None
     slack_channel_id: str | None = None
     slack_user_id: str | None = None
@@ -65,6 +66,18 @@ class BenchmarkCase(BaseModel):
     judge_rubric: str = ""
     judge_min_score: float | None = Field(default=None, ge=0.0, le=1.0)
     weight_override: CaseWeightOverride | None = None
+
+    @model_validator(mode="after")
+    def validate_upload_declarations(self) -> "BenchmarkCase":
+        if self.upload_fixture and self.upload_fixtures:
+            raise ValueError("Use upload_fixtures or legacy upload_fixture, not both")
+        return self
+
+    @property
+    def resolved_upload_fixtures(self) -> list[str]:
+        if self.upload_fixtures:
+            return list(self.upload_fixtures)
+        return [self.upload_fixture] if self.upload_fixture else []
 
 
 class BenchmarkLiveSlackConfig(BaseModel):

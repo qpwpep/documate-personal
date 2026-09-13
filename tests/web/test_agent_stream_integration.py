@@ -10,6 +10,7 @@ import uvicorn
 
 from src.app.web.app import create_app
 from src.app.web.streamlit_api_client import AgentRequestContext, stream_agent_response
+from src.app.client import AgentSessionClient
 from src.core.answer_schema import export_answer_text
 from src.core.conversation_memory import DEFAULT_QUERY_MAX_CHARS
 from src.eval.config_models import BenchmarkCase, BenchmarkConfig
@@ -96,7 +97,7 @@ def test_streamlit_uses_the_real_sse_route_and_runtime(agent_server):
     """The UI client receives a complete answer through real HTTP, routing and session execution."""
     endpoint, app, _ = agent_server
     # The public reset command exercises the real manager without invoking an LLM or tool.
-    events = list(stream_agent_response("exit", AgentRequestContext(fastapi_url=endpoint, session_id="ui-reset")))
+    events = list(AgentSessionClient(AgentRequestContext(fastapi_url=endpoint, session_id="ui-reset")).stream("exit"))
     assert [event.event for event in events] == ["request_started", "final_response"]
     final = events[-1]
     assert export_answer_text(final.result.response) == "Chat session has been reset. Start again."
@@ -122,11 +123,11 @@ def test_benchmark_uses_the_real_sse_route_and_preserves_debug(agent_server):
     assert app.state.session_store.active_session_ids() == {result.session_id}
 
 
-def test_clients_handle_http_validation_errors_without_starting_a_session(agent_server):
-    """Both migrated clients report HTTP rejection before any agent execution."""
+def test_clients_handle_http_validation_errors_without_executing_a_question(agent_server):
+    """Session preparation can precede HTTP rejection, but neither client commits a conversation."""
     endpoint, app, tmp_path = agent_server
     query = "x" * (DEFAULT_QUERY_MAX_CHARS + 1)
-    events = list(stream_agent_response(query, AgentRequestContext(fastapi_url=endpoint, session_id="invalid")))
+    events = list(AgentSessionClient(AgentRequestContext(fastapi_url=endpoint, session_id="invalid")).stream(query))
     result = _benchmark(endpoint, tmp_path, query=query)
     assert [event.event for event in events] == ["error"]
     assert events[0].data["code"] == "http_error"
@@ -134,27 +135,35 @@ def test_clients_handle_http_validation_errors_without_starting_a_session(agent_
     assert result.http_status == 422
     assert result.runtime_errors[0].startswith("HTTP 422:")
     assert result.response is None
-    assert app.state.session_store.active_session_ids() == set()
+    assert app.state.session_store.active_session_ids() == {"invalid", result.session_id}
+    assert app.state.session_store.get_or_create("invalid").messages == []
+    assert app.state.session_store.get_or_create(result.session_id).messages == []
 
 
-def test_clients_do_not_accept_http_200_when_the_service_emits_an_error(agent_server):
-    """An SSE execution error and done cannot become a successful answer or trigger a second run."""
+def test_legacy_stream_error_and_done_do_not_produce_a_successful_answer(agent_server):
+    """The shared streaming client still rejects an SSE service error on the legacy API input."""
     endpoint, app, tmp_path = agent_server
     events = list(stream_agent_response("exit", AgentRequestContext(
         fastapi_url=endpoint, session_id="invalid-upload", upload_file_path="src/__init__.py",
     )))
+    assert [event.event for event in events] == ["request_started", "error", "done"]
+    assert "UPLOAD_PATH_INVALID" in events[1].data["message"]
+    assert app.state.session_store.active_session_ids() == set()
+
+
+def test_benchmark_rejects_unsupported_uploads_before_the_question(agent_server):
+    """The benchmark uses the user's staging validation and cannot bypass it with a legacy path."""
+    endpoint, app, tmp_path = agent_server
     fixtures = tmp_path / "fixtures"
     (fixtures / "uploads").mkdir(parents=True)
     (fixtures / "uploads" / "unsupported.txt").write_text("unsupported", encoding="utf-8")
     result = _benchmark(endpoint, fixtures, query="exit", upload_fixture="unsupported.txt")
-    assert [event.event for event in events] == ["request_started", "error", "done"]
-    assert "UPLOAD_PATH_INVALID" in events[1].data["message"]
-    assert result.http_status == 200
+    assert result.http_status == 0
     assert result.response is None
-    assert any("SSE error:" in error and "UPLOAD_PATH_INVALID" in error for error in result.runtime_errors)
-    assert result.response_errors == ["SSE final_response missing (done received)"]
+    assert result.scenario_turns == []
+    assert any(".py" in error and ".ipynb" in error for error in result.runtime_errors)
     assert not result.release_pass
-    assert app.state.session_store.active_session_ids() == set()
+    assert app.state.session_store.get_or_create(result.session_id).messages == []
 
 
 def test_retired_route_is_unavailable_over_http(agent_server):

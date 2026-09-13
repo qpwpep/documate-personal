@@ -15,6 +15,7 @@ from src.eval.online_runner import _run_single_case, run_online_benchmark
 from tests.eval.response_fixtures import answer_provenance, plain_response, sse_http_response
 
 
+pytestmark = pytest.mark.usefixtures("empty_upload_manifest_http")
 
 
 def response_payload():
@@ -36,6 +37,44 @@ def response_payload():
     }
 
 
+def test_malformed_tool_calls_keeps_usage_and_writes_the_following_case_report(tmp_path, monkeypatch):
+    """A scalar tool list is a response contract failure while both cases reach persisted reports."""
+    payloads = []
+
+    def post(url, *, json, **kwargs):
+        payload = response_payload()
+        if json["query"] == "broken diagnostics":
+            payload["debug"]["tool_calls"] = 1
+        payloads.append(json)
+        return sse_http_response(200, payload)
+
+    monkeypatch.setattr(requests, "post", post)
+    fixtures = tmp_path / "cases.jsonl"
+    dump_jsonl(fixtures, [
+        BenchmarkCase(case_id="broken", category="tool_action", query="broken diagnostics"),
+        BenchmarkCase(case_id="following", category="tool_action", query="valid diagnostics"),
+    ])
+
+    output, results, summary = run_online_benchmark(
+        fixtures_path=fixtures, endpoint="http://fixture", config=BenchmarkConfig(judge_enabled=False),
+        config_path=tmp_path / "config.toml", output_root=tmp_path / "results", track="smoke",
+    )
+
+    assert [item["query"] for item in payloads] == ["broken diagnostics", "valid diagnostics"]
+    first, following = results
+    assert first.response is not None
+    assert first.runtime_errors == []
+    assert any("debug.tool_calls" in error for error in first.response_errors)
+    assert first.debug["tool_calls"] == first.scenario_turns[0].debug["tool_calls"] == 1
+    assert first.token_usage == TokenUsage(prompt_tokens=10, completion_tokens=2, total_tokens=12)
+    assert first.cost_usd == pytest.approx(0.0000027)
+    assert not first.release_pass
+    assert following.runtime_errors == following.response_errors == []
+    assert summary.metrics.total_cases == 2
+    stored = [json.loads(line) for line in (output / "raw_results.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert [item["case_id"] for item in stored] == ["broken", "following"]
+    assert stored[0]["debug"]["tool_calls"] == 1
+    assert (output / "report.md").is_file()
 
 
 @pytest.mark.parametrize(("field", "value"), [
@@ -96,6 +135,36 @@ def test_invalid_trace_preserves_the_answer_and_diagnostic_usage(monkeypatch, tm
     assert not result.release_pass
 
 
+@pytest.mark.parametrize(("defect", "status"), [
+    ("missing", "unavailable"),
+    ("missing_packet", "invalid"),
+    ("wrong_hash", "invalid"),
+])
+def test_online_rejects_unproven_inputs_without_losing_the_answer_or_usage(defect, status, monkeypatch, tmp_path):
+    """Missing or malformed provenance fails evaluation while preserving the actual response and billable usage."""
+    payload = response_payload()
+    if defect == "missing":
+        payload["debug"].pop("answer_provenance")
+    elif defect == "missing_packet":
+        payload["debug"]["answer_provenance"].pop("evidence_packet")
+    else:
+        payload["debug"]["answer_provenance"]["response_hash"] = "another-answer"
+    monkeypatch.setattr(requests, "post", lambda *args, **kwargs: sse_http_response(200, payload))
+
+    result = _run_single_case(
+        run_id="provenance", endpoint="http://fixture", fixtures_path=tmp_path / "cases.jsonl",
+        case=BenchmarkCase(case_id="invalid", category="tool_action", query="test provenance"),
+        timeout_seconds=1, judge=LLMJudge(model_name="unused", enabled=False),
+        config=BenchmarkConfig(judge_enabled=False),
+    )
+
+    assert result.response.model_dump(mode="json") == payload["response"]
+    assert result.debug == result.scenario_turns[0].debug == payload["debug"]
+    assert result.runtime_errors == []
+    assert result.evidence_assessment.status == status
+    assert result.response_errors
+    assert result.cost_usd == pytest.approx(0.0000027)
+    assert not result.release_pass
 
 
 def test_result_builder_rejects_a_declared_provenance_mismatch_without_citation_requirements():
