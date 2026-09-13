@@ -6,6 +6,7 @@ from src.core.contracts.boundary.planner import parse_planner_diagnostic
 from src.core.contracts.boundary.retrieval import parse_retrieval_diagnostics
 from src.core.contracts.boundary.runtime import parse_slack_destination
 from src.core.contracts.debug import DEBUG_CRITICAL_FIELDS, DEBUG_REQUIRED_FIELDS, DEBUG_SCHEMA_VERSION
+from src.core.contracts.provenance import AnswerProvenance
 from src.core.latency import LatencyBreakdownModel
 from src.app.web.schemas import AgentDebugInfo, AgentRequest, AgentTokenUsage
 from src.core.evidence import SearchHit
@@ -29,6 +30,18 @@ def normalize_debug_info(raw_debug: dict | None, latency_ms_server: int | None) 
     tool_calls = debug.get("tool_calls") or []
     errors = debug.get("errors") or []
     error_codes = parse_error_codes(debug.get("error_codes") or [])
+    answer_provenance = None
+    if debug.get("answer_provenance") is not None:
+        try:
+            answer_provenance = AnswerProvenance.model_validate(debug["answer_provenance"])
+        except (TypeError, ValueError):
+            if "DEBUG_NORMALIZATION_FAILED" not in error_codes:
+                error_codes.append("DEBUG_NORMALIZATION_FAILED")
+    if answer_provenance is None:
+        if "answer_provenance" not in missing_required_debug_fields:
+            missing_required_debug_fields.append("answer_provenance")
+        if "answer_provenance" not in critical_missing:
+            critical_missing.append("answer_provenance")
     validation_events_raw = debug.get("validation_events") or []
     edge_decisions_raw = debug.get("edge_decisions") or []
     planner_errors_raw = debug.get("planner_errors") or []
@@ -132,6 +145,7 @@ def normalize_debug_info(raw_debug: dict | None, latency_ms_server: int | None) 
         if isinstance(planner_errors_raw, list)
         else [],
         observed_hits=observed_hits,
+        answer_provenance=answer_provenance,
         retry_context=retry_context,
         retrieval_diagnostics=retrieval_diagnostics,
         planner_diagnostics=planner_diagnostics,

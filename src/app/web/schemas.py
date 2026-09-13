@@ -11,6 +11,7 @@ from src.core.conversation_memory import (
 )
 from src.core.contracts.debug import ActionResults, ErrorCode, LLMCallMetadata, ModelUsageStatus, PlannerDiagnostic, RetryState, RetrievalDiagnostic, TokenUsage
 from src.core.evidence import SearchHit
+from src.core.contracts.provenance import AnswerProvenance
 from src.core.uploads import UploadContext, UploadManifest, validate_session_id
 from src.core.latency import LatencyBreakdownModel, StageName
 
@@ -37,6 +38,7 @@ class AgentDebugInfo(BaseModel):
     edge_decisions: list[dict[str, Any]] = Field(default_factory=list)
     planner_errors: list[str] = Field(default_factory=list)
     observed_hits: list[SearchHit] = Field(default_factory=list)
+    answer_provenance: AnswerProvenance | None = None
     retry_context: AgentRetryContext | None = None
     retrieval_diagnostics: list[RetrievalDiagnostic] = Field(default_factory=list)
     planner_diagnostics: PlannerDiagnostic | None = None

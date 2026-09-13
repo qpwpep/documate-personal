@@ -28,7 +28,9 @@ def make_pre_synthesis_validation_node(verbose: bool):
         runtime = get_runtime_state(state)
         contract = runtime.request_contract
         stamp = {"request_id": contract.request_id if contract else None,
-                 "contract_revision": contract.revision if contract else 0}
+                 "contract_revision": contract.revision if contract else 0,
+                 "body_kind": contract.body.kind if contract else "unresolved",
+                 "evidence_source": None}
         if (contract is not None and contract.can_prepare_body()
                 and planner.diagnostics.reason not in {"upload_retriever_missing", "upload_file_scope_invalid", "planner_unavailable"}):
             guided_followup = ""

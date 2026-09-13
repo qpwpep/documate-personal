@@ -289,6 +289,7 @@ def parse_debug_payload(value: Any) -> DebugPayload:
         if isinstance(value.get("planner_errors"), list)
         else [],
         observed_hits=observed_hits,
+        answer_provenance=value.get("answer_provenance"),
         retry_context=parse_retry_state(value.get("retry_context")) if value.get("retry_context") else None,
         retrieval_diagnostics=parse_retrieval_diagnostics(value.get("retrieval_diagnostics")),
         planner_diagnostics=parse_planner_diagnostic(value.get("planner_diagnostics")),

@@ -78,5 +78,7 @@ def make_synthesize_node(
             kind=outcome.kind,
             request_id=prepared.request_contract.request_id,
             contract_revision=prepared.request_contract.revision,
+            body_kind=prepared.request_contract.body.kind,
+            evidence_source=context.evidence_source,
         )
     return synthesize

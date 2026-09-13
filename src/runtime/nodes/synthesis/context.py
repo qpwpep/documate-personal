@@ -6,6 +6,7 @@ from src.core.contracts.boundary.planner import get_planner_state, parse_planner
 from src.core.contracts.boundary.response import get_response_state
 from src.core.contracts.boundary.retrieval import get_retrieval_state
 from src.core.contracts.boundary.runtime import get_runtime_state
+from src.core.contracts.provenance import AnswerSource
 from src.core.answer_schema import AnswerResponse
 from src.core.evidence import SearchHit
 from src.core.request_contracts import RequestContract, resolve_body_response
@@ -51,6 +52,15 @@ def build_synthesis_context(*, state: GraphState, has_default_slack_destination:
             parse_errors.append(f"retrieved_hits[{index}]: {exc}")
     planner_errors: list[str] = []
     plan = parse_planner_output(planner.output, planner_errors)
+    source_response = resolve_contract_source_response(runtime)
+    evidence_source = None
+    if source_response is not None:
+        # Capture the actual bound source before actions can replace or clear pending state.
+        evidence_source = AnswerSource(
+            ref=runtime.request_contract.body.source.ref,
+            response_hash=source_response.content_hash,
+            citation_ids=[citation.evidence.id for citation in source_response.citations],
+        )
     return SynthesisContext(
         attempt=get_response_state(state).synthesis_attempt + 1,
         user_input=runtime.user_input,
@@ -63,7 +73,8 @@ def build_synthesis_context(*, state: GraphState, has_default_slack_destination:
         retrieval_required=bool(plan.use_retrieval and plan.tasks),
         hits=select_evidence_hits(user_input=runtime.user_input, hits=hits, planner_output=plan),
         request_contract=runtime.request_contract,
-        source_response=resolve_contract_source_response(runtime),
+        source_response=source_response,
+        evidence_source=evidence_source,
     )
 
 
