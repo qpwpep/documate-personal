@@ -41,13 +41,21 @@ def build_history_svg(comparable_runs: list[StoredRun]) -> str:
     if not comparable_runs:
         raise ValueError("No comparable runs were supplied for SVG generation.")
 
+    metrics = list(SVG_METRICS)
+    if comparable_runs[-1].summary.measurement_contract_version is not None:
+        metrics[4] = MetricSpec("p95_question_response_ms", "final question; lower is better", "p95_latency_ms")
+        metrics.extend([
+            MetricSpec("p95_attachment_setup_ms", "attachment preparation and synchronization"),
+            MetricSpec("p95_scenario_total_ms", "all turns; excludes judge and cleanup"),
+        ])
+
     width = 1200
     legend_columns = min(3, len(comparable_runs))
     legend_rows = ceil(len(comparable_runs) / legend_columns)
     legend_start_y = 118
     legend_row_height = 46
     panel_top = legend_start_y + legend_rows * legend_row_height + 26
-    height = panel_top + 3 * 270
+    height = panel_top + ceil(len(metrics) / 2) * 270
 
     lines: list[str] = []
     lines.append(
@@ -58,7 +66,7 @@ def build_history_svg(comparable_runs: list[StoredRun]) -> str:
     lines.append(
         "  <desc id=\"desc\">Stored benchmark runs "
         + ", ".join(run.run_id for run in comparable_runs)
-        + " across pass rate, tool precision, tool recall, citation compliance, p95 latency, and average cost.</desc>"
+        + " across " + ", ".join(spec.key for spec in metrics) + ".</desc>"
     )
     lines.append("  <defs>")
     lines.append("    <style>")
@@ -84,7 +92,7 @@ def build_history_svg(comparable_runs: list[StoredRun]) -> str:
     lines.append(
         '  <text class="subtitle" x="60" y="86">'
         + escape(
-            f"{len(comparable_runs)} comparable {suite_label(comparable_runs[-1].summary.fixtures_path)} runs, 6 key metrics."
+            f"{len(comparable_runs)} comparable {suite_label(comparable_runs[-1].summary.fixtures_path)} runs, {len(metrics)} key metrics."
         )
         + "</text>"
     )
@@ -105,16 +113,9 @@ def build_history_svg(comparable_runs: list[StoredRun]) -> str:
             f"{run.generated_at.strftime('%m-%d %H:%M')}, {'PASS' if run.summary.overall_passed else 'FAIL'}</text>"
         )
 
-    panel_positions = [
-        (40, panel_top),
-        (620, panel_top),
-        (40, panel_top + 270),
-        (620, panel_top + 270),
-        (40, panel_top + 540),
-        (620, panel_top + 540),
-    ]
+    panel_positions = [(40 + (index % 2) * 580, panel_top + (index // 2) * 270) for index in range(len(metrics))]
 
-    for spec, (panel_x, panel_y) in zip(SVG_METRICS, panel_positions):
+    for spec, (panel_x, panel_y) in zip(metrics, panel_positions, strict=True):
         plot_left = panel_x + 90
         plot_right = panel_x + 460
         plot_top = panel_y + 46
@@ -122,9 +123,9 @@ def build_history_svg(comparable_runs: list[StoredRun]) -> str:
         gate_value = None
         if spec.gate_key:
             gate_value = float(comparable_runs[-1].summary.hard_gates.get(spec.gate_key, 0.0))
-        values = [float(getattr(run.metrics, spec.key) or 0.0) for run in comparable_runs]
+        values = [getattr(run.metrics, spec.key) for run in comparable_runs]
         scale_min = 0.0
-        scale_max = _scale_max(spec.key, values, gate_value)
+        scale_max = _scale_max(spec.key, [float(value) for value in values if value is not None], gate_value)
         x_padding = 20.0
         usable_width = (plot_right - plot_left) - 2 * x_padding
         if len(comparable_runs) == 1:
@@ -134,7 +135,7 @@ def build_history_svg(comparable_runs: list[StoredRun]) -> str:
                 plot_left + x_padding + (usable_width * index / (len(comparable_runs) - 1))
                 for index in range(len(comparable_runs))
             ]
-        ys = [_map_y(value, scale_min, scale_max, plot_top, plot_bottom) for value in values]
+        ys = [_map_y(float(value), scale_min, scale_max, plot_top, plot_bottom) if value is not None else None for value in values]
 
         lines.append('  <g transform="translate(0,0)">')
         lines.append(f'    <rect class="panel" x="{panel_x}" y="{panel_y}" width="540" height="230" rx="18"/>')
@@ -161,16 +162,24 @@ def build_history_svg(comparable_runs: list[StoredRun]) -> str:
         lines.append(f'    <text class="axis" x="{panel_x + 56}" y="{plot_top + 4}">{_svg_axis_label(spec.key, scale_max)}</text>')
 
         if len(xs) > 1:
-            path_points = " ".join(
-                ("M" if index == 0 else "L") + f"{x:.1f} {y:.1f}"
-                for index, (x, y) in enumerate(zip(xs, ys, strict=True))
-            )
+            segments: list[str] = []
+            previous_available = False
+            for x, y in zip(xs, ys, strict=True):
+                if y is not None:
+                    segments.append(("L" if previous_available else "M") + f"{x:.1f} {y:.1f}")
+                previous_available = y is not None
+            path_points = " ".join(segments)
             lines.append(f'    <path class="trend" d="{path_points}"/>')
 
         for index, run in enumerate(comparable_runs):
             fill, stroke = SVG_COLORS[index % len(SVG_COLORS)]
             x = xs[index]
             y = ys[index]
+            if y is None:
+                lines.append(
+                    f'    <text class="value" x="{x:.1f}" y="{plot_bottom - 10}" text-anchor="middle">unavailable</text>'
+                )
+                continue
             value_label_y = y - 10 if index % 2 == 0 else y + 18
             if value_label_y < plot_top + 10:
                 value_label_y = y + 18
@@ -205,7 +214,7 @@ def _scale_max(metric_key: str, values: list[float], gate_value: float | None) -
     max_value = max(values) if values else 1.0
     if metric_key in {"pass_rate", "tool_precision", "tool_recall", "citation_compliance"}:
         return 1.0
-    if metric_key == "p95_latency_ms":
+    if metric_key.endswith("_ms"):
         baseline = max(max_value, gate_value or 0.0) * 1.1
         return max(1000.0, _round_up(baseline, 5000.0))
     if metric_key == "avg_cost_per_case_usd":
@@ -217,7 +226,7 @@ def _scale_max(metric_key: str, values: list[float], gate_value: float | None) -
 def _svg_axis_label(metric_key: str, value: float) -> str:
     if metric_key in {"pass_rate", "tool_precision", "tool_recall", "citation_compliance"}:
         return f"{value:.1f}"
-    if metric_key == "p95_latency_ms":
+    if metric_key.endswith("_ms"):
         return str(int(value))
     if metric_key == "avg_cost_per_case_usd":
         return f"{value:.4f}".rstrip("0").rstrip(".")

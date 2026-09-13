@@ -159,7 +159,20 @@ def build_markdown_report(summary: RunSummary, results: list[CaseResult] | None 
     lines.append(f"- Mode: `{summary.mode}`")
     lines.append(f"- Endpoint: `{summary.endpoint}`")
     lines.append(f"- Fixtures: `{summary.fixtures_path}`")
+    lines.append(f"- Execution contract: `{summary.execution_contract_version or 'legacy: unspecified'}`")
+    lines.append(f"- Measurement contract: `{summary.measurement_contract_version or 'legacy: unspecified'}`")
+    lines.append(f"- Suite fingerprint: `{summary.suite_fingerprint or 'unavailable'}`")
+    lines.append(f"- Evaluation fingerprint: `{summary.evaluation_fingerprint or 'unavailable'}`")
     lines.append(f"- Release: `{'PASS' if summary.overall_passed else 'FAIL'}`")
+    if summary.measurement_contract_version is not None:
+        lines.append("")
+        lines.append(
+            "Timing: attachment_setup_ms covers attachment preparation and synchronization; "
+            "question_response_ms covers the final question through final-response receipt, before response validation; "
+            "scenario_total_ms includes initialization, attachments, every conversation turn and response validation, excluding judge and cleanup. "
+            "The p95_latency_ms release gate retains the final-question boundary. "
+            "History comparisons require matching execution and measurement contracts, suite content and evaluation settings."
+        )
     lines.append("")
     lines.append("## Metrics")
     lines.append("")
@@ -181,6 +194,12 @@ def build_markdown_report(summary: RunSummary, results: list[CaseResult] | None 
         ("citation_compliance", summary.metrics.citation_compliance),
         ("p50_latency_ms", summary.metrics.p50_latency_ms),
         ("p95_latency_ms", summary.metrics.p95_latency_ms),
+        ("p50_attachment_setup_ms", summary.metrics.p50_attachment_setup_ms),
+        ("p95_attachment_setup_ms", summary.metrics.p95_attachment_setup_ms),
+        ("p50_question_response_ms", summary.metrics.p50_question_response_ms),
+        ("p95_question_response_ms", summary.metrics.p95_question_response_ms),
+        ("p50_scenario_total_ms", summary.metrics.p50_scenario_total_ms),
+        ("p95_scenario_total_ms", summary.metrics.p95_scenario_total_ms),
         ("hybrid_p95_latency_ms", summary.metrics.hybrid_p95_latency_ms),
         ("hybrid_p95_server_ms", summary.metrics.hybrid_p95_server_ms),
         ("hybrid_p95_synthesis_ms", summary.metrics.hybrid_p95_synthesis_ms),
