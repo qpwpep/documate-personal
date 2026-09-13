@@ -7,12 +7,10 @@ from uuid import uuid4
 
 import streamlit as st
 
-from src.app.web.streamlit_api_client import (
+from src.app.client import (
     AgentRequestContext,
+    AgentSessionClient,
     UploadAPIError,
-    fetch_upload_manifest,
-    stream_agent_response,
-    sync_uploads,
 )
 from src.app.web.streamlit_chat import process_chat_prompt, render_chat_history
 from src.app.web.streamlit_intro import render_intro
@@ -34,10 +32,9 @@ from src.app.web.streamlit_state import (
     set_upload_manifest,
     set_pending_upload,
 )
-from src.app.web.streamlit_upload_handler import (
+from src.app.uploads import (
     PendingUploadOperation,
     discard_staged_files,
-    stage_uploaded_files,
 )
 from src.core.domain_docs import DEFAULT_DOCS
 from src.core.uploads import normalized_upload_name
@@ -60,7 +57,7 @@ def main() -> None:
     manifest_error = None
     if get_upload_manifest() is None:
         try:
-            set_upload_manifest(fetch_upload_manifest(SETTINGS.fastapi_url, get_session_id()))
+            set_upload_manifest(_session_client().refresh_uploads())
         except UploadAPIError as exc:
             manifest_error = str(exc)
 
@@ -85,7 +82,7 @@ def main() -> None:
 
     if sidebar_inputs.refresh_uploads_requested:
         try:
-            set_upload_manifest(fetch_upload_manifest(SETTINGS.fastapi_url, get_session_id()))
+            set_upload_manifest(_session_client().refresh_uploads())
             st.rerun()
         except UploadAPIError as exc:
             st.error(str(exc))
@@ -159,28 +156,24 @@ def main() -> None:
 
         def stream_agent(user_input: str):
             request_session_id = get_session_id()
-            received_final = False
-            events = stream_agent_response(
-                user_input,
+            client = AgentSessionClient(
                 AgentRequestContext(
                     fastapi_url=SETTINGS.fastapi_url,
                     session_id=request_session_id,
                     slack_user_id=sidebar_inputs.slack_user_id,
                     slack_email=sidebar_inputs.slack_email,
                     slack_channel_id=sidebar_inputs.slack_channel_id,
-                    uploads=manifest.context(),
                 ),
+                manifest=manifest,
             )
-            for event in events:
-                if event.event == "final_response" and event.result is not None:
-                    received_final = True
+            try:
+                for event in client.stream(user_input):
                     if get_session_id() == request_session_id:
-                        set_upload_manifest(event.result.upload_manifest)
-                yield event
-            if not received_final and get_session_id() == request_session_id:
-                # The server may have changed attachments before the stream failed.
-                # The next rerun refreshes confirmation without replaying the question.
-                set_upload_manifest(None)
+                        set_upload_manifest(client.manifest)
+                    yield event
+            finally:
+                if get_session_id() == request_session_id:
+                    set_upload_manifest(client.manifest)
 
         process_chat_prompt(
             stream_agent=stream_agent,
@@ -190,10 +183,16 @@ def main() -> None:
         )
 
 
+def _session_client() -> AgentSessionClient:
+    return AgentSessionClient(
+        AgentRequestContext(fastapi_url=SETTINGS.fastapi_url, session_id=get_session_id()),
+        manifest=get_upload_manifest(),
+    )
+
+
 def _stage_files(files: list[Any], session_path: Path):
-    manifest = get_upload_manifest()
-    return stage_uploaded_files(
-        files, session_path, existing_files=manifest.files if manifest is not None else [],
+    return _session_client().stage_files(
+        files, session_path,
         max_files=SETTINGS.upload_max_files, max_file_mib=SETTINGS.upload_max_file_mib,
         max_total_mib=SETTINGS.upload_max_total_mib,
     )
@@ -208,7 +207,7 @@ def commit_pending_upload() -> bool:
         return False
     pending.attempted = True
     try:
-        result = sync_uploads(SETTINGS.fastapi_url, get_session_id(), pending.request_payload())
+        result = _session_client().sync_uploads(pending)
     except UploadAPIError as exc:
         pending.failed = True
         pending.error = str(exc)
@@ -217,7 +216,7 @@ def commit_pending_upload() -> bool:
         if exc.status_code == 409:
             pending.needs_refresh_review = True
             try:
-                set_upload_manifest(fetch_upload_manifest(SETTINGS.fastapi_url, get_session_id()))
+                set_upload_manifest(_session_client().refresh_uploads())
             except UploadAPIError as refresh_error:
                 pending.error += f"\n첨부 목록 새로고침 실패: {refresh_error}"
         return False
@@ -235,7 +234,7 @@ def _review_pending_again() -> None:
     if pending is None:
         return
     try:
-        manifest = fetch_upload_manifest(SETTINGS.fastapi_url, get_session_id())
+        manifest = _session_client().refresh_uploads()
     except UploadAPIError as exc:
         pending.error = str(exc)
         return
@@ -297,7 +296,7 @@ def _render_pending_upload() -> None:
             discard_staged_files(pending.files, get_session_path())
         set_pending_upload(None)
         try:
-            set_upload_manifest(fetch_upload_manifest(SETTINGS.fastapi_url, get_session_id()))
+            set_upload_manifest(_session_client().refresh_uploads())
         except UploadAPIError:
             if pending.attempted:
                 # A lost response may hide a committed mutation. Require confirmation
