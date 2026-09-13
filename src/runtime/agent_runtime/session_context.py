@@ -19,7 +19,7 @@ from src.core.contracts.graph_state import PendingAction
 from src.core.contracts.boundary.runtime import parse_session_metadata
 from src.infra.logging_utils import log_event
 from src.infra.tools.local_rag import UploadedRetrieverHandle
-from src.infra.upload_storage import UploadStorage, remove_managed_upload_files
+from src.infra.upload_storage import UploadStorage, remove_managed_upload_files, clear_auxiliary_upload_files
 
 
 logger = logging.getLogger(__name__)
@@ -173,6 +173,8 @@ class SessionContext:
             self._release_upload_handle(old_handle)
         retained = {record.path for record in records}
         remove_managed_upload_files(storage, (record.path for record in old_records if record.path not in retained))
+        if not records:
+            clear_auxiliary_upload_files(storage)
 
     @staticmethod
     def _release_upload_handle(handle: UploadedRetrieverHandle) -> None:
@@ -198,6 +200,7 @@ class SessionContext:
         self.upload_content_hash = None
         if self._upload_storage is not None:
             remove_managed_upload_files(self._upload_storage, (record.path for record in records))
+            clear_auxiliary_upload_files(self._upload_storage)
 
     def close(self) -> None:
         self.release_upload_resources()
