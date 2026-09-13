@@ -123,6 +123,20 @@ PLANNER_REASONING_EFFORT=high
 | `UPLOAD_MAX_FILES` | `10` | 세션별 활성 업로드 파일 개수 |
 | `UPLOAD_MAX_FILE_MIB` | `10` | 업로드 파일당 크기 상한 (MiB) |
 | `UPLOAD_MAX_TOTAL_MIB` | `50` | 세션별 활성 업로드 합계 상한 (MiB) |
+| `DOCLING_ENABLED` | `false` | PDF·DOCX·이미지 첨부 활성화 (docling extra 필요) |
+| `DOCLING_ARTIFACTS_PATH` | `output/docling/models` | 미리 준비한 로컬 변환/OCR 모델 디렉터리 |
+| `DOCLING_OCR_ENGINE` | `rapidocr` | 한국어·영어 OCR 엔진: rapidocr (기본) 또는 비교용 easyocr |
+| `DOCLING_OCR_ENABLED` | `true` | 스캔 PDF·이미지 OCR 사용 |
+| `DOCLING_MAX_PAGES` | `30` | PDF 파일당 전체 페이지 상한 |
+| `DOCLING_TIMEOUT_SECONDS` | `90` | 한 첨부 변경의 Docling 변환 시간 상한 |
+| `DOCUMENT_UPLOAD_TIMEOUT_SECONDS` | `150` | Docling 활성화 시 후보 첨부 생성·커밋 기한 |
+| `DOCLING_MAX_WORKER_MIB` | `4096` | 변환 프로세스 RSS 감시 한도 (MiB) |
+| `DOCLING_MAX_OUTPUT_MIB` | `16` | 변환 결과 JSON 한도 (MiB) |
+| `DOCLING_MAX_IMAGE_PIXELS` | `40000000` | 이미지 픽셀 수 상한 |
+| `DOCUMENT_MAX_CHUNKS` | `2000` | Docling 문서의 후보 검색 청크 합계 상한 |
+| `DOCUMENT_CACHE_ENABLED` | `true` | 세션별 변환·임베딩 캐시 사용 |
+| `DOCUMENT_CACHE_MAX_MIB` | `64` | 세션 캐시 총 예산: 변환·임베딩에 절반씩 할당 |
+| `DOCUMENT_CACHE_TTL_SECONDS` | `1800` | 캐시 생성 후 유효 시간 |
 | `SESSION_CLEANUP_INTERVAL_SECONDS` | `60` | 세션 정리 주기 |
 | `GENERATED_FILE_TTL_SECONDS` | `86400` | `save_text` 결과 파일 TTL |
 | `FILE_CLEANUP_INTERVAL_SECONDS` | `60` | 업로드/생성 파일 정리 주기 |
@@ -227,17 +241,17 @@ docs 도구는 task의 `k`를 Tavily `max_results`와 반환 evidence 한도에 
 
 ### 3.2 업로드 파일
 
-- 허용 확장자: `.py`, `.ipynb`
+- 기본 확장자: `.py`, `.ipynb`. `DOCLING_ENABLED=true`이면 `.pdf`, `.docx`, `.png`, `.jpg`, `.jpeg`, `.tif`, `.tiff`, `.webp`, `.bmp`도 첨부할 수 있습니다. 이미지는 단일 프레임만 지원합니다.
 - 허용 위치: `uploads/<session_id>/...`
 - 검증 기준: `src/app/web/cleanup.py::validate_upload_file_path`
 - 기본 한도: 세션당 10개, 파일당 10 MiB, 활성 파일 합계 50 MiB. `UPLOAD_MAX_FILES`, `UPLOAD_MAX_FILE_MIB`, `UPLOAD_MAX_TOTAL_MIB`로 조정합니다.
-- 파일 내용은 UTF-8로 읽습니다. 비어 있거나 검색할 코드·markdown 원문이 없는 파일은 첨부 반영 전에 거부합니다.
+- 코드·Notebook은 UTF-8 원문으로 읽고 문서·이미지는 검증된 bytes를 Docling에 전달합니다. 빈 파일이나 검색할 본문·표가 없는 문서는 첨부 반영 전에 거부합니다. 새 문서 형식은 manifest 첨부 API로 사용하고 legacy `upload_file_path`는 `.py`·`.ipynb` 범위를 유지합니다.
 
 Streamlit은 여러 파일을 한 번에 선택하고 기존 첨부에 추가합니다. 같은 이름과 내용은 재전송해도 중복 추가하지 않고, 같은 이름의 다른 내용은 명시적인 교체가 필요합니다. 이름 비교는 Unicode NFC와 대소문자 정규화를 사용합니다. 다른 이름의 동일 내용은 별도 출처로 유지합니다. 개별 삭제와 전체 첨부 해제는 이후 검색에서 해당 자료를 제외하며 대화와 기존 답변의 인용은 보존합니다.
 
 `upload` route는 현재 세션의 활성 파일들을 하나의 임시 Chroma 인덱스로 검색합니다. 파일별 원문과 snapshot은 별도로 보관하고, 검색 청크의 snapshot ID에 맞는 원문을 복원합니다. 도구 이름은 `upload_search`이고 근거 snapshot의 `source_type`은 `upload`입니다. `requirement.file_ids`가 비어 있으면 전체 활성 파일을 검색하며, 파일을 지정하면 그 범위만 검색합니다. 명시적으로 비교하는 파일마다 근거를 배정하고, 확보하지 못한 파일은 누락으로 표시합니다. 파일 사이의 import 별칭은 공유하지 않지만 같은 Notebook의 셀 사이에서는 유지합니다.
 
-UI가 만든 고유 staging 파일은 반영 대기와 재시도 입력입니다. 서버는 검증한 바이트를 `objects/<file_id>/<version>/...`에 복사하고 새 세대 인덱스를 완성한 뒤 활성 목록과 함께 전환합니다. 확정 전에는 변경 작업이 신규 원본·후보 인덱스를 소유하고, 확정 후에는 세션이 관리 원본·활성 인덱스를 소유합니다. 실패한 배치는 이번에 만든 자원만 정리하고 기존 첨부를 유지합니다. 성공한 교체는 새 집합에서 사용하지 않는 이전 원본만 해제하므로, 변경하지 않은 파일은 다음 통합 인덱스에서도 재사용합니다. 같은 파일 집합은 다시 등록하거나 임베딩하지 않으며, 실제 변경에는 변경하지 않은 파일의 재임베딩 비용도 발생합니다.
+UI가 만든 고유 staging 파일은 반영 대기와 재시도 입력입니다. 서버는 검증한 바이트를 `objects/<file_id>/<version>/...`에 복사하고 새 세대 인덱스를 완성한 뒤 활성 목록과 함께 전환합니다. 확정 전에는 변경 작업이 신규 원본·후보 인덱스를 소유하고, 확정 후에는 세션이 관리 원본·활성 인덱스를 소유합니다. 실패한 배치는 이번에 만든 자원만 정리하고 기존 첨부를 유지합니다. 성공한 교체는 새 집합에서 사용하지 않는 이전 원본만 해제하므로, 변경하지 않은 파일은 다음 통합 인덱스에서도 재사용합니다. 같은 파일 집합은 다시 등록하지 않습니다. 실제 변경은 후보 인덱스를 다시 만들지만, 문서 기능과 캐시가 활성화되어 있으면 원본·파서·청킹·모델 설정이 같은 변환과 임베딩을 재사용합니다. 전체 해제와 세션 종료는 세션 캐시도 회수합니다.
 
 첨부 전체 해제와 세션 종료는 같은 자원 해제 규칙을 사용합니다. `exit`·TTL·LRU·서버 정상 종료 시 확정 관리 원본과 인덱스를 해제하고, 이미 응답에 포함한 인용은 보존합니다. 답변 생성 실패는 첨부 수명의 끝이 아니므로 확정 첨부를 지우지 않습니다. HTTP의 기존 단일 파일 요청도 서버가 만든 관리 복사본에 이 규칙을 적용하지만, 런타임에 직접 전달한 legacy 입력 원본은 빌려 읽는 파일이므로 삭제하지 않습니다.
 
@@ -245,7 +259,7 @@ UI가 만든 고유 staging 파일은 반영 대기와 재시도 입력입니다
 
 UI와 서버 모두 파일 크기를 검사합니다. 서버는 실제 바이트를 기준으로 해시와 크기를 계산하고, 추가·교체 후보를 읽는 중에도 전체 한도를 검사합니다. staging과 서버 원본의 합계 저장 공간은 활성 합계 한도의 3배로 제한하며, 공간을 줄이는 개별 삭제나 전체 해제는 허용합니다. 목록 조회·변경 시 같은 세션 락 안에서 활성 목록이 참조하지 않는 관리 원본을 회수하므로, 이전 세션이나 비정상 종료·삭제 실패로 남은 원본도 다시 정리합니다. 삭제 실패로 이미 확정한 목록과 revision을 되돌리지는 않습니다. 현재 요청의 입력 경로와 활성 원본은 보호하고, staging은 `SESSION_TTL_SECONDS`보다 오래된 미사용 배치만 정리하여 최근 쓰기와 재시도 입력을 보존합니다. 경로 경계를 벗어나는 링크와 알 수 없는 저장 구조는 삭제하지 않습니다. 실제 디스크 사용량을 계속 검사하며 기존 단일 파일 API에도 같은 용량 한도를 적용합니다.
 
-명시된 코드 심볼은 retriever가 보존한 전체 source registry에서 AST로 조회합니다. 함수·클래스·메서드 정의와 호출·사용을 구분하므로, 주석이나 호출에 이름이 있다는 이유로 함수 구현을 발췌하지 않습니다. 정확한 심볼 조회는 vector top-k 밖의 원문도 찾으며, 요구한 정의와 Notebook의 별도 정의 cell을 `k` 때문에 잘라내지 않습니다. 일반 topic 검색은 Chroma 후보와 lexical reranking을 사용합니다. 파일 범위가 있는 의미 검색은 `_SourceAwareVectorStore`가 검색 호출마다 쿼리 임베딩을 한 번 계산하고 파일별 필터 조회에 같은 벡터를 전달합니다. 각 파일의 첫 후보를 확보한 뒤 나머지 후보를 원시 거리 오름차순으로 선택하여 `max(k, 명시 파일 수)` 예산을 채웁니다. 기존 metadata·문서 필터, 점수 정규화와 인용 원문 복원은 유지하며, 다른 검색 호출이나 세션에 쿼리 벡터를 캐시하지 않습니다.
+명시된 코드 심볼은 기존 코드·Notebook source registry에서 AST로 조회합니다. Docling/OCR로 읽은 문서는 네이티브 Python 구현의 완전한 수집으로 취급하지 않으며 심볼 부재를 확정하지 않습니다. 함수·클래스·메서드 정의와 호출·사용을 구분하므로, 주석이나 호출에 이름이 있다는 이유로 함수 구현을 발췌하지 않습니다. 정확한 심볼 조회는 vector top-k 밖의 원문도 찾으며, 요구한 정의와 Notebook의 별도 정의 cell을 `k` 때문에 잘라내지 않습니다. 일반 topic 검색은 Chroma 후보와 lexical reranking을 사용합니다. 파일 범위가 있는 의미 검색은 `_SourceAwareVectorStore`가 검색 호출마다 쿼리 임베딩을 한 번 계산하고 파일별 필터 조회에 같은 벡터를 전달합니다. 각 파일의 첫 후보를 확보한 뒤 나머지 후보를 원시 거리 오름차순으로 선택하여 `max(k, 명시 파일 수)` 예산을 채웁니다. 기존 metadata·문서 필터, 점수 정규화와 인용 원문 복원은 유지하며, 다른 검색 호출이나 세션에 쿼리 벡터를 캐시하지 않습니다.
 
 정의 발췌는 decorator와 본문을 포함한 원래 문자 범위를 보존합니다. AST의 UTF-8 byte 열 위치는 원문 문자 offset으로 변환하며, Notebook cell ID·index와 줄바꿈·들여쓰기를 유지합니다. 전체 registry에서 확인한 부재와 일부 검색 후보에서 찾지 못한 상태는 구분합니다. registry가 없거나 AST를 분석할 수 없으면 부재를 단정하지 않고 `unknown`을 반환합니다. 코드의 구체 aspect는 주석이 아닌 구문에서 확인하며, 명시 버전의 근거가 없을 때도 `unknown`으로 남깁니다.
 
@@ -269,13 +283,13 @@ UI와 서버 모두 파일 크기를 검사합니다. 서버는 실제 바이트
 
 synthesis의 기본 근거 개수 상한은 8개이며, 요구사항별 `max(1, 명시 파일 수) × max(1, aspect 수)`의 합이 더 크면 그 합만큼 항목 여유를 둡니다. 같은 파일도 독립 요구사항마다 배분 대상이며, 떨어진 aspect에는 여러 발췌가 필요할 수 있습니다. 실제로 같은 선택 범위를 공유하면 한 번만 포함하고 검색에서 확인한 요구사항 연결을 합칩니다. planner의 `MAX_PLANNER_TASKS=8`은 유지하며 파일마다 태스크를 늘리지 않습니다.
 
-일반 excerpt 합계는 6,000자, docs+upload 혼합은 8,000자이며 compact는 각각 3,000자와 4,000자입니다. 일반 snippet은 `SYNTHESIS_PROMPT_SNIPPET_CHARS`, compact는 일반 설정과 `SYNTHESIS_COMPACT_PROMPT_SNIPPET_CHARS` 중 작은 값을 사용합니다. 요구사항·명시 파일별로 빠진 근거와 literal aspect를 채우는 최소 관련 범위를 먼저 확보한 뒤 남은 예산으로 주변 문맥을 확장합니다. 프롬프트 coverage와 최종 검증은 같은 계산을 사용하되, 각각 실제 packet 전체와 유효하게 인용한 부분집합을 검사합니다. 검색 성공만으로 모델에 전달하지 않은 범위를 충족했다고 판단하지 않습니다. 표는 배정된 문자 예산 안에 전체 excerpt가 들어가야 하며 코드 범위는 완전한 구문·행을 보존합니다. 모든 요구가 예산 안에 들어간다는 보장은 없고, 이 예산은 excerpt만 계산하므로 system prompt·대화·JSON 메타데이터·별도 표 셀을 포함한 전체 입력 토큰 한도도 아닙니다.
+일반 excerpt 합계는 6,000자, docs+upload 혼합은 8,000자이며 compact는 각각 3,000자와 4,000자입니다. 일반 snippet은 `SYNTHESIS_PROMPT_SNIPPET_CHARS`, compact는 일반 설정과 `SYNTHESIS_COMPACT_PROMPT_SNIPPET_CHARS` 중 작은 값을 사용합니다. 요구사항·명시 파일별로 빠진 근거와 literal aspect를 채우는 최소 관련 범위를 먼저 확보한 뒤 남은 예산으로 주변 문맥을 확장합니다. 프롬프트 coverage와 최종 검증은 같은 계산을 사용하되, 각각 실제 packet 전체와 유효하게 인용한 부분집합을 검사합니다. 검색 성공만으로 모델에 전달하지 않은 범위를 충족했다고 판단하지 않습니다. 표는 검색된 셀 범위 안에서 완전한 행과 필요한 헤더를 선택해 문자 예산에 맞추며, 최소 단위가 들어가지 않으면 근거 부족으로 남깁니다. 코드 범위는 완전한 구문·행을 보존합니다. 모든 요구가 예산 안에 들어간다는 보장은 없고, 이 예산은 excerpt만 계산하므로 system prompt·대화·JSON 메타데이터·별도 표 셀을 포함한 전체 입력 토큰 한도도 아닙니다.
 
 모델 합성에서는 실제 보낸 범위만 evidence packet에 남기며, 범위가 달라지면 새 evidence ID를 사용합니다. 기존 답변을 그대로 복사하는 deterministic 경로는 모델을 호출하지 않고 선택한 답변의 citations를 검증 packet으로 사용합니다. 내부 `ResponseState.evidence_requirement_map`은 packet ID와 원래 requirement ID의 연결을 보존합니다. 모델 입출력에서만 `e1`, `e2` 같은 짧은 별칭을 사용하고, 서버가 참조 필드를 원래 ID로 복원한 뒤 검증합니다. 이전 답변을 변환할 때도 모델에 제공하는 원문 사본의 refs에 같은 별칭을 적용하며 저장된 원문과 revision은 유지합니다. 일반·compact 입력은 각자의 매핑을 사용하며 알 수 없는 별칭은 검증을 통과하지 못합니다. 최종 인용의 ID·원문·hash·offset은 이 별칭 때문에 바뀌지 않습니다. 모델 입력에는 선택 범위의 `is_partial`, `capture_scope`와 요구별 남은 aspect·빠진 aspect를 함께 전달합니다. 이 map은 검색 유래를 나타내며, 참조를 붙였다는 사실만으로 설명의 의미적 충분함을 증명하지 않습니다.
 
 합성의 `[Reference Policy]`에는 최종 검증과 동일한 `retrieval_required`를 전달합니다. `source`·`inference`·`excerpt`에는 항상 유효한 refs가 필요하며 검색이 필요한 답변의 `example`에도 필요합니다. 이전 검색 답변의 변환은 이 조건을 상속합니다. `excerpt` 검증은 하나의 선택 범위 전체와 공백·줄바꿈까지 일치할 때만 `exact_match`입니다. 일부 인용이나 재서술은 `source`로 표시하며 의미적 근거성은 별도 평가 대상입니다.
 
-현재 구현은 인용한 원문 요소를 응답에 포함해 파일 교체·삭제 후에도 당시 근거를 보여줍니다. 원본 파일 bytes의 영구 보관소나 별도 문서 조회 API는 제공하지 않습니다. Docling 설치·변환, PDF 입력, 페이지 이미지 강조 표시는 후속 범위입니다. 향후 adapter가 `ParsedDocument`를 만들면 제목 계층·표·페이지·위치 정보를 기존 핵심 모델로 전달할 수 있습니다.
+Docling 어댑터는 제목 계층·표 셀·병합·페이지·위치를 기존 `ParsedDocument`로 변환합니다. 표 청크와 검색 결과는 `cell_ids`를 유지하며 생성 예산에서는 완전한 행과 필요한 헤더를 선택합니다. 알려지지 않은 셀 페이지·DOCX 페이지는 추정하지 않습니다. OCR의 오류·누락 가능성은 `quality_issues`로 생성과 출처 표시에 전달합니다. 현재 구현은 인용한 원문 요소를 응답에 포함해 파일 교체·삭제 후에도 당시 근거를 보여줍니다. 원본 bytes 영구 보관소와 PDF 페이지 이미지 강조 표시는 제공하지 않습니다. 설치·한도·캐시·실제 OCR 측정은 [문서 변환 안내](document_ingestion.md)를 참고하세요.
 
 ### 3.4 생성 파일과 정리 정책
 
