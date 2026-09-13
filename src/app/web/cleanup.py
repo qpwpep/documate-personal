@@ -17,11 +17,12 @@ from src.infra.runtime_paths import (
 )
 from src.infra.settings import AppSettings
 from src.core.uploads import validate_session_id
+from src.core.upload_formats import ALL_UPLOAD_SUFFIXES
 from src.app.web.session_store import InMemorySessionStore
 
 
 logger = logging.getLogger(__name__)
-ALLOWED_UPLOAD_SUFFIXES = {".py", ".ipynb"}
+ALLOWED_UPLOAD_SUFFIXES = ALL_UPLOAD_SUFFIXES
 
 
 def resolve_download_path(output_dir: Path, filename: str) -> Path:

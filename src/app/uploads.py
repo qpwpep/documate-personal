@@ -7,6 +7,7 @@ from typing import Any
 from uuid import uuid4
 
 from src.core.uploads import normalized_upload_name
+from src.core.upload_formats import ALL_UPLOAD_SUFFIXES
 
 
 @dataclass
@@ -76,8 +77,8 @@ def stage_uploaded_files(
     seen_hashes: dict[str, str] = {}
     for uploaded in uploaded_files:
         name = Path(str(uploaded.name).replace("\\", "/")).name
-        if name in {"", ".", ".."} or Path(name).suffix.lower() not in {".py", ".ipynb"}:
-            result.errors.append(f"{name or '(이름 없음)'}: .py 또는 .ipynb 파일만 첨부할 수 있습니다.")
+        if name in {"", ".", ".."} or Path(name).suffix.lower() not in ALL_UPLOAD_SUFFIXES:
+            result.errors.append(f"{name or '(이름 없음)'}: .py · .ipynb · PDF · DOCX 또는 지원하는 이미지 파일을 첨부해 주세요.")
             continue
         try:
             advertised_size = getattr(uploaded, "size", None)

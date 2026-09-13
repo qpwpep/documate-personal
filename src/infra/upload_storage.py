@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from src.core.uploads import validate_session_id
+from src.core.upload_formats import ALL_UPLOAD_SUFFIXES
 from src.infra.runtime_paths import get_upload_session_dir, get_uploads_dir
 
 
@@ -51,7 +52,7 @@ class UploadStorage:
         return bool(
             _IDENTITY.fullmatch(identity) and _IDENTITY.fullmatch(version)
             and all(_unredirected(item) for item in (base / identity, path.parent, path))
-            and (path.name == ".upload-part" or path.suffix.casefold() in {".py", ".ipynb"})
+            and (path.name == ".upload-part" or path.suffix.casefold() in ALL_UPLOAD_SUFFIXES)
         )
 
 
@@ -112,3 +113,26 @@ def reconcile_managed_upload_files(
                     pass
     except (OSError, RuntimeError, ValueError):
         logger.warning("upload_object_reconciliation_failed", exc_info=True)
+
+
+def clear_auxiliary_upload_files(storage: UploadStorage, *, include_cache: bool = True) -> None:
+    """Remove owned conversion workspaces/cache while the caller owns the session lock."""
+    def clear(directory: Path) -> None:
+        if (not directory.is_relative_to(storage.root) or not _unredirected(storage.root)
+                or not _unredirected(directory) or not directory.is_dir()):
+            return
+        for child in directory.iterdir():
+            if not _unredirected(directory) or not _unredirected(child):
+                continue
+            if child.is_dir():
+                clear(child)
+            elif child.is_file():
+                child.unlink(missing_ok=True)
+        if _unredirected(directory):
+            directory.rmdir()
+
+    for name in (("conversions", "cache") if include_cache else ("conversions",)):
+        try:
+            clear(storage.root / name)
+        except (OSError, RuntimeError, ValueError):
+            logger.warning("upload_auxiliary_cleanup_failed")

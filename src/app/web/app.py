@@ -67,10 +67,17 @@ async def lifespan(app: FastAPI):
     app.state.runtime_cleaner = runtime_cleaner
     app.state.agent_request_service = agent_request_service
     from src.app.web.upload_service import UploadService
-    app.state.upload_service = UploadService(settings=settings, session_store=session_store)
+    from src.infra.docling_runner import DoclingRunner
+    converter = DoclingRunner(cache_max_bytes=settings.document_cache_max_mib * 1024 * 1024 // 2,
+                             cache_ttl_seconds=settings.document_cache_ttl_seconds)
+    app.state.document_converter = converter
+    app.state.upload_service = UploadService(settings=settings, session_store=session_store, converter=converter)
     runtime_cleaner.run_once(force=True, current_session_id=None)
-    yield
-    session_store.close_all()
+    try:
+        yield
+    finally:
+        converter.close()
+        session_store.close_all()
 
 
 def create_app() -> FastAPI:

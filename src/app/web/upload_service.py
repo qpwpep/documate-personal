@@ -19,9 +19,11 @@ from src.core.uploads import (
 )
 from src.infra.runtime_paths import get_project_root_path, get_upload_session_dir, get_uploads_dir
 from src.infra.settings import AppSettings
+from src.core.upload_formats import CODE_UPLOAD_SUFFIXES, enabled_upload_suffixes
+from src.infra.document_ingestion import ConversionPolicy, DocumentConverterPort, DocumentIngestionContext, IngestionError
 from src.infra.tools.local_rag import build_upload_retriever
 from src.infra.tools.local_rag.uploads import retry_pending_upload_index_cleanup
-from src.infra.upload_storage import UploadStorage, reconcile_managed_upload_files, remove_managed_upload_files
+from src.infra.upload_storage import UploadStorage, reconcile_managed_upload_files, remove_managed_upload_files, clear_auxiliary_upload_files
 
 if TYPE_CHECKING:
     from src.app.agent_manager import AgentFlowManager
@@ -38,9 +40,11 @@ def _error(status: int, code: str, message: str, *, files: list[dict] | None = N
 
 
 class UploadService:
-    def __init__(self, *, settings: AppSettings, session_store: InMemorySessionStore):
+    def __init__(self, *, settings: AppSettings, session_store: InMemorySessionStore,
+                 converter: DocumentConverterPort | None = None):
         self.settings = settings
         self.session_store = session_store
+        self.converter = converter
 
     def get_manifest(self, session_id: str) -> UploadManifest:
         session_id = validate_session_id(session_id)
@@ -90,6 +94,7 @@ class UploadService:
         retry_pending_upload_index_cleanup()
         reconcile_managed_upload_files(storage, retained_paths=(item.path for item in session.upload_records),
                                        protected_paths=protected)
+        clear_auxiliary_upload_files(storage, include_cache=False)
 
     def _cleanup_staging(self, session_id: str, *, protected_paths: tuple[str, ...] = ()) -> None:
         """Reclaim expired, unreferenced batches while holding the pinned session lock.
@@ -154,8 +159,8 @@ class UploadService:
                 or re.search(r'[\\/:*?"<>|\x00-\x1f]', name)
                 or re.fullmatch(r"(?:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\..*)?", name, re.I)):
             raise _error(422, "UPLOAD_NAME_INVALID", "사용할 수 없는 파일 이름입니다.")
-        if Path(name).suffix.casefold() not in {".py", ".ipynb"}:
-            raise _error(422, "UPLOAD_TYPE_INVALID", ".py 또는 .ipynb 파일만 첨부할 수 있습니다.")
+        if Path(name).suffix.casefold() not in enabled_upload_suffixes(docling_enabled=self.settings.docling_enabled):
+            raise _error(422, "UPLOAD_TYPE_INVALID", "지원하지 않거나 활성화되지 않은 첨부 형식입니다.")
         try:
             validated = validate_upload_file_path(addition.path, session_id)
         except HTTPException as exc:
@@ -192,6 +197,10 @@ class UploadService:
             changed = bool(existing or session.upload_retriever_handle is not None)
             if changed:
                 self._commit(session_id, session, [], None)
+            else:
+                # A failed first attachment may have populated caches without
+                # ever publishing a manifest. Explicit clear releases those too.
+                clear_auxiliary_upload_files(session.bind_upload_storage(session_id))
             return UploadSyncResponse(manifest=session.upload_manifest(), changed=changed)
 
         records = [item for item in session.upload_records if item.file_id not in request.remove]
@@ -270,8 +279,44 @@ class UploadService:
         if not records:
             return None
         try:
-            return build_upload_retriever(records, session_id=session_id, generation=uuid4().hex,
-                                          api_key=self.settings.openai_api_key)
+            generation = uuid4().hex
+            options = {}
+            if self.settings.docling_enabled:
+                storage = UploadStorage.bind(session_id)
+                artifacts = Path(self.settings.docling_artifacts_path).expanduser()
+                if not artifacts.is_absolute():
+                    artifacts = get_project_root_path() / artifacts
+                policy = ConversionPolicy(artifacts_path=str(artifacts),
+                    ocr_engine=self.settings.docling_ocr_engine, do_ocr=self.settings.docling_ocr_enabled,
+                    max_pdf_pages=self.settings.docling_max_pages, timeout_seconds=self.settings.docling_timeout_seconds,
+                    max_worker_mib=self.settings.docling_max_worker_mib, max_output_mib=self.settings.docling_max_output_mib,
+                    max_image_pixels=self.settings.docling_max_image_pixels)
+                options["ingestion"] = DocumentIngestionContext(converter=self.converter, policy=policy,
+                    workspace=storage.root / "conversions" / generation,
+                    cache_dir=storage.root / "cache" if self.settings.document_cache_enabled else None,
+                    cache_max_bytes=self.settings.document_cache_max_mib * _MIB // 2,
+                    cache_ttl_seconds=self.settings.document_cache_ttl_seconds,
+                    max_chunks=self.settings.document_max_chunks,
+                    deadline=time.monotonic() + self.settings.document_upload_timeout_seconds)
+            handle = build_upload_retriever(records, session_id=session_id, generation=generation,
+                                          api_key=self.settings.openai_api_key, **options)
+            try:
+                if "ingestion" in options:
+                    options["ingestion"].check_deadline()
+            except BaseException:
+                try:
+                    handle.cleanup()
+                except Exception:
+                    logger.warning("expired_candidate_cleanup_failed", exc_info=True)
+                raise
+            return handle
+        except IngestionError as exc:
+            status = (504 if exc.code == "DOCUMENT_PROCESSING_TIMEOUT" else
+                      413 if exc.code == "DOCUMENT_LIMIT_EXCEEDED" else
+                      503 if exc.code in {"DOCUMENT_CONVERTER_BUSY", "DOCUMENT_CONVERTER_UNAVAILABLE", "DOCUMENT_CONVERSION_FAILED"} else
+                      500 if exc.code == "DOCUMENT_ADAPTER_ERROR" else 422)
+            raise _error(status, exc.code, f"{exc.message} 기존 첨부는 유지됩니다.",
+                         files=[{"name": exc.file_name, "code": exc.code, "message": exc.message}] if exc.file_name else []) from exc
         except ValueError as exc:
             raise _error(422, "UPLOAD_VALIDATION_FAILED", f"파일 내용을 확인해 주세요. 첨부는 변경되지 않았습니다: {exc}") from exc
         except Exception as exc:
@@ -283,7 +328,7 @@ class UploadService:
         if not root.is_relative_to(get_uploads_dir().resolve()):
             raise _error(422, "UPLOAD_PATH_INVALID", "세션 저장 경로가 업로드 영역을 벗어났습니다.")
         used = 0
-        for area in (root / "objects", root / "staging"):
+        for area in (root / "objects", root / "staging", root / "conversions"):
             if not area.resolve().is_relative_to(root):
                 raise _error(422, "UPLOAD_PATH_INVALID", "첨부 저장 경로가 세션 영역을 벗어났습니다.")
             if area.exists():
@@ -341,6 +386,8 @@ class UploadService:
         from src.app.web.cleanup import validate_upload_file_path
 
         validated = validate_upload_file_path(path, session_id)
+        if Path(validated).suffix.casefold() not in CODE_UPLOAD_SUFFIXES:
+            raise _error(422, "UPLOAD_TYPE_INVALID", "PDF·DOCX·이미지는 첨부 목록 API로 추가해 주세요.")
         addition = UploadAddition(path=validated, name=Path(validated).name)
         content, digest = self._read_addition(addition, session_id)
         previous = next((item for item in session.upload_records if item.source_uri == validated), None)
