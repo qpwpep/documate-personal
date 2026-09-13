@@ -103,6 +103,8 @@ def maybe_short_circuit_synthesis(
         kind=kind,
         request_id=contract.request_id if contract else None,
         contract_revision=contract.revision if contract else 0,
+        body_kind=contract.body.kind if contract else "unresolved",
+        evidence_source=context.evidence_source,
         evidence_requirement_map={item.id: [hit.requirement_id for hit in context.hits if hit.evidence.id == item.id and hit.requirement_id]
                                   for item in packet},
     )

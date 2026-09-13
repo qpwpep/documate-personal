@@ -13,6 +13,7 @@ from src.core.planner_schema import PlannerOutput
 from src.core.request_contracts import RequestContract, UserTurnSnapshot
 from src.core.uploads import UploadFileInfo
 from src.core.contracts.debug import DebugPayload, LLMCallMetadata, PlannerDiagnostic, PlannerStatus, RetryState, RetrievalDiagnostic, empty_planner_diagnostic
+from src.core.contracts.provenance import AnswerSource, BodyKind
 
 
 class SlackDestination(BaseModel):
@@ -84,6 +85,8 @@ class ResponseState(BaseModel):
     kind: Literal["draft", "answer", "clarification", "failure"] = "draft"
     request_id: str | None = None
     contract_revision: int = 0
+    body_kind: BodyKind | None = None
+    evidence_source: AnswerSource | None = None
 
 
 class DebugState(DebugPayload):

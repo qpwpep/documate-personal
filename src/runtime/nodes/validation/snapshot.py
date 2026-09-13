@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from src.core.answer_schema import AnswerResponse, iter_content_units
 from src.core.contracts import GraphState, RetrievalDiagnostic
+from src.core.contracts.provenance import AnswerSource, BodyKind
 from src.core.contracts.boundary.debug import get_debug_state
 from src.core.contracts.boundary.graph import get_retry_state
 from src.core.contracts.boundary.planner import get_planner_state, parse_planner_output
@@ -73,6 +74,8 @@ def build_validation_snapshot(
     response_request_id: str | None = None,
     response_contract_revision: int = 0,
     normal_evidence_missing_requirement_ids: list[str] | None = None,
+    body_kind: BodyKind | None = None,
+    evidence_source: AnswerSource | None = None,
 ) -> ValidationSnapshot:
     retrieval_required = bool(planner_output.use_retrieval and planner_output.tasks)
     evidence_by_route: dict[str, list[EvidenceRef]] = {"docs": [], "upload": []}
@@ -95,6 +98,8 @@ def build_validation_snapshot(
         response_request_id=response_request_id,
         response_contract_revision=response_contract_revision,
         normal_evidence_missing_requirement_ids=normal_evidence_missing_requirement_ids,
+        body_kind=body_kind,
+        evidence_source=evidence_source,
     )
 
 
@@ -131,5 +136,7 @@ def collect_validation_snapshot(state: GraphState) -> tuple[ValidationSnapshot, 
         response_request_id=response.request_id,
         response_contract_revision=response.contract_revision,
         normal_evidence_missing_requirement_ids=response.normal_evidence_missing_requirement_ids,
+        body_kind=response.body_kind,
+        evidence_source=response.evidence_source,
     )
     return snapshot, local_errors

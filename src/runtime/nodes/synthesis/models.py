@@ -7,6 +7,7 @@ from langchain_core.messages import BaseMessage
 
 from src.core.answer_schema import AnswerResponse
 from src.core.contracts.debug import LLMCallMetadata
+from src.core.contracts.provenance import AnswerSource
 from src.core.evidence import EvidenceRef, SearchHit
 from src.core.planner_schema import PlannerOutput
 from src.core.request_contracts import RequestContract
@@ -27,6 +28,7 @@ class SynthesisContext:
     hits: list[SearchHit]
     request_contract: RequestContract | None
     source_response: AnswerResponse | None
+    evidence_source: AnswerSource | None
 
 
 @dataclass(slots=True)

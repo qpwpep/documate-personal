@@ -14,6 +14,7 @@ from src.core.answer_schema import AnswerResponse, finalize_answer, text_documen
 from src.core.request_contracts import required_contract_turn_ids
 from src.core.contracts import RuntimeState, SessionMetadata
 from src.core.contracts.debug import DEBUG_SCHEMA_VERSION
+from src.core.contracts.provenance import AnswerProvenance
 from src.core.contracts.boundary.runtime import parse_runtime_state, parse_session_metadata
 from src.core.contracts.boundary.response import get_response_state
 from src.runtime.graph_builder import StageExecutionError, build_agent_graph
@@ -141,8 +142,9 @@ class AgentFlowManager:
 
     @staticmethod
     def _exit_payload(message: str) -> dict[str, Any]:
+        result = finalize_answer(text_document(message), [])
         return {
-            "response": finalize_answer(text_document(message), []).model_dump(mode="json"),
+            "response": result.model_dump(mode="json"),
             "debug": {
                 "schema_version": DEBUG_SCHEMA_VERSION,
                 "observability_status": "ok",
@@ -159,6 +161,9 @@ class AgentFlowManager:
                 "edge_decisions": [],
                 "planner_errors": [],
                 "observed_hits": [],
+                "answer_provenance": AnswerProvenance(
+                    body_kind="acknowledge", response_hash=result.content_hash, evidence_packet=[],
+                ).model_dump(mode="json"),
                 "retry_context": None,
                 "retrieval_diagnostics": [],
                 "planner_diagnostics": None,
@@ -192,8 +197,9 @@ class AgentFlowManager:
             server_total_ms=elapsed_ms(flow_started, time.perf_counter()),
             upload_retriever_build_ms=upload_retriever_build_ms,
         )
+        result = finalize_answer(text_document(message), [])
         return {
-            "response": finalize_answer(text_document(message), []).model_dump(mode="json"),
+            "response": result.model_dump(mode="json"),
             "debug": {
                 "schema_version": DEBUG_SCHEMA_VERSION,
                 "observability_status": "failed",
@@ -211,6 +217,9 @@ class AgentFlowManager:
                 "edge_decisions": [],
                 "planner_errors": [],
                 "observed_hits": [],
+                "answer_provenance": AnswerProvenance(
+                    body_kind="unresolved", response_hash=result.content_hash, evidence_packet=[],
+                ).model_dump(mode="json"),
                 "retry_context": None,
                 "retrieval_diagnostics": [],
                 "planner_diagnostics": None,

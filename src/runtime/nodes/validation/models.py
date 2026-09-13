@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from src.core.answer_schema import AnswerResponse
 from src.core.contracts import RetrievalDiagnostic
 from src.core.contracts.debug import ErrorCode, RetryReason
+from src.core.contracts.provenance import AnswerSource, BodyKind
 from src.core.evidence import EvidenceRef, SearchHit
 from src.core.planner_schema import PlannerOutput
 from src.core.request_contracts import RequestContract
@@ -29,6 +30,8 @@ class ValidationSnapshot:
     response_request_id: str | None = None
     response_contract_revision: int = 0
     normal_evidence_missing_requirement_ids: list[str] | None = None
+    body_kind: BodyKind | None = None
+    evidence_source: AnswerSource | None = None
 
 
 @dataclass(slots=True)

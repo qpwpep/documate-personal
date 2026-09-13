@@ -5,6 +5,8 @@ from typing import Any, Iterable, Literal
 from langchain_core.messages import AIMessage
 from pydantic import BaseModel, Field
 
+from src.core.contracts.provenance import AnswerProvenance
+
 ErrorCode = Literal[
     "PLANNER_SCHEMA_INVALID",
     "PLANNER_TIMEOUT",
@@ -58,7 +60,7 @@ RETRYABLE_REASONS: set[RetryReason] = {
     "missing_content",
     "missing_route_coverage",
 }
-DEBUG_SCHEMA_VERSION = 6
+DEBUG_SCHEMA_VERSION = 7
 # Historical diagnostics can contain retired routes; these never enable execution.
 RECORDED_ROUTE_ORDER: tuple[str, ...] = ("docs", "upload", "local")
 DebugObservabilityStatus = Literal["ok", "degraded", "failed"]
@@ -77,6 +79,7 @@ DEBUG_REQUIRED_FIELDS: tuple[str, ...] = (
     "errors",
     "planner_errors",
     "observed_hits",
+    "answer_provenance",
     "retry_context",
     "retrieval_diagnostics",
     "planner_diagnostics",
@@ -89,6 +92,7 @@ DEBUG_CRITICAL_FIELDS: tuple[str, ...] = (
     "tool_calls",
     "tool_call_count",
     "observed_hits",
+    "answer_provenance",
     "retrieval_diagnostics",
     "latency_breakdown",
 )
@@ -215,6 +219,7 @@ class DebugPayload(BaseModel):
     edge_decisions: list[dict[str, Any]] = Field(default_factory=list)
     planner_errors: list[str] = Field(default_factory=list)
     observed_hits: list[dict[str, Any]] = Field(default_factory=list)
+    answer_provenance: AnswerProvenance | None = None
     retry_context: RetryState | None = None
     retrieval_diagnostics: list[RetrievalDiagnostic] = Field(default_factory=list)
     planner_diagnostics: PlannerDiagnostic | None = None

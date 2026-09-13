@@ -6,6 +6,7 @@ from typing import Any
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from src.core.contracts.debug import DEBUG_SCHEMA_VERSION
+from src.core.contracts.provenance import AnswerProvenance
 from src.core.contracts.boundary.debug import get_debug_state, parse_retry_state
 from src.core.contracts.boundary.graph import get_retry_state
 from src.core.contracts.boundary.planner import get_planner_state, parse_planner_diagnostic
@@ -344,6 +345,14 @@ class DebugCollector:
             graph_total_ms=graph_total_ms,
             upload_retriever_build_ms=upload_retriever_build_ms,
         )
+        answer_provenance = None
+        if state_response.body_kind is not None:
+            answer_provenance = AnswerProvenance(
+                body_kind=state_response.body_kind,
+                response_hash=state_response.result.content_hash,
+                source=state_response.evidence_source,
+                evidence_packet=state_response.evidence_packet,
+            ).model_dump(mode="json")
 
         return {
             "schema_version": DEBUG_SCHEMA_VERSION,
@@ -362,6 +371,7 @@ class DebugCollector:
             "edge_decisions": list(state_debug.edge_decisions or []),
             "planner_errors": planner_errors,
             "observed_hits": observed_hits,
+            "answer_provenance": answer_provenance,
             "retry_context": retry_context,
             "retrieval_diagnostics": retrieval_diagnostics,
             "planner_diagnostics": planner_diagnostics,

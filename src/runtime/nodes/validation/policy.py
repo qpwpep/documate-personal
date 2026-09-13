@@ -7,6 +7,7 @@ from src.core.answer_schema import (
     filter_document_units, finalize_answer, text_document,
 )
 from src.core.contracts import GraphState, ResponseState
+from src.core.contracts.provenance import AnswerSource, BodyKind
 from src.core.evidence import EvidenceRef
 from src.core.request_contracts import check_answer_contract
 from src.runtime.nodes.retry import build_followup_from_routes
@@ -23,23 +24,28 @@ def build_response_updates(
     request_id: str | None = None,
     contract_revision: int = 0,
     normal_evidence_missing_requirement_ids: list[str] | None = None,
+    body_kind: BodyKind | None = None,
+    evidence_source: AnswerSource | None = None,
 ) -> GraphState:
     return {
         "messages": [AIMessage(content=export_answer_text(result))],
         "response": ResponseState(result=result, evidence_packet=evidence_packet, synthesis_attempt=attempt,
                                   evidence_requirement_map=evidence_requirement_map or {}, kind=kind,
                                   normal_evidence_missing_requirement_ids=normal_evidence_missing_requirement_ids,
-                                  request_id=request_id, contract_revision=contract_revision),
+                                  request_id=request_id, contract_revision=contract_revision,
+                                  body_kind=body_kind, evidence_source=evidence_source),
     }
 
 
 def build_followup_updates(
     answer: str, *, attempt: int, kind: str = "clarification",
     request_id: str | None = None, contract_revision: int = 0,
+    body_kind: BodyKind | None = None, evidence_source: AnswerSource | None = None,
 ) -> GraphState:
     return build_response_updates(
         finalize_answer(text_document(answer), []), attempt=attempt, evidence_packet=[], kind=kind,
         request_id=request_id, contract_revision=contract_revision,
+        body_kind=body_kind, evidence_source=evidence_source,
     )
 
 
@@ -55,6 +61,8 @@ def apply_validation_outcome(
     stamp = {
         "request_id": contract.request_id if contract else None,
         "contract_revision": contract.revision if contract else 0,
+        "body_kind": snapshot.body_kind,
+        "evidence_source": snapshot.evidence_source,
     }
     if assessment.retry_reason is None and result is not None:
         return build_response_updates(result, attempt=attempt, evidence_packet=packet,
