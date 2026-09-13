@@ -38,6 +38,7 @@ from src.app.uploads import (
 )
 from src.core.domain_docs import DEFAULT_DOCS
 from src.core.uploads import normalized_upload_name
+from src.core.upload_formats import enabled_upload_suffixes
 from src.infra.logging_utils import configure_logging
 from src.infra.runtime_encoding import ensure_utf8_stdio
 from src.infra.settings import get_settings
@@ -122,12 +123,13 @@ def main() -> None:
             st.session_state.pop("upload_saved_prompt", None)
             st.rerun()
 
-    st.caption(f".py · .ipynb / 최대 {SETTINGS.upload_max_files}개 / 파일당 {SETTINGS.upload_max_file_mib} MiB / 전체 {SETTINGS.upload_max_total_mib} MiB")
+    suffixes = enabled_upload_suffixes(docling_enabled=getattr(SETTINGS, "docling_enabled", False))
+    st.caption(f"{' · '.join(sorted(suffixes))} / 최대 {SETTINGS.upload_max_files}개 / 파일당 {SETTINGS.upload_max_file_mib} MiB / 전체 {SETTINGS.upload_max_total_mib} MiB")
 
     chat_submission = st.chat_input(
-        "공식 문서나 업로드한 코드에 대해 질문하세요",
+        "공식 문서나 업로드한 자료에 대해 질문하세요",
         accept_file="multiple",
-        file_type=["py", "ipynb"],
+        file_type=[suffix.lstrip(".") for suffix in sorted(suffixes)],
         max_upload_size=SETTINGS.upload_max_file_mib,
     )
     typed_prompt, attached_files = _split_chat_submission(chat_submission)

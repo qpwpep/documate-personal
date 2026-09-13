@@ -194,7 +194,8 @@ def resolve_source_requirement(
         documents = tuple(document for document in documents
                           if any(element.metadata.get("file_id") in requirement.file_ids
                                  for element in document.elements))
-    exhaustive = bool(documents) and all(document.snapshot.capture_scope == "full_document" for document in documents)
+    exhaustive = bool(documents) and all(document.snapshot.capture_scope == "full_document"
+                                        and document.snapshot.parser != "docling" for document in documents)
     sources = ([_Source(document.snapshot, element) for document in documents for element in document.elements]
                if documents is not None else _candidate_sources(candidate_rows))
     if requirement.file_ids:
@@ -205,6 +206,10 @@ def resolve_source_requirement(
     aliases: dict[str, str] = {}
     alias_snapshot: str | None = None
     for source in sources:
+        if source.snapshot.parser == "docling":
+            exhaustive = False
+            warnings.append("source_symbol_analysis_unavailable")
+            continue
         if source.snapshot.snapshot_id != alias_snapshot:
             # Notebook cells share imports; separate files never share lexical scope.
             aliases = {}
