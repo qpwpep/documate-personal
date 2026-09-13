@@ -121,6 +121,7 @@ def test_request_preserves_session_upload_and_slack_context(transport):
 
 @pytest.mark.parametrize("error, code, message", [
     (requests.exceptions.Timeout("timeout"), "timeout", "시간이 초과"),
+    (ReadTimeoutError(None, "/agent/stream", "read timed out"), "timeout", "시간이 초과"),
     (requests.exceptions.ConnectionError("disconnected"), "connection_error", "첫 이벤트"),
     (RuntimeError("boom"), "stream_error", "boom"),
 ])
@@ -427,3 +428,224 @@ def test_upload_sync_returns_server_confirmed_manifest(transport):
     assert result.changed is True
     assert calls[0]["url"] == "http://localhost:8000/sessions/session-1/uploads/sync"
     assert calls[0]["allow_redirects"] is False
+
+
+def test_diagnostic_request_preserves_transport_observation_and_server_error(transport):
+    """Opt-in diagnostics retain server failures and the final response's HTTP timing."""
+    from src.app.client import AgentRequestContext, stream_agent_response
+
+    final = {"response": answer_response().model_dump(mode="json"), "debug": {"runtime_error": "failed"}}
+    calls = transport(StreamResponse([
+        frame("request_started", {"request_id": "request-one"}),
+        frame("error", {"message": "failed"}),
+        frame("final_response", final),
+    ]))
+
+    events = list(stream_agent_response("question", AgentRequestContext(
+        fastapi_url="http://localhost:8000", session_id="session-one",
+        include_debug=True, timeout_seconds=17,
+    )))
+
+    assert len(calls) == 1
+    assert calls[0]["json"]["include_debug"] is True
+    assert calls[0]["timeout"] == 17
+    assert events[1].observation.error_source == "server"
+    assert events[-1].data == final
+    assert events[-1].observation.http_status == 200
+    assert events[-1].observation.request_id == "request-one"
+    assert events[-1].observation.final_received is True
+    assert events[-1].observation.elapsed_ms >= 0
+
+
+def test_transport_request_id_prefers_http_header_over_event_values(transport):
+    """The HTTP request identity is preserved when an event supplies a different identifier."""
+    response = StreamResponse([
+        frame("request_started", {"request_id": "event-request"}),
+        frame("final_response", {"response": answer_response().model_dump(mode="json")}),
+    ])
+    response.headers["x-request-id"] = "header-request"
+    transport(response)
+
+    events = list(stream_agent_response("question", context()))
+
+    assert [event.observation.request_id for event in events] == ["header-request", "header-request"]
+
+
+def test_session_uses_final_manifest_for_followup_and_refreshes_after_lost_response(monkeypatch):
+    """A session follows server epochs and recovers by reading state without replaying questions."""
+    from src.app.client import AgentRequestContext, AgentSessionClient
+
+    initial = UploadManifest(epoch="initial", revision=2, files=[])
+    reset = UploadManifest(epoch="reset", revision=0, files=[])
+    recovered = UploadManifest(epoch="recovered", revision=1, files=[])
+    calls = []
+    responses = iter([
+        StreamResponse([frame("final_response", {
+            "response": answer_response().model_dump(mode="json"),
+            "upload_manifest": reset.model_dump(mode="json"),
+        })]),
+        requests.exceptions.Timeout("lost response"),
+        recovered,
+        StreamResponse([frame("final_response", {
+            "response": answer_response().model_dump(mode="json"),
+            "upload_manifest": recovered.model_dump(mode="json"),
+        })]),
+    ])
+
+    def send(_session, method, url, **kwargs):
+        calls.append({"method": method, "payload": kwargs.get("json")})
+        response = next(responses)
+        if isinstance(response, Exception):
+            raise response
+        if isinstance(response, UploadManifest):
+            reply = requests.Response()
+            reply.status_code = 200
+            reply._content = response.model_dump_json().encode()
+            return reply
+        return response
+
+    monkeypatch.setattr(requests.sessions.Session, "request", send)
+    client = AgentSessionClient(AgentRequestContext(
+        fastapi_url="http://localhost:8000", session_id="same-session",
+    ), manifest=initial)
+
+    assert list(client.stream("exit"))[-1].result is not None
+    assert client.manifest == reset
+    assert list(client.stream("lost question"))[-1].data["code"] == "timeout"
+    assert client.manifest is None
+    assert list(client.stream("new question"))[-1].result is not None
+    assert client.manifest == recovered
+    assert [call["method"] for call in calls] == ["post", "post", "get", "post"]
+    assert [call["payload"]["query"] for call in calls if call["method"] == "post"] == [
+        "exit", "lost question", "new question",
+    ]
+    assert [call["payload"]["uploads"] for call in calls if call["method"] == "post"] == [
+        manifest.context().model_dump() for manifest in [initial, reset, recovered]
+    ]
+    assert {call["payload"]["session_id"] for call in calls if call["method"] == "post"} == {"same-session"}
+
+
+def test_invalid_final_manifest_keeps_diagnostics_but_invalidates_session(transport):
+    """A rejected final manifest remains an identifiable schema error with its raw diagnostics."""
+    from src.app.client import AgentRequestContext, AgentSessionClient
+
+    payload = {"response": answer_response().model_dump(mode="json"),
+               "upload_manifest": {"epoch": "invalid", "revision": -1}, "debug": {"trace": "saved"}}
+    transport(StreamResponse([frame("final_response", payload)]))
+    client = AgentSessionClient(AgentRequestContext(
+        fastapi_url="http://localhost:8000", session_id="session-one",
+    ), manifest=UploadManifest(epoch="confirmed", revision=1))
+
+    events = list(client.stream("question"))
+
+    assert client.manifest is None
+    assert [event.event for event in events] == ["error"]
+    assert events[0].result is None
+    assert events[0].data["raw_final_response"] == payload
+    assert events[0].observation.error_source == "client"
+    assert events[0].observation.error_type == "agent_schema_error"
+    assert events[0].observation.final_received is True
+
+
+def test_unconfirmed_session_does_not_send_question_when_manifest_refresh_fails(transport):
+    """An unavailable attachment confirmation endpoint prevents execution against guessed state."""
+    from src.app.client import AgentRequestContext, AgentSessionClient, UploadAPIError
+
+    calls = transport(requests.exceptions.ConnectionError("unavailable"))
+    client = AgentSessionClient(AgentRequestContext(
+        fastapi_url="http://localhost:8000", session_id="session-one",
+    ))
+
+    with pytest.raises(UploadAPIError):
+        list(client.stream("question"))
+
+    assert client.manifest is None
+    assert [(call["method"], call["url"]) for call in calls] == [
+        ("get", "http://localhost:8000/sessions/session-one/uploads"),
+    ]
+
+
+def test_uncertain_upload_sync_invalidates_confirmation_without_replaying(transport):
+    """Losing a mutation response prevents later questions from reusing the pre-mutation revision."""
+    from src.app.client import AgentRequestContext, AgentSessionClient, UploadAPIError
+    from src.app.uploads import PendingUploadOperation
+
+    calls = transport(requests.exceptions.Timeout("lost sync response"))
+    client = AgentSessionClient(AgentRequestContext(
+        fastapi_url="http://localhost:8000", session_id="session-one",
+    ), manifest=UploadManifest(epoch="one", revision=2))
+    operation = PendingUploadOperation(epoch="one", expected_revision=2, clear=True)
+
+    with pytest.raises(UploadAPIError):
+        client.sync_uploads(operation)
+
+    assert client.manifest is None
+    assert len(calls) == 1
+    assert calls[0]["json"] == operation.request_payload()
+
+
+def test_session_stages_syncs_and_queries_using_the_server_confirmed_uploads(monkeypatch, tmp_path):
+    """File bytes pass through shared staging and sync before a question pins the committed revision."""
+    import hashlib
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    from src.app.client import AgentRequestContext, AgentSessionClient
+    from src.app.uploads import PendingUploadOperation, discard_staged_files
+    from src.core.uploads import UploadFileInfo
+
+    uploaded_bytes = b"print('shared path')\n"
+    initial = UploadManifest(epoch="one", revision=0)
+    committed = UploadManifest(epoch="one", revision=1, files=[UploadFileInfo(
+        file_id="file-one", name="code.py", size_bytes=len(uploaded_bytes),
+        content_hash="sha256:" + hashlib.sha256(uploaded_bytes).hexdigest(),
+        source_uri="upload://session-one/file-one",
+    )])
+    calls = []
+
+    def send(_session, method, url, **kwargs):
+        payload = kwargs.get("json")
+        calls.append({"method": method, "url": url, "payload": payload})
+        response = requests.Response()
+        response.status_code = 200
+        response._content_consumed = True
+        if url.endswith("/uploads"):
+            response._content = initial.model_dump_json().encode()
+        elif url.endswith("/uploads/sync"):
+            assert [(item["name"], Path(item["path"]).read_bytes()) for item in payload["add"]] == [
+                ("code.py", uploaded_bytes),
+            ]
+            response._content = json.dumps({"manifest": committed.model_dump(), "changed": True}).encode()
+        else:
+            response.headers["Content-Type"] = "text/event-stream"
+            response._content = frame("final_response", {
+                "response": answer_response().model_dump(mode="json"),
+                "upload_manifest": committed.model_dump(mode="json"),
+            }).encode()
+        return response
+
+    monkeypatch.setattr(requests.sessions.Session, "request", send)
+    client = AgentSessionClient(AgentRequestContext(
+        fastapi_url="http://localhost:8000", session_id="session-one",
+    ))
+    staged = client.stage_files([
+        SimpleNamespace(name="code.py", getbuffer=lambda: uploaded_bytes),
+    ], tmp_path, max_files=5, max_file_mib=1, max_total_mib=5)
+    assert staged.errors == []
+    assert client.manifest == initial
+    operation = PendingUploadOperation(
+        epoch=initial.epoch, expected_revision=initial.revision, files=staged.files,
+    )
+
+    assert client.sync_uploads(operation).manifest == committed
+    assert list(client.stream("explain code.py"))[-1].result is not None
+
+    assert client.manifest == committed
+    assert [call["method"] for call in calls] == ["get", "post", "post"]
+    assert calls[1]["payload"] == operation.request_payload()
+    assert calls[2]["payload"] == {
+        "query": "explain code.py", "session_id": "session-one",
+        "uploads": committed.context().model_dump(),
+    }
+    discard_staged_files(staged.files, tmp_path)
+    assert not list(tmp_path.rglob("*.py"))
