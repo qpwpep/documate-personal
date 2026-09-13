@@ -271,7 +271,7 @@ synthesis의 기본 근거 개수 상한은 8개이며, 요구사항별 `max(1, 
 
 일반 excerpt 합계는 6,000자, docs+upload 혼합은 8,000자이며 compact는 각각 3,000자와 4,000자입니다. 일반 snippet은 `SYNTHESIS_PROMPT_SNIPPET_CHARS`, compact는 일반 설정과 `SYNTHESIS_COMPACT_PROMPT_SNIPPET_CHARS` 중 작은 값을 사용합니다. 요구사항·명시 파일별로 빠진 근거와 literal aspect를 채우는 최소 관련 범위를 먼저 확보한 뒤 남은 예산으로 주변 문맥을 확장합니다. 프롬프트 coverage와 최종 검증은 같은 계산을 사용하되, 각각 실제 packet 전체와 유효하게 인용한 부분집합을 검사합니다. 검색 성공만으로 모델에 전달하지 않은 범위를 충족했다고 판단하지 않습니다. 표는 배정된 문자 예산 안에 전체 excerpt가 들어가야 하며 코드 범위는 완전한 구문·행을 보존합니다. 모든 요구가 예산 안에 들어간다는 보장은 없고, 이 예산은 excerpt만 계산하므로 system prompt·대화·JSON 메타데이터·별도 표 셀을 포함한 전체 입력 토큰 한도도 아닙니다.
 
-실제 모델에 보낸 범위만 evidence packet에 남기며, 범위가 달라지면 새 evidence ID를 사용합니다. 내부 `ResponseState.evidence_requirement_map`은 이 ID와 원래 requirement ID의 연결을 보존합니다. 모델 입출력에서만 `e1`, `e2` 같은 짧은 별칭을 사용하고, 서버가 참조 필드를 원래 ID로 복원한 뒤 검증합니다. 이전 답변을 변환할 때도 모델에 제공하는 원문 사본의 refs에 같은 별칭을 적용하며 저장된 원문과 revision은 유지합니다. 일반·compact 입력은 각자의 매핑을 사용하며 알 수 없는 별칭은 검증을 통과하지 못합니다. 최종 인용의 ID·원문·hash·offset은 이 별칭 때문에 바뀌지 않습니다. 모델 입력에는 선택 범위의 `is_partial`, `capture_scope`와 요구별 남은 aspect·빠진 aspect를 함께 전달합니다. 이 map은 검색 유래를 나타내며, 참조를 붙였다는 사실만으로 설명의 의미적 충분함을 증명하지 않습니다.
+모델 합성에서는 실제 보낸 범위만 evidence packet에 남기며, 범위가 달라지면 새 evidence ID를 사용합니다. 기존 답변을 그대로 복사하는 deterministic 경로는 모델을 호출하지 않고 선택한 답변의 citations를 검증 packet으로 사용합니다. 내부 `ResponseState.evidence_requirement_map`은 packet ID와 원래 requirement ID의 연결을 보존합니다. 모델 입출력에서만 `e1`, `e2` 같은 짧은 별칭을 사용하고, 서버가 참조 필드를 원래 ID로 복원한 뒤 검증합니다. 이전 답변을 변환할 때도 모델에 제공하는 원문 사본의 refs에 같은 별칭을 적용하며 저장된 원문과 revision은 유지합니다. 일반·compact 입력은 각자의 매핑을 사용하며 알 수 없는 별칭은 검증을 통과하지 못합니다. 최종 인용의 ID·원문·hash·offset은 이 별칭 때문에 바뀌지 않습니다. 모델 입력에는 선택 범위의 `is_partial`, `capture_scope`와 요구별 남은 aspect·빠진 aspect를 함께 전달합니다. 이 map은 검색 유래를 나타내며, 참조를 붙였다는 사실만으로 설명의 의미적 충분함을 증명하지 않습니다.
 
 합성의 `[Reference Policy]`에는 최종 검증과 동일한 `retrieval_required`를 전달합니다. `source`·`inference`·`excerpt`에는 항상 유효한 refs가 필요하며 검색이 필요한 답변의 `example`에도 필요합니다. 이전 검색 답변의 변환은 이 조건을 상속합니다. `excerpt` 검증은 하나의 선택 범위 전체와 공백·줄바꿈까지 일치할 때만 `exact_match`입니다. 일부 인용이나 재서술은 `source`로 표시하며 의미적 근거성은 별도 평가 대상입니다.
 
@@ -342,15 +342,15 @@ compaction 진단은 debug `edge_decisions`와 구조화 로그에서 before/aft
 
 ### 5.1 `POST /agent/stream`
 
-Streamlit과 online benchmark는 이 엔드포인트에 JSON 요청을 보내고 `text/event-stream` 형식의 SSE 응답을 읽습니다. 진행 상황과 최종 응답은 별도 이벤트로 전달됩니다.
+Streamlit과 online benchmark는 `src/app/client.py`의 `AgentSessionClient`를 사용해 첨부 목록 조회·동기화·질문·응답 검증을 공유합니다. `src/app/uploads.py`는 파일 staging과 변경 요청 구성을 담당합니다. 질문은 이 엔드포인트에 JSON으로 보내고 `text/event-stream` SSE로 진행 상황과 최종 응답을 받습니다.
 
-기존 단일 파일 요청 예시:
+일반 UI와 benchmark의 질문 요청 예시입니다. `uploads`는 앞서 첨부 API가 반환한 확정 상태입니다.
 
 ```json
 {
   "query": "업로드한 파일에서 groupby가 어디에 쓰였는지 보여줘",
   "session_id": "demo-session",
-  "upload_file_path": "uploads/demo-session/sales_analysis.py",
+  "uploads": {"epoch": "서버가 반환한 값", "revision": 1},
   "include_debug": true,
   "slack_user_id": "U12345678",
   "slack_email": "user@example.com",
@@ -360,10 +360,10 @@ Streamlit과 online benchmark는 이 엔드포인트에 JSON 요청을 보내고
 
 주요 규칙:
 
-- `query`는 공백이 아닌 문자열이어야 하며 최대 `8192`자와 `16384` UTF-8 byte를 모두 만족해야 합니다. 초과 입력은 truncate하지 않고 graph/session 생성 전에 HTTP `422`로 거절합니다.
+- `query`는 공백이 아닌 문자열이어야 하며 최대 `8192`자와 `16384` UTF-8 byte를 모두 만족해야 합니다. 초과 입력은 truncate하지 않고 질문 실행 전에 HTTP `422`로 거절합니다. 공용 클라이언트가 앞서 첨부 목록을 조회했다면 빈 세션은 이미 존재할 수 있지만 대화는 실행·저장하지 않습니다.
 - `session_id`는 영문·숫자·밑줄·하이픈 1~128자로 제한하고 대소문자를 구분하지 않는 세션 키로 정규화합니다. Windows에서 대소문자만 다른 ID가 같은 파일 디렉터리를 별도 세션으로 공유하지 않게 합니다.
 - `upload_file_path`는 반드시 `uploads/<session_id>/...` 범위 안이어야 합니다. 이 구 필드는 현재 첨부 집합을 해당 파일 하나로 교체하며, 필드 생략·`null`은 기존 의미대로 검색 첨부를 해제합니다.
-- 새 UI는 대신 `"uploads": {"epoch": "서버가 반환한 값", "revision": 1}`을 보냅니다. 이 요청은 이미 확정된 첨부 집합을 사용하고 변경하지 않습니다. 두 계약을 함께 보내거나 `uploads=null`을 보내면 HTTP `422`입니다.
+- UI와 benchmark의 공용 세션 클라이언트는 `"uploads": {"epoch": "서버가 반환한 값", "revision": 1}`을 보냅니다. 이 요청은 이미 확정된 첨부 집합을 사용하고 변경하지 않습니다. 구형 `upload_file_path`는 직접 API 호출의 호환 경로로만 남습니다. 두 계약을 함께 보내거나 `uploads=null`을 보내면 HTTP `422`입니다.
 - 첨부 버전 검사는 세션 락 안에서 다시 수행합니다. 오래된 `uploads` 컨텍스트는 SSE `UPLOAD_REVISION_CONFLICT` 오류로 반환하며, 클라이언트는 목록을 갱신하고 질문을 자동 재전송하지 않습니다.
 - `include_debug=true`일 때만 debug payload가 내려옵니다.
 - Slack 필드는 세션 메타데이터로 저장되며 후속 요청에서 재사용될 수 있습니다.
@@ -394,7 +394,7 @@ Streamlit은 첫 이벤트 전 오류를 포함해 요청 실패를 화면에 �
 
 `GET /sessions/{session_id}/uploads`는 `{epoch, revision, files}`를 반환합니다. 각 파일에는 `file_id`, `name`, `size_bytes`, `content_hash`, `source_uri`가 있으며 물리 저장 경로는 노출하지 않습니다. 서버 재시작이나 세션 TTL/LRU 만료 후에는 새 epoch가 발급됩니다. 오래된 UI는 목록을 다시 확인하고 필요한 자료를 다시 첨부해야 합니다.
 
-`POST /sessions/{session_id}/uploads/sync`는 공유 파일시스템에 저장한 파일의 참조를 받아 첨부 집합을 갱신합니다. 파일 바이트는 Streamlit의 내장 업로드 경로로 수신하며 이 API는 JSON을 받습니다.
+`POST /sessions/{session_id}/uploads/sync`는 공유 파일시스템에 저장한 파일의 참조를 받아 첨부 집합을 갱신합니다. 파일 바이트는 Streamlit의 내장 업로드 경로 또는 benchmark fixture에서 읽어 공용 staging 절차로 준비하며 이 API는 JSON을 받습니다. 원격 클라이언트가 파일 bytes를 직접 보내는 API는 아닙니다.
 
 ```json
 {
@@ -460,10 +460,10 @@ Streamlit은 첫 이벤트 전 오류를 포함해 요청 실패를 화면에 �
 
 - `blocks`: `paragraph`, `heading`, `list`, `code`, `table`. 문장·제목·목록 항목·코드·표 헤더와 셀의 `ContentUnit`은 모두 동일한 검증 순회 대상입니다.
 - `basis`: `source`, `inference`, `example`, `interaction`, `excerpt`. 모델의 표현 분류이며 정확성 판정이 아닙니다.
-- `refs`: synthesis에 실제 제공한 근거 ID. 서버가 최초 등장 순서대로 `citations.number`를 붙이고 사용한 `EvidenceRef`만 응답에 포함합니다.
+- `refs`: 최종 생성·검증 packet의 근거 ID. 서버가 최초 등장 순서대로 `citations.number`를 붙이고 사용한 `EvidenceRef`만 응답에 포함합니다.
 - `checks`: 내용 위치 ID에 대응하는 참조 상태와 확인 상태. 일반 설명·해석의 의미적 지지는 `not_evaluated`이며, `excerpt`는 단일 원문 발췌와 정확히 일치할 때만 `exact_match`입니다.
 - `issues`: 생성 실패·불완전한 답변 등 실제 제한. 전체 confidence 수치는 제공하지 않습니다.
-- `content_hash`: 검사한 본문의 revision. 내용이 바뀌면 검사를 다시 수행해야 합니다.
+- `content_hash`: 본문 구조·basis·refs를 포함한 revision. 내용이 바뀌면 검사를 다시 수행해야 합니다. citation의 존재 여부, `issues`, `retrieval_required`, `actions`까지 포함한 전체 응답 digest는 아닙니다.
 - `retrieval_required`: 이 응답을 다시 검사할 때 유지할 출처 요구 조건. 검색 기반 응답의 생성 예시에도 참조가 필요한지 판단하는 데 사용합니다.
 - `actions`: 실제 저장·전송 결과의 `kind`, `status`, `message`·`error`, `target`, `file_path`. 다운로드 경로는 성공한 `save_text` receipt에 있습니다.
 
@@ -477,12 +477,24 @@ Streamlit은 첫 이벤트 전 오류를 포함해 요청 실패를 화면에 �
 - `token_usage`, `model_name`, `models_used`, `model_usage_status`, `llm_calls`
 - `errors`, `error_codes`, `validation_events`, `edge_decisions`
 - `observed_hits`: 이번 실행에서 수집한 `SearchHit` 목록. 답변이 실제 사용한 `citations`와 구분
+- `answer_provenance`: 서버가 확정한 본문 작업·선행 답변과 최종 검증 packet
 - `retry_context`
 - `retrieval_diagnostics`
 - `planner_diagnostics`
 - `action_results`
 
-현재 debug schema version은 `6`입니다. `RetrievalDiagnostic`은 도구 실행 `status`와 근거 요구의 `answerability`를 구분합니다.
+현재 debug schema version은 `7`입니다. `answer_provenance`의 `version`은 `1`이며 아래 필드를 제공합니다. `AnswerResponse`와 세션 대화 메모리의 공개 계약은 유지합니다.
+
+| 필드 | 의미 |
+|---|---|
+| `body_kind` | 서버가 확정한 요청 계약의 본문 작업 |
+| `response_hash` | 이번 최종 `AnswerResponse.content_hash` |
+| `source` | 선행 답변이 선택되었으면 `{ref, response_hash, citation_ids}`, 그 외에는 `null`. `ref`는 `previous` 또는 `pending`이며 citation IDs는 선택한 원본의 실제 인용 전체 목록 |
+| `evidence_packet` | 최종 결과를 생성·검증한 `EvidenceRef` 목록. compact가 결과를 만들었으면 compact packet이며, 복사 경로는 모델 호출 없이 상속한 인용 packet |
+
+source descriptor는 요청 계약이 실제로 해석한 서버 원본에서 캡처합니다. 이후 packet과 최종 본문 hash를 함께 공개하므로, 현재 검색 결과·선택한 선행 인용·최종 채택 범위를 별도로 확인할 수 있습니다. 같은 hash라도 인용이 빠진 응답과 혼동하지 않도록 원본의 실제 citation ID 목록을 기록합니다. 이 메타데이터는 본문·출처 연결을 진단하며 모든 모델 입력을 재현하는 로그나 action receipt의 동일성 증명은 아닙니다. 현재 online benchmark는 필요한 provenance가 없거나 불일치하면 진단·응답 계약 실패로 처리합니다. 기존 저장 결과는 당시 계약으로 읽으며 자동 승격하지 않습니다.
+
+`RetrievalDiagnostic`은 도구 실행 `status`와 근거 요구의 `answerability`를 구분합니다.
 
 | `answerability` | 확인 범위 |
 |---|---|

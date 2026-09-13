@@ -66,7 +66,7 @@ LLM은 [`AnswerDocument`](../src/core/answer_schema/models.py)의 `blocks`만 �
 
 [`iter_content_units()`](../src/core/answer_schema/models.py)는 문장뿐 아니라 제목·표 헤더·표 셀·코드도 같은 읽기 순서로 순회합니다. 검증, 인용 번호, UI, export가 이 본문을 기준으로 동작합니다. 모델이 사실을 다른 필드에 반복해 쓰거나 검증한 내용과 다른 문자열을 마지막에 선택하는 경로를 두지 않습니다.
 
-서버는 `AnswerResponse`에 `content`, `citations`, `checks`, `issues`, `actions`, `content_hash`, `retrieval_required`를 구성합니다. `citations`에는 실제 사용한 원문 참조만 남기고 최초 사용 순서로 번호를 붙입니다. 검사는 내용 위치 ID에 연결하고 본문 hash로 revision을 확인합니다. `retrieval_required`는 재검증에 필요한 출처 요구 조건을 보존합니다. 저장·Slack·대화용 문자열은 같은 본문에서 export하며 별도 생성 텍스트를 저장하지 않습니다.
+서버는 `AnswerResponse`에 `content`, `citations`, `checks`, `issues`, `actions`, `content_hash`, `retrieval_required`를 구성합니다. `citations`에는 실제 사용한 원문 참조만 남기고 최초 사용 순서로 번호를 붙입니다. 검사는 내용 위치 ID에 연결하고 본문 구조·basis·refs를 포함한 hash로 revision을 확인합니다. 이 hash는 refs의 근거 정체성을 묶지만 citation의 존재 여부나 receipt까지 포함한 전체 응답 digest는 아닙니다. `retrieval_required`는 재검증에 필요한 출처 요구 조건을 보존합니다. 저장·Slack·대화용 문자열은 같은 본문에서 export하며 별도 생성 텍스트를 저장하지 않습니다.
 
 ### 원문 연결 확인과 의미적 지지 평가의 구분
 
@@ -126,7 +126,9 @@ ToolMessage 원문과 provider metadata를 durable snapshot에 저장하지 않�
 
 ### 테스트와 benchmark에 운영 비용을 투자
 
-개인 프로젝트에서 120-case release benchmark와 pytest 기반 회귀 테스트를 유지하는 것은 비용이 있습니다. fixture 관리, judge 설정, latency 및 비용 지표 확인이 필요하기 때문입니다.
+120-case release benchmark는 UI와 같은 공용 클라이언트로 첨부와 질문을 처리합니다. 별도 HTTP 실행 구현을 유지하지 않고 평가 계층에 시나리오 순서·세션 격리·채점·보고서 책임을 남겼습니다. 이전 답변 저장·전송은 내부 상태 주입 대신 실제 준비 질문 뒤에 실행합니다. 요청 실패나 첨부 상태 불일치도 사용자와 같은 계약으로 확인할 수 있지만 브라우저 렌더링은 별도의 UI 테스트가 필요합니다.
+
+fixture 관리, judge 설정과 다중 턴 호출에는 비용이 있습니다. 첨부 준비·최종 질문·전체 시나리오 시간을 나누고 앱 LLM 비용은 준비 턴까지 합산합니다. 질문 지연에서 인덱스 준비가 빠진 변화를 성능 향상으로 오인하지 않도록 실행·측정 버전과 fixture·평가 설정 fingerprint가 같은 결과만 자동 비교합니다. 채점 계약 `answer-provenance-v1`도 평가 fingerprint에 포함해 출처 연결 기준이 다른 결과로 품질 개선율을 계산하지 않습니다. planner 단독 요청 계약 평가는 원시 후보와 확정 계약의 오류를 좁혀 보는 별도 회귀 진단으로 유지합니다.
 
 대신 변경 후 품질을 감으로 판단하지 않아도 됩니다. 회귀 테스트의 실제 결과와 기록된 release benchmark는 [README의 검증 결과](../README.md#검증-결과)에서 확인합니다. 문서에 결과를 중복 복사하지 않으며, 평가 계약 변경 전의 기록을 새 계약의 검증 결과로 간주하지 않습니다.
 
@@ -172,7 +174,9 @@ structured synthesis timeout 시 compact 호출을 사용하고, 실패하면 �
 
 사용자에게는 간결한 답변을 제공하되, `include_debug=true`에서는 latency, planner/retrieval diagnostics, retry context, LLM call metadata를 확인할 수 있게 했습니다. 일반 응답 품질과 개발자 관측성을 같은 메시지에 섞지 않기 위한 기준입니다.
 
-현재 debug schema version은 `6`입니다. debug payload에는 tool call, token usage, model usage status, validation events, edge decisions, `observed_hits`, action results, stage별 latency, retrieval route latency, synthesis attempt mode가 포함됩니다. `observed_hits`는 검색 과정에서 본 자료이며, 사용자 응답의 `citations`는 실제 표시 내용이 채택한 원문입니다. 이 정보는 일반 사용자 답변이 아니라 회귀 분석과 benchmark 해석을 위한 진단 계층입니다.
+현재 debug schema version은 `7`입니다. debug payload에는 tool call, token usage, model usage status, validation events, edge decisions, `observed_hits`, `answer_provenance`, action results, stage별 latency, retrieval route latency, synthesis attempt mode가 포함됩니다. `observed_hits`는 현재 검색에서 본 자료이고, `answer_provenance.evidence_packet`은 최종 결과를 생성·검증한 범위이며, 응답의 `citations`는 그중 실제 표시 내용이 채택한 원문입니다. 모델을 호출하지 않는 본문 복사에서는 선택한 원본의 인용을 검증 packet으로 사용합니다. 이 정보는 일반 사용자 답변이 아니라 회귀 분석과 benchmark 해석을 위한 진단 계층입니다.
+
+다중 턴에서는 서버가 선택한 `previous`·`pending` 본문의 hash와 실제 citation ID 목록을 `answer_provenance.source`에 남깁니다. eval은 같은 사례·세션의 앞선 답변과 이 정보를 대조하고, 선택한 답변의 출처 연결이 검증된 경우에만 그 실제 인용 범위 안의 현재 최종 packet을 인정합니다. 최종 citation은 이 packet의 정확한 근거 ID를 사용해야 합니다. hash만 비교해 인용이 누락된 응답을 같은 원본으로 취급하거나 과거 검색 결과 전체를 현재 근거로 합치지 않습니다. 현재 턴의 도구 실행과 검색·복사 감점은 별도로 유지합니다. 본문·채택 출처가 같으면 이 연결 검증에서는 동등하므로 source 발생 ID나 범용 event store를 추가하지 않습니다. 정확한 발생 시점·전체 전달 artifact의 동일성·설명의 의미적 지지는 이 진단의 보장 범위가 아닙니다.
 
 대화 compaction은 `edge_decisions`에 trigger 차원, before/after turn·message·추정 token·직렬화 byte, removed message 수, fallback 여부를 남깁니다. fallback은 `validation_events`에도 degraded 신호로 기록합니다. 이 진단과 구조화 로그에는 원문 query, summary, ToolMessage content를 포함하지 않습니다.
 
@@ -188,7 +192,7 @@ structured synthesis timeout 시 compact 호출을 사용하고, 실패하면 �
 
 기능 추가 자체보다 release gate를 통과하는 재현 가능한 상태를 우선합니다. benchmark CLI와 `uv run pytest -q` 결과를 문서화해, 프로젝트가 어느 기준에서 정상 동작하는지 확인할 수 있게 했습니다.
 
-평가 파이프라인은 실제 FastAPI `POST /agent/stream`을 호출하고 최종 응답 수신까지의 latency를 측정하는 online benchmark를 기준으로 합니다. HTTP 오류, SSE 오류, 연결 단절, 최종 응답 누락을 구분하고, 수신한 최종 응답의 debug도 평가에 유지합니다. `docs_only`, `rag_only`, `hybrid`, `tool_action` category를 나누고, rule 기반 지표와 LLM judge를 함께 사용합니다. `rag_only`는 fixture의 분류명이며 현재 업로드 검색을 평가합니다. deterministic `reference_coverage`는 표시한 내용의 참조가 실제 검색 결과에 연결되는지를 측정하고, 설명의 의미적 지지는 judge가 평가합니다. `not_evaluated`를 근거가 없는 답변의 점수로 취급하지 않습니다. hard gate는 `data/benchmarks/config.toml`에서 관리하며 자세한 지표는 [벤치마크 가이드](benchmarking.md)에 정리했습니다.
+평가 파이프라인은 실제 FastAPI `POST /agent/stream`을 호출하고 최종 응답 수신까지의 latency를 측정하는 online benchmark를 기준으로 합니다. HTTP 오류, SSE 오류, 연결 단절, 최종 응답 누락을 구분하고, 수신한 최종 응답의 debug도 평가에 유지합니다. `docs_only`, `rag_only`, `hybrid`, `tool_action` category를 나누고, rule 기반 지표와 LLM judge를 함께 사용합니다. `rag_only`는 fixture의 분류명이며 현재 업로드 검색을 평가합니다. deterministic `reference_coverage`는 표시한 내용의 참조가 현재 검색 또는 선택한 선행 답변의 검증된 인용에서 최종 packet으로 연결되는지를 측정하고, 설명의 의미적 지지는 judge가 평가합니다. 필요한 provenance가 누락되면 관측·응답 계약 실패로 남기며, `not_evaluated`를 근거가 없는 답변의 점수로 취급하지 않습니다. hard gate는 `data/benchmarks/config.toml`에서 관리하며 자세한 지표는 [벤치마크 가이드](benchmarking.md)에 정리했습니다.
 
 ## 6. 개선 방향
 
