@@ -19,6 +19,7 @@ PLANNER_SYS = (
     "- Choose retrieval routes from: docs, upload.\n"
     "- docs: official/latest docs on the web.\n"
     "- upload: the active files in this session's uploaded-file retriever context.\n"
+    "- For PDF, DOCX and image attachments use topic retrieval for document content, tables and visible code examples. Exact implementation/AST analysis applies to native .py and .ipynb sources; document conversion or OCR does not establish that an implementation is complete or absent.\n"
     "- If retrieval is unnecessary, set use_retrieval=false and tasks=[].\n"
     "- First resolve what the user is referring to from the dialogue. If a needed subject, referent, or comparison version is unknown, use body kind=unresolved and record a subject missing_info question; use_retrieval=false, tasks=[]. Never search for placeholders such as 'the library' or 'latest changes' without a resolved subject.\n"
     "- If retrieval is needed, include one task per independent library/source/subject/version requirement, at most 8 tasks. The same route may appear multiple times.\n"
