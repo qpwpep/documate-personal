@@ -6,7 +6,7 @@ from urllib.parse import quote, urlparse
 import streamlit as st
 
 from src.core.documents import SourceAnchor, TableData
-from src.core.evidence import EvidenceRef
+from src.core.evidence import EvidenceRef, selected_source_anchors
 
 
 def render_evidence(evidence: EvidenceRef) -> None:
@@ -18,7 +18,11 @@ def render_evidence(evidence: EvidenceRef) -> None:
     st.caption(source_kind)
     if element.heading_path:
         st.caption("문서 위치: " + " › ".join(element.heading_path))
-    for anchor in element.anchors:
+    if element.table is not None and evidence.selection.cell_ids:
+        selected_ids = set(evidence.selection.cell_ids)
+        if any(not cell.anchors for cell in element.table.cells if cell.cell_id in selected_ids) and element.anchors:
+            st.caption("일부 선택 셀의 위치가 없어 표 전체 위치를 함께 표시합니다.")
+    for anchor in selected_source_anchors(evidence):
         st.caption(_format_anchor(anchor))
 
     if snapshot.capture_scope == "provider_excerpt":

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from src.core.evidence import EvidenceRef
+from src.core.evidence import EvidenceRef, selected_source_anchors
 from src.core.answer_schema.models import (
     ActionReceipt, AnswerDocument, AnswerResponse, CodeBlock, ContentUnit,
     HeadingBlock, ListBlock, ParagraphBlock, ResponseIssue, TableBlock,
@@ -66,10 +66,7 @@ def _source_location_details(evidence: EvidenceRef) -> str:
         details.append("table cells " + ", ".join(selection.cell_ids))
     else:
         details.append(f"range [{selection.start}, {selection.end})")
-    anchors = list(evidence.element.anchors)
-    if evidence.element.table is not None and selection.cell_ids:
-        anchors.extend(anchor for cell in evidence.element.table.cells if cell.cell_id in selection.cell_ids for anchor in cell.anchors)
-    for anchor in anchors:
+    for anchor in selected_source_anchors(evidence):
         location = []
         if anchor.cell_id is not None:
             location.append(f"cell ID {anchor.cell_id}")

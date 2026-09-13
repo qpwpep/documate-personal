@@ -1,13 +1,18 @@
 from __future__ import annotations
 
+import json
 
 import pytest
 
+from src.core.answer_schema import export_answer_text, finalize_answer, text_document
+from src.core.contracts.boundary.graph import build_graph_state_input
 from src.core.documents import DocumentElement, ParsedDocument, SourceAnchor, TableCell, TableData, build_snapshot
 from src.core.evidence import build_evidence, selected_source_anchors
+from src.core.planner_schema import RetrievalTask
 from src.core.table_selection import table_row_units
 from src.infra.chunking import chunk_parsed_document
 from src.infra.tools.local_rag.serialization import build_local_hit_bundle
+from src.runtime.nodes.synthesis.prompt_builder import build_synthesis_messages, prepare_evidence_packet
 
 
 def table_source():
@@ -79,8 +84,44 @@ def test_bad_table_chunk_selection_is_rejected(corruption):
         indexed.hydrate(chunk)
 
 
+def test_table_prompt_budget_preserves_target_row_numbers_and_headers():
+    """A large table is reduced to a complete relevant row rather than dropped or cut into characters."""
+    snapshot, element = table_source()
+    item = build_evidence(snapshot=snapshot, element=element)
+    wanted = build_evidence(snapshot=snapshot, element=element, cell_ids=["name", "count", "north", "alpha", "target"])
+    task = RetrievalTask(route="upload", query="target", k=1, requirement={"aspects": ["target"]})
+    packet = prepare_evidence_packet(
+        [item], max_items=1, snippet_char_limit=len(wanted.excerpt), evidence_char_budget=len(wanted.excerpt),
+        query="target", requirements_by_evidence={item.id: [task]},
+    )
+    assert packet == [wanted]
+    assert "20" in packet[0].excerpt
+    assert packet[0].element.table.cells[3].row_span == 2
+    assert prepare_evidence_packet([wanted], max_items=1, snippet_char_limit=5, evidence_char_budget=5) == []
 
 
+def test_table_packet_and_export_only_report_selected_cell_locations():
+    """Generation and saved citations share the selected page locations and conversion limitations."""
+    snapshot, element = table_source()
+    page2 = SourceAnchor(kind="table", page_no=2, bbox=(10, 20, 80, 40), coordinate_space="points", precision="element")
+    page3 = SourceAnchor(kind="table", page_no=3, bbox=(10, 20, 80, 40), coordinate_space="points", precision="element")
+    element.anchors = [page2, page3]
+    for cell in element.table.cells:
+        cell.anchors = [page3 if cell.cell_id in {"south", "beta", "last"} else page2]
+    item = build_evidence(snapshot=snapshot, element=element, cell_ids=["name", "count", "north", "alpha", "target"])
+    assert selected_source_anchors(item) == [page2]
+    messages, _, _ = build_synthesis_messages(
+        state=build_graph_state_input(user_input="target"), action_rules=[], evidence_packet=[item], attempt=1, max_turns=6,
+    )
+    raw = str(messages[-1].content).split("\n", 2)[2]
+    packet = json.loads(raw)
+    assert packet[0]["source_locations"] == [page2.model_dump(mode="json")]
+    assert packet[0]["quality_issues"] == snapshot.quality_issues
+    assert packet[0]["is_partial"] is True
+    assert {cell["cell_id"] for cell in packet[0]["table_cells"]} == set(item.selection.cell_ids)
+    response = finalize_answer(text_document("target 20", basis="excerpt", refs=[item.id]), [item])
+    exported = export_answer_text(response, include_sources=True)
+    assert "page 2" in exported and "page 3" not in exported
 
 
 def test_text_page_locations_follow_selected_charspan_without_resizing_bbox():

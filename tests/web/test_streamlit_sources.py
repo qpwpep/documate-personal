@@ -57,3 +57,46 @@ render_evidence(build_evidence(snapshot=snapshot, element=element))
     assert not app.exception
     assert any("원문 열기" in item.value and "https://docs.example.com/api" in item.value for item in app.markdown)
     assert any("일부만 수집" in item.value for item in app.caption)
+
+
+def test_table_citation_displays_selected_cell_pages_and_preserves_original_table():
+    """Selected cell locations and merged-cell highlights remain visible without the PDF file."""
+    app = AppTest.from_string('''
+from src.app.web.streamlit_sources import render_evidence
+from src.core.documents import DocumentElement, SourceAnchor, TableCell, TableData, build_snapshot
+from src.core.evidence import build_evidence
+
+snapshot = build_snapshot(source_uri="upload:///deleted.pdf", title="deleted.pdf", source_type="upload", media_type="application/pdf", content=b"pdf", parser="docling", parser_version="test")
+page2 = SourceAnchor(kind="table", page_no=2, precision="element")
+page3 = SourceAnchor(kind="table", page_no=3, precision="element")
+element = DocumentElement(element_id="table", kind="table", anchors=[page2, page3], table=TableData(cells=[
+    TableCell(cell_id="header", row=0, col=0, col_span=2, text="Counts", is_header=True, anchors=[page2]),
+    TableCell(cell_id="value", row=1, col=0, text="20", anchors=[page2]),
+    TableCell(cell_id="other", row=1, col=1, text="30", anchors=[page3]),
+]))
+render_evidence(build_evidence(snapshot=snapshot, element=element, cell_ids=["header", "value"]))
+''').run()
+
+    assert not app.exception
+    captions = "\n".join(item.value for item in app.caption)
+    assert "2페이지" in captions and "3페이지" not in captions
+    assert "header, value" in captions
+    assert any("Counts" in item.value and "20" in item.value for item in app.text)
+
+
+def test_table_unknown_cell_page_is_labeled_as_the_whole_table_location():
+    """Unknown cell provenance displays all known table pages with an explicit fallback label."""
+    app = AppTest.from_string('''
+from src.app.web.streamlit_sources import render_evidence
+from src.core.documents import DocumentElement, SourceAnchor, TableCell, TableData, build_snapshot
+from src.core.evidence import build_evidence
+
+snapshot = build_snapshot(source_uri="upload:///unknown.pdf", title="unknown.pdf", source_type="upload", media_type="application/pdf", content=b"pdf", parser="docling", parser_version="test")
+element = DocumentElement(element_id="table", kind="table", anchors=[SourceAnchor(kind="page", page_no=2), SourceAnchor(kind="page", page_no=3)], table=TableData(cells=[TableCell(cell_id="value", row=0, col=0, text="20")]))
+render_evidence(build_evidence(snapshot=snapshot, element=element, cell_ids=["value"]))
+''').run()
+
+    assert not app.exception
+    captions = "\n".join(item.value for item in app.caption)
+    assert "2페이지" in captions and "3페이지" in captions
+    assert "표 전체 위치" in captions
