@@ -1,19 +1,20 @@
 # 벤치마크 가이드
 
-DocuMate release 벤치마크는 Streamlit과 같은 FastAPI `POST /agent/stream` 엔드포인트를 대상으로 하는 온라인 평가를 사용합니다. 실행 진입점은 `src/eval/main.py`이며, 설정 기준은 `data/benchmarks/config.toml`입니다. 요청 해석만 검증하는 별도 평가의 진입점과 정책은 2.6에 정리했습니다.
+DocuMate release 벤치마크는 Streamlit과 같은 `src/app/client.py`의 `AgentSessionClient`와 `src/app/uploads.py`를 사용합니다. 요청 구성, 첨부 준비·동기화, SSE 처리, 최종 `AnswerResponse`·`UploadManifest` 검증을 공유하며, 실행은 일반 FastAPI 첨부 API와 `POST /agent/stream`을 거칩니다. `src/eval/online_runner`는 시나리오 순서·세션 격리·결과 수집을 담당하고 HTTP 요청이나 에이전트 실행을 별도로 구현하지 않습니다. CLI 진입점은 `src/eval/main.py`, 설정 기준은 `data/benchmarks/config.toml`입니다. planner 단독 요청 계약 평가는 별도 회귀 진단으로 유지하며 2.6에 정리했습니다.
 
 평가 category는 `docs_only`, `rag_only`, `hybrid`, `tool_action`입니다. `rag_only`와 fixture의 `require_local_citation`은 파일 검색·인용을 평가하는 분류명입니다. 현재 파일 검색 도구는 `upload_search`, 검색 route와 snapshot의 source type은 `upload`입니다. 과거 결과에 남은 `local` route와 `rag_search` 호출은 당시 실행 기록이며 새 실행의 업로드 검색 충족으로 인정하지 않습니다.
 
-온라인 평가는 SSE `final_response.data`의 `response`, `trace`, `debug` 전체를 읽습니다. 답변 평가 입력인 `response`는 `AnswerResponse`이며, 실제 표시한 `content.blocks`, 사용한 `citations`, 내용별 `checks`, `issues`, `actions`를 debug `observed_hits`와 비교합니다. 별도 답변 문자열이나 주장 목록을 추출해 대신 평가하지 않습니다.
+온라인 평가는 SSE `final_response.data`의 `response`, `trace`, `debug` 전체를 읽습니다. 답변 평가 입력인 `response`는 `AnswerResponse`이며, 실제 표시한 `content.blocks`, 사용한 `citations`, 내용별 `checks`, `issues`, `actions`를 평가합니다. 출처 연결은 현재 검색의 `observed_hits`, 서버가 선택한 선행 답변, 최종 결과의 `answer_provenance.evidence_packet`을 구분해 검증합니다. 별도 답변 문자열이나 주장 목록을 추출해 대신 평가하지 않습니다.
 
-runner는 `include_debug=true`로 요청하고 `final_response` 수신까지의 클라이언트 latency를 측정합니다. HTTP `200`, 첫 진행 이벤트, `done` 수신만으로 실행 성공을 판정하지 않습니다. HTTP 오류, SSE `error`, 연결 단절, 최종 응답 누락을 구분해 기록하며, `error` 뒤에 최종 응답이 오면 앞선 오류와 최종 응답의 debug를 모두 보존합니다. 유효한 최종 응답을 수신해도 오류와 품질 지표를 함께 평가하므로 benchmark 통과를 의미하지는 않습니다. 요청을 자동으로 재전송하지 않습니다.
+벤치마크는 공용 클라이언트에 `include_debug=true`를 지정합니다. HTTP `200`, 첫 진행 이벤트, `done` 수신만으로 성공을 판정하지 않습니다. HTTP 오류, SSE `error`, 연결 단절, timeout, 최종 응답 누락, 응답 계약 오류를 구분하고, `error` 뒤의 최종 응답도 앞선 오류와 함께 보존합니다. 잘못된 manifest는 UI와 마찬가지로 사용 가능한 답변으로 승인하지 않으며 원본 envelope는 진단에 남깁니다. 유효한 최종 응답을 수신해도 benchmark 통과를 의미하지는 않습니다. 질문은 자동 재전송하지 않으며 redirect나 JSON endpoint fallback도 사용하지 않습니다.
 
 ## 1. 사전 준비
 
 - FastAPI 서버가 실행 중이어야 합니다.
+- 업로드 사례는 서버와 같은 공유 파일시스템을 사용해야 합니다. `/uploads/sync`는 파일 bytes 업로드가 아니라 준비된 파일의 경로를 받는 JSON API입니다.
 - `OPENAI_API_KEY`가 설정되어 있어야 합니다.
 - judge를 사용할 경우 `JUDGE_MODEL` 또는 config의 기본값이 유효해야 합니다.
-- 기본 endpoint는 `http://127.0.0.1:8000`입니다. `--endpoint`와 `BENCHMARK_ENDPOINT`에는 FastAPI 기본 주소를 지정하며 runner가 `/agent/stream`을 붙입니다.
+- 기본 endpoint는 `http://127.0.0.1:8000`입니다. `--endpoint`와 `BENCHMARK_ENDPOINT`에는 공용 클라이언트가 호출할 FastAPI 기본 주소를 지정합니다.
 
 권장 실행 순서:
 
@@ -37,6 +38,23 @@ uv run python -m src.eval.main generate \
 
 ### 2.2 온라인 벤치마크 실행
 
+각 사례는 새 세션에서 시작합니다. `upload_fixtures`에 나열한 파일들을 UI와 같은 staging·동기화 절차로 등록한 뒤, `setup_turns`를 순서대로 보내고 마지막 `query`만 사례의 기대값으로 채점합니다. 각 턴의 최종 manifest를 다음 질문에 사용하며 내부 대화 상태를 직접 주입하지 않습니다. 준비 턴의 실행·응답·필수 진단이 실패하면 후속 요청을 보내지 않고 해당 사례를 실패로 기록합니다. judge에는 실제 준비 질문·답변·검색 근거도 전달합니다.
+
+fixture의 최소 예시는 다음과 같습니다. 기존 단일 `upload_fixture`도 읽을 수 있지만 `upload_fixtures`와 동시에 지정할 수 없습니다.
+
+```json
+{
+  "case_id": "save_previous",
+  "category": "tool_action",
+  "setup_turns": ["다음 메모를 두 문장으로 정리해줘: CSV를 읽고 결측 행을 제거한 뒤 날짜별로 집계한다."],
+  "query": "방금 답변을 txt로 저장해줘.",
+  "upload_fixtures": [],
+  "expected_tools": ["save_text"]
+}
+```
+
+현재 120개 fixture에는 준비 턴을 포함한 액션 사례 30개와 복수 파일 사례가 있습니다. 따라서 전체 정상 실행은 최종 평가 질문 120회와 준비 질문 30회, 첨부 API 요청 및 별도 judge 호출로 구성됩니다.
+
 ```bash
 uv run python -m src.eval.main run \
   --mode online \
@@ -56,7 +74,7 @@ uv run python -m src.eval.main run \
 
 ### 2.3 live Slack 전송을 켠 benchmark 실행
 
-실제 Slack 전송은 기본적으로 꺼져 있으며, `--live-slack` 또는 `BENCHMARK_SLACK_ENABLED=true`일 때만 동작합니다.
+`--live-slack` 또는 `BENCHMARK_SLACK_ENABLED=true`는 fixture의 목적지를 지정한 실제 목적지로 바꾸고 전송 성공 감사를 활성화합니다. 서버의 Slack 실행을 차단하는 스위치는 아닙니다. 비활성 상태에서도 fixture 목적지는 일반 요청에 전달되며, 서버에 토큰과 실행 가능한 본문이 있으면 Slack API 호출을 시도할 수 있습니다. 외부 전송을 하지 않는 검증은 Slack 토큰·기본 목적지가 없는 별도 서버나 HTTP 대체 경계를 사용해야 합니다. 파일 저장도 일반 저장 도구를 실제 실행합니다.
 
 - benchmark CLI의 override 우선순위는 `CLI > .env > OS env > config.toml`입니다.
 - 즉 `.env`에 `BENCHMARK_SLACK_*`, `BENCHMARK_ENDPOINT`, `JUDGE_MODEL`, `BENCHMARK_JUDGE_ENABLED`를 넣으면 별도 export 없이도 benchmark CLI가 그대로 읽습니다.
@@ -157,14 +175,26 @@ uv run python -m src.eval.request_contract_eval \
 
 | 파일 | 설명 |
 |---|---|
-| `raw_results.jsonl` | 케이스별 원시 실행 결과 |
-| `summary.json` | 집계 지표, gate 판정, 비용/모델 정보, `track`, `requested_limit` |
+| `raw_results.jsonl` | 최종 평가 결과, 모든 `scenario_turns`의 요청·응답·manifest·debug·오류, 소비한 첨부 hash와 정리 오류 |
+| `summary.json` | 집계 지표, gate 판정, 비용/모델 정보, track, 제한 수, 실행·측정 계약, 채점 버전과 비교 fingerprint |
 | `report.md` | 사람이 읽기 쉬운 분석 보고서 |
-| `request_map.jsonl` | 케이스별 `session_id`, `request_id`, query hash, trace 매핑 |
+| `request_map.jsonl` | 사례의 최종 평가 요청을 기준으로 한 session/request ID, query hash, trace 매핑. 준비 턴은 `raw_results.jsonl`에서 확인 |
 | `output/benchmarks/latest_release_run.txt` | 최신 release run id를 가리키는 루트 포인터 |
 | `output/benchmarks/latest_smoke_run.txt` | 최신 smoke run id를 가리키는 루트 포인터 |
 
 `summary.json`의 `judge_model`은 config와 환경 변수 override를 모두 반영해 실제 실행에 적용된 effective judge model입니다.
+
+시간과 비용의 범위는 다음과 같습니다. 시간 값이 `null`이면 미측정이며 0으로 대체하지 않습니다.
+
+| 필드 | 측정 범위 |
+|---|---|
+| `attachment_setup_ms` | 사례 시작부터 최초 첨부 목록 조회, 로컬 파일 읽기·staging, 동기화와 인덱스 준비까지. 준비 실패 시 실패 확인까지 |
+| `question_response_ms` | 최종 평가 질문 POST부터 final 수신까지. 공용 응답 검증과 `done` 대기는 제외. 실패 시 오류 확인까지, 질문을 보내지 않았으면 `null` |
+| `latency_ms_e2e` | 기존 소비자를 위한 `question_response_ms` 별칭. 브라우저 렌더링 시간은 아님 |
+| `scenario_total_ms` | 최초 준비와 모든 준비 질문·최종 질문, 응답 검증·평가 입력 해석까지. judge·결과 파일 저장·정리 요청은 제외 |
+| `cost_usd` | 실행한 모든 턴에서 관측한 앱 LLM 비용 합계. judge·검색 provider·임베딩 비용은 포함하지 않음 |
+
+최상위 `token_usage`, `llm_calls`, `models_used`, `debug`는 최종 평가 질문의 정보입니다. 모든 턴의 정보는 `scenario_turns`에 남습니다. summary와 보고서에는 세 시간 구간의 p50/p95를 표시하며 `p95_latency_ms` gate는 최종 질문 시간을 평가합니다. 이전 방식에서 질문 시간에 포함되던 초기화·인덱스 준비가 첨부 구간으로 이동했으므로 과거 수치와 직접 비교하지 않습니다.
 
 산출물 역할:
 
@@ -188,20 +218,24 @@ uv run python -m src.eval.request_contract_eval \
 | `avg_cost_per_case_usd` | `0.01` |
 | `cost_gate_min_llm_call_coverage` | `0.80` |
 
-judge minimum score와 pricing도 같은 파일에서 관리합니다. `cost_gate_min_llm_call_coverage`는 `src/eval/config_models.py::HardGates`의 기본값이며, config에 명시하지 않으면 `0.80`이 적용됩니다. 비용 지표는 app 응답 생성 LLM 호출 비용 기준이며, 현재 judge 호출 비용은 benchmark cost gate에 포함하지 않습니다.
+judge minimum score와 pricing도 같은 파일에서 관리합니다. `cost_gate_min_llm_call_coverage`는 `src/eval/config_models.py::HardGates`의 기본값이며, config에 명시하지 않으면 `0.80`이 적용됩니다. 다중 턴 비용 관측률은 모든 실행 턴을 검사합니다. 준비 턴에 LLM 사용량이 있고 마지막 저장이 deterministic이면 인정하지만, 어느 턴의 사용량이 누락되면 최종 질문의 정상 진단만으로 비용 gate를 활성화하지 않습니다.
 
 ### 4.1 참조 연결과 의미적 지지의 구분
 
 | 지표·입력 | 측정 범위 |
 |---|---|
-| `reference_coverage` | `interaction`을 제외한 실제 내용 단위 중 refs가 있고, 모든 참조가 수집한 검색 근거로 추적되는 비율. rule 가중치는 `0.20` |
-| `citation_traceability` | 요청한 docs/upload 출처 범위, 실제 검색 도구 실행, 사용한 참조가 관찰한 원문에 연결되는지 확인 |
+| `reference_coverage` | `interaction`을 제외한 실제 내용 단위 중 refs가 있고, 모든 참조가 현재 검색 또는 선택한 선행 답변의 검증된 인용에서 최종 packet으로 연결되는 비율. rule 가중치는 `0.20` |
+| `citation_traceability` | 요청한 docs/upload 출처 범위와 최종 packet의 채택 참조를 확인. 현재 검색의 근거는 해당 턴의 도구 실행을 요구하며, 검증된 선행 인용은 재검색 없이 계승 가능 |
 | `checks.reference_status` | 런타임의 참조 연결 결과. `resolved`는 의미적 정확성 판정이 아님 |
 | `checks.support_status` | `not_evaluated`, `exact_match`, `unsupported` 개수를 별도 집계. `not_evaluated`를 자동으로 0점 처리하지 않음 |
 | LLM judge의 groundedness | 실제 표시 본문과 연결된 근거가 설명·해석을 의미적으로 뒷받침하는지 평가 |
 | `actions`와 도구 실행 기록 | 저장·전송 성공 여부와 목표 도구 동작을 확인. 본문에 성공 문구가 있다는 이유로 액션 성공으로 판단하지 않음 |
 
-근거 추적은 snapshot과 원문 element가 같고, 인용 범위가 `observed_hits`의 선택 범위에 포함되는지를 확인합니다. synthesis 예산에 맞춰 더 작은 범위를 선택하면 근거 ID는 달라질 수 있으므로 ID 문자열만 비교하지 않습니다. 문자 범위의 포함 관계 또는 표 cell ID 부분집합으로 추적하며, 페이지 bbox가 없더라도 snapshot·요소·선택 범위가 유효하면 원문 연결을 인정합니다.
+현재 검색에서 packet으로 이어지는 근거는 snapshot과 원문 element가 같고, packet의 문자 범위 또는 표 cell ID가 `observed_hits`의 선택 범위에 포함되는지 확인합니다. synthesis 예산 때문에 범위를 줄이면 새 근거 ID가 생깁니다. 최종 citation은 이렇게 검증한 실제 packet의 ID와 일치해야 하므로, 검색 원문에 있었지만 모델에 제공하지 않은 범위는 인정하지 않습니다. 페이지 bbox가 없더라도 snapshot·요소·선택 범위가 유효하면 원문 연결을 인정합니다.
+
+기존 답변 복사·변환은 debug `answer_provenance.source`의 `ref`, `response_hash`, `citation_ids`로 서버가 선택한 본문과 실제 채택 출처를 확인합니다. 같은 사례·세션의 앞선 턴에서 hash와 전체 citation ID 목록이 모두 일치하는 가장 최근 답변을 찾고, 그 답변의 응답 구조와 출처 연결이 검증되어야 상속을 허용합니다. 상속 가능한 근거도 그 답변의 실제 인용 범위 안에 있는 현재 최종 packet으로 제한합니다. 최종 citation은 이 packet의 정확한 ID와 일치해야 합니다. 단순히 conversation에 등장한 답변이나 이전 턴에서 검색만 한 근거는 합치지 않습니다. 현재 턴의 `observed_hits`, 도구 정밀도·재현율, 원문 복사 감점 입력은 유지하므로 과거 검색 호출이 현재 도구 실행으로 집계되지 않습니다.
+
+`content_hash`는 본문 구조·basis·refs를 포함하지만 citation의 존재 여부나 전달 receipt 전체를 hash하지 않습니다. 따라서 선행 답변의 실제 citation 목록을 함께 비교합니다. 이 연결은 동일한 본문·채택 출처를 확인하며, 같은 내용이 반복된 대화의 정확한 발생 시점이나 설명의 의미적 지지를 증명하지 않습니다. 현재 online 실행에서 provenance 누락·불일치·연결되지 않은 선행 답변은 응답 계약 또는 필수 진단 오류이며, 이전 대화나 검색 원문을 합쳐 성공으로 승격하지 않습니다.
 
 runtime의 exact excerpt 검사는 발췌와 원문의 일치만 보장합니다. 인용된 원문 자체의 진실성이나 답변 전체의 충분함까지 보장하지 않으므로, rule 지표와 judge 결과를 함께 해석해야 합니다.
 
@@ -216,25 +250,31 @@ runtime의 exact excerpt 검사는 발췌와 원문의 일치만 보장합니다
 | `BENCHMARK_ENDPOINT` | `http://127.0.0.1:8000` | `/agent/stream`을 붙여 호출할 FastAPI 기본 주소 |
 | `JUDGE_MODEL` | config 값 사용 | judge 모델 override |
 | `BENCHMARK_JUDGE_ENABLED` | config 값 사용 | judge 사용 여부 override |
-| `BENCHMARK_SLACK_ENABLED` | `false` | benchmark live Slack 전송 opt-in |
+| `BENCHMARK_SLACK_ENABLED` | `false` | 실제 목적지 치환·전송 성공 감사 활성화. 서버 전송 차단 스위치는 아님 |
 | `BENCHMARK_SLACK_CHANNEL_ID` | 없음 | live channel 케이스 전송용 Slack channel id |
 | `BENCHMARK_SLACK_USER_ID` | 없음 | live DM 케이스 전송용 Slack user id |
 | `BENCHMARK_SLACK_EMAIL` | 없음 | live DM 케이스 전송용 Slack email |
 
 ## 6. 비교 이력 규칙
 
-history 리포터는 모든 run을 같은 기준으로 비교하지 않습니다. 아래 세 조건이 모두 같은 run만 comparable run으로 묶습니다.
+history 리포터는 다음 조건이 모두 같은 run만 comparable run으로 묶습니다.
 
 - `track`
 - `fixtures_path`
 - `total_cases`
+- `execution_contract_version`: 현재 `shared-client-scenario-v1`
+- `measurement_contract_version`: 현재 `attachment-question-scenario-v1`
+- `suite_fingerprint`: 준비 턴·첨부 목록을 포함한 사례 내용과 staging에서 실제 읽은 첨부 bytes의 SHA256
+- `evaluation_fingerprint`: 채점 계약 버전과 가중치·gate·pricing·judge·timeout 설정, Slack 실행 옵션
 
-즉, fixture 파일이나 케이스 수가 다르면 README 요약과 SVG에는 함께 들어가지 않을 수 있습니다.
+같은 경로의 fixture를 덮어써도 내용이나 첨부 bytes가 달라지면 자동 비교되지 않습니다. 새 계약 정보가 일부만 있는 run은 자기 자신만 표시합니다. 계약 정보가 없는 legacy끼리는 이전 경로·사례 수 비교를 유지하지만, 새 실행과 섞지 않습니다. 과거 JSON을 읽을 때 새 계약으로 자동 승격하지 않습니다.
 
-이 자동 분류는 평가 계약까지 동일하다는 보장은 아닙니다. 현재 rule의 `reference_coverage`는 의미적 groundedness를 측정하지 않으며, 새 본문·인용 계약으로 평가합니다. 스키마·rule이 달랐던 과거 release 수치는 실행 이력으로 보존하지만 새 계약의 검증 결과나 직접적인 품질 상승·하락 근거로 사용하지 않습니다. 비교할 변경은 같은 코드의 평가 계약과 fixture로 다시 실행해야 합니다.
+현재 채점 계약은 `answer-provenance-v1`이며 `summary.json`의 `audit_metrics.scoring_contract_version`에 기록합니다. 이 버전도 `evaluation_fingerprint`에 포함하므로 같은 fixture·설정이라도 이전 채점 결과와 자동 비교하지 않습니다. 실행·측정·채점 계약의 의미를 바꾸면 해당 버전도 갱신해야 합니다. 과거 summary는 당시 값 그대로 읽고 새 채점 버전을 채워 넣지 않습니다. 원격 서버의 모든 설정이나 모델 provider의 변동을 fingerprint가 자동 고정하지는 않습니다. 비교할 변경은 동일한 평가 계약·fixture와 확인된 서버 설정에서 다시 실행합니다. 현재 rule의 `reference_coverage`는 의미적 groundedness를 측정하지 않으며, 이전 스키마·rule의 기록을 새 계약의 품질 상승·하락 근거로 사용하지 않습니다.
 
 ## 7. 운영 메모
 
 - benchmark는 현재 `online` 모드만 지원합니다.
+- 확정된 첨부는 사례 종료 후 일반 sync API의 clear로 해제하고 staging 파일은 공용 정리 함수를 사용합니다. 질문 결과나 sync 처리 여부가 불확실하면 재전송·세션 폴더 직접 삭제를 하지 않습니다. 남은 세션·파일은 일반 TTL/LRU와 서버 파일 정리 주기에 따르며, 후속 요청이나 서버 재시작의 정리 실행까지 남을 수 있습니다. 정리 요청 실패는 `cleanup_errors`로 기록합니다.
+- 공용 클라이언트 평가는 Streamlit 화면 렌더링·브라우저 업로드 시간·다운로드 클릭을 측정하지 않습니다. UI 회귀는 Streamlit AppTest와 첨부 통합 테스트로 별도 확인합니다.
 - `history` 명령은 README 안의 자동 갱신 마커를 기준으로 동작하므로, `README.md`의 `## 검증 결과`와 `## 문서` 제목은 유지해야 합니다.
 - 공개 release 결과의 정본은 README 요약이고, 비교 추세는 기존 benchmark history SVG에 유지합니다. 별도 결과 문서나 smoke history 파일은 만들지 않습니다.

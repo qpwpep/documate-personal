@@ -52,7 +52,7 @@ DocuMate에서 중점적으로 개선한 범위는 단순한 챗봇 구현보다
 - LLM은 `AnswerDocument.blocks`에 표시할 내용을 한 번만 생성합니다. 서버는 같은 문장·코드·목록 항목·표 셀·제목을 검사해 인용, 확인 상태, 제한 사항을 파생합니다.
 - 인용은 내용 hash와 parser 설정으로 식별한 문서 snapshot, 원문 요소, 선택 범위를 보존합니다. 검색 범위를 줄이거나 업로드 파일을 바꿔도 기존 답변의 근거가 다른 원문으로 바뀌지 않습니다.
 - 업로드 인덱스는 원문을 chunk마다 복제하지 않습니다. 원문 구조를 한 번 보관하고 검색된 범위만 근거로 복원해 인용에 연결합니다.
-- Streamlit과 online benchmark를 FastAPI의 `POST /agent/stream`에 연결하고, 세션 TTL/LRU, 요청 lock, SSE progress, 업로드/생성 파일 cleanup을 구현했습니다.
+- Streamlit과 online benchmark가 공용 클라이언트에서 요청 구성, 첨부 준비·동기화, SSE 처리, 최종 답변·첨부 상태 검증을 공유합니다. 벤치마크는 같은 세션의 실제 준비 질문과 후속 질문을 재생하고, 세션 TTL/LRU와 요청 lock을 포함한 일반 FastAPI 실행 경로를 사용합니다.
 - 장기 대화는 고정 예산 rolling summary와 최근 canonical Human/AI 메시지로 유지합니다. 발화 ID와 정확한 원문은 최근 16개 및 보류 계약이 참조하는 발화를 별도로 보존하고, 응답 조립 성공 후에만 세션에 반영합니다.
 - 모델은 본문 작업 타입·사용자 의도·참조 선택자를 해석하고, 서버는 원문 범위·답변 hash·요청 revision을 확정합니다. 부족한 정보가 있어도 이미 확인한 금지·의사·출력 조건을 보존하며 재검색·재합성·전달은 같은 계약을 소비합니다.
 - 120-case online release benchmark와 pytest 회귀 테스트를 통해 pass rate, citation compliance, latency, 비용을 추적합니다.
@@ -68,7 +68,7 @@ DocuMate에서 중점적으로 개선한 범위는 단순한 챗봇 구현보다
 | 실행 흐름 | 모델 tool call과 개별 라우터 실험 중심 | `planner → retrieval → validation → synthesis → action` LangGraph 파이프라인 | 단계별 책임과 재시도 조건을 추적 가능 |
 | 검색 출처 | 검색/RAG 결과가 한 흐름에 섞이기 쉬움 | `docs`, `upload` route와 diagnostics, 문서 snapshot·원문 선택·검색 점수 분리 | 자료 버전·위치와 검색 실패·지연을 각각 추적 |
 | 답변 형식 | 자연어 응답 중심 | `AnswerDocument` 본문과 서버가 만든 citations·checks·issues·actions | 표시하는 내용을 직접 검사하고 UI·저장·전송에 같은 본문 사용 |
-| 웹 런타임 | 데모 UI와 백엔드 실행 기준이 느슨하게 분리 | Streamlit 데모와 benchmark가 FastAPI `POST /agent/stream` 사용 | 화면 동작과 평가가 같은 SSE 실행·응답 계약을 공유 |
+| 웹 런타임 | 데모 UI와 백엔드 실행 기준이 느슨하게 분리 | UI와 benchmark가 공용 첨부·질문·응답 클라이언트 사용 | 다중 턴 문맥과 첨부 revision을 포함해 실제 사용자 실행 경로로 평가 |
 | 세션/파일 처리 | 업로드 파일과 생성 파일의 수명 관리가 약함 | 세션별 manager cache, TTL/LRU, 요청 lock, 업로드/출력 cleanup | 사용자별 업로드 격리와 반복 실행 안정성 강화 |
 | 장기 대화 메모리 | 원문 history가 계속 누적되거나 생성한 summary가 다음 요청에서 사라질 수 있음 | high/low watermark, bounded rolling summary, reducer 삭제, canonical Human/AI projection, atomic commit | 대화 prompt·요약의 예산을 검증하고 Tool payload 재주입을 차단. 정확한 참조용 원문은 최근 16개와 보류 계약의 참조 발화를 별도 보존 |
 | 검증 체계 | 수동 확인과 일부 실험 결과 중심 | pytest 회귀 테스트 + 120-case online release benchmark | pass rate, citation compliance, latency, 비용을 변경마다 비교 가능 |
@@ -114,21 +114,21 @@ flowchart LR
 
 주요 기준 경로는 `src/runtime/graph_builder.py`, `src/runtime/make_graph.py`, `src/infra/tools/*`, `src/runtime/nodes/*`, `src/app/web/*`, `src/eval/*`입니다.
 
-- `src/app/`: FastAPI/Streamlit 웹 런타임, 서비스 매니저, 세션별 `AgentFlowManager`
+- `src/app/`: 공용 클라이언트·첨부 준비, FastAPI/Streamlit 웹 런타임, 서비스 매니저, 세션별 `AgentFlowManager`
 - `src/core/`: `GraphState`, bounded conversation memory 정책, parser 독립 문서·근거 모델, `AnswerDocument`와 응답·진단 계약
 - `src/infra/`: 설정, LLM registry, Chroma 기반 업로드 검색, Tavily docs search, Slack/save 도구
 - `src/runtime/`: LangGraph 조립과 session/planner/retrieval/validation/synthesis/action 노드
-- `src/eval/`: online benchmark, scoring, report/history 생성
+- `src/eval/`: 공용 클라이언트 기반 시나리오 재생·결과 수집, scoring, report/history 생성. 첨부·질문·전체 시나리오 시간을 구분하고 실행·측정 계약과 fixture fingerprint가 같은 이력만 비교
 
 문서 모델은 제목 계층·표 셀과 병합·코드·페이지·좌표를 수용하지만 현재 입력은 `.py`·`.ipynb`와 공식 문서 검색 결과입니다. Docling은 설치하거나 연동하지 않았습니다. 현재 인용은 사용한 원문 요소를 응답에 보존하며, 원본 파일 전체를 영구 보관하는 저장소나 PDF 페이지 뷰어는 포함하지 않습니다.
 
 ## 검증 결과
 
-회귀 테스트는 2026-09-10 KST 기준이며, 아래 `release` benchmark 수치는 `20260509_043436` 런의 기록입니다. 이 release 기록은 현재 응답·평가 계약으로 실행한 결과가 아닙니다. 새 계약의 품질은 별도 release run으로 확인해야 하며, 평가 기준이 다른 수치를 직접 비교하지 않습니다. 로컬 benchmark 실행은 `output/benchmarks/latest_release_run.txt`를 최신 `release` run 포인터로 갱신합니다.
+회귀 테스트는 2026-09-13 KST에 `LIVE_TEST=false`로 실행한 결과이며, 아래 `release` benchmark 수치는 `20260509_043436` 런의 기록입니다. 이 release 기록은 현재 응답·평가 계약이나 공용 클라이언트 시나리오로 실행한 결과가 아닙니다. 새 계약의 품질은 별도 release run으로 확인해야 하며, 평가 기준이 다른 수치를 직접 비교하지 않습니다. 로컬 benchmark 실행은 `output/benchmarks/latest_release_run.txt`를 최신 `release` run 포인터로 갱신합니다.
 
 | 항목 | 결과 |
 |---|---:|
-| 테스트 | `838 passed, 109 skipped, 67 subtests passed` |
+| 테스트 | `1143 passed, 115 skipped, 69 subtests passed` |
 | release benchmark | `116/120` cases passed |
 | release pass rate | `0.9667` |
 | tool precision / recall | `0.9677` / `1.0000` |
@@ -137,6 +137,8 @@ flowchart LR
 | avg cost per case | `$0.00523362` |
 
 기록된 당시의 comparable generated-suite에서 pass rate는 `0.3833`에서 `0.9667`로, citation compliance는 `0.3056`에서 `0.9556`으로 올라갔고 p95 latency는 `62063.0 ms`에서 `9435.9 ms`로 줄었습니다.
+
+공용 클라이언트 전환은 실제 localhost FastAPI·그래프·검색·파일 저장과 외부 모델/임베딩 대체 경계로 검증했습니다. 두 파일의 근거를 포함한 준비 답변과 후속 저장 결과가 같고, 새 사례에 이전 대화·첨부가 유입되지 않는지 확인했습니다. Streamlit 최소 지원 버전 `1.54.0`의 격리 환경 UI 검사도 `83 passed`입니다. 유료 모델·검색·judge를 사용하는 새 release run과 실서비스 Slack 전송은 실행하지 않았습니다.
 
 추세 그래프는 [docs/assets/benchmark_history.svg](docs/assets/benchmark_history.svg)에 보관합니다. 실행 방법은 [벤치마크 가이드](docs/benchmarking.md)를 참고하세요. 로컬 run의 기계 판독 결과와 상세 분석은 각각 `output/benchmarks/<run_id>/summary.json`, `output/benchmarks/<run_id>/report.md`에서 확인합니다.
 
