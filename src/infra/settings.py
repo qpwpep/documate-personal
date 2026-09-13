@@ -115,6 +115,20 @@ APP_ENV_SPECS = (
     EnvVarSpec("UPLOAD_MAX_FILES", "upload_max_files", 10, "세션별 활성 업로드 파일 개수", example=10, example_group="sessions"),
     EnvVarSpec("UPLOAD_MAX_FILE_MIB", "upload_max_file_mib", 10, "업로드 파일당 크기 상한 (MiB)", example=10, example_group="sessions"),
     EnvVarSpec("UPLOAD_MAX_TOTAL_MIB", "upload_max_total_mib", 50, "세션별 활성 업로드 합계 상한 (MiB)", example=50, example_group="sessions"),
+    EnvVarSpec("DOCLING_ENABLED", "docling_enabled", False, "PDF·DOCX·이미지 첨부 활성화 (docling extra 필요)", example_group="files"),
+    EnvVarSpec("DOCLING_ARTIFACTS_PATH", "docling_artifacts_path", "output/docling/models", "미리 준비한 로컬 변환/OCR 모델 디렉터리", example_group="files"),
+    EnvVarSpec("DOCLING_OCR_ENGINE", "docling_ocr_engine", "rapidocr", "한국어·영어 OCR 엔진: rapidocr (기본) 또는 비교용 easyocr", example_group="files"),
+    EnvVarSpec("DOCLING_OCR_ENABLED", "docling_ocr_enabled", True, "스캔 PDF·이미지 OCR 사용", example_group="files"),
+    EnvVarSpec("DOCLING_MAX_PAGES", "docling_max_pages", 30, "PDF 파일당 전체 페이지 상한", example_group="files"),
+    EnvVarSpec("DOCLING_TIMEOUT_SECONDS", "docling_timeout_seconds", 90, "한 첨부 변경의 Docling 변환 시간 상한", example_group="files"),
+    EnvVarSpec("DOCUMENT_UPLOAD_TIMEOUT_SECONDS", "document_upload_timeout_seconds", 150, "Docling 활성화 시 후보 첨부 생성·커밋 기한", example_group="files"),
+    EnvVarSpec("DOCLING_MAX_WORKER_MIB", "docling_max_worker_mib", 4096, "변환 프로세스 RSS 감시 한도 (MiB)", example_group="files"),
+    EnvVarSpec("DOCLING_MAX_OUTPUT_MIB", "docling_max_output_mib", 16, "변환 결과 JSON 한도 (MiB)", example_group="files"),
+    EnvVarSpec("DOCLING_MAX_IMAGE_PIXELS", "docling_max_image_pixels", 40000000, "이미지 픽셀 수 상한", example_group="files"),
+    EnvVarSpec("DOCUMENT_MAX_CHUNKS", "document_max_chunks", 2000, "Docling 문서의 후보 검색 청크 합계 상한", example_group="files"),
+    EnvVarSpec("DOCUMENT_CACHE_ENABLED", "document_cache_enabled", True, "세션별 변환·임베딩 캐시 사용", example_group="files"),
+    EnvVarSpec("DOCUMENT_CACHE_MAX_MIB", "document_cache_max_mib", 64, "세션 캐시 총 예산: 변환·임베딩에 절반씩 할당", example_group="files"),
+    EnvVarSpec("DOCUMENT_CACHE_TTL_SECONDS", "document_cache_ttl_seconds", 1800, "캐시 생성 후 유효 시간", example_group="files"),
     EnvVarSpec(
         "SESSION_CLEANUP_INTERVAL_SECONDS",
         "session_cleanup_interval_seconds",
@@ -560,6 +574,20 @@ class AppSettings(BaseSettings):
     upload_max_files: int = Field(default=_app_default("UPLOAD_MAX_FILES"), alias="UPLOAD_MAX_FILES", ge=1, le=100)
     upload_max_file_mib: int = Field(default=_app_default("UPLOAD_MAX_FILE_MIB"), alias="UPLOAD_MAX_FILE_MIB", ge=1)
     upload_max_total_mib: int = Field(default=_app_default("UPLOAD_MAX_TOTAL_MIB"), alias="UPLOAD_MAX_TOTAL_MIB", ge=1)
+    docling_enabled: bool = Field(default=_app_default("DOCLING_ENABLED"), alias="DOCLING_ENABLED")
+    docling_artifacts_path: str = Field(default=_app_default("DOCLING_ARTIFACTS_PATH"), alias="DOCLING_ARTIFACTS_PATH")
+    docling_ocr_engine: Literal["easyocr", "rapidocr"] = Field(default=_app_default("DOCLING_OCR_ENGINE"), alias="DOCLING_OCR_ENGINE")
+    docling_ocr_enabled: bool = Field(default=_app_default("DOCLING_OCR_ENABLED"), alias="DOCLING_OCR_ENABLED")
+    docling_max_pages: int = Field(default=_app_default("DOCLING_MAX_PAGES"), alias="DOCLING_MAX_PAGES", ge=1)
+    docling_timeout_seconds: int = Field(default=_app_default("DOCLING_TIMEOUT_SECONDS"), alias="DOCLING_TIMEOUT_SECONDS", ge=1)
+    document_upload_timeout_seconds: int = Field(default=_app_default("DOCUMENT_UPLOAD_TIMEOUT_SECONDS"), alias="DOCUMENT_UPLOAD_TIMEOUT_SECONDS", ge=1)
+    docling_max_worker_mib: int = Field(default=_app_default("DOCLING_MAX_WORKER_MIB"), alias="DOCLING_MAX_WORKER_MIB", ge=128)
+    docling_max_output_mib: int = Field(default=_app_default("DOCLING_MAX_OUTPUT_MIB"), alias="DOCLING_MAX_OUTPUT_MIB", ge=1)
+    docling_max_image_pixels: int = Field(default=_app_default("DOCLING_MAX_IMAGE_PIXELS"), alias="DOCLING_MAX_IMAGE_PIXELS", ge=1)
+    document_max_chunks: int = Field(default=_app_default("DOCUMENT_MAX_CHUNKS"), alias="DOCUMENT_MAX_CHUNKS", ge=1)
+    document_cache_enabled: bool = Field(default=_app_default("DOCUMENT_CACHE_ENABLED"), alias="DOCUMENT_CACHE_ENABLED")
+    document_cache_max_mib: int = Field(default=_app_default("DOCUMENT_CACHE_MAX_MIB"), alias="DOCUMENT_CACHE_MAX_MIB", ge=0)
+    document_cache_ttl_seconds: int = Field(default=_app_default("DOCUMENT_CACHE_TTL_SECONDS"), alias="DOCUMENT_CACHE_TTL_SECONDS", ge=0)
     session_cleanup_interval_seconds: int = Field(
         default=_app_default("SESSION_CLEANUP_INTERVAL_SECONDS"),
         alias="SESSION_CLEANUP_INTERVAL_SECONDS",
