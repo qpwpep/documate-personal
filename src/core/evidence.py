@@ -8,7 +8,8 @@ from typing import Any, Iterable, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
-from src.core.documents import DocumentElement, DocumentSnapshot
+from src.core.documents import DocumentElement, DocumentSnapshot, SourceAnchor
+from src.core.table_selection import table_excerpt
 
 
 class DocEntry(BaseModel):
@@ -78,12 +79,7 @@ class EvidenceRef(BaseModel):
     @property
     def excerpt(self) -> str:
         if self.selection.cell_ids:
-            selected = set(self.selection.cell_ids)
-            cells = sorted((cell for cell in self.element.table.cells if cell.cell_id in selected), key=lambda cell: (cell.row, cell.col))
-            rows: dict[int, list[str]] = {}
-            for cell in cells:
-                rows.setdefault(cell.row, []).append(cell.text)
-            return "\n".join(" | ".join(values) for values in rows.values())
+            return table_excerpt(self.element.table, self.selection.cell_ids)
         return self.element.text[self.selection.start:self.selection.end]
 
     @property
@@ -130,6 +126,30 @@ def build_evidence(
         id=_evidence_id(snapshot, element, selection),
         snapshot=snapshot.model_copy(deep=True), element=element.model_copy(deep=True), selection=selection,
     )
+
+
+def selected_source_anchors(evidence: EvidenceRef) -> list[SourceAnchor]:
+    """Resolve known locations without inventing coordinates for cropped text.
+
+    Missing cell provenance falls back to the complete table's locations. Text
+    charspans filter source regions, but never resize their bounding boxes.
+    """
+    element, selection = evidence.element, evidence.selection
+    if selection.cell_ids and element.table is not None:
+        selected = set(selection.cell_ids)
+        cells = [cell for cell in element.table.cells if cell.cell_id in selected]
+        anchors = [anchor for cell in cells for anchor in cell.anchors]
+        if any(not cell.anchors for cell in cells):
+            anchors.extend(element.anchors)
+    else:
+        end = len(element.text) if selection.end is None else selection.end
+        anchors = [anchor for anchor in element.anchors
+                   if anchor.start is None or anchor.end is None
+                   or (anchor.start < end and selection.start < anchor.end)]
+    unique: dict[str, SourceAnchor] = {}
+    for anchor in anchors:
+        unique.setdefault(anchor.model_dump_json(), anchor)
+    return [anchor.model_copy(deep=True) for anchor in unique.values()]
 
 
 def dedupe_search_hits(hits: Iterable[SearchHit]) -> list[SearchHit]:
