@@ -21,6 +21,11 @@ dependencies = [
     "uvicorn>=0.38.0",
 ]
 
+[project.optional-dependencies]
+docling = [
+    "docling[easyocr,rapidocr]==2.126.0",
+]
+
 [dependency-groups]
 dev = [
     "hypothesis>=6.155.7",
