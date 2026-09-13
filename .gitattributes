@@ -1,1 +1,2 @@
 uv.lock whitespace=cr-at-eol
+tests/fixtures/documents/*.pdf binary
