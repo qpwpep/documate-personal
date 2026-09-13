@@ -1,10 +1,13 @@
-from tests.eval.response_fixtures import sse_http_response
+from tests.eval.response_fixtures import answer_provenance, sse_http_response
 from tests.eval.response_fixtures import plain_response
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 from src.eval.config_models import BenchmarkCase, BenchmarkConfig
+from src.core.contracts.debug import DEBUG_SCHEMA_VERSION
 from src.eval.judge_llm import LLMJudge
 from src.eval.online_runner import _run_single_case
 from src.eval.reporting import build_markdown_report
@@ -13,7 +16,7 @@ from src.eval.summary_models import GateResult, RunSummary, SummaryStats
 
 def _debug_payload(**overrides):
     payload = {
-        "schema_version": 1,
+        "schema_version": DEBUG_SCHEMA_VERSION,
         "observability_status": "ok",
         "missing_required_debug_fields": [],
         "tool_calls": [],
@@ -25,6 +28,7 @@ def _debug_payload(**overrides):
         "errors": [],
         "planner_errors": [],
         "observed_hits": [],
+        "answer_provenance": answer_provenance(plain_response("done")),
         "retry_context": None,
         "retrieval_diagnostics": [],
         "planner_diagnostics": None,
@@ -35,7 +39,8 @@ def _debug_payload(**overrides):
 
 
 class LatencyBreakdownReportingTest(unittest.TestCase):
-    @patch("src.eval.online_runner.case_runner.requests.post")
+    @pytest.mark.usefixtures("empty_upload_manifest_http")
+    @patch("src.app.client.requests.post")
     def test_run_single_case_parses_latency_breakdown(self, mock_post) -> None:
         mock_post.return_value = sse_http_response(
             200,
@@ -193,7 +198,8 @@ class LatencyBreakdownReportingTest(unittest.TestCase):
         self.assertIn("| hybrid_p95_retrieval_ms | 250.0 |", report)
         self.assertIn("| retrieval_total_ms | 1 | 600.00 | 600.00 |", report)
 
-    @patch("src.eval.online_runner.case_runner.requests.post")
+    @pytest.mark.usefixtures("empty_upload_manifest_http")
+    @patch("src.app.client.requests.post")
     def test_run_single_case_computes_model_specific_cost_from_llm_calls(self, mock_post) -> None:
         mock_post.return_value = sse_http_response(
             200,

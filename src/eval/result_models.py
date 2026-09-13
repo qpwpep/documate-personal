@@ -60,6 +60,7 @@ class CaseResult(BaseModel):
     endpoint: str
     upload_fixture: str | None = None
     upload_fixtures: list[str] = Field(default_factory=list)
+    attachment_fingerprints: dict[str, str] = Field(default_factory=dict)
     request_payload: dict[str, Any]
     request_id: str | None = None
     http_status: int
@@ -73,7 +74,9 @@ class CaseResult(BaseModel):
     planner_diagnostics: PlannerDiagnostic | None = None
     trace: str | None = None
     latency_ms_e2e: int | None = None
+    attachment_setup_ms: int | None = Field(default=None, ge=0)
     question_response_ms: int | None = Field(default=None, ge=0)
+    scenario_total_ms: int | None = Field(default=None, ge=0)
     scenario_turns: list[ScenarioTurnResult] = Field(default_factory=list)
     latency_ms_server: int | None = None
     latency_breakdown: LatencyBreakdownModel | None = None

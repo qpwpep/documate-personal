@@ -114,7 +114,10 @@ def test_preparation_and_final_turn_share_confirmed_uploads_and_preserve_diagnos
     assert [turn.query for turn in result.scenario_turns] == [item["query"] for item in questions]
     assert [turn.debug["extra_diagnostic"] for turn in result.scenario_turns] == [{"turn": 1}, {"turn": 2}]
     assert export_answer_text(result.response) == "saved prepared body"
+    assert result.attachment_setup_ms == 500
     assert result.question_response_ms == result.latency_ms_e2e == 1000
+    assert result.scenario_total_ms == 2500
+    assert result.cost_usd == pytest.approx(2 * (10 / 1000 * 0.00015 + 2 / 1000 * 0.0006))
     assert result.runtime_errors == result.response_errors == []
 
 
@@ -213,3 +216,23 @@ def test_judge_receives_the_actual_prior_answer_for_a_followup_case(http_boundar
     assert payloads[0]["conversation"] == [{"query": "prepare an answer", "response": plain_response("prepared body"),
                                             "observed_hits": []}]
     assert result.judge_input_complete is True
+
+
+def test_attachment_fingerprint_describes_consumed_bytes_after_fixture_changes(http_boundary, tmp_path, monkeypatch):
+    """A later disk edit cannot relabel the immutable bytes staged for an already executed case."""
+    uploads = tmp_path / "fixtures" / "uploads"
+    uploads.mkdir(parents=True)
+    source = uploads / "one.py"
+    original = b"value = 1"
+    source.write_bytes(original)
+    post = requests.post
+
+    def edit_after_upload(endpoint, **kwargs):
+        source.write_bytes(b"value = 999")
+        return post(endpoint, **kwargs)
+
+    monkeypatch.setattr(requests, "post", edit_after_upload)
+    result = run_case(tmp_path, upload_fixtures=["one.py"])
+    assert result.attachment_fingerprints == {"one.py": hashlib.sha256(original).hexdigest()}
+    assert result.upload_fixtures == ["one.py"]
+    assert source.read_bytes() == b"value = 999"

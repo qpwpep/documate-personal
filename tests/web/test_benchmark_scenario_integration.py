@@ -128,7 +128,13 @@ def test_benchmark_retrieves_two_attachments_then_saves_the_actual_previous_answ
     saved = Path(receipts[0].file_path)
     assert saved.read_bytes().decode("utf-8-sig") == export_answer_text(preparation.response, include_sources=True)
     assert saved.read_bytes().decode("utf-8-sig") == export_answer_text(result.response, include_sources=True)
+    assert result.attachment_setup_ms is not None and result.attachment_setup_ms >= 0
     assert result.question_response_ms == delivery.question_response_ms
+    # Each reported interval is rounded independently to the nearest millisecond.
+    rounding_bound_ms = (len(result.scenario_turns) + 2) / 2
+    assert result.scenario_total_ms + rounding_bound_ms >= result.attachment_setup_ms + sum(
+        turn.question_response_ms for turn in result.scenario_turns
+    )
 
 
 def test_next_benchmark_scenario_cannot_save_another_scenarios_answer(scenario_server):
