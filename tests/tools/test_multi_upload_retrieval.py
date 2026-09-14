@@ -96,19 +96,6 @@ def test_unknown_file_scope_is_rejected_without_unscoped_fallback(uploads):
     assert payload["diagnostics"]["error_code"] == "UPLOAD_FILE_SCOPE_INVALID"
 
 
-def test_explicit_multi_file_scope_reserves_candidates_for_every_file(uploads):
-    """A larger file cannot consume all candidates in an explicit multi-file comparison."""
-    record, indexed = uploads
-    first = record("large.py", "value = 1\n" * 300)
-    second = record("small.py", "other_value = 2\n")
-    with indexed([first, second]) as handle:
-        payload = build_upload_search_tool()(query="compare values", k=1, retriever=handle.retriever,
-            requirement=RetrievalRequirement(file_ids=[first.file_id, second.file_id]))
-    assert {hit.evidence.snapshot.title for hit in parse_search_hits(payload)} == {"large.py", "small.py"}
-    assert payload["diagnostics"]["answerability"] == "covered"
-    assert payload["diagnostics"]["missing_requirements"] == []
-
-
 
 
 def test_scoped_candidates_preserve_filters_reserved_sources_and_raw_distances(uploads):

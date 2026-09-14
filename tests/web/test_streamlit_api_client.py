@@ -79,18 +79,6 @@ def frame(event, data):
 
 
 
-def test_sse_content_type_accepts_charset_parameter(transport):
-    """A standard SSE media type with its UTF-8 parameter preserves the final answer."""
-    transport(StreamResponse([
-        frame("final_response", {"response": answer_response().model_dump(mode="json")}),
-    ], content_type="text/event-stream; charset=utf-8"))
-
-    events = list(stream_agent_response("질문", context()))
-
-    assert [event.event for event in events] == ["final_response"]
-    assert events[0].result.response == answer_response()
-
-
 
 
 

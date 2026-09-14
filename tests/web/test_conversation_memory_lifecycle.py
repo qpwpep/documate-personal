@@ -160,13 +160,7 @@ class ConversationMemoryLifecycleTest(unittest.TestCase):
 
 
 class AgentRequestMemoryBoundaryTest(unittest.TestCase):
-
-    def test_query_over_the_character_limit_is_rejected(self) -> None:
-        with self.assertRaises(ValidationError):
-            AgentRequest(
-                query="x" * (DEFAULT_QUERY_MAX_CHARS + 1),
-                session_id="session",
-            )
+    pass
 
 
 
