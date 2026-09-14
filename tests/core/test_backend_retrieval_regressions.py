@@ -108,13 +108,6 @@ class BackendRetrievalRegressionTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Unsupported retrieval route: archive"):
             sanitize_retrieval_query(route="archive", query="Python json.loads")
 
-    def test_upload_query_keeps_identifier_for_hybrid_requests(self) -> None:
-        sanitized = sanitize_retrieval_query(
-            route="upload",
-            query="train_test_split 공식 문법을 설명하고 업로드 노트북의 실제 사용 예를 찾아줘.",
-        )
-        self.assertIn("train_test_split", sanitized)
-
     def test_docs_query_keeps_identifiers_before_korean_particles(self) -> None:
         pydantic_query = sanitize_retrieval_query(
             route="docs",

@@ -119,7 +119,12 @@ def test_benchmark_uses_the_real_sse_route_and_preserves_debug(agent_server):
     assert result.debug["model_usage_status"] == "deterministic"
     assert result.debug["token_usage"]["total_tokens"] == 0
     assert result.debug["observed_hits"] == []
-    assert result.latency_ms_e2e >= result.latency_ms_server
+    # Client and server use separate clocks whose resolutions differ on Windows.
+    # Exact duration measurement is covered with a controlled clock in test_runner_sse.
+    assert result.latency_ms_e2e == result.question_response_ms
+    assert result.latency_ms_e2e >= 0
+    assert result.latency_ms_server == result.debug["latency_ms_server"]
+    assert result.latency_ms_server >= 0
     assert app.state.session_store.active_session_ids() == {result.session_id}
 
 

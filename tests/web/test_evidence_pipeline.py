@@ -369,41 +369,50 @@ class EvidencePipelineTest(unittest.TestCase):
                                  [request["query"] for request in self.search_requests])
 
 
-    def test_docs_search_filters_cross_library_docs_results_for_hinted_queries(
-        self,
-    ) -> None:
-        self.tavily_payload = {
-            "results": [
-                {
-                    "url": "https://numpy.org/doc/stable/reference/generated/numpy.concatenate.html",
-                    "title": "numpy.concatenate",
-                    "content": "Join a sequence of arrays along an existing axis.",
-                    "score": 0.92,
-                },
-                {
-                    "url": "https://fastapi.tiangolo.com/tutorial/response-model/",
-                    "title": "FastAPI response model",
-                    "content": "FastAPI docs page",
-                    "score": 0.95,
-                },
-            ]
+    def test_docs_search_filters_cross_library_docs_results_for_hinted_queries(self) -> None:
+        documents = {
+            "numpy": (
+                "https://numpy.org/doc/stable/reference/generated/numpy.concatenate.html",
+                "numpy.concatenate", "Join a sequence of arrays along an existing axis.",
+            ),
+            "pandas": (
+                "https://pandas.pydata.org/docs/reference/api/pandas.concat.html",
+                "pandas.concat", "Concatenate pandas objects.",
+            ),
+            "fastapi": (
+                "https://fastapi.tiangolo.com/tutorial/response-model/",
+                "FastAPI response model", "FastAPI docs page",
+            ),
         }
-
         registry = build_tool_registry(AppSettings(openai_api_key="test", tavily_api_key="test"))
-        result = registry.tavily_search_tool(query="numpy 공식 문서")
+        for query, wanted, other in (
+            ("numpy 공식 문서", "numpy", "fastapi"),
+            ("pandas official docs", "pandas", "numpy"),
+        ):
+            with self.subTest(query=query):
+                self.tavily_payload = {"results": [
+                    {"url": url, "title": title, "content": content, "score": score}
+                    for (url, title, content), score in (
+                        (documents[wanted], 0.92), (documents[other], 0.95),
+                    )
+                ]}
 
-        urls = [item["evidence"]["snapshot"]["source_uri"] for item in result["hits"]]
-        self.assertEqual(
-            urls,
-            ["https://numpy.org/doc/stable/reference/generated/numpy.concatenate.html"],
-        )
-        self.assertIn("cross_library_domain_filtered", result["diagnostics"]["warnings"])
-        self.assertEqual(result["diagnostics"]["provider_result_count"], 2)
-        self.assertEqual(result["diagnostics"]["filtered_cross_domain_count"], 1)
-        self.assertEqual(result["diagnostics"]["final_evidence_count"], 1)
+                result = registry.tavily_search_tool(query=query)
 
-    def test_docs_search_word_match_hint_does_not_match_substring(self) -> None:
-        self.assertIsNone(infer_docs_query_hint("baremetal 공식 문서"))
+                urls = [item["evidence"]["snapshot"]["source_uri"] for item in result["hits"]]
+                self.assertEqual(urls, [documents[wanted][0]])
+                self.assertIn("cross_library_domain_filtered", result["diagnostics"]["warnings"])
+                self.assertEqual(result["diagnostics"]["provider_result_count"], 2)
+                self.assertEqual(result["diagnostics"]["filtered_cross_domain_count"], 1)
+                self.assertEqual(result["diagnostics"]["final_evidence_count"], 1)
+
+    def test_docs_search_word_match_hints_do_not_match_substrings_for_library_names(self) -> None:
+        for query in (
+            "baremetal 공식 문서", "numpydoc official docs",
+            "fastapiusers official docs", "pandasai official docs",
+        ):
+            with self.subTest(query=query):
+                self.assertIsNone(infer_docs_query_hint(query))
 
     def test_debug_exposes_retrieval_and_planner_diagnostics(self) -> None:
         result = _assemble_response(_response_with_hits([_hit()]))
@@ -528,38 +537,6 @@ class EvidencePipelineTest(unittest.TestCase):
         self.assertEqual(result["response"], response["response"].result.model_dump(mode="json"))
         self.assertEqual(result["response"]["actions"][0]["status"], "success")
         self.assertTrue(result["response"]["actions"][0]["file_path"].endswith("response_20260101_010101.txt"))
-
-
-    def test_docs_search_post_filters_cross_library_domains_for_hinted_queries(self) -> None:
-        self.tavily_payload = {
-            "results": [
-                {
-                    "url": "https://pandas.pydata.org/docs/reference/api/pandas.concat.html",
-                    "title": "pandas.concat",
-                    "content": "Concatenate pandas objects.",
-                    "score": 0.92,
-                },
-                {
-                    "url": "https://numpy.org/doc/stable/reference/generated/numpy.concatenate.html",
-                    "title": "numpy.concatenate",
-                    "content": "Join a sequence of arrays.",
-                    "score": 0.95,
-                },
-            ]
-        }
-
-        registry = build_tool_registry(AppSettings(openai_api_key="test", tavily_api_key="test"))
-        result = registry.tavily_search_tool(query="pandas official docs")
-
-        self.assertEqual(
-            [item["evidence"]["snapshot"]["source_uri"] for item in result["hits"]],
-            ["https://pandas.pydata.org/docs/reference/api/pandas.concat.html"],
-        )
-
-    def test_docs_search_word_match_hints_do_not_match_substrings_for_library_names(self) -> None:
-        self.assertIsNone(infer_docs_query_hint("numpydoc official docs"))
-        self.assertIsNone(infer_docs_query_hint("fastapiusers official docs"))
-        self.assertIsNone(infer_docs_query_hint("pandasai official docs"))
 
 
 if __name__ == "__main__":

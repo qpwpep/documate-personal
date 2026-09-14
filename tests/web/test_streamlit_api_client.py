@@ -65,8 +65,9 @@ def frame(event, data):
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
-def test_stream_preserves_complete_final_response_and_stops_without_done(transport):
-    """A valid final response preserves all fields and completes without another read."""
+@pytest.mark.parametrize("content_type", ["text/event-stream", "text/event-stream; charset=utf-8"])
+def test_stream_preserves_complete_final_response_and_stops_without_done(transport, content_type):
+    """Both standard SSE media types preserve all fields and finish without another read."""
     expected = cited_response()
     manifest = UploadManifest(epoch="reset-epoch", revision=0, files=[])
     payload = {
@@ -78,7 +79,7 @@ def test_stream_preserves_complete_final_response_and_stops_without_done(transpo
     response = StreamResponse([
         frame("final_response", payload),
         requests.exceptions.ConnectionError("must not read after final response"),
-    ])
+    ], content_type=content_type)
     calls = transport(response)
 
     events = list(stream_agent_response("질문", context()))
@@ -236,18 +237,6 @@ def test_non_sse_response_is_rejected_without_reading_body(transport, content_ty
     assert response.frames_read == 0
     assert response.closed
     assert len(calls) == 1
-
-
-def test_sse_content_type_accepts_charset_parameter(transport):
-    """A standard SSE media type with its UTF-8 parameter preserves the final answer."""
-    transport(StreamResponse([
-        frame("final_response", {"response": answer_response().model_dump(mode="json")}),
-    ], content_type="text/event-stream; charset=utf-8"))
-
-    events = list(stream_agent_response("질문", context()))
-
-    assert [event.event for event in events] == ["final_response"]
-    assert events[0].result.response == answer_response()
 
 
 @pytest.mark.parametrize("frames", [[], [": heartbeat\n\n"]])

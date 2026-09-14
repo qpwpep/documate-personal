@@ -96,21 +96,8 @@ def test_unknown_file_scope_is_rejected_without_unscoped_fallback(uploads):
     assert payload["diagnostics"]["error_code"] == "UPLOAD_FILE_SCOPE_INVALID"
 
 
-def test_explicit_multi_file_scope_reserves_candidates_for_every_file(uploads):
-    """A larger file cannot consume all candidates in an explicit multi-file comparison."""
-    record, indexed = uploads
-    first = record("large.py", "value = 1\n" * 300)
-    second = record("small.py", "other_value = 2\n")
-    with indexed([first, second]) as handle:
-        payload = build_upload_search_tool()(query="compare values", k=1, retriever=handle.retriever,
-            requirement=RetrievalRequirement(file_ids=[first.file_id, second.file_id]))
-    assert {hit.evidence.snapshot.title for hit in parse_search_hits(payload)} == {"large.py", "small.py"}
-    assert payload["diagnostics"]["answerability"] == "covered"
-    assert payload["diagnostics"]["missing_requirements"] == []
-
-
-def test_scoped_search_embeds_query_once_per_invocation(uploads, monkeypatch):
-    """Each search embeds once while preserving every requested file, even when k is smaller."""
+def test_scoped_search_preserves_every_file_and_embeds_once_per_invocation(uploads, monkeypatch):
+    """Uneven file sizes cannot exhaust another file's candidates or multiply query embeddings."""
     class RecordingEmbeddings(LengthEmbeddings):
         def __init__(self):
             self.queries = []
@@ -122,15 +109,20 @@ def test_scoped_search_embeds_query_once_per_invocation(uploads, monkeypatch):
     embeddings = RecordingEmbeddings()
     monkeypatch.setattr("src.infra.chroma_store.OpenAIEmbeddings", lambda **kwargs: embeddings)
     record, indexed = uploads
-    files = [record(f"file-{index}.py", f"value = {index}\n") for index in range(3)]
+    contents = {"large.py": "value = 1\n" * 300, "small.py": "other_value = 2\n", "third.py": "value = 3\n"}
+    files = [record(name, content) for name, content in contents.items()]
     requirement = RetrievalRequirement(file_ids=[file.file_id for file in files])
     search = build_upload_search_tool()
     with indexed(files) as handle:
         for _ in range(2):
             payload = search(query="compare values", k=1, retriever=handle.retriever, requirement=requirement)
-            assert {hit.evidence.snapshot.title: hit.evidence.excerpt for hit in parse_search_hits(payload)} == {
-                f"file-{index}.py": f"value = {index}" for index in range(3)
-            }
+            hits = parse_search_hits(payload)
+            assert {hit.evidence.snapshot.title for hit in hits} == set(contents)
+            for hit in hits:
+                source = contents[hit.evidence.snapshot.title]
+                assert hit.evidence.element.text == source
+                assert hit.evidence.excerpt
+                assert hit.evidence.excerpt == source[hit.evidence.selection.start:hit.evidence.selection.end]
             assert payload["diagnostics"]["answerability"] == "covered"
             assert payload["diagnostics"]["missing_requirements"] == []
     assert embeddings.queries == ["compare values", "compare values"]

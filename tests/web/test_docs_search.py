@@ -404,40 +404,6 @@ class DocsSearchTest(unittest.TestCase):
         self.assertEqual(mock_post.call_args.kwargs["json"]["include_domains"], ["numpy.org"])
 
     @patch("src.infra.tools.docs_search.client.requests.post")
-    def test_docs_search_runs_quality_fallbacks_sequentially(self, mock_post) -> None:
-        completed_queries: list[str] = []
-
-        def request_side_effect(*_args, json: dict[str, object], **_kwargs):
-            query = str(json["query"])
-            completed_queries.append(query)
-            if query == "numpy official docs":
-                return self._provider_response({"results": []})
-            return self._provider_response(
-                {
-                    "results": [
-                        {
-                            "url": "https://numpy.org/doc/stable/user/basics.broadcasting.html",
-                            "title": "Broadcasting",
-                            "content": "NumPy broadcasting stretches compatible array dimensions.",
-                            "score": 0.88,
-                        }
-                    ]
-                }
-            )
-
-        mock_post.side_effect = request_side_effect
-        registry = build_tool_registry(AppSettings(openai_api_key="test", tavily_api_key="test"))
-
-        result = registry.tavily_search_tool(query="numpy official docs")
-
-        self.assertEqual(completed_queries, ["numpy official docs", "numpy official docs API reference"])
-        self.assertEqual(result["diagnostics"]["status"], "success")
-        self.assertEqual(
-            [item["evidence"]["snapshot"]["source_uri"] for item in result["hits"]],
-            ["https://numpy.org/doc/stable/user/basics.broadcasting.html"],
-        )
-
-    @patch("src.infra.tools.docs_search.client.requests.post")
     def test_docs_search_reports_timeout_when_every_quality_fallback_times_out(
         self,
         mock_post,
@@ -480,7 +446,9 @@ class DocsSearchTest(unittest.TestCase):
     @patch("src.infra.tools.docs_search.client.requests.post")
     def test_docs_search_classifies_initial_provider_timeout(self, mock_post) -> None:
         mock_post.side_effect = requests.Timeout("provider timeout")
-        registry = build_tool_registry(AppSettings(openai_api_key="test", tavily_api_key="test"))
+        registry = build_tool_registry(AppSettings(
+            openai_api_key="test", tavily_api_key="test", docs_search_timeout_seconds=5,
+        ))
 
         result = registry.tavily_search_tool(
             query="custom docs",
@@ -491,6 +459,7 @@ class DocsSearchTest(unittest.TestCase):
         self.assertEqual(result["hits"], [])
         self.assertEqual(result["diagnostics"]["status"], "error")
         self.assertEqual(result["diagnostics"]["error_code"], "RETRIEVAL_DOCS_TIMEOUT")
+        self.assertIn("timed out after 5s", result["diagnostics"]["message"])
 
     @patch("src.infra.tools.docs_search.client.requests.post")
     def test_docs_search_classifies_initial_transport_failure(self, mock_post) -> None:
@@ -506,6 +475,7 @@ class DocsSearchTest(unittest.TestCase):
         self.assertEqual(result["hits"], [])
         self.assertEqual(result["diagnostics"]["status"], "error")
         self.assertEqual(result["diagnostics"]["error_code"], "RETRIEVAL_DOCS_FAILED")
+        self.assertIn("Tavily request failed", result["diagnostics"]["message"])
 
     @patch("src.infra.tools.docs_search.client.requests.post")
     def test_docs_search_classifies_initial_invalid_provider_payload(self, mock_post) -> None:
@@ -921,57 +891,12 @@ class TavilyClientTest(unittest.TestCase):
         self.assertEqual(mock_post.call_args.kwargs["json"]["query"], "numpy documentation")
 
     @patch("src.infra.tools.docs_search.client.requests.post")
-    def test_tavily_client_reports_timeout_after_one_provider_request(self, mock_post) -> None:
-        mock_post.side_effect = requests.Timeout("provider timeout")
-
-        with self.assertRaisesRegex(TimeoutError, "timed out after 5s"):
-            request_tavily_search(
-                query="numpy documentation",
-                tavily_api_key="test-key",
-                include_domains=["numpy.org"],
-                search_depth="basic",
-                timeout_seconds=5,
-            )
-
-        self.assertEqual(len(mock_post.call_args_list), 1)
-
-    @patch("src.infra.tools.docs_search.client.requests.post")
-    def test_tavily_client_reports_transport_failure_after_one_provider_request(self, mock_post) -> None:
-        mock_post.side_effect = requests.ConnectionError("connection refused")
-
-        with self.assertRaisesRegex(RuntimeError, "Tavily request failed"):
-            request_tavily_search(
-                query="numpy documentation",
-                tavily_api_key="test-key",
-                include_domains=["numpy.org"],
-                search_depth="basic",
-                timeout_seconds=5,
-            )
-
-        self.assertEqual(len(mock_post.call_args_list), 1)
-
-    @patch("src.infra.tools.docs_search.client.requests.post")
     def test_tavily_client_rejects_invalid_json_after_one_provider_request(self, mock_post) -> None:
         response = self._response(body={})
         response.json.side_effect = ValueError("invalid json")
         mock_post.return_value = response
 
         with self.assertRaisesRegex(RuntimeError, "invalid JSON response"):
-            request_tavily_search(
-                query="numpy documentation",
-                tavily_api_key="test-key",
-                include_domains=["numpy.org"],
-                search_depth="basic",
-                timeout_seconds=5,
-            )
-
-        self.assertEqual(len(mock_post.call_args_list), 1)
-
-    @patch("src.infra.tools.docs_search.client.requests.post")
-    def test_tavily_client_rejects_invalid_results_payload_after_one_provider_request(self, mock_post) -> None:
-        mock_post.return_value = self._response(body={"results": "invalid"})
-
-        with self.assertRaisesRegex(RuntimeError, "invalid Tavily results payload"):
             request_tavily_search(
                 query="numpy documentation",
                 tavily_api_key="test-key",

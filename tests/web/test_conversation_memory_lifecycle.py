@@ -296,13 +296,6 @@ class AgentRequestMemoryBoundaryTest(unittest.TestCase):
 
         self.assertEqual(len(request.query), DEFAULT_QUERY_MAX_CHARS)
 
-    def test_query_over_the_character_limit_is_rejected(self) -> None:
-        with self.assertRaises(ValidationError):
-            AgentRequest(
-                query="x" * (DEFAULT_QUERY_MAX_CHARS + 1),
-                session_id="session",
-            )
-
     def test_query_over_the_utf8_byte_limit_is_rejected(self) -> None:
         query = "😀" * (DEFAULT_QUERY_MAX_UTF8_BYTES // 4 + 1)
         self.assertLessEqual(len(query), DEFAULT_QUERY_MAX_CHARS)

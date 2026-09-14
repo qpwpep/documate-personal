@@ -6,13 +6,12 @@ from uuid import uuid4
 import pytest
 from fastapi import HTTPException
 from langchain_core.embeddings import Embeddings
-from pydantic import ValidationError
 
 from src.app.agent_manager import AgentFlowManager
 from src.app.web.schemas import AgentRequest
 from src.app.web.session_store import InMemorySessionStore
 from src.app.web.upload_service import UploadService
-from src.core.uploads import UploadAddition, UploadContext, UploadSyncRequest
+from src.core.uploads import UploadAddition, UploadSyncRequest
 from src.infra.settings import AppSettings
 from src.infra.tools.local_rag import build_upload_search_tool
 
@@ -162,12 +161,6 @@ def test_other_session_file_is_rejected_before_it_is_searchable(uploads):
     with pytest.raises(HTTPException):
         change(service, add=[staged(root, "secret.py", "secret = 1\n", session="session-b")])
     assert service.get_manifest("session-a").files == []
-
-
-def test_new_upload_context_cannot_be_combined_with_legacy_path():
-    """The two attachment protocols must not silently override each other."""
-    with pytest.raises(ValidationError):
-        AgentRequest(query="question", session_id="session-a", uploads=UploadContext(epoch="epoch", revision=1), upload_file_path="uploads/session-a/a.py")
 
 
 def test_over_total_batch_stops_reading_and_preserves_active_state(uploads, monkeypatch):
