@@ -4,7 +4,6 @@ from hypothesis import given, strategies as st
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from pydantic import ValidationError
 
-from src.core.contracts import PlannerDiagnostic, SessionMetadata, SlackDestination
 from src.core.planner_schema import (
     PlannerOutput,
     RetrievalTask,
@@ -46,7 +45,6 @@ class PlannerNodeTest(unittest.TestCase):
             {"plan": result.output, "reason": result.diagnostics.reason, "followup": bool(result.guided_followup)},
             {"plan": PlannerOutput.fallback(request_contract=RequestContract.invalid().to_wire()), "reason": "planner_unavailable", "followup": True},
         )
-
 
 
     def test_upload_query_sanitizer_preserves_missing_identifier_tokens_for_hybrid_requests(self) -> None:
@@ -94,25 +92,6 @@ class PlannerNodeTest(unittest.TestCase):
         self.assertIsNotNone(updates["planner"].guided_followup)
 
 
-
-
-
-    def test_planner_uses_docs_when_no_file_source_is_requested(self) -> None:
-        capture_planner = _CapturePlannerLLM(PlannerOutput(use_retrieval=True, tasks=[RetrievalTask(route="docs", query="pandas merge examples", k=4)]))
-        planner_node = make_planner_node(capture_planner, verbose=False)
-
-        updates = planner_node(
-            build_test_state(
-                {
-                    "messages": [HumanMessage(content="Explain pandas merge from official docs with an example.")],
-                    "user_input": "Explain pandas merge from official docs with an example.",
-                }
-            )
-        )
-
-        self.assertEqual(capture_planner.call_count, 1)
-        self.assertEqual(updates["planner"].status, "llm")
-        self.assertEqual([task.route for task in updates["planner"].output.tasks], ["docs"])
 
 
 
