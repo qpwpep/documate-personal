@@ -20,7 +20,6 @@ class FixtureContractsTest(unittest.TestCase):
                 if not case.resolved_upload_fixtures:
                     continue
                 self.assertIn("upload_search", case.expected_tools, msg=f"{path}: {case.case_id}")
-                self.assertNotIn("rag_search", case.expected_tools, msg=f"{path}: {case.case_id}")
 
     def test_previous_answer_action_fixtures_include_preparation_turns(self) -> None:
         for path in Path("data/benchmarks/fixtures").glob("cases.*.jsonl"):

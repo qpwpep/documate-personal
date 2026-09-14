@@ -1,49 +1,37 @@
-from src.core.answer_schema import AnswerResponse
-from tests.eval.response_fixtures import plain_response
 import unittest
 
-from src.eval.metric_rules import compute_rule_scores, score_reference_coverage
+from src.core.answer_schema import AnswerResponse
 from src.eval.config_models import BenchmarkCase
+from src.eval.metric_rules import compute_rule_scores
+from tests.eval.response_fixtures import plain_response, source_hit
 
 
 class ActionOnlyScoringTest(unittest.TestCase):
-    def test_tool_action_reference_coverage_is_not_penalized_without_retrieval(self) -> None:
-        case = BenchmarkCase(
-            case_id="tool_action_regression",
-            category="tool_action",
-            query="결과를 txt로 저장해줘",
-            expected_tools=["save_text"],
-        )
+    def test_action_only_rule_scores_do_not_require_citations(self) -> None:
+        """Delivery-only content needs no citations, including after incidental retrieval."""
+        scenarios = [
+            ("save-without-search", ["save_text"], []),
+            ("slack-without-search", ["slack_notify"], []),
+            ("unspecified-action", [], []),
+            ("unrelated-search", [], [source_hit()]),
+        ]
+        for name, tools, hits in scenarios:
+            with self.subTest(scenario=name):
+                scores = compute_rule_scores(
+                    case=BenchmarkCase(
+                        case_id=name, category="tool_action", query="이 본문을 전달해줘.",
+                        expected_tools=tools,
+                    ),
+                    response=AnswerResponse.model_validate(plain_response("전달할 본문")),
+                    called_tools=tools,
+                    observed_hits=hits,
+                    runtime_errors=[],
+                    response_errors=[],
+                    judge_errors=[],
+                )
 
-        self.assertEqual(
-            score_reference_coverage(
-                case=case,
-                response=AnswerResponse.model_validate(plain_response("저장용 본문\n\n저장 완료: output/response.txt")),
-                observed_hits=[],
-            ),
-            1.0,
-        )
-
-    def test_tool_action_rule_scores_keep_reference_coverage_at_one(self) -> None:
-        case = BenchmarkCase(
-            case_id="tool_action_regression",
-            category="tool_action",
-            query="결과를 slack으로 보내줘",
-            expected_tools=["slack_notify"],
-        )
-
-        scores = compute_rule_scores(
-            case=case,
-            response=AnswerResponse.model_validate(plain_response("공유용 본문\n\n전송 완료: Slack (C123BENCH)")),
-            called_tools=["slack_notify"],
-            observed_hits=[],
-            runtime_errors=[],
-            response_errors=[],
-            judge_errors=[],
-        )
-
-        self.assertEqual(scores["reference_coverage"], 1.0)
-        self.assertEqual(scores["citation_traceability"], 1.0)
+                self.assertEqual(scores["reference_coverage"], 1.0)
+                self.assertEqual(scores["citation_traceability"], 1.0)
 
     def test_live_slack_required_case_needs_delivery_success_for_tool_choice(self) -> None:
         case = BenchmarkCase(

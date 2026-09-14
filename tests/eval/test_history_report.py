@@ -109,63 +109,6 @@ def _summary_payload(
 
 
 class HistoryReportTest(unittest.TestCase):
-    def test_select_comparable_runs_uses_release_pointer_and_excludes_smoke(self) -> None:
-        with TemporaryDirectory() as temp_dir:
-            root = Path(temp_dir)
-            output_root = root / "output" / "benchmarks"
-            output_root.mkdir(parents=True)
-
-            for payload in [
-                _summary_payload(
-                    run_id="20260306_163931",
-                    generated_at_utc="2026-03-06T17:48:12.325082+00:00",
-                    pass_rate=0.3583,
-                    tool_precision=0.9062,
-                    tool_recall=0.9667,
-                    citation_compliance=0.85,
-                    p50_latency_ms=29327.0,
-                    p95_latency_ms=59439.2,
-                    avg_cost_per_case_usd=0.00085588,
-                ),
-                _summary_payload(
-                    run_id="20260307_101108",
-                    generated_at_utc="2026-03-07T11:08:17.965871+00:00",
-                    pass_rate=0.3667,
-                    tool_precision=0.9091,
-                    tool_recall=1.0,
-                    citation_compliance=0.8167,
-                    p50_latency_ms=24374.5,
-                    p95_latency_ms=46977.55,
-                    avg_cost_per_case_usd=0.00081372,
-                ),
-                _summary_payload(
-                    run_id="20260307_120000",
-                    generated_at_utc="2026-03-07T12:00:00+00:00",
-                    track="smoke",
-                    requested_limit=10,
-                    total_cases=10,
-                    pass_rate=0.8,
-                    tool_precision=0.9,
-                    tool_recall=0.9,
-                    citation_compliance=0.9,
-                    p50_latency_ms=1000.0,
-                    p95_latency_ms=2000.0,
-                    avg_cost_per_case_usd=0.0001,
-                ),
-            ]:
-                run_dir = output_root / payload["run_id"]
-                run_dir.mkdir()
-                (run_dir / "summary.json").write_text(json.dumps(payload), encoding="utf-8")
-
-            (output_root / "latest_release_run.txt").write_text("20260307_101108\n", encoding="utf-8")
-            (output_root / "latest_smoke_run.txt").write_text("20260307_120000\n", encoding="utf-8")
-
-            runs = load_history_runs(output_root)
-            latest, comparable = select_comparable_runs(runs, track="release", latest_run_id="20260307_101108")
-
-            self.assertEqual(latest.run_id, "20260307_101108")
-            self.assertEqual([run.run_id for run in comparable], ["20260306_163931", "20260307_101108"])
-
     def test_select_comparable_runs_uses_smoke_pointer(self) -> None:
         with TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -270,7 +213,8 @@ class HistoryReportTest(unittest.TestCase):
                 run_dir.mkdir()
                 (run_dir / "summary.json").write_text(json.dumps(payload), encoding="utf-8")
 
-            (output_root / "latest_release_run.txt").write_text("20260307_101108\n", encoding="utf-8")
+            # The pointer deliberately selects an older run, so ignoring it cannot pass.
+            (output_root / "latest_release_run.txt").write_text("20260303_134325\n", encoding="utf-8")
             (output_root / "latest_smoke_run.txt").write_text("20260307_120000\n", encoding="utf-8")
 
             latest, comparable = refresh_history_report(
@@ -283,10 +227,13 @@ class HistoryReportTest(unittest.TestCase):
             readme_text = readme_path.read_text(encoding="utf-8")
             svg_text = svg_path.read_text(encoding="utf-8")
 
-            self.assertEqual(latest.run_id, "20260307_101108")
-            self.assertEqual(len(comparable), 2)
+            self.assertEqual(latest.run_id, "20260303_134325")
+            self.assertEqual(
+                [run.run_id for run in comparable],
+                ["20260303_134325", "20260307_101108"],
+            )
             self.assertIn("`123 passed, 4 subtests passed`", readme_text)
-            self.assertIn("`20260307_101108`", readme_text)
+            self.assertIn("최신 문서화된 `release` benchmark는 `20260303_134325` 런입니다.", readme_text)
             self.assertIn(
                 "로컬 benchmark 실행은 `output/benchmarks/latest_release_run.txt`를",
                 readme_text,

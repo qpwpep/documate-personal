@@ -3,7 +3,7 @@ import unittest
 from src.core.answer_schema import ActionReceipt, AnswerDocument, export_answer_text, finalize_answer, text_document
 from src.core.contracts.debug import DebugPayload
 from src.eval.config_models import BenchmarkCase
-from src.eval.metric_rules import score_citation_traceability, score_reference_coverage
+from src.eval.metric_rules import score_reference_coverage
 from src.eval.online_runner.response_parser import parse_agent_response
 from tests.eval.response_fixtures import answer_provenance
 
@@ -18,16 +18,6 @@ class AnswerDocumentScoringTest(unittest.TestCase):
             observed_hits=[],
         )
         self.assertEqual(score, 0.0)
-
-    def test_action_only_content_does_not_require_search(self) -> None:
-        """A source-free delivery body remains valid without retrieval."""
-        response = finalize_answer(text_document("공유할 본문"), [])
-        case = BenchmarkCase(case_id="action", category="tool_action", query="공유")
-        self.assertEqual(score_reference_coverage(case=case, response=response, observed_hits=[]), 1.0)
-        self.assertEqual(
-            score_citation_traceability(case=case, response=response, observed_hits=[], called_tools=[]),
-            1.0,
-        )
 
     def test_parser_uses_the_canonical_export_and_preserves_public_actions(self) -> None:
         """Evaluation text and receipts come from the same typed response shown in the UI."""
