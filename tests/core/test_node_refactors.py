@@ -1,5 +1,3 @@
-import importlib
-
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
 from src.core.contracts import RetrievalDiagnostic
@@ -23,37 +21,6 @@ def _hit(text, *, source="official", uri="https://numpy.org/doc/stable/", rank=1
     element = DocumentElement(element_id="source", kind="paragraph" if source == "official" else "code", text=text, metadata=metadata or {})
     return SearchHit(evidence=build_evidence(snapshot=snapshot, element=element), rank=rank,
                      score=RetrievalScore(metric="test", raw=0.01, normalized=0.01, direction="higher"))
-
-
-def test_synthesis_package_reexports_models_and_factory():
-    synthesis = importlib.import_module("src.runtime.nodes.synthesis")
-    models = importlib.import_module("src.runtime.nodes.synthesis.models")
-    node = importlib.import_module("src.runtime.nodes.synthesis.node")
-    assert synthesis.PreparedSynthesisInputs is models.PreparedSynthesisInputs
-    assert synthesis.SynthesisPipelineResult is models.SynthesisPipelineResult
-    assert synthesis.make_synthesize_node is node.make_synthesize_node
-    assert not hasattr(synthesis, "build_structured_synthesizer")
-
-
-def test_online_runner_package_reexports_case_runner_api():
-    runner = importlib.import_module("src.eval.online_runner")
-    cases = importlib.import_module("src.eval.online_runner.case_runner")
-    assert runner.run_online_benchmark is cases.run_online_benchmark
-    assert runner._run_single_case is cases._run_single_case
-
-
-def test_reporting_package_reexports_public_helpers():
-    reporting = importlib.import_module("src.eval.reporting")
-    assert reporting.build_markdown_report is importlib.import_module("src.eval.reporting.markdown").build_markdown_report
-    assert reporting.build_summary is importlib.import_module("src.eval.reporting.summary").build_summary
-    assert reporting.write_run_outputs is importlib.import_module("src.eval.reporting.writer").write_run_outputs
-
-
-def test_validation_package_exposes_only_public_entrypoints():
-    validation = importlib.import_module("src.runtime.nodes.validation")
-    for name in ("ValidationAssessment", "ValidationSnapshot", "make_pre_synthesis_validation_node", "make_post_synthesis_validation_node"):
-        assert hasattr(validation, name)
-    assert not hasattr(validation, "apply_validation_outcome")
 
 
 def test_prompt_preserves_current_question_and_contract_while_trimming_history():

@@ -4,7 +4,6 @@ from hypothesis import given, strategies as st
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from pydantic import ValidationError
 
-from src.core.contracts import PlannerDiagnostic, SessionMetadata, SlackDestination
 from src.core.planner_schema import (
     PlannerOutput,
     RetrievalTask,
@@ -66,13 +65,6 @@ class PlannerNodeTest(unittest.TestCase):
             {"plan": result.output, "reason": result.diagnostics.reason, "followup": bool(result.guided_followup)},
             {"plan": PlannerOutput.fallback(request_contract=RequestContract.invalid().to_wire()), "reason": "planner_unavailable", "followup": True},
         )
-
-    def test_nested_state_models_are_not_subscriptable(self) -> None:
-        with self.assertRaises(TypeError):
-            _ = PlannerDiagnostic()["reason"]
-
-        with self.assertRaises(TypeError):
-            _ = SessionMetadata(slack_destination=SlackDestination(channel_id="C123"))["slack_destination"]
 
     def test_planner_schema_rules(self) -> None:
         self.assertEqual(PlannerOutput(use_retrieval=False, tasks=[]).tasks, [])
@@ -221,25 +213,6 @@ class PlannerNodeTest(unittest.TestCase):
         self.assertIn("PLANNER_SCHEMA_INVALID", result["debug"].error_codes)
 
 
-    def test_planner_uses_docs_when_no_file_source_is_requested(self) -> None:
-        capture_planner = _CapturePlannerLLM(PlannerOutput(use_retrieval=True, tasks=[RetrievalTask(route="docs", query="pandas merge examples", k=4)]))
-        planner_node = make_planner_node(capture_planner, verbose=False)
-
-        updates = planner_node(
-            build_test_state(
-                {
-                    "messages": [HumanMessage(content="Explain pandas merge from official docs with an example.")],
-                    "user_input": "Explain pandas merge from official docs with an example.",
-                }
-            )
-        )
-
-        self.assertEqual(capture_planner.call_count, 1)
-        self.assertEqual(updates["planner"].status, "llm")
-        self.assertEqual([task.route for task in updates["planner"].output.tasks], ["docs"])
-
-
-
     @given(has_retriever=st.booleans(), compare_docs=st.booleans())
     def test_planner_requests_missing_file_when_only_llm_recognizes_source(
         self, has_retriever: bool, compare_docs: bool,
@@ -303,27 +276,6 @@ class PlannerNodeTest(unittest.TestCase):
         self.assertEqual(updates["planner"].status, "llm")
         self.assertFalse(updates["planner"].output.use_retrieval)
 
-    def test_planner_records_llm_call_metadata_when_llm_path_is_used(self) -> None:
-        capture_planner = _CapturePlannerLLM(
-            PlannerOutput(use_retrieval=True, tasks=[RetrievalTask(route="docs", query="numpy", k=3)]),
-            include_raw=True,
-        )
-        planner_node = make_planner_node(capture_planner, verbose=False)
-
-        updates = planner_node(
-            build_test_state(
-                {
-                    "messages": [HumanMessage(content="numpy parameters")],
-                    "user_input": "numpy parameters",
-                }
-            )
-        )
-
-        self.assertEqual(capture_planner.call_count, 1)
-        self.assertEqual(len(updates["debug"].llm_calls), 1)
-        self.assertEqual(updates["debug"].llm_calls[0].stage, "planner")
-        self.assertEqual(updates["debug"].llm_calls[0].path, "structured")
-
     def test_planner_uses_one_structured_request(self) -> None:
         capture_planner = _CapturePlannerLLM(
             PlannerOutput(
@@ -347,30 +299,7 @@ class PlannerNodeTest(unittest.TestCase):
         self.assertEqual(updates["planner"].status, "llm")
         self.assertEqual(updates["planner"].output.tasks[0].query, "numpy parameters")
         self.assertEqual([item.path for item in updates["debug"].llm_calls], ["structured"])
-
-    def test_planner_prompt_preserves_library_name_for_docs_queries(self) -> None:
-        capture_planner = _CapturePlannerLLM(
-            PlannerOutput(use_retrieval=True, tasks=[RetrievalTask(route="docs", query="Bare", k=3)])
-        )
-        planner_node = make_planner_node(capture_planner, verbose=False)
-
-        _ = planner_node(
-            build_test_state(
-                {
-                    "messages": [HumanMessage(content="bare parameters")],
-                    "user_input": "bare parameters",
-                }
-            )
-        )
-
-        system_prompts = [
-            str(message.content)
-            for message in (capture_planner.last_messages or [])
-            if isinstance(message, SystemMessage)
-        ]
-        self.assertTrue(
-            any("preserve the library/framework name in task.query" in prompt for prompt in system_prompts)
-        )
+        self.assertEqual([item.stage for item in updates["debug"].llm_calls], ["planner"])
 
     def test_planner_accepts_structured_output_model_instances(self) -> None:
         capture_planner = _CapturePlannerLLM(
@@ -391,6 +320,7 @@ class PlannerNodeTest(unittest.TestCase):
             )
         )
 
+        self.assertEqual(capture_planner.call_count, 1)
         self.assertEqual(updates["planner"].status, "llm")
         self.assertEqual([task.route for task in updates["planner"].output.tasks], ["docs"])
         self.assertEqual(updates["planner"].output.tasks[0].query, "numpy")

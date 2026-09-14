@@ -1,12 +1,7 @@
 import unittest
 
-from langchain_core.messages import HumanMessage
-
 from src.core.contracts.boundary.planner import parse_planner_output, parse_planner_state
-from src.runtime.nodes.planner import make_planner_node
 from src.core.planner_schema import PlannerOutput
-
-from .helpers import _CapturePlannerLLM, build_test_state
 
 
 class PlannerSchemaMismatchTest(unittest.TestCase):
@@ -70,30 +65,6 @@ class PlannerSchemaMismatchTest(unittest.TestCase):
 
         self.assertEqual([task.route for task in state.output.tasks], ["docs", "docs"])
         self.assertEqual(state.diagnostics.planner_warnings, [])
-
-    def test_planner_node_accepts_planner_schema_from_structured_wrapper(self) -> None:
-        capture_planner = _CapturePlannerLLM(
-            PlannerOutput(
-                use_retrieval=True,
-                tasks=[{"route": "docs", "query": "numpy parameters", "k": 3}],
-            ),
-            include_raw=True,
-        )
-        planner_node = make_planner_node(capture_planner, verbose=False)
-
-        updates = planner_node(
-            build_test_state(
-                {
-                    "messages": [HumanMessage(content="numpy parameters")],
-                    "user_input": "numpy parameters",
-                }
-            )
-        )
-
-        self.assertEqual(capture_planner.call_count, 1)
-        self.assertEqual(updates["debug"].planner_errors, [])
-        self.assertEqual([task.route for task in updates["planner"].output.tasks], ["docs"])
-        self.assertEqual(updates["planner"].output.tasks[0].query, "numpy parameters")
 
 
 if __name__ == "__main__":

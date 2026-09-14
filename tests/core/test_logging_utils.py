@@ -8,39 +8,16 @@ from tempfile import TemporaryDirectory
 from unittest.mock import Mock, patch
 
 from src.app.service_manager.process_client import start_background_process
-from src.infra.logging_utils import (
-    LOG_DATE_FORMAT,
-    LOG_FORMAT,
-    EventFormatter,
-    configure_logging,
-)
+from src.infra.logging_utils import EventFormatter, configure_logging
 
 
 class LoggingUtilsTest(unittest.TestCase):
-    def test_event_formatter_includes_timestamp_and_event(self) -> None:
-        formatter = EventFormatter(LOG_FORMAT, datefmt=LOG_DATE_FORMAT)
-        record = logging.LogRecord(
-            name="src.test",
-            level=logging.INFO,
-            pathname=__file__,
-            lineno=1,
-            msg="message body",
-            args=(),
-            exc_info=None,
-        )
-
-        formatted = formatter.format(record)
-
-        self.assertRegex(
-            formatted,
-            r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} INFO src\.test event=log message body$",
-        )
-
     def test_configure_logging_refreshes_existing_documate_handler_formatter(self) -> None:
         root_logger = logging.getLogger()
         original_handlers = root_logger.handlers[:]
         original_level = root_logger.level
-        handler = logging.StreamHandler(io.StringIO())
+        stream = io.StringIO()
+        handler = logging.StreamHandler(stream)
         handler._documate_handler = True  # type: ignore[attr-defined]
         handler.setFormatter(EventFormatter("%(levelname)s %(message)s"))
 
@@ -48,11 +25,11 @@ class LoggingUtilsTest(unittest.TestCase):
             root_logger.handlers = [handler]
             configure_logging(level=logging.DEBUG)
 
-            formatter = handler.formatter
-            self.assertIsInstance(formatter, EventFormatter)
-            self.assertEqual(getattr(formatter, "_fmt", None), LOG_FORMAT)
-            self.assertEqual(getattr(formatter, "datefmt", None), LOG_DATE_FORMAT)
-            self.assertEqual(root_logger.level, logging.DEBUG)
+            root_logger.debug("message body")
+            self.assertRegex(
+                stream.getvalue(),
+                r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} DEBUG root event=log message body\n$",
+            )
         finally:
             root_logger.handlers = original_handlers
             root_logger.setLevel(original_level)

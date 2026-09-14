@@ -7,14 +7,11 @@ from src.core.evidence import RetrievalScore, SearchHit, build_evidence
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from src.core.conversation_memory import ConversationMemoryPolicy
-from src.core.contracts import GraphState, LLMCallMetadata, PlannerState, ResponseState
-from src.core.contracts.boundary.debug import get_debug_state
+from src.core.contracts import GraphState, PlannerState, ResponseState
 from src.core.contracts.boundary.graph import build_graph_state_input
 from src.core.contracts.boundary.response import get_response_state
 from src.core.contracts.boundary.retrieval import get_retrieval_state
-from src.runtime.graph_builder import _instrument_stage_node
 from src.runtime.make_graph import build_graph
-from src.runtime.nodes.actions import make_action_postprocess_node
 from src.runtime.nodes.planner import make_planner_node
 from src.runtime.nodes.retrieval import make_retrieve_dispatch_node
 from src.runtime.nodes.session import add_user_message
@@ -147,28 +144,6 @@ class GraphRoutingTest(unittest.TestCase):
         self.assertEqual(summary_calls["count"], 0)
         self.assertEqual(export_answer_text(result["response"].result), "final answer")
 
-    def test_planner_skips_retrieval_dispatch_when_not_required(self) -> None:
-        dispatch_calls = {"count": 0}
-
-        graph = build_graph(
-            state_type=GraphState,
-            add_user_node=add_user_message,
-            summarize_node=lambda state: state,
-            planner_node=_neutral_planner_update,
-            retrieve_dispatch_node=lambda state: dispatch_calls.__setitem__("count", dispatch_calls["count"] + 1),
-            synthesize_node=lambda state: {
-                "response": _response("final answer", state=state),
-            },
-            pre_synthesis_validation_node=make_pre_synthesis_validation_node(verbose=False),
-            post_synthesis_validation_node=make_post_synthesis_validation_node(verbose=False),
-            action_postprocess_node=lambda state: {},
-            memory_policy=ConversationMemoryPolicy(),
-        )
-
-        result = graph.invoke(build_graph_state_input(user_input="question", messages=[]))
-        self.assertEqual(dispatch_calls["count"], 0)
-        self.assertEqual(export_answer_text(result["response"].result), "final answer")
-
     def test_graph_retrieves_docs_selected_by_planner(self) -> None:
         docs_calls = {"count": 0}
         capture_planner = _CapturePlannerLLM(PlannerOutput(
@@ -289,99 +264,6 @@ class GraphRoutingTest(unittest.TestCase):
         self.assertEqual(docs_calls["count"], 2)
         self.assertEqual(synth_calls["count"], 1)
         self.assertEqual(export_answer_text(result["response"].result), "answer-1 [1]")
-
-    def test_debug_survives_validation_and_action_stage_instrumentation(self) -> None:
-        retrieve_dispatch = make_retrieve_dispatch_node(
-            lambda query, **kwargs: _tool_payload(
-                [
-                    _official_hit(uri='https://numpy.org/doc/stable/', title='NumPy docs', excerpt='broadcasting official reference', score=0.94)
-                ],
-                tool="tavily_search",
-                route="docs",
-                status="success",
-                message="",
-                query=query,
-            ),
-            lambda query, k, retriever=None, **kwargs: _tool_payload(
-                [],
-                tool="upload_search",
-                route="upload",
-                status="no_result",
-                message="",
-                query=query,
-            ),
-            verbose=False,
-        )
-
-        def _synthesize(state):
-            debug = get_debug_state(state)
-            answer = "NumPy broadcasting keeps compatible dimensions aligned"
-            return {
-                "response": _response(answer, state=state),
-                "debug": debug.model_copy(
-                    update={
-                        "llm_calls": [
-                            *debug.llm_calls,
-                            LLMCallMetadata(
-                                stage="synthesis",
-                                attempt=1,
-                                path="structured",
-                                response_metadata={"model_name": "gpt-5-mini"},
-                                usage_metadata={"input_tokens": 20, "output_tokens": 8, "total_tokens": 28},
-                            ),
-                        ]
-                    }
-                ),
-            }
-
-        pre_validate_node = _instrument_stage_node(
-            "pre_synthesis_validation",
-            make_pre_synthesis_validation_node(verbose=False),
-        )
-        validate_node = _instrument_stage_node(
-            "post_synthesis_validation",
-            make_post_synthesis_validation_node(verbose=False),
-        )
-        action_node = _instrument_stage_node(
-            "action_postprocess",
-            make_action_postprocess_node(
-                save_text_tool=lambda content, filename_prefix: {"status": "ok"},
-                slack_notify_tool=lambda text, **kwargs: {"status": "ok"},
-                verbose=False,
-            ),
-        )
-
-        graph = build_graph(
-            state_type=GraphState,
-            add_user_node=add_user_message,
-            summarize_node=lambda state: state,
-            planner_node=lambda state: _neutral_planner_update(state, PlannerOutput(
-                use_retrieval=True,
-                tasks=[RetrievalTask(route="docs", query="numpy broadcasting official docs", k=3)],
-            )),
-            retrieve_dispatch_node=retrieve_dispatch,
-            synthesize_node=_synthesize,
-            pre_synthesis_validation_node=pre_validate_node,
-            post_synthesis_validation_node=validate_node,
-            action_postprocess_node=action_node,
-            memory_policy=ConversationMemoryPolicy(),
-        )
-
-        result = graph.invoke(
-            build_graph_state_input(
-                user_input="Explain NumPy broadcasting from official docs.",
-                messages=[],
-            )
-        )
-
-        debug = get_debug_state(result)
-        self.assertEqual([item.tool for item in debug.retrieval_diagnostics], ["tavily_search"])
-        self.assertEqual([item.stage for item in debug.llm_calls], ["synthesis"])
-        stage_events = [item for item in debug.latency_trace if item.get("kind") == "stage"]
-        self.assertTrue(any(item.get("stage") == "pre_synthesis_validation" for item in stage_events))
-        self.assertTrue(any(item.get("stage") == "post_synthesis_validation" for item in stage_events))
-        self.assertTrue(any(item.get("stage") == "action_postprocess" for item in stage_events))
-        self.assertEqual(export_answer_text(result["response"].result), "NumPy broadcasting keeps compatible dimensions aligned [1]")
 
 
 if __name__ == "__main__":

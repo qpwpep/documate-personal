@@ -173,6 +173,8 @@ class GraphBuilderDebugTest(unittest.TestCase):
         debug = get_debug_state(result)
         self.assertEqual(len(debug.retrieval_diagnostics), 2)
         self.assertEqual([item.route for item in debug.retrieval_diagnostics], ["docs", "upload"])
+        self.assertEqual([item.stage for item in debug.llm_calls], ["planner", "synthesis"])
+        self.assertTrue(all(item.usage_metadata["total_tokens"] == 14 for item in debug.llm_calls))
         stage_events = [
             item for item in debug.latency_trace if isinstance(item, dict) and item.get("kind") == "stage"
         ]
