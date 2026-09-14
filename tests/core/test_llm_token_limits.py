@@ -125,6 +125,7 @@ def test_default_models_reach_every_application_llm_request(provider):
     for model in (registry.llm_synthesizer, registry.llm_synthesizer_compact, registry.llm_summarizer):
         assert model.invoke(messages).content == text_document("Hello.").model_dump_json()
     assert [request["model"] for request in requests] == ["gpt-5.6-luna"] * 4
+    assert all(not {"reasoning_effort", "reasoning"}.intersection(request) for request in requests)
 
 
 @pytest.mark.parametrize("responses_api", [False, True], ids=["chat", "responses"])
@@ -284,19 +285,22 @@ def test_explicit_planner_reasoning_reaches_http_and_preserves_structured_output
     assert schema["name"] == "PlannerOutput"
     assert schema["strict"] is True
     assert schema["schema"]["additionalProperties"] is False
+    assert "request_contract" in schema["schema"]["required"]
+    assert "WireRequestContract" in schema["schema"]["$defs"]
     expected_plan = PlannerOutput(use_retrieval=False, tasks=[], request_contract=WireRequestContract())
     assert configured["parsing_error"] is None
     assert PlannerOutput.model_validate(configured["parsed"]) == PlannerOutput.model_validate(baseline["parsed"]) == expected_plan
 
 
 @pytest.mark.parametrize("responses_api", [False, True], ids=["chat", "responses"])
-def test_planner_and_synthesis_reasoning_overrides_keep_role_requests_independent(provider, responses_api):
+@pytest.mark.parametrize("synthesis_effort", ["low", "xhigh", "none"])
+def test_planner_and_synthesis_reasoning_overrides_keep_role_requests_independent(provider, responses_api, synthesis_effort):
     """Planner tuning leaves both synthesis requests and summarization unchanged, and synthesis tuning stays out of planning."""
     requests, behavior = provider
     messages = [HumanMessage(content="Hello")]
     for effort in (None, "max"):
         registry = build_llm_registry(_settings(
-            planner_reasoning_effort=effort, synthesis_reasoning_effort="low",
+            planner_reasoning_effort=effort, synthesis_reasoning_effort=synthesis_effort,
             synthesis_use_responses_api=responses_api,
         ))
         for model in (registry.llm_planner, registry.llm_synthesizer,
@@ -308,7 +312,7 @@ def test_planner_and_synthesis_reasoning_overrides_keep_role_requests_independen
     assert configured[1:] == baseline[1:]
     assert {key: value for key, value in baseline[0].items() if key in {"reasoning_effort", "reasoning"}} == {}
     assert {key: value for key, value in configured[3].items() if key in {"reasoning_effort", "reasoning"}} == {}
-    expected_reasoning = {"reasoning": {"effort": "low"}} if responses_api else {"reasoning_effort": "low"}
+    expected_reasoning = {"reasoning": {"effort": synthesis_effort}} if responses_api else {"reasoning_effort": synthesis_effort}
     for payload in configured[1:3]:
         assert {key: value for key, value in payload.items() if key in {"reasoning_effort", "reasoning"}} == expected_reasoning
     synthesis_path = "/v1/responses" if responses_api else "/v1/chat/completions"

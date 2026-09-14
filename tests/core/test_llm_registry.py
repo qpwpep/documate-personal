@@ -1,156 +1,44 @@
 import unittest
 from unittest.mock import patch
 
-from src.core.planner_schema import PlannerOutput
 from src.infra.llm import build_llm_registry
 from src.infra.settings import AppSettings
 
 
 class _FakeChatOpenAI:
-    created_kwargs: list[dict] = []
-    structured_args: list[tuple] = []
-    structured_kwargs: list[dict] = []
-
     def __init__(self, **kwargs):
         self.kwargs = kwargs
-        self.__class__.created_kwargs.append(kwargs)
 
     def with_structured_output(self, *_args, **_kwargs):
-        self.__class__.structured_args.append(_args)
-        self.__class__.structured_kwargs.append(_kwargs)
         return self
 
 
 class LLMRegistryTest(unittest.TestCase):
-    def test_planner_schema_matches_strict_json_schema_shape(self) -> None:
-        schema = PlannerOutput.model_json_schema()
-
-        self.assertEqual(set(schema["required"]), {"use_retrieval", "tasks"})
-        self.assertIs(schema["additionalProperties"], False)
-
-        task_schema = schema["$defs"]["RetrievalTask"]
-        self.assertEqual(set(task_schema["required"]), {"route", "query", "k"})
-        self.assertIs(task_schema["additionalProperties"], False)
-        self.assertEqual(set(task_schema["properties"]["route"]["enum"]), {"docs", "upload"})
-
     @patch("src.infra.llm.ChatOpenAI", new=_FakeChatOpenAI)
-    def test_build_llm_registry_applies_explicit_synthesis_policy(self) -> None:
-        _FakeChatOpenAI.created_kwargs = []
-        _FakeChatOpenAI.structured_args = []
-        _FakeChatOpenAI.structured_kwargs = []
+    def test_build_llm_registry_applies_role_specific_transport_policy(self) -> None:
+        """Keep client timeout/retry checks here; request bodies are tested at HTTP."""
         settings = AppSettings(
+            _env_file=None,
             openai_api_key="test-key",
             tavily_api_key="test-tavily",
-            planner_max_tokens=654,
             synthesis_timeout_seconds=9,
             synthesis_max_retries=1,
-            synthesis_max_tokens=777,
-            synthesis_compact_max_tokens=317,
-            summary_max_tokens=555,
-            memory_summary_max_tokens=123,
-            synthesis_reasoning_effort=None,
             verbose=False,
         )
 
         registry = build_llm_registry(settings)
 
-        self.assertEqual(len(_FakeChatOpenAI.created_kwargs), 4)
-        synthesizer_kwargs = _FakeChatOpenAI.created_kwargs[0]
-        self.assertEqual(synthesizer_kwargs["temperature"], 0)
-        self.assertEqual(synthesizer_kwargs["timeout"], 9)
-        self.assertEqual(synthesizer_kwargs["max_retries"], 1)
-        self.assertEqual(synthesizer_kwargs["max_tokens"], 777)
-        self.assertEqual(synthesizer_kwargs["use_responses_api"], False)
-        self.assertNotIn("output_version", synthesizer_kwargs)
-        self.assertEqual(synthesizer_kwargs["verbose"], False)
-        self.assertNotIn("reasoning", synthesizer_kwargs)
-        compact_kwargs = _FakeChatOpenAI.created_kwargs[1]
-        self.assertEqual(compact_kwargs["temperature"], 0)
-        self.assertEqual(compact_kwargs["timeout"], 4)
-        self.assertEqual(compact_kwargs["max_retries"], 0)
-        self.assertEqual(compact_kwargs["max_tokens"], 317)
-        self.assertEqual(compact_kwargs["use_responses_api"], False)
-        self.assertNotIn("output_version", compact_kwargs)
-        self.assertNotIn("reasoning", compact_kwargs)
-        planner_kwargs = _FakeChatOpenAI.created_kwargs[2]
-        self.assertEqual(planner_kwargs["max_tokens"], 654)
-        self.assertEqual(planner_kwargs["timeout"], 30)
-        self.assertEqual(planner_kwargs["max_retries"], 2)
-        self.assertNotIn("reasoning", planner_kwargs)
-        summary_kwargs = _FakeChatOpenAI.created_kwargs[3]
-        self.assertEqual(summary_kwargs["max_tokens"], 555)
-        self.assertIsNotNone(registry.llm_synthesizer_compact)
-        planner_schema = _FakeChatOpenAI.structured_args[0][0]
-        self.assertEqual(planner_schema["name"], "PlannerOutput")
-        self.assertTrue(planner_schema["strict"])
-        self.assertIn("schema", planner_schema)
-        self.assertIn("request_contract", planner_schema["schema"]["required"])
-        self.assertIn("WireRequestContract", planner_schema["schema"]["$defs"])
-        self.assertEqual(_FakeChatOpenAI.structured_kwargs[0]["include_raw"], True)
-
-    @patch("src.infra.llm.ChatOpenAI", new=_FakeChatOpenAI)
-    def test_build_llm_registry_can_opt_into_synthesis_responses_api(self) -> None:
-        _FakeChatOpenAI.created_kwargs = []
-        _FakeChatOpenAI.structured_args = []
-        _FakeChatOpenAI.structured_kwargs = []
-        settings = AppSettings(
-            openai_api_key="test-key",
-            tavily_api_key="test-tavily",
-            synthesis_use_responses_api=True,
-        )
-
-        build_llm_registry(settings)
-
-        self.assertTrue(_FakeChatOpenAI.created_kwargs[0]["use_responses_api"])
-        self.assertEqual(_FakeChatOpenAI.created_kwargs[0]["output_version"], "responses/v1")
-        self.assertTrue(_FakeChatOpenAI.created_kwargs[1]["use_responses_api"])
-        self.assertEqual(_FakeChatOpenAI.created_kwargs[1]["output_version"], "responses/v1")
-
-    @patch("src.infra.llm.ChatOpenAI", new=_FakeChatOpenAI)
-    def test_build_llm_registry_can_apply_reasoning_effort_for_synthesis_only(self) -> None:
-        _FakeChatOpenAI.created_kwargs = []
-        _FakeChatOpenAI.structured_args = []
-        _FakeChatOpenAI.structured_kwargs = []
-        settings = AppSettings(
-            openai_api_key="test-key",
-            tavily_api_key="test-tavily",
-            synthesis_reasoning_effort="xhigh",
-        )
-
-        build_llm_registry(settings)
-
-        self.assertEqual(_FakeChatOpenAI.created_kwargs[0]["reasoning_effort"], "xhigh")
-        self.assertEqual(_FakeChatOpenAI.created_kwargs[1]["reasoning_effort"], "xhigh")
-        self.assertNotIn("reasoning", _FakeChatOpenAI.created_kwargs[0])
-        self.assertNotIn("reasoning", _FakeChatOpenAI.created_kwargs[1])
-        self.assertNotIn("reasoning", _FakeChatOpenAI.created_kwargs[2])
-        self.assertNotIn("reasoning", _FakeChatOpenAI.created_kwargs[3])
-
-    def test_app_settings_normalizes_blank_reasoning_effort_to_none(self) -> None:
-        settings = AppSettings(
-            openai_api_key="test-key",
-            tavily_api_key="test-tavily",
-            synthesis_reasoning_effort="",
-        )
-
-        self.assertIsNone(settings.synthesis_reasoning_effort)
-
-    @patch("src.infra.llm.ChatOpenAI", new=_FakeChatOpenAI)
-    def test_build_llm_registry_preserves_explicit_none_reasoning_override(self) -> None:
-        _FakeChatOpenAI.created_kwargs = []
-        _FakeChatOpenAI.structured_args = []
-        _FakeChatOpenAI.structured_kwargs = []
-        settings = AppSettings(
-            openai_api_key="test-key",
-            tavily_api_key="test-tavily",
-            synthesis_reasoning_effort="none",
-        )
-
-        build_llm_registry(settings)
-
-        self.assertEqual(settings.synthesis_reasoning_effort, "none")
-        self.assertEqual(_FakeChatOpenAI.created_kwargs[0]["reasoning_effort"], "none")
-        self.assertEqual(_FakeChatOpenAI.created_kwargs[1]["reasoning_effort"], "none")
+        for role, client, timeout, retries in (
+            ("synthesis", registry.llm_synthesizer, 9, 1),
+            ("compact", registry.llm_synthesizer_compact, 4, 0),
+            ("planner", registry.llm_planner, 30, 2),
+            ("summary", registry.llm_summarizer, 60, 2),
+        ):
+            with self.subTest(role=role):
+                self.assertEqual(client.kwargs["timeout"], timeout)
+                self.assertEqual(client.kwargs["max_retries"], retries)
+                self.assertEqual(client.kwargs["temperature"], 0)
+                self.assertFalse(client.kwargs["verbose"])
 
 
 if __name__ == "__main__":
