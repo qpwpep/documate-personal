@@ -30,9 +30,12 @@ def _fail(code: str, message: str, file: UploadRecord, *, retryable: bool = Fals
 @lru_cache(maxsize=2)
 def _converter(policy: ConversionPolicy):
     from docling.datamodel.accelerator_options import AcceleratorDevice, AcceleratorOptions
+    from docling.datamodel.backend_options import PdfBackendOptions
     from docling.datamodel.base_models import InputFormat
     from docling.datamodel.pipeline_options import EasyOcrOptions, OcrMode, PdfPipelineOptions, RapidOcrOptions, TableFormerMode
     from docling.document_converter import DocumentConverter, ImageFormatOption, PdfFormatOption, WordFormatOption
+
+    from src.infra.docling_docx_backend import SourceTextWordBackend
 
     artifacts = Path(policy.artifacts_path).resolve()
     if not policy.artifacts_path or not artifacts.is_dir():
@@ -65,9 +68,12 @@ def _converter(policy: ConversionPolicy):
     options.table_structure_options.mode = TableFormerMode(policy.table_mode)
     return DocumentConverter(
         allowed_formats=[InputFormat.PDF, InputFormat.DOCX, InputFormat.IMAGE],
-        format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=options),
+        # Let the native parser join touching glyphs across font changes before
+        # layout/table assembly would insert spaces between separate text cells.
+        format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=options,
+                            backend_options=PdfBackendOptions(enforce_same_font=False)),
                         InputFormat.IMAGE: ImageFormatOption(pipeline_options=options),
-                        InputFormat.DOCX: WordFormatOption()},
+                        InputFormat.DOCX: WordFormatOption(backend=SourceTextWordBackend)},
     )
 
 
@@ -144,9 +150,9 @@ def _table(doc: Any, item: Any) -> tuple[TableData, dict[str, list[str]]]:
                 roles[name].append(cell_id)
         text = cell.text
         if getattr(cell, "ref", None) is not None:
-            from docling_core.transforms.serializer.markdown import MarkdownDocSerializer
+            from docling_core.transforms.serializer.plain_text import PlainTextDocSerializer
 
-            text = MarkdownDocSerializer(doc=doc).serialize(item=cell.ref.resolve(doc)).text
+            text = PlainTextDocSerializer(doc=doc).serialize(item=cell.ref.resolve(doc)).text
         # A Docling cell rectangle has no page field. It identifies a page only
         # when the owning table has exactly one known page.
         locations = []

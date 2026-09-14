@@ -38,7 +38,11 @@ Docling `success` 결과만 수용하며, 오류가 동반된 성공·부분 성
 
 실패 후보는 새 원본과 색인만 폐기하고 기존 첨부를 유지합니다. 관리 원본은 `uploads/<session>/objects`, 변환 임시 파일은 `uploads/<session>/conversions`에 둡니다. 종료·시간 초과 때 worker와 임시 파일을 회수하며, 다음 세션 요청에서도 남은 변환 작업 공간을 정리합니다. worker는 모델을 읽기 전부터 소유 API 프로세스의 PID와 생성 시각을 감시하고, 부모 강제 종료나 PID 재사용을 감지하면 자신과 자식 프로세스를 종료합니다. Windows 가상환경의 중간 실행 프로세스가 있어도 실제 소유 프로세스를 기준으로 감시합니다. 새 형식 접수 기능을 꺼도 저장된 원본의 소유권 판정·정리는 유지합니다.
 
-## 표와 페이지 인용
+## 문단·표와 페이지 인용
+
+DOCX 본문은 굵게·기울임·하이퍼링크 등 서식이 바뀌어도 원래 문단 단위로 추출합니다. 원본 run과 링크 표시문을 공백 제거 전에 연결하므로 단어 내부의 서식 경계, 연속 공백, 탭, 문단 안 줄바꿈을 보존하며 인접한 별도 문단은 합치지 않습니다. 표의 rich cell도 Markdown 장식이나 HTML escape를 넣지 않은 표시문으로 저장합니다. 이 동작은 고정된 Docling Word 백엔드를 확장하므로 의존성 업그레이드 시 실제 DOCX 회귀 테스트를 실행해야 합니다. 추출 정책 변경은 어댑터 버전에 반영해 이전 변환·임베딩 캐시와 구분합니다.
+
+네이티브 PDF는 `PdfBackendOptions(enforce_same_font=False)`로 읽습니다. 글꼴 변경만으로 붙어 있는 글자를 나눴다가 조립 과정에서 공백을 삽입하는 문제를 방지하며, 실제 글자 위치와 레이아웃에 따른 셀 구분은 유지합니다. PDF의 탭 위치·줄바꿈·문단 구분은 DOCX처럼 명시적인 텍스트 구조가 아니므로 같은 문서처럼 보여도 요소 경계가 달라질 수 있습니다. DOCX의 `Code` 스타일도 별도 Docling 코드 처리 규칙을 따르며 행 끝 공백은 제거됩니다.
 
 표의 셀·행/열 병합·열/행/구역 헤더를 저장합니다. 청크 metadata에는 snapshot/element ID와 `cell_ids_json`만 넣고 표 전체는 source registry에 한 번 보존합니다. `page_content`는 선택한 셀의 원문으로 생성하고 검색 후 복원 시 다시 일치 여부를 검사합니다. 생성 단계에서는 검색된 셀 집합 안에서 필요한 행과 헤더를 선택합니다. 최소 단위가 근거 문자 예산에 들어가지 않으면 그 요구를 충족됐다고 표시하지 않습니다.
 
@@ -79,6 +83,7 @@ CER은 정규화한 정답 문자 대비 편집 거리이며 누락도 계산합
 
 ```bash
 LIVE_TEST=false uv run --no-sync pytest -q
+LIVE_TEST=false uv run --no-sync pytest tests/tools/test_docx_conversion.py -q
 RUN_DOCLING_TESTS=1 LIVE_TEST=false HF_HUB_OFFLINE=1 \
   uv run --no-sync pytest tests/tools/test_docling_adapter.py tests/web/test_document_pipeline_live.py -q
 uv run --no-sync python script/benchmark_document_ocr.py
@@ -86,6 +91,8 @@ uv run --no-sync python script/sync_env_example.py --check
 uv run --no-sync python script/check_encoding.py
 ```
 
-일반 테스트는 실제 임시 파일·Chroma와 결정적인 외부 임베딩/LLM 경계를 사용합니다. `RUN_DOCLING_TESTS=1` 검증은 실제 문서 변환 worker와 모델을 사용하며 유료 API를 호출하지 않습니다. PDF·DOCX·스캔 PDF·PNG의 실제 변환에서 시작해 HTTP 첨부·검색·표/페이지 인용·다른 이름으로 캐시 재사용·원본 삭제 후 이전 인용까지 확인합니다. 모델을 내려받지 않은 기본 환경에서는 실제 변환 테스트를 건너뜁니다.
+일반 테스트는 실제 임시 파일·Chroma와 결정적인 외부 임베딩/LLM 경계를 사용합니다. `test_docx_conversion.py`는 합성 Docling 객체를 매핑하는 단위 테스트와 달리 임시 DOCX bytes를 실제 Word 백엔드로 변환합니다. Docling 선택 의존성은 필요하지만 PDF/OCR 추론 모델이나 외부 API는 사용하지 않습니다.
+
+`RUN_DOCLING_TESTS=1` 검증은 실제 문서 변환 worker와 사전 모델을 사용하며 유료 API를 호출하지 않습니다. PDF·DOCX·스캔 PDF·PNG의 실제 변환에서 시작해 HTTP 첨부·검색·표/페이지 인용·다른 이름으로 캐시 재사용·원본 삭제 후 이전 인용까지 확인합니다. 혼합 서식 fixture는 문단별 검색과 전체·부분 문자 범위 인용도 확인합니다. 모델이 필요한 테스트는 명시적으로 활성화한 환경에서만 실행합니다.
 
 범용 문서 전체 요약, PDF 페이지 뷰어, 다중 프레임 이미지, 손글씨 정확도 보장, PPTX/XLSX, 비동기 작업 API는 현재 지원 범위가 아닙니다. 출처 보존과 처리 성공은 OCR 내용의 무오류 보장과 구분합니다.
