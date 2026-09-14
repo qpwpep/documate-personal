@@ -18,7 +18,7 @@ from src.core.uploads import UploadRecord
 from src.core.upload_formats import DOCUMENT_MEDIA_TYPES
 
 
-ADAPTER_VERSION = "1"
+ADAPTER_VERSION = "2"
 
 
 class ConversionPolicy(BaseModel):
