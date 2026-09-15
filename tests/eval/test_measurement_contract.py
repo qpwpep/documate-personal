@@ -158,11 +158,11 @@ def test_provenance_scoring_starts_a_new_baseline_without_relabeling_history() -
     assert "scoring_contract_version" not in previous.audit_metrics
 
 
-def test_summary_identifies_the_provenance_scoring_contract() -> None:
+def test_summary_identifies_the_judge_state_scoring_contract() -> None:
     """Persisted results identify the scoring semantics without changing timing contracts."""
     payload = json.loads(_summary().model_dump_json())
 
-    assert payload["audit_metrics"]["scoring_contract_version"] == "answer-provenance-v1"
+    assert payload["audit_metrics"]["scoring_contract_version"] == "judge-state-contract-v2"
 
 
 def test_history_artifacts_identify_new_timing_baseline(tmp_path: Path) -> None:

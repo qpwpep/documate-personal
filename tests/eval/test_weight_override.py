@@ -58,10 +58,12 @@ class WeightOverrideTest(unittest.TestCase):
         }
         rule_weighted = compute_rule_weighted_score(component_scores, effective)
 
+        # A missing judge score no longer renormalizes rule scores into a full
+        # composite; the contract records the verdict as unscored instead.
         llm_off_score = compute_composite_quality_score(rule_weighted_score=rule_weighted, llm_judge_score=None, weights=effective)
         llm_on_score = compute_composite_quality_score(rule_weighted_score=rule_weighted, llm_judge_score=1.0, weights=effective)
 
-        self.assertAlmostEqual(llm_off_score, 1.0)
+        self.assertIsNone(llm_off_score)
         self.assertAlmostEqual(llm_on_score, 1.0)
 
     def test_tool_action_uses_less_judge_sensitive_base_weights(self) -> None:

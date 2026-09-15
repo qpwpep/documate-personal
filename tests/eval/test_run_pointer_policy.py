@@ -128,8 +128,9 @@ class RunPointerPolicyTest(unittest.TestCase):
             self.assertEqual(payload["track"], "smoke")
             self.assertEqual(payload["requested_limit"], 1)
 
+    @patch("src.eval.online_runner.case_runner.LLMJudge")
     @patch("src.eval.online_runner.case_runner._run_single_case")
-    def test_release_run_updates_release_pointer(self, mock_run_single_case) -> None:
+    def test_release_run_updates_release_pointer(self, mock_run_single_case, _mock_judge) -> None:
         with TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             fixtures_path = root / "cases.jsonl"
@@ -143,7 +144,7 @@ class RunPointerPolicyTest(unittest.TestCase):
             run_dir, _, summary = run_online_benchmark(
                 fixtures_path=fixtures_path,
         endpoint="http://127.0.0.1:8000",
-                config=BenchmarkConfig(judge_enabled=False),
+                config=BenchmarkConfig(judge_enabled=True),
                 config_path=Path("data/benchmarks/config.toml"),
                 output_root=output_root,
                 track="release",

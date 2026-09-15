@@ -27,7 +27,6 @@ class ActionOnlyScoringTest(unittest.TestCase):
                     observed_hits=hits,
                     runtime_errors=[],
                     response_errors=[],
-                    judge_errors=[],
                 )
 
                 self.assertEqual(scores["reference_coverage"], 1.0)
@@ -48,7 +47,6 @@ class ActionOnlyScoringTest(unittest.TestCase):
             observed_hits=[],
             runtime_errors=[],
             response_errors=[],
-            judge_errors=[],
             slack_delivery_required=True,
             slack_delivery_status="failed",
         )
@@ -59,7 +57,6 @@ class ActionOnlyScoringTest(unittest.TestCase):
             observed_hits=[],
             runtime_errors=[],
             response_errors=[],
-            judge_errors=[],
             slack_delivery_required=True,
             slack_delivery_status="success",
         )
@@ -82,7 +79,6 @@ class ActionOnlyScoringTest(unittest.TestCase):
             observed_hits=[],
             runtime_errors=[],
             response_errors=[],
-            judge_errors=[],
             slack_delivery_required=False,
             slack_delivery_status="failed",
         )

@@ -53,14 +53,14 @@ def test_copied_citations_pass_without_inheriting_a_search_tool_call():
     case = BenchmarkCase(case_id="copy", category="tool_action", query="save", expected_tools=["save_text"],
                          forbidden_tools=["upload_search"], require_local_citation=True)
     scores = compute_rule_scores(case=case, response=response, called_tools=["save_text"], observed_hits=[],
-                                 runtime_errors=[], response_errors=[], judge_errors=[], evidence_scope=scope)
+                                 runtime_errors=[], response_errors=[], evidence_scope=scope)
     assert scope.status == "complete"
     assert scope.verified_evidence == [hit.evidence]
     assert scores["citation_traceability"] == scores["reference_coverage"] == scores["tool_choice"] == 1
     case.expected_tools = ["upload_search"]
     case.forbidden_tools = []
     scores = compute_rule_scores(case=case, response=response, called_tools=["save_text"], observed_hits=[],
-                                 runtime_errors=[], response_errors=[], judge_errors=[], evidence_scope=scope)
+                                 runtime_errors=[], response_errors=[], evidence_scope=scope)
     assert scores["tool_choice"] == 0
 
 
@@ -167,7 +167,7 @@ def test_inherited_upload_and_current_official_evidence_keep_separate_tool_origi
     case = BenchmarkCase(case_id="mixed", category="hybrid", query="compare", expected_tools=["tavily_search"],
                          forbidden_tools=["upload_search"], require_local_citation=True, require_official_citation=True)
     scores = compute_rule_scores(case=case, response=response, called_tools=["tavily_search"], observed_hits=[docs],
-                                 runtime_errors=[], response_errors=[], judge_errors=[], evidence_scope=scope)
+                                 runtime_errors=[], response_errors=[], evidence_scope=scope)
     assert scope.status == "complete"
     assert scope.verified_evidence == [upload.evidence, docs.evidence]
     assert scores["citation_traceability"] == scores["reference_coverage"] == scores["tool_choice"] == 1
@@ -181,7 +181,7 @@ def test_reusing_a_long_excerpt_does_not_change_copy_penalties_or_tool_confusion
     case = BenchmarkCase(case_id="copy-long", category="tool_action", query="save", expected_tools=["save_text"],
                          forbidden_tools=["upload_search"], require_local_citation=True)
     scores = compute_rule_scores(case=case, response=response, called_tools=["save_text"], observed_hits=[],
-                                 runtime_errors=[], response_errors=[], judge_errors=[], evidence_scope=scope)
+                                 runtime_errors=[], response_errors=[], evidence_scope=scope)
     assert scores["answer_quality"] == score_answer_quality(case, hit.evidence.excerpt, []) == 1
     assert score_answer_quality(case, hit.evidence.excerpt, [hit]) < scores["answer_quality"]
     assert tool_confusion_counts(case, ["save_text"]) == (1, 0, 0)

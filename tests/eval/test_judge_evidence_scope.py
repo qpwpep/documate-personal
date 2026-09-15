@@ -29,7 +29,7 @@ def test_judge_receives_verified_reused_evidence_separately_from_final_tool_obse
     judge = LLMJudge(model_name="fixture", enabled=False)
     judge.enabled = True
     judge.client = JudgeModelBoundary()
-    result = judge.score_case(
+    outcome = judge.score_case(
         case=BenchmarkCase(case_id="copy", category="tool_action", query="Save that answer",
                            setup_turns=["Explain this file"], require_local_citation=True),
         response=response, tool_calls=["save_text"], observed_hits=[],
@@ -37,7 +37,7 @@ def test_judge_receives_verified_reused_evidence_separately_from_final_tool_obse
         evidence_scope=scope, answer_provenance=provenance,
     )
 
-    assert result[0] == 1.0 and result[2] is None
+    assert outcome.status == "succeeded" and outcome.score == 1.0 and outcome.error is None
     assert len(received) == 1
     assert received[0]["called_tools"] == ["save_text"]
     assert received[0]["observed_hits"] == []
@@ -55,11 +55,12 @@ def test_judge_does_not_treat_missing_provenance_as_a_complete_new_evaluation():
     judge = LLMJudge(model_name="fixture", enabled=False)
     judge.enabled = True
     judge.client = UnusedModelBoundary()
-    score, _, error, _ = judge.score_case(
+    outcome = judge.score_case(
         case=BenchmarkCase(case_id="missing", category="tool_action", query="Save that answer"),
         response=cited_response(), tool_calls=["save_text"],
         evidence_scope={"status": "unavailable", "errors": ["missing packet"], "verified_evidence": []},
     )
 
-    assert score is None
-    assert error == "invalid_eval: judge payload is incomplete"
+    assert outcome.status == "not_run"
+    assert outcome.score is None
+    assert outcome.error == "invalid_eval: judge payload is incomplete"

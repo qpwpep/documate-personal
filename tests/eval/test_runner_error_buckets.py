@@ -17,6 +17,7 @@ from src.eval.judge_llm import LLMJudge
 from src.eval.online_runner import _run_single_case
 from src.eval.online_runner.response_parser import ParsedResponseData
 from src.eval.online_runner.result_builder import build_case_result
+from src.eval.judge_llm import JudgeScoreOutcome
 from src.eval.reporting.histograms import build_analysis
 from src.eval.result_models import JudgeSubscores
 
@@ -30,7 +31,14 @@ class _DummyJudge(LLMJudge):
 
     def score_case(self, *, case: BenchmarkCase, response, tool_calls: list[str], **kwargs):
         _ = (case, tool_calls)
-        return self._result
+        if isinstance(self._result, JudgeScoreOutcome):
+            return self._result
+        score, reason, error, subscores = self._result
+        if error is not None:
+            return JudgeScoreOutcome(status="failed", failure_kind="output_invalid", error=error)
+        if score is None:
+            return JudgeScoreOutcome(status="not_run", failure_kind="input_incomplete")
+        return JudgeScoreOutcome(status="succeeded", score=score, reason=reason, subscores=subscores)
 
 
 class RunnerErrorBucketsTest(unittest.TestCase):

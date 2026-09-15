@@ -160,7 +160,7 @@ class BenchmarkCLIEnvResolutionTest(unittest.TestCase):
         mock_load_benchmark_cli_env_settings.return_value = BenchmarkCLIEnvSettings(
             endpoint="http://env-endpoint:9300",
             judge_model="gpt-5-env",
-            judge_enabled=False,
+            judge_enabled=True,
             live_slack_enabled=True,
             live_slack_channel_id="CENV",
             live_slack_user_id="UENV",
@@ -195,7 +195,7 @@ class BenchmarkCLIEnvResolutionTest(unittest.TestCase):
         kwargs = mock_run_online_benchmark.call_args.kwargs
         self.assertEqual(kwargs["endpoint"], "http://cli-endpoint:9400")
         self.assertEqual(kwargs["config"].judge_model, "gpt-5-env")
-        self.assertFalse(kwargs["config"].judge_enabled)
+        self.assertTrue(kwargs["config"].judge_enabled)
         self.assertTrue(kwargs["live_slack"].enabled)
         self.assertEqual(kwargs["live_slack"].channel_id, "CCLI")
         self.assertEqual(kwargs["live_slack"].user_id, "UCLI")
@@ -274,7 +274,7 @@ class BenchmarkCLIEnvResolutionTest(unittest.TestCase):
                 config=BenchmarkConfig(judge_enabled=False),
                 config_path=DEFAULT_BENCHMARK_CONFIG_PATH,
                 output_root=Path(temp_dir) / "output",
-                track="release",
+                track="smoke",
                 live_slack=live_slack,
             )
 
