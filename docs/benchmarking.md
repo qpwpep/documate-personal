@@ -63,7 +63,9 @@ uv run python -m src.eval.main run \
   --endpoint http://127.0.0.1:8000
 ```
 
-짧은 smoke run이 필요하면 `--limit`을 사용할 수 있습니다. `--track`를 생략하면 `--limit` 런은 기본적으로 `smoke`로 분류됩니다.
+release track은 judge 평가가 필수입니다. `judge_enabled=false`인 release 실행은 시작 전 설정 검증에서 종료 코드 2로 거부하며, 실행 결과가 release 기준에 미달하면 산출물을 저장한 뒤 종료 코드 1을 반환합니다. judge가 정상 완료되고 모든 gate가 통과한 release만 종료 코드 0입니다.
+
+짧은 smoke run이 필요하면 `--limit`을 사용할 수 있습니다. `--track`를 생략하면 `--limit` 런은 기본적으로 `smoke`로 분류됩니다. `judge_enabled=false`로 실행한 smoke는 `judge_status=disabled`의 규칙 진단 결과만 기록하며 release 통과로 표시하지 않고, 정상 완료 시 종료 코드 0을 반환합니다.
 
 ```bash
 uv run python -m src.eval.main run \
@@ -220,6 +222,23 @@ uv run python -m src.eval.request_contract_eval \
 
 judge minimum score와 pricing도 같은 파일에서 관리합니다. `cost_gate_min_llm_call_coverage`는 `src/eval/config_models.py::HardGates`의 기본값이며, config에 명시하지 않으면 `0.80`이 적용됩니다. 다중 턴 비용 관측률은 모든 실행 턴을 검사합니다. 준비 턴에 LLM 사용량이 있고 마지막 저장이 deterministic이면 인정하지만, 어느 턴의 사용량이 누락되면 최종 질문의 정상 진단만으로 비용 gate를 활성화하지 않습니다.
 
+### 4.0.1 평가 상태와 release 판정
+
+사례별 결과는 평가 실행 상태와 답변 품질 합격을 분리해 기록합니다.
+
+- `judge_status`: `disabled`(설정으로 비활성화), `not_run`(제품 응답 부재·입력 불완전 등으로 미실행, 사유는 `judge_status_reason`), `failed`(호출 실패 또는 출력 계약 오류), `succeeded`(입력 완비·호출·출력 계약 통과. 품질 합격이 아님), `legacy_unknown`(상태 필드가 없는 과거 결과).
+- `eval_validity`: `valid`(현재 정책의 평가가 완료되어 판정 가능, 품질 불합격도 유효한 평가), `incomplete`(필수 입력·단계 부족), `invalid`(judge 호출 실패·출력 계약 오류로 결과 신뢰 불가), `legacy_unknown`.
+- `llm_judge_score`: 유효한 judge 0점은 `0`으로, 평가하지 못한 점수는 `null`로 보존합니다. 평가 오류를 점수로 대체하거나 범위 밖 값을 잘라내지 않습니다.
+- `judge_pass`: `succeeded` 평가가 전체 점수와 필수 세부 점수 기준을 모두 충족할 때만 `true`. `disabled`·`not_run`·`failed`는 `null`입니다.
+- `product_pass`: 완전한 composite 점수가 있을 때 composite 기준 판정. 제품 실행 실패는 `false`, judge 장애로 composite를 계산할 수 없으면 `null`입니다.
+- `release_pass`: 평가 유효성(`valid`), 제품 판정(`product_pass`), judge 품질 판정(`judge_pass`), 응답 계약을 모두 충족할 때만 `true`입니다. `incomplete`·`invalid` 평가는 항상 `false`입니다.
+
+`composite_quality_score`는 judge 점수가 있을 때만 가중합으로 계산합니다. judge 점수가 없으면 남은 규칙 점수를 재정규화해 composite를 만들지 않고 `null`로 남기며, 규칙 원점수는 `rule_scores`·`rule_score_total`에 진단용으로 보존합니다. judge 가용성은 제품 규칙 점수를 바꾸지 않습니다.
+
+모든 카테고리에 `judge_min_score`가 명시적으로 존재합니다(기본 `0.70`, case의 `judge_min_score` 필드가 우선). 세부 점수 기준은 `[judge_min_subscores]`의 `answer_quality`(전 카테고리)와 `groundedness`(근거 기반 답변)이며, 인용을 요구하지 않는 순수 `tool_action` 사례에는 groundedness를 적용하지 않습니다. 이 값들은 인간 평가로 보정된 최적값이 아니라 정책 출발점입니다.
+
+run 집계의 `release_pass_rate` 분모는 실행 대상으로 확정한 전체 사례(`planned_cases`)입니다. composite가 `null`이거나 judge 오류·제품 실패인 사례를 빼지 않으며, 계획 대비 결과 누락·중복·예상외 case_id는 `evaluation_completeness` release gate가 차단합니다. judge 상태별 개수(`judge_succeeded/failed/not_run/disabled_cases`)와 `judge_execution_rate`(judge 필수 대상 중 succeeded 비율)를 별도로 기록하며, 대상이 0개인 비율은 `-`(N/A)로 표시합니다.
+
 ### 4.1 참조 연결과 의미적 지지의 구분
 
 | 지표·입력 | 측정 범위 |
@@ -269,7 +288,7 @@ history 리포터는 다음 조건이 모두 같은 run만 comparable run으로 
 
 같은 경로의 fixture를 덮어써도 내용이나 첨부 bytes가 달라지면 자동 비교되지 않습니다. 새 계약 정보가 일부만 있는 run은 자기 자신만 표시합니다. 계약 정보가 없는 legacy끼리는 이전 경로·사례 수 비교를 유지하지만, 새 실행과 섞지 않습니다. 과거 JSON을 읽을 때 새 계약으로 자동 승격하지 않습니다.
 
-현재 채점 계약은 `answer-provenance-v1`이며 `summary.json`의 `audit_metrics.scoring_contract_version`에 기록합니다. 이 버전도 `evaluation_fingerprint`에 포함하므로 같은 fixture·설정이라도 이전 채점 결과와 자동 비교하지 않습니다. 실행·측정·채점 계약의 의미를 바꾸면 해당 버전도 갱신해야 합니다. 과거 summary는 당시 값 그대로 읽고 새 채점 버전을 채워 넣지 않습니다. 원격 서버의 모든 설정이나 모델 provider의 변동을 fingerprint가 자동 고정하지는 않습니다. 비교할 변경은 동일한 평가 계약·fixture와 확인된 서버 설정에서 다시 실행합니다. 현재 rule의 `reference_coverage`는 의미적 groundedness를 측정하지 않으며, 이전 스키마·rule의 기록을 새 계약의 품질 상승·하락 근거로 사용하지 않습니다.
+현재 채점 계약은 `judge-state-contract-v2`이며 `summary.json`의 `audit_metrics.scoring_contract_version`에 기록합니다. 이 버전도 `evaluation_fingerprint`에 포함하므로 같은 fixture·설정이라도 이전 채점 결과와 자동 비교하지 않습니다. 실행·측정·채점 계약의 의미를 바꾸면 해당 버전도 갱신해야 합니다. 과거 summary는 당시 값 그대로 읽고 새 채점 버전을 채워 넣지 않습니다. 원격 서버의 모든 설정이나 모델 provider의 변동을 fingerprint가 자동 고정하지는 않습니다. 비교할 변경은 동일한 평가 계약·fixture와 확인된 서버 설정에서 다시 실행합니다. 현재 rule의 `reference_coverage`는 의미적 groundedness를 측정하지 않으며, 이전 스키마·rule의 기록을 새 계약의 품질 상승·하락 근거로 사용하지 않습니다.
 
 ## 7. 운영 메모
 
