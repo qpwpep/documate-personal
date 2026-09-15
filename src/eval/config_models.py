@@ -178,11 +178,32 @@ class Pricing(BaseModel):
 
 
 class JudgeMinScoreConfig(BaseModel):
-    docs_only: float | None = Field(default=None, ge=0.0, le=1.0)
-    hybrid: float | None = Field(default=None, ge=0.0, le=1.0)
+    """Release gate for the judge's overall score, per category.
+
+    These thresholds are policy starting points, not human-calibrated optima.
+    A missing category must never silently remove the check, so every category
+    keeps an explicit value.
+    """
+
+    docs_only: float = Field(default=0.70, ge=0.0, le=1.0)
+    rag_only: float = Field(default=0.70, ge=0.0, le=1.0)
+    hybrid: float = Field(default=0.70, ge=0.0, le=1.0)
+    tool_action: float = Field(default=0.70, ge=0.0, le=1.0)
 
     def for_category(self, category: str) -> float | None:
         return getattr(self, str(category), None)
+
+
+class JudgeSubscoreMinConfig(BaseModel):
+    """Minimum subscore gates the semantic judge must satisfy.
+
+    answer_quality applies to every category. groundedness applies to
+    evidence-based answers; pure action cases are exempt because they do not
+    require retrieval grounding.
+    """
+
+    answer_quality: float = Field(default=0.70, ge=0.0, le=1.0)
+    groundedness: float = Field(default=0.70, ge=0.0, le=1.0)
 
 
 class BenchmarkConfig(BaseModel):
@@ -190,6 +211,7 @@ class BenchmarkConfig(BaseModel):
     hard_gates: HardGates = Field(default_factory=HardGates)
     pricing: Pricing = Field(default_factory=Pricing)
     judge_min_score: JudgeMinScoreConfig = Field(default_factory=JudgeMinScoreConfig)
+    judge_min_subscores: JudgeSubscoreMinConfig = Field(default_factory=JudgeSubscoreMinConfig)
     judge_model: str = "gpt-5.6-luna"
     judge_enabled: bool = True
     request_timeout_seconds: int = 60

@@ -16,20 +16,22 @@ from ..weighting import (
 from .response_parser import ParsedResponseData
 
 
-_DEFAULT_JUDGE_MIN_SCORES: dict[str, float] = {
-    "docs_only": 0.70,
-    "hybrid": 0.70,
-}
 _PRODUCT_PASS_FLOOR = 0.75
 
 
 def _resolve_judge_min_score(case: BenchmarkCase, config: BenchmarkConfig) -> float | None:
     if case.judge_min_score is not None:
         return float(case.judge_min_score)
-    configured_threshold = config.judge_min_score.for_category(case.category)
-    if configured_threshold is not None:
-        return float(configured_threshold)
-    return _DEFAULT_JUDGE_MIN_SCORES.get(case.category)
+    return config.judge_min_score.for_category(case.category)
+
+
+def _groundedness_gate_applies(case: BenchmarkCase) -> bool:
+    """Evidence-based answers need groundedness; pure action cases do not."""
+    return (
+        case.category != "tool_action"
+        or case.require_official_citation
+        or case.require_local_citation
+    )
 
 
 def _build_gate_failures(
@@ -40,7 +42,9 @@ def _build_gate_failures(
     missing_required_debug_fields: list[str],
     product_pass: bool | None,
     judge_pass: bool | None,
-    judge_errors: list[str],
+    judge_status: str | None,
+    judge_status_reason: str | None,
+    eval_validity: str | None,
     judge_audit_failures: list[str],
 ) -> list[str]:
     failures: list[str] = []
@@ -54,14 +58,18 @@ def _build_gate_failures(
         failures.append("missing_debug_fields")
     if product_pass is False:
         failures.append("product_quality_below_floor")
-    if judge_pass is False:
-        failures.append("judge_min_score_audit_failed")
+    if judge_status == "disabled":
+        failures.append("judge_disabled")
+    elif judge_status == "failed":
+        failures.append("judge_failed")
+    elif judge_status == "not_run":
+        failures.append(
+            "judge_input_incomplete" if judge_status_reason == "input_incomplete" else "judge_not_run"
+        )
     if judge_audit_failures and "judge_min_score_audit_failed" not in failures:
         failures.append("judge_min_score_audit_failed")
-    if any(str(error).startswith("invalid_eval:") for error in judge_errors):
+    if eval_validity == "invalid" and "judge_failed" not in failures:
         failures.append("invalid_eval")
-    if any("judge payload is incomplete" in str(error) for error in judge_errors):
-        failures.append("judge_input_incomplete")
     return failures
 
 
@@ -167,10 +175,15 @@ def build_case_result(
 
     judge_errors: list[str] = []
     judge_audit_failures: list[str] = []
+    judge_input_issues: list[str] = []
+    judge_status: str | None = None
+    judge_status_reason: str | None = None
     llm_judge_score: float | None = None
     llm_judge_reason: str | None = None
     judge_subscores: JudgeSubscores | None = None
     judge_input_complete: bool | None = None
+    judge_required = bool(config.judge_enabled)
+    judge_min_score = _resolve_judge_min_score(case, config)
     evidence_scope = parsed_response.evidence_assessment
     if evidence_scope is None and response is not None and (
         parsed_response.answer_provenance is not None or prior_turns is not None
@@ -187,7 +200,14 @@ def build_case_result(
                 response_errors.append(message)
     conversation = [{"query": turn.query, "response": turn.response,
                      "observed_hits": (turn.debug or {}).get("observed_hits", [])} for turn in (prior_turns or [])]
-    if parsed_response.response_text.strip() and config.judge_enabled:
+    has_final_response = response is not None and bool(parsed_response.response_text.strip())
+    if not judge_required:
+        judge_status = "disabled"
+    elif not has_final_response:
+        # A product failure already settles the verdict; this is not a judge outage.
+        judge_status = "not_run"
+        judge_status_reason = "missing_final_response"
+    else:
         judge_payload = judge.build_case_payload(
             case=case,
             tool_calls=parsed_response.tool_calls,
@@ -206,8 +226,9 @@ def build_case_result(
             evidence_scope=evidence_scope.model_dump(mode="json") if evidence_scope is not None else None,
             answer_provenance=parsed_response.answer_provenance,
         )
-        judge_input_complete = judge.is_payload_complete(judge_payload)
-        llm_judge_score, llm_judge_reason, judge_error, judge_subscores = judge.score_case(
+        judge_input_issues = judge.payload_completeness_issues(judge_payload)
+        judge_input_complete = not judge_input_issues
+        outcome = judge.score_case(
             case=case,
             tool_calls=parsed_response.tool_calls,
             response=response,
@@ -225,8 +246,48 @@ def build_case_result(
             evidence_scope=evidence_scope.model_dump(mode="json") if evidence_scope is not None else None,
             answer_provenance=parsed_response.answer_provenance,
         )
-        if judge_error:
-            judge_errors.append(judge_error)
+        if outcome.status == "disabled":
+            # Config requires the judge but the client was built disabled or is missing.
+            judge_status = "failed"
+            judge_status_reason = "client_unavailable"
+            judge_errors.append(outcome.error or "invalid_eval: judge client is not initialized")
+        else:
+            judge_status = outcome.status
+            judge_status_reason = outcome.failure_kind
+            if outcome.error:
+                judge_errors.append(outcome.error)
+            if outcome.input_issues:
+                judge_input_issues = outcome.input_issues
+                judge_input_complete = False
+            llm_judge_score = outcome.score
+            llm_judge_reason = outcome.reason
+            judge_subscores = outcome.subscores
+
+    if judge_status == "succeeded":
+        if judge_min_score is None:
+            judge_audit_failures.append(
+                f"judge_min_score audit failed: no threshold configured for category '{case.category}'"
+            )
+        elif llm_judge_score is not None and llm_judge_score < judge_min_score:
+            judge_audit_failures.append(
+                "judge_min_score audit failed: "
+                f"score={llm_judge_score:.3f} threshold={judge_min_score:.3f}"
+            )
+        if judge_subscores is not None:
+            subscore_minimums = {"answer_quality": config.judge_min_subscores.answer_quality}
+            if _groundedness_gate_applies(case):
+                subscore_minimums["groundedness"] = config.judge_min_subscores.groundedness
+            for name, minimum in subscore_minimums.items():
+                if minimum is None:
+                    continue
+                value = float(getattr(judge_subscores, name))
+                if value < minimum:
+                    judge_audit_failures.append(
+                        f"judge_min_subscore audit failed: {name}={value:.3f} threshold={minimum:.3f}"
+                    )
+        judge_pass = not judge_audit_failures
+    else:
+        judge_pass = None
 
     rule_scores = compute_rule_scores(
         case=case,
@@ -235,7 +296,6 @@ def build_case_result(
         observed_hits=parsed_response.observed_hits,
         runtime_errors=runtime_errors,
         response_errors=response_errors,
-        judge_errors=judge_errors,
         validator_reason=parsed_response.validator_reason,
         synthesis_mode=parsed_response.synthesis_mode,
         slack_delivery_required=slack_delivery_required,
@@ -246,28 +306,34 @@ def build_case_result(
 
     composite_quality_score = compute_composite_quality_score(
         rule_weighted_score=rule_weighted,
-        llm_judge_score=llm_judge_score,
+        llm_judge_score=llm_judge_score if judge_status == "succeeded" else None,
         weights=effective_weights,
     )
-    judge_min_score = _resolve_judge_min_score(case, config)
-    judge_gate_passed: bool | None = None
-    if judge_min_score is not None and parsed_response.response_text.strip():
-        judge_gate_passed = False if llm_judge_score is None else llm_judge_score >= judge_min_score
-    if judge_min_score is not None and llm_judge_score is not None and parsed_response.response_text.strip():
-        judge_gate_passed = llm_judge_score >= judge_min_score
-        if judge_gate_passed is False:
-            judge_audit_failures.append(
-                "judge_min_score audit failed: "
-                f"score={llm_judge_score:.3f} threshold={judge_min_score:.3f}"
-            )
-    product_pass = composite_quality_score >= _PRODUCT_PASS_FLOOR
-    if any(str(error).startswith("invalid_eval:") for error in judge_errors):
-        judge_pass = False
+    if composite_quality_score is not None:
+        product_pass = composite_quality_score >= _PRODUCT_PASS_FLOOR
+    elif runtime_errors or response_errors:
+        product_pass = False
     else:
-        judge_pass = judge_gate_passed if judge_min_score is not None else (
-            True if (config.judge_enabled and not judge_errors and llm_judge_score is not None) else None
-        )
-    release_pass = bool(product_pass and not runtime_errors and not response_errors)
+        product_pass = None
+
+    if judge_status == "failed":
+        eval_validity = "invalid"
+    elif judge_status == "disabled":
+        eval_validity = "incomplete"
+    elif judge_status == "not_run":
+        # missing_final_response is a settled product verdict, not an
+        # evaluation gap. Any other unrun reason leaves the case incomplete.
+        eval_validity = "valid" if judge_status_reason == "missing_final_response" else "incomplete"
+    else:
+        eval_validity = "valid"
+
+    release_pass = bool(
+        eval_validity == "valid"
+        and product_pass is True
+        and judge_pass is True
+        and not runtime_errors
+        and not response_errors
+    )
     gate_failures = _build_gate_failures(
         runtime_errors=runtime_errors,
         response_errors=response_errors,
@@ -275,7 +341,9 @@ def build_case_result(
         missing_required_debug_fields=parsed_response.missing_required_debug_fields,
         product_pass=product_pass,
         judge_pass=judge_pass,
-        judge_errors=judge_errors,
+        judge_status=judge_status,
+        judge_status_reason=judge_status_reason,
+        eval_validity=eval_validity,
         judge_audit_failures=judge_audit_failures,
     )
     cost = compute_cost_usd(
@@ -324,6 +392,10 @@ def build_case_result(
         debug_errors=parsed_response.debug_errors,
         runtime_errors=runtime_errors,
         response_errors=response_errors,
+        judge_status=judge_status,
+        judge_status_reason=judge_status_reason,
+        eval_validity=eval_validity,
+        judge_input_issues=judge_input_issues,
         judge_errors=judge_errors,
         judge_audit_failures=judge_audit_failures,
         actions=parsed_response.actions,
@@ -342,10 +414,9 @@ def build_case_result(
         judge_score_total=llm_judge_score,
         llm_judge_score=llm_judge_score,
         llm_judge_reason=llm_judge_reason,
-        judge_min_score_applied=judge_min_score,
+        judge_min_score_applied=judge_min_score if judge_required else None,
         judge_input_complete=judge_input_complete,
-        judge_gate_passed=judge_gate_passed,
-        invalid_eval=any(str(error).startswith("invalid_eval:") for error in judge_errors),
+        invalid_eval=(eval_validity == "invalid"),
         resolved_unit_count=resolved_unit_count,
         missing_reference_unit_count=missing_reference_unit_count,
         unchecked_unit_count=unchecked_unit_count,

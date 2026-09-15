@@ -40,6 +40,7 @@ def load_config(path: Path) -> BenchmarkConfig:
         "hard_gates": data.get("hard_gates", {}),
         "pricing": data.get("pricing", {}),
         "judge_min_score": data.get("judge_min_score", {}),
+        "judge_min_subscores": data.get("judge_min_subscores", {}),
         "judge_model": data.get("runtime", {}).get("judge_model", "gpt-5.6-luna"),
         "judge_enabled": data.get("runtime", {}).get("judge_enabled", True),
         "request_timeout_seconds": data.get("runtime", {}).get("request_timeout_seconds", 60),

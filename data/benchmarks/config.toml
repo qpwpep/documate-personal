@@ -16,7 +16,13 @@ avg_cost_per_case_usd = 0.01
 
 [judge_min_score]
 docs_only = 0.70
+rag_only = 0.70
 hybrid = 0.70
+tool_action = 0.70
+
+[judge_min_subscores]
+answer_quality = 0.70
+groundedness = 0.70
 
 [pricing]
 prompt_per_1k_usd = 0.00025

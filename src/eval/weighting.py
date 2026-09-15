@@ -77,10 +77,13 @@ def compute_composite_quality_score(
     rule_weighted_score: float,
     llm_judge_score: float | None,
     weights: ScoreWeights,
-) -> float:
-    llm_weight = float(weights.llm_judge)
+) -> float | None:
+    """A composite only exists when the required judge score exists.
+
+    Missing or failed judge evaluations return None instead of renormalizing
+    rule scores into a manufactured full score.
+    """
     if llm_judge_score is None:
-        denominator = max(1e-9, 1.0 - llm_weight)
-        normalized = rule_weighted_score / denominator
-        return max(0.0, min(1.0, normalized))
+        return None
+    llm_weight = float(weights.llm_judge)
     return max(0.0, min(1.0, rule_weighted_score + llm_judge_score * llm_weight))

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
@@ -13,12 +14,37 @@ from src.core.uploads import UploadManifest
 from .config_models import CaseCategory, CaseScenario
 
 
+JudgeStatus = Literal["disabled", "not_run", "failed", "succeeded", "legacy_unknown"]
+EvalValidity = Literal["valid", "incomplete", "invalid", "legacy_unknown"]
+# not_run: evaluation never reached the judge. failed: the judge boundary was
+# invoked but its contract failed. The two must not share one bucket.
+JudgeStatusReason = Literal[
+    "missing_final_response",
+    "input_incomplete",
+    "client_unavailable",
+    "invocation_failed",
+    "output_invalid",
+]
+
+
 class JudgeSubscores(BaseModel):
     answer_quality: float = Field(ge=0.0, le=1.0)
     groundedness: float = Field(ge=0.0, le=1.0)
     citation_traceability: float = Field(ge=0.0, le=1.0)
     tool_choice: float = Field(ge=0.0, le=1.0)
     format_language: float = Field(ge=0.0, le=1.0)
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_non_numeric_scores(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        for key, item in value.items():
+            if item is None:
+                continue
+            if isinstance(item, bool) or not isinstance(item, (int, float)) or not math.isfinite(float(item)):
+                raise ValueError(f"judge subscore '{key}' must be a finite number, got {item!r}")
+        return value
 
     def average(self) -> float:
         values = self.model_dump().values()
@@ -96,6 +122,10 @@ class CaseResult(BaseModel):
     runtime_errors: list[str] = Field(default_factory=list)
     cleanup_errors: list[str] = Field(default_factory=list)
     response_errors: list[str] = Field(default_factory=list)
+    judge_status: JudgeStatus | None = None
+    judge_status_reason: JudgeStatusReason | None = None
+    eval_validity: EvalValidity | None = None
+    judge_input_issues: list[str] = Field(default_factory=list)
     judge_errors: list[str] = Field(default_factory=list)
     judge_audit_failures: list[str] = Field(default_factory=list)
     actions: list[ActionReceipt] = Field(default_factory=list)
@@ -141,20 +171,34 @@ class CaseResult(BaseModel):
         if not isinstance(value, dict):
             return value
         payload = dict(value)
-        if payload.get("composite_quality_score") is None and payload.get("final_score") is not None:
-            payload["composite_quality_score"] = payload.get("final_score")
-        if payload.get("final_score") is None and payload.get("composite_quality_score") is not None:
-            payload["final_score"] = payload.get("composite_quality_score")
-        if payload.get("release_pass") is None and payload.get("passed") is not None:
-            payload["release_pass"] = payload.get("passed")
-        if payload.get("passed") is None and payload.get("release_pass") is not None:
-            payload["passed"] = payload.get("release_pass")
-        if payload.get("product_pass") is None and payload.get("release_pass") is not None:
-            payload["product_pass"] = payload.get("release_pass")
-        if payload.get("judge_pass") is None and payload.get("judge_gate_passed") is not None:
-            payload["judge_pass"] = payload.get("judge_gate_passed")
-        if payload.get("judge_gate_passed") is None and payload.get("judge_pass") is not None:
-            payload["judge_gate_passed"] = payload.get("judge_pass")
+        # Records written before the explicit state contract carry no judge_status.
+        # They stay readable as legacy data, but the mirrors below only run for
+        # them; a new-contract record never lets an alias field outrank its
+        # canonical verdict.
+        if payload.get("judge_status") is not None:
+            if payload.get("final_score") is None and payload.get("composite_quality_score") is not None:
+                payload["final_score"] = payload.get("composite_quality_score")
+            if payload.get("passed") is None and payload.get("release_pass") is not None:
+                payload["passed"] = payload.get("release_pass")
+            if payload.get("judge_gate_passed") is None and payload.get("judge_pass") is not None:
+                payload["judge_gate_passed"] = payload.get("judge_pass")
+        else:
+            payload["judge_status"] = "legacy_unknown"
+            payload["eval_validity"] = payload.get("eval_validity") or "legacy_unknown"
+            if payload.get("composite_quality_score") is None and payload.get("final_score") is not None:
+                payload["composite_quality_score"] = payload.get("final_score")
+            if payload.get("final_score") is None and payload.get("composite_quality_score") is not None:
+                payload["final_score"] = payload.get("composite_quality_score")
+            if payload.get("release_pass") is None and payload.get("passed") is not None:
+                payload["release_pass"] = payload.get("passed")
+            if payload.get("passed") is None and payload.get("release_pass") is not None:
+                payload["passed"] = payload.get("release_pass")
+            if payload.get("product_pass") is None and payload.get("release_pass") is not None:
+                payload["product_pass"] = payload.get("release_pass")
+            if payload.get("judge_pass") is None and payload.get("judge_gate_passed") is not None:
+                payload["judge_pass"] = payload.get("judge_gate_passed")
+            if payload.get("judge_gate_passed") is None and payload.get("judge_pass") is not None:
+                payload["judge_gate_passed"] = payload.get("judge_pass")
         judge_errors = payload.get("judge_errors")
         if isinstance(judge_errors, list):
             audit_failures = [
@@ -182,20 +226,43 @@ class CaseResult(BaseModel):
 
     @model_validator(mode="after")
     def mirror_legacy_result_fields(self) -> "CaseResult":
-        if self.composite_quality_score is None and self.final_score is not None:
-            self.composite_quality_score = self.final_score
-        if self.final_score is None and self.composite_quality_score is not None:
-            self.final_score = self.composite_quality_score
-        if self.release_pass is None and self.passed is not None:
-            self.release_pass = self.passed
-        if self.passed is None and self.release_pass is not None:
+        if self.judge_status == "legacy_unknown":
+            if self.composite_quality_score is None and self.final_score is not None:
+                self.composite_quality_score = self.final_score
+            if self.final_score is None and self.composite_quality_score is not None:
+                self.final_score = self.composite_quality_score
+            if self.release_pass is None and self.passed is not None:
+                self.release_pass = self.passed
+            if self.passed is None and self.release_pass is not None:
+                self.passed = self.release_pass
+            if self.product_pass is None and self.release_pass is not None:
+                self.product_pass = self.release_pass
+            if self.judge_pass is None and self.judge_gate_passed is not None:
+                self.judge_pass = self.judge_gate_passed
+            if self.judge_gate_passed is None and self.judge_pass is not None:
+                self.judge_gate_passed = self.judge_pass
+        else:
+            # New contract: the canonical verdict fields are authoritative and
+            # alias mirrors always follow them, never the other way around.
             self.passed = self.release_pass
-        if self.product_pass is None and self.release_pass is not None:
-            self.product_pass = self.release_pass
-        if self.judge_pass is None and self.judge_gate_passed is not None:
-            self.judge_pass = self.judge_gate_passed
-        if self.judge_gate_passed is None and self.judge_pass is not None:
+            self.final_score = self.composite_quality_score
             self.judge_gate_passed = self.judge_pass
+            if self.eval_validity not in {"valid", "incomplete", "invalid"}:
+                raise ValueError("new-contract results require an explicit eval_validity")
+            if self.judge_status == "succeeded":
+                if self.llm_judge_score is None or self.judge_subscores is None or self.judge_pass is None:
+                    raise ValueError("a succeeded judge verdict requires score, subscores, and judge_pass")
+            else:
+                if self.llm_judge_score is not None or self.judge_subscores is not None or self.judge_pass is not None:
+                    raise ValueError("a non-succeeded judge status cannot carry a score or verdict")
+            if self.eval_validity in {"incomplete", "invalid"} and self.release_pass is not False:
+                raise ValueError("incomplete or invalid evaluations cannot release")
+            if self.release_pass is True and self.judge_pass is not True:
+                raise ValueError("release requires a succeeded judge verdict that passed")
+            if self.release_pass is True and self.product_pass is not True:
+                raise ValueError("release requires a passing product verdict")
+            if self.invalid_eval != (self.eval_validity == "invalid"):
+                raise ValueError("invalid_eval must mirror eval_validity == 'invalid'")
         if self.tool_call_count <= 0 and self.tool_calls:
             self.tool_call_count = len(self.tool_calls)
         if self.output_tokens <= 0 and self.token_usage is not None:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 
 from src.infra.runtime_paths import (
@@ -83,6 +84,13 @@ def command_run(args: argparse.Namespace) -> int:
     endpoint = args.endpoint or benchmark_env.endpoint
     config = _load_config_with_env_overrides(args.config, benchmark_env=benchmark_env)
     track = resolve_run_track(args.track, args.limit)
+    if track == "release" and not config.judge_enabled:
+        print(
+            "error: release track requires judge evaluation; judge_enabled is false. "
+            "Use --track smoke for rule-only diagnostics.",
+            file=sys.stderr,
+        )
+        return 2
     app_settings = get_settings()
     live_slack_enabled = bool(args.live_slack) or benchmark_env.live_slack_enabled
     live_slack = BenchmarkLiveSlackConfig(
@@ -107,7 +115,10 @@ def command_run(args: argparse.Namespace) -> int:
 
     print(f"Run directory: {run_dir}")
     print(f"Track: {summary.track}")
-    print(f"Overall: {'PASS' if summary.overall_passed else 'FAIL'}")
+    if summary.track == "release":
+        print(f"Overall: {'PASS' if summary.overall_passed else 'FAIL'}")
+        return 0 if summary.overall_passed else 1
+    print("Overall: diagnostic run complete (smoke track; not a release verdict)")
     return 0
 
 
