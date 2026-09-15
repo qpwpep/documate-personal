@@ -20,6 +20,19 @@ class SummaryStats(BaseModel):
     scored_cases: int
     passed_cases: int
     pass_rate: float
+    planned_cases: int = 0
+    invalid_eval_cases: int = 0
+    incomplete_eval_cases: int = 0
+    missing_result_cases: int = 0
+    duplicate_result_cases: int = 0
+    unexpected_result_cases: int = 0
+    judge_required_cases: int = 0
+    judge_succeeded_cases: int = 0
+    judge_failed_cases: int = 0
+    judge_disabled_cases: int = 0
+    judge_not_run_cases: int = 0
+    judge_legacy_unknown_cases: int = 0
+    judge_execution_rate: float | None = None
     product_passed_cases: int = 0
     judge_passed_cases: int = 0
     release_passed_cases: int = 0
@@ -64,31 +77,22 @@ class SummaryStats(BaseModel):
     synthesis_structured_success_rate: float | None = None
     failures: list[dict[str, str]] = Field(default_factory=list)
 
-    @model_validator(mode="before")
-    @classmethod
-    def migrate_legacy_summary_fields(cls, value: Any) -> Any:
-        if not isinstance(value, dict):
-            return value
-        payload = dict(value)
-        if payload.get("release_passed_cases") is None and payload.get("passed_cases") is not None:
-            payload["release_passed_cases"] = payload.get("passed_cases")
-        if payload.get("release_pass_rate") is None and payload.get("pass_rate") is not None:
-            payload["release_pass_rate"] = payload.get("pass_rate")
-        return payload
-
     @model_validator(mode="after")
     def mirror_legacy_summary_fields(self) -> "SummaryStats":
-        if self.release_passed_cases <= 0 and self.passed_cases:
+        # Fill only fields that were absent from the payload. A stored zero is a
+        # real measurement, not a missing value waiting for an alias copy.
+        fields = self.model_fields_set
+        if "release_passed_cases" not in fields and "passed_cases" in fields:
             self.release_passed_cases = self.passed_cases
-        if self.passed_cases <= 0 and self.release_passed_cases:
+        if "passed_cases" not in fields and "release_passed_cases" in fields:
             self.passed_cases = self.release_passed_cases
-        if self.release_pass_rate <= 0.0 and self.pass_rate:
+        if "release_pass_rate" not in fields and "pass_rate" in fields:
             self.release_pass_rate = self.pass_rate
-        if self.pass_rate <= 0.0 and self.release_pass_rate:
+        if "pass_rate" not in fields and "release_pass_rate" in fields:
             self.pass_rate = self.release_pass_rate
-        if self.product_passed_cases <= 0 and self.release_passed_cases:
+        if "product_passed_cases" not in fields and "release_passed_cases" in fields:
             self.product_passed_cases = self.release_passed_cases
-        if self.product_pass_rate <= 0.0 and self.release_pass_rate:
+        if "product_pass_rate" not in fields and "release_pass_rate" in fields:
             self.product_pass_rate = self.release_pass_rate
         return self
 

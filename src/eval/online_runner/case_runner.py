@@ -294,6 +294,11 @@ def run_online_benchmark(
     limit: int | None = None,
     live_slack: BenchmarkLiveSlackConfig | None = None,
 ) -> tuple[Path, list[CaseResult], RunSummary]:
+    if track == "release" and not config.judge_enabled:
+        raise ValueError(
+            "Release runs require judge evaluation; judge_enabled is false. "
+            "Run a smoke track for rule-only diagnostics."
+        )
     cases = load_cases_jsonl(fixtures_path)
     requested_limit = _normalize_limit(limit)
     if requested_limit is not None:
@@ -318,8 +323,14 @@ def run_online_benchmark(
             live_slack=live_slack,
         )
         results.append(result)
+        composite_text = (
+            f"{result.composite_quality_score:.3f}"
+            if result.composite_quality_score is not None
+            else "n/a"
+        )
         print(
-            f"[{index}/{len(cases)}] {case.case_id} score={float(result.composite_quality_score or 0.0):.3f} "
+            f"[{index}/{len(cases)}] {case.case_id} composite={composite_text} "
+            f"judge={result.judge_status} release={'PASS' if result.release_pass else 'FAIL'} "
             f"status={result.http_status} latency={result.latency_ms_e2e}ms"
         )
 

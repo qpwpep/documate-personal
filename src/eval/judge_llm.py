@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import math
 import re
-from typing import Any
+from dataclasses import dataclass, field
+from typing import Any, Literal
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
@@ -69,7 +71,7 @@ def _extract_text_content(content: Any) -> str:
     return str(content)
 
 
-def _parse_json_payload(text: str) -> dict[str, Any] | None:
+def _parse_json_payload(text: str) -> Any | None:
     stripped = text.strip()
     if not stripped:
         return None
@@ -100,10 +102,26 @@ def _normalize_jsonable(value: Any) -> Any:
     return str(value)
 
 
-def _is_payload_complete(payload: dict[str, Any]) -> bool:
-    response = payload.get("response")
-    if not isinstance(response, dict):
-        return False
+@dataclass(frozen=True)
+class JudgeScoreOutcome:
+    """Structured result of a judge attempt.
+
+    status separates *evaluation execution* from *answer quality*: succeeded
+    only means the required call ran and its output passed the contract.
+    A real zero score is a succeeded outcome; missing scores stay None.
+    """
+
+    status: Literal["disabled", "not_run", "failed", "succeeded"]
+    failure_kind: str | None = None
+    score: float | None = None
+    reason: str | None = None
+    subscores: JudgeSubscores | None = None
+    error: str | None = None
+    input_issues: list[str] = field(default_factory=list)
+
+
+def _payload_completeness_issues(payload: dict[str, Any]) -> list[str]:
+    issues: list[str] = []
     required_top_level = (
         "case",
         "response",
@@ -113,27 +131,61 @@ def _is_payload_complete(payload: dict[str, Any]) -> bool:
         "validator_reason",
         "synthesis_mode",
     )
-    if any(key not in payload for key in required_top_level):
-        return False
+    for key in required_top_level:
+        if key not in payload:
+            issues.append(f"missing field: {key}")
+    response = payload.get("response")
+    if not isinstance(response, dict):
+        issues.append("response payload is missing or not an object")
+        return issues
+    missing_response_keys = [
+        key for key in ("content", "citations", "checks", "actions", "content_hash")
+        if key not in response
+    ]
+    if missing_response_keys:
+        issues.append("response missing keys: " + ", ".join(missing_response_keys))
     setup_turns = payload.get("case", {}).get("setup_turns", [])
     conversation = payload.get("conversation", [])
-    if setup_turns and (len(conversation) != len(setup_turns) or any(
-        turn.get("query") != query or not isinstance(turn.get("response"), dict)
-        for query, turn in zip(setup_turns, conversation, strict=True)
-    )):
-        return False
+    if setup_turns and (
+        not isinstance(conversation, list)
+        or len(conversation) != len(setup_turns)
+        or any(
+            not isinstance(turn, dict)
+            or turn.get("query") != query
+            or not isinstance(turn.get("response"), dict)
+            for query, turn in zip(setup_turns, conversation, strict=True)
+        )
+    ):
+        issues.append("setup conversation is missing or does not match case.setup_turns")
     scope = payload.get("evidence_scope")
     if scope is not None:
         if (not isinstance(scope, dict) or scope.get("status") != "complete"
                 or scope.get("errors") != [] or not isinstance(scope.get("verified_evidence"), list)):
-            return False
-        try:
-            provenance = AnswerProvenance.model_validate(payload.get("answer_provenance"))
-        except (TypeError, ValueError):
-            return False
-        if provenance.response_hash != response.get("content_hash"):
-            return False
-    return all(key in response for key in ("content", "citations", "checks", "actions", "content_hash"))
+            issues.append("evidence scope is not complete")
+        else:
+            try:
+                provenance = AnswerProvenance.model_validate(payload.get("answer_provenance"))
+            except (TypeError, ValueError):
+                provenance = None
+            if provenance is None:
+                issues.append("answer provenance is missing or invalid")
+            elif provenance.response_hash != response.get("content_hash"):
+                issues.append("answer provenance response_hash does not match the response")
+    return issues
+
+
+def _is_payload_complete(payload: dict[str, Any]) -> bool:
+    return not _payload_completeness_issues(payload)
+
+
+def _validated_score_value(value: Any, *, label: str) -> float:
+    """Strict judge score contract: finite number in [0, 1], no coercion."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{label} must be a number in [0, 1], got {value!r}")
+    score = float(value)
+    if not math.isfinite(score) or score < 0.0 or score > 1.0:
+        raise ValueError(f"{label} must be a finite number in [0, 1], got {value!r}")
+    return score
 
 
 class LLMJudge:
@@ -171,11 +223,15 @@ class LLMJudge:
         conversation: list[dict[str, Any]] | None = None,
         evidence_scope: dict[str, Any] | None = None,
         answer_provenance: AnswerProvenance | dict[str, Any] | None = None,
-    ) -> tuple[float | None, str | None, str | None, JudgeSubscores | None]:
+    ) -> JudgeScoreOutcome:
         if not self.enabled:
-            return None, None, None, None
+            return JudgeScoreOutcome(status="disabled")
         if self.client is None:
-            return None, None, "invalid_eval: judge client is not initialized", None
+            return JudgeScoreOutcome(
+                status="failed",
+                failure_kind="client_unavailable",
+                error="invalid_eval: judge client is not initialized",
+            )
 
         user_prompt = self.build_case_payload(
             case=case,
@@ -195,8 +251,14 @@ class LLMJudge:
             evidence_scope=evidence_scope,
             answer_provenance=answer_provenance,
         )
-        if not self.is_payload_complete(user_prompt):
-            return None, None, "invalid_eval: judge payload is incomplete", None
+        input_issues = _payload_completeness_issues(user_prompt)
+        if input_issues:
+            return JudgeScoreOutcome(
+                status="not_run",
+                failure_kind="input_incomplete",
+                error="invalid_eval: judge payload is incomplete",
+                input_issues=input_issues,
+            )
 
         try:
             result = self.client.invoke(
@@ -206,27 +268,52 @@ class LLMJudge:
                 ]
             )
         except Exception as exc:
-            return None, None, f"invalid_eval: judge invocation failed ({exc})", None
+            return JudgeScoreOutcome(
+                status="failed",
+                failure_kind="invocation_failed",
+                error=f"invalid_eval: judge invocation failed ({exc})",
+            )
 
         parsed = _parse_json_payload(_extract_text_content(result.content))
-        if not parsed:
-            return None, None, "invalid_eval: judge returned non-JSON content", None
+        if parsed is None:
+            return JudgeScoreOutcome(
+                status="failed",
+                failure_kind="output_invalid",
+                error="invalid_eval: judge returned non-JSON content",
+            )
+        if not isinstance(parsed, dict):
+            return JudgeScoreOutcome(
+                status="failed",
+                failure_kind="output_invalid",
+                error="invalid_eval: judge response must be a JSON object",
+            )
 
-        subscores_raw = parsed.get("subscores")
         try:
-            subscores = JudgeSubscores.model_validate(subscores_raw)
+            subscores = JudgeSubscores.model_validate(parsed.get("subscores"))
         except Exception as exc:
-            return None, None, f"invalid_eval: judge subscores are missing or invalid ({exc})", None
+            return JudgeScoreOutcome(
+                status="failed",
+                failure_kind="output_invalid",
+                error=f"invalid_eval: judge subscores are missing or invalid ({exc})",
+            )
 
         try:
-            score = float(parsed.get("score"))
-        except (TypeError, ValueError):
-            score = subscores.average()
+            score = _validated_score_value(parsed.get("score"), label="judge score")
+        except ValueError as exc:
+            return JudgeScoreOutcome(
+                status="failed",
+                failure_kind="output_invalid",
+                error=f"invalid_eval: {exc}",
+            )
 
         reason = parsed.get("reason")
-        reason_text = str(reason) if reason is not None else None
-        bounded_score = max(0.0, min(1.0, score))
-        return bounded_score, reason_text, None, subscores
+        if reason is not None and not isinstance(reason, str):
+            return JudgeScoreOutcome(
+                status="failed",
+                failure_kind="output_invalid",
+                error="invalid_eval: judge reason must be a string",
+            )
+        return JudgeScoreOutcome(status="succeeded", score=score, reason=reason, subscores=subscores)
 
     @staticmethod
     def build_case_payload(
@@ -283,3 +370,7 @@ class LLMJudge:
     @staticmethod
     def is_payload_complete(payload: dict[str, Any]) -> bool:
         return _is_payload_complete(payload)
+
+    @staticmethod
+    def payload_completeness_issues(payload: dict[str, Any]) -> list[str]:
+        return _payload_completeness_issues(payload)

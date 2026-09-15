@@ -194,7 +194,6 @@ def score_format_language(
     case: BenchmarkCase,
     runtime_errors: list[str],
     response_errors: list[str],
-    judge_errors: list[str],
     response_text: str,
 ) -> float:
     if runtime_errors or response_errors:
@@ -207,8 +206,6 @@ def score_format_language(
         return 0.0
     if _contains_hangul(case.query) and not _contains_hangul(text):
         return 0.0
-    if any(str(error).startswith("invalid_eval:") for error in judge_errors):
-        return 0.0
     return 1.0
 
 
@@ -220,7 +217,6 @@ def compute_rule_scores(
     observed_hits: list[SearchHit],
     runtime_errors: list[str],
     response_errors: list[str],
-    judge_errors: list[str],
     validator_reason: str | None = None,
     synthesis_mode: str | None = None,
     slack_delivery_required: bool = False,
@@ -233,7 +229,7 @@ def compute_rule_scores(
         "reference_coverage": score_reference_coverage(case=case, response=response, observed_hits=observed_hits, validator_reason=validator_reason, evidence_scope=evidence_scope),
         "citation_traceability": score_citation_traceability(case=case, response=response, observed_hits=observed_hits, called_tools=called_tools, evidence_scope=evidence_scope),
         "tool_choice": score_tool_choice(case, called_tools, slack_delivery_required=slack_delivery_required, slack_delivery_status=slack_delivery_status),
-        "format_language": score_format_language(case=case, runtime_errors=runtime_errors, response_errors=response_errors, judge_errors=judge_errors, response_text=response_text),
+        "format_language": score_format_language(case=case, runtime_errors=runtime_errors, response_errors=response_errors, response_text=response_text),
     }
 
 

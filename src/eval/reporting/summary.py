@@ -21,7 +21,9 @@ _AUDIT_HIGH_RULE_LOW_JUDGE_DIVERGENCE_CEILING = 0.10
 _HIGH_RULE_LOW_JUDGE_DIVERGENCE_MARGIN = 0.35
 EXECUTION_CONTRACT_VERSION = "shared-client-scenario-v1"
 MEASUREMENT_CONTRACT_VERSION = "attachment-question-scenario-v1"
-SCORING_CONTRACT_VERSION = "answer-provenance-v1"
+# v2: judge outcome is a hard release gate; missing scores no longer
+# renormalize into a composite; every category has explicit judge minimums.
+SCORING_CONTRACT_VERSION = "judge-state-contract-v2"
 
 
 def _fingerprint(value: Any) -> str:
@@ -215,14 +217,52 @@ def build_summary(
     execution_options: dict[str, Any] | None = None,
 ) -> RunSummary:
     case_map = {case.case_id: case for case in cases}
-    scored_results = [result for result in results if result.composite_quality_score is not None]
-    product_results = [result for result in scored_results if bool(result.product_pass)]
-    release_results = [result for result in scored_results if bool(result.release_pass)]
+    planned_ids = {case.case_id for case in cases}
+    result_ids = [result.case_id for result in results]
+    missing_result_cases = len(planned_ids.difference(result_ids))
+    unexpected_result_cases = len(set(result_ids).difference(planned_ids))
+    duplicate_result_cases = len(result_ids) - len(set(result_ids))
+
+    # Denominators never shrink to the cases that happened to score. Planned
+    # cases are the release denominator; scored verdicts are the product/judge
+    # denominators.
+    planned_cases = len(cases)
+    valid_verdicts = [
+        result
+        for result in results
+        if result.eval_validity == "valid"
+        or (result.eval_validity in {None, "legacy_unknown"} and result.composite_quality_score is not None)
+    ]
+    invalid_eval_cases = sum(1 for result in results if result.eval_validity == "invalid")
+    incomplete_eval_cases = sum(1 for result in results if result.eval_validity == "incomplete")
+    product_results = [result for result in valid_verdicts if bool(result.product_pass)]
+    release_results = [result for result in results if bool(result.release_pass)]
     judge_eligible_results = [result for result in results if result.judge_pass is not None]
     judge_results = [result for result in judge_eligible_results if bool(result.judge_pass)]
-    product_pass_rate = (len(product_results) / len(scored_results)) if scored_results else 0.0
-    release_pass_rate = (len(release_results) / len(scored_results)) if scored_results else 0.0
+    product_pass_rate = (len(product_results) / len(valid_verdicts)) if valid_verdicts else 0.0
+    release_pass_rate = (len(release_results) / planned_cases) if planned_cases else 0.0
     judge_pass_rate = (len(judge_results) / len(judge_eligible_results)) if judge_eligible_results else None
+
+    def _judge_bucket(result: CaseResult) -> str:
+        status = result.judge_status
+        if status in {None, "legacy_unknown"}:
+            if result.llm_judge_score is not None:
+                return "succeeded"
+            if result.judge_errors:
+                return "failed"
+            return "legacy_unknown"
+        return str(status)
+
+    judge_buckets = [_judge_bucket(result) for result in results]
+    judge_succeeded_cases = judge_buckets.count("succeeded")
+    judge_failed_cases = judge_buckets.count("failed")
+    judge_disabled_cases = judge_buckets.count("disabled")
+    judge_not_run_cases = judge_buckets.count("not_run")
+    judge_legacy_unknown_cases = judge_buckets.count("legacy_unknown")
+    judge_required_cases = planned_cases if config.judge_enabled else 0
+    judge_execution_rate = (
+        judge_succeeded_cases / judge_required_cases if judge_required_cases else None
+    )
 
     tp_total = fp_total = fn_total = 0
     for result in results:
@@ -308,7 +348,20 @@ def build_summary(
 
     metrics = SummaryStats(
         total_cases=len(results),
-        scored_cases=len(scored_results),
+        planned_cases=planned_cases,
+        scored_cases=len(valid_verdicts),
+        invalid_eval_cases=invalid_eval_cases,
+        incomplete_eval_cases=incomplete_eval_cases,
+        missing_result_cases=missing_result_cases,
+        duplicate_result_cases=duplicate_result_cases,
+        unexpected_result_cases=unexpected_result_cases,
+        judge_required_cases=judge_required_cases,
+        judge_succeeded_cases=judge_succeeded_cases,
+        judge_failed_cases=judge_failed_cases,
+        judge_disabled_cases=judge_disabled_cases,
+        judge_not_run_cases=judge_not_run_cases,
+        judge_legacy_unknown_cases=judge_legacy_unknown_cases,
+        judge_execution_rate=round(judge_execution_rate, 4) if judge_execution_rate is not None else None,
         passed_cases=len(release_results),
         pass_rate=round(release_pass_rate, 4),
         product_passed_cases=len(product_results),
@@ -352,7 +405,26 @@ def build_summary(
     )
     analysis = build_analysis(case_map=case_map, results=results)
     hard_gates = config.hard_gates
+    completeness_issues = (
+        invalid_eval_cases
+        + incomplete_eval_cases
+        + missing_result_cases
+        + duplicate_result_cases
+        + unexpected_result_cases
+    )
     gates = [
+        GateResult(
+            name="evaluation_completeness",
+            threshold=0,
+            actual=completeness_issues,
+            passed=completeness_issues == 0,
+            gate_type="release",
+            detail=(
+                f"invalid={invalid_eval_cases} incomplete={incomplete_eval_cases} "
+                f"missing={missing_result_cases} duplicate={duplicate_result_cases} "
+                f"unexpected={unexpected_result_cases}"
+            ),
+        ),
         GateResult(name="release_pass_rate", threshold=hard_gates.pass_rate, actual=metrics.release_pass_rate, passed=metrics.release_pass_rate >= hard_gates.pass_rate, gate_type="release"),
         GateResult(name="tool_precision", threshold=hard_gates.tool_precision, actual=metrics.tool_precision, passed=metrics.tool_precision >= hard_gates.tool_precision, gate_type="release"),
         GateResult(name="tool_recall", threshold=hard_gates.tool_recall, actual=metrics.tool_recall, passed=metrics.tool_recall >= hard_gates.tool_recall, gate_type="release"),
@@ -366,8 +438,29 @@ def build_summary(
             gate_type="release",
             status="evaluated" if metrics.cost_gate_eligible else "skipped_insufficient_coverage",
         ),
-        GateResult(name="judge_min_score_pass_rate", threshold=1.0, actual=metrics.judge_pass_rate, passed=metrics.judge_pass_rate is None or metrics.judge_pass_rate >= 1.0, gate_type="audit"),
-        GateResult(name="judge_input_completeness_rate", threshold=1.0, actual=metrics.judge_input_completeness_rate, passed=metrics.judge_input_completeness_rate is None or metrics.judge_input_completeness_rate >= 1.0, gate_type="audit"),
+        GateResult(
+            name="judge_min_score_pass_rate",
+            threshold=1.0,
+            actual=metrics.judge_pass_rate,
+            # A required judge that never produced a verdict is a failure, not a skip.
+            passed=(
+                metrics.judge_pass_rate is not None and metrics.judge_pass_rate >= 1.0
+                if metrics.judge_required_cases
+                else metrics.judge_pass_rate is None or metrics.judge_pass_rate >= 1.0
+            ),
+            gate_type="audit",
+        ),
+        GateResult(
+            name="judge_input_completeness_rate",
+            threshold=1.0,
+            actual=metrics.judge_input_completeness_rate,
+            passed=(
+                metrics.judge_input_completeness_rate is not None and metrics.judge_input_completeness_rate >= 1.0
+                if metrics.judge_required_cases
+                else metrics.judge_input_completeness_rate is None or metrics.judge_input_completeness_rate >= 1.0
+            ),
+            gate_type="audit",
+        ),
         GateResult(name="deterministic_direct_usage_rate", threshold=_AUDIT_DETERMINISTIC_DIRECT_USAGE_CEILING, actual=metrics.deterministic_direct_usage_rate, passed=metrics.deterministic_direct_usage_rate <= _AUDIT_DETERMINISTIC_DIRECT_USAGE_CEILING, gate_type="audit"),
         GateResult(name="high_rule_low_judge_divergence_rate", threshold=_AUDIT_HIGH_RULE_LOW_JUDGE_DIVERGENCE_CEILING, actual=metrics.high_rule_low_judge_divergence_rate, passed=metrics.high_rule_low_judge_divergence_rate <= _AUDIT_HIGH_RULE_LOW_JUDGE_DIVERGENCE_CEILING, gate_type="audit"),
         GateResult(
@@ -422,6 +515,14 @@ def build_summary(
             "scoring_contract_version": SCORING_CONTRACT_VERSION,
             "judge_min_score_pass_rate": metrics.judge_pass_rate,
             "judge_min_score_failures": metrics.judge_min_score_failures,
+            "judge_required_cases": metrics.judge_required_cases,
+            "judge_succeeded_cases": metrics.judge_succeeded_cases,
+            "judge_failed_cases": metrics.judge_failed_cases,
+            "judge_not_run_cases": metrics.judge_not_run_cases,
+            "judge_disabled_cases": metrics.judge_disabled_cases,
+            "judge_execution_rate": metrics.judge_execution_rate,
+            "invalid_eval_cases": metrics.invalid_eval_cases,
+            "incomplete_eval_cases": metrics.incomplete_eval_cases,
             "llm_call_coverage_rate": metrics.llm_call_coverage_rate,
             "request_id_coverage_rate": metrics.request_id_coverage_rate,
             "judge_input_completeness_rate": metrics.judge_input_completeness_rate,

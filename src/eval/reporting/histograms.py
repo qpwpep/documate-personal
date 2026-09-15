@@ -139,6 +139,12 @@ def build_failure_reason(result: CaseResult) -> str:
         return ", ".join(result.judge_errors)
     if result.judge_audit_failures:
         return ", ".join(result.judge_audit_failures)
+    if result.judge_status == "not_run":
+        issues = "; ".join(result.judge_input_issues) if result.judge_input_issues else ""
+        reason = result.judge_status_reason or "unknown"
+        return f"judge_not_run:{reason}" + (f" ({issues})" if issues else "")
+    if result.judge_status == "disabled":
+        return "judge_disabled: semantic evaluation was not executed"
     warnings = _result_retrieval_warnings(result)
     if warnings:
         return "retrieval_warning:" + ", ".join(warnings)

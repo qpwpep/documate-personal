@@ -163,7 +163,12 @@ def build_markdown_report(summary: RunSummary, results: list[CaseResult] | None 
     lines.append(f"- Measurement contract: `{summary.measurement_contract_version or 'legacy: unspecified'}`")
     lines.append(f"- Suite fingerprint: `{summary.suite_fingerprint or 'unavailable'}`")
     lines.append(f"- Evaluation fingerprint: `{summary.evaluation_fingerprint or 'unavailable'}`")
-    lines.append(f"- Release: `{'PASS' if summary.overall_passed else 'FAIL'}`")
+    scoring_contract = (summary.audit_metrics or {}).get("scoring_contract_version") or "legacy: unspecified"
+    lines.append(f"- Scoring contract: `{scoring_contract}`")
+    if summary.judge_enabled:
+        lines.append(f"- Release: `{'PASS' if summary.overall_passed else 'FAIL'}`")
+    else:
+        lines.append("- Release: `diagnostic run only (judge evaluation disabled; no release verdict)`")
     if summary.measurement_contract_version is not None:
         lines.append("")
         lines.append(
@@ -179,8 +184,21 @@ def build_markdown_report(summary: RunSummary, results: list[CaseResult] | None 
     lines.append("| Metric | Value |")
     lines.append("|---|---:|")
     for key, value in (
+        ("planned_cases", summary.metrics.planned_cases),
         ("total_cases", summary.metrics.total_cases),
         ("scored_cases", summary.metrics.scored_cases),
+        ("invalid_eval_cases", summary.metrics.invalid_eval_cases),
+        ("incomplete_eval_cases", summary.metrics.incomplete_eval_cases),
+        ("missing_result_cases", summary.metrics.missing_result_cases),
+        ("duplicate_result_cases", summary.metrics.duplicate_result_cases),
+        ("unexpected_result_cases", summary.metrics.unexpected_result_cases),
+        ("judge_required_cases", summary.metrics.judge_required_cases),
+        ("judge_succeeded_cases", summary.metrics.judge_succeeded_cases),
+        ("judge_failed_cases", summary.metrics.judge_failed_cases),
+        ("judge_disabled_cases", summary.metrics.judge_disabled_cases),
+        ("judge_not_run_cases", summary.metrics.judge_not_run_cases),
+        ("judge_legacy_unknown_cases", summary.metrics.judge_legacy_unknown_cases),
+        ("judge_execution_rate", summary.metrics.judge_execution_rate),
         ("passed_cases", summary.metrics.passed_cases),
         ("product_passed_cases", summary.metrics.product_passed_cases),
         ("judge_passed_cases", summary.metrics.judge_passed_cases),
@@ -226,7 +244,7 @@ def build_markdown_report(summary: RunSummary, results: list[CaseResult] | None 
         ("planner_final_success_rate", summary.metrics.planner_final_success_rate),
         ("synthesis_structured_success_rate", summary.metrics.synthesis_structured_success_rate),
     ):
-        lines.append(f"| {key} | {value} |")
+        lines.append(f"| {key} | {value if value is not None else '-'} |")
 
     lines.append("")
     lines.append("## Gates")
