@@ -178,6 +178,7 @@ class ExecutionRunner:
 
         def build_state(retriever: Any | None = None) -> dict[str, Any]:
             return build_graph_state_input(
+                session_id=self.session.session_id,
                 user_input=user_input,
                 current_turn_id=current_turn_id,
                 user_turns=conversation.user_turns,

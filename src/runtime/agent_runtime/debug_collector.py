@@ -348,6 +348,9 @@ class DebugCollector:
         answer_provenance = None
         if state_response.body_kind is not None:
             answer_provenance = AnswerProvenance(
+                request_id=state_response.request_id,
+                contract_revision=state_response.contract_revision or None,
+                save_operation_binding_sha256=state_response.save_operation_binding_sha256,
                 body_kind=state_response.body_kind,
                 response_hash=state_response.result.content_hash,
                 source=state_response.evidence_source,

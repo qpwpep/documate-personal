@@ -42,6 +42,9 @@ class AnswerProvenance(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     version: Literal[1] = 1
+    request_id: str | None = None
+    contract_revision: int | None = Field(default=None, ge=1)
+    save_operation_binding_sha256: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
     body_kind: BodyKind
     response_hash: str = Field(min_length=1)
     source: AnswerSource | None = None

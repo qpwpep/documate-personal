@@ -63,6 +63,8 @@ def test_pending_copy_retains_its_selected_source_after_actions_clear_the_pendin
     assert published["debug"]["tool_calls"] == []
     assert published["debug"]["answer_provenance"] == {
         "version": 1, "body_kind": "copy_answer", "response_hash": source.content_hash,
+        "request_id": contract.request_id, "contract_revision": contract.revision,
+        "save_operation_binding_sha256": None,
         "source": {"ref": "pending", "response_hash": source.content_hash,
                    "citation_ids": [citation.evidence.id for citation in source.citations]},
         "evidence_packet": [citation.evidence.model_dump(mode="json") for citation in source.citations],
@@ -91,6 +93,8 @@ def test_partial_transform_publishes_the_checked_body_and_complete_parent_identi
     assert "unsupported extra" not in str(published["response"])
     assert published["debug"]["answer_provenance"] == {
         "version": 1, "body_kind": "transform_answer", "response_hash": state["response"].result.content_hash,
+        "request_id": contract.request_id, "contract_revision": contract.revision,
+        "save_operation_binding_sha256": None,
         "source": {"ref": "previous", "response_hash": source.content_hash,
                    "citation_ids": [citation.evidence.id for citation in source.citations]},
         "evidence_packet": [citation.evidence.model_dump(mode="json") for citation in source.citations],
@@ -156,6 +160,8 @@ def test_missing_source_cannot_publish_a_bound_parent_or_borrow_its_evidence():
     assert state["response"].kind == "clarification"
     assert published["debug"]["answer_provenance"] == {
         "version": 1, "body_kind": "copy_answer", "response_hash": state["response"].result.content_hash,
+        "request_id": contract.request_id, "contract_revision": contract.revision,
+        "save_operation_binding_sha256": None,
         "source": None, "evidence_packet": [],
     }
 
@@ -185,5 +191,7 @@ def test_pre_synthesis_terminal_answers_publish_an_explicit_empty_evidence_scope
     assert published["response"]["citations"] == []
     assert published["debug"]["answer_provenance"] == {
         "version": 1, "body_kind": contract.body.kind, "response_hash": state["response"].result.content_hash,
+        "request_id": contract.request_id, "contract_revision": contract.revision,
+        "save_operation_binding_sha256": None,
         "source": None, "evidence_packet": [],
     }

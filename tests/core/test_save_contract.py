@@ -66,6 +66,25 @@ def test_reentering_same_save_action_reuses_artifact(tmp_path, monkeypatch):
     assert len(list(tmp_path.glob("*.txt"))) == 1
 
 
+def test_server_provenance_binds_the_executed_operation_independently_of_receipt(tmp_path, monkeypatch):
+    from src.runtime.agent_runtime.debug_collector import DebugCollector
+
+    monkeypatch.setattr("src.infra.tools.save_text.get_save_text_output_dir", lambda: tmp_path)
+    state = _save_state()
+    state["response"] = state["response"].model_copy(update={"body_kind": "compose"})
+    updates = make_action_postprocess_node(build_save_text_tool(), lambda **_: {}, False)(state)
+    receipt = updates["response"].result.actions[0]
+    # A corrupted public receipt must not change the controller's captured binding.
+    forged = receipt.model_copy(update={"operation": receipt.operation.model_copy(update={"operation_id": "other"})})
+    updates["response"] = updates["response"].model_copy(update={
+        "result": updates["response"].result.model_copy(update={"actions": [forged]}),
+    })
+    debug = DebugCollector().build(response={**state, **updates}, updated_messages=updates["messages"],
+                                   graph_total_ms=1, upload_retriever_build_ms=None)
+    assert debug["answer_provenance"].get("save_operation_binding_sha256") == receipt.operation.binding_sha256
+    assert debug["answer_provenance"]["save_operation_binding_sha256"] != forged.operation.binding_sha256
+
+
 def test_completed_pending_save_is_reverified_without_another_tool_call(tmp_path, monkeypatch):
     monkeypatch.setattr("src.infra.tools.save_text.get_save_text_output_dir", lambda: tmp_path)
     state = _save_state()

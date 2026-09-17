@@ -1,5 +1,7 @@
 from copy import deepcopy
 
+import pytest
+
 from src.app.web.agent_request_support import normalize_debug_info
 from src.core.contracts.boundary.debug import parse_debug_payload
 from src.core.contracts.debug import DebugPayload
@@ -19,16 +21,24 @@ def provenance_debug():
             "tool_calls": ["save_text"], "tool_call_count": 1}
 
 
-def test_graph_and_http_debug_preserve_captured_pending_source_and_exact_packet():
+@pytest.mark.parametrize("request_identity", [{}, {
+    "request_id": "saved-request", "contract_revision": 2, "save_operation_binding_sha256": "a" * 64,
+}])
+def test_graph_and_http_debug_preserve_captured_pending_source_and_exact_packet(request_identity):
     """Both diagnostic boundaries retain the captured parent and source ranges without inventing searches."""
     raw = provenance_debug()
+    raw["answer_provenance"].update(request_identity)
     expected = deepcopy(raw)
+    expected_provenance = {
+        "request_id": None, "contract_revision": None, "save_operation_binding_sha256": None,
+        **expected["answer_provenance"],
+    }
 
     graph_debug = parse_debug_payload(raw).model_dump(mode="json")
     http_debug = normalize_debug_info(graph_debug, 25).model_dump(mode="json")
 
-    assert graph_debug["answer_provenance"] == expected["answer_provenance"]
-    assert http_debug["answer_provenance"] == expected["answer_provenance"]
+    assert graph_debug["answer_provenance"] == expected_provenance
+    assert http_debug["answer_provenance"] == expected_provenance
     assert http_debug["observed_hits"] == []
     assert http_debug["tool_calls"] == ["save_text"]
     assert http_debug["observability_status"] == "ok"

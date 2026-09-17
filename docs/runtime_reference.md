@@ -299,6 +299,12 @@ Docling 어댑터는 제목 계층·표 셀·병합·페이지·위치를 기존
 - 생성 파일 정리: `GENERATED_FILE_TTL_SECONDS`
 - 정리 로직: `src/app/web/cleanup.py::RuntimeCleaner`
 
+서버는 검증된 답변을 출처·참고 및 제한까지 포함해 UTF-8 BOM bytes로 고정하고 `SaveOperation`에 세션·요청·대상 원본·본문 hash·export profile·bytes hash·크기를 연결합니다. 파일명은 시각 대신 세션과 저장 operation ID로 결정됩니다. 같은 operation의 재시도는 같은 manifest와 파일을 확인해 반환하며, 다른 bytes나 요청으로 ID를 재사용하면 `idempotency_conflict`입니다. 다른 저장 의무는 다른 파일을 만들어 앞선 답변을 보존합니다.
+
+보류 요청의 같은 본문 전달 재시도와 목적지 보충·정정은 기존 operation을 유지합니다. 계약 병합에서 본문·원본 참조·출력 요구의 변경을 수락하면, 새 본문이 아직 준비되지 않았더라도 이전 operation과 receipt 연결을 해제합니다. 수정 원본은 보존하되 준비 완료 상태를 해제하고, 이후 여러 확인·보충 턴을 거쳐 검증된 본문이 완성되면 새 operation을 만듭니다. 사용자의 수정 없이 재시도 본문이 달라지면 새 operation으로 우회하지 않고 충돌로 거절합니다. 이미 공개한 파일과 manifest는 이 상태 전이로 삭제하거나 만료 시각을 바꾸지 않습니다. `filename_prefix` 인자는 호출 호환성을 위해 남아 있지만 파일 identity를 바꾸지 않습니다. 최종 이름은 `response_<artifact_id>.txt`로 고정됩니다.
+
+저장소는 private staging 파일을 완전히 쓰고 `fsync`·readback을 마친 다음, manifest를 교체 불가 방식으로 예약하고 payload를 같은 방식으로 공개합니다. manifest만 존재하는 상태는 저장 성공이 아닙니다. 두 파일의 identity·bytes 일치와 만료 여부를 실제로 확인해야 `verification=verified` receipt를 반환합니다. hard link의 원자적 no-replace 생성을 지원하는 로컬 파일시스템을 사용하며, 지원되지 않는 파일시스템에서 덮어쓰기 방식으로 fallback하지 않습니다. 전원 장애와 임의 외부 파일 변경까지 막는 영구 보관소는 아닙니다.
+
 ## 4. 대화 메모리 정책
 
 ### 4.1 저장 형태와 compaction
@@ -479,7 +485,7 @@ Streamlit은 첫 이벤트 전 오류를 포함해 요청 실패를 화면에 �
 - `issues`: 생성 실패·불완전한 답변 등 실제 제한. 전체 confidence 수치는 제공하지 않습니다.
 - `content_hash`: 본문 구조·basis·refs를 포함한 revision. 내용이 바뀌면 검사를 다시 수행해야 합니다. citation의 존재 여부, `issues`, `retrieval_required`, `actions`까지 포함한 전체 응답 digest는 아닙니다.
 - `retrieval_required`: 이 응답을 다시 검사할 때 유지할 출처 요구 조건. 검색 기반 응답의 생성 예시에도 참조가 필요한지 판단하는 데 사용합니다.
-- `actions`: 실제 저장·전송 결과의 `kind`, `status`, `message`·`error`, `target`, `file_path`. 다운로드 경로는 성공한 `save_text` receipt에 있습니다.
+- `actions`: 실제 저장·전송 결과의 `kind`, `status`, `message`·`error`, `target`, `file_path`. `save_text`는 `operation`, `artifact`, `verification`, `error_code`도 전달합니다. `status`는 `success`, `error`, `skipped`, `unknown`이며, 저장 결과를 확인하지 못한 `unknown`은 성공이 아닙니다. `verification=verified`에는 요청·산출물 identity와 실제 bytes 확인이 필요합니다. 구형 receipt는 읽을 수 있지만 새 검증 성공으로 승격하지 않습니다.
 
 예를 들어 `citations[0].evidence`에는 `snapshot`의 source URI·내용 hash·parser revision, `element`의 원문과 anchors, `selection`이 함께 있습니다. 클라이언트는 현재 업로드 파일을 다시 읽어 인용을 해석하지 않습니다. 모델이 생성한 별도 답변 문자열이나 주장 목록을 클라이언트에서 재조합하지도 않습니다.
 
@@ -507,6 +513,8 @@ Streamlit은 첫 이벤트 전 오류를 포함해 요청 실패를 화면에 �
 | `evidence_packet` | 최종 결과를 생성·검증한 `EvidenceRef` 목록. compact가 결과를 만들었으면 compact packet이며, 복사 경로는 모델 호출 없이 상속한 인용 packet |
 
 source descriptor는 요청 계약이 실제로 해석한 서버 원본에서 캡처합니다. 이후 packet과 최종 본문 hash를 함께 공개하므로, 현재 검색 결과·선택한 선행 인용·최종 채택 범위를 별도로 확인할 수 있습니다. 같은 hash라도 인용이 빠진 응답과 혼동하지 않도록 원본의 실제 citation ID 목록을 기록합니다. 이 메타데이터는 본문·출처 연결을 진단하며 모든 모델 입력을 재현하는 로그나 action receipt의 동일성 증명은 아닙니다. 현재 online benchmark는 필요한 provenance가 없거나 불일치하면 진단·응답 계약 실패로 처리합니다. 기존 저장 결과는 당시 계약으로 읽으며 자동 승격하지 않습니다.
+
+저장에는 별도로 `answer_provenance.save_operation_binding_sha256`를 사용합니다. 서버가 도구 호출 전에 확정한 operation의 전체 바인딩 hash를 캡처하므로 receipt의 자기 보고와 독립된 비교 기준이 됩니다. 평가기는 이 값, receipt의 operation, 다운로드 헤더를 모두 대조합니다. 동일한 본문 bytes라도 다른 저장 작업의 receipt를 바꾸어 끼우면 이 연결 검사를 통과하지 못합니다. 구형 provenance의 해당 필드는 `null`이며 현재 저장 성공의 증거로 사용하지 않습니다.
 
 `RetrievalDiagnostic`은 도구 실행 `status`와 근거 요구의 `answerability`를 구분합니다.
 
