@@ -162,7 +162,7 @@ def test_summary_identifies_the_judge_state_scoring_contract() -> None:
     """Persisted results identify the scoring semantics without changing timing contracts."""
     payload = json.loads(_summary().model_dump_json())
 
-    assert payload["audit_metrics"]["scoring_contract_version"] == "judge-state-contract-v2"
+    assert payload["audit_metrics"]["scoring_contract_version"] == "verified-save-contract-v3"
 
 
 def test_history_artifacts_identify_new_timing_baseline(tmp_path: Path) -> None:

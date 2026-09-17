@@ -18,6 +18,7 @@ import requests
 from src.core.answer_schema import AnswerDocument, AnswerResponse, finalize_answer
 from src.core.contracts.debug import DebugPayload, TokenUsage
 from src.core.evidence import RetrievalScore, SearchHit
+from src.core.save_contract import SaveOperation
 from src.eval.config_models import BenchmarkCase, BenchmarkConfig, CaseWeightOverride
 from src.eval.io import dump_jsonl
 from src.eval.judge_llm import LLMJudge
@@ -29,7 +30,9 @@ from src.eval.reporting.summary import build_summary
 from src.eval.result_models import CaseResult
 from tests.eval.response_fixtures import (
     answer_provenance,
+    artifact_http_response,
     plain_response,
+    saved_receipt,
     source_evidence,
     sse_http_response,
 )
@@ -232,6 +235,7 @@ def _copy_answer_case():
         query="직전 답변을 파일로 저장해줘",
         setup_turns=["이 파일을 설명해줘"],
         expected_tools=["save_text"],
+        save_expectation={"outcome": "required_success", "target": {"kind": "setup_answer", "setup_turn_index": 0}},
     )
 
 
@@ -260,14 +264,21 @@ def test_tool_action_semantic_failure_cannot_release_on_rule_scores(tmp_path):
     assert result.release_pass is False
 
 
-def test_requested_answer_copy_can_release_when_judge_passes(tmp_path):
+def test_requested_answer_copy_can_release_when_judge_passes(tmp_path, monkeypatch):
     """요청된 선행 답변 복사는 judge 품질 기준 충족 시 통과할 수 있다."""
     prior_body = "정확한 설명 본문"
     prior_response = plain_response(prior_body)
     prior = _final_payload(prior_response)
     copied = plain_response(prior_body)
-    copied["actions"] = [_save_receipt()]
-    final = _final_payload(copied, tool_calls=["save_text"])
+    monkeypatch.setattr("src.eval.online_runner.case_runner.uuid4", lambda: "save-contract-session")
+    copied["actions"] = [saved_receipt(copied, tmp_path, session_id="save-contract-session", target_kind="copy_answer")]
+    monkeypatch.setattr("src.eval.save_outcomes.requests.get",
+                        lambda url, **kwargs: artifact_http_response(tmp_path, url.rsplit("/", 1)[-1]))
+    final = _final_payload(copied, tool_calls=["save_text"], debug_overrides={
+        "answer_provenance": answer_provenance(copied, body_kind="copy_answer",
+                                                request_id="contract-request", contract_revision=1,
+                                                save_operation_binding_sha256=SaveOperation.model_validate(copied["actions"][0]["operation"]).binding_sha256),
+    })
 
     result = _run_case(
         _copy_answer_case(),

@@ -49,7 +49,11 @@ fixture의 최소 예시는 다음과 같습니다. 기존 단일 `upload_fixtur
   "setup_turns": ["다음 메모를 두 문장으로 정리해줘: CSV를 읽고 결측 행을 제거한 뒤 날짜별로 집계한다."],
   "query": "방금 답변을 txt로 저장해줘.",
   "upload_fixtures": [],
-  "expected_tools": ["save_text"]
+  "expected_tools": ["save_text"],
+  "save_expectation": {
+    "outcome": "required_success",
+    "target": {"kind": "setup_answer", "setup_turn_index": 0}
+  }
 }
 ```
 
@@ -230,14 +234,32 @@ judge minimum score와 pricing도 같은 파일에서 관리합니다. `cost_gat
 - `eval_validity`: `valid`(현재 정책의 평가가 완료되어 판정 가능, 품질 불합격도 유효한 평가), `incomplete`(필수 입력·단계 부족), `invalid`(judge 호출 실패·출력 계약 오류로 결과 신뢰 불가), `legacy_unknown`.
 - `llm_judge_score`: 유효한 judge 0점은 `0`으로, 평가하지 못한 점수는 `null`로 보존합니다. 평가 오류를 점수로 대체하거나 범위 밖 값을 잘라내지 않습니다.
 - `judge_pass`: `succeeded` 평가가 전체 점수와 필수 세부 점수 기준을 모두 충족할 때만 `true`. `disabled`·`not_run`·`failed`는 `null`입니다.
-- `product_pass`: 완전한 composite 점수가 있을 때 composite 기준 판정. 제품 실행 실패는 `false`, judge 장애로 composite를 계산할 수 없으면 `null`입니다.
-- `release_pass`: 평가 유효성(`valid`), 제품 판정(`product_pass`), judge 품질 판정(`judge_pass`), 응답 계약을 모두 충족할 때만 `true`입니다. `incomplete`·`invalid` 평가는 항상 `false`입니다.
+- `product_pass`: 완전한 composite 점수가 있을 때 composite 기준 판정. 제품 실행 실패 또는 필수 저장 계약 실패는 점수와 관계없이 `false`, judge 장애로 composite를 계산할 수 없으면 `null`입니다.
+- `release_pass`: 평가 유효성(`valid`), 제품 판정(`product_pass`), judge 품질 판정(`judge_pass`), 응답 계약과 저장 계약을 모두 충족할 때만 `true`입니다. `incomplete`·`invalid` 평가는 항상 `false`입니다.
 
 `composite_quality_score`는 judge 점수가 있을 때만 가중합으로 계산합니다. judge 점수가 없으면 남은 규칙 점수를 재정규화해 composite를 만들지 않고 `null`로 남기며, 규칙 원점수는 `rule_scores`·`rule_score_total`에 진단용으로 보존합니다. judge 가용성은 제품 규칙 점수를 바꾸지 않습니다.
 
 모든 카테고리에 `judge_min_score`가 명시적으로 존재합니다(기본 `0.70`, case의 `judge_min_score` 필드가 우선). 세부 점수 기준은 `[judge_min_subscores]`의 `answer_quality`(전 카테고리)와 `groundedness`(근거 기반 답변)이며, 인용을 요구하지 않는 순수 `tool_action` 사례에는 groundedness를 적용하지 않습니다. 이 값들은 인간 평가로 보정된 최적값이 아니라 정책 출발점입니다.
 
 run 집계의 `release_pass_rate` 분모는 실행 대상으로 확정한 전체 사례(`planned_cases`)입니다. composite가 `null`이거나 judge 오류·제품 실패인 사례를 빼지 않으며, 계획 대비 결과 누락·중복·예상외 case_id는 `evaluation_completeness` release gate가 차단합니다. judge 상태별 개수(`judge_succeeded/failed/not_run/disabled_cases`)와 `judge_execution_rate`(judge 필수 대상 중 succeeded 비율)를 별도로 기록하며, 대상이 0개인 비율은 `-`(N/A)로 표시합니다.
+
+### 4.0.2 저장 산출물의 필수 조건
+
+저장 사례는 `save_expectation`으로 결과와 대상을 고정합니다. `expected_tools=["save_text"]`는 호출 기대값이며 저장 성공 기대를 대신하지 않습니다. release 실행에서 저장을 기대하면서 `save_expectation`이 없으면 설정 검증이 거절합니다.
+
+| `outcome` | 필수 확인 |
+|---|---|
+| `required_success` | 요청·세션·대상 답변과 연결된 verified receipt, 실제 다운로드의 manifest binding·artifact ID·bytes가 모두 일치해야 함 |
+| `expected_failure` | `error_codes`에 명시한 실패가 올바르게 전달되고, 성공 receipt와 다운로드 가능한 성공 산출물이 없어야 함 |
+| `must_not_execute` | 저장 도구 호출과 저장 receipt가 모두 없어야 함 |
+
+성공·예상 실패 사례는 `target`을 지정합니다. `final_answer`는 실제 최종 답변, `setup_answer`는 `setup_turn_index`로 지정한 준비 턴의 답변이며 인덱스는 0부터 시작합니다. 이전 답변 저장은 준비 턴의 export와 비교하므로 현재 잘못된 답변을 저장하고 같은 hash를 반환해도 통과하지 않습니다. export는 출처·제한을 포함한 UTF-8 BOM bytes이며, 본문 `content_hash`와 별개로 bytes hash와 길이를 확인합니다.
+
+평가기는 일반 `GET /download/{filename}`로 실제 bytes를 읽고 `X-Save-Binding-SHA256`, `X-Artifact-Id`, receipt의 바인딩과 비교합니다. 도구 호출 전에 캡처된 `answer_provenance.save_operation_binding_sha256`도 대조하므로 receipt와 파일이 서로 일치하더라도 다른 저장 작업의 결과로 바뀌었다면 실패합니다. 파일·manifest 부재, 내용 불일치, 만료는 제품 실패이며, timeout·읽기 불가 같은 검증 불가는 `eval_validity=incomplete`로 남깁니다. `CaseResult.save_assessment`에는 `status`(`verified`, `failed`, `unverifiable`, `not_applicable`), `passed`, `failure_codes`, 예상·관측 hash와 크기, artifact ID, 확인 시각을 기록합니다. 개별 사례 후 검사와 실행 끝의 재검사(`phase=case/run_end`)로 뒤의 저장이 앞선 파일을 덮거나 삭제했는지도 확인합니다.
+
+준비 턴에서 성공 receipt를 반환한 저장도 보존 검사 대상입니다. 각 준비 턴의 실제 답변·provenance를 기준으로 확인하고 `CaseResult.setup_save_assessments`에 0부터 시작하는 턴 인덱스별 결과를 남깁니다. 최종 질문의 저장 기대값과는 별개로 사례 후·실행 종료 때 다시 확인하며, 확인 누락·불일치·검증 불가는 해당 사례와 `save_outcome_contract` gate를 실패시킵니다. 마지막 질문의 저장만 성공했다고 앞선 저장 손실을 가리지 않습니다.
+
+실패·검증 불가는 composite나 judge 만점으로 상쇄되지 않습니다. 사례의 `release_pass`와 run의 `save_outcome_contract` gate가 같은 결과를 사용하며, `metrics.save_contract_failures`가 0이어야 이 gate를 통과합니다. 이 gate는 `required_success`·`expected_failure` 및 준비 턴의 성공 저장에 `phase=run_end` 확인 근거도 요구하므로, 파일을 다시 읽지 않는 오프라인 summary는 사례 직후의 성공 결과만으로 release를 통과시키지 않습니다. 구형 receipt와 과거 결과를 새 verified 계약으로 자동 승격하지 않습니다.
 
 ### 4.1 참조 연결과 의미적 지지의 구분
 
@@ -248,7 +270,7 @@ run 집계의 `release_pass_rate` 분모는 실행 대상으로 확정한 전체
 | `checks.reference_status` | 런타임의 참조 연결 결과. `resolved`는 의미적 정확성 판정이 아님 |
 | `checks.support_status` | `not_evaluated`, `exact_match`, `unsupported` 개수를 별도 집계. `not_evaluated`를 자동으로 0점 처리하지 않음 |
 | LLM judge의 groundedness | 실제 표시 본문과 연결된 근거가 설명·해석을 의미적으로 뒷받침하는지 평가 |
-| `actions`와 도구 실행 기록 | 저장·전송 성공 여부와 목표 도구 동작을 확인. 본문에 성공 문구가 있다는 이유로 액션 성공으로 판단하지 않음 |
+| `actions`와 도구 실행 기록 | 실행 의도·결과 진단. 저장 성공은 fixture 대상과 실제 HTTP 산출물 readback까지 일치해야 인정 |
 
 현재 검색에서 packet으로 이어지는 근거는 snapshot과 원문 element가 같고, packet의 문자 범위 또는 표 cell ID가 `observed_hits`의 선택 범위에 포함되는지 확인합니다. synthesis 예산 때문에 범위를 줄이면 새 근거 ID가 생깁니다. 최종 citation은 이렇게 검증한 실제 packet의 ID와 일치해야 하므로, 검색 원문에 있었지만 모델에 제공하지 않은 범위는 인정하지 않습니다. 페이지 bbox가 없더라도 snapshot·요소·선택 범위가 유효하면 원문 연결을 인정합니다.
 
@@ -288,7 +310,7 @@ history 리포터는 다음 조건이 모두 같은 run만 comparable run으로 
 
 같은 경로의 fixture를 덮어써도 내용이나 첨부 bytes가 달라지면 자동 비교되지 않습니다. 새 계약 정보가 일부만 있는 run은 자기 자신만 표시합니다. 계약 정보가 없는 legacy끼리는 이전 경로·사례 수 비교를 유지하지만, 새 실행과 섞지 않습니다. 과거 JSON을 읽을 때 새 계약으로 자동 승격하지 않습니다.
 
-현재 채점 계약은 `judge-state-contract-v2`이며 `summary.json`의 `audit_metrics.scoring_contract_version`에 기록합니다. 이 버전도 `evaluation_fingerprint`에 포함하므로 같은 fixture·설정이라도 이전 채점 결과와 자동 비교하지 않습니다. 실행·측정·채점 계약의 의미를 바꾸면 해당 버전도 갱신해야 합니다. 과거 summary는 당시 값 그대로 읽고 새 채점 버전을 채워 넣지 않습니다. 원격 서버의 모든 설정이나 모델 provider의 변동을 fingerprint가 자동 고정하지는 않습니다. 비교할 변경은 동일한 평가 계약·fixture와 확인된 서버 설정에서 다시 실행합니다. 현재 rule의 `reference_coverage`는 의미적 groundedness를 측정하지 않으며, 이전 스키마·rule의 기록을 새 계약의 품질 상승·하락 근거로 사용하지 않습니다.
+현재 채점 계약은 `verified-save-contract-v3`이며 `summary.json`의 `audit_metrics.scoring_contract_version`에 기록합니다. 이 버전도 `evaluation_fingerprint`에 포함하므로 같은 fixture·설정이라도 이전 채점 결과와 자동 비교하지 않습니다. 실행·측정·채점 계약의 의미를 바꾸면 해당 버전도 갱신해야 합니다. 과거 summary는 당시 값 그대로 읽고 새 채점 버전을 채워 넣지 않습니다. 원격 서버의 모든 설정이나 모델 provider의 변동을 fingerprint가 자동 고정하지는 않습니다. 비교할 변경은 동일한 평가 계약·fixture와 확인된 서버 설정에서 다시 실행합니다. 현재 rule의 `reference_coverage`는 의미적 groundedness를 측정하지 않으며, 이전 스키마·rule의 기록을 새 계약의 품질 상승·하락 근거로 사용하지 않습니다.
 
 ## 7. 운영 메모
 

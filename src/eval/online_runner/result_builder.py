@@ -7,6 +7,7 @@ from ..metric_rules import compute_rule_scores
 from ..pricing import compute_cost_usd
 from ..config_models import BenchmarkCase, BenchmarkConfig
 from ..result_models import CaseResult, JudgeSubscores, ScenarioTurnResult
+from ..save_outcomes import assess_save_outcome, assess_setup_saves
 from ..weighting import (
     compute_composite_quality_score,
     compute_rule_weighted_score,
@@ -52,10 +53,8 @@ def _build_gate_failures(
         failures.append("runtime_error")
     if response_errors:
         failures.append("response_contract_error")
-    if debug_errors:
-        failures.append("debug_error")
-    if missing_required_debug_fields:
-        failures.append("missing_debug_fields")
+    # Diagnostic strings may describe correctly handled expected failures.
+    # Malformed/missing critical debug data already becomes response_errors.
     if product_pass is False:
         failures.append("product_quality_below_floor")
     if judge_status == "disabled":
@@ -70,6 +69,8 @@ def _build_gate_failures(
         failures.append("judge_min_score_audit_failed")
     if eval_validity == "invalid" and "judge_failed" not in failures:
         failures.append("invalid_eval")
+    if eval_validity == "incomplete" and judge_status not in {"disabled", "not_run"}:
+        failures.append("incomplete_eval")
     return failures
 
 
@@ -172,6 +173,16 @@ def build_case_result(
         slack_delivery_required=slack_delivery_required,
         actions=parsed_response.actions,
     )
+    save_assessment = assess_save_outcome(
+        case=case, response=response, actions=parsed_response.actions,
+        called_tools=parsed_response.tool_calls, prior_turns=prior_turns or [],
+        session_id=session_id, endpoint=endpoint_url, timeout=config.request_timeout_seconds,
+        provenance=parsed_response.answer_provenance,
+    )
+    setup_save_assessments = assess_setup_saves(
+        turns=prior_turns or [], session_id=session_id, endpoint=endpoint_url, timeout=config.request_timeout_seconds,
+    )
+    save_assessments = [save_assessment, *setup_save_assessments.values()]
 
     judge_errors: list[str] = []
     judge_audit_failures: list[str] = []
@@ -301,6 +312,7 @@ def build_case_result(
         slack_delivery_required=slack_delivery_required,
         slack_delivery_status=slack_delivery_status,
         evidence_scope=evidence_scope,
+        save_outcome_verified=(save_assessment.outcome == "required_success" and save_assessment.passed is True),
     )
     rule_weighted = compute_rule_weighted_score(rule_scores, effective_weights)
 
@@ -327,24 +339,27 @@ def build_case_result(
     else:
         eval_validity = "valid"
 
-    release_pass = bool(
-        eval_validity == "valid"
-        and product_pass is True
-        and judge_pass is True
-        and not runtime_errors
-        and not response_errors
-    )
+    if any(item.status == "unverifiable" for item in save_assessments) and eval_validity == "valid":
+        eval_validity = "incomplete"
+    quality_pass = product_pass
+    if any(item.passed is False for item in save_assessments):
+        product_pass = False
     gate_failures = _build_gate_failures(
         runtime_errors=runtime_errors,
         response_errors=response_errors,
         debug_errors=parsed_response.debug_errors,
         missing_required_debug_fields=parsed_response.missing_required_debug_fields,
-        product_pass=product_pass,
+        product_pass=quality_pass,
         judge_pass=judge_pass,
         judge_status=judge_status,
         judge_status_reason=judge_status_reason,
         eval_validity=eval_validity,
         judge_audit_failures=judge_audit_failures,
+    )
+    gate_failures = list(dict.fromkeys([*gate_failures, *(code for item in save_assessments for code in item.failure_codes)]))
+    release_pass = bool(
+        eval_validity == "valid" and product_pass is True and judge_pass is True
+        and not gate_failures
     )
     cost = compute_cost_usd(
         token_usage=parsed_response.token_usage,
@@ -425,6 +440,8 @@ def build_case_result(
         unsupported_unit_count=unsupported_unit_count,
         synthesis_mode=parsed_response.synthesis_mode,
         gate_failures=gate_failures,
+        save_assessment=save_assessment,
+        setup_save_assessments=setup_save_assessments,
         composite_quality_score=composite_quality_score,
         product_pass=product_pass,
         judge_pass=judge_pass,

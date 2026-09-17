@@ -39,6 +39,10 @@ class SummaryStats(BaseModel):
     product_pass_rate: float = 0.0
     judge_pass_rate: float | None = None
     release_pass_rate: float = 0.0
+    save_contract_cases: int = 0
+    save_contract_failures: int = 0
+    save_verified_cases: int = 0
+    save_unverifiable_cases: int = 0
     tool_precision: float
     tool_recall: float
     citation_compliance: float

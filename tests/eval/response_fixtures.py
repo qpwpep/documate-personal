@@ -1,10 +1,13 @@
 import io
 import json
 from collections.abc import Iterable
+from pathlib import Path
 
 import requests
 
 from src.core.answer_schema import AnswerDocument, AnswerResponse, finalize_answer, text_document
+from src.core.answer_schema import export_answer_text
+from src.core.save_contract import SaveOperation
 from src.core.contracts.provenance import AnswerProvenance, AnswerSource
 from src.core.documents import DocumentElement, SourceAnchor, build_snapshot
 from src.core.evidence import RetrievalScore, SearchHit, build_evidence
@@ -54,12 +57,52 @@ def plain_response(text: str | list[str]) -> dict:
     return finalize_answer(document, []).model_dump(mode="json")
 
 
-def answer_provenance(response, *, source=None, body_kind="compose", evidence_packet=None) -> dict:
+def saved_receipt(response: dict, root: Path, *, session_id: str, operation_id: str = "save-operation",
+                  target_kind: str = "compose", source_hash: str | None = None) -> dict:
+    """Commit a real artifact; only HTTP and model boundaries are faked by callers."""
+    from src.infra.saved_artifacts import save_artifact
+
+    answer = AnswerResponse.model_validate(response)
+    text = export_answer_text(answer, include_sources=True)
+    operation = SaveOperation.for_text(
+        text, operation_id=operation_id, session_id=session_id, request_id="contract-request",
+        contract_revision=1, target_kind=target_kind, source_hash=source_hash or answer.content_hash,
+        answer_hash=answer.content_hash,
+    )
+    manifest, path = save_artifact(root, text, operation, ttl_seconds=86400)
+    return {"kind": "save_text", "status": "success", "file_path": str(path),
+            "operation": operation.model_dump(mode="json"), "artifact": manifest.artifact.model_dump(mode="json"),
+            "verification": "verified"}
+
+
+def artifact_http_response(root: Path, filename: str) -> requests.Response:
+    """Represent the real storage reader's output at an external HTTP boundary."""
+    from src.infra.saved_artifacts import ArtifactError, read_saved_artifact
+
+    response = requests.Response()
+    try:
+        manifest, payload = read_saved_artifact(root, filename)
+    except ArtifactError as exc:
+        response.status_code = {"manifest_missing": 404, "artifact_missing": 404,
+                                "artifact_expired": 410, "artifact_mismatch": 409}.get(exc.code, 503)
+        response._content = json.dumps({"detail": {"code": exc.code, "message": str(exc)}}).encode()
+    else:
+        response.status_code = 200
+        response._content = payload
+        response.headers["X-Save-Binding-SHA256"] = manifest.operation.binding_sha256
+        response.headers["X-Artifact-Id"] = manifest.artifact.artifact_id
+    return response
+
+
+def answer_provenance(response, *, source=None, body_kind="compose", evidence_packet=None,
+                      request_id=None, contract_revision=None, save_operation_binding_sha256=None) -> dict:
     """Explicitly declare the construction inputs of a valid HTTP fixture answer."""
     answer = response if isinstance(response, AnswerResponse) else AnswerResponse.model_validate(response)
     parent = AnswerSource.model_validate(source) if source is not None else None
     return AnswerProvenance(
         body_kind=body_kind, response_hash=answer.content_hash, source=parent,
+        request_id=request_id, contract_revision=contract_revision,
+        save_operation_binding_sha256=save_operation_binding_sha256,
         evidence_packet=([citation.evidence for citation in answer.citations]
                          if evidence_packet is None else evidence_packet),
     ).model_dump(mode="json")

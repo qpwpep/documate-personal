@@ -305,6 +305,11 @@ def run_online_benchmark(
         cases = cases[:requested_limit]
     if not cases:
         raise ValueError("No benchmark cases found.")
+    if track == "release":
+        missing_save_contracts = [case.case_id for case in cases
+                                  if "save_text" in case.expected_tools and case.save_expectation is None]
+        if missing_save_contracts:
+            raise ValueError("Release save cases require save_expectation: " + ", ".join(missing_save_contracts))
     _validate_live_slack_targets(cases=cases, live_slack=live_slack)
 
     run_id = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
@@ -334,6 +339,8 @@ def run_online_benchmark(
             f"status={result.http_status} latency={result.latency_ms_e2e}ms"
         )
 
+    from ..save_outcomes import revalidate_saved_artifacts
+    revalidate_saved_artifacts(cases=cases, results=results, timeout=config.request_timeout_seconds)
     summary = build_summary(
         run_id=run_id,
         endpoint=endpoint,
