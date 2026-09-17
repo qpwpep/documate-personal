@@ -19,7 +19,7 @@ from src.runtime.nodes.actions import make_action_postprocess_node
 from .test_actions_nodes import _contract
 
 
-def test_save_and_slack_retain_source_selection_and_limitations_without_mutating_answer(tmp_path: Path):
+def test_save_and_slack_retain_source_selection_and_limitations_without_mutating_answer(tmp_path: Path, monkeypatch):
     """저장·전송은 원문 위치와 예제의 제한을 보존하고 확정된 답변을 바꾸지 않는다."""
     original_file = tmp_path / "settings.py"
     original_file.write_text("# Config\nRETRIES = 3\n", encoding="utf-8")
@@ -51,22 +51,18 @@ def test_save_and_slack_retain_source_selection_and_limitations_without_mutating
                                   request_id=contract.request_id, contract_revision=contract.revision),
         "messages": [HumanMessage(content=request)],
     }
-    destination = tmp_path / "answer.txt"
+    monkeypatch.setattr("src.infra.tools.save_text.get_save_text_output_dir", lambda: tmp_path)
     slack_messages = []
-
-    def save_text(content: str, filename_prefix: str):
-        destination.write_text(content, encoding="utf-8")
-        return {"status": "success", "file_path": str(destination)}
 
     def slack_notify(**message):
         slack_messages.append(message)
         return {"status": "ok", "channel_id": "C123"}
 
     updates = make_action_postprocess_node(
-        save_text, slack_notify, False, has_default_slack_destination=True,
+        build_save_text_tool(), slack_notify, False, has_default_slack_destination=True,
     )(state)
 
-    saved = destination.read_text(encoding="utf-8")
+    saved = Path(updates["response"].result.actions[0].file_path).read_text(encoding="utf-8-sig")
     assert [message["text"] for message in slack_messages] == [saved]
     assert saved == export_answer_text(answer, include_sources=True)
     assert snapshot.snapshot_id in saved

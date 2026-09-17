@@ -8,6 +8,7 @@ from src.core.contracts import GraphState, PlannerState, ResponseState, RuntimeS
 from src.core.contracts.graph_state import PendingAction
 from src.core.request_contracts import RequestContract
 from src.runtime.nodes.actions import make_action_postprocess_node
+from src.infra.tools.save_text import build_save_text_tool
 
 
 def _contract(*, save="not_requested", slack="not_requested", **updates):

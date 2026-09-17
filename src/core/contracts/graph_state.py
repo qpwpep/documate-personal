@@ -7,7 +7,8 @@ from langgraph.graph import add_messages
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from typing_extensions import TypedDict
 
-from src.core.answer_schema import AnswerResponse
+from src.core.answer_schema import ActionReceipt, AnswerResponse
+from src.core.save_contract import SaveOperation
 from src.core.evidence import EvidenceRef
 from src.core.planner_schema import PlannerOutput
 from src.core.request_contracts import RequestContract, UserTurnSnapshot
@@ -41,9 +42,12 @@ class PendingAction(BaseModel):
     body_prepared: bool = False
     phase: Literal["awaiting_input", "awaiting_body", "awaiting_destination", "awaiting_delivery"] = "awaiting_destination"
     completed_actions: tuple[Literal["save_text", "slack_notify"], ...] = ()
+    save_operation: SaveOperation | None = None
+    save_receipt: ActionReceipt | None = None
 
 
 class RuntimeState(BaseModel):
+    session_id: str = ""
     user_input: str = ""
     current_turn_id: str = ""
     user_turns: tuple[UserTurnSnapshot, ...] = ()
@@ -85,6 +89,7 @@ class ResponseState(BaseModel):
     kind: Literal["draft", "answer", "clarification", "failure"] = "draft"
     request_id: str | None = None
     contract_revision: int = 0
+    save_operation_binding_sha256: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
     body_kind: BodyKind | None = None
     evidence_source: AnswerSource | None = None
 
