@@ -16,6 +16,7 @@ from src.infra.runtime_paths import (
     get_uploads_dir,
 )
 from src.infra.settings import AppSettings
+from src.infra.saved_artifacts import cleanup_saved_artifacts
 from src.core.uploads import validate_session_id
 from src.core.upload_formats import ALL_UPLOAD_SUFFIXES
 from src.app.web.session_store import InMemorySessionStore
@@ -155,50 +156,16 @@ class RuntimeCleaner:
         return stats
 
     def cleanup_expired_generated_files(self, *, now_epoch: float, ttl_seconds: int) -> dict[str, int]:
-        output_dir = get_save_text_output_dir()
-        stats = {
-            "scanned": 0,
-            "deleted": 0,
-            "errors": 0,
-        }
-
-        if not output_dir.exists():
-            return stats
-
-        try:
-            txt_files = list(output_dir.glob("*.txt"))
-        except OSError as exc:
-            log_event(logger, logging.WARNING, "generated_file_scan_error", root=output_dir, error=exc)
-            stats["errors"] += 1
-            return stats
-
-        for txt_file in txt_files:
-            if not txt_file.is_file():
-                continue
-
-            stats["scanned"] += 1
-            try:
-                file_mtime = txt_file.stat().st_mtime
-            except OSError as exc:
-                log_event(logger, logging.WARNING, "generated_file_stat_error", path=txt_file, error=exc)
-                stats["errors"] += 1
-                continue
-
-            if (now_epoch - file_mtime) <= ttl_seconds:
-                continue
-
-            try:
-                txt_file.unlink()
-                stats["deleted"] += 1
-            except Exception as exc:
-                log_event(logger, logging.WARNING, "generated_file_cleanup_error", path=txt_file, error=exc)
-                stats["errors"] += 1
-
-        return stats
+        return cleanup_saved_artifacts(
+            get_save_text_output_dir(), now_epoch=now_epoch, ttl_seconds=ttl_seconds,
+        )
 
     @staticmethod
     def file_cleanup_event_log_level(*, force: bool, result: dict[str, int | bool]) -> int:
-        deleted_count = int(result["upload_dirs_deleted"]) + int(result["generated_files_deleted"])
+        deleted_count = (
+            int(result["upload_dirs_deleted"]) + int(result["generated_files_deleted"])
+            + int(result["staging_files_deleted"])
+        )
         error_count = int(result["errors"])
         if force or deleted_count > 0 or error_count > 0:
             return logging.INFO
@@ -213,6 +180,9 @@ class RuntimeCleaner:
             "skipped_active_dirs": 0,
             "generated_files_scanned": 0,
             "generated_files_deleted": 0,
+            "staging_files_scanned": 0,
+            "staging_files_deleted": 0,
+            "generated_store_busy": False,
             "errors": 0,
         }
 
@@ -248,6 +218,9 @@ class RuntimeCleaner:
                         "skipped_active_dirs": upload_stats["skipped_active_dirs"],
                         "generated_files_scanned": generated_stats["scanned"],
                         "generated_files_deleted": generated_stats["deleted"],
+                        "staging_files_scanned": generated_stats["staging_scanned"],
+                        "staging_files_deleted": generated_stats["staging_deleted"],
+                        "generated_store_busy": bool(generated_stats["busy"]),
                         "errors": errors,
                     }
         except Exception as exc:
@@ -265,6 +238,9 @@ class RuntimeCleaner:
             skipped_active_dirs=result["skipped_active_dirs"],
             generated_files_scanned=result["generated_files_scanned"],
             generated_files_deleted=result["generated_files_deleted"],
+            staging_files_scanned=result["staging_files_scanned"],
+            staging_files_deleted=result["staging_files_deleted"],
+            generated_store_busy=result["generated_store_busy"],
             errors=result["errors"],
         )
         return result
