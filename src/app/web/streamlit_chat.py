@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable
-from pathlib import Path
+from datetime import datetime, timezone
 from urllib.parse import quote
 
 import streamlit as st
@@ -93,11 +93,20 @@ def render_answer_response(response: AnswerResponse, fastapi_url: str) -> None:
             st.error(f"{label} 실패: {action.error or action.message or '처리하지 못했습니다.'}")
         elif action.status == "skipped":
             st.info(f"{label} 보류: {action.message or '실행 조건을 확인해 주세요.'}")
+        elif action.status == "unknown":
+            st.warning(f"{label} 결과를 확인할 수 없습니다: {action.error or action.message or '완료 여부를 다시 확인해 주세요.'}")
+        elif action.kind == "save_text" and (action.verification != "verified" or action.artifact is None):
+            st.warning("저장 결과를 검증할 수 없습니다. 검증된 파일 정보가 없는 이전 기록입니다.")
         else:
             detail = action.message or action.target or ""
             st.success(f"{label} 완료" + (f": {detail}" if detail else ""))
-            if action.kind == "save_text" and action.file_path:
-                filename = Path(action.file_path).name
+            if action.kind == "save_text" and action.artifact is not None:
+                expires = datetime.fromtimestamp(action.artifact.expires_at, tz=timezone.utc).astimezone()
+                st.caption(f"다운로드 가능 기한: {expires.strftime('%Y-%m-%d %H:%M %Z')}")
+                if expires <= datetime.now(tz=timezone.utc):
+                    st.warning("저장 파일의 보관 기한이 지났습니다.")
+                    continue
+                filename = action.artifact.filename
                 url = f"{fastapi_url}/download/{quote(filename, safe='')}"
                 st.markdown(f"[파일 다운로드 ({filename})]({url})")
 
