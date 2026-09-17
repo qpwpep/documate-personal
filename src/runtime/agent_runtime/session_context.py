@@ -38,6 +38,7 @@ def _clone_messages(messages: Iterable[Any]) -> tuple[Any, ...]:
 
 class SessionContext:
     def __init__(self) -> None:
+        self.session_id = uuid4().hex
         self._conversation_memory = ConversationMemorySnapshot()
         self.session_metadata: SessionMetadata = parse_session_metadata(None)
         self.upload_retriever_handle: UploadedRetrieverHandle | None = None

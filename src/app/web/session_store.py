@@ -180,6 +180,7 @@ class InMemorySessionStore:
             elif not is_session_reset_command(user_input):
                 uploads = service.sync_legacy_locked(session_id, agent_manager, upload_file_path)
             agent_manager.set_session_metadata(session_metadata)
+            agent_manager._ensure_session().session_id = session_id
             agent_answer = agent_manager.run_agent_flow(
                 user_input, progress_emitter=progress_emitter, uploads=uploads,
             )
