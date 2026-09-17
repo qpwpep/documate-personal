@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import json
 import logging
+from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 
 from src.infra.logging_utils import log_event
 from src.infra.runtime_paths import get_save_text_output_dir
+from src.infra.saved_artifacts import ArtifactError, read_saved_artifact
 from src.app.web.cleanup import resolve_download_path
 from src.app.web.schemas import AGENT_STREAM_EVENT_SCHEMAS, AgentRequest, AgentStreamEvent
 from src.core.uploads import UploadManifest, UploadSyncRequest, UploadSyncResponse, validate_session_id
@@ -98,15 +100,34 @@ async def run_agent_stream_api(
 
 
 @router.get("/download/{filename}")
-async def download_file(filename: str):
-    file_path = resolve_download_path(get_save_text_output_dir(), filename)
+def download_file(filename: str):
+    output_dir = get_save_text_output_dir()
+    file_path = resolve_download_path(output_dir, filename)
+    if file_path.parent != output_dir.resolve():
+        raise HTTPException(status_code=403, detail="Forbidden: Invalid file path")
+    if file_path.suffix != ".txt":
+        raise HTTPException(status_code=404, detail={"code": "manifest_missing", "message": "Saved artifact not found"})
+    try:
+        manifest, payload = read_saved_artifact(output_dir, filename)
+    except ArtifactError as exc:
+        status = {
+            "manifest_missing": 404,
+            "artifact_missing": 404,
+            "artifact_expired": 410,
+            "artifact_mismatch": 409,
+        }.get(exc.code, 503)
+        log_event(logger, logging.WARNING, "download_artifact_unavailable", filename=filename, code=exc.code)
+        raise HTTPException(status_code=status, detail={"code": exc.code, "message": str(exc)}) from exc
 
-    if not file_path.exists():
-        log_event(logger, logging.ERROR, "download_file_missing", path=file_path)
-        raise HTTPException(status_code=404, detail=f"File not found: {filename}")
-
-    return FileResponse(
-        path=str(file_path),
-        filename=filename,
+    # Serve the bytes that were verified, rather than reopening a mutable path.
+    return Response(
+        content=payload,
         media_type="text/plain",
+        headers={
+            "Content-Disposition": f"attachment; filename*=utf-8''{quote(manifest.artifact.filename, safe='')}",
+            "ETag": f'"{manifest.artifact.sha256}"',
+            "X-Artifact-Id": manifest.artifact.artifact_id,
+            "X-Save-Binding-SHA256": manifest.operation.binding_sha256,
+            "Cache-Control": "no-store",
+        },
     )

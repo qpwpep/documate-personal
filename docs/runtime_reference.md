@@ -538,15 +538,18 @@ post-synthesis 검사에서 참조·내용·requirement coverage 문제가 있�
 
 ### 5.3 `GET /download/{filename}`
 
-- `save_text`가 만든 텍스트 파일을 다운로드합니다.
-- 경로 순회와 절대 경로는 차단됩니다.
-- 파일이 없으면 `404 Not Found`를 반환합니다.
+- manifest에 연결되고 보관 기한 안에 있는 TXT의 실제 bytes를 다시 확인한 뒤, 확인한 bytes 자체를 내려줍니다. 파일을 검사한 후 다른 경로 읽기로 전송하지 않습니다.
+- 경로 순회와 절대 경로는 차단되며 manifest JSON이나 staging 파일은 다운로드 대상이 아닙니다.
+- manifest 또는 payload가 없으면 `404`, 내용·identity 불일치는 `409`, 만료는 `410`, 파일을 확인할 수 없으면 `503`입니다. 오류 본문의 `detail`은 `code`, `message`를 포함합니다.
+- 성공 응답에는 `X-Save-Binding-SHA256`(전체 operation의 canonical hash), `X-Artifact-Id`, `ETag`(payload SHA-256)를 포함합니다. 평가기는 receipt의 identity와 이 헤더, 실제 응답 bytes를 함께 대조합니다.
 
 ### 5.4 Streamlit 표시와 export
 
 Streamlit은 `AnswerResponse` 전체를 채팅 기록에 보존합니다. 본문 옆의 번호별 근거 popover에서 당시 발췌, 전체 원문 요소, 제목 경로·원본 줄·cell·페이지 위치와 내용 hash를 확인할 수 있습니다. 표는 병합 셀과 선택 셀을 보존해 표시합니다. 페이지 bbox는 좌표 메타데이터로 보여주며 PDF 페이지 이미지 뷰어는 아직 없습니다.
 
 해석·생성 예시·원문 발췌는 표현 성격을 표시하고, “근거 확인 범위”는 출처 연결 확인과 의미적 지지 평가를 구분합니다. 저장·Slack 전송은 같은 본문의 공통 text exporter를 사용해 출처·원문 위치·참고 및 제한을 함께 보존하며, 실행 결과는 본문과 별도 UI에 표시합니다.
+
+저장 성공 표시는 검증된 artifact가 있는 receipt에 한정하고 다운로드 기한을 함께 보여줍니다. 구형 성공 receipt나 확인 불가 결과는 경고로 표시하며 다운로드 링크를 만들지 않습니다. 만료된 파일도 답변 기록은 유지하지만 다운로드 링크를 표시하지 않습니다.
 
 ## 6. 프로젝트 구조
 

@@ -190,6 +190,55 @@ render_chat_history([{"role":"assistant", "response":response}], "http://localho
     assert any("채널을 찾을 수 없습니다" in item.value for item in app.error)
 
 
+def _saved_artifact_app(*, status="success", verification="verified", expires_at=4102444800):
+    return AppTest.from_string(f'''
+from src.app.web.streamlit_chat import render_chat_history
+from src.core.answer_schema import ActionReceipt, finalize_answer, text_document
+from src.core.save_contract import SaveArtifact, SaveOperation
+
+operation = SaveOperation.for_text(
+    "본문입니다", operation_id="save-ui", session_id="session-ui", request_id="request-ui",
+    contract_revision=1, target_kind="compose", source_hash="a" * 64, answer_hash="b" * 64,
+)
+artifact = SaveArtifact(
+    artifact_id="c" * 64, filename="response_verified.txt", sha256=operation.payload_sha256,
+    byte_count=operation.byte_count, created_at=1, expires_at={expires_at},
+)
+receipt = ActionReceipt(
+    kind="save_text", status="{status}", file_path="output/response_verified.txt",
+    verification="{verification}", operation=operation, artifact=artifact,
+)
+response = finalize_answer(text_document("본문입니다"), [], actions=[receipt])
+render_chat_history([{{"role":"assistant", "response":response}}], "http://localhost:8000")
+''').run()
+
+
+def test_verified_save_shows_download_and_retention_deadline():
+    app = _saved_artifact_app()
+
+    assert not app.exception
+    assert any("파일 저장 완료" in item.value for item in app.success)
+    assert any("/download/response_verified.txt" in item.value for item in app.markdown)
+    assert any("다운로드 가능 기한" in item.value for item in app.caption)
+
+
+def test_unknown_save_never_displays_success_or_a_download_link():
+    app = _saved_artifact_app(status="unknown", verification="unverifiable")
+
+    assert not app.exception
+    assert not app.success
+    assert [item.value for item in app.markdown] == ["본문입니다"]
+    assert any("결과를 확인할 수 없습니다" in item.value for item in app.warning)
+
+
+def test_expired_saved_artifact_keeps_history_but_no_download_link():
+    app = _saved_artifact_app(expires_at=2)
+
+    assert not app.exception
+    assert [item.value for item in app.markdown] == ["본문입니다"]
+    assert any("보관 기한이 지났습니다" in item.value for item in app.warning)
+
+
 def test_numbered_citations_open_the_matching_snapshot_and_explain_check_limits():
     """The source control at each block exposes its source and the actual check scope."""
     app = AppTest.from_string('''
@@ -206,7 +255,8 @@ render_chat_history([{"role":"assistant", "response":cited_response()}], "http:/
         assert any("7–8행" in caption.value for caption in item.caption)
         assert item.expander[0].label == "당시 원문과 위치 보기"
     assert any("별도로 평가하지 않았습니다" in item.value for item in app.caption)
-    assert any("파일 다운로드" in item.value and "/download/result.txt" in item.value for item in app.markdown)
+    assert not any("파일 다운로드" in item.value for item in app.markdown)
+    assert any("저장 결과를 검증할 수 없습니다" in item.value for item in app.warning)
 
 
 def test_missing_reference_is_visible_next_to_affected_content():
