@@ -32,6 +32,13 @@ _AMBIGUITY_VARIANTS = [
     "추가 지시: 질문의 범위가 불명확하면 범위를 좁히는 확인 질문을 먼저 제안해.",
     "추가 지시: 용어 정의가 모호하면 가정/제약을 분리해 답해.",
 ]
+_SAVE_COPY_VARIANTS = [
+    "파일에는 직전 답변의 본문과 출처를 그대로 담아줘.",
+    "저장하는 내용은 바꾸지 말고 기존 저장 파일도 보존해줘.",
+    "직전 답변을 손대지 않은 텍스트 파일로 저장해줘.",
+    "본문과 출처를 고치지 않은 별도의 파일로 만들어줘.",
+    "다운로드할 파일의 내용은 직전 답변과 같아야 해.",
+]
 
 
 def _build_seed_variant_query(category: str, base_query: str, variant_index: int) -> str:
@@ -151,6 +158,14 @@ def _build_cell_cases(
             variant_index=index,
             make_variant=make_variant,
         )
+        expectation = template.save_expectation
+        if (expectation is not None and expectation.outcome == "required_success"
+                and expectation.target.kind == "setup_answer" and scenario != "regression"
+                and (scenario != "seed_mutation" or make_variant)):
+            # A frozen copy oracle cannot coexist with generated instructions
+            # to summarize, remove sources, or replace the requested body.
+            suffix = _SAVE_COPY_VARIANTS[(index - 1) % len(_SAVE_COPY_VARIANTS)]
+            query = f"{template.query}\n{suffix}"
         created.append(
             _clone_case(
                 base_case=template,
