@@ -212,3 +212,56 @@ def _save_artifact_locked(
         for staged in (staged_payload, staged_manifest):
             if staged is not None:
                 _remove_staging(staged)
+
+
+def cleanup_saved_artifacts(output_dir: Path, *, now_epoch: float, ttl_seconds: int) -> dict[str, int]:
+    """Reclaim unowned staging and expired payloads without removing tombstones."""
+    stats = {"scanned": 0, "deleted": 0, "errors": 0, "staging_scanned": 0, "staging_deleted": 0, "busy": 0}
+    root = Path(output_dir).resolve()
+    if not root.exists():
+        return stats
+    try:
+        with artifact_store_lock(root, blocking=False) as acquired:
+            if not acquired:
+                stats["busy"] = 1
+                return stats
+            for path in root.iterdir():
+                if _STAGING_NAME.fullmatch(path.name):
+                    # Owning the store lock proves no writer can still use this
+                    # private name. Its mtime and any public hard link are irrelevant.
+                    if path.is_symlink() or not path.is_file():
+                        continue
+                    stats["staging_scanned"] += 1
+                    try:
+                        path.unlink(missing_ok=True)
+                        stats["staging_deleted"] += 1
+                    except OSError as exc:
+                        stats["errors"] += 1
+                        log_event(logger, logging.WARNING, "artifact_staging_cleanup_error", path=path, error=exc)
+                elif path.match("*.txt") and path.is_file():
+                    stats["scanned"] += 1
+                    try:
+                        sidecar = manifest_path_for(path)
+                        if (path.is_symlink() or sidecar.is_symlink()
+                                or path.resolve().parent != root or sidecar.resolve().parent != root):
+                            raise ValueError("Generated artifact paths must stay inside their storage directory")
+                        if sidecar.exists():
+                            manifest = SaveManifest.model_validate_json(sidecar.read_bytes())
+                            if manifest.artifact.filename != path.name:
+                                raise ValueError("Saved artifact filename differs from its retention manifest")
+                            expired = now_epoch >= manifest.artifact.expires_at
+                        else:
+                            # Preserve the existing mtime policy for legacy outputs.
+                            expired = (now_epoch - path.stat().st_mtime) > ttl_seconds
+                        if expired:
+                            path.unlink()
+                            stats["deleted"] += 1
+                            # The immutable manifest stays: retries may not recreate
+                            # expired payloads or extend their original retention.
+                    except (OSError, ValueError) as exc:
+                        stats["errors"] += 1
+                        log_event(logger, logging.WARNING, "generated_file_cleanup_error", path=path, error=exc)
+    except OSError as exc:
+        stats["errors"] += 1
+        log_event(logger, logging.WARNING, "generated_file_scan_error", root=root, error=exc)
+    return stats
