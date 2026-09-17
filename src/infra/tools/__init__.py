@@ -22,7 +22,7 @@ class ToolRegistry:
 def build_tool_registry(settings: AppSettings) -> ToolRegistry:
     tavily_search_tool = build_docs_search_tool(settings)
     upload_search_tool = build_upload_search_tool()
-    save_text_tool = build_save_text_tool()
+    save_text_tool = build_save_text_tool(ttl_seconds=settings.generated_file_ttl_seconds)
     slack_notify_tool = build_slack_notify_tool(settings)
     return ToolRegistry(
         tavily_search_tool=tavily_search_tool,

@@ -293,7 +293,7 @@ Docling 어댑터는 제목 계층·표 셀·병합·페이지·위치를 기존
 
 ### 3.4 생성 파일과 정리 정책
 
-- `save_text` 결과: `output/save_text/*.txt`
+- `save_text` 결과: `output/save_text/response_<artifact_id>.txt`와 `<filename>.json` operation manifest
 - 다운로드 엔드포인트: `GET /download/{filename}`
 - 세션 업로드 정리: `SESSION_TTL_SECONDS`
 - 생성 파일 정리: `GENERATED_FILE_TTL_SECONDS`
