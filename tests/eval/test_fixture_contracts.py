@@ -8,6 +8,16 @@ from src.eval.io import load_cases_jsonl
 
 
 class FixtureContractsTest(unittest.TestCase):
+    def test_save_fixtures_declare_an_independent_target_and_required_outcome(self) -> None:
+        for path in Path("data/benchmarks/fixtures").glob("cases.*.jsonl"):
+            for case in load_cases_jsonl(path):
+                if "save_text" not in case.expected_tools:
+                    continue
+                self.assertIsNotNone(case.save_expectation, msg=f"{path}: {case.case_id}")
+                self.assertEqual(case.save_expectation.outcome, "required_success")
+                self.assertEqual(case.save_expectation.target.kind, "setup_answer")
+                self.assertEqual(case.save_expectation.target.setup_turn_index, len(case.setup_turns) - 1)
+
     def test_upload_fixture_cases_expect_upload_search(self) -> None:
         paths = [
             Path("data/benchmarks/fixtures/cases.seed.jsonl"),

@@ -46,6 +46,37 @@ class CaseWeightOverride(BaseModel):
         return {k: float(v) for k, v in self.model_dump(exclude_none=True).items()}
 
 
+class SaveTarget(BaseModel):
+    """The benchmark's oracle, chosen before observing an agent's response."""
+
+    kind: Literal["final_answer", "setup_answer"]
+    setup_turn_index: int | None = Field(default=None, ge=0)
+
+    @model_validator(mode="after")
+    def validate_index(self) -> "SaveTarget":
+        if (self.kind == "setup_answer") != (self.setup_turn_index is not None):
+            raise ValueError("setup_answer requires setup_turn_index; final_answer must omit it")
+        return self
+
+
+class SaveExpectation(BaseModel):
+    outcome: Literal["required_success", "expected_failure", "must_not_execute"]
+    target: SaveTarget | None = None
+    error_codes: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_expectation(self) -> "SaveExpectation":
+        if self.outcome != "must_not_execute" and self.target is None:
+            raise ValueError("a save expectation requires an explicit target")
+        if self.outcome == "must_not_execute" and self.target is not None:
+            raise ValueError("must_not_execute cannot declare a saved target")
+        if (self.outcome == "expected_failure") != bool(self.error_codes):
+            raise ValueError("only expected_failure requires nonempty error_codes")
+        if any(not code.strip() for code in self.error_codes):
+            raise ValueError("save error codes must be nonblank")
+        return self
+
+
 class BenchmarkCase(BaseModel):
     case_id: str
     category: CaseCategory
@@ -66,11 +97,15 @@ class BenchmarkCase(BaseModel):
     judge_rubric: str = ""
     judge_min_score: float | None = Field(default=None, ge=0.0, le=1.0)
     weight_override: CaseWeightOverride | None = None
+    save_expectation: SaveExpectation | None = None
 
     @model_validator(mode="after")
     def validate_upload_declarations(self) -> "BenchmarkCase":
         if self.upload_fixture and self.upload_fixtures:
             raise ValueError("Use upload_fixtures or legacy upload_fixture, not both")
+        target = self.save_expectation.target if self.save_expectation else None
+        if target is not None and target.kind == "setup_answer" and target.setup_turn_index >= len(self.setup_turns):
+            raise ValueError("save target setup_turn_index must select a declared setup turn")
         return self
 
     @property

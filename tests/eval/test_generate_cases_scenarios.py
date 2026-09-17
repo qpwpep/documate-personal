@@ -47,6 +47,8 @@ class GenerateCasesScenarioTest(unittest.TestCase):
                 case_id="seed_tool", category="tool_action", query="방금 답변을 저장해줘.",
                 setup_turns=["첫 파일을 설명해줘.", "두 번째 파일과 비교해줘."],
                 upload_fixtures=["first.py", "second.py"], expected_tools=["save_text"],
+                save_expectation={"outcome": "required_success",
+                                  "target": {"kind": "setup_answer", "setup_turn_index": 1}},
             ),
         ]
         generated = build_generated_cases(
@@ -60,6 +62,10 @@ class GenerateCasesScenarioTest(unittest.TestCase):
         for case in action_cases:
             self.assertEqual(case.setup_turns, seed_cases[-1].setup_turns)
             self.assertEqual(case.resolved_upload_fixtures, ["first.py", "second.py"])
+            self.assertEqual(case.save_expectation, seed_cases[-1].save_expectation)
+            for conflicting_instruction in ("추정", "출처 표시 없이", "가능한 해석", "단계별", "실무 관점"):
+                self.assertNotIn(conflicting_instruction, case.query)
+        self.assertGreater(len({case.query for case in action_cases}), 1)
 
     def test_target_120_balances_category_and_scenario(self) -> None:
         seed_cases = [
