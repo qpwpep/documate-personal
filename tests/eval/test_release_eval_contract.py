@@ -18,6 +18,7 @@ import requests
 from src.core.answer_schema import AnswerDocument, AnswerResponse, finalize_answer
 from src.core.contracts.debug import DebugPayload, TokenUsage
 from src.core.evidence import RetrievalScore, SearchHit
+from src.core.save_contract import SaveOperation
 from src.eval.config_models import BenchmarkCase, BenchmarkConfig, CaseWeightOverride
 from src.eval.io import dump_jsonl
 from src.eval.judge_llm import LLMJudge
@@ -29,7 +30,9 @@ from src.eval.reporting.summary import build_summary
 from src.eval.result_models import CaseResult
 from tests.eval.response_fixtures import (
     answer_provenance,
+    artifact_http_response,
     plain_response,
+    saved_receipt,
     source_evidence,
     sse_http_response,
 )
@@ -171,6 +174,7 @@ def _copy_answer_case():
         query="직전 답변을 파일로 저장해줘",
         setup_turns=["이 파일을 설명해줘"],
         expected_tools=["save_text"],
+        save_expectation={"outcome": "required_success", "target": {"kind": "setup_answer", "setup_turn_index": 0}},
     )
 
 

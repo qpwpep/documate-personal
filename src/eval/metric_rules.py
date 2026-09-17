@@ -37,6 +37,7 @@ def score_tool_choice(
     *,
     slack_delivery_required: bool = False,
     slack_delivery_status: str = "not_applicable",
+    save_outcome_verified: bool = False,
 ) -> float:
     expected = set(case.expected_tools)
     forbidden = set(case.forbidden_tools)
@@ -49,6 +50,9 @@ def score_tool_choice(
     if expected:
         matched_expected = 0
         for tool_name in expected:
+            if tool_name == "save_text" and save_outcome_verified:
+                matched_expected += 1
+                continue
             if tool_name not in called:
                 continue
             if tool_name == "slack_notify" and slack_delivery_required:
@@ -222,21 +226,24 @@ def compute_rule_scores(
     slack_delivery_required: bool = False,
     slack_delivery_status: str = "not_applicable",
     evidence_scope: EvidenceAssessment | None = None,
+    save_outcome_verified: bool = False,
 ) -> dict[str, float]:
     response_text = export_answer_text(response) if response is not None else ""
     return {
         "answer_quality": score_answer_quality(case, response_text, observed_hits, synthesis_mode=synthesis_mode),
         "reference_coverage": score_reference_coverage(case=case, response=response, observed_hits=observed_hits, validator_reason=validator_reason, evidence_scope=evidence_scope),
         "citation_traceability": score_citation_traceability(case=case, response=response, observed_hits=observed_hits, called_tools=called_tools, evidence_scope=evidence_scope),
-        "tool_choice": score_tool_choice(case, called_tools, slack_delivery_required=slack_delivery_required, slack_delivery_status=slack_delivery_status),
+        "tool_choice": score_tool_choice(case, called_tools, slack_delivery_required=slack_delivery_required, slack_delivery_status=slack_delivery_status, save_outcome_verified=save_outcome_verified),
         "format_language": score_format_language(case=case, runtime_errors=runtime_errors, response_errors=response_errors, response_text=response_text),
     }
 
 
-def tool_confusion_counts(case: BenchmarkCase, called_tools: list[str]) -> tuple[int, int, int]:
+def tool_confusion_counts(case: BenchmarkCase, called_tools: list[str], *, save_outcome_verified: bool = False) -> tuple[int, int, int]:
     expected = set(case.expected_tools)
     forbidden = set(case.forbidden_tools)
     called = set(called_tools)
+    if save_outcome_verified and "save_text" in expected:
+        called.add("save_text")
 
     tp = len(expected.intersection(called))
     fn = len(expected.difference(called))

@@ -23,7 +23,7 @@ EXECUTION_CONTRACT_VERSION = "shared-client-scenario-v1"
 MEASUREMENT_CONTRACT_VERSION = "attachment-question-scenario-v1"
 # v2: judge outcome is a hard release gate; missing scores no longer
 # renormalize into a composite; every category has explicit judge minimums.
-SCORING_CONTRACT_VERSION = "judge-state-contract-v2"
+SCORING_CONTRACT_VERSION = "verified-save-contract-v3"
 
 
 def _fingerprint(value: Any) -> str:
@@ -222,6 +222,30 @@ def build_summary(
     missing_result_cases = len(planned_ids.difference(result_ids))
     unexpected_result_cases = len(set(result_ids).difference(planned_ids))
     duplicate_result_cases = len(result_ids) - len(set(result_ids))
+    save_case_ids = {case.case_id for case in cases
+                     if case.save_expectation is not None or "save_text" in case.expected_tools}
+    results_by_id = {result.case_id: result for result in results}
+    save_failure_ids = {
+        case_id for case_id in save_case_ids
+        if case_id not in results_by_id or results_by_id[case_id].save_assessment is None
+        or results_by_id[case_id].save_assessment.passed is not True
+        or (case_map[case_id].save_expectation is not None
+            and case_map[case_id].save_expectation.outcome != "must_not_execute"
+            and results_by_id[case_id].save_assessment.phase != "run_end")
+    }
+    save_failure_ids.update(result.case_id for result in results
+                            if result.save_assessment is not None and result.save_assessment.passed is False)
+    for result in results:
+        case = case_map.get(result.case_id)
+        if case is None:
+            continue
+        for index, turn in enumerate(result.scenario_turns[:len(case.setup_turns)]):
+            if turn.response is not None and any(action.kind == "save_text" and action.status == "success"
+                                                  for action in turn.response.actions):
+                save_case_ids.add(result.case_id)
+                assessment = result.setup_save_assessments.get(index)
+                if assessment is None or assessment.passed is not True or assessment.phase != "run_end":
+                    save_failure_ids.add(result.case_id)
 
     # Denominators never shrink to the cases that happened to score. Planned
     # cases are the release denominator; scored verdicts are the product/judge
@@ -269,7 +293,12 @@ def build_summary(
         case = case_map.get(result.case_id)
         if not case:
             continue
-        tp, fp, fn = tool_confusion_counts(case=case, called_tools=result.tool_calls)
+        tp, fp, fn = tool_confusion_counts(
+            case=case, called_tools=result.tool_calls,
+            save_outcome_verified=(result.save_assessment is not None
+                                   and result.save_assessment.outcome == "required_success"
+                                   and result.save_assessment.passed is True),
+        )
         tp_total += tp
         fp_total += fp
         fn_total += fn
@@ -370,6 +399,13 @@ def build_summary(
         product_pass_rate=round(product_pass_rate, 4),
         judge_pass_rate=round(judge_pass_rate, 4) if judge_pass_rate is not None else None,
         release_pass_rate=round(release_pass_rate, 4),
+        save_contract_cases=len(save_case_ids),
+        save_contract_failures=len(save_failure_ids),
+        save_verified_cases=len(save_case_ids - save_failure_ids),
+        save_unverifiable_cases=sum(any(item.status == "unverifiable" for item in (
+            *([result.save_assessment] if result.save_assessment is not None else []),
+            *result.setup_save_assessments.values(),
+        )) for result in results),
         tool_precision=round(tool_precision, 4),
         tool_recall=round(tool_recall, 4),
         citation_compliance=round(citation_compliance, 4),
@@ -413,6 +449,11 @@ def build_summary(
         + unexpected_result_cases
     )
     gates = [
+        GateResult(
+            name="save_outcome_contract", threshold=0, actual=metrics.save_contract_failures,
+            passed=metrics.save_contract_failures == 0, gate_type="release",
+            detail="Every declared save outcome must be verified; failures cannot be offset by pass rate.",
+        ),
         GateResult(
             name="evaluation_completeness",
             threshold=0,

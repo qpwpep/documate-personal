@@ -76,6 +76,34 @@ class ScenarioTurnResult(BaseModel):
     response_errors: list[str] = Field(default_factory=list)
 
 
+class SaveAssessment(BaseModel):
+    """An independent observation of a requested artifact, not a tool assertion."""
+
+    status: Literal["verified", "failed", "unverifiable", "not_applicable"]
+    outcome: Literal["required_success", "expected_failure", "must_not_execute"] | None = None
+    passed: bool | None = None
+    failure_codes: list[str] = Field(default_factory=list)
+    expected_sha256: str | None = None
+    expected_byte_count: int | None = None
+    artifact_id: str | None = None
+    observed_sha256: str | None = None
+    observed_byte_count: int | None = None
+    checked_at_utc: str | None = None
+    phase: Literal["case", "run_end"] = "case"
+
+    @model_validator(mode="after")
+    def consistent_verdict(self) -> "SaveAssessment":
+        if self.status == "not_applicable":
+            if self.passed is not None or self.failure_codes or self.outcome is not None:
+                raise ValueError("inapplicable saves cannot carry a verdict or an obligation")
+        elif self.status == "verified":
+            if self.passed is not True or self.failure_codes or self.outcome is None:
+                raise ValueError("verified saves require a passing, failure-free declared outcome")
+        elif self.passed is not False or not self.failure_codes:
+            raise ValueError("failed or unverifiable saves require a failing verdict and reasons")
+        return self
+
+
 class CaseResult(BaseModel):
     run_id: str
     case_id: str
@@ -129,6 +157,8 @@ class CaseResult(BaseModel):
     judge_errors: list[str] = Field(default_factory=list)
     judge_audit_failures: list[str] = Field(default_factory=list)
     actions: list[ActionReceipt] = Field(default_factory=list)
+    save_assessment: SaveAssessment | None = None
+    setup_save_assessments: dict[int, SaveAssessment] = Field(default_factory=dict)
     slack_delivery_status: Literal["success", "failed", "skipped", "unknown", "not_applicable"] = "not_applicable"
     slack_delivery_required: bool = False
     slack_delivery_error: str | None = None
@@ -261,6 +291,12 @@ class CaseResult(BaseModel):
                 raise ValueError("release requires a succeeded judge verdict that passed")
             if self.release_pass is True and self.product_pass is not True:
                 raise ValueError("release requires a passing product verdict")
+            if self.release_pass is True and self.save_assessment is not None and self.save_assessment.passed is False:
+                raise ValueError("release requires the save outcome contract to pass")
+            if self.release_pass is True and any(item.passed is False for item in self.setup_save_assessments.values()):
+                raise ValueError("release requires setup saved artifacts to remain verified")
+            if self.release_pass is True and self.save_assessment is not None and self.gate_failures:
+                raise ValueError("release cannot carry blocking gate failures")
             if self.invalid_eval != (self.eval_validity == "invalid"):
                 raise ValueError("invalid_eval must mirror eval_validity == 'invalid'")
         if self.tool_call_count <= 0 and self.tool_calls:
