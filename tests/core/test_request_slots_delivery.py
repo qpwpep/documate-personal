@@ -361,7 +361,10 @@ def test_delivery_error_preserves_ready_body_and_completed_save_for_explicit_ret
     assert [item["payload"]["text"] for item in delivered] == ["검증된 전달 본문", "검증된 전달 본문"]
     assert saved_file.read_bytes() == saved_bytes
     assert saved_file.stat().st_mtime_ns == saved_time
-    assert [(receipt.kind, receipt.status) for receipt in state["response"].result.actions] == [("slack_notify", "success")]
+    assert state["response"].result.actions[0] == pending.save_receipt
+    assert [(receipt.kind, receipt.status) for receipt in state["response"].result.actions] == [
+        ("save_text", "success"), ("slack_notify", "success"),
+    ]
 
 
 @pytest.mark.parametrize("kind,revision", [("failure", 2), ("draft", 2), ("answer", 1)])

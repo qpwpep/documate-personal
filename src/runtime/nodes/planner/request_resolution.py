@@ -5,6 +5,7 @@ from uuid import uuid4
 
 from src.core.contracts import GraphState
 from src.core.contracts.boundary.runtime import get_runtime_state
+from src.core.contracts.graph_state import PendingAction
 from src.core.request_contracts import (
     AcknowledgeBody, ActionContract, ActionRequest, AnswerContract, AnswerReference, BoundAnswerReference,
     BoundInputText, ComposeBody, CopyAnswerBody, CopyInputBody, MissingInformation,
@@ -174,6 +175,35 @@ def _merge_pending(proposal: WireRequestContract, pending, *, current_turn_id: s
         "body": body, "evidence": tuple(evidence.values()), "missing_info": tuple(missing),
         "slack_destination": destination,
     })
+
+
+def pending_body_changed(pending: PendingAction, contract: RequestContract) -> bool:
+    """Compare accepted body facts, not turn labels or newly bound evidence IDs.
+
+    Copying the checked pending answer continues its frozen delivery even when
+    the original request composed or transformed it. An unresolved replacement
+    still changes that obligation before its final body can be prepared.
+    """
+    def answer_facts(answer):
+        return {
+            "content": tuple(item.model_dump(exclude={"evidence_ids"}) for item in answer.content),
+            "format": tuple(item.model_dump(exclude={"evidence_ids"}) for item in answer.format),
+            "preferences": answer.preferences,
+        }
+
+    if answer_facts(contract.answer) != answer_facts(pending.contract.answer):
+        return True
+    if (isinstance(contract.body, CopyAnswerBody) and pending.response is not None
+            and contract.body.source.response_hash == pending.response.content_hash):
+        return False
+    body, previous = contract.body, pending.contract.body
+    if isinstance(body, UnresolvedBody):
+        body = contract.body_request or body
+        previous = pending.contract.body_request or previous
+    # The same answer can be addressed as previous or pending without changing
+    # its bound identity. Input source offsets and hashes remain significant.
+    exclude = {"evidence_ids": True, "source": {"ref"}}
+    return body.model_dump(exclude=exclude) != previous.model_dump(exclude=exclude)
 
 
 def resolve_request_contract(proposal: WireRequestContract | None, state: GraphState, *, max_turns: int) -> RequestContract:

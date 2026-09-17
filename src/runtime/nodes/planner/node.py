@@ -28,7 +28,7 @@ from src.runtime.nodes.planner.models import (
 )
 from src.runtime.nodes.planner.prompt_builder import build_planner_messages
 from src.runtime.nodes.planner.query_sanitizer import sanitize_planner_output_queries
-from src.runtime.nodes.planner.request_resolution import resolve_request_contract
+from src.runtime.nodes.planner.request_resolution import pending_body_changed, resolve_request_contract
 
 logger = logging.getLogger(__name__)
 
@@ -414,7 +414,13 @@ def make_planner_node(
             completed = tuple(name for name in runtime.pending_action.completed_actions
                               if getattr(contract.actions, name).intent != "requested")
             pending_updates = {"contract": contract, "completed_actions": completed}
-            if contract.body.kind != "copy_answer":
+            body_changed = pending_body_changed(runtime.pending_action, contract)
+            if body_changed or ("save_text" in runtime.pending_action.completed_actions
+                                and contract.actions.save_text.intent == "requested"):
+                # Replace the obligation when the change is accepted, including
+                # corrections whose body will only be ready on a later turn.
+                pending_updates.update(save_operation=None, save_receipt=None)
+            if body_changed or contract.body.kind != "copy_answer":
                 pending_updates["body_prepared"] = False
                 pending_updates["phase"] = "awaiting_body" if contract.can_prepare_body() else "awaiting_input"
             runtime_updates["pending_action"] = runtime.pending_action.model_copy(update=pending_updates)

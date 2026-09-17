@@ -8,6 +8,7 @@ from src.core.contracts import GraphState, PlannerState, ResponseState, RuntimeS
 from src.core.contracts.graph_state import PendingAction
 from src.core.request_contracts import RequestContract
 from src.runtime.nodes.actions import make_action_postprocess_node
+from src.infra.tools.save_text import build_save_text_tool
 
 
 def _contract(*, save="not_requested", slack="not_requested", **updates):
@@ -37,25 +38,22 @@ def _state(text: str, request: str = "결과를 txt로 저장해줘", *, contrac
     }
 
 
-def test_save_exports_the_document_and_adds_a_separate_receipt(tmp_path: Path):
+def test_save_exports_the_document_and_adds_a_separate_receipt(tmp_path: Path, monkeypatch):
     """저장 결과를 본문에 추가하지 않고 실제 저장한 내용과 별도 영수증을 반환한다."""
-    destination = tmp_path / "answer.txt"
+    monkeypatch.setattr("src.infra.tools.save_text.get_save_text_output_dir", lambda: tmp_path)
     state = _state("실제 답변 본문")
     original = state["response"].result.model_dump()
 
-    def save_text(content: str, filename_prefix: str):
-        destination.write_text(content, encoding="utf-8")
-        return {"status": "success", "file_path": str(destination)}
-
-    updates = make_action_postprocess_node(save_text, lambda **kwargs: {}, False)(state)
+    updates = make_action_postprocess_node(build_save_text_tool(), lambda **kwargs: {}, False)(state)
     result = updates["response"].result
 
-    assert destination.read_text(encoding="utf-8") == export_answer_text(state["response"].result)
+    destination = Path(result.actions[0].file_path)
+    assert destination.read_text(encoding="utf-8-sig") == export_answer_text(state["response"].result)
     assert result.content.model_dump() == original["content"]
     assert result.content_hash == original["content_hash"]
-    assert result.actions[0].model_dump(exclude_none=True) == {
-        "kind": "save_text", "status": "success", "file_path": str(destination),
-    }
+    assert result.actions[0].status == "success"
+    assert result.actions[0].verification == "verified"
+    assert result.actions[0].operation.answer_hash == original["content_hash"]
     assert all(isinstance(message, ToolMessage) for message in updates["messages"])
 
 

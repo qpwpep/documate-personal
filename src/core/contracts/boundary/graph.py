@@ -20,6 +20,7 @@ from src.core.contracts.boundary.runtime import parse_request_contract, parse_ru
 def build_graph_state_input(
     *,
     user_input: str,
+    session_id: str = "",
     current_turn_id: str | None = None,
     user_turns: tuple[UserTurnSnapshot, ...] = (),
     messages: list[AnyMessage] | None = None,
@@ -40,6 +41,7 @@ def build_graph_state_input(
     state: GraphState = {
         "messages": list(messages or []),
         "runtime": RuntimeState(
+            session_id=session_id,
             user_input=str(user_input or ""),
             current_turn_id=current_turn_id or f"user:{uuid4().hex}",
             user_turns=user_turns,

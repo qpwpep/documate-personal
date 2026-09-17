@@ -60,6 +60,7 @@ def parse_runtime_state(value: Any) -> RuntimeState:
         except (ValidationError, TypeError, ValueError):
             contract = RequestContract.invalid()
     return RuntimeState(
+        session_id=str(value.get("session_id", "") or ""),
         user_input=str(value.get("user_input", "") or ""),
         current_turn_id=str(value.get("current_turn_id", "") or ""),
         user_turns=tuple(UserTurnSnapshot.model_validate(turn) for turn in value.get("user_turns", ())),

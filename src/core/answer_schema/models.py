@@ -7,6 +7,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from src.core.evidence import EvidenceRef
+from src.core.save_contract import SaveArtifact, SaveOperation
 
 
 class AnswerModel(BaseModel):
@@ -162,11 +163,28 @@ class ResponseIssue(AnswerModel):
 
 class ActionReceipt(AnswerModel):
     kind: Literal["save_text", "slack_notify"]
-    status: Literal["success", "error", "skipped"]
+    status: Literal["success", "error", "skipped", "unknown"]
     file_path: str | None = None
     target: str | None = None
     message: str | None = None
     error: str | None = None
+    operation: SaveOperation | None = None
+    artifact: SaveArtifact | None = None
+    verification: Literal["verified", "failed", "unverifiable"] | None = None
+    error_code: str | None = None
+
+    @model_validator(mode="after")
+    def verified_save_is_bound(self) -> "ActionReceipt":
+        # Legacy receipts remain readable; they cannot claim new verification.
+        if self.verification == "verified":
+            if self.kind != "save_text" or self.status != "success" or not self.file_path:
+                raise ValueError("verified save requires a successful file receipt")
+            if self.operation is None or self.artifact is None:
+                raise ValueError("verified save requires operation and artifact identity")
+            if (self.operation.payload_sha256 != self.artifact.sha256
+                    or self.operation.byte_count != self.artifact.byte_count):
+                raise ValueError("verified save bytes must match the operation")
+        return self
 
 
 class AnswerResponse(AnswerModel):

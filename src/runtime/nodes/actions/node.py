@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from typing import Any
+from uuid import NAMESPACE_URL, uuid5
 
 from src.core.answer_schema import ActionReceipt, AnswerResponse, export_answer_text
 from src.core.contracts import GraphState, SlackDestination
@@ -12,12 +13,31 @@ from src.core.contracts.boundary.response import get_response_state
 from src.core.contracts.boundary.runtime import get_runtime_state
 from src.core.message_utils import build_tool_message
 from src.core.request_contracts import check_answer_contract, resolve_body_response
+from src.core.save_contract import SaveOperation
 from src.infra.logging_utils import log_event
 from src.runtime.nodes.actions.policy import get_slack_destinations
 from src.runtime.nodes.actions.receipts import build_save_receipt, build_slack_receipt
 
 
 logger = logging.getLogger(__name__)
+
+
+def _save_operation(*, contract, runtime, pending, response, body: str) -> SaveOperation:
+    prior = pending.save_operation if pending and pending.contract.request_id == contract.request_id else None
+    scope = runtime.session_id or contract.request_id
+    if prior is not None and prior.request_id == contract.request_id and prior.session_id == scope:
+        # Request reconciliation already discarded replaced obligations. A
+        # surviving operation stays frozen across retries and destination edits.
+        return prior
+    source = getattr(contract.body, "source", None)
+    source_hash = (getattr(source, "response_hash", None) or getattr(source, "content_hash", None)
+                   or response.result.content_hash)
+    return SaveOperation.for_text(
+        body, operation_id=uuid5(NAMESPACE_URL, f"save:{contract.request_id}:{contract.revision}").hex,
+        session_id=scope,
+        request_id=contract.request_id, contract_revision=contract.revision,
+        target_kind=contract.body.kind, source_hash=source_hash, answer_hash=response.result.content_hash,
+    )
 
 
 def _ready_body(*, contract, response, runtime, pending, planner) -> bool:
@@ -134,6 +154,8 @@ def make_action_postprocess_node(
                                                response=response, body_ready=False),
                     phase="awaiting_body" if contract.can_prepare_body() else "awaiting_input",
                     completed_actions=completed, body_prepared=False,
+                    save_operation=pending.save_operation if pending and pending.contract.request_id == contract.request_id else None,
+                    save_receipt=pending.save_receipt if pending and pending.contract.request_id == contract.request_id else None,
                 )})
             elif pending is not None and contract.relation in {"supplement", "correction"}:
                 updates["runtime"] = runtime.model_copy(update={"pending_action": None})
@@ -149,6 +171,8 @@ def make_action_postprocess_node(
             item.slot == "slack_destination" and item.reason != "not_provided" for item in contract.missing_info
         )
         completed = set(pending.completed_actions) if pending and pending.contract.request_id == contract.request_id else set()
+        save_operation = pending.save_operation if pending and pending.contract.request_id == contract.request_id else None
+        save_receipt = pending.save_receipt if pending and pending.contract.request_id == contract.request_id else None
         receipts: list[ActionReceipt] = []
         messages = []
         action_errors: list[str] = []
@@ -158,15 +182,42 @@ def make_action_postprocess_node(
 
         if intents["save_text"] == "requested" and "save_text" not in completed:
             if contract.execution_ready("save_text", body_ready=body_ready):
+                save_operation = _save_operation(contract=contract, runtime=runtime, pending=pending,
+                                                 response=response, body=body)
                 try:
-                    result = save_text_tool(content=body, filename_prefix="response")
+                    if save_operation.answer_hash != response.result.content_hash:
+                        from src.infra.saved_artifacts import ArtifactError
+                        raise ArtifactError("idempotency_conflict", "재시도 본문이 확정된 저장 대상과 다릅니다.")
+                    result = save_text_tool(content=body, filename_prefix="response", operation=save_operation)
                 except Exception as exc:
-                    result = {"status": "error", "error": str(exc)}
-                messages.append(build_tool_message("save_text", result, 1))
-                receipt = build_save_receipt(result)
+                    code = getattr(exc, "code", "write_failed")
+                    result = {"status": "unknown" if code == "artifact_unverifiable" else "error",
+                              "error": str(exc), "error_code": code}
+                receipt = build_save_receipt(result, operation=save_operation)
+                save_receipt = receipt
+                messages.append(build_tool_message("save_text", {
+                    **receipt.model_dump(mode="json", exclude_none=True),
+                    "bytes": receipt.artifact.byte_count if receipt.artifact else 0,
+                }, 1))
                 receipts.append(receipt)
                 if receipt.status == "success":
                     completed.add("save_text")
+        elif intents["save_text"] == "requested" and save_receipt is not None and save_operation is not None:
+            # Re-entering an unchanged active obligation may reuse its receipt.
+            # The planner normally removes completed actions on destination-only
+            # follow-ups; this branch must never attach old success to new text.
+            if (body_ready and save_operation.answer_hash == response.result.content_hash
+                    and save_operation.matches_bytes(body.encode("utf-8-sig"))):
+                receipt = build_save_receipt(save_receipt.model_dump(mode="json"), operation=save_operation)
+            else:
+                receipt = build_save_receipt({
+                    "status": "error", "error_code": "idempotency_conflict",
+                    "error": "현재 답변이 확정된 저장 대상과 다릅니다.",
+                }, operation=save_operation)
+            save_receipt = receipt
+            receipts.append(receipt)
+            if receipt.status != "success":
+                completed.discard("save_text")
 
         if intents["slack_notify"] == "requested" and "slack_notify" not in completed:
             if (body_ready and "slack_notify" not in waiting_intents
@@ -200,12 +251,13 @@ def make_action_postprocess_node(
                             for name in intents if name in waiting_intents)
 
         for receipt in receipts:
-            if receipt.status == "error":
+            if receipt.status in {"error", "unknown"}:
                 action_errors.append(f"{receipt.kind}: {receipt.error}")
 
         if receipts:
             updates["response"] = response.model_copy(update={
                 "result": response.result.model_copy(update={"actions": [*response.result.actions, *receipts]}),
+                "save_operation_binding_sha256": save_operation.binding_sha256 if save_operation is not None else None,
             })
         waiting_for_body = not body_ready and any(intent == "requested" for intent in intents.values())
         waiting_for_delivery = bool(action_errors)
@@ -218,6 +270,8 @@ def make_action_postprocess_node(
                 response=_pending_response(contract=contract, runtime=runtime, pending=pending,
                                            response=response, body_ready=body_ready),
                 completed_actions=tuple(sorted(completed)),
+                save_operation=save_operation,
+                save_receipt=save_receipt,
                 phase=phase,
                 body_prepared=_prepared_pending_body(contract=contract, pending=pending, body_ready=body_ready),
             )

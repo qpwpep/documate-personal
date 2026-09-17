@@ -192,7 +192,8 @@ def test_destination_followup_delivers_the_saved_body_once(delivery_tools):
 
     clarification = AnswerResponse.model_validate(manager.run_agent_flow("우리 팀에")["response"])
     assert clarification.content == first.content
-    assert clarification.actions[0].message == "팀의 channel_id를 알려주세요."
+    assert clarification.actions[0] == first.actions[0]
+    assert clarification.actions[1].message == "팀의 channel_id를 알려주세요."
     assert manager._ensure_session().previous_response.content == first.content
     assert manager._ensure_session().pending_action.response.content == first.content
 
@@ -207,7 +208,10 @@ def test_destination_followup_delivers_the_saved_body_once(delivery_tools):
     assert saved_file.stat().st_mtime_ns == saved_time
     assert len(list(output.glob("*.txt"))) == 1
     assert manager._ensure_session().pending_action is None
-    assert [(receipt.kind, receipt.status) for receipt in second.actions] == [("slack_notify", "success")]
+    assert second.actions[0] == first.actions[0]
+    assert [(receipt.kind, receipt.status) for receipt in second.actions] == [
+        ("save_text", "success"), ("slack_notify", "success"),
+    ]
 
 
 @pytest.mark.parametrize("relation", ["cancel", "new"])
