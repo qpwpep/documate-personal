@@ -1,0 +1,57 @@
+{
+  "dataset_version": "release-nemo-v1",
+  "release_count": 120,
+  "seed": 20260918,
+  "distribution_basis": "Design assumptions for coverage; no production usage distribution evidence.",
+  "independent_holdout": false,
+  "category_scenarios": {
+    "docs_only": {
+      "standard": 20,
+      "boundary": 8,
+      "regression": 2
+    },
+    "rag_only": {
+      "standard": 14,
+      "boundary": 6,
+      "injection": 8,
+      "regression": 2
+    },
+    "hybrid": {
+      "standard": 14,
+      "boundary": 6,
+      "injection": 8,
+      "regression": 2
+    },
+    "tool_action": {
+      "standard": 12,
+      "boundary": 4,
+      "correction": 8,
+      "failure": 4,
+      "regression": 2
+    }
+  },
+  "difficulty_per_category": {
+    "easy": 8,
+    "medium": 14,
+    "hard": 8
+  },
+  "evaluation_roles": {
+    "new_evaluation": 112,
+    "public_regression": 8
+  },
+  "requirements": {
+    "real_nemo_generation": true,
+    "zero_exact_duplicates": true,
+    "source_integrity": true,
+    "semantic_review": true,
+    "prompt_overlap_review": true
+  },
+  "source_manifests": [
+    "sources.json",
+    "action_sources.json"
+  ],
+  "specifications": [
+    "retrieval_specs.jsonl",
+    "action_specs.jsonl"
+  ]
+}
