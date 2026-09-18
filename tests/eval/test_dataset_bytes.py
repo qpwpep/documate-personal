@@ -10,10 +10,11 @@ import sys
 import pytest
 
 from src.eval.io import dump_jsonl
+from src.eval.nemo_generate import _write_jsonl
 from src.eval.dataset_bytes import validate_text_bytes
 
 
-@pytest.mark.parametrize("writer", [dump_jsonl], ids=["assembled"])
+@pytest.mark.parametrize("writer", [dump_jsonl, _write_jsonl], ids=["assembled", "generated"])
 def test_candidate_writers_emit_utf8_lf_bytes(tmp_path, writer):
     target = tmp_path / "candidates.jsonl"
     records = [{"case_id": "case-1", "query": "업로드해 주세요."}, {"case_id": "case-2"}]
