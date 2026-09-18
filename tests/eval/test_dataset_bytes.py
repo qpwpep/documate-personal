@@ -50,6 +50,29 @@ def test_text_validation_allows_escaped_newlines_and_keeps_binaries_opaque():
     assert validate_text_bytes("report.pdf", b"%PDF\r\n\xff") == []
 
 
+def test_source_generator_writes_canonical_text_in_an_isolated_destination(tmp_path, monkeypatch):
+    for module in ("docx", "reportlab", "PIL"):
+        pytest.importorskip(module)
+    from script import build_release_sources as generator
+
+    uploads = tmp_path / "uploads"
+    uploads.mkdir()
+    for name in ("sample_data_analysis.py", "sample_pipeline.ipynb", "sample_visualization.ipynb"):
+        (uploads / name).write_bytes((generator.UPLOADS / name).read_bytes())
+    design = tmp_path / "design"
+    monkeypatch.setattr(generator, "UPLOADS", uploads)
+    monkeypatch.setattr(generator, "DESIGN", design)
+    monkeypatch.setattr(generator, "SOURCES", {})
+    monkeypatch.setattr(generator, "CASES", [])
+    monkeypatch.setattr(sys, "argv", ["build_release_sources.py"])
+
+    generator.main()
+
+    rows = (design / "retrieval_specs.jsonl").read_bytes()
+    assert len(rows.splitlines()) == 90
+    assert "release/cleaning.py" in json.loads((design / "sources.json").read_bytes())
+    for path in [*design.iterdir(), *(uploads / "release").iterdir()]:
+        assert validate_text_bytes(path.name, path.read_bytes()) == []
 
 
 def git(repo: Path, *args: str) -> None:
