@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import errno
+import hashlib
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from threading import Barrier
@@ -17,10 +18,13 @@ from langchain_core.messages import AIMessage
 from src.core.answer_schema import export_answer_text
 from src.core.request_contracts import WireRequestContract
 from src.eval.config_models import BenchmarkCase, BenchmarkConfig
+from src.eval.io import load_cases_jsonl
 from src.eval.judge_llm import LLMJudge
 from src.eval.online_runner import _run_single_case
+from src.eval.release_dataset import load_reviewed_release
 from src.eval.reporting.summary import build_summary
 from src.eval.save_outcomes import revalidate_saved_artifacts
+from tests.eval.test_reviewed_release_execution import approved_package
 from tests.web.test_agent_stream_integration import agent_server
 from tests.web.test_multi_upload_api import LocalChatModel, LocalEmbeddings
 
@@ -41,6 +45,27 @@ class ScenarioChatModel(LocalChatModel):
         raw = next(message.content for message in messages if message.name == "request_context")
         context = json.loads(raw.split("\n", 1)[1])
         current = context["user_turn_ledger"][-1]
+        if "final_review.pdf" in current["text"]:
+            contract = WireRequestContract.model_validate({
+                "evidence": [{
+                    "id": "missing-upload-request", "turn_id": current["turn_id"], "quote": current["text"],
+                    "scope": "current_request", "interpretation": "instruction",
+                }],
+                "body": {"kind": "compose", "instruction": "Explain the conclusion of final_review.pdf with evidence."},
+                "actions": {"save_text": {"intent": "requested", "evidence_ids": ["missing-upload-request"]}},
+            })
+            return {
+                "parsed": {
+                    "use_retrieval": True,
+                    "tasks": [{"route": "upload", "query": "final_review.pdf conclusion", "k": 4}],
+                    "request_contract": contract.model_dump(mode="json"),
+                },
+                "parsing_error": None,
+                "raw": AIMessage(
+                    content="", response_metadata={"model_name": "local-test-model"},
+                    usage_metadata={"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+                ),
+            }
         if current["text"] != SAVE_QUERY:
             return super().invoke(messages)
         contract = WireRequestContract.model_validate({
@@ -149,6 +174,58 @@ def test_benchmark_retrieves_two_attachments_then_saves_the_actual_previous_answ
     )
 
 
+@pytest.mark.parametrize("replacement_name", ["renamed.py", "redirected.ipynb"])
+def test_approved_attachment_identity_survives_symlink_retargeting_through_retrieval(
+    scenario_server, replacement_name,
+):
+    """The reviewed name and bytes must reach the real parser and cited evidence together."""
+    endpoint, _, root = scenario_server
+    execution, review, design, _, upload = approved_package(root)
+    original_content = upload.read_bytes()
+    original_digest = hashlib.sha256(original_content).hexdigest()
+    source = upload.with_name("reviewed-source.py")
+    upload.rename(source)
+    try:
+        upload.symlink_to(source)
+    except (NotImplementedError, OSError) as exc:
+        pytest.skip(f"File symlinks are unavailable: {exc}")
+    approved = load_reviewed_release(execution, review=review, design=design)
+
+    replacement = upload.with_name(replacement_name)
+    replacement.write_bytes(b"CHANGED = 99\n")
+    upload.unlink()
+    upload.symlink_to(replacement)
+
+    result = _run_single_case(
+        run_id="approved-identity-integration", endpoint=endpoint, fixtures_path=execution,
+        case=approved.cases[0], verified_uploads=approved.uploads,
+        timeout_seconds=10, judge=LLMJudge(model_name="unused", enabled=False),
+        config=BenchmarkConfig(judge_enabled=False),
+    )
+
+    assert result.runtime_errors == result.response_errors == [], result.model_dump()
+    assert len(result.scenario_turns) == 1
+    manifest = result.scenario_turns[0].upload_manifest
+    assert len(manifest.files) == 1
+    stored = manifest.files[0]
+    assert stored.name == "settings.py"
+    assert stored.size_bytes == len(original_content)
+    assert stored.content_hash == "sha256:" + original_digest
+    assert result.attachment_fingerprints == {"settings.py": original_digest}
+    assert result.observed_hits
+    assert result.response is not None and result.response.citations
+    evidence = [hit.evidence for hit in result.observed_hits]
+    evidence.extend(citation.evidence for citation in result.response.citations)
+    for item in evidence:
+        assert item.snapshot.title == "settings.py"
+        assert item.snapshot.content_hash == stored.content_hash
+        assert item.snapshot.source_uri == stored.source_uri
+        assert item.element.metadata["file_id"] == stored.file_id
+        assert item.excerpt and item.excerpt in original_content.decode("utf-8")
+    assert any("LIMIT = 17" in item.excerpt for item in evidence)
+    assert replacement.read_bytes() == b"CHANGED = 99\n"
+
+
 def test_next_benchmark_scenario_cannot_save_another_scenarios_answer(scenario_server):
     """An isolated case has neither the earlier attachments nor its previous answer to deliver."""
     endpoint, _, root = scenario_server
@@ -186,6 +263,32 @@ class _PerfectJudgeBoundary:
                 "answer_quality", "groundedness", "citation_traceability", "tool_choice", "format_language",
             )},
         }))
+
+
+def test_release_missing_upload_requests_the_file_without_search_or_save(scenario_server):
+    """A real empty session and graph guard must pass the authored no-execution case."""
+    endpoint, _, root = scenario_server
+    release = Path(__file__).resolve().parents[2] / "data/benchmarks/fixtures/cases.generated.jsonl"
+    case = next(case for case in load_cases_jsonl(release) if case.case_id == "release_action_028")
+    judge = LLMJudge(model_name="local-perfect-judge", enabled=False)
+    judge.enabled = True
+    judge.client = _PerfectJudgeBoundary()
+    result = _run_single_case(
+        run_id="missing-upload-integration", endpoint=endpoint,
+        fixtures_path=root / "fixtures" / "cases.jsonl", case=case,
+        timeout_seconds=10, judge=judge, config=BenchmarkConfig(judge_enabled=True),
+    )
+    assert result.runtime_errors == result.response_errors == [], result.model_dump()
+    assert len(result.scenario_turns) == 1
+    assert result.scenario_turns[0].upload_manifest.files == []
+    assert result.planner_diagnostics.reason == "upload_retriever_missing"
+    assert "업로드" in export_answer_text(result.response)
+    assert result.response.citations == result.response.actions == []
+    assert result.tool_calls == result.observed_hits == []
+    assert result.save_assessment.passed is True
+    assert list((root / "output" / "save_text").rglob("*")) == []
+    assert result.rule_scores["tool_choice"] == 1.0
+    assert result.judge_pass is result.release_pass is True, result.model_dump()
 
 
 def test_concurrent_scenarios_preserve_different_answers_at_the_same_time(scenario_server, monkeypatch):

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
@@ -11,6 +12,7 @@ from src.infra.runtime_paths import get_upload_session_dir
 from src.infra.settings import get_settings
 
 from ..judge_llm import LLMJudge
+from ..approved_uploads import ApprovedUpload, select_approved_uploads, verify_upload_manifest
 from ..evidence_scope import assess_evidence_scope
 from ..config_models import BenchmarkCase, BenchmarkConfig, BenchmarkLiveSlackConfig
 from ..io import load_cases_jsonl
@@ -131,6 +133,7 @@ def _run_single_case(
     judge: LLMJudge,
     config: BenchmarkConfig,
     live_slack: BenchmarkLiveSlackConfig | None = None,
+    verified_uploads: Mapping[str, ApprovedUpload] | None = None,
 ) -> CaseResult:
     started = time.monotonic()
     created_at = datetime.now(timezone.utc).isoformat()
@@ -149,8 +152,10 @@ def _run_single_case(
     files = []
     staged = None
     try:
+        approved_files = (select_approved_uploads(case.resolved_upload_fixtures, verified_uploads)
+                          if verified_uploads is not None else None)
         client.refresh_uploads()
-        files = resolve_fixture_uploads(fixtures_path, case)
+        files = approved_files if approved_files is not None else resolve_fixture_uploads(fixtures_path, case)
         if files:
             settings = get_settings()
             staged = client.stage_files(files, get_upload_session_dir(session_id),
@@ -162,8 +167,13 @@ def _run_single_case(
             client.sync_uploads(PendingUploadOperation(epoch=manifest.epoch, expected_revision=manifest.revision,
                                                         files=staged.files))
             discard_staged_files(staged.files, get_upload_session_dir(session_id))
+        if approved_files is not None:
+            verify_upload_manifest(approved_files, client.manifest)
         attachment_setup_ms = round((time.monotonic() - started) * 1000)
         for index, query in enumerate([*case.setup_turns, case.query]):
+            if index and approved_files is not None:
+                # The app adopts each answer's manifest for the following turn.
+                verify_upload_manifest(approved_files, client.manifest)
             parsed, turn = _run_turn(client, query, prior_turns=turns)
             turns.append(turn)
             turn_costs.append(0.0 if parsed.model_usage_status == "deterministic" and not parsed.llm_calls else
@@ -293,13 +303,35 @@ def run_online_benchmark(
     track: RunTrack,
     limit: int | None = None,
     live_slack: BenchmarkLiveSlackConfig | None = None,
+    release_review: Path | None = None,
+    release_design: Path | None = None,
 ) -> tuple[Path, list[CaseResult], RunSummary]:
     if track == "release" and not config.judge_enabled:
         raise ValueError(
             "Release runs require judge evaluation; judge_enabled is false. "
             "Run a smoke track for rule-only diagnostics."
         )
-    cases = load_cases_jsonl(fixtures_path)
+    from ..release_dataset import DEFAULT_DESIGN, load_release_input, load_reviewed_release
+
+    verified_uploads = None
+    dataset_approval = {"status": "not_verified"}
+    approved = None
+    if track == "release":
+        cases, approved = load_release_input(fixtures_path, review=release_review, design=release_design)
+    elif release_review is not None:
+        approved = load_reviewed_release(
+            fixtures_path, review=release_review, design=release_design or DEFAULT_DESIGN,
+        )
+        cases = approved.cases
+    else:
+        cases = load_cases_jsonl(fixtures_path)
+    if approved is not None:
+        verified_uploads = approved.uploads
+        dataset_approval = {
+            "status": "verified", "review_sha256": approved.review_sha256,
+            "candidate_sha256": approved.inspection["sha256"],
+            "artifact_hashes": approved.inspection["artifact_hashes"],
+        }
     requested_limit = _normalize_limit(limit)
     if requested_limit is not None:
         cases = cases[:requested_limit]
@@ -326,6 +358,7 @@ def run_online_benchmark(
             judge=judge,
             config=config,
             live_slack=live_slack,
+            verified_uploads=verified_uploads,
         )
         results.append(result)
         composite_text = (
@@ -356,6 +389,8 @@ def run_online_benchmark(
                                  for name, digest in result.attachment_fingerprints.items()},
         execution_options=(live_slack or BenchmarkLiveSlackConfig()).model_dump(mode="json"),
     )
+
+    summary.audit_metrics["dataset_approval"] = dataset_approval
 
     run_dir = output_root / run_id
     write_run_outputs(output_dir=run_dir, results=results, summary=summary)

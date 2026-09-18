@@ -204,22 +204,21 @@ class RunnerRequestPayloadTest(unittest.TestCase):
         self.assertNotIn("slack_channel_id", payload)
         self.assertNotIn("slack_email", payload)
 
-    @patch("src.eval.online_runner.case_runner.load_cases_jsonl")
-    def test_live_slack_requires_destination_before_requests(self, mock_load_cases) -> None:
-        mock_load_cases.return_value = [
-            BenchmarkCase(
-                case_id="tool_seed_live_missing",
-                category="tool_action",
-                query="share this to slack",
-                expected_tools=["slack_notify"],
-                slack_channel_id="C123BENCH",
-            )
-        ]
+    def test_live_slack_requires_destination_before_requests(self) -> None:
+        case = BenchmarkCase(
+            case_id="tool_seed_live_missing",
+            category="tool_action",
+            query="share this to slack",
+            expected_tools=["slack_notify"],
+            slack_channel_id="C123BENCH",
+        )
 
         with TemporaryDirectory() as temp_dir:
+            fixture = Path(temp_dir) / "cases.jsonl"
+            fixture.write_bytes((case.model_dump_json() + "\n").encode("utf-8"))
             with self.assertRaisesRegex(ValueError, "tool_seed_live_missing"):
                 run_online_benchmark(
-                    fixtures_path=Path("data/benchmarks/fixtures/cases.generated.jsonl"),
+                    fixtures_path=fixture,
                     endpoint="http://127.0.0.1:8000",
                     config=BenchmarkConfig(),
                     config_path=Path("data/benchmarks/config.toml"),
