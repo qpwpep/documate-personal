@@ -1,6 +1,7 @@
 """Validate and promote the reviewed 120-case release; never synthesize padding."""
 from __future__ import annotations
 
+import argparse
 from collections import Counter
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -8,6 +9,8 @@ import hashlib
 import json
 import os
 from pathlib import Path, PureWindowsPath
+import re
+import tempfile
 from types import MappingProxyType
 
 from src.infra.runtime_paths import get_benchmark_data_dir, get_generated_cases_fixture_path
@@ -294,3 +297,177 @@ def _load_reviewed_snapshot(path: Path, *, review: Path, design: Path,
     return ReviewedRelease(cases=cases, candidate_bytes=candidate_bytes, uploads=approved_uploads,
                            inspection=result, review_sha256=_digest(review_bytes),
                            review_bytes=review_bytes, design_files=design_files)
+
+
+def _approval_store(path: Path) -> Path:
+    return path.with_name(path.name + ".approvals")
+
+
+def _read_bindings(store: Path, read_file: Callable[[Path], bytes]) -> dict[str, str | None] | None:
+    index = store / "bindings.json"
+    try:
+        payload = json.loads(read_file(index))
+    except FileNotFoundError:
+        # A lock file alone can remain after an interrupted first initialization.
+        # Published objects, however, must always have a registry.
+        if index.is_symlink() or (store / "objects").exists():
+            raise ValueError("Release approval registry is missing") from None
+        return None
+    except (OSError, ValueError) as exc:
+        raise ValueError(f"Cannot read release approval registry: {exc}") from exc
+    if (not isinstance(payload, dict) or type(payload.get("version")) is not int
+            or payload["version"] != 1 or not isinstance(payload.get("bindings"), dict)):
+        raise ValueError("Invalid release approval registry")
+    bindings = payload["bindings"]
+    for candidate, review in bindings.items():
+        if (not re.fullmatch(r"[0-9a-f]{64}", candidate)
+                or (review is not None and (not isinstance(review, str)
+                                           or not re.fullmatch(r"[0-9a-f]{64}", review)))):
+            raise ValueError("Invalid release approval binding")
+    return bindings
+
+
+def load_release_input(path: Path, *, review: Path | None = None,
+                       design: Path | None = None) -> tuple[list[BenchmarkCase], ReviewedRelease | None]:
+    """Resolve release approvals and consume the same candidate bytes throughout.
+
+    Explicit approval options retain their legacy meaning. A null registry entry
+    identifies only the exact pre-promotion input, never an approved dataset.
+    """
+    path = _absolute(path)
+    default_release = path.resolve() == DEFAULT_RELEASE.resolve()
+    read_file = _snapshot_reader()
+    candidate_bytes = read_file(path)
+    if review is not None or (design is not None and default_release):
+        approved = _load_reviewed_snapshot(
+            path, review=review if review is not None else design / "release_review.json",
+            design=design if design is not None else DEFAULT_DESIGN,
+            execution_path=path, read_file=read_file,
+        )
+        return approved.cases, approved
+    store = _approval_store(path)
+    bindings = _read_bindings(store, read_file)
+    if bindings is not None:
+        candidate_hash = _digest(candidate_bytes)
+        if candidate_hash not in bindings:
+            raise ValueError("Release approval registry has no binding for these exact candidate bytes")
+        review_hash = bindings[candidate_hash]
+        if review_hash is not None:
+            package = _relative_file(store, "objects/" + review_hash)
+            approved = _load_reviewed_snapshot(
+                path, review=package / "review.json", design=package / "design",
+                execution_path=path, read_file=read_file,
+            )
+            if approved.review_sha256 != review_hash:
+                raise ValueError("Stored release review does not match its approved SHA-256")
+            return approved.cases, approved
+    if default_release:
+        approved = _load_reviewed_snapshot(
+            path, review=DEFAULT_DESIGN / "release_review.json", design=DEFAULT_DESIGN,
+            execution_path=path, read_file=read_file,
+        )
+        return approved.cases, approved
+    cases = [BenchmarkCase.model_validate_json(line)
+             for line in candidate_bytes.decode("utf-8-sig").splitlines() if line.strip()]
+    return cases, None
+
+
+def _write_atomic(path: Path, content: bytes) -> None:
+    with tempfile.NamedTemporaryFile(dir=path.parent, prefix="." + path.name + ".",
+                                     suffix=".pending", delete=False) as stream:
+        temporary = Path(stream.name)
+        try:
+            stream.write(content)
+        except BaseException:
+            stream.close()
+            temporary.unlink(missing_ok=True)
+            raise
+    try:
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _write_bindings(store: Path, bindings: dict[str, str | None]) -> None:
+    payload = {"version": 1, "bindings": bindings}
+    _write_atomic(store / "bindings.json",
+                  (json.dumps(payload, sort_keys=True, indent=2) + "\n").encode("utf-8"))
+
+
+def _publish_approval(store: Path, snapshot: ReviewedRelease) -> None:
+    objects = store / "objects"
+    objects.mkdir(exist_ok=True)
+    package = objects / snapshot.review_sha256
+    files = {"review.json": snapshot.review_bytes,
+             **{"design/" + name: content for name, content in snapshot.design_files.items()}}
+    if package.exists():
+        for name, content in files.items():
+            if _relative_file(package, name).read_bytes() != content:
+                raise ValueError(f"Stored release approval differs from the verified bytes: {name}")
+        return
+    with tempfile.TemporaryDirectory(dir=objects, prefix=".pending-") as temporary:
+        staging = Path(temporary) / "package"
+        staging.mkdir()
+        for name, content in files.items():
+            target = _relative_file(staging, name)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(content)
+        staging.rename(package)
+
+
+def promote(candidates: Path, *, review: Path, out: Path = DEFAULT_RELEASE,
+            design: Path = DEFAULT_DESIGN) -> dict:
+    from src.infra.artifact_store_lock import artifact_store_lock
+
+    out = _absolute(out)
+    snapshot = load_reviewed_release(candidates, review=review, execution_path=out, design=design)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    store = _approval_store(out)
+    store.mkdir(exist_ok=True)
+    with artifact_store_lock(store):
+        bindings = _read_bindings(store, lambda path: path.read_bytes())
+        current_bytes = out.read_bytes() if out.exists() else None
+        if bindings is None:
+            # Record the exact legacy input before publishing anything that could
+            # turn an interrupted first promotion into an approval requirement.
+            bindings = {} if current_bytes is None else {_digest(current_bytes): None}
+            _write_bindings(store, bindings)
+        _publish_approval(store, snapshot)
+        candidate_hash = snapshot.inspection["sha256"]
+        updated = {**bindings, candidate_hash: snapshot.review_sha256}
+        if updated != bindings:
+            _write_bindings(store, updated)
+        # Other candidates' bindings remain readable while this file changes.
+        # Reapproval of identical bytes commits with the registry update alone.
+        if current_bytes != snapshot.candidate_bytes or out.is_symlink():
+            _write_atomic(out, snapshot.candidate_bytes)
+    return snapshot.inspection
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("command", choices=["validate", "promote"])
+    parser.add_argument("--input", type=Path, default=DEFAULT_RELEASE)
+    parser.add_argument("--design", type=Path, default=DEFAULT_DESIGN)
+    parser.add_argument("--review", type=Path)
+    parser.add_argument("--out", type=Path, default=DEFAULT_RELEASE)
+    parser.add_argument("--execution-path", type=Path,
+                        help="Intended execution fixture path when inspecting a stored candidate")
+    args = parser.parse_args()
+    if args.command == "promote":
+        if not args.review:
+            parser.error("promote requires --review")
+        if args.execution_path:
+            parser.error("promote uses --out as its execution path")
+        result = promote(args.input, review=args.review, out=args.out, design=args.design)
+    elif args.review:
+        result = load_reviewed_release(args.input, review=args.review, design=args.design,
+                                       execution_path=args.execution_path).inspection
+    else:
+        result = inspect_release(args.input, design=args.design, execution_path=args.execution_path)
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 1 if result["errors"] else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
