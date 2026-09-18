@@ -291,3 +291,6 @@ data/*
 
 # legacy local service state
 script/web_services_state.json
+
+# Promotion locks are local coordination handles, not approval history.
+**/*.approvals/.save.lock
