@@ -124,6 +124,8 @@ Docling은 요청에 종속된 로컬 프로세스에서 문서를 변환하고 
 
 ## 검증 결과
 
+주력 120개 fixture는 `release-nemo-v2`입니다. 미첨부 사례 1개를 올바른 업로드 안내·저장 보류 계약으로 고치고 실제 NeMo 생성·검수를 다시 수행했으며, 나머지 119개의 내용과 생성 이력은 보존했습니다. 현재 승인은 UTF-8·LF의 실제 바이트와 최종 실행 위치의 첨부를 검증하고, 첨부 이름과 바이트를 불변 입력으로 staging에 전달합니다. 질문 실행 전 서버 manifest의 이름·크기·해시도 대조합니다. 기존 `release-nemo-v1` 데이터·승인 기록은 원본 바이트로 별도 보관합니다. 아래 과거 release 수치는 새 데이터의 성능이 아니며, 현재 120개 전체의 실모델 품질 평가를 새로 수행한 것은 아닙니다. 구성·생성 이력·검수 및 회귀 검증 범위는 [NeMo release 데이터 안내](docs/benchmarking.md#21-nemo-release-데이터-생성검수)에 정리했습니다.
+
 회귀 테스트는 2026-09-13 KST에 Docling 선택 의존성을 설치하고 `LIVE_TEST=false`, `RUN_DOCLING_TESTS=0`으로 실행한 결과입니다. 별도로 실제 로컬 모델을 사용하는 문서 변환·검색·인용 검증은 `19 passed`였고, Docling을 제거한 기본 설치에서도 앱 생성과 회귀 검사(`1218 passed, 117 skipped, 69 subtests passed`)를 확인했습니다. 아래 `release` benchmark 수치는 `20260509_043436` 런의 기록입니다. 이 release 기록은 현재 응답·평가 계약이나 공용 클라이언트 시나리오로 실행한 결과가 아닙니다. 새 계약의 품질은 별도 release run으로 확인해야 하며, 평가 기준이 다른 수치를 직접 비교하지 않습니다. 로컬 benchmark 실행은 `output/benchmarks/latest_release_run.txt`를 최신 `release` run 포인터로 갱신합니다.
 
 | 항목 | 결과 |
