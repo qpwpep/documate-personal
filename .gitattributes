@@ -1,2 +1,19 @@
 uv.lock whitespace=cr-at-eol
 tests/fixtures/documents/*.pdf binary
+
+# Release approval hashes identify exact bytes across supported checkouts.
+data/benchmarks/design/**/*.json text eol=lf
+data/benchmarks/design/**/*.jsonl text eol=lf
+data/benchmarks/design/**/*.parquet binary
+data/benchmarks/fixtures/**/*.jsonl text eol=lf
+data/benchmarks/fixtures/uploads/**/*.py text eol=lf
+data/benchmarks/fixtures/uploads/**/*.ipynb text eol=lf
+data/benchmarks/fixtures/uploads/**/*.pdf binary
+data/benchmarks/fixtures/uploads/**/*.docx binary
+data/benchmarks/fixtures/uploads/**/*.png binary
+
+# Historical generation and review snapshots retain their original bytes.
+data/benchmarks/history/** -text
+
+# Promoted approval snapshots retain the exact reviewed bytes, including legacy CRLF.
+**/*.approvals/** -text
