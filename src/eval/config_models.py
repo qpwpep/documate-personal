@@ -7,7 +7,10 @@ from pydantic import BaseModel, Field, model_validator
 
 
 CaseCategory = Literal["docs_only", "rag_only", "hybrid", "tool_action"]
-CaseScenario = Literal["seed_mutation", "adversarial", "regression", "ambiguity"]
+CaseScenario = Literal[
+    "seed_mutation", "adversarial", "regression", "ambiguity",
+    "standard", "boundary", "injection", "correction", "failure",
+]
 
 
 class CaseWeightOverride(BaseModel):
@@ -77,6 +80,24 @@ class SaveExpectation(BaseModel):
         return self
 
 
+class OracleEvidence(BaseModel):
+    """A fixed source excerpt supporting a case's expected answer or instruction."""
+
+    source: str
+    locator: str
+    excerpt: str
+
+
+class CaseOracle(BaseModel):
+    """Semantic expectations; source excerpts are data, never judge instructions."""
+
+    required_facts: list[str] = Field(default_factory=list)
+    expected_behaviors: list[str] = Field(default_factory=list)
+    forbidden_behaviors: list[str] = Field(default_factory=list)
+    evidence: list[OracleEvidence] = Field(default_factory=list)
+    ambiguity_resolution: str = ""
+
+
 class BenchmarkCase(BaseModel):
     case_id: str
     category: CaseCategory
@@ -98,6 +119,11 @@ class BenchmarkCase(BaseModel):
     judge_min_score: float | None = Field(default=None, ge=0.0, le=1.0)
     weight_override: CaseWeightOverride | None = None
     save_expectation: SaveExpectation | None = None
+    difficulty: Literal["easy", "medium", "hard"] | None = None
+    evaluation_role: Literal["public_regression", "new_evaluation"] | None = None
+    capability: str | None = None
+    oracle: CaseOracle | None = None
+    provenance: dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def validate_upload_declarations(self) -> "BenchmarkCase":
