@@ -111,6 +111,8 @@ def command_run(args: argparse.Namespace) -> int:
         track=track,
         limit=args.limit,
         live_slack=live_slack,
+        release_review=getattr(args, "release_review", None),
+        release_design=getattr(args, "release_design", None),
     )
 
     print(f"Run directory: {run_dir}")
@@ -214,6 +216,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="Run track. Defaults to smoke when --limit is set, otherwise release.",
     )
     parser_run.add_argument("--limit", type=int, default=None, help="Optional case limit for smoke runs")
+    parser_run.add_argument("--release-review", type=Path,
+                            help="Override the promoted release approval; verify exact bytes before HTTP")
+    parser_run.add_argument("--release-design", type=Path,
+                            help="Design directory for an explicit approval (promoted releases use their saved design)")
     parser_run.add_argument(
         "--live-slack",
         action="store_true",
