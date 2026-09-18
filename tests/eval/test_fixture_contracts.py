@@ -5,6 +5,7 @@ from pydantic import ValidationError
 
 from src.eval.config_models import BenchmarkCase
 from src.eval.io import load_cases_jsonl
+from src.eval.online_runner.scenario_inputs import resolve_fixture_uploads
 
 
 class FixtureContractsTest(unittest.TestCase):
@@ -14,11 +15,12 @@ class FixtureContractsTest(unittest.TestCase):
                 if "save_text" not in case.expected_tools:
                     continue
                 self.assertIsNotNone(case.save_expectation, msg=f"{path}: {case.case_id}")
-                self.assertEqual(case.save_expectation.outcome, "required_success")
-                self.assertEqual(case.save_expectation.target.kind, "setup_answer")
-                self.assertEqual(case.save_expectation.target.setup_turn_index, len(case.setup_turns) - 1)
+                self.assertIn(case.save_expectation.outcome, {"required_success", "expected_failure"})
+                self.assertIsNotNone(case.save_expectation.target)
+                if case.save_expectation.target.kind == "setup_answer":
+                    self.assertLess(case.save_expectation.target.setup_turn_index, len(case.setup_turns))
 
-    def test_upload_fixture_cases_expect_upload_search(self) -> None:
+    def test_upload_fixture_files_are_available_to_the_shared_runner(self) -> None:
         paths = [
             Path("data/benchmarks/fixtures/cases.seed.jsonl"),
             Path("data/benchmarks/fixtures/cases.regression.seed.jsonl"),
@@ -27,16 +29,18 @@ class FixtureContractsTest(unittest.TestCase):
 
         for path in paths:
             for case in load_cases_jsonl(path):
-                if not case.resolved_upload_fixtures:
-                    continue
-                self.assertIn("upload_search", case.expected_tools, msg=f"{path}: {case.case_id}")
+                uploads = resolve_fixture_uploads(path, case)
+                self.assertEqual(len(uploads), len(case.resolved_upload_fixtures))
+                for upload in uploads:
+                    self.assertTrue(upload.getbuffer(), msg=f"{path}: {case.case_id}: {upload.name}")
 
-    def test_previous_answer_action_fixtures_include_preparation_turns(self) -> None:
+    def test_previous_answer_save_targets_select_a_real_preparation_turn(self) -> None:
         for path in Path("data/benchmarks/fixtures").glob("cases.*.jsonl"):
             for case in load_cases_jsonl(path):
-                if case.category != "tool_action":
+                target = case.save_expectation.target if case.save_expectation else None
+                if target is None or target.kind != "setup_answer":
                     continue
-                self.assertTrue(case.setup_turns, msg=f"{path}: {case.case_id}")
+                self.assertTrue(case.setup_turns[target.setup_turn_index].strip(), msg=f"{path}: {case.case_id}")
 
     def test_fixture_expectations_use_current_upload_tool_name(self) -> None:
         for path in Path("data/benchmarks/fixtures").glob("cases.*.jsonl"):

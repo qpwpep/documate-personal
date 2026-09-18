@@ -1,0 +1,60 @@
+{
+  "started_at": "2026-09-18T14:46:26.391344+00:00",
+  "status": "complete",
+  "library": "data-designer",
+  "versions": {
+    "data-designer": "0.9.2",
+    "data-designer-config": "0.9.2",
+    "data-designer-engine": "0.9.2",
+    "pydantic": "2.13.5",
+    "pandas": "2.3.3"
+  },
+  "python": "3.12.13",
+  "platform": "Windows-10-10.0.19045-SP0",
+  "provider": {
+    "name": "benchmark-provider",
+    "endpoint": "https://integrate.api.nvidia.com/v1",
+    "provider_type": "openai",
+    "api_key": "NVIDIA_API_KEY",
+    "extra_body": null,
+    "extra_headers": null
+  },
+  "generator_model": "nvidia/nemotron-3-super-120b-a12b",
+  "reviewer_model": "nvidia/nemotron-3-super-120b-a12b",
+  "requested_count": 1,
+  "seed": 20260918,
+  "seed_strategy": "ordered authored specifications; provider seed passed through extra_body",
+  "reproducibility_limit": "Provider seed acceptance does not guarantee deterministic LLM output. Model alias, backend, concurrency and library changes can change generations. Reuse archived candidates for exact replay.",
+  "review_limit": "Fresh model call with fixed evidence; same-model review is correlated and does not establish oracle correctness or holdout independence.",
+  "source_files": [
+    {
+      "path": "output\\nemo-release-v2\\missing-upload\\specs.jsonl",
+      "sha256": "9070572e02417e2cf47c59bd580a230a609da43c62f859c424686b8df96ee541"
+    }
+  ],
+  "selected_specs_sha256": "ec3d75001a18242dff57bebbd1a0af1167430b24504a9060781575afba8700b0",
+  "run_config": {
+    "disable_early_shutdown": false,
+    "shutdown_error_rate": 0.5,
+    "shutdown_error_window": 10,
+    "buffer_size": 12,
+    "max_concurrent_row_groups": 3,
+    "max_in_flight_tasks": 1024,
+    "non_inference_max_parallel_workers": 4,
+    "max_conversation_restarts": 1,
+    "max_conversation_correction_steps": 1,
+    "async_trace": false,
+    "write_scheduler_events": false,
+    "display_tui": false,
+    "progress_interval": 15.0,
+    "otel_metrics_port": null,
+    "preserve_dropped_columns": true,
+    "jinja_rendering_engine": "secure",
+    "request_admission": null
+  },
+  "completed_at": "2026-09-18T14:46:33.991545+00:00",
+  "accepted_count": 1,
+  "rejected_count": 0,
+  "candidate_output": "output\\nemo-release-v2\\missing-upload\\candidates.jsonl",
+  "candidate_output_sha256": "ba475c041955f934c9269b43441d4dca70e88fc47b523dfce9beff58cb16dc98"
+}

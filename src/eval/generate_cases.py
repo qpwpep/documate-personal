@@ -5,7 +5,7 @@ import random
 from collections import defaultdict
 from pathlib import Path
 
-from src.infra.runtime_paths import get_regression_seed_cases_path
+from src.infra.runtime_paths import get_generated_cases_fixture_path, get_regression_seed_cases_path
 from .config_models import BenchmarkCase
 from .io import dump_jsonl, load_cases_jsonl
 
@@ -217,6 +217,11 @@ def generate_cases_file(
     regression_seed_path: Path = get_regression_seed_cases_path(),
     random_seed: int = 42,
 ) -> list[BenchmarkCase]:
+    if out_path.resolve() == get_generated_cases_fixture_path().resolve():
+        raise ValueError(
+            "The template generator cannot overwrite the curated release dataset. "
+            "Use the NeMo pipeline (src.eval.nemo_generate) and validated release promotion."
+        )
     if not regression_seed_path.exists():
         raise FileNotFoundError(f"regression seed JSONL not found: {regression_seed_path}")
 
