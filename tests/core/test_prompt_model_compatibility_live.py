@@ -165,7 +165,7 @@ def _synthesis_state(case_id: str):
 
 def _observe_synthesis(case_id: str, registry, builders: dict, settings) -> dict:
     state = _synthesis_state(case_id)
-    context = builders["context"]["build_synthesis_context"](state=state, has_default_slack_destination=False)
+    context = builders["context"]["build_synthesis_context"](state=state)
     profile = resolve_synthesis_budget_profile(user_input=context.user_input, planner_output=context.planner_output,
                                              snippet_char_limit=settings.synthesis_prompt_snippet_chars)
     prepared = builders["context"]["prepare_synthesis_inputs"](state=state, context=context, budget_profile=profile,

@@ -9,6 +9,8 @@ from src.core.contracts.graph_state import PendingAction
 from src.core.request_contracts import RequestContract
 from src.runtime.nodes.actions import make_action_postprocess_node
 from src.infra.tools.save_text import build_save_text_tool
+from src.core.slack_contract import RecipientSelector, SlackDefault
+from tests.core.test_pending_action_delivery import delivery_tools
 
 
 def _contract(*, save="not_requested", slack="not_requested", **updates):
@@ -57,23 +59,25 @@ def test_save_exports_the_document_and_adds_a_separate_receipt(tmp_path: Path, m
     assert all(isinstance(message, ToolMessage) for message in updates["messages"])
 
 
-def test_slack_exports_current_document_without_appending_receipts():
-    """전송 대상을 명시한 요청은 현재 문서 본문 그대로 전달한다."""
-    delivered = []
-    state = _state("현재 답변", "결과를 슬랙으로 보내줘", contract=_contract(slack="requested"))
-
-    def notify(**kwargs):
-        delivered.append(kwargs)
-        return {"status": "ok", "channel_id": "C123"}
+@pytest.mark.parametrize("explicit", [True, False])
+def test_slack_exports_current_document_without_appending_receipts(delivery_tools, explicit):
+    """명시 대상과 허용된 기본 대상 모두 현재 문서 본문을 변경 없이 전달한다."""
+    save, slack, delivered, _output = delivery_tools
+    recipient = ({"state": "explicit", "selector": {"kind": "channel", "value": "C123"},
+                  "evidence_ids": ["request"]} if explicit else {"state": "omitted"})
+    state = _state("현재 답변", "결과를 슬랙으로 보내줘",
+                   contract=_contract(slack="requested", slack_recipient=recipient))
 
     updates = make_action_postprocess_node(
-        lambda **kwargs: {}, notify, False, has_default_slack_destination=True,
+        save, slack, False, default_slack_recipient=SlackDefault(selector=RecipientSelector(kind="user", value="U123")),
     )(state)
 
-    assert [item["text"] for item in delivered] == [export_answer_text(state["response"].result)]
+    sent = [item for item in delivered if item["path"] == "/chat.postMessage"]
+    assert [item["payload"]["text"] for item in sent] == [export_answer_text(state["response"].result)]
     assert updates["response"].result.content == state["response"].result.content
     assert updates["response"].result.actions[0].status == "success"
-    assert updates["response"].result.actions[0].target == "C123"
+    assert updates["response"].result.actions[0].slack.target.channel_id == ("C123" if explicit else "D123")
+    assert updates["response"].result.actions[0].slack.selection.source == ("user_text" if explicit else "configured_default")
 
 
 def test_failed_action_keeps_the_original_document(tmp_path: Path):
@@ -91,22 +95,19 @@ def test_failed_action_keeps_the_original_document(tmp_path: Path):
     assert list(tmp_path.iterdir()) == []
 
 
-def test_missing_destination_records_a_skipped_receipt_without_delivery():
+def test_missing_destination_records_a_skipped_receipt_without_delivery(delivery_tools):
     """목적지가 없으면 전송을 실행하지 않고 보류 상태를 기록한다."""
-    delivered = []
+    save, slack, delivered, _output = delivery_tools
     state = _state("본문", "슬랙으로 보내줘", contract=_contract(slack="requested"))
 
-    def notify(**kwargs):
-        delivered.append(kwargs)
-        return {"status": "ok"}
-
-    updates = make_action_postprocess_node(lambda **kwargs: {}, notify, False)(state)
+    updates = make_action_postprocess_node(save, slack, False)(state)
 
     assert delivered == []
     assert updates["response"].result.actions[0].status == "skipped"
     assert updates["response"].result.content == state["response"].result.content
     assert updates["runtime"].pending_action.response.content == state["response"].result.content
-    assert "알려주세요" in updates["response"].result.actions[0].message
+    assert updates["response"].result.actions[0].slack.failure.code == "recipient_missing"
+    assert updates["response"].result.actions[0].slack.failure.next_action == "correct_input"
 
 
 def test_guided_followup_prevents_action_delivery(tmp_path: Path):
@@ -143,18 +144,16 @@ def test_empty_document_does_not_create_an_artificial_delivery_body(tmp_path: Pa
 
 
 @pytest.mark.parametrize("intent", ["forbidden", "not_requested", "unresolved"])
-def test_keywords_cannot_execute_actions_without_requested_contract(tmp_path: Path, intent):
+def test_keywords_cannot_execute_actions_without_requested_contract(delivery_tools, intent):
     """원문의 저장·전송 키워드는 미요청·금지·불명확 계약을 실행으로 바꾸지 않는다."""
-    destination = tmp_path / "answer.txt"
+    save, slack, delivered, output = delivery_tools
     state = _state("본문", "save this and send to Slack", contract=_contract(save=intent, slack=intent))
 
-    def unexpected_action(**kwargs):
-        destination.write_text(str(kwargs), encoding="utf-8")
-        return {"status": "success", "file_path": str(destination)}
+    updates = make_action_postprocess_node(save, slack, False,
+        SlackDefault(selector=RecipientSelector(kind="user", value="U123")))(state)
 
-    updates = make_action_postprocess_node(unexpected_action, unexpected_action, False, True)(state)
-
-    assert not destination.exists()
+    assert not output.exists()
+    assert delivered == []
     if intent == "unresolved":
         assert all(receipt.status == "skipped" for receipt in updates["response"].result.actions)
     else:
@@ -162,22 +161,20 @@ def test_keywords_cannot_execute_actions_without_requested_contract(tmp_path: Pa
 
 
 @pytest.mark.parametrize("status", ["invalid", "unresolved"])
-def test_contract_errors_cannot_recover_execution_from_keywords(tmp_path: Path, status):
+def test_contract_errors_cannot_recover_execution_from_keywords(delivery_tools, status):
     """해석에 실패한 요청은 액션 키워드가 있어도 파일이나 메시지를 만들지 않는다."""
-    destination = tmp_path / "answer.txt"
+    save, slack, delivered, output = delivery_tools
     details = ({"failure": "invalid_contract"} if status == "invalid" else {
         "body": {"kind": "unresolved", "question": "본문을 알려 주세요."},
         "missing_info": [{"slot": "subject", "reason": "not_provided", "question": "본문을 알려 주세요."}],
     })
     state = _state("본문", contract=_contract(save="requested", slack="requested", **details))
 
-    def unexpected_action(**kwargs):
-        destination.write_text(str(kwargs), encoding="utf-8")
-        return {"status": "success", "file_path": str(destination)}
+    make_action_postprocess_node(save, slack, False,
+        SlackDefault(selector=RecipientSelector(kind="user", value="U123")))(state)
 
-    make_action_postprocess_node(unexpected_action, unexpected_action, False, True)(state)
-
-    assert not destination.exists()
+    assert not output.exists()
+    assert delivered == []
 
 
 @pytest.mark.parametrize("kind", ["draft", "clarification", "failure"])
@@ -196,18 +193,15 @@ def test_only_final_answer_can_be_delivered(tmp_path: Path, kind):
     assert not destination.exists()
 
 
-def test_absent_contract_does_not_authorize_an_action(tmp_path: Path):
+def test_absent_contract_does_not_authorize_an_action(delivery_tools):
     """계약이 없는 요청은 저장 키워드나 설정된 Slack 대상만으로 실행하지 않는다."""
     state = _state("본문")
     state["runtime"] = state["runtime"].model_copy(update={"request_contract": None})
-    destination = tmp_path / "answer.txt"
-
-    def unexpected_action(**kwargs):
-        destination.write_text(str(kwargs), encoding="utf-8")
-        return {"status": "success", "file_path": str(destination)}
-
-    assert make_action_postprocess_node(unexpected_action, unexpected_action, False, True)(state) == {}
-    assert not destination.exists()
+    save, slack, delivered, output = delivery_tools
+    assert make_action_postprocess_node(save, slack, False,
+        SlackDefault(selector=RecipientSelector(kind="user", value="U123")))(state) == {}
+    assert not output.exists()
+    assert delivered == []
 
 
 @pytest.mark.parametrize("attempt", [1, 2, 3])

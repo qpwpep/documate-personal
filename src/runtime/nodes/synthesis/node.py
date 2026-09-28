@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 def make_synthesize_node(
     llm_synthesizer: Any, llm_synthesizer_compact: Any | None = None,
     verbose: bool = False, max_turns: int = 6, prompt_snippet_char_limit: int = 1800,
-    compact_prompt_snippet_char_limit: int = 900, has_default_slack_destination: bool = False,
+    compact_prompt_snippet_char_limit: int = 900,
 ):
     structured_synthesizer = build_structured_synthesizer(llm_synthesizer)
     structured_synthesizer_compact = (
@@ -32,7 +32,7 @@ def make_synthesize_node(
     def synthesize(state: GraphState) -> GraphState:
         started = time.perf_counter()
         debug = get_debug_state(state)
-        context = build_synthesis_context(state=state, has_default_slack_destination=has_default_slack_destination)
+        context = build_synthesis_context(state=state)
         immediate = maybe_short_circuit_synthesis(state=state, debug=debug, context=context, stage_started=started)
         if immediate is not None:
             return immediate

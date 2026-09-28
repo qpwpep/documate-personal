@@ -8,6 +8,7 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from src.core.evidence import EvidenceRef
 from src.core.save_contract import SaveArtifact, SaveOperation
+from src.core.slack_contract import SlackDelivery
 
 
 class AnswerModel(BaseModel):
@@ -165,7 +166,7 @@ class ActionReceipt(AnswerModel):
     kind: Literal["save_text", "slack_notify"]
     status: Literal["success", "error", "skipped", "unknown"]
     file_path: str | None = None
-    target: str | None = None
+    slack: SlackDelivery | None = None
     message: str | None = None
     error: str | None = None
     operation: SaveOperation | None = None
@@ -175,6 +176,19 @@ class ActionReceipt(AnswerModel):
 
     @model_validator(mode="after")
     def verified_save_is_bound(self) -> "ActionReceipt":
+        if self.kind == "slack_notify":
+            if self.slack is None:
+                if self.status != "skipped":
+                    raise ValueError("Slack result requires typed delivery facts")
+            else:
+                expected = {"sent": "success", "unknown": "unknown", "not_sent": "error"}.get(self.slack.status)
+                if expected is None or (self.status != expected and not (
+                    self.slack.status == "not_sent" and self.slack.failure.stage in {"input", "selection"}
+                    and self.status == "skipped"
+                )):
+                    raise ValueError("Slack receipt status differs from delivery facts")
+        elif self.slack is not None:
+            raise ValueError("only Slack receipts contain Slack delivery facts")
         # Legacy receipts remain readable; they cannot claim new verification.
         if self.verification == "verified":
             if self.kind != "save_text" or self.status != "success" or not self.file_path:

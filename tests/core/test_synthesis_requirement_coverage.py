@@ -45,7 +45,7 @@ def _prepare(tasks, hits, *, budget=6000, snippet=960, max_items=6):
         request_contract=RequestContract(),
         retrieval={"hit_log": [hit.model_dump(mode="json") for hit in hits]},
     )
-    context = build_synthesis_context(state=state, has_default_slack_destination=False)
+    context = build_synthesis_context(state=state)
     prepared = prepare_synthesis_inputs(
         state=state, context=context,
         budget_profile=SynthesisBudgetProfile("docs", snippet, budget, max_items),

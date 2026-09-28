@@ -234,9 +234,7 @@ def _instrument_stage_node(stage: str, node: Any, *, record_latency_trace: bool 
 def build_agent_graph(settings: AppSettings | None = None):
     app_settings = settings or get_settings()
     memory_policy = app_settings.conversation_memory_policy()
-    has_default_slack_destination = bool(
-        app_settings.slack_default_user_id or app_settings.slack_default_dm_email
-    )
+    default_slack_recipient = app_settings.slack_default_recipient()
 
     tool_registry = build_tool_registry(app_settings)
     llm_registry = build_llm_registry(app_settings)
@@ -277,7 +275,6 @@ def build_agent_graph(settings: AppSettings | None = None):
         max_turns=memory_policy.low_water_turns,
         prompt_snippet_char_limit=app_settings.synthesis_prompt_snippet_chars,
         compact_prompt_snippet_char_limit=app_settings.synthesis_compact_prompt_snippet_chars,
-        has_default_slack_destination=has_default_slack_destination,
     )
     synthesize_node = _instrument_stage_node(
         "synthesis",
@@ -295,7 +292,7 @@ def build_agent_graph(settings: AppSettings | None = None):
         save_text_tool=tool_registry.save_text_tool,
         slack_notify_tool=tool_registry.slack_notify_tool,
         verbose=llm_registry.verbose,
-        has_default_slack_destination=has_default_slack_destination,
+        default_slack_recipient=default_slack_recipient,
     )
     action_postprocess_node = _instrument_stage_node(
         "action_postprocess",

@@ -15,7 +15,7 @@ from tests.core.test_synthesis_validation import ModelBoundary, _hit, _state
 
 def _prepare(hits, *, limit=1800):
     state = _state(hits)
-    context = build_synthesis_context(state=state, has_default_slack_destination=False)
+    context = build_synthesis_context(state=state)
     prepared = prepare_synthesis_inputs(
         state=state, context=context,
         budget_profile=SynthesisBudgetProfile("docs", limit, limit * 6, 6),
@@ -141,7 +141,7 @@ def test_model_reference_policy_matches_the_final_answer_checks(mode):
                 instruction="Add a generated example.",
             )),
         })
-    context = build_synthesis_context(state=state, has_default_slack_destination=False)
+    context = build_synthesis_context(state=state)
     prepared = prepare_synthesis_inputs(
         state=state, context=context, budget_profile=SynthesisBudgetProfile("docs", 1800, 6000, 6),
         max_turns=6, prompt_snippet_char_limit=1800, prompt_evidence_char_budget=6000,

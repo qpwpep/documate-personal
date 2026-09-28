@@ -5,7 +5,7 @@ from typing import Any
 from uuid import NAMESPACE_URL, uuid5
 
 from src.core.answer_schema import ActionReceipt, AnswerResponse, export_answer_text
-from src.core.contracts import GraphState, SlackDestination
+from src.core.contracts import GraphState
 from src.core.contracts.graph_state import PendingAction
 from src.core.contracts.boundary.debug import get_debug_state
 from src.core.contracts.boundary.planner import get_planner_state
@@ -15,7 +15,8 @@ from src.core.message_utils import build_tool_message
 from src.core.request_contracts import check_answer_contract, resolve_body_response
 from src.core.save_contract import SaveOperation
 from src.infra.logging_utils import log_event
-from src.runtime.nodes.actions.policy import get_slack_destinations
+from src.runtime.nodes.actions.policy import select_slack_delivery
+from src.core.slack_contract import SlackDefault, SlackDelivery
 from src.runtime.nodes.actions.receipts import build_save_receipt, build_slack_receipt
 
 
@@ -102,8 +103,10 @@ def _prepared_pending_body(*, contract, pending, body_ready: bool) -> bool:
 
 def make_action_postprocess_node(
     save_text_tool: Any, slack_notify_tool: Any, verbose: bool,
-    has_default_slack_destination: bool = False,
+    default_slack_recipient: SlackDefault | None = None,
 ):
+    default_slack_recipient = default_slack_recipient or SlackDefault()
+
     def action_postprocess(state: GraphState) -> GraphState:
         runtime = get_runtime_state(state)
         contract = runtime.request_contract
@@ -156,20 +159,20 @@ def make_action_postprocess_node(
                     completed_actions=completed, body_prepared=False,
                     save_operation=pending.save_operation if pending and pending.contract.request_id == contract.request_id else None,
                     save_receipt=pending.save_receipt if pending and pending.contract.request_id == contract.request_id else None,
+                    slack_delivery=pending.slack_delivery if pending and pending.contract.request_id == contract.request_id else None,
                 )})
             elif pending is not None and contract.relation in {"supplement", "correction"}:
                 updates["runtime"] = runtime.model_copy(update={"pending_action": None})
             return updates
         debug = get_debug_state(state)
         body = export_answer_text(response.result, include_sources=True) if body_ready else ""
-        destinations = (
-            SlackDestination.model_validate(contract.slack_destination.model_dump())
-            if contract.slack_destination is not None
-            else get_slack_destinations(runtime.session_metadata)
-        )
-        slack_available = (destinations.has_destination() or has_default_slack_destination) and not any(
-            item.slot == "slack_destination" and item.reason != "not_provided" for item in contract.missing_info
-        )
+        slack_delivery = pending.slack_delivery if pending and pending.contract.request_id == contract.request_id else None
+        if intents["slack_notify"] == "requested":
+            slack_delivery = select_slack_delivery(
+                request_id=contract.request_id, intent=contract.slack_recipient,
+                request_recipient=runtime.session_metadata.slack_recipient,
+                default=default_slack_recipient, previous=slack_delivery,
+            )
         completed = set(pending.completed_actions) if pending and pending.contract.request_id == contract.request_id else set()
         save_operation = pending.save_operation if pending and pending.contract.request_id == contract.request_id else None
         save_receipt = pending.save_receipt if pending and pending.contract.request_id == contract.request_id else None
@@ -220,31 +223,21 @@ def make_action_postprocess_node(
                 completed.discard("save_text")
 
         if intents["slack_notify"] == "requested" and "slack_notify" not in completed:
-            if (body_ready and "slack_notify" not in waiting_intents
-                    and not contract.execution_ready("slack_notify", body_ready=True, destination_ready=slack_available)):
-                needs_destination = True
-                question = next((item.question for item in contract.missing_info if item.slot == "slack_destination"), None)
-                receipts.append(ActionReceipt(
-                    kind="slack_notify", status="skipped",
-                    message=question or "Slack으로 보낼 대상의 channel_id, user_id 또는 email을 알려주세요.",
-                ))
-            elif contract.execution_ready("slack_notify", body_ready=body_ready, destination_ready=slack_available):
-                try:
-                    result = slack_notify_tool(
-                        text=body, user_id=destinations.user_id,
-                        email=destinations.email, channel_id=destinations.channel_id,
-                    )
-                except Exception as exc:
-                    result = {"status": "error", "error": str(exc), "error_code": "SLACK_AUTH_FAILED"}
-                messages.append(build_tool_message("slack_notify", result, 1))
-                receipt = build_slack_receipt(slack_result=result, destinations=destinations)
-                receipts.append(receipt)
-                if receipt.status == "success":
-                    completed.add("slack_notify")
-                if isinstance(result, dict) and result.get("error_code") == "SLACK_DESTINATION_MISSING":
-                    needs_destination = True
-                if isinstance(result, dict) and result.get("error_code"):
-                    error_codes.append(result["error_code"])
+            if body_ready and "slack_notify" not in waiting_intents:
+                if slack_delivery.selection is not None and contract.execution_ready(
+                    "slack_notify", body_ready=True, destination_ready=True,
+                ):
+                    result = slack_notify_tool(text=body, delivery=slack_delivery)
+                    slack_delivery = SlackDelivery.model_validate(result.model_dump())
+                    messages.append(build_tool_message("slack_notify", slack_delivery.model_dump(mode="json"), 1))
+                if slack_delivery.status != "pending":
+                    receipt = build_slack_receipt(slack_delivery)
+                    receipts.append(receipt)
+                    if receipt.status == "success":
+                        completed.add("slack_notify")
+                    elif slack_delivery.failure is not None:
+                        needs_destination = slack_delivery.failure.next_action == "correct_input"
+                        error_codes.append(receipt.error_code)
 
         if body_ready:
             receipts.extend(ActionReceipt(kind=name, status="skipped", message=_action_question(contract, name))
@@ -260,7 +253,10 @@ def make_action_postprocess_node(
                 "save_operation_binding_sha256": save_operation.binding_sha256 if save_operation is not None else None,
             })
         waiting_for_body = not body_ready and any(intent == "requested" for intent in intents.values())
-        waiting_for_delivery = bool(action_errors)
+        waiting_for_delivery = bool(action_errors) or bool(
+            intents["slack_notify"] == "requested" and slack_delivery is not None
+            and slack_delivery.status != "sent" and not needs_destination and body_ready
+        )
         phase = ("awaiting_input" if needs_intent or not contract.can_prepare_body() else
                  "awaiting_body" if waiting_for_body else
                  "awaiting_delivery" if waiting_for_delivery else "awaiting_destination")
@@ -272,6 +268,7 @@ def make_action_postprocess_node(
                 completed_actions=tuple(sorted(completed)),
                 save_operation=save_operation,
                 save_receipt=save_receipt,
+                slack_delivery=slack_delivery,
                 phase=phase,
                 body_prepared=_prepared_pending_body(contract=contract, pending=pending, body_ready=body_ready),
             )
@@ -281,7 +278,7 @@ def make_action_postprocess_node(
             updates["runtime"] = runtime.model_copy(update={"pending_action": next_pending})
         if messages:
             updates["messages"] = messages
-        if action_errors:
+        if action_errors or error_codes:
             updates["debug"] = debug.model_copy(update={
                 "action_errors": [*debug.action_errors, *action_errors],
                 "error_codes": list(dict.fromkeys([*debug.error_codes, *error_codes])),

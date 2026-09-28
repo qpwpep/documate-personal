@@ -65,7 +65,7 @@ def test_copy_input_preserves_exact_text_in_screen_file_and_slack(delivery_tools
     save, slack, delivered, output = delivery_tools
     original = "  첫 줄\r\n둘째 줄  \r\n"
     contract = _contract(CopyInputBody(source=_input(original)), save="requested", slack="requested",
-                         slack_destination={"channel_id": "C123"})
+                         slack_recipient={"state": "explicit", "selector": {"kind": "channel", "value": "C123"}, "evidence_ids": ["request"]})
     state = _state(contract)
 
     _prepare(state, DocumentModel())
@@ -83,7 +83,7 @@ def test_translated_input_delivers_the_transformation_not_the_instruction(delive
     save, slack, delivered, output = delivery_tools
     source = "안녕하세요."
     contract = _contract(TransformInputBody(source=_input(source), instruction="영어로 번역한다.", evidence_ids=("request",)),
-                         save="requested", slack="requested", slack_destination={"channel_id": "C123"})
+                         save="requested", slack="requested", slack_recipient={"state": "explicit", "selector": {"kind": "channel", "value": "C123"}, "evidence_ids": ["request"]})
     state = _state(contract)
     model = DocumentModel("Hello.")
 
@@ -138,7 +138,7 @@ def test_previous_revision_answer_is_not_delivered_as_the_current_request(delive
     """다른 계약 revision에서 검증된 본문을 새 요청의 완성 본문으로 전송하지 않는다."""
     save, slack, delivered, output = delivery_tools
     contract = _contract(ComposeBody(instruction="새 본문을 작성한다."), save="requested", slack="requested",
-                         slack_destination={"channel_id": "C123"}, revision=2)
+                         slack_recipient={"state": "explicit", "selector": {"kind": "channel", "value": "C123"}, "evidence_ids": ["request"]}, revision=2)
     state = _state(contract)
     state["response"] = ResponseState(result=finalize_answer(text_document("이전 본문"), []), kind="answer",
                                       request_id=contract.request_id, contract_revision=1)
@@ -213,7 +213,7 @@ def test_subject_then_destination_supplements_deliver_one_prepared_revision(deli
     delivery_contract = RequestContract.model_validate({
         **prepared_contract.model_dump(mode="python"), "revision": 3,
         "body": CopyAnswerBody(source=BoundAnswerReference(ref="pending", response_hash=prepared.content_hash)),
-        "slack_destination": {"channel_id": "C123"},
+        "slack_recipient": {"state": "explicit", "selector": {"kind": "channel", "value": "C123"}, "evidence_ids": ["request"]},
     })
     state["runtime"] = state["runtime"].model_copy(update={"request_contract": delivery_contract})
     _prepare(state, DocumentModel())
@@ -286,7 +286,7 @@ def test_failed_transformation_waiting_on_intent_retains_source_without_marking_
 
     ready_contract = RequestContract.model_validate({
         **contract.model_dump(mode="python"), "revision": 3, "missing_info": (),
-        "slack_destination": {"channel_id": "C123"},
+        "slack_recipient": {"state": "explicit", "selector": {"kind": "channel", "value": "C123"}, "evidence_ids": ["request"]},
         "actions": {"save_text": contract.actions.save_text,
                     "slack_notify": ActionRequest(intent="requested", evidence_ids=("request",))},
     })
@@ -323,13 +323,13 @@ def test_unmatched_or_unresolved_pending_target_cannot_replace_the_active_reques
     assert not output.exists()
 
 
-@pytest.mark.parametrize("delivery_tools", [[{"ok": False, "error": "internal_error"},
+@pytest.mark.parametrize("delivery_tools", [[{"ok": False, "error": "ratelimited"},
                                             {"ok": True, "channel": "C123", "ts": "2.0"}]], indirect=True)
 def test_delivery_error_preserves_ready_body_and_completed_save_for_explicit_retry(delivery_tools):
     """저장 성공 후 전송 오류는 준비 본문과 저장 완료를 보존하고 명시적 재시도에서 전송만 수행한다."""
     save, slack, delivered, output = delivery_tools
     contract = _contract(ComposeBody(instruction="본문 작성"), save="requested", slack="requested",
-                         slack_destination={"channel_id": "C123"})
+                         slack_recipient={"state": "explicit", "selector": {"kind": "channel", "value": "C123"}, "evidence_ids": ["request"]})
     state = _state(contract)
     actions = make_action_postprocess_node(save, slack, False)
     _prepare(state, DocumentModel("검증된 전달 본문"))
@@ -341,6 +341,8 @@ def test_delivery_error_preserves_ready_body_and_completed_save_for_explicit_ret
     assert pending.phase == "awaiting_delivery"
     assert pending.body_prepared
     assert pending.completed_actions == ("save_text",)
+    assert pending.slack_delivery.failure.code == "rate_limited"
+    assert pending.slack_delivery.failure.next_action == "retry_same_target"
     assert len(delivered) == 1
     assert [(receipt.kind, receipt.status) for receipt in state["response"].result.actions] == [
         ("save_text", "success"), ("slack_notify", "error"),
@@ -359,6 +361,8 @@ def test_delivery_error_preserves_ready_body_and_completed_save_for_explicit_ret
 
     assert state["runtime"].pending_action is None
     assert [item["payload"]["text"] for item in delivered] == ["검증된 전달 본문", "검증된 전달 본문"]
+    assert [item["payload"]["channel"] for item in delivered] == ["C123", "C123"]
+    assert state["response"].result.actions[-1].slack.selection == pending.slack_delivery.selection
     assert saved_file.read_bytes() == saved_bytes
     assert saved_file.stat().st_mtime_ns == saved_time
     assert state["response"].result.actions[0] == pending.save_receipt
@@ -406,7 +410,7 @@ def test_requested_action_with_an_unresolved_slot_keeps_the_prepared_body_and_as
     save, slack, delivered, output = delivery_tools
     question = "파일로 저장할까요?" if blocked_action == "save_text" else "Slack으로 전송할까요?"
     contract = _contract(ComposeBody(instruction="본문을 설명한다."), save="requested", slack="requested",
-                         slack_destination={"channel_id": "C123"},
+                         slack_recipient={"state": "explicit", "selector": {"kind": "channel", "value": "C123"}, "evidence_ids": ["request"]},
                          missing_info=(MissingInformation(slot=slot, reason="unclear", question=question),))
     state = _state(contract)
 

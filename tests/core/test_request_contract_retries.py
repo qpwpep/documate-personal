@@ -18,6 +18,7 @@ from src.runtime.nodes.retrieval import make_retrieve_dispatch_node
 from src.runtime.nodes.session import add_user_message, make_summarize_node
 from src.runtime.nodes.synthesis import make_synthesize_node
 from src.runtime.nodes.validation import make_post_synthesis_validation_node, make_pre_synthesis_validation_node
+from tests.core.test_pending_action_delivery import delivery_tools
 
 
 class PlannerBoundary:
@@ -28,6 +29,7 @@ class PlannerBoundary:
     def invoke(self, messages):
         user = [message for message in messages if isinstance(message, HumanMessage)][-1]
         contract = WireRequestContract.model_validate({
+            "slack_recipient": {"state": "omitted"},
             "body": {"kind": "transform_answer", "source": {"ref": "previous"},
                      "instruction": "세 줄로 줄여줘", "evidence_ids": ["format"]},
             "actions": {"save_text": {"intent": self.save_intent, "evidence_ids": ["action"]}},
@@ -98,6 +100,7 @@ def test_failed_save_retries_the_same_frozen_operation_through_real_planner(tmp_
         def invoke(self, messages):
             user = [message for message in messages if isinstance(message, HumanMessage)][-1]
             payload = {
+                "slack_recipient": {"state": "omitted"},
                 "actions": {"save_text": {"intent": "requested", "evidence_ids": ["save"]}},
                 "evidence": [{"id": "save", "turn_id": user.id, "quote": str(user.content),
                               "scope": "current_request", "interpretation": "instruction"}],
@@ -199,6 +202,7 @@ class _SaveConversation:
     def invoke(self, messages):
         user = [message for message in messages if isinstance(message, HumanMessage)][-1]
         payload = {
+                "slack_recipient": {"state": "omitted"},
             "actions": {"save_text": {"intent": "requested", "evidence_ids": ["request"]}},
             "evidence": [{"id": "request", "turn_id": user.id, "quote": str(user.content),
                           "scope": "current_request", "interpretation": "instruction"}],
@@ -211,7 +215,7 @@ class _SaveConversation:
         return PlannerOutput(use_retrieval=False, tasks=[],
                              request_contract=WireRequestContract.model_validate(payload))
 
-    def turn(self, query, **payload):
+    def turn(self, query, *, session_metadata=None, **payload):
         self.payload = payload
         previous = self.result
         self.result = self.graph.invoke(build_graph_state_input(
@@ -220,6 +224,7 @@ class _SaveConversation:
             user_turns=previous["runtime"].user_turns if previous else (),
             previous_response=previous["response"].result if previous else None,
             pending_action=previous["runtime"].pending_action if previous else None,
+            session_metadata=session_metadata,
         ))
         return self.result
 
@@ -273,9 +278,10 @@ def test_failed_save_body_correction_survives_clarification_before_supplement(tm
 
 
 @pytest.mark.parametrize("relation", ["correction", "supplement"])
-def test_destination_only_followup_keeps_failed_save_identity(tmp_path, monkeypatch, relation):
+def test_destination_only_followup_keeps_failed_save_identity(tmp_path, monkeypatch, relation, delivery_tools):
     monkeypatch.setattr("src.infra.tools.save_text.get_save_text_output_dir", lambda: tmp_path)
-    conversation = _SaveConversation(["재시도할 본문"], slack=lambda **_kwargs: {"status": "success"})
+    _save, slack, messages, _output = delivery_tools
+    conversation = _SaveConversation(["재시도할 본문"], slack=slack)
     with monkeypatch.context() as failure:
         _fail_save_publication(failure)
         first = conversation.turn("설명을 작성하고 저장한 뒤 Slack으로 보내줘", body={
@@ -287,7 +293,7 @@ def test_destination_only_followup_keeps_failed_save_identity(tmp_path, monkeypa
     reserved_manifest = manifest_path.read_bytes()
 
     result = conversation.turn("Slack 수신처는 C123이야", relation=relation, actions={},
-                               slack_destination={"channel_id": "C123"})
+                               slack_recipient={"state": "explicit", "selector": {"kind": "channel", "value": "C123"}, "evidence_ids": ["request"]})
     receipt = result["response"].result.actions[0]
     assert receipt.status == "success"
     assert receipt.operation == operation
@@ -295,11 +301,13 @@ def test_destination_only_followup_keeps_failed_save_identity(tmp_path, monkeypa
     assert manifest_path.read_bytes() == reserved_manifest
     assert len(list(tmp_path.glob("*.txt"))) == 1
     assert result["runtime"].pending_action is None
+    assert [item["payload"]["channel"] for item in messages] == ["C123"]
 
 
-def test_destination_correction_does_not_repeat_completed_save(tmp_path, monkeypatch):
+def test_destination_correction_does_not_repeat_completed_save(tmp_path, monkeypatch, delivery_tools):
     monkeypatch.setattr("src.infra.tools.save_text.get_save_text_output_dir", lambda: tmp_path)
-    conversation = _SaveConversation(["이미 저장한 본문"], slack=lambda **_kwargs: {"status": "success"})
+    _save, slack, messages, _output = delivery_tools
+    conversation = _SaveConversation(["이미 저장한 본문"], slack=slack)
     first = conversation.turn("설명을 작성하고 저장한 뒤 Slack으로 보내줘", body={
         "kind": "compose", "instruction": "설명을 작성한다.", "evidence_ids": ["request"],
     }, actions={name: {"intent": "requested", "evidence_ids": ["request"]}
@@ -313,7 +321,7 @@ def test_destination_correction_does_not_repeat_completed_save(tmp_path, monkeyp
     original_manifest = manifest_path.read_bytes()
 
     result = conversation.turn("Slack 수신처는 C123이야", relation="correction", actions={},
-                               slack_destination={"channel_id": "C123"})
+                               slack_recipient={"state": "explicit", "selector": {"kind": "channel", "value": "C123"}, "evidence_ids": ["request"]})
     assert result["runtime"].request_contract.actions.save_text.intent == "not_requested"
     assert [(item.kind, item.status) for item in result["response"].result.actions] == [("slack_notify", "success")]
     assert result["response"].result.content == first["response"].result.content
@@ -322,6 +330,7 @@ def test_destination_correction_does_not_repeat_completed_save(tmp_path, monkeyp
     assert manifest_path.read_bytes() == original_manifest
     assert len(list(tmp_path.glob("*.txt"))) == 1
     assert result["runtime"].pending_action is None
+    assert [item["payload"]["channel"] for item in messages] == ["C123"]
 
 
 @pytest.mark.parametrize("change", ["format", "reference"])

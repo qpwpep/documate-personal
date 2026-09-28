@@ -11,6 +11,28 @@ from src.core.save_contract import SaveOperation
 from src.core.contracts.provenance import AnswerProvenance, AnswerSource
 from src.core.documents import DocumentElement, SourceAnchor, build_snapshot
 from src.core.evidence import RetrievalScore, SearchHit, build_evidence
+from src.core.slack_contract import ExplicitRecipient, RecipientSelector, RecipientSelection, SlackDelivery, SlackFailure, SlackTarget
+from src.core.answer_schema import ActionReceipt
+
+
+def slack_action(*, channel_id: str = "C123", status: str = "success", error: str = "channel_not_found") -> dict:
+    """Declare the observed Slack result at the HTTP boundary."""
+    selector = RecipientSelector(kind="channel", value=channel_id)
+    failure = None if status == "success" else SlackFailure(
+        stage="send", code="delivery_unknown" if status == "unknown" else "target_not_found",
+        message=error, next_action="verify_delivery" if status == "unknown" else "correct_input",
+        slack_error=error,
+    )
+    delivery = SlackDelivery(
+        intent=ExplicitRecipient(selector=selector),
+        selection=RecipientSelection(request_id="fixture", source="request_input", selector=selector),
+        target=SlackTarget(channel_id=channel_id),
+        status={"success": "sent", "error": "not_sent", "unknown": "unknown"}[status],
+        message_ts="1.0" if status == "success" else None, failure=failure,
+    )
+    return ActionReceipt(kind="slack_notify", status=status, slack=delivery,
+                         error=failure.message if failure else None,
+                         error_code=failure.code if failure else None).model_dump(mode="json")
 
 
 def sse_frame(event: str, data: dict) -> bytes:

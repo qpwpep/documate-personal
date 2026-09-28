@@ -4,7 +4,7 @@ from typing import Any
 from pathlib import Path
 
 from src.core.answer_schema import ActionReceipt
-from src.core.contracts import SlackDestination
+from src.core.slack_contract import SlackDelivery
 from src.core.save_contract import SaveArtifact, SaveOperation
 
 
@@ -62,17 +62,16 @@ def build_save_receipt(save_result: Any, *, operation: SaveOperation | None = No
                          error=_failure(save_result))
 
 
-def build_slack_receipt(*, slack_result: Any, destinations: SlackDestination) -> ActionReceipt:
-    status = _status(slack_result)
-    target = None
-    for key in ("channel_id", "user_id", "email"):
-        value = slack_result.get(key) if isinstance(slack_result, dict) else None
-        if value:
-            target = str(value)
-            break
-    target = target or destinations.channel_id or destinations.user_id or destinations.email
-    if status in {"success", "ok"}:
-        return ActionReceipt(kind="slack_notify", status="success", target=target)
-    if status == "skipped":
-        return ActionReceipt(kind="slack_notify", status="skipped", target=target, message=str(slack_result.get("reason") or "전송을 보류했습니다."))
-    return ActionReceipt(kind="slack_notify", status="error", target=target, error=_failure(slack_result))
+def build_slack_receipt(delivery: SlackDelivery) -> ActionReceipt:
+    if delivery.status == "sent":
+        return ActionReceipt(kind="slack_notify", status="success", slack=delivery)
+    if delivery.failure is None:
+        raise ValueError("cannot report an unattempted Slack delivery")
+    status = ("unknown" if delivery.status == "unknown" else
+              "skipped" if delivery.failure.stage in {"input", "selection"} else "error")
+    return ActionReceipt(
+        kind="slack_notify", status=status, slack=delivery,
+        message=delivery.failure.message if status == "skipped" else None,
+        error=delivery.failure.message if status != "skipped" else None,
+        error_code=f"SLACK_{delivery.failure.code.upper()}",
+    )
