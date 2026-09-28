@@ -515,7 +515,7 @@ Streamlit은 첫 이벤트 전 오류를 포함해 요청 실패를 화면에 �
 - `planner_diagnostics`
 - `action_results`
 
-현재 debug schema version은 `7`입니다. `answer_provenance`의 `version`은 `1`이며 아래 필드를 제공합니다. `AnswerResponse`와 세션 대화 메모리의 공개 계약은 유지합니다.
+현재 debug schema version은 `8`입니다. `action_results.slack_notify`는 최종 receipt와 동일한 `SlackDelivery`를 사용합니다. `answer_provenance`의 `version`은 `1`이며 아래 필드를 제공합니다.
 
 | 필드 | 의미 |
 |---|---|

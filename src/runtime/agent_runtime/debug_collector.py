@@ -40,16 +40,7 @@ class DebugCollector:
                 continue
             tool_name = str(getattr(message, "name", "") or "").strip()
             payload = cls._parse_tool_payload(message)
-            if tool_name == "slack_notify":
-                action_results["slack_notify"] = {
-                    "status": str(payload.get("status") or "").strip(),
-                    "channel_id": str(payload.get("channel_id") or "").strip() or None,
-                    "target_type": str(payload.get("target_type") or "").strip() or None,
-                    "error": str(payload.get("error") or "").strip() or None,
-                    "reason": str(payload.get("reason") or "").strip() or None,
-                    "error_code": str(payload.get("error_code") or "").strip().upper() or None,
-                }
-            elif tool_name == "save_text":
+            if tool_name == "save_text":
                 try:
                     saved_bytes = max(0, int(payload.get("bytes", 0) or 0))
                 except (TypeError, ValueError):
@@ -332,7 +323,11 @@ class DebugCollector:
         planner_diagnostics = self._normalize_planner_diagnostics(
             state_planner.diagnostics.model_dump(mode="json")
         )
-        action_results = self._extract_action_results(current_turn_messages)
+        action_results = self._extract_action_results(current_turn_messages) or {}
+        for receipt in state_response.result.actions:
+            if receipt.kind == "slack_notify" and receipt.slack is not None:
+                action_results["slack_notify"] = receipt.slack.model_dump(mode="json")
+        action_results = action_results or None
         error_codes = self._collect_error_codes(
             state_error_codes=list(state_debug.error_codes),
             retrieval_diagnostics=retrieval_diagnostics,

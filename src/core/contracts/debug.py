@@ -6,6 +6,7 @@ from langchain_core.messages import AIMessage
 from pydantic import BaseModel, Field
 
 from src.core.contracts.provenance import AnswerProvenance
+from src.core.slack_contract import SlackDelivery
 
 ErrorCode = Literal[
     "PLANNER_SCHEMA_INVALID",
@@ -20,8 +21,19 @@ ErrorCode = Literal[
     "VALIDATION_UNRESOLVED_REFERENCES",
     "VALIDATION_MISSING_CONTENT",
     "DEBUG_NORMALIZATION_FAILED",
-    "SLACK_AUTH_FAILED",
-    "SLACK_DESTINATION_MISSING",
+    "SLACK_RECIPIENT_MISSING",
+    "SLACK_RECIPIENT_INVALID",
+    "SLACK_RECIPIENT_AMBIGUOUS",
+    "SLACK_RECIPIENT_CONFLICT",
+    "SLACK_CONFIGURATION_ERROR",
+    "SLACK_TARGET_NOT_FOUND",
+    "SLACK_TARGET_UNAVAILABLE",
+    "SLACK_PERMISSION_DENIED",
+    "SLACK_AUTHENTICATION_FAILED",
+    "SLACK_RATE_LIMITED",
+    "SLACK_TEMPORARY_FAILURE",
+    "SLACK_DELIVERY_UNKNOWN",
+    "SLACK_PROTOCOL_ERROR",
     "UPLOAD_PATH_INVALID",
 ]
 RetryReason = Literal[
@@ -60,7 +72,7 @@ RETRYABLE_REASONS: set[RetryReason] = {
     "missing_content",
     "missing_route_coverage",
 }
-DEBUG_SCHEMA_VERSION = 7
+DEBUG_SCHEMA_VERSION = 8
 # Historical diagnostics can contain retired routes; these never enable execution.
 RECORDED_ROUTE_ORDER: tuple[str, ...] = ("docs", "upload", "local")
 DebugObservabilityStatus = Literal["ok", "degraded", "failed"]
@@ -179,15 +191,6 @@ class LLMCallMetadata(BaseModel):
     usage_metadata: dict[str, Any] = Field(default_factory=dict)
 
 
-class SlackActionResult(BaseModel):
-    status: str = ""
-    channel_id: str | None = None
-    target_type: str | None = None
-    error: str | None = None
-    reason: str | None = None
-    error_code: ErrorCode | None = None
-
-
 class SaveTextActionResult(BaseModel):
     status: str = ""
     file_path: str | None = None
@@ -198,7 +201,7 @@ class SaveTextActionResult(BaseModel):
 
 
 class ActionResults(BaseModel):
-    slack_notify: SlackActionResult | None = None
+    slack_notify: SlackDelivery | None = None
     save_text: SaveTextActionResult | None = None
 
 
