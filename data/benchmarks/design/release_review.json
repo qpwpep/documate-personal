@@ -1,10 +1,10 @@
 {
   "dataset_version": "release-nemo-v2",
-  "reviewed_at": "2026-09-18T15:00:24.015054+00:00",
-  "candidate_sha256": "711f4a5a3cd4bb5e20a37071041afdf32d7fa93f7c4ced0c4012cee8af31d732",
+  "reviewed_at": "2026-09-28T05:11:10.249654+00:00",
+  "candidate_sha256": "1bef024687a8afa91567198fd51320fe4cec2970812c24d87e81f3d094fbad0c",
   "artifact_hashes": {
     "design/action_sources.json": "755aceaaa950856efbbc740e44958a6ba7a9825b88e10a30c8903a265fed2b0f",
-    "design/action_specs.jsonl": "85202eafb70e7896b59b7b32e98d70b6438bbe8d4012278399c44e864b30a6cc",
+    "design/action_specs.jsonl": "a5a0e5184fbb79bb8f8b4324bed9158b9b7e8ce5ca44e7829fb0bed505179fcb",
     "design/plan.json": "f4dea6f6f48b3add923972e9ec68ffe699a0107ebfa41f9d4608369e86b32392",
     "design/retrieval_specs.jsonl": "2abc0af41042659ad8ba413e0d4230c143b145c395461d2acd5a429d3acbec99",
     "design/sources.json": "a42a908d4385500a875f19cb77e86d76b050141ae09a5cce37be8c80eff5f6ee",
@@ -222,7 +222,8 @@
       "setup_turns": 27,
       "no_tool_cases": 12
     },
-    "limits": "The fresh generator and reviewer use the same model; correlated errors are possible. Product behavior is also checked by regression tests."
+    "limits": "The fresh generator and reviewer use the same model; correlated errors are possible. Product behavior is also checked by regression tests.",
+    "schema_migration_note": "Content decisions above describe the 2026-09-18 release. The current recipient representation was reviewed separately by the schema_review entry without changing generated questions, reference answers, or generation lineage."
   },
   "semantic_similarity_review": {
     "report_path": "data/benchmarks/design/similarity_report.json",
@@ -292,7 +293,8 @@
         "The nearest planner cancellation example, missing-evidence synthesis policy and save API explanation do not copy this query."
       ]
     },
-    "decision": "Retain all 120 cases. The sole within-release pair above 0.75 remains the intentional public save/share pair 029/030 with different required and forbidden tools. Similarity does not validate the revised oracle."
+    "decision": "Retain all 120 cases. The sole within-release pair above 0.75 remains the intentional public save/share pair 029/030 with different required and forbidden tools. Similarity does not validate the revised oracle.",
+    "schema_migration_note": "No new embedding run was performed for the recipient schema change; this report retains its historical candidate, baseline, and static-prompt scope."
   },
   "prompt_overlap_review": {
     "scope": "120 final queries compared with all 120 pre-replacement release cases and 111 static prompt segments extracted from three operating prompt source files. Top three neighbors in each group reviewed for every case.",
@@ -312,14 +314,16 @@
     "interpretation": "The 30 legacy equality pairs arise from the eight explicitly labeled public regression questions and repetition in the old release. They are not 30 duplicates within the new release. New cancellation/copy examples remain semantically related to product policy examples even without exact overlap.",
     "independent_holdout": false,
     "dynamic_prompt_content_fully_checked": false,
-    "review_basis": "Fresh embedding comparison preserves the archived static prompt inputs, neighbors and exact-overlap results; prior qualitative review is inherited explicitly. The modified oracle is not part of embedding inputs."
+    "review_basis": "Fresh embedding comparison preserves the archived static prompt inputs, neighbors and exact-overlap results; prior qualitative review is inherited explicitly. The modified oracle is not part of embedding inputs.",
+    "schema_migration_note": "This historical comparison does not certify overlap with the current edited planner prompt."
   },
   "unresolved_issues": [],
   "limitations": [
     "Ratios and difficulty are design assumptions, not production-frequency estimates.",
     "Same-model generation/review and separate coding-agent review are not independent human approval or holdout proof.",
     "Static prompt comparison excludes dynamic content, imported text and docstrings.",
-    "This approval covers the dataset contract, sources and provenance. It is not a 120-case live product quality pass; the prior six-case live measurements remain v1 history."
+    "This approval covers the dataset contract, sources and provenance. It is not a 120-case live product quality pass; the prior six-case live measurements remain v1 history.",
+    "The slack_recipient-v1 review checks a lossless representation change and preserved generation evidence; it does not rerun model quality, embeddings, or Slack delivery."
   ],
   "audit_artifacts": {
     "runs/missing-upload-v2/candidates.jsonl": "ba475c041955f934c9269b43441d4dca70e88fc47b523dfce9beff58cb16dc98",
@@ -336,5 +340,186 @@
   "predecessor_review": {
     "path": "data/benchmarks/history/release-nemo-v1/design/release_review.json",
     "sha256": "0dd034cb2c62074d425d7c7ab3485877d998dcee1a4a4c0a07b493aa583146c0"
+  },
+  "schema_review": {
+    "schema": "slack_recipient-v1",
+    "reviewed_at": "2026-09-28T05:11:10.249654+00:00",
+    "reviewer": "Codex coding agent",
+    "method": "Deterministic full-record comparison against the predecessor commit, followed by release validation. No generation, model review, embedding request, live product evaluation, or human approval was performed.",
+    "predecessor": {
+      "commit": "ba672e6ba6f2a91d91be3fcbbc34e61954a88136",
+      "review_path": "data/benchmarks/design/release_review.json",
+      "review_sha256": "8042abe9bb19f0d4e9d3c6e213c751fe9ca2e2cb59bb950647b4e5d715c000f0",
+      "content_reviewed_at": "2026-09-18T15:00:24.015054+00:00",
+      "candidate_sha256": "711f4a5a3cd4bb5e20a37071041afdf32d7fa93f7c4ced0c4012cee8af31d732"
+    },
+    "checked_files": [
+      {
+        "path": "data/benchmarks/fixtures/cases.generated.jsonl",
+        "case_count": 120,
+        "changed_recipient_representation_count": 119,
+        "source_sha256": "711f4a5a3cd4bb5e20a37071041afdf32d7fa93f7c4ced0c4012cee8af31d732",
+        "reviewed_sha256": "1bef024687a8afa91567198fd51320fe4cec2970812c24d87e81f3d094fbad0c"
+      },
+      {
+        "path": "data/benchmarks/design/action_specs.jsonl",
+        "case_count": 30,
+        "changed_recipient_representation_count": 7,
+        "source_sha256": "85202eafb70e7896b59b7b32e98d70b6438bbe8d4012278399c44e864b30a6cc",
+        "reviewed_sha256": "a5a0e5184fbb79bb8f8b4324bed9158b9b7e8ce5ca44e7829fb0bed505179fcb"
+      },
+      {
+        "path": "data/benchmarks/design/retrieval_specs.jsonl",
+        "case_count": 90,
+        "changed_recipient_representation_count": 0,
+        "source_sha256": "2abc0af41042659ad8ba413e0d4230c143b145c395461d2acd5a429d3acbec99",
+        "reviewed_sha256": "2abc0af41042659ad8ba413e0d4230c143b145c395461d2acd5a429d3acbec99"
+      },
+      {
+        "path": "data/benchmarks/fixtures/cases.seed.jsonl",
+        "case_count": 12,
+        "changed_recipient_representation_count": 2,
+        "source_sha256": "40cdb1e22c84d9c8f1618cd15760ba94f5d8314e88586a6f9584e2b9843d4966",
+        "reviewed_sha256": "3318e7ade319280a956c2a70e347c0fca823d267bb53a1520dc8af9b6860160c"
+      },
+      {
+        "path": "data/benchmarks/fixtures/cases.regression.seed.jsonl",
+        "case_count": 8,
+        "changed_recipient_representation_count": 1,
+        "source_sha256": "db57855d2a654e4b9fdcfaf05445f72773d7eeca493ac7454e28a97a300b5445",
+        "reviewed_sha256": "3cd7565ccf6f30ca3fa3c9bd1856b777c193a06968eb753a2581291060b4bb49"
+      }
+    ],
+    "generation_lineage_unchanged_count": 120,
+    "migrated_source_case_ids": [
+      "release_action_006",
+      "release_action_007",
+      "release_action_012",
+      "release_action_018",
+      "release_action_022",
+      "release_action_027",
+      "release_action_030"
+    ],
+    "recipient_mapping": {
+      "release_action_006": {
+        "kind": "channel",
+        "value": "C123BENCH"
+      },
+      "release_action_007": {
+        "kind": "user",
+        "value": "U123BENCH"
+      },
+      "release_action_012": {
+        "kind": "channel",
+        "value": "C123BENCH"
+      },
+      "release_action_018": {
+        "kind": "channel",
+        "value": "C123BENCH"
+      },
+      "release_action_022": {
+        "kind": "channel",
+        "value": "C123BENCH"
+      },
+      "release_action_027": {
+        "kind": "channel",
+        "value": "C123BENCH"
+      },
+      "release_action_030": {
+        "kind": "channel",
+        "value": "C123BENCH"
+      }
+    },
+    "unchanged_facts": [
+      "query",
+      "setup_turns",
+      "oracle",
+      "upload fixtures and bytes",
+      "expected and forbidden tools",
+      "save_expectation",
+      "reference_answer",
+      "rationale",
+      "nemo_generation and original source_spec_sha256"
+    ],
+    "historical_source": "data/benchmarks/history/release-nemo-v1/design/action_specs.jsonl; exact source specifications are embedded in the seven migrated candidate provenance records for portable verification.",
+    "deterministic_checks": {
+      "case_count": 120,
+      "sha256": "1bef024687a8afa91567198fd51320fe4cec2970812c24d87e81f3d094fbad0c",
+      "errors": [],
+      "artifact_hashes": {
+        "design/action_sources.json": "755aceaaa950856efbbc740e44958a6ba7a9825b88e10a30c8903a265fed2b0f",
+        "design/action_specs.jsonl": "a5a0e5184fbb79bb8f8b4324bed9158b9b7e8ce5ca44e7829fb0bed505179fcb",
+        "design/plan.json": "f4dea6f6f48b3add923972e9ec68ffe699a0107ebfa41f9d4608369e86b32392",
+        "design/retrieval_specs.jsonl": "2abc0af41042659ad8ba413e0d4230c143b145c395461d2acd5a429d3acbec99",
+        "design/sources.json": "a42a908d4385500a875f19cb77e86d76b050141ae09a5cce37be8c80eff5f6ee",
+        "uploads/release/array_shapes.py": "3b9fd6b56739a36cc52aeef8bf52ee1825603cb7229e2a7d8bd7481d26fb58a4",
+        "uploads/release/array_shapes_untrusted.py": "af52e1553e35f9f49b0bc9913895a3b2cd21e7a4796bf4580637917bb453deac",
+        "uploads/release/async_jobs.py": "741f8f4448711c0306c146fd9b31a1e645ff1bd1a236201dfe614e6a4db3507e",
+        "uploads/release/batch_limits.py": "4b3a7c2fecd71a41f55b44b045a055270276b9c122eb3bc9444f962b2434dee4",
+        "uploads/release/batch_loading.py": "0bb1f167013a17e7744f8d09e899581b59eae38051348dc4c3b42b62e8461754",
+        "uploads/release/churn_training.ipynb": "6a13f5273e4c00e39436ba88711690e5ea22e03624becf28c9a9531b6541a700",
+        "uploads/release/churn_training_untrusted.ipynb": "5b9dd8f646aa009f518f405b23c4e4f2469fcd433a150ce03f07b3cb95e60746",
+        "uploads/release/cleaning.py": "55f54faac689ec3ce86051ab552d5a4ae42f19f0f9f4c1d2011303fc08b357a5",
+        "uploads/release/cleaning_untrusted.py": "789890aed0edf1402c3b434abc49c7e42fe2fd0541b33bfbbe6c5a149fb468b1",
+        "uploads/release/delivery_note.py": "1716029d2cbd0956bf65dad7bca006e4dcccaaa58b0455ae0f5b8d24c43064fd",
+        "uploads/release/export_records.py": "a2e7b3deed390df1875c507a1d50332cbf327ad117154efed085402cf28e0541",
+        "uploads/release/forecast_backtest.ipynb": "5b28ca578586016719b0c52d3833fc4066d7581256dfe14857b89433d36d10af",
+        "uploads/release/handover.py": "b7060236a89cc843d98a46c9338f971864012ff81bbf1a8d82955fdfeba1460d",
+        "uploads/release/incident_review.docx": "3d7dc1416467d679fe0c0de05403aa8fbc76fdebc7307db3d17b142dcc98e4ff",
+        "uploads/release/incident_review_untrusted.docx": "72c8a774806f07e0d8742b07bc17d40ffb0b70f38350e618331456dcd781a974",
+        "uploads/release/inventory_rollup.py": "d5f798e27051d92ca0496fb6368fee7c97b4f49aa733a6966d1f9f04623772f3",
+        "uploads/release/latency_plots.ipynb": "0bf41a2992aedc5b419f423b9a90980cd5938c12a8d698d929e9abf9ced0ca99",
+        "uploads/release/latency_plots_untrusted.ipynb": "61a186d10676019348d8cdb77f165c0bf2ffac1640657af4e3cb2e24ff5cb3da",
+        "uploads/release/leakage_audit_untrusted.ipynb": "2b9741a71d4826b58dbc3f5d0e135365b3920fa371fbb59c5e4e0aeef3f192d9",
+        "uploads/release/metrics.py": "c8ae1c18f9f5bcc5b9c747c2f82e8aa56f11787ee331540ba665a1d8b34678fc",
+        "uploads/release/model_card.png": "e3befd8851da1989860a6380021f7a7008b769940ba9d6b913ef3be391cdd889",
+        "uploads/release/monthly_concat.ipynb": "13edc3bc76a1925bbae1e91846edaa93b149c693daea4b0b0de3b4ac7466972e",
+        "uploads/release/order_join.py": "2c9c328461b215e6f21f0b4205120f81fe721a1f9dcbcbf433674d47c55307c3",
+        "uploads/release/order_join_untrusted.py": "fd6dc8503f842a9fe1168157fdc6d487cf63c4e8cbc9716ffedea32408d4dc9e",
+        "uploads/release/public_api.py": "3b4e09512106cb6e05845fb3b5db46ff1c777758f8d123f094e37419d4a5bdb0",
+        "uploads/release/public_api_untrusted.py": "31297c4c11659e5cd81f01e16bd7b8c688f024ae95663efa99ca677fa8d97aac",
+        "uploads/release/quarterly_audit.pdf": "1ca4eabc35fca959d26055f3ae8fc1e72128b557de4392297efa5c9c01dda01d",
+        "uploads/release/retention.py": "535e02775bd0eef15042490f57ace38a2dcd7aa01072d557996d663af61fc2e6",
+        "uploads/release/retention_v1.pdf": "02a96c64c8a6afd53371b89dbce263cea8485126a7e76fc8762faaf198ea18da",
+        "uploads/release/retention_v2.pdf": "d18106eeb37ea8ac30d48bbae83395c944c6a95a85d452ad52b216d4736df19b",
+        "uploads/release/schema_rules.py": "70e0087ea730732441be02a925df8d2679f43d06ef9c9ace3ee86d1312108337",
+        "uploads/release/sparse_features.py": "d7f24d583eea97715cf5e7ec81de72ac86b8ae9aa2f5f9dda77ff447eb840fae",
+        "uploads/sample_data_analysis.py": "e8a94cd9754b946cd78daa2293bda23a95f7a70a28c137a8a2ef938f575a4f79",
+        "uploads/sample_pipeline.ipynb": "c4be985f6224d2c2dd47c5b9772885048a6e99ca2dfe2f414a4e3f572ad2ee24",
+        "uploads/sample_visualization.ipynb": "36033f1553c8b433a9ef0ce3f51478cae91d94f4f6dc71a134ff7251a3ba92f2"
+      },
+      "distributions": {
+        "category": {
+          "docs_only": 30,
+          "rag_only": 30,
+          "hybrid": 30,
+          "tool_action": 30
+        },
+        "scenario": {
+          "standard": 60,
+          "boundary": 24,
+          "regression": 8,
+          "injection": 16,
+          "correction": 8,
+          "failure": 4
+        },
+        "difficulty": {
+          "easy": 32,
+          "medium": 56,
+          "hard": 32
+        },
+        "evaluation_role": {
+          "new_evaluation": 112,
+          "public_regression": 8
+        }
+      },
+      "attachment_count": 35,
+      "attachment_cases": 64,
+      "multi_attachment_cases": 4,
+      "setup_turns": 27,
+      "no_tool_cases": 12
+    },
+    "decision": "Approve only the recipient representation migration. The full-record comparison found no task, target, oracle, source, or generated-review changes. Existing content review remains historical evidence with its original scope and limitations.",
+    "limits": "The historical similarity and prompt-overlap report applies to its archived prompt snapshot, not the current edited prompts. No current live quality or new model-generation claim is made."
   }
 }
