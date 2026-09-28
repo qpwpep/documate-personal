@@ -5,6 +5,7 @@ import hashlib
 import json
 import time
 from typing import Any
+from uuid import uuid4
 
 from src.core.contracts import RetrievalDiagnostic
 from src.core.contracts.routes import route_for_tool
@@ -13,6 +14,7 @@ from src.core.latency import elapsed_ms, make_retrieval_route_latency_event
 from src.core.planner_schema import RetrievalTask
 from src.infra.tools.docs_search import infer_docs_query_hint
 from src.infra.tools.docs_search.serialization import filter_hits_to_domains
+from src.runtime.agent_runtime.tool_execution import record_nonexecution
 
 
 @dataclass(slots=True)
@@ -189,8 +191,9 @@ def execute_retrieval_task(
 ) -> RetrievalTaskResult:
     local_errors: list[str] = []
     started = time.perf_counter()
+    invocation_id = uuid4().hex
     try:
-        payload = invoke_tool(task)
+        payload = invoke_tool(task, invocation_id)
     except Exception as exc:
         payload = {
             "hits": [],
@@ -214,6 +217,7 @@ def execute_retrieval_task(
         local_errors=local_errors,
         task=task,
     )
+    diagnostic = diagnostic.model_copy(update={"invocation_id": invocation_id})
     payload = {"hits": payload_dicts, "diagnostics": diagnostic.model_dump(mode="json")}
     return RetrievalTaskResult(
         index=index,
@@ -251,6 +255,8 @@ def build_reused_retrieval_task_result(
     if prior is None:
         prior = RetrievalDiagnostic(tool=tool_name, route=route, query=task.query,
                                     status="success" if route_hits else "no_result")
+    record_nonexecution(tool_name, phase="reused", reason_code="retrieval_evidence_reused",
+                        origin_invocation_id=prior.invocation_id)
     diagnostic = prior.model_copy(update={
         "tool": tool_name, "route": route, "attempt": attempt,
         "requirement_id": task.requirement_id,

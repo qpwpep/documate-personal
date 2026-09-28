@@ -255,6 +255,7 @@ def parse_debug_payload(value: Any) -> DebugPayload:
         if isinstance(value.get("tool_calls"), list)
         else [],
         tool_call_count=int(value.get("tool_call_count", 0) or 0),
+        execution_evidence=value.get("execution_evidence"),
         token_usage=token_usage,
         model_name=model_name,
         models_used=models_used,

@@ -107,6 +107,7 @@ class SlackDelivery(SlackModel):
     explicit in status/failure, never represented by an absent ID alone.
     """
 
+    invocation_id: str | None = Field(default=None, min_length=1)
     intent: RecipientIntent
     selection: RecipientSelection | None = None
     resolved_user_id: str | None = None

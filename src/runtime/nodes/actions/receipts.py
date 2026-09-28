@@ -19,6 +19,12 @@ def _failure(result: Any) -> str:
 
 
 def build_save_receipt(save_result: Any, *, operation: SaveOperation | None = None) -> ActionReceipt:
+    receipt = _build_save_receipt(save_result, operation=operation)
+    invocation_id = save_result.get("invocation_id") if isinstance(save_result, dict) else None
+    return receipt.model_copy(update={"invocation_id": invocation_id})
+
+
+def _build_save_receipt(save_result: Any, *, operation: SaveOperation | None = None) -> ActionReceipt:
     status = _status(save_result)
     path = str(save_result.get("file_path") or "").strip() if isinstance(save_result, dict) else ""
     if status in {"success", "ok"} and path:
@@ -64,13 +70,13 @@ def build_save_receipt(save_result: Any, *, operation: SaveOperation | None = No
 
 def build_slack_receipt(delivery: SlackDelivery) -> ActionReceipt:
     if delivery.status == "sent":
-        return ActionReceipt(kind="slack_notify", status="success", slack=delivery)
+        return ActionReceipt(kind="slack_notify", status="success", slack=delivery, invocation_id=delivery.invocation_id)
     if delivery.failure is None:
         raise ValueError("cannot report an unattempted Slack delivery")
     status = ("unknown" if delivery.status == "unknown" else
               "skipped" if delivery.failure.stage in {"input", "selection"} else "error")
     return ActionReceipt(
-        kind="slack_notify", status=status, slack=delivery,
+        kind="slack_notify", status=status, slack=delivery, invocation_id=delivery.invocation_id,
         message=delivery.failure.message if status == "skipped" else None,
         error=delivery.failure.message if status != "skipped" else None,
         error_code=f"SLACK_{delivery.failure.code.upper()}",

@@ -6,6 +6,7 @@ from langchain_core.messages import AIMessage
 from pydantic import BaseModel, Field
 
 from src.core.contracts.provenance import AnswerProvenance
+from src.core.contracts.tool_execution import ToolExecutionEvidence
 from src.core.slack_contract import SlackDelivery
 
 ErrorCode = Literal[
@@ -72,7 +73,7 @@ RETRYABLE_REASONS: set[RetryReason] = {
     "missing_content",
     "missing_route_coverage",
 }
-DEBUG_SCHEMA_VERSION = 8
+DEBUG_SCHEMA_VERSION = 9
 # Historical diagnostics can contain retired routes; these never enable execution.
 RECORDED_ROUTE_ORDER: tuple[str, ...] = ("docs", "upload", "local")
 DebugObservabilityStatus = Literal["ok", "degraded", "failed"]
@@ -146,6 +147,7 @@ class PlannerDiagnostic(BaseModel):
 
 
 class RetrievalDiagnostic(BaseModel):
+    invocation_id: str | None = Field(default=None, min_length=1)
     tool: str = ""
     route: str = ""
     status: str = ""
@@ -211,6 +213,7 @@ class DebugPayload(BaseModel):
     missing_required_debug_fields: list[str] = Field(default_factory=list)
     tool_calls: list[str] = Field(default_factory=list)
     tool_call_count: int = 0
+    execution_evidence: ToolExecutionEvidence | dict[str, Any] | None = None
     token_usage: TokenUsage | None = None
     model_name: str | None = None
     models_used: list[str] = Field(default_factory=list)
