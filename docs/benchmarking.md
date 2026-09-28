@@ -102,9 +102,9 @@ uv run python -m src.eval.main run --mode online --track release
 
 나머지 119개 사례의 내용과 생성 출처는 그대로 유지했습니다. [생성 이력](../data/benchmarks/design/generation_manifest.json)은 과거 실행 기록과 현재 선택 출처를 구분합니다. [신규 실제 실행 원본](../data/benchmarks/design/runs/missing-upload-v2/)에는 입력 명세, source specs, seed Parquet, pipeline, 생성·검수 trace, manifest, 승인 후보를 보존했습니다. 기존 [v1 원본 패키지](../data/benchmarks/history/release-nemo-v1/)의 데이터·첨부·명세·생성 및 승인 기록 44개는 원래 바이트로 보관하며 기존 승인 해시가 계속 일치합니다. v1의 전체 raw trace는 기존 로컬 `output/nemo-release/`에 남으며 새 checkout에는 자동 포함되지 않습니다. 과거 모델 호출을 새 명세의 생성 기록으로 바꾸지 않았습니다.
 
-수신자 표현 변경은 [현재 승인 기록](../data/benchmarks/design/release_review.json)의 `schema_review`에서 별도로 검증했습니다. 전체 120개 후보, 명세 120개, 공개 seed 12개와 회귀 seed 8개의 원문·준비 대화·oracle·첨부·기대 행동·생성 출처를 이전 Git commit과 비교했으며 수신자 표현 외 차이는 없습니다. 명시 수신자가 있는 7개 후보에는 `provenance.recipient_schema_migration`으로 실제 생성에 사용한 원본 명세와 현재 명세 해시를 보관합니다. 검증기는 원본 해시가 기존 `nemo_generation.source_spec_sha256`와 일치하고, 정확히 한 수신자의 표현만 바뀌었는지 확인합니다. 다른 대상·질문·oracle 변경이나 복수 수신자 원본은 거부합니다. 이 원문은 과거 생성 사실을 확인하는 증거이며 구형 요청을 실행하기 위한 입력 계약이 아닙니다. 기존 생성 해시·모델 실행·유사도 보고서는 수정하지 않았고 새 생성·실모델 평가를 수행했다고 간주하지 않습니다.
+수신자 표현 변경은 [현재 승인 기록](../data/benchmarks/design/release_review.json)의 `schema_review`에서 별도로 검증했습니다. 당시 전체 120개 후보, 명세 120개, 공개 seed 12개와 회귀 seed 8개의 원문·준비 대화·oracle·첨부·기대 행동·생성 출처를 이전 Git commit과 비교했으며 수신자 표현 외 차이는 없었습니다. 명시 수신자가 있는 7개 후보에는 `provenance.recipient_schema_migration`으로 실제 생성에 사용한 원본 명세와 수신자 표현 변경 후 명세 해시를 보관합니다. 검증기는 원본 해시가 기존 `nemo_generation.source_spec_sha256`와 일치하고, 정확히 한 수신자의 표현만 바뀌었는지 확인합니다. 다른 대상·질문·oracle 변경이나 복수 수신자 원본은 거부합니다. 이후 추가한 준비 턴의 실행 정책은 같은 승인 기록의 `execution_policy_review`에서 변경 전 후보·명세 해시와 별도 검수 내역으로 연결합니다. 이 원문은 과거 생성 사실을 확인하는 증거이며 구형 요청을 실행하기 위한 입력 계약이 아닙니다. 기존 생성 해시·모델 실행·유사도 보고서는 수정하지 않았고 새 생성·실모델 평가를 수행했다고 간주하지 않습니다.
 
-현재 승인 대상 텍스트는 `plan.text_format=utf8-lf-v1`, UTF-8·BOM 없음·LF로 고정합니다. 생성 writer와 `.gitattributes`가 같은 형식을 사용합니다. 검증 과정에서 개행을 바꾸거나 의미상 같은 JSON으로 정규화하지 않고 실제 바이트의 SHA-256을 비교합니다. 바이너리 첨부는 그대로 해시하고 과거 패키지와 승격한 `.approvals/`의 승인 원본은 `-text`로 체크아웃 변환을 막습니다. 명세의 작업·대상·정답 조건이 달라지면 해당 사례를 실제로 재생성·검수합니다. 이번 수신자 표현 변경만은 검증 가능한 원본 명세 증거와 새 표현 검토를 함께 요구하며 기존 생성 기록을 재사용합니다. 개행이나 표현만 바뀌어도 현재 바이트에 대한 새 승인 해시가 필요합니다. `schema_review.predecessor`는 이전 승인 파일의 Git commit과 해시를 기록하므로 과거 승인을 새 바이트의 승인으로 소급하지 않습니다.
+현재 승인 대상 텍스트는 `plan.text_format=utf8-lf-v1`, UTF-8·BOM 없음·LF로 고정합니다. 생성 writer와 `.gitattributes`가 같은 형식을 사용합니다. 검증 과정에서 개행을 바꾸거나 의미상 같은 JSON으로 정규화하지 않고 실제 바이트의 SHA-256을 비교합니다. 바이너리 첨부는 그대로 해시하고 과거 패키지와 승격한 `.approvals/`의 승인 원본은 `-text`로 체크아웃 변환을 막습니다. 명세의 작업·대상·정답 조건이 달라지면 해당 사례를 실제로 재생성·검수합니다. 수신자 표현 이관은 `schema_review`의 원본 명세 증거와 표현 검토에, 준비 턴 실행 정책 추가는 `execution_policy_review`의 변경 전 해시와 별도 정책 검수에 근거하여 기존 생성 출처를 보존합니다. 두 변경 모두 새 모델 생성으로 기록하지 않으며 현재 바이트에 대한 새 승인 해시를 요구합니다. 개행만 바뀌어도 새 승인 해시가 필요합니다. `schema_review.predecessor`와 `execution_policy_review`에 남긴 원본 연결은 과거 승인을 새 바이트의 승인으로 소급하지 않기 위한 근거입니다.
 
 후보 보관 위치와 실행 위치는 별개입니다. `validate --execution-path <최종 fixture>`와 `promote --out <최종 fixture>`는 최종 fixture의 인접 `uploads/`에서 실제 사용하는 첨부를 검증·해시합니다. 실행 경로를 생략한 `validate`는 입력 fixture 인접 경로를 검사합니다. 사용자 지정 위치에는 먼저 승인한 첨부와 동일한 바이트를 배치해야 하며 기본 위치의 파일로 대체 검사하지 않습니다. 논리적 첨부 이름과 바이트가 같으면 위치만 옮겨도 승인이 유효합니다. 누락·변조·잘못된 경로·승인 불일치가 있으면 기존 release를 교체하지 않습니다.
 
@@ -141,7 +141,7 @@ PDF 3개·DOCX 2개·PNG 1개의 바이트는 v1과 같습니다. 실제 Docling
 
 ### 2.2 온라인 벤치마크 실행
 
-각 사례는 새 세션에서 시작합니다. `upload_fixtures`에 나열한 파일들을 UI와 같은 staging·동기화 절차로 등록한 뒤, `setup_turns`를 순서대로 보내고 마지막 `query`만 사례의 기대값으로 채점합니다. 각 턴의 최종 manifest를 다음 질문에 사용하며 내부 대화 상태를 직접 주입하지 않습니다. 준비 턴의 실행·응답·필수 진단이 실패하면 후속 요청을 보내지 않고 해당 사례를 실패로 기록합니다. judge에는 실제 준비 질문·답변·검색 근거도 전달합니다.
+각 사례는 새 세션에서 시작합니다. `upload_fixtures`에 나열한 파일들을 UI와 같은 staging·동기화 절차로 등록한 뒤, `setup_turns`를 순서대로 보내고 마지막 `query`의 답변 품질을 사례의 기대값으로 채점합니다. 도구 실행 정책은 준비 턴마다 `setup_forbidden_tools`로, 마지막 턴은 `forbidden_tools`로 별도 지정하며 모든 턴의 준수 여부를 확인합니다. 각 턴의 최종 manifest를 다음 질문에 사용하며 내부 대화 상태를 직접 주입하지 않습니다. 준비 턴의 실행·응답·필수 진단이 실패하면 후속 요청을 보내지 않고 해당 사례를 실패로 기록합니다. judge에는 실제 준비 질문·답변·검색 근거도 전달합니다.
 
 fixture의 최소 예시는 다음과 같습니다. 기존 단일 `upload_fixture`도 읽을 수 있지만 `upload_fixtures`와 동시에 지정할 수 없습니다.
 
@@ -150,6 +150,7 @@ fixture의 최소 예시는 다음과 같습니다. 기존 단일 `upload_fixtur
   "case_id": "save_previous",
   "category": "tool_action",
   "setup_turns": ["다음 메모를 두 문장으로 정리해줘: CSV를 읽고 결측 행을 제거한 뒤 날짜별로 집계한다."],
+  "setup_forbidden_tools": [["tavily_search", "upload_search", "save_text", "slack_notify"]],
   "query": "방금 답변을 txt로 저장해줘.",
   "upload_fixtures": [],
   "expected_tools": ["save_text"],
@@ -343,13 +344,27 @@ judge minimum score와 pricing도 같은 파일에서 관리합니다. `cost_gat
 - `llm_judge_score`: 유효한 judge 0점은 `0`으로, 평가하지 못한 점수는 `null`로 보존합니다. 평가 오류를 점수로 대체하거나 범위 밖 값을 잘라내지 않습니다.
 - `judge_pass`: `succeeded` 평가가 전체 점수와 필수 세부 점수 기준을 모두 충족할 때만 `true`. `disabled`·`not_run`·`failed`는 `null`입니다.
 - `product_pass`: 완전한 composite 점수가 있을 때 composite 기준 판정. 제품 실행 실패 또는 필수 저장 계약 실패는 점수와 관계없이 `false`, judge 장애로 composite를 계산할 수 없으면 `null`입니다.
-- `release_pass`: 평가 유효성(`valid`), 제품 판정(`product_pass`), judge 품질 판정(`judge_pass`), 응답 계약과 저장 계약을 모두 충족할 때만 `true`입니다. `incomplete`·`invalid` 평가는 항상 `false`입니다.
+- `release_pass`: 중앙 `decision.passed`의 표시값입니다. 평가 유효성(`valid`), 제품 판정(`product_pass`), judge 품질 판정(`judge_pass`), 응답·저장 계약과 실행 정책 준수를 모두 충족할 때만 `true`입니다. `incomplete`·`invalid` 평가, 금지 실행, 실행 관측의 불완전성은 품질 점수로 상쇄되지 않습니다.
 
 `composite_quality_score`는 judge 점수가 있을 때만 가중합으로 계산합니다. judge 점수가 없으면 남은 규칙 점수를 재정규화해 composite를 만들지 않고 `null`로 남기며, 규칙 원점수는 `rule_scores`·`rule_score_total`에 진단용으로 보존합니다. judge 가용성은 제품 규칙 점수를 바꾸지 않습니다.
 
 모든 카테고리에 `judge_min_score`가 명시적으로 존재합니다(기본 `0.70`, case의 `judge_min_score` 필드가 우선). 세부 점수 기준은 `[judge_min_subscores]`의 `answer_quality`(전 카테고리)와 `groundedness`(근거 기반 답변)이며, 인용을 요구하지 않는 순수 `tool_action` 사례에는 groundedness를 적용하지 않습니다. 이 값들은 인간 평가로 보정된 최적값이 아니라 정책 출발점입니다.
 
 run 집계의 `release_pass_rate` 분모는 실행 대상으로 확정한 전체 사례(`planned_cases`)입니다. composite가 `null`이거나 judge 오류·제품 실패인 사례를 빼지 않으며, 계획 대비 결과 누락·중복·예상외 case_id는 `evaluation_completeness` release gate가 차단합니다. judge 상태별 개수(`judge_succeeded/failed/not_run/disabled_cases`)와 `judge_execution_rate`(judge 필수 대상 중 succeeded 비율)를 별도로 기록하며, 대상이 0개인 비율은 `-`(N/A)로 표시합니다.
+
+현재 결과의 `decision_contract_version`은 실행 정책 판정 계약을 식별합니다. 사례에는 평가 당시의 `policy_snapshot`, 원시 `execution_evidence`, `policy_assessment`와 최종 `decision`을 함께 남깁니다. `policy_assessment.status`는 준수(`compliant`), 확인된 위반(`violated`), 관측 부족으로 판단 불가(`indeterminate`)를 구분합니다. 어느 사례에서든 위반이나 판단 불가가 있으면 run의 `release_decision`은 실패합니다. 정상 사례 수, 평균 점수, 도구 precision/recall로 이 필수 조건을 완화하지 않습니다. 품질 점수와 정책 위반은 별도로 표시합니다.
+
+기존 `forbidden_tools`는 최종 질문의 금지 도구입니다. 준비 대화에는 별도로 검수한 `setup_forbidden_tools`를 같은 순서로 지정하며, 최종 금지 목록을 준비 턴에 일괄 적용하지 않습니다. 준비 턴이 있는데 대응 정책이 없으면 준수로 간주하지 않습니다. 승인한 문서 검색을 준비 단계에서 수행한 뒤 최종 답변을 재검색 없이 저장하는 사례도 각 턴의 실제 정책으로 평가합니다.
+
+현재 120개 release 사례 중 준비 대화가 있는 23개 사례의 27개 턴에는 정책을 별도로 검수했습니다. `release_action_003`·`004`의 첫 준비 턴과 `005`의 두 준비 턴은 `upload_search`를 허용하고 다른 세 도구를 금지합니다. 나머지 23개 준비 턴은 검색·저장·공유 네 도구를 모두 금지합니다. 최종 질문의 금지 목록은 유지했으며, 새 승인 기록의 `execution_policy_review`는 원래 후보·명세 hash와 이번 정책 검수의 관계를 보존합니다. 과거 모델 생성·실행 기록을 새 정책으로 수행한 것으로 바꾸지 않았습니다.
+
+`execution_evidence.events`의 `started`는 실제 도구 구현 진입 직전에 기록합니다. 금지 도구의 `started`가 있으면 이후 `succeeded` 또는 `failed`와 관계없이 위반입니다. 계획에 도구를 포함한 것, 실행 전에 `blocked`로 차단한 것, 기존 결과를 `reused`로 사용한 것은 새 실행과 구분합니다. 재사용 출처는 같은 시나리오의 앞선 턴 또는 같은 턴의 앞선 이벤트에서 시작과 종료가 확인된 호출이어야 합니다. `succeeded`와 `failed` 모두 출처가 될 수 있지만, 실패 결과의 재사용이 작업 성공을 뜻하지는 않습니다. Slack 전달 여부가 `unknown`이면 재사용 후에도 그대로이며 자동 재전송하지 않습니다. 실행 시작만으로 외부 전달·저장 성공을 주장하지 않으며 실제 결과는 receipt와 별도의 저장 산출물 검증으로 확인합니다. 빈 실행 목록은 요청 식별자와 `complete` 관측을 갖춘 경우에만 무실행 증거가 됩니다. 누락·미완료·모순된 기록은 판단 불가이며 release를 차단합니다.
+
+현재 응답 계약의 `debug.retrieval_diagnostics`는 목록이어야 하며 검색 진단이 없으면 `[]`로 보냅니다. 필드 누락, `null`, 잘못된 목록·항목은 안전하게 처리하되 응답 계약 오류와 정책 관측 문제로 보존합니다. 준비 턴의 필수 진단이 잘못되면 종속 질문을 보내지 않고 해당 사례를 실패로 기록하며, 다음 독립 사례의 실행과 결과 저장은 계속합니다. 진단 오류가 있어도 이미 관측한 금지 실행은 지우지 않습니다. 온라인 파싱과 저장 결과 재평가는 같은 정규화 규칙을 사용합니다.
+
+CLI, Markdown 보고서와 history는 같은 중앙 판정을 사용합니다. `run --track release`는 `release_decision`의 통과 여부로 종료 코드 0/1을 정하며, smoke는 judge 실행 여부와 관계없이 진단용입니다. planner 단독 요청 계약 평가의 `qualified`도 전체 release 자격이 아닙니다. 실행 기록을 검증할 수 없는 구형 결과는 `legacy_unverified`로 표시하며 당시 PASS와 측정값을 현재 자격으로 승격하지 않습니다.
+
+현재 계약의 `report --run`과 history 로더는 저장된 정책 snapshot, 원시 결과의 fingerprint와 중앙 재판정 결과가 summary와 일치하는지 확인합니다. 불일치한 산출물은 보고서로 다시 발행하지 않습니다. 판정 계약 도입 전의 run도 `summary.json`과 `raw_results.jsonl`의 구조·소속을 확인한 뒤 보고서를 재생성할 수 있습니다. 과거 보고서는 `legacy_unverified`와 당시 판정·측정값을 표시하며 현재 릴리스 승인을 만들지 않습니다. 현재 계약과 과거 계약의 결과를 섞거나 현재 정책 필드를 남긴 채 버전만 제거한 입력은 거부합니다. 보고서 재생성은 원본 summary·raw 결과를 변경하거나 모델 호출·외부 효과를 다시 실행하지 않습니다. 기존 생성 계보와 과거 수치의 원본도 유지합니다. 최신 run 포인터는 성공 여부와 관계없이 가장 최근 실행을 가리킵니다.
 
 ### 4.0.2 저장 산출물의 필수 조건
 
