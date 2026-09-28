@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from typing import Any
-from uuid import NAMESPACE_URL, uuid5
+from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from src.core.answer_schema import ActionReceipt, AnswerResponse, export_answer_text
 from src.core.contracts import GraphState
@@ -18,6 +18,7 @@ from src.infra.logging_utils import log_event
 from src.runtime.nodes.actions.policy import select_slack_delivery
 from src.core.slack_contract import SlackDefault, SlackDelivery
 from src.runtime.nodes.actions.receipts import build_save_receipt, build_slack_receipt
+from src.runtime.agent_runtime.tool_execution import invoke_tool, record_nonexecution
 
 
 logger = logging.getLogger(__name__)
@@ -144,6 +145,9 @@ def make_action_postprocess_node(
             return updates
         body_ready = _ready_body(contract=contract, response=response, runtime=runtime, pending=pending, planner=planner)
         intents = {name: getattr(contract.actions, name).intent for name in ("save_text", "slack_notify")}
+        for name, intent in intents.items():
+            if intent in {"forbidden", "unresolved"}:
+                record_nonexecution(name, reason_code=f"intent_{intent}")
         waiting_intents = {
             name for name, slot in (("save_text", "save_intent"), ("slack_notify", "slack_intent"))
             if intents[name] == "unresolved" or any(item.slot == slot for item in contract.missing_info)
@@ -187,16 +191,20 @@ def make_action_postprocess_node(
             if contract.execution_ready("save_text", body_ready=body_ready):
                 save_operation = _save_operation(contract=contract, runtime=runtime, pending=pending,
                                                  response=response, body=body)
+                invocation_id = None
                 try:
                     if save_operation.answer_hash != response.result.content_hash:
                         from src.infra.saved_artifacts import ArtifactError
+                        invocation_id = record_nonexecution("save_text", reason_code="idempotency_conflict")
                         raise ArtifactError("idempotency_conflict", "재시도 본문이 확정된 저장 대상과 다릅니다.")
-                    result = save_text_tool(content=body, filename_prefix="response", operation=save_operation)
+                    invocation_id = uuid4().hex
+                    result = invoke_tool("save_text", save_text_tool, execution_id=invocation_id,
+                                         content=body, filename_prefix="response", operation=save_operation)
                 except Exception as exc:
                     code = getattr(exc, "code", "write_failed")
                     result = {"status": "unknown" if code == "artifact_unverifiable" else "error",
                               "error": str(exc), "error_code": code}
-                receipt = build_save_receipt(result, operation=save_operation)
+                receipt = build_save_receipt(result, operation=save_operation).model_copy(update={"invocation_id": invocation_id})
                 save_receipt = receipt
                 messages.append(build_tool_message("save_text", {
                     **receipt.model_dump(mode="json", exclude_none=True),
@@ -205,7 +213,11 @@ def make_action_postprocess_node(
                 receipts.append(receipt)
                 if receipt.status == "success":
                     completed.add("save_text")
+            else:
+                record_nonexecution("save_text", reason_code="execution_not_ready")
         elif intents["save_text"] == "requested" and save_receipt is not None and save_operation is not None:
+            record_nonexecution("save_text", phase="reused", reason_code="completed_operation",
+                                origin_invocation_id=save_receipt.invocation_id)
             # Re-entering an unchanged active obligation may reuse its receipt.
             # The planner normally removes completed actions on destination-only
             # follow-ups; this branch must never attach old success to new text.
@@ -215,6 +227,7 @@ def make_action_postprocess_node(
             else:
                 receipt = build_save_receipt({
                     "status": "error", "error_code": "idempotency_conflict",
+                    "invocation_id": save_receipt.invocation_id,
                     "error": "현재 답변이 확정된 저장 대상과 다릅니다.",
                 }, operation=save_operation)
             save_receipt = receipt
@@ -227,9 +240,17 @@ def make_action_postprocess_node(
                 if slack_delivery.selection is not None and contract.execution_ready(
                     "slack_notify", body_ready=True, destination_ready=True,
                 ):
-                    result = slack_notify_tool(text=body, delivery=slack_delivery)
-                    slack_delivery = SlackDelivery.model_validate(result.model_dump())
+                    if slack_delivery.status in {"sent", "unknown"}:
+                        record_nonexecution("slack_notify", phase="reused", reason_code="existing_delivery",
+                                            origin_invocation_id=slack_delivery.invocation_id)
+                    else:
+                        invocation_id = uuid4().hex
+                        result = invoke_tool("slack_notify", slack_notify_tool, execution_id=invocation_id,
+                                             text=body, delivery=slack_delivery)
+                        slack_delivery = SlackDelivery.model_validate(result.model_dump()).model_copy(update={"invocation_id": invocation_id})
                     messages.append(build_tool_message("slack_notify", slack_delivery.model_dump(mode="json"), 1))
+                else:
+                    record_nonexecution("slack_notify", reason_code="destination_not_ready")
                 if slack_delivery.status != "pending":
                     receipt = build_slack_receipt(slack_delivery)
                     receipts.append(receipt)
@@ -238,6 +259,8 @@ def make_action_postprocess_node(
                     elif slack_delivery.failure is not None:
                         needs_destination = slack_delivery.failure.next_action == "correct_input"
                         error_codes.append(receipt.error_code)
+            else:
+                record_nonexecution("slack_notify", reason_code="execution_not_ready")
 
         if body_ready:
             receipts.extend(ActionReceipt(kind=name, status="skipped", message=_action_question(contract, name))

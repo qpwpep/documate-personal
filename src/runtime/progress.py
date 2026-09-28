@@ -31,6 +31,10 @@ class ProgressEmitter:
         self._heartbeat_stop: threading.Event | None = None
         self._heartbeat_thread: threading.Thread | None = None
 
+    @property
+    def request_id(self) -> str:
+        return self._request_id
+
     def emit_request_started(self) -> None:
         self._publish(
             "request_started",
@@ -155,4 +159,3 @@ class ProgressEmitter:
             stop_event.set()
         if thread is not None and thread.is_alive():
             thread.join(timeout=0.1)
-

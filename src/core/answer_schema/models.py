@@ -163,6 +163,7 @@ class ResponseIssue(AnswerModel):
 
 
 class ActionReceipt(AnswerModel):
+    invocation_id: str | None = Field(default=None, min_length=1)
     kind: Literal["save_text", "slack_notify"]
     status: Literal["success", "error", "skipped", "unknown"]
     file_path: str | None = None

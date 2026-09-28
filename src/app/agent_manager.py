@@ -10,6 +10,7 @@ from src.core.conversation_memory import (
     validate_query_text,
 )
 from src.runtime.agent_runtime import DebugCollector, ExecutionRunner, GraphInvocationError, ResponseAssembler, SessionContext
+from src.runtime.agent_runtime.tool_execution import capture_tool_execution
 from src.core.answer_schema import AnswerResponse, finalize_answer, text_document, export_answer_text
 from src.core.request_contracts import required_contract_turn_ids
 from src.core.contracts import RuntimeState, SessionMetadata
@@ -228,6 +229,22 @@ class AgentFlowManager:
         }
 
     def run_agent_flow(
+        self,
+        user_input: str,
+        upload_file_path: str | None = None,
+        progress_emitter: ProgressEmitter | None = None,
+        *, uploads: UploadContext | None = None,
+    ) -> dict[str, Any]:
+        with capture_tool_execution(getattr(progress_emitter, "request_id", None)) as recorder:
+            result = self._run_agent_flow(user_input, upload_file_path, progress_emitter, uploads=uploads)
+            evidence = recorder.snapshot()
+            debug = result["debug"]
+            debug["execution_evidence"] = evidence.model_dump(mode="json")
+            debug["tool_calls"] = [event.tool_name for event in evidence.events if event.phase == "started"]
+            debug["tool_call_count"] = len(debug["tool_calls"])
+            return result
+
+    def _run_agent_flow(
         self,
         user_input: str,
         upload_file_path: str | None = None,

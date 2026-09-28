@@ -9,6 +9,9 @@ from pydantic import ValidationError
 from src.app.web.agent_request_service import AgentRequestService
 from src.app.web.schemas import AgentRequest, AgentResponse
 from src.core.answer_schema import export_answer_text
+from src.core.contracts.debug import DebugPayload
+from src.core.contracts.provenance import AnswerProvenance
+from src.core.contracts.tool_execution import ToolExecutionEvidence
 from src.core.uploads import UploadManifest
 from tests.web.answer_fixtures import response_payload
 
@@ -87,6 +90,38 @@ class _FakeSessionStore:
 async def _final_response(service: AgentRequestService, *, request_id: str, request_data: AgentRequest):
     events = [event async for event in service.stream(request_id=request_id, request_data=request_data)]
     return AgentResponse.model_validate(next(event.data for event in events if event.event == "final_response"))
+
+
+@pytest.mark.parametrize("diagnostics", [None, 1, [{"status": []}], [{}], "missing", []])
+def test_stream_preserves_invalid_retrieval_observations_as_critical_diagnostic_failures(diagnostics):
+    """Wire normalization cannot replace malformed runtime evidence with an apparently complete empty list."""
+    response = response_payload("retained answer")
+    debug = DebugPayload(
+        answer_provenance=AnswerProvenance(body_kind="compose", response_hash=response["content_hash"], evidence_packet=[]),
+        execution_evidence=ToolExecutionEvidence(schema_version=1, request_id="diagnostic-request", status="complete", events=[]),
+    ).model_dump(mode="json")
+    if diagnostics == "missing":
+        debug.pop("retrieval_diagnostics")
+    else:
+        debug["retrieval_diagnostics"] = diagnostics
+    store = _FakeSessionStore({"response": response, "debug": debug})
+    service = AgentRequestService(runtime_cleaner=_FakeCleaner(), session_store=store)
+    result = asyncio.run(_final_response(
+        service, request_id="diagnostic-request",
+        request_data=AgentRequest(query="hello", session_id="s1", include_debug=True),
+    ))
+
+    assert result.response.model_dump(mode="json") == response
+    assert result.debug.retrieval_diagnostics == []
+    assert result.debug.execution_evidence.request_id == "diagnostic-request"
+    if diagnostics == []:
+        assert result.debug.observability_status == "ok"
+        assert result.debug.errors == result.debug.missing_required_debug_fields == []
+    else:
+        assert result.debug.observability_status == "failed"
+        assert "retrieval_diagnostics" in result.debug.missing_required_debug_fields
+        assert "DEBUG_NORMALIZATION_FAILED" in result.debug.error_codes
+        assert any("retrieval_diagnostics" in error for error in result.debug.errors)
 
 
 class AgentRequestServiceTest(unittest.TestCase):

@@ -13,6 +13,7 @@ from src.core.conversation_memory import (
 from src.core.contracts.debug import ActionResults, ErrorCode, LLMCallMetadata, ModelUsageStatus, PlannerDiagnostic, RetryState, RetrievalDiagnostic, TokenUsage
 from src.core.evidence import SearchHit
 from src.core.contracts.provenance import AnswerProvenance
+from src.core.contracts.tool_execution import ToolExecutionEvidence
 from src.core.uploads import UploadContext, UploadManifest, validate_session_id
 from src.core.latency import LatencyBreakdownModel, StageName
 
@@ -26,6 +27,7 @@ class AgentDebugInfo(BaseModel):
     missing_required_debug_fields: list[str] = Field(default_factory=list)
     tool_calls: list[str] = Field(default_factory=list)
     tool_call_count: int = 0
+    execution_evidence: ToolExecutionEvidence | dict[str, Any] | None = None
     latency_ms_server: int | None = None
     latency_breakdown: LatencyBreakdownModel | None = None
     token_usage: AgentTokenUsage | None = None

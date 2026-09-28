@@ -68,6 +68,7 @@ def parse_retrieval_diagnostic(value: Any) -> RetrievalDiagnostic | None:
     if score_direction not in {"higher_is_better", "lower_is_better"}:
         score_direction = ""
     return RetrievalDiagnostic(
+        invocation_id=value.get("invocation_id"),
         tool=str(value.get("tool") or "").strip(),
         route=str(value.get("route") or "").strip(),
         status=str(value.get("status") or "").strip(),
@@ -115,6 +116,47 @@ def parse_retrieval_diagnostics(value: Any) -> list[RetrievalDiagnostic]:
         if diagnostic is not None:
             diagnostics.append(diagnostic)
     return diagnostics
+
+
+def normalize_retrieval_diagnostic_observation(
+    value: Any,
+) -> tuple[list[RetrievalDiagnostic], list[str]]:
+    """Read observed diagnostics without treating invalid evidence as absence.
+
+    Runtime state readers may use the tolerant parser above. HTTP diagnostics
+    and policy evaluation need both safe values and the reasons any evidence
+    was discarded, including a missing/null list. Execution identity and result
+    matching remain the policy evaluator's responsibility.
+    """
+    label = "debug.retrieval_diagnostics"
+    if not isinstance(value, list):
+        return [], [f"{label} must be a list"]
+    diagnostics: list[RetrievalDiagnostic] = []
+    issues: list[str] = []
+    for index, item in enumerate(value):
+        if isinstance(item, RetrievalDiagnostic):
+            item = item.model_dump(mode="python")
+        if not isinstance(item, dict):
+            issues.append(f"{label}[{index}] must be an object")
+            continue
+        item_issues = []
+        for field in ("tool", "status"):
+            if not isinstance(item.get(field), str) or not item[field].strip():
+                item_issues.append(f"{label}[{index}].{field} must be a non-empty string")
+        invocation_id = item.get("invocation_id")
+        if invocation_id is not None and (not isinstance(invocation_id, str) or not invocation_id.strip()):
+            item_issues.append(f"{label}[{index}].invocation_id must be a non-empty string or null")
+        if item_issues:
+            issues.extend(item_issues)
+            continue
+        try:
+            diagnostic = parse_retrieval_diagnostic(item)
+        except (TypeError, ValueError, OverflowError) as exc:
+            issues.append(f"{label}[{index}] invalid: {exc}")
+        else:
+            if diagnostic is not None:
+                diagnostics.append(diagnostic)
+    return diagnostics, issues
 
 
 def parse_retrieval_state(value: Any) -> RetrievalState:

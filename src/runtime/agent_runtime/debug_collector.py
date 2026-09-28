@@ -14,6 +14,7 @@ from src.core.contracts.boundary.response import get_response_state
 from src.core.contracts.boundary.retrieval import parse_retrieval_diagnostics
 from src.core.evidence import dedupe_search_hits, parse_search_hits
 from src.core.latency import build_latency_breakdown
+from src.runtime.agent_runtime.tool_execution import current_execution_evidence
 
 
 class DebugCollector:
@@ -146,21 +147,6 @@ class DebugCollector:
             final_synthesis_model,
             models_used,
         )
-
-    @staticmethod
-    def _extract_tool_names_from_ai_message(message: AIMessage) -> list[str]:
-        tool_names: list[str] = []
-        tool_calls = getattr(message, "tool_calls", None)
-        if not isinstance(tool_calls, list):
-            return tool_names
-
-        for tool_call in tool_calls:
-            if not isinstance(tool_call, dict):
-                continue
-            name = tool_call.get("name")
-            if name:
-                tool_names.append(str(name))
-        return tool_names
 
     @staticmethod
     def _extract_observed_hits(
@@ -306,11 +292,9 @@ class DebugCollector:
         token_usage, model_name, models_used = self._summarize_llm_calls(llm_calls)
         model_usage_status = "llm_used" if llm_calls or models_used or model_name or token_usage["total_tokens"] > 0 else "deterministic"
 
-        for message in current_turn_messages:
-            if isinstance(message, AIMessage):
-                tool_calls.extend(self._extract_tool_names_from_ai_message(message))
-            elif isinstance(message, ToolMessage) and getattr(message, "name", ""):
-                tool_calls.append(str(message.name))
+        execution_evidence = current_execution_evidence()
+        if execution_evidence is not None:
+            tool_calls = [event.tool_name for event in execution_evidence.events if event.phase == "started"]
 
         observed_hits = self._extract_observed_hits(
             current_turn_messages,
@@ -358,6 +342,7 @@ class DebugCollector:
             "missing_required_debug_fields": [],
             "tool_calls": tool_calls,
             "tool_call_count": len(tool_calls),
+            "execution_evidence": execution_evidence.model_dump(mode="json") if execution_evidence is not None else None,
             "token_usage": token_usage,
             "model_name": model_name,
             "models_used": models_used,

@@ -15,6 +15,21 @@ from src.core.slack_contract import ExplicitRecipient, RecipientSelector, Recipi
 from src.core.answer_schema import ActionReceipt
 
 
+def execution_evidence(tool_calls=(), *, request_id: str = "req-1", status: str = "complete") -> dict:
+    """Explicit completed invocations supplied by a controlled HTTP fixture.
+
+    This helper belongs in valid fixture construction, never in the transport
+    fake: omitted or malformed evidence must remain observable to the evaluator.
+    """
+    events = []
+    for index, tool_name in enumerate(tool_calls, 1):
+        invocation_id = f"{request_id}-invocation-{index}"
+        for phase in ("started", "succeeded"):
+            events.append({"sequence": len(events) + 1, "invocation_id": invocation_id,
+                           "tool_name": tool_name, "phase": phase})
+    return {"schema_version": 1, "request_id": request_id, "status": status, "events": events}
+
+
 def slack_action(*, channel_id: str = "C123", status: str = "success", error: str = "channel_not_found") -> dict:
     """Declare the observed Slack result at the HTTP boundary."""
     selector = RecipientSelector(kind="channel", value=channel_id)

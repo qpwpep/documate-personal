@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextvars import copy_context
 from dataclasses import dataclass, field
 import logging
 import time
@@ -20,6 +21,7 @@ from src.core.evidence import parse_search_hits
 from src.runtime.nodes.planner import sanitize_retrieval_query
 from src.runtime.nodes.retry import current_retrieval_attempt
 from src.runtime.nodes.retrieval.executor import RetrievalTaskResult, build_reused_retrieval_task_result, execute_retrieval_task, retrieval_fingerprint
+from src.runtime.agent_runtime.tool_execution import invoke_tool
 
 
 logger = logging.getLogger(__name__)
@@ -51,11 +53,11 @@ def _build_route_handlers(
     prior_diagnostics: list[RetrievalDiagnostic] | None = None,
     prior_hits: list[dict[str, Any]] | None = None,
 ) -> dict[str, tuple[str, Any]]:
-    def docs_search(task: RetrievalTask):
+    def docs_search(task: RetrievalTask, execution_id: str):
         attempted = [query for d in (prior_diagnostics or [])
                      if d.requirement_id == task.requirement_id and d.status != "error"
                      for query in d.attempted_queries]
-        return tavily_search_tool(query=task.query, k=task.k,
+        return invoke_tool("tavily_search", tavily_search_tool, execution_id=execution_id, query=task.query, k=task.k,
                                   requirement=task.requirement if task.requirement.specified else None,
                                   attempted_queries=attempted,
                                   previous_hits=[hit for hit in parse_search_hits(prior_hits or []) if hit.requirement_id == task.requirement_id])
@@ -67,7 +69,7 @@ def _build_route_handlers(
         ),
         "upload": (
             "upload_search",
-            lambda task: upload_search_tool(
+            lambda task, execution_id: invoke_tool("upload_search", upload_search_tool, execution_id=execution_id,
                 query=task.query,
                 k=task.k,
                 retriever=runtime.retriever,
@@ -153,6 +155,7 @@ def _execute_retrieval_batch(batch_plan: RetrievalBatchPlan) -> RetrievalBatchRe
         with ThreadPoolExecutor(max_workers=min(4, len(batch_plan.indexed_tasks))) as executor:
             futures = {
                 executor.submit(
+                    copy_context().run,
                     execute_retrieval_task,
                     index=index,
                     task=task,
