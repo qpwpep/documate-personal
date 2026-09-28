@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field, ValidationInfo, field_validator, model_va
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
 
 from src.core.conversation_memory import ConversationMemoryPolicy
+from src.core.slack_contract import SlackDefault
 from src.infra.runtime_paths import get_benchmark_config_path, get_env_file_path
 
 
@@ -252,14 +253,16 @@ APP_ENV_SPECS = (
         "SLACK_DEFAULT_DM_EMAIL",
         "slack_default_dm_email",
         None,
-        "기본 DM 대상 이메일",
+        "수신자 미지정 시 사용할 기본 DM 이메일",
+        sync_notes=("SLACK_DEFAULT_USER_ID와 둘 중 하나만 설정합니다. 명시 수신자 실패에는 사용하지 않습니다.",),
         example_group="slack",
     ),
     EnvVarSpec(
         "SLACK_DEFAULT_USER_ID",
         "slack_default_user_id",
         None,
-        "기본 DM 대상 사용자",
+        "수신자 미지정 시 사용할 기본 DM 사용자 ID",
+        sync_notes=("SLACK_DEFAULT_DM_EMAIL과 둘 중 하나만 설정합니다. 명시 수신자 실패에는 사용하지 않습니다.",),
         example_group="slack",
     ),
 )
@@ -662,6 +665,27 @@ class AppSettings(BaseSettings):
     slack_bot_token: str | None = Field(default=_app_default("SLACK_BOT_TOKEN"), alias="SLACK_BOT_TOKEN")
     slack_default_dm_email: str | None = Field(default=_app_default("SLACK_DEFAULT_DM_EMAIL"), alias="SLACK_DEFAULT_DM_EMAIL")
     slack_default_user_id: str | None = Field(default=_app_default("SLACK_DEFAULT_USER_ID"), alias="SLACK_DEFAULT_USER_ID")
+
+    def slack_default_recipient(self) -> SlackDefault:
+        """Invalid defaults block default delivery, not explicit recipients or chat."""
+        from src.core.slack_contract import RecipientSelector, SlackDefault, SlackFailure
+
+        candidates = [(kind, value.strip()) for kind, value in (
+            ("user", self.slack_default_user_id), ("email", self.slack_default_dm_email),
+        ) if value and value.strip()]
+        if not candidates:
+            return SlackDefault()
+        try:
+            if len(candidates) != 1:
+                raise ValueError("configure exactly one default DM recipient")
+            kind, value = candidates[0]
+            return SlackDefault(selector=RecipientSelector(kind=kind, value=value))
+        except ValueError:
+            return SlackDefault(failure=SlackFailure(
+                stage="selection", code="configuration_error",
+                message="기본 Slack 수신자 설정이 잘못되었습니다. 사용자 ID 또는 이메일 중 하나만 올바르게 설정해 주세요.",
+                next_action="fix_configuration",
+            ))
 
     def fastapi_runtime_log_fields(self) -> dict[str, str | int]:
         return {

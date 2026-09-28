@@ -152,16 +152,18 @@ PLANNER_REASONING_EFFORT=high
 | `MEMORY_SUMMARY_MAX_BYTES` | `4096` | rolling summary UTF-8 byte 상한 |
 | `MEMORY_HARD_MAX_BYTES` | `131072` | summary와 최근 메시지를 합친 durable snapshot 절대 byte 상한 |
 | `SLACK_BOT_TOKEN` | 없음 | Slack 전송용 토큰 |
-| `SLACK_DEFAULT_DM_EMAIL` | 없음 | 기본 DM 대상 이메일 |
-| `SLACK_DEFAULT_USER_ID` | 없음 | 기본 DM 대상 사용자 |
+| `SLACK_DEFAULT_DM_EMAIL` | 없음 | 수신자 미지정 시 사용할 기본 DM 이메일 |
+| `SLACK_DEFAULT_USER_ID` | 없음 | 수신자 미지정 시 사용할 기본 DM 사용자 ID |
 
-모델별 reasoning effort override 참고:
+설정 참고:
 
 - `gpt-5.6-luna`: none, low, medium, high, xhigh, max
 - `gpt-5.6-terra`: none, low, medium, high, xhigh, max
 - `gpt-5.6-sol`: none, low, medium, high, xhigh, max
 - `gpt-5.6`: none, low, medium, high, xhigh, max
 - `gpt-5-nano`: minimal, low, medium, high
+- SLACK_DEFAULT_USER_ID와 둘 중 하나만 설정합니다. 명시 수신자 실패에는 사용하지 않습니다.
+- SLACK_DEFAULT_DM_EMAIL과 둘 중 하나만 설정합니다. 명시 수신자 실패에는 사용하지 않습니다.
 
 ### 2.2 벤치마크 설정
 
