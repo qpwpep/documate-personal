@@ -17,7 +17,7 @@ from src.eval.nemo_generate import _sha256
 from src.eval.online_runner import run_online_benchmark
 from src.eval.online_runner.scenario_inputs import resolve_fixture_uploads
 from src.eval.release_dataset import release_artifact_hashes, sha256
-from tests.eval.response_fixtures import answer_provenance, plain_response, sse_frame, sse_http_response
+from tests.eval.response_fixtures import answer_provenance, execution_evidence, plain_response, sse_frame, sse_http_response
 from tests.eval.test_release_promotion import reviewed_candidates
 from tests.eval.test_promoted_release_binding import release_http
 
@@ -32,9 +32,11 @@ def approved_package(tmp_path, *, setup_turns=()):
     specs = [json.loads(line) for line in specs_path.read_text(encoding="utf-8").splitlines()]
     specs[0]["upload_fixtures"] = [upload.name]
     specs[0]["setup_turns"] = list(setup_turns)
+    specs[0]["setup_forbidden_tools"] = [[] for _ in setup_turns]
     specs[0]["oracle"]["evidence"].append({"source": upload.name, "locator": "line 1", "excerpt": "LIMIT = 17"})
     rows[0]["upload_fixtures"] = [upload.name]
     rows[0]["setup_turns"] = list(setup_turns)
+    rows[0]["setup_forbidden_tools"] = [[] for _ in setup_turns]
     rows[0]["oracle"] = specs[0]["oracle"]
     rows[0]["provenance"]["nemo_generation"]["source_spec_sha256"] = _sha256(specs[0])
     specs_path.write_bytes("".join(json.dumps(row, ensure_ascii=False) + "\n" for row in specs).encode("utf-8"))
@@ -138,9 +140,11 @@ def test_approved_run_uses_checked_case_and_upload_bytes_through_staging(tmp_pat
             models_used=["http-boundary-fixture"], model_usage_status="llm_used",
         ).model_dump(mode="json")
         debug["answer_provenance"] = answer_provenance(body)
+        request_id = uuid4().hex
+        debug["execution_evidence"] = execution_evidence(request_id=request_id)
         return sse_http_response(200, {"response": body, "debug": debug, "trace": "snapshot-test",
                                       "upload_manifest": manifests[json["session_id"]]},
-                                 headers={"x-request-id": uuid4().hex})
+                                 headers={"x-request-id": request_id})
 
     monkeypatch.setattr(requests, "request", request)
     monkeypatch.setattr(requests, "post", post)

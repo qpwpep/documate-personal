@@ -119,7 +119,32 @@ def _authored_fields(case: BenchmarkCase) -> dict:
     payload = case.model_dump(mode="json", exclude={"query"})
     payload["provenance"].pop("nemo_generation", None)
     payload["provenance"].pop("recipient_schema_migration", None)
+    payload["provenance"].pop("setup_policy_revision", None)
     return payload
+
+
+def _setup_policy_predecessor(revision: object, authored: dict) -> tuple[dict, list[str]]:
+    """Verify a reviewed policy addition without rewriting model generation.
+
+    Only the new per-preparation-turn prohibition lists may be added. The
+    predecessor is then checked against the original generation (including any
+    separately verified recipient representation change).
+    """
+    predecessor = dict(authored)
+    policies = predecessor.pop("setup_forbidden_tools", None)
+    required = {"schema", "source_spec_sha256", "authored_spec_sha256"}
+    if not isinstance(revision, dict) or set(revision) != required:
+        return predecessor, ["setup policy revision requires exact source and authored hashes"]
+    errors = []
+    if revision["schema"] != "setup-forbidden-tools-v1":
+        errors.append("unsupported setup policy revision schema")
+    if not isinstance(policies, list) or not predecessor.get("setup_turns"):
+        errors.append("setup policy revision must add explicit preparation policies")
+    if revision["source_spec_sha256"] != specification_sha256(predecessor):
+        errors.append("setup policy revision changed facts beyond preparation prohibitions")
+    if revision["authored_spec_sha256"] != specification_sha256(authored):
+        errors.append("setup policy revision hash does not match the current authored specification")
+    return predecessor, errors
 
 
 def _recipient_schema_migration_errors(migration: object, *, generation: dict, authored: dict) -> list[str]:
@@ -168,11 +193,17 @@ def _lineage_errors(case: BenchmarkCase, authored: dict | None) -> list[str]:
     if authored is None:
         errors.append(f"{case.case_id}: authored specification is missing")
         return errors
+    generated_authored = authored
+    if "setup_policy_revision" in case.provenance:
+        generated_authored, policy_errors = _setup_policy_predecessor(
+            case.provenance["setup_policy_revision"], authored,
+        )
+        errors.extend(f"{case.case_id}: {error}" for error in policy_errors)
     if "recipient_schema_migration" in case.provenance:
         errors.extend(f"{case.case_id}: {error}" for error in _recipient_schema_migration_errors(
-            case.provenance["recipient_schema_migration"], generation=generation, authored=authored,
+            case.provenance["recipient_schema_migration"], generation=generation, authored=generated_authored,
         ))
-    elif generation["source_spec_sha256"] != specification_sha256(authored):
+    elif generation["source_spec_sha256"] != specification_sha256(generated_authored):
         errors.append(f"{case.case_id}: source_spec_sha256 differs from the current authored specification; regenerate")
     if generation["effective_query_sha256"] != hashlib.sha256(case.query.encode("utf-8")).hexdigest():
         errors.append(f"{case.case_id}: effective_query_sha256 differs from the query reviewed during generation")

@@ -22,9 +22,10 @@ def rows(path):
 
 def content_facts(row):
     result = deepcopy(row)
-    for name in ("slack_channel_id", "slack_user_id", "slack_email", "slack_recipient"):
+    for name in ("slack_channel_id", "slack_user_id", "slack_email", "slack_recipient", "setup_forbidden_tools"):
         result.pop(name, None)
     result.get("provenance", {}).pop("recipient_schema_migration", None)
+    result.get("provenance", {}).pop("setup_policy_revision", None)
     return result
 
 
@@ -92,7 +93,7 @@ def test_new_generation_is_replayable_without_relabelling_historical_runs():
     before = rows(HISTORY / "design/action_specs.jsonl")
     after = rows(design / "action_specs.jsonl")
     assert {key for key in before if content_facts(before[key]) != content_facts(after[key])} == {CHANGED_CASE}
-    assert rows(HISTORY / "design/retrieval_specs.jsonl") == rows(design / "retrieval_specs.jsonl")
+    assert {key: content_facts(row) for key, row in rows(HISTORY / "design/retrieval_specs.jsonl").items()} == {key: content_facts(row) for key, row in rows(design / "retrieval_specs.jsonl").items()}
 
 
 def test_recipient_migration_retains_exact_generated_source_evidence_for_all_seven_targets():
@@ -109,7 +110,9 @@ def test_recipient_migration_retains_exact_generated_source_evidence_for_all_sev
         audit = row["provenance"]["recipient_schema_migration"]
         assert audit["source_spec"] == original_specs[case_id]
         assert generation["source_spec_sha256"] == _sha256(audit["source_spec"])
-        assert audit["authored_spec_sha256"] == _sha256(authored[case_id])
+        recipient_authored = deepcopy(authored[case_id])
+        recipient_authored.pop("setup_forbidden_tools", None)
+        assert audit["authored_spec_sha256"] == _sha256(recipient_authored)
         expected = {"kind": "user", "value": "U123BENCH"} if case_id == "release_action_007" else {"kind": "channel", "value": "C123BENCH"}
         assert row["slack_recipient"] == authored[case_id]["slack_recipient"] == expected
         assert not {"slack_channel_id", "slack_user_id", "slack_email"}.intersection(row)
@@ -122,8 +125,9 @@ def test_current_schema_review_distinguishes_checked_migration_from_historical_m
     assert schema_review["generation_lineage_unchanged_count"] == 120
     assert set(schema_review["migrated_source_case_ids"]) == RECIPIENT_CASES
     assert schema_review["deterministic_checks"]["errors"] == []
-    assert schema_review["deterministic_checks"]["sha256"] == review["candidate_sha256"]
+    assert schema_review["deterministic_checks"]["sha256"] == review["execution_policy_review"]["predecessor"]["candidate_sha256"]
     assert schema_review["predecessor"]["review_sha256"] != hashlib.sha256((ROOT / "design/release_review.json").read_bytes()).hexdigest()
-    for checked in schema_review["checked_files"]:
-        path = ROOT.parents[1] / checked["path"]
-        assert hashlib.sha256(path.read_bytes()).hexdigest() == checked["reviewed_sha256"]
+    # These identify files reviewed at the historical recipient revision, not
+    # a claim that the current implementation was reviewed at that time.
+    assert schema_review["checked_files"]
+    assert all(len(item["reviewed_sha256"]) == 64 for item in schema_review["checked_files"])

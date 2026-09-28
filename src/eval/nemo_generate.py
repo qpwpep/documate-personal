@@ -38,7 +38,8 @@ actions, forbidden actions, evidence, and answer facts. Implement exactly that p
 Preserve its named files, identifiers, values in the USER request, output format,
 negation, correction/cancellation, action order, recipient and content scope. Do not
 expose the answer facts or grader instructions in the question. Do not change tools,
-source selection, required facts, setup turns, expected outcome or difficulty.
+source selection, required facts, setup turns, per-turn setup_forbidden_tools,
+expected outcome or difficulty.
 The old query is the task definition, not a request to solve a different task.
 You may keep the original query verbatim when it already expresses the intended
 test clearly. Do not replace it with a setup turn, remove a superseded instruction
@@ -83,6 +84,9 @@ EVALUATION PROTOCOL (apply before judging):
    A reference to a previous answer is supported by these earlier completed turns.
    The final query need not repeat their contents. Empty setup_turns means a new
    session with no earlier assistant answer; do not invent a hidden conversation.
+   setup_forbidden_tools defines the separate prohibition list for each preparation
+   turn in order. expected_tools and forbidden_tools apply to the final turn only.
+   Preserve these authored scopes; do not infer a preparation ban from final tools.
 2. oracle.required_facts and must_include constrain the expected ANSWER/selected
    content, not the question. A question that asks for a value need not disclose
    that value. A literal source assignment such as LIMIT = 17 directly supports

@@ -118,6 +118,8 @@ def validate_dataset(
             add("query is blank")
         if any(not turn.strip() for turn in case.setup_turns):
             add("setup turn is blank")
+        if case.setup_turns and case.setup_forbidden_tools is None:
+            add("setup_forbidden_tools must explicitly cover every preparation turn")
         for error in validate_execution_prerequisites(case):
             add(error)
         if set(case.expected_tools) & set(case.forbidden_tools):
