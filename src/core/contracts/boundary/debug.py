@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from src.core.contracts.debug import ActionResults, DEBUG_SCHEMA_VERSION, DebugPayload, ErrorCode, LLMCallMetadata, ModelUsageStatus, RetryState, SaveTextActionResult, SlackActionResult, TokenUsage, json_safe_deep_copy, normalize_recorded_routes
+from src.core.slack_contract import SlackDelivery
+from src.core.contracts.debug import ActionResults, DEBUG_SCHEMA_VERSION, DebugPayload, ErrorCode, LLMCallMetadata, ModelUsageStatus, RetryState, SaveTextActionResult, TokenUsage, json_safe_deep_copy, normalize_recorded_routes
 from src.core.contracts.graph_state import DebugState
 from src.core.contracts.boundary.planner import parse_planner_diagnostic
 from src.core.contracts.boundary.retrieval import parse_retrieval_diagnostic, parse_retrieval_diagnostics
@@ -188,16 +189,9 @@ def parse_action_results(value: Any) -> ActionResults | None:
 
     payload: dict[str, Any] = {}
     slack_payload = value.get("slack_notify")
-    if isinstance(slack_payload, SlackActionResult):
-        payload["slack_notify"] = slack_payload
-    elif isinstance(slack_payload, dict):
-        payload["slack_notify"] = SlackActionResult(
-            status=str(slack_payload.get("status") or "").strip(),
-            channel_id=(str(slack_payload.get("channel_id")).strip() if slack_payload.get("channel_id") else None),
-            target_type=(str(slack_payload.get("target_type")).strip() if slack_payload.get("target_type") else None),
-            error=(str(slack_payload.get("error")).strip() if slack_payload.get("error") else None),
-            reason=(str(slack_payload.get("reason")).strip() if slack_payload.get("reason") else None),
-            error_code=(parse_error_codes([slack_payload.get("error_code")]) or [None])[0],
+    if slack_payload is not None:
+        payload["slack_notify"] = SlackDelivery.model_validate(
+            slack_payload.model_dump() if isinstance(slack_payload, SlackDelivery) else slack_payload
         )
 
     save_payload = value.get("save_text")

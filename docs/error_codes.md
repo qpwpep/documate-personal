@@ -20,8 +20,19 @@
 | `VALIDATION_UNRESOLVED_REFERENCES` | 실제 표시 내용의 `refs`가 해당 synthesis packet에 없거나, 근거가 필요한 내용에 참조가 없습니다. 의미적 사실 판정은 아닙니다. | 더 구체적인 자료를 제공하거나 답변 범위를 좁힙니다. 운영자는 packet 선택과 출력 refs를 확인합니다. | 조건부. 확보한 검색 결과를 재사용해 본문과 참조를 함께 다시 생성할 수 있습니다. |
 | `VALIDATION_MISSING_CONTENT` | 본문이 비었거나 요청한 코드·단계·체크리스트 형식 또는 출처 범위가 부족합니다. 원문 발췌가 실제 선택 범위와 일치하지 않는 경우도 포함합니다. | 원하는 결과를 구체적으로 적습니다. 운영자는 내용 단위의 checks, 요청 계약과 route coverage를 확인합니다. | 조건부. 재합성 후에도 부족하면 확인 가능한 원문 발췌와 제한을 제공합니다. |
 | `DEBUG_NORMALIZATION_FAILED` | web API가 raw debug payload를 `AgentDebugInfo`로 정규화하는 중 latency/debug 구조 검증에 실패했습니다. | 답변 자체보다 관측성 정보가 불완전한 상태입니다. 운영자는 raw debug payload와 `schema_version`을 확인합니다. | 아니요. 같은 사용자 요청 반복보다 debug schema/normalizer 수정이 필요합니다. |
-| `SLACK_AUTH_FAILED` | Slack token이 없거나 Slack API 호출이 인증/권한 문제로 실패했습니다. | `SLACK_BOT_TOKEN` 설정, 앱 설치, channel 접근 권한, 필요한 scope를 확인합니다. | 조건부. Slack 설정을 고친 뒤 재시도합니다. |
-| `SLACK_DESTINATION_MISSING` | channel ID, user ID, email, 기본 Slack destination 중 어느 것도 유효하게 해석되지 않았습니다. | Slack 전송을 원하면 channel ID(`C/G/D...`), user ID, email 중 하나를 제공하거나 기본 destination env를 설정합니다. | 조건부. destination을 제공한 뒤 재시도합니다. |
+| `SLACK_RECIPIENT_MISSING` | 수신자와 기본값이 없습니다. | 수신자 하나를 입력합니다. | 입력 후 |
+| `SLACK_RECIPIENT_INVALID` | 명시한 수신자를 검증하지 못했습니다. | ID 또는 이메일을 확인합니다. | 명시 교정 후 |
+| `SLACK_RECIPIENT_AMBIGUOUS` | 수신자 입력이 모호합니다. | 대상 하나를 지정합니다. | 명시 교정 후 |
+| `SLACK_RECIPIENT_CONFLICT` | 자연어와 요청 필드의 수신자가 충돌합니다. | 두 입력을 같은 대상으로 맞춥니다. | 명시 교정 후 |
+| `SLACK_CONFIGURATION_ERROR` | 기본값이 복수이거나 잘못된 형식입니다. | 기본 사용자 ID 또는 이메일 하나만 설정합니다. | 설정 수정 후 |
+| `SLACK_TARGET_NOT_FOUND` | 명시한 이메일/사용자에 해당하는 활성 대상을 조회하지 못했습니다. | 대상과 워크스페이스를 확인합니다. | 같은 대상 또는 명시 교정 후 |
+| `SLACK_TARGET_UNAVAILABLE` | 대상이 없거나 현재 앱이 접근할 수 없습니다. | 대상 ID·채널 접근을 확인합니다. | 접근 확인 후 같은 대상 |
+| `SLACK_PERMISSION_DENIED` | Slack 앱 권한이 부족합니다. | 필요 scope와 앱의 채널 접근을 확인합니다. | 권한 수정 후 같은 대상 |
+| `SLACK_AUTHENTICATION_FAILED` | 토큰이 없거나 인증에 실패했습니다. | SLACK_BOT_TOKEN과 앱 설치를 확인합니다. | 설정 수정 후 같은 대상 |
+| `SLACK_RATE_LIMITED` | Slack이 요청을 제한했습니다. | retry_after_seconds 이후 같은 대상에 재시도합니다. | 같은 대상 |
+| `SLACK_TEMPORARY_FAILURE` | 조회 또는 DM 개설에 일시적 장애가 발생했습니다. | 동일 선택자로 다시 시도합니다. | 같은 대상 |
+| `SLACK_DELIVERY_UNKNOWN` | 전송 요청의 결과를 확인하지 못했습니다. | Slack에서 전달 여부를 확인합니다. | 자동 재전송 금지 |
+| `SLACK_PROTOCOL_ERROR` | Slack 응답이 필요한 대상 정보를 충족하지 못했습니다. | 응답과 앱 설정을 확인합니다. | 결과의 next_action 확인 |
 | `UPLOAD_PATH_INVALID` | 요청 경로가 현재 session upload directory 밖이거나, 소유할 수 없는 확장자이거나, 파일이 없습니다. 경로 소유권 검사와 현재 기능의 형식 접수 여부는 별도로 검사합니다. | 현재 세션에서 파일을 다시 업로드합니다. PDF·DOCX·이미지는 문서 기능을 활성화한 뒤 첨부 목록 API를 사용하고, 임의 경로나 이전 세션 경로를 보내지 않습니다. | 아니요. 올바른 업로드 경로로 다시 요청해야 합니다. |
 
 ## 문서 첨부 HTTP 오류

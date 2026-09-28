@@ -84,8 +84,10 @@ def _resolve_slack_delivery_status(
     receipt = next((action for action in reversed(actions) if action.kind == "slack_notify"), None)
     if receipt is None:
         return "unknown", "missing_action_receipt"
-    if receipt.status == "success":
+    if receipt.status == "success" and receipt.slack is not None and receipt.slack.status == "sent":
         return "success", None
+    if receipt.status == "unknown":
+        return "unknown", receipt.error or receipt.message
     if receipt.status == "skipped":
         return "skipped", receipt.message or receipt.error
     return "failed", receipt.error or receipt.message
