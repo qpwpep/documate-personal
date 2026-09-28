@@ -152,7 +152,17 @@ def _render_analysis(lines: list[str], summary: RunSummary) -> None:
 
 
 def build_markdown_report(summary: RunSummary, results: list[CaseResult] | None = None) -> str:
-    _ = results
+    """Render current decisions or historical summary facts.
+
+    ``results`` supplies current decision evidence. Historical raw records are
+    validated and retained separately by ``load_report_inputs``; their current
+    evaluation projections are never used to rewrite historical report facts.
+    """
+    summary = RunSummary.model_validate(summary.model_dump(mode="json"))
+    if results is not None:
+        from ..decisions import validate_run_outputs
+
+        validate_run_outputs(summary, results)
     lines: list[str] = []
     lines.append(f"# Benchmark Report ({summary.run_id})")
     lines.append("")
@@ -165,10 +175,18 @@ def build_markdown_report(summary: RunSummary, results: list[CaseResult] | None 
     lines.append(f"- Evaluation fingerprint: `{summary.evaluation_fingerprint or 'unavailable'}`")
     scoring_contract = (summary.audit_metrics or {}).get("scoring_contract_version") or "legacy: unspecified"
     lines.append(f"- Scoring contract: `{scoring_contract}`")
-    if summary.judge_enabled:
-        lines.append(f"- Release: `{'PASS' if summary.overall_passed else 'FAIL'}`")
+    decision = summary.release_decision
+    if summary.track == "smoke" or (decision is not None and decision.scope == "diagnostic"):
+        lines.append("- Release: `diagnostic run only (no release verdict)`")
+    elif decision is None:
+        lines.append("- Release: `legacy_unverified (not eligible under the current contract)`")
+        lines.append(f"- Historical verdict: `{'PASS' if summary.overall_passed else 'FAIL'}`")
     else:
-        lines.append("- Release: `diagnostic run only (judge evaluation disabled; no release verdict)`")
+        lines.append(f"- Release: `{'PASS' if decision.passed else 'FAIL'}`")
+    if decision is not None:
+        lines.append(f"- Decision contract: `{summary.decision_contract_version}`")
+        if decision.failure_codes:
+            lines.append("- Blocking reasons: " + ", ".join(f"`{code}`" for code in decision.failure_codes))
     if summary.measurement_contract_version is not None:
         lines.append("")
         lines.append(
