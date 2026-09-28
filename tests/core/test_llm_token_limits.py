@@ -79,7 +79,7 @@ def provider(monkeypatch):
         elif payload.get("response_format", {}).get("json_schema", {}).get("name") == "PlannerOutput":
             content = json.dumps({
                 "use_retrieval": False, "tasks": [],
-                "request_contract": WireRequestContract().model_dump(mode="json"),
+                "request_contract": WireRequestContract(slack_recipient={"state": "omitted"}).model_dump(mode="json"),
             })
         else:
             content = text_document("Hello.").model_dump_json()

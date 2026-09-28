@@ -4,37 +4,14 @@ from typing import Any
 from pydantic import ValidationError
 from src.core.answer_schema import AnswerResponse
 
-from src.core.contracts.graph_state import PendingAction, RuntimeState, SessionMetadata, SlackDestination
+from src.core.contracts.graph_state import PendingAction, RuntimeState, SessionMetadata
 from src.core.request_contracts import RequestContract, UserTurnSnapshot
 
 
-def parse_slack_destination(value: Any) -> SlackDestination:
-    if isinstance(value, SlackDestination):
-        return value
-    if not isinstance(value, dict):
-        return SlackDestination()
-
-    destination = SlackDestination()
-    for key in ("channel_id", "user_id", "email"):
-        raw_item = value.get(key)
-        if raw_item is None:
-            setattr(destination, key, None)
-            continue
-        text = str(raw_item).strip()
-        setattr(destination, key, text or None)
-    return destination
-
-
 def parse_session_metadata(value: Any) -> SessionMetadata:
-    if isinstance(value, SessionMetadata):
-        return value
-    if not isinstance(value, dict):
+    if value is None:
         return SessionMetadata()
-
-    destination = parse_slack_destination(value.get("slack_destination"))
-    if destination.has_destination():
-        return SessionMetadata(slack_destination=destination)
-    return SessionMetadata()
+    return SessionMetadata.model_validate(value.model_dump() if isinstance(value, SessionMetadata) else value)
 
 
 def parse_request_contract(value: Any) -> RequestContract | None:

@@ -61,7 +61,7 @@ PLANNER_SYS = (
     "- For a generic request such as '리스트를 설명해줘', explain the general concept with compose. For an unidentified specific API or function, use unresolved and ask its name; do not invent a library or API. '파일 저장 API를 설명해줘' needs its API/library identified.\n"
     "- Completed pending actions stay completed unless the latest user turn explicitly requests that action again. Cite that new instruction when the user asks to save a revised body again; a destination-only reply cannot repeat a completed save.\n"
     "- Evidence IDs are local labels within this response. Every evidence_ids entry must name a record in this same response. Do not reproduce or reference server evidence IDs. Pending actions, constraints and completion are confirmed facts owned by the server: report only this turn's changes, using local evidence for those changes. An unchanged pending action uses not_requested with no evidence, and unchanged answer constraints are omitted; the server preserves them.\n"
-    "- Destination configuration can fill an already requested destination; it cannot create action intent. Emit only a destination explicitly resolved from the user dialogue. If an action or body reference is ambiguous, mark it unresolved and ask a concise clarification question. A missing destination alone may be left null for the executor to request after the body is ready."
+    "- Always emit slack_recipient. Use state=omitted only when this turn specifies no recipient; on a pending request omitted preserves the existing recipient. Use state=explicit with one selector (kind=channel/user/email,value) and evidence_ids scoped to slack_recipient for an exact recipient in the current user instruction. If the recipient is ambiguous, invalid, rejected or not verifiable, use state=unresolved with the exact raw_input, reason and evidence_ids; never omit it or choose a default. A name alone is unresolved. Cite current-turn recipient evidence when changing a pending recipient; an old mention cannot change its target. Configuration can fill only an omitted recipient and never create action intent. Missing Slack recipients permit preparing the body."
 )
 
 
@@ -101,7 +101,7 @@ def _confirmed_facts(contract) -> dict:
         "actions": {name: getattr(contract.actions, name).intent for name in ("save_text", "slack_notify")},
         "answer": without_evidence(contract.answer.model_dump(mode="json")),
         "body_request": without_evidence((contract.body_request or contract.to_wire().body).model_dump(mode="json")),
-        "slack_destination": contract.slack_destination.model_dump(mode="json") if contract.slack_destination is not None else None,
+        "slack_recipient": without_evidence(contract.slack_recipient.model_dump(mode="json")),
         "missing_info": [item.model_dump(mode="json") for item in contract.missing_info],
     }
 

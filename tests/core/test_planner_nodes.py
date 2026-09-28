@@ -87,7 +87,7 @@ class PlannerNodeTest(unittest.TestCase):
             )
         )
 
-        self.assertEqual(updates["planner"].output, PlannerOutput.fallback(request_contract=WireRequestContract()))
+        self.assertEqual(updates["planner"].output, PlannerOutput.fallback(request_contract=WireRequestContract(slack_recipient={"state": "omitted"})))
         self.assertEqual(updates["planner"].diagnostics.required_routes, ["upload"])
         self.assertIsNotNone(updates["planner"].guided_followup)
 

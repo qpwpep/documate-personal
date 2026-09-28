@@ -14,10 +14,11 @@ from src.core.contracts.graph_state import PendingAction
 from src.core.planner_schema import PlannerOutput, RetrievalTask
 from src.core.request_contracts import (
     AcknowledgeBody, ActionContract, ActionRequest, AnswerReference, BoundAnswerReference, ComposeBody,
-    ContractDestination, ContractEvidence, CopyAnswerBody, MissingInformation, RequestContract, TransformAnswerBody,
+    ContractEvidence, CopyAnswerBody, MissingInformation, RequestContract, TransformAnswerBody,
     UnresolvedBody, UserTurnSnapshot, WireCopyAnswerBody, WireCopyInputBody, WireRequestContract,
     WireTransformAnswerBody, WireTransformInputBody,
 )
+from src.core.slack_contract import ExplicitRecipient, OmittedRecipient, RecipientSelector, UnresolvedRecipient
 from src.runtime.nodes.planner import make_planner_node
 
 
@@ -31,8 +32,14 @@ class PlannerResult:
         return self.result
 
 
+def recipient(value, *evidence_ids):
+    return {"state": "explicit", "selector": {"kind": "channel", "value": value},
+            "evidence_ids": list(evidence_ids or ("current-evidence",))}
+
+
 def wire(query, **updates):
     return WireRequestContract.model_validate({
+        "slack_recipient": {"state": "omitted"},
         "evidence": [{"id": "current-evidence", "turn_id": "current", "quote": query,
                       "scope": "current_request", "interpretation": "instruction"}],
         **updates,
@@ -55,7 +62,7 @@ def plan(query, contract, **kwargs):
 
 def original_pending(*, response=None, phase="awaiting_destination", completed=()):
     clause = ContractEvidence(id="original", turn_id="old", quote="저장하고 Slack으로 보내줘",
-                              scope="actions", interpretation="instruction")
+                              scope="current_request", interpretation="instruction")
     contract = RequestContract(request_id="pending-request", actions=ActionContract(
         save_text=ActionRequest(intent="requested", evidence_ids=("original",)),
         slack_notify=ActionRequest(intent="requested", evidence_ids=("original",))),
@@ -119,7 +126,7 @@ def original_pending(*, response=None, phase="awaiting_destination", completed=(
 def test_new_relation_with_a_matching_target_cannot_reactivate_a_completed_old_action():
     pending = original_pending(response=finalize_answer(text_document("기존 본문"), []), completed=("save_text",))
     query = "새 주제를 설명해줘"
-    candidate = WireRequestContract(relation="new", target_request_id=pending.contract.request_id,
+    candidate = WireRequestContract(slack_recipient=OmittedRecipient(), relation="new", target_request_id=pending.contract.request_id,
         body=ComposeBody(instruction=query),
         actions=ActionContract(save_text=pending.contract.actions.save_text), evidence=pending.contract.evidence)
     result, _ = plan(query, candidate, pending_action=pending,
@@ -127,6 +134,24 @@ def test_new_relation_with_a_matching_target_cannot_reactivate_a_completed_old_a
     contract = result["runtime"].request_contract
     assert contract.request_id != pending.contract.request_id
     assert not contract.execution_ready("save_text", body_ready=True)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

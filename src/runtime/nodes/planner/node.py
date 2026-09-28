@@ -20,6 +20,7 @@ from src.core.contracts.debug import (
 )
 from src.core.planner_schema import PlannerOutput, RetrievalTask, normalize_planner_output_input
 from src.core.request_contracts import RequestContract
+from src.core.slack_contract import SlackDelivery
 from src.infra.logging_utils import log_event
 from src.runtime.nodes.planner.guardrails import apply_retrieval_availability
 from src.runtime.nodes.planner.models import (
@@ -28,7 +29,9 @@ from src.runtime.nodes.planner.models import (
 )
 from src.runtime.nodes.planner.prompt_builder import build_planner_messages
 from src.runtime.nodes.planner.query_sanitizer import sanitize_planner_output_queries
-from src.runtime.nodes.planner.request_resolution import pending_body_changed, resolve_request_contract
+from src.runtime.nodes.planner.request_resolution import (
+    current_recipient_evidence_ids, pending_body_changed, pending_recipient_changed, resolve_request_contract,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -415,6 +418,27 @@ def make_planner_node(
                               if getattr(contract.actions, name).intent != "requested")
             pending_updates = {"contract": contract, "completed_actions": completed}
             body_changed = pending_body_changed(runtime.pending_action, contract)
+            if pending_recipient_changed(runtime.pending_action, contract):
+                pending_updates["slack_delivery"] = None
+            elif (runtime.pending_action.slack_delivery is not None
+                  and runtime.pending_action.slack_delivery.selection is None
+                  and runtime.pending_action.slack_delivery.intent.state == "unresolved"
+                  and contract.slack_recipient.state == "explicit"
+                  and current_recipient_evidence_ids(contract, current_turn_id=runtime.current_turn_id,
+                                                     current_utterance=runtime.user_input)):
+                # A fresh confirmation may resolve a prior text/input conflict;
+                # an existing selected identity never needs resolution again.
+                pending_updates["slack_delivery"] = None
+            elif ("slack_notify" in runtime.pending_action.completed_actions
+                  and contract.actions.slack_notify.intent == "requested"
+                  and runtime.pending_action.slack_delivery is not None
+                  and runtime.pending_action.slack_delivery.status == "sent"):
+                # Current, grounded send authorization creates a new obligation;
+                # retain the selected identity instead of reusing its old success.
+                pending_updates["slack_delivery"] = SlackDelivery.model_validate({
+                    **runtime.pending_action.slack_delivery.model_dump(),
+                    "status": "pending", "failure": None, "message_ts": None,
+                })
             if body_changed or ("save_text" in runtime.pending_action.completed_actions
                                 and contract.actions.save_text.intent == "requested"):
                 # Replace the obligation when the change is accepted, including

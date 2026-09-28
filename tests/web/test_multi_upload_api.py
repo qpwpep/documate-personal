@@ -59,7 +59,7 @@ class LocalChatModel:
                 "use_retrieval": bool(files),
                 "tasks": [{"route": "upload", "query": "compare values", "k": 4,
                            "requirement": {"file_ids": file_ids}}] if files else [],
-                "request_contract": WireRequestContract().model_dump(mode="json"),
+                "request_contract": WireRequestContract(slack_recipient={"state": "omitted"}).model_dump(mode="json"),
             }
             if files and self.controls.planned_symbols:
                 parsed["tasks"] = [

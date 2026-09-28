@@ -3,7 +3,7 @@ from src.core.contracts.boundary.graph import build_graph_state_input, get_retry
 from src.core.contracts.boundary.planner import get_planner_state, parse_planner_diagnostic, parse_planner_output, parse_planner_state
 from src.core.contracts.boundary.response import get_response_state, parse_response_state
 from src.core.contracts.boundary.retrieval import get_retrieval_state, parse_retrieval_diagnostic, parse_retrieval_diagnostics, parse_retrieval_state
-from src.core.contracts.boundary.runtime import get_runtime_state, parse_session_metadata, parse_slack_destination
+from src.core.contracts.boundary.runtime import get_runtime_state, parse_session_metadata
 
 __all__ = [
     "build_graph_state_input",
@@ -26,6 +26,5 @@ __all__ = [
     "parse_retrieval_state",
     "parse_retry_state",
     "parse_session_metadata",
-    "parse_slack_destination",
     "parse_token_usage",
 ]

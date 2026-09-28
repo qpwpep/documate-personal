@@ -153,9 +153,10 @@ def score_observation(case: dict, observation: dict, policy: dict) -> dict[str, 
         state_errors.append("canonical_state_missing")
     dimensions["state"] = _dimension(state_errors)
 
-    destination = {key: value for key, value in (contract.get("slack_destination") or {}).items() if value}
-    expected_destination = expected.get("destination") or {}
-    if destination != expected_destination:
+    recipient = {key: value for key, value in _mapping(contract.get("slack_recipient")).items()
+                 if key not in {"evidence_ids", "raw_input"}}
+    expected_recipient = expected["recipient"]
+    if recipient != expected_recipient:
         dimensions["actions"]["errors"].append("destination_mismatch")
         dimensions["actions"]["passed"] = False
     raw = _mapping(observation.get("raw_candidate"))
@@ -172,7 +173,7 @@ def score_observation(case: dict, observation: dict, policy: dict) -> dict[str, 
     delivering = any(value == "requested" for value in actions.values())
     if delivering and dimensions["body"]["errors"] and accepted:
         critical.append("wrong_body")
-    if actions.get("slack_notify") == "requested" and destination != expected_destination and accepted:
+    if actions.get("slack_notify") == "requested" and recipient != expected_recipient and accepted:
         critical.append("wrong_destination")
     return {
         "dimensions": dimensions, "critical_failures": critical,

@@ -203,12 +203,12 @@ class _CapturePlannerLLM:
         # Retrieval-only fixtures still supply an explicit neutral interpretation.
         # Missing-contract tests use an unadapted model boundary of their own.
         if isinstance(planner_output, PlannerOutput) and planner_output.request_contract is None:
-            planner_output.request_contract = WireRequestContract()
+            planner_output.request_contract = WireRequestContract(slack_recipient={"state": "omitted"})
         elif isinstance(planner_output, PlannerOutput) and isinstance(planner_output.request_contract, RequestContract):
             planner_output.request_contract = planner_output.request_contract.to_wire()
         elif isinstance(planner_output, dict):
             planner_output = dict(planner_output)
-            planner_output.setdefault("request_contract", WireRequestContract().model_dump(mode="json"))
+            planner_output.setdefault("request_contract", WireRequestContract(slack_recipient={"state": "omitted"}).model_dump(mode="json"))
         self.planner_output = planner_output
         self.last_messages = None
         self.call_count = 0

@@ -9,6 +9,7 @@ from typing_extensions import TypedDict
 
 from src.core.answer_schema import ActionReceipt, AnswerResponse
 from src.core.save_contract import SaveOperation
+from src.core.slack_contract import RecipientSelector, SlackDelivery
 from src.core.evidence import EvidenceRef
 from src.core.planner_schema import PlannerOutput
 from src.core.request_contracts import RequestContract, UserTurnSnapshot
@@ -17,20 +18,9 @@ from src.core.contracts.debug import DebugPayload, LLMCallMetadata, PlannerDiagn
 from src.core.contracts.provenance import AnswerSource, BodyKind
 
 
-class SlackDestination(BaseModel):
-    channel_id: str | None = None
-    user_id: str | None = None
-    email: str | None = None
-
-    def has_destination(self) -> bool:
-        return any(
-            value is not None and str(value).strip()
-            for value in (self.channel_id, self.user_id, self.email)
-        )
-
-
 class SessionMetadata(BaseModel):
-    slack_destination: SlackDestination | None = None
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    slack_recipient: RecipientSelector | None = None
 
 
 class PendingAction(BaseModel):
@@ -44,6 +34,7 @@ class PendingAction(BaseModel):
     completed_actions: tuple[Literal["save_text", "slack_notify"], ...] = ()
     save_operation: SaveOperation | None = None
     save_receipt: ActionReceipt | None = None
+    slack_delivery: SlackDelivery | None = None
 
 
 class RuntimeState(BaseModel):
