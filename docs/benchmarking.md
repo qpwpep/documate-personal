@@ -186,9 +186,12 @@ uv run python -m src.eval.main run \
 - benchmark CLI의 override 우선순위는 `CLI > .env > OS env > config.toml`입니다.
 - 즉 `.env`에 `BENCHMARK_SLACK_*`, `BENCHMARK_ENDPOINT`, `JUDGE_MODEL`, `BENCHMARK_JUDGE_ENABLED`를 넣으면 별도 export 없이도 benchmark CLI가 그대로 읽습니다.
 
+- fixture는 `slack_recipient: {"kind": "channel" | "user" | "email", "value": "..."}` 하나만 선언합니다. 생략하거나 `null`이면 수신자 미지정이며, 명시한 빈 값·잘못된 형식·여러 수신자는 입력 오류입니다. 이전 세 수신자 필드는 지원하지 않습니다.
 - fixture의 `C123BENCH`, `U123BENCH`는 live 모드에서 실제 목적지가 아니라 케이스 분류 힌트로만 사용됩니다.
 - channel 케이스는 `--live-slack-channel-id` 또는 `BENCHMARK_SLACK_CHANNEL_ID`가 필요합니다.
-- DM 케이스는 `--live-slack-user-id`, `--live-slack-email`, `BENCHMARK_SLACK_USER_ID`, `BENCHMARK_SLACK_EMAIL`, 또는 app 기본 DM 설정을 사용합니다.
+- DM 케이스는 CLI의 `--live-slack-user-id`/`--live-slack-email` 묶음, benchmark 환경의 `BENCHMARK_SLACK_USER_ID`/`BENCHMARK_SLACK_EMAIL` 묶음, app 기본 DM 설정 순서로 한 수신자를 선택합니다. 같은 묶음에는 user ID와 email 중 하나만 지정해야 합니다. 상위 묶음의 email은 하위 묶음의 user ID보다 우선하며, 선택한 값이 잘못됐거나 조회에 실패해도 하위 설정으로 바꾸지 않습니다.
+- app 기본 DM 설정은 실행할 DM 케이스에 명시 override가 없을 때만 적용합니다. 사용하지 않는 기본 DM 설정 오류는 channel-only·Slack 없는 실행을 막지 않습니다. CLI·benchmark 환경에서 선택된 명시 DM 입력 오류는 실행 전에 거부하며, 기본값이 필요한 DM 케이스의 설정 오류도 HTTP 요청 전에 해결 방법과 함께 보고합니다.
+- channel override와 DM override는 서로 다른 유형의 케이스에 쓰이므로 함께 설정할 수 있습니다. 최종 요청에는 선택한 `slack_recipient` 한 개만 전달합니다.
 
 ```bash
 uv run python -m src.eval.main run \

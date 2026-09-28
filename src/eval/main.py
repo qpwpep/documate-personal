@@ -22,6 +22,7 @@ from .config_models import BenchmarkConfig, BenchmarkLiveSlackConfig
 from .result_models import CaseResult
 from .summary_models import RunSummary, RunTrack
 from src.infra.settings import get_settings, load_benchmark_cli_env_settings
+from src.core.slack_contract import RecipientSelector, SlackDefault
 
 
 DEFAULT_CONFIG_PATH = get_benchmark_config_path()
@@ -95,11 +96,9 @@ def command_run(args: argparse.Namespace) -> int:
     live_slack_enabled = bool(args.live_slack) or benchmark_env.live_slack_enabled
     live_slack = BenchmarkLiveSlackConfig(
         enabled=live_slack_enabled,
-        channel_id=args.live_slack_channel_id or benchmark_env.live_slack_channel_id,
-        user_id=args.live_slack_user_id or benchmark_env.live_slack_user_id,
-        email=args.live_slack_email or benchmark_env.live_slack_email,
-        fallback_user_id=app_settings.slack_default_user_id,
-        fallback_email=app_settings.slack_default_dm_email,
+        channel_id=(args.live_slack_channel_id if args.live_slack_channel_id is not None else benchmark_env.live_slack_channel_id),
+        dm_recipient=resolve_live_slack_dm_recipient(args, benchmark_env) if live_slack_enabled else None,
+        dm_default=app_settings.slack_default_recipient() if live_slack_enabled else SlackDefault(),
     )
 
     run_dir, _, summary = run_online_benchmark(
@@ -122,6 +121,20 @@ def command_run(args: argparse.Namespace) -> int:
         return 0 if summary.overall_passed else 1
     print("Overall: diagnostic run complete (smoke track; not a release verdict)")
     return 0
+
+
+def resolve_live_slack_dm_recipient(args, benchmark_env) -> RecipientSelector | None:
+    for label, user_id, email in (
+        ("CLI", args.live_slack_user_id, args.live_slack_email),
+        ("benchmark environment", benchmark_env.live_slack_user_id, benchmark_env.live_slack_email),
+    ):
+        supplied = [(kind, value) for kind, value in (("user", user_id), ("email", email)) if value is not None]
+        if len(supplied) > 1:
+            raise ValueError(f"{label}: Slack DM user ID and email cannot both be specified")
+        if supplied:
+            kind, value = supplied[0]
+            return RecipientSelector(kind=kind, value=value)
+    return None
 
 
 def command_report(args: argparse.Namespace) -> int:
