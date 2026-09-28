@@ -45,13 +45,16 @@ def test_missing_upload_still_blocks_an_attempted_save_with_a_perfect_judge(tmp_
     assert "save_unexpected_execution" in result.gate_failures
 
 
-def test_missing_upload_does_not_reward_an_unnecessary_search(tmp_path):
+def test_missing_upload_blocks_forbidden_search_despite_perfect_quality(tmp_path):
     case = missing_upload_case()
     result = _run_case(
         case, _judge(_judge_payload(1.0)), tmp_path=tmp_path,
         turns=[_final_payload(plain_response("확인할 파일을 먼저 업로드해 주세요."), tool_calls=["upload_search"])],
     )
-    assert result.rule_scores["tool_choice"] < 1.0
+    assert result.rule_scores["tool_choice"] == 1.0
+    assert result.composite_quality_score == pytest.approx(1.0)
+    assert result.release_pass is False
+    assert "forbidden_tool_execution" in result.decision.failure_codes
 
 
 def test_judge_receives_the_missing_input_and_nonexecution_contract():

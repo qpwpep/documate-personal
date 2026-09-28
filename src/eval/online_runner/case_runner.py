@@ -119,6 +119,7 @@ def _run_turn(client: AgentSessionClient, query: str, *,
         raw_final_response=raw_final,
         answer_provenance=parsed.answer_provenance, evidence_assessment=parsed.evidence_assessment,
         observed_hits=parsed.observed_hits, tool_calls=parsed.tool_calls,
+        execution_evidence=parsed.execution_evidence,
     )
     return parsed, turn
 

@@ -104,6 +104,7 @@ def scenario_server(agent_server, monkeypatch):
 
 def run_scenario(endpoint: str, root: Path, *, judge=None, config=None, **kwargs):
     case_id = kwargs.pop("case_id", "save-previous")
+    kwargs.setdefault("setup_forbidden_tools", [[] for _ in kwargs.get("setup_turns", [])])
     if "save_expectation" not in kwargs:
         kwargs["save_expectation"] = (
             {"outcome": "required_success", "target": {"kind": "setup_answer", "setup_turn_index": 0}}
@@ -350,7 +351,7 @@ def test_concurrent_scenarios_preserve_different_answers_at_the_same_time(scenar
 
     cases = [BenchmarkCase(
         case_id=result.case_id, category="tool_action", query=SAVE_QUERY,
-        setup_turns=[PREPARE_QUERY], expected_tools=["save_text"], save_expectation=expectation,
+        setup_turns=[PREPARE_QUERY], setup_forbidden_tools=[[]], expected_tools=["save_text"], save_expectation=expectation,
     ) for result in results]
     revalidate_saved_artifacts(cases=cases, results=results)
     assert all(result.save_assessment.phase == "run_end" and result.save_assessment.passed for result in results)
@@ -433,7 +434,7 @@ def test_actual_save_and_evaluation_cannot_hide_artifact_failures(
         assert result.eval_validity == "incomplete"
     case = BenchmarkCase(
         case_id=result.case_id, category="tool_action", query=SAVE_QUERY,
-        setup_turns=[PREPARE_QUERY], expected_tools=["save_text"], save_expectation=expectation,
+        setup_turns=[PREPARE_QUERY], setup_forbidden_tools=[[]], expected_tools=["save_text"], save_expectation=expectation,
     )
     revalidate_saved_artifacts(cases=[case], results=[result])
     summary = build_summary(
@@ -441,3 +442,33 @@ def test_actual_save_and_evaluation_cannot_hide_artifact_failures(
         track="release", requested_limit=None, config=config, cases=[case], results=[result],
     )
     assert summary.overall_passed is expected_pass, summary.model_dump()
+
+
+def test_actual_preparation_violation_cannot_be_erased_by_perfect_final_save(scenario_server):
+    """A real earlier forbidden search remains blocking after a perfect saved answer."""
+    endpoint, _, root = scenario_server
+    uploads = root / "fixtures" / "uploads"
+    uploads.mkdir(parents=True)
+    (uploads / "alpha.py").write_text("alpha = 1\n", encoding="utf-8")
+    judge = LLMJudge(model_name="local-perfect-judge", enabled=False)
+    judge.enabled = True
+    judge.client = _PerfectJudgeBoundary()
+    config = BenchmarkConfig(judge_enabled=True)
+    config.hard_gates.p95_latency_ms = 1_000_000
+
+    result = run_scenario(
+        endpoint, root, judge=judge, config=config, setup_turns=[PREPARE_QUERY],
+        setup_forbidden_tools=[["upload_search"]], forbidden_tools=["upload_search"],
+        upload_fixtures=["alpha.py"],
+    )
+
+    assert result.runtime_errors == result.response_errors == []
+    assert result.judge_pass is True
+    assert result.llm_judge_score == 1.0
+    assert result.save_assessment.passed is True
+    assert result.tool_calls == ["save_text"]
+    assert Path(result.response.actions[0].file_path).is_file()
+    assert result.policy_assessment.status == "violated"
+    assert [(item.tool_name, item.turn_index) for item in result.policy_assessment.violations] == [("upload_search", 0)]
+    assert "forbidden_tool_execution" in result.policy_assessment.failure_codes
+    assert result.release_pass is result.passed is False

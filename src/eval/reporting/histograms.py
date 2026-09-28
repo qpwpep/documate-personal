@@ -131,6 +131,14 @@ def _result_retrieval_warnings(result: CaseResult) -> list[str]:
 
 
 def build_failure_reason(result: CaseResult) -> str:
+    detail = _diagnostic_failure_reason(result)
+    if result.decision is not None and result.decision.failure_codes:
+        codes = ", ".join(result.decision.failure_codes)
+        return codes if detail == codes else f"{codes}; diagnostic: {detail}"
+    return detail
+
+
+def _diagnostic_failure_reason(result: CaseResult) -> str:
     if result.runtime_errors:
         return ", ".join(result.runtime_errors)
     if result.response_errors:

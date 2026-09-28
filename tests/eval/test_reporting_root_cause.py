@@ -1,4 +1,4 @@
-from tests.eval.response_fixtures import plain_response
+from tests.eval.response_fixtures import execution_evidence, plain_response
 import json
 import unittest
 
@@ -25,6 +25,19 @@ def _make_result(
 ) -> CaseResult:
     return CaseResult.model_validate(
         {
+            "decision_contract_version": 1,
+            "policy_snapshot": {"final_forbidden_tools": case.forbidden_tools,
+                                "setup_turn_count": len(case.setup_turns)},
+            "execution_evidence": execution_evidence(tool_calls, request_id=f"req-{case.case_id}"),
+            "request_id": f"req-{case.case_id}",
+            "judge_status": "succeeded",
+            "eval_validity": "valid",
+            "product_pass": passed,
+            "judge_pass": passed,
+            "judge_subscores": {name: final_score for name in (
+                "answer_quality", "groundedness", "citation_traceability", "tool_choice", "format_language",
+            )},
+            "composite_quality_score": final_score,
             "run_id": "run-root-cause",
             "case_id": case.case_id,
             "category": case.category,
@@ -67,7 +80,7 @@ def _make_result(
                 "safety_format": 1.0,
             },
             "rule_score_total": 0.675,
-            "llm_judge_score": 0.0,
+            "llm_judge_score": final_score,
             "llm_judge_reason": llm_judge_reason,
             "final_score": final_score,
             "passed": passed,
@@ -226,7 +239,7 @@ class ReportingRootCauseTest(unittest.TestCase):
             category="docs_only",
             query="pandas merge",
             expected_tools=["tavily_search"],
-            forbidden_tools=["rag_search"],
+            forbidden_tools=["upload_search"],
         )
         hybrid_case = BenchmarkCase(
             case_id="hybrid_case",
@@ -279,9 +292,9 @@ class ReportingRootCauseTest(unittest.TestCase):
             ),
             _make_result(
                 case=docs_confused_case,
-                tool_calls=["rag_search", "save_text"],
+                tool_calls=["upload_search", "save_text"],
                 llm_judge_reason=(
-                    "Assistant used local retrieval and skipped the official docs path, "
+                    "Assistant used upload retrieval and skipped the official docs path, "
                     "so the answer did not satisfy the request."
                 ),
                 passed=False,
@@ -412,10 +425,10 @@ class ReportingRootCauseTest(unittest.TestCase):
         route_confusion = summary.analysis.route_confusion[0]
         self.assertEqual(route_confusion.category, "docs_only")
         self.assertEqual(route_confusion.expected_routes, ["docs"])
-        self.assertEqual(route_confusion.observed_routes, ["local"])
+        self.assertEqual(route_confusion.observed_routes, ["upload"])
         self.assertEqual(route_confusion.missing_expected_routes, ["docs"])
         self.assertEqual(route_confusion.unexpected_routes, [])
-        self.assertEqual(route_confusion.forbidden_routes, ["local"])
+        self.assertEqual(route_confusion.forbidden_routes, ["upload"])
         self.assertEqual(route_confusion.count, 1)
 
         validator_buckets = {
@@ -451,9 +464,10 @@ class ReportingRootCauseTest(unittest.TestCase):
         self.assertNotIn("hybrid_p95_latency_ms", gates)
 
         failure_reasons = {item["case_id"]: item["reason"] for item in summary.metrics.failures}
-        self.assertEqual(failure_reasons["docs_validator_case"], "validator:no_evidence")
+        self.assertIn("validator:no_evidence", failure_reasons["docs_validator_case"])
+        self.assertIn("forbidden_tool_execution", failure_reasons["docs_confused_case"])
         self.assertIn(
-            "Assistant used local retrieval and skipped the official docs path",
+            "Assistant used upload retrieval and skipped the official docs path",
             failure_reasons["docs_confused_case"],
         )
         self.assertNotIn("save_text", str(summary.analysis.route_confusion))

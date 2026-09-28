@@ -266,15 +266,23 @@ def test_stored_release_cannot_claim_success_with_blocking_save_gate(artifact_bo
     result = _evaluate(_committed_response(artifact_boundary), artifact_boundary)
     payload = result.model_dump()
     payload["gate_failures"] = ["save_content_mismatch"]
-    with pytest.raises(ValidationError, match="blocking gate failures"):
+    with pytest.raises(ValidationError, match="decision disagrees"):
         CaseResult.model_validate(payload)
 
 
 def test_verified_retry_passes_without_inventing_another_tool_call(artifact_boundary):
     response = _committed_response(artifact_boundary)
+    case = _save_case(setup_turns=["답변을 작성해서 저장해줘"], setup_forbidden_tools=[["slack_notify"]])
     result = _run_case(
-        _save_case(), _judge(_judge_payload(1.0)), tmp_path=artifact_boundary,
-        turns=[_final_payload(response, tool_calls=[], debug_overrides={
+        case, _judge(_judge_payload(1.0)), tmp_path=artifact_boundary,
+        turns=[_final_payload(response, tool_calls=["save_text"], debug_overrides={
+            "answer_provenance": answer_provenance(response, request_id="contract-request", contract_revision=1,
+                                                     save_operation_binding_sha256=_binding(artifact_boundary)),
+        }), _final_payload(response, tool_calls=[], debug_overrides={
+            "execution_evidence": {"schema_version": 1, "request_id": "req-1", "status": "complete", "events": [
+                {"sequence": 1, "invocation_id": "reuse-save", "tool_name": "save_text", "phase": "reused",
+                 "origin_invocation_id": "req-1-invocation-1"},
+            ]},
             "answer_provenance": answer_provenance(response, request_id="contract-request", contract_revision=2,
                                                     save_operation_binding_sha256=_binding(artifact_boundary)),
         })],
@@ -284,15 +292,15 @@ def test_verified_retry_passes_without_inventing_another_tool_call(artifact_boun
     assert result.tool_calls == [] and result.tool_call_count == 0
     summary = build_summary(
         run_id="retry-run", endpoint="http://fixture", fixtures_path="cases.jsonl", config_path="config.toml",
-        track="release", requested_limit=None, config=BenchmarkConfig(), cases=[_save_case()], results=[result],
+        track="release", requested_limit=None, config=BenchmarkConfig(), cases=[case], results=[result],
     )
     assert summary.metrics.tool_recall == summary.metrics.tool_precision == 1.0
     assert summary.overall_passed is False  # Per-case observation is not a run-end preservation check.
     assert summary.metrics.save_contract_failures == 1
-    revalidate_saved_artifacts(cases=[_save_case()], results=[result])
+    revalidate_saved_artifacts(cases=[case], results=[result])
     summary = build_summary(
         run_id="retry-run", endpoint="http://fixture", fixtures_path="cases.jsonl", config_path="config.toml",
-        track="release", requested_limit=None, config=BenchmarkConfig(), cases=[_save_case()], results=[result],
+        track="release", requested_limit=None, config=BenchmarkConfig(), cases=[case], results=[result],
     )
     assert summary.overall_passed is True
 
@@ -303,6 +311,7 @@ def test_pending_retry_retains_the_original_save_operation(artifact_boundary, ta
     prior = dict(response, actions=[])
     case = BenchmarkCase(case_id="pending-retry", category="tool_action", query="다시 저장해줘",
                          expected_tools=["save_text"], setup_turns=["답변을 작성해줘"],
+                         setup_forbidden_tools=[["save_text", "slack_notify"]],
                          save_expectation={"outcome": "required_success", "target": target})
     result = _run_case(case, _judge(_judge_payload(1.0)), tmp_path=artifact_boundary, turns=[
         _final_payload(prior), _final_payload(response, tool_calls=["save_text"], debug_overrides={
@@ -329,10 +338,27 @@ def test_nonexecuted_skip_receipt_satisfies_must_not_execute(tmp_path):
     assert result.save_assessment.passed is True
 
 
+def test_blocked_save_receipt_is_not_an_executed_save(tmp_path):
+    response = plain_response("실행 정책에 따라 저장을 차단했습니다.")
+    response["actions"] = [{"kind": "save_text", "status": "error", "error": "blocked before execution"}]
+    case = BenchmarkCase(case_id="blocked-save", category="tool_action", query="저장하지 마",
+                         forbidden_tools=["save_text"], save_expectation={"outcome": "must_not_execute"})
+    result = _run_case(case, _judge(_judge_payload(1.0)), tmp_path=tmp_path, turns=[
+        _final_payload(response, debug_overrides={"execution_evidence": {
+            "schema_version": 1, "request_id": "req-1", "status": "complete", "events": [
+                {"sequence": 1, "invocation_id": "blocked-save", "tool_name": "save_text", "phase": "blocked"},
+            ],
+        }}),
+    ])
+    assert result.release_pass is True
+    assert result.save_assessment.passed is True
+
+
 def test_run_end_also_preserves_successful_setup_saves(artifact_boundary):
     prepared = _committed_response(artifact_boundary)
     case = BenchmarkCase(case_id="setup-save", category="tool_action", query="새 파일은 저장하지 마",
-                         setup_turns=["이 답변을 작성하고 저장해줘"], save_expectation={"outcome": "must_not_execute"})
+                         setup_turns=["이 답변을 작성하고 저장해줘"], setup_forbidden_tools=[["slack_notify"]],
+                         save_expectation={"outcome": "must_not_execute"})
     result = _run_case(case, _judge(_judge_payload(1.0)), tmp_path=artifact_boundary, turns=[
         _final_payload(prepared, tool_calls=["save_text"], debug_overrides={
             "answer_provenance": answer_provenance(prepared, request_id="contract-request", contract_revision=1,
@@ -356,6 +382,7 @@ def test_setup_target_comes_from_case_not_self_consistent_wrong_receipt(artifact
                                       target_kind="copy_answer", source_hash=original["content_hash"])]
     case = BenchmarkCase(
         case_id="copy-specific-answer", category="tool_action", query="직전 답변을 저장해줘", setup_turns=["먼저 설명해줘"],
+        setup_forbidden_tools=[["save_text", "slack_notify"]],
         expected_tools=["save_text"], save_expectation={"outcome": "required_success",
             "target": {"kind": "setup_answer", "setup_turn_index": 0}},
     )

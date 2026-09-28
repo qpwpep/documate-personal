@@ -1,16 +1,17 @@
-from tests.eval.response_fixtures import plain_response
+from tests.eval.response_fixtures import plain_response, execution_evidence
 import unittest
 
 from src.eval.config_models import BenchmarkCase, BenchmarkConfig
 from src.eval.reporting import build_summary
 from src.eval.result_models import CaseResult
+from src.eval.decisions import policy_for_case
 
 
 def _case(case_id: str, category: str) -> BenchmarkCase:
     expected_tools = {
         "docs_only": ["tavily_search"],
         "hybrid": ["tavily_search", "upload_search"],
-        "rag_only": ["rag_search"],
+        "rag_only": ["upload_search"],
         "tool_action": ["save_text"],
     }[category]
     return BenchmarkCase(case_id=case_id, category=category, query=f"{case_id} query", expected_tools=expected_tools)
@@ -31,6 +32,13 @@ def _result(
     product_value = product_pass if product_pass is not None else release_pass
     return CaseResult.model_validate(
         {
+            "decision_contract_version": 1,
+            "policy_snapshot": policy_for_case(case),
+            "execution_evidence": execution_evidence(case.expected_tools, request_id=f"req-{case.case_id}"),
+            "judge_status": "succeeded",
+            "eval_validity": "valid",
+            "judge_subscores": {key: llm_judge_score for key in (
+                "answer_quality", "groundedness", "citation_traceability", "tool_choice", "format_language")},
             "run_id": "run-policy",
             "case_id": case.case_id,
             "category": case.category,

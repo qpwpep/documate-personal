@@ -1,4 +1,4 @@
-from tests.eval.response_fixtures import answer_provenance, sse_http_response
+from tests.eval.response_fixtures import answer_provenance, execution_evidence, sse_http_response
 from src.core.contracts.debug import DEBUG_SCHEMA_VERSION
 from src.core.answer_schema import AnswerResponse
 from tests.eval.response_fixtures import plain_response
@@ -104,12 +104,13 @@ class RunnerErrorBucketsTest(unittest.TestCase):
             200,
             {
                 "response": "legacy string response",
-                "trace": "x",
+                "trace": "Request ID: req-1",
                 "debug": {
                     "schema_version": DEBUG_SCHEMA_VERSION,
                     "observability_status": "ok",
                     "missing_required_debug_fields": [],
                     "tool_calls": [],
+                    "execution_evidence": execution_evidence([], request_id="req-1"),
                     "tool_call_count": 0,
                     "token_usage": {},
                     "model_name": None,
@@ -143,13 +144,14 @@ class RunnerErrorBucketsTest(unittest.TestCase):
             200,
             {
                 "response": plain_response('ok'),
-                "trace": "x",
+                "trace": "Request ID: req-1",
                 "debug": {
                     "answer_provenance": answer_provenance(plain_response('ok')),
                     "schema_version": DEBUG_SCHEMA_VERSION,
                     "observability_status": "ok",
                     "missing_required_debug_fields": [],
                     "tool_calls": ["tavily_search"],
+                    "execution_evidence": execution_evidence(["tavily_search"], request_id="req-1"),
                     "tool_call_count": 1,
                     "token_usage": {},
                     "model_name": None,
@@ -184,13 +186,14 @@ class RunnerErrorBucketsTest(unittest.TestCase):
             200,
             {
                 "response": plain_response('ok'),
-                "trace": "x",
+                "trace": "Request ID: req-1",
                 "debug": {
                     "answer_provenance": answer_provenance(plain_response('ok')),
                     "schema_version": DEBUG_SCHEMA_VERSION,
                     "observability_status": "ok",
                     "missing_required_debug_fields": [],
                     "tool_calls": ["tavily_search", "upload_search", "rag_search"],
+                    "execution_evidence": execution_evidence(["tavily_search", "upload_search", "rag_search"], request_id="req-1"),
                     "tool_call_count": 3,
                     "token_usage": {},
                     "model_name": None,
@@ -265,13 +268,14 @@ class RunnerErrorBucketsTest(unittest.TestCase):
             200,
             {
                 "response": plain_response('need more evidence'),
-                "trace": "x",
+                "trace": "Request ID: req-1",
                 "debug": {
                     "answer_provenance": answer_provenance(plain_response('need more evidence')),
                     "schema_version": DEBUG_SCHEMA_VERSION,
                     "observability_status": "ok",
                     "missing_required_debug_fields": [],
                     "tool_calls": ["tavily_search"],
+                    "execution_evidence": execution_evidence(["tavily_search"], request_id="req-1"),
                     "tool_call_count": 1,
                     "token_usage": {},
                     "model_name": None,
@@ -315,9 +319,10 @@ class RunnerErrorBucketsTest(unittest.TestCase):
             200,
             {
                 "response": plain_response('ok'),
-                "trace": "x",
+                "trace": "Request ID: req-1",
                 "debug": {
                     "tool_calls": ["tavily_search"],
+                    "execution_evidence": execution_evidence(["tavily_search"], request_id="req-1"),
                     "observed_hits": [],
                 },
             },
@@ -342,13 +347,14 @@ class RunnerErrorBucketsTest(unittest.TestCase):
             200,
             {
                 "response": plain_response('ok'),
-                "trace": "x",
+                "trace": "Request ID: req-1",
                 "debug": {
                     "answer_provenance": answer_provenance(plain_response('ok')),
                     "schema_version": DEBUG_SCHEMA_VERSION,
                     "observability_status": "ok",
                     "missing_required_debug_fields": [],
                     "tool_calls": ["tavily_search"],
+                    "execution_evidence": execution_evidence(["tavily_search"], request_id="req-1"),
                     "tool_call_count": 1,
                     "token_usage": {},
                     "model_name": None,
@@ -402,13 +408,14 @@ class RunnerErrorBucketsTest(unittest.TestCase):
             200,
             {
                 "response": plain_response(['ok', 'same']),
-                "trace": "x",
+                "trace": "Request ID: req-1",
                 "debug": {
                     "answer_provenance": answer_provenance(plain_response(['ok', 'same'])),
                     "schema_version": DEBUG_SCHEMA_VERSION,
                     "observability_status": "ok",
                     "missing_required_debug_fields": [],
                     "tool_calls": ["tavily_search"],
+                    "execution_evidence": execution_evidence(["tavily_search"], request_id="req-1"),
                     "tool_call_count": 1,
                     "token_usage": {
                         "prompt_tokens": 10,

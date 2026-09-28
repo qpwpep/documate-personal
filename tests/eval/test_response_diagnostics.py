@@ -3,23 +3,73 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 import pytest
 import requests
 
 from src.core.contracts.debug import DebugPayload, LLMCallMetadata, TokenUsage
+from src.app.web.agent_request_support import normalize_debug_info
 from src.eval.config_models import BenchmarkCase, BenchmarkConfig
 from src.eval.io import dump_jsonl
 from src.eval.judge_llm import LLMJudge
+from src.eval.main import command_report
 from src.eval.online_runner import _run_single_case, run_online_benchmark
-from tests.eval.response_fixtures import answer_provenance, plain_response, sse_http_response
+from tests.eval.response_fixtures import answer_provenance, execution_evidence, plain_response, sse_http_response
 
 
 pytestmark = pytest.mark.usefixtures("empty_upload_manifest_http")
 
 
+@pytest.mark.parametrize("setup", [False, True], ids=["final", "preparation"])
+def test_invalid_retrieval_observation_cannot_erase_a_forbidden_start(setup, monkeypatch, tmp_path):
+    """Malformed diagnostics retain the separate, positive evidence of a prohibited invocation."""
+    payload = response_payload()
+    payload["debug"]["retrieval_diagnostics"] = [{"status": []}]
+    payload["debug"]["execution_evidence"] = execution_evidence(["upload_search"], request_id="diagnostic-request")
+    payload["debug"]["tool_calls"] = ["upload_search"]
+    payload["debug"]["tool_call_count"] = 1
+    monkeypatch.setattr(requests, "post", lambda *args, **kwargs: sse_http_response(200, payload))
+    result = _run_single_case(
+        run_id="diagnostics", endpoint="http://fixture", fixtures_path=tmp_path / "cases.jsonl",
+        case=BenchmarkCase(case_id="invalid", category="tool_action", query="final",
+                           setup_turns=["prepare"] if setup else [],
+                           setup_forbidden_tools=[["upload_search"]] if setup else None,
+                           forbidden_tools=[] if setup else ["upload_search"]),
+        timeout_seconds=1, judge=LLMJudge(model_name="unused", enabled=False),
+        config=BenchmarkConfig(judge_enabled=False),
+    )
+    assert result.policy_assessment.status == "violated"
+    assert "forbidden_tool_execution" in result.policy_assessment.failure_codes
+    assert "tool_execution_retrieval_diagnostics_invalid" in result.policy_assessment.failure_codes
+    assert not result.release_pass
+
+
+@pytest.mark.parametrize("setup", [False, True], ids=["final", "preparation"])
+def test_server_normalized_invalid_retrieval_observation_remains_unverified(setup, monkeypatch, tmp_path):
+    """Server normalization preserves its rejection across the HTTP and policy boundaries."""
+    payload = response_payload()
+    payload["debug"]["retrieval_diagnostics"] = None
+    payload["debug"] = normalize_debug_info(payload["debug"], latency_ms_server=1).model_dump(mode="json")
+    assert payload["debug"]["retrieval_diagnostics"] == []
+    monkeypatch.setattr(requests, "post", lambda *args, **kwargs: sse_http_response(200, payload))
+    result = _run_single_case(
+        run_id="diagnostics", endpoint="http://fixture", fixtures_path=tmp_path / "cases.jsonl",
+        case=BenchmarkCase(case_id="invalid", category="tool_action", query="final",
+                           setup_turns=["prepare"] if setup else [],
+                           setup_forbidden_tools=[[]] if setup else None),
+        timeout_seconds=1, judge=LLMJudge(model_name="unused", enabled=False),
+        config=BenchmarkConfig(judge_enabled=False),
+    )
+    assert result.policy_assessment.status == "indeterminate"
+    assert "tool_execution_retrieval_diagnostics_invalid" in result.policy_assessment.failure_codes
+    assert any("retrieval_diagnostics" in error for error in result.response_errors)
+    assert not result.release_pass
+
+
 def response_payload():
     debug = DebugPayload(
+        execution_evidence=execution_evidence(request_id="diagnostic-request"),
         token_usage=TokenUsage(prompt_tokens=10, completion_tokens=2, total_tokens=12),
         llm_calls=[LLMCallMetadata(
             stage="planner", path="structured",

@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -20,6 +21,7 @@ from src.core.contracts.debug import DebugPayload, TokenUsage
 from src.core.evidence import RetrievalScore, SearchHit
 from src.core.save_contract import SaveOperation
 from src.eval.config_models import BenchmarkCase, BenchmarkConfig, CaseWeightOverride
+from src.eval.decisions import policy_for_case
 from src.eval.io import dump_jsonl
 from src.eval.judge_llm import LLMJudge
 from src.eval.main import command_run
@@ -35,6 +37,7 @@ from tests.eval.response_fixtures import (
     saved_receipt,
     source_evidence,
     sse_http_response,
+    execution_evidence,
 )
 
 
@@ -115,6 +118,7 @@ def _hit(evidence) -> SearchHit:
 
 
 def _final_payload(response, *, tool_calls=(), observed_hits=(), debug_overrides=None):
+    response = deepcopy(response)
     debug = DebugPayload(
         token_usage=TokenUsage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
         tool_calls=list(tool_calls),
@@ -124,7 +128,14 @@ def _final_payload(response, *, tool_calls=(), observed_hits=(), debug_overrides
         observed_hits=[hit.model_dump(mode="json") for hit in observed_hits],
     ).model_dump(mode="json")
     debug["answer_provenance"] = answer_provenance(response)
+    debug["execution_evidence"] = execution_evidence(tool_calls)
     debug.update(debug_overrides or {})
+    events = (debug.get("execution_evidence") or {}).get("events", [])
+    for action in response.get("actions", []):
+        event = next((item for item in events if item["tool_name"] == action["kind"]
+                      and item["phase"] in {"started", "reused", "blocked"}), None)
+        if event:
+            action["invocation_id"] = event.get("origin_invocation_id") or event["invocation_id"]
     return {"response": response, "trace": "Request ID: req-1", "debug": debug}
 
 
@@ -234,6 +245,7 @@ def _copy_answer_case():
         category="tool_action",
         query="직전 답변을 파일로 저장해줘",
         setup_turns=["이 파일을 설명해줘"],
+        setup_forbidden_tools=[["save_text", "slack_notify"]],
         expected_tools=["save_text"],
         save_expectation={"outcome": "required_success", "target": {"kind": "setup_answer", "setup_turn_index": 0}},
     )
@@ -557,6 +569,10 @@ def test_enabled_config_with_disabled_client_fails_evaluation(tmp_path):
 
 def _stored_result(case: BenchmarkCase, **fields) -> CaseResult:
     payload = {
+        "decision_contract_version": 1,
+        "policy_snapshot": policy_for_case(case),
+        "execution_evidence": execution_evidence(),
+        "request_id": "req-1",
         "run_id": "agg-run",
         "case_id": case.case_id,
         "category": case.category,
@@ -741,7 +757,8 @@ def test_legacy_record_without_state_fields_keeps_legacy_unknown_status():
 
     assert parsed.judge_status == "legacy_unknown"
     assert parsed.eval_validity == "legacy_unknown"
-    assert parsed.release_pass is True
+    assert parsed.release_pass is False
+    assert "legacy_result_unverified" in parsed.gate_failures
     assert parsed.composite_quality_score == 0.9
 
 
