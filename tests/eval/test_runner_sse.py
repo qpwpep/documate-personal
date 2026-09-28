@@ -10,7 +10,7 @@ from src.core.contracts.debug import DebugPayload, TokenUsage
 from src.eval.config_models import BenchmarkCase, BenchmarkConfig
 from src.eval.judge_llm import LLMJudge
 from src.eval.online_runner import _run_single_case
-from tests.eval.response_fixtures import answer_provenance, plain_response, source_hit, sse_frame, sse_http_response
+from tests.eval.response_fixtures import answer_provenance, execution_evidence, plain_response, source_hit, sse_frame, sse_http_response
 
 
 pytestmark = pytest.mark.usefixtures("empty_upload_manifest_http")
@@ -44,6 +44,7 @@ def final_payload():
         retrieval_diagnostics=[{"tool": "tavily_search", "route": "docs", "status": "success"}],
     ).model_dump(mode="json")
     debug["additional_diagnostic"] = {"measurements": [1, 2, 3]}
+    debug["execution_evidence"] = execution_evidence(["save_text"], request_id="trace-request")
     debug["answer_provenance"] = answer_provenance(response)
     return {"response": response.model_dump(mode="json"), "trace": "Request ID: trace-request", "debug": debug}
 

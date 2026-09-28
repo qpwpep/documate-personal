@@ -15,7 +15,7 @@ from src.core.contracts.debug import DebugPayload, TokenUsage
 from src.eval.config_models import BenchmarkCase, BenchmarkConfig
 from src.eval.judge_llm import LLMJudge
 from src.eval.online_runner import _run_single_case, run_online_benchmark
-from tests.eval.response_fixtures import answer_provenance, plain_response, sse_http_response
+from tests.eval.response_fixtures import answer_provenance, execution_evidence, plain_response, sse_http_response
 
 
 def json_response(payload, status=200):
@@ -66,6 +66,7 @@ def http_boundary(tmp_path, monkeypatch):
         debug = DebugPayload(token_usage=TokenUsage(prompt_tokens=10, completion_tokens=2, total_tokens=12),
                              models_used=["fixture"], model_usage_status="llm_used").model_dump(mode="json")
         debug["extra_diagnostic"] = {"turn": turn}
+        debug["execution_evidence"] = execution_evidence(request_id=f"turn-{turn}")
         if state["fail_setup"]:
             debug["errors"] = ["setup model failed"]
         payload = {"response": plain_response("prepared body" if turn == 1 else "saved prepared body"),

@@ -14,7 +14,7 @@ from src.core.contracts.debug import DebugPayload, TokenUsage
 from src.eval.config_models import BenchmarkConfig
 from src.eval.online_runner import run_online_benchmark
 from src.eval.release_dataset import promote, sha256
-from tests.eval.response_fixtures import answer_provenance, plain_response, sse_http_response
+from tests.eval.response_fixtures import answer_provenance, execution_evidence, plain_response, sse_http_response
 from tests.eval.test_release_promotion import reviewed_candidates
 
 
@@ -70,10 +70,12 @@ def release_http(tmp_path, monkeypatch):
             models_used=["http-boundary-fixture"], model_usage_status="llm_used",
         ).model_dump(mode="json")
         debug["answer_provenance"] = answer_provenance(body)
+        request_id = uuid4().hex
+        debug["execution_evidence"] = execution_evidence(request_id=request_id)
         return sse_http_response(200, {
             "response": body, "debug": debug, "trace": "promotion-test",
             "upload_manifest": manifests[json["session_id"]],
-        }, headers={"x-request-id": uuid4().hex})
+        }, headers={"x-request-id": request_id})
 
     def unexpected_request(*args, **kwargs):
         pytest.fail("Unconfigured network boundary")

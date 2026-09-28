@@ -22,7 +22,7 @@ from src.eval.config_models import BenchmarkConfig
 from src.eval.io import load_cases_jsonl
 from src.eval.online_runner import run_online_benchmark
 from src.eval.release_dataset import promote
-from tests.eval.response_fixtures import answer_provenance, plain_response, sse_http_response
+from tests.eval.response_fixtures import answer_provenance, execution_evidence, plain_response, sse_http_response
 
 
 FIXTURES = Path(__file__).resolve().parents[2] / "data/benchmarks/fixtures/cases.generated.jsonl"
@@ -113,10 +113,12 @@ def test_all_120_release_cases_execute_through_real_loader_client_and_runner(tmp
             models_used=["http-boundary-fixture"], model_usage_status="llm_used",
         ).model_dump(mode="json")
         debug["answer_provenance"] = answer_provenance(response)
+        request_id = uuid4().hex
+        debug["execution_evidence"] = execution_evidence(request_id=request_id)
         return sse_http_response(200, {
             "response": response, "trace": "dataset-http-boundary", "debug": debug,
             "upload_manifest": manifest,
-        }, headers={"x-request-id": uuid4().hex})
+        }, headers={"x-request-id": request_id})
 
     def prohibit_real_network(*args, **kwargs):
         raise AssertionError("The dataset transport smoke must never perform a real network request")

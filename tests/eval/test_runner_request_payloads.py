@@ -1,4 +1,4 @@
-from tests.eval.response_fixtures import answer_provenance, sse_http_response
+from tests.eval.response_fixtures import answer_provenance, execution_evidence, sse_http_response
 from src.core.contracts.debug import DEBUG_SCHEMA_VERSION
 from tests.eval.response_fixtures import source_hit
 from tests.eval.response_fixtures import comparison_response, plain_response, slack_action
@@ -72,13 +72,14 @@ class RunnerRequestPayloadTest(unittest.TestCase):
             200,
             {
                 "response": plain_response('shared'),
-                "trace": "trace-id",
+                "trace": "Request ID: req-1",
                 "debug": {
                     "answer_provenance": answer_provenance(plain_response('shared')),
                     "schema_version": DEBUG_SCHEMA_VERSION,
                     "observability_status": "ok",
                     "missing_required_debug_fields": [],
                     "tool_calls": ["slack_notify"],
+                    "execution_evidence": execution_evidence(["slack_notify"], request_id="req-1"),
                     "tool_call_count": 1,
                     "token_usage": {},
                     "model_name": None,
@@ -126,13 +127,14 @@ class RunnerRequestPayloadTest(unittest.TestCase):
             200,
             {
                 "response": response,
-                "trace": "trace-id",
+                "trace": "Request ID: req-1",
                 "debug": {
                     "answer_provenance": answer_provenance(response),
                     "schema_version": DEBUG_SCHEMA_VERSION,
                     "observability_status": "ok",
                     "missing_required_debug_fields": [],
                     "tool_calls": ["slack_notify"],
+                    "execution_evidence": execution_evidence(["slack_notify"], request_id="req-1"),
                     "tool_call_count": 1,
                     "token_usage": {},
                     "model_name": None,
@@ -184,13 +186,14 @@ class RunnerRequestPayloadTest(unittest.TestCase):
             200,
             {
                 "response": plain_response('shared'),
-                "trace": "trace-id",
+                "trace": "Request ID: req-1",
                 "debug": {
                     "answer_provenance": answer_provenance(plain_response('shared')),
                     "schema_version": DEBUG_SCHEMA_VERSION,
                     "observability_status": "ok",
                     "missing_required_debug_fields": [],
                     "tool_calls": ["slack_notify"],
+                    "execution_evidence": execution_evidence(["slack_notify"], request_id="req-1"),
                     "tool_call_count": 1,
                     "token_usage": {},
                     "model_name": None,
@@ -260,13 +263,14 @@ class RunnerRequestPayloadTest(unittest.TestCase):
             200,
             {
                 "response": plain_response('shared'),
-                "trace": "trace-id",
+                "trace": "Request ID: req-1",
                 "debug": {
                     "answer_provenance": answer_provenance(plain_response('shared')),
                     "schema_version": DEBUG_SCHEMA_VERSION,
                     "observability_status": "ok",
                     "missing_required_debug_fields": [],
                     "tool_calls": ["tavily_search"],
+                    "execution_evidence": execution_evidence(["tavily_search"], request_id="req-1"),
                     "tool_call_count": 1,
                     "token_usage": {},
                     "model_name": None,
@@ -316,6 +320,7 @@ class RunnerRequestPayloadTest(unittest.TestCase):
                     "observability_status": "ok",
                     "missing_required_debug_fields": [],
                     "tool_calls": ["tavily_search", "upload_search"],
+                    "execution_evidence": execution_evidence(["tavily_search", "upload_search"], request_id="req123"),
                     "tool_call_count": 2,
                     "token_usage": {},
                     "model_name": None,
@@ -405,13 +410,14 @@ class RunnerRequestPayloadTest(unittest.TestCase):
             200,
             {
                 "response": {**plain_response('shared'), "actions": [slack_action(channel_id="C999LIVE", status="error")]},
-                "trace": "trace-id",
+                "trace": "Request ID: req-1",
                 "debug": {
                     "answer_provenance": answer_provenance({**plain_response('shared'), "actions": [slack_action(channel_id="C999LIVE", status="error")]}),
                     "schema_version": DEBUG_SCHEMA_VERSION,
                     "observability_status": "ok",
                     "missing_required_debug_fields": [],
                     "tool_calls": ["slack_notify"],
+                    "execution_evidence": execution_evidence(["slack_notify"], request_id="req-1"),
                     "tool_call_count": 1,
                     "token_usage": {},
                     "model_name": None,
