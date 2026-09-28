@@ -3,6 +3,8 @@ from __future__ import annotations
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
+from .decisions import ReleaseDecision, decide_release
+from .tool_policy import ToolPolicySpec
 
 
 RunTrack = Literal["release", "smoke"]
@@ -16,6 +18,11 @@ PlannerErrorCode = Literal[
 
 
 class SummaryStats(BaseModel):
+    policy_compliant_cases: int = 0
+    policy_violating_cases: int = 0
+    policy_indeterminate_cases: int = 0
+    policy_violations: int = 0
+    policy_failure_codes: list[str] = Field(default_factory=list)
     total_cases: int
     scored_cases: int
     passed_cases: int
@@ -210,6 +217,10 @@ class GateResult(BaseModel):
 
 
 class RunSummary(BaseModel):
+    decision_contract_version: Literal[1] | None = None
+    case_policy_snapshots: dict[str, ToolPolicySpec] = Field(default_factory=dict)
+    results_fingerprint: str | None = None
+    release_decision: ReleaseDecision | None = None
     run_id: str
     endpoint: str
     fixtures_path: str
@@ -239,6 +250,45 @@ class RunSummary(BaseModel):
         if not isinstance(value, dict):
             return value
         payload = dict(value)
+        if payload.get("decision_contract_version") == 1:
+            metrics = payload.get("metrics")
+            fields = set(metrics) if isinstance(metrics, dict) else getattr(metrics, "model_fields_set", set())
+            required = {"policy_compliant_cases", "policy_violating_cases", "policy_indeterminate_cases",
+                        "policy_violations", "policy_failure_codes"}
+            if not required.issubset(fields):
+                raise ValueError("current summaries require explicit policy measurements")
         if payload.get("track") is None:
             payload["track"] = "smoke" if payload.get("requested_limit") is not None else "release"
+        if payload.get("decision_contract_version") is None and any(payload.get(field) is not None for field in (
+            "release_decision", "results_fingerprint",
+        )):
+            raise ValueError("current decision fields require decision_contract_version")
+        if payload.get("decision_contract_version") is None and payload.get("case_policy_snapshots"):
+            raise ValueError("current policy snapshots require decision_contract_version")
         return payload
+
+    @model_validator(mode="after")
+    def validate_current_decision(self) -> "RunSummary":
+        if self.decision_contract_version == 1:
+            if (self.metrics.policy_compliant_cases + self.metrics.policy_violating_cases
+                    + self.metrics.policy_indeterminate_cases != self.metrics.total_cases):
+                raise ValueError("policy measurements must account for every observed case")
+            policy_gate = next((gate for gate in self.gates if gate.name == "tool_execution_policy"), None)
+            policy_pass = not (self.metrics.policy_violating_cases or self.metrics.policy_indeterminate_cases
+                               or self.metrics.policy_failure_codes)
+            if (policy_gate is None or policy_gate.gate_type != "release" or policy_gate.passed != policy_pass
+                    or policy_gate.actual != self.metrics.policy_violating_cases + self.metrics.policy_indeterminate_cases):
+                raise ValueError("current runs require a consistent execution policy gate")
+            completeness = (self.metrics.invalid_eval_cases + self.metrics.incomplete_eval_cases
+                            + self.metrics.missing_result_cases + self.metrics.duplicate_result_cases
+                            + self.metrics.unexpected_result_cases)
+            for name, actual in (("evaluation_completeness", completeness),
+                                 ("save_outcome_contract", self.metrics.save_contract_failures)):
+                gate = next((gate for gate in self.gates if gate.name == name), None)
+                if gate is None or gate.gate_type != "release" or gate.actual != actual or gate.passed != (actual == 0):
+                    raise ValueError(f"inconsistent mandatory gate: {name}")
+            expected = decide_release(gates=self.gates, track=self.track,
+                                      policy_failure_codes=self.metrics.policy_failure_codes)
+            if self.release_decision != expected or self.overall_passed != expected.passed:
+                raise ValueError("release decision must follow the central run decision")
+        return self
