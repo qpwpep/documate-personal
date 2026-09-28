@@ -38,7 +38,7 @@ def resolve_contract_source_response(runtime: RuntimeState) -> AnswerResponse | 
     )
 
 
-def build_synthesis_context(*, state: GraphState, has_default_slack_destination: bool) -> SynthesisContext:
+def build_synthesis_context(*, state: GraphState) -> SynthesisContext:
     runtime = get_runtime_state(state)
     planner = get_planner_state(state)
     retry = get_retry_state(state)

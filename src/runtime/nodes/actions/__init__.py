@@ -1,6 +1,6 @@
 from src.runtime.nodes.actions.node import make_action_postprocess_node
-from src.runtime.nodes.actions.policy import get_slack_destinations
+from src.runtime.nodes.actions.policy import select_slack_delivery
 
 __all__ = [
-    "get_slack_destinations", "make_action_postprocess_node",
+    "select_slack_delivery", "make_action_postprocess_node",
 ]

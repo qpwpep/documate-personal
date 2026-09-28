@@ -105,7 +105,7 @@ class LocalRagTest(unittest.TestCase):
             user_input=task.query, planner=PlannerState(output=plan), request_contract=RequestContract(),
             retrieval={"hit_log": hit_payloads},
         )
-        context = build_synthesis_context(state=state, has_default_slack_destination=False)
+        context = build_synthesis_context(state=state)
         profile = resolve_synthesis_budget_profile(
             user_input=task.query, planner_output=plan, snippet_char_limit=1800,
         )

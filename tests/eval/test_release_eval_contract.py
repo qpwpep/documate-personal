@@ -180,7 +180,7 @@ def _copy_answer_case():
 
 def _save_receipt():
     return {"kind": "save_text", "status": "success", "file_path": "outputs/answer.md",
-            "target": None, "message": None, "error": None}
+            "slack": None, "message": None, "error": None}
 
 
 

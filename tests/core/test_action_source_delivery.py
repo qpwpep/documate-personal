@@ -17,9 +17,10 @@ from src.core.evidence import build_evidence
 from src.infra.tools.save_text import build_save_text_tool
 from src.runtime.nodes.actions import make_action_postprocess_node
 from .test_actions_nodes import _contract
+from tests.core.test_pending_action_delivery import delivery_tools
 
 
-def test_save_and_slack_retain_source_selection_and_limitations_without_mutating_answer(tmp_path: Path, monkeypatch):
+def test_save_and_slack_retain_source_selection_and_limitations_without_mutating_answer(tmp_path: Path, delivery_tools):
     """저장·전송은 원문 위치와 예제의 제한을 보존하고 확정된 답변을 바꾸지 않는다."""
     original_file = tmp_path / "settings.py"
     original_file.write_text("# Config\nRETRIES = 3\n", encoding="utf-8")
@@ -43,7 +44,9 @@ def test_save_and_slack_retain_source_selection_and_limitations_without_mutating
     original_content = answer.content.model_dump(mode="json")
     original_hash = answer.content_hash
     request = "결과를 txt로 저장하고 슬랙으로 보내줘"
-    contract = _contract(save="requested", slack="requested")
+    contract = _contract(save="requested", slack="requested", slack_recipient={
+        "state": "explicit", "selector": {"kind": "channel", "value": "C123"}, "evidence_ids": ["request"],
+    })
     state: GraphState = {
         "runtime": RuntimeState(user_input=request, request_contract=contract),
         "planner": PlannerState(),
@@ -51,19 +54,14 @@ def test_save_and_slack_retain_source_selection_and_limitations_without_mutating
                                   request_id=contract.request_id, contract_revision=contract.revision),
         "messages": [HumanMessage(content=request)],
     }
-    monkeypatch.setattr("src.infra.tools.save_text.get_save_text_output_dir", lambda: tmp_path)
-    slack_messages = []
-
-    def slack_notify(**message):
-        slack_messages.append(message)
-        return {"status": "ok", "channel_id": "C123"}
+    save, slack, slack_messages, _output = delivery_tools
 
     updates = make_action_postprocess_node(
-        build_save_text_tool(), slack_notify, False, has_default_slack_destination=True,
+        save, slack, False,
     )(state)
 
     saved = Path(updates["response"].result.actions[0].file_path).read_text(encoding="utf-8-sig")
-    assert [message["text"] for message in slack_messages] == [saved]
+    assert [message["payload"]["text"] for message in slack_messages if message["path"] == "/chat.postMessage"] == [saved]
     assert saved == export_answer_text(answer, include_sources=True)
     assert snapshot.snapshot_id in saved
     assert original_file.as_uri() in saved

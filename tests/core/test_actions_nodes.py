@@ -9,6 +9,8 @@ from src.core.contracts.graph_state import PendingAction
 from src.core.request_contracts import RequestContract
 from src.runtime.nodes.actions import make_action_postprocess_node
 from src.infra.tools.save_text import build_save_text_tool
+from src.core.slack_contract import RecipientSelector, SlackDefault
+from tests.core.test_pending_action_delivery import delivery_tools
 
 
 def _contract(*, save="not_requested", slack="not_requested", **updates):

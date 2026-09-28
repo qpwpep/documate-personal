@@ -364,6 +364,12 @@ graph 실행, debug 수집, response assembly, projection 또는 budget 검사�
 
 compaction 진단은 debug `edge_decisions`와 구조화 로그에서 before/after turn·message·추정 token·byte, removed message 수, fallback 여부로 확인할 수 있습니다. 원문 query, summary, Tool payload는 이 진단 로그에 기록하지 않습니다.
 
+Slack 수신자 선택은 action 정책 한 곳에서 수행합니다. 전송이 요청되었고 자연어·요청 필드 모두 미지정인 신규 선택에만 기본값을 사용합니다. `SLACK_DEFAULT_USER_ID`와 `SLACK_DEFAULT_DM_EMAIL`은 하나만 설정하며, 둘 다 있거나 잘못된 값이면 기본값 사용 요청은 구성 오류가 됩니다. 유효한 명시 수신자 전송과 일반 답변에는 이 오류를 적용하지 않습니다. 자연어와 요청 필드가 충돌하거나 명시 입력을 확정하지 못하면 전송하지 않습니다. 아직 대상을 선택하지 않은 미지정 요청은 설정을 교정한 뒤 선택을 재평가할 수 있습니다.
+
+선택한 출처·선택자와 조회한 사용자/DM 채널은 `PendingAction.slack_delivery`에 고정됩니다. 이메일 조회 실패는 원래 이메일의 실패로 남고 기본값으로 넘어가지 않습니다. 후속 턴의 수신자 생략은 변경 없음이며, 현재 턴의 원문에서 완전한 ID·이메일을 확인한 교정만 새 선택을 만듭니다. 입력 충돌은 단순 재시도로 해소하지 않고 수신자를 명시해 확인해야 합니다. 조회 완료 후에는 같은 이메일을 재확인해도 재조회하여 다른 사용자로 이동하지 않습니다. SDK 자동 재시도는 끄고, 확실한 미전송 실패는 같은 대상의 pending 재시도로 처리합니다. 전송 후 응답 유실은 `unknown`이며 이 pending의 재시도는 다시 전송하지 않습니다. Slack에서 전달 여부를 확인한 뒤 추가 전송이 필요하면 별개의 새 전송 요청을 해야 합니다. 프로세스 재시작을 넘는 영속 작업 큐나 exactly-once 전송 보장은 제공하지 않습니다.
+
+`ActionReceipt.slack`은 `intent`, `selection`, `resolved_user_id`, `target`, `status`, `failure`, `message_ts`를 담습니다. `sent`에는 선택에 부합하는 채널과 Slack이 확인한 timestamp가 필요합니다. `not_sent`와 `unknown`에는 실패 단계·코드·다음 행동이 남습니다. UI와 debug는 이 결과를 그대로 사용하고, 검증된 답변 본문과 전송 결과는 분리합니다.
+
 ## 5. API 계약
 
 ### 5.1 `POST /agent/stream`
@@ -491,7 +497,7 @@ Streamlit은 첫 이벤트 전 오류를 포함해 요청 실패를 화면에 �
 - `issues`: 생성 실패·불완전한 답변 등 실제 제한. 전체 confidence 수치는 제공하지 않습니다.
 - `content_hash`: 본문 구조·basis·refs를 포함한 revision. 내용이 바뀌면 검사를 다시 수행해야 합니다. citation의 존재 여부, `issues`, `retrieval_required`, `actions`까지 포함한 전체 응답 digest는 아닙니다.
 - `retrieval_required`: 이 응답을 다시 검사할 때 유지할 출처 요구 조건. 검색 기반 응답의 생성 예시에도 참조가 필요한지 판단하는 데 사용합니다.
-- `actions`: 실제 저장·전송 결과의 `kind`, `status`, `message`·`error`, `target`, `file_path`. `save_text`는 `operation`, `artifact`, `verification`, `error_code`도 전달합니다. `status`는 `success`, `error`, `skipped`, `unknown`이며, 저장 결과를 확인하지 못한 `unknown`은 성공이 아닙니다. `verification=verified`에는 요청·산출물 identity와 실제 bytes 확인이 필요합니다. 구형 receipt는 읽을 수 있지만 새 검증 성공으로 승격하지 않습니다.
+- `actions`: 실제 저장·전송 결과의 `kind`, `status`, `message`·`error`, `error_code`. Slack은 위의 `slack` 계약으로 의도·선택·조회·전달 결과를 보존합니다. `save_text`는 `file_path`, `operation`, `artifact`, `verification`을 전달합니다. `status`는 `success`, `error`, `skipped`, `unknown`이며, 저장·전송 결과를 확인하지 못한 `unknown`은 성공이 아닙니다. `verification=verified`에는 요청·산출물 identity와 실제 bytes 확인이 필요합니다. 이전 Slack 문자열 결과와 `target` 필드는 사용하지 않습니다.
 
 예를 들어 `citations[0].evidence`에는 `snapshot`의 source URI·내용 hash·parser revision, `element`의 원문과 anchors, `selection`이 함께 있습니다. 클라이언트는 현재 업로드 파일을 다시 읽어 인용을 해석하지 않습니다. 모델이 생성한 별도 답변 문자열이나 주장 목록을 클라이언트에서 재조합하지도 않습니다.
 

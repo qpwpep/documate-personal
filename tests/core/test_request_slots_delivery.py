@@ -65,7 +65,7 @@ def test_copy_input_preserves_exact_text_in_screen_file_and_slack(delivery_tools
     save, slack, delivered, output = delivery_tools
     original = "  첫 줄\r\n둘째 줄  \r\n"
     contract = _contract(CopyInputBody(source=_input(original)), save="requested", slack="requested",
-                         slack_destination={"channel_id": "C123"})
+                         slack_recipient={"state": "explicit", "selector": {"kind": "channel", "value": "C123"}, "evidence_ids": ["request"]})
     state = _state(contract)
 
     _prepare(state, DocumentModel())
