@@ -69,12 +69,12 @@ def _render_readme_notes(specs: tuple[EnvVarSpec, ...]) -> list[str]:
 
     lines = [
         "",
-        "모델별 reasoning effort override 참고:",
+        "설정 참고:",
         "",
     ]
     for note in notes:
-        model_name, supported_values = note.split(":", maxsplit=1)
-        lines.append(f"- `{model_name}`: {supported_values.strip()}")
+        name, separator, detail = note.partition(":")
+        lines.append(f"- `{name}`: {detail.strip()}" if separator else f"- {note}")
     return lines
 
 
