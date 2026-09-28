@@ -9,6 +9,7 @@ from src.core.request_contracts import (
     ContractEvidence, FormatRequirement, RequestContract, check_answer_contract,
     resolve_body_response, validate_contract_evidence,
 )
+from src.core.request_contracts import WireRequestContract
 
 
 def evidence(quote="코드 예시 없이 설명해줘", scope="answer.content.code_example"):
@@ -153,3 +154,30 @@ def test_cancellation_with_unresolved_intent_is_not_ready_even_without_a_missing
                                actions=ActionContract(slack_notify=ActionRequest(intent="unresolved")))
     assert not contract.can_cancel_pending()
     assert contract.status == "unresolved"
+
+
+def test_planner_must_explicitly_classify_recipient_omission():
+    with pytest.raises(ValidationError, match="slack_recipient"):
+        WireRequestContract()
+    assert WireRequestContract(slack_recipient={"state": "omitted"}).slack_recipient.state == "omitted"
+    assert RequestContract().slack_recipient.state == "omitted"
+
+
+@pytest.mark.parametrize("interpretation,scope", [("quotation", "slack_recipient"), ("mention", "slack_recipient"),
+                                                ("instruction", "body.instruction")])
+def test_recipient_cannot_be_authorized_by_quoted_or_unrelated_evidence(interpretation, scope):
+    with pytest.raises(ValidationError, match="recipient intent"):
+        WireRequestContract(slack_recipient={"state": "explicit", "selector": {"kind": "channel", "value": "C123"},
+                                            "evidence_ids": ["recipient"]},
+                            evidence=(ContractEvidence(id="recipient", turn_id="current", quote="C123",
+                                                       scope=scope, interpretation=interpretation),))
+
+
+def test_unresolved_recipient_blocks_delivery_without_a_redundant_missing_slot():
+    contract = RequestContract(slack_recipient={"state": "unresolved", "raw_input": "개발팀", "reason": "ambiguous",
+                                               "evidence_ids": ["recipient"]},
+        actions=ActionContract(slack_notify=ActionRequest(intent="requested", evidence_ids=("recipient",))),
+        evidence=(ContractEvidence(id="recipient", turn_id="current", quote="개발팀에 보내줘",
+                                   scope="current_request", interpretation="instruction"),))
+    assert contract.can_prepare_body()
+    assert not contract.execution_ready("slack_notify", body_ready=True, destination_ready=True)

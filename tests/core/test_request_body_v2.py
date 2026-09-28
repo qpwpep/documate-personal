@@ -24,7 +24,7 @@ from src.infra.llm import _build_planner_response_schema
 ])
 def test_each_body_kind_has_the_same_static_contract_in_provider_and_server(body):
     """Every supported body operation has one valid source shape in both boundaries."""
-    contract = WireRequestContract(body=body)
+    contract = WireRequestContract(slack_recipient={"state": "omitted"}, body=body)
     value = PlannerOutput(use_retrieval=False, tasks=[], request_contract=contract).model_dump(mode="json")
     jsonschema.validate(value, _build_planner_response_schema()["schema"])
     assert PlannerOutput.model_validate(value).request_contract.body == contract.body
@@ -38,7 +38,7 @@ def test_each_body_kind_has_the_same_static_contract_in_provider_and_server(body
 ])
 def test_invalid_operation_source_combinations_are_rejected_by_both_boundaries(body):
     """Malformed or legacy bodies are rejected rather than silently normalized."""
-    value = PlannerOutput(use_retrieval=False, tasks=[], request_contract=WireRequestContract()).model_dump(mode="json")
+    value = PlannerOutput(use_retrieval=False, tasks=[], request_contract=WireRequestContract(slack_recipient={"state": "omitted"})).model_dump(mode="json")
     value["request_contract"]["body"] = body
     with pytest.raises(jsonschema.ValidationError):
         jsonschema.validate(value, _build_planner_response_schema()["schema"])
@@ -59,7 +59,7 @@ def test_wire_schema_does_not_ask_the_model_for_server_identity_or_bound_text_fi
                                        ("line_count", True), ("line_count", "3"), ("line_count", 1.5)])
 def test_format_values_rejected_by_server_are_also_rejected_by_generation_schema(kind, value):
     """A line count requires an integer, while other layouts cannot acquire a count."""
-    candidate = PlannerOutput(use_retrieval=False, tasks=[], request_contract=WireRequestContract()).model_dump(mode="json")
+    candidate = PlannerOutput(use_retrieval=False, tasks=[], request_contract=WireRequestContract(slack_recipient={"state": "omitted"})).model_dump(mode="json")
     contract = candidate["request_contract"]
     contract["evidence"] = [{"id": "e1", "turn_id": "u1", "quote": "requested format", "scope": "answer.format", "interpretation": "instruction"}]
     contract["answer"]["format"] = [{"kind": kind, "mode": "forbidden", "value": value, "evidence_ids": ["e1"]}]
@@ -72,6 +72,7 @@ def test_format_values_rejected_by_server_are_also_rejected_by_generation_schema
 @pytest.mark.parametrize("kind,value", [("line_count", 3), ("line_count", 1.0), ("table", None), ("ordered_list", None)])
 def test_valid_format_variants_roundtrip_through_generation_schema_and_server(kind, value):
     contract = WireRequestContract.model_validate({
+        "slack_recipient": {"state": "omitted"},
         "evidence": [{"id": "e1", "turn_id": "u1", "quote": "requested format", "scope": "answer.format", "interpretation": "instruction"}],
         "answer": {"format": [{"kind": kind, "mode": "required", "value": value, "evidence_ids": ["e1"]}]},
     })

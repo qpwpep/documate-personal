@@ -10,31 +10,23 @@ from src.core.contracts.boundary.debug import parse_debug_state, parse_retry_sta
 from src.core.contracts.boundary.graph import normalize_graph_update
 from src.core.contracts.boundary.planner import parse_planner_output
 from src.core.contracts.boundary.response import parse_response_state
-from src.core.contracts.boundary.runtime import parse_session_metadata, parse_slack_destination
+from src.core.contracts.boundary.runtime import parse_session_metadata
 
 
 class BoundaryAdaptersTest(unittest.TestCase):
-    def test_parse_slack_destination_trims_and_discards_empty_values(self) -> None:
-        destination = parse_slack_destination(
-            {
-                "channel_id": "  C123  ",
-                "user_id": " ",
-                "email": " user@example.com ",
-            }
-        )
+    def test_session_metadata_preserves_one_explicit_recipient(self) -> None:
+        metadata = parse_session_metadata({"slack_recipient": {"kind": "channel", "value": " C123 "}})
+        self.assertEqual(metadata.slack_recipient.value, "C123")
+        self.assertIsNone(parse_session_metadata({}).slack_recipient)
 
-        self.assertEqual(destination.channel_id, "C123")
-        self.assertIsNone(destination.user_id)
-        self.assertEqual(destination.email, "user@example.com")
-
-    def test_parse_session_metadata_keeps_destination_only_when_present(self) -> None:
-        metadata = parse_session_metadata({"slack_destination": {"channel_id": "C123"}})
-        empty_metadata = parse_session_metadata({"slack_destination": {"channel_id": " "}})
-
-        self.assertIsNotNone(metadata.slack_destination)
-        assert metadata.slack_destination is not None
-        self.assertEqual(metadata.slack_destination.channel_id, "C123")
-        self.assertIsNone(empty_metadata.slack_destination)
+    def test_invalid_explicit_recipient_never_becomes_omitted(self) -> None:
+        for value in ({"kind": "user", "value": " "},
+                      {"kind": "user", "value": "not-a-user"},
+                      {"kind": "channel", "value": "C123", "email": "other@example.com"}):
+            with self.assertRaises(ValidationError):
+                parse_session_metadata({"slack_recipient": value})
+        with self.assertRaises(ValidationError):
+            parse_session_metadata({"slack_destination": {"channel_id": "C123"}})
 
     def test_parse_planner_output_falls_back_and_records_error(self) -> None:
         errors: list[str] = []
@@ -94,7 +86,7 @@ class BoundaryAdaptersTest(unittest.TestCase):
             {
                 "runtime": {
                     "user_input": "hello",
-                    "session_metadata": {"slack_destination": {"channel_id": "C123"}},
+                    "session_metadata": {"slack_recipient": {"kind": "channel", "value": "C123"}},
                 },
                 "retry": {"attempt": 2, "failed_routes": ["upload", "upload"]},
                 "messages": "not-a-list",
@@ -102,9 +94,9 @@ class BoundaryAdaptersTest(unittest.TestCase):
         )
 
         self.assertEqual(normalized["runtime"].user_input, "hello")
-        assert normalized["runtime"].session_metadata.slack_destination is not None
+        assert normalized["runtime"].session_metadata.slack_recipient is not None
         self.assertEqual(
-            normalized["runtime"].session_metadata.slack_destination.channel_id,
+            normalized["runtime"].session_metadata.slack_recipient.value,
             "C123",
         )
         self.assertEqual(normalized["retry"].attempt, 2)

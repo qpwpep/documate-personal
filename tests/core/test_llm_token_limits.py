@@ -79,7 +79,7 @@ def provider(monkeypatch):
         elif payload.get("response_format", {}).get("json_schema", {}).get("name") == "PlannerOutput":
             content = json.dumps({
                 "use_retrieval": False, "tasks": [],
-                "request_contract": WireRequestContract().model_dump(mode="json"),
+                "request_contract": WireRequestContract(slack_recipient={"state": "omitted"}).model_dump(mode="json"),
             })
         else:
             content = text_document("Hello.").model_dump_json()
@@ -121,7 +121,7 @@ def test_default_models_reach_every_application_llm_request(provider):
     registry = build_llm_registry(settings)
     messages = [HumanMessage(content="Hello")]
     plan = registry.llm_planner.invoke(messages)
-    assert PlannerOutput.model_validate(plan["parsed"]) == PlannerOutput(use_retrieval=False, tasks=[], request_contract=WireRequestContract())
+    assert PlannerOutput.model_validate(plan["parsed"]) == PlannerOutput(use_retrieval=False, tasks=[], request_contract=WireRequestContract(slack_recipient={"state": "omitted"}))
     for model in (registry.llm_synthesizer, registry.llm_synthesizer_compact, registry.llm_summarizer):
         assert model.invoke(messages).content == text_document("Hello.").model_dump_json()
     assert [request["model"] for request in requests] == ["gpt-5.6-luna"] * 4
@@ -246,7 +246,7 @@ def test_planner_output_cap_reaches_http_without_synthesis_settings(provider):
     result = registry.llm_planner.invoke([HumanMessage(content="Hello")])
     assert requests[0]["max_completion_tokens"] == 654
     assert requests[0]["response_format"]["json_schema"]["name"] == "PlannerOutput"
-    assert PlannerOutput.model_validate(result["parsed"]) == PlannerOutput(use_retrieval=False, tasks=[], request_contract=WireRequestContract())
+    assert PlannerOutput.model_validate(result["parsed"]) == PlannerOutput(use_retrieval=False, tasks=[], request_contract=WireRequestContract(slack_recipient={"state": "omitted"}))
 
 
 @pytest.mark.parametrize("overrides", [
@@ -287,7 +287,7 @@ def test_explicit_planner_reasoning_reaches_http_and_preserves_structured_output
     assert schema["schema"]["additionalProperties"] is False
     assert "request_contract" in schema["schema"]["required"]
     assert "WireRequestContract" in schema["schema"]["$defs"]
-    expected_plan = PlannerOutput(use_retrieval=False, tasks=[], request_contract=WireRequestContract())
+    expected_plan = PlannerOutput(use_retrieval=False, tasks=[], request_contract=WireRequestContract(slack_recipient={"state": "omitted"}))
     assert configured["parsing_error"] is None
     assert PlannerOutput.model_validate(configured["parsed"]) == PlannerOutput.model_validate(baseline["parsed"]) == expected_plan
 

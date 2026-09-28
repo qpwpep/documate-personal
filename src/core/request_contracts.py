@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from src.core.answer_schema import AnswerDocument, AnswerResponse, iter_content_units
 from src.core.evidence import EvidenceRef
+from src.core.slack_contract import ExplicitRecipient, OmittedRecipient, RecipientIntent, UnresolvedRecipient
 from src.core.request_bodies import (
     AcknowledgeBody, AnswerReference, BodyPlan, BoundAnswerReference, BoundInputText, ComposeBody,
     CopyAnswerBody, CopyInputBody, ExtractBody, InputTextReference, TransformAnswerBody,
@@ -48,20 +49,6 @@ class ActionRequest(ContractModel):
 class ActionContract(ContractModel):
     save_text: ActionRequest = Field(default_factory=ActionRequest)
     slack_notify: ActionRequest = Field(default_factory=ActionRequest)
-
-
-class ContractDestination(ContractModel):
-    channel_id: str | None = None
-    user_id: str | None = None
-    email: str | None = None
-
-    @field_validator("channel_id", "user_id", "email")
-    @classmethod
-    def trim_optional(cls, value: str | None) -> str | None:
-        return (value.strip() or None) if value is not None else None
-
-    def has_destination(self) -> bool:
-        return bool(self.channel_id or self.user_id or self.email)
 
 
 RequirementMode = Literal["required", "forbidden", "preferred"]
@@ -143,7 +130,7 @@ class _RequestFacts(ContractModel):
     relation: Literal["new", "correction", "supplement", "cancel"] = "new"
     target_request_id: str | None = None
     actions: ActionContract = Field(default_factory=ActionContract)
-    slack_destination: ContractDestination | None = None
+    slack_recipient: RecipientIntent = Field(default_factory=OmittedRecipient)
     answer: AnswerContract = Field(default_factory=AnswerContract)
     evidence: tuple[ContractEvidence, ...] = ()
     missing_info: tuple[MissingInformation, ...] = ()
@@ -156,6 +143,8 @@ class _RequestFacts(ContractModel):
         references = [self.actions.save_text, self.actions.slack_notify, *self.answer.content, *self.answer.format]
         if hasattr(self.body, "evidence_ids"):
             references.append(self.body)
+        if hasattr(self.slack_recipient, "evidence_ids"):
+            references.append(self.slack_recipient)
         for item in references:
             if any(key not in evidence for key in item.evidence_ids):
                 raise ValueError("unknown contract evidence id")
@@ -174,6 +163,12 @@ class _RequestFacts(ContractModel):
                 allowed = {"instruction", "correction", "reference"} if action.intent == "requested" else {"negation", "correction", "instruction"}
                 if not supports(action.evidence_ids, f"actions.{name}", allowed):
                     raise ValueError("actions require an instruction within their scope, not a mention or quotation")
+        if isinstance(self.slack_recipient, (ExplicitRecipient, UnresolvedRecipient)):
+            allowed = {"instruction", "correction", "reference"}
+            if isinstance(self.slack_recipient, UnresolvedRecipient):
+                allowed.add("negation")
+            if not supports(self.slack_recipient.evidence_ids, "slack_recipient", allowed):
+                raise ValueError("recipient intent requires a user instruction or reference within its scope")
         for group, requirements in (("content", self.answer.content), ("format", self.answer.format)):
             for requirement in requirements:
                 allowed = {"negation", "correction", "instruction"} if requirement.mode == "forbidden" else {"instruction", "correction", "reference"}
@@ -190,6 +185,7 @@ class WireRequestContract(_RequestFacts):
     """Model interpretation: only user facts and offered reference selectors."""
 
     body: WireBodyPlan = Field(default_factory=ComposeBody)
+    slack_recipient: RecipientIntent = Field(description="This turn's recipient intent: omitted only if no recipient is specified; explicit requires one selector and scoped user evidence; unresolved preserves ambiguous, invalid or unverified recipient text. Never replace an unresolved recipient with omitted. For pending requests omitted means keep the existing recipient, not use a default.")
 
 
 class RequestContract(_RequestFacts):
@@ -230,6 +226,8 @@ class RequestContract(_RequestFacts):
         if any(item.slot in blocking for item in self.missing_info):
             return False
         if kind == "slack_notify" and any(item.slot == "slack_destination" and item.reason != "not_provided" for item in self.missing_info):
+            return False
+        if kind == "slack_notify" and isinstance(self.slack_recipient, UnresolvedRecipient):
             return False
         return kind != "slack_notify" or destination_ready
 

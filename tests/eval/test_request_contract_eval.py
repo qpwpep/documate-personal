@@ -44,7 +44,7 @@ def _observation(case):
         "target_request_id": "pending-request-1" if expected["state"]["target_request"] == "pending" else None,
         "actions": {key: {"intent": value} for key, value in expected["actions"].items()},
         "body": body, "answer": {"content": content, "format": formats, "preferences": expected["preferences"]},
-        "slack_destination": expected["destination"],
+        "slack_recipient": expected["recipient"],
         "missing_info": [{"slot": slot, "reason": "not_provided"} for slot in expected["blocker_slots"]],
     }
     pending = case["context"]["pending"]

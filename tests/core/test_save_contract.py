@@ -156,6 +156,7 @@ def test_corrected_answer_with_same_export_gets_its_own_binding(tmp_path, monkey
     class CorrectionPlannerBoundary:
         def invoke(self, _messages):
             return PlannerOutput(use_retrieval=False, tasks=[], request_contract=WireRequestContract.model_validate({
+                "slack_recipient": {"state": "omitted"},
                 "relation": "correction", "target_request_id": pending.contract.request_id,
                 "body": {"kind": "transform_answer", "source": {"ref": "pending"},
                          "instruction": query, "evidence_ids": ["change"]},

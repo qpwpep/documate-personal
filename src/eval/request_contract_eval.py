@@ -89,7 +89,8 @@ def build_case_state(case: dict) -> tuple[dict, dict]:
                         for name, intent in pending_data["actions"].items()},
             "evidence": [{"id": "original-instruction", "turn_id": "u1", "quote": pending_data["query"],
                           "scope": "current_request", "interpretation": "instruction"}],
-            "slack_destination": pending_data.get("destination"),
+            "slack_recipient": {**pending_data["recipient"], **({"evidence_ids": ["original-instruction"]}
+                                                   if pending_data["recipient"]["state"] != "omitted" else {})},
             "missing_info": [{"slot": "slack_destination", "reason": "not_provided", "question": "어느 Slack 채널로 보낼까요?"}],
         })
         pending = PendingAction(contract=contract, response=pending_response, phase=pending_data["phase"],

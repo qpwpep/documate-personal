@@ -47,6 +47,7 @@ class ScenarioChatModel(LocalChatModel):
         current = context["user_turn_ledger"][-1]
         if "final_review.pdf" in current["text"]:
             contract = WireRequestContract.model_validate({
+                "slack_recipient": {"state": "omitted"},
                 "evidence": [{
                     "id": "missing-upload-request", "turn_id": current["turn_id"], "quote": current["text"],
                     "scope": "current_request", "interpretation": "instruction",
@@ -69,6 +70,7 @@ class ScenarioChatModel(LocalChatModel):
         if current["text"] != SAVE_QUERY:
             return super().invoke(messages)
         contract = WireRequestContract.model_validate({
+            "slack_recipient": {"state": "omitted"},
             "evidence": [{
                 "id": "save-request", "turn_id": current["turn_id"], "quote": current["text"],
                 "scope": "current_request", "interpretation": "instruction",

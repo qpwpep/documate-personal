@@ -187,6 +187,7 @@ def test_planner_returns_the_missing_reference_question_without_retrieval():
     """An unresolved referent produces the intended clarification, not a failed search."""
     question = "어떤 라이브러리와 버전을 비교할까요?"
     model = _CapturePlannerLLM({"use_retrieval": False, "tasks": [], "request_contract": WireRequestContract(
+        slack_recipient={"state": "omitted"},
         body=UnresolvedBody(question=question),
         missing_info=(MissingInformation(slot="subject", reason="unclear", question=question),),
     ).model_dump(mode="json")})

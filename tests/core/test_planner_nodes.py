@@ -184,7 +184,7 @@ class PlannerNodeTest(unittest.TestCase):
             )
         )
 
-        self.assertEqual(updates["planner"].output, PlannerOutput.fallback(request_contract=WireRequestContract()))
+        self.assertEqual(updates["planner"].output, PlannerOutput.fallback(request_contract=WireRequestContract(slack_recipient={"state": "omitted"})))
         self.assertEqual(updates["planner"].diagnostics.required_routes, ["upload"])
         self.assertIsNotNone(updates["planner"].guided_followup)
 
@@ -329,7 +329,7 @@ class PlannerNodeTest(unittest.TestCase):
     def test_planner_preserves_independent_routes_from_raw_structured_output(self) -> None:
         raw_payload = {
             "use_retrieval": True,
-            "request_contract": WireRequestContract().model_dump(),
+            "request_contract": WireRequestContract(slack_recipient={"state": "omitted"}).model_dump(),
             "tasks": [
                 {"route": "docs", "query": "numpy", "k": 3},
                 {"route": "docs", "query": "pandas", "k": 5},

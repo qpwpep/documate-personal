@@ -14,10 +14,11 @@ from src.core.contracts.graph_state import PendingAction
 from src.core.planner_schema import PlannerOutput, RetrievalTask
 from src.core.request_contracts import (
     AcknowledgeBody, ActionContract, ActionRequest, AnswerReference, BoundAnswerReference, ComposeBody,
-    ContractDestination, ContractEvidence, CopyAnswerBody, MissingInformation, RequestContract, TransformAnswerBody,
+    ContractEvidence, CopyAnswerBody, MissingInformation, RequestContract, TransformAnswerBody,
     UnresolvedBody, UserTurnSnapshot, WireCopyAnswerBody, WireCopyInputBody, WireRequestContract,
     WireTransformAnswerBody, WireTransformInputBody,
 )
+from src.core.slack_contract import ExplicitRecipient, OmittedRecipient, RecipientSelector, UnresolvedRecipient
 from src.runtime.nodes.planner import make_planner_node
 
 
@@ -31,8 +32,14 @@ class PlannerResult:
         return self.result
 
 
+def recipient(value, *evidence_ids):
+    return {"state": "explicit", "selector": {"kind": "channel", "value": value},
+            "evidence_ids": list(evidence_ids or ("current-evidence",))}
+
+
 def wire(query, **updates):
     return WireRequestContract.model_validate({
+        "slack_recipient": {"state": "omitted"},
         "evidence": [{"id": "current-evidence", "turn_id": "current", "quote": query,
                       "scope": "current_request", "interpretation": "instruction"}],
         **updates,
@@ -55,7 +62,7 @@ def plan(query, contract, **kwargs):
 
 def original_pending(*, response=None, phase="awaiting_destination", completed=()):
     clause = ContractEvidence(id="original", turn_id="old", quote="저장하고 Slack으로 보내줘",
-                              scope="actions", interpretation="instruction")
+                              scope="current_request", interpretation="instruction")
     contract = RequestContract(request_id="pending-request", actions=ActionContract(
         save_text=ActionRequest(intent="requested", evidence_ids=("original",)),
         slack_notify=ActionRequest(intent="requested", evidence_ids=("original",))),
@@ -198,7 +205,7 @@ def test_uncertain_slack_intent_does_not_block_an_independently_requested_body_a
 def test_destination_supplement_preserves_request_identity_revision_and_ready_body():
     pending = original_pending(response=finalize_answer(text_document("하나\n둘\n셋"), []), completed=("save_text",))
     query = "C123"
-    candidate = wire(query, relation="supplement", target_request_id=pending.contract.request_id, slack_destination={"channel_id": query})
+    candidate = wire(query, relation="supplement", target_request_id=pending.contract.request_id, slack_recipient=recipient(query))
     result, _ = plan(query, candidate, pending_action=pending, previous_response=finalize_answer(text_document("어느 채널인가요?"), []))
     contract = result["runtime"].request_contract
     assert (contract.request_id, contract.revision) == ("pending-request", 2)
@@ -215,12 +222,12 @@ def test_forbidding_delivery_preserves_the_separately_supplied_destination_fact(
     candidate = wire(query, relation="correction", target_request_id=pending.contract.request_id,
                      body={"kind": "acknowledge", "evidence_ids": ["current-evidence"]},
                      actions={"slack_notify": {"intent": "forbidden", "evidence_ids": ["current-evidence"]}},
-                     slack_destination={"channel_id": "C123"})
+                     slack_recipient=recipient("C123"))
 
     result, _ = plan(query, candidate, pending_action=pending)
     contract = result["runtime"].request_contract
 
-    assert contract.slack_destination == ContractDestination(channel_id="C123")
+    assert contract.slack_recipient.selector == RecipientSelector(kind="channel", value="C123")
     assert contract.actions.slack_notify.intent == "forbidden"
     assert contract.can_acknowledge()
     assert not contract.execution_ready("slack_notify", body_ready=True, destination_ready=True)
@@ -261,7 +268,7 @@ def test_an_unrelated_input_translation_does_not_inherit_the_pending_send():
 
 @pytest.mark.parametrize("target", [None, "unknown-request"])
 def test_relation_alone_does_not_revive_a_pending_action(target):
-    result, _ = plan("C123", wire("C123", relation="supplement", target_request_id=target, slack_destination={"channel_id": "C123"}))
+    result, _ = plan("C123", wire("C123", relation="supplement", target_request_id=target, slack_recipient=recipient("C123")))
     contract = result["runtime"].request_contract
     assert not contract.can_prepare_body() and not contract.action_requested("slack_notify")
     assert contract.missing_info[0].slot == "pending_request"
@@ -272,7 +279,7 @@ def test_explicit_prohibition_during_a_supplement_overrides_the_old_requested_ac
     query = "C123으로 보내지 마"
     candidate = wire(query, relation="correction", target_request_id=pending.contract.request_id,
                      actions={"slack_notify": {"intent": "forbidden", "evidence_ids": ["current-evidence"]}},
-                     slack_destination={"channel_id": "C123"})
+                     slack_recipient=recipient("C123"))
     result, _ = plan(query, candidate, pending_action=pending)
     assert result["runtime"].request_contract.actions.slack_notify.intent == "forbidden"
     assert not result["runtime"].request_contract.execution_ready("slack_notify", body_ready=True, destination_ready=True)
@@ -292,7 +299,7 @@ def test_cancellation_preserves_forbidden_facts_and_the_target_identity():
 
 def test_historical_positive_evidence_cannot_authorize_an_independent_new_action():
     query = "새 주제를 설명해줘"
-    candidate = WireRequestContract(body=ComposeBody(instruction=query),
+    candidate = WireRequestContract(slack_recipient=OmittedRecipient(), body=ComposeBody(instruction=query),
         actions=ActionContract(save_text=ActionRequest(intent="requested", evidence_ids=("old-action",))),
         evidence=(ContractEvidence(id="old-action", turn_id="old", quote="저장해줘", scope="actions.save_text", interpretation="instruction"),))
     result, _ = plan(query, candidate, user_turns=(UserTurnSnapshot(turn_id="old", text="저장해줘"), UserTurnSnapshot(turn_id="current", text=query)))
@@ -349,7 +356,7 @@ def test_waiting_for_action_input_does_not_turn_an_unfinished_transform_into_a_c
     pending = PendingAction(contract=original, response=original_response, phase="awaiting_input", body_prepared=False)
     query = "네 C123으로 보내줘"
     candidate = wire(query, relation="supplement", target_request_id=original.request_id,
-        actions={"slack_notify": {"intent": "requested", "evidence_ids": ["current-evidence"]}}, slack_destination={"channel_id": "C123"})
+        actions={"slack_notify": {"intent": "requested", "evidence_ids": ["current-evidence"]}}, slack_recipient=recipient("C123"))
     result, _ = plan(query, candidate, pending_action=pending)
     contract = result["runtime"].request_contract
     assert contract.body.kind == "transform_answer"
@@ -367,7 +374,7 @@ def test_action_correction_cannot_silently_fill_an_unknown_subject():
     original = first["runtime"].request_contract
     pending = PendingAction(contract=original, response=None, phase="awaiting_input", body_prepared=False)
     clause = ContractEvidence(id="followup", turn_id="next", quote="저장은 하지 마", scope="actions.save_text", interpretation="negation")
-    candidate = WireRequestContract(relation="correction", target_request_id=original.request_id,
+    candidate = WireRequestContract(slack_recipient=OmittedRecipient(), relation="correction", target_request_id=original.request_id,
         actions=ActionContract(save_text=ActionRequest(intent="forbidden", evidence_ids=("followup",))), evidence=(clause,))
     state = state_for("저장은 하지 마", current_turn_id="next", user_turns=(UserTurnSnapshot(turn_id="next", text="저장은 하지 마"),), pending_action=pending)
     result = make_planner_node(PlannerResult(PlannerOutput(use_retrieval=False, tasks=[], request_contract=candidate)), False)(state)
@@ -388,7 +395,7 @@ def test_unresolved_body_preserves_the_declared_missing_slot_without_inventing_a
 def test_new_relation_with_a_matching_target_cannot_reactivate_a_completed_old_action():
     pending = original_pending(response=finalize_answer(text_document("기존 본문"), []), completed=("save_text",))
     query = "새 주제를 설명해줘"
-    candidate = WireRequestContract(relation="new", target_request_id=pending.contract.request_id,
+    candidate = WireRequestContract(slack_recipient=OmittedRecipient(), relation="new", target_request_id=pending.contract.request_id,
         body=ComposeBody(instruction=query),
         actions=ActionContract(save_text=pending.contract.actions.save_text), evidence=pending.contract.evidence)
     result, _ = plan(query, candidate, pending_action=pending,
@@ -410,7 +417,7 @@ def test_explicit_pending_copy_during_a_supplement_preserves_an_unfinished_trans
     pending = PendingAction(contract=original, response=original_response, phase="awaiting_input", body_prepared=False)
     query = "C123"
     candidate = wire(query, relation="supplement", target_request_id=original.request_id,
-                     body={"kind": "copy_answer", "source": {"ref": "pending"}}, slack_destination={"channel_id": query})
+                     body={"kind": "copy_answer", "source": {"ref": "pending"}}, slack_recipient=recipient(query))
     result, _ = plan(query, candidate, pending_action=pending)
     assert result["runtime"].request_contract.body.kind == "transform_answer"
     assert result["runtime"].request_contract.body.source.ref == "pending"
@@ -421,17 +428,17 @@ def test_local_evidence_reusing_an_old_name_does_not_rewrite_the_confirmed_pendi
     # Frozen run-01 pending_destination: same local name/quote, narrower scope.
     pending = original_pending(response=finalize_answer(text_document("원래 답변"), []))
     original = pending.contract.evidence[0]
-    candidate = WireRequestContract(relation="supplement", target_request_id=pending.contract.request_id,
-        body=WireCopyAnswerBody(source=AnswerReference(ref="pending")), slack_destination={"channel_id": "C123"},
+    candidate = WireRequestContract(slack_recipient=recipient("C123", "destination"), relation="supplement", target_request_id=pending.contract.request_id,
+        body=WireCopyAnswerBody(source=AnswerReference(ref="pending")),
         actions=ActionContract(slack_notify=ActionRequest(intent="requested", evidence_ids=("original",))),
         evidence=(original.model_copy(update={"scope": "actions.slack_notify"}),
-                  ContractEvidence(id="destination", turn_id="current", quote="C123", scope="slack_destination", interpretation="reference")))
+                  ContractEvidence(id="destination", turn_id="current", quote="C123", scope="slack_recipient", interpretation="reference")))
     result, _ = plan("C123", candidate, pending_action=pending,
         user_turns=(UserTurnSnapshot(turn_id="old", text=original.quote), UserTurnSnapshot(turn_id="current", text="C123")))
     contract = result["runtime"].request_contract
     assert contract.failure is None and contract.action_requested("slack_notify")
     assert original in contract.evidence
-    assert next(item for item in contract.evidence if item.id == original.id).scope == "actions"
+    assert next(item for item in contract.evidence if item.id == original.id).scope == "current_request"
 
 
 def test_same_local_name_in_a_later_revision_cannot_mutate_old_evidence():
@@ -439,7 +446,7 @@ def test_same_local_name_in_a_later_revision_cannot_mutate_old_evidence():
     first, _ = plan(first_query, wire(first_query, actions={"slack_notify": {"intent": "requested", "evidence_ids": ["current-evidence"]}}))
     pending = PendingAction(contract=first["runtime"].request_contract, response=finalize_answer(text_document("원문"), []), body_prepared=True)
     next_query = "보내지 마"
-    candidate = WireRequestContract(relation="correction", target_request_id=pending.contract.request_id,
+    candidate = WireRequestContract(slack_recipient=OmittedRecipient(), relation="correction", target_request_id=pending.contract.request_id,
         body=AcknowledgeBody(evidence_ids=("current-evidence",)),
         actions=ActionContract(slack_notify=ActionRequest(intent="forbidden", evidence_ids=("current-evidence",))),
         evidence=(ContractEvidence(id="current-evidence", turn_id="next", quote=next_query, scope="current_request", interpretation="negation"),))
@@ -468,7 +475,7 @@ def test_acknowledging_action_prohibition_does_not_complete_an_unknown_body_subj
         actions={"save_text": {"intent": "requested", "evidence_ids": ["current-evidence"]}},
         missing_info=[{"slot": "subject", "reason": "not_provided", "question": "어떤 API인가요?"}]))
     pending = PendingAction(contract=first["runtime"].request_contract, phase="awaiting_input", response=None, body_prepared=False)
-    candidate = WireRequestContract(relation="correction", target_request_id=pending.contract.request_id,
+    candidate = WireRequestContract(slack_recipient=OmittedRecipient(), relation="correction", target_request_id=pending.contract.request_id,
         body=AcknowledgeBody(evidence_ids=("e1",)),
         actions=ActionContract(save_text=ActionRequest(intent="forbidden", evidence_ids=("e1",))),
         evidence=(ContractEvidence(id="e1", turn_id="next", quote="저장은 하지 마", scope="current_request", interpretation="negation"),))
@@ -481,22 +488,23 @@ def test_acknowledging_action_prohibition_does_not_complete_an_unknown_body_subj
 
 def test_a_rejected_destination_stays_unresolved_until_a_new_destination_is_supplied():
     pending = original_pending(response=finalize_answer(text_document("원래 답변"), []))
-    pending = pending.model_copy(update={"contract": pending.contract.model_copy(update={"slack_destination": ContractDestination(channel_id="COLD")})})
+    pending = pending.model_copy(update={"contract": pending.contract.model_copy(update={"slack_recipient": ExplicitRecipient(selector=RecipientSelector(kind="channel", value="COLD"), evidence_ids=("original",))})})
     query = "COLD는 대상이 아니야. 채널은 아직 몰라."
     candidate = wire(query, relation="correction", target_request_id=pending.contract.request_id,
+        slack_recipient={"state": "unresolved", "raw_input": query, "reason": "ambiguous", "evidence_ids": ["current-evidence"]},
         missing_info=[{"slot": "slack_destination", "reason": "unclear", "question": "어느 채널로 보낼까요?"}])
     first, _ = plan(query, candidate, pending_action=pending)
     contract = first["runtime"].request_contract
-    assert contract.slack_destination is None
+    assert contract.slack_recipient.state == "unresolved"
     assert not contract.execution_ready("slack_notify", body_ready=True, destination_ready=True)
     resumed = PendingAction(contract=contract, response=pending.response, body_prepared=True)
     next_query = "계속 진행해줘"
-    next_candidate = WireRequestContract(relation="supplement", target_request_id=contract.request_id,
+    next_candidate = WireRequestContract(slack_recipient=OmittedRecipient(), relation="supplement", target_request_id=contract.request_id,
         evidence=(ContractEvidence(id="e1", turn_id="next", quote=next_query, scope="current_request", interpretation="reference"),))
     second, _ = plan(next_query, next_candidate, pending_action=resumed, current_turn_id="next",
                      user_turns=(UserTurnSnapshot(turn_id="next", text=next_query),))
     confirmed = second["runtime"].request_contract
-    assert confirmed.slack_destination is None
+    assert confirmed.slack_recipient.state == "unresolved"
     assert [item.slot for item in confirmed.missing_info] == ["slack_destination"]
     assert not confirmed.execution_ready("slack_notify", body_ready=True, destination_ready=True)
 
@@ -514,7 +522,7 @@ def test_local_evidence_must_be_defined_once_in_the_same_model_response(duplicat
 def test_pending_context_exposes_facts_without_server_evidence_labels():
     pending = original_pending(response=finalize_answer(text_document("원문"), []))
     result, model = plan("C123", wire("C123", relation="supplement", target_request_id=pending.contract.request_id,
-                                      slack_destination={"channel_id": "C123"}), pending_action=pending)
+                                      slack_recipient=recipient("C123")), pending_action=pending)
     context = next(str(message.content) for message in model.calls[0] if message.name == "request_context")
     assert "confirmed_facts" in context and "body_prepared" in context
     assert '"evidence_ids"' not in context and '"evidence"' not in context
@@ -536,24 +544,24 @@ def test_retrieval_retry_returns_no_request_contract_and_preserves_the_bound_rev
     assert all(item.id not in prompt for item in fixed.evidence)
 
 
-@pytest.mark.parametrize("destination,expected_reason", [("C123", None), ("C999", "unknown_id")])
-def test_a_new_destination_resolves_only_a_stale_not_provided_gap_after_binding(destination, expected_reason):
+@pytest.mark.parametrize("destination", ["C123", "C999"])
+def test_a_new_destination_resolves_only_a_stale_not_provided_gap_after_binding(destination):
     pending = original_pending(response=finalize_answer(text_document("원래 답변"), []))
     pending = pending.model_copy(update={"contract": pending.contract.model_copy(update={
         "missing_info": (MissingInformation(slot="slack_destination", reason="unclear", question="어느 채널인가요?"),),
     })})
     candidate = wire("C123", relation="supplement", target_request_id=pending.contract.request_id,
-                     slack_destination={"channel_id": destination},
+                     slack_recipient=recipient(destination),
                      missing_info=[{"slot": "slack_destination", "reason": "not_provided", "question": "채널을 알려 주세요."}])
     result, _ = plan("C123", candidate, pending_action=pending)
     contract = result["runtime"].request_contract
-    if expected_reason is None:
-        assert contract.slack_destination.channel_id == "C123"
+    if destination == "C123":
+        assert contract.slack_recipient.selector.value == "C123"
         assert contract.missing_info == ()
         assert contract.execution_ready("slack_notify", body_ready=True, destination_ready=True)
     else:
-        assert contract.slack_destination is None
-        assert [(item.slot, item.reason) for item in contract.missing_info] == [("slack_destination", expected_reason)]
+        assert contract.failure == "contract_invalid"
+        assert result["runtime"].pending_action == pending
         assert not contract.execution_ready("slack_notify", body_ready=True, destination_ready=True)
 
 
@@ -563,9 +571,162 @@ def test_a_destination_supplement_cannot_resolve_an_existing_action_intent_gap()
         "missing_info": (MissingInformation(slot="save_intent", reason="unclear", question="저장할까요?"),),
     })})
     candidate = wire("C123", relation="supplement", target_request_id=pending.contract.request_id,
-                     slack_destination={"channel_id": "C123"})
+                     slack_recipient=recipient("C123"))
     result, _ = plan("C123", candidate, pending_action=pending)
     contract = result["runtime"].request_contract
     assert contract.action_requested("save_text")
     assert [item.slot for item in contract.missing_info] == ["save_intent"]
     assert not contract.execution_ready("save_text", body_ready=True)
+
+
+def test_historical_recipient_mention_cannot_change_a_pending_delivery_target():
+    pending = original_pending(response=finalize_answer(text_document("원래 답변"), []))
+    pending = pending.model_copy(update={"contract": pending.contract.model_copy(update={
+        "slack_recipient": ExplicitRecipient(selector=RecipientSelector(kind="channel", value="COLD"), evidence_ids=("original",)),
+    })})
+    candidate = WireRequestContract(
+        relation="supplement", target_request_id=pending.contract.request_id,
+        slack_recipient=recipient("COTHER", "historical-recipient"),
+        evidence=(ContractEvidence(id="historical-recipient", turn_id="old-recipient", quote="COTHER",
+                                   scope="slack_recipient", interpretation="reference"),),
+    )
+    result, _ = plan("다시 시도해줘", candidate, pending_action=pending,
+                     user_turns=(UserTurnSnapshot(turn_id="old-recipient", text="COTHER"),
+                                 UserTurnSnapshot(turn_id="current", text="다시 시도해줘")))
+    contract = result["runtime"].request_contract
+    assert not contract.execution_ready("slack_notify", body_ready=True, destination_ready=True)
+    assert contract.failure == "contract_invalid"
+    assert result["runtime"].pending_action == pending
+
+
+def test_omitted_recipient_on_retry_preserves_the_confirmed_intent_and_evidence():
+    query = "C123으로 보내줘"
+    first, _ = plan(query, wire(query, slack_recipient=recipient("C123"),
+        actions={"slack_notify": {"intent": "requested", "evidence_ids": ["current-evidence"]}}))
+    confirmed = first["runtime"].request_contract
+    pending = PendingAction(contract=confirmed, response=finalize_answer(text_document("본문"), []), body_prepared=True)
+    next_query = "다시 시도해줘"
+    candidate = WireRequestContract(slack_recipient=OmittedRecipient(), relation="supplement",
+        target_request_id=confirmed.request_id,
+        evidence=(ContractEvidence(id="retry", turn_id="next", quote=next_query,
+                                   scope="current_request", interpretation="instruction"),))
+    result, _ = plan(next_query, candidate, pending_action=pending, current_turn_id="next",
+                     user_turns=(UserTurnSnapshot(turn_id="next", text=next_query),))
+    contract = result["runtime"].request_contract
+    assert contract.slack_recipient == confirmed.slack_recipient
+    assert all(key in {item.id for item in contract.evidence} for key in confirmed.slack_recipient.evidence_ids)
+    assert contract.execution_ready("slack_notify", body_ready=True, destination_ready=True)
+
+
+def test_recipient_correction_requires_current_scoped_evidence_and_binds_it():
+    first_query = "COLD로 보내줘"
+    first, _ = plan(first_query, wire(first_query, slack_recipient=recipient("COLD"),
+        actions={"slack_notify": {"intent": "requested", "evidence_ids": ["current-evidence"]}}))
+    original = first["runtime"].request_contract
+    pending = PendingAction(contract=original, response=finalize_answer(text_document("본문"), []), body_prepared=True)
+    query = "수신자는 CNEW로 정정해줘"
+    candidate = WireRequestContract(slack_recipient=recipient("CNEW", "recipient-correction"),
+        relation="correction", target_request_id=original.request_id,
+        evidence=(ContractEvidence(id="recipient-correction", turn_id="next", quote=query,
+                                   scope="slack_recipient", interpretation="correction"),))
+    result, _ = plan(query, candidate, pending_action=pending, current_turn_id="next",
+                     user_turns=(UserTurnSnapshot(turn_id="next", text=query),))
+    contract = result["runtime"].request_contract
+    assert contract.slack_recipient.selector.value == "CNEW"
+    assert contract.slack_recipient.evidence_ids != candidate.slack_recipient.evidence_ids
+    evidence = {item.id: item for item in contract.evidence}
+    assert all(evidence[key].turn_id == "next" for key in contract.slack_recipient.evidence_ids)
+    assert contract.execution_ready("slack_notify", body_ready=True, destination_ready=True)
+
+
+def test_a_recipient_from_a_prior_unrelated_turn_is_not_a_new_request_recipient():
+    query = "Slack으로 보내줘"
+    candidate = WireRequestContract(slack_recipient=recipient("COLD", "old-recipient"),
+        actions={"slack_notify": {"intent": "requested", "evidence_ids": ["send"]}},
+        evidence=(
+            ContractEvidence(id="old-recipient", turn_id="old", quote="COLD", scope="slack_recipient", interpretation="reference"),
+            ContractEvidence(id="send", turn_id="current", quote=query, scope="actions.slack_notify", interpretation="instruction"),
+        ))
+    result, _ = plan(query, candidate, user_turns=(UserTurnSnapshot(turn_id="old", text="COLD"),
+                                                 UserTurnSnapshot(turn_id="current", text=query)))
+    contract = result["runtime"].request_contract
+    assert contract.slack_recipient.state == "unresolved"
+    assert contract.slack_recipient.raw_input == "COLD"
+    assert not contract.execution_ready("slack_notify", body_ready=True, destination_ready=True)
+
+
+@pytest.mark.parametrize("intent", [
+    {"state": "explicit", "selector": {"kind": "channel", "value": "COTHER"}, "evidence_ids": ["current-evidence"]},
+    {"state": "unresolved", "raw_input": "COTHER", "reason": "ambiguous", "evidence_ids": ["current-evidence"]},
+])
+def test_unverified_current_recipient_proposal_preserves_the_pending_binding(intent):
+    pending = original_pending(response=finalize_answer(text_document("본문"), []))
+    pending = pending.model_copy(update={"contract": pending.contract.model_copy(update={
+        "slack_recipient": ExplicitRecipient(selector=RecipientSelector(kind="channel", value="COLD"), evidence_ids=("original",)),
+    })})
+    query = "다시 시도해줘"
+    candidate = wire(query, relation="supplement", target_request_id=pending.contract.request_id, slack_recipient=intent)
+    result, _ = plan(query, candidate, pending_action=pending)
+    assert result["runtime"].request_contract.failure == "contract_invalid"
+    assert result["runtime"].pending_action == pending
+
+
+def test_a_missing_slot_cannot_replace_the_typed_pending_recipient_intent():
+    pending = original_pending(response=finalize_answer(text_document("본문"), []))
+    pending = pending.model_copy(update={"contract": pending.contract.model_copy(update={
+        "slack_recipient": ExplicitRecipient(selector=RecipientSelector(kind="channel", value="COLD"), evidence_ids=("original",)),
+    })})
+    candidate = wire("다시 시도해줘", relation="supplement", target_request_id=pending.contract.request_id,
+                     missing_info=[{"slot": "slack_destination", "reason": "unclear", "question": "어느 수신자인가요?"}])
+    result, _ = plan("다시 시도해줘", candidate, pending_action=pending)
+    assert result["runtime"].request_contract.failure == "contract_invalid"
+    assert result["runtime"].pending_action == pending
+
+
+@pytest.mark.parametrize("kind,value,query", [
+    ("channel", "C123", "Send to C12345"),
+    ("user", "U123", "Send to U12345"),
+    ("email", "intended@example.invalid", "Send to intended@example.invalid.evil"),
+    ("email", "intended@example.invalid", "Send to other+intended@example.invalid"),
+])
+@pytest.mark.parametrize("quote_only_selector", [False, True])
+def test_recipient_grounding_requires_the_complete_token_in_the_user_utterance(kind, value, query, quote_only_selector):
+    candidate = WireRequestContract(
+        slack_recipient={"state": "explicit", "selector": {"kind": kind, "value": value}, "evidence_ids": ["recipient"]},
+        actions={"slack_notify": {"intent": "requested", "evidence_ids": ["send"]}},
+        evidence=(ContractEvidence(id="recipient", turn_id="current", quote=value if quote_only_selector else query,
+                                   scope="slack_recipient", interpretation="reference"),
+                  ContractEvidence(id="send", turn_id="current", quote=query,
+                                   scope="actions.slack_notify", interpretation="instruction")),
+    )
+    result, _ = plan(query, candidate)
+    assert result["runtime"].request_contract.slack_recipient.state == "unresolved"
+    assert not result["runtime"].request_contract.execution_ready("slack_notify", body_ready=True, destination_ready=True)
+
+
+@pytest.mark.parametrize("kind,value,query", [
+    ("channel", "C123", "<#C123>으로 보내줘"),
+    ("user", "U123", "<@U123>에게 보내줘"),
+    ("email", "intended@example.invalid", "intended@example.invalid로 보내줘"),
+    ("email", "intended@example.invalid", "Send to intended@example.invalid."),
+])
+def test_complete_recipient_tokens_allow_slack_markup_particles_and_sentence_punctuation(kind, value, query):
+    candidate = wire(query, slack_recipient={"state": "explicit", "selector": {"kind": kind, "value": value},
+                                           "evidence_ids": ["current-evidence"]},
+                     actions={"slack_notify": {"intent": "requested", "evidence_ids": ["current-evidence"]}})
+    result, _ = plan(query, candidate)
+    assert result["runtime"].request_contract.slack_recipient.selector == RecipientSelector(kind=kind, value=value)
+    assert result["runtime"].request_contract.execution_ready("slack_notify", body_ready=True, destination_ready=True)
+
+
+def test_an_incorrect_current_reconfirmation_cannot_silently_reuse_the_old_recipient():
+    first_query = "C123으로 보내줘"
+    first, _ = plan(first_query, wire(first_query, slack_recipient=recipient("C123"),
+        actions={"slack_notify": {"intent": "requested", "evidence_ids": ["current-evidence"]}}))
+    original = first["runtime"].request_contract
+    pending = PendingAction(contract=original, response=finalize_answer(text_document("본문"), []), body_prepared=True)
+    query = "수신자를 C12345로 수정해줘"
+    candidate = wire(query, relation="correction", target_request_id=original.request_id, slack_recipient=recipient("C123"))
+    result, _ = plan(query, candidate, pending_action=pending)
+    assert result["runtime"].request_contract.failure == "contract_invalid"
+    assert result["runtime"].pending_action == pending
