@@ -12,6 +12,7 @@ from src.core.answer_schema import ActionReceipt, AnswerResponse, export_answer_
 from src.core.contracts.provenance import AnswerProvenance
 from .config_models import BenchmarkCase
 from .result_models import CaseResult, SaveAssessment, ScenarioTurnResult
+from .tool_policy import executed_tool_names
 
 
 def _download(endpoint: str, filename: str, timeout: int) -> requests.Response:
@@ -32,6 +33,7 @@ def assess_save_outcome(
     called_tools: list[str], prior_turns: list[ScenarioTurnResult], session_id: str,
     endpoint: str, timeout: int = 10, provenance: AnswerProvenance | None = None,
     phase: str = "case",
+    execution_evidence=None,
 ) -> SaveAssessment:
     """A receipt is checked against an independently selected body and fetched bytes."""
     expectation = case.save_expectation
@@ -40,6 +42,12 @@ def assess_save_outcome(
         receipt.status != "skipped" or receipt.operation is not None or receipt.artifact is not None
         or receipt.file_path is not None for receipt in receipts
     )
+    executed = executed_tool_names(execution_evidence)
+    if executed is not None:
+        # Complete lifecycle evidence distinguishes a pre-invocation block or
+        # reuse from a newly executed save. Unmatched receipts are separately
+        # rejected by the execution policy assessment.
+        attempted = "save_text" in executed
     details = {"outcome": expectation.outcome if expectation else None, "phase": phase,
                "checked_at_utc": datetime.now(timezone.utc).isoformat()}
 
@@ -179,6 +187,7 @@ def assess_setup_saves(*, turns: list[ScenarioTurnResult], session_id: str, endp
             case=expectation, response=turn.response, actions=turn.response.actions, called_tools=turn.tool_calls,
             prior_turns=turns[:index], session_id=session_id, endpoint=endpoint, timeout=timeout,
             provenance=turn.answer_provenance, phase=phase,
+            execution_evidence=turn.execution_evidence,
         )
     return assessments
 
@@ -205,14 +214,16 @@ def revalidate_saved_artifacts(*, cases: list[BenchmarkCase], results: list[Case
                 case=case, response=result.response, actions=result.actions, called_tools=result.tool_calls,
                 prior_turns=prior_turns, session_id=result.session_id, endpoint=result.endpoint,
                 timeout=timeout, provenance=result.answer_provenance, phase="run_end",
+                execution_evidence=result.execution_evidence,
             )
             assessments.append(result.save_assessment)
         for assessment in assessments:
             if assessment.passed is False:
                 result.product_pass = False
-                result.release_pass = result.passed = False
                 result.gate_failures = list(dict.fromkeys([*result.gate_failures, *assessment.failure_codes]))
                 if assessment.status == "unverifiable" and result.eval_validity == "valid":
                     result.eval_validity = "incomplete"
                     if "incomplete_eval" not in result.gate_failures:
                         result.gate_failures.append("incomplete_eval")
+        from .decisions import refresh_case_decision
+        refresh_case_decision(result, case)

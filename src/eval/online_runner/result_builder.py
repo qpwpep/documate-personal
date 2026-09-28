@@ -8,6 +8,7 @@ from ..pricing import compute_cost_usd
 from ..config_models import BenchmarkCase, BenchmarkConfig
 from ..result_models import CaseResult, JudgeSubscores, ScenarioTurnResult
 from ..save_outcomes import assess_save_outcome, assess_setup_saves
+from ..decisions import DECISION_CONTRACT_VERSION, policy_for_case
 from ..weighting import (
     compute_composite_quality_score,
     compute_rule_weighted_score,
@@ -180,6 +181,7 @@ def build_case_result(
         called_tools=parsed_response.tool_calls, prior_turns=prior_turns or [],
         session_id=session_id, endpoint=endpoint_url, timeout=config.request_timeout_seconds,
         provenance=parsed_response.answer_provenance,
+        execution_evidence=parsed_response.execution_evidence,
     )
     setup_save_assessments = assess_setup_saves(
         turns=prior_turns or [], session_id=session_id, endpoint=endpoint_url, timeout=config.request_timeout_seconds,
@@ -359,10 +361,6 @@ def build_case_result(
         judge_audit_failures=judge_audit_failures,
     )
     gate_failures = list(dict.fromkeys([*gate_failures, *(code for item in save_assessments for code in item.failure_codes)]))
-    release_pass = bool(
-        eval_validity == "valid" and product_pass is True and judge_pass is True
-        and not gate_failures
-    )
     cost = compute_cost_usd(
         token_usage=parsed_response.token_usage,
         llm_calls=[call.model_dump() for call in parsed_response.llm_calls],
@@ -370,6 +368,10 @@ def build_case_result(
     )
 
     return CaseResult(
+        decision_contract_version=DECISION_CONTRACT_VERSION,
+        policy_snapshot=policy_for_case(case),
+        execution_evidence=parsed_response.execution_evidence,
+        scenario_turns=prior_turns or [],
         run_id=run_id,
         case_id=case.case_id,
         category=case.category,
@@ -447,9 +449,9 @@ def build_case_result(
         composite_quality_score=composite_quality_score,
         product_pass=product_pass,
         judge_pass=judge_pass,
-        release_pass=release_pass,
+        release_pass=None,
         final_score=composite_quality_score,
-        passed=release_pass,
+        passed=None,
         cost_usd=cost,
         created_at_utc=created_at,
     )

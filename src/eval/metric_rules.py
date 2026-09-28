@@ -62,11 +62,9 @@ def score_tool_choice(
             matched_expected += 1
         expected_score = matched_expected / len(expected)
 
-    forbidden_penalty = 0.0
-    if forbidden:
-        forbidden_penalty = len(forbidden.intersection(called)) / len(forbidden)
-
-    return max(0.0, expected_score * (1.0 - forbidden_penalty))
+    # Prohibited execution is assessed independently by tool_policy. Quality
+    # scores never decide whether a mandatory policy violation is acceptable.
+    return expected_score
 
 
 def score_answer_quality(

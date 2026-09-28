@@ -7,13 +7,15 @@ from typing import Any
 from src.core.answer_schema import AnswerResponse, ActionReceipt, export_answer_text
 from src.core.contracts.boundary.debug import parse_error_codes, parse_llm_calls, parse_model_usage_status, parse_token_usage
 from src.core.contracts.boundary.planner import parse_planner_diagnostic
-from src.core.contracts.boundary.retrieval import parse_retrieval_diagnostics
+from src.core.contracts.boundary.retrieval import normalize_retrieval_diagnostic_observation
 from src.core.contracts.debug import DEBUG_CRITICAL_FIELDS, DEBUG_REQUIRED_FIELDS, DEBUG_SCHEMA_VERSION
 from src.core.contracts.debug import LLMCallMetadata, ModelUsageStatus, PlannerDiagnostic, RetrievalDiagnostic, TokenUsage
 from src.core.contracts.provenance import AnswerProvenance
+from src.core.contracts.tool_execution import ToolExecutionEvidence
 from src.core.evidence import SearchHit
 from src.core.latency import LatencyBreakdownModel
 from ..result_models import EvidenceAssessment
+from ..tool_policy import executed_tool_names
 
 
 _REQUEST_ID_PATTERN = re.compile(r"Request ID:\s*([^,\s]+)")
@@ -40,6 +42,7 @@ class ParsedResponseData:
     models_used: list[str] = field(default_factory=list)
     model_usage_status: ModelUsageStatus = "missing_debug"
     tool_calls: list[str] = field(default_factory=list)
+    execution_evidence: ToolExecutionEvidence | dict[str, Any] | None = None
     tool_call_count: int = 0
     token_usage: TokenUsage | None = None
     llm_calls: list[LLMCallMetadata] = field(default_factory=list)
@@ -161,20 +164,8 @@ def _parse_retrieval_diagnostics(
     *,
     response_errors: list[str],
 ) -> list[RetrievalDiagnostic]:
-    if raw_items is None:
-        return []
-    if not isinstance(raw_items, list):
-        response_errors.append("debug.retrieval_diagnostics must be a list")
-        return []
-    parsed: list[RetrievalDiagnostic] = []
-    for index, item in enumerate(raw_items):
-        if not isinstance(item, dict):
-            response_errors.append(f"debug.retrieval_diagnostics[{index}] must be an object")
-            continue
-        try:
-            parsed.extend(parse_retrieval_diagnostics([item]))
-        except (TypeError, ValueError, OverflowError) as exc:
-            response_errors.append(f"debug.retrieval_diagnostics[{index}] invalid: {exc}")
+    parsed, issues = normalize_retrieval_diagnostic_observation(raw_items)
+    response_errors.extend(issues)
     return parsed
 
 
@@ -332,6 +323,16 @@ def parse_agent_response(
             debug_payload.get("tool_calls"), label="debug.tool_calls",
             response_errors=parsed.response_errors, allow_none=False,
         )
+        raw_execution = debug_payload.get("execution_evidence")
+        if isinstance(raw_execution, dict):
+            # Retain malformed envelopes: valid started events remain evidence
+            # even when the complete journal fails structural validation.
+            parsed.execution_evidence = raw_execution
+        elif raw_execution is not None:
+            parsed.response_errors.append("debug.execution_evidence must be an object")
+        executed = executed_tool_names(parsed.execution_evidence)
+        if executed is not None:
+            parsed.tool_calls = executed
         try:
             parsed.tool_call_count = int(
                 debug_payload.get("tool_call_count", len(parsed.tool_calls)) or len(parsed.tool_calls)

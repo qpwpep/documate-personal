@@ -10,6 +10,7 @@ from src.core.planner_schema import PLANNER_WARNING_DUPLICATE_ROUTE_MERGED
 
 from ..config_models import BenchmarkCase, BenchmarkConfig
 from ..metric_rules import tool_confusion_counts
+from ..decisions import refresh_case_decision
 from ..result_models import CaseResult
 from ..summary_models import GateResult, RunSummary, RunTrack, SummaryStats
 from .histograms import build_analysis, build_failure_reason, percentile
@@ -217,6 +218,8 @@ def build_summary(
     execution_options: dict[str, Any] | None = None,
 ) -> RunSummary:
     case_map = {case.case_id: case for case in cases}
+    for result in results:
+        refresh_case_decision(result, case_map.get(result.case_id))
     planned_ids = {case.case_id for case in cases}
     result_ids = [result.case_id for result in results]
     missing_result_cases = len(planned_ids.difference(result_ids))

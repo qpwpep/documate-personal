@@ -8,10 +8,13 @@ from pydantic import BaseModel, Field, model_validator
 from src.core.answer_schema import AnswerResponse, ActionReceipt
 from src.core.contracts.debug import LLMCallMetadata, ModelUsageStatus, PlannerDiagnostic, RetrievalDiagnostic, TokenUsage
 from src.core.contracts.provenance import AnswerProvenance
+from src.core.contracts.tool_execution import ToolExecutionEvidence
 from src.core.evidence import EvidenceRef, SearchHit
 from src.core.latency import LatencyBreakdownModel
 from src.core.uploads import UploadManifest
 from .config_models import CaseCategory, CaseScenario
+from .decisions import CaseDecision
+from .tool_policy import ToolPolicyAssessment, ToolPolicySpec
 
 
 JudgeStatus = Literal["disabled", "not_run", "failed", "succeeded", "legacy_unknown"]
@@ -70,6 +73,7 @@ class ScenarioTurnResult(BaseModel):
     evidence_assessment: EvidenceAssessment | None = None
     observed_hits: list[SearchHit] = Field(default_factory=list)
     tool_calls: list[str] = Field(default_factory=list)
+    execution_evidence: ToolExecutionEvidence | dict[str, Any] | None = None
     upload_manifest: UploadManifest | None = None
     question_response_ms: int | None = Field(default=None, ge=0)
     runtime_errors: list[str] = Field(default_factory=list)
@@ -105,6 +109,11 @@ class SaveAssessment(BaseModel):
 
 
 class CaseResult(BaseModel):
+    decision_contract_version: Literal[1] | None = None
+    policy_snapshot: ToolPolicySpec | None = None
+    policy_assessment: ToolPolicyAssessment | None = None
+    decision: CaseDecision | None = None
+    execution_evidence: ToolExecutionEvidence | dict[str, Any] | None = None
     run_id: str
     case_id: str
     category: CaseCategory
@@ -201,6 +210,15 @@ class CaseResult(BaseModel):
         if not isinstance(value, dict):
             return value
         payload = dict(value)
+        if payload.get("decision_contract_version") == 1:
+            if payload.get("judge_status") not in {"disabled", "not_run", "failed", "succeeded"}:
+                raise ValueError("current results require an explicit current judge_status")
+            if payload.get("eval_validity") not in {"valid", "incomplete", "invalid"}:
+                raise ValueError("current results require an explicit current eval_validity")
+        if payload.get("decision_contract_version") is None and any(payload.get(field) is not None for field in (
+            "policy_snapshot", "policy_assessment", "decision", "execution_evidence",
+        )):
+            raise ValueError("current policy and decision fields require decision_contract_version")
         # Records written before the explicit state contract carry no judge_status.
         # They stay readable as legacy data, but the mirrors below only run for
         # them; a new-contract record never lets an alias field outrank its
@@ -219,16 +237,6 @@ class CaseResult(BaseModel):
                 payload["composite_quality_score"] = payload.get("final_score")
             if payload.get("final_score") is None and payload.get("composite_quality_score") is not None:
                 payload["final_score"] = payload.get("composite_quality_score")
-            if payload.get("release_pass") is None and payload.get("passed") is not None:
-                payload["release_pass"] = payload.get("passed")
-            if payload.get("passed") is None and payload.get("release_pass") is not None:
-                payload["passed"] = payload.get("release_pass")
-            if payload.get("product_pass") is None and payload.get("release_pass") is not None:
-                payload["product_pass"] = payload.get("release_pass")
-            if payload.get("judge_pass") is None and payload.get("judge_gate_passed") is not None:
-                payload["judge_pass"] = payload.get("judge_gate_passed")
-            if payload.get("judge_gate_passed") is None and payload.get("judge_pass") is not None:
-                payload["judge_gate_passed"] = payload.get("judge_pass")
         judge_errors = payload.get("judge_errors")
         if isinstance(judge_errors, list):
             audit_failures = [
@@ -261,16 +269,6 @@ class CaseResult(BaseModel):
                 self.composite_quality_score = self.final_score
             if self.final_score is None and self.composite_quality_score is not None:
                 self.final_score = self.composite_quality_score
-            if self.release_pass is None and self.passed is not None:
-                self.release_pass = self.passed
-            if self.passed is None and self.release_pass is not None:
-                self.passed = self.release_pass
-            if self.product_pass is None and self.release_pass is not None:
-                self.product_pass = self.release_pass
-            if self.judge_pass is None and self.judge_gate_passed is not None:
-                self.judge_pass = self.judge_gate_passed
-            if self.judge_gate_passed is None and self.judge_pass is not None:
-                self.judge_gate_passed = self.judge_pass
         else:
             # New contract: the canonical verdict fields are authoritative and
             # alias mirrors always follow them, never the other way around.
@@ -285,20 +283,17 @@ class CaseResult(BaseModel):
             else:
                 if self.llm_judge_score is not None or self.judge_subscores is not None or self.judge_pass is not None:
                     raise ValueError("a non-succeeded judge status cannot carry a score or verdict")
-            if self.eval_validity in {"incomplete", "invalid"} and self.release_pass is not False:
-                raise ValueError("incomplete or invalid evaluations cannot release")
-            if self.release_pass is True and self.judge_pass is not True:
-                raise ValueError("release requires a succeeded judge verdict that passed")
-            if self.release_pass is True and self.product_pass is not True:
-                raise ValueError("release requires a passing product verdict")
-            if self.release_pass is True and self.save_assessment is not None and self.save_assessment.passed is False:
-                raise ValueError("release requires the save outcome contract to pass")
-            if self.release_pass is True and any(item.passed is False for item in self.setup_save_assessments.values()):
-                raise ValueError("release requires setup saved artifacts to remain verified")
-            if self.release_pass is True and self.save_assessment is not None and self.gate_failures:
-                raise ValueError("release cannot carry blocking gate failures")
             if self.invalid_eval != (self.eval_validity == "invalid"):
                 raise ValueError("invalid_eval must mirror eval_validity == 'invalid'")
+        from .decisions import refresh_case_decision
+        stored_decision = self.decision
+        stored_policy = self.policy_assessment
+        refresh_case_decision(self)
+        if self.decision_contract_version == 1:
+            if stored_decision is not None and stored_decision != self.decision:
+                raise ValueError("stored case decision disagrees with its assessments")
+            if stored_policy is not None and stored_policy != self.policy_assessment:
+                raise ValueError("stored policy assessment disagrees with execution evidence")
         if self.tool_call_count <= 0 and self.tool_calls:
             self.tool_call_count = len(self.tool_calls)
         if self.output_tokens <= 0 and self.token_usage is not None:
