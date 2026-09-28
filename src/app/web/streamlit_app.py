@@ -155,6 +155,10 @@ def main() -> None:
             return
 
     if prompt:
+        if sidebar_inputs.slack_recipient_error is not None:
+            st.error(sidebar_inputs.slack_recipient_error)
+            st.session_state["upload_saved_prompt"] = prompt
+            return
 
         def stream_agent(user_input: str):
             request_session_id = get_session_id()
@@ -162,9 +166,7 @@ def main() -> None:
                 AgentRequestContext(
                     fastapi_url=SETTINGS.fastapi_url,
                     session_id=request_session_id,
-                    slack_user_id=sidebar_inputs.slack_user_id,
-                    slack_email=sidebar_inputs.slack_email,
-                    slack_channel_id=sidebar_inputs.slack_channel_id,
+                    slack_recipient=sidebar_inputs.slack_recipient,
                 ),
                 manifest=manifest,
             )

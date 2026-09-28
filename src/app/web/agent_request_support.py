@@ -4,7 +4,6 @@ from src.core.contracts import SessionMetadata
 from src.core.contracts.boundary.debug import parse_action_results, parse_error_codes, parse_llm_calls, parse_model_usage_status, parse_retry_state, parse_token_usage
 from src.core.contracts.boundary.planner import parse_planner_diagnostic
 from src.core.contracts.boundary.retrieval import parse_retrieval_diagnostics
-from src.core.contracts.boundary.runtime import parse_slack_destination
 from src.core.contracts.debug import DEBUG_CRITICAL_FIELDS, DEBUG_REQUIRED_FIELDS, DEBUG_SCHEMA_VERSION
 from src.core.contracts.provenance import AnswerProvenance
 from src.core.latency import LatencyBreakdownModel
@@ -154,13 +153,4 @@ def normalize_debug_info(raw_debug: dict | None, latency_ms_server: int | None) 
 
 
 def build_session_metadata_snapshot(request_data: AgentRequest) -> SessionMetadata:
-    slack_destination = parse_slack_destination(
-        {
-            "channel_id": request_data.slack_channel_id,
-            "user_id": request_data.slack_user_id,
-            "email": request_data.slack_email,
-        }
-    )
-    return SessionMetadata(
-        slack_destination=slack_destination if slack_destination.has_destination() else None,
-    )
+    return SessionMetadata(slack_recipient=request_data.slack_recipient)

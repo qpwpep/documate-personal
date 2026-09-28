@@ -89,6 +89,31 @@ def render_answer_response(response: AnswerResponse, fastapi_url: str) -> None:
 
     for action in response.actions:
         label = "파일 저장" if action.kind == "save_text" else "Slack 전송"
+        if action.kind == "slack_notify" and action.slack is not None:
+            delivery = action.slack
+            if delivery.selection is not None:
+                recipient = delivery.selection.selector.value
+                prefix = "기본 수신자" if delivery.selection.source == "configured_default" else "요청 수신자"
+                st.caption(f"{prefix}: {recipient}")
+            elif delivery.intent.state == "unresolved":
+                st.caption(f"요청 수신자: {delivery.intent.raw_input}")
+            if delivery.status == "sent":
+                st.success(f"Slack 전송 완료: {delivery.target.channel_id}")
+            else:
+                failure = delivery.failure
+                render = st.warning if delivery.status == "unknown" else st.info if action.status == "skipped" else st.error
+                state = "전달 여부 불명" if delivery.status == "unknown" else "전송하지 않음"
+                render(f"Slack {state}: {failure.message}")
+                guidance = {
+                    "correct_input": "보낼 대상 하나의 ID 또는 이메일을 확인해 주세요.",
+                    "fix_configuration": "앱 권한과 설정을 확인한 뒤 같은 수신자로 재시도해 주세요.",
+                    "retry_same_target": "같은 수신자로 재시도할 수 있습니다.",
+                    "verify_delivery": "Slack에서 전달 여부를 확인해 주세요. 자동으로 다시 전송하지 않습니다.",
+                }[failure.next_action]
+                if failure.retry_after_seconds is not None:
+                    guidance = f"{failure.retry_after_seconds}초 이후 " + guidance
+                st.caption(guidance)
+            continue
         if action.status == "error":
             st.error(f"{label} 실패: {action.error or action.message or '처리하지 못했습니다.'}")
         elif action.status == "skipped":
@@ -98,7 +123,7 @@ def render_answer_response(response: AnswerResponse, fastapi_url: str) -> None:
         elif action.kind == "save_text" and (action.verification != "verified" or action.artifact is None):
             st.warning("저장 결과를 검증할 수 없습니다. 검증된 파일 정보가 없는 이전 기록입니다.")
         else:
-            detail = action.message or action.target or ""
+            detail = action.message or ""
             st.success(f"{label} 완료" + (f": {detail}" if detail else ""))
             if action.kind == "save_text" and action.artifact is not None:
                 expires = datetime.fromtimestamp(action.artifact.expires_at, tz=timezone.utc).astimezone()
