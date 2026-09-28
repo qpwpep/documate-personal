@@ -72,6 +72,7 @@ def build_history_readme_block(
     output_root: Path,
     svg_path: Path,
 ) -> str:
+    summary = RunSummary.model_validate(latest.summary.model_dump(mode="json"))
     current_suite_label = suite_label(latest.summary.fixtures_path)
     previous = comparable_runs[-2] if len(comparable_runs) > 1 else None
     passed_gates, failed_gates = _gate_lists(latest.summary)
@@ -90,11 +91,25 @@ def build_history_readme_block(
         f"로컬 benchmark 실행은 `{local_pointer_path}`를 최신 `{track}` run 포인터로 갱신합니다."
     )
     lines.append("")
+    decision = summary.release_decision
+    if track == "smoke" or (decision is not None and decision.scope == "diagnostic"):
+        lines.append("이 런은 진단용이며 release 자격 판정이 아닙니다.")
+    elif decision is None:
+        lines.append(
+            "현재 release 자격은 `legacy_unverified`입니다. 아래 수치와 당시 "
+            f"`{'PASS' if latest.summary.overall_passed else 'FAIL'}`는 과거 계약의 기록이며 현재 정책 준수를 증명하지 않습니다."
+        )
+    else:
+        lines.append(f"현재 release 판정은 `{'PASS' if decision.passed else 'FAIL'}`입니다.")
+        if decision.failure_codes:
+            lines.append("차단 사유: " + ", ".join(f"`{code}`" for code in decision.failure_codes) + ".")
+    lines.append("")
     lines.append("| 항목 | 결과 |")
     lines.append("|---|---:|")
     lines.append(f"| 테스트 | `{test_result}` |")
-    lines.append(f"| release benchmark | `{latest.metrics.passed_cases}/{latest.metrics.total_cases}` cases passed |")
-    lines.append(f"| release pass rate | `{format_metric_value('pass_rate', latest.metrics.pass_rate)}` |")
+    metric_scope = "release" if track == "release" else "diagnostic"
+    lines.append(f"| {metric_scope} benchmark | `{latest.metrics.passed_cases}/{latest.metrics.total_cases}` cases passed |")
+    lines.append(f"| {metric_scope} pass rate | `{format_metric_value('pass_rate', latest.metrics.pass_rate)}` |")
     lines.append(
         "| tool precision / recall | "
         f"`{format_metric_value('tool_precision', latest.metrics.tool_precision)}` / "
@@ -120,8 +135,8 @@ def build_history_readme_block(
         )
         lines.append("")
     lines.append(
-        "최신 런은 {passed} Hard Gate를 통과했으며 {failed}는 추가 확인 대상입니다.".format(
-            passed=_quoted_metric_names(passed_gates) if passed_gates else "아직 어떤",
+        "기록된 gate 결과에서 통과한 항목은 {passed}, 실패한 항목은 {failed}입니다.".format(
+            passed=_quoted_metric_names(passed_gates) if passed_gates else "없음",
             failed=_quoted_metric_names(failed_gates) if failed_gates else "실패한 gate 없음",
         )
     )

@@ -241,6 +241,21 @@ def test_report_refuses_results_that_do_not_belong_to_the_saved_summary(tmp_path
     assert not (tmp_path / "report.md").exists()
 
 
+def test_legacy_history_labels_historical_pass_without_current_eligibility(tmp_path):
+    summary = RunSummary.model_validate(_legacy_payload())
+    stored = StoredRun(summary, datetime.fromisoformat(summary.generated_at_utc), track_explicit=True)
+
+    readme = build_history_readme_block(
+        track="release", latest=stored, comparable_runs=[stored],
+        readme_path=tmp_path / "README.md", output_root=tmp_path / "runs", svg_path=tmp_path / "history.svg",
+    )
+    svg = build_history_svg([stored])
+
+    assert "legacy_unverified" in readme
+    assert "legacy_unverified" in svg
+    assert "historical PASS" in svg
+
+
 def test_policy_failure_remains_visible_despite_a_positive_judge_explanation():
     case = BenchmarkCase(case_id="unobserved-case", category="docs_only", query="Explain arrays",
                          forbidden_tools=["slack_notify"])
@@ -301,6 +316,35 @@ def test_current_history_requires_the_original_raw_results(tmp_path):
 
     with pytest.raises(ValueError, match="(?i)(fingerprint|result)"):
         load_history_runs(tmp_path)
+
+
+@pytest.mark.parametrize("forbidden", [False, True])
+def test_report_roundtrip_keeps_the_central_verdict_and_policy_reason(tmp_path, forbidden):
+    summary, results = _current_run(forbidden=forbidden)
+    write_run_outputs(output_dir=tmp_path, results=results, summary=summary)
+
+    assert command_report(argparse.Namespace(run=tmp_path)) == 0
+    report = (tmp_path / "report.md").read_text(encoding="utf-8")
+
+    assert f"- Release: `{'FAIL' if forbidden else 'PASS'}`" in report
+    if forbidden:
+        assert "forbidden_tool_execution" in report
+        assert "slack_notify" in report
+        assert "call-slack_notify" in report
+
+
+def test_history_renderers_reject_a_mutated_policy_gate(tmp_path):
+    summary, _ = _current_run()
+    next(gate for gate in summary.gates if gate.name == "tool_execution_policy").gate_type = "audit"
+    stored = StoredRun(summary, datetime.fromisoformat(summary.generated_at_utc), track_explicit=True)
+
+    with pytest.raises(ValueError, match="(?i)policy"):
+        build_history_readme_block(
+            track="release", latest=stored, comparable_runs=[stored], readme_path=tmp_path / "README.md",
+            output_root=tmp_path / "runs", svg_path=tmp_path / "history.svg",
+        )
+    with pytest.raises(ValueError, match="(?i)policy"):
+        build_history_svg([stored])
 
 
 @pytest.mark.parametrize("change", ["missing", "duplicate", "other_run", "extra_policy"])

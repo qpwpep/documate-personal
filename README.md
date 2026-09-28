@@ -142,7 +142,7 @@ Docling은 요청에 종속된 로컬 프로세스에서 문서를 변환하고 
 
 공용 클라이언트 전환은 실제 localhost FastAPI·그래프·검색·파일 저장과 외부 모델/임베딩 대체 경계로 검증했습니다. 두 파일의 근거를 포함한 준비 답변과 후속 저장 결과가 같고, 새 사례에 이전 대화·첨부가 유입되지 않는지 확인했습니다. Streamlit 최소 지원 버전 `1.54.0`의 격리 환경 UI 검사도 `83 passed`입니다. 유료 모델·검색·judge를 사용하는 새 release run과 실서비스 Slack 전송은 실행하지 않았습니다.
 
-추세 그래프는 [docs/assets/benchmark_history.svg](docs/assets/benchmark_history.svg)에 보관합니다. 실행 방법은 [벤치마크 가이드](docs/benchmarking.md)를 참고하세요. 로컬 run의 기계 판독 결과와 상세 분석은 각각 `output/benchmarks/<run_id>/summary.json`, `output/benchmarks/<run_id>/report.md`에서 확인합니다.
+추세 그래프는 [docs/assets/benchmark_history.svg](docs/assets/benchmark_history.svg)에 보관합니다. 실행 방법은 [벤치마크 가이드](docs/benchmarking.md)를 참고하세요. 로컬 run의 기계 판독 결과와 상세 분석은 각각 `output/benchmarks/<run_id>/summary.json`, `output/benchmarks/<run_id>/report.md`에서 확인합니다. 현재 release 판정은 품질과 별도로 실행 정책 준수를 요구하며, 단 한 사례의 금지 실행이나 관측 부족도 통과를 차단합니다. 위 과거 수치와 그래프의 당시 PASS는 현재 정책을 검증한 결과가 아니며 `legacy_unverified`로 취급합니다.
 
 ## 요청 계약 검증
 

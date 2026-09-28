@@ -12,6 +12,33 @@ def _format_metric_value(value: float | int | None, *, decimals: int = 4) -> str
     return f"{float(value):.{decimals}f}"
 
 
+def _render_execution_policy(lines: list[str], summary: RunSummary, results: list[CaseResult] | None) -> None:
+    if summary.decision_contract_version is None:
+        return
+    lines.extend(["", "## Tool Execution Policy", "", "| Outcome | Cases |", "|---|---:|"])
+    for status, count in (
+        ("compliant", summary.metrics.policy_compliant_cases),
+        ("violated", summary.metrics.policy_violating_cases),
+        ("indeterminate", summary.metrics.policy_indeterminate_cases),
+    ):
+        lines.append(f"| {status} | {count} |")
+    if not results:
+        return
+    issues = [
+        (result.case_id, result.policy_assessment.status, issue)
+        for result in results if result.policy_assessment is not None
+        for issue in [*result.policy_assessment.violations, *result.policy_assessment.evidence_issues]
+    ]
+    if issues:
+        lines.extend(["", "| Case | Status | Turn | Request | Tool | Invocation | Reason |",
+                      "|---|---|---:|---|---|---|---|"])
+        for case_id, status, issue in issues:
+            lines.append(
+                f"| {case_id} | {status} | {issue.turn_index} | {issue.request_id or '-'} | "
+                f"{getattr(issue, 'tool_name', '-')} | {getattr(issue, 'invocation_id', '-')} | {issue.code} |"
+            )
+
+
 def _render_analysis(lines: list[str], summary: RunSummary) -> None:
     lines.append("")
     lines.append("## Root Cause Breakdown")
@@ -268,6 +295,7 @@ def build_markdown_report(summary: RunSummary, results: list[CaseResult] | None 
     ):
         lines.append(f"| {key} | {value if value is not None else '-'} |")
 
+    _render_execution_policy(lines, summary, results)
     lines.append("")
     lines.append("## Gates")
     lines.append("")

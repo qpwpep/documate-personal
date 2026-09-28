@@ -124,6 +124,45 @@ def test_perfect_quality_cannot_hide_invalid_retrieval_observations(diagnostics)
     assert _summary([pair]).overall_passed is False
 
 
+@pytest.mark.parametrize("defect", ["null", "missing", "normalization_marker", "unmatched"])
+def test_retained_final_diagnostics_are_checked_even_when_execution_history_matches(tmp_path, defect):
+    from src.eval.main import command_report
+    from src.eval.reporting.writer import load_run_outputs, write_run_outputs
+
+    pair = _result()
+    result = pair[1]
+    final_debug = deepcopy(result.debug)
+    if defect == "null":
+        final_debug["retrieval_diagnostics"] = None
+    elif defect == "missing":
+        final_debug.pop("retrieval_diagnostics")
+    elif defect == "normalization_marker":
+        final_debug["missing_required_debug_fields"] = ["retrieval_diagnostics"]
+    else:
+        final_debug["retrieval_diagnostics"] = [
+            {"tool": "tavily_search", "status": "success", "invocation_id": "unobserved-call"},
+        ]
+    result.scenario_turns = [ScenarioTurnResult(
+        query=result.query, request_payload=result.request_payload, request_id=result.request_id,
+        response=result.response, debug=final_debug, execution_evidence=result.execution_evidence,
+        tool_calls=result.tool_calls,
+    )]
+
+    summary = _summary([pair])
+
+    assert result.policy_assessment.status == "indeterminate"
+    expected = ("tool_execution_retrieval_unmatched" if defect == "unmatched"
+                else "tool_execution_retrieval_diagnostics_invalid")
+    assert expected in result.policy_assessment.failure_codes
+    assert summary.overall_passed is False
+    write_run_outputs(output_dir=tmp_path, results=[result], summary=summary)
+    loaded_summary, loaded_results = load_run_outputs(tmp_path)
+    assert loaded_results[0].policy_assessment == result.policy_assessment
+    assert loaded_summary.release_decision == summary.release_decision
+    assert command_report(Namespace(run=tmp_path)) == 0
+    assert expected in (tmp_path / "report.md").read_text(encoding="utf-8")
+
+
 def test_receipt_cannot_claim_success_without_execution_evidence():
     action = slack_action()
     action["invocation_id"] = "missing-slack-execution"
