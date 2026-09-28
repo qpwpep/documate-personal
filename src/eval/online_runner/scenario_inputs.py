@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from src.app.client import AgentRequestContext
+from src.core.slack_contract import RecipientSelector
 from ..approved_uploads import ApprovedUpload, select_approved_uploads
 from ..config_models import BenchmarkCase, BenchmarkLiveSlackConfig
 
@@ -56,10 +57,14 @@ def resolve_fixture_uploads(fixtures_path: Path, case: BenchmarkCase, *,
 
 def case_context(*, endpoint: str, session_id: str, case: BenchmarkCase,
                  timeout_seconds: int, live_slack: BenchmarkLiveSlackConfig) -> AgentRequestContext:
-    destination = {"slack_channel_id": case.slack_channel_id or "",
-                   "slack_user_id": case.slack_user_id or "", "slack_email": case.slack_email or ""}
+    recipient = case.slack_recipient
     if live_slack.applies_to_case(case):
-        destination = ({"slack_channel_id": live_slack.channel_id or ""}
-                       if live_slack.requires_channel_destination(case) else live_slack.resolve_dm_payload())
+        if live_slack.requires_channel_destination(case):
+            recipient = (RecipientSelector(kind="channel", value=live_slack.channel_id)
+                         if live_slack.channel_id is not None else None)
+        else:
+            recipient = live_slack.resolve_dm_recipient()
+        if recipient is None:
+            raise ValueError(f"Missing live Slack recipient for {case.case_id}")
     return AgentRequestContext(fastapi_url=endpoint, session_id=session_id,
-                               include_debug=True, timeout_seconds=timeout_seconds, **destination)
+                               include_debug=True, timeout_seconds=timeout_seconds, slack_recipient=recipient)

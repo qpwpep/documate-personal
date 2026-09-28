@@ -1,7 +1,7 @@
 from tests.eval.response_fixtures import answer_provenance, sse_http_response
 from src.core.contracts.debug import DEBUG_SCHEMA_VERSION
 from tests.eval.response_fixtures import source_hit
-from tests.eval.response_fixtures import comparison_response, plain_response
+from tests.eval.response_fixtures import comparison_response, plain_response, slack_action
 import json
 import unittest
 
@@ -14,9 +14,40 @@ from unittest.mock import patch
 from src.eval.config_models import BenchmarkCase, BenchmarkConfig, BenchmarkLiveSlackConfig
 from src.eval.judge_llm import LLMJudge
 from src.eval.online_runner import _run_single_case, run_online_benchmark
+from src.eval.main import resolve_live_slack_dm_recipient
+from src.eval.online_runner.scenario_inputs import case_context
+from src.app.client import build_agent_payload
+from src.infra.settings import AppSettings
 
 
 pytestmark = pytest.mark.usefixtures("empty_upload_manifest_http")
+
+
+def test_explicit_live_email_is_not_replaced_by_app_default_user():
+    selector = resolve_live_slack_dm_recipient(
+        SimpleNamespace(live_slack_user_id=None, live_slack_email="requested@example.com"),
+        SimpleNamespace(live_slack_user_id=None, live_slack_email=None),
+    )
+    context = case_context(
+        endpoint="http://localhost", session_id="s1", timeout_seconds=5,
+        case=BenchmarkCase(case_id="dm", category="tool_action", query="send", expected_tools=["slack_notify"]),
+        live_slack=BenchmarkLiveSlackConfig(
+            enabled=True, dm_recipient=selector,
+            dm_default=AppSettings(_env_file=None, slack_default_user_id="UDEFAULT", slack_default_dm_email=None).slack_default_recipient(),
+        ),
+    )
+
+    assert build_agent_payload("send", context)["slack_recipient"] == {"kind": "email", "value": "requested@example.com"}
+
+
+def test_live_channel_case_cannot_fall_back_to_a_dm_override():
+    with pytest.raises(ValueError, match="channel-case"):
+        case_context(
+            endpoint="http://localhost", session_id="s1", timeout_seconds=5,
+            case=BenchmarkCase(case_id="channel-case", category="tool_action", query="send",
+                               expected_tools=["slack_notify"], slack_recipient={"kind": "channel", "value": "C123"}),
+            live_slack=BenchmarkLiveSlackConfig(enabled=True, dm_recipient={"kind": "user", "value": "U123"}),
+        )
 
 
 class _JudgeModelBoundary:
@@ -68,9 +99,7 @@ class RunnerRequestPayloadTest(unittest.TestCase):
             category="tool_action",
             query="share this to slack",
             expected_tools=["slack_notify"],
-            slack_channel_id="C123BENCH",
-            slack_user_id="U123BENCH",
-            slack_email="bench@example.com",
+            slack_recipient={"kind": "channel", "value": "C123BENCH"},
         )
 
         _run_single_case(
@@ -85,15 +114,13 @@ class RunnerRequestPayloadTest(unittest.TestCase):
 
         _, kwargs = mock_post.call_args
         payload = kwargs["json"]
-        self.assertEqual(payload["slack_channel_id"], "C123BENCH")
-        self.assertEqual(payload["slack_user_id"], "U123BENCH")
-        self.assertEqual(payload["slack_email"], "bench@example.com")
+        self.assertEqual(payload["slack_recipient"], {"kind": "channel", "value": "C123BENCH"})
 
     @patch("src.app.client.requests.post")
     def test_live_slack_channel_uses_configured_destination_and_records_delivery(self, mock_post) -> None:
         response = {
             **plain_response("shared"),
-            "actions": [{"kind": "slack_notify", "status": "success", "target": "C999LIVE"}],
+            "actions": [slack_action(channel_id="C999LIVE")],
         }
         mock_post.return_value = sse_http_response(
             200,
@@ -126,7 +153,7 @@ class RunnerRequestPayloadTest(unittest.TestCase):
             category="tool_action",
             query="share this to slack",
             expected_tools=["slack_notify"],
-            slack_channel_id="C123BENCH",
+            slack_recipient={"kind": "channel", "value": "C123BENCH"},
         )
 
         result = _run_single_case(
@@ -142,12 +169,12 @@ class RunnerRequestPayloadTest(unittest.TestCase):
 
         _, kwargs = mock_post.call_args
         payload = kwargs["json"]
-        self.assertEqual(payload["slack_channel_id"], "C999LIVE")
+        self.assertEqual(payload["slack_recipient"], {"kind": "channel", "value": "C999LIVE"})
         self.assertNotIn("slack_user_id", payload)
         self.assertNotIn("slack_email", payload)
         self.assertEqual(len(result.actions), 1)
         self.assertEqual(result.actions[0].status, "success")
-        self.assertEqual(result.actions[0].target, "C999LIVE")
+        self.assertEqual(result.actions[0].slack.target.channel_id, "C999LIVE")
         self.assertTrue(result.slack_delivery_required)
         self.assertEqual(result.slack_delivery_status, "success")
 
@@ -184,7 +211,7 @@ class RunnerRequestPayloadTest(unittest.TestCase):
             category="tool_action",
             query="share this to slack dm",
             expected_tools=["slack_notify"],
-            slack_user_id="U123BENCH",
+            slack_recipient={"kind": "user", "value": "U123BENCH"},
         )
 
         _run_single_case(
@@ -195,12 +222,12 @@ class RunnerRequestPayloadTest(unittest.TestCase):
             timeout_seconds=5,
             judge=LLMJudge(model_name="test-model", enabled=False),
             config=BenchmarkConfig(),
-            live_slack=BenchmarkLiveSlackConfig(enabled=True, user_id="U999LIVE"),
+            live_slack=BenchmarkLiveSlackConfig(enabled=True, dm_recipient={"kind": "user", "value": "U999LIVE"}),
         )
 
         _, kwargs = mock_post.call_args
         payload = kwargs["json"]
-        self.assertEqual(payload["slack_user_id"], "U999LIVE")
+        self.assertEqual(payload["slack_recipient"], {"kind": "user", "value": "U999LIVE"})
         self.assertNotIn("slack_channel_id", payload)
         self.assertNotIn("slack_email", payload)
 
@@ -210,7 +237,7 @@ class RunnerRequestPayloadTest(unittest.TestCase):
             category="tool_action",
             query="share this to slack",
             expected_tools=["slack_notify"],
-            slack_channel_id="C123BENCH",
+            slack_recipient={"kind": "channel", "value": "C123BENCH"},
         )
 
         with TemporaryDirectory() as temp_dir:
@@ -377,10 +404,10 @@ class RunnerRequestPayloadTest(unittest.TestCase):
         mock_post.return_value = sse_http_response(
             200,
             {
-                "response": {**plain_response('shared'), "actions": [{'kind': 'slack_notify', 'status': 'error', 'target': 'C999LIVE', 'message': None, 'error': 'channel_not_found'}]},
+                "response": {**plain_response('shared'), "actions": [slack_action(channel_id="C999LIVE", status="error")]},
                 "trace": "trace-id",
                 "debug": {
-                    "answer_provenance": answer_provenance({**plain_response('shared'), "actions": [{'kind': 'slack_notify', 'status': 'error', 'target': 'C999LIVE', 'message': None, 'error': 'channel_not_found'}]}),
+                    "answer_provenance": answer_provenance({**plain_response('shared'), "actions": [slack_action(channel_id="C999LIVE", status="error")]}),
                     "schema_version": DEBUG_SCHEMA_VERSION,
                     "observability_status": "ok",
                     "missing_required_debug_fields": [],
@@ -414,7 +441,7 @@ class RunnerRequestPayloadTest(unittest.TestCase):
                 category="tool_action",
                 query="share this to slack",
                 expected_tools=["slack_notify"],
-                slack_channel_id="C123BENCH",
+                slack_recipient={"kind": "channel", "value": "C123BENCH"},
             ),
             timeout_seconds=5,
             judge=judge,

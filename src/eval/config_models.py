@@ -3,7 +3,9 @@ from __future__ import annotations
 import math
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from src.core.slack_contract import RecipientSelector, SlackDefault
 
 
 CaseCategory = Literal["docs_only", "rag_only", "hybrid", "tool_action"]
@@ -106,9 +108,7 @@ class BenchmarkCase(BaseModel):
     setup_turns: list[str] = Field(default_factory=list)
     upload_fixtures: list[str] = Field(default_factory=list)
     upload_fixture: str | None = None
-    slack_channel_id: str | None = None
-    slack_user_id: str | None = None
-    slack_email: str | None = None
+    slack_recipient: RecipientSelector | None = None
     expected_tools: list[str] = Field(default_factory=list)
     forbidden_tools: list[str] = Field(default_factory=list)
     must_include: list[str] = Field(default_factory=list)
@@ -124,6 +124,17 @@ class BenchmarkCase(BaseModel):
     capability: str | None = None
     oracle: CaseOracle | None = None
     provenance: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_obsolete_slack_fields(cls, value: Any) -> Any:
+        # Authored extensions stay in the raw specification; recipient input
+        # must never be silently ignored as one of those extensions.
+        if isinstance(value, dict):
+            obsolete = [key for key in ("slack_channel_id", "slack_user_id", "slack_email") if key in value]
+            if obsolete:
+                raise ValueError("Use slack_recipient instead of obsolete recipient fields: " + ", ".join(obsolete))
+        return value
 
     @model_validator(mode="after")
     def validate_upload_declarations(self) -> "BenchmarkCase":
@@ -142,32 +153,48 @@ class BenchmarkCase(BaseModel):
 
 
 class BenchmarkLiveSlackConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     enabled: bool = False
     channel_id: str | None = None
-    user_id: str | None = None
-    email: str | None = None
-    fallback_user_id: str | None = None
-    fallback_email: str | None = None
+    dm_recipient: RecipientSelector | None = None
+    dm_default: SlackDefault = Field(default_factory=SlackDefault)
 
-    @model_validator(mode="before")
+    @field_validator("channel_id")
     @classmethod
-    def normalize_blank_values(cls, value: Any) -> Any:
-        if not isinstance(value, dict):
-            return value
-        payload = dict(value)
-        for key in ("channel_id", "user_id", "email", "fallback_user_id", "fallback_email"):
-            item = payload.get(key)
-            if item is None:
-                continue
-            text = str(item).strip()
-            payload[key] = text or None
-        return payload
+    def validate_channel(cls, value: str | None) -> str | None:
+        return RecipientSelector(kind="channel", value=value).value if value is not None else None
+
+    @field_validator("dm_recipient")
+    @classmethod
+    def validate_dm(cls, value: RecipientSelector | None) -> RecipientSelector | None:
+        if value is not None and value.kind == "channel":
+            raise ValueError("live Slack DM destination must be a user or email")
+        return value
+
+    @field_validator("dm_default")
+    @classmethod
+    def validate_dm_default(cls, value: SlackDefault) -> SlackDefault:
+        if value.selector is not None and value.selector.kind == "channel":
+            raise ValueError("live Slack DM default must be a user or email")
+        return value
+
+    def resolve_dm_recipient(self) -> RecipientSelector | None:
+        if self.dm_recipient is not None:
+            return self.dm_recipient
+        if self.dm_default.failure is not None:
+            raise ValueError(
+                "Invalid app-level default Slack DM recipient: " + self.dm_default.failure.message
+                + " Set exactly one of SLACK_DEFAULT_USER_ID / SLACK_DEFAULT_DM_EMAIL, "
+                "or provide --live-slack-user-id / --live-slack-email."
+            )
+        return self.dm_default.selector
 
     def applies_to_case(self, case: BenchmarkCase) -> bool:
         return self.enabled and "slack_notify" in case.expected_tools
 
     def requires_channel_destination(self, case: BenchmarkCase) -> bool:
-        return self.applies_to_case(case) and bool(case.slack_channel_id)
+        return self.applies_to_case(case) and case.slack_recipient is not None and case.slack_recipient.kind == "channel"
 
     def requires_dm_destination(self, case: BenchmarkCase) -> bool:
         return self.applies_to_case(case) and not self.requires_channel_destination(case)
@@ -176,16 +203,7 @@ class BenchmarkLiveSlackConfig(BaseModel):
         return bool(self.channel_id)
 
     def has_dm_destination(self) -> bool:
-        return bool(self.user_id or self.email or self.fallback_user_id or self.fallback_email)
-
-    def resolve_dm_payload(self) -> dict[str, str]:
-        resolved_user_id = self.user_id or self.fallback_user_id
-        if resolved_user_id:
-            return {"slack_user_id": resolved_user_id}
-        resolved_email = self.email or self.fallback_email
-        if resolved_email:
-            return {"slack_email": resolved_email}
-        return {}
+        return self.resolve_dm_recipient() is not None
 
 
 class ScoreWeights(BaseModel):

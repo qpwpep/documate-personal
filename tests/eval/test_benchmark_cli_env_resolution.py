@@ -1,6 +1,6 @@
 from tests.eval.response_fixtures import answer_provenance, sse_http_response
 from src.core.contracts.debug import DEBUG_SCHEMA_VERSION
-from tests.eval.response_fixtures import plain_response
+from tests.eval.response_fixtures import plain_response, slack_action
 import unittest
 
 import pytest
@@ -11,18 +11,174 @@ from unittest.mock import patch
 
 from src.eval.config_models import BenchmarkCase, BenchmarkConfig, BenchmarkLiveSlackConfig
 from src.eval.io import load_config
-from src.eval.main import command_run
+from src.eval.main import command_run, resolve_live_slack_dm_recipient
 from src.eval.online_runner import run_online_benchmark
 from src.eval.pricing import compute_cost_usd
 from src.infra.settings import (
     DEFAULT_BENCHMARK_CONFIG_PATH,
+    AppSettings,
     BenchmarkCLIEnvSettings,
     load_benchmark_cli_env_settings,
     load_benchmark_env_defaults,
+    get_settings,
 )
 
 
 pytestmark = pytest.mark.usefixtures("empty_upload_manifest_http")
+
+
+@pytest.fixture
+def live_cli_case(tmp_path, monkeypatch):
+    env_path = tmp_path / ".env"
+    env_path.write_text(
+        "BENCHMARK_SLACK_ENABLED=true\nBENCHMARK_SLACK_CHANNEL_ID=CLIVE\n"
+        "SLACK_DEFAULT_USER_ID=UDEFAULT\nSLACK_DEFAULT_DM_EMAIL=default@example.com\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("src.infra.settings.get_env_file_path", lambda: env_path)
+    monkeypatch.setitem(AppSettings.model_config, "env_file", str(env_path))
+    for name in ("BENCHMARK_SLACK_USER_ID", "BENCHMARK_SLACK_EMAIL", "SLACK_DEFAULT_USER_ID", "SLACK_DEFAULT_DM_EMAIL"):
+        monkeypatch.delenv(name, raising=False)
+    get_settings.cache_clear()
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("[runtime]\njudge_enabled = false\n", encoding="utf-8")
+    fixtures_path = tmp_path / "cases.jsonl"
+    fixtures_path.write_text(BenchmarkCase(
+        case_id="channel_only", category="tool_action", query="share this", expected_tools=["slack_notify"],
+        slack_recipient={"kind": "channel", "value": "CBENCH"},
+    ).model_dump_json() + "\n", encoding="utf-8")
+    args = SimpleNamespace(
+        mode="online", endpoint="http://benchmark.invalid", config=config_path, track="smoke", limit=None,
+        fixtures=fixtures_path, output_root=tmp_path / "output", live_slack=True,
+        live_slack_channel_id=None, live_slack_user_id=None, live_slack_email=None,
+    )
+    payloads = []
+
+    def post(_url, **kwargs):
+        payloads.append(kwargs["json"])
+        return sse_http_response(200, {"response": {**plain_response("shared"), "actions": [slack_action(channel_id="CLIVE")]}})
+
+    monkeypatch.setattr("src.app.client.requests.post", post)
+    yield args, env_path, payloads
+    get_settings.cache_clear()
+
+
+def test_channel_only_cli_run_ignores_invalid_unused_app_dm_default(live_cli_case):
+    args, _, payloads = live_cli_case
+    assert command_run(args) == 0
+    assert len(payloads) == 1
+    assert payloads[0]["slack_recipient"] == {"kind": "channel", "value": "CLIVE"}
+
+
+def test_cli_run_without_slack_ignores_invalid_unused_app_dm_default(live_cli_case):
+    args, _, payloads = live_cli_case
+    args.fixtures.write_text(BenchmarkCase(
+        case_id="no_slack", category="docs_only", query="hello",
+    ).model_dump_json() + "\n", encoding="utf-8")
+    assert command_run(args) == 0
+    assert len(payloads) == 1
+    assert "slack_recipient" not in payloads[0]
+
+
+@pytest.fixture
+def live_dm_cli_case(live_cli_case):
+    args, env_path, payloads = live_cli_case
+    args.fixtures.write_text(BenchmarkCase(
+        case_id="dm_only", category="tool_action", query="share this", expected_tools=["slack_notify"],
+        slack_recipient={"kind": "user", "value": "UBENCH"},
+    ).model_dump_json() + "\n", encoding="utf-8")
+    return args, env_path, payloads
+
+
+def test_cli_dm_case_reports_invalid_app_default_before_http(live_dm_cli_case, empty_upload_manifest_http):
+    args, _, payloads = live_dm_cli_case
+    with pytest.raises(ValueError, match="SLACK_DEFAULT_USER_ID.*SLACK_DEFAULT_DM_EMAIL.*--live-slack"):
+        command_run(args)
+    assert payloads == []
+    assert empty_upload_manifest_http == []
+
+
+def test_cli_dm_case_uses_valid_app_default_when_no_override(live_dm_cli_case):
+    args, env_path, payloads = live_dm_cli_case
+    env_path.write_text(env_path.read_text(encoding="utf-8").replace(
+        "SLACK_DEFAULT_DM_EMAIL=default@example.com\n", ""), encoding="utf-8")
+    assert command_run(args) == 0
+    assert len(payloads) == 1
+    assert payloads[0]["slack_recipient"] == {"kind": "user", "value": "UDEFAULT"}
+
+
+@pytest.mark.parametrize("source", ["cli", "environment"])
+@pytest.mark.parametrize("kind, value", [("user", "UEXPLICIT"), ("email", "explicit@example.com")])
+def test_explicit_live_dm_bypasses_invalid_app_default(live_dm_cli_case, source, kind, value):
+    args, env_path, payloads = live_dm_cli_case
+    suffix = "user_id" if kind == "user" else "email"
+    if source == "cli":
+        setattr(args, "live_slack_" + suffix, value)
+    else:
+        with env_path.open("a", encoding="utf-8") as env_file:
+            env_file.write(f"BENCHMARK_SLACK_{suffix.upper()}={value}\n")
+    assert command_run(args) == 0
+    assert len(payloads) == 1
+    assert payloads[0]["slack_recipient"] == {"kind": kind, "value": value}
+
+
+@pytest.mark.parametrize("source, user_id, email", [
+    ("cli", "UEXPLICIT", "explicit@example.com"),
+    ("environment", "UEXPLICIT", "explicit@example.com"),
+    ("cli", None, "   "),
+    ("environment", None, "not-an-email"),
+])
+def test_channel_only_cli_run_rejects_invalid_explicit_dm_input(
+    live_cli_case, empty_upload_manifest_http, source, user_id, email,
+):
+    args, env_path, payloads = live_cli_case
+    if source == "cli":
+        args.live_slack_user_id, args.live_slack_email = user_id, email
+    else:
+        with env_path.open("a", encoding="utf-8") as env_file:
+            for name, value in (("USER_ID", user_id), ("EMAIL", email)):
+                if value is not None:
+                    env_file.write(f"BENCHMARK_SLACK_{name}={value}\n")
+    with pytest.raises(ValueError):
+        command_run(args)
+    assert payloads == []
+    assert empty_upload_manifest_http == []
+
+
+def test_direct_live_slack_configuration_rejects_channel_as_dm_default():
+    with pytest.raises(ValueError, match="DM default must be a user or email"):
+        BenchmarkLiveSlackConfig(dm_default={"selector": {"kind": "channel", "value": "C123"}})
+
+
+@pytest.mark.parametrize("cli, env, expected", [
+    ((None, "cli@example.com"), ("UENV", None), ("email", "cli@example.com")),
+    ((None, None), (None, "env@example.com"), ("email", "env@example.com")),
+    ((None, None), (None, None), ("user", "UDEFAULT")),
+])
+def test_live_dm_source_precedence_selects_a_whole_recipient(cli, env, expected):
+    selector = resolve_live_slack_dm_recipient(
+        SimpleNamespace(live_slack_user_id=cli[0], live_slack_email=cli[1]),
+        SimpleNamespace(live_slack_user_id=env[0], live_slack_email=env[1]),
+    )
+    selector = BenchmarkLiveSlackConfig(
+        dm_recipient=selector,
+        dm_default=AppSettings(_env_file=None, slack_default_user_id="UDEFAULT", slack_default_dm_email=None).slack_default_recipient(),
+    ).resolve_dm_recipient()
+    assert (selector.kind, selector.value) == expected
+
+
+@pytest.mark.parametrize("cli, env", [
+    (("UCLI", "cli@example.com"), (None, None)),
+    ((None, None), ("UENV", "env@example.com")),
+    ((None, "   "), ("UENV", None)),
+    ((None, None), (None, "not-an-email")),
+])
+def test_invalid_selected_dm_source_cannot_fall_back(cli, env):
+    with pytest.raises(ValueError):
+        resolve_live_slack_dm_recipient(
+            SimpleNamespace(live_slack_user_id=cli[0], live_slack_email=cli[1]),
+            SimpleNamespace(live_slack_user_id=env[0], live_slack_email=env[1]),
+        )
 
 
 class BenchmarkCLIEnvResolutionTest(unittest.TestCase):
@@ -164,9 +320,10 @@ class BenchmarkCLIEnvResolutionTest(unittest.TestCase):
             live_slack_enabled=True,
             live_slack_channel_id="CENV",
             live_slack_user_id="UENV",
-            live_slack_email="env@example.com",
+            live_slack_email=None,
         )
-        mock_get_settings.return_value = SimpleNamespace(
+        mock_get_settings.return_value = AppSettings(
+            _env_file=None,
             slack_default_user_id="UDEFAULT",
             slack_default_dm_email="default@example.com",
         )
@@ -186,7 +343,7 @@ class BenchmarkCLIEnvResolutionTest(unittest.TestCase):
             output_root=Path("output/benchmarks"),
             live_slack=False,
             live_slack_channel_id="CCLI",
-            live_slack_user_id="UCLI",
+            live_slack_user_id=None,
             live_slack_email="cli@example.com",
         )
 
@@ -198,8 +355,7 @@ class BenchmarkCLIEnvResolutionTest(unittest.TestCase):
         self.assertTrue(kwargs["config"].judge_enabled)
         self.assertTrue(kwargs["live_slack"].enabled)
         self.assertEqual(kwargs["live_slack"].channel_id, "CCLI")
-        self.assertEqual(kwargs["live_slack"].user_id, "UCLI")
-        self.assertEqual(kwargs["live_slack"].email, "cli@example.com")
+        self.assertEqual(kwargs["live_slack"].dm_recipient.model_dump(), {"kind": "email", "value": "cli@example.com"})
 
     @patch("src.app.client.requests.post")
     @patch("src.eval.online_runner.case_runner.load_cases_jsonl")
@@ -214,13 +370,13 @@ class BenchmarkCLIEnvResolutionTest(unittest.TestCase):
                 category="tool_action",
                 query="share this to slack",
                 expected_tools=["slack_notify"],
-                slack_channel_id="C123BENCH",
+                slack_recipient={"kind": "channel", "value": "C123BENCH"},
             )
         ]
         mock_post.return_value = sse_http_response(
             200,
             {
-                "response": {**plain_response('shared'), "actions": [{'kind': 'slack_notify', 'status': 'success', 'target': 'CENVLIVE', 'message': None, 'error': None}]},
+                "response": {**plain_response('shared'), "actions": [slack_action(channel_id="CENVLIVE")]},
                 "trace": "trace-id",
                 "debug": {
                     "schema_version": DEBUG_SCHEMA_VERSION,
@@ -264,8 +420,6 @@ class BenchmarkCLIEnvResolutionTest(unittest.TestCase):
             live_slack = BenchmarkLiveSlackConfig(
                 enabled=benchmark_env.live_slack_enabled,
                 channel_id=benchmark_env.live_slack_channel_id,
-                user_id=benchmark_env.live_slack_user_id,
-                email=benchmark_env.live_slack_email,
             )
 
             _, _, summary = run_online_benchmark(
@@ -279,7 +433,7 @@ class BenchmarkCLIEnvResolutionTest(unittest.TestCase):
             )
 
         payload = mock_post.call_args.kwargs["json"]
-        self.assertEqual(payload["slack_channel_id"], "CENVLIVE")
+        self.assertEqual(payload["slack_recipient"], {"kind": "channel", "value": "CENVLIVE"})
         gate = next(gate for gate in summary.gates if gate.name == "slack_delivery_success_rate")
         self.assertEqual(gate.status, "evaluated")
         self.assertEqual(gate.actual, 1.0)

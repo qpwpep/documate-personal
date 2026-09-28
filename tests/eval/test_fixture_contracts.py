@@ -9,6 +9,16 @@ from src.eval.online_runner.scenario_inputs import resolve_fixture_uploads
 
 
 class FixtureContractsTest(unittest.TestCase):
+    def test_obsolete_slack_fields_are_rejected_instead_of_discarded(self) -> None:
+        for field in ("slack_channel_id", "slack_user_id", "slack_email"):
+            for value in (None, "explicit-value"):
+                with self.subTest(field=field, value=value), self.assertRaisesRegex(ValidationError, field):
+                    BenchmarkCase.model_validate({
+                        "case_id": "obsolete", "category": "tool_action", "query": "보내줘",
+                        "slack_recipient": {"kind": "user", "value": "U123"}, field: value,
+                        "author_extension": {"retain": ["authored", "data"]},
+                    })
+
     def test_save_fixtures_declare_an_independent_target_and_required_outcome(self) -> None:
         for path in Path("data/benchmarks/fixtures").glob("cases.*.jsonl"):
             for case in load_cases_jsonl(path):
@@ -87,7 +97,7 @@ class FixtureContractsTest(unittest.TestCase):
                 if "slack_notify" not in case.expected_tools:
                     continue
                 self.assertTrue(
-                    bool(case.slack_channel_id or case.slack_user_id or case.slack_email),
+                    case.slack_recipient is not None,
                     msg=f"{path}: {case.case_id}",
                 )
 
