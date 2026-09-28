@@ -1,6 +1,8 @@
 """The sole source of current case and run release decisions."""
 from __future__ import annotations
 
+import hashlib
+import json
 from typing import Any, Literal, TYPE_CHECKING
 
 from pydantic import BaseModel, Field
@@ -14,11 +16,19 @@ if TYPE_CHECKING:
 
 
 DECISION_CONTRACT_VERSION = 1
+REQUIRED_RELEASE_GATES = frozenset({
+    "tool_execution_policy", "save_outcome_contract", "evaluation_completeness", "release_pass_rate",
+    "tool_precision", "tool_recall", "citation_compliance", "p95_latency_ms", "avg_cost_per_case_usd",
+})
 
 
 class CaseDecision(BaseModel):
     passed: bool
     failure_codes: list[str] = Field(default_factory=list)
+
+
+class ReleaseDecision(CaseDecision):
+    scope: Literal["release", "diagnostic"]
 
 
 def policy_for_case(case: BenchmarkCase) -> ToolPolicySpec:
@@ -68,3 +78,22 @@ def refresh_case_decision(result: CaseResult, case: BenchmarkCase | None = None)
     result.final_score = result.composite_quality_score
     result.judge_gate_passed = result.judge_pass
     return decision
+
+
+def decide_release(*, gates: list[GateResult], track: str, policy_failure_codes: list[str]) -> ReleaseDecision:
+    reasons = list(policy_failure_codes)
+    for name in sorted(REQUIRED_RELEASE_GATES):
+        matched = [gate for gate in gates if gate.name == name]
+        if len(matched) != 1 or matched[0].gate_type != "release":
+            reasons.append("release_gate_contract_invalid")
+    reasons.extend(gate.name for gate in gates if gate.gate_type == "release" and not gate.passed)
+    if track != "release":
+        reasons.append("diagnostic_run")
+    return ReleaseDecision(passed=not reasons, failure_codes=list(dict.fromkeys(reasons)),
+                           scope="release" if track == "release" else "diagnostic")
+
+
+def results_fingerprint(results: list[CaseResult]) -> str:
+    payload = [result.model_dump(mode="json") for result in results]
+    canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()

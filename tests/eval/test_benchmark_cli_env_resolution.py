@@ -330,7 +330,9 @@ class BenchmarkCLIEnvResolutionTest(unittest.TestCase):
         mock_run_online_benchmark.return_value = (
             Path("output/benchmarks/run"),
             [],
-            SimpleNamespace(track="release", overall_passed=True),
+            SimpleNamespace(track="release", release_decision=SimpleNamespace(
+                scope="release", passed=True, failure_codes=[],
+            )),
         )
 
         args = SimpleNamespace(

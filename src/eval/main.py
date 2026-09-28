@@ -117,8 +117,13 @@ def command_run(args: argparse.Namespace) -> int:
     print(f"Run directory: {run_dir}")
     print(f"Track: {summary.track}")
     if summary.track == "release":
-        print(f"Overall: {'PASS' if summary.overall_passed else 'FAIL'}")
-        return 0 if summary.overall_passed else 1
+        decision = summary.release_decision
+        if decision is None or decision.scope != "release":
+            raise ValueError("A release run requires a current release decision")
+        print(f"Overall: {'PASS' if decision.passed else 'FAIL'}")
+        if decision.failure_codes:
+            print("Release failures: " + ", ".join(decision.failure_codes))
+        return 0 if decision.passed else 1
     print("Overall: diagnostic run complete (smoke track; not a release verdict)")
     return 0
 

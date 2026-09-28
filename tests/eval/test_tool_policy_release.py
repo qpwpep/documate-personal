@@ -66,6 +66,27 @@ def test_maximum_quality_cannot_offset_forbidden_execution():
     assert "forbidden_tool_execution" in result.gate_failures
 
 
+def test_nine_good_cases_cannot_dilute_one_policy_violation():
+    pairs = [_result(index, forbidden=index == 9) for index in range(10)]
+    summary = _summary(pairs)
+    assert summary.overall_passed is False
+    gates = {gate.name: gate for gate in summary.gates}
+    assert gates["release_pass_rate"].passed is True
+    assert gates["tool_precision"].passed is True
+    assert gates["tool_execution_policy"].passed is False
+    assert gates["tool_execution_policy"].actual == 1
+    assert "forbidden_tool_execution" in summary.release_decision.failure_codes
+
+
+def test_case_failure_alone_is_not_a_run_policy_gate():
+    pairs = [_result(index, forbidden=index == 9) for index in range(10)]
+    pairs[-1][1].release_pass = False
+    pairs[-1][1].passed = False
+    pairs[-1][1].gate_failures = ["forbidden_tool_execution"]
+    summary = _summary(pairs)
+    assert summary.overall_passed is False
+
+
 def test_missing_execution_evidence_blocks_release():
     _, result = _result(evidence=False)
     assert result.release_pass is False
@@ -82,6 +103,25 @@ def test_execution_failure_does_not_erase_forbidden_start(phase):
 def test_blocked_before_invocation_can_pass():
     _, result = _result(forbidden=True, phase="blocked")
     assert result.release_pass is True
+
+
+def test_complete_authorized_execution_can_pass():
+    pair = _result()
+    assert pair[1].release_pass is True
+    assert _summary([pair]).overall_passed is True
+
+
+@pytest.mark.parametrize("diagnostics", [None, 1, [{"tool": "tavily_search", "status": []}]])
+def test_perfect_quality_cannot_hide_invalid_retrieval_observations(diagnostics):
+    """A perfect judge cannot turn malformed current diagnostics into release evidence."""
+    pair = _result(debug_overrides={"retrieval_diagnostics": diagnostics})
+    result = pair[1]
+
+    assert result.release_pass is False
+    assert any("retrieval_diagnostics" in error for error in result.response_errors)
+    assert result.policy_assessment.status == "indeterminate"
+    assert "tool_execution_retrieval_diagnostics_invalid" in result.policy_assessment.failure_codes
+    assert _summary([pair]).overall_passed is False
 
 
 def test_receipt_cannot_claim_success_without_execution_evidence():
@@ -139,6 +179,22 @@ def test_reused_origin_must_be_observable_in_the_scenario():
     assert "tool_execution_reuse_unverifiable" in result.gate_failures
 
 
+def test_unplanned_scenario_turn_cannot_be_ignored():
+    pair = _result()
+    pair[1].scenario_turns = [_setup_turn(["slack_notify"]), _setup_turn([])]
+    summary = _summary([pair])
+    assert summary.overall_passed is False
+    assert "tool_execution_turn_coverage_invalid" in summary.release_decision.failure_codes
+
+
+def test_final_turn_copy_must_match_the_case_execution_evidence():
+    pair = _result()
+    pair[1].scenario_turns = [_setup_turn(["slack_notify"])]
+    summary = _summary([pair])
+    assert summary.overall_passed is False
+    assert "tool_execution_final_turn_mismatch" in summary.release_decision.failure_codes
+
+
 def test_setup_policy_violation_blocks_a_perfect_final_answer():
     _, result = _result(prior_turns=[_setup_turn(["slack_notify"])], setup_forbidden_tools=[["slack_notify"]])
     assert result.release_pass is False
@@ -178,8 +234,37 @@ def test_current_policy_snapshot_rejects_unknown_prohibited_tool():
         CaseResult.model_validate(payload)
 
 
+def test_reassessment_cannot_replace_the_policy_that_detected_a_violation():
+    case, result = _result(forbidden=True)
+    changed = case.model_copy(update={"forbidden_tools": []})
+    with pytest.raises(ValueError, match="policy.*snapshot"):
+        _summary([(changed, result)])
+    assert result.release_pass is False
+    assert result.policy_assessment.status == "violated"
+
+
 @pytest.mark.parametrize("overrides", [{"tool_calls": ["tavily_search", "slack_notify"]}, {"tool_call_count": 9}])
 def test_complete_journal_cannot_hide_conflicting_execution_observations(overrides):
     _, result = _result(debug_overrides=overrides)
     assert result.release_pass is False
     assert "tool_execution_observation_conflict" in result.gate_failures
+
+
+def test_forbidden_failure_survives_a_successful_retry_with_perfect_quality():
+    raw = _evidence(forbidden=True, phase="failed")
+    for phase in ("started", "succeeded"):
+        raw["events"].append({"sequence": len(raw["events"]) + 1, "invocation_id": "allowed-retry",
+                              "tool_name": "tavily_search", "phase": phase})
+    pair = _result(forbidden=True, debug_overrides={"execution_evidence": raw, "tool_call_count": 3})
+    assert pair[1].release_pass is False
+    assert "forbidden_tool_execution" in _summary([pair]).release_decision.failure_codes
+
+
+def test_forbidden_setup_execution_survives_successful_final_reuse():
+    raw = _evidence()
+    raw["events"].append({"sequence": 3, "invocation_id": "reuse-1", "tool_name": "slack_notify",
+                          "phase": "reused", "origin_invocation_id": "setup-req-invocation-1"})
+    pair = _result(prior_turns=[_setup_turn(["slack_notify"])], setup_forbidden_tools=[["slack_notify"]],
+                   debug_overrides={"execution_evidence": raw})
+    assert pair[1].release_pass is False
+    assert "forbidden_tool_execution" in _summary([pair]).release_decision.failure_codes

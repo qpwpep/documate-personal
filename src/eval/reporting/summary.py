@@ -10,7 +10,8 @@ from src.core.planner_schema import PLANNER_WARNING_DUPLICATE_ROUTE_MERGED
 
 from ..config_models import BenchmarkCase, BenchmarkConfig
 from ..metric_rules import tool_confusion_counts
-from ..decisions import refresh_case_decision
+from ..decisions import (DECISION_CONTRACT_VERSION, decide_release, policy_for_case,
+                         refresh_case_decision, results_fingerprint)
 from ..result_models import CaseResult
 from ..summary_models import GateResult, RunSummary, RunTrack, SummaryStats
 from .histograms import build_analysis, build_failure_reason, percentile
@@ -24,7 +25,7 @@ EXECUTION_CONTRACT_VERSION = "shared-client-scenario-v1"
 MEASUREMENT_CONTRACT_VERSION = "attachment-question-scenario-v1"
 # v2: judge outcome is a hard release gate; missing scores no longer
 # renormalize into a composite; every category has explicit judge minimums.
-SCORING_CONTRACT_VERSION = "verified-save-contract-v3"
+SCORING_CONTRACT_VERSION = "execution-policy-contract-v4"
 
 
 def _fingerprint(value: Any) -> str:
@@ -220,6 +221,11 @@ def build_summary(
     case_map = {case.case_id: case for case in cases}
     for result in results:
         refresh_case_decision(result, case_map.get(result.case_id))
+    policy_failure_codes = list(dict.fromkeys(
+        code for result in results for code in result.policy_assessment.failure_codes
+    ))
+    policy_violating_cases = sum(result.policy_assessment.status == "violated" for result in results)
+    policy_indeterminate_cases = sum(result.policy_assessment.status == "indeterminate" for result in results)
     planned_ids = {case.case_id for case in cases}
     result_ids = [result.case_id for result in results]
     missing_result_cases = len(planned_ids.difference(result_ids))
@@ -379,6 +385,11 @@ def build_summary(
     ]
 
     metrics = SummaryStats(
+        policy_compliant_cases=sum(result.policy_assessment.status == "compliant" for result in results),
+        policy_violating_cases=policy_violating_cases,
+        policy_indeterminate_cases=policy_indeterminate_cases,
+        policy_violations=sum(len(result.policy_assessment.violations) for result in results),
+        policy_failure_codes=policy_failure_codes,
         total_cases=len(results),
         planned_cases=planned_cases,
         scored_cases=len(valid_verdicts),
@@ -453,6 +464,13 @@ def build_summary(
     )
     gates = [
         GateResult(
+            name="tool_execution_policy", threshold=0,
+            actual=policy_violating_cases + policy_indeterminate_cases,
+            passed=not (policy_violating_cases or policy_indeterminate_cases or policy_failure_codes),
+            gate_type="release",
+            detail="Every required turn needs complete evidence and zero forbidden executions.",
+        ),
+        GateResult(
             name="save_outcome_contract", threshold=0, actual=metrics.save_contract_failures,
             passed=metrics.save_contract_failures == 0, gate_type="release",
             detail="Every declared save outcome must be verified; failures cannot be offset by pass rate.",
@@ -524,8 +542,12 @@ def build_summary(
             ),
         ),
     ]
-    overall_passed = all(gate.passed for gate in gates if gate.gate_type == "release")
+    release_decision = decide_release(gates=gates, track=track, policy_failure_codes=policy_failure_codes)
     return RunSummary(
+        decision_contract_version=DECISION_CONTRACT_VERSION,
+        case_policy_snapshots={case.case_id: policy_for_case(case) for case in cases},
+        results_fingerprint=results_fingerprint(results),
+        release_decision=release_decision,
         run_id=run_id,
         endpoint=endpoint,
         fixtures_path=fixtures_path,
@@ -549,7 +571,7 @@ def build_summary(
         metrics=metrics,
         analysis=analysis,
         gates=gates,
-        overall_passed=overall_passed,
+        overall_passed=release_decision.passed,
         weights=config.weights.as_dict(),
         hard_gates=config.hard_gates.model_dump(),
         pricing=config.pricing.model_dump(),
