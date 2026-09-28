@@ -106,6 +106,7 @@ class BenchmarkCase(BaseModel):
     scenario: CaseScenario = "seed_mutation"
     query: str
     setup_turns: list[str] = Field(default_factory=list)
+    setup_forbidden_tools: list[list[str]] | None = None
     upload_fixtures: list[str] = Field(default_factory=list)
     upload_fixture: str | None = None
     slack_recipient: RecipientSelector | None = None
@@ -138,6 +139,8 @@ class BenchmarkCase(BaseModel):
 
     @model_validator(mode="after")
     def validate_upload_declarations(self) -> "BenchmarkCase":
+        if self.setup_forbidden_tools is not None and len(self.setup_forbidden_tools) != len(self.setup_turns):
+            raise ValueError("setup_forbidden_tools must define exactly one policy per setup turn")
         if self.upload_fixture and self.upload_fixtures:
             raise ValueError("Use upload_fixtures or legacy upload_fixture, not both")
         target = self.save_expectation.target if self.save_expectation else None
