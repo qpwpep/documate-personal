@@ -15,10 +15,74 @@ from src.eval.io import dump_jsonl
 from src.eval.judge_llm import LLMJudge
 from src.eval.main import command_report
 from src.eval.online_runner import _run_single_case, run_online_benchmark
+from src.eval.reporting.writer import load_run_outputs
 from tests.eval.response_fixtures import answer_provenance, execution_evidence, plain_response, sse_http_response
 
 
 pytestmark = pytest.mark.usefixtures("empty_upload_manifest_http")
+
+
+@pytest.mark.parametrize("setup", [False, True], ids=["final", "preparation"])
+@pytest.mark.parametrize("value", [
+    None,
+    1,
+    [{"tool": "upload_search", "status": []}],
+    [{"tool": {}, "status": "success"}],
+    [{"tool": "upload_search", "status": "success", "invocation_id": []}],
+    ["not an object"],
+    [{}],
+    "missing",
+], ids=["null", "scalar", "status-type", "tool-type", "invocation-type", "item-type", "empty-item", "missing"])
+def test_invalid_retrieval_observation_retains_failed_case_and_regenerates_report(
+    setup, value, tmp_path, monkeypatch,
+):
+    """A malformed observation fails its turn without discarding later cases or saved evidence."""
+    questions = []
+
+    def post(url, *, json, **kwargs):
+        questions.append(json["query"])
+        payload = response_payload()
+        if json["query"] == "broken diagnostics":
+            if value == "missing":
+                payload["debug"].pop("retrieval_diagnostics")
+            else:
+                payload["debug"]["retrieval_diagnostics"] = value
+        return sse_http_response(200, payload)
+
+    monkeypatch.setattr(requests, "post", post)
+    fixtures = tmp_path / "cases.jsonl"
+    dump_jsonl(fixtures, [
+        BenchmarkCase(case_id="broken", category="tool_action",
+                      query="dependent action" if setup else "broken diagnostics",
+                      setup_turns=["broken diagnostics"] if setup else [],
+                      setup_forbidden_tools=[[]] if setup else None),
+        BenchmarkCase(case_id="following", category="tool_action", query="valid diagnostics"),
+    ])
+    output, results, summary = run_online_benchmark(
+        fixtures_path=fixtures, endpoint="http://fixture", config=BenchmarkConfig(judge_enabled=False),
+        config_path=tmp_path / "config.toml", output_root=tmp_path / "results", track="smoke",
+    )
+
+    assert questions == ["broken diagnostics", "valid diagnostics"]
+    first, following = results
+    assert any("retrieval_diagnostics" in error for error in first.response_errors)
+    assert first.policy_assessment.status == "indeterminate"
+    assert "tool_execution_retrieval_diagnostics_invalid" in first.policy_assessment.failure_codes
+    assert not first.release_pass
+    assert first.scenario_turns[0].debug.get("retrieval_diagnostics", "missing") == value
+    assert first.cost_usd == pytest.approx(0.0000027)
+    assert following.runtime_errors == following.response_errors == []
+    assert following.policy_assessment.status == "compliant"
+    assert summary.metrics.total_cases == 2
+
+    originals = {name: (output / name).read_bytes() for name in ("summary.json", "raw_results.jsonl")}
+    loaded_summary, loaded_results = load_run_outputs(output)
+    assert loaded_summary.model_dump() == summary.model_dump()
+    assert [result.policy_assessment for result in loaded_results] == [result.policy_assessment for result in results]
+    assert loaded_results[0].scenario_turns[0].debug == first.scenario_turns[0].debug
+    assert command_report(SimpleNamespace(run=output)) == 0
+    assert (output / "report.md").is_file()
+    assert {name: (output / name).read_bytes() for name in originals} == originals
 
 
 @pytest.mark.parametrize("setup", [False, True], ids=["final", "preparation"])

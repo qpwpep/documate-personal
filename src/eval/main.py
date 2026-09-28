@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 from pathlib import Path
 
@@ -18,9 +17,9 @@ from .history_report import refresh_history_report
 from .io import load_config
 from .online_runner import run_online_benchmark
 from .reporting import build_markdown_report
+from .reporting.writer import load_report_inputs
 from .config_models import BenchmarkConfig, BenchmarkLiveSlackConfig
-from .result_models import CaseResult
-from .summary_models import RunSummary, RunTrack
+from .summary_models import RunTrack
 from src.infra.settings import get_settings, load_benchmark_cli_env_settings
 from src.core.slack_contract import RecipientSelector, SlackDefault
 
@@ -144,26 +143,9 @@ def resolve_live_slack_dm_recipient(args, benchmark_env) -> RecipientSelector | 
 
 def command_report(args: argparse.Namespace) -> int:
     run_path = args.run.resolve()
-    summary_path = run_path / "summary.json"
-    raw_path = run_path / "raw_results.jsonl"
     report_path = run_path / "report.md"
-
-    if not summary_path.exists():
-        raise FileNotFoundError(f"summary.json not found: {summary_path}")
-    if not raw_path.exists():
-        raise FileNotFoundError(f"raw_results.jsonl not found: {raw_path}")
-
-    summary = RunSummary(**json.loads(summary_path.read_text(encoding="utf-8")))
-
-    # Validate raw result lines for report regeneration safety.
-    results: list[CaseResult] = []
-    for line in raw_path.read_text(encoding="utf-8").splitlines():
-        record = line.strip()
-        if not record:
-            continue
-        results.append(CaseResult.model_validate_json(record))
-
-    report_path.write_text(build_markdown_report(summary, results), encoding="utf-8")
+    inputs = load_report_inputs(run_path)
+    report_path.write_text(build_markdown_report(inputs.summary, inputs.current_results), encoding="utf-8")
     print(f"Regenerated report: {report_path}")
     return 0
 

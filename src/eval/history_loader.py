@@ -48,7 +48,12 @@ def _parse_generated_at(summary: RunSummary) -> datetime:
 
 def _read_summary(path: Path) -> tuple[RunSummary, bool]:
     payload = json.loads(path.read_text(encoding="utf-8"))
-    return RunSummary(**payload), "track" in payload
+    summary = RunSummary(**payload)
+    if summary.decision_contract_version is not None:
+        from .reporting.writer import load_run_outputs
+
+        summary, _ = load_run_outputs(path.parent)
+    return summary, "track" in payload
 
 
 def load_history_runs(output_root: Path) -> list[StoredRun]:
@@ -122,6 +127,7 @@ def select_comparable_runs(
         run
         for run in runs
         if run.track == latest.track
+        and run.summary.decision_contract_version == latest.summary.decision_contract_version
         and run.summary.fixtures_path == fixtures_path
         and run.metrics.total_cases == total_cases
         and run.summary.execution_contract_version == latest.summary.execution_contract_version

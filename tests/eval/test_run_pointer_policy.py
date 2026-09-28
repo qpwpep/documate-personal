@@ -1,4 +1,4 @@
-from tests.eval.response_fixtures import plain_response
+from tests.eval.response_fixtures import execution_evidence, plain_response
 import json
 import unittest
 from pathlib import Path
@@ -24,6 +24,12 @@ def _case(case_id: str) -> BenchmarkCase:
 def _result(run_id: str, case: BenchmarkCase) -> CaseResult:
     return CaseResult.model_validate(
         {
+            "decision_contract_version": 1,
+            "judge_status": "disabled", "eval_validity": "incomplete",
+            "policy_snapshot": {"final_forbidden_tools": case.forbidden_tools,
+                                "setup_turn_count": len(case.setup_turns)},
+            "execution_evidence": execution_evidence(case.expected_tools, request_id=f"req-{case.case_id}"),
+            "request_id": f"req-{case.case_id}",
             "run_id": run_id,
             "case_id": case.case_id,
             "category": case.category,
@@ -105,7 +111,7 @@ class RunPointerPolicyTest(unittest.TestCase):
 
             case = _case("docs_only_001")
             dump_jsonl(fixtures_path, [case])
-            mock_run_single_case.return_value = _result("unused-run-id", case)
+            mock_run_single_case.side_effect = lambda **kwargs: _result(kwargs["run_id"], kwargs["case"])
 
             run_dir, _, summary = run_online_benchmark(
                 fixtures_path=fixtures_path,
@@ -139,7 +145,7 @@ class RunPointerPolicyTest(unittest.TestCase):
 
             case = _case("docs_only_001")
             dump_jsonl(fixtures_path, [case])
-            mock_run_single_case.return_value = _result("unused-run-id", case)
+            mock_run_single_case.side_effect = lambda **kwargs: _result(kwargs["run_id"], kwargs["case"])
 
             run_dir, _, summary = run_online_benchmark(
                 fixtures_path=fixtures_path,
