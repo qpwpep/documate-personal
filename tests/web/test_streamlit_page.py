@@ -13,6 +13,8 @@ class _FakeStreamlit:
         self.query_params: dict[str, str] = {}
         self.session_state: dict[str, object] = {}
         self.button_labels: list[str] = []
+        self.input_values: dict[str, str] = {}
+        self.errors: list[str] = []
         self.sidebar = nullcontext()
 
     def set_page_config(self, **kwargs) -> None:
@@ -32,10 +34,38 @@ class _FakeStreamlit:
         return self.session_state.get(key, options[index])
 
     def text_input(self, label: str, *, value: str, **kwargs) -> str:
-        return value
+        return self.input_values.get(label, value)
+
+    def error(self, message: str) -> None:
+        self.errors.append(message)
 
 
 class StreamlitPageTest(unittest.TestCase):
+    def test_sidebar_selects_one_typed_slack_recipient(self) -> None:
+        fake_st = _FakeStreamlit()
+        fake_st.session_state["documate_slack_recipient_kind"] = "이메일"
+        fake_st.input_values["Slack 수신자"] = "selected@example.com"
+        with patch.object(streamlit_sidebar, "st", fake_st), patch.object(streamlit_theme, "st", fake_st):
+            selected = streamlit_sidebar.render_sidebar()
+        self.assertEqual(selected.slack_recipient.model_dump(), {"kind": "email", "value": "selected@example.com"})
+        self.assertIsNone(selected.slack_recipient_error)
+
+    def test_sidebar_blank_explicit_recipient_is_an_error(self) -> None:
+        fake_st = _FakeStreamlit()
+        fake_st.session_state["documate_slack_recipient_kind"] = "사용자"
+        with patch.object(streamlit_sidebar, "st", fake_st), patch.object(streamlit_theme, "st", fake_st):
+            selected = streamlit_sidebar.render_sidebar()
+        self.assertIsNone(selected.slack_recipient)
+        self.assertIsNotNone(selected.slack_recipient_error)
+        self.assertEqual(fake_st.errors, [selected.slack_recipient_error])
+
+    def test_sidebar_unspecified_recipient_has_no_input_error(self) -> None:
+        fake_st = _FakeStreamlit()
+        with patch.object(streamlit_sidebar, "st", fake_st), patch.object(streamlit_theme, "st", fake_st):
+            selected = streamlit_sidebar.render_sidebar()
+        self.assertIsNone(selected.slack_recipient)
+        self.assertIsNone(selected.slack_recipient_error)
+
     def test_render_theme_styles_emits_light_override(self) -> None:
         fake_st = _FakeStreamlit()
 

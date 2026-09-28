@@ -12,6 +12,7 @@ from urllib3.exceptions import ReadTimeoutError
 
 from src.app.uploads import PendingUploadOperation, UploadStageResult, stage_uploaded_files
 from src.core.answer_schema import AnswerResponse
+from src.core.slack_contract import RecipientSelector
 from src.core.uploads import UploadContext, UploadManifest, UploadSyncResponse
 from src.infra.sse import iter_sse_events
 
@@ -20,9 +21,7 @@ from src.infra.sse import iter_sse_events
 class AgentRequestContext:
     fastapi_url: str
     session_id: str
-    slack_user_id: str = ""
-    slack_email: str = ""
-    slack_channel_id: str = ""
+    slack_recipient: RecipientSelector | None = None
     upload_file_path: str | None = None
     uploads: UploadContext | None = None
     include_debug: bool = False
@@ -240,12 +239,8 @@ def build_agent_payload(user_input: str, context: AgentRequestContext) -> dict[s
         "session_id": context.session_id,
     }
 
-    if context.slack_user_id:
-        payload["slack_user_id"] = context.slack_user_id
-    if context.slack_email:
-        payload["slack_email"] = context.slack_email
-    if context.slack_channel_id:
-        payload["slack_channel_id"] = context.slack_channel_id
+    if context.slack_recipient is not None:
+        payload["slack_recipient"] = RecipientSelector.model_validate(context.slack_recipient).model_dump(mode="json")
     if context.upload_file_path:
         payload["upload_file_path"] = context.upload_file_path
     if context.uploads is not None:

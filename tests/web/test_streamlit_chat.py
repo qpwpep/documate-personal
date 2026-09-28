@@ -1,6 +1,11 @@
 from __future__ import annotations
 
+import pytest
 from streamlit.testing.v1 import AppTest
+from src.core.slack_contract import RecipientSelector, SlackDefault
+from src.runtime.nodes.actions import make_action_postprocess_node
+from tests.core.test_actions_nodes import _contract, _state
+from tests.core.test_pending_action_delivery import delivery_tools
 
 
 def test_document_renders_content_once_and_keeps_code_layout():
@@ -175,19 +180,60 @@ with patch("requests.sessions.Session.request", request):
     assert len(app.session_state.messages) == 2
 
 
-def test_action_failure_is_separate_from_answer_content():
-    """A delivery failure is visible without modifying the canonical answer."""
-    app = AppTest.from_string('''
+@pytest.mark.parametrize("delivery_tools,code,guidance,unknown", [
+    ({"/users.lookupByEmail": {"ok": False, "error": "users_not_found"}}, "target_not_found", "ID 또는 이메일을 확인", False),
+    ({"/users.lookupByEmail": {"ok": False, "error": "missing_scope"}}, "permission_denied", "앱 권한과 설정을 확인", False),
+    ({"/users.lookupByEmail": {"ok": False, "error": "ratelimited"}}, "rate_limited", "같은 수신자로 재시도", False),
+    ({"/chat.postMessage": None}, "delivery_unknown", "Slack에서 전달 여부를 확인", True),
+], indirect=["delivery_tools"])
+def test_action_failure_is_separate_from_answer_content(delivery_tools, code, guidance, unknown):
+    """Real delivery outcomes expose the intended recipient, failure and next step without altering the answer."""
+    save, slack, sent, _output = delivery_tools
+    state = _state("본문입니다", contract=_contract(slack="requested", slack_recipient={
+        "state": "explicit", "selector": {"kind": "email", "value": "requested@example.com"},
+        "evidence_ids": ["request"],
+    }))
+    result = make_action_postprocess_node(save, slack, False,
+        SlackDefault(selector=RecipientSelector(kind="user", value="UDEFAULT")))(state)["response"].result
+    receipt = result.actions[0]
+    assert receipt.slack.failure.code == code
+    assert len([item for item in sent if item["path"] == "/chat.postMessage"]) == int(unknown)
+    app = AppTest.from_string(f'''
 from src.app.web.streamlit_chat import render_chat_history
-from src.core.answer_schema import ActionReceipt, finalize_answer, text_document
+from src.core.answer_schema import AnswerResponse
 
-response = finalize_answer(text_document("본문입니다"), [], actions=[ActionReceipt(kind="slack_notify", status="error", error="채널을 찾을 수 없습니다")])
-render_chat_history([{"role":"assistant", "response":response}], "http://localhost:8000")
+response = AnswerResponse.model_validate_json({result.model_dump_json()!r})
+render_chat_history([{{"role":"assistant", "response":response}}], "http://localhost:8000")
 ''').run()
 
     assert not app.exception
     assert [item.value for item in app.markdown] == ["본문입니다"]
-    assert any("채널을 찾을 수 없습니다" in item.value for item in app.error)
+    assert not app.success
+    alerts = app.warning if unknown else app.error
+    assert any(receipt.slack.failure.message in item.value for item in alerts)
+    assert any("requested@example.com" in item.value for item in app.caption)
+    assert any(guidance in item.value for item in app.caption)
+    assert all("UDEFAULT" not in item.value for item in app.caption)
+
+
+@pytest.mark.parametrize("explicit", [True, False])
+def test_slack_success_renders_selected_source_and_confirmed_destination(delivery_tools, explicit):
+    save, slack, sent, _output = delivery_tools
+    recipient = ({"state": "explicit", "selector": {"kind": "channel", "value": "C123"},
+                  "evidence_ids": ["request"]} if explicit else {"state": "omitted"})
+    state = _state("본문입니다", contract=_contract(slack="requested", slack_recipient=recipient))
+    result = make_action_postprocess_node(save, slack, False,
+        SlackDefault(selector=RecipientSelector(kind="user", value="UDEFAULT")))(state)["response"].result
+    app = AppTest.from_string(f'''
+from src.app.web.streamlit_chat import render_chat_history
+from src.core.answer_schema import AnswerResponse
+response = AnswerResponse.model_validate_json({result.model_dump_json()!r})
+render_chat_history([{{"role":"assistant", "response":response}}], "http://localhost:8000")
+''').run()
+    assert not app.exception
+    assert len([item for item in sent if item["path"] == "/chat.postMessage"]) == 1
+    assert any(("요청 수신자: C123" if explicit else "기본 수신자: UDEFAULT") in item.value for item in app.caption)
+    assert [item.value for item in app.success] == [f"Slack 전송 완료: {'C123' if explicit else 'DDEFAULT'}"]
 
 
 def _saved_artifact_app(*, status="success", verification="verified", expires_at=4102444800):

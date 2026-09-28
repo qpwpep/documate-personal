@@ -5,6 +5,7 @@ from typing import Any, Literal, get_args
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from src.core.answer_schema import AnswerResponse
+from src.core.slack_contract import RecipientSelector
 from src.core.conversation_memory import (
     DEFAULT_QUERY_MAX_CHARS,
     validate_query_text,
@@ -46,11 +47,11 @@ class AgentDebugInfo(BaseModel):
 
 
 class AgentRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     query: str = Field(min_length=1, max_length=DEFAULT_QUERY_MAX_CHARS)
     session_id: str
-    slack_user_id: str | None = None
-    slack_email: str | None = None
-    slack_channel_id: str | None = None
+    slack_recipient: RecipientSelector | None = None
     upload_file_path: str | None = None
     uploads: UploadContext | None = None
     include_debug: bool = False

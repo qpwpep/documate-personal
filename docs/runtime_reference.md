@@ -384,9 +384,7 @@ Streamlit과 online benchmark는 `src/app/client.py`의 `AgentSessionClient`를 
   "session_id": "demo-session",
   "uploads": {"epoch": "서버가 반환한 값", "revision": 1},
   "include_debug": true,
-  "slack_user_id": "U12345678",
-  "slack_email": "user@example.com",
-  "slack_channel_id": "C12345678"
+  "slack_recipient": {"kind": "channel", "value": "C12345678"}
 }
 ```
 
@@ -398,7 +396,9 @@ Streamlit과 online benchmark는 `src/app/client.py`의 `AgentSessionClient`를 
 - UI와 benchmark의 공용 세션 클라이언트는 `"uploads": {"epoch": "서버가 반환한 값", "revision": 1}`을 보냅니다. 이 요청은 이미 확정된 첨부 집합을 사용하고 변경하지 않습니다. 구형 `upload_file_path`는 직접 API 호출의 호환 경로로만 남습니다. 두 계약을 함께 보내거나 `uploads=null`을 보내면 HTTP `422`입니다.
 - 첨부 버전 검사는 세션 락 안에서 다시 수행합니다. 오래된 `uploads` 컨텍스트는 SSE `UPLOAD_REVISION_CONFLICT` 오류로 반환하며, 클라이언트는 목록을 갱신하고 질문을 자동 재전송하지 않습니다.
 - `include_debug=true`일 때만 debug payload가 내려옵니다.
-- Slack 필드는 세션 메타데이터로 저장되며 후속 요청에서 재사용될 수 있습니다.
+- `slack_recipient`는 `channel`, `user`, `email` 중 하나의 `kind`와 비어 있지 않은 `value`를 받습니다. 생략·`null`은 미지정이며 빈 명시값·잘못된 형식·구 세 필드 입력은 HTTP `422`입니다. 요청 메타데이터는 매 HTTP 요청의 snapshot으로 교체됩니다. 재시도 대상은 메타데이터가 아니라 보류 요청의 `slack_delivery`가 소유합니다.
+
+내부 호출부에서도 `slack_channel_id`, `slack_user_id`, `slack_email` 세 필드 대신 하나의 `slack_recipient`를 전달합니다. 예를 들어 이메일은 `{"kind": "email", "value": "person@example.com"}`입니다. 전송 도구는 기본값이나 개별 수신자 문자열을 받지 않고 선택된 `SlackDelivery`를 입력·결과로 사용합니다. 새 계약 적용 시 FastAPI·Streamlit 프로세스를 다시 시작하고 새 세션을 사용합니다. 기본 DM 환경 변수 이름은 유지하지만 둘 중 하나만 설정해야 하며, 설정은 프로세스 시작 시 읽습니다. 구 요청·결과를 새 계약으로 자동 변환하는 호환 계층은 없습니다.
 
 SSE의 `event:`는 아래 이벤트 이름이며, `data:`는 해당 이벤트의 JSON 객체입니다. 이벤트 사이에는 빈 줄이 있습니다.
 

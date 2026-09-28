@@ -114,7 +114,7 @@ def _make_manager(graph: _CapturingGraph) -> AgentFlowManager:
     manager.settings = AppSettings(openai_api_key="test-key", tavily_api_key="test")
     manager.graph = graph
     manager.messages = []
-    manager.session_metadata = {"slack_destination": None}
+    manager.session_metadata = {"slack_recipient": None}
     manager.upload_retriever_handle = None
     manager.upload_file_path = None
     return manager
@@ -321,24 +321,20 @@ class UploadSessionIsolationTest(unittest.TestCase):
         manager = _make_manager(graph)
         manager.set_session_metadata(
             {
-                "slack_destination": {
-                    "channel_id": "C123BENCH",
-                    "user_id": None,
-                    "email": None,
-                }
+                "slack_recipient": {"kind": "channel", "value": "C123BENCH"}
             }
         )
 
         manager.run_agent_flow("send this to slack")
 
         self.assertEqual(
-            graph.states[-1]["runtime"].session_metadata.slack_destination.channel_id,
+            graph.states[-1]["runtime"].session_metadata.slack_recipient.value,
             "C123BENCH",
         )
 
         manager.close()
 
-        self.assertIsNone(manager.session_metadata.slack_destination)
+        self.assertIsNone(manager.session_metadata.slack_recipient)
         self.assertEqual(manager.messages, [])
 
     def test_session_metadata_snapshot_replaces_previous_slack_destination(self) -> None:
@@ -350,14 +346,14 @@ class UploadSessionIsolationTest(unittest.TestCase):
                 AgentRequest(
                     query="share this to slack",
                     session_id="demo-session",
-                    slack_channel_id="C123BENCH",
+                    slack_recipient={"kind": "channel", "value": "C123BENCH"},
                 )
             )
         )
         manager.run_agent_flow("share this to slack")
 
         self.assertEqual(
-            graph.states[-1]["runtime"].session_metadata.slack_destination.channel_id,
+            graph.states[-1]["runtime"].session_metadata.slack_recipient.value,
             "C123BENCH",
         )
 
@@ -371,7 +367,7 @@ class UploadSessionIsolationTest(unittest.TestCase):
         )
         manager.run_agent_flow("share this to slack")
 
-        self.assertIsNone(graph.states[-1]["runtime"].session_metadata.slack_destination)
+        self.assertIsNone(graph.states[-1]["runtime"].session_metadata.slack_recipient)
         self.assertFalse(any(message.__class__.__name__ == "SystemMessage" for message in manager.messages))
 
 
@@ -555,7 +551,7 @@ class _UploadContractChatModel:
             parsed = {
                 "use_retrieval": True,
                 "tasks": [{"route": "upload", "query": "read source", "k": 4}],
-                "request_contract": WireRequestContract().model_dump(mode="json"),
+                "request_contract": WireRequestContract(slack_recipient={"state": "omitted"}).model_dump(mode="json"),
             }
         elif self.schema_name == "AnswerDocument":
             packet = json.loads(str(messages[-1].content).split("\n", 2)[2])

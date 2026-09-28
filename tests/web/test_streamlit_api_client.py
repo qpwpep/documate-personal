@@ -101,7 +101,7 @@ def test_request_preserves_session_upload_and_slack_context(transport):
     ]))
     request_context = AgentRequestContext(
         fastapi_url="http://localhost:8000/", session_id="session-1",
-        slack_user_id="U123", slack_email="test@example.com", slack_channel_id="C123",
+        slack_recipient={"kind": "email", "value": "test@example.com"},
         upload_file_path="uploads/session-1/code.py",
     )
 
@@ -114,8 +114,8 @@ def test_request_preserves_session_upload_and_slack_context(transport):
     assert calls[0]["stream"] is True
     assert calls[0]["headers"]["Accept"] == "text/event-stream"
     assert calls[0]["json"] == {
-        "query": "질문", "session_id": "session-1", "slack_user_id": "U123",
-        "slack_email": "test@example.com", "slack_channel_id": "C123",
+        "query": "질문", "session_id": "session-1",
+        "slack_recipient": {"kind": "email", "value": "test@example.com"},
         "upload_file_path": "uploads/session-1/code.py",
     }
 

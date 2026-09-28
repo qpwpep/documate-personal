@@ -3,11 +3,31 @@ from __future__ import annotations
 import asyncio
 import unittest
 
+import pytest
+from pydantic import ValidationError
+
 from src.app.web.agent_request_service import AgentRequestService
 from src.app.web.schemas import AgentRequest, AgentResponse
 from src.core.answer_schema import export_answer_text
 from src.core.uploads import UploadManifest
 from tests.web.answer_fixtures import response_payload
+
+
+@pytest.mark.parametrize("recipient", [
+    {"kind": "email", "value": "   "},
+    {"kind": "email", "value": "not-an-email"},
+    {"kind": "user", "value": "U123", "email": "other@example.com"},
+    [{"kind": "user", "value": "U123"}, {"kind": "email", "value": "other@example.com"}],
+])
+def test_invalid_explicit_recipient_is_rejected_before_dispatch(recipient):
+    with pytest.raises(ValidationError):
+        AgentRequest(query="보내줘", session_id="s1", slack_recipient=recipient)
+
+
+@pytest.mark.parametrize("field", ["slack_user_id", "slack_email", "slack_channel_id"])
+def test_obsolete_recipient_fields_are_not_silently_treated_as_unspecified(field):
+    with pytest.raises(ValidationError):
+        AgentRequest.model_validate({"query": "보내줘", "session_id": "s1", field: "specified"})
 
 
 class _FakeCleaner:
@@ -156,7 +176,7 @@ class AgentRequestServiceTest(unittest.TestCase):
                 request_data=AgentRequest(
                     query="share this",
                     session_id="demo-session",
-                    slack_channel_id="C123BENCH",
+                    slack_recipient={"kind": "channel", "value": "C123BENCH"},
                     include_debug=False,
                 ),
             )
@@ -165,7 +185,7 @@ class AgentRequestServiceTest(unittest.TestCase):
         self.assertEqual(export_answer_text(result.response), "structured answer")
         self.assertEqual(store.run_calls[0]["user_input"], "share this")
         self.assertEqual(
-            store.run_calls[0]["session_metadata"].slack_destination.channel_id,
+            store.run_calls[0]["session_metadata"].slack_recipient.value,
             "C123BENCH",
         )
 

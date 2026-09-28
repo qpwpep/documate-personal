@@ -4,21 +4,22 @@ from dataclasses import dataclass
 from html import escape
 
 import streamlit as st
+from pydantic import ValidationError
 
 from src.app.web.streamlit_theme import _THEME_OPTIONS, _sync_theme_from_query_params
 from src.core.uploads import UploadManifest
+from src.core.slack_contract import RecipientSelector
 
 
 @dataclass
 class SidebarInputs:
-    slack_user_id: str
-    slack_email: str
-    slack_channel_id: str
+    slack_recipient: RecipientSelector | None
     theme_mode: str
     new_chat_requested: bool
     remove_file_id: str | None = None
     clear_uploads_requested: bool = False
     refresh_uploads_requested: bool = False
+    slack_recipient_error: str | None = None
 
 
 
@@ -80,14 +81,26 @@ def render_sidebar(
         )
 
         st.markdown('<div class="dm-sidebar-section">Slack 전송</div>', unsafe_allow_html=True)
-        slack_user_id = st.text_input("User ID", value="", placeholder="Uxxxxx")
-        slack_email = st.text_input("Email", value="", placeholder="name@example.com")
-        slack_channel_id = st.text_input("Channel ID", value="", placeholder="C/G/Dxxxxx")
+        recipient_kind = st.radio(
+            "수신자 유형", options=("미지정", "채널", "사용자", "이메일"), index=0,
+            key="documate_slack_recipient_kind",
+        )
+        slack_recipient = None
+        slack_recipient_error = None
+        if recipient_kind != "미지정":
+            kinds = {"채널": ("channel", "C/G/Dxxxxx"), "사용자": ("user", "Uxxxxx"), "이메일": ("email", "name@example.com")}
+            kind, placeholder = kinds[recipient_kind]
+            value = st.text_input("Slack 수신자", value="", placeholder=placeholder,
+                                  key=f"documate_slack_recipient_{kind}")
+            try:
+                slack_recipient = RecipientSelector(kind=kind, value=value)
+            except ValidationError:
+                slack_recipient_error = "선택한 유형에 맞는 Slack 수신자를 입력하거나 ‘미지정’을 선택해 주세요."
+                st.error(slack_recipient_error)
 
     return SidebarInputs(
-        slack_user_id=slack_user_id,
-        slack_email=slack_email,
-        slack_channel_id=slack_channel_id,
+        slack_recipient=slack_recipient,
+        slack_recipient_error=slack_recipient_error,
         theme_mode=theme_mode,
         new_chat_requested=new_chat_requested,
         remove_file_id=remove_file_id,
