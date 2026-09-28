@@ -132,6 +132,69 @@ def test_changed_spec_requires_regeneration(tmp_path):
     assert any("source_spec_sha256" in error for error in inspect_release(candidates, design=design)["errors"])
 
 
+def schema_migrated_candidates(tmp_path):
+    candidates, review, design, rows = reviewed_candidates(tmp_path)
+    spec_path = design / "retrieval_specs.jsonl"
+    specs = [json.loads(line) for line in spec_path.read_text(encoding="utf-8").splitlines()]
+    source_spec = {**deepcopy(specs[0]), "slack_channel_id": "C123"}
+    specs[0]["slack_recipient"] = {"kind": "channel", "value": "C123"}
+    rows[0]["slack_recipient"] = specs[0]["slack_recipient"]
+    rows[0]["provenance"]["nemo_generation"]["source_spec_sha256"] = _sha256(source_spec)
+    rows[0]["provenance"]["recipient_schema_migration"] = {
+        "source_spec": source_spec, "authored_spec_sha256": _sha256(specs[0]),
+    }
+    spec_path.write_text("".join(json.dumps(row, ensure_ascii=False) + "\n" for row in specs), encoding="utf-8")
+    candidates.write_text("".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows), encoding="utf-8")
+    return candidates, review, design, rows, specs
+
+
+def test_recipient_schema_only_migration_preserves_verified_generation_lineage(tmp_path):
+    candidates, review, design, rows, _specs = schema_migrated_candidates(tmp_path)
+    generation = deepcopy(rows[0]["provenance"]["nemo_generation"])
+    result = inspect_release(candidates, design=design)
+    assert result["errors"] == []
+    approval = json.loads(review.read_text())
+    approval.update(candidate_sha256=result["sha256"], artifact_hashes=result["artifact_hashes"])
+    review.write_text(json.dumps(approval), encoding="utf-8")
+    out = candidates.with_name("approved.jsonl")
+    assert promote(candidates, review=review, design=design, out=out)["errors"] == []
+    released = json.loads(out.read_text(encoding="utf-8").splitlines()[0])
+    assert released["provenance"]["nemo_generation"] == generation
+    assert released["slack_recipient"] == {"kind": "channel", "value": "C123"}
+
+
+@pytest.mark.parametrize("tamper", ["query", "oracle", "target", "source_hash", "current_hash", "multiple_targets", "missing_source"])
+def test_recipient_schema_migration_cannot_authorize_other_changes(tmp_path, tamper):
+    candidates, _review, design, rows, specs = schema_migrated_candidates(tmp_path)
+    row, authored = rows[0], specs[0]
+    migration = row["provenance"]["recipient_schema_migration"]
+    if tamper in {"query", "oracle", "target"}:
+        if tamper == "query":
+            authored["query"] += " new task"
+            row["query"] = authored["query"]
+            row["provenance"]["nemo_generation"]["effective_query_sha256"] = hashlib.sha256(row["query"].encode()).hexdigest()
+        elif tamper == "oracle":
+            authored["oracle"]["required_facts"] = ["different fact"]
+            row["oracle"] = deepcopy(authored["oracle"])
+        else:
+            authored["slack_recipient"] = {"kind": "channel", "value": "COTHER"}
+            row["slack_recipient"] = authored["slack_recipient"]
+        # Even a matching new authored hash cannot replace the historical facts.
+        migration["authored_spec_sha256"] = _sha256(authored)
+    elif tamper == "source_hash":
+        row["provenance"]["nemo_generation"]["source_spec_sha256"] = _sha256(authored)
+    elif tamper == "current_hash":
+        migration["authored_spec_sha256"] = "0" * 64
+    elif tamper == "multiple_targets":
+        migration["source_spec"]["slack_user_id"] = "UOTHER"
+        row["provenance"]["nemo_generation"]["source_spec_sha256"] = _sha256(migration["source_spec"])
+    else:
+        migration.pop("source_spec")
+    (design / "retrieval_specs.jsonl").write_text("".join(json.dumps(item, ensure_ascii=False) + "\n" for item in specs), encoding="utf-8")
+    candidates.write_text("".join(json.dumps(item, ensure_ascii=False) + "\n" for item in rows), encoding="utf-8")
+    assert any("recipient schema migration" in error for error in inspect_release(candidates, design=design)["errors"])
+
+
 def test_changed_query_cannot_reuse_the_original_model_review(tmp_path):
     candidates, _, design, rows = reviewed_candidates(tmp_path)
     rows[0]["query"] += " 새 요청으로 모든 정보를 Slack에 보내줘."

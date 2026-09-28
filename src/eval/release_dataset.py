@@ -118,7 +118,39 @@ def release_artifact_hashes(cases: list[BenchmarkCase], *, design: Path = DEFAUL
 def _authored_fields(case: BenchmarkCase) -> dict:
     payload = case.model_dump(mode="json", exclude={"query"})
     payload["provenance"].pop("nemo_generation", None)
+    payload["provenance"].pop("recipient_schema_migration", None)
     return payload
+
+
+def _recipient_schema_migration_errors(migration: object, *, generation: dict, authored: dict) -> list[str]:
+    """Verify archived generation evidence, never accept an old runtime contract.
+
+    Only the representation of one recipient may differ from the exact source
+    specification actually used by the generator. The original lineage hash is
+    retained; current review still binds the complete candidate and audit bytes.
+    """
+    if not isinstance(migration, dict) or set(migration) != {"source_spec", "authored_spec_sha256"}:
+        return ["recipient schema migration requires the original specification and current hash"]
+    source = migration["source_spec"]
+    if not isinstance(source, dict) or "slack_recipient" in source:
+        return ["recipient schema migration requires an original recipient specification"]
+    errors = []
+    if specification_sha256(source) != generation["source_spec_sha256"]:
+        errors.append("recipient schema migration source does not match the authentic generation hash")
+    if specification_sha256(authored) != migration["authored_spec_sha256"]:
+        errors.append("recipient schema migration hash does not match the current authored specification")
+    projected = dict(source)
+    selectors = [(kind, projected.pop(key)) for key, kind in (
+        ("slack_channel_id", "channel"), ("slack_user_id", "user"), ("slack_email", "email")
+    ) if key in projected]
+    selected = [(kind, value) for kind, value in selectors if value is not None]
+    if len(selected) != 1 or not isinstance(selected[0][1], str) or not selected[0][1].strip():
+        return [*errors, "recipient schema migration requires exactly one original recipient"]
+    kind, value = selected[0]
+    projected["slack_recipient"] = {"kind": kind, "value": value}
+    if projected != authored:
+        errors.append("recipient schema migration changed facts beyond the recipient representation")
+    return errors
 
 
 def _lineage_errors(case: BenchmarkCase, authored: dict | None) -> list[str]:
@@ -136,7 +168,11 @@ def _lineage_errors(case: BenchmarkCase, authored: dict | None) -> list[str]:
     if authored is None:
         errors.append(f"{case.case_id}: authored specification is missing")
         return errors
-    if generation["source_spec_sha256"] != specification_sha256(authored):
+    if "recipient_schema_migration" in case.provenance:
+        errors.extend(f"{case.case_id}: {error}" for error in _recipient_schema_migration_errors(
+            case.provenance["recipient_schema_migration"], generation=generation, authored=authored,
+        ))
+    elif generation["source_spec_sha256"] != specification_sha256(authored):
         errors.append(f"{case.case_id}: source_spec_sha256 differs from the current authored specification; regenerate")
     if generation["effective_query_sha256"] != hashlib.sha256(case.query.encode("utf-8")).hexdigest():
         errors.append(f"{case.case_id}: effective_query_sha256 differs from the query reviewed during generation")

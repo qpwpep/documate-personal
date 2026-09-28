@@ -1,5 +1,6 @@
-"""The active release changes one authored task without rewriting its history."""
+"""The active recipient schema preserves authored tasks and generation history."""
 
+from copy import deepcopy
 import hashlib
 import json
 from pathlib import Path
@@ -10,11 +11,21 @@ from src.eval.nemo_generate import _sha256, assemble_candidates
 ROOT = Path(__file__).resolve().parents[2] / "data/benchmarks"
 HISTORY = ROOT / "history/release-nemo-v1"
 CHANGED_CASE = "release_action_028"
+RECIPIENT_CASES = {"release_action_006", "release_action_007", "release_action_012", "release_action_018",
+                   "release_action_022", "release_action_027", "release_action_030"}
 
 
 def rows(path):
     return {row["case_id"]: row for line in path.read_text(encoding="utf-8").splitlines()
             if line.strip() for row in [json.loads(line)]}
+
+
+def content_facts(row):
+    result = deepcopy(row)
+    for name in ("slack_channel_id", "slack_user_id", "slack_email", "slack_recipient"):
+        result.pop(name, None)
+    result.get("provenance", {}).pop("recipient_schema_migration", None)
+    return result
 
 
 def test_original_approval_still_identifies_the_archived_original_bytes():
@@ -30,7 +41,7 @@ def test_migration_preserves_119_cases_and_their_authentic_generation_lineage():
     after = rows(ROOT / "fixtures/cases.generated.jsonl")
     assert len(before) == len(after) == 120
     assert before.keys() == after.keys()
-    assert {key for key in before if before[key] != after[key]} == {CHANGED_CASE}
+    assert {key for key in before if content_facts(before[key]) != content_facts(after[key])} == {CHANGED_CASE}
     assert after[CHANGED_CASE]["expected_tools"] == []
     assert "upload_search" in after[CHANGED_CASE]["forbidden_tools"]
     assert after[CHANGED_CASE]["save_expectation"]["outcome"] == "must_not_execute"
@@ -77,8 +88,42 @@ def test_new_generation_is_replayable_without_relabelling_historical_runs():
     assert hashlib.sha256((run / "input_specs.jsonl").read_bytes()).hexdigest() == run_manifest["source_files"][0]["sha256"]
     for name, digest in manifest["generation_runs"][-1]["archived_files"].items():
         assert hashlib.sha256((design / name).read_bytes()).hexdigest() == digest, name
-    # Retained authored contracts are also unchanged: LF migration is storage only.
+    # Recipient representation changes do not alter authored content or oracle facts.
     before = rows(HISTORY / "design/action_specs.jsonl")
     after = rows(design / "action_specs.jsonl")
-    assert {key for key in before if before[key] != after[key]} == {CHANGED_CASE}
+    assert {key for key in before if content_facts(before[key]) != content_facts(after[key])} == {CHANGED_CASE}
     assert rows(HISTORY / "design/retrieval_specs.jsonl") == rows(design / "retrieval_specs.jsonl")
+
+
+def test_recipient_migration_retains_exact_generated_source_evidence_for_all_seven_targets():
+    before = rows(HISTORY / "fixtures/cases.generated.jsonl")
+    current = rows(ROOT / "fixtures/cases.generated.jsonl")
+    original_specs = rows(HISTORY / "design/action_specs.jsonl")
+    authored = rows(ROOT / "design/action_specs.jsonl")
+    migrated = {key for key, row in current.items() if "recipient_schema_migration" in row["provenance"]}
+    assert migrated == RECIPIENT_CASES
+    for case_id in RECIPIENT_CASES:
+        row = current[case_id]
+        generation = row["provenance"]["nemo_generation"]
+        assert generation == before[case_id]["provenance"]["nemo_generation"]
+        audit = row["provenance"]["recipient_schema_migration"]
+        assert audit["source_spec"] == original_specs[case_id]
+        assert generation["source_spec_sha256"] == _sha256(audit["source_spec"])
+        assert audit["authored_spec_sha256"] == _sha256(authored[case_id])
+        expected = {"kind": "user", "value": "U123BENCH"} if case_id == "release_action_007" else {"kind": "channel", "value": "C123BENCH"}
+        assert row["slack_recipient"] == authored[case_id]["slack_recipient"] == expected
+        assert not {"slack_channel_id", "slack_user_id", "slack_email"}.intersection(row)
+
+
+def test_current_schema_review_distinguishes_checked_migration_from_historical_model_runs():
+    review = json.loads((ROOT / "design/release_review.json").read_text(encoding="utf-8"))
+    schema_review = review["schema_review"]
+    assert schema_review["schema"] == "slack_recipient-v1"
+    assert schema_review["generation_lineage_unchanged_count"] == 120
+    assert set(schema_review["migrated_source_case_ids"]) == RECIPIENT_CASES
+    assert schema_review["deterministic_checks"]["errors"] == []
+    assert schema_review["deterministic_checks"]["sha256"] == review["candidate_sha256"]
+    assert schema_review["predecessor"]["review_sha256"] != hashlib.sha256((ROOT / "design/release_review.json").read_bytes()).hexdigest()
+    for checked in schema_review["checked_files"]:
+        path = ROOT.parents[1] / checked["path"]
+        assert hashlib.sha256(path.read_bytes()).hexdigest() == checked["reviewed_sha256"]

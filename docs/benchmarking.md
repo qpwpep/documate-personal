@@ -98,11 +98,13 @@ uv run python -m src.eval.main run --mode online --track release
 
 과거 `src.eval.main generate`의 순환 템플릿 생성기는 과거 재현과 단위 테스트용으로만 남으며 주력 release 경로를 덮어쓸 수 없습니다. 공개 seed는 운영 프롬프트와 유사한 알려진 회귀 사례로 유지합니다. 구조화 oracle은 정답 정보를 강화하지만 기존 키워드 채점·judge·가중치·release gate의 일반적 한계를 전면 수정한 것은 아닙니다.
 
-현재 입력은 `release-nemo-v2`입니다. 원본 명세와 실제 NeMo 생성·검수를 다시 수행한 사례는 `release_action_028` 하나입니다. 첨부와 준비 대화가 없는 새 세션에서는 필요한 `final_review.pdf`의 업로드를 요청하고 결론 추출·저장·공유를 보류하는 것이 성공입니다. 필수 도구는 없고 현재 검색·저장·공유는 금지합니다. 안내 문구를 고정하거나 검색 시도·실행 receipt를 요구하지 않습니다. 첨부 없이 `upload_search`를 필수 도구로 선언하면 생성 전제 검사와 release 검증이 거부합니다. 일반 scorer의 가중치·통과선은 유지합니다.
+현재 입력은 `release-nemo-v2`의 `slack_recipient-v1` 표현을 사용합니다. 수신자는 `slack_recipient: {"kind": "channel" | "user" | "email", "value": "..."}` 하나로 기록하며, 생략 또는 `null`은 미지정입니다. 원본 명세와 실제 NeMo 생성·검수를 다시 수행한 사례는 `release_action_028` 하나입니다. 첨부와 준비 대화가 없는 새 세션에서는 필요한 `final_review.pdf`의 업로드를 요청하고 결론 추출·저장·공유를 보류하는 것이 성공입니다. 필수 도구는 없고 현재 검색·저장·공유는 금지합니다. 안내 문구를 고정하거나 검색 시도·실행 receipt를 요구하지 않습니다. 첨부 없이 `upload_search`를 필수 도구로 선언하면 생성 전제 검사와 release 검증이 거부합니다. 일반 scorer의 가중치·통과선은 유지합니다.
 
 나머지 119개 사례의 내용과 생성 출처는 그대로 유지했습니다. [생성 이력](../data/benchmarks/design/generation_manifest.json)은 과거 실행 기록과 현재 선택 출처를 구분합니다. [신규 실제 실행 원본](../data/benchmarks/design/runs/missing-upload-v2/)에는 입력 명세, source specs, seed Parquet, pipeline, 생성·검수 trace, manifest, 승인 후보를 보존했습니다. 기존 [v1 원본 패키지](../data/benchmarks/history/release-nemo-v1/)의 데이터·첨부·명세·생성 및 승인 기록 44개는 원래 바이트로 보관하며 기존 승인 해시가 계속 일치합니다. v1의 전체 raw trace는 기존 로컬 `output/nemo-release/`에 남으며 새 checkout에는 자동 포함되지 않습니다. 과거 모델 호출을 새 명세의 생성 기록으로 바꾸지 않았습니다.
 
-현재 승인 대상 텍스트는 `plan.text_format=utf8-lf-v1`, UTF-8·BOM 없음·LF로 고정합니다. 생성 writer와 `.gitattributes`가 같은 형식을 사용합니다. 검증 과정에서 개행을 바꾸거나 의미상 같은 JSON으로 정규화하지 않고 실제 바이트의 SHA-256을 비교합니다. 바이너리 첨부는 그대로 해시하고 과거 패키지와 승격한 `.approvals/`의 승인 원본은 `-text`로 체크아웃 변환을 막습니다. 명세 내용이 달라지면 해당 사례를 실제로 재생성·검수하고, 개행만 바뀌어도 새 패키지 승인 해시를 발급합니다. 과거 승인 파일을 새 데이터의 승인처럼 덮어쓰지 않습니다.
+수신자 표현 변경은 [현재 승인 기록](../data/benchmarks/design/release_review.json)의 `schema_review`에서 별도로 검증했습니다. 전체 120개 후보, 명세 120개, 공개 seed 12개와 회귀 seed 8개의 원문·준비 대화·oracle·첨부·기대 행동·생성 출처를 이전 Git commit과 비교했으며 수신자 표현 외 차이는 없습니다. 명시 수신자가 있는 7개 후보에는 `provenance.recipient_schema_migration`으로 실제 생성에 사용한 원본 명세와 현재 명세 해시를 보관합니다. 검증기는 원본 해시가 기존 `nemo_generation.source_spec_sha256`와 일치하고, 정확히 한 수신자의 표현만 바뀌었는지 확인합니다. 다른 대상·질문·oracle 변경이나 복수 수신자 원본은 거부합니다. 이 원문은 과거 생성 사실을 확인하는 증거이며 구형 요청을 실행하기 위한 입력 계약이 아닙니다. 기존 생성 해시·모델 실행·유사도 보고서는 수정하지 않았고 새 생성·실모델 평가를 수행했다고 간주하지 않습니다.
+
+현재 승인 대상 텍스트는 `plan.text_format=utf8-lf-v1`, UTF-8·BOM 없음·LF로 고정합니다. 생성 writer와 `.gitattributes`가 같은 형식을 사용합니다. 검증 과정에서 개행을 바꾸거나 의미상 같은 JSON으로 정규화하지 않고 실제 바이트의 SHA-256을 비교합니다. 바이너리 첨부는 그대로 해시하고 과거 패키지와 승격한 `.approvals/`의 승인 원본은 `-text`로 체크아웃 변환을 막습니다. 명세의 작업·대상·정답 조건이 달라지면 해당 사례를 실제로 재생성·검수합니다. 이번 수신자 표현 변경만은 검증 가능한 원본 명세 증거와 새 표현 검토를 함께 요구하며 기존 생성 기록을 재사용합니다. 개행이나 표현만 바뀌어도 현재 바이트에 대한 새 승인 해시가 필요합니다. `schema_review.predecessor`는 이전 승인 파일의 Git commit과 해시를 기록하므로 과거 승인을 새 바이트의 승인으로 소급하지 않습니다.
 
 후보 보관 위치와 실행 위치는 별개입니다. `validate --execution-path <최종 fixture>`와 `promote --out <최종 fixture>`는 최종 fixture의 인접 `uploads/`에서 실제 사용하는 첨부를 검증·해시합니다. 실행 경로를 생략한 `validate`는 입력 fixture 인접 경로를 검사합니다. 사용자 지정 위치에는 먼저 승인한 첨부와 동일한 바이트를 배치해야 하며 기본 위치의 파일로 대체 검사하지 않습니다. 논리적 첨부 이름과 바이트가 같으면 위치만 옮겨도 승인이 유효합니다. 누락·변조·잘못된 경로·승인 불일치가 있으면 기존 release를 교체하지 않습니다.
 
@@ -131,9 +133,9 @@ uv run python -m src.eval.main run --mode online --track release \
 
 업로드 후에는 서버 manifest의 첨부 목록·정확한 파일 이름·크기·SHA-256을 승인 입력과 대조하고, 일치할 때만 준비 질문과 평가 질문을 보냅니다. 준비 답변으로 manifest가 갱신되면 다음 질문 전에 다시 대조합니다. 불일치는 첨부 준비 실패로 기록하며 후속 질문을 보내지 않습니다. 실행 요약의 `audit_metrics.dataset_approval`은 입력 검증 여부·승인 파일 해시·후보 해시·근거 해시를 기록합니다.
 
-[현재 유사도 보고서](../data/benchmarks/design/similarity_report.json)는 120개 후보·교체 전 원래 120개·운영 프롬프트 정적 구간 111개를 실제 `nvidia/nemotron-3-embed-1b`로 다시 비교했습니다. 임베딩 입력과 최근접 대상·순서는 v1과 같고 점수 2개만 0.000001 차이가 있습니다. 검토 대상 50쌍과 동일 질문 30쌍은 이전과 같습니다. release 내부의 동일 질문은 없고, 임계값 0.75를 넘는 내부 쌍은 의도적으로 같은 답변을 저장/공유로 나눈 공개 회귀 029/030뿐입니다. 이전 119개 검토를 명시적으로 이어 사용했고 변경 028은 별도 coding-agent가 명세·참고 답안·실제 trace와 가까운 사례를 대조했습니다. 수정된 oracle은 임베딩 입력이 아니므로 유사도로 정확성을 증명하지 않으며 독립적인 사람의 승인을 주장하지 않습니다.
+[보존된 유사도 보고서](../data/benchmarks/design/similarity_report.json)는 2026-09-18에 120개 후보·교체 전 원래 120개·당시 운영 프롬프트 정적 구간 111개를 실제 `nvidia/nemotron-3-embed-1b`로 비교한 기록입니다. 임베딩 입력과 최근접 대상·순서는 v1과 같고 점수 2개만 0.000001 차이가 있습니다. 검토 대상 50쌍과 동일 질문 30쌍은 이전과 같습니다. release 내부의 동일 질문은 없고, 임계값 0.75를 넘는 내부 쌍은 의도적으로 같은 답변을 저장/공유로 나눈 공개 회귀 029/030뿐입니다. 이전 119개 검토를 명시적으로 이어 사용했고 변경 028은 별도 coding-agent가 명세·참고 답안·실제 trace와 가까운 사례를 대조했습니다. 수신자 표현 변경에서는 새 임베딩 요청을 하지 않았으므로 현재 수정된 planner 프롬프트와의 유사도를 측정한 결과로 해석하지 않습니다. 수정된 oracle은 임베딩 입력이 아니므로 유사도로 정확성을 증명하지 않으며 독립적인 사람의 승인을 주장하지 않습니다.
 
-현재 검증에는 세 Git 개행 설정의 실제 체크아웃 왕복, 승격 후 기본·사용자 지정 경로의 자동 승인 실행, 최초 승격·부분 실패·재시도·동시 승격·동일 후보 재승인의 이력 보존, 승인 바이트 변조 거부, 심볼릭 링크의 경로·snapshot 보존, 검증 후 이름·확장자·원본·링크 변경에도 동일 이름과 바이트 staging, manifest 불일치 및 준비 답변의 첨부 변경 시 후속 질문 차단, 120개 전체 HTTP 경계 실행, 실제 HTTP 서버·파싱·검색·인용까지 첨부 식별 유지, 실제 그래프·저장소에서 미첨부 안내와 저장 보류의 성공 채점이 포함됩니다. HTTP 경계 실행은 모델 품질 측정이 아닙니다. 검증 명령 `uv run pytest -q tests/eval tests/web/test_benchmark_scenario_integration.py`의 현재 결과는 **462 passed, 7 subtests passed**입니다. Git 왕복은 `core.autocrlf=true/false/input` 각각의 임시 저장소에서 실제 add·checkout을 수행하고 승인 보관소를 함께 이동한 뒤 외부 design 없이 실행 입력을 검증했습니다. 120개 HTTP 경계 실행은 일반 진단·기본 승인·사용자 지정 승인 경로를 모두 확인했습니다.
+관련 검사는 세 Git 개행 설정의 실제 체크아웃 왕복, 승격 후 기본·사용자 지정 경로의 자동 승인 실행, 최초 승격·부분 실패·재시도·동시 승격·동일 후보 재승인의 이력 보존, 승인 바이트 변조 거부, 수신자 표현 이관의 원본·현재 해시와 의미 보존, 심볼릭 링크의 경로·snapshot 보존, 검증 후 이름·확장자·원본·링크 변경에도 동일 이름과 바이트 staging, manifest 불일치 및 준비 답변의 첨부 변경 시 후속 질문 차단, 120개 전체 HTTP 경계 실행, 실제 HTTP 서버·파싱·검색·인용까지 첨부 식별 유지, 실제 그래프·저장소에서 미첨부 안내와 저장 보류의 성공 채점을 다룹니다. 전체 명령은 `uv run pytest -q tests/eval tests/web/test_benchmark_scenario_integration.py`입니다. Git 왕복은 `core.autocrlf=true/false/input` 각각의 임시 저장소에서 실제 add·checkout을 수행하고 승인 보관소를 함께 이동한 뒤 외부 design 없이 실행 입력을 검증합니다. HTTP 경계 실행은 모델 품질 측정이 아닙니다.
 
 PDF 3개·DOCX 2개·PNG 1개의 바이트는 v1과 같습니다. 실제 Docling 변환·근거 발췌 검사, PDF 7쪽·PNG 시각 검사, DOCX OOXML·추출 검사는 v1 당시 기록으로 보존합니다. 별도 격리 서버의 실제 `gpt-5.6-luna`·검색·judge 표본 6개(저장/문맥 부족 2개 통과, 검색 4개 근거 부족)도 v1의 측정이며 새 결과로 표기하지 않습니다. 실서비스 Slack 전송과 현재 120개 전체 실모델 품질 평가는 이 변경의 검증에 포함하지 않았습니다. 과거 release 점수를 새 데이터 성능으로 해석하지 않습니다.
 
@@ -205,6 +207,8 @@ uv run python -m src.eval.main run \
 ```
 
 live Slack 실행에서는 `summary.json`과 `report.md`에 Slack delivery audit 지표가 추가됩니다. 이 지표는 audit-only이며 release gate를 직접 차단하지는 않습니다.
+
+수신자 스키마를 바꾼 fixture와 action specification은 내용이 같은 의미여도 기존 승인과 바이트가 다릅니다. release 실행에는 변경한 입력을 대상으로 새 검토와 승인이 필요하며, 기존 review의 hash만 바꿔 승인으로 간주하면 안 됩니다. 승인 검증은 `uv run python -m src.eval.release_dataset validate --input <candidate.jsonl> --design <design-dir> --review <review.json>`으로 수행합니다.
 
 ### 2.4 기존 run에서 보고서 재생성
 
