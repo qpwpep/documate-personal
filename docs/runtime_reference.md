@@ -303,9 +303,11 @@ Docling 어댑터는 제목 계층·표 셀·병합·페이지·위치를 기존
 - 생성 파일 정리: `GENERATED_FILE_TTL_SECONDS`
 - 정리 로직: `src/app/web/cleanup.py::RuntimeCleaner`
 
-서버는 검증된 답변을 출처·참고 및 제한까지 포함해 UTF-8 BOM bytes로 고정하고 `SaveOperation`에 세션·요청·대상 원본·본문 hash·export profile·bytes hash·크기를 연결합니다. 파일명은 시각 대신 세션과 저장 operation ID로 결정됩니다. 같은 operation의 재시도는 같은 manifest와 파일을 확인해 반환하며, 다른 bytes나 요청으로 ID를 재사용하면 `idempotency_conflict`입니다. 다른 저장 의무는 다른 파일을 만들어 앞선 답변을 보존합니다.
+서버는 검증된 답변을 출처·참고 및 제한까지 포함해 UTF-8 BOM bytes로 고정하고 `SaveOperation`에 세션·요청·대상 원본·본문 hash·export profile·bytes hash·크기를 연결합니다. 저장소는 시각 대신 세션과 저장 operation ID로 artifact identity와 파일명을 결정합니다. 같은 operation의 재시도는 같은 manifest와 파일을 확인해 반환하며, 다른 bytes나 요청으로 ID를 재사용하면 `idempotency_conflict`입니다. 다른 저장 의무는 다른 파일을 만들어 앞선 답변을 보존합니다.
 
-보류 요청의 같은 본문 전달 재시도와 목적지 보충·정정은 기존 operation을 유지합니다. 계약 병합에서 본문·원본 참조·출력 요구의 변경을 수락하면, 새 본문이 아직 준비되지 않았더라도 이전 operation과 receipt 연결을 해제합니다. 수정 원본은 보존하되 준비 완료 상태를 해제하고, 이후 여러 확인·보충 턴을 거쳐 검증된 본문이 완성되면 새 operation을 만듭니다. 사용자의 수정 없이 재시도 본문이 달라지면 새 operation으로 우회하지 않고 충돌로 거절합니다. 이미 공개한 파일과 manifest는 이 상태 전이로 삭제하거나 만료 시각을 바꾸지 않습니다. `filename_prefix` 인자는 호출 호환성을 위해 남아 있지만 파일 identity를 바꾸지 않습니다. 최종 이름은 `response_<artifact_id>.txt`로 고정됩니다.
+저장 도구를 직접 호출하면서 `operation`을 생략하면 같은 본문이라도 매 호출 새 operation과 별도 파일을 만듭니다. 같은 저장을 재시도하려면 반환값의 `operation`을 `SaveOperation`으로 복원해 같은 본문과 함께 명시적으로 전달해야 합니다.
+
+보류 요청의 같은 본문 전달 재시도와 목적지 보충·정정은 기존 operation을 유지합니다. 계약 병합에서 본문·원본 참조·출력 요구의 변경을 수락하면, 새 본문이 아직 준비되지 않았더라도 이전 operation과 receipt 연결을 해제합니다. 수정 원본은 보존하되 준비 완료 상태를 해제하고, 이후 여러 확인·보충 턴을 거쳐 검증된 본문이 완성되면 새 operation을 만듭니다. 사용자의 수정 없이 재시도 본문이 달라지면 새 operation으로 우회하지 않고 충돌로 거절합니다. 이미 공개한 파일과 manifest는 이 상태 전이로 삭제하거나 만료 시각을 바꾸지 않습니다.
 
 저장소는 private staging 파일을 완전히 쓰고 `fsync`·readback을 마친 다음, manifest를 교체 불가 방식으로 예약하고 payload를 같은 방식으로 공개합니다. manifest만 존재하는 상태는 저장 성공이 아닙니다. 두 파일의 identity·bytes 일치와 만료 여부를 실제로 확인해야 `verification=verified` receipt를 반환합니다. hard link의 원자적 no-replace 생성을 지원하는 로컬 파일시스템을 사용하며, 지원되지 않는 파일시스템에서 덮어쓰기 방식으로 fallback하지 않습니다. 전원 장애와 임의 외부 파일 변경까지 막는 영구 보관소는 아닙니다.
 

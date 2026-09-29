@@ -96,10 +96,10 @@ def test_retries_return_one_preserved_artifact(store, concurrent):
     before = Path(first["file_path"]).stat().st_mtime_ns
     barrier = Barrier(8) if concurrent else None
 
-    def retry(index):
+    def retry(_):
         if barrier is not None:
             barrier.wait(timeout=10)
-        return save("원본 답변", filename_prefix=f"different-hint-{index}", operation=operation)
+        return save("원본 답변", operation=operation)
 
     if concurrent:
         with ThreadPoolExecutor(max_workers=8) as pool:
@@ -115,11 +115,30 @@ def test_retries_return_one_preserved_artifact(store, concurrent):
 
 def test_direct_call_receipt_can_be_retried_with_its_operation(store):
     save, root = store
-    first = save("원본 답변", filename_prefix="custom-name")
+    first = save("원본 답변")
     operation = SaveOperation.model_validate(first["operation"])
-    second = save("원본 답변", filename_prefix="another-hint", operation=operation)
+    second = save("원본 답변", operation=operation)
     assert first == second
     assert len(list(root.glob("*.txt"))) == 1
+
+
+def test_direct_calls_with_identical_content_create_independent_artifacts(store, monkeypatch):
+    save, root = store
+    monkeypatch.setattr(saved_artifacts, "time", lambda: 100.0)
+    text = "동일한 답변\r\n"
+
+    first = save(text)
+    second = save(text, operation=None)
+
+    assert first["operation"]["operation_id"] != second["operation"]["operation_id"]
+    assert first["artifact"]["artifact_id"] != second["artifact"]["artifact_id"]
+    assert first["file_path"] != second["file_path"]
+    for result in (first, second):
+        manifest, payload = read_saved_artifact(root, Path(result["file_path"]).name)
+        assert manifest.operation == SaveOperation.model_validate(result["operation"])
+        assert manifest.artifact.model_dump(mode="json") == result["artifact"]
+        assert payload == text.encode("utf-8-sig")
+    assert len(list(root.glob("*.txt"))) == len(list(root.glob("*.json"))) == 2
 
 
 def test_concurrent_first_attempts_for_one_operation_share_one_artifact(store):
@@ -174,6 +193,34 @@ def test_changed_payload_conflicts_without_overwriting_the_winner(store, concurr
     assert payload == answers[winner].encode("utf-8-sig")
     assert manifest.operation == _operation(answers[winner])
     assert len(list(root.glob("*.txt"))) == 1
+
+
+@pytest.mark.parametrize(("field", "value"), [
+    pytest.param("request_id", "request-b", id="request_id"),
+    pytest.param("contract_revision", 2, id="contract_revision"),
+    pytest.param("target_kind", "copy_input", id="target_kind"),
+    pytest.param("source_hash", "0" * 64, id="source_hash"),
+    pytest.param("answer_hash", "1" * 64, id="answer_hash"),
+])
+def test_changed_request_binding_conflicts_without_overwriting_identical_bytes(store, field, value):
+    save, root = store
+    text = "원본 답변"
+    operation = _operation(text)
+    first = save(text, operation=operation)
+    path = Path(first["file_path"])
+    manifest_path = manifest_path_for(path)
+    original_payload = path.read_bytes()
+    original_manifest = manifest_path.read_bytes()
+    changed = SaveOperation.model_validate({**operation.model_dump(), field: value})
+
+    with pytest.raises(ArtifactError) as error:
+        save(text, operation=changed)
+
+    assert error.value.code == "idempotency_conflict"
+    assert path.read_bytes() == original_payload
+    assert manifest_path.read_bytes() == original_manifest
+    assert save(text, operation=operation) == first
+    assert len(list(root.glob("*.txt"))) == len(list(root.glob("*.json"))) == 1
 
 
 def test_operation_bytes_must_match_before_any_file_is_published(store):
