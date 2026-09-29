@@ -67,37 +67,6 @@ def extract_exact_identifier_terms(query: str, *, library_name: str = "") -> lis
     return identifiers
 
 
-def has_exact_identifier_coverage(
-    query: str,
-    hits: list[SearchHit],
-    *,
-    library_name: str = "",
-) -> bool:
-    required_identifiers = extract_exact_identifier_terms(query, library_name=library_name)
-    if not required_identifiers:
-        return True
-    combined_text = " ".join(
-        part
-        for item in hits
-        for part in (
-            item.evidence.snapshot.title,
-            item.evidence.snapshot.source_uri,
-            item.evidence.excerpt,
-        )
-        if part
-    )
-    normalized_combined_text = normalize_identifier_reference_text(combined_text)
-    return all(
-        re.search(
-            rf"(?<![A-Za-z0-9_]){re.escape(identifier)}(?![A-Za-z0-9_])",
-            normalized_combined_text,
-            flags=re.I,
-        )
-        is not None
-        for identifier in required_identifiers
-    )
-
-
 def entity_hit_score(query: str, hit: SearchHit) -> float:
     query_terms = tokenize_topic_terms(query)
     haystack = " ".join(
@@ -236,10 +205,6 @@ def hit_has_grounded_text(hit: SearchHit) -> bool:
         if re.search(r"[A-Za-z가-힣0-9]", line):
             return True
     return False
-
-
-def has_meaningful_docs_hits(hits: list[SearchHit]) -> bool:
-    return any(hit_has_grounded_text(item) for item in hits)
 
 
 def dedupe_docs_hits(items: list[SearchHit]) -> list[SearchHit]:
