@@ -291,3 +291,87 @@ def test_already_exact_query_is_not_repeated_with_another_reference_qualifier(se
     assert payload["diagnostics"]["answerability"] == "missing"
     assert payload["diagnostics"]["attempted_queries"] == [query]
     assert len(seen) == 1
+
+
+@pytest.mark.parametrize(("query", "symbol", "other_symbol", "url", "domain"), [
+    ("Standard. Scaler Official docs", "StandardScaler", "MinMaxScaler",
+     "https://scikit-learn.org/stable/modules/generated/sklearn.preprocessing.StandardScaler.html",
+     "scikit-learn.org"),
+    ("pandas. DataFrame. merge Official docs", "pandas.DataFrame.merge", "pandas.DataFrame.join",
+     "https://pandas.pydata.org/docs/reference/api/pandas.DataFrame.merge.html", "pandas.pydata.org"),
+    ("Official docs numpy.reshape.", "numpy.reshape", "numpy.array",
+     "https://numpy.org/doc/stable/reference/generated/numpy.reshape.html", "numpy.org"),
+])
+def test_normalized_query_identifiers_require_the_owning_api_source(search, query, symbol, other_symbol, url, domain):
+    """Query punctuation is normalized before source ownership and coverage are checked."""
+    tool, batches, seen = search
+    source = {"url": url, "title": symbol,
+              "raw_content": f"# {symbol}\n{symbol}(value)\nReturn the transformed value.", "score": 0.9}
+    unrelated = {"url": url.replace(symbol, other_symbol), "title": other_symbol,
+                 "raw_content": f"# {other_symbol}\nReturn another value. See also {symbol}.", "score": 0.95}
+    batches.append([unrelated, source])
+
+    payload = tool(query)
+
+    assert payload["diagnostics"]["answerability"] == "covered"
+    assert payload["diagnostics"]["missing_requirements"] == []
+    assert [hit["evidence"]["snapshot"]["source_uri"] for hit in payload["hits"]] == [url]
+    assert payload["hits"][0]["evidence"]["element"]["text"] == source["raw_content"]
+    assert seen[0]["include_domains"] == [domain]
+    assert len(seen) == 1
+
+
+@pytest.mark.parametrize(("qualifier", "answerability", "missing"), [
+    ("Official", "covered", []),
+    ("AbsentSymbol", "partial", ["symbol:AbsentSymbol"]),
+])
+def test_configured_identifier_stopwords_do_not_hide_actual_symbol_requirements(search, qualifier, answerability, missing):
+    """The configured general word is ignored while an additional API name remains required."""
+    tool, batches, seen = search
+    batches.append([result()])
+
+    payload = tool(f"numpy.reshape {qualifier} docs")
+
+    assert payload["diagnostics"]["answerability"] == answerability
+    assert payload["diagnostics"]["missing_requirements"] == missing
+    assert [hit["evidence"]["snapshot"]["title"] for hit in payload["hits"]] == ["numpy.reshape"]
+
+
+def test_reformulation_combines_first_partial_batch_with_second_definition(search):
+    """One tool invocation retains the first definition when the second query completes coverage."""
+    tool, batches, seen = search
+    first = result("numpy.concatenate")
+    second = result("numpy.stack")
+    batches.extend([[first], [second]])
+
+    payload = tool("numpy.concatenate numpy.stack", requirement={
+        "library": "numpy", "symbols": ["numpy.concatenate", "numpy.stack"], "match": "definition",
+    })
+
+    assert payload["diagnostics"]["answerability"] == "covered"
+    assert payload["diagnostics"]["missing_requirements"] == []
+    assert {hit["evidence"]["element"]["text"] for hit in payload["hits"]} == {
+        first["raw_content"], second["raw_content"],
+    }
+    assert payload["diagnostics"]["provider_result_count"] == 2
+    assert len(seen) == 2
+
+
+def test_previous_complete_evidence_ends_search_before_any_provider_request(search):
+    """An already covered requirement needs no new request even for a different query."""
+    tool, batches, seen = search
+    requirement = {"library": "numpy", "symbols": ["numpy.reshape"], "aspects": ["order"]}
+    batches.append([result()])
+    first = tool("numpy.reshape order", requirement=requirement)
+    assert first["diagnostics"]["answerability"] == "covered"
+    seen.clear()
+
+    second = tool("numpy.reshape order API reference", requirement=requirement,
+                  previous_hits=[SearchHit.model_validate(hit) for hit in first["hits"]])
+
+    assert second["diagnostics"]["answerability"] == "covered"
+    assert second["diagnostics"]["missing_requirements"] == []
+    assert second["hits"] == first["hits"]
+    assert second["diagnostics"]["provider_result_count"] == 0
+    assert second["diagnostics"]["attempted_queries"] == []
+    assert seen == []

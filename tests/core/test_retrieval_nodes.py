@@ -142,6 +142,24 @@ class RetrievalNodeTest(unittest.TestCase):
         self.assertEqual(updates["debug"].retrieval_diagnostics[0].status, "error")
         self.assertEqual(updates["retrieval"].hit_log, [])
 
+    def test_retrieve_dispatch_deduplicates_upload_source_warnings(self) -> None:
+        """Repeated invalid source rows produce one warning in each diagnostic representation."""
+        class _MalformedSourceStore:
+            def similarity_search_with_score(self, query: str, k: int = 4):
+                return [
+                    (Document(page_content="first uploaded row", metadata={}), 0.2),
+                    (Document(page_content="second uploaded row", metadata={}), 0.3),
+                ]
+
+        updates = self._dispatch()(self._state(routes=("upload",), vectorstore=_MalformedSourceStore()))
+
+        diagnostic = updates["debug"].retrieval_diagnostics[0]
+        payload = json.loads(updates["messages"][0].content)
+        self.assertEqual(updates["retrieval"].hit_log, [])
+        self.assertEqual(diagnostic.status, "no_result")
+        self.assertEqual(diagnostic.warnings, ["invalid_source_reference: 'evidence_ref'"])
+        self.assertEqual(payload["diagnostics"]["warnings"], diagnostic.warnings)
+
     def test_invalid_hit_is_removed_from_state_tool_message_and_diagnostics(self) -> None:
         """Malformed source references cannot survive through another retrieval representation."""
         payload = build_upload_search_tool()(query="train_test_split", retriever=SimpleNamespace(vectorstore=_VectorStore()))
