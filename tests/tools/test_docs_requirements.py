@@ -135,3 +135,51 @@ def test_refinement_quotes_required_symbol_and_version_without_repeating_qualifi
     assert refined != seen[0]["query"]
 
 
+
+
+@pytest.mark.parametrize(("query", "symbol", "other_symbol", "url", "domain"), [
+    ("Standard. Scaler Official docs", "StandardScaler", "MinMaxScaler",
+     "https://scikit-learn.org/stable/modules/generated/sklearn.preprocessing.StandardScaler.html",
+     "scikit-learn.org"),
+    ("pandas. DataFrame. merge Official docs", "pandas.DataFrame.merge", "pandas.DataFrame.join",
+     "https://pandas.pydata.org/docs/reference/api/pandas.DataFrame.merge.html", "pandas.pydata.org"),
+    ("Official docs numpy.reshape.", "numpy.reshape", "numpy.array",
+     "https://numpy.org/doc/stable/reference/generated/numpy.reshape.html", "numpy.org"),
+])
+def test_normalized_query_identifiers_require_the_owning_api_source(search, query, symbol, other_symbol, url, domain):
+    """Query punctuation is normalized before source ownership and coverage are checked."""
+    tool, batches, seen = search
+    source = {"url": url, "title": symbol,
+              "raw_content": f"# {symbol}\n{symbol}(value)\nReturn the transformed value.", "score": 0.9}
+    unrelated = {"url": url.replace(symbol, other_symbol), "title": other_symbol,
+                 "raw_content": f"# {other_symbol}\nReturn another value. See also {symbol}.", "score": 0.95}
+    batches.append([unrelated, source])
+
+    payload = tool(query)
+
+    assert payload["diagnostics"]["answerability"] == "covered"
+    assert payload["diagnostics"]["missing_requirements"] == []
+    assert [hit["evidence"]["snapshot"]["source_uri"] for hit in payload["hits"]] == [url]
+    assert payload["hits"][0]["evidence"]["element"]["text"] == source["raw_content"]
+    assert seen[0]["include_domains"] == [domain]
+    assert len(seen) == 1
+
+
+@pytest.mark.parametrize(("qualifier", "answerability", "missing"), [
+    ("Official", "covered", []),
+    ("AbsentSymbol", "partial", ["symbol:AbsentSymbol"]),
+])
+def test_configured_identifier_stopwords_do_not_hide_actual_symbol_requirements(search, qualifier, answerability, missing):
+    """The configured general word is ignored while an additional API name remains required."""
+    tool, batches, seen = search
+    batches.append([result()])
+
+    payload = tool(f"numpy.reshape {qualifier} docs")
+
+    assert payload["diagnostics"]["answerability"] == answerability
+    assert payload["diagnostics"]["missing_requirements"] == missing
+    assert [hit["evidence"]["snapshot"]["title"] for hit in payload["hits"]] == ["numpy.reshape"]
+
+
+
+
