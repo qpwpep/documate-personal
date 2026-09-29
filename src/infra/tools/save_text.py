@@ -12,9 +12,14 @@ from src.infra.saved_artifacts import save_artifact
 
 def build_save_text_tool(*, ttl_seconds: int = 86400) -> Callable[..., dict[str, Any]]:
     def save_text_to_file(
-        content: str, filename_prefix: str = "response", *, operation: SaveOperation | None = None,
+        content: str, *, operation: SaveOperation | None = None,
     ) -> dict[str, Any]:
-        """Save exact text; filename_prefix remains only for call compatibility."""
+        """Save exact UTF-8 BOM bytes under a storage-generated artifact name.
+
+        Omitting operation creates a new save, even for identical content.
+        Retry the same save by passing its returned operation as a SaveOperation
+        with the same content.
+        """
         if operation is None:
             identifier = uuid4().hex
             content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()

@@ -52,6 +52,8 @@ def store(tmp_path, monkeypatch):
 
 
 
+
+
 def test_concurrent_first_attempts_for_one_operation_share_one_artifact(store):
     save, root = store
     operation = _operation()
@@ -96,6 +98,8 @@ def test_changed_payload_conflicts_without_overwriting_the_winner(store, concurr
     assert payload == answers[winner].encode("utf-8-sig")
     assert manifest.operation == _operation(answers[winner])
     assert len(list(root.glob("*.txt"))) == 1
+
+
 
 
 

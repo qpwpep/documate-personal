@@ -199,7 +199,7 @@ def make_action_postprocess_node(
                         raise ArtifactError("idempotency_conflict", "재시도 본문이 확정된 저장 대상과 다릅니다.")
                     invocation_id = uuid4().hex
                     result = invoke_tool("save_text", save_text_tool, execution_id=invocation_id,
-                                         content=body, filename_prefix="response", operation=save_operation)
+                                         content=body, operation=save_operation)
                 except Exception as exc:
                     code = getattr(exc, "code", "write_failed")
                     result = {"status": "unknown" if code == "artifact_unverifiable" else "error",
