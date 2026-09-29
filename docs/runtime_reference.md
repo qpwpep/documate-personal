@@ -191,9 +191,11 @@ PLANNER_REASONING_EFFORT=high
 UI와 문서 검색 규칙은 아래 파일을 기준으로 관리합니다.
 
 - `src/core/domain_docs.py`: Streamlit 소개 영역에 노출하는 기본 문서 목록
-- `src/infra/config/agent_rules.toml`: docs allowlist와 query hint
+- `src/infra/config/agent_rules.toml`: 공식 문서 검색의 허용 출처, query hint, 식별자 제외어
 
-`RULES_CONFIG_PATH`로 규칙 파일을 지정할 수 있습니다. 필요한 검색 출처는 업로드 가용성과 무관하게 LLM이 선택하고, 스키마 검증을 통과한 `PlannerOutput.tasks`를 기준으로 실행합니다. [planner 지침](../src/runtime/nodes/planner/prompt_builder.py)은 일반 기술 설명과 실제 파일 조회를 구분하고 출처 제외 지시를 반영합니다.
+`RULES_CONFIG_PATH`로 규칙 파일을 지정할 수 있습니다. 설정은 `[docs_search]`에 속하며, 최상위·검색 설정·각 query hint에서 선언하지 않은 키는 로드 시 오류로 거부합니다. `docs_identifier_stopwords`는 `[docs_search]`에서 관리하며, query에서 일반 표현을 API 식별자로 오인하지 않도록 사용합니다. query hint의 `identifiers`, `library_name`, `domains`, `match_mode`는 라이브러리 추론과 공식 도메인 선택에 쓰입니다.
+
+필요한 검색 출처는 업로드 가용성과 무관하게 LLM이 선택하고, 스키마 검증을 통과한 `PlannerOutput.tasks`를 기준으로 실행합니다. [planner 지침](../src/runtime/nodes/planner/prompt_builder.py)은 일반 기술 설명과 실제 파일 조회를 구분하고 출처 제외 지시를 반영합니다.
 
 최초 planner 출력에는 `request_contract`도 포함됩니다. 모델은 [`WireRequestContract`](../src/core/request_contracts.py)로 사용자 의도와 참조 선택자를 반환합니다. 서버가 원문·기존 답변·보류 상태와 대조해 [`RequestContract`](../src/core/request_contracts.py)를 확정하고 `RuntimeState.request_contract`에 고정합니다.
 

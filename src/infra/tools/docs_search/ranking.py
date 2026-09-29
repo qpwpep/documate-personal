@@ -26,7 +26,7 @@ _ASCII_IDENTIFIER_PATTERN = re.compile(
 
 
 def _identifier_stopwords(*, library_name: str = "") -> set[str]:
-    stopwords = {item.lower() for item in get_rules_config().planner.docs_identifier_stopwords}
+    stopwords = {item.lower() for item in get_rules_config().docs_search.docs_identifier_stopwords}
     stopwords.update(
         {
             "api",
