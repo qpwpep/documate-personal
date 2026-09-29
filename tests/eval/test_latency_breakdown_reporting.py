@@ -45,6 +45,7 @@ class LatencyBreakdownReportingTest(unittest.TestCase):
         mock_post.return_value = sse_http_response(
             200,
             {
+                "upload_manifest": {"epoch": "fixture-epoch", "revision": 0, "files": []},
                 "response": plain_response('done'),
                 "trace": "trace-id",
                 "debug": _debug_payload(
@@ -204,6 +205,7 @@ class LatencyBreakdownReportingTest(unittest.TestCase):
         mock_post.return_value = sse_http_response(
             200,
             {
+                "upload_manifest": {"epoch": "fixture-epoch", "revision": 0, "files": []},
                 "response": plain_response('done'),
                 "trace": "trace-id",
                 "debug": _debug_payload(

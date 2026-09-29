@@ -218,14 +218,13 @@ def test_final_manifest_updates_sidebar_and_next_question_without_extra_get(monk
     assert calls[1]["payload"]["session_id"] == calls[2]["payload"]["session_id"]
 
 
-@pytest.mark.parametrize("completion", ["legacy_final", "timeout", "done"])
+@pytest.mark.parametrize("completion", ["timeout", "done"])
 def test_unconfirmed_question_result_refreshes_before_next_input_without_replay(monkeypatch, tmp_path, completion):
     """Missing confirmation recovers through a read-only refresh without repeating the question."""
     from streamlit.testing.v1 import AppTest
     monkeypatch.setattr(streamlit_state, "get_uploads_dir", lambda: tmp_path)
     fresh = UploadManifest(epoch="fresh-epoch", revision=0, files=[])
     response = {
-        "legacy_final": [("final_response", {"response": answer_response("Completed.").model_dump(mode="json")})],
         "timeout": requests.exceptions.Timeout("response was lost"),
         "done": [("done", {})],
     }[completion]
@@ -242,8 +241,35 @@ def test_unconfirmed_question_result_refreshes_before_next_input_without_replay(
     assert [message["content"] for message in app.session_state["messages"] if message["role"] == "user"] == ["exit"]
     assert [call["method"] for call in calls] == ["get", "post", "get"]
     assert len(app.chat_input) == 1
-    if completion == "legacy_final":
-        assert app.session_state["messages"][-1]["response"] == answer_response("Completed.")
+
+
+@pytest.mark.parametrize("manifest_fields", [
+    {},
+    {"upload_manifest": None},
+    {"upload_manifest": {"epoch": "invalid", "revision": -1, "files": []}},
+], ids=["missing", "null", "malformed"])
+def test_invalid_final_manifest_rejects_answer_and_recovers_state_without_replay(monkeypatch, tmp_path, manifest_fields):
+    """A schema violation remains a visible answer failure even after GET restores attachment state."""
+    from streamlit.testing.v1 import AppTest
+    monkeypatch.setattr(streamlit_state, "get_uploads_dir", lambda: tmp_path)
+    rejected = answer_response("This answer must not be accepted.")
+    fresh = UploadManifest(epoch="fresh-epoch", revision=0, files=[])
+    calls = _stream_responses(monkeypatch, [
+        ("get", _manifest(files=[_confirmed_file()]).model_dump(mode="json")),
+        ("post", [("final_response", {"response": rejected.model_dump(mode="json"), **manifest_fields})]),
+        ("get", fresh.model_dump(mode="json")),
+    ])
+    app = AppTest.from_file(streamlit_app.__file__).run()
+
+    _send_saved_question(app, "question")
+
+    assert app.session_state["upload_manifest"] == fresh
+    assert app.session_state["messages"][-1]["response"] != rejected
+    assert any("스트리밍 응답 형식에 오류" in item.value for item in app.markdown)
+    assert not any("This answer must not be accepted." in item.value for item in app.markdown)
+    assert [message["content"] for message in app.session_state["messages"] if message["role"] == "user"] == ["question"]
+    assert [call["method"] for call in calls] == ["get", "post", "get"]
+    assert len(app.chat_input) == 1
 
 
 def test_failed_manifest_recovery_keeps_confirmation_unknown_without_replay(monkeypatch, tmp_path):

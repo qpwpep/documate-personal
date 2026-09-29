@@ -136,7 +136,8 @@ def _final_payload(response, *, tool_calls=(), observed_hits=(), debug_overrides
                       and item["phase"] in {"started", "reused", "blocked"}), None)
         if event:
             action["invocation_id"] = event.get("origin_invocation_id") or event["invocation_id"]
-    return {"response": response, "trace": "Request ID: req-1", "debug": debug}
+    return {"response": response, "trace": "Request ID: req-1", "debug": debug,
+            "upload_manifest": {"epoch": "fixture-epoch", "revision": 0, "files": []}}
 
 
 def _run_case(case, judge, *, config=None, turns, tmp_path):

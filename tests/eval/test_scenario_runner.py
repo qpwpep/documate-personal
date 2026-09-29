@@ -76,8 +76,14 @@ def http_boundary(tmp_path, monkeypatch):
         if state["bad_provenance"]:
             debug["answer_provenance"]["response_hash"] = "another-answer"
         manifest.update(payload["upload_manifest"])
-        if state["bad_manifest"]:
-            payload["upload_manifest"] = {"epoch": "bad", "revision": -1}
+        if state["bad_manifest"] == "missing":
+            payload.pop("upload_manifest")
+        elif state["bad_manifest"] == "null":
+            payload["upload_manifest"] = None
+        elif state["bad_manifest"] == "missing-files":
+            payload["upload_manifest"] = {"epoch": "bad", "revision": 0}
+        elif state["bad_manifest"]:
+            payload["upload_manifest"] = {"epoch": "bad", "revision": -1, "files": []}
 
         def chunks():
             from tests.eval.response_fixtures import sse_frame
@@ -146,14 +152,29 @@ def test_unverified_preparation_provenance_stops_the_dependent_action(http_bound
     assert not result.release_pass
 
 
-def test_invalid_final_manifest_fails_evaluation_like_the_user_client(http_boundary, tmp_path):
+@pytest.mark.parametrize("manifest_error", ["missing", "null", "missing-files", "invalid"])
+@pytest.mark.parametrize("setup", [False, True])
+def test_invalid_final_manifest_fails_evaluation_like_the_user_client(http_boundary, tmp_path, manifest_error, setup):
     """A malformed attachment manifest prevents the final answer from passing evaluation."""
-    http_boundary["bad_manifest"] = True
-    result = run_case(tmp_path)
+    http_boundary["bad_manifest"] = manifest_error
+    result = run_case(tmp_path, setup_turns=["prepare an answer"] if setup else [])
     assert result.response is None
-    assert result.response_errors
-    assert result.scenario_turns[0].raw_final_response["upload_manifest"] == {"epoch": "bad", "revision": -1}
-    assert result.scenario_turns[0].debug["extra_diagnostic"] == {"turn": 1}
+    turn = result.scenario_turns[0]
+    assert turn.response is None
+    assert turn.response_errors
+    if manifest_error == "missing":
+        assert "upload_manifest" not in turn.raw_final_response
+    else:
+        assert turn.raw_final_response["upload_manifest"] == {
+            "null": None,
+            "missing-files": {"epoch": "bad", "revision": 0},
+            "invalid": {"epoch": "bad", "revision": -1, "files": []},
+        }[manifest_error]
+    assert turn.debug["extra_diagnostic"] == {"turn": 1}
+    assert turn.upload_manifest is None
+    assert result.cost_usd > 0
+    questions = [body for _, url, body in http_boundary["requests"] if url.endswith("/agent/stream")]
+    assert [body["query"] for body in questions] == ["prepare an answer" if setup else "save the previous answer"]
     assert not result.release_pass
 
 

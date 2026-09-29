@@ -84,7 +84,7 @@ class _FakeSessionStore:
                 summary="근거 요약: docs 1건",
                 evidence_count=1,
             )
-        return self.agent_manager, dict(self.agent_answer), 12, UploadManifest(epoch="session-epoch", revision=0)
+        return self.agent_manager, dict(self.agent_answer), 12, UploadManifest(epoch="session-epoch", revision=0, files=[])
 
 
 async def _final_response(service: AgentRequestService, *, request_id: str, request_data: AgentRequest):
@@ -180,7 +180,7 @@ class AgentRequestServiceTest(unittest.TestCase):
         )
 
         self.assertEqual(without_debug.response.model_dump(), with_debug.response.model_dump())
-        self.assertEqual(without_debug.upload_manifest, UploadManifest(epoch="session-epoch", revision=0))
+        self.assertEqual(without_debug.upload_manifest, UploadManifest(epoch="session-epoch", revision=0, files=[]))
         self.assertEqual(without_debug.upload_manifest, with_debug.upload_manifest)
         self.assertIsNone(without_debug.debug)
         self.assertIsNotNone(with_debug.debug)

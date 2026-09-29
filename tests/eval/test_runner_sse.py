@@ -46,7 +46,8 @@ def final_payload():
     debug["additional_diagnostic"] = {"measurements": [1, 2, 3]}
     debug["execution_evidence"] = execution_evidence(["save_text"], request_id="trace-request")
     debug["answer_provenance"] = answer_provenance(response)
-    return {"response": response.model_dump(mode="json"), "trace": "Request ID: trace-request", "debug": debug}
+    return {"response": response.model_dump(mode="json"), "trace": "Request ID: trace-request", "debug": debug,
+            "upload_manifest": {"epoch": "fixture-epoch", "revision": 0, "files": []}}
 
 
 def test_stream_preserves_full_response_trace_debug_and_evaluation_contracts():
@@ -200,7 +201,7 @@ def test_invalid_stream_is_a_response_contract_error():
 
 def test_success_status_with_json_content_type_is_rejected():
     """A proxy or stale server returning JSON cannot satisfy the SSE contract."""
-    response = sse_http_response(200, {"response": plain_response("ok")}, headers={"content-type": "application/json"})
+    response = sse_http_response(200, {"upload_manifest": {"epoch": "fixture-epoch", "revision": 0, "files": []}, "response": plain_response("ok")}, headers={"content-type": "application/json"})
     with patch("src.app.client.requests.post", return_value=response):
         result = run_case()
 

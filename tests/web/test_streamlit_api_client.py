@@ -97,7 +97,8 @@ def test_stream_preserves_complete_final_response_and_stops_without_done(transpo
 def test_request_preserves_session_upload_and_slack_context(transport):
     """The single streamed POST carries the selected session, upload and Slack target."""
     calls = transport(StreamResponse([
-        frame("final_response", {"response": answer_response().model_dump(mode="json")}),
+        frame("final_response", {"response": answer_response().model_dump(mode="json"),
+                                 "upload_manifest": {"epoch": "e", "revision": 0, "files": []}}),
     ]))
     request_context = AgentRequestContext(
         fastapi_url="http://localhost:8000/", session_id="session-1",
@@ -210,6 +211,7 @@ def test_redirect_is_reported_without_forwarding_post(monkeypatch, status):
             response.headers["Content-Type"] = "text/event-stream"
             response._content = frame("final_response", {
                 "response": answer_response().model_dump(mode="json"),
+                "upload_manifest": {"epoch": "e", "revision": 0, "files": []},
             }).encode("utf-8")
         return response
 
@@ -304,6 +306,7 @@ def test_server_error_can_be_followed_by_complete_final_response(transport):
         "response": answer_response("요청 처리 중 오류가 발생했습니다.").model_dump(mode="json"),
         "trace": "planner",
         "debug": {"runtime_error": "failed"},
+        "upload_manifest": {"epoch": "e", "revision": 0, "files": []},
     }
     transport(StreamResponse([
         frame("error", {"message": "failed"}),
@@ -323,6 +326,7 @@ def test_server_error_can_be_followed_by_complete_final_response(transport):
 ])
 def test_invalid_final_response_is_reported_without_partial_parsing(transport, payload):
     """Malformed final responses cannot silently lose structured answer information."""
+    payload = {**payload, "upload_manifest": {"epoch": "e", "revision": 0, "files": []}}
     transport(StreamResponse([frame("final_response", payload)]))
 
     events = list(stream_agent_response("질문", context()))
@@ -368,20 +372,25 @@ def test_invalid_or_incomplete_stream_reports_error_without_repeating_request(tr
 def test_chunked_sse_preserves_response_trace_and_debug():
     """Arbitrarily split frames preserve the complete event and typed answer."""
     expected = cited_response()
-    payload = {"response": expected.model_dump(mode="json"), "trace": "t", "debug": None}
+    manifest = UploadManifest(epoch="e", revision=0, files=[])
+    payload = {"response": expected.model_dump(mode="json"), "trace": "t", "debug": None,
+               "upload_manifest": manifest.model_dump(mode="json")}
     encoded = frame("final_response", payload)
 
     events = list(_iter_sse_events([encoded[:17], encoded[17:67], encoded[67:]]))
 
     assert len(events) == 1
     assert events[0].data == payload
-    assert events[0].result == AgentCallResult(response=expected)
+    assert events[0].result == AgentCallResult(response=expected, upload_manifest=manifest)
 
 
 def test_question_sends_confirmed_upload_revision_without_legacy_path(transport):
     """A question pins the confirmed attachment generation even when it has no new files."""
     from src.core.uploads import UploadContext
-    calls = transport(StreamResponse([frame("final_response", {"response": answer_response().model_dump(mode="json")})]))
+    calls = transport(StreamResponse([frame("final_response", {
+        "response": answer_response().model_dump(mode="json"),
+        "upload_manifest": {"epoch": "epoch-one", "revision": 2, "files": []},
+    })]))
     request_context = AgentRequestContext(fastapi_url="http://localhost:8000", session_id="session-1", uploads=UploadContext(epoch="epoch-one", revision=2))
     events = list(stream_agent_response("두 파일을 비교해줘", request_context))
     assert events[0].result.response == answer_response()
@@ -423,7 +432,8 @@ def test_diagnostic_request_preserves_transport_observation_and_server_error(tra
     """Opt-in diagnostics retain server failures and the final response's HTTP timing."""
     from src.app.client import AgentRequestContext, stream_agent_response
 
-    final = {"response": answer_response().model_dump(mode="json"), "debug": {"runtime_error": "failed"}}
+    final = {"response": answer_response().model_dump(mode="json"), "debug": {"runtime_error": "failed"},
+             "upload_manifest": {"epoch": "e", "revision": 0, "files": []}}
     calls = transport(StreamResponse([
         frame("request_started", {"request_id": "request-one"}),
         frame("error", {"message": "failed"}),
@@ -450,7 +460,8 @@ def test_transport_request_id_prefers_http_header_over_event_values(transport):
     """The HTTP request identity is preserved when an event supplies a different identifier."""
     response = StreamResponse([
         frame("request_started", {"request_id": "event-request"}),
-        frame("final_response", {"response": answer_response().model_dump(mode="json")}),
+        frame("final_response", {"response": answer_response().model_dump(mode="json"),
+                                 "upload_manifest": {"epoch": "e", "revision": 0, "files": []}}),
     ])
     response.headers["x-request-id"] = "header-request"
     transport(response)
@@ -514,16 +525,26 @@ def test_session_uses_final_manifest_for_followup_and_refreshes_after_lost_respo
     assert {call["payload"]["session_id"] for call in calls if call["method"] == "post"} == {"same-session"}
 
 
-def test_invalid_final_manifest_keeps_diagnostics_but_invalidates_session(transport):
+@pytest.mark.parametrize("manifest_fields", [
+    pytest.param({}, id="missing"),
+    pytest.param({"upload_manifest": None}, id="null"),
+    pytest.param({"upload_manifest": []}, id="not-object"),
+    pytest.param({"upload_manifest": {"epoch": "e", "revision": 0}}, id="missing-files"),
+    pytest.param({"upload_manifest": {"epoch": "e", "revision": "0", "files": []}}, id="string-revision"),
+    pytest.param({"upload_manifest": {"epoch": "e", "revision": True, "files": []}}, id="bool-revision"),
+    pytest.param({"upload_manifest": {"epoch": "e", "revision": 0, "files": None}}, id="null-files"),
+    pytest.param({"upload_manifest": {"epoch": "e", "revision": -1, "files": []}}, id="negative-revision"),
+])
+def test_invalid_final_manifest_keeps_diagnostics_but_invalidates_session(transport, manifest_fields):
     """A rejected final manifest remains an identifiable schema error with its raw diagnostics."""
     from src.app.client import AgentRequestContext, AgentSessionClient
 
     payload = {"response": answer_response().model_dump(mode="json"),
-               "upload_manifest": {"epoch": "invalid", "revision": -1}, "debug": {"trace": "saved"}}
-    transport(StreamResponse([frame("final_response", payload)]))
+               "debug": {"trace": "saved"}, **manifest_fields}
+    calls = transport(StreamResponse([frame("final_response", payload)]))
     client = AgentSessionClient(AgentRequestContext(
         fastapi_url="http://localhost:8000", session_id="session-one",
-    ), manifest=UploadManifest(epoch="confirmed", revision=1))
+    ), manifest=UploadManifest(epoch="confirmed", revision=1, files=[]))
 
     events = list(client.stream("question"))
 
@@ -534,6 +555,35 @@ def test_invalid_final_manifest_keeps_diagnostics_but_invalidates_session(transp
     assert events[0].observation.error_source == "client"
     assert events[0].observation.error_type == "agent_schema_error"
     assert events[0].observation.final_received is True
+    assert events[0].data["code"] == "invalid_stream"
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("manifest", [
+    {"epoch": "e", "revision": 0},
+    {"epoch": "e", "revision": "0", "files": []},
+])
+@pytest.mark.parametrize("operation", ["refresh", "sync"])
+def test_invalid_upload_response_invalidates_confirmation_without_replaying(transport, manifest, operation):
+    """GET and sync must validate the same complete snapshot used by final responses."""
+    from src.app.client import AgentSessionClient, UploadAPIError
+
+    response = requests.Response()
+    response.status_code = 200
+    payload = manifest if operation == "refresh" else {"manifest": manifest, "changed": True}
+    response._content = json.dumps(payload).encode()
+    calls = transport(response)
+    client = AgentSessionClient(context(), manifest=UploadManifest(epoch="old", revision=2, files=[]))
+
+    with pytest.raises(UploadAPIError):
+        if operation == "refresh":
+            client.refresh_uploads()
+        else:
+            client.sync_uploads({"epoch": "old", "expected_revision": 2, "operation_id": "clear", "clear": True})
+
+    assert client.manifest is None
+    assert len(calls) == 1
+    assert not calls[0]["url"].endswith("/agent/stream")
 
 
 def test_unconfirmed_session_does_not_send_question_when_manifest_refresh_fails(transport):
@@ -562,7 +612,7 @@ def test_uncertain_upload_sync_invalidates_confirmation_without_replaying(transp
     calls = transport(requests.exceptions.Timeout("lost sync response"))
     client = AgentSessionClient(AgentRequestContext(
         fastapi_url="http://localhost:8000", session_id="session-one",
-    ), manifest=UploadManifest(epoch="one", revision=2))
+    ), manifest=UploadManifest(epoch="one", revision=2, files=[]))
     operation = PendingUploadOperation(epoch="one", expected_revision=2, clear=True)
 
     with pytest.raises(UploadAPIError):
@@ -584,7 +634,7 @@ def test_session_stages_syncs_and_queries_using_the_server_confirmed_uploads(mon
     from src.core.uploads import UploadFileInfo
 
     uploaded_bytes = b"print('shared path')\n"
-    initial = UploadManifest(epoch="one", revision=0)
+    initial = UploadManifest(epoch="one", revision=0, files=[])
     committed = UploadManifest(epoch="one", revision=1, files=[UploadFileInfo(
         file_id="file-one", name="code.py", size_bytes=len(uploaded_bytes),
         content_hash="sha256:" + hashlib.sha256(uploaded_bytes).hexdigest(),

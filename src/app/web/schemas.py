@@ -84,9 +84,8 @@ class AgentResponse(BaseModel):
     response: AnswerResponse
     trace: str
     debug: AgentDebugInfo | None = None
-    upload_manifest: UploadManifest | None = Field(
-        default=None,
-        description="Attachment state captured under the session lock after this request; absent in older responses.",
+    upload_manifest: UploadManifest = Field(
+        description="Attachment state captured under the session lock after this request, including an empty files list when no files are attached.",
     )
 
 

@@ -56,7 +56,7 @@ def live_cli_case(tmp_path, monkeypatch):
 
     def post(_url, **kwargs):
         payloads.append(kwargs["json"])
-        return sse_http_response(200, {"response": {**plain_response("shared"), "actions": [slack_action(channel_id="CLIVE")]}})
+        return sse_http_response(200, {"upload_manifest": {"epoch": "fixture-epoch", "revision": 0, "files": []}, "response": {**plain_response("shared"), "actions": [slack_action(channel_id="CLIVE")]}})
 
     monkeypatch.setattr("src.app.client.requests.post", post)
     yield args, env_path, payloads
@@ -378,6 +378,7 @@ class BenchmarkCLIEnvResolutionTest(unittest.TestCase):
         mock_post.return_value = sse_http_response(
             200,
             {
+                "upload_manifest": {"epoch": "fixture-epoch", "revision": 0, "files": []},
                 "response": {**plain_response('shared'), "actions": [slack_action(channel_id="CENVLIVE")]},
                 "trace": "trace-id",
                 "debug": {

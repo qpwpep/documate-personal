@@ -6,7 +6,9 @@ DocuMate release 벤치마크는 Streamlit과 같은 `src/app/client.py`의 `Age
 
 온라인 평가는 SSE `final_response.data`의 `response`, `trace`, `debug` 전체를 읽습니다. 답변 평가 입력인 `response`는 `AnswerResponse`이며, 실제 표시한 `content.blocks`, 사용한 `citations`, 내용별 `checks`, `issues`, `actions`를 평가합니다. 출처 연결은 현재 검색의 `observed_hits`, 서버가 선택한 선행 답변, 최종 결과의 `answer_provenance.evidence_packet`을 구분해 검증합니다. 별도 답변 문자열이나 주장 목록을 추출해 대신 평가하지 않습니다.
 
-벤치마크는 공용 클라이언트에 `include_debug=true`를 지정합니다. HTTP `200`, 첫 진행 이벤트, `done` 수신만으로 성공을 판정하지 않습니다. HTTP 오류, SSE `error`, 연결 단절, timeout, 최종 응답 누락, 응답 계약 오류를 구분하고, `error` 뒤의 최종 응답도 앞선 오류와 함께 보존합니다. 잘못된 manifest는 UI와 마찬가지로 사용 가능한 답변으로 승인하지 않으며 원본 envelope는 진단에 남깁니다. 유효한 최종 응답을 수신해도 benchmark 통과를 의미하지는 않습니다. 질문은 자동 재전송하지 않으며 redirect나 JSON endpoint fallback도 사용하지 않습니다.
+벤치마크는 공용 클라이언트에 `include_debug=true`를 지정합니다. HTTP `200`, 첫 진행 이벤트, `done` 수신만으로 성공을 판정하지 않습니다. HTTP 오류, SSE `error`, 연결 단절, timeout, 최종 응답 누락, 응답 계약 오류를 구분하고, `error` 뒤의 유효한 최종 응답은 앞선 오류와 함께 보존하며 manifest를 다음 요청의 확인값으로 적용합니다. 모든 유효한 최종 응답은 실제 epoch·revision과 명시적인 `files` 목록을 가진 `upload_manifest`가 필수입니다. 첨부가 없어도 `files=[]`를 전달하며, manifest 누락·`null`·필드 누락·잘못된 타입은 기본값이나 타입 변환으로 보정하지 않습니다.
+
+계약을 위반한 최종 응답은 UI와 마찬가지로 사용 가능한 답변으로 승인하지 않습니다. 답변·actions는 평가 입력에서 제외하고 원본 envelope·trace·debug·오류는 진단에 남깁니다. 유효한 최종 응답이 없으면 공용 클라이언트의 manifest를 미확인 상태인 `None`으로 바꾸며, 이는 서버가 확인한 빈 첨부 목록과 다릅니다. 새 요청 전 GET 확인이 실패하면 질문을 보내지 않습니다. GET 성공은 현재 첨부 상태만 복구하고 거부된 답변을 성공으로 바꾸지 않으며, 준비 턴이 실패한 시나리오는 후속 질문을 보내지 않습니다. 유효한 최종 응답을 수신해도 benchmark 통과를 의미하지는 않습니다. 질문이나 첨부 변경은 자동 재실행하지 않으며 redirect나 JSON endpoint fallback도 사용하지 않습니다.
 
 ## 1. 사전 준비
 

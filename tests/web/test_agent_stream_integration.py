@@ -104,6 +104,10 @@ def test_streamlit_uses_the_real_sse_route_and_runtime(agent_server):
     assert final.data["response"] == final.result.response.model_dump(mode="json")
     assert "Session ID: ui-reset, Request ID:" in final.data["trace"]
     assert final.data["debug"] is None
+    assert final.data["upload_manifest"] == final.result.upload_manifest.model_dump(mode="json")
+    assert final.result.upload_manifest.files == []
+    assert final.result.upload_manifest.revision == 0
+    assert final.result.upload_manifest.epoch
     assert app.state.session_store.active_session_ids() == {"ui-reset"}
 
 

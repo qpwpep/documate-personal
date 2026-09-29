@@ -103,6 +103,7 @@ class RunnerErrorBucketsTest(unittest.TestCase):
         mock_post.return_value = sse_http_response(
             200,
             {
+                "upload_manifest": {"epoch": "fixture-epoch", "revision": 0, "files": []},
                 "response": "legacy string response",
                 "trace": "Request ID: req-1",
                 "debug": {
@@ -143,6 +144,7 @@ class RunnerErrorBucketsTest(unittest.TestCase):
         mock_post.return_value = sse_http_response(
             200,
             {
+                "upload_manifest": {"epoch": "fixture-epoch", "revision": 0, "files": []},
                 "response": plain_response('ok'),
                 "trace": "Request ID: req-1",
                 "debug": {
@@ -185,6 +187,7 @@ class RunnerErrorBucketsTest(unittest.TestCase):
         mock_post.return_value = sse_http_response(
             200,
             {
+                "upload_manifest": {"epoch": "fixture-epoch", "revision": 0, "files": []},
                 "response": plain_response('ok'),
                 "trace": "Request ID: req-1",
                 "debug": {
@@ -267,6 +270,7 @@ class RunnerErrorBucketsTest(unittest.TestCase):
         mock_post.return_value = sse_http_response(
             200,
             {
+                "upload_manifest": {"epoch": "fixture-epoch", "revision": 0, "files": []},
                 "response": plain_response('need more evidence'),
                 "trace": "Request ID: req-1",
                 "debug": {
@@ -318,6 +322,7 @@ class RunnerErrorBucketsTest(unittest.TestCase):
         mock_post.return_value = sse_http_response(
             200,
             {
+                "upload_manifest": {"epoch": "fixture-epoch", "revision": 0, "files": []},
                 "response": plain_response('ok'),
                 "trace": "Request ID: req-1",
                 "debug": {
@@ -346,6 +351,7 @@ class RunnerErrorBucketsTest(unittest.TestCase):
         mock_post.return_value = sse_http_response(
             200,
             {
+                "upload_manifest": {"epoch": "fixture-epoch", "revision": 0, "files": []},
                 "response": plain_response('ok'),
                 "trace": "Request ID: req-1",
                 "debug": {
@@ -407,6 +413,7 @@ class RunnerErrorBucketsTest(unittest.TestCase):
         mock_post.return_value = sse_http_response(
             200,
             {
+                "upload_manifest": {"epoch": "fixture-epoch", "revision": 0, "files": []},
                 "response": plain_response(['ok', 'same']),
                 "trace": "Request ID: req-1",
                 "debug": {

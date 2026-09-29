@@ -1,15 +1,65 @@
 import unittest
 
+import pytest
 from pydantic import ValidationError
 
 from src.app.web.schemas import AgentResponse
+from src.core.uploads import UploadManifest
 from tests.web.answer_fixtures import cited_response, response_payload
+
+
+@pytest.mark.parametrize("invalid_manifest", [
+    pytest.param(None, id="null"),
+    pytest.param({"epoch": "epoch", "revision": 0}, id="missing-files"),
+    pytest.param({"revision": 0, "files": []}, id="missing-epoch"),
+    pytest.param({"epoch": "epoch", "files": []}, id="missing-revision"),
+    pytest.param({"epoch": "epoch", "revision": "0", "files": []}, id="string-revision"),
+    pytest.param({"epoch": "epoch", "revision": True, "files": []}, id="boolean-revision"),
+    pytest.param({"epoch": "epoch", "revision": 0.0, "files": []}, id="float-revision"),
+    pytest.param({"epoch": "epoch", "revision": 0, "files": None}, id="null-files"),
+    pytest.param({"epoch": "epoch", "revision": 0, "files": {}}, id="object-files"),
+])
+def test_final_response_rejects_incomplete_or_malformed_manifest(invalid_manifest):
+    with pytest.raises(ValidationError):
+        AgentResponse.model_validate({
+            "response": response_payload("answer"), "trace": "trace-id",
+            "upload_manifest": invalid_manifest,
+        })
+
+
+def test_final_response_requires_manifest():
+    with pytest.raises(ValidationError):
+        AgentResponse.model_validate({"response": response_payload("answer"), "trace": "trace-id"})
+
+
+@pytest.mark.parametrize("invalid_size", ["0", True, 0.0])
+def test_final_response_rejects_coerced_nested_file_sizes(invalid_size):
+    with pytest.raises(ValidationError):
+        AgentResponse.model_validate({
+            "response": response_payload("answer"), "trace": "trace-id",
+            "upload_manifest": {"epoch": "epoch", "revision": 1, "files": [{
+                "file_id": "file", "name": "file.py", "size_bytes": invalid_size,
+                "content_hash": "sha256:" + "0" * 64, "source_uri": "upload://file",
+            }]},
+        })
+
+
+def test_empty_manifest_serialization_preserves_the_actual_revision():
+    manifest = {"epoch": "current-epoch", "revision": 7, "files": []}
+    result = AgentResponse.model_validate({
+        "response": response_payload("answer"), "trace": "trace-id", "upload_manifest": manifest,
+    })
+    assert result.upload_manifest == UploadManifest.model_validate(manifest)
+    assert result.model_dump(mode="json")["upload_manifest"] == manifest
 
 
 class AgentResponseSchemaTest(unittest.TestCase):
     def test_structured_response_payload_is_valid(self) -> None:
         expected = cited_response()
-        result = AgentResponse.model_validate({"response": expected.model_dump(mode="json"), "trace": "trace-id", "debug": None})
+        result = AgentResponse.model_validate({
+            "response": expected.model_dump(mode="json"), "trace": "trace-id", "debug": None,
+            "upload_manifest": {"epoch": "session-epoch", "revision": 0, "files": []},
+        })
         self.assertEqual(result.response, expected)
         self.assertNotIn("file_path", result.model_dump())
 
@@ -17,6 +67,7 @@ class AgentResponseSchemaTest(unittest.TestCase):
         legacy_payload = {
             "response": "legacy string response",
             "trace": "trace-id",
+            "upload_manifest": {"epoch": "session-epoch", "revision": 0, "files": []},
             "debug": None,
         }
         with self.assertRaises(ValidationError):
@@ -26,6 +77,7 @@ class AgentResponseSchemaTest(unittest.TestCase):
         payload = {
             "response": response_payload("hello"),
             "trace": "trace-id",
+            "upload_manifest": {"epoch": "session-epoch", "revision": 0, "files": []},
             "debug": {
                 "tool_calls": [],
                 "tool_call_count": 0,
@@ -40,6 +92,7 @@ class AgentResponseSchemaTest(unittest.TestCase):
         payload = {
             "response": response_payload("uncertain"),
             "trace": "trace-id",
+            "upload_manifest": {"epoch": "session-epoch", "revision": 0, "files": []},
             "debug": {
                 "schema_version": 3,
                 "observability_status": "ok",
@@ -70,6 +123,7 @@ class AgentResponseSchemaTest(unittest.TestCase):
         payload = {
             "response": response_payload("ok"),
             "trace": "trace-id",
+            "upload_manifest": {"epoch": "session-epoch", "revision": 0, "files": []},
             "debug": {
                 "schema_version": 3,
                 "observability_status": "ok",
@@ -103,6 +157,7 @@ class AgentResponseSchemaTest(unittest.TestCase):
         payload = {
             "response": response_payload("follow up"),
             "trace": "trace-id",
+            "upload_manifest": {"epoch": "session-epoch", "revision": 0, "files": []},
             "debug": {
                 "schema_version": 3,
                 "observability_status": "ok",
@@ -153,6 +208,7 @@ class AgentResponseSchemaTest(unittest.TestCase):
         payload = {
             "response": response_payload("follow up"),
             "trace": "trace-id",
+            "upload_manifest": {"epoch": "session-epoch", "revision": 0, "files": []},
             "debug": {
                 "schema_version": 3,
                 "observability_status": "ok",
@@ -212,6 +268,7 @@ class AgentResponseSchemaTest(unittest.TestCase):
         payload = {
             "response": response_payload("follow up"),
             "trace": "trace-id",
+            "upload_manifest": {"epoch": "session-epoch", "revision": 0, "files": []},
             "debug": {
                 "schema_version": 3,
                 "observability_status": "ok",
@@ -257,6 +314,7 @@ class AgentResponseSchemaTest(unittest.TestCase):
         payload = {
             "response": response_payload("follow up"),
             "trace": "trace-id",
+            "upload_manifest": {"epoch": "session-epoch", "revision": 0, "files": []},
             "debug": {
                 "schema_version": 3,
                 "observability_status": "ok",

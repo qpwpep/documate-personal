@@ -25,6 +25,7 @@ class _FakeAgentRequestService:
                     "response": response_payload("delegated answer"),
                     "trace": f"trace-{request_id}",
                     "debug": None,
+                    "upload_manifest": {"epoch": "session-epoch", "revision": 0, "files": []},
                 },
             )
             yield AgentStreamEvent(event="done", data={})
@@ -50,6 +51,9 @@ class AgentRouteServiceDelegationTest(unittest.TestCase):
         events = list(iter_sse_events([response.content]))
         self.assertEqual([event.event for event in events], ["request_started", "final_response", "done"])
         self.assertEqual(events[1].data["response"], response_payload("delegated answer"))
+        self.assertEqual(events[1].data["upload_manifest"], {
+            "epoch": "session-epoch", "revision": 0, "files": [],
+        })
         self.assertEqual(len(self.service.stream_calls), 1)
 
     def test_openapi_describes_stream_events_and_final_response_schema(self) -> None:
@@ -67,6 +71,15 @@ class AgentRouteServiceDelegationTest(unittest.TestCase):
         self.assertEqual(stream["x-sse-events"]["final_response"], {"$ref": "#/components/schemas/AgentResponse"})
         final = schema["components"]["schemas"]["AgentResponse"]
         self.assertEqual(set(final["properties"]), {"response", "trace", "debug", "upload_manifest"})
+        self.assertIn("upload_manifest", final["required"])
+        manifest_field = final["properties"]["upload_manifest"]
+        self.assertEqual(manifest_field["$ref"], "#/components/schemas/UploadManifest")
+        self.assertNotIn("anyOf", manifest_field)
+        self.assertNotIn("default", manifest_field)
+        manifest = schema["components"]["schemas"]["UploadManifest"]
+        self.assertEqual(set(manifest["required"]), {"epoch", "revision", "files"})
+        self.assertEqual(manifest["properties"]["files"]["type"], "array")
+        self.assertNotIn("default", manifest["properties"]["files"])
         self.assertIn("AgentDebugInfo", schema["components"]["schemas"])
         self.assertIn("UploadManifest", schema["components"]["schemas"])
 

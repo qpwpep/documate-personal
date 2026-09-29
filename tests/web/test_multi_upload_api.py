@@ -463,9 +463,16 @@ def test_exit_response_supplies_the_context_for_the_next_question(api, command, 
 
 
 @pytest.mark.parametrize("model_failure", [False, True])
-def test_final_response_preserves_the_confirmed_manifest_even_when_the_model_fails(api, model_failure):
+@pytest.mark.parametrize("attachment_state", ["initial-empty", "attached", "cleared"])
+def test_final_response_preserves_the_confirmed_manifest_even_when_the_model_fails(api, model_failure, attachment_state):
     """The completion envelope reports attachment state independently of answer quality or debug visibility."""
-    current = sync(api, add=[staged(api, "alpha.py", "alpha = 1\n")])["manifest"]
+    current = manifest(api)
+    if attachment_state != "initial-empty":
+        current = sync(api, add=[staged(api, "alpha.py", "alpha = 1\n")])["manifest"]
+    if attachment_state == "cleared":
+        current = sync(api, clear=True)["manifest"]
+        assert current["revision"] > 0
+        assert current["files"] == []
     api.controls.fail_synthesis = model_failure
 
     final = final_response(api, uploads=context(current))

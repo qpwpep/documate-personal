@@ -24,7 +24,7 @@ def empty_upload_manifest_http(monkeypatch):
         response = requests.Response()
         response.status_code = 200
         response.headers["Content-Type"] = "application/json"
-        response._content = UploadManifest(epoch="fixture-epoch", revision=0).model_dump_json().encode("utf-8")
+        response._content = UploadManifest(epoch="fixture-epoch", revision=0, files=[]).model_dump_json().encode("utf-8")
         return response
 
     monkeypatch.setattr(requests.sessions.Session, "request", request)

@@ -50,6 +50,7 @@ import streamlit as st
 from src.app.web.streamlit_chat import process_chat_prompt, render_chat_history
 from src.app.web.streamlit_api_client import AgentCallResult, AgentStreamEvent
 from src.core.answer_schema import finalize_answer, text_document
+from src.core.uploads import UploadManifest
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
@@ -57,7 +58,11 @@ if "messages" not in st.session_state:
 def stream_agent(prompt):
     yield AgentStreamEvent(event="stage_started", data={"stage":"synthesis"})
     response = finalize_answer(text_document("완료된 답변"), [])
-    yield AgentStreamEvent(event="final_response", result=AgentCallResult(response=response))
+    manifest = UploadManifest(epoch="chat-epoch", revision=0, files=[])
+    yield AgentStreamEvent(event="final_response", data={
+        "response": response.model_dump(mode="json"),
+        "upload_manifest": manifest.model_dump(mode="json"),
+    }, result=AgentCallResult(response=response, upload_manifest=manifest))
 
 if not st.session_state.messages:
     process_chat_prompt("질문", st.session_state.messages.append, st.session_state.messages.append, stream_agent)
@@ -78,6 +83,7 @@ def test_stream_errors_remain_visible_beside_unchanged_final_response_after_reru
 import streamlit as st
 from src.app.web.streamlit_chat import process_chat_prompt, render_chat_history
 from src.app.web.streamlit_api_client import AgentCallResult, AgentStreamEvent
+from src.core.uploads import UploadManifest
 from tests.web.answer_fixtures import cited_response
 
 if "messages" not in st.session_state:
@@ -87,12 +93,15 @@ def stream_agent(prompt):
     for message in ["검색 단계에서 오류가 발생했습니다.", "검색 단계에서 오류가 발생했습니다.", "일부 근거를 읽지 못했습니다."]:
         yield AgentStreamEvent(event="error", data={"message": message})
     response = cited_response()
+    manifest = UploadManifest(epoch="chat-epoch", revision=0, files=[])
     st.session_state.final_data = {
         "response": response.model_dump(mode="json"),
         "trace": "planner -> synthesis",
         "debug": {"runtime_error": "retrieval failed", "metrics": {"total_tokens": 42}},
+        "upload_manifest": manifest.model_dump(mode="json"),
     }
-    yield AgentStreamEvent(event="final_response", data=st.session_state.final_data, result=AgentCallResult(response=response))
+    yield AgentStreamEvent(event="final_response", data=st.session_state.final_data,
+                           result=AgentCallResult(response=response, upload_manifest=manifest))
 
 if not st.session_state.messages:
     process_chat_prompt("질문", st.session_state.messages.append, st.session_state.messages.append, stream_agent)
@@ -112,6 +121,7 @@ else:
         "response": cited_response().model_dump(mode="json"),
         "trace": "planner -> synthesis",
         "debug": {"runtime_error": "retrieval failed", "metrics": {"total_tokens": 42}},
+        "upload_manifest": {"epoch": "chat-epoch", "revision": 0, "files": []},
     }
     assert [item.value for item in app.markdown].count("함수는 3을 반환합니다. [1]") == 1
 

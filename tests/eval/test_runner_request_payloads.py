@@ -71,6 +71,7 @@ class RunnerRequestPayloadTest(unittest.TestCase):
         mock_post.return_value = sse_http_response(
             200,
             {
+                "upload_manifest": {"epoch": "fixture-epoch", "revision": 0, "files": []},
                 "response": plain_response('shared'),
                 "trace": "Request ID: req-1",
                 "debug": {
@@ -126,6 +127,7 @@ class RunnerRequestPayloadTest(unittest.TestCase):
         mock_post.return_value = sse_http_response(
             200,
             {
+                "upload_manifest": {"epoch": "fixture-epoch", "revision": 0, "files": []},
                 "response": response,
                 "trace": "Request ID: req-1",
                 "debug": {
@@ -185,6 +187,7 @@ class RunnerRequestPayloadTest(unittest.TestCase):
         mock_post.return_value = sse_http_response(
             200,
             {
+                "upload_manifest": {"epoch": "fixture-epoch", "revision": 0, "files": []},
                 "response": plain_response('shared'),
                 "trace": "Request ID: req-1",
                 "debug": {
@@ -262,6 +265,7 @@ class RunnerRequestPayloadTest(unittest.TestCase):
         mock_post.return_value = sse_http_response(
             200,
             {
+                "upload_manifest": {"epoch": "fixture-epoch", "revision": 0, "files": []},
                 "response": plain_response('shared'),
                 "trace": "Request ID: req-1",
                 "debug": {
@@ -312,6 +316,7 @@ class RunnerRequestPayloadTest(unittest.TestCase):
         mock_post.return_value = sse_http_response(
             200,
             {
+                "upload_manifest": {"epoch": "fixture-epoch", "revision": 0, "files": []},
                 "response": comparison_response(),
                 "trace": "Session ID: abc, Request ID: req123, Agent ID: 1",
                 "debug": {
@@ -409,6 +414,7 @@ class RunnerRequestPayloadTest(unittest.TestCase):
         mock_post.return_value = sse_http_response(
             200,
             {
+                "upload_manifest": {"epoch": "fixture-epoch", "revision": 0, "files": []},
                 "response": {**plain_response('shared'), "actions": [slack_action(channel_id="C999LIVE", status="error")]},
                 "trace": "Request ID: req-1",
                 "debug": {

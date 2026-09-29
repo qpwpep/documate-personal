@@ -77,7 +77,7 @@ def sync_uploads(fastapi_url: str, session_id: str, payload: dict[str, Any]) -> 
 @dataclass
 class AgentCallResult:
     response: AnswerResponse
-    upload_manifest: UploadManifest | None = None
+    upload_manifest: UploadManifest
 
 
 @dataclass(frozen=True)
@@ -258,7 +258,7 @@ def _parse_agent_response_data(data: dict[str, Any]) -> AgentCallResult:
     manifest_payload = data.get("upload_manifest")
     return AgentCallResult(
         response=AnswerResponse.model_validate(response_payload),
-        upload_manifest=UploadManifest.model_validate(manifest_payload) if manifest_payload is not None else None,
+        upload_manifest=UploadManifest.model_validate(manifest_payload),
     )
 
 
@@ -279,6 +279,7 @@ class AgentSessionClient:
 
     Callers own presentation, scenario ordering and explicit upload retries. This
     client never retries a question or guesses state after an incomplete response.
+    A None manifest means no usable server-confirmed snapshot, not empty attachments.
     """
 
     def __init__(self, context: AgentRequestContext, *, manifest: UploadManifest | None = None):
@@ -326,13 +327,13 @@ class AgentSessionClient:
 
     def stream(self, user_input: str) -> Iterator[AgentStreamEvent]:
         context = self.request_context()
-        received_final = False
+        received_valid_final = False
         try:
             for event in stream_agent_response(user_input, context):
                 if event.event == "final_response" and event.result is not None:
-                    received_final = True
+                    received_valid_final = True
                     self.manifest = event.result.upload_manifest
                 yield event
         finally:
-            if not received_final:
+            if not received_valid_final:
                 self.manifest = None

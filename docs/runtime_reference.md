@@ -422,13 +422,15 @@ OpenAPI의 HTTP `200` 응답은 `text/event-stream`의 `x-sse-events` 확장에 
 
 HTTP `200`이나 `done`만으로 성공 처리하지 않습니다. 유효한 `final_response`가 있어야 최종 답변을 사용할 수 있으며, 답변의 제한 사항·액션 실패·debug 오류도 별도로 확인합니다. 클라이언트는 `error` 뒤에도 최종 응답 수신을 계속하며, 최종 응답 없이 종료되거나 연결이 끊기면 답변 수신 실패로 처리합니다.
 
-전송 계층은 최종 `response`, `trace`, `debug`, `upload_manifest`를 전달하고, benchmark는 답변·trace·debug와 앞서 수신한 오류를 결과에 보존합니다. 서버는 요청 처리 후 세션 락을 풀기 전에 `UploadManifest` 스냅샷을 확보하며, 답변 품질이나 debug 표시 여부와 관계없이 최종 응답에 포함합니다. Streamlit은 검증된 manifest를 최종 이벤트 소비 전에 세션 상태에 적용하고, 답변 저장 후 기존 rerun으로 첨부 목록을 갱신합니다. 정상 종료 응답에는 새 epoch·revision 0·빈 목록이 포함되므로 추가 GET이나 질문 재전송 없이 다음 질문을 처리합니다. 최종 `AnswerResponse`와 오류 메시지는 대화 기록에, manifest는 현재 첨부 상태에 보관하며 `trace`와 `debug`는 대화 기록에 저장하지 않습니다.
+전송 계층은 최종 `response`, `trace`, `debug`, `upload_manifest`를 전달하고, benchmark는 답변·trace·debug와 앞서 수신한 오류를 결과에 보존합니다. 서버는 요청 처리 후 세션 락을 풀기 전에 `UploadManifest` 스냅샷을 확보하며, 정상 완료·모델 실패·exit의 유효한 최종 응답에 반드시 포함합니다. `error` 뒤에 유효한 최종 응답이 오면 오류 진단과 확정 manifest를 모두 보존합니다. Streamlit은 검증된 manifest를 최종 이벤트 소비 전에 세션 상태에 적용하고, 답변 저장 후 기존 rerun으로 첨부 목록을 갱신합니다. 세션 종료 응답에는 새 epoch·revision 0·`files=[]`가 포함되므로 추가 GET이나 질문 재전송 없이 다음 질문을 처리합니다. 최종 `AnswerResponse`와 오류 메시지는 대화 기록에, manifest는 현재 첨부 상태에 보관하며 `trace`와 `debug`는 대화 기록에 저장하지 않습니다.
 
-Streamlit은 첫 이벤트 전 오류를 포함해 요청 실패를 화면에 표시하며 자동으로 재요청하지 않습니다. 최종 응답을 받지 못했거나 구 응답에 manifest가 없으면 첨부 캐시를 미확인 상태로 바꾸고 입력을 받기 전에 기존 목록 GET으로 복구합니다. 조회 실패 시 재연결을 기다리며 질문 POST를 반복하지 않습니다. 명시된 manifest의 형식 오류는 스트림 오류로 처리하고 일부 상태만 적용하지 않습니다. 이미 실행된 파일 저장·Slack 전송의 중복 실행을 피하기 위해 일반 JSON 엔드포인트로의 fallback도 사용하지 않습니다.
+공용 클라이언트는 답변과 manifest 검증이 모두 통과해야 최종 결과를 전달합니다. manifest 누락·`null`·형식 오류는 응답 계약 위반이며, 구 응답용 기본값이나 빈 manifest로 보정하지 않습니다. 해당 응답의 답변과 첨부 상태는 승인하지 않고 오류와 원본 envelope를 진단에 남깁니다. 이 계약 오류와 timeout·응답 유실은 서로 다른 실패 원인이지만, 모두 현재 서버 상태를 확신할 수 없으므로 첨부 확인값을 무효화합니다.
+
+클라이언트 내부의 `manifest=None`은 사용할 수 있는 서버 확인 스냅샷이 없다는 뜻입니다. 서버가 확인한 빈 첨부는 실제 epoch·revision과 `files=[]`를 가진 manifest로 구분합니다. 다음 질문을 허용하기 전에 `GET /sessions/{session_id}/uploads`로 확인하고, GET 실패 시 질문 POST를 차단합니다. GET 성공은 현재 첨부 상태만 복구하며 거부한 답변을 성공으로 바꾸지 않습니다. Streamlit은 첫 이벤트 전 오류를 포함해 실패를 화면에 표시하고, 질문이나 첨부 변경을 자동 재실행하지 않습니다. 사용자가 명시한 첨부 재시도는 같은 operation 계약을 따릅니다. 이미 실행된 파일 저장·Slack 전송의 중복 실행을 피하기 위해 일반 JSON 엔드포인트로의 fallback도 사용하지 않습니다.
 
 ### 5.1.1 첨부 목록 조회·변경
 
-`GET /sessions/{session_id}/uploads`는 `{epoch, revision, files}`를 반환합니다. 각 파일에는 `file_id`, `name`, `size_bytes`, `content_hash`, `source_uri`가 있으며 물리 저장 경로는 노출하지 않습니다. 서버 재시작이나 세션 TTL/LRU 만료 후에는 새 epoch가 발급됩니다. 오래된 UI는 목록을 다시 확인하고 필요한 자료를 다시 첨부해야 합니다.
+`GET /sessions/{session_id}/uploads`는 `{epoch, revision, files}`를 반환합니다. 각 파일에는 `file_id`, `name`, `size_bytes`, `content_hash`, `source_uri`가 있으며 물리 저장 경로는 노출하지 않습니다. GET·sync·최종 응답의 manifest는 같은 필수 필드와 엄격한 타입 검증을 사용합니다. 서버 재시작이나 세션 TTL/LRU 만료 후에는 새 epoch가 발급됩니다. 오래된 UI는 목록을 다시 확인하고 필요한 자료를 다시 첨부해야 합니다.
 
 `POST /sessions/{session_id}/uploads/sync`는 공유 파일시스템에 저장한 파일의 참조를 받아 첨부 집합을 갱신합니다. 파일 바이트는 Streamlit의 내장 업로드 경로 또는 benchmark fixture에서 읽어 공용 staging 절차로 준비하며 이 API는 JSON을 받습니다. 원격 클라이언트가 파일 bytes를 직접 보내는 API는 아닙니다.
 
@@ -457,7 +459,7 @@ Streamlit은 첫 이벤트 전 오류를 포함해 요청 실패를 화면에 �
 
 ### 5.2 최종 응답과 debug
 
-`final_response` 이벤트의 `data`는 `AgentResponse`이며 `response`, `trace`, `debug`, `upload_manifest`를 담습니다. `upload_manifest`는 기존 목록 조회와 같은 `{epoch, revision, files}`이고 물리 저장 경로를 노출하지 않습니다. 이전 응답과의 파싱 호환성을 위해 스키마 기본값은 `null`이지만 현재 서버는 모든 최종 응답에 처리 후 스냅샷을 채웁니다. 다음 JSON은 SSE 스트림 전체가 아니라 이 `data` 객체의 최소 예시입니다.
+`final_response` 이벤트의 `data`는 `AgentResponse`이며 `response`, `trace`, `debug`, `upload_manifest`를 담습니다. `upload_manifest`는 필수·non-null이며 `{epoch, revision, files}` 세 필드도 모두 필수입니다. epoch는 비어 있지 않은 문자열, revision은 0 이상의 정수, files는 `UploadFileInfo` 목록이며 물리 저장 경로를 노출하지 않습니다. manifest와 파일 항목은 잘못된 타입을 변환해 승인하지 않습니다. 예를 들어 revision이나 `size_bytes`의 문자열·boolean·실수는 정수로 보정하지 않고 거부합니다. 첨부가 없으면 실제 epoch·revision과 `files=[]`를 반환하며, 첨부 전체 삭제 후에도 증가한 revision을 보존합니다. 새 세션이나 exit로 세션을 초기화한 경우에 revision 0을 사용합니다. 다음 JSON은 SSE 스트림 전체가 아니라 이 `data` 객체의 최소 예시입니다.
 
 ```json
 {
