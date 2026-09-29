@@ -5,7 +5,6 @@ from dataclasses import dataclass
 import re
 import time
 from typing import Any
-from urllib.parse import urlparse
 
 from src.core.latency import elapsed_ms
 from src.core.documents import DocumentElement, SourceAnchor, build_snapshot
@@ -16,7 +15,6 @@ from src.infra.tools.docs_search.policy import (
     canonicalize_doc_url,
     doc_url_filter_reason,
     is_valid_doc_result,
-    normalize_domain,
     normalized_domain_set,
     result_matches_domains,
 )
@@ -117,26 +115,6 @@ def _validate_candidate_urls(
             if filter_counters is not None:
                 filter_counters.validated_url_count += 1
             item.resolved_url = validation.final_url
-
-
-def url_domain(url: str) -> str:
-    parsed = urlparse(str(url or "").strip())
-    return normalize_domain(parsed.netloc)
-
-
-def filter_hits_to_domains(
-    hits: list[dict[str, Any]],
-    *,
-    allowed_domains: list[str],
-) -> list[dict[str, Any]]:
-    normalized_domains = normalized_domain_set(allowed_domains)
-    if not normalized_domains:
-        return hits
-    return [
-        item
-        for item in hits
-        if url_domain(str(item["evidence"]["snapshot"]["source_uri"])) in normalized_domains
-    ]
 
 
 def _candidate_doc_urls(original_url: str) -> list[str]:

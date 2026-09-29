@@ -128,9 +128,9 @@ def result_matches_domains(url: str, allowed_domains: set[str]) -> bool:
     return normalize_domain(parsed.netloc) in allowed_domains
 
 
-def infer_docs_query_hint(query: str) -> tuple[str, list[str], list[str]] | None:
+def infer_docs_library(query: str) -> str | None:
     lowered = canonicalize_docs_query_text(query).lower()
-    best_match: tuple[tuple[int, int, int, int], tuple[str, list[str], list[str]]] | None = None
+    best_match: tuple[tuple[int, int, int, int], str] | None = None
     for hint in docs_search_rules().query_hints:
         matched_identifiers = [
             identifier
@@ -151,9 +151,8 @@ def infer_docs_query_hint(query: str) -> tuple[str, list[str], list[str]] | None
             len(matched_identifiers),
             max(len(str(identifier or "")) for identifier in matched_identifiers),
         )
-        candidate = (hint.library_name, list(hint.domains), list(hint.fallback_queries))
         if best_match is None or score > best_match[0]:
-            best_match = (score, candidate)
+            best_match = (score, hint.library_name)
     if best_match is not None:
         return best_match[1]
     return None

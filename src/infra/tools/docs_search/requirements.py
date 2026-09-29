@@ -6,7 +6,7 @@ from urllib.parse import unquote, urlparse
 from src.core.evidence import SearchHit, build_evidence, dedupe_search_hits
 from src.core.planner_schema import RetrievalRequirement
 from src.infra.tools.docs_search.normalization import canonicalize_docs_query_text
-from src.infra.tools.docs_search.policy import docs_search_rules, infer_docs_query_hint, result_matches_domains
+from src.infra.tools.docs_search.policy import docs_search_rules, infer_docs_library, result_matches_domains
 from src.infra.tools.docs_search.ranking import extract_exact_identifier_terms, hit_has_grounded_text
 
 
@@ -37,12 +37,11 @@ def resolve_requirement(query: str, requirement: RetrievalRequirement | dict | N
     supplied = RetrievalRequirement.model_validate(requirement or {})
     if supplied.library or supplied.symbols or supplied.version or supplied.aspects:
         library = canonical_library(supplied.library)
-        if not library and (hint := infer_docs_query_hint(query)):
-            library = hint[0]
+        if not library:
+            library = infer_docs_library(query) or ""
         return supplied.model_copy(update={"library": library or None,
                                            "symbols": [canonical_symbol(s, library) for s in supplied.symbols]})
-    hint = infer_docs_query_hint(query)
-    library = hint[0] if hint else ""
+    library = infer_docs_library(query) or ""
     symbols = [canonical_symbol(s, library) for s in extract_exact_identifier_terms(query, library_name=library)]
     return RetrievalRequirement(library=library or None, symbols=symbols,
                                 match="symbol" if symbols else "topic")

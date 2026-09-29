@@ -15,7 +15,6 @@ class DocsSearchQueryHint(BaseModel):
     identifiers: list[str] = Field(default_factory=list)
     library_name: str
     domains: list[str] = Field(default_factory=list)
-    fallback_queries: list[str] = Field(default_factory=list)
     match_mode: Literal["contains", "word"] = "contains"
 
 

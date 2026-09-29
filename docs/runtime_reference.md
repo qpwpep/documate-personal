@@ -193,7 +193,7 @@ UI와 문서 검색 규칙은 아래 파일을 기준으로 관리합니다.
 - `src/core/domain_docs.py`: Streamlit 소개 영역에 노출하는 기본 문서 목록
 - `src/infra/config/agent_rules.toml`: 공식 문서 검색의 허용 출처, query hint, 식별자 제외어
 
-`RULES_CONFIG_PATH`로 규칙 파일을 지정할 수 있습니다. 설정은 `[docs_search]`에 속하며, 최상위·검색 설정·각 query hint에서 선언하지 않은 키는 로드 시 오류로 거부합니다. `docs_identifier_stopwords`는 `[docs_search]`에서 관리하며, query에서 일반 표현을 API 식별자로 오인하지 않도록 사용합니다. query hint의 `identifiers`, `library_name`, `domains`, `match_mode`는 라이브러리 추론과 공식 도메인 선택에 쓰입니다.
+`RULES_CONFIG_PATH`로 규칙 파일을 지정할 수 있습니다. 설정은 `[docs_search]`에 속하며, 최상위·검색 설정·각 query hint에서 선언하지 않은 키는 로드 시 오류로 거부합니다. `docs_identifier_stopwords`는 `[docs_search]`에서 관리하며, query에서 일반 표현을 API 식별자로 오인하지 않도록 사용합니다. query hint의 `identifiers`, `library_name`, `domains`, `match_mode`는 라이브러리 추론과 공식 도메인 선택에 쓰입니다. `infer_docs_library()`는 매칭한 라이브러리명만 반환하고, 도메인은 확정된 라이브러리를 기준으로 `library_domains()`가 조회합니다. hint는 쿼리 목록이나 검색 실행 순서를 정의하지 않습니다.
 
 필요한 검색 출처는 업로드 가용성과 무관하게 LLM이 선택하고, 스키마 검증을 통과한 `PlannerOutput.tasks`를 기준으로 실행합니다. [planner 지침](../src/runtime/nodes/planner/prompt_builder.py)은 일반 기술 설명과 실제 파일 조회를 구분하고 출처 제외 지시를 반영합니다.
 
@@ -237,9 +237,9 @@ planner 검색어 후처리는 공백을 정규화해 한국어 주제와 식별
 
 현재 기본 문서 소스는 Python, Git, LangChain, Matplotlib, NumPy, pandas, PyTorch, Hugging Face, FastAPI, BeautifulSoup, Streamlit, Gradio, scikit-learn, Pydantic입니다.
 
-docs 도구는 task의 `k`를 Tavily `max_results`와 반환 evidence 한도에 적용합니다. 명시된 라이브러리의 domain을 우선하고, 해당 소스를 지원하지 않으면 다른 라이브러리 문서로 대신 답하지 않습니다. 후보는 domain/path prefix·URL·원문 유효성뿐 아니라 요청 심볼의 문서 소유권, 버전, 실제 발췌에 남은 aspect를 확인합니다. 다른 API 문서에 이름이 언급됐다는 사실만으로 해당 API의 근거를 확보했다고 판단하지 않습니다.
+docs 도구는 task의 `k`를 Tavily `max_results`와 반환 evidence 한도에 적용합니다. 명시된 라이브러리의 domain을 우선하고, 해당 소스를 지원하지 않으면 다른 라이브러리 문서로 대신 답하지 않습니다. 출처 선택·필터링과 요구사항 충족 판정은 docs 도구가 수행합니다. 후보는 domain/path prefix·URL·원문 유효성뿐 아니라 요청 심볼의 문서 소유권, 버전, 실제 발췌에 남은 aspect를 확인합니다. 다른 API 문서에 이름이 언급됐다는 사실만으로 해당 API의 근거를 확보했다고 판단하지 않습니다. dispatcher는 도구가 반환한 근거와 진단에 requirement ID·실행 정보를 연결하며 도메인을 다시 추론해 필터링하지 않습니다.
 
-도구 호출마다 최초 query와 이를 요구사항에 맞춰 재구성한 fallback query를 최대 한 번씩 계획합니다. 충분한 근거를 확보하면 즉시 중단하고, 이미 `attempted_queries`에 기록된 query는 다시 구매하지 않습니다. 고정된 라이브러리별 fallback 목록을 순회하지 않습니다. `DOCS_SEARCH_TIMEOUT_SECONDS`는 개별 Tavily 요청마다 적용되며 route 전체의 deadline은 아닙니다.
+도구는 `query`, `requirement`, `k`, `attempted_queries`, `previous_hits`를 입력받고 공식 도메인을 내부에서 결정합니다. Tavily 검색 깊이는 `basic`으로 실행합니다. 도구 호출마다 최초 query와 이를 요구사항에 맞춰 재구성한 query를 최대 한 번씩 계획합니다. 충분한 근거를 확보하면 즉시 중단하고, 이미 `attempted_queries`에 기록된 query는 다시 구매하지 않습니다. `DOCS_SEARCH_TIMEOUT_SECONDS`는 개별 Tavily 요청마다 적용되며 route 전체의 deadline은 아닙니다.
 
 재시도에는 현재 요청의 같은 `requirement_id`에서 확보한 부분 후보를 `previous_hits`로 전달합니다. 기존·신규 후보를 합친 뒤 원래 라이브러리·domain·심볼·버전·aspect와 `k`에 맞게 다시 검사합니다. 다른 대상이나 버전의 후보는 재사용 근거로 인정하지 않으며, 이미 충분하면 추가 HTTP 호출 없이 반환합니다.
 
