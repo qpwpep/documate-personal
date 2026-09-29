@@ -24,7 +24,6 @@ class SidebarInputs:
 
 
 def render_sidebar(
-    current_file_name: str | None = None,
     *,
     manifest: UploadManifest | None = None,
     uploads_busy: bool = False,
@@ -54,6 +53,8 @@ def render_sidebar(
 
         st.markdown('<div class="dm-sidebar-section">함께 검색할 파일</div>', unsafe_allow_html=True)
         if manifest is not None:
+            refresh_uploads_requested = st.button("첨부 목록 새로고침", key="documate_refresh_uploads", disabled=uploads_busy)
+        if manifest is not None and not refresh_uploads_requested:
             total_mib = sum(item.size_bytes for item in manifest.files) / (1024 * 1024)
             st.markdown(f'<p class="dm-upload-summary"><strong>{len(manifest.files)}개 파일 · {total_mib:.2f} MiB</strong></p>', unsafe_allow_html=True)
             for item in manifest.files:
@@ -65,10 +66,8 @@ def render_sidebar(
                 st.markdown('<p class="dm-upload-help">첨부를 해제해도 대화와 기존 답변의 인용은 유지됩니다.</p>', unsafe_allow_html=True)
             else:
                 st.markdown('<p class="dm-upload-help">아직 업로드된 파일이 없습니다.</p>', unsafe_allow_html=True)
-            refresh_uploads_requested = st.button("첨부 목록 새로고침", key="documate_refresh_uploads", disabled=uploads_busy)
         else:
-            uploaded_label = escape(current_file_name or "아직 업로드된 파일이 없습니다.")
-            st.markdown(f'<div class="dm-upload-note">현재 파일: <strong>{uploaded_label}</strong></div>', unsafe_allow_html=True)
+            st.markdown('<p class="dm-upload-note">첨부 상태를 확인하지 못했습니다. 서버 목록을 확인한 뒤 질문할 수 있습니다.</p>', unsafe_allow_html=True)
 
         st.markdown('<div class="dm-sidebar-section">화면 모드</div>', unsafe_allow_html=True)
         theme_mode = st.radio(

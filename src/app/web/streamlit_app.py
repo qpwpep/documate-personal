@@ -56,7 +56,7 @@ def main() -> None:
     ensure_session_state(logger)
 
     manifest_error = None
-    if get_upload_manifest() is None:
+    if get_upload_manifest() is None and get_pending_upload() is None:
         try:
             set_upload_manifest(_session_client().refresh_uploads())
         except UploadAPIError as exc:
@@ -76,18 +76,25 @@ def main() -> None:
     render_chat_history(messages, SETTINGS.fastapi_url)
 
     if manifest is None:
+        if get_pending_upload() is not None:
+            _render_pending_upload()
+            return
         st.error(manifest_error or "첨부 목록을 불러오지 못했습니다.")
         if st.button("첨부 서버 다시 연결", key="documate_reconnect_uploads"):
             st.rerun()
         return
 
     if sidebar_inputs.refresh_uploads_requested:
+        client = _session_client()
         try:
-            set_upload_manifest(_session_client().refresh_uploads())
+            client.refresh_uploads()
             st.rerun()
         except UploadAPIError as exc:
             st.error(str(exc))
             return
+        finally:
+            if get_session_id() == client.context.session_id:
+                set_upload_manifest(client.manifest)
 
     if get_pending_upload() is None and (sidebar_inputs.remove_file_id or sidebar_inputs.clear_uploads_requested):
         set_pending_upload(PendingUploadOperation(
@@ -210,8 +217,9 @@ def commit_pending_upload() -> bool:
     if any(item.conflicting_file_id and not item.replace_file_id for item in pending.files):
         return False
     pending.attempted = True
+    client = _session_client()
     try:
-        result = _session_client().sync_uploads(pending)
+        client.sync_uploads(pending)
     except UploadAPIError as exc:
         pending.failed = True
         pending.error = str(exc)
@@ -220,11 +228,13 @@ def commit_pending_upload() -> bool:
         if exc.status_code == 409:
             pending.needs_refresh_review = True
             try:
-                set_upload_manifest(_session_client().refresh_uploads())
+                client.refresh_uploads()
             except UploadAPIError as refresh_error:
                 pending.error += f"\n첨부 목록 새로고침 실패: {refresh_error}"
         return False
-    set_upload_manifest(result.manifest)
+    finally:
+        if get_session_id() == client.context.session_id:
+            set_upload_manifest(client.manifest)
     if pending.prompt:
         key = "upload_saved_prompt" if pending.failed else "upload_followup_prompt"
         st.session_state[key] = pending.prompt
@@ -237,12 +247,15 @@ def _review_pending_again() -> None:
     pending = get_pending_upload()
     if pending is None:
         return
+    client = _session_client()
     try:
-        manifest = _session_client().refresh_uploads()
+        manifest = client.refresh_uploads()
     except UploadAPIError as exc:
         pending.error = str(exc)
         return
-    set_upload_manifest(manifest)
+    finally:
+        if get_session_id() == client.context.session_id:
+            set_upload_manifest(client.manifest)
     existing = {normalized_upload_name(item.name): item for item in manifest.files}
     pending.epoch = manifest.epoch
     pending.expected_revision = manifest.revision
@@ -299,13 +312,14 @@ def _render_pending_upload() -> None:
         if not pending.attempted:
             discard_staged_files(pending.files, get_session_path())
         set_pending_upload(None)
+        client = _session_client()
         try:
-            set_upload_manifest(_session_client().refresh_uploads())
+            client.refresh_uploads()
         except UploadAPIError:
-            if pending.attempted:
-                # A lost response may hide a committed mutation. Require confirmation
-                # before another question can use the previous attachment generation.
-                set_upload_manifest(None)
+            pass
+        finally:
+            if get_session_id() == client.context.session_id:
+                set_upload_manifest(client.manifest)
         st.rerun()
 
 
