@@ -20,7 +20,7 @@ def normalized_upload_name(name: str) -> str:
 
 
 class UploadFileInfo(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
     file_id: str = Field(min_length=1, max_length=128)
     name: str = Field(min_length=1, max_length=255)
@@ -46,7 +46,9 @@ class UploadContext(BaseModel):
 
 
 class UploadManifest(UploadContext):
-    files: list[UploadFileInfo] = Field(default_factory=list)
+    model_config = ConfigDict(strict=True)
+
+    files: list[UploadFileInfo]
 
     def context(self) -> UploadContext:
         return UploadContext(epoch=self.epoch, revision=self.revision)

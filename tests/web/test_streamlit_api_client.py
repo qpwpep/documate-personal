@@ -112,14 +112,18 @@ def test_invalid_final_manifest_does_not_confirm_a_partial_response(transport, m
 def test_chunked_sse_preserves_response_trace_and_debug():
     """Arbitrarily split frames preserve the complete event and typed answer."""
     expected = cited_response()
-    payload = {"response": expected.model_dump(mode="json"), "trace": "t", "debug": None}
+    manifest = UploadManifest(epoch="e", revision=0, files=[])
+    payload = {"response": expected.model_dump(mode="json"), "trace": "t", "debug": None,
+               "upload_manifest": manifest.model_dump(mode="json")}
     encoded = frame("final_response", payload)
 
     events = list(_iter_sse_events([encoded[:17], encoded[17:67], encoded[67:]]))
 
     assert len(events) == 1
     assert events[0].data == payload
-    assert events[0].result == AgentCallResult(response=expected)
+    assert events[0].result == AgentCallResult(response=expected, upload_manifest=manifest)
+
+
 
 
 
