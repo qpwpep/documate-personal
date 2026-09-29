@@ -1,11 +1,4 @@
-[intents]
-docs_patterns = [
-  "\\b(latest|official|docs?|documentation|reference|api|syntax|parameter|manual)\\b",
-  "(공식|문서|레퍼런스|참고\\s*자료|최신|API)",
-]
-
-[planner]
-compare_clause_pattern = "(?i)\\b(compare|comparison|versus|vs\\.?|along with|together)\\b|비교|함께|같이"
+[docs_search]
 docs_identifier_stopwords = [
   "from",
   "official",
@@ -19,7 +12,6 @@ docs_identifier_stopwords = [
   "and",
 ]
 
-[docs_search]
 error_page_markers = ["404", "page not found", "github pages", "does not exist", "not found", "requested file"]
 
 [docs_search.allowed_doc_path_prefixes]
