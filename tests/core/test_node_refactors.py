@@ -1,3 +1,7 @@
+import json
+
+import pytest
+import requests
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
 from src.core.contracts import RetrievalDiagnostic
@@ -7,7 +11,10 @@ from src.core.evidence import RetrievalScore, SearchHit, build_evidence
 from src.core.planner_schema import PlannerOutput, RetrievalTask
 from src.core.prompts import SYS_POLICY
 from src.core.request_contracts import RequestContract
-from src.runtime.nodes.retrieval import collect_retrieval_result
+from src.infra.settings import AppSettings
+from src.infra.tools import build_tool_registry
+from src.infra.tools.docs_search.url_validation import validate_doc_url
+from src.runtime.nodes.retrieval import make_retrieve_dispatch_node
 from src.runtime.nodes.synthesis.evidence_selection import select_evidence_hits
 from src.runtime.nodes.synthesis.prompt_builder import build_synthesis_messages
 from src.runtime.nodes.validation.evidence_validator import assess_retrieval_quality, build_validation_snapshot
@@ -91,18 +98,72 @@ def test_retrieval_quality_does_not_reject_available_sources_by_low_score_alone(
     assert assessment.blocked_missing_upload is False
 
 
-def test_collect_retrieval_result_filters_cross_library_domains_without_losing_snapshot():
-    """Library-scoped search retains the correct original source object and records domain filtering."""
-    numpy = _hit("Join a sequence of arrays.", uri="https://numpy.org/doc/stable/reference/generated/numpy.concatenate.html")
-    pandas = _hit("Concatenate pandas objects.", uri="https://pandas.pydata.org/docs/reference/api/pandas.concat.html")
-    errors = []
-    hits, diagnostic = collect_retrieval_result(
-        raw_payload={"hits": [numpy.model_dump(mode="json"), pandas.model_dump(mode="json")],
-                     "diagnostics": {"status": "success", "query": "numpy official docs"}},
-        tool_name="tavily_search", route="docs", query="numpy official docs", attempt=1, local_errors=errors,
+@pytest.mark.parametrize("requirement", [{}, {"library": "numpy"}])
+@pytest.mark.parametrize("has_official_result", [True, False])
+def test_docs_dispatch_preserves_tool_domain_filtering_and_answerability(monkeypatch, requirement, has_official_result):
+    """The real docs tool filters sources before judging coverage and dispatch preserves both decisions."""
+    numpy = {
+        "url": "https://numpy.org/doc/2.3/reference/generated/numpy.concatenate.html",
+        "title": "numpy.concatenate — NumPy v2.3 Manual",
+        "content": "Join a sequence of arrays along an existing axis.",
+        "score": 0.9,
+    }
+    pandas = {
+        "url": "https://pandas.pydata.org/docs/reference/api/pandas.concat.html",
+        "title": "pandas.concat", "content": "Concatenate pandas objects.", "score": 0.99,
+    }
+    requests_seen = []
+
+    def response(url, payload):
+        result = requests.Response()
+        result.status_code = 200
+        result.url = url
+        result._content = json.dumps(payload).encode()
+        result._content_consumed = True
+        return result
+
+    def post(url, *, json, **kwargs):
+        requests_seen.append(json)
+        return response(url, {"results": [pandas, numpy] if has_official_result else [pandas]})
+
+    monkeypatch.setattr(requests, "post", post)
+    monkeypatch.setattr(requests, "head", lambda url, **kwargs: response(url, {}))
+    registry = build_tool_registry(AppSettings(_env_file=None, openai_api_key="test", tavily_api_key="test"))
+    task = RetrievalTask(route="docs", query="numpy official docs", k=3, requirement_id="numpy-docs", requirement=requirement)
+    dispatch = make_retrieve_dispatch_node(registry.tavily_search_tool, registry.upload_search_tool, verbose=False)
+    state = build_graph_state_input(
+        user_input="numpy official docs", messages=[],
+        planner={"output": PlannerOutput(use_retrieval=True, tasks=[task])},
     )
-    assert [SearchHit.model_validate(hit) for hit in hits] == [numpy]
-    assert errors == []
-    assert diagnostic.filtered_cross_domain_count == 1
-    assert diagnostic.final_evidence_count == 1
+    validate_doc_url.cache_clear()
+    try:
+        updates = dispatch(state)
+    finally:
+        validate_doc_url.cache_clear()
+
+    hits = [SearchHit.model_validate(hit) for hit in updates["retrieval"].hit_log]
+    diagnostic = updates["debug"].retrieval_diagnostics[0]
+    tool_payload = json.loads(updates["messages"][0].content)
+    assert updates["debug"].retrieval_errors == []
+    assert diagnostic.requirement_id == task.requirement_id
+    assert diagnostic.request_fingerprint
+    assert all(request["include_domains"] == ["numpy.org"] for request in requests_seen)
+    assert diagnostic.filtered_cross_domain_count == len(requests_seen)
+    assert diagnostic.final_evidence_count == len(hits)
     assert "cross_library_domain_filtered" in diagnostic.warnings
+    assert tool_payload["hits"] == updates["retrieval"].hit_log
+    assert tool_payload["diagnostics"]["answerability"] == diagnostic.answerability
+    if has_official_result:
+        assert len(requests_seen) == 1
+        assert len(hits) == 1
+        assert hits[0].requirement_id == task.requirement_id
+        assert hits[0].evidence.snapshot.source_uri == numpy["url"]
+        assert hits[0].evidence.snapshot.title == numpy["title"]
+        assert hits[0].evidence.element.text == numpy["content"]
+        assert diagnostic.answerability == "covered"
+        assert diagnostic.status == "success"
+    else:
+        assert len(requests_seen) == 2
+        assert hits == []
+        assert diagnostic.answerability == "missing"
+        assert diagnostic.status == "no_result"

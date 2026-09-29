@@ -36,306 +36,201 @@ error_page_markers = ["404", "page not found", "github pages", "does not exist",
 identifiers = ["python", "asyncio", "pathlib", "dataclass", "dataclasses", "venv"]
 library_name = "Python"
 domains = ["docs.python.org"]
-fallback_queries = [
-  "python asyncio task documentation",
-  "python pathlib documentation",
-  "python dataclasses documentation",
-  "python venv documentation",
-]
 match_mode = "word"
 
 [[docs_search.query_hints]]
 identifiers = ["git", "rebase", "cherry-pick", "git merge", "git reset", "git checkout", "git commit", "git push"]
 library_name = "Git"
 domains = ["git-scm.com"]
-fallback_queries = [
-  "git rebase documentation",
-  "git merge documentation",
-  "git reset documentation",
-  "git checkout documentation",
-]
 match_mode = "word"
 
 [[docs_search.query_hints]]
 identifiers = ["langchain", "lcel", "runnable", "retriever", "chatprompttemplate", "prompttemplate"]
 library_name = "LangChain"
 domains = ["python.langchain.com"]
-fallback_queries = [
-  "LangChain retrievers docs",
-  "LangChain Runnable interface docs",
-  "LangChain ChatPromptTemplate docs",
-  "LangChain prompt templates docs",
-]
 match_mode = "word"
 
 [[docs_search.query_hints]]
 identifiers = ["matplotlib"]
 library_name = "matplotlib"
 domains = ["matplotlib.org"]
-fallback_queries = ["matplotlib api reference", "matplotlib user guide"]
 match_mode = "word"
 
 [[docs_search.query_hints]]
 identifiers = ["pytorch", "torch", "torch.nn", "nn.module", "autograd", "optimizer"]
 library_name = "pytorch"
 domains = ["docs.pytorch.org"]
-fallback_queries = [
-  "PyTorch torch.Tensor documentation",
-  "PyTorch torch.nn documentation",
-  "PyTorch autograd documentation",
-  "PyTorch optim documentation",
-]
 match_mode = "word"
 
 [[docs_search.query_hints]]
 identifiers = ["hugging face", "huggingface", "transformers", "tokenizer", "datasets", "trainer"]
 library_name = "Hugging Face"
 domains = ["huggingface.co"]
-fallback_queries = [
-  "Hugging Face Transformers tokenizer padding docs",
-  "Hugging Face datasets loading docs",
-  "Hugging Face Trainer docs",
-  "Hugging Face transformers pipeline docs",
-]
 match_mode = "word"
 
 [[docs_search.query_hints]]
 identifiers = ["streamlit"]
 library_name = "streamlit"
 domains = ["docs.streamlit.io"]
-fallback_queries = ["streamlit api reference", "streamlit concepts documentation"]
 match_mode = "word"
 
 [[docs_search.query_hints]]
 identifiers = ["st.session_state", "st.cache_data", "st.button", "st.file_uploader", "session_state"]
 library_name = "streamlit"
 domains = ["docs.streamlit.io"]
-fallback_queries = [
-  "streamlit st.session_state docs",
-  "streamlit st.cache_data docs",
-  "streamlit st.file_uploader docs",
-]
 match_mode = "contains"
 
 [[docs_search.query_hints]]
 identifiers = ["gradio"]
 library_name = "gradio"
 domains = ["gradio.app"]
-fallback_queries = ["gradio docs", "gradio guides"]
 match_mode = "word"
 
 [[docs_search.query_hints]]
 identifiers = ["gradio blocks", "gradio interface", "chatinterface", "gr.chatinterface", "gradio queue"]
 library_name = "gradio"
 domains = ["gradio.app"]
-fallback_queries = [
-  "gradio Blocks docs",
-  "gradio Interface docs",
-  "gradio ChatInterface docs",
-  "gradio queue docs",
-]
 match_mode = "contains"
 
 [[docs_search.query_hints]]
 identifiers = ["scikit-learn", "sklearn"]
 library_name = "scikit-learn"
 domains = ["scikit-learn.org"]
-fallback_queries = ["scikit-learn user guide", "scikit-learn api reference"]
 match_mode = "word"
 
 [[docs_search.query_hints]]
 identifiers = ["train_test_split"]
 library_name = "scikit-learn"
 domains = ["scikit-learn.org"]
-fallback_queries = ["train_test_split sklearn.model_selection"]
 
 [[docs_search.query_hints]]
 identifiers = ["standardscaler"]
 library_name = "scikit-learn"
 domains = ["scikit-learn.org"]
-fallback_queries = ["StandardScaler sklearn.preprocessing"]
 
 [[docs_search.query_hints]]
 identifiers = ["logisticregression"]
 library_name = "scikit-learn"
 domains = ["scikit-learn.org"]
-fallback_queries = ["LogisticRegression sklearn.linear_model"]
 
 [[docs_search.query_hints]]
 identifiers = ["pipeline"]
 library_name = "scikit-learn"
 domains = ["scikit-learn.org"]
-fallback_queries = ["Pipeline sklearn.pipeline"]
 
 [[docs_search.query_hints]]
 identifiers = ["depends", "apirouter", "backgroundtasks"]
 library_name = "fastapi"
 domains = ["fastapi.tiangolo.com"]
-fallback_queries = [
-  "FastAPI Depends reference",
-  "FastAPI APIRouter reference",
-  "FastAPI BackgroundTasks reference",
-]
 match_mode = "word"
 
 [[docs_search.query_hints]]
 identifiers = ["response_model"]
 library_name = "fastapi"
 domains = ["fastapi.tiangolo.com"]
-fallback_queries = ["response_model fastapi"]
 match_mode = "word"
 
 [[docs_search.query_hints]]
 identifiers = ["fastapi"]
 library_name = "fastapi"
 domains = ["fastapi.tiangolo.com"]
-fallback_queries = ["fastapi tutorial", "fastapi reference"]
 match_mode = "word"
 
 [[docs_search.query_hints]]
 identifiers = ["beautifulsoup", "beautiful soup", "bs4"]
 library_name = "BeautifulSoup"
 domains = ["crummy.com"]
-fallback_queries = [
-  "BeautifulSoup find find_all select official docs",
-  "BeautifulSoup searching the tree find_all find select",
-  "bs4 BeautifulSoup find_all select",
-]
 match_mode = "word"
 
 [[docs_search.query_hints]]
 identifiers = ["find_all", "soup.find", "soup.find_all", "soup.select"]
 library_name = "BeautifulSoup"
 domains = ["crummy.com"]
-fallback_queries = [
-  "BeautifulSoup find find_all select official docs",
-  "BeautifulSoup searching the tree find_all find select",
-  "bs4 BeautifulSoup find_all select",
-]
 match_mode = "contains"
 
 [[docs_search.query_hints]]
 identifiers = ["merge"]
 library_name = "pandas"
 domains = ["pandas.pydata.org"]
-fallback_queries = ["pandas merge user guide", "pandas merging user guide"]
 match_mode = "word"
 
 [[docs_search.query_hints]]
 identifiers = ["groupby"]
 library_name = "pandas"
 domains = ["pandas.pydata.org"]
-fallback_queries = ["pandas groupby user guide"]
 
 [[docs_search.query_hints]]
 identifiers = ["pandas"]
 library_name = "pandas"
 domains = ["pandas.pydata.org"]
-fallback_queries = ["pandas user guide", "pandas api reference"]
 match_mode = "word"
 
 [[docs_search.query_hints]]
 identifiers = ["concat"]
 library_name = "pandas"
 domains = ["pandas.pydata.org"]
-fallback_queries = ["pandas.concat api reference", "pandas concat user guide"]
 match_mode = "word"
 
 [[docs_search.query_hints]]
 identifiers = ["broadcasting"]
 library_name = "numpy"
 domains = ["numpy.org"]
-fallback_queries = ["broadcasting numpy"]
 
 [[docs_search.query_hints]]
 identifiers = ["reshape", "np.reshape", "ndarray"]
 library_name = "numpy"
 domains = ["numpy.org"]
-fallback_queries = [
-  "numpy reshape documentation",
-  "numpy ndarray documentation",
-  "numpy array manipulation documentation",
-]
 match_mode = "word"
 
 [[docs_search.query_hints]]
 identifiers = ["numpy"]
 library_name = "numpy"
 domains = ["numpy.org"]
-fallback_queries = ["numpy user guide", "numpy api reference"]
 match_mode = "word"
 
 [[docs_search.query_hints]]
 identifiers = ["dataloader", "dataset"]
 library_name = "pytorch"
 domains = ["docs.pytorch.org"]
-fallback_queries = [
-  "torch.utils.data Dataset DataLoader",
-  "torch.utils.data.Dataset",
-  "torch.utils.data.DataLoader",
-  "DataLoader torch.utils.data",
-]
 
 [[docs_search.query_hints]]
 identifiers = ["pie"]
 library_name = "matplotlib"
 domains = ["matplotlib.org"]
-fallback_queries = [
-  "matplotlib.pyplot.pie parameters",
-  "matplotlib.pyplot.pie api reference",
-  "matplotlib pie chart api reference",
-]
 match_mode = "word"
 
 [[docs_search.query_hints]]
 identifiers = ["hist", "histogram"]
 library_name = "matplotlib"
 domains = ["matplotlib.org"]
-fallback_queries = ["matplotlib.pyplot.hist api reference", "matplotlib hist api reference"]
 match_mode = "word"
 
 [[docs_search.query_hints]]
 identifiers = ["pydantic"]
 library_name = "pydantic"
 domains = ["docs.pydantic.dev", "pydantic.dev"]
-fallback_queries = ["pydantic concepts documentation", "pydantic api documentation"]
 match_mode = "word"
 
 [[docs_search.query_hints]]
 identifiers = ["basemodel"]
 library_name = "pydantic"
 domains = ["docs.pydantic.dev", "pydantic.dev"]
-fallback_queries = [
-  "pydantic BaseModel documentation",
-  "pydantic model_validate documentation",
-]
 match_mode = "word"
 
 [[docs_search.query_hints]]
 identifiers = ["model_validate"]
 library_name = "pydantic"
 domains = ["docs.pydantic.dev", "pydantic.dev"]
-fallback_queries = [
-  "pydantic model_validate documentation",
-  "pydantic BaseModel documentation",
-]
 match_mode = "word"
 
 [[docs_search.query_hints]]
 identifiers = ["field", "field_validator"]
 library_name = "pydantic"
 domains = ["docs.pydantic.dev", "pydantic.dev"]
-fallback_queries = [
-  "pydantic Field fields concepts",
-  "pydantic Field API fields",
-  "pydantic field_validator validators",
-  "pydantic functional validators field_validator",
-]
 match_mode = "word"
 
 [[docs_search.query_hints]]
 identifiers = ["bare"]
 library_name = "Bare"
 domains = ["docs.pears.com"]
-fallback_queries = ["Bare runtime API", "Bare Pear docs"]
 match_mode = "word"

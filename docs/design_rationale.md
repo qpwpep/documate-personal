@@ -48,6 +48,8 @@ planner와 synthesis에 전달되는 summary는 과거 사용자 입력에서 �
 
 `retrieve_dispatch`는 독립 task를 병렬 실행한 뒤 planner 순서로 결과를 정렬합니다. 성공과 실패를 requirement ID로 구분하므로, 같은 docs route의 한 대상만 실패해도 다른 대상의 근거는 재사용할 수 있습니다. 실행 `status`와 별도로 `answerability`를 `covered`, `partial`, `missing`, `unknown`으로 기록해, 결과 개수나 route 실행 성공을 답변 가능성과 혼동하지 않습니다.
 
+공식 문서의 도메인·경로 필터와 요구사항 충족 판정은 docs 도구가 함께 수행합니다. runtime은 반환된 근거·진단의 형식을 검사하고 요구사항·실행 기록에 연결하며 출처 범위를 다시 판정하지 않습니다. 검색 설정도 이 책임에 맞춰 `docs_search` 아래에 둡니다. hint 추론은 라이브러리명만 반환하고, 도메인은 명시되거나 추론된 라이브러리를 기준으로 조회합니다. 식별자 제외어와 허용 출처는 설정 데이터로 관리하고, 쿼리 재구성·중복 방지·충족 판정은 코드에서 정의합니다. 설정 모델은 알 수 없는 키를 거부합니다. 새 설정을 추가할 때는 실제 소비 지점과 그 값이 검색 결과나 provider 요청에 미치는 영향을 검증하는 테스트를 함께 유지합니다. 구현을 교체할 때도 이전 함수의 직접 테스트가 보호하던 요구사항을 현행 도구·노드 경계로 옮깁니다.
+
 ### 문서 원문과 검색 결과의 분리
 
 원문의 정체성과 검색 편의를 서로 다른 계약으로 관리합니다. [`documents.py`](../src/core/documents.py)의 `DocumentSnapshot`은 출처 URI·유형, 내용 hash, parser 이름·버전·설정, 수집 범위를 식별합니다. `ParsedDocument`와 `DocumentElement`는 부모 관계·제목 level·읽기 순서·제목 경로, 코드와 표 셀을 표현합니다. `SourceAnchor`는 여러 페이지·영역·원본 줄·Notebook cell 등 확보한 위치만 기록합니다. 좌표가 없으면 원문 요소나 문서 수준으로 남기며 정밀 위치를 추정해 채우지 않습니다.
@@ -166,7 +168,7 @@ DocuMate에서 가장 까다로웠던 문제는 "더 빠른 응답"과 "더 충�
 
 독립 retrieval task는 `ThreadPoolExecutor`로 병렬 실행하고 결과는 planner 순서대로 다시 정렬합니다. 이 실행 단위는 서로 다른 route뿐 아니라 같은 docs route의 복수 대상도 포함합니다. 외부 검색은 각 Tavily 요청마다 `DOCS_SEARCH_TIMEOUT_SECONDS`를 적용하고 timeout 원인을 diagnostics에 남깁니다.
 
-planner와 synthesis는 구조화 모델 호출 경로를 사용하며 provider의 요청별 timeout과 SDK retry를 호출 경계에 명시합니다. 요청별 timeout은 stage 전체 deadline이 아니므로 총 실행 시간은 더 길 수 있습니다. docs 도구는 최초 query와 같은 대상을 유지한 재구성 query를 최대 한 번씩 계획하고, `covered`를 확보하거나 해당 query를 이미 시도했다면 추가 호출을 생략합니다. 고정 fallback 목록을 순회하며 주제나 버전 제약을 약화하지 않습니다.
+planner와 synthesis는 구조화 모델 호출 경로를 사용하며 provider의 요청별 timeout과 SDK retry를 호출 경계에 명시합니다. 요청별 timeout은 stage 전체 deadline이 아니므로 총 실행 시간은 더 길 수 있습니다. docs 도구는 최초 query와 같은 대상을 유지한 재구성 query를 최대 한 번씩 계획하고, `covered`를 확보하거나 해당 query를 이미 시도했다면 추가 호출을 생략합니다. 재구성은 원 쿼리의 주제·제약을 유지하고 요구한 심볼·버전·aspect를 보강합니다.
 
 재시도는 requirement 단위로 비용을 제한합니다. 같은 docs route에서 NumPy 근거를 확보하고 pandas만 실패했다면 NumPy는 그대로 사용하고 pandas query만 재계획합니다. 같은 요구의 부분 후보도 다음 후보와 함께 원래 라이브러리·심볼·버전·aspect에 맞는지 재평가합니다. 완료된 동일 요청은 fingerprint로 재사용하고 실제 시도 query도 추적합니다. 응답의 참조·구성 문제는 검색을 다시 구매하지 않고 제한된 재합성으로 처리합니다.
 

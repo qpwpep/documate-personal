@@ -12,8 +12,6 @@ from src.core.contracts.routes import route_for_tool
 from src.core.evidence import parse_search_hits
 from src.core.latency import elapsed_ms, make_retrieval_route_latency_event
 from src.core.planner_schema import RetrievalTask
-from src.infra.tools.docs_search import infer_docs_query_hint
-from src.infra.tools.docs_search.serialization import filter_hits_to_domains
 from src.runtime.agent_runtime.tool_execution import record_nonexecution
 
 
@@ -120,23 +118,6 @@ def collect_retrieval_result(
     except (TypeError, ValueError) as exc:
         local_errors.append(f"tool:{tool_name}: invalid search hits ({exc})")
         parsed_items = []
-    warnings: list[str] = []
-    filtered_cross_domain_count = 0
-    if route == "docs" and not (task and task.requirement.specified):
-        hinted_domains = []
-        if query_hint := infer_docs_query_hint(query):
-            _library_name, hinted_domains, _fallback_queries = query_hint
-        if hinted_domains:
-            pre_filter_count = len(parsed_items)
-            filtered_items = parse_search_hits(filter_hits_to_domains(
-                [hit.model_dump(mode="json") for hit in parsed_items],
-                allowed_domains=hinted_domains,
-            ))
-            if len(filtered_items) != len(parsed_items):
-                filtered_cross_domain_count = pre_filter_count - len(filtered_items)
-                warnings.append("cross_library_domain_filtered")
-                parsed_items = filtered_items
-
     if task is not None:
         parsed_items = [item.model_copy(update={"requirement_id": task.requirement_id}) for item in parsed_items]
     payload_dicts = [item.model_dump(mode="json") for item in parsed_items]
@@ -146,26 +127,7 @@ def collect_retrieval_result(
         if task is not None:
             diagnostics["requirement_id"] = task.requirement_id
             diagnostics["request_fingerprint"] = retrieval_fingerprint(task)
-        diagnostics["warnings"] = sorted(set([*diagnostics.get("warnings", []), *warnings]))
-        if route == "docs":
-            diagnostics["filtered_cross_domain_count"] = _non_negative_int(
-                diagnostics.get("filtered_cross_domain_count", 0),
-                default=0,
-            ) + filtered_cross_domain_count
-            diagnostics["final_evidence_count"] = len(payload_dicts)
-        if route == "docs" and filtered_cross_domain_count > 0:
-            diagnostics["status"] = "success" if payload_dicts else "no_result"
-            if not payload_dicts and not str(diagnostics.get("message") or "").strip():
-                diagnostics["message"] = "no official documentation evidence found"
-            diagnostics["normalized_score"] = max(
-                (item.score.normalized for item in parsed_items if item.score.normalized is not None),
-                default=None,
-            )
-            diagnostics["raw_score"] = max(
-                (item.score.raw for item in parsed_items if item.score.raw is not None), default=None,
-            )
-            diagnostics["result_count"] = len(payload_dicts)
-            diagnostics["evidence_count"] = len(payload_dicts)
+        diagnostics["warnings"] = sorted(set(diagnostics.get("warnings", [])))
 
     diagnostic = normalize_retrieval_diagnostic(
         raw_payload,

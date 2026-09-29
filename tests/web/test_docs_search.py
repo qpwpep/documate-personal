@@ -156,7 +156,7 @@ class DocsSearchTest(unittest.TestCase):
                 self.assertEqual(first_kwargs["include_domains"], expected_domains)
 
     @patch("src.infra.tools.docs_search.client.request_tavily_search")
-    def test_docs_search_continues_fallback_until_identifier_coverage_is_complete(self, mock_request_tavily_search) -> None:
+    def test_docs_search_reformulates_until_identifier_coverage_is_complete(self, mock_request_tavily_search) -> None:
         mock_request_tavily_search.side_effect = [
             {
                 "results": [
@@ -212,7 +212,7 @@ class DocsSearchTest(unittest.TestCase):
         self.assertIn("identifier_coverage_incomplete", result["diagnostics"]["warnings"])
 
     @patch("src.infra.tools.docs_search.client.request_tavily_search")
-    def test_docs_search_uses_fallback_when_first_batch_is_cross_library_only(self, mock_request_tavily_search) -> None:
+    def test_docs_search_reformulates_when_first_batch_is_cross_library_only(self, mock_request_tavily_search) -> None:
         mock_request_tavily_search.side_effect = [
             {
                 "results": [
@@ -380,23 +380,24 @@ class DocsSearchTest(unittest.TestCase):
 
         result = registry.tavily_search_tool(
             query="numpy broadcasting official docs",
-            include_domains=["numpy.org"],
+            requirement={"library": "numpy", "aspects": ["broadcasting"]},
         )
 
         self.assertEqual(result["diagnostics"]["status"], "success")
+        self.assertEqual(result["diagnostics"]["answerability"], "covered")
         self.assertEqual(len(mock_post.call_args_list), 1)
         self.assertEqual(mock_post.call_args.kwargs["json"]["query"], "numpy broadcasting official docs")
         self.assertEqual(mock_post.call_args.kwargs["json"]["include_domains"], ["numpy.org"])
+        self.assertEqual(mock_post.call_args.kwargs["json"]["search_depth"], "basic")
 
     @patch("src.infra.tools.docs_search.client.requests.post")
-    def test_docs_search_reports_timeout_when_every_quality_fallback_times_out(
+    def test_docs_search_reports_timeout_when_reformulated_query_times_out(
         self,
         mock_post,
     ) -> None:
         mock_post.side_effect = [
             self._provider_response({"results": []}),
-            requests.Timeout("first fallback timed out"),
-            requests.Timeout("second fallback timed out"),
+            requests.Timeout("reformulated query timed out"),
         ]
         registry = build_tool_registry(AppSettings(openai_api_key="test", tavily_api_key="test"))
 
@@ -409,14 +410,13 @@ class DocsSearchTest(unittest.TestCase):
         self.assertIn("timed out", result["diagnostics"]["message"])
 
     @patch("src.infra.tools.docs_search.client.requests.post")
-    def test_docs_search_reports_provider_failure_when_every_quality_fallback_is_invalid(
+    def test_docs_search_reports_provider_failure_when_reformulated_query_response_is_invalid(
         self,
         mock_post,
     ) -> None:
         mock_post.side_effect = [
             self._provider_response({"results": []}),
             self._provider_response({"unexpected": []}),
-            self._provider_response({"results": "invalid"}),
         ]
         registry = build_tool_registry(AppSettings(openai_api_key="test", tavily_api_key="test"))
 
@@ -437,7 +437,7 @@ class DocsSearchTest(unittest.TestCase):
 
         result = registry.tavily_search_tool(
             query="custom docs",
-            include_domains=["numpy.org"],
+            requirement={"library": "numpy"},
         )
 
         self.assertEqual(len(mock_post.call_args_list), 1)
@@ -453,7 +453,7 @@ class DocsSearchTest(unittest.TestCase):
 
         result = registry.tavily_search_tool(
             query="custom docs",
-            include_domains=["numpy.org"],
+            requirement={"library": "numpy"},
         )
 
         self.assertEqual(len(mock_post.call_args_list), 1)
@@ -472,7 +472,7 @@ class DocsSearchTest(unittest.TestCase):
 
         result = registry.tavily_search_tool(
             query="custom docs",
-            include_domains=["numpy.org"],
+            requirement={"library": "numpy"},
         )
 
         self.assertEqual(len(mock_post.call_args_list), 1)
@@ -570,12 +570,13 @@ class DocsSearchTest(unittest.TestCase):
         registry = build_tool_registry(AppSettings(openai_api_key="test", tavily_api_key="test"))
         result = registry.tavily_search_tool(
             query="Pydantic UUID official docs",
-            include_domains=["docs.pydantic.dev"],
+            requirement={"library": "Pydantic"},
         )
 
         self.assertEqual(result["diagnostics"]["status"], "no_result")
         self.assertEqual(result["hits"], [])
-        self.assertEqual(result["diagnostics"]["filtered_http_error_count"], 1)
+        self.assertEqual(mock_request_tavily_search.call_count, 2)
+        self.assertEqual(result["diagnostics"]["filtered_http_error_count"], 2)
         self.assertIn("url_http_error_filtered", result["diagnostics"]["warnings"])
 
     @patch("src.infra.tools.docs_search.client.request_tavily_search")
@@ -632,12 +633,13 @@ class DocsSearchTest(unittest.TestCase):
         registry = build_tool_registry(AppSettings(openai_api_key="test", tavily_api_key="test"))
         result = registry.tavily_search_tool(
             query="Pydantic Field official docs",
-            include_domains=["docs.pydantic.dev"],
+            requirement={"library": "Pydantic", "symbols": ["Field"]},
         )
 
         self.assertEqual(result["diagnostics"]["status"], "no_result")
         self.assertEqual(result["hits"], [])
-        self.assertEqual(result["diagnostics"]["filtered_redirect_policy_count"], 1)
+        self.assertEqual(mock_request_tavily_search.call_count, 2)
+        self.assertEqual(result["diagnostics"]["filtered_redirect_policy_count"], 2)
         self.assertIn("url_redirect_policy_filtered", result["diagnostics"]["warnings"])
 
     @patch("src.infra.tools.docs_search.client.request_tavily_search")
@@ -672,7 +674,7 @@ class DocsSearchTest(unittest.TestCase):
         )
 
     @patch("src.infra.tools.docs_search.client.request_tavily_search")
-    def test_docs_search_uses_fallback_when_first_batch_is_docs_chrome_only(self, mock_request_tavily_search) -> None:
+    def test_docs_search_reformulates_when_first_batch_is_docs_chrome_only(self, mock_request_tavily_search) -> None:
         mock_request_tavily_search.side_effect = [
             {
                 "results": [

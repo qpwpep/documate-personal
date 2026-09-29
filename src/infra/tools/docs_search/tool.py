@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
-from typing import Any, Literal
+from typing import Any
 
 from src.core.evidence import SearchHit
 from src.core.latency import elapsed_ms
@@ -20,8 +20,6 @@ from src.infra.tools.docs_search.serialization import DocsSearchFilterCounters, 
 def build_docs_search_tool(settings: AppSettings) -> Callable[..., dict[str, Any]]:
     def tavily_search(
         query: str,
-        search_depth: Literal["basic", "advanced", "fast", "ultra-fast"] = "basic",
-        include_domains: list[str] | None = None,
         *,
         requirement: RetrievalRequirement | None = None,
         k: int = 3,
@@ -30,9 +28,9 @@ def build_docs_search_tool(settings: AppSettings) -> Callable[..., dict[str, Any
     ) -> dict[str, Any]:
         requested = resolve_requirement(query, requirement)
         effective_query = canonical_query(query, requested)
-        if requirement is None and include_domains is None and requested.library and requested.library.casefold() not in effective_query.casefold():
+        if requirement is None and requested.library and requested.library.casefold() not in effective_query.casefold():
             effective_query += " " + requested.library
-        domains = normalize_include_domains(library_domains(str(requested.library or "")) or include_domains
+        domains = normalize_include_domains(library_domains(str(requested.library or ""))
                                              or list(docs_search_rules().allowed_doc_path_prefixes))
         count = max(1, min(10, int(k)))
         include_raw = "markdown" if requested.symbols or requested.aspects or should_extract_doc_content(effective_query) else False
@@ -42,8 +40,6 @@ def build_docs_search_tool(settings: AppSettings) -> Callable[..., dict[str, Any
         unsupported_library = bool(requested.library and not library_domains(requested.library))
         if unsupported_library:
             plan = []
-        if include_domains is not None and requirement is None:
-            plan = [effective_query]
         candidates = dedupe_docs_hits([hit for hit in previous_hits or [] if hit.evidence.route == "docs"])
         if unsupported_library:
             candidates = []
@@ -65,7 +61,7 @@ def build_docs_search_tool(settings: AppSettings) -> Callable[..., dict[str, Any
             started = time.perf_counter()
             try:
                 payload = client.request_tavily_search(query=query_text, tavily_api_key=settings.tavily_api_key,
-                    include_domains=domains, search_depth=search_depth, timeout_seconds=settings.docs_search_timeout_seconds,
+                    include_domains=domains, search_depth="basic", timeout_seconds=settings.docs_search_timeout_seconds,
                     max_results=count, include_raw_content=include_raw)
                 if not isinstance(payload, dict) or not isinstance(payload.get("results"), list):
                     raise RuntimeError("missing or invalid Tavily results payload")

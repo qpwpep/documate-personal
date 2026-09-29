@@ -66,8 +66,13 @@ def test_load_rules_config_rejects_unknown_keys(tmp_path, section, expected_loca
             '[docs_search]\ncompare_clause_pattern = "compare"\n',
             ("docs_search", "compare_clause_pattern"),
         ),
+        (
+            '[docs_search]\n[[docs_search.query_hints]]\nlibrary_name = "Python"\n'
+            'fallback_queries = ["python docs"]\n',
+            ("docs_search", "query_hints", 0, "fallback_queries"),
+        ),
     ],
-    ids=["intents", "planner-pattern", "planner-stopwords", "comparison-pattern"],
+    ids=["intents", "planner-pattern", "planner-stopwords", "comparison-pattern", "fallback-queries"],
 )
 def test_load_rules_config_rejects_retired_keys(tmp_path, payload, expected_location) -> None:
     rules_path = tmp_path / "agent_rules.toml"

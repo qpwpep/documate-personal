@@ -25,7 +25,7 @@ from src.runtime.agent_runtime import DebugCollector, ExecutionRunner, ResponseA
 from src.runtime.graph_builder import _instrument_stage_node
 from src.infra.settings import AppSettings
 from src.infra.tools import build_tool_registry
-from src.infra.tools.docs_search import infer_docs_query_hint
+from src.infra.tools.docs_search import infer_docs_library
 from src.infra.tools.docs_search.url_validation import validate_doc_url
 
 
@@ -412,7 +412,7 @@ class EvidencePipelineTest(unittest.TestCase):
             "fastapiusers official docs", "pandasai official docs",
         ):
             with self.subTest(query=query):
-                self.assertIsNone(infer_docs_query_hint(query))
+                self.assertIsNone(infer_docs_library(query))
 
     def test_debug_exposes_retrieval_and_planner_diagnostics(self) -> None:
         result = _assemble_response(_response_with_hits([_hit()]))
