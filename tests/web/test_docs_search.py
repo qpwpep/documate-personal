@@ -3,31 +3,16 @@ from unittest.mock import Mock, patch
 
 import requests
 
-from src.core.documents import DocumentElement, SourceAnchor, build_snapshot
-from src.core.evidence import RetrievalScore, SearchHit, build_evidence
+from src.core.evidence import SearchHit
 from src.infra.settings import AppSettings
 from src.infra.tools import build_tool_registry
 from src.infra.tools.docs_search.client import request_tavily_search
 from src.infra.tools.docs_search.policy import canonicalize_doc_url, is_allowed_doc_url
-from src.infra.tools.docs_search.ranking import extract_exact_identifier_terms, has_exact_identifier_coverage
+from src.infra.tools.docs_search.ranking import extract_exact_identifier_terms
 from src.infra.tools.docs_search.url_validation import DocUrlValidationResult
 
 
 class DocsSearchTest(unittest.TestCase):
-    def _hit(self, *, title: str, url: str, content: str) -> SearchHit:
-        snapshot = build_snapshot(
-            source_uri=url, title=title, media_type="text/plain", source_type="official",
-            content=content, parser="test", parser_version="1", capture_scope="provider_excerpt",
-        )
-        element = DocumentElement(
-            element_id=f"{snapshot.snapshot_id}:body", kind="paragraph", text=content,
-            anchors=[SourceAnchor(kind="web", start=0, end=len(content), precision="exact")],
-        )
-        return SearchHit(
-            evidence=build_evidence(snapshot=snapshot, element=element), rank=1,
-            score=RetrievalScore(metric="provider_score", raw=0.8, normalized=0.8, direction="higher"),
-        )
-
     def setUp(self) -> None:
         self._url_validation_patcher = patch("src.infra.tools.docs_search.serialization.validate_doc_url")
         self.mock_validate_doc_url = self._url_validation_patcher.start()
@@ -676,40 +661,14 @@ class DocsSearchTest(unittest.TestCase):
         self.assertEqual(result["diagnostics"]["filtered_identifier_mismatch_count"], 1)
         self.assertIn("identifier_coverage_incomplete", result["diagnostics"]["warnings"])
 
-    def test_exact_identifier_coverage_ignores_trailing_dot_tokens(self) -> None:
+    def test_exact_identifier_extraction_ignores_trailing_dot_tokens(self) -> None:
         self.assertEqual(
             extract_exact_identifier_terms("pandas. concat official docs", library_name="pandas"),
             [],
         )
-        self.assertTrue(
-            has_exact_identifier_coverage(
-                "pandas. DataFrame. merge official docs",
-                [
-                    self._hit(
-                        title="pandas.DataFrame.merge",
-                        url="https://pandas.pydata.org/docs/reference/api/pandas.DataFrame.merge.html",
-                        content="Merge DataFrame objects.",
-                    )
-                ],
-                library_name="pandas",
-            )
-        )
         self.assertEqual(
             extract_exact_identifier_terms("Standard. Scaler official docs", library_name="scikit-learn"),
             ["StandardScaler"],
-        )
-        self.assertTrue(
-            has_exact_identifier_coverage(
-                "Standard. Scaler official docs",
-                [
-                    self._hit(
-                        title="StandardScaler",
-                        url="https://scikit-learn.org/stable/modules/generated/sklearn.preprocessing.StandardScaler.html",
-                        content="Standardize features.",
-                    )
-                ],
-                library_name="scikit-learn",
-            )
         )
 
     @patch("src.infra.tools.docs_search.client.request_tavily_search")

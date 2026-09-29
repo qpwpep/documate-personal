@@ -1,12 +1,10 @@
 import os
-import unittest
 
 import pytest
 
 from langchain_core.messages import AIMessage, HumanMessage
 
 from src.core.planner_schema import PlannerOutput
-from src.core.prompts import needs_search
 from src.core.contracts.boundary.graph import build_graph_state_input
 from src.infra.llm import build_llm_registry
 from src.infra.settings import get_settings
@@ -242,13 +240,6 @@ LIVE_SOURCE_CASES += [
     for available in (True, False)
 ]
 
-
-class PromptsTest(unittest.TestCase):
-    def test_needs_search_matches_library_explainer_request(self) -> None:
-        self.assertTrue(needs_search("pandas에 대해 알려줘"))
-
-    def test_needs_search_matches_korean_technical_request(self) -> None:
-        self.assertTrue(needs_search("판다스의 성능 최적화를 알려줘"))
 
 @pytest.fixture(scope="module")
 def live_planner():

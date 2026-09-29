@@ -12,10 +12,6 @@ _NUMPY_VERSIONED_DOC_PATH_PATTERN = re.compile(r"^/doc/\d+(?:\.\d+)*/")
 _PYTORCH_VERSIONED_DOC_PATH_PATTERN = re.compile(r"^/docs/(?!stable/)[^/]+/")
 _PYDANTIC_V2_DOC_PATH_PATTERN = re.compile(r"^/2(?:\.\d+|\.x)?/")
 _STABLE_ALIAS_ROOT_PATH_PATTERN = re.compile(r"^/(?:dev|\d+(?:\.\d+|\.x)*)/")
-_NUMPY_DOC_TITLE_VERSION_PATTERN = re.compile(
-    r"(\bNumPy)\s+v?\d+(?:\.\d+)*(?:[A-Za-z0-9.+-]*)?(\s+Manual\b)",
-    re.IGNORECASE,
-)
 DocUrlFilterReason = Literal["invalid_url", "path_prefix"]
 
 
@@ -83,23 +79,6 @@ def canonicalize_doc_url(url: str) -> str:
 def _domain_allows_stable_root(domain: str) -> bool:
     allowed_prefixes = docs_search_rules().allowed_doc_path_prefixes.get(domain) or []
     return any(normalize_path_prefix(prefix) == "/stable/" for prefix in allowed_prefixes)
-
-
-def canonicalize_doc_title(*, title: Any, original_url: str, canonical_url: str) -> Any:
-    title_text = str(title).strip() if title else ""
-    if not title_text:
-        return title
-
-    original = str(original_url or "").strip()
-    canonical = str(canonical_url or "").strip()
-    if original == canonical:
-        return title
-
-    parsed = urlparse(canonical)
-    if normalize_domain(parsed.netloc) == "numpy.org" and parsed.path.startswith("/doc/stable/"):
-        normalized_title = _NUMPY_DOC_TITLE_VERSION_PATTERN.sub(r"\1\2", title_text)
-        return " ".join(normalized_title.split())
-    return title
 
 
 def is_allowed_doc_url(url: str) -> bool:
