@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from src.app.web import streamlit_state
+from src.core.uploads import UploadManifest
 
 
 class StreamlitStateTest(unittest.TestCase):
@@ -25,6 +26,7 @@ class StreamlitStateTest(unittest.TestCase):
 
                 self.assertEqual(streamlit_state.get_session_id(), "session-123")
                 self.assertIsNone(streamlit_state.get_uploaded_file_name())
+                self.assertIsNone(streamlit_state.get_upload_manifest())
                 self.assertEqual(len(streamlit_state.get_messages()), 1)
                 self.assertEqual(streamlit_state.get_messages()[0]["role"], "assistant")
                 self.assertTrue((uploads_dir / "session-123").exists())
@@ -34,6 +36,7 @@ class StreamlitStateTest(unittest.TestCase):
             session_state={
                 "session_id": "old-session",
                 "uploaded_file_name": "sample.py",
+                "upload_manifest": UploadManifest(epoch="old-epoch", revision=2, files=[]),
                 "documate_quick_prompts": ["old prompt"],
                 "upload_saved_prompt": "old held question",
                 "upload_followup_prompt": "old queued question",
@@ -58,6 +61,7 @@ class StreamlitStateTest(unittest.TestCase):
 
                 self.assertEqual(streamlit_state.get_session_id(), "new-session")
                 self.assertIsNone(streamlit_state.get_uploaded_file_name())
+                self.assertIsNone(streamlit_state.get_upload_manifest())
                 self.assertNotIn("documate_quick_prompts", fake_st.session_state)
                 self.assertNotIn("upload_saved_prompt", fake_st.session_state)
                 self.assertNotIn("upload_followup_prompt", fake_st.session_state)

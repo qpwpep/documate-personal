@@ -50,11 +50,10 @@ def _responses(monkeypatch, statuses_and_payloads):
     return calls
 
 
-def test_failed_batch_keeps_confirmed_files_and_retry_does_not_send_held_question(monkeypatch, tmp_path):
-    """A failed sync preserves ready files; a successful retry leaves its question unsent."""
+def test_failed_batch_invalidates_confirmation_and_retry_does_not_send_held_question(monkeypatch, tmp_path):
+    """A failed sync clears confirmation; a successful retry leaves its question unsent."""
     pending = PendingUploadOperation(epoch="epoch-one", expected_revision=1, prompt="compare the files")
     fake_st = _install_ui(monkeypatch, tmp_path, pending)
-    confirmed = streamlit_state.get_upload_manifest()
     payload = pending.request_payload()
     calls = _responses(monkeypatch, [
         (400, {"detail": {"code": "UPLOAD_INVALID", "message": "failed", "files": [{"name": "bad.py", "message": "invalid"}]}}),
@@ -62,7 +61,7 @@ def test_failed_batch_keeps_confirmed_files_and_retry_does_not_send_held_questio
     ])
 
     assert streamlit_app.commit_pending_upload() is False
-    assert streamlit_state.get_upload_manifest() == confirmed
+    assert streamlit_state.get_upload_manifest() is None
     assert "bad.py" in pending.error
     assert "upload_followup_prompt" not in fake_st.session_state
     assert streamlit_app.commit_pending_upload() is True
@@ -98,6 +97,88 @@ def test_stale_batch_refreshes_manifest_without_replaying_the_mutation(monkeypat
     assert streamlit_state.get_upload_manifest() == fresh
     assert pending.needs_refresh_review is True
     assert [call["method"] for call in calls] == ["post", "get"]
+
+
+def test_stale_batch_with_failed_refresh_keeps_confirmation_unknown(monkeypatch, tmp_path):
+    """A conflict followed by a failed GET cannot leave the pre-sync snapshot usable."""
+    pending = PendingUploadOperation(epoch="epoch-one", expected_revision=1, clear=True)
+    _install_ui(monkeypatch, tmp_path, pending)
+    calls = _responses(monkeypatch, [
+        (409, {"detail": {"code": "UPLOAD_REVISION_CONFLICT", "message": "changed"}}),
+        (503, {"detail": {"message": "unavailable"}}),
+    ])
+
+    assert streamlit_app.commit_pending_upload() is False
+
+    assert streamlit_state.get_upload_manifest() is None
+    assert pending.needs_refresh_review is True
+    assert "새로고침 실패" in pending.error
+    assert [call["method"] for call in calls] == ["post", "get"]
+
+
+def test_manual_refresh_failure_invalidates_cache_before_reconnecting(monkeypatch, tmp_path):
+    """A failed explicit GET blocks questions until a later GET confirms the server state."""
+    from streamlit.testing.v1 import AppTest
+    monkeypatch.setattr(streamlit_state, "get_uploads_dir", lambda: tmp_path)
+    recovered = _manifest(revision=3)
+    calls = _responses(monkeypatch, [
+        (200, _manifest(files=[_confirmed_file()]).model_dump()),
+        (503, {"detail": {"message": "unavailable"}}),
+        (503, {"detail": {"message": "still unavailable"}}),
+        (200, recovered.model_dump()),
+    ])
+    app = AppTest.from_file(streamlit_app.__file__).run()
+    messages = list(app.session_state["messages"])
+
+    app.button(key="documate_refresh_uploads").click().run()
+
+    assert not app.exception
+    assert app.session_state["upload_manifest"] is None
+    assert len(app.chat_input) == 0
+    assert any("첨부 상태를 확인하지 못했습니다" in item.value for item in app.markdown)
+    assert not any("아직 업로드된 파일이 없습니다" in item.value for item in app.markdown)
+    assert not any("a.py" in item.value for item in app.markdown)
+    assert not any(button.label == "a.py 삭제" for button in app.button)
+    app.run()
+    assert not app.exception
+    assert app.session_state["upload_manifest"] is None
+    assert len(app.chat_input) == 0
+    assert any("첨부 상태를 확인하지 못했습니다" in item.value for item in app.markdown)
+    assert not any("아직 업로드된 파일이 없습니다" in item.value for item in app.markdown)
+
+    app.button(key="documate_reconnect_uploads").click().run()
+
+    assert not app.exception
+    assert app.session_state["upload_manifest"] == recovered
+    assert len(app.chat_input) == 1
+    assert app.session_state["messages"] == messages
+    assert any("아직 업로드된 파일이 없습니다" in item.value for item in app.markdown)
+    assert [call["method"] for call in calls] == ["get"] * 4
+
+
+def test_failed_pending_review_invalidates_confirmation_and_keeps_review_available(monkeypatch, tmp_path):
+    """Review failure leaves a pending mutation available without displaying stale files as confirmed."""
+    from streamlit.testing.v1 import AppTest
+    monkeypatch.setattr(streamlit_state, "get_uploads_dir", lambda: tmp_path)
+    calls = _responses(monkeypatch, [
+        (200, _manifest(files=[_confirmed_file()]).model_dump()),
+        (409, {"detail": {"code": "UPLOAD_REVISION_CONFLICT", "message": "changed"}}),
+        (200, _manifest(revision=2, files=[_confirmed_file()]).model_dump()),
+        (503, {"detail": {"message": "unavailable"}}),
+    ])
+    app = AppTest.from_file(streamlit_app.__file__).run()
+    app.button(key="documate_clear_uploads").click().run()
+
+    app.button(key="documate_review_uploads").click().run()
+
+    assert not app.exception
+    assert app.session_state["upload_manifest"] is None
+    assert app.session_state["pending_upload"].needs_refresh_review is True
+    assert len(app.chat_input) == 0
+    assert any(button.key == "documate_review_uploads" for button in app.button)
+    assert any("첨부 상태를 확인하지 못했습니다" in item.value for item in app.markdown)
+    assert not any(button.label == "a.py 삭제" for button in app.button)
+    assert [call["method"] for call in calls] == ["get", "post", "get", "get"]
 
 
 def test_sidebar_clear_button_removes_attachments_and_preserves_visible_conversation(monkeypatch, tmp_path):

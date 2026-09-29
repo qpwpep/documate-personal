@@ -70,6 +70,7 @@ def clear_uploaded_file_name() -> None:
 
 
 def get_upload_manifest() -> UploadManifest | None:
+    """Return the confirmed snapshot; None requires server confirmation, not an empty file set."""
     return st.session_state.get("upload_manifest")
 
 
