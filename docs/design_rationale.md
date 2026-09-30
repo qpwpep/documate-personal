@@ -200,7 +200,7 @@ structured synthesis timeout 시 compact 호출을 사용하고, 실패하면 �
 
 사용자에게는 간결한 답변을 제공하되, `include_debug=true`에서는 latency, planner/retrieval diagnostics, retry context, LLM call metadata를 확인할 수 있게 했습니다. 일반 응답 품질과 개발자 관측성을 같은 메시지에 섞지 않기 위한 기준입니다.
 
-현재 debug schema version은 `10`입니다. debug payload에는 tool call, token usage, model usage status, validation events, `route_decisions`, `memory_compactions`, `observed_hits`, `answer_provenance`, action results, stage별 latency, retrieval route latency, synthesis attempt mode가 포함됩니다. `observed_hits`는 현재 검색에서 본 자료이고, `answer_provenance.evidence_packet`은 최종 결과를 생성·검증한 범위이며, 응답의 `citations`는 그중 실제 표시 내용이 채택한 원문입니다. 모델을 호출하지 않는 본문 복사에서는 선택한 원본의 인용을 검증 packet으로 사용합니다. 이 정보는 일반 사용자 답변이 아니라 회귀 분석과 benchmark 해석을 위한 진단 계층입니다.
+현재 debug schema version은 `11`입니다. debug payload에는 tool call, 호출별 모델·사용량을 정규화한 `llm_calls`, validation events, `route_decisions`, `memory_compactions`, `observed_hits`, `answer_provenance`, action results, stage별 latency, retrieval route latency, synthesis attempt mode가 포함됩니다. `observed_hits`는 현재 검색에서 본 자료이고, `answer_provenance.evidence_packet`은 최종 결과를 생성·검증한 범위이며, 응답의 `citations`는 그중 실제 표시 내용이 채택한 원문입니다. 모델을 호출하지 않는 본문 복사에서는 선택한 원본의 인용을 검증 packet으로 사용합니다. 이 정보는 일반 사용자 답변이 아니라 회귀 분석과 benchmark 해석을 위한 진단 계층입니다.
 
 다중 턴에서는 서버가 선택한 `previous`·`pending` 본문의 hash와 실제 citation ID 목록을 `answer_provenance.source`에 남깁니다. eval은 같은 사례·세션의 앞선 답변과 이 정보를 대조하고, 선택한 답변의 출처 연결이 검증된 경우에만 그 실제 인용 범위 안의 현재 최종 packet을 인정합니다. 최종 citation은 이 packet의 정확한 근거 ID를 사용해야 합니다. hash만 비교해 인용이 누락된 응답을 같은 원본으로 취급하거나 과거 검색 결과 전체를 현재 근거로 합치지 않습니다. 현재 턴의 도구 실행과 검색·복사 감점은 별도로 유지합니다. 본문·채택 출처가 같으면 이 연결 검증에서는 동등하므로 source 발생 ID나 범용 event store를 추가하지 않습니다. 정확한 발생 시점·전체 전달 artifact의 동일성·설명의 의미적 지지는 이 진단의 보장 범위가 아닙니다.
 

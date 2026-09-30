@@ -309,9 +309,14 @@ uv run python -m src.eval.request_contract_eval \
 | `question_response_ms` | 최종 평가 질문 POST부터 final 수신까지. 공용 응답 검증과 `done` 대기는 제외. 실패 시 오류 확인까지, 질문을 보내지 않았으면 `null` |
 | `latency_ms_e2e` | 기존 소비자를 위한 `question_response_ms` 별칭. 브라우저 렌더링 시간은 아님 |
 | `scenario_total_ms` | 최초 준비와 모든 준비 질문·최종 질문, 응답 검증·평가 입력 해석까지. judge·결과 파일 저장·정리 요청은 제외 |
-| `cost_usd` | 실행한 모든 턴에서 관측한 앱 LLM 비용 합계. judge·검색 provider·임베딩 비용은 포함하지 않음 |
+| `cost_usd` | 준비 턴과 최종 질문의 모든 앱 LLM 호출 비용 합계. 한 호출이라도 입력·출력 토큰을 확정하지 못하면 `null`. 확인된 무호출 시나리오는 `0` |
+| `synthesis_output_tokens` | 최종 질문 턴의 모든 synthesis 시도에서 관측한 출력 토큰 합계. planner·memory summary·준비 턴은 제외. synthesis 출력이 하나라도 미관측이면 `null`, 확인된 무호출은 `0` |
 
-최상위 `token_usage`, `llm_calls`, `models_used`, `debug`는 최종 평가 질문의 정보입니다. 모든 턴의 정보는 `scenario_turns`에 남습니다. summary와 보고서에는 세 시간 구간의 p50/p95를 표시하며 `p95_latency_ms` gate는 최종 질문 시간을 평가합니다. 이전 방식에서 질문 시간에 포함되던 초기화·인덱스 준비가 첨부 구간으로 이동했으므로 과거 수치와 직접 비교하지 않습니다.
+사용량의 저장 원본은 `scenario_turns[].llm_calls`입니다. 각 턴의 `role`은 `setup` 또는 `question`이며, 최종 질문도 준비 턴과 같은 모델로 한 번 저장합니다. 최상위 `token_usage`, `llm_calls`, `model_name`, `models_used`, `model_usage_status`를 별도로 저장하지 않습니다. 최상위 `debug`는 최종 질문의 진단이며 raw metadata를 다시 해석하는 비용 근거로 사용하지 않습니다. summary와 보고서에는 세 시간 구간의 p50/p95를 표시하며 `p95_latency_ms` gate는 최종 질문 시간을 평가합니다.
+
+각 호출의 `usage.input_tokens`·`usage.output_tokens`에는 0 이상의 정수 또는 `null`만 들어갑니다. 명시된 `0`은 정상 관측이고, `null`은 누락 또는 유효한 값을 찾지 못한 상태입니다. 입력·출력 중 하나만 있으면 부분 관측입니다. 생성 경계에서 `usage_metadata`를 먼저 읽고 `response_metadata.token_usage`를 뒤에 읽으며, 각 후보 안에서는 `input_tokens`·`output_tokens`가 `prompt_tokens`·`completion_tokens`보다 우선합니다. 각 차원에서 유효한 첫 값을 택하고 빈 후보·누락·잘못된 값은 다음 키와 후보로 넘어갑니다. 정상적인 0은 뒤의 값으로 덮지 않습니다. 음수·bool·문자열·소수는 강제 변환하지 않고 `issues`에 남기며, 유효한 중복 값의 불일치와 provider total의 모순도 진단으로 보존합니다. `total_tokens`는 입력·출력이 모두 있을 때만 두 값의 합으로 얻으며 누락된 차원을 역산하지 않습니다.
+
+`llm_calls=[]`는 해당 턴에서 모델을 호출하지 않았다는 관측이고 `null`은 호출 목록 자체를 확인하지 못했다는 뜻입니다. timeout·예외가 발생한 논리 호출도 기록에 남으며, 응답 사용량을 받지 못했으면 토큰은 `null`입니다. 비용은 memory summary·planner·synthesis와 compact·재합성 시도까지 모두 합산하지만, 출력 토큰 지표는 최종 질문의 synthesis만 합산합니다. 모델별 가격이 없으면 설정된 기본 단가를 사용합니다. 이 비용은 SDK가 반환한 토큰에 따른 추정치이며 judge·검색 provider·임베딩과 SDK 내부 HTTP 재시도의 미보고 사용량은 포함하지 않습니다. 최종 질문의 정상 사용량이 준비 턴의 누락을 덮지 않습니다.
 
 산출물 역할:
 
@@ -333,9 +338,9 @@ uv run python -m src.eval.request_contract_eval \
 | `citation_compliance` | `0.95` |
 | `p95_latency_ms` | `10000` |
 | `avg_cost_per_case_usd` | `0.01` |
-| `cost_gate_min_llm_call_coverage` | `0.80` |
+| `cost_gate_min_observation_rate` | `0.80` |
 
-judge minimum score와 pricing도 같은 파일에서 관리합니다. `cost_gate_min_llm_call_coverage`는 `src/eval/config_models.py::HardGates`의 기본값이며, config에 명시하지 않으면 `0.80`이 적용됩니다. 다중 턴 비용 관측률은 모든 실행 턴을 검사합니다. 준비 턴에 LLM 사용량이 있고 마지막 저장이 deterministic이면 인정하지만, 어느 턴의 사용량이 누락되면 최종 질문의 정상 진단만으로 비용 gate를 활성화하지 않습니다.
+judge minimum score와 pricing도 같은 파일에서 관리합니다. `cost_gate_min_observation_rate`는 `src/eval/config_models.py::HardGates`의 기본값이며, config에 명시하지 않으면 `0.80`이 적용됩니다. `cost_observed_cases`는 `cost_usd`가 확정된 사례 수이고 `cost_observation_rate`는 이 수를 저장된 전체 사례 수로 나눈 값입니다. 정상적인 0 비용도 포함합니다. 평균 비용의 분모는 `cost_observed_cases`이며 미관측 사례를 0 비용으로 넣지 않습니다. 관측률이 기준에 미달하면 비용 gate는 `skipped_insufficient_coverage`로 표시합니다. 준비 턴에서 모델을 사용하고 최종 저장 턴이 무호출인 경우도 모든 호출의 토큰이 관측되면 비용을 확정할 수 있습니다.
 
 ### 4.0.1 평가 상태와 release 판정
 
@@ -366,7 +371,9 @@ run 집계의 `release_pass_rate` 분모는 실행 대상으로 확정한 전체
 
 CLI, Markdown 보고서와 history는 같은 중앙 판정을 사용합니다. `run --track release`는 `release_decision`의 통과 여부로 종료 코드 0/1을 정하며, smoke는 judge 실행 여부와 관계없이 진단용입니다. planner 단독 요청 계약 평가의 `qualified`도 전체 release 자격이 아닙니다. 실행 기록을 검증할 수 없는 구형 결과는 `legacy_unverified`로 표시하며 당시 PASS와 측정값을 현재 자격으로 승격하지 않습니다.
 
-현재 계약의 `report --run`과 history 로더는 저장된 정책 snapshot, 원시 결과의 fingerprint와 중앙 재판정 결과가 summary와 일치하는지 확인합니다. 불일치한 산출물은 보고서로 다시 발행하지 않습니다. 판정 계약 도입 전의 run도 `summary.json`과 `raw_results.jsonl`의 구조·소속을 확인한 뒤 보고서를 재생성할 수 있습니다. 과거 보고서는 `legacy_unverified`와 당시 판정·측정값을 표시하며 현재 릴리스 승인을 만들지 않습니다. 현재 계약과 과거 계약의 결과를 섞거나 현재 정책 필드를 남긴 채 버전만 제거한 입력은 거부합니다. 보고서 재생성은 원본 summary·raw 결과를 변경하거나 모델 호출·외부 효과를 다시 실행하지 않습니다. 기존 생성 계보와 과거 수치의 원본도 유지합니다. 최신 run 포인터는 성공 여부와 관계없이 가장 최근 실행을 가리킵니다.
+현재 계약의 `report --run`과 history 로더는 저장된 정책 snapshot, 원시 결과의 fingerprint와 중앙 재판정 결과가 summary와 일치하는지 확인합니다. fingerprint는 원시 JSON을 현재 모델로 변환하기 전에 확인합니다. 불일치한 산출물은 보고서로 다시 발행하지 않습니다. 이전 측정 계약 `attachment-question-scenario-v1`이 같은 `decision_contract_version=1`을 사용해도 현재 사용량 모델로 승격하지 않습니다. 정책·판정 증거만 공통 판정기로 검증하고 비용·관측률·출력 토큰은 저장 당시 값을 보존합니다. 과거 `llm_call_coverage_rate`는 당시 이름으로 표시하며 새 `cost_observation_rate`로 바꾸지 않습니다.
+
+판정 계약 도입 전의 run도 `summary.json`과 `raw_results.jsonl`의 구조·소속을 확인한 뒤 보고서를 재생성할 수 있습니다. 과거 보고서는 `legacy_unverified`와 당시 판정·측정값을 표시하며 현재 릴리스 승인을 만들지 않습니다. 현재 계약과 과거 계약의 결과를 섞거나 현재 정책 필드를 남긴 채 버전만 제거한 입력은 거부합니다. 보고서 재생성은 원본 summary·raw 결과를 변경하거나 모델 호출·외부 효과를 다시 실행하지 않습니다. 기존 생성 계보와 과거 수치의 원본도 유지합니다. 최신 run 포인터는 성공 여부와 관계없이 가장 최근 실행을 가리킵니다.
 
 ### 4.0.2 저장 산출물의 필수 조건
 
@@ -428,14 +435,15 @@ history 리포터는 다음 조건이 모두 같은 run만 comparable run으로 
 - `track`
 - `fixtures_path`
 - `total_cases`
+- `decision_contract_version`
 - `execution_contract_version`: 현재 `shared-client-scenario-v1`
-- `measurement_contract_version`: 현재 `attachment-question-scenario-v1`
+- `measurement_contract_version`: 현재 `llm-usage-scenario-v2`
 - `suite_fingerprint`: 준비 턴·첨부 목록을 포함한 사례 내용과 staging에서 실제 읽은 첨부 bytes의 SHA256
 - `evaluation_fingerprint`: 채점 계약 버전과 가중치·gate·pricing·judge·timeout 설정, Slack 실행 옵션
 
-같은 경로의 fixture를 덮어써도 내용이나 첨부 bytes가 달라지면 자동 비교되지 않습니다. 새 계약 정보가 일부만 있는 run은 자기 자신만 표시합니다. 계약 정보가 없는 legacy끼리는 이전 경로·사례 수 비교를 유지하지만, 새 실행과 섞지 않습니다. 과거 JSON을 읽을 때 새 계약으로 자동 승격하지 않습니다.
+같은 경로의 fixture를 덮어써도 내용이나 첨부 bytes가 달라지면 자동 비교되지 않습니다. 새 계약 정보가 일부만 있는 run은 자기 자신만 표시합니다. 계약 정보가 없는 legacy끼리는 이전 경로·사례 수 비교를 유지하지만, 새 실행과 섞지 않습니다. 사용량 계약 v2는 빈 metadata 폴백, 정상적인 0, 부분 관측, 실패 호출과 synthesis 출력 범위를 명시하므로 v1과 별도 baseline을 만듭니다. 과거 JSON을 읽을 때 새 계약으로 자동 승격하거나 사용량을 재계산하지 않습니다.
 
-현재 채점 계약은 `verified-save-contract-v3`이며 `summary.json`의 `audit_metrics.scoring_contract_version`에 기록합니다. 이 버전도 `evaluation_fingerprint`에 포함하므로 같은 fixture·설정이라도 이전 채점 결과와 자동 비교하지 않습니다. 실행·측정·채점 계약의 의미를 바꾸면 해당 버전도 갱신해야 합니다. 과거 summary는 당시 값 그대로 읽고 새 채점 버전을 채워 넣지 않습니다. 원격 서버의 모든 설정이나 모델 provider의 변동을 fingerprint가 자동 고정하지는 않습니다. 비교할 변경은 동일한 평가 계약·fixture와 확인된 서버 설정에서 다시 실행합니다. 현재 rule의 `reference_coverage`는 의미적 groundedness를 측정하지 않으며, 이전 스키마·rule의 기록을 새 계약의 품질 상승·하락 근거로 사용하지 않습니다.
+현재 채점 계약은 `execution-policy-contract-v4`이며 `summary.json`의 `audit_metrics.scoring_contract_version`에 기록합니다. 이 버전도 `evaluation_fingerprint`에 포함하므로 같은 fixture·설정이라도 이전 채점 결과와 자동 비교하지 않습니다. 실행·측정·채점 계약의 의미를 바꾸면 해당 버전도 갱신해야 합니다. 과거 summary는 당시 값 그대로 읽고 새 채점 버전을 채워 넣지 않습니다. 원격 서버의 모든 설정이나 모델 provider의 변동을 fingerprint가 자동 고정하지는 않습니다. 비교할 변경은 동일한 평가 계약·fixture와 확인된 서버 설정에서 다시 실행합니다. 현재 rule의 `reference_coverage`는 의미적 groundedness를 측정하지 않으며, 이전 스키마·rule의 기록을 새 계약의 품질 상승·하락 근거로 사용하지 않습니다.
 
 ## 7. 운영 메모
 
