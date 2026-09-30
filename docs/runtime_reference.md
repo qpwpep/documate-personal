@@ -512,7 +512,7 @@ HTTP `200`이나 `done`만으로 성공 처리하지 않습니다. 유효한 `fi
 - `schema_version`, `observability_status`, `missing_required_debug_fields`
 - `tool_calls`, `tool_call_count`
 - `latency_ms_server`, `latency_breakdown`
-- `token_usage`, `model_name`, `models_used`, `model_usage_status`, `llm_calls`
+- `llm_calls`: 정규화한 호출별 모델 이름·사용량·진단 원본. 집계 사용량과 모델 목록을 별도 필드로 직렬화하지 않음
 - `errors`, `error_codes`, `validation_events`, `route_decisions`, `memory_compactions`
 - `observed_hits`: 이번 실행에서 수집한 `SearchHit` 목록. 답변이 실제 사용한 `citations`와 구분
 - `answer_provenance`: 서버가 확정한 본문 작업·선행 답변과 최종 검증 packet
@@ -527,7 +527,13 @@ HTTP `200`이나 `done`만으로 성공 처리하지 않습니다. 유효한 `fi
 
 결정 기록은 다음 노드 선택이 상태에 반영되었다는 뜻이며 다음 노드의 완료를 보장하지 않습니다. 다음 노드가 실패해도 이미 확정된 목록은 오류 debug에 남습니다. runner는 `stream_mode="values"`의 마지막 상태를 교체 보관하므로 누적 스냅샷을 다시 이어 붙이지 않습니다. graph 실행 전 실패와 종료 요청의 빈 목록은 정상이며, 관측 경계에서 누락되거나 잘못된 목록은 `observability_status="failed"`, `missing_required_debug_fields`, 정규화 오류로 드러납니다. 현재 보장 범위는 프로세스 내 실행이며 강제 종료 후 영속 복구나 replay는 포함하지 않습니다.
 
-현재 debug schema version은 `10`입니다. `action_results.slack_notify`는 최종 receipt와 동일한 `SlackDelivery`를 사용합니다. `answer_provenance`의 `version`은 `1`이며 아래 필드를 제공합니다.
+현재 debug schema version은 `11`입니다. 사용량의 단일 계약은 `src/core/contracts/usage.py`의 `LLMCallRecord`·`TokenUsage`입니다. 호출별로 `stage`, graph 재시도 `attempt`, `path`, `model_name`, `usage`를 기록합니다. `usage.input_tokens`·`output_tokens`는 0 이상의 정수 또는 `null`이며, 0·누락·부분 관측을 구별합니다. bool·음수·숫자 문자열·소수는 토큰으로 변환하지 않습니다. 사용량과 total의 충돌·잘못된 값은 `usage.issues`에 남깁니다. 원본 `usage_metadata`·`response_metadata`도 진단용으로 보존하지만 collector·HTTP·eval은 이를 다시 해석하지 않습니다.
+
+응답 생성 경계에서는 각 토큰 차원별로 `usage_metadata` → `response_metadata.token_usage` 순서, 후보 내부에서는 `input_tokens` → `prompt_tokens`, `output_tokens` → `completion_tokens` 순서로 유효한 첫 값을 택합니다. 빈 dict와 누락·잘못된 값은 다음 후보를 막지 않으며, 명시된 0은 뒤의 값으로 대체하지 않습니다. provider total로 입력이나 출력을 역산하지 않습니다. 합계는 입력·출력이 모두 관측됐을 때만 계산합니다.
+
+`src/runtime/agent_runtime/llm_usage.py`의 요청별 recorder는 논리적 모델 호출 시작을 먼저 등록하고 응답을 받으면 정규화 사용량을 채웁니다. planner·memory summary·synthesis의 실패 시도와 compact fallback도 각각 남으며, 이후 graph·응답 조립 실패가 호출 기록을 지우지 않습니다. 무호출을 확인한 턴은 `llm_calls=[]`, 관측 범위 밖이거나 잘못된 목록은 `null`입니다. 모델 호출 여부와 각 호출의 모델 이름은 `llm_calls`에서 확인하며 비용 0만으로 무호출을 추정하지 않습니다. SDK 내부 HTTP 재시도별 미보고 토큰은 이 기록의 범위 밖입니다.
+
+`action_results.slack_notify`는 최종 receipt와 동일한 `SlackDelivery`를 사용합니다. `answer_provenance`의 `version`은 `1`이며 아래 필드를 제공합니다.
 
 | 필드 | 의미 |
 |---|---|
