@@ -4,6 +4,7 @@ import pytest
 
 from langchain_core.messages import AIMessage, HumanMessage
 
+from src.runtime.agent_runtime.llm_usage import capture_llm_usage
 from src.core.planner_schema import PlannerOutput
 from src.core.contracts.boundary.graph import build_graph_state_input
 from src.infra.llm import build_llm_registry
@@ -259,7 +260,8 @@ def test_live_source_selection(case, live_planner):
     ]
     messages.append(HumanMessage(content=case["query"]))
     state = build_graph_state_input(user_input=case["query"], messages=messages, retriever=object() if available else None)
-    result = live_planner(state)
+    with capture_llm_usage() as recorder:
+        result = live_planner(state)
     planner = result["planner"]
     assert planner.status == "llm"
     # Unrequested uploads are forbidden; docs may be optional when the user
@@ -277,4 +279,4 @@ def test_live_source_selection(case, live_planner):
         assert planner.guided_followup is None
         queries = " ".join(task.query for task in planner.output.tasks).casefold()
         assert all(identifier.casefold() in queries for identifier in case.get("query_identifiers", [])), queries
-    assert result["debug"].llm_calls, "A real provider response must be recorded"
+    assert recorder.snapshot(), "A real provider response must be recorded"

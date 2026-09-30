@@ -13,11 +13,10 @@ from src.core.contracts.boundary.graph import get_retry_state
 from src.core.contracts.boundary.retrieval import get_retrieval_state
 from src.core.contracts.boundary.runtime import get_runtime_state
 from src.core.contracts.debug import (
-    LLMCallMetadata,
     RetryState,
-    build_llm_call_metadata,
     empty_planner_diagnostic,
 )
+from src.runtime.agent_runtime.llm_usage import record_llm_call
 from src.core.planner_schema import PlannerOutput, RetrievalTask, normalize_planner_output_input
 from src.core.request_contracts import RequestContract
 from src.core.slack_contract import SlackDelivery
@@ -142,17 +141,17 @@ def _validate_planner_payload(payload: Any) -> tuple[PlannerOutput | None, list[
 
 def _coerce_structured_planner_result(
     result: Any,
-) -> tuple[PlannerOutput | None, AIMessage | None, Exception | None, list[str]]:
+) -> tuple[PlannerOutput | None, Exception | None, list[str]]:
     if isinstance(result, PlannerOutput):
-        return result, None, None, []
+        return result, None, []
 
     if not isinstance(result, dict):
         planner_output, warnings, error = _validate_planner_payload(result)
-        return planner_output, None, error, warnings
+        return planner_output, error, warnings
 
     if "use_retrieval" in result or "tasks" in result:
         planner_output, warnings, error = _validate_planner_payload(result)
-        return planner_output, None, error, warnings
+        return planner_output, error, warnings
 
     raw_message = result.get("raw")
     parsed = _coerce_planner_payload(result.get("parsed"))
@@ -164,7 +163,7 @@ def _coerce_structured_planner_result(
     if parsed is not None:
         planner_output, warnings, error = _validate_planner_payload(parsed)
         if planner_output is not None:
-            return planner_output, raw_message, None, warnings
+            return planner_output, None, warnings
     else:
         error = None
 
@@ -173,22 +172,22 @@ def _coerce_structured_planner_result(
         if raw_payload is not None:
             planner_output, warnings, raw_error = _validate_planner_payload(raw_payload)
             if planner_output is not None:
-                return planner_output, raw_message, None, warnings
+                return planner_output, None, warnings
             error = raw_error
-        return None, raw_message, parsing_error if error is None else error, []
+        return None, parsing_error if error is None else error, []
     if parsing_error is not None:
         raw_payload = _coerce_planner_payload_from_raw_message(raw_message)
         if raw_payload is not None:
             planner_output, warnings, raw_error = _validate_planner_payload(raw_payload)
             if planner_output is not None:
-                return planner_output, raw_message, None, warnings
+                return planner_output, None, warnings
             error = raw_error
-        return None, raw_message, RuntimeError(str(parsing_error) if error is None else str(error)), []
+        return None, RuntimeError(str(parsing_error) if error is None else str(error)), []
 
     if isinstance(parsed, PlannerOutput):
-        return parsed, raw_message, None, []
+        return parsed, None, []
 
-    return None, raw_message, error, []
+    return None, error, []
 
 
 def _resolve_planner_strategy(
@@ -197,23 +196,15 @@ def _resolve_planner_strategy(
     state: GraphState,
     context: PlannerRunContext,
     max_turns: int,
-) -> tuple[PlannerDecision, list[str], list[LLMCallMetadata]]:
+) -> tuple[PlannerDecision, list[str]]:
     planner_errors: list[str] = []
-    llm_calls: list[LLMCallMetadata] = []
 
     try:
         planner_messages = build_planner_messages(state, max_turns=max_turns)
-        planner_raw = llm_planner.invoke(planner_messages)
-        planner_output, raw_message, parse_error, planner_warnings = _coerce_structured_planner_result(planner_raw)
-        if raw_message is not None:
-            llm_calls.append(
-                build_llm_call_metadata(
-                    stage="planner",
-                    attempt=context.planner_attempt,
-                    path="structured",
-                    message=raw_message,
-                )
-            )
+        with record_llm_call(stage="planner", attempt=context.planner_attempt, path="structured") as call:
+            planner_raw = llm_planner.invoke(planner_messages)
+            call.complete(planner_raw.get("raw") if isinstance(planner_raw, dict) else planner_raw)
+        planner_output, parse_error, planner_warnings = _coerce_structured_planner_result(planner_raw)
         if planner_output is not None:
             return (
                 PlannerDecision(
@@ -228,7 +219,6 @@ def _resolve_planner_strategy(
                     guided_followup=None,
                 ),
                 planner_errors,
-                llm_calls,
             )
         planner_errors.append(f"planner: output validation failed ({parse_error})")
     except Exception as exc:
@@ -243,7 +233,7 @@ def _resolve_planner_strategy(
         guided_followup="요청에 필요한 검색 출처를 판단하지 못했습니다. 잠시 후 다시 요청해 주세요.",
         status="fallback_no_routes",
     )
-    return decision, planner_errors, llm_calls
+    return decision, planner_errors
 
 
 def _error_codes_from_planner_errors(errors: list[str]) -> list[str]:
@@ -358,7 +348,7 @@ def make_planner_node(
             ]]),
         )
 
-        decision, planner_errors, llm_calls = _resolve_planner_strategy(
+        decision, planner_errors = _resolve_planner_strategy(
             llm_planner=llm_planner,
             state=state,
             context=context,
@@ -458,7 +448,7 @@ def make_planner_node(
             ),
             "retry": retry_context,
         }
-        if planner_errors or llm_calls:
+        if planner_errors:
             planner_error_codes = _error_codes_from_planner_errors(planner_errors)
             updates["debug"] = debug.model_copy(
                 update={
@@ -471,7 +461,6 @@ def make_planner_node(
                             if code not in debug.error_codes
                         ],
                     ],
-                    "llm_calls": [*debug.llm_calls, *llm_calls],
                 }
             )
         return updates

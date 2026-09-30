@@ -12,6 +12,7 @@ from src.core.evidence import RetrievalScore, SearchHit, build_evidence
 from src.core.planner_schema import PlannerOutput, RetrievalRequirement, RetrievalTask
 from src.core.request_contracts import ExtractBody, RequestContract
 from src.runtime.nodes.synthesis import make_synthesize_node
+from src.runtime.agent_runtime.llm_usage import capture_llm_usage
 from src.runtime.nodes.validation.node import make_post_synthesis_validation_node
 
 
@@ -318,6 +319,45 @@ def test_timeout_uses_compact_model_and_its_actual_source_ranges():
     assert len(response.evidence_packet[0].excerpt) == 900
     assert response.result.citations[0].evidence.snapshot == hit.evidence.snapshot
     assert "SYNTHESIS_TIMEOUT" in updates["debug"].error_codes
+
+
+def test_timeout_keeps_the_failed_primary_attempt_in_usage_evidence():
+    compact = ModelBoundary(malformed={
+        "parsed": text_document("answer").model_dump(mode="json"),
+        "raw": AIMessage(content="", usage_metadata={"input_tokens": 10, "output_tokens": 2, "total_tokens": 12}),
+        "parsing_error": None,
+    })
+    with capture_llm_usage() as recorder:
+        make_synthesize_node(
+            ModelBoundary(error=TimeoutError("structured timeout")), compact,
+        )(_state([]))
+
+    calls = recorder.snapshot()
+    assert [call.path for call in calls] == [
+        "structured", "structured_compact_fallback",
+    ]
+    assert calls[0].usage.input_tokens is None
+    assert calls[0].usage.output_tokens is None
+    assert calls[1].usage.input_tokens == 10
+    assert calls[1].usage.output_tokens == 2
+
+
+def test_invalid_structured_answer_keeps_successfully_observed_model_usage():
+    model = ModelBoundary(malformed={
+        "parsed": None,
+        "raw": AIMessage(content="invalid answer", usage_metadata={
+            "input_tokens": 11, "output_tokens": 3, "total_tokens": 14,
+        }),
+        "parsing_error": ValueError("answer did not match the document schema"),
+    })
+    with capture_llm_usage() as recorder:
+        updates = make_synthesize_node(model)(_state([]))
+
+    assert updates["response"].kind == "failure"
+    calls = recorder.snapshot()
+    assert len(calls) == 1
+    assert calls[0].usage.input_tokens == 11
+    assert calls[0].usage.output_tokens == 3
 
 
 def test_exhausted_timeout_fallback_keeps_source_version_and_location():

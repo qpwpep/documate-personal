@@ -26,7 +26,7 @@ from src.core.contracts import GraphState
 from src.core.request_contracts import UserTurnSnapshot
 from src.core.contracts.boundary.debug import get_debug_state
 from src.core.contracts.boundary.runtime import get_runtime_state
-from src.core.contracts.debug import LLMCallMetadata, build_llm_call_metadata
+from src.runtime.agent_runtime.llm_usage import record_llm_call
 from src.infra.logging_utils import log_event
 
 SUMMARY_SYS = (
@@ -141,7 +141,6 @@ def make_summarize_node(
 
         old_messages = list(plan.evicted_messages)
         recent_messages = list(plan.retained_messages)
-        llm_calls: list[LLMCallMetadata] = []
         summary_transcript = bound_utf8_text(
             build_summary_transcript(old_messages),
             max_bytes=policy.low_water_bytes,
@@ -162,24 +161,17 @@ def make_summarize_node(
                 f"{summary_transcript}"
             )
             try:
-                summary_response = llm_summarizer.invoke(
-                    [
-                        SystemMessage(content=SUMMARY_SYS),
-                        HumanMessage(content=summary_input),
-                    ]
-                )
+                with record_llm_call(stage="summarize", attempt=1, path="direct") as call:
+                    summary_response = llm_summarizer.invoke(
+                        [
+                            SystemMessage(content=SUMMARY_SYS),
+                            HumanMessage(content=summary_input),
+                        ]
+                    )
+                    call.complete(summary_response)
                 generated_summary = extract_text_content(
                     getattr(summary_response, "content", summary_response)
                 ).strip()
-                if isinstance(summary_response, AIMessage):
-                    llm_calls.append(
-                        build_llm_call_metadata(
-                            stage="summarize",
-                            attempt=1,
-                            path="direct",
-                            message=summary_response,
-                        )
-                    )
                 if generated_summary:
                     next_summary = build_bounded_fallback_summary(
                         existing_summary=None,
@@ -240,7 +232,6 @@ def make_summarize_node(
                     ),
                     "validation_events": validation_events,
                     "memory_compactions": [*debug.memory_compactions, diagnostic],
-                    "llm_calls": [*debug.llm_calls, *llm_calls],
                 }
             ),
         }

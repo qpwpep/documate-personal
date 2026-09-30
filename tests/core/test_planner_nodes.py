@@ -4,6 +4,8 @@ from hypothesis import given, strategies as st
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from pydantic import ValidationError
 
+from src.runtime.agent_runtime.llm_usage import capture_llm_usage
+from src.core.contracts.boundary.debug import get_debug_state
 from src.core.planner_schema import (
     PlannerOutput,
     RetrievalTask,
@@ -286,20 +288,21 @@ class PlannerNodeTest(unittest.TestCase):
         )
         planner_node = make_planner_node(capture_planner, verbose=False)
 
-        updates = planner_node(
-            build_test_state(
-                {
-                    "messages": [HumanMessage(content="Explain numpy parameters from official docs.")],
-                    "user_input": "Explain numpy parameters from official docs.",
-                }
+        with capture_llm_usage() as recorder:
+            updates = planner_node(
+                build_test_state(
+                    {
+                        "messages": [HumanMessage(content="Explain numpy parameters from official docs.")],
+                        "user_input": "Explain numpy parameters from official docs.",
+                    }
+                )
             )
-        )
 
         self.assertEqual(capture_planner.call_count, 1)
         self.assertEqual(updates["planner"].status, "llm")
         self.assertEqual(updates["planner"].output.tasks[0].query, "numpy parameters")
-        self.assertEqual([item.path for item in updates["debug"].llm_calls], ["structured"])
-        self.assertEqual([item.stage for item in updates["debug"].llm_calls], ["planner"])
+        self.assertEqual([item.path for item in recorder.snapshot()], ["structured"])
+        self.assertEqual([item.stage for item in recorder.snapshot()], ["planner"])
 
     def test_planner_accepts_structured_output_model_instances(self) -> None:
         capture_planner = _CapturePlannerLLM(
@@ -324,7 +327,7 @@ class PlannerNodeTest(unittest.TestCase):
         self.assertEqual(updates["planner"].status, "llm")
         self.assertEqual([task.route for task in updates["planner"].output.tasks], ["docs"])
         self.assertEqual(updates["planner"].output.tasks[0].query, "numpy")
-        self.assertEqual(updates["debug"].planner_errors, [])
+        self.assertEqual(get_debug_state(updates).planner_errors, [])
 
     def test_planner_preserves_independent_routes_from_raw_structured_output(self) -> None:
         raw_payload = {
@@ -354,7 +357,7 @@ class PlannerNodeTest(unittest.TestCase):
 
         self.assertEqual(capture_planner.call_count, 1)
         self.assertEqual(updates["planner"].status, "llm")
-        self.assertEqual(updates["debug"].planner_errors, [])
+        self.assertEqual(get_debug_state(updates).planner_errors, [])
         self.assertEqual([(task.route, task.query, task.k) for task in updates["planner"].output.tasks],
                          [("docs", "numpy", 3), ("docs", "pandas", 5)])
         self.assertEqual(updates["planner"].diagnostics.planner_warnings, [])

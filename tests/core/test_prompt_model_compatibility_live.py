@@ -172,7 +172,7 @@ def _observe_synthesis(case_id: str, registry, builders: dict, settings) -> dict
         max_turns=6, prompt_snippet_char_limit=profile.snippet_chars, prompt_evidence_char_budget=profile.evidence_chars)
     recorder = _RecordingPlanner(build_structured_synthesizer(registry.llm_synthesizer))
     try:
-        result = _invoke_structured_attempt(structured_synthesizer=recorder, prepared=prepared, llm_calls=[], path="structured")
+        result = _invoke_structured_attempt(structured_synthesizer=recorder, prepared=prepared, path="structured")
     except Exception as exc:
         return {"case_id": case_id, "stage": "synthesis", "score": {"overall": False},
                 "error": f"{type(exc).__name__}: {exc}", "model_calls": recorder.calls}

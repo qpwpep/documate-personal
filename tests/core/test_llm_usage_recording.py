@@ -29,3 +29,27 @@ def test_capture_distinguishes_unavailable_evidence_from_no_model_invocation():
         assert len(current_llm_calls()) == 1
     assert current_llm_calls() is None
 
+
+class UnavailableModel:
+    def invoke(self, _messages):
+        raise TimeoutError("provider timeout")
+
+
+def test_failed_planner_and_summary_remain_observable_attempts():
+    state = build_graph_state_input(user_input="current", messages=[
+        HumanMessage(content="first"), AIMessage(content="answer"),
+        HumanMessage(content="recent"), AIMessage(content="recent answer"),
+        HumanMessage(content="current"),
+    ])
+    with capture_llm_usage() as recorder:
+        summary = make_summarize_node(UnavailableModel(), False, policy=ConversationMemoryPolicy(
+            high_water_turns=3, low_water_turns=2,
+        ))(state)
+        planner = make_planner_node(UnavailableModel(), False)(state)
+
+    assert summary["debug"].memory_compactions[0]["summary_fallback"]
+    assert planner["planner"].status == "fallback_no_routes"
+    calls = recorder.snapshot()
+    assert [call.stage for call in calls] == ["summarize", "planner"]
+    assert all(call.usage.input_tokens is None and call.usage.output_tokens is None for call in calls)
+
