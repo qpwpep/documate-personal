@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 from langchain_core.messages import AIMessage, HumanMessage
 
+from src.runtime.agent_runtime.llm_usage import capture_llm_usage
 from src.core.answer_schema import export_answer_text
 from src.core.request_contracts import RequestContract
 from src.core.contracts.boundary.debug import get_debug_state
@@ -186,14 +187,15 @@ class GraphBuilderDebugTest(unittest.TestCase):
             request_id="graph-observation", session_id="session",
         )
         self.addCleanup(emitter.emit_done)
-        result, visited = _run_graph(graph,
-            build_graph_state_input(
-                user_input="Explain NumPy concatenate from official docs and compare it with the uploaded file example.",
-                messages=[],
-                retriever=SimpleNamespace(vectorstore=_UploadVectorStore()),
-                progress_emitter=emitter,
+        with capture_llm_usage() as recorder:
+            result, visited = _run_graph(graph,
+                build_graph_state_input(
+                    user_input="Explain NumPy concatenate from official docs and compare it with the uploaded file example.",
+                    messages=[],
+                    retriever=SimpleNamespace(vectorstore=_UploadVectorStore()),
+                    progress_emitter=emitter,
+                )
             )
-        )
 
         debug = get_debug_state(result)
         self.assertEqual(debug.synthesis_errors, [])
@@ -206,8 +208,8 @@ class GraphBuilderDebugTest(unittest.TestCase):
         self.assertEqual(len(debug.retrieval_diagnostics), 2)
         self.assertEqual([item.route for item in debug.retrieval_diagnostics], ["docs", "upload"])
         attempts = [1, 2] if repair else [1]
-        self.assertEqual([item.stage for item in debug.llm_calls], ["planner", *(["synthesis"] * len(attempts))])
-        self.assertTrue(all(item.usage_metadata["total_tokens"] == 14 for item in debug.llm_calls))
+        self.assertEqual([item.stage for item in recorder.snapshot()], ["planner", *(["synthesis"] * len(attempts))])
+        self.assertTrue(all(item.usage.total_tokens == 14 for item in recorder.snapshot()))
         stage_events = [
             item for item in debug.latency_trace if isinstance(item, dict) and item.get("kind") == "stage"
         ]

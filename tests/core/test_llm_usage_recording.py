@@ -53,3 +53,48 @@ def test_failed_planner_and_summary_remain_observable_attempts():
     assert [call.stage for call in calls] == ["summarize", "planner"]
     assert all(call.usage.input_tokens is None and call.usage.output_tokens is None for call in calls)
 
+
+@pytest.mark.parametrize("failure_phase", ["graph", "collector", "assembly"])
+def test_manager_retains_completed_usage_after_later_pipeline_failure(monkeypatch, failure_phase):
+    manager = AgentFlowManager(AppSettings(_env_file=None, openai_api_key="test", tavily_api_key="test"))
+
+    def synthesize(state):
+        with record_llm_call(stage="synthesis", attempt=1, path="structured") as call:
+            call.complete(AIMessage(content="answer", response_metadata={"model_name": "test-model"},
+                usage_metadata={"input_tokens": 100, "output_tokens": 20, "total_tokens": 120}))
+        if failure_phase == "graph":
+            raise RuntimeError("graph failure after model response")
+        return {
+            "messages": [HumanMessage(content=state["runtime"].user_input), AIMessage(content="answer")],
+            "response": ResponseState(result=finalize_answer(text_document("answer"), [])),
+        }
+
+    graph = StateGraph(GraphState)
+    graph.add_node("synthesis", synthesize)
+    graph.add_edge(START, "synthesis")
+    graph.add_edge("synthesis", END)
+    manager.graph = graph.compile()
+
+    if failure_phase != "graph":
+        owner, method = ((manager._debug_collector, "build") if failure_phase == "collector"
+                         else (manager._response_assembler, "assemble"))
+        original = getattr(owner, method)
+
+        def fail_after_result(**kwargs):
+            original(**kwargs)
+            raise RuntimeError(f"{failure_phase} failure after model response")
+
+        monkeypatch.setattr(owner, method, fail_after_result)
+
+    try:
+        result = manager.run_agent_flow("question")
+        assert result["debug"]["observability_status"] == "failed"
+        calls = result["debug"]["llm_calls"]
+        assert len(calls) == 1
+        assert calls[0]["model_name"] == "test-model"
+        assert calls[0]["usage"]["input_tokens"] == 100
+        assert calls[0]["usage"]["output_tokens"] == 20
+        assert "token_usage" not in result["debug"]
+        assert "model_usage_status" not in result["debug"]
+    finally:
+        manager.close()

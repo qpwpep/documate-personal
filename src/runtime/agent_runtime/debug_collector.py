@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.messages import HumanMessage, ToolMessage
 
 from src.core.contracts.debug import DEBUG_SCHEMA_VERSION
 from src.core.contracts.provenance import AnswerProvenance
@@ -16,6 +16,7 @@ from src.core.contracts.boundary.retrieval import parse_retrieval_diagnostics
 from src.core.evidence import dedupe_search_hits, parse_search_hits
 from src.core.latency import build_latency_breakdown
 from src.runtime.agent_runtime.tool_execution import current_execution_evidence
+from src.runtime.agent_runtime.llm_usage import current_llm_calls
 
 
 class DebugCollector:
@@ -56,98 +57,6 @@ class DebugCollector:
                     "error_code": str(payload.get("error_code") or "").strip().upper() or None,
                 }
         return action_results or None
-
-    @staticmethod
-    def _extract_token_usage_from_llm_call(llm_call: dict[str, Any]) -> dict[str, int]:
-        usage_metadata = llm_call.get("usage_metadata")
-        response_metadata = llm_call.get("response_metadata")
-        usage_candidates = []
-        if isinstance(usage_metadata, dict):
-            usage_candidates.append(usage_metadata)
-        if isinstance(response_metadata, dict):
-            token_usage = response_metadata.get("token_usage")
-            if isinstance(token_usage, dict):
-                usage_candidates.append(token_usage)
-
-        for usage in usage_candidates:
-            prompt_tokens = usage.get("prompt_tokens", usage.get("input_tokens", 0))
-            completion_tokens = usage.get("completion_tokens", usage.get("output_tokens", 0))
-            total_tokens = usage.get("total_tokens", 0)
-            try:
-                prompt_tokens = int(prompt_tokens or 0)
-                completion_tokens = int(completion_tokens or 0)
-                total_tokens = int(total_tokens or 0)
-            except (TypeError, ValueError):
-                continue
-            if total_tokens <= 0:
-                total_tokens = prompt_tokens + completion_tokens
-            if prompt_tokens >= 0 and completion_tokens >= 0 and total_tokens >= 0:
-                return {
-                    "prompt_tokens": prompt_tokens,
-                    "completion_tokens": completion_tokens,
-                    "total_tokens": total_tokens,
-                }
-
-        return {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
-
-    @staticmethod
-    def _extract_model_name_from_llm_call(llm_call: dict[str, Any]) -> str | None:
-        response_metadata = llm_call.get("response_metadata")
-        if not isinstance(response_metadata, dict):
-            return None
-        model_name = response_metadata.get("model_name") or response_metadata.get("model")
-        return str(model_name) if model_name else None
-
-    @staticmethod
-    def _build_fallback_llm_call_from_ai_message(message: AIMessage, *, attempt: int) -> dict[str, Any] | None:
-        response_metadata = getattr(message, "response_metadata", None)
-        usage_metadata = getattr(message, "usage_metadata", None)
-        has_response_metadata = isinstance(response_metadata, dict) and bool(response_metadata)
-        has_usage_metadata = isinstance(usage_metadata, dict) and bool(usage_metadata)
-        if not has_response_metadata and not has_usage_metadata:
-            return None
-        return {
-            "stage": "synthesis",
-            "attempt": max(0, int(attempt)),
-            "path": "direct",
-            "response_metadata": dict(response_metadata) if has_response_metadata else {},
-            "usage_metadata": dict(usage_metadata) if has_usage_metadata else {},
-        }
-
-    @classmethod
-    def _summarize_llm_calls(
-        cls,
-        llm_calls: list[dict[str, Any]],
-    ) -> tuple[dict[str, int], str | None, list[str]]:
-        total_prompt_tokens = 0
-        total_completion_tokens = 0
-        total_tokens = 0
-        models_used: list[str] = []
-        final_synthesis_model: str | None = None
-
-        for call in llm_calls:
-            usage = cls._extract_token_usage_from_llm_call(call)
-            total_prompt_tokens += usage["prompt_tokens"]
-            total_completion_tokens += usage["completion_tokens"]
-            total_tokens += usage["total_tokens"]
-            model_name = cls._extract_model_name_from_llm_call(call)
-            if model_name and model_name not in models_used:
-                models_used.append(model_name)
-            if call.get("stage") == "synthesis" and model_name:
-                final_synthesis_model = model_name
-
-        if total_tokens <= 0:
-            total_tokens = total_prompt_tokens + total_completion_tokens
-
-        return (
-            {
-                "prompt_tokens": total_prompt_tokens,
-                "completion_tokens": total_completion_tokens,
-                "total_tokens": total_tokens,
-            },
-            final_synthesis_model,
-            models_used,
-        )
 
     @staticmethod
     def _extract_observed_hits(
@@ -267,7 +176,8 @@ class DebugCollector:
             route_decisions = []
             missing_required_debug_fields.append("route_decisions")
             debug_errors.append(f"route_decisions invalid: {exc}")
-        llm_calls = [item.model_dump(mode="json") for item in state_debug.llm_calls]
+        calls = current_llm_calls()
+        llm_calls = [item.model_dump(mode="json") for item in calls] if calls is not None else None
         planner_errors = list(state_debug.planner_errors)
         current_turn_start_index = -1
         for index in range(len(updated_messages) - 1, -1, -1):
@@ -280,25 +190,6 @@ class DebugCollector:
             if current_turn_start_index >= 0
             else updated_messages
         )
-
-        if not llm_calls:
-            fallback_llm_calls = [
-                item
-                for item in (
-                    self._build_fallback_llm_call_from_ai_message(
-                        message,
-                        attempt=int(state_response.synthesis_attempt or 0),
-                    )
-                    for message in current_turn_messages
-                    if isinstance(message, AIMessage)
-                )
-                if item is not None
-            ]
-            if fallback_llm_calls:
-                llm_calls = fallback_llm_calls
-
-        token_usage, model_name, models_used = self._summarize_llm_calls(llm_calls)
-        model_usage_status = "llm_used" if llm_calls or models_used or model_name or token_usage["total_tokens"] > 0 else "deterministic"
 
         execution_evidence = current_execution_evidence()
         if execution_evidence is not None:
@@ -353,10 +244,6 @@ class DebugCollector:
             "tool_calls": tool_calls,
             "tool_call_count": len(tool_calls),
             "execution_evidence": execution_evidence.model_dump(mode="json") if execution_evidence is not None else None,
-            "token_usage": token_usage,
-            "model_name": model_name,
-            "models_used": models_used,
-            "model_usage_status": model_usage_status,
             "llm_calls": llm_calls,
             "errors": debug_errors,
             "error_codes": error_codes,

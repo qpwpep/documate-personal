@@ -11,6 +11,7 @@ from src.core.conversation_memory import (
 )
 from src.runtime.agent_runtime import DebugCollector, ExecutionRunner, GraphInvocationError, ResponseAssembler, SessionContext
 from src.runtime.agent_runtime.tool_execution import capture_tool_execution
+from src.runtime.agent_runtime.llm_usage import capture_llm_usage
 from src.core.answer_schema import AnswerResponse, finalize_answer, text_document, export_answer_text
 from src.core.request_contracts import required_contract_turn_ids
 from src.core.contracts import RuntimeState, SessionMetadata
@@ -153,10 +154,6 @@ class AgentFlowManager:
                 "missing_required_debug_fields": [],
                 "tool_calls": [],
                 "tool_call_count": 0,
-                "token_usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
-                "model_name": None,
-                "models_used": [],
-                "model_usage_status": "deterministic",
                 "llm_calls": [],
                 "errors": [],
                 "validation_events": [],
@@ -233,10 +230,6 @@ class AgentFlowManager:
                 "missing_required_debug_fields": missing_debug_fields,
                 "tool_calls": [],
                 "tool_call_count": 0,
-                "token_usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
-                "model_name": None,
-                "models_used": [],
-                "model_usage_status": "deterministic",
                 "llm_calls": [],
                 "errors": errors,
                 "error_codes": error_codes,
@@ -262,10 +255,12 @@ class AgentFlowManager:
         progress_emitter: ProgressEmitter | None = None,
         *, uploads: UploadContext | None = None,
     ) -> dict[str, Any]:
-        with capture_tool_execution(getattr(progress_emitter, "request_id", None)) as recorder:
+        with (capture_tool_execution(getattr(progress_emitter, "request_id", None)) as recorder,
+              capture_llm_usage() as usage_recorder):
             result = self._run_agent_flow(user_input, upload_file_path, progress_emitter, uploads=uploads)
             evidence = recorder.snapshot()
             debug = result["debug"]
+            debug["llm_calls"] = [call.model_dump(mode="json") for call in usage_recorder.snapshot()]
             debug["execution_evidence"] = evidence.model_dump(mode="json")
             debug["tool_calls"] = [event.tool_name for event in evidence.events if event.phase == "started"]
             debug["tool_call_count"] = len(debug["tool_calls"])
