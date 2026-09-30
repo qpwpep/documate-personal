@@ -108,7 +108,7 @@ flowchart LR
 | 검증/재시도 | 같은 본문의 참조 유효성, 원문 발췌 일치, 요청한 형식·출처 범위를 검사합니다. 일반 설명의 의미적 근거성은 별도 평가하지 않았다고 표시합니다. |
 | 액션 후처리 | 같은 본문과 출처를 텍스트 파일·Slack으로 내보내고 실제 실행 결과는 별도 receipt로 표시합니다. |
 | bounded 대화 메모리 | rolling summary와 최근 Human/AI turn을 token·UTF-8 byte·message·turn 예산 안에 유지하고, 오래된 Tool payload는 세션에 저장하지 않습니다. |
-| 관측성 | `include_debug=true`에서 latency breakdown, diagnostics, retry context, LLM call metadata를 확인할 수 있습니다. |
+| 관측성 | `include_debug=true`에서 실제 경로 선택과 같은 결정에서 나온 `route_decisions`, 압축 진단, latency breakdown, retry context, LLM call metadata를 확인할 수 있습니다. |
 
 ## 구현 개요
 

@@ -6,6 +6,7 @@ from src.core.contracts.boundary.planner import parse_planner_diagnostic
 from src.core.contracts.boundary.retrieval import normalize_retrieval_diagnostic_observation
 from src.core.contracts.debug import DEBUG_CRITICAL_FIELDS, DEBUG_REQUIRED_FIELDS, DEBUG_SCHEMA_VERSION
 from src.core.contracts.provenance import AnswerProvenance
+from src.core.contracts.routing import validate_route_decisions
 from src.core.contracts.tool_execution import ToolExecutionEvidence
 from src.core.latency import LatencyBreakdownModel
 from src.app.web.schemas import AgentDebugInfo, AgentRequest, AgentTokenUsage
@@ -65,6 +66,17 @@ def normalize_debug_info(raw_debug: dict | None, latency_ms_server: int | None) 
             critical_missing.append("answer_provenance")
     validation_events_raw = debug.get("validation_events") or []
     edge_decisions_raw = debug.get("edge_decisions") or []
+    try:
+        route_decisions = validate_route_decisions(debug.get("route_decisions"))
+    except ValueError as exc:
+        route_decisions = []
+        if "route_decisions" not in missing_required_debug_fields:
+            missing_required_debug_fields.append("route_decisions")
+        if "route_decisions" not in critical_missing:
+            critical_missing.append("route_decisions")
+        if "DEBUG_NORMALIZATION_FAILED" not in error_codes:
+            error_codes.append("DEBUG_NORMALIZATION_FAILED")
+        errors = [*errors, f"route_decisions invalid: {exc}"]
     memory_compactions_raw = debug.get("memory_compactions")
     planner_errors_raw = debug.get("planner_errors") or []
     observed_hits_raw = debug.get("observed_hits") or []
@@ -172,6 +184,7 @@ def normalize_debug_info(raw_debug: dict | None, latency_ms_server: int | None) 
         ]
         if isinstance(edge_decisions_raw, list)
         else [],
+        route_decisions=route_decisions,
         memory_compactions=[
             dict(item)
             for item in memory_compactions_raw
