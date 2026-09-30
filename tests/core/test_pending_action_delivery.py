@@ -122,7 +122,7 @@ class _ConsumerGraph:
         self.validate = make_post_synthesis_validation_node(verbose=False)
         self.actions = make_action_postprocess_node(save, slack, False, default_slack_recipient)
 
-    def invoke(self, state):
+    def stream(self, state, *, stream_mode):
         state = dict(state)
         contract = next(self.contracts)
         if callable(contract):
@@ -135,7 +135,7 @@ class _ConsumerGraph:
             messages = [*state["messages"], *updates.pop("messages", [])]
             state.update(updates)
             state["messages"] = messages
-        return state
+        yield state
 
 
 class _PlannedConsumerGraph:
@@ -175,10 +175,10 @@ class _PlannedConsumerGraph:
             })
             return PlannerOutput(use_retrieval=False, tasks=[], request_contract=proposal)
 
-    def invoke(self, state):
+    def stream(self, state, *, stream_mode):
         proposal = next(self.proposals)
         self.proposal = proposal(state["runtime"]) if callable(proposal) else proposal
-        return self.graph.invoke(state)
+        yield from self.graph.stream(state, stream_mode=stream_mode)
 
 
 def _manager(graph):
@@ -328,7 +328,7 @@ def test_graph_failure_cannot_mutate_the_session_pending_body(delivery_tools):
     original_previous = session.previous_response.model_dump(mode="json")
 
     class MutatingGraph:
-        def invoke(self, state):
+        def stream(self, state, *, stream_mode):
             state["runtime"].pending_action.response.content.blocks[0].content[0].text = "실패 중 변조"
             state["runtime"].previous_response.content.blocks[0].content[0].text = "실패 중 변조"
             raise RuntimeError("failed graph")

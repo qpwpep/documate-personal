@@ -28,7 +28,8 @@ class _RollingSummaryGraph:
         self.states: list[dict] = []
         self.include_save_receipt = include_save_receipt
 
-    def invoke(self, state: dict) -> dict:
+    def stream(self, state: dict, *, stream_mode: str):
+        assert stream_mode == "values"
         self.states.append(dict(state))
         turn = len(self.states)
         added = add_user_message(state)
@@ -53,7 +54,7 @@ class _RollingSummaryGraph:
                     tool_call_id=f"save-{turn}",
                 )
             )
-        return {
+        yield {
             "route_decisions": [],
             "messages": messages,
             "runtime": runtime.model_copy(
@@ -64,9 +65,9 @@ class _RollingSummaryGraph:
 
 
 class _RuntimeOmittingGraph:
-    def invoke(self, state: dict) -> dict:
+    def stream(self, state: dict, *, stream_mode: str):
         runtime = state["runtime"]
-        return {
+        yield {
             "route_decisions": [],
             "messages": [
                 *state.get("messages", []),
@@ -78,27 +79,27 @@ class _RuntimeOmittingGraph:
 
 
 class _MutatingFailureGraph:
-    def invoke(self, state: dict) -> dict:
+    def stream(self, state: dict, *, stream_mode: str):
         state["messages"][0].content = "mutated by failed graph"
         state["messages"][0].id = "mutated-id"
         raise RuntimeError("graph failed after mutating its input")
 
 
 class _InvalidResponseGraph(_RollingSummaryGraph):
-    def invoke(self, state: dict) -> dict:
-        result = super().invoke(state)
+    def stream(self, state: dict, *, stream_mode: str):
+        result = next(super().stream(state, stream_mode=stream_mode))
         # A graph boundary can return a valid-looking revision whose body changed.
         response = result["response"].model_dump(mode="json")
         response["result"]["content"]["blocks"][0]["content"][0]["text"] = "unvalidated replacement"
         result["response"] = response
-        return result
+        yield result
 
 
 class _InvalidRuntimeGraph(_RollingSummaryGraph):
-    def invoke(self, state: dict) -> dict:
-        result = super().invoke(state)
+    def stream(self, state: dict, *, stream_mode: str):
+        result = next(super().stream(state, stream_mode=stream_mode))
         result["runtime"] = {"previous_response": {"content": text_document("unchecked runtime body").model_dump(mode="json")}}
-        return result
+        yield result
 
 
 def _make_manager(graph) -> AgentFlowManager:

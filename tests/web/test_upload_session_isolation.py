@@ -40,10 +40,11 @@ class _CapturingGraph:
     def __init__(self):
         self.states: list[dict] = []
 
-    def invoke(self, state: dict) -> dict:
+    def stream(self, state: dict, *, stream_mode: str):
+        assert stream_mode == "values"
         self.states.append(dict(state))
         runtime = state["runtime"]
-        return {
+        yield {
             "route_decisions": [],
             "messages": [
                 HumanMessage(content=runtime.user_input),
@@ -54,15 +55,15 @@ class _CapturingGraph:
 
 
 class _ResolvingGraph(_CapturingGraph):
-    def invoke(self, state: dict) -> dict:
+    def stream(self, state: dict, *, stream_mode: str):
         runtime = state["runtime"]
         if runtime.retriever is not None:
             runtime.retriever.invoke("probe")
-        return super().invoke(state)
+        yield from super().stream(state, stream_mode=stream_mode)
 
 
 class _ExplodingGraph:
-    def invoke(self, state: dict) -> dict:
+    def stream(self, state: dict, *, stream_mode: str):
         if state["runtime"].retriever is not None:
             state["runtime"].retriever.invoke("probe")
         raise RuntimeError("boom")
@@ -74,14 +75,14 @@ class _SlowCapturingGraph:
         self._current = 0
         self._lock = threading.Lock()
 
-    def invoke(self, state: dict) -> dict:
+    def stream(self, state: dict, *, stream_mode: str):
         runtime = state["runtime"]
         with self._lock:
             self._current += 1
             self.max_concurrent = max(self.max_concurrent, self._current)
         try:
             time.sleep(0.05)
-            return {
+            yield {
                 "route_decisions": [],
                 "messages": [
                     HumanMessage(content=runtime.user_input),
@@ -203,13 +204,13 @@ class UploadSessionIsolationTest(unittest.TestCase):
             return handle
 
         class _Graph(_CapturingGraph):
-            def invoke(self, state: dict) -> dict:
+            def stream(self, state: dict, *, stream_mode: str):
                 self.states.append(dict(state))
                 test_case.assertIsNone(manager.upload_retriever_handle)
                 test_case.assertIsNotNone(state["runtime"].retriever)
                 graph_started.set()
                 state["runtime"].retriever.invoke("probe")
-                return {
+                yield {
                     "route_decisions": [],
                     "messages": [
                         HumanMessage(content=state["runtime"].user_input),

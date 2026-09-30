@@ -18,10 +18,11 @@ from src.core.uploads import UploadContext
 
 
 class GraphInvocationError(RuntimeError):
-    def __init__(self, *, graph_total_ms: int, cause: Exception):
+    def __init__(self, *, graph_total_ms: int, cause: Exception, last_state: dict[str, Any] | None):
         super().__init__(str(cause))
         self.graph_total_ms = graph_total_ms
         self.cause = cause
+        self.last_state = last_state
 
 
 @dataclass(slots=True)
@@ -232,10 +233,18 @@ class ExecutionRunner:
 
     def invoke_graph(self, state: dict[str, Any]) -> tuple[dict[str, Any], int]:
         graph_started = time.perf_counter()
+        last_state: dict[str, Any] | None = None
         try:
-            response = self.graph.invoke(state)
+            # Each values event is the complete committed state. Replacing the
+            # snapshot preserves completed decisions without appending them again.
+            for snapshot in self.graph.stream(state, stream_mode="values"):
+                last_state = snapshot
+            if last_state is None:
+                raise RuntimeError("Graph execution produced no state snapshots")
         except Exception as exc:
             graph_total_ms = elapsed_ms(graph_started, time.perf_counter())
-            raise GraphInvocationError(graph_total_ms=graph_total_ms, cause=exc) from exc
+            raise GraphInvocationError(
+                graph_total_ms=graph_total_ms, cause=exc, last_state=last_state,
+            ) from exc
         graph_total_ms = elapsed_ms(graph_started, time.perf_counter())
-        return response, graph_total_ms
+        return last_state, graph_total_ms
