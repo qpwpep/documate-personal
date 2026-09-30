@@ -695,7 +695,7 @@ def test_loopback_attachment_changes_reach_streamlit_client_and_versioned_answer
 
     import uvicorn
 
-    from src.app.web.streamlit_api_client import (
+    from src.app.client import (
         AgentRequestContext, UploadAPIError, fetch_upload_manifest, stream_agent_response, sync_uploads,
     )
 

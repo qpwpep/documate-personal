@@ -48,7 +48,7 @@ def test_stream_completion_preserves_full_response_in_history():
     app = AppTest.from_string('''
 import streamlit as st
 from src.app.web.streamlit_chat import process_chat_prompt, render_chat_history
-from src.app.web.streamlit_api_client import AgentCallResult, AgentStreamEvent
+from src.app.client import AgentCallResult, AgentStreamEvent
 from src.core.answer_schema import finalize_answer, text_document
 from src.core.uploads import UploadManifest
 
@@ -82,7 +82,7 @@ def test_stream_errors_remain_visible_beside_unchanged_final_response_after_reru
     app = AppTest.from_string('''
 import streamlit as st
 from src.app.web.streamlit_chat import process_chat_prompt, render_chat_history
-from src.app.web.streamlit_api_client import AgentCallResult, AgentStreamEvent
+from src.app.client import AgentCallResult, AgentStreamEvent
 from src.core.uploads import UploadManifest
 from tests.web.answer_fixtures import cited_response
 
@@ -131,7 +131,7 @@ def test_stream_errors_without_final_response_are_displayed_once_in_fallback_doc
     app = AppTest.from_string('''
 import streamlit as st
 from src.app.web.streamlit_chat import process_chat_prompt, render_chat_history
-from src.app.web.streamlit_api_client import AgentStreamEvent
+from src.app.client import AgentStreamEvent
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
@@ -160,7 +160,7 @@ import requests
 import streamlit as st
 from unittest.mock import patch
 from src.app.web.streamlit_chat import process_chat_prompt, render_chat_history
-from src.app.web.streamlit_api_client import AgentRequestContext, stream_agent_response
+from src.app.client import AgentRequestContext, stream_agent_response
 
 if "messages" not in st.session_state:
     st.session_state.messages = []

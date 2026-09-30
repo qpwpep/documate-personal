@@ -1,14 +1,11 @@
 import logging
 from html import escape
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
-from uuid import uuid4
 
 import streamlit as st
 
 from src.app.client import (
-    AgentRequestContext,
     AgentSessionClient,
     UploadAPIError,
 )
@@ -20,24 +17,22 @@ from src.app.web.streamlit_styles import configure_page
 from src.app.web.streamlit_theme import render_theme_styles
 from src.app.web.streamlit_state import (
     append_message,
-    clear_uploaded_file_name,
+    PendingUpload,
     ensure_session_state,
     get_messages,
-    get_session_id,
+    get_session_client,
     get_session_path,
-    get_uploaded_file_name,
     get_upload_manifest,
     get_pending_upload,
     reset_chat_session,
-    set_upload_manifest,
     set_pending_upload,
 )
 from src.app.uploads import (
-    PendingUploadOperation,
+    build_upload_sync_request,
     discard_staged_files,
+    review_upload_changes,
 )
 from src.core.domain_docs import DEFAULT_DOCS
-from src.core.uploads import normalized_upload_name
 from src.core.upload_formats import enabled_upload_suffixes
 from src.infra.logging_utils import configure_logging
 from src.infra.runtime_encoding import ensure_utf8_stdio
@@ -58,7 +53,7 @@ def main() -> None:
     manifest_error = None
     if get_upload_manifest() is None and get_pending_upload() is None:
         try:
-            set_upload_manifest(_session_client().refresh_uploads())
+            get_session_client().refresh_uploads()
         except UploadAPIError as exc:
             manifest_error = str(exc)
 
@@ -85,37 +80,20 @@ def main() -> None:
         return
 
     if sidebar_inputs.refresh_uploads_requested:
-        client = _session_client()
+        client = get_session_client()
         try:
             client.refresh_uploads()
             st.rerun()
         except UploadAPIError as exc:
             st.error(str(exc))
             return
-        finally:
-            if get_session_id() == client.context.session_id:
-                set_upload_manifest(client.manifest)
 
     if get_pending_upload() is None and (sidebar_inputs.remove_file_id or sidebar_inputs.clear_uploads_requested):
-        set_pending_upload(PendingUploadOperation(
-            epoch=manifest.epoch, expected_revision=manifest.revision,
+        set_pending_upload(PendingUpload(
+            base_manifest=manifest,
             remove=[sidebar_inputs.remove_file_id] if sidebar_inputs.remove_file_id else [],
             clear=sidebar_inputs.clear_uploads_requested,
         ))
-
-    # A browser kept open across an app update may still contain the old single-file state.
-    legacy_name = get_uploaded_file_name()
-    if legacy_name and get_pending_upload() is None:
-        clear_uploaded_file_name()
-        legacy_path = session_path / Path(legacy_name).name
-        if legacy_path.is_file() and not manifest.files:
-            staged = _stage_files([SimpleNamespace(name=legacy_path.name, getbuffer=legacy_path.read_bytes)], session_path)
-            if staged.errors:
-                for error in staged.errors:
-                    st.error(error)
-                return
-            if staged.files:
-                set_pending_upload(PendingUploadOperation(epoch=manifest.epoch, expected_revision=manifest.revision, files=staged.files))
 
     if get_pending_upload() is not None:
         _render_pending_upload()
@@ -154,8 +132,8 @@ def main() -> None:
         if staged.unchanged_names:
             st.info("이미 첨부된 동일 파일은 유지했습니다: " + ", ".join(staged.unchanged_names))
         if staged.files:
-            set_pending_upload(PendingUploadOperation(
-                epoch=manifest.epoch, expected_revision=manifest.revision,
+            set_pending_upload(PendingUpload(
+                base_manifest=manifest,
                 files=staged.files, prompt=prompt,
             ))
             st.rerun()
@@ -167,42 +145,23 @@ def main() -> None:
             st.session_state["upload_saved_prompt"] = prompt
             return
 
-        def stream_agent(user_input: str):
-            request_session_id = get_session_id()
-            client = AgentSessionClient(
-                AgentRequestContext(
-                    fastapi_url=SETTINGS.fastapi_url,
-                    session_id=request_session_id,
-                    slack_recipient=sidebar_inputs.slack_recipient,
-                ),
-                manifest=manifest,
-            )
-            try:
-                for event in client.stream(user_input):
-                    if get_session_id() == request_session_id:
-                        set_upload_manifest(client.manifest)
-                    yield event
-            finally:
-                if get_session_id() == request_session_id:
-                    set_upload_manifest(client.manifest)
+        client = get_session_client()
+        client.context.slack_recipient = sidebar_inputs.slack_recipient
+
+        def append_current_message(message):
+            if get_session_client() is client:
+                append_message(message)
 
         process_chat_prompt(
-            stream_agent=stream_agent,
+            stream_agent=client.stream,
             prompt=prompt,
-            append_user_message=append_message,
-            append_assistant_message=append_message,
+            append_user_message=append_current_message,
+            append_assistant_message=append_current_message,
         )
 
 
-def _session_client() -> AgentSessionClient:
-    return AgentSessionClient(
-        AgentRequestContext(fastapi_url=SETTINGS.fastapi_url, session_id=get_session_id()),
-        manifest=get_upload_manifest(),
-    )
-
-
 def _stage_files(files: list[Any], session_path: Path):
-    return _session_client().stage_files(
+    return get_session_client().stage_files(
         files, session_path,
         max_files=SETTINGS.upload_max_files, max_file_mib=SETTINGS.upload_max_file_mib,
         max_total_mib=SETTINGS.upload_max_total_mib,
@@ -214,14 +173,24 @@ def commit_pending_upload() -> bool:
     pending = get_pending_upload()
     if pending is None:
         return False
-    if any(item.conflicting_file_id and not item.replace_file_id for item in pending.files):
+    if pending.needs_refresh_review:
         return False
+    if pending.request is None:
+        if any(item.conflicting_file_id and item.conflicting_file_id not in pending.replace_file_ids for item in pending.files):
+            return False
+        pending.request = build_upload_sync_request(
+            pending.base_manifest, files=pending.files,
+            replace_file_ids=pending.replace_file_ids, remove=pending.remove, clear=pending.clear,
+        )
     pending.attempted = True
-    client = _session_client()
+    client = get_session_client()
+    session_path = get_session_path()
     try:
-        client.sync_uploads(pending)
+        client.sync_uploads(pending.request)
     except UploadAPIError as exc:
-        pending.failed = True
+        if not _is_current_pending(client, pending):
+            return False
+        pending.had_failure = True
         pending.error = str(exc)
         if exc.files:
             pending.error += "\n" + "\n".join(f"{item.get('name', '파일')}: {item.get('message', item.get('code', '실패'))}" for item in exc.files)
@@ -232,39 +201,37 @@ def commit_pending_upload() -> bool:
             except UploadAPIError as refresh_error:
                 pending.error += f"\n첨부 목록 새로고침 실패: {refresh_error}"
         return False
-    finally:
-        if get_session_id() == client.context.session_id:
-            set_upload_manifest(client.manifest)
+    if not _is_current_pending(client, pending):
+        return False
     if pending.prompt:
-        key = "upload_saved_prompt" if pending.failed else "upload_followup_prompt"
+        key = "upload_saved_prompt" if pending.had_failure else "upload_followup_prompt"
         st.session_state[key] = pending.prompt
-    discard_staged_files(pending.files, get_session_path())
+    discard_staged_files(pending.files, session_path)
     set_pending_upload(None)
     return True
+
+
+def _is_current_pending(client: AgentSessionClient, pending: PendingUpload) -> bool:
+    return get_session_client() is client and get_pending_upload() is pending
 
 
 def _review_pending_again() -> None:
     pending = get_pending_upload()
     if pending is None:
         return
-    client = _session_client()
+    client = get_session_client()
     try:
         manifest = client.refresh_uploads()
     except UploadAPIError as exc:
-        pending.error = str(exc)
+        if _is_current_pending(client, pending):
+            pending.error = str(exc)
         return
-    finally:
-        if get_session_id() == client.context.session_id:
-            set_upload_manifest(client.manifest)
-    existing = {normalized_upload_name(item.name): item for item in manifest.files}
-    pending.epoch = manifest.epoch
-    pending.expected_revision = manifest.revision
-    pending.operation_id = str(uuid4())
-    pending.remove = [file_id for file_id in pending.remove if any(item.file_id == file_id for item in manifest.files)]
-    for item in pending.files:
-        current = existing.get(normalized_upload_name(item.name))
-        item.conflicting_file_id = current.file_id if current is not None and current.content_hash != item.content_hash else None
-        item.replace_file_id = None
+    if not _is_current_pending(client, pending):
+        return
+    pending.files, pending.remove = review_upload_changes(manifest, files=pending.files, remove=pending.remove)
+    pending.base_manifest = manifest.model_copy(deep=True)
+    pending.request = None
+    pending.replace_file_ids.clear()
     pending.error = None
     pending.needs_refresh_review = False
     pending.attempted = False
@@ -284,7 +251,7 @@ def _render_pending_upload() -> None:
     if pending.error:
         st.error(pending.error)
         st.info("질문은 보내지 않았습니다. 서버가 확인한 첨부 목록만 사용합니다.")
-    conflicts = [item for item in pending.files if item.conflicting_file_id and not item.replace_file_id]
+    conflicts = [item for item in pending.files if item.conflicting_file_id and item.conflicting_file_id not in pending.replace_file_ids]
     if pending.needs_refresh_review:
         if st.button("최신 첨부 목록으로 다시 적용", key="documate_review_uploads"):
             _review_pending_again()
@@ -292,8 +259,7 @@ def _render_pending_upload() -> None:
     elif conflicts:
         st.warning("같은 이름의 다른 내용이 있습니다: " + ", ".join(item.name for item in conflicts))
         if st.button("같은 이름의 파일 교체", key="documate_confirm_upload_replacements"):
-            for item in conflicts:
-                item.replace_file_id = item.conflicting_file_id
+            pending.replace_file_ids.update(item.conflicting_file_id for item in conflicts)
             with st.spinner("파일을 검증하고 함께 검색할 자료를 준비합니다…"):
                 commit_pending_upload()
             st.rerun()
@@ -305,21 +271,18 @@ def _render_pending_upload() -> None:
         with st.spinner("동일한 첨부 변경의 처리 결과를 확인합니다…"):
             commit_pending_upload()
         st.rerun()
-    cancel_label = "대기 화면 닫기" if pending.attempted else "첨부 준비 취소"
+    cancel_label = "대기 화면 닫기" if pending.attempted or pending.had_failure else "첨부 준비 취소"
     if st.button(cancel_label, key="documate_cancel_pending_upload"):
         if pending.prompt:
             st.session_state["upload_saved_prompt"] = pending.prompt
-        if not pending.attempted:
+        if not pending.attempted and not pending.had_failure:
             discard_staged_files(pending.files, get_session_path())
         set_pending_upload(None)
-        client = _session_client()
+        client = get_session_client()
         try:
             client.refresh_uploads()
         except UploadAPIError:
             pass
-        finally:
-            if get_session_id() == client.context.session_id:
-                set_upload_manifest(client.manifest)
         st.rerun()
 
 

@@ -9,8 +9,7 @@ import requests
 import uvicorn
 
 from src.app.web.app import create_app
-from src.app.web.streamlit_api_client import AgentRequestContext, stream_agent_response
-from src.app.client import AgentSessionClient
+from src.app.client import AgentRequestContext, AgentSessionClient, stream_agent_response
 from src.core.answer_schema import export_answer_text
 from src.core.conversation_memory import DEFAULT_QUERY_MAX_CHARS
 from src.eval.config_models import BenchmarkCase, BenchmarkConfig

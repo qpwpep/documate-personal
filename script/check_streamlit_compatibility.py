@@ -10,10 +10,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 UI_TESTS = [
     "tests/web/test_streamlit_upload_flow.py",
-    "tests/web/test_streamlit_upload_handler.py",
-    "tests/web/test_streamlit_api_client.py",
     "tests/web/test_streamlit_state.py",
     "tests/web/test_streamlit_page.py",
+    "tests/web/test_streamlit_chat.py",
 ]
 TEST_RUNNER = """
 import sys

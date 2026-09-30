@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterator
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from time import perf_counter
@@ -10,10 +10,10 @@ from urllib.parse import quote
 import requests
 from urllib3.exceptions import ReadTimeoutError
 
-from src.app.uploads import PendingUploadOperation, UploadStageResult, stage_uploaded_files
+from src.app.uploads import UploadStageResult, stage_uploaded_files
 from src.core.answer_schema import AnswerResponse
 from src.core.slack_contract import RecipientSelector
-from src.core.uploads import UploadContext, UploadManifest, UploadSyncResponse
+from src.core.uploads import UploadContext, UploadManifest, UploadSyncRequest, UploadSyncResponse
 from src.infra.sse import iter_sse_events
 
 
@@ -262,11 +262,6 @@ def _parse_agent_response_data(data: dict[str, Any]) -> AgentCallResult:
     )
 
 
-def _iter_sse_events(chunks: Iterable[str | bytes]) -> Iterator[AgentStreamEvent]:
-    for event in iter_sse_events(chunks):
-        yield _validated_event(event.event, event.data)
-
-
 def _validated_event(event: str, data: dict[str, Any],
                      observation: AgentTransportObservation | None = None) -> AgentStreamEvent:
     result = _parse_agent_response_data(data) if event == "final_response" else None
@@ -303,15 +298,9 @@ class AgentSessionClient:
             max_files=max_files, max_file_mib=max_file_mib, max_total_mib=max_total_mib,
         )
 
-    def sync_uploads(self, operation: PendingUploadOperation | dict[str, Any]) -> UploadSyncResponse:
-        if isinstance(operation, PendingUploadOperation):
-            if any(item.conflicting_file_id and not item.replace_file_id for item in operation.files):
-                raise UploadAPIError("같은 이름의 파일 교체를 먼저 확인해 주세요.", code="UPLOAD_REPLACEMENT_REQUIRED")
-            payload = operation.request_payload()
-        else:
-            payload = operation
+    def sync_uploads(self, request: UploadSyncRequest) -> UploadSyncResponse:
         try:
-            result = sync_uploads(self.context.fastapi_url, self.context.session_id, payload)
+            result = sync_uploads(self.context.fastapi_url, self.context.session_id, request.model_dump(mode="json"))
         except UploadAPIError:
             # A failed or lost response may hide a committed mutation or a newer
             # revision. Retain no confirmation that could be reused by a question.

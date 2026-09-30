@@ -6,13 +6,12 @@ import pytest
 import requests
 from urllib3.exceptions import ReadTimeoutError
 
-from src.app.web.streamlit_api_client import (
+from src.app.client import (
     AgentCallResult,
     AgentRequestContext,
-    _iter_sse_events,
     stream_agent_response,
 )
-from src.core.uploads import UploadManifest
+from src.core.uploads import UploadManifest, UploadSyncRequest
 from tests.web.answer_fixtures import answer_response, cited_response
 
 
@@ -369,19 +368,104 @@ def test_invalid_or_incomplete_stream_reports_error_without_repeating_request(tr
     assert len(calls) == 1
 
 
-def test_chunked_sse_preserves_response_trace_and_debug():
-    """Arbitrarily split frames preserve the complete event and typed answer."""
-    expected = cited_response()
-    manifest = UploadManifest(epoch="e", revision=0, files=[])
-    payload = {"response": expected.model_dump(mode="json"), "trace": "t", "debug": None,
-               "upload_manifest": manifest.model_dump(mode="json")}
-    encoded = frame("final_response", payload)
+def test_session_stream_preserves_utf8_bytes_split_inside_characters(transport):
+    """The HTTP path decodes Korean and emoji bytes before validating a final answer."""
+    from src.app.client import AgentSessionClient
 
-    events = list(_iter_sse_events([encoded[:17], encoded[17:67], encoded[67:]]))
+    expected = answer_response("한글 답변 🧪")
+    manifest = UploadManifest(epoch="confirmed", revision=3, files=[])
+    payload = {
+        "response": expected.model_dump(mode="json"),
+        "trace": "계획 → 검증 🧪",
+        "debug": {"query": "업로드 질문 🧪"},
+        "upload_manifest": manifest.model_dump(mode="json"),
+    }
+    encoded = frame("final_response", payload).encode("utf-8")
+    # One-byte HTTP chunks cross both multibyte code points and SSE frame boundaries.
+    response = StreamResponse([encoded[index:index + 1] for index in range(len(encoded))])
+    calls = transport(response)
+    client = AgentSessionClient(context(), manifest=UploadManifest(epoch="confirmed", revision=2, files=[]))
 
-    assert len(events) == 1
+    events = list(client.stream("질문 🧪"))
+
+    assert [event.event for event in events] == ["final_response"]
     assert events[0].data == payload
     assert events[0].result == AgentCallResult(response=expected, upload_manifest=manifest)
+    assert client.manifest == manifest
+    assert response.closed
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("truncated_character", ["한", "🧪"])
+def test_session_stream_truncated_utf8_invalidates_confirmation(transport, truncated_character):
+    """An incomplete code point after progress cannot retain a confirmed upload revision."""
+    from src.app.client import AgentSessionClient
+
+    incomplete = b'event: final_response\ndata: {"response": "' + truncated_character.encode("utf-8")[:-1]
+    response = StreamResponse([
+        frame("request_started", {"request_id": "r-utf8"}).encode("utf-8"),
+        incomplete,
+    ])
+    calls = transport(response)
+    client = AgentSessionClient(context(), manifest=UploadManifest(epoch="confirmed", revision=2, files=[]))
+
+    events = list(client.stream("질문"))
+
+    assert [event.event for event in events] == ["request_started", "error"]
+    assert events[-1].data["code"] == "invalid_stream"
+    assert events[-1].observation.error_type == "stream_parse_error"
+    assert events[-1].result is None
+    assert client.manifest is None
+    assert response.closed
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("receive_final", [False, True])
+def test_session_stream_close_preserves_only_a_received_valid_final(transport, receive_final):
+    """Closing a partially consumed iterator cannot keep an older confirmed revision."""
+    from src.app.client import AgentSessionClient
+
+    committed = UploadManifest(epoch="confirmed", revision=3, files=[])
+    response = StreamResponse([
+        frame("error", {"message": "Some retrieval failed"}).encode("utf-8"),
+        frame("final_response", {
+            "response": answer_response("확인된 결과").model_dump(mode="json"),
+            "upload_manifest": committed.model_dump(mode="json"),
+        }).encode("utf-8"),
+    ])
+    calls = transport(response)
+    client = AgentSessionClient(context(), manifest=UploadManifest(epoch="confirmed", revision=2, files=[]))
+    stream = client.stream("질문")
+
+    assert next(stream).event == "error"
+    if receive_final:
+        assert next(stream).event == "final_response"
+        assert client.manifest == committed
+    stream.close()
+
+    assert client.manifest == (committed if receive_final else None)
+    assert response.closed
+    assert len(calls) == 1
+
+
+def test_session_sync_serializes_upload_request_and_confirms_manifest(transport):
+    """A shared request model goes over HTTP as JSON and updates the session snapshot."""
+    from src.app.client import AgentSessionClient
+
+    initial = UploadManifest(epoch="confirmed", revision=2, files=[])
+    committed = UploadManifest(epoch="confirmed", revision=3, files=[])
+    request = UploadSyncRequest(epoch="confirmed", expected_revision=2, operation_id="clear-one", clear=True)
+    response = requests.Response()
+    response.status_code = 200
+    response._content = json.dumps({"manifest": committed.model_dump(mode="json"), "changed": True}).encode()
+    calls = transport(response)
+    client = AgentSessionClient(context(), manifest=initial)
+
+    result = client.sync_uploads(request)
+
+    assert calls[0]["json"] == request.model_dump(mode="json")
+    assert result.manifest == committed
+    assert client.manifest == committed
 
 
 def test_question_sends_confirmed_upload_revision_without_legacy_path(transport):
@@ -399,7 +483,7 @@ def test_question_sends_confirmed_upload_revision_without_legacy_path(transport)
 
 def test_upload_sync_failure_preserves_file_errors_and_does_not_retry(transport):
     """A failed attachment batch exposes per-file errors without silently replaying it."""
-    from src.app.web.streamlit_api_client import UploadAPIError, sync_uploads
+    from src.app.client import UploadAPIError, sync_uploads
     response = requests.Response()
     response.status_code = 400
     detail = {"code": "UPLOAD_INVALID", "message": "첨부 실패", "files": [{"name": "bad.py", "code": "INVALID_UTF8", "message": "UTF-8 오류"}]}
@@ -415,7 +499,7 @@ def test_upload_sync_failure_preserves_file_errors_and_does_not_retry(transport)
 
 def test_upload_sync_returns_server_confirmed_manifest(transport):
     """The UI receives the authoritative committed set after a successful sync."""
-    from src.app.web.streamlit_api_client import sync_uploads
+    from src.app.client import sync_uploads
     response = requests.Response()
     response.status_code = 200
     expected = {"epoch": "epoch-one", "revision": 3, "files": []}
@@ -579,7 +663,7 @@ def test_invalid_upload_response_invalidates_confirmation_without_replaying(tran
         if operation == "refresh":
             client.refresh_uploads()
         else:
-            client.sync_uploads({"epoch": "old", "expected_revision": 2, "operation_id": "clear", "clear": True})
+            client.sync_uploads(UploadSyncRequest(epoch="old", expected_revision=2, operation_id="clear", clear=True))
 
     assert client.manifest is None
     assert len(calls) == 1
@@ -607,20 +691,19 @@ def test_unconfirmed_session_does_not_send_question_when_manifest_refresh_fails(
 def test_uncertain_upload_sync_invalidates_confirmation_without_replaying(transport):
     """Losing a mutation response prevents later questions from reusing the pre-mutation revision."""
     from src.app.client import AgentRequestContext, AgentSessionClient, UploadAPIError
-    from src.app.uploads import PendingUploadOperation
 
     calls = transport(requests.exceptions.Timeout("lost sync response"))
     client = AgentSessionClient(AgentRequestContext(
         fastapi_url="http://localhost:8000", session_id="session-one",
     ), manifest=UploadManifest(epoch="one", revision=2, files=[]))
-    operation = PendingUploadOperation(epoch="one", expected_revision=2, clear=True)
+    operation = UploadSyncRequest(epoch="one", expected_revision=2, operation_id="clear-one", clear=True)
 
     with pytest.raises(UploadAPIError):
         client.sync_uploads(operation)
 
     assert client.manifest is None
     assert len(calls) == 1
-    assert calls[0]["json"] == operation.request_payload()
+    assert calls[0]["json"] == operation.model_dump(mode="json")
 
 
 def test_session_stages_syncs_and_queries_using_the_server_confirmed_uploads(monkeypatch, tmp_path):
@@ -630,7 +713,7 @@ def test_session_stages_syncs_and_queries_using_the_server_confirmed_uploads(mon
     from types import SimpleNamespace
 
     from src.app.client import AgentRequestContext, AgentSessionClient
-    from src.app.uploads import PendingUploadOperation, discard_staged_files
+    from src.app.uploads import build_upload_sync_request, discard_staged_files
     from src.core.uploads import UploadFileInfo
 
     uploaded_bytes = b"print('shared path')\n"
@@ -672,16 +755,14 @@ def test_session_stages_syncs_and_queries_using_the_server_confirmed_uploads(mon
     ], tmp_path, max_files=5, max_file_mib=1, max_total_mib=5)
     assert staged.errors == []
     assert client.manifest == initial
-    operation = PendingUploadOperation(
-        epoch=initial.epoch, expected_revision=initial.revision, files=staged.files,
-    )
+    operation = build_upload_sync_request(initial, files=staged.files)
 
     assert client.sync_uploads(operation).manifest == committed
     assert list(client.stream("explain code.py"))[-1].result is not None
 
     assert client.manifest == committed
     assert [call["method"] for call in calls] == ["get", "post", "post"]
-    assert calls[1]["payload"] == operation.request_payload()
+    assert calls[1]["payload"] == operation.model_dump(mode="json")
     assert calls[2]["payload"] == {
         "query": "explain code.py", "session_id": "session-one",
         "uploads": committed.context().model_dump(),

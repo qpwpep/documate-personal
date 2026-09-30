@@ -7,7 +7,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from src.app.client import AgentSessionClient, AgentStreamEvent, UploadAPIError, build_agent_payload
-from src.app.uploads import PendingUploadOperation, discard_staged_files
+from src.app.uploads import build_upload_sync_request, discard_staged_files
 from src.infra.runtime_paths import get_upload_session_dir
 from src.infra.settings import get_settings
 
@@ -164,8 +164,7 @@ def _run_single_case(
             if staged.errors:
                 raise ValueError("; ".join(staged.errors))
             manifest = client.manifest
-            client.sync_uploads(PendingUploadOperation(epoch=manifest.epoch, expected_revision=manifest.revision,
-                                                        files=staged.files))
+            client.sync_uploads(build_upload_sync_request(manifest, files=staged.files))
             discard_staged_files(staged.files, get_upload_session_dir(session_id))
         if approved_files is not None:
             verify_upload_manifest(approved_files, client.manifest)
@@ -209,8 +208,7 @@ def _run_single_case(
     # leave resources to the server's normal TTL/LRU cleanup; never replay it.
     if client.manifest is not None and client.manifest.files:
         try:
-            client.sync_uploads(PendingUploadOperation(epoch=client.manifest.epoch,
-                                                        expected_revision=client.manifest.revision, clear=True))
+            client.sync_uploads(build_upload_sync_request(client.manifest, clear=True))
         except UploadAPIError as exc:
             cleanup_errors.append(f"{exc.code}: {exc}")
     result = build_case_result(
