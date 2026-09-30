@@ -44,6 +44,7 @@ class _CapturingGraph:
         self.states.append(dict(state))
         runtime = state["runtime"]
         return {
+            "route_decisions": [],
             "messages": [
                 HumanMessage(content=runtime.user_input),
                 AIMessage(content="ok"),
@@ -81,6 +82,7 @@ class _SlowCapturingGraph:
         try:
             time.sleep(0.05)
             return {
+                "route_decisions": [],
                 "messages": [
                     HumanMessage(content=runtime.user_input),
                     AIMessage(content="ok"),
@@ -208,6 +210,7 @@ class UploadSessionIsolationTest(unittest.TestCase):
                 graph_started.set()
                 state["runtime"].retriever.invoke("probe")
                 return {
+                    "route_decisions": [],
                     "messages": [
                         HumanMessage(content=state["runtime"].user_input),
                         AIMessage(content="ok"),

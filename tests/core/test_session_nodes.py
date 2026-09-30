@@ -48,6 +48,7 @@ class SessionNodeTest(unittest.TestCase):
             ["recent-user", "recent-answer", "current-user"],
         )
         self.assertEqual(result["runtime"].memory_summary, "summary line")
+        self.assertEqual(result["route_decisions"], [])
         compactions = result["debug"].memory_compactions
         self.assertEqual(len(compactions), 1)
         self.assertEqual(compactions[0]["removed_messages"], 3)

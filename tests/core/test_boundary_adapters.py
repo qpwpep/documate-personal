@@ -4,16 +4,36 @@ from pydantic import ValidationError
 
 from src.core.answer_schema import AnswerResponse, finalize_answer, text_document
 from src.core.contracts import PlannerState
-from src.core.contracts.debug import PlannerDiagnostic, RetrievalDiagnostic, RetryState
+from src.core.contracts.debug import DebugPayload, PlannerDiagnostic, RetrievalDiagnostic, RetryState
 from src.core.contracts.graph_state import DebugState
 from src.core.contracts.boundary.debug import parse_debug_payload, parse_debug_state, parse_retry_state
-from src.core.contracts.boundary.graph import normalize_graph_update
+from src.core.contracts.boundary.graph import build_graph_state_input, normalize_graph_update
 from src.core.contracts.boundary.planner import parse_planner_output
 from src.core.contracts.boundary.response import parse_response_state
 from src.core.contracts.boundary.runtime import parse_session_metadata
 
 
 class BoundaryAdaptersTest(unittest.TestCase):
+    def test_graph_input_initializes_route_history_but_partial_updates_do_not(self) -> None:
+        self.assertEqual(build_graph_state_input(user_input="hello")["route_decisions"], [])
+        self.assertNotIn("route_decisions", normalize_graph_update({"retry": {"attempt": 1}}))
+
+    def test_route_decision_contract_preserves_one_immutable_decision(self) -> None:
+        event = {
+            "sequence": 3,
+            "source": "post_synthesis_validation",
+            "target": "synthesize",
+            "reason": "unresolved_references",
+        }
+        normalized = normalize_graph_update({"route_decisions": [event]})
+        decision = normalized["route_decisions"][0]
+        self.assertEqual(decision.model_dump(), event)
+        with self.assertRaises(ValidationError):
+            decision.target = "planner"
+        output = parse_debug_payload({"route_decisions": [event]})
+        self.assertEqual(output.route_decisions, [decision])
+        self.assertNotIn("route_decisions", DebugState.model_fields)
+
     def test_memory_compaction_diagnostics_survive_internal_and_output_parsing(self) -> None:
         event = {
             "reason": "turn_count",
@@ -25,7 +45,7 @@ class BoundaryAdaptersTest(unittest.TestCase):
         }
         debug = parse_debug_state({"memory_compactions": [event]})
         self.assertEqual(debug.memory_compactions, [event])
-        output = parse_debug_payload({"memory_compactions": [event]})
+        output = parse_debug_payload({"memory_compactions": [event], "route_decisions": []})
         self.assertEqual(output.memory_compactions, [event])
 
     def test_session_metadata_preserves_one_explicit_recipient(self) -> None:

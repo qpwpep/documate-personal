@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import operator
 from typing import Annotated, Any, Literal
 
 from langchain_core.messages import AnyMessage
@@ -14,8 +15,9 @@ from src.core.evidence import EvidenceRef
 from src.core.planner_schema import PlannerOutput
 from src.core.request_contracts import RequestContract, UserTurnSnapshot
 from src.core.uploads import UploadFileInfo
-from src.core.contracts.debug import DebugPayload, LLMCallMetadata, PlannerDiagnostic, PlannerStatus, RetryState, RetrievalDiagnostic, empty_planner_diagnostic
+from src.core.contracts.debug import DebugDiagnostics, LLMCallMetadata, PlannerDiagnostic, PlannerStatus, RetryState, RetrievalDiagnostic, empty_planner_diagnostic
 from src.core.contracts.provenance import AnswerSource, BodyKind
+from src.core.contracts.routing import RoutingDecision
 
 
 class SessionMetadata(BaseModel):
@@ -85,7 +87,7 @@ class ResponseState(BaseModel):
     evidence_source: AnswerSource | None = None
 
 
-class DebugState(DebugPayload):
+class DebugState(DebugDiagnostics):
     planner_errors: list[str] = Field(default_factory=list)
     retrieval_errors: list[str] = Field(default_factory=list)
     synthesis_errors: list[str] = Field(default_factory=list)
@@ -100,6 +102,7 @@ class DebugState(DebugPayload):
 
 class GraphState(TypedDict, total=False):
     messages: Annotated[list[AnyMessage], add_messages]
+    route_decisions: Annotated[list[RoutingDecision], operator.add]
     runtime: RuntimeState
     planner: PlannerState
     retrieval: RetrievalState

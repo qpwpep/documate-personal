@@ -1,142 +1,100 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
-from langgraph.graph import END, StateGraph
+from langgraph.graph import END, StateGraph, add_messages
+from langgraph.types import Command
 
-from src.core.conversation_memory import (
-    ConversationMemoryPolicy,
-    plan_compaction,
-)
-from src.core.contracts.boundary.debug import get_debug_state
-from src.core.contracts.boundary.graph import get_retry_state
+from src.core.conversation_memory import ConversationMemoryPolicy, plan_compaction
+from src.core.contracts.graph_state import GraphState
+from src.core.contracts.routing import RoutingDecision, RoutingSource, RoutingTarget
+from src.core.contracts.boundary.graph import get_retry_state, normalize_graph_update
 from src.core.contracts.boundary.planner import get_planner_state
 from src.core.contracts.boundary.response import get_response_state
 from src.core.contracts.boundary.runtime import get_runtime_state
 
 
-def _record_edge_decision(
-    state: dict[str, Any],
-    *,
-    source: str,
-    decision: str,
-    reason: str,
-) -> None:
-    debug = get_debug_state(state)
-    decision_event = {
-        "source": source,
-        "decision": decision,
-        "reason": reason,
-    }
-    state["debug"] = debug.model_copy(
-        update={"edge_decisions": [*debug.edge_decisions, decision_event]}
-    )
-
-
-def _summary_router(
-    state: dict[str, Any],
-    memory_policy: ConversationMemoryPolicy,
-) -> str:
-    messages = state.get("messages")
-    if not isinstance(messages, list):
-        messages = []
+def _summary_route(state: GraphState, policy: ConversationMemoryPolicy) -> tuple[RoutingTarget, str]:
     plan = plan_compaction(
-        messages,
-        get_runtime_state(state).memory_summary,
-        memory_policy,
+        state.get("messages", []), get_runtime_state(state).memory_summary, policy,
     )
     if plan.should_compact:
-        _record_edge_decision(
-            state,
-            source="add_user_message",
-            decision="summarize",
-            reason=f"memory_high_watermark:{','.join(plan.trigger_reasons)}",
-        )
-        return "summarize"
-    _record_edge_decision(
-        state,
-        source="add_user_message",
-        decision="planner",
-        reason="memory_below_high_watermarks",
-    )
-    return "planner"
+        return "summarize_old_messages", f"memory_high_watermark:{','.join(plan.trigger_reasons)}"
+    return "planner", "memory_below_high_watermarks"
 
 
-def _planner_router(state: dict[str, Any]) -> str:
+def _planner_route(state: GraphState) -> tuple[RoutingTarget, str]:
     planner = get_planner_state(state)
     if str(planner.guided_followup or "").strip():
-        _record_edge_decision(
-            state,
-            source="planner",
-            decision="pre_validate",
-            reason="guided_followup_present",
-        )
-        return "pre_validate"
-    planner_output = planner.output
-    use_retrieval = bool(getattr(planner_output, "use_retrieval", False))
-    tasks = getattr(planner_output, "tasks", []) or []
-    if use_retrieval and tasks:
-        _record_edge_decision(
-            state,
-            source="planner",
-            decision="retrieve",
-            reason=f"retrieval_required:{len(tasks)}_task(s)",
-        )
-        return "retrieve"
-    _record_edge_decision(
-        state,
-        source="planner",
-        decision="synthesize",
-        reason="retrieval_not_required",
-    )
-    return "synthesize"
+        return "pre_synthesis_validation", "guided_followup_present"
+    if planner.output.use_retrieval and planner.output.tasks:
+        return "retrieve_dispatch", f"retrieval_required:{len(planner.output.tasks)}_task(s)"
+    return "synthesize", "retrieval_not_required"
 
 
-def _pre_synthesis_router(state: dict[str, Any]) -> str:
-    if get_retry_state(state).needs_retry:
-        _record_edge_decision(
-            state,
-            source="pre_synthesis_validation",
-            decision="retry",
-            reason=str(get_retry_state(state).retry_reason or "retry_requested"),
-        )
-        return "retry"
-    response = get_response_state(state)
-    if response.result.content.blocks:
-        _record_edge_decision(
-            state,
-            source="pre_synthesis_validation",
-            decision="postprocess",
-            reason="terminal_response_available",
-        )
-        return "postprocess"
-    _record_edge_decision(
-        state,
-        source="pre_synthesis_validation",
-        decision="synthesize",
-        reason="validation_passed",
-    )
-    return "synthesize"
-
-
-def _post_synthesis_router(state: dict[str, Any]) -> str:
+def _pre_synthesis_route(state: GraphState) -> tuple[RoutingTarget, str]:
     retry = get_retry_state(state)
     if retry.needs_retry:
-        decision = "resynthesize" if retry.retry_scope == "reuse_hits_resynthesize" else "retry"
-        _record_edge_decision(
-            state,
-            source="post_synthesis_validation",
-            decision=decision,
-            reason=str(retry.retry_reason or "retry_requested"),
+        return "planner", str(retry.retry_reason or "retry_requested")
+    if get_response_state(state).result.content.blocks:
+        return "action_postprocess", "terminal_response_available"
+    return "synthesize", "validation_passed"
+
+
+def _post_synthesis_route(state: GraphState) -> tuple[RoutingTarget, str]:
+    retry = get_retry_state(state)
+    if retry.needs_retry:
+        target = "synthesize" if retry.retry_scope == "reuse_hits_resynthesize" else "planner"
+        return target, str(retry.retry_reason or "retry_requested")
+    return "action_postprocess", str(retry.retry_reason or "validation_passed")
+
+
+def _business_node(node: Callable[[GraphState], GraphState]):
+    def wrapped(state: GraphState) -> GraphState:
+        updates = node(state)
+        if not isinstance(updates, dict):
+            raise TypeError("Graph business nodes must return a state update dictionary")
+        if "route_decisions" in updates:
+            raise ValueError("Only the graph routing adapter can write route_decisions")
+        return normalize_graph_update(updates)
+
+    return wrapped
+
+
+def _route_after(
+    source: RoutingSource,
+    node: Callable[[GraphState], GraphState],
+    decide: Callable[[GraphState], tuple[RoutingTarget, str]],
+):
+    run_node = _business_node(node)
+
+    def wrapped(state: GraphState) -> Command:
+        updates = run_node(state)
+        # These routing inputs are replacement channels, not nested patches.
+        route_state: GraphState = {
+            key: updates[key] if key in updates else state[key]
+            for key in ("runtime", "planner", "retry", "response")
+            if key in updates or key in state
+        }
+        if source == "add_user_message":
+            # add_user_message returns a message delta. Use the same public
+            # reducer as GraphState rather than losing the existing history.
+            route_state["messages"] = add_messages(
+                state.get("messages", []), updates.get("messages", []),
+            )
+        target, reason = decide(route_state)
+        decision = RoutingDecision(
+            sequence=len(state.get("route_decisions", [])) + 1,
+            source=source,
+            target=target,
+            reason=reason,
         )
-        return decision
-    _record_edge_decision(
-        state,
-        source="post_synthesis_validation",
-        decision="postprocess",
-        reason=str(get_retry_state(state).retry_reason or "validation_passed"),
-    )
-    return "postprocess"
+        # One result owns both the next node and the committed observation.
+        # The append channel receives only this occurrence, never the history.
+        return Command(update={**updates, "route_decisions": [decision]}, goto=decision.target)
+
+    return wrapped
 
 
 def build_graph(
@@ -154,55 +112,35 @@ def build_graph(
 ):
     builder = StateGraph(state_type)
 
-    builder.add_node("add_user_message", add_user_node)
-    builder.set_entry_point("add_user_message")
-
-    builder.add_node("summarize_old_messages", summarize_node)
-    builder.add_node("planner", planner_node)
-    builder.add_node("retrieve_dispatch", retrieve_dispatch_node)
-    builder.add_node("pre_synthesis_validation", pre_synthesis_validation_node)
-    builder.add_node("synthesize", synthesize_node)
-    builder.add_node("post_synthesis_validation", post_synthesis_validation_node)
-    builder.add_node("action_postprocess", action_postprocess_node)
-
-    builder.add_conditional_edges(
+    # destinations describes the diagram. These four nodes route exclusively
+    # through Command; adding outgoing edges would schedule extra work.
+    builder.add_node(
         "add_user_message",
-        lambda state: _summary_router(state, memory_policy),
-        {
-            "summarize": "summarize_old_messages",
-            "planner": "planner",
-        },
+        _route_after("add_user_message", add_user_node, lambda state: _summary_route(state, memory_policy)),
+        destinations=("summarize_old_messages", "planner"),
     )
-    builder.add_edge("summarize_old_messages", "planner")
-    builder.add_conditional_edges(
-        "planner",
-        _planner_router,
-        {
-            "pre_validate": "pre_synthesis_validation",
-            "retrieve": "retrieve_dispatch",
-            "synthesize": "synthesize",
-        },
+    builder.set_entry_point("add_user_message")
+    builder.add_node("summarize_old_messages", _business_node(summarize_node))
+    builder.add_node(
+        "planner", _route_after("planner", planner_node, _planner_route),
+        destinations=("pre_synthesis_validation", "retrieve_dispatch", "synthesize"),
     )
-    builder.add_edge("retrieve_dispatch", "pre_synthesis_validation")
-    builder.add_conditional_edges(
+    builder.add_node("retrieve_dispatch", _business_node(retrieve_dispatch_node))
+    builder.add_node(
         "pre_synthesis_validation",
-        _pre_synthesis_router,
-        {
-            "retry": "planner",
-            "synthesize": "synthesize",
-            "postprocess": "action_postprocess",
-        },
+        _route_after("pre_synthesis_validation", pre_synthesis_validation_node, _pre_synthesis_route),
+        destinations=("planner", "synthesize", "action_postprocess"),
     )
-    builder.add_edge("synthesize", "post_synthesis_validation")
-    builder.add_conditional_edges(
+    builder.add_node("synthesize", _business_node(synthesize_node))
+    builder.add_node(
         "post_synthesis_validation",
-        _post_synthesis_router,
-        {
-            "retry": "planner",
-            "resynthesize": "synthesize",
-            "postprocess": "action_postprocess",
-        },
+        _route_after("post_synthesis_validation", post_synthesis_validation_node, _post_synthesis_route),
+        destinations=("planner", "synthesize", "action_postprocess"),
     )
-    builder.add_edge("action_postprocess", END)
+    builder.add_node("action_postprocess", _business_node(action_postprocess_node))
 
+    builder.add_edge("summarize_old_messages", "planner")
+    builder.add_edge("retrieve_dispatch", "pre_synthesis_validation")
+    builder.add_edge("synthesize", "post_synthesis_validation")
+    builder.add_edge("action_postprocess", END)
     return builder.compile()
