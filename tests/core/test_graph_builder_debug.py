@@ -14,9 +14,11 @@ from src.infra.chunking import chunk_python_text
 from src.core.contracts.boundary.graph import build_graph_state_input
 from src.runtime.agent_runtime.debug_collector import DebugCollector
 from src.runtime.graph_builder import _instrument_stage_node, build_agent_graph
+from src.runtime.progress import ProgressEmitter
 from src.infra.settings import AppSettings
 
 from .helpers import _CaptureStructuredSynthesizeLLM
+from .test_graph_routing import _run_graph
 from src.infra.tools.docs_search.url_validation import validate_doc_url
 
 
@@ -40,7 +42,13 @@ class _UploadVectorStore:
 
 
 class _EvidenceAwareSynthesisLLM(_CaptureStructuredSynthesizeLLM):
+    def __init__(self, *, repair_first=False, **kwargs):
+        super().__init__(**kwargs)
+        self.repair_first = repair_first
+        self.attempt = 0
+
     def invoke(self, messages):
+        self.attempt += 1
         packet_text = next(message.content for message in messages if str(message.content).startswith("[Evidence Packet]"))
         packet = json.loads(packet_text.split("\n", 2)[2])
         docs = next(item for item in packet if item["source_type"] == "official")
@@ -52,6 +60,8 @@ class _EvidenceAwareSynthesisLLM(_CaptureStructuredSynthesizeLLM):
             ]},
             {"type": "code", "language": "python", "content": {"text": upload["excerpt"], "basis": "excerpt", "refs": [upload["id"]]}},
         ]}
+        if self.repair_first and self.attempt == 1:
+            self.payload["blocks"][0]["content"][0]["refs"] = ["unknown-evidence"]
         return super().invoke(messages)
 
 
@@ -134,6 +144,11 @@ class GraphBuilderDebugTest(unittest.TestCase):
         http_post,
         http_head,
     ) -> None:
+        for repair in (False, True):
+            with self.subTest(repair=repair):
+                self._assert_debug_flow(provider_model, http_post, http_head, repair=repair)
+
+    def _assert_debug_flow(self, provider_model, http_post, http_head, *, repair):
         validate_doc_url.cache_clear()
         self.addCleanup(validate_doc_url.cache_clear)
         http_head.side_effect = lambda url, **kwargs: _http_response(url)
@@ -146,7 +161,10 @@ class GraphBuilderDebugTest(unittest.TestCase):
                 "score": 0.94,
             }]},
         )
-        settings = AppSettings(_env_file=None, openai_api_key="test", tavily_api_key="test", planner_model="test-planner", chat_model="test-synthesis", summary_model="test-summary")
+        settings = AppSettings(
+            _env_file=None, openai_api_key="test", tavily_api_key="test",
+            planner_model="test-planner", chat_model="test-synthesis", summary_model="test-summary",
+        )
         def provider(**kwargs):
             if kwargs.get("model") == settings.planner_model:
                 return _CaptureStructuredSynthesizeLLM(payload={
@@ -157,23 +175,38 @@ class GraphBuilderDebugTest(unittest.TestCase):
                         {"route": "upload", "query": "numpy concatenate uploaded example", "k": 3},
                     ],
                 }, include_raw=True)
-            return _EvidenceAwareSynthesisLLM(include_raw=True)
+            return _EvidenceAwareSynthesisLLM(include_raw=True, repair_first=repair)
 
         provider_model.side_effect = provider
 
         graph = build_agent_graph(settings)
-        result = graph.invoke(
+        progress = []
+        emitter = ProgressEmitter(
+            publish=lambda event, data: progress.append((event, data)),
+            request_id="graph-observation", session_id="session",
+        )
+        self.addCleanup(emitter.emit_done)
+        result, visited = _run_graph(graph,
             build_graph_state_input(
                 user_input="Explain NumPy concatenate from official docs and compare it with the uploaded file example.",
                 messages=[],
                 retriever=SimpleNamespace(vectorstore=_UploadVectorStore()),
+                progress_emitter=emitter,
             )
         )
 
         debug = get_debug_state(result)
+        self.assertEqual(debug.synthesis_errors, [])
+        expected_stages = [
+            {"retrieve_dispatch": "retrieval", "synthesize": "synthesis"}.get(node, node)
+            for node in visited if node != "add_user_message"
+        ]
+        self.assertEqual([data["stage"] for event, data in progress if event == "stage_started"], expected_stages)
+        self.assertEqual([data["stage"] for event, data in progress if event == "stage_completed"], expected_stages)
         self.assertEqual(len(debug.retrieval_diagnostics), 2)
         self.assertEqual([item.route for item in debug.retrieval_diagnostics], ["docs", "upload"])
-        self.assertEqual([item.stage for item in debug.llm_calls], ["planner", "synthesis"])
+        attempts = [1, 2] if repair else [1]
+        self.assertEqual([item.stage for item in debug.llm_calls], ["planner", *(["synthesis"] * len(attempts))])
         self.assertTrue(all(item.usage_metadata["total_tokens"] == 14 for item in debug.llm_calls))
         stage_events = [
             item for item in debug.latency_trace if isinstance(item, dict) and item.get("kind") == "stage"
@@ -181,11 +214,24 @@ class GraphBuilderDebugTest(unittest.TestCase):
         self.assertTrue(any(item.get("stage") == "pre_synthesis_validation" for item in stage_events))
         self.assertTrue(any(item.get("stage") == "post_synthesis_validation" for item in stage_events))
         self.assertTrue(any(item.get("stage") == "action_postprocess" for item in stage_events))
-        self.assertTrue(
-            any(
-                item.source == "planner" and item.target == "retrieve_dispatch"
-                for item in result["route_decisions"]
-            )
+        for stage in ("synthesis", "post_synthesis_validation"):
+            for event in ("stage_started", "stage_completed"):
+                self.assertEqual(
+                    [data["attempt"] for name, data in progress if name == event and data["stage"] == stage],
+                    attempts,
+                )
+            self.assertEqual([item["attempt"] for item in stage_events if item["stage"] == stage], attempts)
+        for stage in ("planner", "retrieval"):
+            self.assertEqual([item["attempt"] for item in stage_events if item["stage"] == stage], [1])
+        if repair:
+            validation = [item for item in stage_events if item["stage"] == "post_synthesis_validation"]
+            self.assertEqual(validation[0]["status"], "retry_requested")
+        self.assertEqual(
+            [(item.source, item.target) for item in result["route_decisions"]],
+            [("add_user_message", "planner"), ("planner", "retrieve_dispatch"),
+             ("pre_synthesis_validation", "synthesize"),
+             *([("post_synthesis_validation", "synthesize")] if repair else []),
+             ("post_synthesis_validation", "action_postprocess")],
         )
         self.assertEqual(debug.planner_errors, [])
         self.assertEqual(

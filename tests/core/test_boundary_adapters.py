@@ -36,6 +36,31 @@ class BoundaryAdaptersTest(unittest.TestCase):
         self.assertNotIn("edge_decisions", DebugState.model_fields)
         self.assertNotIn("edge_decisions", DebugPayload.model_fields)
 
+    def test_invalid_route_history_is_rejected_instead_of_silently_dropped(self) -> None:
+        valid_event = {
+            "sequence": 1,
+            "source": "planner",
+            "target": "synthesize",
+            "reason": "retrieval_not_required",
+        }
+        for value in (
+            None, {}, "not-a-list", [None],
+            [{**valid_event, "sequence": 0}],
+            [{**valid_event, "sequence": True}],
+            [{**valid_event, "sequence": "1"}],
+            [{**valid_event, "target": "retry"}],
+            [{**valid_event, "source": "unknown"}],
+            [{**valid_event, "reason": " "}],
+            [{**valid_event, "decision": "retry"}],
+        ):
+            with self.subTest(value=value):
+                with self.assertRaises(ValueError):
+                    normalize_graph_update({"route_decisions": value})
+                with self.assertRaises(ValueError):
+                    parse_debug_payload({"route_decisions": value})
+        with self.assertRaises(ValueError):
+            parse_debug_payload({})
+
     def test_memory_compaction_diagnostics_survive_internal_and_output_parsing(self) -> None:
         event = {
             "reason": "turn_count",
@@ -49,6 +74,46 @@ class BoundaryAdaptersTest(unittest.TestCase):
         self.assertEqual(debug.memory_compactions, [event])
         output = parse_debug_payload({"memory_compactions": [event], "route_decisions": []})
         self.assertEqual(output.memory_compactions, [event])
+
+    def test_output_history_never_becomes_a_shadow_history_in_internal_debug(self) -> None:
+        event = {
+            "sequence": 1,
+            "source": "planner",
+            "target": "synthesize",
+            "reason": "retrieval_not_required",
+        }
+        output = parse_debug_payload({
+            "route_decisions": [event],
+            "memory_compactions": [{"removed_messages": 4}],
+            "validation_events": ["content_accepted"],
+        })
+        for external_value in (output, output.model_dump()):
+            with self.subTest(value_type=type(external_value).__name__):
+                internal = parse_debug_state(external_value)
+                self.assertNotIn("route_decisions", internal.model_dump())
+                self.assertEqual(internal.validation_events, ["content_accepted"])
+                self.assertEqual(internal.memory_compactions, [{"removed_messages": 4}])
+                with self.assertRaises(ValueError):
+                    parse_debug_payload(internal.model_dump())
+                exported = parse_debug_payload({
+                    **internal.model_dump(),
+                    "route_decisions": output.route_decisions,
+                })
+                self.assertEqual(exported, output)
+
+    def test_partial_debug_updates_do_not_replace_authoritative_route_history(self) -> None:
+        event = {
+            "sequence": 7,
+            "source": "post_synthesis_validation",
+            "target": "action_postprocess",
+            "reason": "validation_passed",
+        }
+        normalized = normalize_graph_update({
+            "route_decisions": [event],
+            "debug": {"route_decisions": [], "memory_compactions": []},
+        })
+        self.assertEqual([record.model_dump() for record in normalized["route_decisions"]], [event])
+        self.assertNotIn("route_decisions", normalized["debug"].model_dump())
 
     def test_session_metadata_preserves_one_explicit_recipient(self) -> None:
         metadata = parse_session_metadata({"slack_recipient": {"kind": "channel", "value": " C123 "}})
