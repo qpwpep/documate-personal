@@ -7,6 +7,7 @@ from langchain_core.messages import AnyMessage
 from src.core.answer_schema import AnswerResponse
 
 from src.core.contracts.debug import RetryState
+from src.core.contracts.routing import validate_route_decisions
 from src.core.contracts.graph_state import DebugState, GraphState, PendingAction, PlannerState, ResponseState, RetrievalState, RuntimeState, SessionMetadata
 from src.core.request_contracts import RequestContract, UserTurnSnapshot
 from src.core.uploads import UploadFileInfo
@@ -40,6 +41,7 @@ def build_graph_state_input(
 ) -> GraphState:
     state: GraphState = {
         "messages": list(messages or []),
+        "route_decisions": [],
         "runtime": RuntimeState(
             session_id=session_id,
             user_input=str(user_input or ""),
@@ -77,6 +79,8 @@ def normalize_graph_update(updates: Any) -> Any:
         return updates
 
     normalized = dict(updates)
+    if "route_decisions" in normalized:
+        normalized["route_decisions"] = validate_route_decisions(normalized["route_decisions"])
     if "runtime" in normalized:
         normalized["runtime"] = parse_runtime_state(normalized.get("runtime"))
     if "planner" in normalized:

@@ -54,6 +54,7 @@ class _RollingSummaryGraph:
                 )
             )
         return {
+            "route_decisions": [],
             "messages": messages,
             "runtime": runtime.model_copy(
                 update={"memory_summary": f"summary-{turn}"}
@@ -66,6 +67,7 @@ class _RuntimeOmittingGraph:
     def invoke(self, state: dict) -> dict:
         runtime = state["runtime"]
         return {
+            "route_decisions": [],
             "messages": [
                 *state.get("messages", []),
                 HumanMessage(content=runtime.user_input),

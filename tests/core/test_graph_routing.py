@@ -1,4 +1,5 @@
 import unittest
+import pytest
 
 from src.core.answer_schema import export_answer_text, finalize_answer, text_document
 from src.core.documents import DocumentElement, build_snapshot
@@ -12,6 +13,7 @@ from src.core.contracts.boundary.graph import build_graph_state_input
 from src.core.contracts.boundary.response import get_response_state
 from src.core.contracts.boundary.retrieval import get_retrieval_state
 from src.runtime.make_graph import build_graph
+from src.runtime.graph_builder import _instrument_stage_node
 from src.runtime.nodes.planner import make_planner_node
 from src.runtime.nodes.retrieval import make_retrieve_dispatch_node
 from src.runtime.nodes.session import add_user_message
@@ -51,6 +53,27 @@ def _neutral_planner_update(state, plan=None):
     }
 
 
+def _run_graph(graph, initial_state):
+    visited = []
+    state = initial_state
+    for mode, update in graph.stream(initial_state, stream_mode=["updates", "values"]):
+        if mode == "updates":
+            visited.extend(update)
+        else:
+            state = update
+    branch_sources = {
+        "add_user_message", "planner", "pre_synthesis_validation", "post_synthesis_validation",
+    }
+    expected = [
+        (source, visited[index + 1])
+        for index, source in enumerate(visited) if source in branch_sources
+    ]
+    decisions = state["route_decisions"]
+    assert [(decision.source, decision.target) for decision in decisions] == expected
+    assert [decision.sequence for decision in decisions] == list(range(1, len(expected) + 1))
+    return state, visited
+
+
 class GraphRoutingTest(unittest.TestCase):
     pass
 
@@ -65,7 +88,9 @@ if __name__ == "__main__":
 
 
 
-def _assert_repair_flow(routes, defect, max_retries, persistent):
+
+
+def _assert_repair_flow(routes, defect, max_retries, persistent, *, instrumented=True):
     import json
 
     from src.core.answer_schema import AnswerDocument
@@ -122,30 +147,47 @@ def _assert_repair_flow(routes, defect, max_retries, persistent):
     }) if defect == "code" else RequestContract()
     plan = PlannerOutput(use_retrieval=True, tasks=[RetrievalTask(route=route, query=route, k=3) for route in routes], request_contract=contract.to_wire())
     planner_llm = _CapturePlannerLLM(plan)
+    contracts = []
+    synthesize = make_synthesize_node(RepairingLLM(), verbose=False)
+
+    def synthesize_with_contract_observation(state):
+        contracts.append(state["runtime"].request_contract)
+        return synthesize(state)
+
+    def observe(stage, node):
+        return _instrument_stage_node(stage, node) if instrumented else node
+
     graph = build_graph(
         state_type=GraphState, add_user_node=add_user_message,
         summarize_node=lambda state: {},
-        planner_node=make_planner_node(planner_llm, verbose=False),
+        planner_node=observe("planner", make_planner_node(planner_llm, verbose=False)),
         retrieve_dispatch_node=make_retrieve_dispatch_node(
             lambda query, **kwargs: search("docs", query),
             lambda query, k, retriever=None, **kwargs: search("upload", query),
             verbose=False,
         ),
-        synthesize_node=make_synthesize_node(RepairingLLM(), verbose=False),
-        pre_synthesis_validation_node=make_pre_synthesis_validation_node(False),
-        post_synthesis_validation_node=make_post_synthesis_validation_node(False),
+        synthesize_node=synthesize_with_contract_observation,
+        pre_synthesis_validation_node=observe(
+            "pre_synthesis_validation", make_pre_synthesis_validation_node(False),
+        ),
+        post_synthesis_validation_node=observe(
+            "post_synthesis_validation", make_post_synthesis_validation_node(False),
+        ),
         action_postprocess_node=lambda state: {},
         memory_policy=ConversationMemoryPolicy(),
     )
 
-    state = graph.invoke(build_graph_state_input(
+    initial_state = build_graph_state_input(
         user_input=request, current_turn_id="request", messages=[], retriever=object() if "upload" in routes else None,
         retry={"max_retries": max_retries},
-    ))
+    )
+    state, visited = _run_graph(graph, initial_state)
 
     expected_attempts = 1 if max_retries == 0 else 2
     assert len(packets) == expected_attempts, (routes, defect, max_retries)
     assert all(packet == packets[0] for packet in packets)
+    assert len(contracts) == expected_attempts
+    assert all(contract == contracts[0] for contract in contracts)
     assert planner_llm.call_count == 1
     assert searches == {route: int(route in routes) for route in searches}
     result = state["response"].result
@@ -156,3 +198,4 @@ def _assert_repair_flow(routes, defect, max_retries, persistent):
         assert "수정 전 본문" not in export_answer_text(result)
     else:
         assert not any(issue.code == "source_excerpt_fallback" for issue in result.issues)
+    return state, visited

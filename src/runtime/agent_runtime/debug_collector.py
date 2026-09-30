@@ -7,6 +7,7 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from src.core.contracts.debug import DEBUG_SCHEMA_VERSION
 from src.core.contracts.provenance import AnswerProvenance
+from src.core.contracts.routing import validate_route_decisions
 from src.core.contracts.boundary.debug import get_debug_state, parse_retry_state
 from src.core.contracts.boundary.graph import get_retry_state
 from src.core.contracts.boundary.planner import get_planner_state, parse_planner_diagnostic
@@ -259,6 +260,13 @@ class DebugCollector:
             *state_debug.synthesis_errors,
             *state_debug.action_errors,
         ]
+        missing_required_debug_fields = []
+        try:
+            route_decisions = validate_route_decisions(response.get("route_decisions"))
+        except ValueError as exc:
+            route_decisions = []
+            missing_required_debug_fields.append("route_decisions")
+            debug_errors.append(f"route_decisions invalid: {exc}")
         llm_calls = [item.model_dump(mode="json") for item in state_debug.llm_calls]
         planner_errors = list(state_debug.planner_errors)
         current_turn_start_index = -1
@@ -319,6 +327,8 @@ class DebugCollector:
             planner_errors=planner_errors,
             debug_errors=debug_errors,
         )
+        if missing_required_debug_fields and "DEBUG_NORMALIZATION_FAILED" not in error_codes:
+            error_codes.append("DEBUG_NORMALIZATION_FAILED")
         latency_breakdown = build_latency_breakdown(
             raw_trace=[item for item in state_debug.latency_trace],
             graph_total_ms=graph_total_ms,
@@ -338,8 +348,8 @@ class DebugCollector:
 
         return {
             "schema_version": DEBUG_SCHEMA_VERSION,
-            "observability_status": state_debug.observability_status,
-            "missing_required_debug_fields": [],
+            "observability_status": "failed" if missing_required_debug_fields else state_debug.observability_status,
+            "missing_required_debug_fields": missing_required_debug_fields,
             "tool_calls": tool_calls,
             "tool_call_count": len(tool_calls),
             "execution_evidence": execution_evidence.model_dump(mode="json") if execution_evidence is not None else None,
@@ -352,6 +362,7 @@ class DebugCollector:
             "error_codes": error_codes,
             "validation_events": list(state_debug.validation_events or []),
             "edge_decisions": list(state_debug.edge_decisions or []),
+            "route_decisions": [item.model_dump(mode="json") for item in route_decisions],
             "memory_compactions": list(state_debug.memory_compactions),
             "planner_errors": planner_errors,
             "observed_hits": observed_hits,

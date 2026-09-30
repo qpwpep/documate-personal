@@ -3,8 +3,9 @@ from __future__ import annotations
 from typing import Any
 
 from src.core.slack_contract import SlackDelivery
-from src.core.contracts.debug import ActionResults, DEBUG_SCHEMA_VERSION, DebugPayload, ErrorCode, LLMCallMetadata, ModelUsageStatus, RetryState, SaveTextActionResult, TokenUsage, json_safe_deep_copy, normalize_recorded_routes
+from src.core.contracts.debug import ActionResults, DEBUG_SCHEMA_VERSION, DebugDiagnostics, DebugPayload, ErrorCode, LLMCallMetadata, ModelUsageStatus, RetryState, SaveTextActionResult, TokenUsage, json_safe_deep_copy, normalize_recorded_routes
 from src.core.contracts.graph_state import DebugState
+from src.core.contracts.routing import validate_route_decisions
 from src.core.contracts.boundary.planner import parse_planner_diagnostic
 from src.core.contracts.boundary.retrieval import parse_retrieval_diagnostic, parse_retrieval_diagnostics
 
@@ -210,11 +211,11 @@ def parse_action_results(value: Any) -> ActionResults | None:
     return ActionResults(**payload) if payload else None
 
 
-def parse_debug_payload(value: Any) -> DebugPayload:
-    if isinstance(value, DebugPayload):
+def _parse_debug_diagnostics(value: Any) -> DebugDiagnostics:
+    if isinstance(value, DebugDiagnostics):
         return value
     if not isinstance(value, dict):
-        return DebugPayload()
+        return DebugDiagnostics()
 
     observed_hits = (
         [
@@ -241,7 +242,7 @@ def parse_debug_payload(value: Any) -> DebugPayload:
     token_usage = parse_token_usage(value.get("token_usage"))
     has_llm_usage = bool(llm_calls or models_used or model_name or (token_usage is not None and token_usage.total_tokens > 0))
 
-    return DebugPayload(
+    return DebugDiagnostics(
         schema_version=schema_version,
         observability_status=observability_status,  # type: ignore[arg-type]
         missing_required_debug_fields=[
@@ -302,6 +303,18 @@ def parse_debug_payload(value: Any) -> DebugPayload:
     )
 
 
+def parse_debug_payload(value: Any) -> DebugPayload:
+    if isinstance(value, DebugPayload):
+        return value
+    if not isinstance(value, dict):
+        raise ValueError("debug payload must be an object with route_decisions")
+    decisions = validate_route_decisions(value.get("route_decisions"))
+    return DebugPayload(
+        **_parse_debug_diagnostics(value).model_dump(),
+        route_decisions=decisions,
+    )
+
+
 def parse_debug_state(value: Any) -> DebugState:
     if isinstance(value, DebugState):
         return value
@@ -310,7 +323,7 @@ def parse_debug_state(value: Any) -> DebugState:
     if not isinstance(value, dict):
         return DebugState()
 
-    payload = parse_debug_payload(value).model_dump(mode="json")
+    payload = _parse_debug_diagnostics(value).model_dump(mode="json")
     payload["retrieval_errors"] = [
         str(item) for item in value.get("retrieval_errors", []) if str(item).strip()
     ] if isinstance(value.get("retrieval_errors"), list) else []

@@ -6,6 +6,7 @@ from langchain_core.messages import AIMessage
 from pydantic import BaseModel, Field
 
 from src.core.contracts.provenance import AnswerProvenance
+from src.core.contracts.routing import RoutingDecision
 from src.core.contracts.tool_execution import ToolExecutionEvidence
 from src.core.slack_contract import SlackDelivery
 
@@ -207,7 +208,7 @@ class ActionResults(BaseModel):
     save_text: SaveTextActionResult | None = None
 
 
-class DebugPayload(BaseModel):
+class DebugDiagnostics(BaseModel):
     schema_version: int = DEBUG_SCHEMA_VERSION
     observability_status: DebugObservabilityStatus = "ok"
     missing_required_debug_fields: list[str] = Field(default_factory=list)
@@ -232,6 +233,10 @@ class DebugPayload(BaseModel):
     planner_diagnostics: PlannerDiagnostic | None = None
     latency_breakdown: dict[str, Any] | None = None
     action_results: ActionResults | None = None
+
+
+class DebugPayload(DebugDiagnostics):
+    route_decisions: list[RoutingDecision] = Field(default_factory=list)
 
 
 AgentDebugPayload = DebugPayload
