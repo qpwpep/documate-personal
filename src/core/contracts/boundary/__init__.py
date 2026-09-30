@@ -1,4 +1,4 @@
-from src.core.contracts.boundary.debug import get_debug_state, parse_debug_payload, parse_debug_state, parse_llm_calls, parse_retry_state, parse_token_usage
+from src.core.contracts.boundary.debug import get_debug_state, parse_debug_payload, parse_debug_state, normalize_llm_call_observation, parse_retry_state
 from src.core.contracts.boundary.graph import build_graph_state_input, get_retry_state, normalize_graph_update
 from src.core.contracts.boundary.planner import get_planner_state, parse_planner_diagnostic, parse_planner_output, parse_planner_state
 from src.core.contracts.boundary.response import get_response_state, parse_response_state
@@ -16,7 +16,7 @@ __all__ = [
     "normalize_graph_update",
     "parse_debug_payload",
     "parse_debug_state",
-    "parse_llm_calls",
+    "normalize_llm_call_observation",
     "parse_planner_diagnostic",
     "parse_planner_output",
     "parse_planner_state",
@@ -26,5 +26,4 @@ __all__ = [
     "parse_retrieval_state",
     "parse_retry_state",
     "parse_session_metadata",
-    "parse_token_usage",
 ]

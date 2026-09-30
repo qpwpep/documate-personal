@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from src.core.contracts import SessionMetadata
-from src.core.contracts.boundary.debug import parse_action_results, parse_error_codes, parse_llm_calls, parse_model_usage_status, parse_retry_state, parse_token_usage
+from src.core.contracts.boundary.debug import parse_action_results, parse_error_codes, normalize_llm_call_observation, parse_retry_state
 from src.core.contracts.boundary.planner import parse_planner_diagnostic
 from src.core.contracts.boundary.retrieval import normalize_retrieval_diagnostic_observation
 from src.core.contracts.debug import DEBUG_CRITICAL_FIELDS, DEBUG_REQUIRED_FIELDS, DEBUG_SCHEMA_VERSION
@@ -9,7 +9,7 @@ from src.core.contracts.provenance import AnswerProvenance
 from src.core.contracts.routing import validate_route_decisions
 from src.core.contracts.tool_execution import ToolExecutionEvidence
 from src.core.latency import LatencyBreakdownModel
-from src.app.web.schemas import AgentDebugInfo, AgentRequest, AgentTokenUsage
+from src.app.web.schemas import AgentDebugInfo, AgentRequest
 from src.core.evidence import SearchHit
 
 
@@ -79,10 +79,7 @@ def normalize_debug_info(raw_debug: dict | None, latency_ms_server: int | None) 
     memory_compactions_raw = debug.get("memory_compactions")
     planner_errors_raw = debug.get("planner_errors") or []
     observed_hits_raw = debug.get("observed_hits") or []
-    models_used_raw = debug.get("models_used")
     raw_llm_calls = debug.get("llm_calls")
-
-    token_usage = parse_token_usage(debug.get("token_usage")) or AgentTokenUsage()
 
     observed_hits: list[SearchHit] = []
     if isinstance(observed_hits_raw, list):
@@ -105,26 +102,14 @@ def normalize_debug_info(raw_debug: dict | None, latency_ms_server: int | None) 
             error_codes.append("DEBUG_NORMALIZATION_FAILED")
         errors = [*errors, *retrieval_issues]
     planner_diagnostics = parse_planner_diagnostic(debug.get("planner_diagnostics"))
-    llm_calls = parse_llm_calls(raw_llm_calls)
+    llm_calls, usage_errors = normalize_llm_call_observation(raw_llm_calls)
+    if usage_errors:
+        if "llm_calls" not in missing_required_debug_fields:
+            missing_required_debug_fields.append("llm_calls")
+        if "DEBUG_NORMALIZATION_FAILED" not in error_codes:
+            error_codes.append("DEBUG_NORMALIZATION_FAILED")
+        errors = [*errors, *usage_errors]
     action_results = parse_action_results(debug.get("action_results"))
-
-    models_used = [str(name) for name in models_used_raw if name] if isinstance(models_used_raw, list) else []
-    if not models_used and llm_calls:
-        for llm_call in llm_calls:
-            model_name = llm_call.response_metadata.get("model_name") or llm_call.response_metadata.get("model")
-            if model_name and str(model_name) not in models_used:
-                models_used.append(str(model_name))
-    has_llm_usage = bool(
-        llm_calls
-        or models_used
-        or debug.get("model_name")
-        or (token_usage is not None and token_usage.total_tokens > 0)
-    )
-    model_usage_status = parse_model_usage_status(
-        debug.get("model_usage_status"),
-        has_llm_usage=has_llm_usage,
-        has_debug_payload=isinstance(raw_debug, dict),
-    )
 
     latency_breakdown = None
     raw_latency_breakdown = debug.get("latency_breakdown")
@@ -164,10 +149,6 @@ def normalize_debug_info(raw_debug: dict | None, latency_ms_server: int | None) 
         execution_evidence=execution_evidence,
         latency_ms_server=latency_ms_server,
         latency_breakdown=latency_breakdown,
-        token_usage=token_usage,
-        model_name=(str(debug.get("model_name")) if debug.get("model_name") else None),
-        models_used=models_used,
-        model_usage_status=model_usage_status,
         llm_calls=llm_calls,
         errors=[str(error) for error in errors if error],
         error_codes=error_codes,

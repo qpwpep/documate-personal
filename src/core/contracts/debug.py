@@ -8,7 +8,9 @@ from pydantic import BaseModel, Field
 from src.core.contracts.provenance import AnswerProvenance
 from src.core.contracts.routing import RoutingDecision
 from src.core.contracts.tool_execution import ToolExecutionEvidence
-from src.core.contracts.usage import LLMCallRecord, normalize_token_usage
+from src.core.contracts.usage import (
+    LLMCallPath, LLMCallRecord, LLMCallStage, normalize_token_usage,
+)
 from src.core.slack_contract import SlackDelivery
 
 ErrorCode = Literal[
@@ -55,16 +57,6 @@ PlannerOverrideReason = Literal[
     "missing_required_routes",
     "upload_retriever_missing",
 ]
-LLMCallStage = Literal["summarize", "planner", "synthesis"]
-LLMCallPath = Literal[
-    "direct",
-    "structured",
-    "plain_fallback",
-    "structured_compact_fallback",
-    "plain_summary_attach_fallback",
-    "korean_template_summary_fallback",
-]
-
 DEFAULT_MAX_RETRIES = 1
 RETRYABLE_REASONS: set[RetryReason] = {
     "no_evidence",
@@ -75,21 +67,16 @@ RETRYABLE_REASONS: set[RetryReason] = {
     "missing_content",
     "missing_route_coverage",
 }
-DEBUG_SCHEMA_VERSION = 10
+DEBUG_SCHEMA_VERSION = 11
 # Historical diagnostics can contain retired routes; these never enable execution.
 RECORDED_ROUTE_ORDER: tuple[str, ...] = ("docs", "upload", "local")
 DebugObservabilityStatus = Literal["ok", "degraded", "failed"]
-ModelUsageStatus = Literal["llm_used", "deterministic", "missing_debug"]
 DEBUG_REQUIRED_FIELDS: tuple[str, ...] = (
     "schema_version",
     "observability_status",
     "missing_required_debug_fields",
     "tool_calls",
     "tool_call_count",
-    "token_usage",
-    "model_name",
-    "models_used",
-    "model_usage_status",
     "llm_calls",
     "errors",
     "planner_errors",
@@ -114,12 +101,6 @@ DEBUG_CRITICAL_FIELDS: tuple[str, ...] = (
     "latency_breakdown",
     "route_decisions",
 )
-
-
-class TokenUsage(BaseModel):
-    prompt_tokens: int = 0
-    completion_tokens: int = 0
-    total_tokens: int = 0
 
 
 class RetryState(BaseModel):
@@ -190,14 +171,6 @@ class RetrievalDiagnostic(BaseModel):
     warnings: list[str] = Field(default_factory=list)
 
 
-class LLMCallMetadata(BaseModel):
-    stage: LLMCallStage
-    attempt: int = 0
-    path: LLMCallPath
-    response_metadata: dict[str, Any] = Field(default_factory=dict)
-    usage_metadata: dict[str, Any] = Field(default_factory=dict)
-
-
 class SaveTextActionResult(BaseModel):
     status: str = ""
     file_path: str | None = None
@@ -219,11 +192,7 @@ class DebugDiagnostics(BaseModel):
     tool_calls: list[str] = Field(default_factory=list)
     tool_call_count: int = 0
     execution_evidence: ToolExecutionEvidence | dict[str, Any] | None = None
-    token_usage: TokenUsage | None = None
-    model_name: str | None = None
-    models_used: list[str] = Field(default_factory=list)
-    model_usage_status: ModelUsageStatus = "deterministic"
-    llm_calls: list[LLMCallMetadata] = Field(default_factory=list)
+    llm_calls: list[LLMCallRecord] | None = None
     errors: list[str] = Field(default_factory=list)
     error_codes: list[ErrorCode] = Field(default_factory=list)
     validation_events: list[str] = Field(default_factory=list)
@@ -236,7 +205,6 @@ class DebugDiagnostics(BaseModel):
     planner_diagnostics: PlannerDiagnostic | None = None
     latency_breakdown: dict[str, Any] | None = None
     action_results: ActionResults | None = None
-
 
 class DebugPayload(DebugDiagnostics):
     route_decisions: list[RoutingDecision] = Field(default_factory=list)
@@ -278,32 +246,6 @@ def build_llm_call_metadata(
     stage: LLMCallStage,
     attempt: int,
     path: LLMCallPath,
-    message: AIMessage,
-) -> LLMCallMetadata:
-    response_metadata = getattr(message, "response_metadata", None)
-    usage_metadata = getattr(message, "usage_metadata", None)
-
-    safe_response_metadata = (
-        json_safe_deep_copy(response_metadata) if isinstance(response_metadata, dict) else {}
-    )
-    safe_usage_metadata = (
-        json_safe_deep_copy(usage_metadata) if isinstance(usage_metadata, dict) else {}
-    )
-
-    return LLMCallMetadata(
-        stage=stage,
-        attempt=max(0, int(attempt)),
-        path=path,
-        response_metadata=safe_response_metadata,
-        usage_metadata=safe_usage_metadata,
-    )
-
-
-def build_llm_call_record(
-    *,
-    stage: LLMCallStage,
-    attempt: int,
-    path: LLMCallPath,
     message: AIMessage | None = None,
 ) -> LLMCallRecord:
     response_metadata = getattr(message, "response_metadata", None)
@@ -332,3 +274,21 @@ def build_llm_call_record(
         response_metadata=safe_response_metadata,
         usage_metadata=safe_usage_metadata,
     )
+
+
+# Retained until the evaluation consumer switches to canonical call records.
+ModelUsageStatus = Literal["llm_used", "deterministic", "missing_debug"]
+
+
+class TokenUsage(BaseModel):
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+
+
+class LLMCallMetadata(BaseModel):
+    stage: LLMCallStage
+    attempt: int = 0
+    path: Literal["direct", "structured", "plain_fallback", "structured_compact_fallback", "plain_summary_attach_fallback", "korean_template_summary_fallback"]
+    response_metadata: dict[str, Any] = Field(default_factory=dict)
+    usage_metadata: dict[str, Any] = Field(default_factory=dict)

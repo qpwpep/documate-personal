@@ -15,7 +15,7 @@ from src.core.evidence import EvidenceRef
 from src.core.planner_schema import PlannerOutput
 from src.core.request_contracts import RequestContract, UserTurnSnapshot
 from src.core.uploads import UploadFileInfo
-from src.core.contracts.debug import DebugDiagnostics, LLMCallMetadata, PlannerDiagnostic, PlannerStatus, RetryState, RetrievalDiagnostic, empty_planner_diagnostic
+from src.core.contracts.debug import DebugDiagnostics, PlannerDiagnostic, PlannerStatus, RetryState, RetrievalDiagnostic, empty_planner_diagnostic
 from src.core.contracts.provenance import AnswerSource, BodyKind
 from src.core.contracts.routing import RoutingDecision
 
@@ -95,7 +95,6 @@ class DebugState(DebugDiagnostics):
     validation_events: list[str] = Field(default_factory=list)
     action_errors: list[str] = Field(default_factory=list)
     retrieval_diagnostics: list[RetrievalDiagnostic] = Field(default_factory=list)
-    llm_calls: list[LLMCallMetadata] = Field(default_factory=list)
     latency_trace: list[dict[str, Any]] = Field(default_factory=list)
 
 

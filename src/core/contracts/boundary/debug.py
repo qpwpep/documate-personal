@@ -3,8 +3,10 @@ from __future__ import annotations
 from typing import Any
 
 from src.core.slack_contract import SlackDelivery
-from src.core.contracts.debug import ActionResults, DEBUG_SCHEMA_VERSION, DebugDiagnostics, DebugPayload, ErrorCode, LLMCallMetadata, ModelUsageStatus, RetryState, SaveTextActionResult, TokenUsage, json_safe_deep_copy, normalize_recorded_routes
+from src.core.contracts.debug import ActionResults, DEBUG_SCHEMA_VERSION, DebugDiagnostics, DebugPayload, ErrorCode, RetryState, SaveTextActionResult, json_safe_deep_copy, normalize_recorded_routes
 from src.core.contracts.graph_state import DebugState
+from src.core.contracts.debug import LLMCallMetadata, ModelUsageStatus, TokenUsage
+from src.core.contracts.usage import LLMCallRecord
 from src.core.contracts.routing import validate_route_decisions
 from src.core.contracts.boundary.planner import parse_planner_diagnostic
 from src.core.contracts.boundary.retrieval import parse_retrieval_diagnostic, parse_retrieval_diagnostics
@@ -94,49 +96,26 @@ def parse_retry_state(value: Any) -> RetryState:
     return retry_state
 
 
-def parse_llm_calls(value: Any) -> list[LLMCallMetadata]:
+def normalize_llm_call_observation(value: Any) -> tuple[list[LLMCallRecord] | None, list[str]]:
+    """Validate canonical wire observations without interpreting provider metadata.
+
+    One malformed entry makes the scope unknown: silently dropping it would make
+    the remaining calls look like a fully observed turn. Raw diagnostics remain
+    available in the caller's response envelope.
+    """
+    if value is None:
+        return None, []
     if not isinstance(value, list):
-        return []
-    calls: list[LLMCallMetadata] = []
-    for item in value:
-        if isinstance(item, LLMCallMetadata):
-            calls.append(item)
-            continue
-        if not isinstance(item, dict):
-            continue
-
-        stage = str(item.get("stage") or "").strip()
-        if stage not in {"summarize", "planner", "synthesis"}:
-            continue
-
-        path = str(item.get("path") or "").strip()
-        if path not in {
-            "direct",
-            "structured",
-            "plain_fallback",
-            "structured_compact_fallback",
-            "plain_summary_attach_fallback",
-            "korean_template_summary_fallback",
-        }:
-            continue
-
+        return None, ["debug.llm_calls must be a list or null"]
+    calls: list[LLMCallRecord] = []
+    errors: list[str] = []
+    for index, item in enumerate(value):
         try:
-            attempt = int(item.get("attempt", 0) or 0)
-        except (TypeError, ValueError):
-            attempt = 0
-
-        response_metadata = item.get("response_metadata")
-        usage_metadata = item.get("usage_metadata")
-        calls.append(
-            LLMCallMetadata(
-                stage=stage,
-                attempt=max(0, attempt),
-                path=path,
-                response_metadata=dict(response_metadata) if isinstance(response_metadata, dict) else {},
-                usage_metadata=dict(usage_metadata) if isinstance(usage_metadata, dict) else {},
-            )
-        )
-    return calls
+            payload = item.model_dump(mode="python") if isinstance(item, LLMCallRecord) else item
+            calls.append(LLMCallRecord.model_validate(payload))
+        except (TypeError, ValueError) as exc:
+            errors.append(f"debug.llm_calls[{index}] invalid: {exc}")
+    return (None if errors else calls), errors
 
 
 def parse_error_codes(value: Any) -> list[ErrorCode]:
@@ -151,35 +130,11 @@ def parse_error_codes(value: Any) -> list[ErrorCode]:
     return parsed
 
 
-def parse_token_usage(value: Any) -> TokenUsage | None:
-    if isinstance(value, TokenUsage):
-        return value
-    if not isinstance(value, dict):
-        return None
-    try:
-        return TokenUsage(
-            prompt_tokens=int(value.get("prompt_tokens", 0) or 0),
-            completion_tokens=int(value.get("completion_tokens", 0) or 0),
-            total_tokens=int(value.get("total_tokens", 0) or 0),
-        )
-    except (TypeError, ValueError):
-        return None
-
-
 def _parse_non_negative_int(value: Any, default: int = 0) -> int:
     try:
         return max(0, int(value))
     except (TypeError, ValueError):
         return max(0, default)
-
-
-def parse_model_usage_status(value: Any, *, has_llm_usage: bool, has_debug_payload: bool = True) -> ModelUsageStatus:
-    status = str(value or "").strip().lower()
-    if status in {"llm_used", "deterministic", "missing_debug"}:
-        return status  # type: ignore[return-value]
-    if not has_debug_payload:
-        return "missing_debug"
-    return "llm_used" if has_llm_usage else "deterministic"
 
 
 def parse_action_results(value: Any) -> ActionResults | None:
@@ -236,38 +191,26 @@ def _parse_debug_diagnostics(value: Any) -> DebugDiagnostics:
     if observability_status not in {"ok", "degraded", "failed"}:
         observability_status = "ok"
 
-    llm_calls = parse_llm_calls(value.get("llm_calls"))
-    models_used = [str(item) for item in value.get("models_used", []) if str(item).strip()] if isinstance(value.get("models_used"), list) else []
-    model_name = str(value.get("model_name")) if value.get("model_name") else None
-    token_usage = parse_token_usage(value.get("token_usage"))
-    has_llm_usage = bool(llm_calls or models_used or model_name or (token_usage is not None and token_usage.total_tokens > 0))
+    llm_calls, usage_errors = normalize_llm_call_observation(value.get("llm_calls"))
+    missing = [str(item) for item in value.get("missing_required_debug_fields", []) if str(item).strip()] if isinstance(value.get("missing_required_debug_fields"), list) else []
+    if usage_errors:
+        if "llm_calls" not in missing:
+            missing.append("llm_calls")
+        if observability_status != "failed":
+            observability_status = "degraded"
 
     return DebugDiagnostics(
         schema_version=schema_version,
         observability_status=observability_status,  # type: ignore[arg-type]
-        missing_required_debug_fields=[
-            str(item)
-            for item in value.get("missing_required_debug_fields", [])
-            if str(item).strip()
-        ]
-        if isinstance(value.get("missing_required_debug_fields"), list)
-        else [],
+        missing_required_debug_fields=missing,
         tool_calls=[str(item) for item in value.get("tool_calls", []) if str(item).strip()]
         if isinstance(value.get("tool_calls"), list)
         else [],
         tool_call_count=int(value.get("tool_call_count", 0) or 0),
         execution_evidence=value.get("execution_evidence"),
-        token_usage=token_usage,
-        model_name=model_name,
-        models_used=models_used,
-        model_usage_status=parse_model_usage_status(
-            value.get("model_usage_status"),
-            has_llm_usage=has_llm_usage,
-        ),
         llm_calls=llm_calls,
-        errors=[str(item) for item in value.get("errors", []) if str(item).strip()]
-        if isinstance(value.get("errors"), list)
-        else [],
+        errors=([str(item) for item in value.get("errors", []) if str(item).strip()]
+                if isinstance(value.get("errors"), list) else []) + usage_errors,
         error_codes=parse_error_codes(value.get("error_codes")),
         validation_events=[
             str(item) for item in value.get("validation_events", []) if str(item).strip()
@@ -335,3 +278,73 @@ def parse_debug_state(value: Any) -> DebugState:
 
 def get_debug_state(state: dict[str, Any]) -> DebugState:
     return parse_debug_state(state.get("debug"))
+
+
+# Retained until the evaluation consumer switches to canonical call records.
+def parse_llm_calls(value: Any) -> list[LLMCallMetadata]:
+    if not isinstance(value, list):
+        return []
+    calls: list[LLMCallMetadata] = []
+    for item in value:
+        if isinstance(item, LLMCallMetadata):
+            calls.append(item)
+            continue
+        if not isinstance(item, dict):
+            continue
+
+        stage = str(item.get("stage") or "").strip()
+        if stage not in {"summarize", "planner", "synthesis"}:
+            continue
+
+        path = str(item.get("path") or "").strip()
+        if path not in {
+            "direct",
+            "structured",
+            "plain_fallback",
+            "structured_compact_fallback",
+            "plain_summary_attach_fallback",
+            "korean_template_summary_fallback",
+        }:
+            continue
+
+        try:
+            attempt = int(item.get("attempt", 0) or 0)
+        except (TypeError, ValueError):
+            attempt = 0
+
+        response_metadata = item.get("response_metadata")
+        usage_metadata = item.get("usage_metadata")
+        calls.append(
+            LLMCallMetadata(
+                stage=stage,
+                attempt=max(0, attempt),
+                path=path,
+                response_metadata=dict(response_metadata) if isinstance(response_metadata, dict) else {},
+                usage_metadata=dict(usage_metadata) if isinstance(usage_metadata, dict) else {},
+            )
+        )
+    return calls
+
+
+def parse_token_usage(value: Any) -> TokenUsage | None:
+    if isinstance(value, TokenUsage):
+        return value
+    if not isinstance(value, dict):
+        return None
+    try:
+        return TokenUsage(
+            prompt_tokens=int(value.get("prompt_tokens", 0) or 0),
+            completion_tokens=int(value.get("completion_tokens", 0) or 0),
+            total_tokens=int(value.get("total_tokens", 0) or 0),
+        )
+    except (TypeError, ValueError):
+        return None
+
+
+def parse_model_usage_status(value: Any, *, has_llm_usage: bool, has_debug_payload: bool = True) -> ModelUsageStatus:
+    status = str(value or "").strip().lower()
+    if status in {"llm_used", "deterministic", "missing_debug"}:
+        return status  # type: ignore[return-value]
+    if not has_debug_payload:
+        return "missing_debug"
+    return "llm_used" if has_llm_usage else "deterministic"
