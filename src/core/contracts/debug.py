@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 from src.core.contracts.provenance import AnswerProvenance
 from src.core.contracts.routing import RoutingDecision
 from src.core.contracts.tool_execution import ToolExecutionEvidence
+from src.core.contracts.usage import LLMCallRecord, normalize_token_usage
 from src.core.slack_contract import SlackDelivery
 
 ErrorCode = Literal[
@@ -293,6 +294,41 @@ def build_llm_call_metadata(
         stage=stage,
         attempt=max(0, int(attempt)),
         path=path,
+        response_metadata=safe_response_metadata,
+        usage_metadata=safe_usage_metadata,
+    )
+
+
+def build_llm_call_record(
+    *,
+    stage: LLMCallStage,
+    attempt: int,
+    path: LLMCallPath,
+    message: AIMessage | None = None,
+) -> LLMCallRecord:
+    response_metadata = getattr(message, "response_metadata", None)
+    usage_metadata = getattr(message, "usage_metadata", None)
+
+    safe_response_metadata = (
+        json_safe_deep_copy(response_metadata) if isinstance(response_metadata, dict) else {}
+    )
+    safe_usage_metadata = (
+        json_safe_deep_copy(usage_metadata) if isinstance(usage_metadata, dict) else {}
+    )
+
+    model_name = None
+    if isinstance(response_metadata, dict):
+        for key in ("model_name", "model"):
+            value = response_metadata.get(key)
+            if isinstance(value, str) and value.strip():
+                model_name = value.strip()
+                break
+    return LLMCallRecord(
+        stage=stage,
+        attempt=attempt,
+        path=path,
+        model_name=model_name,
+        usage=normalize_token_usage(usage_metadata, response_metadata),
         response_metadata=safe_response_metadata,
         usage_metadata=safe_usage_metadata,
     )
