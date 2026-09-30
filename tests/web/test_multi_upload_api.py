@@ -689,6 +689,78 @@ def test_new_session_question_completes_while_uploads_pin_the_lru_capacity(api):
     assert manifest(api, "busy-session") == committed.json()["manifest"]
 
 
+@pytest.mark.parametrize("intervening_change", [False, True])
+def test_session_recovers_committed_upload_after_lost_response(api, monkeypatch, intervening_change):
+    """Lost HTTP delivery cannot duplicate a committed batch or replay a question."""
+    from urllib.parse import urlsplit
+
+    import requests
+
+    from src.app.client import AgentRequestContext, AgentSessionClient, UploadAPIError
+    from src.app.uploads import build_upload_sync_request, discard_staged_files
+
+    deliveries = []
+    lose_first_sync = True
+
+    def deliver(_session, method, url, **kwargs):
+        nonlocal lose_first_sync
+        path = urlsplit(url).path
+        deliveries.append((method, path, kwargs.get("json")))
+        # Keep the app, session store, indexing, and response contracts real.
+        received = api.client.request(method, path, json=kwargs.get("json"))
+        if path.endswith("/uploads/sync") and lose_first_sync:
+            lose_first_sync = False
+            assert received.status_code == 200, received.text
+            raise requests.Timeout("response lost after the server committed")
+        response = requests.Response()
+        response.status_code = received.status_code
+        response.headers.update(received.headers)
+        response._content = received.content
+        response._content_consumed = True
+        return response
+
+    monkeypatch.setattr(requests.sessions.Session, "request", deliver)
+    client = AgentSessionClient(AgentRequestContext(fastapi_url="http://local-test", session_id="session-a"))
+    session_path = api.root / "uploads" / "session-a"
+    prepared = client.stage_files(
+        [SimpleNamespace(name="alpha.py", getbuffer=lambda: b"alpha = 1\n")], session_path,
+        max_files=10, max_file_mib=1, max_total_mib=2,
+    )
+    assert not prepared.errors
+    request = build_upload_sync_request(client.manifest, files=prepared.files)
+    original_payload = request.model_dump(mode="json")
+
+    with pytest.raises(UploadAPIError):
+        client.sync_uploads(request)
+
+    assert client.manifest is None
+    committed = manifest(api)
+    assert committed["revision"] == 1
+    assert [file["name"] for file in committed["files"]] == ["alpha.py"]
+    assert len(deliveries) == 2  # Initial GET and exactly one attempted mutation.
+    assert Path(prepared.files[0].path).read_bytes() == b"alpha = 1\n"
+    current = (sync(api, add=[staged(api, "beta.py", "beta = 2\n")])["manifest"]
+               if intervening_change else committed)
+
+    replayed = client.sync_uploads(request)
+
+    assert replayed.manifest.model_dump(mode="json") == committed
+    assert manifest(api) == current
+    sync_payloads = [payload for _, path, payload in deliveries if path.endswith("/uploads/sync")]
+    assert sync_payloads == [original_payload, original_payload]
+    assert all(path != "/agent/stream" for _, path, _ in deliveries)
+    assert client.refresh_uploads().model_dump(mode="json") == current
+    events = list(client.stream("Compare the attached files"))
+    assert not [event for event in events if event.event == "error"]
+    final = next(event.result for event in events if event.event == "final_response")
+    assert final.upload_manifest.model_dump(mode="json") == current
+    assert {citation.evidence.snapshot.title for citation in final.response.citations} == {
+        file["name"] for file in current["files"]
+    }
+    assert len([path for _, path, _ in deliveries if path == "/agent/stream"]) == 1
+    discard_staged_files(prepared.files, session_path)
+
+
 def test_loopback_attachment_changes_reach_streamlit_client_and_versioned_answers(api, monkeypatch):
     """Real TCP requests carry additions, replacements and deletions into the next answer's exact sources."""
     from threading import Thread
