@@ -33,6 +33,8 @@ class BoundaryAdaptersTest(unittest.TestCase):
         output = parse_debug_payload({"route_decisions": [event]})
         self.assertEqual(output.route_decisions, [decision])
         self.assertNotIn("route_decisions", DebugState.model_fields)
+        self.assertNotIn("edge_decisions", DebugState.model_fields)
+        self.assertNotIn("edge_decisions", DebugPayload.model_fields)
 
     def test_memory_compaction_diagnostics_survive_internal_and_output_parsing(self) -> None:
         event = {

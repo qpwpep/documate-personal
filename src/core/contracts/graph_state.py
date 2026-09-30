@@ -93,7 +93,6 @@ class DebugState(DebugDiagnostics):
     synthesis_errors: list[str] = Field(default_factory=list)
     validation_errors: list[str] = Field(default_factory=list)
     validation_events: list[str] = Field(default_factory=list)
-    edge_decisions: list[dict[str, Any]] = Field(default_factory=list)
     action_errors: list[str] = Field(default_factory=list)
     retrieval_diagnostics: list[RetrievalDiagnostic] = Field(default_factory=list)
     llm_calls: list[LLMCallMetadata] = Field(default_factory=list)

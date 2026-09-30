@@ -146,7 +146,7 @@ class GraphBuilderDebugTest(unittest.TestCase):
                 "score": 0.94,
             }]},
         )
-        settings = AppSettings(openai_api_key="test", tavily_api_key="test")
+        settings = AppSettings(_env_file=None, openai_api_key="test", tavily_api_key="test", planner_model="test-planner", chat_model="test-synthesis", summary_model="test-summary")
         def provider(**kwargs):
             if kwargs.get("model") == settings.planner_model:
                 return _CaptureStructuredSynthesizeLLM(payload={
@@ -183,8 +183,8 @@ class GraphBuilderDebugTest(unittest.TestCase):
         self.assertTrue(any(item.get("stage") == "action_postprocess" for item in stage_events))
         self.assertTrue(
             any(
-                item.get("source") == "planner" and item.get("decision") == "retrieve"
-                for item in debug.edge_decisions
+                item.source == "planner" and item.target == "retrieve_dispatch"
+                for item in result["route_decisions"]
             )
         )
         self.assertEqual(debug.planner_errors, [])

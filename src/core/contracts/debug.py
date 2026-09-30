@@ -74,7 +74,7 @@ RETRYABLE_REASONS: set[RetryReason] = {
     "missing_content",
     "missing_route_coverage",
 }
-DEBUG_SCHEMA_VERSION = 9
+DEBUG_SCHEMA_VERSION = 10
 # Historical diagnostics can contain retired routes; these never enable execution.
 RECORDED_ROUTE_ORDER: tuple[str, ...] = ("docs", "upload", "local")
 DebugObservabilityStatus = Literal["ok", "degraded", "failed"]
@@ -98,6 +98,8 @@ DEBUG_REQUIRED_FIELDS: tuple[str, ...] = (
     "retrieval_diagnostics",
     "planner_diagnostics",
     "latency_breakdown",
+    "route_decisions",
+    "memory_compactions",
 )
 DEBUG_CRITICAL_FIELDS: tuple[str, ...] = (
     "schema_version",
@@ -109,6 +111,7 @@ DEBUG_CRITICAL_FIELDS: tuple[str, ...] = (
     "answer_provenance",
     "retrieval_diagnostics",
     "latency_breakdown",
+    "route_decisions",
 )
 
 
@@ -223,7 +226,6 @@ class DebugDiagnostics(BaseModel):
     errors: list[str] = Field(default_factory=list)
     error_codes: list[ErrorCode] = Field(default_factory=list)
     validation_events: list[str] = Field(default_factory=list)
-    edge_decisions: list[dict[str, Any]] = Field(default_factory=list)
     memory_compactions: list[dict[str, Any]] = Field(default_factory=list)
     planner_errors: list[str] = Field(default_factory=list)
     observed_hits: list[dict[str, Any]] = Field(default_factory=list)

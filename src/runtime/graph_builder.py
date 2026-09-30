@@ -48,7 +48,7 @@ def _resolve_stage_status(stage: str, updates: GraphState) -> str | None:
     if stage == "pre_synthesis_validation":
         retry_context = get_retry_state(updates)
         if retry_context.needs_retry:
-            return "retry"
+            return "retry_requested"
         response = get_response_state(updates)
         if response.result.content.blocks:
             return str(retry_context.retry_reason or "terminal")
@@ -56,7 +56,7 @@ def _resolve_stage_status(stage: str, updates: GraphState) -> str | None:
     if stage in {"validation", "post_synthesis_validation"}:
         retry_context = get_retry_state(updates)
         if retry_context.needs_retry:
-            return "retry"
+            return "retry_requested"
         return str(retry_context.retry_reason or "pass")
     return None
 
@@ -81,67 +81,6 @@ def _extract_stage_status_from_debug(stage: str, debug: Any, attempt: int) -> st
             pass
         status = item.get("status")
         return str(status) if status else None
-    return None
-
-
-def _edge_decision_for_stage(stage: str, updates: GraphState) -> dict[str, str] | None:
-    if stage == "planner":
-        planner = get_planner_state(updates)
-        if str(planner.guided_followup or "").strip():
-            return {
-                "source": "planner",
-                "decision": "pre_validate",
-                "reason": "guided_followup_present",
-            }
-        planner_output = planner.output
-        tasks = getattr(planner_output, "tasks", []) or []
-        if bool(getattr(planner_output, "use_retrieval", False)) and tasks:
-            return {
-                "source": "planner",
-                "decision": "retrieve",
-                "reason": f"retrieval_required:{len(tasks)}_task(s)",
-            }
-        return {
-            "source": "planner",
-            "decision": "synthesize",
-            "reason": "retrieval_not_required",
-        }
-
-    if stage == "pre_synthesis_validation":
-        retry_context = get_retry_state(updates)
-        if retry_context.needs_retry:
-            return {
-                "source": "pre_synthesis_validation",
-                "decision": "retry",
-                "reason": str(retry_context.retry_reason or "retry_requested"),
-            }
-        response = get_response_state(updates)
-        if response.result.content.blocks:
-            return {
-                "source": "pre_synthesis_validation",
-                "decision": "postprocess",
-                "reason": "terminal_response_available",
-            }
-        return {
-            "source": "pre_synthesis_validation",
-            "decision": "synthesize",
-            "reason": "validation_passed",
-        }
-
-    if stage == "post_synthesis_validation":
-        retry_context = get_retry_state(updates)
-        if retry_context.needs_retry:
-            return {
-                "source": "post_synthesis_validation",
-                "decision": "retry",
-                "reason": str(retry_context.retry_reason or "retry_requested"),
-            }
-        return {
-            "source": "post_synthesis_validation",
-            "decision": "postprocess",
-            "reason": str(retry_context.retry_reason or "validation_passed"),
-        }
-
     return None
 
 
@@ -199,16 +138,13 @@ def _instrument_stage_node(stage: str, node: Any, *, record_latency_trace: bool 
         raw_debug_patch = updates.get("debug") if "debug" in updates else None
         updates = normalize_graph_update(updates)
         debug = _merge_debug_patch(state, raw_debug_patch)
-        stage_status = _resolve_stage_status(stage, updates) or _extract_stage_status_from_debug(
+        stage_status = _resolve_stage_status(stage, {**state, **updates}) or _extract_stage_status_from_debug(
             stage,
             debug,
             attempt,
         )
         stage_latency_ms = elapsed_ms(started, time.perf_counter())
         debug_updates: dict[str, Any] = {}
-        edge_decision = _edge_decision_for_stage(stage, updates)
-        if edge_decision is not None:
-            debug_updates["edge_decisions"] = [*debug.edge_decisions, edge_decision]
         if record_latency_trace:
             latency_event = make_stage_latency_event(
                 stage=stage,  # type: ignore[arg-type]

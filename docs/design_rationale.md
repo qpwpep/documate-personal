@@ -14,7 +14,7 @@ DocuMate는 LangGraph 기반 학습 보조 에이전트입니다. 현재 구조�
 
 초기 구조처럼 모델의 tool call 흐름에만 실행을 맡기면 검색, 검증, 액션의 책임 경계가 흐려지기 쉽습니다. 그래서 현재 그래프는 `add_user_message`, `summarize_old_messages`, `planner`, `retrieve_dispatch`, `pre_synthesis_validation`, `synthesize`, `post_synthesis_validation`, `action_postprocess` 단계로 나누었습니다.
 
-이 구조의 목표는 각 단계가 명확한 상태 계약을 주고받게 만드는 것입니다. `GraphState`는 `runtime`, `planner`, `retrieval`, `retry`, `response`, `debug` 영역으로 나뉘며, boundary adapter가 dict와 Pydantic 모델 사이의 상태를 정규화합니다. planner는 확인 질문이 필요한지 또는 어떤 근거 요구를 검색할지 결정하고, retrieval은 각 `requirement_id`에 대응하는 `SearchHit`와 diagnostics를 모읍니다. synthesis는 실제 제공받은 원문 범위로 본문을 생성하고, validation은 그 본문의 원문 참조·발췌 일치·요구별 근거와 관찰 가능한 출력 조건을 확인합니다.
+이 구조의 목표는 각 단계가 명확한 상태 계약을 주고받게 만드는 것입니다. `GraphState`는 `runtime`, `planner`, `retrieval`, `retry`, `response`, `debug`와 전용 `route_decisions` 영역으로 나뉘며, boundary adapter가 dict와 Pydantic 모델 사이의 상태를 정규화합니다. planner는 확인 질문이 필요한지 또는 어떤 근거 요구를 검색할지 결정하고, retrieval은 각 `requirement_id`에 대응하는 `SearchHit`와 diagnostics를 모읍니다. synthesis는 실제 제공받은 원문 범위로 본문을 생성하고, validation은 그 본문의 원문 참조·발췌 일치·요구별 근거와 관찰 가능한 출력 조건을 확인합니다.
 
 ### 유한한 장기 대화 메모리
 
@@ -200,11 +200,19 @@ structured synthesis timeout 시 compact 호출을 사용하고, 실패하면 �
 
 사용자에게는 간결한 답변을 제공하되, `include_debug=true`에서는 latency, planner/retrieval diagnostics, retry context, LLM call metadata를 확인할 수 있게 했습니다. 일반 응답 품질과 개발자 관측성을 같은 메시지에 섞지 않기 위한 기준입니다.
 
-현재 debug schema version은 `8`입니다. debug payload에는 tool call, token usage, model usage status, validation events, edge decisions, `memory_compactions`, `observed_hits`, `answer_provenance`, action results, stage별 latency, retrieval route latency, synthesis attempt mode가 포함됩니다. `observed_hits`는 현재 검색에서 본 자료이고, `answer_provenance.evidence_packet`은 최종 결과를 생성·검증한 범위이며, 응답의 `citations`는 그중 실제 표시 내용이 채택한 원문입니다. 모델을 호출하지 않는 본문 복사에서는 선택한 원본의 인용을 검증 packet으로 사용합니다. 이 정보는 일반 사용자 답변이 아니라 회귀 분석과 benchmark 해석을 위한 진단 계층입니다.
+현재 debug schema version은 `10`입니다. debug payload에는 tool call, token usage, model usage status, validation events, `route_decisions`, `memory_compactions`, `observed_hits`, `answer_provenance`, action results, stage별 latency, retrieval route latency, synthesis attempt mode가 포함됩니다. `observed_hits`는 현재 검색에서 본 자료이고, `answer_provenance.evidence_packet`은 최종 결과를 생성·검증한 범위이며, 응답의 `citations`는 그중 실제 표시 내용이 채택한 원문입니다. 모델을 호출하지 않는 본문 복사에서는 선택한 원본의 인용을 검증 packet으로 사용합니다. 이 정보는 일반 사용자 답변이 아니라 회귀 분석과 benchmark 해석을 위한 진단 계층입니다.
 
 다중 턴에서는 서버가 선택한 `previous`·`pending` 본문의 hash와 실제 citation ID 목록을 `answer_provenance.source`에 남깁니다. eval은 같은 사례·세션의 앞선 답변과 이 정보를 대조하고, 선택한 답변의 출처 연결이 검증된 경우에만 그 실제 인용 범위 안의 현재 최종 packet을 인정합니다. 최종 citation은 이 packet의 정확한 근거 ID를 사용해야 합니다. hash만 비교해 인용이 누락된 응답을 같은 원본으로 취급하거나 과거 검색 결과 전체를 현재 근거로 합치지 않습니다. 현재 턴의 도구 실행과 검색·복사 감점은 별도로 유지합니다. 본문·채택 출처가 같으면 이 연결 검증에서는 동등하므로 source 발생 ID나 범용 event store를 추가하지 않습니다. 정확한 발생 시점·전체 전달 artifact의 동일성·설명의 의미적 지지는 이 진단의 보장 범위가 아닙니다.
 
 대화 compaction은 `memory_compactions`에 trigger 차원, before/after turn·message·추정 token·직렬화 byte, removed message 수, fallback 여부를 남깁니다. fallback은 `validation_events`에도 degraded 신호로 기록합니다. 이 진단과 구조화 로그에는 원문 query, summary, ToolMessage content를 포함하지 않습니다.
+
+### 실행과 관측이 같은 분기 결과를 사용
+
+분기 규칙과 경로 기록은 `build_graph()`의 routing adapter가 소유합니다. 업무 노드는 retry scope·예산·사유를 포함한 상태를 반환하고, adapter는 그 업데이트가 반영될 상태에서 목적지와 사유를 한 번 결정합니다. 메시지 누적에는 LangGraph와 동일한 `add_messages`를 사용하며 나머지 교체 채널은 키가 있는 업데이트만 반영합니다. `Command(update=…, goto=…)`는 같은 결정 객체의 실제 노드명을 실행에 사용하고 그 객체를 전용 append 채널에 한 번 기록합니다. 경로 별칭이나 별도 예측기, 다음 경로를 복사해 저장하는 상태는 두지 않습니다.
+
+분기 결과를 일반 debug 객체에서 분리했으므로 이후 노드의 debug 교체가 경로 이력을 지우지 않습니다. collector·HTTP/SSE·eval은 확정 이력을 그대로 전달하며 재판단하거나 중복을 제거하지 않습니다. 반복 방문은 새로운 `sequence`를 갖는 별도 결정입니다. 진행·지연 계측과 압축 진단은 기존 책임을 유지합니다. 내용 복구의 `post_synthesis_validation → synthesize` 경로는 planner·검색을 다시 실행하지 않으므로 확정 요청 계약과 검색 근거를 유지하며 기존 재시도 예산을 따릅니다.
+
+이 이력은 선택된 경로이며 후속 노드의 성공 기록은 아닙니다.
 
 ### 세션 단위 격리
 

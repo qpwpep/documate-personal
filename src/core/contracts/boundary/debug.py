@@ -274,13 +274,6 @@ def _parse_debug_diagnostics(value: Any) -> DebugDiagnostics:
         ]
         if isinstance(value.get("validation_events"), list)
         else [],
-        edge_decisions=[
-            dict(item)
-            for item in value.get("edge_decisions", [])
-            if isinstance(item, dict)
-        ]
-        if isinstance(value.get("edge_decisions"), list)
-        else [],
         memory_compactions=[
             dict(item)
             for item in value.get("memory_compactions", [])

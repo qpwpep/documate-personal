@@ -65,7 +65,6 @@ def normalize_debug_info(raw_debug: dict | None, latency_ms_server: int | None) 
         if "answer_provenance" not in critical_missing:
             critical_missing.append("answer_provenance")
     validation_events_raw = debug.get("validation_events") or []
-    edge_decisions_raw = debug.get("edge_decisions") or []
     try:
         route_decisions = validate_route_decisions(debug.get("route_decisions"))
     except ValueError as exc:
@@ -176,13 +175,6 @@ def normalize_debug_info(raw_debug: dict | None, latency_ms_server: int | None) 
             str(event) for event in validation_events_raw if str(event).strip()
         ]
         if isinstance(validation_events_raw, list)
-        else [],
-        edge_decisions=[
-            dict(item)
-            for item in edge_decisions_raw
-            if isinstance(item, dict)
-        ]
-        if isinstance(edge_decisions_raw, list)
         else [],
         route_decisions=route_decisions,
         memory_compactions=[

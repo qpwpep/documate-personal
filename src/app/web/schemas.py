@@ -39,7 +39,6 @@ class AgentDebugInfo(BaseModel):
     errors: list[str] = Field(default_factory=list)
     error_codes: list[ErrorCode] = Field(default_factory=list)
     validation_events: list[str] = Field(default_factory=list)
-    edge_decisions: list[dict[str, Any]] = Field(default_factory=list)
     route_decisions: list[RoutingDecision]
     memory_compactions: list[dict[str, Any]] = Field(default_factory=list)
     planner_errors: list[str] = Field(default_factory=list)
