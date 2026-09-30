@@ -4,6 +4,7 @@ import pytest
 from pydantic import ValidationError
 
 from src.app.web.schemas import AgentResponse
+from src.core.contracts.debug import DEBUG_SCHEMA_VERSION
 from src.core.uploads import UploadManifest
 from tests.web.answer_fixtures import cited_response, response_payload
 
@@ -94,7 +95,9 @@ class AgentResponseSchemaTest(unittest.TestCase):
             "trace": "trace-id",
             "upload_manifest": {"epoch": "session-epoch", "revision": 0, "files": []},
             "debug": {
-                "schema_version": 3,
+                "schema_version": DEBUG_SCHEMA_VERSION,
+                "route_decisions": [],
+                "memory_compactions": [],
                 "observability_status": "ok",
                 "missing_required_debug_fields": [],
                 "tool_calls": ["tavily_search"],
@@ -119,23 +122,25 @@ class AgentResponseSchemaTest(unittest.TestCase):
         self.assertEqual(result.debug.retry_context.retry_reason, "unresolved_references")
         self.assertEqual(result.debug.retry_context.retrieval_diagnostic_start_index, 0)
 
-    def test_debug_validation_events_and_edge_decisions_are_parseable(self) -> None:
+    def test_debug_validation_events_and_route_decisions_are_parseable(self) -> None:
         payload = {
             "response": response_payload("ok"),
             "trace": "trace-id",
             "upload_manifest": {"epoch": "session-epoch", "revision": 0, "files": []},
             "debug": {
-                "schema_version": 3,
+                "schema_version": DEBUG_SCHEMA_VERSION,
+                "memory_compactions": [],
                 "observability_status": "ok",
                 "missing_required_debug_fields": [],
                 "tool_calls": [],
                 "tool_call_count": 0,
                 "errors": [],
                 "validation_events": ["validate_evidence: retry_reason=unresolved_references"],
-                "edge_decisions": [
+                "route_decisions": [
                     {
                         "source": "planner",
-                        "decision": "retrieve",
+                        "sequence": 1,
+                        "target": "retrieve_dispatch",
                         "reason": "retrieval_required:2_task(s)",
                     }
                 ],
@@ -151,7 +156,7 @@ class AgentResponseSchemaTest(unittest.TestCase):
             ["validate_evidence: retry_reason=unresolved_references"],
         )
         self.assertEqual(result.debug.errors, [])
-        self.assertEqual(result.debug.edge_decisions[0]["decision"], "retrieve")
+        self.assertEqual(result.debug.route_decisions[0].target, "retrieve_dispatch")
 
     def test_debug_diagnostics_are_optional_and_parseable(self) -> None:
         payload = {
@@ -159,7 +164,9 @@ class AgentResponseSchemaTest(unittest.TestCase):
             "trace": "trace-id",
             "upload_manifest": {"epoch": "session-epoch", "revision": 0, "files": []},
             "debug": {
-                "schema_version": 3,
+                "schema_version": DEBUG_SCHEMA_VERSION,
+                "route_decisions": [],
+                "memory_compactions": [],
                 "observability_status": "ok",
                 "missing_required_debug_fields": [],
                 "tool_calls": ["tavily_search"],
@@ -210,7 +217,9 @@ class AgentResponseSchemaTest(unittest.TestCase):
             "trace": "trace-id",
             "upload_manifest": {"epoch": "session-epoch", "revision": 0, "files": []},
             "debug": {
-                "schema_version": 3,
+                "schema_version": DEBUG_SCHEMA_VERSION,
+                "route_decisions": [],
+                "memory_compactions": [],
                 "observability_status": "ok",
                 "missing_required_debug_fields": [],
                 "tool_calls": ["tavily_search"],
@@ -270,7 +279,9 @@ class AgentResponseSchemaTest(unittest.TestCase):
             "trace": "trace-id",
             "upload_manifest": {"epoch": "session-epoch", "revision": 0, "files": []},
             "debug": {
-                "schema_version": 3,
+                "schema_version": DEBUG_SCHEMA_VERSION,
+                "route_decisions": [],
+                "memory_compactions": [],
                 "observability_status": "ok",
                 "missing_required_debug_fields": [],
                 "tool_calls": ["upload_search"],
@@ -316,7 +327,9 @@ class AgentResponseSchemaTest(unittest.TestCase):
             "trace": "trace-id",
             "upload_manifest": {"epoch": "session-epoch", "revision": 0, "files": []},
             "debug": {
-                "schema_version": 3,
+                "schema_version": DEBUG_SCHEMA_VERSION,
+                "route_decisions": [],
+                "memory_compactions": [],
                 "observability_status": "ok",
                 "missing_required_debug_fields": [],
                 "tool_calls": ["tavily_search"],

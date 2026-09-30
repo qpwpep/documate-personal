@@ -9,7 +9,7 @@ from pydantic import ValidationError
 from src.app.web.agent_request_service import AgentRequestService
 from src.app.web.schemas import AgentRequest, AgentResponse
 from src.core.answer_schema import export_answer_text
-from src.core.contracts.debug import DebugPayload
+from src.core.contracts.debug import DEBUG_SCHEMA_VERSION, DebugPayload
 from src.core.contracts.provenance import AnswerProvenance
 from src.core.contracts.tool_execution import ToolExecutionEvidence
 from src.core.uploads import UploadManifest
@@ -147,7 +147,9 @@ class AgentRequestServiceTest(unittest.TestCase):
             {
                 "response": response_payload("fallback answer"),
                 "debug": {
-                    "schema_version": 3,
+                    "schema_version": DEBUG_SCHEMA_VERSION,
+                    "route_decisions": [],
+                    "memory_compactions": [],
                     "observability_status": "ok",
                     "tool_calls": ["tavily_search"],
                     "tool_call_count": 1,
@@ -194,7 +196,9 @@ class AgentRequestServiceTest(unittest.TestCase):
             {
                 "response": response_payload("structured answer"),
                 "debug": {
-                    "schema_version": 3,
+                    "schema_version": DEBUG_SCHEMA_VERSION,
+                    "route_decisions": [],
+                    "memory_compactions": [],
                     "observability_status": "ok",
                     "tool_calls": [],
                     "tool_call_count": 0,
@@ -230,7 +234,9 @@ class AgentRequestServiceTest(unittest.TestCase):
             {
                 "response": response_payload("streamed answer"),
                 "debug": {
-                    "schema_version": 3,
+                    "schema_version": DEBUG_SCHEMA_VERSION,
+                    "route_decisions": [],
+                    "memory_compactions": [],
                     "observability_status": "ok",
                     "tool_calls": [],
                     "tool_call_count": 0,
