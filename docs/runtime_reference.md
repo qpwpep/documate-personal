@@ -378,7 +378,9 @@ Slack 수신자 선택은 action 정책 한 곳에서 수행합니다. 전송이
 
 ### 5.1 `POST /agent/stream`
 
-Streamlit과 online benchmark는 `src/app/client.py`의 `AgentSessionClient`를 사용해 첨부 목록 조회·동기화·질문·응답 검증을 공유합니다. `src/app/uploads.py`는 파일 staging과 변경 요청 구성을 담당합니다. 질문은 이 엔드포인트에 JSON으로 보내고 `text/event-stream` SSE로 진행 상황과 최종 응답을 받습니다.
+Streamlit과 online benchmark는 `src.app.client.AgentSessionClient`를 사용해 첨부 목록 조회·동기화·질문·응답 검증을 공유합니다. `src.app.uploads`는 파일 staging, 최신 manifest 기준 변경 재검토, `src.core.uploads.UploadSyncRequest` 구성을 담당합니다. 질문은 이 엔드포인트에 JSON으로 보내고 `text/event-stream` SSE로 진행 상황과 최종 응답을 받습니다.
+
+Streamlit은 UI 세션마다 하나의 클라이언트를 유지하며, 첨부 목록은 그 클라이언트의 manifest에서 읽습니다. 별도 manifest 사본을 UI에 저장하거나 경로마다 되돌려 쓰지 않습니다. `streamlit_state.PendingUpload`는 기준 manifest 스냅샷, 준비 파일, 교체 승인, 보류 질문, 실패 이력과 제출 요청만 보관합니다. 새 채팅은 새 클라이언트를 만들고 대기 작업·보류 질문을 비우며, 이전 세션의 늦은 결과는 현재 세션에 반영하지 않습니다. Slack 수신자는 질문마다 현재 선택값으로 갱신하고 요청 시작 시 스냅샷을 만듭니다.
 
 일반 UI와 benchmark의 질문 요청 예시입니다. `uploads`는 앞서 첨부 API가 반환한 확정 상태입니다.
 
@@ -422,7 +424,7 @@ OpenAPI의 HTTP `200` 응답은 `text/event-stream`의 `x-sse-events` 확장에 
 
 HTTP `200`이나 `done`만으로 성공 처리하지 않습니다. 유효한 `final_response`가 있어야 최종 답변을 사용할 수 있으며, 답변의 제한 사항·액션 실패·debug 오류도 별도로 확인합니다. 클라이언트는 `error` 뒤에도 최종 응답 수신을 계속하며, 최종 응답 없이 종료되거나 연결이 끊기면 답변 수신 실패로 처리합니다.
 
-전송 계층은 최종 `response`, `trace`, `debug`, `upload_manifest`를 전달하고, benchmark는 답변·trace·debug와 앞서 수신한 오류를 결과에 보존합니다. 서버는 요청 처리 후 세션 락을 풀기 전에 `UploadManifest` 스냅샷을 확보하며, 정상 완료·모델 실패·exit의 유효한 최종 응답에 반드시 포함합니다. `error` 뒤에 유효한 최종 응답이 오면 오류 진단과 확정 manifest를 모두 보존합니다. Streamlit은 검증된 manifest를 최종 이벤트 소비 전에 세션 상태에 적용하고, 답변 저장 후 기존 rerun으로 첨부 목록을 갱신합니다. 세션 종료 응답에는 새 epoch·revision 0·`files=[]`가 포함되므로 추가 GET이나 질문 재전송 없이 다음 질문을 처리합니다. 최종 `AnswerResponse`와 오류 메시지는 대화 기록에, manifest는 현재 첨부 상태에 보관하며 `trace`와 `debug`는 대화 기록에 저장하지 않습니다.
+전송 계층은 최종 `response`, `trace`, `debug`, `upload_manifest`를 전달하고, benchmark는 답변·trace·debug와 앞서 수신한 오류를 결과에 보존합니다. 서버는 요청 처리 후 세션 락을 풀기 전에 `UploadManifest` 스냅샷을 확보하며, 정상 완료·모델 실패·exit의 유효한 최종 응답에 반드시 포함합니다. `error` 뒤에 유효한 최종 응답이 오면 오류 진단과 확정 manifest를 모두 보존합니다. 공용 클라이언트는 검증된 manifest를 최종 이벤트 전달 전에 갱신하고, Streamlit은 답변 저장 후 rerun으로 해당 목록을 표시합니다. 세션 종료 응답에는 새 epoch·revision 0·`files=[]`가 포함되므로 추가 GET이나 질문 재전송 없이 다음 질문을 처리합니다. 최종 `AnswerResponse`와 오류 메시지는 대화 기록에 보관하며 `trace`와 `debug`는 대화 기록에 저장하지 않습니다.
 
 공용 클라이언트는 답변과 manifest 검증이 모두 통과해야 최종 결과를 전달합니다. manifest 누락·`null`·형식 오류는 응답 계약 위반이며, 구 응답용 기본값이나 빈 manifest로 보정하지 않습니다. 해당 응답의 답변과 첨부 상태는 승인하지 않고 오류와 원본 envelope를 진단에 남깁니다. 이 계약 오류와 timeout·응답 유실은 서로 다른 실패 원인이지만, 모두 현재 서버 상태를 확신할 수 없으므로 첨부 확인값을 무효화합니다.
 
@@ -433,6 +435,8 @@ HTTP `200`이나 `done`만으로 성공 처리하지 않습니다. 유효한 `fi
 `GET /sessions/{session_id}/uploads`는 `{epoch, revision, files}`를 반환합니다. 각 파일에는 `file_id`, `name`, `size_bytes`, `content_hash`, `source_uri`가 있으며 물리 저장 경로는 노출하지 않습니다. GET·sync·최종 응답의 manifest는 같은 필수 필드와 엄격한 타입 검증을 사용합니다. 서버 재시작이나 세션 TTL/LRU 만료 후에는 새 epoch가 발급됩니다. 오래된 UI는 목록을 다시 확인하고 필요한 자료를 다시 첨부해야 합니다.
 
 `POST /sessions/{session_id}/uploads/sync`는 공유 파일시스템에 저장한 파일의 참조를 받아 첨부 집합을 갱신합니다. 파일 바이트는 Streamlit의 내장 업로드 경로 또는 benchmark fixture에서 읽어 공용 staging 절차로 준비하며 이 API는 JSON을 받습니다. 원격 클라이언트가 파일 bytes를 직접 보내는 API는 아닙니다.
+
+`build_upload_sync_request()`는 교체 승인을 확인하고 독립된 요청을 한 번 생성합니다. 응답 유실 후 재시도는 이 요청의 operation ID·경로·epoch/revision·변경 목록과 staging 바이트를 그대로 사용합니다. 최신 목록으로 다시 적용할 때는 `review_upload_changes()`로 충돌과 삭제 대상을 재검토하고, 교체 승인을 초기화한 뒤 새 요청을 만듭니다. 성공이 확인되거나 제출 전에 취소한 staging은 정리하지만, 제출 후 처리 여부가 불명인 작업의 staging은 즉시 지우지 않고 세션 정리 정책에 맡깁니다. 최초 업로드 시도에 성공하면 함께 입력한 질문을 이어 보내며, 한 번이라도 실패했다면 이후 성공해도 질문은 명시적 전송을 기다립니다.
 
 ```json
 {
@@ -643,7 +647,7 @@ uv run --locked python script/sync_env_example.py --check
 uv run --no-project python script/check_streamlit_compatibility.py
 ```
 
-`--locked`는 잠금 파일 갱신이 필요하면 실패하지만, 코드가 사용하는 API의 호환성까지 검사하지는 않습니다. `check_streamlit_compatibility.py`는 `pyproject.toml`의 `streamlit>=X.Y.Z`에서 하한을 읽고, 프로젝트 잠금 환경을 기준으로 해당 버전의 격리 환경을 구성합니다. 실제 설치 버전이 하한과 일치하는지 확인한 뒤 기존 UI 테스트 5개 파일을 실행하며, 실패 종료 코드를 그대로 전달합니다. 프로젝트의 `.venv`와 `uv.lock`은 변경하지 않습니다.
+`--locked`는 잠금 파일 갱신이 필요하면 실패하지만, 코드가 사용하는 API의 호환성까지 검사하지는 않습니다. `check_streamlit_compatibility.py`는 `pyproject.toml`의 `streamlit>=X.Y.Z`에서 하한을 읽고, 프로젝트 잠금 환경을 기준으로 해당 버전의 격리 환경을 구성합니다. 실제 설치 버전이 하한과 일치하는지 확인한 뒤 UI 업로드 흐름·상태·페이지·채팅 테스트를 실행하며, 실패 종료 코드를 그대로 전달합니다. 공용 클라이언트와 업로드 로직은 일반 회귀의 `tests/app/`에서 검증합니다. 프로젝트의 `.venv`와 `uv.lock`은 변경하지 않습니다.
 
 Streamlit API 사용이나 의존성을 변경할 때 이 검증을 함께 실행합니다. 잠금 버전만 올라가도 하한 검증은 선언된 버전을 계속 사용합니다. 기존 `AppTest`가 정상 첨부 목록을 받은 화면을 렌더링하고 첨부·교체·삭제 흐름을 검사하므로, 서버 포트가 열리는지만 확인하는 기동 검사로 대체하지 않습니다. `>=X.Y.Z` 외의 선언 형식으로 바꾸면 검증 스크립트도 해당 하한을 명확히 해석하도록 함께 수정해야 합니다.
 
