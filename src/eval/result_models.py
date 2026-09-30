@@ -5,6 +5,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
+from src.core.contracts.usage import LLMCallRecord
 from src.core.answer_schema import AnswerResponse, ActionReceipt
 from src.core.contracts.debug import LLMCallMetadata, ModelUsageStatus, PlannerDiagnostic, RetrievalDiagnostic, TokenUsage
 from src.core.contracts.provenance import AnswerProvenance
@@ -62,6 +63,8 @@ class EvidenceAssessment(BaseModel):
 
 
 class ScenarioTurnResult(BaseModel):
+    role: Literal["setup", "question"] = "question"
+    llm_calls: list[LLMCallRecord] | None = None
     query: str
     request_payload: dict[str, Any]
     http_status: int = 0
@@ -150,7 +153,7 @@ class CaseResult(BaseModel):
     model_name: str | None = None
     models_used: list[str] = Field(default_factory=list)
     model_usage_status: ModelUsageStatus = "missing_debug"
-    llm_calls: list[LLMCallMetadata] = Field(default_factory=list)
+    llm_calls: list[LLMCallRecord] | None = None
     tool_call_count: int = 0
     planner_errors: list[str] = Field(default_factory=list)
     error_codes: list[str] = Field(default_factory=list)
