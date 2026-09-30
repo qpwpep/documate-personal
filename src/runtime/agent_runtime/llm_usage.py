@@ -7,7 +7,7 @@ from contextvars import ContextVar
 from threading import Lock
 from typing import Any
 
-from src.core.contracts.debug import build_llm_call_record
+from src.core.contracts.debug import build_llm_call_metadata
 from src.core.contracts.usage import LLMCallPath, LLMCallRecord, LLMCallStage
 
 
@@ -25,7 +25,7 @@ class LLMUsageRecorder:
     def complete(self, index: int, message: Any) -> None:
         with self._lock:
             call = self._calls[index]
-            self._calls[index] = build_llm_call_record(
+            self._calls[index] = build_llm_call_metadata(
                 stage=call.stage, attempt=call.attempt, path=call.path, message=message,
             )
 
@@ -65,7 +65,7 @@ class LLMCallAttempt:
 @contextmanager
 def record_llm_call(*, stage: LLMCallStage, attempt: int, path: LLMCallPath) -> Iterator[LLMCallAttempt]:
     recorder = _recorder.get()
-    index = recorder.start(build_llm_call_record(
+    index = recorder.start(build_llm_call_metadata(
         stage=stage, attempt=attempt, path=path, message=None,
     )) if recorder is not None else None
     # Exceptions leave the initial, explicitly unobserved usage record intact.

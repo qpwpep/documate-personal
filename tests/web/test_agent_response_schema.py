@@ -321,7 +321,7 @@ class AgentResponseSchemaTest(unittest.TestCase):
         result = AgentResponse.model_validate(payload)
         self.assertEqual(result.debug.latency_breakdown.synthesis_attempts[0].mode, "deterministic_grounded_direct")
 
-    def test_debug_llm_calls_and_models_used_are_optional_and_parseable(self) -> None:
+    def test_debug_canonical_calls_preserve_model_identity_and_usage(self) -> None:
         payload = {
             "response": response_payload("follow up"),
             "trace": "trace-id",
@@ -336,14 +336,13 @@ class AgentResponseSchemaTest(unittest.TestCase):
                 "tool_call_count": 1,
                 "errors": [],
                 "observed_hits": [],
-                "model_name": "gpt-5-mini",
-                "models_used": ["gpt-5-nano", "gpt-5-mini"],
-                "model_usage_status": "llm_used",
                 "llm_calls": [
                     {
                         "stage": "planner",
                         "attempt": 1,
                         "path": "structured",
+                        "model_name": "gpt-5-nano",
+                        "usage": {"input_tokens": 10, "output_tokens": 2},
                         "response_metadata": {"model_name": "gpt-5-nano"},
                         "usage_metadata": {"input_tokens": 10, "output_tokens": 2, "total_tokens": 12},
                     },
@@ -351,6 +350,8 @@ class AgentResponseSchemaTest(unittest.TestCase):
                         "stage": "synthesis",
                         "attempt": 1,
                         "path": "structured",
+                        "model_name": "gpt-5-mini",
+                        "usage": {"input_tokens": 20, "output_tokens": 5},
                         "response_metadata": {"model_name": "gpt-5-mini"},
                         "usage_metadata": {"input_tokens": 20, "output_tokens": 5, "total_tokens": 25},
                     },
@@ -360,12 +361,11 @@ class AgentResponseSchemaTest(unittest.TestCase):
 
         result = AgentResponse.model_validate(payload)
         self.assertIsNotNone(result.debug)
-        self.assertEqual(result.debug.model_name, "gpt-5-mini")
-        self.assertEqual(result.debug.models_used, ["gpt-5-nano", "gpt-5-mini"])
-        self.assertEqual(result.debug.model_usage_status, "llm_used")
+        self.assertEqual([call.model_name for call in result.debug.llm_calls], ["gpt-5-nano", "gpt-5-mini"])
         self.assertEqual(len(result.debug.llm_calls), 2)
         self.assertEqual(result.debug.llm_calls[0].stage, "planner")
-        self.assertEqual(result.debug.llm_calls[1].usage_metadata["total_tokens"], 25)
+        self.assertEqual(result.debug.llm_calls[1].usage.total_tokens, 25)
+        self.assertNotIn("token_usage", result.debug.model_dump())
 
 
 if __name__ == "__main__":

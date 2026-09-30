@@ -170,6 +170,8 @@ class BoundaryAdaptersTest(unittest.TestCase):
                         "stage": "planner",
                         "attempt": 1,
                         "path": "structured",
+                        "model_name": "gpt-5-mini",
+                        "usage": {"input_tokens": 1, "output_tokens": None},
                         "response_metadata": {"model_name": "gpt-5-mini"},
                         "usage_metadata": {"input_tokens": 1},
                     }
@@ -181,6 +183,7 @@ class BoundaryAdaptersTest(unittest.TestCase):
         assert debug.retry_context is not None
         self.assertEqual(debug.retry_context.failed_routes, ["docs"])
         self.assertEqual(len(debug.llm_calls), 1)
+        self.assertEqual(debug.llm_calls[0].usage.observation, "partial")
 
     def test_normalize_graph_update_parses_partial_state(self) -> None:
         normalized = normalize_graph_update(

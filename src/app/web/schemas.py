@@ -10,7 +10,8 @@ from src.core.conversation_memory import (
     DEFAULT_QUERY_MAX_CHARS,
     validate_query_text,
 )
-from src.core.contracts.debug import ActionResults, ErrorCode, LLMCallMetadata, ModelUsageStatus, PlannerDiagnostic, RetryState, RetrievalDiagnostic, TokenUsage
+from src.core.contracts.debug import ActionResults, ErrorCode, PlannerDiagnostic, RetryState, RetrievalDiagnostic
+from src.core.contracts.usage import LLMCallRecord
 from src.core.evidence import SearchHit
 from src.core.contracts.provenance import AnswerProvenance
 from src.core.contracts.routing import RoutingDecision
@@ -18,7 +19,6 @@ from src.core.contracts.tool_execution import ToolExecutionEvidence
 from src.core.uploads import UploadContext, UploadManifest, validate_session_id
 from src.core.latency import LatencyBreakdownModel, StageName
 
-AgentTokenUsage = TokenUsage
 AgentRetryContext = RetryState
 
 
@@ -31,11 +31,7 @@ class AgentDebugInfo(BaseModel):
     execution_evidence: ToolExecutionEvidence | dict[str, Any] | None = None
     latency_ms_server: int | None = None
     latency_breakdown: LatencyBreakdownModel | None = None
-    token_usage: AgentTokenUsage | None = None
-    model_name: str | None = None
-    models_used: list[str] = Field(default_factory=list)
-    model_usage_status: ModelUsageStatus = "missing_debug"
-    llm_calls: list[LLMCallMetadata] = Field(default_factory=list)
+    llm_calls: list[LLMCallRecord] | None = None
     errors: list[str] = Field(default_factory=list)
     error_codes: list[ErrorCode] = Field(default_factory=list)
     validation_events: list[str] = Field(default_factory=list)

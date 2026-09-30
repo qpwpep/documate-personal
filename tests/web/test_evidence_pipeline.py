@@ -22,6 +22,7 @@ from src.core.evidence import RetrievalScore, SearchHit, build_evidence, parse_s
 from src.core.answer_schema import ActionReceipt, AnswerResponse, finalize_answer, export_answer_text, text_document
 from src.core.contracts.graph_state import DebugState, PlannerState, ResponseState, RetrievalState
 from src.runtime.agent_runtime import DebugCollector, ExecutionRunner, ResponseAssembler, SessionContext
+from src.runtime.agent_runtime.llm_usage import capture_llm_usage, record_llm_call
 from src.runtime.graph_builder import _instrument_stage_node
 from src.infra.settings import AppSettings
 from src.infra.tools import build_tool_registry
@@ -63,17 +64,6 @@ def _response_with_hits(hits):
             {"kind": "stage", "stage": "validation", "attempt": 1, "latency_ms": 3, "status": "pass"},
         ]),
     }
-
-
-def _response_with_llm_calls():
-    response = _response_with_hits([])
-    response["debug"] = DebugState(llm_calls=[
-        {"stage": "planner", "attempt": 1, "path": "structured", "response_metadata": {"model_name": "gpt-5-nano"},
-         "usage_metadata": {"input_tokens": 12, "output_tokens": 3, "total_tokens": 15}},
-        {"stage": "synthesis", "attempt": 1, "path": "structured", "response_metadata": {"model_name": "gpt-5-mini"},
-         "usage_metadata": {"input_tokens": 20, "output_tokens": 5, "total_tokens": 25}},
-    ])
-    return response
 
 
 def _response_with_ai_metadata():
@@ -472,32 +462,29 @@ class EvidencePipelineTest(unittest.TestCase):
         self.assertGreaterEqual(latency["graph_total_ms"], 0)
         self.assertGreaterEqual(latency["server_total_ms"], 0)
 
-    def test_debug_aggregates_llm_calls_into_debug_metadata(self) -> None:
-        response = _response_with_llm_calls()
-        result = _assemble_response(response)
+    def test_debug_publishes_canonical_llm_calls_from_the_active_request(self) -> None:
+        response = _response_with_hits([])
+        with capture_llm_usage():
+            for stage, model, inputs, outputs in [
+                ("planner", "gpt-5-nano", 12, 3), ("synthesis", "gpt-5-mini", 20, 5),
+            ]:
+                with record_llm_call(stage=stage, attempt=1, path="structured") as call:
+                    call.complete(AIMessage(content="", response_metadata={"model_name": model},
+                        usage_metadata={"input_tokens": inputs, "output_tokens": outputs, "total_tokens": inputs + outputs}))
+            result = _assemble_response(response)
 
-        self.assertEqual(result["debug"]["token_usage"]["prompt_tokens"], 32)
-        self.assertEqual(result["debug"]["token_usage"]["completion_tokens"], 8)
-        self.assertEqual(result["debug"]["token_usage"]["total_tokens"], 40)
-        self.assertEqual(result["debug"]["model_name"], "gpt-5-mini")
-        self.assertEqual(result["debug"]["models_used"], ["gpt-5-nano", "gpt-5-mini"])
-        self.assertEqual(len(result["debug"]["llm_calls"]), 2)
-        self.assertEqual(
-            [item["path"] for item in result["debug"]["llm_calls"]],
-            ["structured", "structured"],
-        )
+        calls = result["debug"]["llm_calls"]
+        self.assertEqual([call["usage"]["input_tokens"] for call in calls], [12, 20])
+        self.assertEqual([call["usage"]["output_tokens"] for call in calls], [3, 5])
+        self.assertEqual([call["model_name"] for call in calls], ["gpt-5-nano", "gpt-5-mini"])
+        self.assertNotIn("token_usage", result["debug"])
+        self.assertNotIn("model_usage_status", result["debug"])
 
-    def test_debug_falls_back_to_current_turn_ai_message_metadata(self) -> None:
-        response = _response_with_ai_metadata()
-        result = _assemble_response(response)
+    def test_debug_does_not_reinterpret_message_metadata_without_a_call_recorder(self) -> None:
+        result = _assemble_response(_response_with_ai_metadata())
 
-        self.assertEqual(result["debug"]["token_usage"]["prompt_tokens"], 14)
-        self.assertEqual(result["debug"]["token_usage"]["completion_tokens"], 6)
-        self.assertEqual(result["debug"]["token_usage"]["total_tokens"], 20)
-        self.assertEqual(result["debug"]["model_name"], "gpt-5-mini")
-        self.assertEqual(result["debug"]["models_used"], ["gpt-5-mini"])
-        self.assertEqual(len(result["debug"]["llm_calls"]), 1)
-        self.assertEqual(result["debug"]["llm_calls"][0]["path"], "direct")
+        self.assertIsNone(result["debug"]["llm_calls"])
+        self.assertNotIn("token_usage", result["debug"])
 
     @patch("openai.resources.embeddings.Embeddings.create", autospec=True)
     def test_upload_is_searchable_when_session_builds_with_configured_credentials(self, embed_request) -> None:

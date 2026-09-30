@@ -426,7 +426,7 @@ def test_legacy_exit_resets_the_session_without_preparing_the_supplied_file(api,
     assert empty["epoch"] != current["epoch"]
     assert empty == {"epoch": empty["epoch"], "revision": 0, "files": []}
     assert export_answer_text(AnswerResponse.model_validate(reset["response"])) == "Chat session has been reset. Start again."
-    assert reset["debug"]["model_usage_status"] == "deterministic"
+    assert reset["debug"]["llm_calls"] == []
     assert reset["debug"]["errors"] == []
     # Check close itself before a manifest GET can reconcile orphaned originals.
     assert all(not path.exists() for path in owned)
