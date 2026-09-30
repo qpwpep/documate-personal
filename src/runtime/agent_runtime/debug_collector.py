@@ -338,7 +338,7 @@ class DebugCollector:
 
         return {
             "schema_version": DEBUG_SCHEMA_VERSION,
-            "observability_status": "ok",
+            "observability_status": state_debug.observability_status,
             "missing_required_debug_fields": [],
             "tool_calls": tool_calls,
             "tool_call_count": len(tool_calls),
@@ -352,6 +352,7 @@ class DebugCollector:
             "error_codes": error_codes,
             "validation_events": list(state_debug.validation_events or []),
             "edge_decisions": list(state_debug.edge_decisions or []),
+            "memory_compactions": list(state_debug.memory_compactions),
             "planner_errors": planner_errors,
             "observed_hits": observed_hits,
             "answer_provenance": answer_provenance,

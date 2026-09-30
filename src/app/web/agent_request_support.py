@@ -65,6 +65,7 @@ def normalize_debug_info(raw_debug: dict | None, latency_ms_server: int | None) 
             critical_missing.append("answer_provenance")
     validation_events_raw = debug.get("validation_events") or []
     edge_decisions_raw = debug.get("edge_decisions") or []
+    memory_compactions_raw = debug.get("memory_compactions")
     planner_errors_raw = debug.get("planner_errors") or []
     observed_hits_raw = debug.get("observed_hits") or []
     models_used_raw = debug.get("models_used")
@@ -170,6 +171,13 @@ def normalize_debug_info(raw_debug: dict | None, latency_ms_server: int | None) 
             if isinstance(item, dict)
         ]
         if isinstance(edge_decisions_raw, list)
+        else [],
+        memory_compactions=[
+            dict(item)
+            for item in memory_compactions_raw
+            if isinstance(item, dict)
+        ]
+        if isinstance(memory_compactions_raw, list)
         else [],
         planner_errors=[str(error) for error in planner_errors_raw if error]
         if isinstance(planner_errors_raw, list)

@@ -203,8 +203,6 @@ def make_summarize_node(
         debug = get_debug_state(state)
         after_usage = measure_conversation(recent_messages, next_summary)
         diagnostic = {
-            "source": "conversation_memory",
-            "decision": "compacted",
             "reason": ",".join(plan.trigger_reasons),
             "before": {
                 "turns": plan.before.turn_count,
@@ -220,6 +218,7 @@ def make_summarize_node(
             },
             "removed_messages": len(old_messages),
             "summary_fallback": fallback_reason is not None,
+            "fallback_reason": fallback_reason,
         }
         validation_events = list(debug.validation_events)
         if fallback_reason is not None:
@@ -240,7 +239,7 @@ def make_summarize_node(
                         else debug.observability_status
                     ),
                     "validation_events": validation_events,
-                    "edge_decisions": [*debug.edge_decisions, diagnostic],
+                    "memory_compactions": [*debug.memory_compactions, diagnostic],
                     "llm_calls": [*debug.llm_calls, *llm_calls],
                 }
             ),
