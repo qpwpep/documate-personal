@@ -4,6 +4,7 @@ import json
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 from .summary_models import RunSummary, RunTrack
 
@@ -13,6 +14,7 @@ class StoredRun:
     summary: RunSummary
     generated_at: datetime
     track_explicit: bool = False
+    raw_summary: dict[str, Any] | None = None
 
     @property
     def run_id(self) -> str:
@@ -30,6 +32,12 @@ class StoredRun:
             return "smoke"
         return "release"
 
+    @property
+    def has_current_measurements(self) -> bool:
+        from .reporting.writer import is_current_measurement
+
+        return is_current_measurement(self.summary)
+
 
 def latest_run_pointer_name(track: RunTrack) -> str:
     return f"latest_{track}_run.txt"
@@ -46,14 +54,15 @@ def _parse_generated_at(summary: RunSummary) -> datetime:
     return datetime.fromisoformat(summary.generated_at_utc)
 
 
-def _read_summary(path: Path) -> tuple[RunSummary, bool]:
+def _read_summary(path: Path) -> tuple[RunSummary, bool, dict[str, Any] | None]:
     payload = json.loads(path.read_text(encoding="utf-8"))
     summary = RunSummary(**payload)
     if summary.decision_contract_version is not None:
-        from .reporting.writer import load_run_outputs
+        from .reporting.writer import load_report_inputs
 
-        summary, _ = load_run_outputs(path.parent)
-    return summary, "track" in payload
+        inputs = load_report_inputs(path.parent)
+        return inputs.summary, "track" in payload, inputs.historical_summary
+    return summary, "track" in payload, payload
 
 
 def load_history_runs(output_root: Path) -> list[StoredRun]:
@@ -64,12 +73,13 @@ def load_history_runs(output_root: Path) -> list[StoredRun]:
         summary_path = entry / "summary.json"
         if not summary_path.exists():
             continue
-        summary, track_explicit = _read_summary(summary_path)
+        summary, track_explicit, raw_summary = _read_summary(summary_path)
         runs.append(
             StoredRun(
                 summary=summary,
                 generated_at=_parse_generated_at(summary),
                 track_explicit=track_explicit,
+                raw_summary=raw_summary,
             )
         )
     runs.sort(key=lambda item: item.generated_at)

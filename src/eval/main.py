@@ -145,7 +145,9 @@ def command_report(args: argparse.Namespace) -> int:
     run_path = args.run.resolve()
     report_path = run_path / "report.md"
     inputs = load_report_inputs(run_path)
-    report_path.write_text(build_markdown_report(inputs.summary, inputs.current_results), encoding="utf-8")
+    report_path.write_text(build_markdown_report(
+        inputs.summary, inputs.current_results, historical_summary=inputs.historical_summary,
+    ), encoding="utf-8")
     print(f"Regenerated report: {report_path}")
     return 0
 

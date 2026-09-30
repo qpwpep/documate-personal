@@ -7,7 +7,7 @@ from typing import Any, Literal, TYPE_CHECKING
 
 from pydantic import BaseModel, Field
 
-from .tool_policy import ToolPolicySpec, assess_execution_policy
+from .tool_policy import ToolPolicyAssessment, ToolPolicySpec, assess_execution_policy
 
 if TYPE_CHECKING:
     from .config_models import BenchmarkCase
@@ -41,12 +41,23 @@ def refresh_case_decision(result: CaseResult, case: BenchmarkCase | None = None)
     if case is not None and result.decision_contract_version == DECISION_CONTRACT_VERSION:
         if result.policy_snapshot is not None and result.policy_snapshot != policy_for_case(case):
             raise ValueError("case policy does not match the retained execution policy snapshot")
+    assessment, decision = evaluate_case_decision(result)
+    result.policy_assessment = assessment
+    result.decision = decision
+    result.release_pass = result.passed = decision.passed
+    result.gate_failures = decision.failure_codes
+    result.final_score = result.composite_quality_score
+    result.judge_gate_passed = result.judge_pass
+    return decision
+
+
+def evaluate_case_decision(result: Any) -> tuple[ToolPolicyAssessment, CaseDecision]:
+    """Evaluate retained decision evidence without changing stored measurements."""
     assessment = assess_execution_policy(policy=result.policy_snapshot, evidence=result.execution_evidence,
                                          request_id=result.request_id, prior_turns=result.scenario_turns,
                                          actions=result.actions, retrieval_diagnostics=result.retrieval_diagnostics,
                                          debug=result.debug, tool_calls=result.tool_calls,
                                          tool_call_count=result.tool_call_count)
-    result.policy_assessment = assessment
     # Preserve non-policy reasons such as judge quality thresholds. Policy
     # reasons are always derived anew from the retained execution evidence.
     reasons = [code for code in result.gate_failures
@@ -71,13 +82,7 @@ def refresh_case_decision(result: CaseResult, case: BenchmarkCase | None = None)
         if item.passed is False:
             reasons.extend(item.failure_codes)
     reasons = sorted(set(reasons), key=lambda code: (code != "forbidden_tool_execution", code))
-    decision = CaseDecision(passed=not reasons, failure_codes=reasons)
-    result.decision = decision
-    result.release_pass = result.passed = decision.passed
-    result.gate_failures = reasons
-    result.final_score = result.composite_quality_score
-    result.judge_gate_passed = result.judge_pass
-    return decision
+    return assessment, CaseDecision(passed=not reasons, failure_codes=reasons)
 
 
 def decide_release(*, gates: list[GateResult], track: str, policy_failure_codes: list[str]) -> ReleaseDecision:
@@ -95,12 +100,28 @@ def decide_release(*, gates: list[GateResult], track: str, policy_failure_codes:
 
 def results_fingerprint(results: list[CaseResult]) -> str:
     payload = [result.model_dump(mode="json") for result in results]
+    return raw_results_fingerprint(payload)
+
+
+def raw_results_fingerprint(payload: list[dict[str, Any]]) -> str:
+    """Hash the saved JSON values before any model defaults or coercion apply."""
     canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def validate_run_outputs(summary: RunSummary, results: list[CaseResult]) -> None:
     """Validate persisted current outputs without external effects or an LLM."""
+    from .reporting.summary import MEASUREMENT_CONTRACT_VERSION
+
+    if summary.measurement_contract_version != MEASUREMENT_CONTRACT_VERSION:
+        raise ValueError("historical results cannot establish current release eligibility (measurement contract)")
+    validate_run_decision_evidence(summary, results)
+    if summary.results_fingerprint != results_fingerprint(results):
+        raise ValueError("run results fingerprint mismatch")
+
+
+def validate_run_decision_evidence(summary: RunSummary, results: list[Any]) -> None:
+    """Validate the shared decision contract independently of measurement formats."""
     if summary.decision_contract_version != DECISION_CONTRACT_VERSION:
         raise ValueError("historical results cannot establish current release eligibility")
     # model_copy/direct assignment do not run Pydantic validators.
@@ -123,14 +144,10 @@ def validate_run_outputs(summary: RunSummary, results: list[CaseResult]) -> None
         snapshot = summary.case_policy_snapshots.get(result.case_id)
         if snapshot is not None and result.policy_snapshot != snapshot:
             raise ValueError("case policy does not match the run policy snapshot")
-        original = result.decision
-        original_pass = result.release_pass
-        fresh = result.model_copy(deep=True)
-        refresh_case_decision(fresh)
-        if original != fresh.decision or original_pass != fresh.release_pass or result.policy_assessment != fresh.policy_assessment:
+        assessment, decision = evaluate_case_decision(result)
+        if (result.decision != decision or result.release_pass != decision.passed
+                or result.policy_assessment != assessment):
             raise ValueError("stored case verdict disagrees with execution policy")
-    if summary.results_fingerprint != results_fingerprint(results):
-        raise ValueError("run results fingerprint mismatch")
     expected = decide_release(gates=summary.gates, track=summary.track,
                               policy_failure_codes=summary.metrics.policy_failure_codes)
     if summary.release_decision != expected or summary.overall_passed != expected.passed:
