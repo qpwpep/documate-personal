@@ -1,31 +1,23 @@
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass, field
+from collections.abc import Collection, Sequence
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from src.core.uploads import normalized_upload_name
+from src.core.uploads import UploadAddition, UploadManifest, UploadSyncRequest, normalized_upload_name
 from src.core.upload_formats import ALL_UPLOAD_SUFFIXES
 
 
-@dataclass
-class UploadSyncResult:
-    file_name: str | None
-    changed: bool
-    removed: bool
-    error_message: str | None = None
-
-
-@dataclass
+@dataclass(frozen=True)
 class StagedUpload:
     path: str
     name: str
     size_bytes: int
     content_hash: str
     conflicting_file_id: str | None = None
-    replace_file_id: str | None = None
 
 
 @dataclass
@@ -35,29 +27,56 @@ class UploadStageResult:
     errors: list[str] = field(default_factory=list)
 
 
-@dataclass
-class PendingUploadOperation:
-    epoch: str
-    expected_revision: int
-    operation_id: str = field(default_factory=lambda: str(uuid4()))
-    files: list[StagedUpload] = field(default_factory=list)
-    remove: list[str] = field(default_factory=list)
-    clear: bool = False
-    prompt: str | None = None
-    error: str | None = None
-    needs_refresh_review: bool = False
-    attempted: bool = False
-    failed: bool = False
+def review_upload_changes(
+    manifest: UploadManifest,
+    *,
+    files: Sequence[StagedUpload] = (),
+    remove: Sequence[str] = (),
+) -> tuple[list[StagedUpload], list[str]]:
+    """Review a new intent against confirmed state without modifying staged bytes.
 
-    def request_payload(self) -> dict[str, Any]:
-        return {
-            "epoch": self.epoch,
-            "expected_revision": self.expected_revision,
-            "operation_id": self.operation_id,
-            "add": [{"path": item.path, "name": item.name, "replace_file_id": item.replace_file_id} for item in self.files],
-            "remove": list(self.remove),
-            "clear": self.clear,
-        }
+    Keep even now-identical files so callers can release all staging paths after
+    confirmation. Approval belongs to the caller and must be requested again.
+    """
+    existing = {normalized_upload_name(item.name): item for item in manifest.files}
+    reviewed = []
+    for item in files:
+        current = existing.get(normalized_upload_name(item.name))
+        conflict = current.file_id if current is not None and current.content_hash != item.content_hash else None
+        reviewed.append(replace(item, conflicting_file_id=conflict))
+    current_ids = {item.file_id for item in manifest.files}
+    return reviewed, [file_id for file_id in remove if file_id in current_ids]
+
+
+def build_upload_sync_request(
+    manifest: UploadManifest,
+    *,
+    files: Sequence[StagedUpload] = (),
+    replace_file_ids: Collection[str] = (),
+    remove: Sequence[str] = (),
+    clear: bool = False,
+) -> UploadSyncRequest:
+    """Prepare one approved intent; retain the returned request unchanged for retries.
+
+    The request owns its lists and contains no references to a mutable UI draft.
+    Rebuilding is a new intent with a new operation ID, never a retry.
+    """
+    existing = {normalized_upload_name(item.name): item for item in manifest.files if item.file_id not in remove}
+    additions = []
+    for item in files:
+        current = existing.get(normalized_upload_name(item.name))
+        if current is not None and current.content_hash == item.content_hash:
+            continue
+        if current is not None and current.file_id not in replace_file_ids:
+            raise ValueError("같은 이름의 파일 교체를 먼저 확인해 주세요.")
+        additions.append(UploadAddition(
+            path=item.path, name=item.name,
+            replace_file_id=current.file_id if current is not None else None,
+        ))
+    return UploadSyncRequest(
+        epoch=manifest.epoch, expected_revision=manifest.revision,
+        operation_id=str(uuid4()), add=additions, remove=list(remove), clear=clear,
+    )
 
 
 def stage_uploaded_files(
@@ -155,67 +174,3 @@ def discard_staged_files(files: list[StagedUpload], session_path: Path) -> None:
         except OSError:
             # Abandoned staging files are also covered by the session cleanup policy.
             pass
-
-
-def sync_uploaded_file(
-    uploaded_file: Any,
-    session_path: Path,
-    current_file_name: str | None,
-) -> UploadSyncResult:
-    safe_current_file_name = Path(str(current_file_name)).name if current_file_name else None
-
-    if uploaded_file is None:
-        if not safe_current_file_name or safe_current_file_name in {".", ".."}:
-            return UploadSyncResult(file_name=None, changed=False, removed=False)
-
-        old_path = session_path / safe_current_file_name
-        try:
-            old_path.unlink()
-        except FileNotFoundError:
-            pass
-        return UploadSyncResult(file_name=None, changed=True, removed=True)
-
-    safe_file_name = Path(str(uploaded_file.name)).name
-    if safe_file_name in {"", ".", ".."}:
-        return UploadSyncResult(
-            file_name=None,
-            changed=False,
-            removed=False,
-            error_message="Invalid upload filename",
-        )
-
-    file_path_on_disk = session_path / safe_file_name
-    try:
-        content = bytes(uploaded_file.getbuffer())
-        if safe_file_name == safe_current_file_name and file_path_on_disk.is_file():
-            if file_path_on_disk.read_bytes() == content:
-                return UploadSyncResult(file_name=safe_file_name, changed=False, removed=False)
-
-        file_path_on_disk.write_bytes(content)
-
-        if safe_current_file_name and safe_current_file_name not in {safe_file_name, ".", ".."}:
-            old_path = session_path / safe_current_file_name
-            try:
-                old_path.unlink()
-            except FileNotFoundError:
-                pass
-
-        return UploadSyncResult(
-            file_name=safe_file_name,
-            changed=True,
-            removed=False,
-        )
-    except ValueError as exc:
-        return UploadSyncResult(
-            file_name=None,
-            changed=False,
-            removed=False,
-            error_message=f"파일 업로드 실패 (내용 오류): {exc}",
-        )
-    except Exception as exc:
-        return UploadSyncResult(
-            file_name=None,
-            changed=False,
-            removed=False,
-            error_message=f"파일 업로드 실패: {exc}",
-        )

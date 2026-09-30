@@ -6,7 +6,7 @@ from urllib.parse import quote
 
 import streamlit as st
 
-from src.app.web.streamlit_api_client import AgentCallResult, AgentStreamEvent
+from src.app.client import AgentCallResult, AgentStreamEvent
 from src.app.web.streamlit_sources import render_code, render_evidence
 from src.app.web.streamlit_state import AssistantChatMessage, ChatMessage
 from src.core.answer_schema import AnswerResponse, ContentUnit, finalize_answer, iter_content_units, text_document
