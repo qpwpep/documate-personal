@@ -21,9 +21,10 @@ from src.runtime.nodes.validation import make_post_synthesis_validation_node, ma
 
 
 class StageExecutionError(RuntimeError):
-    def __init__(self, *, stage: str, latency_ms: int, cause: Exception):
+    def __init__(self, *, stage: str, attempt: int, latency_ms: int, cause: Exception):
         super().__init__(str(cause))
         self.stage = stage
+        self.attempt = attempt
         self.latency_ms = latency_ms
         self.cause = cause
 
@@ -129,6 +130,7 @@ def _instrument_stage_node(stage: str, node: Any, *, record_latency_trace: bool 
                 )
             raise StageExecutionError(
                 stage=stage,
+                attempt=attempt,
                 latency_ms=elapsed_ms(started, time.perf_counter()),
                 cause=exc,
             ) from exc

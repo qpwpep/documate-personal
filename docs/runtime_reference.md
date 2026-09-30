@@ -525,7 +525,7 @@ HTTP `200`이나 `done`만으로 성공 처리하지 않습니다. 유효한 `fi
 
 `build_graph()`의 routing adapter는 업무 노드의 부분 update를 받은 뒤 다음 상태를 기준으로 한 번 결정합니다. 교체 채널은 업데이트가 있으면 새 값을 사용하고, `messages`는 `add_messages` reducer를 적용합니다. 같은 결정의 `target`을 `Command.goto`에 넣고, 결정 한 건을 `Command.update.route_decisions`에 넣습니다. 최상위 `GraphState.route_decisions`만 append reducer로 누적하며 debug collector와 HTTP/SSE·eval은 그 결과를 검증·직렬화합니다. 업무 노드는 dict 부분 update만 반환하며 예약된 `route_decisions` 채널에 직접 쓰지 않습니다. adapter가 이를 검사하여 이력 전체 재출력에 따른 중복을 차단합니다. wrapper 순서는 업무 노드 → 진행·지연 계측 → routing adapter → `Command`입니다. 단계 계측은 이 결정을 재예측하지 않고 진행과 지연을 기록합니다.
 
-결정 기록은 다음 노드 선택이 상태에 반영되었다는 뜻이며 다음 노드의 완료를 보장하지 않습니다. 관측 경계에서 누락되거나 잘못된 목록은 `observability_status="failed"`, `missing_required_debug_fields`, 정규화 오류로 드러납니다.
+결정 기록은 다음 노드 선택이 상태에 반영되었다는 뜻이며 다음 노드의 완료를 보장하지 않습니다. 다음 노드가 실패해도 이미 확정된 목록은 오류 debug에 남습니다. runner는 `stream_mode="values"`의 마지막 상태를 교체 보관하므로 누적 스냅샷을 다시 이어 붙이지 않습니다. graph 실행 전 실패와 종료 요청의 빈 목록은 정상이며, 관측 경계에서 누락되거나 잘못된 목록은 `observability_status="failed"`, `missing_required_debug_fields`, 정규화 오류로 드러납니다. 현재 보장 범위는 프로세스 내 실행이며 강제 종료 후 영속 복구나 replay는 포함하지 않습니다.
 
 현재 debug schema version은 `10`입니다. `action_results.slack_notify`는 최종 receipt와 동일한 `SlackDelivery`를 사용합니다. `answer_provenance`의 `version`은 `1`이며 아래 필드를 제공합니다.
 

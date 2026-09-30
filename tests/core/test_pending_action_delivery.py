@@ -122,7 +122,7 @@ class _ConsumerGraph:
         self.validate = make_post_synthesis_validation_node(verbose=False)
         self.actions = make_action_postprocess_node(save, slack, False, default_slack_recipient)
 
-    def invoke(self, state):
+    def stream(self, state, *, stream_mode):
         state = dict(state)
         contract = next(self.contracts)
         if callable(contract):
@@ -135,7 +135,7 @@ class _ConsumerGraph:
             messages = [*state["messages"], *updates.pop("messages", [])]
             state.update(updates)
             state["messages"] = messages
-        return state
+        yield state
 
 
 class _PlannedConsumerGraph:
@@ -175,10 +175,10 @@ class _PlannedConsumerGraph:
             })
             return PlannerOutput(use_retrieval=False, tasks=[], request_contract=proposal)
 
-    def invoke(self, state):
+    def stream(self, state, *, stream_mode):
         proposal = next(self.proposals)
         self.proposal = proposal(state["runtime"]) if callable(proposal) else proposal
-        return self.graph.invoke(state)
+        yield from self.graph.stream(state, stream_mode=stream_mode)
 
 
 def _manager(graph):

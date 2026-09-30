@@ -16,6 +16,7 @@ from src.core.request_contracts import required_contract_turn_ids
 from src.core.contracts import RuntimeState, SessionMetadata
 from src.core.contracts.debug import DEBUG_SCHEMA_VERSION
 from src.core.contracts.provenance import AnswerProvenance
+from src.core.contracts.routing import validate_route_decisions
 from src.core.contracts.boundary.runtime import parse_runtime_state, parse_session_metadata
 from src.core.contracts.boundary.response import get_response_state
 from src.runtime.graph_builder import StageExecutionError, build_agent_graph
@@ -182,13 +183,37 @@ class AgentFlowManager:
         upload_retriever_build_ms: int | None,
         stage_error: StageExecutionError | None,
         error_code: str | None = None,
+        graph_state: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        raw_trace: list[dict[str, Any]] = []
+        debug = graph_state.get("debug") if graph_state is not None else None
+        raw_trace = (
+            debug.get("latency_trace", []) if isinstance(debug, dict)
+            else getattr(debug, "latency_trace", [])
+        )
+        raw_trace = list(raw_trace) if isinstance(raw_trace, list) else []
+        memory_compactions = (
+            debug.get("memory_compactions", []) if isinstance(debug, dict)
+            else getattr(debug, "memory_compactions", [])
+        )
+        route_decisions: list[dict[str, Any]] = []
+        missing_debug_fields: list[str] = []
+        errors = [message]
+        error_codes = [error_code] if error_code else []
+        if graph_state is not None:
+            try:
+                route_decisions = [
+                    decision.model_dump(mode="json")
+                    for decision in validate_route_decisions(graph_state.get("route_decisions"))
+                ]
+            except ValueError as exc:
+                missing_debug_fields.append("route_decisions")
+                errors.append(f"Invalid committed route_decisions: {exc}")
+                error_codes.append("DEBUG_NORMALIZATION_FAILED")
         if stage_error is not None:
             raw_trace.append(
                 make_stage_latency_event(
                     stage=stage_error.stage,  # type: ignore[arg-type]
-                    attempt=1,
+                    attempt=stage_error.attempt,
                     latency_ms=stage_error.latency_ms,
                     status="error",
                 )
@@ -205,7 +230,7 @@ class AgentFlowManager:
             "debug": {
                 "schema_version": DEBUG_SCHEMA_VERSION,
                 "observability_status": "failed",
-                "missing_required_debug_fields": [],
+                "missing_required_debug_fields": missing_debug_fields,
                 "tool_calls": [],
                 "tool_call_count": 0,
                 "token_usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
@@ -213,11 +238,11 @@ class AgentFlowManager:
                 "models_used": [],
                 "model_usage_status": "deterministic",
                 "llm_calls": [],
-                "errors": [message],
-                "error_codes": [error_code] if error_code else [],
+                "errors": errors,
+                "error_codes": error_codes,
                 "validation_events": [],
-                "route_decisions": [],
-                "memory_compactions": [],
+                "route_decisions": route_decisions,
+                "memory_compactions": memory_compactions,
                 "planner_errors": [],
                 "observed_hits": [],
                 "answer_provenance": AnswerProvenance(
@@ -275,6 +300,8 @@ class AgentFlowManager:
             self.close()
             return self._exit_payload("Chat session has been reset. Start again.")
 
+        response: dict[str, Any] | None = None
+        graph_total_ms: int | None = None
         try:
             previous_memory = self._ensure_session().snapshot_conversation_memory()
             state, upload_retriever_build_ms = self._runner.prepare_graph_state(
@@ -332,12 +359,12 @@ class AgentFlowManager:
             if uploads is None:
                 self._ensure_session().cleanup_upload_retriever()
                 self.upload_file_path = None
-            graph_total_ms = None
             stage_error = None
             root_exc = exc
             if isinstance(exc, GraphInvocationError):
                 graph_total_ms = exc.graph_total_ms
                 root_exc = exc.cause
+                response = exc.last_state
             if isinstance(root_exc, StageExecutionError):
                 stage_error = root_exc
                 root_exc = root_exc.cause
@@ -354,4 +381,5 @@ class AgentFlowManager:
                 upload_retriever_build_ms=upload_retriever_build_ms,
                 stage_error=stage_error,
                 error_code=error_code,
+                graph_state=response,
             )
