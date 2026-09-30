@@ -19,6 +19,7 @@ from src.runtime.nodes.session import add_user_message, make_summarize_node
 from src.runtime.nodes.synthesis import make_synthesize_node
 from src.runtime.nodes.validation import make_post_synthesis_validation_node, make_pre_synthesis_validation_node
 from tests.core.test_pending_action_delivery import delivery_tools
+from tests.core.test_graph_routing import _run_graph
 
 
 class PlannerBoundary:
@@ -73,7 +74,13 @@ def test_transform_repair_preserves_contract_and_delivers_only_the_repaired_body
         memory_policy=policy,
     )
     query = "방금 답변을 세 줄로 줄여 저장해줘" if save_intent == "requested" else "방금 답변을 세 줄로 줄이고 저장하지 마"
-    result = graph.invoke(build_graph_state_input(user_input=query, previous_response=previous, retry=RetryState(max_retries=2)))
+    result, visited = _run_graph(graph, build_graph_state_input(
+        user_input=query, previous_response=previous, retry=RetryState(max_retries=2),
+    ))
+    assert visited == [
+        "add_user_message", "planner", "synthesize", "post_synthesis_validation",
+        "synthesize", "post_synthesis_validation", "action_postprocess",
+    ]
     answer = result["response"].result
     expected = "첫 요약\n둘째 요약\n셋째 요약"
     assert export_answer_text(answer) == expected
