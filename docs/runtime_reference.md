@@ -513,7 +513,7 @@ HTTP `200`이나 `done`만으로 성공 처리하지 않습니다. 유효한 `fi
 - `tool_calls`, `tool_call_count`
 - `latency_ms_server`, `latency_breakdown`
 - `token_usage`, `model_name`, `models_used`, `model_usage_status`, `llm_calls`
-- `errors`, `error_codes`, `validation_events`, `edge_decisions`, `memory_compactions`
+- `errors`, `error_codes`, `validation_events`, `route_decisions`, `memory_compactions`
 - `observed_hits`: 이번 실행에서 수집한 `SearchHit` 목록. 답변이 실제 사용한 `citations`와 구분
 - `answer_provenance`: 서버가 확정한 본문 작업·선행 답변과 최종 검증 packet
 - `retry_context`
@@ -521,7 +521,13 @@ HTTP `200`이나 `done`만으로 성공 처리하지 않습니다. 유효한 `fi
 - `planner_diagnostics`
 - `action_results`
 
-현재 debug schema version은 `8`입니다. `action_results.slack_notify`는 최종 receipt와 동일한 `SlackDelivery`를 사용합니다. `answer_provenance`의 `version`은 `1`이며 아래 필드를 제공합니다.
+`route_decisions`는 이번 graph 실행에서 확정한 분기 결과를 순서대로 보존합니다. 각 항목은 `sequence`(1부터 증가), 실제 노드명인 `source`·`target`, 판단 사유 `reason`으로 구성됩니다. `add_user_message`, `planner`, `pre_synthesis_validation`, `post_synthesis_validation`이 분기를 소유하며, 고정 edge는 이 목록에 넣지 않습니다. `memory_compactions`는 압축 결과 진단만 담고 분기 이력과 분리합니다.
+
+`build_graph()`의 routing adapter는 업무 노드의 부분 update를 받은 뒤 다음 상태를 기준으로 한 번 결정합니다. 교체 채널은 업데이트가 있으면 새 값을 사용하고, `messages`는 `add_messages` reducer를 적용합니다. 같은 결정의 `target`을 `Command.goto`에 넣고, 결정 한 건을 `Command.update.route_decisions`에 넣습니다. 최상위 `GraphState.route_decisions`만 append reducer로 누적하며 debug collector와 HTTP/SSE·eval은 그 결과를 검증·직렬화합니다. 업무 노드는 dict 부분 update만 반환하며 예약된 `route_decisions` 채널에 직접 쓰지 않습니다. adapter가 이를 검사하여 이력 전체 재출력에 따른 중복을 차단합니다. wrapper 순서는 업무 노드 → 진행·지연 계측 → routing adapter → `Command`입니다. 단계 계측은 이 결정을 재예측하지 않고 진행과 지연을 기록합니다.
+
+결정 기록은 다음 노드 선택이 상태에 반영되었다는 뜻이며 다음 노드의 완료를 보장하지 않습니다. 관측 경계에서 누락되거나 잘못된 목록은 `observability_status="failed"`, `missing_required_debug_fields`, 정규화 오류로 드러납니다.
+
+현재 debug schema version은 `10`입니다. `action_results.slack_notify`는 최종 receipt와 동일한 `SlackDelivery`를 사용합니다. `answer_provenance`의 `version`은 `1`이며 아래 필드를 제공합니다.
 
 | 필드 | 의미 |
 |---|---|

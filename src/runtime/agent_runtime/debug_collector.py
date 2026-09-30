@@ -361,7 +361,6 @@ class DebugCollector:
             "errors": debug_errors,
             "error_codes": error_codes,
             "validation_events": list(state_debug.validation_events or []),
-            "edge_decisions": list(state_debug.edge_decisions or []),
             "route_decisions": [item.model_dump(mode="json") for item in route_decisions],
             "memory_compactions": list(state_debug.memory_compactions),
             "planner_errors": planner_errors,
