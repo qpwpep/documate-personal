@@ -94,7 +94,7 @@ def build_history_readme_block(
     decision = summary.release_decision
     if track == "smoke" or (decision is not None and decision.scope == "diagnostic"):
         lines.append("이 런은 진단용이며 release 자격 판정이 아닙니다.")
-    elif decision is None:
+    elif decision is None or not latest.has_current_measurements:
         lines.append(
             "현재 release 자격은 `legacy_unverified`입니다. 아래 수치와 당시 "
             f"`{'PASS' if latest.summary.overall_passed else 'FAIL'}`는 과거 계약의 기록이며 현재 정책 준수를 증명하지 않습니다."
@@ -125,6 +125,10 @@ def build_history_readme_block(
     lines.append(
         f"| avg cost per case | `${format_metric_value('avg_cost_per_case_usd', latest.metrics.avg_cost_per_case_usd)}` |"
     )
+    if latest.raw_summary is not None:
+        old_coverage = latest.raw_summary.get("metrics", {}).get("llm_call_coverage_rate")
+        if old_coverage is not None:
+            lines.append(f"| historical llm_call_coverage_rate | `{format_metric_value('llm_call_coverage_rate', old_coverage)}` |")
     lines.append("")
     if latest.summary.measurement_contract_version is not None:
         lines.append(
@@ -133,6 +137,9 @@ def build_history_readme_block(
             "채점과 정리 시간은 제외하며, `p95_latency_ms` gate는 최종 질문 응답을 평가합니다. "
             "실행·측정 버전과 fixture·첨부 내용·평가 설정 fingerprint가 모두 같은 런만 자동 비교합니다."
         )
+        lines.append("")
+    if not latest.has_current_measurements:
+        lines.append("과거 비용·관측률·출력 토큰은 저장 당시 값입니다. 현재 사용량 계약으로 재계산하지 않으며 새 측정 기준의 baseline과 분리합니다.")
         lines.append("")
     lines.append(
         "기록된 gate 결과에서 통과한 항목은 {passed}, 실패한 항목은 {failed}입니다.".format(

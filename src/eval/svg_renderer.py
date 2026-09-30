@@ -113,7 +113,7 @@ def build_history_svg(comparable_runs: list[StoredRun]) -> str:
         decision = summary.release_decision
         if run.track == "smoke" or (decision is not None and decision.scope == "diagnostic"):
             verdict = "diagnostic; no release verdict"
-        elif decision is None:
+        elif decision is None or not run.has_current_measurements:
             verdict = f"historical {'PASS' if run.summary.overall_passed else 'FAIL'}; legacy_unverified"
         else:
             verdict = "PASS" if decision.passed else "FAIL"
