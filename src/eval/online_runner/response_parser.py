@@ -11,6 +11,7 @@ from src.core.contracts.boundary.retrieval import normalize_retrieval_diagnostic
 from src.core.contracts.debug import DEBUG_CRITICAL_FIELDS, DEBUG_REQUIRED_FIELDS, DEBUG_SCHEMA_VERSION
 from src.core.contracts.debug import LLMCallMetadata, ModelUsageStatus, PlannerDiagnostic, RetrievalDiagnostic, TokenUsage
 from src.core.contracts.provenance import AnswerProvenance
+from src.core.contracts.routing import RoutingDecision, validate_route_decisions
 from src.core.contracts.tool_execution import ToolExecutionEvidence
 from src.core.evidence import SearchHit
 from src.core.latency import LatencyBreakdownModel
@@ -48,7 +49,7 @@ class ParsedResponseData:
     llm_calls: list[LLMCallMetadata] = field(default_factory=list)
     error_codes: list[str] = field(default_factory=list)
     validation_events: list[str] = field(default_factory=list)
-    edge_decisions: list[dict[str, Any]] = field(default_factory=list)
+    route_decisions: list[RoutingDecision] = field(default_factory=list)
     memory_compactions: list[dict[str, Any]] = field(default_factory=list)
     planner_errors: list[str] = field(default_factory=list)
     debug_errors: list[str] = field(default_factory=list)
@@ -317,6 +318,7 @@ def parse_agent_response(
             if field in DEBUG_CRITICAL_FIELDS
         ]
         if critical_missing_debug_fields:
+            parsed.debug_observability_status = "failed"
             parsed.response_errors.append(
                 "critical debug fields missing: " + ", ".join(critical_missing_debug_fields)
             )
@@ -364,21 +366,17 @@ def parse_agent_response(
             label="debug.validation_events",
             response_errors=parsed.response_errors,
         )
-        edge_decisions_raw = debug_payload.get("edge_decisions")
-        if edge_decisions_raw is None:
-            parsed.edge_decisions = []
-        elif not isinstance(edge_decisions_raw, list):
-            parsed.response_errors.append("debug.edge_decisions must be a list")
-        else:
-            for index, item in enumerate(edge_decisions_raw):
-                if not isinstance(item, dict):
-                    parsed.response_errors.append(f"debug.edge_decisions[{index}] must be an object")
-                    continue
-                parsed.edge_decisions.append(dict(item))
+        try:
+            parsed.route_decisions = validate_route_decisions(debug_payload.get("route_decisions"))
+        except ValueError as exc:
+            parsed.response_errors.append(f"debug.route_decisions invalid: {exc}")
+            parsed.debug_observability_status = "failed"
+            if "route_decisions" not in parsed.missing_required_debug_fields:
+                parsed.missing_required_debug_fields.append("route_decisions")
+            if "DEBUG_NORMALIZATION_FAILED" not in parsed.error_codes:
+                parsed.error_codes.append("DEBUG_NORMALIZATION_FAILED")
         memory_compactions_raw = debug_payload.get("memory_compactions")
-        if memory_compactions_raw is None:
-            parsed.memory_compactions = []
-        elif not isinstance(memory_compactions_raw, list):
+        if not isinstance(memory_compactions_raw, list):
             parsed.response_errors.append("debug.memory_compactions must be a list")
         else:
             for index, item in enumerate(memory_compactions_raw):

@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field, model_validator
 from src.core.answer_schema import AnswerResponse, ActionReceipt
 from src.core.contracts.debug import LLMCallMetadata, ModelUsageStatus, PlannerDiagnostic, RetrievalDiagnostic, TokenUsage
 from src.core.contracts.provenance import AnswerProvenance
+from src.core.contracts.routing import RoutingDecision
 from src.core.contracts.tool_execution import ToolExecutionEvidence
 from src.core.evidence import EvidenceRef, SearchHit
 from src.core.latency import LatencyBreakdownModel
@@ -154,7 +155,7 @@ class CaseResult(BaseModel):
     planner_errors: list[str] = Field(default_factory=list)
     error_codes: list[str] = Field(default_factory=list)
     validation_events: list[str] = Field(default_factory=list)
-    edge_decisions: list[dict[str, Any]] = Field(default_factory=list)
+    route_decisions: list[RoutingDecision] = Field(default_factory=list)
     memory_compactions: list[dict[str, Any]] = Field(default_factory=list)
     debug_errors: list[str] = Field(default_factory=list)
     runtime_errors: list[str] = Field(default_factory=list)
