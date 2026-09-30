@@ -4,7 +4,7 @@ import time
 from typing import Any
 
 from src.core.answer_schema import AnswerResponse, finalize_answer, iter_content_units
-from src.core.contracts.debug import build_llm_call_metadata
+from src.runtime.agent_runtime.llm_usage import record_llm_call
 from src.core.latency import elapsed_ms, make_stage_latency_event, make_synthesis_attempt_latency_event
 from src.runtime.nodes.synthesis.fallbacks import build_synthesis_fallback
 from src.runtime.nodes.synthesis.models import PreparedSynthesisInputs, SynthesisPipelineResult
@@ -18,14 +18,12 @@ def _is_timeout_error(exc: Exception) -> bool:
 
 
 def _invoke_structured_attempt(
-    *, structured_synthesizer: Any, prepared: PreparedSynthesisInputs, llm_calls: list[Any], path: str,
+    *, structured_synthesizer: Any, prepared: PreparedSynthesisInputs, path: str,
 ) -> AnswerResponse:
-    structured = structured_synthesizer.invoke(prepared.model_messages)
-    parsed, raw, error = coerce_structured_synthesis_result(structured)
-    if raw is not None:
-        llm_calls.append(build_llm_call_metadata(
-            stage="synthesis", attempt=prepared.attempt, path=path, message=raw,
-        ))
+    with record_llm_call(stage="synthesis", attempt=prepared.attempt, path=path) as call:
+        structured = structured_synthesizer.invoke(prepared.model_messages)
+        parsed, raw, error = coerce_structured_synthesis_result(structured)
+        call.complete(raw)
     if error is not None:
         raise error
     document = coerce_answer_document(parsed)
@@ -44,7 +42,6 @@ def run_synthesis_pipeline(
     stage_started: float,
 ) -> SynthesisPipelineResult:
     errors: list[str] = []
-    llm_calls: list[Any] = []
     started = time.perf_counter()
     structured_ms: int | None = None
     fallback_ms: int | None = None
@@ -53,7 +50,7 @@ def run_synthesis_pipeline(
     try:
         result = _invoke_structured_attempt(
             structured_synthesizer=structured_synthesizer, prepared=prepared,
-            llm_calls=llm_calls, path="structured",
+            path="structured",
         )
         structured_ms = elapsed_ms(started, time.perf_counter())
     except Exception as exc:
@@ -65,7 +62,7 @@ def run_synthesis_pipeline(
             try:
                 result = _invoke_structured_attempt(
                     structured_synthesizer=structured_synthesizer_compact, prepared=used,
-                    llm_calls=llm_calls, path="structured_compact_fallback",
+                    path="structured_compact_fallback",
                 )
                 mode = "compact_structured_fallback"
             except Exception as compact_exc:
@@ -97,6 +94,6 @@ def run_synthesis_pipeline(
             make_stage_latency_event(stage="synthesis", attempt=prepared.attempt, latency_ms=total, status=mode),
         ],
         retrieval_errors=prepared.parse_errors, planner_errors=prepared.planner_parse_errors,
-        synthesis_errors=errors, llm_calls=llm_calls,
+        synthesis_errors=errors,
         kind="failure" if mode in {"timeout_grounded_fallback", "deterministic_grounded_fallback"} else "draft",
     )

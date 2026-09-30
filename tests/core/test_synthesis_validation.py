@@ -12,6 +12,7 @@ from src.core.evidence import RetrievalScore, SearchHit, build_evidence
 from src.core.planner_schema import PlannerOutput, RetrievalRequirement, RetrievalTask
 from src.core.request_contracts import ExtractBody, RequestContract
 from src.runtime.nodes.synthesis import make_synthesize_node
+from src.runtime.agent_runtime.llm_usage import capture_llm_usage
 from src.runtime.nodes.validation.node import make_post_synthesis_validation_node
 
 
@@ -113,6 +114,10 @@ def test_malformed_generation_becomes_explicit_original_source_fallback():
     assert any(unit.basis == "excerpt" for _, unit in iter_content_units(result.content))
     assert updates["debug"].synthesis_errors
     assert all(check.support_status != "unsupported" for check in result.checks)
+
+
+
+
 
 
 

@@ -4,6 +4,8 @@ from hypothesis import given, strategies as st
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from pydantic import ValidationError
 
+from src.runtime.agent_runtime.llm_usage import capture_llm_usage
+from src.core.contracts.boundary.debug import get_debug_state
 from src.core.planner_schema import (
     PlannerOutput,
     RetrievalTask,

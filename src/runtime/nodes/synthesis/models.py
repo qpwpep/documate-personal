@@ -6,7 +6,6 @@ from typing import Any
 from langchain_core.messages import BaseMessage
 
 from src.core.answer_schema import AnswerResponse
-from src.core.contracts.debug import LLMCallMetadata
 from src.core.contracts.provenance import AnswerSource
 from src.core.evidence import EvidenceRef, SearchHit
 from src.core.planner_schema import PlannerOutput
@@ -58,6 +57,5 @@ class SynthesisPipelineResult:
     retrieval_errors: list[str] = field(default_factory=list)
     planner_errors: list[str] = field(default_factory=list)
     synthesis_errors: list[str] = field(default_factory=list)
-    llm_calls: list[LLMCallMetadata] = field(default_factory=list)
     kind: str = "draft"
     normal_evidence_missing_requirement_ids: list[str] | None = None
