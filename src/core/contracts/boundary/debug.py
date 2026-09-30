@@ -5,7 +5,6 @@ from typing import Any
 from src.core.slack_contract import SlackDelivery
 from src.core.contracts.debug import ActionResults, DEBUG_SCHEMA_VERSION, DebugDiagnostics, DebugPayload, ErrorCode, RetryState, SaveTextActionResult, json_safe_deep_copy, normalize_recorded_routes
 from src.core.contracts.graph_state import DebugState
-from src.core.contracts.debug import LLMCallMetadata, ModelUsageStatus, TokenUsage
 from src.core.contracts.usage import LLMCallRecord
 from src.core.contracts.routing import validate_route_decisions
 from src.core.contracts.boundary.planner import parse_planner_diagnostic
@@ -278,73 +277,3 @@ def parse_debug_state(value: Any) -> DebugState:
 
 def get_debug_state(state: dict[str, Any]) -> DebugState:
     return parse_debug_state(state.get("debug"))
-
-
-# Retained until the evaluation consumer switches to canonical call records.
-def parse_llm_calls(value: Any) -> list[LLMCallMetadata]:
-    if not isinstance(value, list):
-        return []
-    calls: list[LLMCallMetadata] = []
-    for item in value:
-        if isinstance(item, LLMCallMetadata):
-            calls.append(item)
-            continue
-        if not isinstance(item, dict):
-            continue
-
-        stage = str(item.get("stage") or "").strip()
-        if stage not in {"summarize", "planner", "synthesis"}:
-            continue
-
-        path = str(item.get("path") or "").strip()
-        if path not in {
-            "direct",
-            "structured",
-            "plain_fallback",
-            "structured_compact_fallback",
-            "plain_summary_attach_fallback",
-            "korean_template_summary_fallback",
-        }:
-            continue
-
-        try:
-            attempt = int(item.get("attempt", 0) or 0)
-        except (TypeError, ValueError):
-            attempt = 0
-
-        response_metadata = item.get("response_metadata")
-        usage_metadata = item.get("usage_metadata")
-        calls.append(
-            LLMCallMetadata(
-                stage=stage,
-                attempt=max(0, attempt),
-                path=path,
-                response_metadata=dict(response_metadata) if isinstance(response_metadata, dict) else {},
-                usage_metadata=dict(usage_metadata) if isinstance(usage_metadata, dict) else {},
-            )
-        )
-    return calls
-
-
-def parse_token_usage(value: Any) -> TokenUsage | None:
-    if isinstance(value, TokenUsage):
-        return value
-    if not isinstance(value, dict):
-        return None
-    try:
-        return TokenUsage(
-            prompt_tokens=int(value.get("prompt_tokens", 0) or 0),
-            completion_tokens=int(value.get("completion_tokens", 0) or 0),
-            total_tokens=int(value.get("total_tokens", 0) or 0),
-        )
-    except (TypeError, ValueError):
-        return None
-
-
-def parse_model_usage_status(value: Any, *, has_llm_usage: bool, has_debug_payload: bool = True) -> ModelUsageStatus:
-    status = str(value or "").strip().lower()
-    if status in {"llm_used", "deterministic", "missing_debug"}:
-        return status  # type: ignore[return-value]
-    if not has_debug_payload:
-        return "missing_debug"
-    return "llm_used" if has_llm_usage else "deterministic"

@@ -94,29 +94,26 @@ def _resolve_slack_delivery_status(
     return "failed", receipt.error or receipt.message
 
 
-def _extract_output_tokens(parsed_response: ParsedResponseData) -> int:
-    if parsed_response.token_usage is not None and parsed_response.token_usage.completion_tokens > 0:
-        return int(parsed_response.token_usage.completion_tokens)
+def _synthesis_output_tokens(turns: list[ScenarioTurnResult]) -> int | None:
+    question = next((turn for turn in reversed(turns) if turn.role == "question"), None)
+    if question is None or question.llm_calls is None:
+        return None
     total = 0
-    for call in parsed_response.llm_calls or []:
-        if str(call.stage) != "synthesis":
-            continue
-        usage = call.usage_metadata or {}
-        response_usage = call.response_metadata.get("token_usage")
-        if not isinstance(response_usage, dict):
-            response_usage = {}
-        raw_output = (
-            usage.get("output_tokens")
-            or usage.get("completion_tokens")
-            or response_usage.get("completion_tokens")
-            or response_usage.get("output_tokens")
-            or 0
-        )
-        try:
-            total += max(0, int(raw_output or 0))
-        except (TypeError, ValueError):
-            continue
+    for call in question.llm_calls:
+        if call.stage == "synthesis":
+            if call.usage.output_tokens is None:
+                return None
+            total += call.usage.output_tokens
     return total
+
+
+def _scenario_cost(turns: list[ScenarioTurnResult], config: BenchmarkConfig) -> float | None:
+    if not turns or any(turn.llm_calls is None for turn in turns):
+        return None
+    return compute_cost_usd(
+        llm_calls=[call for turn in turns for call in turn.llm_calls],
+        pricing=config.pricing,
+    )
 
 
 def build_case_result(
@@ -133,6 +130,7 @@ def build_case_result(
     parsed_response: ParsedResponseData,
     slack_delivery_required: bool = False,
     prior_turns: list[ScenarioTurnResult] | None = None,
+    scenario_turns: list[ScenarioTurnResult] | None = None,
 ) -> CaseResult:
     effective_weights, weights_error = resolve_effective_weights(
         case=case,
@@ -148,7 +146,17 @@ def build_case_result(
         runtime_errors.append(f"weight_override error: {weights_error}")
 
     response = parsed_response.response
-    output_tokens = _extract_output_tokens(parsed_response)
+    if scenario_turns is None:
+        scenario_turns = [*(prior_turns or []), ScenarioTurnResult(
+            role="question", query=case.query, request_payload=request_payload,
+            http_status=parsed_response.http_status, request_id=parsed_response.request_id,
+            response=response, debug=parsed_response.debug, llm_calls=parsed_response.llm_calls,
+            execution_evidence=parsed_response.execution_evidence,
+            tool_calls=parsed_response.tool_calls, observed_hits=parsed_response.observed_hits,
+            answer_provenance=parsed_response.answer_provenance,
+            evidence_assessment=parsed_response.evidence_assessment,
+        )]
+    output_tokens = _synthesis_output_tokens(scenario_turns)
     checks = response.checks if response is not None else []
     resolved_unit_count = sum(check.reference_status == "resolved" for check in checks)
     missing_reference_unit_count = sum(check.reference_status == "missing" for check in checks)
@@ -361,16 +369,12 @@ def build_case_result(
         judge_audit_failures=judge_audit_failures,
     )
     gate_failures = list(dict.fromkeys([*gate_failures, *(code for item in save_assessments for code in item.failure_codes)]))
-    cost = compute_cost_usd(
-        llm_calls=parsed_response.llm_calls,
-        pricing=config.pricing,
-    )
+    cost = _scenario_cost(scenario_turns, config)
 
     return CaseResult(
         decision_contract_version=DECISION_CONTRACT_VERSION,
         policy_snapshot=policy_for_case(case),
         execution_evidence=parsed_response.execution_evidence,
-        scenario_turns=prior_turns or [],
         run_id=run_id,
         case_id=case.case_id,
         category=case.category,
@@ -397,12 +401,8 @@ def build_case_result(
         latency_breakdown=parsed_response.latency_breakdown,
         tool_calls=parsed_response.tool_calls,
         tool_call_count=parsed_response.tool_call_count,
-        token_usage=parsed_response.token_usage,
-        output_tokens=output_tokens,
-        model_name=parsed_response.model_name,
-        models_used=parsed_response.models_used,
-        model_usage_status=parsed_response.model_usage_status,
-        llm_calls=parsed_response.llm_calls,
+        synthesis_output_tokens=output_tokens,
+        scenario_turns=scenario_turns,
         planner_errors=parsed_response.planner_errors,
         error_codes=parsed_response.error_codes,
         validation_events=parsed_response.validation_events,

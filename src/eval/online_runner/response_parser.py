@@ -10,7 +10,6 @@ from src.core.contracts.boundary.planner import parse_planner_diagnostic
 from src.core.contracts.boundary.retrieval import normalize_retrieval_diagnostic_observation
 from src.core.contracts.debug import DEBUG_CRITICAL_FIELDS, DEBUG_REQUIRED_FIELDS, DEBUG_SCHEMA_VERSION
 from src.core.contracts.debug import PlannerDiagnostic, RetrievalDiagnostic
-from src.core.contracts.debug import ModelUsageStatus, TokenUsage
 from src.core.contracts.usage import LLMCallRecord
 from src.core.contracts.provenance import AnswerProvenance
 from src.core.contracts.routing import RoutingDecision, validate_route_decisions
@@ -26,10 +25,6 @@ _REQUEST_ID_PATTERN = re.compile(r"Request ID:\s*([^,\s]+)")
 
 @dataclass(slots=True)
 class ParsedResponseData:
-    model_name: str | None = None
-    models_used: list[str] = field(default_factory=list)
-    model_usage_status: ModelUsageStatus = "missing_debug"
-    token_usage: TokenUsage | None = None
     http_status: int = 0
     response_text: str = ""
     response: AnswerResponse | None = None
