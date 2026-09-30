@@ -155,6 +155,7 @@ class CaseResult(BaseModel):
     error_codes: list[str] = Field(default_factory=list)
     validation_events: list[str] = Field(default_factory=list)
     edge_decisions: list[dict[str, Any]] = Field(default_factory=list)
+    memory_compactions: list[dict[str, Any]] = Field(default_factory=list)
     debug_errors: list[str] = Field(default_factory=list)
     runtime_errors: list[str] = Field(default_factory=list)
     cleanup_errors: list[str] = Field(default_factory=list)

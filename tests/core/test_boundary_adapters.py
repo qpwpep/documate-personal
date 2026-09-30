@@ -6,7 +6,7 @@ from src.core.answer_schema import AnswerResponse, finalize_answer, text_documen
 from src.core.contracts import PlannerState
 from src.core.contracts.debug import PlannerDiagnostic, RetrievalDiagnostic, RetryState
 from src.core.contracts.graph_state import DebugState
-from src.core.contracts.boundary.debug import parse_debug_state, parse_retry_state
+from src.core.contracts.boundary.debug import parse_debug_payload, parse_debug_state, parse_retry_state
 from src.core.contracts.boundary.graph import normalize_graph_update
 from src.core.contracts.boundary.planner import parse_planner_output
 from src.core.contracts.boundary.response import parse_response_state
@@ -14,6 +14,20 @@ from src.core.contracts.boundary.runtime import parse_session_metadata
 
 
 class BoundaryAdaptersTest(unittest.TestCase):
+    def test_memory_compaction_diagnostics_survive_internal_and_output_parsing(self) -> None:
+        event = {
+            "reason": "turn_count",
+            "before": {"messages": 8},
+            "after": {"messages": 4},
+            "removed_messages": 4,
+            "summary_fallback": True,
+            "fallback_reason": "exception",
+        }
+        debug = parse_debug_state({"memory_compactions": [event]})
+        self.assertEqual(debug.memory_compactions, [event])
+        output = parse_debug_payload({"memory_compactions": [event]})
+        self.assertEqual(output.memory_compactions, [event])
+
     def test_session_metadata_preserves_one_explicit_recipient(self) -> None:
         metadata = parse_session_metadata({"slack_recipient": {"kind": "channel", "value": " C123 "}})
         self.assertEqual(metadata.slack_recipient.value, "C123")

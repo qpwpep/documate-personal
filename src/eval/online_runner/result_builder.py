@@ -408,6 +408,7 @@ def build_case_result(
         error_codes=parsed_response.error_codes,
         validation_events=parsed_response.validation_events,
         edge_decisions=parsed_response.edge_decisions,
+        memory_compactions=parsed_response.memory_compactions,
         debug_errors=parsed_response.debug_errors,
         runtime_errors=runtime_errors,
         response_errors=response_errors,

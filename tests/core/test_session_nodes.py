@@ -48,6 +48,13 @@ class SessionNodeTest(unittest.TestCase):
             ["recent-user", "recent-answer", "current-user"],
         )
         self.assertEqual(result["runtime"].memory_summary, "summary line")
+        compactions = result["debug"].memory_compactions
+        self.assertEqual(len(compactions), 1)
+        self.assertEqual(compactions[0]["removed_messages"], 3)
+        self.assertEqual(compactions[0]["before"]["messages"], 6)
+        self.assertEqual(compactions[0]["after"]["messages"], 3)
+        self.assertFalse(compactions[0]["summary_fallback"])
+        self.assertIsNone(compactions[0]["fallback_reason"])
 
     def test_keep_recent_messages_preserves_human_turn_boundaries(self) -> None:
         messages = [
@@ -228,6 +235,14 @@ class SessionNodeTest(unittest.TestCase):
                 self.assertLessEqual(estimate_text_tokens(summary), policy.summary_max_tokens)
                 self.assertNotIn("PRIVATE_TOOL_PAYLOAD", summary)
                 self.assertEqual(updates["debug"].observability_status, "degraded")
+                self.assertEqual(len(updates["debug"].memory_compactions), 1)
+                compaction = updates["debug"].memory_compactions[0]
+                self.assertTrue(compaction["summary_fallback"])
+                self.assertEqual(
+                    compaction["fallback_reason"],
+                    "blank_output" if label == "blank" else label,
+                )
+                self.assertTrue(compaction["reason"])
                 self.assertTrue(
                     any(
                         event.startswith("memory_summary_fallback:")

@@ -280,6 +280,13 @@ def parse_debug_payload(value: Any) -> DebugPayload:
         ]
         if isinstance(value.get("edge_decisions"), list)
         else [],
+        memory_compactions=[
+            dict(item)
+            for item in value.get("memory_compactions", [])
+            if isinstance(item, dict)
+        ]
+        if isinstance(value.get("memory_compactions"), list)
+        else [],
         planner_errors=[str(item) for item in value.get("planner_errors", []) if str(item).strip()]
         if isinstance(value.get("planner_errors"), list)
         else [],

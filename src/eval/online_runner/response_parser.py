@@ -49,6 +49,7 @@ class ParsedResponseData:
     error_codes: list[str] = field(default_factory=list)
     validation_events: list[str] = field(default_factory=list)
     edge_decisions: list[dict[str, Any]] = field(default_factory=list)
+    memory_compactions: list[dict[str, Any]] = field(default_factory=list)
     planner_errors: list[str] = field(default_factory=list)
     debug_errors: list[str] = field(default_factory=list)
     runtime_errors: list[str] = field(default_factory=list)
@@ -374,6 +375,17 @@ def parse_agent_response(
                     parsed.response_errors.append(f"debug.edge_decisions[{index}] must be an object")
                     continue
                 parsed.edge_decisions.append(dict(item))
+        memory_compactions_raw = debug_payload.get("memory_compactions")
+        if memory_compactions_raw is None:
+            parsed.memory_compactions = []
+        elif not isinstance(memory_compactions_raw, list):
+            parsed.response_errors.append("debug.memory_compactions must be a list")
+        else:
+            for index, item in enumerate(memory_compactions_raw):
+                if not isinstance(item, dict):
+                    parsed.response_errors.append(f"debug.memory_compactions[{index}] must be an object")
+                    continue
+                parsed.memory_compactions.append(dict(item))
         parsed.debug_errors = _parse_string_list(
             debug_payload.get("errors"),
             label="debug.errors",

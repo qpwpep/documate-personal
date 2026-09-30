@@ -160,6 +160,7 @@ class AgentFlowManager:
                 "errors": [],
                 "validation_events": [],
                 "edge_decisions": [],
+                "memory_compactions": [],
                 "planner_errors": [],
                 "observed_hits": [],
                 "answer_provenance": AnswerProvenance(
@@ -216,6 +217,7 @@ class AgentFlowManager:
                 "error_codes": [error_code] if error_code else [],
                 "validation_events": [],
                 "edge_decisions": [],
+                "memory_compactions": [],
                 "planner_errors": [],
                 "observed_hits": [],
                 "answer_provenance": AnswerProvenance(

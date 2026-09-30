@@ -366,7 +366,7 @@ graph 실행, debug 수집, response assembly, projection 또는 budget 검사�
 - planner는 최근 턴 제한 안에서 최신 사용자 질문까지의 Human/AI 대화를 순서대로 전달합니다. 질문 표현으로 문맥을 생략하지 않으며, 도구 호출 중간 메시지와 현재 질문 뒤에 붙은 재시도 답변은 제외합니다.
 - 앞선 대화는 후속 질문의 지시 대상과 이어지는 출처 제한을 해석하는 데 사용합니다. 현재 질문의 명시적인 출처 변경이 우선하며, 관계없는 새 작업에는 이전 검색 요구를 적용하지 않습니다.
 
-compaction 진단은 debug `edge_decisions`와 구조화 로그에서 before/after turn·message·추정 token·byte, removed message 수, fallback 여부로 확인할 수 있습니다. 원문 query, summary, Tool payload는 이 진단 로그에 기록하지 않습니다.
+compaction 진단은 debug `memory_compactions`와 구조화 로그에서 before/after turn·message·추정 token·byte, removed message 수, fallback 여부로 확인할 수 있습니다. 원문 query, summary, Tool payload는 이 진단 로그에 기록하지 않습니다.
 
 Slack 수신자 선택은 action 정책 한 곳에서 수행합니다. 전송이 요청되었고 자연어·요청 필드 모두 미지정인 신규 선택에만 기본값을 사용합니다. `SLACK_DEFAULT_USER_ID`와 `SLACK_DEFAULT_DM_EMAIL`은 하나만 설정하며, 둘 다 있거나 잘못된 값이면 기본값 사용 요청은 구성 오류가 됩니다. 유효한 명시 수신자 전송과 일반 답변에는 이 오류를 적용하지 않습니다. 자연어와 요청 필드가 충돌하거나 명시 입력을 확정하지 못하면 전송하지 않습니다. 아직 대상을 선택하지 않은 미지정 요청은 설정을 교정한 뒤 선택을 재평가할 수 있습니다.
 
@@ -513,7 +513,7 @@ HTTP `200`이나 `done`만으로 성공 처리하지 않습니다. 유효한 `fi
 - `tool_calls`, `tool_call_count`
 - `latency_ms_server`, `latency_breakdown`
 - `token_usage`, `model_name`, `models_used`, `model_usage_status`, `llm_calls`
-- `errors`, `error_codes`, `validation_events`, `edge_decisions`
+- `errors`, `error_codes`, `validation_events`, `edge_decisions`, `memory_compactions`
 - `observed_hits`: 이번 실행에서 수집한 `SearchHit` 목록. 답변이 실제 사용한 `citations`와 구분
 - `answer_provenance`: 서버가 확정한 본문 작업·선행 답변과 최종 검증 packet
 - `retry_context`
