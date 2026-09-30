@@ -383,6 +383,8 @@ class BenchmarkCLIEnvResolutionTest(unittest.TestCase):
                 "trace": "trace-id",
                 "debug": {
                     "schema_version": DEBUG_SCHEMA_VERSION,
+                    "route_decisions": [],
+                    "memory_compactions": [],
                     "observability_status": "ok",
                     "missing_required_debug_fields": [],
                     "tool_calls": ["slack_notify"],

@@ -108,6 +108,8 @@ class RunnerErrorBucketsTest(unittest.TestCase):
                 "trace": "Request ID: req-1",
                 "debug": {
                     "schema_version": DEBUG_SCHEMA_VERSION,
+                    "route_decisions": [],
+                    "memory_compactions": [],
                     "observability_status": "ok",
                     "missing_required_debug_fields": [],
                     "tool_calls": [],
@@ -150,6 +152,8 @@ class RunnerErrorBucketsTest(unittest.TestCase):
                 "debug": {
                     "answer_provenance": answer_provenance(plain_response('ok')),
                     "schema_version": DEBUG_SCHEMA_VERSION,
+                    "route_decisions": [],
+                    "memory_compactions": [],
                     "observability_status": "ok",
                     "missing_required_debug_fields": [],
                     "tool_calls": ["tavily_search"],
@@ -193,6 +197,8 @@ class RunnerErrorBucketsTest(unittest.TestCase):
                 "debug": {
                     "answer_provenance": answer_provenance(plain_response('ok')),
                     "schema_version": DEBUG_SCHEMA_VERSION,
+                    "route_decisions": [],
+                    "memory_compactions": [],
                     "observability_status": "ok",
                     "missing_required_debug_fields": [],
                     "tool_calls": ["tavily_search", "upload_search", "rag_search"],
@@ -276,6 +282,8 @@ class RunnerErrorBucketsTest(unittest.TestCase):
                 "debug": {
                     "answer_provenance": answer_provenance(plain_response('need more evidence')),
                     "schema_version": DEBUG_SCHEMA_VERSION,
+                    "route_decisions": [],
+                    "memory_compactions": [],
                     "observability_status": "ok",
                     "missing_required_debug_fields": [],
                     "tool_calls": ["tavily_search"],
@@ -357,6 +365,8 @@ class RunnerErrorBucketsTest(unittest.TestCase):
                 "debug": {
                     "answer_provenance": answer_provenance(plain_response('ok')),
                     "schema_version": DEBUG_SCHEMA_VERSION,
+                    "route_decisions": [],
+                    "memory_compactions": [],
                     "observability_status": "ok",
                     "missing_required_debug_fields": [],
                     "tool_calls": ["tavily_search"],
@@ -419,6 +429,7 @@ class RunnerErrorBucketsTest(unittest.TestCase):
                 "debug": {
                     "answer_provenance": answer_provenance(plain_response(['ok', 'same'])),
                     "schema_version": DEBUG_SCHEMA_VERSION,
+                    "memory_compactions": [],
                     "observability_status": "ok",
                     "missing_required_debug_fields": [],
                     "tool_calls": ["tavily_search"],
@@ -439,10 +450,11 @@ class RunnerErrorBucketsTest(unittest.TestCase):
                         "VALIDATION_UNRESOLVED_REFERENCES",
                     ],
                     "validation_events": ["validate_evidence: retry_reason=unresolved_references"],
-                    "edge_decisions": [
+                    "route_decisions": [
                         {
                             "source": "planner",
-                            "decision": "retrieve",
+                            "sequence": 1,
+                            "target": "retrieve_dispatch",
                             "reason": "retrieval_required:1_task(s)",
                         }
                     ],
@@ -488,7 +500,7 @@ class RunnerErrorBucketsTest(unittest.TestCase):
             result.validation_events,
             ["validate_evidence: retry_reason=unresolved_references"],
         )
-        self.assertEqual(result.edge_decisions[0]["decision"], "retrieve")
+        self.assertEqual(result.route_decisions[0].target, "retrieve_dispatch")
         self.assertEqual(result.retrieval_diagnostics[0].error_code, "RETRIEVAL_DOCS_TIMEOUT")
         self.assertEqual(result.output_tokens, 21)
         self.assertEqual(result.block_count, 2)

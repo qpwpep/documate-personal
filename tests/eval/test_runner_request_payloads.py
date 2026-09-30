@@ -77,6 +77,8 @@ class RunnerRequestPayloadTest(unittest.TestCase):
                 "debug": {
                     "answer_provenance": answer_provenance(plain_response('shared')),
                     "schema_version": DEBUG_SCHEMA_VERSION,
+                    "route_decisions": [],
+                    "memory_compactions": [],
                     "observability_status": "ok",
                     "missing_required_debug_fields": [],
                     "tool_calls": ["slack_notify"],
@@ -133,6 +135,8 @@ class RunnerRequestPayloadTest(unittest.TestCase):
                 "debug": {
                     "answer_provenance": answer_provenance(response),
                     "schema_version": DEBUG_SCHEMA_VERSION,
+                    "route_decisions": [],
+                    "memory_compactions": [],
                     "observability_status": "ok",
                     "missing_required_debug_fields": [],
                     "tool_calls": ["slack_notify"],
@@ -193,6 +197,8 @@ class RunnerRequestPayloadTest(unittest.TestCase):
                 "debug": {
                     "answer_provenance": answer_provenance(plain_response('shared')),
                     "schema_version": DEBUG_SCHEMA_VERSION,
+                    "route_decisions": [],
+                    "memory_compactions": [],
                     "observability_status": "ok",
                     "missing_required_debug_fields": [],
                     "tool_calls": ["slack_notify"],
@@ -271,6 +277,8 @@ class RunnerRequestPayloadTest(unittest.TestCase):
                 "debug": {
                     "answer_provenance": answer_provenance(plain_response('shared')),
                     "schema_version": DEBUG_SCHEMA_VERSION,
+                    "route_decisions": [],
+                    "memory_compactions": [],
                     "observability_status": "ok",
                     "missing_required_debug_fields": [],
                     "tool_calls": ["tavily_search"],
@@ -322,6 +330,8 @@ class RunnerRequestPayloadTest(unittest.TestCase):
                 "debug": {
                     "answer_provenance": answer_provenance(comparison_response()),
                     "schema_version": DEBUG_SCHEMA_VERSION,
+                    "route_decisions": [],
+                    "memory_compactions": [],
                     "observability_status": "ok",
                     "missing_required_debug_fields": [],
                     "tool_calls": ["tavily_search", "upload_search"],
@@ -420,6 +430,8 @@ class RunnerRequestPayloadTest(unittest.TestCase):
                 "debug": {
                     "answer_provenance": answer_provenance({**plain_response('shared'), "actions": [slack_action(channel_id="C999LIVE", status="error")]}),
                     "schema_version": DEBUG_SCHEMA_VERSION,
+                    "route_decisions": [],
+                    "memory_compactions": [],
                     "observability_status": "ok",
                     "missing_required_debug_fields": [],
                     "tool_calls": ["slack_notify"],
