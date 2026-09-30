@@ -1,3 +1,4 @@
+from tests.eval.response_fixtures import canonical_llm_call
 from datetime import datetime
 import hashlib
 import json
@@ -185,45 +186,34 @@ def test_history_artifacts_identify_new_timing_baseline(tmp_path: Path) -> None:
 
 
 def test_cost_coverage_accepts_observed_setup_llm_before_deterministic_final() -> None:
-    """A save-only final turn retains the fully observed LLM cost of its preceding answer."""
+    """Cost observation is the availability of the same scenario cost used by the gate."""
     result = _result(scenario_turns=[
-        {"query": "Explain arrays", "request_payload": {}, "request_id": "setup", "debug": {
-            "model_usage_status": "llm_used", "llm_calls": [{
-                "stage": "synthesis", "path": "structured",
-                "usage_metadata": {"input_tokens": 10, "output_tokens": 5},
-            }],
-        }},
-        {"query": "Save that answer", "request_payload": {}, "request_id": "final", "debug": {
-            "model_usage_status": "deterministic", "llm_calls": [],
-        }},
+        {"role": "setup", "query": "Explain arrays", "request_payload": {}, "request_id": "setup",
+         "llm_calls": [canonical_llm_call(10, 5)]},
+        {"role": "question", "query": "Save that answer", "request_payload": {}, "request_id": "final",
+         "llm_calls": []},
     ], cost_usd=0.001)
 
     metrics = _summary(results=[result]).metrics
 
-    assert metrics.llm_call_coverage_rate == 1.0
+    assert metrics.cost_observation_rate == 1.0
+    assert metrics.cost_observed_cases == 1
     assert metrics.request_id_coverage_rate == 1.0
     assert metrics.cost_gate_eligible is True
 
 
 def test_missing_setup_usage_keeps_partial_scenario_cost_out_of_gate() -> None:
-    """A well-observed final turn cannot hide unobserved setup usage or request identity."""
+    """An unknown scenario total does not qualify simply because the final request was observed."""
     result = _result(scenario_turns=[
-        {"query": "Explain arrays", "request_payload": {}, "debug": {
-            "model_usage_status": "llm_used", "llm_calls": [{"stage": "synthesis", "path": "structured"}],
-        }},
-        {"query": "Continue", "request_payload": {}, "request_id": "final", "debug": {
-            "model_usage_status": "llm_used", "llm_calls": [{
-                "stage": "synthesis", "path": "structured",
-                "usage_metadata": {"input_tokens": 10, "output_tokens": 5},
-            }],
-        }},
-    ], llm_calls=[{
-        "stage": "synthesis", "path": "structured",
-        "usage_metadata": {"input_tokens": 10, "output_tokens": 5},
-    }], request_id="final", cost_usd=0.001)
+        {"role": "setup", "query": "Explain arrays", "request_payload": {},
+         "llm_calls": [canonical_llm_call()]},
+        {"role": "question", "query": "Continue", "request_payload": {}, "request_id": "final",
+         "llm_calls": [canonical_llm_call(10, 5)]},
+    ], request_id="final", cost_usd=None)
 
     metrics = _summary(results=[result]).metrics
 
-    assert metrics.llm_call_coverage_rate == 0.0
+    assert metrics.cost_observation_rate == 0.0
+    assert metrics.cost_observed_cases == 0
     assert metrics.request_id_coverage_rate == 0.0
     assert metrics.cost_gate_eligible is False

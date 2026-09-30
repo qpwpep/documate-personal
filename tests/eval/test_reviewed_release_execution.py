@@ -10,14 +10,14 @@ from uuid import uuid4
 import pytest
 import requests
 
-from src.core.contracts.debug import DebugPayload, TokenUsage
+from src.core.contracts.debug import DebugPayload
 from src.eval.config_models import BenchmarkCase, BenchmarkConfig
 from src.eval.approved_uploads import ApprovedUpload
 from src.eval.nemo_generate import _sha256
 from src.eval.online_runner import run_online_benchmark
 from src.eval.online_runner.scenario_inputs import resolve_fixture_uploads
 from src.eval.release_dataset import release_artifact_hashes, sha256
-from tests.eval.response_fixtures import answer_provenance, execution_evidence, plain_response, sse_frame, sse_http_response
+from tests.eval.response_fixtures import canonical_llm_call, answer_provenance, execution_evidence, plain_response, sse_frame, sse_http_response
 from tests.eval.test_release_promotion import reviewed_candidates
 from tests.eval.test_promoted_release_binding import release_http
 
@@ -136,8 +136,8 @@ def test_approved_run_uses_checked_case_and_upload_bytes_through_staging(tmp_pat
         queries.append(json["query"])
         body = plain_response("검증한 입력으로 실행했습니다.")
         debug = DebugPayload(
-            token_usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
-            models_used=["http-boundary-fixture"], model_usage_status="llm_used",
+            llm_calls=[canonical_llm_call(1, 1)],
+
         ).model_dump(mode="json")
         debug["answer_provenance"] = answer_provenance(body)
         request_id = uuid4().hex

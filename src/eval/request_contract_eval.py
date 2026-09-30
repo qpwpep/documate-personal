@@ -214,15 +214,11 @@ def make_live_observer(settings: Any) -> Callable[[dict], dict]:
                         raw_candidate = json.loads(raw_content).get("request_contract")
                     except (ValueError, AttributeError):
                         pass
-        usage = []
-        for call in calls:
-            raw = call.get("raw") or {}
-            usage.append(raw.get("usage_metadata") or raw.get("response_metadata", {}).get("token_usage") or {})
         observation = {
             "canonical": contract.model_dump(mode="json") if contract else None,
             "raw_candidate": raw_candidate, "model_calls": calls,
             "contract_accepted": contract is not None and contract.failure is None,
-            "errors": errors, "usage": usage,
+            "errors": errors,
             "latency_ms": round((time.perf_counter() - started) * 1000),
             "disposition": disposition, "context": context,
             "body_preparable": contract.can_prepare_body() if contract else False,

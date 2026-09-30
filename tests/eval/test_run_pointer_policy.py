@@ -65,7 +65,6 @@ def _result(run_id: str, case: BenchmarkCase) -> CaseResult:
             "composite_quality_score": 1.0,
             "synthesis_mode": "structured_only",
             "cost_usd": 0.0002,
-            "llm_calls": [{"stage": "synthesis", "attempt": 1, "path": "structured", "response_metadata": {}, "usage_metadata": {}}],
             "latency_ms_e2e": 1000,
             "created_at_utc": "2026-04-02T00:00:00+00:00",
         }

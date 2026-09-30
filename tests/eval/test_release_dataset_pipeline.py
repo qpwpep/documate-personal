@@ -17,12 +17,12 @@ from uuid import uuid4
 import requests
 import pytest
 
-from src.core.contracts.debug import DebugPayload, TokenUsage
+from src.core.contracts.debug import DebugPayload
 from src.eval.config_models import BenchmarkConfig
 from src.eval.io import load_cases_jsonl
 from src.eval.online_runner import run_online_benchmark
 from src.eval.release_dataset import promote
-from tests.eval.response_fixtures import answer_provenance, execution_evidence, plain_response, sse_http_response
+from tests.eval.response_fixtures import canonical_llm_call, answer_provenance, execution_evidence, plain_response, sse_http_response
 
 
 FIXTURES = Path(__file__).resolve().parents[2] / "data/benchmarks/fixtures/cases.generated.jsonl"
@@ -109,8 +109,8 @@ def test_all_120_release_cases_execute_through_real_loader_client_and_runner(tmp
         manifest["revision"] += 1
         response = plain_response("HTTP 경계 검사 응답입니다. 모델 품질을 평가하는 답변이 아닙니다.")
         debug = DebugPayload(
-            token_usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
-            models_used=["http-boundary-fixture"], model_usage_status="llm_used",
+            llm_calls=[canonical_llm_call(1, 1)],
+
         ).model_dump(mode="json")
         debug["answer_provenance"] = answer_provenance(response)
         request_id = uuid4().hex

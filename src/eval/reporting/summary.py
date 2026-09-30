@@ -22,7 +22,7 @@ _AUDIT_DETERMINISTIC_DIRECT_USAGE_CEILING = 0.35
 _AUDIT_HIGH_RULE_LOW_JUDGE_DIVERGENCE_CEILING = 0.10
 _HIGH_RULE_LOW_JUDGE_DIVERGENCE_MARGIN = 0.35
 EXECUTION_CONTRACT_VERSION = "shared-client-scenario-v1"
-MEASUREMENT_CONTRACT_VERSION = "attachment-question-scenario-v1"
+MEASUREMENT_CONTRACT_VERSION = "llm-usage-scenario-v2"
 # v2: judge outcome is a hard release gate; missing scores no longer
 # renormalize into a composite; every category has explicit judge minimums.
 SCORING_CONTRACT_VERSION = "execution-policy-contract-v4"
@@ -41,41 +41,6 @@ def _scenario_latency_metrics(results: list[CaseResult]) -> dict[str, float | No
             value = percentile(values, quantile)
             metrics[f"{name}_{field}"] = round(value, 2) if value is not None else None
     return metrics
-
-
-def _call_has_usage(call: Any) -> bool:
-    if not isinstance(call, dict):
-        return False
-    response_metadata = call.get("response_metadata")
-    candidates = [call.get("usage_metadata")]
-    if isinstance(response_metadata, dict):
-        candidates.append(response_metadata.get("token_usage"))
-    for usage in candidates:
-        if not isinstance(usage, dict):
-            continue
-        prompt = usage.get("input_tokens", usage.get("prompt_tokens"))
-        completion = usage.get("output_tokens", usage.get("completion_tokens"))
-        if isinstance(prompt, int) and not isinstance(prompt, bool) and prompt >= 0:
-            if isinstance(completion, int) and not isinstance(completion, bool) and completion >= 0:
-                return True
-    return False
-
-
-def _has_llm_coverage(result: CaseResult) -> bool:
-    if not result.scenario_turns:
-        return bool(result.llm_calls)
-    has_calls = False
-    for turn in result.scenario_turns:
-        debug = turn.debug
-        if not debug or debug.get("missing_required_debug_fields"):
-            return False
-        calls = debug.get("llm_calls")
-        if debug.get("model_usage_status") == "deterministic" and calls == []:
-            continue
-        if not isinstance(calls, list) or not calls or not all(_call_has_usage(call) for call in calls):
-            return False
-        has_calls = True
-    return has_calls
 
 
 def _has_request_id_coverage(result: CaseResult) -> bool:
@@ -348,7 +313,8 @@ def build_summary(
         if slack_live_enabled and slack_delivery_required_results
         else None
     )
-    llm_call_coverage_rate = sum(1 for result in results if _has_llm_coverage(result)) / len(results) if results else 0.0
+    cost_observed_cases = len(cost_values)
+    cost_observation_rate = cost_observed_cases / len(results) if results else 0.0
     request_id_coverage_rate = sum(1 for result in results if _has_request_id_coverage(result)) / len(results) if results else 0.0
     judge_input_eligible = [result for result in results if result.judge_input_complete is not None]
     judge_input_completeness_rate = (
@@ -376,7 +342,7 @@ def build_summary(
         if [result for result in results if result.rule_score_total is not None and result.llm_judge_score is not None]
         else 0.0
     )
-    cost_gate_eligible = llm_call_coverage_rate >= float(config.hard_gates.cost_gate_min_llm_call_coverage)
+    cost_gate_eligible = cost_observation_rate >= float(config.hard_gates.cost_gate_min_observation_rate)
 
     failures = [
         {"case_id": result.case_id, "category": result.category, "reason": build_failure_reason(result)}
@@ -436,7 +402,8 @@ def build_summary(
         slack_delivery_success_cases=len(slack_delivery_success_results),
         slack_delivery_success_rate=round(slack_delivery_success_rate, 4) if slack_delivery_success_rate is not None else None,
         cost_gate_eligible=cost_gate_eligible,
-        llm_call_coverage_rate=round(llm_call_coverage_rate, 4),
+        cost_observation_rate=round(cost_observation_rate, 4),
+        cost_observed_cases=cost_observed_cases,
         request_id_coverage_rate=round(request_id_coverage_rate, 4),
         judge_input_completeness_rate=round(judge_input_completeness_rate, 4) if judge_input_completeness_rate is not None else None,
         judge_min_score_failures=judge_min_score_failures,
@@ -589,7 +556,7 @@ def build_summary(
             "judge_execution_rate": metrics.judge_execution_rate,
             "invalid_eval_cases": metrics.invalid_eval_cases,
             "incomplete_eval_cases": metrics.incomplete_eval_cases,
-            "llm_call_coverage_rate": metrics.llm_call_coverage_rate,
+            "cost_observation_rate": metrics.cost_observation_rate,
             "request_id_coverage_rate": metrics.request_id_coverage_rate,
             "judge_input_completeness_rate": metrics.judge_input_completeness_rate,
             "deterministic_direct_usage_rate": metrics.deterministic_direct_usage_rate,

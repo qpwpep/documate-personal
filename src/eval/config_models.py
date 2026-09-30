@@ -245,7 +245,7 @@ class HardGates(BaseModel):
     citation_compliance: float = 0.95
     p95_latency_ms: int = 10000
     avg_cost_per_case_usd: float = 0.01
-    cost_gate_min_llm_call_coverage: float = 0.80
+    cost_gate_min_observation_rate: float = 0.80
 
 
 class ModelPricing(BaseModel):

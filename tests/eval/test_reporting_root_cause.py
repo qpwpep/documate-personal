@@ -57,7 +57,6 @@ def _make_result(
             "latency_ms_server": 900,
             "latency_breakdown": latency_breakdown,
             "tool_calls": tool_calls,
-            "token_usage": {"prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150},
             "planner_errors": planner_errors or [],
             "runtime_errors": [],
             "response_errors": [],

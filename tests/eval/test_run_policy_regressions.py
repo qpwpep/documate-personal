@@ -77,7 +77,6 @@ def _result(
             "composite_quality_score": composite_quality_score,
             "synthesis_mode": synthesis_mode,
             "cost_usd": 0.0002,
-            "llm_calls": [{"stage": "synthesis", "attempt": 1, "path": "structured", "response_metadata": {}, "usage_metadata": {}}],
             "created_at_utc": "2026-04-02T00:00:00+00:00",
         }
     )
