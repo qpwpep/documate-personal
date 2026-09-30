@@ -11,11 +11,11 @@ import pytest
 import requests
 
 from src.core.answer_schema import export_answer_text
-from src.core.contracts.debug import DebugPayload, TokenUsage
+from src.core.contracts.debug import DebugPayload
 from src.eval.config_models import BenchmarkCase, BenchmarkConfig
 from src.eval.judge_llm import LLMJudge
 from src.eval.online_runner import _run_single_case, run_online_benchmark
-from tests.eval.response_fixtures import answer_provenance, execution_evidence, plain_response, sse_http_response
+from tests.eval.response_fixtures import canonical_llm_call, answer_provenance, execution_evidence, plain_response, sse_http_response
 
 
 def json_response(payload, status=200):
@@ -63,8 +63,7 @@ def http_boundary(tmp_path, monkeypatch):
         assert "upload_file_path" not in json
         assert json["include_debug"] is True
         turn = len([item for item in state["requests"] if item[1].endswith("/agent/stream")])
-        debug = DebugPayload(token_usage=TokenUsage(prompt_tokens=10, completion_tokens=2, total_tokens=12),
-                             models_used=["fixture"], model_usage_status="llm_used").model_dump(mode="json")
+        debug = DebugPayload(llm_calls=[canonical_llm_call(10, 2)]).model_dump(mode="json")
         debug["extra_diagnostic"] = {"turn": turn}
         debug["execution_evidence"] = execution_evidence(request_id=f"turn-{turn}")
         if state["fail_setup"]:

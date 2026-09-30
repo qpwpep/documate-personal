@@ -274,21 +274,3 @@ def build_llm_call_metadata(
         response_metadata=safe_response_metadata,
         usage_metadata=safe_usage_metadata,
     )
-
-
-# Retained until the evaluation consumer switches to canonical call records.
-ModelUsageStatus = Literal["llm_used", "deterministic", "missing_debug"]
-
-
-class TokenUsage(BaseModel):
-    prompt_tokens: int = 0
-    completion_tokens: int = 0
-    total_tokens: int = 0
-
-
-class LLMCallMetadata(BaseModel):
-    stage: LLMCallStage
-    attempt: int = 0
-    path: Literal["direct", "structured", "plain_fallback", "structured_compact_fallback", "plain_summary_attach_fallback", "korean_template_summary_fallback"]
-    response_metadata: dict[str, Any] = Field(default_factory=dict)
-    usage_metadata: dict[str, Any] = Field(default_factory=dict)

@@ -6,11 +6,11 @@ import requests
 from urllib3.exceptions import ReadTimeoutError
 
 from src.core.answer_schema import ActionReceipt, finalize_answer, text_document
-from src.core.contracts.debug import DebugPayload, TokenUsage
+from src.core.contracts.debug import DebugPayload
 from src.eval.config_models import BenchmarkCase, BenchmarkConfig
 from src.eval.judge_llm import LLMJudge
 from src.eval.online_runner import _run_single_case
-from tests.eval.response_fixtures import answer_provenance, execution_evidence, plain_response, source_hit, sse_frame, sse_http_response
+from tests.eval.response_fixtures import canonical_llm_call, answer_provenance, execution_evidence, plain_response, source_hit, sse_frame, sse_http_response
 
 
 pytestmark = pytest.mark.usefixtures("empty_upload_manifest_http")
@@ -35,12 +35,11 @@ def final_payload():
         actions=[ActionReceipt(kind="save_text", status="success", file_path="output/result.txt")],
     )
     debug = DebugPayload(
-        token_usage=TokenUsage(prompt_tokens=100, completion_tokens=20, total_tokens=120),
+        llm_calls=[canonical_llm_call(100, 20)],
         observed_hits=[source_hit().model_dump(mode="json")],
         tool_calls=["save_text"],
         tool_call_count=1,
-        models_used=["test-model"],
-        model_usage_status="llm_used",
+
         retrieval_diagnostics=[{"tool": "tavily_search", "route": "docs", "status": "success"}],
     ).model_dump(mode="json")
     debug["additional_diagnostic"] = {"measurements": [1, 2, 3]}
@@ -62,8 +61,8 @@ def test_stream_preserves_full_response_trace_debug_and_evaluation_contracts():
     assert result.debug == payload["debug"]
     assert result.model_dump(mode="json")["debug"] == payload["debug"]
     assert result.request_id == "header-request"
-    assert result.token_usage.model_dump() == payload["debug"]["token_usage"]
-    assert result.output_tokens == 20
+    assert [call.model_dump(mode="json") for call in result.llm_calls] == payload["debug"]["llm_calls"]
+    assert result.synthesis_output_tokens == 20
     assert result.cost_usd == pytest.approx(0.000027)
     assert [hit.model_dump(mode="json") for hit in result.observed_hits] == payload["debug"]["observed_hits"]
     assert result.retrieval_diagnostics[0].status == "success"

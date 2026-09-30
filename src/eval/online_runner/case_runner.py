@@ -19,7 +19,6 @@ from ..io import load_cases_jsonl
 from ..reporting.summary import build_summary
 from ..reporting.writer import write_run_outputs
 from ..result_models import CaseResult, ScenarioTurnResult
-from ..pricing import compute_cost_usd
 from ..summary_models import RunSummary, RunTrack
 from .scenario_inputs import case_context, resolve_fixture_uploads
 from .response_parser import ParsedResponseData, parse_agent_response
@@ -147,7 +146,6 @@ def _run_single_case(
     endpoint_url = endpoint.rstrip("/") + "/agent/stream"
     parsed_response = ParsedResponseData()
     turns: list[ScenarioTurnResult] = []
-    turn_costs: list[float | None] = []
     attachment_setup_ms = None
     question_response_ms = None
     request_payload = build_agent_payload(case.query, context)
@@ -178,7 +176,6 @@ def _run_single_case(
                 verify_upload_manifest(approved_files, client.manifest)
             parsed, turn = _run_turn(client, query, role="question" if index == len(case.setup_turns) else "setup", prior_turns=turns)
             turns.append(turn)
-            turn_costs.append(compute_cost_usd(llm_calls=parsed.llm_calls, pricing=config.pricing))
             if index == len(case.setup_turns):
                 parsed_response = parsed
                 request_payload = turn.request_payload
@@ -229,16 +226,15 @@ def _run_single_case(
         parsed_response=parsed_response,
         slack_delivery_required=resolved_live_slack.applies_to_case(case),
         prior_turns=turns[:len(case.setup_turns)],
+        scenario_turns=turns,
     )
     result.attachment_setup_ms = attachment_setup_ms
     result.question_response_ms = question_response_ms
     result.scenario_total_ms = scenario_total_ms
-    result.scenario_turns = turns
     result.attachment_fingerprints = ({name: upload.fingerprint for name, upload in
                                       zip(case.resolved_upload_fixtures, files, strict=True) if upload.fingerprint is not None}
                                      if files else {})
     result.cleanup_errors = cleanup_errors
-    result.cost_usd = round(sum(turn_costs), 8) if turn_costs and all(cost is not None for cost in turn_costs) else None
     return result
 
 

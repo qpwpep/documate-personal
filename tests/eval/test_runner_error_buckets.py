@@ -1,4 +1,4 @@
-from tests.eval.response_fixtures import answer_provenance, execution_evidence, sse_http_response
+from tests.eval.response_fixtures import canonical_llm_call, answer_provenance, execution_evidence, sse_http_response
 from src.core.contracts.debug import DEBUG_SCHEMA_VERSION
 from src.core.answer_schema import AnswerResponse
 from tests.eval.response_fixtures import plain_response
@@ -115,9 +115,6 @@ class RunnerErrorBucketsTest(unittest.TestCase):
                     "tool_calls": [],
                     "execution_evidence": execution_evidence([], request_id="req-1"),
                     "tool_call_count": 0,
-                    "token_usage": {},
-                    "model_name": None,
-                    "models_used": [],
                     "llm_calls": [],
                     "errors": [],
                     "planner_errors": [],
@@ -159,9 +156,6 @@ class RunnerErrorBucketsTest(unittest.TestCase):
                     "tool_calls": ["tavily_search"],
                     "execution_evidence": execution_evidence(["tavily_search"], request_id="req-1"),
                     "tool_call_count": 1,
-                    "token_usage": {},
-                    "model_name": None,
-                    "models_used": [],
                     "llm_calls": [],
                     "errors": [],
                     "planner_errors": [],
@@ -204,9 +198,6 @@ class RunnerErrorBucketsTest(unittest.TestCase):
                     "tool_calls": ["tavily_search", "upload_search", "rag_search"],
                     "execution_evidence": execution_evidence(["tavily_search", "upload_search", "rag_search"], request_id="req-1"),
                     "tool_call_count": 3,
-                    "token_usage": {},
-                    "model_name": None,
-                    "models_used": [],
                     "llm_calls": [],
                     "errors": [],
                     "planner_errors": [],
@@ -289,9 +280,6 @@ class RunnerErrorBucketsTest(unittest.TestCase):
                     "tool_calls": ["tavily_search"],
                     "execution_evidence": execution_evidence(["tavily_search"], request_id="req-1"),
                     "tool_call_count": 1,
-                    "token_usage": {},
-                    "model_name": None,
-                    "models_used": [],
                     "llm_calls": [],
                     "errors": [],
                     "planner_errors": [],
@@ -372,9 +360,6 @@ class RunnerErrorBucketsTest(unittest.TestCase):
                     "tool_calls": ["tavily_search"],
                     "execution_evidence": execution_evidence(["tavily_search"], request_id="req-1"),
                     "tool_call_count": 1,
-                    "token_usage": {},
-                    "model_name": None,
-                    "models_used": [],
                     "llm_calls": [],
                     "errors": [],
                     "planner_errors": [],
@@ -435,14 +420,7 @@ class RunnerErrorBucketsTest(unittest.TestCase):
                     "tool_calls": ["tavily_search"],
                     "execution_evidence": execution_evidence(["tavily_search"], request_id="req-1"),
                     "tool_call_count": 1,
-                    "token_usage": {
-                        "prompt_tokens": 10,
-                        "completion_tokens": 21,
-                        "total_tokens": 31,
-                    },
-                    "model_name": None,
-                    "models_used": [],
-                    "llm_calls": [],
+                    "llm_calls": [canonical_llm_call(10, 21)],
                     "errors": [],
                     "error_codes": [
                         "RETRIEVAL_DOCS_TIMEOUT",
@@ -502,7 +480,7 @@ class RunnerErrorBucketsTest(unittest.TestCase):
         )
         self.assertEqual(result.route_decisions[0].target, "retrieve_dispatch")
         self.assertEqual(result.retrieval_diagnostics[0].error_code, "RETRIEVAL_DOCS_TIMEOUT")
-        self.assertEqual(result.output_tokens, 21)
+        self.assertEqual(result.synthesis_output_tokens, 21)
         self.assertEqual(result.block_count, 2)
         analysis = build_analysis(case_map={self.case.case_id: self.case}, results=[result])
         self.assertEqual(

@@ -1,4 +1,4 @@
-from tests.eval.response_fixtures import answer_provenance, sse_http_response
+from tests.eval.response_fixtures import canonical_llm_call, answer_provenance, sse_http_response
 from tests.eval.response_fixtures import plain_response
 import unittest
 from pathlib import Path
@@ -23,9 +23,6 @@ def _debug_payload(**overrides):
         "missing_required_debug_fields": [],
         "tool_calls": [],
         "tool_call_count": 0,
-        "token_usage": {},
-        "model_name": None,
-        "models_used": [],
         "llm_calls": [],
         "errors": [],
         "planner_errors": [],
@@ -221,20 +218,8 @@ class LatencyBreakdownReportingTest(unittest.TestCase):
                     model_name="gpt-5-mini",
                     models_used=["gpt-5-nano", "gpt-5-mini"],
                     llm_calls=[
-                        {
-                            "stage": "planner",
-                            "attempt": 1,
-                            "path": "structured",
-                            "response_metadata": {"model_name": "gpt-5-nano"},
-                            "usage_metadata": {"input_tokens": 10, "output_tokens": 2, "total_tokens": 12},
-                        },
-                        {
-                            "stage": "synthesis",
-                            "attempt": 1,
-                            "path": "structured",
-                            "response_metadata": {"model_name": "gpt-5-mini"},
-                            "usage_metadata": {"input_tokens": 20, "output_tokens": 5, "total_tokens": 25},
-                        },
+                        canonical_llm_call(10, 2, stage="planner", model_name="gpt-5-nano"),
+                        canonical_llm_call(20, 5, model_name="gpt-5-mini"),
                     ],
                 ),
             },
@@ -270,9 +255,10 @@ class LatencyBreakdownReportingTest(unittest.TestCase):
             ),
         )
 
-        self.assertEqual(result.models_used, ["gpt-5-nano", "gpt-5-mini"])
+        self.assertEqual([call.model_name for call in result.llm_calls], ["gpt-5-nano", "gpt-5-mini"])
         self.assertEqual(len(result.llm_calls), 2)
         self.assertAlmostEqual(result.cost_usd, 0.000094, places=8)
+        self.assertEqual(result.synthesis_output_tokens, 5)
 
     def test_build_markdown_report_marks_legacy_runs_unavailable(self) -> None:
         summary = RunSummary(

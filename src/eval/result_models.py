@@ -5,9 +5,9 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
-from src.core.contracts.usage import LLMCallRecord
 from src.core.answer_schema import AnswerResponse, ActionReceipt
-from src.core.contracts.debug import LLMCallMetadata, ModelUsageStatus, PlannerDiagnostic, RetrievalDiagnostic, TokenUsage
+from src.core.contracts.debug import PlannerDiagnostic, RetrievalDiagnostic
+from src.core.contracts.usage import LLMCallRecord
 from src.core.contracts.provenance import AnswerProvenance
 from src.core.contracts.routing import RoutingDecision
 from src.core.contracts.tool_execution import ToolExecutionEvidence
@@ -148,12 +148,7 @@ class CaseResult(BaseModel):
     latency_ms_server: int | None = None
     latency_breakdown: LatencyBreakdownModel | None = None
     tool_calls: list[str] = Field(default_factory=list)
-    token_usage: TokenUsage | None = None
-    output_tokens: int = 0
-    model_name: str | None = None
-    models_used: list[str] = Field(default_factory=list)
-    model_usage_status: ModelUsageStatus = "missing_debug"
-    llm_calls: list[LLMCallRecord] | None = None
+    synthesis_output_tokens: int | None = Field(default=None, ge=0, strict=True)
     tool_call_count: int = 0
     planner_errors: list[str] = Field(default_factory=list)
     error_codes: list[str] = Field(default_factory=list)
@@ -208,6 +203,11 @@ class CaseResult(BaseModel):
     passed: bool | None = Field(default=None, exclude=True)
     cost_usd: float | None = None
     created_at_utc: str
+
+    @property
+    def llm_calls(self) -> list[LLMCallRecord] | None:
+        question = next((turn for turn in reversed(self.scenario_turns) if turn.role == "question"), None)
+        return question.llm_calls if question is not None else None
 
     @model_validator(mode="before")
     @classmethod
@@ -301,8 +301,6 @@ class CaseResult(BaseModel):
                 raise ValueError("stored policy assessment disagrees with execution evidence")
         if self.tool_call_count <= 0 and self.tool_calls:
             self.tool_call_count = len(self.tool_calls)
-        if self.output_tokens <= 0 and self.token_usage is not None:
-            self.output_tokens = int(self.token_usage.completion_tokens or 0)
         if self.synthesis_mode is None and self.latency_breakdown and self.latency_breakdown.synthesis_attempts:
             self.synthesis_mode = self.latency_breakdown.synthesis_attempts[0].mode
         return self

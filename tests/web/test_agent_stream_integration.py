@@ -120,8 +120,9 @@ def test_benchmark_uses_the_real_sse_route_and_preserves_debug(agent_server):
     assert export_answer_text(result.response) == "Chat session has been reset. Start again."
     assert result.runtime_errors == result.response_errors == []
     assert result.request_id in result.trace
-    assert result.debug["model_usage_status"] == "deterministic"
-    assert result.debug["token_usage"]["total_tokens"] == 0
+    assert result.debug["llm_calls"] == []
+    assert result.cost_usd == 0.0
+    assert result.synthesis_output_tokens == 0
     assert result.debug["observed_hits"] == []
     # Client and server use separate clocks whose resolutions differ on Windows.
     # Exact duration measurement is covered with a controlled clock in test_runner_sse.
