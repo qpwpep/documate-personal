@@ -71,7 +71,8 @@ class SummaryStats(BaseModel):
     slack_delivery_success_cases: int = 0
     slack_delivery_success_rate: float | None = None
     cost_gate_eligible: bool = False
-    llm_call_coverage_rate: float = 0.0
+    cost_observation_rate: float | None = None
+    cost_observed_cases: int | None = None
     request_id_coverage_rate: float = 0.0
     judge_input_completeness_rate: float | None = None
     judge_min_score_failures: int = 0

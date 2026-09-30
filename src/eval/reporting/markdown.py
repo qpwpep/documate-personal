@@ -178,7 +178,10 @@ def _render_analysis(lines: list[str], summary: RunSummary) -> None:
         lines.append(f"| {row.stage} | {row.sample_count} | {_format_metric_value(row.p50_latency_ms, decimals=2)} | {_format_metric_value(row.p95_latency_ms, decimals=2)} |")
 
 
-def build_markdown_report(summary: RunSummary, results: list[CaseResult] | None = None) -> str:
+def build_markdown_report(
+    summary: RunSummary, results: list[CaseResult] | None = None, *,
+    historical_summary: dict | None = None,
+) -> str:
     """Render current decisions or historical summary facts.
 
     ``results`` supplies current decision evidence. Historical raw records are
@@ -205,7 +208,7 @@ def build_markdown_report(summary: RunSummary, results: list[CaseResult] | None 
     decision = summary.release_decision
     if summary.track == "smoke" or (decision is not None and decision.scope == "diagnostic"):
         lines.append("- Release: `diagnostic run only (no release verdict)`")
-    elif decision is None:
+    elif decision is None or summary.measurement_contract_version != "llm-usage-scenario-v2":
         lines.append("- Release: `legacy_unverified (not eligible under the current contract)`")
         lines.append(f"- Historical verdict: `{'PASS' if summary.overall_passed else 'FAIL'}`")
     else:
@@ -277,7 +280,6 @@ def build_markdown_report(summary: RunSummary, results: list[CaseResult] | None 
         ("slack_delivery_success_cases", summary.metrics.slack_delivery_success_cases),
         ("slack_delivery_success_rate", summary.metrics.slack_delivery_success_rate),
         ("cost_gate_eligible", summary.metrics.cost_gate_eligible),
-        ("llm_call_coverage_rate", summary.metrics.llm_call_coverage_rate),
         ("request_id_coverage_rate", summary.metrics.request_id_coverage_rate),
         ("judge_input_completeness_rate", summary.metrics.judge_input_completeness_rate),
         ("judge_min_score_failures", summary.metrics.judge_min_score_failures),
@@ -294,6 +296,19 @@ def build_markdown_report(summary: RunSummary, results: list[CaseResult] | None 
         ("synthesis_structured_success_rate", summary.metrics.synthesis_structured_success_rate),
     ):
         lines.append(f"| {key} | {value if value is not None else '-'} |")
+
+    if summary.measurement_contract_version == "llm-usage-scenario-v2":
+        lines.append(f"| cost_observed_cases | {summary.metrics.cost_observed_cases} / {summary.metrics.total_cases} |")
+        lines.append(f"| cost_observation_rate | {summary.metrics.cost_observation_rate} |")
+        lines.extend(["", "Cost covers every executed scenario turn and logical LLM invocation. "
+                      "The average includes only cases with complete input and output counts; "
+                      "confirmed no-call cases count as observed zero cost. "
+                      "synthesis_output_tokens covers only synthesis attempts for the final question. "
+                      "SDK transport retries and provider billing reconciliation are outside this estimate."])
+    else:
+        raw_metrics = (historical_summary or {}).get("metrics", {})
+        historical_coverage = raw_metrics.get("llm_call_coverage_rate", (summary.audit_metrics or {}).get("llm_call_coverage_rate"))
+        lines.append(f"| llm_call_coverage_rate (historical) | {historical_coverage if historical_coverage is not None else '-'} |")
 
     _render_execution_policy(lines, summary, results)
     lines.append("")

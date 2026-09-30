@@ -17,7 +17,7 @@ import pytest
 import requests
 
 from src.core.answer_schema import AnswerDocument, AnswerResponse, finalize_answer
-from src.core.contracts.debug import DebugPayload, TokenUsage
+from src.core.contracts.debug import DebugPayload
 from src.core.evidence import RetrievalScore, SearchHit
 from src.core.save_contract import SaveOperation
 from src.eval.config_models import BenchmarkCase, BenchmarkConfig, CaseWeightOverride
@@ -31,6 +31,7 @@ from src.eval.online_runner.result_builder import build_case_result
 from src.eval.reporting.summary import build_summary
 from src.eval.result_models import CaseResult
 from tests.eval.response_fixtures import (
+    canonical_llm_call,
     answer_provenance,
     artifact_http_response,
     plain_response,
@@ -120,11 +121,10 @@ def _hit(evidence) -> SearchHit:
 def _final_payload(response, *, tool_calls=(), observed_hits=(), debug_overrides=None):
     response = deepcopy(response)
     debug = DebugPayload(
-        token_usage=TokenUsage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+        llm_calls=[canonical_llm_call(10, 5)],
         tool_calls=list(tool_calls),
         tool_call_count=len(tool_calls),
-        models_used=["fixture-model"],
-        model_usage_status="llm_used",
+
         observed_hits=[hit.model_dump(mode="json") for hit in observed_hits],
     ).model_dump(mode="json")
     debug["answer_provenance"] = answer_provenance(response)
