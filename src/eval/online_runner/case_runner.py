@@ -65,7 +65,7 @@ def _record_client_error(event: AgentStreamEvent, parsed: ParsedResponseData, *,
 
 
 def _run_turn(client: AgentSessionClient, query: str, *,
-              prior_turns: list[ScenarioTurnResult] | None = None) -> tuple[ParsedResponseData, ScenarioTurnResult]:
+              role: str = "question", prior_turns: list[ScenarioTurnResult] | None = None) -> tuple[ParsedResponseData, ScenarioTurnResult]:
     payload = build_agent_payload(query, client.request_context())
     parsed = ParsedResponseData()
     elapsed = None
@@ -112,6 +112,7 @@ def _run_turn(client: AgentSessionClient, query: str, *,
         parsed.response_errors.extend(f"evidence scope: {error}" for error in parsed.evidence_assessment.errors
                                       if error not in parsed.response_errors)
     turn = ScenarioTurnResult(
+        role=role, llm_calls=parsed.llm_calls,
         query=query, request_payload=payload, http_status=parsed.http_status, request_id=parsed.request_id,
         response=parsed.response, trace=parsed.response_trace, debug=parsed.debug,
         upload_manifest=client.manifest, question_response_ms=elapsed,
@@ -175,11 +176,9 @@ def _run_single_case(
             if index and approved_files is not None:
                 # The app adopts each answer's manifest for the following turn.
                 verify_upload_manifest(approved_files, client.manifest)
-            parsed, turn = _run_turn(client, query, prior_turns=turns)
+            parsed, turn = _run_turn(client, query, role="question" if index == len(case.setup_turns) else "setup", prior_turns=turns)
             turns.append(turn)
-            turn_costs.append(0.0 if parsed.model_usage_status == "deterministic" and not parsed.llm_calls else
-                              compute_cost_usd(token_usage=parsed.token_usage,
-                                               llm_calls=[call.model_dump() for call in parsed.llm_calls], pricing=config.pricing))
+            turn_costs.append(compute_cost_usd(llm_calls=parsed.llm_calls, pricing=config.pricing))
             if index == len(case.setup_turns):
                 parsed_response = parsed
                 request_payload = turn.request_payload

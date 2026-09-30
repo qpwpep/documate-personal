@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import pytest
 import requests
 
-from src.core.contracts.debug import DebugPayload, LLMCallMetadata, TokenUsage
+from src.core.contracts.debug import DebugPayload
 from src.app.web.agent_request_support import normalize_debug_info
 from src.eval.config_models import BenchmarkCase, BenchmarkConfig
 from src.eval.io import dump_jsonl
@@ -16,7 +16,7 @@ from src.eval.judge_llm import LLMJudge
 from src.eval.main import command_report
 from src.eval.online_runner import _run_single_case, run_online_benchmark
 from src.eval.reporting.writer import load_run_outputs
-from tests.eval.response_fixtures import answer_provenance, execution_evidence, plain_response, sse_http_response
+from tests.eval.response_fixtures import canonical_llm_call, answer_provenance, execution_evidence, plain_response, sse_http_response
 
 
 pytestmark = pytest.mark.usefixtures("empty_upload_manifest_http")
@@ -134,13 +134,8 @@ def test_server_normalized_invalid_retrieval_observation_remains_unverified(setu
 def response_payload():
     debug = DebugPayload(
         execution_evidence=execution_evidence(request_id="diagnostic-request"),
-        token_usage=TokenUsage(prompt_tokens=10, completion_tokens=2, total_tokens=12),
-        llm_calls=[LLMCallMetadata(
-            stage="planner", path="structured",
-            response_metadata={"model_name": "local-test-model"},
-            usage_metadata={"input_tokens": 10, "output_tokens": 2, "total_tokens": 12},
-        )],
-        models_used=["local-test-model"], model_usage_status="llm_used",
+        llm_calls=[canonical_llm_call(10, 2, stage="planner", model_name="local-test-model")],
+
     ).model_dump(mode="json")
     response = plain_response("Retained answer")
     debug["answer_provenance"] = answer_provenance(response)
@@ -180,7 +175,8 @@ def test_malformed_tool_calls_keeps_usage_and_writes_the_following_case_report(t
     assert first.runtime_errors == []
     assert any("debug.tool_calls" in error for error in first.response_errors)
     assert first.debug["tool_calls"] == first.scenario_turns[0].debug["tool_calls"] == 1
-    assert first.token_usage == TokenUsage(prompt_tokens=10, completion_tokens=2, total_tokens=12)
+    assert first.scenario_turns[0].llm_calls[0].usage.input_tokens == 10
+    assert first.scenario_turns[0].llm_calls[0].usage.output_tokens == 2
     assert first.cost_usd == pytest.approx(0.0000027)
     assert not first.release_pass
     assert following.runtime_errors == following.response_errors == []
@@ -198,10 +194,9 @@ def test_malformed_tool_calls_keeps_usage_and_writes_the_following_case_report(t
     ("schema_version", float("inf")),
     ("tool_call_count", float("inf")),
     ("latency_ms_server", float("inf")),
-    ("token_usage", {"prompt_tokens": float("inf")}),
     ("llm_calls", [{"stage": "planner", "path": "structured", "attempt": float("inf")}]),
-    ("llm_calls", [{"stage": "planner", "path": "structured", "usage_metadata": {"input_tokens": float("inf")}}]),
-    ("llm_calls", [{"stage": "planner", "path": "structured", "response_metadata": {"token_usage": {"completion_tokens": float("inf")}}}]),
+    ("llm_calls", [{"stage": "planner", "path": "structured", "usage": {"input_tokens": float("inf")}}]),
+    ("llm_calls", [{"stage": "planner", "path": "structured", "usage": {"output_tokens": float("inf")}}]),
     ("retrieval_diagnostics", [{"attempt": float("inf")}]),
     ("retrieval_diagnostics", [{"answerability": {"invalid": True}}]),
     ("planner_diagnostics", {"override_reason": []}),
@@ -223,7 +218,7 @@ def test_invalid_diagnostic_value_keeps_other_fields_and_finishes_the_case(field
     assert any(field in error for error in result.response_errors)
     assert result.response is not None
     assert result.debug[field] == value
-    assert result.cost_usd == pytest.approx(0.0000027)
+    assert result.cost_usd == (None if field == "llm_calls" else pytest.approx(0.0000027))
     assert not result.release_pass
 
 

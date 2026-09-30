@@ -178,3 +178,10 @@ def comparison_response() -> dict:
         ],
     })
     return finalize_answer(document, [official, upload]).model_dump(mode="json")
+
+
+def canonical_llm_call(input_tokens=None, output_tokens=None, *, stage="synthesis", model_name="fixture-model", attempt=1, path="structured") -> dict:
+    """A canonical call in a controlled live HTTP response, without raw parsing."""
+    from src.core.contracts.usage import LLMCallRecord, TokenUsage
+    return LLMCallRecord(stage=stage, attempt=attempt, path=path, model_name=model_name,
+                         usage=TokenUsage(input_tokens=input_tokens, output_tokens=output_tokens)).model_dump(mode="json")

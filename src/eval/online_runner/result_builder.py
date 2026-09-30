@@ -98,7 +98,7 @@ def _extract_output_tokens(parsed_response: ParsedResponseData) -> int:
     if parsed_response.token_usage is not None and parsed_response.token_usage.completion_tokens > 0:
         return int(parsed_response.token_usage.completion_tokens)
     total = 0
-    for call in parsed_response.llm_calls:
+    for call in parsed_response.llm_calls or []:
         if str(call.stage) != "synthesis":
             continue
         usage = call.usage_metadata or {}
@@ -362,8 +362,7 @@ def build_case_result(
     )
     gate_failures = list(dict.fromkeys([*gate_failures, *(code for item in save_assessments for code in item.failure_codes)]))
     cost = compute_cost_usd(
-        token_usage=parsed_response.token_usage,
-        llm_calls=[call.model_dump() for call in parsed_response.llm_calls],
+        llm_calls=parsed_response.llm_calls,
         pricing=config.pricing,
     )
 

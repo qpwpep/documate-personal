@@ -104,7 +104,7 @@ def _compute_planner_llm_attempt_count(results: list[CaseResult]) -> int:
 
 
 def _planner_llm_attempted(result: CaseResult) -> bool:
-    if any(call.stage == "planner" for call in result.llm_calls):
+    if any(call.stage == "planner" for call in result.llm_calls or []):
         return True
     if result.planner_errors:
         return True

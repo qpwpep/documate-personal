@@ -5,11 +5,13 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from src.core.answer_schema import AnswerResponse, ActionReceipt, export_answer_text
-from src.core.contracts.boundary.debug import parse_error_codes, parse_llm_calls, parse_model_usage_status, parse_token_usage
+from src.core.contracts.boundary.debug import parse_error_codes, normalize_llm_call_observation
 from src.core.contracts.boundary.planner import parse_planner_diagnostic
 from src.core.contracts.boundary.retrieval import normalize_retrieval_diagnostic_observation
 from src.core.contracts.debug import DEBUG_CRITICAL_FIELDS, DEBUG_REQUIRED_FIELDS, DEBUG_SCHEMA_VERSION
-from src.core.contracts.debug import LLMCallMetadata, ModelUsageStatus, PlannerDiagnostic, RetrievalDiagnostic, TokenUsage
+from src.core.contracts.debug import PlannerDiagnostic, RetrievalDiagnostic
+from src.core.contracts.debug import ModelUsageStatus, TokenUsage
+from src.core.contracts.usage import LLMCallRecord
 from src.core.contracts.provenance import AnswerProvenance
 from src.core.contracts.routing import RoutingDecision, validate_route_decisions
 from src.core.contracts.tool_execution import ToolExecutionEvidence
@@ -24,6 +26,10 @@ _REQUEST_ID_PATTERN = re.compile(r"Request ID:\s*([^,\s]+)")
 
 @dataclass(slots=True)
 class ParsedResponseData:
+    model_name: str | None = None
+    models_used: list[str] = field(default_factory=list)
+    model_usage_status: ModelUsageStatus = "missing_debug"
+    token_usage: TokenUsage | None = None
     http_status: int = 0
     response_text: str = ""
     response: AnswerResponse | None = None
@@ -39,14 +45,10 @@ class ParsedResponseData:
     request_id: str | None = None
     latency_ms_server: int | None = None
     latency_breakdown: LatencyBreakdownModel | None = None
-    model_name: str | None = None
-    models_used: list[str] = field(default_factory=list)
-    model_usage_status: ModelUsageStatus = "missing_debug"
     tool_calls: list[str] = field(default_factory=list)
     execution_evidence: ToolExecutionEvidence | dict[str, Any] | None = None
     tool_call_count: int = 0
-    token_usage: TokenUsage | None = None
-    llm_calls: list[LLMCallMetadata] = field(default_factory=list)
+    llm_calls: list[LLMCallRecord] | None = None
     error_codes: list[str] = field(default_factory=list)
     validation_events: list[str] = field(default_factory=list)
     route_decisions: list[RoutingDecision] = field(default_factory=list)
@@ -60,57 +62,6 @@ class ParsedResponseData:
     missing_required_debug_fields: list[str] = field(default_factory=list)
     synthesis_mode: str | None = None
     actions: list[ActionReceipt] = field(default_factory=list)
-
-
-def _parse_token_usage(raw_debug: dict[str, Any] | None, *, response_errors: list[str]) -> TokenUsage | None:
-    if not raw_debug:
-        return None
-    raw_usage = raw_debug.get("token_usage")
-    if raw_usage is None:
-        return None
-    try:
-        usage = parse_token_usage(raw_usage)
-    except (TypeError, ValueError, OverflowError):
-        usage = None
-    if usage is None:
-        response_errors.append("debug.token_usage must contain finite integer token counts")
-    return usage
-
-
-def _parse_llm_calls(
-    raw_items: Any,
-    *,
-    response_errors: list[str],
-) -> list[LLMCallMetadata]:
-    parsed: list[LLMCallMetadata] = []
-    if raw_items is None:
-        return parsed
-
-    if not isinstance(raw_items, list):
-        response_errors.append("debug.llm_calls must be a list")
-        return parsed
-
-    for index, item in enumerate(raw_items):
-        if not isinstance(item, dict):
-            response_errors.append(f"debug.llm_calls[{index}] must be an object")
-            continue
-        try:
-            calls = parse_llm_calls([item])
-            if not calls:
-                raise ValueError("call stage or path is invalid")
-            for call in calls:
-                usage_sources = [call.usage_metadata, call.response_metadata.get("token_usage")]
-                for usage in usage_sources:
-                    if not isinstance(usage, dict):
-                        continue
-                    for key in ("input_tokens", "output_tokens", "prompt_tokens", "completion_tokens", "total_tokens"):
-                        if key in usage and usage[key] is not None:
-                            if int(usage[key]) < 0:
-                                raise ValueError(f"{key} must be non-negative")
-            parsed.extend(calls)
-        except (TypeError, ValueError, OverflowError) as exc:
-            response_errors.append(f"debug.llm_calls[{index}] invalid: {exc}")
-    return parsed
 
 
 def _parse_string_list(
@@ -349,17 +300,8 @@ def parse_agent_response(
                 parsed.latency_ms_server = int(latency_raw)
             except (TypeError, ValueError, OverflowError):
                 parsed.response_errors.append("debug.latency_ms_server must be an integer")
-        parsed.model_name = str(debug_payload.get("model_name")) if debug_payload.get("model_name") else None
-        models_used_raw = debug_payload.get("models_used")
-        if isinstance(models_used_raw, list):
-            parsed.models_used = [str(name) for name in models_used_raw if name]
-        elif parsed.model_name:
-            parsed.models_used = [parsed.model_name]
-        parsed.token_usage = _parse_token_usage(debug_payload, response_errors=parsed.response_errors)
-        parsed.llm_calls = _parse_llm_calls(
-            debug_payload.get("llm_calls"),
-            response_errors=parsed.response_errors,
-        )
+        parsed.llm_calls, usage_errors = normalize_llm_call_observation(debug_payload.get("llm_calls"))
+        parsed.response_errors.extend(usage_errors)
         parsed.error_codes = parse_error_codes(debug_payload.get("error_codes"))
         parsed.validation_events = _parse_string_list(
             debug_payload.get("validation_events"),
@@ -393,22 +335,6 @@ def parse_agent_response(
             debug_payload.get("planner_errors"),
             label="debug.planner_errors",
             response_errors=parsed.response_errors,
-        )
-        if not parsed.models_used and parsed.llm_calls:
-            parsed.models_used = []
-            for llm_call in parsed.llm_calls:
-                response_metadata = llm_call.response_metadata
-                model_name_candidate = response_metadata.get("model_name") or response_metadata.get("model")
-                if model_name_candidate and model_name_candidate not in parsed.models_used:
-                    parsed.models_used.append(str(model_name_candidate))
-        parsed.model_usage_status = parse_model_usage_status(
-            debug_payload.get("model_usage_status"),
-            has_llm_usage=bool(
-                parsed.llm_calls
-                or parsed.models_used
-                or parsed.model_name
-                or (parsed.token_usage is not None and parsed.token_usage.total_tokens > 0)
-            ),
         )
         parsed.observed_hits = _parse_search_hits(
             debug_payload.get("observed_hits"),

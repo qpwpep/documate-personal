@@ -1,3 +1,4 @@
+from src.core.contracts.usage import LLMCallRecord, TokenUsage
 from tests.eval.response_fixtures import answer_provenance, sse_http_response
 from src.core.contracts.debug import DEBUG_SCHEMA_VERSION
 from tests.eval.response_fixtures import plain_response, slack_action
@@ -216,16 +217,11 @@ class BenchmarkCLIEnvResolutionTest(unittest.TestCase):
         """Canonical pricing charges mixed current and older calls at their respective model rates."""
         config = load_config(DEFAULT_BENCHMARK_CONFIG_PATH)
         cost = compute_cost_usd(
-            token_usage=None,
             llm_calls=[
-                {
-                    "response_metadata": {"model_name": "gpt-5.6-luna"},
-                    "usage_metadata": {"input_tokens": 2000, "output_tokens": 3000},
-                },
-                {
-                    "response_metadata": {"model_name": "gpt-5.4-nano"},
-                    "usage_metadata": {"input_tokens": 1000, "output_tokens": 2000},
-                },
+                LLMCallRecord(stage="synthesis", path="structured", model_name="gpt-5.6-luna",
+                              usage=TokenUsage(input_tokens=2000, output_tokens=3000)),
+                LLMCallRecord(stage="synthesis", path="structured", model_name="gpt-5.4-nano",
+                              usage=TokenUsage(input_tokens=1000, output_tokens=2000)),
             ],
             pricing=config.pricing,
         )
@@ -389,9 +385,6 @@ class BenchmarkCLIEnvResolutionTest(unittest.TestCase):
                     "missing_required_debug_fields": [],
                     "tool_calls": ["slack_notify"],
                     "tool_call_count": 1,
-                    "token_usage": {},
-                    "model_name": None,
-                    "models_used": [],
                     "llm_calls": [],
                     "errors": [],
                     "planner_errors": [],
