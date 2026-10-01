@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import math
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, field_validator, model_validator
 
 from src.core.slack_contract import RecipientSelector, SlackDefault
 
@@ -15,40 +15,27 @@ CaseScenario = Literal[
 ]
 
 
-class CaseWeightOverride(BaseModel):
-    answer_quality: float | None = Field(default=None, ge=0.0)
-    reference_coverage: float | None = Field(default=None, ge=0.0)
-    citation_traceability: float | None = Field(default=None, ge=0.0)
-    tool_choice: float | None = Field(default=None, ge=0.0)
-    format_language: float | None = Field(default=None, ge=0.0)
-    llm_judge: float | None = Field(default=None, ge=0.0)
+WeightKey = Literal[
+    "answer_quality", "reference_coverage", "citation_traceability",
+    "tool_choice", "format_language", "llm_judge",
+]
+WeightProfileId = Literal["general", "action_with_citations", "action_without_citations"]
 
-    @model_validator(mode="before")
-    @classmethod
-    def migrate_legacy_fields(cls, value: Any) -> Any:
-        if not isinstance(value, dict):
-            return value
-        payload = dict(value)
-        legacy_map = {
-            "tool_match": "tool_choice",
-            "content_constraints": "answer_quality",
-            "citation_compliance": "citation_traceability",
-            "safety_format": "format_language",
-        }
-        for legacy_key, new_key in legacy_map.items():
-            if new_key not in payload and legacy_key in payload:
-                payload[new_key] = payload.get(legacy_key)
-        return payload
 
-    @model_validator(mode="after")
-    def validate_finite(self) -> "CaseWeightOverride":
-        for key, value in self.model_dump(exclude_none=True).items():
-            if not math.isfinite(float(value)):
-                raise ValueError(f"weight_override.{key} must be a finite number")
-        return self
+def _validate_weight_value(value: Any) -> float:
+    if type(value) not in (int, float):
+        raise ValueError("weight must be an integer or float, without coercion")
+    try:
+        number = float(value)
+    except OverflowError as exc:
+        raise ValueError("weight must be a finite nonnegative number") from exc
+    if not math.isfinite(number) or number < 0:
+        raise ValueError("weight must be a finite nonnegative number")
+    return number
 
-    def as_partial_dict(self) -> dict[str, float]:
-        return {k: float(v) for k, v in self.model_dump(exclude_none=True).items()}
+
+WeightValue = Annotated[float, BeforeValidator(_validate_weight_value)]
+WeightOverride = dict[WeightKey, WeightValue]
 
 
 class SaveTarget(BaseModel):
@@ -118,7 +105,7 @@ class BenchmarkCase(BaseModel):
     require_local_citation: bool = False
     judge_rubric: str = ""
     judge_min_score: float | None = Field(default=None, ge=0.0, le=1.0)
-    weight_override: CaseWeightOverride | None = None
+    weight_override: WeightOverride | None = None
     save_expectation: SaveExpectation | None = None
     difficulty: Literal["easy", "medium", "hard"] | None = None
     evaluation_role: Literal["public_regression", "new_evaluation"] | None = None
@@ -210,32 +197,53 @@ class BenchmarkLiveSlackConfig(BaseModel):
 
 
 class ScoreWeights(BaseModel):
-    answer_quality: float = 0.20
-    reference_coverage: float = 0.20
-    citation_traceability: float = 0.20
-    tool_choice: float = 0.15
-    format_language: float = 0.05
-    llm_judge: float = 0.20
+    """A complete relative-weight vector; defaults belong to named profiles."""
 
-    @model_validator(mode="before")
-    @classmethod
-    def migrate_legacy_fields(cls, value: Any) -> Any:
-        if not isinstance(value, dict):
-            return value
-        payload = dict(value)
-        legacy_map = {
-            "tool_match": "tool_choice",
-            "content_constraints": "answer_quality",
-            "citation_compliance": "citation_traceability",
-            "safety_format": "format_language",
-        }
-        for legacy_key, new_key in legacy_map.items():
-            if new_key not in payload and legacy_key in payload:
-                payload[new_key] = payload.get(legacy_key)
-        return payload
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    answer_quality: WeightValue
+    reference_coverage: WeightValue
+    citation_traceability: WeightValue
+    tool_choice: WeightValue
+    format_language: WeightValue
+    llm_judge: WeightValue
+
+    @model_validator(mode="after")
+    def validate_total(self) -> "ScoreWeights":
+        total = sum(self.as_dict().values())
+        if not math.isfinite(total) or total <= 0:
+            raise ValueError("weight sum must be a positive finite number")
+        return self
 
     def as_dict(self) -> dict[str, float]:
         return self.model_dump()
+
+
+class WeightProfiles(BaseModel):
+    """The three fixed policies, with complete defaults per omitted profile."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    general: ScoreWeights = Field(default_factory=lambda: ScoreWeights(
+        answer_quality=0.20, reference_coverage=0.20, citation_traceability=0.20,
+        tool_choice=0.15, format_language=0.05, llm_judge=0.20,
+    ))
+    action_with_citations: ScoreWeights = Field(default_factory=lambda: ScoreWeights(
+        answer_quality=0.35, reference_coverage=0.10, citation_traceability=0.05,
+        tool_choice=0.25, format_language=0.10, llm_judge=0.15,
+    ))
+    action_without_citations: ScoreWeights = Field(default_factory=lambda: ScoreWeights(
+        answer_quality=0.40, reference_coverage=0.0, citation_traceability=0.0,
+        tool_choice=0.30, format_language=0.10, llm_judge=0.15,
+    ))
+
+    @field_validator("action_without_citations")
+    @classmethod
+    def validate_inapplicable_axes(cls, profile: ScoreWeights) -> ScoreWeights:
+        for axis in ("reference_coverage", "citation_traceability"):
+            if getattr(profile, axis) != 0:
+                raise ValueError(f"{axis} must be zero for action_without_citations")
+        return profile
 
 
 class HardGates(BaseModel):
@@ -289,7 +297,9 @@ class JudgeSubscoreMinConfig(BaseModel):
 
 
 class BenchmarkConfig(BaseModel):
-    weights: ScoreWeights = Field(default_factory=ScoreWeights)
+    model_config = ConfigDict(extra="forbid")
+
+    weights: WeightProfiles = Field(default_factory=WeightProfiles)
     hard_gates: HardGates = Field(default_factory=HardGates)
     pricing: Pricing = Field(default_factory=Pricing)
     judge_min_score: JudgeMinScoreConfig = Field(default_factory=JudgeMinScoreConfig)

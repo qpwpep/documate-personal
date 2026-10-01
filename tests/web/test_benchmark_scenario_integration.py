@@ -20,7 +20,7 @@ from src.core.request_contracts import WireRequestContract
 from src.eval.config_models import BenchmarkCase, BenchmarkConfig
 from src.eval.io import load_cases_jsonl
 from src.eval.judge_llm import LLMJudge
-from src.eval.online_runner import _run_single_case
+from tests.eval.runner_helpers import run_case_with_weights as _run_single_case
 from src.eval.release_dataset import load_reviewed_release
 from src.eval.reporting.summary import build_summary
 from src.eval.save_outcomes import revalidate_saved_artifacts

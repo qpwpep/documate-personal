@@ -238,7 +238,9 @@ class RunSummary(BaseModel):
     analysis: AnalysisStats | None = None
     gates: list[GateResult]
     overall_passed: bool
-    weights: dict[str, float]
+    # Saved snapshots, not current input models: historical axes remain readable.
+    weights: dict[str, float] | None = None
+    weight_profiles: dict[str, dict[str, float]] | None = None
     hard_gates: dict[str, float | int | None]
     pricing: dict[str, Any]
     judge_enabled: bool

@@ -14,7 +14,7 @@ from src.core.answer_schema import export_answer_text
 from src.core.conversation_memory import DEFAULT_QUERY_MAX_CHARS
 from src.eval.config_models import BenchmarkCase, BenchmarkConfig
 from src.eval.judge_llm import LLMJudge
-from src.eval.online_runner import _run_single_case
+from tests.eval.runner_helpers import run_case_with_weights as _run_single_case
 from src.infra.settings import AppSettings
 
 

@@ -14,9 +14,9 @@ from langchain_core.messages import AIMessage
 
 from src.eval.config_models import BenchmarkCase, BenchmarkConfig
 from src.eval.judge_llm import LLMJudge
-from src.eval.online_runner import _run_single_case
+from tests.eval.runner_helpers import run_case_with_weights as _run_single_case
 from src.eval.online_runner.response_parser import ParsedResponseData
-from src.eval.online_runner.result_builder import build_case_result
+from tests.eval.runner_helpers import build_result_with_weights as build_case_result
 from src.eval.judge_llm import JudgeScoreOutcome
 from src.eval.reporting.histograms import build_analysis
 from src.eval.result_models import JudgeSubscores

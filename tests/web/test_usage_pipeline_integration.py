@@ -8,7 +8,7 @@ from langchain_core.messages import AIMessage
 
 from src.eval.config_models import BenchmarkCase, BenchmarkConfig, ModelPricing, Pricing
 from src.eval.judge_llm import LLMJudge
-from src.eval.online_runner import _run_single_case
+from tests.eval.runner_helpers import run_case_with_weights as _run_single_case
 from src.eval.reporting.summary import build_summary
 from tests.web.test_agent_stream_integration import agent_server
 from tests.web.test_multi_upload_api import LocalChatModel

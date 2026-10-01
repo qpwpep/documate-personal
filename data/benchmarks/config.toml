@@ -1,10 +1,26 @@
-[weights]
+[weights.general]
 answer_quality = 0.20
 reference_coverage = 0.20
 citation_traceability = 0.20
 tool_choice = 0.15
 format_language = 0.05
 llm_judge = 0.20
+
+[weights.action_with_citations]
+answer_quality = 0.35
+reference_coverage = 0.10
+citation_traceability = 0.05
+tool_choice = 0.25
+format_language = 0.10
+llm_judge = 0.15
+
+[weights.action_without_citations]
+answer_quality = 0.40
+reference_coverage = 0.0
+citation_traceability = 0.0
+tool_choice = 0.30
+format_language = 0.10
+llm_judge = 0.15
 
 [hard_gates]
 pass_rate = 0.90

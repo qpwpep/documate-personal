@@ -14,7 +14,8 @@ from src.core.answer_schema import export_answer_text
 from src.core.contracts.debug import DebugPayload
 from src.eval.config_models import BenchmarkCase, BenchmarkConfig
 from src.eval.judge_llm import LLMJudge
-from src.eval.online_runner import _run_single_case, run_online_benchmark
+from src.eval.online_runner import run_online_benchmark
+from tests.eval.runner_helpers import run_case_with_weights as _run_single_case
 from tests.eval.response_fixtures import canonical_llm_call, answer_provenance, execution_evidence, plain_response, sse_http_response
 
 

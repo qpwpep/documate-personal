@@ -12,11 +12,18 @@ from .config_models import BenchmarkCase, BenchmarkConfig
 
 def load_cases_jsonl(path: Path) -> list[BenchmarkCase]:
     cases: list[BenchmarkCase] = []
-    for line in path.read_text(encoding="utf-8").splitlines():
+    for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
         record = line.strip()
         if not record:
             continue
-        cases.append(BenchmarkCase.model_validate_json(record))
+        context = f"{path}:{line_number}"
+        try:
+            payload = json.loads(record)
+            if isinstance(payload, dict) and "case_id" in payload:
+                context += f" (case {payload['case_id']!r})"
+            cases.append(BenchmarkCase.model_validate(payload))
+        except ValueError as exc:
+            raise ValueError(f"{context}: {exc}") from exc
     return cases
 
 
@@ -34,15 +41,15 @@ def dump_jsonl(path: Path, records: list[BaseModel | dict[str, Any]]) -> None:
 
 def load_config(path: Path) -> BenchmarkConfig:
     data = tomllib.loads(path.read_text(encoding="utf-8"))
-
-    config_payload: dict[str, Any] = {
-        "weights": data.get("weights", {}),
-        "hard_gates": data.get("hard_gates", {}),
-        "pricing": data.get("pricing", {}),
-        "judge_min_score": data.get("judge_min_score", {}),
-        "judge_min_subscores": data.get("judge_min_subscores", {}),
-        "judge_model": data.get("runtime", {}).get("judge_model", "gpt-5.6-luna"),
-        "judge_enabled": data.get("runtime", {}).get("judge_enabled", True),
-        "request_timeout_seconds": data.get("runtime", {}).get("request_timeout_seconds", 60),
-    }
-    return BenchmarkConfig(**config_payload)
+    sections = {"weights", "hard_gates", "pricing", "judge_min_score", "judge_min_subscores", "runtime"}
+    unknown_sections = data.keys() - sections
+    if unknown_sections:
+        raise ValueError("Unknown benchmark config sections: " + ", ".join(sorted(unknown_sections)))
+    runtime = data.get("runtime", {})
+    if not isinstance(runtime, dict):
+        raise ValueError("runtime must be a TOML table")
+    unknown_runtime = runtime.keys() - {"judge_model", "judge_enabled", "request_timeout_seconds"}
+    if unknown_runtime:
+        raise ValueError("Unknown runtime config keys: " + ", ".join(sorted(unknown_runtime)))
+    config_payload = {key: value for key, value in data.items() if key != "runtime"}
+    return BenchmarkConfig.model_validate({**config_payload, **runtime})

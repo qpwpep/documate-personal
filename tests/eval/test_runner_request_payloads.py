@@ -13,7 +13,8 @@ from unittest.mock import patch
 
 from src.eval.config_models import BenchmarkCase, BenchmarkConfig, BenchmarkLiveSlackConfig
 from src.eval.judge_llm import LLMJudge
-from src.eval.online_runner import _run_single_case, run_online_benchmark
+from src.eval.online_runner import run_online_benchmark
+from tests.eval.runner_helpers import run_case_with_weights as _run_single_case
 from src.eval.main import resolve_live_slack_dm_recipient
 from src.eval.online_runner.scenario_inputs import case_context
 from src.app.client import build_agent_payload

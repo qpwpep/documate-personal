@@ -14,7 +14,8 @@ from src.eval.config_models import BenchmarkCase, BenchmarkConfig
 from src.eval.io import dump_jsonl
 from src.eval.judge_llm import LLMJudge
 from src.eval.main import command_report
-from src.eval.online_runner import _run_single_case, run_online_benchmark
+from src.eval.online_runner import run_online_benchmark
+from tests.eval.runner_helpers import run_case_with_weights as _run_single_case
 from src.eval.reporting.writer import load_run_outputs
 from tests.eval.response_fixtures import canonical_llm_call, answer_provenance, execution_evidence, plain_response, sse_http_response
 
@@ -279,7 +280,7 @@ def test_online_rejects_unproven_inputs_without_losing_the_answer_or_usage(defec
 def test_result_builder_rejects_a_declared_provenance_mismatch_without_citation_requirements():
     """Any explicitly supplied invalid provenance prevents release success, including source-free action cases."""
     from src.eval.online_runner.response_parser import parse_agent_response
-    from src.eval.online_runner.result_builder import build_case_result
+    from tests.eval.runner_helpers import build_result_with_weights as build_case_result
 
     payload = response_payload()
     payload["debug"]["answer_provenance"]["response_hash"] = "different-answer"

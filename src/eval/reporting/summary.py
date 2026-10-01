@@ -23,9 +23,9 @@ _AUDIT_HIGH_RULE_LOW_JUDGE_DIVERGENCE_CEILING = 0.10
 _HIGH_RULE_LOW_JUDGE_DIVERGENCE_MARGIN = 0.35
 EXECUTION_CONTRACT_VERSION = "shared-client-scenario-v1"
 MEASUREMENT_CONTRACT_VERSION = "llm-usage-scenario-v2"
-# v2: judge outcome is a hard release gate; missing scores no longer
-# renormalize into a composite; every category has explicit judge minimums.
-SCORING_CONTRACT_VERSION = "execution-policy-contract-v4"
+# Weight profiles are fixed before execution; pure actions exclude citation axes.
+# This scoring contract establishes its own comparison baseline.
+SCORING_CONTRACT_VERSION = "weight-profiles-v5"
 
 
 def _fingerprint(value: Any) -> str:
@@ -539,7 +539,7 @@ def build_summary(
         analysis=analysis,
         gates=gates,
         overall_passed=release_decision.passed,
-        weights=config.weights.as_dict(),
+        weight_profiles=config.weights.model_dump(mode="json"),
         hard_gates=config.hard_gates.model_dump(),
         pricing=config.pricing.model_dump(),
         judge_enabled=config.judge_enabled,

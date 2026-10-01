@@ -9,7 +9,7 @@ import pytest
 from src.eval.config_models import BenchmarkCase, BenchmarkConfig
 from src.core.contracts.debug import DEBUG_SCHEMA_VERSION
 from src.eval.judge_llm import LLMJudge
-from src.eval.online_runner import _run_single_case
+from tests.eval.runner_helpers import run_case_with_weights as _run_single_case
 from src.eval.reporting import build_markdown_report
 from src.eval.summary_models import GateResult, RunSummary, SummaryStats
 

@@ -159,11 +159,11 @@ def test_provenance_scoring_starts_a_new_baseline_without_relabeling_history() -
     assert "scoring_contract_version" not in previous.audit_metrics
 
 
-def test_summary_identifies_the_judge_state_scoring_contract() -> None:
+def test_summary_identifies_the_weight_profile_scoring_contract() -> None:
     """Persisted results identify the scoring semantics without changing timing contracts."""
     payload = json.loads(_summary().model_dump_json())
 
-    assert payload["audit_metrics"]["scoring_contract_version"] == "execution-policy-contract-v4"
+    assert payload["audit_metrics"]["scoring_contract_version"] == "weight-profiles-v5"
 
 
 def test_history_artifacts_identify_new_timing_baseline(tmp_path: Path) -> None:

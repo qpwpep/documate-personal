@@ -8,7 +8,7 @@ import pytest
 
 from src.eval.config_models import BenchmarkConfig
 from src.eval.online_runner.response_parser import parse_agent_response
-from src.eval.online_runner.result_builder import build_case_result
+from tests.eval.runner_helpers import build_result_with_weights as build_case_result
 from src.eval.reporting.summary import build_summary
 from src.eval.result_models import CaseResult, ScenarioTurnResult
 from tests.eval.test_release_eval_contract import (
