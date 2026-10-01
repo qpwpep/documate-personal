@@ -9,13 +9,13 @@ from src.core.documents import DocumentElement, build_snapshot
 from src.core.evidence import RetrievalScore, SearchHit, build_evidence
 from src.core.planner_schema import PlannerOutput, RetrievalRequirement, RetrievalTask
 from src.core.request_contracts import RequestContract
-from src.runtime.nodes.synthesis.budgets import SynthesisBudgetProfile, resolve_synthesis_budget_profile
+from src.runtime.nodes.synthesis.budgets import RetrievedEvidenceBudget, resolve_evidence_budgets
 from src.runtime.nodes.synthesis.context import build_synthesis_context, prepare_synthesis_inputs
-from src.runtime.nodes.synthesis.evidence_selection import select_evidence_hits
-from src.runtime.nodes.synthesis.evidence_selection import select_evidence_packet
+from src.runtime.nodes.synthesis.evidence_selection import select_evidence_hits, select_evidence_packet
 from src.runtime.nodes.validation.assessment import assess_validation
 from src.runtime.nodes.validation.node import make_post_synthesis_validation_node
 from src.runtime.nodes.validation.snapshot import build_validation_snapshot
+from tests.synthesis_fixtures import synthesis_excerpt_limits
 
 
 def _task(library, aspect):
@@ -48,8 +48,8 @@ def _prepare(tasks, hits, *, budget=6000, snippet=960, max_items=6):
     context = build_synthesis_context(state=state)
     prepared = prepare_synthesis_inputs(
         state=state, context=context,
-        budget_profile=SynthesisBudgetProfile("docs", snippet, budget, max_items),
-        max_turns=6, prompt_snippet_char_limit=snippet, prompt_evidence_char_budget=budget,
+        budget=RetrievedEvidenceBudget(max_excerpt_chars=snippet, max_total_excerpt_chars=budget, max_items=max_items),
+        max_turns=6,
     )
     raw = str(prepared.model_messages[-1].content)
     packet = json.loads(raw[raw.index("[", len("[Evidence Packet]")):])
@@ -144,7 +144,8 @@ def test_one_complete_source_can_support_multiple_requirements_without_duplicate
     hit = _hit(order, "order controls traversal. copy controls allocation.")
 
     packet, requirement_ids = select_evidence_packet(
-        [hit.evidence], max_items=1, snippet_char_limit=960, evidence_char_budget=len(hit.evidence.excerpt),
+        [hit.evidence],
+        budget=RetrievedEvidenceBudget(max_excerpt_chars=960, max_total_excerpt_chars=len(hit.evidence.excerpt), max_items=1),
         requirements_by_evidence={hit.evidence.id: [order, copy]},
     )
 
@@ -208,15 +209,15 @@ def test_ten_file_comparison_preserves_sources_without_increasing_text_budget():
     file_ids = [f"file-{index}" for index in range(10)]
     task = RetrievalTask(route="upload", query="compare the setup", k=4, requirement={"file_ids": file_ids})
     plan = PlannerOutput(use_retrieval=True, tasks=[task])
-    profile = resolve_synthesis_budget_profile(user_input=task.query, planner_output=plan, snippet_char_limit=960)
+    profile, _ = resolve_evidence_budgets(plan=plan, limits=synthesis_excerpt_limits(normal_chars=960))
     hits = [_upload_hit(task, file_id, "setup = 123\n" * 100, rank=index + 1) for index, file_id in enumerate(file_ids)]
 
-    prepared, _ = _prepare([task], hits, budget=600, snippet=960, max_items=profile.max_evidence_items)
+    prepared, _ = _prepare([task], hits, budget=600, snippet=960, max_items=profile.max_items)
 
     assert len(prepared.evidence_packet) == 10
     assert {item.element.metadata["file_id"] for item in prepared.evidence_packet} == set(file_ids)
     assert sum(len(item.excerpt) for item in prepared.evidence_packet) <= 600
-    assert profile.evidence_chars == 6000
+    assert profile.max_total_excerpt_chars == 6000
 
 
 def test_missing_comparison_file_is_visible_in_model_coverage():
@@ -269,12 +270,12 @@ def test_repeated_file_sets_preserve_each_independent_requirement_in_the_default
                            requirement={"file_ids": file_ids, "symbols": [symbol], "match": "definition"})
              for symbol in ("setup", "cleanup")]
     plan = PlannerOutput(use_retrieval=True, tasks=tasks)
-    profile = resolve_synthesis_budget_profile(user_input="compare", planner_output=plan, snippet_char_limit=1800)
+    profile, _ = resolve_evidence_budgets(plan=plan, limits=synthesis_excerpt_limits(normal_chars=1800))
     hits = [_upload_hit(task, file_id, f"def {task.requirement.symbols[0]}():\n    return {index}\n")
             for task in tasks for index, file_id in enumerate(file_ids)]
 
-    prepared, _ = _prepare(tasks, hits, max_items=profile.max_evidence_items,
-                           budget=profile.evidence_chars, snippet=profile.snippet_chars)
+    prepared, _ = _prepare(tasks, hits, max_items=profile.max_items,
+                           budget=profile.max_total_excerpt_chars, snippet=profile.max_excerpt_chars)
 
     assert all(not record["coverage"]["is_partial"] for record in _prompt_requirements(prepared))
     result = finalize_answer(text_document("The implementations differ.", basis="inference",
@@ -299,10 +300,9 @@ def test_required_aspects_precede_optional_neighboring_context_across_files():
                                       "aspects": ["setup", "cleanup"], "match": "definition"})
     text = "def run():\n    setup()\n" + "    unrelated()\n" * 80 + "    cleanup()\n"
     hits = [_upload_hit(task, file_id, text) for file_id in file_ids]
-    profile = resolve_synthesis_budget_profile(
-        user_input=task.query, planner_output=PlannerOutput(use_retrieval=True, tasks=[task]), snippet_char_limit=1800)
+    profile, _ = resolve_evidence_budgets(plan=PlannerOutput(use_retrieval=True, tasks=[task]), limits=synthesis_excerpt_limits(normal_chars=1800))
 
-    prepared, _ = _prepare([task], hits, max_items=profile.max_evidence_items, budget=400, snippet=1800)
+    prepared, _ = _prepare([task], hits, max_items=profile.max_items, budget=400, snippet=1800)
 
     assert _prompt_requirements(prepared)[0]["coverage"]["missing_aspects_by_file"] == {
         file_id: [] for file_id in file_ids}

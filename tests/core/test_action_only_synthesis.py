@@ -8,6 +8,7 @@ from src.core.evidence import build_evidence
 from src.core.planner_schema import PlannerOutput, RetrievalTask
 from src.core.request_contracts import ActionContract, ActionRequest, BoundAnswerReference, CopyAnswerBody, ContractEvidence, RequestContract
 from src.runtime.nodes.synthesis import make_synthesize_node
+from tests.synthesis_fixtures import synthesis_excerpt_limits
 
 
 class ModelBoundary:
@@ -30,13 +31,13 @@ def _state(query, **kwargs):
 
 def test_save_without_previous_response_generates_current_document():
     """Saving without an earlier answer still produces a self-contained body in this turn."""
-    updates = make_synthesize_node(ModelBoundary())(_state("save this answer to txt"))
+    updates = make_synthesize_node(ModelBoundary(), excerpt_limits=synthesis_excerpt_limits())(_state("save this answer to txt"))
     assert export_answer_text(updates["response"].result) == "현재 전달할 답변입니다."
 
 
 def test_missing_slack_destination_preserves_the_generated_body_for_actions():
     """A destination supplement is handled after producing the body that will be delivered."""
-    updates = make_synthesize_node(ModelBoundary())(_state(
+    updates = make_synthesize_node(ModelBoundary(), excerpt_limits=synthesis_excerpt_limits())(_state(
         "send this to slack", request_contract=RequestContract(
             actions=ActionContract(slack_notify=ActionRequest(intent="requested", evidence_ids=("r1",))),
             evidence=(ContractEvidence(id="r1", turn_id="current", quote="send this to slack", scope="actions.slack_notify", interpretation="instruction"),),
@@ -60,7 +61,7 @@ def test_saving_previous_response_preserves_its_body_and_source_revision():
         text_document("The value is 3.", basis="source", refs=[evidence.id]), [evidence],
         actions=[ActionReceipt(kind="save_text", status="success", file_path="old.txt")],
     )
-    updates = make_synthesize_node(ModelBoundary(unavailable=True))(_state(
+    updates = make_synthesize_node(ModelBoundary(unavailable=True), excerpt_limits=synthesis_excerpt_limits())(_state(
         "save this answer to txt", previous_response=previous,
         request_contract=RequestContract(body=CopyAnswerBody(source=BoundAnswerReference(ref="previous", response_hash=previous.content_hash))),
     ))
@@ -77,5 +78,5 @@ def test_retrieval_plan_is_not_short_circuited_by_save_wording():
     """A request for new source analysis does not silently reuse the previous answer."""
     state = _state("항목을 확인해서 저장해줘", previous_response=finalize_answer(text_document("previous"), []))
     state["planner"] = PlannerState(output=PlannerOutput(use_retrieval=True, tasks=[RetrievalTask(route="upload", query="항목", k=4)]))
-    result = make_synthesize_node(ModelBoundary())(state)["response"].result
+    result = make_synthesize_node(ModelBoundary(), excerpt_limits=synthesis_excerpt_limits())(state)["response"].result
     assert export_answer_text(result) == "현재 전달할 답변입니다."

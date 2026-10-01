@@ -2,40 +2,61 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from src.core.planner_schema import MAX_PLANNER_TASKS, PlannerOutput
+from src.core.planner_schema import PlannerOutput, RetrievalTask
+
+
+# Empirical selection policy, not measured model-context limits. The pairs are
+# normal/compact sums of Python string lengths for newly retrieved excerpts.
+_DEFAULT_TOTAL_CHARS = (6000, 3000)
+_MIXED_ROUTE_TOTAL_CHARS = (8000, 4000)
+_BASE_ITEM_CAPACITY = 8
 
 
 @dataclass(frozen=True, slots=True)
-class SynthesisBudgetProfile:
-    category: str
-    snippet_chars: int
-    evidence_chars: int
-    max_evidence_items: int
+class ExcerptLimits:
+    """Configured per-excerpt character limits; settings owns defaults and validation."""
+
+    normal_chars: int
+    compact_chars: int
 
 
-def resolve_synthesis_budget_profile(
-    *, user_input: str, planner_output: PlannerOutput, snippet_char_limit: int,
-) -> SynthesisBudgetProfile:
-    routes = {task.route for task in planner_output.tasks} if planner_output.use_retrieval else set()
-    hybrid = {"docs", "upload"}.issubset(routes)
-    category = "hybrid" if hybrid else next(iter(routes), "general")
-    required_passages = sum(max(1, len(task.requirement.file_ids)) * max(1, len(task.requirement.aspects))
-                            for task in planner_output.tasks)
-    # Saving or sending a researched answer does not reduce its evidence budget.
-    return SynthesisBudgetProfile(
-        category=category,
-        snippet_chars=snippet_char_limit,
-        evidence_chars=8000 if hybrid else 6000,
-        max_evidence_items=max(MAX_PLANNER_TASKS, required_passages),
+@dataclass(frozen=True, slots=True)
+class RetrievedEvidenceBudget:
+    """Selection ceilings for retrieved excerpts, excluding inherited citations.
+
+    Character limits count Python string lengths, not bytes or model tokens.
+    Prompt metadata, history, bound source answers and output tokens are outside
+    this budget. Item capacity permits coverage attempts; it does not guarantee
+    that every required passage fits the shared character limit.
+    """
+
+    max_excerpt_chars: int
+    max_total_excerpt_chars: int
+    max_items: int
+
+
+def requirement_passage_targets(task: RetrievalTask) -> list[tuple[str | None, str | None]]:
+    """Expand explicit files and literal aspects in their existing selection order."""
+    return [(file_id, aspect)
+            for file_id in task.requirement.file_ids or [None]
+            for aspect in task.requirement.aspects or [None]]
+
+
+def resolve_evidence_budgets(
+    *, plan: PlannerOutput, limits: ExcerptLimits,
+) -> tuple[RetrievedEvidenceBudget, RetrievedEvidenceBudget]:
+    """Resolve normal and timeout-recovery budgets once from the retrieval plan.
+
+    Saving or sending a researched answer does not reduce its evidence budget.
+    Compact totals are fixed recovery policy, independently of normal totals.
+    """
+    routes = {task.route for task in plan.tasks} if plan.use_retrieval else set()
+    normal_total, compact_total = (
+        _MIXED_ROUTE_TOTAL_CHARS if {"docs", "upload"}.issubset(routes) else _DEFAULT_TOTAL_CHARS
     )
-
-
-def compact_synthesis_budget_profile(
-    profile: SynthesisBudgetProfile, *, snippet_char_limit: int,
-) -> SynthesisBudgetProfile:
-    return SynthesisBudgetProfile(
-        category=profile.category,
-        snippet_chars=min(profile.snippet_chars, snippet_char_limit),
-        evidence_chars=max(800, profile.evidence_chars // 2),
-        max_evidence_items=profile.max_evidence_items,
+    required_passages = sum(len(requirement_passage_targets(task)) for task in plan.tasks)
+    max_items = max(_BASE_ITEM_CAPACITY, required_passages)
+    return (
+        RetrievedEvidenceBudget(limits.normal_chars, normal_total, max_items),
+        RetrievedEvidenceBudget(min(limits.normal_chars, limits.compact_chars), compact_total, max_items),
     )

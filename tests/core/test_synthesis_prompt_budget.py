@@ -5,10 +5,10 @@ from hypothesis import given, strategies as st
 
 from src.core.documents import DocumentElement, TableCell, TableData, build_snapshot
 from src.core.evidence import build_evidence
-from src.core.planner_schema import PlannerOutput, RetrievalRequirement, RetrievalTask
-from src.runtime.nodes.synthesis.budgets import resolve_synthesis_budget_profile
+from src.core.planner_schema import RetrievalRequirement, RetrievalTask
 from src.runtime.nodes.synthesis.prompt_builder import build_synthesis_messages
-from src.runtime.nodes.synthesis.evidence_selection import prepare_evidence_packet
+from src.runtime.nodes.synthesis.budgets import RetrievedEvidenceBudget
+from src.runtime.nodes.synthesis.evidence_selection import select_evidence_packet
 from src.core.contracts.boundary.graph import build_graph_state_input
 
 
@@ -23,7 +23,10 @@ def evidence(text, *, source="upload"):
 def test_prompt_budget_changes_the_actual_reference_range_and_preserves_code():
     """A shortened prompt reference resolves to precisely its visible original source range."""
     original = evidence("def run():\n    retries = 3\n    return retries\n")
-    packet = prepare_evidence_packet([original], max_items=6, snippet_char_limit=26, evidence_char_budget=26)
+    packet, _ = select_evidence_packet(
+        [original],
+        budget=RetrievedEvidenceBudget(max_excerpt_chars=26, max_total_excerpt_chars=26, max_items=6),
+    )
     assert len(packet) == 1
     selected = packet[0]
     assert selected.id != original.id
@@ -44,22 +47,21 @@ def test_prompt_budget_changes_the_actual_reference_range_and_preserves_code():
 
 def test_zero_remaining_budget_never_expands_to_the_full_source():
     """An exhausted evidence budget excludes source text instead of accidentally disabling truncation."""
-    assert prepare_evidence_packet([evidence("private source" )], max_items=6, snippet_char_limit=100, evidence_char_budget=0) == []
+    packet, _ = select_evidence_packet(
+        [evidence("private source" )],
+        budget=RetrievedEvidenceBudget(max_excerpt_chars=100, max_total_excerpt_chars=0, max_items=6),
+    )
+    assert packet == []
 
 
 def test_source_packet_can_contain_multiple_parts_of_a_document():
     """The answer may use more than two original ranges when the evidence budget allows it."""
     entries = [evidence(f"setting_{number} = {number}\n") for number in range(5)]
-    packet = prepare_evidence_packet(entries, max_items=6, snippet_char_limit=100, evidence_char_budget=1000)
+    packet, _ = select_evidence_packet(
+        entries,
+        budget=RetrievedEvidenceBudget(max_excerpt_chars=100, max_total_excerpt_chars=1000, max_items=6),
+    )
     assert packet == entries
-
-
-def test_saving_a_researched_answer_keeps_the_retrieval_budget():
-    """A save request does not discard supporting material from the answer being saved."""
-    planner = PlannerOutput(use_retrieval=True, tasks=[RetrievalTask(route="docs", query="settings", k=4)])
-    normal = resolve_synthesis_budget_profile(user_input="Explain settings", planner_output=planner, snippet_char_limit=1800)
-    save = resolve_synthesis_budget_profile(user_input="Explain settings and save to txt", planner_output=planner, snippet_char_limit=1800)
-    assert save == normal
 
 
 def test_selected_table_cells_reach_generation_with_their_structure():
@@ -104,8 +106,9 @@ def test_parameter_explanation_survives_document_prefix_length(boilerplate_block
     )
     original = build_evidence(snapshot=snapshot, element=DocumentElement(element_id="body", kind="paragraph", text=text))
 
-    packet = prepare_evidence_packet(
-        [original], max_items=6, snippet_char_limit=960, evidence_char_budget=6000,
+    packet, _ = select_evidence_packet(
+        [original],
+        budget=RetrievedEvidenceBudget(max_excerpt_chars=960, max_total_excerpt_chars=6000, max_items=6),
         query="NumPy numpy.reshape order parameter official documentation",
     )
 
@@ -130,8 +133,10 @@ def test_query_selection_never_reads_outside_the_retrieved_source_range():
         snapshot=snapshot, element=DocumentElement(element_id="body", kind="paragraph", text=text),
         start=start,
     )
-    packet = prepare_evidence_packet(
-        [original], max_items=1, snippet_char_limit=25, evidence_char_budget=25, query="order policy",
+    packet, _ = select_evidence_packet(
+        [original],
+        budget=RetrievedEvidenceBudget(max_excerpt_chars=25, max_total_excerpt_chars=25, max_items=1),
+        query="order policy",
     )
 
     assert len(packet) == 1
@@ -142,7 +147,10 @@ def test_query_selection_never_reads_outside_the_retrieved_source_range():
 def test_partial_source_range_is_explicit_in_the_model_packet():
     """A model can distinguish a partial selection from the complete captured source."""
     original = evidence("def run():\n    retries = 3\n    return retries\n")
-    packet = prepare_evidence_packet([original], max_items=1, snippet_char_limit=26, evidence_char_budget=26)
+    packet, _ = select_evidence_packet(
+        [original],
+        budget=RetrievedEvidenceBudget(max_excerpt_chars=26, max_total_excerpt_chars=26, max_items=1),
+    )
     messages, _, _ = build_synthesis_messages(
         state=build_graph_state_input(user_input="Explain run"), action_rules=[],
         evidence_packet=packet, attempt=1, max_turns=6,
@@ -174,9 +182,11 @@ def test_specific_code_aspect_preserves_the_complete_statement_near_a_long_funct
         requirement=RetrievalRequirement(symbols=["persist"], aspects=["commit_changes"]),
     )
 
-    packet = prepare_evidence_packet(
-        [original], max_items=1, snippet_char_limit=200, evidence_char_budget=200,
-        query=task.query, requirements_by_evidence={original.id: [task]},
+    packet, _ = select_evidence_packet(
+        [original],
+        budget=RetrievedEvidenceBudget(max_excerpt_chars=200, max_total_excerpt_chars=200, max_items=1),
+        query=task.query,
+        requirements_by_evidence={original.id: [task]},
     )
 
     assert len(packet) == 1
@@ -212,9 +222,11 @@ def test_ast_definition_end_before_a_line_ending_keeps_the_last_requested_call(n
     assert result.answerability == "covered"
     assert source[original.selection.end:].startswith(newline)
 
-    packet = prepare_evidence_packet(
-        [original], max_items=1, snippet_char_limit=200, evidence_char_budget=200,
-        query=task.query, requirements_by_evidence={original.id: [task]},
+    packet, _ = select_evidence_packet(
+        [original],
+        budget=RetrievedEvidenceBudget(max_excerpt_chars=200, max_total_excerpt_chars=200, max_items=1),
+        query=task.query,
+        requirements_by_evidence={original.id: [task]},
     )
 
     assert len(packet) == 1
@@ -241,9 +253,11 @@ def test_long_code_line_keeps_its_related_partial_range(newline, clipped):
     task = RetrievalTask(route="upload", query="Explain target_call", k=1,
                          requirement={"aspects": ["target_call"]})
 
-    packet = prepare_evidence_packet(
-        [original], max_items=1, snippet_char_limit=80, evidence_char_budget=80,
-        query=task.query, requirements_by_evidence={original.id: [task]},
+    packet, _ = select_evidence_packet(
+        [original],
+        budget=RetrievedEvidenceBudget(max_excerpt_chars=80, max_total_excerpt_chars=80, max_items=1),
+        query=task.query,
+        requirements_by_evidence={original.id: [task]},
     )
 
     assert len(packet) == 1
@@ -266,9 +280,11 @@ def test_related_partial_line_precedes_an_unrelated_complete_line(language):
     task = RetrievalTask(route="upload", query="Explain PROMPT", k=1,
                          requirement={"aspects": ["PROMPT"]})
 
-    packet = prepare_evidence_packet(
-        [original], max_items=1, snippet_char_limit=80, evidence_char_budget=80,
-        query=task.query, requirements_by_evidence={original.id: [task]},
+    packet, _ = select_evidence_packet(
+        [original],
+        budget=RetrievedEvidenceBudget(max_excerpt_chars=80, max_total_excerpt_chars=80, max_items=1),
+        query=task.query,
+        requirements_by_evidence={original.id: [task]},
     )
 
     assert len(packet) == 1
@@ -291,9 +307,11 @@ def test_partial_code_selection_preserves_an_available_anchor_within_its_source(
                               start=len("unselected_prefix"), end=len(text) - len("unselected_suffix"))
     task = RetrievalTask(route="upload", query="target_call", k=1, requirement={"aspects": ["target_call"]})
 
-    packet = prepare_evidence_packet(
-        [original], max_items=1, snippet_char_limit=budget, evidence_char_budget=budget,
-        query=task.query, requirements_by_evidence={original.id: [task]},
+    packet, _ = select_evidence_packet(
+        [original],
+        budget=RetrievedEvidenceBudget(max_excerpt_chars=budget, max_total_excerpt_chars=budget, max_items=1),
+        query=task.query,
+        requirements_by_evidence={original.id: [task]},
     )
 
     assert len(packet) == 1
@@ -312,9 +330,11 @@ def test_partial_code_keeps_a_literal_anchor_across_source_lines():
     original = evidence(text)
     task = RetrievalTask(route="upload", query="target call", k=1, requirement={"aspects": ["target call"]})
 
-    packet = prepare_evidence_packet(
-        [original], max_items=1, snippet_char_limit=80, evidence_char_budget=80,
-        query=task.query, requirements_by_evidence={original.id: [task]},
+    packet, _ = select_evidence_packet(
+        [original],
+        budget=RetrievedEvidenceBudget(max_excerpt_chars=80, max_total_excerpt_chars=80, max_items=1),
+        query=task.query,
+        requirements_by_evidence={original.id: [task]},
     )
 
     assert len(packet) == 1
@@ -329,9 +349,11 @@ def test_topic_selection_keeps_the_requested_suffix_of_a_qualified_identifier():
     original = evidence(text)
     task = RetrievalTask(route="upload", query="target_call", k=1)
 
-    packet = prepare_evidence_packet(
-        [original], max_items=1, snippet_char_limit=24, evidence_char_budget=24,
-        query=task.query, requirements_by_evidence={original.id: [task]},
+    packet, _ = select_evidence_packet(
+        [original],
+        budget=RetrievedEvidenceBudget(max_excerpt_chars=24, max_total_excerpt_chars=24, max_items=1),
+        query=task.query,
+        requirements_by_evidence={original.id: [task]},
     )
 
     assert len(packet) == 1

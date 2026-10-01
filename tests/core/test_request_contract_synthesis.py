@@ -10,6 +10,7 @@ from src.core.request_contracts import (
 from src.runtime.nodes.synthesis import make_synthesize_node
 from src.runtime.nodes.validation import make_post_synthesis_validation_node
 from tests.core.test_synthesis_validation import _hit, _state as retrieval_state
+from tests.synthesis_fixtures import synthesis_excerpt_limits
 
 
 class ModelBoundary:
@@ -45,7 +46,7 @@ def test_transform_uses_bound_document_and_returns_three_new_lines():
     model = ModelBoundary()
     state = _state(contract, "방금 답변을 세 줄로 줄여 저장해줘", previous)
 
-    state.update(make_synthesize_node(model)(state))
+    state.update(make_synthesize_node(model, excerpt_limits=synthesis_excerpt_limits())(state))
     state.update(make_post_synthesis_validation_node(False)(state))
 
     assert export_answer_text(state["response"].result) == "첫 줄\n둘째 줄\n셋째 줄"
@@ -61,7 +62,7 @@ def test_raw_words_do_not_add_requirements_absent_from_contract():
     model = ModelBoundary(text_document("요청한 설명입니다."))
     state = _state(RequestContract(), "‘Slack 저장 코드 예시 체크리스트’라는 문장을 설명해줘")
 
-    state.update(make_synthesize_node(model)(state))
+    state.update(make_synthesize_node(model, excerpt_limits=synthesis_excerpt_limits())(state))
     state.update(make_post_synthesis_validation_node(False)(state))
 
     assert state["response"].kind == "answer"
@@ -84,7 +85,7 @@ def test_reuse_with_new_forbidden_code_does_not_return_old_code():
     )
     state = _state(contract, previous=previous)
 
-    state.update(make_synthesize_node(ModelBoundary(error=RuntimeError("failed")))(state))
+    state.update(make_synthesize_node(ModelBoundary(error=RuntimeError("failed")), excerpt_limits=synthesis_excerpt_limits())(state))
     state.update(make_post_synthesis_validation_node(False)(state))
 
     assert state["response"].kind == "failure"
@@ -96,7 +97,7 @@ def test_unavailable_contract_cannot_reuse_previous_response():
     previous = finalize_answer(text_document("예전 전달 본문"), [])
     state = _state(None, "save this to Slack", previous)
 
-    result = make_synthesize_node(ModelBoundary(error=AssertionError("must not generate")))(state)["response"]
+    result = make_synthesize_node(ModelBoundary(error=AssertionError("must not generate")), excerpt_limits=synthesis_excerpt_limits())(state)["response"]
 
     assert result.kind == "failure"
     assert "예전 전달 본문" not in export_answer_text(result.result)
@@ -128,7 +129,7 @@ def test_exhausted_generation_cannot_expose_forbidden_original_code():
     state["runtime"] = state["runtime"].model_copy(update={"request_contract": contract})
 
     state.update(make_synthesize_node(
-        ModelBoundary(error=TimeoutError("timeout")), ModelBoundary(error=TimeoutError("timeout")),
+        ModelBoundary(error=TimeoutError("timeout")), ModelBoundary(error=TimeoutError("timeout")), excerpt_limits=synthesis_excerpt_limits(),
     )(state))
     state.update(make_post_synthesis_validation_node(False)(state))
 
@@ -153,7 +154,7 @@ def test_validation_exhaustion_cannot_replace_forbidden_generated_code_with_orig
         "type": "code", "content": {"text": "generated_code()", "basis": "example", "refs": []},
     }]})
 
-    state.update(make_synthesize_node(ModelBoundary(document))(state))
+    state.update(make_synthesize_node(ModelBoundary(document), excerpt_limits=synthesis_excerpt_limits())(state))
     state.update(make_post_synthesis_validation_node(False)(state))
 
     assert state["response"].kind == "failure"
@@ -171,7 +172,7 @@ def test_transform_keeps_the_original_citation_revision():
     state = _state(contract, previous=previous)
     model = ModelBoundary(text_document("설정값은 3입니다.", basis="source", refs=[evidence.id]))
 
-    state.update(make_synthesize_node(model)(state))
+    state.update(make_synthesize_node(model, excerpt_limits=synthesis_excerpt_limits())(state))
     state.update(make_post_synthesis_validation_node(False)(state))
 
     assert state["response"].kind == "answer"
@@ -189,7 +190,7 @@ def test_source_fallback_does_not_assume_excerpts_satisfy_semantic_requirements(
     state = retrieval_state([_hit("A source excerpt without any comparison.")])
     state["runtime"] = state["runtime"].model_copy(update={"request_contract": contract})
 
-    response = make_synthesize_node(ModelBoundary(error=RuntimeError("generation failed")))(state)["response"]
+    response = make_synthesize_node(ModelBoundary(error=RuntimeError("generation failed")), excerpt_limits=synthesis_excerpt_limits())(state)["response"]
 
     assert response.kind == "failure"
     assert response.result.citations == []
@@ -210,7 +211,7 @@ def test_forbidden_code_cannot_be_disguised_as_a_paragraph_excerpt():
     state["retry"] = RetryState(max_retries=0)
     model = ModelBoundary(text_document(hit.evidence.excerpt, basis="excerpt", refs=[hit.evidence.id]))
 
-    state.update(make_synthesize_node(model)(state))
+    state.update(make_synthesize_node(model, excerpt_limits=synthesis_excerpt_limits())(state))
     state.update(make_post_synthesis_validation_node(False)(state))
 
     assert state["response"].kind == "failure"
@@ -228,7 +229,7 @@ def test_code_prohibition_allows_a_plain_explanation_citing_code():
     state["runtime"] = state["runtime"].model_copy(update={"request_contract": contract})
     model = ModelBoundary(text_document("재시도 횟수는 세 번입니다.", basis="source", refs=[hit.evidence.id]))
 
-    state.update(make_synthesize_node(model)(state))
+    state.update(make_synthesize_node(model, excerpt_limits=synthesis_excerpt_limits())(state))
     state.update(make_post_synthesis_validation_node(False)(state))
 
     assert state["response"].kind == "answer"
@@ -245,7 +246,7 @@ def test_reuse_checks_original_code_provenance_before_returning_a_paragraph():
         evidence=(ContractEvidence(id="r1", turn_id="current", quote="코드 없이", scope="answer.content.code_example", interpretation="negation"),),
     )
 
-    response = make_synthesize_node(ModelBoundary(error=AssertionError("reuse must not generate")))(
+    response = make_synthesize_node(ModelBoundary(error=AssertionError("reuse must not generate")), excerpt_limits=synthesis_excerpt_limits())(
         _state(contract, previous=previous),
     )["response"]
 

@@ -19,6 +19,7 @@ from src.infra.llm import build_llm_registry
 from src.infra.settings import APP_ENV_SPEC_BY_NAME, AppSettings
 from src.runtime.nodes.synthesis import make_synthesize_node
 from src.runtime.graph_builder import build_agent_graph
+from tests.synthesis_fixtures import synthesis_excerpt_limits
 
 
 def _evidence_packet(payload: dict) -> list[dict]:
@@ -163,8 +164,7 @@ def _synthesize(settings: AppSettings):
     registry = build_llm_registry(settings)
     return make_synthesize_node(
         registry.llm_synthesizer, registry.llm_synthesizer_compact,
-        prompt_snippet_char_limit=settings.synthesis_prompt_snippet_chars,
-        compact_prompt_snippet_char_limit=settings.synthesis_compact_prompt_snippet_chars,
+        excerpt_limits=synthesis_excerpt_limits(normal_chars=settings.synthesis_prompt_snippet_chars, compact_chars=settings.synthesis_compact_prompt_snippet_chars),
     )(_state())
 
 

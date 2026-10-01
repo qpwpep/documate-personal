@@ -15,7 +15,8 @@ from src.core.evidence import EvidenceRef, parse_search_hits
 from src.core.planner_schema import RetrievalRequirement
 from src.infra.docling_runner import DoclingRunner
 from src.infra.tools.local_rag import build_upload_search_tool
-from src.runtime.nodes.synthesis.evidence_selection import prepare_evidence_packet
+from src.runtime.nodes.synthesis.budgets import RetrievedEvidenceBudget
+from src.runtime.nodes.synthesis.evidence_selection import select_evidence_packet
 from tests.web.test_multi_upload_api import LocalChatModel, api, answer, context, manifest, staged, sync  # noqa: F401
 
 
@@ -156,8 +157,10 @@ def test_real_mixed_formatting_paragraphs_remain_searchable_and_exactly_citable(
     assert all(check.support_status == "exact_match" for check in result.checks)
     retained = result.model_dump(mode="json")
 
-    cropped, = prepare_evidence_packet(
-        [full], max_items=1, snippet_char_limit=18, evidence_char_budget=18, query="amber trail",
+    (cropped,), _ = select_evidence_packet(
+        [full],
+        budget=RetrievedEvidenceBudget(max_excerpt_chars=18, max_total_excerpt_chars=18, max_items=1),
+        query="amber trail",
     )
     assert 0 < cropped.selection.start < cropped.selection.end < len(MIXED_INLINE)
     assert cropped.excerpt == MIXED_INLINE[cropped.selection.start:cropped.selection.end]

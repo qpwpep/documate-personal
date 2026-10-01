@@ -10,7 +10,6 @@ from src.core.contracts.provenance import AnswerSource
 from src.core.evidence import EvidenceRef, SearchHit
 from src.core.planner_schema import PlannerOutput
 from src.core.request_contracts import RequestContract
-from src.runtime.nodes.synthesis.budgets import SynthesisBudgetProfile
 
 
 @dataclass(slots=True)
@@ -34,7 +33,6 @@ class SynthesisContext:
 class PreparedSynthesisInputs:
     attempt: int
     user_input: str
-    budget_profile: SynthesisBudgetProfile
     parse_errors: list[str]
     planner_parse_errors: list[str]
     retrieval_required: bool

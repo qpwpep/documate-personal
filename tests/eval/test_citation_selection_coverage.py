@@ -6,7 +6,8 @@ from src.core.documents import DocumentElement, SourceAnchor, TableCell, TableDa
 from src.core.evidence import RetrievalScore, SearchHit, build_evidence
 from src.eval.config_models import BenchmarkCase
 from src.eval.metric_rules import score_citation_traceability, score_reference_coverage
-from src.runtime.nodes.synthesis.evidence_selection import prepare_evidence_packet
+from src.runtime.nodes.synthesis.budgets import RetrievedEvidenceBudget
+from src.runtime.nodes.synthesis.evidence_selection import select_evidence_packet
 from tests.eval.response_fixtures import source_evidence
 
 
@@ -15,7 +16,10 @@ def test_budgeted_synthesis_packet_citation_traces_to_the_larger_search_selectio
     source = source_evidence(text="앞부분. " + "검색으로 확인한 긴 문서 내용입니다. " * 20)
     observed = build_evidence(snapshot=source.snapshot, element=source.element, start=5, end=300)
     hit = SearchHit(evidence=observed, rank=1, score=RetrievalScore(metric="rank", raw=1, direction="lower"))
-    packet = prepare_evidence_packet([observed], max_items=1, snippet_char_limit=40, evidence_char_budget=100)
+    packet, _ = select_evidence_packet(
+        [observed],
+        budget=RetrievedEvidenceBudget(max_excerpt_chars=40, max_total_excerpt_chars=100, max_items=1),
+    )
     response = finalize_answer(text_document(packet[0].excerpt, basis="excerpt", refs=[packet[0].id]), packet)
     case = BenchmarkCase(case_id="budgeted-docs", category="docs_only", query="설명", require_official_citation=True)
 

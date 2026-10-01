@@ -6,7 +6,7 @@ import pytest
 
 from src.core.answer_schema import AnswerDocument, finalize_answer, iter_content_units, text_document
 from src.core.request_contracts import BoundAnswerReference, RequestContract, TransformAnswerBody
-from src.runtime.nodes.synthesis.budgets import SynthesisBudgetProfile
+from src.runtime.nodes.synthesis.budgets import RetrievedEvidenceBudget
 from src.runtime.nodes.synthesis.context import build_synthesis_context, prepare_synthesis_inputs
 from src.runtime.nodes.synthesis.pipeline import run_synthesis_pipeline
 from src.runtime.nodes.synthesis.prompt_builder import build_synthesis_messages
@@ -18,8 +18,8 @@ def _prepare(hits, *, limit=1800):
     context = build_synthesis_context(state=state)
     prepared = prepare_synthesis_inputs(
         state=state, context=context,
-        budget_profile=SynthesisBudgetProfile("docs", limit, limit * 6, 6),
-        max_turns=6, prompt_snippet_char_limit=limit, prompt_evidence_char_budget=limit * 6,
+        budget=RetrievedEvidenceBudget(max_excerpt_chars=limit, max_total_excerpt_chars=limit * 6, max_items=6),
+        max_turns=6,
     )
     return state, prepared
 
@@ -143,8 +143,8 @@ def test_model_reference_policy_matches_the_final_answer_checks(mode):
         })
     context = build_synthesis_context(state=state)
     prepared = prepare_synthesis_inputs(
-        state=state, context=context, budget_profile=SynthesisBudgetProfile("docs", 1800, 6000, 6),
-        max_turns=6, prompt_snippet_char_limit=1800, prompt_evidence_char_budget=6000,
+        state=state, context=context, budget=RetrievedEvidenceBudget(max_excerpt_chars=1800, max_total_excerpt_chars=6000, max_items=6),
+        max_turns=6,
     )
     policy = next(str(message.content) for message in prepared.model_messages
                   if str(message.content).startswith("[Reference Policy]"))

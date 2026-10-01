@@ -14,6 +14,7 @@ from src.core.request_contracts import ExtractBody, RequestContract
 from src.runtime.nodes.synthesis import make_synthesize_node
 from src.runtime.agent_runtime.llm_usage import capture_llm_usage
 from src.runtime.nodes.validation.node import make_post_synthesis_validation_node
+from tests.synthesis_fixtures import synthesis_excerpt_limits
 
 
 def _hit(text="Default mode is safe.", *, source="official", rank=1):
@@ -73,8 +74,7 @@ def test_packet_gaps_retry_only_when_the_normal_packet_can_supply_the_missing_an
     normal = ModelBoundary(error=TimeoutError("timeout") if compact_only else None)
     updates = make_synthesize_node(
         normal, ModelBoundary() if compact_only else None,
-        prompt_snippet_char_limit=100 if compact_only else 1,
-        compact_prompt_snippet_char_limit=1,
+        excerpt_limits=synthesis_excerpt_limits(normal_chars=100 if compact_only else 1, compact_chars=1),
     )(state)
 
     validated = make_post_synthesis_validation_node(False)({**state, **updates})
@@ -107,8 +107,7 @@ def test_generic_packet_omission_preserves_its_requirement_and_only_retries_a_co
     compact = ModelBoundary() if compact_only else None
 
     draft = make_synthesize_node(
-        normal, compact, prompt_snippet_char_limit=100 if compact_only else 0,
-        compact_prompt_snippet_char_limit=0,
+        normal, compact, excerpt_limits=synthesis_excerpt_limits(normal_chars=100 if compact_only else 0, compact_chars=0),
     )(state)
     validated = make_post_synthesis_validation_node(False)({**state, **draft})
 
@@ -158,7 +157,7 @@ def test_a_missing_retrieved_anchor_is_not_reported_as_a_packet_budget_omission(
     hit = _hit("Only a different setting is documented.").model_copy(update={"requirement_id": task.requirement_id})
     state = _state([hit])
     state["planner"] = PlannerState(output=PlannerOutput(use_retrieval=True, tasks=[task]))
-    updates = make_synthesize_node(ModelBoundary())(state)
+    updates = make_synthesize_node(ModelBoundary(), excerpt_limits=synthesis_excerpt_limits())(state)
 
     validated = make_post_synthesis_validation_node(False)({**state, **updates})
 
@@ -177,13 +176,13 @@ def test_complete_packet_allows_repair_when_the_answer_omits_a_required_citation
             for index, task in enumerate(tasks)]
     state = _state(hits)
     state["planner"] = PlannerState(output=PlannerOutput(use_retrieval=True, tasks=tasks))
-    draft = make_synthesize_node(ModelBoundary())(state)
+    draft = make_synthesize_node(ModelBoundary(), excerpt_limits=synthesis_excerpt_limits())(state)
     validate = make_post_synthesis_validation_node(False)
 
     retry = validate({**state, **draft})
     repaired = make_synthesize_node(ModelBoundary(malformed=text_document(
         "The settings differ.", basis="inference", refs=["e1", "e2"],
-    )))({**state, **draft, **retry})
+    )), excerpt_limits=synthesis_excerpt_limits())({**state, **draft, **retry})
     final = validate({**state, **repaired, **retry})
 
     assert retry["retry"].needs_retry
@@ -196,7 +195,7 @@ def test_complete_packet_allows_repair_when_the_answer_omits_a_required_citation
 def test_synthesis_displays_and_checks_the_same_units():
     """The model's sole body is preserved through the result, validation checks, and export."""
     hit = _hit()
-    result = make_synthesize_node(ModelBoundary())(_state([hit]))["response"].result
+    result = make_synthesize_node(ModelBoundary(), excerpt_limits=synthesis_excerpt_limits())(_state([hit]))["response"].result
     units = list(iter_content_units(result.content))
     assert len(units) == 1
     assert units[0][1].text == hit.evidence.excerpt
@@ -211,7 +210,7 @@ def test_only_the_packet_provided_to_the_model_is_accepted_for_citations():
     """Prompt truncation changes the allowed reference rather than silently authorizing unseen text."""
     hit = _hit("First sentence.\nSecond sentence with further detail.")
     model = ModelBoundary()
-    response = make_synthesize_node(model, prompt_snippet_char_limit=16)(_state([hit]))["response"]
+    response = make_synthesize_node(model, excerpt_limits=synthesis_excerpt_limits(normal_chars=16))(_state([hit]))["response"]
     assert [item["id"] for item in model.packet] == ["e1"]
     selected = response.evidence_packet[0]
     assert response.result == finalize_answer(
@@ -243,7 +242,7 @@ def test_eight_independent_requirements_keep_their_evidence_in_generation(timeou
     normal = ModelBoundary(error=TimeoutError("timeout") if timeout else None)
     compact = ModelBoundary() if timeout else None
 
-    response = make_synthesize_node(normal, compact)(state)["response"]
+    response = make_synthesize_node(normal, compact, excerpt_limits=synthesis_excerpt_limits())(state)["response"]
     model = compact if timeout else normal
 
     assert len(model.packet) == 8
@@ -258,7 +257,7 @@ def test_configured_snippet_above_eighteen_hundred_reaches_generation_and_citati
     hit = _hit("source detail " * 400)
     model = ModelBoundary()
 
-    response = make_synthesize_node(model, prompt_snippet_char_limit=2400)(_state([hit]))["response"]
+    response = make_synthesize_node(model, excerpt_limits=synthesis_excerpt_limits(normal_chars=2400))(_state([hit]))["response"]
 
     selected = response.evidence_packet[0]
     assert model.packet[0]["excerpt"] == hit.evidence.excerpt[:2400]
@@ -278,7 +277,7 @@ def test_compact_snippet_setting_preserves_exact_citations_without_expanding_nor
 
     response = make_synthesize_node(
         ModelBoundary(error=TimeoutError("timeout")), compact,
-        prompt_snippet_char_limit=normal_limit, compact_prompt_snippet_char_limit=compact_limit,
+        excerpt_limits=synthesis_excerpt_limits(normal_chars=normal_limit, compact_chars=compact_limit),
     )(_state([hit]))["response"]
 
     selected = response.evidence_packet[0]
@@ -293,7 +292,7 @@ def test_compact_snippet_setting_preserves_exact_citations_without_expanding_nor
 def test_malformed_generation_becomes_explicit_original_source_fallback():
     """Invalid model text is never promoted to an answer, while original evidence stays available."""
     hit = _hit()
-    updates = make_synthesize_node(ModelBoundary(malformed={"answer": "UNVALIDATED WRONG ANSWER"}))(_state([hit]))
+    updates = make_synthesize_node(ModelBoundary(malformed={"answer": "UNVALIDATED WRONG ANSWER"}), excerpt_limits=synthesis_excerpt_limits())(_state([hit]))
     result = updates["response"].result
     assert "UNVALIDATED WRONG ANSWER" not in export_answer_text(result)
     assert hit.evidence.excerpt in export_answer_text(result)
@@ -306,7 +305,7 @@ def test_timeout_uses_compact_model_and_its_actual_source_ranges():
     """A successful compact retry retains only the evidence ranges provided to that attempt."""
     hit = _hit("source detail " * 300)
     compact = ModelBoundary()
-    updates = make_synthesize_node(ModelBoundary(error=TimeoutError("structured timeout")), compact)(_state([hit]))
+    updates = make_synthesize_node(ModelBoundary(error=TimeoutError("structured timeout")), compact, excerpt_limits=synthesis_excerpt_limits())(_state([hit]))
     response = updates["response"]
     assert response.evidence_packet[0].excerpt == compact.packet[0]["excerpt"]
     assert compact.packet[0]["id"] == "e1"
@@ -329,7 +328,7 @@ def test_timeout_keeps_the_failed_primary_attempt_in_usage_evidence():
     })
     with capture_llm_usage() as recorder:
         make_synthesize_node(
-            ModelBoundary(error=TimeoutError("structured timeout")), compact,
+            ModelBoundary(error=TimeoutError("structured timeout")), compact, excerpt_limits=synthesis_excerpt_limits(),
         )(_state([]))
 
     calls = recorder.snapshot()
@@ -351,7 +350,7 @@ def test_invalid_structured_answer_keeps_successfully_observed_model_usage():
         "parsing_error": ValueError("answer did not match the document schema"),
     })
     with capture_llm_usage() as recorder:
-        updates = make_synthesize_node(model)(_state([]))
+        updates = make_synthesize_node(model, excerpt_limits=synthesis_excerpt_limits())(_state([]))
 
     assert updates["response"].kind == "failure"
     calls = recorder.snapshot()
@@ -364,7 +363,7 @@ def test_exhausted_timeout_fallback_keeps_source_version_and_location():
     """Both model failures still leave an honest excerpt tied to the immutable source revision."""
     hit = _hit("retries = 3\n", source="upload")
     updates = make_synthesize_node(
-        ModelBoundary(error=TimeoutError("timeout")), ModelBoundary(error=TimeoutError("timeout")),
+        ModelBoundary(error=TimeoutError("timeout")), ModelBoundary(error=TimeoutError("timeout")), excerpt_limits=synthesis_excerpt_limits(),
     )(_state([hit]))
     evidence = updates["response"].result.citations[0].evidence
     assert evidence.snapshot == hit.evidence.snapshot
@@ -384,7 +383,7 @@ def test_exact_upload_extraction_needs_no_model_generation():
     state["debug"] = DebugState(retrieval_diagnostics=[RetrievalDiagnostic(
         route="upload", requirement_id=task.requirement_id, status="success", answerability="covered", evidence_count=1,
     )])
-    updates = make_synthesize_node(ModelBoundary(error=AssertionError("model should not run")))(state)
+    updates = make_synthesize_node(ModelBoundary(error=AssertionError("model should not run")), excerpt_limits=synthesis_excerpt_limits())(state)
     assert updates["debug"].synthesis_errors == []
     assert any(check.support_status == "exact_match" for check in updates["response"].result.checks)
     assert updates["response"].result.citations[0].evidence.excerpt == hit.evidence.excerpt
@@ -392,5 +391,5 @@ def test_exact_upload_extraction_needs_no_model_generation():
 
 def test_synthesis_draft_is_not_added_to_conversation_before_validation():
     """Unvalidated content cannot survive a later repair as a stale assistant message."""
-    updates = make_synthesize_node(ModelBoundary())(_state([_hit()]))
+    updates = make_synthesize_node(ModelBoundary(), excerpt_limits=synthesis_excerpt_limits())(_state([_hit()]))
     assert "messages" not in updates

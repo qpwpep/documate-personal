@@ -13,7 +13,8 @@ from src.core.table_selection import table_row_units
 from src.infra.chunking import chunk_parsed_document
 from src.infra.tools.local_rag.serialization import build_local_hit_bundle
 from src.runtime.nodes.synthesis.prompt_builder import build_synthesis_messages
-from src.runtime.nodes.synthesis.evidence_selection import prepare_evidence_packet
+from src.runtime.nodes.synthesis.budgets import RetrievedEvidenceBudget
+from src.runtime.nodes.synthesis.evidence_selection import select_evidence_packet
 
 
 def table_source():
@@ -91,14 +92,20 @@ def test_table_prompt_budget_preserves_target_row_numbers_and_headers():
     item = build_evidence(snapshot=snapshot, element=element)
     wanted = build_evidence(snapshot=snapshot, element=element, cell_ids=["name", "count", "north", "alpha", "target"])
     task = RetrievalTask(route="upload", query="target", k=1, requirement={"aspects": ["target"]})
-    packet = prepare_evidence_packet(
-        [item], max_items=1, snippet_char_limit=len(wanted.excerpt), evidence_char_budget=len(wanted.excerpt),
-        query="target", requirements_by_evidence={item.id: [task]},
+    packet, _ = select_evidence_packet(
+        [item],
+        budget=RetrievedEvidenceBudget(max_excerpt_chars=len(wanted.excerpt), max_total_excerpt_chars=len(wanted.excerpt), max_items=1),
+        query="target",
+        requirements_by_evidence={item.id: [task]},
     )
     assert packet == [wanted]
     assert "20" in packet[0].excerpt
     assert packet[0].element.table.cells[3].row_span == 2
-    assert prepare_evidence_packet([wanted], max_items=1, snippet_char_limit=5, evidence_char_budget=5) == []
+    packet, _ = select_evidence_packet(
+        [wanted],
+        budget=RetrievedEvidenceBudget(max_excerpt_chars=5, max_total_excerpt_chars=5, max_items=1),
+    )
+    assert packet == []
 
 
 def test_table_packet_and_export_only_report_selected_cell_locations():

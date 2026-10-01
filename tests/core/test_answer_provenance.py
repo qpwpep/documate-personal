@@ -15,6 +15,7 @@ from src.runtime.nodes.actions.node import make_action_postprocess_node
 from src.runtime.nodes.synthesis import make_synthesize_node
 from src.runtime.nodes.validation import make_post_synthesis_validation_node, make_pre_synthesis_validation_node
 from tests.core.test_synthesis_validation import ModelBoundary, _hit, _state as retrieval_state
+from tests.synthesis_fixtures import synthesis_excerpt_limits
 
 
 def _source_answer(*texts):
@@ -51,7 +52,7 @@ def test_pending_copy_retains_its_selected_source_after_actions_clear_the_pendin
         source=BoundAnswerReference(ref="pending", response_hash=source.content_hash),
     ))
     state = _state(contract, pending=pending)
-    state.update(make_synthesize_node(ModelBoundary(error=AssertionError("copy must not generate")))(state))
+    state.update(make_synthesize_node(ModelBoundary(error=AssertionError("copy must not generate")), excerpt_limits=synthesis_excerpt_limits())(state))
     state.update(make_post_synthesis_validation_node(False)(state))
     state.update(make_action_postprocess_node(None, None, False)(state))
 
@@ -83,7 +84,7 @@ def test_partial_transform_publishes_the_checked_body_and_complete_parent_identi
         {"text": "An unsupported extra claim.", "basis": "source", "refs": ["missing"]},
     ]}]})
     state = _state(contract, previous=source)
-    state.update(make_synthesize_node(ModelBoundary(malformed=document))(state))
+    state.update(make_synthesize_node(ModelBoundary(malformed=document), excerpt_limits=synthesis_excerpt_limits())(state))
     state.update(make_post_synthesis_validation_node(False)(state))
 
     published = _publish(state)
@@ -113,7 +114,7 @@ def test_validation_fallback_publishes_only_the_replacement_packet():
     state["retry"] = RetryState(max_retries=0)
     state.update(make_synthesize_node(ModelBoundary(malformed=text_document(
         "An unsupported replacement.", basis="source", refs=["missing"],
-    )))(state))
+    )), excerpt_limits=synthesis_excerpt_limits())(state))
     state.update(make_post_synthesis_validation_node(False)(state))
 
     published = _publish(state)
@@ -132,7 +133,7 @@ def test_compact_retry_publishes_the_range_that_reached_the_successful_model():
     hit = _hit("source detail " * 300)
     state = retrieval_state([hit])
     compact = ModelBoundary()
-    state.update(make_synthesize_node(ModelBoundary(error=TimeoutError("timeout")), compact)(state))
+    state.update(make_synthesize_node(ModelBoundary(error=TimeoutError("timeout")), compact, excerpt_limits=synthesis_excerpt_limits())(state))
     state.update(make_post_synthesis_validation_node(False)(state))
 
     published = _publish(state)
@@ -152,7 +153,7 @@ def test_missing_source_cannot_publish_a_bound_parent_or_borrow_its_evidence():
         source=BoundAnswerReference(ref="previous", response_hash=unavailable.content_hash),
     ))
     state = _state(contract)
-    state.update(make_synthesize_node(ModelBoundary(error=AssertionError("must not generate")))(state))
+    state.update(make_synthesize_node(ModelBoundary(error=AssertionError("must not generate")), excerpt_limits=synthesis_excerpt_limits())(state))
     state.update(make_post_synthesis_validation_node(False)(state))
 
     published = _publish(state)

@@ -30,6 +30,7 @@ from src.runtime.nodes.retrieval import make_retrieve_dispatch_node
 from src.runtime.nodes.session import add_user_message, make_summarize_node
 from src.runtime.nodes.synthesis import make_synthesize_node
 from src.runtime.nodes.validation import make_post_synthesis_validation_node, make_pre_synthesis_validation_node
+from tests.synthesis_fixtures import synthesis_excerpt_limits
 
 
 def _contract(*, save="not_requested", slack="not_requested", **updates):
@@ -118,7 +119,7 @@ class _ConsumerGraph:
 
     def __init__(self, contracts, documents, save, slack, default_slack_recipient=None):
         self.contracts = iter(contracts)
-        self.synthesize = make_synthesize_node(_DocumentModelBoundary(documents))
+        self.synthesize = make_synthesize_node(_DocumentModelBoundary(documents), excerpt_limits=synthesis_excerpt_limits())
         self.validate = make_post_synthesis_validation_node(verbose=False)
         self.actions = make_action_postprocess_node(save, slack, False, default_slack_recipient)
 
@@ -150,7 +151,7 @@ class _PlannedConsumerGraph:
             summarize_node=make_summarize_node(None, False, policy=policy),
             planner_node=make_planner_node(self._PlannerBoundary(self), False),
             retrieve_dispatch_node=make_retrieve_dispatch_node(self._unavailable_search, self._unavailable_search, False),
-            synthesize_node=make_synthesize_node(_DocumentModelBoundary(documents)),
+            synthesize_node=make_synthesize_node(_DocumentModelBoundary(documents), excerpt_limits=synthesis_excerpt_limits()),
             pre_synthesis_validation_node=make_pre_synthesis_validation_node(False),
             post_synthesis_validation_node=make_post_synthesis_validation_node(False),
             action_postprocess_node=make_action_postprocess_node(save, slack, False, default_slack_recipient),
@@ -418,7 +419,7 @@ def test_uncertain_cancellation_cannot_be_resolved_by_a_destination_only_supplem
             previous_response=original_response, pending_action=pending,
         )
         for node in (make_planner_node(PlannerBoundary(), False),
-                     make_synthesize_node(_DocumentModelBoundary([])),
+                     make_synthesize_node(_DocumentModelBoundary([]), excerpt_limits=synthesis_excerpt_limits()),
                      make_post_synthesis_validation_node(False), actions):
             state.update(node(state))
         return state

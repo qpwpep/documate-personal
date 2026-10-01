@@ -17,6 +17,7 @@ from src.runtime.nodes.planner import make_planner_node
 from src.runtime.nodes.retrieval import make_retrieve_dispatch_node
 from src.runtime.nodes.session import add_user_message, make_summarize_node
 from src.runtime.nodes.synthesis import make_synthesize_node
+from src.runtime.nodes.synthesis.budgets import ExcerptLimits
 from src.runtime.nodes.validation import make_post_synthesis_validation_node, make_pre_synthesis_validation_node
 
 
@@ -211,8 +212,10 @@ def build_agent_graph(settings: AppSettings | None = None):
         llm_synthesizer_compact=llm_registry.llm_synthesizer_compact,
         verbose=llm_registry.verbose,
         max_turns=memory_policy.low_water_turns,
-        prompt_snippet_char_limit=app_settings.synthesis_prompt_snippet_chars,
-        compact_prompt_snippet_char_limit=app_settings.synthesis_compact_prompt_snippet_chars,
+        excerpt_limits=ExcerptLimits(
+            normal_chars=app_settings.synthesis_prompt_snippet_chars,
+            compact_chars=app_settings.synthesis_compact_prompt_snippet_chars,
+        ),
     )
     synthesize_node = _instrument_stage_node(
         "synthesis",

@@ -25,6 +25,7 @@ from .helpers import (
     _CapturePlannerLLM,
     _tool_payload,
 )
+from tests.synthesis_fixtures import synthesis_excerpt_limits
 
 
 def _official_hit(*, uri, title, excerpt, score):
@@ -376,7 +377,7 @@ def _assert_repair_flow(routes, defect, max_retries, persistent, *, instrumented
     plan = PlannerOutput(use_retrieval=True, tasks=[RetrievalTask(route=route, query=route, k=3) for route in routes], request_contract=contract.to_wire())
     planner_llm = _CapturePlannerLLM(plan)
     contracts = []
-    synthesize = make_synthesize_node(RepairingLLM(), verbose=False)
+    synthesize = make_synthesize_node(RepairingLLM(), verbose=False, excerpt_limits=synthesis_excerpt_limits())
 
     def synthesize_with_contract_observation(state):
         contracts.append(state["runtime"].request_contract)

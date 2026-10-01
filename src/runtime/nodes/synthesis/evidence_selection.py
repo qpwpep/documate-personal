@@ -8,6 +8,7 @@ import textwrap
 from src.core.evidence import EvidenceRef, SearchHit, build_evidence
 from src.core.planner_schema import PlannerOutput, RetrievalTask
 from src.core.table_selection import table_excerpt, table_row_units
+from src.runtime.nodes.synthesis.budgets import RetrievedEvidenceBudget, requirement_passage_targets
 
 _TOKEN_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_.-]*|[가-힣]{2,}")
 _STOPWORDS = {
@@ -387,40 +388,26 @@ def select_evidence_range(
     )
 
 
-def prepare_evidence_packet(
-    evidence: list[EvidenceRef], *, max_items: int, snippet_char_limit: int,
-    evidence_char_budget: int, query: str = "",
-    requirements_by_evidence: dict[str, list[RetrievalTask]] | None = None,
-) -> list[EvidenceRef]:
-    """The allowed references contain exactly the source text sent to the model."""
-    return select_evidence_packet(
-        evidence, max_items=max_items, snippet_char_limit=snippet_char_limit,
-        evidence_char_budget=evidence_char_budget, query=query,
-        requirements_by_evidence=requirements_by_evidence,
-    )[0]
-
-
 def select_evidence_packet(
-    evidence: list[EvidenceRef], *, max_items: int, snippet_char_limit: int,
-    evidence_char_budget: int, query: str = "",
+    evidence: list[EvidenceRef], *, budget: RetrievedEvidenceBudget, query: str = "",
     requirements_by_evidence: dict[str, list[RetrievalTask]] | None = None,
 ) -> tuple[list[EvidenceRef], dict[str, list[str]]]:
     """Reserve required passages before expanding context, charging shared ranges only once."""
     packet: list[EvidenceRef] = []
     requirement_ids: dict[str, list[str]] = {}
-    remaining = max(0, evidence_char_budget)
+    remaining = max(0, budget.max_total_excerpt_chars)
     candidates: dict[tuple[str, str, tuple[str, ...]], tuple[EvidenceRef, RetrievalTask | None]] = {}
     for item in evidence:
         tasks = (requirements_by_evidence or {}).get(item.id) or [None]
         for task in tasks:
-            if task is not None and not matches_file_scope(item, task):
-                continue
-            focused_tasks = (
-                [task.model_copy(update={"requirement": task.requirement.model_copy(update={"aspects": [aspect]})})
-                 for aspect in task.requirement.aspects]
-                if task is not None and len(task.requirement.aspects) > 1 else [task]
-            )
-            for focused in focused_tasks:
+            targets = requirement_passage_targets(task) if task is not None else [(None, None)]
+            for file_id, aspect in targets:
+                if file_id is not None and upload_file_id(item) != file_id:
+                    continue
+                focused = (
+                    task.model_copy(update={"requirement": task.requirement.model_copy(update={"aspects": [aspect]})})
+                    if task is not None and len(task.requirement.aspects) > 1 else task
+                )
                 key = (
                     item.id, focused.requirement_id if focused else "",
                     tuple(focused.requirement.aspects) if focused else (),
@@ -469,16 +456,16 @@ def select_evidence_packet(
         allow_partial: bool = True, complete_char_limit: int | None = None,
     ) -> None:
         nonlocal remaining
-        if len(packet) >= max(0, max_items) or allowance <= 0:
+        if len(packet) >= max(0, budget.max_items) or allowance <= 0:
             return
         if item.element.kind == "table":
             selected = select_table_evidence(
-                item, limit=min(max(0, snippet_char_limit), allowance), query=query, task=task,
+                item, limit=min(max(0, budget.max_excerpt_chars), allowance), query=query, task=task,
             )
             if selected is None:
                 return
         else:
-            limit = min(max(0, snippet_char_limit), allowance)
+            limit = min(max(0, budget.max_excerpt_chars), allowance)
             if not limit:
                 return
             selected = select_evidence_range(
@@ -499,13 +486,13 @@ def select_evidence_packet(
         # Deferred earlier requirements still own a share of the remaining budget.
         pending = {(group(candidate), tuple(candidate[1].requirement.aspects) if candidate[1] else ())
                    for candidate in ordered if needs_passage(*candidate)}
-        return remaining // max(1, min(len(pending), max_items - len(packet)))
+        return remaining // max(1, min(len(pending), budget.max_items - len(packet)))
 
     for item, task in ordered:
         share_existing(item, task)
         if not needs_passage(item, task):
             continue
-        add_candidate(item, task, fair_allowance(), complete_char_limit=snippet_char_limit)
+        add_candidate(item, task, fair_allowance(), complete_char_limit=budget.max_excerpt_chars)
 
     # Whole statements and table selections need unequal space. Revisit unmet
     # requirements using capacity left by smaller passages before optional text.
@@ -537,7 +524,7 @@ def select_evidence_packet(
         original, task = origins[selected.id]
         if original.element.kind == "table":
             continue
-        limit = min(max(0, snippet_char_limit), len(selected.excerpt) + remaining // (len(packet) - index))
+        limit = min(max(0, budget.max_excerpt_chars), len(selected.excerpt) + remaining // (len(packet) - index))
         expanded = select_evidence_range(original, limit=limit, query=query, task=task)
         if not contains_evidence_range(expanded, selected):
             continue

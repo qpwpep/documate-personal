@@ -39,9 +39,10 @@ from src.eval.request_contract_eval import (
 from src.eval.request_contract_scoring import score_observation
 from src.infra.llm import _build_planner_response_schema, build_llm_registry
 from src.infra.settings import get_settings
-from src.runtime.nodes.synthesis.budgets import resolve_synthesis_budget_profile
+from src.runtime.nodes.synthesis.budgets import resolve_evidence_budgets
 from src.runtime.nodes.synthesis.pipeline import _invoke_structured_attempt
 from src.runtime.nodes.synthesis.schema_adapter import _build_synthesis_response_schema, build_structured_synthesizer
+from tests.synthesis_fixtures import synthesis_excerpt_limits
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -67,7 +68,8 @@ def _builders(phase: str, revision: str) -> dict:
     planner["build_planner_messages"] = planner_prompt["build_planner_messages"]
     synthesis_prompt = _source_module("src.runtime.nodes.synthesis.prompt_builder", phase, revision)
     synthesis_prompt["SYS_POLICY"] = _source_module("src.core.prompts", phase, revision)["SYS_POLICY"]
-    context = _source_module("src.runtime.nodes.synthesis.context", phase, revision)
+    # Compare prompt revisions through today's preparation contract and budgets.
+    context = _source_module("src.runtime.nodes.synthesis.context", "current", revision)
     context["build_synthesis_messages"] = synthesis_prompt["build_synthesis_messages"]
     return {"planner": planner, "context": context,
             "session": _source_module("src.runtime.nodes.session", phase, revision)}
@@ -166,10 +168,14 @@ def _synthesis_state(case_id: str):
 def _observe_synthesis(case_id: str, registry, builders: dict, settings) -> dict:
     state = _synthesis_state(case_id)
     context = builders["context"]["build_synthesis_context"](state=state)
-    profile = resolve_synthesis_budget_profile(user_input=context.user_input, planner_output=context.planner_output,
-                                             snippet_char_limit=settings.synthesis_prompt_snippet_chars)
-    prepared = builders["context"]["prepare_synthesis_inputs"](state=state, context=context, budget_profile=profile,
-        max_turns=6, prompt_snippet_char_limit=profile.snippet_chars, prompt_evidence_char_budget=profile.evidence_chars)
+    budget, _ = resolve_evidence_budgets(
+        plan=context.planner_output,
+        limits=synthesis_excerpt_limits(normal_chars=settings.synthesis_prompt_snippet_chars,
+                                       compact_chars=settings.synthesis_compact_prompt_snippet_chars),
+    )
+    prepared = builders["context"]["prepare_synthesis_inputs"](
+        state=state, context=context, budget=budget, max_turns=6,
+    )
     recorder = _RecordingPlanner(build_structured_synthesizer(registry.llm_synthesizer))
     try:
         result = _invoke_structured_attempt(structured_synthesizer=recorder, prepared=prepared, path="structured")
