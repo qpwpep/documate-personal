@@ -11,7 +11,7 @@ from src.app.client import (
     AgentRequestContext,
     stream_agent_response,
 )
-from src.core.uploads import UploadManifest, UploadSyncRequest
+from src.core.uploads import UploadContext, UploadManifest, UploadSyncRequest
 from tests.web.answer_fixtures import answer_response, cited_response
 
 
@@ -98,7 +98,7 @@ def test_invalid_final_manifest_does_not_confirm_a_partial_response(transport, m
         "upload_manifest": manifest,
     })]))
 
-    events = list(stream_agent_response("질문", context()))
+    events = list(stream_agent_response("질문", context(), uploads=UploadContext(epoch="e", revision=0)))
 
     assert [event.event for event in events] == ["error"]
     assert events[0].data["code"] == "invalid_stream"

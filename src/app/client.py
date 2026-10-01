@@ -22,8 +22,6 @@ class AgentRequestContext:
     fastapi_url: str
     session_id: str
     slack_recipient: RecipientSelector | None = None
-    upload_file_path: str | None = None
-    uploads: UploadContext | None = None
     include_debug: bool = False
     timeout_seconds: float = 60
 
@@ -107,9 +105,11 @@ class AgentStreamEvent:
 def stream_agent_response(
     user_input: str,
     context: AgentRequestContext,
+    *,
+    uploads: UploadContext,
 ) -> Iterator[AgentStreamEvent]:
     endpoint = f"{context.fastapi_url.rstrip('/')}/agent/stream"
-    payload = build_agent_payload(user_input, context)
+    payload = build_agent_payload(user_input, context, uploads=uploads)
     saw_event = False
     saw_error = False
     started = perf_counter()
@@ -231,20 +231,17 @@ def stream_agent_response(
         yield observed_error("stream_error", f"스트리밍 응답 처리 중 오류가 발생했습니다: {exc}", exc=exc)
 
 
-def build_agent_payload(user_input: str, context: AgentRequestContext) -> dict[str, Any]:
-    if context.uploads is not None and context.upload_file_path is not None:
-        raise ValueError("uploads와 upload_file_path를 동시에 보낼 수 없습니다.")
+def build_agent_payload(
+    user_input: str, context: AgentRequestContext, *, uploads: UploadContext,
+) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "query": user_input,
         "session_id": context.session_id,
+        "uploads": uploads.model_dump(mode="json"),
     }
 
     if context.slack_recipient is not None:
         payload["slack_recipient"] = RecipientSelector.model_validate(context.slack_recipient).model_dump(mode="json")
-    if context.upload_file_path:
-        payload["upload_file_path"] = context.upload_file_path
-    if context.uploads is not None:
-        payload["uploads"] = context.uploads.model_dump(mode="json")
     if context.include_debug:
         payload["include_debug"] = True
     return payload
@@ -278,8 +275,6 @@ class AgentSessionClient:
     """
 
     def __init__(self, context: AgentRequestContext, *, manifest: UploadManifest | None = None):
-        if context.upload_file_path is not None:
-            raise ValueError("세션 클라이언트의 첨부는 stage_files와 sync_uploads로 준비해야 합니다.")
         self.context = context
         self.manifest = manifest
 
@@ -309,16 +304,16 @@ class AgentSessionClient:
         self.manifest = result.manifest
         return result
 
-    def request_context(self) -> AgentRequestContext:
+    def upload_context(self) -> UploadContext:
         if self.manifest is None:
             self.refresh_uploads()
-        return replace(self.context, uploads=self.manifest.context())
+        return self.manifest.context()
 
     def stream(self, user_input: str) -> Iterator[AgentStreamEvent]:
-        context = self.request_context()
+        uploads = self.upload_context()
         received_valid_final = False
         try:
-            for event in stream_agent_response(user_input, context):
+            for event in stream_agent_response(user_input, self.context, uploads=uploads):
                 if event.event == "final_response" and event.result is not None:
                     received_valid_final = True
                     self.manifest = event.result.upload_manifest
