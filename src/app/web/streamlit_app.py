@@ -14,11 +14,12 @@ from src.app.web.streamlit_intro import render_intro
 from src.app.web.streamlit_page import warn_if_utf8_mode_disabled_once
 from src.app.web.streamlit_sidebar import render_sidebar
 from src.app.web.streamlit_styles import configure_page
-from src.app.web.streamlit_theme import render_theme_styles
+from src.app.web.streamlit_theme import THEME_STATE_KEY
 from src.app.web.streamlit_state import (
     append_message,
     PendingUpload,
     ensure_session_state,
+    ensure_theme_state,
     get_messages,
     get_session_client,
     get_session_path,
@@ -46,7 +47,8 @@ SETTINGS = get_settings()
 
 
 def main() -> None:
-    configure_page()
+    ensure_theme_state()
+    configure_page(st.session_state[THEME_STATE_KEY])
     warn_if_utf8_mode_disabled_once()
     ensure_session_state(logger)
 
@@ -62,8 +64,6 @@ def main() -> None:
     if sidebar_inputs.new_chat_requested:
         reset_chat_session(logger)
         st.rerun()
-
-    render_theme_styles(sidebar_inputs.theme_mode)
 
     session_path = get_session_path()
     messages = get_messages()

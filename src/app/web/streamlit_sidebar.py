@@ -6,7 +6,7 @@ from html import escape
 import streamlit as st
 from pydantic import ValidationError
 
-from src.app.web.streamlit_theme import _THEME_OPTIONS, _sync_theme_from_query_params
+from src.app.web.streamlit_theme import THEME_OPTIONS, THEME_STATE_KEY
 from src.core.uploads import UploadManifest
 from src.core.slack_contract import RecipientSelector
 
@@ -14,7 +14,6 @@ from src.core.slack_contract import RecipientSelector
 @dataclass
 class SidebarInputs:
     slack_recipient: RecipientSelector | None
-    theme_mode: str
     new_chat_requested: bool
     remove_file_id: str | None = None
     clear_uploads_requested: bool = False
@@ -28,7 +27,6 @@ def render_sidebar(
     manifest: UploadManifest | None = None,
     uploads_busy: bool = False,
 ) -> SidebarInputs:
-    _sync_theme_from_query_params()
     remove_file_id = None
     clear_uploads_requested = False
     refresh_uploads_requested = False
@@ -70,13 +68,13 @@ def render_sidebar(
             st.markdown('<p class="dm-upload-note">첨부 상태를 확인하지 못했습니다. 서버 목록을 확인한 뒤 질문할 수 있습니다.</p>', unsafe_allow_html=True)
 
         st.markdown('<div class="dm-sidebar-section">화면 모드</div>', unsafe_allow_html=True)
-        theme_mode = st.radio(
+        st.radio(
             "테마",
-            options=_THEME_OPTIONS,
+            options=THEME_OPTIONS,
             index=0,
             horizontal=True,
             label_visibility="collapsed",
-            key="documate_theme_mode",
+            key=THEME_STATE_KEY,
         )
 
         st.markdown('<div class="dm-sidebar-section">Slack 전송</div>', unsafe_allow_html=True)
@@ -100,7 +98,6 @@ def render_sidebar(
     return SidebarInputs(
         slack_recipient=slack_recipient,
         slack_recipient_error=slack_recipient_error,
-        theme_mode=theme_mode,
         new_chat_requested=new_chat_requested,
         remove_file_id=remove_file_id,
         clear_uploads_requested=clear_uploads_requested,

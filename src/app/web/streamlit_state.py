@@ -13,11 +13,20 @@ from src.infra.runtime_paths import get_uploads_dir
 from src.infra.settings import get_settings
 from src.app.client import AgentRequestContext, AgentSessionClient
 from src.app.uploads import StagedUpload
+from src.app.web.streamlit_theme import THEME_STATE_KEY
 from src.core.answer_schema import AnswerResponse, finalize_answer, text_document
 from src.core.uploads import UploadManifest, UploadSyncRequest
 
 
 QUICK_PROMPTS_STATE_KEY = "documate_quick_prompts"
+_THEME_QUERY_MAP = {
+    "system": "시스템",
+    "light": "라이트",
+    "dark": "다크",
+    "시스템": "시스템",
+    "라이트": "라이트",
+    "다크": "다크",
+}
 
 
 @dataclass
@@ -52,6 +61,15 @@ class AssistantChatMessage(TypedDict):
 
 
 ChatMessage = UserChatMessage | AssistantChatMessage
+
+
+def ensure_theme_state() -> None:
+    """Seed the preference once; later reruns keep the user's radio selection."""
+    if THEME_STATE_KEY not in st.session_state:
+        raw_theme = st.query_params.get("theme", "")
+        st.session_state[THEME_STATE_KEY] = _THEME_QUERY_MAP.get(
+            raw_theme.strip().lower(), "시스템"
+        )
 
 
 def ensure_session_state(logger: logging.Logger) -> None:
