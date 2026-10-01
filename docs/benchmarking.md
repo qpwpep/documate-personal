@@ -393,11 +393,36 @@ CLI, Markdown 보고서와 history는 같은 중앙 판정을 사용합니다. `
 
 실패·검증 불가는 composite나 judge 만점으로 상쇄되지 않습니다. 사례의 `release_pass`와 run의 `save_outcome_contract` gate가 같은 결과를 사용하며, `metrics.save_contract_failures`가 0이어야 이 gate를 통과합니다. 이 gate는 `required_success`·`expected_failure` 및 준비 턴의 성공 저장에 `phase=run_end` 확인 근거도 요구하므로, 파일을 다시 읽지 않는 오프라인 summary는 사례 직후의 성공 결과만으로 release를 통과시키지 않습니다. 구형 receipt와 과거 결과를 새 verified 계약으로 자동 승격하지 않습니다.
 
+### 4.0.3 가중치 입력과 사례별 프로필
+
+가중치는 `config.toml`의 `[weights.general]`, `[weights.action_with_citations]`, `[weights.action_without_citations]` 세 프로필로 설정합니다. 프로필 전체를 생략하면 아래 기본 벡터를 사용하며, 프로필을 제공하면 여섯 축을 모두 명시해야 합니다. 개별 축을 생략해 기본값을 섞지 않습니다. 값은 정규화 전 상대 가중치입니다.
+
+| 축 | `general` | `action_with_citations` | `action_without_citations` |
+|---|---:|---:|---:|
+| `answer_quality` | 0.20 | 0.35 | 0.40 |
+| `reference_coverage` | 0.20 | 0.10 | 0 |
+| `citation_traceability` | 0.20 | 0.05 | 0 |
+| `tool_choice` | 0.15 | 0.25 | 0.30 |
+| `format_language` | 0.05 | 0.10 | 0.10 |
+| `llm_judge` | 0.20 | 0.15 | 0.15 |
+
+`tool_action` 이외의 사례는 두 인용 플래그와 관계없이 `general`을 선택합니다. `tool_action`은 `require_official_citation` 또는 `require_local_citation`이 참이면 `action_with_citations`, 둘 다 거짓이면 `action_without_citations`를 선택합니다. 실제 호출 도구·검색 결과·응답의 인용 유무는 이 선택을 바꾸지 않습니다.
+
+case의 `weight_override`는 위 여섯 키 중 변경할 축만 담는 사전입니다. 전체 생략·`null`·`{}`는 변경 없음, 축 누락은 프로필 값 유지, 명시적인 `0`은 해당 축의 점수 기여 제거를 뜻합니다. 축 값의 `null`은 오류입니다. 예를 들어 `{"citation_traceability": 0.35, "llm_judge": 0.1}`은 다른 네 축을 유지한 뒤 전체를 정규화합니다. `llm_judge=0`은 judge 실행이나 필수 품질 gate를 비활성화하지 않으며, judge 점수가 없으면 composite은 계속 `null`입니다.
+
+허용 값은 유한한 비음수 정수·실수입니다. 상대값이므로 1보다 커도 되지만, bool·숫자 문자열·배열·객체·음수·NaN·Infinity는 거절합니다. 전체 벡터와 override 병합 결과의 합계는 양수 유한수여야 하며 합계 overflow도 오류입니다. 부분 override의 합계가 0인 것은 허용하지만, 병합 후 모든 축이 0이면 실행할 수 없습니다. 알 수 없는 설정 section·프로필·가중치 키와 구형 가중치 키 `tool_match`, `content_constraints`, `citation_compliance`, `safety_format`도 거절합니다. `[hard_gates]`의 `citation_compliance`는 현재 gate 이름이므로 그대로 사용합니다.
+
+`action_without_citations`의 `reference_coverage`와 `citation_traceability`는 설정·최종값 모두 0입니다. 이 프로필이나 해당 case의 override에 두 축의 양수를 설정하면 오류이며, 값을 조용히 0으로 바꾸지 않습니다. 인용 평가가 필요하면 사례의 인용 요구 플래그를 설정해야 합니다. 인용 미요구 행동의 원시 인용 rule 점수가 1이어도 최종 가중합에는 기여하지 않습니다.
+
+`resolve_case_weights()` 하나가 **프로필 선택 → 원시값에 override 적용 → 충돌·합계 검사 → 한 번의 정규화**를 수행합니다. 프로필을 미리 정규화하지 않으므로 override도 위 표의 원시 상대값과 같은 척도로 해석합니다. 인용 미요구 기본 프로필은 합계 0.95를 나눠 최종값으로 만듭니다. runner는 limit을 반영한 전체 실행 대상의 가중치를 HTTP·judge 실행 전에 확정하고, 실행기와 결과 생성기는 확정값만 전달받습니다. 잘못된 설정은 실행 전 오류로 종료하며 제품 runtime error나 기본 가중치로 대체하지 않습니다.
+
+새 `summary.json`의 `weight_profiles`는 세 프로필의 정규화 전 설정 snapshot이며, 각 `raw_results.jsonl`의 `effective_weights`는 override를 적용한 최종 정규화값입니다. 과거 summary의 평면 `weights`와 결과의 `effective_weights`는 저장된 사전 그대로 읽습니다. 이 기록을 현재 입력 모델로 검증하거나 새로운 프로필로 재정규화·재채점하지 않습니다.
+
 ### 4.1 참조 연결과 의미적 지지의 구분
 
 | 지표·입력 | 측정 범위 |
 |---|---|
-| `reference_coverage` | `interaction`을 제외한 실제 내용 단위 중 refs가 있고, 모든 참조가 현재 검색 또는 선택한 선행 답변의 검증된 인용에서 최종 packet으로 연결되는 비율. rule 가중치는 `0.20` |
+| `reference_coverage` | `interaction`을 제외한 실제 내용 단위 중 refs가 있고, 모든 참조가 현재 검색 또는 선택한 선행 답변의 검증된 인용에서 최종 packet으로 연결되는 비율. 가중치는 사례 프로필과 override로 결정 |
 | `citation_traceability` | 요청한 docs/upload 출처 범위와 최종 packet의 채택 참조를 확인. 현재 검색의 근거는 해당 턴의 도구 실행을 요구하며, 검증된 선행 인용은 재검색 없이 계승 가능 |
 | `checks.reference_status` | 런타임의 참조 연결 결과. `resolved`는 의미적 정확성 판정이 아님 |
 | `checks.support_status` | `not_evaluated`, `exact_match`, `unsupported` 개수를 별도 집계. `not_evaluated`를 자동으로 0점 처리하지 않음 |
@@ -438,12 +463,16 @@ history 리포터는 다음 조건이 모두 같은 run만 comparable run으로 
 - `decision_contract_version`
 - `execution_contract_version`: 현재 `shared-client-scenario-v1`
 - `measurement_contract_version`: 현재 `llm-usage-scenario-v2`
-- `suite_fingerprint`: 준비 턴·첨부 목록을 포함한 사례 내용과 staging에서 실제 읽은 첨부 bytes의 SHA256
+- `suite_fingerprint`: 준비 턴·첨부 목록·부분 override를 포함한 사례 모델의 JSON 직렬화와 staging에서 실제 읽은 첨부 bytes의 SHA256
 - `evaluation_fingerprint`: 채점 계약 버전과 가중치·gate·pricing·judge·timeout 설정, Slack 실행 옵션
 
 같은 경로의 fixture를 덮어써도 내용이나 첨부 bytes가 달라지면 자동 비교되지 않습니다. 새 계약 정보가 일부만 있는 run은 자기 자신만 표시합니다. 계약 정보가 없는 legacy끼리는 이전 경로·사례 수 비교를 유지하지만, 새 실행과 섞지 않습니다. 사용량 계약 v2는 빈 metadata 폴백, 정상적인 0, 부분 관측, 실패 호출과 synthesis 출력 범위를 명시하므로 v1과 별도 baseline을 만듭니다. 과거 JSON을 읽을 때 새 계약으로 자동 승격하거나 사용량을 재계산하지 않습니다.
 
-현재 채점 계약은 `execution-policy-contract-v4`이며 `summary.json`의 `audit_metrics.scoring_contract_version`에 기록합니다. 이 버전도 `evaluation_fingerprint`에 포함하므로 같은 fixture·설정이라도 이전 채점 결과와 자동 비교하지 않습니다. 실행·측정·채점 계약의 의미를 바꾸면 해당 버전도 갱신해야 합니다. 과거 summary는 당시 값 그대로 읽고 새 채점 버전을 채워 넣지 않습니다. 원격 서버의 모든 설정이나 모델 provider의 변동을 fingerprint가 자동 고정하지는 않습니다. 비교할 변경은 동일한 평가 계약·fixture와 확인된 서버 설정에서 다시 실행합니다. 현재 rule의 `reference_coverage`는 의미적 groundedness를 측정하지 않으며, 이전 스키마·rule의 기록을 새 계약의 품질 상승·하락 근거로 사용하지 않습니다.
+현재 채점 계약은 `weight-profiles-v5`이며 `summary.json`의 `audit_metrics.scoring_contract_version`에 기록합니다. 세 프로필 설정 전체와 이 버전을 `evaluation_fingerprint`에 포함하므로 이전 `execution-policy-contract-v4`와 자동 비교하지 않습니다. 일반·인용 요구 행동의 기본값은 유지하지만, 인용 미요구 행동은 비적용 인용 축의 기본 기여 0.05를 제거합니다. 기본 프로필·override 없음·비어 있지 않은 정상 응답·judge 점수 있음의 조건에서는 새 점수가 `(이전 점수 - 0.05) / 0.95`이며, 통과선 근처 판정이 달라질 수 있습니다. 감점·상한·통과 기준과 judge 필수성은 그대로입니다.
+
+`suite_fingerprint`는 원시 fixture 파일 전체의 bytes hash와 다릅니다. 같은 평가 의미라도 override의 직렬화 형태가 달라지면 suite fingerprint가 달라질 수 있습니다. 승인된 release candidate·명세의 원시 bytes hash는 별도 검증하며, 가중치 모델 변경을 이유로 보관 원본이나 승인 hash를 다시 쓰지 않습니다. 과거 summary의 채점 버전·가중치·fingerprint를 현재 값으로 채우거나 결과를 다시 계산하지 않습니다. 같은 측정 계약의 과거 결과도 원래 result fingerprint를 검증한 뒤 읽으며, 새 비교 baseline과는 분리합니다.
+
+실행·측정·채점 계약의 의미를 바꾸면 해당 버전도 갱신해야 합니다. 원격 서버의 모든 설정이나 모델 provider의 변동을 fingerprint가 자동 고정하지는 않습니다. 비교할 변경은 동일한 평가 계약·fixture와 확인된 서버 설정에서 다시 실행합니다. 현재 rule의 `reference_coverage`는 의미적 groundedness를 측정하지 않으며, 이전 스키마·rule의 기록을 새 계약의 품질 상승·하락 근거로 사용하지 않습니다.
 
 ## 7. 운영 메모
 
