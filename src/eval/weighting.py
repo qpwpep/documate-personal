@@ -1,72 +1,46 @@
 from __future__ import annotations
 
-import math
+from dataclasses import dataclass
 
-from .config_models import BenchmarkCase, CaseWeightOverride, ScoreWeights
-
-
-def resolve_effective_weights(
-    *,
-    case: BenchmarkCase | None = None,
-    base_weights: ScoreWeights,
-    case_override: CaseWeightOverride | None,
-) -> tuple[ScoreWeights, str | None]:
-    if (
-        case is not None
-        and case.category == "tool_action"
-        and not case.require_official_citation
-        and not case.require_local_citation
-    ):
-        merged = {
-            "answer_quality": 0.40,
-            "reference_coverage": 0.025,
-            "citation_traceability": 0.025,
-            "tool_choice": 0.30,
-            "format_language": 0.10,
-            "llm_judge": 0.15,
-        }
-    else:
-        merged = base_weights.as_dict()
-    if case_override is not None:
-        merged.update(case_override.as_partial_dict())
-
-    for key, value in merged.items():
-        if value < 0.0 or not math.isfinite(float(value)):
-            return base_weights, f"invalid weight '{key}': {value}"
-
-    total = float(sum(merged.values()))
-    if total <= 0.0 or not math.isfinite(total):
-        return base_weights, "weight sum must be a positive finite number"
-
-    normalized = {key: float(value) / total for key, value in merged.items()}
-    try:
-        return ScoreWeights(**normalized), None
-    except Exception as exc:
-        return base_weights, f"failed to build normalized weights: {exc}"
+from .config_models import BenchmarkCase, ScoreWeights, WeightProfileId, WeightProfiles
 
 
-def resolve_base_weights_for_case(
-    *,
-    case: BenchmarkCase,
-    base_weights: ScoreWeights,
-) -> ScoreWeights:
+@dataclass(frozen=True)
+class ResolvedWeights:
+    profile_id: WeightProfileId
+    values: ScoreWeights
+
+
+def resolve_case_weights(*, case: BenchmarkCase, profiles: WeightProfiles) -> ResolvedWeights:
+    """Choose once, merge relative values, validate, then normalize once."""
     if case.category != "tool_action":
-        return base_weights
-    return ScoreWeights(
-        answer_quality=0.35,
-        reference_coverage=0.10,
-        citation_traceability=0.05,
-        tool_choice=0.25,
-        format_language=0.10,
-        llm_judge=0.15,
-    )
+        profile_id: WeightProfileId = "general"
+    elif case.require_official_citation or case.require_local_citation:
+        profile_id = "action_with_citations"
+    else:
+        profile_id = "action_without_citations"
+
+    merged = getattr(profiles, profile_id).as_dict()
+    merged.update(case.weight_override or {})
+    context = f"case {case.case_id!r}, weights.{profile_id}"
+    if profile_id == "action_without_citations":
+        for axis in ("reference_coverage", "citation_traceability"):
+            if merged[axis] != 0:
+                raise ValueError(f"{context}.{axis}: must be zero; citation weights cannot be enabled by override")
+    try:
+        validated = ScoreWeights.model_validate(merged)
+    except ValueError as exc:
+        raise ValueError(f"{context}: {exc}") from exc
+    total = sum(validated.as_dict().values())
+    normalized = {key: value / total for key, value in validated.as_dict().items()}
+    return ResolvedWeights(profile_id=profile_id, values=ScoreWeights.model_validate(normalized))
 
 
 def compute_rule_weighted_score(
     component_scores: dict[str, float],
-    weights: ScoreWeights,
+    weights: ResolvedWeights,
 ) -> float:
-    weight_map = weights.as_dict()
+    weight_map = weights.values.as_dict()
     score = 0.0
     for key, value in component_scores.items():
         score += value * float(weight_map.get(key, 0.0))
@@ -76,7 +50,7 @@ def compute_rule_weighted_score(
 def compute_composite_quality_score(
     rule_weighted_score: float,
     llm_judge_score: float | None,
-    weights: ScoreWeights,
+    weights: ResolvedWeights,
 ) -> float | None:
     """A composite only exists when the required judge score exists.
 
@@ -85,5 +59,5 @@ def compute_composite_quality_score(
     """
     if llm_judge_score is None:
         return None
-    llm_weight = float(weights.llm_judge)
+    llm_weight = float(weights.values.llm_judge)
     return max(0.0, min(1.0, rule_weighted_score + llm_judge_score * llm_weight))

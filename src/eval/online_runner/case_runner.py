@@ -20,6 +20,7 @@ from ..reporting.summary import build_summary
 from ..reporting.writer import write_run_outputs
 from ..result_models import CaseResult, ScenarioTurnResult
 from ..summary_models import RunSummary, RunTrack
+from ..weighting import ResolvedWeights, resolve_case_weights
 from .scenario_inputs import case_context, resolve_fixture_uploads
 from .response_parser import ParsedResponseData, parse_agent_response
 from .result_builder import build_case_result
@@ -133,6 +134,7 @@ def _run_single_case(
     timeout_seconds: int,
     judge: LLMJudge,
     config: BenchmarkConfig,
+    resolved_weights: ResolvedWeights,
     live_slack: BenchmarkLiveSlackConfig | None = None,
     verified_uploads: Mapping[str, ApprovedUpload] | None = None,
 ) -> CaseResult:
@@ -217,6 +219,7 @@ def _run_single_case(
         case=case,
         judge=judge,
         config=config,
+        resolved_weights=resolved_weights,
         session_id=session_id,
         created_at=created_at,
         request_payload=request_payload,
@@ -331,6 +334,8 @@ def run_online_benchmark(
         cases = cases[:requested_limit]
     if not cases:
         raise ValueError("No benchmark cases found.")
+    # Resolve every selected case before creating a judge or executing any scenario.
+    resolved_case_weights = [resolve_case_weights(case=case, profiles=config.weights) for case in cases]
     if track == "release":
         missing_save_contracts = [case.case_id for case in cases
                                   if "save_text" in case.expected_tools and case.save_expectation is None]
@@ -342,7 +347,7 @@ def run_online_benchmark(
     judge = LLMJudge(model_name=config.judge_model, enabled=config.judge_enabled)
 
     results: list[CaseResult] = []
-    for index, case in enumerate(cases, 1):
+    for index, (case, resolved_weights) in enumerate(zip(cases, resolved_case_weights, strict=True), 1):
         result = _run_single_case(
             run_id=run_id,
             endpoint=endpoint,
@@ -351,6 +356,7 @@ def run_online_benchmark(
             timeout_seconds=config.request_timeout_seconds,
             judge=judge,
             config=config,
+            resolved_weights=resolved_weights,
             live_slack=live_slack,
             verified_uploads=verified_uploads,
         )

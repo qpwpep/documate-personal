@@ -12,8 +12,7 @@ from ..decisions import DECISION_CONTRACT_VERSION, policy_for_case
 from ..weighting import (
     compute_composite_quality_score,
     compute_rule_weighted_score,
-    resolve_base_weights_for_case,
-    resolve_effective_weights,
+    ResolvedWeights,
 )
 from .response_parser import ParsedResponseData
 
@@ -123,6 +122,7 @@ def build_case_result(
     case: BenchmarkCase,
     judge: LLMJudge,
     config: BenchmarkConfig,
+    resolved_weights: ResolvedWeights,
     session_id: str,
     created_at: str,
     request_payload: dict,
@@ -132,18 +132,8 @@ def build_case_result(
     prior_turns: list[ScenarioTurnResult] | None = None,
     scenario_turns: list[ScenarioTurnResult] | None = None,
 ) -> CaseResult:
-    effective_weights, weights_error = resolve_effective_weights(
-        case=case,
-        base_weights=resolve_base_weights_for_case(
-            case=case,
-            base_weights=config.weights,
-        ),
-        case_override=case.weight_override,
-    )
     runtime_errors = list(parsed_response.runtime_errors)
     response_errors = list(parsed_response.response_errors)
-    if weights_error:
-        runtime_errors.append(f"weight_override error: {weights_error}")
 
     response = parsed_response.response
     if scenario_turns is None:
@@ -326,12 +316,12 @@ def build_case_result(
         evidence_scope=evidence_scope,
         save_outcome_verified=(save_assessment.outcome == "required_success" and save_assessment.passed is True),
     )
-    rule_weighted = compute_rule_weighted_score(rule_scores, effective_weights)
+    rule_weighted = compute_rule_weighted_score(rule_scores, resolved_weights)
 
     composite_quality_score = compute_composite_quality_score(
         rule_weighted_score=rule_weighted,
         llm_judge_score=llm_judge_score if judge_status == "succeeded" else None,
-        weights=effective_weights,
+        weights=resolved_weights,
     )
     if composite_quality_score is not None:
         product_pass = composite_quality_score >= _PRODUCT_PASS_FLOOR
@@ -423,7 +413,7 @@ def build_case_result(
         slack_delivery_error=slack_delivery_error,
         validator_reason=parsed_response.validator_reason,
         validator_feedback=validator_feedback,
-        effective_weights=effective_weights.as_dict(),
+        effective_weights=resolved_weights.values.as_dict(),
         rule_scores=rule_scores,
         rule_score_total=rule_weighted,
         debug_schema_version=parsed_response.debug_schema_version,
