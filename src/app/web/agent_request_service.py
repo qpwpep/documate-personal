@@ -138,7 +138,7 @@ class AgentRequestService:
             session.require_upload_context(request_data.uploads)
             session.session_id = session_id
             agent_manager.set_session_metadata(session_metadata)
-            agent_answer = agent_manager.run_agent_flow(user_query, progress_emitter=progress_emitter, uploads=request_data.uploads)
+            agent_answer = agent_manager.run_agent_flow(user_query, progress_emitter=progress_emitter)
             # A later mutation may complete before delivery; this detached snapshot
             # describes this request's completion, including reset and model failure.
             upload_manifest = session.upload_manifest()

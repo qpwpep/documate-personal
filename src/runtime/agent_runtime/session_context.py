@@ -41,12 +41,10 @@ class SessionContext:
         self.session_id = uuid4().hex
         self._conversation_memory = ConversationMemorySnapshot()
         self.session_metadata: SessionMetadata = parse_session_metadata(None)
-        self.upload_retriever_handle: UploadedRetrieverHandle | None = None
-        self.upload_file_path: str | None = None
-        self.upload_content_hash: str | None = None
-        self.upload_epoch = uuid4().hex
-        self.upload_revision = 0
-        self.upload_records: tuple[UploadRecord, ...] = ()
+        self._upload_retriever_handle: UploadedRetrieverHandle | None = None
+        self._upload_epoch = uuid4().hex
+        self._upload_revision = 0
+        self._upload_records: tuple[UploadRecord, ...] = ()
         self._upload_storage: UploadStorage | None = None
         self.upload_operations: OrderedDict[str, tuple[str, UploadSyncResponse]] = OrderedDict()
         self.previous_response: AnswerResponse | None = None
@@ -141,6 +139,22 @@ class SessionContext:
     def snapshot_session_metadata(self) -> SessionMetadata:
         return parse_session_metadata(self.session_metadata)
 
+    @property
+    def upload_epoch(self) -> str:
+        return self._upload_epoch
+
+    @property
+    def upload_revision(self) -> int:
+        return self._upload_revision
+
+    @property
+    def upload_records(self) -> tuple[UploadRecord, ...]:
+        return self._upload_records
+
+    @property
+    def upload_retriever_handle(self) -> UploadedRetrieverHandle | None:
+        return self._upload_retriever_handle
+
     def require_upload_context(self, context: UploadContext) -> None:
         """Require the caller's attachment version before running under the session lock."""
         if context.epoch != self.upload_epoch or context.revision != self.upload_revision:
@@ -167,14 +181,16 @@ class SessionContext:
         """
         storage = self.bind_upload_storage(session_id)
         records = tuple(records)
+        if bool(records) != (handle is not None):
+            raise ValueError("Committed uploads require both records and their index, or neither")
+        if handle is not None and tuple(handle.retriever.upload_files) != tuple(record.public_info() for record in records):
+            raise ValueError("Committed upload index must match the complete attachment catalog")
         if any(not storage.owns(Path(record.path)) for record in records):
             raise ValueError("Committed upload files must belong to this session's managed storage")
         old_handle, old_records = self.upload_retriever_handle, self.upload_records
-        self.upload_records = records
-        self.upload_retriever_handle = handle
-        self.upload_file_path = None
-        self.upload_content_hash = None
-        self.upload_revision += 1
+        self._upload_records = records
+        self._upload_retriever_handle = handle
+        self._upload_revision += 1
         if old_handle is not None and old_handle is not handle:
             self._release_upload_handle(old_handle)
         retained = {record.path for record in records}
@@ -190,29 +206,21 @@ class SessionContext:
             log_event(logger, logging.WARNING, "upload_retriever_cleanup_failed",
                       collection=handle.collection_name, error=exc)
 
-    def cleanup_upload_retriever(self) -> None:
-        handle = self.upload_retriever_handle
-        if handle is None:
-            return
-
-        self.upload_retriever_handle = None
-        self._release_upload_handle(handle)
-
-    def release_upload_resources(self) -> None:
-        """Release only owned originals; direct legacy input paths remain borrowed."""
-        records, self.upload_records = self.upload_records, ()
-        self.cleanup_upload_retriever()
-        self.upload_file_path = None
-        self.upload_content_hash = None
+    def _release_upload_resources(self) -> None:
+        """Retire the committed index and owned originals during session shutdown."""
+        records, self._upload_records = self.upload_records, ()
+        handle, self._upload_retriever_handle = self.upload_retriever_handle, None
+        if handle is not None:
+            self._release_upload_handle(handle)
         if self._upload_storage is not None:
             remove_managed_upload_files(self._upload_storage, (record.path for record in records))
             clear_auxiliary_upload_files(self._upload_storage)
 
     def close(self) -> None:
-        self.release_upload_resources()
+        self._release_upload_resources()
         self.upload_operations.clear()
-        self.upload_epoch = uuid4().hex
-        self.upload_revision = 0
+        self._upload_epoch = uuid4().hex
+        self._upload_revision = 0
         self.reset_conversation_memory()
         self.session_metadata = parse_session_metadata(None)
 

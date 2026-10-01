@@ -25,15 +25,13 @@ from src.core.latency import build_latency_breakdown, elapsed_ms, make_stage_lat
 from src.infra.logging_utils import log_event
 from src.runtime.progress import ProgressEmitter
 from src.infra.settings import AppSettings, get_settings
-from src.infra.tools.local_rag import build_temp_retriever
-from src.core.uploads import UploadContext
 
 
 logger = logging.getLogger(__name__)
 
 
 def is_session_reset_command(user_input: str) -> bool:
-    """Identify explicit reset commands before preparing attachment changes."""
+    """Identify explicit reset commands before graph execution."""
     return user_input.lower() in {"exit", "종료", "quit", "q"}
 
 
@@ -45,10 +43,8 @@ class AgentFlowManager:
         self.graph = build_agent_graph(self.settings)
         self._session = SessionContext()
         self._runner = ExecutionRunner(
-            settings=self.settings,
             graph=self.graph,
             session=self._session,
-            build_temp_retriever_fn=build_temp_retriever,
         )
         self._debug_collector = DebugCollector()
         self._response_assembler = ResponseAssembler()
@@ -66,15 +62,12 @@ class AgentFlowManager:
             self._response_assembler = ResponseAssembler()
         if not hasattr(self, "_runner"):
             self._runner = ExecutionRunner(
-                settings=getattr(self, "settings", None),
                 graph=self.graph,
                 session=session,
-                build_temp_retriever_fn=build_temp_retriever,
             )
         else:
             self._runner.graph = self.graph
             self._runner.session = session
-            self._runner.settings = getattr(self, "settings", None)
 
     @property
     def messages(self) -> list[Any]:
@@ -103,18 +96,6 @@ class AgentFlowManager:
     @property
     def upload_retriever_handle(self):
         return self._ensure_session().upload_retriever_handle
-
-    @upload_retriever_handle.setter
-    def upload_retriever_handle(self, value) -> None:
-        self._ensure_session().upload_retriever_handle = value
-
-    @property
-    def upload_file_path(self) -> str | None:
-        return self._ensure_session().upload_file_path
-
-    @upload_file_path.setter
-    def upload_file_path(self, value: str | None) -> None:
-        self._ensure_session().upload_file_path = value
 
     def set_session_metadata(self, session_metadata: SessionMetadata | None) -> None:
         self._ensure_session().set_session_metadata(session_metadata)
@@ -177,9 +158,7 @@ class AgentFlowManager:
         message: str,
         graph_total_ms: int | None,
         flow_started: float,
-        upload_retriever_build_ms: int | None,
         stage_error: StageExecutionError | None,
-        error_code: str | None = None,
         graph_state: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         debug = graph_state.get("debug") if graph_state is not None else None
@@ -195,7 +174,7 @@ class AgentFlowManager:
         route_decisions: list[dict[str, Any]] = []
         missing_debug_fields: list[str] = []
         errors = [message]
-        error_codes = [error_code] if error_code else []
+        error_codes: list[str] = []
         if graph_state is not None:
             try:
                 route_decisions = [
@@ -219,7 +198,6 @@ class AgentFlowManager:
             raw_trace=raw_trace,
             graph_total_ms=graph_total_ms,
             server_total_ms=elapsed_ms(flow_started, time.perf_counter()),
-            upload_retriever_build_ms=upload_retriever_build_ms,
         )
         result = finalize_answer(text_document(message), [])
         return {
@@ -251,13 +229,12 @@ class AgentFlowManager:
     def run_agent_flow(
         self,
         user_input: str,
-        upload_file_path: str | None = None,
+        *,
         progress_emitter: ProgressEmitter | None = None,
-        *, uploads: UploadContext | None = None,
     ) -> dict[str, Any]:
         with (capture_tool_execution(getattr(progress_emitter, "request_id", None)) as recorder,
               capture_llm_usage() as usage_recorder):
-            result = self._run_agent_flow(user_input, upload_file_path, progress_emitter, uploads=uploads)
+            result = self._run_agent_flow(user_input, progress_emitter=progress_emitter)
             evidence = recorder.snapshot()
             debug = result["debug"]
             debug["llm_calls"] = [call.model_dump(mode="json") for call in usage_recorder.snapshot()]
@@ -269,25 +246,19 @@ class AgentFlowManager:
     def _run_agent_flow(
         self,
         user_input: str,
-        upload_file_path: str | None = None,
+        *,
         progress_emitter: ProgressEmitter | None = None,
-        *, uploads: UploadContext | None = None,
     ) -> dict[str, Any]:
         self._ensure_components()
 
         flow_started = time.perf_counter()
-        upload_retriever_build_ms: int | None = None
         try:
-            session = self._ensure_session()
-            if uploads is not None and (uploads.epoch != session.upload_epoch or uploads.revision != session.upload_revision):
-                raise ValueError("UPLOAD_REVISION_CONFLICT: attachment set changed")
             validate_query_text(user_input)
         except ValueError as exc:
             return self._error_payload(
                 message=str(exc),
                 graph_total_ms=None,
                 flow_started=flow_started,
-                upload_retriever_build_ms=None,
                 stage_error=None,
             )
 
@@ -299,16 +270,11 @@ class AgentFlowManager:
         graph_total_ms: int | None = None
         try:
             previous_memory = self._ensure_session().snapshot_conversation_memory()
-            state, upload_retriever_build_ms = self._runner.prepare_graph_state(
+            state = self._runner.prepare_graph_state(
                 user_input,
-                upload_file_path,
                 progress_emitter=progress_emitter,
-                uploads=uploads,
             )
             response, graph_total_ms = self._runner.invoke_graph(state)
-            finalized_build_ms = self._runner.finalize_pending_upload_retriever(wait=False)
-            if finalized_build_ms is not None:
-                upload_retriever_build_ms = finalized_build_ms
             updated_messages = list(response["messages"])
             candidate_summary = self._resolve_response_memory_summary(
                 response,
@@ -318,7 +284,6 @@ class AgentFlowManager:
                 response=response,
                 updated_messages=updated_messages,
                 graph_total_ms=graph_total_ms,
-                upload_retriever_build_ms=upload_retriever_build_ms,
             )
             assembled_response = self._response_assembler.assemble(
                 response=response,
@@ -349,11 +314,7 @@ class AgentFlowManager:
             return assembled_response
 
         except Exception as exc:
-            self._runner.cancel_pending_upload_retriever()
             # Committed attachments outlive an individual answer/LLM failure.
-            if uploads is None:
-                self._ensure_session().cleanup_upload_retriever()
-                self.upload_file_path = None
             stage_error = None
             root_exc = exc
             if isinstance(exc, GraphInvocationError):
@@ -363,9 +324,6 @@ class AgentFlowManager:
             if isinstance(root_exc, StageExecutionError):
                 stage_error = root_exc
                 root_exc = root_exc.cause
-            error_code = None
-            if "UPLOAD_RETRIEVER_BUILD_FAILED" in str(root_exc):
-                error_code = "UPLOAD_RETRIEVER_BUILD_FAILED"
             if progress_emitter is not None and stage_error is None:
                 progress_emitter.emit_error(message=str(root_exc), stage=None)
             log_event(logger, logging.ERROR, "agent_execution_error", error=root_exc)
@@ -373,8 +331,6 @@ class AgentFlowManager:
                 message=str(root_exc),
                 graph_total_ms=graph_total_ms,
                 flow_started=flow_started,
-                upload_retriever_build_ms=upload_retriever_build_ms,
                 stage_error=stage_error,
-                error_code=error_code,
                 graph_state=response,
             )

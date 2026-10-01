@@ -147,8 +147,6 @@ class DebugCollector:
                 add("SYNTHESIS_TIMEOUT")
             if "local_rag_failed" in lowered or "local similarity search failed" in lowered:
                 add("LOCAL_RAG_FAILED")
-            if "upload_retriever_build_failed" in lowered:
-                add("UPLOAD_RETRIEVER_BUILD_FAILED")
         return codes
 
     def build(
@@ -157,7 +155,6 @@ class DebugCollector:
         response: dict[str, Any],
         updated_messages: list[Any],
         graph_total_ms: int,
-        upload_retriever_build_ms: int | None,
     ) -> dict[str, Any]:
         tool_calls: list[str] = []
         state_debug = get_debug_state(response)
@@ -223,7 +220,6 @@ class DebugCollector:
         latency_breakdown = build_latency_breakdown(
             raw_trace=[item for item in state_debug.latency_trace],
             graph_total_ms=graph_total_ms,
-            upload_retriever_build_ms=upload_retriever_build_ms,
         )
         answer_provenance = None
         if state_response.body_kind is not None:
