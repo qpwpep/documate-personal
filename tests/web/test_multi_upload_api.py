@@ -172,8 +172,6 @@ def answer(api, **kwargs):
 
 
 
-
-
 def test_sync_rejects_bytes_changed_after_approval(api):
     current = manifest(api)
     addition = staged(api, "alpha.py", "alpha = 1\n")
@@ -184,6 +182,12 @@ def test_sync_rejects_bytes_changed_after_approval(api):
     assert response.json()["detail"]["code"] == "UPLOAD_CONTENT_CHANGED"
     assert manifest(api) == current
     assert not list((api.root / "uploads" / "session-a" / "objects").glob("**/*.py"))
+
+
+
+
+
+
 
 
 
@@ -221,7 +225,7 @@ def test_http_comparison_only_uses_the_planned_files_from_a_larger_attachment_se
         staged(api, "alpha.py", "alpha = 1\n"),
         staged(api, "beta.py", "beta = 2\n"),
         staged(api, "unrelated.py", "unrelated = 99\n"),
-    ])["manifest"]
+    ])
     api.controls.planned_file_ids = [item["file_id"] for item in current["files"] if item["name"] != "unrelated.py"]
 
     result = answer(api, query="Compare only alpha.py and beta.py", uploads=context(current))
@@ -238,7 +242,7 @@ def test_http_comparison_only_uses_the_planned_files_from_a_larger_attachment_se
 def test_stale_http_revision_rejects_mutations_and_question_without_changing_attachments(api, query):
     """A stale client cannot overwrite, reset or use a different attachment revision."""
     old = manifest(api)
-    current = sync(api, add=[staged(api, "alpha.py", "alpha = 1\n")])["manifest"]
+    current = sync(api, add=[staged(api, "alpha.py", "alpha = 1\n")])
 
     rejected = api.client.post("/sessions/session-a/uploads/sync", json=sync_body(old, clear=True))
     events = stream(api, query=query, uploads=context(old))
@@ -294,7 +298,7 @@ def notebook_bytes(size):
 
 def test_failed_http_batch_preserves_previous_sources_for_later_questions(api):
     """One invalid notebook rolls back the batch while the prior attachment remains usable over HTTP."""
-    current = sync(api, add=[staged(api, "alpha.py", "alpha = 1\n")])["manifest"]
+    current = sync(api, add=[staged(api, "alpha.py", "alpha = 1\n")])
     rejected = api.client.post("/sessions/session-a/uploads/sync", json=sync_body(current, add=[
         staged(api, "beta.py", "beta = 2\n"), staged(api, "broken.ipynb", "not JSON"),
     ]))
@@ -365,17 +369,17 @@ def test_session_recovers_committed_upload_after_lost_response(api, monkeypatch,
     assert [file["name"] for file in committed["files"]] == ["alpha.py"]
     assert len(deliveries) == 2  # Initial GET and exactly one attempted mutation.
     assert Path(prepared.files[0].path).read_bytes() == b"alpha = 1\n"
-    current = (sync(api, add=[staged(api, "beta.py", "beta = 2\n")])["manifest"]
+    current = (sync(api, add=[staged(api, "beta.py", "beta = 2\n")])
                if intervening_change else committed)
 
     replayed = client.sync_uploads(request)
 
-    assert replayed.manifest.model_dump(mode="json") == committed
+    assert replayed.model_dump(mode="json") == current
     assert manifest(api) == current
     sync_payloads = [payload for _, path, payload in deliveries if path.endswith("/uploads/sync")]
     assert sync_payloads == [original_payload, original_payload]
     assert all(path != "/agent/stream" for _, path, _ in deliveries)
-    assert client.refresh_uploads().model_dump(mode="json") == current
+    assert client.manifest.model_dump(mode="json") == current
     events = list(client.stream("Compare the attached files"))
     assert not [event for event in events if event.event == "error"]
     final = next(event.result for event in events if event.event == "final_response")
@@ -420,11 +424,11 @@ def test_loopback_attachment_changes_reach_streamlit_client_and_versioned_answer
                 return result.response
 
             empty = fetch_upload_manifest(url, "session-a")
-            first = update(empty, add=[staged(api, "alpha.py", "alpha = 1\n")]).manifest
-            attached = update(first, add=[staged(api, "beta.py", "beta = 2\n")]).manifest
+            first = update(empty, add=[staged(api, "alpha.py", "alpha = 1\n")])
+            attached = update(first, add=[staged(api, "beta.py", "beta = 2\n")])
             original = ask(attached)
             assert {item.evidence.snapshot.title for item in original.citations} == {"alpha.py", "beta.py"}
-            assert update(attached, add=[staged(api, "alpha.py", "alpha = 1\n")]).manifest == attached
+            assert update(attached, add=[staged(api, "alpha.py", "alpha = 1\n")]) == attached
 
             replacement = staged(api, "alpha.py", "alpha = 10\n")
             with pytest.raises(UploadAPIError) as conflict:
@@ -432,7 +436,7 @@ def test_loopback_attachment_changes_reach_streamlit_client_and_versioned_answer
             assert conflict.value.code == "UPLOAD_NAME_CONFLICT"
             alpha = next(item for item in attached.files if item.name == "alpha.py")
             replacement["replace_file_id"] = alpha.file_id
-            replaced = update(attached, add=[replacement]).manifest
+            replaced = update(attached, add=[replacement])
             current = ask(replaced)
             current_alpha = next(item.evidence for item in current.citations if item.evidence.snapshot.title == "alpha.py")
             old_alpha = next(item.evidence for item in original.citations if item.evidence.snapshot.title == "alpha.py")
@@ -442,9 +446,9 @@ def test_loopback_attachment_changes_reach_streamlit_client_and_versioned_answer
             assert current_alpha.snapshot.snapshot_id != old_alpha.snapshot.snapshot_id
 
             beta = next(item for item in replaced.files if item.name == "beta.py")
-            removed = update(replaced, remove=[beta.file_id]).manifest
+            removed = update(replaced, remove=[beta.file_id])
             assert {item.evidence.snapshot.title for item in ask(removed).citations} == {"alpha.py"}
-            cleared = update(removed, clear=True).manifest
+            cleared = update(removed, clear=True)
             assert cleared.files == []
             assert ask(cleared).citations == []
             assert fetch_upload_manifest(url, "session-a") == cleared

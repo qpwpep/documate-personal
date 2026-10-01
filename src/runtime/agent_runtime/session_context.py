@@ -12,7 +12,7 @@ from langchain_core.messages import HumanMessage
 from src.core.answer_schema import AnswerResponse
 from src.core.request_contracts import UserTurnSnapshot, required_contract_turn_ids
 from src.core.conversation_memory import extract_memory_text
-from src.core.uploads import UploadContext, UploadManifest, UploadRecord, UploadSyncResponse
+from src.core.uploads import UploadContext, UploadManifest, UploadRecord
 
 from src.core.contracts import SessionMetadata
 from src.core.contracts.graph_state import PendingAction
@@ -46,7 +46,7 @@ class SessionContext:
         self._upload_revision = 0
         self._upload_records: tuple[UploadRecord, ...] = ()
         self._upload_storage: UploadStorage | None = None
-        self.upload_operations: OrderedDict[str, tuple[str, UploadSyncResponse]] = OrderedDict()
+        self.upload_operations: OrderedDict[str, str] = OrderedDict()
         self.previous_response: AnswerResponse | None = None
         self.pending_action: PendingAction | None = None
 

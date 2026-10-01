@@ -12,7 +12,7 @@ from src.infra.runtime_paths import get_save_text_output_dir
 from src.infra.saved_artifacts import ArtifactError, read_saved_artifact
 from src.app.web.cleanup import resolve_download_path
 from src.app.web.schemas import AGENT_STREAM_EVENT_SCHEMAS, AgentRequest, AgentStreamEvent
-from src.core.uploads import UploadManifest, UploadSyncRequest, UploadSyncResponse, validate_session_id
+from src.core.uploads import UploadManifest, UploadSyncRequest, validate_session_id
 
 
 logger = logging.getLogger(__name__)
@@ -31,7 +31,7 @@ def get_upload_manifest(session_id: str, request: Request):
     return request.app.state.upload_service.get_manifest(_upload_session_id(session_id))
 
 
-@router.post("/sessions/{session_id}/uploads/sync", response_model=UploadSyncResponse)
+@router.post("/sessions/{session_id}/uploads/sync", response_model=UploadManifest)
 def sync_upload_manifest(session_id: str, request_data: UploadSyncRequest, request: Request):
     return request.app.state.upload_service.sync(_upload_session_id(session_id), request_data)
 

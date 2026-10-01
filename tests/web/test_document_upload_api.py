@@ -96,7 +96,7 @@ def test_mixed_http_uploads_preserve_native_code_structured_table_pages_and_docx
     api = document_api
     current = sync(api, add=[staged(api, "sample.py", "native_value = 3\n"),
                              staged(api, "report.pdf", pdf_bytes()),
-                             staged(api, "guide.docx", docx_bytes())])["manifest"]
+                             staged(api, "guide.docx", docx_bytes())])
 
     result = answer(api, uploads=context(current))
 
