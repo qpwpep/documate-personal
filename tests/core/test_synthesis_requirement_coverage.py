@@ -12,7 +12,7 @@ from src.core.request_contracts import RequestContract
 from src.runtime.nodes.synthesis.budgets import SynthesisBudgetProfile, resolve_synthesis_budget_profile
 from src.runtime.nodes.synthesis.context import build_synthesis_context, prepare_synthesis_inputs
 from src.runtime.nodes.synthesis.evidence_selection import select_evidence_hits
-from src.runtime.nodes.synthesis.prompt_builder import select_evidence_packet
+from src.runtime.nodes.synthesis.evidence_selection import select_evidence_packet
 from src.runtime.nodes.validation.assessment import assess_validation
 from src.runtime.nodes.validation.node import make_post_synthesis_validation_node
 from src.runtime.nodes.validation.snapshot import build_validation_snapshot

@@ -385,3 +385,171 @@ def select_evidence_range(
         snapshot=item.snapshot, element=item.element,
         start=item.selection.start + start, end=item.selection.start + end,
     )
+
+
+def prepare_evidence_packet(
+    evidence: list[EvidenceRef], *, max_items: int, snippet_char_limit: int,
+    evidence_char_budget: int, query: str = "",
+    requirements_by_evidence: dict[str, list[RetrievalTask]] | None = None,
+) -> list[EvidenceRef]:
+    """The allowed references contain exactly the source text sent to the model."""
+    return select_evidence_packet(
+        evidence, max_items=max_items, snippet_char_limit=snippet_char_limit,
+        evidence_char_budget=evidence_char_budget, query=query,
+        requirements_by_evidence=requirements_by_evidence,
+    )[0]
+
+
+def select_evidence_packet(
+    evidence: list[EvidenceRef], *, max_items: int, snippet_char_limit: int,
+    evidence_char_budget: int, query: str = "",
+    requirements_by_evidence: dict[str, list[RetrievalTask]] | None = None,
+) -> tuple[list[EvidenceRef], dict[str, list[str]]]:
+    """Reserve required passages before expanding context, charging shared ranges only once."""
+    packet: list[EvidenceRef] = []
+    requirement_ids: dict[str, list[str]] = {}
+    remaining = max(0, evidence_char_budget)
+    candidates: dict[tuple[str, str, tuple[str, ...]], tuple[EvidenceRef, RetrievalTask | None]] = {}
+    for item in evidence:
+        tasks = (requirements_by_evidence or {}).get(item.id) or [None]
+        for task in tasks:
+            if task is not None and not matches_file_scope(item, task):
+                continue
+            focused_tasks = (
+                [task.model_copy(update={"requirement": task.requirement.model_copy(update={"aspects": [aspect]})})
+                 for aspect in task.requirement.aspects]
+                if task is not None and len(task.requirement.aspects) > 1 else [task]
+            )
+            for focused in focused_tasks:
+                key = (
+                    item.id, focused.requirement_id if focused else "",
+                    tuple(focused.requirement.aspects) if focused else (),
+                )
+                candidates.setdefault(key, (item, focused))
+
+    def group(candidate: tuple[EvidenceRef, RetrievalTask | None]) -> str:
+        item, task = candidate
+        if task is not None and task.requirement.file_ids:
+            return f"{task.requirement_id}:file:{upload_file_id(item)}"
+        return task.requirement_id if task else f"route:{item.route}"
+
+    first: dict[str, tuple[EvidenceRef, RetrievalTask | None]] = {}
+    rest = []
+    for candidate in candidates.values():
+        key = group(candidate)
+        if key not in first:
+            first[key] = candidate
+        else:
+            rest.append(candidate)
+    ordered = [*first.values(), *rest]
+    origins: dict[str, tuple[EvidenceRef, RetrievalTask | None]] = {}
+
+    def associate(selected: EvidenceRef, task: RetrievalTask | None) -> None:
+        if task is not None:
+            associated = requirement_ids.setdefault(selected.id, [])
+            if task.requirement_id not in associated:
+                associated.append(task.requirement_id)
+
+    def needs_passage(item: EvidenceRef, task: RetrievalTask | None) -> bool:
+        excerpts = [selected.excerpt for selected in packet
+                    if (task is None and selected.route == item.route) or (
+                        task is not None and task.requirement_id in requirement_ids.get(selected.id, [])
+                        and (not task.requirement.file_ids or upload_file_id(selected) == upload_file_id(item)))]
+        return not excerpts or bool(task and missing_literal_aspects(task.requirement.aspects, excerpts))
+
+    # All associations are attached before testing capacity: sharing a cropped
+    # range is free even when the item or character budget has been exhausted.
+    def share_existing(item: EvidenceRef, task: RetrievalTask | None) -> None:
+        for selected in packet:
+            if contains_evidence_range(item, selected):
+                associate(selected, task)
+
+    def add_candidate(
+        item: EvidenceRef, task: RetrievalTask | None, allowance: int, *, require_anchor: bool = True,
+        allow_partial: bool = True, complete_char_limit: int | None = None,
+    ) -> None:
+        nonlocal remaining
+        if len(packet) >= max(0, max_items) or allowance <= 0:
+            return
+        if item.element.kind == "table":
+            selected = select_table_evidence(
+                item, limit=min(max(0, snippet_char_limit), allowance), query=query, task=task,
+            )
+            if selected is None:
+                return
+        else:
+            limit = min(max(0, snippet_char_limit), allowance)
+            if not limit:
+                return
+            selected = select_evidence_range(
+                item, limit=limit, query=query, task=task, expand_context=False,
+                allow_partial=allow_partial, complete_char_limit=complete_char_limit,
+            )
+        if not selected.excerpt.strip():
+            return
+        if require_anchor and task is not None and missing_literal_aspects(task.requirement.aspects, [selected.excerpt]):
+            return
+        if selected.id not in origins:
+            packet.append(selected)
+            origins[selected.id] = (item, task)
+            remaining -= len(selected.excerpt)
+        associate(selected, task)
+
+    def fair_allowance() -> int:
+        # Deferred earlier requirements still own a share of the remaining budget.
+        pending = {(group(candidate), tuple(candidate[1].requirement.aspects) if candidate[1] else ())
+                   for candidate in ordered if needs_passage(*candidate)}
+        return remaining // max(1, min(len(pending), max_items - len(packet)))
+
+    for item, task in ordered:
+        share_existing(item, task)
+        if not needs_passage(item, task):
+            continue
+        add_candidate(item, task, fair_allowance(), complete_char_limit=snippet_char_limit)
+
+    # Whole statements and table selections need unequal space. Revisit unmet
+    # requirements using capacity left by smaller passages before optional text.
+    while True:
+        before = (len(packet), sum(map(len, requirement_ids.values())))
+        for item, task in ordered:
+            share_existing(item, task)
+            if needs_passage(item, task):
+                add_candidate(item, task, fair_allowance(), allow_partial=False)
+        if before == (len(packet), sum(map(len, requirement_ids.values()))):
+            break
+
+    # If whole units cannot share the available budget, reserve partial source
+    # ranges for the unmet requirements before adding optional sources/context.
+    for item, task in ordered:
+        share_existing(item, task)
+        if needs_passage(item, task):
+            add_candidate(item, task, fair_allowance())
+
+    # Additional sources remain useful after every available required passage
+    # has had a turn. They also precede optional neighboring source context.
+    for item, task in ordered:
+        share_existing(item, task)
+        if any(original.id == item.id for original, _ in origins.values()):
+            continue
+        add_candidate(item, task, remaining, require_anchor=False)
+
+    for index, selected in enumerate(list(packet)):
+        original, task = origins[selected.id]
+        if original.element.kind == "table":
+            continue
+        limit = min(max(0, snippet_char_limit), len(selected.excerpt) + remaining // (len(packet) - index))
+        expanded = select_evidence_range(original, limit=limit, query=query, task=task)
+        if not contains_evidence_range(expanded, selected):
+            continue
+        if any(not any(candidate_task is not None and candidate_task.requirement_id == requirement_id
+                       and contains_evidence_range(candidate, expanded)
+                       for candidate, candidate_task in ordered)
+               for requirement_id in requirement_ids.get(selected.id, [])):
+            continue
+        remaining -= len(expanded.excerpt) - len(selected.excerpt)
+        packet[index] = expanded
+    packet = list({selected.id: selected for selected in packet}.values())
+    requirement_ids.clear()
+    for item, task in ordered:
+        share_existing(item, task)
+    return packet, requirement_ids
