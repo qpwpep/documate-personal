@@ -1,0 +1,1384 @@
+{
+  "summary": {
+    "decision_contract_version": 1,
+    "case_policy_snapshots": {
+      "case-0": {
+        "version": 1,
+        "scope": "scenario_turns",
+        "final_forbidden_tools": [
+          "slack_notify"
+        ],
+        "setup_turn_count": 0,
+        "setup_forbidden_tools": null
+      }
+    },
+    "results_fingerprint": "sha256:fb3307d0e82fcfaf669fc32438aa5e93877a4b7241ce77cc730f81c5383668fd",
+    "release_decision": {
+      "passed": true,
+      "failure_codes": [],
+      "scope": "release"
+    },
+    "run_id": "policy-run",
+    "endpoint": "http://fixture",
+    "fixtures_path": "cases.jsonl",
+    "config_path": "config.toml",
+    "generated_at_utc": "2026-09-30T00:00:00+00:00",
+    "mode": "online",
+    "track": "release",
+    "requested_limit": null,
+    "execution_contract_version": "shared-client-scenario-v1",
+    "measurement_contract_version": "llm-usage-scenario-v2",
+    "suite_fingerprint": "sha256:3000f7f221fb86b479ba22ad21e8f6fe4a69de1e2a0affa697f9e168ee1083cf",
+    "evaluation_fingerprint": "sha256:759d251530d1f490bb6294752f058021c92cefa2eb01239f5cdf71ce9af39de7",
+    "metrics": {
+      "policy_compliant_cases": 1,
+      "policy_violating_cases": 0,
+      "policy_indeterminate_cases": 0,
+      "policy_violations": 0,
+      "policy_failure_codes": [],
+      "total_cases": 1,
+      "scored_cases": 1,
+      "passed_cases": 1,
+      "pass_rate": 1.0,
+      "planned_cases": 1,
+      "invalid_eval_cases": 0,
+      "incomplete_eval_cases": 0,
+      "missing_result_cases": 0,
+      "duplicate_result_cases": 0,
+      "unexpected_result_cases": 0,
+      "judge_required_cases": 1,
+      "judge_succeeded_cases": 1,
+      "judge_failed_cases": 0,
+      "judge_disabled_cases": 0,
+      "judge_not_run_cases": 0,
+      "judge_legacy_unknown_cases": 0,
+      "judge_execution_rate": 1.0,
+      "product_passed_cases": 1,
+      "judge_passed_cases": 1,
+      "release_passed_cases": 1,
+      "product_pass_rate": 1.0,
+      "judge_pass_rate": 1.0,
+      "release_pass_rate": 1.0,
+      "save_contract_cases": 0,
+      "save_contract_failures": 0,
+      "save_verified_cases": 0,
+      "save_unverifiable_cases": 0,
+      "tool_precision": 1.0,
+      "tool_recall": 1.0,
+      "citation_compliance": 1.0,
+      "p50_latency_ms": 10.0,
+      "p95_latency_ms": 10.0,
+      "p50_attachment_setup_ms": null,
+      "p95_attachment_setup_ms": null,
+      "p50_question_response_ms": null,
+      "p95_question_response_ms": null,
+      "p50_scenario_total_ms": null,
+      "p95_scenario_total_ms": null,
+      "hybrid_p95_latency_ms": null,
+      "hybrid_p95_server_ms": null,
+      "hybrid_p95_synthesis_ms": null,
+      "hybrid_p95_retrieval_ms": null,
+      "docs_only_p95_latency_ms": 10.0,
+      "avg_cost_per_case_usd": 4.5e-06,
+      "slack_delivery_required_cases": 0,
+      "slack_delivery_success_cases": 0,
+      "slack_delivery_success_rate": null,
+      "cost_gate_eligible": true,
+      "cost_observation_rate": 1.0,
+      "cost_observed_cases": 1,
+      "request_id_coverage_rate": 1.0,
+      "judge_input_completeness_rate": 1.0,
+      "judge_min_score_failures": 0,
+      "deterministic_direct_usage_rate": 0.0,
+      "high_rule_low_judge_divergence_rate": 0.0,
+      "planner_deterministic_rate": 0.0,
+      "planner_llm_attempt_count": 0,
+      "planner_structured_success_rate": 1.0,
+      "planner_error_count": 0,
+      "planner_error_case_count": 0,
+      "planner_warning_count": 0,
+      "planner_duplicate_route_merge_count": 0,
+      "planner_final_success_rate": 0.0,
+      "synthesis_structured_success_rate": 0.0,
+      "failures": []
+    },
+    "analysis": {
+      "category_pass_rates": [
+        {
+          "category": "docs_only",
+          "passed_cases": 1,
+          "total_cases": 1,
+          "pass_rate": 1.0
+        }
+      ],
+      "planner_diagnostics_histogram": [
+        {
+          "category": "docs_only",
+          "status": "missing",
+          "reason": "diagnostics_unavailable",
+          "override_reason": null,
+          "count": 1
+        }
+      ],
+      "planner_error_histogram": [],
+      "error_code_histogram": [],
+      "retrieval_route_status_histogram": [],
+      "retrieval_warning_histogram": [],
+      "route_confusion": [],
+      "validator_reason_histogram": [],
+      "synthesis_mode_histogram": [],
+      "slack_delivery_status_histogram": [],
+      "stage_latency_percentiles": [],
+      "latency_breakdown_coverage": {
+        "available_cases": 0,
+        "total_cases": 1,
+        "coverage_rate": 0.0
+      }
+    },
+    "gates": [
+      {
+        "name": "tool_execution_policy",
+        "threshold": 0,
+        "actual": 0,
+        "passed": true,
+        "gate_type": "release",
+        "detail": "Every required turn needs complete evidence and zero forbidden executions.",
+        "status": "evaluated"
+      },
+      {
+        "name": "save_outcome_contract",
+        "threshold": 0,
+        "actual": 0,
+        "passed": true,
+        "gate_type": "release",
+        "detail": "Every declared save outcome must be verified; failures cannot be offset by pass rate.",
+        "status": "evaluated"
+      },
+      {
+        "name": "evaluation_completeness",
+        "threshold": 0,
+        "actual": 0,
+        "passed": true,
+        "gate_type": "release",
+        "detail": "invalid=0 incomplete=0 missing=0 duplicate=0 unexpected=0",
+        "status": "evaluated"
+      },
+      {
+        "name": "release_pass_rate",
+        "threshold": 0.9,
+        "actual": 1.0,
+        "passed": true,
+        "gate_type": "release",
+        "detail": null,
+        "status": "evaluated"
+      },
+      {
+        "name": "tool_precision",
+        "threshold": 0.9,
+        "actual": 1.0,
+        "passed": true,
+        "gate_type": "release",
+        "detail": null,
+        "status": "evaluated"
+      },
+      {
+        "name": "tool_recall",
+        "threshold": 0.85,
+        "actual": 1.0,
+        "passed": true,
+        "gate_type": "release",
+        "detail": null,
+        "status": "evaluated"
+      },
+      {
+        "name": "citation_compliance",
+        "threshold": 0.95,
+        "actual": 1.0,
+        "passed": true,
+        "gate_type": "release",
+        "detail": null,
+        "status": "evaluated"
+      },
+      {
+        "name": "p95_latency_ms",
+        "threshold": 10000,
+        "actual": 10.0,
+        "passed": true,
+        "gate_type": "release",
+        "detail": null,
+        "status": "evaluated"
+      },
+      {
+        "name": "avg_cost_per_case_usd",
+        "threshold": 0.01,
+        "actual": 4.5e-06,
+        "passed": true,
+        "gate_type": "release",
+        "detail": null,
+        "status": "evaluated"
+      },
+      {
+        "name": "judge_min_score_pass_rate",
+        "threshold": 1.0,
+        "actual": 1.0,
+        "passed": true,
+        "gate_type": "audit",
+        "detail": null,
+        "status": "evaluated"
+      },
+      {
+        "name": "judge_input_completeness_rate",
+        "threshold": 1.0,
+        "actual": 1.0,
+        "passed": true,
+        "gate_type": "audit",
+        "detail": null,
+        "status": "evaluated"
+      },
+      {
+        "name": "deterministic_direct_usage_rate",
+        "threshold": 0.35,
+        "actual": 0.0,
+        "passed": true,
+        "gate_type": "audit",
+        "detail": null,
+        "status": "evaluated"
+      },
+      {
+        "name": "high_rule_low_judge_divergence_rate",
+        "threshold": 0.1,
+        "actual": 0.0,
+        "passed": true,
+        "gate_type": "audit",
+        "detail": null,
+        "status": "evaluated"
+      },
+      {
+        "name": "slack_delivery_success_rate",
+        "threshold": 1.0,
+        "actual": null,
+        "passed": true,
+        "gate_type": "audit",
+        "detail": null,
+        "status": "skipped_not_live"
+      }
+    ],
+    "overall_passed": true,
+    "weights": {
+      "answer_quality": 0.2,
+      "reference_coverage": 0.2,
+      "citation_traceability": 0.2,
+      "tool_choice": 0.15,
+      "format_language": 0.05,
+      "llm_judge": 0.2
+    },
+    "hard_gates": {
+      "pass_rate": 0.9,
+      "tool_precision": 0.9,
+      "tool_recall": 0.85,
+      "citation_compliance": 0.95,
+      "p95_latency_ms": 10000,
+      "avg_cost_per_case_usd": 0.01,
+      "cost_gate_min_observation_rate": 0.8
+    },
+    "pricing": {
+      "prompt_per_1k_usd": 0.00015,
+      "completion_per_1k_usd": 0.0006,
+      "models": {}
+    },
+    "judge_enabled": true,
+    "judge_model": "gpt-5.6-luna",
+    "audit_metrics": {
+      "scoring_contract_version": "execution-policy-contract-v4",
+      "judge_min_score_pass_rate": 1.0,
+      "judge_min_score_failures": 0,
+      "judge_required_cases": 1,
+      "judge_succeeded_cases": 1,
+      "judge_failed_cases": 0,
+      "judge_not_run_cases": 0,
+      "judge_disabled_cases": 0,
+      "judge_execution_rate": 1.0,
+      "invalid_eval_cases": 0,
+      "incomplete_eval_cases": 0,
+      "cost_observation_rate": 1.0,
+      "request_id_coverage_rate": 1.0,
+      "judge_input_completeness_rate": 1.0,
+      "deterministic_direct_usage_rate": 0.0,
+      "high_rule_low_judge_divergence_rate": 0.0,
+      "planner_error_count": 0,
+      "planner_error_case_count": 0,
+      "planner_warning_count": 0,
+      "planner_duplicate_route_merge_count": 0,
+      "planner_final_success_rate": 0.0,
+      "slack_delivery_success_rate": null,
+      "slack_delivery_required_cases": 0,
+      "slack_delivery_success_cases": 0,
+      "cost_gate_eligible": true
+    }
+  },
+  "results": [
+    {
+      "decision_contract_version": 1,
+      "policy_snapshot": {
+        "version": 1,
+        "scope": "scenario_turns",
+        "final_forbidden_tools": [
+          "slack_notify"
+        ],
+        "setup_turn_count": 0,
+        "setup_forbidden_tools": null
+      },
+      "policy_assessment": {
+        "status": "compliant",
+        "violations": [],
+        "evidence_issues": []
+      },
+      "decision": {
+        "passed": true,
+        "failure_codes": []
+      },
+      "execution_evidence": {
+        "schema_version": 1,
+        "request_id": "req-1",
+        "status": "complete",
+        "events": [
+          {
+            "sequence": 1,
+            "invocation_id": "call-tavily_search",
+            "tool_name": "tavily_search",
+            "phase": "started",
+            "reason_code": null,
+            "origin_invocation_id": null
+          },
+          {
+            "sequence": 2,
+            "invocation_id": "call-tavily_search",
+            "tool_name": "tavily_search",
+            "phase": "succeeded",
+            "reason_code": null,
+            "origin_invocation_id": null
+          }
+        ]
+      },
+      "run_id": "policy-run",
+      "case_id": "case-0",
+      "category": "docs_only",
+      "scenario": "seed_mutation",
+      "query": "pandas merge는 어떻게 동작해?",
+      "session_id": "session-0",
+      "endpoint": "http://fixture",
+      "upload_fixture": null,
+      "upload_fixtures": [],
+      "attachment_fingerprints": {},
+      "request_payload": {
+        "query": "pandas merge는 어떻게 동작해?"
+      },
+      "request_id": "req-1",
+      "http_status": 200,
+      "response_text": "merge는 두 DataFrame의 일치하는 열을 기준으로 행을 결합합니다. [1]",
+      "response": {
+        "content": {
+          "blocks": [
+            {
+              "type": "paragraph",
+              "content": [
+                {
+                  "text": "merge는 두 DataFrame의 일치하는 열을 기준으로 행을 결합합니다.",
+                  "basis": "source",
+                  "refs": [
+                    "ref:91da213c5f1a688d1363a3cbdfc59bed7afc7659c7e7b332839edb184e110b3d"
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        "citations": [
+          {
+            "number": 1,
+            "evidence": {
+              "id": "ref:91da213c5f1a688d1363a3cbdfc59bed7afc7659c7e7b332839edb184e110b3d",
+              "snapshot": {
+                "snapshot_id": "snapshot:114dcd12254f1591fb405f93344e898fcfab6d85c7086e3b105e1d9f772eca93",
+                "document_id": "doc:791ab99f4a4c74520686efa3add903487797de19c9120914a06b1627bc872f66",
+                "content_hash": "sha256:6fffa351fd2aa8cada142e54532c114f2b3811ab3821981c920b1c69e495bbd5",
+                "source_uri": "https://pandas.pydata.org/docs/",
+                "title": "NumPy Docs",
+                "media_type": "text/plain",
+                "source_type": "official",
+                "parser": "eval-fixture",
+                "parser_version": "1",
+                "parser_config": {},
+                "capture_scope": "full_document",
+                "quality_issues": []
+              },
+              "element": {
+                "element_id": "body",
+                "kind": "paragraph",
+                "text": "pandas.merge combines rows from two DataFrames by matching columns.",
+                "parent_id": null,
+                "order": 0,
+                "heading_level": null,
+                "heading_path": [],
+                "language": null,
+                "table": null,
+                "anchors": [
+                  {
+                    "kind": "web",
+                    "start": 0,
+                    "end": 67,
+                    "line_start": null,
+                    "line_end": null,
+                    "cell_id": null,
+                    "cell_index": null,
+                    "page_no": null,
+                    "bbox": null,
+                    "coordinate_space": "normalized",
+                    "coordinate_origin": "top_left",
+                    "page_width": null,
+                    "page_height": null,
+                    "precision": "element"
+                  }
+                ],
+                "metadata": {}
+              },
+              "selection": {
+                "start": 0,
+                "end": 67,
+                "cell_ids": []
+              }
+            }
+          }
+        ],
+        "checks": [
+          {
+            "unit_id": "b0.content.0",
+            "reference_status": "resolved",
+            "support_status": "not_evaluated",
+            "issues": []
+          }
+        ],
+        "issues": [],
+        "actions": [],
+        "content_hash": "6d463e9787935aab9c97b582d8fc4bef2e715665706cd55c3b3f7015d54a2ae1",
+        "retrieval_required": false
+      },
+      "debug": {
+        "schema_version": 11,
+        "observability_status": "ok",
+        "missing_required_debug_fields": [],
+        "tool_calls": [
+          "tavily_search"
+        ],
+        "tool_call_count": 1,
+        "execution_evidence": {
+          "schema_version": 1,
+          "request_id": "req-1",
+          "status": "complete",
+          "events": [
+            {
+              "sequence": 1,
+              "invocation_id": "call-tavily_search",
+              "tool_name": "tavily_search",
+              "phase": "started"
+            },
+            {
+              "sequence": 2,
+              "invocation_id": "call-tavily_search",
+              "tool_name": "tavily_search",
+              "phase": "succeeded"
+            }
+          ]
+        },
+        "llm_calls": [
+          {
+            "stage": "synthesis",
+            "attempt": 1,
+            "path": "structured",
+            "model_name": "fixture-model",
+            "usage": {
+              "input_tokens": 10,
+              "output_tokens": 5,
+              "issues": []
+            },
+            "response_metadata": {},
+            "usage_metadata": {}
+          }
+        ],
+        "errors": [],
+        "error_codes": [],
+        "validation_events": [],
+        "memory_compactions": [],
+        "planner_errors": [],
+        "observed_hits": [
+          {
+            "evidence": {
+              "id": "ref:91da213c5f1a688d1363a3cbdfc59bed7afc7659c7e7b332839edb184e110b3d",
+              "snapshot": {
+                "snapshot_id": "snapshot:114dcd12254f1591fb405f93344e898fcfab6d85c7086e3b105e1d9f772eca93",
+                "document_id": "doc:791ab99f4a4c74520686efa3add903487797de19c9120914a06b1627bc872f66",
+                "content_hash": "sha256:6fffa351fd2aa8cada142e54532c114f2b3811ab3821981c920b1c69e495bbd5",
+                "source_uri": "https://pandas.pydata.org/docs/",
+                "title": "NumPy Docs",
+                "media_type": "text/plain",
+                "source_type": "official",
+                "parser": "eval-fixture",
+                "parser_version": "1",
+                "parser_config": {},
+                "capture_scope": "full_document",
+                "quality_issues": []
+              },
+              "element": {
+                "element_id": "body",
+                "kind": "paragraph",
+                "text": "pandas.merge combines rows from two DataFrames by matching columns.",
+                "parent_id": null,
+                "order": 0,
+                "heading_level": null,
+                "heading_path": [],
+                "language": null,
+                "table": null,
+                "anchors": [
+                  {
+                    "kind": "web",
+                    "start": 0,
+                    "end": 67,
+                    "line_start": null,
+                    "line_end": null,
+                    "cell_id": null,
+                    "cell_index": null,
+                    "page_no": null,
+                    "bbox": null,
+                    "coordinate_space": "normalized",
+                    "coordinate_origin": "top_left",
+                    "page_width": null,
+                    "page_height": null,
+                    "precision": "element"
+                  }
+                ],
+                "metadata": {}
+              },
+              "selection": {
+                "start": 0,
+                "end": 67,
+                "cell_ids": []
+              }
+            },
+            "score": {
+              "metric": "rank",
+              "raw": 1.0,
+              "direction": "lower",
+              "normalized": null
+            },
+            "rank": 1,
+            "requirement_id": ""
+          }
+        ],
+        "answer_provenance": {
+          "version": 1,
+          "request_id": null,
+          "contract_revision": null,
+          "save_operation_binding_sha256": null,
+          "body_kind": "compose",
+          "response_hash": "6d463e9787935aab9c97b582d8fc4bef2e715665706cd55c3b3f7015d54a2ae1",
+          "source": null,
+          "evidence_packet": [
+            {
+              "id": "ref:91da213c5f1a688d1363a3cbdfc59bed7afc7659c7e7b332839edb184e110b3d",
+              "snapshot": {
+                "snapshot_id": "snapshot:114dcd12254f1591fb405f93344e898fcfab6d85c7086e3b105e1d9f772eca93",
+                "document_id": "doc:791ab99f4a4c74520686efa3add903487797de19c9120914a06b1627bc872f66",
+                "content_hash": "sha256:6fffa351fd2aa8cada142e54532c114f2b3811ab3821981c920b1c69e495bbd5",
+                "source_uri": "https://pandas.pydata.org/docs/",
+                "title": "NumPy Docs",
+                "media_type": "text/plain",
+                "source_type": "official",
+                "parser": "eval-fixture",
+                "parser_version": "1",
+                "parser_config": {},
+                "capture_scope": "full_document",
+                "quality_issues": []
+              },
+              "element": {
+                "element_id": "body",
+                "kind": "paragraph",
+                "text": "pandas.merge combines rows from two DataFrames by matching columns.",
+                "parent_id": null,
+                "order": 0,
+                "heading_level": null,
+                "heading_path": [],
+                "language": null,
+                "table": null,
+                "anchors": [
+                  {
+                    "kind": "web",
+                    "start": 0,
+                    "end": 67,
+                    "line_start": null,
+                    "line_end": null,
+                    "cell_id": null,
+                    "cell_index": null,
+                    "page_no": null,
+                    "bbox": null,
+                    "coordinate_space": "normalized",
+                    "coordinate_origin": "top_left",
+                    "page_width": null,
+                    "page_height": null,
+                    "precision": "element"
+                  }
+                ],
+                "metadata": {}
+              },
+              "selection": {
+                "start": 0,
+                "end": 67,
+                "cell_ids": []
+              }
+            }
+          ]
+        },
+        "retry_context": null,
+        "retrieval_diagnostics": [],
+        "planner_diagnostics": null,
+        "latency_breakdown": null,
+        "action_results": null,
+        "route_decisions": []
+      },
+      "answer_provenance": {
+        "version": 1,
+        "request_id": null,
+        "contract_revision": null,
+        "save_operation_binding_sha256": null,
+        "body_kind": "compose",
+        "response_hash": "6d463e9787935aab9c97b582d8fc4bef2e715665706cd55c3b3f7015d54a2ae1",
+        "source": null,
+        "evidence_packet": [
+          {
+            "id": "ref:91da213c5f1a688d1363a3cbdfc59bed7afc7659c7e7b332839edb184e110b3d",
+            "snapshot": {
+              "snapshot_id": "snapshot:114dcd12254f1591fb405f93344e898fcfab6d85c7086e3b105e1d9f772eca93",
+              "document_id": "doc:791ab99f4a4c74520686efa3add903487797de19c9120914a06b1627bc872f66",
+              "content_hash": "sha256:6fffa351fd2aa8cada142e54532c114f2b3811ab3821981c920b1c69e495bbd5",
+              "source_uri": "https://pandas.pydata.org/docs/",
+              "title": "NumPy Docs",
+              "media_type": "text/plain",
+              "source_type": "official",
+              "parser": "eval-fixture",
+              "parser_version": "1",
+              "parser_config": {},
+              "capture_scope": "full_document",
+              "quality_issues": []
+            },
+            "element": {
+              "element_id": "body",
+              "kind": "paragraph",
+              "text": "pandas.merge combines rows from two DataFrames by matching columns.",
+              "parent_id": null,
+              "order": 0,
+              "heading_level": null,
+              "heading_path": [],
+              "language": null,
+              "table": null,
+              "anchors": [
+                {
+                  "kind": "web",
+                  "start": 0,
+                  "end": 67,
+                  "line_start": null,
+                  "line_end": null,
+                  "cell_id": null,
+                  "cell_index": null,
+                  "page_no": null,
+                  "bbox": null,
+                  "coordinate_space": "normalized",
+                  "coordinate_origin": "top_left",
+                  "page_width": null,
+                  "page_height": null,
+                  "precision": "element"
+                }
+              ],
+              "metadata": {}
+            },
+            "selection": {
+              "start": 0,
+              "end": 67,
+              "cell_ids": []
+            }
+          }
+        ]
+      },
+      "evidence_assessment": {
+        "status": "complete",
+        "errors": [],
+        "verified_evidence": [
+          {
+            "id": "ref:91da213c5f1a688d1363a3cbdfc59bed7afc7659c7e7b332839edb184e110b3d",
+            "snapshot": {
+              "snapshot_id": "snapshot:114dcd12254f1591fb405f93344e898fcfab6d85c7086e3b105e1d9f772eca93",
+              "document_id": "doc:791ab99f4a4c74520686efa3add903487797de19c9120914a06b1627bc872f66",
+              "content_hash": "sha256:6fffa351fd2aa8cada142e54532c114f2b3811ab3821981c920b1c69e495bbd5",
+              "source_uri": "https://pandas.pydata.org/docs/",
+              "title": "NumPy Docs",
+              "media_type": "text/plain",
+              "source_type": "official",
+              "parser": "eval-fixture",
+              "parser_version": "1",
+              "parser_config": {},
+              "capture_scope": "full_document",
+              "quality_issues": []
+            },
+            "element": {
+              "element_id": "body",
+              "kind": "paragraph",
+              "text": "pandas.merge combines rows from two DataFrames by matching columns.",
+              "parent_id": null,
+              "order": 0,
+              "heading_level": null,
+              "heading_path": [],
+              "language": null,
+              "table": null,
+              "anchors": [
+                {
+                  "kind": "web",
+                  "start": 0,
+                  "end": 67,
+                  "line_start": null,
+                  "line_end": null,
+                  "cell_id": null,
+                  "cell_index": null,
+                  "page_no": null,
+                  "bbox": null,
+                  "coordinate_space": "normalized",
+                  "coordinate_origin": "top_left",
+                  "page_width": null,
+                  "page_height": null,
+                  "precision": "element"
+                }
+              ],
+              "metadata": {}
+            },
+            "selection": {
+              "start": 0,
+              "end": 67,
+              "cell_ids": []
+            }
+          }
+        ]
+      },
+      "observed_hits": [
+        {
+          "evidence": {
+            "id": "ref:91da213c5f1a688d1363a3cbdfc59bed7afc7659c7e7b332839edb184e110b3d",
+            "snapshot": {
+              "snapshot_id": "snapshot:114dcd12254f1591fb405f93344e898fcfab6d85c7086e3b105e1d9f772eca93",
+              "document_id": "doc:791ab99f4a4c74520686efa3add903487797de19c9120914a06b1627bc872f66",
+              "content_hash": "sha256:6fffa351fd2aa8cada142e54532c114f2b3811ab3821981c920b1c69e495bbd5",
+              "source_uri": "https://pandas.pydata.org/docs/",
+              "title": "NumPy Docs",
+              "media_type": "text/plain",
+              "source_type": "official",
+              "parser": "eval-fixture",
+              "parser_version": "1",
+              "parser_config": {},
+              "capture_scope": "full_document",
+              "quality_issues": []
+            },
+            "element": {
+              "element_id": "body",
+              "kind": "paragraph",
+              "text": "pandas.merge combines rows from two DataFrames by matching columns.",
+              "parent_id": null,
+              "order": 0,
+              "heading_level": null,
+              "heading_path": [],
+              "language": null,
+              "table": null,
+              "anchors": [
+                {
+                  "kind": "web",
+                  "start": 0,
+                  "end": 67,
+                  "line_start": null,
+                  "line_end": null,
+                  "cell_id": null,
+                  "cell_index": null,
+                  "page_no": null,
+                  "bbox": null,
+                  "coordinate_space": "normalized",
+                  "coordinate_origin": "top_left",
+                  "page_width": null,
+                  "page_height": null,
+                  "precision": "element"
+                }
+              ],
+              "metadata": {}
+            },
+            "selection": {
+              "start": 0,
+              "end": 67,
+              "cell_ids": []
+            }
+          },
+          "score": {
+            "metric": "rank",
+            "raw": 1.0,
+            "direction": "lower",
+            "normalized": null
+          },
+          "rank": 1,
+          "requirement_id": ""
+        }
+      ],
+      "retrieval_diagnostics": [],
+      "planner_diagnostics": null,
+      "trace": "Request ID: req-1",
+      "latency_ms_e2e": 10,
+      "attachment_setup_ms": null,
+      "question_response_ms": null,
+      "scenario_total_ms": null,
+      "scenario_turns": [
+        {
+          "role": "question",
+          "llm_calls": [
+            {
+              "stage": "synthesis",
+              "attempt": 1,
+              "path": "structured",
+              "model_name": "fixture-model",
+              "usage": {
+                "input_tokens": 10,
+                "output_tokens": 5,
+                "issues": []
+              },
+              "response_metadata": {},
+              "usage_metadata": {}
+            }
+          ],
+          "query": "pandas merge는 어떻게 동작해?",
+          "request_payload": {
+            "query": "pandas merge는 어떻게 동작해?"
+          },
+          "http_status": 200,
+          "request_id": "req-1",
+          "response": {
+            "content": {
+              "blocks": [
+                {
+                  "type": "paragraph",
+                  "content": [
+                    {
+                      "text": "merge는 두 DataFrame의 일치하는 열을 기준으로 행을 결합합니다.",
+                      "basis": "source",
+                      "refs": [
+                        "ref:91da213c5f1a688d1363a3cbdfc59bed7afc7659c7e7b332839edb184e110b3d"
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            "citations": [
+              {
+                "number": 1,
+                "evidence": {
+                  "id": "ref:91da213c5f1a688d1363a3cbdfc59bed7afc7659c7e7b332839edb184e110b3d",
+                  "snapshot": {
+                    "snapshot_id": "snapshot:114dcd12254f1591fb405f93344e898fcfab6d85c7086e3b105e1d9f772eca93",
+                    "document_id": "doc:791ab99f4a4c74520686efa3add903487797de19c9120914a06b1627bc872f66",
+                    "content_hash": "sha256:6fffa351fd2aa8cada142e54532c114f2b3811ab3821981c920b1c69e495bbd5",
+                    "source_uri": "https://pandas.pydata.org/docs/",
+                    "title": "NumPy Docs",
+                    "media_type": "text/plain",
+                    "source_type": "official",
+                    "parser": "eval-fixture",
+                    "parser_version": "1",
+                    "parser_config": {},
+                    "capture_scope": "full_document",
+                    "quality_issues": []
+                  },
+                  "element": {
+                    "element_id": "body",
+                    "kind": "paragraph",
+                    "text": "pandas.merge combines rows from two DataFrames by matching columns.",
+                    "parent_id": null,
+                    "order": 0,
+                    "heading_level": null,
+                    "heading_path": [],
+                    "language": null,
+                    "table": null,
+                    "anchors": [
+                      {
+                        "kind": "web",
+                        "start": 0,
+                        "end": 67,
+                        "line_start": null,
+                        "line_end": null,
+                        "cell_id": null,
+                        "cell_index": null,
+                        "page_no": null,
+                        "bbox": null,
+                        "coordinate_space": "normalized",
+                        "coordinate_origin": "top_left",
+                        "page_width": null,
+                        "page_height": null,
+                        "precision": "element"
+                      }
+                    ],
+                    "metadata": {}
+                  },
+                  "selection": {
+                    "start": 0,
+                    "end": 67,
+                    "cell_ids": []
+                  }
+                }
+              }
+            ],
+            "checks": [
+              {
+                "unit_id": "b0.content.0",
+                "reference_status": "resolved",
+                "support_status": "not_evaluated",
+                "issues": []
+              }
+            ],
+            "issues": [],
+            "actions": [],
+            "content_hash": "6d463e9787935aab9c97b582d8fc4bef2e715665706cd55c3b3f7015d54a2ae1",
+            "retrieval_required": false
+          },
+          "raw_final_response": null,
+          "trace": null,
+          "debug": {
+            "schema_version": 11,
+            "observability_status": "ok",
+            "missing_required_debug_fields": [],
+            "tool_calls": [
+              "tavily_search"
+            ],
+            "tool_call_count": 1,
+            "execution_evidence": {
+              "schema_version": 1,
+              "request_id": "req-1",
+              "status": "complete",
+              "events": [
+                {
+                  "sequence": 1,
+                  "invocation_id": "call-tavily_search",
+                  "tool_name": "tavily_search",
+                  "phase": "started"
+                },
+                {
+                  "sequence": 2,
+                  "invocation_id": "call-tavily_search",
+                  "tool_name": "tavily_search",
+                  "phase": "succeeded"
+                }
+              ]
+            },
+            "llm_calls": [
+              {
+                "stage": "synthesis",
+                "attempt": 1,
+                "path": "structured",
+                "model_name": "fixture-model",
+                "usage": {
+                  "input_tokens": 10,
+                  "output_tokens": 5,
+                  "issues": []
+                },
+                "response_metadata": {},
+                "usage_metadata": {}
+              }
+            ],
+            "errors": [],
+            "error_codes": [],
+            "validation_events": [],
+            "memory_compactions": [],
+            "planner_errors": [],
+            "observed_hits": [
+              {
+                "evidence": {
+                  "id": "ref:91da213c5f1a688d1363a3cbdfc59bed7afc7659c7e7b332839edb184e110b3d",
+                  "snapshot": {
+                    "snapshot_id": "snapshot:114dcd12254f1591fb405f93344e898fcfab6d85c7086e3b105e1d9f772eca93",
+                    "document_id": "doc:791ab99f4a4c74520686efa3add903487797de19c9120914a06b1627bc872f66",
+                    "content_hash": "sha256:6fffa351fd2aa8cada142e54532c114f2b3811ab3821981c920b1c69e495bbd5",
+                    "source_uri": "https://pandas.pydata.org/docs/",
+                    "title": "NumPy Docs",
+                    "media_type": "text/plain",
+                    "source_type": "official",
+                    "parser": "eval-fixture",
+                    "parser_version": "1",
+                    "parser_config": {},
+                    "capture_scope": "full_document",
+                    "quality_issues": []
+                  },
+                  "element": {
+                    "element_id": "body",
+                    "kind": "paragraph",
+                    "text": "pandas.merge combines rows from two DataFrames by matching columns.",
+                    "parent_id": null,
+                    "order": 0,
+                    "heading_level": null,
+                    "heading_path": [],
+                    "language": null,
+                    "table": null,
+                    "anchors": [
+                      {
+                        "kind": "web",
+                        "start": 0,
+                        "end": 67,
+                        "line_start": null,
+                        "line_end": null,
+                        "cell_id": null,
+                        "cell_index": null,
+                        "page_no": null,
+                        "bbox": null,
+                        "coordinate_space": "normalized",
+                        "coordinate_origin": "top_left",
+                        "page_width": null,
+                        "page_height": null,
+                        "precision": "element"
+                      }
+                    ],
+                    "metadata": {}
+                  },
+                  "selection": {
+                    "start": 0,
+                    "end": 67,
+                    "cell_ids": []
+                  }
+                },
+                "score": {
+                  "metric": "rank",
+                  "raw": 1.0,
+                  "direction": "lower",
+                  "normalized": null
+                },
+                "rank": 1,
+                "requirement_id": ""
+              }
+            ],
+            "answer_provenance": {
+              "version": 1,
+              "request_id": null,
+              "contract_revision": null,
+              "save_operation_binding_sha256": null,
+              "body_kind": "compose",
+              "response_hash": "6d463e9787935aab9c97b582d8fc4bef2e715665706cd55c3b3f7015d54a2ae1",
+              "source": null,
+              "evidence_packet": [
+                {
+                  "id": "ref:91da213c5f1a688d1363a3cbdfc59bed7afc7659c7e7b332839edb184e110b3d",
+                  "snapshot": {
+                    "snapshot_id": "snapshot:114dcd12254f1591fb405f93344e898fcfab6d85c7086e3b105e1d9f772eca93",
+                    "document_id": "doc:791ab99f4a4c74520686efa3add903487797de19c9120914a06b1627bc872f66",
+                    "content_hash": "sha256:6fffa351fd2aa8cada142e54532c114f2b3811ab3821981c920b1c69e495bbd5",
+                    "source_uri": "https://pandas.pydata.org/docs/",
+                    "title": "NumPy Docs",
+                    "media_type": "text/plain",
+                    "source_type": "official",
+                    "parser": "eval-fixture",
+                    "parser_version": "1",
+                    "parser_config": {},
+                    "capture_scope": "full_document",
+                    "quality_issues": []
+                  },
+                  "element": {
+                    "element_id": "body",
+                    "kind": "paragraph",
+                    "text": "pandas.merge combines rows from two DataFrames by matching columns.",
+                    "parent_id": null,
+                    "order": 0,
+                    "heading_level": null,
+                    "heading_path": [],
+                    "language": null,
+                    "table": null,
+                    "anchors": [
+                      {
+                        "kind": "web",
+                        "start": 0,
+                        "end": 67,
+                        "line_start": null,
+                        "line_end": null,
+                        "cell_id": null,
+                        "cell_index": null,
+                        "page_no": null,
+                        "bbox": null,
+                        "coordinate_space": "normalized",
+                        "coordinate_origin": "top_left",
+                        "page_width": null,
+                        "page_height": null,
+                        "precision": "element"
+                      }
+                    ],
+                    "metadata": {}
+                  },
+                  "selection": {
+                    "start": 0,
+                    "end": 67,
+                    "cell_ids": []
+                  }
+                }
+              ]
+            },
+            "retry_context": null,
+            "retrieval_diagnostics": [],
+            "planner_diagnostics": null,
+            "latency_breakdown": null,
+            "action_results": null,
+            "route_decisions": []
+          },
+          "answer_provenance": {
+            "version": 1,
+            "request_id": null,
+            "contract_revision": null,
+            "save_operation_binding_sha256": null,
+            "body_kind": "compose",
+            "response_hash": "6d463e9787935aab9c97b582d8fc4bef2e715665706cd55c3b3f7015d54a2ae1",
+            "source": null,
+            "evidence_packet": [
+              {
+                "id": "ref:91da213c5f1a688d1363a3cbdfc59bed7afc7659c7e7b332839edb184e110b3d",
+                "snapshot": {
+                  "snapshot_id": "snapshot:114dcd12254f1591fb405f93344e898fcfab6d85c7086e3b105e1d9f772eca93",
+                  "document_id": "doc:791ab99f4a4c74520686efa3add903487797de19c9120914a06b1627bc872f66",
+                  "content_hash": "sha256:6fffa351fd2aa8cada142e54532c114f2b3811ab3821981c920b1c69e495bbd5",
+                  "source_uri": "https://pandas.pydata.org/docs/",
+                  "title": "NumPy Docs",
+                  "media_type": "text/plain",
+                  "source_type": "official",
+                  "parser": "eval-fixture",
+                  "parser_version": "1",
+                  "parser_config": {},
+                  "capture_scope": "full_document",
+                  "quality_issues": []
+                },
+                "element": {
+                  "element_id": "body",
+                  "kind": "paragraph",
+                  "text": "pandas.merge combines rows from two DataFrames by matching columns.",
+                  "parent_id": null,
+                  "order": 0,
+                  "heading_level": null,
+                  "heading_path": [],
+                  "language": null,
+                  "table": null,
+                  "anchors": [
+                    {
+                      "kind": "web",
+                      "start": 0,
+                      "end": 67,
+                      "line_start": null,
+                      "line_end": null,
+                      "cell_id": null,
+                      "cell_index": null,
+                      "page_no": null,
+                      "bbox": null,
+                      "coordinate_space": "normalized",
+                      "coordinate_origin": "top_left",
+                      "page_width": null,
+                      "page_height": null,
+                      "precision": "element"
+                    }
+                  ],
+                  "metadata": {}
+                },
+                "selection": {
+                  "start": 0,
+                  "end": 67,
+                  "cell_ids": []
+                }
+              }
+            ]
+          },
+          "evidence_assessment": null,
+          "observed_hits": [
+            {
+              "evidence": {
+                "id": "ref:91da213c5f1a688d1363a3cbdfc59bed7afc7659c7e7b332839edb184e110b3d",
+                "snapshot": {
+                  "snapshot_id": "snapshot:114dcd12254f1591fb405f93344e898fcfab6d85c7086e3b105e1d9f772eca93",
+                  "document_id": "doc:791ab99f4a4c74520686efa3add903487797de19c9120914a06b1627bc872f66",
+                  "content_hash": "sha256:6fffa351fd2aa8cada142e54532c114f2b3811ab3821981c920b1c69e495bbd5",
+                  "source_uri": "https://pandas.pydata.org/docs/",
+                  "title": "NumPy Docs",
+                  "media_type": "text/plain",
+                  "source_type": "official",
+                  "parser": "eval-fixture",
+                  "parser_version": "1",
+                  "parser_config": {},
+                  "capture_scope": "full_document",
+                  "quality_issues": []
+                },
+                "element": {
+                  "element_id": "body",
+                  "kind": "paragraph",
+                  "text": "pandas.merge combines rows from two DataFrames by matching columns.",
+                  "parent_id": null,
+                  "order": 0,
+                  "heading_level": null,
+                  "heading_path": [],
+                  "language": null,
+                  "table": null,
+                  "anchors": [
+                    {
+                      "kind": "web",
+                      "start": 0,
+                      "end": 67,
+                      "line_start": null,
+                      "line_end": null,
+                      "cell_id": null,
+                      "cell_index": null,
+                      "page_no": null,
+                      "bbox": null,
+                      "coordinate_space": "normalized",
+                      "coordinate_origin": "top_left",
+                      "page_width": null,
+                      "page_height": null,
+                      "precision": "element"
+                    }
+                  ],
+                  "metadata": {}
+                },
+                "selection": {
+                  "start": 0,
+                  "end": 67,
+                  "cell_ids": []
+                }
+              },
+              "score": {
+                "metric": "rank",
+                "raw": 1.0,
+                "direction": "lower",
+                "normalized": null
+              },
+              "rank": 1,
+              "requirement_id": ""
+            }
+          ],
+          "tool_calls": [
+            "tavily_search"
+          ],
+          "execution_evidence": {
+            "schema_version": 1,
+            "request_id": "req-1",
+            "status": "complete",
+            "events": [
+              {
+                "sequence": 1,
+                "invocation_id": "call-tavily_search",
+                "tool_name": "tavily_search",
+                "phase": "started",
+                "reason_code": null,
+                "origin_invocation_id": null
+              },
+              {
+                "sequence": 2,
+                "invocation_id": "call-tavily_search",
+                "tool_name": "tavily_search",
+                "phase": "succeeded",
+                "reason_code": null,
+                "origin_invocation_id": null
+              }
+            ]
+          },
+          "upload_manifest": null,
+          "question_response_ms": null,
+          "runtime_errors": [],
+          "response_errors": []
+        }
+      ],
+      "latency_ms_server": null,
+      "latency_breakdown": null,
+      "tool_calls": [
+        "tavily_search"
+      ],
+      "synthesis_output_tokens": 5,
+      "tool_call_count": 1,
+      "planner_errors": [],
+      "error_codes": [],
+      "validation_events": [],
+      "route_decisions": [],
+      "memory_compactions": [],
+      "debug_errors": [],
+      "runtime_errors": [],
+      "cleanup_errors": [],
+      "response_errors": [],
+      "judge_status": "succeeded",
+      "judge_status_reason": null,
+      "eval_validity": "valid",
+      "judge_input_issues": [],
+      "judge_errors": [],
+      "judge_audit_failures": [],
+      "actions": [],
+      "save_assessment": {
+        "status": "not_applicable",
+        "outcome": null,
+        "passed": null,
+        "failure_codes": [],
+        "expected_sha256": null,
+        "expected_byte_count": null,
+        "artifact_id": null,
+        "observed_sha256": null,
+        "observed_byte_count": null,
+        "checked_at_utc": "2026-10-01T08:38:43.474729+00:00",
+        "phase": "case"
+      },
+      "setup_save_assessments": {},
+      "slack_delivery_status": "not_applicable",
+      "slack_delivery_required": false,
+      "slack_delivery_error": null,
+      "validator_reason": null,
+      "validator_feedback": null,
+      "effective_weights": {
+        "answer_quality": 0.2,
+        "reference_coverage": 0.2,
+        "citation_traceability": 0.2,
+        "tool_choice": 0.15,
+        "format_language": 0.05,
+        "llm_judge": 0.2
+      },
+      "rule_scores": {
+        "answer_quality": 1.0,
+        "reference_coverage": 1.0,
+        "citation_traceability": 1.0,
+        "tool_choice": 1.0,
+        "format_language": 1.0
+      },
+      "rule_score_total": 0.8000000000000002,
+      "debug_schema_version": 11,
+      "debug_observability_status": "ok",
+      "missing_required_debug_fields": [],
+      "judge_subscores": {
+        "answer_quality": 1.0,
+        "groundedness": 1.0,
+        "citation_traceability": 1.0,
+        "tool_choice": 1.0,
+        "format_language": 1.0
+      },
+      "judge_score_total": 1.0,
+      "llm_judge_score": 1.0,
+      "llm_judge_reason": "fixture verdict",
+      "judge_input_complete": true,
+      "judge_min_score_applied": 0.7,
+      "judge_gate_passed": true,
+      "invalid_eval": false,
+      "resolved_unit_count": 1,
+      "missing_reference_unit_count": 0,
+      "unchecked_unit_count": 1,
+      "exact_match_unit_count": 0,
+      "unsupported_unit_count": 0,
+      "block_count": 1,
+      "synthesis_mode": null,
+      "gate_failures": [],
+      "composite_quality_score": 1.0,
+      "product_pass": true,
+      "judge_pass": true,
+      "release_pass": true,
+      "cost_usd": 4.5e-06,
+      "created_at_utc": "2026-09-28T00:00:00+00:00"
+    }
+  ]
+}
