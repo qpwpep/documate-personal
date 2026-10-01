@@ -19,14 +19,16 @@ from src.core.uploads import (
 )
 from src.infra.runtime_paths import get_project_root_path, get_upload_session_dir, get_uploads_dir
 from src.infra.settings import AppSettings
-from src.core.upload_formats import CODE_UPLOAD_SUFFIXES, enabled_upload_suffixes
+from src.core.upload_formats import enabled_upload_suffixes
 from src.infra.document_ingestion import ConversionPolicy, DocumentConverterPort, DocumentIngestionContext, IngestionError
 from src.infra.tools.local_rag import build_upload_retriever
 from src.infra.tools.local_rag.uploads import retry_pending_upload_index_cleanup
-from src.infra.upload_storage import UploadStorage, reconcile_managed_upload_files, remove_managed_upload_files, clear_auxiliary_upload_files
+from src.infra.upload_storage import (
+    UploadStorage, reconcile_managed_upload_files, remove_managed_upload_files,
+    clear_auxiliary_upload_files, resolve_upload_input_path,
+)
 
 if TYPE_CHECKING:
-    from src.app.agent_manager import AgentFlowManager
     from src.app.web.session_store import InMemorySessionStore
     from src.runtime.agent_runtime.session_context import SessionContext
 
@@ -152,8 +154,6 @@ class UploadService:
                 logger.warning("upload_staging_cleanup_failed", exc_info=True)
 
     def _read_addition(self, addition: UploadAddition, session_id: str) -> tuple[bytes, str]:
-        from src.app.web.cleanup import validate_upload_file_path
-
         name = addition.name
         if (name in {".", ".."} or name != name.strip() or name.endswith(".")
                 or re.search(r'[\\/:*?"<>|\x00-\x1f]', name)
@@ -162,15 +162,10 @@ class UploadService:
         if Path(name).suffix.casefold() not in enabled_upload_suffixes(docling_enabled=self.settings.docling_enabled):
             raise _error(422, "UPLOAD_TYPE_INVALID", "지원하지 않거나 활성화되지 않은 첨부 형식입니다.")
         try:
-            validated = validate_upload_file_path(addition.path, session_id)
-        except HTTPException as exc:
-            if "Upload file not found" in str(exc.detail):
-                raise _error(422, "UPLOAD_PATH_INVALID", "임시 첨부 파일을 찾을 수 없습니다. 파일을 다시 첨부해 주세요.") from exc
-            raise
-        if validated is None:
-            raise _error(422, "UPLOAD_PATH_INVALID", "파일 경로가 필요합니다.")
+            path = resolve_upload_input_path(addition.path, session_id)
+        except (OSError, RuntimeError, ValueError) as exc:
+            raise _error(422, "UPLOAD_PATH_INVALID", f"첨부 경로를 확인하고 파일을 다시 첨부해 주세요: {exc}") from exc
         limit = self.settings.upload_max_file_mib * _MIB
-        path = Path(validated)
         if path.stat().st_size > limit:
             raise _error(413, "UPLOAD_FILE_TOO_LARGE", f"파일당 {self.settings.upload_max_file_mib} MiB까지 첨부할 수 있습니다.")
         # Bound the read as well as stat: a file can grow between those operations.
@@ -373,37 +368,3 @@ class UploadService:
 
     def _commit(self, session_id: str, session: SessionContext, records: list[UploadRecord], handle) -> None:
         session.replace_upload_resources(session_id, records, handle)
-
-    def sync_legacy_locked(self, session_id: str, agent: AgentFlowManager, path: str | None) -> UploadContext:
-        """The old path replaces the set; absent/null still clears it."""
-        session_id = validate_session_id(session_id)
-        session = agent._ensure_session()
-        self._cleanup_resources(session_id, session, protected_paths=(path,) if path else ())
-        if not path:
-            if session.upload_records or session.upload_retriever_handle is not None:
-                self._commit(session_id, session, [], None)
-            return session.upload_manifest().context()
-        from src.app.web.cleanup import validate_upload_file_path
-
-        validated = validate_upload_file_path(path, session_id)
-        if Path(validated).suffix.casefold() not in CODE_UPLOAD_SUFFIXES:
-            raise _error(422, "UPLOAD_TYPE_INVALID", "PDF·DOCX·이미지는 첨부 목록 API로 추가해 주세요.")
-        addition = UploadAddition(path=validated, name=Path(validated).name)
-        content, digest = self._read_addition(addition, session_id)
-        previous = next((item for item in session.upload_records if item.source_uri == validated), None)
-        if previous is not None and len(session.upload_records) == 1 and previous.content_hash == digest:
-            return session.upload_manifest().context()
-        self._check_limits([len(content)])
-        self._check_storage_capacity(session_id, len(content))
-        record = self._store_content(session_id, previous.file_id if previous else uuid4().hex,
-                                     addition.name, content, digest, validated)
-        handle = None
-        try:
-            handle = self._build_candidate([record], session_id)
-            self._commit(session_id, session, [record], handle)
-        except BaseException:
-            if handle is not None and handle is not session.upload_retriever_handle:
-                session._release_upload_handle(handle)
-            self._remove_managed_files(session_id, [record])
-            raise
-        return session.upload_manifest().context()

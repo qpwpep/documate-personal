@@ -9,7 +9,8 @@ from fastapi.testclient import TestClient
 
 from src.infra.settings import AppSettings
 from src.app.web.app import create_app
-from src.app.web.cleanup import resolve_download_path, validate_upload_file_path
+from src.app.web.cleanup import resolve_download_path
+from src.infra.upload_storage import resolve_upload_input_path
 
 
 class WebRuntimeModulesTest(unittest.TestCase):
@@ -137,21 +138,20 @@ class WebRuntimeModulesTest(unittest.TestCase):
             with self.assertRaises(Exception):
                 resolve_download_path(output_dir, "../escape.txt")
 
-    def test_validate_upload_file_path_enforces_session_directory(self) -> None:
+    def test_resolve_upload_input_path_enforces_session_directory(self) -> None:
         with TemporaryDirectory() as temp_dir:
             uploads_root = Path(temp_dir) / "uploads"
             target = uploads_root / "session-a" / "sample.py"
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text("print('ok')", encoding="utf-8")
 
-            with patch("src.app.web.cleanup.get_project_root_path", return_value=Path(temp_dir)), patch(
-                "src.app.web.cleanup.get_upload_session_dir",
-                return_value=target.parent,
-            ), patch(
-                "src.app.web.cleanup.get_uploads_dir", return_value=uploads_root,
+            with patch("src.infra.runtime_paths.get_project_root_path", return_value=Path(temp_dir)), patch(
+                "src.infra.upload_storage.get_project_root_path", return_value=Path(temp_dir),
             ):
-                validated = validate_upload_file_path("uploads/session-a/sample.py", "session-a")
-                self.assertEqual(validated, str(target.resolve()))
+                validated = resolve_upload_input_path("uploads/session-a/sample.py", "session-a")
+                self.assertEqual(validated, target.resolve())
+                with self.assertRaisesRegex(ValueError, "outside its session"):
+                    resolve_upload_input_path("uploads/session-a/sample.py", "session-b")
 
 
 if __name__ == "__main__":

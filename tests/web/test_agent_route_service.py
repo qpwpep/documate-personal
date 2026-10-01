@@ -44,7 +44,10 @@ class AgentRouteServiceDelegationTest(unittest.TestCase):
 
     def test_agent_stream_route_streams_sse_events(self) -> None:
         """The HTTP response exposes framed progress and final response events."""
-        response = self.client.post("/agent/stream", json={"query": "hello", "session_id": "demo"})
+        response = self.client.post("/agent/stream", json={
+            "query": "hello", "session_id": "demo",
+            "uploads": {"epoch": "session-epoch", "revision": 0},
+        })
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.headers["content-type"], "text/event-stream; charset=utf-8")
         self.assertEqual(response.headers["x-accel-buffering"], "no")
@@ -82,6 +85,9 @@ class AgentRouteServiceDelegationTest(unittest.TestCase):
         self.assertNotIn("default", manifest["properties"]["files"])
         self.assertIn("AgentDebugInfo", schema["components"]["schemas"])
         self.assertIn("UploadManifest", schema["components"]["schemas"])
+        request = schema["components"]["schemas"]["AgentRequest"]
+        self.assertIn("uploads", request["required"])
+        self.assertNotIn("upload_file_path", request["properties"])
 
 
 if __name__ == "__main__":

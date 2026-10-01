@@ -39,7 +39,7 @@ class UploadRecord(UploadFileInfo):
 
 
 class UploadContext(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
     epoch: str = Field(min_length=1, max_length=128)
     revision: int = Field(ge=0)

@@ -8,11 +8,14 @@ from pydantic import ValidationError
 
 from src.app.web.agent_request_service import AgentRequestService
 from src.app.web.schemas import AgentRequest, AgentResponse
+from src.app.web.session_store import InMemorySessionStore
 from src.core.answer_schema import export_answer_text
 from src.core.contracts.debug import DEBUG_SCHEMA_VERSION, DebugPayload
 from src.core.contracts.provenance import AnswerProvenance
 from src.core.contracts.tool_execution import ToolExecutionEvidence
-from src.core.uploads import UploadManifest
+from src.core.uploads import UploadContext
+from src.infra.settings import AppSettings
+from src.runtime.agent_runtime.session_context import SessionContext
 from tests.web.answer_fixtures import response_payload
 
 
@@ -24,13 +27,15 @@ from tests.web.answer_fixtures import response_payload
 ])
 def test_invalid_explicit_recipient_is_rejected_before_dispatch(recipient):
     with pytest.raises(ValidationError):
-        AgentRequest(query="보내줘", session_id="s1", slack_recipient=recipient)
+        AgentRequest(query="보내줘", session_id="s1", slack_recipient=recipient,
+                     uploads=UploadContext(epoch="e", revision=0))
 
 
 @pytest.mark.parametrize("field", ["slack_user_id", "slack_email", "slack_channel_id"])
 def test_obsolete_recipient_fields_are_not_silently_treated_as_unspecified(field):
     with pytest.raises(ValidationError):
-        AgentRequest.model_validate({"query": "보내줘", "session_id": "s1", field: "specified"})
+        AgentRequest.model_validate({"query": "보내줘", "session_id": "s1", field: "specified",
+                                     "uploads": {"epoch": "e", "revision": 0}})
 
 
 class _FakeCleaner:
@@ -47,30 +52,23 @@ class _FakeCleaner:
         return {"errors": 0}
 
 
-class _FakeSessionStore:
+class _ResponseAgent:
+    """Script only the runtime response boundary; retain real session state and locking."""
+
     def __init__(self, agent_answer: dict[str, object]) -> None:
         self.agent_answer = agent_answer
-        self.agent_manager = object()
-        self.run_calls: list[dict[str, object]] = []
+        self.session = SessionContext()
 
-    def run_session_request(
-        self,
-        *,
-        session_id: str,
-        session_metadata,
-        user_input: str,
-        upload_file_path: str | None = None,
-        progress_emitter=None,
-    ):
-        self.run_calls.append(
-            {
-                "session_id": session_id,
-                "session_metadata": session_metadata,
-                "user_input": user_input,
-                "upload_file_path": upload_file_path,
-                "progress_emitter": progress_emitter,
-            }
-        )
+    def _ensure_session(self):
+        return self.session
+
+    def set_session_metadata(self, session_metadata):
+        self.session.set_session_metadata(session_metadata)
+
+    def close(self):
+        self.session.close()
+
+    def run_agent_flow(self, user_input: str, *, progress_emitter=None, uploads=None):
         if progress_emitter is not None:
             progress_emitter.emit_stage_started(stage="planner", attempt=1)
             progress_emitter.emit_stage_completed(
@@ -84,7 +82,20 @@ class _FakeSessionStore:
                 summary="근거 요약: docs 1건",
                 evidence_count=1,
             )
-        return self.agent_manager, dict(self.agent_answer), 12, UploadManifest(epoch="session-epoch", revision=0, files=[])
+        return dict(self.agent_answer)
+
+
+def _session_store(agent_answer: dict[str, object]) -> InMemorySessionStore:
+    return InMemorySessionStore(
+        settings=AppSettings(_env_file=None, openai_api_key="test-key", tavily_api_key="test"),
+        agent_factory=lambda: _ResponseAgent(agent_answer),
+    )
+
+
+def _request(store: InMemorySessionStore, **fields) -> AgentRequest:
+    with store.locked_session(fields["session_id"]) as (entry, _):
+        uploads = entry.agent._ensure_session().upload_manifest().context()
+    return AgentRequest(**fields, uploads=uploads)
 
 
 async def _final_response(service: AgentRequestService, *, request_id: str, request_data: AgentRequest):
@@ -104,11 +115,11 @@ def test_stream_preserves_invalid_retrieval_observations_as_critical_diagnostic_
         debug.pop("retrieval_diagnostics")
     else:
         debug["retrieval_diagnostics"] = diagnostics
-    store = _FakeSessionStore({"response": response, "debug": debug})
+    store = _session_store({"response": response, "debug": debug})
     service = AgentRequestService(runtime_cleaner=_FakeCleaner(), session_store=store)
     result = asyncio.run(_final_response(
         service, request_id="diagnostic-request",
-        request_data=AgentRequest(query="hello", session_id="s1", include_debug=True),
+        request_data=_request(store,query="hello", session_id="s1", include_debug=True),
     ))
 
     assert result.response.model_dump(mode="json") == response
@@ -127,13 +138,11 @@ def test_stream_preserves_invalid_retrieval_observations_as_critical_diagnostic_
 class AgentRequestServiceTest(unittest.TestCase):
     def test_invalid_runtime_response_does_not_silently_fall_back_to_message(self) -> None:
         """A broken response contract is reported instead of discarding source metadata."""
-        service = AgentRequestService(
-            runtime_cleaner=_FakeCleaner(),
-            session_store=_FakeSessionStore({"response": {"answer": "obsolete"}, "message": "fallback"}),
-        )
+        store = _session_store({"response": {"answer": "obsolete"}, "message": "fallback"})
+        service = AgentRequestService(runtime_cleaner=_FakeCleaner(), session_store=store)
         async def collect_events():
             return [event async for event in service.stream(
-                request_id="bad", request_data=AgentRequest(query="hello", session_id="s1"),
+                request_id="bad", request_data=_request(store,query="hello", session_id="s1"),
             )]
 
         events = asyncio.run(collect_events())
@@ -143,7 +152,7 @@ class AgentRequestServiceTest(unittest.TestCase):
 
     def test_include_debug_only_changes_debug_field(self) -> None:
         cleaner = _FakeCleaner()
-        store = _FakeSessionStore(
+        store = _session_store(
             {
                 "response": response_payload("fallback answer"),
                 "debug": {
@@ -163,7 +172,7 @@ class AgentRequestServiceTest(unittest.TestCase):
         without_debug = asyncio.run(
             _final_response(service,
                 request_id="req00001",
-                request_data=AgentRequest(
+                request_data=_request(store,
                     query="hello",
                     session_id="demo-session",
                     include_debug=False,
@@ -173,7 +182,7 @@ class AgentRequestServiceTest(unittest.TestCase):
         with_debug = asyncio.run(
             _final_response(service,
                 request_id="req00002",
-                request_data=AgentRequest(
+                request_data=_request(store,
                     query="hello",
                     session_id="demo-session",
                     include_debug=True,
@@ -182,17 +191,16 @@ class AgentRequestServiceTest(unittest.TestCase):
         )
 
         self.assertEqual(without_debug.response.model_dump(), with_debug.response.model_dump())
-        self.assertEqual(without_debug.upload_manifest, UploadManifest(epoch="session-epoch", revision=0, files=[]))
+        self.assertEqual(without_debug.upload_manifest, store.get_or_create("demo-session").session.upload_manifest())
         self.assertEqual(without_debug.upload_manifest, with_debug.upload_manifest)
         self.assertIsNone(without_debug.debug)
         self.assertIsNotNone(with_debug.debug)
         self.assertEqual(export_answer_text(without_debug.response), "fallback answer")
         self.assertEqual(cleaner.calls[0]["current_session_id"], "demo-session")
-        self.assertIsNotNone(store.run_calls[0]["progress_emitter"])
 
     def test_service_builds_session_metadata_snapshot_before_dispatch(self) -> None:
         cleaner = _FakeCleaner()
-        store = _FakeSessionStore(
+        store = _session_store(
             {
                 "response": response_payload("structured answer"),
                 "debug": {
@@ -212,7 +220,7 @@ class AgentRequestServiceTest(unittest.TestCase):
         result = asyncio.run(
             _final_response(service,
                 request_id="req00003",
-                request_data=AgentRequest(
+                request_data=_request(store,
                     query="share this",
                     session_id="demo-session",
                     slack_recipient={"kind": "channel", "value": "C123BENCH"},
@@ -222,15 +230,14 @@ class AgentRequestServiceTest(unittest.TestCase):
         )
 
         self.assertEqual(export_answer_text(result.response), "structured answer")
-        self.assertEqual(store.run_calls[0]["user_input"], "share this")
         self.assertEqual(
-            store.run_calls[0]["session_metadata"].slack_recipient.value,
+            store.get_or_create("demo-session").session.snapshot_session_metadata().slack_recipient.value,
             "C123BENCH",
         )
 
     def test_stream_emits_progress_then_final_response_then_done(self) -> None:
         cleaner = _FakeCleaner()
-        store = _FakeSessionStore(
+        store = _session_store(
             {
                 "response": response_payload("streamed answer"),
                 "debug": {
@@ -252,7 +259,7 @@ class AgentRequestServiceTest(unittest.TestCase):
                 event
                 async for event in service.stream(
                     request_id="reqstream",
-                    request_data=AgentRequest(
+                    request_data=_request(store,
                         query="hello",
                         session_id="demo-session",
                         include_debug=False,
@@ -277,7 +284,6 @@ class AgentRequestServiceTest(unittest.TestCase):
         self.assertEqual(events[2].data["status"], "llm")
         self.assertEqual(events[3].data["summary"], "근거 요약: docs 1건")
         self.assertEqual(events[4].data["response"], response_payload("streamed answer"))
-        self.assertIsNotNone(store.run_calls[0]["progress_emitter"])
 
 
 if __name__ == "__main__":

@@ -295,6 +295,7 @@ class AgentRequestMemoryBoundaryTest(unittest.TestCase):
         request = AgentRequest(
             query="x" * DEFAULT_QUERY_MAX_CHARS,
             session_id="session",
+            uploads={"epoch": "session-epoch", "revision": 0},
         )
 
         self.assertEqual(len(request.query), DEFAULT_QUERY_MAX_CHARS)
@@ -304,11 +305,11 @@ class AgentRequestMemoryBoundaryTest(unittest.TestCase):
         self.assertLessEqual(len(query), DEFAULT_QUERY_MAX_CHARS)
 
         with self.assertRaises(ValidationError):
-            AgentRequest(query=query, session_id="session")
+            AgentRequest(query=query, session_id="session", uploads={"epoch": "session-epoch", "revision": 0})
 
     def test_blank_query_is_rejected(self) -> None:
         with self.assertRaises(ValidationError):
-            AgentRequest(query="   ", session_id="session")
+            AgentRequest(query="   ", session_id="session", uploads={"epoch": "session-epoch", "revision": 0})
 
 
 if __name__ == "__main__":

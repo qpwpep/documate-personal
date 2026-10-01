@@ -13,7 +13,7 @@ from typing import Any
 from src.infra.logging_utils import log_event
 from src.runtime.progress import ProgressEmitter
 from src.app.web.agent_request_support import build_session_metadata_snapshot, normalize_debug_info
-from src.app.web.cleanup import RuntimeCleaner, validate_upload_file_path
+from src.app.web.cleanup import RuntimeCleaner
 from src.app.web.schemas import AgentDebugInfo, AgentRequest, AgentResponse, AgentStreamEvent
 from src.core.answer_schema import AnswerResponse
 from src.core.uploads import UploadManifest
@@ -119,9 +119,6 @@ class AgentRequestService:
         user_query = request_data.query
         session_id = request_data.session_id
         self._runtime_cleaner.run_once(force=False, current_session_id=session_id)
-        # Reject invalid legacy paths before allocating a session; validation is repeated
-        # under the session lock immediately before capturing immutable bytes.
-        upload_file_path = validate_upload_file_path(request_data.upload_file_path, session_id)
         session_metadata = build_session_metadata_snapshot(request_data)
 
         log_event(
@@ -131,23 +128,20 @@ class AgentRequestService:
             session_id=session_id[:8],
             request_id=request_id,
             **_query_log_fields(user_query),
-            upload_file_path=upload_file_path,
         )
 
         started = time.monotonic()
-        run_request_kwargs = {
-            "session_id": session_id,
-            "session_metadata": session_metadata,
-            "user_input": user_query,
-            "upload_file_path": upload_file_path,
-        }
-        if progress_emitter is not None:
-            run_request_kwargs["progress_emitter"] = progress_emitter
-        if request_data.uploads is not None:
-            run_request_kwargs["uploads"] = request_data.uploads
-        agent_manager, agent_answer, session_lock_wait_ms, upload_manifest = self._session_store.run_session_request(
-            **run_request_kwargs
-        )
+        with self._session_store.locked_session(session_id) as (entry, session_lock_wait_ms):
+            agent_manager = entry.agent
+            session = agent_manager._ensure_session()
+            # Check after queueing for the lock and before any execution or reset.
+            session.require_upload_context(request_data.uploads)
+            session.session_id = session_id
+            agent_manager.set_session_metadata(session_metadata)
+            agent_answer = agent_manager.run_agent_flow(user_query, progress_emitter=progress_emitter, uploads=request_data.uploads)
+            # A later mutation may complete before delivery; this detached snapshot
+            # describes this request's completion, including reset and model failure.
+            upload_manifest = session.upload_manifest()
         latency_ms_server = int((time.monotonic() - started) * 1000)
 
         response_payload = _build_response_payload(agent_answer)

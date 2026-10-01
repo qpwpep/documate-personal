@@ -12,7 +12,7 @@ from langchain_core.messages import HumanMessage
 from src.core.answer_schema import AnswerResponse
 from src.core.request_contracts import UserTurnSnapshot, required_contract_turn_ids
 from src.core.conversation_memory import extract_memory_text
-from src.core.uploads import UploadManifest, UploadRecord, UploadSyncResponse
+from src.core.uploads import UploadContext, UploadManifest, UploadRecord, UploadSyncResponse
 
 from src.core.contracts import SessionMetadata
 from src.core.contracts.graph_state import PendingAction
@@ -140,6 +140,11 @@ class SessionContext:
 
     def snapshot_session_metadata(self) -> SessionMetadata:
         return parse_session_metadata(self.session_metadata)
+
+    def require_upload_context(self, context: UploadContext) -> None:
+        """Require the caller's attachment version before running under the session lock."""
+        if context.epoch != self.upload_epoch or context.revision != self.upload_revision:
+            raise ValueError("UPLOAD_REVISION_CONFLICT: attachment set changed")
 
     def upload_manifest(self) -> UploadManifest:
         return UploadManifest(epoch=self.upload_epoch, revision=self.upload_revision,

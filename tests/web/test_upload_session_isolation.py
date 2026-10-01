@@ -350,6 +350,7 @@ class UploadSessionIsolationTest(unittest.TestCase):
                 AgentRequest(
                     query="share this to slack",
                     session_id="demo-session",
+                    uploads=manager._ensure_session().upload_manifest().context(),
                     slack_recipient={"kind": "channel", "value": "C123BENCH"},
                 )
             )
@@ -366,6 +367,7 @@ class UploadSessionIsolationTest(unittest.TestCase):
                 AgentRequest(
                     query="share this to slack",
                     session_id="demo-session",
+                    uploads=manager._ensure_session().upload_manifest().context(),
                 )
             )
         )
@@ -518,14 +520,8 @@ class SessionStoreCleanupTest(unittest.TestCase):
 
         def worker(index: int) -> None:
             barrier.wait()
-            _agent, agent_answer, session_lock_wait_ms, _manifest = store.run_session_request(
-                session_id="demo-session",
-                session_metadata=build_session_metadata_snapshot(
-                    AgentRequest(query=f"question-{index}", session_id="demo-session")
-                ),
-                user_input=f"question-{index}",
-                upload_file_path=None,
-            )
+            with store.locked_session("demo-session") as (entry, session_lock_wait_ms):
+                agent_answer = entry.agent.run_agent_flow(f"question-{index}")
             results.append((session_lock_wait_ms, export_answer_text(AnswerResponse.model_validate(agent_answer["response"]))))
 
         threads = [threading.Thread(target=worker, args=(idx,)) for idx in range(2)]
@@ -570,7 +566,7 @@ class _UploadContractChatModel:
 @pytest.fixture
 def managed_upload_agent(tmp_path, monkeypatch):
     monkeypatch.setattr("src.infra.runtime_paths.get_project_root_path", lambda: tmp_path)
-    monkeypatch.setattr("src.app.web.cleanup.get_project_root_path", lambda: tmp_path)
+    monkeypatch.setattr("src.infra.upload_storage.get_project_root_path", lambda: tmp_path)
     monkeypatch.setattr("src.app.web.upload_service.get_project_root_path", lambda: tmp_path)
     monkeypatch.setattr("src.infra.tools.local_rag.client.build_openai_embeddings", lambda _key: _FakeEmbeddings())
     monkeypatch.setattr("src.infra.chroma_store.OpenAIEmbeddings", lambda **_kwargs: _FakeEmbeddings())

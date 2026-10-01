@@ -30,8 +30,8 @@ def uploads(tmp_path, monkeypatch):
     from src.infra.tools.local_rag import client
 
     monkeypatch.setattr(runtime_paths, "get_project_root_path", lambda: tmp_path)
-    monkeypatch.setattr("src.app.web.cleanup.get_project_root_path", lambda: tmp_path)
     monkeypatch.setattr("src.app.web.upload_service.get_project_root_path", lambda: tmp_path)
+    monkeypatch.setattr("src.infra.upload_storage.get_project_root_path", lambda: tmp_path)
     monkeypatch.setattr(client, "build_openai_embeddings", lambda _key: DeterministicEmbeddings())
     settings = AppSettings(openai_api_key="test-key", tavily_api_key="test")
     store = InMemorySessionStore(settings, lambda: AgentFlowManager(settings))
@@ -208,7 +208,7 @@ def test_session_case_variants_share_one_manifest_lock_and_storage_path(uploads)
     assert store.active_session_ids() == {"casesession"}
     assert store.active_agents["casesession"].active_request_count == 0
     assert get_upload_session_dir("CaseSession").name == "casesession"
-    assert AgentRequest(query="question", session_id="CaseSession").session_id == "casesession"
+    assert AgentRequest(query="question", session_id="CaseSession", uploads=original.context()).session_id == "casesession"
     assert original.files[0].source_uri.startswith("upload:///casesession/")
 
 
@@ -435,9 +435,8 @@ def test_retired_index_cleanup_failure_is_retried_without_losing_committed_sourc
     assert {hit["evidence"]["snapshot"]["title"] for hit in search(store, "value")["hits"]} == {"first.py", "second.py"}
 
 
-@pytest.mark.parametrize("legacy", [False, True])
-def test_current_operation_can_borrow_an_orphan_managed_path_before_reconciliation(uploads, legacy):
-    """Both upload protocols protect their current input even when it lives in the objects namespace."""
+def test_current_operation_can_borrow_an_orphan_managed_path_before_reconciliation(uploads):
+    """An upload protects its current input even when it lives in the objects namespace."""
     service, store, root = uploads
     before = service.get_manifest("session-a")
     source = root / "uploads" / "session-a" / "objects" / uuid4().hex / uuid4().hex / "borrowed.py"
@@ -445,14 +444,9 @@ def test_current_operation_can_borrow_an_orphan_managed_path_before_reconciliati
     source.write_text("borrowed = 1\n", encoding="utf-8")
     relative = str(source.relative_to(root))
 
-    if legacy:
-        with store.locked_session("session-a") as (entry, _wait_ms):
-            service.sync_legacy_locked("session-a", entry.agent, relative)
-            current = entry.agent._ensure_session().upload_manifest()
-    else:
-        current = service.sync("session-a", UploadSyncRequest(
-            epoch=before.epoch, expected_revision=before.revision, operation_id=uuid4().hex,
-            add=[UploadAddition(path=relative, name=source.name)])).manifest
+    current = service.sync("session-a", UploadSyncRequest(
+        epoch=before.epoch, expected_revision=before.revision, operation_id=uuid4().hex,
+        add=[UploadAddition(path=relative, name=source.name)])).manifest
 
     assert [item.name for item in current.files] == ["borrowed.py"]
     assert source.is_file()

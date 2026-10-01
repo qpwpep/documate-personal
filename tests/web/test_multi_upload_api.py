@@ -19,9 +19,7 @@ from langchain_core.messages import AIMessage
 
 from src.app.web.app import create_app
 from src.core.answer_schema import AnswerResponse, export_answer_text
-from src.core.contracts import SessionMetadata
 from src.core.request_contracts import WireRequestContract
-from src.core.uploads import UploadContext
 from src.infra.settings import AppSettings
 
 
@@ -168,6 +166,27 @@ def answer(api, **kwargs):
     return AnswerResponse.model_validate(final["response"])
 
 
+@pytest.mark.parametrize("fields", [{}, {"uploads": None}, {"upload_file_path": None}])
+def test_question_requires_confirmed_context_without_changing_attachments(api, fields):
+    current = sync(api, add=[staged(api, "alpha.py", "alpha = 1\n")])["manifest"]
+    response = api.client.post("/agent/stream", json={
+        "query": "hello", "session_id": "session-a", **fields,
+    })
+    assert response.status_code == 422
+    assert manifest(api) == current
+
+
+@pytest.mark.parametrize("revision", [True, "0", 0.0])
+def test_question_rejects_coerced_upload_versions(api, revision):
+    current = manifest(api)
+    response = api.client.post("/agent/stream", json={
+        "query": "exit", "session_id": "session-a",
+        "uploads": {"epoch": current["epoch"], "revision": revision},
+    })
+    assert response.status_code == 422
+    assert manifest(api) == current
+
+
 @contextmanager
 def session_requests_arrived(count):
     """Observe actual server request arrivals through its existing log boundary, without replacing the store."""
@@ -246,24 +265,9 @@ def test_http_comparison_only_uses_the_planned_files_from_a_larger_attachment_se
     assert manifest(api) == current
 
 
-@pytest.mark.parametrize("clear_payload", [{}, {"upload_file_path": None}])
-def test_legacy_http_path_replaces_the_set_and_absent_or_null_path_clears_it(api, clear_payload):
-    """Legacy requests keep their replacement/clear semantics while using the new real source index."""
-    sync(api, add=[staged(api, "alpha.py", "alpha = 1\n"), staged(api, "beta.py", "beta = 2\n")])
-    legacy = staged(api, "legacy.py", "legacy = 3\n")
-
-    replaced = answer(api, upload_file_path=legacy["path"])
-    assert {citation.evidence.snapshot.title for citation in replaced.citations} == {"legacy.py"}
-    assert [item["name"] for item in manifest(api)["files"]] == ["legacy.py"]
-
-    cleared = answer(api, **clear_payload)
-    assert cleared.citations == []
-    assert manifest(api)["files"] == []
-
-
 @pytest.mark.parametrize("legacy_path", [None, "uploads/session-a/alpha.py"])
-def test_http_schema_rejects_mixed_attachment_protocols_before_creating_a_session(api, legacy_path):
-    """Neither null nor non-null legacy fields may silently override a versioned upload context."""
+def test_http_schema_rejects_retired_path_field_before_creating_a_session(api, legacy_path):
+    """The retired field is rejected, including null, without creating or changing a session."""
     response = api.client.post("/agent/stream", json={
         "query": "Compare files", "session_id": "session-a", "upload_file_path": legacy_path,
         "uploads": {"epoch": "old", "revision": 0},
@@ -347,7 +351,7 @@ def test_cross_session_staged_file_is_rejected_without_entering_the_index(api):
         before, add=[staged(api, "secret.py", "secret = 1\n", session="session-b")],
     ))
 
-    assert response.status_code == 400
+    assert response.status_code == 422
     assert response.json()["detail"]["code"] == "UPLOAD_PATH_INVALID"
     assert manifest(api) == before
 
@@ -403,8 +407,8 @@ def test_http_exit_releases_managed_files_and_reuses_the_full_upload_quota(api):
     pytest.param("broken.ipynb", b"not-json", id="invalid-notebook"),
     pytest.param("replacement.py", b"replacement = 2\n", id="embedding-outage"),
 ])
-def test_legacy_exit_resets_the_session_without_preparing_the_supplied_file(api, name, content):
-    """Legacy exit resets owned state despite unusable upload input, preserving borrowed bytes and prior citations."""
+def test_exit_releases_owned_state_without_reading_uncommitted_staging(api, name, content):
+    """Explicit reset releases owned state while preserving uncommitted staging and prior citations."""
     original = staged(api, "source.py", "value = 1\n")
     current = sync(api, add=[original])["manifest"]
     previous = answer(api, uploads=context(current))
@@ -420,7 +424,7 @@ def test_legacy_exit_resets_the_session_without_preparing_the_supplied_file(api,
         raise RuntimeError("Simulated embedding outage")
 
     api.controls.before_embedding = fail_embedding
-    reset = final_response(api, query="exit", upload_file_path=supplied["path"], include_debug=True)
+    reset = final_response(api, query="exit", uploads=context(current), include_debug=True)
 
     empty = reset["upload_manifest"]
     assert empty["epoch"] != current["epoch"]
@@ -484,16 +488,12 @@ def test_final_response_preserves_the_confirmed_manifest_even_when_the_model_fai
 def test_session_request_manifest_is_a_detached_snapshot_of_its_completion(api):
     """A later reset cannot change the manifest returned with an earlier session request."""
     current = sync(api, add=[staged(api, "alpha.py", "alpha = 1\n")])["manifest"]
-    store = api.client.app.state.session_store
-    request = {"session_id": "session-a", "session_metadata": SessionMetadata(),
-               "uploads": UploadContext.model_validate(context(current))}
+    previous = final_response(api, uploads=context(current))["upload_manifest"]
+    reset = final_response(api, query="exit", uploads=context(current))["upload_manifest"]
 
-    _, _, _, previous = store.run_session_request(user_input="Compare files", **request)
-    _, _, _, reset = store.run_session_request(user_input="exit", **request)
-
-    assert previous.model_dump(mode="json") == current
-    assert reset.epoch != previous.epoch
-    assert reset.model_dump(mode="json") == {"epoch": reset.epoch, "revision": 0, "files": []}
+    assert previous == current
+    assert reset["epoch"] != previous["epoch"]
+    assert reset == {"epoch": reset["epoch"], "revision": 0, "files": []}
 
 
 @pytest.mark.parametrize("limit", ["file", "total"])
@@ -679,7 +679,8 @@ def test_new_session_question_completes_while_uploads_pin_the_lru_capacity(api):
                                 json=sync_body(current, add=[addition]))
         try:
             assert index_started.wait(10), "upload did not reach indexing"
-            result = final_response(api, query="hello", session_id="new-session")
+            empty = manifest(api, "new-session")
+            result = final_response(api, query="hello", session_id="new-session", uploads=context(empty))
             assert result["upload_manifest"]["files"] == []
         finally:
             release_index.set()
