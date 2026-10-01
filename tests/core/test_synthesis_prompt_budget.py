@@ -7,7 +7,8 @@ from src.core.documents import DocumentElement, TableCell, TableData, build_snap
 from src.core.evidence import build_evidence
 from src.core.planner_schema import PlannerOutput, RetrievalRequirement, RetrievalTask
 from src.runtime.nodes.synthesis.budgets import resolve_synthesis_budget_profile
-from src.runtime.nodes.synthesis.prompt_builder import build_synthesis_messages, prepare_evidence_packet
+from src.runtime.nodes.synthesis.prompt_builder import build_synthesis_messages
+from src.runtime.nodes.synthesis.evidence_selection import prepare_evidence_packet
 from src.core.contracts.boundary.graph import build_graph_state_input
 
 

@@ -13,7 +13,8 @@ from src.core.request_contracts import RequestContract, resolve_body_response
 from src.runtime.nodes.synthesis.budgets import SynthesisBudgetProfile
 from src.runtime.nodes.synthesis.evidence_selection import missing_evidence_requirement_ids, select_evidence_hits, tasks_for_hit
 from src.runtime.nodes.synthesis.models import PreparedSynthesisInputs, SynthesisContext
-from src.runtime.nodes.synthesis.prompt_builder import build_synthesis_messages, select_evidence_packet
+from src.runtime.nodes.synthesis.prompt_builder import build_synthesis_messages
+from src.runtime.nodes.synthesis.evidence_selection import select_evidence_packet
 
 
 def _build_action_rules(*, contract: RequestContract) -> list[str]:

@@ -6,7 +6,7 @@ from src.core.documents import DocumentElement, SourceAnchor, TableCell, TableDa
 from src.core.evidence import RetrievalScore, SearchHit, build_evidence
 from src.eval.config_models import BenchmarkCase
 from src.eval.metric_rules import score_citation_traceability, score_reference_coverage
-from src.runtime.nodes.synthesis.prompt_builder import prepare_evidence_packet
+from src.runtime.nodes.synthesis.evidence_selection import prepare_evidence_packet
 from tests.eval.response_fixtures import source_evidence
 
 

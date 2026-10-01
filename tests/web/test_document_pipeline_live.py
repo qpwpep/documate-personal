@@ -15,7 +15,7 @@ from src.core.evidence import EvidenceRef, parse_search_hits
 from src.core.planner_schema import RetrievalRequirement
 from src.infra.docling_runner import DoclingRunner
 from src.infra.tools.local_rag import build_upload_search_tool
-from src.runtime.nodes.synthesis.prompt_builder import prepare_evidence_packet
+from src.runtime.nodes.synthesis.evidence_selection import prepare_evidence_packet
 from tests.web.test_multi_upload_api import LocalChatModel, api, answer, context, manifest, staged, sync  # noqa: F401
 
 
