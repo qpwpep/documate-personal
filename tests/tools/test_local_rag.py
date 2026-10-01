@@ -1,16 +1,19 @@
+import hashlib
 import json
 import unittest
 import warnings
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
+from uuid import uuid4
 
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 
 from src.core.evidence import EvidenceRef, parse_search_hits
 from src.infra.chunking import chunk_notebook_path, chunk_python_text
-from src.infra.tools.local_rag import build_temp_retriever, build_upload_search_tool
+from src.core.uploads import UploadRecord
+from src.infra.tools.local_rag import build_upload_retriever, build_upload_search_tool
 from src.infra.tools.local_rag.ranking import rank_retrieval_rows
 from src.infra.tools.local_rag.serialization import build_local_snippet, build_query_focused_snippet
 from tests.synthesis_fixtures import synthesis_excerpt_limits
@@ -22,6 +25,17 @@ class _FakeEmbeddings(Embeddings):
 
     def embed_query(self, text: str) -> list[float]:
         return [float(len(text)), float(text.count("train_test_split"))]
+
+
+def _index_upload(path: Path):
+    data = path.read_bytes()
+    file_id = uuid4().hex
+    record = UploadRecord(
+        file_id=file_id, name=path.name, path=str(path), size_bytes=len(data),
+        content_hash="sha256:" + hashlib.sha256(data).hexdigest(),
+        source_uri=f"upload:///rag-tests/{file_id}",
+    )
+    return build_upload_retriever([record], session_id="rag-tests", generation=uuid4().hex, api_key="test-key")
 
 
 def _write_notebook(path: Path, *sources: str) -> None:
@@ -85,7 +99,7 @@ class LocalRagTest(unittest.TestCase):
             path = Path(temp_dir) / "uploads" / "long-line-synthesis" / "source.py"
             path.parent.mkdir(parents=True)
             path.write_text(text, encoding="utf-8")
-            handle = build_temp_retriever(str(path), api_key="test-key")
+            handle = _index_upload(path)
             try:
                 payload = build_upload_search_tool()(query=task.query, k=task.k, retriever=handle.retriever)
             finally:
