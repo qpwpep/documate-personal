@@ -29,6 +29,7 @@ header[data-testid="stHeader"] {
 [data-testid="stSidebar"] {
     background: var(--dm-sidebar-bg);
     border-right: 1px solid var(--dm-border);
+    color: var(--dm-text);
 }
 
 [data-testid="stSidebar"] [data-testid="stSidebarContent"] {
@@ -296,6 +297,11 @@ div.stButton > button:focus {
     color: var(--dm-mark-text);
 }
 
+[data-testid="stChatMessage"] [data-testid="stChatMessageAvatarAssistant"] {
+    background: var(--dm-accent-soft);
+    color: var(--dm-accent);
+}
+
 [data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarUser"]) {
     margin-left: auto;
     max-width: 78%;
@@ -318,6 +324,7 @@ div.stButton > button:focus {
     border: 1px solid var(--dm-assistant-border);
     border-radius: 1.1rem;
     box-shadow: var(--dm-assistant-shadow);
+    color: var(--dm-text);
     display: flex;
     flex-direction: column;
     justify-content: center;
@@ -350,6 +357,78 @@ div.stButton > button:focus {
     display: block;
     padding: 0;
     white-space: pre-wrap;
+}
+
+[data-testid="stCode"] pre {
+    background: var(--dm-inline-code-bg) !important;
+    color: var(--dm-inline-code-text) !important;
+}
+
+[data-testid="stCode"] pre code {
+    background: transparent !important;
+    color: var(--dm-inline-code-text) !important;
+}
+
+[data-testid="stCode"] .react-syntax-highlighter-line-number {
+    color: var(--dm-muted) !important;
+}
+
+[data-testid="stCodeCopyButton"] {
+    color: var(--dm-muted);
+}
+
+[data-testid="stCodeCopyButton"]:hover {
+    background: var(--dm-accent-soft);
+    color: var(--dm-text);
+}
+
+[data-testid="stPopoverButton"],
+[data-testid="stPopoverBody"] {
+    background: var(--dm-panel);
+    border-color: var(--dm-border);
+    color: var(--dm-text);
+}
+
+[data-testid="stPopoverBody"] {
+    box-shadow: var(--dm-shadow);
+}
+
+[data-testid="stPopoverButton"]:hover {
+    background: var(--dm-button-hover-bg);
+    border-color: var(--dm-button-hover-border);
+    color: var(--dm-text);
+}
+
+[data-testid="stPopoverButton"]:focus {
+    border-color: var(--dm-accent);
+    color: var(--dm-text);
+}
+
+[data-testid="stPopoverBody"] > div {
+    background: var(--dm-panel);
+    color: var(--dm-text);
+}
+
+[data-testid="stPopoverBody"] [data-testid="stMarkdownContainer"] {
+    color: var(--dm-text);
+}
+
+[data-testid="stCaptionContainer"],
+[data-testid="stCaptionContainer"] [data-testid="stMarkdownContainer"] {
+    color: var(--dm-muted);
+    opacity: 1;
+}
+
+[data-testid="stChatMessage"] a,
+[data-testid="stPopoverBody"] a {
+    color: var(--dm-accent);
+}
+
+[data-testid="stChatMessage"] th,
+[data-testid="stChatMessage"] td,
+[data-testid="stPopoverBody"] th,
+[data-testid="stPopoverBody"] td {
+    border-color: var(--dm-border);
 }
 
 [data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarAssistant"]) [data-testid="stAlert"] {
