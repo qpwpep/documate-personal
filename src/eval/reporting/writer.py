@@ -103,7 +103,8 @@ def write_run_outputs(*, output_dir: Path, results: list[CaseResult], summary: R
     report = build_markdown_report(summary, results)
     output_dir.mkdir(parents=True, exist_ok=True)
     dump_jsonl(output_dir / "raw_results.jsonl", results)
-    (output_dir / "summary.json").write_text(json.dumps(summary.model_dump(), ensure_ascii=False, indent=2), encoding="utf-8")
+    summary_payload = summary.model_dump(exclude={"weights"} if summary.weights is None else set())
+    (output_dir / "summary.json").write_text(json.dumps(summary_payload, ensure_ascii=False, indent=2), encoding="utf-8")
     (output_dir / "report.md").write_text(report, encoding="utf-8")
     dump_jsonl(
         output_dir / "request_map.jsonl",
