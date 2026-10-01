@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import unittest
 from contextlib import nullcontext
 from unittest.mock import patch
@@ -10,7 +11,6 @@ from src.app.web import streamlit_intro, streamlit_sidebar, streamlit_styles, st
 class _FakeStreamlit:
     def __init__(self) -> None:
         self.markdowns: list[tuple[str, bool]] = []
-        self.query_params: dict[str, str] = {}
         self.session_state: dict[str, object] = {}
         self.button_labels: list[str] = []
         self.input_values: dict[str, str] = {}
@@ -45,7 +45,7 @@ class StreamlitPageTest(unittest.TestCase):
         fake_st = _FakeStreamlit()
         fake_st.session_state["documate_slack_recipient_kind"] = "이메일"
         fake_st.input_values["Slack 수신자"] = "selected@example.com"
-        with patch.object(streamlit_sidebar, "st", fake_st), patch.object(streamlit_theme, "st", fake_st):
+        with patch.object(streamlit_sidebar, "st", fake_st):
             selected = streamlit_sidebar.render_sidebar()
         self.assertEqual(selected.slack_recipient.model_dump(), {"kind": "email", "value": "selected@example.com"})
         self.assertIsNone(selected.slack_recipient_error)
@@ -53,7 +53,7 @@ class StreamlitPageTest(unittest.TestCase):
     def test_sidebar_blank_explicit_recipient_is_an_error(self) -> None:
         fake_st = _FakeStreamlit()
         fake_st.session_state["documate_slack_recipient_kind"] = "사용자"
-        with patch.object(streamlit_sidebar, "st", fake_st), patch.object(streamlit_theme, "st", fake_st):
+        with patch.object(streamlit_sidebar, "st", fake_st):
             selected = streamlit_sidebar.render_sidebar()
         self.assertIsNone(selected.slack_recipient)
         self.assertIsNotNone(selected.slack_recipient_error)
@@ -61,81 +61,39 @@ class StreamlitPageTest(unittest.TestCase):
 
     def test_sidebar_unspecified_recipient_has_no_input_error(self) -> None:
         fake_st = _FakeStreamlit()
-        with patch.object(streamlit_sidebar, "st", fake_st), patch.object(streamlit_theme, "st", fake_st):
+        with patch.object(streamlit_sidebar, "st", fake_st):
             selected = streamlit_sidebar.render_sidebar()
         self.assertIsNone(selected.slack_recipient)
         self.assertIsNone(selected.slack_recipient_error)
 
-    def test_render_theme_styles_emits_light_override(self) -> None:
-        fake_st = _FakeStreamlit()
+    def test_configure_page_renders_selected_theme_with_component_styles(self) -> None:
+        for theme_mode in ("시스템", "라이트", "다크"):
+            with self.subTest(theme_mode=theme_mode):
+                fake_st = _FakeStreamlit()
+                with patch.object(streamlit_styles, "st", fake_st):
+                    streamlit_styles.configure_page(theme_mode)
 
-        with patch.object(streamlit_theme, "st", fake_st):
-            streamlit_theme.render_theme_styles("라이트")
-
-        self.assertEqual(len(fake_st.markdowns), 1)
-        body, unsafe = fake_st.markdowns[0]
-        self.assertTrue(unsafe)
-        self.assertIn("--dm-bg: #f7f5ef;", body)
-        self.assertIn("--dm-text: #202124;", body)
-        self.assertIn("--dm-chat-input-bg: #fffdfa;", body)
-        self.assertIn("--dm-chat-attachment-bg: #f8f6f1;", body)
-        self.assertIn("--dm-chat-attachment-text: #202124;", body)
-        self.assertIn("--dm-chat-icon: #276f66;", body)
-        self.assertIn("--dm-assistant-bg:", body)
-        self.assertIn("--dm-inline-code-bg: rgba(39, 111, 102, 0.10);", body)
-
-    def test_render_theme_styles_emits_dark_override(self) -> None:
-        fake_st = _FakeStreamlit()
-
-        with patch.object(streamlit_theme, "st", fake_st):
-            streamlit_theme.render_theme_styles("다크")
-
-        self.assertEqual(len(fake_st.markdowns), 1)
-        body, unsafe = fake_st.markdowns[0]
-        self.assertTrue(unsafe)
-        self.assertIn("--dm-bg: #101214;", body)
-        self.assertIn("--dm-text: #f5f1e8;", body)
-        self.assertIn("--dm-chat-input-bg: #1d1e20;", body)
-        self.assertIn("--dm-chat-attachment-bg: #242827;", body)
-        self.assertIn("--dm-chat-attachment-text: #f5f1e8;", body)
-        self.assertIn("--dm-chat-icon: #78d1c1;", body)
-        self.assertIn("--dm-assistant-bg:", body)
-        self.assertIn("--dm-inline-code-bg: rgba(120, 209, 193, 0.12);", body)
-
-    def test_render_theme_styles_keeps_system_mode_css_media_query(self) -> None:
-        fake_st = _FakeStreamlit()
-
-        with patch.object(streamlit_styles, "st", fake_st), patch.object(
-            streamlit_theme, "st", fake_st
-        ):
-            streamlit_styles.configure_page()
-            base_markdowns = list(fake_st.markdowns)
-            streamlit_theme.render_theme_styles("시스템")
-
-        self.assertEqual(fake_st.markdowns, base_markdowns)
-        rendered_page = "\n".join(body for body, _ in fake_st.markdowns)
-        self.assertIn("@media (prefers-color-scheme: dark)", rendered_page)
-        self.assertIn('[data-testid="stChatInput"] > div:focus-within', rendered_page)
-        self.assertIn("caret-color: var(--dm-accent) !important;", rendered_page)
-        self.assertIn("--dm-chat-attachment-text: #202124;", rendered_page)
-        self.assertIn("--dm-chat-icon: #276f66;", rendered_page)
-        self.assertIn('[data-testid="stChatInput"] button svg', rendered_page)
-        self.assertIn(
-            '[data-testid="stChatInput"] [data-testid="stChatInputFile"] > div:first-child',
-            rendered_page,
-        )
-
-    def test_sidebar_uses_theme_from_query_params(self) -> None:
-        fake_st = _FakeStreamlit()
-        fake_st.query_params["theme"] = "dark"
-
-        with patch.object(streamlit_sidebar, "st", fake_st), patch.object(
-            streamlit_theme, "st", fake_st
-        ):
-            sidebar_inputs = streamlit_sidebar.render_sidebar()
-
-        self.assertEqual(fake_st.session_state["documate_theme_mode"], "다크")
-        self.assertEqual(sidebar_inputs.theme_mode, "다크")
+                styles = [entry for entry in fake_st.markdowns if "<style>" in entry[0]]
+                self.assertEqual(len(styles), 1)
+                rendered_page, unsafe = styles[0]
+                self.assertTrue(unsafe)
+                self.assertEqual(rendered_page.count("<style>"), 1)
+                self.assertEqual(rendered_page.count("</style>"), 1)
+                theme_css = streamlit_theme.build_theme_css(theme_mode)
+                self.assertIn(theme_css, rendered_page)
+                self.assertEqual("prefers-color-scheme" in rendered_page, theme_mode == "시스템")
+                component_css = rendered_page.replace(theme_css, "", 1)
+                self.assertNotRegex(component_css, r"--dm-[\w-]+\s*:")
+                defined_tokens = set(re.findall(r"(--dm-[\w-]+)\s*:", theme_css))
+                used_tokens = set(re.findall(r"var\((--dm-[\w-]+)\)", component_css))
+                self.assertLessEqual(used_tokens, defined_tokens)
+                self.assertIn('[data-testid="stChatInput"] > div:focus-within', component_css)
+                self.assertIn("caret-color: var(--dm-accent) !important;", component_css)
+                self.assertIn('[data-testid="stChatInput"] button svg', component_css)
+                self.assertIn(
+                    '[data-testid="stChatInput"] [data-testid="stChatInputFile"] > div:first-child',
+                    component_css,
+                )
 
     def test_quick_prompts_are_sampled_once_per_session(self) -> None:
         fake_st = _FakeStreamlit()
