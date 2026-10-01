@@ -1,15 +1,18 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from contextlib import contextmanager
 from types import SimpleNamespace
+from uuid import uuid4
 
 import pytest
 from langchain_core.embeddings import Embeddings
 
 from src.core.evidence import parse_search_hits
 from src.infra.chunking import chunk_python_text
-from src.infra.tools.local_rag import build_temp_retriever, build_upload_search_tool
+from src.core.uploads import UploadRecord
+from src.infra.tools.local_rag import build_upload_retriever, build_upload_search_tool
 
 
 class _LengthEmbeddings(Embeddings):
@@ -37,7 +40,14 @@ def uploaded(tmp_path, monkeypatch):
             path.write_text(json.dumps(payload), encoding="utf-8")
         else:
             path.write_bytes(source.encode("utf-8"))
-        handle = build_temp_retriever(str(path), api_key="test-key")
+        content = path.read_bytes()
+        file_id = uuid4().hex
+        record = UploadRecord(
+            file_id=file_id, name=path.name, path=str(path), size_bytes=len(content),
+            content_hash="sha256:" + hashlib.sha256(content).hexdigest(),
+            source_uri=f"upload:///{session}/{file_id}",
+        )
+        handle = build_upload_retriever([record], session_id=session, generation=uuid4().hex, api_key="test-key")
         try:
             yield handle.retriever
         finally:

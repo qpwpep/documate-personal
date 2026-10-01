@@ -3,7 +3,6 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import re
 import time
 from importlib.metadata import version
 from collections import OrderedDict
@@ -22,7 +21,7 @@ from src.core.documents import ParsedDocument
 from src.core.uploads import UploadFileInfo, UploadRecord
 from src.core.upload_formats import is_document_upload
 from src.infra.chroma_store import create_chroma_vectorstore, add_preembedded_documents
-from src.infra.chunking import ChunkedDocument, chunk_notebook, chunk_notebook_path, chunk_python_text, chunk_parsed_document
+from src.infra.chunking import ChunkedDocument, chunk_notebook, chunk_python_text, chunk_parsed_document
 from src.infra.document_ingestion import DocumentIngestionContext, IngestionError
 from src.infra.embedding_cache import CachedEmbeddings
 from src.infra.notebook_loader import canonicalize_notebook_payload
@@ -52,7 +51,7 @@ def retry_pending_upload_index_cleanup() -> None:
 
     New managed builds stop while this backlog remains. Failures can therefore
     add only already-live/in-flight generations, rather than an unlimited series
-    of new candidates. Legacy collections never enter this registry.
+    of new candidates.
     """
     with _index_cleanup_lock:
         pending = list(_pending_index_deletions.items())[:_INDEX_CLEANUP_BATCH]
@@ -76,46 +75,22 @@ def retry_pending_upload_index_cleanup() -> None:
                     del _pending_index_deletions[key]
 
 
-def _delete_upload_index(vectorstore: Chroma, *, managed: bool) -> None:
+def _delete_upload_index(vectorstore: Chroma) -> None:
     collection = vectorstore._collection
     key = (id(vectorstore._client), str(collection.id))
     try:
-        current = vectorstore._client.get_collection(collection.name) if managed else collection
+        current = vectorstore._client.get_collection(collection.name)
         if str(current.id) == str(collection.id):
             vectorstore.delete_collection()
     except NotFoundError:
         pass
     except Exception:
-        if managed:
-            with _index_cleanup_lock:
-                _pending_index_deletions[key] = _PendingIndexDeletion(
-                    client=vectorstore._client, name=collection.name, collection_id=str(collection.id))
+        with _index_cleanup_lock:
+            _pending_index_deletions[key] = _PendingIndexDeletion(
+                client=vectorstore._client, name=collection.name, collection_id=str(collection.id))
         raise
     with _index_cleanup_lock:
         _pending_index_deletions.pop(key, None)
-
-
-def extract_upload_session_id(path: str) -> str:
-    parts = Path(path).expanduser().parts
-    upload_index = -1
-    for index, part in enumerate(parts):
-        if part.lower() == "uploads":
-            upload_index = index
-
-    if upload_index < 0 or upload_index + 1 >= len(parts):
-        raise ValueError("Upload path must include uploads/<session_id>/...")
-
-    session_id = str(parts[upload_index + 1]).strip()
-    if not session_id or session_id in {".", ".."}:
-        raise ValueError("Upload path must include a valid session_id segment")
-    return session_id
-
-
-def build_upload_collection_name(session_id: str) -> str:
-    normalized_session_id = re.sub(r"[^0-9A-Za-z_-]+", "-", session_id.strip()).strip("-")
-    if not normalized_session_id:
-        raise ValueError("session_id cannot be normalized into a collection name")
-    return f"upload-session-{normalized_session_id}"
 
 
 @dataclass
@@ -124,22 +99,17 @@ class UploadedRetrieverHandle:
     collection_name: str
     _vectorstore: Chroma = field(repr=False)
     _documents: tuple[ChunkedDocument, ...] = field(repr=False)
-    _managed: bool = field(default=False, repr=False)
     _cleaned_up: bool = field(default=False, init=False, repr=False)
 
     def cleanup(self) -> None:
         if self._cleaned_up:
             return
         try:
-            _delete_upload_index(self._vectorstore, managed=self._managed)
+            _delete_upload_index(self._vectorstore)
             self._cleaned_up = True
         finally:
             for document in self._documents:
                 document.release()
-            # Legacy names can be reused even after failed deletion. Preserve
-            # their one-shot disposal; only isolated managed generations retry.
-            if not self._managed:
-                self._cleaned_up = True
 
 
 class _SourceRegistry:
@@ -225,39 +195,9 @@ class _SourceAwareRetriever:
         return getattr(self._retriever, name)
 
 
-def build_temp_retriever(
-    path: str,
-    api_key: str | None = None,
-    k: int = 4,
-) -> UploadedRetrieverHandle:
-    session_id = extract_upload_session_id(path)
-    collection_name = build_upload_collection_name(session_id)
-
-    path_lower = str(path).lower()
-    if path_lower.endswith(".py"):
-        source_content = Path(path).read_bytes()
-        document = chunk_python_text(
-            path=path,
-            text=source_content.decode("utf-8"),
-            chunk_size=UPLOAD_CHUNK_SIZE,
-            chunk_overlap=UPLOAD_CHUNK_OVERLAP,
-            source_content=source_content,
-        )
-    elif path_lower.endswith(".ipynb"):
-        document = chunk_notebook_path(
-            path=path,
-            chunk_size=UPLOAD_CHUNK_SIZE,
-            chunk_overlap=UPLOAD_CHUNK_OVERLAP,
-        )
-    else:
-        raise ValueError("Unsupported file type (only .py or .ipynb).")
-
-    return _index_documents((document,), collection_name=collection_name, api_key=api_key, k=k)
-
-
 def _index_documents(
     documents: tuple[ChunkedDocument, ...], *, collection_name: str,
-    api_key: str | None, k: int, upload_files: tuple[UploadFileInfo, ...] = (),
+    api_key: str | None, k: int, upload_files: tuple[UploadFileInfo, ...],
     ingestion: DocumentIngestionContext | None = None,
 ) -> UploadedRetrieverHandle:
     vectorstore = None
@@ -314,11 +254,11 @@ def _index_documents(
         retriever = _SourceAwareRetriever(vectorstore.as_retriever(search_kwargs={"k": k}),
                                           vectorstore, documents, upload_files)
         return UploadedRetrieverHandle(retriever=retriever, collection_name=collection_name,
-                                       _vectorstore=vectorstore, _documents=documents, _managed=bool(upload_files))
+                                       _vectorstore=vectorstore, _documents=documents)
     except BaseException:
         if vectorstore is not None:
             try:
-                _delete_upload_index(vectorstore, managed=bool(upload_files))
+                _delete_upload_index(vectorstore)
             except Exception:
                 logging.getLogger(__name__).exception("Failed to clean up candidate upload index")
         for document in documents:
