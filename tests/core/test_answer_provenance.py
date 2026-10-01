@@ -40,7 +40,7 @@ def _state(contract, *, previous=None, pending=None):
 
 def _publish(state):
     debug = DebugCollector().build(response=state, updated_messages=state["messages"],
-                                   graph_total_ms=0, upload_retriever_build_ms=None)
+                                   graph_total_ms=0)
     return ResponseAssembler().assemble(response=state, debug_info=debug)
 
 

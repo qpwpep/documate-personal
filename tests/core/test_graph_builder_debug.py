@@ -127,7 +127,6 @@ class GraphBuilderDebugTest(unittest.TestCase):
             ),
             updated_messages=[HumanMessage(content="question")],
             graph_total_ms=10,
-            upload_retriever_build_ms=None,
         )
 
         self.assertEqual(debug["errors"], ["tavily_search: failed (timeout)"])

@@ -29,7 +29,7 @@ def collect_debug():
         "route_decisions": deepcopy(DECISIONS),
     }
     debug = DebugCollector().build(
-        response=state, updated_messages=[], graph_total_ms=25, upload_retriever_build_ms=None,
+        response=state, updated_messages=[], graph_total_ms=25,
     )
     return answer, state, debug
 
@@ -81,8 +81,7 @@ def test_missing_history_is_not_accepted_as_an_observed_empty_history():
     assert "route_decisions" in parsed.missing_required_debug_fields
 
     del state["route_decisions"]
-    collected = DebugCollector().build(response=state, updated_messages=[], graph_total_ms=0,
-                                       upload_retriever_build_ms=None)
+    collected = DebugCollector().build(response=state, updated_messages=[], graph_total_ms=0)
     assert collected["observability_status"] == "failed"
     assert "route_decisions" in collected["missing_required_debug_fields"]
 
@@ -94,8 +93,7 @@ def test_summary_fallback_remains_degraded_after_observation_boundaries():
         "validation_events": ["memory_summary_fallback: reason=model_failed"],
         "memory_compactions": [{**COMPACTIONS[0], "summary_fallback": True}],
     })
-    debug = DebugCollector().build(response=state, updated_messages=[], graph_total_ms=25,
-                                   upload_retriever_build_ms=None)
+    debug = DebugCollector().build(response=state, updated_messages=[], graph_total_ms=25)
     normalized = normalize_debug_info(debug, 30).model_dump(mode="json")
     parsed = parse_agent_response({"response": answer.model_dump(mode="json"), "debug": normalized})
 

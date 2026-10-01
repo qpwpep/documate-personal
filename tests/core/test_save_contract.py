@@ -80,7 +80,7 @@ def test_server_provenance_binds_the_executed_operation_independently_of_receipt
         "result": updates["response"].result.model_copy(update={"actions": [forged]}),
     })
     debug = DebugCollector().build(response={**state, **updates}, updated_messages=updates["messages"],
-                                   graph_total_ms=1, upload_retriever_build_ms=None)
+                                   graph_total_ms=1)
     assert debug["answer_provenance"].get("save_operation_binding_sha256") == receipt.operation.binding_sha256
     assert debug["answer_provenance"]["save_operation_binding_sha256"] != forged.operation.binding_sha256
 

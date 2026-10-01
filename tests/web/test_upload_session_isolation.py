@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import tempfile
+import hashlib
 import threading
 import time
 import unittest
@@ -19,7 +19,6 @@ from src.core.contracts import ResponseState
 from src.core.answer_schema import AnswerResponse, export_answer_text
 from tests.web.answer_fixtures import answer_response
 from src.infra.settings import AppSettings
-from src.infra.tools.local_rag import build_temp_retriever
 from src.app.web.agent_request_support import build_session_metadata_snapshot
 from src.app.web.session_store import InMemorySessionStore, SessionEntry
 from src.app.web.schemas import AgentRequest
@@ -52,14 +51,6 @@ class _CapturingGraph:
             ],
             "response": ResponseState(result=answer_response("ok")),
         }
-
-
-class _ResolvingGraph(_CapturingGraph):
-    def stream(self, state: dict, *, stream_mode: str):
-        runtime = state["runtime"]
-        if runtime.retriever is not None:
-            runtime.retriever.invoke("probe")
-        yield from super().stream(state, stream_mode=stream_mode)
 
 
 class _ExplodingGraph:
@@ -95,231 +86,16 @@ class _SlowCapturingGraph:
                 self._current -= 1
 
 
-class _FakeHandle:
-    def __init__(self, collection_name: str):
-        self.collection_name = collection_name
-        self.retriever = self
-        self.cleanup_calls = 0
-
-    @property
-    def vectorstore(self):
-        return None
-
-    def invoke(self, _query: str):
-        return []
-
-    def cleanup(self) -> None:
-        self.cleanup_calls += 1
-
-
 def _make_manager(graph: _CapturingGraph) -> AgentFlowManager:
     manager = AgentFlowManager.__new__(AgentFlowManager)
     manager.settings = AppSettings(openai_api_key="test-key", tavily_api_key="test")
     manager.graph = graph
     manager.messages = []
     manager.session_metadata = {"slack_recipient": None}
-    manager.upload_retriever_handle = None
-    manager.upload_file_path = None
     return manager
 
 
 class UploadSessionIsolationTest(unittest.TestCase):
-    def _upload(self, filename: str = "file.py", content: str = "value = 1\n") -> str:
-        directory = tempfile.TemporaryDirectory()
-        self.addCleanup(directory.cleanup)
-        path = Path(directory.name) / "uploads" / "session" / filename
-        path.parent.mkdir(parents=True)
-        path.write_text(content, encoding="utf-8")
-        return str(path)
-
-    @patch("src.infra.tools.local_rag.client.build_openai_embeddings", return_value=_FakeEmbeddings())
-    def test_build_temp_retriever_isolates_per_session_collection(self, _mock_embeddings) -> None:
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            uploads_root = Path(tmp_dir) / "uploads"
-            path_one = uploads_root / "session-one" / "sample_one.py"
-            path_two = uploads_root / "session-two" / "sample_two.py"
-
-            path_one.parent.mkdir(parents=True, exist_ok=True)
-            path_two.parent.mkdir(parents=True, exist_ok=True)
-            path_one.write_text("alpha session one", encoding="utf-8")
-            path_two.write_text("beta session two", encoding="utf-8")
-
-            handle_one = build_temp_retriever(str(path_one), api_key="test-key")
-            handle_two = build_temp_retriever(str(path_two), api_key="test-key")
-            self.addCleanup(handle_one.cleanup)
-            self.addCleanup(handle_two.cleanup)
-
-            metadatas = handle_two.retriever.vectorstore.get().get("metadatas", [])
-            sources = [item.get("source") for item in metadatas]
-
-            self.assertEqual(handle_one.collection_name, "upload-session-session-one")
-            self.assertEqual(handle_two.collection_name, "upload-session-session-two")
-            self.assertEqual(sources, [str(path_two)])
-
-    @patch("src.infra.tools.local_rag.client.build_openai_embeddings", return_value=_FakeEmbeddings())
-    def test_failed_legacy_cleanup_cannot_later_delete_a_reused_collection(self, _mock_embeddings) -> None:
-        """Legacy collection names are reused, so failed disposal must not become a delayed deletion."""
-        original = build_temp_retriever(self._upload("old.py"), api_key="test-key")
-        database = original._vectorstore._client
-        with patch.object(database, "delete_collection", side_effect=RuntimeError("unavailable")):
-            with self.assertRaises(RuntimeError):
-                original.cleanup()
-        current = build_temp_retriever(self._upload("new.py", "value = 2\n"), api_key="test-key")
-        try:
-            original.cleanup()
-            self.assertEqual(database.get_collection(current.collection_name).name, current.collection_name)
-        finally:
-            if current.collection_name in {collection.name for collection in database.list_collections()}:
-                current.cleanup()
-
-    @patch("src.app.agent_manager.build_temp_retriever")
-    def test_agent_manager_cleans_previous_handle_when_upload_changes(
-        self,
-        mock_build_temp_retriever,
-    ) -> None:
-        graph = _ResolvingGraph()
-        manager = _make_manager(graph)
-        handle_one = _FakeHandle("upload-session-session")
-        handle_two = _FakeHandle("upload-session-session")
-        mock_build_temp_retriever.side_effect = [handle_one, handle_two]
-
-        manager.run_agent_flow("first", upload_file_path=self._upload("file_one.py"))
-        manager.run_agent_flow("second", upload_file_path=self._upload("file_two.py"))
-
-        self.assertEqual(handle_one.cleanup_calls, 1)
-        self.assertIs(manager.upload_retriever_handle, handle_two)
-        self.assertIsNotNone(graph.states[-1]["runtime"].retriever)
-
-    @patch("src.app.agent_manager.build_temp_retriever")
-    def test_agent_manager_overlaps_upload_retriever_build_with_graph(
-        self,
-        mock_build_temp_retriever,
-    ) -> None:
-        graph_started = threading.Event()
-        handle = _FakeHandle("upload-session-session")
-        test_case = self
-
-        def build_retriever(*_args, **_kwargs):
-            self.assertTrue(graph_started.wait(timeout=1.0))
-            return handle
-
-        class _Graph(_CapturingGraph):
-            def stream(self, state: dict, *, stream_mode: str):
-                self.states.append(dict(state))
-                test_case.assertIsNone(manager.upload_retriever_handle)
-                test_case.assertIsNotNone(state["runtime"].retriever)
-                graph_started.set()
-                state["runtime"].retriever.invoke("probe")
-                yield {
-                    "route_decisions": [],
-                    "messages": [
-                        HumanMessage(content=state["runtime"].user_input),
-                        AIMessage(content="ok"),
-                    ],
-                    "response": ResponseState(result=answer_response("ok")),
-                }
-
-        graph = _Graph()
-        manager = _make_manager(graph)
-        mock_build_temp_retriever.side_effect = build_retriever
-
-        manager.run_agent_flow("with upload", upload_file_path=self._upload())
-
-        self.assertIs(manager.upload_retriever_handle, handle)
-        self.assertEqual(mock_build_temp_retriever.call_count, 1)
-
-    @patch("src.app.agent_manager.build_temp_retriever")
-    def test_agent_manager_cleans_handle_when_upload_removed(self, mock_build_temp_retriever) -> None:
-        graph = _ResolvingGraph()
-        manager = _make_manager(graph)
-        handle = _FakeHandle("upload-session-session")
-        mock_build_temp_retriever.return_value = handle
-
-        manager.run_agent_flow("with upload", upload_file_path=self._upload())
-        manager.run_agent_flow("without upload")
-
-        self.assertEqual(handle.cleanup_calls, 1)
-        self.assertIsNone(manager.upload_retriever_handle)
-        self.assertIsNone(graph.states[-1]["runtime"].retriever)
-
-    @patch("src.app.agent_manager.build_temp_retriever")
-    def test_memory_summary_reaches_plain_new_and_reused_upload_paths(
-        self,
-        mock_build_temp_retriever,
-    ) -> None:
-        graph = _ResolvingGraph()
-        manager = _make_manager(graph)
-        manager.memory_summary = "stable upload summary"
-        handle = _FakeHandle("upload-session-session")
-        mock_build_temp_retriever.return_value = handle
-
-        upload_path = self._upload()
-        manager.run_agent_flow("new upload", upload_file_path=upload_path)
-        manager.run_agent_flow("reuse upload", upload_file_path=upload_path)
-        manager.run_agent_flow("plain request")
-
-        self.assertEqual(
-            [state["runtime"].memory_summary for state in graph.states],
-            ["stable upload summary"] * 3,
-        )
-
-    @patch("src.app.agent_manager.build_temp_retriever")
-    def test_agent_manager_cleans_handle_on_exit(self, mock_build_temp_retriever) -> None:
-        graph = _ResolvingGraph()
-        manager = _make_manager(graph)
-        manager.memory_summary = "summary to clear"
-        handle = _FakeHandle("upload-session-session")
-        mock_build_temp_retriever.return_value = handle
-
-        borrowed_path = self._upload()
-        manager.run_agent_flow("with upload", upload_file_path=borrowed_path)
-        manager.run_agent_flow("exit")
-
-        self.assertEqual(handle.cleanup_calls, 1)
-        self.assertIsNone(manager.upload_retriever_handle)
-        self.assertEqual(manager.messages, [])
-        self.assertIsNone(manager.memory_summary)
-        self.assertTrue(Path(borrowed_path).is_file())
-
-    @patch("src.app.agent_manager.build_temp_retriever")
-    def test_agent_manager_cleans_handle_on_exception(self, mock_build_temp_retriever) -> None:
-        manager = _make_manager(_ExplodingGraph())
-        manager.messages = [
-            HumanMessage(content="stable request"),
-            AIMessage(content="stable answer"),
-        ]
-        manager.memory_summary = "stable summary"
-        before = manager._ensure_session().snapshot_conversation_memory()
-        handle = _FakeHandle("upload-session-session")
-        mock_build_temp_retriever.return_value = handle
-
-        result = manager.run_agent_flow("with upload", upload_file_path=self._upload())
-
-        self.assertEqual(export_answer_text(AnswerResponse.model_validate(result["response"])), "boom")
-        self.assertEqual(handle.cleanup_calls, 1)
-        self.assertIsNone(manager.upload_retriever_handle)
-        self.assertEqual(manager._ensure_session().snapshot_conversation_memory(), before)
-
-    @patch("src.app.agent_manager.build_temp_retriever")
-    def test_replacing_bytes_at_the_same_upload_path_rebuilds_retrieval(self, build_retriever) -> None:
-        """A new document revision replaces retrieval even when its filename is unchanged."""
-        graph = _ResolvingGraph()
-        manager = _make_manager(graph)
-        first = _FakeHandle("first-version")
-        second = _FakeHandle("second-version")
-        build_retriever.side_effect = [first, second]
-        upload_path = self._upload(content="value = 1\n")
-
-        manager.run_agent_flow("initial", upload_file_path=upload_path)
-        manager.run_agent_flow("same bytes", upload_file_path=upload_path)
-        self.assertIs(manager.upload_retriever_handle, first)
-        Path(upload_path).write_text("value = 2\n", encoding="utf-8")
-        manager.run_agent_flow("new bytes", upload_file_path=upload_path)
-
-        self.assertIs(manager.upload_retriever_handle, second)
-        self.assertEqual(first.cleanup_calls, 1)
-        self.assertEqual([state["runtime"].user_input for state in graph.states], ["initial", "same bytes", "new bytes"])
-
     def test_agent_manager_passes_session_metadata_to_graph_and_clears_on_close(self) -> None:
         graph = _CapturingGraph()
         manager = _make_manager(graph)
@@ -592,52 +368,82 @@ def managed_upload_agent(tmp_path, monkeypatch):
         store.close_all()
 
 
-@pytest.mark.parametrize("legacy_path_present", [False, True])
-def test_direct_legacy_transition_retires_managed_uploads_and_rejects_old_context(
-    managed_upload_agent, legacy_path_present,
-):
-    """Changing from managed attachments to a legacy call retires their source set and version together."""
-    agent, service, before, source, owned = managed_upload_agent
-    borrowed = source.with_name("borrowed.py")
-    borrowed.write_text("borrowed_value = 2\n", encoding="utf-8")
-    original = agent.run_agent_flow("read uploads", uploads=before.context())
-    assert {item.evidence.snapshot.title for item in AnswerResponse.model_validate(original["response"]).citations} == {"source.py"}
-    result = agent.run_agent_flow("read uploads", upload_file_path=str(borrowed) if legacy_path_present else None)
-    after = service.get_manifest("session-a")
-    assert after.files == []
-    assert after.epoch == before.epoch and after.revision > before.revision
-    assert not owned.exists() and source.is_file() and borrowed.is_file()
-    response = AnswerResponse.model_validate(result["response"])
-    assert {item.evidence.snapshot.title for item in response.citations} == ({"borrowed.py"} if legacy_path_present else set())
-
-    stale = agent.run_agent_flow("read uploads", uploads=before.context())
-    assert "UPLOAD_REVISION_CONFLICT" in export_answer_text(AnswerResponse.model_validate(stale["response"]))
-    assert service.get_manifest("session-a") == after
-    empty_context = agent.run_agent_flow("read uploads", uploads=after.context())
-    assert AnswerResponse.model_validate(empty_context["response"]).citations == []
-    if legacy_path_present:
-        repeated = agent.run_agent_flow("read uploads", upload_file_path=str(borrowed))
-        assert {item.evidence.snapshot.title for item in AnswerResponse.model_validate(repeated["response"]).citations} == {"borrowed.py"}
-        borrowed.write_text("borrowed_value = 3\n", encoding="utf-8")
-        replaced = agent.run_agent_flow("read uploads", upload_file_path=str(borrowed))
-        assert "borrowed_value = 3" in export_answer_text(AnswerResponse.model_validate(replaced["response"]))
-        cleared = agent.run_agent_flow("read uploads")
-        assert AnswerResponse.model_validate(cleared["response"]).citations == []
-        assert borrowed.is_file()
-
-
-def test_direct_stale_context_cannot_reset_current_managed_uploads(managed_upload_agent):
-    """A stale versioned reset preserves the current epoch, files and searchable source."""
+def test_questions_preserve_committed_uploads_without_resubmitting_attachment_context(managed_upload_agent):
+    """The runner reads the committed attachment set and never treats a question as a mutation."""
     agent, service, before, _source, owned = managed_upload_agent
-    stale_context = UploadContext(epoch=before.epoch, revision=before.revision - 1)
 
-    reset = agent.run_agent_flow("exit", uploads=stale_context)
+    response = AnswerResponse.model_validate(agent.run_agent_flow("read uploads")["response"])
 
-    assert "UPLOAD_REVISION_CONFLICT" in export_answer_text(AnswerResponse.model_validate(reset["response"]))
+    assert {item.evidence.snapshot.title for item in response.citations} == {"source.py"}
     assert service.get_manifest("session-a") == before
     assert owned.is_file()
-    current = agent.run_agent_flow("read uploads", uploads=before.context())
+
+
+def test_failed_answer_preserves_the_committed_upload_for_the_next_question(managed_upload_agent):
+    """An answer failure cannot retire the independently committed attachment transaction."""
+    agent, service, before, _source, owned = managed_upload_agent
+    graph = agent.graph
+    agent.graph = _ExplodingGraph()
+
+    failed = agent.run_agent_flow("read uploads")
+
+    assert failed["debug"]["observability_status"] == "failed"
+    assert service.get_manifest("session-a") == before
+    assert owned.is_file()
+    agent.graph = graph
+    recovered = AnswerResponse.model_validate(agent.run_agent_flow("read uploads")["response"])
+    assert {item.evidence.snapshot.title for item in recovered.citations} == {"source.py"}
+
+
+def test_session_rejects_stale_upload_context_without_mutating_attachments(managed_upload_agent):
+    agent, service, before, _source, owned = managed_upload_agent
+    session = agent._ensure_session()
+    stale_context = UploadContext(epoch=before.epoch, revision=before.revision - 1)
+
+    with pytest.raises(ValueError, match="UPLOAD_REVISION_CONFLICT"):
+        session.require_upload_context(stale_context)
+
+    assert service.get_manifest("session-a") == before
+    assert owned.is_file()
+    session.require_upload_context(before.context())
+    current = agent.run_agent_flow("read uploads")
     assert {item.evidence.snapshot.title for item in AnswerResponse.model_validate(current["response"]).citations} == {"source.py"}
+
+
+@pytest.mark.parametrize("missing", ["records", "index"])
+def test_incomplete_attachment_commit_preserves_the_active_search(managed_upload_agent, missing):
+    agent, service, before, _source, owned = managed_upload_agent
+    session = agent._ensure_session()
+
+    with pytest.raises(ValueError, match="both records and their index"):
+        session.replace_upload_resources(
+            "session-a", () if missing == "records" else session.upload_records,
+            None if missing == "index" else session.upload_retriever_handle,
+        )
+
+    assert service.get_manifest("session-a") == before
+    assert owned.is_file()
+    response = AnswerResponse.model_validate(agent.run_agent_flow("read uploads")["response"])
+    assert {item.evidence.snapshot.title for item in response.citations} == {"source.py"}
+
+
+def test_index_for_another_catalog_cannot_replace_committed_attachments(managed_upload_agent):
+    from src.infra.tools.local_rag import build_upload_retriever
+
+    agent, service, before, _source, owned = managed_upload_agent
+    session = agent._ensure_session()
+    records = [record.model_copy(update={"name": "another.py"}) for record in session.upload_records]
+    candidate = build_upload_retriever(records, session_id="session-a", generation=uuid4().hex, api_key="test-key")
+    try:
+        with pytest.raises(ValueError, match="complete attachment catalog"):
+            session.replace_upload_resources("session-a", session.upload_records, candidate)
+    finally:
+        candidate.cleanup()
+
+    assert service.get_manifest("session-a") == before
+    assert owned.is_file()
+    response = AnswerResponse.model_validate(agent.run_agent_flow("read uploads")["response"])
+    assert {item.evidence.snapshot.title for item in response.citations} == {"source.py"}
 
 
 if __name__ == "__main__":

@@ -33,7 +33,6 @@ def _decision(sequence: int = 1) -> dict[str, Any]:
 
 def _runner(graph: Any) -> ExecutionRunner:
     return ExecutionRunner(
-        settings=AppSettings(_env_file=None, openai_api_key="test-key", tavily_api_key="test-key"),
         graph=graph,
         session=SessionContext(),
     )

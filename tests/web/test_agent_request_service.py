@@ -68,7 +68,7 @@ class _ResponseAgent:
     def close(self):
         self.session.close()
 
-    def run_agent_flow(self, user_input: str, *, progress_emitter=None, uploads=None):
+    def run_agent_flow(self, user_input: str, *, progress_emitter=None):
         if progress_emitter is not None:
             progress_emitter.emit_stage_started(stage="planner", attempt=1)
             progress_emitter.emit_stage_completed(

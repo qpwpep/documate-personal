@@ -1,3 +1,4 @@
+import hashlib
 import json
 import math
 import unittest
@@ -6,6 +7,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from unittest.mock import patch
+from uuid import uuid4
 
 import httpx
 import requests
@@ -83,7 +85,7 @@ def _response_with_save_receipt():
 
 def _assemble_response(response):
     debug = DebugCollector().build(response=response, updated_messages=response["messages"],
-                                   graph_total_ms=100, upload_retriever_build_ms=None)
+                                   graph_total_ms=100)
     return ResponseAssembler().assemble(response=response, debug_info=debug)
 
 
@@ -165,7 +167,7 @@ class EvidencePipelineTest(unittest.TestCase):
             ToolMessage(content="not-json", name="upload_search", tool_call_id="3"),
             ToolMessage(content=json.dumps({"hits": [upload]}), name="save_text", tool_call_id="4"),
         ]
-        debug = DebugCollector().build(response={}, updated_messages=messages, graph_total_ms=0, upload_retriever_build_ms=None)
+        debug = DebugCollector().build(response={}, updated_messages=messages, graph_total_ms=0)
         self.assertEqual(debug["observed_hits"], [docs, upload])
         self.assertTrue(any("invalid JSON" in error for error in debug["errors"]))
 
@@ -494,28 +496,43 @@ class EvidencePipelineTest(unittest.TestCase):
             return {"data": [{"embedding": [1.0, 0.0, 0.0], "index": index} for index, _ in enumerate(input)]}
 
         # Only the external embedding request is replaced; files, Chroma and session state are real.
+        from src.app.web.session_store import InMemorySessionStore
+        from src.app.web.upload_service import UploadService
+        from src.core.uploads import UploadAddition, UploadSyncRequest
+
         embed_request.side_effect = embed
         settings = AppSettings(openai_api_key="test-key", tavily_api_key="test")
         with TemporaryDirectory() as root:
-            upload = Path(root) / "uploads" / "evidence-pipeline" / "sample.py"
+            project = Path(root)
+            upload = project / "uploads" / "evidence-pipeline" / "staging" / "sample.py"
             upload.parent.mkdir(parents=True)
-            upload.write_text("target_call(random_state=42)\n", encoding="utf-8")
-            session = SessionContext()
-            runner = ExecutionRunner(settings=settings, graph=None, session=session)
-            try:
-                state, build_ms = runner.prepare_graph_state("random_state", str(upload))
-                self.assertIsNone(build_ms)
-                result = build_tool_registry(settings).upload_search_tool(
-                    query="random_state", retriever=state["runtime"].retriever,
-                )
-                self.assertEqual(result["diagnostics"]["status"], "success")
-                self.assertEqual(result["hits"][0]["evidence"]["snapshot"]["source_type"], "upload")
-                self.assertEqual(result["hits"][0]["evidence"]["snapshot"]["source_uri"], str(upload))
-                self.assertIn("random_state=42", parse_search_hits(result)[0].evidence.excerpt)
-                self.assertGreaterEqual(runner.finalize_pending_upload_retriever(), 0)
-            finally:
-                runner.cancel_pending_upload_retriever()
-                session.close()
+            upload.write_bytes(b"target_call(random_state=42)\n")
+            manager = AgentFlowManager.__new__(AgentFlowManager)
+            manager.settings, manager.graph = settings, None
+            session = manager._ensure_session()
+            store = InMemorySessionStore(settings, lambda: manager)
+            service = UploadService(settings=settings, session_store=store)
+            with (patch("src.infra.runtime_paths.get_project_root_path", return_value=project),
+                  patch("src.infra.upload_storage.get_project_root_path", return_value=project),
+                  patch("src.app.web.upload_service.get_project_root_path", return_value=project)):
+                try:
+                    manifest = service.get_manifest("evidence-pipeline")
+                    manifest = service.sync("evidence-pipeline", UploadSyncRequest(
+                        epoch=manifest.epoch, expected_revision=manifest.revision, operation_id=uuid4().hex,
+                        add=[UploadAddition(path=str(upload), name=upload.name)],
+                    )).manifest
+                    runner = ExecutionRunner(graph=None, session=session)
+                    state = runner.prepare_graph_state("random_state")
+                    result = build_tool_registry(settings).upload_search_tool(
+                        query="random_state", retriever=state["runtime"].retriever,
+                    )
+                    self.assertEqual(result["diagnostics"]["status"], "success")
+                    self.assertEqual(result["hits"][0]["evidence"]["snapshot"]["source_type"], "upload")
+                    self.assertEqual(result["hits"][0]["evidence"]["snapshot"]["source_uri"], manifest.files[0].source_uri)
+                    self.assertIn("random_state=42", parse_search_hits(result)[0].evidence.excerpt)
+                    self.assertEqual(state["runtime"].upload_files, tuple(manifest.files))
+                finally:
+                    store.close_all()
 
     def test_save_receipt_is_separate_from_canonical_answer(self) -> None:
         response = _response_with_save_receipt()

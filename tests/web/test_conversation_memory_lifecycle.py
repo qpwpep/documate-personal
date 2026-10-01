@@ -110,8 +110,6 @@ def _make_manager(graph) -> AgentFlowManager:
     )
     manager.graph = graph
     manager.messages = []
-    manager.upload_retriever_handle = None
-    manager.upload_file_path = None
     return manager
 
 
