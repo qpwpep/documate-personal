@@ -9,13 +9,13 @@ from src.core.documents import DocumentElement, build_snapshot
 from src.core.evidence import RetrievalScore, SearchHit, build_evidence
 from src.core.planner_schema import PlannerOutput, RetrievalRequirement, RetrievalTask
 from src.core.request_contracts import RequestContract
-from src.runtime.nodes.synthesis.budgets import SynthesisBudgetProfile, resolve_synthesis_budget_profile
+from src.runtime.nodes.synthesis.budgets import RetrievedEvidenceBudget, resolve_evidence_budgets
 from src.runtime.nodes.synthesis.context import build_synthesis_context, prepare_synthesis_inputs
-from src.runtime.nodes.synthesis.evidence_selection import select_evidence_hits
-from src.runtime.nodes.synthesis.evidence_selection import select_evidence_packet
+from src.runtime.nodes.synthesis.evidence_selection import select_evidence_hits, select_evidence_packet
 from src.runtime.nodes.validation.assessment import assess_validation
 from src.runtime.nodes.validation.node import make_post_synthesis_validation_node
 from src.runtime.nodes.validation.snapshot import build_validation_snapshot
+from tests.synthesis_fixtures import synthesis_excerpt_limits
 
 
 def _task(library, aspect):
@@ -48,8 +48,8 @@ def _prepare(tasks, hits, *, budget=6000, snippet=960, max_items=6):
     context = build_synthesis_context(state=state)
     prepared = prepare_synthesis_inputs(
         state=state, context=context,
-        budget_profile=SynthesisBudgetProfile("docs", snippet, budget, max_items),
-        max_turns=6, prompt_snippet_char_limit=snippet, prompt_evidence_char_budget=budget,
+        budget=RetrievedEvidenceBudget(max_excerpt_chars=snippet, max_total_excerpt_chars=budget, max_items=max_items),
+        max_turns=6,
     )
     raw = str(prepared.model_messages[-1].content)
     packet = json.loads(raw[raw.index("[", len("[Evidence Packet]")):])

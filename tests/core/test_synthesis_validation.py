@@ -14,6 +14,7 @@ from src.core.request_contracts import ExtractBody, RequestContract
 from src.runtime.nodes.synthesis import make_synthesize_node
 from src.runtime.agent_runtime.llm_usage import capture_llm_usage
 from src.runtime.nodes.validation.node import make_post_synthesis_validation_node
+from tests.synthesis_fixtures import synthesis_excerpt_limits
 
 
 def _hit(text="Default mode is safe.", *, source="official", rank=1):
@@ -107,7 +108,7 @@ def test_legacy_untagged_packet_without_coverage_metadata_keeps_route_only_valid
 def test_malformed_generation_becomes_explicit_original_source_fallback():
     """Invalid model text is never promoted to an answer, while original evidence stays available."""
     hit = _hit()
-    updates = make_synthesize_node(ModelBoundary(malformed={"answer": "UNVALIDATED WRONG ANSWER"}))(_state([hit]))
+    updates = make_synthesize_node(ModelBoundary(malformed={"answer": "UNVALIDATED WRONG ANSWER"}), excerpt_limits=synthesis_excerpt_limits())(_state([hit]))
     result = updates["response"].result
     assert "UNVALIDATED WRONG ANSWER" not in export_answer_text(result)
     assert hit.evidence.excerpt in export_answer_text(result)
@@ -136,7 +137,7 @@ def test_exact_upload_extraction_needs_no_model_generation():
     state["debug"] = DebugState(retrieval_diagnostics=[RetrievalDiagnostic(
         route="upload", requirement_id=task.requirement_id, status="success", answerability="covered", evidence_count=1,
     )])
-    updates = make_synthesize_node(ModelBoundary(error=AssertionError("model should not run")))(state)
+    updates = make_synthesize_node(ModelBoundary(error=AssertionError("model should not run")), excerpt_limits=synthesis_excerpt_limits())(state)
     assert updates["debug"].synthesis_errors == []
     assert any(check.support_status == "exact_match" for check in updates["response"].result.checks)
     assert updates["response"].result.citations[0].evidence.excerpt == hit.evidence.excerpt

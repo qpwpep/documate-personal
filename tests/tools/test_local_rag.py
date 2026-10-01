@@ -13,6 +13,7 @@ from src.infra.chunking import chunk_notebook_path, chunk_python_text
 from src.infra.tools.local_rag import build_temp_retriever, build_upload_search_tool
 from src.infra.tools.local_rag.ranking import rank_retrieval_rows
 from src.infra.tools.local_rag.serialization import build_local_snippet, build_query_focused_snippet
+from tests.synthesis_fixtures import synthesis_excerpt_limits
 
 
 class _FakeEmbeddings(Embeddings):
@@ -62,7 +63,7 @@ class LocalRagTest(unittest.TestCase):
         from src.core.planner_schema import PlannerOutput, RetrievalTask
         from src.core.request_contracts import RequestContract
         from src.runtime.nodes.retrieval.executor import collect_retrieval_result
-        from src.runtime.nodes.synthesis.budgets import resolve_synthesis_budget_profile
+        from src.runtime.nodes.synthesis.budgets import resolve_evidence_budgets
         from src.runtime.nodes.synthesis.context import build_synthesis_context, prepare_synthesis_inputs
         from src.runtime.nodes.synthesis.pipeline import run_synthesis_pipeline
 
@@ -106,12 +107,9 @@ class LocalRagTest(unittest.TestCase):
             retrieval={"hit_log": hit_payloads},
         )
         context = build_synthesis_context(state=state)
-        profile = resolve_synthesis_budget_profile(
-            user_input=task.query, planner_output=plan, snippet_char_limit=1800,
-        )
+        profile, _ = resolve_evidence_budgets(plan=plan, limits=synthesis_excerpt_limits(normal_chars=1800))
         prepared = prepare_synthesis_inputs(
-            state=state, context=context, budget_profile=profile, max_turns=6,
-            prompt_snippet_char_limit=profile.snippet_chars, prompt_evidence_char_budget=profile.evidence_chars,
+            state=state, context=context, budget=profile, max_turns=6,
         )
         self.assertTrue(prepared.evidence_packet)
         synthesizer = ExcerptSynthesizer()

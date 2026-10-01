@@ -10,6 +10,7 @@ from src.core.request_contracts import (
 from src.runtime.nodes.synthesis import make_synthesize_node
 from src.runtime.nodes.validation import make_post_synthesis_validation_node
 from tests.core.test_synthesis_validation import _hit, _state as retrieval_state
+from tests.synthesis_fixtures import synthesis_excerpt_limits
 
 
 class ModelBoundary:
@@ -60,7 +61,7 @@ def test_validation_exhaustion_cannot_replace_forbidden_generated_code_with_orig
         "type": "code", "content": {"text": "generated_code()", "basis": "example", "refs": []},
     }]})
 
-    state.update(make_synthesize_node(ModelBoundary(document))(state))
+    state.update(make_synthesize_node(ModelBoundary(document), excerpt_limits=synthesis_excerpt_limits())(state))
     state.update(make_post_synthesis_validation_node(False)(state))
 
     assert state["response"].kind == "failure"
@@ -79,7 +80,7 @@ def test_source_fallback_does_not_assume_excerpts_satisfy_semantic_requirements(
     state = retrieval_state([_hit("A source excerpt without any comparison.")])
     state["runtime"] = state["runtime"].model_copy(update={"request_contract": contract})
 
-    response = make_synthesize_node(ModelBoundary(error=RuntimeError("generation failed")))(state)["response"]
+    response = make_synthesize_node(ModelBoundary(error=RuntimeError("generation failed")), excerpt_limits=synthesis_excerpt_limits())(state)["response"]
 
     assert response.kind == "failure"
     assert response.result.citations == []

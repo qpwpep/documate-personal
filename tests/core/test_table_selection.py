@@ -13,7 +13,8 @@ from src.core.table_selection import table_row_units
 from src.infra.chunking import chunk_parsed_document
 from src.infra.tools.local_rag.serialization import build_local_hit_bundle
 from src.runtime.nodes.synthesis.prompt_builder import build_synthesis_messages
-from src.runtime.nodes.synthesis.evidence_selection import prepare_evidence_packet
+from src.runtime.nodes.synthesis.budgets import RetrievedEvidenceBudget
+from src.runtime.nodes.synthesis.evidence_selection import select_evidence_packet
 
 
 def table_source():

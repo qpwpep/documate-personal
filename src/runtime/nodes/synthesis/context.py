@@ -10,11 +10,12 @@ from src.core.contracts.provenance import AnswerSource
 from src.core.answer_schema import AnswerResponse
 from src.core.evidence import SearchHit
 from src.core.request_contracts import RequestContract, resolve_body_response
-from src.runtime.nodes.synthesis.budgets import SynthesisBudgetProfile
-from src.runtime.nodes.synthesis.evidence_selection import missing_evidence_requirement_ids, select_evidence_hits, tasks_for_hit
+from src.runtime.nodes.synthesis.budgets import RetrievedEvidenceBudget
+from src.runtime.nodes.synthesis.evidence_selection import (
+    missing_evidence_requirement_ids, select_evidence_hits, select_evidence_packet, tasks_for_hit,
+)
 from src.runtime.nodes.synthesis.models import PreparedSynthesisInputs, SynthesisContext
 from src.runtime.nodes.synthesis.prompt_builder import build_synthesis_messages
-from src.runtime.nodes.synthesis.evidence_selection import select_evidence_packet
 
 
 def _build_action_rules(*, contract: RequestContract) -> list[str]:
@@ -80,8 +81,8 @@ def build_synthesis_context(*, state: GraphState) -> SynthesisContext:
 
 
 def prepare_synthesis_inputs(
-    *, state: GraphState, context: SynthesisContext, budget_profile: SynthesisBudgetProfile,
-    max_turns: int, prompt_snippet_char_limit: int, prompt_evidence_char_budget: int | None,
+    *, state: GraphState, context: SynthesisContext, budget: RetrievedEvidenceBudget,
+    max_turns: int,
 ) -> PreparedSynthesisInputs:
     if context.request_contract is None or not context.request_contract.can_prepare_body():
         raise ValueError("synthesis requires a prepared body request")
@@ -92,14 +93,14 @@ def prepare_synthesis_inputs(
             associated.setdefault(task.requirement_id, task)
     packet, requirement_ids = select_evidence_packet(
         [hit.evidence for hit in context.hits],
-        max_items=budget_profile.max_evidence_items,
-        snippet_char_limit=prompt_snippet_char_limit,
-        evidence_char_budget=budget_profile.evidence_chars if prompt_evidence_char_budget is None else prompt_evidence_char_budget,
+        budget=budget,
         query=context.user_input,
         requirements_by_evidence={key: list(tasks.values()) for key, tasks in requirements_by_evidence.items()},
     )
     if context.source_response is not None:
-        # The fixed source response retains complete citation ranges when transformed.
+        # Retrieval limits apply only to newly selected search evidence. A bound
+        # transformation source keeps its complete, immutable citation ranges;
+        # neither this merged packet nor the final prompt has an excerpt cap.
         packet = list({item.id: item for item in [
             *packet, *(citation.evidence for citation in context.source_response.citations),
         ]}.values())
@@ -119,7 +120,7 @@ def prepare_synthesis_inputs(
         retrieval_required=retrieval_required,
     )
     return PreparedSynthesisInputs(
-        attempt=context.attempt, user_input=context.user_input, budget_profile=budget_profile,
+        attempt=context.attempt, user_input=context.user_input,
         parse_errors=context.parse_errors, planner_parse_errors=context.planner_parse_errors,
         retrieval_required=retrieval_required, evidence_packet=packet,
         evidence_requirement_map=requirement_ids,
