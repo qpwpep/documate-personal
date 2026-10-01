@@ -113,8 +113,8 @@ PLANNER_REASONING_EFFORT=high
 | `SYNTHESIS_MAX_RETRIES` | `0` | synthesis provider SDK 재시도 횟수 |
 | `SYNTHESIS_MAX_TOKENS` | `4096` | 일반 synthesis 생성 토큰 상한 |
 | `SYNTHESIS_COMPACT_MAX_TOKENS` | `960` | timeout 복구용 synthesis 생성 토큰 상한; 일반 상한과 독립 |
-| `SYNTHESIS_PROMPT_SNIPPET_CHARS` | `1800` | evidence snippet 길이 제한 |
-| `SYNTHESIS_COMPACT_PROMPT_SNIPPET_CHARS` | `900` | timeout 복구용 evidence snippet 길이 제한; 일반 설정보다 확대하지 않음 |
+| `SYNTHESIS_PROMPT_SNIPPET_CHARS` | `1800` | 새 검색 근거의 개별 excerpt 문자 상한 (Python len 기준; 전체 입력 토큰 한도 아님) |
+| `SYNTHESIS_COMPACT_PROMPT_SNIPPET_CHARS` | `900` | timeout 복구용 새 검색 근거의 개별 excerpt 문자 상한; 일반 설정과 작은 값 적용 |
 | `SYNTHESIS_REASONING_EFFORT` | 없음 | synthesis reasoning effort override (none/minimal/low/medium/high/xhigh/max, 빈 값이면 모델 기본값, none은 명시 override) |
 | `VERBOSE` | `true` | 에이전트 런타임 상세 로그 출력 |
 | `FASTAPI_URL` | `http://127.0.0.1:8000` | Streamlit이 호출하는 API 주소 |
@@ -285,9 +285,20 @@ UI와 서버 모두 파일 크기를 검사합니다. 서버는 실제 바이트
 
 업로드의 `ChunkedDocument`는 `ParsedDocument` 원문 구조를 한 번 보관하고 검색용 chunk를 만듭니다. Chroma에는 chunk 텍스트와 snapshot·element·선택 범위 참조만 넣으며, vector 검색 결과는 `hydrate()`로 당시 원문을 가진 `EvidenceRef`로 복원합니다. 심볼 조회는 같은 registry에서 정확한 원문 범위를 선택합니다. 이 원문 보관은 현재 세션의 retriever가 소유하는 process-local 상태입니다. cleanup은 인덱스와 보관 상태를 해제하지만 이미 응답에 포함한 원문 근거는 유지됩니다.
 
-synthesis의 기본 근거 개수 상한은 8개이며, 요구사항별 `max(1, 명시 파일 수) × max(1, aspect 수)`의 합이 더 크면 그 합만큼 항목 여유를 둡니다. 같은 파일도 독립 요구사항마다 배분 대상이며, 떨어진 aspect에는 여러 발췌가 필요할 수 있습니다. 실제로 같은 선택 범위를 공유하면 한 번만 포함하고 검색에서 확인한 요구사항 연결을 합칩니다. planner의 `MAX_PLANNER_TASKS=8`은 유지하며 파일마다 태스크를 늘리지 않습니다.
+synthesis의 새 검색 근거 예산은 [`budgets.py`](../src/runtime/nodes/synthesis/budgets.py)에서 결정합니다. `AppSettings`가 소유한 일반·compact snippet 설정을 graph가 `ExcerptLimits(normal_chars, compact_chars)`로 전달하고, `resolve_evidence_budgets(plan=plan, limits=limits)`가 일반·compact 예산을 함께 계산합니다. 입력 준비와 [`evidence_selection.py`](../src/runtime/nodes/synthesis/evidence_selection.py)의 선택 함수에는 `RetrievedEvidenceBudget(max_excerpt_chars, max_total_excerpt_chars, max_items)` 하나를 전달합니다. 호출자는 profile과 별도 snippet·총량을 중복 지정하지 않습니다.
 
-일반 excerpt 합계는 6,000자, docs+upload 혼합은 8,000자이며 compact는 각각 3,000자와 4,000자입니다. 일반 snippet은 `SYNTHESIS_PROMPT_SNIPPET_CHARS`, compact는 일반 설정과 `SYNTHESIS_COMPACT_PROMPT_SNIPPET_CHARS` 중 작은 값을 사용합니다. 요구사항·명시 파일별로 빠진 근거와 literal aspect를 채우는 최소 관련 범위를 먼저 확보한 뒤 남은 예산으로 주변 문맥을 확장합니다. 프롬프트 coverage와 최종 검증은 같은 계산을 사용하되, 각각 실제 packet 전체와 유효하게 인용한 부분집합을 검사합니다. 검색 성공만으로 모델에 전달하지 않은 범위를 충족했다고 판단하지 않습니다. 표는 검색된 셀 범위 안에서 완전한 행과 필요한 헤더를 선택해 문자 예산에 맞추며, 최소 단위가 들어가지 않으면 근거 부족으로 남깁니다. 코드 범위는 완전한 구문·행을 보존합니다. 모든 요구가 예산 안에 들어간다는 보장은 없고, 이 예산은 excerpt만 계산하므로 system prompt·대화·JSON 메타데이터·별도 표 셀을 포함한 전체 입력 토큰 한도도 아닙니다.
+| 계획의 검색 출처 | 일반 excerpt 합계 상한 | compact excerpt 합계 상한 |
+| --- | ---: | ---: |
+| docs+upload 혼합 이외 | 6,000자 | 3,000자 |
+| docs+upload 혼합 | 8,000자 | 4,000자 |
+
+총량은 위의 고정 쌍으로 정의하며, 일반 총량을 바꾸어도 compact 총량이 자동으로 늘어나지 않습니다. 일반 개별 상한은 `SYNTHESIS_PROMPT_SNIPPET_CHARS`, compact 개별 상한은 일반 설정과 `SYNTHESIS_COMPACT_PROMPT_SNIPPET_CHARS` 중 작은 값입니다. 두 설정은 각각 80자 이상이며 기본값은 1,800자·900자입니다. 개별 상한을 총량으로 미리 줄이지 않고 선택 과정에서 개별 상한과 남은 총량을 함께 적용합니다. 저장·전송 여부는 이 예산을 줄이지 않습니다.
+
+기본 근거 개수 상한은 8개이며 planner의 `MAX_PLANNER_TASKS`와 별개의 정책입니다. 요구사항별 `max(1, 명시 파일 수) × max(1, aspect 수)`의 합이 더 크면 그 합만큼 항목 여유를 둡니다. 예산 계산과 선택은 같은 파일·aspect 조합 정의를 사용합니다. 같은 파일도 독립 요구사항마다 배분 대상이며, 떨어진 aspect에는 여러 발췌가 필요할 수 있습니다. 실제로 같은 선택 범위를 공유하면 한 번만 포함하고 검색에서 확인한 요구사항 연결을 합칩니다. 모든 요구에 충분한 문자가 배정된다는 보장은 없으며 compact도 이 항목 수 상한을 유지합니다.
+
+요구사항·명시 파일별로 빠진 근거와 literal aspect를 채우는 최소 관련 범위를 먼저 확보한 뒤 남은 예산으로 주변 문맥을 확장합니다. 프롬프트 coverage와 최종 검증은 같은 계산을 사용하되, 각각 실제 packet 전체와 유효하게 인용한 부분집합을 검사합니다. 검색 성공만으로 모델에 전달하지 않은 범위를 충족했다고 판단하지 않습니다. 표는 검색된 셀 범위 안에서 완전한 행과 필요한 헤더를 선택해 문자 예산에 맞추며, 최소 단위가 들어가지 않으면 근거 부족으로 남깁니다. 코드는 완전한 구문·행을 우선하지만 검색 범위나 예산에 따라 정확한 원문의 일부를 제공할 수 있습니다. 이때도 원문 offset과 부분 선택 표시를 유지하며, 발췌가 독립 실행 가능한 코드라고 보장하지 않습니다.
+
+문자 수는 새 검색에서 선택한 `excerpt` 문자열의 Python `len()` 기준입니다. 바이트·모델 토큰·화면상 글자 묶음 수가 아니며 system prompt·대화·JSON 메타데이터·별도 표 셀의 직렬화 비용을 포함하지 않습니다. 기존 답변 변환에 필요한 전체 원문 본문과 검증된 인용은 별도 필수 입력이므로 이 검색 예산으로 축약하지 않습니다. 따라서 최종 packet 전체와 prompt 전체에 같은 문자 상한이 적용되는 것은 아니며 모델 context 한도를 보장하지도 않습니다. 현재 수치는 경험적 초기값이고 최적성을 확인한 온라인 평가 근거는 없습니다. 수치 변경에는 요구별 근거 범위·답변 품질·인용과 정상·compact 지연, 입력·출력 토큰·비용의 비교 평가가 필요합니다. 전체 입력 token 제한은 이런 관측으로 필요를 확인한 뒤 별도로 설계합니다.
 
 모델 합성에서는 실제 보낸 범위만 evidence packet에 남기며, 범위가 달라지면 새 evidence ID를 사용합니다. 기존 답변을 그대로 복사하는 deterministic 경로는 모델을 호출하지 않고 선택한 답변의 citations를 검증 packet으로 사용합니다. 내부 `ResponseState.evidence_requirement_map`은 packet ID와 원래 requirement ID의 연결을 보존합니다. 모델 입출력에서만 `e1`, `e2` 같은 짧은 별칭을 사용하고, 서버가 참조 필드를 원래 ID로 복원한 뒤 검증합니다. 이전 답변을 변환할 때도 모델에 제공하는 원문 사본의 refs에 같은 별칭을 적용하며 저장된 원문과 revision은 유지합니다. 일반·compact 입력은 각자의 매핑을 사용하며 알 수 없는 별칭은 검증을 통과하지 못합니다. 최종 인용의 ID·원문·hash·offset은 이 별칭 때문에 바뀌지 않습니다. 모델 입력에는 선택 범위의 `is_partial`, `capture_scope`와 요구별 남은 aspect·빠진 aspect를 함께 전달합니다. 이 map은 검색 유래를 나타내며, 참조를 붙였다는 사실만으로 설명의 의미적 충분함을 증명하지 않습니다.
 
