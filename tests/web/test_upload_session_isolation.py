@@ -358,7 +358,8 @@ def managed_upload_agent(tmp_path, monkeypatch):
     before = service.get_manifest("session-a")
     before = service.sync("session-a", UploadSyncRequest(
         epoch=before.epoch, expected_revision=before.revision, operation_id=uuid4().hex,
-        add=[UploadAddition(path=str(source), name=source.name)],
+        add=[UploadAddition(path=str(source), name=source.name,
+                            content_hash="sha256:" + hashlib.sha256(source.read_bytes()).hexdigest())],
     )).manifest
     agent = store.get_or_create("session-a")
     owned = Path(agent._ensure_session().upload_records[0].path)

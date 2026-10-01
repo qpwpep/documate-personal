@@ -53,6 +53,7 @@ def release_http(tmp_path, monkeypatch):
         else:
             for addition in json["add"]:
                 content = Path(addition["path"]).read_bytes()
+                assert addition["content_hash"] == "sha256:" + hashlib.sha256(content).hexdigest()
                 staged.append(content)
                 manifest["files"].append({
                     "file_id": uuid4().hex, "name": addition["name"], "size_bytes": len(content),

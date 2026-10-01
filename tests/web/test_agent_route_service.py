@@ -88,6 +88,7 @@ class AgentRouteServiceDelegationTest(unittest.TestCase):
         request = schema["components"]["schemas"]["AgentRequest"]
         self.assertIn("uploads", request["required"])
         self.assertNotIn("upload_file_path", request["properties"])
+        self.assertIn("content_hash", schema["components"]["schemas"]["UploadAddition"]["required"])
 
 
 if __name__ == "__main__":

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 from uuid import uuid4
 
@@ -44,7 +45,8 @@ def staged(root, name, text, *, session="session-a"):
     path = root / "uploads" / session / "staging" / uuid4().hex / name
     path.parent.mkdir(parents=True)
     path.write_bytes(text.encode("utf-8"))
-    return UploadAddition(path=str(path), name=name)
+    return UploadAddition(path=str(path), name=name,
+                          content_hash="sha256:" + hashlib.sha256(path.read_bytes()).hexdigest())
 
 
 def change(service, *, session="session-a", add=(), remove=(), clear=False, operation_id=None):
@@ -446,7 +448,8 @@ def test_current_operation_can_borrow_an_orphan_managed_path_before_reconciliati
 
     current = service.sync("session-a", UploadSyncRequest(
         epoch=before.epoch, expected_revision=before.revision, operation_id=uuid4().hex,
-        add=[UploadAddition(path=relative, name=source.name)])).manifest
+        add=[UploadAddition(path=relative, name=source.name,
+                            content_hash="sha256:" + hashlib.sha256(source.read_bytes()).hexdigest())])).manifest
 
     assert [item.name for item in current.files] == ["borrowed.py"]
     assert source.is_file()

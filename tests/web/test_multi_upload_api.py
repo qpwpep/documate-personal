@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import logging
 import socket
 from concurrent.futures import ThreadPoolExecutor
@@ -118,7 +119,8 @@ def staged(api, name, content, *, session="session-a"):
     path = api.root / "uploads" / session / "staging" / uuid4().hex / name
     path.parent.mkdir(parents=True)
     path.write_bytes(content.encode("utf-8") if isinstance(content, str) else content)
-    return {"path": str(path), "name": name}
+    return {"path": str(path), "name": name,
+            "content_hash": "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()}
 
 
 def manifest(api, session="session-a"):
@@ -185,6 +187,50 @@ def test_question_rejects_coerced_upload_versions(api, revision):
     })
     assert response.status_code == 422
     assert manifest(api) == current
+
+
+def test_sync_requires_the_approved_content_hash(api):
+    current = manifest(api)
+    addition = staged(api, "alpha.py", "alpha = 1\n")
+    addition.pop("content_hash", None)
+    response = api.client.post("/sessions/session-a/uploads/sync", json=sync_body(current, add=[addition]))
+    assert response.status_code == 422
+    assert manifest(api) == current
+
+
+def test_sync_rejects_bytes_changed_after_approval(api):
+    current = manifest(api)
+    addition = staged(api, "alpha.py", "alpha = 1\n")
+    addition["content_hash"] = "sha256:" + hashlib.sha256(b"alpha = 1\n").hexdigest()
+    Path(addition["path"]).write_bytes(b"alpha = 2\n")
+    response = api.client.post("/sessions/session-a/uploads/sync", json=sync_body(current, add=[addition]))
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "UPLOAD_CONTENT_CHANGED"
+    assert manifest(api) == current
+    assert not list((api.root / "uploads" / "session-a" / "objects").glob("**/*.py"))
+
+
+def test_same_input_path_changes_search_only_after_explicit_replacement(api):
+    addition = staged(api, "alpha.py", "alpha = 1\n")
+    current = sync(api, add=[addition])["manifest"]
+    previous = answer(api, uploads=context(current))
+    original_evidence = previous.citations[0].evidence.model_dump(mode="json")
+
+    Path(addition["path"]).write_bytes(b"alpha = 2\n")
+    unchanged = answer(api, uploads=context(current))
+    assert unchanged.citations[0].evidence.element.text == "alpha = 1\n"
+    assert manifest(api) == current
+
+    replacement = {**addition, "replace_file_id": current["files"][0]["file_id"],
+                   "content_hash": "sha256:" + hashlib.sha256(b"alpha = 2\n").hexdigest()}
+    updated = sync(api, add=[replacement])["manifest"]
+    following = answer(api, uploads=context(updated))
+    assert updated["epoch"] == current["epoch"]
+    assert updated["revision"] == current["revision"] + 1
+    assert updated["files"][0]["file_id"] == current["files"][0]["file_id"]
+    assert following.citations[0].evidence.element.text == "alpha = 2\n"
+    assert following.citations[0].evidence.snapshot.snapshot_id != previous.citations[0].evidence.snapshot.snapshot_id
+    assert previous.citations[0].evidence.model_dump(mode="json") == original_evidence
 
 
 @contextmanager

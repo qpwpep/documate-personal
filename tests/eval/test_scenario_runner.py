@@ -50,7 +50,9 @@ def http_boundary(tmp_path, monkeypatch):
             return json_response({"detail": {"code": "UPLOAD_INDEX_FAILED", "message": "index failed"}}, 503)
         if not json.get("clear"):
             for item in json["add"]:
-                assert Path(item["path"]).read_text(encoding="utf-8").startswith("value =")
+                content = Path(item["path"]).read_bytes()
+                assert content.decode("utf-8").startswith("value =")
+                assert item["content_hash"] == "sha256:" + hashlib.sha256(content).hexdigest()
         manifest["revision"] += 1
         state["now"] += 0.4
         return json_response({"manifest": manifest, "changed": True})

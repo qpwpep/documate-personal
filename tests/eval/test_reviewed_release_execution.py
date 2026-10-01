@@ -122,6 +122,7 @@ def test_approved_run_uses_checked_case_and_upload_bytes_through_staging(tmp_pat
         else:
             for addition in json["add"]:
                 content = Path(addition["path"]).read_bytes()
+                assert addition["content_hash"] == "sha256:" + hashlib.sha256(content).hexdigest()
                 staged_bytes.append(content)
                 staged_names.append(addition["name"])
                 manifest["files"].append({

@@ -175,7 +175,10 @@ class UploadService:
             raise _error(413, "UPLOAD_FILE_TOO_LARGE", f"파일당 {self.settings.upload_max_file_mib} MiB까지 첨부할 수 있습니다.")
         if not content:
             raise _error(422, "UPLOAD_EMPTY", "빈 파일은 검색할 수 없습니다.")
-        return content, "sha256:" + hashlib.sha256(content).hexdigest()
+        digest = "sha256:" + hashlib.sha256(content).hexdigest()
+        if digest != addition.content_hash:
+            raise _error(422, "UPLOAD_CONTENT_CHANGED", "승인한 파일 내용이 변경되었습니다. 파일을 다시 첨부해 주세요.")
+        return content, digest
 
     def _check_limits(self, sizes: list[int]) -> None:
         if len(sizes) > self.settings.upload_max_files:

@@ -519,7 +519,8 @@ class EvidencePipelineTest(unittest.TestCase):
                     manifest = service.get_manifest("evidence-pipeline")
                     manifest = service.sync("evidence-pipeline", UploadSyncRequest(
                         epoch=manifest.epoch, expected_revision=manifest.revision, operation_id=uuid4().hex,
-                        add=[UploadAddition(path=str(upload), name=upload.name)],
+                        add=[UploadAddition(path=str(upload), name=upload.name,
+                                            content_hash="sha256:" + hashlib.sha256(upload.read_bytes()).hexdigest())],
                     )).manifest
                     runner = ExecutionRunner(graph=None, session=session)
                     state = runner.prepare_graph_state("random_state")

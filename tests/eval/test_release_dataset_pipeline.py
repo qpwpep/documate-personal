@@ -90,6 +90,7 @@ def test_all_120_release_cases_execute_through_real_loader_client_and_runner(tmp
                 content = source.read_bytes()
                 assert content
                 digest = hashlib.sha256(content).hexdigest()
+                assert addition["content_hash"] == "sha256:" + digest
                 staged[session_id][addition["name"]] = digest
                 manifest["files"].append({
                     "file_id": uuid4().hex, "name": addition["name"], "size_bytes": len(content),

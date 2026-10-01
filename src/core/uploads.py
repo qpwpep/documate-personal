@@ -55,15 +55,16 @@ class UploadManifest(UploadContext):
 
 
 class UploadAddition(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
     path: str = Field(min_length=1, max_length=4096)
     name: str = Field(min_length=1, max_length=255)
+    content_hash: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
     replace_file_id: str | None = Field(default=None, min_length=1, max_length=128)
 
 
 class UploadSyncRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
     epoch: str = Field(min_length=1, max_length=128)
     expected_revision: int = Field(ge=0)

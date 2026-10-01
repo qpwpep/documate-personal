@@ -34,6 +34,7 @@ def test_request_requires_approval_and_detaches_from_staging_draft(tmp_path):
     staged.files.clear()
     assert request.model_dump(mode="json") == payload
     assert request.add[0].replace_file_id == "original"
+    assert request.add[0].content_hash == "sha256:" + hashlib.sha256(b"new").hexdigest()
     assert request.expected_revision == 1
     assert request.epoch == "epoch-one"
     assert Path(request.add[0].path).read_bytes() == b"new"
