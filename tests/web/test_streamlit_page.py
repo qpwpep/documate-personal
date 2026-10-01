@@ -95,6 +95,33 @@ class StreamlitPageTest(unittest.TestCase):
                     component_css,
                 )
 
+    def test_native_code_and_popover_surfaces_use_theme_tokens(self) -> None:
+        fake_st = _FakeStreamlit()
+        with patch.object(streamlit_styles, "st", fake_st):
+            streamlit_styles.configure_page("시스템")
+        css, = [body for body, _ in fake_st.markdowns if "<style>" in body]
+        css = re.sub(r"/\*.*?\*/", "", css, flags=re.DOTALL)
+
+        for selector, expected_background, expected_color in (
+            ('[data-testid="stCode"] pre', "var(--dm-inline-code-bg)", "var(--dm-inline-code-text)"),
+            ('[data-testid="stCode"] pre code', "transparent", "var(--dm-inline-code-text)"),
+            ('[data-testid="stPopoverBody"] > div', "var(--dm-panel)", "var(--dm-text)"),
+            ('[data-testid="stCode"] .react-syntax-highlighter-line-number', None, "var(--dm-muted)"),
+        ):
+            with self.subTest(selector=selector):
+                declarations = {}
+                for selectors, body in re.findall(r"([^{}]+)\{([^{}]*)\}", css):
+                    if selector in [item.strip() for item in selectors.split(",")]:
+                        declarations.update(re.findall(r"([\w-]+)\s*:\s*([^;]+);", body))
+                self.assertTrue(declarations, f"Missing native surface rule: {selector}")
+                if expected_background is not None:
+                    background = declarations.get("background", declarations.get("background-color", ""))
+                    self.assertEqual(background.removesuffix("!important").strip(), expected_background)
+                self.assertEqual(
+                    declarations.get("color", "").removesuffix("!important").strip(),
+                    expected_color,
+                )
+
     def test_quick_prompts_are_sampled_once_per_session(self) -> None:
         fake_st = _FakeStreamlit()
         sampled_prompts = [
