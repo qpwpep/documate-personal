@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import logging
 import socket
 from concurrent.futures import ThreadPoolExecutor
@@ -118,7 +119,8 @@ def staged(api, name, content, *, session="session-a"):
     path = api.root / "uploads" / session / "staging" / uuid4().hex / name
     path.parent.mkdir(parents=True)
     path.write_bytes(content.encode("utf-8") if isinstance(content, str) else content)
-    return {"path": str(path), "name": name}
+    return {"path": str(path), "name": name,
+            "content_hash": "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()}
 
 
 def manifest(api, session="session-a"):
@@ -166,6 +168,22 @@ def answer(api, **kwargs):
     return AnswerResponse.model_validate(final["response"])
 
 
+
+
+
+
+
+
+def test_sync_rejects_bytes_changed_after_approval(api):
+    current = manifest(api)
+    addition = staged(api, "alpha.py", "alpha = 1\n")
+    addition["content_hash"] = "sha256:" + hashlib.sha256(b"alpha = 1\n").hexdigest()
+    Path(addition["path"]).write_bytes(b"alpha = 2\n")
+    response = api.client.post("/sessions/session-a/uploads/sync", json=sync_body(current, add=[addition]))
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "UPLOAD_CONTENT_CHANGED"
+    assert manifest(api) == current
+    assert not list((api.root / "uploads" / "session-a" / "objects").glob("**/*.py"))
 
 
 

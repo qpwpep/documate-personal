@@ -70,7 +70,7 @@ def build_upload_sync_request(
         if current is not None and current.file_id not in replace_file_ids:
             raise ValueError("같은 이름의 파일 교체를 먼저 확인해 주세요.")
         additions.append(UploadAddition(
-            path=item.path, name=item.name,
+            path=item.path, name=item.name, content_hash=item.content_hash,
             replace_file_id=current.file_id if current is not None else None,
         ))
     return UploadSyncRequest(
