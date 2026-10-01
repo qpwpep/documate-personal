@@ -19,9 +19,7 @@ from langchain_core.messages import AIMessage
 
 from src.app.web.app import create_app
 from src.core.answer_schema import AnswerResponse, export_answer_text
-from src.core.contracts import SessionMetadata
 from src.core.request_contracts import WireRequestContract
-from src.core.uploads import UploadContext
 from src.infra.settings import AppSettings
 
 
@@ -168,6 +166,10 @@ def answer(api, **kwargs):
     return AnswerResponse.model_validate(final["response"])
 
 
+
+
+
+
 @contextmanager
 def session_requests_arrived(count):
     """Observe actual server request arrivals through its existing log boundary, without replacing the store."""
@@ -212,30 +214,6 @@ def test_http_comparison_only_uses_the_planned_files_from_a_larger_attachment_se
     assert manifest(api) == current
 
 
-@pytest.mark.parametrize("clear_payload", [{}, {"upload_file_path": None}])
-def test_legacy_http_path_replaces_the_set_and_absent_or_null_path_clears_it(api, clear_payload):
-    """Legacy requests keep their replacement/clear semantics while using the new real source index."""
-    sync(api, add=[staged(api, "alpha.py", "alpha = 1\n"), staged(api, "beta.py", "beta = 2\n")])
-    legacy = staged(api, "legacy.py", "legacy = 3\n")
-
-    replaced = answer(api, upload_file_path=legacy["path"])
-    assert {citation.evidence.snapshot.title for citation in replaced.citations} == {"legacy.py"}
-    assert [item["name"] for item in manifest(api)["files"]] == ["legacy.py"]
-
-    cleared = answer(api, **clear_payload)
-    assert cleared.citations == []
-    assert manifest(api)["files"] == []
-
-
-@pytest.mark.parametrize("legacy_path", [None, "uploads/session-a/alpha.py"])
-def test_http_schema_rejects_mixed_attachment_protocols_before_creating_a_session(api, legacy_path):
-    """Neither null nor non-null legacy fields may silently override a versioned upload context."""
-    response = api.client.post("/agent/stream", json={
-        "query": "Compare files", "session_id": "session-a", "upload_file_path": legacy_path,
-        "uploads": {"epoch": "old", "revision": 0},
-    })
-    assert response.status_code == 422
-    assert api.client.app.state.session_store.active_session_ids() == set()
 
 
 @pytest.mark.parametrize("query", ["Compare the attached files", "exit"])
@@ -267,7 +245,7 @@ def test_cross_session_staged_file_is_rejected_without_entering_the_index(api):
         before, add=[staged(api, "secret.py", "secret = 1\n", session="session-b")],
     ))
 
-    assert response.status_code == 400
+    assert response.status_code == 422
     assert response.json()["detail"]["code"] == "UPLOAD_PATH_INVALID"
     assert manifest(api) == before
 
@@ -286,49 +264,6 @@ def notebook_bytes(size):
 
 
 
-@pytest.mark.parametrize("name, content", [
-    pytest.param("broken.ipynb", b"not-json", id="invalid-notebook"),
-    pytest.param("replacement.py", b"replacement = 2\n", id="embedding-outage"),
-])
-def test_legacy_exit_resets_the_session_without_preparing_the_supplied_file(api, name, content):
-    """Legacy exit resets owned state despite unusable upload input, preserving borrowed bytes and prior citations."""
-    original = staged(api, "source.py", "value = 1\n")
-    current = sync(api, add=[original])["manifest"]
-    previous = answer(api, uploads=context(current))
-    saved_citations = [citation.model_dump(mode="json") for citation in previous.citations]
-    agent = api.client.app.state.session_store.get_or_create("session-a")
-    session = agent._ensure_session()
-    owned = [Path(record.path) for record in session.upload_records]
-    assert session.snapshot_conversation_memory().messages
-    assert session.previous_response is not None
-    supplied = staged(api, name, content)
-
-    def fail_embedding():
-        raise RuntimeError("Simulated embedding outage")
-
-    api.controls.before_embedding = fail_embedding
-    reset = final_response(api, query="exit", upload_file_path=supplied["path"], include_debug=True)
-
-    empty = reset["upload_manifest"]
-    assert empty["epoch"] != current["epoch"]
-    assert empty == {"epoch": empty["epoch"], "revision": 0, "files": []}
-    assert export_answer_text(AnswerResponse.model_validate(reset["response"])) == "Chat session has been reset. Start again."
-    assert reset["debug"]["llm_calls"] == []
-    assert reset["debug"]["errors"] == []
-    # Check close itself before a manifest GET can reconcile orphaned originals.
-    assert all(not path.exists() for path in owned)
-    assert session.upload_retriever_handle is None
-    memory = session.snapshot_conversation_memory()
-    assert memory.messages == memory.user_turns == ()
-    assert memory.memory_summary is None
-    assert session.previous_response is session.pending_action is None
-    assert not session.upload_operations
-    assert Path(original["path"]).read_bytes() == b"value = 1\n"
-    assert Path(supplied["path"]).read_bytes() == content
-    assert [citation.model_dump(mode="json") for citation in previous.citations] == saved_citations
-
-    following = final_response(api, query="hello", uploads=context(empty))
-    assert following["upload_manifest"] == empty
 
 
 

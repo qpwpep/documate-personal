@@ -66,7 +66,7 @@ async def root():
                     "x-sse-events": AGENT_STREAM_EVENT_SCHEMAS,
                     "example": (
                         'event: request_started\ndata: {"request_id":"abc12345","session_id":"demo"}\n\n'
-                        'event: error\ndata: {"message":"UPLOAD_PATH_INVALID: Upload file not found"}\n\n'
+                        'event: error\ndata: {"message":"UPLOAD_REVISION_CONFLICT: attachment set changed"}\n\n'
                         'event: done\ndata: {}\n\n'
                     ),
                 },

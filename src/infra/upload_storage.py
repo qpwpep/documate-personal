@@ -10,7 +10,7 @@ from pathlib import Path
 
 from src.core.uploads import validate_session_id
 from src.core.upload_formats import ALL_UPLOAD_SUFFIXES
-from src.infra.runtime_paths import get_upload_session_dir, get_uploads_dir
+from src.infra.runtime_paths import get_project_root_path, get_upload_session_dir, get_uploads_dir
 
 
 logger = logging.getLogger(__name__)
@@ -19,6 +19,22 @@ _IDENTITY = re.compile(r"[0-9a-f]{32}")
 
 def _unredirected(path: Path) -> bool:
     return not path.is_symlink() and not path.is_junction() and path.resolve() == path
+
+
+def resolve_upload_input_path(value: str, session_id: str) -> Path:
+    """Resolve a borrowed input inside its session before capturing its bytes."""
+    storage = UploadStorage.bind(session_id)
+    path = Path(value).expanduser()
+    if not path.is_absolute():
+        path = get_project_root_path() / path
+    path = path.resolve()
+    if storage.root not in path.parents:
+        raise ValueError("Upload file is outside its session directory")
+    if path.suffix.casefold() not in ALL_UPLOAD_SUFFIXES:
+        raise ValueError("Unsupported upload file type")
+    if not path.is_file():
+        raise ValueError("Upload file not found; attach the file again")
+    return path
 
 
 @dataclass(frozen=True)

@@ -10,20 +10,15 @@ from fastapi import HTTPException
 
 from src.infra.logging_utils import log_event
 from src.infra.runtime_paths import (
-    get_project_root_path,
     get_save_text_output_dir,
-    get_upload_session_dir,
     get_uploads_dir,
 )
 from src.infra.settings import AppSettings
 from src.infra.saved_artifacts import cleanup_saved_artifacts
-from src.core.uploads import validate_session_id
-from src.core.upload_formats import ALL_UPLOAD_SUFFIXES
 from src.app.web.session_store import InMemorySessionStore
 
 
 logger = logging.getLogger(__name__)
-ALLOWED_UPLOAD_SUFFIXES = ALL_UPLOAD_SUFFIXES
 
 
 def resolve_download_path(output_dir: Path, filename: str) -> Path:
@@ -39,35 +34,6 @@ def resolve_download_path(output_dir: Path, filename: str) -> Path:
     except ValueError as exc:
         raise HTTPException(status_code=403, detail="Forbidden: Invalid file path") from exc
     return candidate
-
-
-def validate_upload_file_path(upload_file_path: str | None, session_id: str) -> str | None:
-    if not upload_file_path:
-        return None
-
-    try:
-        session_id = validate_session_id(session_id)
-        session_upload_dir = get_upload_session_dir(session_id).resolve()
-        if not session_upload_dir.is_relative_to(get_uploads_dir().resolve()):
-            raise ValueError("Session directory is outside uploads")
-        candidate_path = Path(upload_file_path).expanduser()
-        if not candidate_path.is_absolute():
-            candidate_path = (get_project_root_path() / candidate_path).resolve()
-        else:
-            candidate_path = candidate_path.resolve()
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail="UPLOAD_PATH_INVALID: Invalid upload_file_path") from exc
-
-    if session_upload_dir not in candidate_path.parents:
-        raise HTTPException(status_code=400, detail="UPLOAD_PATH_INVALID: Invalid upload file location")
-
-    if candidate_path.suffix.lower() not in ALLOWED_UPLOAD_SUFFIXES:
-        raise HTTPException(status_code=400, detail="UPLOAD_PATH_INVALID: Unsupported upload file type")
-
-    if not candidate_path.is_file():
-        raise HTTPException(status_code=400, detail="UPLOAD_PATH_INVALID: Upload file not found")
-
-    return str(candidate_path)
 
 
 class RuntimeCleaner:
