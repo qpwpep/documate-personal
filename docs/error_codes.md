@@ -14,7 +14,7 @@
 | `RETRIEVAL_DOCS_FAILED` | Tavily 호출 실패, 예외, 예상과 다른 응답 타입, `results` payload 누락 등 공식 문서 검색이 실패했습니다. | 공식 문서 검색이 꼭 필요하면 다시 요청합니다. 운영자는 `TAVILY_API_KEY`, 네트워크, allowlist/domain rule을 확인합니다. | 조건부. 외부/API 문제면 원인 해소 후 재시도합니다. |
 | `RAG_INDEX_MISSING` | 과거 local route의 인덱스 누락 기록을 읽기 위해 유지하는 코드이며 현재 런타임에서는 발생하지 않습니다. | 현재 파일 기반 질문은 해당 파일을 세션에 업로드해 요청합니다. | 아니요. 과거 실행 기록을 해석하는 코드입니다. |
 | `LOCAL_RAG_FAILED` | upload retriever의 similarity search가 예외로 실패했습니다. 과거 결과에서는 local route 실패에도 사용됩니다. | 업로드 파일을 다시 올립니다. 운영자는 embedding/API key와 Chroma 상태를 확인합니다. | 조건부. 파일이나 API 설정을 고친 뒤 재시도합니다. |
-| `UPLOAD_RETRIEVER_BUILD_FAILED` | 기존 단일 업로드 실행 경로에서 `.py` 또는 `.ipynb`의 임시 retriever 준비가 실패했습니다. 첨부 목록 API의 후보 생성 실패는 별도 HTTP 오류로 반환합니다. | 파일이 손상됐거나 너무 크지 않은지 확인하고 다시 업로드합니다. 운영자는 `OPENAI_API_KEY`와 업로드 파서/embedding 오류를 확인합니다. | 조건부. 파일 또는 설정을 고친 뒤 재시도합니다. |
+| `UPLOAD_RETRIEVER_BUILD_FAILED` | 과거 단일 업로드 실행 경로의 retriever 준비 실패 기록입니다. 현재 질문 런타임은 인덱스를 생성하지 않으며 첨부 후보 실패는 HTTP 오류로 반환합니다. | 과거 결과의 실패 원인을 읽는 코드입니다. 현재 첨부 실패는 아래 HTTP 코드로 확인합니다. | 아니요. 현재 런타임에서는 발생하지 않습니다. |
 | `LLM_STRUCTURED_EMPTY` | synthesis 단계에서 표시할 `AnswerDocument.blocks`가 비어 있었습니다. | 질문을 더 작게 나누거나 다시 요청합니다. 운영자는 모델 응답/structured output adapter 로그를 확인합니다. | 예. 일시적 LLM 출력 실패일 수 있습니다. |
 | `SYNTHESIS_TIMEOUT` | 최종 답변 생성 단계가 timeout 또는 timed out 오류로 종료됐습니다. | 질문 범위를 줄이거나 업로드/근거 요구를 좁혀 다시 요청합니다. 운영자는 `SYNTHESIS_TIMEOUT_SECONDS`와 모델 지연을 확인합니다. | 예. 다만 큰 context가 원인이면 요청을 줄인 뒤 재시도합니다. |
 | `VALIDATION_UNRESOLVED_REFERENCES` | 실제 표시 내용의 `refs`가 해당 synthesis packet에 없거나, 근거가 필요한 내용에 참조가 없습니다. 의미적 사실 판정은 아닙니다. | 더 구체적인 자료를 제공하거나 답변 범위를 좁힙니다. 운영자는 packet 선택과 출력 refs를 확인합니다. | 조건부. 확보한 검색 결과를 재사용해 본문과 참조를 함께 다시 생성할 수 있습니다. |
@@ -33,7 +33,7 @@
 | `SLACK_TEMPORARY_FAILURE` | 조회 또는 DM 개설에 일시적 장애가 발생했습니다. | 동일 선택자로 다시 시도합니다. | 같은 대상 |
 | `SLACK_DELIVERY_UNKNOWN` | 전송 요청의 결과를 확인하지 못했습니다. | Slack에서 전달 여부를 확인합니다. | 자동 재전송 금지 |
 | `SLACK_PROTOCOL_ERROR` | Slack 응답이 필요한 대상 정보를 충족하지 못했습니다. | 응답과 앱 설정을 확인합니다. | 결과의 next_action 확인 |
-| `UPLOAD_PATH_INVALID` | 요청 경로가 현재 session upload directory 밖이거나, 소유할 수 없는 확장자이거나, 파일이 없습니다. 경로 소유권 검사와 현재 기능의 형식 접수 여부는 별도로 검사합니다. | 현재 세션에서 파일을 다시 업로드합니다. PDF·DOCX·이미지는 문서 기능을 활성화한 뒤 첨부 목록 API를 사용하고, 임의 경로나 이전 세션 경로를 보내지 않습니다. | 아니요. 올바른 업로드 경로로 다시 요청해야 합니다. |
+| `UPLOAD_PATH_INVALID` | 과거 질문에 포함된 업로드 경로가 세션 경계를 벗어나는 등의 검증 실패 기록입니다. 현재 질문은 경로를 받지 않으며 같은 이름의 첨부 HTTP 오류와 기록 위치가 다릅니다. | 과거 결과의 진단은 유지하고 현재 첨부 요청은 아래 HTTP 코드를 확인합니다. | 아니요. 현재 그래프에서는 발생하지 않습니다. |
 
 ## 문서 첨부 HTTP 오류
 
@@ -41,6 +41,10 @@
 
 | HTTP 코드 | 상태 | 발생 조건 | 대응과 재시도 |
 |---|---|---|---|
+| `UPLOAD_PATH_INVALID` | 422 | 추가 경로가 현재 세션의 업로드 디렉터리 밖이거나 허용된 파일 참조가 아닙니다. 경로 소유권과 현재 기능의 형식 접수 여부는 별도로 검사합니다. | 현재 세션에서 파일을 다시 준비하고 임의 경로나 다른 세션 경로를 보내지 않습니다. |
+| `UPLOAD_CONTENT_CHANGED` | 422 | 추가 요청의 필수 `content_hash`와 서버가 읽은 파일 bytes의 SHA-256이 다릅니다. | 변경된 bytes로 staging과 새 요청을 만들고 교체 대상을 다시 확인합니다. 같은 operation의 요청 내용만 바꾸지 않습니다. |
+| `UPLOAD_REVISION_CONFLICT` | 409 | 첨부 변경의 epoch 또는 신규 작업의 expected revision이 현재 세션과 다릅니다. 질문 context 충돌은 SSE `error`로 전달합니다. | GET으로 현재 manifest를 확인하고 변경을 다시 검토합니다. 질문은 자동 재전송하지 않습니다. |
+| `UPLOAD_OPERATION_CONFLICT` | 409 | 최근 성공 이력에 있는 operation ID를 다른 요청 fingerprint로 재사용했습니다. | 결과 확인에는 원래 요청을 그대로 사용하며, 새 변경에는 새 operation ID를 사용합니다. |
 | `DOCUMENT_INVALID` | 422 | 파일 서명·DOCX 구조·이미지 형식 검증 실패, 손상된 문서, 여러 프레임 이미지 또는 Docling의 실패·건너뜀 결과입니다. | 파일을 다시 내보내거나 다중 프레임 이미지를 페이지별 파일·PDF로 바꿔 첨부합니다. 같은 잘못된 파일의 반복 요청으로 해결되지 않습니다. |
 | `DOCUMENT_NO_SEARCHABLE_CONTENT` | 422 | 변환 결과에 검색 가능한 본문이나 표가 없습니다. 그림 자리표시자만 있는 결과도 해당합니다. | 원문에 텍스트가 있는지, OCR 설정과 스캔 해상도가 적절한지 확인한 뒤 다시 첨부합니다. |
 | `DOCUMENT_PARTIAL_CONVERSION` | 422 | Docling이 부분 성공을 반환했거나, 성공 결과에도 오류 또는 원본 페이지 누락이 있습니다. 남은 본문만 공개하지 않습니다. | 원본을 확인하고 문제가 있는 페이지를 다시 내보내거나 파일을 나눠 첨부합니다. |

@@ -222,7 +222,11 @@ runner는 graph의 마지막 적용 상태를 보관하여 후속 노드가 실�
 
 업로드 파일 검색과 대화 상태는 세션 단위로 다룹니다. 세션별 manager cache, TTL/LRU 정리, 요청 lock을 두어 한 사용자의 업로드나 실행 상태가 다른 흐름과 섞이지 않게 관리합니다. close, exit, TTL/LRU eviction은 messages와 summary를 함께 제거합니다. 현재 store는 process-local in-memory 구현이므로 서버 재시작이나 여러 worker 사이에서 대화 상태를 복원하지는 않습니다.
 
-업로드는 `uploads/<session_id>/...` 안의 지원 형식만 소유하며, 새 문서 형식 접수 여부는 Docling 활성화 설정으로 결정합니다. 형식 목록은 [`upload_formats.py`](../src/core/upload_formats.py)를 공유하고 기능을 꺼도 기존 관리 원본의 소유권·정리 범위는 유지합니다. 새 문서 형식은 첨부 목록 API로 추가하며 기존 `upload_file_path` 호환 경로는 `.py`·`.ipynb`만 받습니다. 세션 디렉터리 밖 경로는 `validate_upload_file_path()`에서 차단하고, 다운로드도 `output/save_text` 아래 상대 경로만 허용합니다. UI의 staging은 재시도 입력이고, 서버의 관리 원본과 인덱스는 후보 생성 중에는 변경 작업이, 확정 후에는 세션이 소유합니다. 확정·종료는 공통 자원 교체·해제를 사용하되 후보 실패는 신규 자원만, 성공한 교체는 새 집합이 사용하지 않는 이전 자원만 해제합니다. 답변 실패는 확정 첨부를 해제하지 않습니다.
+활성 첨부의 단일 기준은 `SessionContext`이며 공개 manifest는 그 상태의 스냅샷입니다. `UploadService`는 첨부 추가·교체·해제의 검증과 후보 commit을, `AgentRequestService`는 락 안의 context 검사·실행·완료 snapshot을 담당합니다. store에는 세션과 자원 수명 관리만 남기고 런타임은 확정된 검색 자원을 사용합니다. 질문이 파일 경로를 해석하거나 첨부를 암묵적으로 해제하지 않으므로, 파일 수와 형식에 관계없이 같은 첨부 계약으로 실행할 수 있습니다.
+
+업로드는 `uploads/<session_id>/...` 안의 지원 형식만 소유하며, 새 문서 형식 접수 여부는 Docling 활성화 설정으로 결정합니다. 형식 목록은 [`upload_formats.py`](../src/core/upload_formats.py)를 공유하고 기능을 꺼도 기존 관리 원본의 소유권·정리 범위는 유지합니다. 모든 형식은 첨부 목록 API로 추가합니다. 세션 디렉터리 밖 경로는 `resolve_upload_input_path()`에서 차단하고, 다운로드도 `output/save_text` 아래 상대 경로만 허용합니다. UI의 staging은 불변 bytes와 SHA-256을 묶은 재시도 입력이고, 서버는 요청 hash와 검증한 bytes가 일치할 때 그 bytes로 관리 복사본을 만듭니다. 관리 원본과 인덱스는 후보 생성 중에는 변경 작업이, 확정 후에는 세션이 소유합니다. 확정·종료는 공통 자원 교체·해제를 사용하되 후보 실패는 신규 자원만, 성공한 교체는 새 집합이 사용하지 않는 이전 자원만 해제합니다. 답변 실패는 확정 첨부를 해제하지 않습니다.
+
+epoch는 세션 생애를, revision은 실제 첨부 집합의 변경을 식별합니다. 일반 clear는 epoch를 유지하고 reset·exit는 새 epoch를 만듭니다. 같은 세션에서 성공한 변경의 operation ID와 요청 fingerprint를 제한된 개수로 보관해, 응답 유실 뒤 같은 작업을 다시 확인해도 적용을 반복하지 않습니다. 재확인 응답에는 현재 manifest를 담으므로 그 사이 다른 변경이 있어도 과거 상태가 다시 UI의 확인값이 되지 않습니다. 새 변경은 최신 revision에서 다시 검토하고, 질문과 변경 모두 자동 재실행하지 않습니다.
 
 세션 락 안에서 현재 참조와 요청 입력을 제외한 미사용 관리 원본을 대조 정리하여 이전 세션이나 삭제 실패로 남은 파일을 회수합니다. 실패한 물리 삭제 때문에 확정한 목록을 되돌리지 않으며, 실제 디스크 사용량을 계속 제한합니다. 활성 요청과 최근 staging은 보호하고 이미 응답에 담은 인용은 원본 해제 뒤에도 유지합니다. 변환 작업 공간과 캐시도 같은 세션 아래에 두며, 전체 첨부 해제와 세션 종료·reset은 캐시를 지웁니다. 개별 삭제·교체의 캐시는 TTL·용량 한도까지 남아 재첨부에 사용할 수 있습니다. 세션 소유권과 자원 교체는 한 API 프로세스의 기존 락이, 변환 worker 수명은 supervisor가 관리하며 별도 영구 manifest나 분산 참조 관리는 두지 않습니다.
 
@@ -241,7 +245,7 @@ DocuMate의 다음 개선 방향은 더 많은 기능을 붙이는 것보다, �
 - 한영 혼합 스캔·저해상도 문서·복잡한 표 등 실제 표본을 넓혀 OCR 누락과 표제어 오인식을 계측하고, 현재 어댑터의 제목 계층·표 병합·페이지 위치 회귀를 보강합니다.
 - 세션 이후 장기 보관 수명·소유권과 원문 조회 계약을 정의한 뒤 PDF 페이지 뷰어와 위치 강조를 추가합니다.
 - 설명의 의미적 지지 검사를 런타임에 추가할 경우 검사 비용·범위·실패 상태를 명시하고, 인용 연결 확인과 분리해 평가합니다.
-- upload retriever build와 synthesis fallback의 비용/지연을 benchmark summary에서 더 세밀하게 분리합니다.
+- 첨부 준비와 synthesis fallback의 비용/지연을 benchmark summary에서 더 세밀하게 분리합니다.
 - benchmark fixture를 주기적으로 보강해 공식 문서 검색, 업로드 검색, tool action 흐름의 회귀 범위를 넓힙니다.
 - rolling summary의 사실 보존율을 장기 대화 전용 eval fixture로 계측하고, 모델별 tokenizer를 알 수 있을 때 현재 보수적 추정기를 교정합니다.
 - 인증·소유권과 암호화를 포함한 외부 session store가 필요해지면 process restart와 multi-worker를 지원하는 별도 persistence 계층을 도입합니다.
