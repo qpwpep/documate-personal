@@ -15,7 +15,7 @@ from fastapi import HTTPException
 
 from src.core.uploads import (
     UploadAddition, UploadContext, UploadManifest, UploadRecord, UploadSyncRequest,
-    UploadSyncResponse, normalized_upload_name, validate_session_id,
+    normalized_upload_name, validate_session_id,
 )
 from src.infra.runtime_paths import get_project_root_path, get_upload_session_dir, get_uploads_dir
 from src.infra.settings import AppSettings
@@ -35,6 +35,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 _MIB = 1024 * 1024
+# Receipts are scoped to this in-memory epoch. Older requests still undergo CAS.
+_OPERATION_RECEIPT_LIMIT = 64
 
 
 def _error(status: int, code: str, message: str, *, files: list[dict] | None = None) -> HTTPException:
@@ -56,27 +58,27 @@ class UploadService:
             self._cleanup_resources(session_id, session)
             return session.upload_manifest()
 
-    @staticmethod
-    def check_context(session: SessionContext, context: UploadContext) -> None:
-        if context.epoch != session.upload_epoch or context.revision != session.upload_revision:
-            raise _error(409, "UPLOAD_REVISION_CONFLICT", "첨부 목록이 변경되었거나 세션이 만료되었습니다. 목록을 새로고침해 주세요.")
-
-    def sync(self, session_id: str, request: UploadSyncRequest) -> UploadSyncResponse:
+    def sync(self, session_id: str, request: UploadSyncRequest) -> UploadManifest:
         session_id = validate_session_id(session_id)
         with self.session_store.locked_session(session_id) as (entry, _wait_ms):
             session = entry.agent._ensure_session()
+            if request.epoch != session.upload_epoch:
+                raise _error(409, "UPLOAD_REVISION_CONFLICT", "세션이 만료되었습니다. 목록을 새로고침해 주세요.")
             self._cleanup_staging(session_id, protected_paths=tuple(item.path for item in request.add))
             self._cleanup_resources(session_id, session, protected_paths=tuple(item.path for item in request.add))
             fingerprint = hashlib.sha256(request.model_dump_json(exclude={"operation_id"}).encode()).hexdigest()
             previous = session.upload_operations.get(request.operation_id)
             if previous is not None:
-                if previous[0] != fingerprint:
+                if previous != fingerprint:
                     raise _error(409, "UPLOAD_OPERATION_CONFLICT", "이미 사용한 작업 ID의 요청 내용을 변경할 수 없습니다.")
-                return previous[1].model_copy(deep=True)
-            self.check_context(session, UploadContext(epoch=request.epoch, revision=request.expected_revision))
+                return session.upload_manifest()
+            try:
+                session.require_upload_context(UploadContext(epoch=request.epoch, revision=request.expected_revision))
+            except ValueError as exc:
+                raise _error(409, "UPLOAD_REVISION_CONFLICT", "첨부 목록이 변경되었습니다. 목록을 새로고침해 주세요.") from exc
             result = self._sync_locked(session_id, session, request)
-            session.upload_operations[request.operation_id] = (fingerprint, result.model_copy(deep=True))
-            while len(session.upload_operations) > 64:
+            session.upload_operations[request.operation_id] = fingerprint
+            while len(session.upload_operations) > _OPERATION_RECEIPT_LIMIT:
                 session.upload_operations.popitem(last=False)
             return result
 
@@ -186,7 +188,7 @@ class UploadService:
         if sum(sizes) > self.settings.upload_max_total_mib * _MIB:
             raise _error(413, "UPLOAD_TOTAL_TOO_LARGE", f"첨부 합계는 {self.settings.upload_max_total_mib} MiB를 넘을 수 없습니다.")
 
-    def _sync_locked(self, session_id: str, session: SessionContext, request: UploadSyncRequest) -> UploadSyncResponse:
+    def _sync_locked(self, session_id: str, session: SessionContext, request: UploadSyncRequest) -> UploadManifest:
         existing = {item.file_id: item for item in session.upload_records}
         unknown = set(request.remove).difference(existing)
         if unknown:
@@ -199,13 +201,12 @@ class UploadService:
                 # A failed first attachment may have populated caches without
                 # ever publishing a manifest. Explicit clear releases those too.
                 clear_auxiliary_upload_files(session.bind_upload_storage(session_id))
-            return UploadSyncResponse(manifest=session.upload_manifest(), changed=changed)
+            return session.upload_manifest()
 
         records = [item for item in session.upload_records if item.file_id not in request.remove]
         pending: dict[str, tuple[UploadAddition, bytes, str, str]] = {}
         pending_bytes = 0
         batch_hashes: dict[str, str] = {}
-        unchanged: list[str] = []
         failures: list[dict] = []
         failure_status = 422
         name_to_id = {normalized_upload_name(item.name): item.file_id for item in records}
@@ -225,7 +226,6 @@ class UploadService:
                         raise _error(422, "UPLOAD_REPLACEMENT_NAME_MISMATCH", "교체 파일의 이름은 기존 파일과 같아야 합니다.")
                 owner = name_to_id.get(key)
                 if owner is not None and hashes[owner] == digest:
-                    unchanged.append(addition.name)
                     continue
                 if owner is not None and target != owner:
                     raise _error(409, "UPLOAD_NAME_CONFLICT", "같은 이름의 파일이 있습니다. 기존 파일 교체를 선택해 주세요.")
@@ -252,7 +252,7 @@ class UploadService:
         sizes.extend(len(value[1]) for file_id, value in pending.items() if file_id not in existing)
         self._check_limits(sizes)
         if not pending and not request.remove:
-            return UploadSyncResponse(manifest=session.upload_manifest(), changed=False, unchanged_names=unchanged)
+            return session.upload_manifest()
 
         created: list[UploadRecord] = []
         handle = None
@@ -271,7 +271,7 @@ class UploadService:
                 session._release_upload_handle(handle)
             self._remove_managed_files(session_id, created)
             raise
-        return UploadSyncResponse(manifest=session.upload_manifest(), changed=True, unchanged_names=unchanged)
+        return session.upload_manifest()
 
     def _build_candidate(self, records: list[UploadRecord], session_id: str):
         if not records:

@@ -83,11 +83,3 @@ class UploadSyncRequest(BaseModel):
         if len(set(targets)) != len(targets) or set(targets).intersection(self.remove):
             raise ValueError("a file cannot be replaced or removed twice in one operation")
         return self
-
-
-class UploadSyncResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    manifest: UploadManifest
-    changed: bool
-    unchanged_names: list[str] = Field(default_factory=list)

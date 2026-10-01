@@ -89,6 +89,10 @@ class AgentRouteServiceDelegationTest(unittest.TestCase):
         self.assertIn("uploads", request["required"])
         self.assertNotIn("upload_file_path", request["properties"])
         self.assertIn("content_hash", schema["components"]["schemas"]["UploadAddition"]["required"])
+        sync = schema["paths"]["/sessions/{session_id}/uploads/sync"]["post"]["responses"]["200"]
+        self.assertEqual(sync["content"]["application/json"]["schema"], {
+            "$ref": "#/components/schemas/UploadManifest",
+        })
 
 
 if __name__ == "__main__":

@@ -131,7 +131,7 @@ def test_approved_run_uses_checked_case_and_upload_bytes_through_staging(tmp_pat
                     "source_uri": f"upload://{session}/{addition['name']}",
                 })
         manifest["revision"] += 1
-        return response_json({"manifest": manifest, "changed": True})
+        return response_json(manifest)
 
     def post(url, *, json, **kwargs):
         queries.append(json["query"])
@@ -178,7 +178,7 @@ def test_approved_run_rejects_manifest_mismatch_before_any_question(
         response = request(method, url, **kwargs)
         if method.upper() == "POST" and kwargs.get("json", {}).get("add"):
             payload = response.json()
-            files = payload["manifest"]["files"]
+            files = payload["files"]
             if mismatch == "name":
                 files[0]["name"] = "renamed.py"
             elif mismatch == "case":

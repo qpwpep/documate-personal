@@ -456,14 +456,14 @@ def test_session_sync_serializes_upload_request_and_confirms_manifest(transport)
     request = UploadSyncRequest(epoch="confirmed", expected_revision=2, operation_id="clear-one", clear=True)
     response = requests.Response()
     response.status_code = 200
-    response._content = json.dumps({"manifest": committed.model_dump(mode="json"), "changed": True}).encode()
+    response._content = committed.model_dump_json().encode()
     calls = transport(response)
     client = AgentSessionClient(context(), manifest=initial)
 
     result = client.sync_uploads(request)
 
     assert calls[0]["json"] == request.model_dump(mode="json")
-    assert result.manifest == committed
+    assert result == committed
     assert client.manifest == committed
 
 
@@ -503,11 +503,10 @@ def test_upload_sync_returns_server_confirmed_manifest(transport):
     response = requests.Response()
     response.status_code = 200
     expected = {"epoch": "epoch-one", "revision": 3, "files": []}
-    response._content = json.dumps({"manifest": expected, "changed": True, "unchanged_names": []}).encode()
+    response._content = json.dumps(expected).encode()
     calls = transport(response)
     result = sync_uploads("http://localhost:8000/", "session-1", {"operation_id": "operation-1"})
-    assert result.manifest.model_dump(mode="json") == expected
-    assert result.changed is True
+    assert result.model_dump(mode="json") == expected
     assert calls[0]["url"] == "http://localhost:8000/sessions/session-1/uploads/sync"
     assert calls[0]["allow_redirects"] is False
 
@@ -654,7 +653,7 @@ def test_invalid_upload_response_invalidates_confirmation_without_replaying(tran
 
     response = requests.Response()
     response.status_code = 200
-    payload = manifest if operation == "refresh" else {"manifest": manifest, "changed": True}
+    payload = manifest
     response._content = json.dumps(payload).encode()
     calls = transport(response)
     client = AgentSessionClient(context(), manifest=UploadManifest(epoch="old", revision=2, files=[]))
@@ -737,7 +736,7 @@ def test_session_stages_syncs_and_queries_using_the_server_confirmed_uploads(mon
             assert [(item["name"], Path(item["path"]).read_bytes()) for item in payload["add"]] == [
                 ("code.py", uploaded_bytes),
             ]
-            response._content = json.dumps({"manifest": committed.model_dump(), "changed": True}).encode()
+            response._content = json.dumps(committed.model_dump()).encode()
         else:
             response.headers["Content-Type"] = "text/event-stream"
             response._content = frame("final_response", {
@@ -757,7 +756,7 @@ def test_session_stages_syncs_and_queries_using_the_server_confirmed_uploads(mon
     assert client.manifest == initial
     operation = build_upload_sync_request(initial, files=staged.files)
 
-    assert client.sync_uploads(operation).manifest == committed
+    assert client.sync_uploads(operation) == committed
     assert list(client.stream("explain code.py"))[-1].result is not None
 
     assert client.manifest == committed

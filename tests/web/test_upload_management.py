@@ -68,8 +68,8 @@ def test_addition_preserves_existing_files_and_both_sources_are_searchable(uploa
     first = change(service, add=[staged(root, "alpha.py", "def alpha():\n    return 'ALPHA'\n")])
     first_path = Path(store.get_or_create("session-a")._ensure_session().upload_records[0].path)
     second = change(service, add=[staged(root, "beta.py", "def beta():\n    return 'BETA'\n")])
-    assert [item.name for item in second.manifest.files] == ["alpha.py", "beta.py"]
-    assert second.manifest.files[0] == first.manifest.files[0]
+    assert [item.name for item in second.files] == ["alpha.py", "beta.py"]
+    assert second.files[0] == first.files[0]
     assert first_path.is_file()
     assert {hit["evidence"]["snapshot"]["title"] for hit in search(store, "return")["hits"]} == {"alpha.py", "beta.py"}
 
@@ -77,7 +77,7 @@ def test_addition_preserves_existing_files_and_both_sources_are_searchable(uploa
 def test_failed_batch_keeps_previous_manifest_and_search_results(uploads):
     """A malformed file prevents the whole batch from changing a working attachment set."""
     service, store, root = uploads
-    before = change(service, add=[staged(root, "alpha.py", "def alpha():\n    return 1\n")]).manifest
+    before = change(service, add=[staged(root, "alpha.py", "def alpha():\n    return 1\n")])
     originals = {path for path in (root / "uploads" / "session-a" / "objects").rglob("*.py")}
     with pytest.raises(HTTPException):
         change(service, add=[staged(root, "beta.py", "beta = 2\n"), staged(root, "broken.ipynb", "not-json")])
@@ -90,11 +90,11 @@ def test_replacement_keeps_file_identity_and_previous_citation_bytes(uploads):
     """Replacing a file changes its snapshot while an already returned citation keeps its source."""
     service, store, root = uploads
     original = "def alpha():\n    return 1\n"
-    before = change(service, add=[staged(root, "alpha.py", original)]).manifest
+    before = change(service, add=[staged(root, "alpha.py", original)])
     old_path = Path(store.get_or_create("session-a")._ensure_session().upload_records[0].path)
     old_evidence = search(store, "extract alpha function definition")["hits"][0]["evidence"]
     replacement = staged(root, "alpha.py", "def alpha():\n    return 2\n").model_copy(update={"replace_file_id": before.files[0].file_id})
-    after = change(service, add=[replacement]).manifest
+    after = change(service, add=[replacement])
     assert after.files[0].file_id == before.files[0].file_id
     assert after.files[0].content_hash != before.files[0].content_hash
     assert not old_path.exists()
@@ -108,11 +108,10 @@ def test_identical_name_and_bytes_are_noop_but_new_name_preserves_provenance(upl
     """An identical resend is a no-op while another filename remains a distinct source."""
     service, _store, root = uploads
     content = "value = 1\n"
-    before = change(service, add=[staged(root, "alpha.py", content)]).manifest
+    before = change(service, add=[staged(root, "alpha.py", content)])
     noop = change(service, add=[staged(root, "ALPHA.py", content)])
-    assert not noop.changed
-    assert noop.manifest == before
-    after = change(service, add=[staged(root, "beta.py", content)]).manifest
+    assert noop == before
+    after = change(service, add=[staged(root, "beta.py", content)])
     assert len(after.files) == 2
     assert after.files[0].content_hash == after.files[1].content_hash
     assert after.files[0].file_id != after.files[1].file_id
@@ -121,7 +120,7 @@ def test_identical_name_and_bytes_are_noop_but_new_name_preserves_provenance(upl
 def test_name_conflict_does_not_silently_replace_existing_file(uploads):
     """A changed file at an existing name requires an explicit replacement target."""
     service, _store, root = uploads
-    before = change(service, add=[staged(root, "alpha.py", "value = 1\n")]).manifest
+    before = change(service, add=[staged(root, "alpha.py", "value = 1\n")])
     with pytest.raises(HTTPException) as error:
         change(service, add=[staged(root, "alpha.py", "value = 2\n")])
     assert error.value.detail["code"] == "UPLOAD_NAME_CONFLICT"
@@ -131,13 +130,13 @@ def test_name_conflict_does_not_silently_replace_existing_file(uploads):
 def test_delete_and_clear_remove_search_sources_without_mutating_old_evidence(uploads):
     """Removal affects subsequent retrieval but keeps the original returned evidence intact."""
     service, store, root = uploads
-    before = change(service, add=[staged(root, "alpha.py", "alpha = 1\n"), staged(root, "beta.py", "beta = 2\n")]).manifest
+    before = change(service, add=[staged(root, "alpha.py", "alpha = 1\n"), staged(root, "beta.py", "beta = 2\n")])
     evidence = search(store, "alpha")["hits"][0]["evidence"]
     saved = repr(evidence)
-    after = change(service, remove=[before.files[0].file_id]).manifest
+    after = change(service, remove=[before.files[0].file_id])
     assert [item.name for item in after.files] == ["beta.py"]
     assert {hit["evidence"]["snapshot"]["title"] for hit in search(store, "beta")["hits"]} == {"beta.py"}
-    cleared = change(service, clear=True).manifest
+    cleared = change(service, clear=True)
     assert cleared.files == []
     assert store.get_or_create("session-a").upload_retriever_handle is None
     assert repr(evidence) == saved
@@ -154,7 +153,7 @@ def test_retry_is_idempotent_and_stale_changes_are_rejected(uploads):
     with pytest.raises(HTTPException) as error:
         service.sync("session-a", request.model_copy(update={"operation_id": uuid4().hex}))
     assert error.value.status_code == 409
-    assert service.get_manifest("session-a") == first.manifest
+    assert service.get_manifest("session-a") == first
 
 
 def test_other_session_file_is_rejected_before_it_is_searchable(uploads):
@@ -191,10 +190,10 @@ def test_full_staging_space_does_not_block_individual_removal(uploads):
     """Removing an attachment frees its active storage even when abandoned staging files fill the allowance."""
     service, store, root = uploads
     service.settings = service.settings.model_copy(update={"upload_max_total_mib": 1})
-    before = change(service, add=[staged(root, "first.py", "first = 1\n"), staged(root, "second.py", "second = 2\n")]).manifest
+    before = change(service, add=[staged(root, "first.py", "first = 1\n"), staged(root, "second.py", "second = 2\n")])
     with (root / "uploads" / "session-a" / "staging" / "orphan.bin").open("wb") as stream:
         stream.truncate(3 * 1024 * 1024)
-    after = change(service, remove=[before.files[0].file_id]).manifest
+    after = change(service, remove=[before.files[0].file_id])
     assert [file.name for file in after.files] == ["second.py"]
     assert {hit["evidence"]["snapshot"]["title"] for hit in search(store, "second")["hits"]} == {"second.py"}
 
@@ -204,7 +203,7 @@ def test_session_case_variants_share_one_manifest_lock_and_storage_path(uploads)
     from src.infra.runtime_paths import get_upload_session_dir
 
     service, store, root = uploads
-    original = change(service, session="CaseSession", add=[staged(root, "first.py", "first = 1\n", session="casesession")]).manifest
+    original = change(service, session="CaseSession", add=[staged(root, "first.py", "first = 1\n", session="casesession")])
     assert service.get_manifest("casesession") == original
     assert store.get_or_create("CaseSession") is store.get_or_create("casesession")
     assert store.active_session_ids() == {"casesession"}
@@ -218,7 +217,7 @@ def test_session_case_variants_share_one_manifest_lock_and_storage_path(uploads)
 def test_conflicting_contents_in_one_batch_are_rejected_in_either_order(uploads, reverse):
     """An unchanged resend cannot hide a conflicting same-name replacement in its batch."""
     service, _store, root = uploads
-    before = change(service, add=[staged(root, "same.py", "value = 1\n")]).manifest
+    before = change(service, add=[staged(root, "same.py", "value = 1\n")])
     identical = staged(root, "SAME.py", "value = 1\n")
     replacement = staged(root, "same.py", "value = 2\n").model_copy(update={"replace_file_id": before.files[0].file_id})
     with pytest.raises(HTTPException) as error:
@@ -270,7 +269,7 @@ def test_manifest_reclaims_expired_staging_but_preserves_objects_and_recent_writ
     import time
 
     service, store, root = uploads
-    before = change(service, add=[staged(root, "active.py", "active = 1\n")]).manifest
+    before = change(service, add=[staged(root, "active.py", "active = 1\n")])
     old = staged(root, "abandoned.py", "abandoned = 1\n")
     recent = staged(root, "recent.py", "recent = 1\n")
     writing = staged(root, "writing.py", "writing = 1\n")
@@ -304,7 +303,7 @@ def test_sync_preserves_referenced_old_staging_and_reclaims_unreferenced_batches
         _age_staging_directory(Path(item.path).parent, expired)
     response = service.sync("session-a", UploadSyncRequest(
         epoch=manifest.epoch, expected_revision=manifest.revision, operation_id=uuid4().hex, add=[referenced]))
-    assert [file.name for file in response.manifest.files] == ["referenced.py"]
+    assert [file.name for file in response.files] == ["referenced.py"]
     assert Path(referenced.path).is_file()
     assert not Path(abandoned.path).parent.exists()
 
@@ -346,7 +345,7 @@ def test_session_termination_releases_owned_files_and_preserves_input_and_citati
     """Every session termination releases managed originals while borrowed inputs and returned evidence survive."""
     service, store, root = uploads
     addition = staged(root, "source.py", "value = 1\n")
-    previous = change(service, add=[addition]).manifest
+    previous = change(service, add=[addition])
     agent = store.get_or_create("session-a")
     managed = Path(agent._ensure_session().upload_records[0].path)
     evidence = search(store, "value")["hits"][0]["evidence"]
@@ -373,7 +372,7 @@ def test_session_termination_releases_owned_files_and_preserves_input_and_citati
 def test_manifest_reclaims_orphan_objects_but_preserves_active_files_and_staging(uploads):
     """A recreated session can reclaim unreferenced managed versions without deleting live sources or UI inputs."""
     service, store, root = uploads
-    before = change(service, add=[staged(root, "active.py", "active = 1\n")]).manifest
+    before = change(service, add=[staged(root, "active.py", "active = 1\n")])
     active = Path(store.get_or_create("session-a")._ensure_session().upload_records[0].path)
     orphan = root / "uploads" / "session-a" / "objects" / uuid4().hex / uuid4().hex / "orphan.py"
     orphan.parent.mkdir(parents=True)
@@ -403,7 +402,7 @@ def test_failed_file_deletion_is_retried_after_committing_empty_manifest(uploads
         return unlink(path, *args, **kwargs)
 
     monkeypatch.setattr(Path, "unlink", fail_managed_once)
-    cleared = change(service, clear=True).manifest
+    cleared = change(service, clear=True)
     assert cleared.files == [] and managed.exists()
 
     assert service.get_manifest("session-a") == cleared
@@ -429,7 +428,7 @@ def test_retired_index_cleanup_failure_is_retried_without_losing_committed_sourc
         return delete(vectorstore)
 
     monkeypatch.setattr(Chroma, "delete_collection", fail_retired_once)
-    committed = change(service, add=[staged(root, "second.py", "second = 2\n")]).manifest
+    committed = change(service, add=[staged(root, "second.py", "second = 2\n")])
     assert retired.collection_name in {collection.name for collection in database.list_collections()}
 
     assert service.get_manifest("session-a") == committed
@@ -449,7 +448,7 @@ def test_current_operation_can_borrow_an_orphan_managed_path_before_reconciliati
     current = service.sync("session-a", UploadSyncRequest(
         epoch=before.epoch, expected_revision=before.revision, operation_id=uuid4().hex,
         add=[UploadAddition(path=relative, name=source.name,
-                            content_hash="sha256:" + hashlib.sha256(source.read_bytes()).hexdigest())])).manifest
+                            content_hash="sha256:" + hashlib.sha256(source.read_bytes()).hexdigest())]))
 
     assert [item.name for item in current.files] == ["borrowed.py"]
     assert source.is_file()
@@ -484,7 +483,7 @@ def test_cleanup_backlog_survives_session_eviction_and_blocks_new_indexes_until_
         blocked = False
         service.get_manifest("session-a")
 
-    current = change(service, add=[staged(root, "new.py", "new = 2\n")]).manifest
+    current = change(service, add=[staged(root, "new.py", "new = 2\n")])
     assert [item.name for item in current.files] == ["new.py"]
     assert retired.collection_name not in {collection.name for collection in database.list_collections()}
 
@@ -517,7 +516,7 @@ def test_managed_collection_retry_does_not_delete_a_reused_name(uploads, monkeyp
 def test_session_storage_owner_cannot_be_rebound_to_another_session(uploads):
     """A context cannot transfer cleanup authority to a different session's storage."""
     service, store, root = uploads
-    before = change(service, add=[staged(root, "owned.py", "owned = 1\n")]).manifest
+    before = change(service, add=[staged(root, "owned.py", "owned = 1\n")])
     session = store.get_or_create("session-a")._ensure_session()
     with pytest.raises(ValueError, match="another session"):
         session.bind_upload_storage("session-b")

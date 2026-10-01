@@ -13,7 +13,7 @@ from urllib3.exceptions import ReadTimeoutError
 from src.app.uploads import UploadStageResult, stage_uploaded_files
 from src.core.answer_schema import AnswerResponse
 from src.core.slack_contract import RecipientSelector
-from src.core.uploads import UploadContext, UploadManifest, UploadSyncRequest, UploadSyncResponse
+from src.core.uploads import UploadContext, UploadManifest, UploadSyncRequest
 from src.infra.sse import iter_sse_events
 
 
@@ -63,11 +63,11 @@ def fetch_upload_manifest(fastapi_url: str, session_id: str) -> UploadManifest:
         raise UploadAPIError("첨부 목록의 응답 형식이 올바르지 않습니다.") from exc
 
 
-def sync_uploads(fastapi_url: str, session_id: str, payload: dict[str, Any]) -> UploadSyncResponse:
+def sync_uploads(fastapi_url: str, session_id: str, payload: dict[str, Any]) -> UploadManifest:
     endpoint = f"{fastapi_url.rstrip('/')}/sessions/{quote(session_id, safe='')}/uploads/sync"
     data = _upload_request("post", endpoint, payload)
     try:
-        return UploadSyncResponse.model_validate(data)
+        return UploadManifest.model_validate(data)
     except (KeyError, ValueError, TypeError) as exc:
         raise UploadAPIError("첨부 변경 결과의 응답 형식이 올바르지 않습니다.") from exc
 
@@ -293,7 +293,7 @@ class AgentSessionClient:
             max_files=max_files, max_file_mib=max_file_mib, max_total_mib=max_total_mib,
         )
 
-    def sync_uploads(self, request: UploadSyncRequest) -> UploadSyncResponse:
+    def sync_uploads(self, request: UploadSyncRequest) -> UploadManifest:
         try:
             result = sync_uploads(self.context.fastapi_url, self.context.session_id, request.model_dump(mode="json"))
         except UploadAPIError:
@@ -301,7 +301,7 @@ class AgentSessionClient:
             # revision. Retain no confirmation that could be reused by a question.
             self.manifest = None
             raise
-        self.manifest = result.manifest
+        self.manifest = result
         return result
 
     def upload_context(self) -> UploadContext:

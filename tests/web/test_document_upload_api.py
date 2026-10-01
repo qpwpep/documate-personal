@@ -96,7 +96,7 @@ def test_mixed_http_uploads_preserve_native_code_structured_table_pages_and_docx
     api = document_api
     current = sync(api, add=[staged(api, "sample.py", "native_value = 3\n"),
                              staged(api, "report.pdf", pdf_bytes()),
-                             staged(api, "guide.docx", docx_bytes())])["manifest"]
+                             staged(api, "guide.docx", docx_bytes())])
 
     result = answer(api, uploads=context(current))
 
@@ -121,14 +121,14 @@ def test_document_replacement_and_removal_preserve_prior_answers_and_release_sup
     """Replacing and deleting a PDF changes future retrieval while earlier cell citations retain their source version."""
     api = document_api
     current = sync(api, add=[staged(api, "sample.py", "native_value = 3\n"),
-                             staged(api, "report.pdf", pdf_bytes())])["manifest"]
+                             staged(api, "report.pdf", pdf_bytes())])
     previous = answer(api, uploads=context(current))
     previous_json = previous.model_dump(mode="json")
     old_sources = owned_files(api)
     pdf = next(file for file in current["files"] if file["name"] == "report.pdf")
     replacement = {**staged(api, "report.pdf", pdf_bytes(70)), "replace_file_id": pdf["file_id"]}
 
-    updated = sync(api, add=[replacement])["manifest"]
+    updated = sync(api, add=[replacement])
     latest = evidence_by_name(answer(api, uploads=context(updated)))["report.pdf"]
 
     prior = evidence_by_name(previous)["report.pdf"]
@@ -140,7 +140,7 @@ def test_document_replacement_and_removal_preserve_prior_answers_and_release_sup
     assert all(not path.exists() for path, raw in old_sources.items() if raw == pdf_bytes())
     replacement_originals = owned_files(api)
 
-    removed = sync(api, remove=[pdf["file_id"]])["manifest"]
+    removed = sync(api, remove=[pdf["file_id"]])
 
     assert all(not path.exists() for path, raw in replacement_originals.items() if raw == pdf_bytes(70))
     assert set(evidence_by_name(answer(api, uploads=context(removed)))) == {"sample.py"}
@@ -152,7 +152,7 @@ def test_typed_conversion_failure_rolls_back_whole_batch_and_keeps_committed_sou
     """A partial conversion or timeout never commits any candidate source or removes the current searchable set."""
     api = document_api
     current = sync(api, add=[staged(api, "existing.py", "existing_value = 3\n"),
-                             staged(api, "report.pdf", pdf_bytes())])["manifest"]
+                             staged(api, "report.pdf", pdf_bytes())])
     previous_files = owned_files(api)
     api.converter.failure = IngestionError(code, "문서 변환 실패", file_name="broken.docx",
                                           retryable=code == "DOCUMENT_PROCESSING_TIMEOUT")
@@ -170,7 +170,7 @@ def test_typed_conversion_failure_rolls_back_whole_batch_and_keeps_committed_sou
 def test_embedding_failure_after_conversion_preserves_the_current_document_index(document_api):
     """An embedding outage after successful conversion leaves committed sources and their bytes unchanged."""
     api = document_api
-    current = sync(api, add=[staged(api, "report.pdf", pdf_bytes())])["manifest"]
+    current = sync(api, add=[staged(api, "report.pdf", pdf_bytes())])
     previous_files = owned_files(api)
 
     def unavailable():
@@ -203,7 +203,7 @@ def test_document_transactions_replay_without_conversion_and_reject_stale_revisi
     assert replay.status_code == 200 and replay.json() == first.json()
     assert stale.status_code == 409
     assert stale.json()["detail"]["code"] == "UPLOAD_REVISION_CONFLICT"
-    assert manifest(api) == first.json()["manifest"]
+    assert manifest(api) == first.json()
 
 
 def test_index_rebuilds_reuse_document_embeddings_but_new_source_bytes_require_new_vectors(document_api):
@@ -212,15 +212,15 @@ def test_index_rebuilds_reuse_document_embeddings_but_new_source_bytes_require_n
     requests = []
     api.controls.before_embedding = lambda: requests.append("embedding request")
     current = sync(api, add=[staged(api, "sample.py", "native_value = 3\n"),
-                             staged(api, "report.pdf", pdf_bytes())])["manifest"]
+                             staged(api, "report.pdf", pdf_bytes())])
     initial_calls = len(requests)
     assert initial_calls == 2
-    attached = sync(api, add=[staged(api, "guide.docx", docx_bytes())])["manifest"]
+    attached = sync(api, add=[staged(api, "guide.docx", docx_bytes())])
     assert len(requests) == initial_calls + 1
     assert set(evidence_by_name(answer(api, uploads=context(attached)))) == {"sample.py", "report.pdf", "guide.docx"}
     pdf = next(file for file in attached["files"] if file["name"] == "report.pdf")
 
-    changed = sync(api, add=[{**staged(api, "report.pdf", pdf_bytes(70)), "replace_file_id": pdf["file_id"]}])["manifest"]
+    changed = sync(api, add=[{**staged(api, "report.pdf", pdf_bytes(70)), "replace_file_id": pdf["file_id"]}])
 
     assert len(requests) == initial_calls + 2
     assert evidence_by_name(answer(api, uploads=context(changed)))["report.pdf"].excerpt == "Values\nPDF value | 70"
@@ -231,14 +231,14 @@ def test_index_rebuilds_reuse_document_embeddings_but_new_source_bytes_require_n
 def test_clear_or_reset_releases_document_originals_and_session_caches_without_invalidating_prior_citations(document_api, operation):
     """Explicit attachment clear and session reset erase owned originals and caches while saved citations remain readable."""
     api = document_api
-    current = sync(api, add=[staged(api, "report.pdf", pdf_bytes())])["manifest"]
+    current = sync(api, add=[staged(api, "report.pdf", pdf_bytes())])
     prior = answer(api, uploads=context(current))
     original = prior.model_dump(mode="json")
     assert owned_files(api)
     cache_root = api.root / "uploads" / "session-a" / "cache"
     assert [path for path in cache_root.rglob("*") if path.is_file()]
 
-    cleared = (sync(api, clear=True)["manifest"] if operation == "clear" else
+    cleared = (sync(api, clear=True) if operation == "clear" else
                final_response(api, query="exit", uploads=context(current))["upload_manifest"])
 
     assert cleared["files"] == []
@@ -251,7 +251,7 @@ def test_clear_or_reset_releases_document_originals_and_session_caches_without_i
 def test_document_feature_gate_rejects_pdf_without_changing_existing_native_uploads(api):
     """The default disabled document feature retains native uploads and rejects PDF attachment attempts."""
     api.settings.docling_enabled = False
-    current = sync(api, add=[staged(api, "existing.py", "existing_value = 3\n")])["manifest"]
+    current = sync(api, add=[staged(api, "existing.py", "existing_value = 3\n")])
 
     response = api.client.post("/sessions/session-a/uploads/sync", json=sync_body(
         current, add=[staged(api, "report.pdf", pdf_bytes())]))
@@ -283,7 +283,7 @@ def test_clear_after_a_failed_first_upload_erases_uncommitted_session_cache(docu
     cache_root = api.root / "uploads" / "session-a" / "cache"
     assert [path for path in cache_root.rglob("*") if path.is_file()]
 
-    cleared = sync(api, clear=True)["manifest"]
+    cleared = sync(api, clear=True)
 
     assert cleared["files"] == []
     assert not [path for path in cache_root.rglob("*") if path.is_file()]
@@ -294,7 +294,7 @@ def test_embedding_timeout_is_reported_as_document_timeout_without_committing_ca
     """An embedding provider timeout reports a typed document timeout and preserves the committed attachment set."""
     api = document_api
     api.settings.document_cache_enabled = cache_enabled
-    current = sync(api, add=[staged(api, "report.pdf", pdf_bytes())])["manifest"]
+    current = sync(api, add=[staged(api, "report.pdf", pdf_bytes())])
     previous_files = owned_files(api)
 
     def timed_out():
@@ -335,7 +335,7 @@ def test_later_embedding_batches_receive_only_the_remaining_document_deadline(do
                         lambda **kwargs: SlowEmbeddingService(request_timeout=kwargs.get("request_timeout")))
 
     current = sync(api, add=[staged(api, "report.pdf", pdf_bytes()),
-                             staged(api, "guide.docx", docx_bytes())])["manifest"]
+                             staged(api, "guide.docx", docx_bytes())])
 
     assert set(evidence_by_name(answer(api, uploads=context(current)))) == {"report.pdf", "guide.docx"}
     assert request_timeouts == [10, 6]
@@ -346,13 +346,13 @@ def test_chunk_size_change_invalidates_cached_vectors_without_changing_retained_
     api = document_api
     embedding_requests = []
     api.controls.before_embedding = lambda: embedding_requests.append(True)
-    current = sync(api, add=[staged(api, "report.pdf", pdf_bytes())])["manifest"]
+    current = sync(api, add=[staged(api, "report.pdf", pdf_bytes())])
     previous = answer(api, uploads=context(current))
     retained = previous.model_dump(mode="json")
     assert len(embedding_requests) == 1
 
     monkeypatch.setattr("src.infra.tools.local_rag.uploads.UPLOAD_CHUNK_SIZE", 400, raising=False)
-    updated = sync(api, add=[staged(api, "guide.docx", docx_bytes())])["manifest"]
+    updated = sync(api, add=[staged(api, "guide.docx", docx_bytes())])
     latest = evidence_by_name(answer(api, uploads=context(updated)))
 
     assert set(latest) == {"report.pdf", "guide.docx"}

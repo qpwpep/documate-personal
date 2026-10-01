@@ -98,7 +98,7 @@ def test_all_120_release_cases_execute_through_real_loader_client_and_runner(tmp
                     "source_uri": f"upload://{session_id}/{addition['name']}",
                 })
         manifest["revision"] += 1
-        return json_response({"manifest": manifest, "changed": True})
+        return json_response(manifest)
 
     def post(endpoint, *, json, **kwargs):
         assert endpoint == "http://dataset-peer/agent/stream"

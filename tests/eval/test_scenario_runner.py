@@ -55,7 +55,7 @@ def http_boundary(tmp_path, monkeypatch):
                 assert item["content_hash"] == "sha256:" + hashlib.sha256(content).hexdigest()
         manifest["revision"] += 1
         state["now"] += 0.4
-        return json_response({"manifest": manifest, "changed": True})
+        return json_response(manifest)
 
     def post(endpoint, *, json, **kwargs):
         state["requests"].append(("POST", endpoint, json))

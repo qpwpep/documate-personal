@@ -170,20 +170,9 @@ def answer(api, **kwargs):
 
 @pytest.mark.parametrize("fields", [{}, {"uploads": None}, {"upload_file_path": None}])
 def test_question_requires_confirmed_context_without_changing_attachments(api, fields):
-    current = sync(api, add=[staged(api, "alpha.py", "alpha = 1\n")])["manifest"]
+    current = sync(api, add=[staged(api, "alpha.py", "alpha = 1\n")])
     response = api.client.post("/agent/stream", json={
         "query": "hello", "session_id": "session-a", **fields,
-    })
-    assert response.status_code == 422
-    assert manifest(api) == current
-
-
-@pytest.mark.parametrize("revision", [True, "0", 0.0])
-def test_question_rejects_coerced_upload_versions(api, revision):
-    current = manifest(api)
-    response = api.client.post("/agent/stream", json={
-        "query": "exit", "session_id": "session-a",
-        "uploads": {"epoch": current["epoch"], "revision": revision},
     })
     assert response.status_code == 422
     assert manifest(api) == current
@@ -210,9 +199,30 @@ def test_sync_rejects_bytes_changed_after_approval(api):
     assert not list((api.root / "uploads" / "session-a" / "objects").glob("**/*.py"))
 
 
+@pytest.mark.parametrize("later_change", ["add", "clear"])
+def test_successful_operation_replay_returns_current_state_without_reapplying(api, later_change):
+    operation = sync_body(manifest(api), add=[staged(api, "alpha.py", "alpha = 1\n")])
+    first = api.client.post("/sessions/session-a/uploads/sync", json=operation)
+    assert first.status_code == 200
+    if later_change == "add":
+        sync(api, add=[staged(api, "beta.py", "beta = 2\n")])
+    else:
+        sync(api, clear=True)
+    current = manifest(api)
+    # A receipt remains valid after its staging bytes are gone. Replay never
+    # rebuilds an index or brings back files removed by a later operation.
+    Path(operation["add"][0]["path"]).unlink()
+    before_files = set((api.root / "uploads" / "session-a" / "objects").glob("**/*.py"))
+    replayed = api.client.post("/sessions/session-a/uploads/sync", json=operation)
+    assert replayed.status_code == 200
+    assert replayed.json() == current
+    assert manifest(api) == current
+    assert set((api.root / "uploads" / "session-a" / "objects").glob("**/*.py")) == before_files
+
+
 def test_same_input_path_changes_search_only_after_explicit_replacement(api):
     addition = staged(api, "alpha.py", "alpha = 1\n")
-    current = sync(api, add=[addition])["manifest"]
+    current = sync(api, add=[addition])
     previous = answer(api, uploads=context(current))
     original_evidence = previous.citations[0].evidence.model_dump(mode="json")
 
@@ -223,7 +233,7 @@ def test_same_input_path_changes_search_only_after_explicit_replacement(api):
 
     replacement = {**addition, "replace_file_id": current["files"][0]["file_id"],
                    "content_hash": "sha256:" + hashlib.sha256(b"alpha = 2\n").hexdigest()}
-    updated = sync(api, add=[replacement])["manifest"]
+    updated = sync(api, add=[replacement])
     following = answer(api, uploads=context(updated))
     assert updated["epoch"] == current["epoch"]
     assert updated["revision"] == current["revision"] + 1
@@ -231,6 +241,35 @@ def test_same_input_path_changes_search_only_after_explicit_replacement(api):
     assert following.citations[0].evidence.element.text == "alpha = 2\n"
     assert following.citations[0].evidence.snapshot.snapshot_id != previous.citations[0].evidence.snapshot.snapshot_id
     assert previous.citations[0].evidence.model_dump(mode="json") == original_evidence
+
+
+def test_expired_operation_receipt_cannot_reapply_a_committed_change(api):
+    operation = sync_body(manifest(api), add=[staged(api, "alpha.py", "alpha = 1\n")])
+    original = api.client.post("/sessions/session-a/uploads/sync", json=operation)
+    assert original.status_code == 200
+    current = original.json()
+    # Fill the documented bounded receipt window with no-ops. Their successful
+    # delivery must not advance the attachment version or create another index.
+    for _ in range(64):
+        noop = api.client.post("/sessions/session-a/uploads/sync", json=sync_body(current))
+        assert noop.status_code == 200
+        assert noop.json() == current
+    replayed = api.client.post("/sessions/session-a/uploads/sync", json=operation)
+    assert replayed.status_code == 409
+    assert replayed.json()["detail"]["code"] == "UPLOAD_REVISION_CONFLICT"
+    assert manifest(api) == current
+    assert answer(api, uploads=context(current)).citations[0].evidence.element.text == "alpha = 1\n"
+
+
+@pytest.mark.parametrize("revision", [True, "0", 0.0])
+def test_question_rejects_coerced_upload_versions(api, revision):
+    current = manifest(api)
+    response = api.client.post("/agent/stream", json={
+        "query": "exit", "session_id": "session-a",
+        "uploads": {"epoch": current["epoch"], "revision": revision},
+    })
+    assert response.status_code == 422
+    assert manifest(api) == current
 
 
 @contextmanager
@@ -258,7 +297,7 @@ def session_requests_arrived(count):
 
 def test_multi_upload_http_question_cites_both_real_sources_and_reuses_the_manifest(api):
     """A JSON attachment batch reaches real graph retrieval and returns both immutable source citations."""
-    current = sync(api, add=[staged(api, "alpha.py", "alpha = 1\n"), staged(api, "beta.py", "beta = 2\n")])["manifest"]
+    current = sync(api, add=[staged(api, "alpha.py", "alpha = 1\n"), staged(api, "beta.py", "beta = 2\n")])
 
     first = answer(api, uploads=context(current))
     second = answer(api, uploads=context(current))
@@ -279,7 +318,7 @@ def test_http_independent_requirements_keep_each_files_source_citations(api):
         staged(api, f"file-{index}.py",
                f"def setup():\n    return {index}\n\ndef cleanup():\n    return {index + 10}\n")
         for index in range(5)
-    ])["manifest"]
+    ])
 
     result = answer(api, query="Compare setup and cleanup in every attached file",
                     uploads=context(current))
@@ -300,7 +339,7 @@ def test_http_comparison_only_uses_the_planned_files_from_a_larger_attachment_se
         staged(api, "alpha.py", "alpha = 1\n"),
         staged(api, "beta.py", "beta = 2\n"),
         staged(api, "unrelated.py", "unrelated = 99\n"),
-    ])["manifest"]
+    ])
     api.controls.planned_file_ids = [item["file_id"] for item in current["files"] if item["name"] != "unrelated.py"]
 
     result = answer(api, query="Compare only alpha.py and beta.py", uploads=context(current))
@@ -326,7 +365,7 @@ def test_http_schema_rejects_retired_path_field_before_creating_a_session(api, l
 def test_stale_http_revision_rejects_mutations_and_question_without_changing_attachments(api, query):
     """A stale client cannot overwrite, reset or use a different attachment revision."""
     old = manifest(api)
-    current = sync(api, add=[staged(api, "alpha.py", "alpha = 1\n")])["manifest"]
+    current = sync(api, add=[staged(api, "alpha.py", "alpha = 1\n")])
 
     rejected = api.client.post("/sessions/session-a/uploads/sync", json=sync_body(old, clear=True))
     events = stream(api, query=query, uploads=context(old))
@@ -340,9 +379,9 @@ def test_stale_http_revision_rejects_mutations_and_question_without_changing_att
 
 def test_exit_from_a_previous_epoch_preserves_the_current_session_at_the_same_revision(api):
     """A previous session's reset context cannot erase a new session even when revisions coincide."""
-    old = sync(api, add=[staged(api, "old.py", "old = 1\n")])["manifest"]
+    old = sync(api, add=[staged(api, "old.py", "old = 1\n")])
     final_response(api, query="exit", uploads=context(old))
-    current = sync(api, add=[staged(api, "current.py", "current = 2\n")])["manifest"]
+    current = sync(api, add=[staged(api, "current.py", "current = 2\n")])
     answer(api, uploads=context(current))
     session = api.client.app.state.session_store.get_or_create("session-a")._ensure_session()
     memory = session.snapshot_conversation_memory()
@@ -387,7 +426,7 @@ def test_http_operation_replay_is_identical_and_changed_payload_conflicts(api):
     assert replayed.json() == first.json()
     assert conflict.status_code == 409
     assert conflict.json()["detail"]["code"] == "UPLOAD_OPERATION_CONFLICT"
-    assert manifest(api) == first.json()["manifest"]
+    assert manifest(api) == first.json()
 
 
 def test_cross_session_staged_file_is_rejected_without_entering_the_index(api):
@@ -404,7 +443,7 @@ def test_cross_session_staged_file_is_rejected_without_entering_the_index(api):
 
 def test_ten_files_are_accepted_and_an_eleventh_file_is_rejected_atomically(api):
     """The configured ten-file limit counts the whole active set across later additions."""
-    current = sync(api, add=[staged(api, f"file-{index}.py", f"value = {index}\n") for index in range(10)])["manifest"]
+    current = sync(api, add=[staged(api, f"file-{index}.py", f"value = {index}\n") for index in range(10)])
     response = api.client.post("/sessions/session-a/uploads/sync", json=sync_body(
         current, add=[staged(api, "eleventh.py", "extra = 11\n")],
     ))
@@ -431,7 +470,7 @@ def test_http_exit_releases_managed_files_and_reuses_the_full_upload_quota(api):
     for _ in range(3):
         additions = [staged(api, name, notebook_bytes(1024 * 1024))
                      for name in ("first.ipynb", "second.ipynb")]
-        current = sync(api, add=additions)["manifest"]
+        current = sync(api, add=additions)
         for addition in additions:
             path = Path(addition["path"])
             path.unlink()
@@ -456,7 +495,7 @@ def test_http_exit_releases_managed_files_and_reuses_the_full_upload_quota(api):
 def test_exit_releases_owned_state_without_reading_uncommitted_staging(api, name, content):
     """Explicit reset releases owned state while preserving uncommitted staging and prior citations."""
     original = staged(api, "source.py", "value = 1\n")
-    current = sync(api, add=[original])["manifest"]
+    current = sync(api, add=[original])
     previous = answer(api, uploads=context(current))
     saved_citations = [citation.model_dump(mode="json") for citation in previous.citations]
     agent = api.client.app.state.session_store.get_or_create("session-a")
@@ -498,7 +537,7 @@ def test_exit_releases_owned_state_without_reading_uncommitted_staging(api, name
 @pytest.mark.parametrize("attached", [False, True])
 def test_exit_response_supplies_the_context_for_the_next_question(api, command, attached):
     """A successful reset lets the next explicit question use its new context without a manifest GET."""
-    current = (sync(api, add=[staged(api, "alpha.py", "alpha = 1\n")])["manifest"]
+    current = (sync(api, add=[staged(api, "alpha.py", "alpha = 1\n")])
                if attached else manifest(api))
 
     reset = final_response(api, query=command, uploads=context(current))
@@ -518,9 +557,9 @@ def test_final_response_preserves_the_confirmed_manifest_even_when_the_model_fai
     """The completion envelope reports attachment state independently of answer quality or debug visibility."""
     current = manifest(api)
     if attachment_state != "initial-empty":
-        current = sync(api, add=[staged(api, "alpha.py", "alpha = 1\n")])["manifest"]
+        current = sync(api, add=[staged(api, "alpha.py", "alpha = 1\n")])
     if attachment_state == "cleared":
-        current = sync(api, clear=True)["manifest"]
+        current = sync(api, clear=True)
         assert current["revision"] > 0
         assert current["files"] == []
     api.controls.fail_synthesis = model_failure
@@ -533,7 +572,7 @@ def test_final_response_preserves_the_confirmed_manifest_even_when_the_model_fai
 
 def test_session_request_manifest_is_a_detached_snapshot_of_its_completion(api):
     """A later reset cannot change the manifest returned with an earlier session request."""
-    current = sync(api, add=[staged(api, "alpha.py", "alpha = 1\n")])["manifest"]
+    current = sync(api, add=[staged(api, "alpha.py", "alpha = 1\n")])
     previous = final_response(api, uploads=context(current))["upload_manifest"]
     reset = final_response(api, query="exit", uploads=context(current))["upload_manifest"]
 
@@ -549,7 +588,7 @@ def test_http_upload_size_accepts_exact_quota_and_rejects_one_byte_over(api, lim
     additions = [staged(api, "first.ipynb", notebook_bytes(one_mib))]
     if limit == "total":
         additions.append(staged(api, "second.ipynb", notebook_bytes(one_mib)))
-    current = sync(api, add=additions)["manifest"]
+    current = sync(api, add=additions)
     overflow = (staged(api, "too-large.ipynb", notebook_bytes(one_mib + 1)) if limit == "file"
                 else staged(api, "extra.py", b"x"))
 
@@ -563,7 +602,7 @@ def test_http_upload_size_accepts_exact_quota_and_rejects_one_byte_over(api, lim
 
 def test_failed_http_batch_preserves_previous_sources_for_later_questions(api):
     """One invalid notebook rolls back the batch while the prior attachment remains usable over HTTP."""
-    current = sync(api, add=[staged(api, "alpha.py", "alpha = 1\n")])["manifest"]
+    current = sync(api, add=[staged(api, "alpha.py", "alpha = 1\n")])
     rejected = api.client.post("/sessions/session-a/uploads/sync", json=sync_body(current, add=[
         staged(api, "beta.py", "beta = 2\n"), staged(api, "broken.ipynb", "not JSON"),
     ]))
@@ -576,7 +615,7 @@ def test_failed_http_batch_preserves_previous_sources_for_later_questions(api):
 
 def test_model_failure_leaves_the_attachment_set_searchable_for_the_next_question(api):
     """A model outage cannot destroy a successfully committed session search index."""
-    current = sync(api, add=[staged(api, "alpha.py", "alpha = 1\n"), staged(api, "beta.py", "beta = 2\n")])["manifest"]
+    current = sync(api, add=[staged(api, "alpha.py", "alpha = 1\n"), staged(api, "beta.py", "beta = 2\n")])
     api.controls.fail_synthesis = True
     failed = answer(api, uploads=context(current))
     assert failed.issues
@@ -590,7 +629,7 @@ def test_model_failure_leaves_the_attachment_set_searchable_for_the_next_questio
 
 def test_concurrent_additions_from_one_revision_commit_only_one_complete_set(api):
     """Two writers sharing a base revision preserve the existing source and reject the losing change."""
-    current = sync(api, add=[staged(api, "alpha.py", "alpha = 1\n")])["manifest"]
+    current = sync(api, add=[staged(api, "alpha.py", "alpha = 1\n")])
     additions = [staged(api, "beta.py", "beta = 2\n"), staged(api, "gamma.py", "gamma = 3\n")]
     requests_ready = Barrier(3)
     index_started, release_index = Event(), Event()
@@ -616,7 +655,7 @@ def test_concurrent_additions_from_one_revision_commit_only_one_complete_set(api
     api.controls.before_embedding = None
 
     assert sorted(response.status_code for response in responses) == [200, 409]
-    winner = next(response.json()["manifest"] for response in responses if response.status_code == 200)
+    winner = next(response.json() for response in responses if response.status_code == 200)
     loser = next(response for response in responses if response.status_code == 409)
     assert loser.json()["detail"]["code"] == "UPLOAD_REVISION_CONFLICT"
     assert winner["revision"] == current["revision"] + 1
@@ -631,7 +670,7 @@ def test_concurrent_additions_from_one_revision_commit_only_one_complete_set(api
 
 def test_exit_waiting_for_an_upload_rechecks_its_revision_before_resetting(api):
     """A queued reset cannot erase attachments committed while it waited for the session lock."""
-    current = sync(api, add=[staged(api, "alpha.py", "alpha = 1\n")])["manifest"]
+    current = sync(api, add=[staged(api, "alpha.py", "alpha = 1\n")])
     addition = staged(api, "beta.py", "beta = 2\n")
     index_started, release_index = Event(), Event()
 
@@ -655,7 +694,7 @@ def test_exit_waiting_for_an_upload_rechecks_its_revision_before_resetting(api):
     api.controls.before_embedding = None
 
     assert committed.status_code == 200, committed.text
-    updated = committed.json()["manifest"]
+    updated = committed.json()
     assert updated["epoch"] == current["epoch"]
     assert updated["revision"] == current["revision"] + 1
     assert any(event == "error" and "UPLOAD_REVISION_CONFLICT" in data["message"] for event, data in events)
@@ -667,7 +706,7 @@ def test_exit_waiting_for_an_upload_rechecks_its_revision_before_resetting(api):
 
 def test_question_and_file_removal_keep_each_answers_source_revision_consistent(api):
     """A question uses its starting attachment set while a queued deletion changes only later answers."""
-    current = sync(api, add=[staged(api, "alpha.py", "alpha = 1\n"), staged(api, "beta.py", "beta = 2\n")])["manifest"]
+    current = sync(api, add=[staged(api, "alpha.py", "alpha = 1\n"), staged(api, "beta.py", "beta = 2\n")])
     beta = next(item for item in current["files"] if item["name"] == "beta.py")
     synthesis_started, release_synthesis = Event(), Event()
 
@@ -693,7 +732,7 @@ def test_question_and_file_removal_keep_each_answers_source_revision_consistent(
     api.controls.before_synthesis = None
 
     assert removed.status_code == 200, removed.text
-    new_manifest = removed.json()["manifest"]
+    new_manifest = removed.json()
     assert old_result["upload_manifest"] == current
     old_answer = AnswerResponse.model_validate(old_result["response"])
     assert {citation.evidence.element.metadata["file_id"] for citation in old_answer.citations} == {
@@ -732,8 +771,8 @@ def test_new_session_question_completes_while_uploads_pin_the_lru_capacity(api):
             release_index.set()
         committed = upload.result(timeout=10)
     assert committed.status_code == 200, committed.text
-    assert committed.json()["manifest"]["epoch"] == current["epoch"]
-    assert manifest(api, "busy-session") == committed.json()["manifest"]
+    assert committed.json()["epoch"] == current["epoch"]
+    assert manifest(api, "busy-session") == committed.json()
 
 
 @pytest.mark.parametrize("intervening_change", [False, True])
@@ -786,17 +825,17 @@ def test_session_recovers_committed_upload_after_lost_response(api, monkeypatch,
     assert [file["name"] for file in committed["files"]] == ["alpha.py"]
     assert len(deliveries) == 2  # Initial GET and exactly one attempted mutation.
     assert Path(prepared.files[0].path).read_bytes() == b"alpha = 1\n"
-    current = (sync(api, add=[staged(api, "beta.py", "beta = 2\n")])["manifest"]
+    current = (sync(api, add=[staged(api, "beta.py", "beta = 2\n")])
                if intervening_change else committed)
 
     replayed = client.sync_uploads(request)
 
-    assert replayed.manifest.model_dump(mode="json") == committed
+    assert replayed.model_dump(mode="json") == current
     assert manifest(api) == current
     sync_payloads = [payload for _, path, payload in deliveries if path.endswith("/uploads/sync")]
     assert sync_payloads == [original_payload, original_payload]
     assert all(path != "/agent/stream" for _, path, _ in deliveries)
-    assert client.refresh_uploads().model_dump(mode="json") == current
+    assert client.manifest.model_dump(mode="json") == current
     events = list(client.stream("Compare the attached files"))
     assert not [event for event in events if event.event == "error"]
     final = next(event.result for event in events if event.event == "final_response")
@@ -841,11 +880,11 @@ def test_loopback_attachment_changes_reach_streamlit_client_and_versioned_answer
                 return result.response
 
             empty = fetch_upload_manifest(url, "session-a")
-            first = update(empty, add=[staged(api, "alpha.py", "alpha = 1\n")]).manifest
-            attached = update(first, add=[staged(api, "beta.py", "beta = 2\n")]).manifest
+            first = update(empty, add=[staged(api, "alpha.py", "alpha = 1\n")])
+            attached = update(first, add=[staged(api, "beta.py", "beta = 2\n")])
             original = ask(attached)
             assert {item.evidence.snapshot.title for item in original.citations} == {"alpha.py", "beta.py"}
-            assert update(attached, add=[staged(api, "alpha.py", "alpha = 1\n")]).manifest == attached
+            assert update(attached, add=[staged(api, "alpha.py", "alpha = 1\n")]) == attached
 
             replacement = staged(api, "alpha.py", "alpha = 10\n")
             with pytest.raises(UploadAPIError) as conflict:
@@ -853,7 +892,7 @@ def test_loopback_attachment_changes_reach_streamlit_client_and_versioned_answer
             assert conflict.value.code == "UPLOAD_NAME_CONFLICT"
             alpha = next(item for item in attached.files if item.name == "alpha.py")
             replacement["replace_file_id"] = alpha.file_id
-            replaced = update(attached, add=[replacement]).manifest
+            replaced = update(attached, add=[replacement])
             current = ask(replaced)
             current_alpha = next(item.evidence for item in current.citations if item.evidence.snapshot.title == "alpha.py")
             old_alpha = next(item.evidence for item in original.citations if item.evidence.snapshot.title == "alpha.py")
@@ -863,9 +902,9 @@ def test_loopback_attachment_changes_reach_streamlit_client_and_versioned_answer
             assert current_alpha.snapshot.snapshot_id != old_alpha.snapshot.snapshot_id
 
             beta = next(item for item in replaced.files if item.name == "beta.py")
-            removed = update(replaced, remove=[beta.file_id]).manifest
+            removed = update(replaced, remove=[beta.file_id])
             assert {item.evidence.snapshot.title for item in ask(removed).citations} == {"alpha.py"}
-            cleared = update(removed, clear=True).manifest
+            cleared = update(removed, clear=True)
             assert cleared.files == []
             assert ask(cleared).citations == []
             assert fetch_upload_manifest(url, "session-a") == cleared

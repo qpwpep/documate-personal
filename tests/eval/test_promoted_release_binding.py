@@ -61,7 +61,7 @@ def release_http(tmp_path, monkeypatch):
                     "source_uri": f"upload://{session}/{addition['name']}",
                 })
         manifest["revision"] += 1
-        return response_json({"manifest": manifest, "changed": True})
+        return response_json(manifest)
 
     def post(url, *, json, **kwargs):
         queries.append(json["query"])

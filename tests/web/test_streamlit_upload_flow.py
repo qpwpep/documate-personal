@@ -62,7 +62,7 @@ def test_failed_batch_invalidates_confirmation_and_retry_does_not_send_held_ques
     fake_st = _install_ui(monkeypatch, tmp_path, pending)
     calls = _responses(monkeypatch, [
         (400, {"detail": {"code": "UPLOAD_INVALID", "message": "failed", "files": [{"name": "bad.py", "message": "invalid"}]}}),
-        (200, {"manifest": _manifest(revision=2, files=[_confirmed_file()]).model_dump(), "changed": True, "unchanged_names": []}),
+        (200, _manifest(revision=2, files=[_confirmed_file()]).model_dump()),
     ])
 
     assert streamlit_app.commit_pending_upload() is False
@@ -107,9 +107,7 @@ def test_late_upload_completion_cannot_clear_a_new_sessions_pending_question(mon
         fake_st.session_state["upload_saved_prompt"] = "new saved question"
         response = requests.Response()
         response.status_code = 200
-        response._content = json.dumps({
-            "manifest": _manifest(revision=2).model_dump(), "changed": True,
-        }).encode()
+        response._content = json.dumps(_manifest(revision=2).model_dump()).encode()
         return response
 
     monkeypatch.setattr(requests.sessions.Session, "request", complete_after_reset)
@@ -225,7 +223,7 @@ def test_sidebar_clear_button_removes_attachments_and_preserves_visible_conversa
     monkeypatch.setattr(streamlit_state, "get_uploads_dir", lambda: tmp_path)
     _responses(monkeypatch, [
         (200, _manifest(files=[_confirmed_file()]).model_dump()),
-        (200, {"manifest": _manifest(revision=2).model_dump(), "changed": True, "unchanged_names": []}),
+        (200, _manifest(revision=2).model_dump()),
     ])
     app = AppTest.from_file(streamlit_app.__file__).run()
     assert not app.exception
@@ -474,7 +472,7 @@ def test_multiple_attachments_are_confirmed_before_the_comparison_question(monke
             assert [(item["name"], Path(item["path"]).read_bytes()) for item in kwargs["json"]["add"]] == [
                 ("a.py", b"one"), ("b.py", b"two"),
             ]
-            response._content = json.dumps({"manifest": committed.model_dump(), "changed": True}).encode()
+            response._content = json.dumps(committed.model_dump()).encode()
         else:
             response.headers["Content-Type"] = "text/event-stream"
             final = {"response": answer_response("Both files compared.").model_dump(mode="json"),
@@ -508,7 +506,7 @@ def test_replacement_button_commits_only_after_reviewing_the_same_name(monkeypat
     committed = _manifest(revision=2, files=[replacement])
     calls = _responses(monkeypatch, [
         (200, _manifest(files=[_confirmed_file()]).model_dump()),
-        (200, {"manifest": committed.model_dump(), "changed": True}),
+        (200, committed.model_dump()),
     ])
     app = AppTest.from_file(streamlit_app.__file__).run()
     messages = list(app.session_state["messages"])
@@ -538,7 +536,7 @@ def test_individual_delete_preserves_other_attachments_and_conversation(monkeypa
     remaining = _manifest(revision=2, files=[other])
     calls = _responses(monkeypatch, [
         (200, _manifest(files=[_confirmed_file(), other]).model_dump()),
-        (200, {"manifest": remaining.model_dump(), "changed": True}),
+        (200, remaining.model_dump()),
     ])
     app = AppTest.from_file(streamlit_app.__file__).run()
     messages = list(app.session_state["messages"])
@@ -621,7 +619,7 @@ def test_recheck_requires_new_replacement_approval_and_preserves_failed_question
         (409, {"detail": {"code": "UPLOAD_REVISION_CONFLICT", "message": "changed"}}),
         (200, fresh.model_dump(mode="json")),
         (200, fresh.model_dump(mode="json")),
-        (200, {"manifest": committed.model_dump(mode="json"), "changed": True}),
+        (200, committed.model_dump(mode="json")),
     ])
     app = AppTest.from_file(streamlit_app.__file__).run()
     messages = list(app.session_state["messages"])
@@ -667,9 +665,7 @@ def test_lost_upload_response_retries_the_same_bytes_and_holds_the_question(monk
         assert Path(payload["add"][0]["path"]).read_bytes() == b"one"
         if len(requests_sent) == 1:
             raise requests.exceptions.Timeout("reply was lost")
-        response._content = json.dumps({
-            "manifest": _manifest(files=[_confirmed_file()]).model_dump(mode="json"), "changed": True,
-        }).encode()
+        response._content = json.dumps(_manifest(files=[_confirmed_file()]).model_dump(mode="json")).encode()
         return response
 
     monkeypatch.setattr(requests.sessions.Session, "request", send)

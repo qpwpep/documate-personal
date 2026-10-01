@@ -521,7 +521,7 @@ class EvidencePipelineTest(unittest.TestCase):
                         epoch=manifest.epoch, expected_revision=manifest.revision, operation_id=uuid4().hex,
                         add=[UploadAddition(path=str(upload), name=upload.name,
                                             content_hash="sha256:" + hashlib.sha256(upload.read_bytes()).hexdigest())],
-                    )).manifest
+                    ))
                     runner = ExecutionRunner(graph=None, session=session)
                     state = runner.prepare_graph_state("random_state")
                     result = build_tool_registry(settings).upload_search_tool(
