@@ -119,6 +119,7 @@ def test_preparation_and_final_turn_share_confirmed_uploads_and_preserve_diagnos
     assert questions[0]["uploads"] == {"epoch": result.session_id, "revision": 1}
     assert questions[1]["uploads"] == {"epoch": "next-epoch", "revision": 0}
     assert [turn.query for turn in result.scenario_turns] == [item["query"] for item in questions]
+    assert [turn.request_payload for turn in result.scenario_turns] == questions
     assert [turn.debug["extra_diagnostic"] for turn in result.scenario_turns] == [{"turn": 1}, {"turn": 2}]
     assert export_answer_text(result.response) == "saved prepared body"
     assert result.attachment_setup_ms == 500

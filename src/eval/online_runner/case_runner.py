@@ -66,7 +66,7 @@ def _record_client_error(event: AgentStreamEvent, parsed: ParsedResponseData, *,
 
 def _run_turn(client: AgentSessionClient, query: str, *,
               role: str = "question", prior_turns: list[ScenarioTurnResult] | None = None) -> tuple[ParsedResponseData, ScenarioTurnResult]:
-    payload = build_agent_payload(query, client.request_context())
+    payload = build_agent_payload(query, client.context, uploads=client.upload_context())
     parsed = ParsedResponseData()
     elapsed = None
     done_received = False
@@ -150,7 +150,8 @@ def _run_single_case(
     turns: list[ScenarioTurnResult] = []
     attachment_setup_ms = None
     question_response_ms = None
-    request_payload = build_agent_payload(case.query, context)
+    # No question payload exists before its attachment context is confirmed.
+    request_payload = {}
     files = []
     staged = None
     try:

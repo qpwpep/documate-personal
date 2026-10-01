@@ -12,6 +12,7 @@ from src.app.web.app import create_app
 from src.app.client import AgentRequestContext, AgentSessionClient, stream_agent_response
 from src.core.answer_schema import export_answer_text
 from src.core.conversation_memory import DEFAULT_QUERY_MAX_CHARS
+from src.core.uploads import UploadContext
 from src.eval.config_models import BenchmarkCase, BenchmarkConfig
 from src.eval.judge_llm import LLMJudge
 from tests.eval.runner_helpers import run_case_with_weights as _run_single_case
@@ -149,15 +150,20 @@ def test_clients_handle_http_validation_errors_without_executing_a_question(agen
     assert app.state.session_store.get_or_create(result.session_id).messages == []
 
 
-def test_legacy_stream_error_and_done_do_not_produce_a_successful_answer(agent_server):
-    """The shared streaming client still rejects an SSE service error on the legacy API input."""
-    endpoint, app, tmp_path = agent_server
-    events = list(stream_agent_response("exit", AgentRequestContext(
-        fastapi_url=endpoint, session_id="invalid-upload", upload_file_path="src/__init__.py",
-    )))
+def test_stale_upload_context_stream_error_and_done_do_not_produce_a_successful_answer(agent_server):
+    """A stale attachment precondition rejects reset through SSE without changing the session."""
+    endpoint, app, _ = agent_server
+    client = AgentSessionClient(AgentRequestContext(fastapi_url=endpoint, session_id="stale-upload"))
+    confirmed = client.refresh_uploads()
+    events = list(stream_agent_response(
+        "exit", client.context,
+        uploads=UploadContext(epoch=confirmed.epoch, revision=confirmed.revision + 1),
+    ))
     assert [event.event for event in events] == ["request_started", "error", "done"]
-    assert "UPLOAD_PATH_INVALID" in events[1].data["message"]
-    assert app.state.session_store.active_session_ids() == set()
+    assert "UPLOAD_REVISION_CONFLICT" in events[1].data["message"]
+    assert client.refresh_uploads() == confirmed
+    assert app.state.session_store.active_session_ids() == {"stale-upload"}
+    assert app.state.session_store.get_or_create("stale-upload").messages == []
 
 
 def test_benchmark_rejects_unsupported_uploads_before_the_question(agent_server):

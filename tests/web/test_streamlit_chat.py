@@ -161,6 +161,7 @@ import streamlit as st
 from unittest.mock import patch
 from src.app.web.streamlit_chat import process_chat_prompt, render_chat_history
 from src.app.client import AgentRequestContext, stream_agent_response
+from src.core.uploads import UploadContext
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
@@ -172,7 +173,7 @@ def request(*args, **kwargs):
 
 def stream_agent(prompt):
     context = AgentRequestContext(fastapi_url="http://localhost:8000", session_id="session-1")
-    return stream_agent_response(prompt, context)
+    return stream_agent_response(prompt, context, uploads=UploadContext(epoch="e", revision=0))
 
 with patch("requests.sessions.Session.request", request):
     if not st.session_state.messages:

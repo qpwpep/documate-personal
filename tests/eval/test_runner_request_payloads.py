@@ -18,6 +18,7 @@ from tests.eval.runner_helpers import run_case_with_weights as _run_single_case
 from src.eval.main import resolve_live_slack_dm_recipient
 from src.eval.online_runner.scenario_inputs import case_context
 from src.app.client import build_agent_payload
+from src.core.uploads import UploadContext
 from src.infra.settings import AppSettings
 
 
@@ -38,7 +39,8 @@ def test_explicit_live_email_is_not_replaced_by_app_default_user():
         ),
     )
 
-    assert build_agent_payload("send", context)["slack_recipient"] == {"kind": "email", "value": "requested@example.com"}
+    payload = build_agent_payload("send", context, uploads=UploadContext(epoch="confirmed", revision=0))
+    assert payload["slack_recipient"] == {"kind": "email", "value": "requested@example.com"}
 
 
 def test_live_channel_case_cannot_fall_back_to_a_dm_override():

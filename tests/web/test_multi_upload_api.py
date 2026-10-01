@@ -786,8 +786,8 @@ def test_loopback_attachment_changes_reach_streamlit_client_and_versioned_answer
 
             def ask(current):
                 events = list(stream_agent_response("Compare the attached files", AgentRequestContext(
-                    fastapi_url=url, session_id="session-a", uploads=current.context(),
-                )))
+                    fastapi_url=url, session_id="session-a",
+                ), uploads=current.context()))
                 assert not [event for event in events if event.event == "error"]
                 result = next(event.result for event in events if event.event == "final_response")
                 assert result.upload_manifest == current

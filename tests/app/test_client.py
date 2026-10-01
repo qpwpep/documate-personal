@@ -11,7 +11,7 @@ from src.app.client import (
     AgentRequestContext,
     stream_agent_response,
 )
-from src.core.uploads import UploadManifest, UploadSyncRequest
+from src.core.uploads import UploadContext, UploadManifest, UploadSyncRequest
 from tests.web.answer_fixtures import answer_response, cited_response
 
 
@@ -81,7 +81,7 @@ def test_stream_preserves_complete_final_response_and_stops_without_done(transpo
     ], content_type=content_type)
     calls = transport(response)
 
-    events = list(stream_agent_response("질문", context()))
+    events = list(stream_agent_response("질문", context(), uploads=UploadContext(epoch="e", revision=0)))
 
     assert len(events) == 1
     assert events[0].event == "final_response"
@@ -102,10 +102,9 @@ def test_request_preserves_session_upload_and_slack_context(transport):
     request_context = AgentRequestContext(
         fastapi_url="http://localhost:8000/", session_id="session-1",
         slack_recipient={"kind": "email", "value": "test@example.com"},
-        upload_file_path="uploads/session-1/code.py",
     )
 
-    events = list(stream_agent_response("질문", request_context))
+    events = list(stream_agent_response("질문", request_context, uploads=UploadContext(epoch="e", revision=0)))
 
     assert events[0].result.response == answer_response()
     assert len(calls) == 1
@@ -116,7 +115,7 @@ def test_request_preserves_session_upload_and_slack_context(transport):
     assert calls[0]["json"] == {
         "query": "질문", "session_id": "session-1",
         "slack_recipient": {"kind": "email", "value": "test@example.com"},
-        "upload_file_path": "uploads/session-1/code.py",
+        "uploads": {"epoch": "e", "revision": 0},
     }
 
 
@@ -130,7 +129,7 @@ def test_failure_before_first_event_reports_error_without_repeating_request(tran
     """An initial failure is visible without a retry that could repeat server actions."""
     calls = transport(error)
 
-    events = list(stream_agent_response("질문", context()))
+    events = list(stream_agent_response("질문", context(), uploads=UploadContext(epoch="e", revision=0)))
 
     assert len(events) == 1
     assert events[0].event == "error"
@@ -163,7 +162,7 @@ def test_stream_read_timeout_remains_timeout_without_repeating_request(transport
     response.raw = RawStream()
     calls = transport(response)
 
-    events = list(stream_agent_response("질문", context()))
+    events = list(stream_agent_response("질문", context(), uploads=UploadContext(epoch="e", revision=0)))
 
     assert [event.event for event in events] == (["request_started"] if progress_received else []) + ["error"]
     assert events[-1].data["code"] == "timeout"
@@ -177,7 +176,7 @@ def test_http_error_is_visible_without_reading_sse_or_repeating_request(transpor
     response = StreamResponse(status=503, text="temporarily unavailable")
     calls = transport(response)
 
-    events = list(stream_agent_response("질문", context()))
+    events = list(stream_agent_response("질문", context(), uploads=UploadContext(epoch="e", revision=0)))
 
     assert len(events) == 1
     assert events[0].event == "error"
@@ -216,7 +215,7 @@ def test_redirect_is_reported_without_forwarding_post(monkeypatch, status):
 
     monkeypatch.setattr(requests.adapters.HTTPAdapter, "send", send)
 
-    events = list(stream_agent_response("질문", context()))
+    events = list(stream_agent_response("질문", context(), uploads=UploadContext(epoch="e", revision=0)))
 
     assert sent == [("POST", "http://localhost:8000/agent/stream")]
     assert [event.event for event in events] == ["error"]
@@ -230,7 +229,7 @@ def test_non_sse_response_is_rejected_without_reading_body(transport, content_ty
     response = StreamResponse([json.dumps({"response": "stale response"})], content_type=content_type)
     calls = transport(response)
 
-    events = list(stream_agent_response("질문", context()))
+    events = list(stream_agent_response("질문", context(), uploads=UploadContext(epoch="e", revision=0)))
 
     assert [event.event for event in events] == ["error"]
     assert events[0].data["code"] == "invalid_stream"
@@ -245,7 +244,7 @@ def test_empty_stream_reports_error_without_repeating_request(transport, frames)
     """A stream with no data events is a visible empty-stream failure."""
     calls = transport(StreamResponse(frames))
 
-    events = list(stream_agent_response("질문", context()))
+    events = list(stream_agent_response("질문", context(), uploads=UploadContext(epoch="e", revision=0)))
 
     assert [event.event for event in events] == ["error"]
     assert events[0].data["code"] == "empty_stream"
@@ -258,7 +257,7 @@ def test_stream_without_final_response_is_not_success(transport, event):
     """Neither HTTP 200 nor a done event replaces the required final response."""
     calls = transport(StreamResponse([frame(event, {})]))
 
-    events = list(stream_agent_response("질문", context()))
+    events = list(stream_agent_response("질문", context(), uploads=UploadContext(epoch="e", revision=0)))
 
     assert [item.event for item in events] == [event, "error"]
     assert events[-1].data["code"] == "missing_final_response"
@@ -278,7 +277,7 @@ def test_stream_break_after_progress_reports_interruption_without_repeating_requ
         error,
     ]))
 
-    events = list(stream_agent_response("질문", context()))
+    events = list(stream_agent_response("질문", context(), uploads=UploadContext(epoch="e", revision=0)))
 
     assert [event.event for event in events] == ["request_started", "error"]
     assert events[-1].data["code"] == "connection_interrupted"
@@ -292,7 +291,7 @@ def test_server_error_without_final_response_keeps_original_error(transport):
     error = {"message": "업로드 경로를 확인해 주세요.", "request_id": "r1"}
     transport(StreamResponse([frame("error", error), frame("done", {})]))
 
-    events = list(stream_agent_response("질문", context()))
+    events = list(stream_agent_response("질문", context(), uploads=UploadContext(epoch="e", revision=0)))
 
     assert [event.event for event in events] == ["error", "done"]
     assert events[0].data == error
@@ -312,7 +311,7 @@ def test_server_error_can_be_followed_by_complete_final_response(transport):
         frame("final_response", payload),
     ]))
 
-    events = list(stream_agent_response("질문", context()))
+    events = list(stream_agent_response("질문", context(), uploads=UploadContext(epoch="e", revision=0)))
 
     assert [event.event for event in events] == ["error", "final_response"]
     assert events[-1].data == payload
@@ -328,7 +327,7 @@ def test_invalid_final_response_is_reported_without_partial_parsing(transport, p
     payload = {**payload, "upload_manifest": {"epoch": "e", "revision": 0, "files": []}}
     transport(StreamResponse([frame("final_response", payload)]))
 
-    events = list(stream_agent_response("질문", context()))
+    events = list(stream_agent_response("질문", context(), uploads=UploadContext(epoch="e", revision=0)))
 
     assert [event.event for event in events] == ["error"]
     assert events[0].data["code"] == "invalid_stream"
@@ -343,7 +342,7 @@ def test_invalid_final_manifest_does_not_confirm_a_partial_response(transport, m
         "upload_manifest": manifest,
     })]))
 
-    events = list(stream_agent_response("질문", context()))
+    events = list(stream_agent_response("질문", context(), uploads=UploadContext(epoch="e", revision=0)))
 
     assert [event.event for event in events] == ["error"]
     assert events[0].data["code"] == "invalid_stream"
@@ -360,7 +359,7 @@ def test_invalid_or_incomplete_stream_reports_error_without_repeating_request(tr
     """Malformed or truncated SSE frames produce a visible failure without a retry."""
     calls = transport(StreamResponse([encoded]))
 
-    events = list(stream_agent_response("질문", context()))
+    events = list(stream_agent_response("질문", context(), uploads=UploadContext(epoch="e", revision=0)))
 
     assert [event.event for event in events] == ["error"]
     assert events[0].data["code"] == "invalid_stream"
@@ -475,8 +474,9 @@ def test_question_sends_confirmed_upload_revision_without_legacy_path(transport)
         "response": answer_response().model_dump(mode="json"),
         "upload_manifest": {"epoch": "epoch-one", "revision": 2, "files": []},
     })]))
-    request_context = AgentRequestContext(fastapi_url="http://localhost:8000", session_id="session-1", uploads=UploadContext(epoch="epoch-one", revision=2))
-    events = list(stream_agent_response("두 파일을 비교해줘", request_context))
+    request_context = AgentRequestContext(fastapi_url="http://localhost:8000", session_id="session-1")
+    events = list(stream_agent_response("두 파일을 비교해줘", request_context,
+                                      uploads=UploadContext(epoch="epoch-one", revision=2)))
     assert events[0].result.response == answer_response()
     assert calls[0]["json"] == {"query": "두 파일을 비교해줘", "session_id": "session-1", "uploads": {"epoch": "epoch-one", "revision": 2}}
 
@@ -527,7 +527,7 @@ def test_diagnostic_request_preserves_transport_observation_and_server_error(tra
     events = list(stream_agent_response("question", AgentRequestContext(
         fastapi_url="http://localhost:8000", session_id="session-one",
         include_debug=True, timeout_seconds=17,
-    )))
+    ), uploads=UploadContext(epoch="e", revision=0)))
 
     assert len(calls) == 1
     assert calls[0]["json"]["include_debug"] is True
@@ -550,7 +550,7 @@ def test_transport_request_id_prefers_http_header_over_event_values(transport):
     response.headers["x-request-id"] = "header-request"
     transport(response)
 
-    events = list(stream_agent_response("question", context()))
+    events = list(stream_agent_response("question", context(), uploads=UploadContext(epoch="e", revision=0)))
 
     assert [event.observation.request_id for event in events] == ["header-request", "header-request"]
 
