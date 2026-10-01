@@ -8,7 +8,7 @@ DocuMate release 벤치마크는 Streamlit과 같은 `src/app/client.py`의 `Age
 
 벤치마크는 공용 클라이언트에 `include_debug=true`를 지정합니다. HTTP `200`, 첫 진행 이벤트, `done` 수신만으로 성공을 판정하지 않습니다. HTTP 오류, SSE `error`, 연결 단절, timeout, 최종 응답 누락, 응답 계약 오류를 구분하고, `error` 뒤의 유효한 최종 응답은 앞선 오류와 함께 보존하며 manifest를 다음 요청의 확인값으로 적용합니다. 모든 유효한 최종 응답은 실제 epoch·revision과 명시적인 `files` 목록을 가진 `upload_manifest`가 필수입니다. 첨부가 없어도 `files=[]`를 전달하며, manifest 누락·`null`·필드 누락·잘못된 타입은 기본값이나 타입 변환으로 보정하지 않습니다.
 
-계약을 위반한 최종 응답은 UI와 마찬가지로 사용 가능한 답변으로 승인하지 않습니다. 답변·actions는 평가 입력에서 제외하고 원본 envelope·trace·debug·오류는 진단에 남깁니다. 유효한 최종 응답이 없으면 공용 클라이언트의 manifest를 미확인 상태인 `None`으로 바꾸며, 이는 서버가 확인한 빈 첨부 목록과 다릅니다. 새 요청 전 GET 확인이 실패하면 질문을 보내지 않습니다. GET 성공은 현재 첨부 상태만 복구하고 거부된 답변을 성공으로 바꾸지 않으며, 준비 턴이 실패한 시나리오는 후속 질문을 보내지 않습니다. 유효한 최종 응답을 수신해도 benchmark 통과를 의미하지는 않습니다. 질문이나 첨부 변경은 자동 재실행하지 않으며 redirect나 JSON endpoint fallback도 사용하지 않습니다.
+계약을 위반한 최종 응답은 UI와 마찬가지로 사용 가능한 답변으로 승인하지 않습니다. 답변·actions는 평가 입력에서 제외하고 원본 envelope·trace·debug·오류는 진단에 남깁니다. 유효한 최종 응답이 없으면 공용 클라이언트의 manifest를 미확인 상태인 `None`으로 바꾸며, 이는 서버가 확인한 빈 첨부 목록과 다릅니다. 실패 턴 기록인 `ScenarioTurnResult.upload_manifest`도 이 경우 `None`을 보존하며 성공 응답의 필수 manifest 계약과 구분합니다. 새 요청 전 GET 확인이 실패하면 질문을 보내지 않습니다. GET 성공은 현재 첨부 상태만 복구하고 거부된 답변을 성공으로 바꾸지 않으며, 준비 턴이 실패한 시나리오는 후속 질문을 보내지 않습니다. 유효한 최종 응답을 수신해도 benchmark 통과를 의미하지는 않습니다. 질문이나 첨부 변경은 자동 재실행하지 않으며 redirect나 JSON endpoint fallback도 사용하지 않습니다.
 
 ## 1. 사전 준비
 
@@ -133,7 +133,7 @@ uv run python -m src.eval.main run --mode online --track release \
 
 승인 로더는 실제 실행 위치의 첨부까지 다시 검증하고, 파싱·검증·해시에 사용한 바이트와 선언된 논리 참조를 불변 첨부로 묶어 읽기 전용 목록으로 반환합니다. `release/settings.py` 같은 논리 참조는 승인·감사 기록의 키로 유지하고, 전송 이름 `settings.py`는 파일시스템을 조회하지 않고 결정합니다. runner는 이 입력을 staging에 전달하므로 검증 후 원본 파일·부모 디렉터리가 바뀌거나 삭제되고 심볼릭 링크가 교체되어도 승인된 이름과 바이트로 실행합니다. 캡처 시점의 경로 탈출·외부 심볼릭 링크 검사는 유지하며, 승인된 첨부가 누락되면 디스크에서 대신 읽지 않습니다. 한 사례 안에서 전송 이름이 NFC·대소문자 정규화 후 충돌하는 승인 입력은 거부합니다. 미승인 smoke의 기존 파일 로딩·중복 처리와 승인 JSON·저장소 형식은 유지합니다.
 
-업로드 후에는 서버 manifest의 첨부 목록·정확한 파일 이름·크기·SHA-256을 승인 입력과 대조하고, 일치할 때만 준비 질문과 평가 질문을 보냅니다. 준비 답변으로 manifest가 갱신되면 다음 질문 전에 다시 대조합니다. 불일치는 첨부 준비 실패로 기록하며 후속 질문을 보내지 않습니다. 실행 요약의 `audit_metrics.dataset_approval`은 입력 검증 여부·승인 파일 해시·후보 해시·근거 해시를 기록합니다.
+첨부 sync 요청에는 승인된 staging bytes의 SHA-256을 `content_hash`로 포함하며 서버가 실제 읽은 bytes와 일치해야 합니다. sync 성공 응답은 GET과 같은 `{epoch, revision, files}` manifest입니다. 업로드 후에는 이 manifest의 첨부 목록·정확한 파일 이름·크기·SHA-256을 승인 입력과 대조하고, 일치할 때만 준비 질문과 평가 질문을 보냅니다. 준비 답변으로 manifest가 갱신되면 다음 질문 전에 다시 대조합니다. 불일치는 첨부 준비 실패로 기록하며 후속 질문을 보내지 않습니다. 실행 요약의 `audit_metrics.dataset_approval`은 입력 검증 여부·승인 파일 해시·후보 해시·근거 해시를 기록합니다.
 
 [보존된 유사도 보고서](../data/benchmarks/design/similarity_report.json)는 2026-09-18에 120개 후보·교체 전 원래 120개·당시 운영 프롬프트 정적 구간 111개를 실제 `nvidia/nemotron-3-embed-1b`로 비교한 기록입니다. 임베딩 입력과 최근접 대상·순서는 v1과 같고 점수 2개만 0.000001 차이가 있습니다. 검토 대상 50쌍과 동일 질문 30쌍은 이전과 같습니다. release 내부의 동일 질문은 없고, 임계값 0.75를 넘는 내부 쌍은 의도적으로 같은 답변을 저장/공유로 나눈 공개 회귀 029/030뿐입니다. 이전 119개 검토를 명시적으로 이어 사용했고 변경 028은 별도 coding-agent가 명세·참고 답안·실제 trace와 가까운 사례를 대조했습니다. 수신자 표현 변경에서는 새 임베딩 요청을 하지 않았으므로 현재 수정된 planner 프롬프트와의 유사도를 측정한 결과로 해석하지 않습니다. 수정된 oracle은 임베딩 입력이 아니므로 유사도로 정확성을 증명하지 않으며 독립적인 사람의 승인을 주장하지 않습니다.
 
@@ -143,7 +143,7 @@ PDF 3개·DOCX 2개·PNG 1개의 바이트는 v1과 같습니다. 실제 Docling
 
 ### 2.2 온라인 벤치마크 실행
 
-각 사례는 새 세션에서 시작합니다. `upload_fixtures`에 나열한 파일들을 UI와 같은 staging·동기화 절차로 등록한 뒤, `setup_turns`를 순서대로 보내고 마지막 `query`의 답변 품질을 사례의 기대값으로 채점합니다. 도구 실행 정책은 준비 턴마다 `setup_forbidden_tools`로, 마지막 턴은 `forbidden_tools`로 별도 지정하며 모든 턴의 준수 여부를 확인합니다. 각 턴의 최종 manifest를 다음 질문에 사용하며 내부 대화 상태를 직접 주입하지 않습니다. 준비 턴의 실행·응답·필수 진단이 실패하면 후속 요청을 보내지 않고 해당 사례를 실패로 기록합니다. judge에는 실제 준비 질문·답변·검색 근거도 전달합니다.
+각 사례는 새 세션에서 시작합니다. `upload_fixtures`에 나열한 파일들을 UI와 같은 staging·동기화 절차로 등록한 뒤, `setup_turns`를 순서대로 보내고 마지막 `query`의 답변 품질을 사례의 기대값으로 채점합니다. 모든 질문은 공용 클라이언트가 확인한 `uploads` epoch/revision을 필수로 보내며 파일 경로를 받지 않습니다. 첨부 준비가 실패해 질문을 보내지 않은 결과의 `request_payload`는 빈 객체로 남깁니다. 도구 실행 정책은 준비 턴마다 `setup_forbidden_tools`로, 마지막 턴은 `forbidden_tools`로 별도 지정하며 모든 턴의 준수 여부를 확인합니다. 각 턴의 최종 manifest를 다음 질문에 사용하며 내부 대화 상태를 직접 주입하지 않습니다. 준비 턴의 실행·응답·필수 진단이 실패하면 후속 요청을 보내지 않고 해당 사례를 실패로 기록합니다. judge에는 실제 준비 질문·답변·검색 근거도 전달합니다.
 
 fixture의 최소 예시는 다음과 같습니다. 기존 단일 `upload_fixture`도 읽을 수 있지만 `upload_fixtures`와 동시에 지정할 수 없습니다.
 
@@ -312,7 +312,7 @@ uv run python -m src.eval.request_contract_eval \
 | `cost_usd` | 준비 턴과 최종 질문의 모든 앱 LLM 호출 비용 합계. 한 호출이라도 입력·출력 토큰을 확정하지 못하면 `null`. 확인된 무호출 시나리오는 `0` |
 | `synthesis_output_tokens` | 최종 질문 턴의 모든 synthesis 시도에서 관측한 출력 토큰 합계. planner·memory summary·준비 턴은 제외. synthesis 출력이 하나라도 미관측이면 `null`, 확인된 무호출은 `0` |
 
-사용량의 저장 원본은 `scenario_turns[].llm_calls`입니다. 각 턴의 `role`은 `setup` 또는 `question`이며, 최종 질문도 준비 턴과 같은 모델로 한 번 저장합니다. 최상위 `token_usage`, `llm_calls`, `model_name`, `models_used`, `model_usage_status`를 별도로 저장하지 않습니다. 최상위 `debug`는 최종 질문의 진단이며 raw metadata를 다시 해석하는 비용 근거로 사용하지 않습니다. summary와 보고서에는 세 시간 구간의 p50/p95를 표시하며 `p95_latency_ms` gate는 최종 질문 시간을 평가합니다.
+사용량의 저장 원본은 `scenario_turns[].llm_calls`입니다. 각 턴의 `role`은 `setup` 또는 `question`이며, 최종 질문도 준비 턴과 같은 모델로 한 번 저장합니다. 최상위 `token_usage`, `llm_calls`, `model_name`, `models_used`, `model_usage_status`를 별도로 저장하지 않습니다. 최상위 `debug`는 최종 질문의 진단이며 raw metadata를 다시 해석하는 비용 근거로 사용하지 않습니다. summary와 보고서에는 세 시간 구간의 p50/p95를 표시하며 `p95_latency_ms` gate는 최종 질문 시간을 평가합니다. 인덱스 생성은 첨부 준비에만 포함되므로 현재 질문 런타임의 `upload_retriever_build_ms`는 `null`입니다. 과거 결과에 저장된 해당 단계의 수치와 오류 코드는 당시 관측값으로 계속 읽고 집계하며 새 실행값으로 바꾸지 않습니다.
 
 각 호출의 `usage.input_tokens`·`usage.output_tokens`에는 0 이상의 정수 또는 `null`만 들어갑니다. 명시된 `0`은 정상 관측이고, `null`은 누락 또는 유효한 값을 찾지 못한 상태입니다. 입력·출력 중 하나만 있으면 부분 관측입니다. 생성 경계에서 `usage_metadata`를 먼저 읽고 `response_metadata.token_usage`를 뒤에 읽으며, 각 후보 안에서는 `input_tokens`·`output_tokens`가 `prompt_tokens`·`completion_tokens`보다 우선합니다. 각 차원에서 유효한 첫 값을 택하고 빈 후보·누락·잘못된 값은 다음 키와 후보로 넘어갑니다. 정상적인 0은 뒤의 값으로 덮지 않습니다. 음수·bool·문자열·소수는 강제 변환하지 않고 `issues`에 남기며, 유효한 중복 값의 불일치와 provider total의 모순도 진단으로 보존합니다. `total_tokens`는 입력·출력이 모두 있을 때만 두 값의 합으로 얻으며 누락된 차원을 역산하지 않습니다.
 

@@ -247,9 +247,9 @@ docs 도구는 task의 `k`를 Tavily `max_results`와 반환 evidence 한도에 
 
 - 기본 확장자: `.py`, `.ipynb`. `DOCLING_ENABLED=true`이면 `.pdf`, `.docx`, `.png`, `.jpg`, `.jpeg`, `.tif`, `.tiff`, `.webp`, `.bmp`도 첨부할 수 있습니다. 이미지는 단일 프레임만 지원합니다.
 - 허용 위치: `uploads/<session_id>/...`
-- 검증 기준: `src/app/web/cleanup.py::validate_upload_file_path`
+- 경로 검증 기준: `src/infra/upload_storage.py::resolve_upload_input_path`; 첨부 내용·hash·형식 검증은 `UploadService`가 수행합니다.
 - 기본 한도: 세션당 10개, 파일당 10 MiB, 활성 파일 합계 50 MiB. `UPLOAD_MAX_FILES`, `UPLOAD_MAX_FILE_MIB`, `UPLOAD_MAX_TOTAL_MIB`로 조정합니다.
-- 코드·Notebook은 UTF-8 원문으로 읽고 문서·이미지는 검증된 bytes를 Docling에 전달합니다. 빈 파일이나 검색할 본문·표가 없는 문서는 첨부 반영 전에 거부합니다. 새 문서 형식은 manifest 첨부 API로 사용하고 legacy `upload_file_path`는 `.py`·`.ipynb` 범위를 유지합니다.
+- 모든 형식은 첨부 목록 API로 등록합니다. 코드·Notebook은 UTF-8 원문으로 읽고 문서·이미지는 검증된 bytes를 Docling에 전달합니다. 빈 파일이나 검색할 본문·표가 없는 문서는 첨부 반영 전에 거부합니다.
 
 Streamlit은 여러 파일을 한 번에 선택하고 기존 첨부에 추가합니다. 같은 이름과 내용은 재전송해도 중복 추가하지 않고, 같은 이름의 다른 내용은 명시적인 교체가 필요합니다. 이름 비교는 Unicode NFC와 대소문자 정규화를 사용합니다. 다른 이름의 동일 내용은 별도 출처로 유지합니다. 개별 삭제와 전체 첨부 해제는 이후 검색에서 해당 자료를 제외하며 대화와 기존 답변의 인용은 보존합니다.
 
@@ -409,9 +409,9 @@ Streamlit은 UI 세션마다 하나의 클라이언트를 유지하며, 첨부 �
 
 - `query`는 공백이 아닌 문자열이어야 하며 최대 `8192`자와 `16384` UTF-8 byte를 모두 만족해야 합니다. 초과 입력은 truncate하지 않고 질문 실행 전에 HTTP `422`로 거절합니다. 공용 클라이언트가 앞서 첨부 목록을 조회했다면 빈 세션은 이미 존재할 수 있지만 대화는 실행·저장하지 않습니다.
 - `session_id`는 영문·숫자·밑줄·하이픈 1~128자로 제한하고 대소문자를 구분하지 않는 세션 키로 정규화합니다. Windows에서 대소문자만 다른 ID가 같은 파일 디렉터리를 별도 세션으로 공유하지 않게 합니다.
-- `upload_file_path`는 반드시 `uploads/<session_id>/...` 범위 안이어야 합니다. 이 구 필드는 현재 첨부 집합을 해당 파일 하나로 교체하며, 필드 생략·`null`은 기존 의미대로 검색 첨부를 해제합니다.
-- UI와 benchmark의 공용 세션 클라이언트는 `"uploads": {"epoch": "서버가 반환한 값", "revision": 1}`을 보냅니다. 이 요청은 이미 확정된 첨부 집합을 사용하고 변경하지 않습니다. 구형 `upload_file_path`는 직접 API 호출의 호환 경로로만 남습니다. 두 계약을 함께 보내거나 `uploads=null`을 보내면 HTTP `422`입니다.
-- 첨부 버전 검사는 세션 락 안에서 다시 수행합니다. 오래된 `uploads` 컨텍스트는 SSE `UPLOAD_REVISION_CONFLICT` 오류로 반환하며, 클라이언트는 목록을 갱신하고 질문을 자동 재전송하지 않습니다.
+- 모든 질문은 `"uploads": {"epoch": "서버가 반환한 값", "revision": 1}`을 필수로 보냅니다. 첨부가 없어도 먼저 GET으로 확인한 빈 목록의 context를 사용합니다. `uploads` 생략·`null`이나 제거된 `upload_file_path` 입력은 HTTP `422`입니다.
+- 질문은 확인한 첨부 집합을 읽으며 파일 추가·교체·해제를 수행하지 않습니다. 첨부 변경은 별도의 sync 요청으로 완료한 뒤 그 응답의 context로 질문합니다.
+- `AgentRequestService`는 세션 락을 잡은 뒤 context를 한 번 검사하고, 같은 락 안에서 에이전트를 실행한 후 완료 manifest를 확보합니다. 오래된 epoch/revision은 SSE `UPLOAD_REVISION_CONFLICT` 오류로 반환하며, 클라이언트는 목록을 갱신하고 질문을 자동 재전송하지 않습니다.
 - `include_debug=true`일 때만 debug payload가 내려옵니다.
 - `slack_recipient`는 `channel`, `user`, `email` 중 하나의 `kind`와 비어 있지 않은 `value`를 받습니다. 생략·`null`은 미지정이며 빈 명시값·잘못된 형식·구 세 필드 입력은 HTTP `422`입니다. 요청 메타데이터는 매 HTTP 요청의 snapshot으로 교체됩니다. 재시도 대상은 메타데이터가 아니라 보류 요청의 `slack_delivery`가 소유합니다.
 
@@ -431,7 +431,7 @@ SSE의 `event:`는 아래 이벤트 이름이며, `data:`는 해당 이벤트의
 
 OpenAPI의 HTTP `200` 응답은 `text/event-stream`의 `x-sse-events` 확장에 각 이벤트의 `data` 스키마를 제공하며, `final_response`는 `AgentResponse`를 `$ref`로 참조합니다.
 
-요청 스키마 오류는 스트림 시작 전에 HTTP `422`로 반환합니다. 업로드 경로 검증이나 graph 실행처럼 스트림을 시작한 뒤 발생한 오류는 HTTP `200` 상태에서 SSE `error`로 전달될 수 있습니다. 따라서 클라이언트는 HTTP 상태와 SSE 이벤트를 함께 확인해야 합니다.
+요청 스키마 오류는 스트림 시작 전에 HTTP `422`로 반환합니다. 첨부 context 충돌이나 graph 실행처럼 스트림을 시작한 뒤 발생한 오류는 HTTP `200` 상태에서 SSE `error`로 전달될 수 있습니다. 경로·파일 bytes 검증은 첨부 sync 요청에서 수행합니다. 따라서 클라이언트는 HTTP 상태와 SSE 이벤트를 함께 확인해야 합니다.
 
 HTTP `200`이나 `done`만으로 성공 처리하지 않습니다. 유효한 `final_response`가 있어야 최종 답변을 사용할 수 있으며, 답변의 제한 사항·액션 실패·debug 오류도 별도로 확인합니다. 클라이언트는 `error` 뒤에도 최종 응답 수신을 계속하며, 최종 응답 없이 종료되거나 연결이 끊기면 답변 수신 실패로 처리합니다.
 
@@ -447,7 +447,7 @@ HTTP `200`이나 `done`만으로 성공 처리하지 않습니다. 유효한 `fi
 
 `POST /sessions/{session_id}/uploads/sync`는 공유 파일시스템에 저장한 파일의 참조를 받아 첨부 집합을 갱신합니다. 파일 바이트는 Streamlit의 내장 업로드 경로 또는 benchmark fixture에서 읽어 공용 staging 절차로 준비하며 이 API는 JSON을 받습니다. 원격 클라이언트가 파일 bytes를 직접 보내는 API는 아닙니다.
 
-`build_upload_sync_request()`는 교체 승인을 확인하고 독립된 요청을 한 번 생성합니다. 응답 유실 후 재시도는 이 요청의 operation ID·경로·epoch/revision·변경 목록과 staging 바이트를 그대로 사용합니다. 최신 목록으로 다시 적용할 때는 `review_upload_changes()`로 충돌과 삭제 대상을 재검토하고, 교체 승인을 초기화한 뒤 새 요청을 만듭니다. 성공이 확인되거나 제출 전에 취소한 staging은 정리하지만, 제출 후 처리 여부가 불명인 작업의 staging은 즉시 지우지 않고 세션 정리 정책에 맡깁니다. 최초 업로드 시도에 성공하면 함께 입력한 질문을 이어 보내며, 한 번이라도 실패했다면 이후 성공해도 질문은 명시적 전송을 기다립니다.
+`build_upload_sync_request()`는 교체 승인을 확인하고 독립된 요청을 한 번 생성합니다. 각 추가 항목에는 staging 때 읽은 불변 bytes의 `content_hash`를 포함합니다. 서버는 세션 경로와 실제 bytes를 검증하고 이 hash가 일치할 때 검증한 bytes 자체로 관리 복사본을 만듭니다. 응답 유실 후 재시도는 이 요청의 operation ID·경로·hash·epoch/revision·변경 목록과 staging 바이트를 그대로 사용합니다. 최신 목록으로 다시 적용할 때는 `review_upload_changes()`로 충돌과 삭제 대상을 재검토하고, 교체 승인을 초기화한 뒤 새 요청을 만듭니다. 성공이 확인되거나 제출 전에 취소한 staging은 정리하지만, 제출 후 처리 여부가 불명인 작업의 staging은 즉시 지우지 않고 세션 정리 정책에 맡깁니다. 최초 업로드 시도에 성공하면 함께 입력한 질문을 이어 보내며, 한 번이라도 실패했다면 이후 성공해도 질문은 명시적 전송을 기다립니다.
 
 ```json
 {
@@ -455,22 +455,23 @@ HTTP `200`이나 `done`만으로 성공 처리하지 않습니다. 유효한 `fi
   "expected_revision": 0,
   "operation_id": "각 변경에 부여한 고유 ID",
   "add": [
-    {"path": "uploads/demo-session/staging/batch-a/alpha.py", "name": "alpha.py"},
-    {"path": "uploads/demo-session/staging/batch-b/beta.py", "name": "beta.py"}
+    {"path": "uploads/demo-session/staging/batch-a/alpha.py", "name": "alpha.py", "content_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000000"},
+    {"path": "uploads/demo-session/staging/batch-b/beta.py", "name": "beta.py", "content_hash": "sha256:1111111111111111111111111111111111111111111111111111111111111111"}
   ],
   "remove": [],
   "clear": false
 }
 ```
 
+- 예시의 `content_hash`는 실제 파일 bytes의 SHA-256으로 바꿉니다. hash는 필수이며 경로가 같아도 bytes가 달라지면 새 요청과 명시적 교체가 필요합니다. 요청 hash와 실제 bytes가 다르면 `UPLOAD_CONTENT_CHANGED`(422)로 전체 변경을 거절합니다.
 - 교체는 `add` 항목에 기존 `replace_file_id`를 지정합니다. 파일명은 기존과 같아야 하며 논리 파일 ID·원본 URI는 유지하고 새 내용 hash/snapshot을 만듭니다.
 - 개별 삭제는 `remove`에 파일 ID를 넣습니다. 전체 해제는 `clear=true`이며 `add`·`remove`와 함께 사용할 수 없습니다.
-- 성공은 HTTP `200`과 `{manifest, changed, unchanged_names}`입니다. 동일 파일만 재전송하면 `changed=false`이고 revision은 바뀌지 않습니다.
-- 같은 세션 생애에서 최근 64개 성공 작업의 `operation_id`와 요청 내용을 보관합니다. 동일 작업 재전송은 원래 응답을 반환하며 같은 ID로 다른 내용을 보내면 HTTP `409`입니다. 이전 성공 뒤 다른 변경이 있었다면 원래 응답이 현재 목록보다 오래될 수 있으므로 GET으로 확인합니다.
+- 성공은 HTTP `200`과 GET과 같은 `{epoch, revision, files}` manifest입니다. 실제 첨부 집합이 바뀔 때만 revision을 한 번 증가시키며, 동일 파일 추가나 빈 목록 해제는 revision을 바꾸지 않습니다. `clear`는 epoch를 유지하고, 세션 reset·exit는 새 epoch·revision 0으로 초기화합니다.
+- 같은 세션 생애에서 최근 64개 성공 작업의 `operation_id`와 요청 fingerprint를 보관합니다. 검사 순서는 epoch, 기록된 operation ID와 fingerprint, 신규 작업의 expected revision입니다. 같은 ID로 다른 요청을 보내면 HTTP `409`이고, 기록된 동일 작업은 파일을 다시 읽거나 반영하지 않고 현재 manifest를 반환합니다. 따라서 성공 뒤 다른 변경이 있어도 재전송 응답이 클라이언트를 과거 목록으로 되돌리지 않습니다. 성공 이력에서 사라진 작업은 신규 요청의 revision 검사를 받으며 영구적인 중복 실행 방지를 보장하지 않습니다.
 - 오래된 epoch/revision, 이름 충돌은 HTTP `409`; 개수·용량 초과는 `413`; 잘못된 내용은 `422`; 인덱스 생성 장애는 `503`입니다. 오류의 `detail`에는 `code`, `message`, 가능한 파일별 `files` 오류가 있습니다. 실패 시 기존 확정 목록과 검색 인덱스는 유지됩니다.
 - 첨부 반영은 질문 제출과 독립적입니다. 실패 후 재시도에 성공해도 보류한 질문을 자동 실행하지 않습니다.
 
-첨부 변경과 질문 실행은 같은 세션 락으로 직렬화합니다. 락 대기와 인덱스 생성 중에도 세션을 활성 상태로 보호합니다. 한 질문은 시작할 때 확정한 파일 집합만 사용합니다. 현재 store·인덱스는 단일 FastAPI 프로세스의 메모리 상태이며 다중 worker의 공유 세션을 제공하지 않습니다.
+첨부 변경과 질문 실행은 같은 세션 락으로 직렬화합니다. `SessionContext`가 활성 첨부와 인덱스를 소유하고 manifest는 그 상태에서 만든 공개 스냅샷입니다. `UploadService`만 후보 생성과 첨부 commit을 담당하며, `InMemorySessionStore`는 세션 생성·pin·락·TTL/LRU 정리를 관리합니다. `AgentRequestService`는 락을 얻은 뒤 context를 검사하고 실행 종료까지 유지하며, 락을 풀기 전에 최종 manifest를 확보합니다. 명시적 reset·exit도 context 검사를 통과한 뒤 세션 자원을 해제합니다. 런타임은 확정된 세션의 검색 자원을 사용하고 파일 경로나 인덱스 생성 입력을 받지 않습니다. 락 대기와 인덱스 생성 중에도 세션을 활성 상태로 보호하며, 한 질문은 시작할 때 확인한 집합만 사용합니다. 현재 store·인덱스는 단일 FastAPI 프로세스의 메모리 상태이며 다중 worker의 공유 세션을 제공하지 않습니다.
 
 ### 5.2 최종 응답과 debug
 
