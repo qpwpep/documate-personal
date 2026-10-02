@@ -11,13 +11,20 @@ from src.core.contracts.tool_execution import ToolExecutionEvidence
 from src.core.latency import LatencyBreakdownModel
 from src.app.web.schemas import AgentDebugInfo, AgentRequest
 from src.core.evidence import SearchHit
+from src.core.llm_errors import LLMDiagnostic
 
 
-def normalize_debug_info(raw_debug: dict | None, latency_ms_server: int | None) -> AgentDebugInfo:
+def normalize_debug_info(
+    raw_debug: dict | None,
+    latency_ms_server: int | None,
+    *,
+    answer_expected: bool = True,
+) -> AgentDebugInfo:
     debug = raw_debug or {}
     present_keys = {str(key) for key in debug.keys()} if isinstance(debug, dict) else set()
     missing_required_debug_fields = [
         field for field in DEBUG_REQUIRED_FIELDS if field not in present_keys
+        and (answer_expected or field != "answer_provenance")
     ]
     self_reported_missing_fields = [
         str(field_name)
@@ -25,6 +32,8 @@ def normalize_debug_info(raw_debug: dict | None, latency_ms_server: int | None) 
         if str(field_name).strip()
     ]
     for field_name in self_reported_missing_fields:
+        if field_name == "answer_provenance" and not answer_expected and debug.get("answer_provenance") is None:
+            continue
         if field_name not in missing_required_debug_fields:
             missing_required_debug_fields.append(field_name)
     critical_missing = [field for field in missing_required_debug_fields if field in DEBUG_CRITICAL_FIELDS]
@@ -59,7 +68,7 @@ def normalize_debug_info(raw_debug: dict | None, latency_ms_server: int | None) 
         except (TypeError, ValueError):
             if "DEBUG_NORMALIZATION_FAILED" not in error_codes:
                 error_codes.append("DEBUG_NORMALIZATION_FAILED")
-    if answer_provenance is None:
+    if answer_provenance is None and (answer_expected or debug.get("answer_provenance") is not None):
         if "answer_provenance" not in missing_required_debug_fields:
             missing_required_debug_fields.append("answer_provenance")
         if "answer_provenance" not in critical_missing:
@@ -80,6 +89,18 @@ def normalize_debug_info(raw_debug: dict | None, latency_ms_server: int | None) 
     planner_errors_raw = debug.get("planner_errors") or []
     observed_hits_raw = debug.get("observed_hits") or []
     raw_llm_calls = debug.get("llm_calls")
+    llm_diagnostics = []
+    try:
+        raw_llm_diagnostics = debug.get("llm_diagnostics", [])
+        if not isinstance(raw_llm_diagnostics, list):
+            raise ValueError("llm_diagnostics must be a list")
+        llm_diagnostics = [LLMDiagnostic.model_validate(item) for item in raw_llm_diagnostics]
+    except (TypeError, ValueError):
+        missing_required_debug_fields.append("llm_diagnostics")
+        critical_missing.append("llm_diagnostics")
+        if "DEBUG_NORMALIZATION_FAILED" not in error_codes:
+            error_codes.append("DEBUG_NORMALIZATION_FAILED")
+        errors = [*errors, "llm_diagnostics has an invalid structure"]
 
     observed_hits: list[SearchHit] = []
     if isinstance(observed_hits_raw, list):
@@ -150,6 +171,7 @@ def normalize_debug_info(raw_debug: dict | None, latency_ms_server: int | None) 
         latency_ms_server=latency_ms_server,
         latency_breakdown=latency_breakdown,
         llm_calls=llm_calls,
+        llm_diagnostics=llm_diagnostics,
         errors=[str(error) for error in errors if error],
         error_codes=error_codes,
         validation_events=[

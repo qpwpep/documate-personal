@@ -90,6 +90,12 @@ def frame(event, data):
 
 
 
+
+
+
+
+
+
 @pytest.mark.parametrize("manifest", [[], {"epoch": "epoch", "revision": -1, "files": []}])
 def test_invalid_final_manifest_does_not_confirm_a_partial_response(transport, manifest):
     """An invalid attachment snapshot rejects the final response without confirming stale state."""

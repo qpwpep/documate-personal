@@ -11,6 +11,7 @@ from src.app.agent_manager import AgentFlowManager
 from src.infra.logging_utils import configure_logging, log_event
 from src.infra.runtime_encoding import ensure_utf8_stdio
 from src.infra.settings import ConfigurationError, get_settings, validate_required_keys
+from src.infra.llm import validate_output_schemas
 from src.app.web.agent_request_service import AgentRequestService
 from src.app.web.cleanup import RuntimeCleaner
 from src.app.web.routes import router
@@ -42,6 +43,7 @@ async def lifespan(app: FastAPI):
     try:
         settings = get_settings()
         validate_required_keys(settings, context="fastapi_startup")
+        validate_output_schemas()
     except ConfigurationError as exc:
         logger.error(str(exc))
         raise RuntimeError(str(exc)) from exc

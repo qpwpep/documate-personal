@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from typing import Any, Literal, get_args
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from src.core.answer_schema import AnswerResponse
+from src.core.contracts.outcome import TurnResult
+from src.core.llm_errors import LLMDiagnostic
 from src.core.slack_contract import RecipientSelector
 from src.core.conversation_memory import (
     DEFAULT_QUERY_MAX_CHARS,
@@ -32,6 +33,7 @@ class AgentDebugInfo(BaseModel):
     latency_ms_server: int | None = None
     latency_breakdown: LatencyBreakdownModel | None = None
     llm_calls: list[LLMCallRecord] | None = None
+    llm_diagnostics: list[LLMDiagnostic] = Field(default_factory=list)
     errors: list[str] = Field(default_factory=list)
     error_codes: list[ErrorCode] = Field(default_factory=list)
     validation_events: list[str] = Field(default_factory=list)
@@ -66,15 +68,21 @@ class AgentRequest(BaseModel):
         return validate_query_text(value)
 
 
-class AgentResponse(BaseModel):
+class AgentResponse(TurnResult):
     model_config = ConfigDict(extra="forbid")
 
-    response: AnswerResponse
     trace: str
     debug: AgentDebugInfo | None = None
-    upload_manifest: UploadManifest = Field(
-        description="Attachment state captured under the session lock after this request, including an empty files list when no files are attached.",
+    upload_manifest: UploadManifest | None = Field(
+        default=None,
+        description="Confirmed attachment snapshot. Null on a failed request means no snapshot was available, not an empty attachment set.",
     )
+
+    @model_validator(mode="after")
+    def require_confirmed_manifest(self):
+        if self.status not in {"failed", "refused"} and self.upload_manifest is None:
+            raise ValueError("A completed, partial or needs_input result requires upload_manifest")
+        return self
 
 
 AgentStreamEventName = Literal[

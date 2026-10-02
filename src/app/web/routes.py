@@ -53,10 +53,11 @@ async def root():
         200: {
             "description": (
                 "UTF-8 SSE frames: event: <name>\\ndata: <JSON object>\\n\\n. "
-                "A valid final_response carries response, trace, debug and upload_manifest. "
-                "The manifest is captured under the session lock after request execution. HTTP 200 and done "
-                "alone do not indicate success. An error event may precede a final_response; "
-                "preserve both the error and any final diagnostics. Clients must not automatically "
+                "Each execution ends with one final_response carrying status, response, problem, message, "
+                "request_id, trace, debug and upload_manifest. Status distinguishes completed, needs_input, "
+                "failed, partial and refused; a failed result has no answer document. "
+                "The manifest is captured under the session lock; null on failure means unknown state, not an empty attachment set. "
+                "HTTP 200 and done alone do not indicate success. Clients must not automatically "
                 "resubmit interrupted requests because agent actions may already have executed. "
                 "x-sse-events maps each event name to its data schema."
             ),
@@ -66,7 +67,10 @@ async def root():
                     "x-sse-events": AGENT_STREAM_EVENT_SCHEMAS,
                     "example": (
                         'event: request_started\ndata: {"request_id":"abc12345","session_id":"demo"}\n\n'
-                        'event: error\ndata: {"message":"UPLOAD_REVISION_CONFLICT: attachment set changed"}\n\n'
+                        'event: final_response\ndata: {"status":"failed","response":null,"message":"",'
+                        '"problem":{"code":"internal_error","stage":"request","message":"요청을 완료하지 못했습니다.",'
+                        '"next_action":"none"},"request_id":"abc12345","missing_slots":[],"trace":"Request ID: abc12345",'
+                        '"debug":null,"upload_manifest":null}\n\n'
                         'event: done\ndata: {}\n\n'
                     ),
                 },

@@ -20,6 +20,7 @@ from langchain_core.messages import AIMessage
 
 from src.app.web.app import create_app
 from src.core.answer_schema import AnswerResponse, export_answer_text
+from src.core.planner_schema import InitialPlannerOutput, RetrievalPlanOutput
 from src.core.request_contracts import WireRequestContract
 from src.infra.settings import AppSettings
 
@@ -47,8 +48,8 @@ class LocalChatModel:
     def with_structured_output(self, schema, **kwargs):
         return LocalChatModel(self.controls, schema_name=schema["name"])
 
-    def invoke(self, messages):
-        if self.schema_name == "PlannerOutput":
+    def invoke(self, messages, **_kwargs):
+        if self.schema_name in {"PlannerOutput", "RetrievalPlanOutput"}:
             raw = next(message.content for message in messages if message.name == "request_context")
             context = json.loads(raw.split("\n", 1)[1])
             files = context["upload_files"]
@@ -67,11 +68,16 @@ class LocalChatModel:
                                      "symbols": [symbol], "match": "definition"}}
                     for symbol in self.controls.planned_symbols
                 ]
+            if self.schema_name == "RetrievalPlanOutput":
+                parsed.pop("request_contract")
+                parsed = RetrievalPlanOutput.model_validate(parsed).model_dump(mode="json")
+            else:
+                parsed = InitialPlannerOutput.model_validate(parsed).model_dump(mode="json")
         elif self.schema_name == "AnswerDocument":
             if self.controls.before_synthesis is not None:
                 self.controls.before_synthesis()
             if self.controls.fail_synthesis:
-                raise RuntimeError("Simulated model outage")
+                raise TimeoutError("Simulated model outage")
             packet = json.loads(str(messages[-1].content).split("\n", 2)[2])
             blocks = [{"type": "code", "language": "python", "content": {
                 "text": item["excerpt"], "basis": "excerpt", "refs": [item["id"]],
@@ -249,8 +255,10 @@ def test_stale_http_revision_rejects_mutations_and_question_without_changing_att
 
     assert rejected.status_code == 409
     assert rejected.json()["detail"]["code"] == "UPLOAD_REVISION_CONFLICT"
-    assert any(event == "error" and "UPLOAD_REVISION_CONFLICT" in data["message"] for event, data in events)
-    assert not any(event == "final_response" for event, _ in events)
+    final = next(data for event, data in events if event == "final_response")
+    assert final["status"] == "failed"
+    assert final["problem"]["code"] == "upload_revision_conflict"
+    assert final["response"] is None
     assert manifest(api) == current
 
 
