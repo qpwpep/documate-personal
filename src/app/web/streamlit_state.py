@@ -14,7 +14,8 @@ from src.infra.settings import get_settings
 from src.app.client import AgentRequestContext, AgentSessionClient
 from src.app.uploads import StagedUpload
 from src.app.web.streamlit_theme import THEME_STATE_KEY
-from src.core.answer_schema import AnswerResponse, finalize_answer, text_document
+from src.core.answer_schema import finalize_answer, text_document
+from src.core.contracts.outcome import TurnResult
 from src.core.uploads import UploadManifest, UploadSyncRequest
 
 
@@ -56,8 +57,9 @@ class UserChatMessage(TypedDict):
 
 class AssistantChatMessage(TypedDict):
     role: Literal["assistant"]
-    response: AnswerResponse
-    error_messages: NotRequired[list[str]]
+    result: TurnResult | None
+    transport_errors: NotRequired[list[str]]
+    request_id: NotRequired[str]
 
 
 ChatMessage = UserChatMessage | AssistantChatMessage
@@ -141,8 +143,10 @@ def _start_new_session(logger: logging.Logger, event_name: str) -> None:
 def _build_default_assistant_message() -> ChatMessage:
     return {
         "role": "assistant",
-        "response": finalize_answer(
-            text_document("안녕하세요. 공식 문서에 대해 질문하거나 코드 파일을 첨부해 주세요."),
-            [],
+        "result": TurnResult(
+            response=finalize_answer(
+                text_document("안녕하세요. 공식 문서에 대해 질문하거나 코드 파일을 첨부해 주세요."),
+                [],
+            ),
         ),
     }

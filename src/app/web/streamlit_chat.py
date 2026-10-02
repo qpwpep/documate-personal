@@ -9,7 +9,8 @@ import streamlit as st
 from src.app.client import AgentCallResult, AgentStreamEvent
 from src.app.web.streamlit_sources import render_code, render_evidence
 from src.app.web.streamlit_state import AssistantChatMessage, ChatMessage
-from src.core.answer_schema import AnswerResponse, ContentUnit, finalize_answer, iter_content_units, text_document
+from src.core.answer_schema import AnswerResponse, ContentUnit, iter_content_units
+from src.core.contracts.outcome import TurnResult
 
 
 _DEFAULT_ERROR_MESSAGE = "응답을 받지 못했습니다."
@@ -32,9 +33,37 @@ def render_chat_history(messages: list[ChatMessage], fastapi_url: str) -> None:
             if message["role"] == "user":
                 st.markdown(message["content"])
             else:
-                for error_message in message.get("error_messages", []):
+                for error_message in message.get("transport_errors", []):
                     st.error(error_message)
-                render_answer_response(message["response"], fastapi_url)
+                result = message["result"]
+                if result is not None:
+                    render_turn_result(result, fastapi_url)
+                elif message.get("request_id"):
+                    st.caption(f"오류 식별자: {message['request_id']}")
+
+
+def render_turn_result(result: TurnResult, fastapi_url: str) -> None:
+    """Keep failures and questions separate from checked answer content."""
+    if result.status == "needs_input":
+        st.info(result.message)
+    elif result.problem is not None:
+        render = st.error if result.status == "failed" else st.warning
+        render(result.problem.message)
+        guidance = {
+            "none": "",
+            "retry_later": "잠시 후 같은 요청으로 다시 시도할 수 있습니다.",
+            "fix_configuration": "서비스 설정을 수정해야 합니다. 오류 식별자를 운영자에게 알려 주세요.",
+            "supply_information": "확인에 필요한 자료나 조건을 추가해 주세요.",
+        }[result.problem.next_action]
+        if result.problem.retry_after_seconds is not None:
+            guidance = f"{result.problem.retry_after_seconds:g}초 후 다시 시도할 수 있습니다."
+        if guidance:
+            st.caption(guidance)
+    if result.request_id and result.status != "completed":
+        label = "요청 식별자" if result.status == "needs_input" else "오류 식별자"
+        st.caption(f"{label}: {result.request_id}")
+    if result.response is not None:
+        render_answer_response(result.response, fastapi_url)
 
 
 def render_answer_response(response: AnswerResponse, fastapi_url: str) -> None:
@@ -177,10 +206,12 @@ def process_chat_prompt(
 
     result: AgentCallResult | None = None
     error_messages: list[str] = []
+    request_id = ""
     with st.chat_message("assistant"):
         status_placeholder = st.empty()
         status_placeholder.markdown("요청을 접수했습니다.")
         for event in stream_agent(prompt):
+            request_id = event.observation.request_id or str(event.data.get("request_id") or request_id)
             if event.event == "final_response" and event.result is not None:
                 result = event.result
             elif event.event == "error":
@@ -198,12 +229,17 @@ def process_chat_prompt(
         error_text = "\n\n".join(error_messages) or _DEFAULT_ERROR_MESSAGE
         append_assistant_message({
             "role": "assistant",
-            "response": finalize_answer(text_document(error_text), []),
+            "result": None,
+            "transport_errors": [error_text],
+            "request_id": request_id,
         })
     else:
-        assistant_message: AssistantChatMessage = {"role": "assistant", "response": result.response}
+        assistant_message: AssistantChatMessage = {
+            "role": "assistant",
+            "result": TurnResult.model_validate(result.model_dump(exclude={"upload_manifest"})),
+        }
         if error_messages:
-            assistant_message["error_messages"] = error_messages
+            assistant_message["transport_errors"] = error_messages
         append_assistant_message(assistant_message)
     st.rerun()
 
