@@ -13,6 +13,7 @@ from src.core.save_contract import SaveOperation
 from src.core.slack_contract import RecipientSelector, SlackDelivery
 from src.core.evidence import EvidenceRef
 from src.core.planner_schema import PlannerOutput
+from src.core.llm_errors import ExecutionProblem, LLMDiagnostic
 from src.core.request_contracts import RequestContract, UserTurnSnapshot
 from src.core.uploads import UploadFileInfo
 from src.core.contracts.debug import DebugDiagnostics, PlannerDiagnostic, PlannerStatus, RetryState, RetrievalDiagnostic, empty_planner_diagnostic
@@ -79,7 +80,8 @@ class ResponseState(BaseModel):
     evidence_requirement_map: dict[str, list[str]] = Field(default_factory=dict)
     normal_evidence_missing_requirement_ids: list[str] | None = None
     synthesis_attempt: int = 0
-    kind: Literal["draft", "answer", "clarification", "failure"] = "draft"
+    kind: Literal["draft", "answer", "acknowledgement", "clarification", "failure"] = "draft"
+    problem: ExecutionProblem | None = None
     request_id: str | None = None
     contract_revision: int = 0
     save_operation_binding_sha256: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
@@ -88,6 +90,7 @@ class ResponseState(BaseModel):
 
 
 class DebugState(DebugDiagnostics):
+    llm_diagnostics: list[LLMDiagnostic] = Field(default_factory=list)
     planner_errors: list[str] = Field(default_factory=list)
     retrieval_errors: list[str] = Field(default_factory=list)
     synthesis_errors: list[str] = Field(default_factory=list)
