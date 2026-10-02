@@ -73,12 +73,13 @@ class AgentRouteServiceDelegationTest(unittest.TestCase):
         })
         self.assertEqual(stream["x-sse-events"]["final_response"], {"$ref": "#/components/schemas/AgentResponse"})
         final = schema["components"]["schemas"]["AgentResponse"]
-        self.assertEqual(set(final["properties"]), {"response", "trace", "debug", "upload_manifest"})
-        self.assertIn("upload_manifest", final["required"])
+        self.assertEqual(set(final["properties"]), {
+            "status", "response", "message", "problem", "request_id", "missing_slots",
+            "trace", "debug", "upload_manifest",
+        })
         manifest_field = final["properties"]["upload_manifest"]
-        self.assertEqual(manifest_field["$ref"], "#/components/schemas/UploadManifest")
-        self.assertNotIn("anyOf", manifest_field)
-        self.assertNotIn("default", manifest_field)
+        self.assertIn({"$ref": "#/components/schemas/UploadManifest"}, manifest_field["anyOf"])
+        self.assertIn({"type": "null"}, manifest_field["anyOf"])
         manifest = schema["components"]["schemas"]["UploadManifest"]
         self.assertEqual(set(manifest["required"]), {"epoch", "revision", "files"})
         self.assertEqual(manifest["properties"]["files"]["type"], "array")

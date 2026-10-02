@@ -20,7 +20,7 @@ class UsageModelBoundary(LocalChatModel):
     def with_structured_output(self, schema, **kwargs):
         return UsageModelBoundary(self.controls, schema_name=schema["name"])
 
-    def invoke(self, messages):
+    def invoke(self, messages, **_kwargs):
         response = super().invoke(messages)
         if self.schema_name == "PlannerOutput":
             response["raw"] = AIMessage(content="", response_metadata={"model_name": "usage-planner"},

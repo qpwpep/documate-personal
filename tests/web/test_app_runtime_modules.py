@@ -52,7 +52,6 @@ class WebRuntimeModulesTest(unittest.TestCase):
             summary_model="gpt-5.4-nano",
             docs_search_timeout_seconds=7,
             synthesis_timeout_seconds=42,
-            synthesis_max_retries=2,
             synthesis_max_tokens=2048,
             synthesis_reasoning_effort="high",
         )
@@ -78,7 +77,6 @@ class WebRuntimeModulesTest(unittest.TestCase):
                 "docs_search_timeout_seconds": "7",
                 "synthesis_timeout_seconds": "42",
                 "synthesis_use_responses_api": "false",
-                "synthesis_max_retries": "2",
                 "synthesis_max_tokens": "2048",
                 "synthesis_compact_max_tokens": "960",
                 "synthesis_prompt_snippet_chars": "1800",

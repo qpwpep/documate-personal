@@ -146,9 +146,12 @@ class AgentRequestServiceTest(unittest.TestCase):
             )]
 
         events = asyncio.run(collect_events())
-        self.assertEqual([event.event for event in events][-2:], ["error", "done"])
-        self.assertFalse(any(event.event == "final_response" for event in events))
-        self.assertIn("validation error", events[-2].data["message"])
+        self.assertEqual([event.event for event in events][-2:], ["final_response", "done"])
+        final = AgentResponse.model_validate(events[-2].data)
+        self.assertEqual(final.status, "failed")
+        self.assertIsNone(final.response)
+        self.assertEqual(final.problem.code, "internal_error")
+        self.assertNotIn("validation error", final.problem.message)
 
     def test_include_debug_only_changes_debug_field(self) -> None:
         cleaner = _FakeCleaner()

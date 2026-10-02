@@ -20,6 +20,7 @@ from langchain_core.messages import AIMessage
 
 from src.app.web.app import create_app
 from src.core.answer_schema import AnswerResponse, export_answer_text
+from src.core.planner_schema import InitialPlannerOutput, RetrievalPlanOutput
 from src.core.request_contracts import WireRequestContract
 from src.infra.settings import AppSettings
 
@@ -47,8 +48,8 @@ class LocalChatModel:
     def with_structured_output(self, schema, **kwargs):
         return LocalChatModel(self.controls, schema_name=schema["name"])
 
-    def invoke(self, messages):
-        if self.schema_name == "PlannerOutput":
+    def invoke(self, messages, **_kwargs):
+        if self.schema_name in {"PlannerOutput", "RetrievalPlanOutput"}:
             raw = next(message.content for message in messages if message.name == "request_context")
             context = json.loads(raw.split("\n", 1)[1])
             files = context["upload_files"]
@@ -67,11 +68,16 @@ class LocalChatModel:
                                      "symbols": [symbol], "match": "definition"}}
                     for symbol in self.controls.planned_symbols
                 ]
+            if self.schema_name == "RetrievalPlanOutput":
+                parsed.pop("request_contract")
+                parsed = RetrievalPlanOutput.model_validate(parsed).model_dump(mode="json")
+            else:
+                parsed = InitialPlannerOutput.model_validate(parsed).model_dump(mode="json")
         elif self.schema_name == "AnswerDocument":
             if self.controls.before_synthesis is not None:
                 self.controls.before_synthesis()
             if self.controls.fail_synthesis:
-                raise RuntimeError("Simulated model outage")
+                raise TimeoutError("Simulated model outage")
             packet = json.loads(str(messages[-1].content).split("\n", 2)[2])
             blocks = [{"type": "code", "language": "python", "content": {
                 "text": item["excerpt"], "basis": "excerpt", "refs": [item["id"]],
@@ -372,8 +378,10 @@ def test_stale_http_revision_rejects_mutations_and_question_without_changing_att
 
     assert rejected.status_code == 409
     assert rejected.json()["detail"]["code"] == "UPLOAD_REVISION_CONFLICT"
-    assert any(event == "error" and "UPLOAD_REVISION_CONFLICT" in data["message"] for event, data in events)
-    assert not any(event == "final_response" for event, _ in events)
+    final = next(data for event, data in events if event == "final_response")
+    assert final["status"] == "failed"
+    assert final["problem"]["code"] == "upload_revision_conflict"
+    assert final["response"] is None
     assert manifest(api) == current
 
 
@@ -391,8 +399,10 @@ def test_exit_from_a_previous_epoch_preserves_the_current_session_at_the_same_re
 
     events = stream(api, query="exit", uploads=context(old))
 
-    assert any(event == "error" and "UPLOAD_REVISION_CONFLICT" in data["message"] for event, data in events)
-    assert not any(event == "final_response" for event, _ in events)
+    final = next(data for event, data in events if event == "final_response")
+    assert final["status"] == "failed"
+    assert final["problem"]["code"] == "upload_revision_conflict"
+    assert final["response"] is None
     assert session.upload_manifest().model_dump(mode="json") == current
     assert session.snapshot_conversation_memory() == memory
     assert all(path.is_file() for path in owned)
@@ -567,7 +577,16 @@ def test_final_response_preserves_the_confirmed_manifest_even_when_the_model_fai
     final = final_response(api, uploads=context(current))
 
     assert final["upload_manifest"] == current
-    assert bool(AnswerResponse.model_validate(final["response"]).issues) == model_failure
+    if model_failure:
+        assert final["status"] == ("partial" if attachment_state == "attached" else "failed")
+        assert final["problem"]["code"] == "provider_unavailable"
+        if final["status"] == "failed":
+            assert final["response"] is None
+        else:
+            assert AnswerResponse.model_validate(final["response"]).issues
+    else:
+        assert final["status"] == "completed"
+        assert not AnswerResponse.model_validate(final["response"]).issues
 
 
 def test_session_request_manifest_is_a_detached_snapshot_of_its_completion(api):
@@ -697,8 +716,10 @@ def test_exit_waiting_for_an_upload_rechecks_its_revision_before_resetting(api):
     updated = committed.json()
     assert updated["epoch"] == current["epoch"]
     assert updated["revision"] == current["revision"] + 1
-    assert any(event == "error" and "UPLOAD_REVISION_CONFLICT" in data["message"] for event, data in events)
-    assert not any(event == "final_response" for event, _ in events)
+    final = next(data for event, data in events if event == "final_response")
+    assert final["status"] == "failed"
+    assert final["problem"]["code"] == "upload_revision_conflict"
+    assert final["response"] is None
     assert manifest(api) == updated
     result = answer(api, uploads=context(updated))
     assert {citation.evidence.snapshot.title for citation in result.citations} == {"alpha.py", "beta.py"}

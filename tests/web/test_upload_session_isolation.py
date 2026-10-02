@@ -17,6 +17,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 from src.app.agent_manager import AgentFlowManager
 from src.core.contracts import ResponseState
 from src.core.answer_schema import AnswerResponse, export_answer_text
+from src.core.planner_schema import InitialPlannerOutput, RetrievalPlanOutput
 from tests.web.answer_fixtures import answer_response
 from src.infra.settings import AppSettings
 from src.app.web.agent_request_support import build_session_metadata_snapshot
@@ -322,13 +323,18 @@ class _UploadContractChatModel:
     def with_structured_output(self, schema, **_kwargs):
         return _UploadContractChatModel(schema["name"])
 
-    def invoke(self, messages):
-        if self.schema_name == "PlannerOutput":
+    def invoke(self, messages, **_kwargs):
+        if self.schema_name in {"PlannerOutput", "RetrievalPlanOutput"}:
             parsed = {
                 "use_retrieval": True,
                 "tasks": [{"route": "upload", "query": "read source", "k": 4}],
                 "request_contract": WireRequestContract(slack_recipient={"state": "omitted"}).model_dump(mode="json"),
             }
+            if self.schema_name == "RetrievalPlanOutput":
+                parsed.pop("request_contract")
+                parsed = RetrievalPlanOutput.model_validate(parsed).model_dump(mode="json")
+            else:
+                parsed = InitialPlannerOutput.model_validate(parsed).model_dump(mode="json")
         elif self.schema_name == "AnswerDocument":
             packet = json.loads(str(messages[-1].content).split("\n", 2)[2])
             parsed = {"blocks": [{"type": "code", "language": "python", "content": {

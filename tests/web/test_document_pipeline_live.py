@@ -56,7 +56,7 @@ class ParagraphChatModel(LocalChatModel):
     def with_structured_output(self, schema, **kwargs):
         return ParagraphChatModel(self.controls, schema_name=schema["name"])
 
-    def invoke(self, messages):
+    def invoke(self, messages, **_kwargs):
         result = super().invoke(messages)
         if self.schema_name == "PlannerOutput":
             for task in result["parsed"]["tasks"]:

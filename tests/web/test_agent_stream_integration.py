@@ -150,7 +150,7 @@ def test_clients_handle_http_validation_errors_without_executing_a_question(agen
     assert app.state.session_store.get_or_create(result.session_id).messages == []
 
 
-def test_stale_upload_context_stream_error_and_done_do_not_produce_a_successful_answer(agent_server):
+def test_stale_upload_context_produces_failed_terminal_without_a_successful_answer(agent_server):
     """A stale attachment precondition rejects reset through SSE without changing the session."""
     endpoint, app, _ = agent_server
     client = AgentSessionClient(AgentRequestContext(fastapi_url=endpoint, session_id="stale-upload"))
@@ -159,8 +159,11 @@ def test_stale_upload_context_stream_error_and_done_do_not_produce_a_successful_
         "exit", client.context,
         uploads=UploadContext(epoch=confirmed.epoch, revision=confirmed.revision + 1),
     ))
-    assert [event.event for event in events] == ["request_started", "error", "done"]
-    assert "UPLOAD_REVISION_CONFLICT" in events[1].data["message"]
+    assert [event.event for event in events] == ["request_started", "final_response"]
+    assert events[1].result.status == "failed"
+    assert events[1].result.problem.code == "upload_revision_conflict"
+    assert events[1].result.response is None
+    assert events[1].result.upload_manifest == confirmed
     assert client.refresh_uploads() == confirmed
     assert app.state.session_store.active_session_ids() == {"stale-upload"}
     assert app.state.session_store.get_or_create("stale-upload").messages == []

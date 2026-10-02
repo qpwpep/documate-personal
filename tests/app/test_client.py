@@ -64,6 +64,62 @@ def frame(event, data):
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
+@pytest.mark.parametrize("status,problem,message,has_manifest", [
+    ("failed", {"code": "provider_schema_invalid", "stage": "planner", "message": "서비스 설정 오류입니다.",
+                "next_action": "fix_configuration"}, "", True),
+    ("failed", {"code": "internal_error", "stage": "request", "message": "요청을 완료하지 못했습니다.",
+                "next_action": "none"}, "", False),
+    ("refused", {"code": "model_refusal", "stage": "planner", "message": "응답 생성을 거절했습니다.",
+                 "next_action": "none"}, "", True),
+    ("needs_input", None, "어느 문서를 사용할까요?", True),
+])
+def test_client_preserves_terminal_outcome_without_debug_or_answer_document(transport, status, problem, message, has_manifest):
+    manifest = {"epoch": "e", "revision": 0, "files": []} if has_manifest else None
+    payload = {"status": status, "response": None, "problem": problem, "message": message,
+               "request_id": "terminal-request", "debug": None, "upload_manifest": manifest}
+    calls = transport(StreamResponse([frame("final_response", payload)]))
+
+    events = list(stream_agent_response("정상 질문", context(), uploads=UploadContext(epoch="e", revision=0)))
+
+    assert [event.event for event in events] == ["final_response"]
+    result = events[0].result
+    assert result.status == status
+    assert result.response is None
+    assert result.request_id == "terminal-request"
+    assert result.message == message
+    assert (result.problem.model_dump(exclude_none=True) if result.problem else None) == problem
+    assert (result.upload_manifest.model_dump() if result.upload_manifest else None) == manifest
+    assert len(calls) == 1
+
+
+def test_partial_result_preserves_checked_content_and_recovery_policy(transport):
+    answer = cited_response()
+    payload = {
+        "status": "partial", "response": answer.model_dump(mode="json"),
+        "problem": {"code": "provider_unavailable", "stage": "synthesis", "message": "일부 내용만 확인했습니다.",
+                    "next_action": "retry_later", "retry_after_seconds": 3},
+        "upload_manifest": {"epoch": "e", "revision": 0, "files": []},
+    }
+    transport(StreamResponse([frame("final_response", payload)]))
+
+    result = list(stream_agent_response("정상 질문", context(), uploads=UploadContext(epoch="e", revision=0)))[0].result
+
+    assert result.status == "partial"
+    assert result.response == answer
+    assert result.problem.retry_after_seconds == 3
+
+
+def test_http_failure_keeps_internal_body_only_in_observation(transport):
+    transport(StreamResponse(status=500, text="PRIVATE credential=secret traceback"))
+
+    error = list(stream_agent_response("정상 질문", context(), uploads=UploadContext(epoch="e", revision=0)))[0]
+
+    assert error.event == "error"
+    assert "PRIVATE" not in error.data["message"]
+    assert "secret" not in error.data["message"]
+    assert error.observation.http_body == "PRIVATE credential=secret traceback"
+
+
 @pytest.mark.parametrize("content_type", ["text/event-stream", "text/event-stream; charset=utf-8"])
 def test_stream_preserves_complete_final_response_and_stops_without_done(transport, content_type):
     """Both standard SSE media types preserve all fields and finish without another read."""
@@ -123,7 +179,7 @@ def test_request_preserves_session_upload_and_slack_context(transport):
     (requests.exceptions.Timeout("timeout"), "timeout", "시간이 초과"),
     (ReadTimeoutError(None, "/agent/stream", "read timed out"), "timeout", "시간이 초과"),
     (requests.exceptions.ConnectionError("disconnected"), "connection_error", "첫 이벤트"),
-    (RuntimeError("boom"), "stream_error", "boom"),
+    (RuntimeError("boom"), "stream_error", "처리 중 오류"),
 ])
 def test_failure_before_first_event_reports_error_without_repeating_request(transport, error, code, message):
     """An initial failure is visible without a retry that could repeat server actions."""
@@ -183,7 +239,8 @@ def test_http_error_is_visible_without_reading_sse_or_repeating_request(transpor
     assert events[0].data["code"] == "http_error"
     assert events[0].data["status_code"] == 503
     assert "503" in events[0].data["message"]
-    assert "temporarily unavailable" in events[0].data["message"]
+    assert "temporarily unavailable" not in events[0].data["message"]
+    assert "temporarily unavailable" in events[0].observation.http_body
     assert response.frames_read == 0
     assert response.closed
     assert len(calls) == 1
@@ -233,7 +290,7 @@ def test_non_sse_response_is_rejected_without_reading_body(transport, content_ty
 
     assert [event.event for event in events] == ["error"]
     assert events[0].data["code"] == "invalid_stream"
-    assert "Content-Type" in events[0].data["message"]
+    assert "Content-Type" in events[0].observation.exception_detail
     assert response.frames_read == 0
     assert response.closed
     assert len(calls) == 1
@@ -282,7 +339,8 @@ def test_stream_break_after_progress_reports_interruption_without_repeating_requ
     assert [event.event for event in events] == ["request_started", "error"]
     assert events[-1].data["code"] == "connection_interrupted"
     assert "도중" in events[-1].data["message"]
-    assert "stream broke" in events[-1].data["message"]
+    assert "stream broke" not in events[-1].data["message"]
+    assert "stream broke" in events[-1].observation.exception_detail
     assert len(calls) == 1
 
 

@@ -8,10 +8,11 @@ from typing import Any
 from urllib.parse import quote
 
 import requests
+from pydantic import model_validator
 from urllib3.exceptions import ReadTimeoutError
 
 from src.app.uploads import UploadStageResult, stage_uploaded_files
-from src.core.answer_schema import AnswerResponse
+from src.core.contracts.outcome import TurnResult
 from src.core.slack_contract import RecipientSelector
 from src.core.uploads import UploadContext, UploadManifest, UploadSyncRequest
 from src.infra.sse import iter_sse_events
@@ -72,10 +73,14 @@ def sync_uploads(fastapi_url: str, session_id: str, payload: dict[str, Any]) -> 
         raise UploadAPIError("첨부 변경 결과의 응답 형식이 올바르지 않습니다.") from exc
 
 
-@dataclass
-class AgentCallResult:
-    response: AnswerResponse
-    upload_manifest: UploadManifest
+class AgentCallResult(TurnResult):
+    upload_manifest: UploadManifest | None = None
+
+    @model_validator(mode="after")
+    def require_confirmed_manifest(self):
+        if self.status not in {"failed", "refused"} and self.upload_manifest is None:
+            raise ValueError("A completed, partial or needs_input result requires upload_manifest")
+        return self
 
 
 @dataclass(frozen=True)
@@ -146,7 +151,7 @@ def stream_agent_response(
                 observation = replace(observation, http_body=resp.text)
                 yield observed_error(
                     "http_error",
-                    f"Agent 호출 실패: 상태 코드 {resp.status_code}\n응답: {resp.text}",
+                    f"Agent 호출 실패: 상태 코드 {resp.status_code}. 오류 식별자를 확인해 주세요.",
                     status_code=resp.status_code,
                 )
                 return
@@ -175,7 +180,7 @@ def stream_agent_response(
                     # as a usable answer in every client, including benchmarks.
                     yield AgentStreamEvent(
                         event="error",
-                        data={"code": "invalid_stream", "message": f"스트리밍 응답 형식에 오류가 있습니다: {exc}",
+                        data={"code": "invalid_stream", "message": "스트리밍 응답 형식을 검증하지 못했습니다. 서버의 처리 결과를 확인해 주세요.",
                               "raw_final_response": raw_event.data},
                         observation=replace(observation, error_source="client", error_type="agent_schema_error",
                                             exception_type=type(exc).__name__, exception_detail=str(exc)),
@@ -221,14 +226,14 @@ def stream_agent_response(
             message = "첫 이벤트를 받기 전에 스트림 연결에 실패했습니다."
         yield observed_error(
             code,
-            f"{message} 서버에서 요청이 처리되었을 수 있으니 결과를 확인해 주세요.\n상세: {exc}",
+            f"{message} 서버에서 요청이 처리되었을 수 있으니 결과를 확인해 주세요.",
             exc=exc,
         )
     except ValueError as exc:
-        yield observed_error("invalid_stream", f"스트리밍 응답 형식에 오류가 있습니다: {exc}",
+        yield observed_error("invalid_stream", "스트리밍 응답 형식에 오류가 있습니다. 서버의 처리 결과를 확인해 주세요.",
                              exc=exc, error_type="stream_parse_error")
     except Exception as exc:
-        yield observed_error("stream_error", f"스트리밍 응답 처리 중 오류가 발생했습니다: {exc}", exc=exc)
+        yield observed_error("stream_error", "스트리밍 응답 처리 중 오류가 발생했습니다. 서버의 처리 결과를 확인해 주세요.", exc=exc)
 
 
 def build_agent_payload(
@@ -248,15 +253,9 @@ def build_agent_payload(
 
 
 def _parse_agent_response_data(data: dict[str, Any]) -> AgentCallResult:
-    response_payload = data.get("response")
-    if not isinstance(response_payload, dict):
-        raise ValueError("API 응답의 response는 객체여야 합니다.")
-
-    manifest_payload = data.get("upload_manifest")
-    return AgentCallResult(
-        response=AnswerResponse.model_validate(response_payload),
-        upload_manifest=UploadManifest.model_validate(manifest_payload),
-    )
+    return AgentCallResult.model_validate({
+        key: value for key, value in data.items() if key in AgentCallResult.model_fields
+    })
 
 
 def _validated_event(event: str, data: dict[str, Any],
@@ -316,6 +315,8 @@ class AgentSessionClient:
             for event in stream_agent_response(user_input, self.context, uploads=uploads):
                 if event.event == "final_response" and event.result is not None:
                     received_valid_final = True
+                    # Null means no confirmed snapshot, never "attachments were
+                    # cleared". A later request must refresh before submission.
                     self.manifest = event.result.upload_manifest
                 yield event
         finally:
