@@ -197,8 +197,68 @@ def test_invalid_debug_does_not_replace_the_checked_result_or_attachment_snapsho
     store.close_all()
 
 
+@pytest.mark.parametrize("status,problem,message,alert", [
+    ("failed", _problem(), "", "error"),
+    ("refused", _problem("model_refusal", "none"), "", "warning"),
+    ("needs_input", None, "어느 문서를 사용할까요?", "info"),
+])
+def test_chat_history_preserves_outcome_after_rerun_without_fake_answer(status, problem, message, alert):
+    payload = {"status": status, "response": None, "problem": problem,
+               "message": message, "request_id": "visible-request-id"}
+    script = '''
+import json
+import streamlit as st
+from src.app.web.streamlit_chat import process_chat_prompt, render_chat_history
+from src.app.client import AgentCallResult, AgentStreamEvent
+from src.core.uploads import UploadManifest
+
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+    st.session_state.requests_sent = 0
+
+def stream_agent(prompt):
+    st.session_state.requests_sent += 1
+    payload = json.loads(PAYLOAD)
+    result = AgentCallResult(**payload, upload_manifest=UploadManifest(epoch="e", revision=0, files=[]))
+    yield AgentStreamEvent(event="final_response", result=result)
+
+if not st.session_state.messages:
+    process_chat_prompt("정상 질문", st.session_state.messages.append, st.session_state.messages.append, stream_agent)
+else:
+    render_chat_history(st.session_state.messages, "http://localhost:8000")
+'''.replace("PAYLOAD", repr(json.dumps(payload, ensure_ascii=False)))
+    app = AppTest.from_string(script).run()
+    assert not app.exception
+    expected = message or problem["message"]
+    assert [item.value for item in getattr(app, alert)] == [expected]
+    assert app.session_state.requests_sent == 1
+    result = app.session_state.messages[1]["result"]
+    assert result.status == status
+    assert result.response is None
+    assert any("visible-request-id" in item.value for item in app.caption)
+    app.run()
+    assert app.session_state.requests_sent == 1
+    assert [item.value for item in getattr(app, alert)] == [expected]
 
 
+def test_partial_outcome_renders_limitation_and_checked_answer_once():
+    app = AppTest.from_string('''
+from src.app.web.streamlit_chat import render_chat_history
+from src.core.contracts.outcome import TurnResult
+from src.core.llm_errors import ExecutionProblem
+from tests.web.answer_fixtures import cited_response
+
+render_chat_history([{"role": "assistant", "result": TurnResult(
+    status="partial", response=cited_response(), request_id="partial-request",
+    problem=ExecutionProblem(code="provider_unavailable", stage="synthesis", message="확인 가능한 내용만 제공합니다.",
+                             next_action="retry_later", retry_after_seconds=5),
+)}], "http://localhost:8000")
+''').run()
+    assert not app.exception
+    assert [item.value for item in app.markdown].count("함수는 3을 반환합니다. [1]") == 1
+    assert any(item.value == "확인 가능한 내용만 제공합니다." for item in app.warning)
+    assert any("5초 후" in item.value for item in app.caption)
+    assert any("partial-request" in item.value for item in app.caption)
 
 
 def test_llm_diagnostic_metadata_survives_debug_normalization():

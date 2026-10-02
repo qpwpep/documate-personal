@@ -323,13 +323,13 @@ def test_final_manifest_updates_sidebar_and_next_question_without_extra_get(monk
 
     assert app.session_state["session_client"].manifest == reset_manifest
     assert app.session_state["messages"][:-2] == previous_messages
-    assert app.session_state["messages"][-1]["response"] == reset_answer
+    assert app.session_state["messages"][-1]["result"].response == reset_answer
     assert any("0개 파일" in item.value for item in app.markdown)
     assert not any(button.label == "a.py 삭제" for button in app.button)
 
     _send_saved_question(app, "next question")
 
-    assert app.session_state["messages"][-1]["response"] == followup_answer
+    assert app.session_state["messages"][-1]["result"].response == followup_answer
     assert [call["method"] for call in calls] == ["get", "post", "post"]
     assert calls[-1]["payload"]["uploads"] == reset_manifest.context().model_dump(mode="json")
     assert calls[1]["payload"]["session_id"] == calls[2]["payload"]["session_id"]
@@ -381,8 +381,8 @@ def test_invalid_final_manifest_rejects_answer_and_recovers_state_without_replay
     _send_saved_question(app, "question")
 
     assert app.session_state["session_client"].manifest == fresh
-    assert app.session_state["messages"][-1]["response"] != rejected
-    assert any("스트리밍 응답 형식에 오류" in item.value for item in app.markdown)
+    assert app.session_state["messages"][-1]["result"] is None
+    assert any("스트리밍 응답 형식" in item.value for item in app.error)
     assert not any("This answer must not be accepted." in item.value for item in app.markdown)
     assert [message["content"] for message in app.session_state["messages"] if message["role"] == "user"] == ["question"]
     assert [call["method"] for call in calls] == ["get", "post", "get"]

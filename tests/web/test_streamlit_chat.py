@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 from streamlit.testing.v1 import AppTest
+from src.core.contracts.outcome import TurnResult
 from src.core.slack_contract import RecipientSelector, SlackDefault
 from src.runtime.nodes.actions import make_action_postprocess_node
 from tests.core.test_actions_nodes import _contract, _state
@@ -12,13 +13,14 @@ def test_document_renders_content_once_and_keeps_code_layout():
     """The displayed document preserves block order and code without a duplicate answer."""
     app = AppTest.from_string('''
 from src.app.web.streamlit_chat import render_chat_history
+from src.core.contracts.outcome import TurnResult
 from src.core.answer_schema import AnswerDocument, ContentUnit, ParagraphBlock, CodeBlock, finalize_answer
 
 document = AnswerDocument(blocks=[
     ParagraphBlock(content=[ContentUnit(text="한 번만 표시할 설명", basis="interaction", refs=[])]),
     CodeBlock(language="python", content=ContentUnit(text="def value():\\n    return 2\\n", basis="example", refs=[])),
 ])
-render_chat_history([{"role":"assistant", "response":finalize_answer(document, [])}], "http://localhost:8000")
+render_chat_history([{"role":"assistant", "result":TurnResult(response=finalize_answer(document, []))}], "http://localhost:8000")
 ''').run()
 
     assert not app.exception
@@ -31,11 +33,12 @@ def test_chat_history_displays_typed_user_and_assistant_messages():
     """User text and the assistant document survive the same history render."""
     app = AppTest.from_string('''
 from src.app.web.streamlit_chat import render_chat_history
+from src.core.contracts.outcome import TurnResult
 from src.core.answer_schema import finalize_answer, text_document
 
 render_chat_history([
     {"role":"user", "content":"질문입니다"},
-    {"role":"assistant", "response":finalize_answer(text_document("답변입니다"), [])},
+    {"role":"assistant", "result":TurnResult(response=finalize_answer(text_document("답변입니다"), []))},
 ], "http://localhost:8000")
 ''').run()
 
@@ -72,7 +75,7 @@ else:
 
     assert not app.exception
     assert [item.value for item in app.markdown] == ["질문", "완료된 답변"]
-    assert list(app.session_state.messages[1]) == ["role", "response"]
+    assert list(app.session_state.messages[1]) == ["role", "result"]
 
 
 def test_stream_errors_remain_visible_beside_unchanged_final_response_after_rerun():
@@ -114,8 +117,8 @@ else:
     assert [item.value for item in app.error] == expected_errors
     assert app.session_state.messages[1] == {
         "role": "assistant",
-        "response": cited_response(),
-        "error_messages": expected_errors,
+        "result": TurnResult(response=cited_response()),
+        "transport_errors": expected_errors,
     }
     assert app.session_state.final_data == {
         "response": cited_response().model_dump(mode="json"),
@@ -126,8 +129,8 @@ else:
     assert [item.value for item in app.markdown].count("함수는 3을 반환합니다. [1]") == 1
 
 
-def test_stream_errors_without_final_response_are_displayed_once_in_fallback_document():
-    """Without a final answer each distinct error is preserved once in the error document."""
+def test_stream_errors_without_final_response_are_displayed_once_as_errors():
+    """Without a final answer each distinct error remains an error rather than an answer document."""
     app = AppTest.from_string('''
 import streamlit as st
 from src.app.web.streamlit_chat import process_chat_prompt, render_chat_history
@@ -147,10 +150,10 @@ else:
 ''').run()
 
     assert not app.exception
-    displayed_text = "\n".join(item.value for item in app.markdown)
+    displayed_text = "\n".join(item.value for item in app.error)
     assert displayed_text.count("서버 처리 오류") == 1
     assert displayed_text.count("연결이 끊어졌습니다.") == 1
-    assert not app.error
+    assert app.session_state.messages[1]["result"] is None
 
 
 def test_failed_stream_displays_error_in_history_without_resending_on_rerun():
@@ -183,10 +186,9 @@ with patch("requests.sessions.Session.request", request):
 ''').run()
 
     assert not app.exception
-    assert len(app.markdown) == 2
-    assert app.markdown[0].value == "질문"
-    assert "첫 이벤트" in app.markdown[1].value
-    assert "서버에서 요청이 처리되었을 수" in app.markdown[1].value
+    assert [item.value for item in app.markdown] == ["질문"]
+    assert "첫 이벤트" in app.error[0].value
+    assert "서버에서 요청이 처리되었을 수" in app.error[0].value
     assert app.session_state.requests_sent == 1
     assert len(app.session_state.messages) == 2
 
@@ -211,10 +213,11 @@ def test_action_failure_is_separate_from_answer_content(delivery_tools, code, gu
     assert len([item for item in sent if item["path"] == "/chat.postMessage"]) == int(unknown)
     app = AppTest.from_string(f'''
 from src.app.web.streamlit_chat import render_chat_history
+from src.core.contracts.outcome import TurnResult
 from src.core.answer_schema import AnswerResponse
 
 response = AnswerResponse.model_validate_json({result.model_dump_json()!r})
-render_chat_history([{{"role":"assistant", "response":response}}], "http://localhost:8000")
+render_chat_history([{{"role":"assistant", "result":TurnResult(response=response)}}], "http://localhost:8000")
 ''').run()
 
     assert not app.exception
@@ -237,9 +240,10 @@ def test_slack_success_renders_selected_source_and_confirmed_destination(deliver
         SlackDefault(selector=RecipientSelector(kind="user", value="UDEFAULT")))(state)["response"].result
     app = AppTest.from_string(f'''
 from src.app.web.streamlit_chat import render_chat_history
+from src.core.contracts.outcome import TurnResult
 from src.core.answer_schema import AnswerResponse
 response = AnswerResponse.model_validate_json({result.model_dump_json()!r})
-render_chat_history([{{"role":"assistant", "response":response}}], "http://localhost:8000")
+render_chat_history([{{"role":"assistant", "result":TurnResult(response=response)}}], "http://localhost:8000")
 ''').run()
     assert not app.exception
     assert len([item for item in sent if item["path"] == "/chat.postMessage"]) == 1
@@ -250,6 +254,7 @@ render_chat_history([{{"role":"assistant", "response":response}}], "http://local
 def _saved_artifact_app(*, status="success", verification="verified", expires_at=4102444800):
     return AppTest.from_string(f'''
 from src.app.web.streamlit_chat import render_chat_history
+from src.core.contracts.outcome import TurnResult
 from src.core.answer_schema import ActionReceipt, finalize_answer, text_document
 from src.core.save_contract import SaveArtifact, SaveOperation
 
@@ -266,7 +271,7 @@ receipt = ActionReceipt(
     verification="{verification}", operation=operation, artifact=artifact,
 )
 response = finalize_answer(text_document("본문입니다"), [], actions=[receipt])
-render_chat_history([{{"role":"assistant", "response":response}}], "http://localhost:8000")
+render_chat_history([{{"role":"assistant", "result":TurnResult(response=response)}}], "http://localhost:8000")
 ''').run()
 
 
@@ -300,8 +305,9 @@ def test_numbered_citations_open_the_matching_snapshot_and_explain_check_limits(
     """The source control at each block exposes its source and the actual check scope."""
     app = AppTest.from_string('''
 from src.app.web.streamlit_chat import render_chat_history
+from src.core.contracts.outcome import TurnResult
 from tests.web.answer_fixtures import cited_response
-render_chat_history([{"role":"assistant", "response":cited_response()}], "http://localhost:8000")
+render_chat_history([{"role":"assistant", "result":TurnResult(response=cited_response())}], "http://localhost:8000")
 ''').run()
 
     assert not app.exception
@@ -320,9 +326,10 @@ def test_missing_reference_is_visible_next_to_affected_content():
     """An unresolved reference is displayed as a limitation rather than a fake citation."""
     app = AppTest.from_string('''
 from src.app.web.streamlit_chat import render_chat_history
+from src.core.contracts.outcome import TurnResult
 from src.core.answer_schema import finalize_answer, text_document
 response = finalize_answer(text_document("확인이 필요한 내용", basis="source", refs=["missing"]), [])
-render_chat_history([{"role":"assistant", "response":response}], "http://localhost:8000")
+render_chat_history([{"role":"assistant", "result":TurnResult(response=response)}], "http://localhost:8000")
 ''').run()
 
     assert not app.exception
@@ -335,6 +342,7 @@ def test_heading_list_and_table_keep_document_order_and_cell_boundaries():
     """Non-prose blocks retain their structure, including pipes inside a table cell."""
     app = AppTest.from_string('''
 from src.app.web.streamlit_chat import render_chat_history
+from src.core.contracts.outcome import TurnResult
 from src.core.answer_schema import AnswerDocument, ContentUnit, HeadingBlock, ListBlock, TableBlock, finalize_answer
 
 def unit(text):
@@ -344,7 +352,7 @@ document = AnswerDocument(blocks=[
     ListBlock(ordered=True, items=[unit("첫 단계"), unit("다음 단계")]),
     TableBlock(columns=[unit("옵션"), unit("설명")], rows=[[unit("a | b"), unit("첫 줄\\n둘째 줄")]]),
 ])
-render_chat_history([{"role":"assistant", "response":finalize_answer(document, [])}], "http://localhost:8000")
+render_chat_history([{"role":"assistant", "result":TurnResult(response=finalize_answer(document, []))}], "http://localhost:8000")
 ''').run()
 
     assert not app.exception
