@@ -92,6 +92,17 @@ def make_post_synthesis_validation_node(verbose: bool):
         debug = get_debug_state(state)
         retry_context = get_retry_state(state)
 
+        if response.problem is not None:
+            # A grounded partial response preserves its technical failure and cannot
+            # trigger another semantic repair window or become an executable answer.
+            return {
+                "response": response,
+                "retry": retry_context.model_copy(update={
+                    "needs_retry": False, "retry_reason": None, "failed_routes": [],
+                    "failed_requirement_ids": [], "retrieval_feedback": "",
+                }),
+            }
+
         snapshot, local_errors = collect_validation_snapshot(state)
         assessment = _assess_route_failures(snapshot)
         needs_retry, next_retry_context, retrieval_feedback, retry_errors = _decide_retry_outcome(

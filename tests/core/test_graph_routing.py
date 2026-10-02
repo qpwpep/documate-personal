@@ -348,7 +348,7 @@ def _assert_repair_flow(routes, defect, max_retries, persistent, *, instrumented
         def with_structured_output(self, *args, **kwargs):
             return self
 
-        def invoke(self, messages):
+        def invoke(self, messages, **kwargs):
             raw = next(str(message.content) for message in messages if str(message.content).startswith("[Evidence Packet]"))
             packet = json.loads(raw.split("\n", 2)[2])
             packets.append(packet)

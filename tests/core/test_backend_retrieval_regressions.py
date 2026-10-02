@@ -136,6 +136,7 @@ class BackendRetrievalRegressionTest(unittest.TestCase):
         self.assertIn("merge", truncated)
 
     def test_pre_synthesis_validation_keeps_existing_upload_evidence_at_low_scores(self) -> None:
+        from src.core.request_contracts import RequestContract
         validate_node = make_pre_synthesis_validation_node(verbose=False)
         for score, upload_query in (
             (0.0, "uploaded notebook example"),
@@ -146,6 +147,7 @@ class BackendRetrievalRegressionTest(unittest.TestCase):
             with self.subTest(score=score, query=upload_query):
                 state = build_graph_state_input(
                     user_input="Compare official documentation with uploaded code.",
+                    request_contract=RequestContract(),
                     planner={"output": PlannerOutput(use_retrieval=True, tasks=[
                         RetrievalTask(route="docs", query="official docs", k=3),
                         RetrievalTask(route="upload", query=upload_query, k=3),

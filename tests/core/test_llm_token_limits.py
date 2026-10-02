@@ -252,11 +252,12 @@ def test_invalid_or_truncated_provider_json_stays_a_grounded_fallback(provider, 
     behavior.update(invalid_content='{"blocks": ["UNVALIDATED', finish_reason=finish_reason)
     updates = _synthesize(_settings(synthesis_use_responses_api=False, synthesis_max_tokens=4096))
     result = updates["response"].result
-    assert len(requests) == 1
+    assert len(requests) == (2 if finish_reason == "stop" else 1)
     assert "UNVALIDATED" not in export_answer_text(result)
     assert result.citations
     assert any(check.support_status == "exact_match" for check in result.checks)
     assert updates["debug"].synthesis_errors
+    assert updates["response"].problem.code == ("model_output_invalid" if finish_reason == "stop" else "model_output_incomplete")
 
 
 def test_planner_output_cap_reaches_http_without_synthesis_settings(provider):

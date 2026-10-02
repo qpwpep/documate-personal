@@ -9,6 +9,7 @@ from src.core.answer_schema import (
 from src.core.contracts import GraphState, ResponseState
 from src.core.contracts.provenance import AnswerSource, BodyKind
 from src.core.evidence import EvidenceRef
+from src.core.llm_errors import ExecutionProblem, make_problem
 from src.core.request_contracts import check_answer_contract
 from src.runtime.nodes.retry import build_followup_from_routes
 from src.runtime.nodes.synthesis.fallbacks import build_synthesis_fallback
@@ -26,6 +27,7 @@ def build_response_updates(
     normal_evidence_missing_requirement_ids: list[str] | None = None,
     body_kind: BodyKind | None = None,
     evidence_source: AnswerSource | None = None,
+    problem: ExecutionProblem | None = None,
 ) -> GraphState:
     return {
         "messages": [AIMessage(content=export_answer_text(result))],
@@ -33,7 +35,7 @@ def build_response_updates(
                                   evidence_requirement_map=evidence_requirement_map or {}, kind=kind,
                                   normal_evidence_missing_requirement_ids=normal_evidence_missing_requirement_ids,
                                   request_id=request_id, contract_revision=contract_revision,
-                                  body_kind=body_kind, evidence_source=evidence_source),
+                                  body_kind=body_kind, evidence_source=evidence_source, problem=problem),
     }
 
 
@@ -41,11 +43,13 @@ def build_followup_updates(
     answer: str, *, attempt: int, kind: str = "clarification",
     request_id: str | None = None, contract_revision: int = 0,
     body_kind: BodyKind | None = None, evidence_source: AnswerSource | None = None,
+    problem: ExecutionProblem | None = None,
 ) -> GraphState:
     return build_response_updates(
         finalize_answer(text_document(answer), []), attempt=attempt, evidence_packet=[], kind=kind,
         request_id=request_id, contract_revision=contract_revision,
         body_kind=body_kind, evidence_source=evidence_source,
+        problem=problem,
     )
 
 
@@ -68,7 +72,7 @@ def apply_validation_outcome(
         return build_response_updates(result, attempt=attempt, evidence_packet=packet,
                                       evidence_requirement_map=snapshot.evidence_requirement_map,
                                       normal_evidence_missing_requirement_ids=snapshot.normal_evidence_missing_requirement_ids,
-                                      kind=snapshot.response_kind if snapshot.response_kind in {"clarification", "failure"} else "answer",
+                                      kind=snapshot.response_kind if snapshot.response_kind in {"clarification", "acknowledgement", "failure"} else "answer",
                                       **stamp)
 
     if (contract is None or not contract.can_prepare_body()
@@ -76,6 +80,7 @@ def apply_validation_outcome(
             or snapshot.response_contract_revision != contract.revision):
         return build_followup_updates(
             "요청의 조건을 확정하지 못했습니다. 다시 요청해 주세요.", attempt=attempt, kind="failure",
+            problem=make_problem("internal_error", "validation"),
             **stamp,
         )
 
@@ -144,6 +149,8 @@ def apply_validation_outcome(
                 requirement_map.setdefault(hit.evidence.id, []).append(hit.requirement_id)
         return build_response_updates(result, attempt=attempt, evidence_packet=packet,
                                       evidence_requirement_map=requirement_map, kind="failure",
+                                      problem=make_problem("evidence_insufficient", "retrieval") if retrieved_missing else
+                                              make_problem("model_output_invalid", "validation"),
                                       normal_evidence_missing_requirement_ids=snapshot.normal_evidence_missing_requirement_ids,
                                       **stamp)
 
@@ -151,5 +158,5 @@ def apply_validation_outcome(
         ("요청의 필수·금지 조건을 충족하는 답변을 완성하지 못했습니다. 다시 요청해 주세요."
          if assessment.missing_content or assessment.forbidden_content else
          build_followup_from_routes(snapshot.planner_output, assessment.retry_reason or "missing_content")),
-        attempt=attempt, kind="failure", **stamp,
+        attempt=attempt, kind="failure", problem=make_problem("model_output_invalid", "validation"), **stamp,
     )

@@ -67,6 +67,8 @@ def make_synthesize_node(
             evidence_requirement_map=outcome.evidence_requirement_map,
             normal_evidence_missing_requirement_ids=outcome.normal_evidence_missing_requirement_ids,
             kind=outcome.kind,
+            problem=outcome.problem,
+            llm_diagnostics=outcome.llm_diagnostics,
             request_id=prepared.request_contract.request_id,
             contract_revision=prepared.request_contract.revision,
             body_kind=prepared.request_contract.body.kind,

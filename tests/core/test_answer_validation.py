@@ -228,10 +228,12 @@ def test_post_validation_records_reference_failure_as_validation_diagnostic():
 
 
 def test_pre_validation_preserves_planner_failure_without_claiming_upload_is_missing():
-    """검색 계획 실패 후속 질문은 업로드 누락으로 잘못 진단하지 않는다."""
+    """검색 계획 실패 상태를 사용자 보충 질문이나 업로드 누락으로 바꾸지 않는다."""
+    import pytest
     from src.core.contracts import PlannerState, RuntimeState
     from src.core.contracts.debug import PlannerDiagnostic, RetryState
     from src.runtime.nodes.validation import make_pre_synthesis_validation_node
+    from src.core.llm_errors import LLMCallError
 
     followup = "검색 계획을 만들지 못했습니다. 다시 요청해 주세요."
     state = {
@@ -240,12 +242,10 @@ def test_pre_validation_preserves_planner_failure_without_claiming_upload_is_mis
         "retry": RetryState(attempt=1, needs_retry=True, retry_reason="no_evidence", failed_routes=["docs"]),
     }
 
-    updates = make_pre_synthesis_validation_node(False)(state)
-
-    assert export_answer_text(updates["response"].result) == followup
-    assert updates["retry"].retry_reason is None
-    assert not updates["retry"].needs_retry
-    assert updates["retry"].failed_routes == []
+    with pytest.raises(LLMCallError) as caught:
+        make_pre_synthesis_validation_node(False)(state)
+    assert caught.value.problem.code == "internal_error"
+    assert "response" not in state
 
 
 def test_reusing_an_answer_preserves_its_original_reference_requirement():

@@ -8,6 +8,7 @@ from langchain_core.messages import BaseMessage
 from src.core.answer_schema import AnswerResponse
 from src.core.contracts.provenance import AnswerSource
 from src.core.evidence import EvidenceRef, SearchHit
+from src.core.llm_errors import ExecutionProblem, LLMDiagnostic
 from src.core.planner_schema import PlannerOutput
 from src.core.request_contracts import RequestContract
 
@@ -56,4 +57,6 @@ class SynthesisPipelineResult:
     planner_errors: list[str] = field(default_factory=list)
     synthesis_errors: list[str] = field(default_factory=list)
     kind: str = "draft"
+    problem: ExecutionProblem | None = None
+    llm_diagnostics: list[LLMDiagnostic] = field(default_factory=list)
     normal_evidence_missing_requirement_ids: list[str] | None = None

@@ -66,7 +66,7 @@ class PacketEchoModel:
     def with_structured_output(self, *_args, **_kwargs):
         return self
 
-    def invoke(self, messages):
+    def invoke(self, messages, *, timeout=None):
         packet_message = next(str(message.content) for message in messages
                               if str(message.content).startswith("[Evidence Packet]"))
         packet = json.loads(packet_message[packet_message.index("\n[") + 1:])
@@ -192,7 +192,9 @@ def test_exhausted_recovery_does_not_save_an_incomplete_source_fallback(tmp_path
     state.update(make_post_synthesis_validation_node(False)(state))
     state.update(make_action_postprocess_node(build_save_text_tool(), lambda **_kwargs: {}, False)(state))
 
-    assert len(normal.packets) == len(compact.packets) == 1
+    assert len(normal.packets) == 1
+    assert len(compact.packets) == 2
     assert state["response"].kind == "failure"
+    assert state["response"].problem.code == "provider_unavailable"
     assert all(receipt.status != "success" for receipt in state["response"].result.actions)
     assert list(tmp_path.iterdir()) == []

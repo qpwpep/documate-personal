@@ -60,7 +60,7 @@ def assess_validation(snapshot: ValidationSnapshot) -> ValidationAssessment:
         actions=snapshot.response_result.actions, issues=snapshot.response_result.issues,
     )
     assessment.checked_result = result
-    if snapshot.response_kind in {"clarification", "failure"}:
+    if snapshot.response_kind in {"clarification", "acknowledgement", "failure"}:
         return assessment
     for check in result.checks:
         if check.reference_status == "missing" or check.support_status == "unsupported":

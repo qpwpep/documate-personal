@@ -1,13 +1,16 @@
+import pytest
 from langchain_core.messages import HumanMessage
 
 from src.core.answer_schema import AnswerDocument, export_answer_text, finalize_answer, text_document
 from src.core.contracts import PlannerState, ResponseState, RuntimeState
 from src.core.planner_schema import PlannerOutput
+from src.core.llm_errors import LLMCallError
 from src.core.request_contracts import (
     AnswerContract, BoundAnswerReference, ContentRequirement, ContractEvidence,
     CopyAnswerBody, FormatRequirement, RequestContract, TransformAnswerBody,
 )
 from src.runtime.nodes.synthesis import make_synthesize_node
+from src.runtime.agent_runtime.response_assembler import ResponseAssembler
 from src.runtime.nodes.validation import make_post_synthesis_validation_node
 from tests.core.test_synthesis_validation import _hit, _state as retrieval_state
 from tests.synthesis_fixtures import synthesis_excerpt_limits
@@ -88,8 +91,12 @@ def test_reuse_with_new_forbidden_code_does_not_return_old_code():
     state.update(make_synthesize_node(ModelBoundary(error=RuntimeError("failed")), excerpt_limits=synthesis_excerpt_limits())(state))
     state.update(make_post_synthesis_validation_node(False)(state))
 
-    assert state["response"].kind == "failure"
+    assert state["response"].kind == "clarification"
     assert "unsafe_old_code" not in export_answer_text(state["response"].result)
+    result = ResponseAssembler().assemble(response=state, debug_info={})
+    assert result["status"] == "needs_input"
+    assert result["problem"] is None
+    assert "?" in result["message"]
 
 
 def test_unavailable_contract_cannot_reuse_previous_response():
@@ -97,10 +104,11 @@ def test_unavailable_contract_cannot_reuse_previous_response():
     previous = finalize_answer(text_document("예전 전달 본문"), [])
     state = _state(None, "save this to Slack", previous)
 
-    result = make_synthesize_node(ModelBoundary(error=AssertionError("must not generate")), excerpt_limits=synthesis_excerpt_limits())(state)["response"]
-
-    assert result.kind == "failure"
-    assert "예전 전달 본문" not in export_answer_text(result.result)
+    with pytest.raises(LLMCallError) as caught:
+        make_synthesize_node(ModelBoundary(error=AssertionError("must not generate")), excerpt_limits=synthesis_excerpt_limits())(state)
+    assert caught.value.problem.code == "internal_error"
+    assert "예전 전달 본문" not in caught.value.problem.message
+    assert "response" not in state
 
 
 def test_preference_alone_does_not_fail_validation():
@@ -128,14 +136,13 @@ def test_exhausted_generation_cannot_expose_forbidden_original_code():
     state = retrieval_state([_hit("forbidden_original_code()", source="upload")], query="코드 없이 설명해줘")
     state["runtime"] = state["runtime"].model_copy(update={"request_contract": contract})
 
-    state.update(make_synthesize_node(
-        ModelBoundary(error=TimeoutError("timeout")), ModelBoundary(error=TimeoutError("timeout")), excerpt_limits=synthesis_excerpt_limits(),
-    )(state))
-    state.update(make_post_synthesis_validation_node(False)(state))
-
-    assert state["response"].kind == "failure"
-    assert "forbidden_original_code" not in export_answer_text(state["response"].result)
-    assert state["response"].result.citations == []
+    with pytest.raises(LLMCallError) as caught:
+        make_synthesize_node(
+            ModelBoundary(error=TimeoutError("timeout")), ModelBoundary(error=TimeoutError("timeout")), excerpt_limits=synthesis_excerpt_limits(),
+        )(state)
+    assert caught.value.problem.code == "provider_unavailable"
+    assert "forbidden_original_code" not in caught.value.problem.message
+    assert "response" not in state
     assert state["runtime"].request_contract == contract
 
 
@@ -190,11 +197,11 @@ def test_source_fallback_does_not_assume_excerpts_satisfy_semantic_requirements(
     state = retrieval_state([_hit("A source excerpt without any comparison.")])
     state["runtime"] = state["runtime"].model_copy(update={"request_contract": contract})
 
-    response = make_synthesize_node(ModelBoundary(error=RuntimeError("generation failed")), excerpt_limits=synthesis_excerpt_limits())(state)["response"]
-
-    assert response.kind == "failure"
-    assert response.result.citations == []
-    assert "A source excerpt" not in export_answer_text(response.result)
+    with pytest.raises(LLMCallError) as caught:
+        make_synthesize_node(ModelBoundary(error=TimeoutError("generation failed")), excerpt_limits=synthesis_excerpt_limits())(state)
+    assert caught.value.problem.code == "provider_unavailable"
+    assert "response" not in state
+    assert "A source excerpt" not in caught.value.problem.message
 
 
 def test_forbidden_code_cannot_be_disguised_as_a_paragraph_excerpt():
@@ -250,5 +257,5 @@ def test_reuse_checks_original_code_provenance_before_returning_a_paragraph():
         _state(contract, previous=previous),
     )["response"]
 
-    assert response.kind == "failure"
+    assert response.kind == "clarification"
     assert "previous_code" not in export_answer_text(response.result)

@@ -100,3 +100,69 @@ def test_real_missing_user_information_is_a_successful_clarification():
     assert result["runtime"].request_contract.failure is None
     assert result["planner"].diagnostics.reason == "clarification_required"
     assert result["planner"].guided_followup == "어떤 주제를 설명할까요?"
+
+
+def test_synthesis_schema_failure_does_not_retry_or_hide_behind_source_fallback():
+    primary = ModelReplies(schema_error())
+    compact = ModelReplies(AssertionError("compact must not run for invalid schema"))
+
+    with pytest.raises(LLMCallError) as caught:
+        make_synthesize_node(primary, compact, excerpt_limits=synthesis_excerpt_limits())(_state([_hit()]))
+
+    assert caught.value.problem.code == "provider_schema_invalid"
+    assert primary.calls == 1
+    assert compact.calls == 0
+
+
+def test_service_retry_after_cannot_be_bypassed_by_compact_generation():
+    unavailable = InternalServerError(
+        "service unavailable", body={"code": "server_error"},
+        response=httpx.Response(503, headers={"Retry-After": "60"},
+                                request=httpx.Request("POST", "https://api.openai.com/v1/chat/completions")),
+    )
+    primary = ModelReplies(unavailable)
+    compact = ModelReplies(AssertionError("Retry-After must not be bypassed by a compact request"))
+
+    result = make_synthesize_node(primary, compact, excerpt_limits=synthesis_excerpt_limits())(_state([_hit()]))
+
+    assert primary.calls == 1
+    assert compact.calls == 0
+    assert result["response"].problem.code == "provider_unavailable"
+    assert result["response"].problem.retry_after_seconds == 60
+
+
+def test_synthesis_invalid_output_without_sources_remains_a_model_failure():
+    model = ModelReplies({"answer": "unvalidated model prose"})
+
+    with pytest.raises(LLMCallError) as caught:
+        make_synthesize_node(model, excerpt_limits=synthesis_excerpt_limits())(_state([]))
+
+    assert caught.value.problem.code == "model_output_invalid"
+    assert model.calls == 2
+
+
+def test_synthesis_source_fallback_exposes_the_original_typed_problem():
+    model = ModelReplies({"answer": "unvalidated model prose"})
+    hit = _hit()
+
+    result = make_synthesize_node(model, excerpt_limits=synthesis_excerpt_limits())(_state([hit]))
+
+    assert model.calls == 2
+    assert result["response"].kind == "failure"
+    assert result["response"].problem.code == "model_output_invalid"
+    assert result["response"].result.citations[0].evidence == hit.evidence
+    validated = make_post_synthesis_validation_node(False)({**_state([hit]), **result})
+    assert validated["response"] == result["response"]
+    assert not validated["retry"].needs_retry
+
+
+def test_missing_contract_cannot_become_a_synthesis_clarification():
+    state = _state([])
+    state["runtime"] = state["runtime"].model_copy(update={"request_contract": None})
+    model = ModelReplies(AssertionError("must stop before generation"))
+
+    with pytest.raises(LLMCallError) as caught:
+        make_synthesize_node(model, excerpt_limits=synthesis_excerpt_limits())(state)
+
+    assert caught.value.problem.code == "internal_error"
+    assert model.calls == 0

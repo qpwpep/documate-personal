@@ -41,6 +41,7 @@ def test_validation_keeps_successful_requirement_when_another_docs_requirement_i
                            requirement={"library": "pandas", "symbols": ["pandas.concat"], "match": "symbol"})
     hit = _official_hit(numpy)
     result = make_pre_synthesis_validation_node(verbose=False)(build_test_state({
+        "request_contract": RequestContract(),
         "user_input": "Compare both official sources", "planner_output": PlannerOutput(use_retrieval=True, tasks=[numpy, pandas]),
         "retrieved_hits": [hit.model_dump()], "debug": {"retrieval_diagnostics": [
             RetrievalDiagnostic(route="docs", status="success", answerability="covered", requirement_id=numpy.requirement_id, evidence_count=1),

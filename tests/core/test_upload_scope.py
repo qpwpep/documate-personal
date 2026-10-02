@@ -105,4 +105,5 @@ def test_missing_file_search_reports_the_requested_attachment_name():
     result = make_pre_synthesis_validation_node(verbose=False)(state)
 
     assert "beta.py" in export_answer_text(result["response"].result)
-    assert result["response"].kind == "clarification"
+    assert result["response"].kind == "failure"
+    assert result["response"].problem.code == "evidence_insufficient"
