@@ -631,6 +631,7 @@ version = "0.2.0"
 source = { virtual = "." }
 dependencies = [
     { name = "fastapi" },
+    { name = "jsonschema" },
     { name = "langchain-chroma" },
     { name = "langchain-openai" },
     { name = "langchain-text-splitters" },
@@ -661,6 +662,7 @@ dev = [
 requires-dist = [
     { name = "docling", extras = ["easyocr", "rapidocr"], marker = "extra == 'docling'", specifier = "==2.126.0" },
     { name = "fastapi", specifier = ">=0.120.1" },
+    { name = "jsonschema", specifier = ">=4.26.0" },
     { name = "langchain-chroma", specifier = ">=1.0.0" },
     { name = "langchain-openai", specifier = ">=1.0.1" },
     { name = "langchain-text-splitters", specifier = ">=1.1.1" },
