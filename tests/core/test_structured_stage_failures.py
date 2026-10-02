@@ -166,3 +166,35 @@ def test_missing_contract_cannot_become_a_synthesis_clarification():
 
     assert caught.value.problem.code == "internal_error"
     assert model.calls == 0
+
+
+def test_exhausted_model_format_violation_is_not_missing_user_information():
+    contract = RequestContract(
+        answer=AnswerContract(format=(FormatRequirement(kind="line_count", mode="required", value=3, evidence_ids=("r1",)),)),
+        evidence=(ContractEvidence(id="r1", turn_id="current", quote="세 줄로 설명해줘", scope="answer.format.line_count", interpretation="instruction"),),
+    )
+    state = build_graph_state_input(user_input="세 줄로 설명해줘", request_contract=contract,
+                                    retry=RetryState(max_retries=0))
+    model = ModelReplies(text_document("한 줄만 생성한 결과").model_dump(mode="json"))
+
+    state.update(make_synthesize_node(model, excerpt_limits=synthesis_excerpt_limits())(state))
+    state.update(make_post_synthesis_validation_node(False)(state))
+    result = ResponseAssembler().assemble(response=state, debug_info={})
+
+    assert result["status"] == "failed"
+    assert result["response"] is None
+    assert result["problem"]["code"] == "model_output_invalid"
+    assert result["problem"]["stage"] == "validation"
+    assert result["problem"]["next_action"] == "retry_later"
+    assert "질문을 수정할 필요는 없습니다" in result["message"]
+
+
+def test_unclassified_runtime_failure_does_not_claim_evidence_is_missing():
+    state = build_graph_state_input(user_input="요청", request_contract=RequestContract())
+    state["response"] = ResponseState(kind="failure", result=finalize_answer(text_document("실패"), []))
+
+    result = ResponseAssembler().assemble(response=state, debug_info={})
+
+    assert result["status"] == "failed"
+    assert result["problem"]["code"] == "internal_error"
+    assert result["problem"]["next_action"] == "none"

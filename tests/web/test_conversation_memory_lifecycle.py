@@ -173,7 +173,9 @@ class ConversationMemoryLifecycleTest(unittest.TestCase):
             before,
         )
         self.assertEqual(result["debug"]["observability_status"], "failed")
-        self.assertIn("content changed", export_answer_text(AnswerResponse.model_validate(result["response"])))
+        self.assertEqual(result["status"], "failed")
+        self.assertIsNone(result["response"])
+        self.assertEqual(result["problem"]["code"], "internal_error")
 
     def test_invalid_returned_runtime_preserves_conversation_and_previous_answer(self) -> None:
         """잘못된 반환 runtime은 대화 기록 일부만 새 요청으로 교체하지 않는다."""

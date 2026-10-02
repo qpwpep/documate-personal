@@ -378,9 +378,12 @@ def test_uncertain_cancellation_preserves_pending_until_clarified(delivery_tools
     manager.run_agent_flow("이 답변을 Slack으로 보내줘")
     pending = manager._ensure_session().pending_action
 
-    clarification = AnswerResponse.model_validate(manager.run_agent_flow("취소할까?")["response"])
+    clarification = manager.run_agent_flow("취소할까?")
 
-    assert export_answer_text(clarification) == "전송을 취소할까요?"
+    assert clarification["status"] == "needs_input"
+    assert clarification["response"] is None
+    assert clarification["message"] == "전송을 취소할까요?"
+    assert clarification["missing_slots"] == ["slack_intent"]
     retained = manager._ensure_session().pending_action
     assert retained.response == pending.response
     assert retained.completed_actions == pending.completed_actions

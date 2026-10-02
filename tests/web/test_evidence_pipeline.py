@@ -424,15 +424,20 @@ class EvidencePipelineTest(unittest.TestCase):
         self.assertEqual(latency_breakdown["retrieval_routes"][0]["route"], "docs")
         self.assertEqual(latency_breakdown["synthesis_attempts"][0]["mode"], "structured_only")
 
-    def test_agent_manager_returns_error_latency_when_query_is_blank(self) -> None:
+    def test_agent_manager_requests_input_without_a_technical_error_when_query_is_blank(self) -> None:
         manager = AgentFlowManager(AppSettings(openai_api_key="test", tavily_api_key="test"))
         self.addCleanup(manager.close)
 
         result = manager.run_agent_flow("   ")
 
-        self.assertEqual(_answer_text(result), "query must not be blank")
-        self.assertEqual(result["debug"]["observability_status"], "failed")
-        self.assertGreaterEqual(result["debug"]["latency_breakdown"]["server_total_ms"], 0)
+        self.assertEqual(result["status"], "needs_input")
+        self.assertIsNone(result["response"])
+        self.assertIsNone(result["problem"])
+        self.assertEqual(result["missing_slots"], ["query"])
+        self.assertTrue(result["message"].strip())
+        self.assertEqual(result["debug"]["observability_status"], "ok")
+        self.assertEqual(result["debug"]["llm_calls"], [])
+        self.assertIsNone(result["debug"]["latency_breakdown"])
 
     @patch("httpx.Client.send", side_effect=httpx.ReadTimeout("synthesis unavailable"))
     def test_agent_manager_preserves_synthesis_error_latency_when_model_request_fails(self, _send) -> None:
@@ -454,7 +459,9 @@ class EvidencePipelineTest(unittest.TestCase):
         result = manager.run_agent_flow("question")
 
         self.assertEqual(result["debug"]["observability_status"], "failed")
-        self.assertIn("timed out", _answer_text(result).lower())
+        self.assertEqual(result["status"], "failed")
+        self.assertIsNone(result["response"])
+        self.assertNotIn("timed out", result["problem"]["message"].lower())
         latency = result["debug"]["latency_breakdown"]
         self.assertEqual(
             [(event["stage"], event["status"]) for event in latency["stage_attempts"]],

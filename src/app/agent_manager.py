@@ -12,9 +12,12 @@ from src.core.conversation_memory import (
 from src.runtime.agent_runtime import DebugCollector, ExecutionRunner, GraphInvocationError, ResponseAssembler, SessionContext
 from src.runtime.agent_runtime.tool_execution import capture_tool_execution
 from src.runtime.agent_runtime.llm_usage import capture_llm_usage
-from src.core.answer_schema import AnswerResponse, finalize_answer, text_document, export_answer_text
+from src.core.answer_schema import finalize_answer, text_document, export_answer_text
 from src.core.request_contracts import required_contract_turn_ids
 from src.core.contracts import RuntimeState, SessionMetadata
+from src.core.contracts.outcome import TurnResult
+from src.core.llm_errors import LLMCallError, ExecutionProblem, LLMDiagnostic, make_problem
+from src.infra.llm_boundary import capture_llm_diagnostics
 from src.core.contracts.debug import DEBUG_SCHEMA_VERSION
 from src.core.contracts.provenance import AnswerProvenance
 from src.core.contracts.routing import validate_route_decisions
@@ -125,10 +128,10 @@ class AgentFlowManager:
         return fallback
 
     @staticmethod
-    def _exit_payload(message: str) -> dict[str, Any]:
-        result = finalize_answer(text_document(message), [])
+    def _early_result(outcome: TurnResult) -> dict[str, Any]:
+        result = outcome.response
         return {
-            "response": result.model_dump(mode="json"),
+            **outcome.model_dump(mode="json"),
             "debug": {
                 "schema_version": DEBUG_SCHEMA_VERSION,
                 "observability_status": "ok",
@@ -137,6 +140,7 @@ class AgentFlowManager:
                 "tool_call_count": 0,
                 "llm_calls": [],
                 "errors": [],
+                "error_codes": [],
                 "validation_events": [],
                 "route_decisions": [],
                 "memory_compactions": [],
@@ -144,7 +148,7 @@ class AgentFlowManager:
                 "observed_hits": [],
                 "answer_provenance": AnswerProvenance(
                     body_kind="acknowledge", response_hash=result.content_hash, evidence_packet=[],
-                ).model_dump(mode="json"),
+                ).model_dump(mode="json") if result is not None else None,
                 "retry_context": None,
                 "retrieval_diagnostics": [],
                 "planner_diagnostics": None,
@@ -155,11 +159,12 @@ class AgentFlowManager:
     @staticmethod
     def _error_payload(
         *,
-        message: str,
         graph_total_ms: int | None,
         flow_started: float,
         stage_error: StageExecutionError | None,
         graph_state: dict[str, Any] | None = None,
+        problem: ExecutionProblem | None = None,
+        diagnostic: LLMDiagnostic | None = None,
     ) -> dict[str, Any]:
         debug = graph_state.get("debug") if graph_state is not None else None
         raw_trace = (
@@ -173,8 +178,9 @@ class AgentFlowManager:
         )
         route_decisions: list[dict[str, Any]] = []
         missing_debug_fields: list[str] = []
-        errors = [message]
-        error_codes: list[str] = []
+        problem = problem or make_problem("internal_error", stage_error.stage if stage_error else "request")
+        errors = [problem.code]
+        error_codes: list[str] = [problem.code]
         if graph_state is not None:
             try:
                 route_decisions = [
@@ -183,7 +189,7 @@ class AgentFlowManager:
                 ]
             except ValueError as exc:
                 missing_debug_fields.append("route_decisions")
-                errors.append(f"Invalid committed route_decisions: {exc}")
+                errors.append("Invalid committed route_decisions")
                 error_codes.append("DEBUG_NORMALIZATION_FAILED")
         if stage_error is not None:
             raw_trace.append(
@@ -199,9 +205,9 @@ class AgentFlowManager:
             graph_total_ms=graph_total_ms,
             server_total_ms=elapsed_ms(flow_started, time.perf_counter()),
         )
-        result = finalize_answer(text_document(message), [])
         return {
-            "response": result.model_dump(mode="json"),
+            **TurnResult(status="refused" if problem.code == "model_refusal" else "failed",
+                         message=problem.message, problem=problem).model_dump(mode="json"),
             "debug": {
                 "schema_version": DEBUG_SCHEMA_VERSION,
                 "observability_status": "failed",
@@ -209,6 +215,7 @@ class AgentFlowManager:
                 "tool_calls": [],
                 "tool_call_count": 0,
                 "llm_calls": [],
+                "llm_diagnostics": [diagnostic.model_dump(mode="json")] if diagnostic else [],
                 "errors": errors,
                 "error_codes": error_codes,
                 "validation_events": [],
@@ -216,9 +223,7 @@ class AgentFlowManager:
                 "memory_compactions": memory_compactions,
                 "planner_errors": [],
                 "observed_hits": [],
-                "answer_provenance": AnswerProvenance(
-                    body_kind="unresolved", response_hash=result.content_hash, evidence_packet=[],
-                ).model_dump(mode="json"),
+                "answer_provenance": None,
                 "retry_context": None,
                 "retrieval_diagnostics": [],
                 "planner_diagnostics": None,
@@ -233,11 +238,13 @@ class AgentFlowManager:
         progress_emitter: ProgressEmitter | None = None,
     ) -> dict[str, Any]:
         with (capture_tool_execution(getattr(progress_emitter, "request_id", None)) as recorder,
-              capture_llm_usage() as usage_recorder):
+              capture_llm_usage() as usage_recorder, capture_llm_diagnostics() as diagnostics):
             result = self._run_agent_flow(user_input, progress_emitter=progress_emitter)
             evidence = recorder.snapshot()
             debug = result["debug"]
             debug["llm_calls"] = [call.model_dump(mode="json") for call in usage_recorder.snapshot()]
+            debug["llm_diagnostics"] = [entry.model_dump(mode="json") for entry in diagnostics] or debug.get("llm_diagnostics", [])
+            result["request_id"] = getattr(progress_emitter, "request_id", "")
             debug["execution_evidence"] = evidence.model_dump(mode="json")
             debug["tool_calls"] = [event.tool_name for event in evidence.events if event.phase == "started"]
             debug["tool_call_count"] = len(debug["tool_calls"])
@@ -254,17 +261,18 @@ class AgentFlowManager:
         flow_started = time.perf_counter()
         try:
             validate_query_text(user_input)
-        except ValueError as exc:
-            return self._error_payload(
-                message=str(exc),
-                graph_total_ms=None,
-                flow_started=flow_started,
-                stage_error=None,
-            )
+        except ValueError:
+            return self._early_result(TurnResult(
+                status="needs_input", missing_slots=["query"],
+                message="질문을 입력해 주세요." if not user_input.strip() else
+                        "질문이 입력 한도를 초과했습니다. 내용을 줄이거나 나누어 입력해 주세요.",
+            ))
 
         if is_session_reset_command(user_input):
             self.close()
-            return self._exit_payload("Chat session has been reset. Start again.")
+            return self._early_result(TurnResult(
+                response=finalize_answer(text_document("Chat session has been reset. Start again."), []),
+            ))
 
         response: dict[str, Any] | None = None
         graph_total_ms: int | None = None
@@ -291,11 +299,14 @@ class AgentFlowManager:
             )
             final_runtime = parse_runtime_state(response.get("runtime", state.get("runtime")))
             final_response_state = get_response_state(response)
+            if assembled_response["status"] in {"failed", "partial", "refused"}:
+                return assembled_response
             durable_memory = build_durable_conversation_memory(
                 updated_messages,
                 memory_summary=candidate_summary,
                 policy=self._conversation_memory_policy(),
-                canonical_assistant_text=export_answer_text(AnswerResponse.model_validate(assembled_response["response"])),
+                canonical_assistant_text=(assembled_response["message"] if assembled_response["status"] == "needs_input"
+                                          else export_answer_text(final_response_state.result)),
             )
             self._ensure_session().commit_conversation_memory(
                 messages=durable_memory.messages,
@@ -307,7 +318,7 @@ class AgentFlowManager:
             # Only completed answers become the referent of "the previous answer".
             # A destination question or failure must not replace a pending document.
             self._ensure_session().commit_response_state(
-                response=AnswerResponse.model_validate(assembled_response["response"]),
+                response=final_response_state.result,
                 response_kind=final_response_state.kind,
                 pending_action=final_runtime.pending_action,
             )
@@ -324,11 +335,14 @@ class AgentFlowManager:
             if isinstance(root_exc, StageExecutionError):
                 stage_error = root_exc
                 root_exc = root_exc.cause
-            if progress_emitter is not None and stage_error is None:
-                progress_emitter.emit_error(message=str(root_exc), stage=None)
-            log_event(logger, logging.ERROR, "agent_execution_error", error=root_exc)
+            problem = root_exc.problem if isinstance(root_exc, LLMCallError) else make_problem(
+                "internal_error", stage_error.stage if stage_error else "request")
+            diagnostic = root_exc.diagnostic if isinstance(root_exc, LLMCallError) else None
+            log_event(logger, logging.ERROR, "agent_execution_error", code=problem.code,
+                      stage=problem.stage, exception_type=type(root_exc).__name__)
             return self._error_payload(
-                message=str(root_exc),
+                problem=problem,
+                diagnostic=diagnostic,
                 graph_total_ms=graph_total_ms,
                 flow_started=flow_started,
                 stage_error=stage_error,

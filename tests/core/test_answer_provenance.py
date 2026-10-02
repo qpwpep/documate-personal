@@ -159,12 +159,10 @@ def test_missing_source_cannot_publish_a_bound_parent_or_borrow_its_evidence():
     published = _publish(state)
 
     assert state["response"].kind == "clarification"
-    assert published["debug"]["answer_provenance"] == {
-        "version": 1, "body_kind": "copy_answer", "response_hash": state["response"].result.content_hash,
-        "request_id": contract.request_id, "contract_revision": contract.revision,
-        "save_operation_binding_sha256": None,
-        "source": None, "evidence_packet": [],
-    }
+    assert published["response"] is None
+    assert published["debug"]["answer_provenance"] is None
+    assert state["response"].evidence_packet == []
+    assert state["response"].evidence_source is None
 
 
 @pytest.mark.parametrize("terminal_path", ["unresolved_answer", "missing_upload", "exhausted_retrieval"])
@@ -188,11 +186,9 @@ def test_pre_synthesis_terminal_answers_publish_an_explicit_empty_evidence_scope
     state.update(make_pre_synthesis_validation_node(False)(state))
     published = _publish(state)
 
-    assert state["response"].kind == "clarification"
-    assert published["response"]["citations"] == []
-    assert published["debug"]["answer_provenance"] == {
-        "version": 1, "body_kind": contract.body.kind, "response_hash": state["response"].result.content_hash,
-        "request_id": contract.request_id, "contract_revision": contract.revision,
-        "save_operation_binding_sha256": None,
-        "source": None, "evidence_packet": [],
-    }
+    assert state["response"].kind == ("failure" if terminal_path == "exhausted_retrieval" else "clarification")
+    assert published["status"] == ("failed" if terminal_path == "exhausted_retrieval" else "needs_input")
+    assert published["response"] is None
+    assert published["debug"]["answer_provenance"] is None
+    assert state["response"].evidence_packet == []
+    assert state["response"].evidence_source is None

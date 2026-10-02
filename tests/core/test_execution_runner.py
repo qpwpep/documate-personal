@@ -10,6 +10,7 @@ from langgraph.types import Command
 
 from src.app.agent_manager import AgentFlowManager
 from src.core.answer_schema import finalize_answer, text_document
+from src.core.conversation_memory import DEFAULT_QUERY_MAX_CHARS
 from src.core.contracts import DebugState, GraphState, ResponseState
 from src.core.latency import make_stage_latency_event
 from src.infra.settings import AppSettings
@@ -165,7 +166,10 @@ def test_manager_preserves_committed_diagnostics_and_session_on_failure(outcome:
         "stage": "synthesis", "attempt": 1, "latency_ms": 9, "status": None,
     }
     assert manager._ensure_session().snapshot_conversation_memory() == before
-    assert len([event for event, _data in progress if event == "error"]) == 1
+    assert not [event for event, _data in progress if event == "error"]
+    assert result["status"] == "failed"
+    assert result["response"] is None
+    assert result["problem"]["code"] == "internal_error"
     if outcome == "graph_failure":
         attempts = result["debug"]["latency_breakdown"]["stage_attempts"]
         assert len(attempts) == 2
@@ -180,3 +184,18 @@ def test_manager_has_no_routing_decisions_before_graph_execution(query: str) -> 
 
     assert result["debug"]["route_decisions"] == []
     assert result["debug"]["memory_compactions"] == []
+
+
+@pytest.mark.parametrize("query", ["", "   ", "x" * (DEFAULT_QUERY_MAX_CHARS + 1)], ids=["empty", "blank", "too-long"])
+def test_invalid_user_input_is_a_clarification_without_a_technical_failure(query: str) -> None:
+    manager = _manager(_manager_graph("graph_failure"))
+    before = manager._ensure_session().snapshot_conversation_memory()
+    result = manager.run_agent_flow(query)
+    assert result["status"] == "needs_input"
+    assert result["problem"] is None
+    assert result["response"] is None
+    assert result["message"]
+    assert result["missing_slots"] == ["query"]
+    assert result["debug"]["error_codes"] == []
+    assert result["debug"]["tool_calls"] == []
+    assert manager._ensure_session().snapshot_conversation_memory() == before

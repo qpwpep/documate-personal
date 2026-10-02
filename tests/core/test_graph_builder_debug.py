@@ -10,6 +10,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 from src.runtime.agent_runtime.llm_usage import capture_llm_usage
 from src.core.answer_schema import export_answer_text
 from src.core.request_contracts import RequestContract
+from src.core.planner_schema import InitialPlannerOutput
 from src.core.contracts.boundary.debug import get_debug_state
 from src.infra.chunking import chunk_python_text
 from src.core.contracts.boundary.graph import build_graph_state_input
@@ -48,7 +49,7 @@ class _EvidenceAwareSynthesisLLM(_CaptureStructuredSynthesizeLLM):
         self.repair_first = repair_first
         self.attempt = 0
 
-    def invoke(self, messages):
+    def invoke(self, messages, **kwargs):
         self.attempt += 1
         packet_text = next(message.content for message in messages if str(message.content).startswith("[Evidence Packet]"))
         packet = json.loads(packet_text.split("\n", 2)[2])
@@ -63,7 +64,7 @@ class _EvidenceAwareSynthesisLLM(_CaptureStructuredSynthesizeLLM):
         ]}
         if self.repair_first and self.attempt == 1:
             self.payload["blocks"][0]["content"][0]["refs"] = ["unknown-evidence"]
-        return super().invoke(messages)
+        return super().invoke(messages, **kwargs)
 
 
 class GraphBuilderDebugTest(unittest.TestCase):
@@ -167,14 +168,14 @@ class GraphBuilderDebugTest(unittest.TestCase):
         )
         def provider(**kwargs):
             if kwargs.get("model") == settings.planner_model:
-                return _CaptureStructuredSynthesizeLLM(payload={
+                return _CaptureStructuredSynthesizeLLM(payload=InitialPlannerOutput.model_validate({
                     "request_contract": RequestContract().to_wire().model_dump(mode="json"),
                     "use_retrieval": True,
                     "tasks": [
                         {"route": "docs", "query": "numpy concatenate official docs", "k": 3},
                         {"route": "upload", "query": "numpy concatenate uploaded example", "k": 3},
                     ],
-                }, include_raw=True)
+                }).model_dump(mode="json"), include_raw=True)
             return _EvidenceAwareSynthesisLLM(include_raw=True, repair_first=repair)
 
         provider_model.side_effect = provider
