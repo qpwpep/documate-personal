@@ -10,6 +10,7 @@ from src.core.contracts.boundary.planner import parse_planner_diagnostic
 from src.core.contracts.boundary.retrieval import normalize_retrieval_diagnostic_observation
 from src.core.contracts.debug import DEBUG_CRITICAL_FIELDS, DEBUG_REQUIRED_FIELDS, DEBUG_SCHEMA_VERSION
 from src.core.contracts.debug import PlannerDiagnostic, RetrievalDiagnostic
+from src.core.contracts.outcome import TurnResult
 from src.core.contracts.usage import LLMCallRecord
 from src.core.contracts.provenance import AnswerProvenance
 from src.core.contracts.routing import RoutingDecision, validate_route_decisions
@@ -28,6 +29,7 @@ class ParsedResponseData:
     http_status: int = 0
     response_text: str = ""
     response: AnswerResponse | None = None
+    turn_result: TurnResult | None = None
     debug: dict[str, Any] | None = None
     answer_provenance: AnswerProvenance | None = None
     evidence_assessment: EvidenceAssessment | None = None
@@ -194,27 +196,44 @@ def parse_agent_response(
         parsed.response_trace = trace_raw
     else:
         parsed.response_errors.append("trace must be a string")
-    parsed.request_id = request_id or _extract_request_id(parsed.response_trace)
+    body_request_id = body.get("request_id")
+    parsed.request_id = request_id or (
+        body_request_id if isinstance(body_request_id, str) and body_request_id else None
+    ) or _extract_request_id(parsed.response_trace)
 
     response_raw = body.get("response")
-    if not isinstance(response_raw, dict):
-        parsed.response_errors.append("response payload must be an object")
-    else:
-        try:
-            parsed.response = validated_response if validated_response is not None else AnswerResponse.model_validate(response_raw)
+    outcome_payload = {name: body[name] for name in TurnResult.model_fields if name in body}
+    if isinstance(response_raw, dict) and validated_response is not None:
+        outcome_payload["response"] = validated_response
+    try:
+        parsed.turn_result = TurnResult.model_validate(outcome_payload)
+    except (TypeError, ValueError) as exc:
+        parsed.response_errors.append(f"turn result invalid: {exc}")
+    if parsed.turn_result is not None:
+        outcome = parsed.turn_result
+        parsed.response = outcome.response
+        if parsed.response is None:
+            parsed.response_text = outcome.message
+        else:
             parsed.response_text = export_answer_text(parsed.response)
             parsed.actions = list(parsed.response.actions)
             if not parsed.response_text.strip() and not parsed.actions:
                 parsed.response_errors.append("response.content is empty")
-        except Exception as exc:
-            parsed.response_errors.append(f"response invalid: {exc}")
+        if outcome.problem is not None:
+            problem = outcome.problem
+            parsed.error_codes.append(problem.code)
+            parsed.runtime_errors.append(f"{problem.code} ({problem.stage}): {problem.message}")
+    elif not isinstance(response_raw, dict):
+        parsed.response_errors.append("response payload must be an object")
 
+    answer_expected = parsed.turn_result is None or parsed.response is not None
     debug_payload = body.get("debug")
     if isinstance(debug_payload, dict):
         parsed.debug = debug_payload
         raw_provenance = debug_payload.get("answer_provenance")
         if raw_provenance is None:
-            parsed.response_errors.append("debug.answer_provenance is missing")
+            if answer_expected:
+                parsed.response_errors.append("debug.answer_provenance is missing")
         else:
             try:
                 parsed.answer_provenance = AnswerProvenance.model_validate(raw_provenance)
@@ -225,6 +244,7 @@ def parse_agent_response(
         present_debug_keys = {str(key) for key in debug_payload.keys()}
         parsed.missing_required_debug_fields = [
             field for field in DEBUG_REQUIRED_FIELDS if field not in present_debug_keys
+            and (answer_expected or field != "answer_provenance")
         ]
         schema_version_raw = debug_payload.get("schema_version")
         if schema_version_raw is None:
@@ -256,6 +276,8 @@ def parse_agent_response(
                 response_errors=parsed.response_errors,
             )
             for field_name in self_reported_missing_fields:
+                if field_name == "answer_provenance" and not answer_expected and raw_provenance is None:
+                    continue
                 if field_name not in parsed.missing_required_debug_fields:
                     parsed.missing_required_debug_fields.append(field_name)
         critical_missing_debug_fields = [
@@ -297,7 +319,9 @@ def parse_agent_response(
                 parsed.response_errors.append("debug.latency_ms_server must be an integer")
         parsed.llm_calls, usage_errors = normalize_llm_call_observation(debug_payload.get("llm_calls"))
         parsed.response_errors.extend(usage_errors)
-        parsed.error_codes = parse_error_codes(debug_payload.get("error_codes"))
+        for error_code in parse_error_codes(debug_payload.get("error_codes")):
+            if error_code not in parsed.error_codes:
+                parsed.error_codes.append(error_code)
         parsed.validation_events = _parse_string_list(
             debug_payload.get("validation_events"),
             label="debug.validation_events",
@@ -354,7 +378,7 @@ def parse_agent_response(
         )
         if parsed.latency_breakdown is not None and parsed.latency_breakdown.synthesis_attempts:
             parsed.synthesis_mode = parsed.latency_breakdown.synthesis_attempts[0].mode
-    else:
+    elif debug_payload is not None or answer_expected:
         parsed.response_errors.append("debug payload is missing (include_debug=true expected)")
 
     return parsed

@@ -5,6 +5,7 @@ from typing import Iterable
 from urllib.parse import urlparse
 
 from src.core.answer_schema import AnswerResponse, export_answer_text, iter_content_units
+from src.core.contracts.outcome import TurnResult
 from src.core.domain_docs import DEFAULT_DOCS
 from src.core.evidence import EvidenceRef, SearchHit
 from .config_models import BenchmarkCase
@@ -215,6 +216,7 @@ def compute_rule_scores(
     *,
     case: BenchmarkCase,
     response: AnswerResponse | None,
+    turn_result: TurnResult | None = None,
     called_tools: list[str],
     observed_hits: list[SearchHit],
     runtime_errors: list[str],
@@ -227,6 +229,8 @@ def compute_rule_scores(
     save_outcome_verified: bool = False,
 ) -> dict[str, float]:
     response_text = export_answer_text(response) if response is not None else ""
+    if turn_result is not None and turn_result.status == "needs_input":
+        response_text = turn_result.message
     return {
         "answer_quality": score_answer_quality(case, response_text, observed_hits, synthesis_mode=synthesis_mode),
         "reference_coverage": score_reference_coverage(case=case, response=response, observed_hits=observed_hits, validator_reason=validator_reason, evidence_scope=evidence_scope),

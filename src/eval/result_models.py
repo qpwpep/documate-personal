@@ -6,6 +6,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field, model_validator
 
 from src.core.answer_schema import AnswerResponse, ActionReceipt
+from src.core.contracts.outcome import TurnResult
 from src.core.contracts.debug import PlannerDiagnostic, RetrievalDiagnostic
 from src.core.contracts.usage import LLMCallRecord
 from src.core.contracts.provenance import AnswerProvenance
@@ -70,6 +71,7 @@ class ScenarioTurnResult(BaseModel):
     http_status: int = 0
     request_id: str | None = None
     response: AnswerResponse | None = None
+    turn_result: TurnResult | None = Field(default=None, exclude_if=lambda value: value is None)
     raw_final_response: dict[str, Any] | None = None
     trace: str | None = None
     debug: dict[str, Any] | None = None
@@ -133,6 +135,7 @@ class CaseResult(BaseModel):
     http_status: int
     response_text: str = ""
     response: AnswerResponse | None = None
+    turn_result: TurnResult | None = Field(default=None, exclude_if=lambda value: value is None)
     debug: dict[str, Any] | None = None
     answer_provenance: AnswerProvenance | None = None
     evidence_assessment: EvidenceAssessment | None = None
