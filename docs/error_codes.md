@@ -1,6 +1,32 @@
 # ErrorCode taxonomy
 
-이 문서는 그래프의 debug/action 오류와 문서 첨부 API의 HTTP 오류를 구분해 정리합니다. "재시도 가능"은 같은 요청을 다시 보내는 것만으로 회복될 가능성입니다. 설정, 인증, 파일 상태가 원인인 코드는 원인을 고친 뒤 재시도해야 합니다.
+이 문서는 질문 실행 결과, 그래프의 debug/action 오류, 문서 첨부 API의 HTTP 오류를 정리합니다. "재시도 가능"은 같은 요청을 다시 보내는 것만으로 회복될 가능성입니다. 설정, 인증, 파일 상태가 원인인 코드는 원인을 고친 뒤 재시도해야 합니다.
+
+## 질문 실행 결과와 제공자 오류
+
+질문의 SSE 스트림은 `final_response` 하나로 완료됩니다. 공통 `TurnResult`는 `status`, `response`, `message`, `problem`, `request_id`, `missing_slots`를 전달합니다. `completed`와 `partial`만 검증된 `AnswerResponse`를 포함합니다. `needs_input`은 실제 누락된 사용자 정보에 대한 질문이며, `failed`와 `refused`는 답변 문서를 만들지 않습니다. `partial`은 이미 확보하고 검증한 근거로 제한된 답변을 제공하며 실패 원인을 함께 표시합니다. 단순 확인이나 취소 완료는 `completed`입니다.
+
+`problem`의 `code`, `stage`, 안전한 `message`, `next_action`, `retry_after_seconds`는 `include_debug=False`에서도 유지됩니다. 제공자가 정상 질문의 출력 스키마를 거부해도 질문을 고쳐 쓰라는 보충 질문으로 바뀌지 않습니다. 기술적 실패·거절·부분 답변은 세션의 이전 답변과 보류 작업을 덮어쓰지 않으며 UI rerun이 질문을 자동 재전송하지 않습니다.
+
+| code | 원인 | 다음 행동과 자동 복구 |
+|---|---|---|
+| `provider_schema_invalid` | 로컬 스키마 컴파일 실패 또는 제공자가 `response_format`/`text.format` 스키마를 거부 | `fix_configuration`. 자동 재시도·재검색·축소 합성을 하지 않습니다. 사용자 질문 수정은 필요하지 않습니다. |
+| `provider_configuration` | 인증·권한·모델/매개변수 설정 오류 또는 할당량·결제 한도 부족 | `fix_configuration`. 같은 요청을 자동 반복하지 않습니다. |
+| `provider_rate_limited` | 일시적 429 요청 제한 | `retry_later`. `Retry-After`와 전체 호출 예산 안에서 제한적으로 재시도합니다. |
+| `provider_unavailable` | timeout, 연결 장애, 408/409/5xx 등 일시적 제공자 실패 | `retry_later`. 제한된 재시도 후 종료하며 합성 timeout만 축소 context 복구를 사용할 수 있습니다. |
+| `model_output_invalid` | JSON, wire schema, 도메인 계약 또는 바인딩 검증 실패 | 기존 사용자 제약을 유지한 출력 수정 요청을 최대 한 번 수행합니다. 실패하면 `retry_later`이며 질문 의도를 다시 묻지 않습니다. |
+| `model_output_incomplete` | 출력 토큰 한도 등으로 생성이 미완료 | `retry_later`. 잘린 JSON을 정상 문서로 복구하거나 보충 질문으로 바꾸지 않습니다. |
+| `call_budget_exhausted` | 다음 호출 전에 역할별 호출 횟수 또는 처리 시간 예산이 소진됨 | `retry_later`. 추가 모델 호출 없이 종료하며 출력 오류로 오분류하지 않습니다. |
+| `model_refusal` | 모델의 명시적 refusal 또는 content filter | `none`. `refused`로 표시하고 재생성하지 않습니다. |
+| `internal_error` | 분류되지 않은 내부 실행 오류 | `none`. 예외 원문 대신 안전한 안내와 request ID를 전달하며 운영자가 진단을 확인합니다. |
+| `evidence_insufficient` | 검색·근거 검증 후 답변에 필요한 근거를 확보하지 못함 | `supply_information`. 기술적 검색 실패와 실제 사용자 정보 누락을 구분합니다. |
+| `upload_revision_conflict` | 질문에 포함된 첨부 revision이 현재 세션과 다름 | `none`. 현재 첨부 상태를 다시 확인한 뒤 요청합니다. 자동 재전송하지 않습니다. |
+
+Planner와 synthesis는 각 역할별 한 질문에서 최대 3회, 45초의 공통 호출 예산을 사용합니다. 전송 재시도·출력 수정·합성의 축소 복구·그래프의 재진입이 같은 예산을 공유하며 SDK 자체 재시도는 0회입니다. 제공자의 대기 시간이 남은 예산보다 크면 기다린 뒤 무조건 호출하지 않고 종료합니다. 일반 대화 요약 모델은 이 구조화 출력 정책의 대상이 아닙니다.
+
+시간 예산은 다음 호출의 시작 여부와 각 HTTP I/O timeout을 제한합니다. 진행 중인 동기 네트워크 작업을 정확히 45초에 강제 취소하는 전체 요청 deadline은 아닙니다.
+
+개발자 진단은 `debug.llm_diagnostics`와 구조화 로그에 오류 코드, 단계, 모델, endpoint, 스키마 이름·hash, compiler·OpenAI·LangChain 버전, 제공자 status/code/type/param/request ID, 시도와 복구 결정을 기록합니다. 요청 본문·모델 원문 출력·API 키·제공자 예외 메시지를 진단 필드에 저장하지 않습니다. `debug.error_codes`도 예외 문자열 추측 대신 분류된 문제를 사용합니다.
 
 ## 그래프 debug·action ErrorCode
 
@@ -8,15 +34,11 @@
 
 | ErrorCode | 언제 발생하나 | 사용자가 할 일 | 재시도 가능 |
 |---|---|---|---|
-| `PLANNER_SCHEMA_INVALID` | planner의 structured output이 schema 검증 또는 파싱에 실패했습니다. `planner_unavailable`로 기록하고 검색·저장·전송 없이 재요청을 안내합니다. | 질문 의도, 필요한 문서 범위, 업로드 파일 사용 여부를 더 명확히 적습니다. 반복된다면 planner prompt/schema 변경 여부를 확인합니다. | 예. 재요청으로 정상 output이 나올 수 있습니다. |
-| `PLANNER_TIMEOUT` | planner LLM 호출이 timeout 또는 timed out 오류로 종료됐습니다. | 질문을 줄이거나 다시 요청합니다. 운영자는 모델 지연, 네트워크, planner timeout 설정을 확인합니다. | 예. 일시적 지연이면 재시도 가능성이 높습니다. |
 | `RETRIEVAL_DOCS_TIMEOUT` | 공식 문서 검색 route의 Tavily 호출이 `DOCS_SEARCH_TIMEOUT_SECONDS` 안에 끝나지 않았습니다. | 질문의 라이브러리/버전/기능명을 좁히고 다시 요청합니다. 운영자는 Tavily 상태와 timeout 설정을 확인합니다. | 예. 외부 검색 지연이면 재시도로 회복될 수 있습니다. |
 | `RETRIEVAL_DOCS_FAILED` | Tavily 호출 실패, 예외, 예상과 다른 응답 타입, `results` payload 누락 등 공식 문서 검색이 실패했습니다. | 공식 문서 검색이 꼭 필요하면 다시 요청합니다. 운영자는 `TAVILY_API_KEY`, 네트워크, allowlist/domain rule을 확인합니다. | 조건부. 외부/API 문제면 원인 해소 후 재시도합니다. |
 | `RAG_INDEX_MISSING` | 과거 local route의 인덱스 누락 기록을 읽기 위해 유지하는 코드이며 현재 런타임에서는 발생하지 않습니다. | 현재 파일 기반 질문은 해당 파일을 세션에 업로드해 요청합니다. | 아니요. 과거 실행 기록을 해석하는 코드입니다. |
 | `LOCAL_RAG_FAILED` | upload retriever의 similarity search가 예외로 실패했습니다. 과거 결과에서는 local route 실패에도 사용됩니다. | 업로드 파일을 다시 올립니다. 운영자는 embedding/API key와 Chroma 상태를 확인합니다. | 조건부. 파일이나 API 설정을 고친 뒤 재시도합니다. |
 | `UPLOAD_RETRIEVER_BUILD_FAILED` | 과거 단일 업로드 실행 경로의 retriever 준비 실패 기록입니다. 현재 질문 런타임은 인덱스를 생성하지 않으며 첨부 후보 실패는 HTTP 오류로 반환합니다. | 과거 결과의 실패 원인을 읽는 코드입니다. 현재 첨부 실패는 아래 HTTP 코드로 확인합니다. | 아니요. 현재 런타임에서는 발생하지 않습니다. |
-| `LLM_STRUCTURED_EMPTY` | synthesis 단계에서 표시할 `AnswerDocument.blocks`가 비어 있었습니다. | 질문을 더 작게 나누거나 다시 요청합니다. 운영자는 모델 응답/structured output adapter 로그를 확인합니다. | 예. 일시적 LLM 출력 실패일 수 있습니다. |
-| `SYNTHESIS_TIMEOUT` | 최종 답변 생성 단계가 timeout 또는 timed out 오류로 종료됐습니다. | 질문 범위를 줄이거나 업로드/근거 요구를 좁혀 다시 요청합니다. 운영자는 `SYNTHESIS_TIMEOUT_SECONDS`와 모델 지연을 확인합니다. | 예. 다만 큰 context가 원인이면 요청을 줄인 뒤 재시도합니다. |
 | `VALIDATION_UNRESOLVED_REFERENCES` | 실제 표시 내용의 `refs`가 해당 synthesis packet에 없거나, 근거가 필요한 내용에 참조가 없습니다. 의미적 사실 판정은 아닙니다. | 더 구체적인 자료를 제공하거나 답변 범위를 좁힙니다. 운영자는 packet 선택과 출력 refs를 확인합니다. | 조건부. 확보한 검색 결과를 재사용해 본문과 참조를 함께 다시 생성할 수 있습니다. |
 | `VALIDATION_MISSING_CONTENT` | 본문이 비었거나 요청한 코드·단계·체크리스트 형식 또는 출처 범위가 부족합니다. 원문 발췌가 실제 선택 범위와 일치하지 않는 경우도 포함합니다. | 원하는 결과를 구체적으로 적습니다. 운영자는 내용 단위의 checks, 요청 계약과 route coverage를 확인합니다. | 조건부. 재합성 후에도 부족하면 확인 가능한 원문 발췌와 제한을 제공합니다. |
 | `DEBUG_NORMALIZATION_FAILED` | web API가 raw debug payload를 `AgentDebugInfo`로 정규화하는 중 latency/debug 구조 검증에 실패했습니다. | 답변 자체보다 관측성 정보가 불완전한 상태입니다. 운영자는 raw debug payload와 `schema_version`을 확인합니다. | 아니요. 같은 사용자 요청 반복보다 debug schema/normalizer 수정이 필요합니다. |
@@ -64,7 +86,7 @@ OCR의 글자 오인식이나 문단 누락이 항상 실패 상태로 검출되
 
 - 그래프 ErrorCode의 source of truth는 `src/core/contracts/debug.py`이며, 문서 첨부 HTTP 상태 매핑은 `src/app/web/upload_service.py`에서 관리합니다.
 - retrieval/action tool은 가능한 경우 payload의 `error_code`에 직접 기록합니다.
-- planner/synthesis 계열 코드는 stage error 문자열을 정규화해서 debug payload의 `error_codes`에 합쳐집니다.
+- planner/synthesis 오류는 `src/core/llm_errors.py`의 분류된 문제를 사용합니다. 과거 대문자 LLM 오류 코드는 기존 실행 기록을 읽는 용도로만 남아 있습니다.
 - benchmark histogram은 `src/eval/reporting/histograms.py`에서 같은 코드 집합을 bucket으로 집계합니다.
 - 사용자에게 필요한 제한은 `AnswerResponse.issues`, 내용별 확인 결과는 `checks`, 저장·전송 실패는 `actions`에도 전달합니다. debug를 끈 상태에서도 이 정보는 유지됩니다.
 - 참조가 `resolved`인 것과 설명이 원문으로 뒷받침되는 것은 구분합니다. 일반 설명의 `support_status`는 `not_evaluated`이며, 원문 발췌가 정확히 일치할 때만 `exact_match`입니다.

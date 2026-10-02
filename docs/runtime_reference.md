@@ -110,7 +110,6 @@ PLANNER_REASONING_EFFORT=high
 | `DOCS_SEARCH_TIMEOUT_SECONDS` | `5` | Tavily 요청별 timeout |
 | `SYNTHESIS_TIMEOUT_SECONDS` | `20` | synthesis provider 요청 timeout |
 | `SYNTHESIS_USE_RESPONSES_API` | `false` | synthesis Responses API 사용 여부 |
-| `SYNTHESIS_MAX_RETRIES` | `0` | synthesis provider SDK 재시도 횟수 |
 | `SYNTHESIS_MAX_TOKENS` | `4096` | 일반 synthesis 생성 토큰 상한 |
 | `SYNTHESIS_COMPACT_MAX_TOKENS` | `960` | timeout 복구용 synthesis 생성 토큰 상한; 일반 상한과 독립 |
 | `SYNTHESIS_PROMPT_SNIPPET_CHARS` | `1800` | 새 검색 근거의 개별 excerpt 문자 상한 (Python len 기준; 전체 입력 토큰 한도 아님) |
@@ -231,7 +230,7 @@ UI와 문서 검색 규칙은 아래 파일을 기준으로 관리합니다.
 | `requirement.aspects` | 사용자 대화에서 명시적으로 요청한 원문의 식별자·매개변수. 모델이 추정한 옵션값을 필수 조건으로 추가하지 않으며, 일반 설명과 검색용 추정 용어는 `query`에 유지 |
 | `requirement.match` | 넓은 설명은 `topic`, API·심볼 사용은 `symbol`, 업로드 함수·클래스 구현은 `definition` |
 
-대화로도 대상이나 비교 버전을 정할 수 없으면 계약의 `missing_info`에 부족한 정보와 질문을 남기고 `use_retrieval=false`, `tasks=[]`로 반환합니다. 최상위 별도 질문 필드는 사용하지 않습니다. 서버가 본문 준비 상태에서 확인 질문을 파생하며, 이는 모델 호출 실패인 `planner_diagnostics.reason="planner_unavailable"`과 구분합니다. 파일 조회에 필요한 업로드가 없으면 업로드를 안내합니다. 행동 의사·목적지만 미해결이면 준비 가능한 본문을 작성하고 해당 행동을 보류합니다. 본문 대상이 미해결이거나 planner 호출·출력 검증이 실패하면 검색·저장·전송을 진행하지 않습니다.
+대화로도 대상이나 비교 버전을 정할 수 없으면 계약의 `missing_info`에 부족한 정보와 질문을 남기고 `use_retrieval=false`, `tasks=[]`로 반환합니다. 최상위 별도 질문 필드는 사용하지 않습니다. 서버가 본문 준비 상태에서 확인 질문을 파생해 `needs_input`으로 전달합니다. 모델 호출·출력 검증 실패는 분류된 `problem`과 `failed` 또는 `refused` 상태로 전달하며 누락 정보 계약을 꾸며내지 않습니다. 파일 조회에 필요한 업로드가 없으면 업로드를 안내합니다. 행동 의사·목적지만 미해결이면 준비 가능한 본문을 작성하고 해당 행동을 보류합니다. 본문 대상이 미해결이거나 planner 호출·출력 검증이 실패하면 검색·저장·전송을 진행하지 않습니다.
 
 planner 검색어 후처리는 공백을 정규화해 한국어 주제와 식별자를 보존합니다. 별도로 `aspects`를 최근 사용자 대화의 명시적 표현과 대조하므로, 모델이 추정한 허용값이 답변에 필요한 필수 근거 조건으로 승격되지 않습니다. 검색 질의의 보조 용어와 사용자가 요구한 제약은 구분합니다. docs 도구는 알려진 라이브러리·API 별칭을 정규화하되 명시된 라이브러리, 심볼, 버전, aspect를 검색과 후보 검사의 기준으로 유지합니다.
 
@@ -638,10 +637,12 @@ Streamlit은 `AnswerResponse` 전체를 채팅 기록에 보존합니다. 본문
 
 - `src.app.service_manager`는 FastAPI와 Streamlit을 함께 띄우고 종료합니다.
 - `src.app.web.session_store`는 세션별 단일 요청 직렬화 lock을 사용합니다.
-- planner 구조화 요청은 OpenAI client의 요청별 30초 timeout과 최대 2회 SDK 재시도를 사용합니다. 이 값은 stage 전체 deadline이 아니므로 재시도와 SDK backoff를 포함한 총 실행 시간은 30초를 넘을 수 있습니다.
+- Planner와 synthesis 구조화 출력은 `src/infra/structured_schema.py`의 공통 compiler를 사용합니다. 최초 Planner는 필수·nonnull 요청 계약을 포함하고 재검색 Planner는 검색 계획만 생성합니다. compiler는 선택 필드를 required로 전환하되 null 허용 여부를 보존하며, 서로 배타적인 tagged union만 `oneOf`에서 `anyOf`로 바꿉니다. 지원하지 않는 assertion은 삭제하지 않고 스키마 경로를 포함해 실패합니다. 서버 시작과 LLM registry 구성 시 실제 사용하는 세 스키마를 네트워크 호출 없이 미리 검증합니다.
+- Planner의 요청별 timeout은 30초입니다. Planner와 synthesis는 역할별 한 질문에서 최대 3회·45초의 호출 예산을 공유하며 SDK 재시도는 0회입니다. 전송 재시도, 최대 한 번의 출력 수정, 축소 합성, 그래프 재진입이 모두 같은 예산에 포함됩니다. 각 요청 timeout은 남은 예산 이하로 제한됩니다. 스키마·인증·모델 설정·할당량 오류와 명시적 거절은 자동 재시도하지 않습니다.
 - 출력 토큰 한도는 `src/infra/llm.py`의 LLM 생성부에서만 적용합니다. planner는 `PLANNER_MAX_TOKENS`, 일반 synthesis는 `SYNTHESIS_MAX_TOKENS`, compact는 독립된 `SYNTHESIS_COMPACT_MAX_TOKENS`, 요약 생성은 `SUMMARY_MAX_TOKENS`를 사용합니다. synthesis 노드는 입력 예산만 관리하며 출력 cap을 다시 bind하지 않습니다. 설치된 SDK는 Chat Completions의 `max_completion_tokens`, Responses의 `max_output_tokens`로 전달합니다. 생성 한도에는 reasoning과 구조화 JSON도 포함되며 요청·세션 전체의 누적 사용량 상한은 아닙니다. planner effort를 높여도 기본 `1920` 토큰 상한과 요청별 `30`초 timeout은 자동으로 늘어나지 않으므로 출력 완결성·지연·timeout을 함께 확인해야 합니다.
-- synthesis 구조화 요청은 요청별 `SYNTHESIS_TIMEOUT_SECONDS`와 `SYNTHESIS_MAX_RETRIES`를 사용합니다. 재시도를 허용하면 primary synthesis의 총 실행 시간은 설정된 요청별 timeout을 넘을 수 있습니다. timeout에만 시도하는 compact fallback은 독립 출력 cap, 일반의 절반인 요청별 timeout, SDK 재시도 0회를 사용합니다. 일반 출력 cap을 올려도 compact 출력 cap은 늘지 않습니다.
-- startup의 `fastapi_runtime_settings` 로그에는 모델, Planner/Synthesis reasoning effort, 출력 토큰 한도, Docs/Synthesis timeout, Synthesis SDK retry, memory high/low/hard policy가 포함됩니다. reasoning effort를 생략한 단계는 `model_default`, 명시한 단계는 `none`을 포함한 설정값을 기록합니다.
+- synthesis 구조화 요청은 요청별 `SYNTHESIS_TIMEOUT_SECONDS`를 사용합니다. timeout에만 시도하는 compact fallback은 독립 출력 cap과 일반의 절반인 요청별 timeout을 사용합니다. 일반 출력 cap을 올려도 compact 출력 cap은 늘지 않습니다. 일시적 429/5xx의 `Retry-After`가 남은 예산보다 길면 즉시 다른 경로로 호출하지 않고 안전한 실패 결과를 반환합니다.
+- startup의 `fastapi_runtime_settings` 로그에는 모델, Planner/Synthesis reasoning effort, 출력 토큰 한도, Docs/Synthesis timeout, memory high/low/hard policy가 포함됩니다. reasoning effort를 생략한 단계는 `model_default`, 명시한 단계는 `none`을 포함한 설정값을 기록합니다.
+- 질문 실행 결과는 `completed`, `needs_input`, `failed`, `partial`, `refused`로 구분합니다. `include_debug=False`에도 `problem`과 안전한 안내·request ID가 유지됩니다. 오류 분류, 사용자 대응과 진단 계약은 [오류 코드](error_codes.md)를 참고하세요.
 - agent request 로그는 query 원문 대신 문자 수, UTF-8 byte 수, SHA-256 hash만 기록합니다.
 - benchmark run 산출물과 `latest_release_run.txt`, `latest_smoke_run.txt` 포인터는 Git으로 추적하지 않는 `output/benchmarks/` 아래에 로컬로 유지합니다.
 - run별 자동 판정과 상세 분석은 각각 `output/benchmarks/<run_id>/summary.json`, `output/benchmarks/<run_id>/report.md`에서 확인합니다.
@@ -670,6 +671,13 @@ LIVE_TEST=true uv run pytest tests/core/test_prompts.py -k live_source_selection
 ```
 
 이 검사는 단일 요청과 대화 후속 질문의 출처 유지·변경, 주제 전환, 업로드 부재 안내를 확인합니다. 외부 문서 검색이나 파일 검색 도구는 실행하지 않습니다.
+
+현재 설정된 모델과 실제 공식 문서 검색으로 구조화 출력의 정상 흐름만 소수 점검하려면 다음 검사를 사용합니다. pandas merge와 NumPy reshape 질문의 검색·인용 답변 완료, 재검색 전용 스키마 수락을 검증합니다. 저장·전송 도구와 벤치마크는 실행하지 않습니다.
+
+```bash
+STRUCTURED_OUTPUT_LIVE_TEST=true LANGSMITH_TRACING=false LANGCHAIN_TRACING_V2=false \
+  uv run pytest tests/core/test_structured_output_live.py -q -s
+```
 
 세 GPT-5.6 모델의 공통 프롬프트를 같은 대표 입력으로 점검하려면 다음 opt-in 검사를 사용합니다. planner·synthesis·summary 모델만 호출하며 검색·저장·Slack 도구는 실행하지 않습니다. 실행별 원시 출력, 프롬프트·스키마 hash, 판정 결과는 `output/prompt_comparison/`에 보존합니다.
 
