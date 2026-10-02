@@ -1,13 +1,16 @@
+import pytest
 from langchain_core.messages import HumanMessage
 
 from src.core.answer_schema import AnswerDocument, export_answer_text, finalize_answer, text_document
 from src.core.contracts import PlannerState, ResponseState, RuntimeState
 from src.core.planner_schema import PlannerOutput
+from src.core.llm_errors import LLMCallError
 from src.core.request_contracts import (
     AnswerContract, BoundAnswerReference, ContentRequirement, ContractEvidence,
     CopyAnswerBody, FormatRequirement, RequestContract, TransformAnswerBody,
 )
 from src.runtime.nodes.synthesis import make_synthesize_node
+from src.runtime.agent_runtime.response_assembler import ResponseAssembler
 from src.runtime.nodes.validation import make_post_synthesis_validation_node
 from tests.core.test_synthesis_validation import _hit, _state as retrieval_state
 from tests.synthesis_fixtures import synthesis_excerpt_limits
@@ -80,11 +83,11 @@ def test_source_fallback_does_not_assume_excerpts_satisfy_semantic_requirements(
     state = retrieval_state([_hit("A source excerpt without any comparison.")])
     state["runtime"] = state["runtime"].model_copy(update={"request_contract": contract})
 
-    response = make_synthesize_node(ModelBoundary(error=RuntimeError("generation failed")), excerpt_limits=synthesis_excerpt_limits())(state)["response"]
-
-    assert response.kind == "failure"
-    assert response.result.citations == []
-    assert "A source excerpt" not in export_answer_text(response.result)
+    with pytest.raises(LLMCallError) as caught:
+        make_synthesize_node(ModelBoundary(error=TimeoutError("generation failed")), excerpt_limits=synthesis_excerpt_limits())(state)
+    assert caught.value.problem.code == "provider_unavailable"
+    assert "response" not in state
+    assert "A source excerpt" not in caught.value.problem.message
 
 
 

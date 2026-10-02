@@ -8,6 +8,7 @@ from src.core.contracts.boundary.graph import get_retry_state
 from src.core.contracts.boundary.planner import get_planner_state, parse_planner_output
 from src.core.contracts.boundary.response import get_response_state
 from src.core.contracts.boundary.runtime import get_runtime_state
+from src.core.llm_errors import LLMCallError, make_problem
 from src.infra.logging_utils import log_event
 from src.runtime.nodes.retry import build_followup_from_routes, build_retry_update
 from src.runtime.nodes.validation.evidence_validator import assess_retrieval_quality, collect_validation_snapshot
@@ -27,12 +28,14 @@ def make_pre_synthesis_validation_node(verbose: bool):
         guided_followup = str(planner.guided_followup or "").strip()
         runtime = get_runtime_state(state)
         contract = runtime.request_contract
-        stamp = {"request_id": contract.request_id if contract else None,
-                 "contract_revision": contract.revision if contract else 0,
-                 "body_kind": contract.body.kind if contract else "unresolved",
+        if contract is None or contract.failure is not None or planner.diagnostics.reason == "planner_unavailable":
+            raise LLMCallError(make_problem("internal_error", "pre_synthesis_validation"))
+        stamp = {"request_id": contract.request_id,
+                 "contract_revision": contract.revision,
+                 "body_kind": contract.body.kind,
                  "evidence_source": None}
-        if (contract is not None and contract.can_prepare_body()
-                and planner.diagnostics.reason not in {"upload_retriever_missing", "upload_file_scope_invalid", "planner_unavailable"}):
+        if (contract.can_prepare_body()
+                and planner.diagnostics.reason not in {"upload_retriever_missing", "upload_file_scope_invalid"}):
             guided_followup = ""
 
         if guided_followup:
@@ -44,14 +47,13 @@ def make_pre_synthesis_validation_node(verbose: bool):
                 updates.update(build_followup_updates(guided_followup, attempt=response.synthesis_attempt, **stamp))
                 return updates
             planner_output = parse_planner_output(planner.output, [])
-            planner_unavailable = planner.diagnostics.reason == "planner_unavailable"
             needs_retry, next_retry_context, retrieval_feedback = build_retry_update(
                 retry_context=retry_context,
-                retry_reason=None if planner_unavailable else "blocked_missing_upload",
+                retry_reason="blocked_missing_upload",
                 planner_output=planner_output,
                 retrieval_errors=[],
                 score_avg=None,
-                failed_routes=set() if planner_unavailable else {"upload"},
+                failed_routes={"upload"},
                 request_contract=contract,
             )
             _ = needs_retry
@@ -59,8 +61,6 @@ def make_pre_synthesis_validation_node(verbose: bool):
                 "retry": next_retry_context,
             }
             updates.update(build_followup_updates(guided_followup, attempt=response.synthesis_attempt, **stamp))
-            if planner_unavailable:
-                return updates
             updates["debug"] = debug.model_copy(
                 update={
                     "validation_errors": [
@@ -149,6 +149,8 @@ def make_pre_synthesis_validation_node(verbose: bool):
                 build_followup_updates(
                     followup_answer,
                     attempt=response.synthesis_attempt,
+                    kind="failure",
+                    problem=make_problem("provider_unavailable" if assessment.retry_reason == "tool_error" else "evidence_insufficient", "retrieval"),
                     **stamp,
                 )
             )

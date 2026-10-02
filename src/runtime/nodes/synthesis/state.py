@@ -6,17 +6,7 @@ from src.core.answer_schema import AnswerResponse
 from src.core.contracts import GraphState, ResponseState
 from src.core.contracts.provenance import AnswerSource, BodyKind
 from src.core.evidence import EvidenceRef
-
-
-def _error_codes_from_synthesis_errors(errors: list[str] | None) -> list[str]:
-    codes: list[str] = []
-    for error in errors or []:
-        lowered = error.lower()
-        if "structured output was empty" in lowered and "LLM_STRUCTURED_EMPTY" not in codes:
-            codes.append("LLM_STRUCTURED_EMPTY")
-        if ("timeout" in lowered or "timed out" in lowered) and "SYNTHESIS_TIMEOUT" not in codes:
-            codes.append("SYNTHESIS_TIMEOUT")
-    return codes
+from src.core.llm_errors import ExecutionProblem, LLMDiagnostic
 
 
 def build_synthesis_updates(
@@ -30,18 +20,20 @@ def build_synthesis_updates(
     normal_evidence_missing_requirement_ids: list[str] | None = None,
     body_kind: BodyKind | None = None,
     evidence_source: AnswerSource | None = None,
+    problem: ExecutionProblem | None = None,
+    llm_diagnostics: list[LLMDiagnostic] | None = None,
 ) -> GraphState:
     return {
         "response": ResponseState(result=result, evidence_packet=evidence_packet, synthesis_attempt=attempt,
                                   evidence_requirement_map=evidence_requirement_map or {}, kind=kind,
                                   normal_evidence_missing_requirement_ids=normal_evidence_missing_requirement_ids,
                                   request_id=request_id, contract_revision=contract_revision,
-                                  body_kind=body_kind, evidence_source=evidence_source),
+                                  body_kind=body_kind, evidence_source=evidence_source, problem=problem),
         "debug": debug.model_copy(update={
             "retrieval_errors": [*debug.retrieval_errors, *(retrieval_errors or [])],
             "planner_errors": [*debug.planner_errors, *(planner_errors or [])],
             "synthesis_errors": [*debug.synthesis_errors, *(synthesis_errors or [])],
-            "error_codes": list(dict.fromkeys([*debug.error_codes, *_error_codes_from_synthesis_errors(synthesis_errors)])),
+            "llm_diagnostics": [*debug.llm_diagnostics, *(llm_diagnostics or [])],
             "latency_trace": [*debug.latency_trace, *latency_trace],
         }),
     }

@@ -41,3 +41,17 @@ def schema_error():
         response=httpx.Response(400, request=httpx.Request("POST", "https://api.openai.com/v1/chat/completions")),
         body={"code": "invalid_json_schema", "param": "response_format", "message": "Invalid schema"},
     )
+
+
+
+
+
+
+def test_synthesis_invalid_output_without_sources_remains_a_model_failure():
+    model = ModelReplies({"answer": "unvalidated model prose"})
+
+    with pytest.raises(LLMCallError) as caught:
+        make_synthesize_node(model, excerpt_limits=synthesis_excerpt_limits())(_state([]))
+
+    assert caught.value.problem.code == "model_output_invalid"
+    assert model.calls == 2

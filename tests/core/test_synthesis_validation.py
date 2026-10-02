@@ -9,6 +9,7 @@ from src.core.contracts import PlannerState, ResponseState, RetrievalState, Debu
 from src.core.contracts.boundary.graph import build_graph_state_input
 from src.core.documents import DocumentElement, SourceAnchor, build_snapshot
 from src.core.evidence import RetrievalScore, SearchHit, build_evidence
+from src.core.llm_errors import LLMCallError
 from src.core.planner_schema import PlannerOutput, RetrievalRequirement, RetrievalTask
 from src.core.request_contracts import ExtractBody, RequestContract
 from src.runtime.nodes.synthesis import make_synthesize_node
@@ -50,8 +51,8 @@ class ModelBoundary:
     def with_structured_output(self, *args, **kwargs):
         return self
 
-    def invoke(self, messages):
-        packet_text = str(messages[-1].content)
+    def invoke(self, messages, *, timeout=None):
+        packet_text = next(str(message.content) for message in messages if str(message.content).startswith("[Evidence Packet]"))
         self.packet = json.loads(packet_text[packet_text.index("[", len("[Evidence Packet]")):])
         if self.error:
             raise self.error
