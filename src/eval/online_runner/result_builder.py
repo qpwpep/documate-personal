@@ -140,7 +140,8 @@ def build_case_result(
         scenario_turns = [*(prior_turns or []), ScenarioTurnResult(
             role="question", query=case.query, request_payload=request_payload,
             http_status=parsed_response.http_status, request_id=parsed_response.request_id,
-            response=response, debug=parsed_response.debug, llm_calls=parsed_response.llm_calls,
+            response=response, turn_result=parsed_response.turn_result,
+            debug=parsed_response.debug, llm_calls=parsed_response.llm_calls,
             execution_evidence=parsed_response.execution_evidence,
             tool_calls=parsed_response.tool_calls, observed_hits=parsed_response.observed_hits,
             answer_provenance=parsed_response.answer_provenance,
@@ -211,12 +212,16 @@ def build_case_result(
             message = f"evidence scope: {error}"
             if error not in response_errors and message not in response_errors:
                 response_errors.append(message)
-    conversation = [{"query": turn.query, "response": turn.response,
+    conversation = [{"query": turn.query, "response": turn.response, "turn_result": turn.turn_result,
                      "observed_hits": (turn.debug or {}).get("observed_hits", [])} for turn in (prior_turns or [])]
     has_final_response = response is not None and bool(parsed_response.response_text.strip())
+    has_clarification = (
+        parsed_response.turn_result is not None
+        and parsed_response.turn_result.status == "needs_input"
+    )
     if not judge_required:
         judge_status = "disabled"
-    elif not has_final_response:
+    elif not has_final_response and not has_clarification:
         # A product failure already settles the verdict; this is not a judge outage.
         judge_status = "not_run"
         judge_status_reason = "missing_final_response"
@@ -225,6 +230,7 @@ def build_case_result(
             case=case,
             tool_calls=parsed_response.tool_calls,
             response=response,
+            turn_result=parsed_response.turn_result,
             observed_hits=parsed_response.observed_hits,
             retrieval_diagnostics=parsed_response.retrieval_diagnostics,
             planner_diagnostics=parsed_response.planner_diagnostics,
@@ -245,6 +251,7 @@ def build_case_result(
             case=case,
             tool_calls=parsed_response.tool_calls,
             response=response,
+            turn_result=parsed_response.turn_result,
             observed_hits=parsed_response.observed_hits,
             retrieval_diagnostics=parsed_response.retrieval_diagnostics,
             planner_diagnostics=parsed_response.planner_diagnostics,
@@ -305,6 +312,7 @@ def build_case_result(
     rule_scores = compute_rule_scores(
         case=case,
         response=response,
+        turn_result=parsed_response.turn_result,
         called_tools=parsed_response.tool_calls,
         observed_hits=parsed_response.observed_hits,
         runtime_errors=runtime_errors,
@@ -379,6 +387,7 @@ def build_case_result(
         http_status=parsed_response.http_status,
         response_text=parsed_response.response_text,
         response=response,
+        turn_result=parsed_response.turn_result,
         debug=parsed_response.debug,
         answer_provenance=parsed_response.answer_provenance,
         evidence_assessment=evidence_scope,

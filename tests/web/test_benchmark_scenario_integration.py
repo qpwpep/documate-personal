@@ -16,6 +16,7 @@ import requests
 from langchain_core.messages import AIMessage
 
 from src.core.answer_schema import export_answer_text
+from src.core.planner_schema import InitialPlannerOutput
 from src.core.request_contracts import WireRequestContract
 from src.eval.config_models import BenchmarkCase, BenchmarkConfig
 from src.eval.io import load_cases_jsonl
@@ -39,7 +40,7 @@ class ScenarioChatModel(LocalChatModel):
     def with_structured_output(self, schema, **kwargs):
         return ScenarioChatModel(self.controls, schema_name=schema["name"])
 
-    def invoke(self, messages):
+    def invoke(self, messages, **_kwargs):
         if self.schema_name != "PlannerOutput":
             return super().invoke(messages)
         raw = next(message.content for message in messages if message.name == "request_context")
@@ -56,11 +57,11 @@ class ScenarioChatModel(LocalChatModel):
                 "actions": {"save_text": {"intent": "requested", "evidence_ids": ["missing-upload-request"]}},
             })
             return {
-                "parsed": {
+                "parsed": InitialPlannerOutput.model_validate({
                     "use_retrieval": True,
                     "tasks": [{"route": "upload", "query": "final_review.pdf conclusion", "k": 4}],
                     "request_contract": contract.model_dump(mode="json"),
-                },
+                }).model_dump(mode="json"),
                 "parsing_error": None,
                 "raw": AIMessage(
                     content="", response_metadata={"model_name": "local-test-model"},
@@ -79,7 +80,9 @@ class ScenarioChatModel(LocalChatModel):
             "actions": {"save_text": {"intent": "requested", "evidence_ids": ["save-request"]}},
         })
         return {
-            "parsed": {"use_retrieval": False, "tasks": [], "request_contract": contract.model_dump(mode="json")},
+            "parsed": InitialPlannerOutput.model_validate({
+                "use_retrieval": False, "tasks": [], "request_contract": contract.model_dump(mode="json"),
+            }).model_dump(mode="json"),
             "parsing_error": None,
             "raw": AIMessage(
                 content="", response_metadata={"model_name": "local-test-model"},
@@ -248,11 +251,12 @@ def test_next_benchmark_scenario_cannot_save_another_scenarios_answer(scenario_s
     assert second.runtime_errors == second.response_errors == []
     assert len(second.scenario_turns) == 1
     assert second.scenario_turns[0].upload_manifest.files == []
-    assert second.response is not None
-    assert second.response.citations == []
-    assert not any(action.kind == "save_text" and action.status == "success" for action in second.response.actions)
+    assert second.response is None
+    assert second.turn_result.status == "needs_input"
+    assert second.turn_result.message == second.response_text
+    assert second.actions == []
     assert "save_text" not in second.tool_calls
-    assert "alpha = 1" not in export_answer_text(second.response)
+    assert "alpha = 1" not in second.response_text
     assert not second.release_pass
     assert set(saved.parent.glob("*.txt")) == files_before
     assert saved.read_bytes() == saved_bytes
@@ -285,8 +289,10 @@ def test_release_missing_upload_requests_the_file_without_search_or_save(scenari
     assert len(result.scenario_turns) == 1
     assert result.scenario_turns[0].upload_manifest.files == []
     assert result.planner_diagnostics.reason == "upload_retriever_missing"
-    assert "업로드" in export_answer_text(result.response)
-    assert result.response.citations == result.response.actions == []
+    assert result.response is None
+    assert result.turn_result.status == "needs_input"
+    assert "업로드" in result.turn_result.message
+    assert result.actions == []
     assert result.tool_calls == result.observed_hits == []
     assert result.save_assessment.passed is True
     assert list((root / "output" / "save_text").rglob("*")) == []

@@ -38,7 +38,7 @@ class AnswerDocumentScoringTest(unittest.TestCase):
         """A legacy answer payload fails explicitly instead of silently losing its body."""
         parsed = parse_agent_response(self.final_response_data({"answer": "old body", "claims": [], "evidence": []}))
         self.assertIsNone(parsed.response)
-        self.assertTrue(any("response invalid" in error for error in parsed.response_errors))
+        self.assertTrue(any("turn result invalid" in error for error in parsed.response_errors))
 
     @staticmethod
     def final_response_data(payload: dict) -> dict:

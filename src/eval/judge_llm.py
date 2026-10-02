@@ -10,6 +10,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 
 from src.core.answer_schema import AnswerResponse
+from src.core.contracts.outcome import TurnResult
 from src.core.contracts.provenance import AnswerProvenance
 from src.core.evidence import SearchHit
 from .config_models import BenchmarkCase
@@ -43,6 +44,7 @@ Failure guidance:
 - For docs-focused cases, prioritize official documentation summaries over generic web-style summaries.
 - For hybrid cases, assess whether the displayed content actually compares the official source and uploaded code; no particular block title or layout is required.
 - Evaluate response.content directly. It is the exact document rendered to the user and exported for delivery.
+- A turn_result with status needs_input contains the exact clarification in turn_result.message and has no response document. Evaluate that question against the case oracle; requesting input is correct only when the request actually needs it. Do not require content, citations, or an action receipt merely because response is null.
 - For tool_action cases, do not expect citations or retrieval grounding when the case itself does not require them.
 - For tool_action cases expecting successful execution, expect usable content and a separate action receipt for that action; do not require a receipt appended to the body. Do not require a save receipt when save_expectation is must_not_execute; independently required Slack delivery still needs its own receipt. If the oracle expects clarification without any execution, judge that clarification and non-execution without requiring an action receipt.
 - resolved_upload_fixtures lists the only attachments available to this isolated scenario. When it is empty, asking for the missing file without upload_search is correct if the oracle expects missing-input clarification. Do not invent a search or require a tool call merely to confirm that no file was attached.
@@ -122,6 +124,20 @@ class JudgeScoreOutcome:
     input_issues: list[str] = field(default_factory=list)
 
 
+def _complete_conversation_turn(turn: Any, query: str) -> bool:
+    if not isinstance(turn, dict) or turn.get("query") != query:
+        return False
+    if isinstance(turn.get("response"), dict):
+        return True
+    if turn.get("response") is not None:
+        return False
+    try:
+        outcome = TurnResult.model_validate(turn.get("turn_result"))
+    except (TypeError, ValueError):
+        return False
+    return outcome.status == "needs_input"
+
+
 def _payload_completeness_issues(payload: dict[str, Any]) -> list[str]:
     issues: list[str] = []
     required_top_level = (
@@ -137,13 +153,24 @@ def _payload_completeness_issues(payload: dict[str, Any]) -> list[str]:
         if key not in payload:
             issues.append(f"missing field: {key}")
     response = payload.get("response")
-    if not isinstance(response, dict):
+    turn_result = None
+    if payload.get("turn_result") is not None:
+        try:
+            turn_result = TurnResult.model_validate(payload["turn_result"])
+        except (TypeError, ValueError):
+            issues.append("turn result is invalid")
+    clarification = turn_result is not None and turn_result.status == "needs_input"
+    if clarification and response is not None:
+        issues.append("clarification cannot contain a response document")
+    if turn_result is not None and turn_result.status in {"failed", "refused"}:
+        issues.append("technical failure or refusal is not a scorable answer or clarification")
+    if not clarification and not isinstance(response, dict):
         issues.append("response payload is missing or not an object")
         return issues
     missing_response_keys = [
         key for key in ("content", "citations", "checks", "actions", "content_hash")
         if key not in response
-    ]
+    ] if isinstance(response, dict) else []
     if missing_response_keys:
         issues.append("response missing keys: " + ", ".join(missing_response_keys))
     setup_turns = payload.get("case", {}).get("setup_turns", [])
@@ -152,15 +179,15 @@ def _payload_completeness_issues(payload: dict[str, Any]) -> list[str]:
         not isinstance(conversation, list)
         or len(conversation) != len(setup_turns)
         or any(
-            not isinstance(turn, dict)
-            or turn.get("query") != query
-            or not isinstance(turn.get("response"), dict)
+            not _complete_conversation_turn(turn, query)
             for query, turn in zip(setup_turns, conversation, strict=True)
         )
     ):
         issues.append("setup conversation is missing or does not match case.setup_turns")
     scope = payload.get("evidence_scope")
-    if scope is not None:
+    if clarification and (scope is not None or payload.get("answer_provenance") is not None):
+        issues.append("clarification cannot carry answer provenance or evidence scope")
+    elif scope is not None:
         if (not isinstance(scope, dict) or scope.get("status") != "complete"
                 or scope.get("errors") != [] or not isinstance(scope.get("verified_evidence"), list)):
             issues.append("evidence scope is not complete")
@@ -212,6 +239,7 @@ class LLMJudge:
         case: BenchmarkCase,
         tool_calls: list[str],
         response: AnswerResponse | None,
+        turn_result: TurnResult | None = None,
         observed_hits: list[SearchHit] | None = None,
         retrieval_diagnostics: list[dict[str, Any]] | None = None,
         planner_diagnostics: dict[str, Any] | None = None,
@@ -239,6 +267,7 @@ class LLMJudge:
             case=case,
             tool_calls=tool_calls,
             response=response,
+            turn_result=turn_result,
             observed_hits=observed_hits,
             retrieval_diagnostics=retrieval_diagnostics,
             planner_diagnostics=planner_diagnostics,
@@ -323,6 +352,7 @@ class LLMJudge:
         case: BenchmarkCase,
         tool_calls: list[str],
         response: AnswerResponse | None,
+        turn_result: TurnResult | None = None,
         observed_hits: list[SearchHit] | None = None,
         retrieval_diagnostics: list[dict[str, Any]] | list[Any] | None = None,
         planner_diagnostics: dict[str, Any] | Any | None = None,
@@ -358,6 +388,7 @@ class LLMJudge:
                 "oracle": _normalize_jsonable(case.oracle),
             },
             "response": _normalize_jsonable(response),
+            "turn_result": _normalize_jsonable(turn_result),
             "conversation": _normalize_jsonable(conversation or []),
             "evidence_scope": _normalize_jsonable(evidence_scope),
             "answer_provenance": _normalize_jsonable(answer_provenance),

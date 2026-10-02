@@ -239,6 +239,7 @@ def test_judge_receives_the_actual_prior_answer_for_a_followup_case(http_boundar
     assert len(payloads) == 1
     assert payloads[0]["case"]["setup_turns"] == ["prepare an answer"]
     assert payloads[0]["conversation"] == [{"query": "prepare an answer", "response": plain_response("prepared body"),
+                                            "turn_result": result.scenario_turns[0].turn_result.model_dump(mode="json"),
                                             "observed_hits": []}]
     assert result.judge_input_complete is True
 

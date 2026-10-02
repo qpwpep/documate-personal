@@ -114,7 +114,7 @@ def _run_turn(client: AgentSessionClient, query: str, *,
     turn = ScenarioTurnResult(
         role=role, llm_calls=parsed.llm_calls,
         query=query, request_payload=payload, http_status=parsed.http_status, request_id=parsed.request_id,
-        response=parsed.response, trace=parsed.response_trace, debug=parsed.debug,
+        response=parsed.response, turn_result=parsed.turn_result, trace=parsed.response_trace, debug=parsed.debug,
         upload_manifest=client.manifest, question_response_ms=elapsed,
         runtime_errors=parsed.runtime_errors, response_errors=parsed.response_errors,
         raw_final_response=raw_final,
@@ -182,7 +182,9 @@ def _run_single_case(
                 parsed_response = parsed
                 request_payload = turn.request_payload
                 question_response_ms = turn.question_response_ms
-            elif (parsed.response is None or parsed.runtime_errors or parsed.response_errors
+            elif ((parsed.response is None and not (
+                      parsed.turn_result is not None and parsed.turn_result.status == "needs_input"
+                  )) or parsed.runtime_errors or parsed.response_errors
                   or parsed.debug_errors or parsed.planner_errors or parsed.missing_required_debug_fields
                   or parsed.debug_observability_status == "failed"):
                 parsed_response = ParsedResponseData(
