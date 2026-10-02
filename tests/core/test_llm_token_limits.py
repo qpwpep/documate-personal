@@ -13,7 +13,7 @@ from src.core.contracts import PlannerState, RetrievalState
 from src.core.contracts.boundary.graph import build_graph_state_input
 from src.core.documents import DocumentElement, build_snapshot
 from src.core.evidence import RetrievalScore, SearchHit, build_evidence
-from src.core.planner_schema import PlannerOutput, RetrievalTask
+from src.core.planner_schema import InitialPlannerOutput, PlannerOutput, RetrievalPlanOutput, RetrievalTask
 from src.core.request_contracts import RequestContract, WireRequestContract
 from src.infra.llm import build_llm_registry
 from src.infra.settings import APP_ENV_SPEC_BY_NAME, AppSettings
@@ -55,6 +55,21 @@ def _provider_response(payload: dict, content: str, *, finish_reason: str = "sto
     }
 
 
+def _assert_supported_schema(schema):
+    """Independent HTTP fake checks the strict subset at actual schema nodes."""
+    assert not {"oneOf", "discriminator", "default", "const", "allOf", "not"}.intersection(schema)
+    if schema.get("type") == "object":
+        assert schema.get("additionalProperties") is False
+        assert set(schema.get("required", [])) == set(schema.get("properties", {}))
+    for field in ("properties", "$defs"):
+        for child in schema.get(field, {}).values():
+            _assert_supported_schema(child)
+    if "items" in schema:
+        _assert_supported_schema(schema["items"])
+    for child in schema.get("anyOf", []):
+        _assert_supported_schema(child)
+
+
 @pytest.fixture
 def provider(monkeypatch):
     """Only the external HTTP service is replaced; request construction and parsing are real."""
@@ -68,6 +83,9 @@ def provider(monkeypatch):
 
     def handle(request: httpx.Request) -> httpx.Response:
         payload = json.loads(request.content)
+        schema = payload.get("response_format", {}).get("json_schema") or payload.get("text", {}).get("format")
+        if schema and "schema" in schema:
+            _assert_supported_schema(schema["schema"])
         requests.append(payload)
         behavior["request_paths"].append(request.url.path)
         if behavior["timeout_once"]:
@@ -77,11 +95,13 @@ def provider(monkeypatch):
         if packet:
             document = text_document(packet[0]["excerpt"], basis="excerpt", refs=[packet[0]["id"]])
             content = document.model_dump_json()
-        elif payload.get("response_format", {}).get("json_schema", {}).get("name") == "PlannerOutput":
+        elif schema and schema.get("name") == "PlannerOutput":
             content = json.dumps({
                 "use_retrieval": False, "tasks": [],
                 "request_contract": WireRequestContract(slack_recipient={"state": "omitted"}).model_dump(mode="json"),
             })
+        elif schema and schema.get("name") == "RetrievalPlanOutput":
+            content = json.dumps({"use_retrieval": False, "tasks": []})
         else:
             content = text_document("Hello.").model_dump_json()
         if behavior["invalid_content"] is not None:
@@ -110,7 +130,7 @@ def _settings(**overrides) -> AppSettings:
         "openai_api_key": "test-key", "tavily_api_key": "test-key",
         "chat_model": "gpt-5.6-luna", "planner_model": "gpt-5.6-luna",
         "summary_model": "gpt-5.6-luna", "synthesis_reasoning_effort": "low",
-        "synthesis_max_retries": 0, "verbose": False,
+        "verbose": False,
     }
     return AppSettings(_env_file=None, **(values | overrides))
 
@@ -163,6 +183,8 @@ def test_timeout_uses_independent_compact_output_cap(provider, responses_api):
     assert response.result == finalize_answer(
         text_document(selected.excerpt, basis="excerpt", refs=[selected.id]), [selected], retrieval_required=True,
     )
+
+
 
 
 

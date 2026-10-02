@@ -1,3 +1,4 @@
+import json
 import unittest
 
 from hypothesis import given, strategies as st
@@ -11,6 +12,7 @@ from src.core.planner_schema import (
     RetrievalTask,
 )
 from src.core.request_contracts import RequestContract, WireRequestContract
+from src.core.llm_errors import LLMCallError
 from src.runtime.nodes.planner import make_planner_node
 from src.runtime.nodes.planner.query_sanitizer import sanitize_retrieval_query
 
@@ -36,17 +38,6 @@ class PlannerNodeTest(unittest.TestCase):
         }))["planner"]
         self.assertEqual(result.output, requested)
 
-    @given(query=st.sampled_from([
-        "공식 문서만으로 설명해줘", "내 파일에서 찾아줘", "검토한 뒤 저장해줘",
-    ]))
-    def test_planning_failure_requests_retry_without_guessing_sources(self, query) -> None:
-        result = make_planner_node(_FailingPlannerLLM(), verbose=False)(build_test_state({
-            "user_input": query, "messages": [HumanMessage(content=query)], "retriever": object(),
-        }))["planner"]
-        self.assertEqual(
-            {"plan": result.output, "reason": result.diagnostics.reason, "followup": bool(result.guided_followup)},
-            {"plan": PlannerOutput.fallback(request_contract=RequestContract.invalid().to_wire()), "reason": "planner_unavailable", "followup": True},
-        )
 
 
     def test_upload_query_sanitizer_preserves_missing_identifier_tokens_for_hybrid_requests(self) -> None:
@@ -134,12 +125,6 @@ class PlannerNodeTest(unittest.TestCase):
         self.assertEqual({subject for subject in subjects if subject in sanitized}, subjects)
 
 
-    def test_planner_falls_back_when_schema_invalid(self) -> None:
-        planner_node = make_planner_node(_InvalidPlannerLLM(), verbose=False)
-        updates = planner_node(build_test_state({"messages": [HumanMessage(content="hi")], "user_input": "hi"}))
-
-        self.assertFalse(updates["planner"].output.use_retrieval)
-        self.assertTrue(any("validation failed" in error for error in updates["debug"].planner_errors))
 
     def test_planner_includes_retry_context_system_message_on_retry(self) -> None:
         capture_planner = _CapturePlannerLLM(PlannerOutput(use_retrieval=False, tasks=[]))

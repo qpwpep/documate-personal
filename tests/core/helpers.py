@@ -121,7 +121,7 @@ class _CaptureSynthesizeLLM:
         self.response_metadata = response_metadata
         self.usage_metadata = usage_metadata
 
-    def invoke(self, messages):
+    def invoke(self, messages, *, timeout=None):
         self.last_messages = messages
         kwargs = {}
         if self.response_metadata is not None:
@@ -166,7 +166,7 @@ class _CaptureStructuredSynthesizeLLM:
     def with_structured_output(self, *_args, **_kwargs):
         return self
 
-    def invoke(self, messages):
+    def invoke(self, messages, *, timeout=None):
         self.last_messages = messages
         if self.include_raw:
             return {
@@ -185,7 +185,7 @@ class _TimeoutStructuredSynthesizeLLM:
     def with_structured_output(self, *_args, **_kwargs):
         return self
 
-    def invoke(self, messages):
+    def invoke(self, messages, *, timeout=None):
         self.last_messages = messages
         self.call_count += 1
         raise TimeoutError("structured timeout")
@@ -231,7 +231,7 @@ class _CapturePlannerLLM:
         )
         self.parsing_error = parsing_error
 
-    def invoke(self, messages):
+    def invoke(self, messages, *, timeout=None):
         self.last_messages = messages
         self.call_count += 1
         if self.include_raw:
@@ -248,7 +248,7 @@ class _CaptureSummaryLLM:
         self.last_messages = None
         self.content = content
 
-    def invoke(self, messages):
+    def invoke(self, messages, *, timeout=None):
         self.last_messages = messages
         return AIMessage(
             content=self.content,

@@ -11,7 +11,8 @@ from src.core.answer_schema import finalize_answer, text_document
 from src.core.contracts.boundary.graph import build_graph_state_input
 from src.core.contracts.debug import RetryState
 from src.core.contracts.graph_state import PendingAction
-from src.core.planner_schema import PlannerOutput, RetrievalTask
+from src.core.planner_schema import PlannerOutput, RetrievalPlanOutput, RetrievalTask
+from src.core.llm_errors import LLMCallError
 from src.core.request_contracts import (
     AcknowledgeBody, ActionContract, ActionRequest, AnswerReference, BoundAnswerReference, ComposeBody,
     ContractEvidence, CopyAnswerBody, MissingInformation, RequestContract, TransformAnswerBody,
@@ -58,6 +59,17 @@ def plan(query, contract, **kwargs):
     state = state_for(query, **kwargs)
     result = make_planner_node(model, False)(state)
     return result, model
+
+
+def assert_rejected_plan_preserves_state(query, contract, **kwargs):
+    state = state_for(query, **kwargs)
+    original = state["runtime"]
+    model = PlannerResult(PlannerOutput(use_retrieval=False, tasks=[], request_contract=contract))
+    with pytest.raises(LLMCallError) as caught:
+        make_planner_node(model, False)(state)
+    assert caught.value.problem.code == "model_output_invalid"
+    assert state["runtime"] == original
+    assert len(model.calls) == 2
 
 
 def original_pending(*, response=None, phase="awaiting_destination", completed=()):

@@ -2,9 +2,11 @@ from dataclasses import dataclass
 from typing import Any
 
 from langchain_openai import ChatOpenAI
-from openai.lib._pydantic import to_strict_json_schema
 
-from src.core.planner_schema import PlannerOutput
+from src.core.planner_schema import InitialPlannerOutput, RetrievalPlanOutput
+from src.core.answer_schema import AnswerDocument
+from src.infra.structured_schema import compile_output_schema
+from src.infra.llm_boundary import bind_structured_output
 from src.infra.settings import AppSettings
 
 
@@ -15,6 +17,7 @@ class LLMRegistry:
     llm_synthesizer_compact: Any | None
     llm_summarizer: Any
     verbose: bool
+    llm_planner_retry: Any | None = None
 
 
 def _build_synthesis_reasoning_kwargs(settings: AppSettings) -> dict[str, Any]:
@@ -35,21 +38,25 @@ def _build_synthesis_api_kwargs(settings: AppSettings) -> dict[str, Any]:
 
 
 def _build_planner_response_schema() -> dict[str, Any]:
-    return {
-        "name": "PlannerOutput",
-        "strict": True,
-        "schema": to_strict_json_schema(PlannerOutput),
-    }
+    return compile_output_schema(InitialPlannerOutput, name="PlannerOutput")
+
+
+def validate_output_schemas() -> None:
+    """Compile every active contract before accepting user requests; no network IO."""
+    _build_planner_response_schema()
+    compile_output_schema(RetrievalPlanOutput)
+    compile_output_schema(AnswerDocument)
 
 
 def build_llm_registry(settings: AppSettings) -> LLMRegistry:
+    validate_output_schemas()
     llm_synthesizer = ChatOpenAI(
         model=settings.chat_model,
         api_key=settings.openai_api_key,
         temperature=0,
         max_tokens=settings.synthesis_max_tokens,
         timeout=settings.synthesis_timeout_seconds,
-        max_retries=settings.synthesis_max_retries,
+        max_retries=0,
         verbose=settings.verbose,
         **_build_synthesis_api_kwargs(settings),
         **_build_synthesis_reasoning_kwargs(settings),
@@ -76,16 +83,12 @@ def build_llm_registry(settings: AppSettings) -> LLMRegistry:
         temperature=0,
         max_tokens=settings.planner_max_tokens,
         timeout=30,
-        max_retries=2,
+        max_retries=0,
         verbose=settings.verbose,
         **planner_reasoning_kwargs,
     )
-    llm_planner = llm_planner_base.with_structured_output(
-        _build_planner_response_schema(),
-        method="json_schema",
-        include_raw=True,
-        strict=True,
-    )
+    llm_planner = bind_structured_output(llm_planner_base, InitialPlannerOutput, name="PlannerOutput")
+    llm_planner_retry = bind_structured_output(llm_planner_base, RetrievalPlanOutput)
 
     llm_summarizer = ChatOpenAI(
         model=settings.summary_model,
@@ -99,6 +102,7 @@ def build_llm_registry(settings: AppSettings) -> LLMRegistry:
 
     return LLMRegistry(
         llm_planner=llm_planner,
+        llm_planner_retry=llm_planner_retry,
         llm_synthesizer=llm_synthesizer,
         llm_synthesizer_compact=llm_synthesizer_compact,
         llm_summarizer=llm_summarizer,
