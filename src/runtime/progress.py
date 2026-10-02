@@ -51,7 +51,7 @@ class ProgressEmitter:
             self._current_stage = stage
             self._current_attempt = max(1, int(attempt))
             self._current_stage_started = started
-            if stage == "synthesis":
+            if stage in {"synthesis", "planner", "summarize"}:
                 self._start_heartbeat_locked(stage=stage, attempt=self._current_attempt)
         self._publish(
             "stage_started",

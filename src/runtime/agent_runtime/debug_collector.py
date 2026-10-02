@@ -133,18 +133,8 @@ class DebugCollector:
         for result in (action_results or {}).values():
             if isinstance(result, dict):
                 add(result.get("error_code"))
-        for error in planner_errors:
-            lowered = str(error or "").lower()
-            if "output validation failed" in lowered or "schema" in lowered:
-                add("PLANNER_SCHEMA_INVALID")
-            if "timeout" in lowered or "timed out" in lowered:
-                add("PLANNER_TIMEOUT")
         for error in debug_errors:
             lowered = str(error or "").lower()
-            if "structured output was empty" in lowered:
-                add("LLM_STRUCTURED_EMPTY")
-            if "timed out" in lowered or "timeout" in lowered:
-                add("SYNTHESIS_TIMEOUT")
             if "local_rag_failed" in lowered or "local similarity search failed" in lowered:
                 add("LOCAL_RAG_FAILED")
         return codes
@@ -215,6 +205,8 @@ class DebugCollector:
             planner_errors=planner_errors,
             debug_errors=debug_errors,
         )
+        if state_response.problem is not None and state_response.problem.code not in error_codes:
+            error_codes.append(state_response.problem.code)
         if missing_required_debug_fields and "DEBUG_NORMALIZATION_FAILED" not in error_codes:
             error_codes.append("DEBUG_NORMALIZATION_FAILED")
         latency_breakdown = build_latency_breakdown(
@@ -241,6 +233,7 @@ class DebugCollector:
             "tool_call_count": len(tool_calls),
             "execution_evidence": execution_evidence.model_dump(mode="json") if execution_evidence is not None else None,
             "llm_calls": llm_calls,
+            "llm_diagnostics": [item.model_dump(mode="json") for item in state_debug.llm_diagnostics],
             "errors": debug_errors,
             "error_codes": error_codes,
             "validation_events": list(state_debug.validation_events or []),

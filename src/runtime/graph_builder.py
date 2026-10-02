@@ -125,10 +125,7 @@ def _instrument_stage_node(stage: str, node: Any, *, record_latency_trace: bool 
             updates = node(state)
         except Exception as exc:
             if progress_emitter is not None:
-                progress_emitter.emit_error(
-                    message=str(exc),
-                    stage=stage,  # type: ignore[arg-type]
-                )
+                progress_emitter.emit_stage_completed(stage=stage, attempt=attempt, status="failed")
             raise StageExecutionError(
                 stage=stage,
                 attempt=attempt,
