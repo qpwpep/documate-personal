@@ -264,7 +264,7 @@ def test_live_prompt_contract_compatibility(model: str, phase: str):
             rows.append(row)
             print(json.dumps({"phase": phase, "model": model, "case": row["case_id"], "passed": row["score"]["overall"]}), flush=True)
     options = {key: getattr(settings, key) for key in (
-        "planner_max_tokens", "synthesis_max_tokens", "synthesis_timeout_seconds", "synthesis_max_retries",
+        "planner_max_tokens", "synthesis_max_tokens", "synthesis_timeout_seconds",
         "synthesis_use_responses_api", "synthesis_reasoning_effort", "summary_max_tokens", "synthesis_prompt_snippet_chars")}
     options.update(temperature=0, planner_timeout=30, planner_retries=2, summary_timeout=60, summary_retries=2)
     schema_hashes = {stage: hashlib.sha256(json.dumps(schema, sort_keys=True).encode()).hexdigest()

@@ -9,6 +9,7 @@ from src.core.answer_schema import finalize_answer, text_document
 from src.core.contracts import GraphState, ResponseState
 from src.core.contracts.boundary.graph import build_graph_state_input
 from src.core.conversation_memory import ConversationMemoryPolicy
+from src.core.llm_errors import LLMCallError
 from src.infra.settings import AppSettings
 from src.runtime.agent_runtime.llm_usage import capture_llm_usage, current_llm_calls, record_llm_call
 from src.runtime.nodes.planner.node import make_planner_node
@@ -45,12 +46,13 @@ def test_failed_planner_and_summary_remain_observable_attempts():
         summary = make_summarize_node(UnavailableModel(), False, policy=ConversationMemoryPolicy(
             high_water_turns=3, low_water_turns=2,
         ))(state)
-        planner = make_planner_node(UnavailableModel(), False)(state)
+        with pytest.raises(LLMCallError) as caught:
+            make_planner_node(UnavailableModel(), False)(state)
 
     assert summary["debug"].memory_compactions[0]["summary_fallback"]
-    assert planner["planner"].status == "fallback_no_routes"
+    assert caught.value.problem.code == "provider_unavailable"
     calls = recorder.snapshot()
-    assert [call.stage for call in calls] == ["summarize", "planner"]
+    assert [call.stage for call in calls] == ["summarize", "planner", "planner", "planner"]
     assert all(call.usage.input_tokens is None and call.usage.output_tokens is None for call in calls)
 
 

@@ -78,7 +78,6 @@ APP_ENV_SPECS = (
     EnvVarSpec("DOCS_SEARCH_TIMEOUT_SECONDS", "docs_search_timeout_seconds", 5, "Tavily 요청별 timeout", example=5, example_group="search"),
     EnvVarSpec("SYNTHESIS_TIMEOUT_SECONDS", "synthesis_timeout_seconds", 20, "synthesis provider 요청 timeout", example=20, example_group="synthesis"),
     EnvVarSpec("SYNTHESIS_USE_RESPONSES_API", "synthesis_use_responses_api", False, "synthesis Responses API 사용 여부", example=False, example_group="synthesis"),
-    EnvVarSpec("SYNTHESIS_MAX_RETRIES", "synthesis_max_retries", 0, "synthesis provider SDK 재시도 횟수", example=0, example_group="synthesis"),
     EnvVarSpec("SYNTHESIS_MAX_TOKENS", "synthesis_max_tokens", 4096, "일반 synthesis 생성 토큰 상한", example=4096, example_group="synthesis"),
     EnvVarSpec("SYNTHESIS_COMPACT_MAX_TOKENS", "synthesis_compact_max_tokens", 960, "timeout 복구용 synthesis 생성 토큰 상한; 일반 상한과 독립", example=960, example_group="synthesis"),
     EnvVarSpec(
@@ -541,11 +540,6 @@ class AppSettings(BaseSettings):
         default=_app_default("SYNTHESIS_USE_RESPONSES_API"),
         alias="SYNTHESIS_USE_RESPONSES_API",
     )
-    synthesis_max_retries: int = Field(
-        default=_app_default("SYNTHESIS_MAX_RETRIES"),
-        alias="SYNTHESIS_MAX_RETRIES",
-        ge=0,
-    )
     synthesis_max_tokens: int = Field(
         default=_app_default("SYNTHESIS_MAX_TOKENS"),
         alias="SYNTHESIS_MAX_TOKENS",
@@ -698,7 +692,6 @@ class AppSettings(BaseSettings):
             "docs_search_timeout_seconds": self.docs_search_timeout_seconds,
             "synthesis_timeout_seconds": self.synthesis_timeout_seconds,
             "synthesis_use_responses_api": str(self.synthesis_use_responses_api).lower(),
-            "synthesis_max_retries": self.synthesis_max_retries,
             "synthesis_max_tokens": self.synthesis_max_tokens,
             "synthesis_compact_max_tokens": self.synthesis_compact_max_tokens,
             "synthesis_prompt_snippet_chars": self.synthesis_prompt_snippet_chars,

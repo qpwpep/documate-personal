@@ -186,6 +186,7 @@ def build_agent_graph(settings: AppSettings | None = None):
     summarize_node = _instrument_stage_node("summarize", summarize_node)
     planner_node = make_planner_node(
         llm_planner=llm_registry.llm_planner,
+        llm_planner_retry=llm_registry.llm_planner_retry,
         verbose=llm_registry.verbose,
         max_turns=memory_policy.low_water_turns,
     )

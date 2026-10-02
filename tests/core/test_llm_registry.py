@@ -22,16 +22,16 @@ class LLMRegistryTest(unittest.TestCase):
             openai_api_key="test-key",
             tavily_api_key="test-tavily",
             synthesis_timeout_seconds=9,
-            synthesis_max_retries=1,
             verbose=False,
         )
 
         registry = build_llm_registry(settings)
 
         for role, client, timeout, retries in (
-            ("synthesis", registry.llm_synthesizer, 9, 1),
+            ("synthesis", registry.llm_synthesizer, 9, 0),
             ("compact", registry.llm_synthesizer_compact, 4, 0),
-            ("planner", registry.llm_planner, 30, 2),
+            ("planner", registry.llm_planner.runnable, 30, 0),
+            ("replan", registry.llm_planner_retry.runnable, 30, 0),
             ("summary", registry.llm_summarizer, 60, 2),
         ):
             with self.subTest(role=role):

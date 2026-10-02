@@ -39,9 +39,9 @@ class PlannerPromptBuilderTest(unittest.TestCase):
         self.assertEqual(context["fixed_request_facts"]["body_request"]["instruction"], body_text)
         self.assertEqual(context["fixed_request_facts"]["actions"],
                          {"save_text": "not_requested", "slack_notify": "not_requested"})
-        self.assertTrue(any("[Planning Mode]" in content and "request_contract=null" in content
+        self.assertTrue(any("[Planning Mode]" in content and "request_contract is not part of this output schema" in content
                             for content in system_messages))
-        self.assertTrue(any("[Fixed Request Facts]" in content and "request_contract=null" in content
+        self.assertTrue(any("[Fixed Request Facts]" in content and "request_contract is not part of this output schema" in content
                             for content in system_messages))
 
     @given(

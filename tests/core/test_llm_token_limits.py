@@ -13,7 +13,7 @@ from src.core.contracts import PlannerState, RetrievalState
 from src.core.contracts.boundary.graph import build_graph_state_input
 from src.core.documents import DocumentElement, build_snapshot
 from src.core.evidence import RetrievalScore, SearchHit, build_evidence
-from src.core.planner_schema import PlannerOutput, RetrievalTask
+from src.core.planner_schema import InitialPlannerOutput, PlannerOutput, RetrievalPlanOutput, RetrievalTask
 from src.core.request_contracts import RequestContract, WireRequestContract
 from src.infra.llm import build_llm_registry
 from src.infra.settings import APP_ENV_SPEC_BY_NAME, AppSettings
@@ -55,6 +55,21 @@ def _provider_response(payload: dict, content: str, *, finish_reason: str = "sto
     }
 
 
+def _assert_supported_schema(schema):
+    """Independent HTTP fake checks the strict subset at actual schema nodes."""
+    assert not {"oneOf", "discriminator", "default", "const", "allOf", "not"}.intersection(schema)
+    if schema.get("type") == "object":
+        assert schema.get("additionalProperties") is False
+        assert set(schema.get("required", [])) == set(schema.get("properties", {}))
+    for field in ("properties", "$defs"):
+        for child in schema.get(field, {}).values():
+            _assert_supported_schema(child)
+    if "items" in schema:
+        _assert_supported_schema(schema["items"])
+    for child in schema.get("anyOf", []):
+        _assert_supported_schema(child)
+
+
 @pytest.fixture
 def provider(monkeypatch):
     """Only the external HTTP service is replaced; request construction and parsing are real."""
@@ -68,6 +83,9 @@ def provider(monkeypatch):
 
     def handle(request: httpx.Request) -> httpx.Response:
         payload = json.loads(request.content)
+        schema = payload.get("response_format", {}).get("json_schema") or payload.get("text", {}).get("format")
+        if schema and "schema" in schema:
+            _assert_supported_schema(schema["schema"])
         requests.append(payload)
         behavior["request_paths"].append(request.url.path)
         if behavior["timeout_once"]:
@@ -77,11 +95,13 @@ def provider(monkeypatch):
         if packet:
             document = text_document(packet[0]["excerpt"], basis="excerpt", refs=[packet[0]["id"]])
             content = document.model_dump_json()
-        elif payload.get("response_format", {}).get("json_schema", {}).get("name") == "PlannerOutput":
+        elif schema and schema.get("name") == "PlannerOutput":
             content = json.dumps({
                 "use_retrieval": False, "tasks": [],
                 "request_contract": WireRequestContract(slack_recipient={"state": "omitted"}).model_dump(mode="json"),
             })
+        elif schema and schema.get("name") == "RetrievalPlanOutput":
+            content = json.dumps({"use_retrieval": False, "tasks": []})
         else:
             content = text_document("Hello.").model_dump_json()
         if behavior["invalid_content"] is not None:
@@ -110,7 +130,7 @@ def _settings(**overrides) -> AppSettings:
         "openai_api_key": "test-key", "tavily_api_key": "test-key",
         "chat_model": "gpt-5.6-luna", "planner_model": "gpt-5.6-luna",
         "summary_model": "gpt-5.6-luna", "synthesis_reasoning_effort": "low",
-        "synthesis_max_retries": 0, "verbose": False,
+        "verbose": False,
     }
     return AppSettings(_env_file=None, **(values | overrides))
 
@@ -247,6 +267,20 @@ def test_planner_output_cap_reaches_http_without_synthesis_settings(provider):
     assert requests[0]["max_completion_tokens"] == 654
     assert requests[0]["response_format"]["json_schema"]["name"] == "PlannerOutput"
     assert PlannerOutput.model_validate(result["parsed"]) == PlannerOutput(use_retrieval=False, tasks=[], request_contract=WireRequestContract(slack_recipient={"state": "omitted"}))
+
+
+def test_initial_and_retry_planning_use_distinct_strict_http_contracts(provider):
+    requests, _ = provider
+    registry = build_llm_registry(_settings())
+    initial = registry.llm_planner.invoke([HumanMessage(content="Hello")])
+    retry = registry.llm_planner_retry.invoke([HumanMessage(content="Find the remaining evidence")])
+
+    assert InitialPlannerOutput.model_validate(initial["parsed"]).request_contract is not None
+    assert RetrievalPlanOutput.model_validate(retry["parsed"]).tasks == []
+    initial_schema, retry_schema = [request["response_format"]["json_schema"]["schema"] for request in requests]
+    assert "request_contract" in initial_schema["required"]
+    assert "anyOf" not in initial_schema["properties"]["request_contract"]
+    assert set(retry_schema["properties"]) == {"use_retrieval", "tasks"}
 
 
 @pytest.mark.parametrize("overrides", [

@@ -1,3 +1,4 @@
+import json
 import unittest
 
 from hypothesis import given, strategies as st
@@ -11,6 +12,7 @@ from src.core.planner_schema import (
     RetrievalTask,
 )
 from src.core.request_contracts import RequestContract, WireRequestContract
+from src.core.llm_errors import LLMCallError
 from src.runtime.nodes.planner import make_planner_node
 from src.runtime.nodes.planner.query_sanitizer import sanitize_retrieval_query
 
@@ -59,14 +61,14 @@ class PlannerNodeTest(unittest.TestCase):
     @given(query=st.sampled_from([
         "공식 문서만으로 설명해줘", "내 파일에서 찾아줘", "검토한 뒤 저장해줘",
     ]))
-    def test_planning_failure_requests_retry_without_guessing_sources(self, query) -> None:
-        result = make_planner_node(_FailingPlannerLLM(), verbose=False)(build_test_state({
+    def test_planning_failure_stops_without_guessing_sources(self, query) -> None:
+        state = build_test_state({
             "user_input": query, "messages": [HumanMessage(content=query)], "retriever": object(),
-        }))["planner"]
-        self.assertEqual(
-            {"plan": result.output, "reason": result.diagnostics.reason, "followup": bool(result.guided_followup)},
-            {"plan": PlannerOutput.fallback(request_contract=RequestContract.invalid().to_wire()), "reason": "planner_unavailable", "followup": True},
-        )
+        })
+        with self.assertRaises(LLMCallError) as caught:
+            make_planner_node(_FailingPlannerLLM(), verbose=False)(state)
+        self.assertEqual(caught.exception.problem.code, "internal_error")
+        self.assertIsNone(state["runtime"].request_contract)
 
     def test_planner_schema_rules(self) -> None:
         self.assertEqual(PlannerOutput(use_retrieval=False, tasks=[]).tasks, [])
@@ -203,16 +205,14 @@ class PlannerNodeTest(unittest.TestCase):
             "tasks": [{"route": "local", "query": "pandas merge", "k": 4}],
         }), verbose=False)
 
-        result = planner(build_test_state({
+        with self.assertRaises(LLMCallError) as caught:
+            planner(build_test_state({
             "user_input": query,
             "messages": [HumanMessage(content=query)],
             "retriever": object(),
-        }))
-
-        self.assertEqual(result["planner"].output, PlannerOutput.fallback(request_contract=RequestContract.invalid().to_wire()))
-        self.assertEqual(result["planner"].diagnostics.reason, "planner_unavailable")
-        self.assertTrue(result["planner"].guided_followup)
-        self.assertIn("PLANNER_SCHEMA_INVALID", result["debug"].error_codes)
+            }))
+        self.assertEqual(caught.exception.problem.code, "model_output_invalid")
+        self.assertTrue(any("route" in path for path in caught.exception.diagnostic.validation_paths))
 
 
     @given(has_retriever=st.booleans(), compare_docs=st.booleans())
@@ -252,12 +252,11 @@ class PlannerNodeTest(unittest.TestCase):
         self.assertEqual({subject for subject in subjects if subject in sanitized}, subjects)
 
 
-    def test_planner_falls_back_when_schema_invalid(self) -> None:
+    def test_planner_reports_model_output_failure_when_result_is_invalid(self) -> None:
         planner_node = make_planner_node(_InvalidPlannerLLM(), verbose=False)
-        updates = planner_node(build_test_state({"messages": [HumanMessage(content="hi")], "user_input": "hi"}))
-
-        self.assertFalse(updates["planner"].output.use_retrieval)
-        self.assertTrue(any("validation failed" in error for error in updates["debug"].planner_errors))
+        with self.assertRaises(LLMCallError) as caught:
+            planner_node(build_test_state({"messages": [HumanMessage(content="hi")], "user_input": "hi"}))
+        self.assertEqual(caught.exception.problem.code, "model_output_invalid")
 
     def test_planner_preserves_no_retrieval_for_answer_delivery(self) -> None:
         capture_planner = _CapturePlannerLLM(
@@ -341,8 +340,7 @@ class PlannerNodeTest(unittest.TestCase):
         capture_planner = _CapturePlannerLLM(
             None,
             include_raw=True,
-            raw_message=AIMessage(content="", additional_kwargs={"parsed": raw_payload}),
-            parsing_error=ValueError("duplicate routes are not allowed in planner tasks"),
+            raw_message=AIMessage(content=json.dumps(raw_payload)),
         )
         planner_node = make_planner_node(capture_planner, verbose=False)
 

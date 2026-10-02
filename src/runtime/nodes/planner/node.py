@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-import json
 import logging
 from dataclasses import dataclass, replace
 from typing import Any
 
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import HumanMessage
 
 from src.core.contracts import GraphState, PlannerState
 from src.core.contracts.boundary.debug import get_debug_state
@@ -16,11 +15,11 @@ from src.core.contracts.debug import (
     RetryState,
     empty_planner_diagnostic,
 )
-from src.runtime.agent_runtime.llm_usage import record_llm_call
-from src.core.planner_schema import PlannerOutput, RetrievalTask, normalize_planner_output_input
+from src.core.planner_schema import InitialPlannerOutput, PlannerOutput, RetrievalPlanOutput, RetrievalTask, normalize_planner_output_input
 from src.core.request_contracts import RequestContract
 from src.core.slack_contract import SlackDelivery
 from src.infra.logging_utils import log_event
+from src.infra.llm_boundary import run_structured_call
 from src.runtime.nodes.planner.guardrails import apply_retrieval_availability
 from src.runtime.nodes.planner.models import (
     PlannerDecision,
@@ -44,210 +43,35 @@ class PlannerRunContext:
     upload_file_ids: tuple[str, ...] = ()
 
 
-def _coerce_planner_payload(raw: Any) -> Any:
-    if isinstance(raw, PlannerOutput):
-        return raw
-    return normalize_planner_output_input(raw)
-
-
-def _content_text_candidates(content: Any) -> list[str]:
-    if isinstance(content, str):
-        return [content]
-    if not isinstance(content, list):
-        return []
-
-    candidates: list[str] = []
-    for part in content:
-        if isinstance(part, str):
-            candidates.append(part)
-            continue
-        if not isinstance(part, dict):
-            continue
-        text = part.get("text") or part.get("content")
-        if isinstance(text, str):
-            candidates.append(text)
-    return candidates
-
-
-def _json_payload_from_text(text: str) -> Any | None:
-    stripped = str(text or "").strip()
-    if not stripped:
-        return None
-    try:
-        return json.loads(stripped)
-    except json.JSONDecodeError:
-        pass
-
-    start = stripped.find("{")
-    end = stripped.rfind("}")
-    if start < 0 or end <= start:
-        return None
-    try:
-        return json.loads(stripped[start : end + 1])
-    except json.JSONDecodeError:
-        return None
-
-
-def _looks_like_planner_payload(value: Any) -> bool:
-    return isinstance(value, dict) and ("use_retrieval" in value or "tasks" in value)
-
-
-def _find_planner_payload(value: Any) -> Any | None:
-    if _looks_like_planner_payload(value):
-        return value
-
-    if isinstance(value, str):
-        parsed = _json_payload_from_text(value)
-        if _looks_like_planner_payload(parsed):
-            return parsed
-        return None
-
-    if isinstance(value, dict):
-        for item in value.values():
-            found = _find_planner_payload(item)
-            if found is not None:
-                return found
-        return None
-
-    if isinstance(value, (list, tuple)):
-        for item in value:
-            found = _find_planner_payload(item)
-            if found is not None:
-                return found
-    return None
-
-
-def _coerce_planner_payload_from_raw_message(raw_message: AIMessage | None) -> Any | None:
-    if raw_message is None:
-        return None
-    for text in _content_text_candidates(raw_message.content):
-        payload = _json_payload_from_text(text)
-        if _looks_like_planner_payload(payload):
-            return payload
-    for attribute_name in ("additional_kwargs", "response_metadata"):
-        payload = _find_planner_payload(getattr(raw_message, attribute_name, None))
-        if payload is not None:
-            return payload
-    return None
-
-
-def _validate_planner_payload(payload: Any) -> tuple[PlannerOutput | None, list[str], Exception | None]:
-    warnings: list[str] = []
-    try:
-        return PlannerOutput.validate_input(_coerce_planner_payload(payload), warnings=warnings), warnings, None
-    except Exception as exc:
-        return None, warnings, exc
-
-
-def _coerce_structured_planner_result(
-    result: Any,
-) -> tuple[PlannerOutput | None, Exception | None, list[str]]:
-    if isinstance(result, PlannerOutput):
-        return result, None, []
-
-    if not isinstance(result, dict):
-        planner_output, warnings, error = _validate_planner_payload(result)
-        return planner_output, error, warnings
-
-    if "use_retrieval" in result or "tasks" in result:
-        planner_output, warnings, error = _validate_planner_payload(result)
-        return planner_output, error, warnings
-
-    raw_message = result.get("raw")
-    parsed = _coerce_planner_payload(result.get("parsed"))
-    parsing_error = result.get("parsing_error")
-
-    if not isinstance(raw_message, AIMessage):
-        raw_message = None
-
-    if parsed is not None:
-        planner_output, warnings, error = _validate_planner_payload(parsed)
-        if planner_output is not None:
-            return planner_output, None, warnings
-    else:
-        error = None
-
-    if parsing_error is not None and isinstance(parsing_error, Exception):
-        raw_payload = _coerce_planner_payload_from_raw_message(raw_message)
-        if raw_payload is not None:
-            planner_output, warnings, raw_error = _validate_planner_payload(raw_payload)
-            if planner_output is not None:
-                return planner_output, None, warnings
-            error = raw_error
-        return None, parsing_error if error is None else error, []
-    if parsing_error is not None:
-        raw_payload = _coerce_planner_payload_from_raw_message(raw_message)
-        if raw_payload is not None:
-            planner_output, warnings, raw_error = _validate_planner_payload(raw_payload)
-            if planner_output is not None:
-                return planner_output, None, warnings
-            error = raw_error
-        return None, RuntimeError(str(parsing_error) if error is None else str(error)), []
-
-    if isinstance(parsed, PlannerOutput):
-        return parsed, None, []
-
-    return None, error, []
-
-
 def _resolve_planner_strategy(
-    *,
-    llm_planner: Any,
-    state: GraphState,
-    context: PlannerRunContext,
-    max_turns: int,
-) -> tuple[PlannerDecision, list[str]]:
-    planner_errors: list[str] = []
+    *, llm_planner: Any, llm_planner_retry: Any | None,
+    state: GraphState, context: PlannerRunContext, max_turns: int,
+) -> tuple[PlannerDecision, RequestContract]:
+    runtime = get_runtime_state(state)
+    is_replan = runtime.request_contract is not None
 
-    try:
-        planner_messages = build_planner_messages(state, max_turns=max_turns)
-        with record_llm_call(stage="planner", attempt=context.planner_attempt, path="structured") as call:
-            planner_raw = llm_planner.invoke(planner_messages)
-            call.complete(planner_raw.get("raw") if isinstance(planner_raw, dict) else planner_raw)
-        planner_output, parse_error, planner_warnings = _coerce_structured_planner_result(planner_raw)
-        if planner_output is not None:
-            return (
-                PlannerDecision(
-                    output=planner_output,
-                    diagnostics=normalize_planner_diagnostics(
-                        status="llm",
-                        reason=None,
-                        fallback_routes=[],
-                        planner_warnings=planner_warnings,
-                    ),
-                    status="llm",
-                    guided_followup=None,
-                ),
-                planner_errors,
-            )
-        planner_errors.append(f"planner: output validation failed ({parse_error})")
-    except Exception as exc:
-        planner_errors.append(f"planner: structured output invocation failed ({exc})")
+    def validate(payload: Any) -> tuple[PlannerOutput, RequestContract]:
+        payload = normalize_planner_output_input(payload)
+        if is_replan:
+            retry_plan = RetrievalPlanOutput.model_validate(payload)
+            contract = runtime.request_contract
+            output = PlannerOutput(**retry_plan.model_dump(), request_contract=contract.to_wire())
+        else:
+            initial = InitialPlannerOutput.model_validate(payload)
+            # Binding is part of model-output validation. A failed call never reaches it.
+            contract = resolve_request_contract(initial.request_contract, state, max_turns=max_turns)
+            output = PlannerOutput(**initial.model_dump(exclude={"request_contract"}), request_contract=contract.to_wire())
+        return output, contract
 
-    decision = PlannerDecision(
-        output=PlannerOutput.fallback(),
-        diagnostics=normalize_planner_diagnostics(
-            status="fallback_no_routes",
-            reason="planner_unavailable",
-        ),
-        guided_followup="요청에 필요한 검색 출처를 판단하지 못했습니다. 잠시 후 다시 요청해 주세요.",
-        status="fallback_no_routes",
+    output, contract = run_structured_call(
+        llm_planner_retry if is_replan and llm_planner_retry is not None else llm_planner,
+        build_planner_messages(state, max_turns=max_turns),
+        stage="planner", validate=validate, attempt=context.planner_attempt,
     )
-    return decision, planner_errors
-
-
-def _error_codes_from_planner_errors(errors: list[str]) -> list[str]:
-    codes: list[str] = []
-    for error in errors:
-        lowered = str(error or "").lower()
-        if (
-            "output validation failed" in lowered
-            or "schema" in lowered
-        ) and "PLANNER_SCHEMA_INVALID" not in codes:
-            codes.append("PLANNER_SCHEMA_INVALID")
-        if ("timeout" in lowered or "timed out" in lowered) and "PLANNER_TIMEOUT" not in codes:
-            codes.append("PLANNER_TIMEOUT")
-    return codes
+    return PlannerDecision(
+        output=output, status="llm", guided_followup=None,
+        diagnostics=normalize_planner_diagnostics(status="llm"),
+    ), contract
 
 
 def _apply_planner_guardrail(
@@ -331,6 +155,7 @@ def make_planner_node(
     llm_planner: Any,
     verbose: bool,
     max_turns: int = 6,
+    *, llm_planner_retry: Any | None = None,
 ):
     def planner(state: GraphState) -> GraphState:
         runtime = get_runtime_state(state)
@@ -348,30 +173,19 @@ def make_planner_node(
             ]]),
         )
 
-        decision, planner_errors = _resolve_planner_strategy(
-            llm_planner=llm_planner,
-            state=state,
-            context=context,
-            max_turns=max_turns,
+        decision, contract = _resolve_planner_strategy(
+            llm_planner=llm_planner, llm_planner_retry=llm_planner_retry,
+            state=state, context=context, max_turns=max_turns,
         )
-        try:
-            contract = resolve_request_contract(decision.output.request_contract, state, max_turns=max_turns)
-            decision = replace(decision, output=decision.output.model_copy(update={"request_contract": contract.to_wire()}))
-            if contract.can_acknowledge() or contract.can_cancel_pending():
-                decision = replace(decision, output=PlannerOutput.fallback(request_contract=contract.to_wire()), guided_followup=None,
-                                   diagnostics=decision.diagnostics.model_copy(update={"reason": None}))
-            elif not contract.can_prepare_body():
-                question = contract.clarification_question or "요청의 작업과 대상을 더 구체적으로 알려 주세요."
-                decision = replace(decision, output=PlannerOutput.fallback(request_contract=contract.to_wire()),
-                                   guided_followup=question,
-                                   diagnostics=decision.diagnostics.model_copy(update={"reason": "clarification_required"}))
-        except (TypeError, ValueError) as exc:
-            planner_errors.append(f"planner: request contract output validation failed ({exc})")
-            contract = RequestContract.invalid()
-            decision = replace(decision, output=PlannerOutput.fallback(request_contract=contract.to_wire()),
-                               guided_followup="요청의 작업과 조건을 해석하지 못했습니다. 요청을 다시 알려 주세요.",
-                               status="fallback_no_routes",
-                               diagnostics=decision.diagnostics.model_copy(update={"status": "fallback_no_routes", "reason": "planner_unavailable"}))
+        if contract.can_acknowledge() or contract.can_cancel_pending():
+            decision = replace(decision, output=PlannerOutput.fallback(request_contract=contract.to_wire()))
+        elif not contract.can_prepare_body():
+            question = contract.clarification_question or "요청의 작업과 대상을 더 구체적으로 알려 주세요."
+            decision = replace(
+                decision, output=PlannerOutput.fallback(request_contract=contract.to_wire()),
+                guided_followup=question,
+                diagnostics=decision.diagnostics.model_copy(update={"reason": "clarification_required"}),
+            )
         decision = _apply_planner_guardrail(
             decision=decision,
             context=context,
@@ -448,21 +262,6 @@ def make_planner_node(
             ),
             "retry": retry_context,
         }
-        if planner_errors:
-            planner_error_codes = _error_codes_from_planner_errors(planner_errors)
-            updates["debug"] = debug.model_copy(
-                update={
-                    "planner_errors": [*debug.planner_errors, *planner_errors],
-                    "error_codes": [
-                        *debug.error_codes,
-                        *[
-                            code
-                            for code in planner_error_codes
-                            if code not in debug.error_codes
-                        ],
-                    ],
-                }
-            )
         return updates
 
     return planner

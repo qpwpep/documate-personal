@@ -89,7 +89,7 @@ class SettingsSyncTest(unittest.TestCase):
             "Model selection": ["CHAT_MODEL", "PLANNER_MODEL", "SUMMARY_MODEL"],
             "Planning and summary generation": ["SUMMARY_MAX_TOKENS", "PLANNER_MAX_TOKENS", "PLANNER_REASONING_EFFORT"],
             "Answer generation": [
-                "SYNTHESIS_TIMEOUT_SECONDS", "SYNTHESIS_USE_RESPONSES_API", "SYNTHESIS_MAX_RETRIES",
+                "SYNTHESIS_TIMEOUT_SECONDS", "SYNTHESIS_USE_RESPONSES_API",
                 "SYNTHESIS_MAX_TOKENS", "SYNTHESIS_COMPACT_MAX_TOKENS", "SYNTHESIS_PROMPT_SNIPPET_CHARS",
                 "SYNTHESIS_COMPACT_PROMPT_SNIPPET_CHARS", "SYNTHESIS_REASONING_EFFORT",
             ],

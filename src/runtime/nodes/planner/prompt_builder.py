@@ -13,7 +13,7 @@ from src.runtime.nodes.session import keep_recent_messages
 
 
 PLANNER_SYS = (
-    "You interpret user requests and plan retrieval. Return only one JSON object matching the supplied PlannerOutput schema, without prose, Markdown fences, an answer, or tool calls. The runtime executes the plan.\n"
+    "You interpret user requests and plan retrieval. Return only one JSON object matching the supplied output schema, without prose, Markdown fences, an answer, or tool calls. The runtime executes the plan.\n"
     "Read the active Planning Mode first: it determines whether to interpret the request or preserve an already fixed contract. Resolve the body and its evidence needs before choosing retrieval tasks.\n"
     "Retrieval rules:\n"
     "- Choose retrieval routes from: docs, upload.\n"
@@ -121,7 +121,7 @@ def build_planner_messages(state: GraphState, max_turns: int = 6) -> list[BaseMe
                                           "slack_notify": {"destination_required": True}}}
     if runtime.request_contract is not None:
         model_messages.append(SystemMessage(content=(
-            "[Planning Mode]\nRetrieval retry with an already bound contract. Return request_contract=null. "
+            "[Planning Mode]\nRetrieval retry with an already bound contract. Return only the retrieval plan fields; request_contract is not part of this output schema. "
             "Do not reinterpret the request, regenerate evidence, or change confirmed actions or body requirements. "
             "Preserve every original task's requirement_id, route, library, symbols, version, aspects, file_ids, and match; revise only query/k for failed requirements.\n"
             "[Fixed Request Facts]\nRead fixed_request_facts in the Request Interpretation Context as reference data for retrieval only; the server retains the bound contract."

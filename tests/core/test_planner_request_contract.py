@@ -11,7 +11,8 @@ from src.core.answer_schema import finalize_answer, text_document
 from src.core.contracts.boundary.graph import build_graph_state_input
 from src.core.contracts.debug import RetryState
 from src.core.contracts.graph_state import PendingAction
-from src.core.planner_schema import PlannerOutput, RetrievalTask
+from src.core.planner_schema import PlannerOutput, RetrievalPlanOutput, RetrievalTask
+from src.core.llm_errors import LLMCallError
 from src.core.request_contracts import (
     AcknowledgeBody, ActionContract, ActionRequest, AnswerReference, BoundAnswerReference, ComposeBody,
     ContractEvidence, CopyAnswerBody, MissingInformation, RequestContract, TransformAnswerBody,
@@ -60,6 +61,17 @@ def plan(query, contract, **kwargs):
     return result, model
 
 
+def assert_rejected_plan_preserves_state(query, contract, **kwargs):
+    state = state_for(query, **kwargs)
+    original = state["runtime"]
+    model = PlannerResult(PlannerOutput(use_retrieval=False, tasks=[], request_contract=contract))
+    with pytest.raises(LLMCallError) as caught:
+        make_planner_node(model, False)(state)
+    assert caught.value.problem.code == "model_output_invalid"
+    assert state["runtime"] == original
+    assert len(model.calls) == 2
+
+
 def original_pending(*, response=None, phase="awaiting_destination", completed=()):
     clause = ContractEvidence(id="original", turn_id="old", quote="저장하고 Slack으로 보내줘",
                               scope="current_request", interpretation="instruction")
@@ -94,16 +106,19 @@ def test_initial_plan_binds_one_contract_without_an_extra_model_call():
     {"use_retrieval": False, "tasks": [], "request_contract": {"actions": {"save_text": {"intent": "requested"}}}},
 ])
 def test_missing_invalid_or_legacy_contract_never_recovers_actions_from_keywords(payload):
-    result = make_planner_node(PlannerResult(payload), False)(state_for("저장하고 Slack으로 보내줘"))
-    contract = result["runtime"].request_contract
-    assert contract.failure is not None
-    assert not contract.execution_ready("save_text", body_ready=True)
-    assert not contract.execution_ready("slack_notify", body_ready=True, destination_ready=True)
+    state = state_for("저장하고 Slack으로 보내줘")
+    model = PlannerResult(payload)
+    with pytest.raises(LLMCallError) as caught:
+        make_planner_node(model, False)(state)
+    assert caught.value.problem.code == "model_output_invalid"
+    assert state["runtime"].request_contract is None
+    assert len(model.calls) == 2
 
 
 def test_contract_evidence_must_reference_exact_user_text():
-    result, _ = plan("Slack API를 설명해줘", wire("보내줘", actions={"slack_notify": {"intent": "requested", "evidence_ids": ["current-evidence"]}}))
-    assert result["runtime"].request_contract.failure is not None
+    with pytest.raises(LLMCallError) as caught:
+        plan("Slack API를 설명해줘", wire("보내줘", actions={"slack_notify": {"intent": "requested", "evidence_ids": ["current-evidence"]}}))
+    assert caught.value.problem.code == "model_output_invalid"
 
 
 @pytest.mark.parametrize("source, reason", [
@@ -314,10 +329,11 @@ def test_retry_keeps_the_canonical_contract_and_revision_even_when_the_model_cha
     state = state_for(query, request_contract=fixed, retry=RetryState(attempt=1, original_tasks=[task.model_dump()]))
     revised = wire(query, actions={"slack_notify": {"intent": "requested", "evidence_ids": ["current-evidence"]}})
     model = PlannerResult(PlannerOutput(use_retrieval=True, tasks=[task.model_copy(update={"query": "new reference"})], request_contract=revised))
-    result = make_planner_node(model, False)(state)
-    assert result["runtime"].request_contract == fixed
-    assert result["planner"].output.request_contract == fixed.to_wire()
-    assert result["planner"].output.tasks[0].query == "new reference"
+    with pytest.raises(LLMCallError) as caught:
+        make_planner_node(model, False)(state)
+    assert caught.value.problem.code == "model_output_invalid"
+    assert state["runtime"].request_contract == fixed
+    assert fixed.actions.slack_notify.intent == "forbidden"
     assert any("[Fixed Request Facts]" in str(message.content) for message in model.calls[0] if isinstance(message, SystemMessage))
 
 
@@ -328,8 +344,11 @@ def test_retry_model_failure_preserves_an_existing_prohibition():
     class Unavailable:
         def invoke(self, messages):
             raise TimeoutError("provider unavailable")
-    result = make_planner_node(Unavailable(), False)(state_for(query, request_contract=fixed))
-    assert result["runtime"].request_contract == fixed
+    state = state_for(query, request_contract=fixed)
+    with pytest.raises(LLMCallError) as caught:
+        make_planner_node(Unavailable(), False)(state)
+    assert caught.value.problem.code == "provider_unavailable"
+    assert state["runtime"].request_contract == fixed
     assert not fixed.execution_ready("save_text", body_ready=True)
 
 
@@ -536,11 +555,11 @@ def test_retrieval_retry_returns_no_request_contract_and_preserves_the_bound_rev
     fixed = first["runtime"].request_contract
     task = RetrievalTask(route="docs", query="reference", k=2)
     state = state_for(query, request_contract=fixed, retry=RetryState(attempt=1, original_tasks=[task.model_dump()]))
-    model = PlannerResult(PlannerOutput(use_retrieval=True, tasks=[task], request_contract=None))
+    model = PlannerResult(RetrievalPlanOutput(use_retrieval=True, tasks=[task]))
     result = make_planner_node(model, False)(state)
     assert result["runtime"].request_contract == fixed
     prompt = next(str(message.content) for message in model.calls[0] if "[Fixed Request Facts]" in str(message.content))
-    assert "request_contract=null" in prompt
+    assert "request_contract is not part of this output schema" in prompt
     assert all(item.id not in prompt for item in fixed.evidence)
 
 
@@ -553,16 +572,14 @@ def test_a_new_destination_resolves_only_a_stale_not_provided_gap_after_binding(
     candidate = wire("C123", relation="supplement", target_request_id=pending.contract.request_id,
                      slack_recipient=recipient(destination),
                      missing_info=[{"slot": "slack_destination", "reason": "not_provided", "question": "채널을 알려 주세요."}])
-    result, _ = plan("C123", candidate, pending_action=pending)
-    contract = result["runtime"].request_contract
     if destination == "C123":
+        result, _ = plan("C123", candidate, pending_action=pending)
+        contract = result["runtime"].request_contract
         assert contract.slack_recipient.selector.value == "C123"
         assert contract.missing_info == ()
         assert contract.execution_ready("slack_notify", body_ready=True, destination_ready=True)
     else:
-        assert contract.failure == "contract_invalid"
-        assert result["runtime"].pending_action == pending
-        assert not contract.execution_ready("slack_notify", body_ready=True, destination_ready=True)
+        assert_rejected_plan_preserves_state("C123", candidate, pending_action=pending)
 
 
 def test_a_destination_supplement_cannot_resolve_an_existing_action_intent_gap():
@@ -590,13 +607,9 @@ def test_historical_recipient_mention_cannot_change_a_pending_delivery_target():
         evidence=(ContractEvidence(id="historical-recipient", turn_id="old-recipient", quote="COTHER",
                                    scope="slack_recipient", interpretation="reference"),),
     )
-    result, _ = plan("다시 시도해줘", candidate, pending_action=pending,
+    assert_rejected_plan_preserves_state("다시 시도해줘", candidate, pending_action=pending,
                      user_turns=(UserTurnSnapshot(turn_id="old-recipient", text="COTHER"),
                                  UserTurnSnapshot(turn_id="current", text="다시 시도해줘")))
-    contract = result["runtime"].request_contract
-    assert not contract.execution_ready("slack_notify", body_ready=True, destination_ready=True)
-    assert contract.failure == "contract_invalid"
-    assert result["runtime"].pending_action == pending
 
 
 def test_omitted_recipient_on_retry_preserves_the_confirmed_intent_and_evidence():
@@ -666,9 +679,7 @@ def test_unverified_current_recipient_proposal_preserves_the_pending_binding(int
     })})
     query = "다시 시도해줘"
     candidate = wire(query, relation="supplement", target_request_id=pending.contract.request_id, slack_recipient=intent)
-    result, _ = plan(query, candidate, pending_action=pending)
-    assert result["runtime"].request_contract.failure == "contract_invalid"
-    assert result["runtime"].pending_action == pending
+    assert_rejected_plan_preserves_state(query, candidate, pending_action=pending)
 
 
 def test_a_missing_slot_cannot_replace_the_typed_pending_recipient_intent():
@@ -678,9 +689,7 @@ def test_a_missing_slot_cannot_replace_the_typed_pending_recipient_intent():
     })})
     candidate = wire("다시 시도해줘", relation="supplement", target_request_id=pending.contract.request_id,
                      missing_info=[{"slot": "slack_destination", "reason": "unclear", "question": "어느 수신자인가요?"}])
-    result, _ = plan("다시 시도해줘", candidate, pending_action=pending)
-    assert result["runtime"].request_contract.failure == "contract_invalid"
-    assert result["runtime"].pending_action == pending
+    assert_rejected_plan_preserves_state("다시 시도해줘", candidate, pending_action=pending)
 
 
 @pytest.mark.parametrize("kind,value,query", [
@@ -727,6 +736,4 @@ def test_an_incorrect_current_reconfirmation_cannot_silently_reuse_the_old_recip
     pending = PendingAction(contract=original, response=finalize_answer(text_document("본문"), []), body_prepared=True)
     query = "수신자를 C12345로 수정해줘"
     candidate = wire(query, relation="correction", target_request_id=original.request_id, slack_recipient=recipient("C123"))
-    result, _ = plan(query, candidate, pending_action=pending)
-    assert result["runtime"].request_contract.failure == "contract_invalid"
-    assert result["runtime"].pending_action == pending
+    assert_rejected_plan_preserves_state(query, candidate, pending_action=pending)

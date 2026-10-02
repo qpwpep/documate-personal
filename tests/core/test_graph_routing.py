@@ -18,7 +18,7 @@ from src.runtime.nodes.planner import make_planner_node
 from src.runtime.nodes.retrieval import make_retrieve_dispatch_node
 from src.runtime.nodes.session import add_user_message
 from src.runtime.nodes.validation import make_post_synthesis_validation_node, make_pre_synthesis_validation_node
-from src.core.planner_schema import PlannerOutput, RetrievalTask
+from src.core.planner_schema import PlannerOutput, RetrievalPlanOutput, RetrievalTask
 from src.core.request_contracts import RequestContract
 
 from .helpers import (
@@ -224,7 +224,10 @@ class GraphRoutingTest(unittest.TestCase):
             use_retrieval=True,
             tasks=[RetrievalTask(route="docs", query="NumPy broadcasting", k=4)],
         ))
-        planner_node = make_planner_node(capture_planner, verbose=False)
+        retry_planner = _CapturePlannerLLM(RetrievalPlanOutput(
+            use_retrieval=True, tasks=[RetrievalTask(route="docs", query="NumPy broadcasting", k=4)],
+        ))
+        planner_node = make_planner_node(capture_planner, verbose=False, llm_planner_retry=retry_planner)
 
         docs_calls = {"count": 0}
         synth_calls = {"count": 0}
@@ -284,7 +287,8 @@ class GraphRoutingTest(unittest.TestCase):
                 messages=[],
             )
         )
-        self.assertEqual(capture_planner.call_count, 2)
+        self.assertEqual(capture_planner.call_count, 1)
+        self.assertEqual(retry_planner.call_count, 1)
         self.assertEqual(docs_calls["count"], 2)
         self.assertEqual(synth_calls["count"], 1)
         self.assertEqual(export_answer_text(result["response"].result), "answer-1 [1]")
