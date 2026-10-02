@@ -14,6 +14,9 @@ from src.core.contracts.usage import (
 from src.core.slack_contract import SlackDelivery
 
 ErrorCode = Literal[
+    "provider_schema_invalid", "provider_configuration", "provider_unavailable", "provider_rate_limited",
+    "model_output_invalid", "model_output_incomplete", "model_refusal", "internal_error", "evidence_insufficient",
+    "call_budget_exhausted", "upload_revision_conflict",
     "PLANNER_SCHEMA_INVALID",
     "PLANNER_TIMEOUT",
     "RETRIEVAL_DOCS_TIMEOUT",
@@ -67,7 +70,7 @@ RETRYABLE_REASONS: set[RetryReason] = {
     "missing_content",
     "missing_route_coverage",
 }
-DEBUG_SCHEMA_VERSION = 11
+DEBUG_SCHEMA_VERSION = 12
 # Historical diagnostics can contain retired routes; these never enable execution.
 RECORDED_ROUTE_ORDER: tuple[str, ...] = ("docs", "upload", "local")
 DebugObservabilityStatus = Literal["ok", "degraded", "failed"]
