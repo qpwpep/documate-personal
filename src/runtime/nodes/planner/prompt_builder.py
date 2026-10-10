@@ -29,7 +29,8 @@ PLANNER_SYS = (
     "- For upload tasks, resolve explicitly requested files to requirement.file_ids using only upload_files in the Request Interpretation Context. For comparison or inspection of all attachments, include every active file ID in one task unless the subjects require independent tasks; do not create a task merely for each file. A filename by itself may be ambiguous: use the user's supplied ID or ask which same-name file they mean. Never invent IDs or silently substitute another file for an unavailable target.\n"
     "- Empty file_ids means search across active uploads, without requiring every file in the answer. Explicit file_ids restrict retrieval and require evidence for each listed file. For docs tasks always use file_ids=[]. Preserve file scope on retries.\n"
     "- Set requirement.match=definition for a named uploaded function/class implementation, symbol for API documentation or symbol usage, and topic for broad explanation. Definitions and uses are different evidence needs. Do not treat a function call or comment as its implementation.\n"
-    "- Aspects contain only literal identifiers/parameters explicitly requested in the user's dialogue. Do not invent expected values, supported options, or extra conditions from memory: those are facts retrieval must discover. General explanation instructions stay in query. Keep every grounded requirement unchanged when rewriting its search query.\n"
+    "- Aspects contain only literal identifiers/parameters explicitly requested in the user's dialogue. Do not invent parameter names, expected values, supported options, or extra conditions from memory: those are facts retrieval must discover. Keep every grounded requirement unchanged when rewriting its search query.\n"
+    "- For docs, put requested evidence kinds in requirement.evidence_needs: signature for call syntax, parameters for option/argument descriptions, examples for usage examples, and explanation for conceptual or behavioral explanations. For example, an options question needs parameters even if no parameter is named; an axis question puts axis in aspects and parameters in evidence_needs. Choose only kinds the user requests, not every kind available. Keep natural-language search context in query. For upload always use evidence_needs=[]; match and literal aspects describe uploaded evidence.\n"
     "- Keep each task.query short and route-specific, with integer k from 1 through 10.\n"
     "- For docs tasks, preserve the library/framework name in task.query, even for bare library-level requests.\n"
     "- If the request is only asking to save/share/send the current answer, retrieval is unnecessary.\n"
@@ -123,7 +124,7 @@ def build_planner_messages(state: GraphState, max_turns: int = 6) -> list[BaseMe
         model_messages.append(SystemMessage(content=(
             "[Planning Mode]\nRetrieval retry with an already bound contract. Return only the retrieval plan fields; request_contract is not part of this output schema. "
             "Do not reinterpret the request, regenerate evidence, or change confirmed actions or body requirements. "
-            "Preserve every original task's requirement_id, route, library, symbols, version, aspects, file_ids, and match; revise only query/k for failed requirements.\n"
+            "Preserve every original task's requirement_id, route, library, symbols, version, aspects, evidence_needs, file_ids, and match; revise only query/k for failed requirements.\n"
             "[Fixed Request Facts]\nRead fixed_request_facts in the Request Interpretation Context as reference data for retrieval only; the server retains the bound contract."
         )))
         context["fixed_request_facts"] = _confirmed_facts(runtime.request_contract)

@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from src.core.request_contracts import WireRequestContract
 
 PlannerRouteName = Literal["docs", "upload"]
+DocsEvidenceNeed = Literal["signature", "parameters", "examples", "explanation"]
 PLANNER_ROUTES: tuple[PlannerRouteName, ...] = ("docs", "upload")
 MAX_PLANNER_TASKS = 8
 # Historical benchmark diagnostics still use this value; new plans preserve tasks.
@@ -26,7 +27,8 @@ class RetrievalRequirement(BaseModel):
     library: str | None = Field(default=None, description="The one library owning this official source; null for upload or an unknown library.")
     symbols: list[str] = Field(default_factory=list, description="Exact API/code symbols to find, preferably fully qualified official names.")
     version: str | None = Field(default=None, description="Explicit requested version; null when unconstrained. Never substitute another version.")
-    aspects: list[str] = Field(default_factory=list, description="Literal parameter/code anchors explicitly requested in the user's dialogue. Do not guess allowable values or add requirements from model knowledge. General explanation instructions belong in query.")
+    aspects: list[str] = Field(default_factory=list, description="Literal parameter/code anchors explicitly requested in the user's dialogue. Do not guess allowable values or add requirements from model knowledge. General documentation needs belong in evidence_needs, not aspects.")
+    evidence_needs: list[DocsEvidenceNeed] = Field(default_factory=list, description="Docs-only evidence kinds requested by the user: signature for call syntax, parameters for option/argument descriptions, examples for usage examples, explanation for conceptual or behavioral explanation. Keep empty for upload. Do not infer additional kinds from model knowledge.")
     file_ids: list[str] = Field(default_factory=list, description="Upload file IDs from the active catalog whose evidence is explicitly requested. Empty searches all active uploads without requiring every file in the answer. For a comparison or inspection of all attachments, include every requested file ID in one task. Empty for docs.")
     match: Literal["topic", "symbol", "definition"] = Field(default="topic", description="topic for broad explanation, symbol for API/usage references, definition for the implementation of a named uploaded function/class.")
 
@@ -34,6 +36,12 @@ class RetrievalRequirement(BaseModel):
     @classmethod
     def clean_terms(cls, values: list[str]) -> list[str]:
         return list(dict.fromkeys(value.strip() for value in values if value.strip()))
+
+    @field_validator("evidence_needs")
+    @classmethod
+    def clean_evidence_needs(cls, values: list[DocsEvidenceNeed]) -> list[DocsEvidenceNeed]:
+        # Evidence kinds are a set of requirements, not a preference order.
+        return sorted(set(values))
 
     @field_validator("file_ids")
     @classmethod
@@ -47,7 +55,7 @@ class RetrievalRequirement(BaseModel):
 
     @property
     def specified(self) -> bool:
-        return bool(self.library or self.symbols or self.version or self.aspects or self.file_ids or self.match != "topic")
+        return bool(self.library or self.symbols or self.version or self.aspects or self.evidence_needs or self.file_ids or self.match != "topic")
 
 
 class PlannedRequirement(RetrievalRequirement):
@@ -82,6 +90,8 @@ class RetrievalTask(BaseModel):
     def assign_requirement_identity(self) -> "RetrievalTask":
         if self.route != "upload" and self.requirement.file_ids:
             raise ValueError("file_ids apply only to uploaded-file retrieval")
+        if self.route != "docs" and self.requirement.evidence_needs:
+            raise ValueError("evidence_needs apply only to official-doc retrieval")
         if not self.requirement_id.strip():
             identity = {"route": self.route, "requirement": self.requirement.model_dump()}
             if not self.requirement.specified:
