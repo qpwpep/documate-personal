@@ -10,10 +10,9 @@ from src.core.planner_schema import RetrievalRequirement
 from src.infra.settings import AppSettings
 from src.infra.tools._common import build_retrieval_payload
 from src.infra.tools.docs_search import client
-from src.infra.tools.docs_search.extraction import should_extract_doc_content
 from src.infra.tools.docs_search.policy import docs_search_rules, normalize_include_domains
-from src.infra.tools.docs_search.ranking import dedupe_docs_hits, filter_docs_hits_by_topic_purity
-from src.infra.tools.docs_search.requirements import assess_candidates, canonical_query, library_domains, reformulate_query, resolve_requirement
+from src.infra.tools.docs_search.ranking import dedupe_docs_hits, select_docs_evidence
+from src.infra.tools.docs_search.requirements import canonical_query, library_domains, reformulate_query, resolve_requirement
 from src.infra.tools.docs_search.serialization import DocsSearchFilterCounters, collect_docs_search_hits
 
 
@@ -21,7 +20,7 @@ def build_docs_search_tool(settings: AppSettings) -> Callable[..., dict[str, Any
     def tavily_search(
         query: str,
         *,
-        requirement: RetrievalRequirement | None = None,
+        requirement: RetrievalRequirement | dict | None = None,
         k: int = 3,
         attempted_queries: list[str] | None = None,
         previous_hits: list[SearchHit] | None = None,
@@ -33,26 +32,25 @@ def build_docs_search_tool(settings: AppSettings) -> Callable[..., dict[str, Any
         domains = normalize_include_domains(library_domains(str(requested.library or ""))
                                              or list(docs_search_rules().allowed_doc_path_prefixes))
         count = max(1, min(10, int(k)))
-        include_raw = "markdown" if requested.symbols or requested.aspects or should_extract_doc_content(effective_query) else False
+        candidate_limit = min(20, max(6, count * 3))
+        include_raw = "markdown" if requested.symbols or requested.aspects or requested.evidence_needs else False
         attempted = list(dict.fromkeys(attempted_queries or []))
         attempted_keys = {" ".join(q.casefold().split()) for q in attempted}
-        plan = list(dict.fromkeys([effective_query, reformulate_query(effective_query, requested)]))
         unsupported_library = bool(requested.library and not library_domains(requested.library))
-        if unsupported_library:
-            plan = []
         candidates = dedupe_docs_hits([hit for hit in previous_hits or [] if hit.evidence.route == "docs"])
         if unsupported_library:
             candidates = []
         warnings: list[str] = []
         counters = DocsSearchFilterCounters()
         provider_ms = post_ms = 0
-        ranked = candidates if requested.symbols else filter_docs_hits_by_topic_purity(effective_query, candidates, warnings, limit=count)
-        hits, answerability, missing = assess_candidates(ranked, requested, k=count)
-        if answerability == "covered":
-            plan = []
+        assessment = select_docs_evidence(effective_query, candidates, requested, k=count,
+                                          allowed_domains=domains, retrieval_warnings=warnings)
         error_code = None
         error_message = ""
-        for query_text in plan:
+        for attempt in range(2):
+            if unsupported_library or assessment.answerability == "covered":
+                break
+            query_text = effective_query if attempt == 0 else reformulate_query(effective_query, requested, assessment.missing)
             key = " ".join(query_text.casefold().split())
             if key in attempted_keys:
                 continue
@@ -62,7 +60,7 @@ def build_docs_search_tool(settings: AppSettings) -> Callable[..., dict[str, Any
             try:
                 payload = client.request_tavily_search(query=query_text, tavily_api_key=settings.tavily_api_key,
                     include_domains=domains, search_depth="basic", timeout_seconds=settings.docs_search_timeout_seconds,
-                    max_results=count, include_raw_content=include_raw)
+                    max_results=candidate_limit, include_raw_content=include_raw)
                 if not isinstance(payload, dict) or not isinstance(payload.get("results"), list):
                     raise RuntimeError("missing or invalid Tavily results payload")
             except Exception as exc:
@@ -76,16 +74,15 @@ def build_docs_search_tool(settings: AppSettings) -> Callable[..., dict[str, Any
             batch, _scores = collect_docs_search_hits(payload["results"], allowed_domains=domains,
                 retrieval_warnings=warnings, query=effective_query, filter_counters=counters)
             candidates = dedupe_docs_hits([*candidates, *batch])
-            ranked = candidates if requested.symbols else filter_docs_hits_by_topic_purity(effective_query, candidates, warnings, limit=count)
-            hits, answerability, missing = assess_candidates(ranked, requested, k=count)
+            assessment = select_docs_evidence(effective_query, candidates, requested, k=count,
+                                              allowed_domains=domains, retrieval_warnings=warnings)
             post_ms += elapsed_ms(started, time.perf_counter())
-            if answerability == "covered":
-                break
+        hits, answerability, missing = assessment.hits, assessment.answerability, assessment.missing
         if unsupported_library:
             missing = [f"library:{requested.library}"]
         if any(item.startswith("symbol:") for item in missing):
             warnings.append("identifier_coverage_incomplete")
-            counters.filtered_identifier_mismatch_count = len(candidates)
+            counters.filtered_identifier_mismatch_count = assessment.rejected_symbols
         status = "success" if hits else "error" if error_code else "no_result"
         payload = build_retrieval_payload(tool="tavily_search", route="docs", query=effective_query,
             hits=[hit.model_copy(update={"rank": i}) for i, hit in enumerate(hits, 1)], status=status,

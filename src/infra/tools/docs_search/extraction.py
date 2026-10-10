@@ -5,33 +5,13 @@ import re
 from typing import Any
 from urllib.parse import urlparse
 
-
-_DETAIL_QUERY_MARKERS = (
-    "api",
-    "reference",
-    "parameter",
-    "parameters",
-    "argument",
-    "arguments",
-    "option",
-    "options",
-    "signature",
-    "method",
-    "function",
-    "옵션",
-    "파라미터",
-    "매개변수",
-    "인자",
-    "class",
-    "사용법",
-    "문법",
-    "파라미터",
-    "매개변수",
-    "옵션",
-    "인자",
-    "정리",
-    "예제",
+from src.infra.tools.docs_search.sections import (
+    clean_markup,
+    parse_doc_sections,
+    resolve_document_symbol,
 )
+
+
 _SECTION_ALIASES = {
     "parameters": "parameters",
     "parameter": "parameters",
@@ -67,7 +47,6 @@ _DOC_FAMILY_BY_DOMAIN = {
     "gradio.app": "mdx",
 }
 _PARAMETER_STOPWORDS = {
-    "a",
     "an",
     "and",
     "added",
@@ -90,37 +69,38 @@ _DEFAULT_PATTERN = re.compile(r"\bdefault\s*[:=]\s*([^,;.]+)", re.I)
 _IDENTIFIER_PATTERN = re.compile(r"(?<![A-Za-z0-9_])(?:[A-Za-z_][A-Za-z0-9_.-]*|\*{1,2}[A-Za-z_][A-Za-z0-9_]*)")
 
 
-def should_extract_doc_content(query: str) -> bool:
-    lowered = str(query or "").lower()
-    return any(marker in lowered for marker in _DETAIL_QUERY_MARKERS)
-
-
 def extract_doc_content(
     *,
     url: str,
     title: Any,
     content: Any,
-    query: str,
 ) -> tuple[dict[str, Any] | None, str | None]:
-    text = _normalize_content(content)
-    if not text:
+    source = str(content or "")
+    if not source.strip():
         return None, None
-
-    lines = _clean_lines(text)
-    if not lines:
-        return None, None
-
     doc_family = _doc_family_for_url(url)
-    symbol = _resolve_symbol(title=title, url=url, query=query)
-    sections = _split_sections(lines)
+    parsed = parse_doc_sections(source, title=str(title or ""), url=url)
+    owners = {section.owner for section in parsed if section.owner}
+    identity = resolve_document_symbol(title=str(title or ""), url=url)
+    symbol = identity or (next(iter(owners)) if len(owners) == 1 else "")
+    # Metadata represents one API. A multi-API page without a primary identity
+    # cannot honestly flatten every definition's parameters into one list.
+    sections: dict[str, list[str]] = {}
+    for section in parsed:
+        if section.owner != symbol:
+            continue
+        section_lines = _clean_lines(_normalize_content(source[section.start:section.end]))
+        if section_lines and _canonical_section_heading(section_lines[0]):
+            section_lines = section_lines[1:]
+        sections.setdefault(section.kind, []).extend(section_lines)
     source_sections = [section for section, section_lines in sections.items() if section_lines]
 
-    signature = _find_signature(lines=lines, sections=sections, symbol=symbol, doc_family=doc_family)
+    signature = _find_signature(sections=sections, doc_family=doc_family)
     parameters = _extract_entries(sections.get("parameters", []), mode="parameters")
     returns = _extract_entries(sections.get("returns", []), mode="returns")
     options = _extract_entries(sections.get("options", []), mode="options")
     if doc_family == "git_manpage" and not options:
-        options = _extract_entries(lines, mode="options")
+        options = _extract_entries([line for lines in sections.values() for line in lines], mode="options")
 
     examples = _extract_text_samples(sections.get("examples", []), limit=3)
     notes = _extract_text_samples(sections.get("notes", []), limit=3)
@@ -175,9 +155,10 @@ def _normalize_line(line: str) -> str:
     stripped = " ".join(str(line or "").replace("\xa0", " ").split()).strip()
     stripped = re.sub(r"^#{1,6}\s*", "", stripped)
     stripped = re.sub(r"^\s*[-*]\s+", "", stripped)
+    stripped = re.sub(r"^:\s*", "", stripped)
     stripped = stripped.strip("` ")
     stripped = stripped.replace("\\_", "_")
-    stripped = re.sub(r"\*\*([^*]+)\*\*", r"\1", stripped)
+    stripped = re.sub(r"\*\*([^*]+)\*\*", r"\1 ", stripped)
     return stripped.strip()
 
 
@@ -187,37 +168,6 @@ def _doc_family_for_url(url: str) -> str:
     if domain.startswith("www."):
         domain = domain[4:]
     return _DOC_FAMILY_BY_DOMAIN.get(domain, "generic_docs")
-
-
-def _resolve_symbol(*, title: Any, url: str, query: str) -> str:
-    candidates = [
-        str(title or ""),
-        urlparse(str(url or "")).path.rsplit("/", 1)[-1].removesuffix(".html"),
-        str(query or ""),
-    ]
-    for candidate in candidates:
-        cleaned = re.split(r"\s+[—|-]\s+|\s+\|\s+", candidate.strip(), maxsplit=1)[0]
-        match = re.search(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)+", cleaned)
-        if match:
-            return match.group(0)
-    for candidate in candidates:
-        match = re.search(r"[A-Za-z_][A-Za-z0-9_-]{2,}", candidate)
-        if match:
-            return match.group(0).replace("-", " ")
-    return ""
-
-
-def _split_sections(lines: list[str]) -> dict[str, list[str]]:
-    sections: dict[str, list[str]] = {"overview": []}
-    current = "overview"
-    for line in lines:
-        heading = _canonical_section_heading(line)
-        if heading:
-            current = heading
-            sections.setdefault(current, [])
-            continue
-        sections.setdefault(current, []).append(line)
-    return sections
 
 
 def _canonical_section_heading(line: str) -> str:
@@ -240,26 +190,19 @@ def _canonical_section_heading(line: str) -> str:
 
 def _find_signature(
     *,
-    lines: list[str],
     sections: dict[str, list[str]],
-    symbol: str,
     doc_family: str,
 ) -> str:
     if doc_family == "git_manpage":
         synopsis_lines = sections.get("signature", [])
         if synopsis_lines:
             return _truncate(" ".join(synopsis_lines[:3]), 420)
-    for line in lines:
-        if "(" not in line or ")" not in line:
+    for line in sections.get("signature", []):
+        cleaned = clean_markup(line)
+        if not re.match(r"^(?:(?:async\s+)?def\s+|class\s+|function\s+)?[A-Za-z_][\w.]*\s*\(", cleaned):
             continue
-        if len(line) > 520:
-            continue
-        if symbol and symbol.lower() not in line.lower():
-            continue
-        return line
-    for line in lines:
-        if "(" in line and ")" in line and len(line) <= 420:
-            return line
+        if ")" in cleaned and len(cleaned) <= 520:
+            return cleaned
     return ""
 
 
@@ -405,4 +348,4 @@ def _truncate(text: str, limit: int) -> str:
     return normalized[: max(0, limit - 3)].rstrip() + "..."
 
 
-__all__ = ["extract_doc_content", "should_extract_doc_content"]
+__all__ = ["extract_doc_content"]

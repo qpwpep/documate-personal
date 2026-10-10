@@ -58,7 +58,7 @@ def _build_route_handlers(
                      if d.requirement_id == task.requirement_id and d.status != "error"
                      for query in d.attempted_queries]
         return invoke_tool("tavily_search", tavily_search_tool, execution_id=execution_id, query=task.query, k=task.k,
-                                  requirement=task.requirement if task.requirement.specified else None,
+                                  requirement=task.requirement,
                                   attempted_queries=attempted,
                                   previous_hits=[hit for hit in parse_search_hits(prior_hits or []) if hit.requirement_id == task.requirement_id])
 

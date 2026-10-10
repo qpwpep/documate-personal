@@ -203,7 +203,6 @@ def collect_docs_search_hits(
                 url=original_url,
                 title=title,
                 content=content,
-                query="",
             )
             if doc_metadata:
                 metadata["doc_metadata"] = doc_metadata
