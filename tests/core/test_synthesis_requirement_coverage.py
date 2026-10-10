@@ -26,8 +26,9 @@ def _task(library, aspect):
 
 
 def _hit(task, text, *, rank=1, uri=None):
+    root = "https://numpy.org/doc/stable" if task.requirement.library == "numpy" else "https://example.com"
     snapshot = build_snapshot(
-        source_uri=uri or f"https://example.com/{task.requirement.library}/{rank}",
+        source_uri=uri or f"{root}/{task.requirement.library}/{rank}",
         title=task.requirement.library, media_type="text/markdown", source_type="official",
         content=text, parser="test", parser_version="1",
     )

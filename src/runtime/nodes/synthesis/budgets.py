@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from src.core.planner_schema import PlannerOutput, RetrievalTask
+from src.core.planner_schema import DocsEvidenceNeed, PlannerOutput, RetrievalTask
 
 
 # Empirical selection policy, not measured model-context limits. The pairs are
@@ -35,11 +35,13 @@ class RetrievedEvidenceBudget:
     max_items: int
 
 
-def requirement_passage_targets(task: RetrievalTask) -> list[tuple[str | None, str | None]]:
-    """Expand explicit files and literal aspects in their existing selection order."""
-    return [(file_id, aspect)
+def requirement_passage_targets(task: RetrievalTask) -> list[tuple[str | None, str | None, DocsEvidenceNeed | None]]:
+    """Use the same file/aspect/evidence-kind targets for capacity and selection."""
+    needs = task.requirement.evidence_needs if task.route == "docs" else []
+    return [(file_id, aspect, need)
             for file_id in task.requirement.file_ids or [None]
-            for aspect in task.requirement.aspects or [None]]
+            for aspect in task.requirement.aspects or [None]
+            for need in needs or [None]]
 
 
 def resolve_evidence_budgets(

@@ -8,6 +8,7 @@ import textwrap
 from src.core.evidence import EvidenceRef, SearchHit, build_evidence
 from src.core.planner_schema import PlannerOutput, RetrievalTask
 from src.core.table_selection import table_excerpt, table_row_units
+from src.infra.tools.docs_search.ranking import DocsAssessment, assess_docs_evidence
 from src.runtime.nodes.synthesis.budgets import RetrievedEvidenceBudget, requirement_passage_targets
 
 _TOKEN_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_.-]*|[가-힣]{2,}")
@@ -49,10 +50,28 @@ def matches_file_scope(item: EvidenceRef, task: RetrievalTask) -> bool:
     return not task.requirement.file_ids or upload_file_id(item) in task.requirement.file_ids
 
 
+def _assess_docs_ranges(task: RetrievalTask, evidence: list[EvidenceRef]) -> DocsAssessment:
+    return assess_docs_evidence(task.query, evidence, task.requirement)
+
+
+def _has_missing_label(missing: list[str], kind: str, value: str) -> bool:
+    label = f"{kind}:{value}"
+    return any(item == label or item.startswith(label + ":") for item in missing)
+
+
+def _focused_docs_missing(assessment: DocsAssessment, task: RetrievalTask) -> list[str]:
+    """A passage focus changes priority, never the contract used to establish support."""
+    return [label for label in assessment.missing
+            if (not label.startswith("aspect:") or any(_has_missing_label([label], "aspect", aspect)
+                                                       for aspect in task.requirement.aspects))
+            and (not label.startswith("need:") or any(_has_missing_label([label], "need", need)
+                                                       for need in task.requirement.evidence_needs))]
+
+
 def requirement_coverage(
     task: RetrievalTask, evidence: list[EvidenceRef], requirement_ids: dict[str, list[str]],
 ) -> dict:
-    """Describe literal coverage of the supplied ranges, independently of answer generation."""
+    """Describe coverage of the supplied ranges, independently of answer generation."""
     associated = [item for item in evidence
                   if task.requirement_id in requirement_ids.get(item.id, [])
                   and item.route == task.route and matches_file_scope(item, task)]
@@ -62,6 +81,17 @@ def requirement_coverage(
         "present_aspects": [aspect for aspect in task.requirement.aspects if aspect not in missing],
         "missing_aspects": missing, "is_partial": not associated or bool(missing),
     }
+    if task.route == "docs":
+        assessment = _assess_docs_ranges(task, associated)
+        missing = [aspect for aspect in task.requirement.aspects if _has_missing_label(assessment.missing, "aspect", aspect)]
+        missing_needs = [need for need in task.requirement.evidence_needs if _has_missing_label(assessment.missing, "need", need)]
+        coverage.update(
+            present_aspects=[aspect for aspect in task.requirement.aspects if aspect not in missing],
+            missing_aspects=missing,
+            present_needs=[need for need in task.requirement.evidence_needs if need not in missing_needs],
+            missing_needs=missing_needs, missing_requirements=assessment.missing,
+            is_partial=assessment.answerability != "covered",
+        )
     if task.requirement.file_ids:
         covered_files = sorted({upload_file_id(item) for item in associated})
         missing_files = [file_id for file_id in task.requirement.file_ids if file_id not in covered_files]
@@ -280,6 +310,7 @@ def select_table_evidence(
 def select_evidence_range(
     item: EvidenceRef, *, limit: int, query: str = "", task: RetrievalTask | None = None,
     expand_context: bool = True, allow_partial: bool = True, complete_char_limit: int | None = None,
+    coverage_task: RetrievalTask | None = None,
 ) -> EvidenceRef:
     """Choose source ranges; reservation may defer whole code units to a larger allowance."""
     limit = max(0, min(limit, len(item.excerpt)))
@@ -292,7 +323,9 @@ def select_evidence_range(
         aspects = _tokens(" ".join(task.requirement.aspects)) if task is not None else set()
         focus = aspects or (topics - _tokens(item.snapshot.title)) or topics
 
-        def relevance(span: tuple[int, int]) -> tuple[int, int, int, int, int]:
+        docs_scores: dict[tuple[int, int], tuple[int, int, int]] = {}
+
+        def relevance(span: tuple[int, int]) -> tuple[int, ...]:
             passage = text[span[0]:span[1]]
             content = _tokens(passage)
             label = re.match(
@@ -301,10 +334,21 @@ def select_evidence_range(
             )
             label_terms = _tokens(next((value for value in label.groups() if value), "")) if label else set()
             focused_occurrences = sum(match.group().lower() in focus for match in _TOKEN_PATTERN.finditer(passage))
-            return (
+            lexical = (
                 len(label_terms & focus), len(content & focus), min(focused_occurrences, 8),
                 len(content & topics), -span[0],
             )
+            if task is None or task.route != "docs":
+                return lexical
+            if span not in docs_scores:
+                selected = build_evidence(
+                    snapshot=item.snapshot, element=item.element,
+                    start=item.selection.start + span[0], end=item.selection.start + span[1],
+                )
+                assessment = _assess_docs_ranges(coverage_task or task, [selected])
+                missing = _focused_docs_missing(assessment, task)
+                docs_scores[span] = (not missing, -len(missing), -len(assessment.missing))
+            return (*docs_scores[span], *lexical)
 
         if item.element.kind == "code":
             statements, units = _code_ranges(item)
@@ -396,21 +440,30 @@ def select_evidence_packet(
     packet: list[EvidenceRef] = []
     requirement_ids: dict[str, list[str]] = {}
     remaining = max(0, budget.max_total_excerpt_chars)
-    candidates: dict[tuple[str, str, tuple[str, ...]], tuple[EvidenceRef, RetrievalTask | None]] = {}
+    candidates: dict[tuple[str, str, tuple[str, ...], tuple[str, ...]], tuple[EvidenceRef, RetrievalTask | None]] = {}
+    contracts: dict[str, RetrievalTask] = {}
     for item in evidence:
         tasks = (requirements_by_evidence or {}).get(item.id) or [None]
         for task in tasks:
-            targets = requirement_passage_targets(task) if task is not None else [(None, None)]
-            for file_id, aspect in targets:
+            if task is not None:
+                contracts[task.requirement_id] = task
+            targets = requirement_passage_targets(task) if task is not None else [(None, None, None)]
+            for file_id, aspect, need in targets:
                 if file_id is not None and upload_file_id(item) != file_id:
                     continue
+                changes = {}
+                if task is not None and len(task.requirement.aspects) > 1:
+                    changes["aspects"] = [aspect]
+                if task is not None and len(task.requirement.evidence_needs) > 1:
+                    changes["evidence_needs"] = [need]
                 focused = (
-                    task.model_copy(update={"requirement": task.requirement.model_copy(update={"aspects": [aspect]})})
-                    if task is not None and len(task.requirement.aspects) > 1 else task
+                    task.model_copy(update={"requirement": task.requirement.model_copy(update=changes)})
+                    if changes else task
                 )
                 key = (
                     item.id, focused.requirement_id if focused else "",
                     tuple(focused.requirement.aspects) if focused else (),
+                    tuple(focused.requirement.evidence_needs) if focused else (),
                 )
                 candidates.setdefault(key, (item, focused))
 
@@ -438,6 +491,10 @@ def select_evidence_packet(
                 associated.append(task.requirement_id)
 
     def needs_passage(item: EvidenceRef, task: RetrievalTask | None) -> bool:
+        if task is not None and task.route == "docs":
+            associated = [selected for selected in packet if task.requirement_id in requirement_ids.get(selected.id, [])]
+            assessment = _assess_docs_ranges(contracts[task.requirement_id], associated)
+            return bool(_focused_docs_missing(assessment, task))
         excerpts = [selected.excerpt for selected in packet
                     if (task is None and selected.route == item.route) or (
                         task is not None and task.requirement_id in requirement_ids.get(selected.id, [])
@@ -471,10 +528,12 @@ def select_evidence_packet(
             selected = select_evidence_range(
                 item, limit=limit, query=query, task=task, expand_context=False,
                 allow_partial=allow_partial, complete_char_limit=complete_char_limit,
+                coverage_task=contracts.get(task.requirement_id) if task is not None else None,
             )
         if not selected.excerpt.strip():
             return
-        if require_anchor and task is not None and missing_literal_aspects(task.requirement.aspects, [selected.excerpt]):
+        if (require_anchor and task is not None and task.route != "docs"
+                and missing_literal_aspects(task.requirement.aspects, [selected.excerpt])):
             return
         if selected.id not in origins:
             packet.append(selected)
@@ -484,7 +543,8 @@ def select_evidence_packet(
 
     def fair_allowance() -> int:
         # Deferred earlier requirements still own a share of the remaining budget.
-        pending = {(group(candidate), tuple(candidate[1].requirement.aspects) if candidate[1] else ())
+        pending = {(group(candidate), tuple(candidate[1].requirement.aspects) if candidate[1] else (),
+                    tuple(candidate[1].requirement.evidence_needs) if candidate[1] else ())
                    for candidate in ordered if needs_passage(*candidate)}
         return remaining // max(1, min(len(pending), budget.max_items - len(packet)))
 
@@ -525,7 +585,10 @@ def select_evidence_packet(
         if original.element.kind == "table":
             continue
         limit = min(max(0, budget.max_excerpt_chars), len(selected.excerpt) + remaining // (len(packet) - index))
-        expanded = select_evidence_range(original, limit=limit, query=query, task=task)
+        expanded = select_evidence_range(
+            original, limit=limit, query=query, task=task,
+            coverage_task=contracts.get(task.requirement_id) if task is not None else None,
+        )
         if not contains_evidence_range(expanded, selected):
             continue
         if any(not any(candidate_task is not None and candidate_task.requirement_id == requirement_id

@@ -56,7 +56,8 @@ class PacketEchoModel:
 
 
 def _long_hits(*, mixed=False):
-    return [_hit(f"# setting_{index} " + "상세 source information " * 900 + "\n",
+    return [_hit(f"# setting_{index}" + (" " if mixed and index % 2 else "\n")
+                 + "상세 source information " * 900 + "\n",
                  source="upload" if mixed and index % 2 else "official", rank=index + 1)
             for index in range(8)]
 
