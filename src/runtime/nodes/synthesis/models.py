@@ -21,7 +21,6 @@ class SynthesisContext:
     guided_followup: str
     planner_blocked: bool
     parse_errors: list[str]
-    planner_parse_errors: list[str]
     planner_output: PlannerOutput
     retrieval_required: bool
     hits: list[SearchHit]
@@ -35,7 +34,6 @@ class PreparedSynthesisInputs:
     attempt: int
     user_input: str
     parse_errors: list[str]
-    planner_parse_errors: list[str]
     retrieval_required: bool
     evidence_packet: list[EvidenceRef]
     model_messages: list[BaseMessage]
@@ -54,7 +52,6 @@ class SynthesisPipelineResult:
     latency_trace: list[dict[str, Any]]
     evidence_requirement_map: dict[str, list[str]] = field(default_factory=dict)
     retrieval_errors: list[str] = field(default_factory=list)
-    planner_errors: list[str] = field(default_factory=list)
     synthesis_errors: list[str] = field(default_factory=list)
     kind: str = "draft"
     problem: ExecutionProblem | None = None

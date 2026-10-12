@@ -150,10 +150,6 @@ class PlannerOutput(RetrievalPlanOutput):
     request_contract: WireRequestContract | None = None
 
     @classmethod
-    def validate_input(cls, value: Any, warnings: list[str] | None = None) -> "PlannerOutput":
-        return cls.model_validate(normalize_planner_output_input(value))
-
-    @classmethod
     def fallback(cls, request_contract: WireRequestContract | None = None) -> "PlannerOutput":
         return cls(use_retrieval=False, tasks=[], request_contract=request_contract)
 

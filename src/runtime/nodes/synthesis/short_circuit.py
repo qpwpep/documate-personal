@@ -98,7 +98,6 @@ def maybe_short_circuit_synthesis(
             latency_ms=elapsed_ms(stage_started, time.perf_counter()), status=mode,
         )],
         retrieval_errors=context.parse_errors,
-        planner_errors=context.planner_parse_errors,
         kind=kind,
         request_id=contract.request_id if contract else None,
         contract_revision=contract.revision if contract else 0,

@@ -63,6 +63,7 @@ class RuntimeState(BaseModel):
 
 
 class PlannerState(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     output: PlannerOutput = Field(default_factory=PlannerOutput.fallback)
     status: PlannerStatus = "llm"
     diagnostics: PlannerDiagnostic = Field(default_factory=empty_planner_diagnostic)

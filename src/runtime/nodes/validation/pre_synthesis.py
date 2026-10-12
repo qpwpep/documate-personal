@@ -5,7 +5,7 @@ import logging
 from src.core.contracts import GraphState
 from src.core.contracts.boundary.debug import get_debug_state
 from src.core.contracts.boundary.graph import get_retry_state
-from src.core.contracts.boundary.planner import get_planner_state, parse_planner_output
+from src.core.contracts.boundary.planner import get_planner_state
 from src.core.contracts.boundary.response import get_response_state
 from src.core.contracts.boundary.runtime import get_runtime_state
 from src.core.llm_errors import LLMCallError, make_problem
@@ -46,11 +46,10 @@ def make_pre_synthesis_validation_node(verbose: bool):
                 })}
                 updates.update(build_followup_updates(guided_followup, attempt=response.synthesis_attempt, **stamp))
                 return updates
-            planner_output = parse_planner_output(planner.output, [])
             needs_retry, next_retry_context, retrieval_feedback = build_retry_update(
                 retry_context=retry_context,
                 retry_reason="blocked_missing_upload",
-                planner_output=planner_output,
+                planner_output=planner.output,
                 retrieval_errors=[],
                 score_avg=None,
                 failed_routes={"upload"},

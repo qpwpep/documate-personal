@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from src.core.contracts import GraphState, RuntimeState
 from src.core.contracts.boundary.graph import get_retry_state
-from src.core.contracts.boundary.planner import get_planner_state, parse_planner_output
+from src.core.contracts.boundary.planner import get_planner_state
 from src.core.contracts.boundary.response import get_response_state
 from src.core.contracts.boundary.retrieval import get_retrieval_state
 from src.core.contracts.boundary.runtime import get_runtime_state
@@ -52,8 +52,7 @@ def build_synthesis_context(*, state: GraphState) -> SynthesisContext:
             hits.append(raw if isinstance(raw, SearchHit) else SearchHit.model_validate(raw))
         except Exception as exc:
             parse_errors.append(f"retrieved_hits[{index}]: {exc}")
-    planner_errors: list[str] = []
-    plan = parse_planner_output(planner.output, planner_errors)
+    plan = planner.output
     source_response = resolve_contract_source_response(runtime)
     evidence_source = None
     if source_response is not None:
@@ -70,7 +69,6 @@ def build_synthesis_context(*, state: GraphState) -> SynthesisContext:
         guided_followup=str(planner.guided_followup or "").strip(),
         planner_blocked=planner.diagnostics.reason in {"upload_retriever_missing", "upload_file_scope_invalid"},
         parse_errors=parse_errors,
-        planner_parse_errors=planner_errors,
         planner_output=plan,
         retrieval_required=bool(plan.use_retrieval and plan.tasks),
         hits=select_evidence_hits(user_input=runtime.user_input, hits=hits, planner_output=plan),
@@ -121,7 +119,7 @@ def prepare_synthesis_inputs(
     )
     return PreparedSynthesisInputs(
         attempt=context.attempt, user_input=context.user_input,
-        parse_errors=context.parse_errors, planner_parse_errors=context.planner_parse_errors,
+        parse_errors=context.parse_errors,
         retrieval_required=retrieval_required, evidence_packet=packet,
         evidence_requirement_map=requirement_ids,
         reference_aliases=reference_aliases,

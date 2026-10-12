@@ -5,7 +5,7 @@ from src.core.contracts import GraphState, RetrievalDiagnostic
 from src.core.contracts.provenance import AnswerSource, BodyKind
 from src.core.contracts.boundary.debug import get_debug_state
 from src.core.contracts.boundary.graph import get_retry_state
-from src.core.contracts.boundary.planner import get_planner_state, parse_planner_output
+from src.core.contracts.boundary.planner import get_planner_state
 from src.core.contracts.boundary.response import get_response_state
 from src.core.contracts.boundary.retrieval import get_retrieval_state
 from src.core.contracts.boundary.runtime import get_runtime_state
@@ -111,7 +111,7 @@ def collect_validation_snapshot(state: GraphState) -> tuple[ValidationSnapshot, 
     response = get_response_state(state)
     debug = get_debug_state(state)
     retry = get_retry_state(state)
-    planner_output = parse_planner_output(planner.output, local_errors)
+    planner_output = planner.output
     parsed_hits: list[SearchHit] = []
     for index, value in enumerate(slice_from_index(retrieval.hit_log, retry.hit_start_index)):
         try:

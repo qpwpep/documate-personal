@@ -10,7 +10,7 @@ from typing import Any
 from src.core.contracts import GraphState, RetrievalDiagnostic
 from src.core.contracts.boundary.debug import get_debug_state
 from src.core.contracts.boundary.graph import get_retry_state
-from src.core.contracts.boundary.planner import get_planner_state, parse_planner_output
+from src.core.contracts.boundary.planner import get_planner_state
 from src.core.contracts.boundary.retrieval import get_retrieval_state
 from src.core.contracts.boundary.runtime import get_runtime_state
 from src.core.latency import elapsed_ms, make_stage_latency_event
@@ -31,7 +31,6 @@ class RetrievalBatchPlan:
     attempt: int
     indexed_tasks: list[tuple[int, RetrievalTask, str, Any]] = field(default_factory=list)
     reused_results: list[RetrievalTaskResult] = field(default_factory=list)
-    planner_errors: list[str] = field(default_factory=list)
     local_errors: list[str] = field(default_factory=list)
 
 
@@ -186,7 +185,6 @@ def _build_retrieval_updates(
     *,
     retrieval: Any,
     debug: Any,
-    planner_errors: list[str],
     batch_result: RetrievalBatchResult,
 ) -> GraphState:
     updates: GraphState = {
@@ -195,7 +193,7 @@ def _build_retrieval_updates(
         ),
         "messages": batch_result.tool_messages,
     }
-    if planner_errors or batch_result.local_errors or batch_result.retrieval_diagnostics or batch_result.latency_trace:
+    if batch_result.local_errors or batch_result.retrieval_diagnostics or batch_result.latency_trace:
         retrieval_error_codes = [
             diagnostic.error_code
             for diagnostic in batch_result.retrieval_diagnostics
@@ -203,7 +201,6 @@ def _build_retrieval_updates(
         ]
         updates["debug"] = debug.model_copy(
             update={
-                "planner_errors": [*debug.planner_errors, *planner_errors],
                 "retrieval_errors": [*debug.retrieval_errors, *batch_result.local_errors],
                 "retrieval_diagnostics": [*debug.retrieval_diagnostics, *batch_result.retrieval_diagnostics],
                 "error_codes": [
@@ -258,15 +255,8 @@ def make_retrieve_dispatch_node(
         planner = get_planner_state(state)
         retrieval = get_retrieval_state(state)
         debug = get_debug_state(state)
-        planner_errors: list[str] = []
-        planner_output = parse_planner_output(planner.output, planner_errors)
-        if not planner_output.use_retrieval or not planner_output.tasks:
-            if planner_errors:
-                return {
-                    "debug": debug.model_copy(
-                        update={"planner_errors": [*debug.planner_errors, *planner_errors]}
-                    )
-                }
+        planner_output = planner.output
+        if not planner_output.use_retrieval:
             return {}
 
         route_handlers = _build_route_handlers(
@@ -323,7 +313,6 @@ def make_retrieve_dispatch_node(
         return _build_retrieval_updates(
             retrieval=retrieval,
             debug=debug,
-            planner_errors=[*planner_errors, *batch_plan.planner_errors],
             batch_result=batch_result,
         )
 

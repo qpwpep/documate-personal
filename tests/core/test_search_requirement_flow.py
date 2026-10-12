@@ -1,7 +1,6 @@
 """Public node contracts for preserving independent evidence requirements."""
 from langchain_core.messages import HumanMessage
 
-from src.core.contracts.boundary.planner import parse_planner_output
 from src.core.contracts import RetrievalDiagnostic, RetryState
 from src.core.planner_schema import PlannerOutput
 from src.core.request_contracts import RequestContract, WireRequestContract, UnresolvedBody, MissingInformation
@@ -106,20 +105,6 @@ def test_dispatch_keeps_independent_official_sources_and_coverage_with_mixed_pro
 
 
 
-
-
-
-def test_planner_keeps_independent_official_sources_on_the_same_route():
-    """Two official-source requirements remain independently executable."""
-    errors = []
-    plan = parse_planner_output({"use_retrieval": True, "tasks": [
-        {"route": "docs", "query": "numpy.concatenate axis", "k": 2},
-        {"route": "docs", "query": "pandas.concat axis", "k": 3},
-    ]}, errors)
-    assert errors == []
-    assert [(t.route, t.query, t.k) for t in plan.tasks] == [
-        ("docs", "numpy.concatenate axis", 2), ("docs", "pandas.concat axis", 3),
-    ]
 
 
 
