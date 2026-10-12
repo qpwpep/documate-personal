@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import ast
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Literal
 
 from src.core.documents import DocumentElement, DocumentSnapshot, ParsedDocument
-from src.core.evidence import EvidenceRef, RetrievalScore, SearchHit, build_evidence, dedupe_search_hits
+from src.core.evidence import RetrievalScore, SearchHit, build_evidence, dedupe_search_hits
 from src.core.planner_schema import RetrievalRequirement
 
 
@@ -139,34 +139,18 @@ def _code_terms(node: ast.AST) -> set[str]:
     return terms
 
 
-def _candidate_sources(rows: list[tuple[Any, float | None]]) -> list[_Source]:
-    sources: dict[tuple[str, str], _Source] = {}
-    for doc, _score in rows:
-        try:
-            ref = EvidenceRef.model_validate_json(doc.metadata["evidence_ref"])
-            if ref.route != "upload" or ref.excerpt != doc.page_content:
-                continue
-        except (AttributeError, KeyError, TypeError, ValueError):
-            continue
-        sources[(ref.snapshot.snapshot_id, ref.element.element_id)] = _Source(ref.snapshot, ref.element)
-    return list(sources.values())
-
-
 def resolve_source_requirement(
-    *, requirement: RetrievalRequirement, source_document: ParsedDocument | None = None,
-    candidate_rows: list[tuple[Any, float | None]],
-    source_documents: tuple[ParsedDocument, ...] | None = None,
+    *, requirement: RetrievalRequirement, source_documents: tuple[ParsedDocument, ...],
 ) -> SourceRequirementResult:
-    """A complete registry proves absence; vector candidates alone never do."""
-    documents = source_documents if source_documents is not None else ((source_document,) if source_document else None)
-    if documents is not None and requirement.file_ids:
+    """Only a complete, parseable source registry can establish a missing symbol."""
+    documents = source_documents
+    if requirement.file_ids:
         documents = tuple(document for document in documents
                           if any(element.metadata.get("file_id") in requirement.file_ids
                                  for element in document.elements))
     exhaustive = bool(documents) and all(document.snapshot.capture_scope == "full_document"
                                         and document.snapshot.parser != "docling" for document in documents)
-    sources = ([_Source(document.snapshot, element) for document in documents for element in document.elements]
-               if documents is not None else _candidate_sources(candidate_rows))
+    sources = [_Source(document.snapshot, element) for document in documents for element in document.elements]
     if requirement.file_ids:
         sources = [source for source in sources if source.element.metadata.get("file_id") in requirement.file_ids]
     symbols = list(dict.fromkeys(requirement.symbols))
@@ -245,6 +229,6 @@ def resolve_source_requirement(
         hits=hits,
         answerability=answerability,
         missing_requirements=unresolved if exhaustive else [],
-        candidate_count=len(candidate_rows) if documents is None else len(hits),
+        candidate_count=len(hits),
         warnings=list(dict.fromkeys(warnings)),
     )

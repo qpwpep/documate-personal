@@ -29,8 +29,7 @@ def build_docs_search_tool(settings: AppSettings) -> Callable[..., dict[str, Any
         effective_query = canonical_query(query, requested)
         domains = normalize_include_domains(library_domains(str(requested.library or ""))
                                              or list(docs_search_rules().allowed_doc_path_prefixes))
-        count = max(1, min(10, int(k)))
-        candidate_limit = min(20, max(6, count * 3))
+        candidate_limit = min(20, max(6, k * 3))
         include_raw = "markdown" if requested.symbols or requested.aspects or requested.evidence_needs else False
         attempted = list(dict.fromkeys(attempted_queries or []))
         attempted_keys = {" ".join(q.casefold().split()) for q in attempted}
@@ -41,7 +40,7 @@ def build_docs_search_tool(settings: AppSettings) -> Callable[..., dict[str, Any
         warnings: list[str] = []
         counters = DocsSearchFilterCounters()
         provider_ms = post_ms = 0
-        assessment = select_docs_evidence(effective_query, candidates, requested, k=count,
+        assessment = select_docs_evidence(effective_query, candidates, requested, k=k,
                                           allowed_domains=domains, retrieval_warnings=warnings)
         error_code = None
         error_message = ""
@@ -52,8 +51,6 @@ def build_docs_search_tool(settings: AppSettings) -> Callable[..., dict[str, Any
             key = " ".join(query_text.casefold().split())
             if key in attempted_keys:
                 continue
-            attempted_keys.add(key)
-            attempted.append(query_text)
             started = time.perf_counter()
             try:
                 payload = client.request_tavily_search(query=query_text, tavily_api_key=settings.tavily_api_key,
@@ -68,11 +65,15 @@ def build_docs_search_tool(settings: AppSettings) -> Callable[..., dict[str, Any
                 break
             finally:
                 provider_ms += elapsed_ms(started, time.perf_counter())
+            # Only completed provider requests suppress future searches. A timeout
+            # can retain earlier partial evidence without consuming this query.
+            attempted_keys.add(key)
+            attempted.append(query_text)
             started = time.perf_counter()
             batch, _scores = collect_docs_search_hits(payload["results"], allowed_domains=domains,
                 retrieval_warnings=warnings, query=effective_query, filter_counters=counters)
             candidates = dedupe_docs_hits([*candidates, *batch])
-            assessment = select_docs_evidence(effective_query, candidates, requested, k=count,
+            assessment = select_docs_evidence(effective_query, candidates, requested, k=k,
                                               allowed_domains=domains, retrieval_warnings=warnings)
             post_ms += elapsed_ms(started, time.perf_counter())
         hits, answerability, missing = assessment.hits, assessment.answerability, assessment.missing

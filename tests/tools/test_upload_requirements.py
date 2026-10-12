@@ -10,7 +10,6 @@ import pytest
 from langchain_core.embeddings import Embeddings
 
 from src.core.evidence import parse_search_hits
-from src.infra.chunking import chunk_python_text
 from src.core.uploads import UploadRecord
 from src.infra.tools.local_rag import build_upload_retriever, build_upload_search_tool
 
@@ -126,3 +125,10 @@ def test_source_lookup_remains_isolated_between_uploaded_sessions(uploaded):
     assert found["diagnostics"]["answerability"] == "covered"
     assert absent["hits"] == []
     assert absent["diagnostics"]["answerability"] == "missing"
+
+
+
+
+
+
+

@@ -9,7 +9,7 @@ def test_converted_document_cannot_prove_a_python_definition_is_absent():
                               source_type="upload", content=b"pdf", parser="docling", parser_version="test")
     parsed = ParsedDocument(snapshot=snapshot, elements=[DocumentElement(element_id="p", kind="paragraph", text="run example")])
     result = resolve_source_requirement(requirement=RetrievalRequirement(symbols=["run"], match="definition"),
-                                        source_document=parsed, candidate_rows=[])
+                                        source_documents=(parsed,))
     assert result.answerability == "unknown"
     assert result.missing_requirements == []
 
@@ -20,6 +20,6 @@ def test_ocr_code_is_not_published_as_an_exact_python_implementation():
                               source_type="upload", content=b"pdf", parser="docling", parser_version="test")
     parsed = ParsedDocument(snapshot=snapshot, elements=[DocumentElement(element_id="p", kind="code", text="def run():\n    return 1")])
     result = resolve_source_requirement(requirement=RetrievalRequirement(symbols=["run"], match="definition"),
-                                        source_document=parsed, candidate_rows=[])
+                                        source_documents=(parsed,))
     assert result.answerability == "unknown"
     assert result.hits == []

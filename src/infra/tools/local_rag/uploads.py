@@ -20,13 +20,11 @@ from openai import APITimeoutError
 from src.core.documents import ParsedDocument
 from src.core.uploads import UploadFileInfo, UploadRecord
 from src.core.upload_formats import is_document_upload
-from src.infra.chroma_store import create_chroma_vectorstore, add_preembedded_documents
+from src.infra.chroma_store import build_openai_embeddings, create_chroma_vectorstore, add_preembedded_documents
 from src.infra.chunking import ChunkedDocument, chunk_notebook, chunk_python_text, chunk_parsed_document
 from src.infra.document_ingestion import DocumentIngestionContext, IngestionError
 from src.infra.embedding_cache import CachedEmbeddings
 from src.infra.notebook_loader import canonicalize_notebook_payload
-
-from . import client
 
 
 UPLOAD_CHUNK_SIZE = 800
@@ -162,17 +160,11 @@ class _SourceAwareVectorStore:
             rows.extend(remaining[:max(0, budget - len(rows))])
         return [(self._registry.hydrate(chunk), score) for chunk, score in rows]
 
-    def similarity_search(self, *args: Any, **kwargs: Any) -> list[Document]:
-        return [chunk for chunk, _score in self.similarity_search_with_score(*args, **kwargs)]
-
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self._vectorstore, name)
 
 
 class _SourceAwareRetriever:
-    def __init__(self, retriever: Any, vectorstore: Chroma, documents: tuple[ChunkedDocument, ...],
+    def __init__(self, vectorstore: Chroma, documents: tuple[ChunkedDocument, ...],
                  upload_files: tuple[UploadFileInfo, ...] = ()):
-        self._retriever = retriever
         self._registry = _SourceRegistry(documents)
         self.upload_files = upload_files
         self.vectorstore = _SourceAwareVectorStore(vectorstore, self._registry,
@@ -182,22 +174,10 @@ class _SourceAwareRetriever:
     def source_documents(self) -> tuple[ParsedDocument, ...]:
         return tuple(document.parsed for document in self._registry.documents if document.parsed.elements)
 
-    @property
-    def source_document(self) -> ParsedDocument | None:
-        """The current session's preserved source; no filesystem or cross-session lookup."""
-        documents = self.source_documents
-        return documents[0] if len(documents) == 1 else None
-
-    def invoke(self, *args: Any, **kwargs: Any) -> list[Document]:
-        return [self._registry.hydrate(chunk) for chunk in self._retriever.invoke(*args, **kwargs)]
-
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self._retriever, name)
-
 
 def _index_documents(
     documents: tuple[ChunkedDocument, ...], *, collection_name: str,
-    api_key: str | None, k: int, upload_files: tuple[UploadFileInfo, ...],
+    api_key: str | None, upload_files: tuple[UploadFileInfo, ...],
     ingestion: DocumentIngestionContext | None = None,
 ) -> UploadedRetrieverHandle:
     vectorstore = None
@@ -205,7 +185,7 @@ def _index_documents(
         try:
             if ingestion is not None:
                 ingestion.check_deadline()
-            embeddings = client.build_openai_embeddings(api_key)
+            embeddings = build_openai_embeddings(api_key)
             vectorstore = create_chroma_vectorstore(
                 embeddings=embeddings, collection_name=collection_name)
         except IngestionError:
@@ -222,7 +202,7 @@ def _index_documents(
                     if ingestion is not None:
                         provider = embeddings
                         if ingestion.deadline is not None and hasattr(embeddings, "request_timeout"):
-                            provider = client.build_openai_embeddings(api_key, timeout_seconds=max(0.1, ingestion.deadline - time.monotonic()))
+                            provider = build_openai_embeddings(api_key, timeout_seconds=max(0.1, ingestion.deadline - time.monotonic()))
                         if ingestion.cache_dir is not None:
                             snapshot = document.parsed.snapshot
                             provider = CachedEmbeddings(provider, ingestion.cache_dir / "embeddings", namespace={
@@ -251,8 +231,7 @@ def _index_documents(
                                              file_name=document.parsed.snapshot.title, retryable=True) from exc
                 raise RuntimeError(f"{document.parsed.snapshot.title}: embedding or vector insertion failed") from exc
             document.chunks.clear()
-        retriever = _SourceAwareRetriever(vectorstore.as_retriever(search_kwargs={"k": k}),
-                                          vectorstore, documents, upload_files)
+        retriever = _SourceAwareRetriever(vectorstore, documents, upload_files)
         return UploadedRetrieverHandle(retriever=retriever, collection_name=collection_name,
                                        _vectorstore=vectorstore, _documents=documents)
     except BaseException:
@@ -294,7 +273,7 @@ def _parse_upload(file: UploadRecord) -> ChunkedDocument:
 
 def build_upload_retriever(
     files: list[UploadRecord], *, session_id: str, generation: str,
-    api_key: str | None = None, k: int = 4, ingestion: DocumentIngestionContext | None = None,
+    api_key: str | None = None, ingestion: DocumentIngestionContext | None = None,
 ) -> UploadedRetrieverHandle:
     """Build an isolated candidate index without touching the currently active generation."""
     retry_pending_upload_index_cleanup()
@@ -356,4 +335,4 @@ def build_upload_retriever(
         raise
     catalog = tuple(file.public_info() for file in files)
     return _index_documents(tuple(documents), collection_name=collection_name,
-                            api_key=api_key, k=k, upload_files=catalog, ingestion=ingestion)
+                            api_key=api_key, upload_files=catalog, ingestion=ingestion)

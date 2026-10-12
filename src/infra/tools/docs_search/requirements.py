@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from src.core.planner_schema import RetrievalRequirement
-from src.infra.tools.docs_search.normalization import canonicalize_docs_query_text
+from src.infra.tools.docs_search.normalization import canonicalize_docs_query_text, canonicalize_docs_symbol_text
 from src.infra.tools.docs_search.policy import docs_search_rules, infer_docs_library
 
 
@@ -16,7 +16,7 @@ def canonical_library(value: str | None) -> str:
 
 
 def canonical_symbol(symbol: str, library: str) -> str:
-    value = canonicalize_docs_query_text(symbol).strip(" `()")
+    value = canonicalize_docs_symbol_text(symbol)
     for alias, target in _SYMBOL_ALIASES.get(library.casefold(), {}).items():
         if value.startswith(alias + "."):
             return target + value[len(alias):]
