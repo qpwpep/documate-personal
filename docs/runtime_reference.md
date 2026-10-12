@@ -245,7 +245,7 @@ docs 도구는 후보 수집과 최종 근거 선택의 예산을 구분합니�
 
 요청 버전과 명확히 다른 후보는 제외합니다. 버전이 확인되지 않는 후보는 사용 가능한 부분 근거로 남길 수 있지만 버전 요구를 충족하지 않습니다. 요구 충족에 쓰는 근거마다 요청 버전이 확인되어야 `covered`이며, 다른 근거 하나의 버전 표기로 전체를 충족 처리하지 않습니다. 대상·aspect·정보 종류는 선택한 원문 범위에서, 버전은 해당 근거의 출처 URI와 제목에서 확인합니다. 구조·어휘 규칙으로 확인하므로 자연어 답변에 대한 의미적 지지를 증명하는 판정은 아닙니다.
 
-도구는 `query`, `requirement`, `k`, `attempted_queries`, `previous_hits`를 입력받고 공식 도메인을 내부에서 결정합니다. Tavily 검색 깊이는 `basic`으로 실행하며 심볼·aspect·정보 종류가 필요하면 Markdown `raw_content`를 요청합니다. 도구 호출마다 최초 검색과 미충족 요구에 맞춘 보완 검색을 합해 최대 두 번 요청합니다. 보완 검색은 고정된 심볼·버전·aspect를 유지하고 부족한 정보 종류를 반영합니다. 같은 선택 절차에서 충분한 근거를 확보하면 즉시 중단하며, 이미 `attempted_queries`에 기록된 query는 다시 실행하지 않습니다. `DOCS_SEARCH_TIMEOUT_SECONDS`는 개별 Tavily 요청마다 적용되며 route 전체의 deadline은 아닙니다.
+도구는 `query`, `requirement`, `k`, `attempted_queries`, `previous_hits`를 입력받고 공식 도메인을 내부에서 결정합니다. Tavily 검색 깊이는 `basic`으로 실행하며 심볼·aspect·정보 종류가 필요하면 Markdown `raw_content`를 요청합니다. 도구 호출마다 최초 검색과 미충족 요구에 맞춘 보완 검색을 합해 최대 두 번 요청합니다. 보완 검색은 고정된 심볼·버전·aspect를 유지하고 부족한 정보 종류를 반영합니다. 같은 선택 절차에서 충분한 근거를 확보하면 즉시 중단하며, `attempted_queries`에는 정상 완료한 provider 검색만 기록하여 중복 실행을 막습니다. timeout 등으로 실패한 query는 기록하지 않아 다음 호출에서 다시 실행할 수 있습니다. `DOCS_SEARCH_TIMEOUT_SECONDS`는 개별 Tavily 요청마다 적용되며 route 전체의 deadline은 아닙니다.
 
 재시도에는 현재 요청의 같은 `requirement_id`에서 확보한 부분 후보를 `previous_hits`로 전달합니다. 기존·신규 후보를 합친 뒤 원래 라이브러리·domain·심볼·버전·aspect·정보 종류와 선택 예산에 맞게 같은 절차로 다시 평가합니다. 다른 대상이나 명확히 다른 버전의 후보는 재사용 근거로 인정하지 않으며, 이미 충분하면 추가 HTTP 호출 없이 반환합니다. Tavily의 `content`와 `raw_content`는 모두 `provider_excerpt` 원문으로 보존하고, 선택한 근거는 그 원문의 정확한 문자 범위를 인용합니다.
 
@@ -581,7 +581,9 @@ source descriptor는 요청 계약이 실제로 해석한 서버 원본에서 �
 
 진단에는 `requirement_id`, `missing_requirements`, `candidate_count`, `attempted_queries`, `request_fingerprint`, `reused`도 포함됩니다. synthesis 전 검사는 같은 route의 task도 ID별로 나누어 결과와 진단을 확인합니다. 명시된 requirement는 `covered` 없이 통과하지 않습니다. 제약이 없는 일반 topic은 유효 검색 결과가 있으면 생성으로 진행할 수 있지만, 이를 명시 대상 검증 완료로 기록하지는 않습니다.
 
-`retry_context.hit_start_index`는 현재 시도의 검색 결과 시작 위치입니다. `failed_requirement_ids`, `original_tasks`, `preserved_hits`, 보존 진단은 실패 요구와 이미 확보한 근거를 추적합니다. `refresh_routes`는 실패한 요구의 검색을 다시 계획하며 성공한 다른 요구는 같은 route에 있어도 재사용합니다. 재계획에는 실제 query·필터 실패·시도한 query가 전달되고 원래 ID·라이브러리·심볼·버전·aspect·정보 종류를 유지합니다. 같은 요청 fingerprint의 완료 결과를 다시 실행하지 않으며 일시적 도구 오류는 재시도할 수 있습니다.
+`retry_context.hit_start_index`는 현재 시도의 검색 결과 시작 위치입니다. `failed_requirement_ids`, `original_tasks`, `preserved_hits`, 보존 진단은 실패 요구와 이미 확보한 근거를 추적합니다. `refresh_routes`는 실패한 요구의 검색을 다시 계획하며 성공한 다른 요구는 같은 route에 있어도 재사용합니다. 재계획에는 실제 query·필터 실패·시도한 query가 전달되고 원래 ID·라이브러리·심볼·버전·aspect·정보 종류를 유지합니다. 같은 requirement ID 안에서 동일한 요청 fingerprint의 완료 결과를 재사용하며, 다른 ID의 성공 검색과 같아졌다는 이유만으로 새 요구의 검색을 생략하지 않습니다. 일시적 도구 오류는 같은 query로 재시도할 수 있습니다. docs와 업로드의 주제·aspect 벡터 검색은 한도 안에서 query/k를 다시 계획할 수 있습니다. 업로드 원문 전체를 검사하는 symbol·definition 검색, retriever 부재, 잘못된 파일 범위는 쿼리 변경으로 해결할 수 없어 재검색하지 않습니다.
+
+초기 planner의 `aspect_references`는 사용자 원문에 없는 literal aspect를 직전 답변의 명시적인 선택에서 가져올 때만 사용합니다. 현재 사용자 발화의 `reference` 근거, 요구사항별 scope, 서버가 보관한 직전 답변의 정확한 인용과 aspect를 대조한 뒤 내부 검색 계획에는 확정된 aspect만 남깁니다. 이전 답변의 임의 단어·추측값은 필수 조건이 되지 않으며, 참조의 의미와 부정 해석은 모델이 담당합니다. 재시도 모델에는 이 참조 필드를 다시 받지 않고 실패 ID의 query/k만 받습니다.
 
 post-synthesis 검사에서 참조·내용·requirement coverage 문제가 있고 원문 검색 결과가 남아 있으면 `reuse_hits_resynthesize`로 synthesis에 직접 돌아갑니다. 실제 packet에는 필요한 근거가 있지만 답변이 인용하지 않은 경우에는 이 재합성이 유효합니다. 일반 packet부터 근거가 빠져 같은 준비·예산으로 회복할 수 없는 경우는 재생성을 반복하지 않고 불완전한 원문 fallback으로 처리하며, packet의 누락과 검색 부재를 구분합니다. timeout 후 compact packet만 부족하고 일반 packet은 충분하면 기존 한도 안에서 일반 입력으로 재합성할 수 있습니다. 검색 없는 신규 생성·기존 답변 수정도 확정 계약을 유지하며 재합성할 수 있습니다. planner·검색을 반복하지 않는 이 경로의 기본 재시도 상한은 1회이고 `max_retries=0`이면 실행하지 않습니다. 각 시도는 동일 계약의 필수 누락·금지 위반을 검사하며, 선호 미충족만으로 실패하지 않습니다. 코드 원문을 그대로 복사한 일반 문단도 코드 금지 검사에 포함합니다. 줄 수는 출처 부록·receipt를 제외한 본문의 비어 있지 않은 줄입니다. 잘못된 내용 제거와 원문 fallback에도 같은 조건을 적용하며 불완전한 fallback은 저장·전송하지 않습니다. 비교·설명 등 의미 요구의 충족은 구조 검사로 증명하지 않습니다.
 
