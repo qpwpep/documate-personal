@@ -61,28 +61,16 @@ def _requirement(symbols, match="definition"):
     return RetrievalRequirement(symbols=symbols, match=match)
 
 
-def test_legacy_definition_request_does_not_quote_a_comment_or_a_call(uploaded):
+def test_explicit_definition_request_does_not_quote_a_comment_or_a_call(uploaded):
     """A requested function definition is missing even when its name occurs in a comment and call."""
     source = "# archive_orders is supplied by another package\narchive_orders(items)\n\ndef archive_users():\n    return []\n"
     with uploaded(source) as retriever:
-        payload = build_upload_search_tool()(query="archive_orders 함수 정의를 원문 그대로 발췌해줘", retriever=retriever)
+        payload = build_upload_search_tool()(requirement=_requirement(["archive_orders"]), query="archive_orders 함수 정의를 원문 그대로 발췌해줘", retriever=retriever)
     assert payload["hits"] == []
     assert payload["diagnostics"]["answerability"] == "missing"
     assert payload["diagnostics"]["missing_requirements"] == ["archive_orders"]
 
 
-@pytest.mark.parametrize("query, name", [
-    ("Extract function collect_records verbatim", "collect_records"),
-    ("Quote the rebalance function definition", "rebalance"),
-    ("`normalizeRow` 함수 원문을 발췌해줘", "normalizeRow"),
-])
-def test_legacy_named_definition_phrases_keep_the_exact_requested_name(uploaded, query, name):
-    """Definition requests identify the code name rather than English instruction words."""
-    with uploaded(f"def {name}():\n    return 1\n") as retriever:
-        payload = build_upload_search_tool()(query=query, retriever=retriever)
-    assert payload["diagnostics"]["answerability"] == "covered"
-    assert payload["diagnostics"]["missing_requirements"] == []
-    assert [hit.evidence.excerpt for hit in parse_search_hits(payload)] == [f"def {name}():\n    return 1"]
 
 
 def test_complete_method_definition_is_found_outside_vector_top_k_with_exact_offsets(uploaded):

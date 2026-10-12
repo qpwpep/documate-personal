@@ -5,6 +5,7 @@ import json as json_lib
 import pytest
 import requests
 
+from src.core.planner_schema import RetrievalRequirement
 from src.core.evidence import SearchHit
 from src.infra.settings import AppSettings
 from src.infra.tools.docs_search.tool import build_docs_search_tool
@@ -88,12 +89,10 @@ def test_target_api_beats_unrelated_rich_reference(search, library, symbol, othe
     unrelated["raw_content"] += "\nReturns\nresult: The computed result.\nExamples\n>>> data = [1, 2]\n"
     target = reference(symbol, parameter=parameter, score=0.3)
     batches.append([unrelated, target])
-    kwargs = {}
-    if explicit:
-        kwargs["requirement"] = {
-            "library": library, "symbols": [symbol], "evidence_needs": ["parameters"]
-        }
-    payload = tool(f"{library} {symbol.rsplit('.', 1)[-1]} 옵션 설명", k=1, **kwargs)
+    requirement = RetrievalRequirement(
+        library=library, symbols=[symbol] if explicit else [], evidence_needs=["parameters"],
+    )
+    payload = tool(f"{library} {symbol.rsplit('.', 1)[-1]} 옵션 설명", k=1, requirement=requirement)
     selected = hits(payload)
     assert selected[0].evidence.snapshot.source_uri == target["url"]
     assert f"{parameter}: Controls" in selected[0].evidence.excerpt
@@ -109,7 +108,7 @@ def test_target_api_beats_unrelated_rich_reference(search, library, symbol, othe
 def test_library_match_alone_does_not_cover_a_topic(search):
     tool, batches, _ = search
     batches.append([reference("numpy.reshape", parameter="shape")])
-    payload = tool("numpy broadcasting", k=1)
+    payload = tool("numpy broadcasting", requirement=RetrievalRequirement(library='numpy'), k=1)
     assert payload["diagnostics"]["answerability"] == "missing"
     assert hits(payload) == []
 
@@ -119,9 +118,7 @@ def test_library_match_alone_does_not_cover_a_topic(search):
 def test_candidate_budget_is_separate_from_returned_evidence_budget(search):
     tool, batches, seen = search
     batches.append([reference("numpy.mean")])
-    payload = tool("numpy.mean parameters", k=1, requirement={
-        "library": "numpy", "symbols": ["numpy.mean"], "evidence_needs": ["parameters"]
-    })
+    payload = tool("numpy.mean parameters", k=1, requirement=RetrievalRequirement(library='numpy', symbols=['numpy.mean'], evidence_needs=['parameters']))
     assert seen[0]["max_results"] > 1
     assert 0 < len(hits(payload)) <= 1
 
@@ -134,10 +131,7 @@ def test_complementary_aspects_are_selected_before_repeated_coverage(search):
     duplicate = reference("numpy.reshape", parameter="order", score=0.98, suffix="#order-notes")
     copy = reference("numpy.reshape", parameter="copy", score=0.2, suffix="#copy")
     batches.append([order, duplicate, copy])
-    payload = tool("numpy.reshape order copy", k=2, requirement={
-        "library": "numpy", "symbols": ["numpy.reshape"], "aspects": ["order", "copy"],
-        "evidence_needs": ["parameters"],
-    })
+    payload = tool("numpy.reshape order copy", k=2, requirement=RetrievalRequirement(library='numpy', symbols=['numpy.reshape'], aspects=['order', 'copy'], evidence_needs=['parameters']))
     selected = hits(payload)
     assert payload["diagnostics"]["answerability"] == "covered"
     assert len(selected) <= 2
@@ -155,10 +149,7 @@ def test_parameter_of_another_api_on_same_page_does_not_cover_target(search):
         "Parameters\naxis: Axis along which the sum is computed.\n"
     ))
     batches.append([source])
-    payload = tool("numpy.mean axis", k=2, requirement={
-        "library": "numpy", "symbols": ["numpy.mean"], "aspects": ["axis"],
-        "evidence_needs": ["parameters"],
-    })
+    payload = tool("numpy.mean axis", k=2, requirement=RetrievalRequirement(library='numpy', symbols=['numpy.mean'], aspects=['axis'], evidence_needs=['parameters']))
     assert payload["diagnostics"]["answerability"] == "partial"
     assert hits(payload)
     assert any("axis" in item for item in payload["diagnostics"]["missing_requirements"])
@@ -168,9 +159,7 @@ def test_parameter_of_another_api_on_same_page_does_not_cover_target(search):
 def test_unknown_and_conflicting_versions_are_distinct(search, source_version, expected):
     tool, batches, _ = search
     batches.append([reference("numpy.mean", version=source_version)])
-    payload = tool("numpy.mean 1.26 parameters", k=1, requirement={
-        "library": "numpy", "symbols": ["numpy.mean"], "version": "1.26", "evidence_needs": ["parameters"]
-    })
+    payload = tool("numpy.mean 1.26 parameters", k=1, requirement=RetrievalRequirement(library='numpy', symbols=['numpy.mean'], version='1.26', evidence_needs=['parameters']))
     assert payload["diagnostics"]["answerability"] == expected
     assert any("version" in item for item in payload["diagnostics"]["missing_requirements"])
     assert bool(hits(payload)) is (expected == "partial")
@@ -191,7 +180,7 @@ def test_korean_topic_cannot_be_replaced_by_unrelated_api_metadata(search):
     }
     unrelated = reference("numpy.mean", parameter="axis", score=0.99)
     batches.append([unrelated, target])
-    payload = tool("numpy 브로드캐스팅 규칙 설명", k=1)
+    payload = tool("numpy 브로드캐스팅 규칙 설명", requirement=RetrievalRequirement(library='numpy'), k=1)
     assert payload["diagnostics"]["answerability"] == "covered"
     assert hits(payload)[0].evidence.snapshot.source_uri == target["url"]
 

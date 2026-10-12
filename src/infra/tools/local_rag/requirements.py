@@ -3,43 +3,12 @@
 from __future__ import annotations
 
 import ast
-import re
 from dataclasses import dataclass
 from typing import Any, Literal
 
 from src.core.documents import DocumentElement, DocumentSnapshot, ParsedDocument
 from src.core.evidence import EvidenceRef, RetrievalScore, SearchHit, build_evidence, dedupe_search_hits
 from src.core.planner_schema import RetrievalRequirement
-
-
-_IDENTIFIER = r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*"
-_DEFINITION_WORDS = r"(?:function|method|class|함수|메서드|클래스)"
-_EXTRACTION_WORDS = re.compile(r"extract|quote|verbatim|definition|implementation|발췌|추출|정의|구현|원문|그대로", re.I)
-_INSTRUCTION_WORDS = {"a", "an", "the", "extract", "quote", "verbatim", "definition", "implementation",
-                      "function", "method", "class", "named", "code", "source", "of"}
-
-
-def infer_legacy_requirement(query: str) -> RetrievalRequirement | None:
-    """Preserve the direct tool API for explicit named-definition requests.
-
-    General prose and library usage queries retain semantic search. Only a code
-    name adjacent to a definition noun, or a quoted name in a definition request,
-    supplies a deterministic requirement; arbitrary English words are not names.
-    """
-    if not _EXTRACTION_WORDS.search(query):
-        return None
-    symbols: list[str] = []
-    patterns = (
-        rf"(?<![A-Za-z0-9_])({_IDENTIFIER})(?:\(\))?\s*(?:이라는|라는)?\s*{_DEFINITION_WORDS}(?![A-Za-z])",
-        rf"\b(?:function|method|class)\s+(?:named\s+)?[`'\"]?({_IDENTIFIER})(?![A-Za-z0-9_])",
-        rf"(?:함수|메서드|클래스)\s+[`'\"]?({_IDENTIFIER})(?![A-Za-z0-9_])",
-    )
-    for pattern in patterns:
-        symbols.extend(re.findall(pattern, query, flags=re.I))
-    if re.search(rf"definition|implementation|정의|구현|{_DEFINITION_WORDS}", query, re.I):
-        symbols.extend(re.findall(rf"[`'\"]({_IDENTIFIER})[`'\"]", query))
-    symbols = list(dict.fromkeys(name for name in symbols if name.lower() not in _INSTRUCTION_WORDS))
-    return RetrievalRequirement(symbols=symbols, match="definition") if symbols else None
 
 
 @dataclass(frozen=True)

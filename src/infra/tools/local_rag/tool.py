@@ -11,7 +11,7 @@ from src.infra.chroma_store import CHROMA_DISTANCE_METRIC, CHROMA_SCORE_DIRECTIO
 from src.infra.tools._common import build_retrieval_payload
 from src.infra.tools.local_rag import client
 from src.infra.tools.local_rag.ranking import rank_retrieval_rows
-from src.infra.tools.local_rag.requirements import infer_legacy_requirement, resolve_source_requirement
+from src.infra.tools.local_rag.requirements import resolve_source_requirement
 from src.infra.tools.local_rag.serialization import build_local_hit_bundle
 
 
@@ -20,7 +20,7 @@ def _build_search_payload(
     query: str,
     docs_with_scores: list[tuple[Any, float | None]],
     provider_ms: int = 0,
-    requirement: RetrievalRequirement | None = None,
+    requirement: RetrievalRequirement,
 ) -> dict[str, Any]:
     post_started = time.perf_counter()
     ranked_rows = rank_retrieval_rows(docs_with_scores, query=query)
@@ -45,7 +45,7 @@ def _build_search_payload(
         warnings=retrieval_warnings,
     )
     payload["diagnostics"].update(answerability="unknown", missing_requirements=[], candidate_count=len(docs_with_scores))
-    if (requirement is not None and requirement.file_ids and requirement.match == "topic"
+    if (requirement.file_ids and requirement.match == "topic"
             and not (requirement.symbols or requirement.aspects or requirement.version or requirement.library)):
         # For a topic constrained only by files, coverage means candidates from
         # every requested source. Additional code/version constraints stay unknown.
@@ -83,7 +83,7 @@ def build_upload_search_tool() -> Callable[..., dict[str, Any]]:
         k: int = 4,
         retriever: Any = None,
         *,
-        requirement: RetrievalRequirement | None = None,
+        requirement: RetrievalRequirement,
     ) -> dict[str, Any]:
         if retriever is None:
             return build_retrieval_payload(
@@ -94,9 +94,7 @@ def build_upload_search_tool() -> Callable[..., dict[str, Any]]:
                 message="upload retriever is unavailable; upload a .py or .ipynb file first",
             )
 
-        if requirement is None or not requirement.specified:
-            requirement = infer_legacy_requirement(query)
-        file_ids = requirement.file_ids if requirement is not None else []
+        file_ids = requirement.file_ids
         upload_files = getattr(retriever, "upload_files", ())
         if set(file_ids).difference(file.file_id for file in upload_files):
             return build_retrieval_payload(
@@ -114,7 +112,7 @@ def build_upload_search_tool() -> Callable[..., dict[str, Any]]:
             sources = {file.source_uri for file in upload_files if file.file_id in file_ids}
             source_documents = tuple(document for document in source_documents
                                      if document.snapshot.source_uri in sources)
-        if requirement is not None and requirement.symbols and source_documents is not None:
+        if requirement.symbols and source_documents is not None:
             return _build_requirement_payload(query=query, requirement=requirement,
                                               source_documents=source_documents, docs_with_scores=[])
 
@@ -147,7 +145,7 @@ def build_upload_search_tool() -> Callable[..., dict[str, Any]]:
                 error_code="LOCAL_RAG_FAILED",
             )
 
-        if requirement is not None and requirement.symbols:
+        if requirement.symbols:
             return _build_requirement_payload(query=query, requirement=requirement,
                                               source_documents=None, docs_with_scores=docs_with_scores,
                                               provider_ms=provider_ms)

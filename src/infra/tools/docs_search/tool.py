@@ -20,15 +20,13 @@ def build_docs_search_tool(settings: AppSettings) -> Callable[..., dict[str, Any
     def tavily_search(
         query: str,
         *,
-        requirement: RetrievalRequirement | dict | None = None,
+        requirement: RetrievalRequirement,
         k: int = 3,
         attempted_queries: list[str] | None = None,
         previous_hits: list[SearchHit] | None = None,
     ) -> dict[str, Any]:
-        requested = resolve_requirement(query, requirement)
+        requested = resolve_requirement(requirement)
         effective_query = canonical_query(query, requested)
-        if requirement is None and requested.library and requested.library.casefold() not in effective_query.casefold():
-            effective_query += " " + requested.library
         domains = normalize_include_domains(library_domains(str(requested.library or ""))
                                              or list(docs_search_rules().allowed_doc_path_prefixes))
         count = max(1, min(10, int(k)))

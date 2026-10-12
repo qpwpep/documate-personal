@@ -1,17 +1,4 @@
 [docs_search]
-docs_identifier_stopwords = [
-  "from",
-  "official",
-  "docs",
-  "doc",
-  "documentation",
-  "reference",
-  "with",
-  "the",
-  "it",
-  "and",
-]
-
 error_page_markers = ["404", "page not found", "github pages", "does not exist", "not found", "requested file"]
 
 [docs_search.allowed_doc_path_prefixes]

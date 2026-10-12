@@ -10,6 +10,7 @@ from uuid import uuid4
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 
+from src.core.planner_schema import RetrievalRequirement
 from src.core.evidence import EvidenceRef, parse_search_hits
 from src.infra.chunking import chunk_notebook_path, chunk_python_text
 from src.core.uploads import UploadRecord
@@ -101,7 +102,7 @@ class LocalRagTest(unittest.TestCase):
             path.write_text(text, encoding="utf-8")
             handle = _index_upload(path)
             try:
-                payload = build_upload_search_tool()(query=task.query, k=task.k, retriever=handle.retriever)
+                payload = build_upload_search_tool()(requirement=task.requirement, query=task.query, k=task.k, retriever=handle.retriever)
             finally:
                 handle.cleanup()
         errors = []

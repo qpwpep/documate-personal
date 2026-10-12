@@ -379,7 +379,7 @@ def assess_docs_evidence(
     inside each selection supplies factual coverage. This also checks the final
     cropped ranges sent to answer generation with the retrieval contract.
     """
-    requirement = resolve_requirement(query, requirement)
+    requirement = resolve_requirement(requirement)
     domains = library_domains(str(requirement.library or ""))
     if requirement.library and not domains:
         return DocsAssessment(hits=[], answerability="missing", missing=[f"library:{requirement.library}"])

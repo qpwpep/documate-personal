@@ -192,7 +192,7 @@ UI와 문서 검색 규칙은 아래 파일을 기준으로 관리합니다.
 - `src/core/domain_docs.py`: Streamlit 소개 영역에 노출하는 기본 문서 목록
 - `src/infra/config/agent_rules.toml`: 공식 문서 검색의 허용 출처, query hint, 식별자 제외어
 
-`RULES_CONFIG_PATH`로 규칙 파일을 지정할 수 있습니다. 설정은 `[docs_search]`에 속하며, 최상위·검색 설정·각 query hint에서 선언하지 않은 키는 로드 시 오류로 거부합니다. `docs_identifier_stopwords`는 `[docs_search]`에서 관리하며, query에서 일반 표현을 API 식별자로 오인하지 않도록 사용합니다. query hint의 `identifiers`, `library_name`, `domains`, `match_mode`는 라이브러리 추론과 공식 도메인 선택에 쓰입니다. `infer_docs_library()`는 매칭한 라이브러리명만 반환하고, 도메인은 확정된 라이브러리를 기준으로 `library_domains()`가 조회합니다. hint는 쿼리 목록이나 검색 실행 순서를 정의하지 않습니다.
+`RULES_CONFIG_PATH`로 규칙 파일을 지정할 수 있습니다. 설정은 `[docs_search]`에 속하며, 최상위·검색 설정·각 query hint에서 선언하지 않은 키는 로드 시 오류로 거부합니다. query hint의 `identifiers`, `library_name`, `domains`, `match_mode`는 라이브러리 추론과 공식 도메인 선택에 쓰입니다. `infer_docs_library()`는 매칭한 라이브러리명만 반환하고, 도메인은 확정된 라이브러리를 기준으로 `library_domains()`가 조회합니다. hint는 쿼리 목록이나 검색 실행 순서를 정의하지 않습니다.
 
 필요한 검색 출처는 업로드 가용성과 무관하게 LLM이 선택하고, 스키마 검증을 통과한 `PlannerOutput.tasks`를 기준으로 실행합니다. [planner 지침](../src/runtime/nodes/planner/prompt_builder.py)은 일반 기술 설명과 실제 파일 조회를 구분하고 출처 제외 지시를 반영합니다.
 
@@ -233,7 +233,7 @@ UI와 문서 검색 규칙은 아래 파일을 기준으로 관리합니다.
 
 대화로도 대상이나 비교 버전을 정할 수 없으면 계약의 `missing_info`에 부족한 정보와 질문을 남기고 `use_retrieval=false`, `tasks=[]`로 반환합니다. 최상위 별도 질문 필드는 사용하지 않습니다. 서버가 본문 준비 상태에서 확인 질문을 파생해 `needs_input`으로 전달합니다. 모델 호출·출력 검증 실패는 분류된 `problem`과 `failed` 또는 `refused` 상태로 전달하며 누락 정보 계약을 꾸며내지 않습니다. 파일 조회에 필요한 업로드가 없으면 업로드를 안내합니다. 행동 의사·목적지만 미해결이면 준비 가능한 본문을 작성하고 해당 행동을 보류합니다. 본문 대상이 미해결이거나 planner 호출·출력 검증이 실패하면 검색·저장·전송을 진행하지 않습니다.
 
-planner 검색어 후처리는 공백을 정규화해 한국어 주제와 식별자를 보존합니다. 별도로 `aspects`를 최근 사용자 대화의 명시적 표현과 대조하므로, 모델이 추정한 허용값이 답변에 필요한 필수 근거 조건으로 승격되지 않습니다. 옵션 설명처럼 일반적인 정보 요구는 `evidence_needs`에 두고, 표현 지시와 검색 보조어는 `query`에 유지합니다. docs 도구는 명시적으로 전달한 requirement의 빈 필드까지 고정하며 query가 바뀌어도 심볼·버전·aspect·정보 종류를 다시 추론하지 않습니다. 고정된 라이브러리·심볼 자체의 별칭 정규화는 적용합니다. requirement가 `None`인 직접 호출에서만 query를 이용해 라이브러리·심볼·정보 종류를 보조 추론합니다.
+planner 검색어 후처리는 공백을 정규화해 한국어 주제와 식별자를 보존합니다. 별도로 `aspects`를 최근 사용자 대화의 명시적 표현과 대조하므로, 모델이 추정한 허용값이 답변에 필요한 필수 근거 조건으로 승격되지 않습니다. 옵션 설명처럼 일반적인 정보 요구는 `evidence_needs`에 두고, 표현 지시와 검색 보조어는 `query`에 유지합니다. docs 도구는 명시적으로 전달한 requirement의 빈 필드까지 고정하며 query가 바뀌어도 심볼·버전·aspect·정보 종류를 다시 추론하지 않습니다. 고정된 라이브러리·심볼 자체의 별칭 정규화는 적용합니다. docs와 upload 도구는 빈 경우에도 typed requirement를 명시적으로 전달받습니다. query의 단어에서 요구사항을 다시 추론하지 않으며, upload의 구현 정의 검색은 명시적인 `match="definition"`에 따라 실행합니다.
 
 현재 기본 문서 소스는 Python, Git, LangChain, Matplotlib, NumPy, pandas, PyTorch, Hugging Face, FastAPI, BeautifulSoup, Streamlit, Gradio, scikit-learn, Pydantic입니다.
 

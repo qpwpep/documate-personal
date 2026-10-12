@@ -2,6 +2,7 @@
 import pytest
 import requests
 
+from src.core.planner_schema import RetrievalRequirement
 from src.core.evidence import SearchHit
 from src.infra.settings import AppSettings
 from src.infra.tools.docs_search.tool import build_docs_search_tool
@@ -52,7 +53,7 @@ def test_numpy_alias_uses_canonical_definition_without_losing_source_text(search
     tool, batches, seen = search
     source = RECORDED_NUMPY_RESHAPE
     batches.append([source])
-    payload = tool("NumPy np.reshape order", requirement={"library": "NumPy", "symbols": ["np.reshape"], "aspects": ["order"], "match": "definition"})
+    payload = tool("NumPy np.reshape order", requirement=RetrievalRequirement(library='NumPy', symbols=['np.reshape'], aspects=['order'], match='definition'))
     hit = SearchHit.model_validate(payload["hits"][0])
     assert payload["diagnostics"]["answerability"] == "covered"
     assert hit.evidence.element.text == source["raw_content"]
@@ -90,18 +91,17 @@ def test_previous_partial_evidence_is_rechecked_against_library_and_version(sear
     """Preserved evidence from a different source scope cannot satisfy a new requirement."""
     tool, batches, seen = search
     old = result("numpy.concatenate", version="2.4")
-    old_requirement = {"library": "numpy"}
+    old_requirement = RetrievalRequirement(library='numpy')
     if previous_scope == "other_library":
         old["url"] = "https://pandas.pydata.org/docs/user_guide/merging.html"
-        old_requirement = {"library": "pandas"}
+        old_requirement = RetrievalRequirement(library='pandas')
     batches.append([old])
     first = tool("official reference", requirement=old_requirement)
     previous = [SearchHit.model_validate(hit) for hit in first["hits"]]
     assert previous
     batches.append([result("numpy.stack", version="1.26")])
 
-    requirement = {"library": "numpy", "symbols": ["numpy.concatenate", "numpy.stack"],
-                   "version": "1.26" if previous_scope == "other_version" else None}
+    requirement = RetrievalRequirement(library='numpy', symbols=['numpy.concatenate', 'numpy.stack'], version='1.26' if previous_scope == 'other_version' else None)
     second = tool("numpy.concatenate numpy.stack 1.26", requirement=requirement, previous_hits=previous)
 
     assert second["diagnostics"]["answerability"] == "partial"
@@ -121,8 +121,7 @@ def test_refinement_quotes_required_symbol_and_version_without_repeating_qualifi
     """An empty search strengthens exact scope while preserving remaining query constraints."""
     tool, batches, seen = search
     query = f"{library} {symbol} {version} API reference preserve empty inputs -experimental"
-    payload = tool(query, requirement={"library": library, "symbols": [symbol], "version": version,
-                                       "aspects": ["empty inputs"]})
+    payload = tool(query, requirement=RetrievalRequirement(library=library, symbols=[symbol], version=version, aspects=['empty inputs']))
 
     assert payload["diagnostics"]["answerability"] == "missing"
     assert len(seen) == 2
@@ -137,48 +136,8 @@ def test_refinement_quotes_required_symbol_and_version_without_repeating_qualifi
 
 
 
-@pytest.mark.parametrize(("query", "symbol", "other_symbol", "url", "domain"), [
-    ("Standard. Scaler Official docs", "StandardScaler", "MinMaxScaler",
-     "https://scikit-learn.org/stable/modules/generated/sklearn.preprocessing.StandardScaler.html",
-     "scikit-learn.org"),
-    ("pandas. DataFrame. merge Official docs", "pandas.DataFrame.merge", "pandas.DataFrame.join",
-     "https://pandas.pydata.org/docs/reference/api/pandas.DataFrame.merge.html", "pandas.pydata.org"),
-    ("Official docs numpy.reshape.", "numpy.reshape", "numpy.array",
-     "https://numpy.org/doc/stable/reference/generated/numpy.reshape.html", "numpy.org"),
-])
-def test_normalized_query_identifiers_require_the_owning_api_source(search, query, symbol, other_symbol, url, domain):
-    """Query punctuation is normalized before source ownership and coverage are checked."""
-    tool, batches, seen = search
-    source = {"url": url, "title": symbol,
-              "raw_content": f"# {symbol}\n{symbol}(value)\nReturn the transformed value.", "score": 0.9}
-    unrelated = {"url": url.replace(symbol, other_symbol), "title": other_symbol,
-                 "raw_content": f"# {other_symbol}\nReturn another value. See also {symbol}.", "score": 0.95}
-    batches.append([unrelated, source])
-
-    payload = tool(query)
-
-    assert payload["diagnostics"]["answerability"] == "covered"
-    assert payload["diagnostics"]["missing_requirements"] == []
-    assert [hit["evidence"]["snapshot"]["source_uri"] for hit in payload["hits"]] == [url]
-    assert payload["hits"][0]["evidence"]["element"]["text"] == source["raw_content"]
-    assert seen[0]["include_domains"] == [domain]
-    assert len(seen) == 1
 
 
-@pytest.mark.parametrize(("qualifier", "answerability", "missing"), [
-    ("Official", "covered", []),
-    ("AbsentSymbol", "partial", ["symbol:AbsentSymbol"]),
-])
-def test_configured_identifier_stopwords_do_not_hide_actual_symbol_requirements(search, qualifier, answerability, missing):
-    """The configured general word is ignored while an additional API name remains required."""
-    tool, batches, seen = search
-    batches.append([result()])
-
-    payload = tool(f"numpy.reshape {qualifier} docs")
-
-    assert payload["diagnostics"]["answerability"] == answerability
-    assert payload["diagnostics"]["missing_requirements"] == missing
-    assert [hit["evidence"]["snapshot"]["title"] for hit in payload["hits"]] == ["numpy.reshape"]
 
 
 

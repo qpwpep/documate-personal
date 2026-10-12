@@ -73,7 +73,7 @@ def _build_route_handlers(
                 query=task.query,
                 k=task.k,
                 retriever=runtime.retriever,
-                requirement=task.requirement if task.requirement.specified else None,
+                requirement=task.requirement,
             ),
         ),
     }

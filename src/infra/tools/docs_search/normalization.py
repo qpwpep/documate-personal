@@ -21,17 +21,6 @@ def canonicalize_docs_query_text(text: str) -> str:
     return " ".join(normalized.split())
 
 
-def normalize_identifier_reference_text(text: str) -> str:
-    """Normalize text used for exact identifier extraction and matching."""
-    normalized = _DOTTED_CHAIN_PATTERN.sub(_replace_spaced_dotted_chain, str(text or ""))
-    normalized = _TRAILING_IDENTIFIER_DOT_PATTERN.sub(r"\1", normalized)
-    return " ".join(normalized.split())
-
-
-def normalize_identifier_token(token: str) -> str:
-    return str(token or "").strip().rstrip(".")
-
-
 def _replace_spaced_dotted_chain(match: re.Match[str]) -> str:
     raw = match.group(0)
     if not _SPACED_DOT_PATTERN.search(raw):

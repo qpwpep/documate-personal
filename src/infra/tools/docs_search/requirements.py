@@ -1,58 +1,9 @@
 from __future__ import annotations
 
 import re
-from src.core.planner_schema import DocsEvidenceNeed, RetrievalRequirement
-from src.infra.tools.docs_search.normalization import (
-    canonicalize_docs_query_text, normalize_identifier_reference_text, normalize_identifier_token,
-)
+from src.core.planner_schema import RetrievalRequirement
+from src.infra.tools.docs_search.normalization import canonicalize_docs_query_text
 from src.infra.tools.docs_search.policy import docs_search_rules, infer_docs_library
-
-
-_ASCII_IDENTIFIER_PATTERN = re.compile(
-    r"(?<![A-Za-z0-9_])(?:[A-Za-z][A-Za-z0-9._-]*|v\d+)(?![A-Za-z0-9_])"
-)
-
-
-def _identifier_stopwords(*, library_name: str = "") -> set[str]:
-    stopwords = {item.lower() for item in docs_search_rules().docs_identifier_stopwords}
-    stopwords.update(
-        {
-            "api",
-            "parameters",
-            "parameter",
-            "reference",
-            "validation",
-            "validator",
-        }
-    )
-    for part in re.findall(r"[A-Za-z0-9_.-]+", str(library_name or "").lower()):
-        stopwords.add(part)
-    return stopwords
-
-
-def extract_exact_identifier_terms(query: str, *, library_name: str = "") -> list[str]:
-    identifiers: list[str] = []
-    seen: set[str] = set()
-    stopwords = _identifier_stopwords(library_name=library_name)
-    normalized_query = normalize_identifier_reference_text(query)
-    for token in _ASCII_IDENTIFIER_PATTERN.findall(normalized_query):
-        normalized = normalize_identifier_token(token)
-        lowered = normalized.lower()
-        if not normalized or lowered in stopwords:
-            continue
-        if re.fullmatch(r"v\d+", lowered):
-            continue
-        if not (
-            "." in normalized
-            or "_" in normalized
-            or "-" in normalized
-            or normalized != normalized.lower()
-        ):
-            continue
-        if lowered not in seen:
-            identifiers.append(normalized)
-            seen.add(lowered)
-    return identifiers
 
 
 _LIBRARY_NAMES = {"np": "numpy", "pd": "pandas", "plt": "matplotlib", "sklearn": "scikit-learn", "torch": "pytorch", "transformers": "Hugging Face", "huggingface": "Hugging Face", "bs4": "BeautifulSoup", "st": "streamlit"}
@@ -78,39 +29,18 @@ def library_domains(library: str) -> list[str]:
                               if hint.library_name.casefold() == wanted for domain in hint.domains))
 
 
-def resolve_requirement(query: str, requirement: RetrievalRequirement | dict | None) -> RetrievalRequirement:
-    """Normalize fixed requirements; infer goals only for an unplanned direct call."""
-    supplied = RetrievalRequirement.model_validate(requirement) if requirement is not None else RetrievalRequirement()
-    library = canonical_library(supplied.library)
+def resolve_requirement(requirement: RetrievalRequirement) -> RetrievalRequirement:
+    """Canonicalize the fixed source requirement without deriving goals from query text."""
+    library = canonical_library(requirement.library)
     if not library:
-        # Namespace aliases identify libraries before library-specific normalization.
-        # A fixed contract can resolve its own names, never new query vocabulary.
-        scope_text = " ".join(supplied.symbols) if requirement is not None else query
+        scope_text = " ".join(requirement.symbols)
         prefixes = re.findall(r"(?<![\w.])([A-Za-z_]+)\s*\.", scope_text)
         library = next((_LIBRARY_NAMES[p.casefold()] for p in prefixes if p.casefold() in _LIBRARY_NAMES), "")
         library = library or infer_docs_library(scope_text) or ""
-    if requirement is not None:
-        return supplied.model_copy(update={
-            "library": library or None,
-            "symbols": [canonical_symbol(s, library) for s in supplied.symbols],
-        })
-    symbols = extract_exact_identifier_terms(query, library_name=library)
-    return RetrievalRequirement(
-        library=library or None,
-        symbols=[canonical_symbol(s, library) for s in symbols],
-        evidence_needs=infer_evidence_needs(query),
-        match="symbol" if symbols else "topic",
-    )
-
-
-def infer_evidence_needs(query: str) -> list[DocsEvidenceNeed]:
-    """Infer information kinds, never invent parameter names or allowed values."""
-    patterns: dict[DocsEvidenceNeed, str] = {
-        "parameters": r"\b(?:parameters?|params?|arguments?|args?|options?)\b|옵션|파라미터|매개변수|인자",
-        "signature": r"\bsignature\b|시그니처|호출\s*문법",
-        "examples": r"\bexamples?\b|예제|사용\s*예시|코드\s*예시",
-    }
-    return sorted(need for need, pattern in patterns.items() if re.search(pattern, query, re.I))
+    return requirement.model_copy(update={
+        "library": library or None,
+        "symbols": [canonical_symbol(symbol, library) for symbol in requirement.symbols],
+    })
 
 
 def canonical_query(query: str, requirement: RetrievalRequirement) -> str:
