@@ -11,7 +11,7 @@ from src.core.contracts.boundary.planner import get_planner_state
 from src.core.contracts.boundary.retrieval import get_retrieval_state
 from src.core.contracts.boundary.runtime import get_runtime_state
 from src.core.contracts.debug import (
-    RetryState,
+    PlannerDiagnostic, RetryState,
     empty_planner_diagnostic,
 )
 from src.core.planner_schema import InitialPlannerOutput, PlannerOutput, RetrievalRewriteOutput, RetrievalTask, normalize_planner_output_input
@@ -20,11 +20,8 @@ from src.core.slack_contract import SlackDelivery
 from src.infra.logging_utils import log_event
 from src.infra.llm_boundary import run_structured_call
 from src.runtime.nodes.planner.guardrails import apply_retrieval_availability
-from src.runtime.nodes.planner.models import (
-    PlannerDecision,
-    normalize_planner_diagnostics,
-)
-from src.runtime.nodes.planner.prompt_builder import build_planner_messages, planner_user_utterances
+from src.runtime.nodes.planner.models import PlannerDecision
+from src.runtime.nodes.planner.prompt_builder import build_planner_messages, planner_previous_answer, planner_user_utterances
 from src.runtime.nodes.planner.query_sanitizer import ground_planner_requirement_aspects
 from src.runtime.nodes.planner.request_resolution import (
     current_recipient_evidence_ids, pending_body_changed, pending_recipient_changed, resolve_request_contract,
@@ -37,7 +34,6 @@ logger = logging.getLogger(__name__)
 class PlannerRunContext:
     has_retriever: bool
     planner_attempt: int
-    user_utterances: tuple[str, ...] = ()
     upload_file_ids: tuple[str, ...] = ()
 
 
@@ -62,7 +58,10 @@ def _resolve_planner_strategy(
         if any(task.requirement_id not in current_tasks for task in original_tasks if task.requirement_id not in failed_ids):
             raise ValueError("retrieval retry must retain the current successful tasks")
 
+    removed_aspects = False
+
     def validate(payload: Any) -> tuple[PlannerOutput, RequestContract]:
+        nonlocal removed_aspects
         payload = normalize_planner_output_input(payload)
         if is_replan:
             rewrites = RetrievalRewriteOutput.model_validate(payload)
@@ -81,9 +80,17 @@ def _resolve_planner_strategy(
             ], request_contract=contract.to_wire())
         else:
             initial = InitialPlannerOutput.model_validate(payload)
+            grounded = ground_planner_requirement_aspects(
+                initial, user_utterances=planner_user_utterances(state, max_turns),
+                current_turn_id=runtime.current_turn_id,
+                previous_answer=planner_previous_answer(state),
+            )
+            removed_aspects = any(left.requirement.aspects != right.requirement.aspects
+                                  for left, right in zip(initial.tasks, grounded.tasks, strict=True))
+            initial = grounded
             # Binding is part of model-output validation. A failed call never reaches it.
             contract = resolve_request_contract(initial.request_contract, state, max_turns=max_turns)
-            output = PlannerOutput(**initial.model_dump(exclude={"request_contract"}), request_contract=contract.to_wire())
+            output = PlannerOutput(**initial.model_dump(exclude={"request_contract", "aspect_references"}), request_contract=contract.to_wire())
         return output, contract
 
     output, contract = run_structured_call(
@@ -93,7 +100,7 @@ def _resolve_planner_strategy(
     )
     return PlannerDecision(
         output=output, status="llm", guided_followup=None,
-        diagnostics=normalize_planner_diagnostics(status="llm"),
+        diagnostics=PlannerDiagnostic(status="llm", planner_warnings=["unrequested_constraints_removed"] if removed_aspects else []),
     ), contract
 
 
@@ -101,19 +108,8 @@ def _apply_planner_guardrail(
     *,
     decision: PlannerDecision,
     context: PlannerRunContext,
-    retry_context: RetryState,
 ) -> PlannerDecision:
-    # Retries already preserve the bound requirements; only initial interpretation
-    # can introduce literal anchors that need grounding against user evidence.
     planner_output = decision.output
-    if retry_context.attempt <= 0:
-        planner_output = ground_planner_requirement_aspects(
-            planner_output, user_utterances=list(context.user_utterances),
-        )
-    if [task.requirement.aspects for task in planner_output.tasks] != [task.requirement.aspects for task in decision.output.tasks]:
-        decision = replace(decision, diagnostics=decision.diagnostics.model_copy(update={
-            "planner_warnings": list(dict.fromkeys([*decision.diagnostics.planner_warnings, "unrequested_constraints_removed"])),
-        }))
     unknown_files = {file_id for task in planner_output.tasks for file_id in task.requirement.file_ids
                      if file_id not in context.upload_file_ids}
     if unknown_files:
@@ -177,7 +173,6 @@ def make_planner_node(
             has_retriever=bool(runtime.retriever),
             planner_attempt=int(existing_retry_context.attempt) + 1,
             upload_file_ids=tuple(item.file_id for item in runtime.upload_files),
-            user_utterances=tuple(planner_user_utterances(state, max_turns).values()),
         )
 
         decision, contract = _resolve_planner_strategy(
@@ -196,7 +191,6 @@ def make_planner_node(
         decision = _apply_planner_guardrail(
             decision=decision,
             context=context,
-            retry_context=existing_retry_context,
         )
 
         if verbose:

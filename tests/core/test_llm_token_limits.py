@@ -97,7 +97,7 @@ def provider(monkeypatch):
             content = document.model_dump_json()
         elif schema and schema.get("name") == "PlannerOutput":
             content = json.dumps({
-                "use_retrieval": False, "tasks": [],
+                "use_retrieval": False, "tasks": [], "aspect_references": [],
                 "request_contract": WireRequestContract(slack_recipient={"state": "omitted"}).model_dump(mode="json"),
             })
         elif schema and schema.get("name") == "RetrievalRewriteOutput":

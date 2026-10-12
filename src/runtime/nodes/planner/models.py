@@ -2,8 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from src.core.contracts.debug import PlannerDiagnostic, PlannerOverrideReason, PlannerStatus
-from src.core.contracts.routes import ROUTE_ORDER
+from src.core.contracts.debug import PlannerDiagnostic, PlannerStatus
 from src.core.planner_schema import PlannerOutput
 
 
@@ -13,31 +12,3 @@ class PlannerDecision:
     diagnostics: PlannerDiagnostic
     guided_followup: str | None = None
     status: PlannerStatus = "llm"
-
-
-def normalize_planner_diagnostics(
-    *,
-    status: PlannerStatus,
-    reason: str | None = None,
-    fallback_routes: list[str] | None = None,
-    intent_required: bool = False,
-    required_routes: list[str] | None = None,
-    override_applied: bool = False,
-    override_reason: PlannerOverrideReason | None = None,
-    planner_warnings: list[str] | None = None,
-) -> PlannerDiagnostic:
-    warnings: list[str] = []
-    for warning in planner_warnings or []:
-        normalized = str(warning or "").strip()
-        if normalized and normalized not in warnings:
-            warnings.append(normalized)
-    return PlannerDiagnostic(
-        status=status,
-        reason=reason,
-        fallback_routes=list(fallback_routes or []),
-        intent_required=bool(intent_required),
-        required_routes=[route for route in ROUTE_ORDER if route in set(required_routes or [])],
-        override_applied=bool(override_applied),
-        override_reason=override_reason,
-        planner_warnings=warnings,
-    )
