@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from src.core.slack_contract import SlackDelivery
+from src.core.planner_schema import RetrievalTask
 from src.core.contracts.debug import ActionResults, DEBUG_SCHEMA_VERSION, DebugDiagnostics, DebugPayload, ErrorCode, RetryState, SaveTextActionResult, json_safe_deep_copy, normalize_recorded_routes
 from src.core.contracts.graph_state import DebugState
 from src.core.contracts.usage import LLMCallRecord
@@ -70,7 +71,7 @@ def parse_retry_state(value: Any) -> RetryState:
     if isinstance(value.get("failed_requirement_ids"), list):
         retry_state.failed_requirement_ids = [str(item) for item in value["failed_requirement_ids"] if str(item).strip()]
     if isinstance(value.get("original_tasks"), list):
-        retry_state.original_tasks = [json_safe_deep_copy(item) for item in value["original_tasks"] if isinstance(item, dict)]
+        retry_state.original_tasks = [RetrievalTask.model_validate(item) for item in value["original_tasks"]]
 
     retry_scope = value.get("retry_scope")
     if retry_scope in {"refresh_routes", "reuse_hits_resynthesize"}:

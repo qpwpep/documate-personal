@@ -50,7 +50,7 @@ def _resolve_planner_strategy(
         if llm_planner_retry is None:
             raise RuntimeError("retrieval retry model is not configured")
         retry = get_retry_state(state)
-        original_tasks = PlannerOutput(use_retrieval=True, tasks=retry.original_tasks).tasks
+        original_tasks = retry.original_tasks
         failed_ids = set(retry.failed_requirement_ids)
         if not failed_ids or not failed_ids.issubset(task.requirement_id for task in original_tasks):
             raise ValueError("retrieval retry must identify failed original requirements")
@@ -178,19 +178,28 @@ def make_planner_node(
             llm_planner=llm_planner, llm_planner_retry=llm_planner_retry,
             state=state, context=context, max_turns=max_turns,
         )
-        if contract.can_acknowledge() or contract.can_cancel_pending():
-            decision = replace(decision, output=PlannerOutput.fallback(request_contract=contract.to_wire()))
-        elif not contract.can_prepare_body():
-            question = contract.clarification_question or "요청의 작업과 대상을 더 구체적으로 알려 주세요."
-            decision = replace(
-                decision, output=PlannerOutput.fallback(request_contract=contract.to_wire()),
-                guided_followup=question,
-                diagnostics=decision.diagnostics.model_copy(update={"reason": "clarification_required"}),
+        is_initial_plan = runtime.request_contract is None
+        if is_initial_plan:
+            if contract.can_acknowledge() or contract.can_cancel_pending():
+                decision = replace(decision, output=PlannerOutput.fallback(request_contract=contract.to_wire()))
+            elif not contract.can_prepare_body():
+                question = contract.clarification_question or "요청의 작업과 대상을 더 구체적으로 알려 주세요."
+                decision = replace(
+                    decision, output=PlannerOutput.fallback(request_contract=contract.to_wire()),
+                    guided_followup=question,
+                    diagnostics=decision.diagnostics.model_copy(update={"reason": "clarification_required"}),
+                )
+            decision = _apply_planner_guardrail(
+                decision=decision,
+                context=context,
             )
-        decision = _apply_planner_guardrail(
-            decision=decision,
-            context=context,
-        )
+        else:
+            # Retry changes only query/k. The bound contract and execution resources
+            # were checked when this request's original requirements were accepted.
+            required_routes = list(dict.fromkeys(task.route for task in decision.output.tasks))
+            decision = replace(decision, diagnostics=decision.diagnostics.model_copy(update={
+                "intent_required": bool(required_routes), "required_routes": required_routes,
+            }))
 
         if verbose:
             log_event(
@@ -212,11 +221,11 @@ def make_planner_node(
         )
         if not retry_context.original_tasks and decision.output.use_retrieval:
             retry_context = retry_context.model_copy(update={
-                "original_tasks": [task.model_dump(mode="json") for task in decision.output.tasks],
+                "original_tasks": list(decision.output.tasks),
             })
 
         runtime_updates = {"request_contract": contract}
-        if (runtime.pending_action is not None and contract.relation in {"correction", "supplement"}
+        if (is_initial_plan and runtime.pending_action is not None and contract.relation in {"correction", "supplement"}
                 and contract.target_request_id == runtime.pending_action.contract.request_id and contract.failure is None):
             completed = tuple(name for name in runtime.pending_action.completed_actions
                               if getattr(contract.actions, name).intent != "requested")

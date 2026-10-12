@@ -12,6 +12,7 @@ from src.core.contracts.usage import (
     LLMCallPath, LLMCallRecord, LLMCallStage, normalize_token_usage,
 )
 from src.core.slack_contract import SlackDelivery
+from src.core.planner_schema import RetrievalTask
 
 ErrorCode = Literal[
     "provider_schema_invalid", "provider_configuration", "provider_unavailable", "provider_rate_limited",
@@ -119,7 +120,7 @@ class RetryState(BaseModel):
     score_avg: float | None = None
     failed_routes: list[str] = Field(default_factory=list)
     failed_requirement_ids: list[str] = Field(default_factory=list)
-    original_tasks: list[dict[str, Any]] = Field(default_factory=list)
+    original_tasks: list[RetrievalTask] = Field(default_factory=list)
     preserved_hits: list[dict[str, Any]] = Field(default_factory=list)
     preserved_retrieval_diagnostics: list[RetrievalDiagnostic] = Field(default_factory=list)
     retry_scope: Literal["refresh_routes", "reuse_hits_resynthesize"] = "refresh_routes"

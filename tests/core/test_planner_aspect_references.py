@@ -61,7 +61,7 @@ def test_selected_answer_parameter_survives_initial_planning():
     assert result["runtime"].request_contract.failure is None
     # Model provenance is consumed once, not a mutable retry/search requirement.
     assert "aspect_references" not in result["planner"].output.model_dump()
-    assert result["retry"].original_tasks[0]["requirement"]["aspects"] == ["order"]
+    assert result["retry"].original_tasks[0].requirement.aspects == ["order"]
 
 
 def test_only_declared_selected_anchor_survives_not_other_answer_terms_or_guesses():
