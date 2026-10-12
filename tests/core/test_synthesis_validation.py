@@ -5,7 +5,7 @@ import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 
 from src.core.answer_schema import export_answer_text, finalize_answer, iter_content_units, text_document
-from src.core.contracts import PlannerState, ResponseState, RetrievalState, DebugState, RetrievalDiagnostic
+from src.core.contracts import PlannerState, ResponseState, RetrievalState, DebugState, RetrievalDiagnostic, RetryState
 from src.core.contracts.boundary.graph import build_graph_state_input
 from src.core.documents import DocumentElement, SourceAnchor, build_snapshot
 from src.core.evidence import RetrievalScore, SearchHit, build_evidence
@@ -34,10 +34,13 @@ def _hit(text="Default mode is safe.", *, source="official", rank=1):
 
 def _state(hits, query="Explain the setting"):
     routes = list(dict.fromkeys(hit.evidence.route for hit in hits))
+    tasks = [RetrievalTask(route=route, query=query, k=4) for route in routes]
+    task_ids = {task.route: task.requirement_id for task in tasks}
+    hits = [hit if hit.requirement_id else hit.model_copy(update={"requirement_id": task_ids[hit.evidence.route]}) for hit in hits]
     return build_graph_state_input(
         user_input=query, messages=[HumanMessage(content=query)],
         request_contract=RequestContract(),
-        planner=PlannerState(output=PlannerOutput(use_retrieval=bool(routes), tasks=[RetrievalTask(route=route, query=query, k=4) for route in routes])),
+        planner=PlannerState(output=PlannerOutput(use_retrieval=bool(routes), tasks=tasks)),
         retrieval=RetrievalState(hit_log=[hit.model_dump(mode="json") for hit in hits]),
     )
 
@@ -69,27 +72,6 @@ class ModelBoundary:
 
 
 
-def test_legacy_untagged_packet_without_coverage_metadata_keeps_route_only_validation():
-    """A historical packet with no requirement associations still accepts a valid source citation."""
-    hit = _hit()
-    state = _state([hit])
-    contract = state["runtime"].request_contract
-    result = finalize_answer(
-        text_document(hit.evidence.excerpt, basis="excerpt", refs=[hit.evidence.id]),
-        [hit.evidence], retrieval_required=True,
-    )
-    state["response"] = ResponseState(
-        result=result, evidence_packet=[hit.evidence], request_id=contract.request_id,
-        contract_revision=contract.revision,
-    )
-
-    validated = make_post_synthesis_validation_node(False)(state)
-
-    assert validated["retry"].failed_requirement_ids == []
-    assert not validated["retry"].needs_retry
-    assert validated["response"].kind == "answer"
-    assert validated["response"].normal_evidence_missing_requirement_ids is None
-    assert validated["response"].result == result
 
 
 

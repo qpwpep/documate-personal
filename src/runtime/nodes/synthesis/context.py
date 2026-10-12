@@ -126,6 +126,6 @@ def prepare_synthesis_inputs(
         model_messages=messages, history_before=before, history_after=after,
         request_contract=context.request_contract,
         missing_requirement_ids=missing_evidence_requirement_ids(
-            context.planner_output, packet, requirement_ids, strict=True,
+            context.planner_output, packet, requirement_ids,
         ),
     )

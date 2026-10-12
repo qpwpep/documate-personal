@@ -40,25 +40,20 @@ def detect_missing_requirement_coverage(
         snapshot.planner_output,
         [item for item in snapshot.evidence_packet if item.id in cited],
         snapshot.evidence_requirement_map,
-        strict=snapshot.normal_evidence_missing_requirement_ids is not None,
     )
 
 
 def detect_packet_coverage_gaps(snapshot: ValidationSnapshot) -> tuple[list[str], list[str]]:
     """Separate missing retrieved anchors from requirements lost while selecting the packet."""
-    # A known normal-packet result distinguishes current preparation from legacy
-    # untagged packets, even when selection removed every source association.
-    strict = snapshot.normal_evidence_missing_requirement_ids is not None
     packet_missing = missing_evidence_requirement_ids(snapshot.planner_output, snapshot.evidence_packet,
-                                                     snapshot.evidence_requirement_map, strict=strict)
+                                                     snapshot.evidence_requirement_map)
     retrieved_map: dict[str, list[str]] = {}
     for hit in snapshot.parsed_hits:
         associated = retrieved_map.setdefault(hit.evidence.id, [])
         associated.extend(task.requirement_id for task in tasks_for_hit(hit, snapshot.planner_output)
                           if task.requirement_id not in associated)
     retrieved_missing = missing_evidence_requirement_ids(snapshot.planner_output,
-                                                        [hit.evidence for hit in snapshot.parsed_hits], retrieved_map,
-                                                        strict=strict)
+                                                        [hit.evidence for hit in snapshot.parsed_hits], retrieved_map)
     return ([item for item in packet_missing if item in retrieved_missing],
             [item for item in packet_missing if item not in retrieved_missing])
 

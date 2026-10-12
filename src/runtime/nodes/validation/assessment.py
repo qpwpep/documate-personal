@@ -18,11 +18,9 @@ def assess_retrieval_quality(snapshot: ValidationSnapshot) -> ValidationAssessme
     )
     for task in snapshot.planner_output.tasks:
         route = task.route
-        single_route_task = sum(item.route == route for item in snapshot.planner_output.tasks) == 1
         diagnostics = [d for d in snapshot.current_attempt_retrieval_diagnostics
-                       if d.requirement_id == task.requirement_id or (not d.requirement_id and d.route == route and single_route_task)]
-        hits = [h for h in snapshot.parsed_hits if h.requirement_id == task.requirement_id
-                or (not h.requirement_id and h.evidence.route == route and single_route_task)]
+                       if d.requirement_id == task.requirement_id]
+        hits = [h for h in snapshot.parsed_hits if h.requirement_id == task.requirement_id]
         statuses = route_error_statuses(diagnostics)
         if "error" in statuses or ("unavailable" in statuses and route != "upload"):
             assessment.tool_error_routes.add(route)

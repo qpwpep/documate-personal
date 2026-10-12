@@ -38,10 +38,16 @@ def _official_hit(*, uri, title, excerpt, score):
 
 
 def _response(text, *, state=None, attempt=1):
-    evidence = [SearchHit.model_validate(hit).evidence for hit in get_retrieval_state(state).hit_log] if state else []
+    hits = [SearchHit.model_validate(hit) for hit in get_retrieval_state(state).hit_log] if state else []
+    evidence = [hit.evidence for hit in hits]
+    requirement_map = {}
+    for hit in hits:
+        if hit.requirement_id:
+            requirement_map.setdefault(hit.evidence.id, []).append(hit.requirement_id)
     document = text_document(text, basis="source" if evidence else "interaction", refs=[item.id for item in evidence])
     contract = state["runtime"].request_contract if state else None
     return ResponseState(result=finalize_answer(document, evidence), evidence_packet=evidence, synthesis_attempt=attempt,
+                         evidence_requirement_map=requirement_map,
                          request_id=contract.request_id if contract else None, contract_revision=contract.revision if contract else 0)
 
 

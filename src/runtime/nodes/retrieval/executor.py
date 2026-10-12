@@ -111,23 +111,15 @@ def collect_retrieval_result(
     query: str,
     attempt: int,
     local_errors: list[str],
-    task: RetrievalTask | None = None,
+    task: RetrievalTask,
 ) -> tuple[list[dict[str, Any]], RetrievalDiagnostic]:
     try:
         parsed_items = parse_search_hits(raw_payload, errors=local_errors)
     except (TypeError, ValueError) as exc:
         local_errors.append(f"tool:{tool_name}: invalid search hits ({exc})")
         parsed_items = []
-    if task is not None:
-        parsed_items = [item.model_copy(update={"requirement_id": task.requirement_id}) for item in parsed_items]
+    parsed_items = [item.model_copy(update={"requirement_id": task.requirement_id}) for item in parsed_items]
     payload_dicts = [item.model_dump(mode="json") for item in parsed_items]
-
-    if isinstance(raw_payload, dict) and isinstance(raw_payload.get("diagnostics"), dict):
-        diagnostics = raw_payload["diagnostics"]
-        if task is not None:
-            diagnostics["requirement_id"] = task.requirement_id
-            diagnostics["request_fingerprint"] = retrieval_fingerprint(task)
-        diagnostics["warnings"] = sorted(set(diagnostics.get("warnings", [])))
 
     diagnostic = normalize_retrieval_diagnostic(
         raw_payload,
@@ -137,6 +129,11 @@ def collect_retrieval_result(
         attempt=attempt,
         evidence_count=len(payload_dicts),
     )
+    diagnostic = diagnostic.model_copy(update={
+        "requirement_id": task.requirement_id,
+        "request_fingerprint": retrieval_fingerprint(task),
+        "warnings": sorted(set(diagnostic.warnings)),
+    })
     if diagnostic.status in {"error", "unavailable"} and diagnostic.message:
         local_errors.append(f"{tool_name}: {diagnostic.message}")
     return payload_dicts, diagnostic
@@ -209,11 +206,8 @@ def build_reused_retrieval_task_result(
     preserved_diagnostics: list[RetrievalDiagnostic],
 ) -> RetrievalTaskResult:
     route_hits = [hit for hit in parse_search_hits(preserved_hits)
-                  if hit.requirement_id == task.requirement_id
-                  or (not hit.requirement_id and hit.evidence.route == route)]
+                  if hit.requirement_id == task.requirement_id]
     prior = next((item for item in reversed(preserved_diagnostics) if item.requirement_id == task.requirement_id), None)
-    if prior is None:
-        prior = next((item for item in reversed(preserved_diagnostics) if not item.requirement_id and item.route == route), None)
     if prior is None:
         prior = RetrievalDiagnostic(tool=tool_name, route=route, query=task.query,
                                     status="success" if route_hits else "no_result")

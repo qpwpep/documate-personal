@@ -53,7 +53,7 @@ def _build_route_handlers(
 ) -> dict[str, tuple[str, Any]]:
     def docs_search(task: RetrievalTask, execution_id: str):
         attempted = [query for d in (prior_diagnostics or [])
-                     if d.requirement_id == task.requirement_id and d.status != "error"
+                     if d.requirement_id == task.requirement_id
                      for query in d.attempted_queries]
         return invoke_tool("tavily_search", tavily_search_tool, execution_id=execution_id, query=task.query, k=task.k,
                                   requirement=task.requirement,
@@ -86,12 +86,6 @@ def _collect_retrieval_batch(
     prior_hits: list[dict[str, Any]] | None = None,
 ) -> RetrievalBatchPlan:
     attempt = current_retrieval_attempt(retry_context)
-    failed_routes = {
-        str(route).strip()
-        for route in retry_context.failed_routes
-        if str(route).strip()
-    }
-    retry_scope = str(getattr(retry_context, "retry_scope", "") or "").strip()
     preserved_hits = [
         item
         for item in retry_context.preserved_hits
@@ -107,13 +101,10 @@ def _collect_retrieval_batch(
             batch_plan.local_errors.append(f"planner: unsupported route ({task.route})")
             continue
         tool_name, invoke_tool = handler
-        preserve = (
-            (retry_scope == "reuse_hits_resynthesize" and bool(preserved_hits))
-            or (bool(failed_ids) and task.requirement_id not in failed_ids)
-            or (not failed_ids and bool(failed_routes) and task.route not in failed_routes)
-        )
+        preserve = bool(failed_ids) and task.requirement_id not in failed_ids
         duplicate = next((d for d in reversed(prior_diagnostics or [])
-                          if d.status != "error" and d.request_fingerprint
+                          if d.requirement_id == task.requirement_id
+                          and d.status != "error" and d.error_code is None and d.request_fingerprint
                           and d.request_fingerprint == retrieval_fingerprint(task)), None)
         if preserve or duplicate is not None:
             result = build_reused_retrieval_task_result(

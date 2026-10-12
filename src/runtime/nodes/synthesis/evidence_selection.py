@@ -108,11 +108,7 @@ def requirement_coverage(
 
 def missing_evidence_requirement_ids(
     planner_output: PlannerOutput, evidence: list[EvidenceRef], requirement_ids: dict[str, list[str]],
-    *, strict: bool = False,
 ) -> list[str]:
-    # Historical untagged route-only packets have no requirement-level contract.
-    if not strict and not requirement_ids and not any(task.requirement.specified for task in planner_output.tasks):
-        return []
     return [task.requirement_id for task in planner_output.tasks
             if requirement_coverage(task, evidence, requirement_ids)["is_partial"]]
 
@@ -129,11 +125,11 @@ def contains_evidence_range(outer: EvidenceRef, inner: EvidenceRef) -> bool:
 
 
 def tasks_for_hit(hit: SearchHit, planner_output: PlannerOutput) -> list[RetrievalTask]:
-    """Keep the retrieval requirement attached to a hit; old untagged hits use their route."""
+    """Associate only the requirement assigned by the retrieval executor."""
     return [
         task for task in planner_output.tasks
         if task.route == hit.evidence.route
-        and (not hit.requirement_id or task.requirement_id == hit.requirement_id)
+        and task.requirement_id == hit.requirement_id
         and matches_file_scope(hit.evidence, task)
     ]
 
