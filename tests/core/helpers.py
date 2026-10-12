@@ -206,7 +206,7 @@ class _CapturePlannerLLM:
             planner_output.request_contract = WireRequestContract(slack_recipient={"state": "omitted"})
         elif isinstance(planner_output, PlannerOutput) and isinstance(planner_output.request_contract, RequestContract):
             planner_output.request_contract = planner_output.request_contract.to_wire()
-        elif isinstance(planner_output, dict):
+        elif isinstance(planner_output, dict) and "rewrites" not in planner_output:
             planner_output = dict(planner_output)
             planner_output.setdefault("request_contract", WireRequestContract(slack_recipient={"state": "omitted"}).model_dump(mode="json"))
         self.planner_output = planner_output

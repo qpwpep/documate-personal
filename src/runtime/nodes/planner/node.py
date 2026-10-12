@@ -7,13 +7,14 @@ from typing import Any
 from src.core.contracts import GraphState, PlannerState
 from src.core.contracts.boundary.debug import get_debug_state
 from src.core.contracts.boundary.graph import get_retry_state
+from src.core.contracts.boundary.planner import get_planner_state
 from src.core.contracts.boundary.retrieval import get_retrieval_state
 from src.core.contracts.boundary.runtime import get_runtime_state
 from src.core.contracts.debug import (
     RetryState,
     empty_planner_diagnostic,
 )
-from src.core.planner_schema import InitialPlannerOutput, PlannerOutput, RetrievalPlanOutput, RetrievalTask, normalize_planner_output_input
+from src.core.planner_schema import InitialPlannerOutput, PlannerOutput, RetrievalRewriteOutput, RetrievalTask, normalize_planner_output_input
 from src.core.request_contracts import RequestContract
 from src.core.slack_contract import SlackDelivery
 from src.infra.logging_utils import log_event
@@ -46,13 +47,38 @@ def _resolve_planner_strategy(
 ) -> tuple[PlannerDecision, RequestContract]:
     runtime = get_runtime_state(state)
     is_replan = runtime.request_contract is not None
+    original_tasks: list[RetrievalTask] = []
+    failed_ids: set[str] = set()
+    current_tasks: dict[str, RetrievalTask] = {}
+    if is_replan:
+        if llm_planner_retry is None:
+            raise RuntimeError("retrieval retry model is not configured")
+        retry = get_retry_state(state)
+        original_tasks = PlannerOutput(use_retrieval=True, tasks=retry.original_tasks).tasks
+        failed_ids = set(retry.failed_requirement_ids)
+        if not failed_ids or not failed_ids.issubset(task.requirement_id for task in original_tasks):
+            raise ValueError("retrieval retry must identify failed original requirements")
+        current_tasks = {task.requirement_id: task for task in get_planner_state(state).output.tasks}
+        if any(task.requirement_id not in current_tasks for task in original_tasks if task.requirement_id not in failed_ids):
+            raise ValueError("retrieval retry must retain the current successful tasks")
 
     def validate(payload: Any) -> tuple[PlannerOutput, RequestContract]:
         payload = normalize_planner_output_input(payload)
         if is_replan:
-            retry_plan = RetrievalPlanOutput.model_validate(payload)
+            rewrites = RetrievalRewriteOutput.model_validate(payload)
+            revised = {rewrite.requirement_id: rewrite for rewrite in rewrites.rewrites}
+            if set(revised) != failed_ids:
+                raise ValueError("rewrites must contain exactly the failed requirement IDs: " + ", ".join(sorted(failed_ids)))
             contract = runtime.request_contract
-            output = PlannerOutput(**retry_plan.model_dump(), request_contract=contract.to_wire())
+            output = PlannerOutput(use_retrieval=True, tasks=[
+                task.model_copy(update={"query": revised[task.requirement_id].query,
+                                        "k": revised[task.requirement_id].k})
+                if task.requirement_id in revised else task.model_copy(update={
+                    "query": current_tasks[task.requirement_id].query,
+                    "k": current_tasks[task.requirement_id].k,
+                })
+                for task in original_tasks
+            ], request_contract=contract.to_wire())
         else:
             initial = InitialPlannerOutput.model_validate(payload)
             # Binding is part of model-output validation. A failed call never reaches it.
@@ -61,7 +87,7 @@ def _resolve_planner_strategy(
         return output, contract
 
     output, contract = run_structured_call(
-        llm_planner_retry if is_replan and llm_planner_retry is not None else llm_planner,
+        llm_planner_retry if is_replan else llm_planner,
         build_planner_messages(state, max_turns=max_turns),
         stage="planner", validate=validate, attempt=context.planner_attempt,
     )
@@ -88,19 +114,6 @@ def _apply_planner_guardrail(
         decision = replace(decision, diagnostics=decision.diagnostics.model_copy(update={
             "planner_warnings": list(dict.fromkeys([*decision.diagnostics.planner_warnings, "unrequested_constraints_removed"])),
         }))
-    if retry_context.attempt > 0 and retry_context.original_tasks and decision.status == "llm":
-        original = [RetrievalTask.model_validate(task) for task in retry_context.original_tasks]
-        revised = {task.requirement_id: task for task in planner_output.tasks}
-        retained = []
-        for task in original:
-            candidate = revised.get(task.requirement_id)
-            if candidate is None:
-                matches = [item for item in planner_output.tasks if item.route == task.route and item.requirement == task.requirement]
-                candidate = matches[0] if len(matches) == 1 else None
-            retained.append(task.model_copy(update={"query": candidate.query, "k": candidate.k}) if candidate else task)
-        planner_output = PlannerOutput(use_retrieval=True, tasks=retained, request_contract=planner_output.request_contract)
-        decision = replace(decision, guided_followup=None,
-                           diagnostics=decision.diagnostics.model_copy(update={"reason": None}))
     unknown_files = {file_id for task in planner_output.tasks for file_id in task.requirement.file_ids
                      if file_id not in context.upload_file_ids}
     if unknown_files:

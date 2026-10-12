@@ -3,7 +3,7 @@ from typing import Any
 
 from langchain_openai import ChatOpenAI
 
-from src.core.planner_schema import InitialPlannerOutput, RetrievalPlanOutput
+from src.core.planner_schema import InitialPlannerOutput, RetrievalRewriteOutput
 from src.core.answer_schema import AnswerDocument
 from src.infra.structured_schema import compile_output_schema
 from src.infra.llm_boundary import bind_structured_output
@@ -13,11 +13,11 @@ from src.infra.settings import AppSettings
 @dataclass(frozen=True)
 class LLMRegistry:
     llm_planner: Any
+    llm_planner_retry: Any
     llm_synthesizer: Any
     llm_synthesizer_compact: Any | None
     llm_summarizer: Any
     verbose: bool
-    llm_planner_retry: Any | None = None
 
 
 def _build_synthesis_reasoning_kwargs(settings: AppSettings) -> dict[str, Any]:
@@ -44,7 +44,7 @@ def _build_planner_response_schema() -> dict[str, Any]:
 def validate_output_schemas() -> None:
     """Compile every active contract before accepting user requests; no network IO."""
     _build_planner_response_schema()
-    compile_output_schema(RetrievalPlanOutput)
+    compile_output_schema(RetrievalRewriteOutput)
     compile_output_schema(AnswerDocument)
 
 
@@ -88,7 +88,7 @@ def build_llm_registry(settings: AppSettings) -> LLMRegistry:
         **planner_reasoning_kwargs,
     )
     llm_planner = bind_structured_output(llm_planner_base, InitialPlannerOutput, name="PlannerOutput")
-    llm_planner_retry = bind_structured_output(llm_planner_base, RetrievalPlanOutput)
+    llm_planner_retry = bind_structured_output(llm_planner_base, RetrievalRewriteOutput)
 
     llm_summarizer = ChatOpenAI(
         model=settings.summary_model,

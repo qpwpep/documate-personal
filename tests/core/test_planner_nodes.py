@@ -126,27 +126,22 @@ class PlannerNodeTest(unittest.TestCase):
 
 
     def test_planner_includes_retry_context_system_message_on_retry(self) -> None:
-        capture_planner = _CapturePlannerLLM(PlannerOutput(use_retrieval=False, tasks=[]))
-        planner_node = make_planner_node(capture_planner, verbose=False)
-
-        _ = planner_node(
-            build_test_state(
-                {
-                    "messages": [HumanMessage(content="numpy parameters")],
-                    "user_input": "numpy parameters",
-                    "planner_output": PlannerOutput(
-                        use_retrieval=True,
-                        tasks=[RetrievalTask(route="docs", query="numpy", k=3)],
-                    ),
-                    "retry_context": {
-                        "attempt": 1,
-                        "max_retries": 1,
-                        "retry_reason": "no_evidence",
-                        "retrieval_feedback": "query too narrow",
-                    },
-                }
-            )
-        )
+        from src.core.request_contracts import RequestContract
+        task = RetrievalTask(route="docs", query="numpy", k=3)
+        capture_planner = _CapturePlannerLLM({"rewrites": [
+            {"requirement_id": task.requirement_id, "query": "numpy parameters", "k": 3},
+        ]})
+        planner_node = make_planner_node(None, verbose=False, llm_planner_retry=capture_planner)
+        planner_node(build_test_state({
+            "messages": [HumanMessage(content="numpy parameters")],
+            "user_input": "numpy parameters", "request_contract": RequestContract(),
+            "planner_output": PlannerOutput(use_retrieval=True, tasks=[task]),
+            "retry_context": {
+                "attempt": 1, "max_retries": 1, "retry_reason": "no_evidence",
+                "retrieval_feedback": "query too narrow", "failed_requirement_ids": [task.requirement_id],
+                "original_tasks": [task.model_dump()],
+            },
+        }))
 
         retry_context_messages = [
             message.content

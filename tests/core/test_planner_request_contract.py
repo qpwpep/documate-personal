@@ -11,7 +11,7 @@ from src.core.answer_schema import finalize_answer, text_document
 from src.core.contracts.boundary.graph import build_graph_state_input
 from src.core.contracts.debug import RetryState
 from src.core.contracts.graph_state import PendingAction
-from src.core.planner_schema import PlannerOutput, RetrievalPlanOutput, RetrievalTask
+from src.core.planner_schema import PlannerOutput, RetrievalRewriteOutput, RetrievalTask
 from src.core.llm_errors import LLMCallError
 from src.core.request_contracts import (
     AcknowledgeBody, ActionContract, ActionRequest, AnswerReference, BoundAnswerReference, ComposeBody,

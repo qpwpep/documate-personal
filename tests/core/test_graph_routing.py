@@ -18,7 +18,7 @@ from src.runtime.nodes.planner import make_planner_node
 from src.runtime.nodes.retrieval import make_retrieve_dispatch_node
 from src.runtime.nodes.session import add_user_message
 from src.runtime.nodes.validation import make_post_synthesis_validation_node, make_pre_synthesis_validation_node
-from src.core.planner_schema import PlannerOutput, RetrievalPlanOutput, RetrievalTask
+from src.core.planner_schema import PlannerOutput, RetrievalRewriteOutput, RetrievalTask
 from src.core.request_contracts import RequestContract
 
 from .helpers import (

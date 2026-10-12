@@ -13,7 +13,7 @@ from src.core.contracts import PlannerState, RetrievalState
 from src.core.contracts.boundary.graph import build_graph_state_input
 from src.core.documents import DocumentElement, build_snapshot
 from src.core.evidence import RetrievalScore, SearchHit, build_evidence
-from src.core.planner_schema import InitialPlannerOutput, PlannerOutput, RetrievalPlanOutput, RetrievalTask
+from src.core.planner_schema import InitialPlannerOutput, PlannerOutput, RetrievalRewriteOutput, RetrievalTask
 from src.core.request_contracts import RequestContract, WireRequestContract
 from src.infra.llm import build_llm_registry
 from src.infra.settings import APP_ENV_SPEC_BY_NAME, AppSettings
@@ -100,8 +100,8 @@ def provider(monkeypatch):
                 "use_retrieval": False, "tasks": [],
                 "request_contract": WireRequestContract(slack_recipient={"state": "omitted"}).model_dump(mode="json"),
             })
-        elif schema and schema.get("name") == "RetrievalPlanOutput":
-            content = json.dumps({"use_retrieval": False, "tasks": []})
+        elif schema and schema.get("name") == "RetrievalRewriteOutput":
+            content = json.dumps({"rewrites": []})
         else:
             content = text_document("Hello.").model_dump_json()
         if behavior["invalid_content"] is not None:

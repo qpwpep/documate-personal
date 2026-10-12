@@ -7,7 +7,7 @@ from src.core.answer_schema import export_answer_text
 from src.core.contracts import PlannerState
 from src.core.contracts.boundary.graph import build_graph_state_input
 from src.core.contracts.boundary.runtime import parse_runtime_state
-from src.core.planner_schema import PlannerOutput, RetrievalPlanOutput, RetrievalTask
+from src.core.planner_schema import PlannerOutput, RetrievalRewriteOutput, RetrievalTask
 from src.core.request_contracts import RequestContract
 from src.runtime.nodes.planner import make_planner_node
 from src.runtime.nodes.planner.prompt_builder import build_planner_messages
@@ -25,9 +25,9 @@ from .helpers import _CapturePlannerLLM
 def test_planner_cannot_widen_an_unavailable_file_scope_to_active_uploads():
     """An unknown requested upload ID yields a clarification rather than searching other files."""
     task = RetrievalTask(route="upload", query="explain setup", k=4, requirement={"file_ids": ["missing"]})
-    state = build_graph_state_input(user_input=task.query, retriever=object(), request_contract=RequestContract())
+    state = build_graph_state_input(user_input=task.query, retriever=object())
 
-    result = make_planner_node(_CapturePlannerLLM(RetrievalPlanOutput(use_retrieval=True, tasks=[task])), verbose=False)(state)
+    result = make_planner_node(_CapturePlannerLLM(PlannerOutput(use_retrieval=True, tasks=[task])), verbose=False)(state)
 
     assert not result["planner"].output.use_retrieval
     assert result["planner"].output.tasks == []
@@ -45,8 +45,9 @@ def test_retrieval_retry_retains_original_file_scope_when_model_changes_it():
                     for file_id in ["alpha", "beta"])
     state = build_graph_state_input(user_input=first.query, retriever=object(), upload_files=uploads,
                                     request_contract=RequestContract(),
-                                    retry={"attempt": 1, "original_tasks": [first.model_dump()]})
+                                    retry={"attempt": 1, "original_tasks": [first.model_dump()], "failed_requirement_ids": [first.requirement_id]})
 
-    result = make_planner_node(_CapturePlannerLLM(RetrievalPlanOutput(use_retrieval=True, tasks=[changed])), verbose=False)(state)
+    rewrites = RetrievalRewriteOutput(rewrites=[{"requirement_id": first.requirement_id, "query": changed.query, "k": changed.k}])
+    result = make_planner_node(None, verbose=False, llm_planner_retry=_CapturePlannerLLM(rewrites))(state)
 
     assert result["planner"].output.tasks == [first.model_copy(update={"query": changed.query, "k": changed.k})]

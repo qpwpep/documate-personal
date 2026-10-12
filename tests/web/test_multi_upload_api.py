@@ -20,7 +20,7 @@ from langchain_core.messages import AIMessage
 
 from src.app.web.app import create_app
 from src.core.answer_schema import AnswerResponse, export_answer_text
-from src.core.planner_schema import InitialPlannerOutput, RetrievalPlanOutput
+from src.core.planner_schema import InitialPlannerOutput
 from src.core.request_contracts import WireRequestContract
 from src.infra.settings import AppSettings
 
@@ -49,7 +49,7 @@ class LocalChatModel:
         return LocalChatModel(self.controls, schema_name=schema["name"])
 
     def invoke(self, messages, **_kwargs):
-        if self.schema_name in {"PlannerOutput", "RetrievalPlanOutput"}:
+        if self.schema_name == "PlannerOutput":
             raw = next(message.content for message in messages if message.name == "request_context")
             context = json.loads(raw.split("\n", 1)[1])
             files = context["upload_files"]
@@ -68,11 +68,9 @@ class LocalChatModel:
                                      "symbols": [symbol], "match": "definition"}}
                     for symbol in self.controls.planned_symbols
                 ]
-            if self.schema_name == "RetrievalPlanOutput":
-                parsed.pop("request_contract")
-                parsed = RetrievalPlanOutput.model_validate(parsed).model_dump(mode="json")
-            else:
-                parsed = InitialPlannerOutput.model_validate(parsed).model_dump(mode="json")
+            parsed = InitialPlannerOutput.model_validate(parsed).model_dump(mode="json")
+        elif self.schema_name == "RetrievalRewriteOutput":
+            raise AssertionError("Upload-only requests must not replan retrieval")
         elif self.schema_name == "AnswerDocument":
             if self.controls.before_synthesis is not None:
                 self.controls.before_synthesis()

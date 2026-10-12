@@ -130,8 +130,36 @@ def test_planner_keeps_independent_official_sources_on_the_same_route():
 
 
 
+
+
+
 def test_task_query_is_normalized_at_construction():
     task = RetrievalTask(route="docs", query="  numpy\n\treshape   axis  ", k=3)
     assert task.query == "numpy reshape axis"
+
+
+class _RewriteModel:
+    def __init__(self, rewrites):
+        self.rewrites = rewrites
+
+    def invoke(self, _messages):
+        return {"rewrites": self.rewrites}
+
+
+def _rewrite_state():
+    failed = RetrievalTask(route="docs", query="numpy reshape old", k=2, requirement_id="failed",
+                           requirement={"library": "numpy", "symbols": ["numpy.reshape"], "version": "1.26",
+                                        "aspects": ["order"], "evidence_needs": ["parameters"]})
+    successful = RetrievalTask(route="docs", query="pandas concat", k=2, requirement_id="successful")
+    contract = RequestContract()
+    state = build_test_state({"user_input": "continue", "request_contract": contract,
+                             "planner_output": PlannerOutput(use_retrieval=True, tasks=[failed, successful]),
+                             "retry": RetryState(attempt=1, failed_requirement_ids=[failed.requirement_id],
+                                                  original_tasks=[failed.model_dump(), successful.model_dump()])})
+    return state, failed, successful, contract
+
+
+
+
 
 

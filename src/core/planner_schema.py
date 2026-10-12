@@ -108,7 +108,7 @@ class RetrievalTask(RetrievalQuery):
 
 
 class RetrievalPlanOutput(BaseModel):
-    """Model-owned evidence requirements; retry output cannot reinterpret user facts."""
+    """Initial model-owned evidence requirements for independently planned subjects."""
 
     model_config = ConfigDict(extra="forbid")
     use_retrieval: bool = Field(description="Whether a sufficiently resolved request needs retrieved evidence.")
@@ -123,6 +123,24 @@ class RetrievalPlanOutput(BaseModel):
         identities = [task.requirement_id for task in self.tasks]
         if len(set(identities)) != len(identities):
             raise ValueError("each independent requirement must have a unique ID")
+        return self
+
+
+class RetrievalRewrite(RetrievalQuery):
+    """The only model-owned changes allowed during retrieval recovery."""
+
+    requirement_id: str = Field(min_length=1, description="An exact failed requirement ID supplied by the server.")
+
+
+class RetrievalRewriteOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    rewrites: list[RetrievalRewrite] = Field(description="Exactly one query/k rewrite for every failed requirement ID. Omit successful requirements.")
+
+    @model_validator(mode="after")
+    def unique_requirement_ids(self) -> "RetrievalRewriteOutput":
+        identities = [rewrite.requirement_id for rewrite in self.rewrites]
+        if len(set(identities)) != len(identities):
+            raise ValueError("each failed requirement must have exactly one rewrite")
         return self
 
 
