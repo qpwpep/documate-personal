@@ -218,7 +218,7 @@ UI와 문서 검색 규칙은 아래 파일을 기준으로 관리합니다.
 
 `acknowledge`는 단순 금지·취소에 대한 확인이며 새 전달 본문이 아닙니다. 추가 질문이나 본문 생성 없이 확인하고 이전 완료 답변을 보존합니다. 출력 형식은 일반 layout과 줄 수를 타입으로 분리해, `line_count`에는 양의 정수를 요구하고 그 외 형식에는 숫자를 허용하지 않습니다. 저장 파일명은 서버가 자동 생성하므로 파일명·경로 부재를 저장 의사의 미해결로 취급하지 않습니다.
 
-각 task는 독립적인 근거 요구입니다. 같은 `docs` route라도 라이브러리·대상·버전이 다르면 여러 task로 유지하며 검색어를 하나로 합치지 않습니다. 한 계획에는 최대 8개 task를 둘 수 있습니다. 계약 기준은 `src/core/planner_schema.py`입니다.
+각 task는 독립적인 근거 요구입니다. 같은 `docs` route라도 라이브러리·대상·버전이 다르면 여러 task로 유지하며 검색어를 하나로 합치지 않습니다. task 개수에는 고정 상한을 두지 않으며, task별 검색 결과 수 `k`는 1~10으로 제한합니다. 계약 기준은 `src/core/planner_schema.py`입니다.
 
 | 필드 | 의미 |
 |---|---|
@@ -300,7 +300,7 @@ synthesis의 새 검색 근거 예산은 [`budgets.py`](../src/runtime/nodes/syn
 
 총량은 위의 고정 쌍으로 정의하며, 일반 총량을 바꾸어도 compact 총량이 자동으로 늘어나지 않습니다. 일반 개별 상한은 `SYNTHESIS_PROMPT_SNIPPET_CHARS`, compact 개별 상한은 일반 설정과 `SYNTHESIS_COMPACT_PROMPT_SNIPPET_CHARS` 중 작은 값입니다. 두 설정은 각각 80자 이상이며 기본값은 1,800자·900자입니다. 개별 상한을 총량으로 미리 줄이지 않고 선택 과정에서 개별 상한과 남은 총량을 함께 적용합니다. 저장·전송 여부는 이 예산을 줄이지 않습니다.
 
-기본 근거 개수 상한은 8개이며 planner의 `MAX_PLANNER_TASKS`와 별개의 정책입니다. [`requirement_passage_targets()`](../src/runtime/nodes/synthesis/budgets.py)는 `(file_id, aspect, evidence_need)` 조합을 만들고, 비어 있는 차원은 하나의 미지정 대상으로 계산합니다. 요구사항별 `max(1, 명시 파일 수) × max(1, aspect 수) × max(1, 정보 종류 수)`의 합이 기본 상한보다 크면 그 합만큼 항목 여유를 둡니다. 정보 종류는 docs의 `evidence_needs`에만 적용하며 upload는 파일·literal aspect 기준을 유지합니다. 예산 계산과 선택은 같은 발췌 대상 조합을 사용합니다. 같은 파일의 독립 요구나 떨어진 aspect·정보 종류에는 여러 발췌가 필요할 수 있습니다. 실제로 같은 선택 범위를 공유하면 한 번만 포함하고 검색에서 확인한 요구사항 연결을 합칩니다. 모든 요구에 충분한 문자가 배정된다는 보장은 없으며 compact도 이 항목 수 상한을 유지합니다.
+기본 근거 개수 상한은 8개이며 검색 task 개수와 별개의 합성 예산 정책입니다. [`requirement_passage_targets()`](../src/runtime/nodes/synthesis/budgets.py)는 `(file_id, aspect, evidence_need)` 조합을 만들고, 비어 있는 차원은 하나의 미지정 대상으로 계산합니다. 요구사항별 `max(1, 명시 파일 수) × max(1, aspect 수) × max(1, 정보 종류 수)`의 합이 기본 상한보다 크면 그 합만큼 항목 여유를 둡니다. 정보 종류는 docs의 `evidence_needs`에만 적용하며 upload는 파일·literal aspect 기준을 유지합니다. 예산 계산과 선택은 같은 발췌 대상 조합을 사용합니다. 같은 파일의 독립 요구나 떨어진 aspect·정보 종류에는 여러 발췌가 필요할 수 있습니다. 실제로 같은 선택 범위를 공유하면 한 번만 포함하고 검색에서 확인한 요구사항 연결을 합칩니다. 모든 요구에 충분한 문자가 배정된다는 보장은 없으며 compact도 이 항목 수 상한을 유지합니다.
 
 요구사항별로 필요한 최소 관련 범위를 먼저 확보한 뒤 남은 예산으로 주변 문맥을 확장합니다. docs의 축소 후보는 [`evidence_selection.py`](../src/runtime/nodes/synthesis/evidence_selection.py)에서 [`assess_docs_evidence()`](../src/infra/tools/docs_search/ranking.py)로 평가합니다. 단어 일치에 앞서 실제 요구 충족을 비교해 매개변수 설명과 사용 예제 구간을 보존합니다. upload는 명시 파일 범위와 literal aspect를 채우는 기존 기준을 사용합니다. 표는 검색된 셀 범위 안에서 완전한 행과 필요한 헤더를 선택해 문자 예산에 맞추며, 최소 단위가 들어가지 않으면 근거 부족으로 남깁니다. 코드는 완전한 구문·행을 우선하지만 검색 범위나 예산에 따라 정확한 원문의 일부를 제공할 수 있습니다. 이때도 원문 offset과 부분 선택 표시를 유지하며, 발췌가 독립 실행 가능한 코드라고 보장하지 않습니다.
 
