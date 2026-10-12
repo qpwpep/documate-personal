@@ -133,3 +133,5 @@ def test_planner_keeps_independent_official_sources_on_the_same_route():
 def test_task_query_is_normalized_at_construction():
     task = RetrievalTask(route="docs", query="  numpy\n\treshape   axis  ", k=3)
     assert task.query == "numpy reshape axis"
+
+

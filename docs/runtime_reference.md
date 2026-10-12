@@ -233,7 +233,7 @@ UI와 문서 검색 규칙은 아래 파일을 기준으로 관리합니다.
 
 대화로도 대상이나 비교 버전을 정할 수 없으면 계약의 `missing_info`에 부족한 정보와 질문을 남기고 `use_retrieval=false`, `tasks=[]`로 반환합니다. 최상위 별도 질문 필드는 사용하지 않습니다. 서버가 본문 준비 상태에서 확인 질문을 파생해 `needs_input`으로 전달합니다. 모델 호출·출력 검증 실패는 분류된 `problem`과 `failed` 또는 `refused` 상태로 전달하며 누락 정보 계약을 꾸며내지 않습니다. 파일 조회에 필요한 업로드가 없으면 업로드를 안내합니다. 행동 의사·목적지만 미해결이면 준비 가능한 본문을 작성하고 해당 행동을 보류합니다. 본문 대상이 미해결이거나 planner 호출·출력 검증이 실패하면 검색·저장·전송을 진행하지 않습니다.
 
-검색어는 초기 계획과 재검색에 공통인 스키마 경계에서 공백만 정규화해 한국어 주제와 식별자를 보존합니다. 별도로 `aspects`를 최근 사용자 대화의 명시적 표현과 대조하므로, 모델이 추정한 허용값이 답변에 필요한 필수 근거 조건으로 승격되지 않습니다. 옵션 설명처럼 일반적인 정보 요구는 `evidence_needs`에 두고, 표현 지시와 검색 보조어는 `query`에 유지합니다. docs 도구는 명시적으로 전달한 requirement의 빈 필드까지 고정하며 query가 바뀌어도 심볼·버전·aspect·정보 종류를 다시 추론하지 않습니다. 고정된 라이브러리·심볼 자체의 별칭 정규화는 적용합니다. docs와 upload 도구는 빈 경우에도 typed requirement를 명시적으로 전달받습니다. query의 단어에서 요구사항을 다시 추론하지 않으며, upload의 구현 정의 검색은 명시적인 `match="definition"`에 따라 실행합니다.
+검색어는 초기 계획과 재검색에 공통인 스키마 경계에서 공백만 정규화해 한국어 주제와 식별자를 보존합니다. 별도로 최초 계획의 `aspects`를 planner에 제공한 `runtime.user_turns`와 현재 발화의 원문 전체와 대조하므로, 모델이 추정한 허용값이 필수 근거 조건으로 승격되지 않고 이전 발화의 명시적 조건도 유지됩니다. 옵션 설명처럼 일반적인 정보 요구는 `evidence_needs`에 두고, 표현 지시와 검색 보조어는 `query`에 유지합니다. docs 도구는 명시적으로 전달한 requirement의 빈 필드까지 고정하며 query가 바뀌어도 심볼·버전·aspect·정보 종류를 다시 추론하지 않습니다. 고정된 라이브러리·심볼 자체의 별칭 정규화는 적용합니다. docs와 upload 도구는 빈 경우에도 typed requirement를 명시적으로 전달받습니다. query의 단어에서 요구사항을 다시 추론하지 않으며, upload의 구현 정의 검색은 명시적인 `match="definition"`에 따라 실행합니다.
 
 현재 기본 문서 소스는 Python, Git, LangChain, Matplotlib, NumPy, pandas, PyTorch, Hugging Face, FastAPI, BeautifulSoup, Streamlit, Gradio, scikit-learn, Pydantic입니다.
 

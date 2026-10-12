@@ -4,8 +4,6 @@ import logging
 from dataclasses import dataclass, replace
 from typing import Any
 
-from langchain_core.messages import HumanMessage
-
 from src.core.contracts import GraphState, PlannerState
 from src.core.contracts.boundary.debug import get_debug_state
 from src.core.contracts.boundary.graph import get_retry_state
@@ -25,8 +23,8 @@ from src.runtime.nodes.planner.models import (
     PlannerDecision,
     normalize_planner_diagnostics,
 )
-from src.runtime.nodes.planner.prompt_builder import build_planner_messages
-from src.runtime.nodes.planner.query_sanitizer import sanitize_planner_output_queries
+from src.runtime.nodes.planner.prompt_builder import build_planner_messages, planner_user_utterances
+from src.runtime.nodes.planner.query_sanitizer import ground_planner_requirement_aspects
 from src.runtime.nodes.planner.request_resolution import (
     current_recipient_evidence_ids, pending_body_changed, pending_recipient_changed, resolve_request_contract,
 )
@@ -36,10 +34,9 @@ logger = logging.getLogger(__name__)
 
 @dataclass(slots=True)
 class PlannerRunContext:
-    user_input: str
     has_retriever: bool
     planner_attempt: int
-    constraint_context: str = ""
+    user_utterances: tuple[str, ...] = ()
     upload_file_ids: tuple[str, ...] = ()
 
 
@@ -80,12 +77,13 @@ def _apply_planner_guardrail(
     context: PlannerRunContext,
     retry_context: RetryState,
 ) -> PlannerDecision:
-    planner_output = sanitize_planner_output_queries(
-        decision.output,
-        user_input=context.user_input,
-        retry_context=retry_context,
-        constraint_context=context.constraint_context,
-    )
+    # Retries already preserve the bound requirements; only initial interpretation
+    # can introduce literal anchors that need grounding against user evidence.
+    planner_output = decision.output
+    if retry_context.attempt <= 0:
+        planner_output = ground_planner_requirement_aspects(
+            planner_output, user_utterances=list(context.user_utterances),
+        )
     if [task.requirement.aspects for task in planner_output.tasks] != [task.requirement.aspects for task in decision.output.tasks]:
         decision = replace(decision, diagnostics=decision.diagnostics.model_copy(update={
             "planner_warnings": list(dict.fromkeys([*decision.diagnostics.planner_warnings, "unrequested_constraints_removed"])),
@@ -163,14 +161,10 @@ def make_planner_node(
         debug = get_debug_state(state)
         existing_retry_context = get_retry_state(state)
         context = PlannerRunContext(
-            user_input=runtime.user_input,
             has_retriever=bool(runtime.retriever),
             planner_attempt=int(existing_retry_context.attempt) + 1,
             upload_file_ids=tuple(item.file_id for item in runtime.upload_files),
-            constraint_context="\n".join([runtime.user_input, *[
-                str(message.content) for message in state.get("messages", [])[-(max_turns + 1) * 2:]
-                if isinstance(message, HumanMessage)
-            ]]),
+            user_utterances=tuple(planner_user_utterances(state, max_turns).values()),
         )
 
         decision, contract = _resolve_planner_strategy(
