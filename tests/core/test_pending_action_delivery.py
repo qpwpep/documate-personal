@@ -174,7 +174,7 @@ class _PlannedConsumerGraph:
                               "scope": "current_request", "interpretation": "instruction"}],
                 **self.owner.proposal,
             })
-            return PlannerOutput(use_retrieval=False, tasks=[], request_contract=proposal)
+            return PlannerOutput(use_retrieval=False, tasks=[], request_contract=proposal).model_dump(mode="json")
 
     def stream(self, state, *, stream_mode):
         proposal = next(self.proposals)

@@ -42,7 +42,7 @@ class PlannerBoundary:
                  "interpretation": "instruction" if self.save_intent == "requested" else "negation"},
             ],
         })
-        return PlannerOutput(use_retrieval=False, tasks=[], request_contract=contract)
+        return PlannerOutput(use_retrieval=False, tasks=[], request_contract=contract).model_dump(mode="json")
 
 
 class RepairingModelBoundary:
@@ -119,7 +119,7 @@ def test_failed_save_retries_the_same_frozen_operation_through_real_planner(tmp_
                 payload.update(relation="supplement", target_request_id=self.pending_request_id,
                                body={"kind": "copy_answer", "source": {"ref": "pending"}})
             return PlannerOutput(use_retrieval=False, tasks=[],
-                                 request_contract=WireRequestContract.model_validate(payload))
+                                 request_contract=WireRequestContract.model_validate(payload)).model_dump(mode="json")
 
     planner_boundary = DeliveryPlannerBoundary()
     policy = ConversationMemoryPolicy()
@@ -221,7 +221,7 @@ class _SaveConversation:
         if callable(payload.get("body")):
             payload["body"] = payload["body"](user.id)
         return PlannerOutput(use_retrieval=False, tasks=[],
-                             request_contract=WireRequestContract.model_validate(payload))
+                             request_contract=WireRequestContract.model_validate(payload)).model_dump(mode="json")
 
     def turn(self, query, *, session_metadata=None, **payload):
         self.payload = payload

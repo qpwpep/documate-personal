@@ -7,7 +7,7 @@ from src.core.answer_schema import finalize_answer, text_document
 from src.core.contracts.boundary.graph import build_graph_state_input
 from src.core.documents import DocumentElement, build_snapshot
 from src.core.evidence import RetrievalScore, SearchHit, build_evidence
-from src.core.planner_schema import PlannerOutput, RetrievalRequirement, RetrievalTask
+from src.core.planner_schema import PlannerOutput, PlannedRequirement, RetrievalTask
 from src.core.request_contracts import RequestContract
 from src.runtime.nodes.synthesis.budgets import RetrievedEvidenceBudget, resolve_evidence_budgets
 from src.runtime.nodes.synthesis.context import build_synthesis_context, prepare_synthesis_inputs
@@ -21,7 +21,7 @@ from tests.synthesis_fixtures import synthesis_excerpt_limits
 def _task(library, aspect):
     return RetrievalTask(
         route="docs", query=f"{library} {aspect}", k=3,
-        requirement=RetrievalRequirement(library=library, aspects=[aspect]),
+        requirement=PlannedRequirement(library=library, aspects=[aspect]),
     )
 
 

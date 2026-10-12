@@ -10,7 +10,7 @@ from src.core.contracts.boundary.graph import build_graph_state_input
 from src.core.documents import DocumentElement, SourceAnchor, build_snapshot
 from src.core.evidence import RetrievalScore, SearchHit, build_evidence
 from src.core.llm_errors import LLMCallError
-from src.core.planner_schema import PlannerOutput, RetrievalRequirement, RetrievalTask
+from src.core.planner_schema import PlannerOutput, PlannedRequirement, RetrievalTask
 from src.core.request_contracts import ExtractBody, RequestContract
 from src.runtime.nodes.synthesis import make_synthesize_node
 from src.runtime.agent_runtime.llm_usage import capture_llm_usage

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import Any, Literal
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -13,10 +13,6 @@ DocsEvidenceNeed = Literal["signature", "parameters", "examples", "explanation"]
 PLANNER_ROUTES: tuple[PlannerRouteName, ...] = ("docs", "upload")
 # Historical benchmark diagnostics still use this value; new plans preserve tasks.
 PLANNER_WARNING_DUPLICATE_ROUTE_MERGED = "duplicate_route_merged"
-
-
-def normalize_planner_output_input(value: Any) -> Any:
-    return value.model_dump(mode="python") if isinstance(value, BaseModel) else value
 
 
 class RetrievalRequirement(BaseModel):
@@ -84,11 +80,6 @@ class RetrievalTask(RetrievalQuery):
     route: PlannerRouteName
     requirement: PlannedRequirement = Field(default_factory=PlannedRequirement)
     requirement_id: str = Field(default="", description="A stable short ID for this independent requirement; preserve it during retries.")
-
-    @field_validator("requirement", mode="before")
-    @classmethod
-    def coerce_requirement(cls, value: Any) -> Any:
-        return normalize_planner_output_input(value)
 
     @model_validator(mode="after")
     def assign_requirement_identity(self) -> "RetrievalTask":

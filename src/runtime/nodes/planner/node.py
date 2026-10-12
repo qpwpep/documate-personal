@@ -14,7 +14,7 @@ from src.core.contracts.debug import (
     PlannerDiagnostic, RetryState,
     empty_planner_diagnostic,
 )
-from src.core.planner_schema import InitialPlannerOutput, PlannerOutput, RetrievalRewriteOutput, RetrievalTask, normalize_planner_output_input
+from src.core.planner_schema import InitialPlannerOutput, PlannerOutput, RetrievalRewriteOutput, RetrievalTask
 from src.core.request_contracts import RequestContract
 from src.core.slack_contract import SlackDelivery
 from src.infra.logging_utils import log_event
@@ -62,7 +62,6 @@ def _resolve_planner_strategy(
 
     def validate(payload: Any) -> tuple[PlannerOutput, RequestContract]:
         nonlocal removed_aspects
-        payload = normalize_planner_output_input(payload)
         if is_replan:
             rewrites = RetrievalRewriteOutput.model_validate(payload)
             revised = {rewrite.requirement_id: rewrite for rewrite in rewrites.rewrites}

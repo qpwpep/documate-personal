@@ -32,7 +32,7 @@ class ModelReplies:
         self.calls += 1
         if isinstance(reply, Exception):
             raise reply
-        return reply
+        return reply.model_dump(mode="json") if isinstance(reply, (PlannerOutput, RetrievalRewriteOutput)) else reply
 
 
 def schema_error():

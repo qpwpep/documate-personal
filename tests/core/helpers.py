@@ -4,7 +4,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 
 from src.core.contracts import DebugState, PlannerState, ResponseState, RetrievalState, RetryState
 from src.core.contracts.boundary.graph import build_graph_state_input, normalize_graph_update
-from src.core.planner_schema import PlannerOutput
+from src.core.planner_schema import PlannerOutput, RetrievalRewriteOutput
 from src.core.request_contracts import (
     BoundAnswerReference, BoundInputText, CopyAnswerBody, RequestContract,
     TransformAnswerBody, UserTurnSnapshot, WireRequestContract,
@@ -209,7 +209,8 @@ class _CapturePlannerLLM:
         elif isinstance(planner_output, dict) and "rewrites" not in planner_output:
             planner_output = dict(planner_output)
             planner_output.setdefault("request_contract", WireRequestContract(slack_recipient={"state": "omitted"}).model_dump(mode="json"))
-        self.planner_output = planner_output
+        self.planner_output = (planner_output.model_dump(mode="json")
+                               if isinstance(planner_output, (PlannerOutput, RetrievalRewriteOutput)) else planner_output)
         self.last_messages = None
         self.call_count = 0
         self.include_raw = include_raw

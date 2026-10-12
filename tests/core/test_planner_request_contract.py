@@ -25,7 +25,7 @@ from src.runtime.nodes.planner import make_planner_node
 
 class PlannerResult:
     def __init__(self, result):
-        self.result = result
+        self.result = result.model_dump(mode="json") if isinstance(result, (PlannerOutput, RetrievalRewriteOutput)) else result
         self.calls = []
 
     def invoke(self, messages):
