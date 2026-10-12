@@ -71,7 +71,7 @@ RETRYABLE_REASONS: set[RetryReason] = {
     "missing_content",
     "missing_route_coverage",
 }
-DEBUG_SCHEMA_VERSION = 12
+DEBUG_SCHEMA_VERSION = 13
 # Historical diagnostics can contain retired routes; these never enable execution.
 RECORDED_ROUTE_ORDER: tuple[str, ...] = ("docs", "upload", "local")
 DebugObservabilityStatus = Literal["ok", "degraded", "failed"]
@@ -136,6 +136,20 @@ class PlannerDiagnostic(BaseModel):
     planner_warnings: list[str] = Field(default_factory=list)
 
 
+class DocsSearchRequest(BaseModel):
+    """A completed provider scope, reused only within one fixed requirement."""
+
+    query: str
+    max_results: int = Field(ge=1, le=20)
+
+
+class DocsSearchProviderRequest(DocsSearchRequest):
+    """One provider request attempted during this tool invocation."""
+
+    status: Literal["completed", "error"]
+    result_count: int = Field(default=0, ge=0)
+
+
 class RetrievalDiagnostic(BaseModel):
     invocation_id: str | None = Field(default=None, min_length=1)
     tool: str = ""
@@ -148,7 +162,9 @@ class RetrievalDiagnostic(BaseModel):
     answerability: Literal["covered", "partial", "missing", "unknown"] = "unknown"
     missing_requirements: list[str] = Field(default_factory=list)
     candidate_count: int = 0
-    attempted_queries: list[str] = Field(default_factory=list)
+    k: int | None = Field(default=None, ge=1)
+    completed_requests: list[DocsSearchRequest] = Field(default_factory=list)
+    provider_requests: list[DocsSearchProviderRequest] = Field(default_factory=list)
     request_fingerprint: str = ""
     reused: bool = False
     attempt: int = 0

@@ -5,6 +5,7 @@ from collections.abc import Callable
 from typing import Any
 
 from src.core.evidence import SearchHit
+from src.core.contracts.debug import DocsSearchRequest, DocsSearchProviderRequest
 from src.core.latency import elapsed_ms
 from src.core.planner_schema import RetrievalRequirement
 from src.infra.settings import AppSettings
@@ -22,7 +23,7 @@ def build_docs_search_tool(settings: AppSettings) -> Callable[..., dict[str, Any
         *,
         requirement: RetrievalRequirement,
         k: int = 3,
-        attempted_queries: list[str] | None = None,
+        completed_requests: list[DocsSearchRequest] | None = None,
         previous_hits: list[SearchHit] | None = None,
     ) -> dict[str, Any]:
         requested = resolve_requirement(requirement)
@@ -31,8 +32,12 @@ def build_docs_search_tool(settings: AppSettings) -> Callable[..., dict[str, Any
                                              or list(docs_search_rules().allowed_doc_path_prefixes))
         candidate_limit = min(20, max(6, k * 3))
         include_raw = "markdown" if requested.symbols or requested.aspects or requested.evidence_needs else False
-        attempted = list(dict.fromkeys(attempted_queries or []))
-        attempted_keys = {" ".join(q.casefold().split()) for q in attempted}
+        completed: dict[str, DocsSearchRequest] = {}
+        for request in completed_requests or []:
+            key = " ".join(request.query.casefold().split())
+            if key not in completed or completed[key].max_results < request.max_results:
+                completed[key] = request
+        provider_requests: list[DocsSearchProviderRequest] = []
         unsupported_library = bool(requested.library and not library_domains(requested.library))
         candidates = dedupe_docs_hits([hit for hit in previous_hits or [] if hit.evidence.route == "docs"])
         if unsupported_library:
@@ -49,7 +54,7 @@ def build_docs_search_tool(settings: AppSettings) -> Callable[..., dict[str, Any
                 break
             query_text = effective_query if attempt == 0 else reformulate_query(effective_query, requested, assessment.missing)
             key = " ".join(query_text.casefold().split())
-            if key in attempted_keys:
+            if key in completed and completed[key].max_results >= candidate_limit:
                 continue
             started = time.perf_counter()
             try:
@@ -62,13 +67,17 @@ def build_docs_search_tool(settings: AppSettings) -> Callable[..., dict[str, Any
                 timed_out = isinstance(exc, TimeoutError) or "timed out" in str(exc).lower() or "timeout" in str(exc).lower()
                 error_code = "RETRIEVAL_DOCS_TIMEOUT" if timed_out else "RETRIEVAL_DOCS_FAILED"
                 error_message = f"invoke failed ({exc})"
+                provider_requests.append(DocsSearchProviderRequest(
+                    query=query_text, max_results=candidate_limit, status="error"))
                 break
             finally:
                 provider_ms += elapsed_ms(started, time.perf_counter())
             # Only completed provider requests suppress future searches. A timeout
             # can retain earlier partial evidence without consuming this query.
-            attempted_keys.add(key)
-            attempted.append(query_text)
+            completed[key] = DocsSearchRequest(query=query_text, max_results=candidate_limit)
+            provider_requests.append(DocsSearchProviderRequest(
+                query=query_text, max_results=candidate_limit, status="completed",
+                result_count=len(payload["results"])))
             started = time.perf_counter()
             batch, _scores = collect_docs_search_hits(payload["results"], allowed_domains=domains,
                 retrieval_warnings=warnings, query=effective_query, filter_counters=counters)
@@ -96,7 +105,9 @@ def build_docs_search_tool(settings: AppSettings) -> Callable[..., dict[str, Any
             filtered_identifier_mismatch_count=counters.filtered_identifier_mismatch_count, validated_url_count=counters.validated_url_count,
             final_evidence_count=len(hits), warnings=sorted(set(warnings)), error_code=error_code)
         payload["diagnostics"].update(answerability="unknown" if error_code and not hits else answerability,
-            missing_requirements=missing, attempted_queries=attempted, candidate_count=len(candidates))
+            missing_requirements=missing, k=k, candidate_count=len(candidates),
+            completed_requests=[request.model_dump(mode="json") for request in completed.values()],
+            provider_requests=[request.model_dump(mode="json") for request in provider_requests])
         return payload
 
     return tavily_search

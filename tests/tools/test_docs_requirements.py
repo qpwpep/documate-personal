@@ -4,6 +4,7 @@ import requests
 
 from src.core.planner_schema import RetrievalRequirement
 from src.core.evidence import SearchHit
+from src.core.contracts.debug import DocsSearchRequest
 from src.infra.settings import AppSettings
 from src.infra.tools.docs_search.tool import build_docs_search_tool
 
@@ -132,6 +133,14 @@ def test_refinement_quotes_required_symbol_and_version_without_repeating_qualifi
     assert refined.casefold().count("api reference") == 1
     assert seen[1]["include_domains"] == seen[0]["include_domains"]
     assert refined != seen[0]["query"]
+
+
+
+
+
+
+
+
 
 
 

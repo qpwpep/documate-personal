@@ -52,12 +52,12 @@ def _build_route_handlers(
     prior_hits: list[dict[str, Any]] | None = None,
 ) -> dict[str, tuple[str, Any]]:
     def docs_search(task: RetrievalTask, execution_id: str):
-        attempted = [query for d in (prior_diagnostics or [])
+        completed = [request for d in (prior_diagnostics or [])
                      if d.requirement_id == task.requirement_id
-                     for query in d.attempted_queries]
+                     for request in d.completed_requests]
         return invoke_tool("tavily_search", tavily_search_tool, execution_id=execution_id, query=task.query, k=task.k,
                                   requirement=task.requirement,
-                                  attempted_queries=attempted,
+                                  completed_requests=completed,
                                   previous_hits=[hit for hit in parse_search_hits(prior_hits or []) if hit.requirement_id == task.requirement_id])
 
     return {

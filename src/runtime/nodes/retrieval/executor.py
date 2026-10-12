@@ -75,7 +75,8 @@ def normalize_retrieval_diagnostic(
         answerability=diagnostics.get("answerability") if diagnostics.get("answerability") in {"covered", "partial", "missing", "unknown"} else "unknown",
         missing_requirements=[str(item) for item in diagnostics.get("missing_requirements", [])],
         candidate_count=_non_negative_int(diagnostics.get("candidate_count", evidence_count)),
-        attempted_queries=[str(item) for item in diagnostics.get("attempted_queries", [])],
+        completed_requests=diagnostics.get("completed_requests", []),
+        provider_requests=diagnostics.get("provider_requests", []),
         request_fingerprint=str(diagnostics.get("request_fingerprint") or ""),
         reused=bool(diagnostics.get("reused", False)),
         attempt=diagnostic_attempt,
@@ -132,6 +133,7 @@ def collect_retrieval_result(
     diagnostic = diagnostic.model_copy(update={
         "requirement_id": task.requirement_id,
         "request_fingerprint": retrieval_fingerprint(task),
+        "k": task.k,
         "warnings": sorted(set(diagnostic.warnings)),
     })
     if diagnostic.status in {"error", "unavailable"} and diagnostic.message:
@@ -219,6 +221,7 @@ def build_reused_retrieval_task_result(
         "evidence_count": len(route_hits), "result_count": len(route_hits),
         "final_evidence_count": len(route_hits), "reused": True,
         "provider_ms": 0, "url_validation_ms": 0, "post_filter_ms": 0,
+        "k": task.k, "provider_requests": [],
     })
     payload = {"hits": [hit.model_dump(mode="json") for hit in route_hits],
                "diagnostics": diagnostic.model_dump(mode="json")}
