@@ -18,7 +18,6 @@ from src.infra.logging_utils import log_event
 from src.core.message_utils import build_tool_message
 from src.core.planner_schema import RetrievalTask
 from src.core.evidence import parse_search_hits
-from src.runtime.nodes.planner import sanitize_retrieval_query
 from src.runtime.nodes.retry import current_retrieval_attempt
 from src.runtime.nodes.retrieval.executor import RetrievalTaskResult, build_reused_retrieval_task_result, execute_retrieval_task, retrieval_fingerprint
 from src.runtime.agent_runtime.tool_execution import invoke_tool
@@ -109,9 +108,6 @@ def _collect_retrieval_batch(
             batch_plan.local_errors.append(f"planner: unsupported route ({task.route})")
             continue
         tool_name, invoke_tool = handler
-        sanitized_task = task.model_copy(update={"query": sanitize_retrieval_query(
-            route=task.route, query=task.query, retry_context=retry_context,
-        )})
         preserve = (
             (retry_scope == "reuse_hits_resynthesize" and bool(preserved_hits))
             or (bool(failed_ids) and task.requirement_id not in failed_ids)
@@ -119,10 +115,10 @@ def _collect_retrieval_batch(
         )
         duplicate = next((d for d in reversed(prior_diagnostics or [])
                           if d.status != "error" and d.request_fingerprint
-                          and d.request_fingerprint == retrieval_fingerprint(sanitized_task)), None)
+                          and d.request_fingerprint == retrieval_fingerprint(task)), None)
         if preserve or duplicate is not None:
             result = build_reused_retrieval_task_result(
-                index=index, task=sanitized_task, tool_name=tool_name, route=task.route,
+                index=index, task=task, tool_name=tool_name, route=task.route,
                 attempt=attempt, preserved_hits=preserved_hits if preserve else list(prior_hits or []),
                 preserved_diagnostics=preserved_diagnostics if preserve else [duplicate],
             )
@@ -133,7 +129,7 @@ def _collect_retrieval_batch(
                 result.payload["diagnostics"] = result.diagnostic.model_dump(mode="json")
             batch_plan.reused_results.append(result)
             continue
-        batch_plan.indexed_tasks.append((index, sanitized_task, tool_name, invoke_tool))
+        batch_plan.indexed_tasks.append((index, task, tool_name, invoke_tool))
     return batch_plan
 
 def _execute_retrieval_batch(batch_plan: RetrievalBatchPlan) -> RetrievalBatchResult:

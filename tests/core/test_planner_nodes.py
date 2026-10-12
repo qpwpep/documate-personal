@@ -14,7 +14,6 @@ from src.core.planner_schema import (
 from src.core.request_contracts import RequestContract, WireRequestContract
 from src.core.llm_errors import LLMCallError
 from src.runtime.nodes.planner import make_planner_node
-from src.runtime.nodes.planner.query_sanitizer import sanitize_retrieval_query
 
 from .helpers import (
     _CapturePlannerLLM,
@@ -41,10 +40,10 @@ class PlannerNodeTest(unittest.TestCase):
 
 
     def test_upload_query_sanitizer_preserves_missing_identifier_tokens_for_hybrid_requests(self) -> None:
-        sanitized = sanitize_retrieval_query(
-            route="upload",
+        sanitized = RetrievalTask(
+            route="upload", k=3,
             query="train_test_split 공식 문법을 설명하고 업로드 노트북의 실제 사용 예를 찾아줘.",
-        )
+        ).query
         self.assertIn("train_test_split", sanitized)
         self.assertIn("업로드", sanitized)
 
@@ -121,7 +120,7 @@ class PlannerNodeTest(unittest.TestCase):
     ]))
     def test_docs_query_preserves_subject_when_file_terms_are_topics(self, case: tuple) -> None:
         query, subjects = case
-        sanitized = sanitize_retrieval_query(route="docs", query=query).lower()
+        sanitized = RetrievalTask(route="docs", query=query, k=3).query.lower()
         self.assertEqual({subject for subject in subjects if subject in sanitized}, subjects)
 
 

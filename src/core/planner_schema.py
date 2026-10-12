@@ -65,11 +65,24 @@ class PlannedRequirement(RetrievalRequirement):
                               description="At most one primary target. Use separate tasks for independent symbols; calls inspected inside a function belong in its aspects, not additional definitions.")
 
 
-class RetrievalTask(BaseModel):
+class RetrievalQuery(BaseModel):
+    """Validated search text and result budget shared by plans and rewrites."""
+
     model_config = ConfigDict(extra="forbid")
-    route: PlannerRouteName
     query: str = Field(..., min_length=1)
     k: int = Field(..., ge=1, le=10)
+
+    @field_validator("query")
+    @classmethod
+    def validate_query(cls, value: str) -> str:
+        normalized = " ".join(value.split())
+        if not normalized:
+            raise ValueError("query must not be empty")
+        return normalized
+
+
+class RetrievalTask(RetrievalQuery):
+    route: PlannerRouteName
     requirement: PlannedRequirement = Field(default_factory=PlannedRequirement)
     requirement_id: str = Field(default="", description="A stable short ID for this independent requirement; preserve it during retries.")
 
@@ -77,14 +90,6 @@ class RetrievalTask(BaseModel):
     @classmethod
     def coerce_requirement(cls, value: Any) -> Any:
         return normalize_planner_output_input(value)
-
-    @field_validator("query")
-    @classmethod
-    def validate_query(cls, value: str) -> str:
-        trimmed = value.strip()
-        if not trimmed:
-            raise ValueError("query must not be empty")
-        return trimmed
 
     @model_validator(mode="after")
     def assign_requirement_identity(self) -> "RetrievalTask":
@@ -95,7 +100,7 @@ class RetrievalTask(BaseModel):
         if not self.requirement_id.strip():
             identity = {"route": self.route, "requirement": self.requirement.model_dump()}
             if not self.requirement.specified:
-                identity["query"] = " ".join(self.query.split())
+                identity["query"] = self.query
             self.requirement_id = "req_" + hashlib.sha256(json.dumps(identity, ensure_ascii=False, sort_keys=True).encode()).hexdigest()[:16]
         else:
             self.requirement_id = self.requirement_id.strip()
