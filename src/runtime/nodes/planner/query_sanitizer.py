@@ -4,6 +4,7 @@ import json
 import re
 
 from src.core.planner_schema import InitialPlannerOutput
+from src.core.request_contracts import evidence_scope_covers
 
 
 def _contains_anchor(text: str, aspect: str) -> bool:
@@ -19,9 +20,9 @@ def ground_planner_requirement_aspects(
 ) -> InitialPlannerOutput:
     """Bind anchors to user text or a current reference to a selected answer item.
 
-    Reference meaning belongs to the initial interpretation, like other request
-    evidence. The server verifies its literal provenance, not arbitrary assistant
-    words or a second natural-language interpretation via keyword heuristics.
+    Request evidence has already passed the shared user-quote provenance check.
+    This step verifies the current selection and literal previous-answer anchor,
+    without a second natural-language interpretation via keyword heuristics.
     """
     evidence = {item.id: item for item in planner_output.request_contract.evidence}
     referenced = set()
@@ -29,8 +30,7 @@ def ground_planner_requirement_aspects(
     for reference in planner_output.aspect_references:
         item = evidence.get(reference.evidence_id)
         current_evidence = (item is not None and item.turn_id == current_turn_id
-                            and item.scope == f"retrieval.{reference.requirement_id}.aspects"
-                            and item.quote in user_utterances.get(current_turn_id, ""))
+                            and evidence_scope_covers(item.scope, f"retrieval.{reference.requirement_id}.aspects"))
         identity = (reference.requirement_id, reference.aspect)
         if current_evidence and item.interpretation in {"negation", "mention", "quotation"}:
             nonselecting.add(identity)
@@ -60,7 +60,8 @@ def ground_planner_requirement_aspects(
             + ". Recheck the original current user request. If it selects an answer item, retain its literal aspect "
             "and add aspect_references with an exact answer_quote and local evidence_id; the evidence must use "
             "the current turn_id, exact selecting user quote, interpretation=reference, and "
-            "scope=retrieval.<requirement_id>.aspects. current_request instruction evidence alone is insufficient. "
+            "a scope covering retrieval.<requirement_id>.aspects (that path, a parent, or current_request). "
+            "Instruction evidence alone is insufficient, regardless of scope. "
             "If the user does not select that subject, remove the unsupported aspect. Do not drop a selected "
             "subject merely to satisfy validation, or promote other answer words and guessed values."
         )

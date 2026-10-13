@@ -149,7 +149,7 @@ class AspectReference(BaseModel):
     model_config = ConfigDict(extra="forbid")
     requirement_id: str = Field(min_length=1)
     aspect: str = Field(min_length=1)
-    evidence_id: str = Field(min_length=1, description="Local request_contract evidence with interpretation=reference, current turn_id, and scope=retrieval.<requirement_id>.aspects.")
+    evidence_id: str = Field(min_length=1, description="Local request_contract evidence with interpretation=reference, current turn_id, and scope covering retrieval.<requirement_id>.aspects: that path, a parent, or current_request.")
     answer_quote: str = Field(min_length=1, description="Exact, minimal selected item from previous_answer_for_aspects containing this aspect. Never quote the whole answer or unselected items.")
 
 
@@ -158,4 +158,4 @@ class InitialPlannerOutput(PlannerOutput):
 
     request_contract: WireRequestContract = Field(description="Interpret the current user request once, with locally defined evidence and offered body references. Do not invent server identities, hashes or readiness.")
 
-    aspect_references: list[AspectReference] = Field(default_factory=list, description="Required for EACH aspect absent from user_turn_ledger but selected from previous_answer_for_aspects by the current user. Never leave empty for a selected numbered/referred parameter. Cite current user evidence with interpretation=reference and scope=retrieval.<requirement_id>.aspects, plus the exact selected answer item. Empty only for direct user anchors or no selected indirect aspects.")
+    aspect_references: list[AspectReference] = Field(default_factory=list, description="Required for EACH aspect absent from user_turn_ledger but selected from previous_answer_for_aspects by the current user. Never leave empty for a selected numbered/referred parameter. Cite current user evidence with interpretation=reference and scope covering retrieval.<requirement_id>.aspects (that path, a parent, or current_request), plus the exact selected answer item. Empty only for direct user anchors or no selected indirect aspects.")

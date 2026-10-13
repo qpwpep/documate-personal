@@ -12,10 +12,9 @@ from src.core.request_contracts import (
     BoundInputText, ComposeBody, CopyAnswerBody, CopyInputBody, MissingInformation,
     RequestContract, TransformAnswerBody, TransformInputBody, UnresolvedBody,
     WireCopyAnswerBody, WireCopyInputBody, WireRequestContract, WireTransformAnswerBody,
-    WireTransformInputBody, validate_contract_evidence,
+    WireTransformInputBody,
 )
 from src.core.slack_contract import ExplicitRecipient, OmittedRecipient, UnresolvedRecipient
-from src.runtime.nodes.planner.prompt_builder import planner_user_utterances
 
 
 def _missing(slot: str, reason: str, question: str) -> MissingInformation:
@@ -256,16 +255,12 @@ def pending_recipient_changed(pending: PendingAction, contract: RequestContract)
             != pending.contract.slack_recipient.model_dump(exclude={"evidence_ids"}))
 
 
-def resolve_request_contract(proposal: WireRequestContract, state: GraphState, *, max_turns: int) -> RequestContract:
-    """Bind exact references and preserve confirmed facts independently of missing slots."""
+def resolve_request_contract(proposal: WireRequestContract, state: GraphState, *, utterances: dict[str, str]) -> RequestContract:
+    """Bind a provenance-validated proposal and preserve confirmed pending facts."""
     runtime = get_runtime_state(state)
-    utterances = planner_user_utterances(state, max_turns)
     pending = runtime.pending_action
     matches_pending = pending is not None and proposal.target_request_id == pending.contract.request_id
     inherits_pending = matches_pending and proposal.relation in {"correction", "supplement", "cancel"}
-    errors = validate_contract_evidence(proposal, utterances)
-    if errors:
-        raise ValueError("; ".join(errors))
     if (any(item.slot == "slack_destination" and item.reason != "not_provided" for item in proposal.missing_info)
             and not isinstance(proposal.slack_recipient, UnresolvedRecipient)):
         raise ValueError("recipient ambiguity must be represented by the typed unresolved intent")

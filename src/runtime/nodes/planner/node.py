@@ -15,7 +15,7 @@ from src.core.contracts.debug import (
     empty_planner_diagnostic,
 )
 from src.core.planner_schema import InitialPlannerOutput, PlannerOutput, RetrievalRewriteOutput, RetrievalTask
-from src.core.request_contracts import RequestContract
+from src.core.request_contracts import RequestContract, validate_contract_evidence
 from src.core.slack_contract import SlackDelivery
 from src.infra.logging_utils import log_event
 from src.infra.llm_boundary import run_structured_call
@@ -79,8 +79,12 @@ def _resolve_planner_strategy(
             ], request_contract=contract.to_wire())
         else:
             initial = InitialPlannerOutput.model_validate(payload)
+            utterances = planner_user_utterances(state)
+            errors = validate_contract_evidence(initial.request_contract, utterances)
+            if errors:
+                raise ValueError("; ".join(errors))
             grounded = ground_planner_requirement_aspects(
-                initial, user_utterances=planner_user_utterances(state, max_turns),
+                initial, user_utterances=utterances,
                 current_turn_id=runtime.current_turn_id,
                 previous_answer=planner_previous_answer(state),
             )
@@ -88,7 +92,7 @@ def _resolve_planner_strategy(
                                   for left, right in zip(initial.tasks, grounded.tasks, strict=True))
             initial = grounded
             # Binding is part of model-output validation. A failed call never reaches it.
-            contract = resolve_request_contract(initial.request_contract, state, max_turns=max_turns)
+            contract = resolve_request_contract(initial.request_contract, state, utterances=utterances)
             output = PlannerOutput(use_retrieval=initial.use_retrieval, tasks=initial.tasks,
                                    request_contract=contract.to_wire())
         return output, contract

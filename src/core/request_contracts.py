@@ -24,6 +24,11 @@ class ContractModel(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 
+def evidence_scope_covers(scope: str, path: str) -> bool:
+    """A clause applies to its field, descendants, or the whole current request."""
+    return scope == "current_request" or path == scope or path.startswith(scope + ".")
+
+
 class ContractEvidence(ContractModel):
     """An interpreted user clause, not retrieved evidence or an execution permit."""
 
@@ -150,10 +155,8 @@ class _RequestFacts(ContractModel):
                 raise ValueError("unknown contract evidence id")
         def supports(ids: tuple[str, ...], path: str, allowed: set[str]) -> bool:
             return any(
-                evidence[key].interpretation in allowed and (
-                    evidence[key].scope == "current_request" or path == evidence[key].scope
-                    or path.startswith(evidence[key].scope + ".")
-                ) for key in ids
+                evidence[key].interpretation in allowed
+                and evidence_scope_covers(evidence[key].scope, path) for key in ids
             )
 
         for name, action in (("save_text", self.actions.save_text), ("slack_notify", self.actions.slack_notify)):

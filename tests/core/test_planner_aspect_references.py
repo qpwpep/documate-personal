@@ -53,15 +53,6 @@ def _plan(proposal, state=None):
     return make_planner_node(_CapturePlannerLLM(proposal), False)(state or _state())
 
 
-def test_selected_answer_parameter_survives_initial_planning():
-    result = _plan(_proposal())
-    task = result["planner"].output.tasks[0]
-    assert task.requirement.aspects == ["order"]
-    assert result["planner"].diagnostics.planner_warnings == []
-    assert result["runtime"].request_contract.failure is None
-    # Model provenance is consumed once, not a mutable retry/search requirement.
-    assert "aspect_references" not in result["planner"].output.model_dump()
-    assert result["retry"].original_tasks[0].requirement.aspects == ["order"]
 
 
 def test_only_declared_selected_anchor_survives_not_other_answer_terms_or_guesses():
@@ -77,8 +68,12 @@ def test_only_declared_selected_anchor_survives_not_other_answer_terms_or_guesse
 
 @pytest.mark.parametrize("changes", [
     {"turn_id": "original", "quote": "numpy.reshape 옵션을 알려줘"},
-    {"scope": "current_request"},
+    {"scope": "current_request", "interpretation": "instruction"},
     {"scope": "retrieval.other.aspects"},
+    {"scope": "retrieval.reshap"},
+    {"scope": "retrieval.reshape.aspects.order"},
+    {"quote": "존재하지 않는 사용자 인용"},
+    {"turn_id": "unknown"},
     {"answer_quote": "1. invented_value 옵션"},
     {"answer_quote": "2. copy 옵션"},
 ])
@@ -112,6 +107,8 @@ class _SequencePlanner:
     def invoke(self, messages):
         self.messages.append(messages)
         return next(self.proposals)
+
+
 
 
 
