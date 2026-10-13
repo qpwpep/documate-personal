@@ -196,7 +196,7 @@ UI와 문서 검색 규칙은 아래 파일을 기준으로 관리합니다.
 
 필요한 검색 출처는 업로드 가용성과 무관하게 LLM이 선택하고, 스키마 검증을 통과한 `PlannerOutput.tasks`를 기준으로 실행합니다. [planner 지침](../src/runtime/nodes/planner/prompt_builder.py)은 일반 기술 설명과 실제 파일 조회를 구분하고 출처 제외 지시를 반영합니다.
 
-최초 planner 출력에는 `request_contract`도 포함됩니다. 모델은 [`WireRequestContract`](../src/core/request_contracts.py)로 사용자 의도와 참조 선택자를 반환합니다. 서버가 원문·기존 답변·보류 상태와 대조해 [`RequestContract`](../src/core/request_contracts.py)를 확정하고 `RuntimeState.request_contract`에 고정합니다.
+최초 planner 출력에는 `request_contract`도 포함됩니다. 모델은 [`WireRequestContract`](../src/core/request_contracts.py)로 사용자 의도와 참조 선택자를 반환합니다. 서버는 최초 출력의 evidence에 대해 발화 ID와 원문 인용을 한 번 검증한 뒤 aspect의 출처를 확인합니다. 이어서 같은 발화 집합과 기존 답변·보류 상태를 사용해 [`RequestContract`](../src/core/request_contracts.py)를 확정하고 `RuntimeState.request_contract`에 고정합니다.
 
 | 필드 | 의미 |
 | --- | --- |
@@ -212,7 +212,7 @@ UI와 문서 검색 규칙은 아래 파일을 기준으로 관리합니다.
 
 입력 복사·번역·수정은 `turn_id`, 원문 `quote`, 필요 시 1부터 세는 `occurrence`로 선택합니다. 서버는 정확히 일치하는 원문만 선택해 Unicode 문자 기준 `[start, end)`, 원문 텍스트, SHA-256을 확정합니다. 알 수 없는 발화 ID, 없는 구절, 여러 위치에 일치하는 구절을 구분하며 유사 문자열로 대체하지 않습니다. 이전·보류 답변은 서버가 해당 `AnswerResponse.content_hash`에 연결합니다. 모델 스키마에도 본문 타입별 유효한 참조 조합을 표현하며 서버 전용 hash·offset·실행 준비값을 모델에 생성시키지 않습니다.
 
-액션과 답변 요구의 근거는 해당 범위 또는 그 상위 범위에 속해야 하며, `current_request`는 전체 요청 범위입니다. 인용·단순 언급은 실행이나 강제 출력 조건의 근거가 될 수 없습니다. 계약을 누락하거나 해석하지 못하면 검색·저장·전송을 중단하며 키워드 fallback을 사용하지 않습니다. 이 계약은 내부 실행 상태이며, Slack 수신자와 전달 사실은 최종 `AnswerResponse.actions`에도 보존합니다.
+액션·답변 요구와 직전 답변의 aspect 참조는 공통 scope 규칙을 사용합니다. 근거는 해당 경로 또는 그 상위 경로에 속해야 하며, `current_request`는 전체 요청 범위입니다. aspect 참조는 이 scope 조건 외에도 현재 발화, `reference` 해석, 정확한 답변 인용과 requirement·aspect 연결을 요구합니다. 인용·단순 언급은 실행이나 강제 출력 조건의 근거가 될 수 없습니다. 계약을 누락하거나 해석하지 못하면 검색·저장·전송을 중단하며 키워드 fallback을 사용하지 않습니다. 이 계약은 내부 실행 상태이며, Slack 수신자와 전달 사실은 최종 `AnswerResponse.actions`에도 보존합니다.
 
 모델의 evidence ID는 한 응답 안의 임시 참조입니다. 서버가 요청·revision·발화 범위에 속한 ID로 바인딩하고 기존 보류 계약의 근거를 직접 승계합니다. 모델에 기존 근거 ID를 복사하거나 기존 계약을 재작성하도록 요구하지 않습니다. 원문 인용·현재 발화의 변경 권한은 별도로 검증하며, 재검색에서는 모델이 계약을 재출력하지 않아도 고정된 서버 계약을 사용합니다.
 
@@ -233,7 +233,7 @@ UI와 문서 검색 규칙은 아래 파일을 기준으로 관리합니다.
 
 대화로도 대상이나 비교 버전을 정할 수 없으면 계약의 `missing_info`에 부족한 정보와 질문을 남기고 `use_retrieval=false`, `tasks=[]`로 반환합니다. 최상위 별도 질문 필드는 사용하지 않습니다. 서버가 본문 준비 상태에서 확인 질문을 파생해 `needs_input`으로 전달합니다. 모델 호출·출력 검증 실패는 분류된 `problem`과 `failed` 또는 `refused` 상태로 전달하며 누락 정보 계약을 꾸며내지 않습니다. 파일 조회에 필요한 업로드가 없으면 업로드를 안내합니다. 행동 의사·목적지만 미해결이면 준비 가능한 본문을 작성하고 해당 행동을 보류합니다. 본문 대상이 미해결이거나 planner 호출·출력 검증이 실패하면 검색·저장·전송을 진행하지 않습니다.
 
-검색어는 초기 계획과 재검색에 공통인 스키마 경계에서 공백뿐인 문자열을 거부하며, 대소문자·Unicode·앞뒤와 내부 공백을 포함한 원문을 보존합니다. 자유 검색어에 별칭 치환을 적용하지 않아 인용문·코드·제외 검색어·URL을 그대로 전달합니다. 별도로 최초 계획의 `aspects`를 planner에 제공한 `runtime.user_turns`와 현재 발화의 원문 전체와 대조하므로, 모델이 추정한 허용값이 필수 근거 조건으로 승격되지 않고 이전 발화의 명시적 조건도 유지됩니다. 옵션 설명처럼 일반적인 정보 요구는 `evidence_needs`에 두고, 표현 지시와 검색 보조어는 `query`에 유지합니다. docs 도구는 명시적으로 전달한 requirement의 빈 필드까지 고정하며 query가 바뀌어도 심볼·버전·aspect·정보 종류를 다시 추론하지 않습니다. 구조화된 라이브러리·심볼 요구에는 별칭 정규화를 적용합니다. 명시 버전이 검색어에 없으면 원문 뒤에 추가하며, 보완 검색은 기존 인용문과 URL 경로·query parameter를 보존하면서 독립 심볼·버전을 인용하고 필요한 검색어를 덧붙입니다. docs와 upload 도구는 빈 경우에도 typed requirement를 명시적으로 전달받습니다. query의 단어에서 요구사항을 다시 추론하지 않으며, upload의 구현 정의 검색은 명시적인 `match="definition"`에 따라 실행합니다.
+검색어는 초기 계획과 재검색에 공통인 스키마 경계에서 공백뿐인 문자열을 거부하며, 대소문자·Unicode·앞뒤와 내부 공백을 포함한 원문을 보존합니다. 자유 검색어에 별칭 치환을 적용하지 않아 인용문·코드·제외 검색어·URL을 그대로 전달합니다. 별도로 최초 계획의 `aspects`를 planner에 제공한 `runtime.user_turns`와 현재 발화의 원문 전체와 대조하므로, 모델이 추정한 허용값이 필수 근거 조건으로 승격되지 않고 이전 발화의 명시적 조건도 유지됩니다. 옵션 설명처럼 일반적인 정보 요구는 `evidence_needs`에 두고, 표현 지시와 검색 보조어는 `query`에 유지합니다. docs 도구는 명시적으로 전달한 requirement의 빈 필드까지 고정하며 query가 바뀌어도 심볼·버전·aspect·정보 종류를 다시 추론하지 않습니다. 구조화된 라이브러리·심볼 요구에는 별칭 정규화를 적용합니다. 명시 버전이 검색어에 없으면 원문 뒤에 추가합니다. 보완 검색도 기존 검색어 전체를 보존한 채 없는 고정 심볼·aspect와 미충족 정보 종류만 뒤에 추가합니다. 기존 심볼은 정확한 대소문자와 식별자 경계로 확인하며 인용문·제외 검색어·코드·URL의 내부 표현을 바꾸지 않습니다. `API reference`를 일괄 추가하지 않고, 추가할 표현이 없으면 같은 검색어의 중복 HTTP 요청을 생략합니다. docs와 upload 도구는 빈 경우에도 typed requirement를 명시적으로 전달받습니다. query의 단어에서 요구사항을 다시 추론하지 않으며, upload의 구현 정의 검색은 명시적인 `match="definition"`에 따라 실행합니다.
 
 현재 기본 문서 소스는 Python, Git, LangChain, Matplotlib, NumPy, pandas, PyTorch, Hugging Face, FastAPI, BeautifulSoup, Streamlit, Gradio, scikit-learn, Pydantic입니다.
 
@@ -250,6 +250,8 @@ docs 도구는 후보 수집과 최종 근거 선택의 예산을 구분합니�
 재시도에는 현재 요청의 같은 `requirement_id`에서 확보한 부분 후보를 `previous_hits`로 전달합니다. 기존·신규 후보를 합친 뒤 원래 라이브러리·domain·심볼·버전·aspect·정보 종류와 선택 예산에 맞게 같은 절차로 다시 평가합니다. 다른 대상이나 명확히 다른 버전의 후보는 재사용 근거로 인정하지 않으며, 이미 충분하면 추가 HTTP 호출 없이 반환합니다. Tavily의 `content`와 `raw_content`는 모두 `provider_excerpt` 원문으로 보존하고, 선택한 근거는 그 원문의 정확한 문자 범위를 인용합니다.
 
 ### 3.2 업로드 파일
+
+최초 planner는 명시한 파일 ID가 현재 활성 업로드 목록에 속하는지 검증합니다. 재검색은 원래 `file_ids`를 고정하며, 검색 도구는 이 범위로 vector 검색과 source registry 조회를 제한합니다. 세션 상태 확정 시 활성 목록과 retriever 목록을 일치시키고 요청과 업로드 변경이 같은 세션 락을 사용하므로, 도구에서 파일 ID 소속 검사를 반복하지 않습니다.
 
 - 기본 확장자: `.py`, `.ipynb`. `DOCLING_ENABLED=true`이면 `.pdf`, `.docx`, `.png`, `.jpg`, `.jpeg`, `.tif`, `.tiff`, `.webp`, `.bmp`도 첨부할 수 있습니다. 이미지는 단일 프레임만 지원합니다.
 - 허용 위치: `uploads/<session_id>/...`
