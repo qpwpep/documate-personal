@@ -256,13 +256,9 @@ def pending_recipient_changed(pending: PendingAction, contract: RequestContract)
             != pending.contract.slack_recipient.model_dump(exclude={"evidence_ids"}))
 
 
-def resolve_request_contract(proposal: WireRequestContract | None, state: GraphState, *, max_turns: int) -> RequestContract:
+def resolve_request_contract(proposal: WireRequestContract, state: GraphState, *, max_turns: int) -> RequestContract:
     """Bind exact references and preserve confirmed facts independently of missing slots."""
     runtime = get_runtime_state(state)
-    if runtime.request_contract is not None:
-        return runtime.request_contract
-    if proposal is None:
-        raise ValueError("initial planner response omitted request_contract")
     utterances = planner_user_utterances(state, max_turns)
     pending = runtime.pending_action
     matches_pending = pending is not None and proposal.target_request_id == pending.contract.request_id

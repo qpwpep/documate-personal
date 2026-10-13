@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Collection
 from typing import Any
 
 from src.core.contracts import GraphState, RetrievalDiagnostic
@@ -8,19 +9,14 @@ from src.core.contracts.boundary.planner import get_planner_state
 from src.core.contracts.boundary.runtime import get_runtime_state
 from src.core.contracts.boundary.debug import get_debug_state
 from src.core.contracts.debug import RETRYABLE_REASONS, RetryReason, RetryState
-from src.core.contracts.routes import normalize_routes
 from src.core.evidence import SearchHit
-from src.core.planner_schema import PlannerOutput, RetrievalTask
+from src.core.planner_schema import PlannerOutput, PlannerRouteName, RetrievalTask
 from src.core.request_contracts import RequestContract
 
 
 CONTENT_REPAIR_REASONS: set[RetryReason] = {
     "unresolved_references", "missing", "missing_route_coverage", "missing_content",
 }
-
-
-def _normalize_failed_routes(value: set[str] | list[str] | tuple[str, ...] | None) -> list[str]:
-    return normalize_routes(value)
 
 
 def format_retry_context_for_planner(state: GraphState, retry_context: RetryState) -> str:
@@ -47,8 +43,8 @@ def format_retry_context_for_planner(state: GraphState, retry_context: RetryStat
     } for d in diagnostics]
     body = contract.body_request or contract.body if contract is not None else None
     context = {
-        "attempt": int(retry_context.attempt),
-        "max_retries": int(retry_context.max_retries),
+        "attempt": retry_context.attempt,
+        "max_retries": retry_context.max_retries,
         "reason": retry_context.retry_reason,
         "score_avg": retry_context.score_avg,
         "feedback": retry_context.retrieval_feedback[:1000],
@@ -158,7 +154,7 @@ def build_followup_from_routes(
 
 
 def current_retrieval_attempt(retry_context: RetryState) -> int:
-    return int(retry_context.attempt) + 1
+    return retry_context.attempt + 1
 
 
 def _is_repair_retry_candidate(selected_routes: set[str], retry_reason: RetryReason | None) -> bool:
@@ -190,15 +186,15 @@ def build_retry_update(
     planner_output: PlannerOutput,
     retrieval_errors: list[str],
     score_avg: float | None,
-    failed_routes: set[str] | list[str] | tuple[str, ...] | None = None,
+    failed_routes: Collection[PlannerRouteName] | None = None,
     request_contract: RequestContract | None = None,
     failed_requirement_ids: set[str] | list[str] | None = None,
     current_attempt_hits: list[SearchHit] | None = None,
     current_attempt_retrieval_diagnostics: list[RetrievalDiagnostic] | None = None,
     content_repair_available: bool = True,
 ) -> tuple[bool, RetryState, str]:
-    max_retries = max(0, int(retry_context.max_retries))
-    used_retries = int(retry_context.attempt)
+    max_retries = max(0, retry_context.max_retries)
+    used_retries = retry_context.attempt
 
     needs_retry = False
     retrieval_feedback = ""
@@ -212,12 +208,12 @@ def build_retry_update(
     )
 
     selected_routes = {task.route for task in planner_output.tasks}
-    normalized_failed_routes = set(_normalize_failed_routes(failed_routes))
+    failed_route_set = set(failed_routes or ())
     failed_ids = set(failed_requirement_ids or [])
     if retry_reason is not None and retry_reason not in CONTENT_REPAIR_REASONS and not failed_ids:
         # Resolve route-wide provider failures to concrete server-owned tasks.
         failed_ids = {task.requirement_id for task in planner_output.tasks
-                      if task.route in (normalized_failed_routes or selected_routes)}
+                      if task.route in (failed_route_set or selected_routes)}
     # A request that needs no retrieval can still repair a generated or
     # transformed body. Re-enter synthesis, never reinterpret the request.
     contract = request_contract
@@ -252,7 +248,7 @@ def build_retry_update(
                 needs_retry = bool(retryable_ids)
                 if needs_retry:
                     failed_ids = retryable_ids
-                    normalized_failed_routes = {task.route for task in planner_output.tasks
+                    failed_route_set = {task.route for task in planner_output.tasks
                                                 if task.requirement_id in failed_ids}
         if needs_retry:
             used_retries += 1
@@ -261,7 +257,7 @@ def build_retry_update(
             "retrieval_feedback": retrieval_feedback,
             "failed_routes": (
                 [] if reuse_hits_only
-                else _normalize_failed_routes(normalized_failed_routes or selected_routes)
+                else sorted(failed_route_set or selected_routes)
             ),
             "retry_scope": "reuse_hits_resynthesize" if reuse_hits_only else "refresh_routes",
             "failed_requirement_ids": sorted(failed_ids),

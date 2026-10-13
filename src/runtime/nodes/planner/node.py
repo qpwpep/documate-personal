@@ -89,7 +89,8 @@ def _resolve_planner_strategy(
             initial = grounded
             # Binding is part of model-output validation. A failed call never reaches it.
             contract = resolve_request_contract(initial.request_contract, state, max_turns=max_turns)
-            output = PlannerOutput(**initial.model_dump(exclude={"request_contract", "aspect_references"}), request_contract=contract.to_wire())
+            output = PlannerOutput(use_retrieval=initial.use_retrieval, tasks=initial.tasks,
+                                   request_contract=contract.to_wire())
         return output, contract
 
     output, contract = run_structured_call(
@@ -136,13 +137,12 @@ def _reset_retry_window(
     retry_context = existing_retry_context.model_copy(
         update={
             "needs_retry": False,
-            "max_retries": int(existing_retry_context.max_retries),
             "hit_start_index": retrieval_evidence_count,
             "retrieval_error_start_index": retrieval_error_count,
             "retrieval_diagnostic_start_index": retrieval_diagnostic_count,
         }
     )
-    if int(retry_context.attempt) <= 0:
+    if retry_context.attempt <= 0:
         retry_context = retry_context.model_copy(
             update={
                 "retrieval_feedback": "",
@@ -170,7 +170,7 @@ def make_planner_node(
         existing_retry_context = get_retry_state(state)
         context = PlannerRunContext(
             has_retriever=bool(runtime.retriever),
-            planner_attempt=int(existing_retry_context.attempt) + 1,
+            planner_attempt=existing_retry_context.attempt + 1,
             upload_file_ids=tuple(item.file_id for item in runtime.upload_files),
         )
 
