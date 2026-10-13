@@ -125,24 +125,22 @@ class _SourceRegistry:
 class _SourceAwareVectorStore:
     """Hydrate only the retrieved windows, after the vector database returns them."""
 
-    def __init__(self, vectorstore: Chroma, registry: _SourceRegistry, file_ids: tuple[str, ...] = ()):
+    def __init__(self, vectorstore: Chroma, registry: _SourceRegistry):
         self._vectorstore = vectorstore
         self._registry = registry
-        self._file_ids = file_ids
 
     def similarity_search_with_score(
         self, query: str, k: int = 4, filter: dict[str, Any] | None = None,
         where_document: dict[str, Any] | None = None, **kwargs: Any,
     ) -> list[tuple[Document, float]]:
-        file_ids = tuple(dict.fromkeys(kwargs.pop("file_ids", ()) or ()))
-        if set(file_ids).difference(self._file_ids):
-            raise ValueError("Upload file scope is not active in this session")
+        # upload_search accepts the validated requirement scope before dispatch.
+        file_ids = kwargs.pop("file_ids", ())
         if not file_ids:
             rows = self._vectorstore.similarity_search_with_score(
                 query, k=k, filter=filter, where_document=where_document, **kwargs)
         else:
             # Reserve at least one candidate per explicitly requested source.
-            budget = max(int(k), len(file_ids))
+            budget = max(k, len(file_ids))
             embeddings = self._vectorstore.embeddings
             if embeddings is None:
                 raise ValueError("Scoped upload retrieval requires a query embedding function")
@@ -167,8 +165,7 @@ class _SourceAwareRetriever:
                  upload_files: tuple[UploadFileInfo, ...] = ()):
         self._registry = _SourceRegistry(documents)
         self.upload_files = upload_files
-        self.vectorstore = _SourceAwareVectorStore(vectorstore, self._registry,
-                                                  tuple(file.file_id for file in upload_files))
+        self.vectorstore = _SourceAwareVectorStore(vectorstore, self._registry)
 
     @property
     def source_documents(self) -> tuple[ParsedDocument, ...]:
