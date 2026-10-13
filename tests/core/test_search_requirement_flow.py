@@ -120,9 +120,8 @@ def test_dispatch_keeps_independent_official_sources_and_coverage_with_mixed_pro
 
 
 
-def test_task_query_is_normalized_at_construction():
-    task = RetrievalTask(route="docs", query="  numpy\n\treshape   axis  ", k=3)
-    assert task.query == "numpy reshape axis"
+
+
 
 
 class _RewriteModel:

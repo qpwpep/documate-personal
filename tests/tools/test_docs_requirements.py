@@ -60,7 +60,12 @@ def test_numpy_alias_uses_canonical_definition_without_losing_source_text(search
     assert hit.evidence.element.text == source["raw_content"]
     assert hit.evidence.excerpt in source["raw_content"]
     assert seen[0]["include_domains"] == ["numpy.org"]
+    assert seen[0]["query"] == "NumPy np.reshape order"
     assert len(seen) == 1
+
+
+
+
 
 
 
@@ -133,6 +138,10 @@ def test_refinement_quotes_required_symbol_and_version_without_repeating_qualifi
     assert refined.casefold().count("api reference") == 1
     assert seen[1]["include_domains"] == seen[0]["include_domains"]
     assert refined != seen[0]["query"]
+
+
+
+
 
 
 

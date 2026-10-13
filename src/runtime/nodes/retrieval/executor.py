@@ -28,7 +28,7 @@ class RetrievalTaskResult:
 
 def retrieval_fingerprint(task: RetrievalTask) -> str:
     """Request identity within a turn, independent of a model-assigned task ID."""
-    payload = {"route": task.route, "query": " ".join(task.query.split()).casefold(),
+    payload = {"route": task.route, "query": task.query,
                "requirement": task.requirement.model_dump(mode="json"), "k": task.k}
     return hashlib.sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
 

@@ -34,7 +34,7 @@ def build_docs_search_tool(settings: AppSettings) -> Callable[..., dict[str, Any
         include_raw = "markdown" if requested.symbols or requested.aspects or requested.evidence_needs else False
         completed: dict[str, DocsSearchRequest] = {}
         for request in completed_requests or []:
-            key = " ".join(request.query.casefold().split())
+            key = request.query
             if key not in completed or completed[key].max_results < request.max_results:
                 completed[key] = request
         provider_requests: list[DocsSearchProviderRequest] = []
@@ -53,7 +53,7 @@ def build_docs_search_tool(settings: AppSettings) -> Callable[..., dict[str, Any
             if unsupported_library or assessment.answerability == "covered":
                 break
             query_text = effective_query if attempt == 0 else reformulate_query(effective_query, requested, assessment.missing)
-            key = " ".join(query_text.casefold().split())
+            key = query_text
             if key in completed and completed[key].max_results >= candidate_limit:
                 continue
             started = time.perf_counter()

@@ -4,7 +4,7 @@ import re
 
 
 def canonicalize_docs_query_text(text: str) -> str:
-    """Collapse whitespace without interpreting punctuation in search prose."""
+    """Normalize a library-hint matching copy, never the provider search text."""
     return " ".join(text.split())
 
 

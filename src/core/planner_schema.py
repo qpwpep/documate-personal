@@ -70,10 +70,9 @@ class RetrievalQuery(BaseModel):
     @field_validator("query")
     @classmethod
     def validate_query(cls, value: str) -> str:
-        normalized = " ".join(value.split())
-        if not normalized:
+        if not value.strip():
             raise ValueError("query must not be empty")
-        return normalized
+        return value
 
 
 class RetrievalTask(RetrievalQuery):

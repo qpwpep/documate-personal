@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from src.core.planner_schema import RetrievalRequirement
-from src.infra.tools.docs_search.normalization import canonicalize_docs_query_text, canonicalize_docs_symbol_text
+from src.infra.tools.docs_search.normalization import canonicalize_docs_symbol_text
 from src.infra.tools.docs_search.policy import docs_search_rules, infer_docs_library
 
 
@@ -44,9 +44,8 @@ def resolve_requirement(requirement: RetrievalRequirement) -> RetrievalRequireme
 
 
 def canonical_query(query: str, requirement: RetrievalRequirement) -> str:
-    value = canonicalize_docs_query_text(query)
-    for alias, target in _SYMBOL_ALIASES.get(str(requirement.library or "").casefold(), {}).items():
-        value = re.sub(rf"(?<![\w.]){re.escape(alias)}\.", target + ".", value)
+    # A search expression may contain literal code, quoted text or URL paths.
+    value = query
     if requirement.version and requirement.version.casefold() not in value.casefold():
         value += " " + requirement.version
     return value
@@ -74,8 +73,11 @@ def reformulate_query(query: str, requirement: RetrievalRequirement, missing: li
 
 def _quote_search_term(query: str, term: str) -> str:
     pattern = re.compile(rf"(?<![A-Za-z0-9_.]){re.escape(term)}(?![A-Za-z0-9_.])")
-    # Existing quoted phrases already constrain their contents; never nest quotes.
-    pieces = re.split(r'("(?:\\.|[^"\\])*")', query)
+    # Preserve literal phrases and URLs, including scheme-less site: scopes.
+    pieces = re.split(
+        r'("(?:\\.|[^"\\])*"|(?<![\w.])(?i:site):[^\s"]+|[A-Za-z][A-Za-z0-9+.-]*://[^\s"]+)',
+        query,
+    )
     found = False
     for index, piece in enumerate(pieces):
         if pattern.search(piece) is None:
