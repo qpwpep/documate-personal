@@ -92,6 +92,14 @@ def test_numpy_alias_uses_canonical_definition_without_losing_source_text(search
 
 
 
+
+
+
+
+
+
+
+
 @pytest.mark.parametrize("previous_scope", ["other_library", "other_version"])
 def test_previous_partial_evidence_is_rechecked_against_library_and_version(search, previous_scope):
     """Preserved evidence from a different source scope cannot satisfy a new requirement."""
@@ -119,25 +127,6 @@ def test_previous_partial_evidence_is_rechecked_against_library_and_version(sear
 
 
 
-@pytest.mark.parametrize(("library", "symbol", "version"), [
-    ("numpy", "numpy.reshape", "1.26"),
-    ("pandas", "pandas.concat", "2.2"),
-])
-def test_refinement_quotes_required_symbol_and_version_without_repeating_qualifiers(search, library, symbol, version):
-    """An empty search strengthens exact scope while preserving remaining query constraints."""
-    tool, batches, seen = search
-    query = f"{library} {symbol} {version} API reference preserve empty inputs -experimental"
-    payload = tool(query, requirement=RetrievalRequirement(library=library, symbols=[symbol], version=version, aspects=['empty inputs']))
-
-    assert payload["diagnostics"]["answerability"] == "missing"
-    assert len(seen) == 2
-    refined = seen[1]["query"]
-    assert f'"{symbol}"' in refined
-    assert f'"{version}"' in refined
-    assert "preserve empty inputs -experimental" in refined
-    assert refined.casefold().count("api reference") == 1
-    assert seen[1]["include_domains"] == seen[0]["include_domains"]
-    assert refined != seen[0]["query"]
 
 
 

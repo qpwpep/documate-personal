@@ -52,38 +52,16 @@ def canonical_query(query: str, requirement: RetrievalRequirement) -> str:
 
 
 def reformulate_query(query: str, requirement: RetrievalRequirement, missing: list[str]) -> str:
-    # Strengthen scope without replacing prose constraints or adding a new topic.
+    """Append absent fixed requirements without interpreting the search expression."""
     refined = query
-    for term in dict.fromkeys([*requirement.symbols, str(requirement.version or "")]):
-        if term:
-            refined = _quote_search_term(refined, term)
-    for aspect in requirement.aspects:
-        if aspect.casefold() not in refined.casefold():
-            refined += " " + aspect
+    for symbol in requirement.symbols:
+        if not re.search(rf"(?<![\w.]){re.escape(symbol)}(?![\w.])", refined):
+            refined += f' "{symbol}"'
     needs = [need for need in requirement.evidence_needs
-             if any(item.startswith(f"need:{need}") for item in missing)]
-    qualifier = "examples" if needs == ["examples"] else "API reference"
-    if not re.search(rf"\b{qualifier}\b", refined, flags=re.I):
-        refined += " " + qualifier
-    for need in needs:
-        if not re.search(rf"\b{need}\b", refined, flags=re.I):
-            refined += " " + need
+             if any(item == f"need:{need}" or item.startswith(f"need:{need}:") for item in missing)]
+    for term in [*requirement.aspects, *needs]:
+        # An existing term may be quoted, excluded or embedded in literal code.
+        # Keep that expression intact instead of adding a competing interpretation.
+        if term.casefold() not in refined.casefold():
+            refined += " " + term
     return refined
-
-
-def _quote_search_term(query: str, term: str) -> str:
-    pattern = re.compile(rf"(?<![A-Za-z0-9_.]){re.escape(term)}(?![A-Za-z0-9_.])")
-    # Preserve literal phrases and URLs, including scheme-less site: scopes.
-    pieces = re.split(
-        r'("(?:\\.|[^"\\])*"|(?<![\w.])(?i:site):[^\s"]+|[A-Za-z][A-Za-z0-9+.-]*://[^\s"]+)',
-        query,
-    )
-    found = False
-    for index, piece in enumerate(pieces):
-        if pattern.search(piece) is None:
-            continue
-        found = True
-        if index % 2 == 0:
-            pieces[index] = pattern.sub(lambda match: f'"{match.group()}"', piece)
-    refined = "".join(pieces)
-    return refined if found else f'{refined} "{term}"'

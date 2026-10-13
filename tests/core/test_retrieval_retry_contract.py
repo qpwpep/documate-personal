@@ -75,7 +75,7 @@ def test_dispatch_retries_timeout_after_partial_success_without_repeating_comple
     monkeypatch.setattr(requests, "head", lambda url, **kwargs: response(url, {}))
     tool = build_docs_search_tool(AppSettings(_env_file=None, tavily_api_key="test", openai_api_key="test"))
     dispatch = make_retrieve_dispatch_node(tool, None, False)
-    task = RetrievalTask(route="docs", query="numpy.reshape order copy", k=4,
+    task = RetrievalTask(route="docs", query="numpy.reshape order", k=4,
                          requirement={"library": "numpy", "symbols": ["numpy.reshape"], "aspects": ["order", "copy"]})
     state = build_test_state({"request_contract": RequestContract(),
                               "planner_output": PlannerOutput(use_retrieval=True, tasks=[task])})
@@ -94,7 +94,7 @@ def test_dispatch_retries_timeout_after_partial_success_without_repeating_comple
     assert len(queries) == 3
     assert queries[0] == task.query
     assert queries[1] == queries[2]
-    assert queries[1] != queries[0]
+    assert queries[1] == task.query + " copy"
     assert first_hit["evidence"] in [hit["evidence"] for hit in state["retrieval"].hit_log[1:]]
 
 

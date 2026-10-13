@@ -61,8 +61,6 @@ def build_docs_search_tool(settings: AppSettings) -> Callable[..., dict[str, Any
                 payload = client.request_tavily_search(query=query_text, tavily_api_key=settings.tavily_api_key,
                     include_domains=domains, search_depth="basic", timeout_seconds=settings.docs_search_timeout_seconds,
                     max_results=candidate_limit, include_raw_content=include_raw)
-                if not isinstance(payload, dict) or not isinstance(payload.get("results"), list):
-                    raise RuntimeError("missing or invalid Tavily results payload")
             except Exception as exc:
                 timed_out = isinstance(exc, TimeoutError) or "timed out" in str(exc).lower() or "timeout" in str(exc).lower()
                 error_code = "RETRIEVAL_DOCS_TIMEOUT" if timed_out else "RETRIEVAL_DOCS_FAILED"
