@@ -105,11 +105,6 @@ def build_upload_search_tool() -> Callable[..., dict[str, Any]]:
 
         file_ids = requirement.file_ids
         upload_files = retriever.upload_files
-        if set(file_ids).difference(file.file_id for file in upload_files):
-            return build_retrieval_payload(
-                tool="upload_search", route="upload", query=query, status="error",
-                message="requested upload file is not active in this session",
-                error_code="UPLOAD_FILE_SCOPE_INVALID")
         source_documents = retriever.source_documents
         if file_ids:
             sources = {file.source_uri for file in upload_files if file.file_id in file_ids}

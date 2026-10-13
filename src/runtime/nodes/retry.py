@@ -174,7 +174,7 @@ def _can_refresh_search(task: RetrievalTask, diagnostics: list[RetrievalDiagnost
         return False
     return not any(
         item.requirement_id == task.requirement_id
-        and (item.status == "unavailable" or item.error_code == "UPLOAD_FILE_SCOPE_INVALID")
+        and item.status == "unavailable"
         for item in diagnostics
     )
 

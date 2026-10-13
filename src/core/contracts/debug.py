@@ -44,7 +44,6 @@ ErrorCode = Literal[
     "SLACK_DELIVERY_UNKNOWN",
     "SLACK_PROTOCOL_ERROR",
     "UPLOAD_PATH_INVALID",
-    "UPLOAD_FILE_SCOPE_INVALID",
 ]
 RetryReason = Literal[
     "no_evidence",
