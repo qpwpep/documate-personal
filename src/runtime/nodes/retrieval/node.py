@@ -3,6 +3,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextvars import copy_context
 from dataclasses import dataclass, field
+import json
 import logging
 import time
 from typing import Any
@@ -277,6 +278,24 @@ def make_retrieve_dispatch_node(
                 evidence_count=len(batch_result.hit_updates),
                 statuses=statuses,
             )
+            for diagnostic in batch_result.retrieval_diagnostics:
+                log_event(
+                    logger,
+                    logging.INFO,
+                    "retrieval_diagnostic",
+                    details=json.dumps({
+                        "requirement_id": diagnostic.requirement_id,
+                        "route": diagnostic.route,
+                        "attempt": diagnostic.attempt,
+                        "query": diagnostic.query,
+                        "k": diagnostic.k,
+                        "status": diagnostic.status,
+                        "answerability": diagnostic.answerability,
+                        "reused": diagnostic.reused,
+                        "missing_requirements": diagnostic.missing_requirements,
+                        "provider_requests": [request.model_dump(mode="json") for request in diagnostic.provider_requests],
+                    }, ensure_ascii=False),
+                )
 
         stage_status = None
         if batch_result.retrieval_diagnostics:

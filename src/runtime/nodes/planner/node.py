@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass, replace
 from typing import Any
@@ -215,6 +216,11 @@ def make_planner_node(
                 task_count=len(decision.output.tasks),
                 required_routes=decision.diagnostics.required_routes,
                 override=decision.diagnostics.override_applied,
+                attempt=context.planner_attempt,
+                planning_mode="initial" if is_initial_plan else "rewrite",
+                tasks=json.dumps([{"requirement_id": task.requirement_id, "route": task.route,
+                                   "query": task.query, "k": task.k}
+                                  for task in decision.output.tasks], ensure_ascii=False),
             )
 
         retry_context = _reset_retry_window(
