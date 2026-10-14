@@ -31,7 +31,6 @@ class RetrievalBatchPlan:
     attempt: int
     indexed_tasks: list[tuple[int, RetrievalTask, str, Any]] = field(default_factory=list)
     reused_results: list[RetrievalTaskResult] = field(default_factory=list)
-    local_errors: list[str] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -96,11 +95,7 @@ def _collect_retrieval_batch(
 
     failed_ids = set(retry_context.failed_requirement_ids)
     for index, task in enumerate(planner_output.tasks, start=1):
-        handler = route_handlers.get(task.route)
-        if handler is None:
-            batch_plan.local_errors.append(f"planner: unsupported route ({task.route})")
-            continue
-        tool_name, invoke_tool = handler
+        tool_name, invoke_tool = route_handlers[task.route]
         preserve = bool(failed_ids) and task.requirement_id not in failed_ids
         duplicate = next((d for d in reversed(prior_diagnostics or [])
                           if d.requirement_id == task.requirement_id
@@ -157,7 +152,7 @@ def _execute_retrieval_batch(batch_plan: RetrievalBatchPlan) -> RetrievalBatchRe
 
     task_results.sort(key=lambda item: int(item.index))
 
-    result = RetrievalBatchResult(local_errors=list(batch_plan.local_errors))
+    result = RetrievalBatchResult()
     tool_call_counts: dict[str, int] = {}
     for item in task_results:
         result.hit_updates.extend(item.hits)

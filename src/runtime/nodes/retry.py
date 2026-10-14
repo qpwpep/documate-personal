@@ -157,10 +157,10 @@ def current_retrieval_attempt(retry_context: RetryState) -> int:
     return retry_context.attempt + 1
 
 
-def _is_repair_retry_candidate(selected_routes: set[str], retry_reason: RetryReason | None) -> bool:
+def _is_repair_retry_candidate(selected_routes: set[PlannerRouteName], retry_reason: RetryReason | None) -> bool:
     if retry_reason not in CONTENT_REPAIR_REASONS:
         return False
-    return bool(selected_routes) and selected_routes.issubset({"docs", "upload"})
+    return bool(selected_routes)
 
 
 def _can_refresh_search(task: RetrievalTask, diagnostics: list[RetrievalDiagnostic]) -> bool:
