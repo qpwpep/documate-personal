@@ -20,6 +20,7 @@ QUERY_REWRITES = [
     pytest.param("numpy NAN", "numpy nan", id="case"),
     pytest.param("numpy ß comparison", "numpy ss comparison", id="unicode-casefold"),
     pytest.param('numpy.reshape "x  y"', 'numpy.reshape "x y"', id="quoted-space"),
+    pytest.param("numpy.reshape 배열 모양 변경", "numpy.reshape change array shape", id="translated-context"),
 ]
 
 
@@ -95,5 +96,7 @@ def test_planner_text_rewrite_reaches_http_and_recovers_missing_evidence(docs_ht
     state.update(validate(state))
     assert not state["retry"].needs_retry
     assert not state["retry"].failed_requirement_ids
+
+
 
 
