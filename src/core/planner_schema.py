@@ -59,6 +59,12 @@ class PlannedRequirement(RetrievalRequirement):
     symbols: list[str] = Field(default_factory=list, max_length=1,
                               description="At most one primary target. Use separate tasks for independent symbols; calls inspected inside a function belong in its aspects, not additional definitions.")
 
+    @model_validator(mode="after")
+    def validate_named_target(self) -> "PlannedRequirement":
+        if self.match != "topic" and not self.symbols:
+            raise ValueError("symbol and definition match require a nonempty primary symbol")
+        return self
+
 
 class RetrievalQuery(BaseModel):
     """Validated search text and result budget shared by plans and rewrites."""
