@@ -33,7 +33,7 @@ def build_response_updates(
         "messages": [AIMessage(content=export_answer_text(result))],
         "response": ResponseState(result=result, evidence_packet=evidence_packet, synthesis_attempt=attempt,
                                   evidence_requirement_map=evidence_requirement_map or {}, kind=kind,
-                                  normal_evidence_missing_requirement_ids=normal_evidence_missing_requirement_ids,
+                                  normal_evidence_missing_requirement_ids=normal_evidence_missing_requirement_ids or [],
                                   request_id=request_id, contract_revision=contract_revision,
                                   body_kind=body_kind, evidence_source=evidence_source, problem=problem),
     }

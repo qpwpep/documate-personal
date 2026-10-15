@@ -29,7 +29,6 @@ def _decide_retry_outcome(
     retry_context = get_retry_state(state)
     retrieved_missing, packet_omitted = detect_packet_coverage_gaps(snapshot)
     # A compact omission can still recover using a complete normal packet.
-    # Unknown metadata preserves the retry behavior of older/short-circuit states.
     content_repair_available = not (
         (retrieved_missing or packet_omitted) and snapshot.normal_evidence_missing_requirement_ids)
     needs_retry, next_retry_context, retrieval_feedback = build_retry_update(

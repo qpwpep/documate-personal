@@ -4,6 +4,7 @@ from typing import Any
 
 from src.core.slack_contract import SlackDelivery
 from src.core.planner_schema import RetrievalTask
+from src.core.evidence import SearchHit
 from src.core.contracts.debug import ActionResults, DEBUG_SCHEMA_VERSION, DebugDiagnostics, DebugPayload, ErrorCode, RetryState, SaveTextActionResult, json_safe_deep_copy, normalize_recorded_routes
 from src.core.contracts.graph_state import DebugState
 from src.core.contracts.usage import LLMCallRecord
@@ -79,11 +80,7 @@ def parse_retry_state(value: Any) -> RetryState:
 
     preserved_hits = value.get("preserved_hits")
     if isinstance(preserved_hits, list):
-        retry_state.preserved_hits = [
-            json_safe_deep_copy(item)
-            for item in preserved_hits
-            if isinstance(item, dict)
-        ]
+        retry_state.preserved_hits = [SearchHit.model_validate(item) for item in preserved_hits]
 
     preserved_retrieval_diagnostics = value.get("preserved_retrieval_diagnostics")
     if isinstance(preserved_retrieval_diagnostics, list):

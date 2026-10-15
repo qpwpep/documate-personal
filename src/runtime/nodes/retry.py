@@ -263,13 +263,13 @@ def build_retry_update(
             "failed_requirement_ids": sorted(failed_ids),
         }
         if reuse_hits_only:
-            retry_update["preserved_hits"] = [hit.model_dump(mode="json") for hit in (current_attempt_hits or [])]
+            retry_update["preserved_hits"] = [hit for hit in (current_attempt_hits or [])]
             retry_update["preserved_retrieval_diagnostics"] = [
                 item.model_copy(deep=True)
                 for item in (current_attempt_retrieval_diagnostics or [])
             ]
         elif failed_ids:
-            retry_update["preserved_hits"] = [hit.model_dump(mode="json") for hit in (current_attempt_hits or []) if hit.requirement_id not in failed_ids]
+            retry_update["preserved_hits"] = [hit for hit in (current_attempt_hits or []) if hit.requirement_id not in failed_ids]
             retry_update["preserved_retrieval_diagnostics"] = [d.model_copy(deep=True) for d in (current_attempt_retrieval_diagnostics or []) if d.requirement_id not in failed_ids]
         else:
             retry_update["preserved_hits"] = []

@@ -18,7 +18,7 @@ from src.core.latency import elapsed_ms, make_stage_latency_event
 from src.infra.logging_utils import log_event
 from src.core.message_utils import build_tool_message
 from src.core.planner_schema import RetrievalTask
-from src.core.evidence import parse_search_hits
+from src.core.evidence import SearchHit
 from src.runtime.nodes.retry import current_retrieval_attempt
 from src.runtime.nodes.retrieval.executor import RetrievalTaskResult, build_reused_retrieval_task_result, execute_retrieval_task, retrieval_fingerprint
 from src.runtime.agent_runtime.tool_execution import invoke_tool
@@ -36,7 +36,7 @@ class RetrievalBatchPlan:
 
 @dataclass(slots=True)
 class RetrievalBatchResult:
-    hit_updates: list[dict[str, Any]] = field(default_factory=list)
+    hit_updates: list[SearchHit] = field(default_factory=list)
     retrieval_diagnostics: list[RetrievalDiagnostic] = field(default_factory=list)
     tool_messages: list[Any] = field(default_factory=list)
     local_errors: list[str] = field(default_factory=list)
@@ -49,7 +49,7 @@ def _build_route_handlers(
     upload_search_tool: Any,
     runtime: Any,
     prior_diagnostics: list[RetrievalDiagnostic] | None = None,
-    prior_hits: list[dict[str, Any]] | None = None,
+    prior_hits: list[SearchHit] | None = None,
 ) -> dict[str, tuple[str, Any]]:
     def docs_search(task: RetrievalTask, execution_id: str):
         completed = [request for d in (prior_diagnostics or [])
@@ -58,7 +58,7 @@ def _build_route_handlers(
         return invoke_tool("tavily_search", tavily_search_tool, execution_id=execution_id, query=task.query, k=task.k,
                                   requirement=task.requirement,
                                   completed_requests=completed,
-                                  previous_hits=[hit for hit in parse_search_hits(prior_hits or []) if hit.requirement_id == task.requirement_id])
+                                  previous_hits=[hit for hit in (prior_hits or []) if hit.requirement_id == task.requirement_id])
 
     return {
         "docs": (
@@ -83,14 +83,10 @@ def _collect_retrieval_batch(
     retry_context: Any,
     route_handlers: dict[str, tuple[str, Any]],
     prior_diagnostics: list[RetrievalDiagnostic] | None = None,
-    prior_hits: list[dict[str, Any]] | None = None,
+    prior_hits: list[SearchHit] | None = None,
 ) -> RetrievalBatchPlan:
     attempt = current_retrieval_attempt(retry_context)
-    preserved_hits = [
-        item
-        for item in retry_context.preserved_hits
-        if isinstance(item, dict)
-    ]
+    preserved_hits = retry_context.preserved_hits
     preserved_diagnostics = list(retry_context.preserved_retrieval_diagnostics)
     batch_plan = RetrievalBatchPlan(attempt=attempt)
 

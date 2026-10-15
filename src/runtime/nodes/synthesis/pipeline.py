@@ -107,7 +107,6 @@ def run_synthesis_pipeline(
             ),
             make_stage_latency_event(stage="synthesis", attempt=prepared.attempt, latency_ms=total, status=mode),
         ],
-        retrieval_errors=prepared.parse_errors,
         synthesis_errors=errors,
         problem=problem, llm_diagnostics=diagnostics,
         kind="failure" if mode in {"timeout_grounded_fallback", "deterministic_grounded_fallback"} else "draft",

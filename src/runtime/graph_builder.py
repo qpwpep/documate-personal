@@ -3,7 +3,7 @@ from typing import Any
 
 from src.core.contracts import GraphState
 from src.core.contracts.boundary.debug import get_debug_state, parse_debug_state
-from src.core.contracts.boundary.graph import get_retry_state, normalize_graph_update
+from src.core.contracts.boundary.graph import get_retry_state
 from src.core.contracts.boundary.planner import get_planner_state
 from src.core.contracts.boundary.response import get_response_state
 from src.core.contracts.boundary.runtime import get_runtime_state
@@ -90,16 +90,6 @@ def _get_progress_emitter(state: GraphState) -> Any | None:
     return get_runtime_state(state).progress_emitter
 
 
-def _normalize_node(node: Any):
-    def wrapped(state: GraphState) -> GraphState:
-        updates = node(state)
-        if not isinstance(updates, dict):
-            return updates
-        return normalize_graph_update(updates)
-
-    return wrapped
-
-
 def _merge_debug_patch(state: GraphState, raw_debug_patch: Any):
     base_debug = get_debug_state(state)
     if raw_debug_patch is None:
@@ -136,7 +126,6 @@ def _instrument_stage_node(stage: str, node: Any, *, record_latency_trace: bool 
             return updates
 
         raw_debug_patch = updates.get("debug") if "debug" in updates else None
-        updates = normalize_graph_update(updates)
         debug = _merge_debug_patch(state, raw_debug_patch)
         stage_status = _resolve_stage_status(stage, {**state, **updates}) or _extract_stage_status_from_debug(
             stage,
@@ -195,7 +184,7 @@ def build_agent_graph(settings: AppSettings | None = None):
     )
     retrieve_dispatch_node = _instrument_stage_node(
         "retrieval",
-        _normalize_node(retrieve_dispatch_node),
+        retrieve_dispatch_node,
         record_latency_trace=False,
     )
     pre_synthesis_validation_node = make_pre_synthesis_validation_node(
@@ -217,7 +206,7 @@ def build_agent_graph(settings: AppSettings | None = None):
     )
     synthesize_node = _instrument_stage_node(
         "synthesis",
-        _normalize_node(synthesize_node),
+        synthesize_node,
         record_latency_trace=False,
     )
     post_synthesis_validation_node = make_post_synthesis_validation_node(
@@ -237,7 +226,7 @@ def build_agent_graph(settings: AppSettings | None = None):
         "action_postprocess",
         action_postprocess_node,
     )
-    add_user_node = _normalize_node(add_user_message)
+    add_user_node = add_user_message
 
     graph_object = build_graph(
         state_type=GraphState,

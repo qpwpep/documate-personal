@@ -164,16 +164,9 @@ def normalize_retrieval_diagnostic_observation(
 def parse_retrieval_state(value: Any) -> RetrievalState:
     if isinstance(value, RetrievalState):
         return value
-    if not isinstance(value, dict):
+    if value is None:
         return RetrievalState()
-    hit_log = value.get("hit_log")
-    return RetrievalState(
-        hit_log=[
-            item
-            for item in safe_list(hit_log)
-            if isinstance(item, dict)
-        ]
-    )
+    return RetrievalState.model_validate(value)
 
 
 def get_retrieval_state(state: dict[str, Any]) -> RetrievalState:

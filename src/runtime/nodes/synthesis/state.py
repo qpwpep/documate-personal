@@ -11,13 +11,13 @@ from src.core.llm_errors import ExecutionProblem, LLMDiagnostic
 
 def build_synthesis_updates(
     *, debug: Any, result: AnswerResponse, evidence_packet: list[EvidenceRef], attempt: int,
-    latency_trace: list[dict[str, Any]], retrieval_errors: list[str] | None = None,
+    latency_trace: list[dict[str, Any]],
     synthesis_errors: list[str] | None = None,
     evidence_requirement_map: dict[str, list[str]] | None = None,
     kind: str = "draft",
     request_id: str | None = None,
     contract_revision: int = 0,
-    normal_evidence_missing_requirement_ids: list[str] | None = None,
+    normal_evidence_missing_requirement_ids: list[str],
     body_kind: BodyKind | None = None,
     evidence_source: AnswerSource | None = None,
     problem: ExecutionProblem | None = None,
@@ -30,7 +30,6 @@ def build_synthesis_updates(
                                   request_id=request_id, contract_revision=contract_revision,
                                   body_kind=body_kind, evidence_source=evidence_source, problem=problem),
         "debug": debug.model_copy(update={
-            "retrieval_errors": [*debug.retrieval_errors, *(retrieval_errors or [])],
             "synthesis_errors": [*debug.synthesis_errors, *(synthesis_errors or [])],
             "llm_diagnostics": [*debug.llm_diagnostics, *(llm_diagnostics or [])],
             "latency_trace": [*debug.latency_trace, *latency_trace],

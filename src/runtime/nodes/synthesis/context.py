@@ -8,7 +8,6 @@ from src.core.contracts.boundary.retrieval import get_retrieval_state
 from src.core.contracts.boundary.runtime import get_runtime_state
 from src.core.contracts.provenance import AnswerSource
 from src.core.answer_schema import AnswerResponse
-from src.core.evidence import SearchHit
 from src.core.request_contracts import RequestContract, resolve_body_response
 from src.runtime.nodes.synthesis.budgets import RetrievedEvidenceBudget
 from src.runtime.nodes.synthesis.evidence_selection import (
@@ -44,14 +43,7 @@ def build_synthesis_context(*, state: GraphState) -> SynthesisContext:
     runtime = get_runtime_state(state)
     planner = get_planner_state(state)
     retry = get_retry_state(state)
-    raw_hits = get_retrieval_state(state).hit_log[retry.hit_start_index:]
-    parse_errors: list[str] = []
-    hits: list[SearchHit] = []
-    for index, raw in enumerate(raw_hits):
-        try:
-            hits.append(raw if isinstance(raw, SearchHit) else SearchHit.model_validate(raw))
-        except Exception as exc:
-            parse_errors.append(f"retrieved_hits[{index}]: {exc}")
+    hits = get_retrieval_state(state).hit_log[retry.hit_start_index:]
     plan = planner.output
     source_response = resolve_contract_source_response(runtime)
     evidence_source = None
@@ -68,7 +60,6 @@ def build_synthesis_context(*, state: GraphState) -> SynthesisContext:
         messages=list(state.get("messages", [])),
         guided_followup=str(planner.guided_followup or "").strip(),
         planner_blocked=planner.diagnostics.reason in {"upload_retriever_missing", "upload_file_scope_invalid"},
-        parse_errors=parse_errors,
         planner_output=plan,
         retrieval_required=bool(plan.use_retrieval and plan.tasks),
         hits=select_evidence_hits(user_input=runtime.user_input, hits=hits, planner_output=plan),
@@ -120,7 +111,6 @@ def prepare_synthesis_inputs(
     )
     return PreparedSynthesisInputs(
         attempt=context.attempt, user_input=context.user_input,
-        parse_errors=context.parse_errors,
         retrieval_required=retrieval_required, evidence_packet=packet,
         evidence_requirement_map=requirement_ids,
         reference_aliases=reference_aliases,

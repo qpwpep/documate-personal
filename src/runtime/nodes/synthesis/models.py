@@ -20,7 +20,6 @@ class SynthesisContext:
     messages: list[Any]
     guided_followup: str
     planner_blocked: bool
-    parse_errors: list[str]
     planner_output: PlannerOutput
     retrieval_required: bool
     hits: list[SearchHit]
@@ -33,7 +32,6 @@ class SynthesisContext:
 class PreparedSynthesisInputs:
     attempt: int
     user_input: str
-    parse_errors: list[str]
     retrieval_required: bool
     evidence_packet: list[EvidenceRef]
     model_messages: list[BaseMessage]
@@ -51,9 +49,8 @@ class SynthesisPipelineResult:
     evidence_packet: list[EvidenceRef]
     latency_trace: list[dict[str, Any]]
     evidence_requirement_map: dict[str, list[str]] = field(default_factory=dict)
-    retrieval_errors: list[str] = field(default_factory=list)
     synthesis_errors: list[str] = field(default_factory=list)
     kind: str = "draft"
     problem: ExecutionProblem | None = None
     llm_diagnostics: list[LLMDiagnostic] = field(default_factory=list)
-    normal_evidence_missing_requirement_ids: list[str] | None = None
+    normal_evidence_missing_requirement_ids: list[str] = field(default_factory=list)

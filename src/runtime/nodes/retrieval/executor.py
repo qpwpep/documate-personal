@@ -9,7 +9,7 @@ from uuid import uuid4
 
 from src.core.contracts import RetrievalDiagnostic
 from src.core.contracts.routes import route_for_tool
-from src.core.evidence import parse_search_hits
+from src.core.evidence import SearchHit, parse_search_hits
 from src.core.latency import elapsed_ms, make_retrieval_route_latency_event
 from src.core.planner_schema import RetrievalTask
 from src.runtime.agent_runtime.tool_execution import record_nonexecution
@@ -20,7 +20,7 @@ class RetrievalTaskResult:
     index: int
     tool_name: str
     payload: Any
-    hits: list[dict[str, Any]]
+    hits: list[SearchHit]
     diagnostic: RetrievalDiagnostic
     errors: list[str]
     latency_trace: dict[str, Any]
@@ -113,14 +113,13 @@ def collect_retrieval_result(
     attempt: int,
     local_errors: list[str],
     task: RetrievalTask,
-) -> tuple[list[dict[str, Any]], RetrievalDiagnostic]:
+) -> tuple[list[SearchHit], RetrievalDiagnostic]:
     try:
         parsed_items = parse_search_hits(raw_payload, errors=local_errors)
     except (TypeError, ValueError) as exc:
         local_errors.append(f"tool:{tool_name}: invalid search hits ({exc})")
         parsed_items = []
     parsed_items = [item.model_copy(update={"requirement_id": task.requirement_id}) for item in parsed_items]
-    payload_dicts = [item.model_dump(mode="json") for item in parsed_items]
 
     diagnostic = normalize_retrieval_diagnostic(
         raw_payload,
@@ -128,7 +127,7 @@ def collect_retrieval_result(
         route=route,
         query=query,
         attempt=attempt,
-        evidence_count=len(payload_dicts),
+        evidence_count=len(parsed_items),
     )
     diagnostic = diagnostic.model_copy(update={
         "requirement_id": task.requirement_id,
@@ -138,7 +137,7 @@ def collect_retrieval_result(
     })
     if diagnostic.status in {"error", "unavailable"} and diagnostic.message:
         local_errors.append(f"{tool_name}: {diagnostic.message}")
-    return payload_dicts, diagnostic
+    return parsed_items, diagnostic
 
 
 def execute_retrieval_task(
@@ -169,7 +168,7 @@ def execute_retrieval_task(
         }
 
     latency_ms = elapsed_ms(started, time.perf_counter())
-    payload_dicts, diagnostic = collect_retrieval_result(
+    hits, diagnostic = collect_retrieval_result(
         raw_payload=payload,
         tool_name=tool_name,
         route=route,
@@ -179,12 +178,12 @@ def execute_retrieval_task(
         task=task,
     )
     diagnostic = diagnostic.model_copy(update={"invocation_id": invocation_id})
-    payload = {"hits": payload_dicts, "diagnostics": diagnostic.model_dump(mode="json")}
+    payload = {"hits": [hit.model_dump(mode="json") for hit in hits], "diagnostics": diagnostic.model_dump(mode="json")}
     return RetrievalTaskResult(
         index=index,
         tool_name=tool_name,
         payload=payload,
-        hits=payload_dicts,
+        hits=hits,
         diagnostic=diagnostic,
         errors=local_errors,
         latency_trace=make_retrieval_route_latency_event(
@@ -204,10 +203,10 @@ def build_reused_retrieval_task_result(
     tool_name: str,
     route: str,
     attempt: int,
-    preserved_hits: list[dict[str, Any]],
+    preserved_hits: list[SearchHit],
     preserved_diagnostics: list[RetrievalDiagnostic],
 ) -> RetrievalTaskResult:
-    route_hits = [hit for hit in parse_search_hits(preserved_hits)
+    route_hits = [hit for hit in preserved_hits
                   if hit.requirement_id == task.requirement_id]
     prior = next((item for item in reversed(preserved_diagnostics) if item.requirement_id == task.requirement_id), None)
     if prior is None:
@@ -226,7 +225,7 @@ def build_reused_retrieval_task_result(
     payload = {"hits": [hit.model_dump(mode="json") for hit in route_hits],
                "diagnostics": diagnostic.model_dump(mode="json")}
     return RetrievalTaskResult(
-        index=index, tool_name=tool_name, payload=payload, hits=payload["hits"],
+        index=index, tool_name=tool_name, payload=payload, hits=route_hits,
         diagnostic=diagnostic, errors=[],
         latency_trace=make_retrieval_route_latency_event(
             route=route, tool=tool_name, attempt=attempt, latency_ms=0, status=diagnostic.status,

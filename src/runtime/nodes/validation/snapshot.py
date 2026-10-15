@@ -92,7 +92,7 @@ def build_validation_snapshot(
         response_kind=response_kind,
         response_request_id=response_request_id,
         response_contract_revision=response_contract_revision,
-        normal_evidence_missing_requirement_ids=normal_evidence_missing_requirement_ids,
+        normal_evidence_missing_requirement_ids=normal_evidence_missing_requirement_ids or [],
         body_kind=body_kind,
         evidence_source=evidence_source,
     )
@@ -107,12 +107,7 @@ def collect_validation_snapshot(state: GraphState) -> tuple[ValidationSnapshot, 
     debug = get_debug_state(state)
     retry = get_retry_state(state)
     planner_output = planner.output
-    parsed_hits: list[SearchHit] = []
-    for index, value in enumerate(slice_from_index(retrieval.hit_log, retry.hit_start_index)):
-        try:
-            parsed_hits.append(value if isinstance(value, SearchHit) else SearchHit.model_validate(value))
-        except (TypeError, ValueError) as exc:
-            local_errors.append(f"retrieved_hits[{index}]: invalid search hit ({exc})")
+    parsed_hits = slice_from_index(retrieval.hit_log, retry.hit_start_index)
     retrieval_errors = [
         str(error) for error in slice_from_index(debug.retrieval_errors, retry.retrieval_error_start_index)
         if str(error).strip()

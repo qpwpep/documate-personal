@@ -11,7 +11,7 @@ from typing_extensions import TypedDict
 from src.core.answer_schema import ActionReceipt, AnswerResponse
 from src.core.save_contract import SaveOperation
 from src.core.slack_contract import RecipientSelector, SlackDelivery
-from src.core.evidence import EvidenceRef
+from src.core.evidence import EvidenceRef, SearchHit
 from src.core.planner_schema import PlannerOutput
 from src.core.llm_errors import ExecutionProblem, LLMDiagnostic
 from src.core.request_contracts import RequestContract, UserTurnSnapshot
@@ -71,7 +71,7 @@ class PlannerState(BaseModel):
 
 
 class RetrievalState(BaseModel):
-    hit_log: list[dict[str, Any]] = Field(default_factory=list)
+    hit_log: list[SearchHit] = Field(default_factory=list)
 
 
 class ResponseState(BaseModel):
@@ -79,7 +79,7 @@ class ResponseState(BaseModel):
     result: AnswerResponse = Field(default_factory=AnswerResponse)
     evidence_packet: list[EvidenceRef] = Field(default_factory=list)
     evidence_requirement_map: dict[str, list[str]] = Field(default_factory=dict)
-    normal_evidence_missing_requirement_ids: list[str] | None = None
+    normal_evidence_missing_requirement_ids: list[str] = Field(default_factory=list)
     synthesis_attempt: int = 0
     kind: Literal["draft", "answer", "acknowledgement", "clarification", "failure"] = "draft"
     problem: ExecutionProblem | None = None

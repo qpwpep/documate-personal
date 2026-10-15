@@ -32,7 +32,7 @@ def test_executor_assigns_diagnostic_ownership_when_provider_omits_diagnostics()
     result = dispatch(state)
     assert result["debug"].retrieval_diagnostics[-1].requirement_id == task.requirement_id
     assert result["debug"].retrieval_diagnostics[-1].request_fingerprint
-    assert {hit["requirement_id"] for hit in result["retrieval"].hit_log} == {task.requirement_id}
+    assert {hit.requirement_id for hit in result["retrieval"].hit_log} == {task.requirement_id}
 
 
 
@@ -95,7 +95,11 @@ def test_dispatch_retries_timeout_after_partial_success_without_repeating_comple
     assert queries[0] == task.query
     assert queries[1] == queries[2]
     assert queries[1] == task.query + " copy"
-    assert first_hit["evidence"] in [hit["evidence"] for hit in state["retrieval"].hit_log[1:]]
+    assert first_hit.evidence in [hit.evidence for hit in state["retrieval"].hit_log[1:]]
+
+
+
+
 
 
 
