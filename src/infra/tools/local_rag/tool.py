@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-import re
 import time
 from collections.abc import Callable
 from typing import Any
 
 from src.core.documents import ParsedDocument
 from src.core.latency import elapsed_ms
+from src.core.literal_matching import missing_literal_aspects
 from src.core.planner_schema import RetrievalRequirement
 from src.infra.chroma_store import CHROMA_DISTANCE_METRIC, CHROMA_SCORE_DIRECTION
 from src.infra.tools._common import build_retrieval_payload
@@ -24,10 +24,7 @@ def _build_search_payload(
 ) -> dict[str, Any]:
     post_started = time.perf_counter()
     ranked_rows = rank_retrieval_rows(docs_with_scores, query=query)
-    hits, normalized_scores, raw_scores, retrieval_warnings = build_local_hit_bundle(
-        ranked_rows,
-        query=query,
-    )
+    hits, normalized_scores, raw_scores, retrieval_warnings = build_local_hit_bundle(ranked_rows)
     post_filter_ms = elapsed_ms(post_started, time.perf_counter())
     payload = build_retrieval_payload(
         tool="upload_search",
@@ -56,12 +53,9 @@ def _build_search_payload(
             if file_id is not None and not scoped:
                 missing.append(f"file:{file_id}")
                 continue
-            excerpts = [" ".join(hit.evidence.excerpt.split()).casefold() for hit in scoped]
-            for aspect in requirement.aspects:
-                pattern = rf"(?<!\w){re.escape(' '.join(aspect.split()).casefold())}(?!\w)"
-                if not any(re.search(pattern, excerpt) for excerpt in excerpts):
-                    prefix = f"file:{file_id}:" if file_id is not None else ""
-                    missing.append(f"{prefix}aspect:{aspect}")
+            for aspect in missing_literal_aspects(requirement.aspects, [hit.evidence for hit in scoped]):
+                prefix = f"file:{file_id}:" if file_id is not None else ""
+                missing.append(f"{prefix}aspect:{aspect}")
         payload["diagnostics"].update(
             answerability=("covered" if not missing else "partial") if hits else "missing",
             missing_requirements=missing)

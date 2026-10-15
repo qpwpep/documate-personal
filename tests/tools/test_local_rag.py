@@ -16,7 +16,7 @@ from src.infra.chunking import chunk_notebook_path, chunk_python_text
 from src.core.uploads import UploadRecord
 from src.infra.tools.local_rag import build_upload_retriever, build_upload_search_tool
 from src.infra.tools.local_rag.ranking import rank_retrieval_rows
-from src.infra.tools.local_rag.serialization import build_local_snippet, build_query_focused_snippet
+from src.infra.tools.local_rag.serialization import build_local_hit_bundle
 from tests.synthesis_fixtures import synthesis_excerpt_limits
 
 
@@ -67,6 +67,8 @@ def _write_notebook(path: Path, *sources: str) -> None:
 
 
 class LocalRagTest(unittest.TestCase):
+
+
     @patch("src.infra.chroma_store.OpenAIEmbeddings", return_value=_FakeEmbeddings())
     def test_long_line_search_excerpt_survives_synthesis_and_exact_citation(self, _embeddings) -> None:
         """A retrieved fragment of a long source line remains model-visible and exactly citable."""
@@ -114,7 +116,7 @@ class LocalRagTest(unittest.TestCase):
         self.assertEqual(errors, [])
         self.assertEqual(diagnostic.status, "success")
         self.assertTrue(hits)
-        self.assertEqual({len(hit.evidence.excerpt) for hit in hits}, {500})
+        self.assertTrue(all(len(hit.evidence.excerpt) > 500 for hit in hits))
 
         plan = PlannerOutput(use_retrieval=True, tasks=[task])
         state = build_graph_state_input(
@@ -161,122 +163,7 @@ class LocalRagTest(unittest.TestCase):
         call = evidence.element.metadata["code_metadata"]["calls"][0]
         self.assertEqual(call, {"call_name": "train_model", "kwargs": {"learning_rate": "0.01", "epochs": "20"}, "line": 21})
 
-    def test_query_changes_selection_without_changing_snapshot_or_element(self) -> None:
-        """Different queries select different ranges in the same preserved element."""
-        from src.infra.tools.local_rag.serialization import build_local_hit_bundle
 
-        text = "alpha(value=1)\n" + "setup = 1\n" * 12 + "beta(value=2)\n"
-        indexed = chunk_python_text(path="uploads/session/query.py", text=text, chunk_size=800, chunk_overlap=120)
-        doc = indexed.hydrate(indexed.chunks[0])
-        first = build_local_hit_bundle([(doc, 0.2)], query="alpha")[0][0].evidence
-        second = build_local_hit_bundle([(doc, 0.3)], query="beta")[0][0].evidence
-        self.assertEqual(first.snapshot, second.snapshot)
-        self.assertEqual(first.element, second.element)
-        self.assertNotEqual(first.selection, second.selection)
-        self.assertNotEqual(first.id, second.id)
-
-    def test_build_query_focused_snippet_centers_on_matching_identifier(self) -> None:
-        text = (
-            "import pandas as pd\n\n"
-            "sales_q1 = pd.DataFrame(...)\n"
-            "sales_q2 = pd.DataFrame(...)\n"
-            "profiles = pd.DataFrame(...)\n"
-            "# concat example\n"
-            "all_sales = pd.concat([sales_q1, sales_q2], ignore_index=True)\n"
-            "# groupby example\n"
-            'grouped = all_sales.groupby("region", as_index=False)["amount"].sum()\n'
-            "# merge example\n"
-            'sales_with_profile = all_sales.merge(profiles, on="user_id", how="left")\n'
-        )
-
-        snippet = build_query_focused_snippet(
-            text,
-            query="업로드한 파일에서 groupby를 어떻게 쓰는지 찾아서 설명해줘.",
-            max_length=120,
-        )
-
-        self.assertIn("groupby", snippet)
-        self.assertNotIn("sales_q1 = pd.DataFrame", snippet)
-
-    def test_build_query_focused_snippet_prefers_more_relevant_usage_over_earliest_match(self) -> None:
-        text = (
-            "# train_test_split helper notes\n"
-            "from sklearn.model_selection import train_test_split\n"
-            "# later usage\n"
-            "X_train, X_test, y_train, y_test = train_test_split(\n"
-            "    X,\n"
-            "    y,\n"
-            "    test_size=0.2,\n"
-            "    random_state=42,\n"
-            ")\n"
-        )
-
-        snippet = build_query_focused_snippet(
-            text,
-            query="train_test_split random_state parameter",
-            max_length=120,
-        )
-
-        self.assertIn("random_state=42", snippet)
-        self.assertNotIn("helper notes", snippet)
-
-    def test_build_local_snippet_uses_query_window_for_single_chunk_documents(self) -> None:
-        text = "header\n" + ("value = 1\n" * 80) + "target_call(random_state=42)\n"
-
-        snippet = build_local_snippet(
-            text,
-            query="random_state parameter",
-            metadata={"document_chunk_count": 1, "document_char_count": len(text)},
-        )
-
-        self.assertIn("target_call(random_state=42)", snippet)
-        self.assertNotIn("header", snippet)
-        self.assertLess(len(snippet), 500)
-        self.assertLessEqual(len(snippet.splitlines()), 5)
-
-    def test_build_local_snippet_uses_query_window_for_short_documents(self) -> None:
-        text = "header\n" + ("step = 1\n" * 40) + "target_call(random_state=42)\n"
-
-        snippet = build_local_snippet(
-            text,
-            query="random_state parameter",
-            metadata={"document_chunk_count": 3, "document_char_count": len(text)},
-        )
-
-        self.assertIn("target_call(random_state=42)", snippet)
-        self.assertNotIn("header", snippet)
-        self.assertLessEqual(len(snippet.splitlines()), 5)
-        self.assertLessEqual(len(text), 1200)
-
-    def test_build_local_snippet_preserves_full_chunk_for_explicit_extraction(self) -> None:
-        text = "header\n" + ("step = 1\n" * 40) + "target_call(random_state=42)\n"
-
-        snippet = build_local_snippet(
-            text,
-            query="show the exact code snippet with random_state",
-            metadata={"document_chunk_count": 1, "document_char_count": len(text)},
-        )
-
-        self.assertEqual(snippet, text.strip())
-
-    def test_build_local_snippet_places_concat_window_first_for_short_files(self) -> None:
-        text = (
-            "import pandas as pd\n"
-            + ("setup_value = 1\n" * 32)
-            + "all_sales = pd.concat([sales_q1, sales_q2], ignore_index=True)\n"
-            + "print(all_sales.shape)\n"
-        )
-
-        snippet = build_local_snippet(
-            text,
-            query="concat ignore_index option",
-            metadata={"document_chunk_count": 1, "document_char_count": len(text)},
-            max_length=768,
-        )
-
-        self.assertTrue(snippet.startswith("all_sales = pd.concat"))
-        self.assertIn("ignore_index=True", snippet)
-        self.assertNotIn("import pandas as pd", snippet)
 
 
 

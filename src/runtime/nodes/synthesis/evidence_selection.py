@@ -6,6 +6,7 @@ import re
 import textwrap
 
 from src.core.evidence import EvidenceRef, SearchHit, build_evidence
+from src.core.literal_matching import literal_aspect_present, missing_literal_aspects
 from src.core.planner_schema import PlannerOutput, RetrievalTask
 from src.core.table_selection import table_excerpt, table_row_units
 from src.infra.tools.docs_search.ranking import DocsAssessment, assess_docs_evidence
@@ -24,18 +25,6 @@ def _tokens(text: str) -> set[str]:
     tokens = {token.lower().rstrip(".-") for token in _TOKEN_PATTERN.findall(text)}
     tokens.update(token.rsplit(".", 1)[-1] for token in tuple(tokens) if "." in token)
     return {token for token in tokens if token and token not in _STOPWORDS}
-
-
-def missing_literal_aspects(aspects: list[str], excerpts: list[str]) -> list[str]:
-    """Report missing literal anchors in model-visible text, without asserting semantic support."""
-    normalized = [" ".join(excerpt.split()).casefold() for excerpt in excerpts]
-    return [
-        aspect for aspect in aspects
-        if not any(
-            re.search(rf"(?<!\w){re.escape(' '.join(aspect.split()).casefold())}(?!\w)", excerpt)
-            for excerpt in normalized
-        )
-    ]
 
 
 def route_for_evidence(item: EvidenceRef) -> str:
@@ -75,12 +64,7 @@ def requirement_coverage(
     associated = [item for item in evidence
                   if task.requirement_id in requirement_ids.get(item.id, [])
                   and item.route == task.route and matches_file_scope(item, task)]
-    missing = missing_literal_aspects(task.requirement.aspects, [item.excerpt for item in associated])
-    coverage = {
-        "evidence_ids": [item.id for item in associated],
-        "present_aspects": [aspect for aspect in task.requirement.aspects if aspect not in missing],
-        "missing_aspects": missing, "is_partial": not associated or bool(missing),
-    }
+    coverage = {"evidence_ids": [item.id for item in associated]}
     if task.route == "docs":
         assessment = _assess_docs_ranges(task, associated)
         missing = [aspect for aspect in task.requirement.aspects if _has_missing_label(assessment.missing, "aspect", aspect)]
@@ -92,12 +76,18 @@ def requirement_coverage(
             missing_needs=missing_needs, missing_requirements=assessment.missing,
             is_partial=assessment.answerability != "covered",
         )
+    else:
+        missing = missing_literal_aspects(task.requirement.aspects, associated)
+        coverage.update(
+            present_aspects=[aspect for aspect in task.requirement.aspects if aspect not in missing],
+            missing_aspects=missing, is_partial=not associated or bool(missing),
+        )
     if task.requirement.file_ids:
         covered_files = sorted({upload_file_id(item) for item in associated})
         missing_files = [file_id for file_id in task.requirement.file_ids if file_id not in covered_files]
         missing_by_file = {
             file_id: missing_literal_aspects(task.requirement.aspects,
-                                            [item.excerpt for item in associated if upload_file_id(item) == file_id])
+                                            [item for item in associated if upload_file_id(item) == file_id])
             for file_id in task.requirement.file_ids
         }
         coverage.update(requested_file_ids=task.requirement.file_ids, covered_file_ids=covered_files,
@@ -253,7 +243,7 @@ def _literal_code_anchors(text: str, terms: list[str]) -> list[tuple[int, int]]:
     for term in terms:
         pattern = r"\s+".join(re.escape(word) for word in term.split())
         anchors.update((match.start(), match.end()) for match in re.finditer(
-            rf"(?<!\w){pattern}(?!\w)", text, re.IGNORECASE))
+            rf"(?<!\w){pattern}(?!\w)", text))
     return sorted(anchors)
 
 
@@ -291,7 +281,7 @@ def select_table_evidence(
     def rank(unit: list[str]) -> tuple[int, int, int]:
         text = table_excerpt(item.element.table, unit)
         terms = _tokens(text) | set(re.findall(r"\d+(?:[.,]\d+)*", text))
-        return (len(aspects) - len(missing_literal_aspects(aspects, [text])), len(terms & topics), -len(text))
+        return (sum(literal_aspect_present(aspect, text, case_sensitive=False) for aspect in aspects), len(terms & topics), -len(text))
 
     selected_ids: list[str] = []
     for unit in sorted(units, key=rank, reverse=True):
@@ -351,7 +341,14 @@ def select_evidence_range(
             anchors = _literal_code_anchors(text, task.requirement.aspects if task is not None else [])
             if not anchors:
                 # A query may name only the suffix of a long qualified identifier.
-                anchors = _literal_code_anchors(text, sorted(focus))
+                raw_terms = _TOKEN_PATTERN.findall(" ".join([
+                    query, task.query if task is not None else "",
+                    *(task.requirement.symbols if task is not None else []),
+                    *(task.requirement.aspects if task is not None else []),
+                ]))
+                terms = {term.rstrip(".-") for term in raw_terms}
+                terms.update(term.rsplit(".", 1)[-1] for term in tuple(terms) if "." in term)
+                anchors = _literal_code_anchors(text, sorted(term for term in terms if term.lower() in focus))
 
             def related(span: tuple[int, int]) -> bool:
                 return any(span[0] <= start and end <= span[1] for start, end in anchors)
@@ -435,7 +432,7 @@ def select_evidence_packet(
     """Reserve required passages before expanding context, charging shared ranges only once."""
     packet: list[EvidenceRef] = []
     requirement_ids: dict[str, list[str]] = {}
-    remaining = max(0, budget.max_total_excerpt_chars)
+    remaining = budget.max_total_excerpt_chars
     candidates: dict[tuple[str, str, tuple[str, ...], tuple[str, ...]], tuple[EvidenceRef, RetrievalTask | None]] = {}
     contracts: dict[str, RetrievalTask] = {}
     for item in evidence:
@@ -491,11 +488,11 @@ def select_evidence_packet(
             associated = [selected for selected in packet if task.requirement_id in requirement_ids.get(selected.id, [])]
             assessment = _assess_docs_ranges(contracts[task.requirement_id], associated)
             return bool(_focused_docs_missing(assessment, task))
-        excerpts = [selected.excerpt for selected in packet
+        selected_ranges = [selected for selected in packet
                     if (task is None and selected.route == item.route) or (
                         task is not None and task.requirement_id in requirement_ids.get(selected.id, [])
                         and (not task.requirement.file_ids or upload_file_id(selected) == upload_file_id(item)))]
-        return not excerpts or bool(task and missing_literal_aspects(task.requirement.aspects, excerpts))
+        return not selected_ranges or bool(task and missing_literal_aspects(task.requirement.aspects, selected_ranges))
 
     # All associations are attached before testing capacity: sharing a cropped
     # range is free even when the item or character budget has been exhausted.
@@ -509,16 +506,16 @@ def select_evidence_packet(
         allow_partial: bool = True, complete_char_limit: int | None = None,
     ) -> None:
         nonlocal remaining
-        if len(packet) >= max(0, budget.max_items) or allowance <= 0:
+        if len(packet) >= budget.max_items or allowance <= 0:
             return
         if item.element.kind == "table":
             selected = select_table_evidence(
-                item, limit=min(max(0, budget.max_excerpt_chars), allowance), query=query, task=task,
+                item, limit=min(budget.max_excerpt_chars, allowance), query=query, task=task,
             )
             if selected is None:
                 return
         else:
-            limit = min(max(0, budget.max_excerpt_chars), allowance)
+            limit = min(budget.max_excerpt_chars, allowance)
             if not limit:
                 return
             selected = select_evidence_range(
@@ -529,7 +526,7 @@ def select_evidence_packet(
         if not selected.excerpt.strip():
             return
         if (require_anchor and task is not None and task.route != "docs"
-                and missing_literal_aspects(task.requirement.aspects, [selected.excerpt])):
+                and missing_literal_aspects(task.requirement.aspects, [selected])):
             return
         if selected.id not in origins:
             packet.append(selected)
@@ -580,7 +577,7 @@ def select_evidence_packet(
         original, task = origins[selected.id]
         if original.element.kind == "table":
             continue
-        limit = min(max(0, budget.max_excerpt_chars), len(selected.excerpt) + remaining // (len(packet) - index))
+        limit = min(budget.max_excerpt_chars, len(selected.excerpt) + remaining // (len(packet) - index))
         expanded = select_evidence_range(
             original, limit=limit, query=query, task=task,
             coverage_task=contracts.get(task.requirement_id) if task is not None else None,
