@@ -3,94 +3,20 @@ from __future__ import annotations
 from typing import Any
 
 from src.core.slack_contract import SlackDelivery
-from src.core.planner_schema import RetrievalTask
-from src.core.evidence import SearchHit
-from src.core.contracts.debug import ActionResults, DEBUG_SCHEMA_VERSION, DebugDiagnostics, DebugPayload, ErrorCode, RetryState, SaveTextActionResult, json_safe_deep_copy, normalize_recorded_routes
+from src.core.contracts.debug import ActionResults, DEBUG_SCHEMA_VERSION, DebugDiagnostics, DebugPayload, ErrorCode, RetryState, SaveTextActionResult, json_safe_deep_copy
 from src.core.contracts.graph_state import DebugState
 from src.core.contracts.usage import LLMCallRecord
 from src.core.contracts.routing import validate_route_decisions
 from src.core.contracts.boundary.planner import parse_planner_diagnostic
-from src.core.contracts.boundary.retrieval import parse_retrieval_diagnostic, parse_retrieval_diagnostics
+from src.core.contracts.boundary.retrieval import parse_retrieval_diagnostics
 
 
 def parse_retry_state(value: Any) -> RetryState:
     if isinstance(value, RetryState):
         return value
-
-    retry_state = RetryState()
-    if not isinstance(value, dict):
-        return retry_state
-
-    attempt = value.get("attempt")
-    if isinstance(attempt, int) and attempt >= 0:
-        retry_state.attempt = attempt
-
-    max_retries = value.get("max_retries")
-    if isinstance(max_retries, int) and max_retries >= 0:
-        retry_state.max_retries = max_retries
-
-    retry_reason = value.get("retry_reason")
-    if retry_reason in {
-        "no_evidence",
-        "low_score",
-        "tool_error",
-        "blocked_missing_upload",
-        "unresolved_references",
-        "missing",
-        "missing_route_coverage",
-        "missing_content",
-    }:
-        retry_state.retry_reason = retry_reason
-
-    retry_state.needs_retry = bool(value.get("needs_retry", retry_state.needs_retry))
-
-    retrieval_feedback = value.get("retrieval_feedback")
-    if retrieval_feedback is not None:
-        retry_state.retrieval_feedback = str(retrieval_feedback).strip()
-
-    hit_start_index = value.get("hit_start_index")
-    if isinstance(hit_start_index, int) and hit_start_index >= 0:
-        retry_state.hit_start_index = hit_start_index
-
-    retrieval_error_start_index = value.get("retrieval_error_start_index")
-    if isinstance(retrieval_error_start_index, int) and retrieval_error_start_index >= 0:
-        retry_state.retrieval_error_start_index = retrieval_error_start_index
-
-    retrieval_diagnostic_start_index = value.get("retrieval_diagnostic_start_index")
-    if isinstance(retrieval_diagnostic_start_index, int) and retrieval_diagnostic_start_index >= 0:
-        retry_state.retrieval_diagnostic_start_index = retrieval_diagnostic_start_index
-
-    score_avg = value.get("score_avg")
-    if isinstance(score_avg, (int, float)):
-        retry_state.score_avg = float(score_avg)
-    elif score_avg is None and "score_avg" in value:
-        retry_state.score_avg = None
-
-    failed_routes = value.get("failed_routes")
-    if isinstance(failed_routes, list):
-        retry_state.failed_routes = normalize_recorded_routes(failed_routes)
-    if isinstance(value.get("failed_requirement_ids"), list):
-        retry_state.failed_requirement_ids = [str(item) for item in value["failed_requirement_ids"] if str(item).strip()]
-    if isinstance(value.get("original_tasks"), list):
-        retry_state.original_tasks = [RetrievalTask.model_validate(item) for item in value["original_tasks"]]
-
-    retry_scope = value.get("retry_scope")
-    if retry_scope in {"refresh_routes", "reuse_hits_resynthesize"}:
-        retry_state.retry_scope = retry_scope
-
-    preserved_hits = value.get("preserved_hits")
-    if isinstance(preserved_hits, list):
-        retry_state.preserved_hits = [SearchHit.model_validate(item) for item in preserved_hits]
-
-    preserved_retrieval_diagnostics = value.get("preserved_retrieval_diagnostics")
-    if isinstance(preserved_retrieval_diagnostics, list):
-        retry_state.preserved_retrieval_diagnostics = [
-            diagnostic
-            for item in preserved_retrieval_diagnostics
-            if (diagnostic := parse_retrieval_diagnostic(item)) is not None
-        ]
-
-    return retry_state
+    if value is None:
+        return RetryState()
+    return RetryState.model_validate(value)
 
 
 def normalize_llm_call_observation(value: Any) -> tuple[list[LLMCallRecord] | None, list[str]]:

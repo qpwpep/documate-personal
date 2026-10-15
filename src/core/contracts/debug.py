@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any, Iterable, Literal
 
 from langchain_core.messages import AIMessage
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from src.core.contracts.provenance import AnswerProvenance
 from src.core.contracts.routing import RoutingDecision
@@ -110,8 +110,12 @@ DEBUG_CRITICAL_FIELDS: tuple[str, ...] = (
 
 class RetryState(BaseModel):
     needs_retry: bool = False
-    attempt: int = 0
-    max_retries: int = DEFAULT_MAX_RETRIES
+    attempt: int = Field(default=0, ge=0)
+    max_retries: int = Field(default=DEFAULT_MAX_RETRIES, ge=0)
+    content_repair_attempt: int = Field(default=0, ge=0, le=1)
+    max_content_repairs: int = Field(default=1, ge=0, le=1)
+    terminal_failed_requirement_ids: list[str] = Field(default_factory=list)
+    terminal_retrieval_reason: RetryReason | None = None
     retry_reason: RetryReason | None = None
     retrieval_feedback: str = ""
     hit_start_index: int = 0
@@ -124,6 +128,11 @@ class RetryState(BaseModel):
     preserved_hits: list[SearchHit] = Field(default_factory=list)
     preserved_retrieval_diagnostics: list[RetrievalDiagnostic] = Field(default_factory=list)
     retry_scope: Literal["refresh_routes", "reuse_hits_resynthesize"] = "refresh_routes"
+
+    @field_validator("failed_routes")
+    @classmethod
+    def canonical_failed_routes(cls, value: list[str]) -> list[str]:
+        return normalize_recorded_routes(value)
 
 
 class PlannerDiagnostic(BaseModel):
@@ -175,18 +184,13 @@ class RetrievalDiagnostic(BaseModel):
     filtered_invalid_url_count: int = 0
     filtered_path_prefix_count: int = 0
     filtered_cross_domain_count: int = 0
-    filtered_http_error_count: int = 0
-    filtered_redirect_policy_count: int = 0
-    filtered_url_request_failed_count: int = 0
     filtered_identifier_mismatch_count: int = 0
-    validated_url_count: int = 0
     final_evidence_count: int = 0
     metric: str = ""
     score_direction: Literal["higher_is_better", "lower_is_better", ""] = ""
     normalized_score: float | None = None
     raw_score: float | None = None
     provider_ms: int = 0
-    url_validation_ms: int = 0
     post_filter_ms: int = 0
     include_raw_content_requested: bool = False
     warnings: list[str] = Field(default_factory=list)
