@@ -4,12 +4,14 @@ import time
 from collections.abc import Callable
 from typing import Any
 
+from src.core.contracts.retrieval import RetrievalResult
 from src.core.documents import ParsedDocument
+from src.core.evidence import EvidenceRef
 from src.core.latency import elapsed_ms
 from src.core.literal_matching import missing_literal_aspects
 from src.core.planner_schema import RetrievalRequirement
 from src.infra.chroma_store import CHROMA_DISTANCE_METRIC, CHROMA_SCORE_DIRECTION
-from src.infra.tools._common import build_retrieval_payload
+from src.infra.tools._common import build_retrieval_result
 from src.infra.tools.local_rag.ranking import rank_retrieval_rows
 from src.infra.tools.local_rag.requirements import resolve_source_requirement
 from src.infra.tools.local_rag.serialization import build_local_hit_bundle
@@ -18,15 +20,15 @@ from src.infra.tools.local_rag.serialization import build_local_hit_bundle
 def _build_search_payload(
     *,
     query: str,
-    docs_with_scores: list[tuple[Any, float | None]],
+    docs_with_scores: list[tuple[EvidenceRef, float | None]],
     provider_ms: int = 0,
     requirement: RetrievalRequirement,
-) -> dict[str, Any]:
+) -> RetrievalResult:
     post_started = time.perf_counter()
     ranked_rows = rank_retrieval_rows(docs_with_scores, query=query)
     hits, normalized_scores, raw_scores = build_local_hit_bundle(ranked_rows)
     post_filter_ms = elapsed_ms(post_started, time.perf_counter())
-    payload = build_retrieval_payload(
+    payload = build_retrieval_result(
         tool="upload_search",
         route="upload",
         query=query,
@@ -40,7 +42,7 @@ def _build_search_payload(
         metric=CHROMA_DISTANCE_METRIC,
         score_direction=CHROMA_SCORE_DIRECTION,
     )
-    payload["diagnostics"].update(answerability="unknown", missing_requirements=[], candidate_count=len(docs_with_scores))
+    payload.diagnostics.candidate_count = len(docs_with_scores)
     if (requirement.match == "topic" and (requirement.file_ids or requirement.aspects)
             and not (requirement.symbols or requirement.version or requirement.library or requirement.evidence_needs)):
         # These are literal source anchors, not inferred semantic support. Check
@@ -55,59 +57,52 @@ def _build_search_payload(
             for aspect in missing_literal_aspects(requirement.aspects, [hit.evidence for hit in scoped]):
                 prefix = f"file:{file_id}:" if file_id is not None else ""
                 missing.append(f"{prefix}aspect:{aspect}")
-        payload["diagnostics"].update(
-            answerability=("covered" if not missing else "partial") if hits else "missing",
-            missing_requirements=missing)
+        payload.diagnostics.answerability = (("covered" if not missing else "partial") if hits else "missing")
+        payload.diagnostics.missing_requirements = missing
     return payload
 
 
 def _build_requirement_payload(
     *, query: str, requirement: RetrievalRequirement, source_documents: tuple[ParsedDocument, ...],
-) -> dict[str, Any]:
+) -> RetrievalResult:
     started = time.perf_counter()
     result = resolve_source_requirement(requirement=requirement, source_documents=source_documents)
-    payload = build_retrieval_payload(
+    payload = build_retrieval_result(
         tool="upload_search", route="upload", query=query, hits=result.hits,
         status="success" if result.hits else "no_result",
         message="" if result.answerability == "covered" else f"uploaded source requirement {result.answerability}",
         post_filter_ms=elapsed_ms(started, time.perf_counter()),
         metric="source_symbol", score_direction="higher_is_better", warnings=result.warnings,
     )
-    payload["diagnostics"].update(answerability=result.answerability,
-                                  missing_requirements=result.missing_requirements,
-                                  candidate_count=result.candidate_count)
+    payload.diagnostics.answerability = result.answerability
+    payload.diagnostics.missing_requirements = result.missing_requirements
+    payload.diagnostics.candidate_count = result.candidate_count
     return payload
 
 
-def build_upload_search_tool() -> Callable[..., dict[str, Any]]:
+def build_upload_search_tool() -> Callable[..., RetrievalResult]:
     def upload_search(
         query: str,
         k: int = 4,
         retriever: Any = None,
         *,
         requirement: RetrievalRequirement,
-    ) -> dict[str, Any]:
+    ) -> RetrievalResult:
         if retriever is None:
-            return build_retrieval_payload(
+            return build_retrieval_result(
                 tool="upload_search",
                 route="upload",
                 query=query,
                 status="unavailable",
-                message="upload retriever is unavailable; upload a .py or .ipynb file first",
+                message="upload retriever is unavailable; attach a supported file first",
             )
 
         file_ids = requirement.file_ids
-        upload_files = retriever.upload_files
-        source_documents = retriever.source_documents
-        if file_ids:
-            sources = {file.source_uri for file in upload_files if file.file_id in file_ids}
-            source_documents = tuple(document for document in source_documents
-                                     if document.snapshot.source_uri in sources)
         if requirement.symbols:
             return _build_requirement_payload(query=query, requirement=requirement,
-                                              source_documents=source_documents)
+                                              source_documents=retriever.source_documents)
 
-        docs_with_scores: list[tuple[Any, float | None]] = []
+        docs_with_scores: list[tuple[EvidenceRef, float | None]] = []
         provider_ms = 0
         provider_started = time.perf_counter()
         try:
@@ -116,7 +111,7 @@ def build_upload_search_tool() -> Callable[..., dict[str, Any]]:
             provider_ms += elapsed_ms(provider_started, time.perf_counter())
         except Exception as exc:
             provider_ms += elapsed_ms(provider_started, time.perf_counter())
-            return build_retrieval_payload(
+            return build_retrieval_result(
                 tool="upload_search",
                 route="upload",
                 query=query,

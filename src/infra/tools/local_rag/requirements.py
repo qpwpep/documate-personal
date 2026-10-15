@@ -151,9 +151,7 @@ def resolve_source_requirement(
     exhaustive = bool(documents) and all(document.snapshot.capture_scope == "full_document"
                                         and document.snapshot.parser != "docling" for document in documents)
     sources = [_Source(document.snapshot, element) for document in documents for element in document.elements]
-    if requirement.file_ids:
-        sources = [source for source in sources if source.element.metadata.get("file_id") in requirement.file_ids]
-    symbols = list(dict.fromkeys(requirement.symbols))
+    symbols = requirement.symbols
     by_symbol: dict[str, list[tuple[int, _Source, _Occurrence, tuple[int, int]]]] = {name: [] for name in symbols}
     warnings: list[str] = []
     aliases: dict[str, str] = {}

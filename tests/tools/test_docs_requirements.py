@@ -4,7 +4,7 @@ import requests
 
 from src.core.planner_schema import RetrievalRequirement
 from src.core.evidence import SearchHit
-from src.core.contracts.debug import DocsSearchRequest
+from src.core.contracts.debug import DocsSearchRequest, DocsSearchProviderRequest
 from src.infra.settings import AppSettings
 from src.infra.tools.docs_search.tool import build_docs_search_tool
 
@@ -34,16 +34,7 @@ def search(monkeypatch):
         response._content = __import__("json").dumps({"results": batches.pop(0) if batches else []}).encode()
         return response
 
-    def head(url, **kwargs):
-        response = requests.Response()
-        response.status_code = 200
-        response.url = url
-        response._content_consumed = True
-        return response
-
     monkeypatch.setattr(requests, "post", post)
-    monkeypatch.setattr(requests, "head", head)
-    pass
     tool = build_docs_search_tool(AppSettings(_env_file=None, tavily_api_key="test", openai_api_key="test"))
     return tool, batches, requests_seen
 
@@ -54,8 +45,8 @@ def test_numpy_alias_uses_canonical_definition_without_losing_source_text(search
     source = RECORDED_NUMPY_RESHAPE
     batches.append([source])
     payload = tool("NumPy np.reshape order", requirement=RetrievalRequirement(library='NumPy', symbols=['np.reshape'], aspects=['order'], match='definition'))
-    hit = SearchHit.model_validate(payload["hits"][0])
-    assert payload["diagnostics"]["answerability"] == "covered"
+    hit = SearchHit.model_validate(payload.hits[0])
+    assert payload.diagnostics.answerability == "covered"
     assert hit.evidence.element.text == source["raw_content"]
     assert hit.evidence.excerpt in source["raw_content"]
     assert seen[0]["include_domains"] == ["numpy.org"]
@@ -110,16 +101,16 @@ def test_previous_partial_evidence_is_rechecked_against_library_and_version(sear
         old_requirement = RetrievalRequirement(library='pandas')
     batches.append([old])
     first = tool("official reference", requirement=old_requirement)
-    previous = [SearchHit.model_validate(hit) for hit in first["hits"]]
+    previous = [SearchHit.model_validate(hit) for hit in first.hits]
     assert previous
     batches.append([result("numpy.stack", version="1.26")])
 
     requirement = RetrievalRequirement(library='numpy', symbols=['numpy.concatenate', 'numpy.stack'], version='1.26' if previous_scope == 'other_version' else None)
     second = tool("numpy.concatenate numpy.stack 1.26", requirement=requirement, previous_hits=previous)
 
-    assert second["diagnostics"]["answerability"] == "partial"
-    assert second["diagnostics"]["missing_requirements"] == ["symbol:numpy.concatenate"]
-    assert [hit["evidence"]["snapshot"]["title"] for hit in second["hits"]] == ["numpy.stack"]
+    assert second.diagnostics.answerability == "partial"
+    assert second.diagnostics.missing_requirements == ["symbol:numpy.concatenate"]
+    assert [hit.evidence.snapshot.title for hit in second.hits] == ["numpy.stack"]
 
 
 
@@ -185,8 +176,10 @@ def test_provider_sources_keep_official_document_and_library_scope(search, libra
     source["url"] = url
     batches.append([source])
     payload = tool("numpy.reshape", requirement=RetrievalRequirement(library=library, symbols=["numpy.reshape"]))
-    assert payload["hits"] == []
-    assert payload["diagnostics"][counter] == 1
+    assert payload.hits == []
+    assert getattr(payload.diagnostics, counter) == 1
+
+
 
 
 

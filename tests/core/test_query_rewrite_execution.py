@@ -47,12 +47,7 @@ def docs_http(monkeypatch):
         return response(url, {"results": results})
 
     monkeypatch.setattr(requests, "post", post)
-    monkeypatch.setattr(requests, "head", lambda url, **kwargs: response(url, {}))
-    pass
-    try:
-        yield queries, successful_queries
-    finally:
-        pass
+    yield queries, successful_queries
 
 
 def _docs_tool():

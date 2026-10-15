@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
-from typing import Any
 
 from src.core.evidence import SearchHit
+from src.core.contracts.retrieval import RetrievalResult
 from src.core.contracts.debug import DocsSearchRequest, DocsSearchProviderRequest
 from src.core.latency import elapsed_ms
 from src.core.planner_schema import RetrievalRequirement
 from src.infra.settings import AppSettings
-from src.infra.tools._common import build_retrieval_payload
+from src.infra.tools._common import build_retrieval_result
 from src.infra.tools.docs_search import client
 from src.infra.tools.docs_search.policy import docs_search_rules, normalize_include_domains
 from src.infra.tools.docs_search.ranking import dedupe_docs_hits, select_docs_evidence
@@ -17,7 +17,7 @@ from src.infra.tools.docs_search.requirements import canonical_query, library_do
 from src.infra.tools.docs_search.serialization import DocsSearchFilterCounters, collect_docs_search_hits
 
 
-def build_docs_search_tool(settings: AppSettings) -> Callable[..., dict[str, Any]]:
+def build_docs_search_tool(settings: AppSettings) -> Callable[..., RetrievalResult]:
     def tavily_search(
         query: str,
         *,
@@ -25,7 +25,7 @@ def build_docs_search_tool(settings: AppSettings) -> Callable[..., dict[str, Any
         k: int = 3,
         completed_requests: list[DocsSearchRequest] | None = None,
         previous_hits: list[SearchHit] | None = None,
-    ) -> dict[str, Any]:
+    ) -> RetrievalResult:
         requested = resolve_requirement(requirement)
         effective_query = canonical_query(query, requested)
         domains = normalize_include_domains(library_domains(str(requested.library or ""))
@@ -77,7 +77,7 @@ def build_docs_search_tool(settings: AppSettings) -> Callable[..., dict[str, Any
                 query=query_text, max_results=candidate_limit, status="completed",
                 result_count=len(payload["results"])))
             started = time.perf_counter()
-            batch, _scores = collect_docs_search_hits(payload["results"], allowed_domains=domains,
+            batch = collect_docs_search_hits(payload["results"], allowed_domains=domains,
                 retrieval_warnings=warnings, query=effective_query, filter_counters=counters)
             candidates = dedupe_docs_hits([*candidates, *batch])
             assessment = select_docs_evidence(effective_query, candidates, requested, k=k,
@@ -90,20 +90,21 @@ def build_docs_search_tool(settings: AppSettings) -> Callable[..., dict[str, Any
             warnings.append("identifier_coverage_incomplete")
             counters.filtered_identifier_mismatch_count = assessment.rejected_symbols
         status = "success" if hits else "error" if error_code else "no_result"
-        payload = build_retrieval_payload(tool="tavily_search", route="docs", query=effective_query,
+        result = build_retrieval_result(tool="tavily_search", route="docs", query=effective_query,
             hits=[hit.model_copy(update={"rank": i}) for i, hit in enumerate(hits, 1)], status=status,
             message=error_message if error_code else "" if hits else "no official documentation evidence found",
             raw_score=max((h.score.raw for h in hits if h.score.raw is not None), default=None),
-            provider_ms=provider_ms,
-            post_filter_ms=post_ms, include_raw_content_requested=bool(include_raw),
+            provider_ms=provider_ms, post_filter_ms=post_ms, include_raw_content_requested=bool(include_raw),
             provider_result_count=counters.provider_result_count, filtered_invalid_url_count=counters.filtered_invalid_url_count,
             filtered_path_prefix_count=counters.filtered_path_prefix_count, filtered_cross_domain_count=counters.filtered_cross_domain_count,
             filtered_identifier_mismatch_count=counters.filtered_identifier_mismatch_count,
-            final_evidence_count=len(hits), warnings=sorted(set(warnings)), error_code=error_code)
-        payload["diagnostics"].update(answerability="unknown" if error_code and not hits else answerability,
-            missing_requirements=missing, k=k, candidate_count=len(candidates),
-            completed_requests=[request.model_dump(mode="json") for request in completed.values()],
-            provider_requests=[request.model_dump(mode="json") for request in provider_requests])
-        return payload
+            warnings=warnings, error_code=error_code)
+        result.diagnostics = result.diagnostics.model_copy(update={
+            "answerability": "unknown" if error_code and not hits else answerability,
+            "missing_requirements": missing, "k": k, "candidate_count": len(candidates),
+            "completed_requests": list(completed.values()),
+            "provider_requests": provider_requests,
+        })
+        return result
 
     return tavily_search

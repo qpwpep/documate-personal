@@ -26,7 +26,7 @@ def _task(library, aspect):
 
 
 def _hit(task, text, *, rank=1, uri=None):
-    root = "https://numpy.org/doc/stable" if task.requirement.library == "numpy" else "https://example.com"
+    root = {"numpy": "https://numpy.org/doc/stable", "pandas": "https://pandas.pydata.org/docs"}[task.requirement.library]
     snapshot = build_snapshot(
         source_uri=uri or f"{root}/{task.requirement.library}/{rank}",
         title=task.requirement.library, media_type="text/markdown", source_type="official",
@@ -59,14 +59,14 @@ def _prepare(tasks, hits, *, budget=6000, snippet=960, max_items=6):
 
 def test_each_docs_requirement_precedes_additional_hits_from_the_same_source():
     """A comparison retains one candidate for every independent docs requirement before duplicates."""
-    alpha, beta = _task("alpha", "rows"), _task("beta", "columns")
-    alpha_first = _hit(alpha, "alpha rows are combined", rank=1)
-    alpha_second = _hit(alpha, "alpha rows are preserved", rank=2)
-    beta_hit = _hit(beta, "beta columns are combined", rank=9)
+    alpha, beta = _task("numpy", "rows"), _task("pandas", "columns")
+    alpha_first = _hit(alpha, "numpy rows are combined", rank=1)
+    alpha_second = _hit(alpha, "numpy rows are preserved", rank=2)
+    beta_hit = _hit(beta, "pandas columns are combined", rank=9)
     plan = PlannerOutput(use_retrieval=True, tasks=[alpha, beta])
 
     selected = select_evidence_hits(
-        user_input="Compare alpha and beta", hits=[alpha_first, alpha_second, beta_hit], planner_output=plan,
+        user_input="Compare numpy and pandas", hits=[alpha_first, alpha_second, beta_hit], planner_output=plan,
     )
 
     assert selected[:2] == [alpha_first, beta_hit]

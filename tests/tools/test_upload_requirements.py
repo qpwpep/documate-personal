@@ -9,7 +9,6 @@ from uuid import uuid4
 import pytest
 from langchain_core.embeddings import Embeddings
 
-from src.core.evidence import parse_search_hits
 from src.core.uploads import UploadRecord
 from src.infra.tools.local_rag import build_upload_retriever, build_upload_search_tool
 
@@ -65,9 +64,9 @@ def test_explicit_definition_request_does_not_quote_a_comment_or_a_call(uploaded
     source = "# archive_orders is supplied by another package\narchive_orders(items)\n\ndef archive_users():\n    return []\n"
     with uploaded(source) as retriever:
         payload = build_upload_search_tool()(requirement=_requirement(["archive_orders"]), query="archive_orders 함수 정의를 원문 그대로 발췌해줘", retriever=retriever)
-    assert payload["hits"] == []
-    assert payload["diagnostics"]["answerability"] == "missing"
-    assert payload["diagnostics"]["missing_requirements"] == ["archive_orders"]
+    assert payload.hits == []
+    assert payload.diagnostics.answerability == "missing"
+    assert payload.diagnostics.missing_requirements == ["archive_orders"]
 
 
 
@@ -81,8 +80,8 @@ def test_complete_method_definition_is_found_outside_vector_top_k_with_exact_off
         assert all("summarize_rows" not in doc.excerpt for doc, _score in candidates)
         payload = build_upload_search_tool()(query="메서드를 발췌", k=1, retriever=retriever,
                                             requirement=_requirement(["ReportBuilder.summarize_rows"]))
-    hits = parse_search_hits(payload)
-    assert payload["diagnostics"]["answerability"] == "covered"
+    hits = payload.hits
+    assert payload.diagnostics.answerability == "covered"
     assert [hit.evidence.excerpt for hit in hits] == [method.rstrip("\r\n")]
     assert hits[0].evidence.excerpt == source[hits[0].evidence.selection.start:hits[0].evidence.selection.end]
     assert hits[0].evidence.element.text == source
@@ -104,8 +103,8 @@ def test_notebook_import_alias_identifies_usage_in_a_later_cell(uploaded):
     with uploaded(cells, notebook=True) as retriever:
         payload = build_upload_search_tool()(query="itertools.chain 사용", retriever=retriever,
                                             requirement=_requirement(["itertools.chain"], "symbol"))
-    hits = parse_search_hits(payload)
-    assert payload["diagnostics"]["answerability"] == "covered"
+    hits = payload.hits
+    assert payload.diagnostics.answerability == "covered"
     assert [hit.evidence.excerpt for hit in hits] == [cells[1].rstrip("\n")]
     assert hits[0].evidence.element.anchors[0].cell_index == 1
 
@@ -122,9 +121,9 @@ def test_source_lookup_remains_isolated_between_uploaded_sessions(uploaded):
                                               requirement=_requirement(["private_aggregate"]))
             absent = build_upload_search_tool()(query="private_aggregate", retriever=second,
                                                requirement=_requirement(["private_aggregate"]))
-    assert found["diagnostics"]["answerability"] == "covered"
-    assert absent["hits"] == []
-    assert absent["diagnostics"]["answerability"] == "missing"
+    assert found.diagnostics.answerability == "covered"
+    assert absent.hits == []
+    assert absent.diagnostics.answerability == "missing"
 
 
 

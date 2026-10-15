@@ -12,8 +12,8 @@ from src.core.contracts.boundary.debug import get_debug_state, parse_retry_state
 from src.core.contracts.boundary.graph import get_retry_state
 from src.core.contracts.boundary.planner import get_planner_state, parse_planner_diagnostic
 from src.core.contracts.boundary.response import get_response_state
-from src.core.contracts.boundary.retrieval import parse_retrieval_diagnostics
-from src.core.evidence import dedupe_search_hits, parse_search_hits
+from src.core.contracts.boundary.retrieval import parse_retrieval_diagnostics, parse_search_hit_message
+from src.core.evidence import dedupe_search_hits
 from src.core.latency import build_latency_breakdown
 from src.runtime.agent_runtime.tool_execution import current_execution_evidence
 from src.runtime.agent_runtime.llm_usage import current_llm_calls
@@ -76,7 +76,7 @@ class DebugCollector:
             if tool_name not in evidence_tools:
                 continue
 
-            parsed_items = parse_search_hits(
+            parsed_items = parse_search_hit_message(
                 getattr(message, "content", None),
                 errors=errors,
             )
@@ -97,6 +97,9 @@ class DebugCollector:
                 and retry.retrieval_diagnostic_start_index == 0
                 and retry.score_avg is None
                 and not retry.failed_routes
+                and retry.content_repair_attempt == 0
+                and not retry.terminal_failed_requirement_ids
+                and retry.terminal_retrieval_reason is None
             ):
                 return None
         return payload

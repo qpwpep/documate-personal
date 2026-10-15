@@ -10,7 +10,6 @@ from uuid import uuid4
 import pytest
 from langchain_core.embeddings import Embeddings
 
-from src.core.evidence import parse_search_hits
 from src.core.planner_schema import RetrievalRequirement
 from src.infra.tools.local_rag import build_upload_search_tool
 
@@ -64,7 +63,7 @@ def test_same_content_in_different_files_has_distinct_citations(uploads):
         direct = handle.retriever.vectorstore.similarity_search_with_score("load")
         assert len(direct) == 2
         assert len(handle.retriever.source_documents) == 2
-    hits = parse_search_hits(payload)
+    hits = payload.hits
     assert {hit.evidence.snapshot.title for hit in hits} == {"first.py", "second.py"}
     assert {hit.evidence.element.metadata["file_id"] for hit in hits} == {first.file_id, second.file_id}
     assert len({hit.evidence.id for hit in hits}) == 2
@@ -79,8 +78,8 @@ def test_explicit_file_scope_applies_to_semantic_and_exact_search(uploads, symbo
     second = record("second.py", "def load():\n    return 'second'\n")
     with indexed([first, second]) as handle:
         payload = build_upload_search_tool()(query="load", retriever=handle.retriever,
-            requirement=RetrievalRequirement(symbols=symbols, match="definition", file_ids=[second.file_id]))
-    hits = parse_search_hits(payload)
+            requirement=RetrievalRequirement(symbols=symbols, match="definition" if symbols else "topic", file_ids=[second.file_id]))
+    hits = payload.hits
     assert hits
     assert {hit.evidence.snapshot.title for hit in hits} == {"second.py"}
 
@@ -145,6 +144,8 @@ def test_source_resolver_enforces_scope_when_called_directly(uploads):
         result = resolve_source_requirement(source_documents=handle.retriever.source_documents,
             requirement=RetrievalRequirement(symbols=["load"], match="definition", file_ids=[second.file_id]))
     assert {hit.evidence.snapshot.title for hit in result.hits} == {"second.py"}
+
+
 
 
 

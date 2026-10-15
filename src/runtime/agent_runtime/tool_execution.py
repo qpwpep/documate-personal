@@ -74,14 +74,21 @@ def invoke_tool(tool_name: str, implementation: Callable[..., Any], *,
     invocation_id = recorder.record(tool_name, "started", invocation_id=execution_id)
     try:
         result = implementation(**kwargs)
+        if tool_name in {"tavily_search", "upload_search"}:
+            status = result.diagnostics.status
+            reason_code = result.diagnostics.error_code
+        elif tool_name == "slack_notify":
+            status = result.status
+            reason_code = result.failure.code if result.failure is not None else None
+        else:
+            # The save tool returns its storage receipt as a dictionary.
+            status = result["status"]
+            reason_code = result.get("error_code")
     except BaseException as exc:
         recorder.record(tool_name, "failed", invocation_id=invocation_id,
                         reason_code=str(getattr(exc, "code", None) or type(exc).__name__))
         raise
-    payload = result if isinstance(result, dict) else result.model_dump() if hasattr(result, "model_dump") else {}
-    diagnostic = payload.get("diagnostics") if isinstance(payload.get("diagnostics"), dict) else payload
-    status = diagnostic.get("status")
     failed = status in {"error", "unavailable", "unknown", "not_sent"}
     recorder.record(tool_name, "failed" if failed else "succeeded", invocation_id=invocation_id,
-                    reason_code=diagnostic.get("error_code") or (str(status) if failed else None))
+                    reason_code=reason_code or (status if failed else None))
     return result

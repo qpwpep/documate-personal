@@ -105,10 +105,9 @@ def _collect_retrieval_batch(
                 preserved_diagnostics=preserved_diagnostics if preserve else [duplicate],
             )
             if duplicate is not None and not preserve:
-                result.diagnostic = result.diagnostic.model_copy(update={
-                    "warnings": list(dict.fromkeys([*result.diagnostic.warnings, "duplicate_request_reused"])),
+                result.result.diagnostics = result.result.diagnostics.model_copy(update={
+                    "warnings": list(dict.fromkeys([*result.result.diagnostics.warnings, "duplicate_request_reused"])),
                 })
-                result.payload["diagnostics"] = result.diagnostic.model_dump(mode="json")
             batch_plan.reused_results.append(result)
             continue
         batch_plan.indexed_tasks.append((index, task, tool_name, invoke_tool))
@@ -152,14 +151,14 @@ def _execute_retrieval_batch(batch_plan: RetrievalBatchPlan) -> RetrievalBatchRe
     result = RetrievalBatchResult()
     tool_call_counts: dict[str, int] = {}
     for item in task_results:
-        result.hit_updates.extend(item.hits)
-        result.retrieval_diagnostics.append(item.diagnostic)
+        result.hit_updates.extend(item.result.hits)
+        result.retrieval_diagnostics.append(item.result.diagnostics)
         result.local_errors.extend(str(error) for error in item.errors if str(error).strip())
         result.latency_trace.append(item.latency_trace)
 
         tool_call_counts[item.tool_name] = tool_call_counts.get(item.tool_name, 0) + 1
         result.tool_messages.append(
-            build_tool_message(item.tool_name, item.payload, tool_call_counts[item.tool_name])
+            build_tool_message(item.tool_name, item.result.model_dump(mode="json"), tool_call_counts[item.tool_name])
         )
     return result
 

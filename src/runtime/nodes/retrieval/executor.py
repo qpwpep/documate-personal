@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 import hashlib
 import json
@@ -7,9 +8,9 @@ import time
 from typing import Any
 from uuid import uuid4
 
-from src.core.contracts import RetrievalDiagnostic
-from src.core.contracts.routes import route_for_tool
-from src.core.evidence import SearchHit, parse_search_hits
+from src.core.contracts.debug import RetrievalDiagnostic
+from src.core.contracts.retrieval import RetrievalResult
+from src.core.evidence import SearchHit, dedupe_search_hits
 from src.core.latency import elapsed_ms, make_retrieval_route_latency_event
 from src.core.planner_schema import RetrievalTask
 from src.runtime.agent_runtime.tool_execution import record_nonexecution
@@ -19,9 +20,7 @@ from src.runtime.agent_runtime.tool_execution import record_nonexecution
 class RetrievalTaskResult:
     index: int
     tool_name: str
-    payload: Any
-    hits: list[SearchHit]
-    diagnostic: RetrievalDiagnostic
+    result: RetrievalResult
     errors: list[str]
     latency_trace: dict[str, Any]
 
@@ -33,200 +32,54 @@ def retrieval_fingerprint(task: RetrievalTask) -> str:
     return hashlib.sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
 
 
-def _non_negative_int(value: Any, default: int = 0) -> int:
-    try:
-        return max(0, int(value))
-    except (TypeError, ValueError):
-        return max(0, default)
-
-
-def normalize_retrieval_diagnostic(
-    raw_payload: Any,
-    *,
-    tool_name: str,
-    route: str,
-    query: str,
-    attempt: int,
-    evidence_count: int,
-) -> RetrievalDiagnostic:
-    diagnostics: dict[str, Any] = {}
-    if isinstance(raw_payload, dict) and isinstance(raw_payload.get("diagnostics"), dict):
-        diagnostics = dict(raw_payload.get("diagnostics") or {})
-
-    try:
-        diagnostic_attempt = int(diagnostics.get("attempt") or attempt)
-    except (TypeError, ValueError):
-        diagnostic_attempt = attempt
-
-    status = str(diagnostics.get("status") or ("success" if evidence_count > 0 else "no_result"))
-    message = str(diagnostics.get("message") or "")
-    warnings = diagnostics.get("warnings")
-    if not isinstance(warnings, list):
-        warnings = []
-
-    return RetrievalDiagnostic(
-        tool=str(diagnostics.get("tool") or tool_name),
-        route=str(diagnostics.get("route") or route or route_for_tool(tool_name)),
-        status=status,
-        message=message,
-        error_code=diagnostics.get("error_code"),
-        query=str(diagnostics.get("query") or query),
-        requirement_id=str(diagnostics.get("requirement_id") or ""),
-        answerability=diagnostics.get("answerability") if diagnostics.get("answerability") in {"covered", "partial", "missing", "unknown"} else "unknown",
-        missing_requirements=[str(item) for item in diagnostics.get("missing_requirements", [])],
-        candidate_count=_non_negative_int(diagnostics.get("candidate_count", evidence_count)),
-        completed_requests=diagnostics.get("completed_requests", []),
-        provider_requests=diagnostics.get("provider_requests", []),
-        request_fingerprint=str(diagnostics.get("request_fingerprint") or ""),
-        reused=bool(diagnostics.get("reused", False)),
-        attempt=diagnostic_attempt,
-        evidence_count=evidence_count,
-        metric=str(diagnostics.get("metric") or ""),
-        score_direction=str(diagnostics.get("score_direction") or ""),  # type: ignore[arg-type]
-        normalized_score=diagnostics.get("normalized_score"),
-        raw_score=diagnostics.get("raw_score"),
-        provider_ms=_non_negative_int(diagnostics.get("provider_ms", 0), default=0),
-        url_validation_ms=_non_negative_int(diagnostics.get("url_validation_ms", 0), default=0),
-        post_filter_ms=_non_negative_int(diagnostics.get("post_filter_ms", 0), default=0),
-        include_raw_content_requested=bool(diagnostics.get("include_raw_content_requested", False)),
-        result_count=int(diagnostics.get("result_count", evidence_count) or evidence_count),
-        provider_result_count=_non_negative_int(diagnostics.get("provider_result_count", 0), default=0),
-        filtered_invalid_url_count=_non_negative_int(diagnostics.get("filtered_invalid_url_count", 0), default=0),
-        filtered_path_prefix_count=_non_negative_int(diagnostics.get("filtered_path_prefix_count", 0), default=0),
-        filtered_cross_domain_count=_non_negative_int(diagnostics.get("filtered_cross_domain_count", 0), default=0),
-        filtered_http_error_count=_non_negative_int(diagnostics.get("filtered_http_error_count", 0), default=0),
-        filtered_redirect_policy_count=_non_negative_int(diagnostics.get("filtered_redirect_policy_count", 0), default=0),
-        filtered_url_request_failed_count=_non_negative_int(diagnostics.get("filtered_url_request_failed_count", 0), default=0),
-        filtered_identifier_mismatch_count=_non_negative_int(diagnostics.get("filtered_identifier_mismatch_count", 0), default=0),
-        validated_url_count=_non_negative_int(diagnostics.get("validated_url_count", 0), default=0),
-        final_evidence_count=evidence_count,
-        warnings=[str(item).strip() for item in warnings if str(item).strip()],
-    )
-
-
-def collect_retrieval_result(
-    *,
-    raw_payload: Any,
-    tool_name: str,
-    route: str,
-    query: str,
-    attempt: int,
-    local_errors: list[str],
-    task: RetrievalTask,
-) -> tuple[list[SearchHit], RetrievalDiagnostic]:
-    try:
-        parsed_items = parse_search_hits(raw_payload, errors=local_errors)
-    except (TypeError, ValueError) as exc:
-        local_errors.append(f"tool:{tool_name}: invalid search hits ({exc})")
-        parsed_items = []
-    parsed_items = [item.model_copy(update={"requirement_id": task.requirement_id}) for item in parsed_items]
-
-    diagnostic = normalize_retrieval_diagnostic(
-        raw_payload,
-        tool_name=tool_name,
-        route=route,
-        query=query,
-        attempt=attempt,
-        evidence_count=len(parsed_items),
-    )
-    diagnostic = diagnostic.model_copy(update={
-        "requirement_id": task.requirement_id,
-        "request_fingerprint": retrieval_fingerprint(task),
-        "k": task.k,
-        "warnings": sorted(set(diagnostic.warnings)),
-    })
-    if diagnostic.status in {"error", "unavailable"} and diagnostic.message:
-        local_errors.append(f"{tool_name}: {diagnostic.message}")
-    return parsed_items, diagnostic
-
-
 def execute_retrieval_task(
-    *,
-    index: int,
-    task: RetrievalTask,
-    tool_name: str,
-    route: str,
-    invoke_tool: Any,
-    attempt: int,
+    *, index: int, task: RetrievalTask, tool_name: str, route: str,
+    invoke_tool: Callable[[RetrievalTask, str], RetrievalResult], attempt: int,
 ) -> RetrievalTaskResult:
-    local_errors: list[str] = []
     started = time.perf_counter()
     invocation_id = uuid4().hex
-    try:
-        payload = invoke_tool(task, invocation_id)
-    except Exception as exc:
-        payload = {
-            "hits": [],
-            "diagnostics": {
-                "tool": tool_name,
-                "route": route,
-                "status": "error",
-                "message": f"tool invocation failed ({exc})",
-                "error_code": "RETRIEVAL_DOCS_FAILED" if route == "docs" else None,
-                "query": task.query,
-            },
-        }
-
-    latency_ms = elapsed_ms(started, time.perf_counter())
-    hits, diagnostic = collect_retrieval_result(
-        raw_payload=payload,
-        tool_name=tool_name,
-        route=route,
-        query=task.query,
-        attempt=attempt,
-        local_errors=local_errors,
-        task=task,
-    )
-    diagnostic = diagnostic.model_copy(update={"invocation_id": invocation_id})
-    payload = {"hits": [hit.model_dump(mode="json") for hit in hits], "diagnostics": diagnostic.model_dump(mode="json")}
+    result = invoke_tool(task, invocation_id)
+    if not isinstance(result, RetrievalResult):
+        raise TypeError(f"{tool_name} must return RetrievalResult")
+    hits = [hit.model_copy(update={"requirement_id": task.requirement_id})
+            for hit in dedupe_search_hits(result.hits)]
+    diagnostic = result.diagnostics.model_copy(update={
+        "tool": tool_name, "route": route, "attempt": attempt,
+        "requirement_id": task.requirement_id, "request_fingerprint": retrieval_fingerprint(task),
+        "k": task.k, "invocation_id": invocation_id,
+        "evidence_count": len(hits), "result_count": len(hits), "final_evidence_count": len(hits),
+        "warnings": sorted(set(result.diagnostics.warnings)),
+    })
+    errors = ([f"{tool_name}: {diagnostic.message}"]
+              if diagnostic.status in {"error", "unavailable"} and diagnostic.message else [])
     return RetrievalTaskResult(
-        index=index,
-        tool_name=tool_name,
-        payload=payload,
-        hits=hits,
-        diagnostic=diagnostic,
-        errors=local_errors,
-        latency_trace=make_retrieval_route_latency_event(
-            route=route,
-            tool=tool_name,
-            attempt=attempt,
-            latency_ms=latency_ms,
-            status=diagnostic.status,
+        index=index, tool_name=tool_name, result=RetrievalResult(hits=hits, diagnostics=diagnostic),
+        errors=errors, latency_trace=make_retrieval_route_latency_event(
+            route=route, tool=tool_name, attempt=attempt,
+            latency_ms=elapsed_ms(started, time.perf_counter()), status=diagnostic.status,
         ),
     )
 
 
 def build_reused_retrieval_task_result(
-    *,
-    index: int,
-    task: RetrievalTask,
-    tool_name: str,
-    route: str,
-    attempt: int,
-    preserved_hits: list[SearchHit],
-    preserved_diagnostics: list[RetrievalDiagnostic],
+    *, index: int, task: RetrievalTask, tool_name: str, route: str, attempt: int,
+    preserved_hits: list[SearchHit], preserved_diagnostics: list[RetrievalDiagnostic],
 ) -> RetrievalTaskResult:
-    route_hits = [hit for hit in preserved_hits
-                  if hit.requirement_id == task.requirement_id]
-    prior = next((item for item in reversed(preserved_diagnostics) if item.requirement_id == task.requirement_id), None)
-    if prior is None:
-        prior = RetrievalDiagnostic(tool=tool_name, route=route, query=task.query,
-                                    status="success" if route_hits else "no_result")
+    route_hits = [hit for hit in preserved_hits if hit.requirement_id == task.requirement_id]
+    prior = next(item for item in reversed(preserved_diagnostics)
+                 if item.requirement_id == task.requirement_id)
     record_nonexecution(tool_name, phase="reused", reason_code="retrieval_evidence_reused",
                         origin_invocation_id=prior.invocation_id)
     diagnostic = prior.model_copy(update={
         "tool": tool_name, "route": route, "attempt": attempt,
-        "requirement_id": task.requirement_id,
-        "evidence_count": len(route_hits), "result_count": len(route_hits),
-        "final_evidence_count": len(route_hits), "reused": True,
-        "provider_ms": 0, "url_validation_ms": 0, "post_filter_ms": 0,
+        "requirement_id": task.requirement_id, "evidence_count": len(route_hits),
+        "result_count": len(route_hits), "final_evidence_count": len(route_hits),
+        "reused": True, "provider_ms": 0, "post_filter_ms": 0,
         "k": task.k, "provider_requests": [],
     })
-    payload = {"hits": [hit.model_dump(mode="json") for hit in route_hits],
-               "diagnostics": diagnostic.model_dump(mode="json")}
     return RetrievalTaskResult(
-        index=index, tool_name=tool_name, payload=payload, hits=route_hits,
-        diagnostic=diagnostic, errors=[],
+        index=index, tool_name=tool_name,
+        result=RetrievalResult(hits=route_hits, diagnostics=diagnostic), errors=[],
         latency_trace=make_retrieval_route_latency_event(
             route=route, tool=tool_name, attempt=attempt, latency_ms=0, status=diagnostic.status,
         ),

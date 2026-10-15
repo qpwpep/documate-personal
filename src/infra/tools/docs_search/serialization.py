@@ -37,9 +37,8 @@ def collect_docs_search_hits(
     retrieval_warnings: list[str],
     query: str = "",
     filter_counters: DocsSearchFilterCounters | None = None,
-) -> tuple[list[SearchHit], list[float]]:
+) -> list[SearchHit]:
     hits: list[SearchHit] = []
-    raw_scores: list[float] = []
     normalized_domains = normalized_domain_set(allowed_domains)
     if filter_counters is not None:
         filter_counters.provider_result_count += len(results)
@@ -107,9 +106,7 @@ def collect_docs_search_hits(
             score=RetrievalScore(metric="provider_score", raw=raw_score, direction="higher", normalized=normalized_score),
             rank=len(hits) + 1,
         ))
-        if raw_score is not None:
-            raw_scores.append(raw_score)
-    return hits, raw_scores
+    return hits
 
 
 def _select_excerpt_range(text: str, *, query: str, max_chars: int = 3200) -> tuple[int, int]:

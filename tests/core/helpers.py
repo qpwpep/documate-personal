@@ -2,6 +2,8 @@ import hashlib
 
 from langchain_core.messages import AIMessage, HumanMessage
 
+from src.core.contracts.retrieval import RetrievalResult
+from src.core.contracts.debug import RetrievalDiagnostic
 from src.core.contracts import DebugState, PlannerState, ResponseState, RetrievalState, RetryState
 from src.core.contracts.boundary.graph import build_graph_state_input, normalize_graph_update
 from src.core.planner_schema import PlannerOutput, RetrievalRewriteOutput
@@ -269,8 +271,5 @@ class _CaptureSummaryLLM:
         )
 
 
-def _tool_payload(hits: list[dict] | None = None, **diagnostics):
-    return {
-        "hits": list(hits or []),
-        "diagnostics": diagnostics,
-    }
+def _tool_payload(hits: list[dict] | None = None, **diagnostics) -> RetrievalResult:
+    return RetrievalResult(hits=list(hits or []), diagnostics=RetrievalDiagnostic(**diagnostics))

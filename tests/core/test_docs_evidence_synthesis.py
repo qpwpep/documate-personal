@@ -30,30 +30,18 @@ def _retrieve(monkeypatch, body, *, need, symbol="numpy.mean", aspects=None):
         response._content = json.dumps({"results": [source]}).encode()
         return response
 
-    def head(url, **kwargs):
-        response = requests.Response()
-        response.status_code = 200
-        response.url = url
-        response._content_consumed = True
-        return response
-
     monkeypatch.setattr(requests, "post", post)
-    monkeypatch.setattr(requests, "head", head)
-    pass
     needs = [need] if isinstance(need, str) else need
     task = RetrievalTask(
         route="docs", query=f"{symbol} {' '.join(needs)}", k=1,
         requirement={"library": "numpy", "symbols": [symbol], "evidence_needs": needs, "aspects": aspects or []},
     )
-    try:
-        result = build_docs_search_tool(AppSettings(_env_file=None, tavily_api_key="test", openai_api_key="test"))(
-            task.query, requirement=task.requirement, k=task.k,
-        )
-    finally:
-        pass
-    assert result["diagnostics"]["answerability"] == "covered"
+    result = build_docs_search_tool(AppSettings(_env_file=None, tavily_api_key="test", openai_api_key="test"))(
+        task.query, requirement=task.requirement, k=task.k,
+    )
+    assert result.diagnostics.answerability == "covered"
     hits = [SearchHit.model_validate(hit).model_copy(update={"requirement_id": task.requirement_id})
-            for hit in result["hits"]]
+            for hit in result.hits]
     return task, hits
 
 

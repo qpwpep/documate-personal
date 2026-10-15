@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import Any, Iterable, Literal
+from typing import Iterable, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from src.core.documents import DocumentElement, DocumentSnapshot, SourceAnchor
 from src.core.table_selection import table_excerpt
@@ -161,31 +161,3 @@ def dedupe_search_hits(hits: Iterable[SearchHit]) -> list[SearchHit]:
             result.append(hit)
             seen.add(key)
     return result
-
-
-def parse_search_hits(value: Any, errors: list[str] | None = None) -> list[SearchHit]:
-    """Read tool hits, retaining valid items and reporting malformed entries."""
-    payload = value
-    if isinstance(payload, str):
-        if not payload.strip():
-            return []
-        try:
-            payload = json.loads(payload)
-        except json.JSONDecodeError as exc:
-            if errors is not None:
-                errors.append(f"search hits: invalid JSON ({exc})")
-            return []
-    if isinstance(payload, dict):
-        payload = payload.get("hits")
-    if not isinstance(payload, list):
-        if errors is not None:
-            errors.append("search hits: expected a list or an object containing hits")
-        return []
-    result = []
-    for index, item in enumerate(payload):
-        try:
-            result.append(item if isinstance(item, SearchHit) else SearchHit.model_validate(item))
-        except (ValidationError, TypeError, ValueError) as exc:
-            if errors is not None:
-                errors.append(f"search hits[{index}]: invalid item ({exc})")
-    return dedupe_search_hits(result)

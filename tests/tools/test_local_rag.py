@@ -10,7 +10,7 @@ from uuid import uuid4
 from langchain_core.embeddings import Embeddings
 
 from src.core.planner_schema import RetrievalRequirement
-from src.core.evidence import EvidenceRef, parse_search_hits
+from src.core.evidence import EvidenceRef
 from src.infra.chunking import chunk_notebook_path, chunk_python_text
 from src.core.uploads import UploadRecord
 from src.infra.tools.local_rag import build_upload_retriever, build_upload_search_tool
@@ -70,8 +70,6 @@ class LocalRagTest(unittest.TestCase):
 
 
 
-
-
     @patch("src.infra.chroma_store.OpenAIEmbeddings", return_value=_FakeEmbeddings())
     def test_long_line_search_excerpt_survives_synthesis_and_exact_citation(self, _embeddings) -> None:
         """A retrieved fragment of a long source line remains model-visible and exactly citable."""
@@ -82,7 +80,7 @@ class LocalRagTest(unittest.TestCase):
         from src.core.contracts.boundary.graph import build_graph_state_input
         from src.core.planner_schema import PlannerOutput, RetrievalTask
         from src.core.request_contracts import RequestContract
-        from src.runtime.nodes.retrieval.executor import collect_retrieval_result
+        from src.runtime.nodes.retrieval import make_retrieve_dispatch_node
         from src.runtime.nodes.synthesis.budgets import resolve_evidence_budgets
         from src.runtime.nodes.synthesis.context import build_synthesis_context, prepare_synthesis_inputs
         from src.runtime.nodes.synthesis.pipeline import run_synthesis_pipeline
@@ -107,25 +105,19 @@ class LocalRagTest(unittest.TestCase):
             path.write_text(text, encoding="utf-8")
             handle = _index_upload(path)
             try:
-                payload = build_upload_search_tool()(requirement=task.requirement, query=task.query, k=task.k, retriever=handle.retriever)
+                state = build_graph_state_input(user_input=task.query, retriever=handle.retriever,
+                    planner=PlannerState(output=PlannerOutput(use_retrieval=True, tasks=[task])),
+                    request_contract=RequestContract())
+                state.update(make_retrieve_dispatch_node(None, build_upload_search_tool(), False)(state))
             finally:
                 handle.cleanup()
-        errors = []
-        hit_payloads, diagnostic = collect_retrieval_result(
-            raw_payload=payload, tool_name="upload_search", route="upload", query=task.query,
-            attempt=1, local_errors=errors, task=task,
-        )
-        hits = parse_search_hits(hit_payloads)
-        self.assertEqual(errors, [])
+        hits = state["retrieval"].hit_log
+        diagnostic = state["debug"].retrieval_diagnostics[0]
         self.assertEqual(diagnostic.status, "success")
         self.assertTrue(hits)
         self.assertTrue(all(len(hit.evidence.excerpt) > 500 for hit in hits))
 
-        plan = PlannerOutput(use_retrieval=True, tasks=[task])
-        state = build_graph_state_input(
-            user_input=task.query, planner=PlannerState(output=plan), request_contract=RequestContract(),
-            retrieval={"hit_log": hit_payloads},
-        )
+        plan = state["planner"].output
         context = build_synthesis_context(state=state)
         profile, _ = resolve_evidence_budgets(plan=plan, limits=synthesis_excerpt_limits(normal_chars=1800))
         prepared = prepare_synthesis_inputs(
