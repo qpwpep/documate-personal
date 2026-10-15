@@ -124,5 +124,8 @@ def test_exact_upload_extraction_needs_no_model_generation():
     assert updates["debug"].synthesis_errors == []
     assert any(check.support_status == "exact_match" for check in updates["response"].result.checks)
     assert updates["response"].result.citations[0].evidence.excerpt == hit.evidence.excerpt
+    assert updates["response"].normal_evidence_missing_requirement_ids == []
+    assert updates["response"].result.retrieval_required
+    assert updates["response"].result.issues == []
 
 

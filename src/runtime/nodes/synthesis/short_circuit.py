@@ -3,11 +3,13 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from src.core.answer_schema import build_grounded_response, finalize_answer, text_document
+from src.core.answer_schema import finalize_answer, text_document
+from src.core.answer_schema.fallbacks import build_grounded_document
 from src.core.contracts import GraphState
 from src.core.latency import elapsed_ms, make_stage_latency_event
 from src.core.llm_errors import LLMCallError, make_problem
 from src.core.request_contracts import check_answer_contract
+from src.runtime.nodes.synthesis.evidence_selection import missing_evidence_requirement_ids
 from src.runtime.nodes.synthesis.models import SynthesisContext
 from src.runtime.nodes.synthesis.state import build_synthesis_updates
 
@@ -55,12 +57,13 @@ def maybe_short_circuit_synthesis(
         mode = "body_reference_unresolved"
         kind = "clarification"
     elif contract.body.kind == "copy_input":
-        result = finalize_answer(text_document(contract.body.source.text), [])
-        if not check_answer_contract(contract.answer, result.content).valid:
+        document = text_document(contract.body.source.text)
+        if not check_answer_contract(contract.answer, document).valid:
             result = finalize_answer(text_document("선택한 원문을 그대로 사용하면 요청의 필수·금지 조건과 충돌합니다. 원문을 조건에 맞게 수정할까요?"), [])
             kind = "clarification"
             mode = "copy_input_contract_conflict"
         else:
+            result = finalize_answer(document, [])
             mode = "copy_bound_input"
     elif contract.body.kind == "copy_answer":
         previous = context.source_response
@@ -83,26 +86,32 @@ def maybe_short_circuit_synthesis(
                 for d in debug.retrieval_diagnostics)
     ):
         packet = [context.hits[0].evidence]
-        result = build_grounded_response(packet, message="요청한 자료의 원문 발췌입니다.")
-        check = check_answer_contract(contract.answer, result.content, evidence=packet)
+        document = build_grounded_document(packet)
+        check = check_answer_contract(contract.answer, document, evidence=packet)
         if not check.valid or check.unchecked_semantic:
             return None
-        result = finalize_answer(result.content, packet, retrieval_required=True)
+        result = finalize_answer(document, packet, retrieval_required=True)
         mode = "deterministic_grounded_direct"
     else:
         return None
+    requirement_map = {
+        item.id: [hit.requirement_id for hit in context.hits if hit.evidence.id == item.id and hit.requirement_id]
+        for item in packet
+    }
+    missing_requirements = missing_evidence_requirement_ids(
+        context.planner_output, packet, requirement_map,
+    ) if context.retrieval_required else []
     return build_synthesis_updates(
         debug=debug, result=result, evidence_packet=packet, attempt=context.attempt,
         latency_trace=[make_stage_latency_event(
             stage="synthesis", attempt=context.attempt,
             latency_ms=elapsed_ms(stage_started, time.perf_counter()), status=mode,
         )],
-        retrieval_errors=context.parse_errors,
         kind=kind,
         request_id=contract.request_id if contract else None,
         contract_revision=contract.revision if contract else 0,
         body_kind=contract.body.kind if contract else "unresolved",
         evidence_source=context.evidence_source,
-        evidence_requirement_map={item.id: [hit.requirement_id for hit in context.hits if hit.evidence.id == item.id and hit.requirement_id]
-                                  for item in packet},
+        evidence_requirement_map=requirement_map,
+        normal_evidence_missing_requirement_ids=missing_requirements,
     )

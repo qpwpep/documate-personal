@@ -1,4 +1,7 @@
-from src.core.answer_schema import AnswerDocument, export_answer_text, finalize_answer, iter_content_units
+import pytest
+from pydantic import ValidationError
+
+from src.core.answer_schema import AnswerDocument, export_answer_text, finalize_answer, iter_content_units, text_document
 from src.core.documents import DocumentElement, SourceAnchor, build_snapshot
 from src.core.evidence import RetrievalScore, SearchHit, build_evidence
 from src.core.planner_schema import PlannerOutput
@@ -28,6 +31,10 @@ def _snapshot(document: AnswerDocument):
 
 
 
+
+
+
+
 def _evidence(text="retries = 5\n", source_type="upload"):
     snapshot = build_snapshot(
         source_uri="upload:///job.py" if source_type == "upload" else "https://docs.example.org/retries",
@@ -43,6 +50,10 @@ def _evidence(text="retries = 5\n", source_type="upload"):
         anchors=[SourceAnchor(kind="code", line_start=1, line_end=1)],
     )
     return build_evidence(snapshot=snapshot, element=element)
+
+
+
+
 
 
 def _hit(evidence):

@@ -5,7 +5,7 @@ from src.core.answer_schema.models import AnswerDocument, CodeBlock, ContentUnit
 from src.core.answer_schema.rendering import finalize_answer, text_document
 
 
-def build_grounded_response(evidence: list[EvidenceRef], *, message: str = "답변을 충분히 구성하지 못해 확인 가능한 원문 발췌를 제공합니다."):
+def build_grounded_document(evidence: list[EvidenceRef]) -> AnswerDocument:
     blocks = []
     for item in evidence:
         if not item.excerpt.strip():
@@ -15,6 +15,11 @@ def build_grounded_response(evidence: list[EvidenceRef], *, message: str = "답�
             blocks.append(CodeBlock(language=item.element.language or "", content=unit))
         else:
             blocks.append(ParagraphBlock(content=[unit]))
-    if not blocks:
+    return AnswerDocument(blocks=blocks)
+
+
+def build_grounded_response(evidence: list[EvidenceRef], *, message: str = "답변을 충분히 구성하지 못해 확인 가능한 원문 발췌를 제공합니다."):
+    document = build_grounded_document(evidence)
+    if not document.blocks:
         return finalize_answer(text_document("답변에 필요한 근거를 찾지 못했습니다. 자료나 질문 범위를 확인해 주세요."), [])
-    return finalize_answer(AnswerDocument(blocks=blocks), evidence, issues=[ResponseIssue(code="source_excerpt_fallback", message=message)])
+    return finalize_answer(document, evidence, issues=[ResponseIssue(code="source_excerpt_fallback", message=message)])

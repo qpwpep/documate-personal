@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from src.core.answer_schema import finalize_answer
+from src.core.answer_schema import AnswerResponse, finalize_answer, iter_content_units
+from src.core.answer_schema.models import validated_evidence_by_id
 from src.core.request_contracts import check_answer_contract
 from src.runtime.nodes.retry import contains_tool_error
 from src.runtime.nodes.validation.models import ValidationAssessment, ValidationSnapshot
@@ -51,12 +52,20 @@ def assess_validation(snapshot: ValidationSnapshot) -> ValidationAssessment:
         assessment.error_codes = ["VALIDATION_MISSING_CONTENT"]
         return assessment
 
-    # A retrieved hit that was not supplied to synthesis cannot resolve its references.
-    result = finalize_answer(
-        snapshot.response_result.content, snapshot.evidence_packet,
-        retrieval_required=snapshot.retrieval_required or snapshot.response_result.retrieval_required,
-        actions=snapshot.response_result.actions, issues=snapshot.response_result.issues,
-    )
+    # Validate the recorded revision before applying a genuinely changed packet.
+    # Re-finalizing unchanged content would conceal in-memory tampering.
+    result = AnswerResponse.model_validate(snapshot.response_result.model_dump(mode="json"))
+    packet_by_id = validated_evidence_by_id(snapshot.evidence_packet)
+    referenced = {ref for _, unit in iter_content_units(result.content) for ref in unit.refs}
+    packet_references = {ref: packet_by_id[ref] for ref in referenced if ref in packet_by_id}
+    recorded_references = {citation.evidence.id: citation.evidence for citation in result.citations}
+    retrieval_required = snapshot.retrieval_required or result.retrieval_required
+    if packet_references != recorded_references or retrieval_required != result.retrieval_required:
+        # A retrieved hit outside the actual synthesis packet cannot resolve refs.
+        result = finalize_answer(
+            result.content, snapshot.evidence_packet, retrieval_required=retrieval_required,
+            actions=result.actions, issues=result.issues,
+        )
     assessment.checked_result = result
     if snapshot.response_kind in {"clarification", "acknowledgement", "failure"}:
         return assessment

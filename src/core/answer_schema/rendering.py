@@ -5,7 +5,7 @@ from src.core.evidence import EvidenceRef, selected_source_anchors
 from src.core.answer_schema.models import (
     ActionReceipt, AnswerDocument, AnswerResponse, CodeBlock, ContentUnit,
     HeadingBlock, ListBlock, ParagraphBlock, ResponseIssue, TableBlock,
-    derive_checks_and_citations, document_hash, iter_content_units,
+    iter_content_units,
 )
 
 
@@ -17,15 +17,9 @@ def text_document(text: str, *, basis: str = "interaction", refs: list[str] | No
 
 def finalize_answer(document: AnswerDocument, evidence: list[EvidenceRef], *, retrieval_required: bool = False, actions: list[ActionReceipt] | None = None, issues: list[ResponseIssue] | None = None) -> AnswerResponse:
     """Resolve the actual packet references without claiming semantic verification."""
-    document = AnswerDocument.model_validate(document.model_dump(mode="json"))
-    by_id: dict[str, EvidenceRef] = {}
-    for item in evidence:
-        item = EvidenceRef.model_validate(item.model_dump(mode="json"))
-        if item.id in by_id and by_id[item.id] != item:
-            raise ValueError("evidence id resolves to different source versions or ranges")
-        by_id[item.id] = item
-    checks, citations = derive_checks_and_citations(document, list(by_id.values()), retrieval_required=retrieval_required)
-    return AnswerResponse(content=document, citations=citations, checks=checks, issues=issues or [], actions=actions or [], content_hash=document_hash(document), retrieval_required=retrieval_required)
+    return AnswerResponse.from_document(
+        document, evidence, retrieval_required=retrieval_required, actions=actions, issues=issues,
+    )
 
 
 def filter_document_units(document: AnswerDocument, keep_paths: set[str]) -> AnswerDocument:

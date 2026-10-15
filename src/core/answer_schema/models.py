@@ -3,9 +3,10 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Iterator
+from dataclasses import dataclass
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator, model_validator
 from src.core.evidence import EvidenceRef
 from src.core.save_contract import SaveArtifact, SaveOperation
 from src.core.slack_contract import SlackDelivery
@@ -209,6 +210,22 @@ class ActionReceipt(AnswerModel):
         return self
 
 
+def validated_evidence_by_id(evidence: list[EvidenceRef]) -> dict[str, EvidenceRef]:
+    """Validate every mutable packet entry before deduplicating its identity."""
+    by_id: dict[str, EvidenceRef] = {}
+    for item in evidence:
+        item = EvidenceRef.model_validate(item.model_dump(mode="json"))
+        if item.id in by_id and by_id[item.id] != item:
+            raise ValueError("evidence id resolves to different source versions or ranges")
+        by_id[item.id] = item
+    return by_id
+
+
+@dataclass(frozen=True, slots=True)
+class _NewAnswerEvidence:
+    evidence: list[EvidenceRef]
+
+
 class AnswerResponse(AnswerModel):
     content: AnswerDocument = Field(default_factory=AnswerDocument)
     citations: list[Citation] = Field(default_factory=list)
@@ -218,27 +235,46 @@ class AnswerResponse(AnswerModel):
     content_hash: str = ""
     retrieval_required: bool = False
 
+    @classmethod
+    def from_document(
+        cls, document: AnswerDocument, evidence: list[EvidenceRef], *,
+        retrieval_required: bool = False, actions: list[ActionReceipt] | None = None,
+        issues: list[ResponseIssue] | None = None,
+    ) -> "AnswerResponse":
+        """Validate a new document and record its source checks once.
+
+        Restoration uses the ordinary revision validator instead, so an existing
+        hash or recorded check cannot be replaced by this creation context.
+        """
+        by_id = validated_evidence_by_id(evidence)
+        return cls.model_validate({
+            "content": document.model_dump(mode="json"),
+            "actions": [item.model_dump(mode="json") for item in actions or []],
+            "issues": [item.model_dump(mode="json") for item in issues or []],
+            "retrieval_required": retrieval_required,
+        }, context=_NewAnswerEvidence(list(by_id.values())))
+
     @model_validator(mode="after")
-    def consistent_revision(self) -> "AnswerResponse":
+    def consistent_revision(self, info: ValidationInfo) -> "AnswerResponse":
+        creation = info.context if isinstance(info.context, _NewAnswerEvidence) else None
         expected = document_hash(self.content)
-        if self.content.blocks and not self.content_hash:
-            raise ValueError("nonempty responses must retain their checked content revision")
-        if self.content_hash and self.content_hash != expected:
-            raise ValueError("content changed after its checks were recorded")
+        if creation is None:
+            if self.content.blocks and not self.content_hash:
+                raise ValueError("nonempty responses must retain their checked content revision")
+            if self.content_hash and self.content_hash != expected:
+                raise ValueError("content changed after its checks were recorded")
         self.content_hash = expected
-        ids = [citation.evidence.id for citation in self.citations]
-        if len(ids) != len(set(ids)):
-            raise ValueError("duplicate citation evidence")
-        if [c.number for c in self.citations] != list(range(1, len(self.citations) + 1)):
-            raise ValueError("citation numbers must be consecutive in reading order")
         expected_checks, expected_citations = derive_checks_and_citations(
-            self.content, [citation.evidence for citation in self.citations],
+            self.content, creation.evidence if creation is not None else [citation.evidence for citation in self.citations],
             retrieval_required=self.retrieval_required,
         )
-        if self.checks != expected_checks:
-            raise ValueError("checks must match every displayed content unit and its source references in reading order")
-        if self.citations != expected_citations:
-            raise ValueError("citations must contain only referenced sources in first-reference order")
+        if creation is not None:
+            self.checks, self.citations = expected_checks, expected_citations
+        else:
+            if self.checks != expected_checks:
+                raise ValueError("checks must match every displayed content unit and its source references in reading order")
+            if self.citations != expected_citations:
+                raise ValueError("citations must contain only referenced sources in first-reference order")
         paths = {check.unit_id for check in self.checks}
         if any(issue.unit_id is not None and issue.unit_id not in paths for issue in self.issues):
             raise ValueError("response issue refers to an unknown content unit")
