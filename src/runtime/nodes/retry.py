@@ -170,7 +170,7 @@ def _can_refresh_search(task: RetrievalTask, diagnostics: list[RetrievalDiagnost
     # Only topic/aspect vector searches can establish coverage through new
     # candidates. Source symbol absence and unsupported source constraints
     # cannot be repaired by changing the query.
-    if requirement.match != "topic" or requirement.symbols or requirement.library or requirement.version or requirement.evidence_needs:
+    if requirement.match != "topic" or requirement.library or requirement.version or requirement.evidence_needs:
         return False
     return not any(
         item.requirement_id == task.requirement_id

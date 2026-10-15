@@ -199,7 +199,7 @@ def test_failed_comparison_fallback_excludes_files_outside_the_requested_scope(i
             "evidence_requirement_map": {item.id: [task.requirement_id] for item in packet},
             "request_id": contract.request_id, "contract_revision": contract.revision,
         },
-        retry={"max_retries": 0},
+        retry={"max_retries": 0, "max_content_repairs": 0},
     )
 
     response = make_post_synthesis_validation_node(False)(state)["response"]
@@ -211,6 +211,19 @@ def test_failed_comparison_fallback_excludes_files_outside_the_requested_scope(i
         ["alpha.py"] if include_requested_file else [])
 
 
+
+
+
+
+
+
+
+
+def _upload_topic_evidence(text, *, file_id="document"):
+    snapshot = build_snapshot(source_uri=f"upload:///documents/{file_id}", title="guide.pdf",
+        media_type="application/pdf", source_type="upload", content=text, parser="docling", parser_version="test")
+    return build_evidence(snapshot=snapshot, element=DocumentElement(
+        element_id="body", kind="paragraph", text=text, metadata={"file_id": file_id}))
 
 
 

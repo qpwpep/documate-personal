@@ -43,20 +43,20 @@ def _build_search_payload(
         score_direction=CHROMA_SCORE_DIRECTION,
     )
     payload.diagnostics.candidate_count = len(docs_with_scores)
-    if (requirement.match == "topic" and (requirement.file_ids or requirement.aspects)
-            and not (requirement.symbols or requirement.version or requirement.library or requirement.evidence_needs)):
-        # These are literal source anchors, not inferred semantic support. Check
-        # the returned excerpts independently for every explicitly requested file.
+    if (requirement.match == "topic" and (requirement.file_ids or requirement.symbols or requirement.aspects)
+            and not (requirement.version or requirement.library or requirement.evidence_needs)):
+        # Coverage means literal anchors in the returned ranges, not an exact
+        # implementation or inferred semantic support from the complete source.
         missing = []
         for file_id in requirement.file_ids or [None]:
-            scoped = [hit for hit in hits if file_id is None
+            scoped = [hit.evidence for hit in hits if file_id is None
                       or hit.evidence.element.metadata.get("file_id") == file_id]
             if file_id is not None and not scoped:
                 missing.append(f"file:{file_id}")
                 continue
-            for aspect in missing_literal_aspects(requirement.aspects, [hit.evidence for hit in scoped]):
-                prefix = f"file:{file_id}:" if file_id is not None else ""
-                missing.append(f"{prefix}aspect:{aspect}")
+            prefix = f"file:{file_id}:" if file_id is not None else ""
+            for kind, anchors in (("symbol", requirement.symbols), ("aspect", requirement.aspects)):
+                missing.extend(f"{prefix}{kind}:{anchor}" for anchor in missing_literal_aspects(anchors, scoped))
         payload.diagnostics.answerability = (("covered" if not missing else "partial") if hits else "missing")
         payload.diagnostics.missing_requirements = missing
     return payload
@@ -98,7 +98,7 @@ def build_upload_search_tool() -> Callable[..., RetrievalResult]:
             )
 
         file_ids = requirement.file_ids
-        if requirement.symbols:
+        if requirement.match in {"symbol", "definition"}:
             return _build_requirement_payload(query=query, requirement=requirement,
                                               source_documents=retriever.source_documents)
 

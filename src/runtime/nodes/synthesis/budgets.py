@@ -35,12 +35,18 @@ class RetrievedEvidenceBudget:
     max_items: int
 
 
+def literal_passage_anchors(task: RetrievalTask) -> list[str]:
+    """Topic upload symbols are literal source anchors; AST targets keep their own semantics."""
+    symbols = task.requirement.symbols if task.route == "upload" and task.requirement.match == "topic" else []
+    return list(dict.fromkeys([*symbols, *task.requirement.aspects]))
+
+
 def requirement_passage_targets(task: RetrievalTask) -> list[tuple[str | None, str | None, DocsEvidenceNeed | None]]:
-    """Use the same file/aspect/evidence-kind targets for capacity and selection."""
+    """Use the same file/literal-anchor/evidence-kind targets for capacity and selection."""
     needs = task.requirement.evidence_needs if task.route == "docs" else []
     return [(file_id, aspect, need)
             for file_id in task.requirement.file_ids or [None]
-            for aspect in task.requirement.aspects or [None]
+            for aspect in literal_passage_anchors(task) or [None]
             for need in needs or [None]]
 
 

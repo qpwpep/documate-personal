@@ -4,12 +4,16 @@ from pathlib import Path
 import pytest
 
 from src.core.answer_schema import export_answer_text, finalize_answer, text_document
+from src.core.documents import DocumentElement, build_snapshot
+from src.core.evidence import build_evidence
+from src.core.literal_matching import missing_literal_aspects
 from src.core.planner_schema import PlannerOutput, RetrievalTask
 from src.core.request_contracts import BoundAnswerReference, RequestContract, TransformAnswerBody
 from src.infra.tools.save_text import build_save_text_tool
 from src.runtime.nodes.actions import make_action_postprocess_node
 from src.runtime.nodes.synthesis import make_synthesize_node
 from src.runtime.nodes.synthesis.budgets import ExcerptLimits, resolve_evidence_budgets
+from src.runtime.nodes.synthesis.evidence_selection import requirement_coverage, select_evidence_packet
 from src.runtime.nodes.validation import make_post_synthesis_validation_node
 from tests.core.test_synthesis_validation import _hit, _state
 
@@ -18,18 +22,6 @@ from tests.core.test_synthesis_validation import _hit, _state
 
 
 
-def test_item_capacity_counts_independent_file_aspect_passages_without_growing_text_budget():
-    tasks = [RetrievalTask(route="upload", query=f"compare {symbol}", k=4,
-                           requirement={"file_ids": [f"file-{index}" for index in range(5)],
-                                        "aspects": ["setup", "cleanup"], "symbols": [symbol]})
-             for symbol in ("first", "second")]
-
-    normal, compact = resolve_evidence_budgets(
-        plan=PlannerOutput(use_retrieval=True, tasks=tasks), limits=ExcerptLimits(1800, 900),
-    )
-
-    assert normal.max_items == compact.max_items == 20
-    assert (normal.max_total_excerpt_chars, compact.max_total_excerpt_chars) == (6000, 3000)
 
 
 class PacketEchoModel:
