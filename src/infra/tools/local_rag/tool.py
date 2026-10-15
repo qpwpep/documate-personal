@@ -24,7 +24,7 @@ def _build_search_payload(
 ) -> dict[str, Any]:
     post_started = time.perf_counter()
     ranked_rows = rank_retrieval_rows(docs_with_scores, query=query)
-    hits, normalized_scores, raw_scores, retrieval_warnings = build_local_hit_bundle(ranked_rows)
+    hits, normalized_scores, raw_scores = build_local_hit_bundle(ranked_rows)
     post_filter_ms = elapsed_ms(post_started, time.perf_counter())
     payload = build_retrieval_payload(
         tool="upload_search",
@@ -39,7 +39,6 @@ def _build_search_payload(
         post_filter_ms=post_filter_ms,
         metric=CHROMA_DISTANCE_METRIC,
         score_direction=CHROMA_SCORE_DIRECTION,
-        warnings=retrieval_warnings,
     )
     payload["diagnostics"].update(answerability="unknown", missing_requirements=[], candidate_count=len(docs_with_scores))
     if (requirement.match == "topic" and (requirement.file_ids or requirement.aspects)

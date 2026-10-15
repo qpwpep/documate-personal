@@ -10,7 +10,7 @@ from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from src.core.documents import DocumentElement, ParsedDocument, SourceAnchor, build_snapshot
-from src.core.evidence import build_evidence
+from src.core.evidence import EvidenceRef, build_evidence
 from src.core.table_selection import table_excerpt, table_row_units
 from src.infra.notebook_loader import load_canonical_notebook, normalize_cell_source
 
@@ -30,7 +30,7 @@ class ChunkedDocument:
     def __post_init__(self) -> None:
         self._elements = {element.element_id: element for element in self.parsed.elements}
 
-    def hydrate(self, chunk: Document) -> Document:
+    def hydrate(self, chunk: Document) -> EvidenceRef:
         metadata = chunk.metadata
         if metadata.get("snapshot_id") != self.parsed.snapshot.snapshot_id:
             raise ValueError("Indexed chunk belongs to a different source revision")
@@ -56,8 +56,7 @@ class ChunkedDocument:
             )
         if evidence.excerpt != chunk.page_content:
             raise ValueError("Indexed text differs from its source range")
-        return Document(page_content=chunk.page_content,
-                        metadata={**metadata, "evidence_ref": evidence.model_dump_json()})
+        return evidence
 
     def release(self) -> None:
         """Release index-owned source data; previously returned evidence is independent."""

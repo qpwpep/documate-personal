@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import re
-from typing import Any
+
+from src.core.evidence import EvidenceRef
 
 
 IDENTIFIER_PATTERN = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]{1,}\b")
@@ -59,7 +60,7 @@ PARAMETER_HINT_PATTERN = re.compile(
 def extract_identifiers(text: str) -> list[str]:
     identifiers: list[str] = []
     seen_lowered: set[str] = set()
-    for token in IDENTIFIER_PATTERN.findall(str(text or "")):
+    for token in IDENTIFIER_PATTERN.findall(text):
         lowered = token.lower()
         if lowered in KEYWORD_STOPWORDS:
             continue
@@ -72,7 +73,7 @@ def extract_identifiers(text: str) -> list[str]:
 def extract_keywords(text: str) -> set[str]:
     return {
         token.strip().lower()
-        for token in KEYWORD_PATTERN.findall(str(text or "").lower())
+        for token in KEYWORD_PATTERN.findall(text.lower())
         if len(token.strip()) >= 2 and token.strip().lower() not in KEYWORD_STOPWORDS
     }
 
@@ -80,12 +81,11 @@ def extract_keywords(text: str) -> set[str]:
 def parameter_query_score(query: str, content: str) -> int:
     if PARAMETER_HINT_PATTERN.search(query) is None:
         return 0
-    compact = str(content or "")
-    return int("=" in compact) + int("(" in compact and ")" in compact)
+    return int("=" in content) + int("(" in content and ")" in content)
 
 
 def lexical_query_score(query: str, content: str) -> int:
-    lowered_content = str(content or "").lower()
+    lowered_content = content.lower()
     identifier_hits = sum(
         1 for token in extract_identifiers(query) if token.lower() in lowered_content
     )
@@ -94,15 +94,14 @@ def lexical_query_score(query: str, content: str) -> int:
 
 
 def rank_retrieval_rows(
-    docs_with_scores: list[tuple[Any, float | None]],
+    docs_with_scores: list[tuple[EvidenceRef, float | None]],
     *,
     query: str,
-) -> list[tuple[Any, float | None]]:
-    def _sort_key(item: tuple[Any, float | None]) -> tuple[int, float]:
-        doc, score = item
-        content = getattr(doc, "page_content", "")
-        lexical = lexical_query_score(query, str(content or ""))
-        numeric_score = float(score) if score is not None else float("inf")
+) -> list[tuple[EvidenceRef, float | None]]:
+    def _sort_key(item: tuple[EvidenceRef, float | None]) -> tuple[int, float]:
+        evidence, score = item
+        lexical = lexical_query_score(query, evidence.excerpt)
+        numeric_score = score if score is not None else float("inf")
         return (-lexical, numeric_score)
 
     return sorted(docs_with_scores, key=_sort_key)

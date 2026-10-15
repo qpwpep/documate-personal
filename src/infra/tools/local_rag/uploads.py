@@ -6,6 +6,7 @@ import logging
 import time
 from importlib.metadata import version
 from collections import OrderedDict
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from threading import Lock
@@ -18,6 +19,7 @@ from nbformat import from_dict
 from openai import APITimeoutError
 
 from src.core.documents import ParsedDocument
+from src.core.evidence import EvidenceRef
 from src.core.uploads import UploadFileInfo, UploadRecord
 from src.core.upload_formats import is_document_upload
 from src.infra.chroma_store import build_openai_embeddings, create_chroma_vectorstore, add_preembedded_documents
@@ -115,7 +117,7 @@ class _SourceRegistry:
         self.documents = documents
         self.by_snapshot = {document.parsed.snapshot.snapshot_id: document for document in documents}
 
-    def hydrate(self, chunk: Document) -> Document:
+    def hydrate(self, chunk: Document) -> EvidenceRef:
         document = self.by_snapshot.get(str(chunk.metadata.get("snapshot_id") or ""))
         if document is None:
             raise ValueError("Indexed chunk belongs to an unknown source revision")
@@ -130,35 +132,20 @@ class _SourceAwareVectorStore:
         self._registry = registry
 
     def similarity_search_with_score(
-        self, query: str, k: int = 4, filter: dict[str, Any] | None = None,
-        where_document: dict[str, Any] | None = None, **kwargs: Any,
-    ) -> list[tuple[Document, float]]:
-        # upload_search accepts the validated requirement scope before dispatch.
-        file_ids = kwargs.pop("file_ids", ())
+        self, query: str, k: int = 4, *, file_ids: Sequence[str] = (),
+    ) -> list[tuple[EvidenceRef, float]]:
         if not file_ids:
-            rows = self._vectorstore.similarity_search_with_score(
-                query, k=k, filter=filter, where_document=where_document, **kwargs)
+            rows = self._vectorstore.similarity_search_with_score(query, k=k)
         else:
             # Reserve at least one candidate per explicitly requested source.
             budget = max(k, len(file_ids))
-            embeddings = self._vectorstore.embeddings
-            if embeddings is None:
-                raise ValueError("Scoped upload retrieval requires a query embedding function")
-            query_embedding = embeddings.embed_query(query)
-            groups = []
-            for file_id in file_ids:
-                scope = {"file_id": file_id}
-                if filter:
-                    scope = {"$and": [scope, filter]}
-                # This vector API returns raw distances, just like the text API.
-                groups.append(self._vectorstore.similarity_search_by_vector_with_relevance_scores(
-                    query_embedding, k=budget, filter=scope, where_document=where_document, **kwargs))
+            query_embedding = self._vectorstore.embeddings.embed_query(query)
+            groups = [self._vectorstore.similarity_search_by_vector_with_relevance_scores(
+                query_embedding, k=budget, filter={"file_id": file_id}) for file_id in file_ids]
             rows = [group[0] for group in groups if group]
             remaining = sorted((item for group in groups for item in group[1:]), key=lambda item: item[1])
             rows.extend(remaining[:max(0, budget - len(rows))])
         return [(self._registry.hydrate(chunk), score) for chunk, score in rows]
-
-
 
 class _SourceAwareRetriever:
     def __init__(self, vectorstore: Chroma, documents: tuple[ChunkedDocument, ...],

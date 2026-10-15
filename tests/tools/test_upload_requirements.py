@@ -78,7 +78,7 @@ def test_complete_method_definition_is_found_outside_vector_top_k_with_exact_off
     source = "unrelated = 1\r\n" + "# other setup\r\n" * 90 + "class ReportBuilder:\r\n" + method + "\r\ndef other():\r\n    return None\r\n"
     with uploaded(source) as retriever:
         candidates = retriever.vectorstore.similarity_search_with_score("메서드를 발췌", k=1)
-        assert all("summarize_rows" not in doc.page_content for doc, _score in candidates)
+        assert all("summarize_rows" not in doc.excerpt for doc, _score in candidates)
         payload = build_upload_search_tool()(query="메서드를 발췌", k=1, retriever=retriever,
                                             requirement=_requirement(["ReportBuilder.summarize_rows"]))
     hits = parse_search_hits(payload)

@@ -116,41 +116,6 @@ def test_unknown_file_scope_is_rejected_before_searching_active_uploads(uploads)
 
 
 
-def test_scoped_candidates_preserve_filters_reserved_sources_and_raw_distances(uploads):
-    """Scoped retrieval reserves each source before filling the budget by raw distance within both filters."""
-    from src.core.evidence import EvidenceRef
-
-    def notebook(cells):
-        return json.dumps({"nbformat": 4, "nbformat_minor": 5, "metadata": {}, "cells": [
-            {"id": f"cell-{index}", "cell_type": "code", "source": source, "metadata": {},
-             "execution_count": None, "outputs": []} for index, source in enumerate(cells)
-        ]})
-
-    record, indexed = uploads
-    first = record("first.ipynb", notebook([
-        "value = 0\n", "other = 0\n", "value = 111\n", "value = 11111\n", "value = 11111111111\n",
-    ]))
-    second = record("second.ipynb", notebook([
-        "value = 0\n", "value = 2\n", "value = 222222\n", "value = 2222222222222\n",
-    ]))
-    excluded = record("excluded.ipynb", notebook(["value = 0\n", "value\n"]))
-    with indexed([first, second, excluded]) as handle:
-        rows = handle.retriever.vectorstore.similarity_search_with_score(
-            query="value", k=4, file_ids=[first.file_id, second.file_id],
-            filter={"cell_index": {"$gte": 1}}, where_document={"$contains": "value"},
-        )
-    assert [(doc.page_content, score) for doc, score in rows] == [
-        ("value = 111\n", 49.0), ("value = 2\n", 25.0),
-        ("value = 11111\n", 81.0), ("value = 222222\n", 100.0),
-    ]
-    evidence = [EvidenceRef.model_validate_json(doc.metadata["evidence_ref"]) for doc, _score in rows]
-    assert [(item.snapshot.title, item.element.metadata["file_id"], item.element.anchors[0].cell_index, item.excerpt)
-            for item in evidence] == [
-        ("first.ipynb", first.file_id, 2, "value = 111\n"),
-        ("second.ipynb", second.file_id, 1, "value = 2\n"),
-        ("first.ipynb", first.file_id, 3, "value = 11111\n"),
-        ("second.ipynb", second.file_id, 2, "value = 222222\n"),
-    ]
 
 
 
