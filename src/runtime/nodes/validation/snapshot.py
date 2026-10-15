@@ -3,6 +3,7 @@ from __future__ import annotations
 from src.core.answer_schema import AnswerResponse, iter_content_units
 from src.core.contracts import GraphState, RetrievalDiagnostic
 from src.core.contracts.provenance import AnswerSource, BodyKind
+from src.core.contracts.debug import RetryReason
 from src.core.contracts.boundary.debug import get_debug_state
 from src.core.contracts.boundary.graph import get_retry_state
 from src.core.contracts.boundary.planner import get_planner_state
@@ -15,21 +16,6 @@ from src.core.request_contracts import RequestContract
 from src.core.sequence_utils import slice_from_index
 from src.runtime.nodes.validation.models import ValidationSnapshot
 from src.runtime.nodes.synthesis.evidence_selection import missing_evidence_requirement_ids, tasks_for_hit
-
-
-def detect_missing_route_coverage(
-    *, required_routes: list[str], result: AnswerResponse,
-    evidence_packet: list[EvidenceRef], valid_unit_paths: set[str],
-) -> list[str]:
-    route_by_id = {item.id: item.route for item in evidence_packet}
-    covered_routes = {
-        route_by_id[ref]
-        for path, unit in iter_content_units(result.content)
-        if path in valid_unit_paths
-        for ref in unit.refs
-        if ref in route_by_id
-    }
-    return [route for route in required_routes if route not in covered_routes]
 
 
 def detect_missing_requirement_coverage(
@@ -69,6 +55,9 @@ def build_validation_snapshot(
     response_request_id: str | None = None,
     response_contract_revision: int = 0,
     normal_evidence_missing_requirement_ids: list[str] | None = None,
+    terminal_failed_requirement_ids: list[str] | None = None,
+    terminal_retrieval_reason: RetryReason | None = None,
+    upload_file_names: dict[str, str] | None = None,
     body_kind: BodyKind | None = None,
     evidence_source: AnswerSource | None = None,
 ) -> ValidationSnapshot:
@@ -93,6 +82,9 @@ def build_validation_snapshot(
         response_request_id=response_request_id,
         response_contract_revision=response_contract_revision,
         normal_evidence_missing_requirement_ids=normal_evidence_missing_requirement_ids or [],
+        terminal_failed_requirement_ids=terminal_failed_requirement_ids or [],
+        terminal_retrieval_reason=terminal_retrieval_reason,
+        upload_file_names=upload_file_names or {},
         body_kind=body_kind,
         evidence_source=evidence_source,
     )
@@ -126,6 +118,9 @@ def collect_validation_snapshot(state: GraphState) -> tuple[ValidationSnapshot, 
         response_request_id=response.request_id,
         response_contract_revision=response.contract_revision,
         normal_evidence_missing_requirement_ids=response.normal_evidence_missing_requirement_ids,
+        terminal_failed_requirement_ids=retry.terminal_failed_requirement_ids,
+        terminal_retrieval_reason=retry.terminal_retrieval_reason,
+        upload_file_names={item.file_id: item.name for item in runtime.upload_files},
         body_kind=response.body_kind,
         evidence_source=response.evidence_source,
     )

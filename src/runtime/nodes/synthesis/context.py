@@ -59,7 +59,7 @@ def build_synthesis_context(*, state: GraphState) -> SynthesisContext:
         user_input=runtime.user_input,
         messages=list(state.get("messages", [])),
         guided_followup=str(planner.guided_followup or "").strip(),
-        planner_blocked=planner.diagnostics.reason in {"upload_retriever_missing", "upload_file_scope_invalid"},
+        planner_blocked=planner.diagnostics.reason == "upload_retriever_missing",
         planner_output=plan,
         retrieval_required=bool(plan.use_retrieval and plan.tasks),
         hits=select_evidence_hits(user_input=runtime.user_input, hits=hits, planner_output=plan),

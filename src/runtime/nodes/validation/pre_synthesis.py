@@ -10,10 +10,10 @@ from src.core.contracts.boundary.response import get_response_state
 from src.core.contracts.boundary.runtime import get_runtime_state
 from src.core.llm_errors import LLMCallError, make_problem
 from src.infra.logging_utils import log_event
-from src.runtime.nodes.retry import build_followup_from_routes, build_retry_update
+from src.runtime.nodes.retry import build_followup_from_routes, build_retry_update, retrieval_subject
 from src.runtime.nodes.validation.evidence_validator import assess_retrieval_quality, collect_validation_snapshot
 from src.runtime.nodes.validation.policy import build_followup_updates
-from src.runtime.nodes.synthesis.evidence_selection import upload_file_id
+from src.runtime.nodes.synthesis.evidence_selection import tasks_for_hit, upload_file_id
 
 
 logger = logging.getLogger(__name__)
@@ -35,7 +35,7 @@ def make_pre_synthesis_validation_node(verbose: bool):
                  "body_kind": contract.body.kind,
                  "evidence_source": None}
         if (contract.can_prepare_body()
-                and planner.diagnostics.reason not in {"upload_retriever_missing", "upload_file_scope_invalid"}):
+                and planner.diagnostics.reason != "upload_retriever_missing"):
             guided_followup = ""
 
         if guided_followup:
@@ -50,7 +50,6 @@ def make_pre_synthesis_validation_node(verbose: bool):
                 retry_context=retry_context,
                 retry_reason="blocked_missing_upload",
                 planner_output=planner.output,
-                retrieval_errors=[],
                 score_avg=None,
                 failed_routes={"upload"},
                 request_contract=contract,
@@ -82,7 +81,6 @@ def make_pre_synthesis_validation_node(verbose: bool):
             retry_context=retry_context,
             retry_reason=assessment.retry_reason,
             planner_output=snapshot.planner_output,
-            retrieval_errors=snapshot.current_attempt_retrieval_errors,
             score_avg=assessment.score_avg,
             failed_routes=assessment.failed_routes,
             failed_requirement_ids=assessment.failed_requirement_ids,
@@ -113,6 +111,20 @@ def make_pre_synthesis_validation_node(verbose: bool):
             "retry": next_retry_context,
         }
         if assessment.retry_reason is not None and not needs_retry:
+            usable_hits = [hit for hit in snapshot.parsed_hits if tasks_for_hit(hit, snapshot.planner_output)]
+            if usable_hits:
+                # Preserve the failed obligations while allowing a grounded partial
+                # body. Post-validation keeps it ineligible for delivery.
+                updates["retry"] = next_retry_context.model_copy(update={
+                    "terminal_failed_requirement_ids": sorted(assessment.failed_requirement_ids),
+                    "terminal_retrieval_reason": assessment.retry_reason,
+                })
+                if local_errors:
+                    updates["debug"] = debug.model_copy(update={
+                        "validation_errors": [*debug.validation_errors, *local_errors],
+                        "validation_events": [*debug.validation_events, *local_errors],
+                    })
+                return updates
             followup_answer = build_followup_from_routes(
                 snapshot.planner_output,
                 assessment.retry_reason,
@@ -123,7 +135,7 @@ def make_pre_synthesis_validation_node(verbose: bool):
                     if task.requirement_id not in assessment.failed_requirement_ids:
                         continue
                     diagnostics = [d for d in snapshot.current_attempt_retrieval_diagnostics if d.requirement_id == task.requirement_id]
-                    subjects = ", ".join(task.requirement.symbols) or task.requirement.library or task.query
+                    subjects = retrieval_subject(task)
                     if task.requirement.file_ids:
                         observed_files = {upload_file_id(hit.evidence) for hit in snapshot.parsed_hits
                                           if hit.requirement_id == task.requirement_id}

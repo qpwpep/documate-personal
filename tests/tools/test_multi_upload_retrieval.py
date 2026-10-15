@@ -84,34 +84,6 @@ def test_explicit_file_scope_applies_to_semantic_and_exact_search(uploads, symbo
     assert {hit.evidence.snapshot.title for hit in hits} == {"second.py"}
 
 
-def test_unknown_file_scope_is_rejected_before_searching_active_uploads(uploads):
-    """The planner rejects a foreign ID against the committed catalog before retrieval."""
-    from src.core.planner_schema import PlannerOutput, RetrievalTask
-    from src.runtime.nodes.planner import make_planner_node
-    from src.runtime.nodes.retrieval import make_retrieve_dispatch_node
-    from tests.core.helpers import _CapturePlannerLLM
-    from src.core.contracts.boundary.graph import build_graph_state_input
-
-    record, indexed = uploads
-    first = record("first.py", "value = 1\n")
-    with indexed([first]) as handle:
-        task = RetrievalTask(route="upload", query="value", k=3,
-                             requirement={"file_ids": ["foreign-file"]})
-        state = build_graph_state_input(
-            user_input="Find value in the requested attachment.",
-            retriever=handle.retriever,
-            upload_files=handle.retriever.upload_files, retrieval={}, debug={},
-        )
-        state.update(make_planner_node(
-            _CapturePlannerLLM(PlannerOutput(use_retrieval=True, tasks=[task])), False,
-        )(state))
-        assert state["planner"].output.tasks == []
-        assert state["planner"].diagnostics.reason == "upload_file_scope_invalid"
-        assert state["planner"].guided_followup
-
-        state.update(make_retrieve_dispatch_node(None, build_upload_search_tool(), False)(state))
-        assert state["retrieval"].hit_log == []
-        assert state["debug"].retrieval_diagnostics == []
 
 
 

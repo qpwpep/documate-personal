@@ -11,11 +11,11 @@ from src.core.contracts.provenance import AnswerSource, BodyKind
 from src.core.evidence import EvidenceRef
 from src.core.llm_errors import ExecutionProblem, make_problem
 from src.core.request_contracts import check_answer_contract
-from src.runtime.nodes.retry import build_followup_from_routes
+from src.runtime.nodes.retry import build_followup_from_routes, retrieval_subject
 from src.runtime.nodes.synthesis.fallbacks import build_synthesis_fallback
 from src.runtime.nodes.synthesis.evidence_selection import select_evidence_hits
 from src.runtime.nodes.validation.models import ValidationAssessment, ValidationSnapshot
-from src.runtime.nodes.validation.snapshot import detect_missing_route_coverage, detect_missing_requirement_coverage, detect_packet_coverage_gaps
+from src.runtime.nodes.validation.snapshot import detect_missing_requirement_coverage, detect_packet_coverage_gaps
 
 
 def build_response_updates(
@@ -53,6 +53,44 @@ def build_followup_updates(
     )
 
 
+def _retrieval_gap_message(snapshot: ValidationSnapshot) -> str:
+    notices = []
+    failed = set(snapshot.terminal_failed_requirement_ids)
+    for task in snapshot.planner_output.tasks:
+        if task.requirement_id not in failed:
+            continue
+        requirement = task.requirement
+        source = "공식 문서" if task.route == "docs" else "업로드 파일"
+        target = retrieval_subject(task)
+        details = []
+        if requirement.version:
+            details.append(f"버전 {requirement.version}")
+        if requirement.file_ids:
+            names = [snapshot.upload_file_names.get(file_id, file_id) for file_id in requirement.file_ids]
+            details.append("파일 " + ", ".join(names))
+        if requirement.aspects:
+            details.append("확인 항목 " + ", ".join(requirement.aspects))
+        if details:
+            target += " (" + "; ".join(details) + ")"
+        notices.append(f"{source}에서 {target}에 필요한 근거를 충분히 확인하지 못했습니다.")
+    return " ".join(notices)
+
+
+def add_retrieval_gap_issues(snapshot: ValidationSnapshot, result: AnswerResponse) -> AnswerResponse:
+    """Keep the checked body and its original failure while exposing source gaps."""
+    if not snapshot.terminal_failed_requirement_ids:
+        return result
+    issues = [issue for issue in result.issues if issue.code != "retrieved_evidence_incomplete"]
+    issues.append(ResponseIssue(code="retrieved_evidence_incomplete", message=_retrieval_gap_message(snapshot)))
+    if not any(issue.code == "answer_incomplete" for issue in issues):
+        issues.append(ResponseIssue(
+            code="answer_incomplete",
+            message="확인한 근거로 답변을 작성했으며, 요청 전체는 완료하지 못했습니다.",
+        ))
+    # Content, source ranges, checks and the content hash stay exactly as checked.
+    return result.model_copy(update={"issues": issues})
+
+
 def apply_validation_outcome(
     *, snapshot: ValidationSnapshot, assessment: ValidationAssessment,
     attempt: int, needs_retry: bool,
@@ -68,12 +106,25 @@ def apply_validation_outcome(
         "body_kind": snapshot.body_kind,
         "evidence_source": snapshot.evidence_source,
     }
+    def checked_response_updates(checked: AnswerResponse) -> GraphState:
+        kind = snapshot.response_kind if snapshot.response_kind in {"clarification", "acknowledgement", "failure"} else "answer"
+        problem = None
+        if snapshot.terminal_failed_requirement_ids:
+            checked = add_retrieval_gap_issues(snapshot, checked)
+            kind = "failure"
+            problem = make_problem(
+                "provider_unavailable" if snapshot.terminal_retrieval_reason == "tool_error" else "evidence_insufficient",
+                "retrieval",
+            )
+        return build_response_updates(
+            checked, attempt=attempt, evidence_packet=packet,
+            evidence_requirement_map=snapshot.evidence_requirement_map,
+            normal_evidence_missing_requirement_ids=snapshot.normal_evidence_missing_requirement_ids,
+            kind=kind, problem=problem, **stamp,
+        )
+
     if assessment.retry_reason is None and result is not None:
-        return build_response_updates(result, attempt=attempt, evidence_packet=packet,
-                                      evidence_requirement_map=snapshot.evidence_requirement_map,
-                                      normal_evidence_missing_requirement_ids=snapshot.normal_evidence_missing_requirement_ids,
-                                      kind=snapshot.response_kind if snapshot.response_kind in {"clarification", "acknowledgement", "failure"} else "answer",
-                                      **stamp)
+        return checked_response_updates(result)
 
     if (contract is None or not contract.can_prepare_body()
             or snapshot.response_request_id != contract.request_id
@@ -99,17 +150,13 @@ def apply_validation_outcome(
             )],
         )
         valid_paths = {check.unit_id for check in result.checks if check.reference_status != "missing"}
-        missing_routes = detect_missing_route_coverage(
-            required_routes=snapshot.required_routes, result=result,
-            evidence_packet=packet, valid_unit_paths=valid_paths,
-        ) if snapshot.retrieval_required else []
         contract_check = check_answer_contract(snapshot.request_contract.answer, document, evidence=packet)
         missing_requirements = detect_missing_requirement_coverage(snapshot=snapshot, result=result, valid_unit_paths=valid_paths)
-        if document.blocks and not missing_routes and contract_check.valid and not missing_requirements:
-            return build_response_updates(result, attempt=attempt, evidence_packet=packet,
-                                          evidence_requirement_map=snapshot.evidence_requirement_map,
-                                          normal_evidence_missing_requirement_ids=snapshot.normal_evidence_missing_requirement_ids,
-                                          **stamp)
+        recoverable_missing = set(missing_requirements) - set(snapshot.terminal_failed_requirement_ids)
+        # Terminal source gaps permit a partial body only while available evidence remains cited.
+        has_required_citations = not snapshot.terminal_failed_requirement_ids or bool(result.citations)
+        if document.blocks and contract_check.valid and not recoverable_missing and has_required_citations:
+            return checked_response_updates(result)
 
     fallback_hits = select_evidence_hits(
         user_input=snapshot.user_input, hits=snapshot.parsed_hits,
@@ -143,6 +190,7 @@ def apply_validation_outcome(
             actions=snapshot.response_result.actions if snapshot.response_result else [],
             issues=issues,
         )
+        result = add_retrieval_gap_issues(snapshot, result)
         requirement_map: dict[str, list[str]] = {}
         for hit in fallback_hits:
             if hit.requirement_id:

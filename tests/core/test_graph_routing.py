@@ -186,7 +186,7 @@ def _assert_repair_flow(routes, defect, max_retries, persistent, *, instrumented
 
     initial_state = build_graph_state_input(
         user_input=request, current_turn_id="request", messages=[], retriever=object() if "upload" in routes else None,
-        retry={"max_retries": max_retries},
+        retry={"max_retries": 1, "max_content_repairs": min(max_retries, 1)},
     )
     state, visited = _run_graph(graph, initial_state)
 

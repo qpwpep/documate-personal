@@ -108,7 +108,7 @@ class PlannerNodeTest(unittest.TestCase):
 
         self.assertEqual(
             {"routes": [task.route for task in result.output.tasks], "needs_file": bool(result.guided_followup)},
-            {"routes": routes if has_retriever else [], "needs_file": not has_retriever},
+            {"routes": routes if has_retriever or compare_docs else [], "needs_file": not has_retriever and not compare_docs},
         )
 
 

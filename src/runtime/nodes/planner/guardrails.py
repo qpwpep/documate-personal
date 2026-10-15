@@ -18,7 +18,7 @@ def apply_retrieval_availability(
         "intent_required": bool(required_routes),
         "required_routes": required_routes,
     })
-    if "upload" in required_routes and not has_retriever:
+    if required_routes == ["upload"] and not has_retriever:
         return replace(
             decision,
             output=PlannerOutput.fallback(request_contract=decision.output.request_contract),

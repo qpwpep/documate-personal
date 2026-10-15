@@ -23,16 +23,29 @@ from .helpers import _CapturePlannerLLM
 
 
 def test_planner_cannot_widen_an_unavailable_file_scope_to_active_uploads():
-    """An unknown requested upload ID yields a clarification rather than searching other files."""
+    """An unavailable file stays scoped through planning and execution without borrowing active files."""
+    from types import SimpleNamespace
+    from src.infra.tools.local_rag.tool import build_upload_search_tool
+    from src.runtime.nodes.retrieval import make_retrieve_dispatch_node
+
+    class ScopedVectorStore:
+        def similarity_search_with_score(self, query, *, k, file_ids):
+            assert file_ids == ["missing"]
+            return []
+
     task = RetrievalTask(route="upload", query="explain setup", k=4, requirement={"file_ids": ["missing"]})
-    state = build_graph_state_input(user_input=task.query, retriever=object())
+    retriever = SimpleNamespace(vectorstore=ScopedVectorStore())
+    state = build_graph_state_input(user_input=task.query, retriever=retriever)
 
-    result = make_planner_node(_CapturePlannerLLM(PlannerOutput(use_retrieval=True, tasks=[task])), verbose=False)(state)
+    state.update(make_planner_node(_CapturePlannerLLM(PlannerOutput(use_retrieval=True, tasks=[task])), False)(state))
+    state.update(make_retrieve_dispatch_node(None, build_upload_search_tool(), False)(state))
 
-    assert not result["planner"].output.use_retrieval
-    assert result["planner"].output.tasks == []
-    assert result["planner"].diagnostics.reason == "upload_file_scope_invalid"
-    assert result["planner"].guided_followup
+    assert state["planner"].output.tasks == [task]
+    assert state["planner"].guided_followup is None
+    assert state["retrieval"].hit_log == []
+    diagnostic = state["debug"].retrieval_diagnostics[0]
+    assert diagnostic.status == "no_result"
+    assert diagnostic.missing_requirements == ["file:missing"]
 
 
 def test_retrieval_retry_retains_original_file_scope_when_model_changes_it():

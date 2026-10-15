@@ -3,10 +3,9 @@ from __future__ import annotations
 from src.core.answer_schema import AnswerResponse, finalize_answer, iter_content_units
 from src.core.answer_schema.models import validated_evidence_by_id
 from src.core.request_contracts import check_answer_contract
-from src.runtime.nodes.retry import contains_tool_error
 from src.runtime.nodes.validation.models import ValidationAssessment, ValidationSnapshot
 from src.runtime.nodes.validation.route_policy import route_error_statuses
-from src.runtime.nodes.validation.snapshot import detect_missing_route_coverage, detect_missing_requirement_coverage
+from src.runtime.nodes.validation.snapshot import detect_missing_requirement_coverage
 
 
 def assess_retrieval_quality(snapshot: ValidationSnapshot) -> ValidationAssessment:
@@ -23,24 +22,24 @@ def assess_retrieval_quality(snapshot: ValidationSnapshot) -> ValidationAssessme
                        if d.requirement_id == task.requirement_id]
         hits = [h for h in snapshot.parsed_hits if h.requirement_id == task.requirement_id]
         statuses = route_error_statuses(diagnostics)
-        if "error" in statuses or ("unavailable" in statuses and route != "upload"):
+        if route == "upload" and "unavailable" in statuses:
+            assessment.failed_requirement_ids.add(task.requirement_id)
+        elif "error" in statuses or "unavailable" in statuses:
             assessment.tool_error_routes.add(route)
             assessment.failed_requirement_ids.add(task.requirement_id)
         elif (not hits or any(d.answerability in {"missing", "partial"} for d in diagnostics)
               or (task.requirement.specified and not any(d.answerability == "covered" for d in diagnostics))):
             assessment.route_failures[route] = "no_evidence"
             assessment.failed_requirement_ids.add(task.requirement_id)
-    if contains_tool_error(snapshot.current_attempt_retrieval_errors) and not assessment.tool_error_routes:
-        assessment.tool_error_routes = set(snapshot.required_routes)
-    if assessment.blocked_missing_upload:
-        assessment.retry_reason = "blocked_missing_upload"
-        assessment.failed_routes = {"upload"}
-    elif assessment.tool_error_routes:
+    if assessment.tool_error_routes:
         assessment.retry_reason = "tool_error"
         assessment.failed_routes = set(assessment.tool_error_routes)
     elif assessment.route_failures:
         assessment.retry_reason = "no_evidence"
         assessment.failed_routes = set(assessment.route_failures)
+    elif assessment.blocked_missing_upload:
+        assessment.retry_reason = "blocked_missing_upload"
+        assessment.failed_routes = {"upload"}
     return assessment
 
 
@@ -75,17 +74,14 @@ def assess_validation(snapshot: ValidationSnapshot) -> ValidationAssessment:
         else:
             assessment.valid_unit_paths.add(check.unit_id)
     if snapshot.retrieval_required:
-        assessment.missing_route_coverage = detect_missing_route_coverage(
-            required_routes=snapshot.required_routes, result=result,
-            evidence_packet=snapshot.evidence_packet, valid_unit_paths=assessment.valid_unit_paths,
-        )
         assessment.failed_requirement_ids = set(detect_missing_requirement_coverage(
             snapshot=snapshot, result=result, valid_unit_paths=assessment.valid_unit_paths,
         ))
         assessment.missing_route_coverage = list(dict.fromkeys([
-            *assessment.missing_route_coverage,
-            *(task.route for task in snapshot.planner_output.tasks if task.requirement_id in assessment.failed_requirement_ids),
+            task.route for task in snapshot.planner_output.tasks
+            if task.requirement_id in assessment.failed_requirement_ids
         ]))
+    recoverable_missing = assessment.failed_requirement_ids - set(snapshot.terminal_failed_requirement_ids)
     contract = snapshot.request_contract
     if contract is None or not contract.can_prepare_body():
         assessment.missing_content = ["prepared_body_request"]
@@ -103,11 +99,16 @@ def assess_validation(snapshot: ValidationSnapshot) -> ValidationAssessment:
         assessment.error_codes.append("VALIDATION_UNRESOLVED_REFERENCES")
     elif assessment.invalid_unit_paths:
         assessment.retry_reason = "missing_content"
-    elif assessment.missing_route_coverage:
+    elif recoverable_missing:
         assessment.retry_reason = "missing_route_coverage"
     elif assessment.missing_content or assessment.forbidden_content:
         assessment.retry_reason = "missing_content"
     if assessment.retry_reason in {"missing_content", "missing_route_coverage"}:
         assessment.error_codes.append("VALIDATION_MISSING_CONTENT")
-    assessment.failed_routes = set(assessment.missing_route_coverage)
+    if (snapshot.terminal_failed_requirement_ids and not result.citations
+            and assessment.retry_reason is None):
+        assessment.retry_reason = "missing_content"
+        assessment.missing_content.append("available_evidence")
+    assessment.failed_routes = {task.route for task in snapshot.planner_output.tasks
+                                if task.requirement_id in recoverable_missing}
     return assessment

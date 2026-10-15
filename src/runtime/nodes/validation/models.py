@@ -30,6 +30,9 @@ class ValidationSnapshot:
     response_request_id: str | None = None
     response_contract_revision: int = 0
     normal_evidence_missing_requirement_ids: list[str] = field(default_factory=list)
+    terminal_failed_requirement_ids: list[str] = field(default_factory=list)
+    terminal_retrieval_reason: RetryReason | None = None
+    upload_file_names: dict[str, str] = field(default_factory=dict)
     body_kind: BodyKind | None = None
     evidence_source: AnswerSource | None = None
 

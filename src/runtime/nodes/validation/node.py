@@ -9,7 +9,7 @@ from src.core.contracts.boundary.response import get_response_state
 from src.infra.logging_utils import log_event
 from src.runtime.nodes.retry import build_retry_update
 from src.runtime.nodes.validation.evidence_validator import ValidationAssessment, ValidationSnapshot, assess_validation, collect_validation_snapshot
-from src.runtime.nodes.validation.policy import apply_validation_outcome
+from src.runtime.nodes.validation.policy import add_retrieval_gap_issues, apply_validation_outcome
 from src.runtime.nodes.validation.snapshot import detect_packet_coverage_gaps
 
 
@@ -29,13 +29,14 @@ def _decide_retry_outcome(
     retry_context = get_retry_state(state)
     retrieved_missing, packet_omitted = detect_packet_coverage_gaps(snapshot)
     # A compact omission can still recover using a complete normal packet.
-    content_repair_available = not (
-        (retrieved_missing or packet_omitted) and snapshot.normal_evidence_missing_requirement_ids)
+    terminal_missing = set(snapshot.terminal_failed_requirement_ids)
+    repairable_gaps = (set(retrieved_missing) | set(packet_omitted)) - terminal_missing
+    normal_missing = set(snapshot.normal_evidence_missing_requirement_ids) - terminal_missing
+    content_repair_available = not (repairable_gaps and normal_missing)
     needs_retry, next_retry_context, retrieval_feedback = build_retry_update(
         retry_context=retry_context,
         retry_reason=assessment.retry_reason,
         planner_output=snapshot.planner_output,
-        retrieval_errors=snapshot.current_attempt_retrieval_errors,
         score_avg=assessment.score_avg,
         failed_routes=assessment.failed_routes,
         failed_requirement_ids=assessment.failed_requirement_ids,
@@ -92,6 +93,11 @@ def make_post_synthesis_validation_node(verbose: bool):
         retry_context = get_retry_state(state)
 
         if response.problem is not None:
+            if retry_context.terminal_failed_requirement_ids:
+                snapshot, _local_errors = collect_validation_snapshot(state)
+                response = response.model_copy(update={
+                    "result": add_retrieval_gap_issues(snapshot, response.result),
+                })
             # A grounded partial response preserves its technical failure and cannot
             # trigger another semantic repair window or become an executable answer.
             return {

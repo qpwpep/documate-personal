@@ -60,39 +60,15 @@ def format_retry_context_for_planner(state: GraphState, retry_context: RetryStat
     return "[Retry Context]\n" + json.dumps(context, ensure_ascii=False)
 
 
-def contains_tool_error(errors: list[str]) -> bool:
-    if not errors:
-        return False
-    keywords = (
-        "failed",
-        "error",
-        "unavailable",
-        "invalid json",
-        "payload must",
-        "timeout",
-    )
-    for error in errors:
-        lowered = str(error).lower()
-        if any(keyword in lowered for keyword in keywords):
-            return True
-    return False
-
-
 def build_retrieval_feedback(
     reason: RetryReason,
     *,
     planner_output: PlannerOutput,
-    retrieval_errors: list[str],
     score_avg: float | None,
 ) -> str:
     if reason == "blocked_missing_upload":
         return "uploaded file context is missing; ask the user to upload the file first."
     if reason == "tool_error":
-        if any(
-            "upload" in str(error).lower() and "unavailable" in str(error).lower()
-            for error in retrieval_errors
-        ):
-            return "upload retriever unavailable; ask the user to upload the file again."
         return "retrieval tool error detected; use the reported failure to revise query/k while you preserve the route and evidence requirements."
     if reason == "no_evidence":
         selected_routes = ", ".join(task.route for task in planner_output.tasks) if planner_output.tasks else "none"
@@ -106,6 +82,12 @@ def build_retrieval_feedback(
     if score_avg is not None:
         return f"low retrieval relevance(avg_score={score_avg:.3f}); revise query/k and preserve the route and evidence requirements."
     return "low retrieval relevance; revise query/k and preserve the route and evidence requirements."
+
+
+def retrieval_subject(task: RetrievalTask) -> str:
+    """Show the requested subject rather than an internal library sentinel."""
+    library = task.requirement.library
+    return ", ".join(task.requirement.symbols) or (library if library != "unsupported" else None) or task.query
 
 
 def build_missing_upload_followup() -> str:
@@ -165,7 +147,7 @@ def _is_repair_retry_candidate(selected_routes: set[PlannerRouteName], retry_rea
 
 def _can_refresh_search(task: RetrievalTask, diagnostics: list[RetrievalDiagnostic]) -> bool:
     if task.route == "docs":
-        return True
+        return task.requirement.library != "unsupported"
     requirement = task.requirement
     # Only topic/aspect vector searches can establish coverage through new
     # candidates. Source symbol absence and unsupported source constraints
@@ -184,7 +166,6 @@ def build_retry_update(
     retry_context: RetryState,
     retry_reason: RetryReason | None,
     planner_output: PlannerOutput,
-    retrieval_errors: list[str],
     score_avg: float | None,
     failed_routes: Collection[PlannerRouteName] | None = None,
     request_contract: RequestContract | None = None,
@@ -195,6 +176,7 @@ def build_retry_update(
 ) -> tuple[bool, RetryState, str]:
     max_retries = max(0, retry_context.max_retries)
     used_retries = retry_context.attempt
+    used_content_repairs = retry_context.content_repair_attempt
 
     needs_retry = False
     retrieval_feedback = ""
@@ -230,13 +212,13 @@ def build_retry_update(
         retrieval_feedback = build_retrieval_feedback(
             retry_reason,
             planner_output=planner_output,
-            retrieval_errors=retrieval_errors,
             score_avg=score_avg,
         )
-        # Content repair is bounded to one extra synthesis, even if retrieval
-        # retries have a larger configured budget. An explicit zero disables it.
-        retry_limit = min(max_retries, 1) if retry_reason in CONTENT_REPAIR_REASONS else max_retries
-        if retry_reason in RETRYABLE_REASONS and used_retries < retry_limit:
+        # Search recovery and one bounded body repair have independent budgets.
+        is_content_repair = retry_reason in CONTENT_REPAIR_REASONS
+        retry_limit = retry_context.max_content_repairs if is_content_repair else max_retries
+        used_budget = used_content_repairs if is_content_repair else used_retries
+        if retry_reason in RETRYABLE_REASONS and used_budget < retry_limit:
             if retry_reason in CONTENT_REPAIR_REASONS:
                 needs_retry = reuse_hits_only and content_repair_available
             else:
@@ -251,7 +233,10 @@ def build_retry_update(
                     failed_route_set = {task.route for task in planner_output.tasks
                                                 if task.requirement_id in failed_ids}
         if needs_retry:
-            used_retries += 1
+            if is_content_repair:
+                used_content_repairs += 1
+            else:
+                used_retries += 1
         retry_update: dict[str, Any] = {
             "retry_reason": retry_reason,
             "retrieval_feedback": retrieval_feedback,
@@ -286,6 +271,7 @@ def build_retry_update(
         }
 
     retry_update["attempt"] = used_retries
+    retry_update["content_repair_attempt"] = used_content_repairs
     retry_update["needs_retry"] = needs_retry
     next_retry_context = next_retry_context.model_copy(update=retry_update)
     return needs_retry, next_retry_context, retrieval_feedback

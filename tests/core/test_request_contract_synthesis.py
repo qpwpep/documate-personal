@@ -59,7 +59,7 @@ def test_validation_exhaustion_cannot_replace_forbidden_generated_code_with_orig
     )
     state = retrieval_state([_hit("original_code()", source="upload")])
     state["runtime"] = state["runtime"].model_copy(update={"request_contract": contract})
-    state["retry"] = RetryState(max_retries=0)
+    state["retry"] = RetryState(max_retries=0, max_content_repairs=0)
     document = AnswerDocument.model_validate({"blocks": [{
         "type": "code", "content": {"text": "generated_code()", "basis": "example", "refs": []},
     }]})

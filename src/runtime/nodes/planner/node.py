@@ -35,7 +35,6 @@ logger = logging.getLogger(__name__)
 class PlannerRunContext:
     has_retriever: bool
     planner_attempt: int
-    upload_file_ids: tuple[str, ...] = ()
 
 
 def _resolve_planner_strategy(
@@ -115,17 +114,6 @@ def _apply_planner_guardrail(
     context: PlannerRunContext,
 ) -> PlannerDecision:
     planner_output = decision.output
-    unknown_files = {file_id for task in planner_output.tasks for file_id in task.requirement.file_ids
-                     if file_id not in context.upload_file_ids}
-    if unknown_files:
-        return replace(
-            decision, output=PlannerOutput.fallback(request_contract=planner_output.request_contract),
-            diagnostics=decision.diagnostics.model_copy(update={
-                "reason": "upload_file_scope_invalid", "required_routes": ["upload"],
-                "planner_warnings": list(dict.fromkeys([*decision.diagnostics.planner_warnings, "unknown_upload_file_ids"])),
-            }),
-            guided_followup="요청한 첨부 파일을 현재 세션에서 확인할 수 없습니다. 첨부 목록에서 사용할 파일을 다시 지정해 주세요.",
-        )
     return apply_retrieval_availability(
         replace(decision, output=planner_output),
         has_retriever=context.has_retriever,
@@ -176,7 +164,6 @@ def make_planner_node(
         context = PlannerRunContext(
             has_retriever=bool(runtime.retriever),
             planner_attempt=existing_retry_context.attempt + 1,
-            upload_file_ids=tuple(item.file_id for item in runtime.upload_files),
         )
 
         decision, contract = _resolve_planner_strategy(
