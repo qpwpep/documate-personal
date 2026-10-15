@@ -78,9 +78,25 @@ def _declaration(value: str) -> str:
     return match.group("name")
 
 
+def _sphinx_definition_owner(raw_line: str) -> str:
+    """A standalone code declaration and its matching self-link identify a new API."""
+    if raw_line[:1].isspace():
+        return ""
+    anchor = re.search(
+        rf'\[(?:¶|#)\]\(#[ ]*(?P<name>{_NAME})[ ]+"(?:Permalink|Link) to this definition"\)\s*$',
+        raw_line,
+    )
+    if anchor is None or "`" not in raw_line[:anchor.start()]:
+        return ""
+    declaration = _declaration(raw_line[:anchor.start()])
+    target = anchor.group("name")
+    return target if declaration and (target == declaration or target.endswith("." + declaration)) else ""
+
+
 def resolve_document_symbol(*, title: str = "", url: str = "") -> str:
     """Return only an unambiguous identity supplied by the document itself."""
     title_part = re.split(r"\s+[—–|]\s+|\s+-\s+", str(title or ""), maxsplit=1)[0]
+    title_part = re.sub(r"^\d+(?:\.\d+)*\.\s+", "", title_part)
     title_symbol = _symbol(title_part) or _declaration(title_part)
     parsed = urlparse(str(url or ""))
     leaf = unquote(parsed.path.rstrip("/").rsplit("/", 1)[-1])
@@ -92,7 +108,8 @@ def resolve_document_symbol(*, title: str = "", url: str = "") -> str:
         if url_symbol and "." not in title_symbol and url_symbol.endswith("." + title_symbol):
             return url_symbol
         return title_symbol
-    if url_symbol and ("." in url_symbol or any(part in parsed.path.split("/") for part in ("api", "generated", "reference"))):
+    stdlib_module = parsed.hostname == "docs.python.org" and "/library/" in parsed.path
+    if url_symbol and (stdlib_module or "." in url_symbol or any(part in parsed.path.split("/") for part in ("api", "generated", "reference"))):
         return url_symbol
     return ""
 
@@ -102,6 +119,9 @@ def parse_doc_sections(text: str, *, title: str = "", url: str = "") -> list[Doc
     if not text or not text.strip():
         return []
     identity = resolve_document_symbol(title=title, url=url)
+    parsed_url = urlparse(url)
+    module = (identity if parsed_url.hostname == "docs.python.org" and "/library/" in parsed_url.path
+              and identity == unquote(parsed_url.path.rsplit("/", 1)[-1]).removesuffix(".html") else "")
     owner, confidence = identity, 1 if identity else 0
     kind, start, offset = "overview", 0, 0
     sections: list[DocSection] = []
@@ -117,10 +137,20 @@ def parse_doc_sections(text: str, *, title: str = "", url: str = "") -> list[Doc
         start, owner, kind, confidence = position, new_owner, new_kind, new_confidence
 
     def qualify(name: str) -> str:
-        if "." not in name:
-            for known in (owner, identity):
-                if known.endswith("." + name):
-                    return known
+        for known in (owner, identity):
+            if name == known or name.startswith(known + "."):
+                return name
+            if known.endswith("." + name):
+                return known
+            # Relative class/member declarations inherit the source's namespace.
+            # This never uses the requested query or creates API equivalences.
+            parts = known.split(".")
+            for index in range(1, len(parts)):
+                relative = ".".join(parts[index:])
+                if name.startswith(relative + "."):
+                    return known + name[len(relative):]
+        if module and ("." not in name or name.split(".", 1)[0][:1].isupper()):
+            return module + "." + name
         return name
 
     for index, raw_line in enumerate(lines):
@@ -131,7 +161,9 @@ def parse_doc_sections(text: str, *, title: str = "", url: str = "") -> list[Doc
             marker = fence_match.group(1)
             if not fence:
                 fence = marker
-                if kind not in {"examples", "signature"}:
+                first_line = next((lines[following].strip() for following in range(index + 1, len(lines))
+                                   if lines[following].strip()), "")
+                if kind not in {"examples", "signature"} or (kind == "signature" and first_line.startswith(">>>")):
                     before_fence = kind
                     boundary(line_start, owner, "examples", confidence)
             elif marker[0] == fence[0] and len(marker) >= len(fence):
@@ -168,6 +200,10 @@ def parse_doc_sections(text: str, *, title: str = "", url: str = "") -> list[Doc
                     boundary(line_start, identity, "overview", 1 if identity else 0)
                 else:
                     boundary(line_start, owner, "overview", confidence)
+            continue
+        anchored_owner = _sphinx_definition_owner(raw_line)
+        if anchored_owner:
+            boundary(line_start, anchored_owner, "signature", 2)
             continue
         # API declarations belong in an overview/signature, not in example,
         # parameter, return, or note text that happens to contain a call.
