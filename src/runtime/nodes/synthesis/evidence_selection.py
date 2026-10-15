@@ -297,6 +297,7 @@ def select_evidence_range(
     item: EvidenceRef, *, limit: int, query: str = "", task: RetrievalTask | None = None,
     expand_context: bool = True, allow_partial: bool = True, complete_char_limit: int | None = None,
     coverage_task: RetrievalTask | None = None,
+    covered_evidence: list[EvidenceRef] | None = None,
 ) -> EvidenceRef:
     """Choose source ranges; reservation may defer whole code units to a larger allowance."""
     limit = max(0, min(limit, len(item.excerpt)))
@@ -331,7 +332,9 @@ def select_evidence_range(
                     snapshot=item.snapshot, element=item.element,
                     start=item.selection.start + span[0], end=item.selection.start + span[1],
                 )
-                assessment = _assess_docs_ranges(coverage_task or task, [selected])
+                # Score the contribution to this requirement's existing packet.
+                # A new example need not repeat a parameter aspect already supplied.
+                assessment = _assess_docs_ranges(coverage_task or task, [*(covered_evidence or []), selected])
                 missing = _focused_docs_missing(assessment, task)
                 docs_scores[span] = (not missing, -len(missing), -len(assessment.missing))
             return (*docs_scores[span], *lexical)
@@ -522,6 +525,9 @@ def select_evidence_packet(
                 item, limit=limit, query=query, task=task, expand_context=False,
                 allow_partial=allow_partial, complete_char_limit=complete_char_limit,
                 coverage_task=contracts.get(task.requirement_id) if task is not None else None,
+                covered_evidence=[selected for selected in packet
+                                  if task is not None and task.route == "docs"
+                                  and task.requirement_id in requirement_ids.get(selected.id, [])],
             )
         if not selected.excerpt.strip():
             return

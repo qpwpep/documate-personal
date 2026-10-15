@@ -84,3 +84,42 @@ def _prepare(task, hits, *, excerpt_chars=1800, max_items=8):
 
 
 
+
+
+def test_parameter_aspect_does_not_displace_a_separate_required_example(monkeypatch):
+    """A covered parameter cannot repeatedly defeat the still-missing example passage."""
+    description = (
+        "order: C reads and writes the last axis first, while F reads and writes the first axis first. "
+        "A follows Fortran order for a Fortran contiguous array and C order otherwise. "
+        + "The index order controls reading and writing values without changing the original array data. " * 6
+        + "\n"
+    )
+    examples = "Examples\n>>> numpy.reshape([1, 2, 3, 4], (2, 2))\narray([[1, 2], [3, 4]])\n"
+    body = (
+        "# numpy.reshape\nnumpy.reshape(a, shape, order='C')\n\nParameters\n"
+        + description + "\nNotes\n" + "Additional background about storage and memory layout. " * 25
+        + "\n\n" + examples
+    )
+    assert len(body) > 1800
+    task, hits = _retrieve(monkeypatch, body, need=["examples", "explanation", "parameters"],
+                           symbol="numpy.reshape", aspects=["order"])
+
+    prepared, coverage = _prepare(task, hits)
+
+    assert coverage["missing_aspects"] == []
+    assert coverage["missing_needs"] == []
+    assert prepared.missing_requirement_ids == []
+    assert any(description.strip() in item.excerpt for item in prepared.evidence_packet)
+    assert any(examples.strip() in item.excerpt for item in prepared.evidence_packet)
+    assert len(prepared.evidence_packet) >= 2
+    assert all(len(item.excerpt) <= 1800 for item in prepared.evidence_packet)
+    assert sum(len(item.excerpt) for item in prepared.evidence_packet) <= 6000
+    for selected in prepared.evidence_packet:
+        assert any(
+            original.evidence.snapshot == selected.snapshot
+            and original.evidence.element == selected.element
+            and original.evidence.selection.start <= selected.selection.start
+            and selected.selection.end <= original.evidence.selection.end
+            for original in hits
+        )
+        assert selected.excerpt == body[selected.selection.start:selected.selection.end]
