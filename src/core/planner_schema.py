@@ -9,6 +9,11 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from src.core.request_contracts import WireRequestContract
 
 PlannerRouteName = Literal["docs", "upload"]
+PlannedDocsLibrary = Literal[
+    "Python", "Git", "LangChain", "matplotlib", "numpy", "pandas", "pytorch",
+    "Hugging Face", "fastapi", "BeautifulSoup", "streamlit", "gradio",
+    "scikit-learn", "pydantic", "Bare", "unsupported",
+]
 DocsEvidenceNeed = Literal["signature", "parameters", "examples", "explanation"]
 PLANNER_ROUTES: tuple[PlannerRouteName, ...] = ("docs", "upload")
 # Historical benchmark diagnostics still use this value; new plans preserve tasks.
@@ -56,6 +61,18 @@ class RetrievalRequirement(BaseModel):
 class PlannedRequirement(RetrievalRequirement):
     """An independently planned subject has one match mode, never mixed symbol roles."""
 
+    library: PlannedDocsLibrary | None = Field(
+        default=None,
+        description="Exact canonical owning-library ID for official docs. Use unsupported for an explicitly requested library outside the enum; preserve its actual name in query/symbols. Python owns standard-library modules such as pathlib. Never append module names, versions or prose to this ID. Null for upload or an unscoped docs subject.",
+    )
+    version: str | None = Field(
+        default=None, pattern=r"^\S+$",
+        description="One exact requested version token, for example 3.12, 1.26, v2.4 or latest. For 'Python 3.12', return only '3.12'. Never include a library name, spaces, prose or an inferred default version. Null when the user did not constrain the version.",
+    )
+    aspects: list[str] = Field(
+        default_factory=list,
+        description="Literal parameter names, option/flag names, requested value tokens or code fragments that must appear in returned source, such as axis, --force, reflect or random_state. Do not repeat the primary API already in symbols. Never put natural-language behavior conditions such as 'when the path does not exist' or '경로가 없을 때' here; preserve their meaning in query and request explanation in evidence_needs. Only anchors explicitly requested in the user's dialogue belong here.",
+    )
     symbols: list[str] = Field(default_factory=list, max_length=1,
                               description="At most one primary target. Use separate tasks for independent symbols; calls inspected inside a function belong in its aspects, not additional definitions.")
 
