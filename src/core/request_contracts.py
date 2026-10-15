@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-import re
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Any, Literal
 from uuid import uuid4
 
+from markdown_it import MarkdownIt
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from src.core.answer_schema import AnswerDocument, AnswerResponse, iter_content_units
@@ -115,10 +115,11 @@ class AnswerContract(ContractModel):
         required_lines = {item.value for item in self.format if item.kind == "line_count" and item.mode == "required"}
         if len(required_lines) > 1:
             raise ValueError("resolve conflicting line counts before finalizing")
-        aliases = {"code_example": "code", "code_block": "code"}
-        required = {aliases.get(item.kind, item.kind) for item in (*self.content, *self.format) if item.mode == "required"}
-        forbidden = {aliases.get(item.kind, item.kind) for item in (*self.content, *self.format) if item.mode == "forbidden"}
-        implied = required | ({"example"} if "code" in required else set()) | ({"list"} if "ordered_list" in required else set())
+        required = {item.kind for item in (*self.content, *self.format) if item.mode == "required"}
+        forbidden = {item.kind for item in (*self.content, *self.format) if item.mode == "forbidden"}
+        implied = required | ({"code_example", "example"} if "code_block" in required else set())
+        implied |= {"example"} if "code_example" in required else set()
+        implied |= {"list"} if "ordered_list" in required else set()
         # A specific line count and a different forbidden count can coexist.
         if (implied & forbidden) - {"line_count"}:
             raise ValueError("content and format constraints conflict")
@@ -299,20 +300,49 @@ class ContractCheck:
         return not self.missing_required and not self.forbidden_present
 
 
+_COMMONMARK = MarkdownIt("commonmark")
+
+
+def _raw_body_markdown_blocks(document: AnswerDocument) -> Iterable[str]:
+    """Check raw-body Markdown exports, independent of optional UI basis labels."""
+    def cell(text: str) -> str:
+        return text.replace("|", "\\|").replace("\n", "<br>")
+
+    for block in document.blocks:
+        if block.type == "paragraph":
+            yield " ".join(unit.text for unit in block.content)
+        elif block.type == "list":
+            yield "\n".join(
+                f"{str(index) + '.' if block.ordered else '-'} {unit.text}"
+                for index, unit in enumerate(block.items, 1)
+            )
+        elif block.type == "heading":
+            yield f"{'#' * block.level} {block.content.text}"
+        elif block.type == "table":
+            header = "| " + " | ".join(cell(unit.text) for unit in block.columns) + " |"
+            separator = "| " + " | ".join("---" for _ in block.columns) + " |"
+            rows = ["| " + " | ".join(cell(unit.text) for unit in row) + " |" for row in block.rows]
+            yield "\n".join([header, separator, *rows])
+
+
 def check_answer_contract(contract: AnswerContract, document: Any, *, evidence: Iterable[EvidenceRef] = ()) -> ContractCheck:
     """Check observable content; keep semantic evaluation explicitly separate.
 
     Line counts refer to nonblank body lines, excluding citation appendices and
-    receipts. No user text is reinterpreted here.
+    receipts. Code-block prohibitions cover both the screen and Markdown
+    exports, including raw body exports without UI basis labels. No user text
+    is reinterpreted here.
     """
     document = document if isinstance(document, AnswerDocument) else AnswerDocument.model_validate(document)
     blocks = document.blocks
     units = [unit for _, unit in iter_content_units(document)]
-    has_code = any(block.type == "code" for block in blocks) or any(
-        re.search(r"(?m)^\s*(?:`{3,}|~{3,})", unit.text) for unit in units
+    has_markdown_code = any(
+        token.type in {"code_block", "fence"}
+        for text in _raw_body_markdown_blocks(document) for token in _COMMONMARK.parse(text)
     )
+    has_code_block = any(block.type == "code" and not block.inline for block in blocks) or has_markdown_code
     code_sources = {item.id: item.excerpt.strip() for item in evidence if item.element.kind == "code"}
-    has_code = has_code or any(
+    has_code = any(block.type == "code" for block in blocks) or has_markdown_code or any(
         unit.text.strip() == code_sources[reference]
         for unit in units for reference in unit.refs if reference in code_sources
     )
@@ -332,7 +362,7 @@ def check_answer_contract(contract: AnswerContract, document: Any, *, evidence: 
     present = {
         "code_example": has_code,
         "example": has_code or any(unit.basis == "example" for unit in units),
-        "code_block": has_code,
+        "code_block": has_code_block,
         "ordered_list": any(block.type == "list" and block.ordered for block in blocks),
         "list": any(block.type == "list" for block in blocks),
         "table": any(block.type == "table" for block in blocks),

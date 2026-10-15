@@ -52,6 +52,14 @@ def filter_document_units(document: AnswerDocument, keep_paths: set[str]) -> Ans
     return AnswerDocument(blocks=blocks)
 
 
+def inline_code_markdown(text: str) -> str:
+    """Render a single code span without changing literal spaces or backticks."""
+    longest = max((len(match.group()) for match in re.finditer(r"`+", text)), default=0)
+    delimiter = "`" * (longest + 1)
+    pad = " " if text.startswith("`") or text.endswith("`") or (text.startswith(" ") and text.endswith(" ") and text.strip()) else ""
+    return f"{delimiter}{pad}{text}{pad}{delimiter}"
+
+
 def citation_labels(unit: ContentUnit, response: AnswerResponse) -> str:
     numbers = {citation.evidence.id: citation.number for citation in response.citations}
     return " ".join(f"[{numbers[ref]}]" for ref in unit.refs if ref in numbers)
@@ -117,12 +125,16 @@ def export_answer_text(response: AnswerResponse, *, include_sources: bool = Fals
         elif isinstance(block, HeadingBlock):
             blocks.append(f"{'#' * block.level} {render(block.content)}")
         elif isinstance(block, CodeBlock):
-            longest = max((len(m.group()) for m in re.finditer(r"`+", block.content.text)), default=0)
-            fence = "`" * max(3, longest + 1)
             code = block.content.text
-            newline = "" if code.endswith("\n") else "\n"
+            if block.inline:
+                rendered_code = inline_code_markdown(code)
+            else:
+                longest = max((len(m.group()) for m in re.finditer(r"`+", code)), default=0)
+                fence = "`" * max(3, longest + 1)
+                newline = "" if code.endswith("\n") else "\n"
+                rendered_code = f"{fence}{block.language}\n{code}{newline}{fence}"
             labels = citation_labels(block.content, response)
-            rendered_code = f"{fence}{block.language}\n{code}{newline}{fence}" + (f"\n{labels}" if labels else "")
+            rendered_code += f"\n{labels}" if labels else ""
             if include_sources:
                 if block.content.basis == "excerpt":
                     description = "원문 코드 발췌"

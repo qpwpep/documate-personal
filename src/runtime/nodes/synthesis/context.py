@@ -108,6 +108,7 @@ def prepare_synthesis_inputs(
     )
     messages, before, after = build_synthesis_messages(
         state=state,
+        request_contract=context.request_contract,
         action_rules=_build_action_rules(contract=context.request_contract),
         evidence_packet=packet,
         attempt=context.attempt,

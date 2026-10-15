@@ -13,6 +13,7 @@ from src.core.table_selection import table_row_units
 from src.infra.chunking import chunk_parsed_document
 from src.infra.tools.local_rag.serialization import build_local_hit_bundle
 from src.runtime.nodes.synthesis.prompt_builder import build_synthesis_messages
+from src.core.request_contracts import RequestContract
 from src.runtime.nodes.synthesis.budgets import RetrievedEvidenceBudget
 from src.runtime.nodes.synthesis.evidence_selection import select_evidence_packet
 
@@ -61,6 +62,7 @@ def test_table_packet_and_export_only_report_selected_cell_locations():
     assert selected_source_anchors(item) == [page2]
     messages, _, _ = build_synthesis_messages(
         state=build_graph_state_input(user_input="target"), action_rules=[], evidence_packet=[item], attempt=1, max_turns=6,
+        request_contract=RequestContract(), requirement_ids_by_evidence={}, reference_aliases={}, retrieval_required=True,
     )
     raw = str(messages[-1].content).split("\n", 2)[2]
     packet = json.loads(raw)

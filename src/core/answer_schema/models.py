@@ -50,6 +50,7 @@ class ListBlock(AnswerModel):
 class CodeBlock(AnswerModel):
     type: Literal["code"] = "code"
     language: str = ""
+    inline: bool = False
     content: ContentUnit
 
     @field_validator("language")
@@ -58,6 +59,12 @@ class CodeBlock(AnswerModel):
         if any(char in value for char in ("\n", "\r", "`")):
             raise ValueError("invalid code language")
         return value
+
+    @model_validator(mode="after")
+    def single_line_inline_code(self) -> "CodeBlock":
+        if self.inline and any(char in self.content.text for char in ("\n", "\r")):
+            raise ValueError("inline code must be a single line")
+        return self
 
 
 class TableBlock(AnswerModel):

@@ -19,7 +19,7 @@ from langchain_core.embeddings import Embeddings
 from langchain_core.messages import AIMessage
 
 from src.app.web.app import create_app
-from src.core.answer_schema import AnswerResponse, export_answer_text
+from src.core.answer_schema import AnswerDocument, AnswerResponse, export_answer_text
 from src.core.planner_schema import InitialPlannerOutput
 from src.core.request_contracts import WireRequestContract
 from src.infra.settings import AppSettings
@@ -83,6 +83,7 @@ class LocalChatModel:
             parsed = {"blocks": blocks or [{"type": "paragraph", "content": [
                 {"text": "No attached evidence.", "basis": "interaction", "refs": []},
             ]}]}
+            parsed = AnswerDocument.model_validate(parsed).model_dump(mode="json")
         else:
             return AIMessage(content="Conversation summary.")
         return {"parsed": parsed, "parsing_error": None, "raw": AIMessage(
@@ -447,9 +448,14 @@ def test_loopback_attachment_changes_reach_streamlit_client_and_versioned_answer
             current_alpha = next(item.evidence for item in current.citations if item.evidence.snapshot.title == "alpha.py")
             old_alpha = next(item.evidence for item in original.citations if item.evidence.snapshot.title == "alpha.py")
             assert current_alpha.element.metadata["file_id"] == alpha.file_id
-            assert current_alpha.excerpt == "alpha = 10"
-            assert old_alpha.excerpt == "alpha = 1"
+            assert current_alpha.excerpt == "alpha = 10\n"
+            assert old_alpha.excerpt == "alpha = 1\n"
             assert current_alpha.snapshot.snapshot_id != old_alpha.snapshot.snapshot_id
+            assert current_alpha.excerpt == current_alpha.element.text
+            assert old_alpha.excerpt == old_alpha.element.text
+            assert "alpha = 10\n" in {block.content.text for block in current.content.blocks}
+            assert "alpha = 1\n" in {block.content.text for block in original.content.blocks}
+            assert all(check.support_status == "exact_match" for check in current.checks + original.checks)
 
             beta = next(item for item in replaced.files if item.name == "beta.py")
             removed = update(replaced, remove=[beta.file_id])

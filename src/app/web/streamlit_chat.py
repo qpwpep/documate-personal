@@ -10,6 +10,7 @@ from src.app.client import AgentCallResult, AgentStreamEvent
 from src.app.web.streamlit_sources import render_code, render_evidence
 from src.app.web.streamlit_state import AssistantChatMessage, ChatMessage
 from src.core.answer_schema import AnswerResponse, ContentUnit, iter_content_units
+from src.core.answer_schema.rendering import inline_code_markdown
 from src.core.contracts.outcome import TurnResult
 
 
@@ -88,7 +89,10 @@ def render_answer_response(response: AnswerResponse, fastapi_url: str) -> None:
                 for item_index, unit in enumerate(block.items)
             ))
         elif block.type == "code":
-            render_code(block.content.text, language=block.language or "text")
+            if block.inline:
+                st.markdown(inline_code_markdown(block.content.text))
+            else:
+                render_code(block.content.text, language=block.language or "text")
             _render_basis(block.content)
         elif block.type == "table":
             header = "| " + " | ".join(_table_cell(unit, citations) for unit in block.columns) + " |"
