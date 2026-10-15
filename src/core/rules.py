@@ -22,7 +22,7 @@ class DocsSearchRules(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     allowed_doc_path_prefixes: dict[str, list[str]] = Field(default_factory=dict)
-    error_page_markers: list[str] = Field(default_factory=list)
+    allowed_doc_path_patterns: dict[str, list[str]] = Field(default_factory=dict)
     query_hints: list[DocsSearchQueryHint] = Field(default_factory=list)
 
 

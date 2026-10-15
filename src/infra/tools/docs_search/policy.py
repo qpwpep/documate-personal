@@ -1,17 +1,13 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Literal
-from urllib.parse import urlparse, urlunparse
+from typing import Literal
+from urllib.parse import unquote, urlparse
 
 from src.core.rules import get_rules_config
 from src.infra.tools.docs_search.normalization import canonicalize_docs_query_text
 
 
-_NUMPY_VERSIONED_DOC_PATH_PATTERN = re.compile(r"^/doc/\d+(?:\.\d+)*/")
-_PYTORCH_VERSIONED_DOC_PATH_PATTERN = re.compile(r"^/docs/(?!stable/)[^/]+/")
-_PYDANTIC_V2_DOC_PATH_PATTERN = re.compile(r"^/2(?:\.\d+|\.x)?/")
-_STABLE_ALIAS_ROOT_PATH_PATTERN = re.compile(r"^/(?:dev|\d+(?:\.\d+|\.x)*)/")
 DocUrlFilterReason = Literal["invalid_url", "path_prefix"]
 
 
@@ -50,69 +46,32 @@ def normalize_path_prefix(path: str) -> str:
     return normalized if normalized.endswith("/") else normalized + "/"
 
 
-def canonicalize_doc_url(url: str) -> str:
-    candidate = str(url or "").strip()
-    if not candidate:
-        return ""
-
-    parsed = urlparse(candidate)
-    domain = normalize_domain(parsed.netloc)
-    if domain == "numpy.org":
-        stable_path = _NUMPY_VERSIONED_DOC_PATH_PATTERN.sub("/doc/stable/", parsed.path)
-        if stable_path != parsed.path:
-            return urlunparse(parsed._replace(path=stable_path))
-    if domain == "docs.pytorch.org":
-        stable_path = _PYTORCH_VERSIONED_DOC_PATH_PATTERN.sub("/docs/stable/", parsed.path)
-        if stable_path != parsed.path:
-            return urlunparse(parsed._replace(path=stable_path))
-    if domain == "docs.pydantic.dev":
-        latest_path = _PYDANTIC_V2_DOC_PATH_PATTERN.sub("/latest/", parsed.path)
-        if latest_path != parsed.path:
-            return urlunparse(parsed._replace(path=latest_path))
-    if _domain_allows_stable_root(domain):
-        stable_path = _STABLE_ALIAS_ROOT_PATH_PATTERN.sub("/stable/", parsed.path)
-        if stable_path != parsed.path:
-            return urlunparse(parsed._replace(path=stable_path))
-    return candidate
-
-
-def _domain_allows_stable_root(domain: str) -> bool:
-    allowed_prefixes = docs_search_rules().allowed_doc_path_prefixes.get(domain) or []
-    return any(normalize_path_prefix(prefix) == "/stable/" for prefix in allowed_prefixes)
-
-
 def is_allowed_doc_url(url: str) -> bool:
     return doc_url_filter_reason(url) is None
 
 
 def doc_url_filter_reason(url: str) -> DocUrlFilterReason | None:
-    parsed = urlparse(canonicalize_doc_url(url))
+    """Check the provider's original source without rewriting its version."""
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return "invalid_url"
     if parsed.scheme.lower() != "https" or not parsed.netloc:
         return "invalid_url"
     domain = normalize_domain(parsed.netloc)
-    allowed_prefixes = docs_search_rules().allowed_doc_path_prefixes.get(domain)
+    rules = docs_search_rules()
+    allowed_prefixes = rules.allowed_doc_path_prefixes.get(domain)
     if not allowed_prefixes:
         return "invalid_url"
-    normalized_path = normalize_path_prefix(parsed.path or "/")
-    normalized_allowed_prefixes = [normalize_path_prefix(prefix) for prefix in allowed_prefixes]
-    if any(normalized_path.startswith(prefix) for prefix in normalized_allowed_prefixes):
+    path = unquote(parsed.path or "/")
+    if "\\" in path or any(part in {".", ".."} for part in path.split("/")):
+        return "path_prefix"
+    normalized_path = normalize_path_prefix(path)
+    if any(normalized_path.startswith(normalize_path_prefix(prefix)) for prefix in allowed_prefixes):
+        return None
+    if any(re.match(pattern, normalized_path) for pattern in rules.allowed_doc_path_patterns.get(domain, [])):
         return None
     return "path_prefix"
-
-
-def is_valid_doc_result(*, url: str, title: Any, snippet: Any) -> bool:
-    if not is_allowed_doc_url(url):
-        return False
-
-    combined = " ".join(
-        part.strip().lower()
-        for part in [str(url or ""), str(title or ""), str(snippet or "")]
-        if str(part or "").strip()
-    )
-    if not combined:
-        return False
-
-    return not any(marker in combined for marker in docs_search_rules().error_page_markers)
 
 
 def normalized_domain_set(allowed_domains: list[str] | None) -> set[str]:

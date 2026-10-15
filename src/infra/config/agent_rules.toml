@@ -1,5 +1,4 @@
 [docs_search]
-error_page_markers = ["404", "page not found", "github pages", "does not exist", "not found", "requested file"]
 
 [docs_search.allowed_doc_path_prefixes]
 "docs.python.org" = ["/3/"]
@@ -18,6 +17,15 @@ error_page_markers = ["404", "page not found", "github pages", "does not exist",
 "docs.pydantic.dev" = ["/latest/"]
 "pydantic.dev" = ["/docs/validation/latest/"]
 "docs.pears.com" = ["/reference/"]
+
+[docs_search.allowed_doc_path_patterns]
+"docs.python.org" = ['^/(?:[a-z]{2,3}(?:-[a-z]{2})?/)?[0-9]+(?:\.[0-9]+)*/']
+"numpy.org" = ['^/doc/(?:[0-9]+(?:\.[0-9]+)*|dev)/']
+"docs.pytorch.org" = ['^/docs/(?:[0-9]+(?:\.[0-9]+)*|main)/']
+"matplotlib.org" = ['^/(?:dev|[0-9]+(?:\.(?:[0-9]+|x))*)/']
+"scikit-learn.org" = ['^/(?:dev|[0-9]+(?:\.(?:[0-9]+|x))*)/']
+"pandas.pydata.org" = ['^/pandas-docs/version/[0-9]+(?:\.[0-9]+)*/']
+"docs.pydantic.dev" = ['^/[0-9]+(?:\.(?:[0-9]+|x))*/']
 
 [[docs_search.query_hints]]
 identifiers = ["python", "asyncio", "pathlib", "dataclass", "dataclasses", "venv"]

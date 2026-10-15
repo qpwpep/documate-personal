@@ -43,8 +43,7 @@ def search(monkeypatch):
 
     monkeypatch.setattr(requests, "post", post)
     monkeypatch.setattr(requests, "head", head)
-    from src.infra.tools.docs_search.url_validation import validate_doc_url
-    validate_doc_url.cache_clear()
+    pass
     tool = build_docs_search_tool(AppSettings(_env_file=None, tavily_api_key="test", openai_api_key="test"))
     return tool, batches, requests_seen
 
@@ -152,6 +151,42 @@ def test_previous_partial_evidence_is_rechecked_against_library_and_version(sear
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+@pytest.mark.parametrize(("library", "url", "counter"), [
+    ("numpy", "http://numpy.org/doc/stable/reference/generated/numpy.reshape.html", "filtered_invalid_url_count"),
+    ("numpy", "https://numpy.org.attacker.example/doc/stable/reference/generated/numpy.reshape.html", "filtered_invalid_url_count"),
+    ("numpy", "https://numpy.org@attacker.example/doc/stable/reference/generated/numpy.reshape.html", "filtered_invalid_url_count"),
+    ("numpy", "https://attacker.example@numpy.org/doc/stable/reference/generated/numpy.reshape.html", "filtered_invalid_url_count"),
+    ("numpy", "https://numpy.org/community/numpy.reshape.html", "filtered_path_prefix_count"),
+    ("numpy", "https://numpy.org/doc/stable/../../community/numpy.reshape.html", "filtered_path_prefix_count"),
+    ("numpy", "https://numpy.org/doc/stable/%2e%2e/%2e%2e/community/numpy.reshape.html", "filtered_path_prefix_count"),
+    ("numpy", "https://pandas.pydata.org/docs/reference/api/numpy.reshape.html", "filtered_cross_domain_count"),
+    ("Hugging Face", "https://huggingface.co/transformers/commit/1234", "filtered_path_prefix_count"),
+    ("numpy", "https://[not-an-address]/doc/stable/", "filtered_invalid_url_count"),
+])
+def test_provider_sources_keep_official_document_and_library_scope(search, library, url, counter):
+    tool, batches, _seen = search
+    source = result()
+    source["url"] = url
+    batches.append([source])
+    payload = tool("numpy.reshape", requirement=RetrievalRequirement(library=library, symbols=["numpy.reshape"]))
+    assert payload["hits"] == []
+    assert payload["diagnostics"][counter] == 1
 
 
 

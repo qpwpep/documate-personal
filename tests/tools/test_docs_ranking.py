@@ -9,7 +9,6 @@ from src.core.planner_schema import RetrievalRequirement
 from src.core.evidence import SearchHit
 from src.infra.settings import AppSettings
 from src.infra.tools.docs_search.tool import build_docs_search_tool
-from src.infra.tools.docs_search.url_validation import validate_doc_url
 
 
 @pytest.fixture
@@ -36,12 +35,12 @@ def search(monkeypatch):
 
     monkeypatch.setattr(requests, "post", post)
     monkeypatch.setattr(requests, "head", head)
-    validate_doc_url.cache_clear()
+    pass
     tool = build_docs_search_tool(
         AppSettings(_env_file=None, tavily_api_key="test", openai_api_key="test")
     )
     yield tool, batches, requests_seen
-    validate_doc_url.cache_clear()
+    pass
 
 
 def reference(symbol, *, parameter="axis", body=None, score=0.4, version="stable", suffix=""):

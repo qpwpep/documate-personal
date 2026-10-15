@@ -9,7 +9,6 @@ from src.core.planner_schema import PlannerOutput, RetrievalTask
 from src.core.request_contracts import RequestContract
 from src.infra.settings import AppSettings
 from src.infra.tools.docs_search.tool import build_docs_search_tool
-from src.infra.tools.docs_search.url_validation import validate_doc_url
 from src.runtime.nodes.planner import make_planner_node
 from src.runtime.nodes.retrieval import make_retrieve_dispatch_node
 from src.runtime.nodes.validation import make_pre_synthesis_validation_node
@@ -49,11 +48,11 @@ def docs_http(monkeypatch):
 
     monkeypatch.setattr(requests, "post", post)
     monkeypatch.setattr(requests, "head", lambda url, **kwargs: response(url, {}))
-    validate_doc_url.cache_clear()
+    pass
     try:
         yield queries, successful_queries
     finally:
-        validate_doc_url.cache_clear()
+        pass
 
 
 def _docs_tool():

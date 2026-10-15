@@ -72,8 +72,7 @@ def test_dispatch_keeps_independent_official_sources_and_coverage_with_mixed_pro
 
     monkeypatch.setattr(requests, "post", post)
     monkeypatch.setattr(requests, "head", head)
-    from src.infra.tools.docs_search.url_validation import validate_doc_url
-    validate_doc_url.cache_clear()
+    pass
     registry = build_tool_registry(AppSettings(_env_file=None, openai_api_key="test", tavily_api_key="test"))
     dispatch = make_retrieve_dispatch_node(registry.tavily_search_tool, registry.upload_search_tool, False)
 
@@ -82,7 +81,7 @@ def test_dispatch_keeps_independent_official_sources_and_coverage_with_mixed_pro
             "user_input": "Compare both official sources", "planner_output": PlannerOutput(use_retrieval=True, tasks=tasks),
         }))
     finally:
-        validate_doc_url.cache_clear()
+        pass
 
     hits = [SearchHit.model_validate(hit) for hit in result["retrieval"].hit_log]
     assert len(hits) == 2

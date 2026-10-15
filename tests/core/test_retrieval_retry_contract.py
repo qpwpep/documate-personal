@@ -48,7 +48,6 @@ def test_dispatch_retries_timeout_after_partial_success_without_repeating_comple
 
     from src.infra.settings import AppSettings
     from src.infra.tools.docs_search.tool import build_docs_search_tool
-    from src.infra.tools.docs_search.url_validation import validate_doc_url
 
     queries = []
     source_url = "https://numpy.org/doc/2.4/reference/generated/numpy.reshape.html"
@@ -79,7 +78,7 @@ def test_dispatch_retries_timeout_after_partial_success_without_repeating_comple
                          requirement={"library": "numpy", "symbols": ["numpy.reshape"], "aspects": ["order", "copy"]})
     state = build_test_state({"request_contract": RequestContract(),
                               "planner_output": PlannerOutput(use_retrieval=True, tasks=[task])})
-    validate_doc_url.cache_clear()
+    pass
     try:
         state.update(dispatch(state))
         first_hit = state["retrieval"].hit_log[0]
@@ -88,7 +87,7 @@ def test_dispatch_retries_timeout_after_partial_success_without_repeating_comple
         state["retry"] = RetryState(attempt=1, failed_requirement_ids=[task.requirement_id])
         state.update(dispatch(state))
     finally:
-        validate_doc_url.cache_clear()
+        pass
     final = state["debug"].retrieval_diagnostics[-1]
     assert (final.reused, final.answerability, final.error_code) == (False, "covered", None)
     assert len(queries) == 3

@@ -12,7 +12,6 @@ from src.core.planner_schema import PlannerOutput, RetrievalTask
 from src.core.request_contracts import RequestContract
 from src.infra.settings import AppSettings
 from src.infra.tools.docs_search.tool import build_docs_search_tool
-from src.infra.tools.docs_search.url_validation import validate_doc_url
 from src.runtime.nodes.synthesis.budgets import ExcerptLimits, RetrievedEvidenceBudget, resolve_evidence_budgets
 from src.runtime.nodes.synthesis.context import build_synthesis_context, prepare_synthesis_inputs
 
@@ -40,7 +39,7 @@ def _retrieve(monkeypatch, body, *, need, symbol="numpy.mean", aspects=None):
 
     monkeypatch.setattr(requests, "post", post)
     monkeypatch.setattr(requests, "head", head)
-    validate_doc_url.cache_clear()
+    pass
     needs = [need] if isinstance(need, str) else need
     task = RetrievalTask(
         route="docs", query=f"{symbol} {' '.join(needs)}", k=1,
@@ -51,7 +50,7 @@ def _retrieve(monkeypatch, body, *, need, symbol="numpy.mean", aspects=None):
             task.query, requirement=task.requirement, k=task.k,
         )
     finally:
-        validate_doc_url.cache_clear()
+        pass
     assert result["diagnostics"]["answerability"] == "covered"
     hits = [SearchHit.model_validate(hit).model_copy(update={"requirement_id": task.requirement_id})
             for hit in result["hits"]]
