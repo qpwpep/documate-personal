@@ -9,6 +9,7 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from src.core.conversation_memory import ConversationMemoryPolicy
 from src.core.contracts import GraphState, PlannerState, ResponseState
+from src.core.contracts.boundary.debug import get_debug_state
 from src.core.contracts.boundary.graph import build_graph_state_input
 from src.core.contracts.boundary.response import get_response_state
 from src.core.contracts.boundary.retrieval import get_retrieval_state
@@ -16,13 +17,14 @@ from src.runtime.make_graph import build_graph
 from src.runtime.graph_builder import _instrument_stage_node
 from src.runtime.nodes.planner import make_planner_node
 from src.runtime.nodes.retrieval import make_retrieve_dispatch_node
-from src.runtime.nodes.session import add_user_message
+from src.runtime.nodes.session import add_user_message, make_summarize_node
 from src.runtime.nodes.validation import make_post_synthesis_validation_node, make_pre_synthesis_validation_node
 from src.core.planner_schema import PlannerOutput, RetrievalRewriteOutput, RetrievalTask
 from src.core.request_contracts import RequestContract
 
 from .helpers import (
     _CapturePlannerLLM,
+    _CaptureSummaryLLM,
     _tool_payload,
 )
 from tests.synthesis_fixtures import synthesis_excerpt_limits
@@ -91,8 +93,6 @@ class GraphRoutingTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
-
 
 
 
@@ -197,6 +197,10 @@ def _assert_repair_flow(routes, defect, max_retries, persistent, *, instrumented
     assert all(contract == contracts[0] for contract in contracts)
     assert planner_llm.call_count == 1
     assert searches == {route: int(route in routes) for route in searches}
+    if defect == "references" and max_retries > 0:
+        decisions = [event for event in state["route_decisions"] if event.source == "post_synthesis_validation"]
+        assert [event.target for event in decisions] == ["synthesize", "action_postprocess"]
+        assert decisions[0].reason == "unresolved_references"
     result = state["response"].result
     assert all(check.reference_status != "missing" for check in result.checks)
     assert [message.content for message in state["messages"] if isinstance(message, AIMessage)] == [export_answer_text(result)]

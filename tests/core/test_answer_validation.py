@@ -2,10 +2,13 @@ import pytest
 from pydantic import ValidationError
 
 from src.core.answer_schema import AnswerDocument, export_answer_text, finalize_answer, iter_content_units, text_document
+from src.core.contracts import ResponseState
+from src.core.contracts.boundary.graph import build_graph_state_input
 from src.core.documents import DocumentElement, SourceAnchor, build_snapshot
 from src.core.evidence import RetrievalScore, SearchHit, build_evidence
 from src.core.planner_schema import PlannerOutput
 from src.core.request_contracts import AnswerContract, ContentRequirement, ContractEvidence, RequestContract
+from src.runtime.nodes.validation import make_post_synthesis_validation_node
 from src.runtime.nodes.validation.evidence_validator import assess_validation, build_validation_snapshot
 from src.runtime.nodes.validation.policy import apply_validation_outcome
 
@@ -65,18 +68,36 @@ def _hit(evidence):
 
 
 def test_validation_covers_list_code_and_table_cell_text():
-    """목록·코드·비교표 셀의 표시 본문도 문단과 같은 참조 검사를 받는다."""
-    unit = {"text": "검사할 내용", "basis": "source", "refs": ["missing"]}
+    """검증을 마친 답변은 근거 없는 목록·코드·표 셀을 제거하고 유효한 본문을 보존한다."""
+    invalid_units = [
+        {"text": text, "basis": "source", "refs": [f"missing-{index}"]}
+        for index, text in enumerate(["잘못된 목록", "unsupported_code()", "잘못된 표 값"])
+    ]
+    retained = text_document("유지할 안내")
     label = {"text": "항목", "basis": "interaction", "refs": []}
     document = AnswerDocument.model_validate({"blocks": [
-        {"type": "list", "items": [unit]},
-        {"type": "code", "language": "python", "content": unit},
-        {"type": "table", "columns": [label], "rows": [[unit]]},
+        *retained.model_dump(mode="json")["blocks"],
+        {"type": "list", "items": [invalid_units[0]]},
+        {"type": "code", "language": "python", "content": invalid_units[1]},
+        {"type": "table", "columns": [label], "rows": [[invalid_units[2]]]},
     ]})
+    contract = RequestContract()
+    state = build_graph_state_input(
+        user_input="자료를 설명해 주세요", request_contract=contract,
+        response=ResponseState(result=finalize_answer(document, []),
+                               request_id=contract.request_id, contract_revision=contract.revision),
+        retry={"max_retries": 0, "max_content_repairs": 0},
+    )
 
-    assessment = assess_validation(_snapshot(document))
+    updates = make_post_synthesis_validation_node(False)(state)
 
-    assert assessment.invalid_unit_paths == {"b0.items.0", "b1.content", "b2.rows.0.0"}
+    result = updates["response"].result
+    assert updates["response"].kind == "answer"
+    assert not updates["retry"].needs_retry
+    assert result.content == retained
+    assert export_answer_text(result) == "유지할 안내"
+    assert all(unit["text"] not in result.model_dump_json() for unit in invalid_units)
+    assert any(issue.code == "invalid_content_removed" for issue in result.issues)
 
 
 

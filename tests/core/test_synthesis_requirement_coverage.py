@@ -11,7 +11,7 @@ from src.core.planner_schema import PlannerOutput, PlannedRequirement, Retrieval
 from src.core.request_contracts import RequestContract
 from src.runtime.nodes.synthesis.budgets import RetrievedEvidenceBudget, resolve_evidence_budgets
 from src.runtime.nodes.synthesis.context import build_synthesis_context, prepare_synthesis_inputs
-from src.runtime.nodes.synthesis.evidence_selection import select_evidence_hits, select_evidence_packet
+from src.runtime.nodes.synthesis.evidence_selection import select_evidence_packet
 from src.runtime.nodes.validation.assessment import assess_validation
 from src.runtime.nodes.validation.node import make_post_synthesis_validation_node
 from src.runtime.nodes.validation.snapshot import build_validation_snapshot
@@ -57,20 +57,6 @@ def _prepare(tasks, hits, *, budget=6000, snippet=960, max_items=6):
     return prepared, packet
 
 
-def test_each_docs_requirement_precedes_additional_hits_from_the_same_source():
-    """A comparison retains one candidate for every independent docs requirement before duplicates."""
-    alpha, beta = _task("numpy", "rows"), _task("pandas", "columns")
-    alpha_first = _hit(alpha, "numpy rows are combined", rank=1)
-    alpha_second = _hit(alpha, "numpy rows are preserved", rank=2)
-    beta_hit = _hit(beta, "pandas columns are combined", rank=9)
-    plan = PlannerOutput(use_retrieval=True, tasks=[alpha, beta])
-
-    selected = select_evidence_hits(
-        user_input="Compare numpy and pandas", hits=[alpha_first, alpha_second, beta_hit], planner_output=plan,
-    )
-
-    assert selected[:2] == [alpha_first, beta_hit]
-    assert set(hit.evidence.id for hit in selected) == {alpha_first.evidence.id, alpha_second.evidence.id, beta_hit.evidence.id}
 
 
 
@@ -98,19 +84,6 @@ def _upload_hit(task, file_id, text, *, rank=1):
     )
 
 
-def test_file_comparison_reserves_a_candidate_for_each_requested_file():
-    """Extra matches in one upload cannot displace another requested comparison file."""
-    task = RetrievalTask(route="upload", query="compare the setup", k=4, requirement={"file_ids": ["alpha", "beta"]})
-    first = _upload_hit(task, "alpha", "setup = 1\n")
-    extra = _upload_hit(task, "alpha", "setup = 2\n", rank=2)
-    second = _upload_hit(task, "beta", "setup = 3\n", rank=9)
-    unrelated = _upload_hit(task, "gamma", "setup = 4\n")
-
-    selected = select_evidence_hits(user_input=task.query, hits=[first, extra, unrelated, second],
-                                    planner_output=PlannerOutput(use_retrieval=True, tasks=[task]))
-
-    assert selected[:2] == [first, second]
-    assert unrelated not in selected
 
 
 

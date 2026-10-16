@@ -62,5 +62,3 @@ def _state(text: str, request: str = "결과를 txt로 저장해줘", *, contrac
 
 
 
-
-

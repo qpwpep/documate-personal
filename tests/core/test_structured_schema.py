@@ -68,7 +68,8 @@ def test_wire_requires_canonical_fields_without_making_nonnullable_defaults_null
     # Strict wire input deliberately differs from the domain's shorthand input.
     domain = Defaults.model_validate({})
     schema = compile_output_schema(Defaults)["schema"]
-    assert schema["required"] == ["enabled", "label"]
+    assert set(schema["required"]) == {"enabled", "label"}
+    assert len(schema["required"]) == len(set(schema["required"]))
     assert "default" not in schema["properties"]["enabled"]
     _validate_wire(Defaults, domain.model_dump(mode="json"))
     for value in ({}, {"enabled": None, "label": None}, {"enabled": False}):

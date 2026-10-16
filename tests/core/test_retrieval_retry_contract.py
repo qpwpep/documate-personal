@@ -11,7 +11,6 @@ from src.runtime.make_graph import _pre_synthesis_route
 from src.runtime.nodes.planner import make_planner_node
 from src.runtime.nodes.synthesis.evidence_selection import tasks_for_hit
 from src.runtime.nodes.validation import make_pre_synthesis_validation_node
-from src.runtime.nodes.validation.evidence_validator import assess_retrieval_quality, build_validation_snapshot
 from tests.core.helpers import _CapturePlannerLLM, build_test_state
 from tests.core.test_answer_validation import _evidence, _hit
 

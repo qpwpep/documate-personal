@@ -1,5 +1,5 @@
 import pytest
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import HumanMessage, SystemMessage
 
 from src.core.answer_schema import AnswerDocument, export_answer_text, finalize_answer, text_document
 from src.core.contracts import PlannerState, ResponseState, RuntimeState
