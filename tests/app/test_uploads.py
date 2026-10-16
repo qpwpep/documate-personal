@@ -25,6 +25,8 @@ def test_request_requires_approval_and_detaches_from_staging_draft(tmp_path):
     manifest = _manifest()
     staged = stage_uploaded_files([_UploadedFile("sample.py", b"new")], tmp_path,
         existing_files=manifest.files, max_files=10, max_file_mib=1, max_total_mib=10)
+    assert staged.errors == []
+    assert staged.files[0].conflicting_file_id == "original"
     with pytest.raises(ValueError, match="교체"):
         build_upload_sync_request(manifest, files=staged.files)
     approved = {"original"}
@@ -61,15 +63,6 @@ class _UploadedFile:
         return self._payload
 
 
-
-
-def test_staging_same_name_changed_bytes_requires_explicit_replacement(tmp_path):
-    """A name collision is staged as a conflict rather than silently replacing the file."""
-    import hashlib
-    existing = SimpleNamespace(file_id="original", name="sample.py", size_bytes=3, content_hash="sha256:" + hashlib.sha256(b"old").hexdigest())
-    result = stage_uploaded_files([_UploadedFile("sample.py", b"new")], tmp_path, existing_files=[existing], max_files=10, max_file_mib=10, max_total_mib=50)
-    assert result.errors == []
-    assert result.files[0].conflicting_file_id == "original"
 
 
 

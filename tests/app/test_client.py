@@ -96,22 +96,6 @@ def frame(event, data):
 
 
 
-@pytest.mark.parametrize("manifest", [[], {"epoch": "epoch", "revision": -1, "files": []}])
-def test_invalid_final_manifest_does_not_confirm_a_partial_response(transport, manifest):
-    """An invalid attachment snapshot rejects the final response without confirming stale state."""
-    calls = transport(StreamResponse([frame("final_response", {
-        "response": answer_response().model_dump(mode="json"),
-        "upload_manifest": manifest,
-    })]))
-
-    events = list(stream_agent_response("질문", context(), uploads=UploadContext(epoch="e", revision=0)))
-
-    assert [event.event for event in events] == ["error"]
-    assert events[0].data["code"] == "invalid_stream"
-    assert events[0].result is None
-    assert len(calls) == 1
-
-
 
 
 

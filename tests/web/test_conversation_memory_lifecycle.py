@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import unittest
+from copy import deepcopy
+from unittest.mock import patch
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from pydantic import ValidationError
@@ -103,13 +105,12 @@ class _InvalidRuntimeGraph(_RollingSummaryGraph):
 
 
 def _make_manager(graph) -> AgentFlowManager:
-    manager = AgentFlowManager.__new__(AgentFlowManager)
-    manager.settings = AppSettings(
+    manager = AgentFlowManager(settings=AppSettings(
+        _env_file=None,
         openai_api_key="test-key",
         tavily_api_key="test-key",
-    )
+    ))
     manager.graph = graph
-    manager.messages = []
     return manager
 
 
@@ -120,18 +121,23 @@ class ConversationMemoryLifecycleTest(unittest.TestCase):
 
     def test_invalid_returned_runtime_preserves_conversation_and_previous_answer(self) -> None:
         """잘못된 반환 runtime은 대화 기록 일부만 새 요청으로 교체하지 않는다."""
-        manager = _make_manager(_InvalidRuntimeGraph())
-        manager.messages = [HumanMessage(content="stable request"), AIMessage(content="stable answer")]
-        manager.memory_summary = "stable summary"
-        previous = finalize_answer(text_document("stable answer"), [])
-        manager._ensure_session().previous_response = previous
-        before = manager._ensure_session().snapshot_conversation_memory()
+        graph = _RollingSummaryGraph()
+        manager = _make_manager(graph)
+        previous = AnswerResponse.model_validate(manager.run_agent_flow("stable request")["response"])
+        before = deepcopy(manager.messages)
+        summary = manager.memory_summary
+        manager.graph = _InvalidRuntimeGraph()
 
         result = manager.run_agent_flow("new request")
 
         self.assertEqual(result["debug"]["observability_status"], "failed")
-        self.assertEqual(manager._ensure_session().snapshot_conversation_memory(), before)
-        self.assertEqual(manager._ensure_session().previous_response, previous)
+        self.assertEqual(manager.messages, before)
+        self.assertEqual(manager.memory_summary, summary)
+        manager.graph = graph
+        manager.run_agent_flow("continue")
+        self.assertEqual(graph.states[1]["runtime"].previous_response, previous)
+        self.assertEqual(graph.states[1]["messages"], before)
+        self.assertEqual([turn.text for turn in graph.states[1]["runtime"].user_turns], ["stable request"])
 
 
 
