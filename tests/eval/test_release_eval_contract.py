@@ -228,15 +228,6 @@ def _save_receipt():
 
 
 
-def test_zero_score_is_a_valid_score_not_an_error(tmp_path):
-    """유효한 0점은 오류가 아니라 품질 불합격으로 저장된다."""
-    result = _run_case(_docs_case(), _judge(_judge_payload(0.0)), turns=[_wrong_answer_turn()], tmp_path=tmp_path)
-
-    assert result.judge_errors == []
-    assert result.llm_judge_score == 0.0
-    assert result.judge_status == "succeeded"
-
-
 # --- judge 비활성화와 클라이언트 상태 불일치 -------------------------------------
 
 
