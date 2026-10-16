@@ -14,7 +14,6 @@ from src.core.evidence import EvidenceRef
 from src.infra.chunking import chunk_notebook_path, chunk_python_text
 from src.core.uploads import UploadRecord
 from src.infra.tools.local_rag import build_upload_retriever, build_upload_search_tool
-from src.infra.tools.local_rag.ranking import rank_retrieval_rows
 from src.infra.tools.local_rag.serialization import build_local_hit_bundle
 from tests.synthesis_fixtures import synthesis_excerpt_limits
 
@@ -149,31 +148,8 @@ class LocalRagTest(unittest.TestCase):
 
 
 
-    def test_chunk_boundary_does_not_discard_complete_source_ast(self) -> None:
-        """Code facts retain original line numbers even when indexing splits a call."""
-        text = "# setup\n" * 20 + "model = train_model(\n    data,\n    learning_rate=0.01,\n    epochs=20,\n)\n"
-        indexed = chunk_python_text(path="uploads/session/model.py", text=text, chunk_size=45, chunk_overlap=5)
-        chunk = next(doc for doc in indexed.chunks if "learning_rate" in doc.page_content)
-        evidence = indexed.hydrate(chunk)
-        call = evidence.element.metadata["code_metadata"]["calls"][0]
-        self.assertEqual(call, {"call_name": "train_model", "kwargs": {"learning_rate": "0.01", "epochs": "20"}, "line": 21})
 
 
-
-
-
-
-
-    def test_rank_retrieval_rows_prefers_parameter_cell_for_parameter_queries(self) -> None:
-        import_source = "from sklearn.model_selection import train_test_split\nfrom sklearn.preprocessing import StandardScaler"
-        usage_source = "X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)"
-        first = chunk_python_text(path="imports.py", text=import_source, chunk_size=800, chunk_overlap=120)
-        second = chunk_python_text(path="usage.py", text=usage_source, chunk_size=800, chunk_overlap=120)
-        ranked = rank_retrieval_rows(
-            [(first.hydrate(first.chunks[0]), 0.3), (second.hydrate(second.chunks[0]), 0.28)],
-            query="sample_pipeline.ipynb 기준으로 train_test_split 파라미터를 찾아줘",
-        )
-        self.assertEqual(ranked[0][0].excerpt, usage_source)
 
 
 

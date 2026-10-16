@@ -10,29 +10,6 @@ from src.core.planner_schema import RetrievalRequirement, RetrievalTask
 from src.core.uploads import UploadRecord
 from src.infra.document_ingestion import ConversionPolicy, DocumentIngestionContext
 from src.infra.tools.local_rag import build_upload_retriever, build_upload_search_tool
-from src.infra.tools.local_rag.requirements import resolve_source_requirement
-
-
-def test_converted_document_cannot_prove_a_python_definition_is_absent():
-    """Complete document conversion does not imply exhaustive Python source analysis."""
-    snapshot = build_snapshot(source_uri="upload:///session/pdf", title="guide.pdf", media_type="application/pdf",
-                              source_type="upload", content=b"pdf", parser="docling", parser_version="test")
-    parsed = ParsedDocument(snapshot=snapshot, elements=[DocumentElement(element_id="p", kind="paragraph", text="run example")])
-    result = resolve_source_requirement(requirement=RetrievalRequirement(symbols=["run"], match="definition"),
-                                        source_documents=(parsed,))
-    assert result.answerability == "unknown"
-    assert result.missing_requirements == []
-
-
-def test_ocr_code_is_not_published_as_an_exact_python_implementation():
-    """Code-looking OCR text retains document provenance without claiming native AST coverage."""
-    snapshot = build_snapshot(source_uri="upload:///session/pdf", title="guide.pdf", media_type="application/pdf",
-                              source_type="upload", content=b"pdf", parser="docling", parser_version="test")
-    parsed = ParsedDocument(snapshot=snapshot, elements=[DocumentElement(element_id="p", kind="code", text="def run():\n    return 1")])
-    result = resolve_source_requirement(requirement=RetrievalRequirement(symbols=["run"], match="definition"),
-                                        source_documents=(parsed,))
-    assert result.answerability == "unknown"
-    assert result.hits == []
 
 
 class _DocumentEmbeddings(Embeddings):
@@ -48,7 +25,7 @@ def converted_uploads(tmp_path, monkeypatch):
     monkeypatch.setattr("src.infra.chroma_store.OpenAIEmbeddings", lambda **kwargs: _DocumentEmbeddings())
 
     @contextmanager
-    def create(contents):
+    def create(contents, *, kind="paragraph"):
         records = []
         parsed = []
         for name, text in contents.items():
@@ -62,7 +39,7 @@ def converted_uploads(tmp_path, monkeypatch):
             snapshot = build_snapshot(source_uri=record.source_uri, title=name, media_type="application/pdf",
                 source_type="upload", content=raw, parser="docling", parser_version="test")
             parsed.append(ParsedDocument(snapshot=snapshot, elements=[DocumentElement(
-                element_id="body", kind="paragraph", text=text)]))
+                element_id="body", kind=kind, text=text)]))
 
         class Converter:
             def convert_many(self, files, **kwargs):
@@ -77,6 +54,21 @@ def converted_uploads(tmp_path, monkeypatch):
             handle.cleanup()
 
     return create
+
+
+@pytest.mark.parametrize("kind, text", [
+    pytest.param("paragraph", "run example", id="prose-does-not-prove-absence"),
+    pytest.param("code", "def run():\n    return 1", id="ocr-code-does-not-prove-definition"),
+])
+def test_converted_document_cannot_establish_a_python_definition(converted_uploads, kind, text):
+    """Converted prose and code cannot prove either the presence or absence of native Python definitions."""
+    with converted_uploads({"guide.pdf": text}, kind=kind) as (files, retriever):
+        payload = build_upload_search_tool()(query="run definition", retriever=retriever,
+            requirement=RetrievalRequirement(symbols=["run"], match="definition", file_ids=[files[0].file_id]))
+
+    assert payload.diagnostics.answerability == "unknown"
+    assert payload.diagnostics.missing_requirements == []
+    assert payload.hits == []
 
 
 

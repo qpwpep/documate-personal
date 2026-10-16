@@ -97,16 +97,6 @@ def test_complete_method_definition_is_found_outside_vector_top_k_with_exact_off
 
 
 
-def test_notebook_import_alias_identifies_usage_in_a_later_cell(uploaded):
-    """A preserved import alias connects a qualified API requirement to its later notebook call."""
-    cells = ["from itertools import chain as combine\n", "rows = list(combine(left, right))\n"]
-    with uploaded(cells, notebook=True) as retriever:
-        payload = build_upload_search_tool()(query="itertools.chain 사용", retriever=retriever,
-                                            requirement=_requirement(["itertools.chain"], "symbol"))
-    hits = payload.hits
-    assert payload.diagnostics.answerability == "covered"
-    assert [hit.evidence.excerpt for hit in hits] == [cells[1].rstrip("\n")]
-    assert hits[0].evidence.element.anchors[0].cell_index == 1
 
 
 

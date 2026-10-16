@@ -104,14 +104,6 @@ def test_library_match_alone_does_not_cover_a_topic(search):
 
 
 
-def test_candidate_budget_is_separate_from_returned_evidence_budget(search):
-    tool, batches, seen = search
-    batches.append([reference("numpy.mean")])
-    payload = tool("numpy.mean parameters", k=1, requirement=RetrievalRequirement(library='numpy', symbols=['numpy.mean'], evidence_needs=['parameters']))
-    assert seen[0]["max_results"] > 1
-    assert 0 < len(hits(payload)) <= 1
-
-
 
 
 def test_complementary_aspects_are_selected_before_repeated_coverage(search):

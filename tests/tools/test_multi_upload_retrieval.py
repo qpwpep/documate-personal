@@ -81,7 +81,10 @@ def test_explicit_file_scope_applies_to_semantic_and_exact_search(uploads, symbo
             requirement=RetrievalRequirement(symbols=symbols, match="definition" if symbols else "topic", file_ids=[second.file_id]))
     hits = payload.hits
     assert hits
+    assert payload.diagnostics.answerability == "covered"
     assert {hit.evidence.snapshot.title for hit in hits} == {"second.py"}
+    assert {hit.evidence.element.metadata["file_id"] for hit in hits} == {second.file_id}
+    assert all("return 'second'" in hit.evidence.excerpt for hit in hits)
 
 
 
@@ -102,20 +105,6 @@ def test_explicit_file_scope_applies_to_semantic_and_exact_search(uploads, symbo
 
 
 
-
-
-
-def test_source_resolver_enforces_scope_when_called_directly(uploads):
-    """The source resolver does not return definitions outside its explicit file constraint."""
-    from src.infra.tools.local_rag.requirements import resolve_source_requirement
-
-    record, indexed = uploads
-    first = record("first.py", "def load():\n    return 1\n")
-    second = record("second.py", "def load():\n    return 2\n")
-    with indexed([first, second]) as handle:
-        result = resolve_source_requirement(source_documents=handle.retriever.source_documents,
-            requirement=RetrievalRequirement(symbols=["load"], match="definition", file_ids=[second.file_id]))
-    assert {hit.evidence.snapshot.title for hit in result.hits} == {"second.py"}
 
 
 
