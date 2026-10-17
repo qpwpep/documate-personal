@@ -2,20 +2,13 @@ from __future__ import annotations
 
 import json
 
-import pytest
 
 from src.core.answer_schema import export_answer_text, finalize_answer, text_document
 from src.core.contracts.boundary.graph import build_graph_state_input
-from src.core.documents import DocumentElement, ParsedDocument, SourceAnchor, TableCell, TableData, build_snapshot
+from src.core.documents import DocumentElement, SourceAnchor, TableCell, TableData, build_snapshot
 from src.core.evidence import build_evidence, selected_source_anchors
-from src.core.planner_schema import RetrievalTask
-from src.core.table_selection import table_row_units
-from src.infra.chunking import chunk_parsed_document
-from src.infra.tools.local_rag.serialization import build_local_hit_bundle
 from src.runtime.nodes.synthesis.prompt_builder import build_synthesis_messages
 from src.core.request_contracts import RequestContract
-from src.runtime.nodes.synthesis.budgets import RetrievedEvidenceBudget
-from src.runtime.nodes.synthesis.evidence_selection import select_evidence_packet
 
 
 def table_source():
@@ -38,16 +31,6 @@ def table_source():
         "column": ["name", "count"], "row": ["alpha", "beta"], "section": ["north", "south"],
     }})
     return snapshot, element
-
-
-
-
-
-
-
-
-
-
 
 
 def test_table_packet_and_export_only_report_selected_cell_locations():
@@ -73,7 +56,3 @@ def test_table_packet_and_export_only_report_selected_cell_locations():
     response = finalize_answer(text_document("target 20", basis="excerpt", refs=[item.id]), [item])
     exported = export_answer_text(response, include_sources=True)
     assert "page 2" in exported and "page 3" not in exported
-
-
-
-

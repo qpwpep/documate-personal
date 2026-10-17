@@ -2,7 +2,6 @@
 
 import json
 
-import pytest
 import requests
 
 from src.core.contracts import PlannerState
@@ -12,7 +11,7 @@ from src.core.planner_schema import PlannerOutput, RetrievalTask
 from src.core.request_contracts import RequestContract
 from src.infra.settings import AppSettings
 from src.infra.tools.docs_search.tool import build_docs_search_tool
-from src.runtime.nodes.synthesis.budgets import ExcerptLimits, RetrievedEvidenceBudget, resolve_evidence_budgets
+from src.runtime.nodes.synthesis.budgets import RetrievedEvidenceBudget
 from src.runtime.nodes.synthesis.context import build_synthesis_context, prepare_synthesis_inputs
 
 
@@ -59,18 +58,6 @@ def _prepare(task, hits, *, excerpt_chars=1800, max_items=8):
                                if str(message.content).startswith("[Retrieval Requirements]"))
     records = json.loads(requirement_message[requirement_message.index("\n[") + 1:])
     return prepared, records[0]["coverage"]
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 def test_parameter_aspect_does_not_displace_a_separate_required_example(monkeypatch):

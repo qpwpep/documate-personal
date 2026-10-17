@@ -1,20 +1,16 @@
 import json
 
-import pytest
 
 from langchain_core.messages import AIMessage, HumanMessage
 
-from src.core.answer_schema import export_answer_text, finalize_answer, iter_content_units, text_document
-from src.core.contracts import PlannerState, ResponseState, RetrievalState, DebugState, RetrievalDiagnostic, RetryState
+from src.core.answer_schema import export_answer_text, iter_content_units, text_document
+from src.core.contracts import PlannerState, RetrievalState, DebugState, RetrievalDiagnostic
 from src.core.contracts.boundary.graph import build_graph_state_input
 from src.core.documents import DocumentElement, SourceAnchor, build_snapshot
 from src.core.evidence import RetrievalScore, SearchHit, build_evidence
-from src.core.llm_errors import LLMCallError
-from src.core.planner_schema import PlannerOutput, PlannedRequirement, RetrievalTask
+from src.core.planner_schema import PlannerOutput, RetrievalTask
 from src.core.request_contracts import ExtractBody, RequestContract
 from src.runtime.nodes.synthesis import make_synthesize_node
-from src.runtime.agent_runtime.llm_usage import capture_llm_usage
-from src.runtime.nodes.validation.node import make_post_synthesis_validation_node
 from tests.synthesis_fixtures import synthesis_excerpt_limits
 
 
@@ -68,26 +64,6 @@ class ModelBoundary:
         return {"parsed": document.model_dump(mode="json"), "raw": AIMessage(content=""), "parsing_error": None}
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 def test_malformed_generation_becomes_explicit_original_source_fallback():
     """Invalid model text is never promoted to an answer, while original evidence stays available."""
     hit = _hit()
@@ -98,14 +74,6 @@ def test_malformed_generation_becomes_explicit_original_source_fallback():
     assert any(unit.basis == "excerpt" for _, unit in iter_content_units(result.content))
     assert updates["debug"].synthesis_errors
     assert all(check.support_status != "unsupported" for check in result.checks)
-
-
-
-
-
-
-
-
 
 
 def test_exact_upload_extraction_needs_no_model_generation():
@@ -127,5 +95,3 @@ def test_exact_upload_extraction_needs_no_model_generation():
     assert updates["response"].normal_evidence_missing_requirement_ids == []
     assert updates["response"].result.retrieval_required
     assert updates["response"].result.issues == []
-
-

@@ -1,13 +1,10 @@
-import pytest
-from pydantic import ValidationError
-
 from src.core.answer_schema import AnswerDocument, export_answer_text, finalize_answer, iter_content_units, text_document
 from src.core.contracts import ResponseState
 from src.core.contracts.boundary.graph import build_graph_state_input
 from src.core.documents import DocumentElement, SourceAnchor, build_snapshot
 from src.core.evidence import RetrievalScore, SearchHit, build_evidence
 from src.core.planner_schema import PlannerOutput
-from src.core.request_contracts import AnswerContract, ContentRequirement, ContractEvidence, RequestContract
+from src.core.request_contracts import RequestContract
 from src.runtime.nodes.validation import make_post_synthesis_validation_node
 from src.runtime.nodes.validation.evidence_validator import assess_validation, build_validation_snapshot
 from src.runtime.nodes.validation.policy import apply_validation_outcome
@@ -29,15 +26,6 @@ def _snapshot(document: AnswerDocument):
     )
 
 
-
-
-
-
-
-
-
-
-
 def _evidence(text="retries = 5\n", source_type="upload"):
     snapshot = build_snapshot(
         source_uri="upload:///job.py" if source_type == "upload" else "https://docs.example.org/retries",
@@ -55,16 +43,8 @@ def _evidence(text="retries = 5\n", source_type="upload"):
     return build_evidence(snapshot=snapshot, element=element)
 
 
-
-
-
-
 def _hit(evidence):
     return SearchHit(evidence=evidence, score=RetrievalScore(metric="rank", raw=1, direction="lower"), rank=1)
-
-
-
-
 
 
 def test_validation_covers_list_code_and_table_cell_text():
@@ -100,8 +80,6 @@ def test_validation_covers_list_code_and_table_cell_text():
     assert any(issue.code == "invalid_content_removed" for issue in result.issues)
 
 
-
-
 def test_mismatching_excerpt_falls_back_to_the_exact_original_text():
     """원문과 다른 발췌를 정상으로 처리하지 않고 실제 원문으로 대체한다."""
     evidence = _evidence()
@@ -123,11 +101,3 @@ def test_mismatching_excerpt_falls_back_to_the_exact_original_text():
     assert excerpts == [evidence.excerpt]
     assert "retries = 99" not in export_answer_text(result)
     assert any(check.support_status == "exact_match" for check in result.checks)
-
-
-
-
-
-
-
-
