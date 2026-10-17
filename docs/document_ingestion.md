@@ -82,10 +82,8 @@ CER은 정규화한 정답 문자 대비 편집 거리이며 누락도 계산합
 ## 검증 재현
 
 ```bash
-LIVE_TEST=false uv run --no-sync pytest -q
-LIVE_TEST=false uv run --no-sync pytest tests/tools/test_docx_conversion.py -q
-RUN_DOCLING_TESTS=1 LIVE_TEST=false HF_HUB_OFFLINE=1 \
-  uv run --no-sync pytest tests/tools/test_docling_adapter.py tests/web/test_document_pipeline_live.py -q
+uv run --no-sync pytest -q
+uv run --no-sync pytest tests/tools/test_docx_conversion.py -q
 uv run --no-sync python script/benchmark_document_ocr.py
 uv run --no-sync python script/sync_env_example.py --check
 uv run --no-sync python script/check_encoding.py
@@ -93,6 +91,6 @@ uv run --no-sync python script/check_encoding.py
 
 일반 테스트는 실제 임시 파일·Chroma와 결정적인 외부 임베딩/LLM 경계를 사용합니다. `test_docx_conversion.py`는 합성 Docling 객체를 매핑하는 단위 테스트와 달리 임시 DOCX bytes를 실제 Word 백엔드로 변환합니다. Docling 선택 의존성은 필요하지만 PDF/OCR 추론 모델이나 외부 API는 사용하지 않습니다.
 
-`RUN_DOCLING_TESTS=1` 검증은 실제 문서 변환 worker와 사전 모델을 사용하며 유료 API를 호출하지 않습니다. PDF·DOCX·스캔 PDF·PNG의 실제 변환에서 시작해 HTTP 첨부·검색·표/페이지 인용·다른 이름으로 캐시 재사용·원본 삭제 후 이전 인용까지 확인합니다. 혼합 서식 fixture는 문단별 검색과 전체·부분 문자 범위 인용도 확인합니다. 모델이 필요한 테스트는 명시적으로 활성화한 환경에서만 실행합니다.
+PDF/OCR 추론 모델이 필요한 전체 변환 검사는 핵심 회귀 테스트 범위에서 제외합니다. HTTP 첨부·검색·교체·인용 보존과 실패 시 기존 자료 복구는 외부 변환 경계를 대체한 대표 테스트로 확인합니다. 실제 OCR 모델의 품질과 성능은 `script/benchmark_document_ocr.py`로 별도 평가합니다.
 
 범용 문서 전체 요약, PDF 페이지 뷰어, 다중 프레임 이미지, 손글씨 정확도 보장, PPTX/XLSX, 비동기 작업 API는 현재 지원 범위가 아닙니다. 출처 보존과 처리 성공은 OCR 내용의 무오류 보장과 구분합니다.

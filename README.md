@@ -126,7 +126,7 @@ Docling은 요청에 종속된 로컬 프로세스에서 문서를 변환하고 
 
 주력 120개 fixture는 `release-nemo-v2`입니다. 미첨부 사례 1개를 올바른 업로드 안내·저장 보류 계약으로 고치고 실제 NeMo 생성·검수를 다시 수행했으며, 나머지 119개의 내용과 생성 이력은 보존했습니다. 현재 승인은 UTF-8·LF의 실제 바이트와 최종 실행 위치의 첨부를 검증하고, 첨부 이름과 바이트를 불변 입력으로 staging에 전달합니다. 질문 실행 전 서버 manifest의 이름·크기·해시도 대조합니다. 기존 `release-nemo-v1` 데이터·승인 기록은 원본 바이트로 별도 보관합니다. 아래 과거 release 수치는 새 데이터의 성능이 아니며, 현재 120개 전체의 실모델 품질 평가를 새로 수행한 것은 아닙니다. 구성·생성 이력·검수 및 회귀 검증 범위는 [NeMo release 데이터 안내](docs/benchmarking.md#21-nemo-release-데이터-생성검수)에 정리했습니다.
 
-회귀 테스트는 2026-09-13 KST에 Docling 선택 의존성을 설치하고 `LIVE_TEST=false`, `RUN_DOCLING_TESTS=0`으로 실행한 결과입니다. 별도로 실제 로컬 모델을 사용하는 문서 변환·검색·인용 검증은 `19 passed`였고, Docling을 제거한 기본 설치에서도 앱 생성과 회귀 검사(`1218 passed, 117 skipped, 69 subtests passed`)를 확인했습니다. 아래 `release` benchmark 수치는 `20260509_043436` 런의 기록입니다. 이 release 기록은 현재 응답·평가 계약이나 공용 클라이언트 시나리오로 실행한 결과가 아닙니다. 새 계약의 품질은 별도 release run으로 확인해야 하며, 평가 기준이 다른 수치를 직접 비교하지 않습니다. 로컬 benchmark 실행은 `output/benchmarks/latest_release_run.txt`를 최신 `release` run 포인터로 갱신합니다.
+아래 회귀 테스트 수치는 2026-09-13 KST 당시 전체 테스트 구성의 기록이며, 현재 핵심 로직 테스트 구성의 결과가 아닙니다. 당시 Docling 선택 의존성을 설치하고 `LIVE_TEST=false`, `RUN_DOCLING_TESTS=0`으로 실행했습니다. 별도로 실제 로컬 모델을 사용하는 문서 변환·검색·인용 검증은 `19 passed`였고, Docling을 제거한 기본 설치에서도 앱 생성과 회귀 검사(`1218 passed, 117 skipped, 69 subtests passed`)를 확인했습니다. 아래 `release` benchmark 수치는 `20260509_043436` 런의 기록입니다. 이 release 기록은 현재 응답·평가 계약이나 공용 클라이언트 시나리오로 실행한 결과가 아닙니다. 새 계약의 품질은 별도 release run으로 확인해야 하며, 평가 기준이 다른 수치를 직접 비교하지 않습니다. 로컬 benchmark 실행은 `output/benchmarks/latest_release_run.txt`를 최신 `release` run 포인터로 갱신합니다.
 
 | 항목 | 결과 |
 |---|---:|
@@ -140,7 +140,7 @@ Docling은 요청에 종속된 로컬 프로세스에서 문서를 변환하고 
 
 기록된 당시의 comparable generated-suite에서 pass rate는 `0.3833`에서 `0.9667`로, citation compliance는 `0.3056`에서 `0.9556`으로 올라갔고 p95 latency는 `62063.0 ms`에서 `9435.9 ms`로 줄었습니다.
 
-공용 클라이언트 전환은 실제 localhost FastAPI·그래프·검색·파일 저장과 외부 모델/임베딩 대체 경계로 검증했습니다. 두 파일의 근거를 포함한 준비 답변과 후속 저장 결과가 같고, 새 사례에 이전 대화·첨부가 유입되지 않는지 확인했습니다. Streamlit 최소 지원 버전 `1.54.0`의 격리 환경 UI 검사도 `83 passed`입니다. 유료 모델·검색·judge를 사용하는 새 release run과 실서비스 Slack 전송은 실행하지 않았습니다.
+공용 클라이언트 전환 당시에는 실제 localhost FastAPI·그래프·검색·파일 저장과 외부 모델/임베딩 대체 경계로 검증했습니다. 두 파일의 근거를 포함한 준비 답변과 후속 저장 결과가 같고, 새 사례에 이전 대화·첨부가 유입되지 않는지 확인했습니다. Streamlit 최소 지원 버전 `1.54.0`의 격리 환경 UI 검사 결과도 당시 `83 passed`였습니다. 현재 회귀는 핵심 앱 로직과 벤치마크 release 판정의 대표 실패 경로를 검증하며, 벤치마크 생성·승격·승인·보고 도구의 전체 회귀와 UI 테스트는 포함하지 않습니다. 유료 모델·검색·judge를 사용하는 새 release run과 실서비스 Slack 전송은 실행하지 않았습니다.
 
 추세 그래프는 [docs/assets/benchmark_history.svg](docs/assets/benchmark_history.svg)에 보관합니다. 실행 방법은 [벤치마크 가이드](docs/benchmarking.md)를 참고하세요. 로컬 run의 기계 판독 결과와 상세 분석은 각각 `output/benchmarks/<run_id>/summary.json`, `output/benchmarks/<run_id>/report.md`에서 확인합니다. 현재 release 판정은 품질과 별도로 실행 정책 준수를 요구하며, 단 한 사례의 금지 실행이나 관측 부족도 통과를 차단합니다. 위 과거 수치와 그래프의 당시 PASS는 현재 정책을 검증한 결과가 아니며 `legacy_unverified`로 취급합니다.
 

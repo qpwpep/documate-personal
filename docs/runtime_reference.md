@@ -648,6 +648,7 @@ Streamlit은 `AnswerResponse` 전체를 채팅 기록에 보존합니다. 본문
 |   |-- infra/
 |   `-- runtime/
 |-- tests/
+|   |-- app/
 |   |-- core/
 |   |-- eval/
 |   |-- tools/
@@ -672,45 +673,22 @@ Streamlit은 `AnswerResponse` 전체를 채팅 기록에 보존합니다. 본문
 
 ## 8. 테스트 및 검증
 
-잠금 환경과 Streamlit 최소 지원 버전을 함께 검증합니다.
+회귀 테스트는 요청 계약, 검색·검증·합성·액션 실행, 대화 메모리, 업로드 격리와 원문·인용 보존을 검증합니다. 공용 클라이언트의 스트림 실패 처리, 구조화 스키마 변환, 생성 파일 만료·정리, 벤치마크 release 판정도 핵심 계약으로 검증합니다. UI 표시, 설정·로깅·사용량 진단과 벤치마크 생성·승격·승인·보고 도구의 전체 회귀는 포함하지 않습니다.
+
+테스트는 핵심 기능별 대표 성공·실패 경로로 제한합니다. 실제 파일, HTTP 대체 서버, 공개 노드와 그래프를 통해 원문 무결성·검색 범위·세션 격리·저장 멱등성·실패 복구를 검증합니다. 내부 모델·직렬화·프롬프트 문구와 파서의 세부 입력 조합은 별도 테스트로 모두 유지하지 않습니다.
+
+스트림 중단·잘린 UTF-8·리다이렉트에서는 완료되지 않은 응답을 성공으로 처리하거나 질문을 자동 재전송하지 않는지 확인합니다. 스키마 검사는 union 변환의 의미와 필수·null·값 제약을 보존하는지 확인합니다. 생성 파일은 manifest의 만료 시각을 따르고, 만료 후 중복 저장 방지 기록과 저장 중인 임시 파일을 보존해야 합니다. 벤치마크는 평가 오류·미채점·결과 누락·중복·금지 실행·실행 증거 누락이 release 판정에서 사라지지 않는지 검증합니다.
 
 ```bash
 uv lock --check
 uv run --locked pytest -q
 uv run --locked python script/check_encoding.py
 uv run --locked python script/sync_env_example.py --check
-uv run --no-project python script/check_streamlit_compatibility.py
 ```
 
-`--locked`는 잠금 파일 갱신이 필요하면 실패하지만, 코드가 사용하는 API의 호환성까지 검사하지는 않습니다. `check_streamlit_compatibility.py`는 `pyproject.toml`의 `streamlit>=X.Y.Z`에서 하한을 읽고, 프로젝트 잠금 환경을 기준으로 해당 버전의 격리 환경을 구성합니다. 실제 설치 버전이 하한과 일치하는지 확인한 뒤 UI 업로드 흐름·상태·페이지·채팅 테스트를 실행하며, 실패 종료 코드를 그대로 전달합니다. 공용 클라이언트와 업로드 로직은 일반 회귀의 `tests/app/`에서 검증합니다. 프로젝트의 `.venv`와 `uv.lock`은 변경하지 않습니다.
+`--locked`는 잠금 파일 갱신이 필요하면 실패하지만, 코드가 사용하는 API의 호환성까지 검사하지는 않습니다. Streamlit 화면과 최소 지원 버전의 UI 호환성은 현재 회귀 테스트 범위에 포함하지 않습니다.
 
-Streamlit API 사용이나 의존성을 변경할 때 이 검증을 함께 실행합니다. 잠금 버전만 올라가도 하한 검증은 선언된 버전을 계속 사용합니다. 기존 `AppTest`가 정상 첨부 목록을 받은 화면을 렌더링하고 첨부·교체·삭제 흐름을 검사하므로, 서버 포트가 열리는지만 확인하는 기동 검사로 대체하지 않습니다. `>=X.Y.Z` 외의 선언 형식으로 바꾸면 검증 스크립트도 해당 하한을 명확히 해석하도록 함께 수정해야 합니다.
-
-실제 설정된 planner 모델로 출처 판별을 검증하려면 API 호출을 명시적으로 활성화합니다. 기본 회귀에서는 이 검사를 건너뜁니다.
-
-```bash
-LIVE_TEST=true uv run pytest tests/core/test_prompts.py -k live_source_selection -q
-```
-
-이 검사는 단일 요청과 대화 후속 질문의 출처 유지·변경, 주제 전환, 업로드 부재 안내를 확인합니다. 외부 문서 검색이나 파일 검색 도구는 실행하지 않습니다.
-
-현재 설정된 모델과 실제 공식 문서 검색으로 구조화 출력의 정상 흐름만 소수 점검하려면 다음 검사를 사용합니다. pandas merge와 NumPy reshape 질문의 검색·인용 답변 완료, 재검색 전용 스키마 수락을 검증합니다. 저장·전송 도구와 벤치마크는 실행하지 않습니다.
-
-```bash
-STRUCTURED_OUTPUT_LIVE_TEST=true LANGSMITH_TRACING=false LANGCHAIN_TRACING_V2=false \
-  uv run pytest tests/core/test_structured_output_live.py -q -s
-```
-
-세 GPT-5.6 모델의 공통 프롬프트를 같은 대표 입력으로 점검하려면 다음 opt-in 검사를 사용합니다. planner·synthesis·summary 모델만 호출하며 검색·저장·Slack 도구는 실행하지 않습니다. 실행별 원시 출력, 프롬프트·스키마 hash, 판정 결과는 `output/prompt_comparison/`에 보존합니다.
-
-```bash
-LIVE_TEST=true PROMPT_COMPARISON_PHASE=current PROMPT_COMPARISON_RUN_ID="$(date +%Y%m%dT%H%M%S)" \
-  uv run pytest tests/core/test_prompt_model_compatibility_live.py -q -s
-```
-
-`PROMPT_COMPARISON_STAGES=planner`로 변경된 단계만 다시 검사할 수 있습니다. 전후 비교는 `PROMPT_COMPARISON_BASE_REF`에 수정 전 commit을 지정하고 `PROMPT_COMPARISON_PHASE`를 생략합니다. 각 사례는 한 번 호출하므로 이 표본은 전체 benchmark 성공률을 대체하지 않습니다. 요약은 비어 있지 않은지만 자동 검사하며 제약·정정·불확실성 보존은 원문 출력에서 별도로 확인해야 합니다.
-
-요청 계약의 자연어 해석은 별도 모델 평가로 실행합니다.
+회귀 테스트는 외부 모델과 HTTP 서비스 경계를 대체해 실행 정책을 검증합니다. 실제 모델의 요청 계약 해석 정확도는 별도 평가로 확인합니다.
 
 ```bash
 uv run python -m src.eval.request_contract_eval --live --run-id v2_run_01 --repeats 3
@@ -718,8 +696,8 @@ uv run python -m src.eval.request_contract_eval --live --run-id v2_run_01 --repe
 
 이 평가는 실제 설정된 planner 모델만 호출하며 부정·언급·인용·복합 요청·정정·축약·목적지 보충을 실행 전에 고정한 42개 기대값과 각 3회 비교합니다. 실행 ID별 manifest·모델 원문·계약·오류·차원별 결과를 모두 보존합니다. 반복 횟수와 통과 기준, v1의 12/21 이력 보존 규칙은 [벤치마크 가이드](benchmarking.md#26-요청-계약-실제-모델-평가)를 참고하세요. 검색·합성·파일 생성·Slack 전송은 실행하지 않습니다. 기본 회귀의 계약 소비 테스트는 정답 계약과 모델 응답 fixture를 사용하므로 자연어 해석 정확도를 증명하지 않습니다. 소비 테스트는 실제 임시 파일과 localhost Slack HTTP 대체 서버로 수정 본문·인용·보류/완료/취소·재시도·오류 차단을 검증합니다.
 
-최신 회귀 테스트 결과는 [README의 검증 결과](../README.md#검증-결과)를 기준으로 합니다. 문서·응답 검사는 원문 내용이나 parser 설정 변경에 따른 snapshot 식별, 재청킹과 원문 참조의 분리, 코드·Notebook 위치, 표 셀 선택, 실제 표시 내용의 참조 검사와 발췌 일치, invalid 내용 제거 후 재파생, UI·저장·전송의 동일 본문 사용을 다룹니다. 파일 검색은 업로드 유무, 일반 파일 API 설명과의 구분, 인용과 세션 격리를 검증합니다.
+회귀 테스트 결과는 [README의 검증 결과](../README.md#검증-결과)를 참고하되, 과거 전체 회귀 기록과 현재 핵심 테스트의 범위를 구분합니다. 문서·응답 검사는 실제 검색의 원문 식별과 선택 범위, 표 셀 선택, 허위 출처 거부, 잘못된 내용 제거와 원문 복구, 응답·저장·전송의 동일 본문 사용을 다룹니다. 파일 검색은 업로드 유무, 요청한 파일 범위, 인용과 세션 격리를 검증합니다.
 
-bounded memory에는 compiled reducer 회귀, 반복 rolling summary, LLM 예외/빈 출력 fallback, cross-request persistence, response assembly rollback, message ownership 격리, ToolMessage projection, JSON escape-heavy byte fitting, policy envelope, TTL/세션 격리, query boundary, Hypothesis Unicode/property, 300-turn plateau 테스트가 포함됩니다.
+대화 메모리는 확정된 대화만 저장하는지, Unicode·이스케이프 문자가 포함된 입력도 크기 상한을 지키는지, 요약 모델 실패 시 기존 기억을 보존하는지 검증합니다. 요약 생성·저장·다음 프롬프트 전달과 요청 간 기억 유지, 실행 실패 시 롤백, 세션 격리도 대표 흐름으로 확인합니다.
 
 벤치마크 관련 명령과 로컬 산출물 정책은 [벤치마크 가이드](benchmarking.md), 공개 release 요약은 [README의 검증 결과](../README.md#검증-결과), 비교 추세는 [benchmark history SVG](assets/benchmark_history.svg)를 참고하세요. benchmark CLI의 env override 우선순위는 `CLI > .env > OS env > config.toml`입니다.
