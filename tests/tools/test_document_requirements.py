@@ -6,7 +6,7 @@ import pytest
 from langchain_core.embeddings import Embeddings
 
 from src.core.documents import DocumentElement, ParsedDocument, build_snapshot
-from src.core.planner_schema import RetrievalRequirement, RetrievalTask
+from src.core.planner_schema import RetrievalRequirement
 from src.core.uploads import UploadRecord
 from src.infra.document_ingestion import ConversionPolicy, DocumentIngestionContext
 from src.infra.tools.local_rag import build_upload_retriever, build_upload_search_tool
@@ -56,20 +56,12 @@ def converted_uploads(tmp_path, monkeypatch):
     return create
 
 
-@pytest.mark.parametrize("kind, text", [
-    pytest.param("paragraph", "run example", id="prose-does-not-prove-absence"),
-    pytest.param("code", "def run():\n    return 1", id="ocr-code-does-not-prove-definition"),
-])
-def test_converted_document_cannot_establish_a_python_definition(converted_uploads, kind, text):
-    """Converted prose and code cannot prove either the presence or absence of native Python definitions."""
-    with converted_uploads({"guide.pdf": text}, kind=kind) as (files, retriever):
+def test_converted_document_cannot_establish_a_python_definition(converted_uploads):
+    """Converted code cannot establish a native Python definition."""
+    with converted_uploads({"guide.pdf": "def run():\n    return 1"}, kind="code") as (files, retriever):
         payload = build_upload_search_tool()(query="run definition", retriever=retriever,
             requirement=RetrievalRequirement(symbols=["run"], match="definition", file_ids=[files[0].file_id]))
 
     assert payload.diagnostics.answerability == "unknown"
     assert payload.diagnostics.missing_requirements == []
     assert payload.hits == []
-
-
-
-

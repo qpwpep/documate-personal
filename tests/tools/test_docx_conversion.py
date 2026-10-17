@@ -10,9 +10,6 @@ pytest.importorskip("docling")
 
 from docx import Document
 from docx.enum.style import WD_STYLE_TYPE
-from docx.oxml import OxmlElement
-from docx.oxml.ns import qn
-from docx.opc.constants import RELATIONSHIP_TYPE
 
 from src.core.uploads import UploadRecord
 from src.infra.docling_adapter import convert_file
@@ -28,12 +25,6 @@ def convert_word(word, tmp_path):
                         source_uri="upload://local/formatted.docx")
     # The Word pipeline is declarative and does not load the PDF/OCR models.
     return convert_file(file, ConversionPolicy(artifacts_path=str(tmp_path)))
-
-
-
-
-
-
 
 
 def test_code_keeps_indentation_and_blank_lines_separate_from_body(tmp_path):
@@ -54,5 +45,3 @@ def test_code_keeps_indentation_and_blank_lines_separate_from_body(tmp_path):
         ("code", "if flag:\n    use(24)\n\n\tfinish()", ["Usage"]),
         ("paragraph", "Following body paragraph.", ["Usage"]),
     ]
-
-

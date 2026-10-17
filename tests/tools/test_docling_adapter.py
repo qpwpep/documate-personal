@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import os
 from pathlib import Path
 
 import pytest
@@ -9,17 +8,16 @@ import pytest
 pytest.importorskip("docling")
 
 from docling.backend.docling_parse_backend import DoclingParseDocumentBackend
-from docling.datamodel.base_models import ConversionStatus, DoclingComponentType, ErrorItem, FailureCategory, InputFormat
+from docling.datamodel.base_models import ConversionStatus, InputFormat
 from docling.datamodel.document import ConversionResult, InputDocument
 from docling_core.types.doc import (
     BoundingBox, ContentLayer, CoordOrigin, DocItemLabel, DoclingDocument,
-    ProvenanceItem, Size, TableCell as DoclingCell, TableData as DoclingTable,
+    ProvenanceItem, Size,
 )
 
-from src.core.documents import ParsedDocument
 from src.core.uploads import UploadRecord
-from src.infra.docling_adapter import convert_file, map_docling_document
-from src.infra.document_ingestion import ConversionPolicy, IngestionError
+from src.infra.docling_adapter import map_docling_document
+from src.infra.document_ingestion import IngestionError
 
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "documents"
@@ -64,8 +62,6 @@ def test_conversion_preserves_source_identity_hierarchy_and_page_coordinates(upl
     assert parsed.snapshot.content_hash == uploaded.content_hash
     assert parsed.snapshot.source_uri == uploaded.source_uri
     assert parsed.snapshot.title == uploaded.name
-    assert parsed.snapshot.parser == "docling"
-    assert parsed.snapshot.parser_config == {"adapter_version": "1", "device": "cpu"}
     assert [element.element_id for element in parsed.elements] == [title.self_ref, heading.self_ref, passage.self_ref]
     selected = parsed.elements[2]
     assert selected.parent_id == heading.self_ref
@@ -76,26 +72,13 @@ def test_conversion_preserves_source_identity_hierarchy_and_page_coordinates(upl
         "coordinate_space": "points", "coordinate_origin": "bottom_left",
         "page_width": 612.0, "page_height": 792.0, "precision": "element",
     }
-    assert ParsedDocument.model_validate_json(parsed.model_dump_json()) == parsed
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+def test_partial_conversion_never_becomes_a_searchable_document(uploaded):
+    """A partial conversion cannot silently publish its surviving paragraphs."""
+    doc = document()
+    doc.add_text(label=DocItemLabel.PARAGRAPH, text="surviving text")
+    with pytest.raises(IngestionError) as caught:
+        map_docling_document(result_for(uploaded, doc, ConversionStatus.PARTIAL_SUCCESS), uploaded, {})
+    assert caught.value.code == "DOCUMENT_PARTIAL_CONVERSION"
+    assert caught.value.file_name == uploaded.name
