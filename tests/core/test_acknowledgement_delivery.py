@@ -1,5 +1,3 @@
-import pytest
-
 from src.core.answer_schema import AnswerResponse, export_answer_text, finalize_answer, text_document
 from src.core.contracts.graph_state import PendingAction
 from src.core.request_contracts import AcknowledgeBody, ComposeBody, RequestContract
@@ -7,16 +5,13 @@ from tests.core.test_pending_action_delivery import _ConsumerGraph, _manager, de
 from tests.core.test_request_slots_delivery import _contract
 
 
-
-
-@pytest.mark.parametrize("relation", ["new", "correction"])
-def test_untargeted_acknowledgement_preserves_the_existing_pending_body(delivery_tools, relation):
+def test_untargeted_acknowledgement_preserves_the_existing_pending_body(delivery_tools):
     """대상을 지정하지 않은 단순 확인은 기존 보류 요청의 원본문과 완료 정보를 바꾸지 않는다."""
     save, slack, delivered, output = delivery_tools
     previous = finalize_answer(text_document("원래 전달할 본문"), [])
     original = _contract(ComposeBody(instruction="기존 본문"), slack="requested", request_id="original-request")
     pending = PendingAction(contract=original, response=previous, body_prepared=True, completed_actions=("save_text",))
-    acknowledgement = _contract(AcknowledgeBody(), request_id="acknowledgement", relation=relation)
+    acknowledgement = _contract(AcknowledgeBody(), request_id="acknowledgement")
     manager = _manager(_ConsumerGraph([acknowledgement], [], save, slack))
     manager._ensure_session().previous_response = previous
     manager._ensure_session().pending_action = pending

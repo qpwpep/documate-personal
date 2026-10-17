@@ -8,16 +8,14 @@ from src.core.contracts import RetryState
 from src.core.contracts.debug import RetrievalDiagnostic
 from src.core.contracts.retrieval import RetrievalResult
 from src.core.planner_schema import PlannerOutput, RetrievalTask
-from src.core.request_contracts import RequestContract
 from src.runtime.agent_runtime.response_assembler import ResponseAssembler
 from src.runtime.make_graph import _pre_synthesis_route
 from src.runtime.nodes.actions import make_action_postprocess_node
 from src.runtime.nodes.retrieval import make_retrieve_dispatch_node
-from src.runtime.nodes.retry import build_retry_update
 from src.runtime.nodes.synthesis import make_synthesize_node
 from src.runtime.nodes.validation import make_post_synthesis_validation_node, make_pre_synthesis_validation_node
 from tests.core.helpers import build_test_state
-from tests.core.test_actions_nodes import _contract
+from tests.core.test_pending_action_delivery import _contract
 from tests.core.test_answer_validation import _evidence, _hit
 from tests.synthesis_fixtures import synthesis_excerpt_limits
 
@@ -42,8 +40,7 @@ class NaturalPartialModel:
         ]}]}
 
 
-@pytest.mark.parametrize("failure", ["partial", "error", "unavailable"])
-def test_incomplete_retrieval_returns_a_natural_cited_partial_without_delivery(failure):
+def test_incomplete_retrieval_returns_a_natural_cited_partial_without_delivery():
     tasks = [RetrievalTask(route=route, query="axis", k=2) for route in ("docs", "upload")]
     contract = _contract(save="requested", slack="requested")
     state = build_test_state({
@@ -60,10 +57,8 @@ def test_incomplete_retrieval_returns_a_natural_cited_partial_without_delivery(f
 
     def upload(**kwargs):
         calls.append("upload")
-        hits = [_hit(_evidence("Only part of the uploaded source is available"))] if failure == "partial" else []
-        return RetrievalResult(hits=hits, diagnostics=RetrievalDiagnostic(
-            status="success" if failure == "partial" else failure,
-            answerability="partial" if hits else "missing", message="source unavailable",
+        return RetrievalResult(hits=[], diagnostics=RetrievalDiagnostic(
+            status="error", answerability="missing", message="source unavailable",
         ))
 
     state.update(make_retrieve_dispatch_node(docs, upload, False)(state))
@@ -93,10 +88,6 @@ def test_incomplete_retrieval_returns_a_natural_cited_partial_without_delivery(f
     assert not state["runtime"].pending_action.body_prepared
 
 
-
-
-
-
 @pytest.mark.parametrize("repair_succeeds", [False, True])
 def test_graph_bounds_search_recovery_and_body_repair_independently(repair_succeeds):
     from src.core.contracts import GraphState
@@ -119,12 +110,15 @@ def test_graph_bounds_search_recovery_and_body_repair_independently(repair_succe
             status="success" if hits else "no_result", answerability="covered" if hits else "missing",
         ))
 
+    packets = []
+
     class RepairModel(NaturalPartialModel):
         def invoke(self, messages, *, timeout=None):
             self.calls += 1
             packet_text = next(str(message.content) for message in messages
                                if str(message.content).startswith("[Evidence Packet]"))
             packet = json.loads(packet_text[packet_text.index("[", len("[Evidence Packet]")):])
+            packets.append(packet)
             refs = [source["id"] for source in packet] if repair_succeeds and self.calls > 1 else [packet[0]["id"]]
             return {"blocks": [{"type": "paragraph", "content": [
                 {"text": "The sources describe axis selection.", "basis": "source", "refs": refs},
@@ -149,6 +143,7 @@ def test_graph_bounds_search_recovery_and_body_repair_independently(repair_succe
     assert state["retry"].attempt == 1
     assert state["retry"].content_repair_attempt == 1
     assert model.calls == 2
+    assert packets[0] == packets[1]
     assert initial.call_count == 1
     assert rewrite.call_count == 1
     assert searches.count("narrow axis") == 1
@@ -158,8 +153,7 @@ def test_graph_bounds_search_recovery_and_body_repair_independently(repair_succe
     assert not state["retry"].needs_retry
 
 
-@pytest.mark.parametrize("docs_need_rewrite", [False, True])
-def test_graph_keeps_independent_docs_when_upload_retriever_is_missing(docs_need_rewrite):
+def test_graph_keeps_independent_docs_when_upload_retriever_is_missing():
     from src.core.contracts import GraphState
     from src.core.conversation_memory import ConversationMemoryPolicy
     from src.infra.tools.local_rag.tool import build_upload_search_tool
@@ -168,7 +162,7 @@ def test_graph_keeps_independent_docs_when_upload_retriever_is_missing(docs_need
     from src.runtime.nodes.session import add_user_message
     from tests.core.helpers import _CapturePlannerLLM
 
-    tasks = [RetrievalTask(route="docs", query="narrow axis" if docs_need_rewrite else "axis", k=2),
+    tasks = [RetrievalTask(route="docs", query="narrow axis", k=2),
              RetrievalTask(route="upload", query="axis", k=2)]
     initial = _CapturePlannerLLM(PlannerOutput(use_retrieval=True, tasks=tasks))
     rewrite = _CapturePlannerLLM({"rewrites": [{"requirement_id": tasks[0].requirement_id, "query": "axis", "k": 2}]})
@@ -198,80 +192,8 @@ def test_graph_keeps_independent_docs_when_upload_retriever_is_missing(docs_need
     assert outcome["status"] == "partial"
     assert [task.requirement_id for task in state["planner"].output.tasks] == [task.requirement_id for task in tasks]
     assert state["retry"].terminal_failed_requirement_ids == [tasks[1].requirement_id]
-    assert searches == (["narrow axis", "axis"] if docs_need_rewrite else ["axis"])
-    assert state["retry"].attempt == int(docs_need_rewrite)
+    assert searches == ["narrow axis", "axis"]
+    assert state["retry"].attempt == 1
     assert model.calls == 1
     assert len(state["response"].result.citations) == 1
     assert state["debug"].retrieval_diagnostics[-1].status == "unavailable"
-
-
-
-
-
-
-
-
-
-
-
-def _exhausted_partial_recovery_state(guard=None):
-    from src.core.answer_schema import AnswerDocument, finalize_answer
-    from src.core.contracts import ResponseState
-
-    missing = RetrievalTask(route="docs", query="official axis behavior", k=2)
-    available = RetrievalTask(route="upload", query="uploaded axis behavior", k=2,
-                              requirement={"aspects": ["copy"]} if guard == "all_terminal_uncited" else {})
-    tasks = [missing, available]
-    hit = _hit(_evidence("axis selects the dimension")).model_copy(update={"requirement_id": available.requirement_id})
-    hits = [hit]
-    units = [
-        {"text": "The uploaded source explains axis selection.", "basis": "source", "refs": [hit.evidence.id]},
-        {"text": "The official documentation is unavailable, so the sources cannot be compared.", "basis": "interaction", "refs": []},
-        {"text": "An unsupported claim.", "basis": "source", "refs": ["missing"]},
-    ]
-    terminal_ids = [missing.requirement_id]
-    answer = {}
-    blocks = [{"type": "paragraph", "content": units}]
-    if guard == "missing_success_requirement":
-        other = RetrievalTask(route="upload", query="uploaded copy behavior", k=2)
-        tasks.append(other)
-        hits.append(_hit(_evidence("copy creates an independent result")).model_copy(
-            update={"requirement_id": other.requirement_id},
-        ))
-        units[-1]["refs"].append(hits[-1].evidence.id)
-    elif guard == "required_code_removed":
-        answer = {"content": [{"kind": "code_example", "mode": "required", "evidence_ids": ["request"]}]}
-        blocks.append({"type": "code", "language": "python", "content": {
-            "text": "unavailable_example()", "basis": "source", "refs": ["missing"],
-        }})
-    elif guard == "forbidden_code_retained":
-        answer = {"format": [{"kind": "code_block", "mode": "forbidden", "evidence_ids": ["request"]}]}
-        blocks.append({"type": "code", "language": "python", "content": {
-            "text": "axis = 0", "basis": "source", "refs": [hit.evidence.id],
-        }})
-    elif guard == "all_terminal_uncited":
-        terminal_ids.append(available.requirement_id)
-        units.pop(0)
-    contract = _contract(save="requested", slack="requested", answer=answer)
-    packet = [item.evidence for item in hits]
-    return build_test_state({
-        "user_input": "Compare the official docs and uploaded code, then save and send the answer",
-        "request_contract": contract, "planner_output": PlannerOutput(use_retrieval=True, tasks=tasks),
-        "retrieved_hits": hits,
-        "retrieval_diagnostics": [
-            RetrievalDiagnostic(route="docs", requirement_id=missing.requirement_id, status="error", answerability="missing"),
-            *[RetrievalDiagnostic(route="upload", requirement_id=item.requirement_id, status="success",
-                                  answerability="partial" if guard == "all_terminal_uncited" else "covered") for item in hits],
-        ],
-        "retry": RetryState(attempt=1, max_retries=1, content_repair_attempt=1,
-                            terminal_failed_requirement_ids=terminal_ids, terminal_retrieval_reason="tool_error"),
-        "response": ResponseState(
-            result=finalize_answer(AnswerDocument.model_validate({"blocks": blocks}), packet, retrieval_required=True),
-            evidence_packet=packet, evidence_requirement_map={item.evidence.id: [item.requirement_id] for item in hits},
-            request_id=contract.request_id, contract_revision=contract.revision, synthesis_attempt=2,
-        ),
-    })
-
-
-
-

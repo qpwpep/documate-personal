@@ -16,8 +16,7 @@ from src.core.documents import DocumentElement, SourceAnchor, build_snapshot
 from src.core.evidence import build_evidence
 from src.infra.tools.save_text import build_save_text_tool
 from src.runtime.nodes.actions import make_action_postprocess_node
-from .test_actions_nodes import _contract
-from tests.core.test_pending_action_delivery import delivery_tools
+from tests.core.test_pending_action_delivery import _contract, delivery_tools
 
 
 def test_save_and_slack_retain_source_selection_and_limitations_without_mutating_answer(tmp_path: Path, delivery_tools):
@@ -121,5 +120,3 @@ def test_forbidden_source_code_wrapped_as_paragraph_is_not_saved(tmp_path: Path,
 
     assert not output.exists()
     assert "response" not in updates
-
-

@@ -12,24 +12,16 @@ from langchain_core.messages import HumanMessage
 from slack_sdk.web import WebClient
 
 from src.app.agent_manager import AgentFlowManager
-from src.core.answer_schema import AnswerResponse, export_answer_text, finalize_answer, text_document
-from src.core.contracts import GraphState, PlannerState
-from src.core.conversation_memory import ConversationMemoryPolicy
-from src.core.documents import DocumentElement, build_snapshot
-from src.core.evidence import build_evidence
+from src.core.answer_schema import AnswerResponse, export_answer_text, text_document
+from src.core.contracts import PlannerState
 from src.core.planner_schema import PlannerOutput
-from src.core.request_contracts import RequestContract, WireRequestContract
-from src.core.slack_contract import RecipientSelector, SlackDefault
+from src.core.request_contracts import RequestContract
 from src.infra.settings import AppSettings
 from src.infra.tools.save_text import build_save_text_tool
 from src.infra.tools.slack_notify import build_slack_notify_tool
 from src.runtime.nodes.actions import make_action_postprocess_node
-from src.runtime.make_graph import build_graph
-from src.runtime.nodes.planner import make_planner_node
-from src.runtime.nodes.retrieval import make_retrieve_dispatch_node
-from src.runtime.nodes.session import add_user_message, make_summarize_node
 from src.runtime.nodes.synthesis import make_synthesize_node
-from src.runtime.nodes.validation import make_post_synthesis_validation_node, make_pre_synthesis_validation_node
+from src.runtime.nodes.validation import make_post_synthesis_validation_node
 from tests.synthesis_fixtures import synthesis_excerpt_limits
 
 
@@ -139,49 +131,6 @@ class _ConsumerGraph:
         yield state
 
 
-class _PlannedConsumerGraph:
-    """Supply model proposals while keeping reconciliation and execution real."""
-
-    def __init__(self, proposals, documents, save, slack, default_slack_recipient=None):
-        self.proposals = iter(proposals)
-        self.proposal = None
-        policy = ConversationMemoryPolicy()
-        self.graph = build_graph(
-            state_type=GraphState, add_user_node=add_user_message,
-            summarize_node=make_summarize_node(None, False, policy=policy),
-            planner_node=make_planner_node(self._PlannerBoundary(self), False),
-            retrieve_dispatch_node=make_retrieve_dispatch_node(self._unavailable_search, self._unavailable_search, False),
-            synthesize_node=make_synthesize_node(_DocumentModelBoundary(documents), excerpt_limits=synthesis_excerpt_limits()),
-            pre_synthesis_validation_node=make_pre_synthesis_validation_node(False),
-            post_synthesis_validation_node=make_post_synthesis_validation_node(False),
-            action_postprocess_node=make_action_postprocess_node(save, slack, False, default_slack_recipient),
-            memory_policy=policy,
-        )
-
-    @staticmethod
-    def _unavailable_search(*_args, **_kwargs):
-        raise AssertionError("These delivery requests do not use external search.")
-
-    class _PlannerBoundary:
-        def __init__(self, owner):
-            self.owner = owner
-
-        def invoke(self, messages):
-            user = [message for message in messages if isinstance(message, HumanMessage)][-1]
-            proposal = WireRequestContract.model_validate({
-                "slack_recipient": {"state": "omitted"},
-                "evidence": [{"id": "request", "turn_id": user.id, "quote": str(user.content),
-                              "scope": "current_request", "interpretation": "instruction"}],
-                **self.owner.proposal,
-            })
-            return PlannerOutput(use_retrieval=False, tasks=[], request_contract=proposal).model_dump(mode="json")
-
-    def stream(self, state, *, stream_mode):
-        proposal = next(self.proposals)
-        self.proposal = proposal(state["runtime"]) if callable(proposal) else proposal
-        yield from self.graph.stream(state, stream_mode=stream_mode)
-
-
 def _manager(graph):
     manager = AgentFlowManager.__new__(AgentFlowManager)
     manager.settings = AppSettings(_env_file=None, openai_api_key="test-key", tavily_api_key="test-key")
@@ -190,67 +139,18 @@ def _manager(graph):
     return manager
 
 
-def _resume(runtime):
-    pending = runtime.pending_action
-    assert pending is not None
-    payload = pending.contract.model_dump(mode="json")
-    payload.update({
-        "relation": "supplement", "target_request_id": pending.contract.request_id,
-        "revision": pending.contract.revision + 1,
-        "body": {"kind": "copy_answer", "source": {"ref": "pending", "response_hash": pending.response.content_hash}},
-        "slack_recipient": _explicit("channel", "C123"),
-        "missing_info": [], "body_request": None,
-    })
-    return RequestContract.model_validate(payload)
+def test_separate_task_discards_the_pending_action(delivery_tools):
+    """별개의 새 작업은 이전 전송 의사를 다음 턴으로 승계하지 않는다."""
+    save, slack, messages, _output = delivery_tools
+    manager = _manager(_ConsumerGraph([
+        _contract(slack="requested"), _contract(), _contract(),
+    ], ["원 본문", "새 작업의 답변", "독립 답변"], save, slack))
+    manager.run_agent_flow("이 내용을 Slack으로 보내줘")
+    assert manager._ensure_session().pending_action is not None
 
+    second = manager.run_agent_flow("다른 주제를 설명해줘")
+    assert export_answer_text(AnswerResponse.model_validate(second["response"])) == "새 작업의 답변"
+    assert manager._ensure_session().pending_action is None
+    manager.run_agent_flow("C123")
 
-def _explicit(kind, value, evidence_id="request"):
-    return {"state": "explicit", "selector": {"kind": kind, "value": value}, "evidence_ids": [evidence_id]}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-def _retry(runtime):
-    payload = _resume(runtime).model_dump(mode="json")
-    payload["slack_recipient"] = runtime.pending_action.contract.slack_recipient.model_dump(mode="json")
-    return RequestContract.model_validate(payload)
-
-
-def _default(user_id="UDEFAULT"):
-    return SlackDefault(selector=RecipientSelector(kind="user", value=user_id))
-
-
-def _slack_action(response):
-    return next(receipt for receipt in response.actions if receipt.kind == "slack_notify")
-
-
-def _message_requests(requests):
-    return [request for request in requests if request["path"] == "/chat.postMessage"]
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+    assert messages == []

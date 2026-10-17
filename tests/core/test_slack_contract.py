@@ -1,59 +1,11 @@
 from __future__ import annotations
 
 import pytest
-from pydantic import ValidationError
 
-from src.core.slack_contract import (
-    ExplicitRecipient, OmittedRecipient, RecipientSelector, SlackDefault, SlackDelivery, UnresolvedRecipient,
-)
-from src.infra.settings import AppSettings
+from src.core.slack_contract import RecipientSelector
 from src.core.contracts.graph_state import SessionMetadata
-from src.runtime.nodes.actions.policy import select_slack_delivery
 from tests.core.test_pending_action_delivery import delivery_tools
 from tests.core.test_request_contract_retries import _SaveConversation, _fail_save_publication
-
-
-
-
-def _serialized_user_delivery(**updates):
-    """A serialized pending result as received from an internal caller/storage."""
-    return {
-        "intent": {"state": "explicit", "selector": {"kind": "user", "value": "UINTENDED"}},
-        "selection": {"request_id": "request", "source": "request_input", "selector": {"kind": "user", "value": "UINTENDED"}},
-        "resolved_user_id": "UINTENDED",
-        "target": {"channel_id": "DINTENDED", "user_id": "UINTENDED"},
-        "status": "pending",
-        **updates,
-    }
-
-
-
-
-
-
-
-
-
-
-
-
-def _settings(user_id=None, email=None):
-    return AppSettings(
-        _env_file=None, openai_api_key="test-key", tavily_api_key="test-key",
-        slack_default_user_id=user_id, slack_default_dm_email=email,
-    )
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 @pytest.mark.parametrize("delivery_tools", [{"/chat.postMessage": None}], indirect=True)

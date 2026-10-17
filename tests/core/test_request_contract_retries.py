@@ -243,10 +243,6 @@ def _fail_save_publication(monkeypatch):
     monkeypatch.setattr(saved_artifacts.os, "link", fail_payload_publication)
 
 
-
-
-
-
 def test_destination_correction_does_not_repeat_completed_save(tmp_path, monkeypatch, delivery_tools):
     monkeypatch.setattr("src.infra.tools.save_text.get_save_text_output_dir", lambda: tmp_path)
     _save, slack, messages, _output = delivery_tools
@@ -274,7 +270,3 @@ def test_destination_correction_does_not_repeat_completed_save(tmp_path, monkeyp
     assert len(list(tmp_path.glob("*.txt"))) == 1
     assert result["runtime"].pending_action is None
     assert [item["payload"]["channel"] for item in messages] == ["C123"]
-
-
-
-
