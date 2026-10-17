@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import socket
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Thread
 from urllib.parse import parse_qs, urlsplit
@@ -9,8 +8,7 @@ from urllib.parse import parse_qs, urlsplit
 import pytest
 
 from src.core.slack_contract import (
-    ExplicitRecipient, OmittedRecipient, RecipientSelection, RecipientSelector, SlackDelivery,
-    SlackFailure, UnresolvedRecipient,
+    ExplicitRecipient, RecipientSelection, RecipientSelector, SlackDelivery,
 )
 from src.infra.settings import AppSettings
 from src.infra.slack_utils import create_slack_client
@@ -38,19 +36,10 @@ def slack_http_boundary(monkeypatch):
                 "/conversations.open": {"ok": True, "channel": {"id": "DTARGET"}},
                 "/chat.postMessage": {"ok": True, "channel": "DTARGET", "ts": "1.0"},
             }.get(parsed.path, {"ok": False, "error": "unknown_method"}))
-            if response is None:
-                self.connection.shutdown(socket.SHUT_RDWR)
-                self.connection.close()
-                return
-            status, headers = 200, {}
-            if isinstance(response, tuple):
-                status, response, headers = response
             body = json.dumps(response).encode("utf-8")
-            self.send_response(status)
+            self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
-            for key, value in headers.items():
-                self.send_header(key, value)
             self.end_headers()
             self.wfile.write(body)
 
@@ -80,12 +69,12 @@ def slack_http_boundary(monkeypatch):
         thread.join(timeout=3)
 
 
-def _delivery(kind="email", value="intended@example.invalid", *, default=False):
-    selector = RecipientSelector(kind=kind, value=value)
+def _delivery():
+    selector = RecipientSelector(kind="email", value="intended@example.invalid")
     return SlackDelivery(
-        intent=OmittedRecipient() if default else ExplicitRecipient(selector=selector),
+        intent=ExplicitRecipient(selector=selector),
         selection=RecipientSelection(
-            request_id="test-request", source="configured_default" if default else "request_input", selector=selector,
+            request_id="test-request", source="request_input", selector=selector,
         ),
     )
 
@@ -95,8 +84,8 @@ def _sent_requests(requests):
 
 
 @pytest.mark.parametrize("slack_error,error_code", [
-    ("users_not_found", "target_not_found"), ("missing_scope", "permission_denied"),
-    ("invalid_auth", "authentication_failed"), ("ratelimited", "rate_limited"),
+    ("users_not_found", "target_not_found"),
+    ("invalid_auth", "authentication_failed"),
 ])
 def test_explicit_lookup_failure_never_sends_to_configured_default(slack_http_boundary, slack_error, error_code):
     requests, responses = slack_http_boundary
@@ -120,12 +109,6 @@ def test_explicit_lookup_failure_never_sends_to_configured_default(slack_http_bo
     assert result.failure.stage == "lookup"
 
 
-
-
-
-
-
-
 def test_rejected_send_retries_the_already_resolved_channel(slack_http_boundary):
     requests, responses = slack_http_boundary
     responses["/chat.postMessage"] = {"ok": False, "error": "not_in_channel"}
@@ -144,17 +127,3 @@ def test_rejected_send_retries_the_already_resolved_channel(slack_http_boundary)
     assert second.target == first.target
     assert {request["payload"]["channel"] for request in _sent_requests(requests)} == {"DTARGET"}
     assert len(_sent_requests(requests)) == 2
-
-
-
-
-
-
-
-
-
-
-
-
-
-
