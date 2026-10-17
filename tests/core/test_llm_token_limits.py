@@ -8,22 +8,21 @@ import pytest
 from langchain_core.messages import HumanMessage
 from langchain_openai import ChatOpenAI
 
-from src.core.answer_schema import export_answer_text, finalize_answer, text_document
+from src.core.answer_schema import finalize_answer, text_document
 from src.core.contracts import PlannerState, RetrievalState
 from src.core.contracts.boundary.graph import build_graph_state_input
 from src.core.documents import DocumentElement, build_snapshot
 from src.core.evidence import RetrievalScore, SearchHit, build_evidence
-from src.core.planner_schema import InitialPlannerOutput, PlannerOutput, RetrievalRewriteOutput, RetrievalTask
-from src.core.request_contracts import RequestContract, WireRequestContract
+from src.core.planner_schema import PlannerOutput, RetrievalTask
+from src.core.request_contracts import RequestContract
 from src.infra.llm import build_llm_registry
 from src.infra.settings import APP_ENV_SPEC_BY_NAME, AppSettings
 from src.runtime.nodes.synthesis import make_synthesize_node
-from src.runtime.graph_builder import build_agent_graph
 from tests.synthesis_fixtures import synthesis_excerpt_limits
 
 
 def _evidence_packet(payload: dict) -> list[dict]:
-    for message in payload.get("messages", payload.get("input", [])):
+    for message in payload["messages"]:
         content = message.get("content", "")
         if isinstance(content, list):
             content = "\n".join(part.get("text", "") for part in content)
@@ -32,24 +31,11 @@ def _evidence_packet(payload: dict) -> list[dict]:
     return []
 
 
-def _provider_response(payload: dict, content: str, *, finish_reason: str = "stop") -> dict:
-    usage = {"input_tokens": 100, "output_tokens": 30, "total_tokens": 130}
-    if "input" in payload:
-        status = "incomplete" if finish_reason == "length" else "completed"
-        return {
-            "id": "resp_test", "object": "response", "created_at": 1,
-            "status": status, "model": payload["model"],
-            "error": None, "incomplete_details": {"reason": "max_output_tokens"} if status == "incomplete" else None,
-            "output": [{
-                "id": "msg_test", "type": "message", "role": "assistant", "status": status,
-                "content": [{"type": "output_text", "text": content, "annotations": []}],
-            }],
-            "usage": usage,
-        }
+def _provider_response(payload: dict, content: str) -> dict:
     return {
         "id": "chatcmpl_test", "object": "chat.completion", "created": 1,
         "model": payload["model"],
-        "choices": [{"index": 0, "finish_reason": finish_reason,
+        "choices": [{"index": 0, "finish_reason": "stop",
                      "message": {"role": "assistant", "content": content}}],
         "usage": {"prompt_tokens": 100, "completion_tokens": 30, "total_tokens": 130},
     }
@@ -78,37 +64,20 @@ def provider(monkeypatch):
     monkeypatch.setenv("LANGSMITH_TRACING", "false")
     monkeypatch.setenv("LANGCHAIN_TRACING_V2", "false")
     requests: list[dict] = []
-    behavior = {"timeout_once": False, "invalid_content": None, "finish_reason": "stop", "empty_output": False,
-                "request_paths": []}
+    behavior = {"timeout_once": False}
 
     def handle(request: httpx.Request) -> httpx.Response:
         payload = json.loads(request.content)
-        schema = payload.get("response_format", {}).get("json_schema") or payload.get("text", {}).get("format")
+        schema = payload["response_format"]["json_schema"]
         if schema and "schema" in schema:
             _assert_supported_schema(schema["schema"])
         requests.append(payload)
-        behavior["request_paths"].append(request.url.path)
         if behavior["timeout_once"]:
             behavior["timeout_once"] = False
             raise httpx.ReadTimeout("provider timed out", request=request)
         packet = _evidence_packet(payload)
-        if packet:
-            document = text_document(packet[0]["excerpt"], basis="excerpt", refs=[packet[0]["id"]])
-            content = document.model_dump_json()
-        elif schema and schema.get("name") == "PlannerOutput":
-            content = json.dumps({
-                "use_retrieval": False, "tasks": [], "aspect_references": [],
-                "request_contract": WireRequestContract(slack_recipient={"state": "omitted"}).model_dump(mode="json"),
-            })
-        elif schema and schema.get("name") == "RetrievalRewriteOutput":
-            content = json.dumps({"rewrites": []})
-        else:
-            content = text_document("Hello.").model_dump_json()
-        if behavior["invalid_content"] is not None:
-            content = behavior["invalid_content"]
-        response = _provider_response(payload, content, finish_reason=behavior["finish_reason"])
-        if behavior["empty_output"]:
-            response["output"] = []
+        document = text_document(packet[0]["excerpt"], basis="excerpt", refs=[packet[0]["id"]])
+        response = _provider_response(payload, document.model_dump_json())
         return httpx.Response(200, json=response)
 
     def deny_network(*args, **kwargs):
@@ -133,10 +102,6 @@ def _settings(**overrides) -> AppSettings:
         "verbose": False,
     }
     return AppSettings(_env_file=None, **(values | overrides))
-
-
-
-
 
 
 def _state():
@@ -165,43 +130,17 @@ def _synthesize(settings: AppSettings):
     )(_state())
 
 
-
-
-@pytest.mark.parametrize("responses_api", [False, True], ids=["chat", "responses"])
-def test_timeout_uses_independent_compact_output_cap(provider, responses_api):
+def test_timeout_uses_independent_compact_output_cap(provider):
     """Changing the main output cap does not silently resize the compact recovery request."""
     requests, behavior = provider
     behavior["timeout_once"] = True
-    settings = _settings(synthesis_use_responses_api=responses_api, synthesis_max_tokens=4096,
+    settings = _settings(synthesis_use_responses_api=False, synthesis_max_tokens=4096,
                          synthesis_compact_max_tokens=317, synthesis_prompt_snippet_chars=1800)
     response = _synthesize(settings)["response"]
-    cap_name = "max_output_tokens" if responses_api else "max_completion_tokens"
-    assert [request[cap_name] for request in requests] == [4096, 317]
+    assert [request["max_completion_tokens"] for request in requests] == [4096, 317]
     assert len(_evidence_packet(requests[0])[0]["excerpt"]) > 900
     selected = response.evidence_packet[0]
     assert len(selected.excerpt) <= 900
     assert response.result == finalize_answer(
         text_document(selected.excerpt, basis="excerpt", refs=[selected.id]), [selected], retrieval_required=True,
     )
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

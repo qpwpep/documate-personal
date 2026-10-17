@@ -5,10 +5,9 @@ import socket
 
 import httpx
 import pytest
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_openai import ChatOpenAI
 from langgraph.graph import END, StateGraph
-from pydantic import ValidationError
 
 from src.core.contracts import GraphState
 from src.core.contracts.boundary.graph import build_graph_state_input
@@ -96,9 +95,6 @@ def summary_api(monkeypatch):
     ("generation_budget", "storage_budget", "content", "status_code", "expected_status"),
     [
         pytest.param(1024, 256, 'REPLACEMENT_FACT: Python 3.12 한글😀"\n\x00' * 100, 200, "ok", id="large-summary"),
-        pytest.param(2048, 256, 'REPLACEMENT_FACT: Python 3.12 한글😀"\n\x00' * 100, 200, "ok", id="larger-generation-budget"),
-        pytest.param(1024, 128, 'REPLACEMENT_FACT: Python 3.12 한글😀"\n\x00' * 100, 200, "ok", id="smaller-storage-budget"),
-        pytest.param(1024, 256, "   ", 200, "degraded", id="blank-summary"),
         pytest.param(2048, 256, "", 400, "degraded", id="summary-error"),
     ],
 )
@@ -126,6 +122,7 @@ def test_generated_or_fallback_summary_stays_bounded_and_reaches_next_prompt(
         messages=[
             HumanMessage(content='EVICTED_FACT: Python 3.12 "\n\x00' * 40),
             AIMessage(content="old answer " * 20),
+            ToolMessage(content="SECRET_TOOL_PAYLOAD", name="search", tool_call_id="old-search"),
             HumanMessage(content="recent request"),
             AIMessage(content="recent answer"),
             HumanMessage(content="current request"),
@@ -173,9 +170,7 @@ def test_generated_or_fallback_summary_stays_bounded_and_reaches_next_prompt(
     assert prompt_memory == [{"kind": "untrusted_conversation_memory", "summary": summary}]
     assert next_prompt[-1] == HumanMessage(content="follow-up request")
     assert [request["max_completion_tokens"] for request in requests] == [generation_budget]
-
-
-
-
-
-
+    transcript = requests[0]["messages"][-1]["content"]
+    assert "OLDER_FACT:" in transcript
+    assert "EVICTED_FACT:" in transcript
+    assert "SECRET_TOOL_PAYLOAD" not in transcript

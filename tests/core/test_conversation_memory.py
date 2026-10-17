@@ -1,20 +1,12 @@
 from __future__ import annotations
 
-import json
-import unittest
 
-from hypothesis import given, settings as hypothesis_settings, strategies as st
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from hypothesis import example, given, settings as hypothesis_settings, strategies as st
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from src.core.conversation_memory import (
     ConversationMemoryPolicy,
-    DEFAULT_QUERY_MAX_CHARS,
-    build_bounded_fallback_summary,
     build_durable_conversation_memory,
-    build_untrusted_memory_prompt_messages,
-    estimate_text_tokens,
-    measure_conversation,
-    plan_compaction,
 )
 
 
@@ -36,19 +28,6 @@ def _policy(**overrides: int) -> ConversationMemoryPolicy:
     return ConversationMemoryPolicy(**values)
 
 
-class ConversationMemoryPolicyTest(unittest.TestCase):
-    pass
-
-
-
-
-
-
-
-
-
-
-
 _unicode_text = st.text(
     alphabet=st.characters(blacklist_categories=("Cs",)),
     min_size=0,
@@ -58,6 +37,7 @@ _unicode_text = st.text(
 
 @hypothesis_settings(max_examples=80, deadline=None)
 @given(st.lists(_unicode_text, min_size=1, max_size=24))
+@example(turn_texts=["\x00" * 120])
 def test_durable_projection_stays_within_every_hard_bound_for_unicode_history(
     turn_texts: list[str],
 ) -> None:
@@ -111,7 +91,3 @@ def test_durable_projection_stays_within_every_hard_bound_for_unicode_history(
     assert [
         (type(message), str(message.content)) for message in projected_again
     ] == [(type(message), str(message.content)) for message in projected]
-
-
-
-
