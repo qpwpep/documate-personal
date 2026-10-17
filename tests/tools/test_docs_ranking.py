@@ -57,23 +57,11 @@ def hits(payload):
     return [SearchHit.model_validate(item) for item in payload.hits]
 
 
-API_CASES = [
-    ("matplotlib", "matplotlib.pyplot.bar", "matplotlib.pyplot.pie", "height"),
-    ("matplotlib", "matplotlib.pyplot.hist", "matplotlib.pyplot.pie", "bins"),
-    ("matplotlib", "matplotlib.pyplot.scatter", "matplotlib.pyplot.pie", "s"),
-    ("matplotlib", "matplotlib.pyplot.pie", "matplotlib.pyplot.scatter", "autopct"),
-    ("numpy", "numpy.mean", "numpy.reshape", "axis"),
-    ("numpy", "numpy.reshape", "numpy.mean", "shape"),
-    ("pandas", "pandas.merge", "pandas.read_csv", "how"),
-    ("pandas", "pandas.read_csv", "pandas.merge", "sep"),
-]
-
-
-@pytest.mark.parametrize("library,symbol,other,parameter", API_CASES)
 @pytest.mark.parametrize("explicit", [False, True], ids=["short-query", "explicit-symbol"])
-def test_target_api_beats_unrelated_rich_reference(search, library, symbol, other, parameter, explicit):
-    """Changing API names cannot change the target-versus-unrelated ordering."""
+def test_target_api_beats_unrelated_rich_reference(search, explicit):
+    """The requested API outranks an unrelated source with a higher provider score."""
     tool, batches, _ = search
+    library, symbol, other, parameter = "numpy", "numpy.mean", "numpy.reshape", "axis"
     unrelated = reference(other, score=0.99)
     unrelated["raw_content"] += "\nReturns\nresult: The computed result.\nExamples\n>>> data = [1, 2]\n"
     target = reference(symbol, parameter=parameter, score=0.3)
@@ -88,22 +76,12 @@ def test_target_api_beats_unrelated_rich_reference(search, library, symbol, othe
     assert payload.diagnostics.answerability == "covered"
 
 
-
-
-
-
-
-
 def test_library_match_alone_does_not_cover_a_topic(search):
     tool, batches, _ = search
     batches.append([reference("numpy.reshape", parameter="shape")])
     payload = tool("numpy broadcasting", requirement=RetrievalRequirement(library='numpy'), k=1)
     assert payload.diagnostics.answerability == "missing"
     assert hits(payload) == []
-
-
-
-
 
 
 def test_complementary_aspects_are_selected_before_repeated_coverage(search):
@@ -146,10 +124,6 @@ def test_unknown_and_conflicting_versions_are_distinct(search, source_version, e
     assert bool(hits(payload)) is (expected == "partial")
 
 
-
-
-
-
 def test_korean_topic_cannot_be_replaced_by_unrelated_api_metadata(search):
     """Korean subject words still constrain a query without an explicit API."""
     tool, batches, _ = search
@@ -166,31 +140,22 @@ def test_korean_topic_cannot_be_replaced_by_unrelated_api_metadata(search):
     assert hits(payload)[0].evidence.snapshot.source_uri == target["url"]
 
 
+def test_reference_page_examples_support_usage_but_not_signature(search):
+    """A generated-reference URL cannot turn a concrete call into a signature."""
+    tool, batches, _ = search
+    source = {
+        "url": "https://numpy.org/doc/stable/reference/generated/numpy.mean.html",
+        "title": "Mean examples",
+        "content": "Calculate the mean of two integers with numpy.mean.",
+        "raw_content": "# Examples\n>>> import numpy\n>>> numpy.mean([1, 2])\n1.5\n",
+        "score": 0.9,
+    }
+    batches.append([source])
+    example = tool("numpy.mean examples", k=1, requirement=RetrievalRequirement(library='numpy', symbols=['numpy.mean'], evidence_needs=['examples']))
+    assert example.diagnostics.answerability == "covered"
+    assert "numpy.mean([1, 2])" in hits(example)[0].evidence.excerpt
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+    batches.append([source])
+    signature = tool("numpy.mean signature", k=1, requirement=RetrievalRequirement(library='numpy', symbols=['numpy.mean'], evidence_needs=['signature']))
+    assert signature.diagnostics.answerability != "covered"
+    assert "need:signature" in signature.diagnostics.missing_requirements

@@ -1,7 +1,6 @@
 import hashlib
 import json
 import unittest
-import warnings
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
@@ -10,11 +9,8 @@ from uuid import uuid4
 from langchain_core.embeddings import Embeddings
 
 from src.core.planner_schema import RetrievalRequirement
-from src.core.evidence import EvidenceRef
-from src.infra.chunking import chunk_notebook_path, chunk_python_text
 from src.core.uploads import UploadRecord
 from src.infra.tools.local_rag import build_upload_retriever, build_upload_search_tool
-from src.infra.tools.local_rag.serialization import build_local_hit_bundle
 from tests.synthesis_fixtures import synthesis_excerpt_limits
 
 
@@ -65,10 +61,6 @@ def _write_notebook(path: Path, *sources: str) -> None:
 
 
 class LocalRagTest(unittest.TestCase):
-
-
-
-
     @patch("src.infra.chroma_store.OpenAIEmbeddings", return_value=_FakeEmbeddings())
     def test_long_line_search_excerpt_survives_synthesis_and_exact_citation(self, _embeddings) -> None:
         """A retrieved fragment of a long source line remains model-visible and exactly citable."""
@@ -145,12 +137,46 @@ class LocalRagTest(unittest.TestCase):
             unit_id="b0.content", reference_status="resolved", support_status="exact_match",
         )])
 
+    @patch("src.infra.chroma_store.OpenAIEmbeddings", return_value=_FakeEmbeddings())
+    def test_upload_rag_search_preserves_notebook_snapshot_and_raw_l2_scores(
+        self,
+        _mock_openai_embeddings,
+    ) -> None:
+        with TemporaryDirectory() as temp_dir:
+            uploads_root = Path(temp_dir) / "uploads" / "session-a"
+            notebook_path = uploads_root / "sample_pipeline.ipynb"
+            _write_notebook(
+                notebook_path,
+                "# Sample pipeline",
+                "from sklearn.model_selection import train_test_split\n"
+                "X_train, X_test = train_test_split(X, y, test_size=0.2, random_state=42)\n",
+            )
+            original_bytes = notebook_path.read_bytes()
+            original_entries = set(notebook_path.parent.iterdir())
 
-
-
-
-
-
+            handle = _index_upload(notebook_path)
+            try:
+                upload_tool = build_upload_search_tool()
+                payload = upload_tool(requirement=RetrievalRequirement(),
+                    query="train_test_split parameter",
+                    k=2,
+                    retriever=handle.retriever,
+                )
+            finally:
+                handle.cleanup()
+            self.assertEqual(notebook_path.read_bytes(), original_bytes)
+            self.assertEqual(set(notebook_path.parent.iterdir()), original_entries)
+            self.assertEqual(payload.diagnostics.metric, "l2")
+            self.assertEqual(payload.diagnostics.score_direction, "lower_is_better")
+            self.assertEqual(payload.diagnostics.route, "upload")
+            hits = payload.hits
+            self.assertEqual({(hit.evidence.snapshot.source_type, hit.evidence.snapshot.source_uri) for hit in hits},
+                             {("upload", handle.retriever.upload_files[0].source_uri)})
+            self.assertTrue(all(0.0 <= hit.score.normalized <= 1.0 for hit in hits))
+            self.assertTrue(all(hit.evidence.element.anchors[0].cell_id for hit in hits))
+            self.assertEqual({hit.evidence.snapshot.content_hash for hit in hits},
+                             {"sha256:" + hashlib.sha256(original_bytes).hexdigest()})
+            self.assertTrue(all(hit.evidence.snapshot.capture_scope == "full_document" for hit in hits))
 
 
 if __name__ == "__main__":

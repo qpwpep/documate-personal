@@ -3,7 +3,6 @@ from __future__ import annotations
 import hashlib
 import json
 from contextlib import contextmanager
-from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -69,8 +68,6 @@ def test_explicit_definition_request_does_not_quote_a_comment_or_a_call(uploaded
     assert payload.diagnostics.missing_requirements == ["archive_orders"]
 
 
-
-
 def test_complete_method_definition_is_found_outside_vector_top_k_with_exact_offsets(uploaded):
     """Exact source lookup retrieves a complete decorated method regardless of vector candidate limits."""
     method = "    @staticmethod\r\n    async def summarize_rows(rows):\r\n        label = '한글'\r\n" + "        rows = list(rows)\r\n" * 35 + "        return rows\r\n"
@@ -87,20 +84,28 @@ def test_complete_method_definition_is_found_outside_vector_top_k_with_exact_off
     assert hits[0].evidence.element.text == source
 
 
+def test_notebook_parameter_usage_preserves_exact_source_and_cell_location(uploaded):
+    """A call spanning index windows remains a complete, correctly located usage quotation."""
+    call = "model = train_model(\n" + "    data,\n" * 100 + "    learning_rate=0.01,\n    epochs=20,\n)"
+    setup = "# setup\n" * 20
+    source = setup + call + "\n"
+    requirement = _requirement(["train_model"], "symbol")
+    requirement.aspects = ["learning_rate", "epochs"]
+    contents = ["unrelated = 1\n", source]
 
+    with uploaded(contents, notebook=True) as retriever:
+        payload = build_upload_search_tool()(query="train_model parameters", k=1,
+                                            requirement=requirement, retriever=retriever)
 
-
-
-
-
-
-
-
-
-
-
-
-
+    assert payload.diagnostics.answerability == "covered"
+    assert payload.diagnostics.missing_requirements == []
+    assert [hit.evidence.excerpt for hit in payload.hits] == [call]
+    evidence = payload.hits[0].evidence
+    assert evidence.element.text == source
+    assert evidence.selection.start == len(setup)
+    assert evidence.selection.end == len(setup) + len(call)
+    assert evidence.element.anchors[0].cell_index == 1
+    assert evidence.element.anchors[0].cell_id == "source-1"
 
 
 def test_source_lookup_remains_isolated_between_uploaded_sessions(uploaded):
@@ -114,10 +119,3 @@ def test_source_lookup_remains_isolated_between_uploaded_sessions(uploaded):
     assert found.diagnostics.answerability == "covered"
     assert absent.hits == []
     assert absent.diagnostics.answerability == "missing"
-
-
-
-
-
-
-

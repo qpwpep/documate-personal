@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 from contextlib import contextmanager
 from uuid import uuid4
 
@@ -26,23 +25,23 @@ class LengthEmbeddings(Embeddings):
 def uploads(tmp_path, monkeypatch):
     monkeypatch.setattr("src.infra.chroma_store.OpenAIEmbeddings", lambda **kwargs: LengthEmbeddings())
 
-    def record(name, content, *, file_id=None, session="multi"):
+    def record(name, content):
         from src.core.uploads import UploadRecord
 
-        file_id = file_id or uuid4().hex
+        file_id = uuid4().hex
         data = content.encode("utf-8")
-        path = tmp_path / "uploads" / session / uuid4().hex / name
+        path = tmp_path / "uploads" / "multi" / uuid4().hex / name
         path.parent.mkdir(parents=True)
         path.write_bytes(data)
         return UploadRecord(file_id=file_id, name=name, path=str(path), size_bytes=len(data),
                             content_hash="sha256:" + hashlib.sha256(data).hexdigest(),
-                            source_uri=f"upload://{session}/{file_id}")
+                            source_uri=f"upload://multi/{file_id}")
 
     @contextmanager
-    def indexed(files, *, session="multi", generation=None):
+    def indexed(files):
         from src.infra.tools.local_rag.uploads import build_upload_retriever
 
-        handle = build_upload_retriever(files, session_id=session, generation=generation or uuid4().hex,
+        handle = build_upload_retriever(files, session_id="multi", generation=uuid4().hex,
                                        api_key="test-key")
         try:
             yield handle
@@ -87,26 +86,21 @@ def test_explicit_file_scope_applies_to_semantic_and_exact_search(uploads, symbo
     assert all("return 'second'" in hit.evidence.excerpt for hit in hits)
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+def test_scoped_search_preserves_every_file(uploads):
+    """Uneven file sizes cannot exhaust another file's candidates."""
+    record, indexed = uploads
+    contents = {"large.py": "value = 1\n" * 300, "small.py": "other_value = 2\n", "third.py": "value = 3\n"}
+    files = [record(name, content) for name, content in contents.items()]
+    requirement = RetrievalRequirement(file_ids=[file.file_id for file in files])
+    search = build_upload_search_tool()
+    with indexed(files) as handle:
+        payload = search(query="compare values", k=1, retriever=handle.retriever, requirement=requirement)
+        hits = payload.hits
+        assert {hit.evidence.snapshot.title for hit in hits} == set(contents)
+        for hit in hits:
+            source = contents[hit.evidence.snapshot.title]
+            assert hit.evidence.element.text == source
+            assert hit.evidence.excerpt
+            assert hit.evidence.excerpt == source[hit.evidence.selection.start:hit.evidence.selection.end]
+        assert payload.diagnostics.answerability == "covered"
+        assert payload.diagnostics.missing_requirements == []
