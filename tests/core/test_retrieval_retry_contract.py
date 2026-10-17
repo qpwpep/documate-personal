@@ -1,40 +1,10 @@
 """Retrieval recovery keeps evidence ownership and retries only recoverable searches."""
-import pytest
 
-from src.core.contracts import RetrievalDiagnostic, RetryState
-from src.core.contracts.retrieval import RetrievalResult
-from src.core.evidence import SearchHit
+from src.core.contracts import RetryState
 from src.core.planner_schema import PlannerOutput, RetrievalTask
 from src.core.request_contracts import RequestContract
 from src.runtime.nodes.retrieval import make_retrieve_dispatch_node
-from src.runtime.make_graph import _pre_synthesis_route
-from src.runtime.nodes.planner import make_planner_node
-from src.runtime.nodes.synthesis.evidence_selection import tasks_for_hit
-from src.runtime.nodes.validation import make_pre_synthesis_validation_node
-from tests.core.helpers import _CapturePlannerLLM, build_test_state
-from tests.core.test_answer_validation import _evidence, _hit
-
-
-def _payload(*, source="official", status="success", error_code=None):
-    return RetrievalResult(
-        hits=[_hit(_evidence("axis selects the dimension", source_type=source))] if status == "success" else [],
-        diagnostics=RetrievalDiagnostic(status=status, answerability="covered" if status == "success" else "missing",
-                                        message="search failed" if status == "error" else "", error_code=error_code),
-    )
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+from tests.core.helpers import build_test_state
 
 
 def test_dispatch_retries_timeout_after_partial_success_without_repeating_completed_http_query(monkeypatch):
@@ -87,10 +57,3 @@ def test_dispatch_retries_timeout_after_partial_success_without_repeating_comple
     assert queries[1] == queries[2]
     assert queries[1] == task.query + " copy"
     assert first_hit.evidence in [hit.evidence for hit in state["retrieval"].hit_log[1:]]
-
-
-
-
-
-
-

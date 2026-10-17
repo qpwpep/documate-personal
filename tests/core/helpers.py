@@ -1,39 +1,9 @@
-import hashlib
+from langchain_core.messages import HumanMessage
 
-from langchain_core.messages import AIMessage, HumanMessage
-
-from src.core.contracts.retrieval import RetrievalResult
-from src.core.contracts.debug import RetrievalDiagnostic
 from src.core.contracts import DebugState, PlannerState, ResponseState, RetrievalState, RetryState
 from src.core.contracts.boundary.graph import build_graph_state_input, normalize_graph_update
 from src.core.planner_schema import PlannerOutput, RetrievalRewriteOutput
-from src.core.request_contracts import (
-    BoundAnswerReference, BoundInputText, CopyAnswerBody, RequestContract,
-    TransformAnswerBody, UserTurnSnapshot, WireRequestContract,
-)
-
-
-def neutral_contract(*, request_id="test-request", **kwargs):
-    return RequestContract(request_id=request_id, **kwargs)
-
-
-def bound_answer_body(response, transform=None, ref="previous", evidence_ids=()):
-    source = BoundAnswerReference(ref=ref, response_hash=response.content_hash)
-    return (TransformAnswerBody(source=source, instruction=transform, evidence_ids=evidence_ids)
-            if transform is not None else CopyAnswerBody(source=source))
-
-
-def bound_input_text(text, *, turn_id="current", start=0):
-    return BoundInputText(turn_id=turn_id, text=text, start=start, end=start + len(text),
-                          content_hash=hashlib.sha256(text.encode("utf-8")).hexdigest())
-
-
-def build_test_graph_state(*, user_input: str, messages: list | None = None, **kwargs):
-    return build_graph_state_input(
-        user_input=user_input,
-        messages=messages or [],
-        **kwargs,
-    )
+from src.core.request_contracts import RequestContract, UserTurnSnapshot, WireRequestContract
 
 
 def build_test_state(payload: dict):
@@ -95,113 +65,8 @@ def build_test_state(payload: dict):
     return normalize_graph_update(state)
 
 
-class _FailingPlannerLLM:
-    def invoke(self, _messages):
-        raise RuntimeError("planner exploded")
-
-
-class _InvalidPlannerLLM:
-    def invoke(self, _messages):
-        return {
-            "use_retrieval": False,
-            "tasks": [
-                {"route": "docs", "query": "numpy", "k": 4},
-            ],
-        }
-
-
-class _CaptureSynthesizeLLM:
-    def __init__(
-        self,
-        *,
-        content: str = "synth result",
-        response_metadata: dict | None = None,
-        usage_metadata: dict | None = None,
-    ):
-        self.last_messages = None
-        self.content = content
-        self.response_metadata = response_metadata
-        self.usage_metadata = usage_metadata
-
-    def invoke(self, messages, *, timeout=None):
-        self.last_messages = messages
-        kwargs = {}
-        if self.response_metadata is not None:
-            kwargs["response_metadata"] = self.response_metadata
-        if self.usage_metadata is not None:
-            kwargs["usage_metadata"] = self.usage_metadata
-        return AIMessage(content=self.content, **kwargs)
-
-
-class _CaptureStructuredSynthesizeLLM:
-    def __init__(
-        self,
-        payload=None,
-        *,
-        include_raw: bool = False,
-        raw_message: AIMessage | None = None,
-        parsing_error: Exception | None = None,
-    ):
-        self.last_messages = None
-        self.payload = payload if payload is not None else {
-            "blocks": [{"type": "paragraph", "content": [{"text": "synth result", "basis": "interaction", "refs": []}]}],
-        }
-        self.include_raw = include_raw
-        self.raw_message = raw_message or AIMessage(
-            content="",
-            response_metadata={
-                "model_name": "gpt-5-mini",
-                "token_usage": {
-                    "prompt_tokens": 11,
-                    "completion_tokens": 3,
-                    "total_tokens": 14,
-                },
-            },
-            usage_metadata={
-                "input_tokens": 11,
-                "output_tokens": 3,
-                "total_tokens": 14,
-            },
-        )
-        self.parsing_error = parsing_error
-
-    def with_structured_output(self, *_args, **_kwargs):
-        return self
-
-    def invoke(self, messages, *, timeout=None):
-        self.last_messages = messages
-        if self.include_raw:
-            return {
-                "raw": self.raw_message,
-                "parsed": self.payload,
-                "parsing_error": self.parsing_error,
-            }
-        return self.payload
-
-
-class _TimeoutStructuredSynthesizeLLM:
-    def __init__(self):
-        self.last_messages = None
-        self.call_count = 0
-
-    def with_structured_output(self, *_args, **_kwargs):
-        return self
-
-    def invoke(self, messages, *, timeout=None):
-        self.last_messages = messages
-        self.call_count += 1
-        raise TimeoutError("structured timeout")
-
-
 class _CapturePlannerLLM:
-    def __init__(
-        self,
-        planner_output,
-        *,
-        include_raw: bool = False,
-        raw_message: AIMessage | None = None,
-        parsing_error: Exception | None = None,
-    ):
+    def __init__(self, planner_output):
         # Retrieval-only fixtures still supply an explicit neutral interpretation.
         # Missing-contract tests use an unadapted model boundary of their own.
         if isinstance(planner_output, PlannerOutput) and planner_output.request_contract is None:
@@ -213,63 +78,8 @@ class _CapturePlannerLLM:
             planner_output.setdefault("request_contract", WireRequestContract(slack_recipient={"state": "omitted"}).model_dump(mode="json"))
         self.planner_output = (planner_output.model_dump(mode="json")
                                if isinstance(planner_output, (PlannerOutput, RetrievalRewriteOutput)) else planner_output)
-        self.last_messages = None
         self.call_count = 0
-        self.include_raw = include_raw
-        self.raw_message = raw_message or AIMessage(
-            content="",
-            response_metadata={
-                "model_name": "gpt-5-nano",
-                "token_usage": {
-                    "prompt_tokens": 7,
-                    "completion_tokens": 2,
-                    "total_tokens": 9,
-                },
-            },
-            usage_metadata={
-                "input_tokens": 7,
-                "output_tokens": 2,
-                "total_tokens": 9,
-            },
-        )
-        self.parsing_error = parsing_error
 
     def invoke(self, messages, *, timeout=None):
-        self.last_messages = messages
         self.call_count += 1
-        if self.include_raw:
-            return {
-                "raw": self.raw_message,
-                "parsed": self.planner_output,
-                "parsing_error": self.parsing_error,
-            }
         return self.planner_output
-
-
-class _CaptureSummaryLLM:
-    def __init__(self, content: str = "summary line"):
-        self.last_messages = None
-        self.content = content
-
-    def invoke(self, messages, *, timeout=None):
-        self.last_messages = messages
-        return AIMessage(
-            content=self.content,
-            response_metadata={
-                "model_name": "gpt-5-mini",
-                "token_usage": {
-                    "prompt_tokens": 13,
-                    "completion_tokens": 4,
-                    "total_tokens": 17,
-                },
-            },
-            usage_metadata={
-                "input_tokens": 13,
-                "output_tokens": 4,
-                "total_tokens": 17,
-            },
-        )
-
-
-def _tool_payload(hits: list[dict] | None = None, **diagnostics) -> RetrievalResult:
-    return RetrievalResult(hits=list(hits or []), diagnostics=RetrievalDiagnostic(**diagnostics))

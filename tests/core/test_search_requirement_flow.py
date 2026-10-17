@@ -1,43 +1,18 @@
 """Public node contracts for preserving independent evidence requirements."""
-from langchain_core.messages import HumanMessage
 
-from src.core.contracts import RetrievalDiagnostic, RetryState
+from src.core.contracts import RetryState
 from src.core.planner_schema import PlannerOutput
-from src.core.request_contracts import RequestContract, WireRequestContract, UnresolvedBody, MissingInformation
+from src.core.request_contracts import RequestContract
 from src.runtime.nodes.planner import make_planner_node
-from src.runtime.nodes.retry import build_retrieval_feedback, format_retry_context_for_planner
-from tests.core.helpers import _CapturePlannerLLM, build_test_state
-from src.core.documents import DocumentElement, build_snapshot
-from src.core.evidence import SearchHit, RetrievalScore, build_evidence
+from tests.core.helpers import build_test_state
+from src.core.evidence import SearchHit
 from src.core.planner_schema import RetrievalTask
-from src.runtime.nodes.validation import make_pre_synthesis_validation_node
-from src.runtime.nodes.validation import make_post_synthesis_validation_node
-from src.core.answer_schema import AnswerDocument, finalize_answer
 import json
 import requests
 from src.infra.settings import AppSettings
 from src.infra.tools import build_tool_registry
 from src.runtime.nodes.retrieval import make_retrieve_dispatch_node
 import pytest
-from pydantic import ValidationError
-
-
-def _official_hit(task):
-    text = "numpy.concatenate joins arrays along axis."
-    snapshot = build_snapshot(source_uri="https://numpy.org/doc/stable/reference/generated/numpy.concatenate.html",
-                              title="numpy.concatenate", media_type="text/plain", source_type="official",
-                              content=text, parser="test", parser_version="1")
-    return SearchHit(evidence=build_evidence(snapshot=snapshot, element=DocumentElement(element_id="body", kind="paragraph", text=text)),
-                     score=RetrievalScore(metric="provider_score", raw=0.9, normalized=0.9, direction="higher"), rank=1,
-                     requirement_id=task.requirement_id)
-
-
-
-
-
-
-
-
 
 
 def test_dispatch_keeps_independent_official_sources_and_coverage_with_mixed_provider_results(monkeypatch):
@@ -95,30 +70,6 @@ def test_dispatch_keeps_independent_official_sources_and_coverage_with_mixed_pro
     assert {tuple(request["include_domains"]) for request in requests_seen} == {("numpy.org",), ("pandas.pydata.org",)}
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 class _RewriteModel:
     def __init__(self, rewrites):
         self.rewrites = rewrites
@@ -140,7 +91,12 @@ def _rewrite_state():
     return state, failed, successful, contract
 
 
-
-
-
-
+def test_retrieval_rewrite_rejects_an_unknown_requirement():
+    from src.core.llm_errors import LLMCallError
+    rewrites = [{"requirement_id": "unknown", "query": "new", "k": 3}]
+    state, failed, successful, contract = _rewrite_state()
+    with pytest.raises(LLMCallError) as caught:
+        make_planner_node(None, False, llm_planner_retry=_RewriteModel(rewrites))(state)
+    assert caught.value.problem.code == "model_output_invalid"
+    assert state["retry"].original_tasks == [failed, successful]
+    assert state["runtime"].request_contract == contract

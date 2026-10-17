@@ -1,50 +1,30 @@
 """Planner boundary tests use explicit interpretations and real immutable source snapshots."""
 from __future__ import annotations
 
-import hashlib
-
 import pytest
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
-from pydantic import ValidationError
+from langchain_core.messages import HumanMessage
 
 from src.core.answer_schema import finalize_answer, text_document
 from src.core.contracts.boundary.graph import build_graph_state_input
-from src.core.contracts.debug import RetryState
 from src.core.contracts.graph_state import PendingAction
-from src.core.planner_schema import PlannerOutput, RetrievalRewriteOutput, RetrievalTask
+from src.core.planner_schema import PlannerOutput
 from src.core.llm_errors import LLMCallError
 from src.core.request_contracts import (
-    AcknowledgeBody, ActionContract, ActionRequest, AnswerReference, BoundAnswerReference, ComposeBody,
-    ContractEvidence, CopyAnswerBody, MissingInformation, RequestContract, TransformAnswerBody,
-    UnresolvedBody, UserTurnSnapshot, WireCopyAnswerBody, WireCopyInputBody, WireRequestContract,
-    WireTransformAnswerBody, WireTransformInputBody,
+    ActionContract, ActionRequest, ComposeBody, ContractEvidence, RequestContract,
+    UserTurnSnapshot, WireRequestContract,
 )
-from src.core.slack_contract import ExplicitRecipient, OmittedRecipient, RecipientSelector, UnresolvedRecipient
+from src.core.slack_contract import OmittedRecipient
 from src.runtime.nodes.planner import make_planner_node
 
 
 class PlannerResult:
     def __init__(self, result):
-        self.result = result.model_dump(mode="json") if isinstance(result, (PlannerOutput, RetrievalRewriteOutput)) else result
+        self.result = result.model_dump(mode="json") if isinstance(result, PlannerOutput) else result
         self.calls = []
 
     def invoke(self, messages):
         self.calls.append(messages)
         return self.result
-
-
-def recipient(value, *evidence_ids):
-    return {"state": "explicit", "selector": {"kind": "channel", "value": value},
-            "evidence_ids": list(evidence_ids or ("current-evidence",))}
-
-
-def wire(query, **updates):
-    return WireRequestContract.model_validate({
-        "slack_recipient": {"state": "omitted"},
-        "evidence": [{"id": "current-evidence", "turn_id": "current", "quote": query,
-                      "scope": "current_request", "interpretation": "instruction"}],
-        **updates,
-    })
 
 
 def state_for(query, **kwargs):
@@ -61,78 +41,29 @@ def plan(query, contract, **kwargs):
     return result, model
 
 
-def assert_rejected_plan_preserves_state(query, contract, **kwargs):
-    state = state_for(query, **kwargs)
-    original = state["runtime"]
-    model = PlannerResult(PlannerOutput(use_retrieval=False, tasks=[], request_contract=contract))
-    with pytest.raises(LLMCallError) as caught:
-        make_planner_node(model, False)(state)
-    assert caught.value.problem.code == "model_output_invalid"
-    assert state["runtime"] == original
-    assert len(model.calls) == 2
-
-
-def original_pending(*, response=None, phase="awaiting_destination", completed=()):
+def original_pending(*, response, completed=()):
     clause = ContractEvidence(id="original", turn_id="old", quote="저장하고 Slack으로 보내줘",
                               scope="current_request", interpretation="instruction")
     contract = RequestContract(request_id="pending-request", actions=ActionContract(
         save_text=ActionRequest(intent="requested", evidence_ids=("original",)),
         slack_notify=ActionRequest(intent="requested", evidence_ids=("original",))),
         evidence=(clause,))
-    return PendingAction(contract=contract, response=response, phase=phase, completed_actions=completed,
-                         body_prepared=response is not None and phase != "awaiting_body")
+    return PendingAction(contract=contract, response=response, phase="awaiting_destination", completed_actions=completed,
+                         body_prepared=True)
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+@pytest.mark.parametrize("payload", [
+    {"use_retrieval": False, "tasks": []},
+    {"use_retrieval": False, "tasks": [], "request_contract": {"actions": {"save_text": {"intent": "requested"}}}},
+])
+def test_missing_contract_or_ungrounded_action_never_recovers_actions_from_keywords(payload):
+    state = state_for("저장하고 Slack으로 보내줘")
+    model = PlannerResult(payload)
+    with pytest.raises(LLMCallError) as caught:
+        make_planner_node(model, False)(state)
+    assert caught.value.problem.code == "model_output_invalid"
+    assert state["runtime"].request_contract is None
+    assert len(model.calls) == 2
 
 
 def test_new_relation_with_a_matching_target_cannot_reactivate_a_completed_old_action():
@@ -146,43 +77,3 @@ def test_new_relation_with_a_matching_target_cannot_reactivate_a_completed_old_a
     contract = result["runtime"].request_contract
     assert contract.request_id != pending.contract.request_id
     assert not contract.execution_ready("save_text", body_ready=True)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
