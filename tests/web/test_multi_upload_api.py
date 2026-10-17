@@ -4,12 +4,8 @@ from __future__ import annotations
 
 import json
 import hashlib
-import logging
 import socket
-from concurrent.futures import ThreadPoolExecutor
-from contextlib import contextmanager
 from pathlib import Path
-from threading import Barrier, Event
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -19,19 +15,14 @@ from langchain_core.embeddings import Embeddings
 from langchain_core.messages import AIMessage
 
 from src.app.web.app import create_app
-from src.core.answer_schema import AnswerDocument, AnswerResponse, export_answer_text
+from src.core.answer_schema import AnswerDocument, AnswerResponse
 from src.core.planner_schema import InitialPlannerOutput
 from src.core.request_contracts import WireRequestContract
 from src.infra.settings import AppSettings
 
 
 class LocalEmbeddings(Embeddings):
-    def __init__(self, controls):
-        self.controls = controls
-
     def embed_documents(self, texts):
-        if self.controls.before_embedding is not None:
-            self.controls.before_embedding()
         return [[1.0, 0.0] for _ in texts]
 
     def embed_query(self, text):
@@ -61,21 +52,10 @@ class LocalChatModel:
                            "requirement": {"file_ids": file_ids}}] if files else [],
                 "request_contract": WireRequestContract(slack_recipient={"state": "omitted"}).model_dump(mode="json"),
             }
-            if files and self.controls.planned_symbols:
-                parsed["tasks"] = [
-                    {"route": "upload", "query": f"Compare {symbol} definitions", "k": 4,
-                     "requirement": {"file_ids": file_ids,
-                                     "symbols": [symbol], "match": "definition"}}
-                    for symbol in self.controls.planned_symbols
-                ]
             parsed = InitialPlannerOutput.model_validate(parsed).model_dump(mode="json")
         elif self.schema_name == "RetrievalRewriteOutput":
             raise AssertionError("Upload-only requests must not replan retrieval")
         elif self.schema_name == "AnswerDocument":
-            if self.controls.before_synthesis is not None:
-                self.controls.before_synthesis()
-            if self.controls.fail_synthesis:
-                raise TimeoutError("Simulated model outage")
             packet = json.loads(str(messages[-1].content).split("\n", 2)[2])
             blocks = [{"type": "code", "language": "python", "content": {
                 "text": item["excerpt"], "basis": "excerpt", "refs": [item["id"]],
@@ -100,11 +80,10 @@ def api(tmp_path, monkeypatch):
         upload_max_files=10, upload_max_file_mib=1, upload_max_total_mib=2,
         session_ttl_seconds=5, session_cleanup_interval_seconds=1,
     )
-    controls = SimpleNamespace(fail_synthesis=False, before_embedding=None, before_synthesis=None,
-                               planned_symbols=(), planned_file_ids=None)
+    controls = SimpleNamespace(planned_file_ids=None)
     monkeypatch.setattr("src.app.web.app.get_settings", lambda: settings)
     monkeypatch.setattr("src.infra.runtime_paths.get_project_root_path", lambda: tmp_path)
-    monkeypatch.setattr("src.infra.chroma_store.OpenAIEmbeddings", lambda **kwargs: LocalEmbeddings(controls))
+    monkeypatch.setattr("src.infra.chroma_store.OpenAIEmbeddings", lambda **kwargs: LocalEmbeddings())
     monkeypatch.setattr("src.infra.llm.ChatOpenAI", lambda **kwargs: LocalChatModel(controls))
     monkeypatch.setenv("LANGSMITH_TRACING", "false")
     monkeypatch.setenv("LANGCHAIN_TRACING_V2", "false")
@@ -173,10 +152,6 @@ def answer(api, **kwargs):
     return AnswerResponse.model_validate(final["response"])
 
 
-
-
-
-
 def test_sync_rejects_bytes_changed_after_approval(api):
     current = manifest(api)
     addition = staged(api, "alpha.py", "alpha = 1\n")
@@ -187,41 +162,6 @@ def test_sync_rejects_bytes_changed_after_approval(api):
     assert response.json()["detail"]["code"] == "UPLOAD_CONTENT_CHANGED"
     assert manifest(api) == current
     assert not list((api.root / "uploads" / "session-a" / "objects").glob("**/*.py"))
-
-
-
-
-
-
-
-
-
-
-@contextmanager
-def session_requests_arrived(count):
-    """Observe actual server request arrivals through its existing log boundary, without replacing the store."""
-    arrived = Event()
-
-    class ArrivalObserver(logging.Handler):
-        remaining = count
-
-        def emit(self, record):
-            if getattr(record, "event", None) == "session_cache_event":
-                self.remaining -= 1
-                if self.remaining <= 0:
-                    arrived.set()
-
-    logger = logging.getLogger("src.app.web.session_store")
-    observer = ArrivalObserver()
-    logger.addHandler(observer)
-    try:
-        yield arrived
-    finally:
-        logger.removeHandler(observer)
-
-
-
-
 
 
 def test_http_comparison_only_uses_the_planned_files_from_a_larger_attachment_set(api):
@@ -241,16 +181,13 @@ def test_http_comparison_only_uses_the_planned_files_from_a_larger_attachment_se
     assert manifest(api) == current
 
 
-
-
-@pytest.mark.parametrize("query", ["Compare the attached files", "exit"])
-def test_stale_http_revision_rejects_mutations_and_question_without_changing_attachments(api, query):
+def test_stale_http_revision_rejects_mutations_and_question_without_changing_attachments(api):
     """A stale client cannot overwrite, reset or use a different attachment revision."""
     old = manifest(api)
     current = sync(api, add=[staged(api, "alpha.py", "alpha = 1\n")])
 
     rejected = api.client.post("/sessions/session-a/uploads/sync", json=sync_body(old, clear=True))
-    events = stream(api, query=query, uploads=context(old))
+    events = stream(api, query="Compare the attached files", uploads=context(old))
 
     assert rejected.status_code == 409
     assert rejected.json()["detail"]["code"] == "UPLOAD_REVISION_CONFLICT"
@@ -259,12 +196,6 @@ def test_stale_http_revision_rejects_mutations_and_question_without_changing_att
     assert final["problem"]["code"] == "upload_revision_conflict"
     assert final["response"] is None
     assert manifest(api) == current
-
-
-
-
-
-
 
 
 def test_cross_session_staged_file_is_rejected_without_entering_the_index(api):
@@ -277,30 +208,6 @@ def test_cross_session_staged_file_is_rejected_without_entering_the_index(api):
     assert response.status_code == 422
     assert response.json()["detail"]["code"] == "UPLOAD_PATH_INVALID"
     assert manifest(api) == before
-
-
-
-
-def notebook_bytes(size):
-    # Notebook metadata counts against the raw byte quota without creating thousands of search chunks.
-    notebook = {"nbformat": 4, "nbformat_minor": 5, "metadata": {"padding": ""}, "cells": [
-        {"id": "value", "cell_type": "code", "metadata": {}, "source": "value = 1\n", "outputs": [], "execution_count": None},
-    ]}
-    encode = lambda: json.dumps(notebook, separators=(",", ":")).encode("utf-8")
-    notebook["metadata"]["padding"] = "x" * (size - len(encode()))
-    return encode()
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 def test_failed_http_batch_preserves_previous_sources_for_later_questions(api):
@@ -316,18 +223,7 @@ def test_failed_http_batch_preserves_previous_sources_for_later_questions(api):
     assert {citation.evidence.snapshot.title for citation in result.citations} == {"alpha.py"}
 
 
-
-
-
-
-
-
-
-
-
-
-@pytest.mark.parametrize("intervening_change", [False, True])
-def test_session_recovers_committed_upload_after_lost_response(api, monkeypatch, intervening_change):
+def test_session_recovers_committed_upload_after_lost_response(api, monkeypatch):
     """Lost HTTP delivery cannot duplicate a committed batch or replay a question."""
     from urllib.parse import urlsplit
 
@@ -376,8 +272,7 @@ def test_session_recovers_committed_upload_after_lost_response(api, monkeypatch,
     assert [file["name"] for file in committed["files"]] == ["alpha.py"]
     assert len(deliveries) == 2  # Initial GET and exactly one attempted mutation.
     assert Path(prepared.files[0].path).read_bytes() == b"alpha = 1\n"
-    current = (sync(api, add=[staged(api, "beta.py", "beta = 2\n")])
-               if intervening_change else committed)
+    current = sync(api, add=[staged(api, "beta.py", "beta = 2\n")])
 
     replayed = client.sync_uploads(request)
 

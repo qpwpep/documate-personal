@@ -1,34 +1,25 @@
 from __future__ import annotations
 
-import json
 import unittest
 from copy import deepcopy
-from unittest.mock import patch
 
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
-from pydantic import ValidationError
+from langchain_core.messages import AIMessage
 
 from src.app.agent_manager import AgentFlowManager
 from src.app.web.session_store import InMemorySessionStore
-from src.app.web.schemas import AgentRequest
 from src.core.contracts import ResponseState
-from src.core.answer_schema import ActionReceipt, AnswerResponse, export_answer_text, finalize_answer, text_document
-from src.core.conversation_memory import (
-    DEFAULT_QUERY_MAX_CHARS,
-    DEFAULT_QUERY_MAX_UTF8_BYTES,
-)
+from src.core.answer_schema import AnswerResponse, finalize_answer, text_document
 from src.infra.settings import AppSettings
 from src.runtime.nodes.session import add_user_message
 
 
-def _response(answer: str, *, actions: list[ActionReceipt] | None = None) -> ResponseState:
-    return ResponseState(result=finalize_answer(text_document(answer), [], actions=actions), kind="answer")
+def _response(answer: str) -> ResponseState:
+    return ResponseState(result=finalize_answer(text_document(answer), []), kind="answer")
 
 
 class _RollingSummaryGraph:
-    def __init__(self, *, include_save_receipt: bool = False) -> None:
+    def __init__(self) -> None:
         self.states: list[dict] = []
-        self.include_save_receipt = include_save_receipt
 
     def stream(self, state: dict, *, stream_mode: str):
         assert stream_mode == "values"
@@ -42,59 +33,14 @@ class _RollingSummaryGraph:
             *added["messages"],
             AIMessage(content=answer),
         ]
-        if self.include_save_receipt:
-            messages.append(
-                ToolMessage(
-                    content=json.dumps(
-                        {
-                            "status": "success",
-                            "file_path": "output/result.txt",
-                            "raw": "TRANSIENT_TOOL_PAYLOAD",
-                        }
-                    ),
-                    name="save_text",
-                    tool_call_id=f"save-{turn}",
-                )
-            )
         yield {
             "route_decisions": [],
             "messages": messages,
             "runtime": runtime.model_copy(
                 update={"memory_summary": f"summary-{turn}"}
             ),
-            "response": _response(answer, actions=[ActionReceipt(kind="save_text", status="success", file_path="output/result.txt")] if self.include_save_receipt else []),
+            "response": _response(answer),
         }
-
-
-class _RuntimeOmittingGraph:
-    def stream(self, state: dict, *, stream_mode: str):
-        runtime = state["runtime"]
-        yield {
-            "route_decisions": [],
-            "messages": [
-                *state.get("messages", []),
-                HumanMessage(content=runtime.user_input),
-                AIMessage(content="legacy answer"),
-            ],
-            "response": _response("legacy answer"),
-        }
-
-
-class _MutatingFailureGraph:
-    def stream(self, state: dict, *, stream_mode: str):
-        state["messages"][0].content = "mutated by failed graph"
-        state["messages"][0].id = "mutated-id"
-        raise RuntimeError("graph failed after mutating its input")
-
-
-class _InvalidResponseGraph(_RollingSummaryGraph):
-    def stream(self, state: dict, *, stream_mode: str):
-        result = next(super().stream(state, stream_mode=stream_mode))
-        # A graph boundary can return a valid-looking revision whose body changed.
-        response = result["response"].model_dump(mode="json")
-        response["result"]["content"]["blocks"][0]["content"][0]["text"] = "unvalidated replacement"
-        result["response"] = response
-        yield result
 
 
 class _InvalidRuntimeGraph(_RollingSummaryGraph):
@@ -115,10 +61,6 @@ def _make_manager(graph) -> AgentFlowManager:
 
 
 class ConversationMemoryLifecycleTest(unittest.TestCase):
-
-
-
-
     def test_invalid_returned_runtime_preserves_conversation_and_previous_answer(self) -> None:
         """잘못된 반환 runtime은 대화 기록 일부만 새 요청으로 교체하지 않는다."""
         graph = _RollingSummaryGraph()
@@ -138,9 +80,6 @@ class ConversationMemoryLifecycleTest(unittest.TestCase):
         self.assertEqual(graph.states[1]["runtime"].previous_response, previous)
         self.assertEqual(graph.states[1]["messages"], before)
         self.assertEqual([turn.text for turn in graph.states[1]["runtime"].user_turns], ["stable request"])
-
-
-
 
 
     def test_different_sessions_do_not_share_conversation_memory(self) -> None:
@@ -163,13 +102,6 @@ class ConversationMemoryLifecycleTest(unittest.TestCase):
             [str(message.content) for message in manager_b.messages],
             ["beta", "answer-1"],
         )
-
-
-
-class AgentRequestMemoryBoundaryTest(unittest.TestCase):
-    pass
-
-
 
 
 if __name__ == "__main__":
