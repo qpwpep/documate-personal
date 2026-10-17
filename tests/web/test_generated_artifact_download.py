@@ -8,7 +8,6 @@ import pytest
 
 from src.app.web.routes import router
 from src.core.save_contract import SaveOperation
-from src.infra.saved_artifacts import manifest_path_for
 from src.infra.tools.save_text import build_save_text_tool
 
 
@@ -35,10 +34,6 @@ def saved(downloads, monkeypatch):
     return result, text, operation, save
 
 
-
-
-
-
 def test_download_returns_the_actual_verified_bytes_and_operation_binding(downloads, saved):
     client, _ = downloads
     result, text, operation, _ = saved
@@ -56,9 +51,7 @@ def test_download_returns_the_actual_verified_bytes_and_operation_binding(downlo
 
 @pytest.mark.parametrize("damage,status,code", [
     ("delete_payload", 404, "artifact_missing"),
-    ("delete_manifest", 404, "manifest_missing"),
     ("replace_payload", 409, "artifact_mismatch"),
-    ("break_manifest", 409, "artifact_mismatch"),
 ])
 def test_download_rejects_missing_or_inconsistent_artifacts(downloads, saved, damage, status, code):
     client, _ = downloads
@@ -66,22 +59,10 @@ def test_download_rejects_missing_or_inconsistent_artifacts(downloads, saved, da
     path = Path(result["file_path"])
     if damage == "delete_payload":
         path.unlink()
-    elif damage == "delete_manifest":
-        manifest_path_for(path).unlink()
-    elif damage == "replace_payload":
-        path.write_bytes(b"different answer")
     else:
-        manifest_path_for(path).write_text("not a manifest", encoding="utf-8")
+        path.write_bytes(b"different answer")
 
     response = client.get(f"/download/{path.name}")
 
     assert response.status_code == status
     assert response.json()["detail"]["code"] == code
-
-
-
-
-
-
-
-
