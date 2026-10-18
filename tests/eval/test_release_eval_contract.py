@@ -7,7 +7,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from src.core.answer_schema import AnswerDocument, finalize_answer
+from src.core.answer_schema import (
+    AnswerDocument, SemanticValidation, finalize_answer, semantic_evidence_fingerprint,
+)
 from src.core.contracts.debug import DebugPayload
 from src.core.contracts.provenance import AnswerProvenance
 from src.core.contracts.usage import LLMCallRecord, TokenUsage
@@ -43,7 +45,7 @@ class _JudgeBoundary:
         return SimpleNamespace(content=json.dumps(payload))
 
 
-def _response_payload(*, forbidden_phase=None, execution_evidence=True):
+def _response_payload(*, forbidden_phase=None, execution_evidence=True, semantic_checks=None):
     source_text = "pandas.merge combines rows from two DataFrames by matching columns."
     snapshot = build_snapshot(
         source_uri="https://pandas.pydata.org/docs/", title="pandas.merge",
@@ -66,6 +68,12 @@ def _response_payload(*, forbidden_phase=None, execution_evidence=True):
             }],
         }],
     }), [source])
+    if semantic_checks is not None:
+        answer.semantic_validation = SemanticValidation(
+            content_hash=answer.content_hash,
+            evidence_fingerprint=semantic_evidence_fingerprint(answer.citations),
+            model="gpt-6-luna", threshold=0.8, checks=semantic_checks,
+        )
     tools = ["tavily_search", *(["slack_notify"] if forbidden_phase else [])]
     events = []
     for tool in tools:
@@ -138,6 +146,28 @@ def test_complete_authorized_evaluation_can_release():
     assert pair[1].composite_quality_score == pytest.approx(1.0)
     assert pair[1].release_pass is True
     assert _summary([pair]).overall_passed is True
+
+
+@pytest.mark.parametrize("probability", [0.99, 0.2])
+def test_semantically_assessed_units_are_not_counted_as_unchecked(probability):
+    _, result = _case_result(semantic_checks=[
+        {"name": "request_fulfilled", "probability": 0.99},
+        {"name": "grounded", "unit_id": "b0.content.0", "probability": probability},
+    ])
+
+    assert result.response_errors == []
+    assert result.response.checks[0].support_status == "not_evaluated"
+    assert result.response.semantic_validation.passed is (probability >= 0.8)
+    assert result.unchecked_unit_count == 0
+
+
+def test_request_fulfillment_assessment_does_not_cover_factual_units():
+    _, result = _case_result(semantic_checks=[
+        {"name": "request_fulfilled", "probability": 0.99},
+    ])
+
+    assert result.response_errors == []
+    assert result.unchecked_unit_count == 1
 
 
 @pytest.mark.parametrize("failure", ["invocation_error", "missing_score"])

@@ -33,7 +33,7 @@ Return ONLY JSON with this schema:
 
 Scoring guidance:
 - answer_quality: whether the response actually answers the user's request with useful substance rather than copying snippets.
-- groundedness: whether the exact displayed content units are supported by their referenced source snapshots. Resolved references are not semantic proof; not_evaluated means no support assessment has run.
+- groundedness: whether the exact displayed content units are supported by their referenced source snapshots. Resolved references are not semantic proof. UnitCheck.support_status=not_evaluated means the deterministic check did not assess semantic support; response.semantic_validation.checks separately records Decisions API probabilities. A grounded check for the same unit_id means semantic support was assessed, including when its probability is below the report threshold. Use the report as diagnostic evidence and independently evaluate the content against its sources.
 - citation_traceability: use evidence_scope.verified_evidence when supplied. These are final citations independently traced through the final construction packet to current observations or the server-selected source answer. A reused citation does not require another search in the final turn. Logical element positions are valid even when physical page coordinates are unavailable. For legacy inputs without evidence_scope, compare the versioned sources and contained ranges in observed_hits.
 - tool_choice: compare only called_tools and current-turn retrieval routes with case expectations. Preparation-turn searches never satisfy or violate the final question's expected or forbidden tools.
 - format_language: whether the response follows the requested structure and restates in the user's language.
