@@ -24,7 +24,7 @@ _PLANNER_MODEL_REASONING_EFFORTS: dict[str, tuple[ReasoningEffort, ...]] = dict.
     ("none", "low", "medium", "high", "xhigh", "max"),
 )
 EnvExampleGroup = Literal[
-    "required_secrets", "models", "planning_summary", "synthesis", "search",
+    "required_secrets", "models", "planning_summary", "synthesis", "validation", "search",
     "application_settings", "sessions", "files", "memory", "slack",
     "benchmark", "benchmark_slack",
 ]
@@ -61,6 +61,7 @@ APP_ENV_SPECS = (
     EnvVarSpec("CHAT_MODEL", "chat_model", "gpt-5.6-luna", "synthesis 모델 기본값", example="gpt-5.6-luna", example_group="models"),
     EnvVarSpec("PLANNER_MODEL", "planner_model", "gpt-5.6-luna", "planner 모델 기본값", example="gpt-5.6-luna", example_group="models"),
     EnvVarSpec("SUMMARY_MODEL", "summary_model", "gpt-5.6-luna", "session summary 모델 기본값", example="gpt-5.6-luna", example_group="models"),
+    EnvVarSpec("VALIDATION_MODEL", "validation_model", "gpt-6-luna", "사전·사후 검증용 OpenAI Decisions API 모델 (gpt-6-luna만 지원)", example="gpt-6-luna", example_group="models"),
     EnvVarSpec("SUMMARY_MAX_TOKENS", "summary_max_tokens", 1024, "요약 LLM 생성 토큰 상한; 저장 요약 예산과 독립", example=1024, example_group="planning_summary"),
     EnvVarSpec("PLANNER_MAX_TOKENS", "planner_max_tokens", 1920, "planner structured output 최대 토큰", example=1920, example_group="planning_summary"),
     EnvVarSpec(
@@ -76,6 +77,8 @@ APP_ENV_SPECS = (
         example_group="planning_summary",
     ),
     EnvVarSpec("DOCS_SEARCH_TIMEOUT_SECONDS", "docs_search_timeout_seconds", 5, "Tavily 요청별 timeout", example=5, example_group="search"),
+    EnvVarSpec("VALIDATION_TIMEOUT_SECONDS", "validation_timeout_seconds", 20, "사전·사후 검증의 Decisions API 요청별 timeout", example=20, example_group="validation"),
+    EnvVarSpec("VALIDATION_PASS_THRESHOLD", "validation_pass_threshold", 0.8, "사전·사후 검증 통과 확률 기준 (0 이상 1 이하)", example=0.8, example_group="validation"),
     EnvVarSpec("SYNTHESIS_TIMEOUT_SECONDS", "synthesis_timeout_seconds", 20, "synthesis provider 요청 timeout", example=20, example_group="synthesis"),
     EnvVarSpec("SYNTHESIS_USE_RESPONSES_API", "synthesis_use_responses_api", False, "synthesis Responses API 사용 여부", example=False, example_group="synthesis"),
     EnvVarSpec("SYNTHESIS_MAX_TOKENS", "synthesis_max_tokens", 4096, "일반 synthesis 생성 토큰 상한", example=4096, example_group="synthesis"),
@@ -520,6 +523,7 @@ class AppSettings(BaseSettings):
     chat_model: str = Field(default=_app_default("CHAT_MODEL"), alias="CHAT_MODEL")
     planner_model: str = Field(default=_app_default("PLANNER_MODEL"), alias="PLANNER_MODEL")
     summary_model: str = Field(default=_app_default("SUMMARY_MODEL"), alias="SUMMARY_MODEL")
+    validation_model: Literal["gpt-6-luna"] = Field(default=_app_default("VALIDATION_MODEL"), alias="VALIDATION_MODEL")
     summary_max_tokens: int = Field(default=_app_default("SUMMARY_MAX_TOKENS"), alias="SUMMARY_MAX_TOKENS", ge=1)
     planner_max_tokens: int = Field(default=_app_default("PLANNER_MAX_TOKENS"), alias="PLANNER_MAX_TOKENS", ge=1)
     planner_reasoning_effort: ReasoningEffort | None = Field(
@@ -530,6 +534,18 @@ class AppSettings(BaseSettings):
         default=_app_default("DOCS_SEARCH_TIMEOUT_SECONDS"),
         alias="DOCS_SEARCH_TIMEOUT_SECONDS",
         ge=1,
+    )
+    validation_timeout_seconds: int = Field(
+        default=_app_default("VALIDATION_TIMEOUT_SECONDS"),
+        alias="VALIDATION_TIMEOUT_SECONDS",
+        ge=1,
+    )
+    validation_pass_threshold: float = Field(
+        default=_app_default("VALIDATION_PASS_THRESHOLD"),
+        alias="VALIDATION_PASS_THRESHOLD",
+        ge=0,
+        le=1,
+        allow_inf_nan=False,
     )
     synthesis_timeout_seconds: int = Field(
         default=_app_default("SYNTHESIS_TIMEOUT_SECONDS"),
@@ -681,11 +697,14 @@ class AppSettings(BaseSettings):
                 next_action="fix_configuration",
             ))
 
-    def fastapi_runtime_log_fields(self) -> dict[str, str | int]:
+    def fastapi_runtime_log_fields(self) -> dict[str, str | int | float]:
         return {
             "chat_model": self.chat_model,
             "planner_model": self.planner_model,
             "summary_model": self.summary_model,
+            "validation_model": self.validation_model,
+            "validation_timeout_seconds": self.validation_timeout_seconds,
+            "validation_pass_threshold": self.validation_pass_threshold,
             "planner_max_tokens": self.planner_max_tokens,
             "planner_reasoning_effort": self.planner_reasoning_effort or "model_default",
             "summary_max_tokens": self.summary_max_tokens,

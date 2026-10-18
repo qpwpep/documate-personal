@@ -2,12 +2,14 @@ from dataclasses import dataclass
 from typing import Any
 
 from langchain_openai import ChatOpenAI
+from openai import OpenAI
 
 from src.core.planner_schema import InitialPlannerOutput, RetrievalRewriteOutput
 from src.core.answer_schema import AnswerDocument
 from src.infra.structured_schema import compile_output_schema
 from src.infra.llm_boundary import bind_structured_output
 from src.infra.settings import AppSettings
+from src.infra.decisions import DecisionsClient
 
 
 @dataclass(frozen=True)
@@ -17,6 +19,7 @@ class LLMRegistry:
     llm_synthesizer: Any
     llm_synthesizer_compact: Any | None
     llm_summarizer: Any
+    decisions_client: DecisionsClient
     verbose: bool
 
 
@@ -106,5 +109,10 @@ def build_llm_registry(settings: AppSettings) -> LLMRegistry:
         llm_synthesizer=llm_synthesizer,
         llm_synthesizer_compact=llm_synthesizer_compact,
         llm_summarizer=llm_summarizer,
+        decisions_client=DecisionsClient(
+            OpenAI(api_key=settings.openai_api_key, max_retries=0),
+            model=settings.validation_model,
+            timeout_seconds=settings.validation_timeout_seconds,
+        ),
         verbose=settings.verbose,
     )

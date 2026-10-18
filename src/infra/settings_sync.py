@@ -15,6 +15,7 @@ ENV_EXAMPLE_SECTIONS = (
     ("models", "Model selection"),
     ("planning_summary", "Planning and summary generation"),
     ("synthesis", "Answer generation"),
+    ("validation", "Pre- and post-validation"),
     ("search", "Document search"),
     ("application_settings", "Server and logging"),
     ("sessions", "Session lifecycle"),

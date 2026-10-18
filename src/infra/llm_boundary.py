@@ -47,7 +47,7 @@ def capture_llm_diagnostics() -> Iterator[list[LLMDiagnostic]]:
         _budgets.reset(budget_token)
 
 
-def _record(diagnostic: LLMDiagnostic) -> None:
+def record_llm_diagnostic(diagnostic: LLMDiagnostic) -> None:
     records = _diagnostics.get()
     if records is not None:
         records.append(diagnostic)
@@ -363,7 +363,7 @@ def run_structured_call(llm: Any, messages: list[Any], *, stage: str, validate: 
             can_retry = transient and permitted and budget.can_attempt and delay < budget.remaining_seconds
             can_repair = code == "model_output_invalid" and repair and budget.repairs < 1 and budget.can_attempt
             diagnostic = diagnostic.model_copy(update={"recovery": "retry" if can_retry else "repair" if can_repair else "stop"})
-            _record(diagnostic)
+            record_llm_diagnostic(diagnostic)
             last = LLMCallError(error.problem, diagnostic)
             if can_retry:
                 time.sleep(delay)
@@ -382,5 +382,5 @@ def run_structured_call(llm: Any, messages: list[Any], *, stage: str, validate: 
         raise last
     diagnostic = LLMDiagnostic(code="call_budget_exhausted", stage=stage, attempt=budget.calls, **_metadata(llm),
         budget_reason="calls" if budget.calls >= budget.max_calls else "deadline")
-    _record(diagnostic)
+    record_llm_diagnostic(diagnostic)
     raise LLMCallError(make_problem("call_budget_exhausted", stage), diagnostic)

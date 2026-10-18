@@ -12,13 +12,15 @@ def compute_cost_usd(
     llm_calls: Sequence[LLMCallRecord] | None,
     pricing: Pricing,
 ) -> float | None:
-    """Price every observed call; an unavailable count makes the total unknown."""
+    """Price all observed calls; missing usage or Decisions prices stay unknown."""
     if llm_calls is None:
         return None
     total_cost = 0.0
     for call in llm_calls:
         usage = call.usage
         if usage.input_tokens is None or usage.output_tokens is None:
+            return None
+        if call.path == "decisions" and call.model_name not in pricing.models:
             return None
         model_pricing = _resolve_model_pricing(call.model_name, pricing)
         total_cost += (usage.input_tokens / 1000.0) * float(model_pricing.prompt_per_1k_usd)

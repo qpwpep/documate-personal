@@ -8,8 +8,10 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 TokenCount = Annotated[int, Field(strict=True, ge=0)]
-LLMCallStage = Literal["summarize", "planner", "synthesis"]
-LLMCallPath = Literal["direct", "structured", "structured_compact_fallback"]
+LLMCallStage = Literal[
+    "summarize", "planner", "synthesis", "pre_synthesis_validation", "post_synthesis_validation",
+]
+LLMCallPath = Literal["direct", "structured", "structured_compact_fallback", "decisions"]
 
 
 class UsageIssue(BaseModel):
