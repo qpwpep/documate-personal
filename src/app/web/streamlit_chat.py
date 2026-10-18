@@ -9,7 +9,7 @@ import streamlit as st
 from src.app.client import AgentCallResult, AgentStreamEvent
 from src.app.web.streamlit_sources import render_code, render_evidence
 from src.app.web.streamlit_state import AssistantChatMessage, ChatMessage
-from src.core.answer_schema import AnswerResponse, ContentUnit, iter_content_units
+from src.core.answer_schema import AnswerResponse, ContentUnit, SemanticCheck, iter_content_units
 from src.core.answer_schema.rendering import inline_code_markdown
 from src.core.contracts.outcome import TurnResult
 
@@ -64,10 +64,10 @@ def render_turn_result(result: TurnResult, fastapi_url: str) -> None:
         label = "요청 식별자" if result.status == "needs_input" else "오류 식별자"
         st.caption(f"{label}: {result.request_id}")
     if result.response is not None:
-        render_answer_response(result.response, fastapi_url)
+        render_answer_response(result.response, fastapi_url, turn_incomplete=result.status == "partial")
 
 
-def render_answer_response(response: AnswerResponse, fastapi_url: str) -> None:
+def render_answer_response(response: AnswerResponse, fastapi_url: str, *, turn_incomplete: bool = False) -> None:
     response = AnswerResponse.model_validate(response.model_dump(mode="json"))
     citations = {citation.evidence.id: citation for citation in response.citations}
     checks = {check.unit_id: check for check in response.checks}
@@ -112,13 +112,7 @@ def render_answer_response(response: AnswerResponse, fastapi_url: str) -> None:
                 st.warning("이 인용문은 보관한 원문과 일치하지 않습니다.")
         _render_citations([unit for _, unit in units], citations)
 
-    if response.citations:
-        with st.expander("근거 확인 범위"):
-            resolved = sum(check.reference_status == "resolved" for check in response.checks)
-            exact = sum(check.support_status == "exact_match" for check in response.checks)
-            st.caption(f"원문에 연결된 내용 {resolved}개 · 원문과 일치하는 발췌 {exact}개")
-            if any(check.reference_status == "resolved" and check.support_status == "not_evaluated" for check in response.checks):
-                st.caption("출처 연결은 확인했지만, 출처가 모든 설명이나 해석을 뒷받침하는지는 별도로 평가하지 않았습니다.")
+    _render_validation_scope(response, turn_incomplete=turn_incomplete)
 
     for action in response.actions:
         label = "파일 저장" if action.kind == "save_text" else "Slack 전송"
@@ -167,6 +161,50 @@ def render_answer_response(response: AnswerResponse, fastapi_url: str) -> None:
                 filename = action.artifact.filename
                 url = f"{fastapi_url}/download/{quote(filename, safe='')}"
                 st.markdown(f"[파일 다운로드 ({filename})]({url})")
+
+
+def _render_validation_scope(response: AnswerResponse, *, turn_incomplete: bool = False) -> None:
+    report = response.semantic_validation
+    units = list(iter_content_units(response.content))
+    if not response.citations and report is None and not units:
+        return
+    with st.expander("근거 확인 범위"):
+        resolved = sum(check.reference_status == "resolved" for check in response.checks)
+        exact = sum(check.support_status == "exact_match" for check in response.checks)
+        st.caption(f"원문에 연결된 내용 {resolved}개 · 원문과 일치하는 발췌 {exact}개")
+        if report is not None:
+            st.caption("Decisions API에서 받은 평가 결과입니다.")
+        semantic_checks = {(check.name, check.unit_id): check for check in report.checks} if report is not None else {}
+        request_check = semantic_checks.get(("request_fulfilled", None))
+        issue_codes = {issue.code for issue in response.issues}
+        request_label = "요청 충족"
+        if issue_codes & {"retrieved_evidence_incomplete", "evidence_packet_incomplete"}:
+            request_label = "확인된 근거 범위의 본문 충족"
+            st.caption("일부 근거가 부족해 요청 전체는 미완료입니다. 아래 판정은 확보된 근거로 작성한 본문 범위에 한정됩니다.")
+        elif issue_codes & {"answer_incomplete", "source_excerpt_fallback"}:
+            request_label = "제공된 본문 범위의 충족"
+            st.caption("요청 전체를 완료하지 못한 부분 답변입니다. 아래 판정은 현재 제공된 본문에 대한 평가입니다.")
+        elif turn_incomplete:
+            request_label = "답변 본문 충족"
+            st.caption("전체 요청 처리는 완료되지 않았습니다. 아래 판정은 답변 본문만 평가하며 저장·전송 등의 처리 완료 여부를 뜻하지 않습니다.")
+        _render_semantic_result(request_label, request_check, report.threshold if report is not None else None)
+        for index, (path, unit) in enumerate(units, start=1):
+            preview = " ".join(unit.text.split())
+            if len(preview) > 120:
+                preview = preview[:117] + "…"
+            st.markdown(f"**내용 {index}** · {preview}")
+            _render_semantic_result(
+                "근거 지지", semantic_checks.get(("grounded", path)),
+                report.threshold if report is not None else None,
+            )
+
+
+def _render_semantic_result(label: str, check: SemanticCheck | None, threshold: float | None) -> None:
+    if check is None or threshold is None:
+        st.caption(f"{label}: 검증 안 됨")
+        return
+    status = "통과" if check.probability >= threshold else "미통과"
+    st.caption(f"{label}: {status} · 충족 확률 {check.probability} · 임곗값 {threshold}")
 
 
 def _unit_text(unit: ContentUnit, citations: dict) -> str:
