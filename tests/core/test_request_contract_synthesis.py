@@ -7,6 +7,7 @@ from src.core.request_contracts import (
 )
 from src.runtime.nodes.synthesis import make_synthesize_node
 from src.runtime.nodes.validation import make_post_synthesis_validation_node
+from tests.core.helpers import make_decisions_client
 from tests.core.test_synthesis_validation import _hit, _state as retrieval_state
 from tests.synthesis_fixtures import synthesis_excerpt_limits
 
@@ -38,7 +39,7 @@ def test_validation_exhaustion_cannot_replace_forbidden_generated_code_with_orig
     }]})
 
     state.update(make_synthesize_node(ModelBoundary(document), excerpt_limits=synthesis_excerpt_limits())(state))
-    state.update(make_post_synthesis_validation_node(False)(state))
+    state.update(make_post_synthesis_validation_node(False, decisions_client=make_decisions_client())(state))
 
     assert state["response"].kind == "failure"
     assert "generated_code" not in export_answer_text(state["response"].result)

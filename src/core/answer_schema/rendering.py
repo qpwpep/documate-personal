@@ -156,8 +156,10 @@ def export_answer_text(response: AnswerResponse, *, include_sources: bool = Fals
             notes.extend(f"[{citation.number}] {issue}" for issue in source.quality_issues)
             if source.capture_scope == "provider_excerpt":
                 notes.append(f"[{citation.number}] 검색 제공자가 반환한 문서 발췌를 보관한 자료입니다.")
-        if any(check.reference_status == "resolved" and check.support_status == "not_evaluated" for check in response.checks):
-            notes.append("인용의 원문 위치 연결을 확인했으며, 요약과 해석의 의미적 지지는 별도로 검증하지 않았습니다.")
+        if response.citations:
+            # Rechecking the same answer may change its probabilities. Keep
+            # those results in the API/UI so delivery bytes remain stable.
+            notes.append("출처 연결은 의미적 정확성을 보증하지 않습니다. 의미 검증 결과는 앱에서 확인할 수 있습니다.")
         if any(check.reference_status == "missing" for check in response.checks):
             notes.append("일부 내용은 필요한 원문 근거를 연결하지 못했습니다.")
         if any(check.support_status == "unsupported" for check in response.checks):

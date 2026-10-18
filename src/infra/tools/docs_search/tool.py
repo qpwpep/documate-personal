@@ -25,6 +25,7 @@ def build_docs_search_tool(settings: AppSettings) -> Callable[..., RetrievalResu
         k: int = 3,
         completed_requests: list[DocsSearchRequest] | None = None,
         previous_hits: list[SearchHit] | None = None,
+        refresh: bool = False,
     ) -> RetrievalResult:
         requested = resolve_requirement(requirement)
         effective_query = canonical_query(query, requested)
@@ -40,6 +41,8 @@ def build_docs_search_tool(settings: AppSettings) -> Callable[..., RetrievalResu
         provider_requests: list[DocsSearchProviderRequest] = []
         unsupported_library = bool(requested.library and not library_domains(requested.library))
         candidates = dedupe_docs_hits([hit for hit in previous_hits or [] if hit.evidence.route == "docs"])
+        previous_snapshot_ids = {hit.evidence.snapshot.snapshot_id for hit in candidates}
+        fresh_snapshot_ids: set[str] = set()
         if unsupported_library:
             candidates = []
         warnings: list[str] = []
@@ -50,11 +53,14 @@ def build_docs_search_tool(settings: AppSettings) -> Callable[..., RetrievalResu
         error_code = None
         error_message = ""
         for attempt in range(2):
-            if unsupported_library or assessment.answerability == "covered":
+            # A semantic rejection invalidates local coverage as a reason to
+            # skip this search, without discarding previously useful evidence.
+            refresh_request = refresh and attempt == 0
+            if unsupported_library or (assessment.answerability == "covered" and not refresh_request):
                 break
             query_text = effective_query if attempt == 0 else reformulate_query(effective_query, requested, assessment.missing)
             key = query_text
-            if key in completed and completed[key].max_results >= candidate_limit:
+            if not refresh_request and key in completed and completed[key].max_results >= candidate_limit:
                 continue
             started = time.perf_counter()
             try:
@@ -79,9 +85,13 @@ def build_docs_search_tool(settings: AppSettings) -> Callable[..., RetrievalResu
             started = time.perf_counter()
             batch = collect_docs_search_hits(payload["results"], allowed_domains=domains,
                 retrieval_warnings=warnings, query=effective_query, filter_counters=counters)
+            if refresh:
+                fresh_snapshot_ids.update(hit.evidence.snapshot.snapshot_id for hit in batch
+                                          if hit.evidence.snapshot.snapshot_id not in previous_snapshot_ids)
             candidates = dedupe_docs_hits([*candidates, *batch])
             assessment = select_docs_evidence(effective_query, candidates, requested, k=k,
-                                              allowed_domains=domains, retrieval_warnings=warnings)
+                                              allowed_domains=domains, retrieval_warnings=warnings,
+                                              preferred_snapshot_ids=fresh_snapshot_ids)
             post_ms += elapsed_ms(started, time.perf_counter())
         hits, answerability, missing = assessment.hits, assessment.answerability, assessment.missing
         if unsupported_library:

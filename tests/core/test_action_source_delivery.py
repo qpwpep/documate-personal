@@ -70,7 +70,7 @@ def test_save_and_slack_retain_source_selection_and_limitations_without_mutating
     assert "코드 예시 · 실행 확인 안 됨" in saved
     assert "요청한 전체 조건을 확인하지 못한 예시입니다." in saved
     assert "이 파일에는 설정의 예외 조건이 없습니다." in saved
-    assert "의미적 지지는 별도로 검증하지 않았습니다" in saved
+    assert "출처 연결은 의미적 정확성을 보증하지 않습니다." in saved
     assert f"```python\n{code}```" in saved
     final = updates["response"].result
     assert final.content.model_dump(mode="json") == original_content

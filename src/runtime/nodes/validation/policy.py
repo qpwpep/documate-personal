@@ -93,7 +93,7 @@ def add_retrieval_gap_issues(snapshot: ValidationSnapshot, result: AnswerRespons
 
 def apply_validation_outcome(
     *, snapshot: ValidationSnapshot, assessment: ValidationAssessment,
-    attempt: int, needs_retry: bool,
+    attempt: int, needs_retry: bool, allow_filtered_answer: bool = True,
 ) -> GraphState:
     if needs_retry:
         return {}
@@ -146,7 +146,7 @@ def apply_validation_outcome(
             actions=result.actions,
             issues=[*retained_issues, ResponseIssue(
                 code="invalid_content_removed",
-                message="원문 근거를 연결할 수 없거나 발췌와 일치하지 않는 내용을 제외했습니다.",
+                message="근거로 충분히 뒷받침되지 않거나 원문과 일치하지 않는 내용을 제외했습니다.",
             )],
         )
         valid_paths = {check.unit_id for check in result.checks if check.reference_status != "missing"}
@@ -155,7 +155,8 @@ def apply_validation_outcome(
         recoverable_missing = set(missing_requirements) - set(snapshot.terminal_failed_requirement_ids)
         # Terminal source gaps permit a partial body only while available evidence remains cited.
         has_required_citations = not snapshot.terminal_failed_requirement_ids or bool(result.citations)
-        if document.blocks and contract_check.valid and not recoverable_missing and has_required_citations:
+        if (allow_filtered_answer and document.blocks and contract_check.valid
+                and not recoverable_missing and has_required_citations):
             return checked_response_updates(result)
 
     fallback_hits = select_evidence_hits(

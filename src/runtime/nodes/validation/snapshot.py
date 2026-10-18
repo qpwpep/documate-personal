@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from langchain_core.messages import BaseMessage, ToolMessage
+
 from src.core.answer_schema import AnswerResponse, iter_content_units
 from src.core.contracts import GraphState, RetrievalDiagnostic
 from src.core.contracts.provenance import AnswerSource, BodyKind
@@ -12,8 +14,9 @@ from src.core.contracts.boundary.retrieval import get_retrieval_state
 from src.core.contracts.boundary.runtime import get_runtime_state
 from src.core.evidence import EvidenceRef, SearchHit
 from src.core.planner_schema import PlannerOutput
-from src.core.request_contracts import RequestContract
+from src.core.request_contracts import RequestContract, resolve_body_response
 from src.core.sequence_utils import slice_from_index
+from src.runtime.nodes.session import keep_recent_messages
 from src.runtime.nodes.validation.models import ValidationSnapshot
 from src.runtime.nodes.synthesis.evidence_selection import missing_evidence_requirement_ids, tasks_for_hit
 
@@ -60,6 +63,9 @@ def build_validation_snapshot(
     upload_file_names: dict[str, str] | None = None,
     body_kind: BodyKind | None = None,
     evidence_source: AnswerSource | None = None,
+    source_response: AnswerResponse | None = None,
+    conversation_messages: list[BaseMessage] | None = None,
+    memory_summary: str | None = None,
 ) -> ValidationSnapshot:
     retrieval_required = bool(planner_output.use_retrieval and planner_output.tasks)
     evidence_by_route: dict[str, list[EvidenceRef]] = {"docs": [], "upload": []}
@@ -87,10 +93,13 @@ def build_validation_snapshot(
         upload_file_names=upload_file_names or {},
         body_kind=body_kind,
         evidence_source=evidence_source,
+        source_response=source_response,
+        conversation_messages=conversation_messages or [],
+        memory_summary=memory_summary,
     )
 
 
-def collect_validation_snapshot(state: GraphState) -> tuple[ValidationSnapshot, list[str]]:
+def collect_validation_snapshot(state: GraphState, *, max_turns: int = 6) -> tuple[ValidationSnapshot, list[str]]:
     local_errors: list[str] = []
     runtime = get_runtime_state(state)
     planner = get_planner_state(state)
@@ -98,6 +107,13 @@ def collect_validation_snapshot(state: GraphState) -> tuple[ValidationSnapshot, 
     response = get_response_state(state)
     debug = get_debug_state(state)
     retry = get_retry_state(state)
+    source_response = resolve_body_response(
+        runtime.request_contract,
+        previous_response=runtime.previous_response,
+        pending_response=runtime.pending_action.response if runtime.pending_action else None,
+    ) if runtime.request_contract is not None else None
+    if source_response is not None:
+        source_response = AnswerResponse.model_validate(source_response.model_dump(mode="json"))
     planner_output = planner.output
     parsed_hits = slice_from_index(retrieval.hit_log, retry.hit_start_index)
     retrieval_errors = [
@@ -123,5 +139,11 @@ def collect_validation_snapshot(state: GraphState) -> tuple[ValidationSnapshot, 
         upload_file_names={item.file_id: item.name for item in runtime.upload_files},
         body_kind=response.body_kind,
         evidence_source=response.evidence_source,
+        source_response=source_response,
+        conversation_messages=keep_recent_messages(
+            [message for message in state.get("messages", []) if not isinstance(message, ToolMessage)],
+            max_turns=max_turns,
+        ),
+        memory_summary=runtime.memory_summary,
     )
     return snapshot, local_errors

@@ -407,6 +407,7 @@ def assess_docs_evidence(
 def select_docs_evidence(
     query: str, hits: list[SearchHit], requirement: RetrievalRequirement, *,
     k: int, allowed_domains: list[str], retrieval_warnings: list[str],
+    preferred_snapshot_ids: set[str] | None = None,
 ) -> DocsAssessment:
     """One scope/coverage model drives ranking, evidence selection and completion.
 
@@ -453,6 +454,9 @@ def select_docs_evidence(
             len((c.support.coverage & required) - covered),
             c.support.relevance,
             c.support.confidence,
+            # On an explicit refresh, equally scoped new source revisions get
+            # a chance before the provider score of previously rejected text.
+            c.hit.evidence.snapshot.snapshot_id in (preferred_snapshot_ids or ()),
             float(c.hit.score.normalized or 0.0),
             -len(c.hit.evidence.excerpt),
         ))

@@ -6,6 +6,7 @@ from src.core.evidence import RetrievalScore, SearchHit, build_evidence
 from src.core.planner_schema import PlannerOutput
 from src.core.request_contracts import RequestContract
 from src.runtime.nodes.validation import make_post_synthesis_validation_node
+from tests.core.helpers import make_decisions_client
 from src.runtime.nodes.validation.evidence_validator import assess_validation, build_validation_snapshot
 from src.runtime.nodes.validation.policy import apply_validation_outcome
 
@@ -69,7 +70,7 @@ def test_validation_covers_list_code_and_table_cell_text():
         retry={"max_retries": 0, "max_content_repairs": 0},
     )
 
-    updates = make_post_synthesis_validation_node(False)(state)
+    updates = make_post_synthesis_validation_node(False, decisions_client=make_decisions_client())(state)
 
     result = updates["response"].result
     assert updates["response"].kind == "answer"

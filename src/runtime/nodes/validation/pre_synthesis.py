@@ -13,13 +13,17 @@ from src.infra.logging_utils import log_event
 from src.runtime.nodes.retry import build_followup_from_routes, build_retry_update, retrieval_subject
 from src.runtime.nodes.validation.evidence_validator import assess_retrieval_quality, collect_validation_snapshot
 from src.runtime.nodes.validation.policy import build_followup_updates
+from src.runtime.nodes.validation.semantic import DecisionEvaluator, assess_pre_semantics
 from src.runtime.nodes.synthesis.evidence_selection import tasks_for_hit, upload_file_id
 
 
 logger = logging.getLogger(__name__)
 
 
-def make_pre_synthesis_validation_node(verbose: bool):
+def make_pre_synthesis_validation_node(
+    verbose: bool, *, decisions_client: DecisionEvaluator, pass_threshold: float = 0.8,
+    max_turns: int = 6,
+):
     def pre_synthesis_validation(state: GraphState) -> GraphState:
         planner = get_planner_state(state)
         response = get_response_state(state)
@@ -30,6 +34,13 @@ def make_pre_synthesis_validation_node(verbose: bool):
         contract = runtime.request_contract
         if contract is None or contract.failure is not None or planner.diagnostics.reason == "planner_unavailable":
             raise LLMCallError(make_problem("internal_error", "pre_synthesis_validation"))
+        if contract.can_acknowledge() or contract.can_cancel_pending():
+            # These server-resolved instructions create no deliverable body.
+            # Preserve their deterministic acknowledgment/cancellation path.
+            return {"retry": retry_context.model_copy(update={
+                "needs_retry": False, "retry_reason": None, "failed_routes": [],
+                "failed_requirement_ids": [], "retrieval_feedback": "",
+            })}
         stamp = {"request_id": contract.request_id,
                  "contract_revision": contract.revision,
                  "body_kind": contract.body.kind,
@@ -75,8 +86,12 @@ def make_pre_synthesis_validation_node(verbose: bool):
             )
             return updates
 
-        snapshot, local_errors = collect_validation_snapshot(state)
+        snapshot, local_errors = collect_validation_snapshot(state, max_turns=max_turns)
         assessment = assess_retrieval_quality(snapshot)
+        assess_pre_semantics(
+            snapshot, assessment, decisions_client=decisions_client,
+            threshold=pass_threshold, attempt=retry_context.attempt + 1,
+        )
         needs_retry, next_retry_context, retrieval_feedback = build_retry_update(
             retry_context=retry_context,
             retry_reason=assessment.retry_reason,
@@ -88,6 +103,25 @@ def make_pre_synthesis_validation_node(verbose: bool):
             current_attempt_retrieval_diagnostics=snapshot.current_attempt_retrieval_diagnostics,
             request_contract=snapshot.request_contract,
         )
+        if assessment.retry_reason is not None and not snapshot.planner_output.tasks:
+            # No retrieval can improve a request judged unready. In particular,
+            # never route a preflight failure straight into body generation.
+            needs_retry = False
+            next_retry_context = next_retry_context.model_copy(update={
+                "needs_retry": False, "content_repair_attempt": retry_context.content_repair_attempt,
+                "retry_scope": "refresh_routes",
+            })
+
+        if assessment.semantic_probabilities:
+            failures = {name: round(value, 4) for name, value in assessment.semantic_probabilities.items()
+                        if value < pass_threshold}
+            semantic_event = (
+                f"pre_synthesis_validation: decisions threshold={pass_threshold}, "
+                f"predicates={len(assessment.semantic_probabilities)}, failed={failures}"
+            )
+            updates_debug_events = [*debug.validation_events, semantic_event]
+        else:
+            updates_debug_events = list(debug.validation_events)
 
         if assessment.retry_reason is not None:
             local_errors.append(
@@ -122,13 +156,15 @@ def make_pre_synthesis_validation_node(verbose: bool):
                 if local_errors:
                     updates["debug"] = debug.model_copy(update={
                         "validation_errors": [*debug.validation_errors, *local_errors],
-                        "validation_events": [*debug.validation_events, *local_errors],
+                        "validation_events": [*updates_debug_events, *local_errors],
                     })
                 return updates
             followup_answer = build_followup_from_routes(
                 snapshot.planner_output,
                 assessment.retry_reason,
             )
+            if not snapshot.planner_output.tasks:
+                followup_answer = "요청에 필요한 내용을 충분히 확인하지 못해 답변을 준비하지 못했습니다. 요청할 내용과 조건을 더 구체적으로 알려 주세요."
             if assessment.retry_reason == "no_evidence" and assessment.failed_requirement_ids:
                 notices = []
                 for task in snapshot.planner_output.tasks:
@@ -161,15 +197,18 @@ def make_pre_synthesis_validation_node(verbose: bool):
                     followup_answer,
                     attempt=response.synthesis_attempt,
                     kind="failure",
-                    problem=make_problem("provider_unavailable" if assessment.retry_reason == "tool_error" else "evidence_insufficient", "retrieval"),
+                    problem=make_problem(
+                        "provider_unavailable" if assessment.retry_reason == "tool_error" else "evidence_insufficient",
+                        "retrieval" if snapshot.planner_output.tasks else "pre_synthesis_validation",
+                    ),
                     **stamp,
                 )
             )
-        if local_errors:
+        if local_errors or assessment.semantic_probabilities:
             updates["debug"] = debug.model_copy(
                 update={
                     "validation_errors": [*debug.validation_errors, *local_errors],
-                    "validation_events": [*debug.validation_events, *local_errors],
+                    "validation_events": [*updates_debug_events, *local_errors],
                 }
             )
         return updates

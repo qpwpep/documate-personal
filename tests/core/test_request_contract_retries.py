@@ -18,6 +18,7 @@ from src.runtime.nodes.retrieval import make_retrieve_dispatch_node
 from src.runtime.nodes.session import add_user_message, make_summarize_node
 from src.runtime.nodes.synthesis import make_synthesize_node
 from src.runtime.nodes.validation import make_post_synthesis_validation_node, make_pre_synthesis_validation_node
+from tests.core.helpers import make_decisions_client
 from tests.core.test_pending_action_delivery import delivery_tools
 from tests.synthesis_fixtures import synthesis_excerpt_limits
 
@@ -68,8 +69,8 @@ def test_transform_repair_preserves_contract_and_delivers_only_the_repaired_body
         planner_node=make_planner_node(PlannerBoundary(previous, save_intent), False),
         retrieve_dispatch_node=make_retrieve_dispatch_node(unavailable_boundary, unavailable_boundary, False),
         synthesize_node=make_synthesize_node(RepairingModelBoundary(), excerpt_limits=synthesis_excerpt_limits()),
-        pre_synthesis_validation_node=make_pre_synthesis_validation_node(False),
-        post_synthesis_validation_node=make_post_synthesis_validation_node(False),
+        pre_synthesis_validation_node=make_pre_synthesis_validation_node(False, decisions_client=make_decisions_client()),
+        post_synthesis_validation_node=make_post_synthesis_validation_node(False, decisions_client=make_decisions_client()),
         action_postprocess_node=make_action_postprocess_node(build_save_text_tool(), unavailable_boundary, False),
         memory_policy=policy,
     )
@@ -124,8 +125,8 @@ def test_failed_save_retries_the_same_frozen_operation_through_real_planner(tmp_
         planner_node=make_planner_node(planner_boundary, False),
         retrieve_dispatch_node=make_retrieve_dispatch_node(unavailable_boundary, unavailable_boundary, False),
         synthesize_node=make_synthesize_node(RepairingModelBoundary(), excerpt_limits=synthesis_excerpt_limits()),
-        pre_synthesis_validation_node=make_pre_synthesis_validation_node(False),
-        post_synthesis_validation_node=make_post_synthesis_validation_node(False),
+        pre_synthesis_validation_node=make_pre_synthesis_validation_node(False, decisions_client=make_decisions_client()),
+        post_synthesis_validation_node=make_post_synthesis_validation_node(False, decisions_client=make_decisions_client()),
         action_postprocess_node=make_action_postprocess_node(build_save_text_tool(), unavailable_boundary, False),
         memory_policy=policy,
     )
@@ -189,8 +190,8 @@ class _SaveConversation:
             planner_node=make_planner_node(self, False),
             retrieve_dispatch_node=make_retrieve_dispatch_node(unavailable_boundary, unavailable_boundary, False),
             synthesize_node=make_synthesize_node(self._DocumentBoundary(self.documents), excerpt_limits=synthesis_excerpt_limits()),
-            pre_synthesis_validation_node=make_pre_synthesis_validation_node(False),
-            post_synthesis_validation_node=make_post_synthesis_validation_node(False),
+            pre_synthesis_validation_node=make_pre_synthesis_validation_node(False, decisions_client=make_decisions_client()),
+            post_synthesis_validation_node=make_post_synthesis_validation_node(False, decisions_client=make_decisions_client()),
             action_postprocess_node=make_action_postprocess_node(build_save_text_tool(), slack, False),
             memory_policy=policy,
         )

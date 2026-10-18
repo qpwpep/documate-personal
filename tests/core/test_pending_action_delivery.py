@@ -22,6 +22,7 @@ from src.infra.tools.slack_notify import build_slack_notify_tool
 from src.runtime.nodes.actions import make_action_postprocess_node
 from src.runtime.nodes.synthesis import make_synthesize_node
 from src.runtime.nodes.validation import make_post_synthesis_validation_node
+from tests.core.helpers import make_decisions_client
 from tests.synthesis_fixtures import synthesis_excerpt_limits
 
 
@@ -112,7 +113,7 @@ class _ConsumerGraph:
     def __init__(self, contracts, documents, save, slack, default_slack_recipient=None):
         self.contracts = iter(contracts)
         self.synthesize = make_synthesize_node(_DocumentModelBoundary(documents), excerpt_limits=synthesis_excerpt_limits())
-        self.validate = make_post_synthesis_validation_node(verbose=False)
+        self.validate = make_post_synthesis_validation_node(verbose=False, decisions_client=make_decisions_client())
         self.actions = make_action_postprocess_node(save, slack, False, default_slack_recipient)
 
     def stream(self, state, *, stream_mode):

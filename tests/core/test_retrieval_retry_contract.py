@@ -1,5 +1,7 @@
 """Retrieval recovery keeps evidence ownership and retries only recoverable searches."""
 
+import pytest
+
 from src.core.contracts import RetryState
 from src.core.planner_schema import PlannerOutput, RetrievalTask
 from src.core.request_contracts import RequestContract
@@ -7,7 +9,8 @@ from src.runtime.nodes.retrieval import make_retrieve_dispatch_node
 from tests.core.helpers import build_test_state
 
 
-def test_dispatch_retries_timeout_after_partial_success_without_repeating_completed_http_query(monkeypatch):
+@pytest.mark.parametrize("retry_reason", [None, "tool_error", "no_evidence"])
+def test_dispatch_retries_timeout_after_partial_success_without_repeating_completed_http_query(monkeypatch, retry_reason):
     """A successful partial result is not a completed search when its next provider request failed."""
     import json
     import requests
@@ -48,7 +51,7 @@ def test_dispatch_retries_timeout_after_partial_success_without_repeating_comple
     first_hit = state["retrieval"].hit_log[0]
     first = state["debug"].retrieval_diagnostics[-1]
     assert (first.status, first.answerability, first.error_code) == ("success", "partial", "RETRIEVAL_DOCS_TIMEOUT")
-    state["retry"] = RetryState(attempt=1, failed_requirement_ids=[task.requirement_id])
+    state["retry"] = RetryState(attempt=1, retry_reason=retry_reason, failed_requirement_ids=[task.requirement_id])
     state.update(dispatch(state))
     final = state["debug"].retrieval_diagnostics[-1]
     assert (final.reused, final.answerability, final.error_code) == (False, "covered", None)

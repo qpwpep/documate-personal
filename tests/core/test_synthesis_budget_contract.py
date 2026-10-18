@@ -10,6 +10,7 @@ from src.runtime.nodes.actions import make_action_postprocess_node
 from src.runtime.nodes.synthesis import make_synthesize_node
 from src.runtime.nodes.synthesis.budgets import ExcerptLimits
 from src.runtime.nodes.validation import make_post_synthesis_validation_node
+from tests.core.helpers import make_decisions_client
 from tests.core.test_synthesis_validation import _hit, _state
 
 
@@ -51,7 +52,7 @@ def test_model_receives_bounded_excerpts_and_citations_use_the_attempt_that_answ
     normal, compact = PacketEchoModel(timeout=timeout), PacketEchoModel()
 
     state.update(make_synthesize_node(normal, compact, excerpt_limits=ExcerptLimits(1800, 900))(state))
-    state.update(make_post_synthesis_validation_node(False)(state))
+    state.update(make_post_synthesis_validation_node(False, decisions_client=make_decisions_client())(state))
 
     assert 0 < sum(len(item["excerpt"]) for item in normal.packets[0]) <= normal_total
     assert all(len(item["excerpt"]) <= 1800 for item in normal.packets[0])
@@ -84,7 +85,7 @@ def test_saving_a_researched_answer_keeps_the_actual_packet_and_complete_validat
         state["runtime"] = state["runtime"].model_copy(update={"request_contract": contract})
         normal, compact = PacketEchoModel(timeout=True), PacketEchoModel()
         state.update(make_synthesize_node(normal, compact, excerpt_limits=ExcerptLimits(1800, 900))(state))
-        state.update(make_post_synthesis_validation_node(False)(state))
+        state.update(make_post_synthesis_validation_node(False, decisions_client=make_decisions_client())(state))
         assert state["response"].kind == "answer"
         packets.append(state["response"].evidence_packet)
         results.append(export_answer_text(state["response"].result, include_sources=True))
@@ -117,7 +118,7 @@ def test_transform_retains_complete_bound_citations_beyond_the_retrieval_budget(
     normal, compact = PacketEchoModel(timeout=True), PacketEchoModel()
 
     state.update(make_synthesize_node(normal, compact, excerpt_limits=ExcerptLimits(1800, 900))(state))
-    state.update(make_post_synthesis_validation_node(False)(state))
+    state.update(make_post_synthesis_validation_node(False, decisions_client=make_decisions_client())(state))
 
     assert len(original.excerpt) > 6000
     assert state["response"].kind == "answer"
@@ -143,7 +144,7 @@ def test_exhausted_recovery_does_not_save_an_incomplete_source_fallback(tmp_path
     normal, compact = PacketEchoModel(timeout=True), PacketEchoModel(timeout=True)
 
     state.update(make_synthesize_node(normal, compact, excerpt_limits=ExcerptLimits(1800, 900))(state))
-    state.update(make_post_synthesis_validation_node(False)(state))
+    state.update(make_post_synthesis_validation_node(False, decisions_client=make_decisions_client())(state))
     state.update(make_action_postprocess_node(build_save_text_tool(), lambda **_kwargs: {}, False)(state))
 
     assert normal.packets

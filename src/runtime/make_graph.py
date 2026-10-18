@@ -30,7 +30,7 @@ def _planner_route(state: GraphState) -> tuple[RoutingTarget, str]:
         return "pre_synthesis_validation", "guided_followup_present"
     if planner.output.use_retrieval and planner.output.tasks:
         return "retrieve_dispatch", f"retrieval_required:{len(planner.output.tasks)}_task(s)"
-    return "synthesize", "retrieval_not_required"
+    return "pre_synthesis_validation", "retrieval_not_required"
 
 
 def _pre_synthesis_route(state: GraphState) -> tuple[RoutingTarget, str]:
@@ -123,7 +123,7 @@ def build_graph(
     builder.add_node("summarize_old_messages", _business_node(summarize_node))
     builder.add_node(
         "planner", _route_after("planner", planner_node, _planner_route),
-        destinations=("pre_synthesis_validation", "retrieve_dispatch", "synthesize"),
+        destinations=("pre_synthesis_validation", "retrieve_dispatch"),
     )
     builder.add_node("retrieve_dispatch", _business_node(retrieve_dispatch_node))
     builder.add_node(

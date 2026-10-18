@@ -188,7 +188,10 @@ def build_agent_graph(settings: AppSettings | None = None):
         record_latency_trace=False,
     )
     pre_synthesis_validation_node = make_pre_synthesis_validation_node(
-        verbose=llm_registry.verbose
+        verbose=llm_registry.verbose,
+        decisions_client=llm_registry.decisions_client,
+        pass_threshold=app_settings.validation_pass_threshold,
+        max_turns=memory_policy.low_water_turns,
     )
     pre_synthesis_validation_node = _instrument_stage_node(
         "pre_synthesis_validation",
@@ -210,7 +213,10 @@ def build_agent_graph(settings: AppSettings | None = None):
         record_latency_trace=False,
     )
     post_synthesis_validation_node = make_post_synthesis_validation_node(
-        verbose=llm_registry.verbose
+        verbose=llm_registry.verbose,
+        decisions_client=llm_registry.decisions_client,
+        pass_threshold=app_settings.validation_pass_threshold,
+        max_turns=memory_policy.low_water_turns,
     )
     post_synthesis_validation_node = _instrument_stage_node(
         "post_synthesis_validation",

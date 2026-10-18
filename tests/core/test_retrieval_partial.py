@@ -14,7 +14,7 @@ from src.runtime.nodes.actions import make_action_postprocess_node
 from src.runtime.nodes.retrieval import make_retrieve_dispatch_node
 from src.runtime.nodes.synthesis import make_synthesize_node
 from src.runtime.nodes.validation import make_post_synthesis_validation_node, make_pre_synthesis_validation_node
-from tests.core.helpers import build_test_state
+from tests.core.helpers import build_test_state, make_decisions_client
 from tests.core.test_pending_action_delivery import _contract
 from tests.core.test_answer_validation import _evidence, _hit
 from tests.synthesis_fixtures import synthesis_excerpt_limits
@@ -62,13 +62,13 @@ def test_incomplete_retrieval_returns_a_natural_cited_partial_without_delivery()
         ))
 
     state.update(make_retrieve_dispatch_node(docs, upload, False)(state))
-    state.update(make_pre_synthesis_validation_node(False)(state))
+    state.update(make_pre_synthesis_validation_node(False, decisions_client=make_decisions_client())(state))
 
     assert _pre_synthesis_route(state)[0] == "synthesize"
     assert state["retry"].terminal_failed_requirement_ids == [tasks[1].requirement_id]
     model = NaturalPartialModel()
     state.update(make_synthesize_node(model, excerpt_limits=synthesis_excerpt_limits())(state))
-    state.update(make_post_synthesis_validation_node(False)(state))
+    state.update(make_post_synthesis_validation_node(False, decisions_client=make_decisions_client())(state))
     outcome = ResponseAssembler().assemble(response=state, debug_info={})
     delivered = []
     state.update(make_action_postprocess_node(
@@ -131,8 +131,8 @@ def test_graph_bounds_search_recovery_and_body_repair_independently(repair_succe
         make_retrieve_dispatch_node(search, None, False),
         make_synthesize_node(model, excerpt_limits=synthesis_excerpt_limits()),
         memory_policy=ConversationMemoryPolicy(),
-        pre_synthesis_validation_node=make_pre_synthesis_validation_node(False),
-        post_synthesis_validation_node=make_post_synthesis_validation_node(False),
+        pre_synthesis_validation_node=make_pre_synthesis_validation_node(False, decisions_client=make_decisions_client()),
+        post_synthesis_validation_node=make_post_synthesis_validation_node(False, decisions_client=make_decisions_client()),
         action_postprocess_node=make_action_postprocess_node(lambda **kwargs: None, lambda **kwargs: None, False),
     )
 
@@ -181,8 +181,8 @@ def test_graph_keeps_independent_docs_when_upload_retriever_is_missing():
         make_retrieve_dispatch_node(search, build_upload_search_tool(), False),
         make_synthesize_node(model, excerpt_limits=synthesis_excerpt_limits()),
         memory_policy=ConversationMemoryPolicy(),
-        pre_synthesis_validation_node=make_pre_synthesis_validation_node(False),
-        post_synthesis_validation_node=make_post_synthesis_validation_node(False),
+        pre_synthesis_validation_node=make_pre_synthesis_validation_node(False, decisions_client=make_decisions_client()),
+        post_synthesis_validation_node=make_post_synthesis_validation_node(False, decisions_client=make_decisions_client()),
         action_postprocess_node=make_action_postprocess_node(lambda **kwargs: None, lambda **kwargs: None, False),
     )
 

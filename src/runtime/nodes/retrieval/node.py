@@ -43,11 +43,36 @@ class RetrievalBatchResult:
     latency_trace: list[dict[str, Any]] = field(default_factory=list)
 
 
+def _requires_docs_refresh(
+    task: RetrievalTask, retry_context: Any,
+    prior_diagnostics: list[RetrievalDiagnostic] | None,
+) -> bool:
+    if not (
+        task.route == "docs" and retry_context.attempt > 0
+        and retry_context.retry_scope == "refresh_routes"
+        and task.requirement_id in retry_context.failed_requirement_ids
+    ):
+        return False
+    latest = next((diagnostic for diagnostic in reversed(prior_diagnostics or [])
+                   if diagnostic.requirement_id == task.requirement_id), None)
+    if latest is not None:
+        # A different task's tool error must not hide semantic rejection of
+        # evidence that deterministic retrieval had considered covered.
+        if latest.answerability == "covered":
+            return True
+        # After partial success, resume failed requests without repeating the
+        # completed ones, even when pre-validation reports no_evidence.
+        if latest.error_code is not None:
+            return False
+    return retry_context.retry_reason == "no_evidence"
+
+
 def _build_route_handlers(
     *,
     tavily_search_tool: Any,
     upload_search_tool: Any,
     runtime: Any,
+    retry_context: Any,
     prior_diagnostics: list[RetrievalDiagnostic] | None = None,
     prior_hits: list[SearchHit] | None = None,
 ) -> dict[str, tuple[str, Any]]:
@@ -58,7 +83,8 @@ def _build_route_handlers(
         return invoke_tool("tavily_search", tavily_search_tool, execution_id=execution_id, query=task.query, k=task.k,
                                   requirement=task.requirement,
                                   completed_requests=completed,
-                                  previous_hits=[hit for hit in (prior_hits or []) if hit.requirement_id == task.requirement_id])
+                                  previous_hits=[hit for hit in (prior_hits or []) if hit.requirement_id == task.requirement_id],
+                                  refresh=_requires_docs_refresh(task, retry_context, prior_diagnostics))
 
     return {
         "docs": (
@@ -94,7 +120,7 @@ def _collect_retrieval_batch(
     for index, task in enumerate(planner_output.tasks, start=1):
         tool_name, invoke_tool = route_handlers[task.route]
         preserve = bool(failed_ids) and task.requirement_id not in failed_ids
-        duplicate = next((d for d in reversed(prior_diagnostics or [])
+        duplicate = None if _requires_docs_refresh(task, retry_context, prior_diagnostics) else next((d for d in reversed(prior_diagnostics or [])
                           if d.requirement_id == task.requirement_id
                           and d.status != "error" and d.error_code is None and d.request_fingerprint
                           and d.request_fingerprint == retrieval_fingerprint(task)), None)
@@ -245,6 +271,7 @@ def make_retrieve_dispatch_node(
             tavily_search_tool=tavily_search_tool,
             upload_search_tool=upload_search_tool,
             runtime=runtime,
+            retry_context=get_retry_state(state),
             prior_diagnostics=debug.retrieval_diagnostics,
             prior_hits=retrieval.hit_log,
         )

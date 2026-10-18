@@ -130,6 +130,49 @@ class UnitCheck(AnswerModel):
     issues: list[str] = Field(default_factory=list)
 
 
+class SemanticCheck(AnswerModel):
+    """One probability returned by the runtime's Decisions API evaluation."""
+
+    name: str = Field(min_length=1)
+    probability: float = Field(ge=0, le=1, allow_inf_nan=False)
+    unit_id: str | None = Field(default=None, min_length=1)
+
+
+class SemanticValidation(AnswerModel):
+    """Semantic results bound to the exact answer and cited source revisions."""
+
+    content_hash: str = Field(min_length=1)
+    evidence_fingerprint: str = Field(min_length=1)
+    model: str = Field(default="gpt-6-luna", min_length=1)
+    threshold: float = Field(ge=0, le=1, allow_inf_nan=False)
+    checks: list[SemanticCheck] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def unique_checks(self) -> "SemanticValidation":
+        identities = [(check.name, check.unit_id) for check in self.checks]
+        if len(identities) != len(set(identities)):
+            raise ValueError("semantic validation checks must have unique names and content units")
+        return self
+
+    @property
+    def passed(self) -> bool:
+        return all(check.probability >= self.threshold for check in self.checks)
+
+
+def semantic_evidence_fingerprint(evidence: list[EvidenceRef] | list[Citation]) -> str:
+    """Hash the complete cited evidence in first-reference order.
+
+    Citation numbers are presentation metadata. The fingerprint covers every
+    retained source field, including version, selected range and quality notes.
+    """
+    serialized = json.dumps(
+        [(item.evidence if isinstance(item, Citation) else item).model_dump(mode="json")
+         for item in evidence],
+        ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False,
+    )
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
 def derive_checks_and_citations(
     document: AnswerDocument, evidence: list[EvidenceRef], *, retrieval_required: bool,
 ) -> tuple[list[UnitCheck], list[Citation]]:
@@ -234,6 +277,7 @@ class AnswerResponse(AnswerModel):
     actions: list[ActionReceipt] = Field(default_factory=list)
     content_hash: str = ""
     retrieval_required: bool = False
+    semantic_validation: SemanticValidation | None = None
 
     @classmethod
     def from_document(
@@ -278,4 +322,12 @@ class AnswerResponse(AnswerModel):
         paths = {check.unit_id for check in self.checks}
         if any(issue.unit_id is not None and issue.unit_id not in paths for issue in self.issues):
             raise ValueError("response issue refers to an unknown content unit")
+        if self.semantic_validation is not None:
+            semantic = self.semantic_validation
+            if semantic.content_hash != self.content_hash:
+                raise ValueError("semantic validation must match the checked content revision")
+            if semantic.evidence_fingerprint != semantic_evidence_fingerprint(self.citations):
+                raise ValueError("semantic validation must match the cited source revisions")
+            if any(check.unit_id is not None and check.unit_id not in paths for check in semantic.checks):
+                raise ValueError("semantic validation refers to an unknown content unit")
         return self

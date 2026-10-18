@@ -76,6 +76,35 @@ def test_previous_partial_evidence_is_rechecked_against_library_and_version(sear
     assert [hit.evidence.snapshot.title for hit in second.hits] == ["numpy.stack"]
 
 
+@pytest.mark.parametrize("refresh_result", ["empty", "same_snapshot", "wrong_owner", "timeout"])
+def test_explicit_refresh_preserves_prior_evidence_when_no_better_source_arrives(search, monkeypatch, refresh_result):
+    tool, batches, seen = search
+    query = "numpy.reshape explanation"
+    source = result(body="# numpy.reshape\nnumpy.reshape(a, shape)\nGives a new shape to an array.")
+    requirement = RetrievalRequirement(library="numpy", symbols=["numpy.reshape"], evidence_needs=["explanation"])
+    batches.append([source])
+    first = tool(query, requirement=requirement)
+    assert first.diagnostics.answerability == "covered"
+
+    if refresh_result == "timeout":
+        def timeout(url, *, json, **kwargs):
+            seen.append(json)
+            raise requests.Timeout("temporary search failure")
+        monkeypatch.setattr(requests, "post", timeout)
+    else:
+        batches.append([source] if refresh_result == "same_snapshot" else
+                       [result("numpy.stack")] if refresh_result == "wrong_owner" else [])
+
+    refreshed = tool(query, requirement=requirement, previous_hits=first.hits,
+                     completed_requests=first.diagnostics.completed_requests, refresh=True)
+
+    assert [request["query"] for request in seen] == [query, query]
+    assert [hit.evidence.id for hit in refreshed.hits] == [hit.evidence.id for hit in first.hits]
+    assert len(refreshed.diagnostics.provider_requests) == 1
+    assert refreshed.diagnostics.provider_requests[0].status == ("error" if refresh_result == "timeout" else "completed")
+    assert refreshed.diagnostics.error_code == ("RETRIEVAL_DOCS_TIMEOUT" if refresh_result == "timeout" else None)
+
+
 def test_official_version_path_keeps_original_source_identity(search):
     tool, batches, _seen = search
     library, symbol, version = "Python", "pathlib.Path.exists", "3.12"

@@ -9,10 +9,12 @@ from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 from langchain_core.embeddings import Embeddings
 from langchain_core.messages import AIMessage
+from openai import OpenAI
 
 from src.app.web.app import create_app
 from src.core.answer_schema import AnswerDocument, AnswerResponse
@@ -85,6 +87,17 @@ def api(tmp_path, monkeypatch):
     monkeypatch.setattr("src.infra.runtime_paths.get_project_root_path", lambda: tmp_path)
     monkeypatch.setattr("src.infra.chroma_store.OpenAIEmbeddings", lambda **kwargs: LocalEmbeddings())
     monkeypatch.setattr("src.infra.llm.ChatOpenAI", lambda **kwargs: LocalChatModel(controls))
+
+    def decisions_provider(request: httpx.Request) -> httpx.Response:
+        assert (request.method, request.url.path) == ("POST", "/v1/decisions")
+        payload = json.loads(request.content)
+        return httpx.Response(200, json={
+            "model": payload["model"],
+            "answers": [{"type": "predicate", "name": question["name"], "probability": 0.99}
+                        for question in payload["questions"]],
+            "usage": {"input_tokens": 32, "output_tokens": 0, "total_tokens": 32},
+        })
+
     monkeypatch.setenv("LANGSMITH_TRACING", "false")
     monkeypatch.setenv("LANGCHAIN_TRACING_V2", "false")
     connect = socket.socket.connect
@@ -95,8 +108,12 @@ def api(tmp_path, monkeypatch):
         return connect(sock, address)
 
     monkeypatch.setattr(socket.socket, "connect", local_connections_only)
-    with TestClient(create_app()) as client:
-        yield SimpleNamespace(client=client, root=tmp_path, settings=settings, controls=controls)
+    with httpx.Client(transport=httpx.MockTransport(decisions_provider)) as provider_client:
+        monkeypatch.setattr("src.infra.llm.OpenAI", lambda **kwargs: OpenAI(
+            **kwargs, http_client=provider_client, base_url="https://provider.test/v1",
+        ))
+        with TestClient(create_app()) as client:
+            yield SimpleNamespace(client=client, root=tmp_path, settings=settings, controls=controls)
 
 
 def staged(api, name, content, *, session="session-a"):

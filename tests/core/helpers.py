@@ -1,9 +1,37 @@
+import json
+
+import httpx
 from langchain_core.messages import HumanMessage
+from openai import OpenAI
 
 from src.core.contracts import DebugState, PlannerState, ResponseState, RetrievalState, RetryState
 from src.core.contracts.boundary.graph import build_graph_state_input, normalize_graph_update
 from src.core.planner_schema import PlannerOutput, RetrievalRewriteOutput
 from src.core.request_contracts import RequestContract, UserTurnSnapshot, WireRequestContract
+from src.infra.decisions import DecisionsClient
+
+
+def make_decisions_client(probabilities: dict[str, float] | None = None) -> DecisionsClient:
+    """Keep SDK parsing, budgets and usage real while replacing provider HTTP."""
+    probabilities = dict(probabilities or {})
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        assert request.method == "POST"
+        assert request.url.path == "/v1/decisions"
+        payload = json.loads(request.content)
+        return httpx.Response(200, headers={"x-request-id": "req_test_decisions"}, json={
+            "model": "gpt-6-luna",
+            "answers": [
+                {"type": "predicate", "name": question["name"],
+                 "probability": probabilities.get(question["name"], 0.99)}
+                for question in payload["questions"]
+            ],
+            "usage": {"input_tokens": 32, "output_tokens": 0, "total_tokens": 32},
+        })
+
+    sdk = OpenAI(api_key="test-key", base_url="https://provider.test/v1",
+                 http_client=httpx.Client(transport=httpx.MockTransport(respond)), max_retries=0)
+    return DecisionsClient(sdk)
 
 
 def build_test_state(payload: dict):

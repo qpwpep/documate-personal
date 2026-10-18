@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from langchain_core.messages import BaseMessage
+
 from src.core.answer_schema import AnswerResponse
 from src.core.contracts import RetrievalDiagnostic
 from src.core.contracts.debug import ErrorCode, RetryReason
@@ -35,6 +37,9 @@ class ValidationSnapshot:
     upload_file_names: dict[str, str] = field(default_factory=dict)
     body_kind: BodyKind | None = None
     evidence_source: AnswerSource | None = None
+    source_response: AnswerResponse | None = None
+    conversation_messages: list[BaseMessage] = field(default_factory=list)
+    memory_summary: str | None = None
 
 
 @dataclass(slots=True)
@@ -52,4 +57,5 @@ class ValidationAssessment:
     failed_routes: set[str] = field(default_factory=set)
     failed_requirement_ids: set[str] = field(default_factory=set)
     score_avg: float | None = None
+    semantic_probabilities: dict[str, float] = field(default_factory=dict)
     error_codes: list[ErrorCode] = field(default_factory=list)
