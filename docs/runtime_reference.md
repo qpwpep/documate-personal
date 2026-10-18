@@ -74,7 +74,11 @@ Windows 환경에서는 `-X utf8` 또는 `PYTHONUTF8=1` 사용을 권장합니�
 
 세 GPT-5.6 모델은 역할별 환경 변수로 선택하며 같은 프롬프트와 출력 계약을 사용합니다. 공식 문서는 [Luna](https://developers.openai.com/api/docs/models/gpt-5.6-luna)를 비용 중심, [Terra](https://developers.openai.com/api/docs/models/gpt-5.6-terra)를 성능·비용 균형, [Sol](https://developers.openai.com/api/docs/models/gpt-5.6-sol)을 복잡한 전문 작업용으로 설명하며 모두 구조화 출력을 지원합니다. 이 구분만으로 서로 다른 지시문이 필요하다고 판단하지 않습니다. 모델별 분기는 같은 대표 입력에서 계약 준수·완결성·비용 차이가 확인될 때 검토합니다. [GPT-5.6 프롬프트 지침](https://developers.openai.com/api/docs/guides/latest-model?model=gpt-5.6)에 따라 중복 지시를 줄이면서 도메인 제약과 기존 회귀 사례를 보존합니다.
 
-프롬프트 책임은 요청 해석·검색 계획([planner](../src/runtime/nodes/planner/prompt_builder.py)), 검색 실패 피드백([retry](../src/runtime/nodes/retry.py)), 답변 합성([공통 정책](../src/core/prompts.py), [synthesis](../src/runtime/nodes/synthesis/prompt_builder.py)), 대화 요약([session](../src/runtime/nodes/session.py)), 평가용 심사([judge](../src/eval/judge_llm.py))로 나뉩니다. planner와 synthesis는 도구를 직접 호출하지 않고 서버가 출력 계약에 따라 검색·저장·전송을 실행합니다. 평가용 심사의 점수 기준은 생성 프롬프트와 독립적으로 유지합니다.
+프롬프트 책임은 요청 해석·검색 계획([planner](../src/runtime/nodes/planner/prompt_builder.py)), 검색 실패 피드백([retry](../src/runtime/nodes/retry.py)), 답변 합성([공통 정책](../src/core/prompts.py), [synthesis](../src/runtime/nodes/synthesis/prompt_builder.py)), 사전·사후 의미 검증([validation](../src/runtime/nodes/validation/semantic.py)), 대화 요약([session](../src/runtime/nodes/session.py)), 평가용 심사([judge](../src/eval/judge_llm.py))로 나뉩니다. planner와 synthesis는 도구를 직접 호출하지 않고 서버가 출력 계약에 따라 검색·저장·전송을 실행합니다. 평가용 심사의 점수 기준은 생성 프롬프트와 독립적으로 유지합니다.
+
+사전·사후 검증은 [OpenAI Decisions API](https://developers.openai.com/api/docs/guides/decisions)의 `predicate` 질문을 사용합니다. 지원 모델은 `gpt-6-luna`이며, `openai>=3.35.1`의 `client.decisions.with_raw_response.create()`로 호출합니다. 사전 검증은 요구별 검색 근거의 충분성과 본문 준비 가능성을, 사후 검증은 각 내용 단위의 근거성과 전체 요청 충족 여부를 판단합니다. 검색 없는 본문 생성과 이전 답변을 사용하는 후속 요청도 이 경로를 거칩니다. 이미 확정된 확인 질문이나 기술적 실패 안내는 의미 검증 통과 답변으로 표시하지 않습니다.
+
+기본 통과 기준은 각 질문의 확률 `0.8` 이상입니다. 질문은 호출당 최대 200개로 나누며, 배치와 일시 오류 재시도가 단계별 3회·45초 예산을 함께 사용합니다. 개별 호출 timeout 기본값은 20초이고 남은 단계 예산을 넘기지 않습니다. 거절·누락·중복·잘못된 확률·API 장애는 통과로 바꾸지 않고 실패로 전달합니다. API 연결·권한·요청 오류는 기존 오류 분류를 사용합니다. `decisions_completed` 로그에는 단계·모델·질문 수·요청 ID·토큰 수만 기록하며 원문과 키는 기록하지 않습니다.
 
 planner의 추론 수준은 `PLANNER_REASONING_EFFORT`로 지정합니다. 빈 값, `default`, `model_default`는 API 요청에서 effort를 생략해 모델 기본값을 사용하며 `none`은 명시적으로 전달합니다. 입력은 앞뒤 공백을 제거하고 소문자로 정규화합니다. 설정 타입은 `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`를 허용하며 `SYNTHESIS_REASONING_EFFORT`는 별도로 적용합니다.
 
@@ -104,10 +108,13 @@ PLANNER_REASONING_EFFORT=high
 | `CHAT_MODEL` | `gpt-5.6-luna` | synthesis 모델 기본값 |
 | `PLANNER_MODEL` | `gpt-5.6-luna` | planner 모델 기본값 |
 | `SUMMARY_MODEL` | `gpt-5.6-luna` | session summary 모델 기본값 |
+| `VALIDATION_MODEL` | `gpt-6-luna` | 사전·사후 검증용 OpenAI Decisions API 모델 (gpt-6-luna만 지원) |
 | `SUMMARY_MAX_TOKENS` | `1024` | 요약 LLM 생성 토큰 상한; 저장 요약 예산과 독립 |
 | `PLANNER_MAX_TOKENS` | `1920` | planner structured output 최대 토큰 |
 | `PLANNER_REASONING_EFFORT` | 없음 | planner reasoning effort override (none/minimal/low/medium/high/xhigh/max, 빈 값이면 모델 기본값, none은 명시 override) |
 | `DOCS_SEARCH_TIMEOUT_SECONDS` | `5` | Tavily 요청별 timeout |
+| `VALIDATION_TIMEOUT_SECONDS` | `20` | 사전·사후 검증의 Decisions API 요청별 timeout |
+| `VALIDATION_PASS_THRESHOLD` | `0.8` | 사전·사후 검증 통과 확률 기준 (0 이상 1 이하) |
 | `SYNTHESIS_TIMEOUT_SECONDS` | `20` | synthesis provider 요청 timeout |
 | `SYNTHESIS_USE_RESPONSES_API` | `false` | synthesis Responses API 사용 여부 |
 | `SYNTHESIS_MAX_TOKENS` | `4096` | 일반 synthesis 생성 토큰 상한 |
@@ -247,7 +254,9 @@ docs 도구는 후보 수집과 최종 근거 선택의 예산을 구분합니�
 
 요청 버전과 명확히 다른 후보는 제외합니다. 버전이 확인되지 않는 후보는 사용 가능한 부분 근거로 남길 수 있지만 버전 요구를 충족하지 않습니다. 요구 충족에 쓰는 근거마다 요청 버전이 확인되어야 `covered`이며, 다른 근거 하나의 버전 표기로 전체를 충족 처리하지 않습니다. 대상·aspect·정보 종류는 선택한 원문 범위에서, 버전은 해당 근거의 출처 URI와 제목에서 확인합니다. 구조·어휘 규칙으로 확인하므로 자연어 답변에 대한 의미적 지지를 증명하는 판정은 아닙니다.
 
-도구는 `query`, `requirement`, `k`, `completed_requests`, `previous_hits`를 입력받고 공식 도메인을 내부에서 결정합니다. Tavily 검색 깊이는 `basic`으로 실행하며 심볼·aspect·정보 종류가 필요하면 Markdown `raw_content`를 요청합니다. 도구 호출마다 최초 검색과 미충족 요구에 맞춘 보완 검색을 합해 최대 두 번 요청합니다. 보완 검색은 고정된 심볼·버전·aspect를 유지하고 부족한 정보 종류를 반영합니다. 같은 선택 절차에서 충분한 근거를 확보하면 즉시 중단합니다. `completed_requests`에는 정상 완료한 provider 요청의 검색어와 `max_results`를 기록합니다. 같은 요구사항에서 대소문자·Unicode·공백까지 정확히 같은 검색어를 같거나 작은 조회 범위로 반복하면 재사용하지만, `k` 증가로 실제 조회 범위가 커지면 다시 요청합니다. Tavily의 조회 개수는 `min(20, max(6, k * 3))`이므로 `k`가 달라도 이 값이 같으면 완료 요청을 반복하지 않습니다. timeout 등으로 실패한 요청은 완료 이력에 넣지 않아 다음 호출에서 다시 실행할 수 있습니다. `DOCS_SEARCH_TIMEOUT_SECONDS`는 개별 Tavily 요청마다 적용되며 route 전체의 deadline은 아닙니다.
+도구는 `query`, `requirement`, `k`, `completed_requests`, `previous_hits`, `refresh`를 입력받고 공식 도메인을 내부에서 결정합니다. Tavily 검색 깊이는 `basic`으로 실행하며 심볼·aspect·정보 종류가 필요하면 Markdown `raw_content`를 요청합니다. 도구 호출마다 최초 검색과 미충족 요구에 맞춘 보완 검색을 합해 최대 두 번 요청합니다. 보완 검색은 고정된 심볼·버전·aspect를 유지하고 부족한 정보 종류를 반영합니다. 일반 검색은 같은 선택 절차에서 충분한 근거를 확보하면 즉시 중단합니다. `completed_requests`에는 정상 완료한 provider 요청의 검색어와 `max_results`를 기록합니다. 같은 요구사항에서 대소문자·Unicode·공백까지 정확히 같은 검색어를 같거나 작은 조회 범위로 반복하면 재사용하지만, `k` 증가로 실제 조회 범위가 커지면 다시 요청합니다. Tavily의 조회 개수는 `min(20, max(6, k * 3))`이므로 `k`가 달라도 이 값이 같으면 완료 요청을 반복하지 않습니다. timeout 등으로 실패한 요청은 완료 이력에 넣지 않아 다음 호출에서 다시 실행할 수 있습니다. `DOCS_SEARCH_TIMEOUT_SECONDS`는 개별 Tavily 요청마다 적용되며 route 전체의 deadline은 아닙니다.
+
+사전 검증에서 `no_evidence`로 실패한 요구사항을 `refresh_routes`로 재검색할 때는 `refresh=True`를 전달합니다. 이 경우 이전 근거의 로컬 `covered` 판정과 완료 요청 캐시가 첫 Tavily 요청을 생략하지 못합니다. 기존 후보와 새 후보를 함께 평가하며, 범위·관련성·소유 구간 신뢰도가 같으면 새 snapshot을 이전 provider 점수보다 우선합니다. 빈 결과나 오류가 기존 유효 근거를 제거하지 않으며, 새 근거도 동일한 Decisions 검증을 통과해야 합니다.
 
 재시도에는 현재 요청의 같은 `requirement_id`에서 확보한 부분 후보를 `previous_hits`로 전달합니다. 기존·신규 후보를 합친 뒤 원래 라이브러리·domain·심볼·버전·aspect·정보 종류와 선택 예산에 맞게 같은 절차로 다시 평가합니다. 다른 대상이나 명확히 다른 버전의 후보는 재사용 근거로 인정하지 않으며, 이미 충분하면 추가 HTTP 호출 없이 반환합니다. Tavily의 `content`와 `raw_content`는 모두 `provider_excerpt` 원문으로 보존하고, 선택한 근거는 그 원문의 정확한 문자 범위를 인용합니다.
 
@@ -517,7 +526,8 @@ HTTP `200`이나 `done`만으로 성공 처리하지 않습니다. 유효한 `fi
     "issues": [],
     "actions": [],
     "content_hash": "765c737a8f27b2aae412cfa87b2cb432840f4f6e9fa645419cfa8dd3a4f4c766",
-    "retrieval_required": false
+    "retrieval_required": false,
+    "semantic_validation": null
   },
   "trace": "Session ID: ..., Request ID: ..., Agent ID: ...",
   "debug": null,
@@ -530,7 +540,8 @@ HTTP `200`이나 `done`만으로 성공 처리하지 않습니다. 유효한 `fi
 - `blocks`: `paragraph`, `heading`, `list`, `code`, `table`. 문장·제목·목록 항목·코드·표 헤더와 셀의 `ContentUnit`은 모두 동일한 검증 순회 대상입니다.
 - `basis`: `source`, `inference`, `example`, `interaction`, `excerpt`. 모델의 표현 분류이며 정확성 판정이 아닙니다.
 - `refs`: 최종 생성·검증 packet의 근거 ID. 서버가 최초 등장 순서대로 `citations.number`를 붙이고 사용한 `EvidenceRef`만 응답에 포함합니다.
-- `checks`: 내용 위치 ID에 대응하는 참조 상태와 확인 상태. 일반 설명·해석의 의미적 지지는 `not_evaluated`이며, `excerpt`는 단일 원문 발췌와 정확히 일치할 때만 `exact_match`입니다.
+- `checks`: 내용 위치 ID에 대응하는 결정적 참조·발췌 검사. 일반 설명·해석은 이 검사에서 `not_evaluated`이며, `excerpt`는 단일 원문 발췌와 정확히 일치할 때만 `exact_match`입니다. 의미 검증 결과는 별도 `semantic_validation`에 있습니다.
+- `semantic_validation`: Decisions API의 사후 판정. `model`, `threshold`, `checks`의 `name`·`unit_id`·`probability`와 검사 대상의 `content_hash`·`evidence_fingerprint`를 보존합니다. `grounded`는 각 내용 단위의 근거성, `request_fulfilled`는 답변 전체의 요청 충족 여부입니다. 모든 확률이 임계값 이상일 때 통과하며, 판정이 없는 안내·실패 응답은 `null`입니다. 이는 모델의 확률적 판단이며 사실의 정확성을 보증하는 점수가 아닙니다.
 - `issues`: 생성 실패·불완전한 답변 등 실제 제한. 전체 confidence 수치는 제공하지 않습니다.
 - `content_hash`: 본문 구조·basis·refs를 포함한 revision. 내용이 바뀌면 검사를 다시 수행해야 합니다. citation의 존재 여부, `issues`, `retrieval_required`, `actions`까지 포함한 전체 응답 digest는 아닙니다.
 - `retrieval_required`: 이 응답을 다시 검사할 때 유지할 출처 요구 조건. 검색 기반 응답의 생성 예시에도 참조가 필요한지 판단하는 데 사용합니다.
@@ -562,7 +573,7 @@ HTTP `200`이나 `done`만으로 성공 처리하지 않습니다. 유효한 `fi
 
 응답 생성 경계에서는 각 토큰 차원별로 `usage_metadata` → `response_metadata.token_usage` 순서, 후보 내부에서는 `input_tokens` → `prompt_tokens`, `output_tokens` → `completion_tokens` 순서로 유효한 첫 값을 택합니다. 빈 dict와 누락·잘못된 값은 다음 후보를 막지 않으며, 명시된 0은 뒤의 값으로 대체하지 않습니다. provider total로 입력이나 출력을 역산하지 않습니다. 합계는 입력·출력이 모두 관측됐을 때만 계산합니다.
 
-`src/runtime/agent_runtime/llm_usage.py`의 요청별 recorder는 논리적 모델 호출 시작을 먼저 등록하고 응답을 받으면 정규화 사용량을 채웁니다. planner·memory summary·synthesis의 실패 시도와 compact fallback도 각각 남으며, 이후 graph·응답 조립 실패가 호출 기록을 지우지 않습니다. 무호출을 확인한 턴은 `llm_calls=[]`, 관측 범위 밖이거나 잘못된 목록은 `null`입니다. 모델 호출 여부와 각 호출의 모델 이름은 `llm_calls`에서 확인하며 비용 0만으로 무호출을 추정하지 않습니다. SDK 내부 HTTP 재시도별 미보고 토큰은 이 기록의 범위 밖입니다.
+`src/runtime/agent_runtime/llm_usage.py`의 요청별 recorder는 논리적 모델 호출 시작을 먼저 등록하고 응답을 받으면 정규화 사용량을 채웁니다. planner·memory summary·synthesis의 실패 시도와 compact fallback, 사전·사후 Decisions 호출도 각각 남으며, 이후 graph·응답 조립 실패가 호출 기록을 지우지 않습니다. Decisions 호출의 `stage`는 `pre_synthesis_validation` 또는 `post_synthesis_validation`, `path`는 `decisions`입니다. 출력 토큰이 0이어도 입력 토큰이 발생한 실제 호출입니다. 무호출을 확인한 턴은 `llm_calls=[]`, 관측 범위 밖이거나 잘못된 목록은 `null`입니다. 모델 호출 여부와 각 호출의 모델 이름은 `llm_calls`에서 확인하며 비용 0만으로 무호출을 추정하지 않습니다. SDK 내부 HTTP 재시도별 미보고 토큰은 이 기록의 범위 밖입니다.
 
 `action_results.slack_notify`는 최종 receipt와 동일한 `SlackDelivery`를 사용합니다. `answer_provenance`의 `version`은 `1`이며 아래 필드를 제공합니다.
 
@@ -598,6 +609,12 @@ post-synthesis 검사에서 참조·내용·requirement coverage 문제가 있�
 
 새 응답 factory 안에서는 표시 문서와 검증한 근거에서 checks·citations·본문 hash를 한 번 계산합니다. 상태 복원·nested 모델·최종 export의 검증은 일관성 확인을 위해 checks·citations를 다시 계산합니다. post-synthesis 검사는 기록된 revision을 확인하고, 같은 문서·근거를 새 hash로 다시 확정하지 않습니다. 본문 필터링 또는 실제 근거 packet 변경 후에는 다시 확정합니다. mutable 근거의 원문 identity·범위·동일 ID 충돌 검사와 최종 export의 revision 검증은 유지합니다. `inline` 표시 방식은 본문 hash에 포함되므로 표시 방식이 다른 코드를 같은 원본 revision으로 취급하지 않습니다.
 
+Decisions의 사전 판정이 임계값에 미달하면 해당 요구사항만 재검색합니다. 사후 판정은 내용마다 연결된 원문만 근거로 사용하며, 다른 문장의 인용을 빌려 통과시키지 않습니다. 필수 의미 내용이 빠지거나 근거 없는 주장이 있으면 같은 확정 요청과 검색 결과로 본문을 보정합니다. 비교·설명 등의 의미 요구는 이 판정으로 검사하고, 참조·원문 발췌·본문 hash·요청 revision의 결정적 검사는 함께 적용합니다.
+
+두 검증 단계에는 합성과 같은 턴 제한을 적용한 대화 이력과 대화 요약을 함께 전달합니다. 대화는 사용자 사실과 지시 대상의 해석에 쓰는 데이터이며, 확정 요청을 바꾸는 지시나 검색 근거를 대신하지 않습니다. 원문 근거에는 제목 경로, 선택 범위, 부분 발췌 여부와 선택된 표 셀의 행·열·병합 구조를 보존하고, 선택 밖의 셀 내용은 전달하지 않습니다.
+
+사후 판정은 현재 본문 hash와 인용 순서의 전체 근거 fingerprint에 연결합니다. 본문이나 인용 원문이 바뀐 상태에 이전 판정을 붙이면 복원·내보내기 검증에서 거부합니다. 본문 일부를 제거한 뒤에도 새로운 본문 전체가 Decisions를 통과해야 완료 답변으로 처리합니다. 복구 한도 내에 통과하지 못하면 확인 가능한 원문이나 실패 안내를 제공하고 저장·전송을 막습니다. 이 fallback은 의미 검증을 통과한 설명으로 표시하지 않습니다. 이전 답변의 복사·변환은 계약이 지정한 답변 hash로 원문을 확인하고 해당 본문과 인용 근거를 두 검증 단계에 함께 제공합니다.
+
 실제 응답 스키마 기준 파일:
 
 - `src/app/web/schemas.py`
@@ -614,7 +631,7 @@ post-synthesis 검사에서 참조·내용·requirement coverage 문제가 있�
 
 Streamlit은 `AnswerResponse` 전체를 채팅 기록에 보존합니다. 본문 옆의 번호별 근거 popover에서 당시 발췌, 전체 원문 요소, 제목 경로·원본 줄·cell·페이지 위치와 내용 hash를 확인할 수 있습니다. 표는 병합 셀과 선택 셀을 보존해 표시합니다. 페이지 bbox는 좌표 메타데이터로 보여주며 PDF 페이지 이미지 뷰어는 아직 없습니다.
 
-해석·생성 예시·원문 발췌는 표현 성격을 표시하고, “근거 확인 범위”는 출처 연결 확인과 의미적 지지 평가를 구분합니다. 저장·Slack 전송은 같은 본문의 공통 text exporter를 사용해 출처·원문 위치·참고 및 제한을 함께 보존하며, 실행 결과는 본문과 별도 UI에 표시합니다.
+해석·생성 예시·원문 발췌는 표현 성격을 표시하고, “근거 확인 범위”는 출처 연결 확인과 Decisions 의미 검증을 구분합니다. 각 내용 단위와 전체 요청에 대한 판정 확률·임계값·미검증 상태를 확인할 수 있습니다. 저장·Slack 전송은 같은 본문의 공통 text exporter를 사용해 출처·원문 위치·참고 및 제한을 함께 보존하며, 실행 결과는 본문과 별도 UI에 표시합니다. 확률과 동적 검증 보고서는 화면과 API 응답에만 남깁니다. 재검증의 확률 변동이 같은 본문·출처의 저장 bytes를 바꾸지 않고, 출처 없는 사용자 원문 복사에는 검증 설명을 덧붙이지 않습니다.
 
 저장 성공 표시는 검증된 artifact가 있는 receipt에 한정하고 다운로드 기한을 함께 보여줍니다. 구형 성공 receipt나 확인 불가 결과는 경고로 표시하며 다운로드 링크를 만들지 않습니다. 만료된 파일도 답변 기록은 유지하지만 다운로드 링크를 표시하지 않습니다.
 

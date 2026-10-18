@@ -14,7 +14,7 @@
 | `provider_configuration` | 인증·권한·모델/매개변수 설정 오류 또는 할당량·결제 한도 부족 | `fix_configuration`. 같은 요청을 자동 반복하지 않습니다. |
 | `provider_rate_limited` | 일시적 429 요청 제한 | `retry_later`. `Retry-After`와 전체 호출 예산 안에서 제한적으로 재시도합니다. |
 | `provider_unavailable` | timeout, 연결 장애, 408/409/5xx 등 일시적 제공자 실패 | `retry_later`. 제한된 재시도 후 종료하며 합성 timeout만 축소 context 복구를 사용할 수 있습니다. |
-| `model_output_invalid` | JSON, wire schema, 도메인 계약 또는 바인딩 검증 실패 | 기존 사용자 제약을 유지한 출력 수정 요청을 최대 한 번 수행합니다. 실패하면 `retry_later`이며 질문 의도를 다시 묻지 않습니다. |
+| `model_output_invalid` | JSON, wire schema, 도메인 계약 또는 바인딩 검증 실패. Decisions의 잘못된 확률·중복·누락·미지 판정 이름도 포함 | Planner/synthesis는 기존 사용자 제약을 유지한 출력 수정 요청을 최대 한 번 수행합니다. Decisions의 유효하지 않은 응답은 수정 요청 없이 차단합니다. 최종 실패는 `retry_later`이며 질문 의도를 다시 묻지 않습니다. |
 | `model_output_incomplete` | 출력 토큰 한도 등으로 생성이 미완료 | `retry_later`. 잘린 JSON을 정상 문서로 복구하거나 보충 질문으로 바꾸지 않습니다. |
 | `call_budget_exhausted` | 다음 호출 전에 역할별 호출 횟수 또는 처리 시간 예산이 소진됨 | `retry_later`. 추가 모델 호출 없이 종료하며 출력 오류로 오분류하지 않습니다. |
 | `model_refusal` | 모델의 명시적 refusal 또는 content filter | `none`. `refused`로 표시하고 재생성하지 않습니다. |
@@ -23,6 +23,8 @@
 | `upload_revision_conflict` | 질문에 포함된 첨부 revision이 현재 세션과 다름 | `none`. 현재 첨부 상태를 다시 확인한 뒤 요청합니다. 자동 재전송하지 않습니다. |
 
 Planner와 synthesis는 각 역할별 한 질문에서 최대 3회, 45초의 공통 호출 예산을 사용합니다. 전송 재시도·출력 수정·합성의 축소 복구·그래프의 재진입이 같은 예산을 공유하며 SDK 자체 재시도는 0회입니다. 제공자의 대기 시간이 남은 예산보다 크면 기다린 뒤 무조건 호출하지 않고 종료합니다. 일반 대화 요약 모델은 이 구조화 출력 정책의 대상이 아닙니다.
+
+OpenAI Decisions API의 사전·사후 검증도 `pre_synthesis_validation`, `post_synthesis_validation` 단계별로 최대 3회·45초의 예산을 사용합니다. 판정 질문을 요청당 최대 200개로 나누는 배치와 그래프 재진입, 일시적 429·timeout·연결·5xx 재시도가 이 예산을 공유합니다. 각 HTTP timeout은 `VALIDATION_TIMEOUT_SECONDS` 기본 20초와 남은 예산 중 작은 값입니다. 인증·권한·할당량 오류, 거절, 유효하지 않은 판정 응답에는 검증을 생략하거나 로컬 검사만으로 성공을 선언하는 복구를 하지 않습니다. 호출 실패 시 `problem.stage`로 어느 검증 단계가 실패했는지 알 수 있으며, 답변 제공과 저장·전송을 차단합니다.
 
 시간 예산은 다음 호출의 시작 여부와 각 HTTP I/O timeout을 제한합니다. 진행 중인 동기 네트워크 작업을 정확히 45초에 강제 취소하는 전체 요청 deadline은 아닙니다.
 
@@ -40,7 +42,7 @@ Planner와 synthesis는 각 역할별 한 질문에서 최대 3회, 45초의 공
 | `LOCAL_RAG_FAILED` | upload retriever의 similarity search가 예외로 실패했습니다. 과거 결과에서는 local route 실패에도 사용됩니다. | 업로드 파일을 다시 올립니다. 운영자는 embedding/API key와 Chroma 상태를 확인합니다. | 조건부. 파일이나 API 설정을 고친 뒤 재시도합니다. |
 | `UPLOAD_RETRIEVER_BUILD_FAILED` | 과거 단일 업로드 실행 경로의 retriever 준비 실패 기록입니다. 현재 질문 런타임은 인덱스를 생성하지 않으며 첨부 후보 실패는 HTTP 오류로 반환합니다. | 과거 결과의 실패 원인을 읽는 코드입니다. 현재 첨부 실패는 아래 HTTP 코드로 확인합니다. | 아니요. 현재 런타임에서는 발생하지 않습니다. |
 | `VALIDATION_UNRESOLVED_REFERENCES` | 실제 표시 내용의 `refs`가 해당 synthesis packet에 없거나, 근거가 필요한 내용에 참조가 없습니다. 의미적 사실 판정은 아닙니다. | 더 구체적인 자료를 제공하거나 답변 범위를 좁힙니다. 운영자는 packet 선택과 출력 refs를 확인합니다. | 조건부. 확보한 검색 결과를 재사용해 본문과 참조를 함께 다시 생성할 수 있습니다. |
-| `VALIDATION_MISSING_CONTENT` | 본문이 비었거나 요청한 코드·단계·체크리스트 형식 또는 출처 범위가 부족합니다. 원문 발췌가 실제 선택 범위와 일치하지 않는 경우도 포함합니다. | 원하는 결과를 구체적으로 적습니다. 운영자는 내용 단위의 checks, 요청 계약과 route coverage를 확인합니다. | 조건부. 재합성 후에도 부족하면 확인 가능한 원문 발췌와 제한을 제공합니다. |
+| `VALIDATION_MISSING_CONTENT` | 본문이 비었거나 요청한 형식·출처 범위가 부족합니다. 원문 발췌 불일치와 Decisions의 내용 근거·요청 충족 판정이 임계값에 못 미치는 경우도 포함합니다. | 운영자는 로컬 `checks`, `semantic_validation`, 요청 계약과 요구별 근거를 확인합니다. 사용자는 부족한 자료나 조건을 보완할 수 있습니다. | 조건부. 같은 근거와 요청으로 본문을 보정합니다. 끝내 통과하지 못하면 실패 또는 제한된 원문 안내를 반환하고 저장·전송을 차단합니다. |
 | `DEBUG_NORMALIZATION_FAILED` | web API가 raw debug payload를 `AgentDebugInfo`로 정규화하는 중 latency/debug 구조 검증에 실패했습니다. | 답변 자체보다 관측성 정보가 불완전한 상태입니다. 운영자는 raw debug payload와 `schema_version`을 확인합니다. | 아니요. 같은 사용자 요청 반복보다 debug schema/normalizer 수정이 필요합니다. |
 | `SLACK_RECIPIENT_MISSING` | 수신자와 기본값이 없습니다. | 수신자 하나를 입력합니다. | 입력 후 |
 | `SLACK_RECIPIENT_INVALID` | 명시한 수신자를 검증하지 못했습니다. | ID 또는 이메일을 확인합니다. | 명시 교정 후 |
@@ -86,7 +88,7 @@ OCR의 글자 오인식이나 문단 누락이 항상 실패 상태로 검출되
 
 - 그래프 ErrorCode의 source of truth는 `src/core/contracts/debug.py`이며, 문서 첨부 HTTP 상태 매핑은 `src/app/web/upload_service.py`에서 관리합니다.
 - retrieval/action tool은 가능한 경우 payload의 `error_code`에 직접 기록합니다.
-- planner/synthesis 오류는 `src/core/llm_errors.py`의 분류된 문제를 사용합니다. 과거 대문자 LLM 오류 코드는 기존 실행 기록을 읽는 용도로만 남아 있습니다.
+- planner/synthesis와 Decisions 검증의 제공자 오류는 `src/core/llm_errors.py`의 분류된 문제를 사용합니다. 의미 판정이 임계값에 못 미치는 경우와 API 자체의 실패를 구분합니다. 과거 대문자 LLM 오류 코드는 기존 실행 기록을 읽는 용도로만 남아 있습니다.
 - benchmark histogram은 `src/eval/reporting/histograms.py`에서 같은 코드 집합을 bucket으로 집계합니다.
-- 사용자에게 필요한 제한은 `AnswerResponse.issues`, 내용별 확인 결과는 `checks`, 저장·전송 실패는 `actions`에도 전달합니다. debug를 끈 상태에서도 이 정보는 유지됩니다.
-- 참조가 `resolved`인 것과 설명이 원문으로 뒷받침되는 것은 구분합니다. 일반 설명의 `support_status`는 `not_evaluated`이며, 원문 발췌가 정확히 일치할 때만 `exact_match`입니다.
+- 사용자에게 필요한 제한은 `AnswerResponse.issues`, 로컬 확인 결과는 `checks`, 의미 판정은 `semantic_validation`, 저장·전송 실패는 `actions`에도 전달합니다. debug를 끈 UI·API 응답에서도 이 정보는 유지됩니다. 의미 판정의 확률은 저장 파일과 Slack 본문에는 추가하지 않습니다.
+- 참조가 `resolved`인 것과 설명이 원문으로 뒷받침되는 것은 구분합니다. 로컬 `checks.support_status`는 일반 설명에서 `not_evaluated`, 정확한 원문 발췌에서 `exact_match`입니다. 별도의 `semantic_validation`은 본문 hash와 근거 fingerprint에 연결된 `grounded`·`request_fulfilled` 확률을 보존합니다. 각 확률이 임계값 이상이어야 의미 검증을 통과합니다. 원문 안내에 이 보고서가 없으면 의미 검증 완료로 표시하지 않습니다.

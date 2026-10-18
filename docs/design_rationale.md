@@ -14,7 +14,7 @@ DocuMate는 LangGraph 기반 학습 보조 에이전트입니다. 현재 구조�
 
 초기 구조처럼 모델의 tool call 흐름에만 실행을 맡기면 검색, 검증, 액션의 책임 경계가 흐려지기 쉽습니다. 그래서 현재 그래프는 `add_user_message`, `summarize_old_messages`, `planner`, `retrieve_dispatch`, `pre_synthesis_validation`, `synthesize`, `post_synthesis_validation`, `action_postprocess` 단계로 나누었습니다.
 
-이 구조의 목표는 각 단계가 명확한 상태 계약을 주고받게 만드는 것입니다. `GraphState`는 `runtime`, `planner`, `retrieval`, `retry`, `response`, `debug`와 전용 `route_decisions` 영역으로 나뉘며, boundary adapter가 dict와 Pydantic 모델 사이의 상태를 정규화합니다. planner는 확인 질문이 필요한지 또는 어떤 근거 요구를 검색할지 결정하고, retrieval은 각 `requirement_id`에 대응하는 `SearchHit`와 diagnostics를 모읍니다. synthesis는 실제 제공받은 원문 범위로 본문을 생성하고, validation은 그 본문의 원문 참조·발췌 일치·요구별 근거와 관찰 가능한 출력 조건을 확인합니다.
+이 구조의 목표는 각 단계가 명확한 상태 계약을 주고받게 만드는 것입니다. `GraphState`는 `runtime`, `planner`, `retrieval`, `retry`, `response`, `debug`와 전용 `route_decisions` 영역으로 나뉘며, boundary adapter가 dict와 Pydantic 모델 사이의 상태를 정규화합니다. planner는 확인 질문이 필요한지 또는 어떤 근거 요구를 검색할지 결정하고, retrieval은 각 `requirement_id`에 대응하는 `SearchHit`와 diagnostics를 모읍니다. OpenAI Decisions API는 생성 전에 현재 입력으로 답할 수 있는지, 생성 후에는 실제 본문이 근거와 요청을 충족하는지 판단합니다. 원문 참조·hash·발췌 일치와 관찰 가능한 출력 조건은 로컬 검사로 함께 확인합니다. 검색 없는 답변도 생성 전후 검증을 거칩니다.
 
 ### 유한한 장기 대화 메모리
 
@@ -63,7 +63,7 @@ flowchart LR
     E -->|"예산 소진"| G["부분 근거와 누락 반환"]
 ```
 
-후보 수집 예산과 반환 근거 수 `k`, 선택한 원문의 문자 예산을 구분합니다. 최종 출력보다 넓은 후보에서 선택하고, 미충족 정보 종류에 맞춰 검색어를 재구성합니다. 도구 호출마다 최초 검색과 보완 검색을 합해 최대 두 번 요청합니다. 정상 완료한 provider query가 정확히 같고 완료 요청의 조회 한도가 이번 요청 이상이면 중복 요청을 생략합니다. 일시적으로 실패한 query는 다시 실행할 수 있습니다. 명시 버전이 검색어에 없으면 덧붙입니다. 보완 검색은 기존 검색어 전체를 그대로 두고 아직 없는 고정 심볼·aspect와 미충족 정보 종류만 뒤에 추가합니다. 심볼은 정확한 대소문자와 식별자 경계로 존재 여부를 확인하며, 기존 인용문·제외 검색어·코드·URL 안의 표현을 다시 쓰지 않습니다. `API reference` 같은 일반 보조어를 항상 붙이지 않으며 추가할 표현이 없으면 동일한 검색어의 중복 요청을 생략합니다. 구체적인 수집·선택 상한은 [실행 참고서](runtime_reference.md#31-공식-문서-검색)에 정리합니다.
+후보 수집 예산과 반환 근거 수 `k`, 선택한 원문의 문자 예산을 구분합니다. 최종 출력보다 넓은 후보에서 선택하고, 미충족 정보 종류에 맞춰 검색어를 재구성합니다. 도구 호출마다 최초 검색과 보완 검색을 합해 최대 두 번 요청합니다. 명시적 refresh가 없는 일반 검색은 정상 완료한 provider query가 정확히 같고 완료 요청의 조회 한도가 이번 요청 이상이면 중복 요청을 생략합니다. 일시적으로 실패한 query는 다시 실행할 수 있습니다. 명시 버전이 검색어에 없으면 덧붙입니다. 보완 검색은 기존 검색어 전체를 그대로 두고 아직 없는 고정 심볼·aspect와 미충족 정보 종류만 뒤에 추가합니다. 심볼은 정확한 대소문자와 식별자 경계로 존재 여부를 확인하며, 기존 인용문·제외 검색어·코드·URL 안의 표현을 다시 쓰지 않습니다. `API reference` 같은 일반 보조어를 항상 붙이지 않으며 추가할 표현이 없으면 동일한 검색어의 중복 요청을 생략합니다. 구체적인 수집·선택 상한은 [실행 참고서](runtime_reference.md#31-공식-문서-검색)에 정리합니다.
 
 요청 버전과 명확히 다른 후보는 제외합니다. 버전을 확인할 수 없는 원문은 부분 근거로 보존하되, 요구 충족에 쓰는 모든 근거에서 버전이 확인되어야 `covered`입니다. 대상·aspect·정보 종류도 선택한 원문 범위에서 확인해야 하므로 문서 전체에 내용이 있다는 사실만으로 검색을 종료하지 않습니다. 이 판단은 정해진 구조·어휘 규칙에 기반합니다. 의미적 지지나 자연어 설명의 완전성을 증명하지 않으며, API·라이브러리를 바꾼 회귀 검증과 실제 검색 품질 평가의 범위를 구분합니다.
 
@@ -93,15 +93,15 @@ LLM은 [`AnswerDocument`](../src/core/answer_schema/models.py)의 `blocks`만 �
 
 [`iter_content_units()`](../src/core/answer_schema/models.py)는 문장뿐 아니라 제목·표 헤더·표 셀·코드도 같은 읽기 순서로 순회합니다. 검증, 인용 번호, UI, export가 이 본문을 기준으로 동작합니다. 모델이 사실을 다른 필드에 반복해 쓰거나 검증한 내용과 다른 문자열을 마지막에 선택하는 경로를 두지 않습니다.
 
-서버는 `AnswerResponse`에 `content`, `citations`, `checks`, `issues`, `actions`, `content_hash`, `retrieval_required`를 구성합니다. `citations`에는 실제 사용한 원문 참조만 남기고 최초 사용 순서로 번호를 붙입니다. 검사는 내용 위치 ID에 연결하고 본문 구조·basis·refs를 포함한 hash로 revision을 확인합니다. 이 hash는 refs의 근거 정체성을 묶지만 citation의 존재 여부나 receipt까지 포함한 전체 응답 digest는 아닙니다. `retrieval_required`는 재검증에 필요한 출처 요구 조건을 보존합니다. 저장·Slack·대화용 문자열은 같은 본문에서 export하며 별도 생성 텍스트를 저장하지 않습니다.
+서버는 `AnswerResponse`에 `content`, `citations`, `checks`, `semantic_validation`, `issues`, `actions`, `content_hash`, `retrieval_required`를 구성합니다. `citations`에는 실제 사용한 원문 참조만 남기고 최초 사용 순서로 번호를 붙입니다. 검사는 내용 위치 ID에 연결하고 본문 구조·basis·refs를 포함한 hash로 revision을 확인합니다. 이 hash는 refs의 근거 정체성을 묶지만 citation의 존재 여부나 receipt까지 포함한 전체 응답 digest는 아닙니다. `retrieval_required`는 재검증에 필요한 출처 요구 조건을 보존합니다. 저장·Slack·대화용 문자열은 같은 본문에서 export하며 별도 생성 텍스트를 저장하지 않습니다. 의미 검증 보고서는 UI와 API 응답에서 확인하며, 재검증마다 달라질 수 있는 확률을 export 본문에 추가하지 않습니다. 이렇게 해야 사용자 입력의 정확한 복사와 같은 본문의 저장 재시도가 동일한 bytes를 유지합니다.
 
 ### 원문 연결 확인과 의미적 지지 평가의 구분
 
-참조 ID가 존재한다고 설명이 사실이거나 근거가 충분하다고 단정할 수는 없습니다. 서버의 기본 검사는 이번 synthesis에 실제 제공한 근거에 참조가 연결되는지, 문자 범위·표 셀이 유효한지, `excerpt` 내용이 하나의 원문 발췌와 정확히 일치하는지를 확인합니다. 일반 설명·해석은 `support_status="not_evaluated"`로 남고, 정확히 일치한 원문 발췌만 `exact_match`입니다.
+참조 ID가 존재한다고 설명이 사실이거나 근거가 충분하다고 단정할 수는 없습니다. 서버의 로컬 검사는 이번 synthesis에 실제 제공한 근거에 참조가 연결되는지, 문자 범위·표 셀이 유효한지, `excerpt` 내용이 하나의 원문 발췌와 정확히 일치하는지를 확인합니다. 이 결정적 검사에서 일반 설명·해석은 `checks.support_status="not_evaluated"`로 남고, 정확히 일치한 원문 발췌만 `exact_match`입니다. 의미적 판정은 별도의 `semantic_validation`에 기록하므로 이 필드를 보고 전체 검증이 생략되었다고 해석하지 않습니다.
 
-`basis`의 `source`, `inference`, `example`, `interaction`, `excerpt`는 모델이 제안한 표현 구분입니다. 이를 사실 판정이나 검증 면제 인증으로 사용하지 않습니다. 프롬프트는 사실을 `interaction`으로 위장하지 않도록 지시하지만, 현재 런타임이 모든 자연어 사실 주장을 의미적으로 판별하지는 않습니다. 이 한계는 UI의 “근거 확인 범위”에 명시하고 benchmark의 LLM judge에서 별도로 평가합니다.
+`basis`의 `source`, `inference`, `example`, `interaction`, `excerpt`는 모델이 제안한 표현 구분입니다. 이를 사실 판정이나 검증 면제 인증으로 사용하지 않습니다. Decisions 사후 검증은 실제 내용 단위가 허용된 원문과 입력으로 뒷받침되는지, 본문 전체가 확정한 요청의 의미 조건을 충족하는지 평가합니다. `semantic_validation.checks`의 `grounded`는 내용 위치인 `unit_id`에, `request_fulfilled`는 본문 전체에 연결됩니다. 각 항목의 `probability`가 보고서의 `threshold` 이상이어야 통과합니다. 모델 판정에는 오류가 있을 수 있으므로 benchmark의 독립된 LLM judge로 최종 품질을 계속 평가합니다.
 
-전체 confidence 수치는 제공하지 않습니다. 원문 수집 범위·품질 진단, 참조 연결 상태, 원문 발췌 일치, 생성 실패·불완전함을 각각 전달합니다. 생성 코드에는 예시임을 표시하며, 코드 실행 도구를 호출하지 않은 응답을 실행 검증된 결과로 간주하지 않습니다.
+`semantic_validation`은 판정에 사용한 `model`, `threshold`, 본문 `content_hash`와 근거 `evidence_fingerprint`를 보존합니다. 본문·근거가 바뀌었거나 내용 위치가 없거나 판정이 중복되면 기존 결과를 재사용하지 못합니다. 개별 판정 확률을 전체 답변의 정확도나 단일 confidence 점수로 합치지 않습니다. 원문 수집 범위·품질 진단, 참조 연결 상태, 원문 발췌 일치, 의미 판정, 생성 실패·불완전함을 각각 전달합니다. 생성 코드에는 예시임을 표시하며, 코드 실행 도구를 호출하지 않은 응답을 실행 검증된 결과로 간주하지 않습니다.
 
 ### 본문 가까이에서 원문을 확인하는 UI
 
@@ -125,15 +125,19 @@ staging 생성·공개·회수는 인프라 저장소가 소유합니다. 출력
 
 ### 검증과 선택적 재시도
 
-검색 결과가 있어도 필요한 대상이나 조건이 모두 포함되는 것은 아닙니다. synthesis 전에는 requirement별 결과·가용성·도구 오류와 `answerability`를 검사합니다. `covered`는 명시 대상·제약에 대응하는 근거 확보, `partial`은 일부 미충족, `missing`은 현재 검색에서 근거 미확보, `unknown`은 충족이나 부재를 판단할 수 없는 상태입니다. upload에서 대상 부재를 단정하려면 전체 source를 검사해야 합니다. 명시 요구가 부족하면 가능한 검색 복구부터 시도합니다. 복구가 끝나도 유효한 근거가 있으면 terminal 누락을 기록하고 자연어 부분 답변을 생성합니다. 확인 가능한 사실은 인용하고 부족한 대상·파일·버전·정보를 명시하며, 요청 전체를 충족했다고 처리하거나 불완전한 답변을 저장·전송하지 않습니다. 근거가 전혀 없으면 부족한 대상에 대한 안내를 반환합니다. 이 구분은 검색 점수 임계값으로 대체하지 않습니다.
+사전·사후 의미 검증은 OpenAI Decisions API의 같은 경계를 사용합니다. 기본 모델은 `gpt-6-luna`, 통과 임계값은 `0.8`이며 판정 질문은 API 요청당 최대 200개로 나눕니다. 각 검증 단계는 한 사용자 요청 안에서 그래프 재진입·배치·전송 재시도를 합해 최대 3회·45초의 호출 예산을 공유합니다. 개별 HTTP timeout은 기본 20초와 남은 예산 중 작은 값입니다. 따라서 큰 답변은 배치 수 자체가 호출 예산을 소비하며, 남은 예산으로 모든 검사를 마치지 못하면 검증을 통과한 답변으로 제공하지 않습니다.
+
+인증·설정 오류, 유효하지 않은 응답, 명시적 거절에는 검증을 생략하는 fallback을 두지 않습니다. 일시적 호출 실패만 남은 예산 안에서 재시도합니다. API 호출에 실패하거나 모든 판정의 무결성을 확인하지 못하면 답변 제공과 저장·전송을 막습니다. 이 정책은 의미 검증의 가용성과 비용이 사용자 요청 완료에 직접 영향을 준다는 선택입니다. 사전·사후 호출·사용량·지연을 각각 남겨 그 영향을 평가합니다. 전달할 본문이 없는 단순 확인·취소의 확정된 서버 분기는 의미 검증 대상으로 만들지 않습니다.
+
+검색 결과가 있어도 필요한 대상이나 조건이 모두 포함되는 것은 아닙니다. synthesis 전에는 requirement별 결과·가용성·도구 오류와 `answerability`를 검사하고 Decisions로 근거의 의미적 충분성과 요청 준비 상태를 판단합니다. `covered`는 명시 대상·제약에 대응하는 근거 확보, `partial`은 일부 미충족, `missing`은 현재 검색에서 근거 미확보, `unknown`은 충족이나 부재를 판단할 수 없는 상태입니다. upload에서 대상 부재를 단정하려면 전체 source를 검사해야 합니다. 명시 요구의 근거가 부족하거나 사전 판정이 임계값에 못 미치면 가능한 검색 복구부터 시도합니다. 검색 없는 요청이 준비 상태 판정을 통과하지 못하면 합성하지 않습니다. 복구가 끝나도 유효한 근거가 있으면 terminal 누락을 기록하고 자연어 부분 답변을 생성합니다. 확인 가능한 사실은 인용하고 부족한 대상·파일·버전·정보를 명시하며, 요청 전체를 충족했다고 처리하거나 불완전한 답변을 저장·전송하지 않습니다. 근거가 전혀 없으면 부족한 대상에 대한 안내를 반환합니다. 이 구분은 검색 점수 임계값으로 대체하지 않습니다.
 
 synthesis의 입력 준비와 최종 검증은 같은 요구 충족 기준을 각각 실제 packet 전체와 본문이 유효하게 인용한 부분집합에 적용합니다. docs는 [`assess_docs_evidence()`](../src/infra/tools/docs_search/ranking.py)로 `symbols`, `version`, `aspects`, `evidence_needs`를 다시 평가합니다. 전체 원문의 구조는 소유자와 구간 경계를 확인하는 데 사용하고, 내용의 충족 근거는 실제 전달·인용 범위 안에서만 인정합니다. upload는 명시 파일 범위와 literal aspect를 확인하는 기준을 유지합니다. 참조·발췌 일치와 requirement 연결도 함께 검사하며, 검색에서 확보했던 근거 ID를 인용했다는 사실만으로 잘린 내용까지 충족했다고 보지 않습니다.
 
-모델 입력에는 요구별 근거 ID, 확보·누락된 aspect와 정보 종류, docs의 `missing_needs`·`missing_requirements`·`is_partial`을 전달합니다. 문자 예산 때문에 필요한 구간이 빠져도 누락 상태를 남깁니다. 공통 계약 검사는 필수 누락과 금지 위반을 구분하고 선호 미충족을 재생성 조건으로 만들지 않습니다. 코드 금지는 코드 블록·문단 안 Markdown 코드 fence·참조한 코드 원문과 동일한 문단에도 적용하지만, 코드 근거를 인용한 자연어 설명은 허용합니다. 줄 수는 인용 부록과 receipt를 제외한 본문의 비어 있지 않은 줄로 검사합니다. 비교·설명의 의미 충족은 구조 검사로 입증하지 않습니다.
+모델 입력에는 요구별 근거 ID, 확보·누락된 aspect와 정보 종류, docs의 `missing_needs`·`missing_requirements`·`is_partial`을 전달합니다. 문자 예산 때문에 필요한 구간이 빠져도 누락 상태를 남깁니다. 공통 계약 검사는 필수 누락과 금지 위반을 구분하고 선호 미충족을 재생성 조건으로 만들지 않습니다. 코드 금지는 코드 블록·문단 안 Markdown 코드 fence·참조한 코드 원문과 동일한 문단에도 적용하지만, 코드 근거를 인용한 자연어 설명은 허용합니다. 줄 수는 인용 부록과 receipt를 제외한 본문의 비어 있지 않은 줄로 검사합니다. 비교·설명의 의미 충족은 Decisions 사후 판정이 담당하고, 로컬 구조 검사와 함께 통과해야 합니다.
 
 `RetryState`는 현재 시도 시작 위치, 원래 task, `failed_requirement_ids`, `preserved_hits`, 보존 진단과 retry scope를 관리합니다. `refresh_routes`에서는 실패한 요구의 query를 다시 계획하고 같은 route의 성공한 다른 요구도 보존합니다. 재계획에는 실제 query·실패 진단·정상 완료한 query를 제공하며, 원래 ID·라이브러리·심볼·버전·aspect·evidence need는 유지합니다. docs 도구는 같은 요구의 부분 후보도 새 후보와 합쳐 동일한 대상·버전·source 범위와 필요한 정보 종류로 다시 검사합니다. 재사용 근거도 공통 선택 절차에서 평가합니다.
 
-본문 참조나 요구 coverage 문제가 있고 원문 검색 결과가 남아 있으면 `reuse_hits_resynthesize`에서 planner·검색을 반복하지 않고 synthesis로 직접 돌아갑니다. 검색이 필요 없는 신규 작성과 기존 답변 수정도 같은 확정 계약을 유지합니다. 검색 재시도의 `attempt`·`max_retries`와 본문 복구의 `content_repair_attempt`·`max_content_repairs`는 독립적입니다. 기본적으로 본문 복구는 한 번 허용하므로 검색 예산을 사용했거나 `max_retries=0`이어도 본문을 수정할 기회가 남습니다. `max_content_repairs=0`이면 이 복구도 생략합니다. 재합성은 terminal 검색 누락을 유지하고 확보한 근거·참조·내용·형식을 다듬습니다. 재시도 후 잘못된 내용 단위를 제거하면 참조·인용뿐 아니라 남은 requirement coverage와 필수·금지 조건도 다시 검사합니다. 원문 fallback이 같은 조건을 충족하지 못하거나 의미 요구를 확인할 수 없으면 실패 안내를 반환합니다. 불완전한 답변은 완료된 전달 본문으로 승인하지 않습니다.
+본문 참조·요구 coverage 문제나 사후 의미 판정의 미통과는 `reuse_hits_resynthesize`에서 planner·검색을 반복하지 않고 synthesis로 직접 돌아가 보정합니다. 검색이 필요 없는 신규 작성과 기존 답변 수정도 같은 확정 계약을 유지합니다. 검색 재시도의 `attempt`·`max_retries`와 본문 복구의 `content_repair_attempt`·`max_content_repairs`는 독립적입니다. 기본적으로 본문 복구는 한 번 허용하므로 검색 예산을 사용했거나 `max_retries=0`이어도 본문을 수정할 기회가 남습니다. `max_content_repairs=0`이면 이 복구도 생략합니다. 재합성은 terminal 검색 누락을 유지하고 확보한 근거·참조·내용·형식을 다듬습니다. 재시도 후 잘못된 내용 단위를 제거하면 참조·인용뿐 아니라 남은 requirement coverage와 필수·금지 조건을 다시 검사하고, 달라진 본문에 Decisions 사후 검증을 새로 적용합니다. 제한된 원문 발췌로 대체하는 fallback은 실패 상태를 유지하며 `semantic_validation`이 없는 발췌를 의미 검증 완료로 표시하지 않습니다. 불완전한 답변은 완료된 전달 본문으로 승인하지 않습니다.
 
 planner 호출이나 출력 검증 실패는 분류된 `problem`과 `failed`/`refused`, 미해결 정보는 계약의 `missing_info`와 `needs_input`, 업로드 부재는 파일 안내로 구분합니다. 제공자 스키마·설정 오류를 사용자 의도의 불명확함으로 해석하지 않습니다. 최초 요청 계약은 필수이며, 재검색은 별도 출력 스키마로 이미 바인딩한 요청 조건을 유지합니다. 본문에 필요한 입력이 부족하면 생성·전달을 보류하고, 행동 의사·목적지만 부족하면 가능한 본문을 준비한 뒤 해당 행동만 보류합니다. 실패 안내나 변환 전 원본은 완료된 결과물로 전달하지 않습니다.
 
@@ -195,9 +199,9 @@ DocuMate에서 가장 까다로웠던 문제는 "더 빠른 응답"과 "더 충�
 
 독립 retrieval task는 `ThreadPoolExecutor`로 병렬 실행하고 결과는 planner 순서대로 다시 정렬합니다. 이 실행 단위는 서로 다른 route뿐 아니라 같은 docs route의 복수 대상도 포함합니다. 외부 검색은 각 Tavily 요청마다 `DOCS_SEARCH_TIMEOUT_SECONDS`를 적용하고 timeout 원인을 diagnostics에 남깁니다.
 
-planner와 synthesis는 구조화 모델 호출 경로를 사용하며 provider의 요청별 timeout과 SDK retry를 호출 경계에 명시합니다. 요청별 timeout은 stage 전체 deadline이 아니므로 총 실행 시간은 더 길 수 있습니다. docs 도구는 최초 query와 같은 대상을 유지한 재구성 query를 최대 한 번씩 계획하고, `covered`를 확보하거나 해당 query를 이미 시도했다면 추가 호출을 생략합니다. 재구성은 원 쿼리의 주제·제약과 고정된 심볼·버전·aspect를 유지하며 미충족 정보 종류를 반영합니다.
+planner와 synthesis는 구조화 모델 호출 경로를 사용하며 provider의 요청별 timeout과 SDK retry를 호출 경계에 명시합니다. 요청별 timeout은 stage 전체 deadline이 아니므로 총 실행 시간은 더 길 수 있습니다. docs 도구는 최초 query와 같은 대상을 유지한 재구성 query를 최대 한 번씩 계획합니다. 명시적 refresh가 없는 일반 검색은 `covered`를 확보하거나 해당 query를 이미 시도했다면 추가 호출을 생략합니다. 재구성은 원 쿼리의 주제·제약과 고정된 심볼·버전·aspect를 유지하며 미충족 정보 종류를 반영합니다.
 
-재시도는 requirement 단위로 비용을 제한합니다. 같은 docs route에서 NumPy 근거를 확보하고 pandas만 실패했다면 NumPy는 그대로 사용하고 pandas query만 재계획합니다. 같은 요구의 부분 후보도 다음 후보와 함께 원래 라이브러리·심볼·버전·aspect·정보 종류에 맞는지 재평가합니다. 완료된 동일 요청은 fingerprint로 재사용하고 실제 시도 query도 추적합니다. 응답의 참조·구성 문제는 검색을 다시 구매하지 않고 제한된 재합성으로 처리합니다.
+재시도는 requirement 단위로 비용을 제한합니다. 같은 docs route에서 NumPy 근거를 확보하고 pandas만 실패했다면 NumPy는 그대로 사용하고 pandas query만 재계획합니다. 같은 요구의 부분 후보도 다음 후보와 함께 원래 라이브러리·심볼·버전·aspect·정보 종류에 맞는지 재평가합니다. 일반 검색은 완료된 동일 요청을 fingerprint로 재사용하고 실제 시도 query도 추적합니다. 사전 검증의 `no_evidence`로 재검색하는 실패 요구사항은 명시적인 `refresh`를 전달해 로컬 `covered`나 완료 요청 기록이 첫 새 검색을 생략하지 못하게 합니다. 범위·관련성·소유 구간 신뢰도가 같은 후보끼리는 새 snapshot을 이전 provider 점수보다 우선하여 부족하다고 판정된 원문을 보완할 기회를 줍니다. 빈 결과나 오류가 기존 유효 근거를 제거하지 않으며, 도구당 최대 두 번이라는 호출 상한과 의미 검증 조건은 유지합니다. 응답의 참조·구성 문제는 검색을 다시 구매하지 않고 제한된 재합성으로 처리합니다.
 
 docs 품질 검사는 provider 원본 URL의 공식 도메인·문서 경로, 비어 있지 않은 수집문, 대상 문서 소유권, 요청 버전, 실제 발췌의 aspect와 정보 종류를 확인합니다. 검색에서 선택한 범위와 synthesis의 최종 범위에 같은 판정을 적용하여, 단순한 이름 언급·부분 근거·요구 전체 충족을 구분합니다. 이 검사는 모든 설명의 의미적 충분성을 보증하지 않으므로 자연어 평가와 함께 해석합니다.
 
@@ -231,7 +235,7 @@ structured synthesis timeout 시 compact 호출을 사용하고, 실패하면 �
 
 사용자에게는 간결한 답변을 제공하되, `include_debug=true`에서는 latency, planner/retrieval diagnostics, retry context, LLM call metadata를 확인할 수 있게 했습니다. 일반 응답 품질과 개발자 관측성을 같은 메시지에 섞지 않기 위한 기준입니다.
 
-현재 debug schema version은 `13`입니다. debug payload에는 tool call, 호출별 모델·사용량을 정규화한 `llm_calls`, validation events, `route_decisions`, `memory_compactions`, `observed_hits`, `answer_provenance`, action results, stage별 latency, retrieval route latency, synthesis attempt mode가 포함됩니다. `observed_hits`는 현재 검색에서 본 자료이고, `answer_provenance.evidence_packet`은 최종 결과를 생성·검증한 범위이며, 응답의 `citations`는 그중 실제 표시 내용이 채택한 원문입니다. 모델을 호출하지 않는 본문 복사에서는 선택한 원본의 인용을 검증 packet으로 사용합니다. 이 정보는 일반 사용자 답변이 아니라 회귀 분석과 benchmark 해석을 위한 진단 계층입니다.
+현재 debug schema version은 `13`입니다. debug payload에는 tool call, 호출별 모델·사용량을 정규화한 `llm_calls`, validation events, `route_decisions`, `memory_compactions`, `observed_hits`, `answer_provenance`, action results, stage별 latency, retrieval route latency, synthesis attempt mode가 포함됩니다. Decisions 호출은 사전·사후 단계별로 기록하고 판정 확률 요약은 validation events에 남깁니다. `observed_hits`는 현재 검색에서 본 자료이고, `answer_provenance.evidence_packet`은 최종 결과를 생성·검증한 범위이며, 응답의 `citations`는 그중 실제 표시 내용이 채택한 원문입니다. 본문 생성 모델을 호출하지 않는 복사에서도 선택한 원본의 인용을 검증 packet으로 사용합니다. 이 정보는 회귀 분석과 benchmark 해석을 위한 진단이며, 일반 응답에는 별도의 `semantic_validation`으로 해당 본문의 의미 판정을 전달합니다.
 
 다중 턴에서는 서버가 선택한 `previous`·`pending` 본문의 hash와 실제 citation ID 목록을 `answer_provenance.source`에 남깁니다. eval은 같은 사례·세션의 앞선 답변과 이 정보를 대조하고, 선택한 답변의 출처 연결이 검증된 경우에만 그 실제 인용 범위 안의 현재 최종 packet을 인정합니다. 최종 citation은 이 packet의 정확한 근거 ID를 사용해야 합니다. hash만 비교해 인용이 누락된 응답을 같은 원본으로 취급하거나 과거 검색 결과 전체를 현재 근거로 합치지 않습니다. 현재 턴의 도구 실행과 검색·복사 감점은 별도로 유지합니다. 본문·채택 출처가 같으면 이 연결 검증에서는 동등하므로 source 발생 ID나 범용 event store를 추가하지 않습니다. 정확한 발생 시점·전체 전달 artifact의 동일성·설명의 의미적 지지는 이 진단의 보장 범위가 아닙니다.
 
@@ -261,7 +265,7 @@ epoch는 세션 생애를, revision은 실제 첨부 집합의 변경을 식별�
 
 기능 추가 자체보다 release gate를 통과하는 재현 가능한 상태를 우선합니다. benchmark CLI와 `uv run --no-sync pytest -q` 결과를 문서화해, 프로젝트가 어느 기준에서 정상 동작하는지 확인할 수 있게 했습니다. 실제 로컬 문서 변환은 `RUN_DOCLING_TESTS=1`로 실행하고 유료 API 평가와 분리합니다.
 
-평가 파이프라인은 실제 FastAPI `POST /agent/stream`을 호출하고 최종 응답 수신까지의 latency를 측정하는 online benchmark를 기준으로 합니다. HTTP 오류, SSE 오류, 연결 단절, 최종 응답 누락을 구분하고, 수신한 최종 응답의 debug도 평가에 유지합니다. `docs_only`, `rag_only`, `hybrid`, `tool_action` category를 나누고, rule 기반 지표와 LLM judge를 함께 사용합니다. `rag_only`는 fixture의 분류명이며 현재 업로드 검색을 평가합니다. deterministic `reference_coverage`는 표시한 내용의 참조가 현재 검색 또는 선택한 선행 답변의 검증된 인용에서 최종 packet으로 연결되는지를 측정하고, 설명의 의미적 지지는 judge가 평가합니다. 필요한 provenance가 누락되면 관측·응답 계약 실패로 남기며, `not_evaluated`를 근거가 없는 답변의 점수로 취급하지 않습니다. hard gate는 `data/benchmarks/config.toml`에서 관리하며 자세한 지표는 [벤치마크 가이드](benchmarking.md)에 정리했습니다.
+평가 파이프라인은 실제 FastAPI `POST /agent/stream`을 호출하고 최종 응답 수신까지의 latency를 측정하는 online benchmark를 기준으로 합니다. HTTP 오류, SSE 오류, 연결 단절, 최종 응답 누락을 구분하고, 수신한 최종 응답의 debug도 평가에 유지합니다. `docs_only`, `rag_only`, `hybrid`, `tool_action` category를 나누고, rule 기반 지표와 LLM judge를 함께 사용합니다. `rag_only`는 fixture의 분류명이며 현재 업로드 검색을 평가합니다. deterministic `reference_coverage`는 표시한 내용의 참조가 현재 검색 또는 선택한 선행 답변의 검증된 인용에서 최종 packet으로 연결되는지를 측정합니다. 런타임의 Decisions 통과 여부와 별도로 judge가 설명의 의미적 지지를 평가하므로 자기 검증의 통과를 독립적인 품질 점수로 취급하지 않습니다. 필요한 provenance가 누락되면 관측·응답 계약 실패로 남기며, 로컬 검사의 `not_evaluated`를 근거가 없는 답변의 점수로 취급하지 않습니다. hard gate는 `data/benchmarks/config.toml`에서 관리하며 자세한 지표는 [벤치마크 가이드](benchmarking.md)에 정리했습니다.
 
 ## 6. 개선 방향
 
@@ -271,7 +275,7 @@ DocuMate의 다음 개선 방향은 더 많은 기능을 붙이는 것보다, �
 - retrieval route별 warning, error code, latency breakdown을 더 쉽게 비교할 수 있게 report를 정리합니다.
 - 한영 혼합 스캔·저해상도 문서·복잡한 표 등 실제 표본을 넓혀 OCR 누락과 표제어 오인식을 계측하고, 현재 어댑터의 제목 계층·표 병합·페이지 위치 회귀를 보강합니다.
 - 세션 이후 장기 보관 수명·소유권과 원문 조회 계약을 정의한 뒤 PDF 페이지 뷰어와 위치 강조를 추가합니다.
-- 설명의 의미적 지지 검사를 런타임에 추가할 경우 검사 비용·범위·실패 상태를 명시하고, 인용 연결 확인과 분리해 평가합니다.
+- Decisions의 판정 임계값과 내용별 검사 범위를 독립 judge 결과와 비교하고, 사전·사후 호출의 비용·지연·오탐·누락을 계측합니다.
 - 첨부 준비와 synthesis fallback의 비용/지연을 benchmark summary에서 더 세밀하게 분리합니다.
 - benchmark fixture를 주기적으로 보강해 공식 문서 검색, 업로드 검색, tool action 흐름의 회귀 범위를 넓힙니다.
 - rolling summary의 사실 보존율을 장기 대화 전용 eval fixture로 계측하고, 모델별 tokenizer를 알 수 있을 때 현재 보수적 추정기를 교정합니다.

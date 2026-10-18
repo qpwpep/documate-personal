@@ -340,7 +340,7 @@ uv run python -m src.eval.request_contract_eval \
 | `avg_cost_per_case_usd` | `0.01` |
 | `cost_gate_min_observation_rate` | `0.80` |
 
-judge minimum score와 pricing도 같은 파일에서 관리합니다. `cost_gate_min_observation_rate`는 `src/eval/config_models.py::HardGates`의 기본값이며, config에 명시하지 않으면 `0.80`이 적용됩니다. `cost_observed_cases`는 `cost_usd`가 확정된 사례 수이고 `cost_observation_rate`는 이 수를 저장된 전체 사례 수로 나눈 값입니다. 정상적인 0 비용도 포함합니다. 평균 비용의 분모는 `cost_observed_cases`이며 미관측 사례를 0 비용으로 넣지 않습니다. 관측률이 기준에 미달하면 비용 gate는 `skipped_insufficient_coverage`로 표시합니다. 준비 턴에서 모델을 사용하고 최종 저장 턴이 무호출인 경우도 모든 호출의 토큰이 관측되면 비용을 확정할 수 있습니다.
+judge minimum score와 pricing도 같은 파일에서 관리합니다. `cost_gate_min_observation_rate`는 `src/eval/config_models.py::HardGates`의 기본값이며, config에 명시하지 않으면 `0.80`이 적용됩니다. `cost_observed_cases`는 `cost_usd`가 확정된 사례 수이고 `cost_observation_rate`는 이 수를 저장된 전체 사례 수로 나눈 값입니다. 정상적인 0 비용도 포함합니다. 평균 비용의 분모는 `cost_observed_cases`이며 미관측 사례를 0 비용으로 넣지 않습니다. Decisions API 호출은 `pricing.models`에 해당 모델의 단가를 명시해야 비용을 확정합니다. 단가가 없으면 일반 모델의 기본 단가를 적용하지 않고 해당 사례의 `cost_usd`를 `null`로 기록합니다. 이 사례도 비용 관측률의 전체 사례 수에는 포함됩니다. 관측률이 기준에 미달하면 비용 gate는 `skipped_insufficient_coverage`로 표시합니다. 준비 턴에서 모델을 사용하고 최종 저장 턴이 무호출인 경우도 모든 호출의 토큰과 적용 단가를 알면 비용을 확정할 수 있습니다.
 
 ### 4.0.1 평가 상태와 release 판정
 

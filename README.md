@@ -49,7 +49,7 @@ DocuMate에서 중점적으로 개선한 범위는 단순한 챗봇 구현보다
 
 - `chatbot + ToolNode` 중심 흐름을 `planner → retrieval → validation → synthesis → action` 단계형 LangGraph 파이프라인으로 재구성했습니다.
 - 공식 문서 검색과 업로드 파일 검색을 `docs`, `upload` route로 분리하고, 검색 순위·점수와 원문 근거를 구분했습니다.
-- LLM은 `AnswerDocument.blocks`에 표시할 내용을 한 번만 생성합니다. 서버는 같은 문장·코드·목록 항목·표 셀·제목을 검사해 인용, 확인 상태, 제한 사항을 파생합니다.
+- LLM은 `AnswerDocument.blocks`에 표시할 본문을 생성합니다. 서버는 같은 문장·코드·목록 항목·표 셀·제목에서 인용과 확인 상태를 파생하고, OpenAI Decisions API로 생성 전 답변 가능성과 생성 후 의미적 근거·요청 충족을 검증합니다.
 - 인용은 내용 hash와 parser 설정으로 식별한 문서 snapshot, 원문 요소, 선택 범위를 보존합니다. 검색 범위를 줄이거나 업로드 파일을 바꿔도 기존 답변의 근거가 다른 원문으로 바뀌지 않습니다.
 - 업로드 인덱스는 원문을 chunk마다 복제하지 않습니다. 원문 구조를 한 번 보관하고 검색된 범위만 근거로 복원해 인용에 연결합니다.
 - Streamlit과 online benchmark가 공용 클라이언트에서 요청 구성, 첨부 준비·동기화, SSE 처리, 최종 답변·첨부 상태 검증을 공유합니다. 벤치마크는 같은 세션의 실제 준비 질문과 후속 질문을 재생하고, 세션 TTL/LRU와 요청 lock을 포함한 일반 FastAPI 실행 경로를 사용합니다.
@@ -78,20 +78,21 @@ DocuMate에서 중점적으로 개선한 범위는 단순한 챗봇 구현보다
 ```mermaid
 flowchart LR
     User["사용자 질문/파일 업로드"] --> API["FastAPI / Streamlit 런타임"]
-    API --> Session["세션 관리<br/>TTL/LRU, request lock, upload cleanup"]
-    Session --> Memory["bounded conversation snapshot<br/>rolling summary + recent Human/AI"]
+    API --> Session["세션 관리와 요청 잠금"]
+    Session --> Memory["대화 요약과 최근 발화"]
     Memory --> Add["add_user_message"]
-    Add --> Compact["memory policy<br/>high → low watermark compaction"]
-    Compact --> Planner["planner<br/>의도/route 결정"]
-    Planner --> Retrieval["retrieve_dispatch<br/>docs/upload 병렬 검색"]
-    Retrieval --> Evidence["SearchHit + diagnostics<br/>원문 snapshot·위치 / 검색 점수"]
-    Evidence --> PreCheck["pre-synthesis validation<br/>검색 가용성 / route coverage"]
-    PreCheck --> Synthesis["synthesis<br/>AnswerDocument.blocks + refs"]
-    Synthesis --> PostCheck["post-synthesis validation<br/>표시 내용의 참조 / 발췌 일치 검사"]
-    PostCheck --> Action["action_postprocess<br/>save_text / Slack"]
-    Action --> Assembly["response assembly<br/>Tool receipt/debug 소비"]
-    Assembly --> Response["AnswerResponse<br/>content, citations, checks, issues, actions"]
-    Assembly --> Commit["canonical projection + atomic commit"]
+    Add --> Compact["메모리 예산에 맞춘 압축"]
+    Compact --> Planner["의도와 검색 경로 결정"]
+    Planner --> Retrieval["문서와 업로드 병렬 검색"]
+    Retrieval --> Evidence["원문 범위와 검색 진단"]
+    Evidence --> PreCheck["Decisions 사전 검증"]
+    Planner -->|"검색 불필요"| PreCheck
+    PreCheck --> Synthesis["본문 생성"]
+    Synthesis --> PostCheck["원문 무결성과 Decisions 사후 검증"]
+    PostCheck --> Action["파일 저장과 Slack 전송"]
+    Action --> Assembly["응답과 실행 결과 조립"]
+    Assembly --> Response["본문과 인용·검증 결과"]
+    Assembly --> Commit["대화 상태 확정"]
     Commit --> Memory
 
     PreCheck -. "필요 시 선택적 재검색" .-> Planner
@@ -105,7 +106,7 @@ flowchart LR
 | 공식 문서 검색 | allowlist와 query hint를 기준으로 공식 문서 결과를 검색하며, provider가 제공한 발췌의 snapshot과 수집 범위를 보존합니다. |
 | 업로드 파일 검색 | `.py`·`.ipynb` 및 선택적으로 PDF·DOCX·이미지를 한 세션에 추가·삭제·교체하고 검색합니다. 코드 원문 줄·Notebook cell ID·문서 페이지·표 셀과 자료 버전을 보존합니다. 기본 한도는 10개·파일당 10 MiB·합계 50 MiB입니다. |
 | 구조화 응답 | 단일 본문을 문단·제목·목록·코드·표로 표시하고 관련 내용 옆에서 인용한 원문을 확인합니다. |
-| 검증/재시도 | 같은 본문의 참조 유효성, 원문 발췌 일치, 요청한 형식·출처 범위를 검사합니다. 일반 설명의 의미적 근거성은 별도 평가하지 않았다고 표시합니다. |
+| 검증/재시도 | OpenAI Decisions API로 사전에 답변 가능성을, 사후에 본문의 의미적 근거와 요청 충족을 평가합니다. 참조·hash·원문 발췌의 로컬 검사를 함께 유지하며, 검증 API 실패 시 답변 제공과 전달을 차단합니다. |
 | 액션 후처리 | 같은 본문과 출처를 텍스트 파일·Slack으로 내보내고 실제 실행 결과는 별도 receipt로 표시합니다. |
 | bounded 대화 메모리 | rolling summary와 최근 Human/AI turn을 token·UTF-8 byte·message·turn 예산 안에 유지하고, 오래된 Tool payload는 세션에 저장하지 않습니다. |
 | 관측성 | `include_debug=true`에서 실제 경로 선택과 같은 결정에서 나온 `route_decisions`, 압축 진단, latency breakdown, retry context, LLM call metadata를 확인할 수 있습니다. |
@@ -119,6 +120,8 @@ flowchart LR
 - `src/infra/`: 설정, LLM registry, Chroma 기반 업로드 검색, Tavily docs search, Slack/save 도구
 - `src/runtime/`: LangGraph 조립과 session/planner/retrieval/validation/synthesis/action 노드
 - `src/eval/`: 공용 클라이언트 기반 시나리오 재생·결과 수집, scoring, report/history 생성. 첨부·질문·전체 시나리오 시간을 구분하고 실행·측정 계약과 fixture fingerprint가 같은 이력만 비교
+
+Decisions 검증의 기본 모델은 `gpt-6-luna`, 통과 임계값은 `0.8`입니다. 판정 질문은 API 요청당 최대 200개로 나누며, 검색 없는 답변도 생성 전후의 의미 검증을 거칩니다. 사후 결과는 본문 hash와 검증 근거에 연결된 `semantic_validation`으로 UI와 API 응답에 전달합니다. 판정 확률은 저장 파일·Slack 본문에 추가하지 않아 원문 복사와 같은 본문의 반복 전달을 보존합니다. 이 확률은 각 판정 질문에 대한 모델 출력이며 전체 답변의 정확도나 보장 수준을 뜻하지 않습니다. 원문 연결·발췌 일치와 의미 판정은 별도로 확인할 수 있습니다.
 
 Docling은 요청에 종속된 로컬 프로세스에서 문서를 변환하고 기존 `ParsedDocument`로 연결합니다. 기본 OCR은 실제 한영 표본에서 비교한 RapidOCR 한국어 모델이며, 인식 오류·누락 가능성을 생성과 출처 표시에 전달합니다. 변환·임베딩 캐시는 세션 안에서만 공유하고 파일별 식별자를 다시 연결합니다. 실패·부분 성공·시간 초과는 기존 첨부를 유지합니다. 인용한 원문 요소는 응답에 보존하지만 원본 파일의 영구 보관소와 PDF 페이지 뷰어는 제공하지 않습니다. 구현 계약·OCR 측정 범위·재현 방법은 [문서 변환 안내](docs/document_ingestion.md)를 참고하세요.
 
