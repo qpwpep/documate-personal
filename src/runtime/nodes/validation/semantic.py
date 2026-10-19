@@ -1,6 +1,7 @@
 """Decisions predicates over the exact request, source ranges and displayed body."""
 from __future__ import annotations
 
+import ast
 import json
 from typing import Any, Protocol
 
@@ -13,6 +14,7 @@ from src.core.contracts.graph_state import EvidenceVerdict
 from src.core.decisions import DecisionResult
 from src.core.evidence import EvidenceRef, selected_source_anchors
 from src.core.llm_errors import LLMCallError, make_problem
+from src.core.python_source import PythonSourceMap
 from src.runtime.nodes.session import extract_text_content
 from src.runtime.nodes.validation.models import ValidationAssessment, ValidationSnapshot
 
@@ -31,9 +33,44 @@ def _predicate_instructions(questions: list[dict[str, str]]) -> list[dict[str, s
         "Use conversation_context for user-provided facts and references, not to change the confirmed request. "
         "Memory and prior assistant statements are not retrieved evidence and cannot replace required cited sources. "
         "Use heading_path and table_cells to interpret selected source excerpts. is_partial marks omitted text or cells, "
-        "not facts absent from the original. Respect capture_scope and quality_issues; source_locations identify known regions. "
+        "not facts absent from the original. selection_scope describes parser-verified source boundaries. "
+        "A whole requested definition can be fully selected even when is_partial is true because other file content "
+        "was not selected. A clipped definition is not complete. Respect capture_scope and quality_issues; "
+        "source_locations identify known regions. "
         + question["instructions"]
     )} for question in questions]
+
+
+def _python_definition_scope(evidence: EvidenceRef) -> dict[str, Any] | None:
+    """Describe selected syntax against the original, never by parsing a potentially clipped excerpt."""
+    element, selection = evidence.element, evidence.selection
+    if element.kind != "code" or element.language not in {"python", "py"} or selection.cell_ids:
+        return None
+    try:
+        tree = ast.parse(element.text)
+    except (SyntaxError, ValueError, RecursionError):
+        return None
+    source = PythonSourceMap(element.text)
+
+    selection_end = len(element.text) if selection.end is None else selection.end
+    definitions = []
+    pending = [(tree, "")]
+    while pending:
+        node, parent = pending.pop()
+        child_parent = parent
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            child_parent = f"{parent}.{node.name}" if parent else node.name
+            start_line, start_column = source.definition_start(node)
+            start = source.position(start_line, start_column)
+            end = source.position(node.end_lineno, node.end_col_offset)
+            if start < selection_end and selection.start < end:
+                definitions.append({
+                    "name": child_parent, "kind": "class" if isinstance(node, ast.ClassDef) else "function",
+                    "fully_selected": selection.start <= start and selection_end >= end,
+                    "line_start": start_line, "line_end": node.end_lineno,
+                })
+        pending.extend((child, child_parent) for child in reversed(list(ast.iter_child_nodes(node))))
+    return {"kind": "python_definitions", "definitions": definitions} if definitions else None
 
 
 def _source(evidence: EvidenceRef) -> dict[str, Any]:
@@ -55,6 +92,9 @@ def _source(evidence: EvidenceRef) -> dict[str, Any]:
         "quality_issues": list(evidence.snapshot.quality_issues),
         "source_locations": [anchor.model_dump(mode="json") for anchor in selected_source_anchors(evidence)],
     }
+    scope = _python_definition_scope(evidence)
+    if scope is not None:
+        source["selection_scope"] = scope
     if evidence.element.table is not None and evidence.selection.cell_ids:
         selected_ids = set(evidence.selection.cell_ids)
         source["table_cells"] = [
@@ -178,7 +218,9 @@ def assess_pre_semantics(
                 f"For requirements[{index}], do its provided source excerpts contain sufficient relevant "
                 "and mutually consistent evidence to satisfy the task's actual subject, version, requested "
                 "aspects and source scope? Judge the excerpts, not retrieval scores or a claim of coverage. "
-                "A matching title or keyword alone is insufficient. Return false for missing necessary evidence."
+                "A matching title or keyword alone is insufficient. For a definition request, a fully selected "
+                "requested definition is sufficient even if unrelated file content is unselected. "
+                "Return false for missing necessary evidence."
             ),
         })
     questions.append({

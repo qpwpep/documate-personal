@@ -1,6 +1,7 @@
 """Semantic validation receives the meaning and limits of selected evidence."""
 from __future__ import annotations
 
+import hashlib
 import json
 
 import pytest
@@ -8,7 +9,10 @@ import pytest
 from src.core.answer_schema import AnswerDocument, finalize_answer, text_document
 from src.core.documents import DocumentElement, SourceAnchor, TableCell, TableData, build_snapshot
 from src.core.evidence import RetrievalScore, SearchHit, build_evidence
+from src.core.planner_schema import RetrievalRequirement
 from src.core.request_contracts import RequestContract
+from src.infra.chunking import chunk_python_text
+from src.infra.tools.local_rag.requirements import resolve_source_requirement
 from src.runtime.nodes.validation import make_post_synthesis_validation_node, make_pre_synthesis_validation_node
 from tests.core.test_decisions_validation import DecisionsBoundary, _state
 
@@ -127,3 +131,100 @@ def test_validation_preserves_selected_table_cells_and_never_exposes_omitted_cel
     assert source["is_partial"] is True
     assert source["source_locations"] == [selected_anchor.model_dump(mode="json")]
     assert "UNSELECTED_TIMEOUT_VALUE" not in json.dumps(payload)
+
+
+@pytest.mark.parametrize("clipped", [False, True])
+def test_validation_knows_whether_a_selected_python_definition_is_complete(clipped):
+    """A partial file selection can contain a whole function, but a valid prefix is not the whole function."""
+    definition = 'def discounted_total(prices, discount=0.20):\n    total = sum(prices)\n    return total * (1 - discount)'
+    text = definition + '\n\nprivate_example = "UNSELECTED_SOURCE_CONTENT"\n'
+    end = definition.index("\n    return") if clipped else len(definition)
+    item = build_evidence(
+        snapshot=build_snapshot(
+            source_uri="upload:///test/price_calc.py", title="price_calc.py",
+            media_type="text/x-python", source_type="upload", content=text,
+            parser="python", parser_version="1",
+        ),
+        element=DocumentElement(element_id="code", kind="code", language="python", text=text),
+        end=end,
+    )
+
+    sources, payload = _validation_input([item], "pre")
+
+    assert sources[0]["is_partial"] is True
+    assert sources[0]["selection_scope"] == {
+        "kind": "python_definitions",
+        "definitions": [{"name": "discounted_total", "kind": "function", "fully_selected": not clipped,
+                         "line_start": 1, "line_end": 3}],
+    }
+    assert "UNSELECTED_SOURCE_CONTENT" not in json.dumps(payload)
+
+
+@pytest.mark.parametrize("line_endings, clipped", [
+    (("\n",), False),
+    (("\r\n",), False),
+    (("\r",), False),
+    (("\r", "\n", "\r\n"), True),
+], ids=["lf", "crlf", "cr", "mixed-clipped"])
+def test_uploaded_python_definitions_use_python_line_endings_without_changing_source(line_endings, clipped):
+    lines = ["@one", "def one():", "    return 1", "", "@(", "    decorate", ")",
+             "def 계산():", "    return '한글'", "", "private = 'UNSELECTED_SOURCE_CONTENT'"]
+    text = "".join(line + line_endings[index % len(line_endings)] for index, line in enumerate(lines))
+    upload = chunk_python_text(path="source.py", text=text, source_content=text.encode("utf-8"),
+                               chunk_size=2000, chunk_overlap=0)
+    original = upload.hydrate(upload.chunks[0])
+    assert original.excerpt == text
+    assert original.snapshot.content_hash == "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
+    assert original.element.anchors[0].line_end == len(lines)
+    start = text.index("def 계산") if clipped else text.index("@(")
+    end = text.index("    return '한글'") + len("    return '한글'")
+    item = build_evidence(snapshot=original.snapshot, element=original.element, start=start, end=end)
+
+    sources, payload = _validation_input([item], "pre")
+
+    assert sources[0]["excerpt"] == text[start:end]
+    assert sources[0]["selection"] == {"start": start, "end": end, "cell_ids": []}
+    assert sources[0]["selection_scope"] == {
+        "kind": "python_definitions",
+        "definitions": [{"name": "계산", "kind": "function", "fully_selected": not clipped,
+                         "line_start": 5, "line_end": 9}],
+    }
+    assert "UNSELECTED_SOURCE_CONTENT" not in json.dumps(payload)
+
+
+def test_python_source_lookup_and_validation_do_not_count_non_python_line_separators():
+    separator = "\f\v\x85\u2028\u2029"
+    line_ending = "\n"
+    prefix = f"# Source comment contains {separator} inside one physical line.{line_ending}"
+    definition = line_ending.join(["@(", "    decorate", ")", "def 계산():", f"    return '한글{separator}문자'"])
+    text = prefix + definition + line_ending
+    upload = chunk_python_text(path="source.py", text=text, source_content=text.encode("utf-8"),
+                               chunk_size=2000, chunk_overlap=0)
+
+    resolved = resolve_source_requirement(requirement=RetrievalRequirement(symbols=["계산"], match="definition"),
+                                          source_documents=(upload.parsed,))
+
+    assert resolved.answerability == "covered"
+    item, = [hit.evidence for hit in resolved.hits]
+    assert item.excerpt == definition
+    assert item.element.text == text
+    assert item.selection.start == len(prefix)
+    assert item.selection.end == len(prefix) + len(definition)
+    assert item.element.anchors[0].line_end == 6
+    sources, _ = _validation_input([item], "pre")
+    assert sources[0]["selection_scope"] == {
+        "kind": "python_definitions",
+        "definitions": [{"name": "계산", "kind": "function", "fully_selected": True,
+                         "line_start": 2, "line_end": 6}],
+    }
+
+
+@pytest.mark.parametrize("text,language", [("def broken(\n", "python"), ("def plausible():\n    pass", "text")])
+def test_validation_never_invents_definition_completeness_without_a_valid_python_source(text, language):
+    item = build_evidence(
+        snapshot=_snapshot(), element=DocumentElement(element_id="code", kind="code", language=language, text=text),
+    )
+
+    sources, _ = _validation_input([item], "pre")
+
+    assert "selection_scope" not in sources[0]
