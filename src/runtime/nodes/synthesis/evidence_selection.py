@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+from collections.abc import Callable
 import json
 import re
 import textwrap
@@ -9,7 +10,8 @@ from src.core.evidence import EvidenceRef, SearchHit, build_evidence
 from src.core.literal_matching import literal_aspect_present, missing_literal_aspects
 from src.core.planner_schema import PlannerOutput, RetrievalTask
 from src.core.table_selection import table_excerpt, table_row_units
-from src.infra.tools.docs_search.ranking import DocsAssessment, assess_docs_evidence
+from src.infra.tools.docs_search.ranking import DocsAssessment, DocsAssessmentCache, assess_docs_evidence
+from src.infra.tools.docs_search.requirements import resolve_requirement
 from src.runtime.nodes.synthesis.budgets import RetrievedEvidenceBudget, literal_passage_anchors, requirement_passage_targets
 
 _TOKEN_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_.-]*|[가-힣]{2,}")
@@ -319,6 +321,7 @@ def select_evidence_range(
     expand_context: bool = True, allow_partial: bool = True, complete_char_limit: int | None = None,
     coverage_task: RetrievalTask | None = None,
     covered_evidence: list[EvidenceRef] | None = None,
+    docs_assessor: Callable[[RetrievalTask, list[EvidenceRef]], DocsAssessment] | None = None,
 ) -> EvidenceRef:
     """Choose source ranges; reservation may defer whole code units to a larger allowance."""
     limit = max(0, min(limit, len(item.excerpt)))
@@ -355,7 +358,8 @@ def select_evidence_range(
                 )
                 # Score the contribution to this requirement's existing packet.
                 # A new example need not repeat a parameter aspect already supplied.
-                assessment = _assess_docs_ranges(coverage_task or task, [*(covered_evidence or []), selected])
+                assessment = (docs_assessor or _assess_docs_ranges)(
+                    coverage_task or task, [*(covered_evidence or []), selected])
                 missing = _focused_docs_missing(assessment, task)
                 docs_scores[span] = (not missing, -len(missing), -len(assessment.missing))
             return (*docs_scores[span], *lexical)
@@ -409,6 +413,9 @@ def select_evidence_range(
             units = _paragraph_ranges(text)
             best = max(units, key=relevance) if units else (0, limit)
             if best[1] - best[0] > limit:
+                if not allow_partial or best[1] - best[0] <= (complete_char_limit or 0):
+                    return build_evidence(snapshot=item.snapshot, element=item.element,
+                                          start=item.selection.start, end=item.selection.start)
                 units = _sentence_ranges(text, *best)
                 best = max(units, key=relevance)
         if units:
@@ -449,6 +456,86 @@ def select_evidence_range(
     )
 
 
+def _complete_doc_passages(item: EvidenceRef, limit: int, *, cache: DocsAssessmentCache) -> list[EvidenceRef]:
+    """Offer complete source units, including a label and its adjacent description.
+
+    A sentence cut out of a longer physical line cannot establish parameter
+    coverage. Keep original paragraph/line boundaries and let the same strict
+    coverage evaluator decide which of these ranges supplies a requirement.
+    """
+    if limit <= 0:
+        return []
+    text = item.excerpt
+    units = []
+    for start, end in _paragraph_ranges(text):
+        if end - start <= limit:
+            units.append((start, end))
+        else:
+            units.extend((start + left, start + right) for left, right in _line_ranges(text[start:end])
+                         if right - left <= limit and text[start + left:start + right].strip())
+    spans = set(units)
+    # Parameter labels and descriptions may be separated by a blank line.
+    spans.update((left[0], right[1]) for left, right in zip(units, units[1:])
+                 if right[1] - left[0] <= limit)
+    # Paragraphs can join a multiline declaration to an over-budget description.
+    # Keep the declaration as one source unit, using the same parser as coverage.
+    # Full-source analysis must never extend the retrieved evidence's boundaries.
+    end = item.selection.end if item.selection.end is not None else len(item.element.text)
+    spans.update((declaration.start - item.selection.start, declaration.end - item.selection.start)
+                 for declaration in cache.source_for(item.element.text).declarations
+                 if item.selection.start <= declaration.start and declaration.end <= end
+                 and declaration.end - declaration.start <= limit)
+    if text.strip() and len(text) <= limit:
+        spans.add((0, len(text)))
+    return [build_evidence(snapshot=item.snapshot, element=item.element,
+                           start=item.selection.start + start, end=item.selection.start + end)
+            for start, end in sorted(spans)]
+
+
+def _primary_doc_passages(
+    item: EvidenceRef, task: RetrievalTask, *, limit: int,
+    assessor: Callable[[RetrievalTask, list[EvidenceRef]], DocsAssessment],
+    cache: DocsAssessmentCache,
+) -> list[EvidenceRef]:
+    """Retain an API's first complete explanation, within its retrieved range.
+
+    A short special case can satisfy parameter coverage without preserving the
+    API's defining behavior. That behavior is useful context, not a new coverage
+    requirement. The existing assessor excludes declarations and release metadata.
+    """
+    requirement = resolve_requirement(task.requirement)
+    if not requirement.symbols or not set(requirement.evidence_needs) & {"explanation", "parameters"}:
+        return []
+    pending = set(requirement.symbols)
+    passages = []
+    for section in cache.sections_for(item):
+        if section.kind not in {"overview", "signature"}:
+            continue
+        targets = [target for target in requirement.symbols if target in pending and (
+            section.owner == target or ("." not in target and section.owner.endswith("." + target))
+        )]
+        for target in targets:
+            probe = task.model_copy(update={"requirement": requirement.model_copy(update={
+                "symbols": [target], "aspects": [], "evidence_needs": ["explanation"], "match": "definition",
+            })})
+            # Find paragraph boundaries in the full section. Cropped leading or
+            # trailing text must never become a supposedly complete description.
+            for start, end in _paragraph_ranges(item.element.text[section.start:section.end]):
+                start, end = section.start + start, section.start + end
+                if item.element.text[start:end].lstrip().startswith(("```", "~~~", ">>>")):
+                    continue
+                selected = build_evidence(snapshot=item.snapshot, element=item.element, start=start, end=end)
+                if assessor(probe, [selected]).answerability != "covered":
+                    continue
+                pending.remove(target)
+                if len(selected.excerpt) <= limit and contains_evidence_range(item, selected):
+                    passages.append(selected)
+                break
+        if not pending:
+            break
+    return passages
+
+
 def select_evidence_packet(
     evidence: list[EvidenceRef], *, budget: RetrievedEvidenceBudget, query: str = "",
     requirements_by_evidence: dict[str, list[RetrievalTask]] | None = None,
@@ -459,6 +546,19 @@ def select_evidence_packet(
     remaining = budget.max_total_excerpt_chars
     candidates: dict[tuple[str, str, tuple[str, ...], tuple[str, ...], tuple[str, ...]], tuple[EvidenceRef, RetrievalTask | None]] = {}
     contracts: dict[str, RetrievalTask] = {}
+    docs_assessments: dict[tuple[str, tuple[str, ...]], DocsAssessment] = {}
+    docs_source_analysis = DocsAssessmentCache()
+
+    def assess_selected_docs(task: RetrievalTask, selected: list[EvidenceRef]) -> DocsAssessment:
+        # Fair-share and passage scoring revisit the same packet for each
+        # aspect/need candidate. Evidence IDs bind immutable source ranges;
+        # only reuse an identical ordered packet and complete task in this
+        # selection call, never across requests or changed source selections.
+        key = (task.model_dump_json(), tuple(item.id for item in selected))
+        if key not in docs_assessments:
+            docs_assessments[key] = assess_docs_evidence(
+                task.query, selected, task.requirement, cache=docs_source_analysis)
+        return docs_assessments[key]
     for item in evidence:
         tasks = (requirements_by_evidence or {}).get(item.id) or [None]
         for task in tasks:
@@ -515,7 +615,7 @@ def select_evidence_packet(
     def needs_passage(item: EvidenceRef, task: RetrievalTask | None) -> bool:
         if task is not None and task.route == "docs":
             associated = [selected for selected in packet if task.requirement_id in requirement_ids.get(selected.id, [])]
-            assessment = _assess_docs_ranges(contracts[task.requirement_id], associated)
+            assessment = assess_selected_docs(contracts[task.requirement_id], associated)
             return bool(_focused_docs_missing(assessment, task))
         selected_ranges = [selected for selected in packet
                     if (task is None and selected.route == item.route) or (
@@ -530,11 +630,104 @@ def select_evidence_packet(
             if contains_evidence_range(item, selected):
                 associate(selected, task)
 
+    def replaced_ranges(selected: EvidenceRef) -> list[EvidenceRef]:
+        return [old for old in packet if contains_evidence_range(selected, old)
+                and all(any(candidate_task is not None and candidate_task.requirement_id == requirement_id
+                            and contains_evidence_range(candidate, selected)
+                            for candidate, candidate_task in ordered)
+                        for requirement_id in requirement_ids.get(old.id, []))]
+
+    def admit(selected: EvidenceRef, item: EvidenceRef, task: RetrievalTask | None) -> bool:
+        nonlocal remaining
+        for old in packet:
+            if contains_evidence_range(old, selected) and contains_evidence_range(item, old):
+                associate(old, task)
+                return False
+        replaced = replaced_ranges(selected)
+        cost = len(selected.excerpt) - sum(len(old.excerpt) for old in replaced)
+        if cost > remaining or len(packet) - len(replaced) >= budget.max_items:
+            return False
+        associations = {requirement_id for old in replaced for requirement_id in requirement_ids.get(old.id, [])}
+        for old in replaced:
+            packet.remove(old)
+            origins.pop(old.id, None)
+            requirement_ids.pop(old.id, None)
+        packet.append(selected)
+        origins[selected.id] = (item, task)
+        requirement_ids[selected.id] = sorted(associations)
+        associate(selected, task)
+        remaining -= cost
+        return True
+
+    # Docs aspects and evidence kinds are independent coverage obligations,
+    # not an aspect x kind budget. Reserve complete useful passages before any
+    # optional context; inspect the full immutable task for every proposal.
+    doc_proposals: dict[tuple[str, str], tuple[EvidenceRef, EvidenceRef, RetrievalTask]] = {}
+    seen_docs = set()
+    for item, focused in ordered:
+        if focused is None or focused.route != "docs" or (item.id, focused.requirement_id) in seen_docs:
+            continue
+        seen_docs.add((item.id, focused.requirement_id))
+        task = contracts[focused.requirement_id]
+        if item.element.kind == "table":
+            selected = select_table_evidence(item, limit=budget.max_excerpt_chars, query=query, task=task)
+            proposals = [selected] if selected is not None else []
+        else:
+            proposals = _complete_doc_passages(item, budget.max_excerpt_chars, cache=docs_source_analysis)
+        for selected in proposals:
+            doc_proposals.setdefault((selected.id, task.requirement_id), (selected, item, task))
+
+    def reserve_docs(allowances: dict[str, int] | None = None) -> None:
+        spent: dict[str, int] = {}
+        while True:
+            # A source selected for another requirement may already supply this
+            # one. Attach that free coverage before scoring cost or capacity.
+            for item, task in ordered:
+                share_existing(item, task)
+            missing = {key: set(assess_selected_docs(task, [item for item in packet
+                if key in requirement_ids.get(item.id, [])]).missing)
+                for key, task in contracts.items() if task.route == "docs"}
+            best = None
+            best_score = None
+            for selected, original, task in doc_proposals.values():
+                key = task.requirement_id
+                if not missing[key]:
+                    continue
+                replaced = replaced_ranges(selected)
+                cost = len(selected.excerpt) - sum(len(old.excerpt) for old in replaced)
+                if (cost > remaining or len(packet) - len(replaced) >= budget.max_items
+                        or (allowances is not None and cost > allowances[key] - spent.get(key, 0))):
+                    continue
+                associated = [item for item in packet if key in requirement_ids.get(item.id, [])]
+                after = set(assess_selected_docs(task, [*associated, selected]).missing)
+                gain = missing[key] - after
+                if not gain or after - missing[key]:
+                    continue
+                # Both characters and item slots are finite. Optimizing only
+                # characters lets cheap generic descriptions fill every slot
+                # before a passage supplying the requested parameter is chosen.
+                capacity = remaining if allowances is None else min(
+                    remaining, allowances[key] - spent.get(key, 0))
+                pressure = max(
+                    max(0, cost) / max(1, capacity),
+                    max(0, 1 - len(replaced)) / max(1, budget.max_items - len(packet)),
+                    1 / max(1, budget.max_total_excerpt_chars),
+                )
+                score = (len(gain) / pressure, len(gain), -cost)
+                if best_score is None or score > best_score:
+                    best_score = score
+                    best = (selected, original, task, cost)
+            if best is None:
+                return
+            selected, original, task, cost = best
+            if not admit(selected, original, task):
+                return
+            spent[task.requirement_id] = spent.get(task.requirement_id, 0) + cost
+
     def add_candidate(
         item: EvidenceRef, task: RetrievalTask | None, allowance: int, *, require_anchor: bool = True,
         allow_partial: bool = True, complete_char_limit: int | None = None,
     ) -> None:
-        nonlocal remaining
         if len(packet) >= budget.max_items or allowance <= 0:
             return
         if item.element.kind == "table":
@@ -554,17 +747,14 @@ def select_evidence_packet(
                 covered_evidence=[selected for selected in packet
                                   if task is not None and task.route == "docs"
                                   and task.requirement_id in requirement_ids.get(selected.id, [])],
+                docs_assessor=assess_selected_docs,
             )
         if not selected.excerpt.strip():
             return
         if (require_anchor and task is not None and task.route != "docs"
                 and missing_literal_aspects(literal_passage_anchors(task), [selected])):
             return
-        if selected.id not in origins:
-            packet.append(selected)
-            origins[selected.id] = (item, task)
-            remaining -= len(selected.excerpt)
-        associate(selected, task)
+        admit(selected, item, task)
 
     def fair_allowance() -> int:
         # Deferred earlier requirements still own a share of the remaining budget.
@@ -574,8 +764,14 @@ def select_evidence_packet(
                    for candidate in ordered if needs_passage(*candidate)}
         return remaining // max(1, min(len(pending), budget.max_items - len(packet)))
 
+    groups = {group(candidate) for candidate in ordered}
+    reserve_docs({key: remaining // max(1, len(groups))
+                  for key, task in contracts.items() if task.route == "docs"})
+
     for item, task in ordered:
         share_existing(item, task)
+        if task is not None and task.route == "docs":
+            continue
         if not needs_passage(item, task):
             continue
         add_candidate(item, task, fair_allowance(), complete_char_limit=budget.max_excerpt_chars)
@@ -586,6 +782,8 @@ def select_evidence_packet(
         before = (len(packet), sum(map(len, requirement_ids.values())))
         for item, task in ordered:
             share_existing(item, task)
+            if task is not None and task.route == "docs":
+                continue
             if needs_passage(item, task):
                 add_candidate(item, task, fair_allowance(), allow_partial=False)
         if before == (len(packet), sum(map(len, requirement_ids.values()))):
@@ -595,25 +793,54 @@ def select_evidence_packet(
     # ranges for the unmet requirements before adding optional sources/context.
     for item, task in ordered:
         share_existing(item, task)
+        if task is not None and task.route == "docs":
+            continue
         if needs_passage(item, task):
             add_candidate(item, task, fair_allowance())
 
-    # Additional sources remain useful after every available required passage
-    # has had a turn. They also precede optional neighboring source context.
+    # Other routes have now reserved their passages. Release unused fair shares
+    # to remaining docs obligations before spending anything on extra context.
+    reserve_docs()
+
+    # Additional sources can describe requested behavior beyond what is needed
+    # to satisfy coverage. Select their relevant passages before introductory
+    # context marks a source represented or spends its available space.
     for item, task in ordered:
         share_existing(item, task)
         if any(original.id == item.id for original, _ in origins.values()):
             continue
         add_candidate(item, task, remaining, require_anchor=False)
 
-    for index, selected in enumerate(list(packet)):
+    # Coverage can be complete from a short special case while the retrieved
+    # API introduction has been dropped. Preserve that first explanation after
+    # required and additional relevant passages, before optional neighbors.
+    seen_primary = set()
+    for item, focused in ordered:
+        if focused is None or focused.route != "docs" or item.element.kind == "table":
+            continue
+        key = (item.id, focused.requirement_id)
+        if key in seen_primary:
+            continue
+        seen_primary.add(key)
+        task = contracts[focused.requirement_id]
+        for selected in _primary_doc_passages(
+            item, task, limit=budget.max_excerpt_chars, assessor=assess_selected_docs, cache=docs_source_analysis,
+        ):
+            admit(selected, item, task)
+
+    reserved = list(packet)
+    for index, selected in enumerate(reserved):
+        # Expanding an earlier passage may already have subsumed this range.
+        if selected.id not in origins:
+            continue
         original, task = origins[selected.id]
         if original.element.kind == "table":
             continue
-        limit = min(budget.max_excerpt_chars, len(selected.excerpt) + remaining // (len(packet) - index))
+        limit = min(budget.max_excerpt_chars, len(selected.excerpt) + remaining // (len(reserved) - index))
         expanded = select_evidence_range(
             original, limit=limit, query=query, task=task,
             coverage_task=contracts.get(task.requirement_id) if task is not None else None,
+            docs_assessor=assess_selected_docs,
         )
         if not contains_evidence_range(expanded, selected):
             continue
@@ -622,8 +849,7 @@ def select_evidence_packet(
                        for candidate, candidate_task in ordered)
                for requirement_id in requirement_ids.get(selected.id, [])):
             continue
-        remaining -= len(expanded.excerpt) - len(selected.excerpt)
-        packet[index] = expanded
+        admit(expanded, original, task)
     packet = list({selected.id: selected for selected in packet}.values())
     requirement_ids.clear()
     for item, task in ordered:
