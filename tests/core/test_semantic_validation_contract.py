@@ -6,7 +6,7 @@ from pydantic import ValidationError
 from src.core.answer_schema import (
     AnswerDocument, AnswerResponse, ContentUnit, ParagraphBlock, SemanticCheck,
     SemanticValidation, export_answer_text, finalize_answer,
-    semantic_evidence_fingerprint, text_document,
+    semantic_evidence_fingerprint,
 )
 from src.core.documents import DocumentElement, build_snapshot
 from src.core.evidence import build_evidence
@@ -87,6 +87,12 @@ def test_semantic_report_requires_a_check_and_uses_an_inclusive_threshold():
     assert SemanticValidation.model_validate(wire).passed is False
     with pytest.raises(ValidationError):
         SemanticValidation.model_validate(wire | {"checks": []})
+
+
+@pytest.mark.parametrize("status, probability", [("refused", 0.0), ("evaluated", None)])
+def test_semantic_check_rejects_a_probability_inconsistent_with_its_status(status, probability):
+    with pytest.raises(ValidationError):
+        SemanticCheck(name="grounded", unit_id="b0.content.0", status=status, probability=probability)
 
 
 def test_fingerprint_covers_full_cited_evidence_in_order_without_citation_numbers():

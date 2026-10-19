@@ -11,9 +11,12 @@ from src.core.request_contracts import RequestContract, UserTurnSnapshot, WireRe
 from src.infra.decisions import DecisionsClient
 
 
-def make_decisions_client(probabilities: dict[str, float] | None = None) -> DecisionsClient:
+def make_decisions_client(
+    probabilities: dict[str, float] | None = None, *, refused_names: set[str] | None = None,
+) -> DecisionsClient:
     """Keep SDK parsing, budgets and usage real while replacing provider HTTP."""
     probabilities = dict(probabilities or {})
+    refused_names = set(refused_names or ())
 
     def respond(request: httpx.Request) -> httpx.Response:
         assert request.method == "POST"
@@ -22,6 +25,8 @@ def make_decisions_client(probabilities: dict[str, float] | None = None) -> Deci
         return httpx.Response(200, headers={"x-request-id": "req_test_decisions"}, json={
             "model": "gpt-6-luna",
             "answers": [
+                {"type": "refusal", "name": question["name"]}
+                if question["name"] in refused_names else
                 {"type": "predicate", "name": question["name"],
                  "probability": probabilities.get(question["name"], 0.99)}
                 for question in payload["questions"]

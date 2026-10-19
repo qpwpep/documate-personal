@@ -181,13 +181,14 @@ def make_post_synthesis_validation_node(
             ))
         semantic_events = []
         for revision, semantic_assessment in semantic_assessments:
-            if not semantic_assessment.semantic_probabilities:
+            if not semantic_assessment.semantic_probabilities and not semantic_assessment.semantic_refusals:
                 continue
             failures = {name: round(value, 4) for name, value in semantic_assessment.semantic_probabilities.items()
                         if value < pass_threshold}
             semantic_events.append(
                 f"post_synthesis_validation: decisions revision={revision}, threshold={pass_threshold}, "
-                f"predicates={len(semantic_assessment.semantic_probabilities)}, failed={failures}"
+                f"predicates={len(semantic_assessment.semantic_probabilities) + len(semantic_assessment.semantic_refusals)}, "
+                f"failed={failures}, refused={sorted(semantic_assessment.semantic_refusals)}"
             )
         if local_errors or semantic_events:
             error_codes = list(debug.error_codes)

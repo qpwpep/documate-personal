@@ -112,12 +112,13 @@ def make_pre_synthesis_validation_node(
                 "retry_scope": "refresh_routes",
             })
 
-        if assessment.semantic_probabilities:
+        if assessment.semantic_probabilities or assessment.semantic_refusals:
             failures = {name: round(value, 4) for name, value in assessment.semantic_probabilities.items()
                         if value < pass_threshold}
             semantic_event = (
                 f"pre_synthesis_validation: decisions threshold={pass_threshold}, "
-                f"predicates={len(assessment.semantic_probabilities)}, failed={failures}"
+                f"predicates={len(assessment.semantic_probabilities) + len(assessment.semantic_refusals)}, "
+                f"failed={failures}, refused={sorted(assessment.semantic_refusals)}"
             )
             updates_debug_events = [*debug.validation_events, semantic_event]
         else:
@@ -204,7 +205,7 @@ def make_pre_synthesis_validation_node(
                     **stamp,
                 )
             )
-        if local_errors or assessment.semantic_probabilities:
+        if local_errors or assessment.semantic_probabilities or assessment.semantic_refusals:
             updates["debug"] = debug.model_copy(
                 update={
                     "validation_errors": [*debug.validation_errors, *local_errors],

@@ -58,4 +58,5 @@ class ValidationAssessment:
     failed_requirement_ids: set[str] = field(default_factory=set)
     score_avg: float | None = None
     semantic_probabilities: dict[str, float] = field(default_factory=dict)
+    semantic_refusals: set[str] = field(default_factory=set)
     error_codes: list[ErrorCode] = field(default_factory=list)

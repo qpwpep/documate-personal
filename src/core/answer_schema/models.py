@@ -131,11 +131,18 @@ class UnitCheck(AnswerModel):
 
 
 class SemanticCheck(AnswerModel):
-    """One probability returned by the runtime's Decisions API evaluation."""
+    """One evaluated probability or explicit refusal from the Decisions API."""
 
     name: str = Field(min_length=1)
-    probability: float = Field(ge=0, le=1, allow_inf_nan=False)
+    status: Literal["evaluated", "refused"] = "evaluated"
+    probability: float | None = Field(ge=0, le=1, allow_inf_nan=False)
     unit_id: str | None = Field(default=None, min_length=1)
+
+    @model_validator(mode="after")
+    def probability_matches_status(self) -> "SemanticCheck":
+        if (self.probability is None) != (self.status == "refused"):
+            raise ValueError("semantic probability is required only for evaluated checks")
+        return self
 
 
 class SemanticValidation(AnswerModel):
@@ -156,7 +163,7 @@ class SemanticValidation(AnswerModel):
 
     @property
     def passed(self) -> bool:
-        return all(check.probability >= self.threshold for check in self.checks)
+        return all(check.probability is not None and check.probability >= self.threshold for check in self.checks)
 
 
 def semantic_evidence_fingerprint(evidence: list[EvidenceRef] | list[Citation]) -> str:

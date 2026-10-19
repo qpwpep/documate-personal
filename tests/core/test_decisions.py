@@ -6,9 +6,10 @@ import httpx2 as httpx
 import pytest
 from openai import OpenAI
 
+from src.core.decisions import DecisionResult
 from src.core.llm_errors import LLMCallError
 from src.infra.decisions import DecisionsClient
-from src.infra.llm_boundary import capture_llm_diagnostics
+from src.infra.llm_boundary import capture_llm_diagnostics, request_call_budget
 from src.runtime.agent_runtime.llm_usage import capture_llm_usage
 
 
@@ -29,7 +30,7 @@ def decision(*, answers=None, **overrides):
 def invoke(monkeypatch):
     monkeypatch.setattr("src.infra.decisions.time.sleep", lambda _delay: None)
 
-    def run(replies, *, questions=None, repeat=1):
+    def run(replies, *, questions=None, repeat=1, stage=STAGE):
         seen = []
 
         def handle(request):
@@ -46,7 +47,7 @@ def invoke(monkeypatch):
             with capture_llm_usage() as usage, capture_llm_diagnostics() as diagnostics:
                 try:
                     for _ in range(repeat):
-                        result = client.evaluate(input="private evidence", questions=questions or [QUESTION], stage=STAGE)
+                        result = client.evaluate(input="private evidence", questions=questions or [QUESTION], stage=stage)
                 except LLMCallError as exc:
                     result = exc
                 return result, seen, usage.snapshot(), diagnostics
@@ -57,7 +58,7 @@ def invoke(monkeypatch):
 def test_evaluate_posts_predicates_to_decisions_and_records_real_usage(invoke, caplog):
     caplog.set_level(logging.INFO)
     result, seen, usage, diagnostics = invoke([decision()])
-    assert result == {"ready": 0.9}
+    assert result == DecisionResult(probabilities={"ready": 0.9}, refused_names=set())
     assert len(seen) == 1
     assert seen[0].url.path == "/v1/decisions"
     assert json.loads(seen[0].content) == {
@@ -89,6 +90,29 @@ def test_later_batch_failure_does_not_return_partial_validation(invoke):
     assert result.problem.code == "model_output_invalid"
     assert len(seen) == 2
     assert len(usage) == 2
+
+
+def test_refusal_preserves_successes_across_batches(invoke):
+    refused_names = {"requirement_0", "requirement_200"}
+    questions = [{**QUESTION, "name": f"requirement_{index}"} for index in range(201)]
+
+    def reply(request):
+        return decision(answers=[
+            {"type": "refusal", "name": question["name"]}
+            if question["name"] in refused_names else
+            {"type": "predicate", "name": question["name"], "probability": 0.8}
+            for question in reversed(json.loads(request.content)["questions"])
+        ])
+
+    result, seen, usage, diagnostics = invoke([reply], questions=questions)
+    assert result == DecisionResult(
+        probabilities={question["name"]: 0.8 for question in questions
+                       if question["name"] not in refused_names},
+        refused_names=refused_names,
+    )
+    assert [len(json.loads(request.content)["questions"]) for request in seen] == [200, 1]
+    assert len(usage) == 2
+    assert diagnostics == []
 
 
 @pytest.mark.parametrize("answers", [
@@ -123,12 +147,38 @@ def test_malformed_json_or_duplicate_fields_fail_closed(invoke, content):
     assert len(seen) == 1
 
 
-def test_any_refusal_fails_closed_and_preserves_provider_usage(invoke):
-    result, seen, usage, diagnostics = invoke([decision(answers=[{"type": "refusal", "name": "ready"}])])
-    assert result.problem.code == "model_refusal"
+def test_mixed_refusal_retains_individual_probabilities_without_refusal_text(invoke, caplog):
+    caplog.set_level(logging.INFO)
+    questions = [{**QUESTION, "name": name} for name in ("first", "blocked", "last")]
+    result, seen, usage, diagnostics = invoke([decision(answers=[
+        {"type": "predicate", "name": "first", "probability": 0.95},
+        {"type": "refusal", "name": "blocked", "refusal": "private provider refusal"},
+        {"type": "predicate", "name": "last", "probability": 0.2},
+    ])], questions=questions)
+    assert not isinstance(result, LLMCallError)
+    assert result.probabilities == {"first": 0.95, "last": 0.2}
+    assert result.refused_names == {"blocked"}
     assert len(seen) == 1
     assert usage[0].usage.total_tokens == 42
-    assert diagnostics[0].endpoint == "decisions"
+    assert diagnostics == []
+    assert "probability_count=2" in caplog.text
+    assert "refusal_count=1" in caplog.text
+    assert "private provider refusal" not in repr(result)
+    assert "private provider refusal" not in caplog.text
+
+
+@pytest.mark.parametrize("answers", [
+    [{"type": "refusal", "name": "first"},
+     {"type": "predicate", "name": "last", "probability": "invalid"}],
+    [{"type": "refusal", "name": "first"},
+     {"type": "predicate", "name": "first", "probability": 0.9}],
+])
+def test_malformed_answer_after_refusal_still_fails_the_whole_response(invoke, answers):
+    questions = [{**QUESTION, "name": name} for name in ("first", "last")]
+    result, seen, _, _ = invoke([decision(answers=answers)], questions=questions)
+    assert isinstance(result, LLMCallError)
+    assert result.problem.code == "model_output_invalid"
+    assert len(seen) == 1
 
 
 def test_transient_error_retries_same_request_with_observed_attempts(invoke):
@@ -136,7 +186,7 @@ def test_transient_error_retries_same_request_with_observed_attempts(invoke):
         httpx.Response(429, json={"error": {"code": "rate_limit_exceeded"}}, headers={"retry-after": "0"}),
         decision(),
     ])
-    assert result == {"ready": 0.9}
+    assert result == DecisionResult(probabilities={"ready": 0.9}, refused_names=set())
     assert len(seen) == 2
     assert seen[0].content == seen[1].content
     assert [call.attempt for call in usage] == [1, 2]
@@ -165,7 +215,7 @@ def test_transient_failures_stop_after_three_requests_without_sdk_nested_retries
 
 def test_timeout_recovers_through_the_same_bounded_sdk_path(invoke):
     result, seen, usage, diagnostics = invoke([httpx.ReadTimeout("private evidence"), decision()])
-    assert result == {"ready": 0.9}
+    assert result == DecisionResult(probabilities={"ready": 0.9}, refused_names=set())
     assert len(seen) == 2
     assert usage[0].usage.observation == "none"
     assert diagnostics[0].transport_failure == "timeout"
@@ -173,7 +223,7 @@ def test_timeout_recovers_through_the_same_bounded_sdk_path(invoke):
 
 def test_retry_after_exceeding_remaining_budget_does_not_sleep_or_retry(invoke):
     result, seen, _, diagnostics = invoke([
-        httpx.Response(429, json={"error": {"code": "rate_limit_exceeded"}}, headers={"retry-after": "60"}),
+        httpx.Response(429, json={"error": {"code": "rate_limit_exceeded"}}, headers={"retry-after": "120"}),
     ])
     assert result.problem.code == "provider_rate_limited"
     assert len(seen) == 1

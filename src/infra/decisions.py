@@ -12,6 +12,7 @@ from typing import Any
 from openai import OpenAI
 
 from src.core.contracts.usage import normalize_token_usage
+from src.core.decisions import DecisionResult
 from src.core.llm_errors import LLMCallError, LLMDiagnostic, make_problem
 from src.infra.llm_boundary import classify_call_error, record_llm_diagnostic, request_call_budget
 from src.infra.logging_utils import log_event
@@ -51,27 +52,31 @@ def _parse_json(content: bytes) -> Any:
     return json.loads(content, object_pairs_hook=unique_object, parse_constant=reject_constant)
 
 
-def _parse_answers(payload: Any, *, names: set[str], stage: str) -> dict[str, float]:
+def _parse_answers(payload: Any, *, names: set[str]) -> DecisionResult:
     if not isinstance(payload, dict) or not isinstance(payload.get("answers"), list):
         raise ValueError("answers_required")
     answers = payload["answers"]
     if len(answers) != len(names):
         raise ValueError("answer_count_mismatch")
-    result: dict[str, float] = {}
+    probabilities: dict[str, float] = {}
+    refused_names: set[str] = set()
+    seen_names: set[str] = set()
     for answer in answers:
         if not isinstance(answer, dict):
             raise ValueError("answer_object_required")
         name = answer.get("name")
-        if not isinstance(name, str) or name not in names or name in result:
+        if not isinstance(name, str) or name not in names or name in seen_names:
             raise ValueError("answer_name_mismatch")
+        seen_names.add(name)
         if answer.get("type") == "refusal":
-            raise LLMCallError(make_problem("model_refusal", stage))
+            refused_names.add(name)
+            continue
         probability = answer.get("probability")
         if (answer.get("type") != "predicate" or type(probability) not in {int, float}
                 or not math.isfinite(probability) or not 0 <= probability <= 1):
             raise ValueError("predicate_probability_invalid")
-        result[name] = float(probability)
-    return result
+        probabilities[name] = float(probability)
+    return DecisionResult(probabilities=probabilities, refused_names=refused_names)
 
 
 def _usage_observation(payload: Any, *, model: str, request_id: str | None) -> _UsageObservation:
@@ -90,7 +95,8 @@ class DecisionsClient:
     """One Decisions API boundary shared by both validation stages.
 
     Batches and transient retries consume the request's existing stage budget.
-    Malformed answers and refusals cannot grant a validation pass.
+    Malformed responses fail the whole call. Valid refusals are retained by
+    question name so each validation stage can apply its recovery policy.
     """
 
     def __init__(self, client: OpenAI, *, model: str = "gpt-6-luna", timeout_seconds: float = 20) -> None:
@@ -103,7 +109,7 @@ class DecisionsClient:
         self.timeout_seconds = timeout_seconds
 
     def evaluate(self, *, input: str, questions: list[dict[str, str]], stage: str,
-                 attempt: int = 1) -> dict[str, float]:
+                 attempt: int = 1) -> DecisionResult:
         if stage not in _VALIDATION_STAGES:
             raise ValueError("Decisions requires a validation stage")
         if not isinstance(input, str) or not input.strip():
@@ -120,7 +126,8 @@ class DecisionsClient:
             names.add(question["name"])
 
         budget = request_call_budget(stage)
-        result: dict[str, float] = {}
+        probabilities: dict[str, float] = {}
+        refused_names: set[str] = set()
         for start in range(0, len(questions), _MAX_QUESTIONS):
             batch = questions[start:start + _MAX_QUESTIONS]
             batch_names = {question["name"] for question in batch}
@@ -146,7 +153,7 @@ class DecisionsClient:
                             payload = _parse_json(response.content)
                             observation = _usage_observation(payload, model=self.model_name, request_id=request_id)
                             call.complete(observation)
-                            probabilities = _parse_answers(payload, names=batch_names, stage=stage)
+                            batch_result = _parse_answers(payload, names=batch_names)
                         except ValueError as exc:
                             raise LLMCallError(make_problem("model_output_invalid", stage), LLMDiagnostic(
                                 code="model_output_invalid", stage=stage, model=self.model_name,
@@ -156,8 +163,11 @@ class DecisionsClient:
                     usage = normalize_token_usage(observation.usage_metadata, observation.response_metadata)
                     log_event(logger, logging.INFO, "decisions_completed", stage=stage, endpoint="decisions",
                               model=self.model_name, question_count=len(batch), attempt=current_attempt,
+                              probability_count=len(batch_result.probabilities),
+                              refusal_count=len(batch_result.refused_names),
                               request_id=request_id, input_tokens=usage.input_tokens, output_tokens=usage.output_tokens)
-                    result.update(probabilities)
+                    probabilities.update(batch_result.probabilities)
+                    refused_names.update(batch_result.refused_names)
                     break
                 except Exception as exc:
                     error = classify_call_error(exc, stage=stage, llm=self, attempt=current_attempt)
@@ -177,4 +187,4 @@ class DecisionsClient:
                         time.sleep(delay)
                         continue
                     raise LLMCallError(error.problem, diagnostic) from exc
-        return result
+        return DecisionResult(probabilities=probabilities, refused_names=refused_names)

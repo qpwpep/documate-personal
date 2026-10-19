@@ -23,8 +23,9 @@ from src.runtime.nodes.validation import make_post_synthesis_validation_node, ma
 class DecisionsBoundary(DecisionsClient):
     """Keep the SDK and Decisions client real while replacing provider HTTP."""
 
-    def __init__(self, probabilities=None, *, error_status=None):
+    def __init__(self, probabilities=None, *, refused_names=(), error_status=None):
         self.probabilities = probabilities or {}
+        self.refused_names = set(refused_names)
         self.error_status = error_status
         self.requests = []
         sdk = OpenAI(
@@ -48,7 +49,9 @@ class DecisionsBoundary(DecisionsClient):
             }})
         return httpx.Response(200, headers={"x-request-id": "req_test_decisions_validation"}, json={
             "model": self.model_name,
-            "answers": [{"type": "predicate", "name": question["name"],
+            "answers": [{"type": "refusal", "name": question["name"]}
+                        if question["name"] in self.refused_names else
+                        {"type": "predicate", "name": question["name"],
                          "probability": self.probabilities.get(question["name"], 0.99)}
                         for question in payload["questions"]],
             "usage": {"input_tokens": 32, "output_tokens": 0, "total_tokens": 32},
@@ -448,3 +451,65 @@ def test_decisions_failure_cannot_silently_pass_validation(factory, stage):
 
     assert raised.value.problem.code == "provider_unavailable"
     assert raised.value.problem.stage == stage
+
+
+def test_post_validation_repairs_only_a_refused_unit_and_preserves_accepted_sources():
+    state = _state()
+    response = state["response"]
+    refused_text = "Path.exists()에 관한 검증되지 않은 추가 주장입니다."
+    document = AnswerDocument(blocks=[
+        *response.result.content.blocks,
+        *text_document(refused_text, basis="source", refs=[response.evidence_packet[0].id]).blocks,
+    ])
+    state["response"] = response.model_copy(update={
+        "result": finalize_answer(document, response.evidence_packet, retrieval_required=True),
+    })
+    boundary = DecisionsBoundary(refused_names={"grounded_1"})
+
+    updates = make_post_synthesis_validation_node(False, decisions_client=boundary)(state)
+
+    assert updates["retry"].needs_retry is True
+    assert updates["retry"].retry_scope == "reuse_hits_resynthesize"
+    assert updates["retry"].content_repair_attempt == 1
+    assert updates["retry"].preserved_hits[0].evidence == response.evidence_packet[0]
+    assert "b1.content.0" in updates["retry"].retrieval_feedback
+    assert "b0.content.0" not in updates["retry"].retrieval_feedback
+
+
+
+def test_post_validation_filters_a_refused_unit_then_checks_the_retained_body():
+    state = _state(repairs=0)
+    response = state["response"]
+    refused_text = "Path.exists()에 관한 검증되지 않은 추가 주장입니다."
+    document = AnswerDocument(blocks=[
+        *response.result.content.blocks,
+        *text_document(refused_text, basis="source", refs=[response.evidence_packet[0].id]).blocks,
+    ])
+    state["response"] = response.model_copy(update={
+        "result": finalize_answer(document, response.evidence_packet, retrieval_required=True),
+    })
+    boundary = DecisionsBoundary(refused_names={"grounded_1"})
+
+    updates = make_post_synthesis_validation_node(False, decisions_client=boundary)(state)
+
+    assert len(boundary.requests) == 2
+    assert refused_text in boundary.requests[0]["input"]
+    assert refused_text not in boundary.requests[1]["input"]
+    assert updates["response"].kind == "answer"
+    assert updates["response"].result.content == response.result.content
+    assert updates["response"].result.citations == response.result.citations
+    assert updates["response"].result.semantic_validation.passed
+
+
+
+def test_post_validation_request_fulfillment_refusal_uses_body_repair_without_research():
+    state = _state()
+    boundary = DecisionsBoundary(refused_names={"request_fulfilled"})
+
+    updates = make_post_synthesis_validation_node(False, decisions_client=boundary)(state)
+
+    assert updates["retry"].needs_retry is True
+    assert updates["retry"].retry_scope == "reuse_hits_resynthesize"
+    assert updates["retry"].content_repair_attempt == 1
+    assert updates["retry"].failed_routes == []
+

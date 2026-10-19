@@ -9,6 +9,7 @@ from src.core.answer_schema import (
     semantic_evidence_fingerprint,
 )
 from src.core.answer_schema.models import validated_evidence_by_id
+from src.core.decisions import DecisionResult
 from src.core.evidence import EvidenceRef, selected_source_anchors
 from src.core.llm_errors import LLMCallError, make_problem
 from src.runtime.nodes.session import extract_text_content
@@ -19,7 +20,7 @@ class DecisionEvaluator(Protocol):
     model_name: str
 
     def evaluate(self, *, input: str, questions: list[dict[str, str]],
-                 stage: str, attempt: int = 1) -> dict[str, float]: ...
+                 stage: str, attempt: int = 1) -> DecisionResult: ...
 
 
 def _predicate_instructions(questions: list[dict[str, str]]) -> list[dict[str, str]]:
@@ -139,23 +140,26 @@ def assess_pre_semantics(
             "Judge readiness to prepare the body, not whether downstream save/notification has run."
         ),
     })
-    probabilities = decisions_client.evaluate(
+    decisions = decisions_client.evaluate(
         input=json.dumps({**_context(snapshot), "requirements": requirements}, ensure_ascii=False),
         questions=_predicate_instructions(questions), stage="pre_synthesis_validation", attempt=attempt,
     )
+    probabilities = decisions.probabilities
     assessment.semantic_probabilities = probabilities
-    assessment.score_avg = sum(probabilities.values()) / len(probabilities)
+    assessment.semantic_refusals = decisions.refused_names
+    assessment.score_avg = sum(probabilities.values()) / len(probabilities) if probabilities else None
     for index, task in enumerate(snapshot.planner_output.tasks):
-        if probabilities[f"requirement_{index}"] < threshold:
+        if f"requirement_{index}" in decisions.refused_names or probabilities[f"requirement_{index}"] < threshold:
             assessment.failed_requirement_ids.add(task.requirement_id)
             assessment.failed_routes.add(task.route)
-    if probabilities["request_ready"] < threshold and not assessment.failed_requirement_ids:
+    request_unready = "request_ready" in decisions.refused_names or probabilities["request_ready"] < threshold
+    if request_unready and not assessment.failed_requirement_ids:
         assessment.failed_requirement_ids.update(task.requirement_id for task in snapshot.planner_output.tasks)
         assessment.failed_routes.update(task.route for task in snapshot.planner_output.tasks)
         if not snapshot.planner_output.tasks:
             assessment.missing_content.append("request_readiness")
     if assessment.retry_reason is None and (
-        assessment.failed_requirement_ids or probabilities["request_ready"] < threshold
+        assessment.failed_requirement_ids or request_unready
     ):
         assessment.retry_reason = "no_evidence" if snapshot.planner_output.tasks else "missing_content"
 
@@ -207,7 +211,7 @@ def assess_post_semantics(
             "as an incomplete failure and prevents delivery."
         ),
     })
-    probabilities = decisions_client.evaluate(
+    decisions = decisions_client.evaluate(
         input=json.dumps({
             **_context(snapshot), "units": evaluated_units,
             "displayed_document": result.content.model_dump(mode="json"),
@@ -215,20 +219,30 @@ def assess_post_semantics(
         }, ensure_ascii=False),
         questions=_predicate_instructions(questions), stage="post_synthesis_validation", attempt=attempt,
     )
+    probabilities = decisions.probabilities
     assessment.semantic_probabilities = probabilities
-    assessment.score_avg = sum(probabilities.values()) / len(probabilities)
+    assessment.semantic_refusals = decisions.refused_names
+    assessment.score_avg = sum(probabilities.values()) / len(probabilities) if probabilities else None
     checks = []
     for index, (unit_id, _unit) in enumerate(units):
-        probability = probabilities[f"grounded_{index}"]
-        checks.append(SemanticCheck(name="grounded", probability=probability, unit_id=unit_id))
-        if probability < threshold:
+        name = f"grounded_{index}"
+        refused = name in decisions.refused_names
+        probability = None if refused else probabilities[name]
+        checks.append(SemanticCheck(
+            name="grounded", status="refused" if refused else "evaluated",
+            probability=probability, unit_id=unit_id,
+        ))
+        if probability is None or probability < threshold:
             assessment.invalid_unit_paths.add(unit_id)
             assessment.valid_unit_paths.discard(unit_id)
-    fulfilled = probabilities["request_fulfilled"]
-    checks.append(SemanticCheck(name="request_fulfilled", probability=fulfilled))
-    if fulfilled < threshold:
+    refused = "request_fulfilled" in decisions.refused_names
+    fulfilled = None if refused else probabilities["request_fulfilled"]
+    checks.append(SemanticCheck(
+        name="request_fulfilled", status="refused" if refused else "evaluated", probability=fulfilled,
+    ))
+    if fulfilled is None or fulfilled < threshold:
         assessment.missing_content.append("semantic_request_fulfillment")
-    if (assessment.invalid_unit_paths or fulfilled < threshold) and assessment.retry_reason is None:
+    if (assessment.invalid_unit_paths or fulfilled is None or fulfilled < threshold) and assessment.retry_reason is None:
         assessment.retry_reason = "missing_content"
         assessment.error_codes.append("VALIDATION_MISSING_CONTENT")
     report = SemanticValidation(
