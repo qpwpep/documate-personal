@@ -153,7 +153,10 @@ def build_case_result(
     missing_reference_unit_count = sum(check.reference_status == "missing" for check in checks)
     factual_paths = {path for path, unit in iter_content_units(response.content) if unit.basis != "interaction"} if response is not None else set()
     semantic_checks = response.semantic_validation.checks if response is not None and response.semantic_validation is not None else []
-    semantically_assessed_paths = {check.unit_id for check in semantic_checks if check.name == "grounded"}
+    semantically_assessed_paths = {
+        check.unit_id for check in semantic_checks
+        if check.name == "grounded" and check.status == "evaluated" and check.probability is not None
+    }
     unchecked_unit_count = sum(
         check.unit_id in factual_paths
         and check.support_status == "not_evaluated"

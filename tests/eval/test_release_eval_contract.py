@@ -170,6 +170,17 @@ def test_request_fulfillment_assessment_does_not_cover_factual_units():
     assert result.unchecked_unit_count == 1
 
 
+def test_refused_semantic_check_remains_unchecked():
+    _, result = _case_result(semantic_checks=[
+        {"name": "request_fulfilled", "probability": 0.99},
+        {"name": "grounded", "unit_id": "b0.content.0", "status": "refused", "probability": None},
+    ])
+
+    assert result.response_errors == []
+    assert result.response.semantic_validation.passed is False
+    assert result.unchecked_unit_count == 1
+
+
 @pytest.mark.parametrize("failure", ["invocation_error", "missing_score"])
 def test_judge_failure_remains_in_release_denominator(failure):
     passing = _case_result()
