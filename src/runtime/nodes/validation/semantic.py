@@ -127,6 +127,9 @@ def _context(snapshot: ValidationSnapshot) -> dict[str, Any]:
         "bound_source_response": {
             "content_hash": snapshot.source_response.content_hash,
             "content": snapshot.source_response.content.model_dump(mode="json"),
+            "issues": [issue.model_dump(mode="json") for issue in snapshot.source_response.issues],
+            "semantic_validation": (snapshot.source_response.semantic_validation.model_dump(mode="json")
+                                    if snapshot.source_response.semantic_validation is not None else None),
             "sources": [_source(citation.evidence) for citation in snapshot.source_response.citations],
         } if snapshot.source_response is not None else None,
         "retrieval_required": snapshot.retrieval_required or bool(

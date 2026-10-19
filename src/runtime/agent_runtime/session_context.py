@@ -128,9 +128,10 @@ class SessionContext:
         response: AnswerResponse,
         response_kind: str,
         pending_action: PendingAction | None,
+        displayed_partial: bool = False,
     ) -> None:
         self.pending_action = pending_action.model_copy(deep=True) if pending_action is not None else None
-        if response_kind == "answer":
+        if response_kind == "answer" or displayed_partial:
             self.previous_response = response.model_copy(deep=True)
 
     def set_session_metadata(self, session_metadata: SessionMetadata | None) -> None:

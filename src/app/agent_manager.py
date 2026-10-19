@@ -299,14 +299,27 @@ class AgentFlowManager:
             )
             final_runtime = parse_runtime_state(response.get("runtime", state.get("runtime")))
             final_response_state = get_response_state(response)
-            if assembled_response["status"] in {"failed", "partial", "refused"}:
+            if assembled_response["status"] in {"failed", "refused"}:
                 return assembled_response
+            canonical_text = (assembled_response["message"] if assembled_response["status"] == "needs_input"
+                              else export_answer_text(final_response_state.result))
+            if assembled_response["status"] == "partial":
+                # Retain what the user actually saw, including its limits. The
+                # answer reference below remains the original checked document;
+                # recording it is not a promotion of the failed request.
+                limitations = list(dict.fromkeys([
+                    assembled_response["message"],
+                    *(issue.message for issue in final_response_state.result.issues),
+                ]))
+                canonical_text = "\n\n".join([
+                    canonical_text, "부분 답변이며 요청 전체는 완료되지 않았습니다.",
+                    *(message for message in limitations if message.strip()),
+                ])
             durable_memory = build_durable_conversation_memory(
                 updated_messages,
                 memory_summary=candidate_summary,
                 policy=self._conversation_memory_policy(),
-                canonical_assistant_text=(assembled_response["message"] if assembled_response["status"] == "needs_input"
-                                          else export_answer_text(final_response_state.result)),
+                canonical_assistant_text=canonical_text,
             )
             self._ensure_session().commit_conversation_memory(
                 messages=durable_memory.messages,
@@ -315,11 +328,13 @@ class AgentFlowManager:
                 preserve_turn_ids=required_contract_turn_ids(final_runtime.pending_action.contract)
                 if final_runtime.pending_action is not None else (),
             )
-            # Only completed answers become the referent of "the previous answer".
-            # A destination question or failure must not replace a pending document.
+            # Displayed partial bodies are valid references for an explicit new
+            # copy/transform request. Destination questions and failures without
+            # a displayed body must not replace the previous answer.
             self._ensure_session().commit_response_state(
                 response=final_response_state.result,
                 response_kind=final_response_state.kind,
+                displayed_partial=assembled_response["status"] == "partial",
                 pending_action=final_runtime.pending_action,
             )
             return assembled_response

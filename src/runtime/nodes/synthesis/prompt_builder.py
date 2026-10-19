@@ -160,9 +160,15 @@ def build_synthesis_messages(
             "For transform, rewrite this document according to the contract body instruction and all answer constraints. "
             "Return the complete transformed body itself, never an acknowledgement or delivery instructions. "
             "Source refs below use the current Evidence Packet IDs; the response_hash identifies the stored original. "
-            "Preserve useful source references; after rewriting, use source/inference instead of excerpt for altered text.\n"
+            "Preserve useful source references; after rewriting, use source/inference instead of excerpt for altered text. "
+            "The original answer may be partial. Preserve its stated limitations and relevant issues in the transformed body; "
+            "do not claim missing evidence was obtained or the original request was completed. "
+            "A previous validation result describes that exact original revision, not the transformed answer.\n"
             + json.dumps({"response_hash": source_response.content_hash,
-                          "content": source_document.model_dump(mode="json")}, ensure_ascii=False)
+                          "content": source_document.model_dump(mode="json"),
+                          "issues": [issue.model_dump(mode="json") for issue in source_response.issues],
+                          "semantic_validation": (source_response.semantic_validation.model_dump(mode="json")
+                                                  if source_response.semantic_validation is not None else None)}, ensure_ascii=False)
         )))
     contract = request_contract
     if contract.body.kind == "transform_input":
