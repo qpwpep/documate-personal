@@ -79,6 +79,7 @@ def maybe_short_circuit_synthesis(
             mode = "reuse_bound_answer"
     elif (
         context.retrieval_required and len(context.hits) == 1
+        and context.attempt == 1
         and len(context.planner_output.tasks) == 1
         and context.hits[0].evidence.route == "upload"
         and contract.body.kind == "extract"

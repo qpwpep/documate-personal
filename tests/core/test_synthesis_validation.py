@@ -95,3 +95,29 @@ def test_exact_upload_extraction_needs_no_model_generation():
     assert updates["response"].normal_evidence_missing_requirement_ids == []
     assert updates["response"].result.retrieval_required
     assert updates["response"].result.issues == []
+
+
+def test_rejected_exact_extraction_uses_repair_feedback_instead_of_repeating_the_same_shortcut():
+    """After semantic rejection, the normal recovery path can repair the displayed document."""
+    from src.core.contracts import RetryState
+
+    hit = _hit("retries = 3\n", source="upload")
+    state = _state([hit], query="retries 코드를 원문 그대로 발췌해줘")
+    state["runtime"] = state["runtime"].model_copy(update={"request_contract": RequestContract(body=ExtractBody())})
+    task = state["planner"].output.tasks[0]
+    state["debug"] = DebugState(retrieval_diagnostics=[RetrievalDiagnostic(
+        route="upload", requirement_id=task.requirement_id, status="success", answerability="covered", evidence_count=1,
+    )])
+    node = make_synthesize_node(ModelBoundary(), excerpt_limits=synthesis_excerpt_limits())
+    state.update(node(state))
+    assert state["response"].result.content.blocks[0].type == "code"
+    state["retry"] = RetryState(
+        needs_retry=True, retry_scope="reuse_hits_resynthesize", retry_reason="missing_content",
+        content_repair_attempt=1, retrieval_feedback="Repair the requested display without changing the selected original.",
+    )
+
+    updates = node(state)
+
+    # The HTTP/model boundary returns a repaired presentation of the same original.
+    assert updates["response"].result.content.blocks[0].type == "paragraph"
+    assert updates["response"].result.content.blocks[0].content[0].text == hit.evidence.excerpt
