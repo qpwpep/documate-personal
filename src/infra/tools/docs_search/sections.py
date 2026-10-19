@@ -21,9 +21,19 @@ class DocSection:
     confidence: int = 1
 
 
+@dataclass(frozen=True)
+class DocDeclaration:
+    name: str
+    parameters: frozenset[str]
+    start: int
+    end: int
+
+
 _NAME = r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*"
 _NAME_PATTERN = re.compile(rf"^{_NAME}$")
-_DECLARATION = re.compile(rf"^(?:(?:async\s+)?def\s+|class\s+|function\s+)?(?P<name>{_NAME})\s*\(")
+_DECLARATION = re.compile(rf"^@?(?:(?:async\s+)?def\s+|class\s+|function\s+)?(?P<name>{_NAME})\s*\(")
+_SIGNATURE_MAX_CHARS = 8192
+_SIGNATURE_MAX_LINES = 64
 _SECTION_NAMES = {
     "parameter": "parameters", "parameters": "parameters", "args": "parameters",
     "arguments": "parameters", "keyword arguments": "parameters",
@@ -58,37 +68,152 @@ def clean_markup(value: str) -> str:
 
 
 def _symbol(value: str) -> str:
-    cleaned = clean_markup(value).strip().strip("# ¶ ")
+    cleaned = clean_markup(value).strip().strip("# ¶ ").removeprefix("@")
     cleaned = re.sub(r"^(?:class|function|method|def)\s+", "", cleaned)
     if _NAME_PATTERN.fullmatch(cleaned) and cleaned.casefold() not in _GENERAL_NAMES:
         return cleaned
     return ""
 
 
-def _declaration(value: str) -> str:
-    cleaned = clean_markup(value).strip().strip("# ¶ ")
-    match = _DECLARATION.match(cleaned)
-    if match is None or ")" not in cleaned:
-        return ""
-    # A prose sentence mentioning a call is not a declaration. Source links and
-    # return annotations are allowed after a complete signature.
-    tail = cleaned[cleaned.rfind(")") + 1:].strip()
-    if tail and tail != ":" and not tail.startswith(("->", "→")):
-        return ""
-    return match.group("name")
+def _scan_signature(value: str) -> tuple[str, frozenset[str], int] | None:
+    """Recognize one bounded declaration, never evaluate document source code.
+
+    Only separators in the outer parameter list introduce parameters. Nested
+    calls, collection/type expressions, quoted commas and return annotations
+    cannot introduce names. Keep newlines to map the result to original lines.
+    """
+    match = _DECLARATION.match(value)
+    if match is None:
+        return None
+    opening = match.end() - 1
+    stack = ["("]
+    pairs = {")": "(", "]": "[", "}": "{"}
+    parameter_start = opening + 1
+    parameters: set[str] = set()
+    quote = ""
+    lambda_arguments = 0
+    index = opening + 1
+
+    def add_parameter(end: int) -> None:
+        entry = value[parameter_start:end].strip()
+        name = re.match(r"\*{0,2}([A-Za-z_]\w*)(?=\s*(?:[:=]|$))", entry)
+        if name:
+            parameters.add(name.group(1))
+
+    while index < len(value):
+        char = value[index]
+        outer_parameter = all(marker == "optional" for marker in stack[1:])
+        if quote:
+            if char == "\\":
+                index += 2
+                continue
+            if value.startswith(quote, index):
+                index += len(quote)
+                quote = ""
+                continue
+        elif char in {"'", '"'}:
+            quote = char * 3 if value.startswith(char * 3, index) else char
+            index += len(quote)
+            continue
+        elif outer_parameter and (char.isalpha() or char == "_"):
+            word = re.match(r"\w+", value[index:]).group()
+            if word == "lambda":
+                # Lambda defaults have their own comma-separated arguments
+                # without enclosing brackets; the colon closes that scope.
+                lambda_arguments += 1
+            index += len(word)
+            continue
+        elif char == "[" and outer_parameter and re.fullmatch(
+            r"\s*(?:\*{0,2}[A-Za-z_]\w*)?\s*", value[parameter_start:index],
+        ):
+            # Reference grammars also use f(required[, optional]). These
+            # brackets enclose parameters, unlike a default or type expression.
+            add_parameter(index)
+            parameter_start = index + 1
+            stack.append("optional")
+        elif char == "]" and stack[-1] == "optional":
+            add_parameter(index)
+            parameter_start = index + 1
+            stack.pop()
+        elif char in "([{":
+            stack.append(char)
+        elif char in ")]}":
+            if not stack or stack.pop() != pairs[char]:
+                return None
+            if not stack:
+                add_parameter(index)
+                line_end = value.find("\n", index)
+                line_end = len(value) if line_end < 0 else line_end
+                tail = value[index + 1:line_end].strip(" ¶#")
+                if tail and tail != ":" and not tail.startswith(("->", "→")):
+                    return None
+                return match.group("name"), frozenset(parameters), value[:line_end].count("\n") + 1
+        elif char == ":" and outer_parameter and lambda_arguments:
+            lambda_arguments -= 1
+        elif char == "," and outer_parameter and not lambda_arguments:
+            add_parameter(index)
+            parameter_start = index + 1
+        index += 1
+    return None
+
+
+def scan_declarations(text: str) -> list[DocDeclaration]:
+    """Return complete declarations with unchanged source line offsets."""
+    lines = text.splitlines(keepends=True)
+    starts = [0]
+    for line in lines:
+        starts.append(starts[-1] + len(line))
+    declarations: list[DocDeclaration] = []
+    index = 0
+    while index < len(lines):
+        if len(lines[index]) > _SIGNATURE_MAX_CHARS:
+            index += 1
+            continue
+        first = clean_markup(lines[index]).strip("# ¶ ")
+        if not _DECLARATION.match(first):
+            index += 1
+            continue
+        following = index
+        chars = 0
+        candidate: list[str] = []
+        while following < min(len(lines), index + _SIGNATURE_MAX_LINES):
+            chars += len(lines[following])
+            if chars > _SIGNATURE_MAX_CHARS:
+                break
+            candidate.append(first if following == index else clean_markup(lines[following]))
+            following += 1
+        parsed = _scan_signature("\n".join(candidate))
+        if parsed is None:
+            index += 1
+            continue
+        name, parameters, consumed = parsed
+        last_line = lines[index + consumed - 1]
+        start = starts[index] + len(lines[index]) - len(lines[index].lstrip())
+        end = starts[index + consumed] - len(last_line) + len(last_line.rstrip())
+        declarations.append(DocDeclaration(name, parameters, start, end))
+        index += consumed
+    return declarations
+
+
+def declaration_name(value: str) -> str:
+    declarations = scan_declarations(value)
+    if len(declarations) == 1 and not value[:declarations[0].start].strip() and not value[declarations[0].end:].strip():
+        return declarations[0].name
+    return ""
 
 
 def _sphinx_definition_owner(raw_line: str) -> str:
-    """A standalone code declaration and its matching self-link identify a new API."""
+    """A standalone definition and its matching self-link identify a new API."""
     if raw_line[:1].isspace():
         return ""
     anchor = re.search(
         rf'\[(?:¶|#)\]\(#[ ]*(?P<name>{_NAME})[ ]+"(?:Permalink|Link) to this definition"\)\s*$',
         raw_line,
     )
-    if anchor is None or "`" not in raw_line[:anchor.start()]:
+    if anchor is None:
         return ""
-    declaration = _declaration(raw_line[:anchor.start()])
+    definition = raw_line[:anchor.start()]
+    declaration = declaration_name(definition) or _symbol(definition)
     target = anchor.group("name")
     return target if declaration and (target == declaration or target.endswith("." + declaration)) else ""
 
@@ -97,7 +222,7 @@ def resolve_document_symbol(*, title: str = "", url: str = "") -> str:
     """Return only an unambiguous identity supplied by the document itself."""
     title_part = re.split(r"\s+[—–|]\s+|\s+-\s+", str(title or ""), maxsplit=1)[0]
     title_part = re.sub(r"^\d+(?:\.\d+)*\.\s+", "", title_part)
-    title_symbol = _symbol(title_part) or _declaration(title_part)
+    title_symbol = _symbol(title_part) or declaration_name(title_part)
     parsed = urlparse(str(url or ""))
     leaf = unquote(parsed.path.rstrip("/").rsplit("/", 1)[-1])
     leaf = re.sub(r"\.(?:html?|md|rst)$", "", leaf, flags=re.I)
@@ -114,7 +239,9 @@ def resolve_document_symbol(*, title: str = "", url: str = "") -> str:
     return ""
 
 
-def parse_doc_sections(text: str, *, title: str = "", url: str = "") -> list[DocSection]:
+def parse_doc_sections(
+    text: str, *, title: str = "", url: str = "", declarations: list[DocDeclaration] | None = None,
+) -> list[DocSection]:
     """Partition source into owned structural sections without rewriting it."""
     if not text or not text.strip():
         return []
@@ -129,6 +256,10 @@ def parse_doc_sections(text: str, *, title: str = "", url: str = "") -> list[Doc
     before_fence: str | None = None
     owner_level: int | None = None
     lines = text.splitlines(keepends=True)
+    declarations_by_start = {declaration.start: declaration for declaration in (
+        scan_declarations(text) if declarations is None else declarations
+    )}
+    declaration_end = 0
 
     def boundary(position: int, new_owner: str, new_kind: str, new_confidence: int) -> None:
         nonlocal start, owner, kind, confidence
@@ -172,7 +303,7 @@ def parse_doc_sections(text: str, *, title: str = "", url: str = "") -> list[Doc
                     boundary(offset, owner, before_fence, confidence)
                     before_fence = None
             continue
-        if fence or not stripped:
+        if fence or not stripped or line_start < declaration_end:
             continue
         if stripped.startswith(">>>") and kind != "examples":
             boundary(line_start, owner, "examples", confidence)
@@ -189,10 +320,10 @@ def parse_doc_sections(text: str, *, title: str = "", url: str = "") -> list[Doc
             boundary(line_start, owner, new_kind, confidence)
             continue
         if level is not None:
-            heading_owner = _symbol(cleaned) or _declaration(cleaned)
+            heading_owner = _symbol(heading_text) or declaration_name(heading_text)
             if heading_owner:
                 owner_level = level
-                heading_kind = "signature" if _declaration(cleaned) else "overview"
+                heading_kind = "signature" if declaration_name(heading_text) else "overview"
                 boundary(line_start, qualify(heading_owner), heading_kind, 2)
             else:
                 if owner_level is not None and level <= owner_level:
@@ -208,12 +339,13 @@ def parse_doc_sections(text: str, *, title: str = "", url: str = "") -> list[Doc
         # API declarations belong in an overview/signature, not in example,
         # parameter, return, or note text that happens to contain a call.
         if kind in {"overview", "signature"}:
-            declaration = _declaration(cleaned)
+            declaration = declarations_by_start.get(line_start + len(raw_line) - len(raw_line.lstrip()))
             if declaration:
-                boundary(line_start, qualify(declaration), "signature", 2)
+                declaration_end = declaration.end
+                boundary(line_start, qualify(declaration.name), "signature", 2)
     if text[start:].strip():
         sections.append(DocSection(owner, kind, start, len(text), confidence))
     return sections
 
 
-__all__ = ["DocSection", "parse_doc_sections", "resolve_document_symbol"]
+__all__ = ["DocSection", "declaration_name", "scan_declarations", "parse_doc_sections", "resolve_document_symbol"]

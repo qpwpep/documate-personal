@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal
 from urllib.parse import urlparse
 
@@ -9,7 +9,7 @@ from src.core.evidence import EvidenceRef, SearchHit, build_evidence
 from src.core.planner_schema import RetrievalRequirement
 from src.infra.tools.docs_search.policy import result_matches_domains
 from src.infra.tools.docs_search.requirements import library_domains, resolve_requirement
-from src.infra.tools.docs_search.sections import DocSection, clean_markup, parse_doc_sections
+from src.infra.tools.docs_search.sections import DocDeclaration, DocSection, clean_markup, parse_doc_sections, scan_declarations
 
 
 _TOPIC_STOPWORDS = {
@@ -54,12 +54,51 @@ class _Support:
     confidence: int
     version: str
     unresolved_topic: bool = False
+    primary_explanations: int = 0
 
 
 @dataclass(frozen=True)
 class _Candidate:
     hit: SearchHit
     support: _Support
+
+
+@dataclass(frozen=True)
+class _SourceAnalysis:
+    declarations: list[DocDeclaration]
+    prose_source: str
+
+
+@dataclass
+class DocsAssessmentCache:
+    """Memoized immutable source analysis for one evidence-selection operation."""
+
+    sections: dict[tuple[str, str, str], list[DocSection]] = field(default_factory=dict)
+    supports: dict[tuple[str, str, tuple[str, ...], tuple[str, ...], str], _Support | None] = field(default_factory=dict)
+    sources: dict[str, _SourceAnalysis] = field(default_factory=dict)
+
+    def source_for(self, text: str) -> _SourceAnalysis:
+        if text not in self.sources:
+            declarations = scan_declarations(text)
+            # Recognition-only view: keep source offsets and line boundaries,
+            # but exclude declarations/types/defaults from descriptive prose.
+            parts: list[str] = []
+            previous_end = 0
+            for declaration in declarations:
+                parts.append(text[previous_end:declaration.start])
+                parts.append(re.sub(r"[^\r\n]", " ", text[declaration.start:declaration.end]))
+                previous_end = declaration.end
+            parts.append(text[previous_end:])
+            self.sources[text] = _SourceAnalysis(declarations, "".join(parts))
+        return self.sources[text]
+
+    def sections_for(self, evidence: EvidenceRef) -> list[DocSection]:
+        key = (evidence.element.text, evidence.snapshot.title, evidence.snapshot.source_uri)
+        if key not in self.sections:
+            self.sections[key] = parse_doc_sections(
+                key[0], title=key[1], url=key[2], declarations=self.source_for(key[0]).declarations,
+            )
+        return self.sections[key]
 
 
 def _contains(text: str, term: str) -> bool:
@@ -99,7 +138,7 @@ def _meaningful_lines(text: str) -> list[str]:
     headings = {"parameters", "parameter", "options", "returns", "examples", "example", "notes",
                 "arguments", "args", "signature", "overview", "description", "see also"}
     return [line for raw in text.splitlines()
-            if (line := clean_markup(raw).strip("#: ")) and line.casefold() not in headings
+            if (line := clean_markup(raw).lstrip("#: ").rstrip()) and line.casefold().rstrip(":") not in headings
             and not raw.lstrip().startswith(("#", "```", "~~~"))]
 
 
@@ -152,11 +191,9 @@ def _parameter_entries(text: str) -> dict[str, str]:
     return described
 
 
-def _described_parameters(text: str) -> dict[str, str]:
-    return {name: description for name, description in _parameter_entries(text).items() if description}
-
-
-def _declared_parameter_names(text: str, sections: list[DocSection], owner: str) -> set[str]:
+def _declared_parameter_names(
+    text: str, sections: list[DocSection], owner: str, declarations: list[DocDeclaration],
+) -> set[str]:
     """Distinguish parameter names from value anchors, without granting coverage."""
     names: set[str] = set()
     for section in sections:
@@ -166,10 +203,10 @@ def _declared_parameter_names(text: str, sections: list[DocSection], owner: str)
         if section.kind in {"parameters", "options"}:
             names.update(_parameter_entries(source))
         elif section.kind == "signature":
-            signature = clean_markup(source)
-            start, end = signature.find("("), signature.rfind(")")
-            if start >= 0 and end > start:
-                names.update(re.findall(r"(?:^|,)\s*\*{0,2}([A-Za-z_]\w*)", signature[start + 1:end]))
+            for declaration in declarations:
+                if (section.start <= declaration.start < declaration.end <= section.end
+                        and (not owner or owner == declaration.name or owner.endswith("." + declaration.name))):
+                    names.update(declaration.parameters)
     return names
 
 
@@ -185,18 +222,99 @@ def _usage(text: str, target: str) -> bool:
     return re.search(rf"(?<![A-Za-z0-9_.]){re.escape(target)}\s*\(", text) is not None
 
 
-def _section_needs(text: str, section: DocSection, parameter_text: str) -> set[str]:
+_RELEASE_PREFIX = re.compile(
+    r"^(?:changed|new|added|deprecated|removed)\s+(?:in|since)\s+version\s+[\w.]+\s*:?\s*",
+    re.I,
+)
+_LIFECYCLE_STATEMENT = re.compile(
+    r"^[\w .,/-]+\s+(?:was|were|is|are|has been|have been)\s+"
+    r"(?:added|introduced|deprecated|removed)(?:\s+in\s+(?:version\s+)?[\w.]+)?[.!]?$",
+    re.I,
+)
+_API_LIFECYCLE_SUBJECT = re.compile(
+    r"^(?:[\w.]+\s+)*(?:parameter|argument|keyword|option|flag|function|method|class|attribute|module|alias|API)s?\s+",
+    re.I,
+)
+_KOREAN_PARAMETER_SUBJECT = re.compile(
+    r"^(?P<name>[A-Za-z_][A-Za-z0-9_]*)(?:은|는|이|가)\s+(?P<body>.+)$",
+)
+_KOREAN_LIFECYCLE_BODY = re.compile(
+    r"(?:(?:버전\s*)?\d+(?:\.\d+)*\s*(?:버전)?(?:에서|에|부터)\s+)?"
+    r"(?:(?:새로운|새|선택적)\s+)*(?:(?:매개변수|인자|인수|옵션)(?:로|으로)\s+)?"
+    r"(?:추가|도입|제거|삭제|폐기|지원\s*중단)(?:되었습니다|됐습니다|됩니다|됨|되었음)[.!]?",
+)
+
+
+def _korean_lifecycle_statement(text: str) -> bool:
+    subject = _KOREAN_PARAMETER_SUBJECT.match(text)
+    return bool(subject and _KOREAN_LIFECYCLE_BODY.fullmatch(subject.group("body")))
+
+
+def _explanation_lines(text: str) -> list[str]:
+    """Keep descriptive prose, without mistaking API lifecycle metadata for it.
+
+    Release notices remain in the source and can contain real behavior. Strip
+    their annotation before checking the body: a return/exception condition is
+    useful, while saying only that an argument was added does not explain it.
+    Applying the same check to continuation lines handles wrapped notices.
+    """
+    result = []
+    for paragraph in re.split(r"\n\s*\n", text):
+        lines = _meaningful_lines(paragraph)
+        statement = _RELEASE_PREFIX.sub("", " ".join(lines))
+        release_note = bool(lines and _RELEASE_PREFIX.match(lines[0]))
+        if not statement or _korean_lifecycle_statement(statement) or ((release_note or _API_LIFECYCLE_SUBJECT.match(statement))
+                             and _LIFECYCLE_STATEMENT.fullmatch(statement)):
+            continue
+        for original in lines:
+            line = _RELEASE_PREFIX.sub("", original)
+            if _korean_lifecycle_statement(line) or ((release_note or _RELEASE_PREFIX.match(original) or _API_LIFECYCLE_SUBJECT.match(line))
+                    and _LIFECYCLE_STATEMENT.fullmatch(line)):
+                continue
+            if (len(re.findall(r"[A-Za-z가-힣]+", line)) >= 4
+                    and not line.endswith(":")
+                    and not line.startswith((">>>", "import ", "from "))
+                    and not re.match(r"^@?[A-Za-z_][\w.]*\s*\(", line)):
+                result.append(line)
+    return result
+
+
+def _prose_parameters(text: str, declared: set[str]) -> dict[str, str]:
+    """Bind behavior to a declared parameter that is the sentence's subject.
+
+    A mention inside another parameter's description is not an entry. Release
+    metadata and signatures likewise cannot supply parameter behavior.
+    """
+    descriptions: dict[str, str] = {}
+    for line in _explanation_lines(text):
+        subject = re.match(
+            r"^(?:(?:if|when|unless)\s+)?(?:the\s+)?(?P<name>[A-Za-z_]\w*)\s+"
+            r"(?:(?:parameter|argument|option)\s+)?"
+            r"(?:is|are|has|have|must|can|may|should|will|controls?|determines?|specifies|"
+            r"sets?|limits?|defaults?|enables?|disables?|selects?|indicates?)\b",
+            line, re.I,
+        )
+        if subject is None:
+            # Translated references attach a Korean subject/topic particle to
+            # the unchanged parameter name instead of using an English verb.
+            subject = _KOREAN_PARAMETER_SUBJECT.match(line)
+        if subject and subject.group("name") in declared:
+            name = subject.group("name")
+            descriptions[name] = " ".join([descriptions.get(name, ""), line]).strip()
+    return descriptions
+
+
+def _section_needs(
+    text: str, section: DocSection, parameters: dict[str, str], *, has_signature: bool, prose: str,
+) -> set[str]:
     needs: set[str] = set()
-    lines = _meaningful_lines(text)
-    if section.kind == "signature" and re.search(r"[A-Za-z_]\w*(?:\.\w+)*\s*\([^\n]*\)", clean_markup(text)):
+    if has_signature:
         needs.add("signature")
-    if section.kind in {"parameters", "options", "overview"} and _described_parameters(parameter_text):
+    if parameters:
         needs.add("parameters")
     if section.kind == "examples" and _example_content(text):
         needs.add("examples")
-    if any(len(re.findall(r"[A-Za-z가-힣]+", line)) >= 4
-           and not line.startswith((">>>", "import ", "from "))
-           and not re.match(r"^[A-Za-z_][\w.]*\s*\(", line) for line in lines):
+    if _explanation_lines(prose):
         needs.add("explanation")
     return needs
 
@@ -257,23 +375,37 @@ def _complete_source_lines(source: str, start: int, end: int) -> str:
     return source[start:end]
 
 
+def _selected_declaration(source: str, declaration: DocDeclaration, start: int, end: int) -> bool:
+    """Require the source declaration, allowing only omitted markup at its edges."""
+    if declaration.end <= start or end <= declaration.start:
+        return False
+    omitted_prefix = source[declaration.start:max(declaration.start, start)]
+    omitted_suffix = source[min(declaration.end, end):declaration.end]
+    # Definition/self-links, heading markers and code markup are metadata.
+    # A cropped nested call still omits the outer declaration's actual text.
+    return not any(clean_markup(edge).strip("# ¶ ") for edge in (omitted_prefix, omitted_suffix))
+
+
 def _evaluate_window(
     evidence: EvidenceRef, sections: list[DocSection], requirement: RetrievalRequirement,
-    subjects: set[str], focus: set[str], version: str,
+    subjects: set[str], focus: set[str], version: str, source: _SourceAnalysis,
 ) -> _Support | None:
     if not _has_grounded_text(evidence):
         return None
     start, end = evidence.selection.start, evidence.selection.end
     end = len(evidence.element.text) if end is None else end
+    declarations, prose_source = source.declarations, source.prose_source
     parts = [(section, evidence.element.text[max(start, section.start):min(end, section.end)])
              for section in sections if section.start < end and start < section.end]
     coverage: set[Coverage] = set()
+    primary_explanations: set[str] = set()
     confidence = 0
     matched_terms: set[str] = set()
     usage_allowed = requirement.match != "definition" and any(
         need in requirement.evidence_needs for need in ("examples", "explanation")
     )
     unresolved_topic = False
+    declared_by_owner: dict[str, set[str]] = {}
     for target in requirement.symbols or [""]:
         for section, text in parts:
             if not _meaningful_lines(text):
@@ -300,8 +432,33 @@ def _evaluate_window(
                 matched_terms.update(matched)
             coverage.add(("symbol" if target else "topic", target, ""))
             confidence = max(confidence, section.confidence)
-            parameter_text = _complete_source_lines(evidence.element.text, max(start, section.start), min(end, section.end))
-            needs = _section_needs(text, section, parameter_text)
+            part_start, part_end = max(start, section.start), min(end, section.end)
+            prose = prose_source[part_start:part_end]
+            parameter_text = _complete_source_lines(prose_source, part_start, part_end)
+            if section.owner not in declared_by_owner:
+                declared_by_owner[section.owner] = _declared_parameter_names(
+                    evidence.element.text, sections, section.owner, declarations,
+                )
+            parameter_names = declared_by_owner[section.owner]
+            parameters: dict[str, str] = {}
+            if section.kind in {"parameters", "options", "overview", "signature"}:
+                entries = _parameter_entries(parameter_text)
+                if section.kind == "signature":
+                    # A label in the definition's prose (such as "Note:") is
+                    # not a parameter table. Its names require a declaration.
+                    entries = {name: description for name, description in entries.items() if name in parameter_names}
+                parameters = {name: description for name, description in entries.items() if description}
+                if section.kind in {"overview", "signature"} and not entries:
+                    parameters.update(_prose_parameters(parameter_text, parameter_names))
+            has_signature = section.kind == "signature" and any(
+                _selected_declaration(evidence.element.text, declaration, part_start, part_end)
+                and (not section.owner or section.owner == declaration.name or section.owner.endswith("." + declaration.name))
+                for declaration in declarations
+            )
+            needs = _section_needs(text, section, parameters, has_signature=has_signature, prose=prose)
+            if ("explanation" in requirement.evidence_needs and "explanation" in needs
+                    and ("signature" in needs or section.kind == "overview")):
+                primary_explanations.add(target)
             if target and "examples" in needs and not (
                 _usage(text, target) or (owned and (
                     _usage(text, section.owner) or _usage(text, target.rsplit(".", 1)[-1])
@@ -316,9 +473,6 @@ def _evaluate_window(
             if used and not owned:
                 needs &= {"examples", "explanation"}
             coverage.update(("need", target, need) for need in requirement.evidence_needs if need in needs)
-            parameters = _described_parameters(parameter_text) if "parameters" in needs else {}
-            parameter_names = (_declared_parameter_names(evidence.element.text, sections, section.owner)
-                               if parameters and requirement.aspects else set())
             requested_descriptions = [description for name, description in parameters.items()
                                       if name in requirement.aspects]
             for aspect in requirement.aspects:
@@ -329,6 +483,12 @@ def _evaluate_window(
                         _contains(description, aspect) for description in requested_descriptions
                     )):
                         continue
+                if "explanation" in requirement.evidence_needs and aspect not in parameters and not any(
+                    _contains(line, aspect) for line in _explanation_lines(prose)
+                ):
+                    # A name in the signature or release history does not
+                    # explain that parameter's behavior.
+                    continue
                 if _contains(text, aspect):
                     coverage.add(("aspect", target, aspect))
     if not coverage and not unresolved_topic:
@@ -336,7 +496,7 @@ def _evaluate_window(
     if requirement.version and version == "match":
         coverage.add(("version", "", requirement.version))
     relevance = len(matched_terms) / max(1, len(subjects)) if not requirement.symbols else 1.0
-    return _Support(frozenset(coverage), relevance, confidence, version, unresolved_topic)
+    return _Support(frozenset(coverage), relevance, confidence, version, unresolved_topic, len(primary_explanations))
 
 
 def _missing_labels(required: set[Coverage], covered: set[Coverage], requirement: RetrievalRequirement) -> list[str]:
@@ -372,6 +532,7 @@ def _assessment(
 
 def assess_docs_evidence(
     query: str, evidences: list[EvidenceRef], requirement: RetrievalRequirement,
+    *, cache: DocsAssessmentCache | None = None,
 ) -> DocsAssessment:
     """Assess only the supplied source ranges, without expanding or selecting them.
 
@@ -384,8 +545,8 @@ def assess_docs_evidence(
     if requirement.library and not domains:
         return DocsAssessment(hits=[], answerability="missing", missing=[f"library:{requirement.library}"])
     subjects = _topic_terms(query, str(requirement.library or ""))
-    parsed = [(evidence, parse_doc_sections(evidence.element.text,
-               title=evidence.snapshot.title, url=evidence.snapshot.source_uri))
+    cache = cache if cache is not None else DocsAssessmentCache()
+    parsed = [(evidence, cache.sections_for(evidence))
               for evidence in evidences if evidence.route == "docs"
               and result_matches_domains(evidence.snapshot.source_uri, set(domains))]
     focus = {term for term in subjects for _, sections in parsed for section in sections
@@ -396,7 +557,15 @@ def assess_docs_evidence(
         version = _version_state(evidence, requirement.version)
         if version == "mismatch":
             continue
-        support = _evaluate_window(evidence, sections, requirement, subjects, focus, version)
+        key = (evidence.id, requirement.model_dump_json(), tuple(sorted(subjects)), tuple(sorted(focus)), version)
+        if key in cache.supports:
+            support = cache.supports[key]
+        else:
+            support = _evaluate_window(
+                evidence, sections, requirement, subjects, focus, version,
+                cache.source_for(evidence.element.text),
+            )
+            cache.supports[key] = support
         if support is not None:
             supports.append(support)
         elif requirement.symbols:
@@ -416,8 +585,8 @@ def select_docs_evidence(
     """
     required = _required_coverage(requirement)
     subjects = _topic_terms(query, str(requirement.library or ""))
-    parsed = [(hit, parse_doc_sections(hit.evidence.element.text,
-                                      title=hit.evidence.snapshot.title, url=hit.evidence.snapshot.source_uri))
+    cache = DocsAssessmentCache()
+    parsed = [(hit, cache.sections_for(hit.evidence))
               for hit in dedupe_docs_hits(hits)
               if result_matches_domains(hit.evidence.snapshot.source_uri, set(allowed_domains))]
     focus = {term for term in subjects for _, sections in parsed for section in sections
@@ -428,8 +597,9 @@ def select_docs_evidence(
         version = _version_state(hit.evidence, requirement.version)
         if version == "mismatch":
             continue
+        source = cache.source_for(hit.evidence.element.text)
         evaluated = [_Candidate(window, support) for window in _candidate_windows(hit, sections, requirement)
-                     if (support := _evaluate_window(window.evidence, sections, requirement, subjects, focus, version))]
+                     if (support := _evaluate_window(window.evidence, sections, requirement, subjects, focus, version, source))]
         if not evaluated:
             if requirement.symbols:
                 rejected += 1
@@ -454,6 +624,9 @@ def select_docs_evidence(
             len((c.support.coverage & required) - covered),
             c.support.relevance,
             c.support.confidence,
+            # For a behavioral question, the definition's own description
+            # precedes shorter incidental notes with otherwise equal coverage.
+            c.support.primary_explanations,
             # On an explicit refresh, equally scoped new source revisions get
             # a chance before the provider score of previously rejected text.
             c.hit.evidence.snapshot.snapshot_id in (preferred_snapshot_ids or ()),

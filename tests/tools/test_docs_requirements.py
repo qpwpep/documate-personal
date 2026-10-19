@@ -131,3 +131,155 @@ def test_provider_sources_keep_official_document_and_library_scope(search, libra
     payload = tool("numpy.reshape", requirement=RetrievalRequirement(library=library, symbols=["numpy.reshape"]))
     assert payload.hits == []
     assert getattr(payload.diagnostics, counter) == 1
+
+
+def python_reference(body):
+    return {
+        "url": "https://docs.python.org/3/library/pathlib.html",
+        "title": "pathlib — Object-oriented filesystem paths",
+        "content": "Path objects represent filesystem paths.",
+        "raw_content": body,
+        "score": 0.9,
+    }
+
+
+@pytest.mark.parametrize(("symbol", "description"), [
+    ("exists", "Return `True` if the path points to an existing file or directory and `False` if the path is invalid, inaccessible or missing."),
+    ("is_file", "Return `True` if the path points to a regular file, and `False` if it points to another kind of file or if it does not exist."),
+])
+@pytest.mark.parametrize("note_heading", ["Notes", "Additional details"])
+def test_behavior_explanation_selects_return_conditions_before_release_metadata(search, symbol, description, note_heading):
+    """Preserve the behavior from a large source instead of a shorter version annotation."""
+    tool, batches, _seen = search
+    # The declaration, fenced example and release annotation have the structure
+    # returned by Tavily for the live Python documentation.
+    body = (
+        "# Overview\n" + "A path object represents a location in a filesystem.\n" * 75
+        + f"\nPath.{symbol}(*\\**, *follow\\_symlinks=True*)[¶](#pathlib.Path.{symbol} \"Link to this definition\")\n"
+        + f":   {description}\n\n"
+        + "    This method normally follows symlinks; to check the symlink itself, add the argument `follow_symlinks=False`.\n\n"
+        + f"    ```\n    >>> Path('example.txt').{symbol}()\n    True\n    ```\n"
+        + "\n    Changed in version 3.12: The *follow\\_symlinks* parameter was added.\n\n"
+        + f"{note_heading}\nFor symbolic links, Path.{symbol}() checks the target.\n\n"
+        + "# Path.resolve\nPath.resolve()\nReturn an absolute path with all symlinks resolved.\n"
+    )
+    batches.append([python_reference(body)])
+
+    payload = tool(f"Python pathlib.Path.{symbol} 파일 디렉터리 존재 여부 설명", k=1,
+                   requirement=RetrievalRequirement(library="Python", symbols=[f"pathlib.Path.{symbol}"],
+                                                    evidence_needs=["explanation"]))
+
+    assert payload.diagnostics.answerability == "covered"
+    assert len(payload.hits) == 1
+    evidence = payload.hits[0].evidence
+    assert description in evidence.excerpt
+    assert "follow_symlinks=False" in evidence.excerpt
+    assert evidence.element.text == body
+    assert evidence.excerpt == body[evidence.selection.start:evidence.selection.end]
+
+
+@pytest.mark.parametrize("notice", [
+    "Changed in version 3.12: The *follow\\_symlinks* parameter was added.",
+    "Changed in version 3.12:\n    The *follow\\_symlinks* parameter was added.",
+    "Changed in version 3.12:\n    The *follow\\_symlinks* parameter\n    was added.",
+    "Added in version 3.4.",
+    "Deprecated since version 3.12.",
+])
+def test_release_metadata_alone_does_not_cover_behavior_explanation(search, notice):
+    tool, batches, _seen = search
+    batches.append([python_reference(f"Path.exists(*, follow_symlinks=True)\n\n{notice}\n")])
+
+    payload = tool("Python pathlib.Path.exists behavior", requirement=RetrievalRequirement(
+        library="Python", symbols=["pathlib.Path.exists"], evidence_needs=["explanation"],
+    ))
+
+    assert payload.diagnostics.answerability == "partial"
+    assert payload.diagnostics.missing_requirements == ["need:explanation"]
+
+
+def test_behavioral_change_note_remains_usable_evidence(search):
+    tool, batches, _seen = search
+    behavior = "Changed in version 3.8: Returns False instead of raising ValueError for paths containing unrepresentable characters."
+    batches.append([python_reference(f"Path.exists()\n\n{behavior}\n")])
+
+    payload = tool("Python pathlib.Path.exists behavior", requirement=RetrievalRequirement(
+        library="Python", symbols=["pathlib.Path.exists"], evidence_needs=["explanation"],
+    ))
+
+    assert payload.diagnostics.answerability == "covered"
+    assert behavior in payload.hits[0].evidence.excerpt
+
+
+def test_release_metadata_does_not_explain_a_requested_parameter(search):
+    tool, batches, _seen = search
+    batches.append([python_reference(
+        "Path.exists(*, follow_symlinks=True)\n"
+        "Return True if the path points to an existing file or directory.\n\n"
+        "Changed in version 3.12: The follow_symlinks parameter was added.\n"
+    )])
+
+    payload = tool("Python pathlib.Path.exists follow_symlinks explanation", requirement=RetrievalRequirement(
+        library="Python", symbols=["pathlib.Path.exists"], aspects=["follow_symlinks"],
+        evidence_needs=["explanation"],
+    ))
+
+    assert payload.diagnostics.answerability == "partial"
+    assert payload.diagnostics.missing_requirements == ["aspect:follow_symlinks"]
+
+
+@pytest.mark.parametrize("description", [
+    "The entire directory tree is removed.",
+    "Duplicate entries are removed.",
+    "A new trailing dimension is added.",
+])
+def test_addition_and_removal_behavior_is_not_lifecycle_metadata(search, description):
+    tool, batches, _seen = search
+    batches.append([result(body=f"# numpy.reshape\nnumpy.reshape(a, shape)\n{description}\n")])
+
+    payload = tool("numpy.reshape behavior", requirement=RetrievalRequirement(
+        library="numpy", symbols=["numpy.reshape"], evidence_needs=["explanation"],
+    ))
+
+    assert payload.diagnostics.answerability == "covered"
+    assert description in payload.hits[0].evidence.excerpt
+
+
+@pytest.mark.parametrize(("symbol", "parameter", "choice", "other_behavior", "requested_behavior"), [
+    (
+        "numpy.pad", "mode", "reflect",
+        "Selects the padding algorithm. The constant choice inserts a fixed value.",
+        "Selects the padding algorithm. The reflect choice reflects values at the boundary.",
+    ),
+    (
+        "numpy.linalg.norm", "ord", "0",
+        "Selects the norm calculation. None uses the default calculation.",
+        "Selects the norm calculation. A value of 0 counts the nonzero elements.",
+    ),
+    (
+        "numpy.load", "allow_pickle", "True",
+        "Controls loading pickled object arrays. False rejects these arrays.",
+        "Controls loading pickled object arrays. True permits loading these arrays.",
+    ),
+])
+def test_requested_behavior_choice_requires_its_own_parameter_evidence(
+    search, symbol, parameter, choice, other_behavior, requested_behavior,
+):
+    """A query containing a choice cannot compensate for missing source support."""
+    tool, batches, _seen = search
+    query = f"Explain {symbol} with {parameter}={choice}"
+    requirement = RetrievalRequirement(
+        library="numpy", symbols=[symbol], aspects=[parameter, choice],
+        evidence_needs=["parameters", "explanation"],
+    )
+
+    for description, expected in ((other_behavior, "partial"), (requested_behavior, "covered")):
+        # These compact synthetic references exercise the contract rather than
+        # attempting to reproduce each API's complete official signature.
+        body = f"# {symbol}\n{symbol}(a, {parameter})\n\nParameters\n{parameter}: {description}\n"
+        batches.append([result(symbol, body=body)])
+        payload = tool(query, requirement=requirement)
+        assert payload.diagnostics.answerability == expected
+        assert payload.diagnostics.missing_requirements == (
+            [f"aspect:{choice}"] if expected == "partial" else []
+        )
+        assert payload.hits[0].evidence.element.text == body
