@@ -17,16 +17,20 @@
 | `model_output_invalid` | JSON, wire schema, 도메인 계약 또는 바인딩 검증 실패. Decisions의 잘못된 확률·중복·누락·미지 판정 이름도 포함 | Planner/synthesis는 기존 사용자 제약을 유지한 출력 수정 요청을 최대 한 번 수행합니다. Decisions의 유효하지 않은 응답은 수정 요청 없이 차단합니다. 최종 실패는 `retry_later`이며 질문 의도를 다시 묻지 않습니다. |
 | `model_output_incomplete` | 출력 토큰 한도 등으로 생성이 미완료 | `retry_later`. 잘린 JSON을 정상 문서로 복구하거나 보충 질문으로 바꾸지 않습니다. |
 | `call_budget_exhausted` | 다음 호출 전에 역할별 호출 횟수 또는 처리 시간 예산이 소진됨 | `retry_later`. 추가 모델 호출 없이 종료하며 출력 오류로 오분류하지 않습니다. |
-| `model_refusal` | 모델의 명시적 refusal 또는 content filter | `none`. `refused`로 표시하고 재생성하지 않습니다. |
+| `model_refusal` | 호출 전체에 대한 명시적 refusal·content filter, 또는 근거 부족 동반 여부와 관계없이 `request_ready`가 명시적으로 거절됨 | `none`. `refused`로 표시하고 재검색·재생성하지 않습니다. Decisions의 이름별 원문·요구·사후 판정 refusal은 아래 개별 판정 정책을 적용하며 곧바로 전체 `model_refusal`로 바꾸지 않습니다. |
 | `internal_error` | 분류되지 않은 내부 실행 오류 | `none`. 예외 원문 대신 안전한 안내와 request ID를 전달하며 운영자가 진단을 확인합니다. |
 | `evidence_insufficient` | 검색·근거 검증 후 답변에 필요한 근거를 확보하지 못함 | `supply_information`. 기술적 검색 실패와 실제 사용자 정보 누락을 구분합니다. |
 | `upload_revision_conflict` | 질문에 포함된 첨부 revision이 현재 세션과 다름 | `none`. 현재 첨부 상태를 다시 확인한 뒤 요청합니다. 자동 재전송하지 않습니다. |
 
 Planner와 synthesis는 각 역할별 한 질문에서 최대 3회, 45초의 공통 호출 예산을 사용합니다. 전송 재시도·출력 수정·합성의 축소 복구·그래프의 재진입이 같은 예산을 공유하며 SDK 자체 재시도는 0회입니다. 제공자의 대기 시간이 남은 예산보다 크면 기다린 뒤 무조건 호출하지 않고 종료합니다. 일반 대화 요약 모델은 이 구조화 출력 정책의 대상이 아닙니다.
 
-OpenAI Decisions API의 사전·사후 검증도 `pre_synthesis_validation`, `post_synthesis_validation` 단계별로 최대 3회·45초의 예산을 사용합니다. 판정 질문을 요청당 최대 200개로 나누는 배치와 그래프 재진입, 일시적 429·timeout·연결·5xx 재시도가 이 예산을 공유합니다. 각 HTTP timeout은 `VALIDATION_TIMEOUT_SECONDS` 기본 20초와 남은 예산 중 작은 값입니다. 인증·권한·할당량 오류, 거절, 유효하지 않은 판정 응답에는 검증을 생략하거나 로컬 검사만으로 성공을 선언하는 복구를 하지 않습니다. 호출 실패 시 `problem.stage`로 어느 검증 단계가 실패했는지 알 수 있으며, 답변 제공과 저장·전송을 차단합니다.
+OpenAI Decisions API는 `pre_synthesis_validation`에 최대 6회·90초, `post_synthesis_validation`에 최대 3회·45초의 예산을 사용합니다. 사전 검증의 원문별 판정·요구 충족 판정과 한 번의 재검색 후 검증, 요청당 최대 200개 질문의 배치, 그래프 재진입, 일시적 429·timeout·연결·5xx 재시도가 같은 단계 예산을 공유합니다. 각 HTTP timeout은 `VALIDATION_TIMEOUT_SECONDS` 기본 20초와 남은 예산 중 작은 값입니다. 인증·권한·할당량 오류와 유효하지 않은 판정 응답은 호출 전체를 실패 처리합니다. 한 항목의 refusal 뒤에 잘못된 이름·중복·누락·잘못된 확률이 있어도 검사를 끝까지 적용하며, 앞선 배치의 정상 결과만으로 성공을 선언하지 않습니다. 호출 실패는 `problem.stage`로 구분하고 답변 제공과 저장·전송을 차단합니다.
 
-시간 예산은 다음 호출의 시작 여부와 각 HTTP I/O timeout을 제한합니다. 진행 중인 동기 네트워크 작업을 정확히 45초에 강제 취소하는 전체 요청 deadline은 아닙니다.
+유효한 이름별 refusal은 `DecisionResult.refused_names`로 반환하고 다른 이름의 정상 확률은 `probabilities`에 유지합니다. 사전 원문 판정은 `(requirement_id, evidence_id)`별 `passed`·`failed`·`refused`를 기록하며, 실패·거절 원문만 제외합니다. `request_ready`가 명시적으로 거절되면 근거 부족을 동반해도 `model_refusal`로 재검색과 생성을 중단하며 부분 답변을 만들지 않습니다. 이 거절이 없고 남은 통과 원문으로 요구가 충족되면 재검색하지 않습니다. 요구가 부족하거나 요구 판정이 거절되면 기존 정책에 따라 지원하는 docs 또는 upload 주제·aspect 검색의 실패 요구만 기본 한 번 재검색하고, 이미 통과한 원문은 재사용합니다. 재검색 불가·한도 소진 후에도 부족하면 검증한 남은 근거로 `partial` 답변을 제공하되 저장·전송을 막으며, 근거가 없으면 `evidence_insufficient`로 종료합니다. `request_ready`의 수치 확률이 낮은 경우는 근거 요구가 부족할 때만 검색 복구를 판단하고, 근거 요구가 충족됐다면 `evidence_insufficient`로 생성과 재검색을 중단합니다.
+
+사후 개별 refusal은 `semantic_validation.checks`의 `status="refused"`, `probability=null`로 기록합니다. 해당 내용이나 요청 충족을 미통과로 처리해 기존의 제한된 본문 보정·필터링·재검증 정책을 적용합니다. 거절을 확률 0으로 바꾸거나 통과로 간주하지 않으며, refusal 원문은 결과·로그에 남기지 않습니다.
+
+시간 예산은 다음 호출의 시작 여부와 각 HTTP I/O timeout을 제한합니다. 진행 중인 동기 네트워크 작업을 정확히 45초 또는 90초에 강제 취소하는 전체 요청 deadline은 아닙니다.
 
 개발자 진단은 `debug.llm_diagnostics`와 구조화 로그에 오류 코드, 단계, 모델, endpoint, 스키마 이름·hash, compiler·OpenAI·LangChain 버전, 제공자 status/code/type/param/request ID, 시도와 복구 결정을 기록합니다. 요청 본문·모델 원문 출력·API 키·제공자 예외 메시지를 진단 필드에 저장하지 않습니다. `debug.error_codes`도 예외 문자열 추측 대신 분류된 문제를 사용합니다.
 
@@ -91,4 +95,4 @@ OCR의 글자 오인식이나 문단 누락이 항상 실패 상태로 검출되
 - planner/synthesis와 Decisions 검증의 제공자 오류는 `src/core/llm_errors.py`의 분류된 문제를 사용합니다. 의미 판정이 임계값에 못 미치는 경우와 API 자체의 실패를 구분합니다. 과거 대문자 LLM 오류 코드는 기존 실행 기록을 읽는 용도로만 남아 있습니다.
 - benchmark histogram은 `src/eval/reporting/histograms.py`에서 같은 코드 집합을 bucket으로 집계합니다.
 - 사용자에게 필요한 제한은 `AnswerResponse.issues`, 로컬 확인 결과는 `checks`, 의미 판정은 `semantic_validation`, 저장·전송 실패는 `actions`에도 전달합니다. debug를 끈 UI·API 응답에서도 이 정보는 유지됩니다. 의미 판정의 확률은 저장 파일과 Slack 본문에는 추가하지 않습니다.
-- 참조가 `resolved`인 것과 설명이 원문으로 뒷받침되는 것은 구분합니다. 로컬 `checks.support_status`는 일반 설명에서 `not_evaluated`, 정확한 원문 발췌에서 `exact_match`입니다. 별도의 `semantic_validation`은 본문 hash와 근거 fingerprint에 연결된 `grounded`·`request_fulfilled` 확률을 보존합니다. 각 확률이 임계값 이상이어야 의미 검증을 통과합니다. 원문 안내에 이 보고서가 없으면 의미 검증 완료로 표시하지 않습니다.
+- 참조가 `resolved`인 것과 설명이 원문으로 뒷받침되는 것은 구분합니다. 로컬 `checks.support_status`는 일반 설명에서 `not_evaluated`, 정확한 원문 발췌에서 `exact_match`입니다. 별도의 `semantic_validation`은 본문 hash와 근거 fingerprint에 연결된 `grounded`·`request_fulfilled`의 판정 상태와 확률을 보존합니다. 모든 항목이 `evaluated`이고 각 확률이 임계값 이상이어야 의미 검증을 통과합니다. `refused` 항목이나 보고서가 없는 원문 안내는 의미 검증 완료로 표시하지 않습니다.

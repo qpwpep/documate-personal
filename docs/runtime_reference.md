@@ -76,9 +76,11 @@ Windows 환경에서는 `-X utf8` 또는 `PYTHONUTF8=1` 사용을 권장합니�
 
 프롬프트 책임은 요청 해석·검색 계획([planner](../src/runtime/nodes/planner/prompt_builder.py)), 검색 실패 피드백([retry](../src/runtime/nodes/retry.py)), 답변 합성([공통 정책](../src/core/prompts.py), [synthesis](../src/runtime/nodes/synthesis/prompt_builder.py)), 사전·사후 의미 검증([validation](../src/runtime/nodes/validation/semantic.py)), 대화 요약([session](../src/runtime/nodes/session.py)), 평가용 심사([judge](../src/eval/judge_llm.py))로 나뉩니다. planner와 synthesis는 도구를 직접 호출하지 않고 서버가 출력 계약에 따라 검색·저장·전송을 실행합니다. 평가용 심사의 점수 기준은 생성 프롬프트와 독립적으로 유지합니다.
 
-사전·사후 검증은 [OpenAI Decisions API](https://developers.openai.com/api/docs/guides/decisions)의 `predicate` 질문을 사용합니다. 지원 모델은 `gpt-6-luna`이며, `openai>=3.35.1`의 `client.decisions.with_raw_response.create()`로 호출합니다. 사전 검증은 요구별 검색 근거의 충분성과 본문 준비 가능성을, 사후 검증은 각 내용 단위의 근거성과 전체 요청 충족 여부를 판단합니다. 검색 없는 본문 생성과 이전 답변을 사용하는 후속 요청도 이 경로를 거칩니다. 이미 확정된 확인 질문이나 기술적 실패 안내는 의미 검증 통과 답변으로 표시하지 않습니다.
+사전·사후 검증은 [OpenAI Decisions API](https://developers.openai.com/api/docs/guides/decisions)의 `predicate` 질문을 사용합니다. 지원 모델은 `gpt-6-luna`이며, `openai>=3.35.1`의 `client.decisions.with_raw_response.create()`로 호출합니다. 사전 검증은 개별 원문의 적합성을 먼저 판정하고 통과한 원문만으로 요구별 근거 충분성과 본문 준비 가능성을 판단합니다. 사후 검증은 각 내용 단위의 근거성과 전체 요청 충족 여부를 판단합니다. 검색 없는 본문 생성과 이전 답변을 사용하는 후속 요청도 이 경로를 거칩니다. 이미 확정된 확인 질문이나 기술적 실패 안내는 의미 검증 통과 답변으로 표시하지 않습니다.
 
-기본 통과 기준은 각 질문의 확률 `0.8` 이상입니다. 질문은 호출당 최대 200개로 나누며, 배치와 일시 오류 재시도가 단계별 3회·45초 예산을 함께 사용합니다. 개별 호출 timeout 기본값은 20초이고 남은 단계 예산을 넘기지 않습니다. 거절·누락·중복·잘못된 확률·API 장애는 통과로 바꾸지 않고 실패로 전달합니다. API 연결·권한·요청 오류는 기존 오류 분류를 사용합니다. `decisions_completed` 로그에는 단계·모델·질문 수·요청 ID·토큰 수만 기록하며 원문과 키는 기록하지 않습니다.
+기본 통과 기준은 각 질문의 확률 `0.8` 이상입니다. 질문은 호출당 최대 200개로 나누며, `pre_synthesis_validation`은 최대 6회·90초, `post_synthesis_validation`은 최대 3회·45초의 예산을 사용합니다. 사전 검증의 원문·요구 충족 두 단계와 재검색 후 검증, 배치, 일시 오류 재시도가 같은 단계 예산을 공유합니다. 개별 호출 timeout 기본값은 20초이고 남은 단계 예산을 넘기지 않습니다.
+
+`DecisionsClient.evaluate()`는 `DecisionResult(probabilities, refused_names)`를 반환합니다. 응답의 모든 이름은 요청한 질문과 정확히 대응해야 하며, 유효한 개별 refusal은 확률 없이 `refused_names`에 보존합니다. 같은 배치와 이전 배치에서 얻은 정상 확률은 유지합니다. 이름 누락·중복·미지 이름·잘못된 확률·잘못된 JSON은 refusal 이후에 발견되어도 호출 전체의 `model_output_invalid` 오류입니다. API 연결·권한·요청 오류도 전체 호출 실패로 분류하며, 부분 결과를 검증 완료로 반환하지 않습니다. `decisions_completed` 로그에는 단계·모델·질문 수·확률 판정 수·거절 판정 수·요청 ID·토큰 수를 기록하고 원문·refusal 메시지·키는 기록하지 않습니다.
 
 planner의 추론 수준은 `PLANNER_REASONING_EFFORT`로 지정합니다. 빈 값, `default`, `model_default`는 API 요청에서 effort를 생략해 모델 기본값을 사용하며 `none`은 명시적으로 전달합니다. 입력은 앞뒤 공백을 제거하고 소문자로 정규화합니다. 설정 타입은 `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`를 허용하며 `SYNTHESIS_REASONING_EFFORT`는 별도로 적용합니다.
 
@@ -316,9 +318,9 @@ synthesis의 새 검색 근거 예산은 [`budgets.py`](../src/runtime/nodes/syn
 
 총량은 위의 고정 쌍으로 정의하며, 일반 총량을 바꾸어도 compact 총량이 자동으로 늘어나지 않습니다. 일반 개별 상한은 `SYNTHESIS_PROMPT_SNIPPET_CHARS`, compact 개별 상한은 일반 설정과 `SYNTHESIS_COMPACT_PROMPT_SNIPPET_CHARS` 중 작은 값입니다. 두 설정은 각각 80자 이상이며 기본값은 1,800자·900자입니다. 개별 상한을 총량으로 미리 줄이지 않고 선택 과정에서 개별 상한과 남은 총량을 함께 적용합니다. 저장·전송 여부는 이 예산을 줄이지 않습니다.
 
-기본 근거 개수 상한은 8개이며 검색 task 개수와 별개의 합성 예산 정책입니다. [`requirement_passage_targets()`](../src/runtime/nodes/synthesis/budgets.py)는 `(file_id, literal_anchor, evidence_need)` 조합을 만들고, 비어 있는 차원은 하나의 미지정 대상으로 계산합니다. upload의 `topic`에서는 중복을 제거한 `symbols`와 `aspects`를 literal anchor로 사용하고, 다른 검색 모드에서는 `aspects`를 사용합니다. 요구사항별 `max(1, 명시 파일 수) × max(1, literal anchor 수) × max(1, 정보 종류 수)`의 합이 기본 상한보다 크면 그 합만큼 항목 여유를 둡니다. 정보 종류는 docs의 `evidence_needs`에만 적용하며 upload는 파일·literal aspect 기준을 유지합니다. 예산 계산과 선택은 같은 발췌 대상 조합을 사용합니다. 같은 파일의 독립 요구나 떨어진 aspect·정보 종류에는 여러 발췌가 필요할 수 있습니다. 실제로 같은 선택 범위를 공유하면 한 번만 포함하고 검색에서 확인한 요구사항 연결을 합칩니다. 모든 요구에 충분한 문자가 배정된다는 보장은 없으며 compact도 이 항목 수 상한을 유지합니다.
+기본 근거 개수 상한은 8개이며 검색 task 개수와 별개의 합성 예산 정책입니다. [`requirement_passage_targets()`](../src/runtime/nodes/synthesis/budgets.py)는 `(file_id, literal_anchor, evidence_need)` 조합을 만들고, 비어 있는 차원은 하나의 미지정 대상으로 계산합니다. upload의 `topic`에서는 중복을 제거한 `symbols`와 `aspects`를 literal anchor로 사용하고, 다른 검색 모드에서는 `aspects`를 사용합니다. 요구사항별 `max(1, 명시 파일 수) × max(1, literal anchor 수) × max(1, 정보 종류 수)`의 합이 기본 상한보다 크면 그 합만큼 항목 여유를 둡니다. 정보 종류는 docs의 `evidence_needs`에만 적용하며 upload는 파일·literal aspect 기준을 유지합니다. 이 조합 수는 docs의 문자 배분 단위가 아닙니다. docs는 원래 요구사항 전체의 미충족 항목을 평가하므로 하나의 설명이 여러 aspect·정보 종류를 함께 채울 수 있습니다. 실제로 같은 선택 범위를 공유하면 한 번만 포함하고 검색에서 확인한 요구사항 연결을 합칩니다. 모든 요구에 충분한 문자가 배정된다는 보장은 없으며 compact도 이 항목 수 상한을 유지합니다.
 
-요구사항별로 필요한 최소 관련 범위를 먼저 확보한 뒤 남은 예산으로 주변 문맥을 확장합니다. docs의 축소 후보는 [`evidence_selection.py`](../src/runtime/nodes/synthesis/evidence_selection.py)에서 [`assess_docs_evidence()`](../src/infra/tools/docs_search/ranking.py)로 평가합니다. 단어 일치에 앞서 실제 요구 충족을 비교해 매개변수 설명과 사용 예제 구간을 보존합니다. upload는 명시 파일 범위와 literal aspect를 채우는 기존 기준을 사용합니다. 표는 검색된 셀 범위 안에서 완전한 행과 필요한 헤더를 선택해 문자 예산에 맞추며, 최소 단위가 들어가지 않으면 근거 부족으로 남깁니다. 코드는 완전한 구문·행을 우선하지만 검색 범위나 예산에 따라 정확한 원문의 일부를 제공할 수 있습니다. 이때도 원문 offset과 부분 선택 표시를 유지하며, 발췌가 독립 실행 가능한 코드라고 보장하지 않습니다.
+요구사항별로 필요한 최소 관련 범위를 먼저 확보한 뒤 남은 예산으로 주변 문맥을 확장합니다. docs는 온전한 문단·행과 인접한 설명 구간을 후보로 만들고, [`evidence_selection.py`](../src/runtime/nodes/synthesis/evidence_selection.py)에서 [`assess_docs_evidence()`](../src/infra/tools/docs_search/ranking.py)로 기존 packet에 더했을 때의 실제 충족 증가를 평가합니다. 새로 채우는 필수 항목이 없는 후보는 필수 범위 예약에 넣지 않습니다. 선택 순서는 충족 증가와 남은 문자·항목 용량을 함께 고려합니다. 요구·파일별 초기 몫을 배분한 뒤 upload의 필수 범위를 확보하고, 남은 몫을 docs에 재배분합니다. 이후 추가 출처와 주변 문맥을 선택합니다. 더 큰 범위가 기존 범위를 포함하면 요구사항 연결을 보존해 대체하고 기존 문자·항목 비용을 돌려받습니다. upload는 명시 파일 범위와 literal aspect를 채우는 기존 기준을 사용합니다. 표는 검색된 셀 범위 안에서 완전한 행과 필요한 헤더를 선택해 문자 예산에 맞추며, 최소 단위가 들어가지 않으면 근거 부족으로 남깁니다. 코드는 완전한 구문·행을 우선하지만 검색 범위나 예산에 따라 정확한 원문의 일부를 제공할 수 있습니다. 이때도 원문 offset과 부분 선택 표시를 유지하며, 발췌가 독립 실행 가능한 코드라고 보장하지 않습니다.
 
 프롬프트 coverage와 최종 검증은 같은 계산을 각각 실제 packet 전체와 유효하게 인용한 부분집합에 적용합니다. docs의 공통 `assess_docs_evidence()`는 고정된 requirement를 정규화하고 라이브러리 도메인 범위를 검사한 뒤, 해당 범위의 `symbols`, `version`, `aspects`, `evidence_needs`를 다시 확인합니다. runtime이 새로운 출처 범위를 추론하지 않고 검색과 같은 출처 제약을 적용하는 구조입니다. 전체 원문은 소유자·구간 경계의 판단에 사용하지만, 내용의 충족 근거는 선택된 문자 범위에서만 인정합니다. 검색 성공이나 원문 전체에 있는 설명으로 잘린 발췌의 누락을 채우지 않습니다. 문자·항목 예산 때문에 요구가 남으면 `missing_needs`, `missing_requirements`, `is_partial`에 드러납니다.
 
@@ -541,7 +543,7 @@ HTTP `200`이나 `done`만으로 성공 처리하지 않습니다. 유효한 `fi
 - `basis`: `source`, `inference`, `example`, `interaction`, `excerpt`. 모델의 표현 분류이며 정확성 판정이 아닙니다.
 - `refs`: 최종 생성·검증 packet의 근거 ID. 서버가 최초 등장 순서대로 `citations.number`를 붙이고 사용한 `EvidenceRef`만 응답에 포함합니다.
 - `checks`: 내용 위치 ID에 대응하는 결정적 참조·발췌 검사. 일반 설명·해석은 이 검사에서 `not_evaluated`이며, `excerpt`는 단일 원문 발췌와 정확히 일치할 때만 `exact_match`입니다. 의미 검증 결과는 별도 `semantic_validation`에 있습니다.
-- `semantic_validation`: Decisions API의 사후 판정. `model`, `threshold`, `checks`의 `name`·`unit_id`·`probability`와 검사 대상의 `content_hash`·`evidence_fingerprint`를 보존합니다. `grounded`는 각 내용 단위의 근거성, `request_fulfilled`는 답변 전체의 요청 충족 여부입니다. 모든 확률이 임계값 이상일 때 통과하며, 판정이 없는 안내·실패 응답은 `null`입니다. 이는 모델의 확률적 판단이며 사실의 정확성을 보증하는 점수가 아닙니다.
+- `semantic_validation`: Decisions API의 사후 판정. `model`, `threshold`, `checks`의 `name`·`unit_id`·`status`·`probability`와 검사 대상의 `content_hash`·`evidence_fingerprint`를 보존합니다. `grounded`는 각 내용 단위의 근거성, `request_fulfilled`는 답변 전체의 요청 충족 여부입니다. 정상 판정은 `status="evaluated"`와 확률을, 개별 refusal은 `status="refused"`, `probability=null`을 기록합니다. 모든 항목이 정상 판정이고 확률이 임계값 이상일 때 통과하며, 판정이 없는 안내·실패 응답의 보고서는 `null`입니다. 이는 모델의 확률적 판단이며 사실의 정확성을 보증하는 점수가 아닙니다.
 - `issues`: 생성 실패·불완전한 답변 등 실제 제한. 전체 confidence 수치는 제공하지 않습니다.
 - `content_hash`: 본문 구조·basis·refs를 포함한 revision. 내용이 바뀌면 검사를 다시 수행해야 합니다. citation의 존재 여부, `issues`, `retrieval_required`, `actions`까지 포함한 전체 응답 digest는 아닙니다.
 - `retrieval_required`: 이 응답을 다시 검사할 때 유지할 출처 요구 조건. 검색 기반 응답의 생성 예시에도 참조가 필요한지 판단하는 데 사용합니다.
@@ -609,7 +611,26 @@ post-synthesis 검사에서 참조·내용·requirement coverage 문제가 있�
 
 새 응답 factory 안에서는 표시 문서와 검증한 근거에서 checks·citations·본문 hash를 한 번 계산합니다. 상태 복원·nested 모델·최종 export의 검증은 일관성 확인을 위해 checks·citations를 다시 계산합니다. post-synthesis 검사는 기록된 revision을 확인하고, 같은 문서·근거를 새 hash로 다시 확정하지 않습니다. 본문 필터링 또는 실제 근거 packet 변경 후에는 다시 확정합니다. mutable 근거의 원문 identity·범위·동일 ID 충돌 검사와 최종 export의 revision 검증은 유지합니다. `inline` 표시 방식은 본문 hash에 포함되므로 표시 방식이 다른 코드를 같은 원본 revision으로 취급하지 않습니다.
 
-Decisions의 사전 판정이 임계값에 미달하면 해당 요구사항만 재검색합니다. 사후 판정은 내용마다 연결된 원문만 근거로 사용하며, 다른 문장의 인용을 빌려 통과시키지 않습니다. 필수 의미 내용이 빠지거나 근거 없는 주장이 있으면 같은 확정 요청과 검색 결과로 본문을 보정합니다. 비교·설명 등의 의미 요구는 이 판정으로 검사하고, 참조·원문 발췌·본문 hash·요청 revision의 결정적 검사는 함께 적용합니다.
+Decisions 사전 검증은 두 단계로 진행합니다. 먼저 `(requirement_id, evidence_id)`별로 원문이 고정된 요구의 일부라도 뒷받침하는지 판정하고 `retrieval.evidence_verdicts`에 `passed`, `failed`, `refused`와 확률을 기록합니다. refusal의 확률은 `null`입니다. 원문 하나가 요구 전체를 충족할 필요는 없으며, 서로 보완하는 원문을 함께 사용할 수 있습니다. 같은 요청에서 동일한 요구·원문의 판정은 재사용하므로 통과한 원문을 다시 판정하지 않고, 실패·거절된 동일 원문도 재검색 결과에 섞였다는 이유로 복구하지 않습니다. 새로운 원문 ID는 새로 검증합니다. 원본 검색 관측은 진단에 남기고, 합성·검증·원문 fallback은 통과한 원문만 사용합니다.
+
+두 번째 단계는 통과한 원문만으로 `requirement_*`의 충분성과 `request_ready`를 판정합니다. `request_ready`가 명시적으로 거절되면 근거 요구의 부족 여부와 관계없이 `model_refusal`로 재검색과 합성을 중단합니다. 이 거절이 없으면 실패한 원문을 제외해도 요구가 충족되는지 확인하고, 충족되면 재검색하지 않습니다. docs와 upload 주제 검색의 로컬 coverage는 필터링·병합한 현재 근거에서 다시 계산하므로, 이전 검색 진단의 `partial`만으로 통과 원문들의 보완 효과를 무효화하지 않습니다. 요구 판정이 거절되거나 임계값에 미달하면 해당 요구만 `failed_requirement_ids`에 넣고 기존 검색 복구 정책을 적용합니다. 기본 `max_retries=1` 안에서 지원하는 docs 검색과 재검색 가능한 upload 주제·aspect 검색만 다시 계획합니다. upload의 symbol·definition 검색, retriever 부재와 지원하지 않는 source 제약은 쿼리 변경으로 해결할 수 없어 재검색하지 않습니다. 같은 요구 안에서 이미 통과한 원문도 `preserved_hits`에 남겨 새 후보와 함께 사용합니다.
+
+명시적인 readiness refusal이 없는 상태에서 재검색 한도를 소진했거나 재검색할 수 없는 요구는 `terminal_failed_requirement_ids`로 유지합니다. 통과한 근거가 남으면 그 범위에서 합성·사후 검증을 거친 `partial` 답변을 제공하고 누락을 명시하며 저장·전송을 막습니다. 사용할 근거가 없으면 `evidence_insufficient` 실패 안내를 제공합니다. `request_ready`가 수치 판정으로 임계값에 미달하고 근거 요구도 부족하면 그 요구의 검색 복구 가능성을 판단합니다. 모든 근거 요구가 충족됐는데 준비 확률만 낮으면 개별 근거의 실패로 해석하지 않고, `evidence_insufficient`로 재검색과 합성을 중단합니다.
+
+```mermaid
+flowchart TD
+    Sources["요구별 원문"] --> Check["원문별 판정"]
+    Check --> Accepted["통과 원문 유지"]
+    Check --> Rejected["실패·거절 원문 제외"]
+    Accepted --> Coverage["요구 충족·준비 상태 판정"]
+    Coverage -->|"충분하고 준비됨"| Synthesis["합성·사후 검증"]
+    Coverage -->|"준비 거절 없이 부족·재검색 가능"| Retry["실패 요구만 한 번 재검색"]
+    Retry --> Check
+    Coverage -->|"준비 거절 없이 복구 불가·한도 소진"| Partial["남은 근거로 부분 답변 또는 실패 안내"]
+    Coverage -->|"명시적 준비 거절 또는 준비 확률만 미달"| Stop["생성 중단"]
+```
+
+재검색에서도 통과한 원문과 기존 판정을 유지하고 새 후보만 검증합니다. 사후 판정은 내용마다 연결된 원문만 근거로 사용하며, 다른 문장의 인용을 빌려 통과시키지 않습니다. 개별 refusal은 해당 내용이나 요청 충족의 미통과로 기록하며, 필수 의미 내용이 빠지거나 근거 없는 주장이 있으면 같은 확정 요청과 검증된 검색 결과로 본문을 보정합니다. 비교·설명 등의 의미 요구는 이 판정으로 검사하고, 참조·원문 발췌·본문 hash·요청 revision의 결정적 검사는 함께 적용합니다.
 
 두 검증 단계에는 합성과 같은 턴 제한을 적용한 대화 이력과 대화 요약을 함께 전달합니다. 대화는 사용자 사실과 지시 대상의 해석에 쓰는 데이터이며, 확정 요청을 바꾸는 지시나 검색 근거를 대신하지 않습니다. 원문 근거에는 제목 경로, 선택 범위, 부분 발췌 여부와 선택된 표 셀의 행·열·병합 구조를 보존하고, 선택 밖의 셀 내용은 전달하지 않습니다.
 
