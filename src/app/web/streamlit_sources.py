@@ -7,6 +7,7 @@ import streamlit as st
 
 from src.core.documents import SourceAnchor, TableData
 from src.core.evidence import EvidenceRef, selected_source_anchors
+from src.core.python_source import PythonSourceMap
 
 
 def render_evidence(evidence: EvidenceRef) -> None:
@@ -81,8 +82,11 @@ def _format_anchor(anchor: SourceAnchor) -> str:
 
 
 def render_code(text: str, *, language: str, line_numbers: bool = False) -> None:
-    # Streamlit removes one boundary newline; framing preserves the original text.
-    st.code("\n" + text + "\n", language=language, line_numbers=line_numbers)
+    # The code widget lays out LF lines. Normalize only its display input;
+    # retained evidence and checked answer content keep their original bytes.
+    display_text = text.replace("\r\n", "\n").replace("\r", "\n")
+    # Streamlit removes one boundary newline; framing preserves blank lines.
+    st.code("\n" + display_text + "\n", language=language, line_numbers=line_numbers)
 
 
 def _line_range(start: int, end: int) -> str:
@@ -90,9 +94,9 @@ def _line_range(start: int, end: int) -> str:
 
 
 def _selection_location(evidence: EvidenceRef, *, start: int, end: int) -> str:
-    text = evidence.element.text
-    line_start = text.count("\n", 0, start) + 1
-    line_end = text.count("\n", 0, max(start, end - 1)) + 1
+    source = PythonSourceMap(evidence.element.text)
+    line_start = source.line_at_offset(start)
+    line_end = source.line_at_offset(max(start, end - 1))
     source_start = next(
         (anchor.line_start for anchor in evidence.element.anchors if anchor.line_start is not None),
         None,

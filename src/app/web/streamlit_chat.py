@@ -203,6 +203,9 @@ def _render_semantic_result(label: str, check: SemanticCheck | None, threshold: 
     if check is None or threshold is None:
         st.caption(f"{label}: 검증 안 됨")
         return
+    if check.status == "refused":
+        st.caption(f"{label}: 평가 거절 · 충족 확률 없음")
+        return
     status = "통과" if check.probability >= threshold else "미통과"
     st.caption(f"{label}: {status} · 충족 확률 {check.probability} · 임곗값 {threshold}")
 
