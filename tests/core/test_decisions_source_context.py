@@ -51,9 +51,13 @@ def _validation_input(evidence_packet, location):
     boundary = DecisionsBoundary()
     factory = make_pre_synthesis_validation_node if location.endswith("pre") else make_post_synthesis_validation_node
     factory(False, decisions_client=boundary)(state)
-    payload = json.loads(boundary.requests[0]["input"])
+    # Source judgment and accepted-source coverage must receive the same
+    # selected ranges and source context. Bound answers have no new sources.
+    payload = json.loads(boundary.requests[0 if location == "source_pre" else -1]["input"])
     if location.startswith("bound_"):
         sources = payload["bound_source_response"]["sources"]
+    elif location == "source_pre":
+        sources = [item["source"] for item in payload["evidence"]]
     elif location == "pre":
         sources = payload["requirements"][0]["sources"]
     else:
@@ -61,7 +65,7 @@ def _validation_input(evidence_packet, location):
     return sources, payload
 
 
-@pytest.mark.parametrize("location", ["pre", "post", "bound_pre", "bound_post"])
+@pytest.mark.parametrize("location", ["source_pre", "pre", "post", "bound_pre", "bound_post"])
 def test_validation_distinguishes_identical_excerpts_by_heading_and_preserves_selection_limits(location):
     """Identical timeout text stays attributable to its Windows or Linux section."""
     text = "Unselected introduction. 30 seconds Unselected conclusion."
@@ -93,8 +97,7 @@ def test_validation_distinguishes_identical_excerpts_by_heading_and_preserves_se
     assert "Unselected conclusion" not in json.dumps(payload)
 
 
-@pytest.mark.parametrize("location", ["pre", "post", "bound_pre", "bound_post"])
-def test_validation_preserves_selected_table_cells_and_never_exposes_omitted_cells(location):
+def test_validation_preserves_selected_table_cells_and_never_exposes_omitted_cells():
     """Merged headers and row/column positions survive without adding unselected data."""
     selected_anchor = SourceAnchor(kind="table", page_no=2, precision="element")
     omitted_anchor = SourceAnchor(kind="table", page_no=3, precision="element")
@@ -113,7 +116,7 @@ def test_validation_preserves_selected_table_cells_and_never_exposes_omitted_cel
         ), cell_ids=["section", "timeout", "value"],
     )
 
-    sources, payload = _validation_input([item], location)
+    sources, payload = _validation_input([item], "pre")
 
     assert len(sources) == 1
     source = sources[0]

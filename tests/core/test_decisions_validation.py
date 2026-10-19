@@ -18,6 +18,9 @@ from src.core.planner_schema import PlannerOutput, RetrievalTask
 from src.core.request_contracts import RequestContract
 from src.infra.decisions import DecisionsClient
 from src.runtime.nodes.validation import make_post_synthesis_validation_node, make_pre_synthesis_validation_node
+from src.runtime.nodes.validation.models import ValidationAssessment
+from src.runtime.nodes.validation.semantic import assess_pre_semantics
+from src.runtime.nodes.validation.snapshot import collect_validation_snapshot
 
 
 class DecisionsBoundary(DecisionsClient):
@@ -58,9 +61,9 @@ class DecisionsBoundary(DecisionsClient):
         })
 
 
-def _evidence(source_text, *, subject="pathlib.Path.exists"):
+def _evidence(source_text, *, subject="pathlib.Path.exists", source_uri=None):
     source = build_snapshot(
-        source_uri=f"https://docs.python.org/3/library/pathlib.html#{subject}",
+        source_uri=source_uri or f"https://docs.python.org/3/library/pathlib.html#{subject}",
         title=subject, media_type="text/plain", source_type="official",
         content=source_text, parser="test", parser_version="1",
     )
@@ -122,6 +125,79 @@ def test_pre_validation_uses_decisions_probability_for_covered_evidence(probabil
     assert state["response"].evidence_packet[0].excerpt in request["input"]
 
 
+@pytest.mark.parametrize("max_retries, remaining_failure", [
+    (1, None),
+    (0, "requirement_0"),
+    (1, "requirement_0"),
+    (1, "request_ready"),
+    (0, "tool_error"),
+    (1, "tool_error"),
+], ids=[
+    "covered", "semantic-gap-terminal", "semantic-gap-retry",
+    "request-not-ready", "provider-error-terminal", "provider-error-retry",
+])
+def test_pre_validation_recomputes_static_failures_after_rejecting_a_source(max_retries, remaining_failure):
+    """Rejected API headings cannot leave stale failures or erase independent failures."""
+    task = RetrievalTask(
+        route="docs", query="mean", k=2, requirement_id="mean_parameter",
+        requirement={"library": "numpy", "evidence_needs": ["parameters"]},
+    )
+    good = _evidence(
+        "# numpy.var\nnumpy.var(a, mean=None)\n\nParameters\n"
+        "mean: Supplies the mean value used to compute the variance.\n",
+        subject="numpy.var", source_uri="https://numpy.org/doc/stable/reference/generated/numpy.var.html",
+    )
+    rejected = _evidence(
+        "# numpy.mean\n", subject="numpy.mean",
+        source_uri="https://numpy.org/doc/stable/reference/generated/numpy.mean.html",
+    )
+    state = _state()
+    state["runtime"] = state["runtime"].model_copy(update={"user_input": "numpy.var의 mean 매개변수를 설명해 주세요."})
+    state["planner"] = PlannerState(output=PlannerOutput(use_retrieval=True, tasks=[task]))
+    state["retrieval"] = RetrievalState(hit_log=[
+        SearchHit(evidence=evidence, requirement_id=task.requirement_id, rank=index + 1,
+                  score=RetrievalScore(metric="rank", raw=index + 1, direction="lower"))
+        for index, evidence in enumerate([good, rejected])
+    ])
+    state["debug"] = DebugState(retrieval_diagnostics=[RetrievalDiagnostic(
+        route="docs", requirement_id=task.requirement_id, evidence_count=2,
+        status="error" if remaining_failure == "tool_error" else "success", answerability="partial",
+        error_code="RETRIEVAL_DOCS_FAILED" if remaining_failure == "tool_error" else None,
+    )])
+    state["retry"] = RetryState(max_retries=max_retries)
+    state["response"] = ResponseState()
+    probabilities = {"evidence_1": 0.1}
+    if remaining_failure in {"requirement_0", "request_ready"}:
+        probabilities[remaining_failure] = 0.1
+    boundary = DecisionsBoundary(probabilities)
+
+    updates = make_pre_synthesis_validation_node(False, decisions_client=boundary)(state)
+
+    assert [verdict.status for verdict in updates["retrieval"].evidence_verdicts] == ["passed", "failed"]
+    requirements = json.loads(boundary.requests[-1]["input"])["requirements"]
+    assert [source["id"] for source in requirements[0]["sources"]] == [good.id]
+    retry = updates["retry"]
+    if remaining_failure in {"requirement_0", "tool_error"}:
+        assert retry.needs_retry is bool(max_retries)
+        assert retry.retry_reason == ("tool_error" if remaining_failure == "tool_error" else "no_evidence")
+        assert retry.failed_requirement_ids == [task.requirement_id]
+        assert retry.terminal_failed_requirement_ids == ([] if max_retries else [task.requirement_id])
+        assert [hit.evidence.id for hit in retry.preserved_hits] == [good.id]
+    else:
+        assert retry.needs_retry is False
+        assert retry.attempt == 0
+        assert retry.failed_requirement_ids == []
+        assert retry.failed_routes == []
+        assert retry.terminal_failed_requirement_ids == []
+        assert retry.terminal_retrieval_reason is None
+        if remaining_failure == "request_ready":
+            assert retry.retry_reason == "missing_content"
+            assert updates["response"].kind == "failure"
+        else:
+            assert retry.retry_reason is None
+            assert "response" not in updates
+
+
 def test_pre_validation_checks_readiness_without_retrieval():
     """검색 없는 요청도 Decisions 준비 판정을 거쳐 부적합한 요청의 합성을 막는다."""
     state = _state(retrieval=False, answer="안녕하세요.")
@@ -134,6 +210,29 @@ def test_pre_validation_checks_readiness_without_retrieval():
     assert updates["retry"].retry_reason == "missing_content"
     assert updates["response"].kind == "failure"
     assert updates["response"].problem is not None
+
+
+def test_request_readiness_refusal_stops_even_when_a_requirement_lacks_coverage():
+    """A refused whole request cannot become a partial body through an unrelated source gap."""
+    from src.runtime.make_graph import _pre_synthesis_route
+
+    state = _state()
+    accepted_hit = state["retrieval"].hit_log[0]
+    state["response"] = ResponseState()
+    state["retry"] = RetryState(max_retries=1)
+    boundary = DecisionsBoundary({"requirement_0": 0.1}, refused_names={"request_ready"})
+
+    state.update(make_pre_synthesis_validation_node(False, decisions_client=boundary)(state))
+
+    assert state["retry"].needs_retry is False
+    assert state["retry"].attempt == 0
+    assert state["response"].kind == "failure"
+    assert state["response"].problem.code == "model_refusal"
+    assert _pre_synthesis_route(state)[0] == "action_postprocess"
+    verdict = state["retrieval"].evidence_verdicts[0]
+    assert (verdict.requirement_id, verdict.evidence_id, verdict.status) == (
+        accepted_hit.requirement_id, accepted_hit.evidence.id, "passed",
+    )
 
 
 @pytest.mark.parametrize("factory", [make_pre_synthesis_validation_node, make_post_synthesis_validation_node])
@@ -256,6 +355,65 @@ def test_post_validation_repairs_unfulfilled_request_without_retrieval():
     assert updates["retry"].needs_retry is True
     assert updates["retry"].retry_reason == "missing_content"
     assert updates["retry"].retry_scope == "reuse_hits_resynthesize"
+    assert updates["retry"].failed_routes == []
+
+
+def test_post_validation_repairs_only_a_refused_unit_and_preserves_accepted_sources():
+    state = _state()
+    response = state["response"]
+    refused_text = "Path.exists()에 관한 검증되지 않은 추가 주장입니다."
+    document = AnswerDocument(blocks=[
+        *response.result.content.blocks,
+        *text_document(refused_text, basis="source", refs=[response.evidence_packet[0].id]).blocks,
+    ])
+    state["response"] = response.model_copy(update={
+        "result": finalize_answer(document, response.evidence_packet, retrieval_required=True),
+    })
+    boundary = DecisionsBoundary(refused_names={"grounded_1"})
+
+    updates = make_post_synthesis_validation_node(False, decisions_client=boundary)(state)
+
+    assert updates["retry"].needs_retry is True
+    assert updates["retry"].retry_scope == "reuse_hits_resynthesize"
+    assert updates["retry"].content_repair_attempt == 1
+    assert updates["retry"].preserved_hits[0].evidence == response.evidence_packet[0]
+    assert "b1.content.0" in updates["retry"].retrieval_feedback
+    assert "b0.content.0" not in updates["retry"].retrieval_feedback
+
+
+def test_post_validation_filters_a_refused_unit_then_checks_the_retained_body():
+    state = _state(repairs=0)
+    response = state["response"]
+    refused_text = "Path.exists()에 관한 검증되지 않은 추가 주장입니다."
+    document = AnswerDocument(blocks=[
+        *response.result.content.blocks,
+        *text_document(refused_text, basis="source", refs=[response.evidence_packet[0].id]).blocks,
+    ])
+    state["response"] = response.model_copy(update={
+        "result": finalize_answer(document, response.evidence_packet, retrieval_required=True),
+    })
+    boundary = DecisionsBoundary(refused_names={"grounded_1"})
+
+    updates = make_post_synthesis_validation_node(False, decisions_client=boundary)(state)
+
+    assert len(boundary.requests) == 2
+    assert refused_text in boundary.requests[0]["input"]
+    assert refused_text not in boundary.requests[1]["input"]
+    assert updates["response"].kind == "answer"
+    assert updates["response"].result.content == response.result.content
+    assert updates["response"].result.citations == response.result.citations
+    assert updates["response"].result.semantic_validation.passed
+
+
+def test_post_validation_request_fulfillment_refusal_uses_body_repair_without_research():
+    state = _state()
+    boundary = DecisionsBoundary(refused_names={"request_fulfilled"})
+
+    updates = make_post_synthesis_validation_node(False, decisions_client=boundary)(state)
+
+    assert updates["retry"].needs_retry is True
+    assert updates["retry"].retry_scope == "reuse_hits_resynthesize"
+    assert updates["retry"].content_repair_attempt == 1
     assert updates["retry"].failed_routes == []
 
 
@@ -451,65 +609,3 @@ def test_decisions_failure_cannot_silently_pass_validation(factory, stage):
 
     assert raised.value.problem.code == "provider_unavailable"
     assert raised.value.problem.stage == stage
-
-
-def test_post_validation_repairs_only_a_refused_unit_and_preserves_accepted_sources():
-    state = _state()
-    response = state["response"]
-    refused_text = "Path.exists()에 관한 검증되지 않은 추가 주장입니다."
-    document = AnswerDocument(blocks=[
-        *response.result.content.blocks,
-        *text_document(refused_text, basis="source", refs=[response.evidence_packet[0].id]).blocks,
-    ])
-    state["response"] = response.model_copy(update={
-        "result": finalize_answer(document, response.evidence_packet, retrieval_required=True),
-    })
-    boundary = DecisionsBoundary(refused_names={"grounded_1"})
-
-    updates = make_post_synthesis_validation_node(False, decisions_client=boundary)(state)
-
-    assert updates["retry"].needs_retry is True
-    assert updates["retry"].retry_scope == "reuse_hits_resynthesize"
-    assert updates["retry"].content_repair_attempt == 1
-    assert updates["retry"].preserved_hits[0].evidence == response.evidence_packet[0]
-    assert "b1.content.0" in updates["retry"].retrieval_feedback
-    assert "b0.content.0" not in updates["retry"].retrieval_feedback
-
-
-
-def test_post_validation_filters_a_refused_unit_then_checks_the_retained_body():
-    state = _state(repairs=0)
-    response = state["response"]
-    refused_text = "Path.exists()에 관한 검증되지 않은 추가 주장입니다."
-    document = AnswerDocument(blocks=[
-        *response.result.content.blocks,
-        *text_document(refused_text, basis="source", refs=[response.evidence_packet[0].id]).blocks,
-    ])
-    state["response"] = response.model_copy(update={
-        "result": finalize_answer(document, response.evidence_packet, retrieval_required=True),
-    })
-    boundary = DecisionsBoundary(refused_names={"grounded_1"})
-
-    updates = make_post_synthesis_validation_node(False, decisions_client=boundary)(state)
-
-    assert len(boundary.requests) == 2
-    assert refused_text in boundary.requests[0]["input"]
-    assert refused_text not in boundary.requests[1]["input"]
-    assert updates["response"].kind == "answer"
-    assert updates["response"].result.content == response.result.content
-    assert updates["response"].result.citations == response.result.citations
-    assert updates["response"].result.semantic_validation.passed
-
-
-
-def test_post_validation_request_fulfillment_refusal_uses_body_repair_without_research():
-    state = _state()
-    boundary = DecisionsBoundary(refused_names={"request_fulfilled"})
-
-    updates = make_post_synthesis_validation_node(False, decisions_client=boundary)(state)
-
-    assert updates["retry"].needs_retry is True
-    assert updates["retry"].retry_scope == "reuse_hits_resynthesize"
-    assert updates["retry"].content_repair_attempt == 1
-    assert updates["retry"].failed_routes == []
-

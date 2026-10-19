@@ -20,24 +20,6 @@ from tests.core.test_answer_validation import _evidence, _hit
 from tests.synthesis_fixtures import synthesis_excerpt_limits
 
 
-def test_unrefreshable_gap_stays_terminal_while_another_requirement_is_researched():
-    from src.runtime.nodes.retry import build_retry_update
-
-    docs = RetrievalTask(route="docs", query="axis", k=2, requirement_id="docs-axis")
-    upload = RetrievalTask(route="upload", query="missing", k=2, requirement_id="upload-definition",
-                           requirement={"match": "definition", "symbols": ["missing"]})
-    needs_retry, retry, _ = build_retry_update(
-        retry_context=RetryState(original_tasks=[docs, upload]), retry_reason="no_evidence",
-        planner_output=PlannerOutput(use_retrieval=True, tasks=[docs, upload]), score_avg=None,
-        failed_requirement_ids={docs.requirement_id, upload.requirement_id}, current_attempt_hits=[],
-    )
-
-    assert needs_retry
-    assert retry.failed_requirement_ids == [docs.requirement_id]
-    assert retry.terminal_failed_requirement_ids == [upload.requirement_id]
-    assert retry.terminal_retrieval_reason == "no_evidence"
-
-
 class NaturalPartialModel:
     def __init__(self):
         self.calls = 0

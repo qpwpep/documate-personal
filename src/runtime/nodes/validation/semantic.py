@@ -9,6 +9,7 @@ from src.core.answer_schema import (
     semantic_evidence_fingerprint,
 )
 from src.core.answer_schema.models import validated_evidence_by_id
+from src.core.contracts.graph_state import EvidenceVerdict
 from src.core.decisions import DecisionResult
 from src.core.evidence import EvidenceRef, selected_source_anchors
 from src.core.llm_errors import LLMCallError, make_problem
@@ -103,6 +104,55 @@ def _require_bound_source(snapshot: ValidationSnapshot, *, stage: str) -> None:
         raise LLMCallError(make_problem("evidence_insufficient", stage))
 
 
+def _assess_source_semantics(
+    snapshot: ValidationSnapshot, assessment: ValidationAssessment, *,
+    decisions_client: DecisionEvaluator, threshold: float, attempt: int,
+) -> None:
+    """Judge each immutable source once for its fixed retrieval requirement."""
+    tasks = {task.requirement_id: task for task in snapshot.planner_output.tasks}
+    verdicts = {(item.requirement_id, item.evidence_id): item for item in snapshot.evidence_verdicts}
+    candidates = {}
+    for hit in snapshot.parsed_hits:
+        key = (hit.requirement_id, hit.evidence.id)
+        if hit.requirement_id in tasks and key not in verdicts:
+            candidates.setdefault(key, hit)
+    evidence = []
+    questions = []
+    for index, (key, hit) in enumerate(candidates.items()):
+        name = f"evidence_{index}"
+        evidence.append({"name": name, "task": tasks[key[0]].model_dump(mode="json"), "source": _source(hit.evidence)})
+        questions.append({
+            "type": "predicate", "name": name,
+            "instructions": (
+                f"For evidence[{index}], is this source excerpt relevant and usable as evidence for at least "
+                "part of its task's actual subject, version, requested aspects and source scope? "
+                "The excerpt need not satisfy the whole task by itself; complementary source excerpts may "
+                "supply other required facts. Reject unrelated, mismatched or unreliable evidence. "
+                "Judge the selected excerpt and its source context, not a retrieval score or matching title alone."
+            ),
+        })
+    if questions:
+        decisions = decisions_client.evaluate(
+            input=json.dumps({**_context(snapshot), "evidence": evidence}, ensure_ascii=False),
+            questions=_predicate_instructions(questions), stage="pre_synthesis_validation", attempt=attempt,
+        )
+        assessment.semantic_probabilities.update(decisions.probabilities)
+        assessment.semantic_refusals.update(decisions.refused_names)
+        for index, (requirement_id, evidence_id) in enumerate(candidates):
+            name = f"evidence_{index}"
+            refused = name in decisions.refused_names
+            probability = None if refused else decisions.probabilities[name]
+            verdicts[(requirement_id, evidence_id)] = EvidenceVerdict(
+                requirement_id=requirement_id, evidence_id=evidence_id, probability=probability,
+                status="refused" if refused else "passed" if probability >= threshold else "failed",
+            )
+    assessment.evidence_verdicts = list(verdicts.values())
+    assessment.accepted_hits = [
+        hit for hit in snapshot.parsed_hits
+        if (verdict := verdicts.get((hit.requirement_id, hit.evidence.id))) is not None and verdict.status == "passed"
+    ]
+
+
 def assess_pre_semantics(
     snapshot: ValidationSnapshot, assessment: ValidationAssessment, *,
     decisions_client: DecisionEvaluator, threshold: float, attempt: int,
@@ -110,13 +160,16 @@ def assess_pre_semantics(
     _require_bound_source(snapshot, stage="pre_synthesis_validation")
     # Revalidate mutable evidence before trusting excerpts sent to the provider.
     validated_evidence_by_id([hit.evidence for hit in snapshot.parsed_hits])
+    _assess_source_semantics(
+        snapshot, assessment, decisions_client=decisions_client, threshold=threshold, attempt=attempt,
+    )
     requirements = []
     questions = []
     for index, task in enumerate(snapshot.planner_output.tasks):
         name = f"requirement_{index}"
         requirements.append({
             "name": name, "task": task.model_dump(mode="json"),
-            "sources": [_source(hit.evidence) for hit in snapshot.parsed_hits
+            "sources": [_source(hit.evidence) for hit in assessment.accepted_hits
                         if hit.requirement_id == task.requirement_id],
         })
         questions.append({
@@ -145,23 +198,25 @@ def assess_pre_semantics(
         questions=_predicate_instructions(questions), stage="pre_synthesis_validation", attempt=attempt,
     )
     probabilities = decisions.probabilities
-    assessment.semantic_probabilities = probabilities
-    assessment.semantic_refusals = decisions.refused_names
-    assessment.score_avg = sum(probabilities.values()) / len(probabilities) if probabilities else None
+    assessment.semantic_probabilities.update(probabilities)
+    assessment.semantic_refusals.update(decisions.refused_names)
+    values = assessment.semantic_probabilities.values()
+    assessment.score_avg = sum(values) / len(values) if values else None
     for index, task in enumerate(snapshot.planner_output.tasks):
-        if f"requirement_{index}" in decisions.refused_names or probabilities[f"requirement_{index}"] < threshold:
+        name = f"requirement_{index}"
+        if name in decisions.refused_names or probabilities[name] < threshold:
             assessment.failed_requirement_ids.add(task.requirement_id)
             assessment.failed_routes.add(task.route)
-    request_unready = "request_ready" in decisions.refused_names or probabilities["request_ready"] < threshold
-    if request_unready and not assessment.failed_requirement_ids:
-        assessment.failed_requirement_ids.update(task.requirement_id for task in snapshot.planner_output.tasks)
-        assessment.failed_routes.update(task.route for task in snapshot.planner_output.tasks)
-        if not snapshot.planner_output.tasks:
-            assessment.missing_content.append("request_readiness")
-    if assessment.retry_reason is None and (
-        assessment.failed_requirement_ids or request_unready
-    ):
-        assessment.retry_reason = "no_evidence" if snapshot.planner_output.tasks else "missing_content"
+    assessment.request_readiness_failed = (
+        "request_ready" in decisions.refused_names or probabilities["request_ready"] < threshold
+    )
+    if assessment.request_readiness_failed and not assessment.failed_requirement_ids:
+        assessment.missing_content.append("request_readiness")
+    if assessment.retry_reason is None:
+        if assessment.failed_requirement_ids:
+            assessment.retry_reason = "no_evidence"
+        elif assessment.request_readiness_failed:
+            assessment.retry_reason = "missing_content"
 
 
 def assess_post_semantics(

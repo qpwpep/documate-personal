@@ -195,22 +195,24 @@ def test_transient_error_retries_same_request_with_observed_attempts(invoke):
     assert diagnostics[0].recovery == "retry"
 
 
-def test_calls_share_the_stage_budget_across_retrieval_retries(invoke):
-    result, seen, usage, diagnostics = invoke([decision()], repeat=4)
+@pytest.mark.parametrize("stage, max_calls", [(STAGE, 6), ("post_synthesis_validation", 3)])
+def test_calls_share_the_stage_budget_across_retrieval_retries(invoke, stage, max_calls):
+    result, seen, usage, diagnostics = invoke([decision()], repeat=max_calls + 1, stage=stage)
     assert result.problem.code == "call_budget_exhausted"
-    assert len(seen) == 3
-    assert len(usage) == 3
+    assert len(seen) == max_calls
+    assert len(usage) == max_calls
     assert diagnostics[-1].budget_reason == "calls"
 
 
-def test_transient_failures_stop_after_three_requests_without_sdk_nested_retries(invoke):
+def test_transient_failures_stop_at_stage_budget_without_sdk_nested_retries(invoke):
+    stage, max_calls = "post_synthesis_validation", 3
     result, seen, usage, diagnostics = invoke([
         httpx.Response(503, json={"error": {"code": "server_error"}}, headers={"retry-after": "0"}),
-    ])
+    ], stage=stage)
     assert result.problem.code == "provider_unavailable"
-    assert len(seen) == 3
-    assert [record.attempt for record in usage] == [1, 2, 3]
-    assert [diagnostic.recovery for diagnostic in diagnostics] == ["retry", "retry", "stop"]
+    assert len(seen) == max_calls
+    assert [record.attempt for record in usage] == list(range(1, max_calls + 1))
+    assert [diagnostic.recovery for diagnostic in diagnostics] == ["retry"] * (max_calls - 1) + ["stop"]
 
 
 def test_timeout_recovers_through_the_same_bounded_sdk_path(invoke):

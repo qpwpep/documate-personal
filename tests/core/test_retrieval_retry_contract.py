@@ -151,6 +151,96 @@ def test_duplicate_request_reuse_does_not_restore_refused_evidence():
     assert diagnostic.evidence_count == 1
 
 
+def test_complementary_upload_refresh_can_complete_coverage_with_preserved_sources():
+    """새 검색 결과 단독으로는 partial이어도 통과 원문과 합친 실제 범위를 평가한다."""
+    from types import SimpleNamespace
+
+    from src.core.contracts import RetrievalState
+    from src.infra.tools.local_rag.tool import build_upload_search_tool
+    from src.runtime.nodes.validation import make_pre_synthesis_validation_node
+    from tests.core.helpers import make_decisions_client
+    from tests.core.test_answer_validation import _evidence, _hit
+
+    task = RetrievalTask(route="upload", query="alpha beta", k=1, requirement_id="parts",
+                         requirement={"match": "topic", "aspects": ["alpha", "beta"]})
+    accepted = _hit(_evidence("alpha = 1\n")).model_copy(update={"requirement_id": task.requirement_id})
+    replacement = _evidence("beta = 2\n")
+    vectorstore = SimpleNamespace(similarity_search_with_score=lambda query, **kwargs: [(replacement, 0.1)])
+    state = build_test_state({
+        "user_input": "alpha와 beta를 설명해 주세요.", "request_contract": RequestContract(),
+        "planner_output": PlannerOutput(use_retrieval=True, tasks=[task]),
+        "retriever": SimpleNamespace(vectorstore=vectorstore),
+        "retrieval": RetrievalState(hit_log=[accepted], evidence_verdicts=[_verdict(accepted, "passed")]),
+        "retry": RetryState(attempt=1, max_retries=1, retry_reason="no_evidence",
+                            failed_requirement_ids=[task.requirement_id], hit_start_index=1),
+    })
+    state.update(make_retrieve_dispatch_node(None, build_upload_search_tool(), False)(state))
+    assert state["debug"].retrieval_diagnostics[-1].answerability == "partial"
+
+    state.update(make_pre_synthesis_validation_node(False, decisions_client=make_decisions_client())(state))
+
+    assert state["retry"].needs_retry is False
+    assert state["retry"].failed_requirement_ids == []
+    assert state["retry"].terminal_failed_requirement_ids == []
+    assert state["retry"].retry_reason is None
+    assert {item.evidence_id for item in state["retrieval"].evidence_verdicts if item.status == "passed"} == {
+        accepted.evidence.id, replacement.id,
+    }
+
+
+@pytest.mark.parametrize("rejected_status", ["failed", "refused"])
+def test_rejected_source_cannot_keep_a_previously_covered_upload_requirement_complete(rejected_status):
+    """원문 제외로 필요한 항목이 빠지면 과거 covered 진단으로 누락을 가리지 않는다."""
+    from src.core.contracts import RetrievalDiagnostic, RetrievalState
+    from src.runtime.nodes.validation import make_pre_synthesis_validation_node
+    from tests.core.helpers import make_decisions_client
+    from tests.core.test_answer_validation import _evidence, _hit
+
+    task = RetrievalTask(route="upload", query="alpha beta", k=2, requirement_id="parts",
+                         requirement={"match": "topic", "aspects": ["alpha", "beta"]})
+    accepted, rejected = [_hit(_evidence(text)).model_copy(update={"requirement_id": task.requirement_id})
+                          for text in ("alpha = 1\n", "beta = 2\n")]
+    state = build_test_state({
+        "user_input": "alpha와 beta를 설명해 주세요.", "request_contract": RequestContract(),
+        "planner_output": PlannerOutput(use_retrieval=True, tasks=[task]),
+        "retrieval": RetrievalState(hit_log=[accepted, rejected],
+                                    evidence_verdicts=[_verdict(accepted, "passed"), _verdict(rejected, rejected_status)]),
+        "retrieval_diagnostics": [RetrievalDiagnostic(route="upload", requirement_id=task.requirement_id,
+                                                       status="success", answerability="covered")],
+    })
+
+    state.update(make_pre_synthesis_validation_node(False, decisions_client=make_decisions_client())(state))
+
+    assert state["retry"].needs_retry is True
+    assert state["retry"].failed_requirement_ids == [task.requirement_id]
+    assert state["retry"].preserved_hits == [accepted]
+
+
+def test_complete_retained_coverage_does_not_hide_a_partial_provider_failure():
+    """범위를 합쳐 충족해도 검색 중 보고된 기술적 실패는 완료로 바꾸지 않는다."""
+    from src.core.contracts import RetrievalDiagnostic, RetrievalState
+    from src.runtime.nodes.validation import make_pre_synthesis_validation_node
+    from tests.core.helpers import make_decisions_client
+    from tests.core.test_answer_validation import _evidence, _hit
+
+    task = RetrievalTask(route="upload", query="alpha", k=1, requirement_id="part",
+                         requirement={"match": "topic", "aspects": ["alpha"]})
+    accepted = _hit(_evidence("alpha = 1\n")).model_copy(update={"requirement_id": task.requirement_id})
+    state = build_test_state({
+        "user_input": "alpha를 설명해 주세요.", "request_contract": RequestContract(),
+        "planner_output": PlannerOutput(use_retrieval=True, tasks=[task]),
+        "retrieval": RetrievalState(hit_log=[accepted], evidence_verdicts=[_verdict(accepted, "passed")]),
+        "retrieval_diagnostics": [RetrievalDiagnostic(route="upload", requirement_id=task.requirement_id,
+            status="success", answerability="partial", error_code="LOCAL_RAG_FAILED")],
+        "retry": RetryState(max_retries=0),
+    })
+
+    state.update(make_pre_synthesis_validation_node(False, decisions_client=make_decisions_client())(state))
+
+    assert state["retry"].terminal_failed_requirement_ids == [task.requirement_id]
+    assert state["retry"].terminal_retrieval_reason == "tool_error"
+
+
 @pytest.mark.parametrize("retry_reason", [None, "tool_error", "no_evidence"])
 def test_dispatch_retries_timeout_after_partial_success_without_repeating_completed_http_query(monkeypatch, retry_reason):
     """A successful partial result is not a completed search when its next provider request failed."""

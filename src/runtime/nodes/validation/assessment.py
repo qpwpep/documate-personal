@@ -3,6 +3,7 @@ from __future__ import annotations
 from src.core.answer_schema import AnswerResponse, finalize_answer, iter_content_units
 from src.core.answer_schema.models import validated_evidence_by_id
 from src.core.request_contracts import check_answer_contract
+from src.runtime.nodes.synthesis.evidence_selection import requirement_coverage
 from src.runtime.nodes.validation.models import ValidationAssessment, ValidationSnapshot
 from src.runtime.nodes.validation.route_policy import route_error_statuses
 from src.runtime.nodes.validation.snapshot import detect_missing_requirement_coverage
@@ -24,13 +25,32 @@ def assess_retrieval_quality(snapshot: ValidationSnapshot) -> ValidationAssessme
         statuses = route_error_statuses(diagnostics)
         if route == "upload" and "unavailable" in statuses:
             assessment.failed_requirement_ids.add(task.requirement_id)
-        elif "error" in statuses or "unavailable" in statuses:
+        elif "error" in statuses or "unavailable" in statuses or any(d.error_code is not None for d in diagnostics):
             assessment.tool_error_routes.add(route)
             assessment.failed_requirement_ids.add(task.requirement_id)
-        elif (not hits or any(d.answerability in {"missing", "partial"} for d in diagnostics)
-              or (task.requirement.specified and not any(d.answerability == "covered" for d in diagnostics))):
-            assessment.route_failures[route] = "no_evidence"
-            assessment.failed_requirement_ids.add(task.requirement_id)
+        else:
+            # Retrieval diagnostics describe the candidates returned by that
+            # invocation. Validation may remove rejected sources or merge
+            # accepted fragments from an earlier search, so assess the actual
+            # remaining ranges instead of reusing an obsolete coverage verdict.
+            coverage = requirement_coverage(
+                task, [hit.evidence for hit in hits],
+                {hit.evidence.id: [task.requirement_id] for hit in hits},
+            )
+            requirement = task.requirement
+            # Literal topic coverage cannot establish an exact uploaded code
+            # definition or unsupported source constraints. Preserve the source
+            # analyzer's stronger checks for these cases.
+            needs_source_analysis = task.route == "upload" and (
+                requirement.match != "topic" or requirement.library or requirement.version or requirement.evidence_needs
+            )
+            source_analysis_incomplete = needs_source_analysis and (
+                any(d.answerability in {"missing", "partial"} for d in diagnostics)
+                or not any(d.answerability == "covered" for d in diagnostics)
+            )
+            if coverage["is_partial"] or source_analysis_incomplete:
+                assessment.route_failures[route] = "no_evidence"
+                assessment.failed_requirement_ids.add(task.requirement_id)
     if assessment.tool_error_routes:
         assessment.retry_reason = "tool_error"
         assessment.failed_routes = set(assessment.tool_error_routes)

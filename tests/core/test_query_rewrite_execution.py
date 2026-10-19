@@ -95,7 +95,8 @@ def test_planner_text_rewrite_reaches_http_and_recovers_missing_evidence(docs_ht
 
 
 @pytest.mark.parametrize("same_uri", [True, False], ids=["new-snapshot-same-uri", "new-uri"])
-def test_semantic_rejection_refreshes_covered_evidence_and_selects_new_source(monkeypatch, same_uri):
+@pytest.mark.parametrize("source_accepted", [True, False], ids=["incomplete-source", "rejected-source"])
+def test_semantic_rejection_refreshes_covered_evidence_and_selects_new_source(monkeypatch, same_uri, source_accepted):
     initial_query = "numpy.reshape behavior"
     rewritten_query = "numpy.reshape compatible shape -1 dimension inference"
     initial_url = "https://numpy.org/doc/2.4/reference/generated/numpy.reshape.html"
@@ -132,12 +133,19 @@ def test_semantic_rejection_refreshes_covered_evidence_and_selects_new_source(mo
             })
         assert request.url.path == "/v1/decisions"
         context = json.loads(payload["input"])
-        excerpts = [source["excerpt"] for requirement in context["requirements"] for source in requirement["sources"]]
-        decision_sources.append(excerpts)
-        probability = 0.99 if any("One shape dimension can be -1" in text for text in excerpts) else 0.1
+        if "evidence" in context:
+            probabilities = {
+                item["name"]: 0.99 if source_accepted or "One shape dimension can be -1" in item["source"]["excerpt"] else 0.1
+                for item in context["evidence"]
+            }
+        else:
+            excerpts = [source["excerpt"] for requirement in context["requirements"] for source in requirement["sources"]]
+            decision_sources.append(excerpts)
+            probability = 0.99 if any("One shape dimension can be -1" in text for text in excerpts) else 0.1
+            probabilities = {question["name"]: probability for question in payload["questions"]}
         return httpx.Response(200, json={
             "model": "gpt-6-luna",
-            "answers": [{"type": "predicate", "name": question["name"], "probability": probability}
+            "answers": [{"type": "predicate", "name": question["name"], "probability": probabilities[question["name"]]}
                         for question in payload["questions"]],
             "usage": {"input_tokens": 20, "output_tokens": 0, "total_tokens": 20},
         })
@@ -177,6 +185,7 @@ def test_semantic_rejection_refreshes_covered_evidence_and_selects_new_source(mo
         assert state["retry"].needs_retry
         assert state["retry"].retry_reason == "no_evidence"
         assert state["retry"].failed_requirement_ids == [task.requirement_id]
+        assert state["retrieval"].evidence_verdicts[0].status == ("passed" if source_accepted else "failed")
         state.update(make_planner_node(None, False, llm_planner_retry=planner_model)(state))
         state.update(dispatch(state))
 
@@ -184,9 +193,10 @@ def test_semantic_rejection_refreshes_covered_evidence_and_selects_new_source(mo
         diagnostic = state["debug"].retrieval_diagnostics[-1]
         assert not diagnostic.reused
         assert [request.query for request in diagnostic.provider_requests] == [rewritten_query]
-        assert diagnostic.candidate_count == 2
+        assert diagnostic.candidate_count == (2 if source_accepted else 1)
         fresh_hits = state["retrieval"].hit_log[state["retry"].hit_start_index:]
         assert any(hit.evidence.excerpt == fresh_text for hit in fresh_hits)
+        assert any(hit.evidence.id == old_hit.evidence.id for hit in fresh_hits) == source_accepted
         assert any(hit.evidence.id == old_hit.evidence.id for hit in state["retrieval"].hit_log)
         fresh_hit = next(hit for hit in fresh_hits if hit.evidence.excerpt == fresh_text)
         assert fresh_hit.evidence.snapshot.source_uri == fresh_url
@@ -195,7 +205,9 @@ def test_semantic_rejection_refreshes_covered_evidence_and_selects_new_source(mo
         state.update(validate(state))
         assert not state["retry"].needs_retry
         assert not state["retry"].failed_requirement_ids
-        assert decision_sources == [[initial_text], [fresh_text]]
+        assert decision_sources == (
+            [[initial_text], [initial_text, fresh_text]] if source_accepted else [[], [fresh_text]]
+        )
 
 
 @pytest.mark.parametrize("same_query", [False, True], ids=["rewritten-query", "same-query"])
@@ -251,17 +263,22 @@ def test_semantic_rejection_refreshes_docs_alongside_another_requirement_timeout
             })
         assert request.url.path == "/v1/decisions"
         context = json.loads(payload["input"])
-        excerpts = {requirement["task"]["requirement_id"]: [source["excerpt"] for source in requirement["sources"]]
-                    for requirement in context["requirements"]}
-        decision_sources.append(excerpts)
-        supported = {
-            symbol: any("One shape dimension can be -1" in text for text in texts)
-            if symbol == "reshape" else bool(texts)
-            for symbol, texts in excerpts.items()
-        }
-        probabilities = {requirement["name"]: 0.99 if supported[requirement["task"]["requirement_id"]] else 0.1
-                         for requirement in context["requirements"]}
-        probabilities["request_ready"] = 0.99 if all(supported.values()) else 0.1
+        if "evidence" in context:
+            # Each source is useful even when it cannot establish every fact
+            # requested for that requirement. Coverage is a separate judgment.
+            probabilities = {item["name"]: 0.99 for item in context["evidence"]}
+        else:
+            excerpts = {requirement["task"]["requirement_id"]: [source["excerpt"] for source in requirement["sources"]]
+                        for requirement in context["requirements"]}
+            decision_sources.append(excerpts)
+            supported = {
+                symbol: any("One shape dimension can be -1" in text for text in texts)
+                if symbol == "reshape" else bool(texts)
+                for symbol, texts in excerpts.items()
+            }
+            probabilities = {requirement["name"]: 0.99 if supported[requirement["task"]["requirement_id"]] else 0.1
+                             for requirement in context["requirements"]}
+            probabilities["request_ready"] = 0.99 if all(supported.values()) else 0.1
         return httpx.Response(200, json={
             "model": "gpt-6-luna",
             "answers": [{"type": "predicate", "name": question["name"], "probability": probabilities[question["name"]]}
@@ -321,5 +338,5 @@ def test_semantic_rejection_refreshes_docs_alongside_another_requirement_timeout
         assert not state["retry"].failed_requirement_ids
         assert decision_sources == [
             {"reshape": [initial_text], "stack": [], "concatenate": [source_texts["concatenate"]]},
-            {"reshape": [fresh_text], "stack": [source_texts["stack"]], "concatenate": [source_texts["concatenate"]]},
+            {"reshape": [initial_text, fresh_text], "stack": [source_texts["stack"]], "concatenate": [source_texts["concatenate"]]},
         ]
