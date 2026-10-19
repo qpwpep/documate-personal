@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import keyword
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -27,10 +28,10 @@ class RetrievalRequirement(BaseModel):
     library: str | None = Field(default=None, description="The one library owning this official source; null for upload or an unknown library.")
     symbols: list[str] = Field(default_factory=list, description="Exact API/code symbols to find, preferably fully qualified official names.")
     version: str | None = Field(default=None, description="Explicit requested version; null when unconstrained. Never substitute another version.")
-    aspects: list[str] = Field(default_factory=list, description="Literal parameter/code anchors explicitly requested in the user's dialogue. Do not guess allowable values or add requirements from model knowledge. General documentation needs belong in evidence_needs, not aspects.")
-    evidence_needs: list[DocsEvidenceNeed] = Field(default_factory=list, description="Docs-only evidence kinds requested by the user: signature for call syntax, parameters for option/argument descriptions, examples for usage examples, explanation for conceptual or behavioral explanation. Keep empty for upload. Do not infer additional kinds from model knowledge.")
+    aspects: list[str] = Field(default_factory=list, description="Literal parameter/code anchors explicitly requested in the user's dialogue. For docs setting-meaning questions, keep the parameter name but omit ordinary data and arbitrary counts, capacities, sizes, thresholds or seeds; keep the complete setting in query and the body request. A value changing the result is not sufficient to make it a literal anchor. Retain categorical modes, enum members, sentinels and distinct behavior-branch values alongside their parameter names, including numeric and Boolean choices. Preserve exact source/code matching requests. Natural-language properties and questions belong in query, for upload as well as docs. Do not guess the identifier or value answering such a question. General documentation needs belong in evidence_needs, not aspects.")
+    evidence_needs: list[DocsEvidenceNeed] = Field(default_factory=list, description="Docs-only evidence kinds requested by the user: signature for call syntax, parameters for option/argument descriptions, examples for usage examples, explanation for conceptual or behavioral explanation. Explaining a named parameter setting requests BOTH parameters and explanation, even when phrased as its behavior or effect; that value needs the parameter's own description. Keep empty for upload. Do not infer unrelated kinds from model knowledge.")
     file_ids: list[str] = Field(default_factory=list, description="Upload file IDs from the active catalog whose evidence is explicitly requested. Empty searches all active uploads without requiring every file in the answer. For a comparison or inspection of all attachments, include every requested file ID in one task. Empty for docs.")
-    match: Literal["topic", "symbol", "definition"] = Field(default="topic", description="topic for broad explanation, symbol for API/usage references, definition for the implementation of a named uploaded function/class.")
+    match: Literal["topic", "symbol", "definition"] = Field(default="topic", description="topic for broad explanation; symbol for API/usage references, including an uploaded function's implementation together with its actual calls/examples; definition when only the named uploaded function/class implementation is needed. A definition alone excludes calls outside its body.")
 
     @field_validator("symbols", "aspects")
     @classmethod
@@ -71,7 +72,7 @@ class PlannedRequirement(RetrievalRequirement):
     )
     aspects: list[str] = Field(
         default_factory=list,
-        description="Literal parameter names, option/flag names, requested value tokens or code fragments that must appear in returned source, such as axis, --force, reflect or random_state. Do not repeat the primary API already in symbols. Never put natural-language behavior conditions such as 'when the path does not exist' or '경로가 없을 때' here; preserve their meaning in query and request explanation in evidence_needs. Only anchors explicitly requested in the user's dialogue belong here.",
+        description="Literal parameter names, option/flag names, requested value tokens or code fragments that must appear in returned source, such as axis, --force, reflect or random_state. For docs setting-meaning questions, omit ordinary data and arbitrary counts, capacities, sizes, thresholds or seeds; keep their parameter names here and complete settings in query and the body request. A value changing the result is not sufficient to make it a literal anchor. Keep categorical modes, enum members, sentinels and distinct behavior-branch values separately alongside their parameter names, including numeric or Boolean choices. Preserve an explicitly requested exact source/code match. Do not repeat the primary API already in symbols. For upload and docs, never put natural-language properties or conditions here; preserve their meaning in query. For docs additionally request the relevant evidence_needs. Only anchors explicitly requested in the user's dialogue belong here; never guess an identifier from the user's description of a property.",
     )
     symbols: list[str] = Field(default_factory=list, max_length=1,
                               description="At most one primary target. Use separate tasks for independent symbols; calls inspected inside a function belong in its aspects, not additional definitions.")
@@ -109,6 +110,21 @@ class RetrievalTask(RetrievalQuery):
             raise ValueError("file_ids apply only to uploaded-file retrieval")
         if self.route != "docs" and self.requirement.evidence_needs:
             raise ValueError("evidence_needs apply only to official-doc retrieval")
+        if self.route == "upload" and self.requirement.match != "topic":
+            for aspect in self.requirement.aspects:
+                # Reject only single-line runs of ordinary names. Keywords (including
+                # soft keywords) can form incomplete source fragments such as
+                # "is None" or "async def" that cannot parse as a module.
+                # Actual occurrence is checked against uploaded source later.
+                words = aspect.split()
+                if len(words) > 1 and not any(newline in aspect for newline in ("\r", "\n")) and all(
+                    word.isidentifier() and not keyword.iskeyword(word) and not keyword.issoftkeyword(word)
+                    for word in words
+                ):
+                    raise ValueError(
+                        f"Upload aspect {aspect!r} is a natural-language condition, not a literal code anchor. "
+                        "Preserve the question in query and remove it from aspects; never guess its code name."
+                    )
         if not self.requirement_id.strip():
             identity = {"route": self.route, "requirement": self.requirement.model_dump()}
             if not self.requirement.specified:

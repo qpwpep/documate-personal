@@ -11,6 +11,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from src.core.documents import DocumentElement, ParsedDocument, SourceAnchor, build_snapshot
 from src.core.evidence import EvidenceRef, build_evidence
+from src.core.python_source import PythonSourceMap
 from src.core.table_selection import table_excerpt, table_row_units
 from src.infra.notebook_loader import load_canonical_notebook, normalize_cell_source
 
@@ -92,7 +93,7 @@ def chunk_python_text(
     element = DocumentElement(
         element_id="python-source", kind="code", text=text, language="python",
         anchors=[SourceAnchor(kind="code", start=0, end=len(text), line_start=1,
-                              line_end=max(1, len(text.splitlines())), precision="exact")],
+                              line_end=PythonSourceMap(text).line_count, precision="exact")],
         metadata={"code_metadata": _build_code_metadata(source=text)},
     )
     return chunk_parsed_document(ParsedDocument(snapshot=snapshot, elements=[element]),
@@ -143,7 +144,8 @@ def chunk_notebook(
             element_id=f"cell-{native_id}", kind="code" if is_code else "paragraph",
             text=source, order=cell_index, language="python" if is_code else None,
             anchors=[SourceAnchor(kind="notebook", start=0, end=len(source),
-                                  line_start=1, line_end=max(1, len(source.splitlines())),
+                                  line_start=1, line_end=(PythonSourceMap(source).line_count if is_code
+                                                        else max(1, len(source.splitlines()))),
                                   cell_id=native_id, cell_index=cell_index, precision="exact")],
             metadata={"cell_type": str(cell.get("cell_type")),
                       "code_metadata": _build_code_metadata(source=source, cell_id=cell_index) if is_code else {}},

@@ -3,12 +3,17 @@
 from __future__ import annotations
 
 import ast
+import io
+import tokenize
 from dataclasses import dataclass
+from functools import cached_property
 from typing import Literal
 
 from src.core.documents import DocumentElement, DocumentSnapshot, ParsedDocument
 from src.core.evidence import RetrievalScore, SearchHit, build_evidence, dedupe_search_hits
+from src.core.literal_matching import literal_aspect_present
 from src.core.planner_schema import RetrievalRequirement
+from src.core.python_source import PythonSourceMap
 
 
 @dataclass(frozen=True)
@@ -24,6 +29,18 @@ class SourceRequirementResult:
 class _Source:
     snapshot: DocumentSnapshot
     element: DocumentElement
+
+    @cached_property
+    def source_map(self) -> PythonSourceMap:
+        return PythonSourceMap(self.element.text)
+
+    @cached_property
+    def code_tokens(self) -> list[tuple[tuple[int, str], int, int]]:
+        # Token columns count characters, unlike the AST's UTF-8 byte columns.
+        return [((token.type, token.string),
+                 self.source_map.offsets[token.start[0] - 1] + token.start[1],
+                 self.source_map.offsets[token.end[0] - 1] + token.end[1])
+                for token in _fragment_tokens(self.element.text)]
 
 
 @dataclass(frozen=True)
@@ -109,19 +126,11 @@ def _matches(requested: str, occurrence: _Occurrence) -> bool:
     return any(name == requested or (occurrence.definition and name.endswith("." + requested)) for name in names)
 
 
-def _node_range(source: str, node: ast.AST, *, definition: bool) -> tuple[int, int]:
+def _node_range(source: PythonSourceMap, node: ast.AST, *, definition: bool) -> tuple[int, int]:
     """AST columns are UTF-8 byte offsets; evidence offsets count Python characters."""
-    lines = source.splitlines(keepends=True)
-    start_line = int(node.lineno)
-    if definition:
-        decorators = getattr(node, "decorator_list", [])
-        start_line = min([start_line, *(int(item.lineno) for item in decorators)])
-    end_line = int(node.end_lineno)
-    start = sum(len(line) for line in lines[:start_line - 1])
+    start_line = source.definition_start(node)[0] if definition else node.lineno
     # Include indentation and decorators for a standalone source quotation.
-    end = sum(len(line) for line in lines[:end_line - 1])
-    end += len(lines[end_line - 1].encode("utf-8")[:int(node.end_col_offset)].decode("utf-8"))
-    return start, end
+    return source.position(start_line, 0), source.position(node.end_lineno, node.end_col_offset)
 
 
 def _code_terms(node: ast.AST) -> set[str]:
@@ -137,6 +146,56 @@ def _code_terms(node: ast.AST) -> set[str]:
         elif isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             terms.add(item.name)
     return terms
+
+
+def _fragment_tokens(text: str) -> list[tokenize.TokenInfo]:
+    """Tokenize source fragments without requiring a complete Python statement."""
+    tokens = []
+    try:
+        for token in tokenize.generate_tokens(io.StringIO(text, newline=None).readline):
+            if token.type not in {tokenize.NL, tokenize.INDENT, tokenize.DEDENT, tokenize.ENDMARKER}:
+                tokens.append(token)
+    except tokenize.TokenError as exc:
+        # An explicitly requested prefix such as `call(` is still a code anchor.
+        # An unterminated string must not silently become its preceding tokens.
+        if not exc.args[0].endswith("EOF in multi-line statement"):
+            return []
+    except IndentationError:
+        return []
+    if tokens and tokens[-1].type == tokenize.NEWLINE:
+        tokens.pop()
+    return tokens
+
+
+def _fragment_terms(source: _Source, occurrence: _Occurrence, aspects: list[str]) -> set[str]:
+    """Match literal fragments within actual code tokens of one selected node."""
+    # Preserve AST-based matching of names, which excludes string prose.
+    fragments = [aspect for aspect in aspects if not aspect.isidentifier()]
+    if not fragments:
+        return set()
+    node = occurrence.node
+    start_line, start_column = (source.source_map.definition_start(node) if occurrence.definition
+                                else (node.lineno, node.col_offset))
+    start = source.source_map.position(start_line, start_column)
+    end = source.source_map.position(node.end_lineno, node.end_col_offset)
+    tokens = [(key, left, right) for key, left, right in source.code_tokens if start <= left and right <= end]
+    keys = [key for key, _left, _right in tokens]
+    covered = set()
+    for aspect in fragments:
+        expected = [(token.type, token.string) for token in _fragment_tokens(aspect)]
+        if not expected or any(kind in {tokenize.COMMENT, tokenize.ERRORTOKEN} for kind, _text in expected):
+            continue
+        for index in range(len(keys) - len(expected) + 1):
+            if keys[index:index + len(expected)] != expected:
+                continue
+            left, right = tokens[index][1], tokens[index + len(expected) - 1][2]
+            # Preserve the candidate's actual word boundaries without letting a
+            # different match in surrounding comments satisfy this code anchor.
+            context = source.element.text[max(start, left - 1):min(end, right + 1)]
+            if literal_aspect_present(aspect, context, case_sensitive=True):
+                covered.add(aspect)
+                break
+    return covered
 
 
 def resolve_source_requirement(
@@ -176,12 +235,13 @@ def resolve_source_requirement(
         visitor = _SymbolVisitor(tree, aliases)
         visitor.visit(tree)
         aliases = visitor.aliases
+        source_map = source.source_map
         for symbol in symbols:
             for occurrence in visitor.occurrences:
                 if requirement.match == "definition" and not occurrence.definition:
                     continue
                 if _matches(symbol, occurrence):
-                    bounds = _node_range(source.element.text, occurrence.node, definition=occurrence.definition)
+                    bounds = _node_range(source_map, occurrence.node, definition=occurrence.definition)
                     by_symbol[symbol].append((occurrence.priority, source, occurrence, bounds))
 
     hits: list[SearchHit] = []
@@ -190,18 +250,23 @@ def resolve_source_requirement(
     for matches in by_symbol.values():
         if not matches:
             continue
-        # Explicit file comparisons keep the best occurrence from each file.
+        # A call and its implementation establish different facts. Keep both
+        # roles for symbol searches: preferring the call globally discarded the
+        # default values/body needed to explain that actual example's result.
+        # Definition-only requests still contain definitions exclusively.
         scoped = bool(requirement.file_ids)
         preferred_by_file = {}
-        for priority, source, _occurrence, _bounds in matches:
-            key = source.snapshot.snapshot_id if scoped else "all"
+        for priority, source, occurrence, _bounds in matches:
+            key = (source.snapshot.snapshot_id if scoped else "all", occurrence.definition)
             preferred_by_file[key] = min(priority, preferred_by_file.get(key, priority))
         for priority, source, occurrence, (start, end) in matches:
-            if priority != preferred_by_file[source.snapshot.snapshot_id if scoped else "all"]:
+            key = (source.snapshot.snapshot_id if scoped else "all", occurrence.definition)
+            if priority != preferred_by_file[key]:
                 continue
             evidence = build_evidence(snapshot=source.snapshot, element=source.element, start=start, end=end)
             hits.append(SearchHit(evidence=evidence, score=RetrievalScore(metric="source_symbol", direction="higher"), rank=len(hits) + 1))
             terms = _code_terms(occurrence.node)
+            terms.update(_fragment_terms(source, occurrence, requirement.aspects))
             covered_aspects.update(terms)
             if source.element.metadata.get("file_id") in aspects_by_file:
                 aspects_by_file[source.element.metadata["file_id"]].update(terms)

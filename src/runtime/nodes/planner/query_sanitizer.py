@@ -5,6 +5,24 @@ import re
 
 from src.core.planner_schema import InitialPlannerOutput
 from src.core.request_contracts import evidence_scope_covers
+from src.core.uploads import UploadFileInfo
+
+
+def validate_upload_source_references(
+    planner_output: InitialPlannerOutput, *, upload_files: tuple[UploadFileInfo, ...],
+) -> None:
+    """Keep catalog source identities separate from literal content obligations."""
+    filenames = {item.name for item in upload_files}
+    for task in planner_output.tasks:
+        if task.route != "upload":
+            continue
+        misplaced = [symbol for symbol in task.requirement.symbols if symbol in filenames]
+        if misplaced:
+            raise ValueError(
+                f"Upload filenames {misplaced!r} identify sources, not code symbols. "
+                "Resolve them to file_ids using the upload catalog and retain the requested subject in query. "
+                "Use topic when no actual function/class/code symbol is named. Do not weaken file coverage."
+            )
 
 
 def _contains_anchor(text: str, aspect: str) -> bool:

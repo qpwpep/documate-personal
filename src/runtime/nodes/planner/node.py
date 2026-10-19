@@ -23,7 +23,7 @@ from src.infra.llm_boundary import run_structured_call
 from src.runtime.nodes.planner.guardrails import apply_retrieval_availability
 from src.runtime.nodes.planner.models import PlannerDecision
 from src.runtime.nodes.planner.prompt_builder import build_planner_messages, planner_previous_answer, planner_user_utterances
-from src.runtime.nodes.planner.query_sanitizer import ground_planner_requirement_aspects
+from src.runtime.nodes.planner.query_sanitizer import ground_planner_requirement_aspects, validate_upload_source_references
 from src.runtime.nodes.planner.request_resolution import (
     current_recipient_evidence_ids, pending_body_changed, pending_recipient_changed, resolve_request_contract,
 )
@@ -79,6 +79,7 @@ def _resolve_planner_strategy(
             ], request_contract=contract.to_wire())
         else:
             initial = InitialPlannerOutput.model_validate(payload)
+            validate_upload_source_references(initial, upload_files=runtime.upload_files)
             utterances = planner_user_utterances(state)
             errors = validate_contract_evidence(initial.request_contract, utterances)
             if errors:

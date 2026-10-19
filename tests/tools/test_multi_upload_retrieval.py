@@ -104,3 +104,23 @@ def test_scoped_search_preserves_every_file(uploads):
             assert hit.evidence.excerpt == source[hit.evidence.selection.start:hit.evidence.selection.end]
         assert payload.diagnostics.answerability == "covered"
         assert payload.diagnostics.missing_requirements == []
+
+
+def test_function_search_across_attachments_does_not_require_each_file_to_define_it(uploads):
+    """An implementation and a caller have different roles; explicit comparisons still need both."""
+    record, indexed = uploads
+    implementation = record("billing.py", "def calculate_total(amount, discount=0.10):\n    return amount * (1 - discount)\n")
+    example = record("example.py", "from billing import calculate_total\nresult = calculate_total(30000)\n")
+    requirement = RetrievalRequirement(symbols=["calculate_total"], match="definition")
+    with indexed([implementation, example]) as handle:
+        search = build_upload_search_tool()
+        found = search(query="첨부의 calculate_total 함수에서 기본 할인율", retriever=handle.retriever,
+                       requirement=requirement)
+        comparison = search(query="두 파일 각각에 있는 calculate_total 정의 비교", retriever=handle.retriever,
+                            requirement=requirement.model_copy(update={"file_ids": [implementation.file_id, example.file_id]}))
+    assert found.diagnostics.answerability == "covered"
+    assert found.diagnostics.missing_requirements == []
+    assert [hit.evidence.snapshot.title for hit in found.hits] == ["billing.py"]
+    assert "discount=0.10" in found.hits[0].evidence.excerpt
+    assert comparison.diagnostics.answerability == "partial"
+    assert comparison.diagnostics.missing_requirements == [f"file:{example.file_id}:calculate_total"]
