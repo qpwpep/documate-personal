@@ -196,6 +196,7 @@ def build_retry_update(
         # Resolve route-wide provider failures to concrete server-owned tasks.
         failed_ids = {task.requirement_id for task in planner_output.tasks
                       if task.route in (failed_route_set or selected_routes)}
+    unresolved_ids = set(failed_ids)
     # A request that needs no retrieval can still repair a generated or
     # transformed body. Re-enter synthesis, never reinterpret the request.
     contract = request_contract
@@ -247,6 +248,11 @@ def build_retry_update(
             "retry_scope": "reuse_hits_resynthesize" if reuse_hits_only else "refresh_routes",
             "failed_requirement_ids": sorted(failed_ids),
         }
+        if not is_content_repair:
+            terminal_ids = unresolved_ids - failed_ids if needs_retry else unresolved_ids
+            terminal_ids.update(retry_context.terminal_failed_requirement_ids)
+            retry_update["terminal_failed_requirement_ids"] = sorted(terminal_ids)
+            retry_update["terminal_retrieval_reason"] = retry_reason if terminal_ids else None
         if reuse_hits_only:
             retry_update["preserved_hits"] = [hit for hit in (current_attempt_hits or [])]
             retry_update["preserved_retrieval_diagnostics"] = [
@@ -254,7 +260,10 @@ def build_retry_update(
                 for item in (current_attempt_retrieval_diagnostics or [])
             ]
         elif failed_ids:
-            retry_update["preserved_hits"] = [hit for hit in (current_attempt_hits or []) if hit.requirement_id not in failed_ids]
+            # Inputs have passed source validation. A requirement can still lack
+            # coverage while containing useful, independently accepted fragments.
+            # Keep those fragments as well as every successful requirement.
+            retry_update["preserved_hits"] = list(current_attempt_hits or [])
             retry_update["preserved_retrieval_diagnostics"] = [d.model_copy(deep=True) for d in (current_attempt_retrieval_diagnostics or []) if d.requirement_id not in failed_ids]
         else:
             retry_update["preserved_hits"] = []
