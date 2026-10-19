@@ -7,6 +7,7 @@ from langchain_core.messages import BaseMessage
 from src.core.answer_schema import AnswerResponse
 from src.core.contracts import RetrievalDiagnostic
 from src.core.contracts.debug import ErrorCode, RetryReason
+from src.core.contracts.graph_state import EvidenceVerdict
 from src.core.contracts.provenance import AnswerSource, BodyKind
 from src.core.evidence import EvidenceRef, SearchHit
 from src.core.planner_schema import PlannerOutput
@@ -40,6 +41,7 @@ class ValidationSnapshot:
     source_response: AnswerResponse | None = None
     conversation_messages: list[BaseMessage] = field(default_factory=list)
     memory_summary: str | None = None
+    evidence_verdicts: list[EvidenceVerdict] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -59,4 +61,7 @@ class ValidationAssessment:
     score_avg: float | None = None
     semantic_probabilities: dict[str, float] = field(default_factory=dict)
     semantic_refusals: set[str] = field(default_factory=set)
+    request_readiness_failed: bool = False
+    evidence_verdicts: list[EvidenceVerdict] = field(default_factory=list)
+    accepted_hits: list[SearchHit] = field(default_factory=list)
     error_codes: list[ErrorCode] = field(default_factory=list)

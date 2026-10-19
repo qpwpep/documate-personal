@@ -10,7 +10,8 @@ from src.core.contracts.boundary.debug import get_debug_state
 from src.core.contracts.boundary.graph import get_retry_state
 from src.core.contracts.boundary.planner import get_planner_state
 from src.core.contracts.boundary.response import get_response_state
-from src.core.contracts.boundary.retrieval import get_retrieval_state
+from src.core.contracts.boundary.retrieval import accepted_search_hits, get_retrieval_state
+from src.core.contracts.graph_state import EvidenceVerdict
 from src.core.contracts.boundary.runtime import get_runtime_state
 from src.core.evidence import EvidenceRef, SearchHit
 from src.core.planner_schema import PlannerOutput
@@ -66,6 +67,7 @@ def build_validation_snapshot(
     source_response: AnswerResponse | None = None,
     conversation_messages: list[BaseMessage] | None = None,
     memory_summary: str | None = None,
+    evidence_verdicts: list[EvidenceVerdict] | None = None,
 ) -> ValidationSnapshot:
     retrieval_required = bool(planner_output.use_retrieval and planner_output.tasks)
     evidence_by_route: dict[str, list[EvidenceRef]] = {"docs": [], "upload": []}
@@ -96,6 +98,7 @@ def build_validation_snapshot(
         source_response=source_response,
         conversation_messages=conversation_messages or [],
         memory_summary=memory_summary,
+        evidence_verdicts=evidence_verdicts or [],
     )
 
 
@@ -115,7 +118,7 @@ def collect_validation_snapshot(state: GraphState, *, max_turns: int = 6) -> tup
     if source_response is not None:
         source_response = AnswerResponse.model_validate(source_response.model_dump(mode="json"))
     planner_output = planner.output
-    parsed_hits = slice_from_index(retrieval.hit_log, retry.hit_start_index)
+    parsed_hits = accepted_search_hits(slice_from_index(retrieval.hit_log, retry.hit_start_index), retrieval)
     retrieval_errors = [
         str(error) for error in slice_from_index(debug.retrieval_errors, retry.retrieval_error_start_index)
         if str(error).strip()
@@ -145,5 +148,6 @@ def collect_validation_snapshot(state: GraphState, *, max_turns: int = 6) -> tup
             max_turns=max_turns,
         ),
         memory_summary=runtime.memory_summary,
+        evidence_verdicts=retrieval.evidence_verdicts,
     )
     return snapshot, local_errors

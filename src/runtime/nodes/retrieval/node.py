@@ -12,13 +12,13 @@ from src.core.contracts import GraphState, RetrievalDiagnostic
 from src.core.contracts.boundary.debug import get_debug_state
 from src.core.contracts.boundary.graph import get_retry_state
 from src.core.contracts.boundary.planner import get_planner_state
-from src.core.contracts.boundary.retrieval import get_retrieval_state
+from src.core.contracts.boundary.retrieval import accepted_search_hits, get_retrieval_state
 from src.core.contracts.boundary.runtime import get_runtime_state
 from src.core.latency import elapsed_ms, make_stage_latency_event
 from src.infra.logging_utils import log_event
 from src.core.message_utils import build_tool_message
 from src.core.planner_schema import RetrievalTask
-from src.core.evidence import SearchHit
+from src.core.evidence import SearchHit, dedupe_search_hits
 from src.runtime.nodes.retry import current_retrieval_attempt
 from src.runtime.nodes.retrieval.executor import RetrievalTaskResult, build_reused_retrieval_task_result, execute_retrieval_task, retrieval_fingerprint
 from src.runtime.agent_runtime.tool_execution import invoke_tool
@@ -139,7 +139,9 @@ def _collect_retrieval_batch(
         batch_plan.indexed_tasks.append((index, task, tool_name, invoke_tool))
     return batch_plan
 
-def _execute_retrieval_batch(batch_plan: RetrievalBatchPlan) -> RetrievalBatchResult:
+def _execute_retrieval_batch(
+    batch_plan: RetrievalBatchPlan, *, validated_hits: list[SearchHit] | None = None,
+) -> RetrievalBatchResult:
     task_results: list[RetrievalTaskResult] = list(batch_plan.reused_results)
 
     if len(batch_plan.indexed_tasks) == 1:
@@ -177,6 +179,20 @@ def _execute_retrieval_batch(batch_plan: RetrievalBatchPlan) -> RetrievalBatchRe
     result = RetrievalBatchResult()
     tool_call_counts: dict[str, int] = {}
     for item in task_results:
+        # A refresh may return only replacement candidates. Sources already
+        # validated for this fixed requirement survive in the next attempt's
+        # window independently of provider ranking or retrieval-tool behavior.
+        retained = [hit for hit in (validated_hits or [])
+                    if hit.requirement_id == item.result.diagnostics.requirement_id]
+        if retained:
+            merged = dedupe_search_hits([*retained, *item.result.hits])
+            item.result = item.result.model_copy(update={
+                "hits": merged,
+                "diagnostics": item.result.diagnostics.model_copy(update={
+                    "evidence_count": len(merged), "result_count": len(merged),
+                    "final_evidence_count": len(merged),
+                }),
+            })
         result.hit_updates.extend(item.result.hits)
         result.retrieval_diagnostics.append(item.result.diagnostics)
         result.local_errors.extend(str(error) for error in item.errors if str(error).strip())
@@ -267,22 +283,31 @@ def make_retrieve_dispatch_node(
         if not planner_output.use_retrieval:
             return {}
 
+        prior_hits = accepted_search_hits(retrieval.hit_log, retrieval)
+        retry_context = get_retry_state(state)
+        retry_context = retry_context.model_copy(update={
+            "preserved_hits": accepted_search_hits(retry_context.preserved_hits, retrieval),
+        })
+
         route_handlers = _build_route_handlers(
             tavily_search_tool=tavily_search_tool,
             upload_search_tool=upload_search_tool,
             runtime=runtime,
-            retry_context=get_retry_state(state),
+            retry_context=retry_context,
             prior_diagnostics=debug.retrieval_diagnostics,
-            prior_hits=retrieval.hit_log,
+            prior_hits=prior_hits,
         )
         batch_plan = _collect_retrieval_batch(
             planner_output=planner_output,
-            retry_context=get_retry_state(state),
+            retry_context=retry_context,
             route_handlers=route_handlers,
             prior_diagnostics=debug.retrieval_diagnostics,
-            prior_hits=retrieval.hit_log,
+            prior_hits=prior_hits,
         )
-        batch_result = _execute_retrieval_batch(batch_plan)
+        batch_result = _execute_retrieval_batch(
+            batch_plan,
+            validated_hits=accepted_search_hits(prior_hits, retrieval, include_unassessed=False),
+        )
         _emit_retrieval_progress_snapshot(
             progress_emitter=getattr(runtime, "progress_emitter", None),
             batch_result=batch_result,

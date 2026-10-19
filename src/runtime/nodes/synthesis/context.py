@@ -4,7 +4,7 @@ from src.core.contracts import GraphState, RuntimeState
 from src.core.contracts.boundary.graph import get_retry_state
 from src.core.contracts.boundary.planner import get_planner_state
 from src.core.contracts.boundary.response import get_response_state
-from src.core.contracts.boundary.retrieval import get_retrieval_state
+from src.core.contracts.boundary.retrieval import accepted_search_hits, get_retrieval_state
 from src.core.contracts.boundary.runtime import get_runtime_state
 from src.core.contracts.provenance import AnswerSource
 from src.core.answer_schema import AnswerResponse
@@ -43,7 +43,8 @@ def build_synthesis_context(*, state: GraphState) -> SynthesisContext:
     runtime = get_runtime_state(state)
     planner = get_planner_state(state)
     retry = get_retry_state(state)
-    hits = get_retrieval_state(state).hit_log[retry.hit_start_index:]
+    retrieval = get_retrieval_state(state)
+    hits = accepted_search_hits(retrieval.hit_log[retry.hit_start_index:], retrieval)
     plan = planner.output
     source_response = resolve_contract_source_response(runtime)
     evidence_source = None

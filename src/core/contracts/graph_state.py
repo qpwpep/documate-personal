@@ -5,7 +5,7 @@ from typing import Annotated, Any, Literal
 
 from langchain_core.messages import AnyMessage
 from langgraph.graph import add_messages
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from typing_extensions import TypedDict
 
 from src.core.answer_schema import ActionReceipt, AnswerResponse
@@ -70,8 +70,25 @@ class PlannerState(BaseModel):
     guided_followup: str | None = None
 
 
+class EvidenceVerdict(BaseModel):
+    """A turn-local judgment of one immutable source for one fixed requirement."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    requirement_id: str = Field(min_length=1)
+    evidence_id: str = Field(min_length=1)
+    status: Literal["passed", "failed", "refused"]
+    probability: float | None = Field(default=None, ge=0, le=1, allow_inf_nan=False)
+
+    @model_validator(mode="after")
+    def validate_probability(self) -> EvidenceVerdict:
+        if (self.status == "refused") != (self.probability is None):
+            raise ValueError("only refused evidence has no probability")
+        return self
+
+
 class RetrievalState(BaseModel):
     hit_log: list[SearchHit] = Field(default_factory=list)
+    evidence_verdicts: list[EvidenceVerdict] = Field(default_factory=list)
 
 
 class ResponseState(BaseModel):
