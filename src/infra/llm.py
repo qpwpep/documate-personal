@@ -8,6 +8,7 @@ from src.core.planner_schema import InitialPlannerOutput, RetrievalRewriteOutput
 from src.core.answer_schema import AnswerDocument
 from src.infra.structured_schema import compile_output_schema
 from src.infra.llm_boundary import bind_structured_output
+from src.infra.llm_options import chat_temperature
 from src.infra.settings import AppSettings
 from src.infra.decisions import DecisionsClient
 
@@ -56,7 +57,7 @@ def build_llm_registry(settings: AppSettings) -> LLMRegistry:
     llm_synthesizer = ChatOpenAI(
         model=settings.chat_model,
         api_key=settings.openai_api_key,
-        temperature=0,
+        temperature=chat_temperature(settings.chat_model),
         max_tokens=settings.synthesis_max_tokens,
         timeout=settings.synthesis_timeout_seconds,
         max_retries=0,
@@ -67,7 +68,7 @@ def build_llm_registry(settings: AppSettings) -> LLMRegistry:
     llm_synthesizer_compact = ChatOpenAI(
         model=settings.chat_model,
         api_key=settings.openai_api_key,
-        temperature=0,
+        temperature=chat_temperature(settings.chat_model),
         max_tokens=settings.synthesis_compact_max_tokens,
         timeout=max(1, settings.synthesis_timeout_seconds // 2),
         max_retries=0,
@@ -83,7 +84,7 @@ def build_llm_registry(settings: AppSettings) -> LLMRegistry:
     llm_planner_base = ChatOpenAI(
         model=settings.planner_model,
         api_key=settings.openai_api_key,
-        temperature=0,
+        temperature=chat_temperature(settings.planner_model),
         max_tokens=settings.planner_max_tokens,
         timeout=30,
         max_retries=0,
@@ -96,7 +97,7 @@ def build_llm_registry(settings: AppSettings) -> LLMRegistry:
     llm_summarizer = ChatOpenAI(
         model=settings.summary_model,
         api_key=settings.openai_api_key,
-        temperature=0,
+        temperature=chat_temperature(settings.summary_model),
         max_tokens=settings.summary_max_tokens,
         timeout=60,
         max_retries=2,
