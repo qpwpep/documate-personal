@@ -6,6 +6,7 @@ from typing import Annotated, Any, Literal
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, field_validator, model_validator
 
 from src.core.slack_contract import RecipientSelector, SlackDefault
+from .judge_input import DEFAULT_JUDGE_MAX_INPUT_TOKENS, DEFAULT_JUDGE_MAX_OUTPUT_TOKENS
 
 
 CaseCategory = Literal["docs_only", "rag_only", "hybrid", "tool_action"]
@@ -257,14 +258,24 @@ class HardGates(BaseModel):
 
 
 class ModelPricing(BaseModel):
-    prompt_per_1k_usd: float
-    completion_per_1k_usd: float
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    prompt_per_1k_usd: float = Field(ge=0, allow_inf_nan=False, strict=True)
+    completion_per_1k_usd: float = Field(ge=0, allow_inf_nan=False, strict=True)
 
 
 class Pricing(BaseModel):
-    prompt_per_1k_usd: float = 0.00015
-    completion_per_1k_usd: float = 0.0006
+    model_config = ConfigDict(extra="forbid")
+
     models: dict[str, ModelPricing] = Field(default_factory=dict)
+    decisions_models: dict[str, ModelPricing] = Field(default_factory=dict)
+
+    @field_validator("models", "decisions_models")
+    @classmethod
+    def explicit_model_names(cls, table: dict[str, ModelPricing]) -> dict[str, ModelPricing]:
+        if any(not name.strip() or name != name.strip() for name in table):
+            raise ValueError("model prices require nonblank names without surrounding whitespace")
+        return table
 
 
 class JudgeMinScoreConfig(BaseModel):
@@ -306,4 +317,6 @@ class BenchmarkConfig(BaseModel):
     judge_min_subscores: JudgeSubscoreMinConfig = Field(default_factory=JudgeSubscoreMinConfig)
     judge_model: str = "gpt-5.6-luna"
     judge_enabled: bool = True
+    judge_max_input_tokens: int = Field(default=DEFAULT_JUDGE_MAX_INPUT_TOKENS, gt=0, strict=True)
+    judge_max_output_tokens: int = Field(default=DEFAULT_JUDGE_MAX_OUTPUT_TOKENS, gt=0, strict=True)
     request_timeout_seconds: int = 60

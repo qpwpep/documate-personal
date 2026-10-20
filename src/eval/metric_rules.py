@@ -18,17 +18,6 @@ _FAILURE_TEXT_PATTERNS = [
     r"unexpected error",
 ]
 _HANGUL_PATTERN = re.compile(r"[가-힣]")
-_COMPARISON_MARKERS = (
-    "비교",
-    "차이",
-    "반면",
-    "다르",
-    "contrast",
-    "compare",
-    "difference",
-    "however",
-    "whereas",
-)
 _ALLOWED_OFFICIAL_DOMAINS = set()
 
 
@@ -75,6 +64,13 @@ def score_answer_quality(
     *,
     synthesis_mode: str | None = None,
 ) -> float:
+    """Score explicit text constraints, not semantic proxies.
+
+    Evidence category, comparison words, and retrieval chunk boundaries cannot
+    establish whether the user's task was fulfilled. The semantic judge checks
+    the query and oracle, including whether a comparison or verbatim quotation
+    was requested.
+    """
     text = response_text or ""
     if not text.strip():
         return 0.0
@@ -90,13 +86,6 @@ def score_answer_quality(
         exclude_score = 1.0 - (exclude_violations / len(case.must_not_include))
 
     quality = max(0.0, min(1.0, (include_score + exclude_score) / 2.0))
-
-    copy_penalty = _copy_penalty(text, observed_hits)
-    if copy_penalty > 0.0:
-        quality = max(0.0, quality - copy_penalty)
-
-    if case.category == "hybrid" and not _hybrid_comparison_present(text):
-        quality = min(quality, 0.25)
 
     if case.category in {"docs_only", "hybrid"} and synthesis_mode == "deterministic_grounded_direct":
         quality = min(quality, 0.2)
@@ -282,30 +271,3 @@ def _is_valid_official_source(url_or_path: str) -> bool:
 
 def _contains_hangul(text: str) -> bool:
     return bool(_HANGUL_PATTERN.search(str(text or "")))
-
-
-def _normalize_text(text: str) -> str:
-    return re.sub(r"\s+", " ", str(text or "").strip().lower())
-
-
-def _copy_penalty(response_text: str, observed_hits: list[SearchHit]) -> float:
-    normalized_response = _normalize_text(response_text)
-    if not normalized_response:
-        return 0.0
-    longest_match = 0
-    for hit in observed_hits:
-        snippet = _normalize_text(hit.evidence.excerpt)
-        if len(snippet) < 48:
-            continue
-        if snippet and snippet in normalized_response:
-            longest_match = max(longest_match, len(snippet))
-    if longest_match >= 120:
-        return 0.65
-    if longest_match >= 72:
-        return 0.45
-    return 0.0
-
-
-def _hybrid_comparison_present(response_text: str) -> bool:
-    normalized = _normalize_text(response_text)
-    return any(marker in normalized for marker in _COMPARISON_MARKERS)

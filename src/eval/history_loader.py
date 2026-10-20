@@ -54,15 +54,36 @@ def _parse_generated_at(summary: RunSummary) -> datetime:
     return datetime.fromisoformat(summary.generated_at_utc)
 
 
-def _read_summary(path: Path) -> tuple[RunSummary, bool, dict[str, Any] | None]:
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    summary = RunSummary(**payload)
-    if summary.decision_contract_version is not None:
-        from .reporting.writer import load_report_inputs
+def _is_historical_summary(payload: dict[str, Any]) -> bool:
+    # A retained current suite or versioned decision cannot become legacy just
+    # because its version fields were removed or downgraded.
+    if payload.get("release_suite") is not None:
+        return False
+    decision_version = payload.get("decision_contract_version")
+    if decision_version is None:
+        if payload.get("case_policy_snapshots") or any(
+            payload.get(field) is not None for field in ("results_fingerprint", "release_decision")
+        ):
+            return False
+    elif type(decision_version) is not int or decision_version != 1:
+        return False
+    return payload.get("measurement_contract_version") in (
+        None, "attachment-question-scenario-v1", "llm-usage-scenario-v2",
+    )
 
-        inputs = load_report_inputs(path.parent)
-        return inputs.summary, "track" in payload, inputs.historical_summary
-    return summary, "track" in payload, payload
+
+def _read_summary(path: Path) -> tuple[RunSummary, bool, dict[str, Any] | None] | None:
+    from .reporting.writer import load_report_inputs
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("run summary must be a JSON object")
+    if _is_historical_summary(payload):
+        # Exclude known historical contracts before loading their evidence.
+        # Mixed/unknown versions and damaged current runs still fail validation.
+        return None
+    inputs = load_report_inputs(path.parent)
+    return inputs.summary, "track" in payload, inputs.historical_summary
 
 
 def load_history_runs(output_root: Path) -> list[StoredRun]:
@@ -73,7 +94,10 @@ def load_history_runs(output_root: Path) -> list[StoredRun]:
         summary_path = entry / "summary.json"
         if not summary_path.exists():
             continue
-        summary, track_explicit, raw_summary = _read_summary(summary_path)
+        loaded = _read_summary(summary_path)
+        if loaded is None:
+            continue
+        summary, track_explicit, raw_summary = loaded
         runs.append(
             StoredRun(
                 summary=summary,
@@ -112,16 +136,13 @@ def select_comparable_runs(
         raise ValueError("No benchmark summaries were found.")
 
     track_runs = [run for run in runs if run.track == track]
-    if track_runs:
-        latest = next((run for run in track_runs if run.run_id == latest_run_id), None)
-        if latest is None:
-            latest = _default_latest_run(track_runs, track)
-    else:
-        if track == "smoke":
-            raise ValueError("No smoke benchmark summaries were found.")
-        latest = next((run for run in runs if run.run_id == latest_run_id), None)
-        if latest is None:
-            latest = _default_latest_run(runs, track)
+    if not track_runs:
+        # A filtered historical run or stale pointer cannot substitute another
+        # track's measurements for the requested history.
+        raise ValueError(f"No {track} benchmark summaries were found.")
+    latest = next((run for run in track_runs if run.run_id == latest_run_id), None)
+    if latest is None:
+        latest = _default_latest_run(track_runs, track)
 
     fixtures_path = latest.summary.fixtures_path
     total_cases = latest.metrics.total_cases
@@ -135,9 +156,8 @@ def select_comparable_runs(
         return latest, [latest]
     comparable = [
         run
-        for run in runs
-        if run.track == latest.track
-        and run.summary.decision_contract_version == latest.summary.decision_contract_version
+        for run in track_runs
+        if run.summary.decision_contract_version == latest.summary.decision_contract_version
         and run.summary.fixtures_path == fixtures_path
         and run.metrics.total_cases == total_cases
         and run.summary.execution_contract_version == latest.summary.execution_contract_version

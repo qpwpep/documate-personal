@@ -216,8 +216,6 @@ def make_action_postprocess_node(
             else:
                 record_nonexecution("save_text", reason_code="execution_not_ready")
         elif intents["save_text"] == "requested" and save_receipt is not None and save_operation is not None:
-            record_nonexecution("save_text", phase="reused", reason_code="completed_operation",
-                                origin_invocation_id=save_receipt.invocation_id)
             # Re-entering an unchanged active obligation may reuse its receipt.
             # The planner normally removes completed actions on destination-only
             # follow-ups; this branch must never attach old success to new text.
@@ -227,9 +225,18 @@ def make_action_postprocess_node(
             else:
                 receipt = build_save_receipt({
                     "status": "error", "error_code": "idempotency_conflict",
-                    "invocation_id": save_receipt.invocation_id,
                     "error": "현재 답변이 확정된 저장 대상과 다릅니다.",
                 }, operation=save_operation)
+            if receipt.status == "success":
+                record_nonexecution("save_text", phase="reused", reason_code="completed_operation",
+                                    origin_invocation_id=save_receipt.invocation_id)
+            else:
+                # A rejected reuse is a new pre-execution decision. It cannot
+                # relabel the original successful invocation as a failure.
+                invocation_id = record_nonexecution(
+                    "save_text", reason_code=receipt.error_code or "reuse_unverifiable",
+                )
+                receipt = receipt.model_copy(update={"invocation_id": invocation_id})
             save_receipt = receipt
             receipts.append(receipt)
             if receipt.status != "success":

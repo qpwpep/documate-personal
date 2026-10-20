@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import math
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from .decisions import ReleaseDecision, decide_release
 from .tool_policy import ToolPolicySpec
 
@@ -50,6 +51,8 @@ class SummaryStats(BaseModel):
     save_contract_failures: int = 0
     save_verified_cases: int = 0
     save_unverifiable_cases: int = 0
+    action_contract_failures: int = 0
+    action_unverifiable_cases: int = 0
     tool_precision: float
     tool_recall: float
     citation_compliance: float
@@ -217,8 +220,48 @@ class GateResult(BaseModel):
     status: str = "evaluated"
 
 
+class ReleaseSuiteContract(BaseModel):
+    """The complete approved input, retained independently of selected cases."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    approved_case_ids: tuple[str, ...] = Field(min_length=1)
+    review_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    candidate_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @model_validator(mode="after")
+    def validate_case_ids(self) -> "ReleaseSuiteContract":
+        if (any(not case_id.strip() for case_id in self.approved_case_ids)
+                or len(set(self.approved_case_ids)) != len(self.approved_case_ids)):
+            raise ValueError("approved suite case identities must be nonblank and unique")
+        return self
+
+
+def release_suite_gate(
+    *, track: RunTrack, requested_limit: int | None, planned_ids: set[str],
+    release_suite: ReleaseSuiteContract | None,
+) -> GateResult:
+    if track != "release":
+        return GateResult(name="release_suite_completeness", threshold=0, actual=0, passed=True,
+                          status="not_applicable", detail="Diagnostic scope; no release verdict.")
+    if release_suite is None:
+        return GateResult(name="release_suite_completeness", threshold=0, actual=1, passed=False,
+                          status="evaluation_incomplete", detail="The approved full suite is not retained.")
+    approved_ids = set(release_suite.approved_case_ids)
+    missing = approved_ids - planned_ids
+    unexpected = planned_ids - approved_ids
+    issues = len(missing) + len(unexpected) + int(requested_limit is not None)
+    return GateResult(
+        name="release_suite_completeness", threshold=0, actual=issues, passed=issues == 0,
+        status="evaluated" if not issues else "evaluation_incomplete",
+        detail=(f"approved={len(approved_ids)} planned={len(planned_ids)} "
+                f"missing={len(missing)} unexpected={len(unexpected)} "
+                f"limited={requested_limit is not None}"),
+    )
+
+
 class RunSummary(BaseModel):
-    decision_contract_version: Literal[1] | None = None
+    decision_contract_version: Literal[2] | None = None
     case_policy_snapshots: dict[str, ToolPolicySpec] = Field(default_factory=dict)
     results_fingerprint: str | None = None
     release_decision: ReleaseDecision | None = None
@@ -230,6 +273,7 @@ class RunSummary(BaseModel):
     mode: str = "online"
     track: RunTrack = "release"
     requested_limit: int | None = None
+    release_suite: ReleaseSuiteContract | None = None
     execution_contract_version: str | None = None
     measurement_contract_version: str | None = None
     suite_fingerprint: str | None = None
@@ -253,7 +297,7 @@ class RunSummary(BaseModel):
         if not isinstance(value, dict):
             return value
         payload = dict(value)
-        if payload.get("decision_contract_version") == 1:
+        if payload.get("decision_contract_version") == 2:
             metrics = payload.get("metrics")
             fields = set(metrics) if isinstance(metrics, dict) else getattr(metrics, "model_fields_set", set())
             required = {"policy_compliant_cases", "policy_violating_cases", "policy_indeterminate_cases",
@@ -272,7 +316,13 @@ class RunSummary(BaseModel):
 
     @model_validator(mode="after")
     def validate_current_decision(self) -> "RunSummary":
-        if self.decision_contract_version == 1:
+        if self.decision_contract_version == 2:
+            suite_gate = release_suite_gate(
+                track=self.track, requested_limit=self.requested_limit,
+                planned_ids=set(self.case_policy_snapshots), release_suite=self.release_suite,
+            )
+            if next((gate for gate in self.gates if gate.name == suite_gate.name), None) != suite_gate:
+                raise ValueError("release suite gate must follow the retained full approved suite")
             if (self.metrics.policy_compliant_cases + self.metrics.policy_violating_cases
                     + self.metrics.policy_indeterminate_cases != self.metrics.total_cases):
                 raise ValueError("policy measurements must account for every observed case")
@@ -286,10 +336,35 @@ class RunSummary(BaseModel):
                             + self.metrics.missing_result_cases + self.metrics.duplicate_result_cases
                             + self.metrics.unexpected_result_cases)
             for name, actual in (("evaluation_completeness", completeness),
-                                 ("save_outcome_contract", self.metrics.save_contract_failures)):
+                                 ("save_outcome_contract", self.metrics.save_contract_failures),
+                                 ("action_outcome_contract", self.metrics.action_contract_failures)):
                 gate = next((gate for gate in self.gates if gate.name == name), None)
                 if gate is None or gate.gate_type != "release" or gate.actual != actual or gate.passed != (actual == 0):
                     raise ValueError(f"inconsistent mandatory gate: {name}")
+            cost_rate = ((self.metrics.cost_observed_cases or 0) / self.metrics.planned_cases
+                         if self.metrics.planned_cases else 0.0)
+            eligible = (bool(self.metrics.cost_observed_cases)
+                        and cost_rate >= self.hard_gates["cost_gate_min_observation_rate"])
+            cost_observation = next((gate for gate in self.gates if gate.name == "cost_observation_rate"), None)
+            cost = next((gate for gate in self.gates if gate.name == "avg_cost_per_case_usd"), None)
+            cost_passed = (eligible and self.metrics.avg_cost_per_case_usd is not None
+                           and self.metrics.avg_cost_per_case_usd <= self.hard_gates["avg_cost_per_case_usd"])
+            if (self.metrics.cost_observation_rate != round(cost_rate, 4)
+                    or not 0 <= (self.metrics.cost_observed_cases or 0) <= self.metrics.planned_cases
+                    or self.metrics.cost_gate_eligible != eligible
+                    or (self.metrics.avg_cost_per_case_usd is not None
+                        and (not math.isfinite(self.metrics.avg_cost_per_case_usd)
+                             or self.metrics.avg_cost_per_case_usd < 0))
+                    or cost_observation is None or cost_observation.gate_type != "release"
+                    or cost_observation.actual != self.metrics.cost_observation_rate
+                    or cost_observation.threshold != self.hard_gates["cost_gate_min_observation_rate"]
+                    or cost_observation.passed != eligible
+                    or cost_observation.status != ("evaluated" if eligible else "observation_insufficient")
+                    or cost is None or cost.gate_type != "release" or cost.passed != cost_passed
+                    or cost.threshold != self.hard_gates["avg_cost_per_case_usd"]
+                    or cost.status != ("evaluated" if eligible else "observation_insufficient")
+                    or cost.actual != (self.metrics.avg_cost_per_case_usd if eligible else None)):
+                raise ValueError("cost gates must follow the retained cost observations")
             expected = decide_release(gates=self.gates, track=self.track,
                                       policy_failure_codes=self.metrics.policy_failure_codes)
             if self.release_decision != expected or self.overall_passed != expected.passed:

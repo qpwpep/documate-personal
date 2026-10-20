@@ -19,7 +19,7 @@ from ..io import load_cases_jsonl
 from ..reporting.summary import build_summary
 from ..reporting.writer import write_run_outputs
 from ..result_models import CaseResult, ScenarioTurnResult
-from ..summary_models import RunSummary, RunTrack
+from ..summary_models import ReleaseSuiteContract, RunSummary, RunTrack, release_suite_gate
 from ..weighting import ResolvedWeights, resolve_case_weights
 from .scenario_inputs import case_context, resolve_fixture_uploads
 from .response_parser import ParsedResponseData, parse_agent_response
@@ -306,6 +306,10 @@ def run_online_benchmark(
     release_review: Path | None = None,
     release_design: Path | None = None,
 ) -> tuple[Path, list[CaseResult], RunSummary]:
+    if track == "release" and limit is not None:
+        raise ValueError("Release runs cannot use --limit; the complete approved suite is required.")
+    if limit is not None and limit <= 0:
+        raise ValueError("--limit must be a positive integer.")
     if track == "release" and not config.judge_enabled:
         raise ValueError(
             "Release runs require judge evaluation; judge_enabled is false. "
@@ -316,8 +320,21 @@ def run_online_benchmark(
     verified_uploads = None
     dataset_approval = {"status": "not_verified"}
     approved = None
+    release_suite = None
     if track == "release":
         cases, approved = load_release_input(fixtures_path, review=release_review, design=release_design)
+        if approved is None:
+            raise ValueError("Release runs require an approved complete suite.")
+        release_suite = ReleaseSuiteContract(
+            approved_case_ids=tuple(case.case_id for case in approved.cases),
+            review_sha256=approved.review_sha256,
+            candidate_sha256=approved.inspection["sha256"],
+        )
+        if not release_suite_gate(
+            track=track, requested_limit=limit, planned_ids={case.case_id for case in cases},
+            release_suite=release_suite,
+        ).passed:
+            raise ValueError("Release execution must include every approved case exactly once.")
     elif release_review is not None:
         approved = load_reviewed_release(
             fixtures_path, review=release_review, design=release_design or DEFAULT_DESIGN,
@@ -347,7 +364,12 @@ def run_online_benchmark(
     _validate_live_slack_targets(cases=cases, live_slack=live_slack)
 
     run_id = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-    judge = LLMJudge(model_name=config.judge_model, enabled=config.judge_enabled)
+    judge = LLMJudge(
+        model_name=config.judge_model,
+        enabled=config.judge_enabled,
+        max_input_tokens=config.judge_max_input_tokens,
+        max_output_tokens=config.judge_max_output_tokens,
+    )
 
     results: list[CaseResult] = []
     for index, (case, resolved_weights) in enumerate(zip(cases, resolved_case_weights, strict=True), 1):
@@ -391,6 +413,7 @@ def run_online_benchmark(
         attachment_fingerprints={f"{result.case_id}/{name}": digest for result in results
                                  for name, digest in result.attachment_fingerprints.items()},
         execution_options=(live_slack or BenchmarkLiveSlackConfig()).model_dump(mode="json"),
+        release_suite=release_suite,
     )
 
     summary.audit_metrics["dataset_approval"] = dataset_approval

@@ -188,6 +188,8 @@ def build_markdown_report(
     validated and retained separately by ``load_report_inputs``; their current
     evaluation projections are never used to rewrite historical report facts.
     """
+    from .writer import is_current_measurement
+
     summary = RunSummary.model_validate(summary.model_dump(mode="json"))
     if results is not None:
         from ..decisions import validate_run_outputs
@@ -206,9 +208,10 @@ def build_markdown_report(
     scoring_contract = (summary.audit_metrics or {}).get("scoring_contract_version") or "legacy: unspecified"
     lines.append(f"- Scoring contract: `{scoring_contract}`")
     decision = summary.release_decision
+    current_measurement = is_current_measurement(summary)
     if summary.track == "smoke" or (decision is not None and decision.scope == "diagnostic"):
         lines.append("- Release: `diagnostic run only (no release verdict)`")
-    elif decision is None or summary.measurement_contract_version != "llm-usage-scenario-v2":
+    elif decision is None or not current_measurement:
         lines.append("- Release: `legacy_unverified (not eligible under the current contract)`")
         lines.append(f"- Historical verdict: `{'PASS' if summary.overall_passed else 'FAIL'}`")
     else:
@@ -297,8 +300,8 @@ def build_markdown_report(
     ):
         lines.append(f"| {key} | {value if value is not None else '-'} |")
 
-    if summary.measurement_contract_version == "llm-usage-scenario-v2":
-        lines.append(f"| cost_observed_cases | {summary.metrics.cost_observed_cases} / {summary.metrics.total_cases} |")
+    if current_measurement:
+        lines.append(f"| cost_observed_cases | {summary.metrics.cost_observed_cases} / {summary.metrics.planned_cases} |")
         lines.append(f"| cost_observation_rate | {summary.metrics.cost_observation_rate} |")
         lines.extend(["", "Cost covers every executed scenario turn and logical LLM invocation. "
                       "The average includes only cases with complete input and output counts; "

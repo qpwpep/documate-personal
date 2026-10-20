@@ -870,6 +870,7 @@ dependencies = [
     { name = "requests" },
     { name = "slack-sdk" },
     { name = "streamlit" },
+    { name = "tiktoken" },
     { name = "uvicorn" },
 ]
 
@@ -905,6 +906,7 @@ requires-dist = [
     { name = "requests", specifier = ">=2.32.5" },
     { name = "slack-sdk", specifier = ">=3.37.0" },
     { name = "streamlit", specifier = ">=1.54.0" },
+    { name = "tiktoken", specifier = ">=0.14.0" },
     { name = "uvicorn", specifier = ">=0.38.0" },
 ]
 provides-extras = ["docling"]

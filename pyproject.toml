@@ -21,6 +21,7 @@ dependencies = [
     "requests>=2.32.5",
     "slack-sdk>=3.37.0",
     "streamlit>=1.54.0",
+    "tiktoken>=0.14.0",
     "uvicorn>=0.38.0",
 ]
 

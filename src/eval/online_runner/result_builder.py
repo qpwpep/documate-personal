@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 from src.core.answer_schema import ActionReceipt, iter_content_units
 from ..judge_llm import LLMJudge
 from ..evidence_scope import assess_evidence_scope
@@ -181,6 +183,9 @@ def build_case_result(
             validator_feedback = f"{validator_feedback} | retrieval_warnings={warning_text}"
         else:
             validator_feedback = f"retrieval_warnings={warning_text}"
+    # The fixture declares the obligation. A live option only selects the
+    # transport/destination; it cannot switch off requested action success.
+    slack_delivery_required = "slack_notify" in case.expected_tools
     slack_delivery_status, slack_delivery_error = _resolve_slack_delivery_status(
         slack_delivery_required=slack_delivery_required,
         actions=parsed_response.actions,
@@ -200,6 +205,7 @@ def build_case_result(
     judge_errors: list[str] = []
     judge_audit_failures: list[str] = []
     judge_input_issues: list[str] = []
+    judge_input_stats: dict[str, Any] | None = None
     judge_status: str | None = None
     judge_status_reason: str | None = None
     llm_judge_score: float | None = None
@@ -276,6 +282,7 @@ def build_case_result(
             evidence_scope=evidence_scope.model_dump(mode="json") if evidence_scope is not None else None,
             answer_provenance=parsed_response.answer_provenance,
         )
+        judge_input_stats = outcome.input_stats
         if outcome.status == "disabled":
             # Config requires the judge but the client was built disabled or is missing.
             judge_status = "failed"
@@ -359,10 +366,8 @@ def build_case_result(
     else:
         eval_validity = "valid"
 
-    if any(item.status == "unverifiable" for item in save_assessments) and eval_validity == "valid":
-        eval_validity = "incomplete"
     quality_pass = product_pass
-    if any(item.passed is False for item in save_assessments):
+    if any(item.status == "failed" for item in save_assessments):
         product_pass = False
     gate_failures = _build_gate_failures(
         runtime_errors=runtime_errors,
@@ -424,6 +429,7 @@ def build_case_result(
         judge_status_reason=judge_status_reason,
         eval_validity=eval_validity,
         judge_input_issues=judge_input_issues,
+        judge_input_stats=judge_input_stats,
         judge_errors=judge_errors,
         judge_audit_failures=judge_audit_failures,
         actions=parsed_response.actions,

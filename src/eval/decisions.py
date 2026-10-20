@@ -8,6 +8,7 @@ from typing import Any, Literal, TYPE_CHECKING
 from pydantic import BaseModel, Field
 
 from .tool_policy import ToolPolicyAssessment, ToolPolicySpec, assess_execution_policy
+from .action_outcomes import assess_action_outcomes
 
 if TYPE_CHECKING:
     from .config_models import BenchmarkCase
@@ -15,10 +16,11 @@ if TYPE_CHECKING:
     from .summary_models import GateResult, RunSummary
 
 
-DECISION_CONTRACT_VERSION = 1
+DECISION_CONTRACT_VERSION = 2
 REQUIRED_RELEASE_GATES = frozenset({
     "tool_execution_policy", "save_outcome_contract", "evaluation_completeness", "release_pass_rate",
     "tool_precision", "tool_recall", "citation_compliance", "p95_latency_ms", "avg_cost_per_case_usd",
+    "action_outcome_contract", "release_suite_completeness", "cost_observation_rate",
 })
 
 
@@ -32,8 +34,18 @@ class ReleaseDecision(CaseDecision):
 
 
 def policy_for_case(case: BenchmarkCase) -> ToolPolicySpec:
+    outcomes = {
+        tool: "required_success" for tool in case.expected_tools
+        if tool in {"save_text", "slack_notify"}
+    }
+    outcomes.update({
+        tool: "must_not_execute" for tool in case.forbidden_tools
+        if tool in {"save_text", "slack_notify"}
+    })
+    if case.save_expectation is not None:
+        outcomes["save_text"] = case.save_expectation.outcome
     return ToolPolicySpec(final_forbidden_tools=list(case.forbidden_tools), setup_turn_count=len(case.setup_turns),
-                          setup_forbidden_tools=case.setup_forbidden_tools)
+                          setup_forbidden_tools=case.setup_forbidden_tools, final_action_outcomes=outcomes)
 
 
 def refresh_case_decision(result: CaseResult, case: BenchmarkCase | None = None) -> CaseDecision:
@@ -42,6 +54,22 @@ def refresh_case_decision(result: CaseResult, case: BenchmarkCase | None = None)
         if result.policy_snapshot is not None and result.policy_snapshot != policy_for_case(case):
             raise ValueError("case policy does not match the retained execution policy snapshot")
     assessment, decision = evaluate_case_decision(result)
+    result.action_assessments = assess_action_outcomes(result, assessment)
+    if any(item.status == "failed" and item.outcome != "must_not_execute"
+           for item in result.action_assessments.values()):
+        result.product_pass = False
+        assessment, decision = evaluate_case_decision(result)
+    outcome_assessments = [
+        *result.action_assessments.values(),
+        *([result.save_assessment] if result.save_assessment is not None else []),
+        *result.setup_save_assessments.values(),
+    ]
+    if any(item.status == "unverifiable" for item in outcome_assessments):
+        # Unobserved actions cannot erase an already settled product failure.
+        # Apply this once for initial results, run-end rechecks, and reloads.
+        if result.eval_validity == "valid" and result.judge_status_reason != "missing_final_response":
+            result.eval_validity = "incomplete"
+            assessment, decision = evaluate_case_decision(result)
     result.policy_assessment = assessment
     result.decision = decision
     result.release_pass = result.passed = decision.passed
@@ -58,13 +86,24 @@ def evaluate_case_decision(result: Any) -> tuple[ToolPolicyAssessment, CaseDecis
                                          actions=result.actions, retrieval_diagnostics=result.retrieval_diagnostics,
                                          debug=result.debug, tool_calls=result.tool_calls,
                                          tool_call_count=result.tool_call_count)
-    # Preserve non-policy reasons such as judge quality thresholds. Policy
-    # reasons are always derived anew from the retained execution evidence.
+    # New preflight failures have no quality observation. Keep prior reason
+    # semantics intact so existing decision-contract records remain readable.
+    preflight_quality_unobserved = (
+        result.product_pass is None and result.judge_status == "not_run"
+        and result.judge_status_reason in {"input_budget_exceeded", "input_invalid"}
+    )
+    quality_reasons = (
+        {"product_quality_below_floor", "product_quality_unobserved"}
+        if preflight_quality_unobserved else set()
+    )
     reasons = [code for code in result.gate_failures
-               if not code.startswith(("tool_execution_", "tool_policy_")) and code not in {
+               if code not in quality_reasons
+               and not code.startswith(("tool_execution_", "tool_policy_", "action_")) and code not in {
                    "forbidden_tool_execution", "tool_policy_snapshot_missing", "legacy_result_unverified",
                }]
     reasons.extend(assessment.failure_codes)
+    actions = assess_action_outcomes(result, assessment)
+    reasons.extend(code for item in actions.values() for code in item.failure_codes)
     if result.decision_contract_version != DECISION_CONTRACT_VERSION:
         reasons.append("legacy_result_unverified")
     if result.runtime_errors:
@@ -73,7 +112,9 @@ def evaluate_case_decision(result: Any) -> tuple[ToolPolicyAssessment, CaseDecis
         reasons.append("response_contract_error")
     if result.eval_validity != "valid":
         reasons.append("invalid_eval" if result.eval_validity == "invalid" else "incomplete_eval")
-    if result.product_pass is not True:
+    if preflight_quality_unobserved:
+        reasons.append("product_quality_unobserved")
+    elif result.product_pass is not True and not any(item.status == "failed" for item in actions.values()):
         reasons.append("product_quality_below_floor")
     if result.judge_pass is not True or result.judge_status != "succeeded":
         reasons.append("judge_not_passed")
@@ -146,7 +187,8 @@ def validate_run_decision_evidence(summary: RunSummary, results: list[Any]) -> N
             raise ValueError("case policy does not match the run policy snapshot")
         assessment, decision = evaluate_case_decision(result)
         if (result.decision != decision or result.release_pass != decision.passed
-                or result.policy_assessment != assessment):
+                or result.policy_assessment != assessment
+                or result.action_assessments != assess_action_outcomes(result, assessment)):
             raise ValueError("stored case verdict disagrees with execution policy")
     expected = decide_release(gates=summary.gates, track=summary.track,
                               policy_failure_codes=summary.metrics.policy_failure_codes)
@@ -167,3 +209,18 @@ def validate_run_decision_evidence(summary: RunSummary, results: list[Any]) -> N
     rate = round(passed / len(planned_ids), 4) if planned_ids else 0.0
     if summary.metrics.release_passed_cases != passed or summary.metrics.release_pass_rate != rate:
         raise ValueError("run pass rate disagrees with case decisions")
+    from .reporting.summary import cost_observation_metrics
+
+    costs = cost_observation_metrics(results=results, planned_ids=planned_ids)
+    if any(getattr(summary.metrics, field) != value for field, value in costs.items()):
+        raise ValueError("run cost metrics disagree with raw cost observations")
+    action_counts = {
+        "action_contract_failures": sum(
+            any(not item.passed for item in result.action_assessments.values()) for result in results
+        ),
+        "action_unverifiable_cases": sum(
+            any(item.status == "unverifiable" for item in result.action_assessments.values()) for result in results
+        ),
+    }
+    if any(getattr(summary.metrics, field) != value for field, value in action_counts.items()):
+        raise ValueError("run action counts disagree with case action assessments")

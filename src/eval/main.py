@@ -44,9 +44,13 @@ def _load_config_with_env_overrides(
 
 
 def resolve_run_track(track: str | None, limit: int | None) -> RunTrack:
+    if track == "release" and limit is not None:
+        raise ValueError("Release runs cannot use --limit; the complete approved suite is required.")
+    if limit is not None and limit <= 0:
+        raise ValueError("--limit must be a positive integer.")
     if track in {"release", "smoke"}:
         return track
-    return "smoke" if limit is not None and limit > 0 else "release"
+    return "smoke" if limit is not None else "release"
 
 
 def _paths_reference_same_target(candidate: Path, expected: Path) -> bool:
@@ -80,10 +84,10 @@ def command_run(args: argparse.Namespace) -> int:
     if args.mode != "online":
         raise ValueError("Only online mode is supported.")
 
+    track = resolve_run_track(args.track, args.limit)
     benchmark_env = load_benchmark_cli_env_settings(args.config)
     endpoint = args.endpoint or benchmark_env.endpoint
     config = _load_config_with_env_overrides(args.config, benchmark_env=benchmark_env)
-    track = resolve_run_track(args.track, args.limit)
     if track == "release" and not config.judge_enabled:
         print(
             "error: release track requires judge evaluation; judge_enabled is false. "

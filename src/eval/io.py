@@ -48,7 +48,10 @@ def load_config(path: Path) -> BenchmarkConfig:
     runtime = data.get("runtime", {})
     if not isinstance(runtime, dict):
         raise ValueError("runtime must be a TOML table")
-    unknown_runtime = runtime.keys() - {"judge_model", "judge_enabled", "request_timeout_seconds"}
+    unknown_runtime = runtime.keys() - {
+        "judge_model", "judge_enabled", "judge_max_input_tokens", "judge_max_output_tokens",
+        "request_timeout_seconds",
+    }
     if unknown_runtime:
         raise ValueError("Unknown runtime config keys: " + ", ".join(sorted(unknown_runtime)))
     config_payload = {key: value for key, value in data.items() if key != "runtime"}

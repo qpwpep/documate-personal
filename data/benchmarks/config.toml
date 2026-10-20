@@ -40,10 +40,6 @@ tool_action = 0.70
 answer_quality = 0.70
 groundedness = 0.70
 
-[pricing]
-prompt_per_1k_usd = 0.00025
-completion_per_1k_usd = 0.00200
-
 [pricing.models."gpt-5-mini"]
 prompt_per_1k_usd = 0.00025
 completion_per_1k_usd = 0.00200
@@ -59,6 +55,13 @@ completion_per_1k_usd = 0.00125
 [pricing.models."gpt-5.6-luna"]
 prompt_per_1k_usd = 0.00020
 completion_per_1k_usd = 0.00120
+
+# Standard /v1/decisions pricing, verified 2026-10-20:
+# https://developers.openai.com/api/docs/guides/decisions#pricing-and-availability
+# This endpoint charges input only; other APIs have separate model prices.
+[pricing.decisions_models."gpt-6-luna"]
+prompt_per_1k_usd = 0.00010
+completion_per_1k_usd = 0.0
 
 [runtime]
 judge_model = "gpt-5.6-luna"

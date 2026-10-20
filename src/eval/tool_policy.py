@@ -14,6 +14,10 @@ class ToolPolicySpec(BaseModel):
     version: Literal[1] = 1
     scope: Literal["scenario_turns"] = "scenario_turns"
     final_forbidden_tools: list[str]
+    final_action_outcomes: dict[
+        Literal["save_text", "slack_notify"],
+        Literal["required_success", "expected_failure", "must_not_execute"],
+    ] | None = None
     setup_turn_count: int = Field(ge=0)
     setup_forbidden_tools: list[list[str]] | None = None
 
@@ -81,6 +85,8 @@ def assess_execution_policy(*, policy: ToolPolicySpec | None, evidence: Any,
         return ToolPolicyAssessment(status="indeterminate", evidence_issues=[
             PolicyIssue(code="tool_policy_snapshot_missing", turn_index=0),
         ])
+    if policy.final_action_outcomes is None:
+        issues.append(PolicyIssue(code="tool_policy_action_outcomes_missing", turn_index=policy.setup_turn_count))
 
     def assess(raw: Any, expected_id: str | None, index: int, forbidden: set[str],
                receipts: list[Any], diagnostics: Any, observations: list[dict[str, Any]],
@@ -159,12 +165,13 @@ def assess_execution_policy(*, policy: ToolPolicySpec | None, evidence: Any,
                     issues.append(PolicyIssue(code="tool_execution_observation_conflict", **detail))
         # Only the selected, complete, consistent request history may establish
         # origins. Alternate conflicting copies still expose forbidden starts.
-        trusted_history = trust_origins and len(issues) == initial_issue_count
+        terminal_outcomes = {}
         for event in parsed.events:
-            if event.phase == "reused" and (event.origin_invocation_id, event.tool_name) not in completed_invocations:
+            origin = (event.origin_invocation_id, event.tool_name)
+            if event.phase == "reused" and origin not in completed_invocations and origin not in terminal_outcomes:
                 issues.append(PolicyIssue(code="tool_execution_reuse_unverifiable", detail=event.invocation_id, **detail))
-            elif trusted_history and event.phase in {"succeeded", "failed"}:
-                completed_invocations[(event.invocation_id, event.tool_name)] = event.phase
+            elif event.phase in {"succeeded", "failed"}:
+                terminal_outcomes[(event.invocation_id, event.tool_name)] = event.phase
         starts = {(event.invocation_id, event.tool_name) for event in parsed.events if event.phase == "started"}
         reused = {(event.origin_invocation_id, event.tool_name) for event in parsed.events
                   if event.phase == "reused" and event.origin_invocation_id}
@@ -177,16 +184,29 @@ def assess_execution_policy(*, policy: ToolPolicySpec | None, evidence: Any,
                 continue  # A deferred action is not an execution assertion.
             key = (receipt.get("invocation_id"), receipt.get("kind"))
             allowed = starts | reused
-            if receipt.get("status") in {"error", "skipped"}:
+            if receipt.get("status") in {"error", "skipped", "unknown"}:
                 allowed |= blocked
             if key not in allowed:
                 issues.append(PolicyIssue(code="tool_execution_receipt_unmatched", detail=str(receipt.get("kind")), **detail))
+                continue
+            terminal = terminal_outcomes.get(key) if key in starts else completed_invocations.get(key)
+            status = receipt.get("status")
+            expected_terminal = "succeeded" if status == "success" else "failed"
+            if (key not in blocked and terminal != expected_terminal
+                    or isinstance(receipt.get("slack"), dict)
+                    and receipt["slack"].get("invocation_id") != receipt.get("invocation_id")):
+                issues.append(PolicyIssue(code="tool_execution_receipt_outcome_conflict",
+                                          detail=str(receipt.get("kind")), **detail))
         for diagnostic in normalized_diagnostics:
             if diagnostic.status in {"skipped", "not_run"}:
                 continue
             key = (diagnostic.invocation_id, diagnostic.tool)
             if key not in starts | reused | blocked:
                 issues.append(PolicyIssue(code="tool_execution_retrieval_unmatched", detail=diagnostic.tool, **detail))
+        # A request with contradictory receipts cannot establish an origin that
+        # a later reuse turns into apparently verified success.
+        if trust_origins and len(issues) == initial_issue_count:
+            completed_invocations.update(terminal_outcomes)
 
     for index in range(policy.setup_turn_count):
         setup_forbidden = set()

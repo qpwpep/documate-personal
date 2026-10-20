@@ -10,6 +10,7 @@ import requests
 
 from src.core.answer_schema import ActionReceipt, AnswerResponse, export_answer_text
 from src.core.contracts.provenance import AnswerProvenance
+from src.core.contracts.tool_execution import ToolExecutionEvidence
 from .config_models import BenchmarkCase
 from .result_models import CaseResult, SaveAssessment, ScenarioTurnResult
 from .tool_policy import executed_tool_names
@@ -67,7 +68,14 @@ def assess_save_outcome(
     if expectation.outcome == "must_not_execute":
         return fail("save_unexpected_execution") if attempted else verified()
     if not receipts:
-        return fail("save_receipt_missing")
+        history = ToolExecutionEvidence.model_validate(execution_evidence) if executed is not None else None
+        proven_omission = (
+            response is not None and history is not None and provenance is not None
+            and provenance.request_id == history.request_id
+            and provenance.response_hash == response.content_hash
+            and not any(event.tool_name == "save_text" for event in history.events)
+        )
+        return fail("save_receipt_missing", unknown=not proven_omission)
     if len(receipts) != 1:
         return fail("save_receipt_ambiguous")
     receipt = receipts[0]
@@ -219,11 +227,8 @@ def revalidate_saved_artifacts(*, cases: list[BenchmarkCase], results: list[Case
             assessments.append(result.save_assessment)
         for assessment in assessments:
             if assessment.passed is False:
-                result.product_pass = False
+                if assessment.status == "failed":
+                    result.product_pass = False
                 result.gate_failures = list(dict.fromkeys([*result.gate_failures, *assessment.failure_codes]))
-                if assessment.status == "unverifiable" and result.eval_validity == "valid":
-                    result.eval_validity = "incomplete"
-                    if "incomplete_eval" not in result.gate_failures:
-                        result.gate_failures.append("incomplete_eval")
         from .decisions import refresh_case_decision
         refresh_case_decision(result, case)

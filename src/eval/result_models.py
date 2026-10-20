@@ -16,8 +16,9 @@ from src.core.evidence import EvidenceRef, SearchHit
 from src.core.latency import LatencyBreakdownModel
 from src.core.uploads import UploadManifest
 from .config_models import CaseCategory, CaseScenario
-from .decisions import CaseDecision
+from .decisions import CaseDecision, DECISION_CONTRACT_VERSION
 from .tool_policy import ToolPolicyAssessment, ToolPolicySpec
+from .action_outcomes import ActionAssessment
 
 
 JudgeStatus = Literal["disabled", "not_run", "failed", "succeeded", "legacy_unknown"]
@@ -27,6 +28,8 @@ EvalValidity = Literal["valid", "incomplete", "invalid", "legacy_unknown"]
 JudgeStatusReason = Literal[
     "missing_final_response",
     "input_incomplete",
+    "input_budget_exceeded",
+    "input_invalid",
     "client_unavailable",
     "invocation_failed",
     "output_invalid",
@@ -115,9 +118,10 @@ class SaveAssessment(BaseModel):
 
 
 class CaseResult(BaseModel):
-    decision_contract_version: Literal[1] | None = None
+    decision_contract_version: Literal[2] | None = None
     policy_snapshot: ToolPolicySpec | None = None
     policy_assessment: ToolPolicyAssessment | None = None
+    action_assessments: dict[str, ActionAssessment] = Field(default_factory=dict)
     decision: CaseDecision | None = None
     execution_evidence: ToolExecutionEvidence | dict[str, Any] | None = None
     run_id: str
@@ -166,6 +170,7 @@ class CaseResult(BaseModel):
     judge_status_reason: JudgeStatusReason | None = None
     eval_validity: EvalValidity | None = None
     judge_input_issues: list[str] = Field(default_factory=list)
+    judge_input_stats: dict[str, Any] | None = Field(default=None, exclude_if=lambda value: value is None)
     judge_errors: list[str] = Field(default_factory=list)
     judge_audit_failures: list[str] = Field(default_factory=list)
     actions: list[ActionReceipt] = Field(default_factory=list)
@@ -218,7 +223,7 @@ class CaseResult(BaseModel):
         if not isinstance(value, dict):
             return value
         payload = dict(value)
-        if payload.get("decision_contract_version") == 1:
+        if payload.get("decision_contract_version") == DECISION_CONTRACT_VERSION:
             if payload.get("judge_status") not in {"disabled", "not_run", "failed", "succeeded"}:
                 raise ValueError("current results require an explicit current judge_status")
             if payload.get("eval_validity") not in {"valid", "incomplete", "invalid"}:
@@ -296,12 +301,15 @@ class CaseResult(BaseModel):
         from .decisions import refresh_case_decision
         stored_decision = self.decision
         stored_policy = self.policy_assessment
+        stored_actions = self.action_assessments
         refresh_case_decision(self)
-        if self.decision_contract_version == 1:
+        if self.decision_contract_version == DECISION_CONTRACT_VERSION:
             if stored_decision is not None and stored_decision != self.decision:
                 raise ValueError("stored case decision disagrees with its assessments")
             if stored_policy is not None and stored_policy != self.policy_assessment:
                 raise ValueError("stored policy assessment disagrees with execution evidence")
+            if stored_actions and stored_actions != self.action_assessments:
+                raise ValueError("stored action assessment disagrees with action evidence")
         if self.tool_call_count <= 0 and self.tool_calls:
             self.tool_call_count = len(self.tool_calls)
         if self.synthesis_mode is None and self.latency_breakdown and self.latency_breakdown.synthesis_attempts:

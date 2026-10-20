@@ -1,19 +1,24 @@
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Callable
 from datetime import datetime, timezone
 import hashlib
 import json
+import math
 from typing import Any
 
 from src.core.planner_schema import PLANNER_WARNING_DUPLICATE_ROUTE_MERGED
 
 from ..config_models import BenchmarkCase, BenchmarkConfig
+from ..judge_input import JUDGE_INPUT_CONTRACT_VERSION
 from ..metric_rules import tool_confusion_counts
 from ..decisions import (DECISION_CONTRACT_VERSION, decide_release, policy_for_case,
                          refresh_case_decision, results_fingerprint)
 from ..result_models import CaseResult
-from ..summary_models import GateResult, RunSummary, RunTrack, SummaryStats
+from ..summary_models import (
+    GateResult, ReleaseSuiteContract, RunSummary, RunTrack, SummaryStats, release_suite_gate,
+)
 from .histograms import build_analysis, build_failure_reason, percentile
 from .latency_values import result_latency_breakdown_stage_ms, result_server_latency_ms
 
@@ -22,15 +27,30 @@ _AUDIT_DETERMINISTIC_DIRECT_USAGE_CEILING = 0.35
 _AUDIT_HIGH_RULE_LOW_JUDGE_DIVERGENCE_CEILING = 0.10
 _HIGH_RULE_LOW_JUDGE_DIVERGENCE_MARGIN = 0.35
 EXECUTION_CONTRACT_VERSION = "shared-client-scenario-v1"
-MEASUREMENT_CONTRACT_VERSION = "llm-usage-scenario-v2"
+MEASUREMENT_CONTRACT_VERSION = "llm-usage-scenario-v3"
 # Weight profiles are fixed before execution; pure actions exclude citation axes.
 # This scoring contract establishes its own comparison baseline.
-SCORING_CONTRACT_VERSION = "weight-profiles-v5"
+SCORING_CONTRACT_VERSION = "release-obligations-v6"
 
 
 def _fingerprint(value: Any) -> str:
     canonical = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def cost_observation_metrics(*, results: list[Any], planned_ids: set[str]) -> dict[str, int | float | None]:
+    """Aggregate only uniquely observed, finite costs for the planned cases."""
+    counts = Counter(result.case_id for result in results)
+    values = [
+        float(result.cost_usd) for result in results
+        if result.case_id in planned_ids and counts[result.case_id] == 1 and result.cost_usd is not None
+        and math.isfinite(result.cost_usd) and result.cost_usd >= 0
+    ]
+    return {
+        "cost_observed_cases": len(values),
+        "cost_observation_rate": round(len(values) / len(planned_ids), 4) if planned_ids else 0.0,
+        "avg_cost_per_case_usd": round(sum(values) / len(values), 8) if values else None,
+    }
 
 
 def _scenario_latency_metrics(results: list[CaseResult]) -> dict[str, float | None]:
@@ -182,8 +202,11 @@ def build_summary(
     slack_live_enabled: bool = False,
     attachment_fingerprints: dict[str, str] | None = None,
     execution_options: dict[str, Any] | None = None,
+    release_suite: ReleaseSuiteContract | None = None,
 ) -> RunSummary:
     case_map = {case.case_id: case for case in cases}
+    if len(case_map) != len(cases):
+        raise ValueError("planned case identities must be unique")
     for result in results:
         refresh_case_decision(result, case_map.get(result.case_id))
     policy_failure_codes = list(dict.fromkeys(
@@ -302,8 +325,8 @@ def build_summary(
         lambda result: result_latency_breakdown_stage_ms(result, "retrieval_total_ms"),
     )
     docs_only_p95_latency = _category_p95_latency(results, "docs_only")
-    cost_values = [float(result.cost_usd) for result in results if result.cost_usd is not None]
-    avg_cost = (sum(cost_values) / len(cost_values)) if cost_values else None
+    costs = cost_observation_metrics(results=results, planned_ids=planned_ids)
+    avg_cost = costs["avg_cost_per_case_usd"]
     slack_delivery_required_results = [result for result in results if result.slack_delivery_required]
     slack_delivery_success_results = [
         result for result in slack_delivery_required_results if result.slack_delivery_status == "success"
@@ -313,8 +336,8 @@ def build_summary(
         if slack_live_enabled and slack_delivery_required_results
         else None
     )
-    cost_observed_cases = len(cost_values)
-    cost_observation_rate = cost_observed_cases / len(results) if results else 0.0
+    cost_observed_cases = int(costs["cost_observed_cases"])
+    cost_observation_rate = cost_observed_cases / planned_cases if planned_cases else 0.0
     request_id_coverage_rate = sum(1 for result in results if _has_request_id_coverage(result)) / len(results) if results else 0.0
     judge_input_eligible = [result for result in results if result.judge_input_complete is not None]
     judge_input_completeness_rate = (
@@ -342,7 +365,8 @@ def build_summary(
         if [result for result in results if result.rule_score_total is not None and result.llm_judge_score is not None]
         else 0.0
     )
-    cost_gate_eligible = cost_observation_rate >= float(config.hard_gates.cost_gate_min_observation_rate)
+    cost_gate_eligible = (bool(cost_observed_cases)
+                          and cost_observation_rate >= float(config.hard_gates.cost_gate_min_observation_rate))
 
     failures = [
         {"case_id": result.case_id, "category": result.category, "reason": build_failure_reason(result)}
@@ -386,6 +410,14 @@ def build_summary(
             *([result.save_assessment] if result.save_assessment is not None else []),
             *result.setup_save_assessments.values(),
         )) for result in results),
+        action_contract_failures=sum(
+            any(not assessment.passed for assessment in result.action_assessments.values())
+            for result in results
+        ),
+        action_unverifiable_cases=sum(
+            any(assessment.status == "unverifiable" for assessment in result.action_assessments.values())
+            for result in results
+        ),
         tool_precision=round(tool_precision, 4),
         tool_recall=round(tool_recall, 4),
         citation_compliance=round(citation_compliance, 4),
@@ -430,6 +462,8 @@ def build_summary(
         + unexpected_result_cases
     )
     gates = [
+        release_suite_gate(track=track, requested_limit=requested_limit,
+                           planned_ids=planned_ids, release_suite=release_suite),
         GateResult(
             name="tool_execution_policy", threshold=0,
             actual=policy_violating_cases + policy_indeterminate_cases,
@@ -441,6 +475,11 @@ def build_summary(
             name="save_outcome_contract", threshold=0, actual=metrics.save_contract_failures,
             passed=metrics.save_contract_failures == 0, gate_type="release",
             detail="Every declared save outcome must be verified; failures cannot be offset by pass rate.",
+        ),
+        GateResult(
+            name="action_outcome_contract", threshold=0, actual=metrics.action_contract_failures,
+            passed=metrics.action_contract_failures == 0, gate_type="release",
+            detail="Every required action outcome must be verified independently of quality scores.",
         ),
         GateResult(
             name="evaluation_completeness",
@@ -460,12 +499,19 @@ def build_summary(
         GateResult(name="citation_compliance", threshold=hard_gates.citation_compliance, actual=metrics.citation_compliance, passed=metrics.citation_compliance >= hard_gates.citation_compliance, gate_type="release"),
         GateResult(name="p95_latency_ms", threshold=hard_gates.p95_latency_ms, actual=metrics.p95_latency_ms, passed=metrics.p95_latency_ms is not None and metrics.p95_latency_ms <= hard_gates.p95_latency_ms, gate_type="release"),
         GateResult(
+            name="cost_observation_rate",
+            threshold=hard_gates.cost_gate_min_observation_rate,
+            actual=metrics.cost_observation_rate, passed=metrics.cost_gate_eligible,
+            status="evaluated" if metrics.cost_gate_eligible else "observation_insufficient",
+            detail=f"Known complete costs: {cost_observed_cases}/{planned_cases} planned cases.",
+        ),
+        GateResult(
             name="avg_cost_per_case_usd",
             threshold=hard_gates.avg_cost_per_case_usd,
             actual=metrics.avg_cost_per_case_usd if metrics.cost_gate_eligible else None,
-            passed=True if not metrics.cost_gate_eligible else (metrics.avg_cost_per_case_usd is not None and metrics.avg_cost_per_case_usd <= hard_gates.avg_cost_per_case_usd),
+            passed=metrics.cost_gate_eligible and metrics.avg_cost_per_case_usd is not None and metrics.avg_cost_per_case_usd <= hard_gates.avg_cost_per_case_usd,
             gate_type="release",
-            status="evaluated" if metrics.cost_gate_eligible else "skipped_insufficient_coverage",
+            status="evaluated" if metrics.cost_gate_eligible else "observation_insufficient",
         ),
         GateResult(
             name="judge_min_score_pass_rate",
@@ -523,6 +569,7 @@ def build_summary(
         mode="online",
         track=track,
         requested_limit=requested_limit,
+        release_suite=release_suite,
         execution_contract_version=EXECUTION_CONTRACT_VERSION,
         measurement_contract_version=MEASUREMENT_CONTRACT_VERSION,
         suite_fingerprint=_fingerprint({
@@ -531,6 +578,11 @@ def build_summary(
         }),
         evaluation_fingerprint=_fingerprint({
             "scoring_contract_version": SCORING_CONTRACT_VERSION,
+            "judge_input_policy": {
+                "contract_version": JUDGE_INPUT_CONTRACT_VERSION,
+                "max_input_tokens": config.judge_max_input_tokens,
+                "max_output_tokens": config.judge_max_output_tokens,
+            },
             "config": config.model_dump(mode="json"),
             "slack_live_enabled": slack_live_enabled,
             "execution_options": execution_options or {},
@@ -546,6 +598,11 @@ def build_summary(
         judge_model=config.judge_model,
         audit_metrics={
             "scoring_contract_version": SCORING_CONTRACT_VERSION,
+            "judge_input_policy": {
+                "contract_version": JUDGE_INPUT_CONTRACT_VERSION,
+                "max_input_tokens": config.judge_max_input_tokens,
+                "max_output_tokens": config.judge_max_output_tokens,
+            },
             "judge_min_score_pass_rate": metrics.judge_pass_rate,
             "judge_min_score_failures": metrics.judge_min_score_failures,
             "judge_required_cases": metrics.judge_required_cases,

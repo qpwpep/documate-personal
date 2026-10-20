@@ -4,7 +4,7 @@ from collections.abc import Sequence
 
 from src.core.contracts.usage import LLMCallRecord
 
-from .config_models import ModelPricing, Pricing
+from .config_models import Pricing
 
 
 def compute_cost_usd(
@@ -12,28 +12,25 @@ def compute_cost_usd(
     llm_calls: Sequence[LLMCallRecord] | None,
     pricing: Pricing,
 ) -> float | None:
-    """Price all observed calls; missing usage or Decisions prices stay unknown."""
+    """Price each API path explicitly; unobserved billable usage stays unknown."""
     if llm_calls is None:
         return None
     total_cost = 0.0
     for call in llm_calls:
         usage = call.usage
-        if usage.input_tokens is None or usage.output_tokens is None:
+        prices = pricing.decisions_models if call.path == "decisions" else pricing.models
+        model_pricing = prices.get(call.model_name or "")
+        if model_pricing is None:
             return None
-        if call.path == "decisions" and call.model_name not in pricing.models:
-            return None
-        model_pricing = _resolve_model_pricing(call.model_name, pricing)
-        total_cost += (usage.input_tokens / 1000.0) * float(model_pricing.prompt_per_1k_usd)
-        total_cost += (usage.output_tokens / 1000.0) * float(model_pricing.completion_per_1k_usd)
+        for tokens, rate in (
+            (usage.input_tokens, model_pricing.prompt_per_1k_usd),
+            (usage.output_tokens, model_pricing.completion_per_1k_usd),
+        ):
+            # Explicitly free dimensions need no usage estimate. Unknown rates
+            # never reach here, and missing billable tokens never become zero.
+            if rate == 0:
+                continue
+            if tokens is None:
+                return None
+            total_cost += (tokens / 1000.0) * float(rate)
     return round(total_cost, 8)
-
-
-def _resolve_model_pricing(model_name: str | None, pricing: Pricing) -> ModelPricing:
-    if model_name:
-        configured_pricing = pricing.models.get(str(model_name))
-        if configured_pricing is not None:
-            return configured_pricing
-    return ModelPricing(
-        prompt_per_1k_usd=float(pricing.prompt_per_1k_usd),
-        completion_per_1k_usd=float(pricing.completion_per_1k_usd),
-    )
