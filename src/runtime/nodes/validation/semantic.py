@@ -208,11 +208,45 @@ def assess_post_semantics(
             "as an incomplete failure and prevents delivery."
         ),
     })
+    # The packet may contain material the answer never cites. Only actual,
+    # locally valid citations can establish this displayed answer's coverage.
+    cited_ids = {ref for unit_id, unit in units if unit_id in assessment.valid_unit_paths for ref in unit.refs}
+    terminal = set(snapshot.terminal_failed_requirement_ids)
+    evaluated_tasks = [task for task in snapshot.planner_output.tasks
+                       if snapshot.retrieval_required and task.requirement_id not in terminal]
+    requirements = []
+    for index, task in enumerate(evaluated_tasks):
+        name = f"requirement_{index}"
+        cited_sources = [
+            item for item in snapshot.evidence_packet
+            if item.id in cited_ids and item.route == task.route
+            and task.requirement_id in snapshot.evidence_requirement_map.get(item.id, [])
+            and (not task.requirement.file_ids
+                 or item.element.metadata.get("file_id") in task.requirement.file_ids)
+        ]
+        requirements.append({
+            "name": name, "task": semantic_task_input(task, snapshot),
+            "sources": [_source(item) for item in cited_sources],
+        })
+        questions.append({
+            "type": "predicate", "name": name,
+            "instructions": (
+                f"Do requirements[{index}].sources jointly provide sufficient evidence for that task's "
+                "actual subject, requested parameters, behavior, examples, version and scope? These are "
+                "the exact source ranges cited by locally valid displayed units for this requirement. "
+                "Use only those selected excerpts, allowing complementary excerpts to establish the "
+                "requirement together. Do not borrow uncited packet material, sources for another "
+                "requirement, matching titles or facts outside a selected range. A complete source's "
+                "sufficiency does not establish sufficiency of a shorter excerpt. Explicitly documented "
+                "absence or limitations can support a faithful answer explaining that absence."
+            ),
+        })
     decisions = decisions_client.evaluate(
         input=json.dumps({
             **_context(snapshot), "units": evaluated_units,
             "displayed_document": result.content.model_dump(mode="json"),
             "terminal_failed_requirement_ids": snapshot.terminal_failed_requirement_ids,
+            "requirements": requirements,
         }, ensure_ascii=False),
         questions=_predicate_instructions(questions), stage="post_synthesis_validation", attempt=attempt,
     )
@@ -239,8 +273,25 @@ def assess_post_semantics(
     ))
     if fulfilled is None or fulfilled < threshold:
         assessment.missing_content.append("semantic_request_fulfillment")
+    failed_cited_requirements = set()
+    for index, task in enumerate(evaluated_tasks):
+        name = f"requirement_{index}"
+        refused = name in decisions.refused_names
+        probability = None if refused else probabilities[name]
+        checks.append(SemanticCheck(
+            name=f"requirement:{task.requirement_id}",
+            status="refused" if refused else "evaluated", probability=probability,
+        ))
+        if probability is None or probability < threshold:
+            failed_cited_requirements.add(task.requirement_id)
+            assessment.failed_requirement_ids.add(task.requirement_id)
+            assessment.failed_routes.add(task.route)
+            assessment.missing_content.append(f"semantic_cited_requirement:{task.requirement_id}")
     if (assessment.invalid_unit_paths or fulfilled is None or fulfilled < threshold) and assessment.retry_reason is None:
         assessment.retry_reason = "missing_content"
+        assessment.error_codes.append("VALIDATION_MISSING_CONTENT")
+    if failed_cited_requirements and assessment.retry_reason is None:
+        assessment.retry_reason = "missing_route_coverage"
         assessment.error_codes.append("VALIDATION_MISSING_CONTENT")
     report = SemanticValidation(
         content_hash=result.content_hash,
