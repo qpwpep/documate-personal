@@ -27,6 +27,8 @@ dependencies = [
 [project.optional-dependencies]
 docling = [
     "docling[easyocr,rapidocr]==2.126.0",
+    # Docling 2.126.0 uses resolver symbols removed in RapidOCR 3.10.
+    "rapidocr==3.9.2",
 ]
 
 [dependency-groups]

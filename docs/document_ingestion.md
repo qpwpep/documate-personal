@@ -17,6 +17,8 @@ DOCLING_ENABLED=true uv run --no-sync python -m src.app.service_manager startweb
 
 지속적으로 사용하려면 `.env`의 `DOCLING_ENABLED`를 `true`로 설정합니다. `DOCLING_ARTIFACTS_PATH` 기본값은 프로젝트 기준 `output/docling/models`입니다. 설정 전체와 기본 한도는 [런타임 참고](runtime_reference.md#21-애플리케이션-설정)에 있습니다. 선택 의존성을 설치한 뒤 `uv run --no-sync`를 사용하거나 매 실행에서 `--extra docling`을 지정해야 기본 sync가 선택 패키지를 제거하지 않습니다.
 
+`docling` 선택 의존성은 Docling `2.126.0`과 호환되는 RapidOCR `3.9.2`를 고정합니다. RapidOCR `3.10.0`은 Docling이 사용하는 언어 resolver 심볼을 제공하지 않아 모델 다운로드와 OCR 초기화가 실패하므로, 잠금 파일의 버전을 함께 설치합니다.
+
 기본 엔진은 `rapidocr`, backend는 `onnxruntime`, 언어는 한국어 모델의 한영 문자 집합입니다. CPU 4스레드, 전체 페이지 OCR 강제 비활성화, 표 구조 인식 accurate를 사용합니다. 그림 설명·수식 enrichment·원격 모델 서비스는 사용하지 않습니다. worker는 사전 모델만 사용하고 네트워크로 모델을 내려받지 않습니다. 비교용 `easyocr`를 선택하려면 아래 모델도 준비합니다.
 
 ```bash
