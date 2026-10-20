@@ -49,19 +49,3 @@ def canonical_query(query: str, requirement: RetrievalRequirement) -> str:
     if requirement.version and requirement.version.casefold() not in value.casefold():
         value += " " + requirement.version
     return value
-
-
-def reformulate_query(query: str, requirement: RetrievalRequirement, missing: list[str]) -> str:
-    """Append absent fixed requirements without interpreting the search expression."""
-    refined = query
-    for symbol in requirement.symbols:
-        if not re.search(rf"(?<![\w.]){re.escape(symbol)}(?![\w.])", refined):
-            refined += f' "{symbol}"'
-    needs = [need for need in requirement.evidence_needs
-             if any(item == f"need:{need}" or item.startswith(f"need:{need}:") for item in missing)]
-    for term in [*requirement.aspects, *needs]:
-        # An existing term may be quoted, excluded or embedded in literal code.
-        # Keep that expression intact instead of adding a competing interpretation.
-        if term.casefold() not in refined.casefold():
-            refined += " " + term
-    return refined

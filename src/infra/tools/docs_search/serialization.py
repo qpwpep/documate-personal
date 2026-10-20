@@ -21,7 +21,6 @@ class DocsSearchFilterCounters:
     filtered_invalid_url_count: int = 0
     filtered_path_prefix_count: int = 0
     filtered_cross_domain_count: int = 0
-    filtered_identifier_mismatch_count: int = 0
 
     def record_url_filter(self, reason: str | None) -> None:
         if reason == "invalid_url":

@@ -31,6 +31,9 @@ class DocDeclaration:
 
 _NAME = r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*"
 _NAME_PATTERN = re.compile(rf"^{_NAME}$")
+# Command names are document identifiers, not callable declaration syntax.
+_COMMAND = r"[A-Za-z_][A-Za-z0-9_]*(?:-[A-Za-z0-9_]+)+"
+_COMMAND_PATTERN = re.compile(rf"^{_COMMAND}$")
 _DECLARATION = re.compile(rf"^@?(?:(?:async\s+)?def\s+|class\s+|function\s+)?(?P<name>{_NAME})\s*\(")
 _SIGNATURE_MAX_CHARS = 8192
 _SIGNATURE_MAX_LINES = 64
@@ -70,7 +73,7 @@ def clean_markup(value: str) -> str:
 def _symbol(value: str) -> str:
     cleaned = clean_markup(value).strip().strip("# ¶ ").removeprefix("@")
     cleaned = re.sub(r"^(?:class|function|method|def)\s+", "", cleaned)
-    if _NAME_PATTERN.fullmatch(cleaned) and cleaned.casefold() not in _GENERAL_NAMES:
+    if (_NAME_PATTERN.fullmatch(cleaned) or _COMMAND_PATTERN.fullmatch(cleaned)) and cleaned.casefold() not in _GENERAL_NAMES:
         return cleaned
     return ""
 
@@ -220,13 +223,22 @@ def _sphinx_definition_owner(raw_line: str) -> str:
 
 def resolve_document_symbol(*, title: str = "", url: str = "") -> str:
     """Return only an unambiguous identity supplied by the document itself."""
-    title_part = re.split(r"\s+[—–|]\s+|\s+-\s+", str(title or ""), maxsplit=1)[0]
+    title_parts = re.split(r"\s+[—–|]\s+|\s+-\s+", str(title or ""))
+    title_part = title_parts[0]
     title_part = re.sub(r"^\d+(?:\.\d+)*\.\s+", "", title_part)
     title_symbol = _symbol(title_part) or declaration_name(title_part)
     parsed = urlparse(str(url or ""))
     leaf = unquote(parsed.path.rstrip("/").rsplit("/", 1)[-1])
     leaf = re.sub(r"\.(?:html?|md|rst)$", "", leaf, flags=re.I)
     url_symbol = _symbol(leaf)
+    if _COMMAND_PATTERN.fullmatch(url_symbol):
+        # Sites may prepend a brand to "command Documentation". Require the
+        # command in that title segment to agree with the URL, rather than
+        # replacing a conflicting API title or guessing from query terms.
+        for part in title_parts:
+            command = re.fullmatch(rf"(?P<name>{_COMMAND})\s+(?:Documentation|Reference|Manual)", clean_markup(part), re.I)
+            if command and command.group("name") == url_symbol:
+                return url_symbol
     if title_symbol:
         # A qualified URL may disambiguate a short title, but a different title
         # must not be silently replaced by another API from the URL.
@@ -316,14 +328,28 @@ def parse_doc_sections(
         cleaned = clean_markup(heading_text).strip("# ¶ ")
         section_name = cleaned.rstrip(":").strip().casefold()
         new_kind = _SECTION_NAMES.get(section_name)
+        if section_name == "name" and _COMMAND_PATTERN.fullmatch(owner):
+            # NAME is the manpage's introduction, not a new API named NAME.
+            new_kind = "overview"
         if new_kind:
             boundary(line_start, owner, new_kind, confidence)
             continue
         if level is not None:
-            heading_owner = _symbol(heading_text) or declaration_name(heading_text)
+            heading_declaration = declaration_name(heading_text)
+            heading_owner = _symbol(heading_text) or heading_declaration
+            command_scope = _COMMAND_PATTERN.fullmatch(owner) or _COMMAND_PATTERN.fullmatch(identity)
+            if command_scope and not (
+                _COMMAND_PATTERN.fullmatch(heading_owner) or "." in heading_owner or heading_declaration
+            ):
+                # Manpages use ordinary words for section titles, often at the
+                # same level as a command heading. Only an explicit identifier
+                # changes ownership; a subheading must not reset another
+                # command's text to the page's original owner either.
+                boundary(line_start, owner, "overview", confidence)
+                continue
             if heading_owner:
                 owner_level = level
-                heading_kind = "signature" if declaration_name(heading_text) else "overview"
+                heading_kind = "signature" if heading_declaration else "overview"
                 boundary(line_start, qualify(heading_owner), heading_kind, 2)
             else:
                 if owner_level is not None and level <= owner_level:

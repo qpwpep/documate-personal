@@ -1,4 +1,4 @@
-"""Evidence requirements are checked against source identity and returned text."""
+"""Docs retrieval preserves official source candidates for later semantic decisions."""
 import pytest
 import requests
 
@@ -7,9 +7,6 @@ from src.core.evidence import SearchHit
 from src.infra.settings import AppSettings
 from src.infra.tools.docs_search.tool import build_docs_search_tool
 
-
-# Public NumPy response captured during the paid API verification; contains no user data.
-RECORDED_NUMPY_RESHAPE = {'url': 'https://numpy.org/doc/2.4/reference/generated/numpy.reshape.html', 'title': 'numpy.reshape — NumPy v2.4 Manual', 'raw_content': '[![NumPy v2.4 Manual - Home](../../_static/numpylogo.svg) ![NumPy v2.4 Manual - Home](../../_static/numpylogo_dark.svg)](../../index.html)\n\n* [GitHub](https://github.com/numpy/numpy "GitHub")\n\n# numpy.reshape[#](#numpy-reshape "Link to this heading")\n\nnumpy.reshape(*a*, */*, *shape*, *order=\'C\'*, *\\**, *copy=None*)[[source]](https://github.com/numpy/numpy/blob/v2.4.0/numpy/_core/fromnumeric.py#L207-L299)[#](#numpy.reshape "Link to this definition")\n:   Gives a new shape to an array without changing its data.\n\n    Parameters:\n    :   **a**array\\_like\n        :   Array to be reshaped.\n\n        **shape**int or tuple of ints\n        :   The new shape should be compatible with the original shape. If an integer, then the result will be a 1-D array of that length. One shape dimension can be -1. In this case, the value is inferred from the length of the array and remaining dimensions.\n\n        **order**{‘C’, ‘F’, ‘A’}, optional\n        :   Read the elements of `a` using this index order, and place the elements into the reshaped array using this index order. ‘C’ means to read / write the elements using C-like index order, with the last axis index changing fastest, back to the first axis index changing slowest. ‘F’ means to read / write the elements using Fortran-like index order, with the first index changing fastest, and the last index changing slowest. Note that the ‘C’ and ‘F’ options take no account of the memory layout of the underlying array, and only refer to the order of indexing. ‘A’ means to read / write the elements in Fortran-like index order if `a` is Fortran *contiguous* in memory, C-like order otherwise.\n\n        **copy**bool, optional\n        :   If `True`, then the array data is copied. If `None`, a copy will only be made if it’s required by `order`. For `False` it raises a `ValueError` if a copy cannot be avoided. Default: `None`.\n\n    Returns:\n    :   **reshaped\\_array**ndarray\n        :   This will be a new view object if possible; otherwise, it will be a copy. Note there is no guarantee of the *memory layout* (C- or Fortran- contiguous) of the returned array.\n\n    See also\n\n    [`ndarray.reshape`](numpy.ndarray.reshape.html#numpy.ndarray.reshape "numpy.ndarray.reshape")\n    :   Equivalent method.\n\n    Notes\n\n    It is not always possible to change the shape of an array without copying the data.\n\n    The `order` keyword gives the index ordering both for *fetching* the values from `a`, and then *placing* the values into the output array. For example, let’s say you have an array:\n\n    ```\n    >>> a = np. arange(6). reshape((3, 2))>>> aarray([[0, 1], [2, 3], [4, 5]])\n    ```\n\n    You can think of reshaping as first raveling the array (using the given index order), then inserting the elements from the raveled array into the new array using the same kind of index ordering as was used for the raveling.\n\n    ```\n    >>> np. reshape(a,(2, 3))# C-like index orderingarray([[0, 1, 2], [3, 4, 5]])>>> np. reshape(np. ravel(a),(2, 3)) # equivalent to C ravel then C reshapearray([[0, 1, 2], [3, 4, 5]])>>> np. reshape(a,(2, 3), order = \'F\')# Fortran-like index orderingarray([[0, 4, 3], [2, 1, 5]])>>> np. reshape(np. ravel(a, order = \'F\'),(2, 3), order = \'F\')array([[0, 4, 3], [2, 1, 5]])\n    ```\n\n    Examples\n\n    ```\n    >>> import  numpy  as  np>>> a = np. array([[1, 2, 3],[4, 5, 6]])>>> np. reshape(a, 6)array([1, 2, 3, 4, 5, 6])>>> np. reshape(a, 6, order = \'F\')array([1, 4, 2, 5, 3, 6])\n    ```\n\n    ```\n    >>> np. reshape(a,(3, - 1)) # the unspecified value is inferred to be 2array([[1, 2], [3, 4], [5, 6]])\n    ```\n\nOn this page\n\n ', 'content': 'numpy.reshape reference.', 'score': 0.9}
 
 def result(symbol="numpy.reshape", *, version="2.4", body=None):
     return {
@@ -38,24 +35,9 @@ def search(monkeypatch):
     return tool, batches, requests_seen
 
 
-def test_numpy_alias_uses_canonical_definition_without_losing_source_text(search):
-    """The np alias resolves to the NumPy definition in the original provider source."""
-    tool, batches, seen = search
-    source = RECORDED_NUMPY_RESHAPE
-    batches.append([source])
-    payload = tool("NumPy np.reshape order", requirement=RetrievalRequirement(library='NumPy', symbols=['np.reshape'], aspects=['order'], match='definition'))
-    hit = SearchHit.model_validate(payload.hits[0])
-    assert payload.diagnostics.answerability == "covered"
-    assert hit.evidence.element.text == source["raw_content"]
-    assert hit.evidence.excerpt in source["raw_content"]
-    assert seen[0]["include_domains"] == ["numpy.org"]
-    assert seen[0]["query"] == "NumPy np.reshape order"
-    assert len(seen) == 1
-
-
 @pytest.mark.parametrize("previous_scope", ["other_library", "other_version"])
-def test_previous_partial_evidence_is_rechecked_against_library_and_version(search, previous_scope):
-    """Preserved evidence from a different source scope cannot satisfy a new requirement."""
+def test_previous_candidates_keep_library_scope_and_defer_version_relevance(search, previous_scope):
+    """Library domains constrain sources; requested versions are judged by Decisions."""
     tool, batches, seen = search
     old = result("numpy.concatenate", version="2.4")
     old_requirement = RetrievalRequirement(library='numpy')
@@ -71,20 +53,23 @@ def test_previous_partial_evidence_is_rechecked_against_library_and_version(sear
     requirement = RetrievalRequirement(library='numpy', symbols=['numpy.concatenate', 'numpy.stack'], version='1.26' if previous_scope == 'other_version' else None)
     second = tool("numpy.concatenate numpy.stack 1.26", requirement=requirement, previous_hits=previous)
 
-    assert second.diagnostics.answerability == "partial"
-    assert second.diagnostics.missing_requirements == ["symbol:numpy.concatenate"]
-    assert [hit.evidence.snapshot.title for hit in second.hits] == ["numpy.stack"]
+    assert second.diagnostics.answerability == "unknown"
+    assert second.diagnostics.missing_requirements == []
+    assert {hit.evidence.snapshot.title for hit in second.hits} == (
+        {"numpy.stack"} if previous_scope == "other_library" else {"numpy.concatenate", "numpy.stack"}
+    )
+    assert len(seen) == 2
 
 
-@pytest.mark.parametrize("refresh_result", ["empty", "same_snapshot", "wrong_owner", "timeout"])
-def test_explicit_refresh_preserves_prior_evidence_when_no_better_source_arrives(search, monkeypatch, refresh_result):
+@pytest.mark.parametrize("refresh_result", ["same_snapshot", "wrong_owner", "timeout"])
+def test_explicit_refresh_preserves_prior_candidates_and_does_not_reject_other_symbols(search, monkeypatch, refresh_result):
     tool, batches, seen = search
     query = "numpy.reshape explanation"
     source = result(body="# numpy.reshape\nnumpy.reshape(a, shape)\nGives a new shape to an array.")
     requirement = RetrievalRequirement(library="numpy", symbols=["numpy.reshape"], evidence_needs=["explanation"])
     batches.append([source])
     first = tool(query, requirement=requirement)
-    assert first.diagnostics.answerability == "covered"
+    assert first.diagnostics.answerability == "unknown"
 
     if refresh_result == "timeout":
         def timeout(url, *, json, **kwargs):
@@ -92,30 +77,43 @@ def test_explicit_refresh_preserves_prior_evidence_when_no_better_source_arrives
             raise requests.Timeout("temporary search failure")
         monkeypatch.setattr(requests, "post", timeout)
     else:
-        batches.append([source] if refresh_result == "same_snapshot" else
-                       [result("numpy.stack")] if refresh_result == "wrong_owner" else [])
+        batches.append([source] if refresh_result == "same_snapshot" else [result("numpy.stack")])
 
     refreshed = tool(query, requirement=requirement, previous_hits=first.hits,
                      completed_requests=first.diagnostics.completed_requests, refresh=True)
 
     assert [request["query"] for request in seen] == [query, query]
-    assert [hit.evidence.id for hit in refreshed.hits] == [hit.evidence.id for hit in first.hits]
+    first_ids = {hit.evidence.id for hit in first.hits}
+    refreshed_ids = {hit.evidence.id for hit in refreshed.hits}
+    assert first_ids <= refreshed_ids
+    if refresh_result == "wrong_owner":
+        assert {hit.evidence.snapshot.title for hit in refreshed.hits} == {"numpy.reshape", "numpy.stack"}
+    else:
+        assert refreshed_ids == first_ids
+    assert refreshed.diagnostics.answerability == "unknown"
+    assert refreshed.diagnostics.missing_requirements == []
     assert len(refreshed.diagnostics.provider_requests) == 1
     assert refreshed.diagnostics.provider_requests[0].status == ("error" if refresh_result == "timeout" else "completed")
     assert refreshed.diagnostics.error_code == ("RETRIEVAL_DOCS_TIMEOUT" if refresh_result == "timeout" else None)
 
 
-def test_official_version_path_keeps_original_source_identity(search):
-    tool, batches, _seen = search
-    library, symbol, version = "Python", "pathlib.Path.exists", "3.12"
-    url = "https://docs.python.org/3.12/library/pathlib.html#pathlib.Path.exists"
-    body = f"# {symbol}\n{symbol}(value)\nReturn the requested value using documented behavior.\n"
-    batches.append([{"url": url, "title": symbol, "content": body, "raw_content": body, "score": 0.8}])
-    payload = tool(symbol, requirement=RetrievalRequirement(library=library, symbols=[symbol], version=version))
-    assert payload.diagnostics.answerability == "covered"
-    hit = SearchHit.model_validate(payload.hits[0])
-    assert hit.evidence.snapshot.source_uri == url
-    assert hit.evidence.element.text == body
+@pytest.mark.parametrize(("second_k", "expected_calls"), [(2, 1), (3, 2)])
+def test_completed_query_reuses_candidates_only_with_sufficient_provider_limit(search, second_k, expected_calls):
+    tool, batches, seen = search
+    query = "numpy.reshape order"
+    requirement = RetrievalRequirement(library="numpy", symbols=["numpy.reshape"], aspects=["order"])
+    batches.append([result()])
+    first = tool(query, k=1, requirement=requirement)
+    batches.append([result()])
+
+    second = tool(query, k=second_k, requirement=requirement, previous_hits=first.hits,
+                  completed_requests=first.diagnostics.completed_requests)
+
+    assert len(seen) == expected_calls
+    assert seen[-1]["max_results"] == min(20, max(6, second_k * 3))
+    assert second.hits
+    assert second.diagnostics.answerability == "unknown"
+    assert len(second.diagnostics.provider_requests) == expected_calls - 1
 
 
 @pytest.mark.parametrize(("library", "url", "counter"), [
@@ -130,6 +128,8 @@ def test_provider_sources_keep_official_document_and_library_scope(search, libra
     batches.append([source])
     payload = tool("numpy.reshape", requirement=RetrievalRequirement(library=library, symbols=["numpy.reshape"]))
     assert payload.hits == []
+    assert payload.diagnostics.answerability == "missing"
+    assert payload.diagnostics.missing_requirements == []
     assert getattr(payload.diagnostics, counter) == 1
 
 
@@ -143,14 +143,32 @@ def python_reference(body):
     }
 
 
-@pytest.mark.parametrize(("symbol", "description"), [
-    ("exists", "Return `True` if the path points to an existing file or directory and `False` if the path is invalid, inaccessible or missing."),
-    ("is_file", "Return `True` if the path points to a regular file, and `False` if it points to another kind of file or if it does not exist."),
-])
-@pytest.mark.parametrize("note_heading", ["Notes", "Additional details"])
-def test_behavior_explanation_selects_return_conditions_before_release_metadata(search, symbol, description, note_heading):
-    """Preserve the behavior from a large source instead of a shorter version annotation."""
+def test_korean_prose_without_query_terms_remains_a_candidate(search):
     tool, batches, _seen = search
+    description = "최대 크기를 지정하지 않은 캐시는 새 항목을 계속 저장합니다."
+    source = python_reference(description)
+    source["url"] = "https://docs.python.org/ko/3/library/functools.html"
+    source["title"] = "functools — 고차 함수와 호출 가능한 객체에 대한 연산"
+    batches.append([source])
+
+    payload = tool("functools.lru_cache maxsize=None 동작 설명", requirement=RetrievalRequirement(
+        library="Python", symbols=["functools.lru_cache"], aspects=["maxsize", "None"],
+        evidence_needs=["parameters", "explanation"], match="definition",
+    ))
+
+    assert payload.diagnostics.answerability == "unknown"
+    assert payload.diagnostics.missing_requirements == []
+    assert len(payload.hits) == 1
+    evidence = payload.hits[0].evidence
+    assert evidence.element.text == description
+    assert evidence.excerpt == description
+
+
+def test_large_source_candidates_preserve_return_conditions_and_release_metadata(search):
+    """Candidate construction keeps late source text without deciding its sufficiency."""
+    tool, batches, _seen = search
+    symbol = "exists"
+    description = "Return `True` if the path points to an existing file or directory and `False` if the path is invalid, inaccessible or missing."
     # The declaration, fenced example and release annotation have the structure
     # returned by Tavily for the live Python documentation.
     body = (
@@ -160,7 +178,7 @@ def test_behavior_explanation_selects_return_conditions_before_release_metadata(
         + "    This method normally follows symlinks; to check the symlink itself, add the argument `follow_symlinks=False`.\n\n"
         + f"    ```\n    >>> Path('example.txt').{symbol}()\n    True\n    ```\n"
         + "\n    Changed in version 3.12: The *follow\\_symlinks* parameter was added.\n\n"
-        + f"{note_heading}\nFor symbolic links, Path.{symbol}() checks the target.\n\n"
+        + f"Additional details\nFor symbolic links, Path.{symbol}() checks the target.\n\n"
         + "# Path.resolve\nPath.resolve()\nReturn an absolute path with all symlinks resolved.\n"
     )
     batches.append([python_reference(body)])
@@ -169,117 +187,13 @@ def test_behavior_explanation_selects_return_conditions_before_release_metadata(
                    requirement=RetrievalRequirement(library="Python", symbols=[f"pathlib.Path.{symbol}"],
                                                     evidence_needs=["explanation"]))
 
-    assert payload.diagnostics.answerability == "covered"
-    assert len(payload.hits) == 1
-    evidence = payload.hits[0].evidence
-    assert description in evidence.excerpt
-    assert "follow_symlinks=False" in evidence.excerpt
-    assert evidence.element.text == body
-    assert evidence.excerpt == body[evidence.selection.start:evidence.selection.end]
-
-
-@pytest.mark.parametrize("notice", [
-    "Changed in version 3.12: The *follow\\_symlinks* parameter was added.",
-    "Changed in version 3.12:\n    The *follow\\_symlinks* parameter was added.",
-    "Changed in version 3.12:\n    The *follow\\_symlinks* parameter\n    was added.",
-    "Added in version 3.4.",
-    "Deprecated since version 3.12.",
-])
-def test_release_metadata_alone_does_not_cover_behavior_explanation(search, notice):
-    tool, batches, _seen = search
-    batches.append([python_reference(f"Path.exists(*, follow_symlinks=True)\n\n{notice}\n")])
-
-    payload = tool("Python pathlib.Path.exists behavior", requirement=RetrievalRequirement(
-        library="Python", symbols=["pathlib.Path.exists"], evidence_needs=["explanation"],
-    ))
-
-    assert payload.diagnostics.answerability == "partial"
-    assert payload.diagnostics.missing_requirements == ["need:explanation"]
-
-
-def test_behavioral_change_note_remains_usable_evidence(search):
-    tool, batches, _seen = search
-    behavior = "Changed in version 3.8: Returns False instead of raising ValueError for paths containing unrepresentable characters."
-    batches.append([python_reference(f"Path.exists()\n\n{behavior}\n")])
-
-    payload = tool("Python pathlib.Path.exists behavior", requirement=RetrievalRequirement(
-        library="Python", symbols=["pathlib.Path.exists"], evidence_needs=["explanation"],
-    ))
-
-    assert payload.diagnostics.answerability == "covered"
-    assert behavior in payload.hits[0].evidence.excerpt
-
-
-def test_release_metadata_does_not_explain_a_requested_parameter(search):
-    tool, batches, _seen = search
-    batches.append([python_reference(
-        "Path.exists(*, follow_symlinks=True)\n"
-        "Return True if the path points to an existing file or directory.\n\n"
-        "Changed in version 3.12: The follow_symlinks parameter was added.\n"
-    )])
-
-    payload = tool("Python pathlib.Path.exists follow_symlinks explanation", requirement=RetrievalRequirement(
-        library="Python", symbols=["pathlib.Path.exists"], aspects=["follow_symlinks"],
-        evidence_needs=["explanation"],
-    ))
-
-    assert payload.diagnostics.answerability == "partial"
-    assert payload.diagnostics.missing_requirements == ["aspect:follow_symlinks"]
-
-
-@pytest.mark.parametrize("description", [
-    "The entire directory tree is removed.",
-    "Duplicate entries are removed.",
-    "A new trailing dimension is added.",
-])
-def test_addition_and_removal_behavior_is_not_lifecycle_metadata(search, description):
-    tool, batches, _seen = search
-    batches.append([result(body=f"# numpy.reshape\nnumpy.reshape(a, shape)\n{description}\n")])
-
-    payload = tool("numpy.reshape behavior", requirement=RetrievalRequirement(
-        library="numpy", symbols=["numpy.reshape"], evidence_needs=["explanation"],
-    ))
-
-    assert payload.diagnostics.answerability == "covered"
-    assert description in payload.hits[0].evidence.excerpt
-
-
-@pytest.mark.parametrize(("symbol", "parameter", "choice", "other_behavior", "requested_behavior"), [
-    (
-        "numpy.pad", "mode", "reflect",
-        "Selects the padding algorithm. The constant choice inserts a fixed value.",
-        "Selects the padding algorithm. The reflect choice reflects values at the boundary.",
-    ),
-    (
-        "numpy.linalg.norm", "ord", "0",
-        "Selects the norm calculation. None uses the default calculation.",
-        "Selects the norm calculation. A value of 0 counts the nonzero elements.",
-    ),
-    (
-        "numpy.load", "allow_pickle", "True",
-        "Controls loading pickled object arrays. False rejects these arrays.",
-        "Controls loading pickled object arrays. True permits loading these arrays.",
-    ),
-])
-def test_requested_behavior_choice_requires_its_own_parameter_evidence(
-    search, symbol, parameter, choice, other_behavior, requested_behavior,
-):
-    """A query containing a choice cannot compensate for missing source support."""
-    tool, batches, _seen = search
-    query = f"Explain {symbol} with {parameter}={choice}"
-    requirement = RetrievalRequirement(
-        library="numpy", symbols=[symbol], aspects=[parameter, choice],
-        evidence_needs=["parameters", "explanation"],
-    )
-
-    for description, expected in ((other_behavior, "partial"), (requested_behavior, "covered")):
-        # These compact synthetic references exercise the contract rather than
-        # attempting to reproduce each API's complete official signature.
-        body = f"# {symbol}\n{symbol}(a, {parameter})\n\nParameters\n{parameter}: {description}\n"
-        batches.append([result(symbol, body=body)])
-        payload = tool(query, requirement=requirement)
-        assert payload.diagnostics.answerability == expected
-        assert payload.diagnostics.missing_requirements == (
-            [f"aspect:{choice}"] if expected == "partial" else []
-        )
-        assert payload.hits[0].evidence.element.text == body
+    assert payload.diagnostics.answerability == "unknown"
+    assert payload.diagnostics.missing_requirements == []
+    assert 1 <= len(payload.hits) <= 6
+    assert any(description in hit.evidence.excerpt for hit in payload.hits)
+    assert any("follow_symlinks=False" in hit.evidence.excerpt for hit in payload.hits)
+    assert any("Changed in version 3.12" in hit.evidence.excerpt for hit in payload.hits)
+    for hit in payload.hits:
+        evidence = hit.evidence
+        assert evidence.element.text == body
+        assert evidence.excerpt == body[evidence.selection.start:evidence.selection.end]

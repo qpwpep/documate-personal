@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from src.core.planner_schema import DocsEvidenceNeed, PlannerOutput, RetrievalTask
+from src.core.planner_schema import PlannerOutput, RetrievalTask
 
 
 # Empirical selection policy, not measured model-context limits. The pairs are
@@ -41,13 +41,11 @@ def literal_passage_anchors(task: RetrievalTask) -> list[str]:
     return list(dict.fromkeys([*symbols, *task.requirement.aspects]))
 
 
-def requirement_passage_targets(task: RetrievalTask) -> list[tuple[str | None, str | None, DocsEvidenceNeed | None]]:
-    """Use the same file/literal-anchor/evidence-kind targets for capacity and selection."""
-    needs = task.requirement.evidence_needs if task.route == "docs" else []
-    return [(file_id, aspect, need)
+def upload_passage_targets(task: RetrievalTask) -> list[tuple[str | None, str | None]]:
+    """Explicit upload file and literal anchors reserve independent source ranges."""
+    return [(file_id, aspect)
             for file_id in task.requirement.file_ids or [None]
-            for aspect in literal_passage_anchors(task) or [None]
-            for need in needs or [None]]
+            for aspect in literal_passage_anchors(task) or [None]]
 
 
 def resolve_evidence_budgets(
@@ -62,7 +60,13 @@ def resolve_evidence_budgets(
     normal_total, compact_total = (
         _MIXED_ROUTE_TOTAL_CHARS if {"docs", "upload"}.issubset(routes) else _DEFAULT_TOTAL_CHARS
     )
-    required_passages = sum(len(requirement_passage_targets(task)) for task in plan.tasks)
+    # Docs needs and aspects are independent semantic allocation labels, not a
+    # Cartesian product of mandatory passages. Decisions verifies the packet.
+    required_passages = sum(
+        max(1, len(task.requirement.aspects) + len(task.requirement.evidence_needs))
+        if task.route == "docs" else len(upload_passage_targets(task))
+        for task in plan.tasks
+    )
     max_items = max(_BASE_ITEM_CAPACITY, required_passages)
     return (
         RetrievedEvidenceBudget(limits.normal_chars, normal_total, max_items),
