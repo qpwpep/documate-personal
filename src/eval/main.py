@@ -84,6 +84,13 @@ def command_run(args: argparse.Namespace) -> int:
     endpoint = args.endpoint or benchmark_env.endpoint
     config = _load_config_with_env_overrides(args.config, benchmark_env=benchmark_env)
     track = resolve_run_track(args.track, args.limit)
+    if track == "release" and args.limit is not None and args.limit > 0:
+        print(
+            "error: release track runs the whole approved suite and cannot use --limit. "
+            "Use --track smoke for a partial run.",
+            file=sys.stderr,
+        )
+        return 2
     if track == "release" and not config.judge_enabled:
         print(
             "error: release track requires judge evaluation; judge_enabled is false. "

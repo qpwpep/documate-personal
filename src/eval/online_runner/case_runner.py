@@ -311,6 +311,8 @@ def run_online_benchmark(
             "Release runs require judge evaluation; judge_enabled is false. "
             "Run a smoke track for rule-only diagnostics."
         )
+    if track == "release" and _normalize_limit(limit) is not None:
+        raise ValueError("Release runs execute the whole approved suite; use a smoke track with --limit.")
     from ..release_dataset import DEFAULT_DESIGN, load_release_input, load_reviewed_release
 
     verified_uploads = None

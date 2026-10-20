@@ -26,10 +26,11 @@ class StoredRun:
 
     @property
     def track(self) -> RunTrack:
-        if self.track_explicit:
-            return self.summary.track
+        # A limited run never represents the release suite, whatever track it claimed.
         if self.summary.requested_limit is not None:
             return "smoke"
+        if self.track_explicit:
+            return self.summary.track
         return "release"
 
     @property

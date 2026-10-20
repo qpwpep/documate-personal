@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -16,9 +17,13 @@ from src.core.contracts.usage import LLMCallRecord, TokenUsage
 from src.core.documents import DocumentElement, SourceAnchor, build_snapshot
 from src.core.evidence import RetrievalScore, SearchHit, build_evidence
 from src.eval.config_models import BenchmarkCase, BenchmarkConfig
+from src.eval.history_loader import StoredRun
 from src.eval.judge_llm import LLMJudge
+from src.eval.main import build_parser
+from src.eval.online_runner import run_online_benchmark
 from src.eval.online_runner.response_parser import ParsedResponseData, parse_agent_response
 from src.eval.online_runner.result_builder import build_case_result
+from src.eval.reporting import build_markdown_report
 from src.eval.reporting.summary import build_summary
 from src.eval.weighting import resolve_case_weights
 
@@ -129,12 +134,13 @@ def _case_result(index=0, *, judge_failure=None, missing_response=False, **respo
     return case, result
 
 
-def _summary(pairs, *, results=None):
+def _summary(pairs, *, results=None, requested_limit=None, slack_live_enabled=False):
     return build_summary(
         run_id="release-contract", endpoint="http://fixture", fixtures_path="cases.jsonl",
-        config_path="config.toml", track="release", requested_limit=None,
+        config_path="config.toml", track="release", requested_limit=requested_limit,
         config=BenchmarkConfig(), cases=[case for case, _ in pairs],
         results=[result for _, result in pairs] if results is None else results,
+        slack_live_enabled=slack_live_enabled,
     )
 
 
@@ -277,3 +283,73 @@ def test_missing_execution_evidence_blocks_a_perfect_evaluation():
     assert pair[1].release_pass is False
     assert "tool_execution_evidence_missing" in pair[1].gate_failures
     assert _summary([pair]).overall_passed is False
+
+
+@pytest.mark.parametrize("unobserved", [3, 10])
+def test_unobserved_cost_blocks_release(unobserved):
+    pairs = [_case_result(index) for index in range(10)]
+    for _, result in pairs[:unobserved]:
+        result.cost_usd = None
+
+    summary = _summary(pairs)
+    gate = next(gate for gate in summary.gates if gate.name == "avg_cost_per_case_usd")
+
+    assert summary.metrics.cost_gate_eligible is False
+    assert gate.passed is False
+    assert gate.status == "insufficient_coverage"
+    assert "avg_cost_per_case_usd" in summary.release_decision.failure_codes
+    assert summary.overall_passed is False
+
+
+def test_sufficiently_observed_cost_is_evaluated():
+    pairs = [_case_result(index) for index in range(10)]
+    for _, result in pairs[:2]:
+        result.cost_usd = None
+
+    gate = next(gate for gate in _summary(pairs).gates if gate.name == "avg_cost_per_case_usd")
+
+    assert gate.status == "evaluated"
+    assert gate.passed is True
+
+
+def test_release_run_rejects_case_limit(tmp_path):
+    fixtures = tmp_path / "cases.jsonl"
+    fixtures.write_text("", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="limit"):
+        run_online_benchmark(
+            fixtures_path=fixtures, endpoint="http://fixture", config=BenchmarkConfig(),
+            config_path=tmp_path / "config.toml", output_root=tmp_path / "out",
+            track="release", limit=1,
+        )
+    assert not (tmp_path / "out").exists()
+
+
+def test_release_cli_rejects_case_limit(tmp_path, capsys):
+    fixtures = tmp_path / "cases.jsonl"
+    fixtures.write_text("", encoding="utf-8")
+    args = build_parser().parse_args([
+        "run", "--mode", "online", "--track", "release", "--limit", "1",
+        "--fixtures", str(fixtures), "--output-root", str(tmp_path / "out"),
+    ])
+
+    assert args.func(args) == 2
+    assert "--limit" in capsys.readouterr().err
+
+
+def test_limited_run_is_never_release_history():
+    summary = _summary([_case_result()], requested_limit=1)
+    stored = StoredRun(summary=summary, generated_at=datetime.now(timezone.utc), track_explicit=True)
+
+    assert stored.track == "smoke"
+
+
+@pytest.mark.parametrize("live", [False, True])
+def test_summary_records_whether_slack_delivery_was_live(live):
+    case, result = _case_result()
+    summary = _summary([(case, result)], slack_live_enabled=live)
+    report = build_markdown_report(summary, [result])
+
+    mode = "live" if live else "not_live"
+    assert summary.audit_metrics["slack_delivery_mode"] == mode
+    assert f"- Slack delivery: `{mode}`" in report

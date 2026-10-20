@@ -205,6 +205,9 @@ def build_markdown_report(
     lines.append(f"- Evaluation fingerprint: `{summary.evaluation_fingerprint or 'unavailable'}`")
     scoring_contract = (summary.audit_metrics or {}).get("scoring_contract_version") or "legacy: unspecified"
     lines.append(f"- Scoring contract: `{scoring_contract}`")
+    slack_mode = (summary.audit_metrics or {}).get("slack_delivery_mode")
+    if slack_mode is not None:
+        lines.append(f"- Slack delivery: `{slack_mode}`")
     decision = summary.release_decision
     if summary.track == "smoke" or (decision is not None and decision.scope == "diagnostic"):
         lines.append("- Release: `diagnostic run only (no release verdict)`")

@@ -463,9 +463,15 @@ def build_summary(
             name="avg_cost_per_case_usd",
             threshold=hard_gates.avg_cost_per_case_usd,
             actual=metrics.avg_cost_per_case_usd if metrics.cost_gate_eligible else None,
-            passed=True if not metrics.cost_gate_eligible else (metrics.avg_cost_per_case_usd is not None and metrics.avg_cost_per_case_usd <= hard_gates.avg_cost_per_case_usd),
+            # Unmeasured cost is not evidence of acceptable cost.
+            passed=(metrics.cost_gate_eligible and metrics.avg_cost_per_case_usd is not None
+                    and metrics.avg_cost_per_case_usd <= hard_gates.avg_cost_per_case_usd),
             gate_type="release",
-            status="evaluated" if metrics.cost_gate_eligible else "skipped_insufficient_coverage",
+            detail=(
+                f"observed={cost_observed_cases}/{len(results)} "
+                f"min_rate={float(hard_gates.cost_gate_min_observation_rate)}"
+            ),
+            status="evaluated" if metrics.cost_gate_eligible else "insufficient_coverage",
         ),
         GateResult(
             name="judge_min_score_pass_rate",
@@ -570,6 +576,8 @@ def build_summary(
             "slack_delivery_required_cases": metrics.slack_delivery_required_cases,
             "slack_delivery_success_cases": metrics.slack_delivery_success_cases,
             "cost_gate_eligible": metrics.cost_gate_eligible,
+            # A release may run without live Slack; delivery is then attempted but unverified.
+            "slack_delivery_mode": "live" if slack_live_enabled else "not_live",
         },
     )
 

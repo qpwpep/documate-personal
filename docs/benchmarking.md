@@ -175,7 +175,7 @@ uv run python -m src.eval.main run \
 
 release track은 judge 평가가 필수입니다. `judge_enabled=false`인 release 실행은 시작 전 설정 검증에서 종료 코드 2로 거부하며, 실행 결과가 release 기준에 미달하면 산출물을 저장한 뒤 종료 코드 1을 반환합니다. judge가 정상 완료되고 모든 gate가 통과한 release만 종료 코드 0입니다.
 
-짧은 smoke run이 필요하면 `--limit`을 사용할 수 있습니다. `--track`를 생략하면 `--limit` 런은 기본적으로 `smoke`로 분류됩니다. smoke는 기존처럼 fixture를 직접 읽으며 승격 승인 저장소를 자동 선택하지 않습니다. `--release-review`를 명시하면 지정한 승인으로 검증합니다. `judge_enabled=false`로 실행한 smoke는 `judge_status=disabled`의 규칙 진단 결과만 기록하며 release 통과로 표시하지 않고, 정상 완료 시 종료 코드 0을 반환합니다.
+짧은 smoke run이 필요하면 `--limit`을 사용할 수 있습니다. `--track`를 생략하면 `--limit` 런은 `smoke`로 분류됩니다. release는 승인된 전체 사례를 실행해야 하므로 `--track release`와 `--limit`을 함께 지정하면 실행 전에 종료 코드 2로 거부합니다. 이전에 저장된 limit 실행은 track 표시와 관계없이 history에서 smoke로 취급합니다. smoke는 기존처럼 fixture를 직접 읽으며 승격 승인 저장소를 자동 선택하지 않습니다. `--release-review`를 명시하면 지정한 승인으로 검증합니다. `judge_enabled=false`로 실행한 smoke는 `judge_status=disabled`의 규칙 진단 결과만 기록하며 release 통과로 표시하지 않고, 정상 완료 시 종료 코드 0을 반환합니다.
 
 ```bash
 uv run python -m src.eval.main run \
@@ -209,7 +209,7 @@ uv run python -m src.eval.main run \
   --live-slack-user-id U0123456789
 ```
 
-live Slack 실행에서는 `summary.json`과 `report.md`에 Slack delivery audit 지표가 추가됩니다. 이 지표는 audit-only이며 release gate를 직접 차단하지는 않습니다.
+live Slack 실행에서는 `summary.json`과 `report.md`에 Slack delivery audit 지표가 추가됩니다. 이 지표는 audit-only이며 release gate를 직접 차단하지는 않습니다. live Slack 없이 실행한 release도 release로 인정하되, 이때 Slack 사례는 전송 시도까지만 평가하고 실제 전송 성공은 검증하지 않습니다. 두 경우를 구분하도록 `summary.json`의 `audit_metrics.slack_delivery_mode`와 `report.md` 머리말의 `Slack delivery`에 `live` 또는 `not_live`를 기록합니다.
 
 수신자 스키마를 바꾼 fixture와 action specification은 내용이 같은 의미여도 기존 승인과 바이트가 다릅니다. release 실행에는 변경한 입력을 대상으로 새 검토와 승인이 필요하며, 기존 review의 hash만 바꿔 승인으로 간주하면 안 됩니다. 승인 검증은 `uv run python -m src.eval.release_dataset validate --input <candidate.jsonl> --design <design-dir> --review <review.json>`으로 수행합니다.
 
@@ -340,7 +340,7 @@ uv run python -m src.eval.request_contract_eval \
 | `avg_cost_per_case_usd` | `0.01` |
 | `cost_gate_min_observation_rate` | `0.80` |
 
-judge minimum score와 pricing도 같은 파일에서 관리합니다. `cost_gate_min_observation_rate`는 `src/eval/config_models.py::HardGates`의 기본값이며, config에 명시하지 않으면 `0.80`이 적용됩니다. `cost_observed_cases`는 `cost_usd`가 확정된 사례 수이고 `cost_observation_rate`는 이 수를 저장된 전체 사례 수로 나눈 값입니다. 정상적인 0 비용도 포함합니다. 평균 비용의 분모는 `cost_observed_cases`이며 미관측 사례를 0 비용으로 넣지 않습니다. Decisions API 호출은 `pricing.models`에 해당 모델의 단가를 명시해야 비용을 확정합니다. 단가가 없으면 일반 모델의 기본 단가를 적용하지 않고 해당 사례의 `cost_usd`를 `null`로 기록합니다. 이 사례도 비용 관측률의 전체 사례 수에는 포함됩니다. 관측률이 기준에 미달하면 비용 gate는 `skipped_insufficient_coverage`로 표시합니다. 준비 턴에서 모델을 사용하고 최종 저장 턴이 무호출인 경우도 모든 호출의 토큰과 적용 단가를 알면 비용을 확정할 수 있습니다.
+judge minimum score와 pricing도 같은 파일에서 관리합니다. `cost_gate_min_observation_rate`는 `src/eval/config_models.py::HardGates`의 기본값이며, config에 명시하지 않으면 `0.80`이 적용됩니다. `cost_observed_cases`는 `cost_usd`가 확정된 사례 수이고 `cost_observation_rate`는 이 수를 저장된 전체 사례 수로 나눈 값입니다. 정상적인 0 비용도 포함합니다. 평균 비용의 분모는 `cost_observed_cases`이며 미관측 사례를 0 비용으로 넣지 않습니다. Decisions API 호출은 `pricing.models`에 해당 모델의 단가를 명시해야 비용을 확정합니다. 단가가 없으면 일반 모델의 기본 단가를 적용하지 않고 해당 사례의 `cost_usd`를 `null`로 기록합니다. 이 사례도 비용 관측률의 전체 사례 수에는 포함됩니다. 관측률이 기준에 미달하면 비용 gate는 `insufficient_coverage` 상태로 실패하며, 측정하지 못한 비용을 기준 충족으로 간주하지 않습니다. gate `detail`에는 관측 사례 수와 최소 관측률을 기록합니다. 준비 턴에서 모델을 사용하고 최종 저장 턴이 무호출인 경우도 모든 호출의 토큰과 적용 단가를 알면 비용을 확정할 수 있습니다.
 
 ### 4.0.1 평가 상태와 release 판정
 
