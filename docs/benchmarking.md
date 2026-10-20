@@ -173,7 +173,9 @@ uv run python -m src.eval.main run \
   --endpoint http://127.0.0.1:8000
 ```
 
-release track은 judge 평가가 필수입니다. `judge_enabled=false`인 release 실행은 시작 전 설정 검증에서 종료 코드 2로 거부하며, 실행 결과가 release 기준에 미달하면 산출물을 저장한 뒤 종료 코드 1을 반환합니다. judge가 정상 완료되고 모든 gate가 통과한 release만 종료 코드 0입니다.
+release track은 승인된 전체 사례와 judge 평가가 필수입니다. `--track release --limit ...`, 승인되지 않은 입력, `judge_enabled=false`는 실행 전에 거부합니다. 전체 승인 case ID 목록과 후보·승인 해시를 `release_suite`에 보존하고, 실행 계획이 승인 목록과 정확히 일치하는지 실행 전과 집계·저장 결과 검증에서 확인합니다. `--limit`이 승인 사례 수보다 커도 release에는 사용할 수 없습니다. 일부 사례의 결과만으로 전체 release 자격을 만들지 않습니다.
+
+설정 오류는 종료 코드 2, 실행 결과의 release 기준 미달은 산출물 저장 후 종료 코드 1을 반환합니다. judge가 정상 완료되고 전체 승인 사례·평가 완전성·행동 의무·비용 관측을 포함한 모든 gate를 통과한 release만 종료 코드 0입니다.
 
 짧은 smoke run이 필요하면 `--limit`을 사용할 수 있습니다. `--track`를 생략하면 `--limit` 런은 기본적으로 `smoke`로 분류됩니다. smoke는 기존처럼 fixture를 직접 읽으며 승격 승인 저장소를 자동 선택하지 않습니다. `--release-review`를 명시하면 지정한 승인으로 검증합니다. `judge_enabled=false`로 실행한 smoke는 `judge_status=disabled`의 규칙 진단 결과만 기록하며 release 통과로 표시하지 않고, 정상 완료 시 종료 코드 0을 반환합니다.
 
@@ -209,7 +211,7 @@ uv run python -m src.eval.main run \
   --live-slack-user-id U0123456789
 ```
 
-live Slack 실행에서는 `summary.json`과 `report.md`에 Slack delivery audit 지표가 추가됩니다. 이 지표는 audit-only이며 release gate를 직접 차단하지는 않습니다.
+live Slack 실행에서는 `summary.json`과 `report.md`에 추가 전달 감사 지표가 표시됩니다. 이 보조 지표와 별개로, fixture가 Slack을 필수 행동으로 지정하면 live 옵션 유무와 관계없이 성공 영수증과 일치하는 실행 기록이 있어야 사례와 `action_outcome_contract` gate를 통과합니다. `permission_denied` 같은 확인된 전송 실패를 높은 답변 점수로 상쇄할 수 없습니다.
 
 수신자 스키마를 바꾼 fixture와 action specification은 내용이 같은 의미여도 기존 승인과 바이트가 다릅니다. release 실행에는 변경한 입력을 대상으로 새 검토와 승인이 필요하며, 기존 review의 hash만 바꿔 승인으로 간주하면 안 됩니다. 승인 검증은 `uv run python -m src.eval.release_dataset validate --input <candidate.jsonl> --design <design-dir> --review <review.json>`으로 수행합니다.
 
@@ -220,7 +222,7 @@ run_id="$(<output/benchmarks/latest_release_run.txt)"
 uv run python -m src.eval.main report --run "output/benchmarks/$run_id"
 ```
 
-`run` 명령이 갱신한 release 포인터를 사용하는 예시입니다. smoke 보고서를 재생성하려면 `latest_smoke_run.txt`를 읽습니다. `report`는 대상 run에 `summary.json`과 `raw_results.jsonl`이 모두 있는지 검증한 뒤 같은 디렉터리의 `report.md`만 다시 씁니다.
+`run` 명령이 갱신한 release 포인터를 사용하는 예시입니다. smoke 보고서를 재생성하려면 `latest_smoke_run.txt`를 읽습니다. `report`는 대상 run의 `summary.json`과 `raw_results.jsonl`, 현재 판정·측정 계약과 보존된 증거를 검증한 뒤 같은 디렉터리의 `report.md`만 다시 씁니다. 구형 계약의 산출물은 현재 보고기로 재발행하지 않으며, 당시 저장한 보고서를 그대로 읽습니다.
 
 ### 2.5 release 요약과 benchmark history SVG 갱신
 
@@ -254,15 +256,21 @@ uv run python -m src.eval.request_contract_eval \
 
 `--run-id`는 아직 존재하지 않는 이름이어야 합니다. `--plan-only`는 모델 호출 없이 실행 manifest만 만들며 `--live`와 함께 사용할 수 없습니다. `--cases`로 일부 사례를 지정하거나 반복 횟수를 줄인 실행은 진단용이며 전체 통과로 인정하지 않습니다. 수정 후 실행은 `--comparison-run`과 `--change-note`로 비교 대상과 변경 근거를 실행 전에 기록할 수 있습니다. `--model`, `--max-tokens`는 명시적인 비교 조건으로 기록하고 `.env`를 변경하지 않습니다.
 
-이 평가는 현재 설정된 planner 모델과 실제 계약 확정 코드를 사용합니다. 계약 유효성, 행동 의사·목적지, 본문 작업·정확한 참조, 내용·형식·선호, 질문·부족한 정보, 요청 ID·revision과 보류 상태를 분리해 채점합니다. 모델이 요청되지 않은 행동을 허용한 오류는 서버가 차단했더라도 원시 출력의 심각 실패로 기록합니다. `overall`은 이 해석 과제의 모든 차원이 성공한 표본이며 실제 검색·합성·파일·Slack까지 실행한 성공률이 아닙니다. 전체 전달 상태 전이는 pytest의 실제 임시 파일·localhost Slack 대체 서버 검사로 검증합니다.
+이 평가는 현재 설정된 planner 모델과 실제 계약 확정 코드를 사용합니다. 공용 LLM 호출 경계의 observer가 각 시도를 관측하므로 제품의 `StructuredModel`을 교체하지 않습니다. wire schema 검증, 남은 시간 예산 전달, repair는 제품과 같은 경로를 실행합니다. 최초 응답뿐 아니라 모든 repair 시도의 원문을 `model_calls`와 `raw_candidates`에 보존합니다. 요청되지 않은 행동의 승격이나 취소 행동의 부활은 서버가 차단했어도 해당 시도의 `critical_attempts`와 심각 실패에 기록합니다. 시도 누락·순서 불일치·관측 불가는 심각 실패 0건으로 간주하지 않습니다. `invalid_json` 시도는 원시 행동을 판정할 수 없으므로 최종 repair가 수용돼도 관측 부족입니다. 파싱 가능한 계약 누락을 정상 repair한 경우와 구분합니다.
+
+계약 유효성, 행동 의사·목적지, 본문 작업·정확한 참조, 내용·형식·선호, 질문·부족한 정보, 요청 ID·revision과 보류 상태를 분리해 채점합니다. 자유 텍스트 본문 지시가 있는 `compose`, `transform_input`, `transform_answer`, `extract`는 별도 의미 평가자가 원래 질문·대화·고정 oracle과 확정 계약을 대조합니다. 주제·범위(`subject`), 작업·변환 목표(`operation`), 목표 언어(`target_language`), 필수 조건(`constraints`) 네 항목에 각각 `pass` 또는 `fail`과 근거가 필요합니다. 평가 대상은 모델이 선택한 body가 아니라 고정 oracle의 body 종류로 정합니다. 동의어나 자연스러운 바꿔 쓰기를 허용하되 특정 단어의 존재로 의미 일치를 인정하지 않습니다.
+
+의미 평가자는 `JUDGE_MODEL`과 `BENCHMARK_JUDGE_ENABLED` 설정을 사용합니다. `body_semantics.status`는 `evaluated`, `not_applicable`, `unavailable`, `invalid`를 구분하며, 평가 입력 해시로 원래 요청·본문과 연결합니다. 의미 불일치는 `product_failure`, 잘못된 평가 응답은 `evaluation_failure`, 필수 평가·호출 관측 누락은 `observation_insufficient`로 기록합니다. 동시에 발생한 원인은 `failure_categories`에 모두 남깁니다. 평가 오류·관측 부족이 하나라도 있으면 `complete_evaluation` 조건이 전체 자격을 차단합니다. 평가자의 장애가 제품의 계약 수용 결과나 원시 시도를 지우지 않습니다.
+
+`overall`은 이 해석 과제의 모든 차원이 성공한 표본이며 실제 검색·합성·파일·Slack까지 실행한 성공률이 아닙니다. 전체 전달 상태 전이는 pytest의 실제 임시 파일·localhost Slack 대체 서버 검사로 검증합니다. 의미 평가도 모델 판단이므로 자동 회귀 통과가 실제 모델의 의미 판정 정확도나 전체 벤치마크 성능을 입증하지는 않습니다.
 
 각 실행은 `output/request_contract_evals/<run_id>/`에 덮어쓰기 없이 보존합니다.
 
 | 파일 | 내용 |
 | --- | --- |
-| `manifest.json` | 실행 전 표본 순서·반복 횟수·정책·모델 설정, 코드·스키마·프롬프트·fixture hash |
-| `results.jsonl` | 실패를 포함한 모든 표본의 모델 원문·사용량·시간·계약·오류·차원별 판정 |
-| `summary.json` | 차원별 실패, 각 사례의 3회 변동성, 통과 기준 판정 |
+| `manifest.json` | 실행 전 표본 순서·반복 횟수·정책, 실제 planner 모델·reasoning·시간·재시도·호출 예산 설정, 전체 `src` 코드·스키마·프롬프트·fixture hash, 의미 평가자의 설정·프롬프트·스키마와 digest |
+| `results.jsonl` | 실패를 포함한 모든 표본과 모든 시도의 모델 원문·사용량·시간·계약·오류, 의미 평가 요청·원시 응답·입력 해시, 차원별 판정과 실패 분류 |
+| `summary.json` | 차원별 실패·상태별 개수·심각 실패, 각 사례의 3회 변동성, 평가 완전성과 통과 기준 판정 |
 
 실행 중 코드가 바뀌면 해당 배치는 통과로 인정하지 않습니다. 결함 수정 뒤에는 새 실행 ID로 결과를 남기며 기존 실패를 삭제하거나 성공한 재실행만 합산하지 않습니다. 최초 v1의 **12/21 통과·9/21 실패**와 별도 진단 재실행은 [`history.v1.json`](../data/benchmarks/request_contracts/history.v1.json)에 보존합니다. v1 원시 응답 전체는 당시 파일로 저장되지 않았으며 이 이력은 남아 있는 실행 기록을 근거로 작성했습니다. v2 정책으로 v1 결과를 다시 채점하거나 두 수치로 개선율을 계산하지 않습니다.
 
@@ -278,7 +286,7 @@ uv run python -m src.eval.request_contract_eval \
 | `v2-20260910-replay-02` | 목적지 보존 수정 후 두 번째 배치의 원시 응답 재검증 | 105/126 (83.33%) | 122/126 (96.83%) | 새 모델 호출 0건. 독립적인 실모델 표본이나 품질 통과 배치로 사용하지 않음 |
 | `v2-20260910-astra-schema-01` | `gpt-6-astra` 호환성 진단 1건 | 생성 응답 없음 | 생성 응답 없음 | `temperature=0` 미지원으로 HTTP 400. 추가 Astra 호출 없음 |
 
-두 전체 실모델 배치 모두 실행 중 코드 변경 없이 완료했으며 심각 실패는 0건이었습니다. 두 번째 배치의 기존 사례는 59/63 표본 성공, 21개 중 17개 사례가 3/3 성공했습니다. 따라서 기존 사례 전부 3/3, 전체 95%, 계약 수용 99% 기준을 충족하지 못합니다. 사례별 변동성은 각 `summary.json`의 `cases`, 반복별 원시 결과는 `results.jsonl`에 남깁니다.
+두 전체 실모델 배치 모두 실행 중 코드 변경 없이 완료했으며 당시 채점기의 심각 실패 집계는 0건이었습니다. 이 수치는 현재의 모든 repair 시도 검사와 본문 의미 평가로 다시 검증한 결과가 아닙니다. 두 번째 배치의 기존 사례는 59/63 표본 성공, 21개 중 17개 사례가 3/3 성공했습니다. 따라서 기존 사례 전부 3/3, 전체 95%, 계약 수용 99% 기준을 충족하지 못합니다. 사례별 변동성은 각 `summary.json`의 `cases`, 반복별 원시 결과는 `results.jsonl`에 남깁니다.
 
 두 번째 배치의 차원별 실패는 계약 유효성 4건, 행동·목적지 6건, 본문 작업·참조 3건, 내용·형식 요구 7건, 질문 필요성 3건, 부족한 정보 6건, 상태 전이 10건입니다. 한 표본이 여러 차원에서 실패할 수 있으므로 합산하지 않습니다. 정확한 인용 범위, 정정·보충·취소의 분류, 형식 제약과 부족한 정보의 해석에서 실패가 남았습니다. 모든 모델 응답은 정상 종료했고 최대 출력량은 첫 배치 877, 두 번째 배치 690 토큰이어서 출력 한도 부족을 원인으로 판단하지 않았습니다.
 
@@ -301,6 +309,12 @@ uv run python -m src.eval.request_contract_eval \
 
 `summary.json`의 `judge_model`은 config와 환경 변수 override를 모두 반영해 실제 실행에 적용된 effective judge model입니다.
 
+judge 입력은 원본 응답·출처 계약을 검증한 뒤 `evidence-selection-v1` 전송 형식으로 변환합니다. 원래 근거 ID마다 정확한 선택 구간(`excerpt` 또는 선택한 표 셀), snapshot 식별자, 출처와 위치를 한 번 보존하고, 응답·검색 결과·출처 기록에서는 그 ID를 참조합니다. `turn_result.response`도 나란히 있는 동일 응답의 hash로 참조합니다. 원본 근거 객체와 저장된 사례·응답은 바꾸지 않으며, 선택 범위 밖의 문서 전체를 judge에게 보내지 않습니다. 본문·oracle·선택된 모든 근거·대화·진단은 잘라내거나 요약하지 않습니다.
+
+`[runtime]`의 `judge_max_input_tokens` 기본값은 `128000`, `judge_max_output_tokens` 기본값은 `4096`입니다. 입력 예산은 system prompt와 실제 JSON을 tokenizer로 센 값에 메시지 형식 여유분 256토큰을 더해 검사하며, 출력 상한은 별도로 API에 전달합니다. 모델별 tokenizer가 등록되지 않았으면 해당 모델 계열의 encoding을 사용합니다. vocabulary를 불러오지 못하면 UTF-8 바이트 수를 보수적인 토큰 상한으로 사용합니다. 추정값과 API가 보고한 사용량은 구분합니다.
+
+필수 입력을 모두 보존한 결과가 예산을 넘으면 API를 호출하지 않고 `judge_status=not_run`, `judge_status_reason=input_budget_exceeded`, `eval_validity=incomplete`로 기록합니다. 근거 ID 충돌 등 전송용 입력의 검증 실패는 `input_invalid`입니다. 이 두 상태는 0점이나 답변 품질 실패로 바꾸지 않으며 사례 통과도 허용하지 않습니다. `judge_input_stats`에는 입력 계약 버전, tokenizer와 fallback 여부, 입력 추정 토큰, 출력 상한, JSON 바이트 수, 근거 수와 실제 API 사용량(관측된 경우)을 남깁니다. 입력 정책 버전과 예산은 `evaluation_fingerprint`와 `audit_metrics.judge_input_policy`에 포함합니다.
+
 시간과 비용의 범위는 다음과 같습니다. 시간 값이 `null`이면 미측정이며 0으로 대체하지 않습니다.
 
 | 필드 | 측정 범위 |
@@ -309,14 +323,14 @@ uv run python -m src.eval.request_contract_eval \
 | `question_response_ms` | 최종 평가 질문 POST부터 final 수신까지. 공용 응답 검증과 `done` 대기는 제외. 실패 시 오류 확인까지, 질문을 보내지 않았으면 `null` |
 | `latency_ms_e2e` | 기존 소비자를 위한 `question_response_ms` 별칭. 브라우저 렌더링 시간은 아님 |
 | `scenario_total_ms` | 최초 준비와 모든 준비 질문·최종 질문, 응답 검증·평가 입력 해석까지. judge·결과 파일 저장·정리 요청은 제외 |
-| `cost_usd` | 준비 턴과 최종 질문의 모든 앱 LLM 호출 비용 합계. 한 호출이라도 입력·출력 토큰을 확정하지 못하면 `null`. 확인된 무호출 시나리오는 `0` |
+| `cost_usd` | 준비 턴과 최종 질문의 모든 앱 LLM 호출 비용 합계. 필요한 단가나 유료 차원의 토큰을 확정하지 못하면 `null`. 명시적으로 무료인 차원은 토큰 미관측이어도 비용에 더하지 않음. 확인된 무호출 시나리오는 `0` |
 | `synthesis_output_tokens` | 최종 질문 턴의 모든 synthesis 시도에서 관측한 출력 토큰 합계. planner·memory summary·준비 턴은 제외. synthesis 출력이 하나라도 미관측이면 `null`, 확인된 무호출은 `0` |
 
 사용량의 저장 원본은 `scenario_turns[].llm_calls`입니다. 각 턴의 `role`은 `setup` 또는 `question`이며, 최종 질문도 준비 턴과 같은 모델로 한 번 저장합니다. 최상위 `token_usage`, `llm_calls`, `model_name`, `models_used`, `model_usage_status`를 별도로 저장하지 않습니다. 최상위 `debug`는 최종 질문의 진단이며 raw metadata를 다시 해석하는 비용 근거로 사용하지 않습니다. summary와 보고서에는 세 시간 구간의 p50/p95를 표시하며 `p95_latency_ms` gate는 최종 질문 시간을 평가합니다. 인덱스 생성은 첨부 준비에만 포함되므로 현재 질문 런타임의 `upload_retriever_build_ms`는 `null`입니다. 과거 결과에 저장된 해당 단계의 수치와 오류 코드는 당시 관측값으로 계속 읽고 집계하며 새 실행값으로 바꾸지 않습니다.
 
 각 호출의 `usage.input_tokens`·`usage.output_tokens`에는 0 이상의 정수 또는 `null`만 들어갑니다. 명시된 `0`은 정상 관측이고, `null`은 누락 또는 유효한 값을 찾지 못한 상태입니다. 입력·출력 중 하나만 있으면 부분 관측입니다. 생성 경계에서 `usage_metadata`를 먼저 읽고 `response_metadata.token_usage`를 뒤에 읽으며, 각 후보 안에서는 `input_tokens`·`output_tokens`가 `prompt_tokens`·`completion_tokens`보다 우선합니다. 각 차원에서 유효한 첫 값을 택하고 빈 후보·누락·잘못된 값은 다음 키와 후보로 넘어갑니다. 정상적인 0은 뒤의 값으로 덮지 않습니다. 음수·bool·문자열·소수는 강제 변환하지 않고 `issues`에 남기며, 유효한 중복 값의 불일치와 provider total의 모순도 진단으로 보존합니다. `total_tokens`는 입력·출력이 모두 있을 때만 두 값의 합으로 얻으며 누락된 차원을 역산하지 않습니다.
 
-`llm_calls=[]`는 해당 턴에서 모델을 호출하지 않았다는 관측이고 `null`은 호출 목록 자체를 확인하지 못했다는 뜻입니다. timeout·예외가 발생한 논리 호출도 기록에 남으며 응답 사용량을 받지 못했으면 토큰은 `null`입니다. 비용은 memory summary·planner·synthesis, compact·재합성, 사전·사후 Decisions 호출을 모두 합산하지만 출력 토큰 지표는 최종 질문의 synthesis만 합산합니다. 일반 모델은 모델별 가격이 없으면 설정된 기본 단가를 사용하고 Decisions는 아래의 명시적 모델 단가 정책을 적용합니다. 이 비용은 SDK가 반환한 토큰에 따른 추정치이며 judge·검색 provider·임베딩과 SDK 내부 HTTP 재시도의 미보고 사용량은 포함하지 않습니다. 최종 질문의 정상 사용량이 준비 턴의 누락을 덮지 않습니다.
+`llm_calls=[]`는 해당 턴에서 모델을 호출하지 않았다는 관측이고 `null`은 호출 목록 자체를 확인하지 못했다는 뜻입니다. timeout·예외가 발생한 논리 호출도 기록에 남으며 응답 사용량을 받지 못했으면 토큰은 `null`입니다. 비용은 memory summary·planner·synthesis, compact·재합성, 사전·사후 Decisions 호출을 모두 합산하지만 출력 토큰 지표는 최종 질문의 synthesis만 합산합니다. 일반 API는 `pricing.models`, Decisions API는 `pricing.decisions_models`에 실제 모델의 단가가 있어야 합니다. 미등록·무명 모델에 기본 단가를 대신 적용하지 않습니다. 이 비용은 SDK가 반환한 토큰에 따른 추정치이며 judge·검색 provider·임베딩과 SDK 내부 HTTP 재시도의 미보고 사용량은 포함하지 않습니다. 최종 질문의 정상 사용량이 준비 턴의 누락을 덮지 않습니다.
 
 산출물 역할:
 
@@ -340,7 +354,11 @@ uv run python -m src.eval.request_contract_eval \
 | `avg_cost_per_case_usd` | `0.01` |
 | `cost_gate_min_observation_rate` | `0.80` |
 
-judge minimum score와 pricing도 같은 파일에서 관리합니다. `cost_gate_min_observation_rate`는 `src/eval/config_models.py::HardGates`의 기본값이며, config에 명시하지 않으면 `0.80`이 적용됩니다. `cost_observed_cases`는 `cost_usd`가 확정된 사례 수이고 `cost_observation_rate`는 이 수를 저장된 전체 사례 수로 나눈 값입니다. 정상적인 0 비용도 포함합니다. 평균 비용의 분모는 `cost_observed_cases`이며 미관측 사례를 0 비용으로 넣지 않습니다. Decisions API 호출은 `pricing.models`에 해당 모델의 단가를 명시해야 비용을 확정합니다. 단가가 없으면 일반 모델의 기본 단가를 적용하지 않고 해당 사례의 `cost_usd`를 `null`로 기록합니다. 이 사례도 비용 관측률의 전체 사례 수에는 포함됩니다. 관측률이 기준에 미달하면 비용 gate는 `skipped_insufficient_coverage`로 표시합니다. 준비 턴에서 모델을 사용하고 최종 저장 턴이 무호출인 경우도 모든 호출의 토큰과 적용 단가를 알면 비용을 확정할 수 있습니다.
+judge minimum score와 pricing도 같은 파일에서 관리합니다. `cost_gate_min_observation_rate`는 `src/eval/config_models.py::HardGates`의 기본값이며, config에 명시하지 않으면 `0.80`이 적용됩니다. `cost_observed_cases`는 `cost_usd`가 확정된 사례 수이고 `cost_observation_rate`는 이 수를 계획된 전체 사례 수로 나눈 값입니다. 정상적인 0 비용도 포함합니다. 평균 비용의 분모는 `cost_observed_cases`이며 미관측 사례를 0 비용으로 넣지 않습니다. 결과가 누락된 사례도 관측률 분모에 남습니다.
+
+가격표의 단가는 유한한 비음수 값이어야 합니다. 일반 API의 `pricing.models`와 Decisions API의 `pricing.decisions_models`를 구분하며, 같은 모델명이어도 다른 API의 단가를 대신 적용하지 않습니다. 기본 `gpt-6-luna` Decisions 가격은 2026-10-20에 확인한 [공식 가격 안내](https://developers.openai.com/api/docs/guides/decisions#pricing-and-availability)에 따라 입력 100만 토큰당 `$0.10`, 출력 무료로 설정합니다. 출력 토큰을 제공하지 않아도 무료라는 명시적 단가로 비용을 계산하며, 입력 토큰이나 해당 API의 모델 단가를 모르면 사례 비용은 `null`입니다. 준비 턴에서 모델을 사용하고 최종 저장 턴이 무호출인 경우도 모든 유료 사용량과 단가를 알면 비용을 확정할 수 있습니다.
+
+비용 관측률이 기준 미만이거나 관측한 사례가 없으면 `cost_observation_rate`와 `avg_cost_per_case_usd` gate는 모두 `observation_insufficient`, `passed=false`입니다. 관측된 일부 사례의 낮은 평균으로 이를 상쇄할 수 없습니다. 관측률이 충분하면 비용 상한을 별도로 검사합니다. 저장 결과를 다시 읽을 때도 계획 수·비용 관측·설정에서 두 gate를 재검증합니다.
 
 ### 4.0.1 평가 상태와 release 판정
 
@@ -351,15 +369,15 @@ judge minimum score와 pricing도 같은 파일에서 관리합니다. `cost_gat
 - `llm_judge_score`: 유효한 judge 0점은 `0`으로, 평가하지 못한 점수는 `null`로 보존합니다. 평가 오류를 점수로 대체하거나 범위 밖 값을 잘라내지 않습니다.
 - `judge_pass`: `succeeded` 평가가 전체 점수와 필수 세부 점수 기준을 모두 충족할 때만 `true`. `disabled`·`not_run`·`failed`는 `null`입니다.
 - `product_pass`: 완전한 composite 점수가 있을 때 composite 기준 판정. 제품 실행 실패 또는 필수 저장 계약 실패는 점수와 관계없이 `false`, judge 장애로 composite를 계산할 수 없으면 `null`입니다.
-- `release_pass`: 중앙 `decision.passed`의 표시값입니다. 평가 유효성(`valid`), 제품 판정(`product_pass`), judge 품질 판정(`judge_pass`), 응답·저장 계약과 실행 정책 준수를 모두 충족할 때만 `true`입니다. `incomplete`·`invalid` 평가, 금지 실행, 실행 관측의 불완전성은 품질 점수로 상쇄되지 않습니다.
+- `release_pass`: 중앙 `decision.passed`의 표시값입니다. 평가 유효성(`valid`), 제품 판정(`product_pass`), judge 품질 판정(`judge_pass`), 응답·저장 계약, 필수 행동 결과와 실행 정책 준수를 모두 충족할 때만 `true`입니다. `incomplete`·`invalid` 평가, 금지 실행, 필수 행동 실패, 실행 관측의 불완전성은 품질 점수로 상쇄되지 않습니다.
 
 `composite_quality_score`는 judge 점수가 있을 때만 가중합으로 계산합니다. judge 점수가 없으면 남은 규칙 점수를 재정규화해 composite를 만들지 않고 `null`로 남기며, 규칙 원점수는 `rule_scores`·`rule_score_total`에 진단용으로 보존합니다. judge 가용성은 제품 규칙 점수를 바꾸지 않습니다.
 
 모든 카테고리에 `judge_min_score`가 명시적으로 존재합니다(기본 `0.70`, case의 `judge_min_score` 필드가 우선). 세부 점수 기준은 `[judge_min_subscores]`의 `answer_quality`(전 카테고리)와 `groundedness`(근거 기반 답변)이며, 인용을 요구하지 않는 순수 `tool_action` 사례에는 groundedness를 적용하지 않습니다. 이 값들은 인간 평가로 보정된 최적값이 아니라 정책 출발점입니다.
 
-run 집계의 `release_pass_rate` 분모는 실행 대상으로 확정한 전체 사례(`planned_cases`)입니다. composite가 `null`이거나 judge 오류·제품 실패인 사례를 빼지 않으며, 계획 대비 결과 누락·중복·예상외 case_id는 `evaluation_completeness` release gate가 차단합니다. judge 상태별 개수(`judge_succeeded/failed/not_run/disabled_cases`)와 `judge_execution_rate`(judge 필수 대상 중 succeeded 비율)를 별도로 기록하며, 대상이 0개인 비율은 `-`(N/A)로 표시합니다.
+run 집계의 `release_pass_rate` 분모는 실행 대상으로 확정한 전체 사례(`planned_cases`)입니다. release 계획 자체가 보존한 전체 승인 사례와 일치해야 하며, 승인 정보 누락·부분 계획·제한 실행은 `release_suite_completeness` gate가 차단합니다. composite가 `null`이거나 judge 오류·제품 실패인 사례를 빼지 않으며, 계획 대비 결과 누락·중복·예상외 case_id는 `evaluation_completeness` release gate가 차단합니다. judge 상태별 개수(`judge_succeeded/failed/not_run/disabled_cases`)와 `judge_execution_rate`(judge 필수 대상 중 succeeded 비율)를 별도로 기록하며, 대상이 0개인 비율은 `-`(N/A)로 표시합니다.
 
-현재 결과의 `decision_contract_version`은 실행 정책 판정 계약을 식별합니다. 사례에는 평가 당시의 `policy_snapshot`, 원시 `execution_evidence`, `policy_assessment`와 최종 `decision`을 함께 남깁니다. `policy_assessment.status`는 준수(`compliant`), 확인된 위반(`violated`), 관측 부족으로 판단 불가(`indeterminate`)를 구분합니다. 어느 사례에서든 위반이나 판단 불가가 있으면 run의 `release_decision`은 실패합니다. 정상 사례 수, 평균 점수, 도구 precision/recall로 이 필수 조건을 완화하지 않습니다. 품질 점수와 정책 위반은 별도로 표시합니다.
+현재 결과의 `decision_contract_version=2`는 실행 정책·행동 의무·전체 승인 사례·비용 관측의 필수 판정 계약을 식별합니다. 사례에는 평가 당시의 `policy_snapshot`, 원시 `execution_evidence`, `policy_assessment`, `action_assessments`와 최종 `decision`을 함께 남깁니다. `policy_assessment.status`는 준수(`compliant`), 확인된 위반(`violated`), 관측 부족으로 판단 불가(`indeterminate`)를 구분합니다. 어느 사례에서든 위반이나 판단 불가가 있으면 run의 `release_decision`은 실패합니다. 정상 사례 수, 평균 점수, 도구 precision/recall로 이 필수 조건을 완화하지 않습니다. 품질 점수와 정책 위반은 별도로 표시합니다.
 
 기존 `forbidden_tools`는 최종 질문의 금지 도구입니다. 준비 대화에는 별도로 검수한 `setup_forbidden_tools`를 같은 순서로 지정하며, 최종 금지 목록을 준비 턴에 일괄 적용하지 않습니다. 준비 턴이 있는데 대응 정책이 없으면 준수로 간주하지 않습니다. 승인한 문서 검색을 준비 단계에서 수행한 뒤 최종 답변을 재검색 없이 저장하는 사례도 각 턴의 실제 정책으로 평가합니다.
 
@@ -367,15 +385,21 @@ run 집계의 `release_pass_rate` 분모는 실행 대상으로 확정한 전체
 
 `execution_evidence.events`의 `started`는 실제 도구 구현 진입 직전에 기록합니다. 금지 도구의 `started`가 있으면 이후 `succeeded` 또는 `failed`와 관계없이 위반입니다. 계획에 도구를 포함한 것, 실행 전에 `blocked`로 차단한 것, 기존 결과를 `reused`로 사용한 것은 새 실행과 구분합니다. 재사용 출처는 같은 시나리오의 앞선 턴 또는 같은 턴의 앞선 이벤트에서 시작과 종료가 확인된 호출이어야 합니다. `succeeded`와 `failed` 모두 출처가 될 수 있지만, 실패 결과의 재사용이 작업 성공을 뜻하지는 않습니다. Slack 전달 여부가 `unknown`이면 재사용 후에도 그대로이며 자동 재전송하지 않습니다. 실행 시작만으로 외부 전달·저장 성공을 주장하지 않으며 실제 결과는 receipt와 별도의 저장 산출물 검증으로 확인합니다. 빈 실행 목록은 요청 식별자와 `complete` 관측을 갖춘 경우에만 무실행 증거가 됩니다. 누락·미완료·모순된 기록은 판단 불가이며 release를 차단합니다.
 
+receipt는 호출 ID뿐 아니라 종료 상태와도 일치해야 합니다. 성공 receipt에는 `succeeded`, 실패 receipt에는 `failed` 근거가 필요하며, 재사용도 원본 호출의 종료 상태를 대조합니다. Slack의 내부 invocation ID도 바깥 receipt와 같아야 합니다. 모순된 기록은 이후 재사용의 신뢰할 수 있는 원본으로 등록하지 않습니다.
+
 현재 응답 계약의 `debug.retrieval_diagnostics`는 목록이어야 하며 검색 진단이 없으면 `[]`로 보냅니다. 필드 누락, `null`, 잘못된 목록·항목은 안전하게 처리하되 응답 계약 오류와 정책 관측 문제로 보존합니다. 준비 턴의 필수 진단이 잘못되면 종속 질문을 보내지 않고 해당 사례를 실패로 기록하며, 다음 독립 사례의 실행과 결과 저장은 계속합니다. 진단 오류가 있어도 이미 관측한 금지 실행은 지우지 않습니다. 온라인 파싱과 저장 결과 재평가는 같은 정규화 규칙을 사용합니다.
 
-CLI, Markdown 보고서와 history는 같은 중앙 판정을 사용합니다. `run --track release`는 `release_decision`의 통과 여부로 종료 코드 0/1을 정하며, smoke는 judge 실행 여부와 관계없이 진단용입니다. planner 단독 요청 계약 평가의 `qualified`도 전체 release 자격이 아닙니다. 실행 기록을 검증할 수 없는 구형 결과는 `legacy_unverified`로 표시하며 당시 PASS와 측정값을 현재 자격으로 승격하지 않습니다.
+CLI, Markdown 보고서와 history는 같은 중앙 판정을 사용합니다. `run --track release`는 `release_decision`의 통과 여부로 종료 코드 0/1을 정하며, smoke는 judge 실행 여부와 관계없이 진단용입니다. planner 단독 요청 계약 평가의 `qualified`도 전체 release 자격이 아닙니다. 구형 결과의 당시 PASS와 측정값은 현재 자격으로 승격하지 않습니다.
 
-현재 계약의 `report --run`과 history 로더는 저장된 정책 snapshot, 원시 결과의 fingerprint와 중앙 재판정 결과가 summary와 일치하는지 확인합니다. fingerprint는 원시 JSON을 현재 모델로 변환하기 전에 확인합니다. 불일치한 산출물은 보고서로 다시 발행하지 않습니다. 이전 측정 계약 `attachment-question-scenario-v1`이 같은 `decision_contract_version=1`을 사용해도 현재 사용량 모델로 승격하지 않습니다. 정책·판정 증거만 공통 판정기로 검증하고 비용·관측률·출력 토큰은 저장 당시 값을 보존합니다. 과거 `llm_call_coverage_rate`는 당시 이름으로 표시하며 새 `cost_observation_rate`로 바꾸지 않습니다.
+현재 계약의 `report --run`과 history 로더는 저장된 정책 snapshot, 원시 결과의 fingerprint와 중앙 재판정 결과가 summary와 일치하는지 확인합니다. fingerprint는 원시 JSON을 현재 모델로 변환하기 전에 확인합니다. 불일치한 산출물은 보고서로 다시 발행하지 않습니다. 결과 로더는 현재 `decision_contract_version=2`와 `measurement_contract_version=llm-usage-scenario-v3`만 허용합니다. 구형 결과를 현재 모델로 변환하거나 과거 필드에서 필수 판정 증거를 만들어 넣지 않습니다.
 
-판정 계약 도입 전의 run도 `summary.json`과 `raw_results.jsonl`의 구조·소속을 확인한 뒤 보고서를 재생성할 수 있습니다. 과거 보고서는 `legacy_unverified`와 당시 판정·측정값을 표시하며 현재 릴리스 승인을 만들지 않습니다. 현재 계약과 과거 계약의 결과를 섞거나 현재 정책 필드를 남긴 채 버전만 제거한 입력은 거부합니다. 보고서 재생성은 원본 summary·raw 결과를 변경하거나 모델 호출·외부 효과를 다시 실행하지 않습니다. 기존 생성 계보와 과거 수치의 원본도 유지합니다. 최신 run 포인터는 성공 여부와 관계없이 가장 최근 실행을 가리킵니다.
+과거 `summary.json`·`raw_results.jsonl`·`report.md`는 당시 계약의 기록으로 보존합니다. 구형 계약의 재발행이나 현재 자격 판정은 거부하며, 과거 결과는 당시 저장된 보고서로 확인합니다. 현재 계약과 과거 계약의 결과를 섞거나 필수 버전을 제거한 입력도 거부합니다. 현재 보고서 재생성은 원본 summary·raw 결과를 변경하거나 모델 호출·외부 효과를 다시 실행하지 않습니다. 기존 생성 계보와 과거 수치의 원본도 유지합니다. 최신 run 포인터는 성공 여부와 관계없이 가장 최근 실행을 가리킵니다.
 
-### 4.0.2 저장 산출물의 필수 조건
+### 4.0.2 행동 결과와 저장 산출물의 필수 조건
+
+저장·Slack의 최종 행동 의무는 `policy_snapshot.final_action_outcomes`에 고정합니다. 필수 행동은 `required_success`, 금지 행동은 `must_not_execute`이며 저장의 명시적 `save_expectation`은 `expected_failure`도 허용합니다. `action_assessments`에는 도구별 의무와 `verified`, `failed`, `unverifiable` 상태 및 실패 코드를 보존합니다. 정책 snapshot과 원시 receipt·실행 기록·저장 검증에서 다시 판정하며, 점수와 live Slack 옵션은 의무를 바꾸지 않습니다.
+
+Slack 성공 의무에는 `status=success`인 receipt, 내부 `status=sent`, 일치하는 성공 실행 기록이 모두 필요합니다. 확인된 전송 실패는 `failed`, 빠졌거나 모순된 성공 근거는 `unverifiable`입니다. 각 사례의 필수 의무가 모두 검증돼야 `action_outcome_contract` gate를 통과합니다. Slack의 예상 실패를 자동 인정하는 일반 규칙은 없으며, 향후 지원하려면 허용할 오류를 명시하는 별도 oracle이 필요합니다.
 
 저장 사례는 `save_expectation`으로 결과와 대상을 고정합니다. `expected_tools=["save_text"]`는 호출 기대값이며 저장 성공 기대를 대신하지 않습니다. release 실행에서 저장을 기대하면서 `save_expectation`이 없으면 설정 검증이 거절합니다.
 
@@ -387,7 +411,9 @@ CLI, Markdown 보고서와 history는 같은 중앙 판정을 사용합니다. `
 
 성공·예상 실패 사례는 `target`을 지정합니다. `final_answer`는 실제 최종 답변, `setup_answer`는 `setup_turn_index`로 지정한 준비 턴의 답변이며 인덱스는 0부터 시작합니다. 이전 답변 저장은 준비 턴의 export와 비교하므로 현재 잘못된 답변을 저장하고 같은 hash를 반환해도 통과하지 않습니다. export는 출처·제한을 포함한 UTF-8 BOM bytes이며, 본문 `content_hash`와 별개로 bytes hash와 길이를 확인합니다.
 
-평가기는 일반 `GET /download/{filename}`로 실제 bytes를 읽고 `X-Save-Binding-SHA256`, `X-Artifact-Id`, receipt의 바인딩과 비교합니다. 도구 호출 전에 캡처된 `answer_provenance.save_operation_binding_sha256`도 대조하므로 receipt와 파일이 서로 일치하더라도 다른 저장 작업의 결과로 바뀌었다면 실패합니다. 파일·manifest 부재, 내용 불일치, 만료는 제품 실패이며, timeout·읽기 불가 같은 검증 불가는 `eval_validity=incomplete`로 남깁니다. `CaseResult.save_assessment`에는 `status`(`verified`, `failed`, `unverifiable`, `not_applicable`), `passed`, `failure_codes`, 예상·관측 hash와 크기, artifact ID, 확인 시각을 기록합니다. 개별 사례 후 검사와 실행 끝의 재검사(`phase=case/run_end`)로 뒤의 저장이 앞선 파일을 덮거나 삭제했는지도 확인합니다.
+평가기는 일반 `GET /download/{filename}`로 실제 bytes를 읽고 `X-Save-Binding-SHA256`, `X-Artifact-Id`, receipt의 바인딩과 비교합니다. 도구 호출 전에 캡처된 `answer_provenance.save_operation_binding_sha256`도 대조하므로 receipt와 파일이 서로 일치하더라도 다른 저장 작업의 결과로 바뀌었다면 실패합니다. 파일·manifest 부재, 내용 불일치, 만료는 제품 실패입니다. 응답은 있지만 timeout·읽기 불가로 저장 결과를 검증할 수 없으면 `eval_validity=incomplete`로 남깁니다. `CaseResult.save_assessment`에는 `status`(`verified`, `failed`, `unverifiable`, `not_applicable`), `passed`, `failure_codes`, 예상·관측 hash와 크기, artifact ID, 확인 시각을 기록합니다. 개별 사례 후 검사와 실행 끝의 재검사(`phase=case/run_end`)로 뒤의 저장이 앞선 파일을 덮거나 삭제했는지도 확인합니다.
+
+최종 응답 부재(`missing_final_response`)로 제품 실패가 확정된 사례는 저장 검증 결과와 관계없이 `eval_validity=valid`를 유지해 제품 통과율의 분모에 포함합니다. 확인할 수 없는 최종·준비 턴 저장 결과는 계속 `unverifiable`이며 release를 통과시키지 않습니다. 이 구분은 초기 판정, 실행 종료 후 재검증, 저장 결과 재로드에 동일하게 적용합니다.
 
 준비 턴에서 성공 receipt를 반환한 저장도 보존 검사 대상입니다. 각 준비 턴의 실제 답변·provenance를 기준으로 확인하고 `CaseResult.setup_save_assessments`에 0부터 시작하는 턴 인덱스별 결과를 남깁니다. 최종 질문의 저장 기대값과는 별개로 사례 후·실행 종료 때 다시 확인하며, 확인 누락·불일치·검증 불가는 해당 사례와 `save_outcome_contract` gate를 실패시킵니다. 마지막 질문의 저장만 성공했다고 앞선 저장 손실을 가리지 않습니다.
 
@@ -407,6 +433,8 @@ CLI, Markdown 보고서와 history는 같은 중앙 판정을 사용합니다. `
 | `llm_judge` | 0.20 | 0.15 | 0.15 |
 
 `tool_action` 이외의 사례는 두 인용 플래그와 관계없이 `general`을 선택합니다. `tool_action`은 `require_official_citation` 또는 `require_local_citation`이 참이면 `action_with_citations`, 둘 다 거짓이면 `action_without_citations`를 선택합니다. 실제 호출 도구·검색 결과·응답의 인용 유무는 이 선택을 바꾸지 않습니다.
+
+`hybrid`는 공식·업로드 근거를 사용하는 분류이며 비교 문구를 필수로 요구하지 않습니다. 규칙의 답변 품질은 명시적인 `must_include`·`must_not_include`를 검사하고, 질문·oracle이 요구한 설명·비교·인용·변환의 충족 여부는 의미 judge가 평가합니다. 특정 비교 단어를 덧붙이거나 검색 hit의 경계를 바꿔 점수가 변하는 휴리스틱은 사용하지 않습니다. 요청한 원문 인용·복사는 정확성과 완전성을 평가하며 복사 자체로 감점하지 않습니다.
 
 case의 `weight_override`는 위 여섯 키 중 변경할 축만 담는 사전입니다. 전체 생략·`null`·`{}`는 변경 없음, 축 누락은 프로필 값 유지, 명시적인 `0`은 해당 축의 점수 기여 제거를 뜻합니다. 축 값의 `null`은 오류입니다. 예를 들어 `{"citation_traceability": 0.35, "llm_judge": 0.1}`은 다른 네 축을 유지한 뒤 전체를 정규화합니다. `llm_judge=0`은 judge 실행이나 필수 품질 gate를 비활성화하지 않으며, judge 점수가 없으면 composite은 계속 `null`입니다.
 
@@ -432,7 +460,7 @@ case의 `weight_override`는 위 여섯 키 중 변경할 축만 담는 사전�
 
 현재 검색에서 packet으로 이어지는 근거는 snapshot과 원문 element가 같고, packet의 문자 범위 또는 표 cell ID가 `observed_hits`의 선택 범위에 포함되는지 확인합니다. synthesis 예산 때문에 범위를 줄이면 새 근거 ID가 생깁니다. 최종 citation은 이렇게 검증한 실제 packet의 ID와 일치해야 하므로, 검색 원문에 있었지만 모델에 제공하지 않은 범위는 인정하지 않습니다. 페이지 bbox가 없더라도 snapshot·요소·선택 범위가 유효하면 원문 연결을 인정합니다.
 
-기존 답변 복사·변환은 debug `answer_provenance.source`의 `ref`, `response_hash`, `citation_ids`로 서버가 선택한 본문과 실제 채택 출처를 확인합니다. 같은 사례·세션의 앞선 턴에서 hash와 전체 citation ID 목록이 모두 일치하는 가장 최근 답변을 찾고, 그 답변의 응답 구조와 출처 연결이 검증되어야 상속을 허용합니다. 상속 가능한 근거도 그 답변의 실제 인용 범위 안에 있는 현재 최종 packet으로 제한합니다. 최종 citation은 이 packet의 정확한 ID와 일치해야 합니다. 단순히 conversation에 등장한 답변이나 이전 턴에서 검색만 한 근거는 합치지 않습니다. 현재 턴의 `observed_hits`, 도구 정밀도·재현율, 원문 복사 감점 입력은 유지하므로 과거 검색 호출이 현재 도구 실행으로 집계되지 않습니다.
+기존 답변 복사·변환은 debug `answer_provenance.source`의 `ref`, `response_hash`, `citation_ids`로 서버가 선택한 본문과 실제 채택 출처를 확인합니다. 같은 사례·세션의 앞선 턴에서 hash와 전체 citation ID 목록이 모두 일치하는 가장 최근 답변을 찾고, 그 답변의 응답 구조와 출처 연결이 검증되어야 상속을 허용합니다. 상속 가능한 근거도 그 답변의 실제 인용 범위 안에 있는 현재 최종 packet으로 제한합니다. 최종 citation은 이 packet의 정확한 ID와 일치해야 합니다. 단순히 conversation에 등장한 답변이나 이전 턴에서 검색만 한 근거는 합치지 않습니다. 현재 턴의 `observed_hits`와 도구 정밀도·재현율은 그대로 구분하므로 과거 검색 호출이 현재 도구 실행으로 집계되지 않습니다.
 
 `content_hash`는 본문 구조·basis·refs를 포함하지만 citation의 존재 여부나 전달 receipt 전체를 hash하지 않습니다. 따라서 선행 답변의 실제 citation 목록을 함께 비교합니다. 이 연결은 동일한 본문·채택 출처를 확인하며, 같은 내용이 반복된 대화의 정확한 발생 시점이나 설명의 의미적 지지를 증명하지 않습니다. 현재 online 실행에서 provenance 누락·불일치·연결되지 않은 선행 답변은 응답 계약 또는 필수 진단 오류이며, 이전 대화나 검색 원문을 합쳐 성공으로 승격하지 않습니다.
 
@@ -460,20 +488,20 @@ runtime의 exact excerpt 검사는 발췌와 원문의 일치만 보장합니다
 
 ## 6. 비교 이력 규칙
 
-history 리포터는 다음 조건이 모두 같은 run만 comparable run으로 묶습니다.
+history 리포터는 현재 판정·측정 계약과 저장 증거를 검증한 run 중 다음 조건이 모두 같은 결과만 comparable run으로 묶습니다. 같은 출력 폴더에 보관된 알려진 구형 계약의 run은 집계에서 제외하며, 당시 저장한 파일을 변경하거나 현재 계약으로 변환하지 않습니다. 현재 결과의 증거 검증 실패, 서로 섞인 계약 버전, 알 수 없는 계약 버전은 계속 오류로 처리합니다.
 
 - `track`
 - `fixtures_path`
 - `total_cases`
 - `decision_contract_version`
 - `execution_contract_version`: 현재 `shared-client-scenario-v1`
-- `measurement_contract_version`: 현재 `llm-usage-scenario-v2`
+- `measurement_contract_version`: 현재 `llm-usage-scenario-v3`
 - `suite_fingerprint`: 준비 턴·첨부 목록·부분 override를 포함한 사례 모델의 JSON 직렬화와 staging에서 실제 읽은 첨부 bytes의 SHA256
 - `evaluation_fingerprint`: 채점 계약 버전과 가중치·gate·pricing·judge·timeout 설정, Slack 실행 옵션
 
-같은 경로의 fixture를 덮어써도 내용이나 첨부 bytes가 달라지면 자동 비교되지 않습니다. 새 계약 정보가 일부만 있는 run은 자기 자신만 표시합니다. 계약 정보가 없는 legacy끼리는 이전 경로·사례 수 비교를 유지하지만, 새 실행과 섞지 않습니다. 사용량 계약 v2는 빈 metadata 폴백, 정상적인 0, 부분 관측, 실패 호출과 synthesis 출력 범위를 명시하므로 v1과 별도 baseline을 만듭니다. 과거 JSON을 읽을 때 새 계약으로 자동 승격하거나 사용량을 재계산하지 않습니다.
+같은 경로의 fixture를 덮어써도 내용이나 첨부 bytes가 달라지면 자동 비교되지 않습니다. 비교 fingerprint 정보가 일부만 있는 현재 run은 자기 자신만 표시합니다. 사용량 계약 v3는 Decisions의 API 경로별 가격표와 무료 출력 차원을 반영하며, 비용 관측률을 계획 사례 전체를 기준으로 계산합니다. 비용 정의가 다른 v1·v2와 별도 baseline을 만듭니다. 과거 JSON을 새 계약으로 자동 승격하거나 사용량을 재계산하지 않습니다.
 
-현재 채점 계약은 `weight-profiles-v5`이며 `summary.json`의 `audit_metrics.scoring_contract_version`에 기록합니다. 세 프로필 설정 전체와 이 버전을 `evaluation_fingerprint`에 포함하므로 이전 `execution-policy-contract-v4`와 자동 비교하지 않습니다. 일반·인용 요구 행동의 기본값은 유지하지만, 인용 미요구 행동은 비적용 인용 축의 기본 기여 0.05를 제거합니다. 기본 프로필·override 없음·비어 있지 않은 정상 응답·judge 점수 있음의 조건에서는 새 점수가 `(이전 점수 - 0.05) / 0.95`이며, 통과선 근처 판정이 달라질 수 있습니다. 감점·상한·통과 기준과 judge 필수성은 그대로입니다.
+현재 채점 계약은 `release-obligations-v6`이며 `summary.json`의 `audit_metrics.scoring_contract_version`에 기록합니다. 세 프로필 설정 전체와 이 버전을 `evaluation_fingerprint`에 포함합니다. 전체 승인 사례·비용 관측·행동 의무를 필수 조건으로 적용하고, 비교 단어·원문 복사 휴리스틱 대신 질문과 oracle의 요구를 평가합니다. 기존 가중치·수치 통과선·judge 필수성은 유지하지만 판정 의미가 달라졌으므로 `weight-profiles-v5`를 포함한 이전 채점 계약과 자동 비교하지 않습니다.
 
 `suite_fingerprint`는 원시 fixture 파일 전체의 bytes hash와 다릅니다. 같은 평가 의미라도 override의 직렬화 형태가 달라지면 suite fingerprint가 달라질 수 있습니다. 승인된 release candidate·명세의 원시 bytes hash는 별도 검증하며, 가중치 모델 변경을 이유로 보관 원본이나 승인 hash를 다시 쓰지 않습니다. 과거 summary의 채점 버전·가중치·fingerprint를 현재 값으로 채우거나 결과를 다시 계산하지 않습니다. 같은 측정 계약의 과거 결과도 원래 result fingerprint를 검증한 뒤 읽으며, 새 비교 baseline과는 분리합니다.
 
