@@ -316,7 +316,7 @@ uv run python -m src.eval.request_contract_eval \
 
 각 호출의 `usage.input_tokens`·`usage.output_tokens`에는 0 이상의 정수 또는 `null`만 들어갑니다. 명시된 `0`은 정상 관측이고, `null`은 누락 또는 유효한 값을 찾지 못한 상태입니다. 입력·출력 중 하나만 있으면 부분 관측입니다. 생성 경계에서 `usage_metadata`를 먼저 읽고 `response_metadata.token_usage`를 뒤에 읽으며, 각 후보 안에서는 `input_tokens`·`output_tokens`가 `prompt_tokens`·`completion_tokens`보다 우선합니다. 각 차원에서 유효한 첫 값을 택하고 빈 후보·누락·잘못된 값은 다음 키와 후보로 넘어갑니다. 정상적인 0은 뒤의 값으로 덮지 않습니다. 음수·bool·문자열·소수는 강제 변환하지 않고 `issues`에 남기며, 유효한 중복 값의 불일치와 provider total의 모순도 진단으로 보존합니다. `total_tokens`는 입력·출력이 모두 있을 때만 두 값의 합으로 얻으며 누락된 차원을 역산하지 않습니다.
 
-`llm_calls=[]`는 해당 턴에서 모델을 호출하지 않았다는 관측이고 `null`은 호출 목록 자체를 확인하지 못했다는 뜻입니다. timeout·예외가 발생한 논리 호출도 기록에 남으며, 응답 사용량을 받지 못했으면 토큰은 `null`입니다. 비용은 memory summary·planner·synthesis와 compact·재합성 시도까지 모두 합산하지만, 출력 토큰 지표는 최종 질문의 synthesis만 합산합니다. 모델별 가격이 없으면 설정된 기본 단가를 사용합니다. 이 비용은 SDK가 반환한 토큰에 따른 추정치이며 judge·검색 provider·임베딩과 SDK 내부 HTTP 재시도의 미보고 사용량은 포함하지 않습니다. 최종 질문의 정상 사용량이 준비 턴의 누락을 덮지 않습니다.
+`llm_calls=[]`는 해당 턴에서 모델을 호출하지 않았다는 관측이고 `null`은 호출 목록 자체를 확인하지 못했다는 뜻입니다. timeout·예외가 발생한 논리 호출도 기록에 남으며 응답 사용량을 받지 못했으면 토큰은 `null`입니다. 비용은 memory summary·planner·synthesis, compact·재합성, 사전·사후 Decisions 호출을 모두 합산하지만 출력 토큰 지표는 최종 질문의 synthesis만 합산합니다. 일반 모델은 모델별 가격이 없으면 설정된 기본 단가를 사용하고 Decisions는 아래의 명시적 모델 단가 정책을 적용합니다. 이 비용은 SDK가 반환한 토큰에 따른 추정치이며 judge·검색 provider·임베딩과 SDK 내부 HTTP 재시도의 미보고 사용량은 포함하지 않습니다. 최종 질문의 정상 사용량이 준비 턴의 누락을 덮지 않습니다.
 
 산출물 역할:
 
@@ -426,6 +426,7 @@ case의 `weight_override`는 위 여섯 키 중 변경할 축만 담는 사전�
 | `citation_traceability` | 요청한 docs/upload 출처 범위와 최종 packet의 채택 참조를 확인. 현재 검색의 근거는 해당 턴의 도구 실행을 요구하며, 검증된 선행 인용은 재검색 없이 계승 가능 |
 | `checks.reference_status` | 런타임의 참조 연결 결과. `resolved`는 의미적 정확성 판정이 아님 |
 | `checks.support_status` | `not_evaluated`, `exact_match`, `unsupported` 개수를 별도 집계. `not_evaluated`를 자동으로 0점 처리하지 않음 |
+| 런타임 Decisions 판정 | 후보 관련성·지원 항목, 실제 일반·compact packet의 충분성, 본문별 근거성과 실제 인용 범위의 요구 충족. 제품의 생성·복구·전달 허용에 사용 |
 | LLM judge의 groundedness | 실제 표시 본문과 연결된 근거가 설명·해석을 의미적으로 뒷받침하는지 평가 |
 | `actions`와 도구 실행 기록 | 실행 의도·결과 진단. 저장 성공은 fixture 대상과 실제 HTTP 산출물 readback까지 일치해야 인정 |
 
@@ -436,6 +437,10 @@ case의 `weight_override`는 위 여섯 키 중 변경할 축만 담는 사전�
 `content_hash`는 본문 구조·basis·refs를 포함하지만 citation의 존재 여부나 전달 receipt 전체를 hash하지 않습니다. 따라서 선행 답변의 실제 citation 목록을 함께 비교합니다. 이 연결은 동일한 본문·채택 출처를 확인하며, 같은 내용이 반복된 대화의 정확한 발생 시점이나 설명의 의미적 지지를 증명하지 않습니다. 현재 online 실행에서 provenance 누락·불일치·연결되지 않은 선행 답변은 응답 계약 또는 필수 진단 오류이며, 이전 대화나 검색 원문을 합쳐 성공으로 승격하지 않습니다.
 
 runtime의 exact excerpt 검사는 발췌와 원문의 일치만 보장합니다. 인용된 원문 자체의 진실성이나 답변 전체의 충분함까지 보장하지 않으므로, rule 지표와 judge 결과를 함께 해석해야 합니다.
+
+런타임의 Decisions 통과를 benchmark의 독립 품질 점수로 사용하지 않습니다. 후보 준비와 packet 충분성, 실제 인용 범위 판정이 같은 모델 경계를 사용하므로 독립 judge와 고정 oracle로 최종 답변을 다시 평가합니다. 확률 `0.8`은 런타임의 각 predicate 통과선이며 답변 정확도 80%를 뜻하지 않습니다. 한국어 설명·동의어·생략된 정보·다른 API의 유사 문구·잘린 발췌·여러 근거의 보완·인용 누락 사례에서 오탐과 누락을 구분해 해석합니다.
+
+비용·지연 비교에는 `pre_synthesis_validation`과 `post_synthesis_validation`의 실제 호출·토큰·latency, provider 검색 횟수, 재검색·본문 보정 횟수를 함께 봅니다. 사전 검증의 `decision_cache` hit/miss와 생략한 질문 수는 호출 절약의 관측이며 성공률 개선의 증거가 아닙니다. 같은 입력·모델·지시문의 재사용과 새 범위의 재판정을 구분하고, 준비 packet과 합성에 사용한 packet이 같은지 확인합니다. 기존 release 수치를 새로운 판정 구조의 성능으로 재해석하지 않으며 동일한 fixture·평가 계약·서버 설정의 새 실행으로 비교합니다.
 
 ## 5. 환경 변수 override
 

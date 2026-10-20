@@ -14,7 +14,7 @@ DocuMate는 LangGraph 기반 학습 보조 에이전트입니다. 현재 구조�
 
 초기 구조처럼 모델의 tool call 흐름에만 실행을 맡기면 검색, 검증, 액션의 책임 경계가 흐려지기 쉽습니다. 그래서 현재 그래프는 `add_user_message`, `summarize_old_messages`, `planner`, `retrieve_dispatch`, `pre_synthesis_validation`, `synthesize`, `post_synthesis_validation`, `action_postprocess` 단계로 나누었습니다.
 
-이 구조의 목표는 각 단계가 명확한 상태 계약을 주고받게 만드는 것입니다. `GraphState`는 `runtime`, `planner`, `retrieval`, `retry`, `response`, `debug`와 전용 `route_decisions` 영역으로 나뉘며, boundary adapter가 dict와 Pydantic 모델 사이의 상태를 정규화합니다. planner는 확인 질문이 필요한지 또는 어떤 근거 요구를 검색할지 결정하고, retrieval은 각 `requirement_id`에 대응하는 `SearchHit`와 diagnostics를 모읍니다. OpenAI Decisions API는 생성 전에 현재 입력으로 답할 수 있는지, 생성 후에는 실제 본문이 근거와 요청을 충족하는지 판단합니다. 원문 참조·hash·발췌 일치와 관찰 가능한 출력 조건은 로컬 검사로 함께 확인합니다. 검색 없는 답변도 생성 전후 검증을 거칩니다.
+이 구조의 목표는 각 단계가 명확한 상태 계약을 주고받게 만드는 것입니다. `GraphState`는 `runtime`, `planner`, `retrieval`, `retry`, `response`, `debug`와 전용 `route_decisions` 영역으로 나뉘며, boundary adapter가 dict와 Pydantic 모델 사이의 상태를 정규화합니다. planner는 확인 질문이 필요한지 또는 어떤 근거 요구를 검색할지 결정하고, retrieval은 각 `requirement_id`에 대응하는 `SearchHit`와 diagnostics를 모읍니다. OpenAI Decisions API는 후보의 관련성과 실제 합성 packet의 충분성을 사전에 판정하고, 생성 후에는 실제 본문과 인용 범위의 요청 충족을 판단합니다. 원문 참조·hash·발췌 일치와 관찰 가능한 출력 조건은 로컬 검사로 함께 확인합니다. 검색 없는 답변도 생성 전후 검증을 거칩니다.
 
 ### 유한한 장기 대화 메모리
 
@@ -48,30 +48,31 @@ planner의 소유 라이브러리는 지원 canonical ID와 `unsupported`로 제
 
 필요한 출처는 업로드 가용성과 무관하게 LLM이 판단합니다. 대화로도 지시 대상이나 비교 버전을 정하지 못하면 계약의 `missing_info`와 검색 없는 계획을 반환하고 서버가 질문을 파생합니다. 업로드만 필요한데 retriever가 없으면 첨부를 안내하지만, docs와 upload를 함께 요청하면 두 task를 유지해 실행 가능한 출처의 근거를 확보합니다. 활성 목록에 없는 파일 ID도 다른 파일로 대체하거나 계획에서 제거하지 않고 검색 범위와 파일별 누락으로 보존합니다. 파일 부재, 본문 대상 미해결, 행동 의사·목적지 부족, planner 호출·출력 실패를 서로 구분합니다. 초기 계획과 재검색은 공백뿐인 검색어를 거부하되 대소문자·Unicode·앞뒤와 내부 공백을 포함한 원문을 보존합니다. 자유 검색어의 별칭을 일괄 치환하지 않으므로 인용문·코드·제외 검색어·URL의 표현도 유지됩니다. 별칭 정규화는 구조화된 라이브러리·심볼 요구에 적용합니다.
 
-`docs` route는 Tavily와 [agent_rules.toml](../src/infra/config/agent_rules.toml)의 공식 출처 규칙을 사용합니다. 명시 라이브러리의 domain을 먼저 고르고 provider 원본 URL의 HTTPS·공식 도메인·문서 경로를 검사합니다. 버전별 문서 경로와 Python의 공식 locale 경로는 도메인별 패턴으로 허용하며 원래 URI와 fragment를 보존합니다. 비어 있지 않은 `raw_content` 또는 `content`를 수집하고, 현재 링크의 도달 가능성을 발췌 채택 조건으로 삼지 않습니다. 이후 [`select_docs_evidence()`](../src/infra/tools/docs_search/ranking.py)가 같은 요구사항 충족 기준으로 후보 랭킹, 근거 선택, 검색 종료를 결정합니다. 심볼을 명시한 요청도 이 절차를 통과합니다. API 이름별 가점이나 메타데이터 필드의 존재에 따른 가점은 사용하지 않습니다.
+`docs` route는 Tavily와 [agent_rules.toml](../src/infra/config/agent_rules.toml)의 공식 출처 규칙을 사용합니다. 명시 라이브러리의 domain을 먼저 고르고 provider 원본 URL의 HTTPS·공식 도메인·문서 경로를 검사합니다. 공식 버전·locale 경로와 원래 URI·fragment를 보존하며 비어 있지 않은 `raw_content` 또는 `content`를 수집합니다. [`select_docs_candidates()`](../src/infra/tools/docs_search/ranking.py)는 여러 출처의 원문 범위를 제한된 후보로 구성합니다. 제목·검색어의 문자 일치와 provider 점수는 후보 순서만 돕고 대상·버전·정보 종류·자연어 설명의 충분성은 Decisions가 판정합니다.
 
-[`parse_doc_sections()`](../src/infra/tools/docs_search/sections.py)는 원문의 제목·선언·문서 구간을 API 소유자와 문자 범위에 연결합니다. 한 페이지에 여러 API가 있으면 각 구간의 소유자를 구분하고, 예제 안 호출을 API 정의로 승격하지 않습니다. 선택 후보는 해당 대상의 구간에서 실제 반환할 원문 범위가 어떤 aspect와 정보 종류를 뒷받침하는지 평가합니다. 매개변수 요구는 이름뿐 아니라 그 이름에 연결된 설명이 필요합니다. 명시한 열거형 값도 사용자가 요청한 매개변수의 설명에 연결되어야 하며, 다른 항목의 값이나 `Returns`·`Notes` 구간을 매개변수 설명으로 인정하지 않습니다. 다른 API의 풍부한 파라미터 표나 높은 provider 점수는 대상 불일치를 상쇄하지 못합니다. 선택할 때는 아직 충족하지 못한 요구에 기여하는 발췌를 우선하므로, 같은 내용의 반복이 다른 필요한 근거를 밀어내지 않게 합니다.
+[`parse_doc_sections()`](../src/infra/tools/docs_search/sections.py)는 제목·선언·문서 구간과 문자 범위를 후보 창의 시작 위치에 활용합니다. API 소유자나 section 이름만으로 다른 구간을 버리지 않으며 출처의 시작 구간도 유지합니다. 식별자를 찾지 못한 원문도 후보가 될 수 있습니다. 매개변수 설명·예제·동작 설명과 사용자가 지정한 aspect의 지원 여부는 실제 발췌를 받은 Decisions가 판정합니다. 원문 하나에 전체 요구 충족을 강요하지 않아 서로 보완하는 후보를 남길 수 있습니다.
 
 ```mermaid
 flowchart LR
-    A["고정된 근거 요구"] --> B["Tavily 후보 수집"]
-    B --> C["소유 구간과 원문 범위 평가"]
-    C --> D["미충족 요구를 보완하는 근거 선택"]
-    D --> E{"선택한 범위로 충족"}
-    E -->|"충족"| F["근거 반환"]
-    E -->|"미충족·예산 있음"| B
-    E -->|"예산 소진"| G["부분 근거와 누락 반환"]
+    A["고정된 근거 요구"] --> B["공식 출처 후보 수집"]
+    B --> C["Decisions 후보 일괄 판정"]
+    C --> D["승인 범위로 packet 선택"]
+    D --> E["Decisions packet 충분성"]
+    E -->|"충분"| F["같은 packet으로 합성"]
+    E -->|"부족·복구 가능"| R["실패 요구 한 번 재계획"]
+    R --> B
+    E -->|"복구 불가"| G["부분 답변 또는 실패 안내"]
 ```
 
-후보 수집 예산과 반환 근거 수 `k`, 선택한 원문의 문자 예산을 구분합니다. 최종 출력보다 넓은 후보에서 선택하고, 미충족 정보 종류에 맞춰 검색어를 재구성합니다. 도구 호출마다 최초 검색과 보완 검색을 합해 최대 두 번 요청합니다. 명시적 refresh가 없는 일반 검색은 정상 완료한 provider query가 정확히 같고 완료 요청의 조회 한도가 이번 요청 이상이면 중복 요청을 생략합니다. 일시적으로 실패한 query는 다시 실행할 수 있습니다. 명시 버전이 검색어에 없으면 덧붙입니다. 보완 검색은 기존 검색어 전체를 그대로 두고 아직 없는 고정 심볼·aspect와 미충족 정보 종류만 뒤에 추가합니다. 심볼은 정확한 대소문자와 식별자 경계로 존재 여부를 확인하며, 기존 인용문·제외 검색어·코드·URL 안의 표현을 다시 쓰지 않습니다. `API reference` 같은 일반 보조어를 항상 붙이지 않으며 추가할 표현이 없으면 동일한 검색어의 중복 요청을 생략합니다. 구체적인 수집·선택 상한은 [실행 참고서](runtime_reference.md#31-공식-문서-검색)에 정리합니다.
+후보 수집 예산, Decisions에 보내는 후보 수와 문자 길이, 합성 packet의 문자·항목 예산은 각각 제한합니다. 요구당 provider 검색은 초기 한 번과 의미 판정 실패 후 재계획 한 번, 최대 두 번입니다. docs 도구는 호출당 provider 요청을 한 번만 수행하고 내부에서 누락 키워드를 추정해 보완 검색을 반복하지 않습니다. 정상 완료한 검색어와 조회 한도가 같으면 이력을 재사용하며 의미 판정 실패 후 명시적 refresh는 새 요청을 허용합니다. 재계획은 확정된 library·symbol·version·aspect·evidence need를 보존하고 query/k만 바꿉니다. 자세한 상한은 [실행 참고서](runtime_reference.md#31-공식-문서-검색)에 정리합니다.
 
-요청 버전과 명확히 다른 후보는 제외합니다. 버전을 확인할 수 없는 원문은 부분 근거로 보존하되, 요구 충족에 쓰는 모든 근거에서 버전이 확인되어야 `covered`입니다. 대상·aspect·정보 종류도 선택한 원문 범위에서 확인해야 하므로 문서 전체에 내용이 있다는 사실만으로 검색을 종료하지 않습니다. 이 판단은 정해진 구조·어휘 규칙에 기반합니다. 의미적 지지나 자연어 설명의 완전성을 증명하지 않으며, API·라이브러리를 바꾼 회귀 검증과 실제 검색 품질 평가의 범위를 구분합니다.
+문서 URI와 제목, 선택 범위, 수집 범위와 품질 정보를 Decisions에 함께 보냅니다. 버전·대상·설명의 충분성은 이 문맥과 실제 발췌를 바탕으로 판단합니다. 도구의 `answerability="unknown"`이나 후보 수를 의미적 성공으로 바꾸지 않습니다. 요구의 충분성은 실제 합성 packet의 검증 결과로 남기며 공식 출처 허용 목록과 원문 선택 범위 검사는 별도로 유지합니다.
 
 `upload` route는 현재 세션의 활성 첨부 집합을 검색합니다. `.py`·`.ipynb`와 함께 Docling 기능을 활성화한 환경에서는 PDF·DOCX·스캔 PDF·단일 프레임 PNG/JPEG/TIFF/WebP/BMP를 처리합니다. `topic`은 Chroma 후보를 검색하며 `symbols`도 literal anchor로 평가합니다. `symbol`·`definition`은 Python·Notebook source registry의 AST로 조회합니다. PDF에서 추출한 코드에 같은 분석 보장을 적용하지 않습니다. 명시한 파일 범위는 file ID로 제한하고 재시도에서도 유지합니다. 없는 파일과 근거를 확보하지 못한 파일은 누락으로 남깁니다. 세션 상태 확정 시 업로드 목록과 retriever 목록의 일치를 보장하고 요청 동안 같은 세션 락을 유지합니다. 실제 vector 검색과 source registry 조회의 파일 필터는 유지합니다.
 
 `retrieve_dispatch`는 독립 task를 병렬 실행한 뒤 planner 순서로 결과를 정렬합니다. 성공과 실패를 requirement ID로 구분하므로, 같은 docs route의 한 대상만 실패해도 다른 대상의 근거는 재사용할 수 있습니다. 실행 `status`와 별도로 `answerability`를 `covered`, `partial`, `missing`, `unknown`으로 기록해, 결과 개수나 route 실행 성공을 답변 가능성과 혼동하지 않습니다.
 
-공식 문서의 도메인·경로 필터와 요구사항 충족 판정은 docs 도구가 수행합니다. 두 검색 도구는 [`RetrievalResult`](../src/core/contracts/retrieval.py)의 `list[SearchHit]`와 `RetrievalDiagnostic`을 직접 반환하고 dispatcher는 여기에 requirement ID·실행 기록을 연결합니다. 외부 Tavily 응답은 클라이언트·수집 경계에서 검사하고, Chroma의 검색 참조는 source registry에서 snapshot·element·범위·원문과 대조해 `EvidenceRef`로 복원합니다. 내부 단계마다 dict·JSON으로 바꿔 다시 파싱하지 않으며 ToolMessage·HTTP 출력과 상태 복원 경계에서 직렬화·검증합니다. synthesis의 입력 준비와 최종 검증은 실제로 제공·인용한 범위에 공통 assessor를 적용합니다. hint는 라이브러리명만 추론하고 해당 라이브러리의 공식 도메인을 조회합니다. 허용 출처·버전 경로와 hint는 설정 데이터로, 쿼리 재구성·중복 방지·충족 판정은 코드로 관리합니다. 설정 모델은 알 수 없는 키를 거부하며, 소비 지점과 관측 가능한 검색 동작을 함께 검증합니다.
+공식 문서 도구는 도메인·경로 검증과 후보 수집을 담당합니다. 두 검색 도구는 [`RetrievalResult`](../src/core/contracts/retrieval.py)의 `list[SearchHit]`와 `RetrievalDiagnostic`을 반환하고 dispatcher는 requirement ID·실행 기록을 연결합니다. 외부 Tavily 응답은 수집 경계에서 검사하고 Chroma의 검색 참조는 source registry의 snapshot·element·범위·원문과 대조해 `EvidenceRef`로 복원합니다. ToolMessage·HTTP 출력과 상태 복원 경계에서 직렬화·검증하며 후속 의미 판정은 같은 원문을 사용합니다. 출처 규칙·query hint는 설정 데이터로, 후보 준비·중복 요청 방지·Decisions 판정·실패 복구는 코드로 관리합니다. 설정 모델은 알 수 없는 키를 거부합니다.
 
 ### 문서 원문과 검색 결과의 분리
 
@@ -79,7 +80,7 @@ flowchart LR
 
 [`evidence.py`](../src/core/evidence.py)의 `EvidenceRef`는 snapshot, 당시 원문 요소 전체, 해당 요소 안의 문자 또는 표 셀 선택을 묶습니다. ID는 이 데이터에 따라 결정되므로 같은 경로의 파일을 바꾸거나 검색 chunk 크기를 바꾸어도 이전 인용이 새 내용으로 조용히 연결되지 않습니다. `SearchHit`는 여기에 `requirement_id`, 질의별 순위와 `RetrievalScore`를 붙인 검색 결과입니다. 같은 원문이 여러 요구를 지원해도 검색 유래를 각각 보존합니다. 검색 점수는 답변의 정답 확률로 표시하지 않습니다.
 
-`.py`·`.ipynb`는 기존 파서가, PDF·DOCX·이미지는 [`docling_adapter.py`](../src/infra/docling_adapter.py)가 같은 `ParsedDocument` 모델로 원문을 전달합니다. Docling 요소의 `self_ref`, 제목 계층과 읽기 순서, 표 셀·병합·열/행/구역 헤더, 알려진 페이지 위치를 보존합니다. 공식 문서는 Tavily의 `content`·`raw_content` 원문을 `capture_scope="provider_excerpt"`로 기록합니다. 웹 페이지 전체나 실제 HTML 좌표를 확보했다고 간주하지 않습니다. 표 청크는 필요한 행과 헤더의 셀 ID를 선택하며 검색 후 같은 셀에서 본문을 복원합니다. 검색용 제목·옵션 요약을 추가하더라도 인용 발췌는 저장한 원문 요소의 범위에서 얻습니다. synthesis의 문자 예산 때문에 범위를 줄이면 줄인 범위를 가리키는 새 근거 ID를 만들고, `evidence_requirement_map`도 실제 packet ID에 연결합니다. 원래 source element를 보관하고 있더라도 모델에 보내지 않은 범위를 해당 답변의 근거로 인정하지 않습니다.
+`.py`·`.ipynb`는 기존 파서가, PDF·DOCX·이미지는 [`docling_adapter.py`](../src/infra/docling_adapter.py)가 같은 `ParsedDocument` 모델로 원문을 전달합니다. Docling 요소의 `self_ref`, 제목 계층과 읽기 순서, 표 셀·병합·열/행/구역 헤더, 알려진 페이지 위치를 보존합니다. 공식 문서는 Tavily의 `content`·`raw_content` 원문을 `capture_scope="provider_excerpt"`로 기록합니다. 웹 페이지 전체나 실제 HTML 좌표를 확보했다고 간주하지 않습니다. 표 청크는 필요한 행과 헤더의 셀 ID를 선택하며 검색 후 같은 셀에서 본문을 복원합니다. 검색용 제목·옵션 요약을 추가하더라도 인용 발췌는 저장한 원문 요소의 범위에서 얻습니다. 사전 packet 준비의 문자 예산 때문에 범위를 줄이면 줄인 범위를 가리키는 새 근거 ID를 만들고, `evidence_requirement_map`도 실제 packet ID에 연결합니다. 원래 source element를 보관하고 있더라도 모델에 보내지 않은 범위를 해당 답변의 근거로 인정하지 않습니다.
 
 전체 원문을 모든 chunk의 metadata에 복제하면 작은 파일도 인덱스와 메모리를 크게 늘릴 수 있습니다. [`ChunkedDocument`](../src/infra/chunking.py)는 `ParsedDocument`를 한 번 보관하고, Chroma에는 chunk 텍스트와 snapshot·element·문자 범위 또는 셀 ID 참조만 저장합니다. vector 검색 범위는 원문과 대조해 `EvidenceRef`로 복원하고, 정확한 코드 심볼은 같은 source registry에서 범위를 선택합니다. 검색용 registry는 현재 세션의 process-local retriever 수명에 한정되지만 이미 반환된 근거는 독립적으로 원문 요소를 보존하므로 인덱스나 변환 캐시 cleanup이 과거 답변을 손상하지 않습니다.
 
@@ -99,7 +100,7 @@ LLM은 [`AnswerDocument`](../src/core/answer_schema/models.py)의 `blocks`만 �
 
 참조 ID가 존재한다고 설명이 사실이거나 근거가 충분하다고 단정할 수는 없습니다. 서버의 로컬 검사는 이번 synthesis에 실제 제공한 근거에 참조가 연결되는지, 문자 범위·표 셀이 유효한지, `excerpt` 내용이 하나의 원문 발췌와 정확히 일치하는지를 확인합니다. 이 결정적 검사에서 일반 설명·해석은 `checks.support_status="not_evaluated"`로 남고, 정확히 일치한 원문 발췌만 `exact_match`입니다. 의미적 판정은 별도의 `semantic_validation`에 기록하므로 이 필드를 보고 전체 검증이 생략되었다고 해석하지 않습니다.
 
-`basis`의 `source`, `inference`, `example`, `interaction`, `excerpt`는 모델이 제안한 표현 구분입니다. 이를 사실 판정이나 검증 면제 인증으로 사용하지 않습니다. Decisions 사후 검증은 실제 내용 단위가 허용된 원문과 입력으로 뒷받침되는지, 본문 전체가 확정한 요청의 의미 조건을 충족하는지 평가합니다. `semantic_validation.checks`의 `grounded`는 내용 위치인 `unit_id`에, `request_fulfilled`는 본문 전체에 연결됩니다. 각 항목이 `status="evaluated"`이고 `probability`가 보고서의 `threshold` 이상이어야 통과합니다. 개별 refusal은 `status="refused"`, `probability=null`로 보존해 실제 낮은 확률과 구분하며, 해당 항목은 통과하지 못합니다. 모델 판정에는 오류가 있을 수 있으므로 benchmark의 독립된 LLM judge로 최종 품질을 계속 평가합니다.
+`basis`의 `source`, `inference`, `example`, `interaction`, `excerpt`는 모델이 제안한 표현 구분입니다. 이를 사실 판정이나 검증 면제 인증으로 사용하지 않습니다. Decisions 사후 검증은 실제 내용 단위가 허용된 원문과 입력으로 뒷받침되는지, 본문 전체가 확정한 요청의 의미 조건을 충족하는지 평가합니다. `semantic_validation.checks`의 `grounded`는 내용 위치인 `unit_id`에, `request_fulfilled`는 본문 전체에, `requirement:<requirement_id>`는 실제 인용 범위의 요구 충족에 연결됩니다. 각 항목이 `status="evaluated"`이고 `probability`가 보고서의 `threshold` 이상이어야 통과합니다. 개별 refusal은 `status="refused"`, `probability=null`로 보존해 실제 낮은 확률과 구분하며, 해당 항목은 통과하지 못합니다. 모델 판정에는 오류가 있을 수 있으므로 benchmark의 독립된 LLM judge로 최종 품질을 계속 평가합니다.
 
 `semantic_validation`은 판정에 사용한 `model`, `threshold`, 본문 `content_hash`와 근거 `evidence_fingerprint`를 보존합니다. 본문·근거가 바뀌었거나 내용 위치가 없거나 판정이 중복되면 기존 결과를 재사용하지 못합니다. 개별 판정 확률을 전체 답변의 정확도나 단일 confidence 점수로 합치지 않습니다. 원문 수집 범위·품질 진단, 참조 연결 상태, 원문 발췌 일치, 의미 판정, 생성 실패·불완전함을 각각 전달합니다. 생성 코드에는 예시임을 표시하며, 코드 실행 도구를 호출하지 않은 응답을 실행 검증된 결과로 간주하지 않습니다.
 
@@ -129,19 +130,19 @@ staging 생성·공개·회수는 인프라 저장소가 소유합니다. 출력
 
 API 경계는 정상 확률과 이름별 거절을 `DecisionResult(probabilities, refused_names)`로 나눕니다. 유효한 개별 refusal 때문에 같은 배치나 앞선 배치의 정상 판정을 잃지 않습니다. 어느 응답이든 이름 누락·중복·미지 이름·잘못된 확률·JSON 오류가 있으면 호출 전체를 실패 처리합니다. 인증·설정 오류나 소진된 일시 오류 재시도도 전체 실패이며, 이전 배치의 일부 결과만으로 답변 제공과 저장·전송을 승인하지 않습니다. refusal 원문은 결과나 로그에 보존하지 않습니다. 이 구분은 판정을 받지 못한 원문의 사용을 막으면서 독립적으로 확인한 근거를 활용하기 위한 계약입니다. 사전·사후 호출·사용량·지연과 안전한 판정 개수를 각각 기록합니다. 전달할 본문이 없는 단순 확인·취소의 확정된 서버 분기는 의미 검증 대상으로 만들지 않습니다.
 
-검색 결과가 있어도 필요한 대상이나 조건이 모두 포함되는 것은 아닙니다. synthesis 전에는 requirement별 결과·가용성·도구 오류와 `answerability`를 검사합니다. `covered`는 명시 대상·제약에 대응하는 근거 확보, `partial`은 일부 미충족, `missing`은 현재 검색에서 근거 미확보, `unknown`은 충족이나 부재를 판단할 수 없는 상태입니다. upload에서 대상 부재를 단정하려면 전체 source를 검사해야 합니다. 이 구분은 검색 점수 임계값으로 대체하지 않습니다.
+검색 결과가 있어도 필요한 대상이나 조건이 모두 포함되는 것은 아닙니다. 사전 검증은 requirement별 가용성·도구 오류와 명시 파일 범위를 구분합니다. docs 후보는 `unknown`으로 남기며 검색 성공이나 결과 수를 답변 가능성으로 바꾸지 않습니다. upload의 정확한 symbol·definition 조회는 source registry와 AST의 확정적 결과를 유지합니다. 전체 source를 보지 않은 부분 검색으로 대상의 부재를 단정하지 않습니다.
 
-Decisions는 먼저 `(requirement_id, evidence_id)`별 원문이 해당 요구의 일부라도 뒷받침하는지 검사합니다. 원문 하나에 전체 요구 충족을 강요하면 서로 보완하는 자료까지 제거하게 되므로, 원문 적합성과 요구 전체의 충분성을 분리합니다. 원문 판정은 `passed`·`failed`·`refused`로 기록하고 통과한 원문만 두 번째 요구 충족·`request_ready` 판정에 사용합니다. 일부 원문을 제외해도 남은 근거가 충분하면 재검색하지 않습니다. 같은 요청에서 이미 판정한 요구·원문은 다시 평가하지 않으며, 실패한 동일 원문이 재검색에 등장해도 채택하지 않습니다. 새 원문은 같은 기준으로 검증합니다. 원본 검색 결과는 관측 기록에 남기되 합성·검증·원문 fallback은 통과한 근거만 소비합니다.
+Decisions는 제한된 후보의 관련성을 우선 판정하고, 남는 질문 예산으로 요청한 정보 종류·aspect 지원 여부를 판정합니다. 후보 수와 지원 항목 수의 곱이 전체 호출 예산을 소진하지 않도록 캐시에 없는 질문 수를 계산하고, 실제 packet 검증과 재검색 후 검증 호출을 예약합니다. 통과 후보의 `supported_labels`는 서로 보완하는 범위를 고르는 입력이며 생략한 지원 질문을 의미적 실패로 취급하지 않습니다. 문자·항목 한도와 원문 containment는 로컬 선택기가 적용합니다. 실제 선택한 일반·compact packet의 요구별 충분성과 `request_ready`를 함께 평가해 `retrieval.prepared_evidence`에 저장합니다. synthesis는 이 packet만 소비하므로 넓은 원문에 내린 판정을 더 짧은 발췌의 충분성으로 재사용하지 않습니다.
 
-요구별 판정이 거절되거나 임계값에 못 미치고 `request_ready`의 명시적 거절이 없으면 기존 정책에 따라 복구 가능한 실패 요구만 기본 한 번 재검색합니다. docs와 지원하는 upload 주제·aspect 검색은 query/k를 바꿀 수 있지만, 원문 전체를 검사한 symbol·definition 검색이나 retriever 부재·지원하지 않는 source 제약은 재검색하지 않습니다. 실패한 요구 안에 있는 통과 원문도 유지합니다. docs와 upload 주제 검색은 필터링·병합한 실제 근거에서 coverage를 다시 계산해 과거 진단의 `partial`이 현재 충분한 근거를 차단하지 않게 합니다. 복구가 끝나도 요구가 부족하면 terminal 누락을 기록하고, 남은 근거로 합성·사후 검증한 자연어 부분 답변만 제공합니다. 확인 가능한 사실은 인용하고 부족한 대상·파일·버전·정보를 명시하며 저장·전송을 막습니다. 근거가 전혀 없으면 실패 안내를 반환합니다.
+일반 packet의 요구 판정이 거절되거나 임계값에 못 미치고 `request_ready`의 명시적 거절이 없으면 복구 가능한 실패 요구만 한 번 재계획합니다. docs와 지원하는 upload 주제·aspect 검색은 query/k를 바꿀 수 있지만 전체 원문을 검사한 symbol·definition 조회, retriever 부재와 지원하지 않는 source 제약은 재검색하지 않습니다. 통과 근거를 보존하고 새 후보와 packet을 다시 준비합니다. 복구 후에도 부족하면 terminal 누락을 기록해 남은 근거로 제한된 부분 답변을 제공하고 저장·전송을 막습니다. 근거가 전혀 없으면 실패 안내를 반환합니다.
 
 `request_ready`의 명시적 refusal은 요청 전체의 준비 판정을 거절한 것이므로, 근거 부족이 함께 있어도 `model_refusal`로 재검색과 합성을 중단합니다. 이 경우 부분 답변을 만들기 위한 합성도 시작하지 않습니다. 수치 판정의 확률이 낮고 근거 요구도 부족하면 부족한 요구의 검색 복구 가능성을 판단합니다. 모든 근거 요구가 충족됐는데 준비 확률만 낮으면 어느 원문이 문제인지 추정하지 않고, `evidence_insufficient`로 재검색과 합성을 중단합니다. 검색 없는 요청에도 같은 기준을 적용합니다.
 
-synthesis의 입력 준비와 최종 검증은 같은 요구 충족 기준을 각각 실제 packet 전체와 본문이 유효하게 인용한 부분집합에 적용합니다. docs는 [`assess_docs_evidence()`](../src/infra/tools/docs_search/ranking.py)로 `symbols`, `version`, `aspects`, `evidence_needs`를 다시 평가합니다. 전체 원문의 구조는 소유자와 구간 경계를 확인하는 데 사용하고, 내용의 충족 근거는 실제 전달·인용 범위 안에서만 인정합니다. upload는 명시 파일 범위와 literal aspect를 확인하는 기준을 유지합니다. 참조·발췌 일치와 requirement 연결도 함께 검사하며, 검색에서 확보했던 근거 ID를 인용했다는 사실만으로 잘린 내용까지 충족했다고 보지 않습니다.
+판정 캐시는 현재 요청 안에서 실제 입력·질문·모델·지시문의 fingerprint로 묶습니다. `EvidenceRef.id`에는 snapshot 전체와 원문 요소·선택 범위가 포함되므로 source version이나 발췌 범위가 바뀌면 identity도 바뀝니다. 같은 질문과 입력의 확률·refusal만 재사용하고 조건이 바뀌면 다시 판정합니다. 준비 packet은 요청 ID·revision·계획·이전 답변 hash와 연결합니다. 계약이나 근거가 바뀐 상태에서 이전 packet을 그대로 사용하지 못하며 재합성은 같은 준비 packet을 사용합니다.
 
-모델 입력에는 요구별 근거 ID, 확보·누락된 aspect와 정보 종류, docs의 `missing_needs`·`missing_requirements`·`is_partial`을 전달합니다. 문자 예산 때문에 필요한 구간이 빠져도 누락 상태를 남깁니다. 공통 계약 검사는 필수 누락과 금지 위반을 구분하고 선호 미충족을 재생성 조건으로 만들지 않습니다. 코드 금지는 코드 블록·문단 안 Markdown 코드 fence·참조한 코드 원문과 동일한 문단에도 적용하지만, 코드 근거를 인용한 자연어 설명은 허용합니다. 줄 수는 인용 부록과 receipt를 제외한 본문의 비어 있지 않은 줄로 검사합니다. 비교·설명의 의미 충족은 Decisions 사후 판정이 담당하고, 로컬 구조 검사와 함께 통과해야 합니다.
+사후 검증은 내용 단위별 `grounded`, 본문 전체의 `request_fulfilled`, 실제 인용 범위의 요구별 충분성을 한 batch로 평가합니다. 요구별 판정에는 로컬 참조 검사를 통과한 본문이 실제로 인용한 범위만 사용합니다. 검색에서 보았거나 packet에 들어 있다는 이유로 인용하지 않은 원문을 끌어오지 않습니다. 공통 계약 검사는 필수 누락·금지 위반과 선호 미충족을 구분합니다. 코드 금지, 정확한 원문 발췌, 본문 줄 수와 같은 관찰 가능한 조건은 로컬에서 확인하고 의미적 충족은 Decisions 결과를 사용합니다.
 
-`RetryState`는 현재 시도 시작 위치, 원래 task, `failed_requirement_ids`, `preserved_hits`, 보존 진단과 retry scope를 관리합니다. `refresh_routes`에서는 실패한 요구의 query를 다시 계획하고, 같은 route의 성공한 다른 요구와 실패 요구 안에서 통과한 원문을 함께 보존합니다. 재계획에는 실제 query·실패 진단·정상 완료한 query를 제공하며, 원래 ID·라이브러리·심볼·버전·aspect·evidence need는 유지합니다. docs 도구는 같은 요구의 부분 후보도 새 후보와 합쳐 동일한 대상·버전·source 범위와 필요한 정보 종류로 다시 검사합니다. 원문별 Decisions 판정은 보존하며, 통과한 원문들의 최종 요구 충족 여부를 다시 확인합니다.
+`RetryState`는 시도 시작 위치, 원래 task, `failed_requirement_ids`, `preserved_hits`, 보존 진단과 retry scope를 관리합니다. `refresh_routes`에서는 실패 요구의 query를 다시 계획하고 성공 요구와 실패 요구 안의 통과 원문을 보존합니다. 재계획에는 실제 query·실패 진단·정상 완료한 query를 제공하며 원래 ID·라이브러리·심볼·버전·aspect·evidence need는 유지합니다. 기존·신규 후보는 같은 Decisions 경계를 통과하고 실제 packet의 충분성을 다시 확인합니다.
 
 본문 참조·요구 coverage 문제나 사후 의미 판정의 미통과는 `reuse_hits_resynthesize`에서 planner·검색을 반복하지 않고 synthesis로 직접 돌아가 보정합니다. 검색이 필요 없는 신규 작성과 기존 답변 수정도 같은 확정 계약을 유지합니다. 검색 재시도의 `attempt`·`max_retries`와 본문 복구의 `content_repair_attempt`·`max_content_repairs`는 독립적입니다. 기본적으로 본문 복구는 한 번 허용하므로 검색 예산을 사용했거나 `max_retries=0`이어도 본문을 수정할 기회가 남습니다. `max_content_repairs=0`이면 이 복구도 생략합니다. 재합성은 terminal 검색 누락을 유지하고 확보한 근거·참조·내용·형식을 다듬습니다. 재시도 후 잘못된 내용 단위를 제거하면 참조·인용뿐 아니라 남은 requirement coverage와 필수·금지 조건을 다시 검사하고, 달라진 본문에 Decisions 사후 검증을 새로 적용합니다. 제한된 원문 발췌로 대체하는 fallback은 실패 상태를 유지하며 `semantic_validation`이 없는 발췌를 의미 검증 완료로 표시하지 않습니다. 불완전한 답변은 완료된 전달 본문으로 승인하지 않습니다.
 
@@ -205,25 +206,25 @@ DocuMate에서 가장 까다로웠던 문제는 "더 빠른 응답"과 "더 충�
 
 독립 retrieval task는 `ThreadPoolExecutor`로 병렬 실행하고 결과는 planner 순서대로 다시 정렬합니다. 이 실행 단위는 서로 다른 route뿐 아니라 같은 docs route의 복수 대상도 포함합니다. 외부 검색은 각 Tavily 요청마다 `DOCS_SEARCH_TIMEOUT_SECONDS`를 적용하고 timeout 원인을 diagnostics에 남깁니다.
 
-planner와 synthesis는 구조화 모델 호출 경로를 사용하며 provider의 요청별 timeout과 SDK retry를 호출 경계에 명시합니다. 요청별 timeout은 stage 전체 deadline이 아니므로 총 실행 시간은 더 길 수 있습니다. docs 도구는 최초 query와 같은 대상을 유지한 재구성 query를 최대 한 번씩 계획합니다. 명시적 refresh가 없는 일반 검색은 `covered`를 확보하거나 해당 query를 이미 시도했다면 추가 호출을 생략합니다. 재구성은 원 쿼리의 주제·제약과 고정된 심볼·버전·aspect를 유지하며 미충족 정보 종류를 반영합니다.
+planner와 synthesis는 구조화 모델 호출 경로를 사용하며 provider timeout과 SDK retry를 호출 경계에서 관리합니다. 요청별 timeout은 전체 stage deadline이 아닙니다. 검색은 요구당 초기 요청과 의미 판정 실패 후 재계획 요청으로 최대 두 번이며 docs 도구는 한 번의 실행 안에서 추가 보완 검색을 하지 않습니다. 상세 재사용·복구 기준은 앞의 검증 계약과 [실행 참고서](runtime_reference.md)에 둡니다.
 
-재시도는 requirement 단위로 비용을 제한합니다. 같은 docs route에서 NumPy 근거를 확보하고 pandas만 실패했다면 NumPy는 그대로 사용하고 pandas query만 재계획합니다. 같은 요구의 부분 후보도 다음 후보와 함께 원래 라이브러리·심볼·버전·aspect·정보 종류에 맞는지 재평가합니다. 일반 검색은 완료된 동일 요청을 fingerprint로 재사용하고 실제 시도 query도 추적합니다. 사전 검증의 `no_evidence`로 재검색하는 실패 요구사항은 명시적인 `refresh`를 전달해 로컬 `covered`나 완료 요청 기록이 첫 새 검색을 생략하지 못하게 합니다. 범위·관련성·소유 구간 신뢰도가 같은 후보끼리는 새 snapshot을 이전 provider 점수보다 우선하여 부족하다고 판정된 원문을 보완할 기회를 줍니다. 빈 결과나 오류가 기존 유효 근거를 제거하지 않으며, 도구당 최대 두 번이라는 호출 상한과 의미 검증 조건은 유지합니다. 응답의 참조·구성 문제는 검색을 다시 구매하지 않고 제한된 재합성으로 처리합니다.
+재시도는 requirement 단위로 비용을 제한합니다. 같은 docs route에서 NumPy 근거를 확보하고 pandas만 실패했다면 NumPy와 이미 통과한 pandas 근거를 보존하고 pandas query만 다시 계획합니다. 새로운 후보와 준비 packet은 필요한 Decisions 판정만 받고 동일 입력은 캐시를 사용합니다. 실제 provider 요청과 캐시 관측을 기록하므로 검색 실행, 판정 재사용, 본문 보정의 비용을 구분할 수 있습니다.
 
-docs 품질 검사는 provider 원본 URL의 공식 도메인·문서 경로, 비어 있지 않은 수집문, 대상 문서 소유권, 요청 버전, 실제 발췌의 aspect와 정보 종류를 확인합니다. 검색에서 선택한 범위와 synthesis의 최종 범위에 같은 판정을 적용하여, 단순한 이름 언급·부분 근거·요구 전체 충족을 구분합니다. 이 검사는 모든 설명의 의미적 충분성을 보증하지 않으므로 자연어 평가와 함께 해석합니다.
+공식 도메인·문서 경로·원문 범위 검사는 확정적 제약입니다. 대상·버전·aspect·정보 종류의 관련성과 충분성은 후보와 실제 packet에 대한 Decisions 결과로 판단합니다. bounded 후보 선택은 일부 유용한 범위를 놓칠 수 있고 모델도 잘못 판단할 수 있으므로 독립 평가에서 두 원인을 구분해야 합니다.
 
 upload의 `topic` 검색은 vector 후보를 identifier·keyword·parameter signal로 rerank하고 명시한 심볼도 literal anchor로 평가합니다. 명시한 파일별 후보를 확보하는 어댑터가 한 검색 호출의 쿼리 임베딩을 계산하고 파일별 조회에 공유합니다. 벡터 재사용은 그 호출 안에 한정하며 파일별 후보 예약, 원시 거리 기반 추가 후보 선택, 후속 정렬과 인용 의미를 유지합니다. `symbol`·`definition`은 전체 source registry의 AST 조회로 top-k 후보 밖의 범위도 찾습니다. 사용과 정의를 구분하고, 정의의 decorator·본문·Notebook cell 및 정확한 원문 offset을 유지합니다. source 전체를 확인할 수 없으면 부재를 단정하지 않고 `unknown`으로 남깁니다. 이 경로는 임의의 유사도 임계값 없이 이름이 없는 함수의 오발췌를 막으며 source에 명시된 정적 코드 범위만 확인합니다.
 
 문서 재첨부 비용은 세션별 변환·문서 임베딩 캐시로 줄입니다. 변환 키에는 원본 해시·형식·추출 설정·어댑터와 runtime 버전·모델 파일 해시를, 임베딩 키에는 정확한 청크 텍스트와 청킹·임베딩 모델 설정까지 반영합니다. query 임베딩은 디스크에 캐시하지 않습니다. 변환 캐시를 읽을 때 현재 원본 bytes·파일명·source URI로 새 snapshot을 만들므로 다른 이름의 첨부에 이전 파일 ID나 인용을 재사용하지 않습니다. 현재 입력·페이지·출력 한도도 다시 검사합니다. TTL·용량 한도로 보관 비용을 제한하며 캐시 손상이나 쓰기 실패가 정상 변환 결과를 무효화하지 않게 했습니다.
 
-synthesis의 새 검색 근거 예산은 설정 입력, 고정 정책, 실행 예산을 구분합니다. `AppSettings`만 일반·compact snippet 기본값을 정의하고, graph가 이를 `ExcerptLimits`로 전달합니다. `resolve_evidence_budgets()`는 계획과 이 설정으로 일반·compact의 `RetrievedEvidenceBudget`을 한 번에 결정하며, 입력 준비와 선택은 해당 예산 하나만 받습니다. 별도 snippet·총량 override나 요청 문자열 기반 분기는 없습니다. 일반/compact의 총 excerpt 예산은 docs+upload 혼합에 8,000/4,000자, 그 외에 6,000/3,000자로 고정합니다. 두 총량을 명시적인 쌍으로 두어 일반 총량을 조정할 때 timeout 복구 비용까지 자동으로 늘어나지 않게 합니다. compact의 개별 상한은 일반·compact 설정 중 작은 값이며 항목 수 상한은 유지합니다.
+새 검색 근거 예산은 설정 입력, 고정 정책, 실행 예산을 구분합니다. `AppSettings`가 일반·compact snippet 기본값을 소유하고 graph가 `ExcerptLimits`로 사전 검증에 전달합니다. `resolve_evidence_budgets()`는 계획과 설정에서 두 `RetrievedEvidenceBudget`을 계산합니다. 일반/compact 총 excerpt 예산은 docs+upload 혼합에 8,000/4,000자, 그 외에 6,000/3,000자입니다. 두 총량을 고정 쌍으로 두어 일반 총량 변경이 timeout 복구 비용까지 자동으로 늘리지 않게 합니다. compact의 개별 상한은 두 snippet 설정 중 작은 값이며 항목 상한은 일반과 같습니다.
 
-근거 항목의 기본 상한 8건은 planner 태스크 한도와 별개의 선택 정책입니다. [`requirement_passage_targets()`](../src/runtime/nodes/synthesis/budgets.py)가 계산한 파일·aspect·정보 종류 조합의 합이 기본 상한보다 크면 그만큼 항목 여유를 둡니다. 이 조합 수로 docs의 문자 예산을 균등 분할하지는 않습니다. docs는 원래 요구사항 전체를 기준으로 온전한 문단·행과 인접한 설명 구간을 평가하고, 미충족 항목을 새로 채우는 후보부터 선택합니다. [`evidence_selection.py`](../src/runtime/nodes/synthesis/evidence_selection.py)의 `assess_docs_evidence()`로 실제 충족 증가를 확인하며, 남은 문자 수와 항목 수 중 더 부족한 자원을 함께 고려합니다. 짧지만 필수 항목에 기여하지 않는 설명이 자리를 먼저 소진하지 않도록 합니다. 요구·파일별 초기 몫을 확보하고, upload의 필수 범위를 배분한 뒤 남은 몫을 docs에 재배분합니다. 필수 범위를 확보한 뒤 추가 출처와 주변 문맥을 확장합니다. 같은 선택 범위의 비용은 한 번만 계산하고 검색 연결을 합치며, 더 큰 범위로 대체하면 포함된 기존 범위의 비용과 자리를 돌려받습니다. 예산 안에 들어가지 않는 필수 설명은 부분 충족으로 남깁니다.
+근거 항목의 기본 상한 8건은 planner task 한도와 별개의 선택 정책입니다. docs의 aspect·정보 종류 개수 합과 upload의 명시 파일·literal anchor 조합을 바탕으로 필요한 항목 여유를 계산합니다. docs는 Decisions가 부여한 지원 label의 증가와 남은 문자·항목 용량으로 후보를 선택합니다. label은 전체 요구 충족을 보증하지 않으므로 선택 후 실제 packet의 충분성을 다시 판정합니다. 같은 선택 범위의 비용은 한 번만 계산하고 requirement 연결을 합칩니다. 자세한 계산식은 [근거 입력 예산](runtime_reference.md)에 정리합니다.
 
 완전한 코드 구문·행을 우선하고, 초기 균등 배분에서 보류한 요구에도 잔여 예산의 몫을 유지해 재배분합니다. 검색 범위가 줄 중간에서 끝나거나 완전한 단위가 예산에 들어가지 않으면, 선택적 문맥보다 먼저 관련 부분 원문을 배분합니다. 이 범위는 검색된 원문 안에 한정하며 정확한 발췌가 독립 실행 가능한 코드를 뜻하지는 않습니다. 저장·전송 요청은 근거 예산을 줄이지 않습니다.
 
 문자 예산은 새 검색에서 선택한 `excerpt` 문자열의 Python `len()`을 세며, 원문 위치를 보존하면서 모델에 제공할 검색 문맥의 양을 제한합니다. 기존 답변을 변환하는 경로의 전체 원문 본문과 검증된 인용은 변환에 필요한 별도 입력으로 보존하므로 이 검색 예산으로 자르지 않습니다. system prompt·대화·JSON 메타데이터·표 셀 등의 직렬화 비용도 포함하지 않아 전체 prompt나 모델의 context token 한도를 보장하지 않습니다. 현재 구조에서는 문자 예산을 유지하며, 모델별 전체 입력 토큰 제한은 실제 context 초과나 입력량 측정으로 필요가 확인될 때 별도로 설계해야 합니다.
 
-structured synthesis timeout 시 compact 호출을 사용하고, 실패하면 불완전함을 명시한 원문 발췌 fallback을 제공합니다. 각 경로의 검사 기준은 해당 호출에 실제 제공한 packet입니다. 현행 준비 과정에서 packet과 요구 연결이 모두 비어진 경우에도 누락을 계산하며, 커버리지 계산 정보가 없는 구형 상태와 구분합니다. 일반 packet부터 부족한 근거는 같은 입력으로 재생성해도 회복되지 않으므로 불완전 결과로 처리하고, 모델의 인용 누락이나 일반 packet으로 회복할 수 있는 compact의 누락은 제한된 재합성으로 처리합니다. 예산으로 잘린 범위를 원문에 없다고 단정하거나, 누락 안내만으로 완성된 답변으로 승인하지 않습니다.
+structured synthesis timeout에서는 사전에 충분성과 준비 판정을 통과한 compact packet이 있을 때만 compact 모델을 호출합니다. 이 packet이 없으면 검증하지 않은 축약 입력을 만들지 않습니다. 각 경로는 실제 제공한 packet을 기록하며 모델 호출이 끝내 실패하면 불완전함을 명시한 원문 발췌 fallback을 제공합니다. 일반 packet부터 부족한 요구는 같은 입력으로 재생성해 회복되지 않으므로 terminal 누락으로 유지합니다. 충분한 packet에서 발생한 본문·인용 누락은 제한된 재합성으로 보정합니다. 예산 때문에 빠진 범위를 원문에 없다고 단정하거나 누락 안내만으로 완료 답변을 승인하지 않습니다.
 
 출력 한도와 provider timeout은 LLM registry 생성부에서만 설정하며 검색 근거 예산에서는 재지정하지 않습니다. 일반 출력과 snippet의 초기 조정값은 각각 4,096토큰과 1,800자이며, compact는 독립된 960토큰·900자 설정을 사용합니다. 6,000/8,000자와 compact 3,000/4,000자를 포함한 현재 수치는 경험적 초기값이며, 최적성을 뒷받침하는 온라인 평가 근거는 확인되지 않았습니다. 설정·예산 책임을 분리하면서 기존 운영 수치는 유지합니다. 출력과 검색 예산의 독립성은 HTTP 요청·원문 범위에서 검증하고, 수치 조정은 파일·aspect 커버리지, 최종 답변 품질·인용, 정상·timeout 복구 지연, 관측 가능한 입력·출력 토큰과 비용을 함께 평가해야 합니다. 이 분리는 일반 응답의 생성 여유를 늘릴 때 복구 비용이나 저장 메모리까지 함께 늘어나는 것을 피하기 위한 것입니다.
 
