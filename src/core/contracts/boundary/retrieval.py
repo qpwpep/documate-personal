@@ -93,20 +93,3 @@ def parse_retrieval_state(value: Any) -> RetrievalState:
 
 def get_retrieval_state(state: dict[str, Any]) -> RetrievalState:
     return parse_retrieval_state(state.get("retrieval"))
-
-
-def accepted_search_hits(
-    hits: list[SearchHit], retrieval: RetrievalState, *, include_unassessed: bool = True,
-) -> list[SearchHit]:
-    """Keep sources accepted for this requirement without erasing observations.
-
-    A source may be useful for one requirement and rejected for another. The
-    fixed requirement and immutable evidence ID therefore identify a verdict;
-    a rewritten query or a repeated provider result does not reset it.
-    """
-    verdicts = {(item.requirement_id, item.evidence_id): item for item in retrieval.evidence_verdicts}
-    return dedupe_search_hits([
-        hit for hit in hits
-        if ((verdict := verdicts.get((hit.requirement_id, hit.evidence.id))) is None and include_unassessed)
-        or (verdict is not None and verdict.status == "passed")
-    ])

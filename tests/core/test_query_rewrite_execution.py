@@ -17,6 +17,7 @@ from src.runtime.nodes.planner import make_planner_node
 from src.runtime.nodes.retrieval import make_retrieve_dispatch_node
 from src.runtime.nodes.validation import make_pre_synthesis_validation_node
 from tests.core.helpers import _CapturePlannerLLM, build_test_state, make_decisions_client
+from tests.synthesis_fixtures import synthesis_excerpt_limits
 
 
 QUERY_REWRITES = [
@@ -67,7 +68,7 @@ def test_planner_text_rewrite_reaches_http_and_recovers_missing_evidence(docs_ht
         "planner_output": PlannerOutput(use_retrieval=True, tasks=[task]),
     })
     dispatch = make_retrieve_dispatch_node(_docs_tool(), None, False)
-    validate = make_pre_synthesis_validation_node(False, decisions_client=make_decisions_client())
+    validate = make_pre_synthesis_validation_node(False, excerpt_limits=synthesis_excerpt_limits(), decisions_client=make_decisions_client())
     state.update(dispatch(state))
     assert queries[0] == initial_query
     state.update(validate(state))
@@ -87,7 +88,7 @@ def test_planner_text_rewrite_reaches_http_and_recovers_missing_evidence(docs_ht
     assert queries[previous_request_count:] == [rewritten_query]
     diagnostic = state["debug"].retrieval_diagnostics[-1]
     assert diagnostic.reused is False
-    assert diagnostic.answerability == "covered"
+    assert diagnostic.answerability == "unknown"
     assert [request.query for request in diagnostic.provider_requests] == [rewritten_query]
     state.update(validate(state))
     assert not state["retry"].needs_retry
@@ -139,13 +140,13 @@ def test_semantic_rejection_refreshes_covered_evidence_and_selects_new_source(mo
                 for item in context["evidence"]
             }
         else:
-            excerpts = [source["excerpt"] for requirement in context["requirements"] for source in requirement["sources"]]
+            excerpts = [source["excerpt"] for requirement in context["requirements"] if requirement.get("task") and not requirement["name"].startswith("compact_") for source in requirement["sources"]]
             decision_sources.append(excerpts)
             probability = 0.99 if any("One shape dimension can be -1" in text for text in excerpts) else 0.1
             probabilities = {question["name"]: probability for question in payload["questions"]}
         return httpx.Response(200, json={
             "model": "gpt-6-luna",
-            "answers": [{"type": "predicate", "name": question["name"], "probability": probabilities[question["name"]]}
+            "answers": [{"type": "predicate", "name": question["name"], "probability": probabilities.get(question["name"], probabilities.get(question["name"].split("_support_")[0], 0.99))}
                         for question in payload["questions"]],
             "usage": {"input_tokens": 20, "output_tokens": 0, "total_tokens": 20},
         })
@@ -168,15 +169,15 @@ def test_semantic_rejection_refreshes_covered_evidence_and_selects_new_source(mo
             model="gpt-5.6-luna", api_key="test-key", base_url="https://provider.test/v1",
             http_client=client, max_retries=0, use_responses_api=False,
         ), RetrievalRewriteOutput)
-        validate = make_pre_synthesis_validation_node(False, decisions_client=decisions)
+        validate = make_pre_synthesis_validation_node(False, excerpt_limits=synthesis_excerpt_limits(), decisions_client=decisions)
         state.update(dispatch(state))
         first = state["debug"].retrieval_diagnostics[-1]
         old_hit = state["retrieval"].hit_log[0]
-        assert first.answerability == "covered"
+        assert first.answerability == "unknown"
         assert provider_queries == [(initial_query, 9)]
 
-        # Ordinary coverage reuse remains available until validation requests refresh.
-        cached = tool(rewritten_query, requirement=task.requirement, k=6,
+        # An identical completed provider request is reused until validation requests refresh.
+        cached = tool(initial_query, requirement=task.requirement, k=3,
                       previous_hits=[old_hit], completed_requests=first.completed_requests)
         assert cached.diagnostics.provider_requests == []
         assert cached.hits[0].evidence.id == old_hit.evidence.id
@@ -193,10 +194,10 @@ def test_semantic_rejection_refreshes_covered_evidence_and_selects_new_source(mo
         diagnostic = state["debug"].retrieval_diagnostics[-1]
         assert not diagnostic.reused
         assert [request.query for request in diagnostic.provider_requests] == [rewritten_query]
-        assert diagnostic.candidate_count == (2 if source_accepted else 1)
+        assert diagnostic.candidate_count == 2
         fresh_hits = state["retrieval"].hit_log[state["retry"].hit_start_index:]
         assert any(hit.evidence.excerpt == fresh_text for hit in fresh_hits)
-        assert any(hit.evidence.id == old_hit.evidence.id for hit in fresh_hits) == source_accepted
+        assert any(hit.evidence.id == old_hit.evidence.id for hit in fresh_hits)
         assert any(hit.evidence.id == old_hit.evidence.id for hit in state["retrieval"].hit_log)
         fresh_hit = next(hit for hit in fresh_hits if hit.evidence.excerpt == fresh_text)
         assert fresh_hit.evidence.snapshot.source_uri == fresh_url
@@ -205,9 +206,12 @@ def test_semantic_rejection_refreshes_covered_evidence_and_selects_new_source(mo
         state.update(validate(state))
         assert not state["retry"].needs_retry
         assert not state["retry"].failed_requirement_ids
-        assert decision_sources == (
-            [[initial_text], [initial_text, fresh_text]] if source_accepted else [[], [fresh_text]]
-        )
+        assert len(decision_sources) == 2
+        assert (initial_text in decision_sources[0]) == source_accepted
+        assert fresh_text in decision_sources[1]
+        assert (initial_text in decision_sources[1]) == source_accepted
+        assert all(excerpt in initial_text for excerpt in decision_sources[0])
+        assert all(excerpt in initial_text or excerpt in fresh_text for excerpt in decision_sources[1])
 
 
 @pytest.mark.parametrize("same_query", [False, True], ids=["rewritten-query", "same-query"])
@@ -269,7 +273,7 @@ def test_semantic_rejection_refreshes_docs_alongside_another_requirement_timeout
             probabilities = {item["name"]: 0.99 for item in context["evidence"]}
         else:
             excerpts = {requirement["task"]["requirement_id"]: [source["excerpt"] for source in requirement["sources"]]
-                        for requirement in context["requirements"]}
+                        for requirement in context["requirements"] if requirement.get("task") and not requirement["name"].startswith("compact_")}
             decision_sources.append(excerpts)
             supported = {
                 symbol: any("One shape dimension can be -1" in text for text in texts)
@@ -277,11 +281,12 @@ def test_semantic_rejection_refreshes_docs_alongside_another_requirement_timeout
                 for symbol, texts in excerpts.items()
             }
             probabilities = {requirement["name"]: 0.99 if supported[requirement["task"]["requirement_id"]] else 0.1
-                             for requirement in context["requirements"]}
-            probabilities["request_ready"] = 0.99 if all(supported.values()) else 0.1
+                             for requirement in context["requirements"] if requirement.get("task") and not requirement["name"].startswith("compact_")}
+            probabilities.update({question["name"]: 0.99 if all(supported.values()) else 0.1
+                                  for question in payload["questions"] if question["name"] not in probabilities})
         return httpx.Response(200, json={
             "model": "gpt-6-luna",
-            "answers": [{"type": "predicate", "name": question["name"], "probability": probabilities[question["name"]]}
+            "answers": [{"type": "predicate", "name": question["name"], "probability": probabilities.get(question["name"], probabilities.get(question["name"].split("_support_")[0], 0.99))}
                         for question in payload["questions"]],
             "usage": {"input_tokens": 20, "output_tokens": 0, "total_tokens": 20},
         })
@@ -305,13 +310,13 @@ def test_semantic_rejection_refreshes_docs_alongside_another_requirement_timeout
             model="gpt-5.6-luna", api_key="test-key", base_url="https://provider.test/v1",
             http_client=client, max_retries=0, use_responses_api=False,
         ), RetrievalRewriteOutput)
-        validate = make_pre_synthesis_validation_node(False, decisions_client=decisions)
+        validate = make_pre_synthesis_validation_node(False, excerpt_limits=synthesis_excerpt_limits(), decisions_client=decisions)
         state.update(dispatch(state))
         initial_diagnostics = {item.requirement_id: item for item in state["debug"].retrieval_diagnostics}
         initial_hits = {hit.requirement_id: hit for hit in state["retrieval"].hit_log}
-        assert initial_diagnostics["reshape"].answerability == "covered"
+        assert initial_diagnostics["reshape"].answerability == "unknown"
         assert initial_diagnostics["stack"].error_code == "RETRIEVAL_DOCS_TIMEOUT"
-        assert initial_diagnostics["concatenate"].answerability == "covered"
+        assert initial_diagnostics["concatenate"].answerability == "unknown"
         assert sorted(provider_queries) == sorted(initial_queries.values())
 
         state.update(validate(state))
@@ -331,12 +336,20 @@ def test_semantic_rejection_refreshes_docs_alongside_another_requirement_timeout
         retry_hits = {hit.requirement_id: hit for hit in state["retrieval"].hit_log[state["retry"].hit_start_index:]}
         assert retry_hits["reshape"].evidence.excerpt == fresh_text
         assert retry_hits["reshape"].evidence.snapshot.snapshot_id != initial_hits["reshape"].evidence.snapshot.snapshot_id
-        assert retry_hits["concatenate"].evidence.id == initial_hits["concatenate"].evidence.id
+        assert any(hit.evidence.id == initial_hits["concatenate"].evidence.id
+                   for hit in state["retrieval"].hit_log[state["retry"].hit_start_index:])
 
         state.update(validate(state))
         assert not state["retry"].needs_retry
         assert not state["retry"].failed_requirement_ids
-        assert decision_sources == [
-            {"reshape": [initial_text], "stack": [], "concatenate": [source_texts["concatenate"]]},
-            {"reshape": [initial_text, fresh_text], "stack": [source_texts["stack"]], "concatenate": [source_texts["concatenate"]]},
-        ]
+        assert len(decision_sources) == 2
+        assert initial_text in decision_sources[0]["reshape"]
+        assert decision_sources[0]["stack"] == []
+        assert source_texts["concatenate"] in decision_sources[0]["concatenate"]
+        assert fresh_text in decision_sources[1]["reshape"]
+        assert source_texts["stack"] in decision_sources[1]["stack"]
+        # The unchanged exact requirement/ranges are served by the decision
+        # cache and therefore omitted from the second provider batch.
+        assert "concatenate" not in decision_sources[1]
+        assert any(item.excerpt == source_texts["concatenate"]
+                   for item in state["retrieval"].prepared_evidence.normal.evidence)

@@ -174,7 +174,9 @@ def build_retry_update(
     current_attempt_retrieval_diagnostics: list[RetrievalDiagnostic] | None = None,
     content_repair_available: bool = True,
 ) -> tuple[bool, RetryState, str]:
-    max_retries = max(0, retry_context.max_retries)
+    # Search is bounded to the initial request plus one supplemental attempt.
+    # Content repair retains its independent budget below.
+    max_retries = min(1, max(0, retry_context.max_retries))
     used_retries = retry_context.attempt
     used_content_repairs = retry_context.content_repair_attempt
 

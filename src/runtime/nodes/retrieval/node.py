@@ -12,7 +12,7 @@ from src.core.contracts import GraphState, RetrievalDiagnostic
 from src.core.contracts.boundary.debug import get_debug_state
 from src.core.contracts.boundary.graph import get_retry_state
 from src.core.contracts.boundary.planner import get_planner_state
-from src.core.contracts.boundary.retrieval import accepted_search_hits, get_retrieval_state
+from src.core.contracts.boundary.retrieval import get_retrieval_state
 from src.core.contracts.boundary.runtime import get_runtime_state
 from src.core.latency import elapsed_ms, make_stage_latency_event
 from src.infra.logging_utils import log_event
@@ -56,14 +56,13 @@ def _requires_docs_refresh(
     latest = next((diagnostic for diagnostic in reversed(prior_diagnostics or [])
                    if diagnostic.requirement_id == task.requirement_id), None)
     if latest is not None:
-        # A different task's tool error must not hide semantic rejection of
-        # evidence that deterministic retrieval had considered covered.
-        if latest.answerability == "covered":
-            return True
         # After partial success, resume failed requests without repeating the
         # completed ones, even when pre-validation reports no_evidence.
         if latest.error_code is not None:
             return False
+        # The failed requirement came from semantic validation. Search tools
+        # report candidates, never an independent meaning-based covered flag.
+        return True
     return retry_context.retry_reason == "no_evidence"
 
 
@@ -77,13 +76,17 @@ def _build_route_handlers(
     prior_hits: list[SearchHit] | None = None,
 ) -> dict[str, tuple[str, Any]]:
     def docs_search(task: RetrievalTask, execution_id: str):
-        completed = [request for d in (prior_diagnostics or [])
-                     if d.requirement_id == task.requirement_id
-                     for request in d.completed_requests]
+        latest = next((item for item in reversed(prior_diagnostics or [])
+                       if item.requirement_id == task.requirement_id), None)
+        # Each result carries the current completion set. A failed refresh can
+        # remove a prior marker, so unioning historical results would revive it.
+        completed = list(latest.completed_requests) if latest is not None else []
         return invoke_tool("tavily_search", tavily_search_tool, execution_id=execution_id, query=task.query, k=task.k,
                                   requirement=task.requirement,
                                   completed_requests=completed,
                                   previous_hits=[hit for hit in (prior_hits or []) if hit.requirement_id == task.requirement_id],
+                                  preserved_evidence_ids=[hit.evidence.id for hit in retry_context.preserved_hits
+                                                          if hit.requirement_id == task.requirement_id],
                                   refresh=_requires_docs_refresh(task, retry_context, prior_diagnostics))
 
     return {
@@ -120,10 +123,12 @@ def _collect_retrieval_batch(
     for index, task in enumerate(planner_output.tasks, start=1):
         tool_name, invoke_tool = route_handlers[task.route]
         preserve = bool(failed_ids) and task.requirement_id not in failed_ids
-        duplicate = None if _requires_docs_refresh(task, retry_context, prior_diagnostics) else next((d for d in reversed(prior_diagnostics or [])
-                          if d.requirement_id == task.requirement_id
-                          and d.status != "error" and d.error_code is None and d.request_fingerprint
-                          and d.request_fingerprint == retrieval_fingerprint(task)), None)
+        latest_matching = next((d for d in reversed(prior_diagnostics or [])
+                                if d.requirement_id == task.requirement_id
+                                and d.request_fingerprint == retrieval_fingerprint(task)), None)
+        duplicate = (latest_matching if latest_matching is not None
+                     and latest_matching.status != "error" and latest_matching.error_code is None
+                     and not _requires_docs_refresh(task, retry_context, prior_diagnostics) else None)
         if preserve or duplicate is not None:
             result = build_reused_retrieval_task_result(
                 index=index, task=task, tool_name=tool_name, route=task.route,
@@ -140,7 +145,7 @@ def _collect_retrieval_batch(
     return batch_plan
 
 def _execute_retrieval_batch(
-    batch_plan: RetrievalBatchPlan, *, validated_hits: list[SearchHit] | None = None,
+    batch_plan: RetrievalBatchPlan, *, prior_candidates: list[SearchHit] | None = None,
 ) -> RetrievalBatchResult:
     task_results: list[RetrievalTaskResult] = list(batch_plan.reused_results)
 
@@ -179,10 +184,10 @@ def _execute_retrieval_batch(
     result = RetrievalBatchResult()
     tool_call_counts: dict[str, int] = {}
     for item in task_results:
-        # A refresh may return only replacement candidates. Sources already
-        # validated for this fixed requirement survive in the next attempt's
-        # window independently of provider ranking or retrieval-tool behavior.
-        retained = [hit for hit in (validated_hits or [])
+        # A refresh may return only replacement candidates. Preserve raw ranges
+        # until pre-validation can compare their complete decision identity.
+        # An old failed verdict cannot erase a candidate for a changed request.
+        retained = [hit for hit in (prior_candidates or [])
                     if hit.requirement_id == item.result.diagnostics.requirement_id]
         if retained:
             merged = dedupe_search_hits([*retained, *item.result.hits])
@@ -213,7 +218,7 @@ def _build_retrieval_updates(
 ) -> GraphState:
     updates: GraphState = {
         "retrieval": retrieval.model_copy(
-            update={"hit_log": [*retrieval.hit_log, *batch_result.hit_updates]}
+            update={"hit_log": [*retrieval.hit_log, *batch_result.hit_updates], "prepared_evidence": None}
         ),
         "messages": batch_result.tool_messages,
     }
@@ -283,11 +288,8 @@ def make_retrieve_dispatch_node(
         if not planner_output.use_retrieval:
             return {}
 
-        prior_hits = accepted_search_hits(retrieval.hit_log, retrieval)
         retry_context = get_retry_state(state)
-        retry_context = retry_context.model_copy(update={
-            "preserved_hits": accepted_search_hits(retry_context.preserved_hits, retrieval),
-        })
+        prior_hits = dedupe_search_hits([*retry_context.preserved_hits, *retrieval.hit_log])
 
         route_handlers = _build_route_handlers(
             tavily_search_tool=tavily_search_tool,
@@ -306,7 +308,7 @@ def make_retrieve_dispatch_node(
         )
         batch_result = _execute_retrieval_batch(
             batch_plan,
-            validated_hits=accepted_search_hits(prior_hits, retrieval, include_unassessed=False),
+            prior_candidates=prior_hits,
         )
         _emit_retrieval_progress_snapshot(
             progress_emitter=getattr(runtime, "progress_emitter", None),
