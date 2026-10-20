@@ -29,26 +29,14 @@ def assess_retrieval_quality(snapshot: ValidationSnapshot) -> ValidationAssessme
             assessment.tool_error_routes.add(route)
             assessment.failed_requirement_ids.add(task.requirement_id)
         else:
-            # Retrieval diagnostics describe the candidates returned by that
-            # invocation. Validation may remove rejected sources or merge
-            # accepted fragments from an earlier search, so assess the actual
-            # remaining ranges instead of reusing an obsolete coverage verdict.
+            # This check establishes only actual source associations and exact
+            # file/code scope. Decisions owns meaning and sufficiency; a stale
+            # retrieval answerability label must not override its verdict.
             coverage = requirement_coverage(
                 task, [hit.evidence for hit in hits],
                 {hit.evidence.id: [task.requirement_id] for hit in hits},
             )
-            requirement = task.requirement
-            # Literal topic coverage cannot establish an exact uploaded code
-            # definition or unsupported source constraints. Preserve the source
-            # analyzer's stronger checks for these cases.
-            needs_source_analysis = task.route == "upload" and (
-                requirement.match != "topic" or requirement.library or requirement.version or requirement.evidence_needs
-            )
-            source_analysis_incomplete = needs_source_analysis and (
-                any(d.answerability in {"missing", "partial"} for d in diagnostics)
-                or not any(d.answerability == "covered" for d in diagnostics)
-            )
-            if coverage["is_partial"] or source_analysis_incomplete:
+            if coverage["is_partial"]:
                 assessment.route_failures[route] = "no_evidence"
                 assessment.failed_requirement_ids.add(task.requirement_id)
     if assessment.tool_error_routes:

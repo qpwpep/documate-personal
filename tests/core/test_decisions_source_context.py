@@ -1,6 +1,7 @@
 """Semantic validation receives the meaning and limits of selected evidence."""
 from __future__ import annotations
 
+from functools import partial
 import hashlib
 import json
 
@@ -9,13 +10,16 @@ import pytest
 from src.core.answer_schema import AnswerDocument, finalize_answer, text_document
 from src.core.documents import DocumentElement, SourceAnchor, TableCell, TableData, build_snapshot
 from src.core.evidence import RetrievalScore, SearchHit, build_evidence
-from src.core.planner_schema import RetrievalRequirement
+from src.core.planner_schema import PlannerOutput, RetrievalRequirement, RetrievalTask
 from src.core.request_contracts import RequestContract
 from src.infra.chunking import chunk_python_text
 from src.infra.tools.local_rag.requirements import resolve_source_requirement
 from src.runtime.nodes.validation import make_post_synthesis_validation_node, make_pre_synthesis_validation_node
 from tests.core.test_decisions_validation import DecisionsBoundary, _state
+from tests.synthesis_fixtures import synthesis_excerpt_limits
 
+
+make_pre_synthesis_validation_node = partial(make_pre_synthesis_validation_node, excerpt_limits=synthesis_excerpt_limits())
 
 def _snapshot():
     return build_snapshot(
@@ -27,6 +31,11 @@ def _snapshot():
 
 def _validation_input(evidence_packet, location):
     state = _state()
+    if evidence_packet and evidence_packet[0].route == "upload":
+        state["planner"] = state["planner"].model_copy(update={"output": PlannerOutput(
+            use_retrieval=True, tasks=[RetrievalTask(route="upload", query="selected source", k=2,
+                                                  requirement_id="path_exists")],
+        )})
     response = state["response"]
     document = AnswerDocument(blocks=[
         block for item in evidence_packet

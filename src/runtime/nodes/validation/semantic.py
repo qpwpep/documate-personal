@@ -10,20 +10,21 @@ from src.core.answer_schema import (
     semantic_evidence_fingerprint,
 )
 from src.core.answer_schema.models import validated_evidence_by_id
-from src.core.contracts.graph_state import EvidenceVerdict
 from src.core.decisions import DecisionResult
 from src.core.evidence import EvidenceRef, selected_source_anchors
 from src.core.llm_errors import LLMCallError, make_problem
 from src.core.python_source import PythonSourceMap
+from src.core.planner_schema import RetrievalTask
 from src.runtime.nodes.session import extract_text_content
 from src.runtime.nodes.validation.models import ValidationAssessment, ValidationSnapshot
 
 
 class DecisionEvaluator(Protocol):
     model_name: str
+    max_questions_per_call: int
 
     def evaluate(self, *, input: str, questions: list[dict[str, str]],
-                 stage: str, attempt: int = 1) -> DecisionResult: ...
+                 stage: str, attempt: int = 1, reserve_calls: int = 0) -> DecisionResult: ...
 
 
 def _predicate_instructions(questions: list[dict[str, str]]) -> list[dict[str, str]]:
@@ -105,6 +106,14 @@ def _source(evidence: EvidenceRef) -> dict[str, Any]:
     return source
 
 
+def semantic_task_input(task: RetrievalTask, snapshot: ValidationSnapshot) -> dict[str, Any]:
+    """Keep the original natural-language intent while search rewrites vary."""
+    original = next((item for item in snapshot.original_tasks
+                     if item.requirement_id == task.requirement_id and item.route == task.route
+                     and item.requirement == task.requirement), task)
+    return {**task.model_dump(mode="json", exclude={"query", "k"}), "query": original.query}
+
+
 def _context(snapshot: ValidationSnapshot) -> dict[str, Any]:
     return {
         "evaluation_rules": (
@@ -123,7 +132,7 @@ def _context(snapshot: ValidationSnapshot) -> dict[str, Any]:
             "memory_summary": snapshot.memory_summary,
         },
         "confirmed_request": snapshot.request_contract.model_dump(mode="json") if snapshot.request_contract else None,
-        "retrieval_requirements": [task.model_dump(mode="json") for task in snapshot.planner_output.tasks],
+        "retrieval_requirements": [semantic_task_input(task, snapshot) for task in snapshot.planner_output.tasks],
         "bound_source_response": {
             "content_hash": snapshot.source_response.content_hash,
             "content": snapshot.source_response.content.model_dump(mode="json"),
@@ -147,121 +156,6 @@ def _require_bound_source(snapshot: ValidationSnapshot, *, stage: str) -> None:
         raise LLMCallError(make_problem("evidence_insufficient", stage))
 
 
-def _assess_source_semantics(
-    snapshot: ValidationSnapshot, assessment: ValidationAssessment, *,
-    decisions_client: DecisionEvaluator, threshold: float, attempt: int,
-) -> None:
-    """Judge each immutable source once for its fixed retrieval requirement."""
-    tasks = {task.requirement_id: task for task in snapshot.planner_output.tasks}
-    verdicts = {(item.requirement_id, item.evidence_id): item for item in snapshot.evidence_verdicts}
-    candidates = {}
-    for hit in snapshot.parsed_hits:
-        key = (hit.requirement_id, hit.evidence.id)
-        if hit.requirement_id in tasks and key not in verdicts:
-            candidates.setdefault(key, hit)
-    evidence = []
-    questions = []
-    for index, (key, hit) in enumerate(candidates.items()):
-        name = f"evidence_{index}"
-        evidence.append({"name": name, "task": tasks[key[0]].model_dump(mode="json"), "source": _source(hit.evidence)})
-        questions.append({
-            "type": "predicate", "name": name,
-            "instructions": (
-                f"For evidence[{index}], is this source excerpt relevant and usable as evidence for at least "
-                "part of its task's actual subject, version, requested aspects and source scope? "
-                "The excerpt need not satisfy the whole task by itself; complementary source excerpts may "
-                "supply other required facts. Reject unrelated, mismatched or unreliable evidence. "
-                "Judge the selected excerpt and its source context, not a retrieval score or matching title alone."
-            ),
-        })
-    if questions:
-        decisions = decisions_client.evaluate(
-            input=json.dumps({**_context(snapshot), "evidence": evidence}, ensure_ascii=False),
-            questions=_predicate_instructions(questions), stage="pre_synthesis_validation", attempt=attempt,
-        )
-        assessment.semantic_probabilities.update(decisions.probabilities)
-        assessment.semantic_refusals.update(decisions.refused_names)
-        for index, (requirement_id, evidence_id) in enumerate(candidates):
-            name = f"evidence_{index}"
-            refused = name in decisions.refused_names
-            probability = None if refused else decisions.probabilities[name]
-            verdicts[(requirement_id, evidence_id)] = EvidenceVerdict(
-                requirement_id=requirement_id, evidence_id=evidence_id, probability=probability,
-                status="refused" if refused else "passed" if probability >= threshold else "failed",
-            )
-    assessment.evidence_verdicts = list(verdicts.values())
-    assessment.accepted_hits = [
-        hit for hit in snapshot.parsed_hits
-        if (verdict := verdicts.get((hit.requirement_id, hit.evidence.id))) is not None and verdict.status == "passed"
-    ]
-
-
-def assess_pre_semantics(
-    snapshot: ValidationSnapshot, assessment: ValidationAssessment, *,
-    decisions_client: DecisionEvaluator, threshold: float, attempt: int,
-) -> None:
-    _require_bound_source(snapshot, stage="pre_synthesis_validation")
-    # Revalidate mutable evidence before trusting excerpts sent to the provider.
-    validated_evidence_by_id([hit.evidence for hit in snapshot.parsed_hits])
-    _assess_source_semantics(
-        snapshot, assessment, decisions_client=decisions_client, threshold=threshold, attempt=attempt,
-    )
-    requirements = []
-    questions = []
-    for index, task in enumerate(snapshot.planner_output.tasks):
-        name = f"requirement_{index}"
-        requirements.append({
-            "name": name, "task": task.model_dump(mode="json"),
-            "sources": [_source(hit.evidence) for hit in assessment.accepted_hits
-                        if hit.requirement_id == task.requirement_id],
-        })
-        questions.append({
-            "type": "predicate", "name": name,
-            "instructions": (
-                f"For requirements[{index}], do its provided source excerpts contain sufficient relevant "
-                "and mutually consistent evidence to satisfy the task's actual subject, version, requested "
-                "aspects and source scope? Judge the excerpts, not retrieval scores or a claim of coverage. "
-                "A matching title or keyword alone is insufficient. For a definition request, a fully selected "
-                "requested definition is sufficient even if unrelated file content is unselected. "
-                "Return false for missing necessary evidence."
-            ),
-        })
-    questions.append({
-        "type": "predicate", "name": "request_ready",
-        "instructions": (
-            "Can a useful body satisfying the confirmed request be prepared from the supplied user input, "
-            "conversation context, bound input/prior answer and required source excerpts, without inventing missing facts or "
-            "ignoring required/forbidden conditions? For ordinary conversation, creative composition or "
-            "user-text transformation with no retrieval requirement, external citations are not required. "
-            "For a copy/transform of a prior answer use bound_source_response as the actual source text. "
-            "For acknowledgment or cancellation, readiness means the instruction can be acknowledged without a new body. "
-            "Judge readiness to prepare the body, not whether downstream save/notification has run."
-        ),
-    })
-    decisions = decisions_client.evaluate(
-        input=json.dumps({**_context(snapshot), "requirements": requirements}, ensure_ascii=False),
-        questions=_predicate_instructions(questions), stage="pre_synthesis_validation", attempt=attempt,
-    )
-    probabilities = decisions.probabilities
-    assessment.semantic_probabilities.update(probabilities)
-    assessment.semantic_refusals.update(decisions.refused_names)
-    values = assessment.semantic_probabilities.values()
-    assessment.score_avg = sum(values) / len(values) if values else None
-    for index, task in enumerate(snapshot.planner_output.tasks):
-        name = f"requirement_{index}"
-        if name in decisions.refused_names or probabilities[name] < threshold:
-            assessment.failed_requirement_ids.add(task.requirement_id)
-            assessment.failed_routes.add(task.route)
-    assessment.request_readiness_failed = (
-        "request_ready" in decisions.refused_names or probabilities["request_ready"] < threshold
-    )
-    if assessment.request_readiness_failed and not assessment.failed_requirement_ids:
-        assessment.missing_content.append("request_readiness")
-    if assessment.retry_reason is None:
-        if assessment.failed_requirement_ids:
-            assessment.retry_reason = "no_evidence"
-        elif assessment.request_readiness_failed:
-            assessment.retry_reason = "missing_content"
 
 
 def assess_post_semantics(

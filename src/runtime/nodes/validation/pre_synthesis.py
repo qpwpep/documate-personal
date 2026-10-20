@@ -17,7 +17,9 @@ from src.runtime.nodes.retry import build_followup_from_routes, build_retry_upda
 from src.runtime.nodes.validation.evidence_validator import assess_retrieval_quality, collect_validation_snapshot
 from src.runtime.nodes.validation.models import ValidationAssessment
 from src.runtime.nodes.validation.policy import build_followup_updates
-from src.runtime.nodes.validation.semantic import DecisionEvaluator, assess_pre_semantics
+from src.runtime.nodes.validation.semantic import DecisionEvaluator
+from src.runtime.nodes.validation.prepared_semantics import assess_pre_semantics
+from src.runtime.nodes.synthesis.budgets import ExcerptLimits
 from src.runtime.nodes.synthesis.evidence_selection import tasks_for_hit, upload_file_id
 
 
@@ -26,6 +28,7 @@ logger = logging.getLogger(__name__)
 
 def make_pre_synthesis_validation_node(
     verbose: bool, *, decisions_client: DecisionEvaluator, pass_threshold: float = 0.8,
+    excerpt_limits: ExcerptLimits,
     max_turns: int = 6,
 ):
     def pre_synthesis_validation(state: GraphState) -> GraphState:
@@ -98,18 +101,28 @@ def make_pre_synthesis_validation_node(
         assess_pre_semantics(
             snapshot, assessment, decisions_client=decisions_client,
             threshold=pass_threshold, attempt=retry_context.attempt + 1,
+            excerpt_limits=excerpt_limits,
         )
-        # Keep the raw observations for diagnostics, but all downstream source
-        # consumers use the recorded per-requirement, per-source verdicts.
-        retrieval = get_retrieval_state(state).model_copy(update={
-            "evidence_verdicts": assessment.evidence_verdicts,
-        })
         snapshot = replace(snapshot, parsed_hits=assessment.accepted_hits)
         accepted_quality = assess_retrieval_quality(snapshot)
         assessment.failed_requirement_ids.update(accepted_quality.failed_requirement_ids)
         assessment.failed_routes.update(accepted_quality.failed_routes)
         if accepted_quality.retry_reason is not None:
             assessment.retry_reason = accepted_quality.retry_reason
+        prepared = assessment.prepared_evidence
+        if accepted_quality.failed_requirement_ids:
+            prepared = prepared.model_copy(update={
+                "normal": prepared.normal.model_copy(update={
+                    "failed_requirement_ids": sorted(assessment.failed_requirement_ids),
+                }), "compact": None,
+            })
+        # Raw observations stay available for a changed requirement. Generation
+        # and fallback consume only this exact prepared packet.
+        retrieval = get_retrieval_state(state).model_copy(update={
+            "evidence_verdicts": assessment.evidence_verdicts,
+            "decision_cache": assessment.decision_cache,
+            "prepared_evidence": prepared,
+        })
         request_level_failure = (
             "request_ready" in assessment.semantic_refusals
             or (assessment.request_readiness_failed and not assessment.failed_requirement_ids)
@@ -147,7 +160,11 @@ def make_pre_synthesis_validation_node(
                 [verdict.model_dump(mode="json") for verdict in assessment.evidence_verdicts],
                 ensure_ascii=False,
             )
-            updates_debug_events = [*debug.validation_events, semantic_event, evidence_event]
+            cache_event = "pre_synthesis_validation: decision_cache=" + json.dumps(
+                assessment.cache_observations, ensure_ascii=False,
+            )
+            log_event(logger, logging.INFO, "decision_cache", observations=assessment.cache_observations)
+            updates_debug_events = [*debug.validation_events, semantic_event, evidence_event, cache_event]
         else:
             updates_debug_events = list(debug.validation_events)
 

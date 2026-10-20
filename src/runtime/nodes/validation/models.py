@@ -7,10 +7,10 @@ from langchain_core.messages import BaseMessage
 from src.core.answer_schema import AnswerResponse
 from src.core.contracts import RetrievalDiagnostic
 from src.core.contracts.debug import ErrorCode, RetryReason
-from src.core.contracts.graph_state import EvidenceVerdict
+from src.core.contracts.graph_state import DecisionCacheEntry, EvidenceVerdict, PreparedEvidence
 from src.core.contracts.provenance import AnswerSource, BodyKind
 from src.core.evidence import EvidenceRef, SearchHit
-from src.core.planner_schema import PlannerOutput
+from src.core.planner_schema import PlannerOutput, RetrievalTask
 from src.core.request_contracts import RequestContract
 
 
@@ -42,6 +42,8 @@ class ValidationSnapshot:
     conversation_messages: list[BaseMessage] = field(default_factory=list)
     memory_summary: str | None = None
     evidence_verdicts: list[EvidenceVerdict] = field(default_factory=list)
+    decision_cache: list[DecisionCacheEntry] = field(default_factory=list)
+    original_tasks: list[RetrievalTask] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -64,4 +66,7 @@ class ValidationAssessment:
     request_readiness_failed: bool = False
     evidence_verdicts: list[EvidenceVerdict] = field(default_factory=list)
     accepted_hits: list[SearchHit] = field(default_factory=list)
+    decision_cache: list[DecisionCacheEntry] = field(default_factory=list)
+    prepared_evidence: PreparedEvidence | None = None
+    cache_observations: list[dict] = field(default_factory=list)
     error_codes: list[ErrorCode] = field(default_factory=list)

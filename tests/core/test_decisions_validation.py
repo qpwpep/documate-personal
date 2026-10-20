@@ -1,6 +1,7 @@
 """Decisions judgments control retrieval and answer recovery through public nodes."""
 from __future__ import annotations
 
+from functools import partial
 import json
 
 import httpx
@@ -18,10 +19,10 @@ from src.core.planner_schema import PlannerOutput, RetrievalTask
 from src.core.request_contracts import RequestContract
 from src.infra.decisions import DecisionsClient
 from src.runtime.nodes.validation import make_post_synthesis_validation_node, make_pre_synthesis_validation_node
-from src.runtime.nodes.validation.models import ValidationAssessment
-from src.runtime.nodes.validation.semantic import assess_pre_semantics
-from src.runtime.nodes.validation.snapshot import collect_validation_snapshot
+from tests.synthesis_fixtures import synthesis_excerpt_limits
 
+
+make_pre_synthesis_validation_node = partial(make_pre_synthesis_validation_node, excerpt_limits=synthesis_excerpt_limits())
 
 class DecisionsBoundary(DecisionsClient):
     """Keep the SDK and Decisions client real while replacing provider HTTP."""
@@ -37,9 +38,10 @@ class DecisionsBoundary(DecisionsClient):
         )
         super().__init__(sdk)
 
-    def evaluate(self, *, input, questions, stage, attempt=1):
+    def evaluate(self, *, input, questions, stage, attempt=1, reserve_calls=0):
         self._stage, self._attempt = stage, attempt
-        return super().evaluate(input=input, questions=questions, stage=stage, attempt=attempt)
+        return super().evaluate(input=input, questions=questions, stage=stage, attempt=attempt,
+                                reserve_calls=reserve_calls)
 
     def _respond(self, request):
         assert request.method == "POST"

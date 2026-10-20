@@ -192,6 +192,10 @@ def build_agent_graph(settings: AppSettings | None = None):
         decisions_client=llm_registry.decisions_client,
         pass_threshold=app_settings.validation_pass_threshold,
         max_turns=memory_policy.low_water_turns,
+        excerpt_limits=ExcerptLimits(
+            normal_chars=app_settings.synthesis_prompt_snippet_chars,
+            compact_chars=app_settings.synthesis_compact_prompt_snippet_chars,
+        ),
     )
     pre_synthesis_validation_node = _instrument_stage_node(
         "pre_synthesis_validation",

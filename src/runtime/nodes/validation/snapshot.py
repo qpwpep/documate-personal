@@ -10,11 +10,11 @@ from src.core.contracts.boundary.debug import get_debug_state
 from src.core.contracts.boundary.graph import get_retry_state
 from src.core.contracts.boundary.planner import get_planner_state
 from src.core.contracts.boundary.response import get_response_state
-from src.core.contracts.boundary.retrieval import accepted_search_hits, get_retrieval_state
-from src.core.contracts.graph_state import EvidenceVerdict
+from src.core.contracts.boundary.retrieval import get_retrieval_state
+from src.core.contracts.graph_state import DecisionCacheEntry, EvidenceVerdict
 from src.core.contracts.boundary.runtime import get_runtime_state
-from src.core.evidence import EvidenceRef, SearchHit
-from src.core.planner_schema import PlannerOutput
+from src.core.evidence import EvidenceRef, SearchHit, dedupe_search_hits
+from src.core.planner_schema import PlannerOutput, RetrievalTask
 from src.core.request_contracts import RequestContract, resolve_body_response
 from src.core.sequence_utils import slice_from_index
 from src.runtime.nodes.session import keep_recent_messages
@@ -25,6 +25,7 @@ from src.runtime.nodes.synthesis.evidence_selection import missing_evidence_requ
 def detect_missing_requirement_coverage(
     *, snapshot: ValidationSnapshot, result: AnswerResponse, valid_unit_paths: set[str],
 ) -> list[str]:
+    """Check cited source associations and exact scope, never semantic coverage."""
     cited = {ref for path, unit in iter_content_units(result.content) if path in valid_unit_paths for ref in unit.refs}
     return missing_evidence_requirement_ids(
         snapshot.planner_output,
@@ -34,7 +35,7 @@ def detect_missing_requirement_coverage(
 
 
 def detect_packet_coverage_gaps(snapshot: ValidationSnapshot) -> tuple[list[str], list[str]]:
-    """Separate missing retrieved anchors from requirements lost while selecting the packet."""
+    """Separate absent source associations from scope lost during packet selection."""
     packet_missing = missing_evidence_requirement_ids(snapshot.planner_output, snapshot.evidence_packet,
                                                      snapshot.evidence_requirement_map)
     retrieved_map: dict[str, list[str]] = {}
@@ -68,6 +69,8 @@ def build_validation_snapshot(
     conversation_messages: list[BaseMessage] | None = None,
     memory_summary: str | None = None,
     evidence_verdicts: list[EvidenceVerdict] | None = None,
+    decision_cache: list[DecisionCacheEntry] | None = None,
+    original_tasks: list[RetrievalTask] | None = None,
 ) -> ValidationSnapshot:
     retrieval_required = bool(planner_output.use_retrieval and planner_output.tasks)
     evidence_by_route: dict[str, list[EvidenceRef]] = {"docs": [], "upload": []}
@@ -99,6 +102,8 @@ def build_validation_snapshot(
         conversation_messages=conversation_messages or [],
         memory_summary=memory_summary,
         evidence_verdicts=evidence_verdicts or [],
+        decision_cache=decision_cache or [],
+        original_tasks=original_tasks or [],
     )
 
 
@@ -118,7 +123,9 @@ def collect_validation_snapshot(state: GraphState, *, max_turns: int = 6) -> tup
     if source_response is not None:
         source_response = AnswerResponse.model_validate(source_response.model_dump(mode="json"))
     planner_output = planner.output
-    parsed_hits = accepted_search_hits(slice_from_index(retrieval.hit_log, retry.hit_start_index), retrieval)
+    # Reevaluate raw candidates against the current requirement/model/prompt.
+    # A verdict for an older context must not erase a source before that check.
+    parsed_hits = dedupe_search_hits(slice_from_index(retrieval.hit_log, retry.hit_start_index))
     retrieval_errors = [
         str(error) for error in slice_from_index(debug.retrieval_errors, retry.retrieval_error_start_index)
         if str(error).strip()
@@ -149,5 +156,7 @@ def collect_validation_snapshot(state: GraphState, *, max_turns: int = 6) -> tup
         ),
         memory_summary=runtime.memory_summary,
         evidence_verdicts=retrieval.evidence_verdicts,
+        decision_cache=retrieval.decision_cache,
+        original_tasks=retry.original_tasks,
     )
     return snapshot, local_errors

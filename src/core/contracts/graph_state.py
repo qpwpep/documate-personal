@@ -12,6 +12,7 @@ from src.core.answer_schema import ActionReceipt, AnswerResponse
 from src.core.save_contract import SaveOperation
 from src.core.slack_contract import RecipientSelector, SlackDelivery
 from src.core.evidence import EvidenceRef, SearchHit
+from src.core.decisions import prepared_packet_fingerprint
 from src.core.planner_schema import PlannerOutput
 from src.core.llm_errors import ExecutionProblem, LLMDiagnostic
 from src.core.request_contracts import RequestContract, UserTurnSnapshot
@@ -78,6 +79,10 @@ class EvidenceVerdict(BaseModel):
     evidence_id: str = Field(min_length=1)
     status: Literal["passed", "failed", "refused"]
     probability: float | None = Field(default=None, ge=0, le=1, allow_inf_nan=False)
+    fingerprint: str = Field(min_length=1)
+    model: str = Field(min_length=1)
+    prompt_fingerprint: str = Field(min_length=1)
+    supported_labels: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def validate_probability(self) -> EvidenceVerdict:
@@ -86,9 +91,48 @@ class EvidenceVerdict(BaseModel):
         return self
 
 
+class DecisionCacheEntry(BaseModel):
+    """A probability/refusal bound to the complete immutable judgment input."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    fingerprint: str = Field(min_length=1)
+    probability: float | None = Field(default=None, ge=0, le=1, allow_inf_nan=False)
+
+
+class PreparedEvidencePacket(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    evidence: list[EvidenceRef] = Field(default_factory=list)
+    requirement_map: dict[str, list[str]] = Field(default_factory=dict)
+    failed_requirement_ids: list[str] = Field(default_factory=list)
+    fingerprint: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def binds_selected_ranges(self) -> PreparedEvidencePacket:
+        if self.fingerprint != prepared_packet_fingerprint(self.evidence, self.requirement_map):
+            raise ValueError("prepared evidence ranges or associations changed")
+        return self
+
+
+class PreparedEvidence(BaseModel):
+    """Exact ranges already selected and semantically checked before synthesis."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    request_id: str
+    contract_revision: int
+    plan_fingerprint: str
+    source_response_hash: str | None = None
+    model: str
+    prompt_fingerprint: str
+    threshold: float = Field(ge=0, le=1)
+    normal: PreparedEvidencePacket
+    compact: PreparedEvidencePacket | None = None
+
+
 class RetrievalState(BaseModel):
     hit_log: list[SearchHit] = Field(default_factory=list)
     evidence_verdicts: list[EvidenceVerdict] = Field(default_factory=list)
+    decision_cache: list[DecisionCacheEntry] = Field(default_factory=list)
+    prepared_evidence: PreparedEvidence | None = None
 
 
 class ResponseState(BaseModel):
