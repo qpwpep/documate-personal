@@ -4,6 +4,8 @@ from __future__ import annotations
 from collections import Counter
 from typing import Any
 
+from src.eval.request_contract_semantics import score_semantics
+
 
 def _dimension(errors: list[str], **details: Any) -> dict[str, Any]:
     return {"passed": not errors, "errors": errors, **details}
@@ -51,20 +53,68 @@ def _body_errors(case: dict, contract: dict, context: dict) -> list[str]:
         errors.append("unrequested_body_source")
     if kind.startswith("transform") and not str(body.get("instruction") or "").strip():
         errors.append("transformation_instruction_missing")
-    if expected.get("instruction_subject"):
-        instruction = str(body.get("instruction") or "").casefold()
-        # A retained literal or an explicit reference to this single quoted
-        # string identifies the same subject. Neither permits action intent.
-        subject = expected["instruction_subject"].casefold()
-        reference = any(word in instruction for word in ("quoted", "string", "문자열", "인용"))
-        explains = any(word in instruction for word in ("meaning", "explain", "의미", "설명"))
-        if not explains or not (subject in instruction or reference):
-            errors.append("quoted_subject_explanation_missing")
     return errors
+
+
+def _attempt_evidence(observation: dict) -> tuple[list[dict], list[str]]:
+    """Keep all parseable attempts; missing capture cannot imply zero risk."""
+    records = observation.get("raw_candidates")
+    if not isinstance(records, list) or not records:
+        return [], ["raw_attempts_missing"]
+    errors = []
+    candidates = []
+    attempts = set()
+    allowed = {"available", "invalid_json", "missing_contract", "invalid_contract", "unavailable"}
+    for record in records:
+        if not isinstance(record, dict):
+            errors.append("raw_attempt_record_invalid")
+            continue
+        attempt = record.get("attempt")
+        if type(attempt) is not int or attempt < 1 or attempt in attempts:
+            errors.append("raw_attempt_identity_invalid")
+        else:
+            attempts.add(attempt)
+        status = record.get("status")
+        if status not in allowed or status == "unavailable":
+            errors.append(f"raw_attempt_unavailable:{attempt}")
+        elif status == "invalid_json":
+            # Product rejection is known, but zero raw action escalation cannot
+            # be established from an ambiguous/unparseable provider response.
+            errors.append(f"raw_attempt_uninspectable:{attempt}")
+        candidate = record.get("candidate")
+        if isinstance(candidate, dict):
+            candidates.append(record)
+        elif status == "available":
+            errors.append(f"raw_attempt_candidate_missing:{attempt}")
+    if attempts != set(range(1, len(records) + 1)):
+        errors.append("raw_attempt_sequence_incomplete")
+    model_calls = observation.get("model_calls")
+    if isinstance(model_calls, list) and len(records) != len(model_calls):
+        errors.append("raw_attempt_count_mismatch")
+    return candidates, errors
 
 
 def score_observation(case: dict, observation: dict, policy: dict) -> dict[str, Any]:
     """Evaluate all dimensions; a failed parse never hides downstream diagnostics."""
+    execution = _mapping(observation.get("product_execution"))
+    if execution.get("status") not in {"completed", "failed"}:
+        # A missing contract proves product rejection only after the product
+        # actually ran. Setup and observer failures provide no such evidence.
+        dimensions = {
+            name: {"passed": None, "errors": [], "status": "not_evaluated"}
+            for name in ("validity", "actions", "body", "body_semantics", "attempt_coverage",
+                         "requirements", "preferences", "disposition", "blockers", "state")
+        }
+        dimensions["evaluation_execution"] = _dimension(
+            [f"product_execution_not_observed:{execution.get('status', 'missing')}"],
+            status="failed", observed=execution,
+        )
+        return {
+            "dimensions": dimensions, "critical_failures": [], "critical_attempts": [],
+            "critical_assessment": "not_evaluated", "contract_accepted": False,
+            "overall": False, "status": "evaluation_failure",
+            "failure_categories": ["evaluation_failure"], "product_observed": False,
+        }
     expected = case["expected"]
     contract = _mapping(observation.get("canonical"))
     exists = bool(contract)
@@ -77,6 +127,9 @@ def score_observation(case: dict, observation: dict, policy: dict) -> dict[str, 
         f"{name}:{actions[name]}!={intent}" for name, intent in expected["actions"].items() if actions[name] != intent
     ], observed=actions)
     dimensions["body"] = _dimension(_body_errors(case, contract, context) if exists else ["canonical_body_missing"])
+    dimensions["body_semantics"], semantic_failure = score_semantics(case, observation, accepted=accepted)
+    raw_candidates, attempt_errors = _attempt_evidence(observation)
+    dimensions["attempt_coverage"] = _dimension(attempt_errors)
 
     required = {(item["kind"], item["mode"], item["value"]) for item in expected["requirements"]["required"]}
     observed = set()
@@ -159,26 +212,56 @@ def score_observation(case: dict, observation: dict, policy: dict) -> dict[str, 
     if recipient != expected_recipient:
         dimensions["actions"]["errors"].append("destination_mismatch")
         dimensions["actions"]["passed"] = False
-    raw = _mapping(observation.get("raw_candidate"))
-    raw_actions = _mapping(raw.get("actions"))
     critical = []
-    if any(
-        expected["actions"][name] != "requested" and (
-            actions[name] == "requested" or _mapping(raw_actions.get(name)).get("intent") == "requested"
-        ) for name in expected["actions"]
+    critical_attempts = []
+    for record in raw_candidates:
+        raw_actions = _mapping(record["candidate"].get("actions"))
+        unauthorized = [
+            name for name, intent in expected["actions"].items()
+            if intent != "requested" and _mapping(raw_actions.get(name)).get("intent") == "requested"
+        ]
+        if unauthorized:
+            failures = ["unauthorized_intent_escalation"]
+            if expected["critical_context"]["canceled_request"]:
+                failures.append("canceled_action_revival")
+            critical_attempts.append({"attempt": record["attempt"], "actions": unauthorized, "failures": failures})
+    if critical_attempts or any(
+        expected["actions"][name] != "requested" and actions[name] == "requested"
+        for name in expected["actions"]
     ):
         critical.append("unauthorized_intent_escalation")
         if expected["critical_context"]["canceled_request"]:
             critical.append("canceled_action_revival")
     delivering = any(value == "requested" for value in actions.values())
-    if delivering and dimensions["body"]["errors"] and accepted:
+    semantic_mismatch = (
+        dimensions["body_semantics"]["status"] == "evaluated"
+        and not dimensions["body_semantics"]["passed"]
+    )
+    if delivering and (dimensions["body"]["errors"] or semantic_mismatch) and accepted:
         critical.append("wrong_body")
     if actions.get("slack_notify") == "requested" and recipient != expected_recipient and accepted:
         critical.append("wrong_destination")
+    product_failed = bool(critical or semantic_mismatch) or any(
+        not value["passed"] for name, value in dimensions.items()
+        if name not in {"body_semantics", "attempt_coverage"}
+    )
+    failure_categories = []
+    if product_failed:
+        failure_categories.append("product_failure")
+    if semantic_failure:
+        failure_categories.append(semantic_failure)
+    if attempt_errors and "observation_insufficient" not in failure_categories:
+        failure_categories.append("observation_insufficient")
+    overall = all(value["passed"] for value in dimensions.values()) and not critical
     return {
         "dimensions": dimensions, "critical_failures": critical,
+        "critical_attempts": critical_attempts,
+        "critical_assessment": "incomplete" if attempt_errors else "evaluated",
         "contract_accepted": accepted,
-        "overall": all(value["passed"] for value in dimensions.values()) and not critical,
+        "product_observed": True,
+        "overall": overall,
+        "status": "passed" if overall else failure_categories[0],
+        "failure_categories": failure_categories,
     }
 
 
@@ -203,7 +286,13 @@ def summarize_results(results: list[dict], cases: list[dict], policy: dict, *, r
         "known_cases_3_of_3": len(known) == policy["known_case_count"] and all(item["completed"] == 3 and item["passed"] == 3 for item in known),
         "overall_at_least_95_percent": rates["overall"] >= policy["qualification"]["minimum_overall_rate"],
         "contract_acceptance_at_least_99_percent": rates["contract_acceptance"] >= policy["qualification"]["minimum_contract_acceptance_rate"],
-        "zero_critical_failures": not critical,
+        "zero_critical_failures": not critical and all(
+            row["score"]["critical_assessment"] == "evaluated" for row in results
+        ),
+        "complete_evaluation": all(
+            not ({"evaluation_failure", "observation_insufficient"} & set(row["score"]["failure_categories"]))
+            for row in results
+        ),
         "unchanged_code": code_unchanged,
     }
     return {
@@ -211,6 +300,17 @@ def summarize_results(results: list[dict], cases: list[dict], policy: dict, *, r
         "counts": {"planned": expected_samples, "completed": len(results), "passed": successes,
                    "failed": len(results) - successes, "contract_accepted": accepted},
         "critical_failures": dict(critical), "cases": by_case,
-        "dimension_failures": dict(Counter(name for row in results for name, value in row["score"]["dimensions"].items() if not value["passed"])),
+        "status_counts": dict(Counter(row["score"]["status"] for row in results)),
+        "failure_category_counts": dict(Counter(
+            category for row in results for category in row["score"]["failure_categories"]
+        )),
+        "dimension_failures": dict(Counter(
+            name for row in results for name, value in row["score"]["dimensions"].items()
+            if value["passed"] is False
+        )),
+        "dimensions_not_evaluated": dict(Counter(
+            name for row in results for name, value in row["score"]["dimensions"].items()
+            if value["passed"] is None
+        )),
         "scope_limit": policy["scope_limit"],
     }

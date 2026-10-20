@@ -33,6 +33,32 @@ T = TypeVar("T")
 logger = logging.getLogger(__name__)
 _diagnostics: ContextVar[list[LLMDiagnostic] | None] = ContextVar("llm_diagnostics", default=None)
 _budgets: ContextVar[dict[str, CallBudget] | None] = ContextVar("llm_call_budgets", default=None)
+_observations: ContextVar[list[StructuredCallObservation] | None] = ContextVar("llm_call_observations", default=None)
+
+
+@dataclass(frozen=True)
+class StructuredCallObservation:
+    """One provider attempt, captured without replacing the production model."""
+
+    stage: str
+    attempt: int
+    path: str
+    messages: tuple[Any, ...]
+    output: Any
+    exception: Exception | None
+    latency_ms: int
+    timeout_seconds: float | None
+
+
+@contextmanager
+def capture_structured_calls() -> Iterator[list[StructuredCallObservation]]:
+    """Keep raw attempts local to the caller; never log model content globally."""
+    records: list[StructuredCallObservation] = []
+    token = _observations.set(records)
+    try:
+        yield records
+    finally:
+        _observations.reset(token)
 
 
 @contextmanager
@@ -272,7 +298,8 @@ def _provider_completion(raw: AIMessage | None, *, stage: str) -> None:
         raise LLMCallError(make_problem(code, stage))
 
 
-def _load_json(content: str) -> Any:
+def parse_structured_json(content: str) -> Any:
+    """Parse the exact provider JSON, rejecting duplicates and nonfinite numbers."""
     def unique_object(pairs):
         result = {}
         for key, value in pairs:
@@ -300,11 +327,11 @@ def _parse(value: Any, raw: AIMessage | None) -> Any:
         if isinstance(content, list):
             content = "".join(item.get("text", "") for item in content if isinstance(item, dict) and item.get("type") in {"text", "output_text"})
         if isinstance(content, str) and content.strip():
-            return _load_json(content)
+            return parse_structured_json(content)
     if isinstance(parsed, (dict, BaseModel)):
         return parsed
     if isinstance(parsed, str):
-        return _load_json(parsed)
+        return parse_structured_json(parsed)
     raise ValueError("provider_output_empty")
 
 
@@ -323,6 +350,31 @@ def _validation_paths(exc: Exception) -> list[str]:
     return ["/:" + ("invalid_json" if isinstance(exc, json.JSONDecodeError) else "contract_validation")]
 
 
+def _invoke_observed(llm: Any, messages: list[Any], *, stage: str, attempt: int, path: str,
+                     timeout_seconds: float) -> Any:
+    """Observation never changes dispatch, timeouts, schema validation or retries."""
+    records = _observations.get()
+    started = time.perf_counter()
+    output = None
+    exception = None
+    effective_timeout = ((min(timeout_seconds, llm.timeout) if llm.timeout else timeout_seconds)
+                         if isinstance(llm, StructuredModel) else None)
+    try:
+        output = (llm.invoke(messages, timeout_seconds=timeout_seconds)
+                  if isinstance(llm, StructuredModel) else llm.invoke(messages))
+        return output
+    except Exception as exc:
+        exception = exc
+        raise
+    finally:
+        if records is not None:
+            records.append(StructuredCallObservation(
+                stage=stage, attempt=attempt, path=path, messages=tuple(messages), output=output,
+                exception=exception, latency_ms=round((time.perf_counter() - started) * 1000),
+                timeout_seconds=effective_timeout,
+            ))
+
+
 def run_structured_call(llm: Any, messages: list[Any], *, stage: str, validate: Callable[[Any], T],
         budget: CallBudget | None = None, path: str = "structured", attempt: int = 1,
         repair: bool = True, retry_transient: bool | set[str] = True, retry_timeouts: bool = True) -> T:
@@ -335,7 +387,8 @@ def run_structured_call(llm: Any, messages: list[Any], *, stage: str, validate: 
         budget.calls += 1
         try:
             with record_llm_call(stage=stage, attempt=max(attempt, budget.calls), path=path) as call:
-                value = llm.invoke(request_messages, timeout_seconds=budget.remaining_seconds) if isinstance(llm, StructuredModel) else llm.invoke(request_messages)
+                value = _invoke_observed(llm, request_messages, stage=stage, attempt=max(attempt, budget.calls),
+                                         path=path, timeout_seconds=budget.remaining_seconds)
                 raw = _raw_message(value)
                 call.complete(raw)
             _provider_completion(raw, stage=stage)

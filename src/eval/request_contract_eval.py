@@ -11,6 +11,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 import hashlib
 from importlib.metadata import PackageNotFoundError, version
+import inspect
 import json
 from pathlib import Path
 import platform
@@ -24,7 +25,6 @@ from src.eval.request_contract_scoring import score_observation, summarize_resul
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 FIXTURE_ROOT = PROJECT_ROOT / "data/benchmarks/request_contracts"
 DEFAULT_OUTPUT_ROOT = PROJECT_ROOT / "output/request_contract_evals"
-SETTINGS_WHITELIST = ("planner_model", "planner_max_tokens")
 
 
 def _json(value: Any) -> str:
@@ -149,51 +149,80 @@ def _redact_secret(value: Any, secret: str) -> Any:
     return value
 
 
-class _RecordingPlanner:
-    def __init__(self, model: Any):
-        self.model = model
-        self.calls: list[dict] = []
+def _recorded_call(call: Any) -> dict:
+    output = call.output
+    record = {
+        "stage": call.stage, "attempt": call.attempt, "path": call.path,
+        "messages": _prompt_messages(list(call.messages)),
+        "latency_ms": call.latency_ms, "timeout_seconds": call.timeout_seconds,
+    }
+    if isinstance(output, dict) and ("raw" in output or "parsed" in output):
+        record.update(raw=_safe_model_message(output.get("raw")), parsed=_serializable(output.get("parsed")),
+                      parsing_error=str(output["parsing_error"]) if output.get("parsing_error") else None)
+    else:
+        record.update(raw=_safe_model_message(output), parsed=_serializable(output), parsing_error=None)
+    if call.exception is not None:
+        record["exception"] = f"{type(call.exception).__name__}: {call.exception}"
+    return record
 
-    def invoke(self, messages: list[Any]):
-        started = time.perf_counter()
-        record = {"messages": _prompt_messages(messages)}
+
+def _raw_candidate(call: dict) -> dict:
+    """Inspect every exact provider response, including rejected repair outputs."""
+    from src.infra.llm_boundary import parse_structured_json
+
+    record = {"attempt": call["attempt"], "status": "unavailable", "candidate": None}
+    content = (call.get("raw") or {}).get("content")
+    if isinstance(content, list):
+        content = "".join(item.get("text", "") for item in content
+                          if isinstance(item, dict) and item.get("type") in {"text", "output_text"})
+    payload = call.get("parsed")
+    if isinstance(content, str) and content.strip():
+        payload = content
+    if isinstance(payload, str):
         try:
-            output = self.model.invoke(messages)
-            if isinstance(output, dict) and ("raw" in output or "parsed" in output):
-                record.update(raw=_safe_model_message(output.get("raw")), parsed=_serializable(output.get("parsed")),
-                              parsing_error=str(output["parsing_error"]) if output.get("parsing_error") else None)
-            else:
-                record.update(raw=_safe_model_message(output), parsed=_serializable(output), parsing_error=None)
-            return output
-        except Exception as exc:
-            record["exception"] = f"{type(exc).__name__}: {exc}"
-            raise
-        finally:
-            record["latency_ms"] = round((time.perf_counter() - started) * 1000)
-            self.calls.append(record)
+            payload = parse_structured_json(payload)
+        except (ValueError, TypeError):
+            return {**record, "status": "invalid_json"}
+    if payload is None:
+        return record
+    if not isinstance(payload, dict):
+        return {**record, "status": "invalid_contract"}
+    candidate = payload.get("request_contract")
+    if candidate is None:
+        return {**record, "status": "missing_contract"}
+    if not isinstance(candidate, dict):
+        return {**record, "status": "invalid_contract"}
+    return {**record, "status": "available", "candidate": candidate}
 
 
-def make_live_observer(settings: Any) -> Callable[[dict], dict]:
+def make_live_observer(settings: Any, *, body_semantic_assessor: Callable[[dict, dict], dict] | None = None) -> Callable[[dict], dict]:
     """Create a factory boundary without calling any model until a sample runs."""
     def observe(case: dict) -> dict:
         from src.infra.llm import build_llm_registry
+        from src.infra.llm_boundary import capture_structured_calls
         from src.runtime.nodes.planner import make_planner_node
 
-        state, context = build_case_state(case)
         started = time.perf_counter()
         errors = []
         result = None
-        recorder = None
+        records = []
+        context = {}
+        product_execution = {"status": "not_started", "failure_origin": "evaluation_setup"}
         try:
-            recorder = _RecordingPlanner(build_llm_registry(settings).llm_planner)
-            result = make_planner_node(recorder, verbose=False)(state)
+            state, context = build_case_state(case)
+            model = build_llm_registry(settings).llm_planner
+            node = make_planner_node(model, verbose=False)
+            with capture_structured_calls() as records:
+                product_execution = {"status": "failed", "failure_origin": "product"}
+                result = node(state)
+                product_execution = {"status": "completed", "failure_origin": None}
             errors.extend(result.get("debug").planner_errors if result.get("debug") else [])
         except Exception as exc:
             errors.append(f"{type(exc).__name__}: {exc}")
         runtime = result.get("runtime") if result else None
         contract = runtime.request_contract if runtime else None
         planner = result.get("planner") if result else None
-        calls = recorder.calls if recorder else []
+        calls = [_recorded_call(call) for call in records]
         disposition = "clarify"
         if contract is not None:
             if contract.can_cancel_pending() or contract.can_acknowledge():
@@ -202,21 +231,10 @@ def make_live_observer(settings: Any) -> Callable[[dict], dict]:
                 disposition = "clarify"
             elif contract.can_prepare_body():
                 disposition = "answer"
-        raw_candidate = None
-        if calls:
-            parsed = calls[0].get("parsed")
-            if isinstance(parsed, dict):
-                raw_candidate = parsed.get("request_contract")
-            if raw_candidate is None:
-                raw_content = (calls[0].get("raw") or {}).get("content")
-                if isinstance(raw_content, str):
-                    try:
-                        raw_candidate = json.loads(raw_content).get("request_contract")
-                    except (ValueError, AttributeError):
-                        pass
         observation = {
             "canonical": contract.model_dump(mode="json") if contract else None,
-            "raw_candidate": raw_candidate, "model_calls": calls,
+            "raw_candidates": [_raw_candidate(call) for call in calls], "model_calls": calls,
+            "product_execution": product_execution,
             "contract_accepted": contract is not None and contract.failure is None,
             "errors": errors,
             "latency_ms": round((time.perf_counter() - started) * 1000),
@@ -225,8 +243,38 @@ def make_live_observer(settings: Any) -> Callable[[dict], dict]:
             "planner": planner.model_dump(mode="json") if planner else None,
             "pending_after": runtime.pending_action.model_dump(mode="json") if runtime and runtime.pending_action else None,
         }
+        if observation["contract_accepted"]:
+            semantic_started = time.perf_counter()
+            try:
+                from src.eval.request_contract_semantics import build_semantic_assessor
+
+                assessor = body_semantic_assessor or build_semantic_assessor(settings)
+                observation["body_semantics"] = assessor(case, observation)
+            except Exception as exc:
+                # Evaluator failures must retain the product's accepted result
+                # and every raw attempt instead of replacing the observation.
+                observation["body_semantics"] = {
+                    "status": "unavailable", "error": f"{type(exc).__name__}: {exc}",
+                }
+            observation["semantic_latency_ms"] = round((time.perf_counter() - semantic_started) * 1000)
         return _redact_secret(observation, str(settings.openai_api_key or ""))
     return observe
+
+
+def observe_case(case: dict, observer: Callable[[dict], dict]) -> dict:
+    """Preserve an observer failure as an unknown product outcome, not rejection."""
+    try:
+        observation = observer(case)
+        if not isinstance(observation, dict):
+            raise TypeError("observer must return an observation object")
+        return observation
+    except Exception as exc:
+        return {
+            "canonical": None, "raw_candidates": [], "model_calls": [],
+            "product_execution": {"status": "unknown", "failure_origin": "observer"},
+            "contract_accepted": False, "errors": [f"{type(exc).__name__}: {exc}"],
+            "disposition": None, "context": {},
+        }
 
 
 def code_fingerprint() -> dict:
@@ -239,7 +287,10 @@ def code_fingerprint() -> dict:
 
 def build_manifest(*, run_id: str, cases: list[dict], policy: dict, settings: Any,
                    repeats: int, max_workers: int, mode: str) -> dict:
-    from src.infra.llm import _build_planner_response_schema
+    from src.infra.llm import _build_planner_response_schema, build_llm_registry
+    from src.infra.llm_boundary import CallBudget
+    from src.eval.request_contract_semantics import semantic_assessor_manifest
+    from src.runtime.nodes.planner import make_planner_node
     from src.runtime.nodes.planner.prompt_builder import build_planner_messages
 
     prompt_hashes = {}
@@ -247,10 +298,21 @@ def build_manifest(*, run_id: str, cases: list[dict], policy: dict, settings: An
         state, _ = build_case_state(case)
         prompt_hashes[case["id"]] = _hash(_json(_prompt_messages(build_planner_messages(state))))
     schema = _build_planner_response_schema()
+    semantic_definition = semantic_assessor_manifest(settings)
     code = code_fingerprint()
-    whitelisted = {name: getattr(settings, name) for name in SETTINGS_WHITELIST}
-    whitelisted.update(temperature=0, planner_timeout_seconds=30, planner_provider_max_retries=2,
-                       planner_history_max_turns=6, max_workers=max_workers)
+    # Client construction does not perform network IO. A placeholder credential
+    # permits plan-only manifests before a real credential has been configured.
+    client_settings = settings if settings.openai_api_key else settings.model_copy(update={"openai_api_key": "manifest-only"})
+    model = build_llm_registry(client_settings).llm_planner.source_model
+    budget = CallBudget()
+    whitelisted = {
+        "planner_model": model.model_name, "planner_max_tokens": model.max_tokens,
+        "planner_reasoning_effort": model.reasoning_effort, "temperature": model.temperature,
+        "planner_timeout_seconds": model.request_timeout, "planner_provider_max_retries": model.max_retries,
+        "planner_call_budget": {"max_calls": budget.max_calls, "timeout_seconds": budget.timeout_seconds},
+        "planner_history_max_turns": inspect.signature(make_planner_node).parameters["max_turns"].default,
+        "max_workers": max_workers,
+    }
     dependencies = {}
     for name in ("openai", "langchain-openai", "langchain-core", "pydantic", "langgraph"):
         try:
@@ -263,7 +325,9 @@ def build_manifest(*, run_id: str, cases: list[dict], policy: dict, settings: An
         "settings": whitelisted, "python": platform.python_version(), "dependencies": dependencies,
         "hashes": {"code": code["digest"], "code_files": code["files"], "schema": _hash(_json(schema)),
                    "fixtures": _hash(_json(cases)), "policy": _hash(_json(policy)),
-                   "settings": _hash(_json(whitelisted)), "prompts": prompt_hashes},
+                   "settings": _hash(_json(whitelisted)), "prompts": prompt_hashes,
+                   "semantic_assessor": semantic_definition["digest"]},
+        "semantic_assessor": semantic_definition,
         "schema": schema, "sample_plan": make_sample_plan(cases, repeats=repeats),
         "repeats": repeats, "cases": [{"id": case["id"], "cohort": case["cohort"], "expected": case["expected"]} for case in cases],
         "scope": "planner model and canonicalization only; no retrieval, synthesis, save_text or Slack execution",
@@ -292,11 +356,7 @@ def run_evaluation(*, cases: list[dict], policy: dict, observer: Callable[[dict]
 
     def one(sample):
         case = by_id[sample["case_id"]]
-        try:
-            observation = observer(case)
-        except Exception as exc:
-            observation = {"canonical": None, "raw_candidate": None, "contract_accepted": False,
-                           "errors": [f"{type(exc).__name__}: {exc}"], "disposition": None, "context": {}}
+        observation = observe_case(case, observer)
         return {**sample, "observation": observation, "score": score_observation(case, observation, policy)}
 
     with (run_dir / "results.jsonl").open("x", encoding="utf-8") as handle:
