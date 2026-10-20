@@ -21,7 +21,6 @@ from src.runtime.agent_runtime.llm_usage import record_llm_call
 
 logger = logging.getLogger(__name__)
 _VALIDATION_STAGES = {"pre_synthesis_validation", "post_synthesis_validation"}
-_MAX_QUESTIONS = 200
 
 
 @dataclass(frozen=True)
@@ -99,6 +98,8 @@ class DecisionsClient:
     question name so each validation stage can apply its recovery policy.
     """
 
+    max_questions_per_call = 200
+
     def __init__(self, client: OpenAI, *, model: str = "gpt-6-luna", timeout_seconds: float = 20) -> None:
         if model != "gpt-6-luna":
             raise ValueError("Decisions supports only gpt-6-luna")
@@ -109,7 +110,10 @@ class DecisionsClient:
         self.timeout_seconds = timeout_seconds
 
     def evaluate(self, *, input: str, questions: list[dict[str, str]], stage: str,
-                 attempt: int = 1) -> DecisionResult:
+                 attempt: int = 1, reserve_calls: int = 0) -> DecisionResult:
+        """Leave reserved calls available for subsequent validation checks."""
+        if type(reserve_calls) is not int or reserve_calls < 0:
+            raise ValueError("Decisions reserve_calls must be a nonnegative integer")
         if stage not in _VALIDATION_STAGES:
             raise ValueError("Decisions requires a validation stage")
         if not isinstance(input, str) or not input.strip():
@@ -128,14 +132,15 @@ class DecisionsClient:
         budget = request_call_budget(stage)
         probabilities: dict[str, float] = {}
         refused_names: set[str] = set()
-        for start in range(0, len(questions), _MAX_QUESTIONS):
-            batch = questions[start:start + _MAX_QUESTIONS]
+        for start in range(0, len(questions), self.max_questions_per_call):
+            batch = questions[start:start + self.max_questions_per_call]
             batch_names = {question["name"] for question in batch}
+            remaining_batches = math.ceil((len(questions) - start - len(batch)) / self.max_questions_per_call)
             while True:
-                if not budget.can_attempt:
+                if not budget.can_attempt or budget.remaining_calls <= reserve_calls:
                     diagnostic = LLMDiagnostic(code="call_budget_exhausted", stage=stage, model=self.model_name,
                         endpoint="decisions", attempt=budget.calls,
-                        budget_reason="calls" if budget.calls >= budget.max_calls else "deadline")
+                        budget_reason="calls" if budget.remaining_calls <= reserve_calls else "deadline")
                     record_llm_diagnostic(diagnostic)
                     raise LLMCallError(make_problem("call_budget_exhausted", stage), diagnostic)
                 budget.calls += 1
@@ -174,8 +179,12 @@ class DecisionsClient:
                     delay = error.problem.retry_after_seconds
                     if delay is None:
                         delay = min(2 ** (budget.calls - 1) * 0.25, 2.0)
+                    # Retrying is useful only if every later batch can still run
+                    # without spending the calls reserved for later checks.
                     can_retry = (error.problem.code in {"provider_unavailable", "provider_rate_limited"}
-                                 and budget.can_attempt and delay < budget.remaining_seconds)
+                                 and budget.can_attempt
+                                 and budget.remaining_calls > reserve_calls + remaining_batches
+                                 and delay < budget.remaining_seconds)
                     diagnostic = error.diagnostic.model_copy(update={
                         "model": self.model_name, "endpoint": "decisions", "attempt": current_attempt,
                         "provider_request_id": error.diagnostic.provider_request_id or request_id,

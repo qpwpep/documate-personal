@@ -67,8 +67,12 @@ class CallBudget:
         return max(0.0, self.timeout_seconds - (time.monotonic() - self.started))
 
     @property
+    def remaining_calls(self) -> int:
+        return max(0, self.max_calls - self.calls)
+
+    @property
     def can_attempt(self) -> bool:
-        return self.calls < self.max_calls and self.remaining_seconds > 0
+        return self.remaining_calls > 0 and self.remaining_seconds > 0
 
 
 def request_call_budget(stage: str) -> CallBudget:

@@ -195,6 +195,87 @@ def test_transient_error_retries_same_request_with_observed_attempts(invoke):
     assert diagnostics[0].recovery == "retry"
 
 
+@pytest.mark.parametrize("question_count, reserve_calls", [(1, 5), (201, 4)])
+def test_source_retry_preserves_reserved_calls_and_remaining_batches(question_count, reserve_calls):
+    questions = [{**QUESTION, "name": f"source_{index}"} for index in range(question_count)]
+    seen = []
+
+    def handle(request):
+        payload = json.loads(request.content)
+        seen.append(payload)
+        if payload["input"] == "source evidence":
+            return httpx.Response(503, json={"error": {"code": "server_error"}},
+                                  headers={"retry-after": "0"})
+        return decision()
+
+    with httpx.Client(transport=httpx.MockTransport(handle)) as http_client:
+        client = DecisionsClient(OpenAI(api_key="test-key", base_url="https://provider.test/v1",
+                                        http_client=http_client, max_retries=0))
+        with capture_llm_diagnostics() as diagnostics:
+            with pytest.raises(LLMCallError) as failure:
+                client.evaluate(input="source evidence", questions=questions, stage=STAGE,
+                                reserve_calls=reserve_calls)
+            assert failure.value.problem.code == "provider_unavailable"
+            assert diagnostics[-1].recovery == "stop"
+            assert request_call_budget(STAGE).remaining_calls == 5
+            result = client.evaluate(input="packet evidence", questions=[QUESTION], stage=STAGE)
+
+    assert result.probabilities == {"ready": 0.9}
+    assert [payload["input"] for payload in seen] == ["source evidence", "packet evidence"]
+
+
+def test_source_retry_and_remaining_batches_succeed_with_reserved_packet_capacity():
+    questions = [{**QUESTION, "name": f"source_{index}"} for index in range(201)]
+    seen = []
+
+    def handle(request):
+        payload = json.loads(request.content)
+        seen.append(payload)
+        if len(seen) == 1:
+            return httpx.Response(503, json={"error": {"code": "server_error"}},
+                                  headers={"retry-after": "0"})
+        return decision(answers=[{"type": "predicate", "name": question["name"], "probability": 0.9}
+                                 for question in payload["questions"]])
+
+    with httpx.Client(transport=httpx.MockTransport(handle)) as http_client:
+        client = DecisionsClient(OpenAI(api_key="test-key", base_url="https://provider.test/v1",
+                                        http_client=http_client, max_retries=0))
+        with capture_llm_diagnostics() as diagnostics:
+            source = client.evaluate(input="source evidence", questions=questions, stage=STAGE, reserve_calls=3)
+            assert source.probabilities == {question["name"]: 0.9 for question in questions}
+            assert request_call_budget(STAGE).remaining_calls == 3
+            packet = client.evaluate(input="packet evidence", questions=[QUESTION], stage=STAGE, reserve_calls=2)
+            assert request_call_budget(STAGE).remaining_calls == 2
+    assert packet.probabilities == {"ready": 0.9}
+    assert [len(payload["questions"]) for payload in seen] == [200, 200, 1, 1]
+    assert [diagnostic.recovery for diagnostic in diagnostics] == ["retry"]
+
+
+@pytest.mark.parametrize("question_count, reserve_calls, source_calls", [(1, 6, 0), (201, 5, 1)])
+def test_reserved_calls_block_new_batches_before_provider_request(question_count, reserve_calls, source_calls):
+    questions = [{**QUESTION, "name": f"source_{index}"} for index in range(question_count)]
+    seen = []
+
+    def handle(request):
+        seen.append(request)
+        return decision(answers=[{"type": "predicate", "name": question["name"], "probability": 0.9}
+                                 for question in json.loads(request.content)["questions"]])
+
+    with httpx.Client(transport=httpx.MockTransport(handle)) as http_client:
+        client = DecisionsClient(OpenAI(api_key="test-key", base_url="https://provider.test/v1",
+                                        http_client=http_client, max_retries=0))
+        with capture_llm_diagnostics():
+            with pytest.raises(LLMCallError) as failure:
+                client.evaluate(input="source evidence", questions=questions, stage=STAGE,
+                                reserve_calls=reserve_calls)
+            assert failure.value.problem.code == "call_budget_exhausted"
+            assert failure.value.diagnostic.budget_reason == "calls"
+            assert request_call_budget(STAGE).remaining_calls == reserve_calls
+            packet = client.evaluate(input="packet evidence", questions=[QUESTION], stage=STAGE)
+    assert packet.probabilities == {"ready": 0.9}
+    assert len(seen) == source_calls + 1
+
+
 @pytest.mark.parametrize("stage, max_calls", [(STAGE, 6), ("post_synthesis_validation", 3)])
 def test_calls_share_the_stage_budget_across_retrieval_retries(invoke, stage, max_calls):
     result, seen, usage, diagnostics = invoke([decision()], repeat=max_calls + 1, stage=stage)
