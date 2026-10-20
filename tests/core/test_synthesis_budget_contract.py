@@ -4,13 +4,16 @@ from pathlib import Path
 import pytest
 
 from src.core.answer_schema import export_answer_text, finalize_answer, text_document
+from src.core.evidence import build_evidence
 from src.core.request_contracts import BoundAnswerReference, RequestContract, TransformAnswerBody
+from src.core.llm_errors import LLMCallError
 from src.infra.tools.save_text import build_save_text_tool
 from src.runtime.nodes.actions import make_action_postprocess_node
 from src.runtime.nodes.synthesis import make_synthesize_node
 from src.runtime.nodes.synthesis.budgets import ExcerptLimits
 from src.runtime.nodes.validation import make_post_synthesis_validation_node
 from tests.core.helpers import make_decisions_client
+from tests.synthesis_fixtures import prepare_synthesis_state
 from tests.core.test_synthesis_validation import _hit, _state
 
 
@@ -51,7 +54,8 @@ def test_model_receives_bounded_excerpts_and_citations_use_the_attempt_that_answ
     state = _state(_long_hits(mixed=mixed))
     normal, compact = PacketEchoModel(timeout=timeout), PacketEchoModel()
 
-    state.update(make_synthesize_node(normal, compact, excerpt_limits=ExcerptLimits(1800, 900))(state))
+    prepare_synthesis_state(state, limits=ExcerptLimits(1800, 900))
+    state.update(make_synthesize_node(normal, compact)(state))
     state.update(make_post_synthesis_validation_node(False, decisions_client=make_decisions_client())(state))
 
     assert 0 < sum(len(item["excerpt"]) for item in normal.packets[0]) <= normal_total
@@ -84,7 +88,8 @@ def test_saving_a_researched_answer_keeps_the_actual_packet_and_complete_validat
         })
         state["runtime"] = state["runtime"].model_copy(update={"request_contract": contract})
         normal, compact = PacketEchoModel(timeout=True), PacketEchoModel()
-        state.update(make_synthesize_node(normal, compact, excerpt_limits=ExcerptLimits(1800, 900))(state))
+        prepare_synthesis_state(state, limits=ExcerptLimits(1800, 900))
+        state.update(make_synthesize_node(normal, compact)(state))
         state.update(make_post_synthesis_validation_node(False, decisions_client=make_decisions_client())(state))
         assert state["response"].kind == "answer"
         packets.append(state["response"].evidence_packet)
@@ -117,7 +122,8 @@ def test_transform_retains_complete_bound_citations_beyond_the_retrieval_budget(
     })
     normal, compact = PacketEchoModel(timeout=True), PacketEchoModel()
 
-    state.update(make_synthesize_node(normal, compact, excerpt_limits=ExcerptLimits(1800, 900))(state))
+    prepare_synthesis_state(state, limits=ExcerptLimits(1800, 900))
+    state.update(make_synthesize_node(normal, compact)(state))
     state.update(make_post_synthesis_validation_node(False, decisions_client=make_decisions_client())(state))
 
     assert len(original.excerpt) > 6000
@@ -143,7 +149,8 @@ def test_exhausted_recovery_does_not_save_an_incomplete_source_fallback(tmp_path
     state["runtime"] = state["runtime"].model_copy(update={"request_contract": contract})
     normal, compact = PacketEchoModel(timeout=True), PacketEchoModel(timeout=True)
 
-    state.update(make_synthesize_node(normal, compact, excerpt_limits=ExcerptLimits(1800, 900))(state))
+    prepare_synthesis_state(state, limits=ExcerptLimits(1800, 900))
+    state.update(make_synthesize_node(normal, compact)(state))
     state.update(make_post_synthesis_validation_node(False, decisions_client=make_decisions_client())(state))
     state.update(make_action_postprocess_node(build_save_text_tool(), lambda **_kwargs: {}, False)(state))
 
@@ -154,3 +161,85 @@ def test_exhausted_recovery_does_not_save_an_incomplete_source_fallback(tmp_path
     assert state["response"].problem.code == "provider_unavailable"
     assert all(receipt.status != "success" for receipt in state["response"].result.actions)
     assert list(tmp_path.iterdir()) == []
+
+
+def test_compact_fallback_is_not_called_when_its_actual_ranges_are_insufficient():
+    state = _state(_long_hits())
+    prepare_synthesis_state(
+        state, limits=ExcerptLimits(1800, 900),
+        decisions=make_decisions_client({"compact_requirement_0": 0.1, "compact_request_ready": 0.1}),
+    )
+    assert state["retrieval"].prepared_evidence.compact is None
+    normal, compact = PacketEchoModel(timeout=True), PacketEchoModel()
+
+    try:
+        make_synthesize_node(normal, compact)(state)
+    except LLMCallError as error:
+        assert error.problem.code == "provider_unavailable"
+
+    assert normal.packets
+    assert compact.packets == []
+
+
+def test_changed_bound_source_response_invalidates_prepared_ranges():
+    original = _hit("The original bound citation.").evidence
+    previous = finalize_answer(text_document(original.excerpt, basis="excerpt", refs=[original.id]),
+                               [original], retrieval_required=True)
+    state = _state([])
+    contract = RequestContract(body=TransformAnswerBody(
+        source=BoundAnswerReference(ref="previous", response_hash=previous.content_hash),
+        instruction="Summarize this answer.",
+    ))
+    state["runtime"] = state["runtime"].model_copy(update={
+        "previous_response": previous, "request_contract": contract,
+    })
+    prepare_synthesis_state(state)
+    replacement = finalize_answer(text_document("A revised bound answer."), [])
+    state["runtime"] = state["runtime"].model_copy(update={
+        "previous_response": replacement,
+        "request_contract": contract.model_copy(update={"body": TransformAnswerBody(
+            source=BoundAnswerReference(ref="previous", response_hash=replacement.content_hash),
+            instruction="Summarize this answer.",
+        )}),
+    })
+    model = PacketEchoModel()
+
+    with pytest.raises(LLMCallError) as caught:
+        make_synthesize_node(model)(state)
+
+    assert caught.value.problem.code == "internal_error"
+    assert model.packets == []
+
+
+def test_mutated_prepared_evidence_range_fails_before_generation():
+    state = prepare_synthesis_state(_state([_hit("The complete approved source range.")]))
+    packet = state["retrieval"].prepared_evidence.normal
+    original = packet.evidence[0]
+    # The replacement is valid source evidence, but this exact range was never
+    # approved as part of the prepared generation packet.
+    packet.evidence[0] = build_evidence(
+        snapshot=original.snapshot, element=original.element,
+        start=original.selection.start + 1, end=original.selection.end,
+    )
+    normal, compact = PacketEchoModel(), PacketEchoModel()
+
+    with pytest.raises(LLMCallError) as caught:
+        make_synthesize_node(normal, compact)(state)
+
+    assert caught.value.problem.code == "internal_error"
+    assert normal.packets == compact.packets == []
+
+
+def test_mutated_prepared_requirement_map_fails_before_generation():
+    state = prepare_synthesis_state(_state([_hit("The complete approved source range.")]))
+    packet = state["retrieval"].prepared_evidence.compact
+    # Frozen model fields still contain mutable lists. Changing an association
+    # cannot transfer a source's prior approval to another requirement.
+    packet.requirement_map[packet.evidence[0].id].append("unapproved-requirement")
+    normal, compact = PacketEchoModel(), PacketEchoModel()
+
+    with pytest.raises(LLMCallError) as caught:
+        make_synthesize_node(normal, compact)(state)
+
+    assert caught.value.problem.code == "internal_error"
+    assert normal.packets == compact.packets == []

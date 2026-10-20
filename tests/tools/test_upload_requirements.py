@@ -12,6 +12,7 @@ from langchain_core.embeddings import Embeddings
 from src.core.documents import DocumentElement, ParsedDocument, build_snapshot
 from src.core.uploads import UploadRecord
 from src.infra.tools.local_rag import build_upload_retriever, build_upload_search_tool
+from tests.synthesis_fixtures import prepare_synthesis_state, synthesis_excerpt_limits
 
 
 class _LengthEmbeddings(Embeddings):
@@ -156,7 +157,6 @@ def test_planned_code_fragment_reaches_source_retrieval_without_losing_the_const
     from src.core.contracts.boundary.graph import build_graph_state_input
     from src.runtime.nodes.planner import make_planner_node
     from src.runtime.nodes.retrieval import make_retrieve_dispatch_node
-    from src.runtime.nodes.synthesis.budgets import RetrievedEvidenceBudget
     from src.runtime.nodes.synthesis.context import build_synthesis_context, prepare_synthesis_inputs
     from src.runtime.nodes.synthesis.evidence_selection import requirement_coverage
     from tests.core.helpers import _CapturePlannerLLM
@@ -177,9 +177,8 @@ def test_planned_code_fragment_reaches_source_retrieval_without_losing_the_const
     diagnostic, = state["debug"].retrieval_diagnostics
     assert diagnostic.answerability == "covered"
     assert [hit.evidence.excerpt for hit in state["retrieval"].hit_log] == [source.rstrip("\n")]
-    prepared = prepare_synthesis_inputs(state=state, context=build_synthesis_context(state=state),
-                                        budget=RetrievedEvidenceBudget(max_excerpt_chars=480,
-                                            max_total_excerpt_chars=3000, max_items=8), max_turns=6)
+    prepare_synthesis_state(state, limits=synthesis_excerpt_limits(normal_chars=480))
+    prepared = prepare_synthesis_inputs(state=state, context=build_synthesis_context(state=state), max_turns=6)
     assert prepared.missing_requirement_ids == []
     assert [item.excerpt for item in prepared.evidence_packet] == [source.rstrip("\n")]
     assert requirement_coverage(task, prepared.evidence_packet, prepared.evidence_requirement_map)["is_partial"] is False
@@ -254,7 +253,6 @@ def test_planned_symbol_search_preserves_implementation_and_its_actual_example(u
     from src.core.planner_schema import PlannerOutput, RetrievalTask
     from src.runtime.nodes.planner import make_planner_node
     from src.runtime.nodes.retrieval import make_retrieve_dispatch_node
-    from src.runtime.nodes.synthesis.budgets import RetrievedEvidenceBudget
     from src.runtime.nodes.synthesis.context import build_synthesis_context, prepare_synthesis_inputs
     from tests.core.helpers import _CapturePlannerLLM
 
@@ -274,8 +272,7 @@ def test_planned_symbol_search_preserves_implementation_and_its_actual_example(u
     diagnostic, = state["debug"].retrieval_diagnostics
     assert diagnostic.answerability == "covered"
     assert diagnostic.final_evidence_count == 2
-    budget = RetrievedEvidenceBudget(max_excerpt_chars=480, max_total_excerpt_chars=3000, max_items=8)
-    prepared = prepare_synthesis_inputs(state=state, context=build_synthesis_context(state=state),
-                                        budget=budget, max_turns=6)
+    prepare_synthesis_state(state, limits=synthesis_excerpt_limits(normal_chars=480))
+    prepared = prepare_synthesis_inputs(state=state, context=build_synthesis_context(state=state), max_turns=6)
     assert {item.excerpt for item in prepared.evidence_packet} == {definition, example}
-    assert sum(len(item.excerpt) for item in prepared.evidence_packet) <= budget.max_total_excerpt_chars
+    assert all(len(item.excerpt) <= 480 for item in prepared.evidence_packet)

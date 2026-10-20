@@ -11,7 +11,7 @@ from langchain_core.embeddings import Embeddings
 from src.core.planner_schema import RetrievalRequirement
 from src.core.uploads import UploadRecord
 from src.infra.tools.local_rag import build_upload_retriever, build_upload_search_tool
-from tests.synthesis_fixtures import synthesis_excerpt_limits
+from tests.synthesis_fixtures import prepare_synthesis_state, synthesis_excerpt_limits
 
 
 class _FakeEmbeddings(Embeddings):
@@ -64,17 +64,13 @@ class LocalRagTest(unittest.TestCase):
     @patch("src.infra.chroma_store.OpenAIEmbeddings", return_value=_FakeEmbeddings())
     def test_long_line_search_excerpt_survives_synthesis_and_exact_citation(self, _embeddings) -> None:
         """A retrieved fragment of a long source line remains model-visible and exactly citable."""
-        import time
-
         from src.core.answer_schema import AnswerDocument, CodeBlock, ContentUnit, UnitCheck
         from src.core.contracts import PlannerState
         from src.core.contracts.boundary.graph import build_graph_state_input
         from src.core.planner_schema import PlannerOutput, RetrievalTask
         from src.core.request_contracts import RequestContract
         from src.runtime.nodes.retrieval import make_retrieve_dispatch_node
-        from src.runtime.nodes.synthesis.budgets import resolve_evidence_budgets
-        from src.runtime.nodes.synthesis.context import build_synthesis_context, prepare_synthesis_inputs
-        from src.runtime.nodes.synthesis.pipeline import run_synthesis_pipeline
+        from src.runtime.nodes.synthesis import make_synthesize_node
 
         class ExcerptSynthesizer:
             def __init__(self):
@@ -108,32 +104,26 @@ class LocalRagTest(unittest.TestCase):
         self.assertTrue(hits)
         self.assertTrue(all(len(hit.evidence.excerpt) > 500 for hit in hits))
 
-        plan = state["planner"].output
-        context = build_synthesis_context(state=state)
-        profile, _ = resolve_evidence_budgets(plan=plan, limits=synthesis_excerpt_limits(normal_chars=1800))
-        prepared = prepare_synthesis_inputs(
-            state=state, context=context, budget=profile, max_turns=6,
-        )
-        self.assertTrue(prepared.evidence_packet)
+        prepare_synthesis_state(state, limits=synthesis_excerpt_limits(normal_chars=1800))
+        prepared = state["retrieval"].prepared_evidence.normal
+        self.assertTrue(prepared.evidence)
         synthesizer = ExcerptSynthesizer()
-        outcome = run_synthesis_pipeline(
-            structured_synthesizer=synthesizer, structured_synthesizer_compact=None,
-            prepared=prepared, compact_prepared=None, stage_started=time.perf_counter(),
-        )
-        self.assertEqual(outcome.synthesis_errors, [])
+        updates = make_synthesize_node(synthesizer)(state)
+        result = updates["response"].result
+        self.assertEqual(updates["debug"].synthesis_errors, [])
         self.assertTrue(synthesizer.packet[0]["is_partial"])
-        evidence = prepared.evidence_packet[0]
+        evidence = prepared.evidence[0]
         self.assertTrue(any(
             evidence.snapshot == hit.evidence.snapshot and evidence.element == hit.evidence.element
             and hit.evidence.selection.start <= evidence.selection.start < evidence.selection.end <= hit.evidence.selection.end
             for hit in hits
         ))
         self.assertEqual(synthesizer.packet[0]["excerpt"], text[evidence.selection.start:evidence.selection.end])
-        self.assertEqual([citation.evidence for citation in outcome.result.citations], [evidence])
-        self.assertEqual(outcome.result.content.blocks[0].content, ContentUnit(
+        self.assertEqual([citation.evidence for citation in result.citations], [evidence])
+        self.assertEqual(result.content.blocks[0].content, ContentUnit(
             text=evidence.excerpt, basis="excerpt", refs=[evidence.id],
         ))
-        self.assertEqual(outcome.result.checks, [UnitCheck(
+        self.assertEqual(result.checks, [UnitCheck(
             unit_id="b0.content", reference_status="resolved", support_status="exact_match",
         )])
 

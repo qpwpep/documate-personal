@@ -23,7 +23,7 @@ from src.runtime.nodes.actions import make_action_postprocess_node
 from src.runtime.nodes.synthesis import make_synthesize_node
 from src.runtime.nodes.validation import make_post_synthesis_validation_node
 from tests.core.helpers import make_decisions_client
-from tests.synthesis_fixtures import synthesis_excerpt_limits
+from tests.synthesis_fixtures import prepare_synthesis_state
 
 
 def _contract(*, save="not_requested", slack="not_requested", **updates):
@@ -112,7 +112,7 @@ class _ConsumerGraph:
 
     def __init__(self, contracts, documents, save, slack, default_slack_recipient=None):
         self.contracts = iter(contracts)
-        self.synthesize = make_synthesize_node(_DocumentModelBoundary(documents), excerpt_limits=synthesis_excerpt_limits())
+        self.synthesize = make_synthesize_node(_DocumentModelBoundary(documents))
         self.validate = make_post_synthesis_validation_node(verbose=False, decisions_client=make_decisions_client())
         self.actions = make_action_postprocess_node(save, slack, False, default_slack_recipient)
 
@@ -124,6 +124,7 @@ class _ConsumerGraph:
         state["runtime"] = state["runtime"].model_copy(update={"request_contract": contract})
         state["planner"] = PlannerState(output=PlannerOutput(use_retrieval=False, tasks=[], request_contract=contract.to_wire()))
         state["messages"] = [*state["messages"], HumanMessage(content=state["runtime"].user_input)]
+        prepare_synthesis_state(state)
         for node in (self.synthesize, self.validate, self.actions):
             updates = node(state)
             messages = [*state["messages"], *updates.pop("messages", [])]

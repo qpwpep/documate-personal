@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 
 from langchain_core.messages import AIMessage, HumanMessage
 
@@ -10,8 +12,9 @@ from src.core.documents import DocumentElement, SourceAnchor, build_snapshot
 from src.core.evidence import RetrievalScore, SearchHit, build_evidence
 from src.core.planner_schema import PlannerOutput, RetrievalTask
 from src.core.request_contracts import ExtractBody, RequestContract
+from src.core.llm_errors import LLMCallError
 from src.runtime.nodes.synthesis import make_synthesize_node
-from tests.synthesis_fixtures import synthesis_excerpt_limits
+from tests.synthesis_fixtures import prepare_synthesis_state
 
 
 def _hit(text="Default mode is safe.", *, source="official", rank=1):
@@ -67,7 +70,7 @@ class ModelBoundary:
 def test_malformed_generation_becomes_explicit_original_source_fallback():
     """Invalid model text is never promoted to an answer, while original evidence stays available."""
     hit = _hit()
-    updates = make_synthesize_node(ModelBoundary(malformed={"answer": "UNVALIDATED WRONG ANSWER"}), excerpt_limits=synthesis_excerpt_limits())(_state([hit]))
+    updates = make_synthesize_node(ModelBoundary(malformed={"answer": "UNVALIDATED WRONG ANSWER"}))(prepare_synthesis_state(_state([hit])))
     result = updates["response"].result
     assert "UNVALIDATED WRONG ANSWER" not in export_answer_text(result)
     assert hit.evidence.excerpt in export_answer_text(result)
@@ -88,7 +91,8 @@ def test_exact_upload_extraction_needs_no_model_generation():
     state["debug"] = DebugState(retrieval_diagnostics=[RetrievalDiagnostic(
         route="upload", requirement_id=task.requirement_id, status="success", answerability="covered", evidence_count=1,
     )])
-    updates = make_synthesize_node(ModelBoundary(error=AssertionError("model should not run")), excerpt_limits=synthesis_excerpt_limits())(state)
+    prepare_synthesis_state(state)
+    updates = make_synthesize_node(ModelBoundary(error=AssertionError("model should not run")))(state)
     assert updates["debug"].synthesis_errors == []
     assert any(check.support_status == "exact_match" for check in updates["response"].result.checks)
     assert updates["response"].result.citations[0].evidence.excerpt == hit.evidence.excerpt
@@ -108,7 +112,8 @@ def test_rejected_exact_extraction_uses_repair_feedback_instead_of_repeating_the
     state["debug"] = DebugState(retrieval_diagnostics=[RetrievalDiagnostic(
         route="upload", requirement_id=task.requirement_id, status="success", answerability="covered", evidence_count=1,
     )])
-    node = make_synthesize_node(ModelBoundary(), excerpt_limits=synthesis_excerpt_limits())
+    node = make_synthesize_node(ModelBoundary())
+    prepare_synthesis_state(state)
     state.update(node(state))
     assert state["response"].result.content.blocks[0].type == "code"
     state["retry"] = RetryState(
@@ -121,3 +126,51 @@ def test_rejected_exact_extraction_uses_repair_feedback_instead_of_repeating_the
     # The HTTP/model boundary returns a repaired presentation of the same original.
     assert updates["response"].result.content.blocks[0].type == "paragraph"
     assert updates["response"].result.content.blocks[0].content[0].text == hit.evidence.excerpt
+
+
+def test_unprepared_generation_fails_closed_before_model_call():
+    model = ModelBoundary(error=AssertionError("an unprepared request cannot call the model"))
+
+    with pytest.raises(LLMCallError) as caught:
+        make_synthesize_node(model)(_state([_hit()]))
+
+    assert caught.value.problem.code == "internal_error"
+    assert model.packet == []
+
+
+def test_prepared_source_ranges_are_used_without_reselecting_changed_raw_hits():
+    state = prepare_synthesis_state(_state([_hit("The approved source range.")]))
+    approved = state["retrieval"].prepared_evidence.normal.evidence
+    extra = _hit("An unvalidated replacement must never enter generation.")
+    state["retrieval"] = state["retrieval"].model_copy(update={"hit_log": [extra]})
+    model = ModelBoundary()
+
+    response = make_synthesize_node(model)(state)["response"]
+
+    assert response.evidence_packet == approved
+    assert [item["id"] for item in model.packet] == [f"e{index}" for index in range(1, len(approved) + 1)]
+    assert [item["snapshot_id"] for item in model.packet] == [item.snapshot.snapshot_id for item in approved]
+    assert [item["selection"] for item in model.packet] == [item.selection.model_dump(mode="json") for item in approved]
+    assert [item["excerpt"] for item in model.packet] == [item.excerpt for item in approved]
+    assert [citation.evidence.selection for citation in response.result.citations] == [item.selection for item in approved]
+
+
+@pytest.mark.parametrize("changed", ["revision", "plan"])
+def test_stale_preparation_fails_closed(changed):
+    state = prepare_synthesis_state(_state([_hit()]))
+    if changed == "revision":
+        contract = state["runtime"].request_contract
+        state["runtime"] = state["runtime"].model_copy(update={
+            "request_contract": contract.model_copy(update={"revision": contract.revision + 1}),
+        })
+    else:
+        planner = state["planner"]
+        task = planner.output.tasks[0].model_copy(update={"query": "A different request"})
+        state["planner"] = planner.model_copy(update={"output": planner.output.model_copy(update={"tasks": [task]})})
+    model = ModelBoundary(error=AssertionError("stale preparation cannot call the model"))
+
+    with pytest.raises(LLMCallError) as caught:
+        make_synthesize_node(model)(state)
+
+    assert caught.value.problem.code == "internal_error"
+    assert model.packet == []

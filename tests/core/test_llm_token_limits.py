@@ -18,7 +18,7 @@ from src.core.request_contracts import RequestContract
 from src.infra.llm import build_llm_registry
 from src.infra.settings import APP_ENV_SPEC_BY_NAME, AppSettings
 from src.runtime.nodes.synthesis import make_synthesize_node
-from tests.synthesis_fixtures import synthesis_excerpt_limits
+from tests.synthesis_fixtures import prepare_synthesis_state, synthesis_excerpt_limits
 
 
 def _evidence_packet(payload: dict) -> list[dict]:
@@ -105,7 +105,9 @@ def _settings(**overrides) -> AppSettings:
 
 
 def _state():
-    text = "The configuration keeps the original source range. " * 100
+    # Fits the normal range intact and exceeds the compact range, so this
+    # exercises an actual independent compact selection without extra candidates.
+    text = "The configuration keeps the original source range. " * 30
     snapshot = build_snapshot(
         source_uri="https://docs.example.com/config", title="Configuration", media_type="text/plain",
         source_type="official", content=text, parser="test", parser_version="1",
@@ -124,10 +126,13 @@ def _state():
 
 def _synthesize(settings: AppSettings):
     registry = build_llm_registry(settings)
+    state = prepare_synthesis_state(_state(), limits=synthesis_excerpt_limits(
+        normal_chars=settings.synthesis_prompt_snippet_chars,
+        compact_chars=settings.synthesis_compact_prompt_snippet_chars,
+    ))
     return make_synthesize_node(
         registry.llm_synthesizer, registry.llm_synthesizer_compact,
-        excerpt_limits=synthesis_excerpt_limits(normal_chars=settings.synthesis_prompt_snippet_chars, compact_chars=settings.synthesis_compact_prompt_snippet_chars),
-    )(_state())
+    )(state)
 
 
 def test_timeout_uses_independent_compact_output_cap(provider):

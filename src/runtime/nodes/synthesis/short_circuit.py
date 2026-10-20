@@ -9,7 +9,6 @@ from src.core.contracts import GraphState
 from src.core.latency import elapsed_ms, make_stage_latency_event
 from src.core.llm_errors import LLMCallError, make_problem
 from src.core.request_contracts import check_answer_contract
-from src.runtime.nodes.synthesis.evidence_selection import missing_evidence_requirement_ids
 from src.runtime.nodes.synthesis.models import SynthesisContext
 from src.runtime.nodes.synthesis.state import build_synthesis_updates
 
@@ -78,15 +77,15 @@ def maybe_short_circuit_synthesis(
             result = finalize_answer(previous.content, packet, retrieval_required=previous.retrieval_required, issues=previous.issues)
             mode = "reuse_bound_answer"
     elif (
-        context.retrieval_required and len(context.hits) == 1
+        context.retrieval_required and context.prepared_evidence is not None
+        and len(context.prepared_evidence.normal.evidence) == 1
+        and not context.prepared_evidence.normal.failed_requirement_ids
         and context.attempt == 1
         and len(context.planner_output.tasks) == 1
-        and context.hits[0].evidence.route == "upload"
+        and context.prepared_evidence.normal.evidence[0].route == "upload"
         and contract.body.kind == "extract"
-        and any(d.requirement_id == context.hits[0].requirement_id and d.answerability == "covered"
-                for d in debug.retrieval_diagnostics)
     ):
-        packet = [context.hits[0].evidence]
+        packet = list(context.prepared_evidence.normal.evidence)
         document = build_grounded_document(packet)
         check = check_answer_contract(contract.answer, document, evidence=packet)
         if not check.valid or check.unchecked_semantic:
@@ -95,13 +94,12 @@ def maybe_short_circuit_synthesis(
         mode = "deterministic_grounded_direct"
     else:
         return None
+    prepared = context.prepared_evidence
     requirement_map = {
-        item.id: [hit.requirement_id for hit in context.hits if hit.evidence.id == item.id and hit.requirement_id]
+        item.id: list(prepared.normal.requirement_map.get(item.id, [])) if prepared else []
         for item in packet
     }
-    missing_requirements = missing_evidence_requirement_ids(
-        context.planner_output, packet, requirement_map,
-    ) if context.retrieval_required else []
+    missing_requirements = list(prepared.normal.failed_requirement_ids) if prepared else []
     return build_synthesis_updates(
         debug=debug, result=result, evidence_packet=packet, attempt=context.attempt,
         latency_trace=[make_stage_latency_event(

@@ -62,12 +62,12 @@ def test_incomplete_retrieval_returns_a_natural_cited_partial_without_delivery()
         ))
 
     state.update(make_retrieve_dispatch_node(docs, upload, False)(state))
-    state.update(make_pre_synthesis_validation_node(False, decisions_client=make_decisions_client())(state))
+    state.update(make_pre_synthesis_validation_node(False, excerpt_limits=synthesis_excerpt_limits(), decisions_client=make_decisions_client())(state))
 
     assert _pre_synthesis_route(state)[0] == "synthesize"
     assert state["retry"].terminal_failed_requirement_ids == [tasks[1].requirement_id]
     model = NaturalPartialModel()
-    state.update(make_synthesize_node(model, excerpt_limits=synthesis_excerpt_limits())(state))
+    state.update(make_synthesize_node(model)(state))
     state.update(make_post_synthesis_validation_node(False, decisions_client=make_decisions_client())(state))
     outcome = ResponseAssembler().assemble(response=state, debug_info={})
     delivered = []
@@ -129,9 +129,9 @@ def test_graph_bounds_search_recovery_and_body_repair_independently(repair_succe
         GraphState, add_user_message, lambda state: {},
         make_planner_node(initial, False, llm_planner_retry=rewrite),
         make_retrieve_dispatch_node(search, None, False),
-        make_synthesize_node(model, excerpt_limits=synthesis_excerpt_limits()),
+        make_synthesize_node(model),
         memory_policy=ConversationMemoryPolicy(),
-        pre_synthesis_validation_node=make_pre_synthesis_validation_node(False, decisions_client=make_decisions_client()),
+        pre_synthesis_validation_node=make_pre_synthesis_validation_node(False, excerpt_limits=synthesis_excerpt_limits(), decisions_client=make_decisions_client()),
         post_synthesis_validation_node=make_post_synthesis_validation_node(False, decisions_client=make_decisions_client()),
         action_postprocess_node=make_action_postprocess_node(lambda **kwargs: None, lambda **kwargs: None, False),
     )
@@ -179,9 +179,9 @@ def test_graph_keeps_independent_docs_when_upload_retriever_is_missing():
     graph = build_graph(
         GraphState, add_user_message, lambda state: {}, make_planner_node(initial, False, llm_planner_retry=rewrite),
         make_retrieve_dispatch_node(search, build_upload_search_tool(), False),
-        make_synthesize_node(model, excerpt_limits=synthesis_excerpt_limits()),
+        make_synthesize_node(model),
         memory_policy=ConversationMemoryPolicy(),
-        pre_synthesis_validation_node=make_pre_synthesis_validation_node(False, decisions_client=make_decisions_client()),
+        pre_synthesis_validation_node=make_pre_synthesis_validation_node(False, excerpt_limits=synthesis_excerpt_limits(), decisions_client=make_decisions_client()),
         post_synthesis_validation_node=make_post_synthesis_validation_node(False, decisions_client=make_decisions_client()),
         action_postprocess_node=make_action_postprocess_node(lambda **kwargs: None, lambda **kwargs: None, False),
     )

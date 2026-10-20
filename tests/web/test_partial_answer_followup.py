@@ -65,9 +65,9 @@ def _partial_manager(save, slack, model=None):
             "rewrites": [{"requirement_id": "upload", "query": "axis", "k": 2}],
         })),
         make_retrieve_dispatch_node(docs, build_upload_search_tool(), False),
-        make_synthesize_node(model or NaturalPartialModel(), excerpt_limits=synthesis_excerpt_limits()),
+        make_synthesize_node(model or NaturalPartialModel()),
         memory_policy=ConversationMemoryPolicy(),
-        pre_synthesis_validation_node=make_pre_synthesis_validation_node(False, decisions_client=make_decisions_client()),
+        pre_synthesis_validation_node=make_pre_synthesis_validation_node(False, excerpt_limits=synthesis_excerpt_limits(), decisions_client=make_decisions_client()),
         post_synthesis_validation_node=make_post_synthesis_validation_node(False, decisions_client=make_decisions_client()),
         action_postprocess_node=make_action_postprocess_node(save, slack, False),
     )

@@ -13,7 +13,6 @@ from src.core.llm_errors import ExecutionProblem, make_problem
 from src.core.request_contracts import check_answer_contract
 from src.runtime.nodes.retry import build_followup_from_routes, retrieval_subject
 from src.runtime.nodes.synthesis.fallbacks import build_synthesis_fallback
-from src.runtime.nodes.synthesis.evidence_selection import select_evidence_hits
 from src.runtime.nodes.validation.models import ValidationAssessment, ValidationSnapshot
 from src.runtime.nodes.validation.snapshot import detect_missing_requirement_coverage, detect_packet_coverage_gaps
 
@@ -159,11 +158,9 @@ def apply_validation_outcome(
                 and not recoverable_missing and has_required_citations):
             return checked_response_updates(result)
 
-    fallback_hits = select_evidence_hits(
-        user_input=snapshot.user_input, hits=snapshot.parsed_hits,
-        planner_output=snapshot.planner_output,
-    )
-    if fallback_hits:
+    # Only the exact approved ranges passed to generation are eligible for an
+    # excerpt fallback. Raw observations can contain rejected/unassessed text.
+    if snapshot.evidence_packet:
         retrieved_missing, packet_omitted = detect_packet_coverage_gaps(snapshot)
         if packet_omitted:
             retained_issues.append(ResponseIssue(
@@ -175,7 +172,7 @@ def apply_validation_outcome(
                 code="retrieved_evidence_incomplete",
                 message="검색한 원문에서 요청에 필요한 근거를 모두 확인하지 못했습니다.",
             ))
-        packet = list({hit.evidence.id: hit.evidence for hit in fallback_hits}.values())
+        packet = list({item.id: item for item in snapshot.evidence_packet}.values())
         result = build_synthesis_fallback(
             evidence_packet=packet, retrieval_required=True,
             message="요청한 답변을 충분히 구성하지 못해, 확인 가능한 원문 발췌를 제공합니다.",
@@ -192,10 +189,7 @@ def apply_validation_outcome(
             issues=issues,
         )
         result = add_retrieval_gap_issues(snapshot, result)
-        requirement_map: dict[str, list[str]] = {}
-        for hit in fallback_hits:
-            if hit.requirement_id:
-                requirement_map.setdefault(hit.evidence.id, []).append(hit.requirement_id)
+        requirement_map = {item.id: snapshot.evidence_requirement_map.get(item.id, []) for item in packet}
         return build_response_updates(result, attempt=attempt, evidence_packet=packet,
                                       evidence_requirement_map=requirement_map, kind="failure",
                                       problem=make_problem("evidence_insufficient", "retrieval") if retrieved_missing else

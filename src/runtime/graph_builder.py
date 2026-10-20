@@ -206,10 +206,6 @@ def build_agent_graph(settings: AppSettings | None = None):
         llm_synthesizer_compact=llm_registry.llm_synthesizer_compact,
         verbose=llm_registry.verbose,
         max_turns=memory_policy.low_water_turns,
-        excerpt_limits=ExcerptLimits(
-            normal_chars=app_settings.synthesis_prompt_snippet_chars,
-            compact_chars=app_settings.synthesis_compact_prompt_snippet_chars,
-        ),
     )
     synthesize_node = _instrument_stage_node(
         "synthesis",

@@ -15,8 +15,8 @@ from src.runtime.nodes.retrieval import make_retrieve_dispatch_node
 import pytest
 
 
-def test_dispatch_keeps_independent_official_sources_and_coverage_with_mixed_provider_results(monkeypatch):
-    """Each docs task retains only its own library's source and consistent coverage diagnostics."""
+def test_dispatch_keeps_independent_official_candidates_with_mixed_provider_results(monkeypatch):
+    """Each docs task retains its allowed library sources without claiming semantic coverage."""
     tasks = [
         RetrievalTask(route="docs", query="numpy.concatenate", k=2,
                       requirement={"library": "numpy", "symbols": ["numpy.concatenate"], "match": "definition"}),
@@ -63,7 +63,8 @@ def test_dispatch_keeps_independent_official_sources_and_coverage_with_mixed_pro
         assert hit.evidence.element.text == source["content"]
     diagnostics = result["debug"].retrieval_diagnostics
     assert {diagnostic.requirement_id for diagnostic in diagnostics} == {task.requirement_id for task in tasks}
-    assert all(diagnostic.answerability == "covered" and diagnostic.status == "success" for diagnostic in diagnostics)
+    assert all(diagnostic.answerability == "unknown" and diagnostic.status == "success" for diagnostic in diagnostics)
+    assert all(diagnostic.missing_requirements == [] for diagnostic in diagnostics)
     assert all(diagnostic.evidence_count == diagnostic.final_evidence_count == 1 for diagnostic in diagnostics)
     assert all(diagnostic.filtered_cross_domain_count == 1 for diagnostic in diagnostics)
     assert len(requests_seen) == 2

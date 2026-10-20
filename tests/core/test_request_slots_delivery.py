@@ -11,7 +11,7 @@ from src.runtime.nodes.synthesis import make_synthesize_node
 from src.runtime.nodes.validation import make_post_synthesis_validation_node
 from tests.core.helpers import make_decisions_client
 from tests.core.test_pending_action_delivery import delivery_tools
-from tests.synthesis_fixtures import synthesis_excerpt_limits
+from tests.synthesis_fixtures import prepare_synthesis_state
 
 
 class DocumentModel:
@@ -46,7 +46,8 @@ def _state(contract):
 
 
 def _prepare(state, model):
-    for node in (make_synthesize_node(model, excerpt_limits=synthesis_excerpt_limits()), make_post_synthesis_validation_node(False, decisions_client=make_decisions_client())):
+    prepare_synthesis_state(state)
+    for node in (make_synthesize_node(model), make_post_synthesis_validation_node(False, decisions_client=make_decisions_client())):
         state.update(node(state))
 
 

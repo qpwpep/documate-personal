@@ -8,7 +8,6 @@ from src.core.contracts import GraphState
 from src.core.contracts.boundary.debug import get_debug_state
 from src.core.contracts.boundary.runtime import get_runtime_state
 from src.infra.logging_utils import log_event
-from src.runtime.nodes.synthesis.budgets import ExcerptLimits, resolve_evidence_budgets
 from src.runtime.nodes.synthesis.context import build_synthesis_context, prepare_synthesis_inputs
 from src.runtime.nodes.synthesis.pipeline import run_synthesis_pipeline
 from src.runtime.nodes.synthesis.schema_adapter import build_structured_synthesizer
@@ -20,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 def make_synthesize_node(
     llm_synthesizer: Any, llm_synthesizer_compact: Any | None = None,
-    verbose: bool = False, max_turns: int = 6, *, excerpt_limits: ExcerptLimits,
+    verbose: bool = False, max_turns: int = 6,
 ):
     structured_synthesizer = build_structured_synthesizer(llm_synthesizer)
     structured_synthesizer_compact = (
@@ -35,11 +34,8 @@ def make_synthesize_node(
         immediate = maybe_short_circuit_synthesis(state=state, debug=debug, context=context, stage_started=started)
         if immediate is not None:
             return immediate
-        normal_budget, compact_budget = resolve_evidence_budgets(
-            plan=context.planner_output, limits=excerpt_limits,
-        )
         prepared = prepare_synthesis_inputs(
-            state=state, context=context, budget=normal_budget, max_turns=max_turns,
+            state=state, context=context, max_turns=max_turns,
         )
         emitter = get_runtime_state(state).progress_emitter
         if emitter is not None and hasattr(emitter, "emit_progress_snapshot"):
@@ -50,9 +46,10 @@ def make_synthesize_node(
         if verbose and prepared.history_before != prepared.history_after:
             log_event(logger, logging.INFO, "synthesize_trimmed_messages", before=prepared.history_before, after=prepared.history_after)
         compact = None
-        if llm_synthesizer_compact is not None:
+        if (llm_synthesizer_compact is not None and context.prepared_evidence is not None
+                and context.prepared_evidence.compact is not None):
             compact = prepare_synthesis_inputs(
-                state=state, context=context, budget=compact_budget, max_turns=max_turns,
+                state=state, context=context, max_turns=max_turns, compact=True,
             )
         outcome = run_synthesis_pipeline(
             structured_synthesizer=structured_synthesizer,

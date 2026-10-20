@@ -1,6 +1,7 @@
 """Partial Decisions failures retain approved sources across real graph nodes."""
 from __future__ import annotations
 
+from functools import partial
 import json
 
 import httpx
@@ -26,6 +27,9 @@ from tests.core.test_pending_action_delivery import _contract
 from tests.synthesis_fixtures import synthesis_excerpt_limits
 
 
+make_pre_synthesis_validation_node = partial(make_pre_synthesis_validation_node, excerpt_limits=synthesis_excerpt_limits())
+
+
 class DecisionProvider:
     """Replace provider HTTP; keep Decisions parsing and validation policies real."""
 
@@ -45,7 +49,7 @@ class DecisionProvider:
         payload = json.loads(request.content)
         context = json.loads(payload["input"])
         candidates = {item["name"]: item for item in context.get("evidence", [])}
-        requirements = {item["name"]: item for item in context.get("requirements", [])}
+        requirements = {item["name"]: item for item in context.get("requirements", []) if "task" in item}
         self.source_requests.extend(candidates.values())
         if requirements:
             self.requirement_requests.append(list(requirements.values()))
@@ -125,7 +129,7 @@ def _state(tasks, *, max_retries=1):
 
 def _synthesize(state):
     model = CitedBodyModel()
-    state.update(make_synthesize_node(model, excerpt_limits=synthesis_excerpt_limits())(state))
+    state.update(make_synthesize_node(model)(state))
     return model
 
 

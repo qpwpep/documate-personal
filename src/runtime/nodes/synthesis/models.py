@@ -6,6 +6,7 @@ from typing import Any
 from langchain_core.messages import BaseMessage
 
 from src.core.answer_schema import AnswerResponse
+from src.core.contracts.graph_state import PreparedEvidence
 from src.core.contracts.provenance import AnswerSource
 from src.core.evidence import EvidenceRef, SearchHit
 from src.core.llm_errors import ExecutionProblem, LLMDiagnostic
@@ -26,6 +27,7 @@ class SynthesisContext:
     request_contract: RequestContract | None
     source_response: AnswerResponse | None
     evidence_source: AnswerSource | None
+    prepared_evidence: PreparedEvidence | None = None
 
 
 @dataclass(slots=True)

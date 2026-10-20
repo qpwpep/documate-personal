@@ -4,15 +4,13 @@ from src.core.contracts import GraphState, RuntimeState
 from src.core.contracts.boundary.graph import get_retry_state
 from src.core.contracts.boundary.planner import get_planner_state
 from src.core.contracts.boundary.response import get_response_state
-from src.core.contracts.boundary.retrieval import accepted_search_hits, get_retrieval_state
+from src.core.contracts.boundary.retrieval import get_retrieval_state
 from src.core.contracts.boundary.runtime import get_runtime_state
 from src.core.contracts.provenance import AnswerSource
 from src.core.answer_schema import AnswerResponse
+from src.core.decisions import evidence_plan_fingerprint, prepared_packet_fingerprint
+from src.core.llm_errors import LLMCallError, make_problem
 from src.core.request_contracts import RequestContract, resolve_body_response
-from src.runtime.nodes.synthesis.budgets import RetrievedEvidenceBudget
-from src.runtime.nodes.synthesis.evidence_selection import (
-    missing_evidence_requirement_ids, select_evidence_hits, select_evidence_packet, tasks_for_hit,
-)
 from src.runtime.nodes.synthesis.models import PreparedSynthesisInputs, SynthesisContext
 from src.runtime.nodes.synthesis.prompt_builder import build_synthesis_messages
 
@@ -44,9 +42,26 @@ def build_synthesis_context(*, state: GraphState) -> SynthesisContext:
     planner = get_planner_state(state)
     retry = get_retry_state(state)
     retrieval = get_retrieval_state(state)
-    hits = accepted_search_hits(retrieval.hit_log[retry.hit_start_index:], retrieval)
+    hits = list(retrieval.hit_log[retry.hit_start_index:])
     plan = planner.output
     source_response = resolve_contract_source_response(runtime)
+    prepared = retrieval.prepared_evidence
+    contract = runtime.request_contract
+    needs_prepared = (
+        contract is not None and contract.can_prepare_body()
+        and not contract.can_acknowledge() and not contract.can_cancel_pending()
+        and planner.diagnostics.reason != "upload_retriever_missing"
+    )
+    if needs_prepared and (
+        prepared is None
+        or prepared.request_id != contract.request_id
+        or prepared.contract_revision != contract.revision
+        or prepared.plan_fingerprint != evidence_plan_fingerprint(plan)
+        or prepared.source_response_hash != (source_response.content_hash if source_response else None)
+        or any(packet.fingerprint != prepared_packet_fingerprint(packet.evidence, packet.requirement_map)
+               for packet in (prepared.normal, prepared.compact) if packet is not None)
+    ):
+        raise LLMCallError(make_problem("internal_error", "synthesis"))
     evidence_source = None
     if source_response is not None:
         # Capture the actual bound source before actions can replace or clear pending state.
@@ -63,37 +78,29 @@ def build_synthesis_context(*, state: GraphState) -> SynthesisContext:
         planner_blocked=planner.diagnostics.reason == "upload_retriever_missing",
         planner_output=plan,
         retrieval_required=bool(plan.use_retrieval and plan.tasks),
-        hits=select_evidence_hits(user_input=runtime.user_input, hits=hits, planner_output=plan),
+        hits=hits,
         request_contract=runtime.request_contract,
         source_response=source_response,
         evidence_source=evidence_source,
+        prepared_evidence=prepared,
     )
 
 
 def prepare_synthesis_inputs(
-    *, state: GraphState, context: SynthesisContext, budget: RetrievedEvidenceBudget,
-    max_turns: int,
+    *, state: GraphState, context: SynthesisContext, max_turns: int, compact: bool = False,
 ) -> PreparedSynthesisInputs:
     if context.request_contract is None or not context.request_contract.can_prepare_body():
         raise ValueError("synthesis requires a prepared body request")
-    requirements_by_evidence = {}
-    for hit in context.hits:
-        associated = requirements_by_evidence.setdefault(hit.evidence.id, {})
-        for task in tasks_for_hit(hit, context.planner_output):
-            associated.setdefault(task.requirement_id, task)
-    packet, requirement_ids = select_evidence_packet(
-        [hit.evidence for hit in context.hits],
-        budget=budget,
-        query=context.user_input,
-        requirements_by_evidence={key: list(tasks.values()) for key, tasks in requirements_by_evidence.items()},
-    )
-    if context.source_response is not None:
-        # Retrieval limits apply only to newly selected search evidence. A bound
-        # transformation source keeps its complete, immutable citation ranges;
-        # neither this merged packet nor the final prompt has an excerpt cap.
-        packet = list({item.id: item for item in [
-            *packet, *(citation.evidence for citation in context.source_response.citations),
-        ]}.values())
+    prepared = context.prepared_evidence
+    if prepared is None:
+        raise LLMCallError(make_problem("internal_error", "synthesis"))
+    selection = prepared.compact if compact else prepared.normal
+    if selection is None:
+        raise ValueError("compact evidence has not passed its own sufficiency checks")
+    # The pre-validation stage owns all selection and semantic sufficiency.
+    # Never shorten or re-rank an approved packet during message construction.
+    packet = list(selection.evidence)
+    requirement_ids = selection.requirement_map
     reference_aliases = {f"e{index}": source.id for index, source in enumerate(packet, 1)}
     retrieval_required = context.retrieval_required or bool(
         context.source_response and context.source_response.retrieval_required
@@ -117,7 +124,5 @@ def prepare_synthesis_inputs(
         reference_aliases=reference_aliases,
         model_messages=messages, history_before=before, history_after=after,
         request_contract=context.request_contract,
-        missing_requirement_ids=missing_evidence_requirement_ids(
-            context.planner_output, packet, requirement_ids,
-        ),
+        missing_requirement_ids=list(selection.failed_requirement_ids),
     )

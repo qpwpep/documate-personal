@@ -8,25 +8,25 @@ from src.core.documents import DocumentElement, build_snapshot
 from src.core.evidence import RetrievalScore, SearchHit, build_evidence
 from src.core.planner_schema import PlannerOutput, RetrievalTask
 from src.core.request_contracts import RequestContract
-from src.runtime.nodes.synthesis.budgets import RetrievedEvidenceBudget
 from src.runtime.nodes.synthesis.context import build_synthesis_context, prepare_synthesis_inputs
 from src.runtime.nodes.validation.assessment import assess_validation
 from src.runtime.nodes.validation.node import make_post_synthesis_validation_node
 from tests.core.helpers import make_decisions_client
 from src.runtime.nodes.validation.snapshot import build_validation_snapshot
+from tests.synthesis_fixtures import prepare_synthesis_state, synthesis_excerpt_limits
 
 
-def _prepare(tasks, hits, *, budget=6000, snippet=960, max_items=6):
+def _prepare(tasks, hits, *, snippet=960):
     plan = PlannerOutput(use_retrieval=True, tasks=tasks)
     state = build_graph_state_input(
         user_input="Compare the requested settings", planner=PlannerState(output=plan),
         request_contract=RequestContract(),
         retrieval={"hit_log": [hit.model_dump(mode="json") for hit in hits]},
     )
+    prepare_synthesis_state(state, limits=synthesis_excerpt_limits(normal_chars=snippet))
     context = build_synthesis_context(state=state)
     prepared = prepare_synthesis_inputs(
         state=state, context=context,
-        budget=RetrievedEvidenceBudget(max_excerpt_chars=snippet, max_total_excerpt_chars=budget, max_items=max_items),
         max_turns=6,
     )
     raw = str(prepared.model_messages[-1].content)
@@ -76,8 +76,8 @@ def _prompt_requirements(prepared):
     return json.loads(raw[raw.index("\n[") + 1:])
 
 
-def test_each_file_must_retain_its_own_aspects_in_the_prompt_and_final_citations():
-    """An aspect from one file cannot conceal its absence in another requested file."""
+def test_each_file_must_retain_its_own_literal_code_anchors_in_prompt_and_citations():
+    """Concrete code anchors from one file cannot conceal absence in another requested file."""
     task = RetrievalTask(route="upload", query="compare setup cleanup", k=2,
                          requirement={"file_ids": ["alpha", "beta"], "aspects": ["setup", "cleanup"]})
     hits = [_upload_hit(task, "alpha", "setup()\ncleanup()\n"), _upload_hit(task, "beta", "setup()\n")]
@@ -93,8 +93,10 @@ def test_each_file_must_retain_its_own_aspects_in_the_prompt_and_final_citations
         request_contract=contract, response_request_id=contract.request_id, response_contract_revision=contract.revision,
     )
 
-    assert _prompt_requirements(prepared)[0]["coverage"]["missing_aspects_by_file"] == {
-        "alpha": [], "beta": ["cleanup"]}
+    requirements = _prompt_requirements(prepared)[0]
+    assert requirements["requirement"]["aspects"] == ["setup", "cleanup"]
+    assert requirements["coverage"]["missing_file_ids"] == []
+    assert requirements["coverage"]["missing_aspects_by_file"] == {"alpha": [], "beta": ["cleanup"]}
     assert assess_validation(snapshot).failed_requirement_ids == {task.requirement_id}
 
 
