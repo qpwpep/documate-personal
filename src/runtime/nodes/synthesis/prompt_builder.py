@@ -11,7 +11,7 @@ from src.core.contracts.boundary.debug import get_debug_state
 from src.core.contracts.boundary.planner import get_planner_state
 from src.core.contracts.boundary.runtime import get_runtime_state
 from src.core.conversation_memory import build_untrusted_memory_prompt_messages
-from src.core.evidence import EvidenceRef, selected_source_anchors
+from src.core.evidence import EvidenceRef, selected_source_anchors, source_line_records
 from src.core.planner_schema import RetrievalTask
 from src.core.prompts import SYS_POLICY
 from src.core.request_contracts import RequestContract
@@ -32,7 +32,8 @@ Use excerpt with exactly one reference only when text equals that source's entir
 Headings and table labels are displayed content too: avoid unsupported factual headings.
 Preserve code indentation. Represent generated code examples with type=code and raw content.text without Markdown delimiters. Set inline=true for a single-line code span and inline=false for a displayed code block. When code blocks are forbidden, use code(inline=true) for single-line code examples. Keep exact source excerpts unchanged in paragraph content when that respects the format constraints; never flatten multiline source code into inline form. The language field is a single-line label without backticks. Generated code is an example, not an executed result.
 Every table row must have exactly as many cells as columns; each column label and cell is a content unit.
-Do not generate answer, claims, sections, confidence, citation numbers, source positions, or action receipts.
+Do not generate answer, claims, sections, confidence, citation numbers, source-position metadata, or action receipts.
+When the user asks for a file's line numbers, use the exact source_lines.line_number attached to the matching source text. These are original physical lines, including blank lines; never count lines in the excerpt or infer positions from formatting. Cite the matching code and explicitly identify the file. Prefer code(inline=true) for a one-line code answer, including copied original code. A line copied from a larger excerpt must use basis=source: being original code does not make it equal to the entire excerpt field. Do not expand a requested one-line answer to the whole file just to use basis=excerpt. An empty source_lines means exact line positions are unavailable: state that limit instead of inventing a number. Notebook line numbers are within the identified cell, not physical lines of the notebook JSON file. Copy the original code literally when identifying its location; generated or rewritten code has no original location.
 Never write placeholder references such as 'see above code' or '위 코드 참고'. Include the concrete content.
 If evidence is insufficient, clearly state the specific limitation. Do not invent sources or imply semantic verification.
 Source selections marked is_partial omit captured text. Do not infer that omitted information is absent from the original source.
@@ -216,6 +217,7 @@ def build_synthesis_messages(
             "capture_scope": item.snapshot.capture_scope,
             "quality_issues": list(item.snapshot.quality_issues),
             "source_locations": [anchor.model_dump(mode="json") for anchor in selected_source_anchors(item)],
+            "source_lines": source_line_records(item),
         }
         if item.element.table is not None and item.selection.cell_ids:
             selected_ids = set(item.selection.cell_ids)

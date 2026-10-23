@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import replace
 
@@ -20,6 +21,17 @@ logger = logging.getLogger(__name__)
 
 def _assess_route_failures(snapshot: ValidationSnapshot) -> ValidationAssessment:
     return assess_validation(snapshot)
+
+
+def _deterministic_issues(assessment: ValidationAssessment) -> dict[str, list[str]]:
+    """Return server-owned check codes without source text or model-provided refs."""
+    if assessment.checked_result is None:
+        return {}
+    return {
+        check.unit_id: list(dict.fromkeys(issue.split(":", 1)[0] for issue in check.issues))
+        for check in assessment.checked_result.checks
+        if check.unit_id in assessment.invalid_unit_paths and check.issues
+    }
 
 
 def _decide_retry_outcome(
@@ -63,10 +75,30 @@ def _decide_retry_outcome(
         )
         next_retry_context = next_retry_context.model_copy(update={"retrieval_feedback": retrieval_feedback})
     if assessment.invalid_unit_paths:
+        deterministic_issues = _deterministic_issues(assessment)
         retrieval_feedback += (
             f" Unsupported displayed units: {sorted(assessment.invalid_unit_paths)}."
             " Recheck each claim against only its own cited source excerpts; remove or repair unsupported claims."
         )
+        if deterministic_issues:
+            retrieval_feedback += (
+                " Deterministic check issues by displayed unit: "
+                + json.dumps(deterministic_issues, sort_keys=True)
+                + "."
+            )
+        issue_codes = {issue for issues in deterministic_issues.values() for issue in issues}
+        if "excerpt_does_not_match_source" in issue_codes:
+            retrieval_feedback += (
+                " For a partial quotation, preserve the supported literal text and use basis=source with its source ref."
+                " basis=excerpt requires text identical to the entire selected excerpt of exactly one referenced source,"
+                " including whitespace; a one-line quotation from a longer selection is not an exact excerpt."
+            )
+        if any(issue.startswith("source_location_") for issue in issue_codes):
+            retrieval_feedback += (
+                " Match each location claim's exact quoted source literal to source_lines.line_number."
+                " These are physical source lines, including blank lines; do not count excerpt lines or guess."
+                " If the source has no exact mapping, remove the unsupported location claim and state that limitation."
+            )
         next_retry_context = next_retry_context.model_copy(update={"retrieval_feedback": retrieval_feedback})
 
     local_errors: list[str] = []
@@ -141,6 +173,12 @@ def make_post_synthesis_validation_node(
                 evidence_count=len(snapshot.parsed_hits),
                 needs_retry=needs_retry,
                 retry_reason=assessment.retry_reason,
+                missing_content=assessment.missing_content,
+                deterministic_issues=_deterministic_issues(assessment),
+                semantic_failures={
+                    name: round(value, 4) for name, value in assessment.semantic_probabilities.items()
+                    if value < pass_threshold
+                },
             )
 
         _ = retrieval_feedback

@@ -11,7 +11,7 @@ from src.core.answer_schema import (
 )
 from src.core.answer_schema.models import validated_evidence_by_id
 from src.core.decisions import DecisionResult
-from src.core.evidence import EvidenceRef, selected_source_anchors
+from src.core.evidence import EvidenceRef, selected_source_anchors, source_line_records
 from src.core.llm_errors import LLMCallError, make_problem
 from src.core.python_source import PythonSourceMap
 from src.core.planner_schema import RetrievalTask
@@ -37,7 +37,9 @@ def _predicate_instructions(questions: list[dict[str, str]]) -> list[dict[str, s
         "not facts absent from the original. selection_scope describes parser-verified source boundaries. "
         "A whole requested definition can be fully selected even when is_partial is true because other file content "
         "was not selected. A clipped definition is not complete. Respect capture_scope and quality_issues; "
-        "source_locations identify known regions. "
+        "source_locations identify known regions. source_lines maps the selected original text to its exact physical line_number, including blank lines. "
+        "For every claimed file line position, compare the cited literal code or text with source_lines; never count excerpt lines or trust the answer's numbers. "
+        "When source_lines is empty, an exact original line claim is unsupported. Notebook lines are cell-local, not lines of the JSON file. "
         + question["instructions"]
     )} for question in questions]
 
@@ -92,6 +94,7 @@ def _source(evidence: EvidenceRef) -> dict[str, Any]:
         "capture_scope": evidence.snapshot.capture_scope,
         "quality_issues": list(evidence.snapshot.quality_issues),
         "source_locations": [anchor.model_dump(mode="json") for anchor in selected_source_anchors(evidence)],
+        "source_lines": source_line_records(evidence),
     }
     scope = _python_definition_scope(evidence)
     if scope is not None:

@@ -139,6 +139,11 @@ def apply_validation_outcome(
         if issue.unit_id is None
     ]
     if result is not None and assessment.invalid_unit_paths:
+        location_failed = any(
+            issue.startswith("source_location_")
+            for check in result.checks if check.unit_id in assessment.invalid_unit_paths
+            for issue in check.issues
+        )
         document = filter_document_units(result.content, assessment.valid_unit_paths)
         result = finalize_answer(
             document, packet, retrieval_required=result.retrieval_required,
@@ -148,6 +153,24 @@ def apply_validation_outcome(
                 message="근거로 충분히 뒷받침되지 않거나 원문과 일치하지 않는 내용을 제외했습니다.",
             )],
         )
+        if location_failed and document.blocks:
+            # Dropping a wrong location is not completing a location answer.
+            # Keep the useful body, but never promote it via another probabilistic
+            # verdict after the bounded source-position repair failed.
+            result = finalize_answer(
+                document, packet, retrieval_required=result.retrieval_required, actions=result.actions,
+                issues=[*result.issues, ResponseIssue(
+                    code="source_location_unverified",
+                    message="원본의 줄 위치를 정확히 확인하지 못한 내용을 제외했습니다. 출처에서 원문 위치를 확인해 주세요.",
+                )],
+            )
+            return build_response_updates(
+                result, attempt=attempt, evidence_packet=packet,
+                evidence_requirement_map=snapshot.evidence_requirement_map, kind="failure",
+                problem=make_problem("model_output_invalid", "validation"),
+                normal_evidence_missing_requirement_ids=snapshot.normal_evidence_missing_requirement_ids,
+                **stamp,
+            )
         valid_paths = {check.unit_id for check in result.checks if check.reference_status != "missing"}
         contract_check = check_answer_contract(snapshot.request_contract.answer, document, evidence=packet)
         missing_requirements = detect_missing_requirement_coverage(snapshot=snapshot, result=result, valid_unit_paths=valid_paths)
