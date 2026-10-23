@@ -565,8 +565,16 @@ def _previous_answer_state(body_kind, *, matching_revision=True):
 @pytest.mark.parametrize("factory", [make_pre_synthesis_validation_node, make_post_synthesis_validation_node])
 @pytest.mark.parametrize("body_kind", ["copy_answer", "transform_answer"])
 def test_answer_followups_send_bound_original_content_and_cited_sources(factory, body_kind):
-    """이전 답변의 복사·변환 검증은 해시뿐 아니라 결합된 원문과 인용 근거를 받는다."""
+    """새 의미 조건이 있는 복사·변환 검증은 결합된 원문과 인용 근거를 받는다."""
     state, previous = _previous_answer_state(body_kind)
+    if body_kind == "copy_answer":
+        contract = state["runtime"].request_contract
+        contract = RequestContract.model_validate({**contract.model_dump(mode="json"), "answer": {
+            "content": [{"kind": "custom", "mode": "required", "description": "추가 조건을 확인한다.",
+                         "evidence_ids": ["condition"]}],
+        }, "evidence": [{"id": "condition", "turn_id": "user:0", "quote": "추가 조건",
+                         "scope": "current_request", "interpretation": "instruction"}]})
+        state["runtime"] = state["runtime"].model_copy(update={"request_contract": contract})
     boundary = DecisionsBoundary()
 
     factory(False, decisions_client=boundary)(state)

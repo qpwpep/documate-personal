@@ -10,6 +10,7 @@ from src.core.answer_schema import (
     semantic_evidence_fingerprint,
 )
 from src.core.answer_schema.models import validated_evidence_by_id
+from src.core.answer_export import answer_export_snapshot, exact_copy_ready
 from src.core.decisions import DecisionResult
 from src.core.evidence import EvidenceRef, selected_source_anchors, source_line_records
 from src.core.llm_errors import LLMCallError, make_problem
@@ -169,6 +170,13 @@ def assess_post_semantics(
     if result is None or snapshot.response_kind in {"clarification", "acknowledgement", "failure"}:
         return
     _require_bound_source(snapshot, stage="post_synthesis_validation")
+    if not snapshot.retrieval_required and exact_copy_ready(snapshot.request_contract, snapshot.source_response):
+        source = answer_export_snapshot(snapshot.source_response)
+        if answer_export_snapshot(result) != source:
+            raise LLMCallError(make_problem("model_output_invalid", "post_synthesis_validation"))
+        # Retain the original semantic report, including limits on a previously
+        # displayed partial answer. This check certifies copying, not new claims.
+        return
     sources = validated_evidence_by_id(snapshot.evidence_packet)
     units = list(iter_content_units(result.content))
     questions = []

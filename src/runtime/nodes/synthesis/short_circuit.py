@@ -4,6 +4,7 @@ import time
 from typing import Any
 
 from src.core.answer_schema import finalize_answer, text_document
+from src.core.answer_export import answer_export_snapshot
 from src.core.answer_schema.fallbacks import build_grounded_document
 from src.core.contracts import GraphState
 from src.core.latency import elapsed_ms, make_stage_latency_event
@@ -74,7 +75,7 @@ def maybe_short_circuit_synthesis(
             kind = "clarification"
         else:
             packet = [citation.evidence for citation in previous.citations]
-            result = finalize_answer(previous.content, packet, retrieval_required=previous.retrieval_required, issues=previous.issues)
+            result = answer_export_snapshot(previous)
             mode = "reuse_bound_answer"
     elif (
         context.retrieval_required and context.prepared_evidence is not None

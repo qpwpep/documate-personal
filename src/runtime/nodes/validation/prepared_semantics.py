@@ -6,6 +6,7 @@ from dataclasses import replace
 from typing import Any
 
 from src.core.answer_schema.models import validated_evidence_by_id
+from src.core.answer_export import exact_copy_ready
 from src.core.contracts.graph_state import DecisionCacheEntry, EvidenceVerdict, PreparedEvidence, PreparedEvidencePacket
 from src.core.decisions import DecisionResult, decision_fingerprint, evidence_plan_fingerprint, prepared_packet_fingerprint
 from src.core.evidence import SearchHit
@@ -264,6 +265,22 @@ def assess_pre_semantics(
     excerpt_limits: ExcerptLimits,
 ) -> None:
     _require_bound_source(snapshot, stage="pre_synthesis_validation")
+    if not snapshot.retrieval_required and exact_copy_ready(snapshot.request_contract, snapshot.source_response):
+        # The body already exists. Check its exact revision instead of asking a
+        # model whether this export needs a newly generated answer.
+        source = snapshot.source_response
+        packet = [citation.evidence for citation in source.citations]
+        prepared = PreparedEvidencePacket(evidence=packet,
+            fingerprint=prepared_packet_fingerprint(packet, {}))
+        assessment.prepared_evidence = PreparedEvidence(
+            request_id=snapshot.request_contract.request_id,
+            contract_revision=snapshot.request_contract.revision,
+            plan_fingerprint=evidence_plan_fingerprint(snapshot.planner_output),
+            source_response_hash=source.content_hash, model="deterministic-exact-copy",
+            prompt_fingerprint=decision_fingerprint("exact-answer-export-v1"), threshold=threshold,
+            normal=prepared, compact=prepared,
+        )
+        return
     validated_evidence_by_id([hit.evidence for hit in snapshot.parsed_hits])
     normal_budget, compact_budget = resolve_evidence_budgets(plan=snapshot.planner_output, limits=excerpt_limits)
     context = _decision_context(snapshot)
