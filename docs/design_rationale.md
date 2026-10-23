@@ -36,6 +36,8 @@ planner와 synthesis에 전달되는 summary는 과거 사용자 입력에서 �
 
 실행 노드는 명시적으로 요청된 행동, 확정된 본문·목적지, 계약 검사를 통과한 `ResponseState.kind="answer"`와 일치하는 요청 ID·revision을 요구합니다. 초안·보충 질문·실패 안내는 전달하지 않습니다. 계약 누락이나 파싱 오류를 정규식으로 복구하는 경로는 없습니다. 목적지 설정은 전송 의사를 만들지 않습니다. 수신자 의도는 미지정·근거가 있는 명시 선택·미해결 입력으로 나누고, 기본값은 진짜 미지정에만 적용합니다. 선택 정책을 통과한 단일 선택자만 Slack 계층에 넘기며 조회·전송 계층에는 기본값을 전달하지 않습니다. 조회 실패는 원래 선택자의 구조화된 실패이고 새로운 선택의 계기가 아닙니다.
 
+Slack 입력 초안은 `RecipientInput`으로 받아 일반 질문과 분리합니다. 선택한 유형의 값이 비어 있거나 형식이 잘못되어도 일반 답변은 진행하며, 실제 전송을 요청할 때 `RecipientSelector`로 검증합니다. 잘못된 명시 입력을 `null`이나 미지정으로 바꾸지 않으므로 기본 수신자로 우회하지 않습니다. 전송이 보류되면 준비된 답변과 입력 실패를 함께 보존하고, 사용자가 수신자를 고친 뒤 해당 전송만 이어갈 수 있습니다.
+
 ### 검색 소스와 근거 요구의 분리
 
 검색 소스는 `docs`, `upload` route로 분리했습니다. 공식 문서 검색과 세션 업로드 파일 검색은 데이터 출처와 확인 기준이 다르기 때문입니다. route는 도구 선택 기준이고, 답변에 필요한 근거의 단위는 `RetrievalTask`입니다. NumPy와 pandas를 비교하는 질문처럼 같은 route에 여러 대상이 있어도 task를 합치지 않습니다. 계획은 독립 task를 개수 상한으로 잘라내지 않고 유지하며 `requirement_id`로 검색·재시도·본문 근거를 연결합니다.
@@ -116,9 +118,11 @@ Streamlit은 `AnswerResponse` 전체를 채팅 기록에 보존하고, 각 블�
 
 서버는 도구 반환값을 받기 전에 저장 operation의 바인딩 hash를 `answer_provenance.save_operation_binding_sha256`에 고정합니다. 평가기는 이 독립된 값과 receipt·다운로드의 operation 바인딩을 비교합니다. 파일 bytes만 맞는 다른 작업의 성공 receipt도 통과시키지 않기 위한 연결이며, 전체 이벤트 저장소나 새로운 본문 생성 모델을 추가하지 않습니다.
 
-시각 기반 파일명 대신 저장 의무별 ID를 사용하고 기존 이름을 교체하지 않는 파일 생성으로 덮어쓰기를 차단합니다. 완전히 쓴 staging을 검증한 뒤 manifest 예약과 payload 공개를 수행하며, manifest와 실제 파일이 모두 맞아야 성공입니다. 같은 operation과 bytes의 재시도는 같은 artifact를 반환하고, 다른 bytes의 재사용은 충돌로 거절합니다. 만료 뒤에는 payload만 정리하고 manifest를 남겨 기한 연장과 재생성을 막습니다. 작은 로컬 저장소에 필요한 원자성·재시도 확인을 파일 하나의 메타데이터로 처리하며 DB, 범용 event store, 전체 HTTP 요청의 exactly-once 처리는 추가하지 않았습니다.
+시각 기반 파일명 대신 저장 의무별 ID를 사용하고 기존 이름을 교체하지 않는 파일 생성으로 덮어쓰기를 차단합니다. 완전히 쓴 staging을 검증한 뒤 manifest 예약과 payload 공개를 수행하며, manifest와 실제 파일이 모두 맞아야 성공입니다. 같은 operation과 bytes의 재시도는 같은 artifact를 반환하고, 다른 bytes의 재사용은 충돌로 거절합니다. 만료 뒤에는 payload만 정리하고 manifest를 남겨 기존 artifact의 기한 연장과 같은 operation의 재생성을 막습니다. 서버에 답변 snapshot이 남아 있고 사용자가 다시 내보내기를 요청하면, 검증된 이전 manifest의 만료를 확인한 뒤 별도 operation의 새 export 세대를 만들 수 있습니다. 이전 파일·tombstone·만료 시각은 바꾸지 않으며 손상·불일치·미확인 상태를 새 세대로 우회하지 않습니다. 작은 로컬 저장소에 필요한 원자성·재시도 확인을 파일 하나의 메타데이터로 처리하며 DB, 범용 event store, 전체 HTTP 요청의 exactly-once 처리는 추가하지 않았습니다.
 
 저장 operation의 수명은 대화 revision과 구분합니다. 계약 병합은 본문 유지와 교체를 판정하고, 본문 교체를 수락할 때 준비 상태와 이전 저장 연결을 함께 해제합니다. 새 본문이 확인 질문을 거쳐 나중에 완성되어도 새 저장 의무가 되며, 같은 본문 재시도와 목적지 정정은 동결된 operation을 유지합니다. 액션 실행은 이 상태를 소비하고 실제 hash·bytes를 검사합니다. 해시 불일치만 보고 새 operation을 만드는 방식은 의도하지 않은 본문 변경을 숨길 수 있으므로 사용하지 않습니다.
+
+화면에서 선택한 답변의 TXT 저장은 `answer_id`에 연결된 서버 snapshot을 사용합니다. `POST /sessions/{session_id}/answers/{answer_id}/save`는 본문을 다시 생성하거나 Slack을 실행하지 않고, 당시 본문·출처·검사·제한을 보존한 공통 exporter를 호출합니다. snapshot은 등록·조회 시 깊은 복사로 격리하고 기존 실행 receipt만 제외합니다. 세션은 snapshot별 현재 저장 operation을 고정하므로, 답변 생성과 저장을 함께 요청했다가 실패한 뒤 직접 재시도하거나 같은 원문을 자연어로 다시 저장해도 원래 artifact에 연결됩니다. 검증된 artifact 만료로 새 세대가 선택된 경우에는 이후 재시도도 그 세대에 고정합니다. 저장 실패나 이후 대화의 답변은 저장 원본을 바꾸지 않습니다. 자연어 저장 실패는 원래 본문을 유지한 `partial`·`save_failed`로 전달하고, 직접 저장 API는 같은 snapshot과 실패 receipt를 반환합니다. 같은 준비 본문의 보류 저장을 완료하면 그 저장 의무만 해소하고 남은 Slack 의무는 유지합니다. 서버 세션이나 답변 snapshot이 사라진 경우에는 기록을 새로 만들거나 화면의 본문을 신뢰해 대신 저장하지 않습니다.
 
 staging 생성·공개·회수는 인프라 저장소가 소유합니다. 출력 디렉터리별 OS 잠금으로 짧은 파일 쓰기 구간과 정리를 조정하여, 정리자가 잠금을 얻었을 때 남은 staging만 회수합니다. 프로세스 중단과 임시 파일 삭제 실패를 같은 회수 경로로 처리하고, 본문 데이터가 임시 하드 링크에 남아 TXT 만료 뒤에도 보존되는 것을 막습니다. 현재의 작은 로컬 텍스트 저장에서는 쓰기를 직렬화하는 비용을 받아들이고 작업별 lease·heartbeat·별도 정리 큐를 두지 않습니다. 정리 실행 주기는 웹 런타임이 관리하며 기존 artifact 만료 시각과 manifest 보존 규칙은 유지합니다.
 
@@ -156,7 +160,7 @@ FastAPI는 실제 API 실행과 세션 관리를 담당하고, Streamlit은 사�
 
 `SessionContext`는 최근 messages, `memory_summary`, 발화 ID와 원문의 `user_turns`를 하나의 immutable conversation snapshot으로 소유합니다. 발화 ID는 요청 진입에서 한 번 부여하고 projection·길이 제한·재시도에서 유지합니다. 원문은 최근 16개와 보류 계약이 참조하는 발화를 보존하며 요약이나 잘린 표시 문자열로 대체하지 않습니다. summary·messages의 기존 byte 예산은 대화 부분에 적용하고 원문 ledger와 보류 본문은 별도 상태로 관리합니다. graph가 반환한 전체 메시지는 먼저 debug와 response assembly가 사용합니다. 사용자가 볼 응답까지 정상적으로 조립된 뒤에만 Tool/System/중간 AI를 제거하고 각 Human turn과 canonical final AI를 남겨 원문 ledger와 함께 단일 참조 교체로 commit합니다. graph, debug, assembly, projection 중 하나라도 실패하면 이전 정상 snapshot은 그대로 유지됩니다. 이 원자성은 대화 메모리에 한정되며 이미 실행된 파일 저장·Slack 전송 같은 외부 side effect까지 rollback하지는 않습니다.
 
-Streamlit과 online benchmark는 `POST /agent/stream`으로 같은 진행 이벤트와 최종 응답을 받습니다. 전송 계층은 `final_response.data`의 실행 상태, 답변 또는 안내, 오류 진단과 `upload_manifest`를 전달합니다. `completed`·`partial`·`needs_input`에는 세션 락 안에서 확보한 실제 epoch·revision·파일 목록이 필수이며, 확인된 빈 첨부는 `files=[]`로 표현합니다. 모델 실패 때도 스냅샷을 확보했다면 반환하지만, `failed`·`refused`에서 확인 스냅샷이 없으면 manifest가 `null`일 수 있습니다. UI는 검증된 스냅샷을 다음 질문의 context로 적용하므로, 정상 종료 명령으로 epoch가 바뀌어도 명령별 UI 처리나 별도 성공 후 GET이 필요하지 않습니다. benchmark는 답변·trace·debug와 오류 진단을 결과에 보존하고, Streamlit은 최종 `AnswerResponse`와 오류 메시지는 대화 기록에, manifest는 첨부 상태에 보관합니다. HTTP `200`이나 `done`만으로 성공을 판정하지 않으며, `error` 뒤에 유효한 최종 응답이 오면 앞선 오류 진단과 최종 결과를 모두 보존합니다.
+Streamlit과 online benchmark는 `POST /agent/stream`으로 같은 진행 이벤트와 최종 응답을 받습니다. 전송 계층은 `final_response.data`의 실행 상태, 답변 또는 안내, 오류 진단과 `upload_manifest`를 전달합니다. `completed`·`partial`·`needs_input`에는 세션 락 안에서 확보한 실제 epoch·revision·파일 목록이 필수이며, 확인된 빈 첨부는 `files=[]`로 표현합니다. 모델 실패 때도 스냅샷을 확보했다면 반환하지만, `failed`·`refused`에서 확인 스냅샷이 없으면 manifest가 `null`일 수 있습니다. 공용 클라이언트는 검증된 스냅샷을 context로 적용하고, Streamlit은 기존 대화의 epoch가 바뀌면 화면 기록을 읽기 전용으로 전환합니다. benchmark는 답변·trace·debug와 오류 진단을 결과에 보존하고, Streamlit은 최종 `AnswerResponse`와 오류 메시지는 대화 기록에, manifest는 첨부 상태에 보관합니다. HTTP `200`이나 `done`만으로 성공을 판정하지 않으며, `error` 뒤에 유효한 최종 응답이 오면 앞선 오류 진단과 최종 결과를 모두 보존합니다.
 
 서버 응답 모델과 공용 클라이언트는 상태별 결과와 manifest를 함께 검증합니다. `completed`·`partial`·`needs_input`의 manifest 누락·`null`은 계약 위반이며, `failed`·`refused`에서는 미확인 상태인 `None`으로 허용합니다. manifest 객체를 제공했다면 모든 상태에서 필수 필드와 타입을 검증하고 잘못된 객체를 빈 manifest로 보정하지 않습니다. 클라이언트 내부의 `manifest=None`은 사용할 수 있는 서버 확인 스냅샷이 없다는 뜻으로 유지합니다. 초기 미조회, 유효한 실패·거절 결과의 `null` manifest, timeout·응답 유실·계약 위반 이후에는 모두 GET 확인이 필요하므로 별도 상태 enum을 추가하지 않습니다. 확인된 빈 첨부는 완전한 manifest로 표현해 미확인 상태와 혼동하지 않습니다. UI의 수동 새로고침·첨부 동기화·재검토 실패도 동일하게 확인값을 무효화하고, GET 실패 시 질문을 차단합니다. 조회 성공은 현재 첨부 상태만 복구하며 거부한 답변의 성공 여부를 바꾸지 않습니다. 질문이나 첨부 변경은 자동 재실행하지 않아 이미 실행된 저장·Slack 전송이나 업로드 변경이 중복되지 않도록 합니다.
 
@@ -214,6 +218,8 @@ planner와 synthesis는 구조화 모델 호출 경로를 사용하며 provider 
 
 upload의 `topic` 검색은 vector 후보를 identifier·keyword·parameter signal로 rerank하고 명시한 심볼도 literal anchor로 평가합니다. 명시한 파일별 후보를 확보하는 어댑터가 한 검색 호출의 쿼리 임베딩을 계산하고 파일별 조회에 공유합니다. 벡터 재사용은 그 호출 안에 한정하며 파일별 후보 예약, 원시 거리 기반 추가 후보 선택, 후속 정렬과 인용 의미를 유지합니다. `symbol`·`definition`은 전체 source registry의 AST 조회로 top-k 후보 밖의 범위도 찾습니다. 사용과 정의를 구분하고, 정의의 decorator·본문·Notebook cell 및 정확한 원문 offset을 유지합니다. source 전체를 확인할 수 없으면 부재를 단정하지 않고 `unknown`으로 남깁니다. 이 경로는 임의의 유사도 임계값 없이 이름이 없는 함수의 오발췌를 막으며 source에 명시된 정적 코드 범위만 확인합니다.
 
+원본의 물리적 줄 번호는 모델이 발췌를 다시 세어 만드는 정보가 아닙니다. 정확한 원문 anchor와 변경하지 않은 문자열에서 `source_lines`를 계산해 합성과 Decisions에 함께 제공합니다. LF·CRLF·CR과 빈 줄을 보존하며 부분 발췌의 시작 줄을 1로 다시 매기지 않습니다. 명시적인 원문 줄 위치 주장은 연결된 원문 literal의 실제 위치와 결정적으로 대조합니다. 제한된 보정 뒤에도 위치를 확인하지 못하면 틀린 주장을 제외하고 미완료로 남기며, 나머지 본문만으로 완료 상태를 만들지 않습니다. 화면과 TXT도 같은 선택 범위의 좌표를 사용하고, 정확한 매핑이 없으면 원문 요소의 알려진 위치와 발췌의 위치 불명을 구분합니다. Notebook의 줄은 파일 JSON이 아닌 해당 셀의 원문 줄입니다.
+
 문서 재첨부 비용은 세션별 변환·문서 임베딩 캐시로 줄입니다. 변환 키에는 원본 해시·형식·추출 설정·어댑터와 runtime 버전·모델 파일 해시를, 임베딩 키에는 정확한 청크 텍스트와 청킹·임베딩 모델 설정까지 반영합니다. query 임베딩은 디스크에 캐시하지 않습니다. 변환 캐시를 읽을 때 현재 원본 bytes·파일명·source URI로 새 snapshot을 만들므로 다른 이름의 첨부에 이전 파일 ID나 인용을 재사용하지 않습니다. 현재 입력·페이지·출력 한도도 다시 검사합니다. TTL·용량 한도로 보관 비용을 제한하며 캐시 손상이나 쓰기 실패가 정상 변환 결과를 무효화하지 않게 했습니다.
 
 새 검색 근거 예산은 설정 입력, 고정 정책, 실행 예산을 구분합니다. `AppSettings`가 일반·compact snippet 기본값을 소유하고 graph가 `ExcerptLimits`로 사전 검증에 전달합니다. `resolve_evidence_budgets()`는 계획과 설정에서 두 `RetrievedEvidenceBudget`을 계산합니다. 일반/compact 총 excerpt 예산은 docs+upload 혼합에 8,000/4,000자, 그 외에 6,000/3,000자입니다. 두 총량을 고정 쌍으로 두어 일반 총량 변경이 timeout 복구 비용까지 자동으로 늘리지 않게 합니다. compact의 개별 상한은 두 snippet 설정 중 작은 값이며 항목 상한은 일반과 같습니다.
@@ -260,6 +266,8 @@ runner는 graph의 마지막 적용 상태를 보관하여 후속 노드가 실�
 
 업로드 파일 검색과 대화 상태는 세션 단위로 다룹니다. 세션별 manager cache, TTL/LRU 정리, 요청 lock을 두어 한 사용자의 업로드나 실행 상태가 다른 흐름과 섞이지 않게 관리합니다. close, exit, TTL/LRU eviction은 messages와 summary를 함께 제거합니다. 현재 store는 process-local in-memory 구현이므로 서버 재시작이나 여러 worker 사이에서 대화 상태를 복원하지는 않습니다.
 
+Streamlit은 현재 브라우저 세션 안에서 여러 대화를 보관하고 전환합니다. 새 채팅은 이전 화면 기록을 지우지 않고 새 대화 ID와 클라이언트를 추가합니다. 메시지·보류 질문·첨부 변경·Slack 입력 초안은 대화별로 격리하며 테마는 공통 설정으로 유지합니다. 실행 중에는 대화 전환을 막고, 전환 시 보류 작업을 자동 실행하지 않습니다. 다시 선택한 대화는 서버 manifest를 조회해 epoch를 비교합니다. TTL/LRU·서버 재시작·명시적 종료로 epoch가 바뀌면 기존 메시지와 당시 출처만 읽을 수 있고 질문·저장·전송·첨부 변경은 차단합니다. 연결 확인 실패는 만료와 구분해 기록을 보존하고 재확인 동작을 제공합니다. 새로고침·탭 재접속 이후 복원은 보장하지 않으며, UI 기록 보존이 backend 세션이나 첨부의 수명을 연장하지 않습니다.
+
 활성 첨부의 단일 기준은 `SessionContext`이며 공개 manifest는 그 상태의 스냅샷입니다. `UploadService`는 첨부 추가·교체·해제의 검증과 후보 commit을, `AgentRequestService`는 락 안의 context 검사·실행·완료 snapshot을 담당합니다. store에는 세션과 자원 수명 관리만 남기고 런타임은 확정된 검색 자원을 사용합니다. 질문이 파일 경로를 해석하거나 첨부를 암묵적으로 해제하지 않으므로, 파일 수와 형식에 관계없이 같은 첨부 계약으로 실행할 수 있습니다.
 
 업로드는 `uploads/<session_id>/...` 안의 지원 형식만 소유하며, 새 문서 형식 접수 여부는 Docling 활성화 설정으로 결정합니다. 형식 목록은 [`upload_formats.py`](../src/core/upload_formats.py)를 공유하고 기능을 꺼도 기존 관리 원본의 소유권·정리 범위는 유지합니다. 모든 형식은 첨부 목록 API로 추가합니다. 세션 디렉터리 밖 경로는 `resolve_upload_input_path()`에서 차단하고, 다운로드도 `output/save_text` 아래 상대 경로만 허용합니다. UI의 staging은 불변 bytes와 SHA-256을 묶은 재시도 입력이고, 서버는 요청 hash와 검증한 bytes가 일치할 때 그 bytes로 관리 복사본을 만듭니다. 관리 원본과 인덱스는 후보 생성 중에는 변경 작업이, 확정 후에는 세션이 소유합니다. 확정·종료는 공통 자원 교체·해제를 사용하되 후보 실패는 신규 자원만, 성공한 교체는 새 집합이 사용하지 않는 이전 자원만 해제합니다. 답변 실패는 확정 첨부를 해제하지 않습니다.
@@ -287,4 +295,3 @@ DocuMate의 다음 개선 방향은 더 많은 기능을 붙이는 것보다, �
 - benchmark fixture를 주기적으로 보강해 공식 문서 검색, 업로드 검색, tool action 흐름의 회귀 범위를 넓힙니다.
 - rolling summary의 사실 보존율을 장기 대화 전용 eval fixture로 계측하고, 모델별 tokenizer를 알 수 있을 때 현재 보수적 추정기를 교정합니다.
 - 인증·소유권과 암호화를 포함한 외부 session store가 필요해지면 process restart와 multi-worker를 지원하는 별도 persistence 계층을 도입합니다.
-- Streamlit의 새 대화 동작이 이전 backend session을 TTL까지 남겨 두지 않고 즉시 폐기하도록 reset API의 동시성·멱등성 계약을 설계합니다.

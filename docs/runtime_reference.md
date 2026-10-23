@@ -336,11 +336,14 @@ Docling 어댑터는 제목 계층·표 셀·병합·페이지·위치를 기존
 
 - `save_text` 결과: `output/save_text/response_<artifact_id>.txt`와 `<filename>.json` operation manifest
 - 다운로드 엔드포인트: `GET /download/{filename}`
+- 선택한 답변의 직접 저장: `POST /sessions/{session_id}/answers/{answer_id}/save`
 - 세션 업로드 정리: `SESSION_TTL_SECONDS`
 - 생성 파일 정리: `GENERATED_FILE_TTL_SECONDS`
 - 정리 로직: `src/app/web/cleanup.py::RuntimeCleaner`
 
 서버는 검증된 답변을 출처·참고 및 제한까지 포함해 UTF-8 BOM bytes로 고정하고 `SaveOperation`에 세션·요청·대상 원본·본문 hash·export profile·bytes hash·크기를 연결합니다. 저장소는 시각 대신 세션과 저장 operation ID로 artifact identity와 파일명을 결정합니다. 같은 operation의 재시도는 같은 manifest와 파일을 확인해 반환하며, 다른 bytes나 요청으로 ID를 재사용하면 `idempotency_conflict`입니다. 다른 저장 의무는 다른 파일을 만들어 앞선 답변을 보존합니다.
+
+답변별 TXT 버튼은 서버가 발급한 `answer_id`를 전달해 당시 답변 snapshot을 저장합니다. 본문·출처·검사·제한을 다시 생성하지 않고 기존 실행 receipt만 제외한 뒤 공통 exporter를 사용합니다. 세션의 `answer_export_operations`는 snapshot fingerprint별 현재 operation을 고정합니다. 생성과 저장을 함께 요청한 `compose`의 저장 실패 뒤 직접 재시도하고 같은 원문을 자연어로 반복 저장해도 원래 operation과 artifact를 재사용합니다. artifact의 검증된 만료로 새 세대를 선택한 경우에만 이 연결을 새 operation으로 옮깁니다. 저장 실패는 별도 receipt에 남기며 기존 답변이나 snapshot을 실패 안내로 교체하지 않습니다. 자연어 저장의 쓰기 실패는 원래 본문과 함께 `status="partial"`, `problem.code="save_failed"`를 반환합니다. 이후 대화가 진행되어도 직접 재시도는 선택했던 `answer_id`의 원본을 사용합니다. 새 내용이나 새로운 의미 조건을 요구하는 수정·번역은 이 단순 내보내기와 구분하여 원래 답변 생성·검증 경로를 따릅니다.
 
 저장 도구를 직접 호출하면서 `operation`을 생략하면 같은 본문이라도 매 호출 새 operation과 별도 파일을 만듭니다. 같은 저장을 재시도하려면 반환값의 `operation`을 `SaveOperation`으로 복원해 같은 본문과 함께 명시적으로 전달해야 합니다.
 
@@ -350,7 +353,7 @@ Docling 어댑터는 제목 계층·표 셀·병합·페이지·위치를 기존
 
 저장과 생성 파일 정리는 같은 출력 디렉터리의 OS 파일 잠금을 공유합니다. 저장자는 staging 생성 전부터 최종 검증과 임시 파일 삭제 시도까지 잠금을 유지하며, 정리자는 잠금이 사용 중이면 이번 생성 파일 정리를 건너뜁니다. 잠금을 획득한 정리자는 중단된 저장이나 삭제 실패로 남은 `.save-<uuid>.part`를 회수하고 기존 TXT 만료 정책을 적용합니다. staging은 재시도 입력이 아니므로 나이로 활성 여부를 추정하거나 artifact TTL까지 보관하지 않습니다. 잠금 관리 파일은 삭제하지 않으며 프로세스 종료 시 OS가 잠금 소유권을 해제합니다. 종료 직후의 해제 지연도 고려해 프로세스 종료 여부가 아닌 실제 잠금 획득 성공을 회수 기준으로 삼습니다. 회수는 서버 시작과 이후 요청에서 실행되는 기존 정리 주기에 따르며, 서버가 유휴 상태일 때 별도 백그라운드 정리를 실행하지는 않습니다.
 
-`GENERATED_FILE_TTL_SECONDS`는 최초 저장의 `expires_at`을 정합니다(기본 86,400초). 재시도·파일 mtime 변경으로 기한이 연장되지 않으며 다운로드도 정리 실행 여부와 무관하게 만료를 적용합니다. 정리는 만료 payload를 삭제하고 작은 manifest를 tombstone으로 유지해 만료된 operation의 재생성을 막습니다. manifest 없는 기존 TXT는 종전 mtime TTL로 정리하지만 새 다운로드 API에서는 검증된 저장으로 취급하지 않습니다. 같은 operation ID로 저장소를 다시 조회·재시도할 수 있지만, 세션과 HTTP 질문 전체를 재시작 후 동일하게 재생하는 exactly-once API는 제공하지 않습니다.
+`GENERATED_FILE_TTL_SECONDS`는 각 artifact 최초 저장의 `expires_at`을 정합니다(기본 86,400초). 재시도·파일 mtime 변경으로 기존 기한이 연장되지 않으며 다운로드도 정리 실행 여부와 무관하게 만료를 적용합니다. 정리는 만료 payload를 삭제하고 작은 manifest를 tombstone으로 유지해 같은 operation의 재생성을 막습니다. 서버 세션과 답변 snapshot이 살아 있는 동안 사용자가 직접 또는 자연어로 다시 내보내기를 요청하면, 이전 manifest의 바인딩과 만료를 확인한 뒤 새 operation ID·contract revision의 export 세대를 만듭니다. 새 파일은 자체 TTL을 가지며 이전 파일·tombstone·만료 시각은 그대로입니다. 새 세대의 저장 실패 후 재시도도 그 세대의 operation을 유지합니다. manifest가 손상되었거나 바인딩이 다르거나 만료를 확인하지 못한 경우에는 새 세대로 우회하지 않습니다. manifest 없는 기존 TXT는 종전 mtime TTL로 정리하지만 새 다운로드 API에서는 검증된 저장으로 취급하지 않습니다. backend 세션이나 답변 snapshot 자체가 만료된 경우에는 새 세대도 만들 수 없으며, 세션과 HTTP 질문 전체를 재시작 후 동일하게 재생하는 exactly-once API는 제공하지 않습니다.
 
 ## 4. 대화 메모리 정책
 
@@ -398,7 +401,9 @@ graph 실행, debug 수집, response assembly, projection 또는 budget 검사�
 - `exit`/`quit`/`q`, manager close, TTL/LRU eviction은 messages와 summary를 함께 초기화합니다.
 - 서로 다른 session은 snapshot을 공유하지 않습니다.
 - 현재 store는 in-memory이므로 process restart와 multi-worker 사이에서 대화 상태를 복원하지 않습니다.
-- Streamlit의 새 대화는 새 session ID를 발급해 즉시 격리하지만 이전 backend entry는 TTL/LRU까지 남을 수 있습니다.
+- Streamlit은 현재 브라우저 세션 안에서 여러 대화의 표시 기록과 클라이언트를 보관합니다. 새 대화는 새 session ID를 발급하며 이전 대화를 목록에서 다시 선택할 수 있습니다. 새로고침·탭 재접속 이후 복원은 보장하지 않습니다.
+- 대화 복귀와 새 요청 실행 전에는 서버 manifest를 재확인합니다. 기존 epoch와 다르면 기록·당시 출처는 읽기 전용으로 유지하고 질문·저장·전송·첨부 변경을 차단합니다. 연결 실패는 만료로 확정하지 않고 재확인을 제공합니다. 새 채팅에서 필요한 파일을 다시 첨부해 계속할 수 있습니다.
+- 화면의 대화 목록은 서버 TTL/LRU나 첨부 정리 정책을 무효화하지 않습니다. 전환 시 질문·첨부 변경·외부 전송을 자동 재실행하지 않으며, 실행 중에는 대화 전환을 막습니다.
 - planner/synthesis에는 summary를 비신뢰 과거 데이터로 전달하며, summary 안의 명령을 따르거나 retrieved evidence로 취급하지 않습니다.
 - planner는 최근 턴 제한 안에서 최신 사용자 질문까지의 Human/AI 대화를 순서대로 전달합니다. 질문 표현으로 문맥을 생략하지 않으며, 도구 호출 중간 메시지와 현재 질문 뒤에 붙은 재시도 답변은 제외합니다.
 - 앞선 대화는 후속 질문의 지시 대상과 이어지는 출처 제한을 해석하는 데 사용합니다. 현재 질문의 명시적인 출처 변경이 우선하며, 관계없는 새 작업에는 이전 검색 요구를 적용하지 않습니다.
@@ -406,6 +411,8 @@ graph 실행, debug 수집, response assembly, projection 또는 budget 검사�
 compaction 진단은 debug `memory_compactions`와 구조화 로그에서 before/after turn·message·추정 token·byte, removed message 수, fallback 여부로 확인할 수 있습니다. 원문 query, summary, Tool payload는 이 진단 로그에 기록하지 않습니다.
 
 Slack 수신자 선택은 action 정책 한 곳에서 수행합니다. 전송이 요청되었고 자연어·요청 필드 모두 미지정인 신규 선택에만 기본값을 사용합니다. `SLACK_DEFAULT_USER_ID`와 `SLACK_DEFAULT_DM_EMAIL`은 하나만 설정하며, 둘 다 있거나 잘못된 값이면 기본값 사용 요청은 구성 오류가 됩니다. 유효한 명시 수신자 전송과 일반 답변에는 이 오류를 적용하지 않습니다. 자연어와 요청 필드가 충돌하거나 명시 입력을 확정하지 못하면 전송하지 않습니다. 아직 대상을 선택하지 않은 미지정 요청은 설정을 교정한 뒤 선택을 재평가할 수 있습니다.
+
+UI·HTTP 요청의 `RecipientInput`은 선택한 유형과 입력 문자열을 그대로 보존합니다. 빈 값이나 잘못된 ID·이메일도 일반 질문을 차단하지 않으며, 전송 선택 시에만 `RecipientSelector`로 검증합니다. 잘못된 명시 입력은 미지정이나 `null`로 바꾸지 않아 기본 수신자로 넘어가지 않습니다. 입력 실패로 아직 대상을 선택하지 못한 보류 전송은 올바른 폼 값으로 교정할 수 있고, 값을 지우거나 미지정으로 바꾼 것만으로 실패를 없애지 않습니다.
 
 선택한 출처·선택자와 조회한 사용자/DM 채널은 `PendingAction.slack_delivery`에 고정됩니다. 이메일 조회 실패는 원래 이메일의 실패로 남고 기본값으로 넘어가지 않습니다. 후속 턴의 수신자 생략은 변경 없음이며, 현재 턴의 원문에서 완전한 ID·이메일을 확인한 교정만 새 선택을 만듭니다. 입력 충돌은 단순 재시도로 해소하지 않고 수신자를 명시해 확인해야 합니다. 조회 완료 후에는 같은 이메일을 재확인해도 재조회하여 다른 사용자로 이동하지 않습니다. SDK 자동 재시도는 끄고, 확실한 미전송 실패는 같은 대상의 pending 재시도로 처리합니다. 전송 후 응답 유실은 `unknown`이며 이 pending의 재시도는 다시 전송하지 않습니다. Slack에서 전달 여부를 확인한 뒤 추가 전송이 필요하면 별개의 새 전송 요청을 해야 합니다. 프로세스 재시작을 넘는 영속 작업 큐나 exactly-once 전송 보장은 제공하지 않습니다.
 
@@ -417,7 +424,7 @@ Slack 수신자 선택은 action 정책 한 곳에서 수행합니다. 전송이
 
 Streamlit과 online benchmark는 `src.app.client.AgentSessionClient`를 사용해 첨부 목록 조회·동기화·질문·응답 검증을 공유합니다. `src.app.uploads`는 파일 staging, 최신 manifest 기준 변경 재검토, `src.core.uploads.UploadSyncRequest` 구성을 담당합니다. 질문은 이 엔드포인트에 JSON으로 보내고 `text/event-stream` SSE로 진행 상황과 최종 응답을 받습니다.
 
-Streamlit은 UI 세션마다 하나의 클라이언트를 유지하며, 첨부 목록은 그 클라이언트의 manifest에서 읽습니다. 별도 manifest 사본을 UI에 저장하거나 경로마다 되돌려 쓰지 않습니다. `streamlit_state.PendingUpload`는 기준 manifest 스냅샷, 준비 파일, 교체 승인, 보류 질문, 실패 이력과 제출 요청만 보관합니다. 새 채팅은 새 클라이언트를 만들고 대기 작업·보류 질문을 비우며, 이전 세션의 늦은 결과는 현재 세션에 반영하지 않습니다. Slack 수신자는 질문마다 현재 선택값으로 갱신하고 요청 시작 시 스냅샷을 만듭니다.
+Streamlit은 대화마다 `Conversation`과 `AgentSessionClient`를 유지합니다. 메시지, 보류 질문, 업로드 후 질문, 첨부 변경, Slack 입력 초안과 실행 대기 요청은 해당 대화에 귀속됩니다. 활성 첨부의 확인값은 클라이언트의 manifest이며, UI의 `preserved_manifest`는 만료·연결 실패 시 마지막 상태를 보여주기 위한 사본입니다. 이 사본을 요청 context로 되돌려 사용하지 않습니다. `PendingUpload`는 기준 manifest, 준비 파일, 교체 승인, 보류 질문, 실패 이력과 제출 요청을 보관합니다. 대화 전환 후에는 자동 후속 질문을 보류 질문으로 바꾸고 첨부 변경의 재확인을 요구합니다. 실행 요청은 화면의 처리 중 상태를 그리기 전에 한 번 소비하며, 완료 기록은 시작한 대화에 추가합니다. Slack 수신자는 해당 대화의 입력 초안으로 갱신하고 요청 시작 시 스냅샷을 만듭니다.
 
 일반 UI와 benchmark의 질문 요청 예시입니다. `uploads`는 앞서 첨부 API가 반환한 확정 상태입니다.
 
@@ -439,7 +446,7 @@ Streamlit은 UI 세션마다 하나의 클라이언트를 유지하며, 첨부 �
 - 질문은 확인한 첨부 집합을 읽으며 파일 추가·교체·해제를 수행하지 않습니다. 첨부 변경은 별도의 sync 요청으로 완료한 뒤 그 응답의 context로 질문합니다.
 - `AgentRequestService`는 세션 락을 잡은 뒤 context를 한 번 검사하고, 같은 락 안에서 에이전트를 실행한 후 완료 manifest를 확보합니다. 오래된 epoch/revision은 SSE `UPLOAD_REVISION_CONFLICT` 오류로 반환하며, 클라이언트는 목록을 갱신하고 질문을 자동 재전송하지 않습니다.
 - `include_debug=true`일 때만 debug payload가 내려옵니다.
-- `slack_recipient`는 `channel`, `user`, `email` 중 하나의 `kind`와 비어 있지 않은 `value`를 받습니다. 생략·`null`은 미지정이며 빈 명시값·잘못된 형식·구 세 필드 입력은 HTTP `422`입니다. 요청 메타데이터는 매 HTTP 요청의 snapshot으로 교체됩니다. 재시도 대상은 메타데이터가 아니라 보류 요청의 `slack_delivery`가 소유합니다.
+- `slack_recipient`는 `channel`, `user`, `email` 중 하나의 `kind`와 문자열 `value`를 받습니다. 생략·`null`은 미지정이며 `{"kind": "channel", "value": ""}` 같은 불완전한 명시 입력도 그대로 받습니다. 이 값은 일반 질문을 막지 않고 실제 Slack 전송 선택에서 검증합니다. 잘못된 `kind`, 문자열이 아닌 `value`, 구 세 필드 입력은 HTTP `422`입니다. 요청 메타데이터는 매 HTTP 요청의 snapshot으로 교체하며 잘못된 명시 입력을 미지정으로 보정하지 않습니다. 재시도 대상은 메타데이터가 아니라 보류 요청의 `slack_delivery`가 소유합니다.
 
 내부 호출부에서도 `slack_channel_id`, `slack_user_id`, `slack_email` 세 필드 대신 하나의 `slack_recipient`를 전달합니다. 예를 들어 이메일은 `{"kind": "email", "value": "person@example.com"}`입니다. 전송 도구는 기본값이나 개별 수신자 문자열을 받지 않고 선택된 `SlackDelivery`를 입력·결과로 사용합니다. 새 계약 적용 시 FastAPI·Streamlit 프로세스를 다시 시작하고 새 세션을 사용합니다. 기본 DM 환경 변수 이름은 유지하지만 둘 중 하나만 설정해야 하며, 설정은 프로세스 시작 시 읽습니다. 구 요청·결과를 새 계약으로 자동 변환하는 호환 계층은 없습니다.
 
@@ -451,7 +458,7 @@ SSE의 `event:`는 아래 이벤트 이름이며, `data:`는 해당 이벤트의
 | `stage_started`, `stage_completed` | graph 단계의 시작·완료 정보 |
 | `heartbeat` | 실행 중 연결 유지 신호 |
 | `progress_snapshot` | 현재 단계와 근거 수 등 진행 상황 |
-| `final_response` | `status`, `response`, `message`, `problem`, `request_id`, `trace`, `debug`, `upload_manifest`를 담은 최종 결과 |
+| `final_response` | `status`, `response`, 선택적 `answer_id`, `message`, `problem`, `request_id`, `trace`, `debug`, `upload_manifest`를 담은 최종 결과 |
 | `error` | 실행 중 오류 정보. 이후 `final_response`가 올 수도 있음 |
 | `done` | 이벤트 전송 종료. 요청 성공을 뜻하지 않음 |
 
@@ -461,7 +468,7 @@ OpenAPI의 HTTP `200` 응답은 `text/event-stream`의 `x-sse-events` 확장에 
 
 HTTP `200`이나 `done`만으로 성공 처리하지 않습니다. 유효한 `final_response`가 있어야 최종 답변을 사용할 수 있으며, 답변의 제한 사항·액션 실패·debug 오류도 별도로 확인합니다. 클라이언트는 `error` 뒤에도 최종 응답 수신을 계속하며, 최종 응답 없이 종료되거나 연결이 끊기면 답변 수신 실패로 처리합니다.
 
-전송 계층은 최종 실행 상태, 답변 또는 안내, 오류 진단과 `upload_manifest`를 전달하고, benchmark는 답변·trace·debug와 앞서 수신한 오류를 결과에 보존합니다. 서버는 세션 락을 풀기 전에 `UploadManifest` 스냅샷을 확보합니다. 모델 실패 때도 스냅샷을 확보했다면 반환하지만, 세션 초기화나 스냅샷 확보 자체가 실패한 경우에는 `failed`·`refused` 결과의 manifest가 `null`일 수 있습니다. `error` 뒤에 유효한 최종 응답이 오면 앞선 오류 진단과 최종 결과를 모두 보존합니다. 공용 클라이언트는 최종 이벤트 전달 전에 그 결과의 manifest로 확인값을 갱신하며, `null`이면 확인값을 무효화합니다. Streamlit은 답변 저장 후 rerun으로 해당 상태를 표시합니다. 정상 세션 종료 응답에는 새 epoch·revision 0·`files=[]`가 포함되므로 추가 GET이나 질문 재전송 없이 다음 질문을 처리합니다. 최종 `AnswerResponse`와 오류 메시지는 대화 기록에 보관하며 `trace`와 `debug`는 대화 기록에 저장하지 않습니다.
+전송 계층은 최종 실행 상태, 답변 또는 안내, 오류 진단과 `upload_manifest`를 전달하고, benchmark는 답변·trace·debug와 앞서 수신한 오류를 결과에 보존합니다. 서버는 세션 락을 풀기 전에 `UploadManifest` 스냅샷을 확보합니다. 모델 실패 때도 스냅샷을 확보했다면 반환하지만, 세션 초기화나 스냅샷 확보 자체가 실패한 경우에는 `failed`·`refused` 결과의 manifest가 `null`일 수 있습니다. `error` 뒤에 유효한 최종 응답이 오면 앞선 오류 진단과 최종 결과를 모두 보존합니다. 공용 클라이언트는 최종 이벤트 전달 전에 그 결과의 manifest로 확인값을 갱신하며, `null`이면 확인값을 무효화합니다. Streamlit은 답변 저장 후 rerun으로 해당 상태를 표시합니다. 정상 세션 종료 응답에는 새 epoch·revision 0·`files=[]`가 포함되며, Streamlit은 기존 epoch와의 차이를 확인해 해당 대화를 읽기 전용으로 전환합니다. 최종 `AnswerResponse`와 오류 메시지는 대화 기록에 보관하며 `trace`와 `debug`는 대화 기록에 저장하지 않습니다.
 
 공용 클라이언트는 실행 상태별 결과와 manifest 검증이 모두 통과해야 최종 결과를 전달합니다. `completed`·`partial`·`needs_input`에서 manifest 누락·`null`은 응답 계약 위반입니다. `failed`·`refused`에서는 누락과 `null`을 미확인 상태인 `None`으로 허용합니다. 어느 상태든 manifest 객체를 제공하면 필수 필드와 타입을 검증하며, 잘못된 객체를 빈 manifest로 보정하지 않습니다. 계약을 위반한 응답은 답변과 첨부 상태를 승인하지 않고 오류와 원본 envelope를 진단에 남깁니다. 계약 오류, timeout·응답 유실, 유효한 실패 결과의 `null` manifest는 서로 다른 원인이지만 모두 첨부 확인값을 무효화합니다.
 
@@ -469,7 +476,7 @@ HTTP `200`이나 `done`만으로 성공 처리하지 않습니다. 유효한 `fi
 
 ### 5.1.1 첨부 목록 조회·변경
 
-`GET /sessions/{session_id}/uploads`는 `{epoch, revision, files}`를 반환합니다. 각 파일에는 `file_id`, `name`, `size_bytes`, `content_hash`, `source_uri`가 있으며 물리 저장 경로는 노출하지 않습니다. GET·sync·최종 응답의 manifest는 같은 필수 필드와 엄격한 타입 검증을 사용합니다. 서버 재시작이나 세션 TTL/LRU 만료 후에는 새 epoch가 발급됩니다. 오래된 UI는 목록을 다시 확인하고 필요한 자료를 다시 첨부해야 합니다.
+`GET /sessions/{session_id}/uploads`는 `{epoch, revision, files}`를 반환합니다. 각 파일에는 `file_id`, `name`, `size_bytes`, `content_hash`, `source_uri`가 있으며 물리 저장 경로는 노출하지 않습니다. GET·sync·최종 응답의 manifest는 같은 필수 필드와 엄격한 타입 검증을 사용합니다. 서버 재시작이나 세션 TTL/LRU 만료 후에는 새 epoch가 발급됩니다. Streamlit의 기존 대화는 이 변경을 확인하면 읽기 전용으로 남기며, 사용자는 새 채팅에서 필요한 자료를 다시 첨부합니다.
 
 `POST /sessions/{session_id}/uploads/sync`는 공유 파일시스템에 저장한 파일의 참조를 받아 첨부 집합을 갱신합니다. 파일 바이트는 Streamlit의 내장 업로드 경로 또는 benchmark fixture에서 읽어 공용 staging 절차로 준비하며 이 API는 JSON을 받습니다. 원격 클라이언트가 파일 bytes를 직접 보내는 API는 아닙니다.
 
@@ -498,6 +505,14 @@ HTTP `200`이나 `done`만으로 성공 처리하지 않습니다. 유효한 `fi
 - 첨부 반영은 질문 제출과 독립적입니다. 실패 후 재시도에 성공해도 보류한 질문을 자동 실행하지 않습니다.
 
 첨부 변경과 질문 실행은 같은 세션 락으로 직렬화합니다. `SessionContext`가 활성 첨부와 인덱스를 소유하고 manifest는 그 상태에서 만든 공개 스냅샷입니다. `UploadService`만 후보 생성과 첨부 commit을 담당하며, `InMemorySessionStore`는 세션 생성·pin·락·TTL/LRU 정리를 관리합니다. `AgentRequestService`는 락을 얻은 뒤 context를 검사하고 실행 종료까지 유지하며, 락을 풀기 전에 최종 manifest를 확보합니다. 명시적 reset·exit도 context 검사를 통과한 뒤 세션 자원을 해제합니다. 런타임은 확정된 세션의 검색 자원을 사용하고 파일 경로나 인덱스 생성 입력을 받지 않습니다. 락 대기와 인덱스 생성 중에도 세션을 활성 상태로 보호하며, 한 질문은 시작할 때 확인한 집합만 사용합니다. 현재 store·인덱스는 단일 FastAPI 프로세스의 메모리 상태이며 다중 worker의 공유 세션을 제공하지 않습니다.
+
+### 5.1.2 선택한 답변의 TXT 저장
+
+`POST /sessions/{session_id}/answers/{answer_id}/save`는 요청 본문 없이 서버에 보관된 해당 답변을 저장합니다. 임의의 본문을 업로드하는 API가 아니며 planner·검색·synthesis·Slack 전송을 실행하지 않습니다. `answer_id`는 최종 답변에 선택적으로 제공되며 세션별로 최근 200개 snapshot을 보관합니다. snapshot은 원래 본문·출처·검사·제한을 유지하고 실행 receipt는 제외합니다. 등록·조회 시 깊은 복사로 호출자의 변경과 격리합니다.
+
+성공과 저장 실패는 `{status, answer_id, request_id, response, message}`로 반환하며 `status`는 `completed` 또는 `failed`입니다. `response.actions`에는 이번 저장의 receipt가 있고 본문은 같은 snapshot입니다. 같은 답변의 중복 요청·실패 후 재시도는 현재 export 세대의 operation과 bytes를 사용합니다. snapshot별 operation 연결을 보존하므로 생성 요청에서 시작된 저장도 직접 재시도·자연어 반복 사이에 별도 파일로 갈라지지 않습니다. 검증된 artifact 만료 뒤 명시적으로 다시 저장하면 새 세대를 선택하고 이전 artifact의 기한과 tombstone은 유지합니다. 이미 준비된 보류 저장의 snapshot과 일치하면 그 저장만 완료 처리하고 남은 Slack 전송은 유지합니다. 본문이 미완료인 원래 요청은 사용자가 표시된 부분 답변을 별도로 저장했다고 완료로 바꾸지 않습니다.
+
+이 API는 기존 세션을 잠그며 누락·만료 세션을 새로 만들지 않습니다. 없는 세션·답변은 `404`, 조회 시 확인한 TTL 만료는 `410`이며 오류 본문의 `detail`에 `code`, `message`를 제공합니다. 서버 기록이 없을 때 화면 답변을 재생성하거나 대신 전송하지 않습니다. 이미 만들어진 파일의 다운로드는 별도 artifact 기한을 따릅니다.
 
 ### 5.2 최종 응답과 debug
 
@@ -620,7 +635,7 @@ source descriptor는 요청 계약이 실제로 해석한 서버 원본에서 �
 
 post-synthesis 검사에서 참조·내용·requirement coverage 문제가 있고 원문 검색 결과가 남아 있으면 `reuse_hits_resynthesize`로 synthesis에 직접 돌아갑니다. 실제 packet에는 필요한 근거가 있지만 답변이 인용하지 않은 경우에는 이 재합성이 유효합니다. 일반 packet부터 근거가 빠져 같은 준비·예산으로 회복할 수 없는 경우는 재생성을 반복하지 않고 불완전한 원문 fallback으로 처리하며, packet의 누락과 검색 부재를 구분합니다. compact packet은 사전 충분성 검증을 통과한 경우에만 timeout 복구에 사용합니다. 검색 없는 신규 생성·기존 답변 수정과 자연어 부분 답변도 확정 계약을 유지합니다. 검색 복구는 `attempt`·`max_retries`, 본문 복구는 `content_repair_attempt`·`max_content_repairs`로 독립 관리합니다. 본문 복구 기본 상한은 1회이며 검색 재시도를 사용했거나 `max_retries=0`이어도 이 기회는 남습니다. `max_content_repairs=0`이면 본문을 재생성하지 않습니다. 본문 복구에서는 planner·검색을 다시 실행하지 않으며 terminal 상태의 검색 누락을 새 검색 의무로 바꾸지 않습니다. 각 생성 시도는 동일 계약의 필수 누락·금지 위반을 검사하며, 선호 미충족만으로 실패하지 않습니다.
 
-코드 내용과 코드 블록 형식은 구분합니다. `code(inline=true)`는 한 줄 코드 내용을 인라인으로 표시하고, `inline=false`는 코드 블록으로 표시합니다. 코드 예시 필수와 코드 블록 금지는 함께 사용할 수 있습니다. 코드 원문을 그대로 복사한 문단도 코드 내용 금지 검사에 포함하지만, 일반 인라인 식별자·강조 문구를 코드 예시로 추측하지 않습니다. 코드 블록 금지는 화면과 Markdown 내보내기 모두에 적용합니다. 문단·목록·제목·표는 원문 본문을 사용하는 Markdown 내보내기 문맥까지 fence·들여쓰기 코드 블록을 검사합니다. 화면의 예시·발췌 표시가 블록 렌더링을 막아도 내보낸 본문이 블록이면 금지 위반이며, 원문의 들여쓰기를 제거하지 않습니다. 생성 예시는 `example`, 정확한 원문 발췌는 `excerpt`, 부분 인용은 `source`로 표현합니다. 줄 수는 출처 부록·receipt를 제외한 본문의 비어 있지 않은 줄입니다. 잘못된 내용 제거와 원문 fallback에도 같은 조건을 적용하며 불완전한 답변은 저장·전송하지 않습니다. 비교·설명 등 의미 요구의 충족은 구조 검사로 증명하지 않습니다.
+코드 내용과 코드 블록 형식은 구분합니다. `code(inline=true)`는 한 줄 코드 내용을 인라인으로 표시하고, `inline=false`는 코드 블록으로 표시합니다. 코드 예시 필수와 코드 블록 금지는 함께 사용할 수 있습니다. 코드 원문을 그대로 복사한 문단도 코드 내용 검사에 포함합니다. 문단의 Markdown 인라인 코드가 같은 내용 단위에서 인용한 코드 자료의 완전한 물리적 한 줄과 일치해도 코드 내용으로 인정합니다. 일반 인라인 식별자·파일명·강조 문구나 다른 내용 단위의 인용으로 코드 예시를 추측하지 않습니다. 코드 블록 금지는 화면과 Markdown 내보내기 모두에 적용합니다. 문단·목록·제목·표는 원문 본문을 사용하는 Markdown 내보내기 문맥까지 fence·들여쓰기 코드 블록을 검사합니다. 화면의 예시·발췌 표시가 블록 렌더링을 막아도 내보낸 본문이 블록이면 금지 위반이며, 원문의 들여쓰기를 제거하지 않습니다. 생성 예시는 `example`, 정확한 원문 발췌는 `excerpt`, 부분 인용은 `source`로 표현합니다. 줄 수는 출처 부록·receipt를 제외한 본문의 비어 있지 않은 줄입니다. 잘못된 내용 제거와 원문 fallback에도 같은 조건을 적용하며 불완전한 답변은 저장·전송하지 않습니다. 비교·설명 등 의미 요구의 충족은 구조 검사로 증명하지 않습니다.
 
 새 응답 factory 안에서는 표시 문서와 검증한 근거에서 checks·citations·본문 hash를 한 번 계산합니다. 상태 복원·nested 모델·최종 export의 검증은 일관성 확인을 위해 checks·citations를 다시 계산합니다. post-synthesis 검사는 기록된 revision을 확인하고, 같은 문서·근거를 새 hash로 다시 확정하지 않습니다. 본문 필터링 또는 실제 근거 packet 변경 후에는 다시 확정합니다. mutable 근거의 원문 identity·범위·동일 ID 충돌 검사와 최종 export의 revision 검증은 유지합니다. `inline` 표시 방식은 본문 hash에 포함되므로 표시 방식이 다른 코드를 같은 원본 revision으로 취급하지 않습니다.
 
@@ -652,6 +667,10 @@ flowchart TD
 
 두 검증 단계에는 합성과 같은 턴 제한을 적용한 대화 이력과 대화 요약을 함께 전달합니다. 대화는 사용자 사실과 지시 대상의 해석에 쓰는 데이터이며, 확정 요청을 바꾸는 지시나 검색 근거를 대신하지 않습니다. 원문 근거에는 제목 경로, 선택 범위, 부분 발췌 여부와 선택된 표 셀의 행·열·병합 구조를 보존하고, 선택 밖의 셀 내용은 전달하지 않습니다.
 
+정확한 텍스트 anchor가 선택 범위 전체를 매핑하면 합성·Decisions의 source에 `source_lines`를 제공합니다. 각 항목은 원본의 `line_number`, 요소 문자열 기준 반열린 `start`·`end`, 변경하지 않은 `text`, `partial_start`·`partial_end`를 가집니다. 물리적 줄 구분은 LF·CRLF·CR이며 빈 줄도 셉니다. 정확한 위치가 없거나 서로 다른 매핑이 충돌하면 빈 목록을 제공하고 줄 번호를 추정하지 않습니다. Notebook은 anchor의 셀 식별자와 셀 내부 줄을 함께 해석합니다.
+
+내용 단위의 명시적인 원문 줄 위치와 연결된 코드 literal은 `source_location_mismatch`·`source_location_unverifiable` 검사로 대조합니다. 정확한 위치도 기존 의미 검증을 거치며, 높은 Decisions 확률이 물리적 위치 불일치를 덮어쓰지는 못합니다. 재합성 입력에는 실패한 내용 단위뿐 아니라 `UnitCheck`의 실제 오류 코드와 수정 기준을 전달합니다. 부분 원문 인용의 `excerpt_does_not_match_source`는 본문을 임의로 늘리지 않고 `source` 표현을 사용하도록 안내하고, 줄 위치 오류는 `source_lines.line_number`와 대조하도록 안내합니다. 보정 한도 뒤에도 줄 위치 검사가 실패하면 해당 내용을 제외하고 `source_location_unverified` 제한과 `model_output_invalid`를 반환합니다. 부분 답변에서 필수 줄 번호를 삭제한 상태를 완료로 승격하거나 자동 저장·전송하지 않습니다.
+
 사후 판정은 현재 본문 hash와 인용 순서의 전체 근거 fingerprint에 연결합니다. 본문이나 인용 원문이 바뀐 상태에 이전 판정을 붙이면 복원·내보내기 검증에서 거부합니다. 본문 일부를 제거한 뒤에도 새로운 본문 전체가 Decisions를 통과해야 완료 답변으로 처리합니다. 복구 한도 내에 통과하지 못하면 확인 가능한 원문이나 실패 안내를 제공하고 저장·전송을 막습니다. 이 fallback은 의미 검증을 통과한 설명으로 표시하지 않습니다. 이전 답변의 복사·변환은 계약이 지정한 답변 hash로 원문을 확인하고 해당 본문과 인용 근거를 두 검증 단계에 함께 제공합니다.
 
 실제 응답 스키마 기준 파일:
@@ -670,9 +689,13 @@ flowchart TD
 
 Streamlit은 `AnswerResponse` 전체를 채팅 기록에 보존합니다. 본문 옆의 번호별 근거 popover에서 당시 발췌, 전체 원문 요소, 제목 경로·원본 줄·cell·페이지 위치와 내용 hash를 확인할 수 있습니다. 표는 병합 셀과 선택 셀을 보존해 표시합니다. 페이지 bbox는 좌표 메타데이터로 보여주며 PDF 페이지 이미지 뷰어는 아직 없습니다.
 
+원문 코드에는 발췌 첫 줄을 1로 다시 매기는 자동 번호를 표시하지 않습니다. 사용 범위는 공통 물리적 줄 매핑으로 표시하고, 매핑이 불명확하면 수집한 요소 안의 줄과 원본 줄 번호 확인 불가를 함께 안내합니다. 정확한 텍스트 anchor는 선택 범위로 좁혀 화면과 TXT에 동일하게 전달하며 페이지·bbox 등의 수집 영역을 임의로 축소하지 않습니다.
+
 해석·생성 예시·원문 발췌는 표현 성격을 표시하고, “근거 확인 범위”는 출처 연결 확인과 Decisions 의미 검증을 구분합니다. 각 내용 단위와 전체 요청에 대한 판정 확률·임계값·미검증 상태를 확인할 수 있습니다. 저장·Slack 전송은 같은 본문의 공통 text exporter를 사용해 출처·원문 위치·참고 및 제한을 함께 보존하며, 실행 결과는 본문과 별도 UI에 표시합니다. 확률과 동적 검증 보고서는 화면과 API 응답에만 남깁니다. 재검증의 확률 변동이 같은 본문·출처의 저장 bytes를 바꾸지 않고, 출처 없는 사용자 원문 복사에는 검증 설명을 덧붙이지 않습니다.
 
 저장 성공 표시는 검증된 artifact가 있는 receipt에 한정하고 다운로드 기한을 함께 보여줍니다. 구형 성공 receipt나 확인 불가 결과는 경고로 표시하며 다운로드 링크를 만들지 않습니다. 만료된 파일도 답변 기록은 유지하지만 다운로드 링크를 표시하지 않습니다.
+
+`answer_id`가 있는 답변에는 해당 답변의 TXT 저장 동작을 제공합니다. 결과는 원래 답변을 유지한 채 별도로 표시하고 실패 후에도 같은 답변으로 재시도합니다. 대화가 읽기 전용이거나 다른 요청을 처리 중이면 저장을 실행하지 않습니다. 대화 목록과 표시 기록의 보존 범위는 현재 브라우저 세션이며 서버 기록이나 기존 생성 파일의 기한을 연장하지 않습니다. 파일만 만료되었고 서버 답변은 남아 있다면 명시적인 TXT 저장으로 별도 기한의 새 export 세대를 만들 수 있습니다.
 
 ## 6. 프로젝트 구조
 
