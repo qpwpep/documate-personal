@@ -46,6 +46,7 @@ class ExecutionRunner:
                                if self.session.previous_response is not None else None),
             pending_action=(self.session.pending_action.model_copy(deep=True)
                             if self.session.pending_action is not None else None),
+            answer_export_operations=dict(self.session.answer_export_operations),
         )
         return normalize_graph_update(state)
 

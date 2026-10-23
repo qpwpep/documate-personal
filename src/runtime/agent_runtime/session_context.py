@@ -10,6 +10,8 @@ from typing import Any
 from uuid import uuid4
 from langchain_core.messages import HumanMessage
 from src.core.answer_schema import AnswerResponse
+from src.core.answer_export import answer_export_key, answer_export_snapshot
+from src.core.save_contract import SaveOperation
 from src.core.request_contracts import UserTurnSnapshot, required_contract_turn_ids
 from src.core.conversation_memory import extract_memory_text
 from src.core.uploads import UploadContext, UploadManifest, UploadRecord
@@ -49,6 +51,48 @@ class SessionContext:
         self.upload_operations: OrderedDict[str, str] = OrderedDict()
         self.previous_response: AnswerResponse | None = None
         self.pending_action: PendingAction | None = None
+        self._answers: OrderedDict[str, AnswerResponse] = OrderedDict()
+        self.answer_export_operations: OrderedDict[str, SaveOperation] = OrderedDict()
+
+    def register_answer(self, response: AnswerResponse) -> str:
+        """Keep the exact displayed revision private for explicit future exports."""
+        snapshot = answer_export_snapshot(response)
+        key = answer_export_key(snapshot)
+        # The graph may have selected a newer generation already. A displayed
+        # older receipt must never overwrite that current operation binding.
+        if key not in self.answer_export_operations:
+            from src.core.answer_schema import export_answer_text
+            body = export_answer_text(snapshot, include_sources=True).encode("utf-8-sig")
+            for receipt in response.actions:
+                operation = receipt.operation
+                if (receipt.kind == "save_text" and operation is not None
+                        and operation.session_id == self.session_id
+                        and operation.answer_hash == snapshot.content_hash
+                        and operation.matches_bytes(body)):
+                    self.remember_answer_export(key, operation)
+                    break
+        self._trim_answer_exports()
+        for answer_id, existing in self._answers.items():
+            if existing == snapshot:
+                return answer_id
+        answer_id = uuid4().hex
+        self._answers[answer_id] = snapshot
+        while len(self._answers) > 200:
+            self._answers.popitem(last=False)
+        return answer_id
+
+    def remember_answer_export(self, key: str, operation: SaveOperation) -> None:
+        self.answer_export_operations[key] = operation
+        self.answer_export_operations.move_to_end(key)
+        self._trim_answer_exports()
+
+    def _trim_answer_exports(self) -> None:
+        while len(self.answer_export_operations) > 200:
+            self.answer_export_operations.popitem(last=False)
+
+    def get_answer(self, answer_id: str) -> AnswerResponse | None:
+        snapshot = self._answers.get(answer_id)
+        return snapshot.model_copy(deep=True) if snapshot is not None else None
 
     @property
     def messages(self) -> list[Any]:
@@ -121,6 +165,8 @@ class SessionContext:
         self._conversation_memory = ConversationMemorySnapshot()
         self.previous_response = None
         self.pending_action = None
+        self._answers.clear()
+        self.answer_export_operations.clear()
 
     def commit_response_state(
         self,

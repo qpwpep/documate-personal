@@ -10,7 +10,7 @@ FailureCode = Literal[
     "provider_schema_invalid", "provider_configuration", "provider_unavailable",
     "provider_rate_limited", "model_output_invalid", "model_output_incomplete",
     "model_refusal", "internal_error", "evidence_insufficient", "upload_revision_conflict",
-    "call_budget_exhausted",
+    "call_budget_exhausted", "save_failed",
 ]
 NextAction = Literal["none", "retry_later", "fix_configuration", "supply_information"]
 
@@ -36,6 +36,7 @@ _PUBLIC_MESSAGES: dict[str, tuple[str, NextAction]] = {
     "internal_error": ("서비스 내부 오류로 처리를 완료하지 못했습니다. 질문을 수정할 필요는 없습니다.", "none"),
     "evidence_insufficient": ("요청한 답변을 뒷받침할 근거를 충분히 확인하지 못했습니다.", "supply_information"),
     "upload_revision_conflict": ("첨부 목록이 변경되었습니다. 현재 첨부 목록을 확인한 뒤 다시 요청해 주세요.", "none"),
+    "save_failed": ("파일을 만들지 못했습니다. 기존 답변은 유지됩니다. 같은 답변으로 저장을 다시 시도할 수 있습니다.", "retry_later"),
 }
 
 

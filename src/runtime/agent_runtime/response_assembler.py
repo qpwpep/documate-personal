@@ -23,6 +23,10 @@ class ResponseAssembler:
             contract = get_runtime_state(response).request_contract
             outcome = TurnResult(status="needs_input", message=export_answer_text(result),
                                  missing_slots=[item.slot for item in contract.missing_info] if contract else [])
+        elif any(receipt.kind == "save_text" and receipt.status in {"error", "unknown"}
+                 for receipt in result.actions):
+            problem = make_problem("save_failed", "action_postprocess")
+            outcome = TurnResult(status="partial", response=result, problem=problem, message=problem.message)
         else:
             outcome = TurnResult(response=result)
         if outcome.response is None:

@@ -13,6 +13,7 @@ class TurnResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
     status: Literal["completed", "needs_input", "failed", "partial", "refused"] = "completed"
     response: AnswerResponse | None = None
+    answer_id: str | None = Field(default=None, min_length=1)
     message: str = ""
     problem: ExecutionProblem | None = None
     request_id: str = ""
@@ -20,6 +21,8 @@ class TurnResult(BaseModel):
 
     @model_validator(mode="after")
     def consistent_result(self) -> "TurnResult":
+        if self.answer_id is not None and self.response is None:
+            raise ValueError("an answer ID requires a displayed answer")
         if self.status in {"completed", "partial"} and self.response is None:
             raise ValueError("completed and partial results require a checked response")
         if self.status in {"failed", "refused", "needs_input"} and self.response is not None:
@@ -33,4 +36,26 @@ class TurnResult(BaseModel):
             raise ValueError("clarification requires a specific question")
         if self.status == "refused" and self.problem.code != "model_refusal":
             raise ValueError("refused results require an explicit model refusal")
+        return self
+
+
+class AnswerExportResult(BaseModel):
+    """A saved answer retains its body even when the filesystem operation fails."""
+    model_config = ConfigDict(extra="forbid")
+    status: Literal["completed", "failed"]
+    answer_id: str = Field(min_length=1)
+    request_id: str = Field(min_length=1)
+    response: AnswerResponse
+    message: str
+
+    @model_validator(mode="after")
+    def verified_completion(self) -> "AnswerExportResult":
+        receipts = [receipt for receipt in self.response.actions if receipt.kind == "save_text"]
+        if len(receipts) != 1:
+            raise ValueError("answer export requires exactly one save receipt")
+        receipt = receipts[0]
+        complete = (receipt.status == "success" and receipt.verification == "verified"
+                    and receipt.artifact is not None and receipt.operation is not None)
+        if (self.status == "completed") != complete:
+            raise ValueError("export completion must agree with its verified artifact receipt")
         return self

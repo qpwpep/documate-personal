@@ -303,7 +303,10 @@ class AgentFlowManager:
                 return assembled_response
             canonical_text = (assembled_response["message"] if assembled_response["status"] == "needs_input"
                               else export_answer_text(final_response_state.result))
-            if assembled_response["status"] == "partial":
+            if (assembled_response["status"] == "partial"
+                    and assembled_response["problem"]["code"] == "save_failed"):
+                canonical_text = "\n\n".join([canonical_text, assembled_response["message"]])
+            elif assembled_response["status"] == "partial":
                 # Retain what the user actually saw, including its limits. The
                 # answer reference below remains the original checked document;
                 # recording it is not a promotion of the failed request.
@@ -328,15 +331,25 @@ class AgentFlowManager:
                 preserve_turn_ids=required_contract_turn_ids(final_runtime.pending_action.contract)
                 if final_runtime.pending_action is not None else (),
             )
-            # Displayed partial bodies are valid references for an explicit new
-            # copy/transform request. Destination questions and failures without
-            # a displayed body must not replace the previous answer.
+            # An export's fallback is failure feedback, not a replacement for
+            # the answer the user selected. Other displayed partial answers
+            # remain valid references for a new explicit copy/transform request.
+            contract = final_runtime.request_contract
+            export_failed = bool(
+                contract is not None and contract.body.kind in {"copy_answer", "transform_answer"}
+                and contract.actions.save_text.intent == "requested"
+                and final_response_state.kind == "failure"
+            )
             self._ensure_session().commit_response_state(
                 response=final_response_state.result,
                 response_kind=final_response_state.kind,
-                displayed_partial=assembled_response["status"] == "partial",
+                displayed_partial=assembled_response["status"] == "partial" and not export_failed,
                 pending_action=final_runtime.pending_action,
             )
+            self._ensure_session().answer_export_operations.update(final_runtime.answer_export_operations)
+            if (not export_failed and assembled_response["response"] is not None
+                    and final_response_state.result.content.blocks):
+                assembled_response["answer_id"] = self._ensure_session().register_answer(final_response_state.result)
             return assembled_response
 
         except Exception as exc:
