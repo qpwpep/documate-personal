@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import pytest
 from langchain_core.messages import HumanMessage
 
 from src.core.answer_schema import (
@@ -67,7 +68,7 @@ def test_save_and_slack_retain_source_selection_and_limitations_without_mutating
     assert "settings-code" in saved
     assert "range [10, 11)" in saved
     assert "lines 2-2" in saved
-    assert "코드 예시 · 실행 확인 안 됨" in saved
+    assert "예시 · 코드 블록 · 실행 확인 안 됨" in saved
     assert "요청한 전체 조건을 확인하지 못한 예시입니다." in saved
     assert "이 파일에는 설정의 예외 조건이 없습니다." in saved
     assert "출처 연결은 의미적 정확성을 보증하지 않습니다." in saved
@@ -79,6 +80,32 @@ def test_save_and_slack_retain_source_selection_and_limitations_without_mutating
     assert [(receipt.kind, receipt.status) for receipt in final.actions] == [
         ("save_text", "success"), ("slack_notify", "success"),
     ]
+
+
+@pytest.mark.parametrize(("basis", "label"), [
+    ("interaction", "코드 블록 · 실행 확인 안 됨"),
+    ("source", "근거 기반 내용 · 코드 블록 · 실행 확인 안 됨"),
+    ("inference", "해석 · 코드 블록 · 실행 확인 안 됨"),
+    ("example", "예시 · 코드 블록 · 실행 확인 안 됨"),
+    ("excerpt", "원문 코드 발췌"),
+])
+def test_export_log_block_preserves_format_and_basis_without_claiming_program_code(basis, label):
+    logs = "INFO worker started\nWARN worker retry scheduled"
+    snapshot = build_snapshot(source_uri="upload:///worker.log", title="worker.log",
+                              media_type="text/plain", source_type="upload", content=logs,
+                              parser="text", parser_version="1")
+    evidence = build_evidence(snapshot=snapshot, element=DocumentElement(element_id="logs", kind="paragraph", text=logs))
+    answer = finalize_answer(AnswerDocument(blocks=[CodeBlock(
+        language="text", content=ContentUnit(text=logs, basis=basis,
+                                             refs=[evidence.id] if basis in {"source", "inference", "excerpt"} else []),
+    )]), [evidence])
+    before = answer.model_dump(mode="json")
+
+    exported = export_answer_text(answer, include_sources=True)
+
+    assert exported.startswith(label + "\n\n```text\n" + logs + "\n```")
+    assert "작성한 코드" not in exported and "코드 예시" not in exported
+    assert answer.model_dump(mode="json") == before
 
 
 def _code_source_answer(text: str, *, basis: str):
@@ -97,7 +124,7 @@ def _code_source_answer(text: str, *, basis: str):
 
 def _no_code_save_state(answer):
     contract = _contract(save="requested", answer={
-        "content": [{"kind": "code_example", "mode": "forbidden", "evidence_ids": ["request"]}],
+        "content": [{"kind": "code", "mode": "forbidden", "evidence_ids": ["request"]}],
     })
     return {
         "runtime": RuntimeState(request_contract=contract),

@@ -54,6 +54,15 @@ def inline_code_markdown(text: str) -> str:
     return f"{delimiter}{pad}{text}{pad}{delimiter}"
 
 
+def code_display_label(block: CodeBlock) -> str:
+    """Describe presentation and provenance without inferring executable content."""
+    if block.content.basis == "excerpt":
+        return "원문 발췌"
+    basis = {"inference": "해석", "example": "예시", "source": "근거 기반 내용"}.get(block.content.basis)
+    layout = "인라인 코드" if block.inline else "코드 블록"
+    return (f"{basis} · " if basis else "") + layout + " · 실행 확인 안 됨"
+
+
 def citation_labels(unit: ContentUnit, response: AnswerResponse) -> str:
     numbers = {citation.evidence.id: citation.number for citation in response.citations}
     return " ".join(f"[{numbers[ref]}]" for ref in unit.refs if ref in numbers)
@@ -132,10 +141,8 @@ def export_answer_text(response: AnswerResponse, *, include_sources: bool = Fals
             if include_sources:
                 if block.content.basis == "excerpt":
                     description = "원문 코드 발췌"
-                elif block.content.basis == "example":
-                    description = "코드 예시 · 실행 확인 안 됨"
                 else:
-                    description = "코드 · 실행 확인 안 됨"
+                    description = code_display_label(block)
                 rendered_code = f"{description}\n\n{rendered_code}"
             blocks.append(rendered_code)
         elif isinstance(block, TableBlock):

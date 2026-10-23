@@ -56,13 +56,13 @@ def render_evidence(evidence: EvidenceRef) -> None:
         else:
             st.text(element.text)
         st.caption("이 내용은 답변을 만들 때 보관한 원문입니다. 현재 파일의 변경이나 삭제와 무관합니다.")
-        st.caption(f"자료 버전: {snapshot.content_hash}")
+        st.caption(f"자료 내용 해시: {snapshot.content_hash}")
 
     source_uri = snapshot.source_uri
     parsed = urlparse(source_uri)
     if parsed.scheme in {"http", "https"} and parsed.netloc:
         safe_url = quote(source_uri, safe=":/?#[]@!$&'*,;=+-._~%")
-        st.markdown(f"[현재 원문 열기]({safe_url})")
+        st.markdown(f"[현재 출처 페이지 열기]({safe_url})")
     else:
         st.caption(f"원본 자료: {source_uri}")
 

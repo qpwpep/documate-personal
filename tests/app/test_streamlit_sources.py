@@ -138,3 +138,37 @@ def test_unmapped_anchor_cannot_supply_notebook_cell_for_known_physical_lines():
     assert "사용 범위: 셀 3의 19행" in captions
     assert "사용 범위: 셀 10의 19행" not in captions
     assert "원문 요소 위치: 셀 10 · 19행" in captions
+
+
+def test_retained_source_identifies_content_hash_without_calling_it_a_document_version():
+    text = "target = 3\n"
+    app = _render(text, "target = 3", anchor=SourceAnchor(
+        kind="code", start=0, end=len(text), line_start=1, line_end=1, precision="exact",
+    ))
+
+    captions = [item.value for item in app.caption]
+    assert any(value.startswith("자료 내용 해시: sha256:") for value in captions)
+    assert not any(value.startswith("자료 버전:") for value in captions)
+    assert app.code[1].value == text
+
+
+def test_current_source_page_link_is_distinct_from_retained_source_content():
+    captured_text = "Captured documentation for the answer."
+    source_uri = "https://docs.example.org/guide?section=old#retained"
+    snapshot = build_snapshot(
+        source_uri=source_uri, title="Guide", media_type="text/html",
+        source_type="official", content=captured_text, parser="html", parser_version="1",
+    )
+    evidence = build_evidence(
+        snapshot=snapshot,
+        element=DocumentElement(element_id="paragraph", kind="paragraph", text=captured_text),
+        start=0, end=len(captured_text),
+    )
+
+    app = AppTest.from_function(_source_app, args=(evidence.model_dump(mode="json"),)).run()
+
+    assert not app.exception
+    markdown = [item.value for item in app.markdown]
+    assert f"[현재 출처 페이지 열기]({source_uri})" in markdown
+    assert not any("[현재 원문 열기]" in value for value in markdown)
+    assert [item.value for item in app.text] == [captured_text, captured_text]

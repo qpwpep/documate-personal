@@ -10,7 +10,7 @@ from src.app.client import AgentCallResult, AgentStreamEvent
 from src.app.web.streamlit_sources import render_code, render_evidence
 from src.app.web.streamlit_state import AssistantChatMessage, ChatMessage
 from src.core.answer_schema import AnswerResponse, ContentUnit, SemanticCheck, iter_content_units
-from src.core.answer_schema.rendering import inline_code_markdown
+from src.core.answer_schema.rendering import code_display_label, inline_code_markdown
 from src.core.contracts.outcome import TurnResult
 
 
@@ -90,9 +90,7 @@ def render_turn_result(result: TurnResult, fastapi_url: str) -> None:
         label = "요청 식별자" if result.status == "needs_input" else "오류 식별자"
         st.caption(f"{label}: {result.request_id}")
     if result.response is not None:
-        render_answer_response(result.response, fastapi_url, turn_incomplete=(
-            result.status == "partial" and (result.problem is None or result.problem.code != "save_failed")
-        ))
+        render_answer_response(result.response, fastapi_url, turn_incomplete=result.status == "partial")
 
 
 def render_answer_response(response: AnswerResponse, fastapi_url: str, *, turn_incomplete: bool = False) -> None:
@@ -101,7 +99,7 @@ def render_answer_response(response: AnswerResponse, fastapi_url: str, *, turn_i
     checks = {check.unit_id: check for check in response.checks}
     for issue in response.issues:
         if issue.unit_id is None:
-            st.warning(issue.message)
+            st.warning(f"답변에 기록된 한계: {issue.message}")
 
     for index, block in enumerate(response.content.blocks):
         prefix = f"b{index}."
@@ -121,7 +119,7 @@ def render_answer_response(response: AnswerResponse, fastapi_url: str, *, turn_i
                 st.markdown(inline_code_markdown(block.content.text))
             else:
                 render_code(block.content.text, language=block.language or "text")
-            _render_basis(block.content)
+            st.caption(code_display_label(block))
         elif block.type == "table":
             header = "| " + " | ".join(_table_cell(unit, citations) for unit in block.columns) + " |"
             separator = "| " + " | ".join("---" for _ in block.columns) + " |"
@@ -131,7 +129,7 @@ def render_answer_response(response: AnswerResponse, fastapi_url: str, *, turn_i
         paths = {path for path, _ in units}
         for issue in response.issues:
             if issue.unit_id in paths:
-                st.warning(issue.message)
+                st.warning(f"답변에 기록된 한계: {issue.message}")
         for path, unit in units:
             check = checks.get(path)
             if check is not None and check.reference_status == "missing":
@@ -210,17 +208,14 @@ def _render_validation_scope(response: AnswerResponse, *, turn_incomplete: bool 
         semantic_checks = {(check.name, check.unit_id): check for check in report.checks} if report is not None else {}
         request_check = semantic_checks.get(("request_fulfilled", None))
         issue_codes = {issue.code for issue in response.issues}
-        request_label = "요청 충족"
+        st.caption("아래 판정은 답변 본문의 조건 충족 여부를 평가합니다. 저장·전송의 처리 결과는 별도로 표시됩니다.")
         if issue_codes & {"retrieved_evidence_incomplete", "evidence_packet_incomplete"}:
-            request_label = "확인된 근거 범위의 본문 충족"
-            st.caption("일부 근거가 부족해 요청 전체는 미완료입니다. 아래 판정은 확보된 근거로 작성한 본문 범위에 한정됩니다.")
+            st.caption("이 답변에 기록된 한계: 일부 근거가 부족합니다. 아래 판정은 확보된 근거로 작성한 본문 범위에 한정됩니다.")
         elif issue_codes & {"answer_incomplete", "source_excerpt_fallback"}:
-            request_label = "제공된 본문 범위의 충족"
-            st.caption("요청 전체를 완료하지 못한 부분 답변입니다. 아래 판정은 현재 제공된 본문에 대한 평가입니다.")
-        elif turn_incomplete:
-            request_label = "답변 본문 충족"
-            st.caption("전체 요청 처리는 완료되지 않았습니다. 아래 판정은 답변 본문만 평가하며 저장·전송 등의 처리 완료 여부를 뜻하지 않습니다.")
-        _render_semantic_result(request_label, request_check, report.threshold if report is not None else None)
+            st.caption("이 답변에 기록된 한계: 일부 내용만 제공한 부분 답변입니다. 아래 판정은 제공된 본문 범위에 한정됩니다.")
+        if turn_incomplete:
+            st.caption("이번 요청 처리는 완료되지 않았습니다. 남은 작업은 안내와 저장·전송 결과를 확인해 주세요.")
+        _render_semantic_result("답변 본문 조건 충족", request_check, report.threshold if report is not None else None)
         for index, (path, unit) in enumerate(units, start=1):
             preview = " ".join(unit.text.split())
             if len(preview) > 120:
@@ -251,14 +246,6 @@ def _unit_text(unit: ContentUnit, citations: dict) -> str:
 
 def _table_cell(unit: ContentUnit, citations: dict) -> str:
     return _unit_text(unit, citations).replace("|", "\\|").replace("\n", "<br>")
-
-
-def _render_basis(unit: ContentUnit) -> None:
-    if unit.basis == "excerpt":
-        st.caption("원문 발췌")
-        return
-    label = {"inference": "해석에 따라 작성한 코드", "example": "코드 예시", "source": "근거를 바탕으로 작성한 코드"}.get(unit.basis, "코드")
-    st.caption(label + " · 실행 확인 안 됨")
 
 
 def _render_citations(units: list[ContentUnit], citations: dict) -> None:
