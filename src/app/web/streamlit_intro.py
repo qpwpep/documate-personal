@@ -5,7 +5,7 @@ from html import escape
 
 import streamlit as st
 
-from src.app.web.streamlit_state import QUICK_PROMPTS_STATE_KEY
+from src.app.web.streamlit_state import get_conversation
 
 
 _QUICK_PROMPT_COUNT = 4
@@ -47,18 +47,18 @@ def render_intro(default_docs: dict[str, str]) -> str | None:
         for offset, prompt in enumerate(quick_prompts[row_start : row_start + 2]):
             index = row_start + offset
             with columns[offset]:
-                if st.button(prompt, key=f"quick_prompt_{index}", use_container_width=True):
+                if st.button(prompt, key=get_conversation().widget_key(f"quick_prompt_{index}"), use_container_width=True):
                     selected_prompt = prompt
     return selected_prompt
 
 
 
 def _get_quick_prompts_for_session() -> list[str]:
-    saved_prompts = st.session_state.get(QUICK_PROMPTS_STATE_KEY)
-    if isinstance(saved_prompts, list) and saved_prompts:
-        return [str(prompt) for prompt in saved_prompts[:_QUICK_PROMPT_COUNT]]
+    conversation = get_conversation()
+    if conversation.quick_prompts:
+        return conversation.quick_prompts[:_QUICK_PROMPT_COUNT]
 
     prompt_count = min(_QUICK_PROMPT_COUNT, len(_QUICK_PROMPTS))
     selected_prompts = random.sample(_QUICK_PROMPTS, prompt_count)
-    st.session_state[QUICK_PROMPTS_STATE_KEY] = selected_prompts
+    conversation.quick_prompts = selected_prompts
     return selected_prompts

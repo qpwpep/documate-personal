@@ -4,22 +4,21 @@ import logging
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal, NotRequired, TypedDict
+from typing import Any, Literal, NotRequired, TypedDict
 
 import streamlit as st
 
 from src.infra.logging_utils import log_event
 from src.infra.runtime_paths import get_uploads_dir
 from src.infra.settings import get_settings
-from src.app.client import AgentRequestContext, AgentSessionClient
+from src.app.client import AgentRequestContext, AgentSessionClient, UploadAPIError
 from src.app.uploads import StagedUpload
 from src.app.web.streamlit_theme import THEME_STATE_KEY
 from src.core.answer_schema import finalize_answer, text_document
-from src.core.contracts.outcome import TurnResult
+from src.core.contracts.outcome import AnswerExportResult, TurnResult
 from src.core.uploads import UploadManifest, UploadSyncRequest
 
 
-QUICK_PROMPTS_STATE_KEY = "documate_quick_prompts"
 _THEME_QUERY_MAP = {
     "system": "시스템",
     "light": "라이트",
@@ -45,6 +44,7 @@ class PendingUpload:
     attempted: bool = False
     had_failure: bool = False
     needs_refresh_review: bool = False
+    requires_confirmation: bool = False
 
     def __post_init__(self) -> None:
         self.base_manifest = self.base_manifest.model_copy(deep=True)
@@ -60,9 +60,50 @@ class AssistantChatMessage(TypedDict):
     result: TurnResult | None
     transport_errors: NotRequired[list[str]]
     request_id: NotRequired[str]
+    export_result: NotRequired[AnswerExportResult]
+    export_error: NotRequired[str]
 
 
 ChatMessage = UserChatMessage | AssistantChatMessage
+
+
+@dataclass
+class Conversation:
+    """One browser-session conversation; server state remains subject to its TTL."""
+
+    id: str
+    client: AgentSessionClient
+    messages: list[ChatMessage] = field(default_factory=list)
+    pending_upload: PendingUpload | None = None
+    saved_prompt: str | None = None
+    followup_prompt: str | None = None
+    quick_prompts: list[str] = field(default_factory=list)
+    slack_drafts: dict[str, str] = field(default_factory=dict)
+    pending_request: Any | None = None
+    operation_in_progress: bool = False
+    confirmed_epoch: str | None = None
+    preserved_manifest: UploadManifest | None = None
+    expired: bool = False
+    validation_error: str | None = None
+
+    @property
+    def is_read_only(self) -> bool:
+        return self.expired or self.validation_error is not None
+
+    @property
+    def is_busy(self) -> bool:
+        return self.operation_in_progress or self.pending_request is not None
+
+    @property
+    def title(self) -> str:
+        for message in self.messages:
+            if message["role"] == "user":
+                text = " ".join(message["content"].split())
+                return text[:45] + ("…" if len(text) > 45 else "")
+        return "새 대화"
+
+    def widget_key(self, name: str) -> str:
+        return f"conversation:{self.id}:{name}"
 
 
 def ensure_theme_state() -> None:
@@ -75,19 +116,22 @@ def ensure_theme_state() -> None:
 
 
 def ensure_session_state(logger: logging.Logger) -> None:
-    if "session_id" not in st.session_state:
+    if "conversations" not in st.session_state:
+        st.session_state["conversations"] = {}
         _start_new_session(logger, "streamlit_session_start")
-
-    st.session_state.setdefault("pending_upload", None)
-
-    if "messages" not in st.session_state:
-        st.session_state["messages"] = [_build_default_assistant_message()]
-
     get_session_path().mkdir(parents=True, exist_ok=True)
 
 
+def get_conversation() -> Conversation:
+    return st.session_state["conversations"][st.session_state["active_conversation_id"]]
+
+
+def list_conversations() -> list[Conversation]:
+    return list(st.session_state["conversations"].values())
+
+
 def get_session_id() -> str:
-    return str(st.session_state["session_id"])
+    return get_conversation().id
 
 
 def get_session_path() -> Path:
@@ -97,24 +141,28 @@ def get_session_path() -> Path:
 
 
 def get_session_client() -> AgentSessionClient:
-    return st.session_state["session_client"]
+    return get_conversation().client
 
 
 def get_upload_manifest() -> UploadManifest | None:
-    """Return the confirmed snapshot; None requires server confirmation, not an empty file set."""
-    return get_session_client().manifest
+    """Read-only conversations expose the last snapshot for display, never reuse."""
+    conversation = get_conversation()
+    if conversation.is_read_only:
+        return conversation.preserved_manifest
+    _remember_manifest(conversation)
+    return conversation.preserved_manifest if conversation.is_read_only else conversation.client.manifest
 
 
 def get_pending_upload() -> PendingUpload | None:
-    return st.session_state.get("pending_upload")
+    return get_conversation().pending_upload
 
 
 def set_pending_upload(operation: PendingUpload | None) -> None:
-    st.session_state["pending_upload"] = operation
+    get_conversation().pending_upload = operation
 
 
 def get_messages() -> list[ChatMessage]:
-    return st.session_state["messages"]
+    return get_conversation().messages
 
 
 def append_message(message: ChatMessage) -> None:
@@ -122,21 +170,88 @@ def append_message(message: ChatMessage) -> None:
 
 
 def reset_chat_session(logger: logging.Logger) -> None:
+    if get_conversation().is_busy:
+        return
+    _pause_automatic_work(get_conversation())
+    _remember_manifest(get_conversation())
     _start_new_session(logger, "streamlit_session_reset")
-    st.session_state["pending_upload"] = None
-    st.session_state["messages"] = [_build_default_assistant_message()]
-    st.session_state.pop(QUICK_PROMPTS_STATE_KEY, None)
-    st.session_state.pop("upload_saved_prompt", None)
-    st.session_state.pop("upload_followup_prompt", None)
     get_session_path().mkdir(parents=True, exist_ok=True)
+
+
+def switch_conversation(conversation_id: str) -> bool:
+    current = get_conversation()
+    if current.is_busy or current.id == conversation_id:
+        return False
+    target = st.session_state["conversations"][conversation_id]
+    if target.is_busy:
+        return False
+    _pause_automatic_work(current)
+    _remember_manifest(current)
+    _pause_automatic_work(target)
+    st.session_state["active_conversation_id"] = target.id
+    validate_conversation(target)
+    return True
+
+
+def validate_conversation(conversation: Conversation | None = None) -> bool:
+    """Recheck server identity without replaying uploads, questions or actions."""
+    conversation = conversation or get_conversation()
+    if conversation.expired:
+        return False
+    _remember_manifest(conversation)
+    if conversation.expired:
+        return False
+    expected_epoch = conversation.confirmed_epoch
+    try:
+        manifest = conversation.client.refresh_uploads()
+    except UploadAPIError as exc:
+        conversation.validation_error = str(exc)
+        return False
+    if expected_epoch is not None and manifest.epoch != expected_epoch:
+        conversation.expired = True
+        conversation.validation_error = None
+        conversation.client.manifest = None
+        _pause_automatic_work(conversation)
+        return False
+    conversation.validation_error = None
+    _remember_manifest(conversation)
+    return True
+
+
+def _remember_manifest(conversation: Conversation) -> None:
+    if conversation.is_read_only:
+        return
+    manifest = conversation.client.manifest
+    if manifest is not None:
+        if conversation.confirmed_epoch is not None and manifest.epoch != conversation.confirmed_epoch:
+            conversation.expired = True
+            conversation.client.manifest = None
+            _pause_automatic_work(conversation)
+            return
+        conversation.preserved_manifest = manifest.model_copy(deep=True)
+        if conversation.confirmed_epoch is None:
+            conversation.confirmed_epoch = manifest.epoch
+
+
+def _pause_automatic_work(conversation: Conversation) -> None:
+    if conversation.followup_prompt:
+        conversation.saved_prompt = conversation.followup_prompt
+        conversation.followup_prompt = None
+    if conversation.pending_upload is not None:
+        conversation.pending_upload.requires_confirmation = True
 
 
 def _start_new_session(logger: logging.Logger, event_name: str) -> None:
     session_id = str(uuid.uuid4())
-    st.session_state["session_id"] = session_id
-    st.session_state["session_client"] = AgentSessionClient(AgentRequestContext(
-        fastapi_url=get_settings().fastapi_url, session_id=session_id,
-    ))
+    conversation = Conversation(
+        id=session_id,
+        client=AgentSessionClient(AgentRequestContext(
+            fastapi_url=get_settings().fastapi_url, session_id=session_id,
+        )),
+        messages=[_build_default_assistant_message()],
+    )
+    st.session_state["conversations"][session_id] = conversation
+    st.session_state["active_conversation_id"] = session_id
     log_event(logger, logging.INFO, event_name, session_id=session_id[:8])
 
 

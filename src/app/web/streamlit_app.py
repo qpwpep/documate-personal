@@ -7,16 +7,22 @@ import streamlit as st
 
 from src.app.client import (
     AgentSessionClient,
+    AnswerExportAPIError,
     UploadAPIError,
 )
 from src.app.web.streamlit_chat import process_chat_prompt, render_chat_history
+from src.app.web.streamlit_conversations import render_conversation_notice
+from src.app.web.streamlit_requests import (
+    ChatSubmission, SaveSubmission, UploadSubmission, discard_saved_prompt,
+    queue_chat, queue_save, queue_upload, send_saved_prompt,
+)
 from src.app.web.streamlit_intro import render_intro
 from src.app.web.streamlit_page import warn_if_utf8_mode_disabled_once
 from src.app.web.streamlit_sidebar import render_sidebar
 from src.app.web.streamlit_styles import configure_page
 from src.app.web.streamlit_theme import THEME_STATE_KEY
 from src.app.web.streamlit_state import (
-    append_message,
+    Conversation,
     PendingUpload,
     ensure_session_state,
     ensure_theme_state,
@@ -25,8 +31,11 @@ from src.app.web.streamlit_state import (
     get_session_path,
     get_upload_manifest,
     get_pending_upload,
+    get_conversation,
     reset_chat_session,
     set_pending_upload,
+    switch_conversation,
+    validate_conversation,
 )
 from src.app.uploads import (
     build_upload_sync_request,
@@ -51,30 +60,56 @@ def main() -> None:
     configure_page(st.session_state[THEME_STATE_KEY])
     warn_if_utf8_mode_disabled_once()
     ensure_session_state(logger)
-
-    manifest_error = None
-    if get_upload_manifest() is None and get_pending_upload() is None:
-        try:
-            get_session_client().refresh_uploads()
-        except UploadAPIError as exc:
-            manifest_error = str(exc)
-
+    conversation = get_conversation()
+    if get_upload_manifest() is None and get_pending_upload() is None and not conversation.is_read_only:
+        validate_conversation(conversation)
+    if conversation.followup_prompt and not conversation.saved_prompt:
+        queue_chat(conversation, conversation.followup_prompt)
+        if conversation.pending_request is not None and conversation.pending_request.kind == "chat":
+            conversation.followup_prompt = None
+    queued = conversation.pending_request
+    pending_upload = get_pending_upload()
+    auto_upload = (
+        not conversation.is_read_only and pending_upload is not None and not pending_upload.attempted
+        and not pending_upload.requires_confirmation
+        and not any(item.conflicting_file_id and item.conflicting_file_id not in pending_upload.replace_file_ids
+                    for item in pending_upload.files)
+    )
+    busy = queued is not None or conversation.operation_in_progress or auto_upload
     manifest = get_upload_manifest()
-    sidebar_inputs = render_sidebar(manifest=manifest, uploads_busy=get_pending_upload() is not None)
+    sidebar_inputs = render_sidebar(
+        manifest=manifest, uploads_busy=get_pending_upload() is not None or conversation.is_read_only,
+        interactions_disabled=busy,
+    )
     if sidebar_inputs.new_chat_requested:
         reset_chat_session(logger)
         st.rerun()
+    selected_conversation = sidebar_inputs.selected_conversation
+    if selected_conversation is not None:
+        switch_conversation(selected_conversation)
+        st.rerun()
+    conversation.client.context.slack_recipient = sidebar_inputs.slack_recipient
 
     session_path = get_session_path()
     messages = get_messages()
-    selected_prompt = render_intro(DEFAULT_DOCS) if len(messages) <= 1 else None
-    render_chat_history(messages, SETTINGS.fastapi_url)
+    selected_prompt = render_intro(DEFAULT_DOCS) if len(messages) <= 1 and not busy and not conversation.is_read_only and not conversation.saved_prompt else None
+    render_chat_history(
+        messages, SETTINGS.fastapi_url, on_save=lambda answer_id: queue_save(conversation, answer_id),
+        actions_disabled=busy or conversation.is_read_only,
+    )
+    if conversation.is_read_only:
+        render_conversation_notice()
+        return
+    if queued is not None:
+        st.chat_input("처리 중입니다…", disabled=True, key=conversation.widget_key("busy_input"))
+        _execute_submission(conversation, queued)
+        st.rerun()
 
     if manifest is None:
         if get_pending_upload() is not None:
             _render_pending_upload()
             return
-        st.error(manifest_error or "첨부 목록을 불러오지 못했습니다.")
+        st.error("첨부 목록을 불러오지 못했습니다.")
         if st.button("첨부 서버 다시 연결", key="documate_reconnect_uploads"):
             st.rerun()
         return
@@ -82,7 +117,7 @@ def main() -> None:
     if sidebar_inputs.refresh_uploads_requested:
         client = get_session_client()
         try:
-            client.refresh_uploads()
+            validate_conversation(conversation)
             st.rerun()
         except UploadAPIError as exc:
             st.error(str(exc))
@@ -99,14 +134,16 @@ def main() -> None:
         _render_pending_upload()
         return
 
-    saved_prompt = st.session_state.get("upload_saved_prompt")
-    send_saved_prompt = False
+    saved_prompt = conversation.saved_prompt
     if saved_prompt:
         st.info(f"아직 보내지 않은 질문: {saved_prompt}")
-        send_saved_prompt = st.button("보류한 질문 보내기", key="documate_send_saved_upload_prompt")
-        if st.button("보류한 질문 지우기", key="documate_discard_saved_upload_prompt"):
-            st.session_state.pop("upload_saved_prompt", None)
-            st.rerun()
+        st.button("보류한 질문 보내기", key="documate_send_saved_upload_prompt",
+                  on_click=send_saved_prompt, args=(conversation,))
+        st.button("보류한 질문 지우기", key="documate_discard_saved_upload_prompt",
+                  on_click=discard_saved_prompt, args=(conversation,))
+        st.chat_input("보류한 질문을 보내거나 지운 뒤 새 질문을 입력하세요", disabled=True,
+                      key=conversation.widget_key("held_input"))
+        return
 
     suffixes = enabled_upload_suffixes(docling_enabled=getattr(SETTINGS, "docling_enabled", False))
     st.caption(f"{' · '.join(sorted(suffixes))} / 최대 {SETTINGS.upload_max_files}개 / 파일당 {SETTINGS.upload_max_file_mib} MiB / 전체 {SETTINGS.upload_max_total_mib} MiB")
@@ -116,18 +153,17 @@ def main() -> None:
         accept_file="multiple",
         file_type=[suffix.lstrip(".") for suffix in sorted(suffixes)],
         max_upload_size=SETTINGS.upload_max_file_mib,
+        key=conversation.widget_key("chat_input"),
     )
     typed_prompt, attached_files = _split_chat_submission(chat_submission)
-    prompt = typed_prompt or st.session_state.pop("upload_followup_prompt", None) or (saved_prompt if send_saved_prompt else None) or selected_prompt
-    if send_saved_prompt:
-        st.session_state.pop("upload_saved_prompt", None)
+    prompt = typed_prompt or selected_prompt
     if attached_files:
         staged = _stage_files(attached_files, session_path)
         if staged.errors:
             for error in staged.errors:
                 st.error(error)
             if prompt:
-                st.session_state["upload_saved_prompt"] = prompt
+                conversation.saved_prompt = prompt
             return
         if staged.unchanged_names:
             st.info("이미 첨부된 동일 파일은 유지했습니다: " + ", ".join(staged.unchanged_names))
@@ -140,24 +176,52 @@ def main() -> None:
             return
 
     if prompt:
-        if sidebar_inputs.slack_recipient_error is not None:
-            st.error(sidebar_inputs.slack_recipient_error)
-            st.session_state["upload_saved_prompt"] = prompt
+        queue_chat(conversation, prompt)
+        st.rerun()
+
+
+def _execute_submission(conversation: Conversation, submission: ChatSubmission | SaveSubmission | UploadSubmission) -> None:
+    """A consumed submission cannot be replayed by a rerun or navigation."""
+    conversation.pending_request = None
+    if not validate_conversation(conversation):
+        if submission.kind == "chat":
+            conversation.saved_prompt = submission.prompt
+        elif submission.kind == "upload" and conversation.pending_upload is not None:
+            conversation.pending_upload.requires_confirmation = True
+        elif submission.kind == "save":
+            for message in conversation.messages:
+                if message["role"] == "assistant" and message["result"] is not None and message["result"].answer_id == submission.answer_id:
+                    message["export_error"] = "저장 전에 서버 상태를 확인하지 못했습니다. 대화 연결을 확인한 뒤 같은 답변으로 다시 시도해 주세요."
+        return
+    conversation.operation_in_progress = True
+    try:
+        if submission.kind == "upload":
+            with st.spinner("파일을 검증하고 함께 검색할 자료를 준비합니다…"):
+                commit_pending_upload()
             return
-
-        client = get_session_client()
-        client.context.slack_recipient = sidebar_inputs.slack_recipient
-
-        def append_current_message(message):
-            if get_session_client() is client:
-                append_message(message)
-
+        if submission.kind == "save":
+            targets = [message for message in conversation.messages if message["role"] == "assistant"
+                       and message["result"] is not None and message["result"].answer_id == submission.answer_id]
+            try:
+                with st.spinner("선택한 답변을 출처와 함께 저장합니다…"):
+                    result = conversation.client.save_answer(submission.answer_id)
+                for message in targets:
+                    message["export_result"] = result
+                    message.pop("export_error", None)
+            except AnswerExportAPIError as exc:
+                for message in targets:
+                    message["export_error"] = str(exc)
+                if exc.status_code == 410:
+                    conversation.expired = True
+            return
         process_chat_prompt(
-            stream_agent=client.stream,
-            prompt=prompt,
-            append_user_message=append_current_message,
-            append_assistant_message=append_current_message,
+            stream_agent=conversation.client.stream,
+            prompt=submission.prompt,
+            append_user_message=conversation.messages.append,
+            append_assistant_message=conversation.messages.append,
         )
+    finally:
+        conversation.operation_in_progress = False
 
 
 def _stage_files(files: list[Any], session_path: Path):
@@ -204,8 +268,10 @@ def commit_pending_upload() -> bool:
     if not _is_current_pending(client, pending):
         return False
     if pending.prompt:
-        key = "upload_saved_prompt" if pending.had_failure else "upload_followup_prompt"
-        st.session_state[key] = pending.prompt
+        if pending.had_failure:
+            get_conversation().saved_prompt = pending.prompt
+        else:
+            get_conversation().followup_prompt = pending.prompt
     discard_staged_files(pending.files, session_path)
     set_pending_upload(None)
     return True
@@ -260,21 +326,18 @@ def _render_pending_upload() -> None:
         st.warning("같은 이름의 다른 내용이 있습니다: " + ", ".join(item.name for item in conflicts))
         if st.button("같은 이름의 파일 교체", key="documate_confirm_upload_replacements"):
             pending.replace_file_ids.update(item.conflicting_file_id for item in conflicts)
-            with st.spinner("파일을 검증하고 함께 검색할 자료를 준비합니다…"):
-                commit_pending_upload()
+            queue_upload(get_conversation())
             st.rerun()
-    elif not pending.attempted:
-        with st.spinner("파일을 검증하고 함께 검색할 자료를 준비합니다…"):
-            commit_pending_upload()
+    elif not pending.attempted and not pending.requires_confirmation:
+        queue_upload(get_conversation())
         st.rerun()
-    elif st.button("첨부 변경 다시 시도", key="documate_retry_uploads"):
-        with st.spinner("동일한 첨부 변경의 처리 결과를 확인합니다…"):
-            commit_pending_upload()
+    elif st.button("첨부 변경 다시 시도" if pending.attempted else "첨부 변경 적용", key="documate_retry_uploads"):
+        queue_upload(get_conversation())
         st.rerun()
     cancel_label = "대기 화면 닫기" if pending.attempted or pending.had_failure else "첨부 준비 취소"
     if st.button(cancel_label, key="documate_cancel_pending_upload"):
         if pending.prompt:
-            st.session_state["upload_saved_prompt"] = pending.prompt
+            get_conversation().saved_prompt = pending.prompt
         if not pending.attempted and not pending.had_failure:
             discard_staged_files(pending.files, get_session_path())
         set_pending_upload(None)

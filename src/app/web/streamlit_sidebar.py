@@ -7,18 +7,20 @@ import streamlit as st
 from pydantic import ValidationError
 
 from src.app.web.streamlit_theme import THEME_OPTIONS, THEME_STATE_KEY
+from src.app.web.streamlit_state import get_conversation
+from src.app.web.streamlit_conversations import render_conversation_picker
 from src.core.uploads import UploadManifest
-from src.core.slack_contract import RecipientSelector
+from src.core.slack_contract import RecipientInput, RecipientSelector
 
 
 @dataclass
 class SidebarInputs:
-    slack_recipient: RecipientSelector | None
+    slack_recipient: RecipientInput | None
     new_chat_requested: bool
+    selected_conversation: str | None = None
     remove_file_id: str | None = None
     clear_uploads_requested: bool = False
     refresh_uploads_requested: bool = False
-    slack_recipient_error: str | None = None
 
 
 
@@ -26,7 +28,10 @@ def render_sidebar(
     *,
     manifest: UploadManifest | None = None,
     uploads_busy: bool = False,
+    interactions_disabled: bool = False,
 ) -> SidebarInputs:
+    conversation = get_conversation()
+    uploads_busy = uploads_busy or interactions_disabled
     remove_file_id = None
     clear_uploads_requested = False
     refresh_uploads_requested = False
@@ -47,7 +52,9 @@ def render_sidebar(
             "새 채팅",
             key="documate_new_chat",
             use_container_width=True,
+            disabled=interactions_disabled,
         )
+        selected_conversation = render_conversation_picker(disabled=interactions_disabled)
 
         st.markdown('<div class="dm-sidebar-section">함께 검색할 파일</div>', unsafe_allow_html=True)
         if manifest is not None:
@@ -56,7 +63,8 @@ def render_sidebar(
             total_mib = sum(item.size_bytes for item in manifest.files) / (1024 * 1024)
             st.markdown(f'<p class="dm-upload-summary"><strong>{len(manifest.files)}개 파일 · {total_mib:.2f} MiB</strong></p>', unsafe_allow_html=True)
             for item in manifest.files:
-                st.markdown(f'<div class="dm-upload-note"><strong>{escape(item.name)}</strong> · {item.size_bytes / 1024:.1f} KiB · 검색 가능</div>', unsafe_allow_html=True)
+                availability = "이전 첨부 기록" if conversation.is_read_only else "검색 가능"
+                st.markdown(f'<div class="dm-upload-note"><strong>{escape(item.name)}</strong> · {item.size_bytes / 1024:.1f} KiB · {availability}</div>', unsafe_allow_html=True)
                 if st.button(f"{item.name} 삭제", key=f"documate_remove_upload_{item.file_id}", disabled=uploads_busy):
                     remove_file_id = item.file_id
             if manifest.files:
@@ -75,30 +83,36 @@ def render_sidebar(
             horizontal=True,
             label_visibility="collapsed",
             key=THEME_STATE_KEY,
+            disabled=interactions_disabled,
         )
 
         st.markdown('<div class="dm-sidebar-section">Slack 전송</div>', unsafe_allow_html=True)
+        recipient_options = ("미지정", "채널", "사용자", "이메일")
         recipient_kind = st.radio(
-            "수신자 유형", options=("미지정", "채널", "사용자", "이메일"), index=0,
-            key="documate_slack_recipient_kind",
+            "수신자 유형", options=recipient_options,
+            index=recipient_options.index(conversation.slack_drafts.get("kind", "미지정")),
+            key=conversation.widget_key("slack_recipient_kind"),
+            disabled=interactions_disabled or conversation.is_read_only,
         )
+        conversation.slack_drafts["kind"] = recipient_kind
         slack_recipient = None
-        slack_recipient_error = None
         if recipient_kind != "미지정":
             kinds = {"채널": ("channel", "C/G/Dxxxxx"), "사용자": ("user", "Uxxxxx"), "이메일": ("email", "name@example.com")}
             kind, placeholder = kinds[recipient_kind]
-            value = st.text_input("Slack 수신자", value="", placeholder=placeholder,
-                                  key=f"documate_slack_recipient_{kind}")
+            value = st.text_input("Slack 수신자", value=conversation.slack_drafts.get(kind, ""), placeholder=placeholder,
+                                  key=conversation.widget_key(f"slack_recipient_{kind}"),
+                                  disabled=interactions_disabled or conversation.is_read_only)
+            conversation.slack_drafts[kind] = value
+            slack_recipient = RecipientInput(kind=kind, value=value)
             try:
-                slack_recipient = RecipientSelector(kind=kind, value=value)
+                RecipientSelector(kind=kind, value=value)
             except ValidationError:
-                slack_recipient_error = "선택한 유형에 맞는 Slack 수신자를 입력하거나 ‘미지정’을 선택해 주세요."
-                st.error(slack_recipient_error)
+                st.caption("Slack 전송 시 선택한 유형에 맞는 수신자가 필요합니다. 일반 질문은 계속할 수 있습니다.")
 
     return SidebarInputs(
         slack_recipient=slack_recipient,
-        slack_recipient_error=slack_recipient_error,
         new_chat_requested=new_chat_requested,
+        selected_conversation=selected_conversation,
         remove_file_id=remove_file_id,
         clear_uploads_requested=clear_uploads_requested,
         refresh_uploads_requested=refresh_uploads_requested,
