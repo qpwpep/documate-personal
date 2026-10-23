@@ -6,7 +6,7 @@ from urllib.parse import quote, urlparse
 import streamlit as st
 
 from src.core.documents import SourceAnchor, TableData
-from src.core.evidence import EvidenceRef, selected_source_anchors
+from src.core.evidence import EvidenceRef, selected_source_anchors, source_line_records
 from src.core.python_source import PythonSourceMap
 
 
@@ -23,8 +23,12 @@ def render_evidence(evidence: EvidenceRef) -> None:
         selected_ids = set(evidence.selection.cell_ids)
         if any(not cell.anchors for cell in element.table.cells if cell.cell_id in selected_ids) and element.anchors:
             st.caption("일부 선택 셀의 위치가 없어 표 전체 위치를 함께 표시합니다.")
+    mapping_anchor = _mapped_line_anchor(evidence, source_line_records(evidence))
     for anchor in selected_source_anchors(evidence):
-        st.caption(_format_anchor(anchor))
+        location = _format_anchor(anchor)
+        if anchor.line_start is not None and anchor != mapping_anchor:
+            location = "원문 요소 위치: " + location
+        st.caption(location)
 
     if snapshot.capture_scope == "provider_excerpt":
         st.caption("원문의 일부만 수집한 자료입니다. 아래에 당시 수집한 내용을 표시합니다.")
@@ -33,7 +37,8 @@ def render_evidence(evidence: EvidenceRef) -> None:
 
     st.markdown("**답변에 사용한 부분**")
     if element.kind == "code":
-        render_code(evidence.excerpt, language=element.language or "text", line_numbers=True)
+        # Streamlit can only number from one, which would relabel cropped source.
+        render_code(evidence.excerpt, language=element.language or "text")
     else:
         st.text(evidence.excerpt)
     if evidence.selection.cell_ids:
@@ -47,7 +52,7 @@ def render_evidence(evidence: EvidenceRef) -> None:
         if element.table is not None:
             st.html(_table_html(element.table, selected=set(evidence.selection.cell_ids)))
         elif element.kind == "code":
-            render_code(element.text, language=element.language or "text", line_numbers=True)
+            render_code(element.text, language=element.language or "text")
         else:
             st.text(element.text)
         st.caption("이 내용은 답변을 만들 때 보관한 원문입니다. 현재 파일의 변경이나 삭제와 무관합니다.")
@@ -93,17 +98,29 @@ def _line_range(start: int, end: int) -> str:
     return f"{start}행" if start == end else f"{start}–{end}행"
 
 
+def _mapped_line_anchor(evidence: EvidenceRef, lines: list[dict]) -> SourceAnchor | None:
+    if not lines:
+        return None
+    selected_length = lines[-1]["end"] - lines[0]["start"]
+    return next((anchor for anchor in selected_source_anchors(evidence)
+                 if anchor.kind in {"code", "notebook", "text"} and anchor.precision == "exact"
+                 and anchor.start is not None and anchor.end is not None
+                 and anchor.end - anchor.start == selected_length
+                 and anchor.line_start == lines[0]["line_number"]
+                 and anchor.line_end == lines[-1]["line_number"]), None)
+
+
 def _selection_location(evidence: EvidenceRef, *, start: int, end: int) -> str:
+    lines = source_line_records(evidence)
+    if lines:
+        line_start, line_end = lines[0]["line_number"], lines[-1]["line_number"]
+        anchor = _mapped_line_anchor(evidence, lines)
+        scope = f"셀 {anchor.cell_index + 1}의 " if anchor is not None and anchor.cell_index is not None else "원문 "
+        return "사용 범위: " + scope + _line_range(line_start, line_end)
     source = PythonSourceMap(evidence.element.text)
     line_start = source.line_at_offset(start)
     line_end = source.line_at_offset(max(start, end - 1))
-    source_start = next(
-        (anchor.line_start for anchor in evidence.element.anchors if anchor.line_start is not None),
-        None,
-    )
-    if source_start is not None:
-        return "사용 범위: 원문 " + _line_range(source_start + line_start - 1, source_start + line_end - 1)
-    return "사용 범위: 수집한 요소의 " + _line_range(line_start, line_end)
+    return "사용 범위: 수집한 요소의 " + _line_range(line_start, line_end) + " (원문 줄 번호는 확인되지 않았습니다)"
 
 
 def _table_html(table: TableData, *, selected: set[str]) -> str:
