@@ -294,3 +294,9 @@ script/web_services_state.json
 
 # Promotion locks are local coordination handles, not approval history.
 **/*.approvals/.save.lock
+
+# Local agent skill configuration
+/AGENTS.md
+/docs/agents/issue-tracker.md
+/docs/agents/triage-labels.md
+/docs/agents/domain.md
