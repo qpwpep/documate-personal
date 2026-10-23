@@ -5,6 +5,7 @@ from typing import Any
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from src.core.answer_schema import ActionReceipt, AnswerResponse, export_answer_text
+from src.core.answer_export import answer_export_key, answer_export_snapshot, build_answer_export_operation
 from src.core.contracts import GraphState
 from src.core.contracts.graph_state import PendingAction
 from src.core.contracts.boundary.debug import get_debug_state
@@ -15,6 +16,7 @@ from src.core.message_utils import build_tool_message
 from src.core.request_contracts import check_answer_contract, resolve_body_response
 from src.core.save_contract import SaveOperation
 from src.infra.logging_utils import log_event
+from src.infra.answer_export import select_current_save_operation
 from src.runtime.nodes.actions.policy import select_slack_delivery
 from src.core.slack_contract import SlackDefault, SlackDelivery
 from src.runtime.nodes.actions.receipts import build_save_receipt, build_slack_receipt
@@ -27,6 +29,13 @@ logger = logging.getLogger(__name__)
 def _save_operation(*, contract, runtime, pending, response, body: str) -> SaveOperation:
     prior = pending.save_operation if pending and pending.contract.request_id == contract.request_id else None
     scope = runtime.session_id or contract.request_id
+    if contract.body.kind == "copy_answer":
+        operation = (runtime.answer_export_operations.get(answer_export_key(response.result))
+                     or prior or build_answer_export_operation(response.result, session_id=scope))
+        if operation.session_id != scope or not operation.matches_bytes(body.encode("utf-8-sig")):
+            from src.infra.saved_artifacts import ArtifactError
+            raise ArtifactError("idempotency_conflict", "선택한 저장 작업의 본문과 세션이 다릅니다.")
+        return select_current_save_operation(operation)
     if prior is not None and prior.request_id == contract.request_id and prior.session_id == scope:
         # Request reconciliation already discarded replaced obligations. A
         # surviving operation stays frozen across retries and destination edits.
@@ -65,8 +74,11 @@ def _ready_body(*, contract, response, runtime, pending, planner) -> bool:
         )
         if source is None:
             return False
-        if contract.body.kind == "copy_answer" and response.result.content_hash != source.content_hash:
-            return False
+        if contract.body.kind == "copy_answer":
+            copied = answer_export_snapshot(response.result).model_dump(exclude={"semantic_validation"})
+            original = answer_export_snapshot(source).model_dump(exclude={"semantic_validation"})
+            if copied != original:
+                return False
     return True
 
 
@@ -189,10 +201,10 @@ def make_action_postprocess_node(
 
         if intents["save_text"] == "requested" and "save_text" not in completed:
             if contract.execution_ready("save_text", body_ready=body_ready):
-                save_operation = _save_operation(contract=contract, runtime=runtime, pending=pending,
-                                                 response=response, body=body)
                 invocation_id = None
                 try:
+                    save_operation = _save_operation(contract=contract, runtime=runtime, pending=pending,
+                                                     response=response, body=body)
                     if save_operation.answer_hash != response.result.content_hash:
                         from src.infra.saved_artifacts import ArtifactError
                         invocation_id = record_nonexecution("save_text", reason_code="idempotency_conflict")
@@ -315,6 +327,11 @@ def make_action_postprocess_node(
             })
         if verbose and messages:
             log_event(logger, logging.INFO, "postprocess", tools=", ".join(message.name or "" for message in messages))
+        if body_ready and save_operation is not None and save_receipt is not None:
+            committed_runtime = updates.get("runtime", runtime)
+            operations = {**committed_runtime.answer_export_operations,
+                          answer_export_key(response.result): save_operation}
+            updates["runtime"] = committed_runtime.model_copy(update={"answer_export_operations": operations})
         return updates
 
     return action_postprocess

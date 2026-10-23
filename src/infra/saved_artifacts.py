@@ -83,6 +83,11 @@ def _check_expiry(manifest: SaveManifest, now_epoch: float) -> None:
         raise ArtifactError("artifact_expired", "This saved artifact has expired")
 
 
+def read_saved_manifest(output_dir: Path, filename: str) -> SaveManifest:
+    """Inspect a validated operation tombstone without renewing its retention."""
+    return _load_manifest(_artifact_path(Path(output_dir), filename))
+
+
 def read_saved_artifact(
     output_dir: Path, filename: str, *, now_epoch: float | None = None,
 ) -> tuple[SaveManifest, bytes]:

@@ -87,6 +87,32 @@ def test_export_preserves_checked_body_sources_limits_and_semantic_report(tmp_pa
     assert Path(receipt.file_path).read_bytes() == export_answer_text(source, include_sources=True).encode("utf-8-sig")
 
 
+def test_unchanged_export_retry_and_repeat_use_one_exact_artifact(tmp_path, monkeypatch):
+    monkeypatch.setattr("src.infra.tools.save_text.get_save_text_output_dir", lambda: tmp_path)
+    source = checked_source()
+    graph = export_graph()
+    real_link = saved_artifacts.os.link
+
+    def fail_payload(source, destination):
+        if Path(destination).suffix == ".txt":
+            raise OSError("temporary disk failure")
+        return real_link(source, destination)
+
+    state = dict(user_input="방금 답변을 출처와 함께 txt 파일로 저장해줘", previous_response=source,
+                 session_id="exact-export-session")
+    with monkeypatch.context() as failing:
+        failing.setattr(saved_artifacts.os, "link", fail_payload)
+        first = graph.invoke(build_graph_state_input(**state))
+    assert first["response"].result.actions[0].status == "error"
+    for _ in range(2):
+        result = graph.invoke(build_graph_state_input(**state))
+        receipt = result["response"].result.actions[0]
+        assert receipt.status == "success"
+        assert receipt.operation == first["response"].result.actions[0].operation
+        assert Path(receipt.file_path).read_bytes() == export_answer_text(source, include_sources=True).encode("utf-8-sig")
+    assert len(list(tmp_path.glob("*.txt"))) == 1
+
+
 def test_copy_with_new_semantic_requirement_still_requires_semantic_validation(tmp_path, monkeypatch):
     monkeypatch.setattr("src.infra.tools.save_text.get_save_text_output_dir", lambda: tmp_path)
     result = export_graph(semantic_constraint=True).invoke(build_graph_state_input(

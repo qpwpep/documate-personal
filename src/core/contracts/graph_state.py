@@ -54,6 +54,7 @@ class RuntimeState(BaseModel):
     previous_response: AnswerResponse | None = None
     request_contract: RequestContract | None = None
     pending_action: PendingAction | None = None
+    answer_export_operations: dict[str, SaveOperation] = Field(default_factory=dict)
 
     @field_validator("user_turns")
     @classmethod

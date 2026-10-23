@@ -53,6 +53,7 @@ def parse_runtime_state(value: Any) -> RuntimeState:
         previous_response=(AnswerResponse.model_validate(value["previous_response"]) if value.get("previous_response") is not None else None),
         request_contract=contract,
         pending_action=pending,
+        answer_export_operations=value.get("answer_export_operations", {}),
     )
 
 

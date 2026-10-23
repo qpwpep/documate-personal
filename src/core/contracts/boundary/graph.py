@@ -5,6 +5,7 @@ from uuid import uuid4
 
 from langchain_core.messages import AnyMessage
 from src.core.answer_schema import AnswerResponse
+from src.core.save_contract import SaveOperation
 
 from src.core.contracts.debug import RetryState
 from src.core.contracts.routing import validate_route_decisions
@@ -33,6 +34,7 @@ def build_graph_state_input(
     previous_response: AnswerResponse | None = None,
     request_contract: RequestContract | dict[str, Any] | None = None,
     pending_action: PendingAction | None = None,
+    answer_export_operations: dict[str, SaveOperation] | None = None,
     planner: PlannerState | dict[str, Any] | None = None,
     retrieval: RetrievalState | dict[str, Any] | None = None,
     retry: RetryState | dict[str, Any] | None = None,
@@ -55,6 +57,7 @@ def build_graph_state_input(
             previous_response=previous_response,
             request_contract=parse_request_contract(request_contract),
             pending_action=pending_action,
+            answer_export_operations=answer_export_operations or {},
         ),
     }
     if planner is not None:
