@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 from urllib.parse import quote
+from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response, StreamingResponse
@@ -12,6 +13,7 @@ from src.infra.runtime_paths import get_save_text_output_dir
 from src.infra.saved_artifacts import ArtifactError, read_saved_artifact
 from src.app.web.cleanup import resolve_download_path
 from src.app.web.schemas import AGENT_STREAM_EVENT_SCHEMAS, AgentRequest, AgentStreamEvent
+from src.core.contracts.outcome import AnswerExportResult
 from src.core.uploads import UploadManifest, UploadSyncRequest, validate_session_id
 
 
@@ -34,6 +36,12 @@ def get_upload_manifest(session_id: str, request: Request):
 @router.post("/sessions/{session_id}/uploads/sync", response_model=UploadManifest)
 def sync_upload_manifest(session_id: str, request_data: UploadSyncRequest, request: Request):
     return request.app.state.upload_service.sync(_upload_session_id(session_id), request_data)
+
+
+@router.post("/sessions/{session_id}/answers/{answer_id}/save", response_model=AnswerExportResult)
+def save_answer(session_id: str, answer_id: str, request: Request):
+    request_id = str(getattr(request.state, "request_id", None) or uuid4().hex)[:8]
+    return request.app.state.answer_export_service.save(_upload_session_id(session_id), answer_id, request_id=request_id)
 
 
 def _encode_sse_event(event: AgentStreamEvent) -> str:

@@ -16,6 +16,12 @@ from src.infra.settings import AppSettings
 logger = logging.getLogger(__name__)
 
 
+class SessionUnavailable(LookupError):
+    def __init__(self, *, expired: bool = False):
+        self.expired = expired
+        super().__init__("Session has expired" if expired else "Session is unavailable")
+
+
 @dataclass
 class SessionEntry:
     agent: AgentFlowManager
@@ -150,6 +156,30 @@ class InMemorySessionStore:
         try:
             with entry.request_lock:
                 yield entry, int((time.monotonic() - lock_started) * 1000)
+        finally:
+            with self._lock:
+                if self.active_agents.get(session_id) is entry:
+                    entry.last_accessed_monotonic = time.monotonic()
+                    entry.active_request_count = max(0, entry.active_request_count - 1)
+
+    @contextmanager
+    def locked_existing_session(self, session_id: str):
+        """Pin a live session without silently recreating expired answer history."""
+        session_id = validate_session_id(session_id)
+        now = time.monotonic()
+        with self._lock:
+            entry = self.active_agents.get(session_id)
+            if entry is None:
+                raise SessionUnavailable()
+            if (entry.active_request_count <= 0 and not entry.request_lock.locked()
+                    and now - entry.last_accessed_monotonic > self.settings.session_ttl_seconds):
+                self._pop_session_entry(session_id)
+                raise SessionUnavailable(expired=True)
+            entry.active_request_count += 1
+            entry.last_accessed_monotonic = now
+        try:
+            with entry.request_lock:
+                yield entry
         finally:
             with self._lock:
                 if self.active_agents.get(session_id) is entry:

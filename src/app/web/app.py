@@ -8,6 +8,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 
 from src.app.agent_manager import AgentFlowManager
+from src.app.answer_exports import AnswerExportService
 from src.infra.logging_utils import configure_logging, log_event
 from src.infra.runtime_encoding import ensure_utf8_stdio
 from src.infra.settings import ConfigurationError, get_settings, validate_required_keys
@@ -68,6 +69,7 @@ async def lifespan(app: FastAPI):
     app.state.session_store = session_store
     app.state.runtime_cleaner = runtime_cleaner
     app.state.agent_request_service = agent_request_service
+    app.state.answer_export_service = AnswerExportService(settings=settings, session_store=session_store)
     from src.app.web.upload_service import UploadService
     from src.infra.docling_runner import DoclingRunner
     converter = DoclingRunner(cache_max_bytes=settings.document_cache_max_mib * 1024 * 1024 // 2,
