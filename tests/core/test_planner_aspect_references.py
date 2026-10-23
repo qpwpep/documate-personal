@@ -1,5 +1,6 @@
 """Selected answer subjects retain anchors without authorizing assistant guesses."""
 import pytest
+import json
 from langchain_core.messages import AIMessage, HumanMessage
 
 from src.core.answer_schema import finalize_answer, text_document
@@ -7,6 +8,8 @@ from src.core.llm_errors import LLMCallError
 from src.core.request_contracts import WireRequestContract
 from src.runtime.nodes.planner import make_planner_node
 from tests.core.helpers import _CapturePlannerLLM, build_test_state
+from tests.core.test_exact_answer_export import checked_source
+from src.runtime.nodes.planner.prompt_builder import build_planner_messages
 
 
 CURRENT = "1번을 공식 문서에서 확인해줘"
@@ -67,3 +70,17 @@ class _SequencePlanner:
     def invoke(self, messages):
         self.messages.append(messages)
         return next(self.proposals)
+
+
+def test_offered_answer_reference_exposes_existing_export_sources_and_limits():
+    state = _state()
+    source = checked_source()
+    state["runtime"] = state["runtime"].model_copy(update={"previous_response": source})
+    messages = build_planner_messages(state)
+    context = json.loads(next(message.content for message in messages if message.name == "request_context").split("\n", 1)[1])
+    offered = context["offered_answer_references"][0]
+    assert offered["document"] == source.content.model_dump(mode="json")
+    assert offered["export"]["preserves"] == ["body", "sources", "limitations"]
+    assert offered["export"]["source_count"] == len(source.citations)
+    assert offered["export"]["limitation_count"] == len(source.issues)
+    assert context["execution_capabilities"]["save_text"]["preserves"] == ["body", "sources", "limitations"]

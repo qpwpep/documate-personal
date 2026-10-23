@@ -68,6 +68,7 @@ PLANNER_SYS = PLANNER_RETRIEVAL_SYS + (
     "- Input bodies select source={turn_id, quote, occurrence} from the exact User Turn Ledger. quote must match verbatim; occurrence is one-based only when the user distinguishes repeated text, otherwise null. Answer bodies select source={ref: previous or pending} from Offered Answer References. Do not output hashes, offsets, request IDs of your own, revisions or readiness. The server binds those fields.\n"
     "- 'Translate the phrase save this' is transform_input selecting only the phrase, with no save action. Surrounding quotation marks are delimiters, not payload, unless explicitly included in the requested content. '현재 답변을 저장해줘' is copy_answer(ref=previous). '방금 답변을 세 줄로 줄여 저장해줘' is transform_answer(ref=previous) plus required line_count=3.\n"
     "- A request for the answer as a TXT file, including '방금 답변 txt로', requests save_text and preserves the selected answer. An explicit request to reformat displayed text without creating a file does not request saving.\n"
+    "- The save_text export always preserves the selected body's existing citations, source locations and limitations. When the user explicitly requests exporting an existing answer with no additional body changes or verification requirements, '방금 답변을 출처와 함께 txt 파일로 저장해줘' or export instructions to 'include the sources' or 'keep the limitations' use copy_answer with save_text=requested, empty answer requirements and no retrieval. Asking about sources or limitations alone does not request saving. Existing source attribution is an export component, not new answer content. Do not choose transform_answer merely to add a sources section or convert Markdown into TXT. Use transform_answer only when the user requests actual changes such as translating, shortening, rewriting or adding new claims; newly requested external verification still needs its own retrieval.\n"
     "- Saving or sending an already completed displayed answer is a new request: use relation=new and target_request_id=null, unless the user explicitly changes an offered pending request. Choose copy_answer(ref=previous) when preserving the body and transform_answer(ref=previous) when changes are requested. In '방금 답변을 수정하지 말고 그대로 txt 파일로 저장해줘', '수정하지 말고' preserves the body; it does not supplement or cancel a prior request. For this TXT example, keep save_text=requested.\n"
     "- Distinguish semantic content requirements, explicit output format, prohibitions, and preferences. A general example does not require code; an everyday example is kind=example. A beginner audience is a preference, not an ordered-list requirement. Only explicit strict constraints are required/forbidden; preferred and answer.preferences also record only preferences actually expressed by the user, never your own presentation choices. Omit unrequested content, format, and preferences entries; empty arrays are valid. Every content/format entry, including mode=preferred, needs evidence_ids supporting that field's scope. Preserve softer user preferences without promoting them to hard requirements.\n"
     "- Do not repeat a transformation instruction or delivery action as custom required content. Put explicit N-line constraints in answer.format line_count with value=N; no table belongs to answer.format table/forbidden, never comparison or custom.\n"
@@ -163,7 +164,8 @@ def build_planner_messages(state: GraphState, max_turns: int = 6) -> list[BaseMe
     context = {"user_turn_ledger": [{"turn_id": turn_id, "text": text} for turn_id, text in utterances.items()],
                "upload_files": [{"file_id": item.file_id, "name": item.name} for item in runtime.upload_files],
                "offered_answer_references": [],
-               "execution_capabilities": {"save_text": {"filename": "server_generated", "user_filename_or_path_required": False},
+               "execution_capabilities": {"save_text": {"filename": "server_generated", "user_filename_or_path_required": False,
+                                                         "preserves": ["body", "sources", "limitations"]},
                                           "slack_notify": {"destination_required": True}}}
     context["previous_answer_for_aspects"] = planner_previous_answer(state)
     model_messages.append(SystemMessage(content=(
@@ -171,7 +173,7 @@ def build_planner_messages(state: GraphState, max_turns: int = 6) -> list[BaseMe
         "Interpret the latest user request once, using the exact user_turn_ledger for evidence and offered references for body selection."
     )))
     if runtime.previous_response is not None:
-        context["offered_answer_references"].append({"ref": "previous", "document": runtime.previous_response.content.model_dump(mode="json")})
+        context["offered_answer_references"].append(_offered_answer("previous", runtime.previous_response))
     if runtime.pending_action is not None:
         pending = runtime.pending_action
         context["pending_action"] = {
@@ -184,7 +186,7 @@ def build_planner_messages(state: GraphState, max_turns: int = 6) -> list[BaseMe
             "completed_actions": list(pending.completed_actions),
         }
         if pending.response is not None:
-            context["offered_answer_references"].append({"ref": "pending", "document": pending.response.content.model_dump(mode="json")})
+            context["offered_answer_references"].append(_offered_answer("pending", pending.response))
     if context:
         model_messages.append(SystemMessage(content=(
             "The Request Interpretation Context has distinct roles. "
@@ -207,3 +209,10 @@ def build_planner_messages(state: GraphState, max_turns: int = 6) -> list[BaseMe
     if not any(isinstance(message, HumanMessage) for message in model_messages):
         model_messages.append(HumanMessage(content=runtime.user_input.strip()))
     return model_messages
+
+
+def _offered_answer(ref, response) -> dict:
+    return {"ref": ref, "document": response.content.model_dump(mode="json"), "export": {
+        "preserves": ["body", "sources", "limitations"],
+        "source_count": len(response.citations), "limitation_count": len(response.issues),
+    }}

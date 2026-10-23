@@ -84,6 +84,11 @@ class TransformInputBody(BodyModel):
 
 
 class WireCopyAnswerBody(BodyModel):
+    """Reuse a displayed answer including its existing sources and limitations.
+
+    TXT serialization and inclusion of existing citations are server export
+    behavior, not transformations of the answer's wording or content.
+    """
     kind: Literal["copy_answer"] = "copy_answer"
     source: AnswerReference
 
@@ -94,9 +99,16 @@ class CopyAnswerBody(BodyModel):
 
 
 class WireTransformAnswerBody(BodyModel):
+    """Change the actual answer body, for example its language, length or claims.
+
+    Saving the existing answer with its sources/limitations is copy_answer.
+    """
     kind: Literal["transform_answer"] = "transform_answer"
     source: AnswerReference
-    instruction: str = Field(min_length=1)
+    instruction: str = Field(min_length=1, description=(
+        "The requested change to the answer's actual wording, language, structure or claims. "
+        "TXT serialization or including existing sources/limitations is not a body change; use copy_answer."
+    ))
     evidence_ids: tuple[str, ...] = ()
 
 

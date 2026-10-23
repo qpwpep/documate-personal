@@ -206,6 +206,12 @@ def make_planner_node(
                 override=decision.diagnostics.override_applied,
                 attempt=context.planner_attempt,
                 planning_mode="initial" if is_initial_plan else "rewrite",
+                body_kind=contract.body.kind,
+                answer_requirements=json.dumps([
+                    {"kind": item.kind, "mode": item.mode, "description": getattr(item, "description", ""),
+                     "value": getattr(item, "value", None)}
+                    for item in (*contract.answer.content, *contract.answer.format)
+                ], ensure_ascii=False),
                 tasks=json.dumps([{"requirement_id": task.requirement_id, "route": task.route,
                                    "query": task.query, "k": task.k}
                                   for task in decision.output.tasks], ensure_ascii=False),
