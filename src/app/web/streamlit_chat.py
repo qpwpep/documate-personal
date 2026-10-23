@@ -28,8 +28,11 @@ _STAGE_MESSAGES = {
 }
 
 
-def render_chat_history(messages: list[ChatMessage], fastapi_url: str) -> None:
-    for message in messages:
+def render_chat_history(
+    messages: list[ChatMessage], fastapi_url: str, *, on_save: Callable[[str], None] | None = None,
+    actions_disabled: bool = False,
+) -> None:
+    for index, message in enumerate(messages):
         with st.chat_message(message["role"]):
             if message["role"] == "user":
                 st.markdown(message["content"])
@@ -38,7 +41,30 @@ def render_chat_history(messages: list[ChatMessage], fastapi_url: str) -> None:
                     st.error(error_message)
                 result = message["result"]
                 if result is not None:
-                    render_turn_result(result, fastapi_url)
+                    export_result = message.get("export_result")
+                    displayed = result
+                    if export_result is not None and result.response is not None:
+                        # Keep the original body and other actions; show only the latest save attempt.
+                        response = result.response.model_copy(update={
+                            "actions": [action for action in result.response.actions if action.kind != "save_text"]
+                                       + export_result.response.actions,
+                        })
+                        changes = {"response": response}
+                        if export_result.status == "completed" and result.problem is not None and result.problem.code == "save_failed":
+                            changes.update(status="completed", problem=None, message="")
+                        displayed = result.model_copy(update=changes)
+                    render_turn_result(displayed, fastapi_url)
+                    if result.answer_id and on_save is not None:
+                        export_error = message.get("export_error")
+                        if export_error:
+                            st.error(export_error)
+                        if export_result is not None and export_result.status != "completed":
+                            st.caption("‘저장 다시 시도’는 이 답변의 본문과 출처를 그대로 사용합니다.")
+                        retry = bool(export_error) or (export_result is not None and export_result.status != "completed")
+                        if export_result is None and result.response is not None:
+                            retry = retry or any(action.kind == "save_text" and action.status != "success" for action in result.response.actions)
+                        st.button("저장 다시 시도" if retry else "TXT 저장", key=f"save_answer_{index}_{result.answer_id}",
+                                  disabled=actions_disabled, on_click=on_save, args=(result.answer_id,))
                 elif message.get("request_id"):
                     st.caption(f"오류 식별자: {message['request_id']}")
 
@@ -64,7 +90,9 @@ def render_turn_result(result: TurnResult, fastapi_url: str) -> None:
         label = "요청 식별자" if result.status == "needs_input" else "오류 식별자"
         st.caption(f"{label}: {result.request_id}")
     if result.response is not None:
-        render_answer_response(result.response, fastapi_url, turn_incomplete=result.status == "partial")
+        render_answer_response(result.response, fastapi_url, turn_incomplete=(
+            result.status == "partial" and (result.problem is None or result.problem.code != "save_failed")
+        ))
 
 
 def render_answer_response(response: AnswerResponse, fastapi_url: str, *, turn_incomplete: bool = False) -> None:
@@ -113,7 +141,10 @@ def render_answer_response(response: AnswerResponse, fastapi_url: str, *, turn_i
         _render_citations([unit for _, unit in units], citations)
 
     _render_validation_scope(response, turn_incomplete=turn_incomplete)
+    render_action_receipts(response, fastapi_url)
 
+
+def render_action_receipts(response: AnswerResponse, fastapi_url: str) -> None:
     for action in response.actions:
         label = "파일 저장" if action.kind == "save_text" else "Slack 전송"
         if action.kind == "slack_notify" and action.slack is not None:
@@ -142,7 +173,9 @@ def render_answer_response(response: AnswerResponse, fastapi_url: str, *, turn_i
                 st.caption(guidance)
             continue
         if action.status == "error":
-            st.error(f"{label} 실패: {action.error or action.message or '처리하지 못했습니다.'}")
+            st.error("파일 저장 실패: 기존 답변은 유지됩니다. 아래 '저장 다시 시도'로 같은 답변을 저장할 수 있습니다."
+                     if action.kind == "save_text" else
+                     f"{label} 실패: {action.error or action.message or '처리하지 못했습니다.'}")
         elif action.status == "skipped":
             st.info(f"{label} 보류: {action.message or '실행 조건을 확인해 주세요.'}")
         elif action.status == "unknown":
@@ -286,7 +319,6 @@ def process_chat_prompt(
         if error_messages:
             assistant_message["transport_errors"] = error_messages
         append_assistant_message(assistant_message)
-    st.rerun()
 
 
 def _progress_message_for_event(event: AgentStreamEvent) -> str:
