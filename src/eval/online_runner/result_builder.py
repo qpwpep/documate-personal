@@ -195,6 +195,7 @@ def build_case_result(
         called_tools=parsed_response.tool_calls, prior_turns=prior_turns or [],
         session_id=session_id, endpoint=endpoint_url, timeout=config.request_timeout_seconds,
         provenance=parsed_response.answer_provenance,
+        execution_id=parsed_response.request_id,
         execution_evidence=parsed_response.execution_evidence,
     )
     setup_save_assessments = assess_setup_saves(

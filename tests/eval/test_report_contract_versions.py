@@ -275,3 +275,100 @@ def test_history_ignores_pointer_to_another_track_when_matching_runs_exist(tmp_p
     assert [run.run_id for run in comparable] == [expected.run_id]
     assert f"`{track}` benchmark는 `{expected.run_id}`" in readme.read_text(encoding="utf-8")
     assert expected.run_id in svg.read_text(encoding="utf-8")
+
+
+def _write_previous_execution_history(
+    output_root, monkeypatch, *, execution="shared-client-scenario-v1", scoring="release-obligations-v6",
+):
+    from src.eval.reporting import summary as summary_module
+
+    with monkeypatch.context() as legacy:
+        legacy.setattr(summary_module, "EXECUTION_CONTRACT_VERSION", execution)
+        legacy.setattr(summary_module, "SCORING_CONTRACT_VERSION", scoring)
+        case, result = _case_result()
+        result.run_id = "previous-execution-and-scoring"
+        summary = _summary([(case, result)]).model_copy(update={"run_id": result.run_id})
+        write_run_outputs(output_dir=output_root / summary.run_id, results=[result], summary=summary)
+    return summary
+
+
+@pytest.mark.parametrize("execution,scoring", [
+    ("shared-client-scenario-v1", "release-obligations-v6"),
+    ("shared-client-scenario-v2", "release-obligations-v7"),
+    ("shared-client-scenario-v2", "release-obligations-v8"),
+])
+def test_history_excludes_previous_execution_and_scoring_without_rewriting(
+    tmp_path, monkeypatch, execution, scoring,
+):
+    output_root = tmp_path / "runs"
+    previous = _write_previous_execution_history(output_root, monkeypatch, execution=execution, scoring=scoring)
+    pair = _case_result()
+    current = _summary([pair])
+    write_run_outputs(output_dir=output_root / current.run_id, results=[pair[1]], summary=current)
+    (output_root / "latest_release_run.txt").write_text(previous.run_id, encoding="utf-8")
+    before = {path: path.read_bytes() for path in output_root.rglob("*") if path.is_file()}
+    readme = tmp_path / "README.md"
+    readme.write_text("# Fixture\n\n## 검증 결과\n\nOld history.\n\n## 문서\n", encoding="utf-8")
+
+    latest, comparable = refresh_history_report(
+        output_root=output_root, readme_path=readme, svg_path=tmp_path / "history.svg",
+    )
+
+    assert latest.run_id == current.run_id
+    assert [run.run_id for run in comparable] == [current.run_id]
+    assert [run.run_id for run in load_history_runs(output_root)] == [current.run_id]
+    assert current.execution_contract_version == "shared-client-scenario-v2"
+    assert current.audit_metrics["scoring_contract_version"] == "release-obligations-v9"
+    assert current.evaluation_fingerprint != previous.evaluation_fingerprint
+    assert {path: path.read_bytes() for path in before} == before
+    with pytest.raises(ValueError, match="current execution and scoring contracts"):
+        load_report_inputs(output_root / previous.run_id)
+
+
+@pytest.mark.parametrize("execution,scoring", [
+    ("shared-client-scenario-v2", "release-obligations-v6"),
+    ("shared-client-scenario-v1", "release-obligations-v7"),
+    ("shared-client-scenario-v1", "release-obligations-v8"),
+    ("shared-client-scenario-v1", "release-obligations-v9"),
+    ("future-execution", "release-obligations-v7"),
+    ("shared-client-scenario-v2", "future-scoring"),
+    (None, "release-obligations-v7"),
+    ("shared-client-scenario-v2", None),
+    ([], "release-obligations-v7"),
+    ("shared-client-scenario-v2", {}),
+])
+def test_history_rejects_mixed_unknown_or_missing_execution_and_scoring(tmp_path, execution, scoring):
+    pair = _case_result()
+    summary = _summary([pair]).model_dump(mode="json")
+    summary["execution_contract_version"] = execution
+    summary["audit_metrics"]["scoring_contract_version"] = scoring
+    _save_payloads(tmp_path / "run", summary, [pair[1].model_dump(mode="json")])
+
+    with pytest.raises(ValueError, match="contract"):
+        load_history_runs(tmp_path)
+
+
+@pytest.mark.parametrize("execution,scoring", [
+    ("shared-client-scenario-v1", "release-obligations-v6"),
+    ("shared-client-scenario-v2", "release-obligations-v7"),
+    ("shared-client-scenario-v2", "release-obligations-v8"),
+])
+@pytest.mark.parametrize("damage", ["fingerprint", "missing_evidence"])
+def test_previous_execution_history_still_rejects_corrupt_evidence(
+    tmp_path, monkeypatch, execution, scoring, damage,
+):
+    previous = _write_previous_execution_history(tmp_path, monkeypatch, execution=execution, scoring=scoring)
+    raw_path = tmp_path / previous.run_id / "raw_results.jsonl"
+    raw = json.loads(raw_path.read_text(encoding="utf-8"))
+    if damage == "fingerprint":
+        raw["cost_usd"] = 100
+    else:
+        raw.pop("cost_usd")
+        summary_path = tmp_path / previous.run_id / "summary.json"
+        summary = json.loads(summary_path.read_text(encoding="utf-8"))
+        summary["results_fingerprint"] = raw_results_fingerprint([raw])
+        summary_path.write_text(json.dumps(summary), encoding="utf-8")
+    raw_path.write_text(json.dumps(raw) + "\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="fingerprint mismatch" if damage == "fingerprint" else "cost metrics disagree"):
+        load_history_runs(tmp_path)

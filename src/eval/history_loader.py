@@ -73,7 +73,7 @@ def _is_historical_summary(payload: dict[str, Any]) -> bool:
 
 
 def _read_summary(path: Path) -> tuple[RunSummary, bool, dict[str, Any] | None] | None:
-    from .reporting.writer import load_report_inputs
+    from .reporting.writer import is_current_measurement, load_run_outputs
 
     payload = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
@@ -82,8 +82,12 @@ def _read_summary(path: Path) -> tuple[RunSummary, bool, dict[str, Any] | None] 
         # Exclude known historical contracts before loading their evidence.
         # Mixed/unknown versions and damaged current runs still fail validation.
         return None
-    inputs = load_report_inputs(path.parent)
-    return inputs.summary, "track" in payload, inputs.historical_summary
+    summary, _ = load_run_outputs(path.parent)
+    # Recognized prior execution/scoring contracts still have compatible evidence.
+    # Validate before exclusion so corruption cannot hide as history.
+    if not is_current_measurement(summary):
+        return None
+    return summary, "track" in payload, None
 
 
 def load_history_runs(output_root: Path) -> list[StoredRun]:

@@ -14,7 +14,7 @@ from src.infra.settings import get_settings
 from ..judge_llm import LLMJudge
 from ..approved_uploads import ApprovedUpload, select_approved_uploads, verify_upload_manifest
 from ..evidence_scope import assess_evidence_scope
-from ..config_models import BenchmarkCase, BenchmarkConfig, BenchmarkLiveSlackConfig
+from ..config_models import BenchmarkCase, BenchmarkConfig, BenchmarkLiveSlackConfig, SetupTurnExpectation
 from ..io import load_cases_jsonl
 from ..reporting.summary import build_summary
 from ..reporting.writer import write_run_outputs
@@ -26,10 +26,12 @@ from .response_parser import ParsedResponseData, parse_agent_response
 from .result_builder import build_case_result
 
 
-def _parse_final(body: dict, *, previous: ParsedResponseData, validated_response=None) -> ParsedResponseData:
+def _parse_final(body: dict, *, previous: ParsedResponseData, validated_response=None,
+                 expected_partial_problem: str | None = None) -> ParsedResponseData:
     try:
         return parse_agent_response(body, http_status=previous.http_status, request_id=previous.request_id,
-                                    validated_response=validated_response)
+                                    validated_response=validated_response,
+                                    expected_partial_problem=expected_partial_problem)
     except Exception as exc:
         # Diagnostics are external input too. An unexpected shape must not lose
         # the case, its original debug data, or subsequent scenario results.
@@ -65,7 +67,8 @@ def _record_client_error(event: AgentStreamEvent, parsed: ParsedResponseData, *,
 
 
 def _run_turn(client: AgentSessionClient, query: str, *,
-              role: str = "question", prior_turns: list[ScenarioTurnResult] | None = None) -> tuple[ParsedResponseData, ScenarioTurnResult]:
+              role: str = "question", prior_turns: list[ScenarioTurnResult] | None = None,
+              expectation: SetupTurnExpectation | None = None) -> tuple[ParsedResponseData, ScenarioTurnResult]:
     payload = build_agent_payload(query, client.context, uploads=client.upload_context())
     parsed = ParsedResponseData()
     elapsed = None
@@ -79,7 +82,8 @@ def _run_turn(client: AgentSessionClient, query: str, *,
         parsed.request_id = observation.request_id or parsed.request_id
         elapsed = round(observation.elapsed_ms)
         if event.event == "final_response" and event.result is not None:
-            final = _parse_final(event.data, previous=parsed, validated_response=event.result.response)
+            final = _parse_final(event.data, previous=parsed, validated_response=event.result.response,
+                                 expected_partial_problem=expectation.problem_code if expectation else None)
             final.runtime_errors.extend(parsed.runtime_errors)
             final.response_errors.extend(parsed.response_errors)
             parsed = final
@@ -123,6 +127,16 @@ def _run_turn(client: AgentSessionClient, query: str, *,
         execution_evidence=parsed.execution_evidence,
     )
     return parsed, turn
+
+
+def _setup_outcome_matches(parsed: ParsedResponseData, expectation: SetupTurnExpectation | None) -> bool:
+    outcome = parsed.turn_result
+    if outcome is None:
+        return False
+    if expectation is None:
+        return outcome.status in {"completed", "needs_input"}
+    return (outcome.status == expectation.status
+            and (outcome.problem.code if outcome.problem else None) == expectation.problem_code)
 
 
 def _run_single_case(
@@ -176,16 +190,19 @@ def _run_single_case(
             if index and approved_files is not None:
                 # The app adopts each answer's manifest for the following turn.
                 verify_upload_manifest(approved_files, client.manifest)
-            parsed, turn = _run_turn(client, query, role="question" if index == len(case.setup_turns) else "setup", prior_turns=turns)
+            is_setup = index < len(case.setup_turns)
+            expectation = case.setup_expectations[index] if is_setup and case.setup_expectations is not None else None
+            parsed, turn = _run_turn(client, query, role="setup" if is_setup else "question",
+                                     prior_turns=turns, expectation=expectation)
             turns.append(turn)
             if index == len(case.setup_turns):
                 parsed_response = parsed
                 request_payload = turn.request_payload
                 question_response_ms = turn.question_response_ms
-            elif ((parsed.response is None and not (
-                      parsed.turn_result is not None and parsed.turn_result.status == "needs_input"
-                  )) or parsed.runtime_errors or parsed.response_errors
-                  or parsed.debug_errors or parsed.planner_errors or parsed.missing_required_debug_fields
+            elif (not _setup_outcome_matches(parsed, expectation)
+                  or parsed.runtime_errors or parsed.response_errors
+                  or (parsed.debug_errors and not (expectation and expectation.status == "partial"))
+                  or parsed.planner_errors or parsed.missing_required_debug_fields
                   or parsed.debug_observability_status == "failed"):
                 parsed_response = ParsedResponseData(
                     http_status=parsed.http_status,

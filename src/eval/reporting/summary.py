@@ -26,11 +26,11 @@ from .latency_values import result_latency_breakdown_stage_ms, result_server_lat
 _AUDIT_DETERMINISTIC_DIRECT_USAGE_CEILING = 0.35
 _AUDIT_HIGH_RULE_LOW_JUDGE_DIVERGENCE_CEILING = 0.10
 _HIGH_RULE_LOW_JUDGE_DIVERGENCE_MARGIN = 0.35
-EXECUTION_CONTRACT_VERSION = "shared-client-scenario-v1"
+EXECUTION_CONTRACT_VERSION = "shared-client-scenario-v2"
 MEASUREMENT_CONTRACT_VERSION = "llm-usage-scenario-v3"
 # Weight profiles are fixed before execution; pure actions exclude citation axes.
 # This scoring contract establishes its own comparison baseline.
-SCORING_CONTRACT_VERSION = "release-obligations-v6"
+SCORING_CONTRACT_VERSION = "release-obligations-v9"
 
 
 def _fingerprint(value: Any) -> str:

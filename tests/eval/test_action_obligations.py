@@ -82,7 +82,9 @@ def _answer(actions=()):
 
 def _result(*, status="success", terminal="succeeded", missing=False, reused_origin=None,
             tool_name="slack_notify", artifact_dir=None, origin_terminal="failed", evidence_available=True,
-            missing_receipt_after_attempt=False):
+            missing_receipt_after_attempt=False, domain_request_id="req-domain",
+            execution_id="req-final", evidence_execution_id="req-final", evidence_status="complete",
+            provenance_hash=None):
     actions = [] if missing else [_receipt(status, reused_origin or "slack-call", tool_name)]
     operation = None
     if artifact_dir is not None:
@@ -90,7 +92,7 @@ def _result(*, status="success", terminal="succeeded", missing=False, reused_ori
         content = export_answer_text(body, include_sources=True)
         operation = SaveOperation.for_text(
             content, operation_id="save-operation", session_id="session",
-            request_id="req-final", contract_revision=1, target_kind="compose",
+            request_id=domain_request_id, contract_revision=1, target_kind="compose",
             source_hash=body.content_hash, answer_hash=body.content_hash,
         )
         manifest, path = save_artifact(artifact_dir, content, operation, ttl_seconds=60)
@@ -135,14 +137,17 @@ def _result(*, status="success", terminal="succeeded", missing=False, reused_ori
     debug = DebugPayload(
         tool_calls=tools, tool_call_count=len(tools),
         answer_provenance=AnswerProvenance(
-            body_kind="compose", response_hash=answer.content_hash, evidence_packet=[],
-            request_id="req-final", contract_revision=1,
+            body_kind="compose", response_hash=provenance_hash or answer.content_hash, evidence_packet=[],
+            request_id=domain_request_id, contract_revision=1,
             save_operation_binding_sha256=operation.binding_sha256 if operation is not None else None,
         ),
-        execution_evidence=_evidence("req-final", events) if evidence_available else None,
+        execution_evidence={
+            **_evidence(evidence_execution_id, events), "status": evidence_status,
+        } if evidence_available else None,
     )
     parsed = parse_agent_response({
-        "response": answer.model_dump(mode="json"), "trace": "Request ID: req-final",
+        "response": answer.model_dump(mode="json"), "request_id": execution_id,
+        "trace": f"Request ID: {execution_id}" if execution_id else "",
         "debug": debug.model_dump(mode="json"),
     })
     judge = LLMJudge(model_name="fixture", enabled=False)
@@ -319,3 +324,30 @@ def test_missing_save_receipt_distinguishes_proven_omission_from_missing_observa
     assert result.release_pass is False
     if attempted:
         assert result.product_pass is True
+
+
+def test_omitted_save_is_product_failure_with_distinct_request_and_execution_ids():
+    result = _result(missing=True, tool_name="save_text")
+
+    assert result.answer_provenance.request_id != result.request_id
+    assert result.policy_assessment.status == "compliant"
+    assert result.save_assessment.status == "failed"
+    assert result.save_assessment.failure_codes == ["save_receipt_missing"]
+    assert result.eval_validity == "valid"
+    assert result.product_pass is False
+    assert result.release_pass is False
+
+
+@pytest.mark.parametrize("observation", [
+    {"execution_id": ""},
+    {"evidence_execution_id": "another-execution"},
+    {"evidence_status": "incomplete"},
+    {"provenance_hash": "0" * 64},
+    {"domain_request_id": None},
+])
+def test_missing_save_is_unverifiable_without_matching_complete_execution_and_body(observation):
+    result = _result(missing=True, tool_name="save_text", **observation)
+
+    assert result.save_assessment.status == "unverifiable"
+    assert result.eval_validity == "incomplete"
+    assert result.release_pass is False

@@ -1,24 +1,11 @@
 from __future__ import annotations
 
-import re
-from typing import Iterable
-from urllib.parse import urlparse
-
 from src.core.answer_schema import AnswerResponse, export_answer_text, iter_content_units
 from src.core.contracts.outcome import TurnResult
-from src.core.domain_docs import DEFAULT_DOCS
 from src.core.evidence import EvidenceRef, SearchHit
+from src.infra.tools.docs_search.policy import is_allowed_doc_url
 from .config_models import BenchmarkCase
 from .result_models import EvidenceAssessment
-
-
-_FAILURE_TEXT_PATTERNS = [
-    r"agent execution failed",
-    r"request timeout",
-    r"unexpected error",
-]
-_HANGUL_PATTERN = re.compile(r"[가-힣]")
-_ALLOWED_OFFICIAL_DOMAINS = set()
 
 
 def score_tool_choice(
@@ -142,17 +129,21 @@ def score_citation_traceability(
         return 0.0
     traceable = _traceable_refs(response, observed_hits, evidence_scope)
     route_tools = {"docs": "tavily_search", "upload": "upload_search"}
-    valid_routes = {
-        citation.evidence.route
+    valid_refs = {
+        citation.evidence.id
         for citation in response.citations
         if citation.evidence.id in traceable
         and (
             citation.evidence.snapshot.source_type != "official"
-            or _is_valid_official_source(citation.evidence.snapshot.source_uri)
+            or is_allowed_doc_url(citation.evidence.snapshot.source_uri)
         )
     }
+    valid_routes = {
+        citation.evidence.route for citation in response.citations
+        if citation.evidence.id in valid_refs
+    }
     used = {ref for _, unit in iter_content_units(response.content) for ref in unit.refs}
-    coverage = len(used.intersection(traceable)) / len(used) if used else 0.0
+    coverage = len(used.intersection(valid_refs)) / len(used) if used else 0.0
     route_coverage = sum(
         route in valid_routes and (evidence_scope is not None or route_tools[route] in called_tools)
         for route in required_routes
@@ -188,17 +179,15 @@ def score_format_language(
     response_errors: list[str],
     response_text: str,
 ) -> float:
+    """Check response availability without interpreting the answer as diagnostics.
+
+    This compatibility metric uses structured runtime/response errors. The
+    semantic judge evaluates requested structure and language from the query
+    and oracle, including literal copies and explicitly requested languages.
+    """
     if runtime_errors or response_errors:
         return 0.0
-
-    text = (response_text or "").strip()
-    if not text:
-        return 0.0
-    if _contains_any_pattern(text, _FAILURE_TEXT_PATTERNS):
-        return 0.0
-    if _contains_hangul(case.query) and not _contains_hangul(text):
-        return 0.0
-    return 1.0
+    return float(bool((response_text or "").strip()))
 
 
 def compute_rule_scores(
@@ -244,30 +233,3 @@ def tool_confusion_counts(case: BenchmarkCase, called_tools: list[str], *, save_
     if expected:
         fp += len(called.difference(expected).difference(forbidden))
     return tp, fp, fn
-
-
-def _contains_any_pattern(text: str, patterns: Iterable[str]) -> bool:
-    return any(re.search(pattern, text, flags=re.I) for pattern in patterns)
-
-
-def _normalize_domain(url_or_domain: str) -> str:
-    parsed = urlparse(url_or_domain if "://" in url_or_domain else f"https://{url_or_domain}")
-    domain = (parsed.netloc or parsed.path).strip().lower()
-    if domain.startswith("www."):
-        domain = domain[4:]
-    return domain
-
-
-for _default_doc in DEFAULT_DOCS.values():
-    _ALLOWED_OFFICIAL_DOMAINS.add(_normalize_domain(_default_doc))
-
-
-def _is_valid_official_source(url_or_path: str) -> bool:
-    parsed = urlparse(str(url_or_path or "").strip())
-    if parsed.scheme.lower() != "https" or not parsed.netloc:
-        return False
-    return _normalize_domain(parsed.netloc) in _ALLOWED_OFFICIAL_DOMAINS
-
-
-def _contains_hangul(text: str) -> bool:
-    return bool(_HANGUL_PATTERN.search(str(text or "")))

@@ -24,10 +24,12 @@ class ReportInputs:
 
 
 def is_current_measurement(summary: RunSummary) -> bool:
-    from .summary import MEASUREMENT_CONTRACT_VERSION
+    from .summary import EXECUTION_CONTRACT_VERSION, MEASUREMENT_CONTRACT_VERSION, SCORING_CONTRACT_VERSION
 
     return (summary.measurement_contract_version == MEASUREMENT_CONTRACT_VERSION
-            and summary.decision_contract_version == DECISION_CONTRACT_VERSION)
+            and summary.decision_contract_version == DECISION_CONTRACT_VERSION
+            and summary.execution_contract_version == EXECUTION_CONTRACT_VERSION
+            and (summary.audit_metrics or {}).get("scoring_contract_version") == SCORING_CONTRACT_VERSION)
 
 
 def write_run_outputs(*, output_dir: Path, results: list[CaseResult], summary: RunSummary) -> None:
@@ -60,7 +62,7 @@ def write_run_outputs(*, output_dir: Path, results: list[CaseResult], summary: R
 
 
 def load_run_outputs(output_dir: Path) -> tuple[RunSummary, list[CaseResult]]:
-    """Read a current run and verify its saved evidence without calling providers."""
+    """Verify saved evidence for the current or a recognized prior execution contract."""
     from ..decisions import validate_run_outputs
 
     _, raw_results, summary = _read_saved_payloads(output_dir)
@@ -71,7 +73,7 @@ def load_run_outputs(output_dir: Path) -> tuple[RunSummary, list[CaseResult]]:
 
 def _read_saved_payloads(output_dir: Path) -> tuple[dict[str, Any], list[dict[str, Any]], RunSummary]:
     """Verify the original fingerprint before any defaults or typed projection."""
-    from .summary import MEASUREMENT_CONTRACT_VERSION
+    from .summary import EXECUTION_CONTRACT_VERSION, MEASUREMENT_CONTRACT_VERSION, SCORING_CONTRACT_VERSION
 
     summary_path = output_dir / "summary.json"
     raw_path = output_dir / "raw_results.jsonl"
@@ -88,6 +90,18 @@ def _read_saved_payloads(output_dir: Path) -> tuple[dict[str, Any], list[dict[st
             "only the current decision and measurement contracts can be loaded or regenerated; "
             "historical reports remain available as their originally saved files"
         )
+    audit_metrics = summary_payload.get("audit_metrics")
+    execution_and_scoring = (
+        summary_payload.get("execution_contract_version"),
+        audit_metrics.get("scoring_contract_version") if isinstance(audit_metrics, dict) else None,
+    )
+    if execution_and_scoring not in (
+        (EXECUTION_CONTRACT_VERSION, SCORING_CONTRACT_VERSION),
+        ("shared-client-scenario-v1", "release-obligations-v6"),
+        ("shared-client-scenario-v2", "release-obligations-v7"),
+        ("shared-client-scenario-v2", "release-obligations-v8"),
+    ):
+        raise ValueError("unknown, mixed, or missing execution and scoring contracts")
     raw_results: list[dict[str, Any]] = []
     for line in raw_path.read_text(encoding="utf-8").splitlines():
         if not line.strip():
@@ -105,6 +119,11 @@ def _read_saved_payloads(output_dir: Path) -> tuple[dict[str, Any], list[dict[st
 def load_report_inputs(output_dir: Path) -> ReportInputs:
     """Use the same evidence validation for approval loading and report rendering."""
     summary, results = load_run_outputs(output_dir)
+    if not is_current_measurement(summary):
+        raise ValueError(
+            "only the current execution and scoring contracts can be regenerated; "
+            "historical reports remain available as their originally saved files"
+        )
     return ReportInputs(summary=summary, current_results=results)
 
 

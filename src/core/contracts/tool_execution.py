@@ -1,4 +1,4 @@
-"""Request-scoped facts about entry into registered tool implementations."""
+"""Execution-scoped facts about entry into registered tool implementations."""
 from __future__ import annotations
 
 from typing import Literal
@@ -31,7 +31,10 @@ class ToolExecutionEvidence(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     schema_version: Literal[1]
-    request_id: str = Field(min_length=1, strict=True)
+    request_id: str = Field(
+        min_length=1, strict=True,
+        description="ID of this execution, matching TurnResult.request_id; not the domain request ID.",
+    )
     status: Literal["complete", "incomplete", "unavailable"]
     events: list[ToolExecutionEvent]
 

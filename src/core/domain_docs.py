@@ -1,3 +1,5 @@
+"""Suggested documentation links for the UI, not the official source policy."""
+
 DEFAULT_DOCS = {
     "python": "https://docs.python.org/3/",
     "git": "https://git-scm.com/docs",

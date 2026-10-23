@@ -14,7 +14,7 @@
 "docs.streamlit.io" = ["/"]
 "gradio.app" = ["/docs/"]
 "scikit-learn.org" = ["/stable/"]
-"docs.pydantic.dev" = ["/latest/"]
+"docs.pydantic.dev" = ["/latest/", "/docs/validation/latest/"]
 "pydantic.dev" = ["/docs/validation/latest/"]
 "docs.pears.com" = ["/reference/"]
 
@@ -25,7 +25,8 @@
 "matplotlib.org" = ['^/(?:dev|[0-9]+(?:\.(?:[0-9]+|x))*)/']
 "scikit-learn.org" = ['^/(?:dev|[0-9]+(?:\.(?:[0-9]+|x))*)/']
 "pandas.pydata.org" = ['^/pandas-docs/version/[0-9]+(?:\.[0-9]+)*/']
-"docs.pydantic.dev" = ['^/[0-9]+(?:\.(?:[0-9]+|x))*/']
+"docs.pydantic.dev" = ['^/[0-9]+(?:\.(?:[0-9]+|x))*/', '^/docs/validation/(?:[0-9]+(?:\.(?:[0-9]+|x))*|dev)/']
+"pydantic.dev" = ['^/docs/validation/(?:[0-9]+(?:\.(?:[0-9]+|x))*|dev)/']
 
 [[docs_search.query_hints]]
 identifiers = ["python", "asyncio", "pathlib", "dataclass", "dataclasses", "venv"]

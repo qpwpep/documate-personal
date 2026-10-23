@@ -42,7 +42,10 @@ class AnswerProvenance(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     version: Literal[1] = 1
-    request_id: str | None = None
+    request_id: str | None = Field(
+        default=None,
+        description="Domain request ID from RequestContract, retained across supplementation and retries.",
+    )
     contract_revision: int | None = Field(default=None, ge=1)
     save_operation_binding_sha256: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
     body_kind: BodyKind

@@ -16,7 +16,7 @@ class TurnResult(BaseModel):
     answer_id: str | None = Field(default=None, min_length=1)
     message: str = ""
     problem: ExecutionProblem | None = None
-    request_id: str = ""
+    request_id: str = Field(default="", description="ID of this execution, not the domain request ID.")
     missing_slots: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
@@ -44,7 +44,7 @@ class AnswerExportResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
     status: Literal["completed", "failed"]
     answer_id: str = Field(min_length=1)
-    request_id: str = Field(min_length=1)
+    request_id: str = Field(min_length=1, description="ID of this export execution, renewed on retry.")
     response: AnswerResponse
     message: str
 

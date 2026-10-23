@@ -184,6 +184,7 @@ def parse_agent_response(
     http_status: int = 200,
     request_id: str | None = None,
     validated_response: AnswerResponse | None = None,
+    expected_partial_problem: str | None = None,
 ) -> ParsedResponseData:
     """Parse the complete data object from an SSE final_response event."""
     parsed = ParsedResponseData(http_status=http_status)
@@ -222,7 +223,11 @@ def parse_agent_response(
         if outcome.problem is not None:
             problem = outcome.problem
             parsed.error_codes.append(problem.code)
-            parsed.runtime_errors.append(f"{problem.code} ({problem.stage}): {problem.message}")
+            # An explicitly expected partial setup still records its problem in
+            # the typed result and error codes. It is usable as a source answer,
+            # not a transport failure. All other outcomes keep their error gate.
+            if outcome.status != "partial" or problem.code != expected_partial_problem:
+                parsed.runtime_errors.append(f"{problem.code} ({problem.stage}): {problem.message}")
     elif not isinstance(response_raw, dict):
         parsed.response_errors.append("response payload must be an object")
 

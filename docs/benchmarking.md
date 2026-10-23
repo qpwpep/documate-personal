@@ -8,7 +8,9 @@ DocuMate release 벤치마크는 Streamlit과 같은 `src/app/client.py`의 `Age
 
 벤치마크는 공용 클라이언트에 `include_debug=true`를 지정합니다. HTTP `200`, 첫 진행 이벤트, `done` 수신만으로 성공을 판정하지 않습니다. HTTP 오류, SSE `error`, 연결 단절, timeout, 최종 응답 누락, 응답 계약 오류를 구분하고, `error` 뒤의 유효한 최종 응답은 앞선 오류와 함께 보존하며 manifest로 첨부 확인값을 갱신합니다. `completed`·`partial`·`needs_input`은 실제 epoch·revision과 명시적인 `files` 목록을 가진 `upload_manifest`가 필수입니다. `failed`·`refused`는 스냅샷을 확보하지 못한 경우 manifest 누락·`null`을 허용하며, 클라이언트는 첨부 확인값을 `None`으로 바꿉니다. 첨부가 없다고 확인한 상태는 `files=[]`를 가진 객체로 구분합니다. manifest 객체의 필드 누락·잘못된 타입은 어느 상태에서도 기본값이나 타입 변환으로 보정하지 않습니다.
 
-계약을 위반한 최종 응답은 UI와 마찬가지로 사용 가능한 답변으로 승인하지 않습니다. 답변·actions는 평가 입력에서 제외하고 원본 envelope·trace·debug·오류는 진단에 남깁니다. 유효한 최종 응답이 없거나 유효한 실패·거절 결과의 manifest가 `null`이면 공용 클라이언트의 manifest를 미확인 상태인 `None`으로 바꿉니다. 실패 턴 기록인 `ScenarioTurnResult.upload_manifest`도 이 경우 `None`을 보존합니다. 새 요청 전 GET 확인이 실패하면 질문을 보내지 않습니다. GET 성공은 현재 첨부 상태만 복구하고 거부된 답변을 성공으로 바꾸지 않으며, 준비 턴이 실패한 시나리오는 후속 질문을 보내지 않습니다. 유효한 최종 응답을 수신해도 benchmark 통과를 의미하지는 않습니다. 질문이나 첨부 변경은 자동 재실행하지 않으며 redirect나 JSON endpoint fallback도 사용하지 않습니다.
+계약을 위반한 최종 응답은 UI와 마찬가지로 사용 가능한 답변으로 승인하지 않습니다. 답변·actions는 평가 입력에서 제외하고 원본 envelope·trace·debug·오류는 진단에 남깁니다. 유효한 최종 응답이 없거나 유효한 실패·거절 결과의 manifest가 `null`이면 공용 클라이언트의 manifest를 미확인 상태인 `None`으로 바꿉니다. 실패 턴 기록인 `ScenarioTurnResult.upload_manifest`도 이 경우 `None`을 보존합니다. 새 요청 전 GET 확인이 실패하면 질문을 보내지 않습니다. GET 성공은 현재 첨부 상태만 복구하고 거부된 답변을 성공으로 바꾸지 않습니다. 준비 턴에 전송·응답 계약·관측 오류가 있거나 결과가 사전 기대와 다르면 후속 질문을 보내지 않습니다. 유효한 최종 응답을 수신해도 benchmark 통과를 의미하지는 않습니다. 질문이나 첨부 변경은 자동 재실행하지 않으며 redirect나 JSON endpoint fallback도 사용하지 않습니다.
+
+`setup_expectations`는 각 `setup_turns`의 기대 결과를 같은 순서와 개수로 선언합니다. `status`는 `completed`·`needs_input`·`partial` 중 하나이며, `partial`일 때만 `problem_code=evidence_insufficient` 또는 `save_failed`를 반드시 지정합니다. 생략하면 기존처럼 `completed`·`needs_input`만 후속 질문으로 이어집니다. 명시한 `partial`과 실제 결과가 일치하면 제한된 답변의 복사·저장이나 저장 재시도를 평가할 수 있습니다. 원래 `turn_result.problem`, `error_codes`, debug 기록은 유지하며, 그 도메인 문제를 전송 실패인 `runtime_errors`로 중복 분류하지 않습니다. 예상한 부분 결과라도 SSE 오류, timeout, 응답 계약 오류, 필수 관측 누락, planner 오류가 있으면 후속 질문은 차단합니다. 최종 질문의 성공 조건과 저장 의무는 그대로 평가합니다.
 
 ## 1. 사전 준비
 
@@ -303,7 +305,7 @@ uv run python -m src.eval.request_contract_eval \
 | `raw_results.jsonl` | 최종 평가 결과, 모든 `scenario_turns`의 요청·응답·manifest·debug·오류, 소비한 첨부 hash와 정리 오류 |
 | `summary.json` | 집계 지표, gate 판정, 비용/모델 정보, track, 제한 수, 실행·측정 계약, 채점 버전과 비교 fingerprint |
 | `report.md` | 사람이 읽기 쉬운 분석 보고서 |
-| `request_map.jsonl` | 사례의 최종 평가 요청을 기준으로 한 session/request ID, query hash, trace 매핑. 준비 턴은 `raw_results.jsonl`에서 확인 |
+| `request_map.jsonl` | 사례의 최종 평가 질문을 기준으로 한 session ID·HTTP 실행 ID(`request_id`), query hash, trace 매핑. 준비 턴은 `raw_results.jsonl`에서 확인 |
 | `output/benchmarks/latest_release_run.txt` | 최신 release run id를 가리키는 루트 포인터 |
 | `output/benchmarks/latest_smoke_run.txt` | 최신 smoke run id를 가리키는 루트 포인터 |
 
@@ -383,7 +385,7 @@ run 집계의 `release_pass_rate` 분모는 실행 대상으로 확정한 전체
 
 현재 120개 release 사례 중 준비 대화가 있는 23개 사례의 27개 턴에는 정책을 별도로 검수했습니다. `release_action_003`·`004`의 첫 준비 턴과 `005`의 두 준비 턴은 `upload_search`를 허용하고 다른 세 도구를 금지합니다. 나머지 23개 준비 턴은 검색·저장·공유 네 도구를 모두 금지합니다. 최종 질문의 금지 목록은 유지했으며, 새 승인 기록의 `execution_policy_review`는 원래 후보·명세 hash와 이번 정책 검수의 관계를 보존합니다. 과거 모델 생성·실행 기록을 새 정책으로 수행한 것으로 바꾸지 않았습니다.
 
-`execution_evidence.events`의 `started`는 실제 도구 구현 진입 직전에 기록합니다. 금지 도구의 `started`가 있으면 이후 `succeeded` 또는 `failed`와 관계없이 위반입니다. 계획에 도구를 포함한 것, 실행 전에 `blocked`로 차단한 것, 기존 결과를 `reused`로 사용한 것은 새 실행과 구분합니다. 재사용 출처는 같은 시나리오의 앞선 턴 또는 같은 턴의 앞선 이벤트에서 시작과 종료가 확인된 호출이어야 합니다. `succeeded`와 `failed` 모두 출처가 될 수 있지만, 실패 결과의 재사용이 작업 성공을 뜻하지는 않습니다. Slack 전달 여부가 `unknown`이면 재사용 후에도 그대로이며 자동 재전송하지 않습니다. 실행 시작만으로 외부 전달·저장 성공을 주장하지 않으며 실제 결과는 receipt와 별도의 저장 산출물 검증으로 확인합니다. 빈 실행 목록은 요청 식별자와 `complete` 관측을 갖춘 경우에만 무실행 증거가 됩니다. 누락·미완료·모순된 기록은 판단 불가이며 release를 차단합니다.
+`execution_evidence.events`의 `started`는 실제 도구 구현 진입 직전에 기록합니다. 금지 도구의 `started`가 있으면 이후 `succeeded` 또는 `failed`와 관계없이 위반입니다. 계획에 도구를 포함한 것, 실행 전에 `blocked`로 차단한 것, 기존 결과를 `reused`로 사용한 것은 새 실행과 구분합니다. 재사용 출처는 같은 시나리오의 앞선 턴 또는 같은 턴의 앞선 이벤트에서 시작과 종료가 확인된 호출이어야 합니다. `succeeded`와 `failed` 모두 출처가 될 수 있지만, 실패 결과의 재사용이 작업 성공을 뜻하지는 않습니다. Slack 전달 여부가 `unknown`이면 재사용 후에도 그대로이며 자동 재전송하지 않습니다. 실행 시작만으로 외부 전달·저장 성공을 주장하지 않으며 실제 결과는 receipt와 별도의 저장 산출물 검증으로 확인합니다. 빈 실행 목록은 현재 턴 결과와 일치하는 HTTP 실행 ID와 `complete` 관측을 갖춘 경우에만 무실행 증거가 됩니다. 요청 계약을 식별하는 `AnswerProvenance.request_id`로 실행 기록을 연결하지 않습니다. 누락·미완료·모순된 기록은 판단 불가이며 release를 차단합니다.
 
 receipt는 호출 ID뿐 아니라 종료 상태와도 일치해야 합니다. 성공 receipt에는 `succeeded`, 실패 receipt에는 `failed` 근거가 필요하며, 재사용도 원본 호출의 종료 상태를 대조합니다. Slack의 내부 invocation ID도 바깥 receipt와 같아야 합니다. 모순된 기록은 이후 재사용의 신뢰할 수 있는 원본으로 등록하지 않습니다.
 
@@ -391,7 +393,7 @@ receipt는 호출 ID뿐 아니라 종료 상태와도 일치해야 합니다. �
 
 CLI, Markdown 보고서와 history는 같은 중앙 판정을 사용합니다. `run --track release`는 `release_decision`의 통과 여부로 종료 코드 0/1을 정하며, smoke는 judge 실행 여부와 관계없이 진단용입니다. planner 단독 요청 계약 평가의 `qualified`도 전체 release 자격이 아닙니다. 구형 결과의 당시 PASS와 측정값은 현재 자격으로 승격하지 않습니다.
 
-현재 계약의 `report --run`과 history 로더는 저장된 정책 snapshot, 원시 결과의 fingerprint와 중앙 재판정 결과가 summary와 일치하는지 확인합니다. fingerprint는 원시 JSON을 현재 모델로 변환하기 전에 확인합니다. 불일치한 산출물은 보고서로 다시 발행하지 않습니다. 결과 로더는 현재 `decision_contract_version=2`와 `measurement_contract_version=llm-usage-scenario-v3`만 허용합니다. 구형 결과를 현재 모델로 변환하거나 과거 필드에서 필수 판정 증거를 만들어 넣지 않습니다.
+현재 계약의 `report --run`과 history 로더는 저장된 정책 snapshot, 원시 결과의 fingerprint와 중앙 재판정 결과가 summary와 일치하는지 확인합니다. fingerprint는 원시 JSON을 현재 모델로 변환하기 전에 확인합니다. 불일치한 산출물은 보고서로 다시 발행하지 않습니다. 결과 로더는 현재 `decision_contract_version=2`와 `measurement_contract_version=llm-usage-scenario-v3`에 연결된 실행·채점 버전 조합도 검증합니다. 이전 실행·채점 계약의 증거는 검증 후 history에서 제외하고 `report --run`으로 다시 발행하지 않습니다. 구형 결과의 버전·점수를 현재 값으로 바꾸거나 과거 필드에서 필수 판정 증거를 만들어 넣지 않습니다.
 
 과거 `summary.json`·`raw_results.jsonl`·`report.md`는 당시 계약의 기록으로 보존합니다. 구형 계약의 재발행이나 현재 자격 판정은 거부하며, 과거 결과는 당시 저장된 보고서로 확인합니다. 현재 계약과 과거 계약의 결과를 섞거나 필수 버전을 제거한 입력도 거부합니다. 현재 보고서 재생성은 원본 summary·raw 결과를 변경하거나 모델 호출·외부 효과를 다시 실행하지 않습니다. 기존 생성 계보와 과거 수치의 원본도 유지합니다. 최신 run 포인터는 성공 여부와 관계없이 가장 최근 실행을 가리킵니다.
 
@@ -412,6 +414,8 @@ Slack 성공 의무에는 `status=success`인 receipt, 내부 `status=sent`, 일
 성공·예상 실패 사례는 `target`을 지정합니다. `final_answer`는 실제 최종 답변, `setup_answer`는 `setup_turn_index`로 지정한 준비 턴의 답변이며 인덱스는 0부터 시작합니다. 이전 답변 저장은 준비 턴의 export와 비교하므로 현재 잘못된 답변을 저장하고 같은 hash를 반환해도 통과하지 않습니다. export는 출처·제한을 포함한 UTF-8 BOM bytes이며, 본문 `content_hash`와 별개로 bytes hash와 길이를 확인합니다.
 
 평가기는 일반 `GET /download/{filename}`로 실제 bytes를 읽고 `X-Save-Binding-SHA256`, `X-Artifact-Id`, receipt의 바인딩과 비교합니다. 도구 호출 전에 캡처된 `answer_provenance.save_operation_binding_sha256`도 대조하므로 receipt와 파일이 서로 일치하더라도 다른 저장 작업의 결과로 바뀌었다면 실패합니다. 파일·manifest 부재, 내용 불일치, 만료는 제품 실패입니다. 응답은 있지만 timeout·읽기 불가로 저장 결과를 검증할 수 없으면 `eval_validity=incomplete`로 남깁니다. `CaseResult.save_assessment`에는 `status`(`verified`, `failed`, `unverifiable`, `not_applicable`), `passed`, `failure_codes`, 예상·관측 hash와 크기, artifact ID, 확인 시각을 기록합니다. 개별 사례 후 검사와 실행 끝의 재검사(`phase=case/run_end`)로 뒤의 저장이 앞선 파일을 덮거나 삭제했는지도 확인합니다.
+
+저장 receipt가 없으면 현재 응답의 HTTP 실행 ID와 `ToolExecutionEvidence.request_id`가 일치하는지 먼저 확인합니다. 완전한 실행 기록에 저장 이벤트가 없고, provenance의 답변 hash가 현재 답변과 같으면 저장 누락이 확인된 제품 실패(`failed`)입니다. 확인 가능한 제품 실패는 유효한 평가(`eval_validity=valid`)로 남깁니다. 실행 ID가 없거나 다른 실행의 기록이면 누락을 확정하지 않고 `unverifiable`로 남깁니다. 저장 receipt가 있는 경로에서는 `SaveOperation.request_id`와 `AnswerProvenance.request_id`가 같은 요청 계약을 가리키는지 별도로 대조합니다.
 
 최종 응답 부재(`missing_final_response`)로 제품 실패가 확정된 사례는 저장 검증 결과와 관계없이 `eval_validity=valid`를 유지해 제품 통과율의 분모에 포함합니다. 확인할 수 없는 최종·준비 턴 저장 결과는 계속 `unverifiable`이며 release를 통과시키지 않습니다. 이 구분은 초기 판정, 실행 종료 후 재검증, 저장 결과 재로드에 동일하게 적용합니다.
 
@@ -436,6 +440,8 @@ Slack 성공 의무에는 `status=success`인 receipt, 내부 `status=sent`, 일
 
 `hybrid`는 공식·업로드 근거를 사용하는 분류이며 비교 문구를 필수로 요구하지 않습니다. 규칙의 답변 품질은 명시적인 `must_include`·`must_not_include`를 검사하고, 질문·oracle이 요구한 설명·비교·인용·변환의 충족 여부는 의미 judge가 평가합니다. 특정 비교 단어를 덧붙이거나 검색 hit의 경계를 바꿔 점수가 변하는 휴리스틱은 사용하지 않습니다. 요청한 원문 인용·복사는 정확성과 완전성을 평가하며 복사 자체로 감점하지 않습니다.
 
+규칙 점수의 `format_language`는 기존 키를 유지하며, 구조화된 `runtime_errors`·`response_errors`가 없고 표시할 답변이나 추가 입력 안내가 있는지 확인합니다. 답변에 오류 메시지가 인용됐다는 이유나 한글 문자가 없다는 이유로 실패를 판정하지 않습니다. 요청한 형식·언어와 원문 복사 조건의 의미적 충족은 질문과 oracle을 받은 judge가 평가합니다. 한국어 요청이라도 명시한 출력 언어와 원문 보존 조건을 우선하며, 설명을 요구한 요청의 언어 불일치는 계속 judge의 감점 대상입니다.
+
 case의 `weight_override`는 위 여섯 키 중 변경할 축만 담는 사전입니다. 전체 생략·`null`·`{}`는 변경 없음, 축 누락은 프로필 값 유지, 명시적인 `0`은 해당 축의 점수 기여 제거를 뜻합니다. 축 값의 `null`은 오류입니다. 예를 들어 `{"citation_traceability": 0.35, "llm_judge": 0.1}`은 다른 네 축을 유지한 뒤 전체를 정규화합니다. `llm_judge=0`은 judge 실행이나 필수 품질 gate를 비활성화하지 않으며, judge 점수가 없으면 composite은 계속 `null`입니다.
 
 허용 값은 유한한 비음수 정수·실수입니다. 상대값이므로 1보다 커도 되지만, bool·숫자 문자열·배열·객체·음수·NaN·Infinity는 거절합니다. 전체 벡터와 override 병합 결과의 합계는 양수 유한수여야 하며 합계 overflow도 오류입니다. 부분 override의 합계가 0인 것은 허용하지만, 병합 후 모든 축이 0이면 실행할 수 없습니다. 알 수 없는 설정 section·프로필·가중치 키와 구형 가중치 키 `tool_match`, `content_constraints`, `citation_compliance`, `safety_format`도 거절합니다. `[hard_gates]`의 `citation_compliance`는 현재 gate 이름이므로 그대로 사용합니다.
@@ -451,12 +457,14 @@ case의 `weight_override`는 위 여섯 키 중 변경할 축만 담는 사전�
 | 지표·입력 | 측정 범위 |
 |---|---|
 | `reference_coverage` | `interaction`을 제외한 실제 내용 단위 중 refs가 있고, 모든 참조가 현재 검색 또는 선택한 선행 답변의 검증된 인용에서 최종 packet으로 연결되는 비율. 가중치는 사례 프로필과 override로 결정 |
-| `citation_traceability` | 요청한 docs/upload 출처 범위와 최종 packet의 채택 참조를 확인. 현재 검색의 근거는 해당 턴의 도구 실행을 요구하며, 검증된 선행 인용은 재검색 없이 계승 가능 |
+| `citation_traceability` | 요청한 docs/upload 출처 범위와 최종 packet의 채택 참조를 확인. 연결 검사와 출처 허용 정책을 통과한 참조만 coverage에 포함. 현재 검색의 근거는 해당 턴의 도구 실행을 요구하며, 검증된 선행 인용은 재검색 없이 계승 가능 |
 | `checks.reference_status` | 런타임의 참조 연결 결과. `resolved`는 의미적 정확성 판정이 아님 |
 | `checks.support_status` | `not_evaluated`, `exact_match`, `unsupported` 개수를 별도 집계. `not_evaluated`를 자동으로 0점 처리하지 않음 |
 | 런타임 Decisions 판정 | 후보 관련성·지원 항목, 실제 일반·compact packet의 충분성, 본문별 근거성과 실제 인용 범위의 요구 충족. 제품의 생성·복구·전달 허용에 사용 |
 | LLM judge의 groundedness | 실제 표시 본문과 연결된 근거가 설명·해석을 의미적으로 뒷받침하는지 평가 |
 | `actions`와 도구 실행 기록 | 실행 의도·결과 진단. 저장 성공은 fixture 대상과 실제 HTTP 산출물 readback까지 일치해야 인정 |
+
+공식 출처 여부는 런타임의 `is_allowed_doc_url()`로 검사합니다. HTTPS를 요구하고 `agent_rules.toml`에 설정된 도메인·문서 경로·버전 경로 정책을 적용하며, UI 추천 링크인 `DEFAULT_DOCS`에서 별도의 허용 목록을 만들지 않습니다. 따라서 허용된 공식 버전 문서는 추천 링크에 없어도 인정하고, 같은 도메인의 허용되지 않은 경로는 인정하지 않습니다. 허용 URL과 금지 URL이 함께 인용돼도 각 참조의 정책 통과 여부를 따로 계산하므로, 허용된 인용 하나가 나머지 인용의 coverage를 높이지 않습니다. 이 URL 검사는 출처 범위를 확인하며 발췌의 의미적 지지는 judge가 별도로 평가합니다.
 
 현재 검색에서 packet으로 이어지는 근거는 snapshot과 원문 element가 같고, packet의 문자 범위 또는 표 cell ID가 `observed_hits`의 선택 범위에 포함되는지 확인합니다. synthesis 예산 때문에 범위를 줄이면 새 근거 ID가 생깁니다. 최종 citation은 이렇게 검증한 실제 packet의 ID와 일치해야 하므로, 검색 원문에 있었지만 모델에 제공하지 않은 범위는 인정하지 않습니다. 페이지 bbox가 없더라도 snapshot·요소·선택 범위가 유효하면 원문 연결을 인정합니다.
 
@@ -494,14 +502,16 @@ history 리포터는 현재 판정·측정 계약과 저장 증거를 검증한 
 - `fixtures_path`
 - `total_cases`
 - `decision_contract_version`
-- `execution_contract_version`: 현재 `shared-client-scenario-v1`
+- `execution_contract_version`: 현재 `shared-client-scenario-v2`
 - `measurement_contract_version`: 현재 `llm-usage-scenario-v3`
-- `suite_fingerprint`: 준비 턴·첨부 목록·부분 override를 포함한 사례 모델의 JSON 직렬화와 staging에서 실제 읽은 첨부 bytes의 SHA256
+- `suite_fingerprint`: 준비 턴·준비 턴의 기대 결과·첨부 목록·부분 override를 포함한 사례 모델의 JSON 직렬화와 staging에서 실제 읽은 첨부 bytes의 SHA256
 - `evaluation_fingerprint`: 채점 계약 버전과 가중치·gate·pricing·judge·timeout 설정, Slack 실행 옵션
 
 같은 경로의 fixture를 덮어써도 내용이나 첨부 bytes가 달라지면 자동 비교되지 않습니다. 비교 fingerprint 정보가 일부만 있는 현재 run은 자기 자신만 표시합니다. 사용량 계약 v3는 Decisions의 API 경로별 가격표와 무료 출력 차원을 반영하며, 비용 관측률을 계획 사례 전체를 기준으로 계산합니다. 비용 정의가 다른 v1·v2와 별도 baseline을 만듭니다. 과거 JSON을 새 계약으로 자동 승격하거나 사용량을 재계산하지 않습니다.
 
-현재 채점 계약은 `release-obligations-v6`이며 `summary.json`의 `audit_metrics.scoring_contract_version`에 기록합니다. 세 프로필 설정 전체와 이 버전을 `evaluation_fingerprint`에 포함합니다. 전체 승인 사례·비용 관측·행동 의무를 필수 조건으로 적용하고, 비교 단어·원문 복사 휴리스틱 대신 질문과 oracle의 요구를 평가합니다. 기존 가중치·수치 통과선·judge 필수성은 유지하지만 판정 의미가 달라졌으므로 `weight-profiles-v5`를 포함한 이전 채점 계약과 자동 비교하지 않습니다.
+현재 채점 계약은 `release-obligations-v9`이며 `summary.json`의 `audit_metrics.scoring_contract_version`에 기록합니다. 세 프로필 설정 전체와 이 버전을 `evaluation_fingerprint`에 포함합니다. 전체 승인 사례·비용 관측·행동 의무를 필수 조건으로 적용하고, 오류 문자열·한글 유무 대신 구조화된 실행 결과와 질문·oracle의 요구를 평가합니다. 현재 턴의 HTTP 실행 ID와 완전한 실행 기록으로 저장 누락을 확인하고, 요청 계약 ID와 혼동해 관측 불가로 분류하지 않습니다. 공식 출처는 UI 추천 목록이 아닌 런타임의 공통 URL 정책으로 판정합니다. 기존 가중치·수치 통과선·judge 필수성은 유지하지만 판정 의미가 달라졌으므로 `release-obligations-v8`·`release-obligations-v7`·`release-obligations-v6`·`weight-profiles-v5`를 포함한 이전 채점 계약과 자동 비교하지 않습니다. 실행 계약 v2는 사전에 선언한 준비 턴의 부분 결과를 후속 질문으로 연결합니다.
+
+현재 판정·측정 계약에서 알려진 이전 조합은 `shared-client-scenario-v1`/`release-obligations-v6`, `shared-client-scenario-v2`/`release-obligations-v7`, `shared-client-scenario-v2`/`release-obligations-v8`입니다. 이 조합들은 원시 결과 fingerprint와 저장된 결정 증거를 검증한 뒤 history에서 제외하며, stale latest 포인터가 있어도 새 비교의 기준으로 선택하지 않습니다. 실행·채점 버전의 혼합, 누락, 알 수 없는 값은 오류입니다. 과거 원시 결과가 손상됐다는 사실도 이력 제외로 숨기지 않습니다.
 
 `suite_fingerprint`는 원시 fixture 파일 전체의 bytes hash와 다릅니다. 같은 평가 의미라도 override의 직렬화 형태가 달라지면 suite fingerprint가 달라질 수 있습니다. 승인된 release candidate·명세의 원시 bytes hash는 별도 검증하며, 가중치 모델 변경을 이유로 보관 원본이나 승인 hash를 다시 쓰지 않습니다. 과거 summary의 채점 버전·가중치·fingerprint를 현재 값으로 채우거나 결과를 다시 계산하지 않습니다. 같은 측정 계약의 과거 결과도 원래 result fingerprint를 검증한 뒤 읽으며, 새 비교 baseline과는 분리합니다.
 
