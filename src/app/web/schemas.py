@@ -6,7 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from src.core.contracts.outcome import TurnResult
 from src.core.llm_errors import LLMDiagnostic
-from src.core.slack_contract import RecipientSelector
+from src.core.slack_contract import RecipientInput
 from src.core.conversation_memory import (
     DEFAULT_QUERY_MAX_CHARS,
     validate_query_text,
@@ -53,7 +53,7 @@ class AgentRequest(BaseModel):
 
     query: str = Field(min_length=1, max_length=DEFAULT_QUERY_MAX_CHARS)
     session_id: str
-    slack_recipient: RecipientSelector | None = None
+    slack_recipient: RecipientInput | None = None
     uploads: UploadContext
     include_debug: bool = False
 

@@ -11,6 +11,7 @@ from urllib3.exceptions import ReadTimeoutError
 from src.app.client import AgentRequestContext, AgentSessionClient
 from src.core.answer_schema import finalize_answer, text_document
 from src.core.uploads import UploadManifest
+from src.core.slack_contract import RecipientInput
 
 
 def frame(event, data):
@@ -157,4 +158,19 @@ def test_truncated_utf8_fails_and_invalidates_session(transport, client):
     assert all(event.result is None for event in events)
     assert client.manifest is None
     assert response.raw.released
+    assert len(sent) == 1
+
+
+def test_client_preserves_incomplete_slack_form_input_for_action_validation(transport, client):
+    client.context.slack_recipient = RecipientInput(kind="channel", value="")
+    answer = finalize_answer(text_document("일반 질문의 답변"), [])
+    response, sent = transport([frame("final_response", {
+        "response": answer.model_dump(mode="json"),
+        "upload_manifest": client.manifest.model_dump(mode="json"),
+    })])
+
+    events = list(client.stream("일반 질문"))
+
+    assert events[-1].result.response == answer
+    assert json.loads(response.request.body)["slack_recipient"] == {"kind": "channel", "value": ""}
     assert len(sent) == 1

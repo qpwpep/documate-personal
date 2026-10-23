@@ -13,7 +13,7 @@ from urllib3.exceptions import ReadTimeoutError
 
 from src.app.uploads import UploadStageResult, stage_uploaded_files
 from src.core.contracts.outcome import TurnResult
-from src.core.slack_contract import RecipientSelector
+from src.core.slack_contract import RecipientInput
 from src.core.uploads import UploadContext, UploadManifest, UploadSyncRequest
 from src.infra.sse import iter_sse_events
 
@@ -22,7 +22,7 @@ from src.infra.sse import iter_sse_events
 class AgentRequestContext:
     fastapi_url: str
     session_id: str
-    slack_recipient: RecipientSelector | None = None
+    slack_recipient: RecipientInput | None = None
     include_debug: bool = False
     timeout_seconds: float = 60
 
@@ -246,7 +246,7 @@ def build_agent_payload(
     }
 
     if context.slack_recipient is not None:
-        payload["slack_recipient"] = RecipientSelector.model_validate(context.slack_recipient).model_dump(mode="json")
+        payload["slack_recipient"] = RecipientInput.model_validate(context.slack_recipient).model_dump(mode="json")
     if context.include_debug:
         payload["include_debug"] = True
     return payload

@@ -10,7 +10,7 @@ from typing_extensions import TypedDict
 
 from src.core.answer_schema import ActionReceipt, AnswerResponse
 from src.core.save_contract import SaveOperation
-from src.core.slack_contract import RecipientSelector, SlackDelivery
+from src.core.slack_contract import RecipientInput, SlackDelivery
 from src.core.evidence import EvidenceRef, SearchHit
 from src.core.decisions import prepared_packet_fingerprint
 from src.core.planner_schema import PlannerOutput
@@ -24,7 +24,7 @@ from src.core.contracts.routing import RoutingDecision
 
 class SessionMetadata(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
-    slack_recipient: RecipientSelector | None = None
+    slack_recipient: RecipientInput | None = None
 
 
 class PendingAction(BaseModel):

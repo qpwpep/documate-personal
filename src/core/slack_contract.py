@@ -11,8 +11,16 @@ class SlackModel(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 
-class RecipientSelector(SlackModel):
+class RecipientInput(SlackModel):
+    """An optional form value; incomplete input is meaningful, not omission."""
+
     kind: Literal["channel", "user", "email"]
+    value: str = Field(strict=True)
+
+
+class RecipientSelector(RecipientInput):
+    """A recipient validated when a Slack operation actually selects its target."""
+
     value: str = Field(min_length=1, strict=True)
 
     @field_validator("value")

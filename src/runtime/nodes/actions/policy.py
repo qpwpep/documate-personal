@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from pydantic import ValidationError
+
 from src.core.slack_contract import (
-    ExplicitRecipient, RecipientIntent, RecipientSelection, RecipientSelector,
+    ExplicitRecipient, RecipientInput, RecipientIntent, RecipientSelection, RecipientSelector,
     SlackDefault, SlackDelivery, SlackFailure, UnresolvedRecipient,
 )
 
@@ -11,14 +13,25 @@ def _same_intent(left: RecipientIntent, right: RecipientIntent) -> bool:
 
 
 def select_slack_delivery(
-    *, request_id: str, intent: RecipientIntent, request_recipient: RecipientSelector | None,
+    *, request_id: str, intent: RecipientIntent, request_recipient: RecipientInput | None,
     default: SlackDefault, previous: SlackDelivery | None = None,
 ) -> SlackDelivery:
     """Select once. Resolution failure never becomes an omitted recipient."""
+    selector_input = None
+    if request_recipient is not None:
+        try:
+            selector_input = RecipientSelector.model_validate(request_recipient.model_dump())
+        except ValidationError:
+            pass
     if previous is not None and previous.intent.state == "unresolved":
-        # Accepted current-turn confirmation/correction clears this record in
-        # the planner. Input disappearance is not a new recipient decision.
-        return previous
+        if (previous.failure is not None and previous.failure.stage == "input"
+                and selector_input is not None):
+            # A corrected form can resolve its own never-selected recipient.
+            # Text ambiguity and an already selected identity remain pinned.
+            previous = None
+        else:
+            # Input disappearance is not a new recipient decision.
+            return previous
     if previous is not None and (intent.state == "omitted" or _same_intent(intent, previous.intent)):
         if previous.selection is not None:
             if previous.selection.request_id != request_id:
@@ -35,17 +48,25 @@ def select_slack_delivery(
             stage="selection", code=code, next_action="correct_input",
             message="명시한 Slack 수신자를 확정하지 못했습니다. 보낼 대상 하나의 ID 또는 이메일을 확인해 주세요.",
         ))
+    if request_recipient is not None and selector_input is None:
+        return SlackDelivery(
+            intent=UnresolvedRecipient(raw_input=request_recipient.value, reason="invalid"),
+            status="not_sent", failure=SlackFailure(
+                stage="input", code="recipient_invalid", next_action="correct_input",
+                message="Slack 전송을 위해 사이드바의 수신자를 확인해 주세요. 선택한 유형에 맞는 채널 ID, 사용자 ID 또는 이메일을 입력한 뒤 다시 전송할 수 있습니다. 기존 답변은 유지됩니다.",
+            ),
+        )
     if intent.state == "explicit":
-        if request_recipient is not None and request_recipient != intent.selector:
+        if selector_input is not None and selector_input != intent.selector:
             unresolved = UnresolvedRecipient(
-                raw_input=f"{intent.selector.value} / {request_recipient.value}",
+                raw_input=f"{intent.selector.value} / {selector_input.value}",
                 reason="conflict", evidence_ids=intent.evidence_ids,
             )
             return select_slack_delivery(request_id=request_id, intent=unresolved,
                                          request_recipient=None, default=default)
         selector, source = intent.selector, "user_text"
-    elif request_recipient is not None:
-        selector, source = request_recipient, "request_input"
+    elif selector_input is not None:
+        selector, source = selector_input, "request_input"
         intent = ExplicitRecipient(selector=selector)
     elif default.failure is not None:
         return SlackDelivery(intent=intent, status="not_sent", failure=default.failure)

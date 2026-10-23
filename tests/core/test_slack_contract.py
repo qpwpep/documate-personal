@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from src.core.slack_contract import RecipientSelector
+from src.core.slack_contract import RecipientSelector, SlackDefault
 from src.core.contracts.graph_state import SessionMetadata
 from tests.core.test_pending_action_delivery import delivery_tools
 from tests.core.test_request_contract_retries import _SaveConversation, _fail_save_publication
@@ -83,3 +83,78 @@ def test_current_email_reconfirmation_preserves_the_resolved_pending_user(delive
     assert receipt.slack.target.user_id == "UINTENDED"
     assert [request["payload"]["channel"] for request in requests if request["path"] == "/chat.postMessage"] == ["DINTENDED"]
     assert set(original.contract.slack_recipient.evidence_ids) < set(second["runtime"].request_contract.slack_recipient.evidence_ids)
+
+
+@pytest.mark.parametrize("value", ["", "not-a-channel"])
+def test_incomplete_sidebar_recipient_blocks_only_send_and_recovers_after_correction(delivery_tools, value):
+    from src.core.answer_schema import export_answer_text
+
+    _save, slack, requests, _output = delivery_tools
+    conversation = _SaveConversation(["수신자를 고쳐도 유지할 본문"], slack=slack)
+    first = conversation.turn("설명을 작성해 Slack으로 보내줘",
+        session_metadata=SessionMetadata(slack_recipient={"kind": "channel", "value": value}),
+        body={"kind": "compose", "instruction": "설명을 작성해", "evidence_ids": ["request"]},
+        actions={"slack_notify": {"intent": "requested", "evidence_ids": ["request"]}})
+
+    assert requests == []
+    pending = first["runtime"].pending_action
+    assert pending.body_prepared
+    assert pending.slack_delivery.failure.code == "recipient_invalid"
+    assert pending.slack_delivery.failure.next_action == "correct_input"
+    assert export_answer_text(pending.response) == "수신자를 고쳐도 유지할 본문"
+
+    repeated = conversation.turn("다시 보내줘", relation="supplement", actions={},
+        session_metadata=SessionMetadata(slack_recipient={"kind": "channel", "value": value}))
+    assert repeated["runtime"].pending_action.response.content == pending.response.content
+    assert requests == []
+
+    omitted = conversation.turn("다시 보내줘", relation="supplement", actions={})
+    assert omitted["runtime"].pending_action.slack_delivery.failure.code == "recipient_invalid"
+    assert requests == []
+
+    second = conversation.turn("수신자를 고쳤으니 다시 보내줘", relation="supplement", actions={},
+        session_metadata=SessionMetadata(slack_recipient={"kind": "channel", "value": "C123"}))
+
+    assert second["runtime"].pending_action is None
+    receipt = second["response"].result.actions[0]
+    assert receipt.status == "success"
+    assert [request["payload"] for request in requests] == [
+        {"channel": "C123", "text": "수신자를 고쳐도 유지할 본문"},
+    ]
+
+
+def test_incomplete_sidebar_recipient_never_falls_back_to_configured_default(delivery_tools):
+    from tests.core.test_pending_action_delivery import _ConsumerGraph, _contract, _manager
+
+    save, slack, requests, _output = delivery_tools
+    manager = _manager(_ConsumerGraph([_contract(slack="requested")], ["전송할 본문"], save, slack,
+        SlackDefault(selector=RecipientSelector(kind="channel", value="CDEFAULT"))))
+    manager.set_session_metadata(SessionMetadata(slack_recipient={"kind": "channel", "value": ""}))
+
+    result = manager.run_agent_flow("본문을 Slack으로 보내줘")
+
+    assert result["response"]["actions"][0]["status"] == "skipped"
+    assert requests == []
+    delivery = manager._ensure_session().pending_action.slack_delivery
+    assert delivery.selection is None
+    assert delivery.failure.code == "recipient_invalid"
+
+
+@pytest.mark.parametrize("delivery_tools", [{"/chat.postMessage": None}], indirect=True)
+def test_changing_sidebar_recipient_never_resends_an_unknown_delivery(delivery_tools):
+    _save, slack, requests, _output = delivery_tools
+    conversation = _SaveConversation(["전달 여부를 확인할 본문"], slack=slack)
+    first = conversation.turn("설명을 작성해 Slack으로 보내줘",
+        session_metadata=SessionMetadata(slack_recipient={"kind": "channel", "value": "C123"}),
+        body={"kind": "compose", "instruction": "설명을 작성해", "evidence_ids": ["request"]},
+        actions={"slack_notify": {"intent": "requested", "evidence_ids": ["request"]}})
+    original = first["runtime"].pending_action.slack_delivery
+    assert original.status == "unknown"
+
+    second = conversation.turn("다시 보내줘", relation="supplement", actions={},
+        session_metadata=SessionMetadata(slack_recipient={"kind": "channel", "value": "COTHER"}))
+
+    assert second["runtime"].pending_action.slack_delivery == original
+    assert second["response"].result.actions[0].status == "unknown"
+    assert len(requests) == 1
+    assert requests[0]["payload"]["channel"] == "C123"
