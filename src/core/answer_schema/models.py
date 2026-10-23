@@ -189,6 +189,8 @@ def derive_checks_and_citations(
     Only an excerpt equal to one retained source selection gets exact_match.
     """
     by_id = {item.id: item for item in evidence}
+    from src.core.answer_schema.source_locations import source_location_issues
+    location_issues = source_location_issues(document, evidence)
     citations: list[Citation] = []
     adopted: set[str] = set()
     checks: list[UnitCheck] = []
@@ -206,6 +208,9 @@ def derive_checks_and_citations(
             else:
                 support = "unsupported"
                 messages.append("excerpt_does_not_match_source")
+        if path in location_issues:
+            support = "unsupported"
+            messages.extend(location_issues[path])
         checks.append(UnitCheck(unit_id=path, reference_status=status, support_status=support, issues=messages))
         for ref in unit.refs:
             if ref in by_id and ref not in adopted:
