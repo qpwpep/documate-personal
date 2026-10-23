@@ -111,6 +111,16 @@ class RetrievalTask(RetrievalQuery):
         if self.route != "docs" and self.requirement.evidence_needs:
             raise ValueError("evidence_needs apply only to official-doc retrieval")
         if self.route == "upload" and self.requirement.match != "topic":
+            # A conventional empty call suffix names the same code symbol. Keep
+            # qualifiers and literal aspects intact; expressions with arguments
+            # or intermediate calls must never become a different lookup target.
+            symbols = []
+            for symbol in self.requirement.symbols:
+                name = symbol[:-2] if symbol.endswith("()") else symbol
+                if all(part.isidentifier() and not keyword.iskeyword(part) for part in name.split(".")):
+                    symbol = name
+                symbols.append(symbol)
+            self.requirement = self.requirement.model_copy(update={"symbols": list(dict.fromkeys(symbols))})
             for aspect in self.requirement.aspects:
                 # Reject only single-line runs of ordinary names. Keywords (including
                 # soft keywords) can form incomplete source fragments such as
