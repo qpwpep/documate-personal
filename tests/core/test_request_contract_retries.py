@@ -271,3 +271,107 @@ def test_destination_correction_does_not_repeat_completed_save(tmp_path, monkeyp
     assert len(list(tmp_path.glob("*.txt"))) == 1
     assert result["runtime"].pending_action is None
     assert [item["payload"]["channel"] for item in messages] == ["C123"]
+
+
+def test_content_supplement_preserves_completed_save_while_preparing_new_body(tmp_path, monkeypatch):
+    """Additional content changes the pending answer without reauthorizing a saved file."""
+    monkeypatch.setattr("src.infra.tools.save_text.get_save_text_output_dir", lambda: tmp_path)
+    conversation = _SaveConversation([
+        "시간복잡도는 O(n)이다. 공간복잡도는 O(1)이다.",
+        "시간복잡도는 O(n)이다. 공간복잡도는 O(1)이다. 빈 입력이면 즉시 반환한다.",
+    ])
+    original_conditions = [
+        {"kind": "custom", "mode": "required", "description": description,
+         "replaces": None, "evidence_ids": ["request"]}
+        for description in ("시간복잡도를 설명한다", "공간복잡도를 설명한다")
+    ]
+    first = conversation.turn(
+        "시간복잡도와 공간복잡도를 설명해서 저장하고 Slack으로 보내줘",
+        body={"kind": "compose", "instruction": "시간복잡도와 공간복잡도를 설명한다.",
+              "evidence_ids": ["request"]},
+        answer={"content": original_conditions},
+        actions={name: {"intent": "requested", "evidence_ids": ["request"]}
+                 for name in ("save_text", "slack_notify")},
+    )
+    receipt = first["response"].result.actions[0]
+    assert receipt.kind == "save_text" and receipt.status == "success"
+    pending = first["runtime"].pending_action
+    assert pending is not None and pending.completed_actions == ("save_text",)
+    path = Path(receipt.file_path)
+    manifest_path = path.with_name(path.name + ".json")
+    original_bytes = path.read_bytes()
+    original_mtime = path.stat().st_mtime_ns
+    original_manifest = manifest_path.read_bytes()
+
+    result = conversation.turn(
+        "앞의 조건은 유지하고 빈 입력 처리도 설명에 추가해줘",
+        relation="supplement", actions={},
+        body={"kind": "transform_answer", "source": {"ref": "pending"},
+              "instruction": "기존 시간복잡도와 공간복잡도 설명에 빈 입력 처리를 추가한다.",
+              "evidence_ids": ["request"]},
+        answer={"content": [
+            {"kind": "custom", "mode": "required", "description": "빈 입력 처리를 설명한다",
+             "replaces": None, "evidence_ids": ["request"]},
+        ]},
+    )
+    contract = result["runtime"].request_contract
+    assert [item.description for item in contract.answer.content] == [
+        "시간복잡도를 설명한다", "공간복잡도를 설명한다", "빈 입력 처리를 설명한다",
+    ]
+    assert contract.actions.save_text.intent == "not_requested"
+    assert export_answer_text(result["response"].result) == (
+        "시간복잡도는 O(n)이다. 공간복잡도는 O(1)이다. 빈 입력이면 즉시 반환한다."
+    )
+    assert all(item.kind != "save_text" for item in result["response"].result.actions)
+    assert path.read_bytes() == original_bytes
+    assert path.stat().st_mtime_ns == original_mtime
+    assert manifest_path.read_bytes() == original_manifest
+    assert len(list(tmp_path.glob("*.txt"))) == 1
+    assert len(list(tmp_path.glob("*.json"))) == 1
+    pending = result["runtime"].pending_action
+    assert pending is not None and pending.body_prepared
+    assert pending.contract.actions.slack_notify.intent == "requested"
+
+
+def test_content_reconfirmation_keeps_failed_save_operation_frozen(tmp_path, monkeypatch):
+    """A new evidence binding for the same condition does not replace a failed write."""
+    monkeypatch.setattr("src.infra.tools.save_text.get_save_text_output_dir", lambda: tmp_path)
+    conversation = _SaveConversation(["시간복잡도는 O(n)이다."])
+    condition = {"kind": "custom", "mode": "required", "description": "시간복잡도를 설명한다",
+                 "replaces": None, "evidence_ids": ["request"]}
+    with monkeypatch.context() as failure:
+        _fail_save_publication(failure)
+        first = conversation.turn(
+            "시간복잡도를 설명하고 저장해줘",
+            body={"kind": "compose", "instruction": "시간복잡도를 설명한다.",
+                  "evidence_ids": ["request"]},
+            answer={"content": [condition]},
+        )
+    failed_receipt = first["response"].result.actions[0]
+    assert failed_receipt.status == "error" and failed_receipt.error_code == "write_failed"
+    pending = first["runtime"].pending_action
+    assert pending is not None and pending.body_prepared
+    assert pending.save_operation == failed_receipt.operation
+    assert len(list(tmp_path.glob("*.json"))) == 1
+    assert list(tmp_path.glob("*.txt")) == []
+
+    result = conversation.turn(
+        "시간복잡도 설명 조건은 그대로야. 그 본문 그대로 저장을 다시 시도해줘",
+        relation="supplement", body={"kind": "copy_answer", "source": {"ref": "pending"}},
+        answer={"content": [condition]},
+    )
+    contract = result["runtime"].request_contract
+    assert contract.revision == pending.contract.revision + 1
+    assert len(contract.answer.content) == 1
+    assert contract.answer.content[0].description == "시간복잡도를 설명한다"
+    assert set(contract.answer.content[0].evidence_ids) > set(pending.contract.answer.content[0].evidence_ids)
+    assert result["response"].result.content_hash == first["response"].result.content_hash
+    receipt = result["response"].result.actions[0]
+    assert receipt.status == "success"
+    assert receipt.operation == failed_receipt.operation
+    assert receipt.operation.target_kind == "compose"
+    assert result["response"].save_operation_binding_sha256 == failed_receipt.operation.binding_sha256
+    assert result["runtime"].pending_action is None
+    assert Path(receipt.file_path).read_bytes() == "시간복잡도는 O(n)이다.".encode("utf-8-sig")
+    assert len(list(tmp_path.glob("*.txt"))) == 1
+    assert len(list(tmp_path.glob("*.json"))) == 1

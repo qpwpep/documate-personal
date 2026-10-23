@@ -51,6 +51,26 @@ def _save_operation(*, contract, runtime, pending, response, body: str) -> SaveO
     )
 
 
+def _answer_conditions_ready(contract, answer: AnswerResponse) -> bool:
+    check = check_answer_contract(
+        contract.answer, answer.content,
+        evidence=[citation.evidence for citation in answer.citations],
+    )
+    if not check.valid:
+        return False
+    if not check.unchecked_semantic:
+        return True
+    try:
+        # Reuse the answer boundary's content/source revision checks rather
+        # than trusting a report carried through an unchecked model_copy.
+        report = AnswerResponse.model_validate(answer.model_dump(mode="json")).semantic_validation
+    except ValueError:
+        return False
+    return report is not None and report.passed and any(
+        item.name == "request_fulfilled" and item.unit_id is None for item in report.checks
+    )
+
+
 def _ready_body(*, contract, response, runtime, pending, planner) -> bool:
     """Only this contract revision's checked complete body can leave the app."""
     if (
@@ -59,10 +79,7 @@ def _ready_body(*, contract, response, runtime, pending, planner) -> bool:
         or response.contract_revision != contract.revision
         or planner.diagnostics.reason in {"upload_retriever_missing", "planner_unavailable"}
         or not response.result.content.blocks
-        or not check_answer_contract(
-            contract.answer, response.result.content,
-            evidence=[citation.evidence for citation in response.result.citations],
-        ).valid
+        or not _answer_conditions_ready(contract, response.result)
     ):
         return False
     if contract.body.kind == "copy_input":
@@ -109,8 +126,7 @@ def _prepared_pending_body(*, contract, pending, body_ready: bool) -> bool:
         and contract.can_prepare_body() and contract.body.kind == "copy_answer"
         and contract.body.source.ref == "pending"
         and contract.body.source.response_hash == pending.response.content_hash
-        and check_answer_contract(contract.answer, pending.response.content,
-                                  evidence=[citation.evidence for citation in pending.response.citations]).valid
+        and _answer_conditions_ready(contract, pending.response)
     )
 
 

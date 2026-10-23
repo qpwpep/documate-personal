@@ -6,7 +6,7 @@ from dataclasses import replace
 from typing import Any
 
 from src.core.answer_schema.models import validated_evidence_by_id
-from src.core.answer_export import exact_copy_ready
+from src.core.answer_export import exact_copy_ready, input_copy_snapshot
 from src.core.contracts.graph_state import DecisionCacheEntry, EvidenceVerdict, PreparedEvidence, PreparedEvidencePacket
 from src.core.decisions import DecisionResult, decision_fingerprint, evidence_plan_fingerprint, prepared_packet_fingerprint
 from src.core.evidence import SearchHit
@@ -41,7 +41,9 @@ READINESS_INSTRUCTIONS = (
     "conversation context, bound input/prior answer and this packet's required source excerpts, without "
     "inventing missing facts or ignoring required/forbidden conditions? Use only this packet. "
     "For ordinary conversation, creative composition or user-text transformation without retrieval, external "
-    "citations are not required. For copy/transform use bound_source_response as actual source text. "
+    "citations are not required. For copy_input/transform_input use confirmed_request.body.source.text; "
+    "for copy_answer/transform_answer use bound_source_response as actual source text. "
+    "For literal input copying, assess additional requested conditions rather than the truth of quoted events. "
     "Judge readiness to prepare the body, not whether downstream save/notification has run."
 )
 SUPPORT_INSTRUCTIONS = (
@@ -268,7 +270,8 @@ def assess_pre_semantics(
     if not snapshot.retrieval_required and exact_copy_ready(snapshot.request_contract, snapshot.source_response):
         # The body already exists. Check its exact revision instead of asking a
         # model whether this export needs a newly generated answer.
-        source = snapshot.source_response
+        input_copy = snapshot.request_contract.body.kind == "copy_input"
+        source = input_copy_snapshot(snapshot.request_contract) if input_copy else snapshot.source_response
         packet = [citation.evidence for citation in source.citations]
         prepared = PreparedEvidencePacket(evidence=packet,
             fingerprint=prepared_packet_fingerprint(packet, {}))
@@ -276,8 +279,8 @@ def assess_pre_semantics(
             request_id=snapshot.request_contract.request_id,
             contract_revision=snapshot.request_contract.revision,
             plan_fingerprint=evidence_plan_fingerprint(snapshot.planner_output),
-            source_response_hash=source.content_hash, model="deterministic-exact-copy",
-            prompt_fingerprint=decision_fingerprint("exact-answer-export-v1"), threshold=threshold,
+            source_response_hash=None if input_copy else source.content_hash, model="deterministic-exact-copy",
+            prompt_fingerprint=decision_fingerprint("exact-input-copy-v1" if input_copy else "exact-answer-export-v1"), threshold=threshold,
             normal=prepared, compact=prepared,
         )
         return

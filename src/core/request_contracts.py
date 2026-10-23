@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Any, Literal
@@ -61,10 +62,16 @@ RequirementMode = Literal["required", "forbidden", "preferred"]
 
 
 class ContentRequirement(ContractModel):
-    kind: Literal["code_example", "example", "comparison", "options_summary", "explanation", "procedure", "custom"] = Field(description="Semantic content only. Do not repeat the body transformation, action, line count or layout as custom content. A table prohibition belongs to format.table, not comparison or custom.")
+    kind: Literal["code", "code_example", "example", "comparison", "options_summary", "explanation", "procedure", "custom"] = Field(description="Semantic content only. code means program code, code_example means an illustrative code example, and example means an illustration of any kind. A code_block is layout and can contain logs or input text. Do not repeat the body transformation, action, line count or layout as custom content. A table prohibition belongs to format.table, not comparison or custom.")
     mode: RequirementMode
     description: str = ""
     evidence_ids: tuple[str, ...] = ()
+    replaces: str | None = Field(default=None, min_length=1, description="For a change to one pending content condition, copy its offered ref from pending_action.confirmed_facts.answer.content. Null adds an independent condition. Never invent a ref; it is valid only for the offered request revision.")
+
+    @property
+    def condition_key(self) -> tuple[str, str]:
+        """Exact condition identity; kind alone only identifies its category."""
+        return self.kind, self.description.strip()
 
 
 class LayoutRequirement(ContractModel):
@@ -109,17 +116,25 @@ class AnswerContract(ContractModel):
         for constraints in (self.content, self.format):
             modes: dict[tuple[str, Any], set[str]] = {}
             for item in constraints:
-                key = (item.kind, getattr(item, "value", None))
+                key = item.condition_key if isinstance(item, ContentRequirement) else (item.kind, item.value)
                 modes.setdefault(key, set()).add(item.mode)
             if any({"required", "forbidden"} <= states for states in modes.values()):
                 raise ValueError("resolve conflicting required and forbidden constraints before finalizing")
         required_lines = {item.value for item in self.format if item.kind == "line_count" and item.mode == "required"}
         if len(required_lines) > 1:
             raise ValueError("resolve conflicting line counts before finalizing")
-        required = {item.kind for item in (*self.content, *self.format) if item.mode == "required"}
-        forbidden = {item.kind for item in (*self.content, *self.format) if item.mode == "forbidden"}
-        implied = required | ({"code_example", "example"} if "code_block" in required else set())
-        implied |= {"example"} if "code_example" in required else set()
+        for required_content in (item for item in self.content if item.mode == "required"):
+            implied_content = {required_content.kind}
+            if required_content.kind == "code_example":
+                implied_content.update({"code", "example"})
+            for forbidden_content in (item for item in self.content if item.mode == "forbidden"):
+                same_scope = (not forbidden_content.description.strip()
+                              or required_content.description.strip() == forbidden_content.description.strip())
+                if same_scope and forbidden_content.kind in implied_content:
+                    raise ValueError("resolve conflicting required and forbidden content conditions")
+        required = {item.kind for item in self.format if item.mode == "required"}
+        forbidden = {item.kind for item in self.format if item.mode == "forbidden"}
+        implied = set(required)
         implied |= {"list"} if "ordered_list" in required else set()
         # A specific line count and a different forbidden count can coexist.
         if (implied & forbidden) - {"line_count"}:
@@ -201,6 +216,12 @@ class RequestContract(_RequestFacts):
     body: BodyPlan = Field(default_factory=ComposeBody)
     body_request: WireBodyPlan | None = None
     failure: str | None = None
+
+    @property
+    def content_requirements_by_ref(self) -> dict[str, ContentRequirement]:
+        """Revision-scoped correction targets, never permanent condition identities."""
+        return {f"content:{self.request_id}:{self.revision}:{index}": item
+                for index, item in enumerate(self.answer.content, 1)}
 
     @property
     def status(self) -> Literal["resolved", "unresolved", "invalid"]:
@@ -301,7 +322,8 @@ class ContractCheck:
         return not self.missing_required and not self.forbidden_present
 
 
-_COMMONMARK = MarkdownIt("commonmark")
+# The UI renders Markdown tables as well as CommonMark block structures.
+_COMMONMARK = MarkdownIt("commonmark").enable("table")
 
 
 def _raw_body_markdown_blocks(document: AnswerDocument) -> Iterable[str]:
@@ -326,17 +348,30 @@ def _raw_body_markdown_blocks(document: AnswerDocument) -> Iterable[str]:
             yield "\n".join([header, separator, *rows])
 
 
-def _complete_selected_code_lines(evidence: EvidenceRef) -> set[str]:
+def _selected_code_statements(evidence: EvidenceRef) -> set[str]:
+    """Conservative syntax proof from the complete native source and selection."""
+    if evidence.element.language not in {"python", "py"}:
+        return set()
+    try:
+        tree = ast.parse(evidence.element.text)
+    except (SyntaxError, ValueError, RecursionError):
+        return set()
     source = PythonSourceMap(evidence.element.text)
     selection = evidence.selection
     end = len(source.text) if selection.end is None else selection.end
-    selected_lines = set()
-    for offset, line in zip(source.offsets, source.lines):
-        content = line.strip()
-        start = offset + len(line) - len(line.lstrip())
-        if content and selection.start <= start and start + len(content) <= end:
-            selected_lines.add(content)
-    return selected_lines
+    statements = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.stmt):
+            continue
+        # Bare names, attributes and literal strings can also be labels, paths
+        # or logs. Their syntax alone cannot establish program-code intent.
+        if isinstance(node, ast.Expr) and not isinstance(node.value, ast.Call):
+            continue
+        start = source.position(node.lineno, node.col_offset)
+        stop = source.position(node.end_lineno, node.end_col_offset)
+        if selection.start <= start and stop <= end:
+            statements.add(source.text[start:stop].strip())
+    return statements
 
 
 def check_answer_contract(contract: AnswerContract, document: Any, *, evidence: Iterable[EvidenceRef] = ()) -> ContractCheck:
@@ -350,25 +385,28 @@ def check_answer_contract(contract: AnswerContract, document: Any, *, evidence: 
     document = document if isinstance(document, AnswerDocument) else AnswerDocument.model_validate(document)
     blocks = document.blocks
     units = [unit for _, unit in iter_content_units(document)]
-    has_markdown_code = any(
-        token.type in {"code_block", "fence"}
+    markdown_blocks = {
+        token.type
         for text in _raw_body_markdown_blocks(document) for token in _COMMONMARK.parse(text)
-    )
+    }
+    has_markdown_code = bool(markdown_blocks & {"code_block", "fence"})
     has_code_block = any(block.type == "code" and not block.inline for block in blocks) or has_markdown_code
     code_sources = {item.id: item for item in evidence if item.element.kind == "code"}
     # A quoted native statement is still code when displayed inside a paragraph.
-    # Require a complete source line in this unit's own selected evidence: a
-    # filename, label or identifier substring must not satisfy a code request.
-    source_lines = {key: _complete_selected_code_lines(item) for key, item in code_sources.items()}
+    # Require a complete statement in this unit's own selected source range:
+    # filenames, identifier fragments and strings inside code are not proof.
+    source_statements = {key: _selected_code_statements(item) for key, item in code_sources.items()}
     has_cited_inline_code = any(
-        child.content.strip() in source_lines[reference]
+        child.content.strip() in source_statements[reference]
         for unit in units
         for token in _COMMONMARK.parseInline(unit.text)
         for child in token.children or [] if child.type == "code_inline"
-        for reference in unit.refs if reference in source_lines
+        for reference in unit.refs if reference in source_statements
     )
-    has_code = any(block.type == "code" for block in blocks) or has_markdown_code or any(
-        unit.text.strip() == code_sources[reference].excerpt.strip()
+    # Exact cited program text proves code content. Markup, language hints and
+    # basis labels alone cannot distinguish code from logs or quoted prose.
+    has_code = any(
+        bool(source_statements[reference]) and unit.text.strip() == code_sources[reference].excerpt.strip()
         for unit in units for reference in unit.refs if reference in code_sources
     ) or has_cited_inline_code
     # Paragraph units are displayed on one line unless their text has newlines.
@@ -385,19 +423,26 @@ def check_answer_contract(contract: AnswerContract, document: Any, *, evidence: 
             body_segments.append(block.content.text)
     line_count = sum(bool(line.strip()) for segment in body_segments for line in segment.splitlines())
     present = {
-        "code_example": has_code,
-        "example": has_code or any(unit.basis == "example" for unit in units),
+        # An example is a semantic role, never a consequence of its layout or
+        # the model-proposed basis label. Decisions checks those obligations.
         "code_block": has_code_block,
-        "ordered_list": any(block.type == "list" and block.ordered for block in blocks),
-        "list": any(block.type == "list" for block in blocks),
-        "table": any(block.type == "table" for block in blocks),
-        "headings": any(block.type == "heading" for block in blocks),
+        "ordered_list": any(block.type == "list" and block.ordered for block in blocks) or "ordered_list_open" in markdown_blocks,
+        "list": any(block.type == "list" for block in blocks) or bool(markdown_blocks & {"ordered_list_open", "bullet_list_open"}),
+        "table": any(block.type == "table" for block in blocks) or "table_open" in markdown_blocks,
+        "headings": any(block.type == "heading" for block in blocks) or "heading_open" in markdown_blocks,
     }
+    if has_code:
+        present["code"] = True
     check = ContractCheck()
     for requirement in (*contract.content, *contract.format):
         if requirement.mode == "preferred":
             continue
         key = requirement.kind
+        if isinstance(requirement, ContentRequirement) and requirement.description.strip():
+            # Presence of a category does not establish the specific condition
+            # described by the user (for example newly generated code only).
+            check.unchecked_semantic.append(f"{requirement.mode}:{key}")
+            continue
         if key == "line_count":
             found = line_count == requirement.value
             key = f"line_count:{requirement.value}"

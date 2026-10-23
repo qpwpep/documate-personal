@@ -4,6 +4,7 @@ import hashlib
 import re
 from uuid import uuid4
 
+from src.core.answer_schema import text_document
 from src.core.contracts import GraphState
 from src.core.contracts.boundary.runtime import get_runtime_state
 from src.core.contracts.graph_state import PendingAction
@@ -12,7 +13,7 @@ from src.core.request_contracts import (
     BoundInputText, ComposeBody, CopyAnswerBody, CopyInputBody, MissingInformation,
     RequestContract, TransformAnswerBody, TransformInputBody, UnresolvedBody,
     WireCopyAnswerBody, WireCopyInputBody, WireRequestContract, WireTransformAnswerBody,
-    WireTransformInputBody,
+    WireTransformInputBody, check_answer_contract, evidence_scope_covers,
 )
 from src.core.slack_contract import ExplicitRecipient, OmittedRecipient, UnresolvedRecipient
 
@@ -123,6 +124,38 @@ def _bind_body(body, runtime, utterances, original=None, *, declared_missing=())
     return body, ()
 
 
+def _apply_requested_copy_layout(body, body_request, answer, runtime):
+    """An explicit layout edit changes the operation, never the bound source."""
+    if isinstance(body, CopyInputBody):
+        document = text_document(body.source.text)
+    elif isinstance(body, CopyAnswerBody):
+        response = (runtime.previous_response if body.source.ref == "previous"
+                    else runtime.pending_action.response if runtime.pending_action else None)
+        if response is None:
+            return body, body_request
+        document = response.content
+    else:
+        return body, body_request
+    check = check_answer_contract(AnswerContract(format=answer.format), document)
+    conflicts = {*check.missing_required, *check.forbidden_present}
+    # A line-count mismatch may require deleting or rewriting content. Do not
+    # infer authorization for that from a request to change only presentation.
+    if not conflicts or any(key.startswith("line_count:") for key in conflicts):
+        return body, body_request
+    evidence_ids = tuple(dict.fromkeys(
+        key for item in answer.format if item.kind in conflicts for key in item.evidence_ids
+    ))
+    instruction = (
+        "Preserve the selected source's wording and information. Apply only the explicitly requested "
+        "layout in answer.format. Do not translate, summarize, delete source content or add explanations "
+        "or examples. Preserve source whitespace inside a surrounding code block."
+    )
+    transform = TransformInputBody if isinstance(body, CopyInputBody) else TransformAnswerBody
+    wire_transform = WireTransformInputBody if isinstance(body, CopyInputBody) else WireTransformAnswerBody
+    return (transform(source=body.source, instruction=instruction, evidence_ids=evidence_ids),
+            wire_transform(source=body_request.source, instruction=instruction, evidence_ids=evidence_ids))
+
+
 def _merge_pending(proposal: WireRequestContract, pending, *, current_turn_id: str, current_utterance: str):
     original = pending.contract
     evidence = {item.id: item for item in original.evidence}
@@ -147,19 +180,60 @@ def _merge_pending(proposal: WireRequestContract, pending, *, current_turn_id: s
             selected = ActionRequest()
         actions[name] = selected
 
-    def requirements(previous, incoming):
+    def current_requirement_instruction(item, group):
+        allowed = ({"negation", "correction", "instruction"} if item.mode == "forbidden"
+                   else {"instruction", "correction", "reference"})
+        return any(key in current_ids and evidence[key].interpretation in allowed
+                   and evidence_scope_covers(evidence[key].scope, f"answer.{group}.{item.kind}")
+                   for key in item.evidence_ids)
+
+    def content_requirements(previous, incoming):
+        result = list(previous)
+        targets = {ref: index for index, ref in enumerate(original.content_requirements_by_ref)}
+        replaced = set()
+        for item in incoming:
+            if item in result:
+                continue
+            if not current_requirement_instruction(item, "content"):
+                raise ValueError("pending requirements need a new user instruction to change")
+            if item.replaces is not None:
+                if item.replaces not in targets or item.replaces in replaced:
+                    raise ValueError("content correction must select one distinct offered condition in the current pending revision")
+                replaced.add(item.replaces)
+                result[targets[item.replaces]] = item.model_copy(update={"replaces": None})
+                continue
+            matching = next((index for index, old in enumerate(result)
+                             if old.condition_key == item.condition_key and old.mode == item.mode), None)
+            if matching is None:
+                result.append(item)
+            else:
+                old = result[matching]
+                result[matching] = old.model_copy(update={
+                    "evidence_ids": tuple(dict.fromkeys((*old.evidence_ids, *item.evidence_ids))),
+                })
+        return tuple(result)
+
+    def format_requirements(previous, incoming):
         result = list(previous)
         for item in incoming:
             if item in result:
                 continue
-            if not current_ids.intersection(item.evidence_ids):
+            if not current_requirement_instruction(item, "format"):
                 raise ValueError("pending requirements need a new user instruction to change")
-            result = [old for old in result if old.kind != item.kind]
+            if item.kind == "line_count":
+                # One required/preferred count can change without deleting
+                # independent prohibitions on other counts.
+                result = [old for old in result if old.kind != item.kind or not (
+                    (item.mode in {"required", "preferred"} and old.mode == item.mode)
+                    or (item.mode != "preferred" and old.value == item.value)
+                )]
+            else:
+                result = [old for old in result if old.kind != item.kind]
             result.append(item)
         return tuple(result)
 
-    answer = AnswerContract(content=requirements(original.answer.content, proposal.answer.content),
-                            format=requirements(original.answer.format, proposal.answer.format),
+    answer = AnswerContract(content=content_requirements(original.answer.content, proposal.answer.content),
+                            format=format_requirements(original.answer.format, proposal.answer.format),
                             preferences=tuple(dict.fromkeys([*original.answer.preferences, *proposal.answer.preferences])))
     body = proposal.body
     neutral_body = isinstance(body, ComposeBody) and not body.instruction.strip() and not body.evidence_ids
@@ -261,6 +335,8 @@ def resolve_request_contract(proposal: WireRequestContract, state: GraphState, *
     pending = runtime.pending_action
     matches_pending = pending is not None and proposal.target_request_id == pending.contract.request_id
     inherits_pending = matches_pending and proposal.relation in {"correction", "supplement", "cancel"}
+    if not inherits_pending and any(item.replaces is not None for item in proposal.answer.content):
+        raise ValueError("content correction requires the offered pending request")
     if (any(item.slot == "slack_destination" and item.reason != "not_provided" for item in proposal.missing_info)
             and not isinstance(proposal.slack_recipient, UnresolvedRecipient)):
         raise ValueError("recipient ambiguity must be represented by the typed unresolved intent")
@@ -321,10 +397,11 @@ def resolve_request_contract(proposal: WireRequestContract, state: GraphState, *
     ) and not any(getattr(proposal.actions, name).intent == "requested" for name in ("save_text", "slack_notify")):
         question = next(item.question for item in unique.values() if item.slot in {"save_intent", "slack_intent"})
         body = UnresolvedBody(question=question)
+    body, body_request = _apply_requested_copy_layout(body, proposal.body, proposal.answer, runtime)
     return RequestContract.model_validate({
         **proposal.model_dump(mode="python", exclude={"body", "missing_info"}),
         "request_id": request_id,
         "revision": revision,
-        "body": body, "body_request": proposal.body, "missing_info": tuple(unique.values()),
+        "body": body, "body_request": body_request, "missing_info": tuple(unique.values()),
         "slack_recipient": recipient,
     })

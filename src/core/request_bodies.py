@@ -60,6 +60,7 @@ class AcknowledgeBody(BodyModel):
 
 
 class WireCopyInputBody(BodyModel):
+    """Copy literal input with unchanged layout; a newly requested layout uses transform_input."""
     kind: Literal["copy_input"] = "copy_input"
     source: InputTextReference
 
@@ -72,7 +73,10 @@ class CopyInputBody(BodyModel):
 class WireTransformInputBody(BodyModel):
     kind: Literal["transform_input"] = "transform_input"
     source: InputTextReference
-    instruction: str = Field(min_length=1)
+    instruction: str = Field(min_length=1, description=(
+        "The requested translation, edit or layout-only change. If wording must stay literal while adding "
+        "a code block/list/table, preserve the selected payload and change only its presentation."
+    ))
     evidence_ids: tuple[str, ...] = ()
 
 
@@ -87,7 +91,8 @@ class WireCopyAnswerBody(BodyModel):
     """Reuse a displayed answer including its existing sources and limitations.
 
     TXT serialization and inclusion of existing citations are server export
-    behavior, not transformations of the answer's wording or content.
+    behavior, not transformations of the answer's wording or content. A newly
+    requested displayed layout uses transform_answer even if wording stays literal.
     """
     kind: Literal["copy_answer"] = "copy_answer"
     source: AnswerReference

@@ -81,7 +81,7 @@ def test_cited_native_code_line_in_paragraph_satisfies_code_without_creating_cod
     code = 'grouped = all_sales.groupby("region", as_index=False)["amount"].sum()'
     document = text_document(f"계산식은 `{code}`입니다.", basis="source", refs=[evidence.id])
     contract = AnswerContract(
-        content=(ContentRequirement(kind="code_example", mode="required"),),
+        content=(ContentRequirement(kind="code", mode="required"),),
         format=(FormatRequirement(kind="code_block", mode="forbidden"),),
     )
 
@@ -89,19 +89,20 @@ def test_cited_native_code_line_in_paragraph_satisfies_code_without_creating_cod
 
     assert check.missing_required == []
     assert check.forbidden_present == []
-    forbidden = AnswerContract(content=(ContentRequirement(kind="code_example", mode="forbidden"),))
-    assert check_answer_contract(forbidden, document, evidence=[evidence]).forbidden_present == ["code_example"]
+    assert check.unchecked_semantic == []
+    forbidden = AnswerContract(content=(ContentRequirement(kind="code", mode="forbidden"),))
+    assert check_answer_contract(forbidden, document, evidence=[evidence]).forbidden_present == ["code"]
 
 
 @pytest.mark.parametrize("quoted", ["sample_data_analysis.py", "지역별 합계", "amount", "all_sales.groupby"])
-def test_filename_label_or_partial_identifier_is_not_a_native_code_example(quoted):
+def test_filename_label_or_partial_identifier_does_not_prove_native_code_content(quoted):
     evidence = _native_calculation_source()
     document = text_document(f"`{quoted}`를 확인하세요.", basis="source", refs=[evidence.id])
-    contract = AnswerContract(content=(ContentRequirement(kind="code_example", mode="required"),))
+    contract = AnswerContract(content=(ContentRequirement(kind="code", mode="required"),))
 
     check = check_answer_contract(contract, document, evidence=[evidence])
 
-    assert check.missing_required == ["code_example"]
+    assert check.unchecked_semantic == ["required:code"]
 
 
 def test_inline_code_cannot_borrow_another_units_source():
@@ -111,9 +112,9 @@ def test_inline_code_cannot_borrow_another_units_source():
         {"text": f"`{code}`", "basis": "source", "refs": []},
         {"text": "sample_data_analysis.py", "basis": "source", "refs": [evidence.id]},
     ]}]})
-    contract = AnswerContract(content=(ContentRequirement(kind="code_example", mode="required"),))
+    contract = AnswerContract(content=(ContentRequirement(kind="code", mode="required"),))
 
-    assert check_answer_contract(contract, document, evidence=[evidence]).missing_required == ["code_example"]
+    assert check_answer_contract(contract, document, evidence=[evidence]).unchecked_semantic == ["required:code"]
 
 
 def test_inline_identifier_cannot_borrow_a_complete_line_outside_selected_range():
@@ -125,10 +126,10 @@ def test_inline_identifier_cannot_borrow_a_complete_line_outside_selected_range(
     evidence = build_evidence(snapshot=original.snapshot, element=original.element,
                               start=start, end=start + len("amount"))
     document = text_document("`amount`를 사용합니다.", basis="source", refs=[evidence.id])
-    contract = AnswerContract(content=(ContentRequirement(kind="code_example", mode="required"),))
+    contract = AnswerContract(content=(ContentRequirement(kind="code", mode="required"),))
 
     assert evidence.excerpt == "amount"
-    assert check_answer_contract(contract, document, evidence=[evidence]).missing_required == ["code_example"]
+    assert check_answer_contract(contract, document, evidence=[evidence]).unchecked_semantic == ["required:code"]
 
 
 @pytest.mark.parametrize("newline", ["\n", "\r\n", "\r"])
@@ -142,6 +143,7 @@ def test_selected_complete_code_line_can_exclude_indentation_and_line_ending(new
     evidence = build_evidence(snapshot=original.snapshot, element=original.element,
                               start=start, end=start + len(code))
     document = text_document(f"`{code}`를 사용합니다.", basis="source", refs=[evidence.id])
-    contract = AnswerContract(content=(ContentRequirement(kind="code_example", mode="required"),))
+    contract = AnswerContract(content=(ContentRequirement(kind="code", mode="required"),))
 
     assert check_answer_contract(contract, document, evidence=[evidence]).missing_required == []
+    assert check_answer_contract(contract, document, evidence=[evidence]).unchecked_semantic == []

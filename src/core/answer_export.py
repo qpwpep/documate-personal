@@ -3,9 +3,9 @@ from __future__ import annotations
 
 from uuid import NAMESPACE_URL, uuid5
 
-from src.core.answer_schema import AnswerResponse, export_answer_text
+from src.core.answer_schema import AnswerResponse, export_answer_text, finalize_answer, text_document
 from src.core.decisions import decision_fingerprint
-from src.core.request_contracts import RequestContract, check_answer_contract
+from src.core.request_contracts import BoundInputText, RequestContract, check_answer_contract
 from src.core.save_contract import SaveOperation
 
 
@@ -14,12 +14,27 @@ def answer_export_snapshot(response: AnswerResponse) -> AnswerResponse:
     return AnswerResponse.model_validate(response.model_dump(mode="json", exclude={"actions"}))
 
 
+def input_copy_snapshot(contract: RequestContract) -> AnswerResponse:
+    """Revalidate the bound input and derive the only permitted literal copy."""
+    if contract.body.kind != "copy_input":
+        raise ValueError("an input copy requires bound input text")
+    source = BoundInputText.model_validate(contract.body.source.model_dump(mode="json"))
+    return finalize_answer(text_document(source.text), [])
+
+
 def exact_copy_ready(contract: RequestContract | None, source: AnswerResponse | None) -> bool:
-    """New semantic obligations still need evaluation; an unchanged export does not."""
-    if contract is None or source is None or contract.body.kind != "copy_answer" or not contract.can_prepare_body():
+    """New semantic obligations still need evaluation; literal fidelity does not."""
+    if contract is None or not contract.can_prepare_body():
         return False
-    checked = answer_export_snapshot(source)
-    if checked.content_hash != contract.body.source.response_hash or not checked.content.blocks:
+    if contract.body.kind == "copy_input":
+        checked = input_copy_snapshot(contract)
+    elif contract.body.kind == "copy_answer" and source is not None:
+        checked = answer_export_snapshot(source)
+        if checked.content_hash != contract.body.source.response_hash:
+            return False
+    else:
+        return False
+    if not checked.content.blocks:
         return False
     check = check_answer_contract(contract.answer, checked.content,
                                   evidence=[citation.evidence for citation in checked.citations])
