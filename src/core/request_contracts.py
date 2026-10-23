@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from src.core.answer_schema import AnswerDocument, AnswerResponse, iter_content_units
 from src.core.evidence import EvidenceRef
+from src.core.python_source import PythonSourceMap
 from src.core.slack_contract import ExplicitRecipient, OmittedRecipient, RecipientIntent, UnresolvedRecipient
 from src.core.request_bodies import (
     AcknowledgeBody, AnswerReference, BodyPlan, BoundAnswerReference, BoundInputText, ComposeBody,
@@ -325,6 +326,19 @@ def _raw_body_markdown_blocks(document: AnswerDocument) -> Iterable[str]:
             yield "\n".join([header, separator, *rows])
 
 
+def _complete_selected_code_lines(evidence: EvidenceRef) -> set[str]:
+    source = PythonSourceMap(evidence.element.text)
+    selection = evidence.selection
+    end = len(source.text) if selection.end is None else selection.end
+    selected_lines = set()
+    for offset, line in zip(source.offsets, source.lines):
+        content = line.strip()
+        start = offset + len(line) - len(line.lstrip())
+        if content and selection.start <= start and start + len(content) <= end:
+            selected_lines.add(content)
+    return selected_lines
+
+
 def check_answer_contract(contract: AnswerContract, document: Any, *, evidence: Iterable[EvidenceRef] = ()) -> ContractCheck:
     """Check observable content; keep semantic evaluation explicitly separate.
 
@@ -341,11 +355,22 @@ def check_answer_contract(contract: AnswerContract, document: Any, *, evidence: 
         for text in _raw_body_markdown_blocks(document) for token in _COMMONMARK.parse(text)
     )
     has_code_block = any(block.type == "code" and not block.inline for block in blocks) or has_markdown_code
-    code_sources = {item.id: item.excerpt.strip() for item in evidence if item.element.kind == "code"}
-    has_code = any(block.type == "code" for block in blocks) or has_markdown_code or any(
-        unit.text.strip() == code_sources[reference]
-        for unit in units for reference in unit.refs if reference in code_sources
+    code_sources = {item.id: item for item in evidence if item.element.kind == "code"}
+    # A quoted native statement is still code when displayed inside a paragraph.
+    # Require a complete source line in this unit's own selected evidence: a
+    # filename, label or identifier substring must not satisfy a code request.
+    source_lines = {key: _complete_selected_code_lines(item) for key, item in code_sources.items()}
+    has_cited_inline_code = any(
+        child.content.strip() in source_lines[reference]
+        for unit in units
+        for token in _COMMONMARK.parseInline(unit.text)
+        for child in token.children or [] if child.type == "code_inline"
+        for reference in unit.refs if reference in source_lines
     )
+    has_code = any(block.type == "code" for block in blocks) or has_markdown_code or any(
+        unit.text.strip() == code_sources[reference].excerpt.strip()
+        for unit in units for reference in unit.refs if reference in code_sources
+    ) or has_cited_inline_code
     # Paragraph units are displayed on one line unless their text has newlines.
     body_segments: list[str] = []
     for block in blocks:

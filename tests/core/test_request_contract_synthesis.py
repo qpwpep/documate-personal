@@ -1,10 +1,14 @@
+from pathlib import Path
+
 import pytest
 
 from src.core.answer_schema import AnswerDocument, export_answer_text, text_document
 from src.core.llm_errors import LLMCallError
 from src.core.request_contracts import (
-    AnswerContract, ContentRequirement, ContractEvidence, FormatRequirement, RequestContract,
+    AnswerContract, ContentRequirement, ContractEvidence, FormatRequirement, RequestContract, check_answer_contract,
 )
+from src.infra.chunking import chunk_python_text
+from src.core.evidence import build_evidence
 from src.runtime.nodes.synthesis import make_synthesize_node
 from src.runtime.nodes.validation import make_post_synthesis_validation_node
 from tests.core.helpers import make_decisions_client
@@ -62,3 +66,82 @@ def test_source_fallback_does_not_assume_excerpts_satisfy_semantic_requirements(
     assert caught.value.problem.code == "provider_unavailable"
     assert "response" not in state
     assert "A source excerpt" not in caught.value.problem.message
+
+
+def _native_calculation_source():
+    path = Path(__file__).resolve().parents[2] / "data/benchmarks/fixtures/uploads/sample_data_analysis.py"
+    raw = path.read_bytes()
+    upload = chunk_python_text(path=str(path), text=raw.decode("utf-8"), source_content=raw,
+                               chunk_size=2000, chunk_overlap=0)
+    return upload.hydrate(upload.chunks[0])
+
+
+def test_cited_native_code_line_in_paragraph_satisfies_code_without_creating_code_block():
+    evidence = _native_calculation_source()
+    code = 'grouped = all_sales.groupby("region", as_index=False)["amount"].sum()'
+    document = text_document(f"계산식은 `{code}`입니다.", basis="source", refs=[evidence.id])
+    contract = AnswerContract(
+        content=(ContentRequirement(kind="code_example", mode="required"),),
+        format=(FormatRequirement(kind="code_block", mode="forbidden"),),
+    )
+
+    check = check_answer_contract(contract, document, evidence=[evidence])
+
+    assert check.missing_required == []
+    assert check.forbidden_present == []
+    forbidden = AnswerContract(content=(ContentRequirement(kind="code_example", mode="forbidden"),))
+    assert check_answer_contract(forbidden, document, evidence=[evidence]).forbidden_present == ["code_example"]
+
+
+@pytest.mark.parametrize("quoted", ["sample_data_analysis.py", "지역별 합계", "amount", "all_sales.groupby"])
+def test_filename_label_or_partial_identifier_is_not_a_native_code_example(quoted):
+    evidence = _native_calculation_source()
+    document = text_document(f"`{quoted}`를 확인하세요.", basis="source", refs=[evidence.id])
+    contract = AnswerContract(content=(ContentRequirement(kind="code_example", mode="required"),))
+
+    check = check_answer_contract(contract, document, evidence=[evidence])
+
+    assert check.missing_required == ["code_example"]
+
+
+def test_inline_code_cannot_borrow_another_units_source():
+    evidence = _native_calculation_source()
+    code = 'grouped = all_sales.groupby("region", as_index=False)["amount"].sum()'
+    document = AnswerDocument.model_validate({"blocks": [{"type": "paragraph", "content": [
+        {"text": f"`{code}`", "basis": "source", "refs": []},
+        {"text": "sample_data_analysis.py", "basis": "source", "refs": [evidence.id]},
+    ]}]})
+    contract = AnswerContract(content=(ContentRequirement(kind="code_example", mode="required"),))
+
+    assert check_answer_contract(contract, document, evidence=[evidence]).missing_required == ["code_example"]
+
+
+def test_inline_identifier_cannot_borrow_a_complete_line_outside_selected_range():
+    text = "amount\nx = amount.sum()\n"
+    upload = chunk_python_text(path="selected.py", text=text, source_content=text.encode(),
+                               chunk_size=2000, chunk_overlap=0)
+    original = upload.hydrate(upload.chunks[0])
+    start = text.index("amount.sum")
+    evidence = build_evidence(snapshot=original.snapshot, element=original.element,
+                              start=start, end=start + len("amount"))
+    document = text_document("`amount`를 사용합니다.", basis="source", refs=[evidence.id])
+    contract = AnswerContract(content=(ContentRequirement(kind="code_example", mode="required"),))
+
+    assert evidence.excerpt == "amount"
+    assert check_answer_contract(contract, document, evidence=[evidence]).missing_required == ["code_example"]
+
+
+@pytest.mark.parametrize("newline", ["\n", "\r\n", "\r"])
+def test_selected_complete_code_line_can_exclude_indentation_and_line_ending(newline):
+    code = "value = 1"
+    text = f"if True:{newline}    {code}{newline}"
+    upload = chunk_python_text(path="selected.py", text=text, source_content=text.encode(),
+                               chunk_size=2000, chunk_overlap=0)
+    original = upload.hydrate(upload.chunks[0])
+    start = text.index(code)
+    evidence = build_evidence(snapshot=original.snapshot, element=original.element,
+                              start=start, end=start + len(code))
+    document = text_document(f"`{code}`를 사용합니다.", basis="source", refs=[evidence.id])
+    contract = AnswerContract(content=(ContentRequirement(kind="code_example", mode="required"),))
+
+    assert check_answer_contract(contract, document, evidence=[evidence]).missing_required == []
