@@ -165,6 +165,7 @@ Docling은 요청에 종속된 로컬 프로세스에서 문서를 변환하고 
 
 ## 문서
 
+- [도메인 용어집](GLOSSARY.md): 요청·자료·원문 근거·답변·전달의 공통 용어와 개념 경계
 - [런타임 참고 문서](docs/runtime_reference.md): 설치, 실행, 환경 변수, API 계약, 파일 제약, 운영 메모
 - [설계 판단 기록](docs/design_rationale.md): 구조를 나눈 이유, latency/retrieval 품질 문제, 주요 트레이드오프
 - [벤치마크 가이드](docs/benchmarking.md): online benchmark 실행, 로컬 run 산출물, README release 요약과 history SVG 갱신

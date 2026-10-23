@@ -4,9 +4,9 @@
 
 ## 질문 실행 결과와 제공자 오류
 
-질문의 SSE 스트림은 `final_response` 하나로 완료됩니다. 공통 `TurnResult`는 `status`, `response`, `message`, `problem`, `request_id`, `missing_slots`를 전달합니다. `completed`와 `partial`만 검증된 `AnswerResponse`를 포함합니다. `needs_input`은 실제 누락된 사용자 정보에 대한 질문이며, `failed`와 `refused`는 답변 문서를 만들지 않습니다. `partial`은 이미 확보하고 검증한 근거로 제한된 답변을 제공하며 실패 원인을 함께 표시합니다. 단순 확인이나 취소 완료는 `completed`입니다.
+질문의 SSE 스트림은 `final_response` 하나로 완료됩니다. 공통 `TurnResult`는 `status`, `response`, `message`, `problem`, `request_id`, `missing_slots`를 전달합니다. `completed`와 `partial`만 검증된 `AnswerResponse`를 포함할 수 있습니다. `needs_input`은 실제 누락된 사용자 정보에 대한 질문이며, `failed`와 `refused`는 답변 문서를 만들지 않습니다. `partial`은 답변 본문과 미완료 원인을 함께 전달합니다. 근거 부족으로 제한된 본문을 제공할 수도 있고, 본문은 완성됐지만 저장에 실패했을 수도 있습니다. 본문의 한계는 `issues`와 의미 검증에서, 저장·전송 결과는 각 `ActionReceipt`에서 확인합니다. 단순 확인이나 취소 완료는 `completed`입니다.
 
-`problem`의 `code`, `stage`, 안전한 `message`, `next_action`, `retry_after_seconds`는 `include_debug=False`에서도 유지됩니다. 제공자가 정상 질문의 출력 스키마를 거부해도 질문을 고쳐 쓰라는 보충 질문으로 바뀌지 않습니다. 기술적 실패·거절·부분 답변은 세션의 이전 답변과 보류 작업을 덮어쓰지 않으며 UI rerun이 질문을 자동 재전송하지 않습니다.
+`problem`의 `code`, `stage`, 안전한 `message`, `next_action`, `retry_after_seconds`는 `include_debug=False`에서도 유지됩니다. 제공자가 정상 질문의 출력 스키마를 거부해도 질문을 고쳐 쓰라는 보충 질문으로 바뀌지 않습니다. 답변 없는 실패·거절·보충 질문은 세션의 이전 답변을 교체하지 않습니다. 화면에 제공한 부분 답변은 `previous_response`에 보존되며, 사용자가 새로 명시한 복사·변환·저장 요청의 원본이 될 수 있습니다. 보류 작업은 확정된 계약과 본문 준비·전달 상태에 따라 보존하거나 갱신합니다. UI rerun은 질문을 자동 재전송하지 않습니다.
 
 | code | 원인 | 다음 행동과 자동 복구 |
 |---|---|---|

@@ -196,10 +196,11 @@ PLANNER_REASONING_EFFORT=high
 
 ### 3.1 공식 문서 검색
 
-UI와 문서 검색 규칙은 아래 파일을 기준으로 관리합니다.
+UI 추천 링크와 공식 출처 정책은 아래 파일에서 각각 관리합니다.
 
-- `src/core/domain_docs.py`: Streamlit 소개 영역에 노출하는 기본 문서 목록
-- `src/infra/config/agent_rules.toml`: 허용 공식 도메인·문서 경로·버전 경로 패턴과 query hint
+- `src/core/domain_docs.py`의 `DEFAULT_DOCS`: Streamlit 소개 영역의 추천 문서 링크. 검색·평가의 공식 출처 허용 목록으로 사용하지 않음
+- `src/infra/config/agent_rules.toml`: 검색·평가에 적용할 공식 도메인·문서 경로·버전 경로 패턴과 검색용 query hint
+- `src/infra/tools/docs_search/policy.py`의 `is_allowed_doc_url()`: 런타임과 평가기가 함께 사용하는 공식 문서 URL 검사
 
 planner의 `PlannedDocsLibrary`는 지원 출처의 canonical ID와 `unsupported`를 스키마에 명시합니다. `pathlib` 같은 Python 표준 라이브러리 모듈은 `library="Python"`과 정확한 `symbols`로 표현합니다. 명시한 미지원 라이브러리는 다른 공식 출처로 대체하지 않으며 provider 검색 없이 한계를 안내합니다. 지원 출처를 추가할 때는 계획 스키마의 ID와 검색 설정을 함께 갱신합니다.
 
@@ -211,7 +212,7 @@ planner의 `PlannedDocsLibrary`는 지원 출처의 canonical ID와 `unsupported
 
 | 필드 | 의미 |
 | --- | --- |
-| `request_id`, `revision` | 서버가 부여하는 요청 식별자와 revision. 모델 출력에는 포함하지 않음 |
+| `request_id`, `revision` | 서버가 부여하는 요청 계약 ID와 revision. 보충·정정 시 ID를 유지하고 revision을 올림. HTTP 실행 ID와 구분하며 모델 출력에는 포함하지 않음 |
 | `actions` | 저장·Slack 각각의 `requested`, `forbidden`, `not_requested`, `unresolved` |
 | `body` | `compose`, `copy_input`, `transform_input`, `copy_answer`, `transform_answer`, `extract`, `acknowledge`, `unresolved`의 타입별 합집합. 각 타입이 유효한 출처와 필요한 작업 지시만 허용 |
 | `answer` | 내용 요구·출력 형식별 필수/금지/선호 및 일반 선호 |
@@ -246,15 +247,15 @@ planner의 `PlannedDocsLibrary`는 지원 출처의 canonical ID와 `unsupported
 
 검색어는 초기 계획과 재검색의 스키마 경계에서 공백뿐인 문자열을 거부하며 대소문자·Unicode·공백을 포함한 원문을 보존합니다. 자유 검색어에 별칭 치환을 적용하지 않아 인용문·코드·제외 검색어·URL을 그대로 전달합니다. 최초 계획의 `aspects`는 사용자 원문 또는 검증된 이전 답변 참조에 연결하며, 모델이 추정한 허용값을 필수 조건으로 승격하지 않습니다. 일반적인 정보 요구는 `evidence_needs`로 표현합니다. docs 도구는 명시한 requirement를 유지하고 query에서 새 요구를 추론하지 않습니다. 구조화된 라이브러리·심볼 요구에는 별칭 정규화를 적용하며 명시 버전이 검색어에 없으면 뒤에 추가합니다. 의미 판정 실패 후 query/k의 재계획은 planner가 맡고 도구는 누락 키워드로 내부 보완 검색을 만들지 않습니다. docs와 upload 도구는 빈 경우에도 typed requirement를 전달받으며 upload 정의 검색은 명시적 `match="definition"`으로 실행합니다.
 
-현재 기본 문서 소스는 Python, Git, LangChain, Matplotlib, NumPy, pandas, PyTorch, Hugging Face, FastAPI, BeautifulSoup, Streamlit, Gradio, scikit-learn, Pydantic입니다.
+현재 UI 추천 문서 링크는 Python, Git, LangChain, Matplotlib, NumPy, pandas, PyTorch, Hugging Face, FastAPI, BeautifulSoup, Streamlit, Gradio, scikit-learn, Pydantic입니다.
 
 docs 도구는 최종 답변의 근거를 승인하기 전에 제한된 후보를 수집합니다. Tavily `max_results`와 반환 후보 수의 상한은 `min(20, max(6, 3 * k))`이며 `k`개만 최종 근거로 승인한다는 뜻이 아닙니다. 후보 창은 최대 3,200자로 구성하고 여러 출처에 기회를 나눕니다. 검색어·제목의 문자 일치와 provider 점수는 정렬 보조 신호입니다. 후보의 의미 적합성과 실제 합성 packet의 충분성은 사전 Decisions 검증이 담당합니다.
 
-명시된 라이브러리의 domain을 우선하며 지원하지 않는 소스를 다른 라이브러리로 대체하지 않습니다. docs 도구는 provider 원본 URL의 HTTPS·공식 도메인과 `allowed_doc_path_prefixes`·`allowed_doc_path_patterns`를 검사하고 비어 있지 않은 `raw_content` 또는 `content`를 수집합니다. 공식 locale·버전 경로, 원래 URI와 fragment를 보존합니다. 현재 링크의 도달 가능성을 수집한 발췌의 동일성 조건으로 삼지 않습니다. [`select_docs_candidates()`](../src/infra/tools/docs_search/ranking.py)는 이 출처 조건을 통과한 원문을 후보로 만들며 대상·버전·aspect·정보 종류를 정규식으로 승인하거나 제외하지 않습니다. dispatcher는 typed 근거와 진단에 requirement ID·실행 정보를 연결합니다.
+명시된 라이브러리의 domain을 우선하며 지원하지 않는 소스를 다른 라이브러리로 대체하지 않습니다. docs 도구와 평가기는 `is_allowed_doc_url()`로 URL의 HTTPS·등록된 도메인과 `allowed_doc_path_prefixes`·`allowed_doc_path_patterns`를 함께 검사합니다. 도메인만 같다는 이유로 허용되지 않은 문서 경로를 승인하지 않으며, 허용된 버전·locale 경로는 UI 추천 링크에 없어도 사용할 수 있습니다. UI의 `latest` 링크는 탐색 시작점이며 공식 문서의 전체 범위를 뜻하지 않습니다. Pydantic은 `docs.pydantic.dev`와 `pydantic.dev`의 `/docs/validation/latest/`, `/docs/validation/{숫자 버전}/`, `/docs/validation/dev/` 경로를 허용합니다. docs 도구는 이 검사를 통과한 provider 원본 URL에서 비어 있지 않은 `raw_content` 또는 `content`를 수집합니다. 공식 locale·버전 경로, 원래 URI와 fragment를 보존합니다. 현재 링크의 도달 가능성을 수집한 발췌의 동일성 조건으로 삼지 않습니다. [`select_docs_candidates()`](../src/infra/tools/docs_search/ranking.py)는 이 출처 조건을 통과한 원문을 후보로 만들며 대상·버전·aspect·정보 종류를 정규식으로 승인하거나 제외하지 않습니다. dispatcher는 typed 근거와 진단에 requirement ID·실행 정보를 연결합니다.
 
 [`parse_doc_sections()`](../src/infra/tools/docs_search/sections.py)는 제목·선언·구간의 원문 위치를 후보 창 생성에 활용합니다. 파서가 알아보지 못한 자연어 설명도 남기고 출처의 시작 구간을 포함합니다. API 소유자·heading·매개변수 목록이나 검색어 일치만으로 요구를 충족했다고 판단하지 않습니다. 의미 판단에는 실제 발췌와 출처 URI·제목·선택 범위·수집 범위·품질 정보를 함께 사용합니다.
 
-요청한 대상·버전·aspect와 필요한 정보 종류의 지원 여부는 Decisions가 판단합니다. 원문 하나는 요구의 일부를 지원할 수 있고 여러 발췌를 함께 사용해 요구를 충족할 수 있습니다. 후보를 승인한 뒤 범위를 줄이면 실제 packet을 다시 판정하므로 원문 전체의 설명이나 다른 근거의 버전 표기로 잘린 범위의 부족을 채우지 않습니다.
+허용된 버전 문서를 `latest` URL로 바꾸지 않으며, 요청한 대상·버전·aspect와 필요한 정보 종류의 지원 여부는 원래 URL과 실제 발췌를 받은 Decisions가 판단합니다. 원문 하나는 요구의 일부를 지원할 수 있고 여러 발췌를 함께 사용해 요구를 충족할 수 있습니다. 후보를 승인한 뒤 범위를 줄이면 실제 packet을 다시 판정하므로 원문 전체의 설명이나 다른 근거의 버전 표기로 잘린 범위의 부족을 채우지 않습니다.
 
 도구는 `query`, `requirement`, `k`, `completed_requests`, `previous_hits`, `refresh`를 입력받고 공식 도메인을 내부에서 결정합니다. Tavily 검색 깊이는 `basic`이며 심볼·aspect·정보 종류가 필요하면 Markdown `raw_content`를 요청합니다. 도구 실행당 provider 요청은 한 번입니다. 요청 전체에서 같은 요구는 초기 검색과 의미 판정 실패 후 재계획을 합해 최대 두 번 검색합니다. `completed_requests`는 정상 완료한 검색어와 `max_results` 중 현재 유효한 완료 집합이며 같은 검색어를 같거나 작은 조회 범위로 반복하면 재사용합니다. 조회 범위는 `min(20, max(6, k * 3))`이므로 k만 달라도 실제 조회 한도가 같으면 중복 요청을 생략할 수 있습니다. 실패한 요청은 완료 집합에 넣지 않으며, 실패한 refresh는 해당 요청의 과거 완료 표시도 제거할 수 있습니다. 다음 실행은 해당 요구의 최신 진단에서 완료 집합을 복원합니다. `DOCS_SEARCH_TIMEOUT_SECONDS`는 개별 Tavily 요청의 timeout이며 전체 route의 deadline은 아닙니다.
 
@@ -391,7 +392,7 @@ graph가 반환한 전체 메시지는 현재 요청의 debug 검색 결과와 s
 
 graph 실행, debug 수집, response assembly, projection 또는 budget 검사가 실패하면 이전 정상 conversation snapshot을 유지합니다. 이미 완료된 `save_text`나 Slack 전송 같은 외부 side effect는 이 대화 메모리 원자성의 rollback 범위가 아닙니다.
 
-세션은 완료된 `AnswerResponse`만 `previous_response`로 별도 보존합니다. 내부 `ResponseState.kind`는 `draft`, `answer`, `clarification`, `failure`를 구분하며 검증을 통과한 `answer`만 전달할 수 있습니다. “이 답변을 저장해줘”는 계약에 고정한 기존 본문과 원문 인용을 사용하고, “세 줄로 줄여 저장해줘”는 같은 원본을 수정해 검증한 새 본문을 저장합니다. 실행 receipt는 본문에 덧붙이지 않고 `actions`에서 관리합니다.
+세션은 전달 가능한 `answer`와 화면에 제공한 부분 답변을 `previous_response`로 별도 보존합니다. 답변 없는 실패·거절·보충 질문은 이 원본을 교체하지 않습니다. 내부 `ResponseState.kind`는 `draft`, `answer`, `clarification`, `failure`를 구분하며, 부분 답변을 보존했다는 이유만으로 원래 미완료 요청의 저장·전송을 허용하지 않습니다. 사용자가 새로 “이 답변을 그대로 저장해줘”라고 요청하면 기존 본문·원문 인용·한계를 고정한 복사 대상으로 사용할 수 있습니다. “세 줄로 줄여 저장해줘”는 같은 원본을 수정하고 새 요청에 맞게 검증한 본문을 저장합니다. 실행 receipt는 본문에 덧붙이지 않고 `actions`에서 관리합니다.
 
 `PendingAction`은 정보가 부족한 `awaiting_input`, 생성이 필요한 `awaiting_body`, 목적지가 필요한 `awaiting_destination`, 전달 실패 후 재개를 기다리는 `awaiting_delivery`를 구분합니다. 본문이 없어도 확정된 요구를 보존하고, `body_prepared`가 변환할 원본과 검증을 마친 결과를 구분합니다. 완성된 뒤에는 원문 인용·계약·이미 성공한 행동을 함께 보존합니다. Slack 목적지가 없으면 본문 준비를 진행하고 목적지 질문을 실행 receipt에 표시합니다. 저장 성공 후 Slack이 실패하면 준비된 본문과 저장 완료 상태를 보존하며 다음 보충에서 저장을 반복하지 않습니다. 보충 질문·실패 안내가 원본을 덮지 않고, 잘못된 보류 요청 ID도 기존 원본을 교체하지 않습니다. 후속 금지·불명확함·본문 수정은 과거 전송 의사로 덮어쓰지 않습니다. 새 발화의 보충·정정만 명시적인 revision을 만들며 재검색·재합성은 같은 계약을 유지합니다. 검증된 `ResponseState`의 요청 ID·revision이 현재 계약과 일치해야 실행할 수 있습니다. graph에는 이전·보류 본문의 깊은 복사본을 전달해 실패한 실행의 변경이 세션 원본을 오염시키지 않게 합니다.
 
@@ -454,7 +455,7 @@ SSE의 `event:`는 아래 이벤트 이름이며, `data:`는 해당 이벤트의
 
 | 이벤트 | 의미 |
 |---|---|
-| `request_started` | 요청 시작과 `request_id` |
+| `request_started` | 이번 HTTP 실행 시작과 실행 ID인 `request_id` |
 | `stage_started`, `stage_completed` | graph 단계의 시작·완료 정보 |
 | `heartbeat` | 실행 중 연결 유지 신호 |
 | `progress_snapshot` | 현재 단계와 근거 수 등 진행 상황 |
@@ -516,7 +517,22 @@ HTTP `200`이나 `done`만으로 성공 처리하지 않습니다. 유효한 `fi
 
 ### 5.2 최종 응답과 debug
 
-`final_response` 이벤트의 `data`는 `AgentResponse`입니다. `status`, `response`, `message`, `problem`, `request_id`, `missing_slots`와 전송 진단용 `trace`, `debug`, `upload_manifest`를 담습니다. 서버 응답 모델과 공용 클라이언트는 다음 상태별 계약을 검증합니다.
+`final_response` 이벤트의 `data`는 `AgentResponse`입니다. `status`, `response`, `message`, `problem`, `request_id`, `missing_slots`와 전송 진단용 `trace`, `debug`, `upload_manifest`를 담습니다.
+
+공개 필드 이름 `request_id`는 유지하지만, 필드가 속한 모델에 따라 식별 대상과 수명이 다릅니다.
+
+| 위치 | 식별 대상과 수명 |
+|---|---|
+| `TurnResult.request_id`, 최종 응답의 `request_id` | 한 번의 HTTP 실행. 보충·정정·저장 재시도도 새 실행 ID를 받음 |
+| `ToolExecutionEvidence.request_id` | 도구 실행 기록을 수집한 한 번의 실행. 같은 턴 결과의 실행 ID와 대조 |
+| `request_map.jsonl`의 `request_id` | benchmark 최종 평가 질문의 실행 ID. 준비 턴의 실행 ID는 `scenario_turns`에서 확인 |
+| `RequestContract.request_id` | 사용자의 요청을 이어가는 요청 계약 ID. 보충·정정은 ID를 유지하고 revision을 올리며, 별개의 새 요청은 새 ID를 받음 |
+| `AnswerProvenance.request_id` | 해당 답변을 확정한 요청 계약 ID. HTTP 실행 기록의 ID와 직접 비교하지 않음 |
+| `SaveOperation.request_id` | 저장 의무를 소유한 요청 ID. 같은 본문의 저장 재시도는 동결된 operation과 ID를 유지 |
+
+따라서 저장 재시도는 새 HTTP 실행이면서 같은 저장 작업일 수 있습니다. 도구 실행 기록은 현재 실행 ID로 연결하고, 저장 작업은 답변의 요청 계약 ID와 연결합니다. 직접 TXT 저장에서 새 저장 작업을 만들 때는 서버 답변 snapshot에 기반한 `answer-export:<fingerprint>` ID를 사용하며, 이 값도 매번의 HTTP 실행 ID와 구분합니다.
+
+서버 응답 모델과 공용 클라이언트는 다음 상태별 계약을 검증합니다.
 
 | `status` | 답변·안내·문제 | `upload_manifest` |
 |---|---|---|
