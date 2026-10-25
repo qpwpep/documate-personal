@@ -283,6 +283,9 @@ def _render_validation_scope(response: AnswerResponse, *, turn_incomplete: bool 
         if turn_incomplete:
             st.caption("이번 요청 처리는 완료되지 않았습니다. 남은 작업은 안내와 저장·전송 결과를 확인해 주세요.")
         _render_semantic_result("답변 본문 조건 충족", request_check, report.threshold if report is not None else None)
+        format_check = semantic_checks.get(("format_fulfilled", None))
+        if format_check is not None:
+            _render_semantic_result("답변 서식 조건 충족", format_check, report.threshold)
         for index, (path, unit) in enumerate(units, start=1):
             preview = " ".join(unit.text.split())
             if len(preview) > 120:

@@ -22,6 +22,40 @@ from src.infra.tools.save_text import build_save_text_tool
 from tests.core.helpers import make_decisions_client
 
 
+@pytest.mark.parametrize(("text", "present"), [
+    ("1행은 x = 1이고 2행은 y = 2입니다.", False),
+    ("1행은 `x = 1`이고 2행은 `y = 2`입니다.", True),
+    (r"Show \`x = 1\` literally.", False),
+    ("The unmatched delimiter is `x = 1.", False),
+    ("```python\nprint('`label`')\n```", False),
+    ("    print('`label`')", False),
+    ("Use ``value = '`'`` here.", True),
+])
+def test_inline_code_requirement_observes_rendered_markdown_spans(text, present):
+    document = text_document(text)
+    required = AnswerContract(format=(FormatRequirement(kind="inline_code", mode="required"),))
+    forbidden = AnswerContract(format=(FormatRequirement(kind="inline_code", mode="forbidden"),))
+
+    assert check_answer_contract(required, document).missing_required == ([] if present else ["inline_code"])
+    assert check_answer_contract(forbidden, document).forbidden_present == (["inline_code"] if present else [])
+
+
+@pytest.mark.parametrize("inline", [False, True])
+def test_structured_code_layout_is_not_inferred_from_its_literal_contents(inline):
+    document = AnswerDocument(blocks=[CodeBlock(
+        inline=inline, content=ContentUnit(text="print('`label`')", basis="interaction"),
+    )])
+    contract = AnswerContract(format=(FormatRequirement(kind="inline_code", mode="required"),))
+
+    assert check_answer_contract(contract, document).missing_required == ([] if inline else ["inline_code"])
+
+
+def test_inline_code_preference_does_not_become_a_required_layout():
+    contract = AnswerContract(format=(FormatRequirement(kind="inline_code", mode="preferred"),))
+
+    assert check_answer_contract(contract, text_document("Plain text is acceptable.")).valid
+
+
 @pytest.mark.parametrize("forbidden_content", ["example", "code_example"])
 def test_required_code_block_can_present_input_without_examples(forbidden_content):
     """코드 블록은 로그나 원문도 표현하므로 예시 금지와 양립한다."""

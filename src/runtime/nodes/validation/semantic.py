@@ -228,7 +228,7 @@ def assess_post_semantics(
         "type": "predicate", "name": "request_fulfilled",
         "instructions": (
             "Does the actual displayed body fulfill the confirmed body request, including required semantic "
-            "content, scope, language and forbidden content, without substituting a generic acknowledgment "
+            "content, scope, language, presentation and forbidden content, without substituting a generic acknowledgment "
             "or raw excerpts for a requested explanation/comparison? Evaluate the final body itself. "
             "Distinguish program code content (code), illustrative roles (example/code_example), and block layout "
             "(code_block): copied input, logs and source excerpts are not examples merely because they use a block, "
@@ -244,6 +244,24 @@ def assess_post_semantics(
             "as an incomplete failure and prevents delivery."
         ),
     })
+    check_format = snapshot.request_contract is not None and any(
+        requirement.mode != "preferred" for requirement in snapshot.request_contract.answer.format
+    )
+    if check_format:
+        questions.append({
+            "type": "predicate", "name": "format_fulfilled",
+            "instructions": (
+                "Does displayed_document satisfy every required and forbidden presentation condition in "
+                "confirmed_request, including the content each format applies to in the body instruction? "
+                "Judge actual rendered structure and Markdown, not semantic similarity or the presence of "
+                "one formatted token somewhere. A requirement covering each of several portions must hold "
+                "for all of them. Plain text is not an inline code span; Markdown code spans or code records "
+                "with inline=true are. A separate code block cannot satisfy a request for code inside a sentence. "
+                "Do not count code in cited_sources, citations, or source previews as formatting of the answer. "
+                "Respect the requested paragraph, sentence, list, table and heading scope. Ignore preferred "
+                "formatting as a pass/fail condition and do not infer unrequested formats."
+            ),
+        })
     # The packet may contain material the answer never cites. Only actual,
     # locally valid citations can establish this displayed answer's coverage.
     cited_ids = {ref for unit_id, unit in units if unit_id in assessment.valid_unit_paths for ref in unit.refs}
@@ -309,6 +327,17 @@ def assess_post_semantics(
     ))
     if fulfilled is None or fulfilled < threshold:
         assessment.missing_content.append("semantic_request_fulfillment")
+    format_passed = True
+    if check_format:
+        format_refused = "format_fulfilled" in decisions.refused_names
+        format_probability = None if format_refused else probabilities["format_fulfilled"]
+        checks.append(SemanticCheck(
+            name="format_fulfilled", status="refused" if format_refused else "evaluated",
+            probability=format_probability,
+        ))
+        format_passed = format_probability is not None and format_probability >= threshold
+        if not format_passed:
+            assessment.missing_content.append("semantic_format_fulfillment")
     failed_cited_requirements = set()
     for index, task in enumerate(evaluated_tasks):
         name = f"requirement_{index}"
@@ -323,7 +352,7 @@ def assess_post_semantics(
             assessment.failed_requirement_ids.add(task.requirement_id)
             assessment.failed_routes.add(task.route)
             assessment.missing_content.append(f"semantic_cited_requirement:{task.requirement_id}")
-    if (assessment.invalid_unit_paths or fulfilled is None or fulfilled < threshold) and assessment.retry_reason is None:
+    if (assessment.invalid_unit_paths or fulfilled is None or fulfilled < threshold or not format_passed) and assessment.retry_reason is None:
         assessment.retry_reason = "missing_content"
         assessment.error_codes.append("VALIDATION_MISSING_CONTENT")
     if failed_cited_requirements and assessment.retry_reason is None:

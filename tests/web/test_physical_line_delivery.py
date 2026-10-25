@@ -23,6 +23,8 @@ from tests.web.test_multi_upload_api import context, final_response, staged, syn
 SAMPLE = Path(__file__).parents[2] / "data/benchmarks/fixtures/uploads/sample_data_analysis.py"
 CALCULATION = 'grouped = all_sales.groupby("region", as_index=False)["amount"].sum()'
 QUESTION = "첨부한 sample_data_analysis.py에서 지역별 amount 합계를 계산하는 코드 한 줄과 원본 파일의 줄 번호를 알려줘."
+INLINE_SOURCE = b"x = 1\ny = 2\n"
+INLINE_QUESTION = "첨부한 two_lines.py의 1행과 2행 원문을 각각 인라인 코드로 표시하고 실제 줄 번호와 함께 한 문장으로 설명해줘."
 
 
 def _chat_response(payload, document):
@@ -62,6 +64,7 @@ def physical_line_api(tmp_path, monkeypatch):
     monkeypatch.setattr(socket.socket, "connect", local_only)
     controls = SimpleNamespace(line=29, repair_line=None, paragraph_code=False,
                                excerpt_repair_required=False, location_repair_required=False,
+                               inline_mode=None, second_line=2, format_probability=0.99, format_refused=False,
                                requests=[], synthesis_packets=[], decisions_inputs=[])
 
     def provider(request):
@@ -76,10 +79,17 @@ def physical_line_api(tmp_path, monkeypatch):
             })
         if request.url.path == "/v1/decisions":
             controls.decisions_inputs.append(json.loads(payload["input"]))
+            answers = []
+            for question in payload["questions"]:
+                name = question["name"]
+                if name == "format_fulfilled" and controls.format_refused:
+                    answers.append({"type": "refusal", "name": name})
+                else:
+                    answers.append({"type": "predicate", "name": name,
+                                    "probability": controls.format_probability if name == "format_fulfilled" else 0.99})
             return httpx.Response(200, json={
                 "model": payload["model"],
-                "answers": [{"type": "predicate", "name": item["name"], "probability": 0.99}
-                            for item in payload["questions"]],
+                "answers": answers,
                 "usage": {"input_tokens": 10, "output_tokens": 0, "total_tokens": 10},
             })
         assert request.url.path == "/v1/chat/completions"
@@ -88,17 +98,22 @@ def physical_line_api(tmp_path, monkeypatch):
             raw_context = next(item["content"] for item in payload["messages"]
                                if item.get("name") == "request_context")
             context_record = json.loads(raw_context.split("\n", 1)[1])
+            question = context_record["user_turn_ledger"][-1]["text"]
+            answer = ({"content": [{"kind": "code_example", "mode": "required", "evidence_ids": ["code"]}]}
+                      if controls.paragraph_code else {})
+            evidence = ([{"id": "code", "turn_id": context_record["user_turn_ledger"][-1]["turn_id"],
+                          "quote": question, "scope": "answer.content.code_example", "interpretation": "instruction"}]
+                        if controls.paragraph_code else [])
+            if controls.inline_mode is not None:
+                answer["format"] = [{"kind": "inline_code", "mode": "required", "evidence_ids": ["format"]}]
+                evidence.append({"id": "format", "turn_id": context_record["user_turn_ledger"][-1]["turn_id"],
+                                 "quote": question, "scope": "answer.format", "interpretation": "instruction"})
             plan = {
                 "use_retrieval": True,
-                "tasks": [{"route": "upload", "query": "region amount groupby sum", "k": 4,
+                "tasks": [{"route": "upload", "query": question if controls.inline_mode is not None else "region amount groupby sum", "k": 4,
                            "requirement": {"file_ids": [item["file_id"] for item in context_record["upload_files"]]}}],
                 "request_contract": WireRequestContract(
-                    body={"kind": "compose", "instruction": QUESTION},
-                    answer={"content": [{"kind": "code_example", "mode": "required", "evidence_ids": ["code"]}]}
-                    if controls.paragraph_code else {},
-                    evidence=[{"id": "code", "turn_id": context_record["user_turn_ledger"][-1]["turn_id"],
-                               "quote": QUESTION, "scope": "answer.content.code_example", "interpretation": "instruction"}]
-                    if controls.paragraph_code else [],
+                    body={"kind": "compose", "instruction": question}, answer=answer, evidence=evidence,
                     slack_recipient={"state": "omitted"},
                 ).model_dump(mode="json"),
             }
@@ -108,6 +123,21 @@ def physical_line_api(tmp_path, monkeypatch):
                                   if str(item["content"]).startswith("[Evidence Packet]"))
             packet = json.loads(packet_message.split("\n", 2)[2])
             controls.synthesis_packets.append(packet)
+            if controls.inline_mode is not None:
+                source = next(item for item in packet if "x = 1\ny = 2" in item["excerpt"])
+                use_inline = controls.inline_mode == "correct" or (
+                    controls.inline_mode == "repair" and len(controls.synthesis_packets) > 1
+                )
+                first = "`x = 1`" if use_inline or controls.inline_mode == "mixed" else "x = 1"
+                second = "`y = 2`" if use_inline else "y = 2"
+                text = (f"원문 대입문은 {first}과 {second}입니다."
+                        if controls.inline_mode == "mixed"
+                        else f"1행은 {first}이고 {controls.second_line}행은 {second}입니다.")
+                document = {"blocks": [{"type": "paragraph", "content": [{
+                    "text": text,
+                    "basis": "source", "refs": [source["id"]],
+                }]}]}
+                return httpx.Response(200, json=_chat_response(payload, document))
             evidence = next(item for item in packet if CALCULATION in item["excerpt"])
             feedback = next((item["content"] for item in payload["messages"]
                              if str(item["content"]).startswith("[Validation Repair]")), "")
@@ -300,3 +330,79 @@ def test_exact_source_line_in_paragraph_completes_and_downloads(physical_line_ap
     download = api.client.get(f"/download/{artifact.filename}")
     assert download.status_code == 200
     assert download.content == export_answer_text(response, include_sources=True).encode("utf-8-sig")
+
+
+def test_missing_required_inline_code_cannot_complete_with_high_model_scores(physical_line_api):
+    api = physical_line_api
+    api.controls.inline_mode = "missing"
+    current = sync(api, add=[staged(api, "two_lines.py", INLINE_SOURCE)])
+
+    result = final_response(api, query=INLINE_QUESTION, uploads=context(current))
+
+    assert api.controls.synthesis_packets, "The real synthesis boundary must run before format rejection"
+    assert api.controls.decisions_inputs
+    assert result["status"] in {"partial", "failed"}, result
+    assert result["problem"] is not None
+
+
+@pytest.mark.parametrize("inline_mode", ["correct", "repair"])
+def test_required_inline_code_with_correct_lines_completes_and_preserves_saved_bytes(physical_line_api, inline_mode):
+    api = physical_line_api
+    api.controls.inline_mode = inline_mode
+    current = sync(api, add=[staged(api, "two_lines.py", INLINE_SOURCE)])
+
+    result = final_response(api, query=INLINE_QUESTION, uploads=context(current))
+
+    assert result["status"] == "completed", result
+    response = AnswerResponse.model_validate(result["response"])
+    paragraph, = response.content.blocks
+    assert paragraph.type == "paragraph"
+    assert " ".join(unit.text for unit in paragraph.content) == "1행은 `x = 1`이고 2행은 `y = 2`입니다."
+    assert not response.issues
+    assert all(not check.issues for check in response.checks)
+    saved = api.client.post(f"/sessions/session-a/answers/{result['answer_id']}/save")
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["status"] == "completed", saved.json()
+    saved_answer = AnswerResponse.model_validate(saved.json()["response"])
+    assert saved_answer.model_copy(update={"actions": []}) == response
+    receipt = saved_answer.actions[-1]
+    download = api.client.get(f"/download/{receipt.artifact.filename}")
+    assert download.status_code == 200, download.text
+    assert download.content == export_answer_text(response, include_sources=True).encode("utf-8-sig")
+    assert download.content == Path(receipt.file_path).read_bytes()
+    assert b"`x = 1`" in download.content and b"`y = 2`" in download.content
+
+
+def test_inline_code_does_not_override_an_incorrect_physical_line(physical_line_api):
+    api = physical_line_api
+    api.controls.inline_mode = "correct"
+    api.controls.second_line = 3
+    current = sync(api, add=[staged(api, "two_lines.py", INLINE_SOURCE)])
+
+    result = final_response(api, query=INLINE_QUESTION, uploads=context(current))
+
+    assert api.controls.synthesis_packets
+    assert result["status"] == "failed", result
+    assert result["problem"]["code"] == "model_output_invalid"
+    assert result["response"] is None
+
+
+@pytest.mark.parametrize(("probability", "refused"), [
+    pytest.param(0.1, False, id="format-failed"),
+    pytest.param(0.99, True, id="format-refused"),
+])
+def test_partial_inline_format_cannot_complete_when_separate_format_review_fails(physical_line_api, probability, refused):
+    api = physical_line_api
+    api.controls.inline_mode = "mixed"
+    api.controls.format_probability = probability
+    api.controls.format_refused = refused
+    current = sync(api, add=[staged(api, "two_lines.py", INLINE_SOURCE)])
+
+    result = final_response(api, query=INLINE_QUESTION, uploads=context(current))
+
+    assert api.controls.synthesis_packets
+    assert result["status"] in {"partial", "failed"}, result
+    assert result["problem"] is not None
+    questions = [question["name"] for path, payload in api.controls.requests if path == "/v1/decisions"
+                 for question in payload["questions"]]
+    assert "format_fulfilled" in questions

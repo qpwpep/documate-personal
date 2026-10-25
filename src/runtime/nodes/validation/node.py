@@ -74,6 +74,13 @@ def _decide_retry_outcome(
             " Keep the confirmed request contract unchanged when repairing the body."
         )
         next_retry_context = next_retry_context.model_copy(update={"retrieval_feedback": retrieval_feedback})
+    if "inline_code" in assessment.missing_content or "semantic_format_fulfillment" in assessment.missing_content:
+        retrieval_feedback += (
+            " Check the requested formatting on every intended portion of the actual body."
+            " For code inside a sentence, preserve the literal code in Markdown code spans within the same"
+            " paragraph content unit; standalone blocks and plain text do not satisfy that layout."
+        )
+        next_retry_context = next_retry_context.model_copy(update={"retrieval_feedback": retrieval_feedback})
     if assessment.invalid_unit_paths:
         deterministic_issues = _deterministic_issues(assessment)
         retrieval_feedback += (

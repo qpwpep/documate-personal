@@ -75,7 +75,7 @@ class ContentRequirement(ContractModel):
 
 
 class LayoutRequirement(ContractModel):
-    kind: Literal["code_block", "ordered_list", "list", "table", "headings"] = Field(description="Explicit layout. No table means table/forbidden, not comparison or custom content. Layouts have no numeric value.")
+    kind: Literal["code_block", "inline_code", "ordered_list", "list", "table", "headings"] = Field(description="Explicit layout. inline_code means code spans within prose or an inline CodeBlock; code_block means a separate block. Preserve which content needs the format in the body instruction. No table means table/forbidden, not comparison or custom content. Layouts have no numeric value.")
     mode: RequirementMode
     value: None = None
     evidence_ids: tuple[str, ...] = ()
@@ -385,12 +385,17 @@ def check_answer_contract(contract: AnswerContract, document: Any, *, evidence: 
     document = document if isinstance(document, AnswerDocument) else AnswerDocument.model_validate(document)
     blocks = document.blocks
     units = [unit for _, unit in iter_content_units(document)]
-    markdown_blocks = {
-        token.type
+    markdown_tokens = [
+        token
         for text in _raw_body_markdown_blocks(document) for token in _COMMONMARK.parse(text)
-    }
+    ]
+    markdown_blocks = {token.type for token in markdown_tokens}
     has_markdown_code = bool(markdown_blocks & {"code_block", "fence"})
     has_code_block = any(block.type == "code" and not block.inline for block in blocks) or has_markdown_code
+    has_inline_code = any(block.type == "code" and block.inline for block in blocks) or any(
+        child.type == "code_inline"
+        for token in markdown_tokens for child in token.children or []
+    )
     code_sources = {item.id: item for item in evidence if item.element.kind == "code"}
     # A quoted native statement is still code when displayed inside a paragraph.
     # Require a complete statement in this unit's own selected source range:
@@ -426,6 +431,7 @@ def check_answer_contract(contract: AnswerContract, document: Any, *, evidence: 
         # An example is a semantic role, never a consequence of its layout or
         # the model-proposed basis label. Decisions checks those obligations.
         "code_block": has_code_block,
+        "inline_code": has_inline_code,
         "ordered_list": any(block.type == "list" and block.ordered for block in blocks) or "ordered_list_open" in markdown_blocks,
         "list": any(block.type == "list" for block in blocks) or bool(markdown_blocks & {"ordered_list_open", "bullet_list_open"}),
         "table": any(block.type == "table" for block in blocks) or "table_open" in markdown_blocks,
