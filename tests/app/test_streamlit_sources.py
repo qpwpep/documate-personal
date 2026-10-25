@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from html import unescape
 
 import pytest
 from streamlit.testing.v1 import AppTest
@@ -10,14 +11,58 @@ from src.core.documents import DocumentElement, SourceAnchor, build_snapshot
 from src.core.evidence import build_evidence
 
 
-def _source_app(payload):
+def _answer_app(payload):
+    from src.app.web.streamlit_chat import render_answer_response
+    from src.core.answer_schema import AnswerResponse
+
+    render_answer_response(AnswerResponse.model_validate(payload), "http://localhost:8000")
+
+
+def test_answer_code_opens_matching_physical_line_with_context_and_original_copy():
+    from src.core.answer_schema import finalize_answer, text_document
+
+    fixture = Path(__file__).resolve().parents[2] / "data/benchmarks/fixtures/uploads/sample_data_analysis.py"
+    text = fixture.read_bytes().decode("utf-8")
+    selected = 'grouped = all_sales.groupby("region", as_index=False)["amount"].sum()'
+    evidence = build_evidence(
+        snapshot=build_snapshot(
+            source_uri="upload:///sample_data_analysis.py", title="sample_data_analysis.py",
+            media_type="text/x-python", source_type="upload", content=text,
+            parser="python", parser_version="1",
+        ),
+        element=DocumentElement(
+            element_id="source", kind="code", text=text, language="python",
+            anchors=[SourceAnchor(kind="code", start=0, end=len(text), line_start=1,
+                                  line_end=36, precision="exact")],
+        ),
+    )
+    answer = finalize_answer(text_document(
+        f"sample_data_analysis.py의 30행: `{selected}`", basis="source", refs=[evidence.id],
+    ), [evidence])
+
+    app = AppTest.from_function(_answer_app, args=(answer.model_dump(mode="json"),)).run()
+
+    assert not app.exception
+    assert "답변의 코드와 일치하는 원문: 30행" in [item.value for item in app.caption]
+    rendered = unescape(app.get("html")[0].proto.body)
+    assert 'aria-label="원문 30행"' in rendered
+    assert f"<mark>{selected}</mark>" in rendered
+    assert 'aria-label="원문 28행"' in rendered
+    assert 'aria-label="원문 32행"' in rendered
+    assert 'aria-label="원문 1행"' not in rendered
+    assert "전체 원문 보기" in [item.label for item in app.expander]
+    assert app.code[0].value == text
+
+
+def _source_app(payload, cited_texts=None):
     from src.app.web.streamlit_sources import render_evidence
     from src.core.evidence import EvidenceRef
 
-    render_evidence(EvidenceRef.model_validate(payload))
+    render_evidence(EvidenceRef.model_validate(payload), cited_texts=cited_texts)
 
 
-def _render(text: str, selected: str, *, anchor: SourceAnchor | list[SourceAnchor], offset: int | None = None):
+def _render(text: str, selected: str, *, anchor: SourceAnchor | list[SourceAnchor], offset: int | None = None,
+            cited_texts: list[str] | None = None):
     snapshot = build_snapshot(
         source_uri="upload:///sample.py", title="sample.py", media_type="text/x-python",
         source_type="upload", content=text, parser="python", parser_version="1",
@@ -31,7 +76,7 @@ def _render(text: str, selected: str, *, anchor: SourceAnchor | list[SourceAncho
         ),
         start=start, end=start + len(selected),
     )
-    app = AppTest.from_function(_source_app, args=(evidence.model_dump(mode="json"),)).run()
+    app = AppTest.from_function(_source_app, args=(evidence.model_dump(mode="json"), cited_texts)).run()
     assert not app.exception
     return app
 
@@ -45,7 +90,11 @@ def test_cropped_sample_code_keeps_physical_line_30_without_relative_gutter():
     ))
 
     assert "사용 범위: 원문 30행" in [item.value for item in app.caption]
-    assert app.code[0].value == selected
+    rendered = unescape(app.get("html")[0].proto.body)
+    assert selected in rendered
+    assert 'aria-label="원문 30행"' in rendered
+    assert 'aria-label="원문 1행"' not in rendered
+    assert app.code[0].value == text
     assert not app.code[0].proto.show_line_numbers
 
 
@@ -59,6 +108,7 @@ def test_coarse_element_provenance_does_not_invent_selected_physical_line():
     captions = [item.value for item in app.caption]
     assert "사용 범위: 수집한 요소의 2행 (원문 줄 번호는 확인되지 않았습니다)" in captions
     assert "사용 범위: 원문 41행" not in captions
+    assert not app.get("html")
     assert not any(item.proto.show_line_numbers for item in app.code)
 
 
@@ -70,7 +120,11 @@ def test_cropped_crlf_fragment_uses_original_offset_and_keeps_code_unchanged():
     ))
 
     assert "사용 범위: 원문 18행" in [item.value for item in app.caption]
-    assert app.code[0].value == "target = 3"
+    rendered = unescape(app.get("html")[0].proto.body)
+    assert "target = 3" in rendered
+    assert 'aria-label="원문 18행"' in rendered
+    assert 'aria-label="원문 1행"' not in rendered
+    assert app.code[0].value == text.replace("\r\n", "\n")
     assert not any(item.proto.show_line_numbers for item in app.code)
 
 
@@ -149,7 +203,7 @@ def test_retained_source_identifies_content_hash_without_calling_it_a_document_v
     captions = [item.value for item in app.caption]
     assert any(value.startswith("자료 내용 해시: sha256:") for value in captions)
     assert not any(value.startswith("자료 버전:") for value in captions)
-    assert app.code[1].value == text
+    assert app.code[0].value == text
 
 
 def test_current_source_page_link_is_distinct_from_retained_source_content():
@@ -171,4 +225,76 @@ def test_current_source_page_link_is_distinct_from_retained_source_content():
     markdown = [item.value for item in app.markdown]
     assert f"[현재 출처 페이지 열기]({source_uri})" in markdown
     assert not any("[현재 원문 열기]" in value for value in markdown)
-    assert [item.value for item in app.text] == [captured_text, captured_text]
+    assert captured_text in app.get("html")[0].proto.body
+    assert app.code[0].value == captured_text
+
+
+def test_repeated_cited_code_shows_all_confirmed_occurrences_without_guessing_from_prose():
+    text = "begin\ntarget = 3\nmiddle\ntarget = 3\nend\n"
+    app = _render(text, text, anchor=SourceAnchor(
+        kind="code", start=500, end=500 + len(text), line_start=40, line_end=44, precision="exact",
+    ), cited_texts=["30행의 `target = 3`을 확인하세요."])
+
+    assert "답변의 코드와 일치하는 원문: 41행, 43행" in [item.value for item in app.caption]
+    rendered = unescape(app.get("html")[0].proto.body)
+    assert rendered.count("<mark>target = 3</mark>") == 2
+    assert 'aria-label="원문 30행"' not in rendered
+
+
+def test_official_markdown_is_readable_with_source_link_first_and_verbatim_capture_available():
+    captured = "## numpy.reshape\n\nReturn an array with a new **shape**.\n\n- `order` controls the traversal.\n\n[[source]](https://github.com/numpy/numpy/blob/main/numpy/_core/fromnumeric.py)"
+    evidence = build_evidence(
+        snapshot=build_snapshot(
+            source_uri="https://numpy.org/doc/stable/reference/generated/numpy.reshape.html",
+            title="numpy.reshape", media_type="text/markdown", source_type="official",
+            content=captured, parser="provider", parser_version="1",
+        ),
+        element=DocumentElement(element_id="description", kind="paragraph", text=captured),
+    )
+
+    app = AppTest.from_function(_source_app, args=(evidence.model_dump(mode="json"),)).run()
+
+    assert not app.exception
+    markdown = [item.value for item in app.markdown]
+    rendered = app.get("html")[0].proto.body
+    assert "<h2>numpy.reshape</h2>" in rendered
+    assert "<li><code>order</code> controls the traversal.</li>" in rendered
+    assert markdown.index(f"[현재 출처 페이지 열기]({evidence.snapshot.source_uri})") < markdown.index("**답변에 사용한 부분**")
+    assert "수집한 원문 그대로 보기" in [item.label for item in app.expander]
+    assert app.code[0].value == captured
+
+
+def test_official_links_resolve_against_captured_page_without_rewriting_code_or_raw_source():
+    source_uri = "https://numpy.org/doc/2.1/user/absolute_beginners.html"
+    relative = "../reference/generated/numpy.concatenate.html#numpy.concatenate"
+    absolute = "https://numpy.org/doc/2.1/reference/generated/numpy.concatenate.html#numpy.concatenate"
+    captured = (
+        f"[concatenate]({relative}) and [reference][api] and [section](#creating-arrays).\n\n"
+        f"![diagram](../images/arrays.svg)\n\n"
+        f"`[code example]({relative})`\n\n"
+        f"```markdown\n[code example]({relative})\n```\n\n"
+        f"[api]: {relative}\n\n"
+        "<script>alert('source')</script>\n\n[unsafe](javascript:alert)\n"
+    )
+    evidence = build_evidence(
+        snapshot=build_snapshot(
+            source_uri=source_uri, title="NumPy source", media_type="text/markdown",
+            source_type="official", content=captured, parser="provider", parser_version="1",
+        ),
+        element=DocumentElement(element_id="source", kind="paragraph", text=captured),
+    )
+
+    app = AppTest.from_function(_source_app, args=(evidence.model_dump(mode="json"),)).run()
+
+    assert not app.exception
+    reader_output = "\n".join(item.proto.body for item in app.get("html")) or "\n".join(item.value for item in app.markdown)
+    assert absolute in reader_output
+    rendered = app.get("html")[0].proto.body
+    assert rendered.count(f'href="{absolute}"') == 2
+    assert f'href="{source_uri}#creating-arrays"' in rendered
+    assert 'src="https://numpy.org/doc/2.1/images/arrays.svg"' in rendered
+    assert f"<code>[code example]({relative})</code>" in rendered
+    assert f'<code class="language-markdown">[code example]({relative})\n</code>' in rendered
+    assert "<script>" not in rendered
+    assert 'href="javascript:' not in rendered
+    assert app.code[0].value == captured

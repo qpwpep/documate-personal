@@ -11,6 +11,8 @@ export succeeds. ``지연:`` questions return their normal answer after a three-
 HTTP delay, allowing pending UI events to be tested while a request is in flight.
 ``부분:`` questions return a partial answer with one cited excerpt and three
 limitations (two answer-wide and one attached to the excerpt).
+``문서:`` questions return an explicitly synthetic Markdown source for checking
+headings, lists, links, code fences and the retained raw-source view.
 No LLM, search provider, or Slack service is called.
 
 The process logs its ephemeral API URL as DOCUMATE_UX_FIXTURE_API. Its read-only
@@ -41,6 +43,19 @@ from src.core.uploads import UploadManifest
 
 
 SOURCE_TEXT = "회귀 검증용 공식 문서 원문입니다. 이 문장은 라이트 모드에서도 선명하게 읽혀야 합니다."
+MARKDOWN_SOURCE_TEXT = """# 문서 표시 검증용 합성 자료
+
+이 내용은 실제 공식 문서를 검색한 결과가 아니라 **브라우저 회귀 검증용 자료**입니다.
+
+## 배열 모양 예시
+
+- `shape`는 배열의 모양을 나타냅니다.
+- [NumPy 문서 링크](https://numpy.org/doc/stable/reference/generated/numpy.reshape.html)는 링크 표시를 확인하기 위한 예시입니다.
+
+```python
+values.reshape((2, 3))
+```
+"""
 PARTIAL_LIMITS = (
     "요청한 비교 중 공식 문서의 확인 가능한 내용만 제공합니다.",
     "업로드한 코드의 근거가 없어 공식 문서와 코드의 비교를 완료하지 못했습니다.",
@@ -76,14 +91,17 @@ class FixtureState:
                     problem=make_problem("evidence_insufficient", "pre_synthesis_validation"),
                 )
             else:
+                markdown_source = query.startswith("문서:")
+                source_text = MARKDOWN_SOURCE_TEXT if markdown_source else SOURCE_TEXT
                 snapshot = build_snapshot(
-                    source_uri="https://docs.python.org/3/tutorial/", title="브라우저 회귀 검증 자료",
-                    media_type="text/html", source_type="official", content=SOURCE_TEXT,
+                    source_uri="https://docs.example.org/fixtures/markdown" if markdown_source else "https://docs.python.org/3/tutorial/",
+                    title="문서 표시 검증용 합성 자료" if markdown_source else "브라우저 회귀 검증 자료",
+                    media_type="text/markdown" if markdown_source else "text/html", source_type="official", content=source_text,
                     parser="browser-fixture", parser_version="1",
                 )
                 evidence = build_evidence(
                     snapshot=snapshot,
-                    element=DocumentElement(element_id="fixture-paragraph", kind="paragraph", text=SOURCE_TEXT),
+                    element=DocumentElement(element_id="fixture-paragraph", kind="paragraph", text=source_text),
                 )
                 partial = query.startswith("부분:")
                 issues = [

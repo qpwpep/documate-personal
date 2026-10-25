@@ -1,20 +1,28 @@
 from __future__ import annotations
 
 from html import escape
-from urllib.parse import quote, urlparse
+from urllib.parse import quote, urljoin, urlparse
 
 import streamlit as st
+from markdown_it import MarkdownIt
 
 from src.core.documents import SourceAnchor, TableData
 from src.core.evidence import EvidenceRef, selected_source_anchors, source_line_records
 from src.core.python_source import PythonSourceMap
 
 
-def render_evidence(evidence: EvidenceRef) -> None:
+def render_evidence(evidence: EvidenceRef, *, cited_texts: list[str] | None = None) -> None:
     """Show the retained source, independently of the current uploaded file."""
     snapshot = evidence.snapshot
     element = evidence.element
     st.markdown(f"**{escape(snapshot.title or snapshot.source_uri)}**")
+    source_uri = snapshot.source_uri
+    parsed = urlparse(source_uri)
+    if parsed.scheme in {"http", "https"} and parsed.netloc:
+        safe_url = quote(source_uri, safe=":/?#[]@!$&'*,;=+-._~%")
+        st.markdown(f"[현재 출처 페이지 열기]({safe_url})")
+    else:
+        st.caption(f"원본 자료: {source_uri}")
     source_kind = "공식 문서" if snapshot.source_type == "official" else "업로드 자료"
     st.caption(source_kind)
     if element.heading_path:
@@ -23,7 +31,8 @@ def render_evidence(evidence: EvidenceRef) -> None:
         selected_ids = set(evidence.selection.cell_ids)
         if any(not cell.anchors for cell in element.table.cells if cell.cell_id in selected_ids) and element.anchors:
             st.caption("일부 선택 셀의 위치가 없어 표 전체 위치를 함께 표시합니다.")
-    mapping_anchor = _mapped_line_anchor(evidence, source_line_records(evidence))
+    lines = source_line_records(evidence)
+    mapping_anchor = _mapped_line_anchor(evidence, lines)
     for anchor in selected_source_anchors(evidence):
         location = _format_anchor(anchor)
         if anchor.line_start is not None and anchor != mapping_anchor:
@@ -36,9 +45,22 @@ def render_evidence(evidence: EvidenceRef) -> None:
         st.warning(str(issue))
 
     st.markdown("**답변에 사용한 부분**")
+    code_ranges = _matching_code_ranges(evidence, cited_texts or []) if element.kind == "code" else []
     if element.kind == "code":
-        # Streamlit can only number from one, which would relabel cropped source.
-        render_code(evidence.excerpt, language=element.language or "text")
+        if lines:
+            matched = [index for index, line in enumerate(lines)
+                       if any(start < line["end"] and line["start"] < end for start, end in code_ranges)]
+            visible = {neighbor for index in matched for neighbor in range(max(0, index - 2), min(len(lines), index + 3))}
+            if matched:
+                st.caption("답변의 코드와 일치하는 원문: " + ", ".join(f"{lines[index]['line_number']}행" for index in matched))
+                if len(code_ranges) > 1:
+                    st.caption("일치하는 위치를 모두 표시했습니다.")
+            st.html(_code_lines_html([line for index, line in enumerate(lines) if not visible or index in visible], code_ranges))
+        else:
+            # Unknown physical provenance stays unnumbered.
+            render_code(evidence.excerpt, language=element.language or "text")
+    elif snapshot.source_type == "official" and element.table is None:
+        _render_source_markdown(evidence.excerpt, source_uri=source_uri)
     else:
         st.text(evidence.excerpt)
     if evidence.selection.cell_ids:
@@ -48,23 +70,105 @@ def render_evidence(evidence: EvidenceRef) -> None:
         end = evidence.selection.end if evidence.selection.end is not None else len(element.text)
         st.caption(_selection_location(evidence, start=start, end=end))
 
-    with st.expander("당시 원문과 위치 보기"):
+    full_source_label = "당시 원문과 위치 보기"
+    if code_ranges:
+        full_source_label = "전체 원문 보기"
+    elif snapshot.source_type == "official":
+        full_source_label = "수집한 원문 그대로 보기"
+    with st.expander(full_source_label):
         if element.table is not None:
             st.html(_table_html(element.table, selected=set(evidence.selection.cell_ids)))
         elif element.kind == "code":
+            st.caption("원문 복사에는 아래 코드 블록의 복사 버튼을 사용하세요. 줄 번호와 강조 표시는 포함되지 않습니다.")
             render_code(element.text, language=element.language or "text")
+        elif snapshot.source_type == "official":
+            render_code(element.text, language="markdown")
         else:
             st.text(element.text)
         st.caption("이 내용은 답변을 만들 때 보관한 원문입니다. 현재 파일의 변경이나 삭제와 무관합니다.")
         st.caption(f"자료 내용 해시: {snapshot.content_hash}")
 
-    source_uri = snapshot.source_uri
-    parsed = urlparse(source_uri)
-    if parsed.scheme in {"http", "https"} and parsed.netloc:
-        safe_url = quote(source_uri, safe=":/?#[]@!$&'*,;=+-._~%")
-        st.markdown(f"[현재 출처 페이지 열기]({safe_url})")
-    else:
-        st.caption(f"원본 자료: {source_uri}")
+
+def _render_source_markdown(text: str, *, source_uri: str) -> None:
+    """Resolve parsed links against their source without rewriting captured text."""
+    parser = MarkdownIt("commonmark", {"html": False}).enable(["table", "strikethrough"])
+    tokens = parser.parse(text)
+    pending = list(tokens)
+    url_attributes = {"link_open": "href", "image": "src"}
+    while pending:
+        token = pending.pop()
+        pending.extend(token.children or [])
+        attribute = url_attributes.get(token.type)
+        if attribute is not None:
+            target = token.attrGet(attribute)
+            if target is not None:
+                absolute = urljoin(source_uri, target)
+                if parser.validateLink(absolute):
+                    token.attrSet(attribute, absolute)
+    content = parser.renderer.render(tokens, parser.options, {})
+    st.html(
+        '<style>.dm-source-markdown {overflow-wrap:anywhere;max-width:100%}'
+        '.dm-source-markdown pre {overflow-x:auto;max-width:100%;padding:0.75rem;'
+        'border:1px solid currentColor;border-radius:0.4rem;white-space:pre}'
+        '.dm-source-markdown code {font-family:monospace}'
+        '.dm-source-markdown pre code {white-space:pre;overflow-wrap:normal}'
+        '.dm-source-markdown img {max-width:100%;height:auto}</style>'
+        '<div class="dm-source-markdown">' + content + '</div>'
+    )
+
+
+def _matching_code_ranges(evidence: EvidenceRef, cited_texts: list[str]) -> list[tuple[int, int]]:
+    """Locate exact cited code, never infer locations from numbers in prose."""
+    snippets = set()
+    parser = MarkdownIt()
+    for text in cited_texts:
+        if text in evidence.excerpt:
+            snippets.add(text)
+        for token in parser.parse(text):
+            snippets.update(child.content for child in token.children or [] if child.type == "code_inline")
+    ranges = set()
+    end = evidence.selection.end if evidence.selection.end is not None else len(evidence.element.text)
+    for snippet in snippets:
+        if not snippet:
+            continue
+        start = evidence.element.text.find(snippet, evidence.selection.start, end)
+        while start >= 0:
+            ranges.add((start, start + len(snippet)))
+            start = evidence.element.text.find(snippet, start + 1, end)
+    merged = []
+    for start, end in sorted(ranges):
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    return merged
+
+
+def _code_lines_html(lines: list[dict], ranges: list[tuple[int, int]]) -> str:
+    rendered = ['<div class="dm-source-code" style="font-family:monospace;font-size:0.875rem;line-height:1.6;max-width:100%">',
+                '<style>.dm-source-code mark {background:#ffec99;color:#1a1a1a}</style>']
+    previous = None
+    for line in lines:
+        number = line["line_number"]
+        if previous is not None and number > previous + 1:
+            rendered.append('<div aria-label="생략한 원문">…</div>')
+        previous = number
+        text = line["text"].rstrip("\r\n")
+        cursor = 0
+        content = []
+        for start, end in ranges:
+            first, last = max(0, start - line["start"]), min(len(text), end - line["start"])
+            if first < last:
+                content.extend((escape(text[cursor:first]), "<mark>" + escape(text[first:last]) + "</mark>"))
+                cursor = last
+        content.append(escape(text[cursor:]))
+        rendered.append(
+            f'<div role="group" aria-label="원문 {number}행" style="display:grid;grid-template-columns:3.5em minmax(0,1fr);gap:0.7em">'
+            f'<span aria-hidden="true" style="user-select:none;text-align:right;opacity:0.7">{number}</span>'
+            '<code style="white-space:pre-wrap;overflow-wrap:anywhere;background:transparent;color:inherit;padding:0">'
+            + ("".join(content) or "&#8203;") + "</code></div>"
+        )
+    return "".join(rendered) + "</div>"
 
 
 def _format_anchor(anchor: SourceAnchor) -> str:

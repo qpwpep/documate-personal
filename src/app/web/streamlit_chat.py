@@ -326,7 +326,7 @@ def _render_citations(units: list[ContentUnit], citations: dict) -> None:
         for ref in refs:
             citation = citations[ref]
             with st.popover(f"근거 [{citation.number}]", help=citation.evidence.snapshot.title):
-                render_evidence(citation.evidence)
+                render_evidence(citation.evidence, cited_texts=[unit.text for unit in units if ref in unit.refs])
 
 
 def process_chat_prompt(
