@@ -176,4 +176,5 @@ def _theme_vars_css(theme_mode: str) -> str:
         f"    --{name}: {values[theme_mode]};"
         for name, values in _THEME_TOKENS.items()
     )
-    return f":root {{\n{variables}\n}}"
+    color_scheme = "light" if theme_mode == "라이트" else "dark"
+    return f":root {{\n    color-scheme: {color_scheme};\n{variables}\n}}"

@@ -32,6 +32,12 @@ header[data-testid="stHeader"] {
     color: var(--dm-text);
 }
 
+/* Streamlit translates the collapsed sidebar off screen without removing its
+   children from keyboard navigation. Keep only the separate opener available. */
+[data-testid="stSidebar"][data-collapsed="true"] {
+    visibility: hidden;
+}
+
 [data-testid="stSidebar"] [data-testid="stSidebarContent"] {
     padding: 1.15rem 1rem 1.5rem;
 }
@@ -200,7 +206,7 @@ button[data-testid="stExpandSidebarButton"]:hover {
 }
 
 .dm-intro {
-    margin: 3.4rem auto 1.3rem;
+    margin: 0.5rem auto;
     max-width: 780px;
     text-align: center;
 }
@@ -216,17 +222,18 @@ button[data-testid="stExpandSidebarButton"]:hover {
 
 .dm-intro h1 {
     color: var(--dm-text);
-    font-size: 3rem;
+    font-size: 2.25rem;
     letter-spacing: 0;
     line-height: 1.12;
     margin: 0;
+    padding: 0;
 }
 
 .dm-intro p {
     color: var(--dm-muted);
     font-size: 1.06rem;
     line-height: 1.7;
-    margin: 1rem auto 1.35rem;
+    margin: 0.5rem auto;
     max-width: 610px;
 }
 
@@ -236,6 +243,12 @@ button[data-testid="stExpandSidebarButton"]:hover {
     gap: 0.5rem;
     justify-content: center;
     margin: 0.6rem auto 1.15rem;
+}
+
+/* The initial guide should not scroll out of view just to reserve space for
+   a long chat history. Streamlit already allocates room for the composer. */
+.block-container:has(.dm-intro) {
+    padding-bottom: 1rem;
 }
 
 .dm-docs-row span {
@@ -270,6 +283,15 @@ div.stButton > button:hover {
 div.stButton > button:focus {
     border-color: var(--dm-accent);
     box-shadow: 0 0 0 0.14rem var(--dm-focus-ring);
+}
+
+/* Recommendation text is the question itself, so it must remain readable on
+   narrow screens instead of using Streamlit's single-line button ellipsis. */
+[class*="-quick_prompt_"] button [data-testid="stMarkdownContainer"],
+[class*="-quick_prompt_"] button [data-testid="stMarkdownContainer"] p {
+    overflow: visible;
+    text-overflow: clip;
+    white-space: normal;
 }
 
 [data-testid="stChatMessage"] {
@@ -411,6 +433,13 @@ div.stButton > button:focus {
 
 [data-testid="stPopoverBody"] [data-testid="stMarkdownContainer"] {
     color: var(--dm-text);
+}
+
+/* Plain retained source uses st.text rather than Markdown. Its inner span has
+   a Streamlit theme color of its own, including when the app theme changes. */
+[data-testid="stText"],
+[data-testid="stText"] * {
+    color: var(--dm-text) !important;
 }
 
 [data-testid="stCaptionContainer"],
@@ -676,8 +705,46 @@ div.stButton > button:focus {
 }
 
 [data-testid="stRadio"] label,
-[data-testid="stTextInput"] label {
-    color: var(--dm-text);
+[data-testid="stTextInput"] label,
+[data-testid="stSelectbox"] label,
+[data-testid="stWidgetLabel"],
+[data-testid="stWidgetLabel"] span,
+[data-testid="stWidgetLabel"] p {
+    color: var(--dm-text) !important;
+}
+
+[data-testid="stSelectbox"] [role="group"],
+[data-testid="stSelectbox"] div:has(> input[role="combobox"]),
+[data-testid="stSelectbox"] [data-baseweb="select"] > div,
+[data-testid="stSelectboxVirtualDropdown"],
+[data-testid="stSelectboxVirtualDropdown"] [role="listbox"] {
+    background: var(--dm-panel) !important;
+    border-color: var(--dm-border) !important;
+    color: var(--dm-text) !important;
+}
+
+[data-testid="stSelectbox"] input,
+[data-testid="stSelectbox"] button,
+[data-testid="stSelectboxVirtualDropdown"] [role="option"],
+[data-testid="stSelectboxVirtualDropdown"] [role="option"] * {
+    color: var(--dm-text) !important;
+    -webkit-text-fill-color: var(--dm-text) !important;
+}
+
+[data-testid="stSelectbox"] input,
+[data-testid="stSelectbox"] button {
+    background: transparent !important;
+}
+
+[data-testid="stTextInput"] input:disabled,
+[data-testid="stSelectbox"] input:disabled {
+    color: var(--dm-muted) !important;
+    -webkit-text-fill-color: var(--dm-muted) !important;
+}
+
+[data-testid="stSelectboxVirtualDropdown"] [role="option"][aria-selected="true"],
+[data-testid="stSelectboxVirtualDropdown"] [role="option"][data-focused="true"] {
+    background: var(--dm-accent-soft) !important;
 }
 
 [data-testid="stRadio"] [role="radiogroup"] {
@@ -763,12 +830,12 @@ div.stButton > button:focus {
     }
 
     .dm-intro {
-        margin-top: 2.4rem;
+        margin-top: 1rem;
         text-align: left;
     }
 
     .dm-intro h1 {
-        font-size: 2.25rem;
+        font-size: 1.8rem;
     }
 
     .dm-docs-row {
@@ -795,10 +862,9 @@ def configure_page(theme_mode: str) -> None:
                 <span class="dm-mark">DM</span>
                 <div class="dm-title-copy">
                     <strong>DocuMate</strong>
-                    <span>공식 문서와 업로드한 코드로 답하는 학습 채팅</span>
+                    <span>공식 문서와 첨부 자료로 답하는 학습 채팅</span>
                 </div>
             </div>
-            <div class="dm-topbar-status">FastAPI + Streamlit</div>
         </div>
         """,
         unsafe_allow_html=True,
