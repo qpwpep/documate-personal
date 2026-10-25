@@ -11,7 +11,7 @@ from src.app.client import (
     UploadAPIError,
 )
 from src.app.web.streamlit_chat import process_chat_prompt, render_chat_history
-from src.app.web.streamlit_browser_state import edit_question, render_browser_state, restore_composer
+from src.app.web.streamlit_browser_state import edit_question, render_browser_state, restore_browser_session, restore_composer
 from src.app.web.streamlit_conversations import render_conversation_notice
 from src.app.web.streamlit_requests import (
     ChatSubmission, SaveSubmission, UploadSubmission, discard_saved_prompt,
@@ -60,9 +60,10 @@ def main() -> None:
     ensure_theme_state()
     configure_page(st.session_state[THEME_STATE_KEY])
     warn_if_utf8_mode_disabled_once()
+    if not restore_browser_session():
+        return
     ensure_session_state(logger)
     conversation = get_conversation()
-    render_browser_state(conversation)
     if get_upload_manifest() is None and get_pending_upload() is None and not conversation.is_read_only:
         validate_conversation(conversation)
     if conversation.followup_prompt and not conversation.saved_prompt:
@@ -91,6 +92,7 @@ def main() -> None:
         switch_conversation(selected_conversation)
         st.rerun()
     conversation.client.context.slack_recipient = sidebar_inputs.slack_recipient
+    render_browser_state(conversation)
 
     session_path = get_session_path()
     messages = get_messages()

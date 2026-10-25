@@ -22,7 +22,7 @@ def render_conversation_picker(*, disabled: bool = False) -> str | None:
             format_func=lambda value: _conversation_label(by_id[value], conversations),
             key=current.widget_key(f"picker:{current.title}:{current.expired}"), disabled=disabled or current.is_busy,
         )
-        st.caption("이 브라우저 세션에서만 대화를 전환합니다. 새로고침 후 복원은 보장하지 않습니다.")
+        st.caption("이 탭에서 새로고침해도 대화와 초안을 복원합니다. 서버 세션이 만료되면 기존 기록은 읽기 전용으로 남습니다.")
     return selected if selected != current.id else None
 
 
@@ -41,7 +41,7 @@ def render_conversation_notice() -> None:
             validate_conversation(conversation)
             st.rerun()
     if conversation.is_read_only:
-        drafts = [conversation.saved_prompt]
+        drafts = [conversation.draft.text, conversation.saved_prompt]
         if conversation.pending_upload is not None:
             drafts.append(conversation.pending_upload.prompt)
         for prompt in dict.fromkeys(value for value in drafts if value):

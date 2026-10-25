@@ -43,7 +43,7 @@ class RequestsObserved(list):
 
 
 @pytest.fixture
-def chat_http(monkeypatch, tmp_path):
+def chat_http(monkeypatch, tmp_path, browser_storage):
     from src.app.web import streamlit_state
 
     monkeypatch.setattr(streamlit_state, "get_uploads_dir", lambda: tmp_path / "uploads")
@@ -223,6 +223,34 @@ def test_completed_answer_offers_direct_txt_save(chat_http):
 
     assert not app.exception
     assert any(item.label == "TXT 저장" for item in app.button)
+
+
+def test_reloaded_answer_can_be_saved_with_the_original_answer_id_without_regeneration(chat_http, tmp_path):
+    app = AppTest.from_file(APP, default_timeout=10).run()
+    app.chat_input[0].set_value("새로고침 뒤 저장할 답변").run()
+    session_id = chat_http[0]["session_id"]
+
+    reloaded = AppTest.from_file(APP, default_timeout=10).run()
+    assert not reloaded.exception
+    assert len(chat_http) == 1
+    assert not chat_http.exports
+    next(item for item in reloaded.button if item.label == "TXT 저장").click().run()
+
+    assert not reloaded.exception
+    assert any("파일 저장 완료" in item.value for item in reloaded.success)
+    assert any("파일 다운로드" in item.value for item in reloaded.markdown)
+    assert chat_http.exports == [f"/sessions/{session_id}/answers/answer-1/save"]
+    assert len(chat_http) == 1
+    saved = list((tmp_path / "saved").glob("*.txt"))
+    assert len(saved) == 1
+    assert "답변: 새로고침 뒤 저장할 답변" in saved[0].read_text(encoding="utf-8-sig")
+
+    after_save = AppTest.from_file(APP, default_timeout=10).run()
+    assert not after_save.exception
+    assert any("파일 저장 완료" in item.value for item in after_save.success)
+    assert any("파일 다운로드" in item.value for item in after_save.markdown)
+    assert len(chat_http.exports) == 1
+    assert len(chat_http) == 1
 
 
 @pytest.mark.parametrize("failure_code", ["evidence_insufficient", "model_output_invalid"])

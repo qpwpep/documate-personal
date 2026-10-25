@@ -24,6 +24,28 @@ export async function answerCompleted(tab, answerText) {
   return { check: "answer completed", answerText };
 }
 
+/** Use after a real attachment has produced an answer. No blur before reload. */
+export async function reloadPreservesConversation(tab, { draft, answerText, attachmentText }) {
+  await answerCompleted(tab, answerText);
+  const attachment = tab.playwright.getByText(attachmentText, { exact: false }).first();
+  assert(await attachment.isVisible(), "Confirmed attachment is not displayed before reload");
+  const messageCount = await tab.playwright.evaluate(() =>
+    document.querySelectorAll('[data-testid="stChatMessage"]').length);
+  await tab.playwright.getByRole("textbox", {
+    name: "공식 문서나 업로드한 자료에 대해 질문하세요", exact: true,
+  }).fill(draft);
+  await tab.reload();
+  await tab.playwright.getByText(answerText, { exact: true }).waitFor({ state: "visible", timeoutMs: 20000 });
+  await tab.getAXState({ emit: false });
+  await composerText(tab, draft);
+  await answerCompleted(tab, answerText);
+  assert(await attachment.isVisible(), "Confirmed attachment disappeared on reload");
+  const restoredCount = await tab.playwright.evaluate(() =>
+    document.querySelectorAll('[data-testid="stChatMessage"]').length);
+  assert(restoredCount === messageCount, "Reload lost or duplicated chat messages");
+  return { check: "reload preserves answer, attachment and exact unsent draft", messages: restoredCount };
+}
+
 /** Run on a new conversation. AppTest cannot reproduce just-typed browser text. */
 export async function suggestionDraftProtection(tab, suggestionText) {
   const input = tab.playwright.getByRole("textbox", {
