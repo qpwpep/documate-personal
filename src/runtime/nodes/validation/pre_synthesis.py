@@ -14,11 +14,10 @@ from src.core.contracts.boundary.runtime import get_runtime_state
 from src.core.llm_errors import LLMCallError, make_problem
 from src.infra.logging_utils import log_event
 from src.runtime.nodes.retry import build_followup_from_routes, build_retry_update, retrieval_subject
-from src.runtime.nodes.validation.evidence_validator import assess_retrieval_quality, collect_validation_snapshot
-from src.runtime.nodes.validation.models import ValidationAssessment
+from src.runtime.nodes.validation.evidence_validator import collect_validation_snapshot
 from src.runtime.nodes.validation.policy import build_followup_updates
 from src.runtime.nodes.validation.semantic import DecisionEvaluator
-from src.runtime.nodes.validation.prepared_semantics import assess_pre_semantics
+from src.runtime.nodes.validation.prepared_semantics import prepare_answer_evidence
 from src.runtime.nodes.synthesis.budgets import ExcerptLimits
 from src.runtime.nodes.synthesis.evidence_selection import tasks_for_hit, upload_file_id
 
@@ -94,85 +93,65 @@ def make_pre_synthesis_validation_node(
             return updates
 
         snapshot, local_errors = collect_validation_snapshot(state, max_turns=max_turns)
-        # Source rejection can change the document scope used by static coverage.
-        # Keep semantic failures separate until static quality is assessed against
-        # the accepted sources, so obsolete raw-source failures cannot survive.
-        assessment = ValidationAssessment()
-        assess_pre_semantics(
-            snapshot, assessment, decisions_client=decisions_client,
+        preparation = prepare_answer_evidence(
+            snapshot, decisions_client=decisions_client,
             threshold=pass_threshold, attempt=retry_context.attempt + 1,
             excerpt_limits=excerpt_limits,
         )
-        snapshot = replace(snapshot, parsed_hits=assessment.accepted_hits)
-        accepted_quality = assess_retrieval_quality(snapshot)
-        assessment.failed_requirement_ids.update(accepted_quality.failed_requirement_ids)
-        assessment.failed_routes.update(accepted_quality.failed_routes)
-        if accepted_quality.retry_reason is not None:
-            assessment.retry_reason = accepted_quality.retry_reason
-        prepared = assessment.prepared_evidence
-        if accepted_quality.failed_requirement_ids:
-            prepared = prepared.model_copy(update={
-                "normal": prepared.normal.model_copy(update={
-                    "failed_requirement_ids": sorted(assessment.failed_requirement_ids),
-                }), "compact": None,
-            })
+        snapshot = replace(snapshot, parsed_hits=preparation.accepted_hits)
         # Raw observations stay available for a changed requirement. Generation
         # and fallback consume only this exact prepared packet.
         retrieval = get_retrieval_state(state).model_copy(update={
-            "evidence_verdicts": assessment.evidence_verdicts,
-            "decision_cache": assessment.decision_cache,
-            "prepared_evidence": prepared,
+            "evidence_verdicts": preparation.evidence_verdicts,
+            "decision_cache": preparation.decision_cache,
+            "prepared_evidence": preparation.prepared_evidence,
         })
-        request_level_failure = (
-            "request_ready" in assessment.semantic_refusals
-            or (assessment.request_readiness_failed and not assessment.failed_requirement_ids)
-        )
         needs_retry, next_retry_context, retrieval_feedback = build_retry_update(
             retry_context=retry_context,
-            retry_reason=None if request_level_failure else assessment.retry_reason,
+            retry_reason=None if preparation.request_failure is not None else preparation.retry_reason,
             planner_output=snapshot.planner_output,
-            score_avg=assessment.score_avg,
-            failed_routes=assessment.failed_routes,
-            failed_requirement_ids=assessment.failed_requirement_ids,
+            score_avg=preparation.score_avg,
+            failed_routes=preparation.failed_routes,
+            failed_requirement_ids=preparation.failed_requirement_ids,
             current_attempt_hits=snapshot.parsed_hits,
             current_attempt_retrieval_diagnostics=snapshot.current_attempt_retrieval_diagnostics,
             request_contract=snapshot.request_contract,
         )
-        if request_level_failure:
+        if preparation.request_failure is not None:
             # A global readiness failure is not evidence that any accepted
             # source is bad. Re-searching those sources cannot repair it.
             needs_retry = False
             next_retry_context = next_retry_context.model_copy(update={
                 "needs_retry": False, "content_repair_attempt": retry_context.content_repair_attempt,
                 "retry_scope": "refresh_routes", "retry_reason": "missing_content",
-                "preserved_hits": list(assessment.accepted_hits),
+                "preserved_hits": list(preparation.accepted_hits),
             })
 
-        if assessment.semantic_probabilities or assessment.semantic_refusals:
-            failures = {name: round(value, 4) for name, value in assessment.semantic_probabilities.items()
+        if preparation.semantic_probabilities or preparation.semantic_refusals:
+            failures = {name: round(value, 4) for name, value in preparation.semantic_probabilities.items()
                         if value < pass_threshold}
             semantic_event = (
                 f"pre_synthesis_validation: decisions threshold={pass_threshold}, "
-                f"predicates={len(assessment.semantic_probabilities) + len(assessment.semantic_refusals)}, "
-                f"failed={failures}, refused={sorted(assessment.semantic_refusals)}"
+                f"predicates={len(preparation.semantic_probabilities) + len(preparation.semantic_refusals)}, "
+                f"failed={failures}, refused={sorted(preparation.semantic_refusals)}"
             )
             evidence_event = "pre_synthesis_validation: evidence_verdicts=" + json.dumps(
-                [verdict.model_dump(mode="json") for verdict in assessment.evidence_verdicts],
+                [verdict.model_dump(mode="json") for verdict in preparation.evidence_verdicts],
                 ensure_ascii=False,
             )
             cache_event = "pre_synthesis_validation: decision_cache=" + json.dumps(
-                assessment.cache_observations, ensure_ascii=False,
+                preparation.cache_observations, ensure_ascii=False,
             )
-            log_event(logger, logging.INFO, "decision_cache", observations=assessment.cache_observations)
+            log_event(logger, logging.INFO, "decision_cache", observations=preparation.cache_observations)
             updates_debug_events = [*debug.validation_events, semantic_event, evidence_event, cache_event]
         else:
             updates_debug_events = list(debug.validation_events)
 
-        if assessment.retry_reason is not None:
+        if preparation.retry_reason is not None:
             local_errors.append(
                 "pre_synthesis_validation: retry_reason="
-                f"{assessment.retry_reason}, failed_routes={sorted(assessment.failed_routes)}, "
-                f"score_avg={assessment.score_avg}, feedback={retrieval_feedback}"
+                f"{preparation.retry_reason}, failed_routes={sorted(preparation.failed_routes)}, "
+                f"score_avg={preparation.score_avg}, feedback={retrieval_feedback}"
             )
 
         if verbose:
@@ -182,35 +161,35 @@ def make_pre_synthesis_validation_node(
                 "pre_synthesis_validation",
                 retrieval_required=snapshot.retrieval_required,
                 evidence_count=len(snapshot.parsed_hits),
-                rejected_evidence_count=sum(item.status != "passed" for item in assessment.evidence_verdicts),
-                failed_requirement_ids=sorted(assessment.failed_requirement_ids),
+                rejected_evidence_count=sum(item.status != "passed" for item in preparation.evidence_verdicts),
+                failed_requirement_ids=sorted(preparation.failed_requirement_ids),
                 needs_retry=needs_retry,
-                retry_reason=assessment.retry_reason,
+                retry_reason=preparation.retry_reason,
             )
 
         updates: GraphState = {
             "retry": next_retry_context,
             "retrieval": retrieval,
         }
-        if request_level_failure:
+        if preparation.request_failure is not None:
             updates.update(build_followup_updates(
                 "요청의 내용과 조건에 맞는 답변을 준비할 수 있는지 확인하지 못했습니다. 요청을 더 구체적으로 알려 주세요.",
                 attempt=response.synthesis_attempt, kind="failure",
                 problem=make_problem(
-                    "model_refusal" if "request_ready" in assessment.semantic_refusals else "evidence_insufficient",
+                    preparation.request_failure,
                     "pre_synthesis_validation",
                 ), **stamp,
             ))
-        elif assessment.retry_reason is not None and not needs_retry:
+        elif preparation.retry_reason is not None and not needs_retry:
             usable_hits = [hit for hit in snapshot.parsed_hits if tasks_for_hit(hit, snapshot.planner_output)]
             if usable_hits:
                 # Preserve the failed obligations while allowing a grounded partial
                 # body. Post-validation keeps it ineligible for delivery.
                 updates["retry"] = next_retry_context.model_copy(update={
                     "terminal_failed_requirement_ids": sorted(
-                        set(next_retry_context.terminal_failed_requirement_ids) | assessment.failed_requirement_ids
+                        set(next_retry_context.terminal_failed_requirement_ids) | preparation.failed_requirement_ids
                     ),
-                    "terminal_retrieval_reason": assessment.retry_reason,
+                    "terminal_retrieval_reason": preparation.retry_reason,
                 })
                 if local_errors:
                     updates["debug"] = debug.model_copy(update={
@@ -220,14 +199,14 @@ def make_pre_synthesis_validation_node(
                 return updates
             followup_answer = build_followup_from_routes(
                 snapshot.planner_output,
-                assessment.retry_reason,
+                preparation.retry_reason,
             )
             if not snapshot.planner_output.tasks:
                 followup_answer = "요청에 필요한 내용을 충분히 확인하지 못해 답변을 준비하지 못했습니다. 요청할 내용과 조건을 더 구체적으로 알려 주세요."
-            if assessment.retry_reason == "no_evidence" and assessment.failed_requirement_ids:
+            if preparation.retry_reason == "no_evidence" and preparation.failed_requirement_ids:
                 notices = []
                 for task in snapshot.planner_output.tasks:
-                    if task.requirement_id not in assessment.failed_requirement_ids:
+                    if task.requirement_id not in preparation.failed_requirement_ids:
                         continue
                     diagnostics = [d for d in snapshot.current_attempt_retrieval_diagnostics if d.requirement_id == task.requirement_id]
                     subjects = retrieval_subject(task)
@@ -257,13 +236,13 @@ def make_pre_synthesis_validation_node(
                     attempt=response.synthesis_attempt,
                     kind="failure",
                     problem=make_problem(
-                        "provider_unavailable" if assessment.retry_reason == "tool_error" else "evidence_insufficient",
+                        "provider_unavailable" if preparation.retry_reason == "tool_error" else "evidence_insufficient",
                         "retrieval" if snapshot.planner_output.tasks else "pre_synthesis_validation",
                     ),
                     **stamp,
                 )
             )
-        if local_errors or assessment.semantic_probabilities or assessment.semantic_refusals:
+        if local_errors or preparation.semantic_probabilities or preparation.semantic_refusals:
             updates["debug"] = debug.model_copy(
                 update={
                     "validation_errors": [*debug.validation_errors, *local_errors],

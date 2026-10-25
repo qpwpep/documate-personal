@@ -178,6 +178,11 @@ def test_pre_validation_recomputes_static_failures_after_rejecting_a_source(max_
     assert [verdict.status for verdict in updates["retrieval"].evidence_verdicts] == ["passed", "failed"]
     requirements = json.loads(boundary.requests[-1]["input"])["requirements"]
     assert [source["id"] for source in requirements[0]["sources"]] == [good.id]
+    if remaining_failure == "tool_error":
+        prepared = updates["retrieval"].prepared_evidence
+        assert prepared is not None
+        assert prepared.normal.failed_requirement_ids == [task.requirement_id]
+        assert prepared.compact is None
     retry = updates["retry"]
     if remaining_failure in {"requirement_0", "tool_error"}:
         assert retry.needs_retry is bool(max_retries)

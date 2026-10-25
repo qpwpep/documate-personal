@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import replace
-from typing import Any
+from typing import Any, Literal
 
 from src.core.answer_schema.models import validated_evidence_by_id
 from src.core.answer_export import exact_copy_ready, input_copy_snapshot
@@ -15,7 +15,8 @@ from src.runtime.nodes.synthesis.budgets import ExcerptLimits, resolve_evidence_
 from src.runtime.nodes.synthesis.evidence_selection import (
     missing_evidence_requirement_ids, prepare_evidence_candidates, select_evidence_packet, tasks_for_hit, upload_file_id,
 )
-from src.runtime.nodes.validation.models import ValidationAssessment, ValidationSnapshot
+from src.runtime.nodes.validation.assessment import assess_retrieval_quality
+from src.runtime.nodes.validation.models import EvidencePreparationResult, ValidationAssessment, ValidationSnapshot
 from src.runtime.nodes.validation.semantic import (
     DecisionEvaluator, _context, _predicate_instructions, _require_bound_source, _source, semantic_task_input,
 )
@@ -261,11 +262,56 @@ def _assess_sources(snapshot, assessment, *, decisions_client, threshold, attemp
     assessment.accepted_hits = [hit for key, hit in candidates.items() if key in accepted]
 
 
-def assess_pre_semantics(
+def prepare_answer_evidence(
+    snapshot: ValidationSnapshot, *,
+    decisions_client: DecisionEvaluator, threshold: float, attempt: int,
+    excerpt_limits: ExcerptLimits,
+) -> EvidencePreparationResult:
+    """Finish semantic and local checks before exposing packets or failure meaning."""
+    assessment = ValidationAssessment()
+    prepared = _assess_pre_semantics(
+        snapshot, assessment, decisions_client=decisions_client,
+        threshold=threshold, attempt=attempt, excerpt_limits=excerpt_limits,
+    )
+    # Source rejection changes the scope used by local coverage. Keep the raw
+    # input intact and assess only accepted hits, not the budgeted packet.
+    accepted_quality = assess_retrieval_quality(replace(snapshot, parsed_hits=assessment.accepted_hits))
+    assessment.failed_requirement_ids.update(accepted_quality.failed_requirement_ids)
+    assessment.failed_routes.update(accepted_quality.failed_routes)
+    if accepted_quality.retry_reason is not None:
+        assessment.retry_reason = accepted_quality.retry_reason
+    if accepted_quality.failed_requirement_ids:
+        prepared = prepared.model_copy(update={
+            "normal": prepared.normal.model_copy(update={
+                "failed_requirement_ids": sorted(assessment.failed_requirement_ids),
+            }), "compact": None,
+        })
+    request_failure: Literal["model_refusal", "evidence_insufficient"] | None = None
+    if "request_ready" in assessment.semantic_refusals:
+        request_failure = "model_refusal"
+    elif assessment.request_readiness_failed and not assessment.failed_requirement_ids:
+        request_failure = "evidence_insufficient"
+    return EvidencePreparationResult(
+        prepared_evidence=prepared,
+        accepted_hits=assessment.accepted_hits,
+        failed_requirement_ids=assessment.failed_requirement_ids,
+        failed_routes=assessment.failed_routes,
+        retry_reason=assessment.retry_reason,
+        request_failure=request_failure,
+        score_avg=assessment.score_avg,
+        semantic_probabilities=assessment.semantic_probabilities,
+        semantic_refusals=assessment.semantic_refusals,
+        evidence_verdicts=assessment.evidence_verdicts,
+        decision_cache=assessment.decision_cache,
+        cache_observations=assessment.cache_observations,
+    )
+
+
+def _assess_pre_semantics(
     snapshot: ValidationSnapshot, assessment: ValidationAssessment, *,
     decisions_client: DecisionEvaluator, threshold: float, attempt: int,
     excerpt_limits: ExcerptLimits,
-) -> None:
+) -> PreparedEvidence:
     _require_bound_source(snapshot, stage="pre_synthesis_validation")
     if not snapshot.retrieval_required and exact_copy_ready(snapshot.request_contract, snapshot.source_response):
         # The body already exists. Check its exact revision instead of asking a
@@ -275,7 +321,7 @@ def assess_pre_semantics(
         packet = [citation.evidence for citation in source.citations]
         prepared = PreparedEvidencePacket(evidence=packet,
             fingerprint=prepared_packet_fingerprint(packet, {}))
-        assessment.prepared_evidence = PreparedEvidence(
+        return PreparedEvidence(
             request_id=snapshot.request_contract.request_id,
             contract_revision=snapshot.request_contract.revision,
             plan_fingerprint=evidence_plan_fingerprint(snapshot.planner_output),
@@ -283,7 +329,6 @@ def assess_pre_semantics(
             prompt_fingerprint=decision_fingerprint("exact-input-copy-v1" if input_copy else "exact-answer-export-v1"), threshold=threshold,
             normal=prepared, compact=prepared,
         )
-        return
     validated_evidence_by_id([hit.evidence for hit in snapshot.parsed_hits])
     normal_budget, compact_budget = resolve_evidence_budgets(plan=snapshot.planner_output, limits=excerpt_limits)
     context = _decision_context(snapshot)
@@ -390,7 +435,7 @@ def assess_pre_semantics(
             "failed_requirement_ids": compact.failed_requirement_ids,
             "readiness_probability": decisions.probabilities.get("compact_request_ready")})
     contract = snapshot.request_contract
-    assessment.prepared_evidence = PreparedEvidence(
+    prepared = PreparedEvidence(
         request_id=contract.request_id, contract_revision=contract.revision,
         plan_fingerprint=evidence_plan_fingerprint(snapshot.planner_output),
         source_response_hash=snapshot.source_response.content_hash if snapshot.source_response is not None else None,
@@ -411,3 +456,4 @@ def assess_pre_semantics(
         assessment.retry_reason = "no_evidence"
     elif assessment.request_readiness_failed:
         assessment.retry_reason = "missing_content"
+    return prepared

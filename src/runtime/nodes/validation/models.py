@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Literal
 
 from langchain_core.messages import BaseMessage
 
@@ -70,3 +71,21 @@ class ValidationAssessment:
     prepared_evidence: PreparedEvidence | None = None
     cache_observations: list[dict] = field(default_factory=list)
     error_codes: list[ErrorCode] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class EvidencePreparationResult:
+    """Final preparation state; a normal packet can still carry failed requirements."""
+
+    prepared_evidence: PreparedEvidence
+    accepted_hits: list[SearchHit]
+    failed_requirement_ids: set[str]
+    failed_routes: set[str]
+    retry_reason: RetryReason | None
+    request_failure: Literal["model_refusal", "evidence_insufficient"] | None
+    score_avg: float | None
+    semantic_probabilities: dict[str, float]
+    semantic_refusals: set[str]
+    evidence_verdicts: list[EvidenceVerdict]
+    decision_cache: list[DecisionCacheEntry]
+    cache_observations: list[dict[str, object]]
