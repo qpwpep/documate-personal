@@ -9,7 +9,7 @@ import streamlit as st
 from src.app.client import AgentCallResult, AgentStreamEvent
 from src.app.web.streamlit_sources import render_code, render_evidence
 from src.app.web.streamlit_state import AssistantChatMessage, ChatMessage
-from src.core.answer_schema import AnswerResponse, ContentUnit, SemanticCheck, iter_content_units
+from src.core.answer_schema import ActionReceipt, AnswerResponse, ContentUnit, SemanticCheck, iter_content_units
 from src.core.answer_schema.rendering import code_display_label, inline_code_markdown
 from src.core.contracts.outcome import TurnResult
 from src.core.llm_errors import ExecutionProblem
@@ -65,8 +65,18 @@ def render_chat_history(
                         retry = bool(export_error) or (export_result is not None and export_result.status != "completed")
                         if export_result is None and result.response is not None:
                             retry = retry or any(action.kind == "save_text" and action.status != "success" for action in result.response.actions)
-                        st.button("저장 다시 시도" if retry else "TXT 저장", key=f"save_answer_{index}_{result.answer_id}",
-                                  disabled=actions_disabled, on_click=on_save, args=(result.answer_id,))
+                        save_actions = [action for action in displayed.response.actions if action.kind == "save_text"] if displayed.response else []
+                        if not any(_save_download_ready(action) for action in save_actions):
+                            expired = any(action.artifact is not None and action.verification == "verified"
+                                          and action.artifact.expires_at <= datetime.now(tz=timezone.utc).timestamp()
+                                          for action in save_actions)
+                            label = "TXT 저장"
+                            if retry:
+                                label = "저장 다시 시도"
+                            elif expired:
+                                label = "TXT 다시 만들기"
+                            st.button(label, key=f"save_answer_{index}_{result.answer_id}",
+                                      disabled=actions_disabled, on_click=on_save, args=(result.answer_id,))
                 elif message.get("request_id"):
                     st.caption(f"오류 식별자: {message['request_id']}")
                 if index == len(messages) - 1 and index > 0 and messages[index - 1]["role"] == "user":
@@ -245,18 +255,24 @@ def render_action_receipts(response: AnswerResponse, fastapi_url: str) -> None:
             st.warning(f"{label} 결과를 확인할 수 없습니다: {action.error or action.message or '완료 여부를 다시 확인해 주세요.'}")
         elif action.kind == "save_text" and (action.verification != "verified" or action.artifact is None):
             st.warning("저장 결과를 검증할 수 없습니다. 검증된 파일 정보가 없는 이전 기록입니다.")
+        elif action.kind == "save_text" and action.artifact is not None:
+            expires = datetime.fromtimestamp(action.artifact.expires_at, tz=timezone.utc).astimezone()
+            st.caption(f"다운로드 가능 기한: {expires.strftime('%Y-%m-%d %H:%M %Z')}")
+            if not _save_download_ready(action):
+                st.warning("저장 파일의 보관 기한이 지났습니다. 답변은 유지됩니다. 내려받으려면 TXT를 다시 만들어 주세요.")
+                continue
+            st.success("파일 준비 완료 — 아래에서 내려받으세요.")
+            url = f"{fastapi_url}/download/{quote(action.artifact.filename, safe='')}"
+            st.link_button("TXT 다운로드", url, type="primary")
         else:
             detail = action.message or ""
             st.success(f"{label} 완료" + (f": {detail}" if detail else ""))
-            if action.kind == "save_text" and action.artifact is not None:
-                expires = datetime.fromtimestamp(action.artifact.expires_at, tz=timezone.utc).astimezone()
-                st.caption(f"다운로드 가능 기한: {expires.strftime('%Y-%m-%d %H:%M %Z')}")
-                if expires <= datetime.now(tz=timezone.utc):
-                    st.warning("저장 파일의 보관 기한이 지났습니다.")
-                    continue
-                filename = action.artifact.filename
-                url = f"{fastapi_url}/download/{quote(filename, safe='')}"
-                st.markdown(f"[파일 다운로드 ({filename})]({url})")
+
+
+def _save_download_ready(action: ActionReceipt) -> bool:
+    return (action.kind == "save_text" and action.status == "success"
+            and action.verification == "verified" and action.artifact is not None
+            and action.artifact.expires_at > datetime.now(tz=timezone.utc).timestamp())
 
 
 def _render_validation_scope(response: AnswerResponse, *, turn_incomplete: bool = False) -> None:

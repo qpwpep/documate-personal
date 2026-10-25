@@ -260,7 +260,8 @@ button[data-testid="stExpandSidebarButton"]:hover {
     padding: 0.34rem 0.7rem;
 }
 
-div.stButton > button {
+div.stButton > button,
+div.stLinkButton > a {
     background: var(--dm-panel);
     border: 1px solid var(--dm-border);
     border-radius: 0.9rem;
@@ -273,14 +274,16 @@ div.stButton > button {
     white-space: normal;
 }
 
-div.stButton > button:hover {
+div.stButton > button:hover,
+div.stLinkButton > a:hover {
     background: var(--dm-button-hover-bg);
     border-color: var(--dm-button-hover-border);
     color: var(--dm-text);
     transform: translateY(-1px);
 }
 
-div.stButton > button:focus {
+div.stButton > button:focus,
+div.stLinkButton > a:focus-visible {
     border-color: var(--dm-accent);
     box-shadow: 0 0 0 0.14rem var(--dm-focus-ring);
 }

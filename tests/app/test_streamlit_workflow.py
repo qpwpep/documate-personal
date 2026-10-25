@@ -225,6 +225,72 @@ def test_completed_answer_offers_direct_txt_save(chat_http):
     assert any(item.label == "TXT 저장" for item in app.button)
 
 
+def test_prepared_txt_offers_download_instead_of_saving_the_same_answer_again(chat_http, tmp_path):
+    app = AppTest.from_file(APP, default_timeout=10).run()
+    app.chat_input[0].set_value("내려받을 답변").run()
+    next(item for item in app.button if item.label == "TXT 저장").click().run()
+
+    assert not app.exception
+    assert any("파일 준비 완료" in item.value and "내려받으세요" in item.value for item in app.success)
+    downloads = app.get("link_button")
+    assert len(downloads) == 1
+    assert downloads[0].proto.label == "TXT 다운로드"
+    assert downloads[0].proto.type == "primary"
+    saved = list((tmp_path / "saved").glob("*.txt"))
+    assert len(saved) == 1
+    assert downloads[0].proto.url.endswith("/download/" + saved[0].name)
+    assert not any(item.label in {"TXT 저장", "저장 다시 시도"} for item in app.button)
+    assert "답변: 내려받을 답변" in saved[0].read_text(encoding="utf-8-sig")
+    app.run()
+    assert len(chat_http) == 1
+    assert len(chat_http.exports) == 1
+
+
+@pytest.mark.parametrize("verified", [True, False], ids=["expired", "unverified"])
+def test_unavailable_download_keeps_answer_and_offers_file_preparation(verified):
+    from src.core.answer_schema import ActionReceipt
+    from src.core.contracts.outcome import TurnResult
+    from src.core.save_contract import SaveArtifact
+
+    answer = finalize_answer(text_document("계속 읽을 수 있는 원래 답변"), [])
+    operation = build_answer_export_operation(answer, session_id="download-test")
+    artifact = SaveArtifact(
+        artifact_id=operation.binding_sha256, filename="retained-answer.txt",
+        sha256=operation.payload_sha256, byte_count=operation.byte_count,
+        created_at=1, expires_at=2,
+    ) if verified else None
+    receipt = ActionReceipt(
+        kind="save_text", status="success", file_path="retained-answer.txt",
+        operation=operation if verified else None, artifact=artifact,
+        verification="verified" if verified else None,
+    )
+    app = AppTest.from_string('''
+import streamlit as st
+from src.app.web.streamlit_chat import render_chat_history
+
+def save(answer_id):
+    st.session_state["save_requests"].append(answer_id)
+
+render_chat_history(st.session_state["messages"], "http://localhost:8000", on_save=save)
+''', default_timeout=10)
+    app.session_state["messages"] = [{"role": "assistant", "result": TurnResult(
+        status="completed", answer_id="original-answer",
+        response=answer.model_copy(update={"actions": [receipt]}),
+    )}]
+    app.session_state["save_requests"] = []
+    app.run()
+
+    assert not app.exception
+    assert any(item.value == "계속 읽을 수 있는 원래 답변" for item in app.markdown)
+    assert not app.get("link_button")
+    assert not app.success
+    warning = "보관 기한이 지났습니다" if verified else "저장 결과를 검증할 수 없습니다"
+    assert any(warning in item.value for item in app.warning)
+    label = "TXT 다시 만들기" if verified else "TXT 저장"
+    next(item for item in app.button if item.label == label).click().run()
+    assert app.session_state["save_requests"] == ["original-answer"]
+
+
 def test_reloaded_answer_can_be_saved_with_the_original_answer_id_without_regeneration(chat_http, tmp_path):
     app = AppTest.from_file(APP, default_timeout=10).run()
     app.chat_input[0].set_value("새로고침 뒤 저장할 답변").run()
@@ -237,8 +303,8 @@ def test_reloaded_answer_can_be_saved_with_the_original_answer_id_without_regene
     next(item for item in reloaded.button if item.label == "TXT 저장").click().run()
 
     assert not reloaded.exception
-    assert any("파일 저장 완료" in item.value for item in reloaded.success)
-    assert any("파일 다운로드" in item.value for item in reloaded.markdown)
+    assert any("파일 준비 완료" in item.value for item in reloaded.success)
+    assert any(item.proto.label == "TXT 다운로드" for item in reloaded.get("link_button"))
     assert chat_http.exports == [f"/sessions/{session_id}/answers/answer-1/save"]
     assert len(chat_http) == 1
     saved = list((tmp_path / "saved").glob("*.txt"))
@@ -247,8 +313,9 @@ def test_reloaded_answer_can_be_saved_with_the_original_answer_id_without_regene
 
     after_save = AppTest.from_file(APP, default_timeout=10).run()
     assert not after_save.exception
-    assert any("파일 저장 완료" in item.value for item in after_save.success)
-    assert any("파일 다운로드" in item.value for item in after_save.markdown)
+    assert any("파일 준비 완료" in item.value for item in after_save.success)
+    assert any(item.proto.label == "TXT 다운로드" for item in after_save.get("link_button"))
+    assert not any(item.label == "TXT 저장" for item in after_save.button)
     assert len(chat_http.exports) == 1
     assert len(chat_http) == 1
 
@@ -392,7 +459,7 @@ def test_save_failure_preserves_answer_and_retries_same_target_once(chat_http, f
     next(item for item in app.button if item.label == "저장 다시 시도").click().run()
     assert not app.exception
     assert not app.error
-    assert any("파일 다운로드" in item.value for item in app.markdown)
+    assert any(item.proto.label == "TXT 다운로드" for item in app.get("link_button"))
     conversation = app.session_state["conversations"][app.session_state["active_conversation_id"]]
     assert conversation.messages[-1]["result"] == before
     assert chat_http.exports == [chat_http.exports[0]] * 2
@@ -414,5 +481,5 @@ def test_natural_save_failure_shows_only_latest_success_after_direct_retry(chat_
     assert not app.exception
     assert not app.error
     assert not any("파일을 만들지 못했습니다" in item.value for item in app.warning)
-    assert any("파일 저장 완료" in item.value for item in app.success)
+    assert any("파일 준비 완료" in item.value for item in app.success)
     assert len(chat_http.exports) == 1

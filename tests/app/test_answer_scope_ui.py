@@ -167,8 +167,8 @@ def test_saving_a_partial_answer_keeps_body_limits_without_marking_new_request_i
     assert saved.content == original.content
     assert saved.issues == original.issues
     assert saved.semantic_validation == original.semantic_validation
-    assert any("파일 저장 완료" in item.value for item in app.success)
-    assert any("파일 다운로드" in item.value for item in app.markdown)
+    assert any("파일 준비 완료" in item.value for item in app.success)
+    assert any(item.proto.label == "TXT 다운로드" for item in app.get("link_button"))
     for issue in original.issues:
         assert any(item.value == f"답변에 기록된 한계: {issue.message}" for item in app.warning)
     captions = [item.value for item in app.caption]
