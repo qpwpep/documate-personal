@@ -1,12 +1,19 @@
 from __future__ import annotations
 
 import time
-from typing import Any
+from collections.abc import Iterator
+from typing import Any, Literal, Protocol
 from uuid import uuid4
 
 from src.core.contracts.boundary.graph import build_graph_state_input, normalize_graph_update
 from src.core.latency import elapsed_ms
 from src.runtime.agent_runtime.session_context import SessionContext
+
+
+class AgentGraph(Protocol):
+    def stream(
+        self, state: dict[str, object], *, stream_mode: Literal["values"],
+    ) -> Iterator[dict[str, object]]: ...
 
 
 class GraphInvocationError(RuntimeError):
@@ -18,7 +25,7 @@ class GraphInvocationError(RuntimeError):
 
 
 class ExecutionRunner:
-    def __init__(self, *, graph: Any, session: SessionContext) -> None:
+    def __init__(self, *, graph: AgentGraph, session: SessionContext) -> None:
         self.graph = graph
         self.session = session
 

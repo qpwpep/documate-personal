@@ -29,7 +29,7 @@ class AnswerExportService:
     def save(self, session_id: str, answer_id: str, *, request_id: str) -> AnswerExportResult:
         try:
             with self._session_store.locked_existing_session(session_id) as entry:
-                session = entry.agent._ensure_session()
+                session = entry.agent.session
                 snapshot = session.get_answer(answer_id)
                 if snapshot is None:
                     raise HTTPException(status_code=404, detail={

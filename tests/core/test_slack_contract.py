@@ -135,7 +135,7 @@ def test_incomplete_sidebar_recipient_never_falls_back_to_configured_default(del
 
     assert result["response"]["actions"][0]["status"] == "skipped"
     assert requests == []
-    delivery = manager._ensure_session().pending_action.slack_delivery
+    delivery = manager.session.pending_action.slack_delivery
     assert delivery.selection is None
     assert delivery.failure.code == "recipient_invalid"
 

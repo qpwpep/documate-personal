@@ -13,14 +13,14 @@ def test_untargeted_acknowledgement_preserves_the_existing_pending_body(delivery
     pending = PendingAction(contract=original, response=previous, body_prepared=True, completed_actions=("save_text",))
     acknowledgement = _contract(AcknowledgeBody(), request_id="acknowledgement")
     manager = _manager(_ConsumerGraph([acknowledgement], [], save, slack))
-    manager._ensure_session().previous_response = previous
-    manager._ensure_session().pending_action = pending
+    manager.session.previous_response = previous
+    manager.session.pending_action = pending
 
     result = manager.run_agent_flow("알겠어")
 
     assert export_answer_text(AnswerResponse.model_validate(result["response"])) == "알겠습니다."
-    assert manager._ensure_session().pending_action == pending
-    assert manager._ensure_session().previous_response == previous
+    assert manager.session.pending_action == pending
+    assert manager.session.previous_response == previous
     assert delivered == []
     assert not output.exists()
 
@@ -44,14 +44,14 @@ def test_targeted_prohibition_acknowledges_and_closes_the_finished_delivery_requ
     destination_only = _contract(ComposeBody(instruction="대상만으로 전송 요청을 만들지 않는다."), request_id="independent-request")
     manager = _manager(_ConsumerGraph([original, forbid, destination_only], ["준비된 원래 본문", "전달할 새 요청을 알려 주세요."], save, slack))
     first = AnswerResponse.model_validate(manager.run_agent_flow("이 내용을 Slack으로 보내줘")["response"])
-    assert manager._ensure_session().pending_action.body_prepared
+    assert manager.session.pending_action.body_prepared
 
     second = AnswerResponse.model_validate(manager.run_agent_flow("그 전송은 하지 마")["response"])
 
     assert export_answer_text(second) == "알겠습니다. Slack으로 전송하지 않겠습니다."
-    assert manager._ensure_session().previous_response.content == first.content
-    assert manager._ensure_session().pending_action is None
+    assert manager.session.previous_response.content == first.content
+    assert manager.session.pending_action is None
     manager.run_agent_flow("C123")
-    assert manager._ensure_session().pending_action is None
+    assert manager.session.pending_action is None
     assert delivered == []
     assert not output.exists()

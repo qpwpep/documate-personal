@@ -141,14 +141,14 @@ def test_partial_history_keeps_its_limits_without_automatically_saving(delivery_
     partial = AnswerResponse.model_validate(result["response"])
     assert export_answer_text(partial) in str(manager.messages[-1].content)
     assert result["message"] in str(manager.messages[-1].content)
-    assert manager._ensure_session().previous_response == partial
-    assert manager._ensure_session().pending_action is not None
-    assert not manager._ensure_session().pending_action.body_prepared
+    assert manager.session.previous_response == partial
+    assert manager.session.pending_action is not None
+    assert not manager.session.pending_action.body_prepared
 
     acknowledgement = manager.run_agent_flow("알겠어")
 
     assert acknowledgement["status"] == "completed"
-    assert manager._ensure_session().previous_response == partial
-    assert not manager._ensure_session().pending_action.body_prepared
+    assert manager.session.previous_response == partial
+    assert not manager.session.pending_action.body_prepared
     assert not output.exists()
     assert deliveries == []

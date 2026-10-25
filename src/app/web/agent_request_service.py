@@ -122,7 +122,7 @@ class AgentRequestService:
         try:
             with self._session_store.locked_session(session_id) as (entry, session_lock_wait_ms):
                 agent_manager = entry.agent
-                session = agent_manager._ensure_session()
+                session = agent_manager.session
                 try:
                     # Check under the lock, before execution or reset. This is an
                     # attachment conflict, not a model or user-question failure.

@@ -1,4 +1,6 @@
 import json
+from collections.abc import Iterator
+from typing import Literal
 
 import httpx
 from langchain_core.messages import HumanMessage
@@ -9,6 +11,19 @@ from src.core.contracts.boundary.graph import build_graph_state_input, normalize
 from src.core.planner_schema import PlannerOutput, RetrievalRewriteOutput
 from src.core.request_contracts import RequestContract, UserTurnSnapshot, WireRequestContract
 from src.infra.decisions import DecisionsClient
+from src.runtime.agent_runtime import AgentGraph
+
+
+class SequentialGraph:
+    """Run each turn's graph while the manager retains one session."""
+
+    def __init__(self, *graphs: AgentGraph) -> None:
+        self._graphs = iter(graphs)
+
+    def stream(
+        self, state: dict[str, object], *, stream_mode: Literal["values"],
+    ) -> Iterator[dict[str, object]]:
+        yield from next(self._graphs).stream(state, stream_mode=stream_mode)
 
 
 def make_decisions_client(

@@ -5,11 +5,10 @@ import time
 from typing import Any
 
 from src.core.conversation_memory import (
-    ConversationMemoryPolicy,
     build_durable_conversation_memory,
     validate_query_text,
 )
-from src.runtime.agent_runtime import DebugCollector, ExecutionRunner, GraphInvocationError, ResponseAssembler, SessionContext
+from src.runtime.agent_runtime import AgentGraph, DebugCollector, ExecutionRunner, GraphInvocationError, ResponseAssembler, SessionContext
 from src.runtime.agent_runtime.tool_execution import capture_tool_execution
 from src.runtime.agent_runtime.llm_usage import capture_llm_usage
 from src.core.answer_schema import finalize_answer, text_document, export_answer_text
@@ -41,76 +40,53 @@ def is_session_reset_command(user_input: str) -> bool:
 class AgentFlowManager:
     """Facade over session state, graph execution, debug collection, and response assembly."""
 
-    def __init__(self, settings: AppSettings | None = None):
+    def __init__(self, settings: AppSettings | None = None, *, graph: AgentGraph | None = None) -> None:
         self.settings = settings or get_settings()
-        self.graph = build_agent_graph(self.settings)
         self._session = SessionContext()
         self._runner = ExecutionRunner(
-            graph=self.graph,
+            graph=graph if graph is not None else build_agent_graph(self.settings),
             session=self._session,
         )
         self._debug_collector = DebugCollector()
         self._response_assembler = ResponseAssembler()
 
-    def _ensure_session(self) -> SessionContext:
-        if not hasattr(self, "_session"):
-            self._session = SessionContext()
+    @property
+    def session(self) -> SessionContext:
         return self._session
-
-    def _ensure_components(self) -> None:
-        session = self._ensure_session()
-        if not hasattr(self, "_debug_collector"):
-            self._debug_collector = DebugCollector()
-        if not hasattr(self, "_response_assembler"):
-            self._response_assembler = ResponseAssembler()
-        if not hasattr(self, "_runner"):
-            self._runner = ExecutionRunner(
-                graph=self.graph,
-                session=session,
-            )
-        else:
-            self._runner.graph = self.graph
-            self._runner.session = session
 
     @property
     def messages(self) -> list[Any]:
-        return self._ensure_session().messages
+        return self.session.messages
 
     @messages.setter
     def messages(self, value: list[Any]) -> None:
-        self._ensure_session().messages = list(value or [])
+        self.session.messages = list(value or [])
 
     @property
     def memory_summary(self) -> str | None:
-        return self._ensure_session().memory_summary
+        return self.session.memory_summary
 
     @memory_summary.setter
     def memory_summary(self, value: str | None) -> None:
-        self._ensure_session().memory_summary = value
+        self.session.memory_summary = value
 
     @property
     def session_metadata(self) -> SessionMetadata:
-        return self._ensure_session().session_metadata
+        return self.session.session_metadata
 
     @session_metadata.setter
     def session_metadata(self, value: SessionMetadata | dict[str, Any] | None) -> None:
-        self._ensure_session().session_metadata = parse_session_metadata(value)
+        self.session.session_metadata = parse_session_metadata(value)
 
     @property
     def upload_retriever_handle(self):
-        return self._ensure_session().upload_retriever_handle
+        return self.session.upload_retriever_handle
 
     def set_session_metadata(self, session_metadata: SessionMetadata | None) -> None:
-        self._ensure_session().set_session_metadata(session_metadata)
+        self.session.set_session_metadata(session_metadata)
 
     def close(self) -> None:
-        self._ensure_session().close()
-
-    def _conversation_memory_policy(self) -> ConversationMemoryPolicy:
-        settings = getattr(self, "settings", None)
-        if isinstance(settings, AppSettings):
-            return settings.conversation_memory_policy()
-        return ConversationMemoryPolicy()
+        self.session.close()
 
     @staticmethod
     def _resolve_response_memory_summary(
@@ -256,8 +232,6 @@ class AgentFlowManager:
         *,
         progress_emitter: ProgressEmitter | None = None,
     ) -> dict[str, Any]:
-        self._ensure_components()
-
         flow_started = time.perf_counter()
         try:
             validate_query_text(user_input)
@@ -277,7 +251,7 @@ class AgentFlowManager:
         response: dict[str, Any] | None = None
         graph_total_ms: int | None = None
         try:
-            previous_memory = self._ensure_session().snapshot_conversation_memory()
+            previous_memory = self.session.snapshot_conversation_memory()
             state = self._runner.prepare_graph_state(
                 user_input,
                 progress_emitter=progress_emitter,
@@ -321,10 +295,10 @@ class AgentFlowManager:
             durable_memory = build_durable_conversation_memory(
                 updated_messages,
                 memory_summary=candidate_summary,
-                policy=self._conversation_memory_policy(),
+                policy=self.settings.conversation_memory_policy(),
                 canonical_assistant_text=canonical_text,
             )
-            self._ensure_session().commit_conversation_memory(
+            self.session.commit_conversation_memory(
                 messages=durable_memory.messages,
                 memory_summary=durable_memory.memory_summary,
                 user_turns=final_runtime.user_turns,
@@ -340,16 +314,16 @@ class AgentFlowManager:
                 and contract.actions.save_text.intent == "requested"
                 and final_response_state.kind == "failure"
             )
-            self._ensure_session().commit_response_state(
+            self.session.commit_response_state(
                 response=final_response_state.result,
                 response_kind=final_response_state.kind,
                 displayed_partial=assembled_response["status"] == "partial" and not export_failed,
                 pending_action=final_runtime.pending_action,
             )
-            self._ensure_session().answer_export_operations.update(final_runtime.answer_export_operations)
+            self.session.answer_export_operations.update(final_runtime.answer_export_operations)
             if (not export_failed and assembled_response["response"] is not None
                     and final_response_state.result.content.blocks):
-                assembled_response["answer_id"] = self._ensure_session().register_answer(final_response_state.result)
+                assembled_response["answer_id"] = self.session.register_answer(final_response_state.result)
             return assembled_response
 
         except Exception as exc:

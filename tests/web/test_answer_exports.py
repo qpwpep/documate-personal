@@ -20,6 +20,7 @@ from src.infra.saved_artifacts import ArtifactError
 from src.infra.settings import AppSettings
 from src.infra.tools.save_text import build_save_text_tool
 from src.runtime.agent_runtime.session_context import SessionContext
+from tests.core.helpers import SequentialGraph
 from tests.core.test_answer_validation import _evidence
 from tests.core.test_pending_action_delivery import _ConsumerGraph, _contract, _manager
 from tests.core.test_exact_answer_export import checked_source, export_graph
@@ -33,10 +34,10 @@ def exports(tmp_path, monkeypatch):
 
     def manager():
         session = SessionContext()
-        return SimpleNamespace(_ensure_session=lambda: session, close=session.close)
+        return SimpleNamespace(session=session, close=session.close)
 
     store = InMemorySessionStore(settings=settings, agent_factory=manager)
-    session = store.get_or_create("export-session")._ensure_session()
+    session = store.get_or_create("export-session").session
     evidence = _evidence("regional = df.groupby('region')['amount'].sum()")
     original = finalize_answer(
         text_document(evidence.excerpt, basis="excerpt", refs=[evidence.id]), [evidence],
@@ -176,7 +177,7 @@ def test_natural_language_failure_direct_retry_and_natural_repeat_share_one_file
     monkeypatch.setattr("src.app.web.routes.get_save_text_output_dir", lambda: tmp_path)
     manager = _manager(export_graph())
     original = checked_source()
-    manager._ensure_session().previous_response = original
+    manager.session.previous_response = original
     real_link = saved_artifacts.os.link
 
     def unavailable_payload(source, destination):
@@ -191,7 +192,7 @@ def test_natural_language_failure_direct_retry_and_natural_repeat_share_one_file
     assert failed["problem"]["code"] == "save_failed"
     assert failed["response"]["actions"][0]["status"] == "error"
     assert failed["answer_id"]
-    assert manager._ensure_session().pending_action is not None
+    assert manager.session.pending_action is not None
     store = InMemorySessionStore(settings=manager.settings, agent_factory=lambda: manager)
     store.get_or_create("flow-session")
     app = FastAPI()
@@ -200,7 +201,7 @@ def test_natural_language_failure_direct_retry_and_natural_repeat_share_one_file
     with TestClient(app) as client:
         direct = client.post(f"/sessions/flow-session/answers/{failed['answer_id']}/save").json()
         assert direct["status"] == "completed"
-        assert manager._ensure_session().pending_action is None
+        assert manager.session.pending_action is None
         repeated = manager.run_agent_flow("방금 답변을 출처와 함께 txt 파일로 저장해줘")
         assert repeated["status"] == "completed"
         receipts = [item["response"]["actions"][0] for item in (failed, direct, repeated)]
@@ -265,8 +266,10 @@ def test_compose_save_recovery_keeps_binding_across_direct_and_natural_exports(t
 
     monkeypatch.setattr("src.infra.tools.save_text.get_save_text_output_dir", lambda: tmp_path)
     monkeypatch.setattr("src.app.web.routes.get_save_text_output_dir", lambda: tmp_path)
-    manager = _manager(_ConsumerGraph([_contract(save="requested")], ["원래 생성 답변"],
-                                     build_save_text_tool(), None))
+    manager = _manager(SequentialGraph(
+        _ConsumerGraph([_contract(save="requested")], ["원래 생성 답변"], build_save_text_tool(), None),
+        export_graph(), export_graph(),
+    ))
     real_link = saved_artifacts.os.link
 
     def unavailable_payload(source, destination):
@@ -291,7 +294,6 @@ def test_compose_save_recovery_keeps_binding_across_direct_and_natural_exports(t
             direct = client.post(url).json()
             assert direct["status"] == "completed"
             assert direct["response"]["actions"][0]["operation"] == original_operation
-        manager.graph = export_graph()
         repeated = manager.run_agent_flow("방금 답변을 그대로 저장해줘")
         assert repeated["status"] == "completed"
         assert repeated["response"]["actions"][0]["operation"] == original_operation

@@ -92,7 +92,7 @@ def test_provider_schema_rejection_preserves_session_without_committing_an_answe
         session_id = "schema-failure-delivery"
         client = AgentSessionClient(AgentRequestContext(fastapi_url=endpoint, session_id=session_id))
         manifest = client.refresh_uploads()
-        session = server_app.state.session_store.get_or_create(session_id)._ensure_session()
+        session = server_app.state.session_store.get_or_create(session_id).session
         before = session.snapshot_conversation_memory()
 
         events = list(client.stream("pandas merge 사용법을 공식 문서 기준으로 설명해줘"))

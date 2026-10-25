@@ -134,11 +134,10 @@ class _ConsumerGraph:
 
 
 def _manager(graph):
-    manager = AgentFlowManager.__new__(AgentFlowManager)
-    manager.settings = AppSettings(_env_file=None, openai_api_key="test-key", tavily_api_key="test-key")
-    manager.graph = graph
-    manager.messages = []
-    return manager
+    return AgentFlowManager(
+        settings=AppSettings(_env_file=None, openai_api_key="test-key", tavily_api_key="test-key"),
+        graph=graph,
+    )
 
 
 def test_separate_task_discards_the_pending_action(delivery_tools):
@@ -148,11 +147,11 @@ def test_separate_task_discards_the_pending_action(delivery_tools):
         _contract(slack="requested"), _contract(), _contract(),
     ], ["원 본문", "새 작업의 답변", "독립 답변"], save, slack))
     manager.run_agent_flow("이 내용을 Slack으로 보내줘")
-    assert manager._ensure_session().pending_action is not None
+    assert manager.session.pending_action is not None
 
     second = manager.run_agent_flow("다른 주제를 설명해줘")
     assert export_answer_text(AnswerResponse.model_validate(second["response"])) == "새 작업의 답변"
-    assert manager._ensure_session().pending_action is None
+    assert manager.session.pending_action is None
     manager.run_agent_flow("C123")
 
     assert messages == []

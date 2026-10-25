@@ -54,14 +54,14 @@ class UploadService:
         session_id = validate_session_id(session_id)
         with self.session_store.locked_session(session_id) as (entry, _wait_ms):
             self._cleanup_staging(session_id)
-            session = entry.agent._ensure_session()
+            session = entry.agent.session
             self._cleanup_resources(session_id, session)
             return session.upload_manifest()
 
     def sync(self, session_id: str, request: UploadSyncRequest) -> UploadManifest:
         session_id = validate_session_id(session_id)
         with self.session_store.locked_session(session_id) as (entry, _wait_ms):
-            session = entry.agent._ensure_session()
+            session = entry.agent.session
             if request.epoch != session.upload_epoch:
                 raise _error(409, "UPLOAD_REVISION_CONFLICT", "세션이 만료되었습니다. 목록을 새로고침해 주세요.")
             self._cleanup_staging(session_id, protected_paths=tuple(item.path for item in request.add))

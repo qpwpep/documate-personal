@@ -11,6 +11,7 @@ from src.core.contracts import ResponseState
 from src.core.answer_schema import AnswerResponse, finalize_answer, text_document
 from src.infra.settings import AppSettings
 from src.runtime.nodes.session import add_user_message
+from tests.core.helpers import SequentialGraph
 
 
 def _response(answer: str) -> ResponseState:
@@ -51,31 +52,27 @@ class _InvalidRuntimeGraph(_RollingSummaryGraph):
 
 
 def _make_manager(graph) -> AgentFlowManager:
-    manager = AgentFlowManager(settings=AppSettings(
+    return AgentFlowManager(settings=AppSettings(
         _env_file=None,
         openai_api_key="test-key",
         tavily_api_key="test-key",
-    ))
-    manager.graph = graph
-    return manager
+    ), graph=graph)
 
 
 class ConversationMemoryLifecycleTest(unittest.TestCase):
     def test_invalid_returned_runtime_preserves_conversation_and_previous_answer(self) -> None:
         """잘못된 반환 runtime은 대화 기록 일부만 새 요청으로 교체하지 않는다."""
         graph = _RollingSummaryGraph()
-        manager = _make_manager(graph)
+        manager = _make_manager(SequentialGraph(graph, _InvalidRuntimeGraph(), graph))
         previous = AnswerResponse.model_validate(manager.run_agent_flow("stable request")["response"])
         before = deepcopy(manager.messages)
         summary = manager.memory_summary
-        manager.graph = _InvalidRuntimeGraph()
 
         result = manager.run_agent_flow("new request")
 
         self.assertEqual(result["debug"]["observability_status"], "failed")
         self.assertEqual(manager.messages, before)
         self.assertEqual(manager.memory_summary, summary)
-        manager.graph = graph
         manager.run_agent_flow("continue")
         self.assertEqual(graph.states[1]["runtime"].previous_response, previous)
         self.assertEqual(graph.states[1]["messages"], before)

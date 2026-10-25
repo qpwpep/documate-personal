@@ -17,7 +17,7 @@ from src.runtime.nodes.retrieval import make_retrieve_dispatch_node
 from src.runtime.nodes.session import add_user_message, make_summarize_node
 from src.runtime.nodes.synthesis import make_synthesize_node
 from src.runtime.nodes.validation import make_post_synthesis_validation_node, make_pre_synthesis_validation_node
-from tests.core.helpers import make_decisions_client
+from tests.core.helpers import SequentialGraph, make_decisions_client
 from tests.core.test_decisions_validation import _state
 from tests.core.test_pending_action_delivery import _manager
 from tests.synthesis_fixtures import synthesis_excerpt_limits
@@ -137,18 +137,17 @@ def test_export_does_not_rejudge_whether_existing_body_can_be_prepared(tmp_path,
 def test_export_failure_feedback_does_not_replace_target_of_a_followup_retry(tmp_path, monkeypatch):
     monkeypatch.setattr("src.infra.tools.save_text.get_save_text_output_dir", lambda: tmp_path)
     source = checked_source()
-    manager = _manager(export_graph(semantic_constraint=True))
-    manager._ensure_session().previous_response = source.model_copy(deep=True)
+    manager = _manager(SequentialGraph(export_graph(semantic_constraint=True), export_graph()))
+    manager.session.previous_response = source.model_copy(deep=True)
 
     failed = manager.run_agent_flow("방금 답변이 새 조건을 충족하면 출처와 함께 저장해줘")
 
     assert failed["status"] == "failed"
     assert failed["answer_id"] is None
-    assert manager._ensure_session().previous_response == source
-    assert manager._ensure_session().pending_action is None
+    assert manager.session.previous_response == source
+    assert manager.session.pending_action is None
     assert list(tmp_path.glob("*.txt")) == []
 
-    manager.graph = export_graph()
     retried = manager.run_agent_flow("방금 답변을 출처와 함께 txt 파일로 저장해줘")
     assert retried["status"] == "completed"
     assert retried["answer_id"] is not None
@@ -160,10 +159,10 @@ def test_failed_transformation_save_keeps_original_answer_as_retry_target(tmp_pa
     monkeypatch.setattr("src.infra.tools.save_text.get_save_text_output_dir", lambda: tmp_path)
     source = checked_source()
     manager = _manager(export_graph(transform=True))
-    manager._ensure_session().previous_response = source.model_copy(deep=True)
+    manager.session.previous_response = source.model_copy(deep=True)
     failed = manager.run_agent_flow("방금 답변을 요약해서 출처와 함께 저장해줘")
     assert failed["status"] == "partial"
     assert failed["answer_id"] is None
-    assert manager._ensure_session().previous_response == source
-    assert manager._ensure_session().pending_action.response == source
+    assert manager.session.previous_response == source
+    assert manager.session.pending_action.response == source
     assert list(tmp_path.glob("*.txt")) == []
