@@ -11,6 +11,7 @@ from src.app.client import (
     UploadAPIError,
 )
 from src.app.web.streamlit_chat import process_chat_prompt, render_chat_history
+from src.app.web.streamlit_browser_state import edit_question, render_browser_state, restore_composer
 from src.app.web.streamlit_conversations import render_conversation_notice
 from src.app.web.streamlit_requests import (
     ChatSubmission, SaveSubmission, UploadSubmission, discard_saved_prompt,
@@ -61,6 +62,7 @@ def main() -> None:
     warn_if_utf8_mode_disabled_once()
     ensure_session_state(logger)
     conversation = get_conversation()
+    render_browser_state(conversation)
     if get_upload_manifest() is None and get_pending_upload() is None and not conversation.is_read_only:
         validate_conversation(conversation)
     if conversation.followup_prompt and not conversation.saved_prompt:
@@ -92,11 +94,19 @@ def main() -> None:
 
     session_path = get_session_path()
     messages = get_messages()
-    selected_prompt = render_intro(DEFAULT_DOCS) if len(messages) <= 1 and not busy and not conversation.is_read_only and not conversation.saved_prompt else None
+    if (not messages and not busy and not conversation.is_read_only
+            and not conversation.saved_prompt and pending_upload is None and manifest is not None):
+        render_intro(DEFAULT_DOCS, has_uploads=bool(manifest.files))
     render_chat_history(
         messages, SETTINGS.fastapi_url, on_save=lambda answer_id: queue_save(conversation, answer_id),
         actions_disabled=busy or conversation.is_read_only,
+        on_retry=(lambda prompt: queue_chat(conversation, prompt)) if not pending_upload and not conversation.saved_prompt else None,
+        on_edit=(lambda prompt: edit_question(conversation, prompt)) if not pending_upload and not conversation.saved_prompt else None,
     )
+    if conversation.is_read_only or queued is not None or pending_upload is not None or conversation.saved_prompt or manifest is None:
+        # The native widget disappears on these screens; its next instance
+        # needs the independently retained text, including after reconnection.
+        conversation.draft.needs_restore = True
     if conversation.is_read_only:
         render_conversation_notice()
         return
@@ -148,6 +158,7 @@ def main() -> None:
     suffixes = enabled_upload_suffixes(docling_enabled=getattr(SETTINGS, "docling_enabled", False))
     st.caption(f"{' · '.join(sorted(suffixes))} / 최대 {SETTINGS.upload_max_files}개 / 파일당 {SETTINGS.upload_max_file_mib} MiB / 전체 {SETTINGS.upload_max_total_mib} MiB")
 
+    restore_composer(conversation)
     chat_submission = st.chat_input(
         "공식 문서나 업로드한 자료에 대해 질문하세요",
         accept_file="multiple",
@@ -156,7 +167,9 @@ def main() -> None:
         key=conversation.widget_key("chat_input"),
     )
     typed_prompt, attached_files = _split_chat_submission(chat_submission)
-    prompt = typed_prompt or selected_prompt
+    if chat_submission is not None:
+        conversation.draft.consume()
+    prompt = typed_prompt
     if attached_files:
         staged = _stage_files(attached_files, session_path)
         if staged.errors:
@@ -222,6 +235,7 @@ def _execute_submission(conversation: Conversation, submission: ChatSubmission |
         )
     finally:
         conversation.operation_in_progress = False
+        conversation.draft.needs_restore = True
 
 
 def _stage_files(files: list[Any], session_path: Path):

@@ -14,7 +14,7 @@ from src.infra.settings import get_settings
 from src.app.client import AgentRequestContext, AgentSessionClient, UploadAPIError
 from src.app.uploads import StagedUpload
 from src.app.web.streamlit_theme import THEME_STATE_KEY
-from src.core.answer_schema import finalize_answer, text_document
+from src.app.web.composer_draft import ComposerDraft
 from src.core.contracts.outcome import AnswerExportResult, TurnResult
 from src.core.uploads import UploadManifest, UploadSyncRequest
 
@@ -76,8 +76,8 @@ class Conversation:
     messages: list[ChatMessage] = field(default_factory=list)
     pending_upload: PendingUpload | None = None
     saved_prompt: str | None = None
+    draft: ComposerDraft = field(default_factory=ComposerDraft)
     followup_prompt: str | None = None
-    quick_prompts: list[str] = field(default_factory=list)
     slack_drafts: dict[str, str] = field(default_factory=dict)
     pending_request: Any | None = None
     operation_in_progress: bool = False
@@ -189,6 +189,7 @@ def switch_conversation(conversation_id: str) -> bool:
     _remember_manifest(current)
     _pause_automatic_work(target)
     st.session_state["active_conversation_id"] = target.id
+    target.draft.needs_restore = True
     validate_conversation(target)
     return True
 
@@ -248,20 +249,7 @@ def _start_new_session(logger: logging.Logger, event_name: str) -> None:
         client=AgentSessionClient(AgentRequestContext(
             fastapi_url=get_settings().fastapi_url, session_id=session_id,
         )),
-        messages=[_build_default_assistant_message()],
     )
     st.session_state["conversations"][session_id] = conversation
     st.session_state["active_conversation_id"] = session_id
     log_event(logger, logging.INFO, event_name, session_id=session_id[:8])
-
-
-def _build_default_assistant_message() -> ChatMessage:
-    return {
-        "role": "assistant",
-        "result": TurnResult(
-            response=finalize_answer(
-                text_document("안녕하세요. 공식 문서에 대해 질문하거나 코드 파일을 첨부해 주세요."),
-                [],
-            ),
-        ),
-    }

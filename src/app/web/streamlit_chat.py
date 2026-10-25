@@ -12,6 +12,7 @@ from src.app.web.streamlit_state import AssistantChatMessage, ChatMessage
 from src.core.answer_schema import AnswerResponse, ContentUnit, SemanticCheck, iter_content_units
 from src.core.answer_schema.rendering import code_display_label, inline_code_markdown
 from src.core.contracts.outcome import TurnResult
+from src.core.llm_errors import ExecutionProblem
 
 
 _DEFAULT_ERROR_MESSAGE = "응답을 받지 못했습니다."
@@ -30,6 +31,7 @@ _STAGE_MESSAGES = {
 
 def render_chat_history(
     messages: list[ChatMessage], fastapi_url: str, *, on_save: Callable[[str], None] | None = None,
+    on_retry: Callable[[str], None] | None = None, on_edit: Callable[[str], None] | None = None,
     actions_disabled: bool = False,
 ) -> None:
     for index, message in enumerate(messages):
@@ -67,39 +69,92 @@ def render_chat_history(
                                   disabled=actions_disabled, on_click=on_save, args=(result.answer_id,))
                 elif message.get("request_id"):
                     st.caption(f"오류 식별자: {message['request_id']}")
+                if index == len(messages) - 1 and index > 0 and messages[index - 1]["role"] == "user":
+                    _render_question_recovery(
+                        message, messages[index - 1]["content"], index=index,
+                        on_retry=on_retry, on_edit=on_edit, disabled=actions_disabled,
+                    )
+
+
+def _render_question_recovery(
+    message: AssistantChatMessage, prompt: str, *, index: int,
+    on_retry: Callable[[str], None] | None, on_edit: Callable[[str], None] | None,
+    disabled: bool,
+) -> None:
+    result = message["result"]
+    if result is not None:
+        if result.status not in {"failed", "partial"}:
+            return
+        # Delivery receipts have their own recovery path. Replaying the whole
+        # utterance could repeat a file save or a Slack delivery that already ran.
+        if result.problem.code == "save_failed" or (result.response is not None and result.response.actions):
+            return
+    can_retry = (
+        result is not None
+        and result.problem.next_action in {"retry_later", "supply_information"}
+        and result.problem.stage not in {"action_postprocess", "response_assembly"}
+    )
+    if result is None and on_edit is not None:
+        st.caption("처리 결과를 확인하지 못했습니다. 저장·전송을 요청했다면 완료 여부를 확인한 뒤 질문을 수정해 주세요.")
+    request_id = result.request_id if result is not None else message.get("request_id", "")
+    recovery_key = f"{index}_{request_id}"
+    with st.container(horizontal=True):
+        if can_retry and on_retry is not None:
+            st.button("같은 질문 다시 보내기", key=f"retry_question_{recovery_key}",
+                      disabled=disabled, on_click=on_retry, args=(prompt,))
+        if on_edit is not None:
+            st.button("질문 수정", key=f"edit_question_{recovery_key}",
+                      disabled=disabled, on_click=on_edit, args=(prompt,))
 
 
 def render_turn_result(result: TurnResult, fastapi_url: str) -> None:
     """Keep failures and questions separate from checked answer content."""
+    partial_body = (result.status == "partial" and result.problem.code != "save_failed"
+                    and result.problem.stage != "action_postprocess")
     if result.status == "needs_input":
         st.info(result.message)
+    elif partial_body:
+        guidance = _problem_guidance(result.problem)
+        st.warning("**부분 답변** · 요청 전체를 완성하지 못했습니다."
+                   + (f"\n\n{guidance}" if guidance else ""))
     elif result.problem is not None:
         render = st.error if result.status == "failed" else st.warning
         render(result.problem.message)
-        guidance = {
-            "none": "",
-            "retry_later": "잠시 후 같은 요청으로 다시 시도할 수 있습니다.",
-            "fix_configuration": "서비스 설정을 수정해야 합니다. 오류 식별자를 운영자에게 알려 주세요.",
-            "supply_information": "확인에 필요한 자료나 조건을 추가해 주세요.",
-        }[result.problem.next_action]
-        if result.problem.retry_after_seconds is not None:
-            guidance = f"{result.problem.retry_after_seconds:g}초 후 다시 시도할 수 있습니다."
+        guidance = _problem_guidance(result.problem)
         if guidance:
             st.caption(guidance)
-    if result.request_id and result.status != "completed":
+    if result.request_id and result.status != "completed" and not partial_body:
         label = "요청 식별자" if result.status == "needs_input" else "오류 식별자"
         st.caption(f"{label}: {result.request_id}")
     if result.response is not None:
-        render_answer_response(result.response, fastapi_url, turn_incomplete=result.status == "partial")
+        render_answer_response(
+            result.response, fastapi_url, turn_incomplete=result.status == "partial",
+            partial_problem=result.problem if partial_body else None,
+            request_id=result.request_id if partial_body else "",
+        )
 
 
-def render_answer_response(response: AnswerResponse, fastapi_url: str, *, turn_incomplete: bool = False) -> None:
+def _problem_guidance(problem: ExecutionProblem) -> str:
+    if problem.retry_after_seconds is not None:
+        return f"{problem.retry_after_seconds:g}초 후 다시 시도할 수 있습니다."
+    return {
+        "none": "",
+        "retry_later": "잠시 후 같은 요청으로 다시 시도할 수 있습니다.",
+        "fix_configuration": "서비스 설정을 수정해야 합니다. 오류 식별자를 운영자에게 알려 주세요.",
+        "supply_information": "확인에 필요한 자료나 조건을 추가해 주세요.",
+    }[problem.next_action]
+
+
+def render_answer_response(
+    response: AnswerResponse, fastapi_url: str, *, turn_incomplete: bool = False,
+    partial_problem: ExecutionProblem | None = None, request_id: str = "",
+) -> None:
     response = AnswerResponse.model_validate(response.model_dump(mode="json"))
     citations = {citation.evidence.id: citation for citation in response.citations}
     checks = {check.unit_id: check for check in response.checks}
-    for issue in response.issues:
-        if issue.unit_id is None:
-            st.warning(f"답변에 기록된 한계: {issue.message}")
+    global_issues = [issue for issue in response.issues if issue.unit_id is None]
+    if global_issues and partial_problem is None:
+        st.warning("이 답변에는 한계가 기록되어 있습니다. 아래 ‘답변의 한계와 처리 정보’를 확인해 주세요.")
 
     for index, block in enumerate(response.content.blocks):
         prefix = f"b{index}."
@@ -126,10 +181,14 @@ def render_answer_response(response: AnswerResponse, fastapi_url: str, *, turn_i
             rows = ["| " + " | ".join(_table_cell(unit, citations) for unit in row) + " |" for row in block.rows]
             st.markdown("\n".join([header, separator, *rows]))
 
-        paths = {path for path, _ in units}
-        for issue in response.issues:
-            if issue.unit_id in paths:
-                st.warning(f"답변에 기록된 한계: {issue.message}")
+        unit_by_path = dict(units)
+        unit_issues = [issue for issue in response.issues if issue.unit_id in unit_by_path]
+        if unit_issues:
+            with st.expander(f"이 내용의 한계 ({len(unit_issues)}개)"):
+                for issue in unit_issues:
+                    preview = " ".join(unit_by_path[issue.unit_id].text.split())
+                    st.caption("관련 내용: " + (preview[:117] + "…" if len(preview) > 120 else preview))
+                    st.warning(f"답변에 기록된 한계: {issue.message}")
         for path, unit in units:
             check = checks.get(path)
             if check is not None and check.reference_status == "missing":
@@ -138,6 +197,14 @@ def render_answer_response(response: AnswerResponse, fastapi_url: str, *, turn_i
                 st.warning("이 인용문은 보관한 원문과 일치하지 않습니다.")
         _render_citations([unit for _, unit in units], citations)
 
+    if global_issues or partial_problem is not None:
+        with st.expander("답변의 한계와 처리 정보"):
+            if partial_problem is not None:
+                st.markdown(partial_problem.message)
+            for issue in global_issues:
+                st.warning(f"답변에 기록된 한계: {issue.message}")
+            if request_id:
+                st.caption(f"오류 식별자: {request_id}")
     _render_validation_scope(response, turn_incomplete=turn_incomplete)
     render_action_receipts(response, fastapi_url)
 

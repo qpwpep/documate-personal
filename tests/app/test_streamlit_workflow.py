@@ -38,6 +38,8 @@ class RequestsObserved(list):
         self.exports = []
         self.export_failure = None
         self.natural_save_failure = False
+        self.failure_code = None
+        self.upload_files = []
 
 
 @pytest.fixture
@@ -56,7 +58,7 @@ def chat_http(monkeypatch, tmp_path):
         result.request = request
         result.url = request.url
         if request.method == "GET" and path.endswith("/uploads"):
-            manifest = {"epoch": "epoch-" + path.split("/")[2], "revision": 0, "files": []}
+            manifest = {"epoch": "epoch-" + path.split("/")[2], "revision": 0, "files": submissions.upload_files}
             result._content = json.dumps(manifest).encode()
         elif request.method == "POST" and path == "/agent/stream":
             payload = json.loads(request.body)
@@ -70,6 +72,13 @@ def chat_http(monkeypatch, tmp_path):
                 "upload_manifest": {"epoch": "epoch-" + payload["session_id"], "revision": 0, "files": []},
                 "request_id": f"test-request-{len(submissions)}",
             }
+            if submissions.failure_code:
+                from src.core.llm_errors import make_problem
+
+                final.update(
+                    status="failed", response=None, answer_id=None,
+                    problem=make_problem(submissions.failure_code, "pre_synthesis_validation").model_dump(mode="json"),
+                )
             if submissions.natural_save_failure:
                 source = answers["answer-1"]
                 operation = build_answer_export_operation(source, session_id=payload["session_id"])
@@ -102,6 +111,81 @@ def chat_http(monkeypatch, tmp_path):
 
     monkeypatch.setattr(requests.adapters.HTTPAdapter, "send", send)
     return submissions
+
+
+def test_new_conversation_guides_input_without_presenting_a_verified_answer(chat_http):
+    app = AppTest.from_file(APP, default_timeout=10).run()
+
+    assert not app.exception
+    assert not app.chat_message
+    assert not any(item.label == "근거 확인 범위" for item in app.expander)
+    assert any("파일을 첨부" in item.value for item in app.markdown)
+    assert not chat_http
+
+
+def test_suggested_question_prefills_then_sends_only_on_explicit_submission(chat_http):
+    app = AppTest.from_file(APP, default_timeout=10).run()
+    suggestion = next(item for item in app.button if "quick_prompt_" in (item.key or ""))
+    prompt = suggestion.label
+    suggestion.click().run()
+
+    assert not app.exception
+    assert not chat_http
+    assert not app.chat_message
+    assert app.chat_input[0].proto.value == prompt
+    app.chat_input[0].set_value(prompt).run()
+    app.run()
+    assert [item["query"] for item in chat_http] == [prompt]
+    assert any("답변: " + prompt in item.value for item in app.markdown)
+
+
+def test_examples_are_stable_and_require_confirmed_attachments(chat_http):
+    app = AppTest.from_file(APP, default_timeout=10).run()
+    initial = [item.label for item in app.button if "quick_prompt_" in (item.key or "")]
+    assert len(initial) == 4
+    assert not any(word in prompt for prompt in initial for word in ("첨부", "업로드", "방금", "Slack", "저장"))
+    app.button(key="documate_new_chat").click().run()
+    assert [item.label for item in app.button if "quick_prompt_" in (item.key or "")] == initial
+
+    chat_http.upload_files = [{
+        "file_id": "sample", "name": "sample.py", "size_bytes": 10,
+        "content_hash": "sha256:" + "a" * 64, "source_uri": "upload:///sample.py",
+    }]
+    next(item for item in app.button if item.label == "첨부 목록 새로고침").click().run()
+    with_files = [item.label for item in app.button if "quick_prompt_" in (item.key or "")]
+    assert any("첨부한 자료" in prompt for prompt in with_files)
+    assert not any(word in prompt for prompt in with_files for word in ("방금", "Slack", "저장"))
+    assert not app.exception
+    assert not chat_http
+
+
+def test_suggestion_does_not_replace_a_draft_received_during_the_click(chat_http):
+    app = AppTest.from_file(APP, default_timeout=10).run()
+    suggestion = next(item for item in app.button if "quick_prompt_" in (item.key or ""))
+    conversation = app.session_state["conversations"][app.session_state["active_conversation_id"]]
+    text = "  작성하던 질문\n두 번째 줄  "
+    conversation.draft.record(text, revision=conversation.draft.revision)
+    suggestion.click().run()
+
+    assert not app.exception
+    assert conversation.draft.text == text
+    assert not chat_http
+    assert all(item.disabled for item in app.button if "quick_prompt_" in (item.key or ""))
+    assert any("작성 중인 질문" in item.value for item in app.caption)
+
+
+def test_examples_are_hidden_while_attachment_changes_need_confirmation(chat_http):
+    from src.app.web.streamlit_state import PendingUpload
+
+    app = AppTest.from_file(APP, default_timeout=10).run()
+    conversation = app.session_state["conversations"][app.session_state["active_conversation_id"]]
+    conversation.pending_upload = PendingUpload(
+        base_manifest=conversation.client.manifest, clear=True, requires_confirmation=True,
+    )
+    app.run()
+    assert not app.exception
+    assert not any("quick_prompt_" in (item.key or "") for item in app.button)
+    assert not chat_http
 
 
 def test_incomplete_slack_setting_does_not_block_regular_question(chat_http):
@@ -141,6 +225,129 @@ def test_completed_answer_offers_direct_txt_save(chat_http):
     assert any(item.label == "TXT 저장" for item in app.button)
 
 
+@pytest.mark.parametrize("failure_code", ["evidence_insufficient", "model_output_invalid"])
+def test_failed_question_can_be_retried_once_without_retyping(chat_http, failure_code):
+    chat_http.failure_code = failure_code
+    app = AppTest.from_file(APP, default_timeout=10).run()
+    app.chat_input[0].set_value("공식 문서에서 append의 반환값을 설명해줘").run()
+    assert not app.exception
+    assert app.error
+
+    retry = next(item for item in app.button if item.label == "같은 질문 다시 보내기")
+    chat_http.failure_code = None
+    retry.click().run()
+
+    assert not app.exception
+    assert [item["query"] for item in chat_http] == ["공식 문서에서 append의 반환값을 설명해줘"] * 2
+    assert any("답변: 공식 문서에서 append의 반환값을 설명해줘" in item.value for item in app.markdown)
+    assert not any(item.label == "같은 질문 다시 보내기" for item in app.button)
+    app.run()
+    assert len(chat_http) == 2
+
+
+def test_only_latest_failed_question_offers_recovery(chat_http):
+    chat_http.failure_code = "evidence_insufficient"
+    app = AppTest.from_file(APP, default_timeout=10).run()
+    app.chat_input[0].set_value("첫 번째 실패 질문").run()
+    app.chat_input[0].set_value("두 번째 실패 질문").run()
+
+    retries = [item for item in app.button if item.label == "같은 질문 다시 보내기"]
+    assert len(retries) == 1
+    retries[0].click().run()
+    assert not app.exception
+    assert [item["query"] for item in chat_http] == ["첫 번째 실패 질문", "두 번째 실패 질문", "두 번째 실패 질문"]
+
+
+def test_editing_failed_question_prefills_without_sending_then_submits_the_revision_once(chat_http):
+    chat_http.failure_code = "evidence_insufficient"
+    app = AppTest.from_file(APP, default_timeout=10).run()
+    original = "Python append와 extend를 설명해줘"
+    app.chat_input[0].set_value(original).run()
+
+    next(item for item in app.button if item.label == "질문 수정").click().run()
+
+    assert not app.exception
+    assert [item["query"] for item in chat_http] == [original]
+    assert app.chat_input[0].proto.value == original
+    chat_http.failure_code = None
+    revised = "Python 공식 문서에서 list.append만 설명해줘"
+    app.chat_input[0].set_value(revised).run()
+
+    assert not app.exception
+    assert [item["query"] for item in chat_http] == [original, revised]
+    assert any("답변: " + revised in item.value for item in app.markdown)
+    assert not any(item.label == "질문 수정" for item in app.button)
+    app.run()
+    assert len(chat_http) == 2
+
+
+def _recovery_view(messages):
+    app = AppTest.from_string('''
+import streamlit as st
+from src.app.web.streamlit_chat import render_chat_history
+
+def retry(prompt):
+    st.session_state["events"].append(("retry", prompt))
+
+def edit(prompt):
+    st.session_state["events"].append(("edit", prompt))
+
+render_chat_history(st.session_state["messages"], "http://localhost:8000", on_retry=retry, on_edit=edit)
+''', default_timeout=10)
+    app.session_state["messages"] = messages
+    app.session_state["events"] = []
+    app.run()
+    assert not app.exception
+    return app
+
+
+def test_interrupted_response_offers_edit_without_replaying_uncertain_request():
+    prompt = "정리한 내용을 Slack으로 보내줘"
+    app = _recovery_view([
+        {"role": "user", "content": prompt},
+        {"role": "assistant", "result": None, "transport_errors": ["연결이 끊겼습니다."]},
+    ])
+
+    assert not any(item.label == "같은 질문 다시 보내기" for item in app.button)
+    assert any("완료 여부를 확인" in item.value for item in app.caption)
+    next(item for item in app.button if item.label == "질문 수정").click().run()
+    assert app.session_state["events"] == [("edit", prompt)]
+    app.run()
+    assert app.session_state["events"] == [("edit", prompt)]
+
+
+@pytest.mark.parametrize("delivery_status", ["sent", "unknown"])
+def test_partial_answer_with_slack_receipt_does_not_offer_whole_request_replay(delivery_status):
+    from src.core.contracts.outcome import TurnResult
+    from src.core.llm_errors import make_problem
+    from src.core.slack_contract import SlackDelivery
+    from src.runtime.nodes.actions.receipts import build_slack_receipt
+
+    delivery = SlackDelivery.model_validate({
+        "intent": {"state": "explicit", "selector": {"kind": "channel", "value": "C12345678"}},
+        "selection": {"request_id": "request-1", "source": "user_text",
+                      "selector": {"kind": "channel", "value": "C12345678"}},
+        "target": {"channel_id": "C12345678"}, "status": delivery_status,
+        "message_ts": "1234.5678" if delivery_status == "sent" else None,
+        "failure": None if delivery_status == "sent" else {
+            "stage": "send", "code": "delivery_unknown", "message": "전달 여부를 확인해 주세요.",
+            "next_action": "verify_delivery",
+        },
+    })
+    answer = finalize_answer(text_document("확인된 답변"), [])
+    result = TurnResult(
+        status="partial", problem=make_problem("evidence_insufficient", "validation"),
+        response=answer.model_copy(update={"actions": [build_slack_receipt(delivery)]}),
+    )
+    app = _recovery_view([
+        {"role": "user", "content": "공식 문서를 정리하고 Slack으로 보내줘"},
+        {"role": "assistant", "result": result},
+    ])
+
+    assert not any(item.label in {"같은 질문 다시 보내기", "질문 수정"} for item in app.button)
+    assert app.session_state["events"] == []
+
+
 @pytest.mark.parametrize("failure", ["network", "http"])
 def test_save_failure_preserves_answer_and_retries_same_target_once(chat_http, failure):
     app = AppTest.from_file(APP, default_timeout=10).run()
@@ -174,6 +381,7 @@ def test_natural_save_failure_shows_only_latest_success_after_direct_retry(chat_
     assert not app.exception
     assert any("파일 저장 실패" in item.value for item in app.error)
     assert not any("server-private-path" in item.value for item in app.error)
+    assert not any(item.label in {"같은 질문 다시 보내기", "질문 수정"} for item in app.button)
     next(item for item in app.button if item.label == "저장 다시 시도").click().run()
     assert not app.exception
     assert not app.error

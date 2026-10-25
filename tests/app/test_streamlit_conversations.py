@@ -169,6 +169,23 @@ def test_failed_session_validation_keeps_history_and_offers_retry(conversation_h
     assert len(conversation_http["requests"]) == 1
 
 
+def test_reconnecting_restores_unsent_draft_without_sending_it(conversation_http):
+    app = AppTest.from_file(APP, default_timeout=10).run()
+    first = _first_id(conversation_http)
+    conversation = app.session_state["conversations"][first]
+    conversation.draft.record("연결 실패 전 작성한 질문", revision=0)
+    conversation_http["unavailable"].add(first)
+    next(item for item in app.button if item.label == "첨부 목록 새로고침").click().run()
+    assert not app.exception
+    assert not app.chat_input
+
+    conversation_http["unavailable"].remove(first)
+    next(item for item in app.button if item.label == "대화 연결 다시 확인").click().run()
+    assert not app.exception
+    assert app.chat_input[0].proto.value == "연결 실패 전 작성한 질문"
+    assert not conversation_http["requests"]
+
+
 def test_held_question_stays_in_its_conversation_until_explicit_send(conversation_http):
     app = AppTest.from_file(APP, default_timeout=10).run()
     first = _first_id(conversation_http)

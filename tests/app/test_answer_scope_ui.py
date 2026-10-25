@@ -6,8 +6,10 @@ from streamlit.testing.v1 import AppTest
 
 from src.core.answer_export import build_answer_export_operation
 from src.core.answer_schema import (
+    ActionReceipt,
     AnswerDocument,
     AnswerResponse,
+    ResponseIssue,
     SemanticCheck,
     SemanticValidation,
     finalize_answer,
@@ -16,6 +18,7 @@ from src.core.answer_schema import (
     text_document,
 )
 from src.core.contracts.outcome import TurnResult
+from src.core.llm_errors import make_problem
 from src.runtime.nodes.actions.receipts import build_save_receipt
 from tests.core.test_pending_action_delivery import delivery_tools
 from tests.core.test_answer_validation import _evidence
@@ -45,6 +48,59 @@ def _checked_answer():
     )})
 
 
+@pytest.mark.parametrize("with_held_delivery", [False, True])
+def test_partial_answer_keeps_one_summary_visible_and_preserves_limits_in_collapsed_details(with_held_delivery):
+    evidence = _evidence("확인한 문서 내용", source_type="official")
+    answer = finalize_answer(text_document("확인한 문서 내용", basis="source", refs=[evidence.id]), [evidence], issues=[
+        ResponseIssue(code="answer_incomplete", message="비교 요청 전체를 완성하지 못했습니다."),
+        ResponseIssue(code="retrieved_evidence_incomplete", message="첨부 코드의 동작은 확인하지 못했습니다."),
+        ResponseIssue(code="scope_limited", unit_id="b0.content.0", message="이 내용은 공식 문서 범위에 한정됩니다."),
+    ])
+    if with_held_delivery:
+        answer = answer.model_copy(update={"actions": [ActionReceipt(
+            kind="slack_notify", status="skipped", message="본문을 완성하지 못해 전송하지 않았습니다.",
+        )]})
+    result = TurnResult(status="partial", response=answer,
+                        problem=make_problem("evidence_insufficient", "validation"), request_id="partial-scope")
+
+    app = _render(result)
+
+    visible_warnings = [item for item in app.main.children.values() if item.type == "warning"]
+    assert len(visible_warnings) == 1
+    assert "부분 답변" in visible_warnings[0].value
+    assert "자료나 조건을 추가" in visible_warnings[0].value
+    assert any("확인한 문서 내용" in item.value for item in app.markdown)
+    details = next(item for item in app.expander if item.label == "답변의 한계와 처리 정보")
+    assert not details.proto.expanded
+    for issue in answer.issues[:2]:
+        assert any(issue.message in item.value for item in details.warning)
+    assert any(result.problem.message in item.value for item in details.markdown)
+    assert any("partial-scope" in item.value for item in details.caption)
+    unit_details = next(item for item in app.expander if item.label == "이 내용의 한계 (1개)")
+    assert not unit_details.proto.expanded
+    assert any(answer.issues[2].message in item.value for item in unit_details.warning)
+    assert any("확인한 문서 내용" in item.value for item in unit_details.caption)
+
+
+@pytest.mark.parametrize(("basis", "refs", "warning"), [
+    ("source", ["missing-source"], "이 내용에 연결된 근거를 찾지 못했습니다."),
+    ("excerpt", None, "이 인용문은 보관한 원문과 일치하지 않습니다."),
+])
+def test_source_integrity_warning_stays_visible_beside_affected_content(basis, refs, warning):
+    evidence = _evidence("자료의 실제 내용", source_type="official")
+    answer = finalize_answer(
+        text_document("주의가 필요한 내용", basis=basis, refs=refs or [evidence.id]), [evidence],
+        issues=[ResponseIssue(code="scope_limited", unit_id="b0.content.0", message="범위를 확인해 주세요.")],
+    )
+
+    app = _render(TurnResult(response=answer))
+
+    visible_warnings = [item.value for item in app.main.children.values() if item.type == "warning"]
+    assert warning in visible_warnings
+    assert any("주의가 필요한 내용" in item.value for item in app.markdown)
+    assert any(item.label == "이 내용의 한계 (1개)" for item in app.expander)
+
+
 def test_body_check_does_not_imply_completion_when_file_save_fails():
     answer = _checked_answer()
     operation = build_answer_export_operation(answer, session_id="scope-test")
@@ -65,6 +121,7 @@ def test_body_check_does_not_imply_completion_when_file_save_fails():
     assert not any(text.startswith("요청 충족:") for text in captions)
     assert any("파일 저장 실패" in item.value for item in app.error)
     assert any(item.value == "보존할 답변 본문" for item in app.markdown)
+    assert not any("부분 답변" in item.value for item in app.warning)
 
 
 def test_saving_a_partial_answer_keeps_body_limits_without_marking_new_request_incomplete(delivery_tools):
