@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 from copy import deepcopy
 
+import pytest
 from langchain_core.messages import AIMessage
 
 from src.app.agent_manager import AgentFlowManager
@@ -57,6 +58,31 @@ def _make_manager(graph) -> AgentFlowManager:
         openai_api_key="test-key",
         tavily_api_key="test-key",
     ), graph=graph)
+
+
+@pytest.mark.parametrize(("raw_trace", "planner_ms"), [
+    ([{"kind": "stage", "stage": "planner", "latency_ms": 120},
+      {"kind": "stage", "stage": "planner", "latency_ms": "broken"}], 120),
+    ("broken trace", 0),
+])
+def test_failed_request_reports_incomplete_latency_observations(raw_trace, planner_ms):
+    class FailingGraph(_RollingSummaryGraph):
+        def stream(self, state, *, stream_mode):
+            result = next(super().stream(state, stream_mode=stream_mode))
+            result["debug"] = {"latency_trace": raw_trace}
+            yield result
+            raise RuntimeError("request failed after collecting observations")
+
+    manager = _make_manager(FailingGraph())
+    result = manager.run_agent_flow("failed request")
+
+    assert result["status"] == "failed"
+    assert result["problem"]["code"] == "internal_error"
+    assert result["debug"]["observability_status"] == "failed"
+    assert "latency_breakdown" in result["debug"]["missing_required_debug_fields"]
+    assert "DEBUG_NORMALIZATION_FAILED" in result["debug"]["error_codes"]
+    assert result["debug"]["latency_breakdown"]["stage_totals_ms"]["planner_ms"] == planner_ms
+    assert manager.messages == []
 
 
 class ConversationMemoryLifecycleTest(unittest.TestCase):

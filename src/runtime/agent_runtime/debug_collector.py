@@ -201,6 +201,15 @@ class DebugCollector:
             if receipt.kind == "slack_notify" and receipt.slack is not None:
                 action_results["slack_notify"] = receipt.slack.model_dump(mode="json")
         action_results = action_results or None
+        latency_errors: list[str] = []
+        latency_breakdown = build_latency_breakdown(
+            raw_trace=state_debug.latency_trace,
+            errors=latency_errors,
+            graph_total_ms=graph_total_ms,
+        )
+        if latency_errors:
+            debug_errors.extend(latency_errors)
+            missing_required_debug_fields.append("latency_breakdown")
         error_codes = self._collect_error_codes(
             state_error_codes=list(state_debug.error_codes),
             retrieval_diagnostics=retrieval_diagnostics,
@@ -212,10 +221,6 @@ class DebugCollector:
             error_codes.append(state_response.problem.code)
         if missing_required_debug_fields and "DEBUG_NORMALIZATION_FAILED" not in error_codes:
             error_codes.append("DEBUG_NORMALIZATION_FAILED")
-        latency_breakdown = build_latency_breakdown(
-            raw_trace=[item for item in state_debug.latency_trace],
-            graph_total_ms=graph_total_ms,
-        )
         answer_provenance = None
         if state_response.body_kind is not None:
             answer_provenance = AnswerProvenance(

@@ -147,7 +147,12 @@ class AgentFlowManager:
             debug.get("latency_trace", []) if isinstance(debug, dict)
             else getattr(debug, "latency_trace", [])
         )
-        raw_trace = list(raw_trace) if isinstance(raw_trace, list) else []
+        latency_errors: list[str] = []
+        if isinstance(raw_trace, list):
+            raw_trace = list(raw_trace)
+        elif stage_error is not None:
+            latency_errors.append("latency_trace must be a list")
+            raw_trace = []
         memory_compactions = (
             debug.get("memory_compactions", []) if isinstance(debug, dict)
             else getattr(debug, "memory_compactions", [])
@@ -178,9 +183,15 @@ class AgentFlowManager:
             )
         latency_breakdown = build_latency_breakdown(
             raw_trace=raw_trace,
+            errors=latency_errors,
             graph_total_ms=graph_total_ms,
             server_total_ms=elapsed_ms(flow_started, time.perf_counter()),
         )
+        if latency_errors:
+            errors.extend(latency_errors)
+            missing_debug_fields.append("latency_breakdown")
+            if "DEBUG_NORMALIZATION_FAILED" not in error_codes:
+                error_codes.append("DEBUG_NORMALIZATION_FAILED")
         return {
             **TurnResult(status="refused" if problem.code == "model_refusal" else "failed",
                          message=problem.message, problem=problem).model_dump(mode="json"),

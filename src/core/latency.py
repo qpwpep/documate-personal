@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 
 StageName = Literal[
@@ -142,15 +142,10 @@ def make_synthesis_attempt_latency_event(
     }
 
 
-def _coerce_trace_items(raw_trace: Any) -> list[dict[str, Any]]:
-    if not isinstance(raw_trace, list):
-        return []
-    return [item for item in raw_trace if isinstance(item, dict)]
-
-
 def build_latency_breakdown(
     *,
-    raw_trace: Any,
+    raw_trace: object,
+    errors: list[str],
     graph_total_ms: int | None = None,
     server_total_ms: int | None = None,
     upload_retriever_build_ms: int | None = None,
@@ -160,12 +155,19 @@ def build_latency_breakdown(
     retrieval_routes: list[RetrievalRouteLatencyModel] = []
     synthesis_attempts: list[SynthesisAttemptLatencyModel] = []
 
-    for item in _coerce_trace_items(raw_trace):
-        kind = str(item.get("kind") or "").strip()
+    if not isinstance(raw_trace, list):
+        errors.append("latency_trace must be a list")
+        raw_trace = []
+    for index, item in enumerate(raw_trace):
+        if not isinstance(item, dict):
+            errors.append(f"latency_trace[{index}] must be an object")
+            continue
+        kind = item.get("kind")
         if kind == "stage":
             try:
                 stage_attempt = StageAttemptModel.model_validate(item)
-            except Exception:
+            except ValidationError:
+                errors.append(f"latency_trace[{index}] has an invalid stage event")
                 continue
             stage_attempts.append(stage_attempt)
             field_name = _STAGE_TOTAL_FIELD_BY_NAME.get(stage_attempt.stage)
@@ -176,14 +178,18 @@ def build_latency_breakdown(
         if kind == "retrieval_route":
             try:
                 retrieval_routes.append(RetrievalRouteLatencyModel.model_validate(item))
-            except Exception:
+            except ValidationError:
+                errors.append(f"latency_trace[{index}] has an invalid retrieval route event")
                 continue
             continue
         if kind == "synthesis_attempt":
             try:
                 synthesis_attempts.append(SynthesisAttemptLatencyModel.model_validate(item))
-            except Exception:
+            except ValidationError:
+                errors.append(f"latency_trace[{index}] has an invalid synthesis attempt event")
                 continue
+        else:
+            errors.append(f"latency_trace[{index}] has an unknown event kind")
 
     return LatencyBreakdownModel(
         server_total_ms=server_total_ms,

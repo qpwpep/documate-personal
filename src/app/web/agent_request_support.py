@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pydantic import ValidationError
+
 from src.core.contracts import SessionMetadata
 from src.core.contracts.boundary.debug import parse_action_results, parse_error_codes, normalize_llm_call_observation, parse_retry_state
 from src.core.contracts.boundary.planner import parse_planner_diagnostic
@@ -87,7 +89,7 @@ def normalize_debug_info(
         errors = [*errors, f"route_decisions invalid: {exc}"]
     memory_compactions_raw = debug.get("memory_compactions")
     planner_errors_raw = debug.get("planner_errors") or []
-    observed_hits_raw = debug.get("observed_hits") or []
+    observed_hits_raw = debug.get("observed_hits")
     raw_llm_calls = debug.get("llm_calls")
     llm_diagnostics = []
     try:
@@ -103,14 +105,23 @@ def normalize_debug_info(
         errors = [*errors, "llm_diagnostics has an invalid structure"]
 
     observed_hits: list[SearchHit] = []
+    observed_hit_errors: list[str] = []
     if isinstance(observed_hits_raw, list):
-        for item in observed_hits_raw:
-            if not isinstance(item, dict):
-                continue
+        for index, item in enumerate(observed_hits_raw):
             try:
                 observed_hits.append(SearchHit.model_validate(item))
-            except Exception:
-                continue
+            except ValidationError:
+                observed_hit_errors.append(f"debug.observed_hits[{index}] has an invalid structure")
+    else:
+        observed_hit_errors.append("debug.observed_hits must be a list")
+    if observed_hit_errors:
+        if "observed_hits" not in missing_required_debug_fields:
+            missing_required_debug_fields.append("observed_hits")
+        if "observed_hits" not in critical_missing:
+            critical_missing.append("observed_hits")
+        if "DEBUG_NORMALIZATION_FAILED" not in error_codes:
+            error_codes.append("DEBUG_NORMALIZATION_FAILED")
+        errors = [*errors, *observed_hit_errors]
 
     retry_context = parse_retry_state(debug.get("retry_context")) if debug.get("retry_context") else None
     retrieval_diagnostics, retrieval_issues = normalize_retrieval_diagnostic_observation(debug.get("retrieval_diagnostics"))
@@ -134,15 +145,23 @@ def normalize_debug_info(
 
     latency_breakdown = None
     raw_latency_breakdown = debug.get("latency_breakdown")
-    if isinstance(raw_latency_breakdown, dict):
-        latency_payload = dict(raw_latency_breakdown)
-        latency_payload["server_total_ms"] = latency_ms_server
+    if raw_latency_breakdown is not None:
+        latency_payload = (
+            {**raw_latency_breakdown, "server_total_ms": latency_ms_server}
+            if isinstance(raw_latency_breakdown, dict)
+            else raw_latency_breakdown
+        )
         try:
             latency_breakdown = LatencyBreakdownModel.model_validate(latency_payload)
-        except Exception:
+        except ValidationError:
             latency_breakdown = None
+            if "latency_breakdown" not in missing_required_debug_fields:
+                missing_required_debug_fields.append("latency_breakdown")
+            if "latency_breakdown" not in critical_missing:
+                critical_missing.append("latency_breakdown")
             if "DEBUG_NORMALIZATION_FAILED" not in error_codes:
-                error_codes.append("DEBUG_NORMALIZATION_FAILED")  # type: ignore[arg-type]
+                error_codes.append("DEBUG_NORMALIZATION_FAILED")
+            errors = [*errors, "debug.latency_breakdown has an invalid structure"]
 
     schema_version_raw = debug.get("schema_version", DEBUG_SCHEMA_VERSION)
     try:
