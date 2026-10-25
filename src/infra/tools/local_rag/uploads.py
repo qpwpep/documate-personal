@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import logging
 import time
 from importlib.metadata import version
@@ -15,7 +14,6 @@ from typing import Any
 from chromadb.errors import NotFoundError
 from langchain_chroma import Chroma
 from langchain_core.documents import Document
-from nbformat import from_dict
 from openai import APITimeoutError
 
 from src.core.contracts.retrieval import UploadRetriever
@@ -27,7 +25,7 @@ from src.infra.chroma_store import build_openai_embeddings, create_chroma_vector
 from src.infra.chunking import ChunkedDocument, chunk_notebook, chunk_python_text, chunk_parsed_document
 from src.infra.document_ingestion import DocumentIngestionContext, IngestionError
 from src.infra.embedding_cache import CachedEmbeddings
-from src.infra.notebook_loader import canonicalize_notebook_payload
+from src.infra.notebook_loader import parse_canonical_notebook
 
 
 UPLOAD_CHUNK_SIZE = 800
@@ -239,11 +237,8 @@ def _parse_upload(file: UploadRecord) -> ChunkedDocument:
     if file.name.lower().endswith(".py"):
         document = chunk_python_text(text=content.decode("utf-8"), **options)
     elif file.name.lower().endswith(".ipynb"):
-        payload = json.loads(content.decode("utf-8"))
-        if not isinstance(payload, dict):
-            raise ValueError("notebook payload must be an object")
-        canonical, _added = canonicalize_notebook_payload(payload)
-        document = chunk_notebook(notebook=from_dict(canonical), **options)
+        loaded = parse_canonical_notebook(content)
+        document = chunk_notebook(notebook=loaded.notebook, **options)
     else:
         raise ValueError("Unsupported file type (only .py or .ipynb).")
     if not document.chunks:

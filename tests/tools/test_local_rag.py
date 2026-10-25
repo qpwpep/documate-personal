@@ -6,6 +6,7 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 from uuid import uuid4
 
+import pytest
 from langchain_core.embeddings import Embeddings
 
 from src.core.planner_schema import RetrievalRequirement
@@ -58,6 +59,80 @@ def _write_notebook(path: Path, *sources: str) -> None:
         ),
         encoding="utf-8",
     )
+
+
+@pytest.mark.parametrize("source", [123, {"text": "not source text"}, ["text", 123], None])
+def test_notebook_upload_rejects_invalid_cell_source(tmp_path, source):
+    path = tmp_path / "source.ipynb"
+    content = json.dumps({
+        "nbformat": 4, "nbformat_minor": 5, "metadata": {},
+        "cells": [
+            {"cell_type": "markdown", "metadata": {}, "source": source},
+            {"cell_type": "markdown", "metadata": {}, "source": "Valid source text."},
+        ],
+    }).encode("utf-8")
+    path.write_bytes(content)
+
+    with patch("src.infra.chroma_store.OpenAIEmbeddings", return_value=_FakeEmbeddings()):
+        with pytest.raises(ValueError, match="source.ipynb"):
+            handle = _index_upload(path)
+            handle.cleanup()
+
+    assert path.read_bytes() == content
+
+
+def test_notebook_upload_rejects_duplicate_cell_ids(tmp_path):
+    path = tmp_path / "duplicate.ipynb"
+    content = json.dumps({
+        "nbformat": 4, "nbformat_minor": 5, "metadata": {},
+        "cells": [
+            {"id": "duplicate", "cell_type": "markdown", "metadata": {}, "source": "First source."},
+            {"id": "duplicate", "cell_type": "markdown", "metadata": {}, "source": "Second source."},
+        ],
+    }).encode("utf-8")
+    path.write_bytes(content)
+
+    with patch("src.infra.chroma_store.OpenAIEmbeddings", return_value=_FakeEmbeddings()):
+        with pytest.raises(ValueError, match="duplicate.*cell.*ID"):
+            handle = _index_upload(path)
+            handle.cleanup()
+
+    assert path.read_bytes() == content
+
+
+@pytest.mark.parametrize("minor_version", [4, 5])
+def test_notebook_upload_preserves_source_bytes_and_stable_cell_locations(tmp_path, minor_version):
+    path = tmp_path / "source.ipynb"
+    content = json.dumps({
+        "nbformat": 4, "nbformat_minor": minor_version, "metadata": {},
+        "cells": [
+            {"cell_type": "markdown", "metadata": {}, "source": "# 제목\r\n원문\r끝"},
+            {"cell_type": "code", "metadata": {}, "execution_count": None, "outputs": [],
+             "source": ["value = 1\r\n", "print(value)\r"]},
+        ],
+    }, ensure_ascii=False).encode("utf-8")
+    path.write_bytes(content)
+    cell_ids = []
+
+    with patch("src.infra.chroma_store.OpenAIEmbeddings", return_value=_FakeEmbeddings()):
+        for _ in range(2):
+            handle = _index_upload(path)
+            try:
+                document, = handle.retriever.source_documents
+                assert [element.text for element in document.elements] == [
+                    "# 제목\n원문\n끝", "value = 1\nprint(value)\n",
+                ]
+                assert document.snapshot.content_hash == "sha256:" + hashlib.sha256(content).hexdigest()
+                anchors = [element.anchors[0] for element in document.elements]
+                assert [(anchor.cell_index, anchor.line_start, anchor.line_end, anchor.precision)
+                        for anchor in anchors] == [(0, 1, 3, "exact"), (1, 1, 2, "exact")]
+                cell_ids.append([anchor.cell_id for anchor in anchors])
+            finally:
+                handle.cleanup()
+
+    assert cell_ids[0] == cell_ids[1]
+    assert all(cell_ids[0]) and len(set(cell_ids[0])) == 2
+    assert path.read_bytes() == content
 
 
 class LocalRagTest(unittest.TestCase):
