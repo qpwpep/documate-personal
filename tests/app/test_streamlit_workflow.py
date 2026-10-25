@@ -118,7 +118,7 @@ def test_new_conversation_guides_input_without_presenting_a_verified_answer(chat
 
     assert not app.exception
     assert not app.chat_message
-    assert not any(item.label == "근거 확인 범위" for item in app.expander)
+    assert not any(item.label == "검증 상세" for item in app.expander)
     assert any("파일을 첨부" in item.value for item in app.markdown)
     assert not chat_http
 

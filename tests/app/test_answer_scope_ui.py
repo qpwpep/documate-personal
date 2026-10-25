@@ -48,6 +48,33 @@ def _checked_answer():
     )})
 
 
+def test_removed_content_explains_known_scope_and_next_step_before_technical_details():
+    evidence = _evidence("확인한 문서 내용", source_type="official")
+    answer = finalize_answer(text_document("확인한 문서 내용", basis="source", refs=[evidence.id]), [evidence], issues=[
+        ResponseIssue(code="invalid_content_removed",
+                      message="근거로 충분히 뒷받침되지 않거나 원문과 일치하지 않는 내용을 제외했습니다."),
+    ])
+    answer = answer.model_copy(update={"semantic_validation": SemanticValidation(
+        content_hash=answer.content_hash,
+        evidence_fingerprint=semantic_evidence_fingerprint(answer.citations), threshold=0.8,
+        checks=[SemanticCheck(name="request_fulfilled", probability=0.95),
+                SemanticCheck(name="grounded", unit_id="b0.content.0", probability=0.9)],
+    )})
+
+    app = _render(TurnResult(response=answer))
+
+    visible = [item.value for item in app.main.children.values() if item.type in {"caption", "markdown", "warning"}]
+    assert any("확인한 범위" in text and "원문에 연결된 내용 1개" in text for text in visible)
+    assert any("확인하지 못한 범위" in text and "제외된 항목의 상세 기록은 없습니다" in text for text in visible)
+    assert any("다음 행동" in text and "필요한 항목이 빠졌다면" in text for text in visible)
+    assert not any("Decisions API" in text or "충족 확률" in text or "임곗값" in text for text in visible)
+    details = next(item for item in app.expander if item.label == "검증 상세")
+    assert not details.proto.expanded
+    assert any("충족 확률 0.95" in item.value for item in details.caption)
+    assert any("답변 전체의 정확도" in item.value and "보증" in item.value for item in details.caption)
+    assert answer.issues[0].message in [item.value.removeprefix("답변에 기록된 한계: ") for item in app.warning]
+
+
 @pytest.mark.parametrize("with_held_delivery", [False, True])
 def test_partial_answer_keeps_one_summary_visible_and_preserves_limits_in_collapsed_details(with_held_delivery):
     evidence = _evidence("확인한 문서 내용", source_type="official")

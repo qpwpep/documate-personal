@@ -153,8 +153,6 @@ def render_answer_response(
     citations = {citation.evidence.id: citation for citation in response.citations}
     checks = {check.unit_id: check for check in response.checks}
     global_issues = [issue for issue in response.issues if issue.unit_id is None]
-    if global_issues and partial_problem is None:
-        st.warning("이 답변에는 한계가 기록되어 있습니다. 아래 ‘답변의 한계와 처리 정보’를 확인해 주세요.")
 
     for index, block in enumerate(response.content.blocks):
         prefix = f"b{index}."
@@ -266,15 +264,40 @@ def _render_validation_scope(response: AnswerResponse, *, turn_incomplete: bool 
     units = list(iter_content_units(response.content))
     if not response.citations and report is None and not units:
         return
-    with st.expander("근거 확인 범위"):
-        resolved = sum(check.reference_status == "resolved" for check in response.checks)
-        exact = sum(check.support_status == "exact_match" for check in response.checks)
-        st.caption(f"원문에 연결된 내용 {resolved}개 · 원문과 일치하는 발췌 {exact}개")
+    resolved = sum(check.reference_status == "resolved" for check in response.checks)
+    exact = sum(check.support_status == "exact_match" for check in response.checks)
+    semantic_checks = {(check.name, check.unit_id): check for check in report.checks} if report is not None else {}
+    request_check = semantic_checks.get(("request_fulfilled", None))
+    issue_codes = {issue.code for issue in response.issues}
+    st.caption(f"확인한 범위: 원문에 연결된 내용 {resolved}개 · 원문과 일치하는 발췌 {exact}개. "
+               "원문 연결과 발췌 일치는 답변 전체의 정확성을 뜻하지 않습니다.")
+    limits = list(dict.fromkeys(issue.message for issue in response.issues if issue.unit_id is None))
+    if "invalid_content_removed" in issue_codes:
+        limits.append("제외된 항목의 상세 기록은 없습니다.")
+    unit_limit_count = sum(issue.unit_id is not None for issue in response.issues)
+    if unit_limit_count:
+        limits.append(f"내용별 한계 {unit_limit_count}개는 해당 내용 아래에서 확인할 수 있습니다.")
+    if request_check is None or request_check.status == "refused":
+        limits.append("답변 본문의 요청 조건 충족 여부는 평가 결과가 없습니다.")
+    elif request_check.probability < report.threshold:
+        limits.append("답변 본문의 요청 조건 충족을 확인하지 못했습니다.")
+    if not limits:
+        limits.append("답변에 별도로 기록된 한계는 없습니다. 정확성을 보장한다는 뜻은 아닙니다.")
+    st.caption("확인하지 못한 범위: " + " ".join(limits))
+    if "invalid_content_removed" in issue_codes:
+        next_step = "답변과 근거를 대조하고, 필요한 항목이 빠졌다면 해당 항목을 지정해 다시 질문해 주세요."
+    elif "source_location_unverified" in issue_codes:
+        next_step = "출처에서 원문 위치를 확인하거나, 위치를 확인할 수 있는 원본 파일을 첨부해 주세요."
+    elif response.issues:
+        next_step = "기록된 한계를 확인하고, 필요한 범위의 자료나 조건을 추가해 다시 질문해 주세요."
+    else:
+        next_step = "근거 버튼에서 원문을 확인하세요. 저장·전송 결과는 아래 별도 안내에서 확인할 수 있습니다."
+    st.caption("다음 행동: " + next_step)
+
+    with st.expander("검증 상세"):
+        st.caption("수치는 개별 조건에 대한 자동 평가이며 답변 전체의 정확도나 실행 성공을 보증하지 않습니다.")
         if report is not None:
             st.caption("Decisions API에서 받은 평가 결과입니다.")
-        semantic_checks = {(check.name, check.unit_id): check for check in report.checks} if report is not None else {}
-        request_check = semantic_checks.get(("request_fulfilled", None))
-        issue_codes = {issue.code for issue in response.issues}
         st.caption("아래 판정은 답변 본문의 조건 충족 여부를 평가합니다. 저장·전송의 처리 결과는 별도로 표시됩니다.")
         if issue_codes & {"retrieved_evidence_incomplete", "evidence_packet_incomplete"}:
             st.caption("이 답변에 기록된 한계: 일부 근거가 부족합니다. 아래 판정은 확보된 근거로 작성한 본문 범위에 한정됩니다.")
