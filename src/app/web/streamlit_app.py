@@ -159,6 +159,8 @@ def main() -> None:
 
     suffixes = enabled_upload_suffixes(docling_enabled=getattr(SETTINGS, "docling_enabled", False))
     st.caption(f"{' · '.join(sorted(suffixes))} / 최대 {SETTINGS.upload_max_files}개 / 파일당 {SETTINGS.upload_max_file_mib} MiB / 전체 {SETTINGS.upload_max_total_mib} MiB")
+    st.html('<p id="documate-upload-selection" role="status" aria-live="polite">'
+            '선택한 파일은 전송 후 검색에 사용됩니다. 파일만 먼저 전송할 수도 있습니다.</p>')
 
     restore_composer(conversation)
     chat_submission = st.chat_input(

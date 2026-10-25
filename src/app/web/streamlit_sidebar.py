@@ -61,7 +61,8 @@ def render_sidebar(
             refresh_uploads_requested = st.button("첨부 목록 새로고침", key="documate_refresh_uploads", disabled=uploads_busy)
         if manifest is not None and not refresh_uploads_requested:
             total_mib = sum(item.size_bytes for item in manifest.files) / (1024 * 1024)
-            st.markdown(f'<p class="dm-upload-summary"><strong>{len(manifest.files)}개 파일 · {total_mib:.2f} MiB</strong></p>', unsafe_allow_html=True)
+            state_label = "이전 첨부 기록" if conversation.is_read_only else "검색 가능"
+            st.markdown(f'<p class="dm-upload-summary"><strong>{state_label} {len(manifest.files)}개 · {total_mib:.2f} MiB</strong></p>', unsafe_allow_html=True)
             for item in manifest.files:
                 availability = "이전 첨부 기록" if conversation.is_read_only else "검색 가능"
                 st.markdown(f'<div class="dm-upload-note"><strong>{escape(item.name)}</strong> · {item.size_bytes / 1024:.1f} KiB · {availability}</div>', unsafe_allow_html=True)
@@ -71,7 +72,7 @@ def render_sidebar(
                 clear_uploads_requested = st.button("전체 첨부 해제", key="documate_clear_uploads", disabled=uploads_busy)
                 st.markdown('<p class="dm-upload-help">첨부를 해제해도 대화와 기존 답변의 인용은 유지됩니다.</p>', unsafe_allow_html=True)
             else:
-                st.markdown('<p class="dm-upload-help">아직 업로드된 파일이 없습니다.</p>', unsafe_allow_html=True)
+                st.markdown('<p class="dm-upload-help">검색 준비가 끝난 파일이 없습니다. 입력창에서 선택한 파일은 전송 후 여기에 표시됩니다.</p>', unsafe_allow_html=True)
         else:
             st.markdown('<p class="dm-upload-note">첨부 상태를 확인하지 못했습니다. 서버 목록을 확인한 뒤 질문할 수 있습니다.</p>', unsafe_allow_html=True)
 

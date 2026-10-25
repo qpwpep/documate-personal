@@ -6,6 +6,25 @@ function assert(condition, message) {
   if (!condition) throw new Error(message);
 }
 
+/** Observe the actual native file picker; no simulated upload state. */
+export async function attachmentSelectionState(tab, { waiting, ready, rejected = 0 }) {
+  const summary = await tab.playwright.evaluate(() => ({
+    chips: document.querySelectorAll('[data-testid="stChatInput"] [data-testid="stFileChip"]').length,
+    waiting: document.querySelector('[role="status"][id="documate-upload-selection"]')?.textContent || "",
+    ready: document.querySelector('.dm-upload-summary')?.textContent || "",
+  }));
+  assert(summary.chips === waiting + rejected, `Unexpected native file selection: ${JSON.stringify(summary)}`);
+  if (rejected) {
+    assert(summary.waiting.includes(`선택 오류 ${rejected}개`),
+      `Rejected file is presented as ready to send: ${JSON.stringify(summary)}`);
+  }
+  assert(summary.waiting.includes(waiting ? `전송 대기 ${waiting}개` : rejected ? "파일 옆의 오류" : "선택한 파일은 전송 후"),
+    `Selected files lack a distinct waiting state: ${JSON.stringify(summary)}`);
+  assert(summary.ready.includes(`검색 가능 ${ready}개`),
+    `Server-ready files are not distinguished: ${JSON.stringify(summary)}`);
+  return { check: "selected versus searchable attachments", ...summary };
+}
+
 export async function composerText(tab, expected) {
   const actual = await tab.playwright.getByRole("textbox", {
     name: "공식 문서나 업로드한 자료에 대해 질문하세요", exact: true,

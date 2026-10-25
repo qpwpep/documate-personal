@@ -132,15 +132,39 @@ export default function ({ data, setStateValue }) {
     sidebarHadFocus = false;
   }
 
+  function renderUploadSelection() {
+    const status = document.getElementById("documate-upload-selection");
+    if (!status) return;
+    // These chips belong to the native picker, not the confirmed server
+    // manifest. Observe its rendered selection without taking over uploads.
+    const composer = document.querySelector(selector)?.closest('[data-testid="stChatInput"]');
+    const chips = [...(composer?.querySelectorAll('[data-testid="stFileChip"]') || [])];
+    const rejected = chips.filter(chip => chip.getAttribute("aria-invalid") === "true").length;
+    const uploading = chips.filter(chip => chip.querySelector('[data-testid="stFileChipIconSpinner"]')).length;
+    const waiting = chips.length - rejected - uploading;
+    const states = [];
+    if (waiting) states.push(`전송 대기 ${waiting}개`);
+    if (uploading) states.push(`파일 업로드 중 ${uploading}개`);
+    if (rejected) states.push(`선택 오류 ${rejected}개 · 파일 옆의 오류를 확인하고 해당 파일을 제거하거나 다시 선택하세요.`);
+    const text = chips.length
+      ? states.join(" · ") + " 아직 검색에 사용되지 않습니다." + (waiting ? " 전송하면 자료를 준비합니다." : "")
+      : "선택한 파일은 전송 후 검색에 사용됩니다. 파일만 먼저 전송할 수도 있습니다.";
+    if (status.textContent !== text) status.textContent = text;
+  }
+
   document.addEventListener("keydown", onKeyDown, true);
   document.addEventListener("pointerdown", onPointerDown, true);
   document.addEventListener("click", onClick, true);
   document.addEventListener("input", onInput, true);
   document.addEventListener("focusin", onFocus, true);
   window.addEventListener("pagehide", storeDraft);
-  const observer = new MutationObserver(recoverSidebarFocus);
-  observer.observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ["data-collapsed"] });
+  const observer = new MutationObserver(() => {
+    recoverSidebarFocus();
+    renderUploadSelection();
+  });
+  observer.observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ["data-collapsed", "aria-invalid"] });
   recoverSidebarFocus();
+  renderUploadSelection();
   persist();
 
   return () => {
