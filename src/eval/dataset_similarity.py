@@ -23,6 +23,10 @@ from typing import Any
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
+from pydantic import ValidationError
+
+from .config_models import BenchmarkCase
+
 
 DEFAULT_MODEL = "nvidia/nemotron-3-embed-1b"
 DEFAULT_ENDPOINT = "https://integrate.api.nvidia.com/v1/embeddings"
@@ -48,22 +52,23 @@ def load_case_records(paths: list[Path], *, group: str) -> list[dict[str, Any]]:
         for line_number, line in enumerate(Path(path).read_text(encoding="utf-8-sig").splitlines(), 1):
             if not line.strip():
                 continue
-            row = json.loads(line)
-            identifier = str(row["case_id"])
+            try:
+                case = BenchmarkCase.model_validate_json(line)
+            except ValidationError as exc:
+                raise ValueError(f"{path}:{line_number}: {exc}") from exc
+            identifier = case.case_id
             if identifier in seen:
-                raise ValueError(f"Repeated {group} case_id: {identifier}")
+                raise ValueError(f"{path}:{line_number}: Repeated {group} case_id: {identifier}")
             seen.add(identifier)
-            query = str(row["query"])
-            intent = query
-            setup = row.get("setup_turns", [])
-            if setup:
-                intent += "\nPrior dialogue:\n" + "\n".join(str(turn) for turn in setup)
-            if row.get("capability"):
-                intent += "\nCapability: " + str(row["capability"])
+            intent = case.query
+            if case.setup_turns:
+                intent += "\nPrior dialogue:\n" + "\n".join(case.setup_turns)
+            if case.capability:
+                intent += "\nCapability: " + case.capability
             records.append({"id": identifier if group == "candidate" else f"{group}:{identifier}",
-                            "case_id": identifier, "group": group, "query": query, "text": intent,
+                            "case_id": identifier, "group": group, "query": case.query, "text": intent,
                             "source": str(path), "line": line_number,
-                            "evaluation_role": row.get("evaluation_role")})
+                            "evaluation_role": case.evaluation_role})
     return records
 
 
