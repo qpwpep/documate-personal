@@ -38,7 +38,7 @@ def _fingerprint(value: Any) -> str:
     return "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
-def cost_observation_metrics(*, results: list[Any], planned_ids: set[str]) -> dict[str, int | float | None]:
+def cost_observation_metrics(*, results: list[CaseResult], planned_ids: set[str]) -> dict[str, int | float | None]:
     """Aggregate only uniquely observed, finite costs for the planned cases."""
     counts = Counter(result.case_id for result in results)
     values = [

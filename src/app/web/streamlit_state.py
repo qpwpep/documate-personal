@@ -4,7 +4,7 @@ import logging
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Literal, NotRequired, TypedDict
+from typing import TYPE_CHECKING, Any, Literal, NotRequired, TypedDict
 
 import streamlit as st
 
@@ -17,6 +17,9 @@ from src.app.web.streamlit_theme import THEME_STATE_KEY
 from src.app.web.composer_draft import ComposerDraft
 from src.core.contracts.outcome import AnswerExportResult, TurnResult
 from src.core.uploads import UploadManifest, UploadSyncRequest
+
+if TYPE_CHECKING:
+    from src.app.web.streamlit_requests import ChatSubmission, SaveSubmission, UploadSubmission
 
 
 _THEME_QUERY_MAP = {
@@ -79,7 +82,7 @@ class Conversation:
     draft: ComposerDraft = field(default_factory=ComposerDraft)
     followup_prompt: str | None = None
     slack_drafts: dict[str, str] = field(default_factory=dict)
-    pending_request: Any | None = None
+    pending_request: ChatSubmission | SaveSubmission | UploadSubmission | None = None
     operation_in_progress: bool = False
     confirmed_epoch: str | None = None
     preserved_manifest: UploadManifest | None = None

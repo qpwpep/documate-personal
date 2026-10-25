@@ -2,9 +2,8 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
-from typing import Any
 
-from src.core.contracts.retrieval import RetrievalResult
+from src.core.contracts.retrieval import RetrievalResult, UploadRetriever
 from src.core.documents import ParsedDocument
 from src.core.evidence import EvidenceRef
 from src.core.latency import elapsed_ms
@@ -84,7 +83,7 @@ def build_upload_search_tool() -> Callable[..., RetrievalResult]:
     def upload_search(
         query: str,
         k: int = 4,
-        retriever: Any = None,
+        retriever: UploadRetriever | None = None,
         *,
         requirement: RetrievalRequirement,
     ) -> RetrievalResult:

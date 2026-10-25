@@ -8,7 +8,9 @@ import logging
 import time
 from typing import Any
 
-from src.core.contracts import GraphState, RetrievalDiagnostic
+from langchain_core.messages import ToolMessage
+
+from src.core.contracts import DebugState, GraphState, RetrievalDiagnostic, RetrievalState, RetryState, RuntimeState
 from src.core.contracts.boundary.debug import get_debug_state
 from src.core.contracts.boundary.graph import get_retry_state
 from src.core.contracts.boundary.planner import get_planner_state
@@ -17,7 +19,7 @@ from src.core.contracts.boundary.runtime import get_runtime_state
 from src.core.latency import elapsed_ms, make_stage_latency_event
 from src.infra.logging_utils import log_event
 from src.core.message_utils import build_tool_message
-from src.core.planner_schema import RetrievalTask
+from src.core.planner_schema import PlannerOutput, RetrievalTask
 from src.core.evidence import SearchHit, dedupe_search_hits
 from src.runtime.nodes.retry import current_retrieval_attempt
 from src.runtime.nodes.retrieval.executor import RetrievalTaskResult, build_reused_retrieval_task_result, execute_retrieval_task, retrieval_fingerprint
@@ -38,13 +40,13 @@ class RetrievalBatchPlan:
 class RetrievalBatchResult:
     hit_updates: list[SearchHit] = field(default_factory=list)
     retrieval_diagnostics: list[RetrievalDiagnostic] = field(default_factory=list)
-    tool_messages: list[Any] = field(default_factory=list)
+    tool_messages: list[ToolMessage] = field(default_factory=list)
     local_errors: list[str] = field(default_factory=list)
     latency_trace: list[dict[str, Any]] = field(default_factory=list)
 
 
 def _requires_docs_refresh(
-    task: RetrievalTask, retry_context: Any,
+    task: RetrievalTask, retry_context: RetryState,
     prior_diagnostics: list[RetrievalDiagnostic] | None,
 ) -> bool:
     if not (
@@ -70,8 +72,8 @@ def _build_route_handlers(
     *,
     tavily_search_tool: Any,
     upload_search_tool: Any,
-    runtime: Any,
-    retry_context: Any,
+    runtime: RuntimeState,
+    retry_context: RetryState,
     prior_diagnostics: list[RetrievalDiagnostic] | None = None,
     prior_hits: list[SearchHit] | None = None,
 ) -> dict[str, tuple[str, Any]]:
@@ -108,8 +110,8 @@ def _build_route_handlers(
 
 def _collect_retrieval_batch(
     *,
-    planner_output: Any,
-    retry_context: Any,
+    planner_output: PlannerOutput,
+    retry_context: RetryState,
     route_handlers: dict[str, tuple[str, Any]],
     prior_diagnostics: list[RetrievalDiagnostic] | None = None,
     prior_hits: list[SearchHit] | None = None,
@@ -212,8 +214,8 @@ def _execute_retrieval_batch(
 
 def _build_retrieval_updates(
     *,
-    retrieval: Any,
-    debug: Any,
+    retrieval: RetrievalState,
+    debug: DebugState,
     batch_result: RetrievalBatchResult,
 ) -> GraphState:
     updates: GraphState = {

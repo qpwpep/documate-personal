@@ -9,6 +9,7 @@ from src.core.save_contract import SaveOperation
 
 from src.core.contracts.debug import RetryState
 from src.core.contracts.routing import validate_route_decisions
+from src.core.contracts.retrieval import UploadRetriever
 from src.core.contracts.graph_state import DebugState, GraphState, PendingAction, PlannerState, ResponseState, RetrievalState, RuntimeState, SessionMetadata
 from src.core.request_contracts import RequestContract, UserTurnSnapshot
 from src.core.uploads import UploadFileInfo
@@ -26,7 +27,7 @@ def build_graph_state_input(
     current_turn_id: str | None = None,
     user_turns: tuple[UserTurnSnapshot, ...] = (),
     messages: list[AnyMessage] | None = None,
-    retriever: Any | None = None,
+    retriever: UploadRetriever | None = None,
     upload_files: tuple[UploadFileInfo, ...] = (),
     progress_emitter: Any | None = None,
     session_metadata: SessionMetadata | dict[str, Any] | None = None,

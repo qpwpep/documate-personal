@@ -5,7 +5,7 @@ from typing import Annotated, Any, Literal
 
 from langchain_core.messages import AnyMessage
 from langgraph.graph import add_messages
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, SkipValidation, field_validator, model_validator
 from typing_extensions import TypedDict
 
 from src.core.answer_schema import ActionReceipt, AnswerResponse
@@ -19,6 +19,7 @@ from src.core.request_contracts import RequestContract, UserTurnSnapshot
 from src.core.uploads import UploadFileInfo
 from src.core.contracts.debug import DebugDiagnostics, PlannerDiagnostic, PlannerStatus, RetryState, RetrievalDiagnostic, empty_planner_diagnostic
 from src.core.contracts.provenance import AnswerSource, BodyKind
+from src.core.contracts.retrieval import UploadRetriever
 from src.core.contracts.routing import RoutingDecision
 
 
@@ -42,11 +43,14 @@ class PendingAction(BaseModel):
 
 
 class RuntimeState(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     session_id: str = ""
     user_input: str = ""
     current_turn_id: str = ""
     user_turns: tuple[UserTurnSnapshot, ...] = ()
-    retriever: Any | None = None
+    # Upload preparation owns this process-local resource; it is not wire data.
+    retriever: SkipValidation[UploadRetriever | None] = None
     upload_files: tuple[UploadFileInfo, ...] = ()
     session_metadata: SessionMetadata = Field(default_factory=SessionMetadata)
     memory_summary: str | None = None

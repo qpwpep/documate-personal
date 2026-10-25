@@ -97,8 +97,8 @@ def test_explicit_refresh_preserves_prior_candidates_and_does_not_reject_other_s
     assert refreshed.diagnostics.error_code == ("RETRIEVAL_DOCS_TIMEOUT" if refresh_result == "timeout" else None)
 
 
-@pytest.mark.parametrize(("second_k", "expected_calls"), [(2, 1), (3, 2)])
-def test_completed_query_reuses_candidates_only_with_sufficient_provider_limit(search, second_k, expected_calls):
+@pytest.mark.parametrize(("second_k", "expected_calls", "expected_max_results"), [(2, 1, 6), (3, 2, 9)])
+def test_completed_query_reuses_candidates_only_with_sufficient_provider_limit(search, second_k, expected_calls, expected_max_results):
     tool, batches, seen = search
     query = "numpy.reshape order"
     requirement = RetrievalRequirement(library="numpy", symbols=["numpy.reshape"], aspects=["order"])
@@ -110,7 +110,7 @@ def test_completed_query_reuses_candidates_only_with_sufficient_provider_limit(s
                   completed_requests=first.diagnostics.completed_requests)
 
     assert len(seen) == expected_calls
-    assert seen[-1]["max_results"] == min(20, max(6, second_k * 3))
+    assert seen[-1]["max_results"] == expected_max_results
     assert second.hits
     assert second.diagnostics.answerability == "unknown"
     assert len(second.diagnostics.provider_requests) == expected_calls - 1

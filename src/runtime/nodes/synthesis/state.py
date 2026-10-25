@@ -3,14 +3,14 @@ from __future__ import annotations
 from typing import Any
 
 from src.core.answer_schema import AnswerResponse
-from src.core.contracts import GraphState, ResponseState
+from src.core.contracts import DebugState, GraphState, ResponseState
 from src.core.contracts.provenance import AnswerSource, BodyKind
 from src.core.evidence import EvidenceRef
 from src.core.llm_errors import ExecutionProblem, LLMDiagnostic
 
 
 def build_synthesis_updates(
-    *, debug: Any, result: AnswerResponse, evidence_packet: list[EvidenceRef], attempt: int,
+    *, debug: DebugState, result: AnswerResponse, evidence_packet: list[EvidenceRef], attempt: int,
     latency_trace: list[dict[str, Any]],
     synthesis_errors: list[str] | None = None,
     evidence_requirement_map: dict[str, list[str]] | None = None,

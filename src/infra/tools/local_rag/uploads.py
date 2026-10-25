@@ -18,6 +18,7 @@ from langchain_core.documents import Document
 from nbformat import from_dict
 from openai import APITimeoutError
 
+from src.core.contracts.retrieval import UploadRetriever
 from src.core.documents import ParsedDocument
 from src.core.evidence import EvidenceRef
 from src.core.uploads import UploadFileInfo, UploadRecord
@@ -95,7 +96,7 @@ def _delete_upload_index(vectorstore: Chroma) -> None:
 
 @dataclass
 class UploadedRetrieverHandle:
-    retriever: Any
+    retriever: UploadRetriever
     collection_name: str
     _vectorstore: Chroma = field(repr=False)
     _documents: tuple[ChunkedDocument, ...] = field(repr=False)

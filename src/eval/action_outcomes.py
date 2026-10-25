@@ -1,12 +1,15 @@
 """Mandatory action outcomes, independent of quality scores and live options."""
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Literal, TYPE_CHECKING
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from src.core.contracts.tool_execution import ToolExecutionEvidence
 from .tool_policy import ToolPolicyAssessment, executed_tool_names
+
+if TYPE_CHECKING:
+    from .result_models import CaseResult
 
 
 class ActionAssessment(BaseModel):
@@ -22,7 +25,7 @@ class ActionAssessment(BaseModel):
         return self.status == "verified"
 
 
-def assess_action_outcomes(result: Any, policy_assessment: ToolPolicyAssessment) -> dict[str, ActionAssessment]:
+def assess_action_outcomes(result: CaseResult, policy_assessment: ToolPolicyAssessment) -> dict[str, ActionAssessment]:
     """Recompute from retained receipts, lifecycle facts, and byte verification."""
     obligations = result.policy_snapshot.final_action_outcomes if result.policy_snapshot is not None else None
     assessments = {}

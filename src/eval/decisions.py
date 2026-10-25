@@ -79,7 +79,7 @@ def refresh_case_decision(result: CaseResult, case: BenchmarkCase | None = None)
     return decision
 
 
-def evaluate_case_decision(result: Any) -> tuple[ToolPolicyAssessment, CaseDecision]:
+def evaluate_case_decision(result: CaseResult) -> tuple[ToolPolicyAssessment, CaseDecision]:
     """Evaluate retained decision evidence without changing stored measurements."""
     assessment = assess_execution_policy(policy=result.policy_snapshot, evidence=result.execution_evidence,
                                          request_id=result.request_id, prior_turns=result.scenario_turns,
@@ -161,7 +161,7 @@ def validate_run_outputs(summary: RunSummary, results: list[CaseResult]) -> None
         raise ValueError("run results fingerprint mismatch")
 
 
-def validate_run_decision_evidence(summary: RunSummary, results: list[Any]) -> None:
+def validate_run_decision_evidence(summary: RunSummary, results: list[CaseResult]) -> None:
     """Validate the shared decision contract independently of measurement formats."""
     if summary.decision_contract_version != DECISION_CONTRACT_VERSION:
         raise ValueError("historical results cannot establish current release eligibility")

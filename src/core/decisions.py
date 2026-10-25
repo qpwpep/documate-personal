@@ -4,21 +4,25 @@ from __future__ import annotations
 from dataclasses import dataclass
 import hashlib
 import json
-from typing import Any
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from src.core.evidence import EvidenceRef
+    from src.core.planner_schema import PlannerOutput
 
 
-def decision_fingerprint(value: Any) -> str:
+def decision_fingerprint(value: object) -> str:
     """Bind a decision to canonical content, independent of dictionary order."""
     return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True,
                                      separators=(",", ":")).encode("utf-8")).hexdigest()
 
 
-def evidence_plan_fingerprint(plan: Any) -> str:
+def evidence_plan_fingerprint(plan: PlannerOutput) -> str:
     """Prepared packets belong to the exact plan used to construct them."""
     return decision_fingerprint(plan.model_dump(mode="json"))
 
 
-def prepared_packet_fingerprint(evidence: list[Any], requirement_map: dict[str, list[str]]) -> str:
+def prepared_packet_fingerprint(evidence: list[EvidenceRef], requirement_map: dict[str, list[str]]) -> str:
     """Bind approved generation inputs to all source revisions and exact ranges."""
     return decision_fingerprint({"evidence": [item.model_dump(mode="json") for item in evidence],
                                  "requirement_map": requirement_map})

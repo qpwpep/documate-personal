@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from src.core.uploads import UploadAddition, UploadManifest, UploadSyncRequest, normalized_upload_name
+from src.core.uploads import UploadAddition, UploadFileInfo, UploadManifest, UploadSyncRequest, normalized_upload_name
 from src.core.upload_formats import ALL_UPLOAD_SUFFIXES
 
 
@@ -83,7 +83,7 @@ def stage_uploaded_files(
     uploaded_files: list[Any],
     session_path: Path,
     *,
-    existing_files: list[Any],
+    existing_files: Sequence[UploadFileInfo],
     max_files: int,
     max_file_mib: int,
     max_total_mib: int,
@@ -91,7 +91,7 @@ def stage_uploaded_files(
     """Stage a complete batch without changing any confirmed upload or source revision."""
     result = UploadStageResult()
     existing = {normalized_upload_name(item.name): item for item in existing_files}
-    candidates: dict[str, tuple[str, bytes, str, Any]] = {}
+    candidates: dict[str, tuple[str, bytes, str, UploadFileInfo | None]] = {}
     candidate_bytes = 0
     seen_hashes: dict[str, str] = {}
     for uploaded in uploaded_files:

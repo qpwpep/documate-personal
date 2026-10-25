@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 import time
-from typing import Any
 
 from src.core.answer_schema import finalize_answer, text_document
 from src.core.answer_export import answer_export_snapshot
 from src.core.answer_schema.fallbacks import build_grounded_document
-from src.core.contracts import GraphState
+from src.core.contracts import DebugState, GraphState
 from src.core.latency import elapsed_ms, make_stage_latency_event
 from src.core.llm_errors import LLMCallError, make_problem
 from src.core.request_contracts import check_answer_contract
@@ -15,7 +14,7 @@ from src.runtime.nodes.synthesis.state import build_synthesis_updates
 
 
 def maybe_short_circuit_synthesis(
-    *, state: GraphState, debug: Any, context: SynthesisContext, stage_started: float,
+    *, state: GraphState, debug: DebugState, context: SynthesisContext, stage_started: float,
 ) -> GraphState | None:
     packet = []
     kind = "draft"
