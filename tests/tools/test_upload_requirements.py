@@ -9,9 +9,16 @@ from uuid import uuid4
 import pytest
 from langchain_core.embeddings import Embeddings
 
+from src.core.contracts import GraphState
+from src.core.contracts.boundary.graph import build_graph_state_input
+from src.core.contracts.retrieval import UploadRetriever
 from src.core.documents import DocumentElement, ParsedDocument, build_snapshot
 from src.core.uploads import UploadRecord
 from src.infra.tools.local_rag import build_upload_retriever, build_upload_search_tool
+from src.runtime.nodes.planner import make_planner_node
+from src.runtime.nodes.retrieval import make_retrieve_dispatch_node
+from src.runtime.nodes.synthesis.evidence_selection import requirement_coverage
+from tests.core.helpers import _CapturePlannerLLM
 from tests.synthesis_fixtures import prepare_synthesis_state, synthesis_excerpt_limits
 
 
@@ -182,6 +189,69 @@ def test_planned_code_fragment_reaches_source_retrieval_without_losing_the_const
     assert prepared.missing_requirement_ids == []
     assert [item.excerpt for item in prepared.evidence_packet] == [source.rstrip("\n")]
     assert requirement_coverage(task, prepared.evidence_packet, prepared.evidence_requirement_map)["is_partial"] is False
+
+
+def _retrieve_planned_topic(retriever: UploadRetriever, query: str, aspects: list[str]) -> GraphState:
+    file_id = retriever.source_documents[0].elements[0].metadata["file_id"]
+    planner = _CapturePlannerLLM({"use_retrieval": True, "tasks": [{
+        "route": "upload", "query": query, "k": 4,
+        "requirement": {"file_ids": [file_id], "match": "topic", "aspects": aspects},
+    }]})
+    state = build_graph_state_input(user_input=query, retriever=retriever)
+    state.update(make_planner_node(planner, False)(state))
+    state.update(make_retrieve_dispatch_node(None, build_upload_search_tool(), False)(state))
+    return state
+
+
+@pytest.mark.parametrize(("query", "notebook"), [
+    pytest.param("첨부한 파일의 1행·2행을 한 문장에서 설명해줘.", False, id="korean-lines"),
+    pytest.param("Explain line 1 and line 2 of the uploaded file.", False, id="english-lines"),
+    pytest.param("Explain the source range from line 1 through line 2.", False, id="line-range"),
+    pytest.param("첨부한 노트북 첫 번째 셀의 1행·2행을 설명해줘.", True, id="notebook-cell"),
+])
+def test_planned_source_locations_remain_query_context_without_literal_requirements(uploaded, query, notebook):
+    """A valid provider plan preserves location requests without demanding those words in source."""
+    source = "x = 1\ny = 2\n"
+    with uploaded([source] if notebook else source, notebook=notebook) as retriever:
+        state = _retrieve_planned_topic(retriever, query, [])
+
+    task, = state["planner"].output.tasks
+    assert task.query == query
+    assert task.requirement.aspects == []
+    diagnostic, = state["debug"].retrieval_diagnostics
+    assert diagnostic.answerability == "covered"
+    assert diagnostic.missing_requirements == []
+    evidence, = [hit.evidence for hit in state["retrieval"].hit_log]
+    assert evidence.excerpt.rstrip("\n") == "x = 1\ny = 2"
+    assert evidence.excerpt == source[evidence.selection.start:evidence.selection.end]
+    coverage = requirement_coverage(task, [evidence], {evidence.id: [task.requirement_id]})
+    assert coverage["is_partial"] is False
+    assert coverage["missing_aspects"] == []
+    if notebook:
+        assert evidence.element.anchors[0].cell_index == 0
+        assert evidence.element.anchors[0].cell_id == "source-0"
+
+
+@pytest.mark.parametrize(("source", "answerability", "missing_aspects"), [
+    pytest.param("x = 1\ny = 2\n", "partial", ["1행"], id="literal-absent"),
+    pytest.param('label = "1행"\ny = 2\n', "covered", [], id="literal-present"),
+])
+def test_planned_location_word_as_literal_still_requires_source_occurrence(uploaded, source, answerability, missing_aspects):
+    """The same location-looking text is binding when requested as an actual source string."""
+    query = "첨부한 파일에서 원문 문자열 `1행`을 찾아 인용해줘."
+    with uploaded(source) as retriever:
+        state = _retrieve_planned_topic(retriever, query, ["1행"])
+
+    task, = state["planner"].output.tasks
+    assert task.requirement.aspects == ["1행"]
+    diagnostic, = state["debug"].retrieval_diagnostics
+    assert diagnostic.answerability == answerability
+    assert diagnostic.missing_requirements == ([f"file:{task.requirement.file_ids[0]}:aspect:1행"] if missing_aspects else [])
+    evidence = [hit.evidence for hit in state["retrieval"].hit_log]
+    assert evidence
+    coverage = requirement_coverage(task, evidence, {item.id: [task.requirement_id] for item in evidence})
+    assert coverage["is_partial"] is bool(missing_aspects)
+    assert coverage["missing_aspects"] == missing_aspects
 
 
 def test_explicit_definition_request_does_not_quote_a_comment_or_a_call(uploaded):
