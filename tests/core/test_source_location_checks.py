@@ -107,6 +107,81 @@ def test_inline_literal_can_bind_its_own_location_without_a_code_block():
     assert result.checks[0].support_status == "unsupported"
 
 
+@pytest.mark.parametrize("claim", [
+    "sample.py의 1행은 `x = 1`이고 2행은 `y = 2`입니다.",
+    "sample.py에서 `x = 1`은 1행이고 `y = 2`는 2행입니다.",
+    "sample.py의 1행은 `x = 1`이고 `y = 2`는 2행입니다.",
+    "sample.py에서 `x = 1`은 1행이고 2행은 `y = 2`입니다.",
+    "sample.py의 2행은 `y = 2`이고 1행은 `x = 1`입니다.",
+    "In sample.py, line 1 is `x = 1` and line 2 is `y = 2`.",
+    "In sample.py, `x = 1` is on line 1 and `y = 2` is on line 2.",
+    "`sample.py`의 **1**행은 `x = 1`이고 **2**행은 `y = 2`입니다.",
+    "sample.py의 1행은 `x`에 `1`을, 2행은 `y`에 `2`를 대입합니다.",
+])
+def test_multiple_line_claims_bind_each_literal_in_one_sentence(claim):
+    ref = evidence("x = 1\ny = 2\n")
+    document = AnswerDocument.model_validate({"blocks": [{"type": "paragraph", "content": [{
+        "text": claim, "basis": "source", "refs": [ref.id],
+    }]}]})
+
+    result = AnswerResponse.from_document(document, [ref], retrieval_required=True)
+
+    assert result.checks[0].support_status == "not_evaluated"
+    assert result.checks[0].issues == []
+
+
+@pytest.mark.parametrize("claim", [
+    "sample.py의 2행은 `x = 1`이고 1행은 `y = 2`입니다.",
+    "sample.py의 1행은 `x = 1`이고 3행은 `y = 2`입니다.",
+    "sample.py의 1행은 `x = 1`이고 1행은 `y = 2`입니다.",
+    "sample.py에서 `x = 1`은 2행이고 `y = 2`는 1행입니다.",
+    "sample.py의 2행은 `x = 1`이고 `y = 2`는 1행입니다.",
+    "In sample.py, line 2 is `x = 1` and line 1 is `y = 2`.",
+    "In sample.py, `x = 1` is on line 1 and `y = 2` is on line 3.",
+])
+def test_multiple_line_claims_reject_an_incorrect_literal_position(claim):
+    ref = evidence("x = 1\ny = 2\n")
+    document = AnswerDocument.model_validate({"blocks": [{"type": "paragraph", "content": [{
+        "text": claim, "basis": "source", "refs": [ref.id],
+    }]}]})
+
+    result = AnswerResponse.from_document(document, [ref], retrieval_required=True)
+
+    assert result.checks[0].support_status == "unsupported"
+    assert result.checks[0].issues == ["source_location_mismatch"]
+
+
+def test_repeated_inline_literal_keeps_each_known_occurrence():
+    ref = evidence("x = 1\nx = 1\n")
+    document = AnswerDocument.model_validate({"blocks": [{"type": "paragraph", "content": [{
+        "text": "sample.py에서 `x = 1`은 1행과 2행에 있습니다. 두 줄 모두 `x = 1`입니다.",
+        "basis": "source", "refs": [ref.id],
+    }]}]})
+
+    result = AnswerResponse.from_document(document, [ref], retrieval_required=True)
+
+    assert result.checks[0].support_status == "not_evaluated"
+    assert result.checks[0].issues == []
+
+
+@pytest.mark.parametrize(("text", "claim", "status", "issues"), [
+    ("x = 1\ny = 2\n", "sample.py의 1행과 2행에는 모두 `x = 1`과 `y = 2`가 있습니다.",
+     "unsupported", ["source_location_unverifiable"]),
+    ("x = y\nx = y\n", "sample.py에서 `x`와 `y`는 1행과 2행에 모두 있습니다.",
+     "not_evaluated", []),
+])
+def test_grouped_line_claims_require_each_literal_at_every_claimed_line(text, claim, status, issues):
+    ref = evidence(text)
+    document = AnswerDocument.model_validate({"blocks": [{"type": "paragraph", "content": [{
+        "text": claim, "basis": "source", "refs": [ref.id],
+    }]}]})
+
+    result = AnswerResponse.from_document(document, [ref], retrieval_required=True)
+
+    assert result.checks[0].support_status == status
+    assert result.checks[0].issues == issues
+
+
 def test_relabeling_as_example_does_not_bypass_a_physical_location_check():
     assert response(evidence(), "sample.py의 29행입니다.", basis="example").checks[1].support_status == "unsupported"
 
@@ -122,6 +197,8 @@ def test_display_formatting_does_not_hide_a_wrong_location(claim):
 
 @pytest.mark.parametrize("claim", [
     "sample.py의 DataFrame은 29행입니다.",
+    "sample.py의 **DataFrame**은 29행입니다.",
+    "sample.py의 __DataFrame__은 29행입니다.",
     "sample.py는 총 29행의 데이터를 처리합니다.",
 ])
 def test_file_mention_does_not_turn_a_data_row_count_into_a_location(claim):

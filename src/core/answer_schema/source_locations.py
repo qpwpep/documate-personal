@@ -26,18 +26,24 @@ _ROW_COUNT = re.compile(r"^\s*(?:의\s*)?(?:데이터|레코드|DataFrame|rows?\
 _ROW_SUBJECT = re.compile(r"(?:DataFrame|데이터프레임|데이터|표|결과)(?:은|는|이|가|에는|에|의)?\s*(?:총\s*)?$", re.IGNORECASE)
 
 
-def _claims(text: str, *, native_code_context: bool) -> list[tuple[int, int]]:
+def _claims(text: str, *, native_code_context: bool) -> list[re.Match[str]]:
     # A literal string may itself contain 'line 29'; that is quoted source data.
-    prose = _INLINE.sub("", text).replace("**", "").replace("__", "")
+    # Mask it without shifting the offsets used to bind a claim to its quote.
+    masked = _INLINE.sub(lambda match: " " * len(match[0]), text)
+    prose = masked.replace("**", "  ").replace("__", "  ")
     source_context = bool(_FILE.search(text) or _SOURCE_CONTEXT.search(prose))
     if not (source_context or native_code_context):
         return []
     matches = [*_ENGLISH_LINE.finditer(prose), *_KOREAN_LINE.finditer(prose), *_LABELED_LINE.finditer(prose)]
-    return list(dict.fromkeys(
-        (int(match["start"]), int(match["end"] or match["start"]))
-        for match in matches if not _ROW_COUNT.match(prose[match.end():])
-        and not _ROW_SUBJECT.search(prose[:match.start()])
-    ))
+    claims: list[re.Match[str]] = []
+    for match in sorted(matches, key=lambda item: (item.start(), -item.end())):
+        if claims and match.start() < claims[-1].end():
+            continue
+        before = masked[:match.start()].replace("**", "").replace("__", "")
+        after = masked[match.end():].replace("**", "").replace("__", "")
+        if not _ROW_COUNT.match(after) and not _ROW_SUBJECT.search(before):
+            claims.append(match)
+    return claims
 
 
 def _occurrences(literal: str, evidence: EvidenceRef) -> set[tuple[int, int]]:
@@ -59,13 +65,9 @@ def _occurrences(literal: str, evidence: EvidenceRef) -> set[tuple[int, int]]:
     return positions
 
 
-def _literals_for_unit(
+def _neighboring_code_literals(
     unit: ContentUnit, block_index: int, document: AnswerDocument, sources: list[EvidenceRef],
 ) -> list[str]:
-    inline = [match[1] for match in _INLINE.finditer(unit.text)
-              if not _FILE.fullmatch(match[1]) and any(match[1] in source.excerpt for source in sources)]
-    if inline:
-        return inline
     # Only neighboring source code associated with this unit's references can
     # supply the literal. Equally near blocks must agree on their locations;
     # neither document order nor the first textual occurrence resolves ambiguity.
@@ -77,6 +79,37 @@ def _literals_for_unit(
         return []
     distance = min(item[0] for item in code)
     return list(dict.fromkeys(text for near, text in code if near == distance))
+
+
+def _claim_literals(
+    text: str, claims: list[re.Match[str]], inline: list[re.Match[str]], literals: list[str],
+) -> list[list[str]]:
+    if len(claims) == 1 or not inline or len(set(literals)) == 1:
+        return [literals for _ in claims]
+    # Distinct claim/quote pairs keep their textual order even if clauses
+    # alternate direction. Overlapping pairs such as "lines 1 and 2 both
+    # contain `x` and `y`" do not establish that one-to-one binding.
+    if len(claims) == len(inline):
+        spans = [(min(claim.start(), literal.start()), max(claim.end(), literal.end()))
+                 for claim, literal in zip(claims, inline)]
+        if all(left[1] <= right[0] for left, right in zip(spans, spans[1:])):
+            return [[match[1]] for match in inline]
+    # In a sequence of explicit claims, quotes either follow their positions
+    # ("line 1 is `x`") or precede them ("`x` is on line 1"). Keep each quote
+    # within those claim boundaries; another clause cannot validate its line.
+    positions_first = claims[0].start() < inline[0].start()
+    bindings: list[list[str]] = []
+    for index, claim in enumerate(claims):
+        if positions_first:
+            start = claim.end()
+            end = claims[index + 1].start() if index + 1 < len(claims) else len(text)
+        else:
+            start = claims[index - 1].end() if index else 0
+            end = claim.start()
+        bindings.append([match[1] for match in inline if start <= match.start() and match.end() <= end])
+    # A shared list of positions has no individual quote for every claim.
+    # Retain the conservative check that every literal occurs at every position.
+    return bindings if all(bindings) else [literals for _ in claims]
 
 
 def source_location_issues(document: AnswerDocument, evidence: list[EvidenceRef]) -> dict[str, list[str]]:
@@ -97,7 +130,10 @@ def source_location_issues(document: AnswerDocument, evidence: list[EvidenceRef]
         if named_files:
             sources = [source for source in sources if source.snapshot.title in named_files
                        or source.snapshot.source_uri.replace("\\", "/").rsplit("/", 1)[-1] in named_files]
-        literals = _literals_for_unit(unit, block_index, document, sources)
+        inline = [match for match in _INLINE.finditer(unit.text)
+                  if not _FILE.fullmatch(match[1]) and any(match[1] in source.excerpt for source in sources)]
+        literals = ([match[1] for match in inline] if inline
+                    else _neighboring_code_literals(unit, block_index, document, sources))
         native_code_context = any(
             anchor.kind in {"code", "notebook"} and literal in source.excerpt
             for source in sources for anchor in source.element.anchors for literal in literals
@@ -105,11 +141,15 @@ def source_location_issues(document: AnswerDocument, evidence: list[EvidenceRef]
         claims = _claims(unit.text, native_code_context=native_code_context)
         if not claims:
             continue
-        literal_locations = [{location for source in sources for location in _occurrences(literal, source)}
-                             for literal in literals]
-        locations = set.intersection(*literal_locations) if literal_locations else set()
-        if not locations:
-            failures[path] = ["source_location_unverifiable"]
-        elif any(claim not in locations for claim in claims):
-            failures[path] = ["source_location_mismatch"]
+        for claim, bound_literals in zip(claims, _claim_literals(unit.text, claims, inline, literals)):
+            literal_locations = [{location for source in sources for location in _occurrences(literal, source)}
+                                 for literal in bound_literals]
+            locations = set.intersection(*literal_locations) if literal_locations else set()
+            claimed_lines = (int(claim["start"]), int(claim["end"] or claim["start"]))
+            if not locations:
+                failures[path] = ["source_location_unverifiable"]
+                break
+            if claimed_lines not in locations:
+                failures[path] = ["source_location_mismatch"]
+                break
     return failures
