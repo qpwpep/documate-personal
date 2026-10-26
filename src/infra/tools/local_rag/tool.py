@@ -3,29 +3,32 @@ from __future__ import annotations
 import time
 from collections.abc import Callable
 
-from src.core.contracts.retrieval import RetrievalResult, UploadRetriever
+from src.core.contracts.retrieval import RetrievalResult, UploadRetriever, UploadSearchMode
 from src.core.documents import ParsedDocument
-from src.core.evidence import EvidenceRef
+from src.core.evidence import SearchHit
 from src.core.latency import elapsed_ms
 from src.core.literal_matching import missing_literal_aspects
 from src.core.planner_schema import RetrievalRequirement
-from src.infra.chroma_store import CHROMA_DISTANCE_METRIC, CHROMA_SCORE_DIRECTION
 from src.infra.tools._common import build_retrieval_result
-from src.infra.tools.local_rag.ranking import rank_retrieval_rows
 from src.infra.tools.local_rag.requirements import resolve_source_requirement
-from src.infra.tools.local_rag.serialization import build_local_hit_bundle
 
 
 def _build_search_payload(
     *,
     query: str,
-    docs_with_scores: list[tuple[EvidenceRef, float | None]],
+    hits: list[SearchHit],
+    mode: UploadSearchMode,
     provider_ms: int = 0,
     requirement: RetrievalRequirement,
 ) -> RetrievalResult:
     post_started = time.perf_counter()
-    ranked_rows = rank_retrieval_rows(docs_with_scores, query=query)
-    hits, normalized_scores, raw_scores = build_local_hit_bundle(ranked_rows)
+    normalized_scores = [hit.score.normalized for hit in hits if hit.score.normalized is not None]
+    raw_scores = [hit.score.raw for hit in hits if hit.score.raw is not None]
+    metric = {"baseline": "l2", "bm25": "bm25", "hybrid": "rrf"}[mode]
+    lower_is_better = mode == "baseline"
+    best_raw_score = None
+    if raw_scores:
+        best_raw_score = min(raw_scores) if lower_is_better else max(raw_scores)
     post_filter_ms = elapsed_ms(post_started, time.perf_counter())
     payload = build_retrieval_result(
         tool="upload_search",
@@ -35,13 +38,13 @@ def _build_search_payload(
         status="success" if hits else "no_result",
         message="" if hits else "no uploaded file evidence found",
         normalized_score=max(normalized_scores) if normalized_scores else None,
-        raw_score=min(raw_scores) if raw_scores else None,
+        raw_score=best_raw_score,
         provider_ms=provider_ms,
         post_filter_ms=post_filter_ms,
-        metric=CHROMA_DISTANCE_METRIC,
-        score_direction=CHROMA_SCORE_DIRECTION,
+        metric=metric,
+        score_direction="lower_is_better" if lower_is_better else "higher_is_better",
     )
-    payload.diagnostics.candidate_count = len(docs_with_scores)
+    payload.diagnostics.candidate_count = len(hits)
     if (requirement.match == "topic" and (requirement.file_ids or requirement.symbols or requirement.aspects)
             and not (requirement.version or requirement.library or requirement.evidence_needs)):
         # Coverage means literal anchors in the returned ranges, not an exact
@@ -79,13 +82,14 @@ def _build_requirement_payload(
     return payload
 
 
-def build_upload_search_tool() -> Callable[..., RetrievalResult]:
+def build_upload_search_tool(*, default_mode: UploadSearchMode = "hybrid") -> Callable[..., RetrievalResult]:
     def upload_search(
         query: str,
         k: int = 4,
         retriever: UploadRetriever | None = None,
         *,
         requirement: RetrievalRequirement,
+        mode: UploadSearchMode = default_mode,
     ) -> RetrievalResult:
         if retriever is None:
             return build_retrieval_result(
@@ -101,12 +105,11 @@ def build_upload_search_tool() -> Callable[..., RetrievalResult]:
             return _build_requirement_payload(query=query, requirement=requirement,
                                               source_documents=retriever.source_documents)
 
-        docs_with_scores: list[tuple[EvidenceRef, float | None]] = []
+        hits: list[SearchHit] = []
         provider_ms = 0
         provider_started = time.perf_counter()
         try:
-            scope = {"file_ids": file_ids} if file_ids else {}
-            docs_with_scores = retriever.vectorstore.similarity_search_with_score(query, k=k, **scope)
+            hits = retriever.search(query, k=k, file_ids=file_ids, mode=mode)
             provider_ms += elapsed_ms(provider_started, time.perf_counter())
         except Exception as exc:
             provider_ms += elapsed_ms(provider_started, time.perf_counter())
@@ -122,7 +125,8 @@ def build_upload_search_tool() -> Callable[..., RetrievalResult]:
 
         return _build_search_payload(
             query=query,
-            docs_with_scores=docs_with_scores,
+            hits=hits,
+            mode=mode,
             provider_ms=provider_ms,
             requirement=requirement,
         )

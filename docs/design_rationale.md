@@ -78,7 +78,7 @@ flowchart LR
 
 문서 URI와 제목, 선택 범위, 수집 범위와 품질 정보를 Decisions에 함께 보냅니다. 버전·대상·설명의 충분성은 이 문맥과 실제 발췌를 바탕으로 판단합니다. 도구의 `answerability="unknown"`이나 후보 수를 의미적 성공으로 바꾸지 않습니다. 요구의 충분성은 실제 합성 packet의 검증 결과로 남기며 공식 출처 허용 목록과 원문 선택 범위 검사는 별도로 유지합니다.
 
-`upload` route는 현재 세션의 활성 첨부 집합을 검색합니다. `.py`·`.ipynb`와 함께 Docling 기능을 활성화한 환경에서는 PDF·DOCX·스캔 PDF·단일 프레임 PNG/JPEG/TIFF/WebP/BMP를 처리합니다. `topic`은 Chroma 후보를 검색하며 `symbols`도 literal anchor로 평가합니다. `symbol`·`definition`은 Python·Notebook source registry의 AST로 조회합니다. PDF에서 추출한 코드에 같은 분석 보장을 적용하지 않습니다. 명시한 파일 범위는 file ID로 제한하고 재시도에서도 유지합니다. 없는 파일과 근거를 확보하지 못한 파일은 누락으로 남깁니다. 세션 상태 확정 시 업로드 목록과 retriever 목록의 일치를 보장하고 요청 동안 같은 세션 락을 유지합니다. 실제 vector 검색과 source registry 조회의 파일 필터는 유지합니다.
+`upload` route는 현재 세션의 활성 첨부 집합을 검색합니다. `.py`·`.ipynb`와 함께 Docling 기능을 활성화한 환경에서는 PDF·DOCX·스캔 PDF·단일 프레임 PNG/JPEG/TIFF/WebP/BMP를 처리합니다. `topic`은 Chroma 의미 검색과 Kiwi 형태소 분석을 사용하는 BM25 후보 검색을 결합하며 `symbols`도 literal anchor로 평가합니다. `symbol`·`definition`은 Python·Notebook source registry의 AST로 조회합니다. PDF에서 추출한 코드에 같은 분석 보장을 적용하지 않습니다. 명시한 파일 범위는 file ID로 제한하고 재시도에서도 유지합니다. 없는 파일과 근거를 확보하지 못한 파일은 누락으로 남깁니다. 세션 상태 확정 시 업로드 목록과 retriever 목록의 일치를 보장하고 요청 동안 같은 세션 락을 유지합니다. 실제 vector 검색과 source registry 조회의 파일 필터는 유지합니다.
 
 `retrieve_dispatch`는 독립 task를 병렬 실행한 뒤 planner 순서로 결과를 정렬합니다. 성공과 실패를 requirement ID로 구분하므로, 같은 docs route의 한 대상만 실패해도 다른 대상의 근거는 재사용할 수 있습니다. 실행 `status`와 별도로 `answerability`를 `covered`, `partial`, `missing`, `unknown`으로 기록해, 결과 개수나 route 실행 성공을 답변 가능성과 혼동하지 않습니다.
 
@@ -218,6 +218,20 @@ Docling은 선택 의존성과 로컬 변환 어댑터로 연동합니다. `Docl
 
 현재 구현은 관리 원본을 세션 수명에 맞춰 보관하고, 사용한 원문 요소를 응답에 독립적으로 보존합니다. 원본 bytes를 영구 저장하는 artifact store, 전체 문서 조회 API, PDF 페이지 이미지 뷰어는 아직 없습니다. 세션 종료 후에도 원본 조회가 필요해지면 장기 보관 수명과 소유권을 포함해 확장해야 합니다. 현재 규모에서는 별도 그래프 DB, 문장 주장 그래프, 범용 문서 편집 AST, parser 플러그인 프레임워크를 두지 않습니다.
 
+### 한국어 BM25 라이브러리 선정
+
+업로드 검색은 세션의 첨부 집합이 바뀔 때 색인을 다시 만들고 세션 종료 때 해제합니다. Python 프로세스 안에서 한국어 문단과 영문 코드 식별자를 함께 찾고, 파일 범위와 원문 위치를 보존해야 합니다. 이 구조에 맞춰 `bm25s`와 `kiwipiepy`를 선택했습니다. Kiwi가 한국어 형태소를 만들고 bm25s가 그 토큰 목록으로 BM25 점수를 계산합니다.
+
+| 후보 | 장점 | 이 프로젝트에서의 한계·판단 |
+|---|---|---|
+| [bm25s + Kiwi](https://github.com/xhluca/bm25s) | 사용자 토큰 목록, 희소 점수 계산, NumPy 기본 실행, 저장·로드 지원 | 증분 추가·삭제 대신 재색인 필요. 현재 세션 세대별 구축과 맞으며 서버·JVM 없이 통합 가능하여 선정 |
+| [rank_bm25 + Kiwi](https://github.com/dorianbrown/rank_bm25) | 작은 API, 토큰 목록 입력, 지정 문서의 `get_batch_scores` | 전체 검색은 질의 토큰마다 문서 빈도를 순회. 작은 자료나 범위 검색의 단순한 대안 |
+| [retriv](https://github.com/AmenRa/retriv) | 사용자 토크나이저와 sparse·dense·hybrid 통합 | ML 의존성과 통합 범위가 크고 고급 필터 API는 experimental. 기존 검색에 BM25만 추가하는 범위에는 과함 |
+| [Pyserini](https://github.com/castorini/pyserini) | Lucene BM25, 검색 연구·재현 도구 | Python 3.12·Java 21 구성 필요. `ko` 기본 분석기는 Nori가 아닌 CJKAnalyzer. Windows 구성은 이번에 검증하지 않음 |
+| [Elasticsearch Nori](https://www.elastic.co/docs/reference/elasticsearch/plugins/analysis-nori) / [OpenSearch](https://docs.opensearch.org/latest/install-and-configure/additional-plugins/index/) | 한국어 형태소 분석과 서버형 필터·검색 운영 기능 | 별도 서버·플러그인·문서 수명 관리 필요. 장기 공용 색인이 필요할 때 재검토 |
+
+[Kiwi](https://github.com/bab2min/kiwipiepy)는 실제 Windows 환경에 설치해 검증했습니다. 형태소·식별자 일치를 보완하지만 한국어 질문과 영어 원문 사이의 의미 대응을 해결하지는 않습니다. 따라서 BM25 단독 전환보다 기존 의미 검색과 비교 가능한 통합을 구현했습니다.
+
 ## 4. 가장 어려웠던 문제: Latency와 Retrieval 품질
 
 DocuMate에서 가장 까다로웠던 문제는 "더 빠른 응답"과 "더 충분한 근거"가 자주 반대 방향으로 움직인다는 점이었습니다. 관련 근거를 넉넉히 모으면 답변을 뒷받침할 가능성은 높아지지만, 검색 시간이 늘고 synthesis prompt가 무거워집니다. 반대로 속도만 보고 route나 context를 줄이면 필요한 근거를 놓쳐 tool recall과 최종 답변 품질이 흔들릴 수 있습니다. 근거 개수나 높은 검색 점수가 의미적 정확성을 보장하는 것은 아닙니다.
@@ -232,7 +246,7 @@ planner와 synthesis는 구조화 모델 호출 경로를 사용하며 provider 
 
 공식 도메인·문서 경로·원문 범위 검사는 확정적 제약입니다. 대상·버전·aspect·정보 종류의 관련성과 충분성은 후보와 실제 packet에 대한 Decisions 결과로 판단합니다. bounded 후보 선택은 일부 유용한 범위를 놓칠 수 있고 모델도 잘못 판단할 수 있으므로 독립 평가에서 두 원인을 구분해야 합니다.
 
-upload의 `topic` 검색은 vector 후보를 identifier·keyword·parameter signal로 rerank하고 명시한 심볼도 literal anchor로 평가합니다. 명시한 파일별 후보를 확보하는 어댑터가 한 검색 호출의 쿼리 임베딩을 계산하고 파일별 조회에 공유합니다. 벡터 재사용은 그 호출 안에 한정하며 파일별 후보 예약, 원시 거리 기반 추가 후보 선택, 후속 정렬과 인용 의미를 유지합니다. `symbol`·`definition`은 전체 source registry의 AST 조회로 top-k 후보 밖의 범위도 찾습니다. 사용과 정의를 구분하고, 정의의 decorator·본문·Notebook cell 및 정확한 원문 offset을 유지합니다. source 전체를 확인할 수 없으면 부재를 단정하지 않고 `unknown`으로 남깁니다. 이 경로는 임의의 유사도 임계값 없이 이름이 없는 함수의 오발췌를 막으며 source에 명시된 정적 코드 범위만 확인합니다.
+upload의 `topic` 검색은 Chroma와 `bm25s`가 독립적으로 찾은 후보를 RRF로 결합하고 명시한 심볼도 literal anchor로 평가합니다. 문서와 질의에 같은 Kiwi 기반 한국어·식별자 토큰화를 적용하며 검색용 토큰은 원문과 분리합니다. 기존 Chroma top-k 뒤 identifier·keyword·parameter signal로 재정렬하던 경로는 `baseline` 모드로 보존해 같은 자료에서 비교합니다. BM25 단독 `bm25` 모드도 같은 검색 인터페이스를 사용합니다. 명시한 파일별 후보를 확보하는 어댑터가 한 검색 호출의 쿼리 임베딩을 계산하고 파일별 조회에 공유합니다. 벡터 재사용은 그 호출 안에 한정하며 파일별 후보 예약, 원시 거리 기반 추가 후보 선택, 후속 정렬과 인용 의미를 유지합니다. `symbol`·`definition`은 전체 source registry의 AST 조회로 top-k 후보 밖의 범위도 찾습니다. 사용과 정의를 구분하고, 정의의 decorator·본문·Notebook cell 및 정확한 원문 offset을 유지합니다. source 전체를 확인할 수 없으면 부재를 단정하지 않고 `unknown`으로 남깁니다. 이 경로는 임의의 유사도 임계값 없이 이름이 없는 함수의 오발췌를 막으며 source에 명시된 정적 코드 범위만 확인합니다.
 
 원본의 물리적 줄 번호는 모델이 발췌를 다시 세어 만드는 정보가 아닙니다. 정확한 원문 anchor와 변경하지 않은 문자열에서 `source_lines`를 계산해 합성과 Decisions에 함께 제공합니다. LF·CRLF·CR과 빈 줄을 보존하며 부분 발췌의 시작 줄을 1로 다시 매기지 않습니다. 명시적인 원문 줄 위치 주장은 연결된 원문 literal의 실제 위치와 결정적으로 대조합니다. 제한된 보정 뒤에도 위치를 확인하지 못하면 틀린 주장을 제외하고 미완료로 남기며, 나머지 본문만으로 완료 상태를 만들지 않습니다. 화면과 TXT도 같은 선택 범위의 좌표를 사용하고, 정확한 매핑이 없으면 원문 요소의 알려진 위치와 발췌의 위치 불명을 구분합니다. Notebook의 줄은 파일 JSON이 아닌 해당 셀의 원문 줄입니다.
 

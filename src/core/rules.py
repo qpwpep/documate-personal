@@ -9,6 +9,15 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 
+class HybridSearchConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    dense_weight: float = Field(default=0.5, ge=0, le=1, allow_inf_nan=False)
+    # Keep rank differences meaningful in the small candidate pool; selected by retrieval experiments.
+    rrf_rank_constant: int = Field(default=0, ge=0)
+    lexical_coverage_power: float = Field(default=1, ge=0, allow_inf_nan=False)
+
+
 class DocsSearchQueryHint(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

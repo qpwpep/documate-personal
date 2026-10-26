@@ -115,6 +115,7 @@ PLANNER_REASONING_EFFORT=high
 | `PLANNER_MAX_TOKENS` | `1920` | planner structured output 최대 토큰 |
 | `PLANNER_REASONING_EFFORT` | 없음 | planner reasoning effort override (none/minimal/low/medium/high/xhigh/max, 빈 값이면 모델 기본값, none은 명시 override) |
 | `DOCS_SEARCH_TIMEOUT_SECONDS` | `5` | Tavily 요청별 timeout |
+| `UPLOAD_SEARCH_MODE` | `hybrid` | 첨부 검색 모드: baseline, bm25, hybrid (변경 후 서버 재시작) |
 | `VALIDATION_TIMEOUT_SECONDS` | `20` | 사전·사후 검증의 Decisions API 요청별 timeout |
 | `VALIDATION_PASS_THRESHOLD` | `0.8` | 사전·사후 검증 통과 확률 기준 (0 이상 1 이하) |
 | `SYNTHESIS_TIMEOUT_SECONDS` | `20` | synthesis provider 요청 timeout |
@@ -285,7 +286,26 @@ UI가 만든 고유 staging 파일은 반영 대기와 재시도 입력입니다
 
 UI와 서버 모두 파일 크기를 검사합니다. 서버는 실제 바이트를 기준으로 해시와 크기를 계산하고, 추가·교체 후보를 읽는 중에도 전체 한도를 검사합니다. staging과 서버 원본의 합계 저장 공간은 활성 합계 한도의 3배로 제한하며, 공간을 줄이는 개별 삭제나 전체 해제는 허용합니다. 목록 조회·변경 시 같은 세션 락 안에서 활성 목록이 참조하지 않는 관리 원본을 회수하므로, 이전 세션이나 비정상 종료·삭제 실패로 남은 원본도 다시 정리합니다. 삭제 실패로 이미 확정한 목록과 revision을 되돌리지는 않습니다. 현재 요청의 입력 경로와 활성 원본은 보호하고, staging은 `SESSION_TTL_SECONDS`보다 오래된 미사용 배치만 정리하여 최근 쓰기와 재시도 입력을 보존합니다. 경로 경계를 벗어나는 링크와 알 수 없는 저장 구조는 삭제하지 않습니다. 실제 디스크 사용량을 계속 검사하며 기존 단일 파일 API에도 같은 용량 한도를 적용합니다.
 
-`requirement.match`가 `symbol` 또는 `definition`이면 기존 코드·Notebook source registry에서 AST로 조회합니다. `topic`에 `symbols`가 있으면 vector 검색 결과의 literal anchor로 확인하며 AST 조회로 전환하지 않습니다. Docling/OCR로 읽은 문서는 네이티브 Python 구현의 완전한 수집으로 취급하지 않으며 심볼 부재를 확정하지 않습니다. 함수·클래스·메서드 정의와 호출·사용을 구분하므로, 주석이나 호출에 이름이 있다는 이유로 함수 구현을 발췌하지 않습니다. AST 조회는 vector top-k 밖의 원문도 찾으며, 요구한 정의와 Notebook의 별도 정의 cell을 `k` 때문에 잘라내지 않습니다. topic 검색은 Chroma 후보와 lexical reranking을 사용합니다. 파일 범위가 있는 vector 검색은 `_SourceAwareVectorStore`가 검색 호출마다 쿼리 임베딩을 한 번 계산하고 파일별 필터 조회에 같은 벡터를 전달합니다. 각 파일의 첫 후보를 확보한 뒤 나머지 후보를 원시 거리 오름차순으로 선택하여 `max(k, 명시 파일 수)` 예산을 채웁니다. 점수 정규화와 인용 원문 복원은 유지하며, 다른 검색 호출이나 세션에 쿼리 벡터를 캐시하지 않습니다.
+`requirement.match`가 `symbol` 또는 `definition`이면 기존 코드·Notebook source registry에서 AST로 조회합니다. `topic`에 `symbols`가 있으면 vector 검색 결과의 literal anchor로 확인하며 AST 조회로 전환하지 않습니다. Docling/OCR로 읽은 문서는 네이티브 Python 구현의 완전한 수집으로 취급하지 않으며 심볼 부재를 확정하지 않습니다. 함수·클래스·메서드 정의와 호출·사용을 구분하므로, 주석이나 호출에 이름이 있다는 이유로 함수 구현을 발췌하지 않습니다. AST 조회는 vector top-k 밖의 원문도 찾으며, 요구한 정의와 Notebook의 별도 정의 cell을 `k` 때문에 잘라내지 않습니다.
+
+topic 검색은 Chroma 의미 검색과 `bm25s`의 BM25 검색을 결합하는 `hybrid` 모드를 기본으로 사용합니다. 한국어는 `kiwipiepy`로 분석하고 영문 식별자·숫자도 검색 토큰에 보존합니다. 문서와 질의에 동일한 정책을 적용하며 원문 문자열과 offset은 변경하지 않습니다. `UploadRetriever.search()`는 `SearchHit` 목록을 반환하고 Chroma 메서드는 외부에 노출하지 않습니다. 비교용 `baseline`은 기존 Chroma top-k 후보의 문자열 재정렬을 그대로 유지하며, `bm25`는 어휘 검색만 수행합니다.
+
+파일 범위가 있는 vector 검색은 검색 호출마다 쿼리 임베딩을 한 번 계산하고 파일별 필터 조회에 같은 벡터를 전달합니다. 각 파일의 첫 후보를 확보한 뒤 나머지 후보를 원시 거리 오름차순으로 선택하여 `max(k, 명시 파일 수)` 예산을 채웁니다. 최종 순위 결합 후에도 명시한 파일별 후보를 보존합니다. BM25는 허용 파일의 양수 점수 후보만 반환하므로 일치하는 토큰이 없는 파일의 근거를 만들어 내지 않습니다. 기준선은 L2 거리와 기존 정규화 점수를, BM25와 결합 검색은 각각 `bm25`·`rrf` 점수와 `higher` 방향을 기록하며 정규화 점수는 제공하지 않습니다. 인용 원문 복원은 유지하며, 제품 경로는 다른 검색 호출이나 세션에 쿼리 벡터를 캐시하지 않습니다.
+
+`UPLOAD_SEARCH_MODE`는 서버 시작 시 `baseline`, `bm25`, `hybrid` 중 하나를 선택하며 기본값은 `hybrid`입니다. 설정을 바꾸면 서버를 재시작해 새 세션에서 사용합니다. `baseline`에서는 BM25 색인과 Kiwi 모델을 초기화하지 않습니다. `bm25`의 질의 검색은 임베딩 API를 호출하지 않지만, 현재 업로드 준비 과정은 비교 가능한 Chroma 색인과 문서 임베딩을 함께 구축합니다. 이 모드를 API 키 없이 동작하는 전체 앱으로 해석하지 않습니다. 설정을 생략한 직접 도구 생성도 `hybrid`를 사용합니다.
+
+결합 검색은 각 경로에서 `4*k`개 후보를 모읍니다. BM25의 순위 기여에는 후보가 포함한 고유 질의 토큰 비율을 곱해 약한 부분 일치를 줄입니다. 색인에 없는 질의 토큰도 분모에 남깁니다. `HybridSearchConfig`의 기본값은 dense 가중치 0.5, RRF 상수 0, 일치율 지수 1입니다. Kiwi 모델은 프로세스에서 한 번 공유하고, 세션 세대마다 BM25 점수 배열·토큰 집합·원문 참조를 구축하며 세대 종료 때 해제합니다. 검색용 토큰은 인용 원문을 대체하지 않습니다.
+
+```mermaid
+flowchart LR
+    Q["주제 질의"] --> D["Chroma 의미 후보"]
+    Q --> K["Kiwi 토큰화"]
+    K --> B["BM25 후보와 토큰 일치율"]
+    D --> F["순위 결합"]
+    B --> F
+    F --> S["파일별 후보 보존"]
+    S --> E["원문 근거 복원"]
+```
 
 정의 발췌는 decorator와 본문을 포함한 원래 문자 범위를 보존합니다. AST의 UTF-8 byte 열 위치는 원문 문자 offset으로 변환하며, Notebook cell ID·index와 줄바꿈·들여쓰기를 유지합니다. 전체 registry에서 확인한 부재와 일부 검색 후보에서 찾지 못한 상태는 구분합니다. registry가 없거나 AST를 분석할 수 없으면 부재를 단정하지 않고 `unknown`을 반환합니다. 코드의 구체 aspect는 주석이 아닌 구문에서 확인하며, 명시 버전의 근거가 없을 때도 `unknown`으로 남깁니다.
 

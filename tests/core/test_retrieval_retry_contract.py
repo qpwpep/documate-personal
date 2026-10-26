@@ -274,11 +274,11 @@ def test_complementary_upload_refresh_can_complete_coverage_with_preserved_sourc
                          requirement={"match": "topic", "aspects": ["alpha", "beta"]})
     accepted = _hit(_evidence("alpha = 1\n")).model_copy(update={"requirement_id": task.requirement_id})
     replacement = _evidence("beta = 2\n")
-    vectorstore = SimpleNamespace(similarity_search_with_score=lambda query, **kwargs: [(replacement, 0.1)])
+    retriever = SimpleNamespace(search=lambda query, **kwargs: [_hit(replacement)])
     state = build_test_state({
         "user_input": "alpha와 beta를 설명해 주세요.", "request_contract": RequestContract(),
         "planner_output": PlannerOutput(use_retrieval=True, tasks=[task]),
-        "retriever": SimpleNamespace(vectorstore=vectorstore),
+        "retriever": retriever,
         "retrieval": RetrievalState(hit_log=[accepted], evidence_verdicts=[_verdict(accepted, "passed")]),
         "retry": RetryState(attempt=1, max_retries=1, retry_reason="no_evidence",
                             failed_requirement_ids=[task.requirement_id], hit_start_index=1),

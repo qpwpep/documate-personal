@@ -11,6 +11,7 @@ from dotenv import dotenv_values
 from pydantic import BaseModel, Field, ValidationInfo, field_validator, model_validator
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
 
+from src.core.contracts.retrieval import UploadSearchMode
 from src.core.conversation_memory import ConversationMemoryPolicy
 from src.core.slack_contract import SlackDefault
 from src.infra.runtime_paths import get_benchmark_config_path, get_env_file_path
@@ -77,6 +78,7 @@ APP_ENV_SPECS = (
         example_group="planning_summary",
     ),
     EnvVarSpec("DOCS_SEARCH_TIMEOUT_SECONDS", "docs_search_timeout_seconds", 5, "Tavily 요청별 timeout", example=5, example_group="search"),
+    EnvVarSpec("UPLOAD_SEARCH_MODE", "upload_search_mode", "hybrid", "첨부 검색 모드: baseline, bm25, hybrid (변경 후 서버 재시작)", example="hybrid", example_group="search"),
     EnvVarSpec("VALIDATION_TIMEOUT_SECONDS", "validation_timeout_seconds", 20, "사전·사후 검증의 Decisions API 요청별 timeout", example=20, example_group="validation"),
     EnvVarSpec("VALIDATION_PASS_THRESHOLD", "validation_pass_threshold", 0.8, "사전·사후 검증 통과 확률 기준 (0 이상 1 이하)", example=0.8, example_group="validation"),
     EnvVarSpec("SYNTHESIS_TIMEOUT_SECONDS", "synthesis_timeout_seconds", 20, "synthesis provider 요청 timeout", example=20, example_group="synthesis"),
@@ -535,6 +537,7 @@ class AppSettings(BaseSettings):
         alias="DOCS_SEARCH_TIMEOUT_SECONDS",
         ge=1,
     )
+    upload_search_mode: UploadSearchMode = Field(default=_app_default("UPLOAD_SEARCH_MODE"), alias="UPLOAD_SEARCH_MODE")
     validation_timeout_seconds: int = Field(
         default=_app_default("VALIDATION_TIMEOUT_SECONDS"),
         alias="VALIDATION_TIMEOUT_SECONDS",

@@ -59,7 +59,7 @@ def test_same_content_in_different_files_has_distinct_citations(uploads):
     with indexed([first, second]) as handle:
         payload = build_upload_search_tool()(query="load definition", retriever=handle.retriever,
                                             requirement=RetrievalRequirement(symbols=["load"], match="definition"))
-        direct = handle.retriever.vectorstore.similarity_search_with_score("load")
+        direct = handle.retriever.search("load")
         assert len(direct) == 2
         assert len(handle.retriever.source_documents) == 2
     hits = payload.hits

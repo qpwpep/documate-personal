@@ -2,20 +2,17 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Protocol, runtime_checkable
+from typing import Literal, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict
 
 from src.core.contracts.debug import RetrievalDiagnostic
 from src.core.documents import ParsedDocument
-from src.core.evidence import EvidenceRef, SearchHit
+from src.core.evidence import SearchHit
 from src.core.uploads import UploadFileInfo
 
 
-class EvidenceVectorStore(Protocol):
-    def similarity_search_with_score(
-        self, query: str, k: int = 4, *, file_ids: Sequence[str] = (),
-    ) -> list[tuple[EvidenceRef, float]]: ...
+UploadSearchMode = Literal["baseline", "bm25", "hybrid"]
 
 
 @runtime_checkable
@@ -27,7 +24,12 @@ class UploadRetriever(Protocol):
     def upload_files(self) -> tuple[UploadFileInfo, ...]: ...
 
     @property
-    def vectorstore(self) -> EvidenceVectorStore: ...
+    def chunk_count(self) -> int: ...
+
+    def search(
+        self, query: str, k: int = 4, *, file_ids: Sequence[str] = (),
+        mode: UploadSearchMode = "hybrid",
+    ) -> list[SearchHit]: ...
 
 
 class RetrievalResult(BaseModel):

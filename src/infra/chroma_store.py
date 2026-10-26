@@ -4,6 +4,7 @@ import math
 from uuid import uuid4
 
 from langchain_chroma import Chroma
+from langchain_core.embeddings import Embeddings
 from langchain_openai import OpenAIEmbeddings
 
 
@@ -32,7 +33,7 @@ def add_preembedded_documents(vectorstore: Chroma, documents: list, vectors: lis
 
 def create_chroma_vectorstore(
     *,
-    embeddings: OpenAIEmbeddings,
+    embeddings: Embeddings,
     collection_name: str,
 ) -> Chroma:
     return Chroma(

@@ -14,11 +14,13 @@ from typing import Any
 from chromadb.errors import NotFoundError
 from langchain_chroma import Chroma
 from langchain_core.documents import Document
+from langchain_core.embeddings import Embeddings
 from openai import APITimeoutError
 
-from src.core.contracts.retrieval import UploadRetriever
+from src.core.contracts.retrieval import UploadRetriever, UploadSearchMode
 from src.core.documents import ParsedDocument
-from src.core.evidence import EvidenceRef
+from src.core.evidence import EvidenceRef, RetrievalScore, SearchHit, build_evidence
+from src.core.rules import HybridSearchConfig
 from src.core.uploads import UploadFileInfo, UploadRecord
 from src.core.upload_formats import is_document_upload
 from src.infra.chroma_store import build_openai_embeddings, create_chroma_vectorstore, add_preembedded_documents
@@ -26,11 +28,15 @@ from src.infra.chunking import ChunkedDocument, chunk_notebook, chunk_python_tex
 from src.infra.document_ingestion import DocumentIngestionContext, IngestionError
 from src.infra.embedding_cache import CachedEmbeddings
 from src.infra.notebook_loader import parse_canonical_notebook
+from src.infra.tools.local_rag.lexical import ChunkReference, KoreanBM25Index
+from src.infra.tools.local_rag.ranking import rank_retrieval_rows
+from src.infra.tools.local_rag.serialization import build_local_hit_bundle
 
 
 UPLOAD_CHUNK_SIZE = 800
 UPLOAD_CHUNK_OVERLAP = 120
 UPLOAD_CHUNKING_VERSION = "source-ranges-and-table-cells-v1"
+HYBRID_CANDIDATE_MULTIPLIER = 4
 
 
 @dataclass(frozen=True)
@@ -98,6 +104,7 @@ class UploadedRetrieverHandle:
     collection_name: str
     _vectorstore: Chroma = field(repr=False)
     _documents: tuple[ChunkedDocument, ...] = field(repr=False)
+    _lexical_index: KoreanBM25Index | None = field(default=None, repr=False)
     _cleaned_up: bool = field(default=False, init=False, repr=False)
 
     def cleanup(self) -> None:
@@ -107,6 +114,8 @@ class UploadedRetrieverHandle:
             _delete_upload_index(self._vectorstore)
             self._cleaned_up = True
         finally:
+            if self._lexical_index is not None:
+                self._lexical_index.release()
             for document in self._documents:
                 document.release()
 
@@ -121,6 +130,13 @@ class _SourceRegistry:
         if document is None:
             raise ValueError("Indexed chunk belongs to an unknown source revision")
         return document.hydrate(chunk)
+
+    def hydrate_reference(self, reference: ChunkReference) -> EvidenceRef:
+        document = self.by_snapshot[reference.snapshot_id]
+        element = next(element for element in document.parsed.elements if element.element_id == reference.element_id)
+        return build_evidence(snapshot=document.parsed.snapshot, element=element,
+                              start=reference.selection.start, end=reference.selection.end,
+                              cell_ids=reference.selection.cell_ids or None)
 
 
 class _SourceAwareVectorStore:
@@ -148,10 +164,75 @@ class _SourceAwareVectorStore:
 
 class _SourceAwareRetriever:
     def __init__(self, vectorstore: Chroma, documents: tuple[ChunkedDocument, ...],
-                 upload_files: tuple[UploadFileInfo, ...] = ()):
+                 upload_files: tuple[UploadFileInfo, ...], lexical_index: KoreanBM25Index | None,
+                 chunk_count: int, hybrid_config: HybridSearchConfig):
         self._registry = _SourceRegistry(documents)
         self.upload_files = upload_files
-        self.vectorstore = _SourceAwareVectorStore(vectorstore, self._registry)
+        self._dense = _SourceAwareVectorStore(vectorstore, self._registry)
+        self._lexical_index = lexical_index
+        self.chunk_count = chunk_count
+        self._hybrid_config = hybrid_config
+
+    def search(
+        self, query: str, k: int = 4, *, file_ids: Sequence[str] = (),
+        mode: UploadSearchMode = "hybrid",
+    ) -> list[SearchHit]:
+        if k < 1:
+            raise ValueError("Search result count must be positive")
+        if mode == "baseline":
+            rows = self._dense.similarity_search_with_score(query, k=k, file_ids=file_ids)
+            return build_local_hit_bundle(rank_retrieval_rows(rows, query=query))[0]
+        if mode not in {"bm25", "hybrid"}:
+            raise ValueError(f"Unsupported upload search mode: {mode}")
+        if self._lexical_index is None:
+            raise ValueError("This upload index was built without BM25")
+        candidate_k = k if mode == "bm25" else k * HYBRID_CANDIDATE_MULTIPLIER
+        lexical_rows = []
+        if mode == "bm25" or self._hybrid_config.dense_weight < 1:
+            lexical_rows = self._lexical_index.search(query, k=candidate_k, file_ids=file_ids)
+        lexical_hits = [SearchHit(evidence=self._registry.hydrate_reference(match.reference), rank=rank,
+                                 score=RetrievalScore(metric="bm25", raw=match.score, direction="higher"))
+                        for rank, match in enumerate(lexical_rows, start=1)]
+        if mode == "bm25":
+            return lexical_hits
+        dense_rows = []
+        if self._hybrid_config.dense_weight > 0:
+            dense_rows = self._dense.similarity_search_with_score(query, k=candidate_k, file_ids=file_ids)
+        dense_rows.sort(key=lambda row: row[1])
+        dense_hits = build_local_hit_bundle(dense_rows)[0]
+        evidence_by_id: dict[str, EvidenceRef] = {}
+        fused_scores: dict[str, float] = {}
+        # With coverage attenuation disabled, equal shares sum reciprocal ranks.
+        for rank, hit in enumerate(dense_hits, start=1):
+            evidence_by_id[hit.evidence.id] = hit.evidence
+            fused_scores[hit.evidence.id] = (2 * self._hybrid_config.dense_weight
+                                           / (self._hybrid_config.rrf_rank_constant + rank))
+        for rank, (hit, match) in enumerate(zip(lexical_hits, lexical_rows, strict=True), start=1):
+            evidence_by_id[hit.evidence.id] = hit.evidence
+            coverage_factor = match.query_coverage ** self._hybrid_config.lexical_coverage_power
+            contribution = (2 * (1 - self._hybrid_config.dense_weight) * coverage_factor
+                            / (self._hybrid_config.rrf_rank_constant + rank))
+            fused_scores[hit.evidence.id] = fused_scores.get(hit.evidence.id, 0.0) + contribution
+        # Equal fusion scores should prefer the stronger term match, not insertion order.
+        lexical_ranks = {hit.evidence.id: rank for rank, hit in enumerate(lexical_hits, start=1)}
+        ranked_ids = sorted(fused_scores, key=lambda evidence_id: (
+            -fused_scores[evidence_id], lexical_ranks.get(evidence_id, len(lexical_hits) + 1)))
+        if file_ids:
+            # Fusion can otherwise evict the sole candidate for a requested file.
+            reserved = {}
+            for evidence_id in ranked_ids:
+                file_id = evidence_by_id[evidence_id].element.metadata.get("file_id")
+                if file_id in file_ids and file_id not in reserved:
+                    reserved[file_id] = evidence_id
+            selected = set(reserved.values())
+            remaining = [evidence_id for evidence_id in ranked_ids if evidence_id not in selected]
+            selected.update(remaining[:max(0, max(k, len(set(file_ids))) - len(selected))])
+            ranked_ids = [evidence_id for evidence_id in ranked_ids if evidence_id in selected]
+        else:
+            ranked_ids = ranked_ids[:k]
+        return [SearchHit(evidence=evidence_by_id[evidence_id], rank=rank,
+                          score=RetrievalScore(metric="rrf", raw=fused_scores[evidence_id], direction="higher"))
+                for rank, evidence_id in enumerate(ranked_ids, start=1)]
 
     @property
     def source_documents(self) -> tuple[ParsedDocument, ...]:
@@ -162,19 +243,29 @@ def _index_documents(
     documents: tuple[ChunkedDocument, ...], *, collection_name: str,
     api_key: str | None, upload_files: tuple[UploadFileInfo, ...],
     ingestion: DocumentIngestionContext | None = None,
+    embeddings: Embeddings | None = None, build_bm25: bool = True,
+    hybrid_config: HybridSearchConfig,
 ) -> UploadedRetrieverHandle:
     vectorstore = None
+    lexical_index = None
+    owns_embeddings = embeddings is None
+    chunk_count = sum(len(document.chunks) for document in documents)
     try:
         try:
             if ingestion is not None:
                 ingestion.check_deadline()
-            embeddings = build_openai_embeddings(api_key)
+            if embeddings is None:
+                embeddings = build_openai_embeddings(api_key)
             vectorstore = create_chroma_vectorstore(
                 embeddings=embeddings, collection_name=collection_name)
         except IngestionError:
             raise
         except Exception as exc:
             raise RuntimeError("Upload index initialization failed") from exc
+        if build_bm25:
+            lexical_index = KoreanBM25Index([chunk for document in documents for chunk in document.chunks])
+            if ingestion is not None:
+                ingestion.check_deadline()
         # Keep each embedding/storage request bounded even for a large notebook.
         for document in documents:
             try:
@@ -184,7 +275,7 @@ def _index_documents(
                     batch = document.chunks[start:start + 128]
                     if ingestion is not None:
                         provider = embeddings
-                        if ingestion.deadline is not None and hasattr(embeddings, "request_timeout"):
+                        if owns_embeddings and ingestion.deadline is not None and hasattr(embeddings, "request_timeout"):
                             provider = build_openai_embeddings(api_key, timeout_seconds=max(0.1, ingestion.deadline - time.monotonic()))
                         if ingestion.cache_dir is not None:
                             snapshot = document.parsed.snapshot
@@ -214,10 +305,12 @@ def _index_documents(
                                              file_name=document.parsed.snapshot.title, retryable=True) from exc
                 raise RuntimeError(f"{document.parsed.snapshot.title}: embedding or vector insertion failed") from exc
             document.chunks.clear()
-        retriever = _SourceAwareRetriever(vectorstore, documents, upload_files)
+        retriever = _SourceAwareRetriever(vectorstore, documents, upload_files, lexical_index, chunk_count, hybrid_config)
         return UploadedRetrieverHandle(retriever=retriever, collection_name=collection_name,
-                                       _vectorstore=vectorstore, _documents=documents)
+                                       _vectorstore=vectorstore, _documents=documents, _lexical_index=lexical_index)
     except BaseException:
+        if lexical_index is not None:
+            lexical_index.release()
         if vectorstore is not None:
             try:
                 _delete_upload_index(vectorstore)
@@ -254,6 +347,8 @@ def _parse_upload(file: UploadRecord) -> ChunkedDocument:
 def build_upload_retriever(
     files: list[UploadRecord], *, session_id: str, generation: str,
     api_key: str | None = None, ingestion: DocumentIngestionContext | None = None,
+    embeddings: Embeddings | None = None, build_bm25: bool = True,
+    hybrid_config: HybridSearchConfig | None = None,
 ) -> UploadedRetrieverHandle:
     """Build an isolated candidate index without touching the currently active generation."""
     retry_pending_upload_index_cleanup()
@@ -315,4 +410,6 @@ def build_upload_retriever(
         raise
     catalog = tuple(file.public_info() for file in files)
     return _index_documents(tuple(documents), collection_name=collection_name,
-                            api_key=api_key, upload_files=catalog, ingestion=ingestion)
+                            api_key=api_key, upload_files=catalog, ingestion=ingestion,
+                            embeddings=embeddings, build_bm25=build_bm25,
+                            hybrid_config=hybrid_config or HybridSearchConfig())

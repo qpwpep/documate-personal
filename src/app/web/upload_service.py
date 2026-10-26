@@ -297,7 +297,8 @@ class UploadService:
                     max_chunks=self.settings.document_max_chunks,
                     deadline=time.monotonic() + self.settings.document_upload_timeout_seconds)
             handle = build_upload_retriever(records, session_id=session_id, generation=generation,
-                                          api_key=self.settings.openai_api_key, **options)
+                                          api_key=self.settings.openai_api_key,
+                                          build_bm25=self.settings.upload_search_mode != "baseline", **options)
             try:
                 if "ingestion" in options:
                     options["ingestion"].check_deadline()

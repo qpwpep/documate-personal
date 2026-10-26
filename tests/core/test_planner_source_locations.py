@@ -13,13 +13,13 @@ from __future__ import annotations
 
 import os
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import pytest
 
 from src.core.contracts.boundary.graph import build_graph_state_input
 from src.core.documents import ParsedDocument
-from src.core.evidence import EvidenceRef
+from src.core.evidence import SearchHit
 from src.core.uploads import UploadFileInfo
 from src.infra.llm import LLMRegistry, build_llm_registry
 from src.infra.settings import get_settings
@@ -32,20 +32,17 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-class _NoSearchStore:
-    def similarity_search_with_score(
-        self, query: str, k: int = 4, *, file_ids: Sequence[str] = (),
-    ) -> list[tuple[EvidenceRef, float]]:
-        raise AssertionError("The planner must not execute attachment retrieval")
-
-
 @dataclass(frozen=True)
 class _ManifestOnlyRetriever:
     """Advertise available uploads without starting a vector database or embedding call."""
 
     upload_files: tuple[UploadFileInfo, ...]
     source_documents: tuple[ParsedDocument, ...] = ()
-    vectorstore: _NoSearchStore = field(default_factory=_NoSearchStore)
+
+    def search(
+        self, query: str, k: int = 4, *, file_ids: Sequence[str] = (), mode: str = "hybrid",
+    ) -> list[SearchHit]:
+        raise AssertionError("The planner must not execute attachment retrieval")
 
 
 @dataclass(frozen=True)

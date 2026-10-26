@@ -50,7 +50,7 @@ class LocalChatModel:
                         else [item["file_id"] for item in files])
             parsed = {
                 "use_retrieval": bool(files),
-                "tasks": [{"route": "upload", "query": "compare values", "k": 4,
+                "tasks": [{"route": "upload", "query": self.controls.search_query, "k": 4,
                            "requirement": {"file_ids": file_ids}}] if files else [],
                 "request_contract": WireRequestContract(slack_recipient={"state": "omitted"}).model_dump(mode="json"),
             }
@@ -75,14 +75,15 @@ class LocalChatModel:
 
 
 @pytest.fixture
-def api(tmp_path, monkeypatch):
+def api(tmp_path, monkeypatch, request):
     settings = AppSettings(
         _env_file=None, openai_api_key="test-key", tavily_api_key="test-key",
         slack_bot_token="", slack_default_user_id="", slack_default_dm_email="",
         upload_max_files=10, upload_max_file_mib=1, upload_max_total_mib=2,
         session_ttl_seconds=5, session_cleanup_interval_seconds=1,
+        upload_search_mode=getattr(request, "param", "hybrid"),
     )
-    controls = SimpleNamespace(planned_file_ids=None)
+    controls = SimpleNamespace(planned_file_ids=None, search_query="compare values")
     monkeypatch.setattr("src.app.web.app.get_settings", lambda: settings)
     monkeypatch.setattr("src.infra.runtime_paths.get_project_root_path", lambda: tmp_path)
     monkeypatch.setattr("src.infra.chroma_store.OpenAIEmbeddings", lambda **kwargs: LocalEmbeddings())
@@ -167,6 +168,32 @@ def final_response(api, **kwargs):
 def answer(api, **kwargs):
     final = final_response(api, **kwargs)
     return AnswerResponse.model_validate(final["response"])
+
+
+@pytest.mark.parametrize(("api", "expected_metric"), [
+    ("baseline", "l2"), ("bm25", "bm25"), ("hybrid", "rrf"),
+], indirect=["api"])
+def test_configured_search_mode_reaches_http_answers_and_upload_index(api, expected_metric):
+    """The configured search mode controls both the ready index and subsequent HTTP retrieval."""
+    current = sync(api, add=[staged(api, "contract.py", "# 계약을 갱신한다.\nrenewal_days = 30\n")])
+    api.controls.search_query = "계약"
+
+    final = final_response(api, query="첨부의 계약 갱신을 설명해줘", uploads=context(current), include_debug=True)
+
+    response = AnswerResponse.model_validate(final["response"])
+    assert {citation.evidence.snapshot.title for citation in response.citations} == {"contract.py"}
+    hits = final["debug"]["observed_hits"]
+    assert hits
+    assert {hit["score"]["metric"] for hit in hits} == {expected_metric}
+    with api.client.app.state.session_store.locked_session("session-a") as (entry, _wait_ms):
+        retriever = entry.agent.session.upload_retriever_handle.retriever
+        if api.settings.upload_search_mode == "baseline":
+            with pytest.raises(ValueError, match="built without BM25"):
+                retriever.search("계약", mode="bm25")
+        else:
+            lexical_hits = retriever.search("계약", mode="bm25")
+            assert [hit.evidence.snapshot.title for hit in lexical_hits] == ["contract.py"]
+            assert all(hit.score.metric == "bm25" for hit in lexical_hits)
 
 
 def test_sync_rejects_bytes_changed_after_approval(api):

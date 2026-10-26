@@ -226,6 +226,7 @@ class LocalRagTest(unittest.TestCase):
                     query="train_test_split parameter",
                     k=2,
                     retriever=handle.retriever,
+                    mode="baseline",
                 )
             finally:
                 handle.cleanup()

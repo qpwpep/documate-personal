@@ -93,17 +93,16 @@ def test_planner_preserves_python_fragments_as_literal_requirements(fragment, ma
 
 def test_planner_cannot_widen_an_unavailable_file_scope_to_active_uploads():
     """An unavailable file stays scoped through planning and execution without borrowing active files."""
-    from types import SimpleNamespace
     from src.infra.tools.local_rag.tool import build_upload_search_tool
     from src.runtime.nodes.retrieval import make_retrieve_dispatch_node
 
-    class ScopedVectorStore:
-        def similarity_search_with_score(self, query, *, k, file_ids):
+    class ScopedRetriever:
+        def search(self, query, *, k, file_ids, mode):
             assert file_ids == ["missing"]
             return []
 
     task = RetrievalTask(route="upload", query="explain setup", k=4, requirement={"file_ids": ["missing"]})
-    retriever = SimpleNamespace(vectorstore=ScopedVectorStore())
+    retriever = ScopedRetriever()
     state = build_graph_state_input(user_input=task.query, retriever=retriever)
 
     state.update(make_planner_node(_CapturePlannerLLM(PlannerOutput(use_retrieval=True, tasks=[task])), False)(state))
@@ -119,14 +118,13 @@ def test_planner_cannot_widen_an_unavailable_file_scope_to_active_uploads():
 
 def test_retrieval_retry_keeps_requested_files_when_query_changes():
     """A rewritten search still queries and reports missing evidence for every requested file."""
-    from types import SimpleNamespace
     from src.infra.tools.local_rag.tool import build_upload_search_tool
     from src.runtime.nodes.retrieval import make_retrieve_dispatch_node
 
     searches = []
 
-    class ScopedVectorStore:
-        def similarity_search_with_score(self, query, *, k, file_ids):
+    class ScopedRetriever:
+        def search(self, query, *, k, file_ids, mode):
             searches.append({"query": query, "k": k, "file_ids": file_ids})
             return []
 
@@ -134,7 +132,7 @@ def test_retrieval_retry_keeps_requested_files_when_query_changes():
     uploads = tuple({"file_id": file_id, "name": f"{file_id}.py", "size_bytes": 10,
                      "content_hash": "sha256:" + "a" * 64, "source_uri": f"upload://session/{file_id}"}
                     for file_id in ["alpha", "beta"])
-    state = build_graph_state_input(user_input=first.query, retriever=SimpleNamespace(vectorstore=ScopedVectorStore()), upload_files=uploads,
+    state = build_graph_state_input(user_input=first.query, retriever=ScopedRetriever(), upload_files=uploads,
                                     request_contract=RequestContract(),
                                     retry={"attempt": 1, "original_tasks": [first.model_dump()], "failed_requirement_ids": [first.requirement_id]})
 
