@@ -5,8 +5,10 @@ description = "DocuMate: a LangGraph-based learning assistant combining official
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "bm25s>=0.3.15",
     "fastapi>=0.120.1",
     "jsonschema>=4.26.0",
+    "kiwipiepy>=0.24.1",
     "langchain-chroma>=1.0.0",
     "langchain-openai>=1.0.1",
     "langchain-text-splitters>=1.1.1",
