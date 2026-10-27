@@ -49,9 +49,14 @@ reason identifying the relevant requested and planned meaning.
   only if the plan does not introduce a conflicting language restriction. Never
   infer the target solely from the language in which the question is written.
 - constraints: preserve material requested conditions and prohibitions without
-  inventing restrictions that change the task. Do not require optional details,
-  literal wording, a specific layout, or domain assumptions the user did not ask
-  for. Missing subject information must remain unresolved rather than guessed.
+  inventing restrictions that change the task. Evaluate body instructions,
+  content conditions, format conditions, and preferences together. Equivalent
+  restatements of the requested task are allowed regardless of category or
+  wording. Preserve requested preferences, including audience level and tone,
+  as preferences rather than promoting them to mandatory content or layout.
+  Do not require optional details, literal wording, a specific layout, or domain
+  assumptions the user did not ask for. Missing subject information must remain
+  unresolved rather than guessed.
 
 Every check is mandatory. Do not use not-applicable, abstention, numeric scores,
 or a single overall verdict. Do not let correct delivery actions compensate for
@@ -91,9 +96,15 @@ def _hash(value: Any) -> str:
     return hashlib.sha256(_json(value).encode("utf-8")).hexdigest()
 
 
-def requires_semantic_assessment(case: dict) -> bool:
-    """Applicability belongs to the oracle, never to the model's chosen body."""
-    return case["expected"]["body"]["kind"] in SEMANTIC_BODY_KINDS
+def requires_semantic_assessment(case: dict, observation: dict) -> bool:
+    """The oracle's task and either side's conditions require meaning checks."""
+    expected = case["expected"]
+    answer = (observation.get("canonical") or {}).get("answer") or {}
+    return bool(
+        expected["body"]["kind"] in SEMANTIC_BODY_KINDS
+        or expected["requirements"]["required"] or expected["preferences"]
+        or answer.get("content") or answer.get("format") or answer.get("preferences")
+    )
 
 
 def semantic_input(case: dict, observation: dict) -> dict:
@@ -131,6 +142,7 @@ def semantic_assessor_manifest(settings: Any | None = None) -> dict:
         "prompt": _SEMANTIC_SYSTEM_PROMPT,
         "schema": schema,
         "required_body_kinds": sorted(SEMANTIC_BODY_KINDS),
+        "condition_scope": "oracle requirements/preferences and candidate answer conditions",
     }
     return {**definition, "digest": _hash(definition)}
 
@@ -159,7 +171,7 @@ class BodySemanticAssessor:
         self.definition = definition
 
     def __call__(self, case: dict, observation: dict) -> dict:
-        if not requires_semantic_assessment(case):
+        if not requires_semantic_assessment(case, observation):
             return {"status": "not_applicable", "reason": "The oracle requires only structural body verification."}
         if not observation.get("contract_accepted") or not observation.get("canonical"):
             return {"status": "not_applicable", "reason": "The product did not accept a body contract."}
@@ -222,7 +234,7 @@ def build_semantic_assessor(settings: Any) -> Callable[[dict, dict], dict]:
 
 def score_semantics(case: dict, observation: dict, *, accepted: bool) -> tuple[dict, str | None]:
     """Return a dimension and any evaluation/observation failure classification."""
-    if not requires_semantic_assessment(case) or not accepted:
+    if not requires_semantic_assessment(case, observation) or not accepted:
         return {"passed": True, "errors": [], "status": "not_applicable"}, None
     assessment = observation.get("body_semantics")
     if not isinstance(assessment, dict) or assessment.get("status") == "unavailable":

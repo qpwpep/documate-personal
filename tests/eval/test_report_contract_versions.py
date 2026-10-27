@@ -149,7 +149,7 @@ def test_history_refresh_ignores_historical_runs_without_rewriting_them(tmp_path
     (output_root / "latest_release_run.txt").write_text(historical.name, encoding="utf-8")
     before = {path: path.read_bytes() for path in output_root.rglob("*") if path.is_file()}
     readme = tmp_path / "README.md"
-    readme.write_text("# Fixture\n\n## 검증 결과\n\nOld history.\n\n## 문서\n", encoding="utf-8")
+    readme.write_text("# Fixture\n\n## 검증 결과\n\n<!-- BEGIN BENCHMARK HISTORY -->\n\nOld history.\n\n<!-- END BENCHMARK HISTORY -->\n\n## 문서\n", encoding="utf-8")
     svg = tmp_path / "history.svg"
 
     latest, comparable = refresh_history_report(
@@ -240,7 +240,7 @@ def test_release_history_rejects_smoke_after_filtering_old_release_without_write
         (output_root / "latest_release_run.txt").write_text(pointer_target, encoding="utf-8")
 
     readme = tmp_path / "README.md"
-    readme.write_text("# Fixture\n\n## 검증 결과\n\nOriginal release history.\n\n## 문서\n", encoding="utf-8")
+    readme.write_text("# Fixture\n\n## 검증 결과\n\n<!-- BEGIN BENCHMARK HISTORY -->\n\nOriginal release history.\n\n<!-- END BENCHMARK HISTORY -->\n\n## 문서\n", encoding="utf-8")
     svg = tmp_path / "history.svg"
     svg.write_text("<svg><!-- Original release history --></svg>\n", encoding="utf-8")
     before = {path: path.read_bytes() for path in tmp_path.rglob("*") if path.is_file()}
@@ -263,7 +263,7 @@ def test_history_ignores_pointer_to_another_track_when_matching_runs_exist(tmp_p
     expected, other = (release, smoke) if track == "release" else (smoke, release)
     (output_root / f"latest_{track}_run.txt").write_text(other.run_id, encoding="utf-8")
     readme = tmp_path / "README.md"
-    readme.write_text("# Fixture\n\n## 검증 결과\n\nOld history.\n\n## 문서\n", encoding="utf-8")
+    readme.write_text("# Fixture\n\n## 검증 결과\n\n<!-- BEGIN BENCHMARK HISTORY -->\n\nOld history.\n\n<!-- END BENCHMARK HISTORY -->\n\n## 문서\n", encoding="utf-8")
     svg = tmp_path / "history.svg"
 
     latest, comparable = refresh_history_report(
@@ -308,7 +308,7 @@ def test_history_excludes_previous_execution_and_scoring_without_rewriting(
     (output_root / "latest_release_run.txt").write_text(previous.run_id, encoding="utf-8")
     before = {path: path.read_bytes() for path in output_root.rglob("*") if path.is_file()}
     readme = tmp_path / "README.md"
-    readme.write_text("# Fixture\n\n## 검증 결과\n\nOld history.\n\n## 문서\n", encoding="utf-8")
+    readme.write_text("# Fixture\n\n## 검증 결과\n\n<!-- BEGIN BENCHMARK HISTORY -->\n\nOld history.\n\n<!-- END BENCHMARK HISTORY -->\n\n## 문서\n", encoding="utf-8")
 
     latest, comparable = refresh_history_report(
         output_root=output_root, readme_path=readme, svg_path=tmp_path / "history.svg",

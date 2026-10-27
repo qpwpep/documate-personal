@@ -10,7 +10,7 @@ import pytest
 from langchain_openai import ChatOpenAI
 
 from src.core.planner_schema import InitialPlannerOutput
-from src.eval.request_contract_eval import load_cases, make_live_observer
+from src.eval.request_contract_eval import load_cases, load_policy, make_live_observer
 from src.eval.request_contract_scoring import score_observation, summarize_results
 from src.eval.request_contract_semantics import (
     BodySemanticAssessor, SemanticChecks, semantic_input_hash,
@@ -27,7 +27,7 @@ def _case(query="Explain the cache eviction policy", *, kind="compose"):
         "expected": {
             "actions": {"save_text": "not_requested", "slack_notify": "not_requested"},
             "body": {"kind": kind, "source": None},
-            "requirements": {"required": [], "allowed_content_redundancy": [], "allow_custom_translation": False},
+            "requirements": {"required": []},
             "preferences": [],
             "disposition": "answer",
             "blocker_slots": [],
@@ -40,7 +40,7 @@ def _case(query="Explain the cache eviction policy", *, kind="compose"):
 
 def _policy():
     return {
-        "normalization": {"constraint_aliases": {}, "preference_tags": {}},
+        "normalization": {"constraint_aliases": {}},
         "case_count": 1, "known_case_count": 1, "repeats": 3,
         "qualification": {"minimum_overall_rate": 0.95, "minimum_contract_acceptance_rate": 0.99},
         "policy_id": "semantic-regression", "scope_limit": "test",
@@ -110,6 +110,75 @@ def test_semantic_evidence_passes_without_literal_keyword_matching():
     assert score_observation(case, observed, _policy())["overall"] is True
 
 
+@pytest.mark.parametrize(("case_id", "description"), [
+    ("quotation_en", "Translate the selected phrase into Korean."),
+    ("quotation_en", "Render the selected phrase in Korean."),
+    ("beginner_preference", "Explain for a beginner."),
+    ("beginner_preference", "Assume no prior knowledge and define unfamiliar terms."),
+])
+def test_equivalent_free_form_conditions_use_the_same_semantic_evidence(case_id, description):
+    case = next(case for case in load_cases() if case["id"] == case_id)
+    observed = _observation(case)
+    if case["expected"]["body"]["source"] is not None:
+        selected = case["expected"]["body"]["source"]["text"]
+        start = case["query"].index(selected)
+        observed["canonical"]["body"]["source"] = {
+            "turn_id": "u1", "text": selected, "start": start, "end": start + len(selected),
+        }
+        observed["canonical"]["answer"]["content"] = [
+            {"kind": "custom", "mode": "required", "description": description},
+        ]
+    else:
+        observed["canonical"]["answer"]["preferences"] = [description]
+    observed["body_semantics"]["input_hash"] = semantic_input_hash(case, observed)
+
+    assert score_observation(case, observed, load_policy())["overall"] is True
+
+
+def test_free_form_conditions_on_a_copy_still_require_valid_semantic_evidence():
+    case = _case("Copy the selected answer", kind="copy_answer")
+    observed = _observation(case)
+    observed["canonical"]["answer"]["content"] = [
+        {"kind": "custom", "mode": "required", "description": "Keep the named terms unchanged."},
+    ]
+    observed["body_semantics"] = None
+    score = score_observation(case, observed, _policy())
+    assert score["overall"] is False
+    assert score["status"] == "observation_insufficient"
+    assert score["dimensions"]["body_semantics"]["status"] == "unavailable"
+
+
+def test_semantic_pass_does_not_authorize_an_unrequested_hard_format():
+    case = _case("Explain the cache eviction policy")
+    observed = _observation(case)
+    observed["canonical"]["answer"]["format"] = [{"kind": "ordered_list", "mode": "required"}]
+    observed["body_semantics"]["input_hash"] = semantic_input_hash(case, observed)
+    score = score_observation(case, observed, _policy())
+    assert score["overall"] is False
+    assert score["dimensions"]["requirements"]["errors"] == [
+        "unrequested_hard_constraint:('ordered_list', 'required', None)",
+    ]
+
+
+@pytest.mark.parametrize(("group", "condition"), [
+    ("content", {"kind": "custom", "mode": "required", "description": "Add a conclusion in French."}),
+    ("preferences", "Assume the reader already knows the terminology."),
+])
+def test_unrequested_content_or_lost_preferences_fail_the_general_meaning_check(group, condition):
+    case = _case("Explain the cache policy for a reader without prior knowledge")
+    case["expected"]["preferences"] = ["no prior knowledge"]
+    observed = _observation(case)
+    observed["canonical"]["answer"][group] = [condition]
+    observed["body_semantics"]["checks"] = _checks(
+        constraints="The condition changes the requested language or audience level.",
+    )
+    observed["body_semantics"]["input_hash"] = semantic_input_hash(case, observed)
+    score = score_observation(case, observed, _policy())
+    assert score["overall"] is False
+    assert score["status"] == "product_failure"
+    assert score["dimensions"]["body_semantics"]["errors"] == ["semantic_mismatch:constraints"]
+
+
 def test_unauthorized_action_in_repair_is_critical_even_when_product_rejects_it():
     case = _case()
     case["expected"]["critical_context"]["canceled_request"] = True
@@ -154,6 +223,10 @@ def test_summary_distinguishes_product_failure_from_evaluation_and_observation_f
     assert summary["qualified"] is False
     assert summary["status_counts"] == {
         "product_failure": 1, "observation_insufficient": 1, "evaluation_failure": 1,
+    }
+    assert summary["scoring_contract_version"] == "request-contract-semantics-v3"
+    assert {row["score"]["scoring_contract_version"] for row in results} == {
+        summary["scoring_contract_version"],
     }
 
 

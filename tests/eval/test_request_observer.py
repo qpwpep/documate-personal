@@ -135,6 +135,7 @@ def test_manifest_records_effective_reasoning_retry_and_budget_settings(monkeypa
     assert first["settings"]["planner_provider_max_retries"] == 0
     assert first["settings"]["planner_call_budget"] == {"max_calls": 3, "timeout_seconds": 45}
     assert first["hashes"]["semantic_assessor"] == first["semantic_assessor"]["digest"]
+    assert first["scoring_contract_version"] == "request-contract-semantics-v3"
 
 
 def test_capture_keeps_valid_repair_and_is_scoped_to_the_current_observer(planner_http):

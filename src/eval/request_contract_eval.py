@@ -19,7 +19,7 @@ import re
 import time
 from typing import Any, Callable
 
-from src.eval.request_contract_scoring import score_observation, summarize_results
+from src.eval.request_contract_scoring import SCORING_CONTRACT_VERSION, score_observation, summarize_results
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -321,6 +321,7 @@ def build_manifest(*, run_id: str, cases: list[dict], policy: dict, settings: An
             dependencies[name] = None
     return {
         "run_id": run_id, "mode": mode, "policy_id": policy["policy_id"],
+        "scoring_contract_version": SCORING_CONTRACT_VERSION,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "settings": whitelisted, "python": platform.python_version(), "dependencies": dependencies,
         "hashes": {"code": code["digest"], "code_files": code["files"], "schema": _hash(_json(schema)),

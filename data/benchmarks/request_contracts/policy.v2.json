@@ -45,18 +45,6 @@
       "content.code_example": "code",
       "format.code_block": "code"
     },
-    "allowed_semantic_redundancy": [
-      "content.explanation"
-    ],
-    "preference_tags": {
-      "beginner": [
-        "beginner",
-        "novice",
-        "초보",
-        "초급",
-        "입문"
-      ]
-    },
     "acknowledgement_body_policy": "not_applicable_when_no_action_is_requested_and_the_only_task_is_prohibition_or_cancel",
     "no_per_case_or_answers": true,
     "blocked_body_representations": {

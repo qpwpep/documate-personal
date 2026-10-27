@@ -7,6 +7,9 @@ from typing import Any
 from src.eval.request_contract_semantics import score_semantics
 
 
+SCORING_CONTRACT_VERSION = "request-contract-semantics-v3"
+
+
 def _dimension(errors: list[str], **details: Any) -> dict[str, Any]:
     return {"passed": not errors, "errors": errors, **details}
 
@@ -103,13 +106,14 @@ def score_observation(case: dict, observation: dict, policy: dict) -> dict[str, 
         dimensions = {
             name: {"passed": None, "errors": [], "status": "not_evaluated"}
             for name in ("validity", "actions", "body", "body_semantics", "attempt_coverage",
-                         "requirements", "preferences", "disposition", "blockers", "state")
+                         "requirements", "disposition", "blockers", "state")
         }
         dimensions["evaluation_execution"] = _dimension(
             [f"product_execution_not_observed:{execution.get('status', 'missing')}"],
             status="failed", observed=execution,
         )
         return {
+            "scoring_contract_version": SCORING_CONTRACT_VERSION,
             "dimensions": dimensions, "critical_failures": [], "critical_attempts": [],
             "critical_assessment": "not_evaluated", "contract_accepted": False,
             "overall": False, "status": "evaluation_failure",
@@ -143,13 +147,10 @@ def score_observation(case: dict, observation: dict, policy: dict) -> dict[str, 
             observed.add(key)
             if key in required:
                 continue
-            semantic_redundancy = group == "content" and item.get("kind") in expected["requirements"]["allowed_content_redundancy"] and item.get("mode") == "required"
-            translation_redundancy = (
-                group == "content" and item.get("kind") == "custom" and item.get("mode") == "required"
-                and expected["requirements"].get("allow_custom_translation")
-                and any(word in str(item.get("description") or "").casefold() for word in ("translat", "번역"))
-            )
-            if not semantic_redundancy and not translation_redundancy:
+            # Content conditions can restate the body task in many equivalent
+            # ways. Their meaning is checked with the whole request; explicit
+            # hard layout requirements still need an exact oracle counterpart.
+            if group == "format":
                 unexpected.append(key)
     requirement_errors = [f"missing:{item}" for item in sorted(required - observed, key=str)]
     requirement_errors.extend(f"unrequested_hard_constraint:{item}" for item in sorted(unexpected, key=str))
@@ -157,11 +158,6 @@ def score_observation(case: dict, observation: dict, policy: dict) -> dict[str, 
         requirement_errors.append("canonical_requirements_missing")
     dimensions["requirements"] = _dimension(requirement_errors, observed=[list(item) for item in sorted(observed, key=str)])
 
-    preference_text = " ".join(str(value) for value in answer.get("preferences", [])).casefold()
-    missing_preferences = [tag for tag in expected["preferences"] if not any(
-        word.casefold() in preference_text for word in policy["normalization"]["preference_tags"][tag]
-    )]
-    dimensions["preferences"] = _dimension([f"missing_preference:{tag}" for tag in missing_preferences])
     dimensions["disposition"] = _dimension([] if observation.get("disposition") == expected["disposition"] else [
         f"disposition:{observation.get('disposition')}!={expected['disposition']}"
     ])
@@ -254,6 +250,7 @@ def score_observation(case: dict, observation: dict, policy: dict) -> dict[str, 
         failure_categories.append("observation_insufficient")
     overall = all(value["passed"] for value in dimensions.values()) and not critical
     return {
+        "scoring_contract_version": SCORING_CONTRACT_VERSION,
         "dimensions": dimensions, "critical_failures": critical,
         "critical_attempts": critical_attempts,
         "critical_assessment": "incomplete" if attempt_errors else "evaluated",
@@ -296,7 +293,8 @@ def summarize_results(results: list[dict], cases: list[dict], policy: dict, *, r
         "unchanged_code": code_unchanged,
     }
     return {
-        "policy_id": policy["policy_id"], "qualified": all(gates.values()), "gates": gates, "rates": rates,
+        "policy_id": policy["policy_id"], "scoring_contract_version": SCORING_CONTRACT_VERSION,
+        "qualified": all(gates.values()), "gates": gates, "rates": rates,
         "counts": {"planned": expected_samples, "completed": len(results), "passed": successes,
                    "failed": len(results) - successes, "contract_accepted": accepted},
         "critical_failures": dict(critical), "cases": by_case,
