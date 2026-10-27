@@ -371,11 +371,11 @@ def _split_chat_submission(submission: Any) -> tuple[str | None, list[Any]]:
     if submission is None:
         return None, []
     if isinstance(submission, str):
-        return submission.strip() or None, []
-
-    text = str(getattr(submission, "text", "") or "").strip() or None
-    files = getattr(submission, "files", None) or []
-    return text, list(files)
+        text, files = submission, []
+    else:
+        text = str(getattr(submission, "text", "") or "")
+        files = getattr(submission, "files", None) or []
+    return text if text.strip() else None, list(files)
 
 
 if __name__ == "__main__":
