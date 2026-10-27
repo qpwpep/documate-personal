@@ -1,13 +1,14 @@
 """An explicit export preserves the displayed answer instead of regenerating it."""
+import json
 from pathlib import Path
 
-from langchain_core.messages import HumanMessage
+import pytest
 
 from src.core.answer_schema import ResponseIssue, export_answer_text, text_document
 from src.core.contracts import GraphState
 from src.core.contracts.boundary.graph import build_graph_state_input
 from src.core.conversation_memory import ConversationMemoryPolicy
-from src.core.planner_schema import PlannerOutput
+from src.core.planner_schema import InitialPlannerOutput
 from src.infra import saved_artifacts
 from src.infra.tools.save_text import build_save_text_tool
 from src.runtime.make_graph import build_graph
@@ -17,7 +18,7 @@ from src.runtime.nodes.retrieval import make_retrieve_dispatch_node
 from src.runtime.nodes.session import add_user_message, make_summarize_node
 from src.runtime.nodes.synthesis import make_synthesize_node
 from src.runtime.nodes.validation import make_post_synthesis_validation_node, make_pre_synthesis_validation_node
-from tests.core.helpers import SequentialGraph, make_decisions_client
+from tests.core.helpers import SequentialGraph, make_decisions_client, mock_chat_model, structured_model
 from tests.core.test_decisions_validation import _state
 from tests.core.test_pending_action_delivery import _manager
 from tests.synthesis_fixtures import synthesis_excerpt_limits
@@ -28,35 +29,39 @@ def _unavailable(*args, **kwargs):
 
 
 class ExportPlanner:
-    def __init__(self, *, semantic_constraint=False, transform=False):
+    def __init__(self, *, semantic_constraint=False, transform=False, action="save_text"):
         self.semantic_constraint = semantic_constraint
         self.transform = transform
+        self.action = action
 
-    def invoke(self, messages, *, timeout=None):
-        user = [message for message in messages if isinstance(message, HumanMessage)][-1]
-        return PlannerOutput(use_retrieval=False, tasks=[], request_contract={
+    def invoke(self, messages):
+        context = next(message for message in messages if message.name == "request_context")
+        user = json.loads(context.content.split("\n", 1)[1])["user_turn_ledger"][-1]
+        return InitialPlannerOutput(use_retrieval=False, tasks=[], request_contract={
             "body": ({"kind": "transform_answer", "source": {"ref": "previous"},
                       "instruction": "이전 답변을 요약해줘", "evidence_ids": ["export"]} if self.transform else
                      {"kind": "copy_answer", "source": {"ref": "previous"}}),
-            "actions": {"save_text": {"intent": "requested", "evidence_ids": ["export"]}},
+            "actions": {self.action: {"intent": "requested", "evidence_ids": ["export"]}} if self.action else {},
             "answer": {"content": [{"kind": "custom", "mode": "required", "description": "새 조건",
                                      "evidence_ids": ["export"]}]} if self.semantic_constraint else {},
-            "evidence": [{"id": "export", "turn_id": user.id, "quote": str(user.content),
+            "evidence": [{"id": "export", "turn_id": user["turn_id"], "quote": user["text"],
                           "scope": "current_request", "interpretation": "instruction"}],
             "slack_recipient": {"state": "omitted"},
         }).model_dump(mode="json")
 
 
-def export_graph(*, semantic_constraint=False, probabilities=None, transform=False):
+def export_graph(*, semantic_constraint=False, probabilities=None, transform=False, action="save_text"):
     policy = ConversationMemoryPolicy()
-    class RejectedTransformation:
-        def invoke(self, messages, *, timeout=None):
-            return text_document("원문이 보장하지 않는 새 설명입니다.", basis="source", refs=["e1"]).model_dump(mode="json")
+    planner = ExportPlanner(semantic_constraint=semantic_constraint, transform=transform, action=action)
+    synthesizer = mock_chat_model(
+        (lambda _messages: text_document("원문이 보장하지 않는 새 설명입니다.", basis="source", refs=["e1"]).model_dump(mode="json"))
+        if transform else _unavailable
+    )
     return build_graph(
         GraphState, add_user_message, make_summarize_node(None, False, policy=policy),
-        make_planner_node(ExportPlanner(semantic_constraint=semantic_constraint, transform=transform), False),
+        make_planner_node(structured_model(planner.invoke, InitialPlannerOutput), False),
         make_retrieve_dispatch_node(_unavailable, _unavailable, False),
-        make_synthesize_node(RejectedTransformation() if transform else _unavailable), memory_policy=policy,
+        make_synthesize_node(synthesizer), memory_policy=policy,
         pre_synthesis_validation_node=make_pre_synthesis_validation_node(
             False, excerpt_limits=synthesis_excerpt_limits(), decisions_client=make_decisions_client(probabilities)),
         post_synthesis_validation_node=make_post_synthesis_validation_node(

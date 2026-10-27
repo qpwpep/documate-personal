@@ -1,10 +1,10 @@
 """Public node contracts for preserving independent evidence requirements."""
 
 from src.core.contracts import RetryState
-from src.core.planner_schema import PlannerOutput
+from src.core.planner_schema import PlannerOutput, RetrievalRewriteOutput
 from src.core.request_contracts import RequestContract
 from src.runtime.nodes.planner import make_planner_node
-from tests.core.helpers import build_test_state
+from tests.core.helpers import build_test_state, structured_model
 from src.core.evidence import SearchHit
 from src.core.planner_schema import RetrievalTask
 import json
@@ -97,7 +97,8 @@ def test_retrieval_rewrite_rejects_an_unknown_requirement():
     rewrites = [{"requirement_id": "unknown", "query": "new", "k": 3}]
     state, failed, successful, contract = _rewrite_state()
     with pytest.raises(LLMCallError) as caught:
-        make_planner_node(None, False, llm_planner_retry=_RewriteModel(rewrites))(state)
+        make_planner_node(None, False, llm_planner_retry=structured_model(
+            _RewriteModel(rewrites).invoke, RetrievalRewriteOutput))(state)
     assert caught.value.problem.code == "model_output_invalid"
     assert state["retry"].original_tasks == [failed, successful]
     assert state["runtime"].request_contract == contract

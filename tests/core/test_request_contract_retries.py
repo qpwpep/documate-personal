@@ -1,13 +1,13 @@
+import json
 from pathlib import Path
 
 import pytest
-from langchain_core.messages import HumanMessage
 
 from src.core.answer_schema import export_answer_text, finalize_answer, text_document
 from src.core.contracts import GraphState, RetryState
 from src.core.contracts.boundary.graph import build_graph_state_input
 from src.core.conversation_memory import ConversationMemoryPolicy
-from src.core.planner_schema import PlannerOutput
+from src.core.planner_schema import InitialPlannerOutput
 from src.core.request_contracts import WireRequestContract
 from src.infra.tools.save_text import build_save_text_tool
 from src.infra import saved_artifacts
@@ -18,9 +18,14 @@ from src.runtime.nodes.retrieval import make_retrieve_dispatch_node
 from src.runtime.nodes.session import add_user_message, make_summarize_node
 from src.runtime.nodes.synthesis import make_synthesize_node
 from src.runtime.nodes.validation import make_post_synthesis_validation_node, make_pre_synthesis_validation_node
-from tests.core.helpers import make_decisions_client
+from tests.core.helpers import make_decisions_client, mock_chat_model, structured_model
 from tests.core.test_pending_action_delivery import delivery_tools
 from tests.synthesis_fixtures import synthesis_excerpt_limits
+
+
+def _current_turn(messages):
+    context = next(message for message in messages if message.name == "request_context")
+    return json.loads(context.content.split("\n", 1)[1])["user_turn_ledger"][-1]
 
 
 class PlannerBoundary:
@@ -29,7 +34,7 @@ class PlannerBoundary:
         self.save_intent = save_intent
 
     def invoke(self, messages):
-        user = [message for message in messages if isinstance(message, HumanMessage)][-1]
+        user = _current_turn(messages)
         contract = WireRequestContract.model_validate({
             "slack_recipient": {"state": "omitted"},
             "body": {"kind": "transform_answer", "source": {"ref": "previous"},
@@ -37,12 +42,12 @@ class PlannerBoundary:
             "actions": {"save_text": {"intent": self.save_intent, "evidence_ids": ["action"]}},
             "answer": {"format": [{"kind": "line_count", "mode": "required", "value": 3, "evidence_ids": ["format"]}]},
             "evidence": [
-                {"id": "format", "turn_id": user.id or "user:0", "quote": str(user.content), "scope": "answer.format.line_count", "interpretation": "instruction"},
-                {"id": "action", "turn_id": user.id or "user:0", "quote": str(user.content), "scope": "actions.save_text",
+                {"id": "format", "turn_id": user["turn_id"], "quote": user["text"], "scope": "answer.format.line_count", "interpretation": "instruction"},
+                {"id": "action", "turn_id": user["turn_id"], "quote": user["text"], "scope": "actions.save_text",
                  "interpretation": "instruction" if self.save_intent == "requested" else "negation"},
             ],
         })
-        return PlannerOutput(use_retrieval=False, tasks=[], request_contract=contract).model_dump(mode="json")
+        return InitialPlannerOutput(use_retrieval=False, tasks=[], request_contract=contract).model_dump(mode="json")
 
 
 class RepairingModelBoundary:
@@ -66,9 +71,9 @@ def test_transform_repair_preserves_contract_and_delivers_only_the_repaired_body
     graph = build_graph(
         state_type=GraphState, add_user_node=add_user_message,
         summarize_node=make_summarize_node(None, False, policy=policy),
-        planner_node=make_planner_node(PlannerBoundary(previous, save_intent), False),
+        planner_node=make_planner_node(structured_model(PlannerBoundary(previous, save_intent).invoke, InitialPlannerOutput), False),
         retrieve_dispatch_node=make_retrieve_dispatch_node(unavailable_boundary, unavailable_boundary, False),
-        synthesize_node=make_synthesize_node(RepairingModelBoundary()),
+        synthesize_node=make_synthesize_node(mock_chat_model(RepairingModelBoundary().invoke)),
         pre_synthesis_validation_node=make_pre_synthesis_validation_node(False, excerpt_limits=synthesis_excerpt_limits(), decisions_client=make_decisions_client()),
         post_synthesis_validation_node=make_post_synthesis_validation_node(False, decisions_client=make_decisions_client()),
         action_postprocess_node=make_action_postprocess_node(build_save_text_tool(), unavailable_boundary, False),
@@ -102,11 +107,11 @@ def test_failed_save_retries_the_same_frozen_operation_through_real_planner(tmp_
         pending_request_id = None
 
         def invoke(self, messages):
-            user = [message for message in messages if isinstance(message, HumanMessage)][-1]
+            user = _current_turn(messages)
             payload = {
                 "slack_recipient": {"state": "omitted"},
                 "actions": {"save_text": {"intent": "requested", "evidence_ids": ["save"]}},
-                "evidence": [{"id": "save", "turn_id": user.id, "quote": str(user.content),
+                "evidence": [{"id": "save", "turn_id": user["turn_id"], "quote": user["text"],
                               "scope": "current_request", "interpretation": "instruction"}],
             }
             if self.pending_request_id is None:
@@ -114,7 +119,7 @@ def test_failed_save_retries_the_same_frozen_operation_through_real_planner(tmp_
             else:
                 payload.update(relation="supplement", target_request_id=self.pending_request_id,
                                body={"kind": "copy_answer", "source": {"ref": "pending"}})
-            return PlannerOutput(use_retrieval=False, tasks=[],
+            return InitialPlannerOutput(use_retrieval=False, tasks=[],
                                  request_contract=WireRequestContract.model_validate(payload)).model_dump(mode="json")
 
     planner_boundary = DeliveryPlannerBoundary()
@@ -122,9 +127,9 @@ def test_failed_save_retries_the_same_frozen_operation_through_real_planner(tmp_
     graph = build_graph(
         state_type=GraphState, add_user_node=add_user_message,
         summarize_node=make_summarize_node(None, False, policy=policy),
-        planner_node=make_planner_node(planner_boundary, False),
+        planner_node=make_planner_node(structured_model(planner_boundary.invoke, InitialPlannerOutput), False),
         retrieve_dispatch_node=make_retrieve_dispatch_node(unavailable_boundary, unavailable_boundary, False),
-        synthesize_node=make_synthesize_node(RepairingModelBoundary()),
+        synthesize_node=make_synthesize_node(mock_chat_model(RepairingModelBoundary().invoke)),
         pre_synthesis_validation_node=make_pre_synthesis_validation_node(False, excerpt_limits=synthesis_excerpt_limits(), decisions_client=make_decisions_client()),
         post_synthesis_validation_node=make_post_synthesis_validation_node(False, decisions_client=make_decisions_client()),
         action_postprocess_node=make_action_postprocess_node(build_save_text_tool(), unavailable_boundary, False),
@@ -187,9 +192,9 @@ class _SaveConversation:
         self.graph = build_graph(
             state_type=GraphState, add_user_node=add_user_message,
             summarize_node=make_summarize_node(None, False, policy=policy),
-            planner_node=make_planner_node(self, False),
+            planner_node=make_planner_node(structured_model(self.invoke, InitialPlannerOutput), False),
             retrieve_dispatch_node=make_retrieve_dispatch_node(unavailable_boundary, unavailable_boundary, False),
-            synthesize_node=make_synthesize_node(self._DocumentBoundary(self.documents)),
+            synthesize_node=make_synthesize_node(mock_chat_model(self._DocumentBoundary(self.documents).invoke)),
             pre_synthesis_validation_node=make_pre_synthesis_validation_node(False, excerpt_limits=synthesis_excerpt_limits(), decisions_client=make_decisions_client()),
             post_synthesis_validation_node=make_post_synthesis_validation_node(False, decisions_client=make_decisions_client()),
             action_postprocess_node=make_action_postprocess_node(build_save_text_tool(), slack, False),
@@ -204,19 +209,19 @@ class _SaveConversation:
             return text_document(next(self.documents)).model_dump(mode="json")
 
     def invoke(self, messages):
-        user = [message for message in messages if isinstance(message, HumanMessage)][-1]
+        user = _current_turn(messages)
         payload = {
                 "slack_recipient": {"state": "omitted"},
             "actions": {"save_text": {"intent": "requested", "evidence_ids": ["request"]}},
-            "evidence": [{"id": "request", "turn_id": user.id, "quote": str(user.content),
+            "evidence": [{"id": "request", "turn_id": user["turn_id"], "quote": user["text"],
                           "scope": "current_request", "interpretation": "instruction"}],
             **self.payload,
         }
         if self.result is not None:
             payload["target_request_id"] = self.result["runtime"].pending_action.contract.request_id
         if callable(payload.get("body")):
-            payload["body"] = payload["body"](user.id)
-        return PlannerOutput(use_retrieval=False, tasks=[],
+            payload["body"] = payload["body"](user["turn_id"])
+        return InitialPlannerOutput(use_retrieval=False, tasks=[],
                              request_contract=WireRequestContract.model_validate(payload)).model_dump(mode="json")
 
     def turn(self, query, *, session_metadata=None, **payload):

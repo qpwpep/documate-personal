@@ -3,7 +3,7 @@ import json
 
 import pytest
 
-from src.core.answer_schema import export_answer_text
+from src.core.answer_schema import AnswerDocument, export_answer_text
 from src.core.contracts import RetryState
 from src.core.contracts.debug import RetrievalDiagnostic
 from src.core.contracts.retrieval import RetrievalResult
@@ -14,7 +14,7 @@ from src.runtime.nodes.actions import make_action_postprocess_node
 from src.runtime.nodes.retrieval import make_retrieve_dispatch_node
 from src.runtime.nodes.synthesis import make_synthesize_node
 from src.runtime.nodes.validation import make_post_synthesis_validation_node, make_pre_synthesis_validation_node
-from tests.core.helpers import build_test_state, make_decisions_client
+from tests.core.helpers import build_test_state, make_decisions_client, mock_chat_model
 from tests.core.test_pending_action_delivery import _contract
 from tests.core.test_answer_validation import _evidence, _hit
 from tests.synthesis_fixtures import synthesis_excerpt_limits
@@ -25,8 +25,6 @@ class NaturalPartialModel:
         self.calls = 0
         self.messages = []
 
-    def with_structured_output(self, *args, **kwargs):
-        return self
 
     def invoke(self, messages, *, timeout=None):
         self.calls += 1
@@ -34,10 +32,10 @@ class NaturalPartialModel:
         packet_text = next(str(message.content) for message in messages
                            if str(message.content).startswith("[Evidence Packet]"))
         packet = json.loads(packet_text[packet_text.index("[", len("[Evidence Packet]")):])
-        return {"blocks": [{"type": "paragraph", "content": [
+        return AnswerDocument.model_validate({"blocks": [{"type": "paragraph", "content": [
             {"text": "The available documentation explains axis selection.", "basis": "source", "refs": [packet[0]["id"]]},
             {"text": "The requested uploaded evidence remains unavailable, so that part cannot be compared.", "basis": "interaction", "refs": []},
-        ]}]}
+        ]}]})
 
 
 def test_incomplete_retrieval_returns_a_natural_cited_partial_without_delivery():
@@ -67,7 +65,7 @@ def test_incomplete_retrieval_returns_a_natural_cited_partial_without_delivery()
     assert _pre_synthesis_route(state)[0] == "synthesize"
     assert state["retry"].terminal_failed_requirement_ids == [tasks[1].requirement_id]
     model = NaturalPartialModel()
-    state.update(make_synthesize_node(model)(state))
+    state.update(make_synthesize_node(mock_chat_model(model.invoke))(state))
     state.update(make_post_synthesis_validation_node(False, decisions_client=make_decisions_client())(state))
     outcome = ResponseAssembler().assemble(response=state, debug_info={})
     delivered = []
@@ -120,16 +118,16 @@ def test_graph_bounds_search_recovery_and_body_repair_independently(repair_succe
             packet = json.loads(packet_text[packet_text.index("[", len("[Evidence Packet]")):])
             packets.append(packet)
             refs = [source["id"] for source in packet] if repair_succeeds and self.calls > 1 else [packet[0]["id"]]
-            return {"blocks": [{"type": "paragraph", "content": [
+            return AnswerDocument.model_validate({"blocks": [{"type": "paragraph", "content": [
                 {"text": "The sources describe axis selection.", "basis": "source", "refs": refs},
-            ]}]}
+            ]}]})
 
     model = RepairModel()
     graph = build_graph(
         GraphState, add_user_message, lambda state: {},
         make_planner_node(initial, False, llm_planner_retry=rewrite),
         make_retrieve_dispatch_node(search, None, False),
-        make_synthesize_node(model),
+        make_synthesize_node(mock_chat_model(model.invoke)),
         memory_policy=ConversationMemoryPolicy(),
         pre_synthesis_validation_node=make_pre_synthesis_validation_node(False, excerpt_limits=synthesis_excerpt_limits(), decisions_client=make_decisions_client()),
         post_synthesis_validation_node=make_post_synthesis_validation_node(False, decisions_client=make_decisions_client()),
@@ -179,7 +177,7 @@ def test_graph_keeps_independent_docs_when_upload_retriever_is_missing():
     graph = build_graph(
         GraphState, add_user_message, lambda state: {}, make_planner_node(initial, False, llm_planner_retry=rewrite),
         make_retrieve_dispatch_node(search, build_upload_search_tool(), False),
-        make_synthesize_node(model),
+        make_synthesize_node(mock_chat_model(model.invoke)),
         memory_policy=ConversationMemoryPolicy(),
         pre_synthesis_validation_node=make_pre_synthesis_validation_node(False, excerpt_limits=synthesis_excerpt_limits(), decisions_client=make_decisions_client()),
         post_synthesis_validation_node=make_post_synthesis_validation_node(False, decisions_client=make_decisions_client()),

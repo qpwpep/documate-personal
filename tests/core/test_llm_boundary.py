@@ -12,7 +12,7 @@ from src.infra.llm_boundary import CallBudget, bind_structured_output, run_struc
 
 class Output(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    count: int = Field(ge=1)
+    count: int = Field(default=1, ge=1)
 
 
 def response(content='{"count":1}'):
@@ -76,3 +76,41 @@ def test_total_attempt_budget_bounds_transport_and_output_repairs_together(invok
     result, seen = invoke([busy, response('{"count":0}'), busy])
     assert result.problem.code == "provider_unavailable"
     assert len(seen) == 3
+
+
+def test_unbound_collaborator_cannot_bypass_the_declared_wire_contract():
+    class InvokeOnly:
+        def invoke(self, messages):
+            return {"count": "1"}
+
+    with pytest.raises(TypeError, match="bound structured model"):
+        run_structured_call(InvokeOnly(), [HumanMessage(content="Count one")],
+                            stage="planner", validate=Output.model_validate)
+
+
+@pytest.mark.parametrize("content", ["{}", '{"count":"1"}'])
+def test_wire_defaults_and_types_are_checked_before_domain_coercion(invoke, content):
+    result, seen = invoke([response(content)])
+    assert result.problem.code == "model_output_invalid"
+    assert len(seen) == 2
+
+
+def test_remaining_call_budget_reaches_the_provider_transport():
+    timeouts = []
+
+    def handle(request):
+        timeouts.append(request.extensions["timeout"]["read"])
+        return response()
+
+    with httpx.Client(transport=httpx.MockTransport(handle)) as client:
+        model = bind_structured_output(ChatOpenAI(
+            model="gpt-4o-mini", api_key="test", http_client=client,
+            base_url="https://provider.test/v1", max_retries=0, timeout=10,
+            use_responses_api=False,
+        ), Output)
+        result = run_structured_call(model, [HumanMessage(content="Count one")],
+            stage="planner", validate=Output.model_validate, budget=CallBudget(timeout_seconds=2))
+
+    assert result.count == 1
+    assert len(timeouts) == 1
+    assert 0 < timeouts[0] <= 2

@@ -5,13 +5,13 @@ import pytest
 from src.core.answer_schema import AnswerDocument, export_answer_text, text_document
 from src.core.llm_errors import LLMCallError
 from src.core.request_contracts import (
-    AnswerContract, ContentRequirement, ContractEvidence, FormatRequirement, RequestContract, check_answer_contract,
+    AnswerContract, ContentRequirement, ContractEvidence, LayoutRequirement, RequestContract, check_answer_contract,
 )
 from src.infra.chunking import chunk_python_text
 from src.core.evidence import build_evidence
 from src.runtime.nodes.synthesis import make_synthesize_node
 from src.runtime.nodes.validation import make_post_synthesis_validation_node
-from tests.core.helpers import make_decisions_client
+from tests.core.helpers import make_decisions_client, mock_chat_model
 from tests.core.test_synthesis_validation import _hit, _state as retrieval_state
 from tests.synthesis_fixtures import prepare_synthesis_state
 
@@ -32,7 +32,7 @@ def test_validation_exhaustion_cannot_replace_forbidden_generated_code_with_orig
     from src.core.contracts.debug import RetryState
 
     contract = RequestContract(
-        answer=AnswerContract(format=(FormatRequirement(kind="code_block", mode="forbidden", evidence_ids=("r1",)),)),
+        answer=AnswerContract(format=(LayoutRequirement(kind="code_block", mode="forbidden", evidence_ids=("r1",)),)),
         evidence=(ContractEvidence(id="r1", turn_id="current", quote="코드 없이", scope="answer.format.code_block", interpretation="negation"),),
     )
     state = retrieval_state([_hit("original_code()", source="upload")])
@@ -43,7 +43,7 @@ def test_validation_exhaustion_cannot_replace_forbidden_generated_code_with_orig
     }]})
 
     prepare_synthesis_state(state)
-    state.update(make_synthesize_node(ModelBoundary(document))(state))
+    state.update(make_synthesize_node(mock_chat_model(ModelBoundary(document).invoke))(state))
     state.update(make_post_synthesis_validation_node(False, decisions_client=make_decisions_client())(state))
 
     assert state["response"].kind == "failure"
@@ -62,7 +62,7 @@ def test_source_fallback_does_not_assume_excerpts_satisfy_semantic_requirements(
 
     prepare_synthesis_state(state)
     with pytest.raises(LLMCallError) as caught:
-        make_synthesize_node(ModelBoundary(error=TimeoutError("generation failed")))(state)
+        make_synthesize_node(mock_chat_model(ModelBoundary(error=TimeoutError("generation failed")).invoke))(state)
     assert caught.value.problem.code == "provider_unavailable"
     assert "response" not in state
     assert "A source excerpt" not in caught.value.problem.message
@@ -82,7 +82,7 @@ def test_cited_native_code_line_in_paragraph_satisfies_code_without_creating_cod
     document = text_document(f"계산식은 `{code}`입니다.", basis="source", refs=[evidence.id])
     contract = AnswerContract(
         content=(ContentRequirement(kind="code", mode="required"),),
-        format=(FormatRequirement(kind="code_block", mode="forbidden"),),
+        format=(LayoutRequirement(kind="code_block", mode="forbidden"),),
     )
 
     check = check_answer_contract(contract, document, evidence=[evidence])

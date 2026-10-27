@@ -137,7 +137,7 @@ class StructuredModel:
         return runnable.invoke(messages)
 
 
-def bind_structured_output(llm: Any, model: type[BaseModel], *, name: str | None = None) -> Any:
+def bind_structured_output(llm: Any, model: type[BaseModel], *, name: str | None = None) -> StructuredModel:
     schema = compile_output_schema(model, name=name)
     checker = FormatChecker()
     # Format validation uses the installed validator's supported checkers. A
@@ -155,9 +155,6 @@ def bind_structured_output(llm: Any, model: type[BaseModel], *, name: str | None
 
     check_formats(schema["schema"], "#")
     wire_validator = Draft202012Validator(schema["schema"], format_checker=checker)
-    if not hasattr(llm, "with_structured_output"):
-        # Small in-process collaborators in node tests still pass through the same parser.
-        return llm
     runnable = llm.with_structured_output(schema, method="json_schema", include_raw=True, strict=True)
     timeout = getattr(llm, "request_timeout", None)
     return StructuredModel(source_model=llm, runnable=runnable, schema=schema,
@@ -350,18 +347,16 @@ def _validation_paths(exc: Exception) -> list[str]:
     return ["/:" + ("invalid_json" if isinstance(exc, json.JSONDecodeError) else "contract_validation")]
 
 
-def _invoke_observed(llm: Any, messages: list[Any], *, stage: str, attempt: int, path: str,
+def _invoke_observed(llm: StructuredModel, messages: list[Any], *, stage: str, attempt: int, path: str,
                      timeout_seconds: float) -> Any:
     """Observation never changes dispatch, timeouts, schema validation or retries."""
     records = _observations.get()
     started = time.perf_counter()
     output = None
     exception = None
-    effective_timeout = ((min(timeout_seconds, llm.timeout) if llm.timeout else timeout_seconds)
-                         if isinstance(llm, StructuredModel) else None)
+    effective_timeout = min(timeout_seconds, llm.timeout) if llm.timeout else timeout_seconds
     try:
-        output = (llm.invoke(messages, timeout_seconds=timeout_seconds)
-                  if isinstance(llm, StructuredModel) else llm.invoke(messages))
+        output = llm.invoke(messages, timeout_seconds=timeout_seconds)
         return output
     except Exception as exc:
         exception = exc
@@ -375,11 +370,13 @@ def _invoke_observed(llm: Any, messages: list[Any], *, stage: str, attempt: int,
             ))
 
 
-def run_structured_call(llm: Any, messages: list[Any], *, stage: str, validate: Callable[[Any], T],
+def run_structured_call(llm: StructuredModel, messages: list[Any], *, stage: str, validate: Callable[[Any], T],
         budget: CallBudget | None = None, path: str = "structured", attempt: int = 1,
         repair: bool = True, retry_transient: bool | set[str] = True, retry_timeouts: bool = True) -> T:
     from src.runtime.agent_runtime.llm_usage import record_llm_call
 
+    if not isinstance(llm, StructuredModel):
+        raise TypeError("run_structured_call requires a bound structured model")
     budget = budget or request_call_budget(stage)
     request_messages = list(messages)
     last: LLMCallError | None = None
@@ -394,9 +391,8 @@ def run_structured_call(llm: Any, messages: list[Any], *, stage: str, validate: 
             _provider_completion(raw, stage=stage)
             try:
                 parsed = _parse(value, raw)
-                if isinstance(llm, StructuredModel):
-                    wire_value = parsed.model_dump(mode="json") if isinstance(parsed, BaseModel) else parsed
-                    llm.wire_validator.validate(wire_value)
+                wire_value = parsed.model_dump(mode="json") if isinstance(parsed, BaseModel) else parsed
+                llm.wire_validator.validate(wire_value)
                 return validate(parsed)
             except (ValueError, WireValidationError) as exc:
                 error = LLMCallError(make_problem("model_output_invalid", stage), LLMDiagnostic(

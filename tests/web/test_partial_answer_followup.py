@@ -3,12 +3,12 @@ from __future__ import annotations
 
 import json
 
-from src.core.answer_schema import AnswerResponse, export_answer_text
+from src.core.answer_schema import AnswerDocument, AnswerResponse, export_answer_text
 from src.core.contracts import GraphState
 from src.core.contracts.debug import RetrievalDiagnostic
 from src.core.contracts.retrieval import RetrievalResult
 from src.core.conversation_memory import ConversationMemoryPolicy
-from src.core.planner_schema import PlannerOutput, RetrievalTask
+from src.core.planner_schema import InitialPlannerOutput, RetrievalTask
 from src.infra.tools.local_rag.tool import build_upload_search_tool
 from src.runtime.make_graph import build_graph
 from src.runtime.nodes.actions import make_action_postprocess_node
@@ -17,7 +17,7 @@ from src.runtime.nodes.retrieval import make_retrieve_dispatch_node
 from src.runtime.nodes.session import add_user_message
 from src.runtime.nodes.synthesis import make_synthesize_node
 from src.runtime.nodes.validation import make_post_synthesis_validation_node, make_pre_synthesis_validation_node
-from tests.core.helpers import _CapturePlannerLLM, make_decisions_client
+from tests.core.helpers import _CapturePlannerLLM, make_decisions_client, mock_chat_model, structured_model
 from tests.core.test_answer_validation import _evidence, _hit
 from tests.core.test_pending_action_delivery import _manager, delivery_tools
 from tests.core.test_retrieval_partial import NaturalPartialModel
@@ -42,7 +42,7 @@ class _PlannerBoundary:
                           "scope": "current_request", "interpretation": "instruction"}],
             "slack_recipient": {"state": "omitted"},
         }
-        return PlannerOutput(
+        return InitialPlannerOutput(
             use_retrieval=not (copying or transforming or acknowledging),
             tasks=[] if copying or transforming or acknowledging else [
                 RetrievalTask(route=route, query="axis", k=2, requirement_id=route)
@@ -61,11 +61,11 @@ def _partial_manager(save, slack, model=None):
 
     graph = build_graph(
         GraphState, add_user_message, lambda state: {},
-        make_planner_node(_PlannerBoundary(), False, llm_planner_retry=_CapturePlannerLLM({
+        make_planner_node(structured_model(_PlannerBoundary().invoke, InitialPlannerOutput), False, llm_planner_retry=_CapturePlannerLLM({
             "rewrites": [{"requirement_id": "upload", "query": "axis", "k": 2}],
         })),
         make_retrieve_dispatch_node(docs, build_upload_search_tool(), False),
-        make_synthesize_node(model or NaturalPartialModel()),
+        make_synthesize_node(mock_chat_model((model or NaturalPartialModel()).invoke)),
         memory_policy=ConversationMemoryPolicy(),
         pre_synthesis_validation_node=make_pre_synthesis_validation_node(False, excerpt_limits=synthesis_excerpt_limits(), decisions_client=make_decisions_client()),
         post_synthesis_validation_node=make_post_synthesis_validation_node(False, decisions_client=make_decisions_client()),
@@ -107,11 +107,11 @@ def test_partial_answer_summary_receives_and_preserves_original_limits(delivery_
             packet_message = next(str(message.content) for message in messages
                                   if str(message.content).startswith("[Evidence Packet]"))
             packet = json.loads(packet_message[packet_message.index("[", len("[Evidence Packet]")):])
-            return {"blocks": [{"type": "paragraph", "content": [
+            return AnswerDocument.model_validate({"blocks": [{"type": "paragraph", "content": [
                 {"text": "The docs explain axis selection.", "basis": "source", "refs": [packet[0]["id"]]},
                 {"text": " ".join(issue["message"] for issue in self.source["issues"]),
                  "basis": "interaction", "refs": []},
-            ]}]}
+            ]}]}).model_dump(mode="json")
 
     save, slack, deliveries, output = delivery_tools
     model = SummaryModel()

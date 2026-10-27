@@ -5,9 +5,10 @@ from langchain_core.messages import AIMessage, HumanMessage
 
 from src.core.answer_schema import finalize_answer, text_document
 from src.core.llm_errors import LLMCallError
+from src.core.planner_schema import InitialPlannerOutput
 from src.core.request_contracts import WireRequestContract
 from src.runtime.nodes.planner import make_planner_node
-from tests.core.helpers import _CapturePlannerLLM, build_test_state
+from tests.core.helpers import _CapturePlannerLLM, build_test_state, structured_model
 from tests.core.test_exact_answer_export import checked_source
 from src.runtime.nodes.planner.prompt_builder import build_planner_messages
 
@@ -29,7 +30,7 @@ def _state():
 
 
 def _proposal(*, aspects=None, answer_quote="1. order 옵션"):
-    return {
+    return InitialPlannerOutput.model_validate({
         "use_retrieval": True,
         "tasks": [{
             "requirement_id": "reshape", "route": "docs", "query": "numpy.reshape order", "k": 3,
@@ -42,13 +43,13 @@ def _proposal(*, aspects=None, answer_quote="1. order 옵션"):
         }]).model_dump(mode="json"),
         "aspect_references": [{"requirement_id": "reshape", "aspect": "order",
                                "evidence_id": "selection", "answer_quote": answer_quote}],
-    }
+    }).model_dump(mode="json")
 
 
 def test_only_declared_selected_anchor_survives_not_other_answer_terms_or_guesses():
     model = _SequencePlanner(_proposal(aspects=["order", "copy", "invented_value"]),
                              _proposal(aspects=["order", "invented_value"]))
-    result = make_planner_node(model, False)(_state())
+    result = make_planner_node(structured_model(model.invoke, InitialPlannerOutput), False)(_state())
     assert result["planner"].output.tasks[0].requirement.aspects == ["order"]
     assert "unrequested_constraints_removed" in result["planner"].diagnostics.planner_warnings
     assert len(model.messages) == 2

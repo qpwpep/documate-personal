@@ -15,6 +15,7 @@ from src.core.request_contracts import (
 )
 from src.runtime.nodes.synthesis import make_synthesize_node
 from src.runtime.nodes.validation import make_post_synthesis_validation_node
+from tests.core.helpers import mock_chat_model
 from tests.core.test_decisions_validation import DecisionsBoundary
 from tests.core.test_synthesis_validation import _hit, _state as retrieval_state
 from tests.synthesis_fixtures import prepare_synthesis_state
@@ -87,7 +88,7 @@ def test_synthesis_keeps_request_interpretation_ids_out_of_citation_context(body
     original = state["runtime"].request_contract.model_dump(mode="json")
     boundary = SynthesisBoundary()
 
-    updates = make_synthesize_node(boundary)(prepare_synthesis_state(state))
+    updates = make_synthesize_node(mock_chat_model(boundary.invoke))(prepare_synthesis_state(state))
 
     messages = [str(message.content) for message in boundary.messages]
     assert INTERPRETATION_ID not in "\n".join(messages)
@@ -129,7 +130,7 @@ def test_real_evidence_packet_references_remain_available_to_synthesis():
     })
     boundary = SynthesisBoundary(text_document(hit.evidence.excerpt, basis="source", refs=["e1"]))
 
-    updates = make_synthesize_node(boundary)(prepare_synthesis_state(state))
+    updates = make_synthesize_node(mock_chat_model(boundary.invoke))(prepare_synthesis_state(state))
 
     packet_message = next(str(message.content) for message in boundary.messages
                           if str(message.content).startswith("[Evidence Packet]"))
@@ -142,7 +143,7 @@ def test_real_evidence_packet_references_remain_available_to_synthesis():
 def test_request_interpretation_id_is_still_rejected_as_an_answer_citation():
     document = text_document(ANALYSIS, basis="source", refs=[INTERPRETATION_ID])
     state = _state()
-    state.update(make_synthesize_node(SynthesisBoundary(document))(prepare_synthesis_state(state)))
+    state.update(make_synthesize_node(mock_chat_model(SynthesisBoundary(document).invoke))(prepare_synthesis_state(state)))
 
     updates = make_post_synthesis_validation_node(False, decisions_client=DecisionsBoundary())(state)
 
@@ -153,7 +154,7 @@ def test_request_interpretation_id_is_still_rejected_as_an_answer_citation():
 
 def test_user_code_analysis_is_judged_against_the_supplied_code_without_invented_citations():
     state = _state()
-    state.update(make_synthesize_node(SynthesisBoundary())(prepare_synthesis_state(state)))
+    state.update(make_synthesize_node(mock_chat_model(SynthesisBoundary().invoke))(prepare_synthesis_state(state)))
     decisions = DecisionsBoundary()
 
     updates = make_post_synthesis_validation_node(False, decisions_client=decisions)(state)
@@ -171,7 +172,7 @@ def test_user_code_analysis_is_judged_against_the_supplied_code_without_invented
 def test_user_code_input_does_not_exempt_an_unsupported_execution_claim_from_validation():
     document = text_document("실제 서버에서 코드를 실행해 처리 결과를 확인했습니다.", basis="interaction")
     state = _state()
-    state.update(make_synthesize_node(SynthesisBoundary(document))(prepare_synthesis_state(state)))
+    state.update(make_synthesize_node(mock_chat_model(SynthesisBoundary(document).invoke))(prepare_synthesis_state(state)))
     decisions = DecisionsBoundary({"grounded_0": 0.1})
 
     updates = make_post_synthesis_validation_node(False, decisions_client=decisions)(state)

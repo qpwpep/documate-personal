@@ -9,7 +9,7 @@ from src.core.request_contracts import ActionContract, ActionRequest, BoundInput
 from src.runtime.nodes.actions import make_action_postprocess_node
 from src.runtime.nodes.synthesis import make_synthesize_node
 from src.runtime.nodes.validation import make_post_synthesis_validation_node
-from tests.core.helpers import make_decisions_client
+from tests.core.helpers import make_decisions_client, mock_chat_model
 from tests.core.test_pending_action_delivery import delivery_tools
 from tests.synthesis_fixtures import prepare_synthesis_state
 
@@ -47,7 +47,7 @@ def _state(contract):
 
 def _prepare(state, model):
     prepare_synthesis_state(state)
-    for node in (make_synthesize_node(model), make_post_synthesis_validation_node(False, decisions_client=make_decisions_client())):
+    for node in (make_synthesize_node(mock_chat_model(model.invoke)), make_post_synthesis_validation_node(False, decisions_client=make_decisions_client())):
         state.update(node(state))
 
 

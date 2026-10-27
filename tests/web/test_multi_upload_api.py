@@ -13,7 +13,8 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 from langchain_core.embeddings import Embeddings
-from langchain_core.messages import AIMessage
+from langchain_core.messages import convert_to_messages
+from langchain_openai import ChatOpenAI
 from openai import OpenAI
 
 from src.app.web.app import create_app
@@ -31,18 +32,17 @@ class LocalEmbeddings(Embeddings):
         return [1.0, 0.0]
 
 
-class LocalChatModel:
-    """Deterministic OpenAI boundary; all planning, retrieval and validation remain real."""
+class LocalModelProvider:
+    """Replace provider HTTP while keeping model parsing and wire validation real."""
 
-    def __init__(self, controls, *, schema_name=""):
+    def __init__(self, controls):
         self.controls = controls
-        self.schema_name = schema_name
 
-    def with_structured_output(self, schema, **kwargs):
-        return LocalChatModel(self.controls, schema_name=schema["name"])
-
-    def invoke(self, messages, **_kwargs):
-        if self.schema_name == "PlannerOutput":
+    def respond(self, request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        messages = convert_to_messages(payload["messages"])
+        schema_name = payload.get("response_format", {}).get("json_schema", {}).get("name")
+        if schema_name == "PlannerOutput":
             raw = next(message.content for message in messages if message.name == "request_context")
             context = json.loads(raw.split("\n", 1)[1])
             files = context["upload_files"]
@@ -55,9 +55,9 @@ class LocalChatModel:
                 "request_contract": WireRequestContract(slack_recipient={"state": "omitted"}).model_dump(mode="json"),
             }
             parsed = InitialPlannerOutput.model_validate(parsed).model_dump(mode="json")
-        elif self.schema_name == "RetrievalRewriteOutput":
+        elif schema_name == "RetrievalRewriteOutput":
             raise AssertionError("Upload-only requests must not replan retrieval")
-        elif self.schema_name == "AnswerDocument":
+        elif schema_name == "AnswerDocument":
             packet = json.loads(str(messages[-1].content).split("\n", 2)[2])
             blocks = [{"type": "code", "language": "python", "content": {
                 "text": item["excerpt"], "basis": "excerpt", "refs": [item["id"]],
@@ -67,11 +67,15 @@ class LocalChatModel:
             ]}]}
             parsed = AnswerDocument.model_validate(parsed).model_dump(mode="json")
         else:
-            return AIMessage(content="Conversation summary.")
-        return {"parsed": parsed, "parsing_error": None, "raw": AIMessage(
-            content="", response_metadata={"model_name": "local-test-model"},
-            usage_metadata={"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
-        )}
+            parsed = "Conversation summary."
+        return httpx.Response(200, json={
+            "id": "chatcmpl-upload-test", "object": "chat.completion", "created": 1,
+            "model": payload["model"],
+            "choices": [{"index": 0, "finish_reason": "stop", "message": {
+                "role": "assistant", "content": parsed if isinstance(parsed, str) else json.dumps(parsed),
+            }}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        })
 
 
 @pytest.fixture
@@ -87,7 +91,7 @@ def api(tmp_path, monkeypatch, request):
     monkeypatch.setattr("src.app.web.app.get_settings", lambda: settings)
     monkeypatch.setattr("src.infra.runtime_paths.get_project_root_path", lambda: tmp_path)
     monkeypatch.setattr("src.infra.chroma_store.OpenAIEmbeddings", lambda **kwargs: LocalEmbeddings())
-    monkeypatch.setattr("src.infra.llm.ChatOpenAI", lambda **kwargs: LocalChatModel(controls))
+    model_provider = LocalModelProvider(controls)
 
     def decisions_provider(request: httpx.Request) -> httpx.Response:
         assert (request.method, request.url.path) == ("POST", "/v1/decisions")
@@ -109,7 +113,12 @@ def api(tmp_path, monkeypatch, request):
         return connect(sock, address)
 
     monkeypatch.setattr(socket.socket, "connect", local_connections_only)
-    with httpx.Client(transport=httpx.MockTransport(decisions_provider)) as provider_client:
+    with (httpx.Client(transport=httpx.MockTransport(decisions_provider)) as provider_client,
+          httpx.Client(transport=httpx.MockTransport(model_provider.respond)) as model_client):
+        monkeypatch.setattr("src.infra.llm.ChatOpenAI", lambda **kwargs: ChatOpenAI(
+            model="gpt-4o-mini", api_key="test-key", base_url="https://provider.test/v1",
+            http_client=model_client, max_retries=0, use_responses_api=False,
+        ))
         monkeypatch.setattr("src.infra.llm.OpenAI", lambda **kwargs: OpenAI(
             **kwargs, http_client=provider_client, base_url="https://provider.test/v1",
         ))

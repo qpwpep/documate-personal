@@ -5,6 +5,7 @@ import pytest
 
 from src.core.llm_errors import LLMCallError
 from src.runtime.nodes.synthesis import make_synthesize_node
+from tests.core.helpers import mock_chat_model
 from tests.core.test_synthesis_validation import _state
 from tests.synthesis_fixtures import prepare_synthesis_state
 
@@ -28,7 +29,7 @@ def test_synthesis_invalid_output_without_sources_remains_a_model_failure():
     model = ModelReplies({"answer": "unvalidated model prose"})
 
     with pytest.raises(LLMCallError) as caught:
-        make_synthesize_node(model)(prepare_synthesis_state(_state([])))
+        make_synthesize_node(mock_chat_model(model.invoke))(prepare_synthesis_state(_state([])))
 
     assert caught.value.problem.code == "model_output_invalid"
     assert model.calls == 2

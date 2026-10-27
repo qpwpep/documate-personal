@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from src.core.answer_schema import export_answer_text, finalize_answer, text_document
+from src.core.answer_schema import AnswerDocument, export_answer_text, finalize_answer, text_document
 from src.core.evidence import build_evidence
 from src.core.request_contracts import BoundAnswerReference, RequestContract, TransformAnswerBody
 from src.core.llm_errors import LLMCallError
@@ -12,7 +12,7 @@ from src.runtime.nodes.actions import make_action_postprocess_node
 from src.runtime.nodes.synthesis import make_synthesize_node
 from src.runtime.nodes.synthesis.budgets import ExcerptLimits
 from src.runtime.nodes.validation import make_post_synthesis_validation_node
-from tests.core.helpers import make_decisions_client
+from tests.core.helpers import make_decisions_client, mock_chat_model
 from tests.synthesis_fixtures import prepare_synthesis_state
 from tests.core.test_synthesis_validation import _hit, _state
 
@@ -24,8 +24,6 @@ class PacketEchoModel:
         self.timeout = timeout
         self.packets = []
 
-    def with_structured_output(self, *_args, **_kwargs):
-        return self
 
     def invoke(self, messages, *, timeout=None):
         packet_message = next(str(message.content) for message in messages
@@ -34,10 +32,10 @@ class PacketEchoModel:
         self.packets.append(packet)
         if self.timeout:
             raise TimeoutError("structured timeout")
-        return {"blocks": [{"type": "paragraph", "content": [
+        return AnswerDocument.model_validate({"blocks": [{"type": "paragraph", "content": [
             {"text": item["excerpt"], "basis": "excerpt", "refs": [item["id"]]}
             for item in packet
-        ]}]}
+        ]}]})
 
 
 def _long_hits(*, mixed=False):
@@ -55,7 +53,7 @@ def test_model_receives_bounded_excerpts_and_citations_use_the_attempt_that_answ
     normal, compact = PacketEchoModel(timeout=timeout), PacketEchoModel()
 
     prepare_synthesis_state(state, limits=ExcerptLimits(1800, 900))
-    state.update(make_synthesize_node(normal, compact)(state))
+    state.update(make_synthesize_node(mock_chat_model(normal.invoke), mock_chat_model(compact.invoke))(state))
     state.update(make_post_synthesis_validation_node(False, decisions_client=make_decisions_client())(state))
 
     assert 0 < sum(len(item["excerpt"]) for item in normal.packets[0]) <= normal_total
@@ -89,7 +87,7 @@ def test_saving_a_researched_answer_keeps_the_actual_packet_and_complete_validat
         state["runtime"] = state["runtime"].model_copy(update={"request_contract": contract})
         normal, compact = PacketEchoModel(timeout=True), PacketEchoModel()
         prepare_synthesis_state(state, limits=ExcerptLimits(1800, 900))
-        state.update(make_synthesize_node(normal, compact)(state))
+        state.update(make_synthesize_node(mock_chat_model(normal.invoke), mock_chat_model(compact.invoke))(state))
         state.update(make_post_synthesis_validation_node(False, decisions_client=make_decisions_client())(state))
         assert state["response"].kind == "answer"
         packets.append(state["response"].evidence_packet)
@@ -123,7 +121,7 @@ def test_transform_retains_complete_bound_citations_beyond_the_retrieval_budget(
     normal, compact = PacketEchoModel(timeout=True), PacketEchoModel()
 
     prepare_synthesis_state(state, limits=ExcerptLimits(1800, 900))
-    state.update(make_synthesize_node(normal, compact)(state))
+    state.update(make_synthesize_node(mock_chat_model(normal.invoke), mock_chat_model(compact.invoke))(state))
     state.update(make_post_synthesis_validation_node(False, decisions_client=make_decisions_client())(state))
 
     assert len(original.excerpt) > 6000
@@ -150,7 +148,7 @@ def test_exhausted_recovery_does_not_save_an_incomplete_source_fallback(tmp_path
     normal, compact = PacketEchoModel(timeout=True), PacketEchoModel(timeout=True)
 
     prepare_synthesis_state(state, limits=ExcerptLimits(1800, 900))
-    state.update(make_synthesize_node(normal, compact)(state))
+    state.update(make_synthesize_node(mock_chat_model(normal.invoke), mock_chat_model(compact.invoke))(state))
     state.update(make_post_synthesis_validation_node(False, decisions_client=make_decisions_client())(state))
     state.update(make_action_postprocess_node(build_save_text_tool(), lambda **_kwargs: {}, False)(state))
 
@@ -173,7 +171,7 @@ def test_compact_fallback_is_not_called_when_its_actual_ranges_are_insufficient(
     normal, compact = PacketEchoModel(timeout=True), PacketEchoModel()
 
     try:
-        make_synthesize_node(normal, compact)(state)
+        make_synthesize_node(mock_chat_model(normal.invoke), mock_chat_model(compact.invoke))(state)
     except LLMCallError as error:
         assert error.problem.code == "provider_unavailable"
 
@@ -205,7 +203,7 @@ def test_changed_bound_source_response_invalidates_prepared_ranges():
     model = PacketEchoModel()
 
     with pytest.raises(LLMCallError) as caught:
-        make_synthesize_node(model)(state)
+        make_synthesize_node(mock_chat_model(model.invoke))(state)
 
     assert caught.value.problem.code == "internal_error"
     assert model.packets == []
@@ -224,7 +222,7 @@ def test_mutated_prepared_evidence_range_fails_before_generation():
     normal, compact = PacketEchoModel(), PacketEchoModel()
 
     with pytest.raises(LLMCallError) as caught:
-        make_synthesize_node(normal, compact)(state)
+        make_synthesize_node(mock_chat_model(normal.invoke), mock_chat_model(compact.invoke))(state)
 
     assert caught.value.problem.code == "internal_error"
     assert normal.packets == compact.packets == []
@@ -239,7 +237,7 @@ def test_mutated_prepared_requirement_map_fails_before_generation():
     normal, compact = PacketEchoModel(), PacketEchoModel()
 
     with pytest.raises(LLMCallError) as caught:
-        make_synthesize_node(normal, compact)(state)
+        make_synthesize_node(mock_chat_model(normal.invoke), mock_chat_model(compact.invoke))(state)
 
     assert caught.value.problem.code == "internal_error"
     assert normal.packets == compact.packets == []

@@ -1,17 +1,59 @@
 import json
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from typing import Literal
 
 import httpx
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import BaseMessage, HumanMessage, convert_to_messages
+from langchain_openai import ChatOpenAI
 from openai import OpenAI
+from pydantic import BaseModel
 
 from src.core.contracts import DebugState, PlannerState, ResponseState, RetrievalState, RetryState
 from src.core.contracts.boundary.graph import build_graph_state_input, normalize_graph_update
-from src.core.planner_schema import PlannerOutput, RetrievalRewriteOutput
+from src.core.planner_schema import InitialPlannerOutput, PlannerOutput, RetrievalRewriteOutput
 from src.core.request_contracts import RequestContract, UserTurnSnapshot, WireRequestContract
 from src.infra.decisions import DecisionsClient
+from src.infra.llm_boundary import StructuredModel, bind_structured_output
 from src.runtime.agent_runtime import AgentGraph
+
+
+def mock_chat_model(respond: Callable[[list[BaseMessage]], object]) -> ChatOpenAI:
+    """Replace provider HTTP while keeping model binding, parsing and wire checks real.
+
+    A model instance explicitly constructs a complete valid fixture. Raw dictionaries
+    and strings pass through unchanged so malformed-output tests remain meaningful.
+    """
+    def handle(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        reply = respond(convert_to_messages(payload["messages"]))
+        if isinstance(reply, Exception):
+            raise reply
+        if isinstance(reply, httpx.Response):
+            return reply
+        if isinstance(reply, BaseModel):
+            content = reply.model_dump_json()
+        elif isinstance(reply, str):
+            content = reply
+        else:
+            content = json.dumps(reply, ensure_ascii=False)
+        return httpx.Response(200, json={
+            "id": "chatcmpl-test", "object": "chat.completion", "created": 1,
+            "model": payload["model"],
+            "choices": [{"index": 0, "finish_reason": "stop", "message": {
+                "role": "assistant", "content": content,
+            }}],
+            "usage": {"prompt_tokens": 2, "completion_tokens": 3, "total_tokens": 5},
+        })
+
+    return ChatOpenAI(
+        model="gpt-4o-mini", api_key="test-key", base_url="https://provider.test/v1",
+        http_client=httpx.Client(transport=httpx.MockTransport(handle)), max_retries=0,
+        use_responses_api=False,
+    )
+
+
+def structured_model(respond: Callable[[list[BaseMessage]], object], schema: type[BaseModel]) -> StructuredModel:
+    return bind_structured_output(mock_chat_model(respond), schema)
 
 
 class SequentialGraph:
@@ -113,7 +155,7 @@ def build_test_state(payload: dict):
     return normalize_graph_update(state)
 
 
-class _CapturePlannerLLM:
+class _CapturePlannerLLM(StructuredModel):
     def __init__(self, planner_output):
         # Retrieval-only fixtures still supply an explicit neutral interpretation.
         # Missing-contract tests use an unadapted model boundary of their own.
@@ -121,13 +163,15 @@ class _CapturePlannerLLM:
             planner_output.request_contract = WireRequestContract(slack_recipient={"state": "omitted"})
         elif isinstance(planner_output, PlannerOutput) and isinstance(planner_output.request_contract, RequestContract):
             planner_output.request_contract = planner_output.request_contract.to_wire()
-        elif isinstance(planner_output, dict) and "rewrites" not in planner_output:
-            planner_output = dict(planner_output)
-            planner_output.setdefault("request_contract", WireRequestContract(slack_recipient={"state": "omitted"}).model_dump(mode="json"))
+        if isinstance(planner_output, PlannerOutput):
+            planner_output = InitialPlannerOutput.model_validate(planner_output.model_dump(mode="json"))
         self.planner_output = (planner_output.model_dump(mode="json")
                                if isinstance(planner_output, (PlannerOutput, RetrievalRewriteOutput)) else planner_output)
         self.call_count = 0
+        schema = RetrievalRewriteOutput if "rewrites" in self.planner_output else InitialPlannerOutput
+        bound = structured_model(self._reply, schema)
+        super().__init__(**vars(bound))
 
-    def invoke(self, messages, *, timeout=None):
+    def _reply(self, messages):
         self.call_count += 1
         return self.planner_output

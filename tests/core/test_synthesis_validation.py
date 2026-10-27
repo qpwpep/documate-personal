@@ -3,7 +3,7 @@ import json
 import pytest
 
 
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import HumanMessage
 
 from src.core.answer_schema import export_answer_text, iter_content_units, text_document
 from src.core.contracts import PlannerState, RetrievalState, DebugState, RetrievalDiagnostic
@@ -14,6 +14,7 @@ from src.core.planner_schema import PlannerOutput, RetrievalTask
 from src.core.request_contracts import ExtractBody, RequestContract
 from src.core.llm_errors import LLMCallError
 from src.runtime.nodes.synthesis import make_synthesize_node
+from tests.core.helpers import mock_chat_model
 from tests.synthesis_fixtures import prepare_synthesis_state
 
 
@@ -51,7 +52,7 @@ class ModelBoundary:
         self.packet = []
 
     def with_structured_output(self, *args, **kwargs):
-        return self
+        return mock_chat_model(self.invoke).with_structured_output(*args, **kwargs)
 
     def invoke(self, messages, *, timeout=None):
         packet_text = next(str(message.content) for message in messages if str(message.content).startswith("[Evidence Packet]"))
@@ -64,7 +65,7 @@ class ModelBoundary:
             document = text_document(self.packet[0]["excerpt"], basis="excerpt", refs=[self.packet[0]["id"]])
         else:
             document = text_document("현재 답변입니다.")
-        return {"parsed": document.model_dump(mode="json"), "raw": AIMessage(content=""), "parsing_error": None}
+        return document
 
 
 def test_malformed_generation_becomes_explicit_original_source_fallback():

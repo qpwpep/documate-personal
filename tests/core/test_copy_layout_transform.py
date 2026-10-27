@@ -5,39 +5,32 @@ import pytest
 from langchain_core.messages import HumanMessage
 
 from src.core.answer_schema import AnswerDocument, CodeBlock, ContentUnit, finalize_answer, text_document
+from src.core.answer_export import exact_copy_ready
 from src.core.contracts.boundary.graph import build_graph_state_input
 from src.core.documents import DocumentElement, build_snapshot
 from src.core.evidence import build_evidence
-from src.core.planner_schema import PlannerOutput
+from src.core.planner_schema import InitialPlannerOutput
 from src.core.request_contracts import UserTurnSnapshot, WireRequestContract
 from src.infra.tools.save_text import build_save_text_tool
 from src.runtime.nodes.actions import make_action_postprocess_node
 from src.runtime.nodes.planner import make_planner_node
 from src.runtime.nodes.synthesis import make_synthesize_node
 from src.runtime.nodes.validation import make_post_synthesis_validation_node
-from tests.core.helpers import make_decisions_client
+from tests.core.helpers import make_decisions_client, mock_chat_model, structured_model
 from tests.synthesis_fixtures import prepare_synthesis_state
 
 
-class PlannerBoundary:
-    def __init__(self, proposal):
-        self.payload = PlannerOutput(use_retrieval=False, tasks=[], request_contract=proposal).model_dump(mode="json")
+def _document_model(document=None):
+    def respond(_messages):
+        assert document is not None, "Exact copy must not generate a new body"
+        return document
 
-    def invoke(self, _messages):
-        return self.payload
-
-
-class DocumentBoundary:
-    def __init__(self, document=None):
-        self.document = document
-
-    def invoke(self, _messages):
-        assert self.document is not None, "Exact copy must not generate a new body"
-        return self.document.model_dump(mode="json")
+    return mock_chat_model(respond)
 
 
-def _plan_copy(text, *, formats, content=(), previous=None, scoped_evidence=False):
-    query = "아래 원문은 내용 그대로 두고 요청한 형식으로 표시하고 저장해줘.\n" + text
+def _plan_copy(text, *, formats, content=(), previous=None, scoped_evidence=False,
+               instruction="아래 원문은 내용 그대로 두고 요청한 형식으로 표시하고 저장해줘."):
+    query = instruction + "\n" + text
     proposal = WireRequestContract.model_validate({
         "body": ({"kind": "copy_input", "source": {"turn_id": "current", "quote": text}}
                  if previous is None else {"kind": "copy_answer", "source": {"ref": "previous"}}),
@@ -71,7 +64,11 @@ def _plan_copy(text, *, formats, content=(), previous=None, scoped_evidence=Fals
         user_turns=(UserTurnSnapshot(turn_id="current", text=query),),
         messages=[HumanMessage(content=query, id="current")], previous_response=previous,
     )
-    state.update(make_planner_node(PlannerBoundary(proposal), False)(state))
+    planner = structured_model(
+        lambda _messages: InitialPlannerOutput(use_retrieval=False, tasks=[], request_contract=proposal),
+        InitialPlannerOutput,
+    )
+    state.update(make_planner_node(planner, False)(state))
     return state
 
 
@@ -109,6 +106,8 @@ def test_explicit_block_layout_changes_answer_copy_without_rebinding_its_source(
     assert state["runtime"].previous_response.content == previous.content
 
 
+
+
 @pytest.mark.parametrize("previous_answer", [False, True])
 @pytest.mark.parametrize("text, layout", [
     ("```text\nrequest timeout\n```", "code_block"),
@@ -130,9 +129,11 @@ def test_layout_that_already_matches_keeps_exact_copy(previous_answer, text, lay
         assert contract.body.source.text == text
         assert contract.body.source.content_hash == sha256(text.encode("utf-8")).hexdigest()
     prepare_synthesis_state(state)
-    updates = make_synthesize_node(DocumentBoundary())(state)
+    updates = make_synthesize_node(_document_model())(state)
     assert updates["response"].kind != "clarification"
     assert updates["response"].result.content == text_document(text)
+
+
 
 
 @pytest.mark.parametrize("formats", [
@@ -144,7 +145,7 @@ def test_line_count_conflict_cannot_authorize_changing_literal_content(formats):
 
     assert state["runtime"].request_contract.body.kind == "copy_input"
     prepare_synthesis_state(state)
-    updates = make_synthesize_node(DocumentBoundary())(state)
+    updates = make_synthesize_node(_document_model())(state)
     assert updates["response"].kind == "clarification"
 
 
@@ -161,7 +162,7 @@ def test_content_conflict_alone_cannot_authorize_rewriting_a_copied_answer():
 
     assert state["runtime"].request_contract.body.kind == "copy_answer"
     prepare_synthesis_state(state)
-    updates = make_synthesize_node(DocumentBoundary())(state)
+    updates = make_synthesize_node(_document_model())(state)
     assert updates["response"].kind == "clarification"
 
 
@@ -177,7 +178,7 @@ def test_layout_only_transform_reaches_a_saved_answer_without_changing_the_paylo
     ], previous=previous, scoped_evidence=scoped_evidence)
     document = AnswerDocument(blocks=[CodeBlock(language="text", content=ContentUnit(text=text, basis="interaction"))])
     prepare_synthesis_state(state)
-    state.update(make_synthesize_node(DocumentBoundary(document))(state))
+    state.update(make_synthesize_node(_document_model(document))(state))
     state.update(make_post_synthesis_validation_node(False, decisions_client=make_decisions_client())(state))
 
     state.update(make_action_postprocess_node(build_save_text_tool(), lambda **kwargs: {}, False)(state))

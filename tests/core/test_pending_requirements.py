@@ -9,8 +9,10 @@ from langchain_core.messages import HumanMessage
 from src.core.contracts.boundary.graph import build_graph_state_input
 from src.core.contracts.graph_state import PendingAction
 from src.core.llm_errors import LLMCallError
-from src.core.request_contracts import UserTurnSnapshot
+from src.core.planner_schema import InitialPlannerOutput
+from src.core.request_contracts import ContentRequirement, LayoutRequirement, LineCountRequirement, UserTurnSnapshot, WireRequestContract
 from src.runtime.nodes.planner import make_planner_node
+from tests.core.helpers import structured_model
 
 
 class PlannerBoundary:
@@ -21,18 +23,21 @@ class PlannerBoundary:
         context = next(message for message in messages if message.name == "request_context")
         facts = json.loads(context.content.split("\n", 1)[1])
         contract = self.contract(facts) if callable(self.contract) else self.contract
-        return {"use_retrieval": False, "tasks": [], "request_contract": contract}
+        return {"use_retrieval": False, "tasks": [], "request_contract": contract, "aspect_references": []}
 
 
 def _facts(query, *, content=(), format=(), pending=None, relation="new", turn_id="current"):
     return {
+        **WireRequestContract(slack_recipient={"state": "omitted"}).model_dump(mode="json"),
         "relation": relation,
         "target_request_id": pending.contract.request_id if pending else None,
         "slack_recipient": {"state": "omitted"},
-        "body": {"kind": "compose", "instruction": "" if pending else query},
+        "body": {"kind": "compose", "instruction": "" if pending else query, "evidence_ids": []},
         "answer": {
-            "content": [{**item, "evidence_ids": ["instruction"]} for item in content],
-            "format": [{**item, "evidence_ids": ["instruction"]} for item in format],
+            "content": [ContentRequirement(**{**item, "evidence_ids": ["instruction"]}).model_dump(mode="json") for item in content],
+            "format": [(LineCountRequirement if item["kind"] == "line_count" else LayoutRequirement)(
+                **{**item, "evidence_ids": ["instruction"]}).model_dump(mode="json") for item in format],
+            "preferences": [],
         },
         "evidence": [{"id": "instruction", "turn_id": turn_id, "quote": query,
                       "scope": "current_request", "interpretation": "instruction"}],
@@ -51,7 +56,8 @@ def _state(query, pending=None, *, turn_id="current", history=()):
 def _plan(query, *, content=(), format=(), pending=None, relation="new", turn_id="current"):
     boundary = PlannerBoundary(_facts(query, content=content, format=format, pending=pending,
                                       relation=relation, turn_id=turn_id))
-    return make_planner_node(boundary, False)(_state(query, pending, turn_id=turn_id))
+    return make_planner_node(structured_model(boundary.invoke, InitialPlannerOutput), False)(
+        _state(query, pending, turn_id=turn_id))
 
 
 def test_independent_content_requirements_can_be_required_and_forbidden():
@@ -101,7 +107,7 @@ def test_correction_replaces_only_the_selected_condition_even_when_reworded():
              "replaces": target["ref"]},
         ])
 
-    result = make_planner_node(PlannerBoundary(correction), False)(_state(query, pending, turn_id="followup"))
+    result = make_planner_node(structured_model(PlannerBoundary(correction).invoke, InitialPlannerOutput), False)(_state(query, pending, turn_id="followup"))
 
     content = result["runtime"].request_contract.answer.content
     assert [item.description for item in content] == ["실행 시간 측정 결과를 설명한다", "메모리복잡도를 설명한다"]
@@ -137,7 +143,7 @@ def test_past_instruction_and_unrelated_current_evidence_cannot_correct_content(
     ])
     before = state["runtime"].pending_action.model_dump()
     with pytest.raises(LLMCallError) as caught:
-        make_planner_node(PlannerBoundary(correction), False)(state)
+        make_planner_node(structured_model(PlannerBoundary(correction).invoke, InitialPlannerOutput), False)(state)
     assert caught.value.problem.code == "model_output_invalid"
     assert state["runtime"].pending_action.model_dump() == before
 
@@ -188,7 +194,7 @@ def test_invalid_correction_targets_leave_pending_state_unchanged(invalid_target
     state = _state(query, pending, turn_id="followup")
     before = state["runtime"].pending_action.model_dump()
     with pytest.raises(LLMCallError) as caught:
-        make_planner_node(PlannerBoundary(correction), False)(state)
+        make_planner_node(structured_model(PlannerBoundary(correction).invoke, InitialPlannerOutput), False)(state)
     assert caught.value.problem.code == "model_output_invalid"
     assert state["runtime"].pending_action.model_dump() == before
 
@@ -216,7 +222,7 @@ def test_explicit_correction_can_reverse_one_condition_without_removing_others()
             {"kind": "custom", "mode": "forbidden", "description": "시간복잡도를 설명한다", "replaces": ref},
         ])
 
-    result = make_planner_node(PlannerBoundary(correction), False)(_state(query, pending, turn_id="followup"))
+    result = make_planner_node(structured_model(PlannerBoundary(correction).invoke, InitialPlannerOutput), False)(_state(query, pending, turn_id="followup"))
     assert [(item.description, item.mode) for item in result["runtime"].request_contract.answer.content] == [
         ("시간복잡도를 설명한다", "forbidden"), ("메모리복잡도를 설명한다", "required"),
     ]

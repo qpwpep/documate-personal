@@ -11,13 +11,14 @@ from src.core.contracts.boundary.graph import build_graph_state_input
 from src.core.planner_schema import PlannerOutput
 from src.core.request_contracts import (
     ActionContract, ActionRequest, AnswerContract, BoundInputText, ContentRequirement, ContractEvidence,
-    CopyInputBody, FormatRequirement, RequestContract,
+    CopyInputBody, LineCountRequirement, RequestContract,
 )
 from src.core.llm_errors import LLMCallError
 from src.infra.tools.save_text import build_save_text_tool
 from src.runtime.nodes.actions import make_action_postprocess_node
 from src.runtime.nodes.synthesis import make_synthesize_node
 from src.runtime.nodes.validation import make_post_synthesis_validation_node
+from tests.core.helpers import mock_chat_model
 from tests.core.test_decisions_validation import DecisionsBoundary
 from tests.core.test_request_slots_delivery import DocumentModel
 from tests.synthesis_fixtures import prepare_synthesis_state
@@ -53,7 +54,7 @@ def test_exact_input_is_saved_despite_low_factual_confidence_in_quoted_claim(tmp
     monkeypatch.setattr("src.infra.tools.save_text.get_save_text_output_dir", lambda: output)
     state = _state()
     prepare_synthesis_state(state)
-    state.update(make_synthesize_node(DocumentModel())(state))
+    state.update(make_synthesize_node(mock_chat_model(DocumentModel().invoke))(state))
     assert export_answer_text(state["response"].result) == ORIGINAL
     decisions = DecisionsBoundary({"grounded_0": 0.74, "request_fulfilled": 1.0})
 
@@ -87,7 +88,7 @@ def test_bound_input_is_ready_without_a_model_rejudging_the_quoted_events():
 def test_changed_copy_is_rejected_even_when_decisions_approves_it(changed):
     state = _state()
     prepare_synthesis_state(state)
-    state.update(make_synthesize_node(DocumentModel())(state))
+    state.update(make_synthesize_node(mock_chat_model(DocumentModel().invoke))(state))
     # Represents a producer returning a self-consistent but wrong document.
     state["response"] = state["response"].model_copy(update={
         "result": finalize_answer(text_document(changed), []),
@@ -106,7 +107,7 @@ def test_copy_with_an_additional_semantic_condition_still_checks_that_condition(
         evidence_ids=("request",),
     ),)))
     prepare_synthesis_state(state)
-    state.update(make_synthesize_node(DocumentModel())(state))
+    state.update(make_synthesize_node(mock_chat_model(DocumentModel().invoke))(state))
     decisions = DecisionsBoundary({"grounded_0": 0.01, "request_fulfilled": probability})
 
     state.update(make_post_synthesis_validation_node(False, decisions_client=decisions)(state))
@@ -118,11 +119,11 @@ def test_copy_with_an_additional_semantic_condition_still_checks_that_condition(
 
 
 def test_copy_with_conflicting_local_format_remains_a_clarification():
-    state = _state(answer=AnswerContract(format=(FormatRequirement(
+    state = _state(answer=AnswerContract(format=(LineCountRequirement(
         kind="line_count", mode="required", value=2, evidence_ids=("request",),
     ),)))
     prepare_synthesis_state(state)
-    state.update(make_synthesize_node(DocumentModel())(state))
+    state.update(make_synthesize_node(mock_chat_model(DocumentModel().invoke))(state))
 
     state.update(make_post_synthesis_validation_node(False, decisions_client=DecisionsBoundary())(state))
 
@@ -136,7 +137,7 @@ def test_copy_with_semantic_report_can_be_revalidated_without_changing_the_body(
         evidence_ids=("request",),
     ),)))
     prepare_synthesis_state(state)
-    state.update(make_synthesize_node(DocumentModel())(state))
+    state.update(make_synthesize_node(mock_chat_model(DocumentModel().invoke))(state))
     validate = make_post_synthesis_validation_node(False, decisions_client=DecisionsBoundary())
     state.update(validate(state))
     checked = state["response"].result
@@ -151,7 +152,7 @@ def test_copy_with_semantic_report_can_be_revalidated_without_changing_the_body(
 def test_same_text_with_changed_content_role_is_not_an_exact_input_copy(basis):
     state = _state()
     prepare_synthesis_state(state)
-    state.update(make_synthesize_node(DocumentModel())(state))
+    state.update(make_synthesize_node(mock_chat_model(DocumentModel().invoke))(state))
     state["response"] = state["response"].model_copy(update={
         "result": finalize_answer(text_document(ORIGINAL, basis=basis), []),
     })

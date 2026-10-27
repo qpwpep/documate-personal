@@ -8,7 +8,7 @@ import httpx
 import pytest
 from openai import OpenAI
 
-from src.core.answer_schema import export_answer_text
+from src.core.answer_schema import AnswerDocument, export_answer_text
 from src.core.contracts import RetryState
 from src.core.contracts.debug import RetrievalDiagnostic
 from src.core.contracts.retrieval import RetrievalResult
@@ -21,7 +21,7 @@ from src.runtime.nodes.planner import make_planner_node
 from src.runtime.nodes.retrieval import make_retrieve_dispatch_node
 from src.runtime.nodes.synthesis import make_synthesize_node
 from src.runtime.nodes.validation import make_post_synthesis_validation_node, make_pre_synthesis_validation_node
-from tests.core.helpers import _CapturePlannerLLM, build_test_state, make_decisions_client
+from tests.core.helpers import _CapturePlannerLLM, build_test_state, make_decisions_client, mock_chat_model
 from tests.core.test_answer_validation import _evidence, _hit
 from tests.core.test_pending_action_delivery import _contract
 from tests.synthesis_fixtures import synthesis_excerpt_limits
@@ -93,18 +93,16 @@ class CitedBodyModel:
     def __init__(self):
         self.messages = []
 
-    def with_structured_output(self, *args, **kwargs):
-        return self
 
     def invoke(self, messages, *, timeout=None):
         self.messages = messages
         packet_text = next(str(message.content) for message in messages
                            if str(message.content).startswith("[Evidence Packet]"))
         packet = json.loads(packet_text[packet_text.index("[", len("[Evidence Packet]")):])
-        return {"blocks": [{"type": "paragraph", "content": [{
+        return AnswerDocument.model_validate({"blocks": [{"type": "paragraph", "content": [{
             "text": "The verified sources explain the available behavior.",
             "basis": "source", "refs": [source["id"] for source in packet],
-        }]}]}
+        }]}]})
 
 
 def _task(requirement_id, *, route="docs", match="topic"):
@@ -129,7 +127,7 @@ def _state(tasks, *, max_retries=1):
 
 def _synthesize(state):
     model = CitedBodyModel()
-    state.update(make_synthesize_node(model)(state))
+    state.update(make_synthesize_node(mock_chat_model(model.invoke))(state))
     return model
 
 

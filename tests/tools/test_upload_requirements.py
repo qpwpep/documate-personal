@@ -13,6 +13,7 @@ from src.core.contracts import GraphState
 from src.core.contracts.boundary.graph import build_graph_state_input
 from src.core.contracts.retrieval import UploadRetriever
 from src.core.documents import DocumentElement, ParsedDocument, build_snapshot
+from src.core.planner_schema import PlannerOutput
 from src.core.uploads import UploadRecord
 from src.infra.tools.local_rag import build_upload_retriever, build_upload_search_tool
 from src.runtime.nodes.planner import make_planner_node
@@ -170,10 +171,10 @@ def test_planned_code_fragment_reaches_source_retrieval_without_losing_the_const
 
     source = "def target(value):\n    return value is None\n"
     query = "첨부한 target 함수의 `is None` 코드 조각을 찾아 인용해줘."
-    planner = _CapturePlannerLLM({"use_retrieval": True, "tasks": [{
+    planner = _CapturePlannerLLM(PlannerOutput.model_validate({"use_retrieval": True, "tasks": [{
         "route": "upload", "query": query, "k": 4,
         "requirement": {"symbols": ["target"], "match": "definition", "aspects": ["is None"]},
-    }]})
+    }]}))
     state = build_graph_state_input(user_input=query, retriever=_source_retriever(source))
 
     state.update(make_planner_node(planner, False)(state))
@@ -193,10 +194,10 @@ def test_planned_code_fragment_reaches_source_retrieval_without_losing_the_const
 
 def _retrieve_planned_topic(retriever: UploadRetriever, query: str, aspects: list[str]) -> GraphState:
     file_id = retriever.source_documents[0].elements[0].metadata["file_id"]
-    planner = _CapturePlannerLLM({"use_retrieval": True, "tasks": [{
+    planner = _CapturePlannerLLM(PlannerOutput.model_validate({"use_retrieval": True, "tasks": [{
         "route": "upload", "query": query, "k": 4,
         "requirement": {"file_ids": [file_id], "match": "topic", "aspects": aspects},
-    }]})
+    }]}))
     state = build_graph_state_input(user_input=query, retriever=retriever)
     state.update(make_planner_node(planner, False)(state))
     state.update(make_retrieve_dispatch_node(None, build_upload_search_tool(), False)(state))

@@ -1,10 +1,10 @@
 import pytest
 
 from src.core.contracts.boundary.graph import build_graph_state_input
-from src.core.planner_schema import PlannerOutput, RetrievalRewriteOutput, RetrievalTask
+from src.core.planner_schema import InitialPlannerOutput, PlannerOutput, RetrievalRequirement, RetrievalRewriteOutput, RetrievalTask
 from src.core.request_contracts import RequestContract
 from src.runtime.nodes.planner import make_planner_node
-from .helpers import _CapturePlannerLLM
+from .helpers import _CapturePlannerLLM, structured_model
 
 
 class _RepairingPlanner:
@@ -19,7 +19,7 @@ def _upload_plan(requirement, *, query):
     from src.core.request_contracts import WireRequestContract
 
     return {"use_retrieval": True, "tasks": [{"route": "upload", "requirement_id": "source",
-            "requirement": requirement, "query": query, "k": 4}],
+            "requirement": RetrievalRequirement.model_validate(requirement).model_dump(mode="json"), "query": query, "k": 4}],
             "request_contract": WireRequestContract(slack_recipient={"state": "omitted"}).model_dump(mode="json"),
             "aspect_references": []}
 
@@ -37,7 +37,7 @@ def test_active_upload_filename_is_repaired_to_file_scope_before_search():
         _upload_plan({"symbols": ["billing_rules.py"], "match": "symbol", "file_ids": ["billing"]}, query=query),
         _upload_plan({"file_ids": ["billing"]}, query=query),
     )
-    result = make_planner_node(planner, False)(state)
+    result = make_planner_node(structured_model(planner.invoke, InitialPlannerOutput), False)(state)
     task, = result["planner"].output.tasks
     assert task.requirement.symbols == []
     assert task.requirement.file_ids == ["billing"]
@@ -56,7 +56,7 @@ def test_semantic_upload_condition_is_repaired_without_weakening_the_question(co
         _upload_plan({"symbols": ["calculate_total"], "match": "definition", "aspects": [condition]}, query=query),
         _upload_plan({"symbols": ["calculate_total"], "match": "definition"}, query=query),
     )
-    result = make_planner_node(planner, False)(state)
+    result = make_planner_node(structured_model(planner.invoke, InitialPlannerOutput), False)(state)
     task, = result["planner"].output.tasks
     assert task.requirement.aspects == []
     assert task.requirement.symbols == ["calculate_total"]
