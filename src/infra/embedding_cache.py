@@ -61,10 +61,7 @@ class CachedEmbeddings(Embeddings):
         self._underlying = underlying
         self._cache_dir = Path(cache_dir).absolute()
         self._namespace = _digest(_json_bytes(namespace))
-        embedding = namespace.get("embedding")
-        dimensions = (embedding.get("dimensions") if isinstance(embedding, dict) else None)
-        if dimensions is None:
-            dimensions = namespace.get("embedding_dimensions", namespace.get("dimensions"))
+        dimensions = namespace["embedding"]["dimensions"]
         if dimensions is not None and (type(dimensions) is not int or dimensions <= 0):
             raise ValueError("Embedding dimensions must be a positive integer")
         self._dimensions = dimensions

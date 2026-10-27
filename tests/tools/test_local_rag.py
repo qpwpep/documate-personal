@@ -12,6 +12,7 @@ from langchain_core.embeddings import Embeddings
 from src.core.planner_schema import RetrievalRequirement
 from src.core.uploads import UploadRecord
 from src.infra.tools.local_rag import build_upload_retriever, build_upload_search_tool
+from tests.core.helpers import mock_chat_model
 from tests.synthesis_fixtures import prepare_synthesis_state, synthesis_excerpt_limits
 
 
@@ -183,7 +184,7 @@ class LocalRagTest(unittest.TestCase):
         prepared = state["retrieval"].prepared_evidence.normal
         self.assertTrue(prepared.evidence)
         synthesizer = ExcerptSynthesizer()
-        updates = make_synthesize_node(synthesizer)(state)
+        updates = make_synthesize_node(mock_chat_model(synthesizer.invoke))(state)
         result = updates["response"].result
         self.assertEqual(updates["debug"].synthesis_errors, [])
         self.assertTrue(synthesizer.packet[0]["is_partial"])
