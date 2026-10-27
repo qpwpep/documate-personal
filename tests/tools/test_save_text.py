@@ -22,8 +22,9 @@ def test_partial_write_never_publishes_a_final_artifact(tmp_path, monkeypatch):
         raise OSError("simulated full disk")
 
     monkeypatch.setattr(saved_artifacts.os, "write", fail_after_partial_write)
+    content = "모든 내용이 저장되어야 하는 답변"
     with pytest.raises(RuntimeError, match="full disk"):
-        save_module.build_save_text_tool()("모든 내용이 저장되어야 하는 답변")
+        save_module.build_save_text_tool()(content, operation=_operation(content))
 
     assert list(tmp_path.glob("*.txt")) == []
     assert list(tmp_path.glob("*.json")) == []

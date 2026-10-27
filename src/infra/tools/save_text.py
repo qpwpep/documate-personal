@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-import hashlib
 from typing import Any
-from uuid import uuid4
 
 from src.core.save_contract import SaveOperation
 from src.infra.runtime_paths import get_save_text_output_dir
@@ -12,22 +10,13 @@ from src.infra.saved_artifacts import save_artifact
 
 def build_save_text_tool(*, ttl_seconds: int = 86400) -> Callable[..., dict[str, Any]]:
     def save_text_to_file(
-        content: str, *, operation: SaveOperation | None = None,
+        content: str, *, operation: SaveOperation,
     ) -> dict[str, Any]:
         """Save exact UTF-8 BOM bytes under a storage-generated artifact name.
 
-        Omitting operation creates a new save, even for identical content.
-        Retry the same save by passing its returned operation as a SaveOperation
-        with the same content.
+        The caller binds the save to its request and selected answer. Retrying
+        the same operation with the same content returns the same artifact.
         """
-        if operation is None:
-            identifier = uuid4().hex
-            content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
-            operation = SaveOperation.for_text(
-                content, operation_id=identifier, session_id="direct", request_id=identifier,
-                contract_revision=1, target_kind="compose", source_hash=content_hash,
-                answer_hash=content_hash,
-            )
         manifest, filepath = save_artifact(
             get_save_text_output_dir(), content, operation, ttl_seconds=ttl_seconds,
         )
