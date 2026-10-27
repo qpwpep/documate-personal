@@ -106,6 +106,35 @@ def test_explicit_block_layout_changes_answer_copy_without_rebinding_its_source(
     assert state["runtime"].previous_response.content == previous.content
 
 
+@pytest.mark.parametrize("previous_answer", [False, True])
+@pytest.mark.parametrize("rendered, probability, expected_kind", [
+    ("`alpha`와 beta", 0.01, "failure"),
+    ("`alpha`와 `beta`", 0.99, "answer"),
+])
+def test_layout_scope_is_checked_when_the_source_is_only_partly_formatted(
+    previous_answer, rendered, probability, expected_kind,
+):
+    text = "`alpha`와 beta"
+    previous = finalize_answer(text_document(text), []) if previous_answer else None
+    state = _plan_copy(
+        text, formats=[{"kind": "inline_code", "mode": "required"}], previous=previous,
+        instruction="원문 내용은 그대로 두고 alpha와 beta를 모두 인라인 코드로 표시하고 저장해줘.",
+    )
+    contract = state["runtime"].request_contract
+    assert contract.body.kind == ("transform_answer" if previous_answer else "transform_input")
+    assert not exact_copy_ready(contract, previous)
+    state["retry"] = state["retry"].model_copy(update={"max_retries": 0, "max_content_repairs": 0})
+    prepare_synthesis_state(state)
+    state.update(make_synthesize_node(_document_model(text_document(rendered)))(state))
+
+    state.update(make_post_synthesis_validation_node(
+        False, decisions_client=make_decisions_client({"format_fulfilled": probability}),
+    )(state))
+
+    assert state["response"].kind == expected_kind
+    if expected_kind == "answer":
+        report = state["response"].result.semantic_validation
+        assert any(check.name == "format_fulfilled" and check.probability == probability for check in report.checks)
 
 
 @pytest.mark.parametrize("previous_answer", [False, True])
@@ -116,24 +145,36 @@ def test_explicit_block_layout_changes_answer_copy_without_rebinding_its_source(
     ("| item | value |\n| --- | --- |\n| alpha | 1 |", "table"),
     ("# Original heading\n\nOriginal text", "headings"),
 ])
-def test_layout_that_already_matches_keeps_exact_copy(previous_answer, text, layout):
+def test_existing_layout_does_not_bypass_transformation_scope_validation(previous_answer, text, layout):
     previous = finalize_answer(text_document(text), []) if previous_answer else None
 
     state = _plan_copy(text, formats=[{"kind": layout, "mode": "required"}], previous=previous)
 
     contract = state["runtime"].request_contract
-    assert contract.body.kind == ("copy_answer" if previous_answer else "copy_input")
+    assert contract.body.kind == ("transform_answer" if previous_answer else "transform_input")
     if previous_answer:
         assert contract.body.source.response_hash == previous.content_hash
     else:
         assert contract.body.source.text == text
         assert contract.body.source.content_hash == sha256(text.encode("utf-8")).hexdigest()
     prepare_synthesis_state(state)
-    updates = make_synthesize_node(_document_model())(state)
+    updates = make_synthesize_node(_document_model(text_document(text)))(state)
     assert updates["response"].kind != "clarification"
     assert updates["response"].result.content == text_document(text)
 
 
+@pytest.mark.parametrize("previous_answer", [False, True])
+@pytest.mark.parametrize("formats", [[], [{"kind": "inline_code", "mode": "preferred"}]])
+def test_pure_copy_and_soft_layout_preferences_preserve_the_exact_copy_path(previous_answer, formats):
+    text = "  original text\r\nwith whitespace  "
+    previous = finalize_answer(text_document(text), []) if previous_answer else None
+    state = _plan_copy(text, formats=formats, previous=previous)
+
+    assert exact_copy_ready(state["runtime"].request_contract, previous)
+    prepare_synthesis_state(state)
+    updates = make_synthesize_node(_document_model())(state)
+
+    assert updates["response"].result.content == text_document(text)
 
 
 @pytest.mark.parametrize("formats", [

@@ -126,6 +126,9 @@ def _bind_body(body, runtime, utterances, original=None, *, declared_missing=())
 
 def _apply_requested_copy_layout(body, body_request, answer, runtime):
     """An explicit layout edit changes the operation, never the bound source."""
+    layouts = [item for item in answer.format if item.kind != "line_count" and item.mode != "preferred"]
+    if not layouts:
+        return body, body_request
     if isinstance(body, CopyInputBody):
         document = text_document(body.source.text)
     elif isinstance(body, CopyAnswerBody):
@@ -137,13 +140,14 @@ def _apply_requested_copy_layout(body, body_request, answer, runtime):
     else:
         return body, body_request
     check = check_answer_contract(AnswerContract(format=answer.format), document)
-    conflicts = {*check.missing_required, *check.forbidden_present}
     # A line-count mismatch may require deleting or rewriting content. Do not
     # infer authorization for that from a request to change only presentation.
-    if not conflicts or any(key.startswith("line_count:") for key in conflicts):
+    if any(key.startswith("line_count:") for key in (*check.missing_required, *check.forbidden_present)):
         return body, body_request
+    # Even an existing layout may cover only part of the requested content.
+    # Let the transformation and format validation apply the user's full scope.
     evidence_ids = tuple(dict.fromkeys(
-        key for item in answer.format if item.kind in conflicts for key in item.evidence_ids
+        key for item in layouts for key in item.evidence_ids
     ))
     instruction = (
         "Preserve the selected source's wording and information. Apply only the explicitly requested "

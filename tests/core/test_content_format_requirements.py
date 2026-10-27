@@ -13,7 +13,7 @@ from src.core.documents import DocumentElement, build_snapshot
 from src.core.evidence import build_evidence
 from src.core.planner_schema import PlannerOutput
 from src.core.request_contracts import (
-    ActionContract, ActionRequest, AnswerContract, ContentRequirement, ContractEvidence, FormatRequirement, RequestContract,
+    ActionContract, ActionRequest, AnswerContract, ContentRequirement, ContractEvidence, LayoutRequirement, RequestContract,
     check_answer_contract,
 )
 from src.runtime.nodes.validation import make_post_synthesis_validation_node
@@ -33,8 +33,8 @@ from tests.core.helpers import make_decisions_client
 ])
 def test_inline_code_requirement_observes_rendered_markdown_spans(text, present):
     document = text_document(text)
-    required = AnswerContract(format=(FormatRequirement(kind="inline_code", mode="required"),))
-    forbidden = AnswerContract(format=(FormatRequirement(kind="inline_code", mode="forbidden"),))
+    required = AnswerContract(format=(LayoutRequirement(kind="inline_code", mode="required"),))
+    forbidden = AnswerContract(format=(LayoutRequirement(kind="inline_code", mode="forbidden"),))
 
     assert check_answer_contract(required, document).missing_required == ([] if present else ["inline_code"])
     assert check_answer_contract(forbidden, document).forbidden_present == (["inline_code"] if present else [])
@@ -45,15 +45,30 @@ def test_structured_code_layout_is_not_inferred_from_its_literal_contents(inline
     document = AnswerDocument(blocks=[CodeBlock(
         inline=inline, content=ContentUnit(text="print('`label`')", basis="interaction"),
     )])
-    contract = AnswerContract(format=(FormatRequirement(kind="inline_code", mode="required"),))
+    contract = AnswerContract(format=(LayoutRequirement(kind="inline_code", mode="required"),))
 
     assert check_answer_contract(contract, document).missing_required == ([] if inline else ["inline_code"])
 
 
+
+
+
+
+
+
 def test_inline_code_preference_does_not_become_a_required_layout():
-    contract = AnswerContract(format=(FormatRequirement(kind="inline_code", mode="preferred"),))
+    contract = AnswerContract(format=(LayoutRequirement(kind="inline_code", mode="preferred"),))
 
     assert check_answer_contract(contract, text_document("Plain text is acceptable.")).valid
+
+
+def test_present_layout_still_requires_semantic_scope_validation():
+    contract = AnswerContract(format=(LayoutRequirement(kind="inline_code", mode="required"),))
+
+    check = check_answer_contract(contract, text_document("`alpha` and beta"))
+
+    assert check.missing_required == []
+    assert check.unchecked_semantic == ["required:inline_code"]
 
 
 @pytest.mark.parametrize("forbidden_content", ["example", "code_example"])
@@ -61,7 +76,7 @@ def test_required_code_block_can_present_input_without_examples(forbidden_conten
     """코드 블록은 로그나 원문도 표현하므로 예시 금지와 양립한다."""
     contract = AnswerContract(
         content=(ContentRequirement(kind=forbidden_content, mode="forbidden"),),
-        format=(FormatRequirement(kind="code_block", mode="required"),),
+        format=(LayoutRequirement(kind="code_block", mode="required"),),
     )
 
     assert contract.content[0].kind == forbidden_content
@@ -76,14 +91,14 @@ def test_input_log_block_requires_semantic_example_judgment(kind):
     )])
     contract = AnswerContract(
         content=(ContentRequirement(kind=kind, mode="forbidden"),),
-        format=(FormatRequirement(kind="code_block", mode="required"),),
+        format=(LayoutRequirement(kind="code_block", mode="required"),),
     )
 
     check = check_answer_contract(contract, document)
 
     assert check.forbidden_present == []
     assert check.missing_required == []
-    assert check.unchecked_semantic == [f"forbidden:{kind}"]
+    assert check.unchecked_semantic == [f"forbidden:{kind}", "required:code_block"]
 
 
 def _validation_state(document, *, kind="example", mode="forbidden", format_mode="required"):
@@ -91,7 +106,7 @@ def _validation_state(document, *, kind="example", mode="forbidden", format_mode
     contract = RequestContract(
         answer=AnswerContract(
             content=(ContentRequirement(kind=kind, mode=mode, evidence_ids=("content",)),),
-            format=(FormatRequirement(kind="code_block", mode=format_mode, evidence_ids=("format",)),),
+            format=(LayoutRequirement(kind="code_block", mode=format_mode, evidence_ids=("format",)),),
         ),
         evidence=(
             ContractEvidence(id="content", turn_id="user:0", quote=request,
@@ -336,9 +351,9 @@ def test_layout_syntax_inside_literal_code_does_not_count_as_displayed_layout(co
         document = text_document("```text\n" + text + "\n```")
     else:
         document = text_document("\n".join("    " + line for line in text.splitlines()))
-    required = AnswerContract(format=tuple(FormatRequirement(kind=kind, mode="required")
+    required = AnswerContract(format=tuple(LayoutRequirement(kind=kind, mode="required")
                                           for kind in ("ordered_list", "list", "table", "headings")))
-    forbidden = AnswerContract(format=tuple(FormatRequirement(kind=kind, mode="forbidden")
+    forbidden = AnswerContract(format=tuple(LayoutRequirement(kind=kind, mode="forbidden")
                                            for kind in ("ordered_list", "list", "table", "headings")))
 
     assert check_answer_contract(required, document).missing_required == ["ordered_list", "list", "table", "headings"]

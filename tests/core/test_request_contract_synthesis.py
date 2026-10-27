@@ -89,7 +89,7 @@ def test_cited_native_code_line_in_paragraph_satisfies_code_without_creating_cod
 
     assert check.missing_required == []
     assert check.forbidden_present == []
-    assert check.unchecked_semantic == []
+    assert check.unchecked_semantic == ["forbidden:code_block"]
     forbidden = AnswerContract(content=(ContentRequirement(kind="code", mode="forbidden"),))
     assert check_answer_contract(forbidden, document, evidence=[evidence]).forbidden_present == ["code"]
 

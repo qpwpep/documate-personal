@@ -98,10 +98,6 @@ class LineCountRequirement(ContractModel):
 FormatConstraint = LayoutRequirement | LineCountRequirement
 
 
-def FormatRequirement(*, kind: str, mode: RequirementMode, value: int | None = None, evidence_ids: tuple[str, ...] = ()) -> FormatConstraint:
-    """Keep the public constructor while typed branches define the actual schema."""
-    model = LineCountRequirement if kind == "line_count" else LayoutRequirement
-    return model(kind=kind, mode=mode, value=value, evidence_ids=evidence_ids)
 
 
 class AnswerContract(ContractModel):
@@ -444,6 +440,10 @@ def check_answer_contract(contract: AnswerContract, document: Any, *, evidence: 
         if requirement.mode == "preferred":
             continue
         key = requirement.kind
+        if isinstance(requirement, LayoutRequirement):
+            # Presence establishes a layout category, not whether it applies
+            # to every portion selected by the user's instruction.
+            check.unchecked_semantic.append(f"{requirement.mode}:{key}")
         if isinstance(requirement, ContentRequirement) and requirement.description.strip():
             # Presence of a category does not establish the specific condition
             # described by the user (for example newly generated code only).
