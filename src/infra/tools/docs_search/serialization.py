@@ -7,7 +7,6 @@ from typing import Any
 from src.core.documents import DocumentElement, SourceAnchor, build_snapshot
 from src.core.evidence import RetrievalScore, SearchHit, build_evidence
 from src.infra.tools._common import normalize_relevance_score
-from src.infra.tools.docs_search.extraction import extract_doc_content
 from src.infra.tools.docs_search.policy import (
     doc_url_filter_reason,
     normalized_domain_set,
@@ -64,22 +63,11 @@ def collect_docs_search_hits(
             result.get("score"),
             warnings=retrieval_warnings,
         )
-        metadata: dict[str, Any] = {}
         raw_content = result.get("raw_content")
         provider_field = "raw_content" if isinstance(raw_content, str) and raw_content.strip() else "content"
         content = result.get(provider_field)
         if not isinstance(content, str) or not content.strip():
             continue
-        if provider_field == "raw_content":
-            doc_metadata, structured_snippet = extract_doc_content(
-                url=original_url,
-                title=title,
-                content=content,
-            )
-            if doc_metadata:
-                metadata["doc_metadata"] = doc_metadata
-            if structured_snippet:
-                metadata["search_summary"] = structured_snippet
         snapshot = build_snapshot(
             source_uri=original_url,
             title=title,
@@ -97,7 +85,6 @@ def collect_docs_search_hits(
             text=content,
             order=0,
             anchors=[SourceAnchor(kind="web", start=0, end=len(content), precision="exact")],
-            metadata=metadata,
         )
         start, end = _select_excerpt_range(content, query=query)
         hits.append(SearchHit(

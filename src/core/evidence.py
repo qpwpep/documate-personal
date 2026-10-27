@@ -13,27 +13,6 @@ from src.core.python_source import PythonSourceMap
 from src.core.table_selection import table_excerpt
 
 
-class DocEntry(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    name: str = ""
-    type: str = ""
-    default: str = ""
-    description: str = ""
-
-
-class DocMetadata(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    doc_family: str = ""
-    symbol: str = ""
-    signature: str = ""
-    parameters: list[DocEntry] = Field(default_factory=list)
-    returns: list[DocEntry] = Field(default_factory=list)
-    options: list[DocEntry] = Field(default_factory=list)
-    examples: list[str] = Field(default_factory=list)
-    notes: list[str] = Field(default_factory=list)
-    source_sections: list[str] = Field(default_factory=list)
-
-
 class SourceSelection(BaseModel):
     """Half-open offsets in element.text, or structured table cell IDs."""
 
