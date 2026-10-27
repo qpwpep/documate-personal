@@ -234,12 +234,12 @@ uv run python -m src.eval.main history --track release
 
 `history`는 로컬 `output/benchmarks/*/summary.json`을 읽고 release run을 선택해 저장소에서 유지하는 두 공개 산출물을 함께 갱신합니다.
 
-- `README.md`의 `## 검증 결과` 섹션
+- `README.md`의 `<!-- BEGIN BENCHMARK HISTORY -->`와 `<!-- END BENCHMARK HISTORY -->` 사이 benchmark 본문
 - `docs/assets/benchmark_history.svg`
 
 최신 release 선택에는 `output/benchmarks/latest_release_run.txt`를 우선 사용합니다. 포인터가 없거나 가리키는 release run을 찾지 못하면 release track에서 전체 케이스 수가 가장 큰 run들 중 가장 최근 `summary.json`으로 fallback합니다. README 요약과 SVG의 지표는 `summary.json`에서 읽으며, `report.md`는 history 입력이 아니라 사람이 확인하거나 `report` 명령으로 재생성하는 로컬 상세 보고서입니다.
 
-이미 존재하는 release run을 공개 요약에 반영할 때는 full benchmark를 다시 실행할 필요가 없습니다. 새 release 수치가 필요할 때만 2.2의 `run` 명령을 먼저 실행합니다. `history`는 pytest를 실행하지 않고 README 표에 기록된 기존 테스트 결과를 보존하므로, 테스트 수치를 바꾸려면 `uv run pytest -q`로 별도 검증한 뒤 README의 테스트 행을 갱신해야 합니다.
+이미 존재하는 release run을 공개 요약에 반영할 때는 full benchmark를 다시 실행할 필요가 없습니다. 새 release 수치가 필요할 때만 2.2의 `run` 명령을 먼저 실행합니다. `history`는 pytest를 실행하거나 테스트 출력 문자열을 해석하지 않습니다. 테스트 기록과 설명은 생성 구간 밖에 두어 그대로 보존합니다. 테스트 수치를 바꾸려면 `uv run pytest -q`로 별도 검증한 뒤 README의 테스트 행을 갱신해야 합니다. 요청 계약 검증을 비롯한 다른 절도 생성 구간 밖에서 유지합니다.
 
 SVG는 현재 로컬에 남아 있는 comparable release summary만으로 다시 생성됩니다. 의도한 과거 release run의 `summary.json`이 모두 있는지 확인한 뒤 실행해야 기존 추세 지점이 빠지지 않습니다.
 
@@ -524,5 +524,5 @@ history 리포터는 현재 판정·측정 계약과 저장 증거를 검증한 
 - benchmark는 현재 `online` 모드만 지원합니다.
 - 확정된 첨부는 사례 종료 후 일반 sync API의 clear로 해제하고 staging 파일은 공용 정리 함수를 사용합니다. 질문 결과나 sync 처리 여부가 불확실하면 재전송·세션 폴더 직접 삭제를 하지 않습니다. 남은 세션·파일은 일반 TTL/LRU와 서버 파일 정리 주기에 따르며, 후속 요청이나 서버 재시작의 정리 실행까지 남을 수 있습니다. 정리 요청 실패는 `cleanup_errors`로 기록합니다.
 - 공용 클라이언트 평가는 Streamlit 화면 렌더링·브라우저 업로드 시간·다운로드 클릭을 측정하지 않습니다.
-- `history` 명령은 README 안의 자동 갱신 마커를 기준으로 동작하므로, `README.md`의 `## 검증 결과`와 `## 문서` 제목은 유지해야 합니다.
+- `history` 명령은 README의 `<!-- BEGIN BENCHMARK HISTORY -->`와 `<!-- END BENCHMARK HISTORY -->` 사이만 갱신합니다. 각 마커를 한 번씩 올바른 순서로 유지해야 하며, 누락·중복·역순이면 문서를 쓰지 않고 실패합니다.
 - 공개 release 결과의 정본은 README 요약이고, 비교 추세는 기존 benchmark history SVG에 유지합니다. 별도 결과 문서나 smoke history 파일은 만들지 않습니다.

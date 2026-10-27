@@ -1,30 +1,14 @@
 from __future__ import annotations
 
 import os
-import re
 from pathlib import Path
 
 from .history_loader import StoredRun, latest_run_pointer_name, suite_label
 from .summary_models import RunSummary, RunTrack
 
 
-README_HISTORY_START = "## 검증 결과"
-README_HISTORY_END = "## 문서"
-README_TEST_RESULT_PATTERN = re.compile(
-    r"^\| [^|]+ \| `(?P<result>\d+ passed, \d+ subtests passed)` \|$",
-    re.MULTILINE,
-)
-
-
-def _existing_test_result(readme_path: Path) -> str:
-    try:
-        readme_text = readme_path.read_text(encoding="utf-8")
-    except OSError:
-        return "pytest result not recorded"
-    match = README_TEST_RESULT_PATTERN.search(readme_text)
-    if match is None:
-        return "pytest result not recorded"
-    return match.group("result")
+README_HISTORY_START = "<!-- BEGIN BENCHMARK HISTORY -->"
+README_HISTORY_END = "<!-- END BENCHMARK HISTORY -->"
 
 
 def format_metric_value(metric_key: str, value: float | int | None) -> str:
@@ -81,11 +65,8 @@ def build_history_readme_block(
     local_output_root = _relative_markdown_path(output_root, readme_path.parent)
     local_pointer_path = f"{local_output_root}/{pointer_name}"
     local_run_output = f"{local_output_root}/<run_id>"
-    test_result = _existing_test_result(readme_path)
 
     lines: list[str] = []
-    lines.append("## 검증 결과")
-    lines.append("")
     lines.append(
         f"최신 문서화된 `{track}` benchmark는 `{latest.run_id}` 런입니다. "
         f"로컬 benchmark 실행은 `{local_pointer_path}`를 최신 `{track}` run 포인터로 갱신합니다."
@@ -106,7 +87,6 @@ def build_history_readme_block(
     lines.append("")
     lines.append("| 항목 | 결과 |")
     lines.append("|---|---:|")
-    lines.append(f"| 테스트 | `{test_result}` |")
     metric_scope = "release" if track == "release" else "diagnostic"
     lines.append(f"| {metric_scope} benchmark | `{latest.metrics.passed_cases}/{latest.metrics.total_cases}` cases passed |")
     lines.append(f"| {metric_scope} pass rate | `{format_metric_value('pass_rate', latest.metrics.pass_rate)}` |")
@@ -187,13 +167,15 @@ def build_history_readme_block(
 
 
 def replace_history_block(readme_text: str, history_block: str) -> str:
+    if readme_text.count(README_HISTORY_START) != 1 or readme_text.count(README_HISTORY_END) != 1:
+        raise ValueError("README benchmark history requires one pair of section markers.")
     start_index = readme_text.find(README_HISTORY_START)
     end_index = readme_text.find(README_HISTORY_END)
-    if start_index < 0 or end_index < 0 or end_index <= start_index:
-        raise ValueError("README benchmark history section markers were not found.")
+    if end_index <= start_index:
+        raise ValueError("README benchmark history section markers are out of order.")
 
-    prefix = readme_text[:start_index].rstrip()
-    suffix = readme_text[end_index:].lstrip("\n")
+    prefix = readme_text[:start_index + len(README_HISTORY_START)]
+    suffix = readme_text[end_index:]
     return prefix + "\n\n" + history_block.rstrip() + "\n\n" + suffix
 
 
