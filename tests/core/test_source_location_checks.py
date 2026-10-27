@@ -1,261 +1,179 @@
-"""Physical line claims are checked against the retained original text."""
-import pytest
+"""Source positions bind to captured ranges, independently of prose and filenames."""
+import json
 
-from src.core.answer_schema import AnswerDocument, AnswerResponse
+import pytest
+from pydantic import ValidationError
+
+from src.core.answer_export import answer_export_snapshot
+from src.core.answer_schema import AnswerDocument, AnswerResponse, document_hash, export_answer_text
+from src.core.contracts.boundary.graph import build_graph_state_input
 from src.core.documents import DocumentElement, SourceAnchor, build_snapshot
 from src.core.evidence import build_evidence
+from src.core.request_contracts import RequestContract
+from src.runtime.nodes.synthesis.prompt_builder import build_synthesis_messages
 
 
 CODE = 'grouped = sales.groupby("region")["amount"].sum()'
 
 
-def evidence(text=None, *, start=0, end=None, exact=True):
-    text = text or "\n" * 29 + CODE + "\n"
+def evidence(text=None, *, start=0, end=None, exact=True, title="sample.py", notebook=False):
+    text = text if text is not None else "\n" * 29 + CODE + "\n"
     snapshot = build_snapshot(
-        source_uri="upload://sample.py", title="sample.py", media_type="text/x-python",
+        source_uri="upload:///file-id", title=title, media_type="text/x-python",
         source_type="upload", content=text, parser="python", parser_version="1",
     )
     anchor = SourceAnchor(
-        kind="code", start=0, end=len(text), line_start=1,
+        kind="notebook" if notebook else "code", start=0, end=len(text), line_start=1,
         line_end=len(text.splitlines()), precision="exact" if exact else "element",
+        cell_id="cell-source" if notebook else None, cell_index=3 if notebook else None,
     )
     return build_evidence(snapshot=snapshot, element=DocumentElement(
         element_id="source", kind="code", text=text, anchors=[anchor],
     ), start=start, end=end)
 
 
-def response(ref, claim, *, code=CODE, basis="source"):
-    return AnswerResponse.from_document(AnswerDocument.model_validate({"blocks": [
-        {"type": "code", "language": "python", "content": {
-            "text": code, "basis": "source", "refs": [ref.id],
-        }},
-        {"type": "paragraph", "content": [{"text": claim, "basis": basis, "refs": [ref.id]}]},
-    ]}), [ref], retrieval_required=True)
+def location_document(ref, *, start=None, end=None, text="model supplied location text"):
+    return AnswerDocument.model_validate({"blocks": [{"type": "paragraph", "content": [{
+        "text": text, "basis": "source", "refs": [ref.id],
+        "source_location": {"ref": ref.id,
+                            "start": ref.selection.start if start is None else start,
+                            "end": ref.selection.end if end is None else end},
+    }]}]})
 
 
-@pytest.mark.parametrize("line", [28, 29, 33])
-def test_wrong_file_line_is_rejected_even_when_the_code_is_exact(line):
-    result = response(evidence(), f"sample.py의 {line}행입니다.")
-    assert result.checks[1].support_status == "unsupported"
-    assert "source_location_mismatch" in result.checks[1].issues
+@pytest.mark.parametrize("title", ["sales_analysis.py", "sales analysis.py"])
+def test_bound_location_uses_source_identity_instead_of_parsing_names(title):
+    ref = evidence('data = pd.read_csv("input.csv")\n', title=title)
+    document = location_document(ref, end=len(ref.element.text) - 1)
 
+    result = AnswerResponse.from_document(document, [ref], retrieval_required=True)
 
-def test_correct_line_still_requires_semantic_validation():
-    result = response(evidence(), "sample.py의 30행입니다.")
-    assert result.checks[1].support_status == "not_evaluated"
-    assert result.checks[1].issues == []
-
-
-@pytest.mark.parametrize("line", [30, 33])
-def test_duplicate_literal_can_bind_to_each_known_physical_occurrence(line):
-    ref = evidence("\n" * 29 + CODE + "\n\n\n" + CODE + "\n")
-    assert response(ref, f"sample.py의 {line}행입니다.").checks[1].issues == []
-
-
-def test_duplicate_literal_does_not_authorize_an_intervening_line():
-    ref = evidence("\n" * 29 + CODE + "\n\n\n" + CODE + "\n")
-    assert response(ref, "sample.py의 31행입니다.").checks[1].support_status == "unsupported"
-
-
-@pytest.mark.parametrize("claim, expected", [
-    ("sample.py의 30~31행입니다.", "not_evaluated"),
-    ("sample.py의 29-30행입니다.", "unsupported"),
-    ("In sample.py, lines 30–31.", "not_evaluated"),
-    ("In sample.py, lines 29–30.", "unsupported"),
-])
-def test_multiline_literal_has_original_line_range(claim, expected):
-    code = CODE + "\nprint(grouped)"
-    ref = evidence("\n" * 29 + code + "\n")
-    assert response(ref, claim, code=code).checks[1].support_status == expected
-
-
-def test_midline_selection_keeps_physical_line_not_excerpt_relative_line():
-    text = "\n" * 29 + "    " + CODE + "\n"
-    ref = evidence(text, start=text.index(CODE), end=text.index(CODE) + len(CODE))
-    assert response(ref, "sample.py의 30행입니다.").checks[1].issues == []
-    assert response(ref, "sample.py의 1행입니다.").checks[1].support_status == "unsupported"
-
-
-def test_unknown_provenance_cannot_certify_a_line_number():
-    result = response(evidence(exact=False), "sample.py의 30행입니다.")
-    assert result.checks[1].support_status == "unsupported"
-    assert "source_location_unverifiable" in result.checks[1].issues
-
-
-@pytest.mark.parametrize("claim", [
-    "DataFrame에는 30행이 있습니다.",
-    "결과 예시는 30행과 2개 열입니다.",
-    "sample.py는 30행의 데이터를 처리합니다.",
-])
-def test_dataframe_row_counts_are_not_file_positions(claim):
-    assert response(evidence(), claim).checks[1].issues == []
-
-
-def test_literal_source_text_is_not_reinterpreted_as_a_location_claim():
-    literal = 'message = "sample.py의 29행입니다."'
-    ref = evidence("\n" * 29 + literal + "\n")
-    result = response(ref, "원문 문자열은 `sample.py의 29행입니다.`입니다.", code=literal)
     assert all(not check.issues for check in result.checks)
+    assert result.content.blocks[0].content[0].text == f"{title}:1"
+    assert document.blocks[0].content[0].text == "model supplied location text"
+    assert answer_export_snapshot(result) == result
+    assert result.content.blocks[0].content[0].text in export_answer_text(result, include_sources=True)
 
 
-def test_inline_literal_can_bind_its_own_location_without_a_code_block():
+@pytest.mark.parametrize("subject", ["DataFrame", "데이터셋", "표", "관측 자료"])
+def test_general_row_count_prose_is_left_to_semantic_validation(subject):
     ref = evidence()
+    text = f"sample.py의 {subject}은 29행입니다."
     document = AnswerDocument.model_validate({"blocks": [{"type": "paragraph", "content": [{
-        "text": f"sample.py의 29행은 `{CODE}`입니다.", "basis": "source", "refs": [ref.id],
+        "text": text, "basis": "source", "refs": [ref.id],
     }]}]})
     result = AnswerResponse.from_document(document, [ref], retrieval_required=True)
-    assert result.checks[0].support_status == "unsupported"
-
-
-@pytest.mark.parametrize("claim", [
-    "sample.py의 1행은 `x = 1`이고 2행은 `y = 2`입니다.",
-    "sample.py에서 `x = 1`은 1행이고 `y = 2`는 2행입니다.",
-    "sample.py의 1행은 `x = 1`이고 `y = 2`는 2행입니다.",
-    "sample.py에서 `x = 1`은 1행이고 2행은 `y = 2`입니다.",
-    "sample.py의 2행은 `y = 2`이고 1행은 `x = 1`입니다.",
-    "In sample.py, line 1 is `x = 1` and line 2 is `y = 2`.",
-    "In sample.py, `x = 1` is on line 1 and `y = 2` is on line 2.",
-    "`sample.py`의 **1**행은 `x = 1`이고 **2**행은 `y = 2`입니다.",
-    "sample.py의 1행은 `x`에 `1`을, 2행은 `y`에 `2`를 대입합니다.",
-])
-def test_multiple_line_claims_bind_each_literal_in_one_sentence(claim):
-    ref = evidence("x = 1\ny = 2\n")
-    document = AnswerDocument.model_validate({"blocks": [{"type": "paragraph", "content": [{
-        "text": claim, "basis": "source", "refs": [ref.id],
-    }]}]})
-
-    result = AnswerResponse.from_document(document, [ref], retrieval_required=True)
-
-    assert result.checks[0].support_status == "not_evaluated"
     assert result.checks[0].issues == []
+    assert result.checks[0].support_status == "not_evaluated"
+    assert result.content.blocks[0].content[0].text == text
 
 
-@pytest.mark.parametrize("claim", [
-    "sample.py의 2행은 `x = 1`이고 1행은 `y = 2`입니다.",
-    "sample.py의 1행은 `x = 1`이고 3행은 `y = 2`입니다.",
-    "sample.py의 1행은 `x = 1`이고 1행은 `y = 2`입니다.",
-    "sample.py에서 `x = 1`은 2행이고 `y = 2`는 1행입니다.",
-    "sample.py의 2행은 `x = 1`이고 `y = 2`는 1행입니다.",
-    "In sample.py, line 2 is `x = 1` and line 1 is `y = 2`.",
-    "In sample.py, `x = 1` is on line 1 and `y = 2` is on line 3.",
-])
-def test_multiple_line_claims_reject_an_incorrect_literal_position(claim):
-    ref = evidence("x = 1\ny = 2\n")
-    document = AnswerDocument.model_validate({"blocks": [{"type": "paragraph", "content": [{
-        "text": claim, "basis": "source", "refs": [ref.id],
-    }]}]})
-
+@pytest.mark.parametrize("newline", ["\n", "\r\n", "\r"])
+def test_server_generates_physical_range_from_offsets_including_blank_lines(newline):
+    source = newline * 29 + CODE + newline + "print(grouped)" + newline
+    ref = evidence(source)
+    document = location_document(ref, start=source.index(CODE), end=len(source))
     result = AnswerResponse.from_document(document, [ref], retrieval_required=True)
+    assert result.content.blocks[0].content[0].text == "sample.py:30–31"
+    assert result.checks[0].support_status == "not_evaluated"
+    assert not result.checks[0].issues
 
+
+def test_repeated_literal_is_bound_to_the_selected_occurrence():
+    ref = evidence("x = 1\n\nx = 1\n")
+    first = AnswerResponse.from_document(location_document(ref, start=0, end=5), [ref])
+    second = AnswerResponse.from_document(location_document(ref, start=7, end=12), [ref])
+    assert first.content.blocks[0].content[0].text == "sample.py:1"
+    assert second.content.blocks[0].content[0].text == "sample.py:3"
+
+
+def test_blank_source_line_retains_its_physical_position():
+    ref = evidence("x = 1\n\nx = 1\n")
+    result = AnswerResponse.from_document(location_document(ref, start=6, end=7), [ref])
+    assert result.content.blocks[0].content[0].text == "sample.py:2"
+    assert not result.checks[0].issues
+
+
+def test_midline_selection_and_notebook_cell_keep_their_original_locations():
+    source = "\n" * 29 + "    " + CODE + "\n"
+    start = source.index(CODE)
+    ref = evidence(source, start=start, end=start + len(CODE), title="analysis notes.ipynb", notebook=True)
+    result = AnswerResponse.from_document(location_document(ref), [ref])
+    assert result.content.blocks[0].content[0].text == "analysis notes.ipynb · cell 4:30"
+    assert not result.checks[0].issues
+
+
+@pytest.mark.parametrize(("start", "end"), [(0, 5), (7, 14)])
+def test_location_cannot_recover_text_outside_the_supplied_evidence(start, end):
+    ref = evidence("hidden\nvisible\nhidden", start=8, end=13)
+    result = AnswerResponse.from_document(location_document(ref, start=start, end=end), [ref])
     assert result.checks[0].support_status == "unsupported"
     assert result.checks[0].issues == ["source_location_mismatch"]
 
 
-def test_repeated_inline_literal_keeps_each_known_occurrence():
-    ref = evidence("x = 1\nx = 1\n")
-    document = AnswerDocument.model_validate({"blocks": [{"type": "paragraph", "content": [{
-        "text": "sample.py에서 `x = 1`은 1행과 2행에 있습니다. 두 줄 모두 `x = 1`입니다.",
-        "basis": "source", "refs": [ref.id],
-    }]}]})
-
-    result = AnswerResponse.from_document(document, [ref], retrieval_required=True)
-
-    assert result.checks[0].support_status == "not_evaluated"
-    assert result.checks[0].issues == []
-
-
-@pytest.mark.parametrize(("text", "claim", "status", "issues"), [
-    ("x = 1\ny = 2\n", "sample.py의 1행과 2행에는 모두 `x = 1`과 `y = 2`가 있습니다.",
-     "unsupported", ["source_location_unverifiable"]),
-    ("x = y\nx = y\n", "sample.py에서 `x`와 `y`는 1행과 2행에 모두 있습니다.",
-     "not_evaluated", []),
-])
-def test_grouped_line_claims_require_each_literal_at_every_claimed_line(text, claim, status, issues):
-    ref = evidence(text)
-    document = AnswerDocument.model_validate({"blocks": [{"type": "paragraph", "content": [{
-        "text": claim, "basis": "source", "refs": [ref.id],
-    }]}]})
-
-    result = AnswerResponse.from_document(document, [ref], retrieval_required=True)
-
-    assert result.checks[0].support_status == status
-    assert result.checks[0].issues == issues
-
-
-def test_relabeling_as_example_does_not_bypass_a_physical_location_check():
-    assert response(evidence(), "sample.py의 29행입니다.", basis="example").checks[1].support_status == "unsupported"
-
-
-@pytest.mark.parametrize("claim", [
-    "`sample.py`의 **29**행입니다.",
-    "원본 파일의 줄 번호: 29",
-    "The original source is at line 29.",
-])
-def test_display_formatting_does_not_hide_a_wrong_location(claim):
-    assert response(evidence(), claim).checks[1].support_status == "unsupported"
-
-
-@pytest.mark.parametrize("claim", [
-    "sample.py의 DataFrame은 29행입니다.",
-    "sample.py의 **DataFrame**은 29행입니다.",
-    "sample.py의 __DataFrame__은 29행입니다.",
-    "sample.py는 총 29행의 데이터를 처리합니다.",
-])
-def test_file_mention_does_not_turn_a_data_row_count_into_a_location(claim):
-    assert response(evidence(), claim).checks[1].issues == []
-
-
-def test_no_literal_binding_does_not_certify_a_bare_file_position():
-    ref = evidence()
-    document = AnswerDocument.model_validate({"blocks": [{"type": "paragraph", "content": [{
-        "text": "sample.py의 30행입니다.", "basis": "source", "refs": [ref.id],
-    }]}]})
-    result = AnswerResponse.from_document(document, [ref], retrieval_required=True)
+def test_unknown_provenance_cannot_generate_a_line_number():
+    ref = evidence(exact=False)
+    result = AnswerResponse.from_document(location_document(ref), [ref])
+    assert result.checks[0].support_status == "unsupported"
     assert result.checks[0].issues == ["source_location_unverifiable"]
+    assert result.content.blocks[0].content[0].text == "model supplied location text"
 
 
-def test_other_file_with_same_line_number_cannot_support_the_claim():
-    assert response(evidence(), "other.py의 30행입니다.").checks[1].support_status == "unsupported"
+def test_unknown_evidence_cannot_generate_a_line_number():
+    ref = evidence()
+    result = AnswerResponse.from_document(location_document(ref), [])
+    assert result.checks[0].reference_status == "missing"
+    assert result.checks[0].support_status == "unsupported"
+    assert "source_location_unverifiable" in result.checks[0].issues
 
 
-def test_equally_near_different_literals_require_an_unambiguous_binding():
-    ref = evidence("\n" * 29 + CODE + "\nprint(grouped)\n")
-    document = AnswerDocument.model_validate({"blocks": [
-        {"type": "code", "content": {"text": CODE, "basis": "source", "refs": [ref.id]}},
-        {"type": "paragraph", "content": [{"text": "sample.py의 30행입니다.", "basis": "source", "refs": [ref.id]}]},
-        {"type": "code", "content": {"text": "print(grouped)", "basis": "source", "refs": [ref.id]}},
-    ]})
-    result = AnswerResponse.from_document(document, [ref], retrieval_required=True)
-    assert result.checks[1].support_status == "unsupported"
-    assert result.checks[1].issues == ["source_location_unverifiable"]
+def test_location_must_bind_to_its_single_declared_reference():
+    ref = evidence()
+    payload = location_document(ref).model_dump(mode="json")
+    payload["blocks"][0]["content"][0]["source_location"]["ref"] = "other-source"
+    with pytest.raises(ValidationError, match="one reference"):
+        AnswerDocument.model_validate(payload)
 
 
-@pytest.mark.parametrize("text", [
-    "Output format: line 1 contains the title; line 2 contains the answer.",
-    "The first example prints line 1 and then line 2.",
-])
-def test_bare_english_line_in_instructions_is_not_a_source_position(text):
-    document = AnswerDocument.model_validate({"blocks": [{"type": "paragraph", "content": [{
-        "text": text, "basis": "interaction", "refs": [],
-    }]}]})
-    result = AnswerResponse.from_document(document, [], retrieval_required=False)
-    assert result.checks[0].issues == []
-    assert result.checks[0].support_status == "not_evaluated"
+@pytest.mark.parametrize(("start", "end"), [(2, 2), (3, 2)])
+def test_empty_or_reversed_location_ranges_are_rejected(start, end):
+    with pytest.raises(ValidationError, match="nonempty range"):
+        location_document(evidence(), start=start, end=end)
 
 
-def test_web_prose_reference_does_not_make_output_lines_native_source_positions():
-    text = "A heading introduces a section."
-    snapshot = build_snapshot(
-        source_uri="https://example.test/guide", title="Guide", media_type="text/html",
-        source_type="official", content=text, parser="web", parser_version="1",
+def test_revalidating_a_stored_response_never_rewrites_tampered_location_text():
+    ref = evidence()
+    result = AnswerResponse.from_document(location_document(ref, start=29, end=29 + len(CODE)), [ref])
+    payload = result.model_dump(mode="json")
+    payload["content"]["blocks"][0]["content"][0]["text"] = "sample.py의 29행입니다."
+    payload["content_hash"] = document_hash(AnswerDocument.model_validate(payload["content"]))
+    with pytest.raises(ValidationError, match="checks must match"):
+        AnswerResponse.model_validate(payload)
+
+
+def test_copying_a_checked_location_retains_the_same_text_and_hash():
+    ref = evidence()
+    result = AnswerResponse.from_document(location_document(ref, start=29, end=29 + len(CODE)), [ref])
+    assert answer_export_snapshot(result).content_hash == result.content_hash
+    assert AnswerResponse.from_document(result.content, [ref]) == result
+
+
+def test_transform_prompt_aliases_locations_and_refs_without_changing_stored_answer():
+    ref = evidence()
+    original = AnswerResponse.from_document(location_document(ref, start=29, end=29 + len(CODE)), [ref])
+    messages, _, _ = build_synthesis_messages(
+        state=build_graph_state_input(user_input="위 답변을 영어로 바꿔줘"),
+        request_contract=RequestContract(), action_rules=[], evidence_packet=[ref],
+        attempt=1, max_turns=6, requirement_ids_by_evidence={},
+        reference_aliases={"e1": ref.id}, retrieval_required=True, source_response=original,
     )
-    ref = build_evidence(snapshot=snapshot, element=DocumentElement(
-        element_id="prose", kind="paragraph", text=text, anchors=[SourceAnchor(kind="web")],
-    ))
-    result = response(ref, "For the output, line 1 contains `A heading`.", code="A heading")
-    assert result.checks[1].issues == []
-
-
-def test_bare_english_line_with_native_code_binding_still_requires_correct_position():
-    result = response(evidence(), "This is on line 29.")
-    assert result.checks[1].issues == ["source_location_mismatch"]
+    bound_message = next(str(message.content) for message in messages
+                         if str(message.content).startswith("[Bound Source Answer]"))
+    record = json.loads(bound_message.split("\n", 2)[2])
+    unit = record["content"]["blocks"][0]["content"][0]
+    assert unit["refs"] == ["e1"]
+    assert unit["source_location"] == {"ref": "e1", "start": 29, "end": 29 + len(CODE)}
+    assert unit["text"] == "sample.py:30"
+    assert record["response_hash"] == original.content_hash
+    assert original.content.blocks[0].content[0].source_location.ref == ref.id
+    assert answer_export_snapshot(original) == original

@@ -102,8 +102,9 @@ def _decide_retry_outcome(
             )
         if any(issue.startswith("source_location_") for issue in issue_codes):
             retrieval_feedback += (
-                " Match each location claim's exact quoted source literal to source_lines.line_number."
-                " These are physical source lines, including blank lines; do not count excerpt lines or guess."
+                " Bind source_location.ref to its only refs entry and select element-character start/end offsets"
+                " inside that evidence selection using source_lines. The server generates physical line numbers."
+                " Do not put line numbers in free prose, count excerpt lines, or guess a source range."
                 " If the source has no exact mapping, remove the unsupported location claim and state that limitation."
             )
         next_retry_context = next_retry_context.model_copy(update={"retrieval_feedback": retrieval_feedback})

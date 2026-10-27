@@ -5,8 +5,10 @@ from pathlib import Path
 from html import unescape
 
 import pytest
+from markdown_it import MarkdownIt
 from streamlit.testing.v1 import AppTest
 
+from src.core.answer_schema import AnswerDocument, export_answer_text, finalize_answer
 from src.core.documents import DocumentElement, SourceAnchor, build_snapshot
 from src.core.evidence import build_evidence
 
@@ -16,6 +18,58 @@ def _answer_app(payload):
     from src.core.answer_schema import AnswerResponse
 
     render_answer_response(AnswerResponse.model_validate(payload), "http://localhost:8000")
+
+
+@pytest.mark.parametrize(("title", "layout"), [
+    ("__init__.py", "paragraph"),
+    ("# notes.py", "paragraph"),
+    ("notes [draft] & `copy`.py", "paragraph"),
+    ("notes | draft.py", "table"),
+    ("__init__.py", "inline_code"),
+    ("__init__.py", "code"),
+])
+def test_structured_location_preserves_literal_filename_in_rendered_body_and_txt(title, layout):
+    source = "value = 1\n"
+    evidence = build_evidence(
+        snapshot=build_snapshot(source_uri="upload:///source", title=title, media_type="text/x-python",
+                                source_type="upload", content=source, parser="python", parser_version="1"),
+        element=DocumentElement(element_id="source", kind="code", text=source, language="python",
+                                anchors=[SourceAnchor(kind="code", start=0, end=len(source),
+                                                      line_start=1, line_end=1, precision="exact")]),
+    )
+    unit = {"text": "source position", "basis": "source", "refs": [evidence.id],
+            "source_location": {"ref": evidence.id, "start": 0, "end": 9}}
+    if layout == "paragraph":
+        block = {"type": "paragraph", "content": [unit]}
+    elif layout == "table":
+        block = {"type": "table", "columns": [{"text": "Source"}], "rows": [[unit]]}
+    else:
+        block = {"type": "code", "inline": layout == "inline_code", "content": unit}
+    answer = finalize_answer(AnswerDocument.model_validate({"blocks": [block]}), [evidence])
+    original = answer.model_dump(mode="json")
+    exported = export_answer_text(answer)
+
+    app = AppTest.from_function(_answer_app, args=(original,)).run()
+
+    assert not app.exception
+    expected = f"{title}:1"
+    if layout == "code":
+        assert app.code[0].value == expected
+    else:
+        tokens = MarkdownIt("commonmark").enable("table").parse(app.markdown[0].value)
+        displayed = ["".join(child.content for child in token.children if child.type in {"text", "code_inline"})
+                     for token in tokens if token.type == "inline"]
+        assert expected + ("" if layout == "inline_code" else " [1]") in displayed
+        assert not any(child.type in {"strong_open", "em_open", "link_open"}
+                       for token in tokens for child in token.children or [])
+        if layout == "paragraph":
+            assert not any(token.type == "heading_open" for token in tokens)
+        if layout == "table":
+            assert sum(token.type == "td_open" for token in tokens) == 1
+    if layout != "table":
+        assert expected in exported
+    assert export_answer_text(answer) == exported
+    assert answer.model_dump(mode="json") == original
 
 
 def test_answer_code_opens_matching_physical_line_with_context_and_original_copy():

@@ -13,7 +13,7 @@ from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from openai import OpenAI
 
 from src.app.web.app import create_app
-from src.core.answer_schema import AnswerResponse, export_answer_text
+from src.core.answer_schema import AnswerDocument, AnswerResponse, export_answer_text
 from src.core.planner_schema import InitialPlannerOutput
 from src.core.request_contracts import WireRequestContract
 from src.infra.settings import APP_ENV_SPEC_BY_NAME, AppSettings
@@ -28,6 +28,8 @@ INLINE_QUESTION = "첨부한 two_lines.py의 1행과 2행 원문을 각각 인�
 
 
 def _chat_response(payload, document):
+    if payload.get("response_format", {}).get("json_schema", {}).get("name") == "AnswerDocument":
+        document = AnswerDocument.model_validate(document).model_dump(mode="json")
     return {
         "id": "chatcmpl-physical-lines", "object": "chat.completion", "created": 1,
         "model": payload["model"],
@@ -62,9 +64,9 @@ def physical_line_api(tmp_path, monkeypatch):
         return connect(sock, address)
 
     monkeypatch.setattr(socket.socket, "connect", local_only)
-    controls = SimpleNamespace(line=29, repair_line=None, paragraph_code=False,
+    controls = SimpleNamespace(invalid_location=True, repair_location=False, paragraph_code=False,
                                excerpt_repair_required=False, location_repair_required=False,
-                               inline_mode=None, second_line=2, format_probability=0.99, format_refused=False,
+                               inline_mode=None, invalid_second_location=False, format_probability=0.99, format_refused=False,
                                requests=[], synthesis_packets=[], decisions_inputs=[])
 
     def provider(request):
@@ -130,23 +132,31 @@ def physical_line_api(tmp_path, monkeypatch):
                 )
                 first = "`x = 1`" if use_inline or controls.inline_mode == "mixed" else "x = 1"
                 second = "`y = 2`" if use_inline else "y = 2"
-                text = (f"원문 대입문은 {first}과 {second}입니다."
-                        if controls.inline_mode == "mixed"
-                        else f"1행은 {first}이고 {controls.second_line}행은 {second}입니다.")
-                document = {"blocks": [{"type": "paragraph", "content": [{
-                    "text": text,
-                    "basis": "source", "refs": [source["id"]],
-                }]}]}
+                first_start = source["selection"]["start"] + source["excerpt"].index("x = 1")
+                second_start = (source["selection"]["end"] if controls.invalid_second_location
+                                else source["selection"]["start"] + source["excerpt"].index("y = 2"))
+                document = {"blocks": [{"type": "paragraph", "content": [
+                    {"text": "first source position", "basis": "source", "refs": [source["id"]],
+                     "source_location": {"ref": source["id"], "start": first_start, "end": first_start + 5}},
+                    {"text": f"원문은 {first}이고", "basis": "source", "refs": [source["id"]]},
+                    {"text": "second source position", "basis": "source", "refs": [source["id"]],
+                     "source_location": {"ref": source["id"], "start": second_start, "end": second_start + 5}},
+                    {"text": f"원문은 {second}입니다.", "basis": "source", "refs": [source["id"]]},
+                ]}]}
                 return httpx.Response(200, json=_chat_response(payload, document))
             evidence = next(item for item in packet if CALCULATION in item["excerpt"])
             feedback = next((item["content"] for item in payload["messages"]
                              if str(item["content"]).startswith("[Validation Repair]")), "")
             location_repair_ready = not controls.location_repair_required or (
-                "source_location_mismatch" in feedback and "source_lines.line_number" in feedback
+                "source_location_mismatch" in feedback and "start/end offsets" in feedback
             )
-            line = (controls.repair_line
-                    if len(controls.synthesis_packets) > 1 and controls.repair_line and location_repair_ready
-                    else controls.line)
+            invalid_location = controls.invalid_location and not (
+                len(controls.synthesis_packets) > 1 and controls.repair_location and location_repair_ready
+            )
+            start = (evidence["selection"]["end"] if invalid_location
+                     else evidence["selection"]["start"] + evidence["excerpt"].index(CALCULATION))
+            location = {"text": "source position", "basis": "source", "refs": [evidence["id"]],
+                        "source_location": {"ref": evidence["id"], "start": start, "end": start + len(CALCULATION)}}
             basis = "source"
             if controls.excerpt_repair_required and not (
                 "excerpt_does_not_match_source" in feedback and "basis=source" in feedback
@@ -156,16 +166,13 @@ def physical_line_api(tmp_path, monkeypatch):
                 {"type": "code", "language": "python", "inline": False, "content": {
                     "text": CALCULATION, "basis": basis, "refs": [evidence["id"]],
                 }},
-                {"type": "paragraph", "content": [{
-                    "text": f"sample_data_analysis.py의 {line}행입니다.",
-                    "basis": "source", "refs": [evidence["id"]],
-                }]},
+                {"type": "paragraph", "content": [location]},
             ]}
             if controls.paragraph_code:
                 document = {"blocks": [{"type": "paragraph", "content": [{
-                    "text": f'`{CALCULATION}` — sample_data_analysis.py의 {line}행입니다.',
+                    "text": f'`{CALCULATION}` —',
                     "basis": "source", "refs": [evidence["id"]],
-                }]}]}
+                }, location]}]}
         else:
             raise AssertionError(f"Unexpected provider schema: {schema_name}")
         return httpx.Response(200, json=_chat_response(payload, document))
@@ -185,7 +192,7 @@ def physical_line_api(tmp_path, monkeypatch):
             yield SimpleNamespace(client=client, root=tmp_path, controls=controls)
 
 
-def test_incorrect_physical_line_cannot_be_delivered_as_completed(physical_line_api):
+def test_out_of_evidence_location_cannot_be_delivered_as_completed(physical_line_api):
     api = physical_line_api
     original = SAMPLE.read_bytes()
     assert original.decode("utf-8").splitlines()[29] == CALCULATION
@@ -205,9 +212,9 @@ def test_incorrect_physical_line_cannot_be_delivered_as_completed(physical_line_
     assert response.actions == []
 
 
-def test_incorrect_physical_line_recovers_when_provider_repairs_the_number(physical_line_api):
+def test_location_recovers_when_provider_repairs_the_selected_range(physical_line_api):
     api = physical_line_api
-    api.controls.repair_line = 30
+    api.controls.repair_location = True
     api.controls.location_repair_required = True
     current = sync(api, add=[staged(api, SAMPLE.name, SAMPLE.read_bytes())])
 
@@ -217,7 +224,7 @@ def test_incorrect_physical_line_recovers_when_provider_repairs_the_number(physi
     response = AnswerResponse.model_validate(result["response"])
     displayed = export_answer_text(response)
     assert CALCULATION in displayed
-    assert "sample_data_analysis.py의 30행입니다." in displayed
+    assert "sample_data_analysis.py:30" in displayed
     assert "29행" not in displayed
     assert not response.issues
     assert all(check.support_status != "unsupported" for check in response.checks)
@@ -226,7 +233,7 @@ def test_incorrect_physical_line_recovers_when_provider_repairs_the_number(physi
 
 def test_partial_source_quotation_recovers_from_exact_excerpt_diagnostic(physical_line_api, caplog):
     api = physical_line_api
-    api.controls.line = 30
+    api.controls.invalid_location = False
     api.controls.excerpt_repair_required = True
     current = sync(api, add=[staged(api, SAMPLE.name, SAMPLE.read_bytes())])
 
@@ -236,7 +243,7 @@ def test_partial_source_quotation_recovers_from_exact_excerpt_diagnostic(physica
     response = AnswerResponse.model_validate(result["response"])
     displayed = export_answer_text(response)
     assert CALCULATION in displayed
-    assert "sample_data_analysis.py의 30행입니다." in displayed
+    assert "sample_data_analysis.py:30" in displayed
     assert response.content.blocks[0].content.basis == "source"
     assert not response.issues
     assert all(check.support_status != "unsupported" for check in response.checks)
@@ -260,7 +267,7 @@ def test_partial_source_quotation_recovers_from_exact_excerpt_diagnostic(physica
 
 def test_physical_line_is_shared_by_model_validation_answer_and_download(physical_line_api):
     api = physical_line_api
-    api.controls.line = 30
+    api.controls.invalid_location = False
     current = sync(api, add=[staged(api, SAMPLE.name, SAMPLE.read_bytes())])
 
     result = final_response(api, query=QUESTION, uploads=context(current))
@@ -292,7 +299,10 @@ def test_physical_line_is_shared_by_model_validation_answer_and_download(physica
     original = AnswerResponse.model_validate(result["response"])
     displayed = export_answer_text(original)
     assert CALCULATION in displayed
-    assert "sample_data_analysis.py의 30행입니다." in displayed
+    assert "sample_data_analysis.py:30" in displayed
+    location = original.content.blocks[1].content[0].source_location
+    assert location.ref == original.citations[0].evidence.id
+    assert location.ref == original.content.blocks[1].content[0].refs[0]
     saved = api.client.post(f"/sessions/session-a/answers/{result['answer_id']}/save")
     assert saved.status_code == 200, saved.text
     saved_result = saved.json()
@@ -304,12 +314,12 @@ def test_physical_line_is_shared_by_model_validation_answer_and_download(physica
     assert download.status_code == 200, download.text
     assert download.content == export_answer_text(original, include_sources=True).encode("utf-8-sig")
     assert CALCULATION in download.content.decode("utf-8-sig")
-    assert "sample_data_analysis.py의 30행입니다." in download.content.decode("utf-8-sig")
+    assert "sample_data_analysis.py:30" in download.content.decode("utf-8-sig")
 
 
 def test_exact_source_line_in_paragraph_completes_and_downloads(physical_line_api):
     api = physical_line_api
-    api.controls.line = 30
+    api.controls.invalid_location = False
     api.controls.paragraph_code = True
     current = sync(api, add=[staged(api, SAMPLE.name, SAMPLE.read_bytes())])
 
@@ -321,7 +331,7 @@ def test_exact_source_line_in_paragraph_completes_and_downloads(physical_line_ap
     assert not response.issues
     displayed = export_answer_text(response)
     assert f"`{CALCULATION}`" in displayed
-    assert "sample_data_analysis.py의 30행입니다." in displayed
+    assert "sample_data_analysis.py:30" in displayed
     saved = api.client.post(f"/sessions/session-a/answers/{result['answer_id']}/save")
     assert saved.status_code == 200, saved.text
     assert saved.json()["status"] == "completed", saved.json()
@@ -357,7 +367,7 @@ def test_required_inline_code_with_correct_lines_completes_and_preserves_saved_b
     response = AnswerResponse.model_validate(result["response"])
     paragraph, = response.content.blocks
     assert paragraph.type == "paragraph"
-    assert " ".join(unit.text for unit in paragraph.content) == "1행은 `x = 1`이고 2행은 `y = 2`입니다."
+    assert " ".join(unit.text for unit in paragraph.content) == "two_lines.py:1 원문은 `x = 1`이고 two_lines.py:2 원문은 `y = 2`입니다."
     assert not response.issues
     assert all(not check.issues for check in response.checks)
     saved = api.client.post(f"/sessions/session-a/answers/{result['answer_id']}/save")
@@ -373,18 +383,23 @@ def test_required_inline_code_with_correct_lines_completes_and_preserves_saved_b
     assert b"`x = 1`" in download.content and b"`y = 2`" in download.content
 
 
-def test_inline_code_does_not_override_an_incorrect_physical_line(physical_line_api):
+def test_inline_code_does_not_override_an_invalid_source_location(physical_line_api):
     api = physical_line_api
     api.controls.inline_mode = "correct"
-    api.controls.second_line = 3
+    api.controls.invalid_second_location = True
     current = sync(api, add=[staged(api, "two_lines.py", INLINE_SOURCE)])
 
     result = final_response(api, query=INLINE_QUESTION, uploads=context(current))
 
     assert api.controls.synthesis_packets
-    assert result["status"] == "failed", result
+    assert result["status"] == "partial", result
     assert result["problem"]["code"] == "model_output_invalid"
-    assert result["response"] is None
+    response = AnswerResponse.model_validate(result["response"])
+    displayed = export_answer_text(response)
+    assert "two_lines.py:1" in displayed
+    assert "`x = 1`" in displayed and "`y = 2`" in displayed
+    assert "second source position" not in displayed
+    assert any(issue.code == "source_location_unverified" for issue in response.issues)
 
 
 @pytest.mark.parametrize(("probability", "refused"), [

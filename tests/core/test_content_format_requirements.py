@@ -4,12 +4,13 @@ import pytest
 from pydantic import ValidationError
 
 from src.core.answer_schema import (
-    AnswerDocument, CodeBlock, ContentUnit, SemanticCheck, SemanticValidation,
+    AnswerDocument, CodeBlock, ContentUnit, HeadingBlock, ListBlock, ParagraphBlock,
+    SemanticCheck, SemanticValidation, SourceLocationReference,
     finalize_answer, semantic_evidence_fingerprint, text_document,
 )
 from src.core.contracts import PlannerState, ResponseState, RetryState
 from src.core.contracts.boundary.graph import build_graph_state_input
-from src.core.documents import DocumentElement, build_snapshot
+from src.core.documents import DocumentElement, SourceAnchor, build_snapshot
 from src.core.evidence import build_evidence
 from src.core.planner_schema import PlannerOutput
 from src.core.request_contracts import (
@@ -50,10 +51,50 @@ def test_structured_code_layout_is_not_inferred_from_its_literal_contents(inline
     assert check_answer_contract(contract, document).missing_required == ([] if inline else ["inline_code"])
 
 
+def _source_location_answer(title, make_block):
+    text = "value = 1\n"
+    source = build_snapshot(
+        source_uri="upload://source-file", title=title, media_type="text/x-python",
+        source_type="upload", content=text, parser="python", parser_version="1",
+    )
+    evidence = build_evidence(snapshot=source, element=DocumentElement(
+        element_id="source", kind="code", text=text, language="python",
+        anchors=[SourceAnchor(kind="code", start=0, end=len(text),
+                              line_start=1, line_end=1, precision="exact")],
+    ))
+    unit = ContentUnit(
+        text="source position", basis="source", refs=[evidence.id],
+        source_location=SourceLocationReference(ref=evidence.id, start=0, end=len(text) - 1),
+    )
+    return finalize_answer(AnswerDocument(blocks=[make_block(unit)]), [evidence])
 
 
+@pytest.mark.parametrize(("title", "layout"), [
+    ("# notes.py", "headings"),
+    ("`marker`.py", "inline_code"),
+    ("- notes.py", "list"),
+])
+def test_source_location_filename_does_not_introduce_markdown_layout(title, layout):
+    response = _source_location_answer(title, lambda unit: ParagraphBlock(content=[unit]))
+    required = AnswerContract(format=(LayoutRequirement(kind=layout, mode="required"),))
+    forbidden = AnswerContract(format=(LayoutRequirement(kind=layout, mode="forbidden"),))
+
+    assert check_answer_contract(forbidden, response.content).forbidden_present == []
+    assert check_answer_contract(required, response.content).missing_required == [layout]
 
 
+@pytest.mark.parametrize(("make_block", "layout"), [
+    (lambda unit: HeadingBlock(content=unit), "headings"),
+    (lambda unit: CodeBlock(inline=True, content=unit), "inline_code"),
+    (lambda unit: ListBlock(items=[unit]), "list"),
+])
+def test_source_location_retains_its_explicit_block_layout(make_block, layout):
+    response = _source_location_answer("__init__.py", make_block)
+    required = AnswerContract(format=(LayoutRequirement(kind=layout, mode="required"),))
+    forbidden = AnswerContract(format=(LayoutRequirement(kind=layout, mode="forbidden"),))
+
+    assert check_answer_contract(required, response.content).missing_required == []
+    assert check_answer_contract(forbidden, response.content).forbidden_present == [layout]
 
 
 def test_inline_code_preference_does_not_become_a_required_layout():

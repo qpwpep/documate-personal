@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import string
 from src.core.evidence import EvidenceRef, selected_source_anchors
 from src.core.answer_schema.models import (
     ActionReceipt, AnswerDocument, AnswerResponse, CodeBlock, ContentUnit,
@@ -52,6 +53,16 @@ def inline_code_markdown(text: str) -> str:
     delimiter = "`" * (longest + 1)
     pad = " " if text.startswith("`") or text.endswith("`") or (text.startswith(" ") and text.endswith(" ") and text.strip()) else ""
     return f"{delimiter}{pad}{text}{pad}{delimiter}"
+
+
+def literal_markdown(text: str) -> str:
+    """Escape literal text; table renderers handle their own pipe delimiters."""
+    return "".join("\\" + char if char in string.punctuation and char != "|" else char for char in text)
+
+
+def content_unit_markdown(unit: ContentUnit) -> str:
+    """Source positions contain literal metadata; ordinary body text permits Markdown."""
+    return literal_markdown(unit.text) if unit.source_location is not None else unit.text
 
 
 def code_display_label(block: CodeBlock) -> str:

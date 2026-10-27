@@ -107,6 +107,48 @@ def _first_id(observed):
     return next(iter(observed["manifests"]))
 
 
+def test_reload_restores_stored_answer_without_optional_source_location(conversation_http, browser_storage):
+    conversation_id = "c3fe22c2-ef6b-47a5-a352-2996ab2a0c05"
+    # Fixed body and hash in the schema before optional source positions were added.
+    # Keep both fixed so the current serializer cannot conceal a revision change.
+    content_hash = "df8ee3a420f2177db595b2dea63fc628814c375b0fadd6040041e45d9e30ea1c"
+    browser_storage.snapshot = json.dumps({
+        "version": 1, "active_conversation_id": conversation_id,
+        "conversations": [{
+            "id": conversation_id,
+            "messages": [
+                {"role": "user", "content": "Stored question"},
+                {"role": "assistant", "result": {
+                    "status": "completed", "answer_id": "stored-answer", "response": {
+                        "content": {"blocks": [{"type": "paragraph", "content": [{
+                            "text": "Previously saved answer", "basis": "interaction", "refs": [],
+                        }]}]},
+                        "citations": [], "checks": [{
+                            "unit_id": "b0.content.0", "reference_status": "not_required",
+                            "support_status": "not_evaluated", "issues": [],
+                        }],
+                        "issues": [], "actions": [], "content_hash": content_hash,
+                        "retrieval_required": False, "semantic_validation": None,
+                    },
+                }},
+            ],
+            "draft": {"text": "아직 보내지 않은 질문", "revision": 1},
+            "confirmed_epoch": "epoch-" + conversation_id,
+        }],
+    }, ensure_ascii=False)
+
+    restored = AppTest.from_file(APP, default_timeout=10).run()
+
+    assert not restored.exception
+    assert any("Previously saved answer" in item.value for item in restored.markdown)
+    assert _picker(restored).value == conversation_id
+    assert restored.chat_input[0].proto.value == "아직 보내지 않은 질문"
+    saved = json.loads(browser_storage.snapshot)
+    response = saved["conversations"][0]["messages"][1]["result"]["response"]
+    assert response["content_hash"] == content_hash
+    assert not conversation_http["requests"]
+
+
 def test_reload_restores_answer_sources_attachments_and_unsent_draft(conversation_http, browser_storage):
     app = AppTest.from_file(APP, default_timeout=10).run()
     app.chat_input[0].set_value("새로고침 후에도 확인할 답변").run()

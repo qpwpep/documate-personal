@@ -16,11 +16,26 @@ class AnswerModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class SourceLocationReference(AnswerModel):
+    """A nonempty element-character range inside one supplied evidence selection."""
+
+    ref: str = Field(min_length=1)
+    start: int = Field(ge=0)
+    end: int = Field(gt=0)
+
+    @model_validator(mode="after")
+    def nonempty_range(self) -> "SourceLocationReference":
+        if self.end <= self.start:
+            raise ValueError("a source location requires a nonempty range")
+        return self
+
+
 class ContentUnit(AnswerModel):
     """The exact displayed content and its proposed relationship to sources."""
     text: str = Field(min_length=1)
     basis: Literal["source", "inference", "example", "interaction", "excerpt"] = "interaction"
     refs: list[str] = Field(default_factory=list)
+    source_location: SourceLocationReference | None = None
 
     @field_validator("text")
     @classmethod
@@ -35,6 +50,14 @@ class ContentUnit(AnswerModel):
         if any(not ref.strip() for ref in value):
             raise ValueError("evidence references must not be blank")
         return list(dict.fromkeys(value))
+
+    @model_validator(mode="after")
+    def location_uses_its_only_source(self) -> "ContentUnit":
+        if self.source_location is not None and (
+            self.basis != "source" or self.refs != [self.source_location.ref]
+        ):
+            raise ValueError("a source location requires basis=source and its one reference in refs")
+        return self
 
 
 class ParagraphBlock(AnswerModel):
@@ -114,7 +137,8 @@ def iter_content_units(document: AnswerDocument) -> Iterator[tuple[str, ContentU
 
 
 def document_hash(document: AnswerDocument) -> str:
-    serialized = json.dumps(document.model_dump(mode="json"), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    """Hash displayed content and present metadata; absent optional values are neutral."""
+    serialized = json.dumps(document.model_dump(mode="json", exclude_none=True), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
 
@@ -303,6 +327,14 @@ class AnswerResponse(AnswerModel):
         hash or recorded check cannot be replaced by this creation context.
         """
         by_id = validated_evidence_by_id(evidence)
+        from src.core.answer_schema.source_locations import source_location_text
+
+        document = document.model_copy(deep=True)
+        for _path, unit in iter_content_units(document):
+            if unit.source_location is not None:
+                text, _issue = source_location_text(unit.source_location, by_id.get(unit.source_location.ref))
+                if text is not None:
+                    unit.text = text
         return cls.model_validate({
             "content": document.model_dump(mode="json"),
             "actions": [item.model_dump(mode="json") for item in actions or []],

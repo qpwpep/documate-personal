@@ -40,7 +40,11 @@ def _predicate_instructions(questions: list[dict[str, str]]) -> list[dict[str, s
         "A whole requested definition can be fully selected even when is_partial is true because other file content "
         "was not selected. A clipped definition is not complete. Respect capture_scope and quality_issues; "
         "source_locations identify known regions. source_lines maps the selected original text to its exact physical line_number, including blank lines. "
-        "For every claimed file line position, compare the cited literal code or text with source_lines; never count excerpt lines or trust the answer's numbers. "
+        "Structured source_location units have server-rendered titles and physical positions for their referenced "
+        "element-character ranges. Check that the selected range is the location the user actually requested. "
+        "Reject original-file line claims in ordinary units with source_location=null: those claims must use the "
+        "structured binding rather than model-written numbers. Data row counts and requested output lines are "
+        "ordinary semantic claims, not original-file positions. Never count excerpt lines or trust model-written numbers. "
         "When source_lines is empty, an exact original line claim is unsupported. Notebook lines are cell-local, not lines of the JSON file. "
         + question["instructions"]
     )} for question in questions]

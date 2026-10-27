@@ -10,7 +10,7 @@ from src.app.client import AgentCallResult, AgentStreamEvent
 from src.app.web.streamlit_sources import render_code, render_evidence
 from src.app.web.streamlit_state import AssistantChatMessage, ChatMessage
 from src.core.answer_schema import ActionReceipt, AnswerResponse, ContentUnit, SemanticCheck, iter_content_units
-from src.core.answer_schema.rendering import code_display_label, inline_code_markdown
+from src.core.answer_schema.rendering import code_display_label, content_unit_markdown, inline_code_markdown, literal_markdown
 from src.core.contracts.outcome import TurnResult
 from src.core.llm_errors import ExecutionProblem
 
@@ -329,6 +329,8 @@ def _render_validation_scope(response: AnswerResponse, *, turn_incomplete: bool 
             preview = " ".join(unit.text.split())
             if len(preview) > 120:
                 preview = preview[:117] + "…"
+            if unit.source_location is not None:
+                preview = literal_markdown(preview)
             st.markdown(f"**내용 {index}** · {preview}")
             _render_semantic_result(
                 "근거 지지", semantic_checks.get(("grounded", path)),
@@ -350,7 +352,7 @@ def _render_semantic_result(label: str, check: SemanticCheck | None, threshold: 
 def _unit_text(unit: ContentUnit, citations: dict) -> str:
     prefix = {"inference": "**해석** · ", "example": "**예시** · ", "excerpt": "**원문 발췌** · "}.get(unit.basis, "")
     labels = " ".join(f"[{citations[ref].number}]" for ref in unit.refs if ref in citations)
-    return prefix + unit.text + (f" {labels}" if labels else "")
+    return prefix + content_unit_markdown(unit) + (f" {labels}" if labels else "")
 
 
 def _table_cell(unit: ContentUnit, citations: dict) -> str:

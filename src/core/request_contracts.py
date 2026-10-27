@@ -10,6 +10,7 @@ from markdown_it import MarkdownIt
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from src.core.answer_schema import AnswerDocument, AnswerResponse, iter_content_units
+from src.core.answer_schema.rendering import content_unit_markdown
 from src.core.evidence import EvidenceRef
 from src.core.python_source import PythonSourceMap
 from src.core.slack_contract import ExplicitRecipient, OmittedRecipient, RecipientIntent, UnresolvedRecipient
@@ -96,8 +97,6 @@ class LineCountRequirement(ContractModel):
 
 
 FormatConstraint = LayoutRequirement | LineCountRequirement
-
-
 
 
 class AnswerContract(ContractModel):
@@ -323,24 +322,24 @@ _COMMONMARK = MarkdownIt("commonmark").enable("table")
 
 
 def _raw_body_markdown_blocks(document: AnswerDocument) -> Iterable[str]:
-    """Check raw-body Markdown exports, independent of optional UI basis labels."""
+    """Check displayed Markdown, independent of optional UI basis labels."""
     def cell(text: str) -> str:
         return text.replace("|", "\\|").replace("\n", "<br>")
 
     for block in document.blocks:
         if block.type == "paragraph":
-            yield " ".join(unit.text for unit in block.content)
+            yield " ".join(content_unit_markdown(unit) for unit in block.content)
         elif block.type == "list":
             yield "\n".join(
-                f"{str(index) + '.' if block.ordered else '-'} {unit.text}"
+                f"{str(index) + '.' if block.ordered else '-'} {content_unit_markdown(unit)}"
                 for index, unit in enumerate(block.items, 1)
             )
         elif block.type == "heading":
-            yield f"{'#' * block.level} {block.content.text}"
+            yield f"{'#' * block.level} {content_unit_markdown(block.content)}"
         elif block.type == "table":
-            header = "| " + " | ".join(cell(unit.text) for unit in block.columns) + " |"
+            header = "| " + " | ".join(cell(content_unit_markdown(unit)) for unit in block.columns) + " |"
             separator = "| " + " | ".join("---" for _ in block.columns) + " |"
-            rows = ["| " + " | ".join(cell(unit.text) for unit in row) + " |" for row in block.rows]
+            rows = ["| " + " | ".join(cell(content_unit_markdown(unit)) for unit in row) + " |" for row in block.rows]
             yield "\n".join([header, separator, *rows])
 
 
@@ -400,7 +399,7 @@ def check_answer_contract(contract: AnswerContract, document: Any, *, evidence: 
     has_cited_inline_code = any(
         child.content.strip() in source_statements[reference]
         for unit in units
-        for token in _COMMONMARK.parseInline(unit.text)
+        for token in _COMMONMARK.parseInline(content_unit_markdown(unit))
         for child in token.children or [] if child.type == "code_inline"
         for reference in unit.refs if reference in source_statements
     )

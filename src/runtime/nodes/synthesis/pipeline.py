@@ -26,6 +26,10 @@ def _invoke_structured_attempt(
             document = document.model_copy(deep=True)
             for _path, unit in iter_content_units(document):
                 unit.refs = [prepared.reference_aliases.get(reference, reference) for reference in unit.refs]
+                if unit.source_location is not None:
+                    unit.source_location = unit.source_location.model_copy(update={
+                        "ref": prepared.reference_aliases.get(unit.source_location.ref, unit.source_location.ref),
+                    })
         return finalize_answer(document, prepared.evidence_packet, retrieval_required=prepared.retrieval_required)
 
     return run_structured_call(
