@@ -127,7 +127,6 @@ def test_code_fragment_coverage_preserves_unicode_and_original_line_endings(newl
     ("discount", "def target():\n    # discount\n    return 'discount'\n", "definition"),
     ("return value", "def target(value):\n    return\n    value\n", "definition"),
     ("is None", "def target(value):\n    return value is \\\n        None\n", "definition"),
-    ("value=", "def target(value=0.10):\n    # value=\n    return value\n", "definition"),
     ("helper('unfinished", "def target():\n    return helper()\n", "definition"),
     ('helper("""unfinished', "def target():\n    return helper()\n", "definition"),
 ])
@@ -139,13 +138,13 @@ def test_code_aspect_requires_whole_code_tokens_in_the_selected_occurrence(aspec
     assert "source_requirement_constraints_unverified" in payload.diagnostics.warnings
 
 
-@pytest.mark.parametrize(("aspect", "signature", "covered"), [
-    ("value=", "value=0.10", False),
-    ("=None", "value=None", False),
-    ("value=", "value= 0.10", True),
-    ("=None", "value =None", True),
+@pytest.mark.parametrize(("aspect", "signature"), [
+    ("value=", "value=0.10"),
+    ("=None", "value=None"),
+    ("value=", "value= 0.10"),
+    ("=None", "value =None"),
 ])
-def test_fragment_coverage_keeps_the_original_literal_boundaries(aspect, signature, covered):
+def test_fragment_coverage_uses_identifier_boundaries_only_at_identifier_edges(aspect, signature):
     from src.core.planner_schema import RetrievalTask
     from src.runtime.nodes.synthesis.evidence_selection import requirement_coverage
 
@@ -156,9 +155,170 @@ def test_fragment_coverage_keeps_the_original_literal_boundaries(aspect, signatu
     evidence = [hit.evidence for hit in payload.hits]
     coverage = requirement_coverage(task, evidence, {item.id: [task.requirement_id] for item in evidence})
 
-    assert payload.diagnostics.answerability == ("covered" if covered else "unknown")
-    assert coverage["is_partial"] is not covered
-    assert coverage["missing_aspects"] == ([] if covered else [aspect])
+    assert payload.diagnostics.answerability == "covered"
+    assert coverage["is_partial"] is False
+    assert coverage["missing_aspects"] == []
+
+
+@pytest.mark.parametrize("arguments", ["", "value", " value", "value, other"])
+def test_call_prefix_fragment_does_not_require_whitespace_before_arguments(arguments):
+    source = f"def target(value, other):\n    return helper({arguments})\n"
+    payload = _search_code_aspect(source, "helper(")
+
+    assert payload.diagnostics.answerability == "covered"
+    assert payload.hits[0].evidence.excerpt == source.rstrip("\n")
+
+
+@pytest.mark.parametrize("body", [
+    "def target(np):\n    return np.array([1])\n",
+    "np = service\nnp.array([1])\n",
+    "def target():\n    np = service\n    return np.array([1])\n",
+    "def target():\n    result = np.array([1])\n    np = service\n    return result\n",
+    "def outer(np):\n    def inner():\n        return np.array([1])\n",
+    "for np in services:\n    np.array([1])\n",
+    "with service() as np:\n    np.array([1])\n",
+    "def target[T](np: T):\n    return np.array([1])\n",
+    "def target[np](value: np):\n    return np.array([1])\n",
+])
+def test_import_alias_is_not_applied_to_a_shadowed_name(body):
+    source = "import numpy as np\n" + body
+    payload = build_upload_search_tool()(query="numpy.array", requirement=_requirement(["numpy.array"], "symbol"),
+                                        retriever=_source_retriever(source))
+
+    assert payload.hits == []
+    assert payload.diagnostics.answerability == "missing"
+
+
+def test_shadowed_function_parameter_does_not_change_outer_import_alias():
+    source = ("import numpy as np\n"
+              "def shadowed(np):\n    return np.array([1])\n"
+              "def preserved():\n    return np.array([2])\n")
+    payload = build_upload_search_tool()(query="numpy.array", requirement=_requirement(["numpy.array"], "symbol"),
+                                        retriever=_source_retriever(source))
+
+    assert payload.diagnostics.answerability == "covered"
+    assert [hit.evidence.excerpt for hit in payload.hits] == ["    return np.array([2])"]
+
+
+@pytest.mark.parametrize(("prefix", "symbol", "covered"), [
+    ("import numpy as np\ndef outer(np):\n", "numpy.array", True),
+    ("import numpy as np\ndef outer():\n    import pandas as np\n", "numpy.array", True),
+    ("import numpy as np\ndef outer():\n    import pandas as np\n", "pandas.array", False),
+    ("def outer():\n    import numpy as np\n", "numpy.array", False),
+])
+def test_explicit_global_uses_module_binding_instead_of_enclosing_binding(prefix, symbol, covered):
+    source = prefix + "    def inner():\n        global np\n        return np.array([1])\n"
+    payload = build_upload_search_tool()(query=symbol, requirement=_requirement([symbol], "symbol"),
+                                        retriever=_source_retriever(source))
+
+    assert payload.diagnostics.answerability == ("covered" if covered else "missing")
+    assert [hit.evidence.excerpt for hit in payload.hits] == (["        return np.array([1])"] if covered else [])
+
+
+def test_assignment_visits_the_value_before_rebinding_an_import_alias():
+    source = "import numpy as np\nnp = np.array([1])\nnp.array([2])\n"
+    payload = build_upload_search_tool()(query="numpy.array", requirement=_requirement(["numpy.array"], "symbol"),
+                                        retriever=_source_retriever(source))
+
+    assert payload.diagnostics.answerability == "covered"
+    assert [hit.evidence.excerpt for hit in payload.hits] == ["np = np.array([1])"]
+
+
+def test_assignment_target_remains_searchable_by_its_source_name():
+    source = "target = value\n"
+    payload = build_upload_search_tool()(query="target", requirement=_requirement(["target"], "symbol"),
+                                        retriever=_source_retriever(source))
+
+    assert payload.diagnostics.answerability == "covered"
+    assert [hit.evidence.excerpt for hit in payload.hits] == ["target = value"]
+
+
+@pytest.mark.parametrize("shadowed", [
+    "callback = lambda np: np.array([1])",
+    "results = [np.array([1]) for np in services]",
+])
+def test_expression_scope_shadows_import_alias_without_changing_outer_scope(shadowed):
+    source = f"import numpy as np\n{shadowed}\nresult = np.array([2])\n"
+    payload = build_upload_search_tool()(query="numpy.array", requirement=_requirement(["numpy.array"], "symbol"),
+                                        retriever=_source_retriever(source))
+
+    assert payload.diagnostics.answerability == "covered"
+    assert [hit.evidence.excerpt for hit in payload.hits] == ["result = np.array([2])"]
+
+
+def test_lambdas_on_the_same_line_have_distinct_lexical_bindings():
+    expression = "callbacks = (lambda np: np.array([1]), lambda value: np.array([2]))"
+    source = "import numpy as np\n" + expression + "\n"
+    payload = build_upload_search_tool()(query="numpy.array", requirement=_requirement(["numpy.array"], "symbol"),
+                                        retriever=_source_retriever(source))
+
+    assert payload.diagnostics.answerability == "covered"
+    assert [hit.evidence.excerpt for hit in payload.hits] == [expression]
+
+
+def test_notebook_import_alias_is_shared_until_a_later_cell_rebinds_it(uploaded):
+    cells = ["import numpy as np\n", "result = np.array([1])\n", "np = service\nnp.array([2])\n"]
+    with uploaded(cells, notebook=True) as retriever:
+        payload = build_upload_search_tool()(query="numpy.array", requirement=_requirement(["numpy.array"], "symbol"),
+                                            retriever=retriever)
+
+    assert payload.diagnostics.answerability == "covered"
+    assert [hit.evidence.excerpt for hit in payload.hits] == ["result = np.array([1])"]
+    assert payload.hits[0].evidence.element.anchors[0].cell_index == 1
+
+
+@pytest.mark.parametrize("definition", [
+    "def outer[T](value: T):\n    def inner():\n        return np.array([1])\n",
+    "class Wrapper[T]:\n    def method(self):\n        return np.array([1])\n",
+])
+def test_generic_scope_preserves_unshadowed_outer_imports(definition):
+    source = "import numpy as np\n" + definition
+    payload = build_upload_search_tool()(query="numpy.array", requirement=_requirement(["numpy.array"], "symbol"),
+                                        retriever=_source_retriever(source))
+
+    assert payload.diagnostics.answerability == "covered"
+    assert [hit.evidence.excerpt.strip() for hit in payload.hits] == ["return np.array([1])"]
+
+
+@pytest.mark.parametrize("declaration", [
+    "type Factory = type(lambda np: np.array([1]))",
+    "type Factory[T] = type(lambda np: np.array([1]))",
+    "def target[T](value: (lambda np: np.array([1]))):\n    return value",
+    "def target[T](value = lambda np: np.array([1])):\n    return value",
+])
+def test_annotation_and_default_expression_scopes_preserve_the_outer_alias(declaration):
+    source = f"import numpy as np\n{declaration}\nresult = np.array([2])\n"
+    payload = build_upload_search_tool()(query="numpy.array", requirement=_requirement(["numpy.array"], "symbol"),
+                                        retriever=_source_retriever(source))
+
+    assert payload.diagnostics.answerability == "covered"
+    assert [hit.evidence.excerpt for hit in payload.hits] == ["result = np.array([2])"]
+
+
+def test_unavailable_compiler_scope_does_not_claim_symbol_absence():
+    source = ("from __future__ import annotations\nimport numpy as np\n"
+              "def target(value: (lambda np: np.array([1]))):\n    return value\n")
+    payload = build_upload_search_tool()(query="numpy.array", requirement=_requirement(["numpy.array"], "symbol"),
+                                        retriever=_source_retriever(source))
+
+    assert payload.hits == []
+    assert payload.diagnostics.answerability == "unknown"
+    assert payload.diagnostics.missing_requirements == []
+    assert "source_symbol_analysis_unavailable" in payload.diagnostics.warnings
+
+
+@pytest.mark.parametrize("declaration", [
+    "def target[T: np.ndarray]():\n    pass",
+    "class Target[T: np.ndarray]:\n    pass",
+    "type Target[T: np.ndarray] = list[T]",
+])
+def test_generic_type_parameter_bound_remains_searchable(declaration):
+    source = f"import numpy as np\n{declaration}\n"
+    payload = build_upload_search_tool()(query="numpy.ndarray", requirement=_requirement(["numpy.ndarray"], "symbol"),
+                                        retriever=_source_retriever(source))
+
+    assert payload.diagnostics.answerability == "covered"
+    assert [hit.evidence.excerpt for hit in payload.hits] == [declaration]
 
 
 def test_planned_code_fragment_reaches_source_retrieval_without_losing_the_constraint():

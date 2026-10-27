@@ -8,7 +8,11 @@ from src.core.evidence import EvidenceRef
 
 
 def _contains_literal(anchor: str, excerpt: str) -> bool:
-    return re.search(rf"(?<!\w){re.escape(anchor)}(?!\w)", excerpt) is not None
+    if not anchor:
+        return False
+    left = r"(?<!\w)" if re.match(r"\w", anchor[0]) else ""
+    right = r"(?!\w)" if re.match(r"\w", anchor[-1]) else ""
+    return re.search(left + re.escape(anchor) + right, excerpt) is not None
 
 
 def literal_aspect_present(aspect: str, text: str, *, case_sensitive: bool) -> bool:

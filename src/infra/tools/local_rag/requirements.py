@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import ast
 import io
+import symtable
 import tokenize
+from collections.abc import Iterator
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from functools import cached_property
 from typing import Literal
@@ -52,12 +55,20 @@ class _Occurrence:
     canonical_name: str = ""
 
 
+class _SymbolScopeUnavailable(ValueError):
+    """The compiler did not expose a scope required for lexical resolution."""
+
+
 class _SymbolVisitor(ast.NodeVisitor):
-    def __init__(self, tree: ast.AST, aliases: dict[str, str]):
+    def __init__(self, tree: ast.AST, aliases: dict[str, str], symbols: symtable.SymbolTable):
         self.occurrences: list[_Occurrence] = []
         self.scope: list[str] = []
         self.parents = {child: parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)}
         self.aliases = dict(aliases)
+        self.module_aliases = self.aliases
+        self.symbols = symbols
+        self.class_enclosing_aliases: dict[str, str] | None = None
+        self.child_scopes: dict[tuple[int, str, int], Iterator[symtable.SymbolTable]] = {}
 
     def _reference(self, name: str, node: ast.AST, priority: int) -> None:
         root, separator, suffix = name.partition(".")
@@ -71,15 +82,129 @@ class _SymbolVisitor(ast.NodeVisitor):
 
     def _definition(self, node: ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef) -> None:
         self.occurrences.append(_Occurrence(".".join([*self.scope, node.name]), node, True, 1))
-        outer_aliases = dict(self.aliases)
-        self.scope.append(node.name)
-        self.generic_visit(node)
-        self.scope.pop()
-        self.aliases = outer_aliases
+        # Defaults and decorators use the enclosing scope; generic annotations
+        # have a separate compiler scope around the function/class body.
+        for decorator in node.decorator_list:
+            self.visit(decorator)
+        if not isinstance(node, ast.ClassDef):
+            for default in (*node.args.defaults, *node.args.kw_defaults):
+                if default is not None:
+                    self.visit(default)
+        annotation_scope = (self._nested_scope(node.name, node.lineno, annotation_scope=True)
+                            if node.type_params else nullcontext())
+        with annotation_scope:
+            for parameter in node.type_params:
+                self.visit(parameter)
+            if isinstance(node, ast.ClassDef):
+                for base in node.bases:
+                    self.visit(base)
+                for keyword in node.keywords:
+                    self.visit(keyword.value)
+            else:
+                for argument in (*node.args.posonlyargs, *node.args.args, *node.args.kwonlyargs,
+                                 node.args.vararg, node.args.kwarg):
+                    if argument is not None and argument.annotation is not None:
+                        self.visit(argument.annotation)
+                if node.returns is not None:
+                    self.visit(node.returns)
+            self.aliases.pop(node.name, None)
+            with self._nested_scope(node.name, node.lineno, class_scope=isinstance(node, ast.ClassDef)):
+                self.scope.append(node.name)
+                for statement in node.body:
+                    self.visit(statement)
+                self.scope.pop()
+        self.aliases.pop(node.name, None)
+
+    @contextmanager
+    def _nested_scope(
+        self, name: str | None, line: int, *, class_scope: bool = False, annotation_scope: bool = False,
+    ) -> Iterator[None]:
+        outer_aliases = self.aliases
+        outer_symbols = self.symbols
+        outer_class_aliases = self.class_enclosing_aliases
+        self.aliases = dict(outer_aliases if annotation_scope or outer_class_aliases is None else outer_class_aliases)
+        if name is not None:
+            self.symbols = self._child_scope(name, line)
+        if class_scope:
+            # Methods skip the class namespace when resolving unqualified names.
+            self.class_enclosing_aliases = dict(self.aliases)
+        else:
+            self.class_enclosing_aliases = None
+        if name is not None:
+            for symbol in self.symbols.get_symbols():
+                symbol_name = symbol.get_name()
+                if symbol.is_declared_global():
+                    # An explicit global skips every enclosing lexical binding.
+                    self.aliases.pop(symbol_name, None)
+                    if symbol_name in self.module_aliases:
+                        self.aliases[symbol_name] = self.module_aliases[symbol_name]
+                elif not class_scope and symbol.is_local():
+                    self.aliases.pop(symbol_name, None)
+        try:
+            yield
+        finally:
+            self.aliases = outer_aliases
+            self.symbols = outer_symbols
+            self.class_enclosing_aliases = outer_class_aliases
+
+    def _child_scope(self, name: str, line: int) -> symtable.SymbolTable:
+        key = (self.symbols.get_id(), name, line)
+        if key not in self.child_scopes:
+            # Several lambdas can share a line and name. Consume each compiler
+            # scope once in source traversal order rather than reusing the first.
+            self.child_scopes[key] = iter(child for child in self.symbols.get_children()
+                                          if child.get_name() == name and child.get_lineno() == line)
+        child = next(self.child_scopes[key], None)
+        if child is None:
+            raise _SymbolScopeUnavailable(f"No compiler scope for {name!r} at line {line}")
+        return child
 
     visit_FunctionDef = _definition
     visit_AsyncFunctionDef = _definition
     visit_ClassDef = _definition
+
+    def visit_TypeAlias(self, node: ast.TypeAlias) -> None:
+        self.visit(node.name)
+        annotation_scope = (self._nested_scope(node.name.id, node.lineno, annotation_scope=True)
+                            if node.type_params else nullcontext())
+        with annotation_scope:
+            for parameter in node.type_params:
+                self.visit(parameter)
+            with self._nested_scope(node.name.id, node.lineno, annotation_scope=True):
+                self.visit(node.value)
+
+    def visit_TypeVar(self, node: ast.TypeVar) -> None:
+        if node.bound is not None:
+            with self._nested_scope(node.name, node.lineno, annotation_scope=True):
+                self.visit(node.bound)
+
+    def visit_Lambda(self, node: ast.Lambda) -> None:
+        self.visit(node.args)
+        with self._nested_scope("lambda", node.lineno):
+            self.visit(node.body)
+
+    def _comprehension(self, node: ast.ListComp | ast.SetComp | ast.DictComp | ast.GeneratorExp) -> None:
+        self.visit(node.generators[0].iter)
+        # List/set/dict comprehensions are inlined by Python 3.12+, while a
+        # generator keeps its own symbol table. Both isolate their target names.
+        name = "genexpr" if isinstance(node, ast.GeneratorExp) else None
+        with self._nested_scope(name, node.lineno):
+            for index, generator in enumerate(node.generators):
+                if index:
+                    self.visit(generator.iter)
+                self.visit(generator.target)
+                for condition in generator.ifs:
+                    self.visit(condition)
+            if isinstance(node, ast.DictComp):
+                self.visit(node.key)
+                self.visit(node.value)
+            else:
+                self.visit(node.elt)
+
+    visit_ListComp = _comprehension
+    visit_SetComp = _comprehension
+    visit_DictComp = _comprehension
+    visit_GeneratorExp = _comprehension
 
     def visit_Import(self, node: ast.Import) -> None:
         for alias in node.names:
@@ -101,7 +226,48 @@ class _SymbolVisitor(ast.NodeVisitor):
         self.generic_visit(node)
 
     def visit_Name(self, node: ast.Name) -> None:
+        if not isinstance(node.ctx, ast.Load):
+            self.aliases.pop(node.id, None)
         self._reference(node.id, node, 2)
+
+    def visit_Assign(self, node: ast.Assign) -> None:
+        self.visit(node.value)
+        for target in node.targets:
+            self.visit(target)
+
+    def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
+        self.visit(node.annotation)
+        if node.value is not None:
+            self.visit(node.value)
+            self.visit(node.target)
+        elif isinstance(node.target, ast.Name):
+            self._reference(node.target.id, node.target, 2)
+
+    def visit_AugAssign(self, node: ast.AugAssign) -> None:
+        self.visit(node.value)
+        self.visit(node.target)
+
+    def visit_NamedExpr(self, node: ast.NamedExpr) -> None:
+        self.visit(node.value)
+        self.visit(node.target)
+
+    def visit_For(self, node: ast.For | ast.AsyncFor) -> None:
+        self.visit(node.iter)
+        self.visit(node.target)
+        for statement in (*node.body, *node.orelse):
+            self.visit(statement)
+
+    visit_AsyncFor = visit_For
+
+    def visit_ExceptHandler(self, node: ast.ExceptHandler) -> None:
+        if node.type is not None:
+            self.visit(node.type)
+        if node.name is not None:
+            self.aliases.pop(node.name, None)
+        for statement in node.body:
+            self.visit(statement)
+        if node.name is not None:
+            self.aliases.pop(node.name, None)
 
     def visit_Attribute(self, node: ast.Attribute) -> None:
         name = _dotted_name(node)
@@ -189,8 +355,8 @@ def _fragment_terms(source: _Source, occurrence: _Occurrence, aspects: list[str]
             if keys[index:index + len(expected)] != expected:
                 continue
             left, right = tokens[index][1], tokens[index + len(expected) - 1][2]
-            # Preserve the candidate's actual word boundaries without letting a
-            # different match in surrounding comments satisfy this code anchor.
+            # Check literal spacing within the matched tokens, keeping this
+            # occurrence separate from similar text in surrounding comments.
             context = source.element.text[max(start, left - 1):min(end, right + 1)]
             if literal_aspect_present(aspect, context, case_sensitive=True):
                 covered.add(aspect)
@@ -228,12 +394,19 @@ def resolve_source_requirement(
             continue
         try:
             tree = ast.parse(source.element.text)
+            symbols_table = symtable.symtable(source.element.text, "<uploaded source>", "exec")
         except (SyntaxError, ValueError):
             exhaustive = False
             warnings.append("source_symbol_analysis_unavailable")
             continue
-        visitor = _SymbolVisitor(tree, aliases)
-        visitor.visit(tree)
+        visitor = _SymbolVisitor(tree, aliases, symbols_table)
+        try:
+            visitor.visit(tree)
+        except _SymbolScopeUnavailable:
+            exhaustive = False
+            warnings.append("source_symbol_analysis_unavailable")
+            aliases = {}
+            continue
         aliases = visitor.aliases
         source_map = source.source_map
         for symbol in symbols:
