@@ -316,23 +316,22 @@ class AgentFlowManager:
                 preserve_turn_ids=required_contract_turn_ids(final_runtime.pending_action.contract)
                 if final_runtime.pending_action is not None else (),
             )
-            # An export's fallback is failure feedback, not a replacement for
-            # the answer the user selected. Other displayed partial answers
-            # remain valid references for a new explicit copy/transform request.
+            # A failed copy/transform cannot replace the selected source answer
+            # with its fallback, regardless of how the result was to be delivered.
+            # Other displayed partial answers remain reusable source answers.
             contract = final_runtime.request_contract
-            export_failed = bool(
+            answer_reuse_failed = bool(
                 contract is not None and contract.body.kind in {"copy_answer", "transform_answer"}
-                and contract.actions.save_text.intent == "requested"
                 and final_response_state.kind == "failure"
             )
             self.session.commit_response_state(
                 response=final_response_state.result,
                 response_kind=final_response_state.kind,
-                displayed_partial=assembled_response["status"] == "partial" and not export_failed,
+                displayed_partial=assembled_response["status"] == "partial" and not answer_reuse_failed,
                 pending_action=final_runtime.pending_action,
             )
             self.session.answer_export_operations.update(final_runtime.answer_export_operations)
-            if (not export_failed and assembled_response["response"] is not None
+            if (not answer_reuse_failed and assembled_response["response"] is not None
                     and final_response_state.result.content.blocks):
                 assembled_response["answer_id"] = self.session.register_answer(final_response_state.result)
             return assembled_response

@@ -160,12 +160,17 @@ def test_export_failure_feedback_does_not_replace_target_of_a_followup_retry(tmp
     assert Path(receipt["file_path"]).read_bytes() == export_answer_text(source, include_sources=True).encode("utf-8-sig")
 
 
-def test_failed_transformation_save_keeps_original_answer_as_retry_target(tmp_path, monkeypatch):
+@pytest.mark.parametrize("action, prompt", [
+    ("save_text", "방금 답변을 요약해서 출처와 함께 저장해줘"),
+    ("slack_notify", "방금 답변을 요약해서 출처와 함께 Slack으로 보내줘"),
+    (None, "방금 답변을 요약해서 출처와 함께 보여줘"),
+])
+def test_failed_transformation_keeps_original_answer_as_retry_target(tmp_path, monkeypatch, action, prompt):
     monkeypatch.setattr("src.infra.tools.save_text.get_save_text_output_dir", lambda: tmp_path)
     source = checked_source()
-    manager = _manager(export_graph(transform=True))
+    manager = _manager(export_graph(transform=True, action=action))
     manager.session.previous_response = source.model_copy(deep=True)
-    failed = manager.run_agent_flow("방금 답변을 요약해서 출처와 함께 저장해줘")
+    failed = manager.run_agent_flow(prompt)
     assert failed["status"] == "partial"
     assert failed["answer_id"] is None
     assert manager.session.previous_response == source
