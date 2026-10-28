@@ -13,6 +13,8 @@ HTTP delay, allowing pending UI events to be tested while a request is in flight
 limitations (two answer-wide and one attached to the excerpt).
 ``문서:`` questions return an explicitly synthetic Markdown source for checking
 headings, lists, links, code fences and the retained raw-source view.
+``매개변수:`` reproduces indented documentation definitions. ``긴답변:`` returns
+ten paragraphs; ``지연:긴답변`` waits eight seconds so the reader can scroll away.
 No LLM, search provider, or Slack service is called.
 
 The process logs its ephemeral API URL as DOCUMATE_UX_FIXTURE_API. Its read-only
@@ -33,7 +35,7 @@ from urllib.parse import unquote, urlparse
 import streamlit as st
 
 from src.core.answer_export import build_answer_export_operation
-from src.core.answer_schema import ActionReceipt, AnswerResponse, ResponseIssue, export_answer_text, finalize_answer, text_document
+from src.core.answer_schema import ActionReceipt, AnswerDocument, AnswerResponse, ContentUnit, ParagraphBlock, ResponseIssue, export_answer_text, finalize_answer, text_document
 from src.core.contracts.outcome import AnswerExportResult, TurnResult
 from src.core.documents import DocumentElement, build_snapshot
 from src.core.evidence import build_evidence
@@ -51,6 +53,23 @@ MARKDOWN_SOURCE_TEXT = """# 문서 표시 검증용 합성 자료
 
 - `shape`는 배열의 모양을 나타냅니다.
 - [NumPy 문서 링크](https://numpy.org/doc/stable/reference/generated/numpy.reshape.html)는 링크 표시를 확인하기 위한 예시입니다.
+
+```python
+values.reshape((2, 3))
+```
+"""
+PARAMETER_SOURCE_TEXT = """reshape(*a*, *shape*, *order='C'*)
+:   배열 모양을 바꾸는 매개변수 설명 검증용 합성 자료입니다.
+
+    Parameters:
+    :   **shape** : int or tuple of ints
+        : 배열 모양을 지정합니다. 이 설명은 좁은 화면에서도 가로 스크롤 없이 끝까지 읽을 수 있어야 합니다.
+
+        **order** : {'C', 'F', 'A'}, optional
+        : Read the elements using this index order. This deliberately long parameter description should wrap inside the evidence panel on a narrow screen without losing any words.
+
+        **copy** : bool, optional
+        : 가능하면 기존 메모리를 사용합니다. [문서 링크](https://numpy.org/doc/stable/reference/generated/numpy.reshape.html)를 확인하세요.
 
 ```python
 values.reshape((2, 3))
@@ -91,8 +110,11 @@ class FixtureState:
                     problem=make_problem("evidence_insufficient", "pre_synthesis_validation"),
                 )
             else:
-                markdown_source = query.startswith("문서:")
-                source_text = MARKDOWN_SOURCE_TEXT if markdown_source else SOURCE_TEXT
+                markdown_source = query.startswith(("문서:", "매개변수:"))
+                if query.startswith("매개변수:"):
+                    source_text = PARAMETER_SOURCE_TEXT
+                else:
+                    source_text = MARKDOWN_SOURCE_TEXT if markdown_source else SOURCE_TEXT
                 snapshot = build_snapshot(
                     source_uri="https://docs.example.org/fixtures/markdown" if markdown_source else "https://docs.python.org/3/tutorial/",
                     title="문서 표시 검증용 합성 자료" if markdown_source else "브라우저 회귀 검증 자료",
@@ -113,6 +135,14 @@ class FixtureState:
                     SOURCE_TEXT if partial else f"회귀 검증 답변: {query}",
                     basis="excerpt" if partial else "source", refs=[evidence.id],
                 )
+                if query.startswith(("긴답변:", "지연:긴답변")):
+                    document = AnswerDocument(blocks=[
+                        ParagraphBlock(content=[ContentUnit(
+                            text=f"긴 답변 {index}번째 문단. " + "답변의 시작과 읽던 위치를 확인하는 합성 자료입니다. " * 8,
+                            basis="source", refs=[evidence.id],
+                        )])
+                        for index in range(1, 11)
+                    ])
                 answer = finalize_answer(document, [evidence], issues=issues)
                 answer_id = f"fixture-answer-{len(self.questions)}"
                 self.answers[(session_id, answer_id)] = (answer, query)
@@ -197,7 +227,7 @@ def fixture_boundary() -> tuple[str, Path]:
             if path == "/agent/stream":
                 result = state.submit(payload)
                 if payload["query"].startswith("지연:"):
-                    time.sleep(3)
+                    time.sleep(8 if payload["query"].startswith("지연:긴답변") else 3)
                 event = "event: final_response\ndata: " + json.dumps(result, ensure_ascii=False) + "\n\n"
                 self.respond(200, event.encode("utf-8"), "text/event-stream; charset=utf-8")
             elif len(parts) == 5 and parts[0] == "sessions" and parts[2] == "answers" and parts[4] == "save":

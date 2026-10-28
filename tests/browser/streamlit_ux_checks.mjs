@@ -157,3 +157,62 @@ export async function sidebarOpenerFocused(tab) {
   assert(focused, "Closing sidebar did not return focus to its opener");
   return { check: "sidebar focus return", passed: true };
 }
+
+/** The header must own space outside the scrollable reading area. */
+export async function mobileToolbarLayout(tab) {
+  const layout = await tab.playwright.evaluate(() => {
+    const header = document.querySelector('[data-testid="stHeader"]');
+    const main = document.querySelector('#stMain');
+    return {
+      headerBottom: header.getBoundingClientRect().bottom,
+      mainTop: main.getBoundingClientRect().top,
+      mainWidth: main.clientWidth, scrollWidth: main.scrollWidth,
+    };
+  });
+  assert(layout.mainTop >= layout.headerBottom - 1,
+    `Toolbar overlaps the reading area: ${JSON.stringify(layout)}`);
+  assert(layout.scrollWidth <= layout.mainWidth + 1,
+    `Reading area overflows horizontally: ${JSON.stringify(layout)}`);
+  return { check: "mobile toolbar outside reading area", ...layout };
+}
+
+export async function answerStartVisible(tab, text) {
+  const position = await tab.playwright.locator('[data-testid="stChatMessage"] p').evaluateAll((elements, prefix) => {
+    const el = elements.filter(element => element.textContent.startsWith(prefix)).at(-1);
+    const rect = el.getBoundingClientRect();
+    const main = document.querySelector('#stMain').getBoundingClientRect();
+    const composer = document.querySelector('[data-testid="stChatInput"]').getBoundingClientRect();
+    return { top: rect.top, mainTop: main.top, bottom: composer.top };
+  }, text);
+  assert(position.top >= position.mainTop - 1 && position.top < position.bottom,
+    `Completed answer starts outside the reading area: ${JSON.stringify(position)}`);
+  return { check: "completed answer start visible", ...position };
+}
+
+export async function readingPosition(tab, previousTop) {
+  const top = await tab.playwright.evaluate(() => document.querySelector('#stMain').scrollTop);
+  if (previousTop !== undefined) {
+    assert(Math.abs(top - previousTop) < 4, `Reading position changed from ${previousTop} to ${top}`);
+  }
+  return top;
+}
+
+export async function parameterEvidence(tab) {
+  const details = await tab.playwright.evaluate(() => {
+    const source = document.querySelector('.dm-source-markdown');
+    return {
+      width: source.clientWidth, scrollWidth: source.scrollWidth,
+      emphasized: [...source.querySelectorAll('strong')].map(el => el.textContent),
+      code: [...source.querySelectorAll('pre')].map(el => el.textContent),
+    };
+  });
+  assert(details.emphasized.includes('order') && details.emphasized.includes('copy'),
+    `Parameter definitions lost their formatting: ${JSON.stringify(details)}`);
+  assert(!details.code.some(text => text.includes('**order**')),
+    `Parameter prose is rendered as code: ${JSON.stringify(details)}`);
+  assert(details.code.some(text => text.includes('values.reshape((2, 3))')),
+    "Real code example was lost");
+  assert(details.scrollWidth <= details.width + 1,
+    `Evidence prose overflows horizontally: ${JSON.stringify(details)}`);
+  return { check: "wrapped parameter definitions and preserved code", ...details };
+}

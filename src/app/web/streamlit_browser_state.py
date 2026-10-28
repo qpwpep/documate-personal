@@ -68,6 +68,8 @@ def render_browser_state(conversation: Conversation) -> None:
         data={"conversation_id": conversation.id, "revision": conversation.draft.revision,
               "text": conversation.draft.text,
               "focus_input": conversation.draft.needs_restore,
+              "pending_chat": conversation.pending_request is not None and conversation.pending_request.kind == "chat",
+              "message_count": len(conversation.messages),
               "snapshot": dump_conversations(list_conversations(), conversation.id),
               "storage_error": state.get("storage_error")},
         key=_KEY,

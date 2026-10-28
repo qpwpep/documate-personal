@@ -1,6 +1,13 @@
 // Keep Streamlit's own composer, upload handling, and public prefill mechanism.
-export default function ({ data, setStateValue }) {
+const bridgeCleanups = new WeakMap();
+
+export default function ({ data, setStateValue, parentElement }) {
+  // Streamlit reruns this entry point for new data; it only calls its returned
+  // cleanup on unmount. Retire the previous listeners before replacing them.
+  bridgeCleanups.get(parentElement)?.();
+  bridgeCleanups.delete(parentElement);
   const storageKey = "documate.conversations.v1";
+  const readingKey = "documate.reading-position.v1";
   const storageError = "브라우저에 대화를 저장하지 못했습니다. 새로고침하면 최근 대화와 초안을 잃을 수 있습니다.";
   if (data.restore) {
     try {
@@ -36,6 +43,92 @@ export default function ({ data, setStateValue }) {
   let closeRequested = false;
   let sidebarHadFocus = false;
   let focusInput = data.focus_input;
+  let previousReading = null;
+  try {
+    const stored = JSON.parse(sessionStorage.getItem(readingKey) || "null");
+    if (stored?.conversation_id === data.conversation_id && Number.isInteger(stored.message_count) && stored.message_count >= 0
+        && typeof stored.pending === "boolean"
+        && (stored.top === null || (Number.isFinite(stored.top) && stored.top >= 0))) {
+      previousReading = stored;
+    }
+  } catch {
+    // Conversation persistence already reports unavailable browser storage.
+  }
+  // A fast response can reach the browser without displaying the busy run.
+  const newAnswer = Boolean(previousReading && !data.pending_chat
+    && data.message_count > previousReading.message_count
+    && storedConversation.messages.at(-1)?.role === "assistant");
+  const reading = {
+    conversation_id: data.conversation_id,
+    message_count: newAnswer ? previousReading.message_count : data.message_count,
+    pending: data.pending_chat,
+    top: previousReading?.pending || newAnswer ? previousReading.top : null,
+  };
+  let observeUserScroll = reading.top !== null;
+  let answerScrollPending = newAnswer;
+  let scrollTimer;
+  let readingFrame;
+
+  function persistReading() {
+    try {
+      sessionStorage.setItem(readingKey, JSON.stringify(reading));
+    } catch {
+      // Keep the current view usable when browser storage is unavailable.
+    }
+  }
+
+  function recordReadingPosition() {
+    const main = document.getElementById("stMain");
+    if (!reading.pending || !observeUserScroll || !main) return;
+    // Returning to the latest content opts back into seeing the new answer.
+    reading.top = main.scrollHeight - main.clientHeight - main.scrollTop > 80 ? main.scrollTop : null;
+    persistReading();
+  }
+
+  function onReadingIntent(event) {
+    if (!event.target.closest?.("#stMain") || event.target.closest?.('[data-testid="stChatInput"]')) return;
+    if (event.type === "keydown"
+        && (!["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "].includes(event.key)
+          || event.target.closest?.('input, textarea, select, [contenteditable="true"]'))) return;
+    observeUserScroll = true;
+    // A gesture after completion takes priority over an automatic adjustment.
+    if (answerScrollPending) {
+      reading.message_count = data.message_count;
+      persistReading();
+    }
+    answerScrollPending = false;
+    clearTimeout(scrollTimer);
+    cancelAnimationFrame(readingFrame);
+    readingFrame = requestAnimationFrame(recordReadingPosition);
+  }
+
+  function settleAnswerScroll() {
+    if (!answerScrollPending) return;
+    clearTimeout(scrollTimer);
+    const input = document.querySelector(selector);
+    const messages = document.querySelectorAll('[data-testid="stChatMessage"]');
+    if (!input || input.disabled || messages.length !== data.message_count) return;
+    // Streamlit animates to the bottom when the composer returns. Wait for
+    // both its scrolling and the final answer layout to settle before moving.
+    scrollTimer = setTimeout(() => {
+      const main = document.getElementById("stMain");
+      const answer = document.querySelectorAll('[data-testid="stChatMessage"]')[data.message_count - 1];
+      if (!main || !answer) return;
+      const visibleTop = Math.max(main.getBoundingClientRect().top,
+        document.querySelector('[data-testid="stHeader"]')?.getBoundingClientRect().bottom || 0);
+      const top = reading.top ?? main.scrollTop + answer.getBoundingClientRect().top - visibleTop - 16;
+      answerScrollPending = false;
+      reading.message_count = data.message_count;
+      persistReading();
+      main.scrollTo({ top: Math.max(0, top), behavior: "instant" });
+    }, 160);
+  }
+
+  function onMainScroll(event) {
+    if (event.target.id !== "stMain") return;
+    recordReadingPosition();
+    settleAnswerScroll();
+  }
 
   function persist() {
     let error = null;
@@ -118,7 +211,7 @@ export default function ({ data, setStateValue }) {
     if (focusInput) {
       const input = document.querySelector(selector);
       if (input && !input.disabled) {
-        input.focus();
+        input.focus({ preventScroll: true });
         focusInput = false;
       }
     }
@@ -157,23 +250,43 @@ export default function ({ data, setStateValue }) {
   document.addEventListener("click", onClick, true);
   document.addEventListener("input", onInput, true);
   document.addEventListener("focusin", onFocus, true);
+  document.addEventListener("wheel", onReadingIntent, { capture: true, passive: true });
+  document.addEventListener("touchmove", onReadingIntent, { capture: true, passive: true });
+  document.addEventListener("pointerdown", onReadingIntent, true);
+  document.addEventListener("keydown", onReadingIntent, true);
+  document.addEventListener("scroll", onMainScroll, true);
   window.addEventListener("pagehide", storeDraft);
   const observer = new MutationObserver(() => {
     recoverSidebarFocus();
     renderUploadSelection();
+    settleAnswerScroll();
   });
   observer.observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ["data-collapsed", "aria-invalid"] });
   recoverSidebarFocus();
   renderUploadSelection();
   persist();
+  persistReading();
+  settleAnswerScroll();
 
-  return () => {
+  const cleanup = () => {
     document.removeEventListener("keydown", onKeyDown, true);
     document.removeEventListener("pointerdown", onPointerDown, true);
     document.removeEventListener("click", onClick, true);
     document.removeEventListener("input", onInput, true);
     document.removeEventListener("focusin", onFocus, true);
+    document.removeEventListener("wheel", onReadingIntent, true);
+    document.removeEventListener("touchmove", onReadingIntent, true);
+    document.removeEventListener("pointerdown", onReadingIntent, true);
+    document.removeEventListener("keydown", onReadingIntent, true);
+    document.removeEventListener("scroll", onMainScroll, true);
     window.removeEventListener("pagehide", storeDraft);
     observer.disconnect();
+    clearTimeout(scrollTimer);
+    cancelAnimationFrame(readingFrame);
+  };
+  bridgeCleanups.set(parentElement, cleanup);
+  return () => {
+    cleanup();
+    if (bridgeCleanups.get(parentElement) === cleanup) bridgeCleanups.delete(parentElement);
   };
 }

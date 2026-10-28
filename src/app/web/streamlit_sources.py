@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import re
 from html import escape
+from textwrap import dedent
 from urllib.parse import quote, urljoin, urlparse
 
 import streamlit as st
@@ -92,7 +94,7 @@ def render_evidence(evidence: EvidenceRef, *, cited_texts: list[str] | None = No
 def _render_source_markdown(text: str, *, source_uri: str) -> None:
     """Resolve parsed links against their source without rewriting captured text."""
     parser = MarkdownIt("commonmark", {"html": False}).enable(["table", "strikethrough"])
-    tokens = parser.parse(text)
+    tokens = parser.parse(_source_reader_markdown(text, parser))
     pending = list(tokens)
     url_attributes = {"link_open": "href", "image": "src"}
     while pending:
@@ -115,6 +117,34 @@ def _render_source_markdown(text: str, *, source_uri: str) -> None:
         '.dm-source-markdown img {max-width:100%;height:auto}</style>'
         '<div class="dm-source-markdown">' + content + '</div>'
     )
+
+
+def _source_reader_markdown(text: str, parser: MarkdownIt) -> str:
+    """Display top-level provider definitions as prose without changing retained source."""
+    lines = text.splitlines(keepends=True)
+    # Sphinx-derived parameter definitions are not CommonMark. A leading colon
+    # and indentation otherwise turn the next parameter into a code block.
+    definition = re.compile(r"(?m)^(?:[ \t]*:[ \t]+)?\*\*[^*\n]+\*\*[^\n]*\n[ \t]*:[ \t]+")
+    for token in reversed(parser.parse(text)):
+        # Nested token content omits list/quote prefixes, so replacing those
+        # source lines would discard their surrounding Markdown structure.
+        if (token.type, token.level) not in {("inline", 1), ("code_block", 0)} or token.map is None:
+            continue
+        # One indented block can contain both definitions and ordinary code.
+        # Replace only matching paragraphs, retaining every other source line.
+        paragraphs = re.finditer(r"(?m)(?:^[ \t]*\S[^\n]*(?:\n|$))+", token.content)
+        for paragraph in reversed(list(paragraphs)):
+            # Provider definitions can retain another indentation level after
+            # CommonMark removes the first four spaces of a code block.
+            paragraph_text = dedent(paragraph.group())
+            if definition.search(paragraph_text) is None:
+                continue
+            display = re.sub(r"(?m)^[ \t]*:[ \t]+", "\n", paragraph_text)
+            display = re.sub(r"(?m)^(\*\*[^*\n]+\*\*)(?=[^\s:])", r"\1 ", display)
+            start = token.map[0] + token.content.count("\n", 0, paragraph.start())
+            end = start + len(paragraph.group().splitlines())
+            lines[start:end] = [display.rstrip("\n") + "\n"]
+    return "".join(lines)
 
 
 def _matching_code_ranges(evidence: EvidenceRef, cited_texts: list[str]) -> list[tuple[int, int]]:

@@ -819,6 +819,26 @@ div.stLinkButton > a:focus-visible {
 }
 
 @media (max-width: 760px) {
+    /* Reserve a separate toolbar row even after the conversation is scrolled. */
+    header[data-testid="stHeader"] {
+        height: 3.75rem;
+        background: var(--dm-bg);
+        border-bottom: 1px solid var(--dm-border);
+    }
+
+    #stMain {
+        top: 3.75rem;
+        height: calc(100% - 3.75rem);
+    }
+
+    [data-testid="stAppDeployButton"] {
+        display: none;
+    }
+
+    [data-testid="stToolbar"] {
+        padding-right: 0.75rem;
+    }
+
     .block-container {
         padding: 1.2rem 1rem 7.5rem;
     }

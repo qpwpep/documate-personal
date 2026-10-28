@@ -352,3 +352,148 @@ def test_official_links_resolve_against_captured_page_without_rewriting_code_or_
     assert "<script>" not in rendered
     assert 'href="javascript:' not in rendered
     assert app.code[0].value == captured
+
+
+def test_official_parameter_definitions_are_readable_without_changing_captured_code():
+    captured = (
+        "Parameters:\n"
+        ":   **a**array\\_like\n"
+        "    :   Array to be reshaped.\n\n"
+        "    **shape**int or tuple of ints\n"
+        "    :   The new shape should be compatible with the original shape.\n\n"
+        "    **order**{'C', 'F', 'A'}, optional\n"
+        "    :   Read the elements using this index order.\n\n"
+        "```python\nresult = values.reshape((2, 3))\n```\n\n"
+        "An indented code example:\n\n"
+        "    if values.size == 6:\n"
+        "        result = values.reshape((2, 3))\n"
+    )
+    evidence = build_evidence(
+        snapshot=build_snapshot(
+            source_uri="https://numpy.org/doc/stable/reference/generated/numpy.reshape.html",
+            title="numpy.reshape", media_type="text/markdown", source_type="official",
+            content=captured, parser="provider", parser_version="1",
+        ),
+        element=DocumentElement(element_id="description", kind="paragraph", text=captured),
+    )
+
+    app = AppTest.from_function(_source_app, args=(evidence.model_dump(mode="json"),)).run()
+
+    assert not app.exception
+    rendered = app.get("html")[0].proto.body
+    assert "<p><strong>a</strong> array_like</p>" in rendered
+    assert "<p>Array to be reshaped.</p>" in rendered
+    assert "<p><strong>shape</strong> int or tuple of ints</p>" in rendered
+    assert "<p>The new shape should be compatible with the original shape.</p>" in rendered
+    assert "**shape**" not in rendered
+    assert '<pre><code class="language-python">result = values.reshape((2, 3))\n</code></pre>' in rendered
+    assert "<pre><code>if values.size == 6:\n    result = values.reshape((2, 3))\n</code></pre>" in rendered
+    assert app.code[0].value == captured
+
+
+@pytest.mark.parametrize(("captured", "expected_html"), [
+    (
+        "- **shape**int\n  :   Target shape.\n\n- Keep this next item.",
+        "<ul>\n<li>\n<p><strong>shape</strong>int\n:   Target shape.</p>\n</li>\n"
+        "<li>\n<p>Keep this next item.</p>\n</li>\n</ul>",
+    ),
+    (
+        "> **shape**int\n> :   Target shape.",
+        "<blockquote>\n<p><strong>shape</strong>int\n:   Target shape.</p>\n</blockquote>",
+    ),
+])
+def test_official_parameter_formatting_preserves_list_and_quote_containers(captured, expected_html):
+    evidence = build_evidence(
+        snapshot=build_snapshot(
+            source_uri="https://numpy.org/doc/stable/reference/generated/numpy.reshape.html",
+            title="numpy.reshape", media_type="text/markdown", source_type="official",
+            content=captured, parser="provider", parser_version="1",
+        ),
+        element=DocumentElement(element_id="description", kind="paragraph", text=captured),
+    )
+
+    app = AppTest.from_function(_source_app, args=(evidence.model_dump(mode="json"),)).run()
+
+    assert not app.exception
+    assert expected_html in app.get("html")[0].proto.body
+    assert app.code[0].value == captured
+
+
+@pytest.mark.parametrize(("term", "rendered_term"), [
+    ("**shape**int", "<strong>shape</strong> int"),
+    ("**shape** int", "<strong>shape</strong> int"),
+    ("**shape**: int", "<strong>shape</strong>: int"),
+])
+def test_official_parameter_formatting_preserves_term_separators_and_adjacent_code(term, rendered_term):
+    captured = (
+        f"    {term}\n"
+        "    :   Target shape.\n\n"
+        "    result = values.reshape((2, 3))\n"
+    )
+    evidence = build_evidence(
+        snapshot=build_snapshot(
+            source_uri="https://numpy.org/doc/stable/reference/generated/numpy.reshape.html",
+            title="numpy.reshape", media_type="text/markdown", source_type="official",
+            content=captured, parser="provider", parser_version="1",
+        ),
+        element=DocumentElement(element_id="description", kind="paragraph", text=captured),
+    )
+
+    app = AppTest.from_function(_source_app, args=(evidence.model_dump(mode="json"),)).run()
+
+    assert not app.exception
+    rendered = app.get("html")[0].proto.body
+    assert f"<p>{rendered_term}</p>" in rendered
+    assert "<p>Target shape.</p>" in rendered
+    assert "<pre><code>result = values.reshape((2, 3))\n</code></pre>" in rendered
+    assert app.code[0].value == captured
+
+
+def test_official_numpy_retained_parameter_excerpt_renders_nested_indentation_as_prose():
+    captured = (
+        "numpy.reshape(*a*, */*, *shape*, *order='C'*, *\\**, *copy=None*)[[source]]"
+        "(https://github.com/numpy/numpy/blob/v2.5.0/numpy/_core/fromnumeric.py#L207-L299)"
+        "[#](#numpy.reshape \"Link to this definition\")\n"
+        ":   Returns a reshaped ndarray without changing data.\n\n"
+        "    Parameters:\n"
+        "    :   **a**array\\_like\n"
+        "        :   Array to be reshaped.\n\n"
+        "        **shape**int or tuple of ints\n"
+        "        :   The new shape should be compatible with the original shape. If an integer, "
+        "then the result will be a 1-D array of that length. One shape dimension can be -1. "
+        "In this case, the value is inferred from the length of the array and remaining dimensions.\n\n"
+        "        **order**{‘C’, ‘F’, ‘A’}, optional\n"
+        "        :   Read the elements of `a` using this index order, and place the elements into "
+        "the reshaped array using this index order. ‘C’ means to read / write the elements using "
+        "C-like index order, with the last axis index changing fastest, back to the first axis "
+        "index changing slowest. ‘F’ means to read / write the elements using Fortran-like index "
+        "order, with the first index changing fastest, and the last index changing slowest. "
+        "Note that the ‘C’ and ‘F’ options take no account of the memory layout of the underlying "
+        "array, and only refer to the order of indexing. ‘A’ means to read / write the elements "
+        "in Fortran-like index order if `a` is Fortran *contiguous* in memory, C-like order otherwise.\n\n"
+        "        **copy**bool, optional\n"
+        "        :   If `True`, then the array data is copied. If `None`, a copy will only be made "
+        "if it’s required by `order`. For `False` it raises a `ValueError` if a copy cannot be "
+        "avoided. Default: `None`."
+    )
+    evidence = build_evidence(
+        snapshot=build_snapshot(
+            source_uri="https://numpy.org/doc/stable/reference/generated/numpy.reshape.html",
+            title="numpy.reshape", media_type="text/markdown", source_type="official",
+            content=captured, parser="provider", parser_version="1",
+        ),
+        element=DocumentElement(element_id="description", kind="paragraph", text=captured),
+    )
+
+    app = AppTest.from_function(_source_app, args=(evidence.model_dump(mode="json"),)).run()
+
+    assert not app.exception
+    rendered = app.get("html")[0].proto.body
+    assert "<p><strong>a</strong> array_like</p>" in rendered
+    assert "<p><strong>shape</strong> int or tuple of ints</p>" in rendered
+    assert "<p><strong>order</strong> {‘C’, ‘F’, ‘A’}, optional</p>" in rendered
+    assert "<p><strong>copy</strong> bool, optional</p>" in rendered
+    assert "<p>Read the elements of <code>a</code>" in rendered
+    assert "<p>If <code>True</code>, then the array data is copied." in rendered
+    assert "<pre>" not in rendered
+    assert app.code[0].value == captured
