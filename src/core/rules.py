@@ -32,6 +32,7 @@ class DocsSearchRules(BaseModel):
 
     allowed_doc_path_prefixes: dict[str, list[str]] = Field(default_factory=dict)
     allowed_doc_path_patterns: dict[str, list[str]] = Field(default_factory=dict)
+    stable_doc_path_patterns: dict[str, list[str]] = Field(default_factory=dict)
     query_hints: list[DocsSearchQueryHint] = Field(default_factory=list)
 
 

@@ -50,6 +50,16 @@ def is_allowed_doc_url(url: str) -> bool:
     return doc_url_filter_reason(url) is None
 
 
+def is_current_stable_doc_url(url: str) -> bool:
+    """Identify configured moving stable aliases without changing the source URL."""
+    if not is_allowed_doc_url(url):
+        return False
+    parsed = urlparse(url)
+    patterns = docs_search_rules().stable_doc_path_patterns.get(normalize_domain(parsed.netloc), [])
+    path = normalize_path_prefix(unquote(parsed.path or "/"))
+    return any(re.match(pattern, path) for pattern in patterns)
+
+
 def doc_url_filter_reason(url: str) -> DocUrlFilterReason | None:
     """Check the provider's original source without rewriting its version."""
     try:

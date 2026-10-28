@@ -9,6 +9,8 @@ from types import SimpleNamespace
 import requests
 import pytest
 
+pytestmark = pytest.mark.usefixtures("unavailable_official_pages")
+
 from src.core.evidence import SearchHit
 from src.core.planner_schema import PlannerOutput, RetrievalTask
 from src.infra.settings import AppSettings

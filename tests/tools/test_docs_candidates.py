@@ -1,19 +1,26 @@
 """Documentation candidates remain bounded without interpreting source meaning."""
 
+import json
+
 import pytest
 import requests
 
+pytestmark = pytest.mark.usefixtures("unavailable_official_pages")
+
 from src.core.documents import DocumentElement, build_snapshot
 from src.core.evidence import RetrievalScore, SearchHit, build_evidence
-from src.core.planner_schema import RetrievalRequirement
+from src.core.planner_schema import PlannerOutput, RetrievalRequirement, RetrievalTask
 from src.infra.settings import AppSettings
+from src.infra.tools.docs_search.policy import is_current_stable_doc_url
 from src.infra.tools.docs_search.ranking import select_docs_candidates
 from src.infra.tools.docs_search.tool import build_docs_search_tool
+from src.runtime.nodes.synthesis.budgets import RetrievedEvidenceBudget
+from src.runtime.nodes.synthesis.evidence_selection import prepare_evidence_candidates
 
 
-def source_hit(body, *, symbol="numpy.mean", start=0, end=None, version="stable", score=0.4):
-    snapshot = build_snapshot(source_uri=f"https://numpy.org/doc/{version}/reference/generated/{symbol}.html",
-                              title=symbol, media_type="text/markdown", source_type="official", content=body,
+def source_hit(body, *, symbol="numpy.mean", start=0, end=None, version="stable", score=0.4, title=None, url_suffix=""):
+    snapshot = build_snapshot(source_uri=f"https://numpy.org/doc/{version}/reference/generated/{symbol}.html{url_suffix}",
+                              title=title or symbol, media_type="text/markdown", source_type="official", content=body,
                               parser="test", parser_version="1")
     evidence = build_evidence(snapshot=snapshot, element=DocumentElement(element_id="body", kind="paragraph", text=body),
                               start=start, end=min(len(body), 3200) if end is None else end)
@@ -24,6 +31,24 @@ def select(hits, *, k=1, requirement=None, preserved_evidence_ids=None):
     return select_docs_candidates("numpy.mean axis", hits, requirement or RetrievalRequirement(
         library="numpy", symbols=["numpy.mean"], aspects=["axis"], evidence_needs=["parameters", "explanation"],
     ), k=k, allowed_domains=["numpy.org"], preserved_evidence_ids=preserved_evidence_ids)
+
+
+@pytest.mark.parametrize("url,expected", [
+    ("https://pandas.pydata.org/docs/reference/api/pandas.merge.html", True),
+    ("https://pandas.pydata.org/docs/dev/reference/api/pandas.merge.html", False),
+    ("https://pandas.pydata.org/pandas-docs/version/2.2.2/reference/api/pandas.merge.html", False),
+    ("https://docs.python.org/ko/3/library/pathlib.html", True),
+    ("https://docs.python.org/3.12/library/pathlib.html", False),
+    ("https://numpy.org/doc/stable/reference/generated/numpy.mean.html", True),
+    ("https://numpy.org/doc/dev/reference/generated/numpy.mean.html", False),
+    ("https://docs.pytorch.org/docs/main/generated/torch.mean.html", False),
+    ("https://docs.pydantic.dev/latest/api/base_model/", True),
+    ("https://huggingface.co/docs/transformers/main/en/index", False),
+    ("https://pandas.pydata.org.attacker.example/docs/reference/api/pandas.merge.html", False),
+    ("https://pandas.pydata.org/docs/%2e%2e/community/", False),
+])
+def test_current_stable_alias_is_distinct_from_official_url_permission(url, expected):
+    assert is_current_stable_doc_url(url) is expected
 
 
 @pytest.mark.parametrize("k,limit", [(1, 6), (3, 9), (20, 20)])
@@ -37,6 +62,160 @@ def test_candidate_count_window_size_and_source_balance(k, limit):
     }
     assert all(0 < len(hit.evidence.excerpt) <= 3200 for hit in candidates)
     assert len({hit.evidence.id for hit in candidates}) == len(candidates)
+
+
+def test_unspecified_version_keeps_stable_windows_before_archived_or_development_sources():
+    body = (
+        "# numpy.mean\nnumpy.mean(a, axis=None)\n"
+        + "The axis parameter controls the selected dimension.\n" * 100
+        + "\n## Examples\n>>> np.mean([[1, 2], [3, 4]])\n2.5\n"
+    )
+    stable = source_hit(body, score=0.01)
+    alternatives = [source_hit("numpy.mean(a, axis=None)\nOlder or development description.",
+                               version=version, score=0.99)
+                    for version in ["1.20", "1.21", "1.22", "1.23", "1.24", "dev"]]
+
+    candidates = select([*alternatives, stable])
+
+    assert candidates[0].evidence.snapshot.source_uri == stable.evidence.snapshot.source_uri
+    assert any(">>> np.mean([[1, 2], [3, 4]])" in hit.evidence.excerpt for hit in candidates)
+    stable_positions = [index for index, hit in enumerate(candidates)
+                        if hit.evidence.snapshot.snapshot_id == stable.evidence.snapshot.snapshot_id]
+    assert stable_positions == list(range(len(stable_positions)))
+    assert len(candidates) <= 6
+    for hit in candidates:
+        evidence = hit.evidence
+        assert evidence.excerpt == evidence.element.text[evidence.selection.start:evidence.selection.end]
+
+
+def test_new_development_snapshot_does_not_displace_current_stable_source():
+    stable = source_hit("numpy.mean(a)\nCurrent stable explanation.", score=0.01)
+    development = source_hit("numpy.mean(a)\nDevelopment explanation.", version="dev", score=0.99)
+    candidates = select_docs_candidates("numpy.mean", [development, stable],
+        RetrievalRequirement(library="numpy", symbols=["numpy.mean"]), k=1,
+        allowed_domains=["numpy.org"], preferred_snapshot_ids={development.evidence.snapshot.snapshot_id})
+
+    assert [hit.evidence.id for hit in candidates] == [stable.evidence.id, development.evidence.id]
+
+
+def test_explicit_version_keeps_existing_candidate_order_and_original_urls():
+    requested = source_hit("numpy.mean(a)\nVersioned explanation.", version="1.26", score=0.99)
+    stable = source_hit("numpy.mean(a)\nCurrent stable explanation.", score=0.01)
+    candidates = select([stable, requested], requirement=RetrievalRequirement(
+        library="numpy", symbols=["numpy.mean"], version="1.26"))
+
+    assert [hit.evidence.id for hit in candidates] == [requested.evidence.id, stable.evidence.id]
+    assert candidates[0].evidence.snapshot.source_uri == requested.evidence.snapshot.source_uri
+
+
+@pytest.mark.parametrize("version,expected_url,expected_limit", [
+    ("1.5.3", "https://pandas.pydata.org/pandas-docs/version/1.5/reference/api/pandas.merge.html", 9),
+    (None, "https://pandas.pydata.org/docs/reference/api/pandas.merge.html", 6),
+])
+def test_small_search_budget_recovers_explicit_version_without_expanding_default_search(
+    monkeypatch, version, expected_url, expected_limit,
+):
+    requested = {
+        "url": "https://pandas.pydata.org/pandas-docs/version/1.5/reference/api/pandas.merge.html",
+        "title": "pandas.merge - pandas 1.5.3 documentation",
+        "raw_content": "pandas.merge(left, right, how='inner', copy=True)\nMerge DataFrames using matching keys.",
+        "score": 0.84,
+    }
+    current = {
+        "url": "https://pandas.pydata.org/docs/reference/api/pandas.merge.html",
+        "title": "pandas.merge - pandas 3.1.0 documentation",
+        "raw_content": "pandas.merge(left, right, how='inner')\nMerge DataFrames using matching keys.",
+        "score": 0.46,
+    }
+    ordered = {
+        "url": "https://pandas.pydata.org/pandas-docs/version/1.5/reference/api/pandas.merge_ordered.html",
+        "title": "pandas.merge_ordered - pandas 1.5.3 documentation",
+        "raw_content": "pandas.merge_ordered(left, right)\nMerge ordered data with optional interpolation.",
+        "score": 0.8,
+    }
+    searches = []
+
+    def post(url, **kwargs):
+        searches.append(kwargs["json"])
+        # The observed six-result response omitted the requested API/version;
+        # the nine-result response included it ahead of alternative APIs.
+        results = [ordered, current]
+        if kwargs["json"]["max_results"] >= 9:
+            results.insert(0, requested)
+        response = requests.Response()
+        response.status_code = 200
+        response._content = json.dumps({"results": results}).encode()
+        return response
+
+    monkeypatch.setattr(requests, "post", post)
+    tool = build_docs_search_tool(AppSettings(_env_file=None, tavily_api_key="test", openai_api_key="test"))
+    requirement = RetrievalRequirement(library="pandas", symbols=["pandas.merge"], version=version,
+                                       evidence_needs=["explanation"])
+    first = tool("pandas merge usage", requirement=requirement, k=1)
+    matching = [hit for hit in first.hits if hit.evidence.snapshot.source_uri == expected_url]
+
+    assert matching
+    assert matching[0].evidence.snapshot.title == (requested if version else current)["title"]
+    assert matching[0].evidence.element.text == (requested if version else current)["raw_content"]
+    assert len(first.hits) <= 6
+    assert first.diagnostics.completed_requests[0].max_results == expected_limit
+    second = tool("pandas merge usage", requirement=requirement, k=2, previous_hits=first.hits,
+                  completed_requests=first.diagnostics.completed_requests)
+    assert {hit.evidence.id for hit in second.hits} == {hit.evidence.id for hit in first.hits}
+    assert [search["max_results"] for search in searches] == [expected_limit]
+
+
+def test_explicit_version_keeps_primary_api_middle_and_examples_available_for_validation():
+    parameter = "axis: Select which dimension to reduce; None reduces every dimension."
+    example = ">>> numpy.mean([[1, 2], [3, 4]], axis=0)"
+    body = (
+        "Navigation links.\n" * 130
+        + "\nnumpy.mean(a, axis=None)\nCompute the arithmetic mean.\n"
+        + "Basic operation details.\n" * 120
+        + "\n## Parameters\n" + parameter + "\n"
+        + "Parameter context and supporting discussion.\n" * 80
+        + "\n## Examples\n" + example + "\n[2., 3.]\n"
+    )
+    requested = source_hit(body, version="1.5", title="numpy.mean - NumPy 1.5.3 documentation", score=0.1)
+    related = [source_hit(body.replace("numpy.mean", symbol), symbol=symbol, version="1.5",
+                          title=f"{symbol} - NumPy 1.5.3 documentation", score=0.9)
+               for symbol in ["numpy.mean_asof", "numpy.mean_ordered"]]
+    others = [source_hit(body, version=version, score=0.99) for version in ["stable", "2.1", "3.1"]]
+    task = RetrievalTask(route="docs", query="numpy.mean 1.5.3 usage", k=1,
+                         requirement=RetrievalRequirement(library="numpy", symbols=["numpy.mean"],
+                                                          version="1.5.3", evidence_needs=["explanation"]).model_dump())
+    candidates = select_docs_candidates(task.query, [*related, *others, requested], task.requirement,
+                                       k=1, allowed_domains=["numpy.org"])
+    prepared = prepare_evidence_candidates(
+        user_input=task.query,
+        hits=[hit.model_copy(update={"requirement_id": task.requirement_id}) for hit in candidates],
+        planner_output=PlannerOutput(use_retrieval=True, tasks=[task]),
+        budget=RetrievedEvidenceBudget(1800, 6000, 8),
+    )
+    selected_text = "\n".join(hit.evidence.excerpt for hit in prepared
+                              if hit.evidence.snapshot.snapshot_id == requested.evidence.snapshot.snapshot_id)
+
+    assert parameter in selected_text
+    assert example in selected_text
+    assert len(candidates) <= 6
+    assert candidates[0].evidence.snapshot.source_uri == requested.evidence.snapshot.source_uri
+    assert all(hit.evidence.excerpt == hit.evidence.element.text[hit.evidence.selection.start:hit.evidence.selection.end]
+               for hit in candidates)
+
+
+@pytest.mark.parametrize("other_version", ["1.5.30", "1.5.3rc1", "1.5.3-rc1"])
+def test_explicit_version_priority_uses_complete_tokens_and_preserves_other_candidates(other_version):
+    requested = source_hit("numpy.mean(a)\nRequested explanation.", version="1.5",
+                           title="numpy.mean - NumPy 1.5.3 documentation", score=0.01)
+    other = source_hit("numpy.mean(a)\nOther explanation.", version="1.5.30",
+                       title=f"numpy.mean - NumPy {other_version} documentation", score=0.99)
+    query_only = source_hit("numpy.mean(a)\nCurrent explanation.", score=0.99,
+                            url_suffix="?version=1.5.3#1.5.3")
+    candidates = select([other, query_only, requested], requirement=RetrievalRequirement(
+        library="numpy", symbols=["numpy.mean"], version="1.5.3"))
+
+    assert candidates[0].evidence.id == requested.evidence.id
+    assert {hit.evidence.id for hit in candidates} == {requested.evidence.id, other.evidence.id, query_only.evidence.id}
 
 
 def test_unparsed_source_keeps_base_window_and_late_literal_anchor():

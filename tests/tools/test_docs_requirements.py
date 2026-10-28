@@ -2,6 +2,8 @@
 import pytest
 import requests
 
+pytestmark = pytest.mark.usefixtures("unavailable_official_pages")
+
 from src.core.planner_schema import RetrievalRequirement
 from src.core.evidence import SearchHit
 from src.infra.settings import AppSettings

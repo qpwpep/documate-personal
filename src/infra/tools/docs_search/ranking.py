@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterator
+from urllib.parse import unquote, urlparse
 
 from src.core.evidence import SearchHit, build_evidence
 from src.core.planner_schema import RetrievalRequirement
-from src.infra.tools.docs_search.policy import is_allowed_doc_url, normalized_domain_set, result_matches_domains
+from src.infra.tools.docs_search.policy import (
+    is_allowed_doc_url, is_current_stable_doc_url, normalized_domain_set, result_matches_domains,
+)
 from src.infra.tools.docs_search.sections import parse_doc_sections, scan_declarations
 
 
@@ -135,6 +138,8 @@ def select_docs_candidates(
 
     HTTPS, official documentation paths and requested library domains are hard
     constraints. Topic, version, owner and prose recognition are not filters.
+    With no requested version, moving stable aliases receive the first slots.
+    Explicit versions prioritize the named API's matching documentation first.
     """
     limit = min(20, max(6, k * 3))
     domains = normalized_domain_set(allowed_domains)
@@ -149,25 +154,55 @@ def select_docs_candidates(
         sources.setdefault((evidence.snapshot.snapshot_id, evidence.element.element_id), []).append(hit)
 
     groups = list(sources.values())
+    source_priorities = {}
+    version_pattern = (re.compile(rf"(?<![\w.-]){re.escape(requirement.version)}(?![\w.-])", re.I)
+                       if requirement.version else None)
+    symbol_patterns = [re.compile(rf"(?<![\w.-]){re.escape(symbol)}(?![\w.-])", re.I)
+                       for symbol in requirement.symbols]
+    for group in groups:
+        snapshot = group[0].evidence.snapshot
+        path = unquote(urlparse(snapshot.source_uri).path)
+        symbol_context = snapshot.title + " " + re.sub(r"\.html?$", "", path, flags=re.I)
+        matches_symbol = any(pattern.search(symbol_context) for pattern in symbol_patterns)
+        if version_pattern is None:
+            source_priorities[snapshot.snapshot_id] = 2
+            if is_current_stable_doc_url(snapshot.source_uri):
+                source_priorities[snapshot.snapshot_id] = (
+                    0 if matches_symbol and snapshot.parser == "official_html" else 1
+                )
+            continue
+        # Titles and paths can guide allocation, never approve a version or
+        # subject. Query strings and fragments cannot establish either identity.
+        source_priorities[snapshot.snapshot_id] = 2
+        if version_pattern.search(snapshot.title) or version_pattern.search(path):
+            source_priorities[snapshot.snapshot_id] = 0 if matches_symbol else 1
     groups.sort(key=lambda group: (
+        source_priorities[group[0].evidence.snapshot.snapshot_id],
         group[0].evidence.snapshot.snapshot_id not in (preferred_snapshot_ids or set()),
         -_literal_score(group[0].evidence.snapshot.title + " " + group[0].evidence.snapshot.source_uri, terms),
         -float(group[0].score.normalized or 0),
         group[0].evidence.snapshot.source_uri,
     ))
-    # Every admitted source gets a window before one rich source
-    # consumes remaining slots with multiple headings or literal matches.
-    pools = [_source_candidates(group, terms, symbols, limit, preserved_evidence_ids or set()) for group in groups[:limit]]
+    groups = groups[:limit]
+    # Exhaust the preferred tier first so other APIs/versions cannot displace
+    # its later parameters and examples. Preserve round-robin within each tier.
+    batches = [[group for group in groups if source_priorities[group[0].evidence.snapshot.snapshot_id] == priority]
+               for priority in range(3)]
     selected: list[SearchHit] = []
-    while len(selected) < limit and pools:
-        for pool in pools[:]:
-            hit = next(pool, None)
-            if hit is None:
-                pools.remove(pool)
-                continue
-            selected.append(hit)
-            if len(selected) == limit:
-                break
+    for batch in batches:
+        if len(selected) == limit:
+            break
+        # Balance sources within each tier before selecting more windows.
+        pools = [_source_candidates(group, terms, symbols, limit, preserved_evidence_ids or set()) for group in batch]
+        while len(selected) < limit and pools:
+            for pool in pools[:]:
+                hit = next(pool, None)
+                if hit is None:
+                    pools.remove(pool)
+                    continue
+                selected.append(hit)
+                if len(selected) == limit:
+                    break
     return [hit.model_copy(update={"rank": index}) for index, hit in enumerate(selected, start=1)]
 
 

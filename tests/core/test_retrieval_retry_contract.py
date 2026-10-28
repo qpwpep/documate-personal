@@ -4,6 +4,8 @@ import json
 
 import httpx
 import pytest
+
+pytestmark = pytest.mark.usefixtures("unavailable_official_pages")
 from openai import OpenAI
 
 from src.core.contracts import RetryState

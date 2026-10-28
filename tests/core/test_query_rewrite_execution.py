@@ -4,6 +4,8 @@ import json
 import httpx
 import pytest
 import requests
+
+pytestmark = pytest.mark.usefixtures("unavailable_official_pages")
 from langchain_openai import ChatOpenAI
 from openai import OpenAI
 
@@ -209,7 +211,8 @@ def test_semantic_rejection_refreshes_covered_evidence_and_selects_new_source(mo
         assert len(decision_sources) == 2
         assert (initial_text in decision_sources[0]) == source_accepted
         assert fresh_text in decision_sources[1]
-        assert (initial_text in decision_sources[1]) == source_accepted
+        # An approved stable source replaces archive context for an unversioned request.
+        assert (initial_text in decision_sources[1]) == (source_accepted and same_uri)
         assert all(excerpt in initial_text for excerpt in decision_sources[0])
         assert all(excerpt in initial_text or excerpt in fresh_text for excerpt in decision_sources[1])
 

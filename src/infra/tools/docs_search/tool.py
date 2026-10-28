@@ -11,6 +11,7 @@ from src.core.planner_schema import RetrievalRequirement
 from src.infra.settings import AppSettings
 from src.infra.tools._common import build_retrieval_result
 from src.infra.tools.docs_search import client
+from src.infra.tools.docs_search.official_page import refresh_stable_sources
 from src.infra.tools.docs_search.policy import docs_search_rules, normalize_include_domains
 from src.infra.tools.docs_search.ranking import dedupe_docs_hits, select_docs_candidates
 from src.infra.tools.docs_search.requirements import canonical_query, library_domains, resolve_requirement
@@ -32,7 +33,10 @@ def build_docs_search_tool(settings: AppSettings) -> Callable[..., RetrievalResu
         effective_query = canonical_query(query, requested)
         domains = normalize_include_domains(library_domains(str(requested.library or ""))
                                              or list(docs_search_rules().allowed_doc_path_prefixes))
-        candidate_limit = min(20, max(6, k * 3))
+        # A small search can return only newer releases or adjacent APIs for
+        # an explicit version. Widen provider recall without increasing the
+        # source-window budget that semantic validation receives.
+        provider_limit = min(20, max(9 if requested.version else 6, k * 3))
         include_raw = "markdown" if requested.symbols or requested.aspects or requested.evidence_needs else False
         completed: dict[str, DocsSearchRequest] = {}
         for request in completed_requests or []:
@@ -59,7 +63,7 @@ def build_docs_search_tool(settings: AppSettings) -> Callable[..., RetrievalResu
         # Search expansion belongs to the retrieval planner after Decisions has
         # reviewed these candidates. This tool never infers missing semantics or
         # reformulates a query from regex coverage labels.
-        already_completed = effective_query in completed and completed[effective_query].max_results >= candidate_limit
+        already_completed = effective_query in completed and completed[effective_query].max_results >= provider_limit
         if not unsupported_library and (refresh or not already_completed):
             query_text = effective_query
             key = query_text
@@ -67,13 +71,13 @@ def build_docs_search_tool(settings: AppSettings) -> Callable[..., RetrievalResu
             try:
                 payload = client.request_tavily_search(query=query_text, tavily_api_key=settings.tavily_api_key,
                     include_domains=domains, search_depth="basic", timeout_seconds=settings.docs_search_timeout_seconds,
-                    max_results=candidate_limit, include_raw_content=include_raw)
+                    max_results=provider_limit, include_raw_content=include_raw)
             except Exception as exc:
                 timed_out = isinstance(exc, TimeoutError) or "timed out" in str(exc).lower() or "timeout" in str(exc).lower()
                 error_code = "RETRIEVAL_DOCS_TIMEOUT" if timed_out else "RETRIEVAL_DOCS_FAILED"
                 error_message = f"invoke failed ({exc})"
                 provider_requests.append(DocsSearchProviderRequest(
-                    query=query_text, max_results=candidate_limit, status="error"))
+                    query=query_text, max_results=provider_limit, status="error"))
                 # A failed refresh must not inherit the successful completion
                 # marker from before that attempt and suppress a later retry.
                 completed.pop(key, None)
@@ -82,9 +86,9 @@ def build_docs_search_tool(settings: AppSettings) -> Callable[..., RetrievalResu
             if error_code is None:
                 # Only completed provider requests suppress future searches. A
                 # timeout retains prior candidates without consuming this query.
-                completed[key] = DocsSearchRequest(query=query_text, max_results=candidate_limit)
+                completed[key] = DocsSearchRequest(query=query_text, max_results=provider_limit)
                 provider_requests.append(DocsSearchProviderRequest(
-                    query=query_text, max_results=candidate_limit, status="completed",
+                    query=query_text, max_results=provider_limit, status="completed",
                     result_count=len(payload["results"])))
                 started = time.perf_counter()
                 batch = collect_docs_search_hits(payload["results"], allowed_domains=domains,
@@ -93,6 +97,15 @@ def build_docs_search_tool(settings: AppSettings) -> Callable[..., RetrievalResu
                     fresh_snapshot_ids.update(hit.evidence.snapshot.snapshot_id for hit in batch
                                               if hit.evidence.snapshot.snapshot_id not in previous_snapshot_ids)
                 candidates = dedupe_docs_hits([*candidates, *batch])
+                if requested.version is None:
+                    ranked = select_docs_candidates(effective_query, candidates, requested, k=k, allowed_domains=domains,
+                                                    preferred_snapshot_ids=fresh_snapshot_ids,
+                                                    preserved_evidence_ids=preserved_ids)
+                    candidates = refresh_stable_sources(ranked, requirement=requested,
+                                                        timeout_seconds=settings.docs_search_timeout_seconds,
+                                                        allowed_domains=domains, warnings=warnings)
+                    fresh_snapshot_ids.update(hit.evidence.snapshot.snapshot_id for hit in candidates
+                                              if hit.evidence.snapshot.parser == "official_html")
                 hits = select_docs_candidates(effective_query, candidates, requested, k=k,
                     allowed_domains=domains, preferred_snapshot_ids=fresh_snapshot_ids,
                     preserved_evidence_ids=preserved_ids)

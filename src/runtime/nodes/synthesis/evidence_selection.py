@@ -11,6 +11,7 @@ from src.core.literal_matching import literal_aspect_present, missing_literal_as
 from src.core.planner_schema import PlannerOutput, RetrievalTask
 from src.core.python_source import PythonSourceMap
 from src.core.table_selection import table_excerpt, table_row_units
+from src.infra.tools.docs_search.policy import is_current_stable_doc_url
 from src.infra.tools.docs_search.sections import parse_doc_sections, scan_declarations
 from src.runtime.nodes.synthesis.budgets import RetrievedEvidenceBudget, literal_passage_anchors, upload_passage_targets
 
@@ -621,22 +622,38 @@ def prepare_evidence_candidates(
     counts: dict[str, int] = {}
     seen: set[tuple[str, str]] = set()
     docs_count = 0
-    for index in range(max(map(len, pools), default=0)):
-        for pool in pools:
-            if index >= len(pool):
-                continue
-            candidate = pool[index]
-            key = (candidate.evidence.id, candidate.requirement_id)
-            if key in seen:
-                continue
-            if candidate.evidence.route == "docs":
-                if (docs_count >= _DOC_CANDIDATES_TOTAL
-                        or counts.get(candidate.requirement_id, 0) >= limits.get(candidate.requirement_id, 12)):
+    refreshed_pools = []
+    other_pools = []
+    for pool in pools:
+        if not pool:
+            continue
+        item = pool[0].evidence
+        if (item.route == "docs" and item.snapshot.parser == "official_html"
+                and is_current_stable_doc_url(item.snapshot.source_uri)
+                and any(task.requirement.version is None for task in tasks_for_hit(pool[0], planner_output))):
+            refreshed_pools.append(pool)
+        else:
+            other_pools.append(pool)
+    # Packet selection already prefers freshly captured stable documents.
+    # Give their later passages evaluation slots before cached sources spend
+    # the requirement cap, while retaining source round-robin within each tier.
+    for batch in (refreshed_pools, other_pools):
+        for index in range(max(map(len, batch), default=0)):
+            for pool in batch:
+                if index >= len(pool):
                     continue
-                docs_count += 1
-                counts[candidate.requirement_id] = counts.get(candidate.requirement_id, 0) + 1
-            seen.add(key)
-            result.append(candidate)
+                candidate = pool[index]
+                key = (candidate.evidence.id, candidate.requirement_id)
+                if key in seen:
+                    continue
+                if candidate.evidence.route == "docs":
+                    if (docs_count >= _DOC_CANDIDATES_TOTAL
+                            or counts.get(candidate.requirement_id, 0) >= limits.get(candidate.requirement_id, 12)):
+                        continue
+                    docs_count += 1
+                    counts[candidate.requirement_id] = counts.get(candidate.requirement_id, 0) + 1
+                seen.add(key)
+                result.append(candidate)
     return result
 
 
@@ -721,6 +738,10 @@ def select_evidence_packet(
     def share_existing(item: EvidenceRef, task: RetrievalTask | None) -> None:
         for selected in packet:
             if item.route == "docs":
+                # Sharing must not restore an association removed by the
+                # stable-channel or freshness policy for this requirement.
+                if task is not None and (selected.id, task.requirement_id) not in doc_proposals:
+                    continue
                 if selected.id == item.id and (semantic_support is None or task is None
                         or support.get(item.id, {}).get(task.requirement_id)):
                     associate(selected, task)
@@ -783,6 +804,39 @@ def select_evidence_packet(
         for selected in proposals:
             doc_proposals.setdefault((selected.id, task.requirement_id), (selected, item, task))
 
+    # Once relevant stable evidence is available for an unversioned task,
+    # keep its packet on that channel instead of mixing cheaper archive/dev defaults.
+    stable_requirements = {
+        task.requirement_id for selected, _original, task in doc_proposals.values()
+        if task.requirement.version is None and is_current_stable_doc_url(selected.snapshot.source_uri)
+    }
+    doc_proposals = {
+        key: proposal for key, proposal in doc_proposals.items()
+        if proposal[2].requirement_id not in stable_requirements
+        or is_current_stable_doc_url(proposal[0].snapshot.source_uri)
+    }
+    refreshed_requirements = {
+        task.requirement_id for selected, _original, task in doc_proposals.values()
+        if task.requirement_id in stable_requirements
+        and "freshness_unverified" not in selected.snapshot.quality_issues
+    }
+    doc_proposals = {
+        key: proposal for key, proposal in doc_proposals.items()
+        if proposal[2].requirement_id not in refreshed_requirements
+        or "freshness_unverified" not in proposal[0].snapshot.quality_issues
+    }
+    # Retrieval windows can put overlapping late notes before the basic usage
+    # flow. Keep source relevance order, but read each source in document order.
+    source_proposals = {}
+    for key, proposal in doc_proposals.items():
+        selected = proposal[0]
+        source_key = (selected.snapshot.snapshot_id, selected.element.element_id)
+        source_proposals.setdefault(source_key, []).append((key, proposal))
+    doc_proposals = dict(
+        item for proposals in source_proposals.values()
+        for item in sorted(proposals, key=lambda value: value[1][0].selection.start)
+    )
+
     def reserve_docs(allowances: dict[str, int] | None = None) -> None:
         spent: dict[str, int] = {}
         while True:
@@ -824,7 +878,11 @@ def select_evidence_packet(
                     int(not existing) / max(1, budget.max_items - len(packet)),
                     1 / max(1, budget.max_total_excerpt_chars),
                 )
-                score = (not selected_labels.get(key), bool(gain), len(gain), len(gain) / pressure, -cost)
+                # Once labels are covered, preserve source rank and document order.
+                # Cheaper ranges can repeat signatures while displacing a
+                # complementary example with the same semantic labels.
+                score = (not selected_labels.get(key), bool(gain), len(gain), len(gain) / pressure,
+                         -cost if gain else 0)
                 if best_score is None or score > best_score:
                     best_score = score
                     best = (selected, original, task, cost, labels)

@@ -6,6 +6,8 @@ import json
 import pytest
 import requests
 
+pytestmark = pytest.mark.usefixtures("unavailable_official_pages")
+
 from src.core.answer_schema import AnswerDocument, finalize_answer
 from src.core.documents import DocumentElement, SourceAnchor, build_snapshot
 from src.core.evidence import RetrievalScore, SearchHit, build_evidence

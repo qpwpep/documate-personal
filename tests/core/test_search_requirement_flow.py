@@ -14,6 +14,8 @@ from src.infra.tools import build_tool_registry
 from src.runtime.nodes.retrieval import make_retrieve_dispatch_node
 import pytest
 
+pytestmark = pytest.mark.usefixtures("unavailable_official_pages")
+
 
 def test_dispatch_keeps_independent_official_candidates_with_mixed_provider_results(monkeypatch):
     """Each docs task retains its allowed library sources without claiming semantic coverage."""
