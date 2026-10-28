@@ -1,5 +1,9 @@
 // Keep Streamlit's own composer, upload handling, and public prefill mechanism.
 const bridgeCleanups = new WeakMap();
+// Native chat widgets discard their local File list when a conversation is
+// unmounted. Keep the original bytes in this page, not in sessionStorage.
+const conversationFiles = new Map();
+const restoredComposers = new WeakMap();
 
 export default function ({ data, setStateValue, parentElement }) {
   // Streamlit reruns this entry point for new data; it only calls its returned
@@ -37,7 +41,11 @@ export default function ({ data, setStateValue, parentElement }) {
     // with the current server-rendered display state, if storage allows it.
   }
   const storedConversation = snapshot.conversations.find(item => item.id === data.conversation_id);
+  for (const conversationId of conversationFiles.keys()) {
+    if (!snapshot.conversations.some(item => item.id === conversationId)) conversationFiles.delete(conversationId);
+  }
   const selector = `.st-key-conversation-${data.conversation_id}-chat_input textarea`;
+  let restoringFiles = false;
   let lastSent = data.text;
   let submitting = false;
   let closeRequested = false;
@@ -149,6 +157,7 @@ export default function ({ data, setStateValue, parentElement }) {
 
   function beginSubmission() {
     submitting = true;
+    conversationFiles.delete(data.conversation_id);
     storedConversation.draft = { text: "", revision: data.revision + 1 };
     persist();
   }
@@ -168,17 +177,18 @@ export default function ({ data, setStateValue, parentElement }) {
     // Capture keyboard navigation before leaving the composer. DOM removal
     // after submit also emits blur, so blur must never request a rerun.
     if (event.key === "Tab" && event.target.matches?.(selector)) flushDraft();
-    if (event.key === "Enter" && !event.shiftKey && !event.isComposing
+    if (event.key === "Enter" && !event.shiftKey && !event.ctrlKey && !event.metaKey && !event.isComposing
         && event.target.matches?.(selector)) {
       if (blockRejectedSubmission(event)) return;
-      if (event.target.value.trim()) beginSubmission();
+      const send = event.target.closest('[data-testid="stChatInput"]')
+        ?.querySelector('[data-testid="stChatInputSubmitButton"]');
+      if (send && !send.disabled) beginSubmission();
     }
   }
 
   function onPointerDown(event) {
     const send = event.target.closest?.('[data-testid="stChatInputSubmitButton"]');
     if (send && blockRejectedSubmission(event)) return;
-    if (send && !send.disabled) beginSubmission();
     // Flush before a navigation trigger; that trigger then carries this widget
     // state even if Streamlit coalesces the two rerun requests.
     if (!event.target.closest?.('[data-testid="stChatInput"]')) flushDraft();
@@ -188,8 +198,10 @@ export default function ({ data, setStateValue, parentElement }) {
   }
 
   function onClick(event) {
-    if (event.target.closest?.('[data-testid="stChatInputSubmitButton"]')
-        && blockRejectedSubmission(event)) return;
+    const send = event.target.closest?.('[data-testid="stChatInputSubmitButton"]');
+    if (send && blockRejectedSubmission(event)) return;
+    // Keyboard activation of the send button has no pointerdown event.
+    if (send && !send.disabled && !submitting) beginSubmission();
     // The component's draft event and a Streamlit button callback can arrive
     // separately. Protect the visible draft before a suggestion can replace it.
     const suggestion = event.target.closest?.('[class*="-quick_prompt_"] button');
@@ -208,6 +220,89 @@ export default function ({ data, setStateValue, parentElement }) {
     // Re-enable examples as soon as the user clears a draft, without rerunning
     // on every keystroke. The submit latch excludes submission-driven clearing.
     if (event.target.matches?.(selector) && event.target.value === "") flushDraft();
+  }
+
+  function rememberSelectedFiles(event) {
+    if (restoringFiles || submitting) return;
+    const composer = document.querySelector(selector)?.closest('[data-testid="stChatInput"]');
+    if (!composer?.contains(event.target)) return;
+    let files;
+    if (event.type === "change") {
+      if (!event.target.matches?.('input[type="file"]')) return;
+      files = event.target.files;
+    } else if (event.type === "drop") {
+      files = event.dataTransfer?.files;
+    } else {
+      files = event.clipboardData?.files;
+    }
+    if (!files?.length) return;
+    conversationFiles.set(data.conversation_id, [
+      ...(conversationFiles.get(data.conversation_id) || []), ...files,
+    ]);
+  }
+
+  function forgetRemovedFile(event) {
+    const remove = event.target.closest?.('[data-testid="stFileChipDeleteBtn"]');
+    const composer = document.querySelector(selector)?.closest('[data-testid="stChatInput"]');
+    if (!remove || !composer?.contains(remove)) return;
+    const chip = remove.closest('[data-testid="stFileChip"]');
+    const filename = chip.querySelector('[data-testid="stFileChipName"]')?.title;
+    const files = conversationFiles.get(data.conversation_id) || [];
+    // Native validation renders rejected files before accepted uploads. Its
+    // chip exposes the name and rounded size, but no file ID. Size-limit status
+    // distinguishes files on either side of the limit even when sizes round
+    // to the same label. Equal signatures retain their selection order.
+    const label = chip.getAttribute("aria-label");
+    const tooLarge = fileChipTooLarge(chip);
+    const matchingChips = [...composer.querySelectorAll('[data-testid="stFileChip"]')]
+      .filter(item => item.getAttribute("aria-label") === label && fileChipTooLarge(item) === tooLarge);
+    const matchingFiles = files.flatMap((file, index) =>
+      file.name === filename && `${file.name}, ${nativeFileSize(file.size)}` === label
+        && (file.size > data.max_file_bytes) === tooLarge ? [index] : []);
+    const index = matchingFiles[matchingChips.indexOf(chip)] ?? -1;
+    if (index < 0) return;
+    files.splice(index, 1);
+    if (!files.length) conversationFiles.delete(data.conversation_id);
+  }
+
+  function fileChipTooLarge(chip) {
+    const error = chip.querySelector('[role="alert"]')?.textContent || "";
+    return error.includes(" or smaller.") || error.includes("File is too large.");
+  }
+
+  function nativeFileSize(bytes) {
+    // Streamlit's visible chip sizes use binary units on Windows and decimal
+    // units elsewhere, advancing units at half the base with one decimal.
+    const base = /^Win/i.test(navigator.platform) ? 1024 : 1000;
+    const units = ["B", "KB", "MB", "GB"];
+    let unit = 0;
+    while (bytes > base / 2 && unit < units.length - 1) {
+      bytes /= base;
+      unit += 1;
+    }
+    return `${bytes.toFixed(1)}${units[unit]}`;
+  }
+
+  function restoreSelectedFiles() {
+    const composer = document.querySelector(selector)?.closest('[data-testid="stChatInput"]');
+    const input = composer?.querySelector('[data-testid="stChatInputFileUploadButton"] input[type="file"]');
+    if (!input || input.disabled || restoredComposers.get(composer) === data.conversation_id) return;
+    // Expanding a multiline composer replaces its file input while preserving
+    // its pending native upload. Restore once per composer, not per input.
+    restoredComposers.set(composer, data.conversation_id);
+    const files = conversationFiles.get(data.conversation_id);
+    if (!files?.length || composer.querySelector('[data-testid="stFileChip"]')) return;
+    const selection = new DataTransfer();
+    for (const file of files) selection.items.add(file);
+    // Re-enter Streamlit's normal validation/upload path for the new widget.
+    // Restoring a draft only selects files; it never submits the question.
+    restoringFiles = true;
+    try {
+      input.files = selection.files;
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+    } finally {
+      restoringFiles = false;
+    }
   }
 
   function onFocus(event) {
@@ -278,6 +373,10 @@ export default function ({ data, setStateValue, parentElement }) {
   document.addEventListener("pointerdown", onPointerDown, true);
   document.addEventListener("click", onClick, true);
   document.addEventListener("input", onInput, true);
+  document.addEventListener("change", rememberSelectedFiles, true);
+  document.addEventListener("drop", rememberSelectedFiles, true);
+  document.addEventListener("paste", rememberSelectedFiles, true);
+  document.addEventListener("click", forgetRemovedFile, true);
   document.addEventListener("focusin", onFocus, true);
   document.addEventListener("wheel", onReadingIntent, { capture: true, passive: true });
   document.addEventListener("touchmove", onReadingIntent, { capture: true, passive: true });
@@ -287,11 +386,13 @@ export default function ({ data, setStateValue, parentElement }) {
   window.addEventListener("pagehide", storeDraft);
   const observer = new MutationObserver(() => {
     recoverSidebarFocus();
+    restoreSelectedFiles();
     renderUploadSelection();
     settleAnswerScroll();
   });
   observer.observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ["data-collapsed", "aria-invalid", "disabled"] });
   recoverSidebarFocus();
+  restoreSelectedFiles();
   renderUploadSelection();
   persist();
   persistReading();
@@ -302,6 +403,10 @@ export default function ({ data, setStateValue, parentElement }) {
     document.removeEventListener("pointerdown", onPointerDown, true);
     document.removeEventListener("click", onClick, true);
     document.removeEventListener("input", onInput, true);
+    document.removeEventListener("change", rememberSelectedFiles, true);
+    document.removeEventListener("drop", rememberSelectedFiles, true);
+    document.removeEventListener("paste", rememberSelectedFiles, true);
+    document.removeEventListener("click", forgetRemovedFile, true);
     document.removeEventListener("focusin", onFocus, true);
     document.removeEventListener("wheel", onReadingIntent, true);
     document.removeEventListener("touchmove", onReadingIntent, true);

@@ -33,6 +33,41 @@ export async function composerText(tab, expected) {
   return { check: "composer text", value: actual };
 }
 
+/** Run after leaving and returning to a conversation with unsubmitted files. */
+export async function conversationDraftSelection(tab, { draft, filenames, messages = 0 }) {
+  await composerText(tab, draft);
+  const selection = await tab.playwright.evaluate(() => ({
+    filenames: [...document.querySelectorAll('[data-testid="stChatInput"] [data-testid="stFileChip"] button[aria-label^="Remove "]')]
+      .map(button => button.getAttribute("aria-label").slice("Remove ".length)),
+    messages: document.querySelectorAll('[data-testid="stChatMessage"]').length,
+    sendDisabled: document.querySelector('[data-testid="stChatInputSubmitButton"]')?.disabled,
+  }));
+  assert(JSON.stringify(selection.filenames.toSorted()) === JSON.stringify(filenames.toSorted()),
+    `Conversation lost or mixed its unsent files: ${JSON.stringify({ expected: filenames, actual: selection.filenames })}`);
+  assert(selection.messages === messages, "Navigation submitted a question or changed the conversation history");
+  assert(selection.sendDisabled === (draft === "" && filenames.length === 0),
+    `Restored draft has the wrong submission state: ${JSON.stringify(selection)}`);
+  return { check: "conversation retains exact question and selected files", ...selection };
+}
+
+/** Check visible size/status as well as names, including same-name selections. */
+export async function attachmentSelectionDetails(tab, expected) {
+  const actual = await tab.playwright.evaluate(() =>
+    [...document.querySelectorAll('[data-testid="stChatInput"] [data-testid="stFileChip"]')].map(chip => {
+      const name = chip.querySelector('[data-testid="stFileChipName"]').title;
+      return {
+        name,
+        size: chip.getAttribute("aria-label").slice(name.length + 2),
+        rejected: chip.getAttribute("aria-invalid") === "true",
+      };
+    }));
+  assert(actual.length === expected.length && actual.every((file, index) =>
+    file.name === expected[index].name && file.size === expected[index].size
+      && file.rejected === expected[index].rejected),
+    `Restored attachment metadata differs: ${JSON.stringify({ expected, actual })}`);
+  return { check: "selected attachment names, sizes and validation status", files: actual };
+}
+
 /** Run with a real rejected file selected, before removing/replacing it. */
 export async function rejectedAttachmentPreservesDraft(tab, draft) {
   const input = tab.playwright.getByRole("textbox", {

@@ -70,6 +70,7 @@ def render_browser_state(conversation: Conversation) -> None:
               "focus_input": conversation.draft.needs_restore,
               "pending_chat": conversation.pending_request is not None and conversation.pending_request.kind == "chat",
               "message_count": len(conversation.messages),
+              "max_file_bytes": get_settings().upload_max_file_mib * 1024 * 1024,
               "snapshot": dump_conversations(list_conversations(), conversation.id),
               "storage_error": state.get("storage_error")},
         key=_KEY,
