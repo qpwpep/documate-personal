@@ -50,6 +50,8 @@ export default function ({ data, setStateValue, parentElement }) {
   let submitting = false;
   let closeRequested = false;
   let sidebarHadFocus = false;
+  let sidebarOverlayActive = false;
+  const sidebarBackground = new Map();
   let focusInput = data.focus_input;
   let previousReading = null;
   try {
@@ -307,9 +309,45 @@ export default function ({ data, setStateValue, parentElement }) {
 
   function onFocus(event) {
     sidebarHadFocus = Boolean(event.target.closest?.('[data-testid="stSidebar"]'));
+    if (sidebarOverlayActive && !sidebarFocusRoots().some(root => root.contains(event.target))) {
+      sidebarFocusableElements()[0]?.focus();
+    }
   }
 
   function recoverSidebarFocus() {
+    const sidebar = document.querySelector('[data-testid="stSidebar"]');
+    const main = document.getElementById("stMain");
+    const open = sidebar?.getAttribute("data-collapsed") === "false";
+    // Streamlit takes main out of the flex row in its mobile layout. Use that
+    // layout mode: the sidebar's animated transform still looks closed at the
+    // moment data-collapsed changes, so its current rectangle is not reliable.
+    const overlay = open && main && getComputedStyle(main).position === "absolute";
+    if (overlay) {
+      sidebarOverlayActive = true;
+      for (const element of [main, document.querySelector('[data-testid="stHeader"]'),
+        document.querySelector('a[href="#stMain"]')].filter(Boolean)) {
+        if (!sidebarBackground.has(element)) sidebarBackground.set(element, element.inert);
+        element.inert = true;
+      }
+      if (!sidebarFocusRoots().some(root => root.contains(document.activeElement))) {
+        sidebarFocusableElements()[0]?.focus();
+      }
+      // Opening a navigation menu takes precedence over composer restoration.
+      focusInput = false;
+      return;
+    }
+    releaseSidebarBackground();
+    if (sidebar?.getAttribute("data-collapsed") === "true") {
+      const focusedInside = sidebar.contains(document.activeElement);
+      if (closeRequested || sidebarOverlayActive || focusedInside
+          || (sidebarHadFocus && document.activeElement === document.body)) {
+        document.querySelector('[data-testid="stExpandSidebarButton"]')?.focus();
+        focusInput = false;
+      }
+      closeRequested = false;
+      sidebarHadFocus = false;
+    }
+    sidebarOverlayActive = false;
     if (focusInput) {
       const input = document.querySelector(selector);
       if (input && !input.disabled) {
@@ -317,14 +355,60 @@ export default function ({ data, setStateValue, parentElement }) {
         focusInput = false;
       }
     }
+  }
+
+  function releaseSidebarBackground() {
+    for (const [element, wasInert] of sidebarBackground) element.inert = wasInert;
+    sidebarBackground.clear();
+  }
+
+  function sidebarFocusRoots() {
     const sidebar = document.querySelector('[data-testid="stSidebar"]');
-    if (sidebar?.getAttribute("data-collapsed") !== "true") return;
-    const focusedInside = sidebar.contains(document.activeElement);
-    if (closeRequested || focusedInside || (sidebarHadFocus && document.activeElement === document.body)) {
-      document.querySelector('[data-testid="stExpandSidebarButton"]')?.focus();
+    if (!sidebar) return [];
+    // Selectboxes render their listboxes in a portal outside the sidebar.
+    // Keep those owned popups usable without admitting background controls.
+    const popups = [...sidebar.querySelectorAll('[aria-controls]')]
+      .flatMap(element => element.getAttribute("aria-controls").split(/\s+/))
+      .map(id => document.getElementById(id))
+      .filter(element => element && !sidebar.contains(element));
+    return [sidebar, ...popups];
+  }
+
+  function sidebarFocusableElements() {
+    return sidebarFocusRoots().flatMap(root => [...root.querySelectorAll(
+      'a[href], button, input, select, textarea, summary, [tabindex]'
+    )]).filter(element => {
+      if (element.disabled || element.tabIndex < 0 || element.closest('[inert]')
+          || !element.getClientRects().length || getComputedStyle(element).visibility !== "visible") return false;
+      if (element.matches('input[type="radio"]') && element.name && !element.checked) {
+        return ![...element.form?.elements || document.querySelectorAll('input[type="radio"]')]
+          .some(other => other.name === element.name && other.checked);
+      }
+      return true;
+    });
+  }
+
+  function onSidebarKeyDown(event) {
+    if (!sidebarOverlayActive) return;
+    const roots = sidebarFocusRoots();
+    // Escape first dismisses a selectbox's own popup. A second Escape closes
+    // the sidebar, preserving the standard nested-widget keyboard behavior.
+    if (event.key === "Escape" && roots.length === 1) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      closeRequested = true;
+      document.querySelector('[data-testid="stSidebarCollapseButton"] button')?.click();
+      return;
     }
-    closeRequested = false;
-    sidebarHadFocus = false;
+    if (event.key !== "Tab") return;
+    const focusable = sidebarFocusableElements();
+    const first = focusable[0];
+    const last = focusable.at(-1);
+    const inside = roots.some(root => root.contains(document.activeElement));
+    if (!inside || (event.shiftKey ? document.activeElement === first : document.activeElement === last)) {
+      event.preventDefault();
+      (event.shiftKey ? last : first)?.focus();
+    }
   }
 
   function renderUploadSelection() {
@@ -378,6 +462,8 @@ export default function ({ data, setStateValue, parentElement }) {
   document.addEventListener("paste", rememberSelectedFiles, true);
   document.addEventListener("click", forgetRemovedFile, true);
   document.addEventListener("focusin", onFocus, true);
+  document.addEventListener("keydown", onSidebarKeyDown, true);
+  window.addEventListener("resize", recoverSidebarFocus);
   document.addEventListener("wheel", onReadingIntent, { capture: true, passive: true });
   document.addEventListener("touchmove", onReadingIntent, { capture: true, passive: true });
   document.addEventListener("pointerdown", onReadingIntent, true);
@@ -408,6 +494,9 @@ export default function ({ data, setStateValue, parentElement }) {
     document.removeEventListener("paste", rememberSelectedFiles, true);
     document.removeEventListener("click", forgetRemovedFile, true);
     document.removeEventListener("focusin", onFocus, true);
+    document.removeEventListener("keydown", onSidebarKeyDown, true);
+    window.removeEventListener("resize", recoverSidebarFocus);
+    releaseSidebarBackground();
     document.removeEventListener("wheel", onReadingIntent, true);
     document.removeEventListener("touchmove", onReadingIntent, true);
     document.removeEventListener("pointerdown", onReadingIntent, true);

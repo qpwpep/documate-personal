@@ -825,6 +825,8 @@ uv run python -X utf8 -m streamlit run tests/browser/streamlit_fixture.py --serv
 
 미전송 파일 선택은 실제 파일 선택기로 여러 파일을 고른 뒤 질문을 작성하고 다른 대화로 왕복해 검증합니다. `conversationDraftSelection()`은 정확한 질문 텍스트·파일명·전송 상태·메시지 수를 확인합니다. 각 대화의 서로 다른 선택, 파일 제거 후 복귀, 명시적 전송 후 선택이 다시 나타나지 않는지도 확인합니다. Ctrl+Enter와 전송 버튼 우클릭처럼 전송하지 않는 입력 뒤에도 초안이 유지되어야 합니다. 같은 이름의 정상 파일과 크기 초과 파일을 함께 선택한 경우에는 오류 파일만 제거하고 왕복한 뒤 `attachmentSelectionDetails()`로 남은 파일의 이름·표시 크기·거부 상태를 비교합니다. 파일 선택은 같은 페이지의 메모리에만 보관하므로 새로고침 후 파일 복원은 이 계약에 포함하지 않습니다. 실제 첨부 확정과 바이트 보존은 FastAPI·Streamlit 서버에서 파일을 전송하고 manifest의 파일 크기·해시를 원본과 대조합니다.
 
+모바일 메뉴 회귀는 [sidebar_focus_checks.mjs](../tests/browser/sidebar_focus_checks.mjs)로 검사합니다. 320px·390px에서 열기 버튼에 Enter를 누른 직후 `mobileSidebarOpened()`로 메뉴 내부 포커스를 확인하고, 열기 애니메이션이 끝난 화면에서 `mobileSidebarFocus()`로 가시성을 확인합니다. Tab·Shift+Tab 순환에는 `mobileSidebarTabCycle()`, Escape·닫기 버튼 이후에는 `sidebarClosedFocus()`를 실행합니다. 대화 선택 팝업의 방향키·Enter·Escape도 확인하고, 데스크톱 폭에서는 열린 사이드바의 마지막 컨트롤에서 기본 헤더를 거쳐 본문으로 이동해 `desktopMainFocused()`로 본문 탐색이 유지되는지 검사합니다. 이 검사들은 실제 CUA 탭의 DOM과 포커스를 관찰하며 AppTest를 대체하지 않습니다.
+
 회귀 테스트는 외부 모델과 HTTP 서비스 경계를 대체해 실행 정책을 검증합니다. 실제 모델의 요청 계약 해석 정확도는 별도 평가로 확인합니다.
 
 ```bash
