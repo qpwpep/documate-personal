@@ -108,12 +108,15 @@ def test_failed_save_retries_the_original_snapshot(exports, monkeypatch):
     assert saved[0].read_bytes() == export_answer_text(original, include_sources=True).encode("utf-8-sig")
 
 
-def test_missing_or_expired_session_is_not_recreated(exports):
+@pytest.mark.parametrize("monotonic_now", [1.0, 86400.0], ids=["just-booted", "long-running"])
+def test_missing_or_expired_session_is_not_recreated(exports, monkeypatch, monotonic_now):
     client, store, _, answer_id, _, output = exports
+    # Keep HTTP and event-loop clocks real; only control the session store's clock.
+    monkeypatch.setattr("src.app.web.session_store.time", SimpleNamespace(monotonic=lambda: monotonic_now))
     absent = client.post(f"/sessions/missing-session/answers/{answer_id}/save")
     assert absent.status_code == 404
     assert "missing-session" not in store.active_session_ids()
-    store.active_agents["export-session"].last_accessed_monotonic = 0
+    store.active_agents["export-session"].last_accessed_monotonic = monotonic_now - store.settings.session_ttl_seconds - 1
     expired = client.post(f"/sessions/export-session/answers/{answer_id}/save")
     assert expired.status_code == 410
     assert "export-session" not in store.active_session_ids()
