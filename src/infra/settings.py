@@ -64,7 +64,7 @@ APP_ENV_SPECS = (
     EnvVarSpec("SUMMARY_MODEL", "summary_model", "gpt-5.6-luna", "session summary 모델 기본값", example="gpt-5.6-luna", example_group="models"),
     EnvVarSpec("VALIDATION_MODEL", "validation_model", "gpt-6-luna", "사전·사후 검증용 OpenAI Decisions API 모델 (gpt-6-luna만 지원)", example="gpt-6-luna", example_group="models"),
     EnvVarSpec("SUMMARY_MAX_TOKENS", "summary_max_tokens", 1024, "요약 LLM 생성 토큰 상한; 저장 요약 예산과 독립", example=1024, example_group="planning_summary"),
-    EnvVarSpec("PLANNER_MAX_TOKENS", "planner_max_tokens", 1920, "planner structured output 최대 토큰", example=1920, example_group="planning_summary"),
+    EnvVarSpec("PLANNER_MAX_TOKENS", "planner_max_tokens", 4096, "planner structured output 최대 토큰", example=4096, example_group="planning_summary"),
     EnvVarSpec(
         "PLANNER_REASONING_EFFORT",
         "planner_reasoning_effort",
