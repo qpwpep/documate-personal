@@ -19,6 +19,7 @@ from src.core.planner_schema import PlannerOutput, RetrievalTask
 from src.core.request_contracts import RequestContract
 from src.infra.decisions import DecisionsClient
 from src.runtime.nodes.validation import make_post_synthesis_validation_node, make_pre_synthesis_validation_node
+from src.runtime.nodes.validation import semantic
 from tests.synthesis_fixtures import synthesis_excerpt_limits
 
 
@@ -63,11 +64,11 @@ class DecisionsBoundary(DecisionsClient):
         })
 
 
-def _evidence(source_text, *, subject="pathlib.Path.exists", source_uri=None):
+def _evidence(source_text, *, subject="pathlib.Path.exists", source_uri=None, parser="test"):
     source = build_snapshot(
         source_uri=source_uri or f"https://docs.python.org/3/library/pathlib.html#{subject}",
         title=subject, media_type="text/plain", source_type="official",
-        content=source_text, parser="test", parser_version="1",
+        content=source_text, parser=parser, parser_version="1",
     )
     element = DocumentElement(
         element_id=subject, kind="paragraph", text=source_text,
@@ -105,6 +106,23 @@ def _state(*, retrieval=True, answer="Path.exists()는 파일이나 디렉터리
             synthesis_attempt=1, request_id=contract.request_id, contract_revision=contract.revision,
         ),
     )
+
+
+@pytest.mark.parametrize("parser", ["official_html", "tavily"])
+def test_validation_receives_the_actual_capture_method(parser):
+    state = _state()
+    evidence = _evidence("Path.exists() returns True if the path exists.", parser=parser)
+    state["response"] = state["response"].model_copy(update={
+        "result": finalize_answer(text_document(evidence.excerpt, basis="source", refs=[evidence.id]), [evidence]),
+        "evidence_packet": [evidence],
+        "evidence_requirement_map": {evidence.id: ["path_exists"]},
+    })
+    boundary = DecisionsBoundary()
+
+    make_post_synthesis_validation_node(False, decisions_client=boundary)(state)
+
+    source = json.loads(boundary.requests[0]["input"])["units"][0]["cited_sources"][0]
+    assert source["capture_method"] == parser
 
 
 @pytest.mark.parametrize("probability, needs_retry", [(0.79, True), (0.80, False)])
@@ -352,6 +370,142 @@ def test_post_validation_rejects_semantically_unsupported_text_with_valid_refere
     assert state["response"].evidence_packet[0].excerpt in request["input"]
 
 
+def test_post_validation_distinguishes_heading_context_from_unsupported_heading_claims():
+    state = _state()
+    evidence = state["response"].evidence_packet[0]
+    document = AnswerDocument.model_validate({"blocks": [
+        {"type": "heading", "level": 2, "content": {
+            "text": "Path.exists 사용법", "basis": "interaction", "refs": [],
+        }},
+        {"type": "paragraph", "content": [{
+            "text": "이 발췌는 존재 여부만 설명합니다.", "basis": "source", "refs": [evidence.id],
+        }]},
+        {"type": "heading", "level": 2, "content": {
+            "text": "존재하지 않는 파일을 자동으로 생성합니다.", "basis": "source", "refs": [evidence.id],
+        }},
+    ]})
+    state["response"] = state["response"].model_copy(update={
+        "result": finalize_answer(document, [evidence], retrieval_required=True),
+    })
+    boundary = DecisionsBoundary({"grounded_2": 0.1})
+
+    updates = make_post_synthesis_validation_node(False, decisions_client=boundary)(state)
+
+    units = json.loads(boundary.requests[0]["input"])["units"]
+    assert [unit["block_type"] for unit in units] == ["heading", "paragraph", "heading"]
+    assert units[0]["basis"] == "interaction" and units[0]["cited_sources"] == []
+    assert units[1]["cited_sources"][0]["excerpt"] == evidence.excerpt
+    assert units[2]["basis"] == "source" and units[2]["cited_sources"][0]["id"] == evidence.id
+    assert updates["retry"].needs_retry
+    assert "b2.content" in updates["retry"].retrieval_feedback
+    assert "b0.content" not in updates["retry"].retrieval_feedback
+
+
+def test_api_requirement_checks_keep_target_and_selected_ranges_before_and_after_synthesis():
+    """Related-method support cannot borrow an uncited callable definition."""
+    state = _state()
+    task = RetrievalTask(route="docs", query="Explain pandas.merge usage", k=2,
+                         requirement_id="merge_usage", requirement={
+                             "library": "pandas", "symbols": ["pandas.merge"], "version": "3.1.0",
+                             "evidence_needs": ["explanation"], "match": "symbol",
+                         })
+    related = _evidence("DataFrame.merge(right, on=None): on names the common key columns.",
+                        subject="pandas.DataFrame.merge")
+    primary = _evidence("pandas.merge(left, right, on=None) merges two DataFrames on the named columns.",
+                        subject="pandas.merge")
+    selected = build_evidence(snapshot=related.snapshot, element=related.element,
+                              start=related.excerpt.index("on names"), end=len(related.excerpt))
+    hits = [SearchHit(evidence=item, requirement_id=task.requirement_id, rank=index,
+                      score=RetrievalScore(metric="test", raw=0.99, normalized=0.99, direction="higher"))
+            for index, item in enumerate([selected, primary], 1)]
+    state["planner"] = PlannerState(output=PlannerOutput(use_retrieval=True, tasks=[task]))
+    state["retrieval"] = RetrievalState(hit_log=hits)
+    boundary = DecisionsBoundary()
+
+    pre = make_pre_synthesis_validation_node(False, decisions_client=boundary)(state)
+    assert not pre["retry"].needs_retry
+    pre_payload = next(json.loads(call["input"]) for call in boundary.requests
+                       if "requirements" in json.loads(call["input"]))
+    pre_requirement = pre_payload["requirements"][0]
+    assert pre_requirement["task"]["requirement"]["symbols"] == ["pandas.merge"]
+    assert {source["id"] for source in pre_requirement["sources"]} == {selected.id, primary.id}
+
+    state["response"] = state["response"].model_copy(update={
+        "result": finalize_answer(text_document("on specifies the merge keys.", basis="source",
+                                                 refs=[selected.id]), [selected, primary], retrieval_required=True),
+        "evidence_packet": [selected, primary],
+        "evidence_requirement_map": {item.id: [task.requirement_id] for item in [selected, primary]},
+    })
+    boundary.probabilities["requirement_0"] = 0.2
+    post = make_post_synthesis_validation_node(False, decisions_client=boundary)(state)
+
+    requirement = json.loads(boundary.requests[-1]["input"])["requirements"][0]
+    assert requirement["task"] == pre_requirement["task"]
+    assert [source["id"] for source in requirement["sources"]] == [selected.id]
+    assert requirement["sources"][0]["excerpt"] == "on names the common key columns."
+    assert requirement["sources"][0]["selection"]["start"] > 0
+    assert post["retry"].needs_retry
+    assert "semantic_cited_requirement:merge_usage" in post["retry"].retrieval_feedback
+
+
+@pytest.mark.parametrize("extra_request, fulfilled, needs_retry", [
+    ("", 0.99, False),
+    (" 모든 매개변수와 null 키 주의사항도 빠짐없이 설명해줘.", 0.2, True),
+])
+def test_api_usage_scope_is_shared_without_waiving_explicit_answer_requirements(
+    extra_request, fulfilled, needs_retry,
+):
+    """Scope policy reaches both checks; source availability cannot fill answer omissions."""
+    request = "pandas.merge 사용법을 공식 문서 기준으로 설명해줘." + extra_request
+    task = RetrievalTask(route="docs", query=request, k=1, requirement_id="merge_usage", requirement={
+        "library": "pandas", "symbols": ["pandas.merge"], "evidence_needs": ["explanation"],
+        "match": "symbol",
+    })
+    evidence = _evidence(
+        "pandas.merge(left, right, on=None, how='inner') merges two DataFrames. "
+        "on names a common key column; inner keeps matching keys. Null keys match each other.",
+        subject="pandas.merge", source_uri="https://pandas.pydata.org/docs/reference/api/pandas.merge.html",
+        parser="official_html",
+    )
+    document = AnswerDocument.model_validate({"blocks": [
+        {"type": "code", "language": "python", "content": {
+            "text": "result = pandas.merge(left, right, on='id', how='inner')",
+            "basis": "example", "refs": [evidence.id],
+        }},
+        {"type": "paragraph", "content": [{
+            "text": "left와 right는 id 열이 있는 DataFrame이라고 가정합니다. "
+                    "on은 공통 키 열을 지정하며, inner는 일치하는 키의 행을 결합합니다.",
+            "basis": "source", "refs": [evidence.id],
+        }]},
+    ]})
+    state = _state()
+    state["runtime"] = state["runtime"].model_copy(update={
+        "user_input": request,
+        "request_contract": RequestContract(request_id="decisions-validation", body={
+            "kind": "compose", "instruction": request,
+        }),
+    })
+    state["planner"] = PlannerState(output=PlannerOutput(use_retrieval=True, tasks=[task]))
+    state["response"] = state["response"].model_copy(update={
+        "result": finalize_answer(document, [evidence], retrieval_required=True),
+        "evidence_packet": [evidence], "evidence_requirement_map": {evidence.id: [task.requirement_id]},
+    })
+    boundary = DecisionsBoundary({"request_fulfilled": fulfilled})
+
+    updates = make_post_synthesis_validation_node(False, decisions_client=boundary)(state)
+
+    payload = json.loads(boundary.requests[0]["input"])
+    questions = {question["name"]: question["instructions"] for question in boundary.requests[0]["questions"]}
+    assert semantic.API_USAGE_SCOPE_INSTRUCTIONS in questions["requirement_0"]
+    assert semantic.API_USAGE_SCOPE_INSTRUCTIONS in questions["request_fulfilled"]
+    assert payload["confirmed_request"]["body"]["instruction"] == request
+    assert payload["displayed_document"] == document.model_dump(mode="json")
+    assert payload["requirements"][0]["sources"][0]["excerpt"] == evidence.excerpt
+    assert updates["retry"].needs_retry is needs_retry
+    if needs_retry:
+        assert "semantic_request_fulfillment" in updates["retry"].retrieval_feedback
+
+
 def test_post_validation_repairs_unfulfilled_request_without_retrieval():
     """형식 오류가 없는 일반 답변도 요청 충족 확률이 낮으면 한 번 재합성한다."""
     state = _state(retrieval=False, answer="요청과 관계없는 문장입니다.")
@@ -542,6 +696,10 @@ def test_post_validation_keeps_each_units_cited_sources_separate():
     assert len(units) == 2
     assert [source["id"] for source in units[0]["cited_sources"]] == [packet[0].id]
     assert [source["id"] for source in units[1]["cited_sources"]] == [packet[1].id]
+    for unit, question in zip(units, boundary.requests[0]["questions"]):
+        assert question["name"] == unit["name"]
+        assert f"unit named {unit['name']}" in question["instructions"]
+        assert "units[" not in question["instructions"]
     assert updates["response"].kind == "answer"
 
 
