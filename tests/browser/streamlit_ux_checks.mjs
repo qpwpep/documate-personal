@@ -33,6 +33,42 @@ export async function composerText(tab, expected) {
   return { check: "composer text", value: actual };
 }
 
+/** Run with a real rejected file selected, before removing/replacing it. */
+export async function rejectedAttachmentPreservesDraft(tab, draft) {
+  const input = tab.playwright.getByRole("textbox", {
+    name: "공식 문서나 업로드한 자료에 대해 질문하세요", exact: true,
+  });
+  await input.fill(draft);
+  const messagesBefore = await tab.playwright.evaluate(() =>
+    document.querySelectorAll('[data-testid="stChatMessage"]').length);
+  await input.press("Enter");
+  await tab.getAXState({ emit: false });
+  await composerText(tab, draft);
+  const state = await tab.playwright.evaluate(() => ({
+    rejected: document.querySelectorAll('[data-testid="stChatInput"] [data-testid="stFileChip"][aria-invalid="true"]').length,
+    messages: document.querySelectorAll('[data-testid="stChatMessage"]').length,
+    sendDisabled: document.querySelector('[data-testid="stChatInputSubmitButton"]')?.disabled,
+    notice: document.getElementById("documate-upload-selection")?.textContent || "",
+  }));
+  assert(state.rejected > 0, "Rejected attachment disappeared on attempted submission");
+  assert(state.messages === messagesBefore, "Question was sent without its rejected attachment");
+  assert(state.sendDisabled, "Send remains enabled with a rejected attachment");
+  assert(state.notice.includes("전송할 수 없습니다"), "Rejected attachment lacks a recovery instruction");
+  return { check: "rejected attachment blocks submission and preserves draft", ...state };
+}
+
+/** Remove an actual rejected selection and verify the same draft can continue. */
+export async function rejectedAttachmentRecovery(tab, { filename, draft, remaining = 0 }) {
+  await tab.playwright.getByRole("button", { name: `Remove ${filename}`, exact: true }).click();
+  await tab.getAXState({ emit: false });
+  await composerText(tab, draft);
+  const chips = await tab.playwright.getByTestId("stChatInput").getByTestId("stFileChip").count();
+  const enabled = await tab.playwright.getByRole("button", { name: "Send message", exact: true }).isEnabled();
+  assert(chips === remaining, `Recovery lost or retained unexpected attachments: ${chips}`);
+  assert(enabled === (draft !== "" || remaining > 0), "Send did not recover after removing the rejected file");
+  return { check: "rejected attachment removal preserves draft and restores submission", chips, enabled };
+}
+
 export async function answerCompleted(tab, answerText) {
   const answer = tab.playwright.getByText(answerText, { exact: true });
   assert(await answer.isVisible(), `Final answer not displayed: ${answerText}`);
@@ -132,6 +168,39 @@ export async function readableText(tab, text) {
   });
   assert(measured.contrast >= 4.5, `Unreadable text ${text}: ${JSON.stringify(measured)}`);
   return { check: "text contrast", text, ...measured };
+}
+
+/** Measure rendered code text against its actual opaque block background. */
+export async function codeContrast(tab) {
+  const measured = await tab.playwright.getByTestId("stCode").evaluateAll(blocks => {
+    function luminance(css) {
+      return css.match(/[\d.]+/g).slice(0, 3).map(Number).map(v => {
+        const s = v / 255;
+        return s <= 0.04045 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+      }).reduce((sum, v, i) => sum + v * [0.2126, 0.7152, 0.0722][i], 0);
+    }
+    return blocks.flatMap(block => Array.from(block.querySelectorAll("pre, code, span"))
+      .filter(el => el.getClientRects().length > 0
+        && Array.from(el.childNodes).some(node => node.nodeType === 3 && node.textContent.trim()))
+      .map(el => {
+        const color = getComputedStyle(el).color;
+        let background = "";
+        for (let parent = el; parent; parent = parent.parentElement) {
+          const candidate = getComputedStyle(parent).backgroundColor;
+          if (candidate !== "rgba(0, 0, 0, 0)" && candidate !== "transparent") {
+            background = candidate;
+            break;
+          }
+        }
+        const a = luminance(color), b = luminance(background);
+        return { color, background, contrast: (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05) };
+      }));
+  });
+  assert(measured.length > 0, "No rendered code text to measure");
+  const worst = measured.reduce((a, b) => a.contrast < b.contrast ? a : b);
+  assert(worst.contrast >= 4.5, `Unreadable code: ${JSON.stringify(worst)}`);
+  return { check: "rendered code contrast", samples: measured.length, minimum: worst.contrast,
+    colors: [...new Set(measured.map(sample => sample.color))] };
 }
 
 export async function visibleFocus(tab) {

@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import re
+from dataclasses import replace
 from html import escape
 from textwrap import dedent
 from urllib.parse import quote, urljoin, urlparse
 
 import streamlit as st
 from markdown_it import MarkdownIt
+from markdown_it.token import Token
 
 from src.core.documents import SourceAnchor, TableData
 from src.core.evidence import EvidenceRef, selected_source_anchors, source_line_records
@@ -43,8 +45,12 @@ def render_evidence(evidence: EvidenceRef, *, cited_texts: list[str] | None = No
 
     if snapshot.capture_scope == "provider_excerpt":
         st.caption("원문의 일부만 수집한 자료입니다. 아래에 당시 수집한 내용을 표시합니다.")
+    quality_messages = {
+        "html_structure_flattened": "원문 웹페이지에서 본문을 추출했습니다. 표와 배치 등 일부 서식은 원본 페이지와 다를 수 있습니다.",
+        "freshness_unverified": "현재 공식 페이지를 확인하지 못해 검색에 보관된 내용을 사용했습니다. 최신 문서와 다를 수 있습니다.",
+    }
     for issue in snapshot.quality_issues:
-        st.warning(str(issue))
+        st.warning(quality_messages.get(issue, issue))
 
     st.markdown("**답변에 사용한 부분**")
     code_ranges = _matching_code_ranges(evidence, cited_texts or []) if element.kind == "code" else []
@@ -62,7 +68,10 @@ def render_evidence(evidence: EvidenceRef, *, cited_texts: list[str] | None = No
             # Unknown physical provenance stays unnumbered.
             render_code(evidence.excerpt, language=element.language or "text")
     elif snapshot.source_type == "official" and element.table is None:
-        _render_source_markdown(evidence.excerpt, source_uri=source_uri)
+        _render_source_markdown(
+            evidence.excerpt, source_uri=source_uri,
+            provider_excerpt=snapshot.capture_scope == "provider_excerpt",
+        )
     else:
         st.text(evidence.excerpt)
     if evidence.selection.cell_ids:
@@ -91,10 +100,12 @@ def render_evidence(evidence: EvidenceRef, *, cited_texts: list[str] | None = No
         st.caption(f"자료 내용 해시: {snapshot.content_hash}")
 
 
-def _render_source_markdown(text: str, *, source_uri: str) -> None:
+def _render_source_markdown(text: str, *, source_uri: str, provider_excerpt: bool) -> None:
     """Resolve parsed links against their source without rewriting captured text."""
     parser = MarkdownIt("commonmark", {"html": False}).enable(["table", "strikethrough"])
     tokens = parser.parse(_source_reader_markdown(text, parser))
+    if provider_excerpt:
+        _separate_flattened_headings(tokens)
     pending = list(tokens)
     url_attributes = {"link_open": "href", "image": "src"}
     while pending:
@@ -110,6 +121,10 @@ def _render_source_markdown(text: str, *, source_uri: str) -> None:
     content = parser.renderer.render(tokens, parser.options, {})
     st.html(
         '<style>.dm-source-markdown {overflow-wrap:anywhere;max-width:100%}'
+        '.dm-source-markdown :is(h1,h2,h3,h4,h5,h6) {line-height:1.4;margin:0.75rem 0 0.4rem}'
+        '.dm-source-markdown h1 {font-size:1.25rem}'
+        '.dm-source-markdown h2 {font-size:1.125rem}'
+        '.dm-source-markdown :is(h3,h4,h5,h6) {font-size:1rem}'
         '.dm-source-markdown pre {overflow-x:auto;max-width:100%;padding:0.75rem;'
         'border:1px solid currentColor;border-radius:0.4rem;white-space:pre}'
         '.dm-source-markdown code {font-family:monospace}'
@@ -117,6 +132,36 @@ def _render_source_markdown(text: str, *, source_uri: str) -> None:
         '.dm-source-markdown img {max-width:100%;height:auto}</style>'
         '<div class="dm-source-markdown">' + content + '</div>'
     )
+
+
+def _separate_flattened_headings(tokens: list[Token]) -> None:
+    """Recover a provider-flattened Sphinx heading at its permalink boundary."""
+    for index in reversed(range(len(tokens) - 2)):
+        opening, inline, closing = tokens[index:index + 3]
+        if opening.type != "heading_open" or opening.level != 0 or inline.children is None:
+            continue
+        nesting = 0
+        for child_index, child in enumerate(inline.children):
+            nesting += child.nesting
+            # A literal inside code, emphasis or a link is not a block boundary.
+            if nesting or child.type != "text":
+                continue
+            title, separator, body = child.content.partition("#. ")
+            if not separator:
+                continue
+            title_children = inline.children[:child_index] + [replace(child, content=title)]
+            body_children = [replace(child, content=body)] + inline.children[child_index + 1:]
+            title_text = "".join(item.content for item in title_children)
+            body_text = "".join(item.content for item in body_children)
+            if not title_text.strip() or not body_text.strip():
+                continue
+            tokens[index:index + 3] = [
+                opening, replace(inline, content=title_text, children=title_children), closing,
+                Token("paragraph_open", "p", 1, block=True),
+                replace(inline, content=body_text, children=body_children),
+                Token("paragraph_close", "p", -1, block=True),
+            ]
+            break
 
 
 def _source_reader_markdown(text: str, parser: MarkdownIt) -> str:

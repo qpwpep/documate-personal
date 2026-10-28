@@ -13,6 +13,8 @@ HTTP delay, allowing pending UI events to be tested while a request is in flight
 limitations (two answer-wide and one attached to the excerpt).
 ``문서:`` questions return an explicitly synthetic Markdown source for checking
 headings, lists, links, code fences and the retained raw-source view.
+``평탄화:`` reproduces a flattened provider heading with an explicitly synthetic
+pandas.merge source and a Python answer block for contrast checks.
 ``매개변수:`` reproduces indented documentation definitions. ``긴답변:`` returns
 ten paragraphs; ``지연:긴답변`` waits eight seconds so the reader can scroll away.
 No LLM, search provider, or Slack service is called.
@@ -35,7 +37,7 @@ from urllib.parse import unquote, urlparse
 import streamlit as st
 
 from src.core.answer_export import build_answer_export_operation
-from src.core.answer_schema import ActionReceipt, AnswerDocument, AnswerResponse, ContentUnit, ParagraphBlock, ResponseIssue, export_answer_text, finalize_answer, text_document
+from src.core.answer_schema import ActionReceipt, AnswerDocument, AnswerResponse, CodeBlock, ContentUnit, ParagraphBlock, ResponseIssue, export_answer_text, finalize_answer, text_document
 from src.core.contracts.outcome import AnswerExportResult, TurnResult
 from src.core.documents import DocumentElement, build_snapshot
 from src.core.evidence import build_evidence
@@ -58,6 +60,21 @@ MARKDOWN_SOURCE_TEXT = """# 문서 표시 검증용 합성 자료
 values.reshape((2, 3))
 ```
 """
+FLATTENED_SOURCE_TEXT = (
+    "Title: pandas.merge — 브라우저 검증용 합성 자료\n"
+    "# pandas.merge#. pandas.merge(*left*, *right*, *how='inner'*, *on=None*, "
+    "*left_on=None*, *right_on=None*, *left_index=False*, *right_index=False*, "
+    "*sort=False*, *suffixes=('_x', '_y')*, *indicator=False*, *validate=None*)#. "
+    ": 이 내용은 실제 공식 문서 검색 결과가 아니라 평탄화된 원문의 표시를 확인하는 합성 자료입니다. "
+    "Merge DataFrame or named Series objects with a database-style join. "
+    "The join is done on columns or indexes. If joining columns on columns, "
+    "the DataFrame indexes will be ignored. "
+    "* left: use only keys from left frame, similar to a SQL left outer join. "
+    "* right: use only keys from right frame, similar to a SQL right outer join. "
+    "* inner: use intersection of keys from both frames, similar to a SQL inner join. "
+    "on: Column or index level names to join on. "
+    "[표시 검증용 링크](https://pandas.pydata.org/docs/reference/api/pandas.merge.html)."
+)
 PARAMETER_SOURCE_TEXT = """reshape(*a*, *shape*, *order='C'*)
 :   배열 모양을 바꾸는 매개변수 설명 검증용 합성 자료입니다.
 
@@ -110,8 +127,11 @@ class FixtureState:
                     problem=make_problem("evidence_insufficient", "pre_synthesis_validation"),
                 )
             else:
-                markdown_source = query.startswith(("문서:", "매개변수:"))
-                if query.startswith("매개변수:"):
+                flattened_source = query.startswith("평탄화:")
+                markdown_source = query.startswith(("문서:", "매개변수:", "평탄화:"))
+                if flattened_source:
+                    source_text = FLATTENED_SOURCE_TEXT
+                elif query.startswith("매개변수:"):
                     source_text = PARAMETER_SOURCE_TEXT
                 else:
                     source_text = MARKDOWN_SOURCE_TEXT if markdown_source else SOURCE_TEXT
@@ -120,6 +140,7 @@ class FixtureState:
                     title="문서 표시 검증용 합성 자료" if markdown_source else "브라우저 회귀 검증 자료",
                     media_type="text/markdown" if markdown_source else "text/html", source_type="official", content=source_text,
                     parser="browser-fixture", parser_version="1",
+                    capture_scope="provider_excerpt" if flattened_source else "full_document",
                 )
                 evidence = build_evidence(
                     snapshot=snapshot,
@@ -135,6 +156,18 @@ class FixtureState:
                     SOURCE_TEXT if partial else f"회귀 검증 답변: {query}",
                     basis="excerpt" if partial else "source", refs=[evidence.id],
                 )
+                if flattened_source:
+                    document = text_document(
+                        "브라우저 회귀 검증용 합성 답변입니다. 근거에서 평탄화된 pandas.merge 제목과 본문을 확인하세요. "
+                        "아래 코드는 라이트·다크 모드의 구문 색상 대비를 확인하는 합성 예시입니다.",
+                        basis="source", refs=[evidence.id],
+                    )
+                    document.blocks.append(CodeBlock(language="python", content=ContentUnit(
+                        text='import pandas as pd\n\n# 합성 코드 예시\nleft = pd.DataFrame({"key": [1, 2]})\n'
+                             'right = pd.DataFrame({"key": [1], "value": [10]})\n'
+                             'result = pd.merge(left, right, on="key", how="left")\nprint(result)',
+                        basis="example", refs=[evidence.id],
+                    )))
                 if query.startswith(("긴답변:", "지연:긴답변")):
                     document = AnswerDocument(blocks=[
                         ParagraphBlock(content=[ContentUnit(

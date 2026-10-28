@@ -169,13 +169,15 @@ export default function ({ data, setStateValue, parentElement }) {
     // after submit also emits blur, so blur must never request a rerun.
     if (event.key === "Tab" && event.target.matches?.(selector)) flushDraft();
     if (event.key === "Enter" && !event.shiftKey && !event.isComposing
-        && event.target.matches?.(selector) && event.target.value.trim()) {
-      beginSubmission();
+        && event.target.matches?.(selector)) {
+      if (blockRejectedSubmission(event)) return;
+      if (event.target.value.trim()) beginSubmission();
     }
   }
 
   function onPointerDown(event) {
     const send = event.target.closest?.('[data-testid="stChatInputSubmitButton"]');
+    if (send && blockRejectedSubmission(event)) return;
     if (send && !send.disabled) beginSubmission();
     // Flush before a navigation trigger; that trigger then carries this widget
     // state even if Streamlit coalesces the two rerun requests.
@@ -186,6 +188,8 @@ export default function ({ data, setStateValue, parentElement }) {
   }
 
   function onClick(event) {
+    if (event.target.closest?.('[data-testid="stChatInputSubmitButton"]')
+        && blockRejectedSubmission(event)) return;
     // The component's draft event and a Streamlit button callback can arrive
     // separately. Protect the visible draft before a suggestion can replace it.
     const suggestion = event.target.closest?.('[class*="-quick_prompt_"] button');
@@ -197,7 +201,10 @@ export default function ({ data, setStateValue, parentElement }) {
   }
 
   function onInput(event) {
-    if (event.target.matches?.(selector)) storeDraft();
+    if (event.target.matches?.(selector)) {
+      storeDraft();
+      renderUploadSelection();
+    }
     // Re-enable examples as soon as the user clears a draft, without rerunning
     // on every keystroke. The submit latch excludes submission-driven clearing.
     if (event.target.matches?.(selector) && event.target.value === "") flushDraft();
@@ -235,14 +242,36 @@ export default function ({ data, setStateValue, parentElement }) {
     const rejected = chips.filter(chip => chip.getAttribute("aria-invalid") === "true").length;
     const uploading = chips.filter(chip => chip.querySelector('[data-testid="stFileChipIconSpinner"]')).length;
     const waiting = chips.length - rejected - uploading;
+    const send = composer?.querySelector('[data-testid="stChatInputSubmitButton"]');
+    if (send && rejected) {
+      send.dataset.documateUploadBlocked = "true";
+      if (!send.disabled) send.disabled = true;
+    } else if (send?.dataset.documateUploadBlocked) {
+      delete send.dataset.documateUploadBlocked;
+      // Return control to the native picker after the user removes its errors.
+      const input = document.querySelector(selector);
+      send.disabled = input.disabled || uploading > 0 || (input.value === "" && waiting === 0);
+    }
     const states = [];
     if (waiting) states.push(`전송 대기 ${waiting}개`);
     if (uploading) states.push(`파일 업로드 중 ${uploading}개`);
-    if (rejected) states.push(`선택 오류 ${rejected}개 · 파일 옆의 오류를 확인하고 해당 파일을 제거하거나 다시 선택하세요.`);
+    if (rejected) states.push(`선택 오류 ${rejected}개 · 파일 옆의 오류를 확인하고 해당 파일을 제거하거나 지원 형식·크기에 맞는 파일로 다시 선택하세요. 작성한 질문은 유지됩니다. 오류를 해결하기 전에는 전송할 수 없습니다.`);
     const text = chips.length
       ? states.join(" · ") + " 아직 검색에 사용되지 않습니다." + (waiting ? " 전송하면 자료를 준비합니다." : "")
       : "선택한 파일은 전송 후 검색에 사용됩니다. 파일만 먼저 전송할 수도 있습니다.";
     if (status.textContent !== text) status.textContent = text;
+  }
+
+  function blockRejectedSubmission(event) {
+    const composer = document.querySelector(selector)?.closest('[data-testid="stChatInput"]');
+    if (!composer?.querySelector('[data-testid="stFileChip"][aria-invalid="true"]')) return false;
+    // Streamlit omits rejected files from its submit payload. Stop before its
+    // handler clears the picker and draft, including keyboard submission.
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    storeDraft();
+    renderUploadSelection();
+    return true;
   }
 
   document.addEventListener("keydown", onKeyDown, true);
@@ -261,7 +290,7 @@ export default function ({ data, setStateValue, parentElement }) {
     renderUploadSelection();
     settleAnswerScroll();
   });
-  observer.observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ["data-collapsed", "aria-invalid"] });
+  observer.observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ["data-collapsed", "aria-invalid", "disabled"] });
   recoverSidebarFocus();
   renderUploadSelection();
   persist();

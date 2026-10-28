@@ -113,6 +113,30 @@ _THEME_TOKENS = {
         "라이트": "#215f58",
         "다크": "#9fe6d8",
     },
+    "dm-code-bg": {
+        "라이트": "#e8eeea",
+        "다크": "#21302e",
+    },
+    "dm-code-keyword": {
+        "라이트": "#1959a5",
+        "다크": "#8bc1ff",
+    },
+    "dm-code-string": {
+        "라이트": "#246633",
+        "다크": "#94d7a1",
+    },
+    "dm-code-value": {
+        "라이트": "#70448f",
+        "다크": "#d6b1f0",
+    },
+    "dm-code-operator": {
+        "라이트": "#914514",
+        "다크": "#f4b17d",
+    },
+    "dm-code-important": {
+        "라이트": "#a22d38",
+        "다크": "#ffabb4",
+    },
     "dm-chat-input-bg": {
         "라이트": "#fffdfa",
         "다크": "#1d1e20",

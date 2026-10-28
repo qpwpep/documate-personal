@@ -318,6 +318,61 @@ def test_official_markdown_is_readable_with_source_link_first_and_verbatim_captu
     assert app.code[0].value == captured
 
 
+def test_flattened_provider_heading_separates_title_from_description_without_changing_evidence():
+    captured = (
+        "Title: pandas.merge — pandas 3.0.6 documentation\n"
+        "# `pandas.merge`#. pandas.merge(*left*, *right*, *how='inner'*)#. "
+        ": Merge DataFrame or named Series objects with a database-style join. "
+        "See the [merge guide](../user_guide/merging.html).\n\n"
+        "## Examples\n\n```python\nresult = pd.merge(left, right)\n```"
+    )
+    evidence = build_evidence(
+        snapshot=build_snapshot(
+            source_uri="https://pandas.pydata.org/docs/reference/api/pandas.merge.html",
+            title="pandas.merge", media_type="text/markdown", source_type="official",
+            content=captured, parser="provider", parser_version="1", capture_scope="provider_excerpt",
+        ),
+        element=DocumentElement(element_id="description", kind="paragraph", text=captured),
+    )
+    original = evidence.model_dump(mode="json")
+
+    app = AppTest.from_function(_source_app, args=(original,)).run()
+
+    assert not app.exception
+    rendered = app.get("html")[0].proto.body
+    assert "<h1><code>pandas.merge</code></h1>" in rendered
+    assert "<p>pandas.merge(<em>left</em>, <em>right</em>, <em>how='inner'</em>)#. " in rendered
+    assert ": Merge DataFrame or named Series objects with a database-style join." in rendered
+    assert 'href="https://pandas.pydata.org/docs/reference/user_guide/merging.html"' in rendered
+    assert "<h2>Examples</h2>" in rendered
+    assert '<pre><code class="language-python">result = pd.merge(left, right)\n</code></pre>' in rendered
+    assert app.code[0].value == captured
+    assert evidence.model_dump(mode="json") == original
+
+
+@pytest.mark.parametrize(("capture_scope", "captured", "expected_heading"), [
+    ("provider_excerpt", "# Read `value#. literal` safely", "Read <code>value#. literal</code> safely"),
+    ("provider_excerpt", "# Read [value#. literal](https://example.org) safely",
+     'Read <a href="https://example.org">value#. literal</a> safely'),
+    ("full_document", "# Heading#. ordinary text", "Heading#. ordinary text"),
+])
+def test_provider_heading_repair_preserves_literal_markdown_and_full_documents(capture_scope, captured, expected_heading):
+    evidence = build_evidence(
+        snapshot=build_snapshot(
+            source_uri="https://docs.example.org/guide", title="Guide", media_type="text/markdown",
+            source_type="official", content=captured, parser="provider", parser_version="1",
+            capture_scope=capture_scope,
+        ),
+        element=DocumentElement(element_id="description", kind="paragraph", text=captured),
+    )
+
+    app = AppTest.from_function(_source_app, args=(evidence.model_dump(mode="json"),)).run()
+
+    assert not app.exception
+    assert f"<h1>{expected_heading}</h1>" in app.get("html")[0].proto.body
+    assert app.code[0].value == captured
+
+
 def test_official_links_resolve_against_captured_page_without_rewriting_code_or_raw_source():
     source_uri = "https://numpy.org/doc/2.1/user/absolute_beginners.html"
     relative = "../reference/generated/numpy.concatenate.html#numpy.concatenate"

@@ -385,7 +385,7 @@ div.stLinkButton > a:focus-visible {
 }
 
 [data-testid="stCode"] pre {
-    background: var(--dm-inline-code-bg) !important;
+    background: var(--dm-code-bg) !important;
     color: var(--dm-inline-code-text) !important;
 }
 
@@ -394,8 +394,41 @@ div.stLinkButton > a:focus-visible {
     color: var(--dm-inline-code-text) !important;
 }
 
+/* Prism's own theme does not follow the app preference. Keep its token colors
+   and an opaque background together so every code token stays readable. */
+[data-testid="stCode"] .token {
+    background: transparent !important;
+    color: var(--dm-inline-code-text) !important;
+}
+
+[data-testid="stCode"] .token:is(.comment, .prolog, .doctype, .cdata, .punctuation, .unchanged),
+[data-testid="stCode"] .comment.linenumber,
 [data-testid="stCode"] .react-syntax-highlighter-line-number {
     color: var(--dm-muted) !important;
+}
+
+[data-testid="stCode"] .token:is(.keyword, .tag, .function, .class-name, .selector, .property, .attr-name, .variable) {
+    color: var(--dm-code-keyword) !important;
+}
+
+[data-testid="stCode"] .token:is(.string, .char, .attr-value, .inserted) {
+    color: var(--dm-code-string) !important;
+}
+
+[data-testid="stCode"] .token:is(.boolean, .constant, .symbol, .number, .regex, .url) {
+    color: var(--dm-code-value) !important;
+}
+
+[data-testid="stCode"] .token:is(.operator, .entity, .decorator, .atrule) {
+    color: var(--dm-code-operator) !important;
+}
+
+[data-testid="stCode"] .token:is(.important, .deleted) {
+    color: var(--dm-code-important) !important;
+}
+
+[data-testid="stCode"] .namespace {
+    opacity: 1;
 }
 
 [data-testid="stCodeCopyButton"] {
