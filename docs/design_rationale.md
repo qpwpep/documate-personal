@@ -22,9 +22,11 @@ DocuMate는 LangGraph 기반 학습 보조 에이전트입니다. 현재 구조�
 
 `GraphState.messages`는 LangGraph의 `add_messages` reducer를 사용하므로 최근 리스트만 반환해서는 누락된 과거 메시지가 삭제되지 않습니다. 요약 노드는 `RemoveMessage(id=REMOVE_ALL_MESSAGES)`와 retained suffix를 함께 반환해 reducer에 전체 교체 의도를 명시합니다. router와 요약 노드는 같은 pure compaction plan을 사용하므로 trigger 판단과 실제 퇴출 범위가 어긋나지 않습니다.
 
-summary도 별도로 bounded합니다. 새 summary는 `기존 bounded summary + 이번에 새로 퇴출된 대화`를 하나의 replacement memory로 다시 작성한 결과이며, 이전 summary 뒤에 새 문자열을 append하지 않습니다. `SUMMARY_MAX_TOKENS`는 LLM 생성 여유를, `MEMORY_SUMMARY_MAX_TOKENS`와 `MEMORY_SUMMARY_MAX_BYTES`는 저장 길이를 관리하므로 생성 예산 조정이 대화 메모리 보존량을 암묵적으로 바꾸지 않습니다. Tool/System payload는 요약 입력에서 제외합니다. summarizer 예외나 빈 출력에는 기존 summary와 새 transcript의 head/tail을 함께 보존하는 deterministic fallback을 적용하고, 결과를 token·byte 상한에 다시 맞춥니다. fallback 사용 여부와 before/after 크기는 기록하지만 대화 내용은 로그에 남기지 않습니다.
+summary도 별도로 bounded합니다. 새 summary는 `기존 bounded summary + 이번에 새로 퇴출된 대화`를 하나의 replacement memory로 다시 작성한 결과이며, 이전 summary 뒤에 새 문자열을 append하지 않습니다. `SUMMARY_MAX_TOKENS`는 LLM 생성 여유를, `MEMORY_SUMMARY_MAX_TOKENS`와 `MEMORY_SUMMARY_MAX_BYTES`는 저장 길이를 관리하므로 생성 예산 조정이 대화 메모리 보존량을 암묵적으로 바꾸지 않습니다. 요약 지시에는 두 저장 상한으로 계산한 실효 byte 목표를 명시해, 저장 과정에서 버릴 내용을 생성하는 일을 줄입니다. Tool/System payload는 요약 입력에서 제외합니다. summarizer 예외나 빈 출력에는 기존 summary와 새 transcript의 head/tail을 함께 보존하는 deterministic fallback을 적용하고, 결과를 token·byte 상한에 다시 맞춥니다. SDK 내부 재시도 대신 공통 호출·시간 예산의 명시적 재시도를 사용해 실패한 시도도 관측합니다. fallback 사용 여부와 before/after·생성·저장 크기는 기록하지만 대화 내용은 로그에 남기지 않습니다.
 
 planner와 synthesis에 전달되는 summary는 과거 사용자 입력에서 유래한 비신뢰 데이터입니다. 고정 System policy가 그 안의 명령을 따르거나 검색 evidence로 취급하지 말라고 명시하고, 실제 summary payload는 system instruction이 아닌 별도 assistant data message로 전달합니다.
+
+planner는 기존 Human/AI 메시지 순서, 발화 ID와 원문 ledger, 이전 답변 표시 텍스트, previous·pending 원본 답변 문서를 함께 전달합니다. 후속 복사 요청 해석의 품질 위험이 실제 평가에서 반복되어, 이 문맥을 공유 ID로 압축하는 변경은 적용 범위에서 제외했습니다. 정보 소실이 확인됐다는 뜻은 아니며, 원래 표현의 중복을 유지하고 고정 시스템 지시의 반복 문장만 간결하게 정리했습니다. 원문 선택과 계약 바인딩, 원본 답변 선택과 export metadata의 의미는 유지합니다.
 
 ### 요청 계약과 실행 의사의 분리
 
@@ -78,6 +80,8 @@ flowchart LR
 
 문서 URI와 제목, 선택 범위, 수집 범위와 품질 정보를 Decisions에 함께 보냅니다. 버전·대상·설명의 충분성은 이 문맥과 실제 발췌를 바탕으로 판단합니다. 도구의 `answerability="unknown"`이나 후보 수를 의미적 성공으로 바꾸지 않습니다. 요구의 충분성은 실제 합성 packet의 검증 결과로 남기며 공식 출처 허용 목록과 원문 선택 범위 검사는 별도로 유지합니다.
 
+Decisions 사전 검증 입력은 출처·요구의 공유 registry를 사용합니다. 같은 근거가 후보, 요구, packet에 연결되어도 출처 본문은 한 번만 전송하고 정확한 ID로 관계를 유지합니다. 공통 정책과 종류별 rubric은 한 번만 전달하며 각 질문은 평가 대상과 범위를 지정합니다. 사후 검증은 실제 표시 본문, 각 내용 단위의 인용 출처, 요구별 task·sources, 질문별 공통 정책과 rubric을 직접 제공하는 기존 표현을 유지합니다. 사후 입력을 압축한 실제 평가에서 정상 초안의 미통과가 반복되어 이 단계의 중복 제거는 적용 범위에서 제외했습니다. 판정 임계값·질문 수·실패 차단을 완화해 비용을 줄이지 않습니다. 출처 정체성이나 질문별 scope를 텍스트 유사도로 합치지 않고, 실제 packet과 사전 판정 캐시의 의미적 동일성 검사는 유지합니다. 반복 입력을 줄이는 이 표현 변경과 제공자 프롬프트 캐시의 단가 차이는 별도로 측정합니다.
+
 `upload` route는 현재 세션의 활성 첨부 집합을 검색합니다. `.py`·`.ipynb`와 함께 Docling 기능을 활성화한 환경에서는 PDF·DOCX·스캔 PDF·단일 프레임 PNG/JPEG/TIFF/WebP/BMP를 처리합니다. `topic`은 Chroma 의미 검색과 Kiwi 형태소 분석을 사용하는 BM25 후보 검색을 결합하며 `symbols`도 literal anchor로 평가합니다. `symbol`·`definition`은 Python·Notebook source registry의 AST로 조회합니다. PDF에서 추출한 코드에 같은 분석 보장을 적용하지 않습니다. 명시한 파일 범위는 file ID로 제한하고 재시도에서도 유지합니다. 없는 파일과 근거를 확보하지 못한 파일은 누락으로 남깁니다. 세션 상태 확정 시 업로드 목록과 retriever 목록의 일치를 보장하고 요청 동안 같은 세션 락을 유지합니다. 실제 vector 검색과 source registry 조회의 파일 필터는 유지합니다.
 
 `retrieve_dispatch`는 독립 task를 병렬 실행한 뒤 planner 순서로 결과를 정렬합니다. 성공과 실패를 requirement ID로 구분하므로, 같은 docs route의 한 대상만 실패해도 다른 대상의 근거는 재사용할 수 있습니다. 실행 `status`와 별도로 `answerability`를 `covered`, `partial`, `missing`, `unknown`으로 기록해, 결과 개수나 route 실행 성공을 답변 가능성과 혼동하지 않습니다.
@@ -105,6 +109,8 @@ LLM은 [`AnswerDocument`](../src/core/answer_schema/models.py)의 `blocks`만 �
 [`iter_content_units()`](../src/core/answer_schema/models.py)는 문장뿐 아니라 제목·표 헤더·표 셀·코드도 같은 읽기 순서로 순회합니다. 검증, 인용 번호, UI, export가 이 본문을 기준으로 동작합니다. 모델이 사실을 다른 필드에 반복해 쓰거나 검증한 내용과 다른 문자열을 마지막에 선택하는 경로를 두지 않습니다.
 
 서버는 `AnswerResponse`에 `content`, `citations`, `checks`, `semantic_validation`, `issues`, `actions`, `content_hash`, `retrieval_required`를 구성합니다. `citations`에는 실제 사용한 원문 참조만 남기고 최초 사용 순서로 번호를 붙입니다. 검사는 내용 위치 ID에 연결하고 본문 구조·basis·refs를 포함한 hash로 revision을 확인합니다. 이 hash는 refs의 근거 정체성을 묶지만 citation의 존재 여부나 receipt까지 포함한 전체 응답 digest는 아닙니다. `retrieval_required`는 재검증에 필요한 출처 요구 조건을 보존합니다. 저장·Slack·대화용 문자열은 같은 본문에서 export하며 별도 생성 텍스트를 저장하지 않습니다. 의미 검증 보고서는 UI와 API 응답에서 확인하며, 재검증마다 달라질 수 있는 확률을 export 본문에 추가하지 않습니다. 이렇게 해야 사용자 입력의 정확한 복사와 같은 본문의 저장 재시도가 동일한 bytes를 유지합니다.
+
+수정할 입력 원문이나 원본 답변을 합성 프롬프트의 전용 payload로 제공할 때는, 대화 이력의 정확히 일치하는 범위만 참조 문구로 바꿉니다. 원본 답변의 의미 검증은 거절·임계값 미달 한계를 남기고 전체 보고서를 반복하지 않습니다. 서버 정본과 부분 답변·전달 안내는 보존합니다. 고정 Reference Policy를 동적 요청 계약보다 앞에 배치해 반복 prefix를 유지하지만, 이 순서 변경 자체가 입력 토큰 감소나 캐시 적중을 의미하지는 않습니다.
 
 ### 원문 연결 확인과 의미적 지지 평가의 구분
 
@@ -252,7 +258,7 @@ planner와 synthesis는 구조화 모델 호출 경로를 사용하며 provider 
 
 upload의 `topic` 검색은 Chroma와 `bm25s`가 독립적으로 찾은 후보를 RRF로 결합하고 명시한 심볼도 literal anchor로 평가합니다. 문서와 질의에 같은 Kiwi 기반 한국어·식별자 토큰화를 적용하며 검색용 토큰은 원문과 분리합니다. 기존 Chroma top-k 뒤 identifier·keyword·parameter signal로 재정렬하던 경로는 `baseline` 모드로 보존해 같은 자료에서 비교합니다. BM25 단독 `bm25` 모드도 같은 검색 인터페이스를 사용합니다. 명시한 파일별 후보를 확보하는 어댑터가 한 검색 호출의 쿼리 임베딩을 계산하고 파일별 조회에 공유합니다. 벡터 재사용은 그 호출 안에 한정하며 파일별 후보 예약, 원시 거리 기반 추가 후보 선택, 후속 정렬과 인용 의미를 유지합니다. `symbol`·`definition`은 전체 source registry의 AST 조회로 top-k 후보 밖의 범위도 찾습니다. 사용과 정의를 구분하고, 정의의 decorator·본문·Notebook cell 및 정확한 원문 offset을 유지합니다. source 전체를 확인할 수 없으면 부재를 단정하지 않고 `unknown`으로 남깁니다. 이 경로는 임의의 유사도 임계값 없이 이름이 없는 함수의 오발췌를 막으며 source에 명시된 정적 코드 범위만 확인합니다.
 
-원본의 물리적 줄 번호는 모델이 발췌를 다시 세어 만드는 정보가 아닙니다. 정확한 원문 anchor와 변경하지 않은 문자열에서 `source_lines`를 계산해 합성과 Decisions에 함께 제공합니다. LF·CRLF·CR과 빈 줄을 보존하며 부분 발췌의 시작 줄을 1로 다시 매기지 않습니다. 명시적인 원문 위치는 내용 단위의 `source_location`에 근거 ID와 원문 요소 기준 문자 범위를 지정합니다. 서버가 그 범위와 원본 매핑을 검증하고 파일·셀·줄 위치 문자열을 생성하므로, 파일명이나 자연어 문장 형태를 정규식으로 추측하지 않습니다. 재검증에서는 구조화 위치와 표시 문자열이 일치해야 합니다. 위치가 설명하는 내용의 근거와 요청 충족 여부는 의미 검증으로 확인합니다. 제한된 보정 뒤에도 위치를 확인하지 못하면 해당 내용을 제외하고 미완료로 남깁니다. 화면과 TXT는 같은 확정 본문을 사용하며, 정확한 매핑이 없으면 줄 번호를 추정하지 않습니다. Notebook의 줄은 파일 JSON이 아닌 해당 셀의 원문 줄입니다.
+원본의 물리적 줄 번호는 모델이 발췌를 다시 세어 만드는 정보가 아닙니다. 정확한 원문 anchor와 변경하지 않은 문자열에서 `source_lines`를 계산합니다. 합성과 Decisions 사전 검증에는 발췌 본문을 한 번 제공하고 줄별로는 위치만 전달해 같은 문자열을 반복하지 않습니다. 표도 셀 본문 대신 발췌 내 문자 범위와 행·열·병합 정보를 전달합니다. 사후 검증은 판정 품질을 위해 줄·선택 셀의 본문을 포함하는 기존 표현을 유지합니다. 전송용 `partial_end`는 모든 경로에서 마지막 개행만 제외한 완전한 줄과 실제 코드 내용이 잘린 줄을 구분하며, 정본의 선택 범위와 위치는 바꾸지 않습니다. LF·CRLF·CR과 빈 줄을 보존하며 부분 발췌의 시작 줄을 1로 다시 매기지 않습니다. 명시적인 원문 위치는 내용 단위의 `source_location`에 근거 ID와 원문 요소 기준 문자 범위를 지정합니다. 서버가 그 범위와 원본 매핑을 검증하고 파일·셀·줄 위치 문자열을 생성하므로, 파일명이나 자연어 문장 형태를 정규식으로 추측하지 않습니다. 재검증에서는 구조화 위치와 표시 문자열이 일치해야 합니다. 위치가 설명하는 내용의 근거와 요청 충족 여부는 의미 검증으로 확인합니다. 제한된 보정 뒤에도 위치를 확인하지 못하면 해당 내용을 제외하고 미완료로 남깁니다. 화면과 TXT는 같은 확정 본문을 사용하며, 정확한 매핑이 없으면 줄 번호를 추정하지 않습니다. Notebook의 줄은 파일 JSON이 아닌 해당 셀의 원문 줄입니다.
 
 문서 재첨부 비용은 세션별 변환·문서 임베딩 캐시로 줄입니다. 변환 키에는 원본 해시·형식·추출 설정·어댑터와 runtime 버전·모델 파일 해시를, 임베딩 키에는 정확한 청크 텍스트와 청킹·임베딩 모델 설정까지 반영합니다. query 임베딩은 디스크에 캐시하지 않습니다. 변환 캐시를 읽을 때 현재 원본 bytes·파일명·source URI로 새 snapshot을 만들므로 다른 이름의 첨부에 이전 파일 ID나 인용을 재사용하지 않습니다. 현재 입력·페이지·출력 한도도 다시 검사합니다. TTL·용량 한도로 보관 비용을 제한하며 캐시 손상이나 쓰기 실패가 정상 변환 결과를 무효화하지 않게 했습니다.
 
@@ -282,11 +288,11 @@ structured synthesis timeout에서는 사전에 충분성과 준비 판정을 �
 
 사용자에게는 간결한 답변을 제공하되, `include_debug=true`에서는 latency, planner/retrieval diagnostics, retry context, LLM call metadata를 확인할 수 있게 했습니다. 일반 응답 품질과 개발자 관측성을 같은 메시지에 섞지 않기 위한 기준입니다.
 
-현재 debug schema version은 `13`입니다. debug payload에는 tool call, 호출별 모델·사용량을 정규화한 `llm_calls`, validation events, `route_decisions`, `memory_compactions`, `observed_hits`, `answer_provenance`, action results, stage별 latency, retrieval route latency, synthesis attempt mode가 포함됩니다. Decisions 호출은 사전·사후 단계별로 기록하고 판정 확률 요약은 validation events에 남깁니다. `observed_hits`는 현재 검색에서 본 자료이고, `answer_provenance.evidence_packet`은 최종 결과를 생성·검증한 범위이며, 응답의 `citations`는 그중 실제 표시 내용이 채택한 원문입니다. 본문 생성 모델을 호출하지 않는 복사에서도 선택한 원본의 인용을 검증 packet으로 사용합니다. 이 정보는 회귀 분석과 benchmark 해석을 위한 진단이며, 일반 응답에는 별도의 `semantic_validation`으로 해당 본문의 의미 판정을 전달합니다.
+현재 debug schema version은 `14`입니다. debug payload에는 tool call, 호출별 모델·사용량을 정규화한 `llm_calls`, validation events, `route_decisions`, `memory_compactions`, `observed_hits`, `answer_provenance`, action results, stage별 latency, retrieval route latency, synthesis attempt mode가 포함됩니다. `llm_calls`는 endpoint·완료/실패 상태·시도별 시간과 입력·출력·캐시 읽기/쓰기·reasoning 사용량을 구분합니다. 실패·재시도를 포함해 누적하며 제공자가 보고하지 않은 사용량은 0으로 바꾸지 않습니다. 캐시 읽기·쓰기는 입력의 부분집합이므로 전체 입력에 다시 더하지 않고, 총 입력 감소와 캐시 단가 차이를 별도로 비교합니다. Decisions 호출은 사전·사후 단계별로 기록하고 판정 확률 요약은 validation events에 남깁니다. `observed_hits`는 현재 검색에서 본 자료이고, `answer_provenance.evidence_packet`은 최종 결과를 생성·검증한 범위이며, 응답의 `citations`는 그중 실제 표시 내용이 채택한 원문입니다. 본문 생성 모델을 호출하지 않는 복사에서도 선택한 원본의 인용을 검증 packet으로 사용합니다. 이 정보는 회귀 분석과 benchmark 해석을 위한 진단이며, 일반 응답에는 별도의 `semantic_validation`으로 해당 본문의 의미 판정을 전달합니다.
 
 다중 턴에서는 서버가 선택한 `previous`·`pending` 본문의 hash와 실제 citation ID 목록을 `answer_provenance.source`에 남깁니다. eval은 같은 사례·세션의 앞선 답변과 이 정보를 대조하고, 선택한 답변의 출처 연결이 검증된 경우에만 그 실제 인용 범위 안의 현재 최종 packet을 인정합니다. 최종 citation은 이 packet의 정확한 근거 ID를 사용해야 합니다. hash만 비교해 인용이 누락된 응답을 같은 원본으로 취급하거나 과거 검색 결과 전체를 현재 근거로 합치지 않습니다. 현재 턴의 도구 실행과 검색·복사 감점은 별도로 유지합니다. 본문·채택 출처가 같으면 이 연결 검증에서는 동등하므로 source 발생 ID나 범용 event store를 추가하지 않습니다. 정확한 발생 시점·전체 전달 artifact의 동일성·설명의 의미적 지지는 이 진단의 보장 범위가 아닙니다.
 
-대화 compaction은 `memory_compactions`에 trigger 차원, before/after turn·message·추정 token·직렬화 byte, removed message 수, fallback 여부를 남깁니다. fallback은 `validation_events`에도 degraded 신호로 기록합니다. 이 진단과 구조화 로그에는 원문 query, summary, ToolMessage content를 포함하지 않습니다.
+대화 compaction은 `memory_compactions`에 trigger 차원, before/after turn·message·추정 token·직렬화 byte, removed message 수, fallback 여부를 남깁니다. 요약의 목표·생성·저장 byte도 JSON escaping을 반영한 같은 기준으로 기록해 저장 과정에서 버린 출력량을 확인합니다. fallback은 `validation_events`에도 degraded 신호로 기록합니다. 이 진단과 구조화 로그에는 원문 query, summary, ToolMessage content를 포함하지 않습니다.
 
 ### 실행과 관측이 같은 분기 결과를 사용
 

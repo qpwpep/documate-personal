@@ -298,6 +298,43 @@ uv run python -m src.eval.request_contract_eval \
 
 당시 평가 정책·사례·채점 기준은 첫 모델 호출 전에 고정한 버전을 유지했습니다. 현재 실행용 42개 fixture와 채점기는 `slack_recipient`의 미지정·명시·미해결 상태를 구분하도록 전환했으며, 위 실모델 점수를 새 계약의 측정으로 해석하지 않습니다. 프로젝트 기본 모델과 `.env`를 변경하지 않았으며, Astra 진단은 당시 모델에서 남은 실패를 비교하려던 별도 시도입니다. 실제 모델 평가에는 planner만 연결했고, 실제 저장·Slack 소비 동작은 pytest의 임시 파일·localhost HTTP 대체 서버로 확인했습니다. 실서비스 Slack 전송, 실제 검색·합성을 포함한 전체 120-case release benchmark는 이번 검증에 포함하지 않았습니다.
 
+### 2.7 LLM 누적 토큰·비용 비교
+
+[`script/benchmark_llm_tokens.py`](../script/benchmark_llm_tokens.py)는 변경 전 소스 사본과 현재 소스에 같은 대표 시나리오를 실행하는 진단 도구입니다. release 120개 평가를 대신하지 않습니다. 짧은 요청, 공식 문서 단일·복수 대상, 코드 첨부의 표·줄 위치, 답변 변환·복사·저장, 긴 입력 원문 복사, 여러 턴의 기억 회상을 고정합니다. 각 소스는 별도 프로세스로 실행하며 `.env`는 실행 스크립트가 있는 프로젝트의 기존 설정을 읽습니다. 기본 계측에는 키나 원시 요청 프롬프트를 기록하지 않습니다.
+
+`BASELINE_SOURCE`에는 변경 전 보존한 소스 디렉터리의 절대 경로를 지정합니다. 실행 중에는 비교 대상 소스를 수정하지 않습니다.
+
+```bash
+uv run --locked python script/benchmark_llm_tokens.py \
+  --source-root "$BASELINE_SOURCE" --output output/benchmarks/token-comparison \
+  --variant baseline --repeats 2
+
+uv run --locked python script/benchmark_llm_tokens.py \
+  --source-root . --output output/benchmarks/token-comparison \
+  --variant candidate --repeats 2
+```
+
+`--cases`로 일부 시나리오를 선택할 수 있습니다. `--rejudge`는 저장된 제품 결과를 새 제품 호출 없이 다시 평가합니다. `--compare-to <완료된 run 디렉터리>`는 같은 설정·suite·문서와 중복 없는 턴 키를 확인한 뒤 output 루트에 `comparison_<variant>.json`을 생성합니다. 같은 variant의 완료된 시나리오·반복 번호는 건너뛰며 source·설정·suite·문서 해시가 달라지면 기존 실행에 이어 쓰지 않습니다. 중단된 시나리오의 부분 기록이 있으면 이어 쓰기를 거부하므로 새 variant를 사용하고, 중단 전 물리 호출 기록을 비용 분석에서 별도로 보존합니다. 기본값이 꺼진 `--capture-completions`는 합성 fixture의 제공자 출력을 `provider_outputs.jsonl`, 공개·합성 자료의 Decisions input/questions를 `provider_inputs.jsonl`에 추가로 저장합니다. 키·HTTP header·채팅 system/request 프롬프트는 기록하지 않습니다.
+
+실제 `AgentFlowManager`·그래프·LLM·Decisions를 실행합니다. 공식 문서 HTTP 응답과 검색 순위 입력은 고정해 검색 결과 변동을 통제하고, 첨부는 실제 parser·index·embedding 경로를 사용합니다. 저장은 실제 임시 결과로 확인하며 Slack은 전송하지 않습니다. FastAPI·SSE·브라우저는 이 도구의 실행 범위가 아니므로 주요 사용자 흐름을 별도로 검증해야 합니다.
+
+각 variant에는 다음 산출물이 남습니다.
+
+| 파일 | 비교 근거 |
+|---|---|
+| `manifest.json` | 소스·suite·문서 해시, 실제 설정과 적용 단가 |
+| `provider_calls.jsonl` | 실패를 포함한 물리 HTTP 시도별 사용량·캐시 상세·시간. 미보고 토큰은 미관측으로 유지 |
+| `turns.jsonl` | 모든 사용자 요청의 원본 결과·누적 사용량·시간. `capture_write_ms`와 이를 뺀 `latency_excluding_capture_ms`도 별도 기록 |
+| `scenarios.jsonl` | 준비·후속 요청을 포함한 시나리오 전체 집계 |
+| `judgments.jsonl` | 고정 oracle과 전체 답변·인용에 대한 독립 품질 평가 및 정확 복사·저장·기억 확인 |
+| `summary.json` | 제품 호출·judge·첨부 준비를 구분한 전체 집계 |
+
+토큰 비교에는 성공한 마지막 생성뿐 아니라 모든 단계·재시도·실패를 포함한 요청별 입력·출력 합계를 사용합니다. 여러 턴 시나리오는 각 요청과 전체 합계를 함께 봅니다. API가 토큰을 보고하지 않은 실패는 호출 수·시간에 포함하고 미보고 사용량을 0으로 합산하지 않습니다. 캐시를 제외한 단가 비교와 관측된 읽기·쓰기 비용을 나누어 보고, 반복 순서에 따른 캐시 준비 상태를 통제하지 못했다면 그 한계를 남깁니다. 지연은 같은 질문별 분포와 성공 상태를 함께 비교하며, 적은 반복의 평균만으로 일반적인 개선을 단정하지 않습니다. 품질 판정은 앱 자체의 Decisions 확률과 분리하고, 요청 조건·사실·인용·정확 복사·실제 저장·대화 기억을 확인합니다.
+
+선택형 응답 캡처를 켠 실행은 `latency_ms`와 `latency_excluding_capture_ms`를 함께 보고 기록 비용을 구분합니다. 후자는 측정한 파일 기록 시간만 뺀 값이며 전체 계측 오버헤드를 제거한 시간은 아닙니다. 구형 실행에 이 관측이 없으면 보정 시간을 추정하지 않습니다. 기본 output은 `output/benchmarks/token_comparison`이며 특정 실험을 이어 비교할 때는 그 실행에 사용한 `--output`을 명시합니다.
+
+[`script/benchmark_decisions_ab.py`](../script/benchmark_decisions_ab.py)는 캡처한 Decisions 입력에 표현만 바꿔 재평가하는 별도 진단입니다. `--input <provider_inputs.jsonl> --output <새 디렉터리> --scenario docs_single --repeats 2`로 실행합니다. 기본 `--mode displayed`는 canonical unit 참조, 본문을 직접 담은 표현, 그 표현에 정책까지 맞춘 입력을 비교합니다. `--mode sources`는 canonical source 참조, `source_lines.text` 복원, 요구별 source를 중복 배치한 입력을 비교합니다. 고정 payload의 표현 영향을 분리하는 실험이며 전체 요청의 품질 평가를 대신하지 않습니다. 진단 호출·비용은 주요 전후 실행 합계와 별도로 남깁니다.
+
 ## 3. 출력 산출물
 
 각 run은 `output/benchmarks/<run_id>/` 아래에 저장됩니다. 최신 run 포인터는 run 디렉터리 안이 아니라 `output/benchmarks/` 루트에 저장됩니다. `output/` 전체는 Git 추적 대상이 아닌 로컬 실행 산출물입니다.
@@ -327,14 +364,16 @@ judge 입력은 원본 응답·출처 계약을 검증한 뒤 `evidence-selectio
 | `question_response_ms` | 최종 평가 질문 POST부터 final 수신까지. 공용 응답 검증과 `done` 대기는 제외. 실패 시 오류 확인까지, 질문을 보내지 않았으면 `null` |
 | `latency_ms_e2e` | 기존 소비자를 위한 `question_response_ms` 별칭. 브라우저 렌더링 시간은 아님 |
 | `scenario_total_ms` | 최초 준비와 모든 준비 질문·최종 질문, 응답 검증·평가 입력 해석까지. judge·결과 파일 저장·정리 요청은 제외 |
-| `cost_usd` | 준비 턴과 최종 질문의 모든 앱 LLM 호출 비용 합계. 필요한 단가나 유료 차원의 토큰을 확정하지 못하면 `null`. 명시적으로 무료인 차원은 토큰 미관측이어도 비용에 더하지 않음. 확인된 무호출 시나리오는 `0` |
+| `cost_usd` | 준비 턴과 최종 질문의 모든 앱 LLM 호출에 관측된 캐시 읽기·쓰기 단가를 적용한 비용 합계. 필요한 단가나 유료 차원의 토큰을 확정하지 못하면 `null`. 명시적으로 무료인 차원은 토큰 미관측이어도 비용에 더하지 않음. 확인된 무호출 시나리오는 `0` |
 | `synthesis_output_tokens` | 최종 질문 턴의 모든 synthesis 시도에서 관측한 출력 토큰 합계. planner·memory summary·준비 턴은 제외. synthesis 출력이 하나라도 미관측이면 `null`, 확인된 무호출은 `0` |
 
 사용량의 저장 원본은 `scenario_turns[].llm_calls`입니다. 각 턴의 `role`은 `setup` 또는 `question`이며, 최종 질문도 준비 턴과 같은 모델로 한 번 저장합니다. 최상위 `token_usage`, `llm_calls`, `model_name`, `models_used`, `model_usage_status`를 별도로 저장하지 않습니다. 최상위 `debug`는 최종 질문의 진단이며 raw metadata를 다시 해석하는 비용 근거로 사용하지 않습니다. summary와 보고서에는 세 시간 구간의 p50/p95를 표시하며 `p95_latency_ms` gate는 최종 질문 시간을 평가합니다. 인덱스 생성은 첨부 준비에만 포함되므로 현재 질문 런타임의 `upload_retriever_build_ms`는 `null`입니다. 과거 결과에 저장된 해당 단계의 수치와 오류 코드는 당시 관측값으로 계속 읽고 집계하며 새 실행값으로 바꾸지 않습니다.
 
-각 호출의 `usage.input_tokens`·`usage.output_tokens`에는 0 이상의 정수 또는 `null`만 들어갑니다. 명시된 `0`은 정상 관측이고, `null`은 누락 또는 유효한 값을 찾지 못한 상태입니다. 입력·출력 중 하나만 있으면 부분 관측입니다. 생성 경계에서 `usage_metadata`를 먼저 읽고 `response_metadata.token_usage`를 뒤에 읽으며, 각 후보 안에서는 `input_tokens`·`output_tokens`가 `prompt_tokens`·`completion_tokens`보다 우선합니다. 각 차원에서 유효한 첫 값을 택하고 빈 후보·누락·잘못된 값은 다음 키와 후보로 넘어갑니다. 정상적인 0은 뒤의 값으로 덮지 않습니다. 음수·bool·문자열·소수는 강제 변환하지 않고 `issues`에 남기며, 유효한 중복 값의 불일치와 provider total의 모순도 진단으로 보존합니다. `total_tokens`는 입력·출력이 모두 있을 때만 두 값의 합으로 얻으며 누락된 차원을 역산하지 않습니다.
+각 호출의 `usage.input_tokens`·`usage.output_tokens`에는 0 이상의 정수 또는 `null`만 들어갑니다. 제공자가 명시한 `0`은 정상 관측이고, `null`은 누락 또는 유효한 값을 찾지 못한 상태입니다. 입력·출력 중 하나만 있으면 부분 관측입니다. 생성 경계에서 입력·출력 총량은 보존된 `response_metadata.token_usage` 원본으로 확인하고, 원본이 없을 때 `usage_metadata`를 사용합니다. 이 구분으로 Chat Completions의 제공자 출력 누락을 SDK 기본값 0으로 오인하지 않습니다. 캐시·reasoning 상세는 `usage_metadata`를 먼저 해석합니다. 각 후보 안에서는 `input_tokens`·`output_tokens`가 `prompt_tokens`·`completion_tokens`보다 우선하고, 정상적인 0은 뒤의 값으로 덮지 않습니다. 음수·bool·문자열·소수는 강제 변환하지 않고 `issues`에 남기며, 유효한 중복 값의 불일치와 provider total의 모순도 진단으로 보존합니다. `total_tokens`는 입력·출력이 모두 있을 때만 두 값의 합으로 얻으며 누락된 차원을 역산하지 않습니다. 선택형 Responses의 LangChain 변환은 원본 usage를 보존하지 않아 제공자 누락과 SDK 기본값 0의 구분이 제한됩니다.
 
-`llm_calls=[]`는 해당 턴에서 모델을 호출하지 않았다는 관측이고 `null`은 호출 목록 자체를 확인하지 못했다는 뜻입니다. timeout·예외가 발생한 논리 호출도 기록에 남으며 응답 사용량을 받지 못했으면 토큰은 `null`입니다. 비용은 memory summary·planner·synthesis, compact·재합성, 사전·사후 Decisions 호출을 모두 합산하지만 출력 토큰 지표는 최종 질문의 synthesis만 합산합니다. 일반 API는 `pricing.models`, Decisions API는 `pricing.decisions_models`에 실제 모델의 단가가 있어야 합니다. 미등록·무명 모델에 기본 단가를 대신 적용하지 않습니다. 이 비용은 SDK가 반환한 토큰에 따른 추정치이며 judge·검색 provider·임베딩과 SDK 내부 HTTP 재시도의 미보고 사용량은 포함하지 않습니다. 최종 질문의 정상 사용량이 준비 턴의 누락을 덮지 않습니다.
+`llm_calls=[]`는 해당 턴에서 모델을 호출하지 않았다는 관측이고 `null`은 호출 목록 자체를 확인하지 못했다는 뜻입니다. timeout·예외가 발생한 호출 시도도 `endpoint`·`status`·`latency_ms`·`failure_type`과 함께 기록하며 응답 사용량을 받지 못했으면 토큰은 `null`입니다. 앱 런타임은 SDK 내부 재시도를 끄고 예산 안에서 수행한 각 시도를 기록합니다. 비용은 memory summary·planner·synthesis, compact·재합성, 사전·사후 Decisions 호출을 모두 합산하지만 `synthesis_output_tokens` 지표는 최종 질문의 synthesis만 합산합니다. 요청당 누적 출력 비교에는 해당 턴의 모든 `llm_calls[].usage.output_tokens`를 사용해야 합니다. 일반 API는 `pricing.models`, Decisions API는 `pricing.decisions_models`에 실제 모델의 단가가 있어야 합니다. 미등록·무명 모델에 기본 단가를 대신 적용하지 않습니다. 이 비용은 제공자가 보고한 사용량에 설정 단가를 적용한 추정치이며 청구서 대조값이 아닙니다. judge·검색 provider·임베딩은 별도 비용이며, 실패 시 제공자가 보고하지 않은 사용량도 알 수 없습니다. 최종 질문의 정상 사용량이 준비 턴의 누락을 덮지 않습니다.
+
+`cached_input_tokens`·`cache_write_input_tokens`는 전체 `input_tokens`의 부분집합이고 `reasoning_output_tokens`는 전체 `output_tokens`의 부분집합입니다. 전체 사용량에 다시 더하지 않습니다. 누락된 세부 사용량을 0으로 채우지 않으며, 입력과 캐시 읽기·쓰기가 모두 관측되어야 `uncached_input_tokens`를 계산할 수 있습니다. `compute_cost_usd(cache_mode="observed")`는 일반 입력 단가로 계산한 금액에 캐시 읽기·쓰기의 단가 차이를 반영합니다. 필요한 캐시 단가나 사용량이 없으면 비용은 `null`이며, 명시된 0 또는 일반 입력과 같은 단가는 차액 계산에 추가 관측을 요구하지 않습니다. `cache_mode="uncached"`는 모든 입력을 일반 단가로 계산한 비교치입니다. 이 비교치의 전후 차이로 입력량·호출 구성의 영향을, 관측 비용과의 차이로 캐시 단가 영향을 구분합니다. 캐시 쓰기는 첫 호출 비용을 높일 수도 있으며 프롬프트 중복 제거만으로 캐시 적중을 보장하지 않습니다.
 
 산출물 역할:
 
@@ -360,7 +399,7 @@ judge 입력은 원본 응답·출처 계약을 검증한 뒤 `evidence-selectio
 
 judge minimum score와 pricing도 같은 파일에서 관리합니다. `cost_gate_min_observation_rate`는 `src/eval/config_models.py::HardGates`의 기본값이며, config에 명시하지 않으면 `0.80`이 적용됩니다. `cost_observed_cases`는 `cost_usd`가 확정된 사례 수이고 `cost_observation_rate`는 이 수를 계획된 전체 사례 수로 나눈 값입니다. 정상적인 0 비용도 포함합니다. 평균 비용의 분모는 `cost_observed_cases`이며 미관측 사례를 0 비용으로 넣지 않습니다. 결과가 누락된 사례도 관측률 분모에 남습니다.
 
-가격표의 단가는 유한한 비음수 값이어야 합니다. 일반 API의 `pricing.models`와 Decisions API의 `pricing.decisions_models`를 구분하며, 같은 모델명이어도 다른 API의 단가를 대신 적용하지 않습니다. 기본 `gpt-6-luna` Decisions 가격은 2026-10-20에 확인한 [공식 가격 안내](https://developers.openai.com/api/docs/guides/decisions#pricing-and-availability)에 따라 입력 100만 토큰당 `$0.10`, 출력 무료로 설정합니다. 출력 토큰을 제공하지 않아도 무료라는 명시적 단가로 비용을 계산하며, 입력 토큰이나 해당 API의 모델 단가를 모르면 사례 비용은 `null`입니다. 준비 턴에서 모델을 사용하고 최종 저장 턴이 무호출인 경우도 모든 유료 사용량과 단가를 알면 비용을 확정할 수 있습니다.
+가격표의 단가는 유한한 비음수 값이어야 합니다. 일반 API의 `pricing.models`와 Decisions API의 `pricing.decisions_models`를 구분하며, 같은 모델명이어도 다른 API의 단가를 대신 적용하지 않습니다. `prompt_per_1k_usd`, `cached_prompt_per_1k_usd`, `cache_write_per_1k_usd`, `completion_per_1k_usd`는 각각 일반 입력·캐시 읽기·캐시 쓰기·출력 1,000토큰당 단가입니다. 2026-10-29에 확인한 Standard 등급·기본 캐시 보존·짧은 문맥 가격을 기본 설정에 반영했습니다. `gpt-5.6-luna`는 100만 토큰당 `$0.20 / $0.02 / $0.25 / $1.20`, `gpt-6-luna` Decisions는 `$0.10 / $0.01 / $0.125 / $0`입니다. [모델 가격](https://developers.openai.com/api/docs/models/gpt-5.6-luna), [전체 가격표](https://developers.openai.com/api/docs/pricing), [Decisions 가격](https://developers.openai.com/api/docs/guides/decisions#pricing-and-availability)을 기준으로 실행 당시 endpoint·service tier·문맥 길이·보존 정책에 맞는 단가를 사용해야 합니다. 긴 문맥이나 다른 service tier에 이 설정을 그대로 적용하지 않습니다. 출력 무료인 Decisions는 출력 토큰이 미관측이어도 해당 차원 비용을 계산할 수 있지만, 필요한 입력·캐시 사용량이나 단가가 없으면 사례 비용은 `null`입니다. 준비 턴에서 모델을 사용하고 최종 저장 턴이 무호출인 경우도 모든 유료 사용량과 단가를 알면 비용을 확정할 수 있습니다.
 
 비용 관측률이 기준 미만이거나 관측한 사례가 없으면 `cost_observation_rate`와 `avg_cost_per_case_usd` gate는 모두 `observation_insufficient`, `passed=false`입니다. 관측된 일부 사례의 낮은 평균으로 이를 상쇄할 수 없습니다. 관측률이 충분하면 비용 상한을 별도로 검사합니다. 저장 결과를 다시 읽을 때도 계획 수·비용 관측·설정에서 두 gate를 재검증합니다.
 
@@ -395,7 +434,7 @@ receipt는 호출 ID뿐 아니라 종료 상태와도 일치해야 합니다. �
 
 CLI, Markdown 보고서와 history는 같은 중앙 판정을 사용합니다. `run --track release`는 `release_decision`의 통과 여부로 종료 코드 0/1을 정하며, smoke는 judge 실행 여부와 관계없이 진단용입니다. planner 단독 요청 계약 평가의 `qualified`도 전체 release 자격이 아닙니다. 구형 결과의 당시 PASS와 측정값은 현재 자격으로 승격하지 않습니다.
 
-현재 계약의 `report --run`과 history 로더는 저장된 정책 snapshot, 원시 결과의 fingerprint와 중앙 재판정 결과가 summary와 일치하는지 확인합니다. fingerprint는 원시 JSON을 현재 모델로 변환하기 전에 확인합니다. 불일치한 산출물은 보고서로 다시 발행하지 않습니다. 결과 로더는 현재 `decision_contract_version=2`와 `measurement_contract_version=llm-usage-scenario-v3`에 연결된 실행·채점 버전 조합도 검증합니다. 이전 실행·채점 계약의 증거는 검증 후 history에서 제외하고 `report --run`으로 다시 발행하지 않습니다. 구형 결과의 버전·점수를 현재 값으로 바꾸거나 과거 필드에서 필수 판정 증거를 만들어 넣지 않습니다.
+현재 계약의 `report --run`과 history 로더는 저장된 정책 snapshot, 원시 결과의 fingerprint와 중앙 재판정 결과가 summary와 일치하는지 확인합니다. fingerprint는 원시 JSON을 현재 모델로 변환하기 전에 확인합니다. 불일치한 산출물은 보고서로 다시 발행하지 않습니다. 결과 로더는 현재 `decision_contract_version=2`와 `measurement_contract_version=llm-usage-scenario-v4`에 연결된 실행·채점 버전 조합도 검증합니다. v4는 캐시 상세와 시도별 실행 관측을 포함하므로 v3 결과를 새 비용 계약으로 재해석하지 않습니다. 이전 실행·채점 계약의 증거는 검증 후 history에서 제외하고 `report --run`으로 다시 발행하지 않습니다. 구형 결과의 버전·점수를 현재 값으로 바꾸거나 과거 필드에서 필수 판정 증거를 만들어 넣지 않습니다.
 
 과거 `summary.json`·`raw_results.jsonl`·`report.md`는 당시 계약의 기록으로 보존합니다. 구형 계약의 재발행이나 현재 자격 판정은 거부하며, 과거 결과는 당시 저장된 보고서로 확인합니다. 현재 계약과 과거 계약의 결과를 섞거나 필수 버전을 제거한 입력도 거부합니다. 현재 보고서 재생성은 원본 summary·raw 결과를 변경하거나 모델 호출·외부 효과를 다시 실행하지 않습니다. 기존 생성 계보와 과거 수치의 원본도 유지합니다. 최신 run 포인터는 성공 여부와 관계없이 가장 최근 실행을 가리킵니다.
 
@@ -505,7 +544,7 @@ history 리포터는 현재 판정·측정 계약과 저장 증거를 검증한 
 - `total_cases`
 - `decision_contract_version`
 - `execution_contract_version`: 현재 `shared-client-scenario-v2`
-- `measurement_contract_version`: 현재 `llm-usage-scenario-v3`
+- `measurement_contract_version`: 현재 `llm-usage-scenario-v4`
 - `suite_fingerprint`: 준비 턴·준비 턴의 기대 결과·첨부 목록·부분 override를 포함한 사례 모델의 JSON 직렬화와 staging에서 실제 읽은 첨부 bytes의 SHA256
 - `evaluation_fingerprint`: 채점 계약 버전과 가중치·gate·pricing·judge·timeout 설정, Slack 실행 옵션
 

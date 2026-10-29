@@ -399,9 +399,9 @@ LangGraph의 `messages`는 `add_messages` reducer이므로 요약 노드는 최�
 → 하나의 새 bounded summary
 ```
 
-기존 summary 뒤에 새 문자열을 append하지 않습니다. ToolMessage와 SystemMessage는 summary transcript에서 제외합니다. summary LLM의 예외 또는 빈 출력에는 기존 memory의 앞부분과 새로 퇴출된 최근 문맥의 뒷부분을 함께 보존하는 deterministic bounded fallback을 사용합니다.
+기존 summary 뒤에 새 문자열을 append하지 않습니다. ToolMessage와 SystemMessage는 summary transcript에서 제외합니다. summary LLM의 예외 또는 빈 출력에는 기존 memory의 앞부분과 새로 퇴출된 최근 문맥의 뒷부분을 함께 보존하는 deterministic bounded fallback을 사용합니다. SDK 내부 재시도는 끄고 `summarize` 단계의 공통 예산 안에서 일시적 연결·제공자 오류와 rate limit만 명시적으로 재시도합니다. 기본 예산은 3회·45초이며 각 시도는 남은 시간을 timeout으로 사용합니다. 인증·잘못된 요청은 재시도하지 않고, `Retry-After`가 남은 시간 이상이면 즉시 fallback으로 전환합니다.
 
-`SUMMARY_MAX_TOKENS`는 요약 LLM의 생성 예산이고 `MEMORY_SUMMARY_MAX_TOKENS`와 `MEMORY_SUMMARY_MAX_BYTES`는 저장 예산입니다. 생성 예산 기본값 1,024는 조정 시작값이며 저장 예산과 독립적입니다. 저장 본문은 `min(MEMORY_SUMMARY_MAX_BYTES, MEMORY_SUMMARY_MAX_TOKENS × 3)`에 맞추므로 기본 256 추정 토큰·4,096바이트 설정의 실효 본문 예산은 768 UTF-8 바이트입니다. durable 저장 전에는 JSON escaping 크기도 검사합니다. 생성 예산을 늘려도 저장 길이나 전체 메모리 high/low·hard 한도는 바뀌지 않습니다. 요약에 넣는 퇴출 transcript는 `MEMORY_LOW_WATER_BYTES`로 별도 제한하며, 기존 요약과 system prompt는 그 뒤에 추가됩니다.
+`SUMMARY_MAX_TOKENS`는 요약 LLM의 생성 예산이고 `MEMORY_SUMMARY_MAX_TOKENS`와 `MEMORY_SUMMARY_MAX_BYTES`는 저장 예산입니다. 생성 예산 기본값 1,024는 조정 시작값이며 저장 예산과 독립적입니다. 저장 본문은 `min(MEMORY_SUMMARY_MAX_BYTES, MEMORY_SUMMARY_MAX_TOKENS × 3)`에 맞추므로 기본 256 추정 토큰·4,096바이트 설정의 실효 본문 예산은 768 UTF-8 바이트입니다. 이 저장 목표를 요약 지시에도 명시해 생성 상한을 목표 길이로 사용하지 않게 합니다. 크기는 JSON string escaping 후 감싸는 따옴표를 제외한 UTF-8 바이트로 검사합니다. 생성 예산을 늘려도 저장 길이나 전체 메모리 high/low·hard 한도는 바뀌지 않습니다. 요약에 넣는 퇴출 transcript는 `MEMORY_LOW_WATER_BYTES`로 별도 제한하며, 기존 요약과 system prompt는 그 뒤에 추가됩니다.
 
 ### 4.2 요청 종료 시 durable projection과 commit
 
@@ -428,10 +428,10 @@ graph 실행, debug 수집, response assembly, projection 또는 budget 검사�
 - 새로고침 복원·대화 복귀·새 요청 실행 전에는 서버 manifest를 재확인합니다. 기존 epoch와 같으면 활성 첨부를 다시 올리지 않고 후속 질문과 기존 답변 저장을 계속할 수 있습니다. epoch가 다르면 기록·당시 출처·초안·마지막 첨부 목록은 읽기 전용으로 유지하고 질문·저장·전송·첨부 변경을 차단합니다. 연결 실패는 만료로 확정하지 않고 재확인을 제공합니다. 새 채팅에서 필요한 파일을 다시 첨부해 계속할 수 있습니다.
 - 표시 기록의 보존은 서버 TTL/LRU나 첨부·생성 파일의 수명을 연장하지 않습니다. 새로고침과 대화 전환은 질문·첨부 변경·파일 저장·Slack 전송을 자동 재실행하지 않으며, 실행 중에는 대화 전환을 막습니다. 제출 전 네이티브 파일 선택과 실행 대기 명령은 복원하지 않습니다. 선택만 한 파일은 다시 선택해야 합니다. 탭을 닫은 뒤의 복원은 보장하지 않으며 다른 기기와의 동기화는 제공하지 않습니다. 브라우저 저장 실패나 잘못된 snapshot은 화면에 안내합니다.
 - planner/synthesis에는 summary를 비신뢰 과거 데이터로 전달하며, summary 안의 명령을 따르거나 retrieved evidence로 취급하지 않습니다.
-- planner는 최근 턴 제한 안에서 최신 사용자 질문까지의 Human/AI 대화를 순서대로 전달합니다. 질문 표현으로 문맥을 생략하지 않으며, 도구 호출 중간 메시지와 현재 질문 뒤에 붙은 재시도 답변은 제외합니다.
+- planner는 최근 턴 제한 안에서 최신 사용자 질문까지의 Human/AI 메시지를 순서대로 전달합니다. 별도의 `user_turn_ledger`에는 발화 ID와 정확한 원문을 보존하고 `[User Turn IDs]` 지시로 현재 발화 ID를 지정합니다. 이전 답변의 aspect 선택에는 실제 표시 텍스트를, previous·pending 원본 선택에는 원래 답변 문서와 export metadata를 제공합니다. 이 문맥들의 중복은 후속 요청 해석과 정확한 원문 바인딩을 위해 유지합니다. 질문 표현으로 문맥을 생략하지 않으며, 도구 호출 중간 메시지와 현재 질문 뒤에 붙은 재시도 답변은 제외합니다.
 - 앞선 대화는 후속 질문의 지시 대상과 이어지는 출처 제한을 해석하는 데 사용합니다. 현재 질문의 명시적인 출처 변경이 우선하며, 관계없는 새 작업에는 이전 검색 요구를 적용하지 않습니다.
 
-compaction 진단은 debug `memory_compactions`와 구조화 로그에서 before/after turn·message·추정 token·byte, removed message 수, fallback 여부로 확인할 수 있습니다. 원문 query, summary, Tool payload는 이 진단 로그에 기록하지 않습니다.
+compaction 진단은 debug `memory_compactions`와 구조화 로그에서 before/after turn·message·추정 token·byte, removed message 수, fallback 여부로 확인할 수 있습니다. `summary_max_bytes`, `summary_generated_bytes`, `summary_stored_bytes`는 저장 목표·실제 생성·저장 크기를 같은 JSON escaping 기준으로 비교합니다. 모델 응답을 받지 못한 생성 크기는 `null`입니다. 원문 query, summary, Tool payload는 이 진단 로그에 기록하지 않습니다.
 
 Slack 수신자 선택은 action 정책 한 곳에서 수행합니다. 전송이 요청되었고 자연어·요청 필드 모두 미지정인 신규 선택에만 기본값을 사용합니다. `SLACK_DEFAULT_USER_ID`와 `SLACK_DEFAULT_DM_EMAIL`은 하나만 설정하며, 둘 다 있거나 잘못된 값이면 기본값 사용 요청은 구성 오류가 됩니다. 유효한 명시 수신자 전송과 일반 답변에는 이 오류를 적용하지 않습니다. 자연어와 요청 필드가 충돌하거나 명시 입력을 확정하지 못하면 전송하지 않습니다. 아직 대상을 선택하지 않은 미지정 요청은 설정을 교정한 뒤 선택을 재평가할 수 있습니다.
 
@@ -637,11 +637,13 @@ HTTP `200`이나 `done`만으로 성공 처리하지 않습니다. 유효한 `fi
 
 결정 기록은 다음 노드 선택이 상태에 반영되었다는 뜻이며 다음 노드의 완료를 보장하지 않습니다. 다음 노드가 실패해도 이미 확정된 목록은 오류 debug에 남습니다. runner는 `stream_mode="values"`의 마지막 상태를 교체 보관하므로 누적 스냅샷을 다시 이어 붙이지 않습니다. graph 실행 전 실패와 종료 요청의 빈 목록은 정상이며, 관측 경계에서 누락되거나 잘못된 목록은 `observability_status="failed"`, `missing_required_debug_fields`, 정규화 오류로 드러납니다. 현재 보장 범위는 프로세스 내 실행이며 강제 종료 후 영속 복구나 replay는 포함하지 않습니다.
 
-현재 debug schema version은 `13`입니다. 사용량의 단일 계약은 `src/core/contracts/usage.py`의 `LLMCallRecord`·`TokenUsage`입니다. 호출별로 `stage`, graph 재시도 `attempt`, `path`, `model_name`, `usage`를 기록합니다. `usage.input_tokens`·`output_tokens`는 0 이상의 정수 또는 `null`이며, 0·누락·부분 관측을 구별합니다. bool·음수·숫자 문자열·소수는 토큰으로 변환하지 않습니다. 사용량과 total의 충돌·잘못된 값은 `usage.issues`에 남깁니다. 원본 `usage_metadata`·`response_metadata`도 진단용으로 보존하지만 collector·HTTP·eval은 이를 다시 해석하지 않습니다.
+현재 debug schema version은 `14`입니다. 사용량의 단일 계약은 `src/core/contracts/usage.py`의 `LLMCallRecord`·`TokenUsage`입니다. 호출별로 `stage`, 단계별 시도 `attempt`, `path`, `model_name`, `endpoint`, `status`, `latency_ms`, `failure_type`, `usage`를 기록합니다. `status`는 호출 시작·완료·실패를 구분하며, 실패 종류는 예외 이름만 남깁니다. `usage.input_tokens`·`output_tokens`와 세부 사용량 `cached_input_tokens`·`cache_write_input_tokens`·`reasoning_output_tokens`는 0 이상의 정수 또는 `null`이며, 0·누락·부분 관측을 구별합니다. 캐시 읽기·쓰기는 전체 입력의 부분집합이고 reasoning은 전체 출력의 부분집합이므로 합계에 다시 더하지 않습니다. bool·음수·숫자 문자열·소수는 토큰으로 변환하지 않습니다. 사용량과 total의 충돌·잘못된 값·전체보다 큰 세부 사용량은 `usage.issues`에 남깁니다. 원본 `usage_metadata`·`response_metadata`도 진단용으로 보존하지만 collector·HTTP·eval은 이를 다시 해석하지 않습니다.
 
-응답 생성 경계에서는 각 토큰 차원별로 `usage_metadata` → `response_metadata.token_usage` 순서, 후보 내부에서는 `input_tokens` → `prompt_tokens`, `output_tokens` → `completion_tokens` 순서로 유효한 첫 값을 택합니다. 빈 dict와 누락·잘못된 값은 다음 후보를 막지 않으며, 명시된 0은 뒤의 값으로 대체하지 않습니다. provider total로 입력이나 출력을 역산하지 않습니다. 합계는 입력·출력이 모두 관측됐을 때만 계산합니다.
+응답 생성 경계에서 입력·출력 총량은 보존된 제공자 원본 `response_metadata.token_usage`를 기준으로 삼습니다. Chat Completions의 원본에 출력 사용량이 없으면 SDK가 채운 기본값 0을 관측값으로 사용하지 않습니다. 원본이 없을 때는 `usage_metadata`를 사용하며, 캐시·reasoning 세부 값은 `usage_metadata` → 원본 상세 순서로 해석합니다. 후보 내부에서는 `input_tokens` → `prompt_tokens`, `output_tokens` → `completion_tokens` 순서로 유효한 첫 값을 택하며 명시된 0은 뒤의 값으로 대체하지 않습니다. provider total로 입력이나 출력을 역산하지 않습니다. 합계는 입력·출력이 모두 관측됐을 때만 계산합니다. 선택형 Responses 경로는 LangChain 변환이 제공자 원본 usage를 보존하지 않아 실제 누락과 SDK 기본값 0을 구별하는 데 한계가 있습니다.
 
-`src/runtime/agent_runtime/llm_usage.py`의 요청별 recorder는 논리적 모델 호출 시작을 먼저 등록하고 응답을 받으면 정규화 사용량을 채웁니다. planner·memory summary·synthesis의 실패 시도와 compact fallback, 사전·사후 Decisions 호출도 각각 남으며, 이후 graph·응답 조립 실패가 호출 기록을 지우지 않습니다. Decisions 호출의 `stage`는 `pre_synthesis_validation` 또는 `post_synthesis_validation`, `path`는 `decisions`입니다. 출력 토큰이 0이어도 입력 토큰이 발생한 실제 호출입니다. 무호출을 확인한 턴은 `llm_calls=[]`, 관측 범위 밖이거나 잘못된 목록은 `null`입니다. 모델 호출 여부와 각 호출의 모델 이름은 `llm_calls`에서 확인하며 비용 0만으로 무호출을 추정하지 않습니다. SDK 내부 HTTP 재시도별 미보고 토큰은 이 기록의 범위 밖입니다.
+`src/runtime/agent_runtime/llm_usage.py`의 요청별 recorder는 모델 호출 시도의 시작을 먼저 등록하고 응답을 받으면 정규화 사용량을 채웁니다. planner·memory summary·synthesis의 실패 시도와 compact fallback, 사전·사후 Decisions 호출도 각각 남으며, 이후 graph·응답 조립 실패가 호출 기록을 지우지 않습니다. 각 런타임 모델의 SDK 내부 재시도는 끄고 공통 호출 예산의 명시적 재시도를 기록합니다. Decisions 호출의 `stage`는 `pre_synthesis_validation` 또는 `post_synthesis_validation`, `path`는 `decisions`입니다. 출력 토큰이 0이어도 입력 토큰이 발생한 실제 호출입니다. 응답을 받지 못한 실패 시도도 모델·endpoint·시간·실패 종류를 남기지만 제공자가 보고하지 않은 토큰을 추정해 채우지는 않습니다. 무호출을 확인한 턴은 `llm_calls=[]`, 관측 범위 밖이거나 잘못된 목록은 `null`입니다. 모델 호출 여부와 각 호출의 모델 이름은 `llm_calls`에서 확인하며 비용 0만으로 무호출을 추정하지 않습니다.
+
+구조화 응답을 SDK가 파싱하다 `LengthFinishReasonError` 또는 `ContentFilterFinishReasonError`를 반환해도 이미 생성 비용이 발생했을 수 있습니다. 예외에 `completion.usage`가 있으면 이를 회수해 실패 호출에 보존하며, 출력 중단을 사용량 없는 호출로 바꾸지 않습니다.
 
 `action_results.slack_notify`는 최종 receipt와 동일한 `SlackDelivery`를 사용합니다. `answer_provenance`의 `version`은 `1`이며 아래 필드를 제공합니다.
 
@@ -701,11 +703,15 @@ flowchart TD
 
 판정 캐시는 `retrieval.decision_cache`에 요청 단위로 보존합니다. 실제 공유 요청 문맥·요구·source 또는 packet 입력·질문 지시문·scope 지시문·모델의 canonical fingerprint가 같을 때만 확률 또는 refusal을 재사용합니다. source version과 선택 범위는 evidence identity에 포함됩니다. 자연어 의도를 유지하기 위해 `RetryState.original_tasks`의 원래 query를 의미 판정 입력과 캐시 fingerprint에 포함합니다. 원래 task가 없으면 현재 task의 query를 사용합니다. 재검색용 query와 검색 개수 k, batch 위치와 질문 이름은 판정 의미에서 제외하므로 검색어 재계획만으로 같은 의미 판정을 다시 호출하지 않습니다. 원래 query·조건·원문 범위가 바뀌면 새 판정입니다. 캐시 hit/miss와 생략한 질문 수는 `decision_cache` 관측에 남습니다.
 
-사후에는 내용별 근거성, 전체 요청 충족, 실제 인용 범위의 요구 충분성을 같은 batch에서 평가합니다. 개별 refusal은 해당 판정의 미통과로 기록하며 근거 없는 주장이나 요구 누락은 같은 확정 요청과 준비 packet으로 본문을 보정합니다. 다른 문장의 인용이나 인용하지 않은 packet 자료로 내용의 근거성을 대신하지 않습니다. 참조·발췌 일치·본문 hash·요청 revision 검사는 함께 적용합니다.
+Decisions 사전 검증 입력은 `sources`·`tasks` registry에 원문 근거와 요구를 한 번만 넣고 후보는 해당 ID를 참조합니다. packet은 중복된 요구 본문 대신 `requirement_names`를 참조합니다. 공통 판정 정책과 종류별 rubric은 `evaluation_policy`·`evaluation_rubrics`로 한 번 전달하고, 개별 질문은 대상 이름과 평가 범위를 지정합니다. 이 전송 표현은 서버의 근거 정본이나 검증 의미를 줄이지 않습니다. 동일 텍스트여도 출처·수집본·선택 범위가 다르면 같은 source로 합치지 않습니다. 요청 안의 판정 결과 재사용은 호출 자체를 생략하는 앱 캐시이며, 반복 입력에 낮은 단가를 적용하는 제공자 프롬프트 캐시와 구분합니다.
+
+사후에는 내용별 근거성, 전체 요청 충족, 실제 인용 범위의 요구 충분성을 같은 batch에서 평가합니다. `displayed_document`는 실제 `AnswerDocument`를 그대로 담고, `units.cited_sources`와 요구별 `task`·`sources`도 해당 위치에 직접 제공합니다. 공통 정책과 rubric은 각 질문의 지시에 포함합니다. 사후 입력을 공유 참조로 압축했을 때 정상 초안이 미통과하는 사례가 반복되어, 이 단계의 본문·출처·질문 지시 중복은 유지합니다. 판정 임계값·질문 수·실패 차단 정책은 바꾸지 않습니다. 개별 refusal은 해당 판정의 미통과로 기록하며 근거 없는 주장이나 요구 누락은 같은 확정 요청과 준비 packet으로 본문을 보정합니다. 다른 문장의 인용이나 인용하지 않은 packet 자료로 내용의 근거성을 대신하지 않습니다. 참조·발췌 일치·본문 hash·요청 revision 검사는 함께 적용합니다.
 
 두 검증 단계에는 합성과 같은 턴 제한을 적용한 대화 이력과 대화 요약을 함께 전달합니다. 대화는 사용자 사실과 지시 대상의 해석에 쓰는 데이터이며, 확정 요청을 바꾸는 지시나 검색 근거를 대신하지 않습니다. 원문 근거에는 제목 경로, 선택 범위, 부분 발췌 여부와 선택된 표 셀의 행·열·병합 구조를 보존하고, 선택 밖의 셀 내용은 전달하지 않습니다.
 
-정확한 텍스트 anchor가 선택 범위 전체를 매핑하면 합성·Decisions의 source에 `source_lines`를 제공합니다. 각 항목은 원본의 `line_number`, 요소 문자열 기준 반열린 `start`·`end`, 변경하지 않은 `text`, `partial_start`·`partial_end`를 가집니다. 물리적 줄 구분은 LF·CRLF·CR이며 빈 줄도 셉니다. 정확한 위치가 없거나 서로 다른 매핑이 충돌하면 빈 목록을 제공하고 줄 번호를 추정하지 않습니다. Notebook은 anchor의 셀 식별자와 셀 내부 줄을 함께 해석합니다.
+정확한 텍스트 anchor가 선택 범위 전체를 매핑하면 원본의 `line_number`, 요소 문자열 기준 반열린 `start`·`end`, 변경하지 않은 `text`, `partial_start`·`partial_end`를 가진 `source_lines`를 계산합니다. 합성과 Decisions 사전 검증에는 `excerpt`에 이미 있는 `text`를 빼고 위치 정보만 제공합니다. 사후 검증은 기존 표현대로 줄별 `text`도 함께 전달합니다. 전송용 `partial_end`는 두 검증 단계와 합성에서 줄 내용 중간에 선택이 끝났는지를 나타냅니다. AST 정의 범위처럼 마지막 LF·CR·CRLF만 선택하지 않은 경우에는 `false`로 제공해 코드 내용이 잘렸다고 해석하지 않게 합니다. 원문 `source_line_records()`의 개행 포함 경계와 선택 범위·offset·근거 ID는 바꾸지 않습니다. 물리적 줄 구분은 LF·CRLF·CR이며 빈 줄도 셉니다. 정확한 위치가 없거나 서로 다른 매핑이 충돌하면 빈 목록을 제공하고 줄 번호를 추정하지 않습니다. Notebook은 anchor의 셀 식별자와 셀 내부 줄을 함께 해석합니다. 합성과 사전 검증의 표 본문은 `excerpt`에 한 번만 담고 `table_cells`에는 셀 ID·행·열과 발췌 기준 문자 범위 `excerpt_range=[start,end]`를 전달합니다. 기본값인 span 1과 `is_header=false`는 생략하며 정책에서 그 의미를 명시합니다. 사후 검증은 선택한 셀 본문을 포함한 기존 표 표현을 유지합니다. 정본 표 셀과 선택 범위는 그대로 보존합니다.
+
+합성 프롬프트의 고정 Reference Policy는 동적인 요청 계약 앞에 둡니다. 선택한 입력 원문과 원본 답변은 전용 payload로 전달하고, 대화 이력에 같은 내용이 있으면 검증된 발화 ID·범위 또는 같은 답변 표시 본문에 한해 참조 문구로 바꿉니다. 다른 대화 내용과 부분 답변·전달 안내는 유지합니다. 원본 답변의 전체 의미 검증 보고서를 반복하지 않고 거절·임계값 미달인 항목만 `semantic_limitations`로 전달해 미확인 한계를 보존합니다. 서버의 원문·답변·보고서 정본과 사전 검증한 packet은 이 투영으로 변경하지 않습니다.
 
 원문 위치를 표시할 내용 단위는 `basis="source"`, 하나의 `refs`와 `source_location={ref, start, end}`를 사용합니다. 범위는 원문 요소 문자열 기준의 반열린 문자 범위이며 해당 근거의 선택 범위 안에 있어야 합니다. 서버는 검증된 `source_lines`에서 파일·셀·줄 위치를 계산해 내용 단위의 `text`를 생성합니다. 확정 응답을 다시 읽을 때는 이 문자열이 구조화 위치와 일치하는지도 검사하며, 저장된 본문을 조용히 고치지 않습니다. 범위·표시 불일치는 `source_location_mismatch`, 정확한 원본 매핑이 없으면 `source_location_unverifiable`입니다. 자연어 문장의 파일명·행 수를 정규식으로 해석하지 않습니다. 의미 검증은 설명과 위치의 연결 및 요청 충족을 확인하고, 명시적인 원문 좌표를 구조화 위치 없이 서술한 내용도 거부합니다. 높은 Decisions 확률이 물리적 위치 불일치를 덮어쓰지는 못합니다. 재합성에는 실제 오류 코드와 범위 수정 기준을 전달합니다. 보정 한도 뒤에도 위치 검사가 실패하면 해당 내용을 제외하고 `source_location_unverified` 제한과 `model_output_invalid`를 반환합니다. 필수 위치를 삭제한 부분 답변을 완료로 승격하거나 자동 저장·전송하지 않습니다.
 
