@@ -63,6 +63,46 @@ export async function sidebarClosedFocus(tab) {
   return { check: 'sidebar closes and returns focus', ...state };
 }
 
+/** Run after choosing another conversation on a narrow screen. */
+export async function mobileConversationSelected(tab, expectedTitle) {
+  const state = await sidebarClosedFocus(tab);
+  const conversation = await tab.playwright.evaluate(() => {
+    const current = document.querySelector('.st-key-documate_recent_conversations button:disabled');
+    const title = document.querySelector('.dm-conversation-title');
+    const titleRect = title?.getBoundingClientRect();
+    const mainRect = document.querySelector('#stMain').getBoundingClientRect();
+    const visibleTop = Math.max(mainRect.top,
+      document.querySelector('[data-testid="stHeader"]')?.getBoundingClientRect().bottom || 0);
+    return {
+      current: current?.textContent || "", pending: Boolean(document.querySelector('textarea:disabled')),
+      scriptState: document.querySelector('[data-testid="stApp"]')?.getAttribute('data-test-script-state'),
+      title: title?.textContent || "", titleTop: titleRect?.top, titleBottom: titleRect?.bottom,
+      titleVisible: Boolean(titleRect && titleRect.width > 0 && titleRect.height > 0
+        && titleRect.top >= visibleTop - 1 && titleRect.bottom <= Math.min(mainRect.bottom, innerHeight) + 1),
+    };
+  });
+  assert(conversation.current.includes(expectedTitle),
+    `The selected conversation is not identified: ${JSON.stringify(conversation)}`);
+  assert(conversation.scriptState === "notRunning",
+    `The selected conversation is still rendering: ${JSON.stringify(conversation)}`);
+  assert(conversation.title.includes(expectedTitle) && conversation.titleVisible,
+    `The selected conversation title is outside the reading area: ${JSON.stringify(conversation)}`);
+  assert(!conversation.pending, "Changing conversations started a request");
+  return { check: "mobile conversation selection returns to the conversation", ...state, ...conversation };
+}
+
+/** Check localized controls after the composer is restored. */
+export async function koreanControlLabels(tab) {
+  const labels = await tab.playwright.evaluate(() => ({
+    upload: document.querySelector('[data-testid="stChatInput"] button[aria-label="파일 첨부"]')?.getAttribute('aria-label'),
+    send: document.querySelector('[data-testid="stChatInputSubmitButton"]')?.getAttribute('aria-label'),
+    open: document.querySelector('[data-testid="stExpandSidebarButton"]')?.getAttribute('aria-label'),
+  }));
+  assert(labels.upload === "파일 첨부" && labels.send === "질문 보내기" && labels.open === "대화 메뉴 열기",
+    `Composer and navigation labels are not in Korean: ${JSON.stringify(labels)}`);
+  return { check: "Korean composer and sidebar labels", ...labels };
+}
+
 /** With an open desktop sidebar, Tab through the native header into main. */
 export async function desktopMainFocused(tab) {
   const state = await tab.playwright.evaluate(() => ({

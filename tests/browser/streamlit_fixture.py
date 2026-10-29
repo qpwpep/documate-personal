@@ -17,6 +17,9 @@ headings, lists, links, code fences and the retained raw-source view.
 pandas.merge source and a Python answer block for contrast checks.
 ``매개변수:`` reproduces indented documentation definitions. ``긴답변:`` returns
 ten paragraphs; ``지연:긴답변`` waits eight seconds so the reader can scroll away.
+``코드문맥:`` returns literal code containing Markdown punctuation.
+``제출대기:`` pauses before the composer submission is consumed. Reload while
+the fixture notice is visible, then release the old run with the fixture button.
 No LLM, search provider, or Slack service is called.
 
 The process logs its ephemeral API URL as DOCUMATE_UX_FIXTURE_API. Its read-only
@@ -47,6 +50,7 @@ from src.core.uploads import UploadManifest
 
 
 SOURCE_TEXT = "회귀 검증용 공식 문서 원문입니다. 이 문장은 라이트 모드에서도 선명하게 읽혀야 합니다."
+CODE_CONTEXT_TEXT = '__version__ = "1.0"\n# important comment\nif __version__:\n    print("__version__")\n'
 MARKDOWN_SOURCE_TEXT = """# 문서 표시 검증용 합성 자료
 
 이 내용은 실제 공식 문서를 검색한 결과가 아니라 **브라우저 회귀 검증용 자료**입니다.
@@ -127,24 +131,39 @@ class FixtureState:
                     problem=make_problem("evidence_insufficient", "pre_synthesis_validation"),
                 )
             else:
+                code_context = query.startswith("코드문맥:")
                 flattened_source = query.startswith("평탄화:")
                 markdown_source = query.startswith(("문서:", "매개변수:", "평탄화:"))
-                if flattened_source:
+                if code_context:
+                    source_text = CODE_CONTEXT_TEXT
+                elif flattened_source:
                     source_text = FLATTENED_SOURCE_TEXT
                 elif query.startswith("매개변수:"):
                     source_text = PARAMETER_SOURCE_TEXT
                 else:
                     source_text = MARKDOWN_SOURCE_TEXT if markdown_source else SOURCE_TEXT
+                if code_context:
+                    source_uri, title, media_type = (
+                        "https://docs.example.org/fixtures/code", "코드 문맥 검증용 합성 자료", "text/plain",
+                    )
+                elif markdown_source:
+                    source_uri, title, media_type = (
+                        "https://docs.example.org/fixtures/markdown", "문서 표시 검증용 합성 자료", "text/markdown",
+                    )
+                else:
+                    source_uri, title, media_type = (
+                        "https://docs.python.org/3/tutorial/", "브라우저 회귀 검증 자료", "text/html",
+                    )
                 snapshot = build_snapshot(
-                    source_uri="https://docs.example.org/fixtures/markdown" if markdown_source else "https://docs.python.org/3/tutorial/",
-                    title="문서 표시 검증용 합성 자료" if markdown_source else "브라우저 회귀 검증 자료",
-                    media_type="text/markdown" if markdown_source else "text/html", source_type="official", content=source_text,
+                    source_uri=source_uri, title=title, media_type=media_type,
+                    source_type="official", content=source_text,
                     parser="browser-fixture", parser_version="1",
                     capture_scope="provider_excerpt" if flattened_source else "full_document",
                 )
                 evidence = build_evidence(
                     snapshot=snapshot,
-                    element=DocumentElement(element_id="fixture-paragraph", kind="paragraph", text=source_text),
+                    element=DocumentElement(element_id="fixture-paragraph", kind="code" if code_context else "paragraph",
+                                            language="python" if code_context else None, text=source_text),
                 )
                 partial = query.startswith("부분:")
                 issues = [
@@ -156,6 +175,12 @@ class FixtureState:
                     SOURCE_TEXT if partial else f"회귀 검증 답변: {query}",
                     basis="excerpt" if partial else "source", refs=[evidence.id],
                 )
+                if code_context:
+                    document = AnswerDocument(blocks=[
+                        CodeBlock(language="python", content=ContentUnit(text=CODE_CONTEXT_TEXT, basis="example", refs=[evidence.id])),
+                        CodeBlock(inline=True, content=ContentUnit(text="__version__", basis="example", refs=[evidence.id])),
+                        ParagraphBlock(content=[ContentUnit(text="**합성 코드 자료**의 문맥과 원문을 비교합니다.", basis="source", refs=[evidence.id])]),
+                    ])
                 if flattened_source:
                     document = text_document(
                         "브라우저 회귀 검증용 합성 답변입니다. 근거에서 평탄화된 pandas.merge 제목과 본문을 확인하세요. "
@@ -278,6 +303,30 @@ def fixture_boundary() -> tuple[str, Path]:
     return url, Path(temporary.name)
 
 
+@st.cache_resource
+def submission_gate() -> threading.Event:
+    """Hold the real UI at the pre-consumption boundary, without timing a reload."""
+    from src.app.web import streamlit_app
+
+    gate = threading.Event()
+    gate.set()
+    split_submission = streamlit_app._split_chat_submission
+
+    def split_with_gate(value):
+        prompt, files = split_submission(value)
+        if prompt and prompt.startswith("제출대기:"):
+            gate.clear()
+            st.info("검증용: 제출 인계 전 대기 중입니다. 지금 새로고침하세요.")
+            # Explicit release makes browser checks deterministic. The timeout
+            # only bounds an abandoned fixture run; it is not a test assertion.
+            gate.wait(timeout=60)
+            st.empty()  # Let a disconnected runner stop before it can submit.
+        return prompt, files
+
+    streamlit_app._split_chat_submission = split_with_gate
+    return gate
+
+
 def main() -> None:
     from src.infra.settings import get_settings
     from src.app.web import streamlit_state
@@ -288,6 +337,9 @@ def main() -> None:
     from src.app.web import streamlit_app
 
     streamlit_app.SETTINGS = get_settings()
+    gate = submission_gate()
+    if not gate.is_set():
+        st.button("검증용 이전 제출 대기 해제", on_click=gate.set)
     streamlit_app.main()
 
 

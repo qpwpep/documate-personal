@@ -66,6 +66,7 @@ class AssistantChatMessage(TypedDict):
     request_id: NotRequired[str]
     export_result: NotRequired[AnswerExportResult]
     export_error: NotRequired[str]
+    interrupted: NotRequired[bool]
 
 
 ChatMessage = UserChatMessage | AssistantChatMessage
@@ -84,6 +85,8 @@ class Conversation:
     followup_prompt: str | None = None
     slack_drafts: dict[str, str] = field(default_factory=dict)
     pending_request: ChatSubmission | SaveSubmission | UploadSubmission | None = None
+    active_submission: ChatSubmission | SaveSubmission | UploadSubmission | None = None
+    operation_message_count: int = 0
     operation_in_progress: bool = False
     confirmed_epoch: str | None = None
     preserved_manifest: UploadManifest | None = None
@@ -97,6 +100,11 @@ class Conversation:
     @property
     def is_busy(self) -> bool:
         return self.operation_in_progress or self.pending_request is not None
+
+    @property
+    def has_interrupted_response(self) -> bool:
+        return bool(self.messages and self.messages[-1]["role"] == "assistant"
+                    and self.messages[-1].get("interrupted"))
 
     @property
     def title(self) -> str:
@@ -154,6 +162,10 @@ def get_upload_manifest() -> UploadManifest | None:
     if conversation.is_read_only:
         return conversation.preserved_manifest
     _remember_manifest(conversation)
+    if conversation.has_interrupted_response and conversation.client.manifest is None:
+        # Recovery must not wait on the still-running server request's lock.
+        # This snapshot is display-only; explicit submissions validate again.
+        return conversation.preserved_manifest
     return conversation.preserved_manifest if conversation.is_read_only else conversation.client.manifest
 
 
@@ -194,11 +206,15 @@ def switch_conversation(conversation_id: str) -> bool:
     _pause_automatic_work(target)
     st.session_state["active_conversation_id"] = target.id
     target.draft.needs_restore = True
-    validate_conversation(target)
+    if not target.has_interrupted_response:
+        validate_conversation(target)
     return True
 
 
-def validate_conversation(conversation: Conversation | None = None) -> bool:
+def validate_conversation(
+    conversation: Conversation | None = None, *,
+    expected_submission: ChatSubmission | SaveSubmission | UploadSubmission | None = None,
+) -> bool:
     """Recheck server identity without replaying uploads, questions or actions."""
     conversation = conversation or get_conversation()
     if conversation.expired:
@@ -210,7 +226,11 @@ def validate_conversation(conversation: Conversation | None = None) -> bool:
     try:
         manifest = conversation.client.refresh_uploads()
     except UploadAPIError as exc:
+        if expected_submission is not None and conversation.active_submission is not expected_submission:
+            return False
         conversation.validation_error = str(exc)
+        return False
+    if expected_submission is not None and conversation.active_submission is not expected_submission:
         return False
     if expected_epoch is not None and manifest.epoch != expected_epoch:
         conversation.expired = True

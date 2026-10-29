@@ -23,15 +23,23 @@ export default function ({ data, setStateValue, parentElement }) {
   }
 
   const snapshot = JSON.parse(data.snapshot);
+  let closeAfterNavigation = false;
   try {
     const previous = JSON.parse(sessionStorage.getItem(storageKey) || "null");
     if (previous?.version === 1 && Array.isArray(previous.conversations)) {
+      closeAfterNavigation = previous.active_conversation_id !== snapshot.active_conversation_id;
       for (const conversation of snapshot.conversations) {
-        const draft = previous.conversations.find(item => item.id === conversation.id)?.draft;
+        const stored = previous.conversations.find(item => item.id === conversation.id);
+        const draft = stored?.draft;
         // Python advances the revision on submit/edit. An unchanged revision
         // must not overwrite text just typed in the native browser input.
         if (typeof draft?.text === "string" && Number.isInteger(draft.revision)
             && draft.revision >= conversation.draft.revision) {
+          // A submit clears the browser draft before Python consumes it. Keep
+          // its question until a server snapshot acknowledges that revision.
+          if (draft.revision > conversation.draft.revision) {
+            conversation.pending_prompt = stored.pending_prompt ?? null;
+          }
           conversation.draft = draft;
         }
       }
@@ -51,6 +59,9 @@ export default function ({ data, setStateValue, parentElement }) {
   let closeRequested = false;
   let sidebarHadFocus = false;
   let sidebarOverlayActive = false;
+  let sourcePanel = null;
+  let sourceOpener = null;
+  let interruptRequested = false;
   const sidebarBackground = new Map();
   let focusInput = data.focus_input;
   let previousReading = null;
@@ -73,9 +84,12 @@ export default function ({ data, setStateValue, parentElement }) {
     message_count: newAnswer ? previousReading.message_count : data.message_count,
     pending: data.pending_chat,
     top: previousReading?.pending || newAnswer ? previousReading.top : null,
+    // Draft and navigation events can cause separate reruns before scrolling.
+    navigation: closeAfterNavigation || previousReading?.navigation === true,
   };
   let observeUserScroll = reading.top !== null;
   let answerScrollPending = newAnswer;
+  let navigationScrollPending = reading.navigation;
   let scrollTimer;
   let readingFrame;
 
@@ -96,48 +110,76 @@ export default function ({ data, setStateValue, parentElement }) {
   }
 
   function onReadingIntent(event) {
+    if (!event.isTrusted) return;
     if (!event.target.closest?.("#stMain") || event.target.closest?.('[data-testid="stChatInput"]')) return;
     if (event.type === "keydown"
         && (!["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "].includes(event.key)
           || event.target.closest?.('input, textarea, select, [contenteditable="true"]'))) return;
     observeUserScroll = true;
     // A gesture after completion takes priority over an automatic adjustment.
-    if (answerScrollPending) {
+    if (answerScrollPending || navigationScrollPending) {
       reading.message_count = data.message_count;
+      reading.navigation = false;
       persistReading();
     }
     answerScrollPending = false;
+    navigationScrollPending = false;
     clearTimeout(scrollTimer);
     cancelAnimationFrame(readingFrame);
     readingFrame = requestAnimationFrame(recordReadingPosition);
   }
 
-  function settleAnswerScroll() {
-    if (!answerScrollPending) return;
+  function settleReadingScroll() {
+    if (!answerScrollPending && !navigationScrollPending) return;
     clearTimeout(scrollTimer);
     const input = document.querySelector(selector);
     const messages = document.querySelectorAll('[data-testid="stChatMessage"]');
-    if (!input || input.disabled || messages.length !== data.message_count) return;
+    if (messages.length !== data.message_count) return;
+    if (answerScrollPending && (!input || input.disabled)) return;
+    if (navigationScrollPending && !document.querySelector('.dm-conversation-title')) return;
+    // Message rows can arrive before the restored composer. Wait for the run
+    // to finish so its later mount cannot restart native scrolling afterward.
+    if (document.querySelector('[data-testid="stApp"]')
+        ?.getAttribute("data-test-script-state") !== "notRunning") return;
     // Streamlit animates to the bottom when the composer returns. Wait for
     // both its scrolling and the final answer layout to settle before moving.
     scrollTimer = setTimeout(() => {
       const main = document.getElementById("stMain");
+      if (!main) return;
+      // The same main container survives conversation changes. A new view
+      // starts at its title; ordinary reruns retain the current reading policy.
+      if (navigationScrollPending) {
+        navigationScrollPending = false;
+        moveReadingPosition(main, 0);
+        return;
+      }
       const answer = document.querySelectorAll('[data-testid="stChatMessage"]')[data.message_count - 1];
-      if (!main || !answer) return;
+      if (!answer) return;
       const visibleTop = Math.max(main.getBoundingClientRect().top,
         document.querySelector('[data-testid="stHeader"]')?.getBoundingClientRect().bottom || 0);
       const top = reading.top ?? main.scrollTop + answer.getBoundingClientRect().top - visibleTop - 16;
       answerScrollPending = false;
+      moveReadingPosition(main, top);
+    }, 160);
+  }
+
+  function moveReadingPosition(main, top) {
+    // Streamlit's animation can overwrite scrollTo. Its main-container
+    // wheel listener cancels that animation; a zero-delta event targets
+    // no widget and performs no scrolling or input action of its own.
+    main.dispatchEvent(new WheelEvent("wheel"));
+    readingFrame = requestAnimationFrame(() => {
+      reading.navigation = false;
       reading.message_count = data.message_count;
       persistReading();
       main.scrollTo({ top: Math.max(0, top), behavior: "instant" });
-    }, 160);
+    });
   }
 
   function onMainScroll(event) {
     if (event.target.id !== "stMain") return;
     recordReadingPosition();
-    settleAnswerScroll();
+    settleReadingScroll();
   }
 
   function persist() {
@@ -158,8 +200,12 @@ export default function ({ data, setStateValue, parentElement }) {
   }
 
   function beginSubmission() {
+    const prompt = document.querySelector(selector)?.value;
     submitting = true;
     conversationFiles.delete(data.conversation_id);
+    // Keep the question before the server's queued-request snapshot arrives.
+    // Reloading this marker only restores an uncertain outcome, never resends.
+    if (prompt?.trim()) storedConversation.pending_prompt = prompt;
     storedConversation.draft = { text: "", revision: data.revision + 1 };
     persist();
   }
@@ -200,6 +246,32 @@ export default function ({ data, setStateValue, parentElement }) {
   }
 
   function onClick(event) {
+    const headerButton = event.target.closest?.('[data-testid="stHeader"] button');
+    if (data.operation_id && headerButton
+        && (headerButton.textContent.trim() === "Stop" || headerButton.dataset.documateInterrupt)) {
+      // Streamlit's native Stop prevents the rerun that restores this UI.
+      // A component event interrupts the receiver while allowing a normal
+      // rerun. It does not cancel the independent server request.
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      if (!interruptRequested) {
+        interruptRequested = true;
+        localizeControls();
+        setStateValue("interrupt", {
+          operation_id: data.operation_id,
+          conversation_id: data.conversation_id,
+          nonce: Date.now(),
+        });
+      }
+      return;
+    }
+    if (event.target.closest?.('.dm-source-close')) {
+      event.preventDefault();
+      closeSourcePanel();
+      return;
+    }
+    const sourceButton = event.target.closest?.('[data-testid="stPopoverButton"]');
+    if (sourceButton) sourceOpener = sourceButton;
     const send = event.target.closest?.('[data-testid="stChatInputSubmitButton"]');
     if (send && blockRejectedSubmission(event)) return;
     // Keyboard activation of the send button has no pointerdown event.
@@ -314,6 +386,88 @@ export default function ({ data, setStateValue, parentElement }) {
     }
   }
 
+  function recoverSourceFocus() {
+    const panel = [...document.querySelectorAll('[data-testid="stPopoverBody"]')]
+      .find(element => element.querySelector('.dm-source-header') && element.getClientRects().length);
+    if (panel === sourcePanel) return;
+    if (!panel) {
+      const opener = currentSourceOpener();
+      if (sourcePanel && opener) {
+        opener.focus({ preventScroll: true });
+        const main = document.getElementById('stMain');
+        const bounds = opener.getBoundingClientRect();
+        const visibleTop = Math.max(main?.getBoundingClientRect().top ?? 0,
+          document.querySelector('[data-testid="stHeader"]')?.getBoundingClientRect().bottom ?? 0);
+        const visibleBottom = document.querySelector('[data-testid="stBottom"]')?.getBoundingClientRect().top
+          ?? window.innerHeight;
+        // Fixed headers and composers overlap the scroller. Reveal only the
+        // hidden edge, with room for the focus outline.
+        if (main && bounds.top < visibleTop) {
+          main.scrollTop += bounds.top - visibleTop - 8;
+        } else if (main && bounds.bottom > visibleBottom) {
+          main.scrollTop += bounds.bottom - visibleBottom + 8;
+        }
+      }
+      sourcePanel = null;
+      return;
+    }
+    sourcePanel = panel;
+    if (!sourceOpener?.isConnected || sourceOpener.getAttribute('aria-expanded') !== 'true') {
+      sourceOpener = null;
+    }
+    sourceOpener = currentSourceOpener();
+    focusInput = false;
+    panel.querySelector('.dm-source-title')?.focus({ preventScroll: true });
+  }
+
+  function closeSourcePanel() {
+    const opener = currentSourceOpener();
+    if (opener?.getAttribute('aria-expanded') === 'true') {
+      opener.click();
+    }
+  }
+
+  function currentSourceOpener() {
+    // Streamlit keeps separate desktop/mobile buttons inside one popover.
+    // Resizing hides the original without disconnecting it. Resolve its visible
+    // sibling within the same popover: different answers can share a label.
+    const popover = sourceOpener?.closest('[data-testid="stPopover"]');
+    const candidates = popover
+      ? popover.querySelectorAll('[data-testid="stPopoverButton"]')
+      : document.querySelectorAll('[data-testid="stPopoverButton"][aria-expanded="true"]');
+    return [...candidates].find(button => !button.disabled && button.getClientRects().length
+      && getComputedStyle(button).visibility === 'visible');
+  }
+
+  function onSourceKeyDown(event) {
+    if (!sourcePanel) return;
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      closeSourcePanel();
+      return;
+    }
+    if (event.key !== 'Tab') return;
+    const focusable = [...sourcePanel.querySelectorAll('a[href], button, input, select, textarea, summary, [tabindex]')]
+      .filter(element => {
+        // Closed details can retain layout boxes in Chromium; only their own
+        // summary participates in keyboard navigation.
+        const closed = element.closest('details:not([open])');
+        if (closed && (!element.matches('summary') || element.parentElement !== closed
+            || closed.parentElement.closest('details:not([open])'))) return false;
+        return !element.disabled && element.tabIndex >= 0 && element.getClientRects().length
+          && getComputedStyle(element).visibility === 'visible';
+      });
+    const first = focusable[0];
+    const last = focusable.at(-1);
+    const current = document.activeElement;
+    if (!focusable.includes(current) || (event.shiftKey ? current === first : current === last)) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      (event.shiftKey ? last : first)?.focus();
+    }
+  }
+
   function recoverSidebarFocus() {
     const sidebar = document.querySelector('[data-testid="stSidebar"]');
     const main = document.getElementById("stMain");
@@ -322,6 +476,14 @@ export default function ({ data, setStateValue, parentElement }) {
     // layout mode: the sidebar's animated transform still looks closed at the
     // moment data-collapsed changes, so its current rectangle is not reliable.
     const overlay = open && main && getComputedStyle(main).position === "absolute";
+    if (closeAfterNavigation) {
+      closeAfterNavigation = false;
+      if (overlay) {
+        closeRequested = true;
+        document.querySelector('[data-testid="stSidebarCollapseButton"] button')?.click();
+        return;
+      }
+    }
     if (overlay) {
       sidebarOverlayActive = true;
       for (const element of [main, document.querySelector('[data-testid="stHeader"]'),
@@ -437,8 +599,36 @@ export default function ({ data, setStateValue, parentElement }) {
     if (rejected) states.push(`선택 오류 ${rejected}개 · 파일 옆의 오류를 확인하고 해당 파일을 제거하거나 지원 형식·크기에 맞는 파일로 다시 선택하세요. 작성한 질문은 유지됩니다. 오류를 해결하기 전에는 전송할 수 없습니다.`);
     const text = chips.length
       ? states.join(" · ") + " 아직 검색에 사용되지 않습니다." + (waiting ? " 전송하면 자료를 준비합니다." : "")
-      : "선택한 파일은 전송 후 검색에 사용됩니다. 파일만 먼저 전송할 수도 있습니다.";
+      : "새 파일은 +로 추가한 뒤 전송하세요. 파일만 먼저 전송할 수도 있습니다.";
     if (status.textContent !== text) status.textContent = text;
+  }
+
+  function localizeControls() {
+    if (data.operation_id) {
+      for (const button of document.querySelectorAll('[data-testid="stHeader"] button')) {
+        if (button.textContent.trim() !== 'Stop' && !button.dataset.documateInterrupt) continue;
+        button.dataset.documateInterrupt = 'true';
+        const label = interruptRequested ? '수신 중단 중…' : '응답 수신 중단';
+        if (button.textContent !== label) button.textContent = label;
+        if (button.getAttribute('aria-label') !== label) button.setAttribute('aria-label', label);
+        const hint = '화면의 응답 수신만 중단합니다. 서버 작업은 계속될 수 있습니다.';
+        if (button.title !== hint) button.title = hint;
+        if (interruptRequested && !button.disabled) button.disabled = true;
+      }
+    }
+    const controls = [
+      ['[data-testid="stChatInput"] input[type="file"]', "첨부할 파일 선택"],
+      ['[data-testid="stChatInput"] button:is([aria-label="Upload files"], [aria-label="파일 첨부"])', "파일 첨부"],
+      ['[data-testid="stChatInputSubmitButton"]', "질문 보내기"],
+      ['[data-testid="stExpandSidebarButton"]', "대화 메뉴 열기"],
+      ['[data-testid="stSidebarCollapseButton"] button', "대화 메뉴 닫기"],
+    ];
+    for (const [selector, label] of controls) {
+      for (const control of document.querySelectorAll(selector)) {
+        if (control.getAttribute("aria-label") !== label) control.setAttribute("aria-label", label);
+        if (control.getAttribute("title") !== label) control.setAttribute("title", label);
+      }
+    }
   }
 
   function blockRejectedSubmission(event) {
@@ -463,6 +653,7 @@ export default function ({ data, setStateValue, parentElement }) {
   document.addEventListener("click", forgetRemovedFile, true);
   document.addEventListener("focusin", onFocus, true);
   document.addEventListener("keydown", onSidebarKeyDown, true);
+  document.addEventListener("keydown", onSourceKeyDown, true);
   window.addEventListener("resize", recoverSidebarFocus);
   document.addEventListener("wheel", onReadingIntent, { capture: true, passive: true });
   document.addEventListener("touchmove", onReadingIntent, { capture: true, passive: true });
@@ -471,18 +662,22 @@ export default function ({ data, setStateValue, parentElement }) {
   document.addEventListener("scroll", onMainScroll, true);
   window.addEventListener("pagehide", storeDraft);
   const observer = new MutationObserver(() => {
+    localizeControls();
     recoverSidebarFocus();
+    recoverSourceFocus();
     restoreSelectedFiles();
     renderUploadSelection();
-    settleAnswerScroll();
+    settleReadingScroll();
   });
-  observer.observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ["data-collapsed", "aria-invalid", "disabled"] });
+  observer.observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ["data-collapsed", "aria-expanded", "aria-invalid", "disabled", "aria-label", "title", "data-test-script-state"] });
+  localizeControls();
   recoverSidebarFocus();
+  recoverSourceFocus();
   restoreSelectedFiles();
   renderUploadSelection();
   persist();
   persistReading();
-  settleAnswerScroll();
+  settleReadingScroll();
 
   const cleanup = () => {
     document.removeEventListener("keydown", onKeyDown, true);
@@ -495,6 +690,7 @@ export default function ({ data, setStateValue, parentElement }) {
     document.removeEventListener("click", forgetRemovedFile, true);
     document.removeEventListener("focusin", onFocus, true);
     document.removeEventListener("keydown", onSidebarKeyDown, true);
+    document.removeEventListener("keydown", onSourceKeyDown, true);
     window.removeEventListener("resize", recoverSidebarFocus);
     releaseSidebarBackground();
     document.removeEventListener("wheel", onReadingIntent, true);

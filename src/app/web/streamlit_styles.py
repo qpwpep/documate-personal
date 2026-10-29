@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from html import escape
+
 import streamlit as st
 
 from src.app.web.streamlit_theme import build_theme_css
@@ -9,6 +11,10 @@ _COMPONENT_CSS = """
 #MainMenu,
 footer {
     visibility: hidden;
+}
+
+[data-testid="stAppDeployButton"] {
+    display: none;
 }
 
 header[data-testid="stHeader"] {
@@ -110,6 +116,12 @@ button[data-testid="stExpandSidebarButton"]:hover {
     min-width: 0;
 }
 
+.dm-conversation-title {
+    display: block;
+    margin-top: 0.35rem;
+    overflow-wrap: anywhere;
+}
+
 .dm-title-copy strong {
     color: var(--dm-text);
     display: block;
@@ -194,6 +206,18 @@ button[data-testid="stExpandSidebarButton"]:hover {
 
 [data-testid="stSidebar"] div.stButton > button {
     min-height: 3rem;
+}
+
+.st-key-documate_recent_conversations button[kind="primary"]:disabled {
+    background: var(--dm-accent-soft);
+    border-color: var(--dm-accent);
+    color: var(--dm-text);
+    opacity: 1;
+}
+
+.st-key-documate_recent_conversations button p {
+    overflow-wrap: anywhere;
+    white-space: normal;
 }
 
 [data-testid="stSidebar"] [data-testid="stElementContainer"]:has(div.stButton),
@@ -451,6 +475,72 @@ div.stLinkButton > a:focus-visible {
     box-shadow: var(--dm-shadow);
 }
 
+.dm-source-title {
+    margin: 0;
+    overflow-wrap: anywhere;
+}
+
+.dm-source-header {
+    align-items: center;
+    background: var(--dm-panel);
+    border-bottom: 1px solid var(--dm-divider);
+    display: flex;
+    gap: 0.75rem;
+    justify-content: space-between;
+    padding: 0.25rem 0 0.65rem;
+}
+
+[data-testid="stPopoverBody"] [data-testid="stElementContainer"]:has(.dm-source-header) {
+    background: var(--dm-panel);
+    position: sticky;
+    top: 0;
+    z-index: 2;
+}
+
+.dm-source-close {
+    background: var(--dm-panel);
+    border: 1px solid var(--dm-border);
+    border-radius: 0.6rem;
+    color: var(--dm-text);
+    cursor: pointer;
+    flex-shrink: 0;
+    font: inherit;
+    min-height: 44px;
+    min-width: 44px;
+    padding: 0.5rem 0.75rem;
+}
+
+.dm-source-close:hover {
+    background: var(--dm-accent-soft);
+}
+
+.dm-source-close:focus-visible,
+.dm-source-title:focus-visible {
+    outline: 2px solid var(--dm-accent);
+    outline-offset: 2px;
+}
+
+.dm-source-answer-context {
+    background: var(--dm-accent-soft);
+    border-left: 3px solid var(--dm-accent);
+    border-radius: 0.3rem;
+    color: var(--dm-text);
+    margin: 0.75rem 0;
+    overflow-wrap: anywhere;
+    padding: 0.75rem;
+}
+
+.dm-source-context-label {
+    color: var(--dm-accent);
+    font-size: 0.88rem;
+    font-weight: 700;
+    margin-bottom: 0.4rem;
+}
+
+.dm-source-answer-text {
+    margin: 0.4rem 0 0;
+}
+
 [data-testid="stPopoverButton"]:hover {
     background: var(--dm-button-hover-bg);
     border-color: var(--dm-button-hover-border);
@@ -505,8 +595,36 @@ div.stLinkButton > a:focus-visible {
     color: var(--dm-text) !important;
 }
 
-[data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarAssistant"]) [data-testid="stAlert"] * {
-    color: var(--dm-text) !important;
+/* Streamlit's status colors follow its own theme. Opaque paired colors keep
+   status messages readable when DocuMate's independent theme changes. */
+[data-testid="stAlertContainer"] {
+    --dm-alert-text: var(--dm-info-text);
+    --dm-alert-bg: var(--dm-info-bg);
+    background: var(--dm-alert-bg) !important;
+    color: var(--dm-alert-text) !important;
+}
+
+[data-testid="stAlertContainer"]:has([data-testid="stAlertContentSuccess"]) {
+    --dm-alert-text: var(--dm-success-text);
+    --dm-alert-bg: var(--dm-success-bg);
+}
+
+[data-testid="stAlertContainer"]:has([data-testid="stAlertContentWarning"]) {
+    --dm-alert-text: var(--dm-warning-text);
+    --dm-alert-bg: var(--dm-warning-bg);
+}
+
+[data-testid="stAlertContainer"]:has([data-testid="stAlertContentError"]) {
+    --dm-alert-text: var(--dm-error-text);
+    --dm-alert-bg: var(--dm-error-bg);
+}
+
+[data-testid="stAlertContainer"] * {
+    color: inherit !important;
+}
+
+[data-testid="stAlertContainer"] a {
+    text-decoration: underline;
 }
 
 [data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarAssistant"]) [data-testid="stAlert"] code {
@@ -658,6 +776,18 @@ div.stLinkButton > a:focus-visible {
     background: var(--dm-accent-soft) !important;
     border-radius: 0.72rem !important;
     color: var(--dm-chat-icon) !important;
+}
+
+[data-testid="stChatInput"] [data-testid="stChatInputSubmitButton"],
+[data-testid="stChatInput"] button:has(svg):not([aria-label^="Remove "]) {
+    min-width: 44px;
+    min-height: 44px;
+    flex-shrink: 0;
+}
+
+[data-testid="stChatInput"] button:focus-visible {
+    outline: 2px solid var(--dm-accent);
+    outline-offset: 2px;
 }
 
 [data-testid="stChatInput"] button *,
@@ -852,6 +982,18 @@ div.stLinkButton > a:focus-visible {
 }
 
 @media (max-width: 760px) {
+    [data-testid="stPopoverBody"]:has(.dm-source-title) {
+        /* Keep the expanded reader inside the viewport; the popover's computed
+           transform still assumes Streamlit's shorter default height. */
+        top: 4rem !important;
+        left: 1rem !important;
+        transform: none !important;
+        width: calc(100vw - 2rem) !important;
+        min-width: 0 !important;
+        max-width: calc(100vw - 2rem);
+        max-height: calc(100dvh - 5rem) !important;
+    }
+
     /* Reserve a separate toolbar row even after the conversation is scrolled. */
     header[data-testid="stHeader"] {
         height: 3.75rem;
@@ -864,16 +1006,12 @@ div.stLinkButton > a:focus-visible {
         height: calc(100% - 3.75rem);
     }
 
-    [data-testid="stAppDeployButton"] {
-        display: none;
-    }
-
     [data-testid="stToolbar"] {
         padding-right: 0.75rem;
     }
 
     .block-container {
-        padding: 1.2rem 1rem 7.5rem;
+        padding: 1rem 0.75rem 7.5rem;
     }
 
     .dm-topbar {
@@ -901,6 +1039,55 @@ div.stLinkButton > a:focus-visible {
     [data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarUser"]) {
         max-width: 100%;
     }
+
+    /* Put the speaker above the message so its column cannot consume the
+       narrow reading area. Keep the avatar and the message's accessible name. */
+    [data-testid="stChatMessage"] {
+        flex-direction: column;
+        gap: 0.35rem;
+    }
+
+    [data-testid="stChatMessage"] [data-testid="stChatMessageContent"] {
+        width: 100%;
+        min-width: 0;
+    }
+
+    [data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarAssistant"]) [data-testid="stChatMessageContent"],
+    [data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarUser"]) [data-testid="stMarkdownContainer"] {
+        padding: 0.7rem 0.75rem;
+    }
+
+    [data-testid="stChatMessage"] h2 {
+        font-size: 1.5rem;
+        line-height: 1.35;
+        padding-top: 0.6rem;
+    }
+
+    [data-testid="stChatMessage"] h3 {
+        font-size: 1.2rem;
+    }
+
+    [data-testid="stExpanderDetails"] [data-testid="stMarkdownContainer"] {
+        padding: 0.65rem 0.75rem;
+    }
+
+    [data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarAssistant"]) [data-testid="stAlert"] {
+        background: transparent !important;
+        border: 0 !important;
+        box-shadow: none;
+        padding: 0;
+    }
+
+    [data-testid="stChatMessage"] [data-testid="stAlertContainer"] {
+        padding: 0.65rem 0.75rem;
+    }
+
+    [data-testid="stChatMessage"] [data-testid="stAlert"] [data-testid="stMarkdownContainer"] {
+        background: transparent;
+        border: 0;
+        box-shadow: none;
+        padding: 0;
+    }
 }
 """
 
@@ -911,16 +1098,26 @@ def configure_page(theme_mode: str) -> None:
         f"<style>\n{build_theme_css(theme_mode)}\n{_COMPONENT_CSS}</style>",
         unsafe_allow_html=True,
     )
+
+
+def render_conversation_header(title: str, *, attachment_count: int | None, read_only: bool) -> None:
+    if attachment_count is None:
+        status = "첨부 연결 확인 중"
+    else:
+        status = f"{'이전 첨부 기록' if read_only else '검색 가능 자료'} {attachment_count}개"
+    if read_only:
+        status = "읽기 전용 · " + status
     st.markdown(
-        """
+        f"""
         <div class="dm-topbar">
             <div class="dm-topbar-title">
                 <span class="dm-mark">DM</span>
                 <div class="dm-title-copy">
                     <strong>DocuMate</strong>
-                    <span>공식 문서와 첨부 자료로 답하는 학습 채팅</span>
+                    <span class="dm-conversation-title">{escape(title)}</span>
                 </div>
             </div>
+            <span class="dm-topbar-status">{status}</span>
         </div>
         """,
         unsafe_allow_html=True,

@@ -9,7 +9,7 @@ import streamlit as st
 from src.app.client import AgentCallResult, AgentStreamEvent
 from src.app.web.streamlit_sources import render_code, render_evidence
 from src.app.web.streamlit_state import AssistantChatMessage, ChatMessage
-from src.core.answer_schema import ActionReceipt, AnswerResponse, ContentUnit, SemanticCheck, iter_content_units
+from src.core.answer_schema import ActionReceipt, AnswerResponse, CodeBlock, ContentUnit, SemanticCheck, iter_content_units
 from src.core.answer_schema.rendering import code_display_label, content_unit_markdown, inline_code_markdown, literal_markdown
 from src.core.contracts.outcome import TurnResult
 from src.core.llm_errors import ExecutionProblem
@@ -39,6 +39,8 @@ def render_chat_history(
             if message["role"] == "user":
                 st.markdown(message["content"])
             else:
+                if message.get("interrupted"):
+                    st.warning("응답 수신이 중단되었습니다. 서버 작업은 취소되지 않아 처리나 저장·전송이 계속될 수 있습니다.")
                 for error_message in message.get("transport_errors", []):
                     st.error(error_message)
                 result = message["result"]
@@ -104,7 +106,9 @@ def _render_question_recovery(
         and result.problem.next_action in {"retry_later", "supply_information"}
         and result.problem.stage not in {"action_postprocess", "response_assembly"}
     )
-    if result is None and on_edit is not None:
+    if result is None and on_edit is not None and not disabled:
+        if message.get("interrupted"):
+            st.caption("다른 작업은 ‘새 채팅’에서 시작할 수 있습니다. 이 대화의 질문 원문은 아래 ‘질문 수정’으로 가져올 수 있습니다.")
         st.caption("처리 결과를 확인하지 못했습니다. 저장·전송을 요청했다면 완료 여부를 확인한 뒤 질문을 수정해 주세요.")
     request_id = result.request_id if result is not None else message.get("request_id", "")
     recovery_key = f"{index}_{request_id}"
@@ -124,9 +128,7 @@ def render_turn_result(result: TurnResult, fastapi_url: str) -> None:
     if result.status == "needs_input":
         st.info(result.message)
     elif partial_body:
-        guidance = _problem_guidance(result.problem)
-        st.warning("**부분 답변** · 요청 전체를 완성하지 못했습니다."
-                   + (f"\n\n{guidance}" if guidance else ""))
+        st.warning(_partial_answer_summary(result.response, result.problem))
     elif result.problem is not None:
         render = st.error if result.status == "failed" else st.warning
         render(result.problem.message)
@@ -142,6 +144,41 @@ def render_turn_result(result: TurnResult, fastapi_url: str) -> None:
             partial_problem=result.problem if partial_body else None,
             request_id=result.request_id if partial_body else "",
         )
+
+
+def _partial_answer_summary(response: AnswerResponse, problem: ExecutionProblem) -> str:
+    global_issues = [issue for issue in response.issues if issue.unit_id is None]
+    issue_codes = {issue.code for issue in global_issues}
+    provided_scope = next(
+        (issue.message for issue in global_issues if issue.code == "source_excerpt_fallback"),
+        "현재 제공할 수 있는 본문을 아래에 표시합니다.",
+    )
+    # General completion notices do not explain the missing condition. Keep
+    # every original issue in the details, but prioritize concrete gaps here.
+    reasons = list(dict.fromkeys(
+        issue.message for issue in global_issues
+        if issue.code not in {"answer_incomplete", "source_excerpt_fallback"}
+    )) or [problem.message]
+    displayed_reasons = "\n".join(f"- {message}" for message in reasons[:2])
+    if len(reasons) > 2:
+        displayed_reasons += f"\n- 나머지 {len(reasons) - 2}개 한계는 ‘답변의 한계와 처리 정보’에서 확인하세요."
+    if "invalid_content_removed" in issue_codes:
+        displayed_reasons += "\n\n제외된 항목의 상세 기록은 없습니다."
+    guidance = _problem_guidance(problem)
+    if problem.next_action == "supply_information":
+        if "evidence_packet_incomplete" in issue_codes and "retrieved_evidence_incomplete" not in issue_codes:
+            guidance = "질문을 항목별로 나누어 다시 요청해 주세요. 검색한 자료를 답변에 담는 과정에서 생긴 한계입니다."
+        elif "source_location_unverified" in issue_codes:
+            guidance = "출처에서 원문 위치를 확인하거나, 위치를 확인할 수 있는 원본 파일을 첨부해 주세요."
+        elif "invalid_content_removed" in issue_codes:
+            guidance = "필요한 항목이 빠졌다면 해당 항목을 지정해 다시 질문해 주세요."
+        else:
+            guidance = ("위 조건을 확인해 질문을 수정하세요. 필요한 내용이 기존 자료에 있으면 파일명·위치를 지정하고, "
+                        "없는 경우에만 자료를 추가해 주세요.")
+    return ("**부분 답변** · 요청 전체를 완성하지 못했습니다."
+            f"\n\n**제공한 범위** · {provided_scope}"
+            f"\n\n**확인하지 못한 내용**\n\n{displayed_reasons}"
+            + (f"\n\n**다음 행동** · {guidance}" if guidance else ""))
 
 
 def _problem_guidance(problem: ExecutionProblem) -> str:
@@ -163,10 +200,18 @@ def render_answer_response(
     citations = {citation.evidence.id: citation for citation in response.citations}
     checks = {check.unit_id: check for check in response.checks}
     global_issues = [issue for issue in response.issues if issue.unit_id is None]
+    section_units: list[ContentUnit | CodeBlock] = []
 
     for index, block in enumerate(response.content.blocks):
+        if block.type == "heading" and section_units:
+            _render_citations(section_units, citations)
+            section_units = []
         prefix = f"b{index}."
         units = [(path, unit) for path, unit in iter_content_units(response.content) if path.startswith(prefix)]
+        if block.type == "code":
+            section_units.append(block)
+        else:
+            section_units.extend(unit for _, unit in units)
         if block.type == "paragraph":
             st.markdown(" ".join(_unit_text(unit, citations) for unit in block.content))
         elif block.type == "heading":
@@ -203,7 +248,7 @@ def render_answer_response(
                 st.warning("이 내용에 연결된 근거를 찾지 못했습니다.")
             elif check is not None and check.support_status == "unsupported":
                 st.warning("이 인용문은 보관한 원문과 일치하지 않습니다.")
-        _render_citations([unit for _, unit in units], citations)
+    _render_citations(section_units, citations)
 
     if global_issues or partial_problem is not None:
         with st.expander("답변의 한계와 처리 정보"):
@@ -213,7 +258,9 @@ def render_answer_response(
                 st.warning(f"답변에 기록된 한계: {issue.message}")
             if request_id:
                 st.caption(f"오류 식별자: {request_id}")
-    _render_validation_scope(response, turn_incomplete=turn_incomplete)
+    _render_validation_scope(
+        response, turn_incomplete=turn_incomplete, show_limit_summary=partial_problem is None,
+    )
     render_action_receipts(response, fastapi_url)
 
 
@@ -275,42 +322,40 @@ def _save_download_ready(action: ActionReceipt) -> bool:
             and action.artifact.expires_at > datetime.now(tz=timezone.utc).timestamp())
 
 
-def _render_validation_scope(response: AnswerResponse, *, turn_incomplete: bool = False) -> None:
+def _render_validation_scope(
+    response: AnswerResponse, *, turn_incomplete: bool = False, show_limit_summary: bool = True,
+) -> None:
     report = response.semantic_validation
     units = list(iter_content_units(response.content))
     if not response.citations and report is None and not units:
         return
     resolved = sum(check.reference_status == "resolved" for check in response.checks)
-    exact = sum(check.support_status == "exact_match" for check in response.checks)
+    excerpt_paths = {path for path, unit in units if unit.basis == "excerpt"}
+    exact = sum(check.unit_id in excerpt_paths and check.support_status == "exact_match" for check in response.checks)
     semantic_checks = {(check.name, check.unit_id): check for check in report.checks} if report is not None else {}
     request_check = semantic_checks.get(("request_fulfilled", None))
     issue_codes = {issue.code for issue in response.issues}
-    st.caption(f"확인한 범위: 원문에 연결된 내용 {resolved}개 · 원문과 일치하는 발췌 {exact}개. "
-               "원문 연결과 발췌 일치는 답변 전체의 정확성을 뜻하지 않습니다.")
+    quote_summary = f"직접 인용 {len(excerpt_paths)}개 중 원문 일치 {exact}개" if excerpt_paths else "직접 인용 없음"
+    st.caption(f"출처가 연결된 내용 {resolved}개 · {quote_summary}")
     limits = list(dict.fromkeys(issue.message for issue in response.issues if issue.unit_id is None))
     if "invalid_content_removed" in issue_codes:
         limits.append("제외된 항목의 상세 기록은 없습니다.")
     unit_limit_count = sum(issue.unit_id is not None for issue in response.issues)
     if unit_limit_count:
         limits.append(f"내용별 한계 {unit_limit_count}개는 해당 내용 아래에서 확인할 수 있습니다.")
-    if request_check is None or request_check.status == "refused":
-        limits.append("답변 본문의 요청 조건 충족 여부는 평가 결과가 없습니다.")
-    elif request_check.probability < report.threshold:
+    if request_check is not None and request_check.status == "refused":
+        limits.append("요청 조건을 자동으로 확인하지 못했습니다.")
+    elif request_check is not None and request_check.probability < report.threshold:
         limits.append("답변 본문의 요청 조건 충족을 확인하지 못했습니다.")
-    if not limits:
-        limits.append("답변에 별도로 기록된 한계는 없습니다. 정확성을 보장한다는 뜻은 아닙니다.")
-    st.caption("확인하지 못한 범위: " + " ".join(limits))
-    if "invalid_content_removed" in issue_codes:
-        next_step = "답변과 근거를 대조하고, 필요한 항목이 빠졌다면 해당 항목을 지정해 다시 질문해 주세요."
-    elif "source_location_unverified" in issue_codes:
-        next_step = "출처에서 원문 위치를 확인하거나, 위치를 확인할 수 있는 원본 파일을 첨부해 주세요."
-    elif response.issues:
-        next_step = "기록된 한계를 확인하고, 필요한 범위의 자료나 조건을 추가해 다시 질문해 주세요."
-    else:
-        next_step = "근거 버튼에서 원문을 확인하세요. 저장·전송 결과는 아래 별도 안내에서 확인할 수 있습니다."
-    st.caption("다음 행동: " + next_step)
+    if limits and show_limit_summary:
+        st.caption("확인할 한계: " + " ".join(limits))
+    if "invalid_content_removed" in issue_codes and show_limit_summary:
+        st.caption("필요한 항목이 빠졌다면 해당 항목을 지정해 다시 질문해 주세요.")
+    elif "source_location_unverified" in issue_codes and show_limit_summary:
+        st.caption("출처에서 원문 위치를 확인하거나, 위치를 확인할 수 있는 원본 파일을 첨부해 주세요.")
 
     with st.expander("검증 상세"):
+        st.caption("출처 연결은 내용에 출처가 있다는 뜻입니다. 직접 인용은 보관한 원문과 일치하는지 확인합니다.")
         st.caption("수치는 개별 조건에 대한 자동 평가이며 답변 전체의 정확도나 실행 성공을 보증하지 않습니다.")
         if report is not None:
             st.caption("Decisions API에서 받은 평가 결과입니다.")
@@ -359,7 +404,8 @@ def _table_cell(unit: ContentUnit, citations: dict) -> str:
     return _unit_text(unit, citations).replace("|", "\\|").replace("\n", "<br>")
 
 
-def _render_citations(units: list[ContentUnit], citations: dict) -> None:
+def _render_citations(context: list[ContentUnit | CodeBlock], citations: dict) -> None:
+    units = [item.content if isinstance(item, CodeBlock) else item for item in context]
     refs = list(dict.fromkeys(ref for unit in units for ref in unit.refs if ref in citations))
     if not refs:
         return
@@ -367,7 +413,11 @@ def _render_citations(units: list[ContentUnit], citations: dict) -> None:
         for ref in refs:
             citation = citations[ref]
             with st.popover(f"근거 [{citation.number}]", help=citation.evidence.snapshot.title):
-                render_evidence(citation.evidence, cited_texts=[unit.text for unit in units if ref in unit.refs])
+                render_evidence(
+                    citation.evidence, cited_texts=[unit.text for unit in units if ref in unit.refs],
+                    answer_context=[item if isinstance(item, CodeBlock) else content_unit_markdown(item)
+                                    for item, unit in zip(context, units) if ref in unit.refs],
+                )
 
 
 def process_chat_prompt(
@@ -384,22 +434,25 @@ def process_chat_prompt(
     error_messages: list[str] = []
     request_id = ""
     with st.chat_message("assistant"):
-        status_placeholder = st.empty()
-        status_placeholder.markdown("요청을 접수했습니다.")
-        for event in stream_agent(prompt):
-            request_id = event.observation.request_id or str(event.data.get("request_id") or request_id)
-            if event.event == "final_response" and event.result is not None:
-                result = event.result
-            elif event.event == "error":
-                error_message = str(event.data.get("message") or "응답 처리 중 오류가 발생했습니다.")
-                if error_message not in error_messages:
-                    error_messages.append(error_message)
-                status_placeholder.markdown(error_message)
-            else:
-                progress = _progress_message_for_event(event)
-                if progress:
-                    status_placeholder.markdown(progress)
-        status_placeholder.empty()
+        with st.spinner("답변을 준비하고 있습니다.", show_time=True):
+            st.caption("완료되면 질문 입력과 대화 전환을 다시 사용할 수 있습니다. "
+                       "‘응답 수신 중단’은 화면의 대기를 끝내며 서버 작업을 취소하지 않습니다.")
+            status_placeholder = st.empty()
+            status_placeholder.markdown("요청을 접수했습니다.")
+            for event in stream_agent(prompt):
+                request_id = event.observation.request_id or str(event.data.get("request_id") or request_id)
+                if event.event == "final_response" and event.result is not None:
+                    result = event.result
+                elif event.event == "error":
+                    error_message = str(event.data.get("message") or "응답 처리 중 오류가 발생했습니다.")
+                    if error_message not in error_messages:
+                        error_messages.append(error_message)
+                    status_placeholder.markdown(error_message)
+                else:
+                    progress = _progress_message_for_event(event)
+                    if progress:
+                        status_placeholder.markdown(progress)
+            status_placeholder.empty()
 
     if result is None:
         error_text = "\n\n".join(error_messages) or _DEFAULT_ERROR_MESSAGE

@@ -18,7 +18,7 @@ export async function attachmentSelectionState(tab, { waiting, ready, rejected =
     assert(summary.waiting.includes(`선택 오류 ${rejected}개`),
       `Rejected file is presented as ready to send: ${JSON.stringify(summary)}`);
   }
-  assert(summary.waiting.includes(waiting ? `전송 대기 ${waiting}개` : rejected ? "파일 옆의 오류" : "선택한 파일은 전송 후"),
+  assert(summary.waiting.includes(waiting ? `전송 대기 ${waiting}개` : rejected ? "파일 옆의 오류" : "새 파일은 +로 추가"),
     `Selected files lack a distinct waiting state: ${JSON.stringify(summary)}`);
   assert(summary.ready.includes(`검색 가능 ${ready}개`),
     `Server-ready files are not distinguished: ${JSON.stringify(summary)}`);
@@ -31,6 +31,37 @@ export async function composerText(tab, expected) {
   }).evaluate(el => el.value);
   assert(actual === expected, `Composer text mismatch: ${JSON.stringify({ expected, actual })}`);
   return { check: "composer text", value: actual };
+}
+
+/** Run with the code-context fixture's evidence dialog open. */
+export async function literalCodeContext(tab, expectedCode) {
+  const context = await tab.playwright.locator(".dm-source-answer-context").evaluate(el => ({
+    code: [...el.querySelectorAll("code")].map(item => item.textContent),
+    headings: el.querySelectorAll("h1,h2,h3,h4,h5,h6").length,
+    codeBlocks: [...el.querySelectorAll("pre")].map(block => ({
+      width: block.clientWidth, scrollWidth: block.scrollWidth,
+    })),
+  }));
+  assert(JSON.stringify(context.code) === JSON.stringify(expectedCode),
+    `Code context changed literal text: ${JSON.stringify(context)}`);
+  assert(context.headings === 0, "Code comments became Markdown headings");
+  assert(context.codeBlocks.every(block => block.scrollWidth <= block.width + 1),
+    `Code context needs horizontal scrolling: ${JSON.stringify(context.codeBlocks)}`);
+  return { check: "literal block and inline code context", ...context };
+}
+
+/** Run after an interrupted question is followed by a completed answer. */
+export async function pastInterruptionGuidance(tab, completedAnswer) {
+  const state = await tab.playwright.evaluate(() => ({
+    text: document.querySelector("main")?.textContent || "",
+    editButtons: [...document.querySelectorAll("button")]
+      .filter(button => button.textContent.trim() === "질문 수정").length,
+  }));
+  assert(state.text.includes("응답 수신이 중단되었습니다."), "Interrupted history disappeared");
+  assert(state.text.includes(completedAnswer), "The following answer has not completed");
+  assert(!state.text.includes("아래 ‘질문 수정’") && state.editButtons === 0,
+    "Past interruption still points to an unavailable edit action");
+  return { check: "past interruption retains warning without stale recovery guidance", passed: true };
 }
 
 /** Run after leaving and returning to a conversation with unsubmitted files. */
@@ -98,7 +129,7 @@ export async function rejectedAttachmentRecovery(tab, { filename, draft, remaini
   await tab.getAXState({ emit: false });
   await composerText(tab, draft);
   const chips = await tab.playwright.getByTestId("stChatInput").getByTestId("stFileChip").count();
-  const enabled = await tab.playwright.getByRole("button", { name: "Send message", exact: true }).isEnabled();
+  const enabled = await tab.playwright.getByRole("button", { name: "질문 보내기", exact: true }).isEnabled();
   assert(chips === remaining, `Recovery lost or retained unexpected attachments: ${chips}`);
   assert(enabled === (draft !== "" || remaining > 0), "Send did not recover after removing the rejected file");
   return { check: "rejected attachment removal preserves draft and restores submission", chips, enabled };
@@ -319,4 +350,113 @@ export async function parameterEvidence(tab) {
   assert(details.scrollWidth <= details.width + 1,
     `Evidence prose overflows horizontally: ${JSON.stringify(details)}`);
   return { check: "wrapped parameter definitions and preserved code", ...details };
+}
+
+/** Run after opening evidence at 320px and 390px, including a long source. */
+export async function evidencePopoverLayout(tab) {
+  const layout = await tab.playwright.getByRole("dialog").evaluate(el => {
+    const rect = el.getBoundingClientRect();
+    const title = el.querySelector('.dm-source-title').getBoundingClientRect();
+    return {
+      left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom,
+      viewportWidth: innerWidth, viewportHeight: innerHeight,
+      titleVisible: title.top >= rect.top && title.bottom <= rect.bottom,
+      width: el.clientWidth, scrollWidth: el.scrollWidth,
+      detailsCollapsed: [...el.querySelectorAll('details')].every(details => !details.open),
+    };
+  });
+  assert(layout.left >= 0 && layout.right <= layout.viewportWidth
+    && layout.top >= 0 && layout.bottom <= layout.viewportHeight && layout.titleVisible,
+    `Evidence panel is clipped by the viewport: ${JSON.stringify(layout)}`);
+  assert(layout.scrollWidth <= layout.width + 1,
+    `Evidence panel overflows horizontally: ${JSON.stringify(layout)}`);
+  assert(layout.detailsCollapsed, "Collection metadata or raw source should start collapsed");
+  return { check: "evidence panel fits viewport with collapsed metadata", ...layout };
+}
+
+/** Run after opening a source with Enter and after Tab / Shift+Tab. */
+export async function evidenceKeyboardFocus(tab, expectedFocus) {
+  const state = await tab.playwright.getByRole("dialog").evaluate(panel => {
+    const close = panel.querySelector('.dm-source-close');
+    const rect = close?.getBoundingClientRect();
+    return {
+      focusInside: panel.contains(document.activeElement),
+      focused: document.activeElement?.textContent?.trim().slice(0, 100),
+      context: panel.querySelector('.dm-source-answer-context')?.textContent || "",
+      closeLabel: close?.getAttribute('aria-label'),
+      closeWidth: rect?.width, closeHeight: rect?.height,
+    };
+  });
+  assert(state.focusInside, `Source keyboard focus escaped to the background: ${JSON.stringify(state)}`);
+  if (expectedFocus) {
+    assert(state.focused?.endsWith(expectedFocus),
+      `Source keyboard focus did not reach ${expectedFocus}: ${JSON.stringify(state)}`);
+  }
+  assert(state.context.includes("이 근거가 연결된 답변"), "Source panel lost the associated answer context");
+  assert(state.closeLabel === "근거 닫기" && state.closeWidth >= 44 && state.closeHeight >= 44,
+    `Source close control is missing or too small: ${JSON.stringify(state)}`);
+  return { check: "source context, close target and keyboard focus", ...state };
+}
+
+/** Closing by Escape or the close button returns to the actual citation opener. */
+export async function evidenceClosedFocus(tab, expectedOpener, expectedPopoverIndex) {
+  const state = await tab.playwright.evaluate(() => {
+    const focused = document.activeElement;
+    const rect = focused.getBoundingClientRect();
+    const covering = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+    const readingTop = Math.max(document.getElementById('stMain').getBoundingClientRect().top,
+      document.querySelector('[data-testid="stHeader"]')?.getBoundingClientRect().bottom ?? 0);
+    const readingBottom = document.querySelector('[data-testid="stBottom"]')?.getBoundingClientRect().top
+      ?? window.innerHeight;
+    return {
+      openPanels: [...document.querySelectorAll('[data-testid="stPopoverBody"]')]
+        .filter(panel => panel.getClientRects().length).length,
+      openerFocused: focused.getAttribute('data-testid') === 'stPopoverButton',
+      expanded: focused.getAttribute('aria-expanded'),
+      openerText: focused.querySelector('[data-testid="stMarkdownContainer"]')?.textContent?.trim(),
+      openerVisible: Boolean(focused.getClientRects().length && getComputedStyle(focused).visibility === 'visible'),
+      popoverIndex: [...document.querySelectorAll('[data-testid="stPopover"]')]
+        .indexOf(focused.closest('[data-testid="stPopover"]')),
+      openerUncovered: covering === focused || focused.contains(covering),
+      openerWithinReadingArea: rect.top >= readingTop && rect.bottom <= readingBottom,
+      verticalBounds: { top: rect.top, bottom: rect.bottom, readingTop, readingBottom },
+    };
+  });
+  assert(state.openPanels === 0 && state.openerFocused && state.openerVisible && state.expanded === 'false',
+    `Source close lost focus or left its panel open: ${JSON.stringify(state)}`);
+  assert(state.openerUncovered, `Focused source button is obscured or outside the viewport: ${JSON.stringify(state)}`);
+  assert(state.openerWithinReadingArea,
+    `Focused source button is partially outside the reading area: ${JSON.stringify(state)}`);
+  if (expectedOpener) {
+    assert(state.openerText === expectedOpener, `Focus returned to a different citation: ${JSON.stringify(state)}`);
+  }
+  if (expectedPopoverIndex !== undefined) {
+    assert(state.popoverIndex === expectedPopoverIndex,
+      `Focus returned to a different answer's citation: ${JSON.stringify(state)}`);
+  }
+  return { check: "source closes and returns focus", ...state };
+}
+
+/** Theme alerts use opaque surfaces, so measure the actual browser colors. */
+export async function statusContrast(tab) {
+  const colors = await tab.playwright.locator('[data-testid="stAlertContainer"]').evaluateAll(elements =>
+    elements.map(element => {
+      const text = element.querySelector('p') || element;
+      return { text: text.textContent, color: getComputedStyle(text).color,
+        background: getComputedStyle(element).backgroundColor };
+    }));
+  assert(colors.length > 0, "No status feedback is visible for contrast checking");
+  const luminance = rgb => rgb.map(value => value / 255)
+    .map(value => value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4)
+    .reduce((sum, value, index) => sum + value * [0.2126, 0.7152, 0.0722][index], 0);
+  const results = colors.map(item => {
+    const foreground = item.color.match(/[\d.]+/g).map(Number);
+    const background = item.background.match(/[\d.]+/g).map(Number);
+    assert(background.length === 3 || background[3] === 1, "Status surface must have an opaque theme color");
+    const first = luminance(foreground.slice(0, 3));
+    const second = luminance(background.slice(0, 3));
+    return { ...item, ratio: (Math.max(first, second) + 0.05) / (Math.min(first, second) + 0.05) };
+  });
+  assert(results.every(item => item.ratio >= 4.5), `Low status text contrast: ${JSON.stringify(results)}`);
+  return { check: "status text contrast >= 4.5", results };
 }

@@ -68,6 +68,9 @@ def test_structured_location_preserves_literal_filename_in_rendered_body_and_txt
             assert sum(token.type == "td_open" for token in tokens) == 1
     if layout != "table":
         assert expected in exported
+    context = next(item.proto.body for item in app.get("html") if "dm-source-answer-context" in item.proto.body)
+    assert expected in unescape(context)
+    assert "source position" not in context
     assert export_answer_text(answer) == exported
     assert answer.model_dump(mode="json") == original
 
@@ -98,7 +101,7 @@ def test_answer_code_opens_matching_physical_line_with_context_and_original_copy
 
     assert not app.exception
     assert "답변의 코드와 일치하는 원문: 30행" in [item.value for item in app.caption]
-    rendered = unescape(app.get("html")[0].proto.body)
+    rendered = unescape(next(item.proto.body for item in app.get("html") if "dm-source-code" in item.proto.body))
     assert 'aria-label="원문 30행"' in rendered
     assert f"<mark>{selected}</mark>" in rendered
     assert 'aria-label="원문 28행"' in rendered
@@ -108,11 +111,121 @@ def test_answer_code_opens_matching_physical_line_with_context_and_original_copy
     assert app.code[0].value == text
 
 
+@pytest.mark.parametrize("inline", [False, True], ids=["block", "inline"])
+def test_cited_code_context_preserves_literal_code_and_source_matching(inline):
+    code = '__version__ = "1.0"' if inline else '__version__ = "1.0"\n# important comment\nprint("<tag>", "`")\n'
+    evidence = build_evidence(
+        snapshot=build_snapshot(
+            source_uri="upload:///version.py", title="version.py", media_type="text/x-python",
+            source_type="upload", content=code, parser="python", parser_version="1",
+        ),
+        element=DocumentElement(
+            element_id="source", kind="code", text=code, language="python",
+            anchors=[SourceAnchor(kind="code", start=0, end=len(code), line_start=1,
+                                  line_end=len(code.splitlines()), precision="exact")],
+        ),
+    )
+    answer = finalize_answer(AnswerDocument.model_validate({"blocks": [{
+        "type": "code", "language": "python", "inline": inline,
+        "content": {"text": code, "basis": "source", "refs": [evidence.id]},
+    }]}), [evidence])
+    original = answer.model_dump(mode="json")
+    exported = export_answer_text(answer)
+
+    app = AppTest.from_function(_answer_app, args=(original,)).run()
+
+    assert not app.exception
+    # Markdown's code renderer replaces inline wrapping styles with its highlighter.
+    # Keep this already escaped HTML at the direct HTML rendering boundary.
+    contexts = [item.proto.body for item in app.get("html") if "dm-source-answer-context" in item.proto.body]
+    assert len(contexts) == 1
+    context = contexts[0]
+    assert code in unescape(context)
+    assert '<code style="white-space:pre-wrap;overflow-wrap:anywhere">' in context
+    assert "<strong>" not in context and "<h1>" not in context and "<tag>" not in context
+    assert ("<pre>" in context) is (not inline)
+    expected_lines = "1행" if inline else "1행, 2행, 3행"
+    assert "답변의 코드와 일치하는 원문: " + expected_lines in [item.value for item in app.caption]
+    assert app.code[-1].value == code
+    assert answer.model_dump(mode="json") == original
+    assert export_answer_text(answer) == exported
+
+
 def _source_app(payload, cited_texts=None):
     from src.app.web.streamlit_sources import render_evidence
     from src.core.evidence import EvidenceRef
 
     render_evidence(EvidenceRef.model_validate(payload), cited_texts=cited_texts)
+
+
+def test_source_panel_exposes_close_and_answer_context_before_original_excerpt():
+    captured = "Original documentation excerpt."
+    evidence = build_evidence(
+        snapshot=build_snapshot(
+            source_uri="https://docs.example.org/guide", title="Guide <draft>",
+            media_type="text/plain", source_type="official", content=captured,
+            parser="text", parser_version="1",
+        ),
+        element=DocumentElement(element_id="description", kind="paragraph", text=captured),
+    )
+    answer_texts = ["첫 번째 답변 문장", "둘째 답변의 <literal> 값", "함께 연결된 세 번째 문장"]
+    original = evidence.model_dump(mode="json")
+
+    app = AppTest.from_function(_source_app, args=(original, answer_texts)).run()
+
+    assert not app.exception
+    markdown = [item.value for item in app.markdown]
+    header = next(value for value in markdown if "dm-source-header" in value)
+    assert 'type="button"' in header and 'aria-label="근거 닫기"' in header
+    assert ">닫기</button>" in header
+    assert "Guide &lt;draft&gt;" in header
+    context_element = next(item for item in app.get("html") if "dm-source-answer-context" in item.proto.body)
+    context = context_element.proto.body
+    assert "이 근거가 연결된 답변" in context
+    assert answer_texts[0] in context and "둘째 답변의 &lt;literal&gt; 값" in context
+    assert answer_texts[2] not in context
+    remaining = next(item for item in app.expander if item.label == "함께 연결된 답변 더 보기 (1개)")
+    assert not remaining.proto.expanded
+    assert answer_texts[2] in " ".join(item.proto.body for item in remaining.get("html"))
+    elements = list(app.main)
+    excerpt_heading = next(item for item in app.markdown if item.value == "**답변에 사용한 부분**")
+    assert elements.index(context_element) < elements.index(excerpt_heading)
+    assert markdown.index("[현재 출처 페이지 열기](https://docs.example.org/guide)") < markdown.index("**답변에 사용한 부분**")
+    assert app.code[0].value == captured
+    assert evidence.model_dump(mode="json") == original
+
+
+def test_answer_context_renders_markdown_and_line_breaks_without_executing_html():
+    captured = "BATCH_SIZE = 64\nMAX_RETRIES = 4"
+    evidence = build_evidence(
+        snapshot=build_snapshot(
+            source_uri="upload:///batch_limits.py", title="batch_limits.py",
+            media_type="text/plain", source_type="upload", content=captured,
+            parser="text", parser_version="1",
+        ),
+        element=DocumentElement(element_id="description", kind="paragraph", text=captured),
+    )
+    original = evidence.model_dump(mode="json")
+    cited_texts = [
+        '`batch_limits.py`의 배치 크기는 **64개**입니다.\n<script>alert(1)</script><img src=x onerror=alert(1)>',
+        captured,
+        "**추가 근거**를 확인하세요.",
+    ]
+
+    app = AppTest.from_function(_source_app, args=(original, cited_texts)).run()
+
+    assert not app.exception
+    context = next(item.proto.body for item in app.get("html") if "dm-source-answer-context" in item.proto.body)
+    assert "<code>batch_limits.py</code>" in context
+    assert "<strong>64개</strong>" in context
+    assert "`batch_limits.py`" not in context and "**64개**" not in context
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in context
+    assert "&lt;img src=x onerror=alert(1)&gt;" in context
+    assert "<script>" not in context and "<img " not in context
+    assert "BATCH_SIZE = 64<br />\nMAX_RETRIES = 4" in context
+    remaining = next(item for item in app.expander if item.label == "함께 연결된 답변 더 보기 (1개)")
+    assert "<strong>추가 근거</strong>" in remaining.get("html")[0].proto.body
+    assert evidence.model_dump(mode="json") == original
 
 
 def _render(text: str, selected: str, *, anchor: SourceAnchor | list[SourceAnchor], offset: int | None = None,
@@ -283,6 +396,58 @@ def test_current_source_page_link_is_distinct_from_retained_source_content():
     assert app.code[0].value == captured_text
 
 
+def test_long_official_evidence_previews_broad_range_and_preserves_full_excerpt():
+    captured = "## pandas.merge\n\nMerge DataFrames using a database-style join.\n\n" + (
+        "Additional parameter context belongs to this retained source.\n" * 20
+    ) + "The final retained warning must remain available."
+    evidence = build_evidence(
+        snapshot=build_snapshot(
+            source_uri="https://pandas.pydata.org/docs/reference/api/pandas.merge.html",
+            title="pandas.merge", media_type="text/markdown", source_type="official",
+            content=captured, parser="provider", parser_version="1",
+        ),
+        element=DocumentElement(element_id="description", kind="paragraph", text=captured),
+    )
+    original = evidence.model_dump(mode="json")
+
+    app = AppTest.from_function(_source_app, args=(original, ["두 데이터프레임을 결합합니다."])).run()
+
+    assert not app.exception
+    assert any("넓은 원문 범위" in item.value for item in app.caption)
+    assert captured.startswith(app.text[0].value.removesuffix("…"))
+    assert "final retained warning" not in app.text[0].value
+    excerpt = next(item for item in app.expander if item.label == "답변에 사용한 전체 발췌")
+    assert not excerpt.proto.expanded
+    assert "The final retained warning must remain available." in excerpt.get("html")[0].proto.body
+    assert app.code[0].value == captured
+    assert evidence.model_dump(mode="json") == original
+
+
+def test_long_official_evidence_focuses_only_exact_answer_phrase_without_changing_selection():
+    exact = "Both key columns containing null values will match each other."
+    captured = "Earlier documentation context.\n" * 30 + exact + "\nOther retained context.\n" * 20
+    evidence = build_evidence(
+        snapshot=build_snapshot(
+            source_uri="https://pandas.pydata.org/docs/reference/api/pandas.merge.html",
+            title="pandas.merge", media_type="text/markdown", source_type="official",
+            content=captured, parser="provider", parser_version="1",
+        ),
+        element=DocumentElement(element_id="description", kind="paragraph", text=captured),
+    )
+    original = evidence.model_dump(mode="json")
+
+    app = AppTest.from_function(_source_app, args=(original, [exact, "This unsupported wording is not in the source."])).run()
+
+    assert not app.exception
+    focused = next(item.proto.body for item in app.get("html") if "dm-source-markdown" in item.proto.body)
+    assert f">{exact}</mark>" in focused
+    assert "Earlier documentation context" not in focused
+    assert "unsupported wording" not in focused
+    assert "답변 문구와 정확히 일치하는 원문" in " ".join(item.value for item in app.caption)
+    assert app.code[0].value == captured
+    assert evidence.model_dump(mode="json") == original
+
+
 def test_repeated_cited_code_shows_all_confirmed_occurrences_without_guessing_from_prose():
     text = "begin\ntarget = 3\nmiddle\ntarget = 3\nend\n"
     app = _render(text, text, anchor=SourceAnchor(
@@ -290,18 +455,19 @@ def test_repeated_cited_code_shows_all_confirmed_occurrences_without_guessing_fr
     ), cited_texts=["30행의 `target = 3`을 확인하세요."])
 
     assert "답변의 코드와 일치하는 원문: 41행, 43행" in [item.value for item in app.caption]
-    rendered = unescape(app.get("html")[0].proto.body)
+    rendered = unescape(next(item.proto.body for item in app.get("html") if "dm-source-code" in item.proto.body))
     assert rendered.count("<mark>target = 3</mark>") == 2
     assert 'aria-label="원문 30행"' not in rendered
 
 
-def test_official_markdown_is_readable_with_source_link_first_and_verbatim_capture_available():
+def test_official_markdown_shows_excerpt_before_source_details_and_preserves_capture():
     captured = "## numpy.reshape\n\nReturn an array with a new **shape**.\n\n- `order` controls the traversal.\n\n[[source]](https://github.com/numpy/numpy/blob/main/numpy/_core/fromnumeric.py)"
     evidence = build_evidence(
         snapshot=build_snapshot(
             source_uri="https://numpy.org/doc/stable/reference/generated/numpy.reshape.html",
             title="numpy.reshape", media_type="text/markdown", source_type="official",
-            content=captured, parser="provider", parser_version="1",
+            content=captured, parser="provider", parser_version="1", capture_scope="provider_excerpt",
+            quality_issues=["html_structure_flattened", "freshness_unverified"],
         ),
         element=DocumentElement(element_id="description", kind="paragraph", text=captured),
     )
@@ -314,6 +480,11 @@ def test_official_markdown_is_readable_with_source_link_first_and_verbatim_captu
     assert "<h2>numpy.reshape</h2>" in rendered
     assert "<li><code>order</code> controls the traversal.</li>" in rendered
     assert markdown.index(f"[현재 출처 페이지 열기]({evidence.snapshot.source_uri})") < markdown.index("**답변에 사용한 부분**")
+    details = next(item for item in app.expander if item.label == "출처와 수집 정보")
+    assert not details.proto.expanded
+    assert "원문의 일부만 수집한 자료입니다." in " ".join(item.value for item in details.caption)
+    assert len(details.warning) == 2
+    assert "최신 문서와 다를 수 있습니다." in details.warning[1].value
     assert "수집한 원문 그대로 보기" in [item.label for item in app.expander]
     assert app.code[0].value == captured
 

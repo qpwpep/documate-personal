@@ -107,6 +107,31 @@ def _first_id(observed):
     return next(iter(observed["manifests"]))
 
 
+def test_recent_conversation_buttons_switch_without_sending_or_losing_drafts(conversation_http):
+    app = AppTest.from_file(APP, default_timeout=10).run()
+    app.chat_input[0].set_value("첫 대화 질문").run()
+    first = _picker(app).value
+    conversation = app.session_state["conversations"][first]
+    conversation.draft.record("첫 대화의 작성 초안", revision=conversation.draft.revision)
+    app.button(key="documate_new_chat").click().run()
+    second = _picker(app).value
+    app.chat_input[0].set_value("두 번째 대화 질문").run()
+
+    current = next(item for item in app.button if item.label == "현재 · 2. 두 번째 대화 질문")
+    assert current.disabled
+    next(item for item in app.button if item.label == "1. 첫 대화 질문").click().run()
+
+    assert not app.exception
+    assert _picker(app).value == first
+    assert app.chat_input[0].proto.value == "첫 대화의 작성 초안"
+    assert any("답변: 첫 대화 질문" in item.value for item in app.markdown)
+    assert not any("답변: 두 번째 대화 질문" in item.value for item in app.markdown)
+    assert next(item for item in app.button if item.label == "현재 · 1. 첫 대화 질문").disabled
+    next(item for item in app.button if item.label == "2. 두 번째 대화 질문").click().run()
+    assert _picker(app).value == second
+    assert [item["query"] for item in conversation_http["requests"]] == ["첫 대화 질문", "두 번째 대화 질문"]
+
+
 def test_reload_restores_stored_answer_without_optional_source_location(conversation_http, browser_storage):
     conversation_id = "c3fe22c2-ef6b-47a5-a352-2996ab2a0c05"
     # Fixed body and hash in the schema before optional source positions were added.

@@ -32,6 +32,22 @@ class HTTPBytes:
         pass
 
 
+class InterruptedHTTPBytes(HTTPBytes):
+    def __init__(self, before_interrupt=None):
+        super().__init__(b"")
+        self.before_interrupt = before_interrupt
+
+    def stream(self, *_args, **_kwargs):
+        from streamlit.runtime.scriptrunner import RerunException
+        from streamlit.runtime.scriptrunner_utils.script_requests import RerunData
+
+        yield b'event: stage_started\ndata: {"stage": "planner"}\n\n'
+        if self.before_interrupt is not None:
+            self.before_interrupt()
+        # A browser interaction interrupts Streamlit at an output yield point.
+        raise RerunException(RerunData())
+
+
 class RequestsObserved(list):
     def __init__(self):
         super().__init__()
@@ -43,7 +59,14 @@ class RequestsObserved(list):
         self.upload_revision = 0
         self.upload_failure = None
         self.upload_manifest_failure = None
+        self.before_manifest_failure = None
         self.upload_syncs = []
+        self.missing_slots = []
+        self.interrupt_response = False
+        self.before_interrupt = None
+        self.active_snapshot = None
+        self.manifest_reads = 0
+        self.manifest_reads_at_submission = 0
 
 
 @pytest.fixture
@@ -62,9 +85,12 @@ def chat_http(monkeypatch, tmp_path, browser_storage):
         result.request = request
         result.url = request.url
         if request.method == "GET" and path.endswith("/uploads"):
+            submissions.manifest_reads += 1
             if submissions.upload_manifest_failure:
                 result.status_code = 503
                 data = {"detail": {"code": "UPLOAD_REQUEST_FAILED", "message": submissions.upload_manifest_failure}}
+                if submissions.before_manifest_failure is not None:
+                    submissions.before_manifest_failure()
             else:
                 data = {"epoch": "epoch-" + path.split("/")[2], "revision": submissions.upload_revision, "files": submissions.upload_files}
             result._content = json.dumps(data).encode()
@@ -89,6 +115,8 @@ def chat_http(monkeypatch, tmp_path, browser_storage):
         elif request.method == "POST" and path == "/agent/stream":
             payload = json.loads(request.body)
             submissions.append(payload)
+            submissions.active_snapshot = browser_storage.snapshot
+            submissions.manifest_reads_at_submission = submissions.manifest_reads
             answer = finalize_answer(text_document("답변: " + payload["query"]), [])
             answer_id = f"answer-{len(submissions)}"
             answers[answer_id] = answer
@@ -105,6 +133,10 @@ def chat_http(monkeypatch, tmp_path, browser_storage):
                     status="failed", response=None, answer_id=None,
                     problem=make_problem(submissions.failure_code, "pre_synthesis_validation").model_dump(mode="json"),
                 )
+            if submissions.missing_slots and not submissions.upload_files:
+                final.update(status="needs_input", response=None, answer_id=None,
+                             message="확인할 파일을 먼저 업로드한 뒤 다시 질문해 주세요.",
+                             missing_slots=submissions.missing_slots)
             if submissions.natural_save_failure:
                 source = answers["answer-1"]
                 operation = build_answer_export_operation(source, session_id=payload["session_id"])
@@ -114,6 +146,8 @@ def chat_http(monkeypatch, tmp_path, browser_storage):
                              problem={"code": "save_failed", "stage": "action_postprocess", "message": "파일을 만들지 못했습니다.", "next_action": "retry_later"})
             result.headers["Content-Type"] = "text/event-stream; charset=utf-8"
             result.raw = HTTPBytes(("event: final_response\ndata: " + json.dumps(final, ensure_ascii=False) + "\n\n").encode())
+            if submissions.interrupt_response:
+                result.raw = InterruptedHTTPBytes(submissions.before_interrupt)
         elif request.method == "POST" and path.endswith("/save"):
             submissions.exports.append(path)
             if submissions.export_failure == "network":
@@ -137,6 +171,126 @@ def chat_http(monkeypatch, tmp_path, browser_storage):
 
     monkeypatch.setattr(requests.adapters.HTTPAdapter, "send", send)
     return submissions
+
+
+def test_interrupted_response_restores_navigation_and_retains_question_without_replay(chat_http):
+    app = AppTest.from_file(APP, default_timeout=10).run()
+    prompt = "  수신 중단 뒤에도 남길 질문\n두 번째 줄  "
+    chat_http.interrupt_response = True
+
+    app.chat_input[0].set_value(prompt).run()
+
+    assert not app.exception
+    assert [item["query"] for item in chat_http] == [prompt]
+    assert not app.chat_input[0].disabled
+    assert not app.button(key="documate_new_chat").disabled
+    # Manifest reads share the server request lock. A recovery render must not
+    # wait for the very server operation whose response the user stopped.
+    assert chat_http.manifest_reads == chat_http.manifest_reads_at_submission
+    assert any("응답 수신이 중단" in item.value for item in app.warning)
+    assert any(prompt.strip() in item.value for item in app.markdown)
+    assert not any(item.label == "같은 질문 다시 보내기" for item in app.button)
+    next(item for item in app.button if item.label == "질문 수정").click().run()
+    assert app.chat_input[0].proto.value == prompt
+    app.run()
+    assert len(chat_http) == 1
+    chat_http.interrupt_response = False
+    reads_before_next_question = chat_http.manifest_reads
+    app.chat_input[0].set_value("명시적으로 보낸 다음 질문").run()
+    assert [item["query"] for item in chat_http] == [prompt, "명시적으로 보낸 다음 질문"]
+    assert chat_http.manifest_reads > reads_before_next_question
+    assert any("답변: 명시적으로 보낸 다음 질문" in item.value for item in app.markdown)
+
+
+def test_reload_during_response_retains_submitted_question_without_replay(chat_http, browser_storage):
+    app = AppTest.from_file(APP, default_timeout=10).run()
+    prompt = "새로고침 직전에 보낸 질문"
+    chat_http.interrupt_response = True
+    app.chat_input[0].set_value(prompt).run()
+    # Restore the snapshot saved before the HTTP stream was started, as a tab
+    # reload would. No completed or caught-interruption render is available.
+    browser_storage.snapshot = chat_http.active_snapshot
+
+    restored = AppTest.from_file(APP, default_timeout=10).run()
+
+    assert not restored.exception
+    assert any(prompt in item.value for item in restored.markdown)
+    assert any("응답 수신이 중단" in item.value for item in restored.warning)
+    assert not restored.chat_input[0].disabled
+    assert chat_http.manifest_reads == chat_http.manifest_reads_at_submission
+    assert [item["query"] for item in chat_http] == [prompt]
+    next(item for item in restored.button if item.label == "질문 수정").click().run()
+    assert restored.chat_input[0].proto.value == prompt
+    assert len(chat_http) == 1
+
+
+def test_interrupt_event_recovers_before_the_old_stream_unwinds(chat_http, browser_storage):
+    import streamlit as st
+
+    app = AppTest.from_file(APP, default_timeout=10).run()
+    before_unwind = {}
+
+    def interrupt_from_browser():
+        # Fast reruns deliver the new runner's component callback while the
+        # previous runner is still waiting for HTTP. Deliver that event before
+        # raising the old runner's control exception, without sleeps or races.
+        conversation_id = browser_storage.data["conversation_id"]
+        st.session_state["documate_browser_state"] = {"interrupt": {
+            "conversation_id": conversation_id,
+            "operation_id": browser_storage.data["operation_id"],
+            "nonce": 1,
+        }}
+        browser_storage.callbacks["on_interrupt_change"]()
+        conversation = st.session_state["conversations"][conversation_id]
+        before_unwind.update(busy=conversation.is_busy,
+                             interrupted=conversation.has_interrupted_response)
+
+    chat_http.interrupt_response = True
+    chat_http.before_interrupt = interrupt_from_browser
+    app.chat_input[0].set_value("이전 스트림 종료 전에 복구할 질문").run()
+
+    assert before_unwind == {"busy": False, "interrupted": True}
+    assert not app.exception
+    assert len([item for item in app.warning if "응답 수신이 중단" in item.value]) == 1
+    assert not app.button(key="documate_new_chat").disabled
+    assert not app.chat_input[0].disabled
+    assert len(chat_http) == 1
+
+
+def test_interrupted_validation_cannot_overwrite_the_next_question(chat_http, browser_storage):
+    import streamlit as st
+
+    from src.app.web.streamlit_requests import queue_chat
+
+    app = AppTest.from_file(APP, default_timeout=10).run()
+
+    def interrupt_and_submit_next_question():
+        # The old validation response arrives after the browser has stopped
+        # receiving it and explicitly submitted the next question.
+        conversation_id = browser_storage.data["conversation_id"]
+        st.session_state["documate_browser_state"] = {"interrupt": {
+            "conversation_id": conversation_id,
+            "operation_id": browser_storage.data["operation_id"],
+            "nonce": 1,
+        }}
+        browser_storage.callbacks["on_interrupt_change"]()
+        conversation = st.session_state["conversations"][conversation_id]
+        queue_chat(conversation, "중단 후 명시적으로 보낸 새 질문")
+        chat_http.upload_manifest_failure = None
+        chat_http.before_manifest_failure = None
+
+    chat_http.upload_manifest_failure = "이전 요청의 연결 확인 실패"
+    chat_http.before_manifest_failure = interrupt_and_submit_next_question
+    app.chat_input[0].set_value("연결 확인 중 중단한 이전 질문").run()
+
+    assert not app.exception
+    assert [item["query"] for item in chat_http] == ["중단 후 명시적으로 보낸 새 질문"]
+    assert not app.chat_input[0].disabled
+    assert any("답변: 중단 후 명시적으로 보낸 새 질문" in item.value for item in app.markdown)
+    assert any("응답 수신이 중단" in item.value for item in app.warning)
+    conversation = app.session_state["conversations"][app.session_state["active_conversation_id"]]
+    assert conversation.saved_prompt is None
+    assert conversation.validation_error is None
 
 
 def test_new_conversation_guides_input_without_presenting_a_verified_answer(chat_http):
@@ -194,6 +348,24 @@ def test_examples_are_stable_and_require_confirmed_attachments(chat_http):
     assert not any(word in prompt for prompt in with_files for word in ("방금", "Slack", "저장"))
     assert not app.exception
     assert not chat_http
+
+
+def test_current_conversation_and_searchable_files_are_visible_in_main_header(chat_http):
+    chat_http.upload_files = [{
+        "file_id": "sample", "name": "sample.py", "size_bytes": 10,
+        "content_hash": "sha256:" + "a" * 64, "source_uri": "upload:///sample.py",
+    }]
+    app = AppTest.from_file(APP, default_timeout=10).run()
+    prompt = "첨부한 함수의 반환값을 설명해줘"
+    app.chat_input[0].set_value(prompt).run()
+    app.run()
+
+    assert not app.exception
+    header = next(item.value for item in app.markdown if 'class="dm-topbar"' in item.value)
+    assert prompt in header
+    assert "검색 가능 자료 1개" in header
+    assert not any("다음 질문부터" in item.value for item in app.caption)
+    assert any("실제 사용한 자료는 답변의 근거에서 확인" in item.value for item in app.caption)
 
 
 def test_suggestion_does_not_replace_a_draft_received_during_the_click(chat_http):
@@ -261,6 +433,46 @@ class _UploadedSample:
 
     def getbuffer(self) -> bytes:
         return self.content
+
+
+@pytest.mark.parametrize("missing_slots", [["upload"], ["subject"]], ids=["upload", "other-clarification"])
+def test_file_only_upload_confirms_readiness_and_explicitly_continues_only_missing_upload_question(chat_http, tmp_path, missing_slots):
+    from src.app.web.streamlit_state import PendingUpload
+
+    chat_http.missing_slots = missing_slots
+    app = AppTest.from_file(APP, default_timeout=10).run()
+    prompt = "  첨부한 코드를 요약해줘.\n함수도 설명해줘.  "
+    app.chat_input[0].set_value(prompt).run()
+    assert not any(item.label == "이전 질문 계속하기" for item in app.button)
+    conversation = app.session_state["conversations"][app.session_state["active_conversation_id"]]
+    staged = conversation.client.stage_files(
+        [_UploadedSample("sample.py", b"VALUE = 42\n")], tmp_path / "uploads" / conversation.id,
+        max_files=10, max_file_mib=1, max_total_mib=10,
+    )
+    conversation.pending_upload = PendingUpload(base_manifest=conversation.client.manifest, files=staged.files)
+    app.run()
+
+    assert not app.exception
+    assert any("자료 준비 완료 · 1개" in item.value for item in app.success)
+    assert any("sample.py" in item.value for item in app.caption)
+    assert not any("다음 질문부터" in item.value for item in app.caption)
+    assert [item["query"] for item in chat_http] == [prompt]
+    app.run()
+    assert len(chat_http) == 1
+    if missing_slots != ["upload"]:
+        assert not any(item.label == "이전 질문 계속하기" for item in app.button)
+        return
+
+    draft = "따로 작성 중인 다음 질문"
+    conversation.draft.edit(draft)
+    app.button(key="documate_continue_upload_question").click().run()
+    assert not app.exception
+    assert [item["query"] for item in chat_http] == [prompt, prompt]
+    assert chat_http[-1]["uploads"] == {"epoch": "epoch-" + conversation.id, "revision": 1}
+    assert app.chat_input[0].proto.value == draft
+    assert not any(item.label == "이전 질문 계속하기" for item in app.button)
+    app.run()
+    assert len(chat_http) == 2
 
 
 @pytest.mark.parametrize("prompt", ["  이 노트북을 요약해줘.\n근거도 보여줘.  ", None], ids=["with-question", "file-only"])
@@ -561,7 +773,7 @@ def test_editing_failed_question_prefills_without_sending_then_submits_the_revis
     assert len(chat_http) == 2
 
 
-def _recovery_view(messages):
+def _recovery_view(messages, *, allow_edit=True, actions_disabled=False):
     app = AppTest.from_string('''
 import streamlit as st
 from src.app.web.streamlit_chat import render_chat_history
@@ -572,10 +784,14 @@ def retry(prompt):
 def edit(prompt):
     st.session_state["events"].append(("edit", prompt))
 
-render_chat_history(st.session_state["messages"], "http://localhost:8000", on_retry=retry, on_edit=edit)
+render_chat_history(st.session_state["messages"], "http://localhost:8000", on_retry=retry,
+                    on_edit=edit if st.session_state["allow_edit"] else None,
+                    actions_disabled=st.session_state["actions_disabled"])
 ''', default_timeout=10)
     app.session_state["messages"] = messages
     app.session_state["events"] = []
+    app.session_state["allow_edit"] = allow_edit
+    app.session_state["actions_disabled"] = actions_disabled
     app.run()
     assert not app.exception
     return app
@@ -594,6 +810,39 @@ def test_interrupted_response_offers_edit_without_replaying_uncertain_request():
     assert app.session_state["events"] == [("edit", prompt)]
     app.run()
     assert app.session_state["events"] == [("edit", prompt)]
+
+
+@pytest.mark.parametrize(("scenario", "expected_guidance"), [
+    ("latest", True),
+    ("followed_by_answer", False),
+    ("read_only", False),
+    ("busy", False),
+])
+def test_interrupted_card_only_guides_to_an_available_edit_action(scenario, expected_guidance):
+    from src.core.contracts.outcome import TurnResult
+
+    messages = [
+        {"role": "user", "content": "중단한 질문"},
+        {"role": "assistant", "result": None, "interrupted": True},
+    ]
+    if scenario == "followed_by_answer":
+        messages.extend([
+            {"role": "user", "content": "이어서 보낸 질문"},
+            {"role": "assistant", "result": TurnResult(
+                status="completed", response=finalize_answer(text_document("완료한 답변"), []),
+            )},
+        ])
+
+    app = _recovery_view(messages, allow_edit=scenario != "read_only", actions_disabled=scenario == "busy")
+
+    assert any("응답 수신이 중단" in item.value for item in app.warning)
+    guidance = [item.value for item in app.caption if "아래 ‘질문 수정’" in item.value]
+    assert bool(guidance) is expected_guidance
+    enabled_edits = [item for item in app.button if item.label == "질문 수정" and not item.disabled]
+    assert bool(enabled_edits) is expected_guidance
+    if expected_guidance:
+        enabled_edits[0].click().run()
+        assert app.session_state["events"] == [("edit", "중단한 질문")]
 
 
 @pytest.mark.parametrize("delivery_status", ["sent", "unknown"])

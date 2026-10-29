@@ -88,6 +88,7 @@ def render_sidebar(
         )
 
         st.markdown('<div class="dm-sidebar-section">Slack 전송</div>', unsafe_allow_html=True)
+        st.caption('수신자를 설정한 뒤 질문 입력창에 "방금 답변을 Slack으로 보내줘"라고 요청하세요. 설정만으로 전송하지 않습니다.')
         recipient_options = ("미지정", "채널", "사용자", "이메일")
         recipient_kind = st.radio(
             "수신자 유형", options=recipient_options,
@@ -98,8 +99,13 @@ def render_sidebar(
         conversation.slack_drafts["kind"] = recipient_kind
         slack_recipient = None
         if recipient_kind != "미지정":
-            kinds = {"채널": ("channel", "C/G/Dxxxxx"), "사용자": ("user", "Uxxxxx"), "이메일": ("email", "name@example.com")}
-            kind, placeholder = kinds[recipient_kind]
+            kinds = {
+                "채널": ("channel", "C0123456789", "채널 이름 대신 C, G 또는 D로 시작하는 채널 ID를 입력하세요."),
+                "사용자": ("user", "U0123456789", "표시 이름 대신 U 또는 W로 시작하는 멤버 ID를 입력하세요. 이메일로도 지정할 수 있습니다."),
+                "이메일": ("email", "name@example.com", "받는 사람이 Slack 워크스페이스에 등록한 이메일을 입력하세요."),
+            }
+            kind, placeholder, guidance = kinds[recipient_kind]
+            st.caption(guidance)
             value = st.text_input("Slack 수신자", value=conversation.slack_drafts.get(kind, ""), placeholder=placeholder,
                                   key=conversation.widget_key(f"slack_recipient_{kind}"),
                                   disabled=interactions_disabled or conversation.is_read_only)
@@ -108,7 +114,13 @@ def render_sidebar(
             try:
                 RecipientSelector(kind=kind, value=value)
             except ValidationError:
-                st.caption("Slack 전송 시 선택한 유형에 맞는 수신자가 필요합니다. 일반 질문은 계속할 수 있습니다.")
+                st.caption("수신자 입력을 확인해 주세요. 일반 질문은 계속할 수 있고, Slack 전송은 올바른 수신자가 필요합니다.")
+            if recipient_kind in {"채널", "사용자"}:
+                with st.expander("수신자 ID 찾는 방법", expanded=False):
+                    if recipient_kind == "채널":
+                        st.markdown("Slack에서 대상 채널을 열고 상단 채널 이름을 누르세요. 채널 상세 화면 맨 아래의 **채널 ID**를 복사해 입력하세요.")
+                    else:
+                        st.markdown("Slack에서 받는 사람의 프로필을 열고 **더 보기 → 멤버 ID 복사**를 선택하세요. ID를 찾기 어렵다면 수신자 유형을 **이메일**로 바꿀 수 있습니다.")
 
     return SidebarInputs(
         slack_recipient=slack_recipient,

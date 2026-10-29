@@ -24,6 +24,7 @@ class StoredConversation(BaseModel):
     messages: list[ChatMessage]
     draft: StoredDraft
     saved_prompt: str | None = None
+    pending_prompt: str | None = None
     slack_drafts: dict[str, str] = Field(default_factory=dict)
     confirmed_epoch: str | None = None
     preserved_manifest: UploadManifest | None = None
@@ -56,6 +57,9 @@ def dump_conversations(conversations: list[Conversation], active_id: str) -> str
             id=UUID(conversation.id), messages=conversation.messages,
             draft=StoredDraft(text=conversation.draft.text, revision=conversation.draft.revision),
             saved_prompt=saved_prompt, slack_drafts=conversation.slack_drafts,
+            pending_prompt=(conversation.pending_request.prompt
+                            if conversation.pending_request is not None and conversation.pending_request.kind == "chat"
+                            else None),
             confirmed_epoch=conversation.confirmed_epoch,
             preserved_manifest=conversation.preserved_manifest,
             expired=conversation.expired,
@@ -70,13 +74,21 @@ def load_conversations(snapshot: str, *, fastapi_url: str) -> tuple[dict[str, Co
     conversations = {}
     for item in saved.conversations:
         conversation_id = str(item.id)
+        messages = list(item.messages)
+        if item.pending_prompt is not None:
+            # A refreshed tab cannot know whether the server finished the
+            # request. Preserve the utterance without replaying its actions.
+            messages.extend([
+                {"role": "user", "content": item.pending_prompt},
+                {"role": "assistant", "result": None, "interrupted": True},
+            ])
         conversations[conversation_id] = Conversation(
             id=conversation_id,
             # A cached manifest is display-only until the server confirms its epoch.
             client=AgentSessionClient(AgentRequestContext(
                 fastapi_url=fastapi_url, session_id=conversation_id,
             )),
-            messages=item.messages,
+            messages=messages,
             draft=ComposerDraft(text=item.draft.text, revision=item.draft.revision, needs_restore=True),
             saved_prompt=item.saved_prompt, slack_drafts=item.slack_drafts,
             confirmed_epoch=item.confirmed_epoch, preserved_manifest=item.preserved_manifest,

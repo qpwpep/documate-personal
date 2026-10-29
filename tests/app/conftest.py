@@ -9,8 +9,12 @@ import pytest
 class BrowserStorage:
     def __init__(self) -> None:
         self.snapshot: str | None = None
+        self.data: dict[str, object] = {}
+        self.callbacks: dict[str, object] = {}
 
     def render(self, *, data: dict[str, object], **_kwargs: object) -> dict[str, object]:
+        self.data = data
+        self.callbacks = _kwargs
         if data.get("restore"):
             return {"restore": {"snapshot": self.snapshot, "error": None}}
         snapshot = data.get("snapshot")

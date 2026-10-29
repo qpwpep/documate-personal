@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 
 import streamlit as st
+from streamlit.runtime.scriptrunner import RerunException, StopException
 
 from src.app.client import (
     AgentSessionClient,
@@ -14,13 +15,14 @@ from src.app.web.streamlit_chat import process_chat_prompt, render_chat_history
 from src.app.web.streamlit_browser_state import edit_question, render_browser_state, restore_browser_session, restore_composer
 from src.app.web.streamlit_conversations import render_conversation_notice
 from src.app.web.streamlit_requests import (
-    ChatSubmission, SaveSubmission, UploadSubmission, discard_saved_prompt, edit_saved_prompt,
-    queue_chat, queue_save, queue_upload, send_saved_prompt,
+    ChatSubmission, SaveSubmission, UploadSubmission, continue_upload_question,
+    discard_saved_prompt, edit_saved_prompt, get_upload_followup_prompt,
+    interrupt_operation, queue_chat, queue_save, queue_upload, send_saved_prompt,
 )
 from src.app.web.streamlit_intro import render_intro
 from src.app.web.streamlit_page import warn_if_utf8_mode_disabled_once
 from src.app.web.streamlit_sidebar import render_sidebar
-from src.app.web.streamlit_styles import configure_page
+from src.app.web.streamlit_styles import configure_page, render_conversation_header
 from src.app.web.streamlit_theme import THEME_STATE_KEY
 from src.app.web.streamlit_state import (
     Conversation,
@@ -93,18 +95,28 @@ def main() -> None:
         st.rerun()
     conversation.client.context.slack_recipient = sidebar_inputs.slack_recipient
     render_browser_state(conversation)
+    render_conversation_header(
+        conversation.title, attachment_count=len(manifest.files) if manifest is not None else None,
+        read_only=conversation.is_read_only,
+    )
 
     session_path = get_session_path()
     messages = get_messages()
+    # Clear the previous welcome screen before a long synchronous request starts.
+    intro = st.empty()
+    intro.empty()
     if (not messages and not busy and not conversation.is_read_only
             and not conversation.saved_prompt and pending_upload is None and manifest is not None):
-        render_intro(DEFAULT_DOCS, has_uploads=bool(manifest.files))
+        with intro.container():
+            render_intro(DEFAULT_DOCS, has_uploads=bool(manifest.files))
     render_chat_history(
         messages, SETTINGS.fastapi_url, on_save=lambda answer_id: queue_save(conversation, answer_id),
         actions_disabled=busy or conversation.is_read_only,
         on_retry=(lambda prompt: queue_chat(conversation, prompt)) if not pending_upload and not conversation.saved_prompt else None,
         on_edit=(lambda prompt: edit_question(conversation, prompt)) if not pending_upload and not conversation.saved_prompt else None,
     )
+    upload_status = st.empty()
+    upload_status.empty()
     if conversation.is_read_only or queued is not None or pending_upload is not None or conversation.saved_prompt or manifest is None:
         # The native widget disappears on these screens; its next instance
         # needs the independently retained text, including after reconnection.
@@ -146,6 +158,20 @@ def main() -> None:
         _render_pending_upload()
         return
 
+    if manifest.files:
+        with upload_status.container():
+            st.success(f"자료 준비 완료 · {len(manifest.files)}개")
+            st.caption(" · ".join(item.name for item in manifest.files))
+            previous_prompt = get_upload_followup_prompt(conversation)
+            if previous_prompt is not None:
+                st.info("첨부한 자료로 이전 질문을 계속할 수 있습니다.")
+                st.text(previous_prompt)
+                st.button("이전 질문 계속하기", key="documate_continue_upload_question", type="primary",
+                          on_click=continue_upload_question, args=(conversation,))
+                st.caption("버튼을 누르면 위 질문을 보냅니다. 입력창에 작성 중인 질문은 유지됩니다.")
+            else:
+                st.caption("이 대화에서 검색할 수 있는 자료입니다. 실제 사용한 자료는 답변의 근거에서 확인하세요.")
+
     saved_prompt = conversation.saved_prompt
     if saved_prompt:
         st.info(f"아직 보내지 않은 질문: {saved_prompt}")
@@ -163,7 +189,7 @@ def main() -> None:
     suffixes = enabled_upload_suffixes(docling_enabled=getattr(SETTINGS, "docling_enabled", False))
     st.caption(f"{' · '.join(sorted(suffixes))} / 최대 {SETTINGS.upload_max_files}개 / 파일당 {SETTINGS.upload_max_file_mib} MiB / 전체 {SETTINGS.upload_max_total_mib} MiB")
     st.html('<p id="documate-upload-selection" role="status" aria-live="polite">'
-            '선택한 파일은 전송 후 검색에 사용됩니다. 파일만 먼저 전송할 수도 있습니다.</p>')
+            '새 파일은 +로 추가한 뒤 전송하세요. 파일만 먼저 전송할 수도 있습니다.</p>')
 
     restore_composer(conversation)
     chat_submission = st.chat_input(
@@ -203,27 +229,32 @@ def main() -> None:
 def _execute_submission(conversation: Conversation, submission: ChatSubmission | SaveSubmission | UploadSubmission) -> None:
     """A consumed submission cannot be replayed by a rerun or navigation."""
     conversation.pending_request = None
-    if not validate_conversation(conversation):
-        if submission.kind == "chat":
-            conversation.saved_prompt = submission.prompt
-        elif submission.kind == "upload" and conversation.pending_upload is not None:
-            conversation.pending_upload.requires_confirmation = True
-        elif submission.kind == "save":
-            for message in conversation.messages:
-                if message["role"] == "assistant" and message["result"] is not None and message["result"].answer_id == submission.answer_id:
-                    message["export_error"] = "저장 전에 서버 상태를 확인하지 못했습니다. 대화 연결을 확인한 뒤 같은 답변으로 다시 시도해 주세요."
-        return
+    conversation.active_submission = submission
+    conversation.operation_message_count = len(conversation.messages)
     conversation.operation_in_progress = True
     try:
+        valid = validate_conversation(conversation, expected_submission=submission)
+        if conversation.active_submission is not submission:
+            return
+        if not valid:
+            if submission.kind == "chat":
+                conversation.saved_prompt = submission.prompt
+            elif submission.kind == "upload" and conversation.pending_upload is not None:
+                conversation.pending_upload.requires_confirmation = True
+            elif submission.kind == "save":
+                for message in conversation.messages:
+                    if message["role"] == "assistant" and message["result"] is not None and message["result"].answer_id == submission.answer_id:
+                        message["export_error"] = "저장 전에 서버 상태를 확인하지 못했습니다. 대화 연결을 확인한 뒤 같은 답변으로 다시 시도해 주세요."
+            return
         if submission.kind == "upload":
-            with st.spinner("파일을 검증하고 함께 검색할 자료를 준비합니다…"):
+            with st.spinner("파일을 검증하고 함께 검색할 자료를 준비합니다…", show_time=True):
                 commit_pending_upload()
             return
         if submission.kind == "save":
             targets = [message for message in conversation.messages if message["role"] == "assistant"
                        and message["result"] is not None and message["result"].answer_id == submission.answer_id]
             try:
-                with st.spinner("선택한 답변을 출처와 함께 저장합니다…"):
+                with st.spinner("선택한 답변을 출처와 함께 저장합니다…", show_time=True):
                     result = conversation.client.save_answer(submission.answer_id)
                 for message in targets:
                     message["export_result"] = result
@@ -240,9 +271,16 @@ def _execute_submission(conversation: Conversation, submission: ChatSubmission |
             append_user_message=conversation.messages.append,
             append_assistant_message=conversation.messages.append,
         )
+    except (RerunException, StopException):
+        # A browser-triggered rerun stops receiving the response, not the
+        # server operation. Never replay an utterance or its delivery actions.
+        interrupt_operation(conversation, submission.operation_id)
+        raise
     finally:
-        conversation.operation_in_progress = False
-        conversation.draft.needs_restore = True
+        if conversation.active_submission is submission:
+            conversation.active_submission = None
+            conversation.operation_in_progress = False
+            conversation.draft.needs_restore = True
 
 
 def _stage_files(files: list[Any], session_path: Path):

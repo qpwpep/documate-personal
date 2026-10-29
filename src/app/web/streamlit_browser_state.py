@@ -10,6 +10,7 @@ from pydantic import BaseModel, ValidationError
 from streamlit.components.v2 import component
 
 from src.app.web.conversation_snapshot import dump_conversations, load_conversations
+from src.app.web.streamlit_requests import interrupt_operation
 from src.app.web.streamlit_state import Conversation, list_conversations
 from src.infra.settings import get_settings
 
@@ -30,7 +31,8 @@ def restore_browser_session() -> bool:
         return True
     result = _bridge(
         data={"restore": True}, key=_KEY, on_restore_change=lambda: None,
-        on_draft_change=_record_draft, on_storage_error_change=lambda: None, height=0,
+        on_draft_change=_record_draft, on_storage_error_change=lambda: None,
+        on_interrupt_change=_interrupt_response, height=0,
     )
     if result.get("restore") is None:
         st.info("이 탭의 대화를 복원하고 있습니다…")
@@ -62,13 +64,26 @@ def _record_draft() -> None:
     conversation.draft.record(event["text"], revision=event["revision"])
 
 
+def _interrupt_response() -> None:
+    event = st.session_state.get(_KEY, {}).get("interrupt")
+    if (not isinstance(event, dict) or not isinstance(event.get("operation_id"), str)
+            or not isinstance(event.get("conversation_id"), str)):
+        return
+    conversation = st.session_state.get("conversations", {}).get(event.get("conversation_id"))
+    if conversation is not None:
+        interrupt_operation(conversation, event["operation_id"])
+
+
 def render_browser_state(conversation: Conversation) -> None:
     state = st.session_state.get(_KEY, {})
+    submission = conversation.pending_request or conversation.active_submission
     result = _bridge(
         data={"conversation_id": conversation.id, "revision": conversation.draft.revision,
               "text": conversation.draft.text,
               "focus_input": conversation.draft.needs_restore,
               "pending_chat": conversation.pending_request is not None and conversation.pending_request.kind == "chat",
+              "operation_id": submission.operation_id if submission is not None else None,
+              "operation_kind": submission.kind if submission is not None else None,
               "message_count": len(conversation.messages),
               "max_file_bytes": get_settings().upload_max_file_mib * 1024 * 1024,
               "snapshot": dump_conversations(list_conversations(), conversation.id),
@@ -76,6 +91,7 @@ def render_browser_state(conversation: Conversation) -> None:
         key=_KEY,
         on_draft_change=_record_draft, on_restore_change=lambda: None,
         on_storage_error_change=lambda: None,
+        on_interrupt_change=_interrupt_response,
         height=0,
     )
     notice = result.get("storage_error") or st.session_state.get("browser_storage_notice")

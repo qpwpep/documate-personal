@@ -48,6 +48,54 @@ def _checked_answer():
     )})
 
 
+def test_normal_answer_uses_one_short_scope_summary_without_repeating_generic_guidance():
+    evidence = _evidence("문서에 기록된 설명", source_type="official")
+    answer = finalize_answer(text_document("문서를 바탕으로 설명합니다.", basis="source", refs=[evidence.id]), [evidence])
+
+    app = _render(TurnResult(response=answer))
+
+    visible_captions = [item.value for item in app.main.children.values() if item.type == "caption"]
+    assert visible_captions == ["출처가 연결된 내용 1개 · 직접 인용 없음"]
+    assert not app.warning
+    details = next(item for item in app.expander if item.label == "검증 상세")
+    assert not details.proto.expanded
+    assert any("답변 전체의 정확도" in item.value for item in details.caption)
+
+
+@pytest.mark.parametrize(("quote", "matched"), [("그대로 인용할 문장", 1), ("원문과 다른 인용문", 0)])
+def test_direct_quote_count_is_separate_from_source_connection_count(quote, matched):
+    evidence = _evidence("그대로 인용할 문장", source_type="official")
+    answer = finalize_answer(text_document(quote, basis="excerpt", refs=[evidence.id]), [evidence])
+
+    app = _render(TurnResult(response=answer))
+
+    visible_captions = [item.value for item in app.main.children.values() if item.type == "caption"]
+    assert f"출처가 연결된 내용 1개 · 직접 인용 1개 중 원문 일치 {matched}개" in visible_captions
+
+
+def test_citations_are_grouped_by_section_without_changing_answer_or_export():
+    evidence = _evidence("하나의 출처에서 확인한 두 설명", source_type="official")
+    answer = finalize_answer(AnswerDocument.model_validate({"blocks": [
+        {"type": "heading", "content": {"text": "첫 절", "basis": "source", "refs": [evidence.id]}},
+        {"type": "paragraph", "content": [{"text": "첫 설명", "basis": "source", "refs": [evidence.id]}]},
+        {"type": "paragraph", "content": [{"text": "둘째 설명", "basis": "source", "refs": [evidence.id]}]},
+        {"type": "heading", "content": {"text": "둘째 절"}},
+        {"type": "paragraph", "content": [{"text": "다음 설명", "basis": "source", "refs": [evidence.id]}]},
+    ]}), [evidence])
+    original = answer.model_dump(mode="json")
+    exported = export_answer_text(answer, include_sources=True)
+
+    app = _render(TurnResult(response=answer))
+
+    popovers = app.get("popover")
+    assert len(popovers) == 2
+    assert [item.proto.popover.label for item in popovers] == ["근거 [1]", "근거 [1]"]
+    for text in ("첫 설명 [1]", "둘째 설명 [1]", "다음 설명 [1]"):
+        assert any(item.value == text for item in app.markdown)
+    assert answer.model_dump(mode="json") == original
+    assert export_answer_text(answer, include_sources=True) == exported
+
+
 def test_removed_content_explains_known_scope_and_next_step_before_technical_details():
     evidence = _evidence("확인한 문서 내용", source_type="official")
     answer = finalize_answer(text_document("확인한 문서 내용", basis="source", refs=[evidence.id]), [evidence], issues=[
@@ -64,9 +112,9 @@ def test_removed_content_explains_known_scope_and_next_step_before_technical_det
     app = _render(TurnResult(response=answer))
 
     visible = [item.value for item in app.main.children.values() if item.type in {"caption", "markdown", "warning"}]
-    assert any("확인한 범위" in text and "원문에 연결된 내용 1개" in text for text in visible)
-    assert any("확인하지 못한 범위" in text and "제외된 항목의 상세 기록은 없습니다" in text for text in visible)
-    assert any("다음 행동" in text and "필요한 항목이 빠졌다면" in text for text in visible)
+    assert any("출처가 연결된 내용 1개" in text for text in visible)
+    assert any("확인할 한계" in text and "제외된 항목의 상세 기록은 없습니다" in text for text in visible)
+    assert any("필요한 항목이 빠졌다면" in text for text in visible)
     assert not any("Decisions API" in text or "충족 확률" in text or "임곗값" in text for text in visible)
     details = next(item for item in app.expander if item.label == "검증 상세")
     assert not details.proto.expanded
@@ -95,7 +143,8 @@ def test_partial_answer_keeps_one_summary_visible_and_preserves_limits_in_collap
     visible_warnings = [item for item in app.main.children.values() if item.type == "warning"]
     assert len(visible_warnings) == 1
     assert "부분 답변" in visible_warnings[0].value
-    assert "자료나 조건을 추가" in visible_warnings[0].value
+    assert "첨부 코드의 동작은 확인하지 못했습니다." in visible_warnings[0].value
+    assert "없는 경우에만 자료를 추가" in visible_warnings[0].value
     assert any("확인한 문서 내용" in item.value for item in app.markdown)
     details = next(item for item in app.expander if item.label == "답변의 한계와 처리 정보")
     assert not details.proto.expanded
@@ -107,6 +156,70 @@ def test_partial_answer_keeps_one_summary_visible_and_preserves_limits_in_collap
     assert not unit_details.proto.expanded
     assert any(answer.issues[2].message in item.value for item in unit_details.warning)
     assert any("확인한 문서 내용" in item.value for item in unit_details.caption)
+
+
+def test_partial_calculation_shows_recorded_gap_before_answer_without_assuming_missing_file():
+    source = "def total_price(prices, discount_rate=0):\n    return sum(prices) * (1 - discount_rate)"
+    evidence = _evidence(source)
+    gap = "업로드 파일에서 total_price (파일 ux_sample.py; 확인 항목 prices, discount_rate, 0.1)에 필요한 근거를 충분히 확인하지 못했습니다."
+    answer = finalize_answer(
+        text_document("주어진 값을 대입한 계산 결과는 270.0입니다.", basis="inference", refs=[evidence.id]),
+        [evidence],
+        issues=[ResponseIssue(code="answer_incomplete", message="요청 전체는 완료하지 못했습니다."),
+                ResponseIssue(code="retrieved_evidence_incomplete", message=gap)],
+    )
+    original = answer.model_dump(mode="json")
+    exported = export_answer_text(answer, include_sources=True)
+
+    app = _render(TurnResult(status="partial", response=answer,
+                             problem=make_problem("evidence_insufficient", "validation")))
+
+    visible = [item for item in app.main.children.values() if item.type in {"warning", "markdown", "caption"}]
+    assert visible[0].type == "warning"
+    summary = visible[0].value
+    assert gap in summary
+    assert "제공한 범위" in summary and "확인하지 못한 내용" in summary and "다음 행동" in summary
+    assert "파일명·위치" in summary and "없는 경우에만 자료를 추가" in summary
+    assert "파일이 없습니다" not in summary and "자료나 조건을 추가해 주세요" not in summary
+    assert any("270.0" in item.value for item in app.markdown)
+    assert not any(gap in item.value for item in visible if item.type == "caption")
+    assert answer.model_dump(mode="json") == original
+    assert export_answer_text(answer, include_sources=True) == exported
+
+
+def test_partial_source_fallback_distinguishes_supplied_excerpt_from_processing_limit():
+    evidence = _evidence("확인 가능한 원문 발췌", source_type="official")
+    gap = "검색한 원문의 필요한 내용을 답변 준비 범위에 모두 담지 못했습니다."
+    fallback = "요청한 설명 대신 확인 가능한 원문 발췌만 제공합니다."
+    answer = finalize_answer(
+        text_document("확인 가능한 원문 발췌", basis="excerpt", refs=[evidence.id]), [evidence],
+        issues=[ResponseIssue(code="evidence_packet_incomplete", message=gap),
+                ResponseIssue(code="source_excerpt_fallback", message=fallback),
+                ResponseIssue(code="answer_incomplete", message="요청 전체를 완성하지 못했습니다.")],
+    )
+
+    app = _render(TurnResult(status="partial", response=answer,
+                             problem=make_problem("evidence_insufficient", "validation")))
+
+    summary = next(item.value for item in app.main.children.values() if item.type == "warning")
+    assert gap in summary and fallback in summary
+    assert "질문을 항목별로 나누어" in summary
+    assert "자료를 추가" not in summary
+    details = next(item for item in app.expander if item.label == "답변의 한계와 처리 정보")
+    assert all(any(issue.message in item.value for item in details.warning) for issue in answer.issues)
+
+
+def test_partial_removed_content_preserves_unknown_omissions_notice():
+    answer = finalize_answer(text_document("남아 있는 답변"), [], issues=[
+        ResponseIssue(code="invalid_content_removed", message="근거가 부족한 내용을 제외했습니다."),
+    ])
+
+    app = _render(TurnResult(status="partial", response=answer,
+                             problem=make_problem("evidence_insufficient", "validation")))
+
+    summary = next(item.value for item in app.main.children.values() if item.type == "warning")
+    assert "제외된 항목의 상세 기록은 없습니다." in summary
+    assert "필요한 항목이 빠졌다면 해당 항목을 지정" in summary
 
 
 @pytest.mark.parametrize(("basis", "refs", "warning"), [
