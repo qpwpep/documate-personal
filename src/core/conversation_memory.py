@@ -386,7 +386,7 @@ def build_bounded_fallback_summary(
         combined = previous or evicted
 
     byte_budget = min(policy.summary_max_bytes, policy.summary_max_tokens * 3)
-    return _head_tail_bound(combined, max_bytes=byte_budget).strip() or None
+    return _bound_summary(_head_tail_bound(combined, max_bytes=byte_budget), policy)
 
 
 def build_untrusted_memory_prompt_messages(

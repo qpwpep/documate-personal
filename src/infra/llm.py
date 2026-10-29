@@ -100,7 +100,7 @@ def build_llm_registry(settings: AppSettings) -> LLMRegistry:
         temperature=chat_temperature(settings.summary_model),
         max_tokens=settings.summary_max_tokens,
         timeout=60,
-        max_retries=2,
+        max_retries=0,
         verbose=settings.verbose,
     )
 

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import json
 import logging
+import time
+from collections.abc import Callable
 from typing import Any, List
 from uuid import uuid4
 
@@ -14,6 +17,8 @@ from langchain_core.messages import (
     ToolMessage,
 )
 from langgraph.graph.message import REMOVE_ALL_MESSAGES
+from langchain_openai import ChatOpenAI
+from openai import APIConnectionError, APIStatusError
 
 from src.core.conversation_memory import (
     ConversationMemoryPolicy,
@@ -24,9 +29,15 @@ from src.core.conversation_memory import (
 )
 from src.core.contracts import GraphState
 from src.core.request_contracts import UserTurnSnapshot
+from src.core.llm_errors import LLMCallError, make_problem
 from src.core.contracts.boundary.debug import get_debug_state
 from src.core.contracts.boundary.runtime import get_runtime_state
 from src.runtime.agent_runtime.llm_usage import record_llm_call
+from src.infra.llm_boundary import (
+    classify_call_error,
+    record_llm_diagnostic,
+    request_call_budget,
+)
 from src.infra.logging_utils import log_event
 
 SUMMARY_SYS = (
@@ -127,11 +138,19 @@ def latest_previous_ai_answer(messages: list[AnyMessage]) -> str:
 
 
 def make_summarize_node(
-    llm_summarizer: Any,
+    llm_summarizer: ChatOpenAI | None,
     verbose: bool,
     *,
     policy: ConversationMemoryPolicy,
-):
+) -> Callable[[GraphState], GraphState]:
+    summary_max_bytes = min(policy.summary_max_bytes, policy.summary_max_tokens * 3)
+    summary_instructions = (
+        SUMMARY_SYS
+        + f"- Storage allows at most {summary_max_bytes} UTF-8 bytes after JSON string escaping "
+        "(excluding enclosing quotes). Write a concise memory within that limit. "
+        "The generation token cap is a safety limit, not a target length.\n"
+    )
+
     def summarize_old_messages(state: GraphState) -> GraphState:
         messages: List[BaseMessage] = state.get("messages", [])
         runtime = get_runtime_state(state)
@@ -151,6 +170,7 @@ def make_summarize_node(
             policy=policy,
         )
         next_summary = previous_summary
+        generated_summary: str | None = None
         fallback_reason: str | None = None
 
         if summary_transcript:
@@ -161,18 +181,13 @@ def make_summarize_node(
                 f"{summary_transcript}"
             )
             try:
-                with record_llm_call(stage="summarize", attempt=1, path="direct") as call:
-                    summary_response = llm_summarizer.invoke(
-                        [
-                            SystemMessage(content=SUMMARY_SYS),
-                            HumanMessage(content=summary_input),
-                        ]
-                    )
-                    call.complete(summary_response)
-                generated_summary = extract_text_content(
-                    getattr(summary_response, "content", summary_response)
-                ).strip()
-                if generated_summary:
+                if llm_summarizer is None:
+                    raise ValueError("summary model is not configured")
+                generated_summary = _generate_summary(
+                    llm_summarizer,
+                    [SystemMessage(content=summary_instructions), HumanMessage(content=summary_input)],
+                )
+                if generated_summary.strip():
                     next_summary = build_bounded_fallback_summary(
                         existing_summary=None,
                         evicted_transcript=generated_summary,
@@ -211,6 +226,13 @@ def make_summarize_node(
             "removed_messages": len(old_messages),
             "summary_fallback": fallback_reason is not None,
             "fallback_reason": fallback_reason,
+            # Match the escaped UTF-8 content budget used by stored memory.
+            "summary_max_bytes": summary_max_bytes,
+            "summary_generated_bytes": (
+                len(json.dumps(generated_summary, ensure_ascii=False).encode("utf-8")) - 2
+                if generated_summary is not None else None
+            ),
+            "summary_stored_bytes": len(json.dumps(next_summary or "", ensure_ascii=False).encode("utf-8")) - 2,
         }
         validation_events = list(debug.validation_events)
         if fallback_reason is not None:
@@ -248,7 +270,41 @@ def make_summarize_node(
                 before_serialized_bytes=plan.before.serialized_bytes,
                 after_serialized_bytes=after_usage.serialized_bytes,
                 summary_fallback=fallback_reason is not None,
+                summary_generated_bytes=diagnostic["summary_generated_bytes"],
+                summary_stored_bytes=diagnostic["summary_stored_bytes"],
+                summary_max_bytes=summary_max_bytes,
             )
         return updates
 
     return summarize_old_messages
+
+
+def _generate_summary(llm: ChatOpenAI, messages: list[BaseMessage]) -> str:
+    budget = request_call_budget("summarize")
+    while budget.can_attempt:
+        budget.calls += 1
+        try:
+            with record_llm_call(
+                stage="summarize", attempt=budget.calls, path="direct",
+                model_name=llm.model_name, endpoint="chat_completions",
+            ) as call:
+                response = llm.invoke(messages, timeout=budget.remaining_seconds)
+                call.complete(response)
+            return extract_text_content(response.content)
+        except (APIConnectionError, APIStatusError) as exc:
+            error = classify_call_error(exc, stage="summarize", llm=llm, attempt=budget.calls)
+            delay = error.problem.retry_after_seconds
+            if delay is None:
+                delay = min(2 ** (budget.calls - 1) * 0.25, 2.0)
+            can_retry = (
+                error.problem.code in {"provider_unavailable", "provider_rate_limited"}
+                and budget.can_attempt and delay < budget.remaining_seconds
+            )
+            diagnostic = error.diagnostic.model_copy(update={
+                "endpoint": "chat_completions", "recovery": "retry" if can_retry else "stop",
+            })
+            record_llm_diagnostic(diagnostic)
+            if not can_retry:
+                raise LLMCallError(error.problem, diagnostic) from exc
+            time.sleep(delay)
+    raise LLMCallError(make_problem("call_budget_exhausted", "summarize"))
