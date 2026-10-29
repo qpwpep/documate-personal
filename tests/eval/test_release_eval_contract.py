@@ -101,7 +101,7 @@ def _response_payload(*, forbidden_phase=None, execution_evidence=True, semantic
     debug = DebugPayload(
         llm_calls=[LLMCallRecord(
             stage="synthesis", attempt=1, path="structured", model_name="fixture-model",
-            usage=TokenUsage(input_tokens=10, output_tokens=5),
+            usage=TokenUsage(input_tokens=10, output_tokens=5, cached_input_tokens=0, cache_write_input_tokens=0),
         )],
         tool_calls=tools, tool_call_count=len(tools),
         observed_hits=[SearchHit(

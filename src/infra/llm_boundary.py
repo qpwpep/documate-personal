@@ -383,28 +383,38 @@ def run_structured_call(llm: StructuredModel, messages: list[Any], *, stage: str
     while budget.can_attempt:
         budget.calls += 1
         try:
-            with record_llm_call(stage=stage, attempt=max(attempt, budget.calls), path=path) as call:
-                value = _invoke_observed(llm, request_messages, stage=stage, attempt=max(attempt, budget.calls),
-                                         path=path, timeout_seconds=budget.remaining_seconds)
+            with record_llm_call(stage=stage, attempt=max(attempt, budget.calls), path=path,
+                                 model_name=llm.model_name, endpoint=llm.endpoint) as call:
+                try:
+                    value = _invoke_observed(llm, request_messages, stage=stage, attempt=max(attempt, budget.calls),
+                                             path=path, timeout_seconds=budget.remaining_seconds)
+                except (LengthFinishReasonError, ContentFilterFinishReasonError) as exc:
+                    # SDK parsing can fail before returning the already billed completion.
+                    if exc.completion is not None and exc.completion.usage is not None:
+                        call.complete(AIMessage(content="", response_metadata={
+                            "model_name": exc.completion.model,
+                            "token_usage": exc.completion.usage.model_dump(mode="json"),
+                        }))
+                    raise
                 raw = _raw_message(value)
                 call.complete(raw)
-            _provider_completion(raw, stage=stage)
-            try:
-                parsed = _parse(value, raw)
-                wire_value = parsed.model_dump(mode="json") if isinstance(parsed, BaseModel) else parsed
-                llm.wire_validator.validate(wire_value)
-                return validate(parsed)
-            except (ValueError, WireValidationError) as exc:
-                error = LLMCallError(make_problem("model_output_invalid", stage), LLMDiagnostic(
-                    code="model_output_invalid", stage=stage, attempt=budget.calls,
-                    exception_type=type(exc).__name__, validation_paths=_validation_paths(exc), **_metadata(llm),
-                ))
-                # Feedback is sent only to the same model context; values and raw text are never logged.
-                error.repair_hint = ("The result must satisfy the declared wire schema at " + ", ".join(_validation_paths(exc))
-                    if isinstance(exc, WireValidationError) else "; ".join(item["msg"] for item in exc.errors(
-                    include_input=False, include_context=False, include_url=False))
-                    if isinstance(exc, ValidationError) else str(exc))[:2000]
-                raise error from exc
+                _provider_completion(raw, stage=stage)
+                try:
+                    parsed = _parse(value, raw)
+                    wire_value = parsed.model_dump(mode="json") if isinstance(parsed, BaseModel) else parsed
+                    llm.wire_validator.validate(wire_value)
+                    return validate(parsed)
+                except (ValueError, WireValidationError) as exc:
+                    error = LLMCallError(make_problem("model_output_invalid", stage), LLMDiagnostic(
+                        code="model_output_invalid", stage=stage, attempt=budget.calls,
+                        exception_type=type(exc).__name__, validation_paths=_validation_paths(exc), **_metadata(llm),
+                    ))
+                    # Feedback is sent only to the same model context; values and raw text are never logged.
+                    error.repair_hint = ("The result must satisfy the declared wire schema at " + ", ".join(_validation_paths(exc))
+                        if isinstance(exc, WireValidationError) else "; ".join(item["msg"] for item in exc.errors(
+                        include_input=False, include_context=False, include_url=False))
+                        if isinstance(exc, ValidationError) else str(exc))[:2000]
+                    raise error from exc
         except Exception as exc:
             error = classify_call_error(exc, stage=stage, llm=llm, attempt=budget.calls)
             diagnostic = error.diagnostic.model_copy(update={

@@ -78,6 +78,25 @@ def test_evaluate_posts_predicates_to_decisions_and_records_real_usage(invoke, c
     assert "test-secret" not in caplog.text
 
 
+def test_decisions_preserves_cache_counters_without_unrelated_provider_payload(invoke):
+    result, _, calls, _ = invoke([decision(usage={
+        "input_tokens": 100, "output_tokens": 0, "total_tokens": 100,
+        "input_tokens_details": {"cached_tokens": 30, "cache_write_tokens": 40,
+                                 "private_text": "private provider payload"},
+        "private_text": "private provider payload",
+    })])
+
+    assert result == DecisionResult(probabilities={"ready": 0.9}, refused_names=set())
+    assert calls[0].usage.cached_input_tokens == 30
+    assert calls[0].usage.cache_write_input_tokens == 40
+    assert calls[0].usage.uncached_input_tokens == 30
+    assert calls[0].usage.total_tokens == 100
+    assert calls[0].status == "completed"
+    assert calls[0].endpoint == "decisions"
+    assert calls[0].latency_ms is not None and calls[0].latency_ms >= 0
+    assert "private provider payload" not in calls[0].model_dump_json()
+
+
 def test_later_batch_failure_does_not_return_partial_validation(invoke):
     questions = [{**QUESTION, "name": f"requirement_{index}"} for index in range(201)]
 
@@ -129,6 +148,8 @@ def test_invalid_answers_fail_closed_without_repair_or_payload_logging(invoke, a
     assert result.problem.code == "model_output_invalid"
     assert len(seen) == 1
     assert usage[0].usage.input_tokens == 42
+    assert usage[0].status == "failed"
+    assert usage[0].failure_type is not None
     assert diagnostics[0].endpoint == "decisions"
     assert diagnostics[0].recovery == "stop"
     assert "private evidence" not in caplog.text
@@ -192,6 +213,12 @@ def test_transient_error_retries_same_request_with_observed_attempts(invoke):
     assert [call.attempt for call in usage] == [1, 2]
     assert usage[0].usage.observation == "none"
     assert usage[1].usage.total_tokens == 42
+    assert [call.status for call in usage] == ["failed", "completed"]
+    assert all(call.model_name == "gpt-6-luna" for call in usage)
+    assert all(call.endpoint == "decisions" for call in usage)
+    assert all(call.latency_ms is not None and call.latency_ms >= 0 for call in usage)
+    assert usage[0].failure_type is not None
+    assert usage[1].failure_type is None
     assert diagnostics[0].recovery == "retry"
 
 

@@ -16,7 +16,7 @@ from src.eval.pricing import compute_cost_usd
 def _decision_call(stage="pre_synthesis_validation", *, model="gpt-6-luna"):
     return LLMCallRecord(
         stage=stage, path="decisions", model_name=model,
-        usage=TokenUsage(input_tokens=1000, output_tokens=100),
+        usage=TokenUsage(input_tokens=1000, output_tokens=100, cached_input_tokens=0, cache_write_input_tokens=0),
     )
 
 
@@ -24,7 +24,7 @@ def test_unknown_decisions_price_prevents_partially_priced_total():
     calls = [
         LLMCallRecord(
             stage="synthesis", path="structured", model_name="known-model",
-            usage=TokenUsage(input_tokens=1000, output_tokens=100),
+            usage=TokenUsage(input_tokens=1000, output_tokens=100, cached_input_tokens=0, cache_write_input_tokens=0),
         ),
         _decision_call(),
     ]
@@ -59,7 +59,7 @@ def test_same_model_uses_the_price_for_its_actual_api_path():
         _decision_call(model="shared-model"),
         LLMCallRecord(
             stage="synthesis", path="structured", model_name="shared-model",
-            usage=TokenUsage(input_tokens=1000, output_tokens=100),
+            usage=TokenUsage(input_tokens=1000, output_tokens=100, cached_input_tokens=0, cache_write_input_tokens=0),
         ),
     ]
 
@@ -96,7 +96,8 @@ def test_decisions_price_does_not_substitute_for_unknown_general_model_price():
     assert compute_cost_usd(llm_calls=[call], pricing=pricing) is None
 
 
-@pytest.mark.parametrize("field", ["prompt_per_1k_usd", "completion_per_1k_usd"])
+@pytest.mark.parametrize("field", ["prompt_per_1k_usd", "completion_per_1k_usd",
+                                   "cached_prompt_per_1k_usd", "cache_write_per_1k_usd"])
 @pytest.mark.parametrize("value", [-0.02, float("nan"), float("inf"), float("-inf")])
 def test_model_prices_must_be_finite_nonnegative_numbers(field, value):
     values = {"prompt_per_1k_usd": 0.01, "completion_per_1k_usd": 0.02, field: value}
@@ -125,7 +126,7 @@ def test_free_output_does_not_require_an_output_token_observation():
     })
     call = LLMCallRecord(
         stage="pre_synthesis_validation", path="decisions", model_name="gpt-6-luna",
-        usage=TokenUsage(input_tokens=1000, output_tokens=None),
+        usage=TokenUsage(input_tokens=1000, output_tokens=None, cached_input_tokens=0, cache_write_input_tokens=0),
     )
 
     assert compute_cost_usd(llm_calls=[call], pricing=pricing) == pytest.approx(0.0001)
@@ -150,3 +151,52 @@ def test_shipped_config_prices_the_product_decisions_model():
         llm_calls=[_decision_call(), _decision_call("post_synthesis_validation")],
         pricing=config.pricing,
     ) == pytest.approx(0.0002)
+
+
+def test_cache_read_and_write_are_subsets_of_input_and_reasoning_is_not_added_again():
+    pricing = Pricing(models={"priced": ModelPricing(
+        prompt_per_1k_usd=0.1, cached_prompt_per_1k_usd=0.01,
+        cache_write_per_1k_usd=0.125, completion_per_1k_usd=0.2,
+    )})
+    call = LLMCallRecord(stage="synthesis", path="structured", model_name="priced", usage=TokenUsage(
+        input_tokens=1000, output_tokens=100, cached_input_tokens=200,
+        cache_write_input_tokens=300, reasoning_output_tokens=40,
+    ))
+
+    assert compute_cost_usd(llm_calls=[call], pricing=pricing) == pytest.approx(0.1095)
+    assert compute_cost_usd(llm_calls=[call], pricing=pricing, cache_mode="uncached") == pytest.approx(0.12)
+
+
+def test_missing_cache_detail_keeps_adjusted_cost_unknown_but_allows_uncached_comparison():
+    pricing = Pricing(models={"priced": ModelPricing(
+        prompt_per_1k_usd=0.1, cached_prompt_per_1k_usd=0.01,
+        cache_write_per_1k_usd=0.125, completion_per_1k_usd=0.0,
+    )})
+    call = LLMCallRecord(stage="planner", path="structured", model_name="priced", usage=TokenUsage(
+        input_tokens=1000, output_tokens=None, cached_input_tokens=0,
+    ))
+
+    assert compute_cost_usd(llm_calls=[call], pricing=pricing) is None
+    assert compute_cost_usd(llm_calls=[call], pricing=pricing, cache_mode="uncached") == pytest.approx(0.1)
+
+
+def test_explicit_flat_cache_rates_do_not_require_irrelevant_cache_observations():
+    pricing = Pricing(models={"flat": ModelPricing(
+        prompt_per_1k_usd=0.1, cached_prompt_per_1k_usd=0.1,
+        cache_write_per_1k_usd=0.1, completion_per_1k_usd=0.0,
+    )})
+    call = LLMCallRecord(stage="planner", path="structured", model_name="flat", usage=TokenUsage(input_tokens=1000))
+
+    assert compute_cost_usd(llm_calls=[call], pricing=pricing) == pytest.approx(0.1)
+
+
+def test_cache_counts_exceeding_total_do_not_produce_a_discounted_cost():
+    pricing = Pricing(models={"priced": ModelPricing(
+        prompt_per_1k_usd=0.1, cached_prompt_per_1k_usd=0.01,
+        cache_write_per_1k_usd=0.125, completion_per_1k_usd=0.0,
+    )})
+    call = LLMCallRecord(stage="planner", path="structured", model_name="priced", usage=TokenUsage(
+        input_tokens=100, cached_input_tokens=80, cache_write_input_tokens=50,
+    ))
+
+    assert compute_cost_usd(llm_calls=[call], pricing=pricing) is None

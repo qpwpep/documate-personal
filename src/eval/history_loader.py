@@ -83,8 +83,8 @@ def _read_summary(path: Path) -> tuple[RunSummary, bool, dict[str, Any] | None] 
         # Mixed/unknown versions and damaged current runs still fail validation.
         return None
     summary, _ = load_run_outputs(path.parent)
-    # Recognized prior execution/scoring contracts still have compatible evidence.
-    # Validate before exclusion so corruption cannot hide as history.
+    # Recognized v3 measurements keep their original costs and decision evidence.
+    # Validate before exclusion; do not reprice or promote them to current history.
     if not is_current_measurement(summary):
         return None
     return summary, "track" in payload, None

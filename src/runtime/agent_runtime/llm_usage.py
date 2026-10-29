@@ -5,7 +5,8 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from threading import Lock
-from typing import Any
+from time import perf_counter
+from typing import Literal
 
 from src.core.contracts.debug import build_llm_call_metadata
 from src.core.contracts.usage import LLMCallPath, LLMCallRecord, LLMCallStage
@@ -22,12 +23,21 @@ class LLMUsageRecorder:
             self._calls.append(call)
             return index
 
-    def complete(self, index: int, message: Any) -> None:
+    def complete(self, index: int, message: object) -> None:
         with self._lock:
             call = self._calls[index]
-            self._calls[index] = build_llm_call_metadata(
+            observed = build_llm_call_metadata(
                 stage=call.stage, attempt=call.attempt, path=call.path, message=message,
+                model_name=call.model_name, endpoint=call.endpoint,
             )
+            self._calls[index] = observed.model_copy(update={"status": call.status})
+
+    def finish(self, index: int, *, status: Literal["completed", "failed"], latency_ms: int,
+               failure_type: str | None) -> None:
+        with self._lock:
+            self._calls[index] = self._calls[index].model_copy(update={
+                "status": status, "latency_ms": latency_ms, "failure_type": failure_type,
+            })
 
     def snapshot(self) -> list[LLMCallRecord]:
         with self._lock:
@@ -57,16 +67,27 @@ class LLMCallAttempt:
         self._recorder = recorder
         self._index = index
 
-    def complete(self, message: Any) -> None:
+    def complete(self, message: object) -> None:
         if self._recorder is not None and self._index is not None:
             self._recorder.complete(self._index, message)
 
 
 @contextmanager
-def record_llm_call(*, stage: LLMCallStage, attempt: int, path: LLMCallPath) -> Iterator[LLMCallAttempt]:
+def record_llm_call(*, stage: LLMCallStage, attempt: int, path: LLMCallPath,
+                    model_name: str | None = None, endpoint: str | None = None) -> Iterator[LLMCallAttempt]:
     recorder = _recorder.get()
     index = recorder.start(build_llm_call_metadata(
-        stage=stage, attempt=attempt, path=path, message=None,
-    )) if recorder is not None else None
-    # Exceptions leave the initial, explicitly unobserved usage record intact.
-    yield LLMCallAttempt(recorder, index)
+        stage=stage, attempt=attempt, path=path, model_name=model_name, endpoint=endpoint,
+    ).model_copy(update={"status": "started"})) if recorder is not None else None
+    started = perf_counter()
+    failure_type = None
+    try:
+        yield LLMCallAttempt(recorder, index)
+    except BaseException as exc:
+        # Preserve both observed usage and failed/cancelled attempts without retaining exception text.
+        failure_type = type(exc).__name__
+        raise
+    finally:
+        if recorder is not None and index is not None:
+            recorder.finish(index, status="failed" if failure_type else "completed",
+                            latency_ms=round((perf_counter() - started) * 1000), failure_type=failure_type)

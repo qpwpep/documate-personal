@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Any, Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -12,13 +12,17 @@ LLMCallStage = Literal[
     "summarize", "planner", "synthesis", "pre_synthesis_validation", "post_synthesis_validation",
 ]
 LLMCallPath = Literal["direct", "structured", "structured_compact_fallback", "decisions"]
+UsageField = Literal[
+    "input_tokens", "output_tokens", "total_tokens", "cached_input_tokens",
+    "cache_write_input_tokens", "reasoning_output_tokens", "metadata",
+]
 
 
 class UsageIssue(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    code: Literal["invalid_value", "conflict", "total_mismatch"]
-    field: Literal["input_tokens", "output_tokens", "total_tokens", "metadata"]
+    code: Literal["invalid_value", "conflict", "total_mismatch", "detail_exceeds_total"]
+    field: UsageField
     source: str
 
 
@@ -27,6 +31,9 @@ class TokenUsage(BaseModel):
 
     input_tokens: TokenCount | None = None
     output_tokens: TokenCount | None = None
+    cached_input_tokens: TokenCount | None = None
+    cache_write_input_tokens: TokenCount | None = None
+    reasoning_output_tokens: TokenCount | None = None
     issues: list[UsageIssue] = Field(default_factory=list)
 
     @property
@@ -40,6 +47,13 @@ class TokenUsage(BaseModel):
             return None
         return self.input_tokens + self.output_tokens
 
+    @property
+    def uncached_input_tokens(self) -> int | None:
+        if self.input_tokens is None or self.cached_input_tokens is None or self.cache_write_input_tokens is None:
+            return None
+        remaining = self.input_tokens - self.cached_input_tokens - self.cache_write_input_tokens
+        return remaining if remaining >= 0 else None
+
 
 class LLMCallRecord(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -48,23 +62,28 @@ class LLMCallRecord(BaseModel):
     attempt: TokenCount = 0
     path: LLMCallPath
     model_name: Annotated[str, Field(strict=True, min_length=1)] | None = None
+    endpoint: str | None = None
+    status: Literal["unknown", "started", "completed", "failed"] = "unknown"
+    latency_ms: TokenCount | None = None
+    failure_type: str | None = None
     usage: TokenUsage
     # Retained for diagnostics; no consumer may interpret these again.
-    response_metadata: dict[str, Any] = Field(default_factory=dict)
-    usage_metadata: dict[str, Any] = Field(default_factory=dict)
+    response_metadata: dict[str, object] = Field(default_factory=dict)
+    usage_metadata: dict[str, object] = Field(default_factory=dict)
 
 
-def normalize_token_usage(usage_metadata: Any, response_metadata: Any) -> TokenUsage:
+def normalize_token_usage(usage_metadata: object, response_metadata: object) -> TokenUsage:
     """Select each dimension independently, without coercing absent or invalid data.
 
-    SDK usage precedes response token_usage, input/output precede their aliases.
-    A valid zero is authoritative. Lower-priority disagreements are diagnostic.
+    Original provider input/output counts are authoritative when retained: SDKs
+    can synthesize zero for an absent count. Otherwise use the SDK observation.
+    Nested SDK details precede response details; a valid zero is authoritative.
     Reported totals never fill missing dimensions.
     """
     issues: list[UsageIssue] = []
-    candidates: list[tuple[str, dict[str, Any]]] = []
+    candidates: list[tuple[str, dict[object, object]]] = []
 
-    def add_candidate(source: str, value: Any) -> None:
+    def add_candidate(source: str, value: object) -> None:
         if value is None:
             return
         if not isinstance(value, dict):
@@ -79,14 +98,24 @@ def normalize_token_usage(usage_metadata: Any, response_metadata: Any) -> TokenU
         else:
             issues.append(UsageIssue(code="invalid_value", field="metadata", source="response_metadata"))
 
-    def select(field: Literal["input_tokens", "output_tokens"], alias: str) -> int | None:
+    def select(field: UsageField, paths: tuple[tuple[str, ...], ...], *, provider_counts: bool = False) -> int | None:
         selected: int | None = None
-        for source, candidate in candidates:
-            for key in (field, alias):
-                value = candidate.get(key)
+        provider = [candidate for candidate in candidates if candidate[0] == "response_metadata.token_usage"]
+        observations = provider if provider_counts and provider else candidates
+        for source, candidate in observations:
+            for path in paths:
+                value: object = candidate
+                for key in path:
+                    if value is None:
+                        break
+                    if not isinstance(value, dict):
+                        issues.append(UsageIssue(code="invalid_value", field=field, source=source + "." + ".".join(path)))
+                        value = None
+                        break
+                    value = value.get(key)
                 if value is None:
                     continue
-                location = f"{source}.{key}"
+                location = source + "." + ".".join(path)
                 if type(value) is not int or value < 0:
                     issues.append(UsageIssue(code="invalid_value", field=field, source=location))
                 elif selected is None:
@@ -95,8 +124,20 @@ def normalize_token_usage(usage_metadata: Any, response_metadata: Any) -> TokenU
                     issues.append(UsageIssue(code="conflict", field=field, source=location))
         return selected
 
-    input_tokens = select("input_tokens", "prompt_tokens")
-    output_tokens = select("output_tokens", "completion_tokens")
+    input_tokens = select("input_tokens", (("input_tokens",), ("prompt_tokens",)), provider_counts=True)
+    output_tokens = select("output_tokens", (("output_tokens",), ("completion_tokens",)), provider_counts=True)
+    cached_input_tokens = select("cached_input_tokens", (
+        ("input_token_details", "cache_read"), ("input_tokens_details", "cached_tokens"),
+        ("prompt_tokens_details", "cached_tokens"),
+    ))
+    cache_write_input_tokens = select("cache_write_input_tokens", (
+        ("input_token_details", "cache_creation"), ("input_tokens_details", "cache_write_tokens"),
+        ("prompt_tokens_details", "cache_write_tokens"),
+    ))
+    reasoning_output_tokens = select("reasoning_output_tokens", (
+        ("output_token_details", "reasoning"), ("output_tokens_details", "reasoning_tokens"),
+        ("completion_tokens_details", "reasoning_tokens"),
+    ))
     total = input_tokens + output_tokens if input_tokens is not None and output_tokens is not None else None
     for source, candidate in candidates:
         reported = candidate.get("total_tokens")
@@ -106,4 +147,16 @@ def normalize_token_usage(usage_metadata: Any, response_metadata: Any) -> TokenU
             issues.append(UsageIssue(code="invalid_value", field="total_tokens", source=f"{source}.total_tokens"))
         elif total is not None and total != reported:
             issues.append(UsageIssue(code="total_mismatch", field="total_tokens", source=f"{source}.total_tokens"))
-    return TokenUsage(input_tokens=input_tokens, output_tokens=output_tokens, issues=issues)
+    for field, detail, parent in (
+        ("cached_input_tokens", cached_input_tokens, input_tokens),
+        ("cache_write_input_tokens", cache_write_input_tokens, input_tokens),
+        ("reasoning_output_tokens", reasoning_output_tokens, output_tokens),
+    ):
+        if detail is not None and parent is not None and detail > parent:
+            issues.append(UsageIssue(code="detail_exceeds_total", field=field, source=field))
+    if (input_tokens is not None and cached_input_tokens is not None and cache_write_input_tokens is not None
+            and cached_input_tokens + cache_write_input_tokens > input_tokens):
+        issues.append(UsageIssue(code="detail_exceeds_total", field="input_tokens", source="cache_read+cache_write"))
+    return TokenUsage(input_tokens=input_tokens, output_tokens=output_tokens,
+                      cached_input_tokens=cached_input_tokens, cache_write_input_tokens=cache_write_input_tokens,
+                      reasoning_output_tokens=reasoning_output_tokens, issues=issues)

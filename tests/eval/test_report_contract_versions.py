@@ -55,6 +55,18 @@ def test_current_report_roundtrip_preserves_decision_and_raw_cost(tmp_path):
     assert report.current_results == results
 
 
+def test_current_report_cannot_fill_missing_call_observations_before_fingerprint_check(tmp_path):
+    pair = _case_result()
+    summary = _summary([pair]).model_dump(mode="json")
+    raw_result = pair[1].model_dump(mode="json")
+    raw_result["scenario_turns"][0]["llm_calls"][0].pop("status")
+    summary["results_fingerprint"] = raw_results_fingerprint([raw_result])
+    _save_payloads(tmp_path, summary, [raw_result])
+
+    with pytest.raises(ValueError, match="fingerprint mismatch"):
+        load_run_outputs(tmp_path)
+
+
 def test_unknown_cost_stays_unknown_and_cannot_become_release_pass_on_reload(tmp_path):
     pair = _case_result()
     pair[1].cost_usd = None
@@ -285,10 +297,20 @@ def _write_previous_execution_history(
     with monkeypatch.context() as legacy:
         legacy.setattr(summary_module, "EXECUTION_CONTRACT_VERSION", execution)
         legacy.setattr(summary_module, "SCORING_CONTRACT_VERSION", scoring)
+        legacy.setattr(summary_module, "MEASUREMENT_CONTRACT_VERSION", "llm-usage-scenario-v3")
         case, result = _case_result()
         result.run_id = "previous-execution-and-scoring"
         summary = _summary([(case, result)]).model_copy(update={"run_id": result.run_id})
         write_run_outputs(output_dir=output_root / summary.run_id, results=[result], summary=summary)
+    raw_result = result.model_dump(mode="json")
+    for turn in raw_result["scenario_turns"]:
+        for call in turn["llm_calls"] or []:
+            for field in ("endpoint", "status", "latency_ms", "failure_type"):
+                call.pop(field)
+            for field in ("cached_input_tokens", "cache_write_input_tokens", "reasoning_output_tokens"):
+                call["usage"].pop(field)
+    summary = summary.model_copy(update={"results_fingerprint": raw_results_fingerprint([raw_result])})
+    _save_payloads(output_root / summary.run_id, summary.model_dump(mode="json"), [raw_result])
     return summary
 
 
@@ -296,6 +318,7 @@ def _write_previous_execution_history(
     ("shared-client-scenario-v1", "release-obligations-v6"),
     ("shared-client-scenario-v2", "release-obligations-v7"),
     ("shared-client-scenario-v2", "release-obligations-v8"),
+    ("shared-client-scenario-v2", "release-obligations-v9"),
 ])
 def test_history_excludes_previous_execution_and_scoring_without_rewriting(
     tmp_path, monkeypatch, execution, scoring,
@@ -319,9 +342,9 @@ def test_history_excludes_previous_execution_and_scoring_without_rewriting(
     assert [run.run_id for run in load_history_runs(output_root)] == [current.run_id]
     assert current.execution_contract_version == "shared-client-scenario-v2"
     assert current.audit_metrics["scoring_contract_version"] == "release-obligations-v9"
-    assert current.evaluation_fingerprint != previous.evaluation_fingerprint
+    assert current.measurement_contract_version != previous.measurement_contract_version
     assert {path: path.read_bytes() for path in before} == before
-    with pytest.raises(ValueError, match="current execution and scoring contracts"):
+    with pytest.raises(ValueError, match="current.*contracts"):
         load_report_inputs(output_root / previous.run_id)
 
 
@@ -352,6 +375,7 @@ def test_history_rejects_mixed_unknown_or_missing_execution_and_scoring(tmp_path
     ("shared-client-scenario-v1", "release-obligations-v6"),
     ("shared-client-scenario-v2", "release-obligations-v7"),
     ("shared-client-scenario-v2", "release-obligations-v8"),
+    ("shared-client-scenario-v2", "release-obligations-v9"),
 ])
 @pytest.mark.parametrize("damage", ["fingerprint", "missing_evidence"])
 def test_previous_execution_history_still_rejects_corrupt_evidence(
@@ -371,4 +395,19 @@ def test_previous_execution_history_still_rejects_corrupt_evidence(
     raw_path.write_text(json.dumps(raw) + "\n", encoding="utf-8")
 
     with pytest.raises(ValueError, match="fingerprint mismatch" if damage == "fingerprint" else "cost metrics disagree"):
+        load_history_runs(tmp_path)
+
+
+def test_previous_measurement_still_rejects_changed_decision_with_valid_raw_fingerprint(tmp_path, monkeypatch):
+    previous = _write_previous_execution_history(
+        tmp_path, monkeypatch, execution="shared-client-scenario-v2", scoring="release-obligations-v9",
+    )
+    directory = tmp_path / previous.run_id
+    raw_result = json.loads((directory / "raw_results.jsonl").read_text(encoding="utf-8"))
+    raw_result["decision"]["passed"] = not raw_result["decision"]["passed"]
+    summary = previous.model_dump(mode="json")
+    summary["results_fingerprint"] = raw_results_fingerprint([raw_result])
+    _save_payloads(directory, summary, [raw_result])
+
+    with pytest.raises(ValueError, match="stored case"):
         load_history_runs(tmp_path)

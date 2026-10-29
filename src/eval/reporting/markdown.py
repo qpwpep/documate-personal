@@ -304,7 +304,9 @@ def build_markdown_report(
         lines.append(f"| cost_observed_cases | {summary.metrics.cost_observed_cases} / {summary.metrics.planned_cases} |")
         lines.append(f"| cost_observation_rate | {summary.metrics.cost_observation_rate} |")
         lines.extend(["", "Cost covers every executed scenario turn and logical LLM invocation. "
-                      "The average includes only cases with complete input and output counts; "
+                      "It applies configured endpoint prices to input, cache reads, cache writes and output; "
+                      "cache subsets are not added to total input again. "
+                      "The average includes only cases with every billable dimension observed; "
                       "confirmed no-call cases count as observed zero cost. "
                       "synthesis_output_tokens covers only synthesis attempts for the final question. "
                       "SDK transport retries and provider billing reconciliation are outside this estimate."])

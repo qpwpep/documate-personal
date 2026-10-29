@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from typing import Any, Iterable, Literal
 
-from langchain_core.messages import AIMessage
 from pydantic import BaseModel, Field, field_validator
 
 from src.core.contracts.provenance import AnswerProvenance
@@ -72,7 +71,7 @@ RETRYABLE_REASONS: set[RetryReason] = {
     "missing_content",
     "missing_route_coverage",
 }
-DEBUG_SCHEMA_VERSION = 13
+DEBUG_SCHEMA_VERSION = 14
 # Historical diagnostics can contain retired routes; these never enable execution.
 RECORDED_ROUTE_ORDER: tuple[str, ...] = ("docs", "upload", "local")
 DebugObservabilityStatus = Literal["ok", "degraded", "failed"]
@@ -270,7 +269,9 @@ def build_llm_call_metadata(
     stage: LLMCallStage,
     attempt: int,
     path: LLMCallPath,
-    message: AIMessage | None = None,
+    message: object = None,
+    model_name: str | None = None,
+    endpoint: str | None = None,
 ) -> LLMCallRecord:
     response_metadata = getattr(message, "response_metadata", None)
     usage_metadata = getattr(message, "usage_metadata", None)
@@ -282,18 +283,20 @@ def build_llm_call_metadata(
         json_safe_deep_copy(usage_metadata) if isinstance(usage_metadata, dict) else {}
     )
 
-    model_name = None
     if isinstance(response_metadata, dict):
         for key in ("model_name", "model"):
             value = response_metadata.get(key)
             if isinstance(value, str) and value.strip():
                 model_name = value.strip()
                 break
+        if isinstance(response_metadata.get("endpoint"), str):
+            endpoint = response_metadata["endpoint"]
     return LLMCallRecord(
         stage=stage,
         attempt=attempt,
         path=path,
         model_name=model_name,
+        endpoint=endpoint,
         usage=normalize_token_usage(usage_metadata, response_metadata),
         response_metadata=safe_response_metadata,
         usage_metadata=safe_usage_metadata,

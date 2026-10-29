@@ -53,14 +53,22 @@ prompt_per_1k_usd = 0.00020
 completion_per_1k_usd = 0.00125
 
 [pricing.models."gpt-5.6-luna"]
+# Standard short-context, default cache retention; verified 2026-10-29:
+# https://developers.openai.com/api/docs/models/gpt-5.6-luna
+# Long-context (>272K), other service tiers and retention policies need their own prices.
 prompt_per_1k_usd = 0.00020
+cached_prompt_per_1k_usd = 0.00002
+cache_write_per_1k_usd = 0.00025
 completion_per_1k_usd = 0.00120
 
-# Standard /v1/decisions pricing, verified 2026-10-20:
+# Standard short-context /v1/decisions pricing, verified 2026-10-29:
 # https://developers.openai.com/api/docs/guides/decisions#pricing-and-availability
-# This endpoint charges input only; other APIs have separate model prices.
+# https://developers.openai.com/api/docs/pricing
+# This endpoint charges input only; cache reads/writes use standard gpt-6-luna rates.
 [pricing.decisions_models."gpt-6-luna"]
 prompt_per_1k_usd = 0.00010
+cached_prompt_per_1k_usd = 0.00001
+cache_write_per_1k_usd = 0.000125
 completion_per_1k_usd = 0.0
 
 [runtime]

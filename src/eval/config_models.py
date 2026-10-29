@@ -280,6 +280,8 @@ class ModelPricing(BaseModel):
 
     prompt_per_1k_usd: float = Field(ge=0, allow_inf_nan=False, strict=True)
     completion_per_1k_usd: float = Field(ge=0, allow_inf_nan=False, strict=True)
+    cached_prompt_per_1k_usd: float | None = Field(default=None, ge=0, allow_inf_nan=False, strict=True)
+    cache_write_per_1k_usd: float | None = Field(default=None, ge=0, allow_inf_nan=False, strict=True)
 
 
 class Pricing(BaseModel):

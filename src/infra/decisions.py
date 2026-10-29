@@ -82,8 +82,17 @@ def _usage_observation(payload: Any, *, model: str, request_id: str | None) -> _
     # Only token counters are retained. Neither input, answers nor arbitrary
     # provider fields enter diagnostics or the public usage records.
     raw_usage = payload.get("usage") if isinstance(payload, dict) else None
-    counters = {key: value for key in ("input_tokens", "output_tokens", "total_tokens")
+    counters: dict[str, object] = {key: value for key in ("input_tokens", "output_tokens", "total_tokens")
                 if isinstance(raw_usage, dict) and type(value := raw_usage.get(key)) is int and value >= 0}
+    if isinstance(raw_usage, dict):
+        for field, names in (
+            ("input_tokens_details", ("cached_tokens", "cache_write_tokens")),
+            ("output_tokens_details", ("reasoning_tokens",)),
+        ):
+            details = raw_usage.get(field)
+            if isinstance(details, dict):
+                counters[field] = {name: value for name in names
+                                   if type(value := details.get(name)) is int and value >= 0}
     return _UsageObservation(
         response_metadata={"model": model, "endpoint": "decisions", "request_id": request_id},
         usage_metadata=counters,
@@ -147,7 +156,8 @@ class DecisionsClient:
                 current_attempt = max(attempt, budget.calls)
                 request_id = None
                 try:
-                    with record_llm_call(stage=stage, attempt=current_attempt, path="decisions") as call:
+                    with record_llm_call(stage=stage, attempt=current_attempt, path="decisions",
+                                         model_name=self.model_name, endpoint="decisions") as call:
                         # Keep the native SDK request and inspect raw bytes before
                         # its permissive parser could hide duplicate JSON keys.
                         response = self._client.decisions.with_raw_response.create(
