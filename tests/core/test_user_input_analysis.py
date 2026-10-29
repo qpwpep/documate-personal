@@ -16,7 +16,7 @@ from src.core.request_contracts import (
 from src.runtime.nodes.synthesis import make_synthesize_node
 from src.runtime.nodes.validation import make_post_synthesis_validation_node
 from tests.core.helpers import mock_chat_model
-from tests.core.test_decisions_validation import DecisionsBoundary
+from tests.core.test_decisions_validation import DecisionsBoundary, read_decision_input
 from tests.core.test_synthesis_validation import _hit, _state as retrieval_state
 from tests.synthesis_fixtures import prepare_synthesis_state
 
@@ -159,7 +159,7 @@ def test_user_code_analysis_is_judged_against_the_supplied_code_without_invented
 
     updates = make_post_synthesis_validation_node(False, decisions_client=decisions)(state)
 
-    assessment = json.loads(decisions.requests[0]["input"])
+    assessment = read_decision_input(decisions.requests[0]["input"])
     assert assessment["conversation_context"]["messages"] == [{"role": "user", "content": REQUEST}]
     assert assessment["units"][0]["basis"] == "interaction"
     assert assessment["units"][0]["refs"] == []
@@ -177,7 +177,7 @@ def test_user_code_input_does_not_exempt_an_unsupported_execution_claim_from_val
 
     updates = make_post_synthesis_validation_node(False, decisions_client=decisions)(state)
 
-    assessment = json.loads(decisions.requests[0]["input"])
+    assessment = read_decision_input(decisions.requests[0]["input"])
     assert assessment["units"][0]["text"] == "실제 서버에서 코드를 실행해 처리 결과를 확인했습니다."
     assert assessment["units"][0]["cited_sources"] == []
     assert updates["response"].kind == "failure"

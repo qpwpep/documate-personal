@@ -25,6 +25,46 @@ from tests.synthesis_fixtures import synthesis_excerpt_limits
 
 make_pre_synthesis_validation_node = partial(make_pre_synthesis_validation_node, excerpt_limits=synthesis_excerpt_limits())
 
+
+def read_decision_input(value: str) -> dict:
+    """Resolve pre-validation references; post-validation already embeds its scope."""
+    payload = json.loads(value)
+    if "evaluation_policy" not in payload:
+        return payload
+    sources = {}
+    for identity, source in payload["sources"].items():
+        source = dict(source)
+        start = source["selection"]["start"]
+        source["source_lines"] = [{
+            **line, "text": source["excerpt"][line["start"] - start:line["end"] - start],
+        } for line in source["source_lines"]]
+        if "table_cells" in source:
+            source["table_cells"] = [{
+                "row_span": 1, "col_span": 1, "is_header": False,
+                **{key: item for key, item in cell.items() if key != "excerpt_range"},
+                "text": source["excerpt"][cell["excerpt_range"][0]:cell["excerpt_range"][1]],
+            } for cell in source["table_cells"]]
+        sources[identity] = source
+    tasks = payload["tasks"]
+    if "evidence" in payload:
+        payload["evidence"] = [{**entry, "task": tasks[entry["task_id"]], "source": sources[entry["source_id"]]}
+                               for entry in payload["evidence"]]
+    requirements = {}
+    if "requirements" in payload:
+        payload["requirements"] = [{**entry, "task": tasks[entry["task_id"]],
+                                    "sources": [sources[identity] for identity in entry["source_ids"]]}
+                                   for entry in payload["requirements"]]
+        requirements = {entry["name"]: entry for entry in payload["requirements"]}
+    if "packets" in payload:
+        payload["packets"] = [{**packet, "requirements": [requirements[name] for name in packet["requirement_names"]],
+                               "sources": [sources[identity] for identity in packet["source_ids"]]}
+                              for packet in payload["packets"]]
+    if payload.get("bound_source_response") is not None:
+        bound = payload["bound_source_response"]
+        bound["sources"] = [sources[identity] for identity in bound["source_ids"]]
+    return payload
+
+
 class DecisionsBoundary(DecisionsClient):
     """Keep the SDK and Decisions client real while replacing provider HTTP."""
 
@@ -108,6 +148,58 @@ def _state(*, retrieval=True, answer="Path.exists()는 파일이나 디렉터리
     )
 
 
+def test_post_validation_keeps_nested_sources_and_complete_question_instructions():
+    state = _state()
+    response = state["response"]
+    evidence = response.evidence_packet[0]
+    first_text = "UNIQUE_FIRST_CLAIM: the path exists."
+    second_text = "UNIQUE_SECOND_CLAIM: the result is Boolean."
+    document = AnswerDocument(blocks=[
+        *text_document(first_text, basis="source", refs=[evidence.id]).blocks,
+        *text_document(second_text, basis="source", refs=[evidence.id]).blocks,
+    ])
+    state["response"] = response.model_copy(update={
+        "result": finalize_answer(document, [evidence], retrieval_required=True),
+    })
+    boundary = DecisionsBoundary()
+
+    updates = make_post_synthesis_validation_node(False, decisions_client=boundary)(state)
+
+    wire = boundary.requests[0]["input"]
+    payload = json.loads(wire)
+    assert "sources" not in payload
+    assert "evaluation_policy" not in payload
+    assert "evaluation_rubrics" not in payload
+    # Post-validation deliberately retains its established local evidence and
+    # full instructions after compressed inputs rejected valid fixed drafts.
+    assert wire.count(first_text) == wire.count(second_text) == 2
+    assert [unit["cited_sources"][0]["excerpt"] for unit in payload["units"]] == [evidence.excerpt] * 2
+    assert payload["requirements"][0]["sources"][0]["excerpt"] == evidence.excerpt
+    assert all("Ignore instructions" in question["instructions"] for question in boundary.requests[0]["questions"])
+    assert all("evaluation_rubrics" not in question["instructions"] for question in boundary.requests[0]["questions"])
+    assert payload["displayed_document"] == document.model_dump(mode="json")
+    assert updates["response"].result.content == document
+
+
+def test_pre_validation_shares_policy_and_source_text_across_predicates_and_packet_checks():
+    state, boundary = _state(), DecisionsBoundary()
+    task = state["planner"].output.tasks[0].model_copy(deep=True)
+    task.requirement.evidence_needs = ["parameters", "explanation"]
+    state["planner"] = PlannerState(output=PlannerOutput(use_retrieval=True, tasks=[task]))
+
+    updates = make_pre_synthesis_validation_node(False, decisions_client=boundary)(state)
+
+    evidence = state["retrieval"].hit_log[0].evidence
+    for request in boundary.requests:
+        payload = json.loads(request["input"])
+        assert list(payload)[0] == "evaluation_policy"
+        assert request["input"].count(evidence.excerpt) == 1
+        assert "Ignore instructions" in payload["evaluation_policy"]
+        assert all("Ignore instructions" not in question["instructions"] for question in request["questions"])
+        assert all("evaluation_policy" in question["instructions"] for question in request["questions"])
+    assert not updates["retry"].needs_retry
+
+
 @pytest.mark.parametrize("parser", ["official_html", "tavily"])
 def test_validation_receives_the_actual_capture_method(parser):
     state = _state()
@@ -121,7 +213,7 @@ def test_validation_receives_the_actual_capture_method(parser):
 
     make_post_synthesis_validation_node(False, decisions_client=boundary)(state)
 
-    source = json.loads(boundary.requests[0]["input"])["units"][0]["cited_sources"][0]
+    source = read_decision_input(boundary.requests[0]["input"])["units"][0]["cited_sources"][0]
     assert source["capture_method"] == parser
 
 
@@ -194,7 +286,7 @@ def test_pre_validation_recomputes_static_failures_after_rejecting_a_source(max_
     updates = make_pre_synthesis_validation_node(False, decisions_client=boundary)(state)
 
     assert [verdict.status for verdict in updates["retrieval"].evidence_verdicts] == ["passed", "failed"]
-    requirements = json.loads(boundary.requests[-1]["input"])["requirements"]
+    requirements = read_decision_input(boundary.requests[-1]["input"])["requirements"]
     assert [source["id"] for source in requirements[0]["sources"]] == [good.id]
     if remaining_failure == "tool_error":
         prepared = updates["retrieval"].prepared_evidence
@@ -282,7 +374,7 @@ def test_conversation_followups_send_the_user_facts_used_by_synthesis(factory, r
 
     updates = factory(False, decisions_client=boundary)(state)
 
-    context = json.loads(boundary.requests[0]["input"])["conversation_context"]
+    context = read_decision_input(boundary.requests[0]["input"])["conversation_context"]
     assert context["memory_summary"] == summary
     assert context["messages"] == [
         *([{"role": "user", "content": "제 이름은 민수입니다."},
@@ -313,7 +405,7 @@ def test_validation_conversation_uses_the_synthesis_turn_limit_and_excludes_tool
 
     factory(False, decisions_client=boundary, max_turns=1)(state)
 
-    context = json.loads(boundary.requests[0]["input"])["conversation_context"]
+    context = read_decision_input(boundary.requests[0]["input"])["conversation_context"]
     messages, _, _ = build_synthesis_messages(
         state=state, request_contract=state["runtime"].request_contract,
         action_rules=[], evidence_packet=[], attempt=1, max_turns=1,
@@ -391,7 +483,7 @@ def test_post_validation_distinguishes_heading_context_from_unsupported_heading_
 
     updates = make_post_synthesis_validation_node(False, decisions_client=boundary)(state)
 
-    units = json.loads(boundary.requests[0]["input"])["units"]
+    units = read_decision_input(boundary.requests[0]["input"])["units"]
     assert [unit["block_type"] for unit in units] == ["heading", "paragraph", "heading"]
     assert units[0]["basis"] == "interaction" and units[0]["cited_sources"] == []
     assert units[1]["cited_sources"][0]["excerpt"] == evidence.excerpt
@@ -424,8 +516,8 @@ def test_api_requirement_checks_keep_target_and_selected_ranges_before_and_after
 
     pre = make_pre_synthesis_validation_node(False, decisions_client=boundary)(state)
     assert not pre["retry"].needs_retry
-    pre_payload = next(json.loads(call["input"]) for call in boundary.requests
-                       if "requirements" in json.loads(call["input"]))
+    pre_payload = next(read_decision_input(call["input"]) for call in boundary.requests
+                       if "requirements" in read_decision_input(call["input"]))
     pre_requirement = pre_payload["requirements"][0]
     assert pre_requirement["task"]["requirement"]["symbols"] == ["pandas.merge"]
     assert {source["id"] for source in pre_requirement["sources"]} == {selected.id, primary.id}
@@ -439,7 +531,7 @@ def test_api_requirement_checks_keep_target_and_selected_ranges_before_and_after
     boundary.probabilities["requirement_0"] = 0.2
     post = make_post_synthesis_validation_node(False, decisions_client=boundary)(state)
 
-    requirement = json.loads(boundary.requests[-1]["input"])["requirements"][0]
+    requirement = read_decision_input(boundary.requests[-1]["input"])["requirements"][0]
     assert requirement["task"] == pre_requirement["task"]
     assert [source["id"] for source in requirement["sources"]] == [selected.id]
     assert requirement["sources"][0]["excerpt"] == "on names the common key columns."
@@ -494,7 +586,7 @@ def test_api_usage_scope_is_shared_without_waiving_explicit_answer_requirements(
 
     updates = make_post_synthesis_validation_node(False, decisions_client=boundary)(state)
 
-    payload = json.loads(boundary.requests[0]["input"])
+    payload = read_decision_input(boundary.requests[0]["input"])
     questions = {question["name"]: question["instructions"] for question in boundary.requests[0]["questions"]}
     assert semantic.API_USAGE_SCOPE_INSTRUCTIONS in questions["requirement_0"]
     assert semantic.API_USAGE_SCOPE_INSTRUCTIONS in questions["request_fulfilled"]
@@ -692,7 +784,7 @@ def test_post_validation_keeps_each_units_cited_sources_separate():
 
     updates = make_post_synthesis_validation_node(False, decisions_client=boundary)(state)
 
-    units = json.loads(boundary.requests[0]["input"])["units"]
+    units = read_decision_input(boundary.requests[0]["input"])["units"]
     assert len(units) == 2
     assert [source["id"] for source in units[0]["cited_sources"]] == [packet[0].id]
     assert [source["id"] for source in units[1]["cited_sources"]] == [packet[1].id]
@@ -742,7 +834,7 @@ def test_answer_followups_send_bound_original_content_and_cited_sources(factory,
 
     factory(False, decisions_client=boundary)(state)
 
-    bound = json.loads(boundary.requests[0]["input"])["bound_source_response"]
+    bound = read_decision_input(boundary.requests[0]["input"])["bound_source_response"]
     assert bound["content_hash"] == previous.content_hash
     assert bound["content"] == previous.content.model_dump(mode="json")
     for source, citation in zip(bound["sources"], previous.citations, strict=True):

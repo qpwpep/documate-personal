@@ -277,7 +277,9 @@ def test_physical_line_is_shared_by_model_validation_answer_and_download(physica
                          if CALCULATION in item["excerpt"])
     expected_line = CALCULATION + "\n"
     record = next(item for item in packet_source["source_lines"] if item["line_number"] == 30)
-    assert record["text"] == expected_line
+    start = packet_source["selection"]["start"]
+    assert packet_source["excerpt"][record["start"] - start:record["end"] - start] == expected_line
+    assert "text" not in record
     assert record["partial_start"] is False
     assert record["partial_end"] is False
 
@@ -291,10 +293,16 @@ def test_physical_line_is_shared_by_model_validation_answer_and_download(physica
             for child in value:
                 yield from sources(child)
 
-    validation_sources = [source for payload in api.controls.decisions_inputs for source in sources(payload)]
+    validation_sources = [(payload, source) for payload in api.controls.decisions_inputs for source in sources(payload)]
     assert validation_sources
-    assert all(next(item for item in source["source_lines"] if item["line_number"] == 30)["text"]
-               == expected_line for source in validation_sources)
+    for payload, source in validation_sources:
+        record = next(item for item in source["source_lines"] if item["line_number"] == 30)
+        start = source["selection"]["start"]
+        assert source["excerpt"][record["start"] - start:record["end"] - start] == expected_line
+        if "evaluation_policy" in payload:
+            assert "text" not in record
+        else:
+            assert record["text"] == expected_line
 
     original = AnswerResponse.model_validate(result["response"])
     displayed = export_answer_text(original)

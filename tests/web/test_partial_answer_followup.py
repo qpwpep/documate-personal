@@ -29,16 +29,17 @@ class _PlannerBoundary:
         context_message = next(message for message in messages if message.name == "request_context")
         context = json.loads(context_message.content.split("\n", 1)[1])
         turn = context["user_turn_ledger"][-1]
-        copying = "그대로" in turn["text"]
-        transforming = "요약" in turn["text"]
-        acknowledging = turn["text"] == "알겠어"
+        current_text = turn["text"]
+        copying = "그대로" in current_text
+        transforming = "요약" in current_text
+        acknowledging = current_text == "알겠어"
         contract = {
             "body": ({"kind": "copy_answer", "source": {"ref": "previous"}} if copying else
                      {"kind": "transform_answer", "source": {"ref": "previous"}, "instruction": "부분 답변을 요약해줘"} if transforming else
                      {"kind": "acknowledge"} if acknowledging else
                      {"kind": "compose", "instruction": "Compare the docs and uploaded code"}),
             "actions": {} if acknowledging else {"save_text": {"intent": "requested", "evidence_ids": ["request"]}},
-            "evidence": [{"id": "request", "turn_id": turn["turn_id"], "quote": turn["text"],
+            "evidence": [{"id": "request", "turn_id": turn["turn_id"], "quote": current_text,
                           "scope": "current_request", "interpretation": "instruction"}],
             "slack_recipient": {"state": "omitted"},
         }
@@ -125,7 +126,8 @@ def test_partial_answer_summary_receives_and_preserves_original_limits(delivery_
     assert followup["status"] == "completed"
     summary = AnswerResponse.model_validate(followup["response"])
     assert model.source["issues"] == [issue.model_dump(mode="json") for issue in partial.issues]
-    assert model.source["semantic_validation"] == partial.semantic_validation.model_dump(mode="json")
+    assert "semantic_validation" not in model.source
+    assert model.source["semantic_limitations"] == []
     assert all(issue.message in export_answer_text(summary) for issue in partial.issues)
     assert summary.actions[0].status == "success"
     assert len(list(output.glob("*.txt"))) == 1

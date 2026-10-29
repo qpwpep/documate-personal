@@ -15,7 +15,7 @@ from src.core.request_contracts import RequestContract
 from src.infra.chunking import chunk_python_text
 from src.infra.tools.local_rag.requirements import resolve_source_requirement
 from src.runtime.nodes.validation import make_post_synthesis_validation_node, make_pre_synthesis_validation_node
-from tests.core.test_decisions_validation import DecisionsBoundary, _state
+from tests.core.test_decisions_validation import DecisionsBoundary, _state, read_decision_input
 from tests.synthesis_fixtures import synthesis_excerpt_limits
 
 
@@ -29,7 +29,7 @@ def _snapshot():
     )
 
 
-def _validation_input(evidence_packet, location):
+def _validation_input(evidence_packet, location, *, raw=False):
     state = _state()
     if evidence_packet and evidence_packet[0].route == "upload":
         state["planner"] = state["planner"].model_copy(update={"output": PlannerOutput(
@@ -66,7 +66,11 @@ def _validation_input(evidence_packet, location):
     factory(False, decisions_client=boundary)(state)
     # Source judgment and accepted-source coverage must receive the same
     # selected ranges and source context. Bound answers have no new sources.
-    payload = json.loads(boundary.requests[0 if location == "source_pre" else -1]["input"])
+    wire = boundary.requests[0 if location == "source_pre" else -1]["input"]
+    if raw:
+        payload = json.loads(wire)
+        return list(payload["sources"].values()), payload
+    payload = read_decision_input(wire)
     if location.startswith("bound_"):
         sources = payload["bound_source_response"]["sources"]
     elif location == "source_pre":
@@ -140,6 +144,64 @@ def test_validation_preserves_selected_table_cells_and_never_exposes_omitted_cel
     assert source["is_partial"] is True
     assert source["source_locations"] == [selected_anchor.model_dump(mode="json")]
     assert "UNSELECTED_TIMEOUT_VALUE" not in json.dumps(payload)
+
+
+def test_validation_table_wire_preserves_cell_text_through_offsets_without_duplicates():
+    """Repeated, merged and multiline cells keep their original positions and text."""
+    anchor = SourceAnchor(kind="table", page_no=2, precision="element")
+    cells = [
+        TableCell(cell_id="heading", row=0, col=0, col_span=2, text='한글 | 머리\n"글"', is_header=True),
+        TableCell(cell_id="first", row=1, col=0, text="반복\n값"),
+        TableCell(cell_id="second", row=1, col=1, text="반복\n값"),
+        TableCell(cell_id="omitted", row=2, col=0, text="UNSELECTED_TABLE_SECRET"),
+    ]
+    item = build_evidence(
+        snapshot=_snapshot(), element=DocumentElement(
+            element_id="repeated-values", kind="table", anchors=[anchor], table=TableData(cells=cells),
+        ), cell_ids=["heading", "first", "second"],
+    )
+
+    sources, payload = _validation_input([item], "pre", raw=True)
+
+    source, = sources
+    assert source["excerpt"] == '한글 | 머리\n"글"\n반복\n값 | 반복\n값'
+    assert [cell["cell_id"] for cell in source["table_cells"]] == ["heading", "first", "second"]
+    assert all("text" not in cell for cell in source["table_cells"])
+    assert [source["excerpt"][cell["excerpt_range"][0]:cell["excerpt_range"][1]]
+            for cell in source["table_cells"]] == ['한글 | 머리\n"글"', "반복\n값", "반복\n값"]
+    assert source["table_cells"][0]["col_span"] == 2
+    assert source["table_cells"][0]["is_header"] is True
+    assert source["table_cells"][1].get("col_span", 1) == 1
+    assert source["table_cells"][1].get("row_span", 1) == 1
+    assert source["table_cells"][1].get("is_header", False) is False
+    assert source["table_cells"][1]["excerpt_range"][1] < source["table_cells"][2]["excerpt_range"][0]
+    assert "UNSELECTED_TABLE_SECRET" not in json.dumps(payload)
+
+
+def test_validation_line_wire_uses_original_offsets_without_repeating_selected_text():
+    """Partial CRLF lines retain physical positions in the single selected excerpt."""
+    text = "private = 1\r\n\r\ndef 계산():\r\n    value = '한글'\r\n    return value\r\n"
+    upload = chunk_python_text(path="offsets.py", text=text, source_content=text.encode("utf-8"),
+                               chunk_size=2000, chunk_overlap=0)
+    original = upload.hydrate(upload.chunks[0])
+    start = text.index("계산")
+    end = text.index("    return") + len("    return")
+    item = build_evidence(snapshot=original.snapshot, element=original.element, start=start, end=end)
+
+    sources, payload = _validation_input([item], "source_pre", raw=True)
+
+    source, = sources
+    assert source["excerpt"] == "계산():\r\n    value = '한글'\r\n    return"
+    assert source["selection"]["start"] == start
+    lines = source["source_lines"]
+    assert [line["line_number"] for line in lines] == [3, 4, 5]
+    assert all("text" not in line for line in lines)
+    assert [source["excerpt"][line["start"] - start:line["end"] - start] for line in lines] == [
+        "계산():\r\n", "    value = '한글'\r\n", "    return",
+    ]
+    assert lines[0]["partial_start"] is True
+    assert lines[-1]["partial_end"] is True
+    assert "private = 1" not in json.dumps(payload)
 
 
 @pytest.mark.parametrize("clipped", [False, True])

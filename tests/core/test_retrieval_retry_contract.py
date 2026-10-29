@@ -14,6 +14,7 @@ from src.core.request_contracts import RequestContract
 from src.infra.decisions import DecisionsClient
 from src.runtime.nodes.retrieval import make_retrieve_dispatch_node
 from tests.core.helpers import build_test_state
+from tests.core.test_decisions_validation import read_decision_input
 from tests.synthesis_fixtures import prepare_synthesis_state, synthesis_excerpt_limits
 
 
@@ -67,7 +68,7 @@ def _rejecting_decisions(status="failed"):
     """Reject the deliberately unrelated fixture through the actual provider boundary."""
     def respond(request):
         payload = json.loads(request.content)
-        context = json.loads(payload["input"])
+        context = read_decision_input(payload["input"])
         rejected = {item["name"] for item in context.get("evidence", [])
                     if "creates missing directories" in item["source"]["excerpt"]
                     or item["task"]["requirement_id"] == "path_exists_other"}
@@ -149,7 +150,7 @@ def test_refresh_evaluates_new_evidence_after_lexically_stronger_candidates_are_
 
     def respond(request):
         payload = json.loads(request.content)
-        context = json.loads(payload["input"])
+        context = read_decision_input(payload["input"])
         evaluated_sources.extend(item["source"]["uri"] for item in context.get("evidence", []))
         entries = {item["name"]: item for collection in ("evidence", "requirements", "packets")
                    for item in context.get(collection, [])}

@@ -19,6 +19,7 @@ from src.runtime.nodes.planner import make_planner_node
 from src.runtime.nodes.retrieval import make_retrieve_dispatch_node
 from src.runtime.nodes.validation import make_pre_synthesis_validation_node
 from tests.core.helpers import _CapturePlannerLLM, build_test_state, make_decisions_client
+from tests.core.test_decisions_validation import read_decision_input
 from tests.synthesis_fixtures import synthesis_excerpt_limits
 
 
@@ -135,14 +136,17 @@ def test_semantic_rejection_refreshes_covered_evidence_and_selects_new_source(mo
                 "usage": {"prompt_tokens": 20, "completion_tokens": 10, "total_tokens": 30},
             })
         assert request.url.path == "/v1/decisions"
-        context = json.loads(payload["input"])
+        context = read_decision_input(payload["input"])
+        question_names = {question["name"] for question in payload["questions"]}
         if "evidence" in context:
             probabilities = {
                 item["name"]: 0.99 if source_accepted or "One shape dimension can be -1" in item["source"]["excerpt"] else 0.1
                 for item in context["evidence"]
             }
         else:
-            excerpts = [source["excerpt"] for requirement in context["requirements"] if requirement.get("task") and not requirement["name"].startswith("compact_") for source in requirement["sources"]]
+            excerpts = [source["excerpt"] for requirement in context["requirements"]
+                        if requirement["name"] in question_names and not requirement["name"].startswith("compact_")
+                        for source in requirement["sources"]]
             decision_sources.append(excerpts)
             probability = 0.99 if any("One shape dimension can be -1" in text for text in excerpts) else 0.1
             probabilities = {question["name"]: probability for question in payload["questions"]}
@@ -269,14 +273,16 @@ def test_semantic_rejection_refreshes_docs_alongside_another_requirement_timeout
                 "usage": {"prompt_tokens": 20, "completion_tokens": 10, "total_tokens": 30},
             })
         assert request.url.path == "/v1/decisions"
-        context = json.loads(payload["input"])
+        context = read_decision_input(payload["input"])
+        question_names = {question["name"] for question in payload["questions"]}
         if "evidence" in context:
             # Each source is useful even when it cannot establish every fact
             # requested for that requirement. Coverage is a separate judgment.
             probabilities = {item["name"]: 0.99 for item in context["evidence"]}
         else:
             excerpts = {requirement["task"]["requirement_id"]: [source["excerpt"] for source in requirement["sources"]]
-                        for requirement in context["requirements"] if requirement.get("task") and not requirement["name"].startswith("compact_")}
+                        for requirement in context["requirements"]
+                        if requirement["name"] in question_names and not requirement["name"].startswith("compact_")}
             decision_sources.append(excerpts)
             supported = {
                 symbol: any("One shape dimension can be -1" in text for text in texts)
@@ -284,7 +290,8 @@ def test_semantic_rejection_refreshes_docs_alongside_another_requirement_timeout
                 for symbol, texts in excerpts.items()
             }
             probabilities = {requirement["name"]: 0.99 if supported[requirement["task"]["requirement_id"]] else 0.1
-                             for requirement in context["requirements"] if requirement.get("task") and not requirement["name"].startswith("compact_")}
+                             for requirement in context["requirements"]
+                             if requirement["name"] in question_names and not requirement["name"].startswith("compact_")}
             probabilities.update({question["name"]: 0.99 if all(supported.values()) else 0.1
                                   for question in payload["questions"] if question["name"] not in probabilities})
         return httpx.Response(200, json={
@@ -352,7 +359,8 @@ def test_semantic_rejection_refreshes_docs_alongside_another_requirement_timeout
         assert fresh_text in decision_sources[1]["reshape"]
         assert source_texts["stack"] in decision_sources[1]["stack"]
         # The unchanged exact requirement/ranges are served by the decision
-        # cache and therefore omitted from the second provider batch.
+        # cache and therefore receive no predicate in the second provider batch.
+        # Their source may still appear in the shared registry for packet readiness.
         assert "concatenate" not in decision_sources[1]
         assert any(item.excerpt == source_texts["concatenate"]
                    for item in state["retrieval"].prepared_evidence.normal.evidence)

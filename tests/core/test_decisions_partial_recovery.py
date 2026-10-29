@@ -24,6 +24,7 @@ from src.runtime.nodes.validation import make_post_synthesis_validation_node, ma
 from tests.core.helpers import _CapturePlannerLLM, build_test_state, make_decisions_client, mock_chat_model
 from tests.core.test_answer_validation import _evidence, _hit
 from tests.core.test_pending_action_delivery import _contract
+from tests.core.test_decisions_validation import read_decision_input
 from tests.synthesis_fixtures import synthesis_excerpt_limits
 
 
@@ -47,7 +48,7 @@ class DecisionProvider:
     def respond(self, request):
         assert request.url.path == "/v1/decisions"
         payload = json.loads(request.content)
-        context = json.loads(payload["input"])
+        context = read_decision_input(payload["input"])
         candidates = {item["name"]: item for item in context.get("evidence", [])}
         requirements = {item["name"]: item for item in context.get("requirements", []) if "task" in item}
         self.source_requests.extend(candidates.values())

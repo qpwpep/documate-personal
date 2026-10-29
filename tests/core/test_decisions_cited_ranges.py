@@ -17,6 +17,7 @@ from src.core.planner_schema import PlannerOutput, RetrievalTask
 from src.core.request_contracts import RequestContract
 from src.infra.decisions import DecisionsClient
 from src.runtime.nodes.validation import make_post_synthesis_validation_node, make_pre_synthesis_validation_node
+from tests.core.test_decisions_validation import read_decision_input
 from tests.synthesis_fixtures import synthesis_excerpt_limits
 
 
@@ -165,7 +166,7 @@ def test_post_requirement_batch_sees_only_actual_citations_and_records_requireme
 
     assert len(boundary.requests) == 1
     request = boundary.requests[0]
-    payload = json.loads(request["input"])
+    payload = read_decision_input(request["input"])
     assert {question["name"] for question in request["questions"]} == {
         "grounded_0", "request_fulfilled", "requirement_0",
     }
@@ -201,7 +202,7 @@ def test_terminal_requirement_gap_preserves_grounded_partial_answer_policy():
 
     updates = make_post_synthesis_validation_node(False, decisions_client=boundary)(state)
 
-    assert json.loads(boundary.requests[0]["input"])["requirements"] == []
+    assert read_decision_input(boundary.requests[0]["input"])["requirements"] == []
     assert updates["retry"].needs_retry is False
     assert updates["response"].kind == "failure"
     assert updates["response"].problem.code == "evidence_insufficient"

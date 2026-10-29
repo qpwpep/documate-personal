@@ -10,7 +10,7 @@ from src.core.contracts import PlannerState, RetrievalState
 from src.core.evidence import build_evidence
 from src.core.planner_schema import PlannerOutput
 from src.runtime.nodes.validation import make_pre_synthesis_validation_node
-from tests.core.test_decisions_validation import DecisionsBoundary, _evidence, _state
+from tests.core.test_decisions_validation import DecisionsBoundary, _evidence, _state, read_decision_input
 from tests.synthesis_fixtures import synthesis_excerpt_limits
 
 
@@ -36,7 +36,7 @@ def test_public_pre_node_reuses_unchanged_source_and_packet_decisions_without_pr
     assert any('"cache_hits"' in event for event in state["debug"].validation_events)
 
 
-@pytest.mark.parametrize("changed", ["source", "model", "prompt"])
+@pytest.mark.parametrize("changed", ["source", "model", "prompt", "policy"])
 def test_public_pre_node_invalidates_semantic_cache_for_changed_judgment_inputs(changed, monkeypatch):
     state, boundary = _state(), DecisionsBoundary()
     _validate(state, boundary)
@@ -48,14 +48,17 @@ def test_public_pre_node_invalidates_semantic_cache_for_changed_judgment_inputs(
         ]})
     elif changed == "model":
         boundary.model_name = "changed-model"
-    else:
+    elif changed == "prompt":
         from src.runtime.nodes.validation import prepared_semantics as semantic
         monkeypatch.setattr(semantic, "SOURCE_RELEVANCE_INSTRUCTIONS", semantic.SOURCE_RELEVANCE_INSTRUCTIONS + " New rubric.")
+    else:
+        from src.runtime.nodes.validation import prepared_semantics as semantic
+        monkeypatch.setattr(semantic, "EVALUATION_POLICY", semantic.EVALUATION_POLICY + " Updated shared evaluation policy.")
 
     _validate(state, boundary)
 
     assert len(boundary.requests) > original_calls
-    last_sources = json.loads(boundary.requests[original_calls]["input"])["evidence"]
+    last_sources = read_decision_input(boundary.requests[original_calls]["input"])["evidence"]
     assert last_sources
 
 
@@ -88,8 +91,8 @@ def test_a_changed_selected_range_requires_a_new_source_and_packet_decision():
 
     _validate(state, boundary)
 
-    source_calls = [json.loads(call["input"])["evidence"] for call in boundary.requests
-                    if "evidence" in json.loads(call["input"])]
+    source_calls = [read_decision_input(call["input"])["evidence"] for call in boundary.requests
+                    if "evidence" in read_decision_input(call["input"])]
     assert len(source_calls) == 2
     assert source_calls[-1][0]["source"]["id"] == changed.id
     assert state["retrieval"].prepared_evidence.normal.evidence == [changed]
@@ -102,7 +105,7 @@ def test_threshold_changes_recompute_cached_probability_without_rejudging_the_so
 
     _validate(state, boundary, pass_threshold=0.7)
 
-    source_calls = [call for call in boundary.requests if "evidence" in json.loads(call["input"])]
+    source_calls = [call for call in boundary.requests if "evidence" in read_decision_input(call["input"])]
     assert len(source_calls) == 1
     assert state["retrieval"].evidence_verdicts[0].status == "passed"
     assert state["retrieval"].prepared_evidence.threshold == 0.7
@@ -120,7 +123,7 @@ def test_previously_rejected_source_is_reconsidered_when_its_requirement_changes
     _validate(state, boundary)
 
     assert state["retrieval"].evidence_verdicts[0].status == "passed"
-    source_calls = [call for call in boundary.requests if "evidence" in json.loads(call["input"])]
+    source_calls = [call for call in boundary.requests if "evidence" in read_decision_input(call["input"])]
     assert len(source_calls) == 2
     assert state["retrieval"].prepared_evidence.normal.evidence
 
@@ -147,7 +150,7 @@ def test_rejected_ranges_do_not_hide_unjudged_passages_from_the_same_source():
         def _respond(self, request):
             payload = json.loads(request.content)
             self.requests.append(payload)
-            context = json.loads(payload["input"])
+            context = read_decision_input(payload["input"])
             entries = {item["name"]: item for collection in ("evidence", "requirements", "packets")
                        for item in context.get(collection, [])}
             return httpx.Response(200, json={
@@ -167,7 +170,7 @@ def test_rejected_ranges_do_not_hide_unjudged_passages_from_the_same_source():
     )
     state.update(validate(state))
     first_sources = [entry["source"] for call in boundary.requests
-                     for entry in json.loads(call["input"]).get("evidence", [])]
+                     for entry in read_decision_input(call["input"]).get("evidence", [])]
     assert first_sources
     assert all(correct_fact not in source["excerpt"] for source in first_sources)
     assert state["retry"].needs_retry is True
@@ -177,7 +180,7 @@ def test_rejected_ranges_do_not_hide_unjudged_passages_from_the_same_source():
     state.update(validate(state))
 
     later_sources = [entry["source"] for call in boundary.requests[first_calls:]
-                     for entry in json.loads(call["input"]).get("evidence", [])]
+                     for entry in read_decision_input(call["input"]).get("evidence", [])]
     assert any(correct_fact in source["excerpt"] for source in later_sources)
     assert {source["id"] for source in first_sources}.isdisjoint(source["id"] for source in later_sources)
     packet = state["retrieval"].prepared_evidence.normal
@@ -201,7 +204,7 @@ def test_source_decisions_survive_question_renaming_after_candidate_order_change
 
     _validate(state, boundary)
 
-    source_calls = [call for call in boundary.requests if "evidence" in json.loads(call["input"])]
+    source_calls = [call for call in boundary.requests if "evidence" in read_decision_input(call["input"])]
     assert len(source_calls) == 1
     assert {verdict.evidence_id for verdict in state["retrieval"].evidence_verdicts} == {first.evidence.id, second.evidence.id}
 
@@ -230,14 +233,14 @@ def test_untrusted_aspect_text_stays_in_input_and_never_becomes_evaluator_instru
 
     _validate(state, boundary)
 
-    source_call = next(call for call in boundary.requests if "evidence" in json.loads(call["input"]))
-    entries = json.loads(source_call["input"])["evidence"]
+    source_call = next(call for call in boundary.requests if "evidence" in read_decision_input(call["input"]))
+    entries = read_decision_input(source_call["input"])["evidence"]
     assert len(entries) == 1
     assert entries[0]["task"]["requirement"]["aspects"] == ["maxsize", instruction_like_aspect]
     assert all(instruction_like_aspect not in question["instructions"]
                for call in boundary.requests for question in call["questions"])
     instructions = "\n".join(question["instructions"] for question in source_call["questions"])
-    assert "task.requirement.evidence_needs[0]" in instructions
-    assert "task.requirement.evidence_needs[1]" in instructions
-    assert "task.requirement.aspects[0]" in instructions
-    assert "task.requirement.aspects[1]" in instructions
+    assert "tasks[entry.task_id].requirement.evidence_needs[0]" in instructions
+    assert "tasks[entry.task_id].requirement.evidence_needs[1]" in instructions
+    assert "tasks[entry.task_id].requirement.aspects[0]" in instructions
+    assert "tasks[entry.task_id].requirement.aspects[1]" in instructions
