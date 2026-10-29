@@ -44,6 +44,7 @@ class PendingUpload:
     request: UploadSyncRequest | None = None
     prompt: str | None = None
     error: str | None = None
+    error_detail: str | None = None
     attempted: bool = False
     had_failure: bool = False
     needs_refresh_review: bool = False

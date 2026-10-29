@@ -387,12 +387,24 @@ def test_returning_to_failed_upload_requires_confirmation_without_replay(convers
     )
     app.button(key="documate_new_chat").click().run()
     assert not app.exception
-    assert not any("첨부 변경 준비 중" in item.value for item in app.markdown)
+    assert not any("첨부 변경을 완료하지 못했습니다" in item.value for item in app.markdown)
     _picker(app).set_value(first).run()
 
     assert not app.exception
-    assert any("첨부 변경 준비 중" in item.value for item in app.markdown)
+    assert any("첨부 변경을 완료하지 못했습니다" in item.value for item in app.markdown)
     assert any(item.label == "첨부 변경 다시 시도" for item in app.button)
+    assert not conversation_http["syncs"]
+    assert not conversation_http["requests"]
+
+    next(item for item in app.button if item.label == "질문과 첨부 수정").click().run()
+
+    assert not app.exception
+    assert conversation.pending_upload is None
+    assert conversation.saved_prompt is None
+    assert app.chat_input[0].proto.value == "첨부 후 질문"
+    assert not app.chat_input[0].disabled
+    assert app.chat_input[0].proto.accept_file
+    assert not conversation_http["syncs"]
     assert not conversation_http["requests"]
 
 

@@ -42,6 +42,14 @@ def discard_saved_prompt(conversation: Conversation) -> None:
     conversation.saved_prompt = None
 
 
+def edit_saved_prompt(conversation: Conversation) -> None:
+    if conversation.is_read_only or conversation.is_busy or conversation.pending_upload is not None:
+        return
+    if conversation.saved_prompt is not None:
+        conversation.draft.edit(conversation.saved_prompt)
+        conversation.saved_prompt = None
+
+
 def queue_save(conversation: Conversation, answer_id: str) -> None:
     if conversation.is_read_only or conversation.pending_request is not None or conversation.operation_in_progress:
         return

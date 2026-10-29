@@ -40,6 +40,10 @@ class RequestsObserved(list):
         self.natural_save_failure = False
         self.failure_code = None
         self.upload_files = []
+        self.upload_revision = 0
+        self.upload_failure = None
+        self.upload_manifest_failure = None
+        self.upload_syncs = []
 
 
 @pytest.fixture
@@ -58,8 +62,30 @@ def chat_http(monkeypatch, tmp_path, browser_storage):
         result.request = request
         result.url = request.url
         if request.method == "GET" and path.endswith("/uploads"):
-            manifest = {"epoch": "epoch-" + path.split("/")[2], "revision": 0, "files": submissions.upload_files}
-            result._content = json.dumps(manifest).encode()
+            if submissions.upload_manifest_failure:
+                result.status_code = 503
+                data = {"detail": {"code": "UPLOAD_REQUEST_FAILED", "message": submissions.upload_manifest_failure}}
+            else:
+                data = {"epoch": "epoch-" + path.split("/")[2], "revision": submissions.upload_revision, "files": submissions.upload_files}
+            result._content = json.dumps(data).encode()
+        elif request.method == "POST" and path.endswith("/uploads/sync"):
+            payload = json.loads(request.body)
+            submissions.upload_syncs.append(payload)
+            if submissions.upload_failure:
+                result.status_code = 422
+                data = {"detail": {"code": "UPLOAD_VALIDATION_FAILED", "message": submissions.upload_failure}}
+            else:
+                submissions.upload_revision += 1
+                for addition in payload["add"]:
+                    content = Path(addition["path"]).read_bytes()
+                    submissions.upload_files.append({
+                        "file_id": "corrected-file", "name": addition["name"],
+                        "size_bytes": len(content), "content_hash": addition["content_hash"],
+                        "source_uri": "upload:///corrected-file",
+                    })
+                data = {"epoch": "epoch-" + path.split("/")[2], "revision": submissions.upload_revision,
+                        "files": submissions.upload_files}
+            result._content = json.dumps(data).encode()
         elif request.method == "POST" and path == "/agent/stream":
             payload = json.loads(request.body)
             submissions.append(payload)
@@ -69,7 +95,7 @@ def chat_http(monkeypatch, tmp_path, browser_storage):
             final = {
                 "status": "completed", "response": answer.model_dump(mode="json"),
                 "answer_id": answer_id,
-                "upload_manifest": {"epoch": "epoch-" + payload["session_id"], "revision": 0, "files": []},
+                "upload_manifest": {"epoch": "epoch-" + payload["session_id"], "revision": submissions.upload_revision, "files": submissions.upload_files},
                 "request_id": f"test-request-{len(submissions)}",
             }
             if submissions.failure_code:
@@ -226,6 +252,154 @@ def test_sending_held_question_clears_recovery_controls_and_does_not_replay(chat
     assert not any(item.label == "보류한 질문 보내기" for item in app.button)
     app.run()
     assert len(chat_http) == 1
+
+
+class _UploadedSample:
+    def __init__(self, name: str, content: bytes) -> None:
+        self.name = name
+        self.content = content
+
+    def getbuffer(self) -> bytes:
+        return self.content
+
+
+@pytest.mark.parametrize("prompt", ["  이 노트북을 요약해줘.\n근거도 보여줘.  ", None], ids=["with-question", "file-only"])
+def test_failed_attachment_can_be_replaced_without_losing_question_or_existing_files(chat_http, tmp_path, prompt):
+    from src.app.web.streamlit_state import PendingUpload
+
+    existing = {
+        "file_id": "existing-file", "name": "existing.py", "size_bytes": 10,
+        "content_hash": "sha256:" + "a" * 64, "source_uri": "upload:///existing-file",
+    }
+    chat_http.upload_files = [existing]
+    chat_http.upload_failure = "sample.ipynb: Expecting value: line 1 column 1 (char 0)"
+    app = AppTest.from_file(APP, default_timeout=10).run()
+    conversation = app.session_state["conversations"][app.session_state["active_conversation_id"]]
+    session_path = tmp_path / "uploads" / conversation.id
+    invalid = conversation.client.stage_files(
+        [_UploadedSample("sample.ipynb", b"not a notebook")], session_path,
+        max_files=10, max_file_mib=1, max_total_mib=10,
+    )
+    # AppTest cannot choose native files. Enter at the prepared-upload boundary;
+    # staging, HTTP handling, recovery controls and question submission are real.
+    conversation.pending_upload = PendingUpload(
+        base_manifest=conversation.client.manifest, files=invalid.files, prompt=prompt,
+    )
+    app.run()
+
+    assert not app.exception
+    assert not chat_http
+    assert len(chat_http.upload_syncs) == 1
+    assert conversation.pending_upload.had_failure
+    label = "질문과 첨부 수정" if prompt else "첨부 수정"
+    assert any(item.label == label for item in app.button)
+    assert any("첨부 변경을 완료하지 못했습니다" in item.value for item in app.markdown)
+    assert not any("반영 확인 대기" in item.value for item in app.markdown)
+    assert not any("Expecting value" in item.value for item in app.error)
+    details = next(item for item in app.expander if "오류 상세" in item.label)
+    assert not details.proto.expanded
+    next(item for item in app.button if item.label == label).click().run()
+
+    assert not app.exception
+    assert conversation.pending_upload is None
+    assert conversation.saved_prompt is None
+    assert app.chat_input[0].proto.value == (prompt or "")
+    assert not app.chat_input[0].disabled
+    assert app.chat_input[0].proto.accept_file
+    assert [item.file_id for item in conversation.client.manifest.files] == ["existing-file"]
+    assert not chat_http
+    restored_prompt = app.chat_input[0].proto.value or None
+    app.run()
+    assert len(chat_http.upload_syncs) == 1
+
+    chat_http.upload_failure = None
+    corrected_content = b'{"cells": [], "metadata": {}, "nbformat": 4, "nbformat_minor": 5}'
+    corrected = conversation.client.stage_files(
+        [_UploadedSample("sample.ipynb", corrected_content)], session_path,
+        max_files=10, max_file_mib=1, max_total_mib=10,
+    )
+    assert Path(corrected.files[0].path).read_bytes() == corrected_content
+    conversation.draft.consume()
+    conversation.pending_upload = PendingUpload(
+        base_manifest=conversation.client.manifest, files=corrected.files, prompt=restored_prompt,
+    )
+    app.run()
+
+    assert not app.exception
+    assert [item["query"] for item in chat_http] == ([prompt] if prompt else [])
+    assert [item.file_id for item in conversation.client.manifest.files] == ["existing-file", "corrected-file"]
+    assert len(chat_http.upload_syncs) == 2
+    assert chat_http.upload_syncs[0]["operation_id"] != chat_http.upload_syncs[1]["operation_id"]
+    if prompt:
+        assert chat_http[0]["uploads"] == {"epoch": "epoch-" + conversation.id, "revision": 1}
+    app.run()
+    assert len(chat_http) == (1 if prompt else 0)
+    assert len(chat_http.upload_syncs) == 2
+
+
+def test_failed_upload_review_keeps_question_and_hides_latest_technical_error(chat_http, tmp_path):
+    from src.app.web.streamlit_state import PendingUpload
+
+    app = AppTest.from_file(APP, default_timeout=10).run()
+    conversation = app.session_state["conversations"][app.session_state["active_conversation_id"]]
+    staged = conversation.client.stage_files(
+        [_UploadedSample("sample.py", b"VALUE = 42\n")], tmp_path / "uploads" / conversation.id,
+        max_files=10, max_file_mib=1, max_total_mib=10,
+    )
+    prompt = "  첨부를 확인한 뒤 답해줘.\n질문을 유지해줘.  "
+    pending = PendingUpload(
+        base_manifest=conversation.client.manifest, files=staged.files, prompt=prompt,
+        attempted=True, had_failure=True, needs_refresh_review=True,
+        error="첨부 목록이 변경되었습니다.", error_detail="previous revision conflict",
+    )
+    conversation.pending_upload = pending
+    app.run()
+    raw_error = "manifest store unavailable: server-private-path/uploads"
+    chat_http.upload_manifest_failure = raw_error
+
+    app.button(key="documate_review_uploads").click().run()
+
+    assert not app.exception
+    assert conversation.pending_upload is pending
+    assert pending.prompt == prompt
+    assert pending.files == staged.files
+    assert pending.needs_refresh_review
+    assert conversation.saved_prompt is None
+    assert not chat_http
+    assert not chat_http.upload_syncs
+    expected = "최신 첨부 목록을 확인하지 못했습니다. 잠시 후 다시 시도하거나 첨부를 수정해 주세요."
+    assert [item.value for item in app.error] == [expected]
+    assert pending.error_detail == raw_error
+    details = next(item for item in app.expander if item.label == "오류 상세")
+    assert not details.proto.expanded
+    assert [item.value for item in details.text] == [raw_error]
+    assert any(prompt.strip() in item.value for item in app.info)
+    assert any(item.label == "질문과 첨부 수정" for item in app.button)
+    app.run()
+    assert conversation.pending_upload is pending
+    assert not chat_http
+    assert not chat_http.upload_syncs
+
+
+def test_held_upload_question_can_return_to_editable_composer_without_sending(chat_http):
+    app = AppTest.from_file(APP, default_timeout=10).run()
+    conversation = app.session_state["conversations"][app.session_state["active_conversation_id"]]
+    prompt = "  보존할 질문\n두 번째 줄  "
+    conversation.saved_prompt = prompt
+    app.run()
+
+    assert any(item.label == "질문과 첨부 수정" for item in app.button)
+    next(item for item in app.button if item.label == "질문과 첨부 수정").click().run()
+
+    assert not app.exception
+    assert conversation.saved_prompt is None
+    assert app.chat_input[0].proto.value == prompt
+    assert not app.chat_input[0].disabled
+    assert app.chat_input[0].proto.accept_file
+    assert not chat_http
+    app.chat_input[0].set_value("수정한 질문").run()
+    app.run()
+    assert [item["query"] for item in chat_http] == ["수정한 질문"]
 
 
 def test_completed_answer_offers_direct_txt_save(chat_http):

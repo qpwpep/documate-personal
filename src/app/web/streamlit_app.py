@@ -14,7 +14,7 @@ from src.app.web.streamlit_chat import process_chat_prompt, render_chat_history
 from src.app.web.streamlit_browser_state import edit_question, render_browser_state, restore_browser_session, restore_composer
 from src.app.web.streamlit_conversations import render_conversation_notice
 from src.app.web.streamlit_requests import (
-    ChatSubmission, SaveSubmission, UploadSubmission, discard_saved_prompt,
+    ChatSubmission, SaveSubmission, UploadSubmission, discard_saved_prompt, edit_saved_prompt,
     queue_chat, queue_save, queue_upload, send_saved_prompt,
 )
 from src.app.web.streamlit_intro import render_intro
@@ -149,11 +149,14 @@ def main() -> None:
     saved_prompt = conversation.saved_prompt
     if saved_prompt:
         st.info(f"아직 보내지 않은 질문: {saved_prompt}")
+        st.button("질문과 첨부 수정", key="documate_edit_saved_upload_prompt", type="primary",
+                  on_click=edit_saved_prompt, args=(conversation,))
+        st.caption("질문을 입력창으로 가져옵니다. 파일을 다시 선택하거나 질문을 수정한 뒤 전송하세요.")
         st.button("보류한 질문 보내기", key="documate_send_saved_upload_prompt",
                   on_click=send_saved_prompt, args=(conversation,))
         st.button("보류한 질문 지우기", key="documate_discard_saved_upload_prompt",
                   on_click=discard_saved_prompt, args=(conversation,))
-        st.chat_input("보류한 질문을 보내거나 지운 뒤 새 질문을 입력하세요", disabled=True,
+        st.chat_input("질문과 첨부 수정에서 파일을 다시 선택할 수 있습니다", disabled=True,
                       key=conversation.widget_key("held_input"))
         return
 
@@ -273,15 +276,16 @@ def commit_pending_upload() -> bool:
         if not _is_current_pending(client, pending):
             return False
         pending.had_failure = True
-        pending.error = str(exc)
+        pending.error = _upload_error_message(exc, pending)
+        pending.error_detail = str(exc)
         if exc.files:
-            pending.error += "\n" + "\n".join(f"{item.get('name', '파일')}: {item.get('message', item.get('code', '실패'))}" for item in exc.files)
+            pending.error_detail += "\n" + "\n".join(f"{item.get('name', '파일')}: {item.get('message', item.get('code', '실패'))}" for item in exc.files)
         if exc.status_code == 409:
             pending.needs_refresh_review = True
             try:
                 client.refresh_uploads()
             except UploadAPIError as refresh_error:
-                pending.error += f"\n첨부 목록 새로고침 실패: {refresh_error}"
+                pending.error_detail += f"\n첨부 목록 새로고침 실패: {refresh_error}"
         return False
     if not _is_current_pending(client, pending):
         return False
@@ -293,6 +297,21 @@ def commit_pending_upload() -> bool:
     discard_staged_files(pending.files, session_path)
     set_pending_upload(None)
     return True
+
+
+def _upload_error_message(error: UploadAPIError, pending: PendingUpload) -> str:
+    if error.code == "UPLOAD_VALIDATION_FAILED":
+        message = "파일 내용을 읽지 못해 첨부 변경을 반영하지 않았습니다. 올바른 파일로 교체해 주세요."
+        if any(Path(item.name).suffix.lower() == ".ipynb" for item in pending.files):
+            message += " Notebook(.ipynb)은 Jupyter에서 열리는지 확인한 뒤 다시 저장해 주세요."
+        return message
+    if error.status_code == 413:
+        return "첨부 용량 또는 개수 한도를 초과했습니다. 파일 크기와 개수를 줄인 뒤 다시 전송해 주세요."
+    if error.status_code == 422:
+        return "파일 형식이나 내용을 확인하지 못해 첨부 변경을 반영하지 않았습니다. 파일을 확인하거나 교체해 주세요."
+    if error.status_code == 409:
+        return "첨부 목록이 변경되어 이번 변경을 반영하지 않았습니다. 최신 목록으로 다시 적용하거나 첨부를 수정해 주세요."
+    return "첨부 변경 결과를 확인하지 못했습니다. 같은 변경을 다시 시도하거나, 현재 첨부 목록을 확인한 뒤 파일을 다시 선택해 주세요."
 
 
 def _is_current_pending(client: AgentSessionClient, pending: PendingUpload) -> bool:
@@ -308,7 +327,8 @@ def _review_pending_again() -> None:
         manifest = client.refresh_uploads()
     except UploadAPIError as exc:
         if _is_current_pending(client, pending):
-            pending.error = str(exc)
+            pending.error = "최신 첨부 목록을 확인하지 못했습니다. 잠시 후 다시 시도하거나 첨부를 수정해 주세요."
+            pending.error_detail = str(exc)
         return
     if not _is_current_pending(client, pending):
         return
@@ -317,24 +337,49 @@ def _review_pending_again() -> None:
     pending.request = None
     pending.replace_file_ids.clear()
     pending.error = None
+    pending.error_detail = None
     pending.needs_refresh_review = False
     pending.attempted = False
+
+
+def _edit_pending_upload() -> None:
+    conversation = get_conversation()
+    pending = conversation.pending_upload
+    if pending is None or conversation.is_busy or conversation.is_read_only:
+        return
+    conversation.draft.edit(pending.prompt or conversation.saved_prompt or conversation.draft.text)
+    conversation.saved_prompt = None
+    conversation.pending_upload = None
+    # An attempted upload may still be using its staging files on the server.
+    # Leave those to session cleanup, just as cancellation does.
+    if not pending.attempted and not pending.had_failure:
+        discard_staged_files(pending.files, get_session_path())
+    validate_conversation(conversation)
 
 
 def _render_pending_upload() -> None:
     pending = get_pending_upload()
     if pending is None:
         return
-    st.markdown('<p class="dm-upload-summary"><strong>첨부 변경 준비 중</strong></p>', unsafe_allow_html=True)
+    title = "첨부 변경을 완료하지 못했습니다" if pending.error else "첨부 변경 준비 중"
+    file_status = "변경 미완료" if pending.error else "반영 확인 대기"
+    st.markdown(f'<p class="dm-upload-summary"><strong>{title}</strong></p>', unsafe_allow_html=True)
     for item in pending.files:
-        st.markdown(f'<p class="dm-upload-help">{escape(item.name)} · {item.size_bytes / 1024:.1f} KiB · 반영 확인 대기</p>', unsafe_allow_html=True)
+        st.markdown(f'<p class="dm-upload-help">{escape(item.name)} · {item.size_bytes / 1024:.1f} KiB · {file_status}</p>', unsafe_allow_html=True)
     if pending.remove:
         st.markdown('<p class="dm-upload-help">선택한 파일을 이후 검색에서 제외합니다.</p>', unsafe_allow_html=True)
     if pending.clear:
         st.markdown('<p class="dm-upload-help">모든 첨부를 이후 검색에서 제외합니다. 대화와 기존 인용은 유지됩니다.</p>', unsafe_allow_html=True)
     if pending.error:
         st.error(pending.error)
-        st.info("질문은 보내지 않았습니다. 서버가 확인한 첨부 목록만 사용합니다.")
+        if pending.prompt:
+            st.info(f"질문은 아직 보내지 않았습니다: {pending.prompt}")
+        edit_label = "질문과 첨부 수정" if pending.prompt else "첨부 수정"
+        st.button(edit_label, key="documate_edit_pending_upload", type="primary", on_click=_edit_pending_upload)
+        st.caption("입력창에서 이번에 사용할 파일을 다시 선택해 주세요. 서버에서 확인한 기존 첨부는 계속 사용할 수 있습니다.")
+        if pending.error_detail:
+            with st.expander("오류 상세", expanded=False):
+                st.text(pending.error_detail)
     conflicts = [item for item in pending.files if item.conflicting_file_id and item.conflicting_file_id not in pending.replace_file_ids]
     if pending.needs_refresh_review:
         if st.button("최신 첨부 목록으로 다시 적용", key="documate_review_uploads"):
@@ -352,7 +397,7 @@ def _render_pending_upload() -> None:
     elif st.button("첨부 변경 다시 시도" if pending.attempted else "첨부 변경 적용", key="documate_retry_uploads"):
         queue_upload(get_conversation())
         st.rerun()
-    cancel_label = "대기 화면 닫기" if pending.attempted or pending.had_failure else "첨부 준비 취소"
+    cancel_label = "첨부 변경 취소" if pending.attempted or pending.had_failure else "첨부 준비 취소"
     if st.button(cancel_label, key="documate_cancel_pending_upload"):
         if pending.prompt:
             get_conversation().saved_prompt = pending.prompt
