@@ -30,14 +30,14 @@ def render_conversation_picker(*, disabled: bool = False) -> str | None:
                     key=current.widget_key(f"recent:{conversation_id}"),
                     use_container_width=True,
                     type="primary" if is_current else "secondary",
-                    disabled=disabled or current.is_busy or is_current,
+                    disabled=disabled or is_current,
                 ):
                     return conversation_id
         with st.expander("모든 대화 보기", expanded=False):
             selected = st.selectbox(
                 "대화 선택", ids, index=ids.index(current.id),
                 format_func=lambda value: _conversation_label(by_id[value], conversations),
-                key=current.widget_key(f"picker:{current.title}:{current.expired}"), disabled=disabled or current.is_busy,
+                key=current.widget_key(f"picker:{current.title}:{current.expired}"), disabled=disabled,
             )
             st.caption("이 탭에서 새로고침해도 대화와 초안을 복원합니다. 서버 세션이 만료되면 기존 기록은 읽기 전용으로 남습니다.")
     return selected if selected != current.id else None
@@ -68,4 +68,6 @@ def render_conversation_notice() -> None:
 def _conversation_label(conversation: Conversation, conversations: list[Conversation]) -> str:
     index = conversations.index(conversation) + 1
     suffix = " · 읽기 전용" if conversation.expired else ""
+    if conversation.chat_task is not None:
+        suffix = " · 답변 준비 중"
     return f"{index}. {conversation.title}{suffix}"

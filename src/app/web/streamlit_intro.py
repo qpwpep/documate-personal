@@ -40,7 +40,13 @@ def render_intro(default_docs: dict[str, str], *, has_uploads: bool = False) -> 
         st.caption("작성 중인 질문을 먼저 보내거나 지운 뒤 다른 예시를 선택하세요.")
     else:
         st.caption("예시를 선택하면 입력창에 채워집니다. 확인하거나 수정한 뒤 전송하세요.")
-    _render_examples(quick_prompts[:2], start_index=0)
+    with st.container(key=conversation.widget_key("default_prompts")):
+        _render_examples(quick_prompts[:2], start_index=0)
+    if not has_uploads:
+        # The browser reveals these supported callbacks as soon as the native
+        # file picker has a selection, without rerunning or losing that picker.
+        with st.container(key=conversation.widget_key("selected_upload_prompts")):
+            _render_examples(_UPLOAD_PROMPTS, start_index=4)
     with st.expander("다른 질문 예시와 지원 문서", expanded=False):
         _render_examples(quick_prompts[2:], start_index=2)
         st.markdown("**지원하는 공식 문서**")

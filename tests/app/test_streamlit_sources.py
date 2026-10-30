@@ -60,8 +60,10 @@ def test_structured_location_preserves_literal_filename_in_rendered_body_and_txt
         displayed = ["".join(child.content for child in token.children if child.type in {"text", "code_inline"})
                      for token in tokens if token.type == "inline"]
         assert expected + ("" if layout == "inline_code" else " [1]") in displayed
-        assert not any(child.type in {"strong_open", "em_open", "link_open"}
+        assert not any(child.type in {"strong_open", "em_open"}
                        for token in tokens for child in token.children or [])
+        assert all(child.attrGet("href").startswith("#dm-citation-")
+                   for token in tokens for child in token.children or [] if child.type == "link_open")
         if layout == "paragraph":
             assert not any(token.type == "heading_open" for token in tokens)
         if layout == "table":
@@ -158,7 +160,7 @@ def _source_app(payload, cited_texts=None):
     render_evidence(EvidenceRef.model_validate(payload), cited_texts=cited_texts)
 
 
-def test_source_panel_exposes_close_and_answer_context_before_original_excerpt():
+def test_source_panel_shows_original_excerpt_before_collapsed_answer_context():
     captured = "Original documentation excerpt."
     evidence = build_evidence(
         snapshot=build_snapshot(
@@ -183,13 +185,14 @@ def test_source_panel_exposes_close_and_answer_context_before_original_excerpt()
     context = context_element.proto.body
     assert "이 근거가 연결된 답변" in context
     assert answer_texts[0] in context and "둘째 답변의 &lt;literal&gt; 값" in context
-    assert answer_texts[2] not in context
-    remaining = next(item for item in app.expander if item.label == "함께 연결된 답변 더 보기 (1개)")
-    assert not remaining.proto.expanded
-    assert answer_texts[2] in " ".join(item.proto.body for item in remaining.get("html"))
+    assert answer_texts[2] in context
+    context_panel = next(item for item in app.expander if item.label == "연결된 답변 보기")
+    assert not context_panel.proto.expanded
+    assert context_element in list(context_panel)
     elements = list(app.main)
     excerpt_heading = next(item for item in app.markdown if item.value == "**답변에 사용한 부분**")
-    assert elements.index(context_element) < elements.index(excerpt_heading)
+    original_excerpt = next(item for item in app.get("html") if "Original documentation excerpt." in item.proto.body)
+    assert elements.index(excerpt_heading) < elements.index(original_excerpt) < elements.index(context_panel)
     assert markdown.index("[현재 출처 페이지 열기](https://docs.example.org/guide)") < markdown.index("**답변에 사용한 부분**")
     assert app.code[0].value == captured
     assert evidence.model_dump(mode="json") == original
@@ -223,8 +226,7 @@ def test_answer_context_renders_markdown_and_line_breaks_without_executing_html(
     assert "&lt;img src=x onerror=alert(1)&gt;" in context
     assert "<script>" not in context and "<img " not in context
     assert "BATCH_SIZE = 64<br />\nMAX_RETRIES = 4" in context
-    remaining = next(item for item in app.expander if item.label == "함께 연결된 답변 더 보기 (1개)")
-    assert "<strong>추가 근거</strong>" in remaining.get("html")[0].proto.body
+    assert "<strong>추가 근거</strong>" in context
     assert evidence.model_dump(mode="json") == original
 
 
@@ -446,6 +448,123 @@ def test_long_official_evidence_focuses_only_exact_answer_phrase_without_changin
     assert "답변 문구와 정확히 일치하는 원문" in " ".join(item.value for item in app.caption)
     assert app.code[0].value == captured
     assert evidence.model_dump(mode="json") == original
+
+
+def test_paraphrased_answer_previews_matching_terms_before_unrelated_source_prefix():
+    relevant = "pandas.merge combines two DataFrame objects or named Series with a database-style join."
+    captured = "Deprecated copy behavior is unrelated to the question.\n\n" * 20 + relevant + (
+        "\n\nThe remaining captured material stays available."
+    )
+    evidence = build_evidence(
+        snapshot=build_snapshot(
+            source_uri="https://pandas.pydata.org/docs/reference/api/pandas.merge.html",
+            title="pandas.merge", media_type="text/markdown", source_type="official",
+            content=captured, parser="provider", parser_version="1",
+        ),
+        element=DocumentElement(element_id="description", kind="paragraph", text=captured),
+    )
+    original = evidence.model_dump(mode="json")
+    answer_text = "`pandas.merge`는 두 DataFrame 또는 이름이 있는 Series를 결합합니다."
+
+    app = AppTest.from_function(_source_app, args=(original, [answer_text])).run()
+
+    assert not app.exception
+    previews = [item.proto.body for item in app.get("html") if "dm-source-related-preview" in item.proto.body]
+    assert previews
+    assert "database-style join" in previews[0]
+    assert "Deprecated" not in previews[0]
+    assert "<mark>pandas.merge</mark>" in previews[0]
+    assert any("용어가 포함된 원문" in item.value and "근거성 판정은 아닙니다" in item.value for item in app.caption)
+    full_excerpt = next(item for item in app.expander if item.label == "답변에 사용한 전체 발췌")
+    assert app.code[0].value == captured
+    assert "Deprecated copy behavior" in full_excerpt.get("html")[0].proto.body
+    assert evidence.model_dump(mode="json") == original
+
+
+def test_related_preview_centers_on_late_term_without_matching_identifier_substrings():
+    captured = "A NotDataFrameWrapper is unrelated.\n\n" + "Earlier context. " * 80 + (
+        "DataFrame joins preserve the selected keys. <script>not executable</script>"
+    )
+    evidence = build_evidence(
+        snapshot=build_snapshot(
+            source_uri="https://docs.example.org/merge", title="merge", media_type="text/markdown",
+            source_type="official", content=captured, parser="provider", parser_version="1",
+        ),
+        element=DocumentElement(element_id="description", kind="paragraph", text=captured),
+    )
+    original = evidence.model_dump(mode="json")
+
+    app = AppTest.from_function(_source_app, args=(original, ["`DataFrame`을 결합합니다."])).run()
+
+    assert not app.exception
+    previews = [item.proto.body for item in app.get("html") if "dm-source-related-preview" in item.proto.body]
+    assert len(previews) == 1
+    assert "<mark>DataFrame</mark> joins preserve the selected keys." in previews[0]
+    assert "NotDataFrameWrapper" not in previews[0]
+    assert "<script>" not in previews[0] and "&lt;script&gt;" in previews[0]
+    assert app.code[0].value == captured
+    assert evidence.model_dump(mode="json") == original
+
+
+def test_related_preview_prefers_description_over_standalone_matching_names():
+    captured = "Earlier context unrelated to the answer.\n\n" * 20 + (
+        "DataFrame\n\nA DataFrame of the two merged objects.\n\nDataFrame.join"
+    )
+    evidence = build_evidence(
+        snapshot=build_snapshot(
+            source_uri="https://docs.example.org/merge", title="merge", media_type="text/markdown",
+            source_type="official", content=captured, parser="provider", parser_version="1",
+        ),
+        element=DocumentElement(element_id="description", kind="paragraph", text=captured),
+    )
+    original = evidence.model_dump(mode="json")
+
+    app = AppTest.from_function(
+        _source_app, args=(original, ["`pandas.merge`는 두 DataFrame 객체를 결합합니다."]),
+    ).run()
+
+    assert not app.exception
+    previews = [item.proto.body for item in app.get("html") if "dm-source-related-preview" in item.proto.body]
+    assert len(previews) == 3
+    assert "A <mark>DataFrame</mark> of the two merged objects." in previews[0]
+    assert "<mark>DataFrame</mark>.join" in previews[2]
+    assert app.code[0].value == captured
+    assert evidence.model_dump(mode="json") == original
+
+
+def test_broad_excerpt_search_finds_literal_text_without_claiming_semantic_support():
+    captured = "Earlier context without the warning.\n\n" * 30 + (
+        "Both key columns containing NULL values will match each other.\n"
+        "Check the result before using it."
+    )
+    evidence = build_evidence(
+        snapshot=build_snapshot(
+            source_uri="https://docs.example.org/merge", title="merge", media_type="text/markdown",
+            source_type="official", content=captured, parser="provider", parser_version="1",
+        ),
+        element=DocumentElement(element_id="description", kind="paragraph", text=captured),
+    )
+    original = evidence.model_dump(mode="json")
+    app = AppTest.from_function(_source_app, args=(original, ["결측값 처리에 주의하세요."])).run()
+
+    next(item for item in app.text_input if item.label == "발췌에서 찾기").set_value("null").run()
+
+    assert not app.exception
+    results = [item.proto.body for item in app.get("html") if "dm-source-search-result" in item.proto.body]
+    assert len(results) == 1
+    assert "<mark>NULL</mark>" in results[0]
+    assert "Check the result before using it." in results[0]
+    assert "Earlier context" not in results[0]
+    assert any("근거성 판정" in item.value for item in app.caption)
+    assert any("문장별 일치 위치 미확인" in item.value for item in app.caption)
+    assert app.code[0].value == captured
+    assert evidence.model_dump(mode="json") == original
+
+    next(item for item in app.text_input if item.label == "발췌에서 찾기").set_value("absent phrase").run()
+
+    assert not app.exception
+    assert any("일치하는 문구가 없습니다" in item.value for item in app.info)
+    assert not any("dm-source-search-result" in item.proto.body for item in app.get("html"))
 
 
 def test_repeated_cited_code_shows_all_confirmed_occurrences_without_guessing_from_prose():

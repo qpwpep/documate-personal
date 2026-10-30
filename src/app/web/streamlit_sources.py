@@ -18,7 +18,7 @@ from src.core.python_source import PythonSourceMap
 
 def render_evidence(
     evidence: EvidenceRef, *, cited_texts: list[str] | None = None,
-    answer_context: list[str | CodeBlock] | None = None,
+    answer_context: list[str | CodeBlock] | None = None, search_key: str = "",
 ) -> None:
     """Show the retained source, independently of the current uploaded file."""
     snapshot = evidence.snapshot
@@ -34,7 +34,6 @@ def render_evidence(
     if parsed.scheme in {"http", "https"} and parsed.netloc:
         safe_url = quote(source_uri, safe=":/?#[]@!$&'*,;=+-._~%")
         st.markdown(f"[현재 출처 페이지 열기]({safe_url})")
-    _render_answer_context(answer_context if answer_context is not None else cited_texts or [])
     lines = source_line_records(evidence)
     st.markdown("**답변에 사용한 부분**")
     code_ranges = _matching_code_ranges(evidence, cited_texts or []) if element.kind == "code" else []
@@ -52,7 +51,7 @@ def render_evidence(
             # Unknown physical provenance stays unnumbered.
             render_code(evidence.excerpt, language=element.language or "text")
     elif snapshot.source_type == "official" and element.table is None:
-        _render_official_excerpt(evidence, cited_texts or [])
+        _render_official_excerpt(evidence, cited_texts or [], search_key=search_key or evidence.id)
     else:
         st.text(evidence.excerpt)
     if evidence.selection.cell_ids:
@@ -70,6 +69,7 @@ def render_evidence(
     if "freshness_unverified" in snapshot.quality_issues:
         source_status.append("최신성 미확인")
     st.caption(" · ".join(source_status))
+    _render_answer_context(answer_context if answer_context is not None else cited_texts or [])
     with st.expander("출처와 수집 정보"):
         st.caption(f"원본 자료: {source_uri}")
         if element.table is not None and evidence.selection.cell_ids:
@@ -129,17 +129,14 @@ def _render_answer_context(items: list[str | CodeBlock]) -> None:
         return
     # This is already escaped HTML. Markdown's highlighter would replace the
     # code wrapping styles and force horizontal scrolling on narrow screens.
-    st.html(
-        '<div class="dm-source-answer-context"><p class="dm-source-context-label">이 근거가 연결된 답변</p>'
-        + "".join(rendered[:2]) + '</div>',
-    )
-    if len(rendered) > 2:
-        with st.expander(f"함께 연결된 답변 더 보기 ({len(rendered) - 2}개)"):
-            for content in rendered[2:]:
-                st.html(content)
+    with st.expander("연결된 답변 보기", expanded=False):
+        st.html(
+            '<div class="dm-source-answer-context"><p class="dm-source-context-label">이 근거가 연결된 답변</p>'
+            + "".join(rendered) + '</div>',
+        )
 
 
-def _render_official_excerpt(evidence: EvidenceRef, cited_texts: list[str]) -> None:
+def _render_official_excerpt(evidence: EvidenceRef, cited_texts: list[str], *, search_key: str) -> None:
     """Shorten the initial view without narrowing the retained evidence range."""
     excerpt = evidence.excerpt
     provider_excerpt = evidence.snapshot.capture_scope == "provider_excerpt"
@@ -147,8 +144,8 @@ def _render_official_excerpt(evidence: EvidenceRef, cited_texts: list[str]) -> N
         _render_source_markdown(excerpt, source_uri=evidence.snapshot.source_uri, provider_excerpt=provider_excerpt)
         return
 
-    # Only whole answer phrases qualify; shared identifiers or inferred meaning
-    # do not establish which part of a documentation range supports an answer.
+    # Whole answer phrases establish exact text matches. Shared terms below
+    # only help readers navigate; they do not narrow the cited evidence range.
     exact_phrases = list(dict.fromkeys(text for text in cited_texts if text.strip() and text in excerpt))
     if exact_phrases:
         st.caption("답변 문구와 정확히 일치하는 원문을 먼저 표시합니다. 연결된 전체 범위는 아래에서 확인하세요.")
@@ -156,12 +153,80 @@ def _render_official_excerpt(evidence: EvidenceRef, cited_texts: list[str]) -> N
             st.html('<div class="dm-source-markdown" style="white-space:pre-wrap;overflow-wrap:anywhere">'
                     '<mark style="background:#ffec99;color:#1a1a1a">' + escape(phrase) + '</mark></div>')
     else:
-        st.caption("이 설명에는 넓은 원문 범위가 연결돼 있습니다. 특정 문장과의 일치 위치를 확인한 것은 아닙니다.")
-        st.caption("원문 앞부분 미리보기 · 연결된 전체 발췌는 아래에서 확인하세요.")
-        preview = "\n".join(excerpt.splitlines()[:6])[:420]
-        st.text(preview + "…")
+        st.caption("넓은 원문 범위 · 문장별 일치 위치 미확인")
+    query = st.text_input("발췌에서 찾기", key=f"{search_key}-source-search",
+                          placeholder="원문에서 찾을 단어 또는 문구").strip()
+    if query:
+        pattern = re.compile(re.escape(query), re.IGNORECASE)
+        paragraphs = [paragraph for paragraph in re.split(r"\n\s*\n", excerpt) if pattern.search(paragraph)]
+        if paragraphs:
+            st.caption(f"검색어와 일치하는 문단 {len(paragraphs)}개 · 내용의 근거성 판정은 아닙니다.")
+            for paragraph in paragraphs:
+                _render_highlighted_excerpt(paragraph, pattern, class_name="dm-source-search-result")
+        else:
+            st.info("이 발췌에는 일치하는 문구가 없습니다. 다른 단어를 입력하거나 전체 발췌를 확인하세요.")
+    elif not exact_phrases:
+        pattern = _answer_term_pattern(cited_texts)
+        previews = _related_excerpt_previews(excerpt, pattern) if pattern is not None else []
+        if pattern is not None and previews:
+            st.caption("답변에 나온 용어가 포함된 원문을 먼저 표시합니다. 용어 일치는 내용의 근거성 판정은 아닙니다.")
+            for preview in previews:
+                _render_highlighted_excerpt(preview, pattern, class_name="dm-source-related-preview")
+        else:
+            preview = "\n".join(excerpt.splitlines()[:6])[:420]
+            st.text(preview + "…")
+            st.caption("답변과 겹치는 용어를 찾지 못해 원문 앞부분을 표시합니다. 전체 발췌에서 확인하세요.")
     with st.expander("답변에 사용한 전체 발췌"):
         _render_source_markdown(excerpt, source_uri=evidence.snapshot.source_uri, provider_excerpt=provider_excerpt)
+
+
+def _answer_term_pattern(cited_texts: list[str]) -> re.Pattern[str] | None:
+    # Technical names survive translation between a Korean answer and English
+    # documentation. Common prose words would make unrelated paragraphs rank.
+    common_words = {
+        "the", "and", "for", "with", "from", "this", "that", "these", "those",
+        "are", "was", "were", "will", "can", "may", "has", "have", "had",
+        "not", "but", "into", "when", "then", "than", "its", "each", "both",
+        "only", "also", "use", "using", "used", "returns", "return",
+    }
+    terms = {term.rstrip(".").casefold() for text in cited_texts
+             for term in re.findall(r"[A-Za-z_][A-Za-z0-9_.]*", text)}
+    terms = {term for term in terms if len(term) >= 3 and term not in common_words}
+    if not terms:
+        return None
+    alternatives = "|".join(re.escape(term) for term in sorted(terms, key=lambda term: (-len(term), term)))
+    return re.compile(r"(?<![A-Za-z0-9_])(?:" + alternatives + r")(?![A-Za-z0-9_])", re.IGNORECASE)
+
+
+def _related_excerpt_previews(excerpt: str, pattern: re.Pattern[str]) -> list[str]:
+    ranked = []
+    for index, paragraph in enumerate(dict.fromkeys(re.split(r"\n\s*\n", excerpt))):
+        matches = list(pattern.finditer(paragraph))
+        if not matches:
+            continue
+        score = len({match.group().casefold() for match in matches})
+        # At equal term coverage, a few words beyond the matched names make
+        # descriptions more useful than standalone return types or See also names.
+        has_description = len(re.findall(r"[^\W\d_]+", pattern.sub("", paragraph))) >= 3
+        # Show the matched area even when a provider flattened a long section
+        # into one paragraph. Ellipses distinguish this view from the full text.
+        start = max(0, min(matches[0].start() - 120, len(paragraph) - 600))
+        end = min(len(paragraph), start + 600)
+        preview = ("…" if start else "") + paragraph[start:end] + ("…" if end < len(paragraph) else "")
+        ranked.append((-score, not has_description, index, preview))
+    return [preview for _, _, _, preview in sorted(ranked)[:3]]
+
+
+def _render_highlighted_excerpt(text: str, pattern: re.Pattern[str], *, class_name: str) -> None:
+    pieces = []
+    cursor = 0
+    for match in pattern.finditer(text):
+        pieces.extend((escape(text[cursor:match.start()]), "<mark>" + escape(match.group()) + "</mark>"))
+        cursor = match.end()
+    pieces.append(escape(text[cursor:]))
+    st.html(f'<div class="{class_name}" style="white-space:pre-wrap;overflow-wrap:anywhere">'
+            f'<style>.{class_name} mark {{background:#ffec99;color:#1a1a1a}}</style>'
+            + "".join(pieces) + '</div>')
 
 
 def _render_source_markdown(text: str, *, source_uri: str, provider_excerpt: bool) -> None:

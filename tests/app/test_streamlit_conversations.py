@@ -12,6 +12,7 @@ from streamlit.testing.v1 import AppTest
 from src.core.answer_schema import finalize_answer, text_document
 from src.core.documents import DocumentElement, SourceAnchor, build_snapshot
 from src.core.evidence import build_evidence
+from tests.app.streamlit_support import finish_chat_response
 
 
 APP = Path(__file__).resolve().parents[2] / "src/app/web/streamlit_app.py"
@@ -109,13 +110,13 @@ def _first_id(observed):
 
 def test_recent_conversation_buttons_switch_without_sending_or_losing_drafts(conversation_http):
     app = AppTest.from_file(APP, default_timeout=10).run()
-    app.chat_input[0].set_value("첫 대화 질문").run()
+    finish_chat_response(app.chat_input[0].set_value("첫 대화 질문").run())
     first = _picker(app).value
     conversation = app.session_state["conversations"][first]
     conversation.draft.record("첫 대화의 작성 초안", revision=conversation.draft.revision)
     app.button(key="documate_new_chat").click().run()
     second = _picker(app).value
-    app.chat_input[0].set_value("두 번째 대화 질문").run()
+    finish_chat_response(app.chat_input[0].set_value("두 번째 대화 질문").run())
 
     current = next(item for item in app.button if item.label == "현재 · 2. 두 번째 대화 질문")
     assert current.disabled
@@ -176,7 +177,7 @@ def test_reload_restores_stored_answer_without_optional_source_location(conversa
 
 def test_reload_restores_answer_sources_attachments_and_unsent_draft(conversation_http, browser_storage):
     app = AppTest.from_file(APP, default_timeout=10).run()
-    app.chat_input[0].set_value("새로고침 후에도 확인할 답변").run()
+    finish_chat_response(app.chat_input[0].set_value("새로고침 후에도 확인할 답변").run())
     first = _first_id(conversation_http)
     conversation_http["manifests"][first].update({"revision": 1, "files": [{
         "file_id": "retained-file", "name": "retained-after-refresh.py", "size_bytes": 20,
@@ -197,7 +198,7 @@ def test_reload_restores_answer_sources_attachments_and_unsent_draft(conversatio
     assert [item["query"] for item in conversation_http["requests"]] == ["새로고침 후에도 확인할 답변"]
     assert not conversation_http["syncs"]
 
-    reloaded.chat_input[0].set_value("기존 첨부로 계속 질문").run()
+    finish_chat_response(reloaded.chat_input[0].set_value("기존 첨부로 계속 질문").run())
     assert not reloaded.exception
     assert conversation_http["requests"][-1]["session_id"] == first
     assert conversation_http["requests"][-1]["uploads"] == {"epoch": "epoch-" + first, "revision": 1}
@@ -208,10 +209,10 @@ def test_reload_preserves_selected_conversation_and_separate_drafts_without_repl
     conversation_http, browser_storage,
 ):
     app = AppTest.from_file(APP, default_timeout=10).run()
-    app.chat_input[0].set_value("첫 대화 답변").run()
+    finish_chat_response(app.chat_input[0].set_value("첫 대화 답변").run())
     first = _picker(app).value
     app.button(key="documate_new_chat").click().run()
-    app.chat_input[0].set_value("두 번째 대화 답변").run()
+    finish_chat_response(app.chat_input[0].set_value("두 번째 대화 답변").run())
     second = _picker(app).value
     _picker(app).set_value(first).run()
     browser_storage.type_draft(first, "  첫 대화의 초안\n다음 줄  ")
@@ -231,7 +232,7 @@ def test_reload_preserves_selected_conversation_and_separate_drafts_without_repl
     assert reloaded.chat_input[0].proto.value == "두 번째 대화의 초안"
     assert len(conversation_http["requests"]) == 2
 
-    reloaded.chat_input[0].set_value("두 번째 대화의 초안").run()
+    finish_chat_response(reloaded.chat_input[0].set_value("두 번째 대화의 초안").run())
     after_send = AppTest.from_file(APP, default_timeout=10).run()
     assert not after_send.exception
     assert _picker(after_send).value == second
@@ -247,7 +248,7 @@ def test_reload_keeps_records_and_draft_when_server_session_cannot_be_resumed(
     conversation_http, browser_storage, server_state,
 ):
     app = AppTest.from_file(APP, default_timeout=10).run()
-    app.chat_input[0].set_value("서버 연결이 끊겨도 보존할 답변").run()
+    finish_chat_response(app.chat_input[0].set_value("서버 연결이 끊겨도 보존할 답변").run())
     first = _picker(app).value
     conversation_http["manifests"][first].update({"revision": 1, "files": [{
         "file_id": "retained-file", "name": "keep-visible.py", "size_bytes": 20,
@@ -268,7 +269,7 @@ def test_reload_keeps_records_and_draft_when_server_session_cannot_be_resumed(
     assert any("keep-visible.py" in item.value for item in reloaded.markdown)
     assert any("복원 후 계속 작성할 질문" in item.value for item in reloaded.info)
     assert not reloaded.chat_input or reloaded.chat_input[0].disabled
-    assert any(item.label == "TXT 저장" and item.disabled for item in reloaded.button)
+    assert any(item.label == "TXT 파일 만들기" and item.disabled for item in reloaded.button)
     assert not conversation_http["syncs"]
     assert len(conversation_http["requests"]) == 1
 
@@ -294,7 +295,7 @@ def test_unreadable_browser_storage_explains_recovery_and_allows_a_new_question(
     assert any("저장된 대화를 복원하지 못했습니다" in item.value for item in app.warning)
     assert app.chat_input and not app.chat_input[0].disabled
     assert not conversation_http["requests"]
-    app.chat_input[0].set_value("새 대화에서 이어가기").run()
+    finish_chat_response(app.chat_input[0].set_value("새 대화에서 이어가기").run())
     assert not app.exception
     assert any("답변: 새 대화에서 이어가기" in item.value for item in app.markdown)
     assert [item["query"] for item in conversation_http["requests"]] == ["새 대화에서 이어가기"]
@@ -304,7 +305,7 @@ def test_new_chat_preserves_previous_messages_and_isolates_slack_drafts(conversa
     app = AppTest.from_file(APP, default_timeout=10).run()
     _slack_kind(app).set_value("채널").run()
     next(item for item in app.text_input if item.label == "Slack 수신자").set_value("C12345678").run()
-    app.chat_input[0].set_value("첫 대화 질문").run()
+    finish_chat_response(app.chat_input[0].set_value("첫 대화 질문").run())
     assert not app.exception
     first = _first_id(conversation_http)
     app.button(key="documate_new_chat").click().run()
@@ -312,7 +313,7 @@ def test_new_chat_preserves_previous_messages_and_isolates_slack_drafts(conversa
     assert not app.exception
     assert not any("답변: 첫 대화 질문" in item.value for item in app.markdown)
     assert _slack_kind(app).value == "미지정"
-    app.chat_input[0].set_value("두 번째 대화 질문").run()
+    finish_chat_response(app.chat_input[0].set_value("두 번째 대화 질문").run())
     _picker(app).set_value(first).run()
 
     assert not app.exception
@@ -327,7 +328,7 @@ def test_new_chat_preserves_previous_messages_and_isolates_slack_drafts(conversa
 
 def test_expired_conversation_keeps_visible_history_without_replaying_requests(conversation_http):
     app = AppTest.from_file(APP, default_timeout=10).run()
-    app.chat_input[0].set_value("보존할 답변").run()
+    finish_chat_response(app.chat_input[0].set_value("보존할 답변").run())
     first = _first_id(conversation_http)
     app.button(key="documate_new_chat").click().run()
     conversation_http["manifests"][first]["epoch"] = "replacement-server-session"
@@ -338,14 +339,14 @@ def test_expired_conversation_keeps_visible_history_without_replaying_requests(c
     assert any("retained source for 보존할 답변" in item.value for item in app.code)
     assert any("읽기 전용" in item.value for item in app.warning)
     assert not app.chat_input or app.chat_input[0].disabled
-    assert any(item.label == "TXT 저장" and item.disabled for item in app.button)
+    assert any(item.label == "TXT 파일 만들기" and item.disabled for item in app.button)
     app.run()
     assert [item["query"] for item in conversation_http["requests"]] == ["보존할 답변"]
 
 
 def test_failed_session_validation_keeps_history_and_offers_retry(conversation_http):
     app = AppTest.from_file(APP, default_timeout=10).run()
-    app.chat_input[0].set_value("연결 실패에도 남길 답변").run()
+    finish_chat_response(app.chat_input[0].set_value("연결 실패에도 남길 답변").run())
     first = _first_id(conversation_http)
     app.button(key="documate_new_chat").click().run()
     conversation_http["unavailable"].add(first)
@@ -392,7 +393,7 @@ def test_held_question_stays_in_its_conversation_until_explicit_send(conversatio
     _picker(app).set_value(first).run()
     assert any("이 대화에만 보류한 질문" in item.value for item in app.info)
     assert not conversation_http["requests"]
-    next(item for item in app.button if item.label == "보류한 질문 보내기").click().run()
+    finish_chat_response(next(item for item in app.button if item.label == "보류한 질문 보내기").click().run())
     assert not app.exception
     assert [item["query"] for item in conversation_http["requests"]] == ["이 대화에만 보류한 질문"]
     assert not any("아직 보내지 않은 질문" in item.value for item in app.info)
@@ -421,7 +422,7 @@ def test_returning_to_failed_upload_requires_confirmation_without_replay(convers
     assert not conversation_http["syncs"]
     assert not conversation_http["requests"]
 
-    next(item for item in app.button if item.label == "질문과 첨부 수정").click().run()
+    next(item for item in app.button if item.label == "파일 다시 선택").click().run()
 
     assert not app.exception
     assert conversation.pending_upload is None
@@ -447,17 +448,17 @@ def test_confirmed_attachments_follow_the_selected_conversation(conversation_htt
     _picker(app).set_value(first).run()
     assert not app.exception
     assert any("first-conversation.py" in item.value for item in app.markdown)
-    app.chat_input[0].set_value("이 첨부를 사용해줘").run()
+    finish_chat_response(app.chat_input[0].set_value("이 첨부를 사용해줘").run())
     assert conversation_http["requests"][-1]["session_id"] == first
     assert conversation_http["requests"][-1]["uploads"] == {"epoch": "epoch-" + first, "revision": 1}
 
 
 def test_expiry_before_submission_keeps_draft_and_does_not_start_new_server_work(conversation_http):
     app = AppTest.from_file(APP, default_timeout=10).run()
-    app.chat_input[0].set_value("만료 전 답변").run()
+    finish_chat_response(app.chat_input[0].set_value("만료 전 답변").run())
     first = _first_id(conversation_http)
     conversation_http["manifests"][first]["epoch"] = "new-server-incarnation"
-    app.chat_input[0].set_value("만료 직후 새 질문").run()
+    finish_chat_response(app.chat_input[0].set_value("만료 직후 새 질문").run())
 
     assert not app.exception
     assert any("답변: 만료 전 답변" in item.value for item in app.markdown)

@@ -55,10 +55,11 @@ export async function mobileSidebarTabCycle(tab, { steps = 24, backwards = false
 export async function sidebarClosedFocus(tab) {
   const state = await tab.playwright.evaluate(() => ({
     closed: document.querySelector('[data-testid="stSidebar"]')?.getAttribute('data-collapsed') === 'true',
+    sidebarInert: Boolean(document.querySelector('[data-testid="stSidebar"]')?.inert),
     openerFocused: document.activeElement?.getAttribute('data-testid') === 'stExpandSidebarButton',
     mainBlocked: Boolean(document.querySelector('#stMain')?.closest('[inert]')),
   }));
-  assert(state.closed && state.openerFocused && !state.mainBlocked,
+  assert(state.closed && state.sidebarInert && state.openerFocused && !state.mainBlocked,
     `Closing the sidebar did not restore normal navigation: ${JSON.stringify(state)}`);
   return { check: 'sidebar closes and returns focus', ...state };
 }

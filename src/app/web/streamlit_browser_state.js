@@ -1,19 +1,25 @@
 // Keep Streamlit's own composer, upload handling, and public prefill mechanism.
-const bridgeCleanups = new WeakMap();
+// Streamlit imports changed JS as a fresh module without first calling the
+// previous module's cleanup. This bridge owns document-wide listeners, so its
+// owner must survive module replacement as well as ordinary data reruns.
+const bridgeCleanupKey = Symbol.for("documate.browser-state.cleanup");
 // Native chat widgets discard their local File list when a conversation is
 // unmounted. Keep the original bytes in this page, not in sessionStorage.
 const conversationFiles = new Map();
 const restoredComposers = new WeakMap();
+const restoredPages = new WeakSet();
+const sourceOrigins = new WeakMap();
 
 export default function ({ data, setStateValue, parentElement }) {
   // Streamlit reruns this entry point for new data; it only calls its returned
   // cleanup on unmount. Retire the previous listeners before replacing them.
-  bridgeCleanups.get(parentElement)?.();
-  bridgeCleanups.delete(parentElement);
+  document[bridgeCleanupKey]?.();
   const storageKey = "documate.conversations.v1";
   const readingKey = "documate.reading-position.v1";
+  const uploadErrorKey = "documate.upload-error-focus.v1";
   const storageError = "브라우저에 대화를 저장하지 못했습니다. 새로고침하면 최근 대화와 초안을 잃을 수 있습니다.";
   if (data.restore) {
+    restoredPages.add(parentElement);
     try {
       setStateValue("restore", { snapshot: sessionStorage.getItem(storageKey), error: null });
     } catch {
@@ -61,9 +67,17 @@ export default function ({ data, setStateValue, parentElement }) {
   let sidebarOverlayActive = false;
   let sourcePanel = null;
   let sourceOpener = null;
+  let sourceLink = null;
+  let sourceFrame;
   let interruptRequested = false;
   const sidebarBackground = new Map();
   let focusInput = data.focus_input;
+  let focusedUploadError = null;
+  try {
+    focusedUploadError = sessionStorage.getItem(uploadErrorKey);
+  } catch {
+    // The conversation bridge already reports unavailable browser storage.
+  }
   let previousReading = null;
   try {
     const stored = JSON.parse(sessionStorage.getItem(readingKey) || "null");
@@ -88,7 +102,11 @@ export default function ({ data, setStateValue, parentElement }) {
     navigation: closeAfterNavigation || previousReading?.navigation === true,
   };
   let observeUserScroll = reading.top !== null;
-  let answerScrollPending = newAnswer;
+  // A restored composer makes Streamlit jump past the answer to the footer.
+  // On reload, show the latest answer while keeping live reading rules intact.
+  const restoredAnswer = restoredPages.has(parentElement)
+    && storedConversation.messages.at(-1)?.role === "assistant";
+  let answerScrollPending = newAnswer || restoredAnswer;
   let navigationScrollPending = reading.navigation;
   let scrollTimer;
   let readingFrame;
@@ -124,6 +142,7 @@ export default function ({ data, setStateValue, parentElement }) {
     }
     answerScrollPending = false;
     navigationScrollPending = false;
+    restoredPages.delete(parentElement);
     clearTimeout(scrollTimer);
     cancelAnimationFrame(readingFrame);
     readingFrame = requestAnimationFrame(recordReadingPosition);
@@ -171,6 +190,7 @@ export default function ({ data, setStateValue, parentElement }) {
     readingFrame = requestAnimationFrame(() => {
       reading.navigation = false;
       reading.message_count = data.message_count;
+      restoredPages.delete(parentElement);
       persistReading();
       main.scrollTo({ top: Math.max(0, top), behavior: "instant" });
     });
@@ -227,7 +247,7 @@ export default function ({ data, setStateValue, parentElement }) {
     if (event.key === "Tab" && event.target.matches?.(selector)) flushDraft();
     if (event.key === "Enter" && !event.shiftKey && !event.ctrlKey && !event.metaKey && !event.isComposing
         && event.target.matches?.(selector)) {
-      if (blockRejectedSubmission(event)) return;
+      if (blockUnavailableSubmission(event)) return;
       const send = event.target.closest('[data-testid="stChatInput"]')
         ?.querySelector('[data-testid="stChatInputSubmitButton"]');
       if (send && !send.disabled) beginSubmission();
@@ -236,7 +256,7 @@ export default function ({ data, setStateValue, parentElement }) {
 
   function onPointerDown(event) {
     const send = event.target.closest?.('[data-testid="stChatInputSubmitButton"]');
-    if (send && blockRejectedSubmission(event)) return;
+    if (send && blockUnavailableSubmission(event)) return;
     // Flush before a navigation trigger; that trigger then carries this widget
     // state even if Streamlit coalesces the two rerun requests.
     if (!event.target.closest?.('[data-testid="stChatInput"]')) flushDraft();
@@ -246,6 +266,32 @@ export default function ({ data, setStateValue, parentElement }) {
   }
 
   function onClick(event) {
+    const citation = event.target.closest?.('a[href^="#dm-citation-"]');
+    if (citation) {
+      const target = citation.getAttribute("href").slice(1);
+      if (!/^dm-citation-[\w-]+$/.test(target)) return;
+      const buttons = document.querySelector(`.st-key-${target}`)
+        ?.querySelectorAll('[data-testid="stPopoverButton"]') || [];
+      const button = [...buttons].find(element => !element.disabled && element.getClientRects().length
+        && getComputedStyle(element).visibility === "visible");
+      if (button) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        // Finish the link event before opening the native popover. Otherwise
+        // its outside-click handler can immediately dismiss the new panel.
+        cancelAnimationFrame(sourceFrame);
+        sourceFrame = requestAnimationFrame(() => {
+          if (!button.isConnected) return;
+          button.click();
+          sourceLink = citation;
+          const href = citation.getAttribute("href");
+          const links = [...document.querySelectorAll('a[href^="#dm-citation-"]')]
+            .filter(link => link.getAttribute("href") === href);
+          sourceOrigins.set(parentElement, { href, index: links.indexOf(citation) });
+        });
+      }
+      return;
+    }
     const headerButton = event.target.closest?.('[data-testid="stHeader"] button');
     if (data.operation_id && headerButton
         && (headerButton.textContent.trim() === "Stop" || headerButton.dataset.documateInterrupt)) {
@@ -271,9 +317,15 @@ export default function ({ data, setStateValue, parentElement }) {
       return;
     }
     const sourceButton = event.target.closest?.('[data-testid="stPopoverButton"]');
-    if (sourceButton) sourceOpener = sourceButton;
+    if (sourceButton) {
+      if (sourceButton.getAttribute("aria-expanded") !== "true") {
+        sourceLink = null;
+        sourceOrigins.delete(parentElement);
+      }
+      sourceOpener = sourceButton;
+    }
     const send = event.target.closest?.('[data-testid="stChatInputSubmitButton"]');
-    if (send && blockRejectedSubmission(event)) return;
+    if (send && blockUnavailableSubmission(event)) return;
     // Keyboard activation of the send button has no pointerdown event.
     if (send && !send.disabled && !submitting) beginSubmission();
     // The component's draft event and a Streamlit button callback can arrive
@@ -310,6 +362,11 @@ export default function ({ data, setStateValue, parentElement }) {
       files = event.clipboardData?.files;
     }
     if (!files?.length) return;
+    if (data.chat_in_progress) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      return;
+    }
     conversationFiles.set(data.conversation_id, [
       ...(conversationFiles.get(data.conversation_id) || []), ...files,
     ]);
@@ -391,7 +448,7 @@ export default function ({ data, setStateValue, parentElement }) {
       .find(element => element.querySelector('.dm-source-header') && element.getClientRects().length);
     if (panel === sourcePanel) return;
     if (!panel) {
-      const opener = currentSourceOpener();
+      const opener = currentSourceLink() || currentSourceOpener();
       if (sourcePanel && opener) {
         opener.focus({ preventScroll: true });
         const main = document.getElementById('stMain');
@@ -409,6 +466,8 @@ export default function ({ data, setStateValue, parentElement }) {
         }
       }
       sourcePanel = null;
+      sourceLink = null;
+      sourceOrigins.delete(parentElement);
       return;
     }
     sourcePanel = panel;
@@ -425,6 +484,16 @@ export default function ({ data, setStateValue, parentElement }) {
     if (opener?.getAttribute('aria-expanded') === 'true') {
       opener.click();
     }
+  }
+
+  function currentSourceLink() {
+    if (sourceLink?.isConnected) return sourceLink;
+    // Source search reruns replace the original DOM link. Preserve its exact
+    // occurrence because several sentences can cite the same source.
+    const origin = sourceOrigins.get(parentElement);
+    if (!origin) return null;
+    return [...document.querySelectorAll('a[href^="#dm-citation-"]')]
+      .filter(link => link.getAttribute("href") === origin.href)[origin.index] || null;
   }
 
   function currentSourceOpener() {
@@ -472,6 +541,7 @@ export default function ({ data, setStateValue, parentElement }) {
     const sidebar = document.querySelector('[data-testid="stSidebar"]');
     const main = document.getElementById("stMain");
     const open = sidebar?.getAttribute("data-collapsed") === "false";
+    if (open) sidebar.inert = false;
     // Streamlit takes main out of the flex row in its mobile layout. Use that
     // layout mode: the sidebar's animated transform still looks closed at the
     // moment data-collapsed changes, so its current rectangle is not reliable.
@@ -506,6 +576,9 @@ export default function ({ data, setStateValue, parentElement }) {
         document.querySelector('[data-testid="stExpandSidebarButton"]')?.focus();
         focusInput = false;
       }
+      // CSS visibility can be overridden by descendant styles. Inert removes
+      // the entire closed subtree from focus navigation and the AX tree.
+      sidebar.inert = true;
       closeRequested = false;
       sidebarHadFocus = false;
     }
@@ -573,9 +646,9 @@ export default function ({ data, setStateValue, parentElement }) {
     }
   }
 
+  let uploadSelection = null;
+
   function renderUploadSelection() {
-    const status = document.getElementById("documate-upload-selection");
-    if (!status) return;
     // These chips belong to the native picker, not the confirmed server
     // manifest. Observe its rendered selection without taking over uploads.
     const composer = document.querySelector(selector)?.closest('[data-testid="stChatInput"]');
@@ -584,26 +657,80 @@ export default function ({ data, setStateValue, parentElement }) {
     const uploading = chips.filter(chip => chip.querySelector('[data-testid="stFileChipIconSpinner"]')).length;
     const waiting = chips.length - rejected - uploading;
     const send = composer?.querySelector('[data-testid="stChatInputSubmitButton"]');
+    const input = document.querySelector(selector);
+    if (send) {
+      const label = data.chat_in_progress ? "답변을 기다리는 중 — 초안 작성 가능"
+        : waiting ? (input.value.trim() ? "질문과 파일 보내기" : "파일 보내기") : "질문 보내기";
+      if (send.getAttribute("aria-label") !== label) send.setAttribute("aria-label", label);
+      if (send.getAttribute("title") !== label) send.setAttribute("title", label);
+    }
+    if (send && data.chat_in_progress) {
+      send.dataset.documateChatBlocked = "true";
+      if (!send.disabled) send.disabled = true;
+    } else if (send?.dataset.documateChatBlocked) {
+      delete send.dataset.documateChatBlocked;
+      send.disabled = input.disabled || rejected > 0 || uploading > 0 || (input.value === "" && waiting === 0);
+    }
+    for (const control of composer?.querySelectorAll('input[type="file"], [data-testid="stChatInputFileUploadButton"] button') || []) {
+      if (data.chat_in_progress) {
+        control.dataset.documateChatBlocked = "true";
+        if (!control.disabled) control.disabled = true;
+      } else if (control.dataset.documateChatBlocked) {
+        delete control.dataset.documateChatBlocked;
+        control.disabled = input.disabled;
+      }
+    }
     if (send && rejected) {
       send.dataset.documateUploadBlocked = "true";
       if (!send.disabled) send.disabled = true;
     } else if (send?.dataset.documateUploadBlocked) {
       delete send.dataset.documateUploadBlocked;
       // Return control to the native picker after the user removes its errors.
-      const input = document.querySelector(selector);
-      send.disabled = input.disabled || uploading > 0 || (input.value === "" && waiting === 0);
+      send.disabled = Boolean(data.chat_in_progress) || input.disabled || uploading > 0 || (input.value === "" && waiting === 0);
+    }
+    const selectedPrompts = document.querySelector('[class*="-selected_upload_prompts"]');
+    const defaultPrompts = document.querySelector('[class*="-default_prompts"]');
+    if (selectedPrompts && defaultPrompts) {
+      const hasSelection = waiting > 0 || uploading > 0;
+      if (selectedPrompts.dataset.selectedFiles !== String(hasSelection)) selectedPrompts.dataset.selectedFiles = String(hasSelection);
+      if (selectedPrompts.hidden === hasSelection) selectedPrompts.hidden = !hasSelection;
+      if (defaultPrompts.hidden !== hasSelection) defaultPrompts.hidden = hasSelection;
+    }
+    if (!composer) return;
+    // The native composer lives in Streamlit's fixed bottom area. Own a small
+    // sibling of its content, rather than moving a React-managed HTML element
+    // out of the scrolling message area.
+    if (uploadSelection?.parentElement !== composer) {
+      uploadSelection?.remove();
+      uploadSelection = document.createElement("p");
+      uploadSelection.id = "documate-upload-selection";
+      uploadSelection.setAttribute("role", "status");
+      uploadSelection.setAttribute("aria-live", "polite");
+      uploadSelection.setAttribute("aria-atomic", "true");
+      composer.prepend(uploadSelection);
     }
     const states = [];
+    if (rejected) states.push(`선택 오류 ${rejected}개 · 오류가 있는 파일을 제거하고 지원 형식·크기로 다시 선택하세요. 질문은 유지됩니다. 오류를 해결하면 전송할 수 있습니다.`);
     if (waiting) states.push(`전송 대기 ${waiting}개`);
     if (uploading) states.push(`파일 업로드 중 ${uploading}개`);
-    if (rejected) states.push(`선택 오류 ${rejected}개 · 파일 옆의 오류를 확인하고 해당 파일을 제거하거나 지원 형식·크기에 맞는 파일로 다시 선택하세요. 작성한 질문은 유지됩니다. 오류를 해결하기 전에는 전송할 수 없습니다.`);
     const text = chips.length
-      ? states.join(" · ") + " 아직 검색에 사용되지 않습니다." + (waiting ? " 전송하면 자료를 준비합니다." : "")
-      : "새 파일은 +로 추가한 뒤 전송하세요. 파일만 먼저 전송할 수도 있습니다.";
-    if (status.textContent !== text) status.textContent = text;
+      ? states.join(" · ") + (waiting || uploading ? " 아직 검색에 사용되지 않습니다." : "") + (waiting ? " 전송하면 자료를 준비합니다." : "")
+      : "";
+    if (uploadSelection.textContent !== text) uploadSelection.textContent = text;
+    uploadSelection.dataset.invalid = String(rejected > 0);
+    const describedBy = new Set((input.getAttribute("aria-describedby") || "").split(/\s+/).filter(Boolean));
+    if (text) describedBy.add(uploadSelection.id);
+    else describedBy.delete(uploadSelection.id);
+    const description = [...describedBy].join(" ");
+    if (description && input.getAttribute("aria-describedby") !== description) input.setAttribute("aria-describedby", description);
+    else if (!description && input.hasAttribute("aria-describedby")) input.removeAttribute("aria-describedby");
   }
 
   function localizeControls() {
+    for (const link of document.querySelectorAll('a[href^="#dm-citation-"]')) {
+      const label = `근거 ${link.textContent.trim()} 열기`;
+      if (link.getAttribute("aria-label") !== label) link.setAttribute("aria-label", label);
+    }
     if (data.operation_id) {
       for (const button of document.querySelectorAll('[data-testid="stHeader"] button')) {
         if (button.textContent.trim() !== 'Stop' && !button.dataset.documateInterrupt) continue;
@@ -619,7 +746,6 @@ export default function ({ data, setStateValue, parentElement }) {
     const controls = [
       ['[data-testid="stChatInput"] input[type="file"]', "첨부할 파일 선택"],
       ['[data-testid="stChatInput"] button:is([aria-label="Upload files"], [aria-label="파일 첨부"])', "파일 첨부"],
-      ['[data-testid="stChatInputSubmitButton"]', "질문 보내기"],
       ['[data-testid="stExpandSidebarButton"]', "대화 메뉴 열기"],
       ['[data-testid="stSidebarCollapseButton"] button', "대화 메뉴 닫기"],
     ];
@@ -631,9 +757,26 @@ export default function ({ data, setStateValue, parentElement }) {
     }
   }
 
-  function blockRejectedSubmission(event) {
+  function connectRecipientFeedback() {
+    const input = document.querySelector('input[aria-label="Slack 수신자"]');
+    if (!input) return;
+    const feedbackId = "documate-slack-recipient-help";
+    const feedback = document.getElementById(feedbackId);
+    const describedBy = new Set((input.getAttribute("aria-describedby") || "").split(/\s+/).filter(Boolean));
+    if (feedback) describedBy.add(feedbackId);
+    else describedBy.delete(feedbackId);
+    const description = [...describedBy].join(" ");
+    if (description && input.getAttribute("aria-describedby") !== description) input.setAttribute("aria-describedby", description);
+    else if (!description) input.removeAttribute("aria-describedby");
+    if (feedback) {
+      const invalid = feedback.dataset.slackInvalid;
+      if (input.getAttribute("aria-invalid") !== invalid) input.setAttribute("aria-invalid", invalid);
+    } else input.removeAttribute("aria-invalid");
+  }
+
+  function blockUnavailableSubmission(event) {
     const composer = document.querySelector(selector)?.closest('[data-testid="stChatInput"]');
-    if (!composer?.querySelector('[data-testid="stFileChip"][aria-invalid="true"]')) return false;
+    if (!data.chat_in_progress && !composer?.querySelector('[data-testid="stFileChip"][aria-invalid="true"]')) return false;
     // Streamlit omits rejected files from its submit payload. Stop before its
     // handler clears the picker and draft, including keyboard submission.
     event.preventDefault();
@@ -641,6 +784,33 @@ export default function ({ data, setStateValue, parentElement }) {
     storeDraft();
     renderUploadSelection();
     return true;
+  }
+
+  function revealUploadError() {
+    const error = document.querySelector("[data-dm-upload-error]");
+    if (!error || error.dataset.dmUploadError === focusedUploadError) return;
+    const app = document.querySelector('[data-testid="stApp"]');
+    if (app && app.getAttribute("data-test-script-state") !== "notRunning") return;
+    focusInput = false;
+    answerScrollPending = false;
+    navigationScrollPending = false;
+    clearTimeout(scrollTimer);
+    const main = document.getElementById("stMain");
+    main?.dispatchEvent(new WheelEvent("wheel"));
+    error.focus({ preventScroll: true });
+    if (main) {
+      const visibleTop = Math.max(main.getBoundingClientRect().top,
+        document.querySelector('[data-testid="stHeader"]')?.getBoundingClientRect().bottom || 0);
+      main.scrollTop += error.getBoundingClientRect().top - visibleTop - 16;
+    } else {
+      error.scrollIntoView({ block: "start", behavior: "instant" });
+    }
+    focusedUploadError = error.dataset.dmUploadError;
+    try {
+      sessionStorage.setItem(uploadErrorKey, focusedUploadError);
+    } catch {
+      // Keep the once-per-run guard even when browser storage is unavailable.
+    }
   }
 
   document.addEventListener("keydown", onKeyDown, true);
@@ -663,23 +833,32 @@ export default function ({ data, setStateValue, parentElement }) {
   window.addEventListener("pagehide", storeDraft);
   const observer = new MutationObserver(() => {
     localizeControls();
+    connectRecipientFeedback();
     recoverSidebarFocus();
     recoverSourceFocus();
     restoreSelectedFiles();
     renderUploadSelection();
+    revealUploadError();
     settleReadingScroll();
   });
-  observer.observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ["data-collapsed", "aria-expanded", "aria-invalid", "disabled", "aria-label", "title", "data-test-script-state"] });
+  observer.observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ["data-collapsed", "aria-expanded", "aria-invalid", "data-slack-invalid", "disabled", "aria-label", "title", "data-test-script-state"] });
   localizeControls();
+  connectRecipientFeedback();
   recoverSidebarFocus();
   recoverSourceFocus();
   restoreSelectedFiles();
   renderUploadSelection();
+  revealUploadError();
   persist();
   persistReading();
   settleReadingScroll();
 
+  let disposed = false;
   const cleanup = () => {
+    // Streamlit can later unmount an already-replaced component. That stale
+    // cleanup must not release state belonging to the current owner.
+    if (disposed) return;
+    disposed = true;
     document.removeEventListener("keydown", onKeyDown, true);
     document.removeEventListener("pointerdown", onPointerDown, true);
     document.removeEventListener("click", onClick, true);
@@ -700,12 +879,12 @@ export default function ({ data, setStateValue, parentElement }) {
     document.removeEventListener("scroll", onMainScroll, true);
     window.removeEventListener("pagehide", storeDraft);
     observer.disconnect();
+    uploadSelection?.remove();
     clearTimeout(scrollTimer);
     cancelAnimationFrame(readingFrame);
+    cancelAnimationFrame(sourceFrame);
+    if (document[bridgeCleanupKey] === cleanup) delete document[bridgeCleanupKey];
   };
-  bridgeCleanups.set(parentElement, cleanup);
-  return () => {
-    cleanup();
-    if (bridgeCleanups.get(parentElement) === cleanup) bridgeCleanups.delete(parentElement);
-  };
+  document[bridgeCleanupKey] = cleanup;
+  return cleanup;
 }

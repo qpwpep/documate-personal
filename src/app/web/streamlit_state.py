@@ -19,6 +19,7 @@ from src.core.contracts.outcome import AnswerExportResult, TurnResult
 from src.core.uploads import UploadManifest, UploadSyncRequest
 
 if TYPE_CHECKING:
+    from src.app.web.chat_response_task import ChatResponseTask
     from src.app.web.streamlit_requests import ChatSubmission, SaveSubmission, UploadSubmission
 
 
@@ -88,6 +89,7 @@ class Conversation:
     active_submission: ChatSubmission | SaveSubmission | UploadSubmission | None = None
     operation_message_count: int = 0
     operation_in_progress: bool = False
+    chat_task: ChatResponseTask | None = None
     confirmed_epoch: str | None = None
     preserved_manifest: UploadManifest | None = None
     expired: bool = False
@@ -186,7 +188,7 @@ def append_message(message: ChatMessage) -> None:
 
 
 def reset_chat_session(logger: logging.Logger) -> None:
-    if get_conversation().is_busy:
+    if get_conversation().is_busy and get_conversation().chat_task is None:
         return
     _pause_automatic_work(get_conversation())
     _remember_manifest(get_conversation())
@@ -196,17 +198,17 @@ def reset_chat_session(logger: logging.Logger) -> None:
 
 def switch_conversation(conversation_id: str) -> bool:
     current = get_conversation()
-    if current.is_busy or current.id == conversation_id:
+    if (current.is_busy and current.chat_task is None) or current.id == conversation_id:
         return False
     target = st.session_state["conversations"][conversation_id]
-    if target.is_busy:
+    if target.is_busy and target.chat_task is None:
         return False
     _pause_automatic_work(current)
     _remember_manifest(current)
     _pause_automatic_work(target)
     st.session_state["active_conversation_id"] = target.id
     target.draft.needs_restore = True
-    if not target.has_interrupted_response:
+    if not target.has_interrupted_response and not target.is_busy:
         validate_conversation(target)
     return True
 

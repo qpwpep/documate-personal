@@ -77,11 +77,13 @@ def _interrupt_response() -> None:
 def render_browser_state(conversation: Conversation) -> None:
     state = st.session_state.get(_KEY, {})
     submission = conversation.pending_request or conversation.active_submission
+    chat_in_progress = submission is not None and submission.kind == "chat"
     result = _bridge(
         data={"conversation_id": conversation.id, "revision": conversation.draft.revision,
               "text": conversation.draft.text,
               "focus_input": conversation.draft.needs_restore,
-              "pending_chat": conversation.pending_request is not None and conversation.pending_request.kind == "chat",
+              "pending_chat": chat_in_progress,
+              "chat_in_progress": chat_in_progress,
               "operation_id": submission.operation_id if submission is not None else None,
               "operation_kind": submission.kind if submission is not None else None,
               "message_count": len(conversation.messages),

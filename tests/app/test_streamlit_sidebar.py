@@ -43,6 +43,24 @@ def test_all_conversations_picker_is_secondary_but_keeps_older_conversations_rea
     assert json.loads(app.json[0].value)["selected_conversation"] == "1"
 
 
+def test_sidebar_keeps_secondary_settings_collapsed_without_losing_preferences() -> None:
+    app = AppTest.from_function(_sidebar_app).run()
+
+    appearance = next(item for item in app.expander if item.label == "화면 설정")
+    delivery = next(item for item in app.expander if item.label == "Slack 수신자 설정")
+    assert not appearance.proto.expanded
+    assert not delivery.proto.expanded
+    appearance.radio[0].set_value("다크").run()
+    next(item for item in app.radio if item.label == "수신자 유형").set_value("사용자").run()
+    next(item for item in app.text_input if item.label == "Slack 수신자").set_value("U0123456789").run()
+    next(item for item in app.radio if item.label == "수신자 유형").set_value("채널").run()
+    next(item for item in app.radio if item.label == "수신자 유형").set_value("사용자").run()
+
+    assert not app.exception
+    assert next(item for item in app.radio if item.label == "테마").value == "다크"
+    assert next(item for item in app.text_input if item.label == "Slack 수신자").value == "U0123456789"
+
+
 def test_slack_guidance_explains_destination_and_explicit_send_without_discarding_input() -> None:
     app = AppTest.from_function(_sidebar_app).run()
     next(item for item in app.radio if item.label == "수신자 유형").set_value("채널").run()
@@ -58,6 +76,17 @@ def test_slack_guidance_explains_destination_and_explicit_send_without_discardin
     assert not app.exception
     assert json.loads(app.json[0].value)["recipient"] == {"kind": "channel", "value": "general"}
     assert any("C, G 또는 D" in item.value for item in app.caption)
+    feedback = next(item.value for item in app.markdown if 'id="documate-slack-recipient-help"' in item.value)
+    assert 'data-slack-invalid="true"' in feedback
+    assert 'role="status"' in feedback
+    assert "채널 이름은 사용할 수 없습니다" in feedback
     field = next(item for item in app.text_input if item.label == "Slack 수신자")
     field.set_value("C0123456789").run()
     assert json.loads(app.json[0].value)["recipient"] == {"kind": "channel", "value": "C0123456789"}
+    feedback = next(item.value for item in app.markdown if 'id="documate-slack-recipient-help"' in item.value)
+    assert 'data-slack-invalid="false"' in feedback
+    assert "수신자 형식을 확인했습니다" in feedback
+
+    next(item for item in app.radio if item.label == "수신자 유형").set_value("미지정").run()
+    assert not app.text_input
+    assert not any('id="documate-slack-recipient-help"' in item.value for item in app.markdown)

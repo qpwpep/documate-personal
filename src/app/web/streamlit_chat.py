@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable
+from collections.abc import Callable
 from datetime import datetime, timezone
 from urllib.parse import quote
 
 import streamlit as st
 
-from src.app.client import AgentCallResult, AgentStreamEvent
+from src.app.client import AgentStreamEvent
 from src.app.web.streamlit_sources import render_code, render_evidence
 from src.app.web.streamlit_state import AssistantChatMessage, ChatMessage
 from src.core.answer_schema import ActionReceipt, AnswerResponse, CodeBlock, ContentUnit, SemanticCheck, iter_content_units
@@ -15,7 +15,6 @@ from src.core.contracts.outcome import TurnResult
 from src.core.llm_errors import ExecutionProblem
 
 
-_DEFAULT_ERROR_MESSAGE = "응답을 받지 못했습니다."
 _DEFAULT_PROCESSING_MESSAGE = "응답을 준비하고 있습니다."
 _STAGE_MESSAGES = {
     "summarize": "이전 맥락을 정리하고 있습니다.",
@@ -57,7 +56,7 @@ def render_chat_history(
                         if export_result.status == "completed" and result.problem is not None and result.problem.code == "save_failed":
                             changes.update(status="completed", problem=None, message="")
                         displayed = result.model_copy(update=changes)
-                    render_turn_result(displayed, fastapi_url)
+                    render_turn_result(displayed, fastapi_url, citation_scope=f"answer-{index}")
                     if result.answer_id and on_save is not None:
                         export_error = message.get("export_error")
                         if export_error:
@@ -72,7 +71,7 @@ def render_chat_history(
                             expired = any(action.artifact is not None and action.verification == "verified"
                                           and action.artifact.expires_at <= datetime.now(tz=timezone.utc).timestamp()
                                           for action in save_actions)
-                            label = "TXT 저장"
+                            label = "TXT 파일 만들기"
                             if retry:
                                 label = "저장 다시 시도"
                             elif expired:
@@ -121,7 +120,7 @@ def _render_question_recovery(
                       disabled=disabled, on_click=on_edit, args=(prompt,))
 
 
-def render_turn_result(result: TurnResult, fastapi_url: str) -> None:
+def render_turn_result(result: TurnResult, fastapi_url: str, *, citation_scope: str = "") -> None:
     """Keep failures and questions separate from checked answer content."""
     partial_body = (result.status == "partial" and result.problem.code != "save_failed"
                     and result.problem.stage != "action_postprocess")
@@ -143,6 +142,7 @@ def render_turn_result(result: TurnResult, fastapi_url: str) -> None:
             result.response, fastapi_url, turn_incomplete=result.status == "partial",
             partial_problem=result.problem if partial_body else None,
             request_id=result.request_id if partial_body else "",
+            citation_scope=citation_scope,
         )
 
 
@@ -194,18 +194,21 @@ def _problem_guidance(problem: ExecutionProblem) -> str:
 
 def render_answer_response(
     response: AnswerResponse, fastapi_url: str, *, turn_incomplete: bool = False,
-    partial_problem: ExecutionProblem | None = None, request_id: str = "",
+    partial_problem: ExecutionProblem | None = None, request_id: str = "", citation_scope: str = "",
 ) -> None:
     response = AnswerResponse.model_validate(response.model_dump(mode="json"))
     citations = {citation.evidence.id: citation for citation in response.citations}
     checks = {check.unit_id: check for check in response.checks}
     global_issues = [issue for issue in response.issues if issue.unit_id is None]
     section_units: list[ContentUnit | CodeBlock] = []
+    citation_scope = f"{citation_scope}-{response.content_hash}" if citation_scope else response.content_hash
+    citation_prefix = f"dm-citation-{citation_scope}-0"
 
     for index, block in enumerate(response.content.blocks):
         if block.type == "heading" and section_units:
-            _render_citations(section_units, citations)
+            _render_citations(section_units, citations, citation_prefix=citation_prefix)
             section_units = []
+            citation_prefix = f"dm-citation-{citation_scope}-{index}"
         prefix = f"b{index}."
         units = [(path, unit) for path, unit in iter_content_units(response.content) if path.startswith(prefix)]
         if block.type == "code":
@@ -213,13 +216,13 @@ def render_answer_response(
         else:
             section_units.extend(unit for _, unit in units)
         if block.type == "paragraph":
-            st.markdown(" ".join(_unit_text(unit, citations) for unit in block.content))
+            st.markdown(" ".join(_unit_text(unit, citations, citation_prefix) for unit in block.content))
         elif block.type == "heading":
-            st.markdown("#" * block.level + " " + _unit_text(block.content, citations))
+            st.markdown("#" * block.level + " " + _unit_text(block.content, citations, citation_prefix))
         elif block.type == "list":
             st.markdown("\n".join(
-                f"{item_index + 1}. {_unit_text(unit, citations)}" if block.ordered
-                else f"- {_unit_text(unit, citations)}"
+                f"{item_index + 1}. {_unit_text(unit, citations, citation_prefix)}" if block.ordered
+                else f"- {_unit_text(unit, citations, citation_prefix)}"
                 for item_index, unit in enumerate(block.items)
             ))
         elif block.type == "code":
@@ -229,9 +232,9 @@ def render_answer_response(
                 render_code(block.content.text, language=block.language or "text")
             st.caption(code_display_label(block))
         elif block.type == "table":
-            header = "| " + " | ".join(_table_cell(unit, citations) for unit in block.columns) + " |"
+            header = "| " + " | ".join(_table_cell(unit, citations, citation_prefix) for unit in block.columns) + " |"
             separator = "| " + " | ".join("---" for _ in block.columns) + " |"
-            rows = ["| " + " | ".join(_table_cell(unit, citations) for unit in row) + " |" for row in block.rows]
+            rows = ["| " + " | ".join(_table_cell(unit, citations, citation_prefix) for unit in row) + " |" for row in block.rows]
             st.markdown("\n".join([header, separator, *rows]))
 
         unit_by_path = dict(units)
@@ -248,7 +251,7 @@ def render_answer_response(
                 st.warning("이 내용에 연결된 근거를 찾지 못했습니다.")
             elif check is not None and check.support_status == "unsupported":
                 st.warning("이 인용문은 보관한 원문과 일치하지 않습니다.")
-    _render_citations(section_units, citations)
+    _render_citations(section_units, citations, citation_prefix=citation_prefix)
 
     if global_issues or partial_problem is not None:
         with st.expander("답변의 한계와 처리 정보"):
@@ -355,32 +358,41 @@ def _render_validation_scope(
         st.caption("출처에서 원문 위치를 확인하거나, 위치를 확인할 수 있는 원본 파일을 첨부해 주세요.")
 
     with st.expander("검증 상세"):
-        st.caption("출처 연결은 내용에 출처가 있다는 뜻입니다. 직접 인용은 보관한 원문과 일치하는지 확인합니다.")
-        st.caption("수치는 개별 조건에 대한 자동 평가이며 답변 전체의 정확도나 실행 성공을 보증하지 않습니다.")
-        if report is not None:
-            st.caption("Decisions API에서 받은 평가 결과입니다.")
-        st.caption("아래 판정은 답변 본문의 조건 충족 여부를 평가합니다. 저장·전송의 처리 결과는 별도로 표시됩니다.")
+        if resolved:
+            st.caption(f"출처 연결: 내용 {resolved}개에 출처가 연결되어 있습니다. ‘근거’에서 사용한 원문을 확인할 수 있습니다.")
+        else:
+            st.caption("출처 연결: 이 답변에 연결된 출처가 없습니다.")
+        st.caption(quote_summary + ". 직접 인용은 보관한 원문과 일치하는지 확인합니다.")
+        if any(block.type == "code" for block in response.content.blocks):
+            st.caption("실행 확인: 코드 형식으로 표시된 내용의 실행 결과는 확인하지 않았습니다.")
+        if limits:
+            st.caption("확인하지 못한 내용: " + " ".join(limits))
+        st.caption("자동 확인은 답변 전체의 정확도나 실행 성공을 보증하지 않습니다.")
+        st.caption("본문 확인과 저장·전송의 처리 결과는 별도로 표시됩니다.")
         if issue_codes & {"retrieved_evidence_incomplete", "evidence_packet_incomplete"}:
             st.caption("이 답변에 기록된 한계: 일부 근거가 부족합니다. 아래 판정은 확보된 근거로 작성한 본문 범위에 한정됩니다.")
         elif issue_codes & {"answer_incomplete", "source_excerpt_fallback"}:
             st.caption("이 답변에 기록된 한계: 일부 내용만 제공한 부분 답변입니다. 아래 판정은 제공된 본문 범위에 한정됩니다.")
         if turn_incomplete:
             st.caption("이번 요청 처리는 완료되지 않았습니다. 남은 작업은 안내와 저장·전송 결과를 확인해 주세요.")
-        _render_semantic_result("답변 본문 조건 충족", request_check, report.threshold if report is not None else None)
-        format_check = semantic_checks.get(("format_fulfilled", None))
-        if format_check is not None:
-            _render_semantic_result("답변 서식 조건 충족", format_check, report.threshold)
-        for index, (path, unit) in enumerate(units, start=1):
-            preview = " ".join(unit.text.split())
-            if len(preview) > 120:
-                preview = preview[:117] + "…"
-            if unit.source_location is not None:
-                preview = literal_markdown(preview)
-            st.markdown(f"**내용 {index}** · {preview}")
-            _render_semantic_result(
-                "근거 지지", semantic_checks.get(("grounded", path)),
-                report.threshold if report is not None else None,
-            )
+        with st.expander("기술 상세"):
+            if report is not None:
+                st.caption("Decisions API에서 받은 평가 결과입니다. 수치는 개별 조건의 충족 여부에 대한 자동 평가입니다.")
+            _render_semantic_result("답변 본문 조건 충족", request_check, report.threshold if report is not None else None)
+            format_check = semantic_checks.get(("format_fulfilled", None))
+            if format_check is not None:
+                _render_semantic_result("답변 서식 조건 충족", format_check, report.threshold)
+            for index, (path, unit) in enumerate(units, start=1):
+                preview = " ".join(unit.text.split())
+                if len(preview) > 120:
+                    preview = preview[:117] + "…"
+                if unit.source_location is not None:
+                    preview = literal_markdown(preview)
+                st.markdown(f"**내용 {index}** · {preview}")
+                _render_semantic_result(
+                    "근거 지지", semantic_checks.get(("grounded", path)),
+                    report.threshold if report is not None else None,
+                )
 
 
 def _render_semantic_result(label: str, check: SemanticCheck | None, threshold: float | None) -> None:
@@ -394,17 +406,18 @@ def _render_semantic_result(label: str, check: SemanticCheck | None, threshold: 
     st.caption(f"{label}: {status} · 충족 확률 {check.probability} · 임곗값 {threshold}")
 
 
-def _unit_text(unit: ContentUnit, citations: dict) -> str:
+def _unit_text(unit: ContentUnit, citations: dict, citation_prefix: str) -> str:
     prefix = {"inference": "**해석** · ", "example": "**예시** · ", "excerpt": "**원문 발췌** · "}.get(unit.basis, "")
-    labels = " ".join(f"[{citations[ref].number}]" for ref in unit.refs if ref in citations)
+    labels = " ".join(f"[[{citations[ref].number}]](#{citation_prefix}-{citations[ref].number})"
+                      for ref in unit.refs if ref in citations)
     return prefix + content_unit_markdown(unit) + (f" {labels}" if labels else "")
 
 
-def _table_cell(unit: ContentUnit, citations: dict) -> str:
-    return _unit_text(unit, citations).replace("|", "\\|").replace("\n", "<br>")
+def _table_cell(unit: ContentUnit, citations: dict, citation_prefix: str) -> str:
+    return _unit_text(unit, citations, citation_prefix).replace("|", "\\|").replace("\n", "<br>")
 
 
-def _render_citations(context: list[ContentUnit | CodeBlock], citations: dict) -> None:
+def _render_citations(context: list[ContentUnit | CodeBlock], citations: dict, *, citation_prefix: str) -> None:
     units = [item.content if isinstance(item, CodeBlock) else item for item in context]
     refs = list(dict.fromkeys(ref for unit in units for ref in unit.refs if ref in citations))
     if not refs:
@@ -412,67 +425,18 @@ def _render_citations(context: list[ContentUnit | CodeBlock], citations: dict) -
     with st.container(horizontal=True):
         for ref in refs:
             citation = citations[ref]
-            with st.popover(f"근거 [{citation.number}]", help=citation.evidence.snapshot.title):
-                render_evidence(
-                    citation.evidence, cited_texts=[unit.text for unit in units if ref in unit.refs],
-                    answer_context=[item if isinstance(item, CodeBlock) else content_unit_markdown(item)
-                                    for item, unit in zip(context, units) if ref in unit.refs],
-                )
+            target = f"{citation_prefix}-{citation.number}"
+            with st.container(key=target, width="content"):
+                with st.popover(f"근거 [{citation.number}]", help=citation.evidence.snapshot.title):
+                    render_evidence(
+                        citation.evidence, cited_texts=[unit.text for unit in units if ref in unit.refs],
+                        answer_context=[item if isinstance(item, CodeBlock) else content_unit_markdown(item)
+                                        for item, unit in zip(context, units) if ref in unit.refs],
+                        search_key=target,
+                    )
 
 
-def process_chat_prompt(
-    prompt: str,
-    append_user_message: Callable[[ChatMessage], None],
-    append_assistant_message: Callable[[ChatMessage], None],
-    stream_agent: Callable[[str], Iterable[AgentStreamEvent]],
-) -> None:
-    append_user_message({"role": "user", "content": prompt})
-    with st.chat_message("user"):
-        st.markdown(prompt)
-
-    result: AgentCallResult | None = None
-    error_messages: list[str] = []
-    request_id = ""
-    with st.chat_message("assistant"):
-        with st.spinner("답변을 준비하고 있습니다.", show_time=True):
-            st.caption("완료되면 질문 입력과 대화 전환을 다시 사용할 수 있습니다. "
-                       "‘응답 수신 중단’은 화면의 대기를 끝내며 서버 작업을 취소하지 않습니다.")
-            status_placeholder = st.empty()
-            status_placeholder.markdown("요청을 접수했습니다.")
-            for event in stream_agent(prompt):
-                request_id = event.observation.request_id or str(event.data.get("request_id") or request_id)
-                if event.event == "final_response" and event.result is not None:
-                    result = event.result
-                elif event.event == "error":
-                    error_message = str(event.data.get("message") or "응답 처리 중 오류가 발생했습니다.")
-                    if error_message not in error_messages:
-                        error_messages.append(error_message)
-                    status_placeholder.markdown(error_message)
-                else:
-                    progress = _progress_message_for_event(event)
-                    if progress:
-                        status_placeholder.markdown(progress)
-            status_placeholder.empty()
-
-    if result is None:
-        error_text = "\n\n".join(error_messages) or _DEFAULT_ERROR_MESSAGE
-        append_assistant_message({
-            "role": "assistant",
-            "result": None,
-            "transport_errors": [error_text],
-            "request_id": request_id,
-        })
-    else:
-        assistant_message: AssistantChatMessage = {
-            "role": "assistant",
-            "result": TurnResult.model_validate(result.model_dump(exclude={"upload_manifest"})),
-        }
-        if error_messages:
-            assistant_message["transport_errors"] = error_messages
-        append_assistant_message(assistant_message)
-
-
-def _progress_message_for_event(event: AgentStreamEvent) -> str:
+def progress_message_for_event(event: AgentStreamEvent) -> str:
     if event.event == "request_started":
         return "요청을 접수했습니다."
     if event.event == "progress_snapshot":

@@ -8,18 +8,29 @@ function assert(condition, message) {
 
 /** Observe the actual native file picker; no simulated upload state. */
 export async function attachmentSelectionState(tab, { waiting, ready, rejected = 0 }) {
-  const summary = await tab.playwright.evaluate(() => ({
-    chips: document.querySelectorAll('[data-testid="stChatInput"] [data-testid="stFileChip"]').length,
-    waiting: document.querySelector('[role="status"][id="documate-upload-selection"]')?.textContent || "",
-    ready: document.querySelector('.dm-upload-summary')?.textContent || "",
-  }));
+  const summary = await tab.playwright.evaluate(() => {
+    const feedback = document.getElementById("documate-upload-selection");
+    const bounds = feedback?.getBoundingClientRect();
+    return {
+      chips: document.querySelectorAll('[data-testid="stChatInput"] [data-testid="stFileChip"]').length,
+      waiting: feedback?.textContent || "",
+      ready: document.querySelector('.dm-upload-summary')?.textContent || "",
+      besideComposer: Boolean(feedback?.closest('[data-testid="stChatInput"]')),
+      feedbackVisible: Boolean(bounds && bounds.top >= 0 && bounds.bottom <= window.innerHeight
+        && bounds.left >= 0 && bounds.right <= window.innerWidth),
+    };
+  });
   assert(summary.chips === waiting + rejected, `Unexpected native file selection: ${JSON.stringify(summary)}`);
   if (rejected) {
     assert(summary.waiting.includes(`선택 오류 ${rejected}개`),
       `Rejected file is presented as ready to send: ${JSON.stringify(summary)}`);
   }
-  assert(summary.waiting.includes(waiting ? `전송 대기 ${waiting}개` : rejected ? "파일 옆의 오류" : "새 파일은 +로 추가"),
+  assert(waiting || rejected
+    ? summary.waiting.includes(waiting ? `전송 대기 ${waiting}개` : "오류가 있는 파일을 제거")
+    : summary.waiting === "",
     `Selected files lack a distinct waiting state: ${JSON.stringify(summary)}`);
+  if (waiting || rejected) assert(summary.besideComposer && summary.feedbackVisible,
+    `Attachment feedback is detached from the visible composer: ${JSON.stringify(summary)}`);
   assert(summary.ready.includes(`검색 가능 ${ready}개`),
     `Server-ready files are not distinguished: ${JSON.stringify(summary)}`);
   return { check: "selected versus searchable attachments", ...summary };
@@ -33,7 +44,7 @@ export async function composerText(tab, expected) {
   return { check: "composer text", value: actual };
 }
 
-/** Run with the code-context fixture's evidence dialog open. */
+/** Run with the code-context fixture's evidence dialog and 연결된 답변 보기 open. */
 export async function literalCodeContext(tab, expectedCode) {
   const context = await tab.playwright.locator(".dm-source-answer-context").evaluate(el => ({
     code: [...el.querySelectorAll("code")].map(item => item.textContent),
@@ -357,12 +368,21 @@ export async function evidencePopoverLayout(tab) {
   const layout = await tab.playwright.getByRole("dialog").evaluate(el => {
     const rect = el.getBoundingClientRect();
     const title = el.querySelector('.dm-source-title').getBoundingClientRect();
+    const excerpt = el.querySelector('.dm-source-code, .dm-source-markdown, [data-testid="stText"], [data-testid="stCode"]');
+    const excerptRect = excerpt?.getBoundingClientRect();
+    const context = el.querySelector('.dm-source-answer-context');
+    const contextPanel = context?.closest('details');
     return {
       left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom,
       viewportWidth: innerWidth, viewportHeight: innerHeight,
       titleVisible: title.top >= rect.top && title.bottom <= rect.bottom,
       width: el.clientWidth, scrollWidth: el.scrollWidth,
       detailsCollapsed: [...el.querySelectorAll('details')].every(details => !details.open),
+      originalVisible: Boolean(excerptRect && excerptRect.bottom > rect.top
+        && excerptRect.top < rect.bottom - 20),
+      originalBeforeContext: !context || Boolean(excerptRect && contextPanel
+        && excerptRect.bottom <= contextPanel.getBoundingClientRect().top + 1),
+      contextCollapsed: !context || contextPanel?.open === false,
     };
   });
   assert(layout.left >= 0 && layout.right <= layout.viewportWidth
@@ -371,7 +391,9 @@ export async function evidencePopoverLayout(tab) {
   assert(layout.scrollWidth <= layout.width + 1,
     `Evidence panel overflows horizontally: ${JSON.stringify(layout)}`);
   assert(layout.detailsCollapsed, "Collection metadata or raw source should start collapsed");
-  return { check: "evidence panel fits viewport with collapsed metadata", ...layout };
+  assert(layout.originalVisible && layout.originalBeforeContext && layout.contextCollapsed,
+    `Original source is displaced by the answer context: ${JSON.stringify(layout)}`);
+  return { check: "source visible before collapsed context in evidence panel", ...layout };
 }
 
 /** Run after opening a source with Enter and after Tab / Shift+Tab. */

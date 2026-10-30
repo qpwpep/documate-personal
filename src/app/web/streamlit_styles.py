@@ -40,8 +40,9 @@ header[data-testid="stHeader"] {
 
 /* Streamlit translates the collapsed sidebar off screen without removing its
    children from keyboard navigation. Keep only the separate opener available. */
-[data-testid="stSidebar"][data-collapsed="true"] {
-    visibility: hidden;
+[data-testid="stSidebar"][data-collapsed="true"],
+[data-testid="stSidebar"][data-collapsed="true"] * {
+    visibility: hidden !important;
 }
 
 [data-testid="stSidebar"] [data-testid="stSidebarContent"] {
@@ -147,13 +148,16 @@ button[data-testid="stExpandSidebarButton"]:hover {
 }
 
 .dm-sidebar-brand {
+    align-items: center;
     border-bottom: 1px solid var(--dm-strong-divider);
-    margin-bottom: 0.9rem;
-    padding-bottom: 0.95rem;
+    display: flex;
+    gap: 0.65rem;
+    margin-bottom: 0.35rem;
+    padding-bottom: 0.6rem;
 }
 
 .dm-sidebar-brand .dm-mark {
-    margin-bottom: 0.7rem;
+    flex-shrink: 0;
 }
 
 .dm-sidebar-brand h2 {
@@ -162,13 +166,6 @@ button[data-testid="stExpandSidebarButton"]:hover {
     letter-spacing: 0;
     line-height: 1.3;
     margin: 0;
-}
-
-.dm-sidebar-brand p {
-    color: var(--dm-muted);
-    font-size: 0.9rem;
-    line-height: 1.5;
-    margin: 0.35rem 0 0;
 }
 
 .dm-sidebar-section {
@@ -229,6 +226,21 @@ button[data-testid="stExpandSidebarButton"]:hover {
     margin: 0;
 }
 
+[data-testid="stSidebar"] .dm-slack-feedback {
+    color: var(--dm-muted);
+    font-size: 0.875rem;
+    line-height: 1.5;
+    margin: 0;
+    overflow-wrap: anywhere;
+}
+
+[data-testid="stSidebar"] .dm-slack-feedback[data-slack-invalid="true"] {
+    background: var(--dm-error-bg);
+    border-radius: 0.5rem;
+    color: var(--dm-error-text);
+    padding: 0.65rem;
+}
+
 .dm-intro {
     margin: 0.5rem auto;
     max-width: 780px;
@@ -285,7 +297,8 @@ button[data-testid="stExpandSidebarButton"]:hover {
 }
 
 div.stButton > button,
-div.stLinkButton > a {
+div.stLinkButton > a,
+[class*="-stop_response"] button {
     background: var(--dm-panel);
     border: 1px solid var(--dm-border);
     border-radius: 0.9rem;
@@ -299,7 +312,8 @@ div.stLinkButton > a {
 }
 
 div.stButton > button:hover,
-div.stLinkButton > a:hover {
+div.stLinkButton > a:hover,
+[class*="-stop_response"] button:hover {
     background: var(--dm-button-hover-bg);
     border-color: var(--dm-button-hover-border);
     color: var(--dm-text);
@@ -307,13 +321,33 @@ div.stLinkButton > a:hover {
 }
 
 div.stButton > button:focus,
-div.stLinkButton > a:focus-visible {
+div.stLinkButton > a:focus-visible,
+[class*="-stop_response"] button:focus-visible {
     border-color: var(--dm-accent);
     box-shadow: 0 0 0 0.14rem var(--dm-focus-ring);
 }
 
+/* The interruption button's help tooltip inserts a wrapper between stButton
+   and button. Pair its native label with the independent DocuMate theme. */
+[class*="-stop_response"] button * {
+    color: var(--dm-text) !important;
+    -webkit-text-fill-color: var(--dm-text) !important;
+}
+
+a[href^="#dm-citation-"]:focus-visible {
+    border-radius: 0.2rem;
+    outline: 2px solid var(--dm-accent);
+    outline-offset: 3px;
+}
+
 /* Recommendation text is the question itself, so it must remain readable on
    narrow screens instead of using Streamlit's single-line button ellipsis. */
+[class*="-selected_upload_prompts"]:not([data-selected-files="true"]),
+[class*="-selected_upload_prompts"][hidden],
+[class*="-default_prompts"][hidden] {
+    display: none !important;
+}
+
 [class*="-quick_prompt_"] button [data-testid="stMarkdownContainer"],
 [class*="-quick_prompt_"] button [data-testid="stMarkdownContainer"] p {
     overflow: visible;
@@ -696,6 +730,26 @@ div.stLinkButton > a:focus-visible {
     background: transparent !important;
     overflow: visible !important;
     padding-bottom: 1.1rem;
+}
+
+#documate-upload-selection {
+    background: var(--dm-chat-input-bg);
+    border: 1px solid var(--dm-border);
+    border-radius: 0.65rem;
+    color: var(--dm-text);
+    font-size: 0.875rem;
+    line-height: 1.5;
+    margin: 0 0 0.5rem;
+    overflow-wrap: anywhere;
+    padding: 0.6rem 0.75rem;
+}
+
+#documate-upload-selection:empty {
+    display: none;
+}
+
+#documate-upload-selection[data-invalid="true"] {
+    border-color: var(--dm-accent);
 }
 
 [data-testid="stBottom"] > div {
@@ -1100,11 +1154,17 @@ def configure_page(theme_mode: str) -> None:
     )
 
 
-def render_conversation_header(title: str, *, attachment_count: int | None, read_only: bool) -> None:
-    if attachment_count is None:
+def render_conversation_header(
+    title: str, *, attachment_count: int | None, read_only: bool, attachment_error: bool = False,
+) -> None:
+    if attachment_error:
+        status = "첨부 준비 실패"
+        if attachment_count is not None:
+            status += f" · 기존 자료 {attachment_count}개 유지"
+    elif attachment_count is None:
         status = "첨부 연결 확인 중"
     else:
-        status = f"{'이전 첨부 기록' if read_only else '검색 가능 자료'} {attachment_count}개"
+        status = f"{'이전 첨부 기록' if read_only else '첨부 자료'} {attachment_count}개"
     if read_only:
         status = "읽기 전용 · " + status
     st.markdown(

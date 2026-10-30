@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -13,6 +14,7 @@ from src.core.answer_schema import export_answer_text, finalize_answer, text_doc
 from src.core.answer_export import build_answer_export_operation
 from src.infra.tools.save_text import build_save_text_tool
 from src.runtime.nodes.actions.receipts import build_save_receipt
+from tests.app.streamlit_support import finish_chat_response
 
 
 APP = Path(__file__).resolve().parents[2] / "src/app/web/streamlit_app.py"
@@ -32,22 +34,6 @@ class HTTPBytes:
         pass
 
 
-class InterruptedHTTPBytes(HTTPBytes):
-    def __init__(self, before_interrupt=None):
-        super().__init__(b"")
-        self.before_interrupt = before_interrupt
-
-    def stream(self, *_args, **_kwargs):
-        from streamlit.runtime.scriptrunner import RerunException
-        from streamlit.runtime.scriptrunner_utils.script_requests import RerunData
-
-        yield b'event: stage_started\ndata: {"stage": "planner"}\n\n'
-        if self.before_interrupt is not None:
-            self.before_interrupt()
-        # A browser interaction interrupts Streamlit at an output yield point.
-        raise RerunException(RerunData())
-
-
 class RequestsObserved(list):
     def __init__(self):
         super().__init__()
@@ -62,11 +48,12 @@ class RequestsObserved(list):
         self.before_manifest_failure = None
         self.upload_syncs = []
         self.missing_slots = []
-        self.interrupt_response = False
-        self.before_interrupt = None
         self.active_snapshot = None
         self.manifest_reads = 0
         self.manifest_reads_at_submission = 0
+        self.response_release = None
+        self.response_started = threading.Event()
+        self.response_gates = []
 
 
 @pytest.fixture
@@ -146,8 +133,18 @@ def chat_http(monkeypatch, tmp_path, browser_storage):
                              problem={"code": "save_failed", "stage": "action_postprocess", "message": "파일을 만들지 못했습니다.", "next_action": "retry_later"})
             result.headers["Content-Type"] = "text/event-stream; charset=utf-8"
             result.raw = HTTPBytes(("event: final_response\ndata: " + json.dumps(final, ensure_ascii=False) + "\n\n").encode())
-            if submissions.interrupt_response:
-                result.raw = InterruptedHTTPBytes(submissions.before_interrupt)
+            if submissions.response_release is not None:
+                body = result.raw.body
+                release = submissions.response_release
+                submissions.response_gates.append(release)
+
+                class PendingHTTPBytes(HTTPBytes):
+                    def stream(self, *_args, **_kwargs):
+                        submissions.response_started.set()
+                        assert release.wait(10), "test response was not released"
+                        yield body
+
+                result.raw = PendingHTTPBytes(body)
         elif request.method == "POST" and path.endswith("/save"):
             submissions.exports.append(path)
             if submissions.export_failure == "network":
@@ -170,15 +167,89 @@ def chat_http(monkeypatch, tmp_path, browser_storage):
         return result
 
     monkeypatch.setattr(requests.adapters.HTTPAdapter, "send", send)
-    return submissions
+    yield submissions
+    for gate in submissions.response_gates:
+        gate.set()
+
+
+def test_pending_question_allows_draft_and_navigation_without_replaying(chat_http):
+    app = AppTest.from_file(APP, default_timeout=10).run()
+    chat_http.response_release = threading.Event()
+    try:
+        app.chat_input[0].set_value("답변을 기다릴 질문").run()
+        first = app.session_state["active_conversation_id"]
+        conversation = app.session_state["conversations"][first]
+        assert chat_http.response_started.wait(1)
+        assert conversation.is_busy
+        assert not app.chat_input[0].disabled
+        assert not app.button(key="documate_new_chat").disabled
+        app.chat_input[0].set_value("기다리면서 쓴 다음 질문").run()
+        assert len(chat_http) == 1
+        app.button(key="documate_new_chat").click().run()
+        second = app.session_state["active_conversation_id"]
+        assert first != second
+        assert conversation.is_busy
+        assert not any("답변: 답변을 기다릴 질문" in item.value for item in app.markdown)
+        release = chat_http.response_release
+        chat_http.response_release = None
+        app.chat_input[0].set_value("다른 대화에서 독립적으로 보낸 질문").run()
+        second_task = app.session_state["conversations"][second].chat_task
+        if second_task is not None:
+            assert second_task.finished.wait(2)
+            app.run()
+        assert any("답변: 다른 대화에서 독립적으로 보낸 질문" in item.value for item in app.markdown)
+        next(item for item in app.selectbox if item.label == "대화 선택").set_value(first).run()
+        assert app.chat_input[0].proto.value == "기다리면서 쓴 다음 질문"
+        assert len(chat_http) == 2
+        task = conversation.chat_task
+        release.set()
+        assert task.finished.wait(2)
+        app.run()
+        assert not app.exception
+        assert not conversation.is_busy
+        assert conversation.draft.text == "기다리면서 쓴 다음 질문"
+        assert any("답변: 답변을 기다릴 질문" in item.value for item in app.markdown)
+        assert not any("답변: 다른 대화에서 독립적으로 보낸 질문" in item.value for item in app.markdown)
+        assert len(chat_http) == 2
+    finally:
+        for gate in chat_http.response_gates:
+            gate.set()
+
+
+def test_completion_keeps_the_mounted_composer_without_prefilling_stale_python_text(chat_http):
+    app = AppTest.from_file(APP, default_timeout=10).run()
+    release = threading.Event()
+    chat_http.response_release = release
+    app.chat_input[0].set_value("대기 중 브라우저에서 초안을 작성할 질문").run()
+    conversation = app.session_state["conversations"][app.session_state["active_conversation_id"]]
+    task = conversation.chat_task
+    assert chat_http.response_started.wait(1)
+    assert not conversation.draft.needs_restore
+    # Until blur or navigation, browser typing is newer than Python's draft.
+    # A response update must not send an empty prefill to that mounted widget.
+    assert conversation.draft.text == ""
+    release.set()
+    assert task.finished.wait(2)
+    app.run()
+    assert not app.exception
+    assert not app.chat_input[0].proto.set_value
+    assert not conversation.draft.needs_restore
+    assert any("답변: 대기 중 브라우저에서 초안을 작성할 질문" in item.value for item in app.markdown)
 
 
 def test_interrupted_response_restores_navigation_and_retains_question_without_replay(chat_http):
     app = AppTest.from_file(APP, default_timeout=10).run()
     prompt = "  수신 중단 뒤에도 남길 질문\n두 번째 줄  "
-    chat_http.interrupt_response = True
+    chat_http.response_release = threading.Event()
 
     app.chat_input[0].set_value(prompt).run()
+    conversation = app.session_state["conversations"][app.session_state["active_conversation_id"]]
+    task = conversation.chat_task
+    assert chat_http.response_started.wait(1)
+    app.button(key=conversation.widget_key("stop_response")).click().run()
+    chat_http.response_release.set()
+    assert task.finished.wait(2)
+    app.run()
 
     assert not app.exception
     assert [item["query"] for item in chat_http] == [prompt]
@@ -194,22 +265,25 @@ def test_interrupted_response_restores_navigation_and_retains_question_without_r
     assert app.chat_input[0].proto.value == prompt
     app.run()
     assert len(chat_http) == 1
-    chat_http.interrupt_response = False
+    chat_http.response_release = None
     reads_before_next_question = chat_http.manifest_reads
-    app.chat_input[0].set_value("명시적으로 보낸 다음 질문").run()
+    finish_chat_response(app.chat_input[0].set_value("명시적으로 보낸 다음 질문").run())
     assert [item["query"] for item in chat_http] == [prompt, "명시적으로 보낸 다음 질문"]
     assert chat_http.manifest_reads > reads_before_next_question
     assert any("답변: 명시적으로 보낸 다음 질문" in item.value for item in app.markdown)
 
 
-def test_reload_during_response_retains_submitted_question_without_replay(chat_http, browser_storage):
+@pytest.mark.parametrize("snapshot_stage", ["queued", "receiving"])
+def test_reload_during_response_retains_submitted_question_without_replay(chat_http, browser_storage, snapshot_stage):
     app = AppTest.from_file(APP, default_timeout=10).run()
     prompt = "새로고침 직전에 보낸 질문"
-    chat_http.interrupt_response = True
+    chat_http.response_release = threading.Event()
     app.chat_input[0].set_value(prompt).run()
-    # Restore the snapshot saved before the HTTP stream was started, as a tab
-    # reload would. No completed or caught-interruption render is available.
-    browser_storage.snapshot = chat_http.active_snapshot
+    conversation = app.session_state["conversations"][app.session_state["active_conversation_id"]]
+    task = conversation.chat_task
+    assert chat_http.response_started.wait(1)
+    if snapshot_stage == "queued":
+        browser_storage.snapshot = chat_http.active_snapshot
 
     restored = AppTest.from_file(APP, default_timeout=10).run()
 
@@ -222,39 +296,34 @@ def test_reload_during_response_retains_submitted_question_without_replay(chat_h
     next(item for item in restored.button if item.label == "질문 수정").click().run()
     assert restored.chat_input[0].proto.value == prompt
     assert len(chat_http) == 1
+    task.stopped.set()
+    chat_http.response_release.set()
+    assert task.finished.wait(2)
 
 
-def test_interrupt_event_recovers_before_the_old_stream_unwinds(chat_http, browser_storage):
-    import streamlit as st
-
+def test_late_response_after_stopping_cannot_replace_the_next_answer(chat_http):
     app = AppTest.from_file(APP, default_timeout=10).run()
-    before_unwind = {}
-
-    def interrupt_from_browser():
-        # Fast reruns deliver the new runner's component callback while the
-        # previous runner is still waiting for HTTP. Deliver that event before
-        # raising the old runner's control exception, without sleeps or races.
-        conversation_id = browser_storage.data["conversation_id"]
-        st.session_state["documate_browser_state"] = {"interrupt": {
-            "conversation_id": conversation_id,
-            "operation_id": browser_storage.data["operation_id"],
-            "nonce": 1,
-        }}
-        browser_storage.callbacks["on_interrupt_change"]()
-        conversation = st.session_state["conversations"][conversation_id]
-        before_unwind.update(busy=conversation.is_busy,
-                             interrupted=conversation.has_interrupted_response)
-
-    chat_http.interrupt_response = True
-    chat_http.before_interrupt = interrupt_from_browser
+    release = threading.Event()
+    chat_http.response_release = release
     app.chat_input[0].set_value("이전 스트림 종료 전에 복구할 질문").run()
-
-    assert before_unwind == {"busy": False, "interrupted": True}
+    conversation = app.session_state["conversations"][app.session_state["active_conversation_id"]]
+    task = conversation.chat_task
+    assert chat_http.response_started.wait(1)
+    app.button(key=conversation.widget_key("stop_response")).click().run()
+    assert not conversation.is_busy
+    assert not task.finished.is_set()
+    chat_http.response_release = None
+    finish_chat_response(app.chat_input[0].set_value("명시적으로 보낸 다음 질문").run())
+    release.set()
+    assert task.finished.wait(2)
+    app.run()
     assert not app.exception
     assert len([item for item in app.warning if "응답 수신이 중단" in item.value]) == 1
     assert not app.button(key="documate_new_chat").disabled
     assert not app.chat_input[0].disabled
-    assert len(chat_http) == 1
+    assert len(chat_http) == 2
+    assert not any("답변: 이전 스트림 종료 전에 복구할 질문" in item.value for item in app.markdown)
+    assert any("답변: 명시적으로 보낸 다음 질문" in item.value for item in app.markdown)
 
 
 def test_interrupted_validation_cannot_overwrite_the_next_question(chat_http, browser_storage):
@@ -281,7 +350,7 @@ def test_interrupted_validation_cannot_overwrite_the_next_question(chat_http, br
 
     chat_http.upload_manifest_failure = "이전 요청의 연결 확인 실패"
     chat_http.before_manifest_failure = interrupt_and_submit_next_question
-    app.chat_input[0].set_value("연결 확인 중 중단한 이전 질문").run()
+    finish_chat_response(app.chat_input[0].set_value("연결 확인 중 중단한 이전 질문").run())
 
     assert not app.exception
     assert [item["query"] for item in chat_http] == ["중단 후 명시적으로 보낸 새 질문"]
@@ -313,7 +382,7 @@ def test_suggested_question_prefills_then_sends_only_on_explicit_submission(chat
     assert not chat_http
     assert not app.chat_message
     assert app.chat_input[0].proto.value == prompt
-    app.chat_input[0].set_value(prompt).run()
+    finish_chat_response(app.chat_input[0].set_value(prompt).run())
     app.run()
     assert [item["query"] for item in chat_http] == [prompt]
     assert any("답변: " + prompt in item.value for item in app.markdown)
@@ -323,7 +392,7 @@ def test_submitted_input_preserves_boundary_whitespace_for_exact_copy(chat_http)
     app = AppTest.from_file(APP, default_timeout=10).run()
     prompt = "  아래 원문을 공백과 개행까지 그대로 복사해줘:\n    value = 1\n\n"
 
-    app.chat_input[0].set_value(prompt).run()
+    finish_chat_response(app.chat_input[0].set_value(prompt).run())
     app.run()
 
     assert not app.exception
@@ -332,11 +401,11 @@ def test_submitted_input_preserves_boundary_whitespace_for_exact_copy(chat_http)
 
 def test_examples_are_stable_and_require_confirmed_attachments(chat_http):
     app = AppTest.from_file(APP, default_timeout=10).run()
-    initial = [item.label for item in app.button if "quick_prompt_" in (item.key or "")]
+    initial = [item.label for item in app.button if any((item.key or "").endswith(f"quick_prompt_{index}") for index in range(4))]
     assert len(initial) == 4
     assert not any(word in prompt for prompt in initial for word in ("첨부", "업로드", "방금", "Slack", "저장"))
     app.button(key="documate_new_chat").click().run()
-    assert [item.label for item in app.button if "quick_prompt_" in (item.key or "")] == initial
+    assert [item.label for item in app.button if any((item.key or "").endswith(f"quick_prompt_{index}") for index in range(4))] == initial
 
     chat_http.upload_files = [{
         "file_id": "sample", "name": "sample.py", "size_bytes": 10,
@@ -357,13 +426,13 @@ def test_current_conversation_and_searchable_files_are_visible_in_main_header(ch
     }]
     app = AppTest.from_file(APP, default_timeout=10).run()
     prompt = "첨부한 함수의 반환값을 설명해줘"
-    app.chat_input[0].set_value(prompt).run()
+    finish_chat_response(app.chat_input[0].set_value(prompt).run())
     app.run()
 
     assert not app.exception
     header = next(item.value for item in app.markdown if 'class="dm-topbar"' in item.value)
     assert prompt in header
-    assert "검색 가능 자료 1개" in header
+    assert "첨부 자료 1개" in header
     assert not any("다음 질문부터" in item.value for item in app.caption)
     assert any("실제 사용한 자료는 답변의 근거에서 확인" in item.value for item in app.caption)
 
@@ -401,7 +470,7 @@ def test_incomplete_slack_setting_does_not_block_regular_question(chat_http):
     app = AppTest.from_file(APP, default_timeout=10).run()
     assert not app.exception
     next(item for item in app.radio if item.label == "수신자 유형").set_value("채널").run()
-    app.chat_input[0].set_value("NumPy reshape를 설명해줘").run()
+    finish_chat_response(app.chat_input[0].set_value("NumPy reshape를 설명해줘").run())
 
     assert not app.exception
     assert [item["query"] for item in chat_http] == ["NumPy reshape를 설명해줘"]
@@ -416,7 +485,7 @@ def test_sending_held_question_clears_recovery_controls_and_does_not_replay(chat
     app = AppTest.from_file(APP, default_timeout=10).run()
     app.session_state["conversations"][app.session_state["active_conversation_id"]].saved_prompt = "보류했던 질문"
     app.run()
-    app.button(key="documate_send_saved_upload_prompt").click().run()
+    finish_chat_response(app.button(key="documate_send_saved_upload_prompt").click().run())
 
     assert not app.exception
     assert [item["query"] for item in chat_http] == ["보류했던 질문"]
@@ -442,7 +511,7 @@ def test_file_only_upload_confirms_readiness_and_explicitly_continues_only_missi
     chat_http.missing_slots = missing_slots
     app = AppTest.from_file(APP, default_timeout=10).run()
     prompt = "  첨부한 코드를 요약해줘.\n함수도 설명해줘.  "
-    app.chat_input[0].set_value(prompt).run()
+    finish_chat_response(app.chat_input[0].set_value(prompt).run())
     assert not any(item.label == "이전 질문 계속하기" for item in app.button)
     conversation = app.session_state["conversations"][app.session_state["active_conversation_id"]]
     staged = conversation.client.stage_files(
@@ -453,7 +522,8 @@ def test_file_only_upload_confirms_readiness_and_explicitly_continues_only_missi
     app.run()
 
     assert not app.exception
-    assert any("자료 준비 완료 · 1개" in item.value for item in app.success)
+    attachments = next(item for item in app.expander if item.label == "첨부 1개 · 검색 가능")
+    assert not attachments.proto.expanded
     assert any("sample.py" in item.value for item in app.caption)
     assert not any("다음 질문부터" in item.value for item in app.caption)
     assert [item["query"] for item in chat_http] == [prompt]
@@ -465,7 +535,7 @@ def test_file_only_upload_confirms_readiness_and_explicitly_continues_only_missi
 
     draft = "따로 작성 중인 다음 질문"
     conversation.draft.edit(draft)
-    app.button(key="documate_continue_upload_question").click().run()
+    finish_chat_response(app.button(key="documate_continue_upload_question").click().run())
     assert not app.exception
     assert [item["query"] for item in chat_http] == [prompt, prompt]
     assert chat_http[-1]["uploads"] == {"epoch": "epoch-" + conversation.id, "revision": 1}
@@ -475,8 +545,9 @@ def test_file_only_upload_confirms_readiness_and_explicitly_continues_only_missi
     assert len(chat_http) == 2
 
 
+@pytest.mark.parametrize("recovery", ["파일 다시 선택", "기존 자료로 계속"])
 @pytest.mark.parametrize("prompt", ["  이 노트북을 요약해줘.\n근거도 보여줘.  ", None], ids=["with-question", "file-only"])
-def test_failed_attachment_can_be_replaced_without_losing_question_or_existing_files(chat_http, tmp_path, prompt):
+def test_failed_attachment_can_be_replaced_without_losing_question_or_existing_files(chat_http, tmp_path, prompt, recovery):
     from src.app.web.streamlit_state import PendingUpload
 
     existing = {
@@ -503,14 +574,16 @@ def test_failed_attachment_can_be_replaced_without_losing_question_or_existing_f
     assert not chat_http
     assert len(chat_http.upload_syncs) == 1
     assert conversation.pending_upload.had_failure
-    label = "질문과 첨부 수정" if prompt else "첨부 수정"
-    assert any(item.label == label for item in app.button)
+    assert any(item.label == recovery for item in app.button)
+    assert any("첨부 준비 실패" in item.value for item in app.markdown)
+    assert not any("첨부 연결 확인 중" in item.value for item in app.markdown)
+    assert app.chat_input[0].disabled
     assert any("첨부 변경을 완료하지 못했습니다" in item.value for item in app.markdown)
     assert not any("반영 확인 대기" in item.value for item in app.markdown)
     assert not any("Expecting value" in item.value for item in app.error)
     details = next(item for item in app.expander if "오류 상세" in item.label)
     assert not details.proto.expanded
-    next(item for item in app.button if item.label == label).click().run()
+    next(item for item in app.button if item.label == recovery).click().run()
 
     assert not app.exception
     assert conversation.pending_upload is None
@@ -586,7 +659,7 @@ def test_failed_upload_review_keeps_question_and_hides_latest_technical_error(ch
     assert not details.proto.expanded
     assert [item.value for item in details.text] == [raw_error]
     assert any(prompt.strip() in item.value for item in app.info)
-    assert any(item.label == "질문과 첨부 수정" for item in app.button)
+    assert any(item.label == "파일 다시 선택" for item in app.button)
     app.run()
     assert conversation.pending_upload is pending
     assert not chat_http
@@ -609,23 +682,23 @@ def test_held_upload_question_can_return_to_editable_composer_without_sending(ch
     assert not app.chat_input[0].disabled
     assert app.chat_input[0].proto.accept_file
     assert not chat_http
-    app.chat_input[0].set_value("수정한 질문").run()
+    finish_chat_response(app.chat_input[0].set_value("수정한 질문").run())
     app.run()
     assert [item["query"] for item in chat_http] == ["수정한 질문"]
 
 
 def test_completed_answer_offers_direct_txt_save(chat_http):
     app = AppTest.from_file(APP, default_timeout=10).run()
-    app.chat_input[0].set_value("NumPy reshape를 설명해줘").run()
+    finish_chat_response(app.chat_input[0].set_value("NumPy reshape를 설명해줘").run())
 
     assert not app.exception
-    assert any(item.label == "TXT 저장" for item in app.button)
+    assert any(item.label == "TXT 파일 만들기" for item in app.button)
 
 
 def test_prepared_txt_offers_download_instead_of_saving_the_same_answer_again(chat_http, tmp_path):
     app = AppTest.from_file(APP, default_timeout=10).run()
-    app.chat_input[0].set_value("내려받을 답변").run()
-    next(item for item in app.button if item.label == "TXT 저장").click().run()
+    finish_chat_response(app.chat_input[0].set_value("내려받을 답변").run())
+    next(item for item in app.button if item.label == "TXT 파일 만들기").click().run()
 
     assert not app.exception
     assert any("파일 준비 완료" in item.value and "내려받으세요" in item.value for item in app.success)
@@ -636,7 +709,7 @@ def test_prepared_txt_offers_download_instead_of_saving_the_same_answer_again(ch
     saved = list((tmp_path / "saved").glob("*.txt"))
     assert len(saved) == 1
     assert downloads[0].proto.url.endswith("/download/" + saved[0].name)
-    assert not any(item.label in {"TXT 저장", "저장 다시 시도"} for item in app.button)
+    assert not any(item.label in {"TXT 파일 만들기", "저장 다시 시도"} for item in app.button)
     assert "답변: 내려받을 답변" in saved[0].read_text(encoding="utf-8-sig")
     app.run()
     assert len(chat_http) == 1
@@ -683,21 +756,21 @@ render_chat_history(st.session_state["messages"], "http://localhost:8000", on_sa
     assert not app.success
     warning = "보관 기한이 지났습니다" if verified else "저장 결과를 검증할 수 없습니다"
     assert any(warning in item.value for item in app.warning)
-    label = "TXT 다시 만들기" if verified else "TXT 저장"
+    label = "TXT 다시 만들기" if verified else "TXT 파일 만들기"
     next(item for item in app.button if item.label == label).click().run()
     assert app.session_state["save_requests"] == ["original-answer"]
 
 
 def test_reloaded_answer_can_be_saved_with_the_original_answer_id_without_regeneration(chat_http, tmp_path):
     app = AppTest.from_file(APP, default_timeout=10).run()
-    app.chat_input[0].set_value("새로고침 뒤 저장할 답변").run()
+    finish_chat_response(app.chat_input[0].set_value("새로고침 뒤 저장할 답변").run())
     session_id = chat_http[0]["session_id"]
 
     reloaded = AppTest.from_file(APP, default_timeout=10).run()
     assert not reloaded.exception
     assert len(chat_http) == 1
     assert not chat_http.exports
-    next(item for item in reloaded.button if item.label == "TXT 저장").click().run()
+    next(item for item in reloaded.button if item.label == "TXT 파일 만들기").click().run()
 
     assert not reloaded.exception
     assert any("파일 준비 완료" in item.value for item in reloaded.success)
@@ -712,7 +785,7 @@ def test_reloaded_answer_can_be_saved_with_the_original_answer_id_without_regene
     assert not after_save.exception
     assert any("파일 준비 완료" in item.value for item in after_save.success)
     assert any(item.proto.label == "TXT 다운로드" for item in after_save.get("link_button"))
-    assert not any(item.label == "TXT 저장" for item in after_save.button)
+    assert not any(item.label == "TXT 파일 만들기" for item in after_save.button)
     assert len(chat_http.exports) == 1
     assert len(chat_http) == 1
 
@@ -721,13 +794,13 @@ def test_reloaded_answer_can_be_saved_with_the_original_answer_id_without_regene
 def test_failed_question_can_be_retried_once_without_retyping(chat_http, failure_code):
     chat_http.failure_code = failure_code
     app = AppTest.from_file(APP, default_timeout=10).run()
-    app.chat_input[0].set_value("공식 문서에서 append의 반환값을 설명해줘").run()
+    finish_chat_response(app.chat_input[0].set_value("공식 문서에서 append의 반환값을 설명해줘").run())
     assert not app.exception
     assert app.error
 
     retry = next(item for item in app.button if item.label == "같은 질문 다시 보내기")
     chat_http.failure_code = None
-    retry.click().run()
+    finish_chat_response(retry.click().run())
 
     assert not app.exception
     assert [item["query"] for item in chat_http] == ["공식 문서에서 append의 반환값을 설명해줘"] * 2
@@ -740,8 +813,8 @@ def test_failed_question_can_be_retried_once_without_retyping(chat_http, failure
 def test_only_latest_failed_question_offers_recovery(chat_http):
     chat_http.failure_code = "evidence_insufficient"
     app = AppTest.from_file(APP, default_timeout=10).run()
-    app.chat_input[0].set_value("첫 번째 실패 질문").run()
-    app.chat_input[0].set_value("두 번째 실패 질문").run()
+    finish_chat_response(app.chat_input[0].set_value("첫 번째 실패 질문").run())
+    finish_chat_response(app.chat_input[0].set_value("두 번째 실패 질문").run())
 
     retries = [item for item in app.button if item.label == "같은 질문 다시 보내기"]
     assert len(retries) == 1
@@ -754,7 +827,7 @@ def test_editing_failed_question_prefills_without_sending_then_submits_the_revis
     chat_http.failure_code = "evidence_insufficient"
     app = AppTest.from_file(APP, default_timeout=10).run()
     original = "Python append와 extend를 설명해줘"
-    app.chat_input[0].set_value(original).run()
+    finish_chat_response(app.chat_input[0].set_value(original).run())
 
     next(item for item in app.button if item.label == "질문 수정").click().run()
 
@@ -763,7 +836,7 @@ def test_editing_failed_question_prefills_without_sending_then_submits_the_revis
     assert app.chat_input[0].proto.value == original
     chat_http.failure_code = None
     revised = "Python 공식 문서에서 list.append만 설명해줘"
-    app.chat_input[0].set_value(revised).run()
+    finish_chat_response(app.chat_input[0].set_value(revised).run())
 
     assert not app.exception
     assert [item["query"] for item in chat_http] == [original, revised]
@@ -880,10 +953,10 @@ def test_partial_answer_with_slack_receipt_does_not_offer_whole_request_replay(d
 @pytest.mark.parametrize("failure", ["network", "http"])
 def test_save_failure_preserves_answer_and_retries_same_target_once(chat_http, failure):
     app = AppTest.from_file(APP, default_timeout=10).run()
-    app.chat_input[0].set_value("원래 저장할 답변").run()
+    finish_chat_response(app.chat_input[0].set_value("원래 저장할 답변").run())
     before = app.session_state["conversations"][app.session_state["active_conversation_id"]].messages[-1]["result"]
     chat_http.export_failure = failure
-    next(item for item in app.button if item.label == "TXT 저장").click().run()
+    next(item for item in app.button if item.label == "TXT 파일 만들기").click().run()
     assert not app.exception
     assert app.error
     assert any("답변: 원래 저장할 답변" in item.value for item in app.markdown)
@@ -904,9 +977,9 @@ def test_save_failure_preserves_answer_and_retries_same_target_once(chat_http, f
 
 def test_natural_save_failure_shows_only_latest_success_after_direct_retry(chat_http):
     app = AppTest.from_file(APP, default_timeout=10).run()
-    app.chat_input[0].set_value("원래 답변").run()
+    finish_chat_response(app.chat_input[0].set_value("원래 답변").run())
     chat_http.natural_save_failure = True
-    app.chat_input[0].set_value("방금 답변을 출처와 함께 txt 파일로 저장해줘").run()
+    finish_chat_response(app.chat_input[0].set_value("방금 답변을 출처와 함께 txt 파일로 저장해줘").run())
     assert not app.exception
     assert any("파일 저장 실패" in item.value for item in app.error)
     assert not any("server-private-path" in item.value for item in app.error)

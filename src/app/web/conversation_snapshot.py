@@ -25,6 +25,7 @@ class StoredConversation(BaseModel):
     draft: StoredDraft
     saved_prompt: str | None = None
     pending_prompt: str | None = None
+    receiving_response: bool = False
     slack_drafts: dict[str, str] = Field(default_factory=dict)
     confirmed_epoch: str | None = None
     preserved_manifest: UploadManifest | None = None
@@ -60,6 +61,7 @@ def dump_conversations(conversations: list[Conversation], active_id: str) -> str
             pending_prompt=(conversation.pending_request.prompt
                             if conversation.pending_request is not None and conversation.pending_request.kind == "chat"
                             else None),
+            receiving_response=conversation.chat_task is not None,
             confirmed_epoch=conversation.confirmed_epoch,
             preserved_manifest=conversation.preserved_manifest,
             expired=conversation.expired,
@@ -82,6 +84,8 @@ def load_conversations(snapshot: str, *, fastapi_url: str) -> tuple[dict[str, Co
                 {"role": "user", "content": item.pending_prompt},
                 {"role": "assistant", "result": None, "interrupted": True},
             ])
+        elif item.receiving_response and messages and messages[-1]["role"] == "user":
+            messages.append({"role": "assistant", "result": None, "interrupted": True})
         conversations[conversation_id] = Conversation(
             id=conversation_id,
             # A cached manifest is display-only until the server confirms its epoch.

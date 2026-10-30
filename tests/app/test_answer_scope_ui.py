@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import pytest
+from markdown_it import MarkdownIt
 from streamlit.testing.v1 import AppTest
 
 from src.core.answer_export import build_answer_export_operation
@@ -18,6 +19,8 @@ from src.core.answer_schema import (
     text_document,
 )
 from src.core.contracts.outcome import TurnResult
+from src.core.documents import DocumentElement, build_snapshot
+from src.core.evidence import build_evidence
 from src.core.llm_errors import make_problem
 from src.runtime.nodes.actions.receipts import build_save_receipt
 from tests.core.test_pending_action_delivery import delivery_tools
@@ -73,6 +76,36 @@ def test_direct_quote_count_is_separate_from_source_connection_count(quote, matc
     assert f"출처가 연결된 내용 1개 · 직접 인용 1개 중 원문 일치 {matched}개" in visible_captions
 
 
+def test_validation_details_explain_usable_scope_before_collapsed_technical_scores():
+    evidence = _evidence("공식 자료의 원문", source_type="official")
+    answer = finalize_answer(AnswerDocument.model_validate({"blocks": [
+        {"type": "paragraph", "content": [{"text": "공식 자료의 원문", "basis": "excerpt", "refs": [evidence.id]}]},
+        {"type": "code", "language": "python", "content": {"text": "print('example')", "basis": "example"}},
+    ]}), [evidence], issues=[ResponseIssue(code="scope_limited", message="다른 버전의 동작은 확인하지 않았습니다.")])
+    answer = answer.model_copy(update={"semantic_validation": SemanticValidation(
+        content_hash=answer.content_hash,
+        evidence_fingerprint=semantic_evidence_fingerprint(answer.citations), threshold=0.8,
+        checks=[SemanticCheck(name="request_fulfilled", probability=0.95)],
+    )})
+    original = answer.model_dump(mode="json")
+    exported = export_answer_text(answer, include_sources=True)
+
+    app = _render(TurnResult(response=answer))
+
+    details = next(item for item in app.expander if item.label == "검증 상세")
+    summary = [item.value for item in details.children.values() if item.type in {"caption", "markdown"}]
+    assert any("출처" in text and "1개" in text for text in summary)
+    assert any("직접 인용" in text and "원문 일치 1개" in text for text in summary)
+    assert any("실행 결과는 확인하지 않았습니다" in text for text in summary)
+    assert any("다른 버전의 동작은 확인하지 않았습니다." in text for text in summary)
+    assert not any("Decisions API" in text or "충족 확률" in text or "임곗값" in text for text in summary)
+    technical = next(item for item in details.expander if item.label == "기술 상세")
+    assert not technical.proto.expanded
+    assert any("충족 확률 0.95" in item.value for item in technical.caption)
+    assert answer.model_dump(mode="json") == original
+    assert export_answer_text(answer, include_sources=True) == exported
+
+
 def test_citations_are_grouped_by_section_without_changing_answer_or_export():
     evidence = _evidence("하나의 출처에서 확인한 두 설명", source_type="official")
     answer = finalize_answer(AnswerDocument.model_validate({"blocks": [
@@ -90,10 +123,47 @@ def test_citations_are_grouped_by_section_without_changing_answer_or_export():
     popovers = app.get("popover")
     assert len(popovers) == 2
     assert [item.proto.popover.label for item in popovers] == ["근거 [1]", "근거 [1]"]
-    for text in ("첫 설명 [1]", "둘째 설명 [1]", "다음 설명 [1]"):
-        assert any(item.value == text for item in app.markdown)
+    source_links = {}
+    for text in ("첫 설명", "둘째 설명", "다음 설명"):
+        markdown = next(item.value for item in app.markdown if item.value.startswith(text))
+        tokens = MarkdownIt().parse(markdown)
+        source_links[text] = next(child.attrGet("href") for token in tokens for child in token.children or []
+                                  if child.type == "link_open")
+    assert source_links["첫 설명"].startswith("#dm-citation-")
+    assert source_links["첫 설명"] == source_links["둘째 설명"]
+    assert source_links["첫 설명"] != source_links["다음 설명"]
     assert answer.model_dump(mode="json") == original
     assert export_answer_text(answer, include_sources=True) == exported
+
+
+def test_repeated_answers_keep_their_own_inline_citation_targets_and_search_fields():
+    captured = "Captured documentation.\n\n" * 45
+    evidence = build_evidence(
+        snapshot=build_snapshot(source_uri="https://docs.example.org/repeated", title="Guide",
+                                media_type="text/markdown", source_type="official", content=captured,
+                                parser="provider", parser_version="1"),
+        element=DocumentElement(element_id="description", kind="paragraph", text=captured),
+    )
+    answer = finalize_answer(text_document("같은 답변", basis="source", refs=[evidence.id]), [evidence])
+    app = AppTest.from_string("""
+import streamlit as st
+from src.app.web.streamlit_chat import render_chat_history
+from src.core.contracts.outcome import TurnResult
+result = TurnResult.model_validate(st.session_state["result"])
+render_chat_history([
+    {"role": "user", "content": "첫 질문"}, {"role": "assistant", "result": result},
+    {"role": "user", "content": "후속 질문"}, {"role": "assistant", "result": result},
+], "http://localhost:8000")
+""", default_timeout=10)
+    app.session_state["result"] = TurnResult(response=answer).model_dump(mode="json")
+
+    app.run()
+
+    assert not app.exception
+    answers = [item.value for item in app.markdown if item.value.startswith("같은 답변")]
+    assert len(answers) == 2
+    assert answers[0] != answers[1]
+    assert len([item for item in app.text_input if item.label == "발췌에서 찾기"]) == 2
 
 
 def test_removed_content_explains_known_scope_and_next_step_before_technical_details():

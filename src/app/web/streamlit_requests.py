@@ -43,6 +43,10 @@ def interrupt_operation(conversation: Conversation, operation_id: str) -> bool:
     conversation.active_submission = None
     conversation.operation_in_progress = False
     conversation.draft.needs_restore = True
+    if conversation.chat_task is not None:
+        conversation.chat_task.stopped.set()
+        conversation.chat_task = None
+        conversation.client.manifest = None
     if submission.kind == "chat":
         if len(conversation.messages) == conversation.operation_message_count:
             conversation.messages.append({"role": "user", "content": submission.prompt})

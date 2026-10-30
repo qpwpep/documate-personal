@@ -1,4 +1,5 @@
 import logging
+from time import monotonic
 from html import escape
 from pathlib import Path
 from typing import Any
@@ -11,7 +12,8 @@ from src.app.client import (
     AnswerExportAPIError,
     UploadAPIError,
 )
-from src.app.web.streamlit_chat import process_chat_prompt, render_chat_history
+from src.app.web.streamlit_chat import render_chat_history
+from src.app.web.chat_response_task import collect_chat_response, start_chat_response
 from src.app.web.streamlit_browser_state import edit_question, render_browser_state, restore_browser_session, restore_composer
 from src.app.web.streamlit_conversations import render_conversation_notice
 from src.app.web.streamlit_requests import (
@@ -35,6 +37,7 @@ from src.app.web.streamlit_state import (
     get_upload_manifest,
     get_pending_upload,
     get_conversation,
+    list_conversations,
     reset_chat_session,
     set_pending_upload,
     switch_conversation,
@@ -65,8 +68,11 @@ def main() -> None:
     if not restore_browser_session():
         return
     ensure_session_state(logger)
+    for existing in list_conversations():
+        collect_chat_response(existing)
     conversation = get_conversation()
-    if get_upload_manifest() is None and get_pending_upload() is None and not conversation.is_read_only:
+    if (get_upload_manifest() is None and get_pending_upload() is None and not conversation.is_read_only
+            and not conversation.is_busy):
         validate_conversation(conversation)
     if conversation.followup_prompt and not conversation.saved_prompt:
         queue_chat(conversation, conversation.followup_prompt)
@@ -83,8 +89,8 @@ def main() -> None:
     busy = queued is not None or conversation.operation_in_progress or auto_upload
     manifest = get_upload_manifest()
     sidebar_inputs = render_sidebar(
-        manifest=manifest, uploads_busy=get_pending_upload() is not None or conversation.is_read_only,
-        interactions_disabled=busy,
+        manifest=manifest, uploads_busy=busy or get_pending_upload() is not None or conversation.is_read_only,
+        interactions_disabled=busy and conversation.chat_task is None,
     )
     if sidebar_inputs.new_chat_requested:
         reset_chat_session(logger)
@@ -98,6 +104,7 @@ def main() -> None:
     render_conversation_header(
         conversation.title, attachment_count=len(manifest.files) if manifest is not None else None,
         read_only=conversation.is_read_only,
+        attachment_error=bool(pending_upload and pending_upload.error),
     )
 
     session_path = get_session_path()
@@ -115,6 +122,8 @@ def main() -> None:
         on_retry=(lambda prompt: queue_chat(conversation, prompt)) if not pending_upload and not conversation.saved_prompt else None,
         on_edit=(lambda prompt: edit_question(conversation, prompt)) if not pending_upload and not conversation.saved_prompt else None,
     )
+    if any(item.chat_task is not None for item in list_conversations()):
+        _render_chat_progress(conversation.id)
     upload_status = st.empty()
     upload_status.empty()
     if conversation.is_read_only or queued is not None or pending_upload is not None or conversation.saved_prompt or manifest is None:
@@ -125,7 +134,8 @@ def main() -> None:
         render_conversation_notice()
         return
     if queued is not None:
-        st.chat_input("처리 중입니다…", disabled=True, key=conversation.widget_key("busy_input"))
+        if queued.kind != "chat":
+            st.chat_input("처리 중입니다…", disabled=True, key=conversation.widget_key("busy_input"))
         _execute_submission(conversation, queued)
         st.rerun()
 
@@ -160,8 +170,9 @@ def main() -> None:
 
     if manifest.files:
         with upload_status.container():
-            st.success(f"자료 준비 완료 · {len(manifest.files)}개")
-            st.caption(" · ".join(item.name for item in manifest.files))
+            with st.expander(f"첨부 {len(manifest.files)}개 · 검색 가능", expanded=False):
+                st.caption(" · ".join(item.name for item in manifest.files))
+                st.caption("실제 사용한 자료는 답변의 근거에서 확인하세요.")
             previous_prompt = get_upload_followup_prompt(conversation)
             if previous_prompt is not None:
                 st.info("첨부한 자료로 이전 질문을 계속할 수 있습니다.")
@@ -169,8 +180,6 @@ def main() -> None:
                 st.button("이전 질문 계속하기", key="documate_continue_upload_question", type="primary",
                           on_click=continue_upload_question, args=(conversation,))
                 st.caption("버튼을 누르면 위 질문을 보냅니다. 입력창에 작성 중인 질문은 유지됩니다.")
-            else:
-                st.caption("이 대화에서 검색할 수 있는 자료입니다. 실제 사용한 자료는 답변의 근거에서 확인하세요.")
 
     saved_prompt = conversation.saved_prompt
     if saved_prompt:
@@ -187,10 +196,9 @@ def main() -> None:
         return
 
     suffixes = enabled_upload_suffixes(docling_enabled=getattr(SETTINGS, "docling_enabled", False))
-    st.caption(f"{' · '.join(sorted(suffixes))} / 최대 {SETTINGS.upload_max_files}개 / 파일당 {SETTINGS.upload_max_file_mib} MiB / 전체 {SETTINGS.upload_max_total_mib} MiB")
-    st.html('<p id="documate-upload-selection" role="status" aria-live="polite">'
-            '새 파일은 +로 추가한 뒤 전송하세요. 파일만 먼저 전송할 수도 있습니다.</p>')
-
+    with st.expander("첨부 형식과 용량 안내", expanded=False):
+        st.caption(f"{' · '.join(sorted(suffixes))} / 최대 {SETTINGS.upload_max_files}개 / 파일당 {SETTINGS.upload_max_file_mib} MiB / 전체 {SETTINGS.upload_max_total_mib} MiB")
+        st.caption("입력창의 +로 파일을 선택한 뒤 전송하세요. 파일만 먼저 전송할 수도 있습니다.")
     restore_composer(conversation)
     chat_submission = st.chat_input(
         "공식 문서나 업로드한 자료에 대해 질문하세요",
@@ -200,6 +208,13 @@ def main() -> None:
         key=conversation.widget_key("chat_input"),
     )
     typed_prompt, attached_files = _split_chat_submission(chat_submission)
+    if conversation.chat_task is not None:
+        # The browser blocks submission while preserving ordinary typing.
+        # A delayed widget event must retain the draft, never queue a request.
+        if typed_prompt is not None:
+            conversation.draft.edit(typed_prompt)
+            st.rerun()
+        return
     if chat_submission is not None:
         conversation.draft.consume()
     prompt = typed_prompt
@@ -265,22 +280,42 @@ def _execute_submission(conversation: Conversation, submission: ChatSubmission |
                 if exc.status_code == 410:
                     conversation.expired = True
             return
-        process_chat_prompt(
-            stream_agent=conversation.client.stream,
-            prompt=submission.prompt,
-            append_user_message=conversation.messages.append,
-            append_assistant_message=conversation.messages.append,
-        )
+        start_chat_response(conversation, submission.prompt, submission.operation_id)
     except (RerunException, StopException):
         # A browser-triggered rerun stops receiving the response, not the
         # server operation. Never replay an utterance or its delivery actions.
         interrupt_operation(conversation, submission.operation_id)
         raise
     finally:
-        if conversation.active_submission is submission:
+        if conversation.active_submission is submission and conversation.chat_task is None:
             conversation.active_submission = None
             conversation.operation_in_progress = False
             conversation.draft.needs_restore = True
+
+
+@st.fragment(run_every=0.5)
+def _render_chat_progress(conversation_id: str) -> None:
+    completed = False
+    for conversation in list_conversations():
+        completed = collect_chat_response(conversation) or completed
+    if completed:
+        st.rerun()
+    conversation = st.session_state["conversations"][conversation_id]
+    task = conversation.chat_task
+    if task is None:
+        st.caption("다른 대화의 답변을 준비하고 있습니다. 대화 목록에서 돌아가 확인할 수 있습니다.")
+        return
+    with st.chat_message("assistant"):
+        elapsed = int(monotonic() - task.started_at)
+        st.markdown(f"**{task.progress}** · {elapsed}초")
+        st.caption("기다리는 동안 다음 질문을 작성하거나 다른 대화를 볼 수 있습니다. 전송과 첨부 변경은 답변이 끝나면 다시 사용할 수 있습니다.")
+        if elapsed >= 30:
+            st.info("응답을 기다리는 시간이 길어지고 있습니다. 다른 대화를 보는 동안에도 처리는 계속됩니다.")
+        if st.button("응답 수신 중단", key=conversation.widget_key("stop_response"),
+                     help="화면의 응답 수신만 중단합니다. 서버 작업은 계속될 수 있습니다."):
+            interrupt_operation(conversation, task.operation_id)
+            st.rerun()
+        st.caption("‘응답 수신 중단’은 서버 작업을 취소하지 않습니다.")
 
 
 def _stage_files(files: list[Any], session_path: Path):
@@ -401,7 +436,12 @@ def _render_pending_upload() -> None:
         return
     title = "첨부 변경을 완료하지 못했습니다" if pending.error else "첨부 변경 준비 중"
     file_status = "변경 미완료" if pending.error else "반영 확인 대기"
-    st.markdown(f'<p class="dm-upload-summary"><strong>{title}</strong></p>', unsafe_allow_html=True)
+    error_attributes = ""
+    if pending.error:
+        operation_id = pending.request.operation_id if pending.request is not None else pending.error
+        error_key = escape(f"{get_conversation().id}:{operation_id}", quote=True)
+        error_attributes = f' tabindex="-1" data-dm-upload-error="{error_key}"'
+    st.markdown(f'<p class="dm-upload-summary"{error_attributes}><strong>{title}</strong></p>', unsafe_allow_html=True)
     for item in pending.files:
         st.markdown(f'<p class="dm-upload-help">{escape(item.name)} · {item.size_bytes / 1024:.1f} KiB · {file_status}</p>', unsafe_allow_html=True)
     if pending.remove:
@@ -412,9 +452,8 @@ def _render_pending_upload() -> None:
         st.error(pending.error)
         if pending.prompt:
             st.info(f"질문은 아직 보내지 않았습니다: {pending.prompt}")
-        edit_label = "질문과 첨부 수정" if pending.prompt else "첨부 수정"
-        st.button(edit_label, key="documate_edit_pending_upload", type="primary", on_click=_edit_pending_upload)
-        st.caption("입력창에서 이번에 사용할 파일을 다시 선택해 주세요. 서버에서 확인한 기존 첨부는 계속 사용할 수 있습니다.")
+        st.button("파일 다시 선택", key="documate_edit_pending_upload", type="primary", on_click=_edit_pending_upload)
+        st.caption("입력창으로 돌아간 뒤 +로 올바른 파일을 선택하세요. 작성한 질문은 유지됩니다.")
         if pending.error_detail:
             with st.expander("오류 상세", expanded=False):
                 st.text(pending.error_detail)
@@ -435,6 +474,13 @@ def _render_pending_upload() -> None:
     elif st.button("첨부 변경 다시 시도" if pending.attempted else "첨부 변경 적용", key="documate_retry_uploads"):
         queue_upload(get_conversation())
         st.rerun()
+    if pending.error:
+        continue_label = "기존 자료로 계속" if pending.base_manifest.files else "첨부 없이 계속"
+        st.button(continue_label, key="documate_cancel_pending_upload", on_click=_edit_pending_upload)
+        st.caption("이번 첨부 변경을 취소하고 서버의 자료 목록을 확인합니다. 질문은 자동으로 보내지 않습니다.")
+        st.chat_input("첨부 복구가 필요합니다", disabled=True,
+                      key=get_conversation().widget_key("failed_upload_input"))
+        return
     cancel_label = "첨부 변경 취소" if pending.attempted or pending.had_failure else "첨부 준비 취소"
     if st.button(cancel_label, key="documate_cancel_pending_upload"):
         if pending.prompt:
