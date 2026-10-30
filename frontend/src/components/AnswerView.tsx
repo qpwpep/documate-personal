@@ -1,4 +1,7 @@
 import { Fragment, createElement, useId, useState } from 'react';
+import remarkGfm from 'remark-gfm';
+import remarkParse from 'remark-parse';
+import { unified } from 'unified';
 import type { components } from '../api/generated';
 import type { AgentResponse, AnswerResponse } from '../api/types';
 import { EvidencePanel, type AnswerContext } from './EvidencePanel';
@@ -13,6 +16,7 @@ type Unit = { path: string; unit: ContentUnit; isCode?: boolean; inline?: boolea
 type OpenCitation = (citation: Citation, opener: HTMLElement) => void;
 
 const basisLabels = { source: '', interaction: '', inference: '해석', example: '예시', excerpt: '원문 발췌' };
+const markdownParser = unified().use(remarkParse).use(remarkGfm);
 const actionLabels = { save_text: '파일 저장', slack_notify: 'Slack 전송' };
 const actionStatuses = { success: '완료', error: '실패', skipped: '실행하지 않음', unknown: '결과 확인 필요' };
 const deliveryGuidance = {
@@ -134,8 +138,14 @@ function blockUnits(block: AnswerBlock, index: number): Unit[] {
 function BodyBlock({ block, citations, onCitation }: { block: AnswerBlock; citations: Map<string, Citation>; onCitation: OpenCitation }) {
   const renderUnit = (unit: ContentUnit) => <UnitText unit={unit} citations={citations} onCitation={onCitation} />;
   switch (block.type) {
-    case 'paragraph':
-      return <p>{block.content.map((unit, index) => <Fragment key={index}>{index > 0 && ' '}{renderUnit(unit)}</Fragment>)}</p>;
+    case 'paragraph': {
+      // Exact input copies keep the whole Markdown document in one paragraph unit.
+      const content = block.content.map((unit) => ({ unit, inline: unit.source_location != null || !hasBlockMarkdown(unit.text) }));
+      const Paragraph = content.every(({ inline }) => inline) ? 'p' : 'div';
+      return <Paragraph>{content.map(({ unit, inline }, index) => <Fragment key={index}>
+        {index > 0 && ' '}<UnitText unit={unit} citations={citations} onCitation={onCitation} inline={inline} />
+      </Fragment>)}</Paragraph>;
+    }
     case 'heading':
       return createElement(`h${block.level ?? 2}`, {}, renderUnit(block.content));
     case 'list': {
@@ -159,13 +169,20 @@ function BodyBlock({ block, citations, onCitation }: { block: AnswerBlock; citat
   }
 }
 
-function UnitText({ unit, citations, onCitation }: { unit: ContentUnit; citations: Map<string, Citation>; onCitation: OpenCitation }) {
+function hasBlockMarkdown(text: string): boolean {
+  return markdownParser.parse(text).children.some((node) => node.type !== 'paragraph' && node.type !== 'definition');
+}
+
+function UnitText({ unit, citations, onCitation, inline = true }: {
+  unit: ContentUnit; citations: Map<string, Citation>; onCitation: OpenCitation; inline?: boolean;
+}) {
   const basis = basisLabels[unit.basis ?? 'interaction'];
-  return <span className="answer-unit">
+  const Container = inline ? 'span' : 'div';
+  return <Container className={inline ? 'answer-unit' : 'answer-markdown-unit'}>
     {basis && <span className="answer-basis">{basis} · </span>}
-    {unit.source_location ? <span>{unit.text}</span> : <MarkdownView text={unit.text} inline />}
+    {unit.source_location ? <span>{unit.text}</span> : <MarkdownView text={unit.text} inline={inline} />}
     <CitationLinks unit={unit} citations={citations} onCitation={onCitation} />
-  </span>;
+  </Container>;
 }
 
 function CitationLinks({ unit, citations, onCitation }: { unit: ContentUnit; citations: Map<string, Citation>; onCitation: OpenCitation }) {

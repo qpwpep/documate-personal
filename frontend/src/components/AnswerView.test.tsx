@@ -71,6 +71,34 @@ describe('AnswerView', () => {
     expect(container.querySelector('script')).toBeNull();
   });
 
+  it('preserves block Markdown returned as a single paragraph by an exact input copy', () => {
+    const text = '# Copied title\n\n3. first step\n4. second step\n\n| name | value |\n| --- | --- |\n| x | 2 |\n\n```python\ndef run():\n    return "<tag>"\n```';
+    const copied: AnswerResponse = { ...response,
+      content: { blocks: [{ type: 'paragraph', content: [unit(text)] }] },
+      checks: [], issues: [], actions: [],
+    };
+    const original = JSON.stringify(copied);
+    const { container, rerender } = render(<AnswerView response={copied} />);
+    const body = container.querySelector('.answer-body') as HTMLElement;
+
+    expect(within(body).getByRole('heading', { name: 'Copied title', level: 1 })).toBeVisible();
+    const list = within(body).getByRole('list');
+    expect(list.tagName).toBe('OL');
+    expect(list).toHaveAttribute('start', '3');
+    expect(within(list).getAllByRole('listitem').map((item) => item.textContent)).toEqual(['first step', 'second step']);
+    const table = within(body).getByRole('table');
+    expect(within(table).getAllByRole('columnheader').map((cell) => cell.textContent)).toEqual(['name', 'value']);
+    expect(within(table).getAllByRole('cell').map((cell) => cell.textContent)).toEqual(['x', '2']);
+    expect(body.querySelector('pre code')?.textContent).toBe('def run():\n    return "<tag>"\n');
+    expect(body.querySelector('p :is(h1, ol, table, pre)')).toBeNull();
+    expect(JSON.stringify(copied)).toBe(original);
+
+    rerender(<AnswerView response={{ ...copied,
+      content: { blocks: [{ type: 'paragraph', content: [unit('    def run():\n        return 1\n')] }] },
+    }} />);
+    expect(body.querySelector('pre code')?.textContent).toBe('def run():\n    return 1\n');
+  });
+
   it('keeps answer limits and each delivery result separate from the body', () => {
     render(<AnswerView response={response} />);
 
