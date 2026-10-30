@@ -97,7 +97,9 @@ class UploadService:
             content_hash="sha256:" + hashlib.sha256(content).hexdigest(),
         )
 
-    def sync(self, session_id: str, request: UploadSyncRequest) -> UploadManifest:
+    def sync(
+        self, session_id: str, request: UploadSyncRequest, *, discard_staging: bool = False,
+    ) -> UploadManifest:
         session_id = validate_session_id(session_id)
         with self.session_store.locked_session(session_id) as (entry, _wait_ms):
             session = entry.agent.session
@@ -110,6 +112,8 @@ class UploadService:
             if previous is not None:
                 if previous != fingerprint:
                     raise _error(409, "UPLOAD_OPERATION_CONFLICT", "이미 사용한 작업 ID의 요청 내용을 변경할 수 없습니다.")
+                if discard_staging:
+                    self._discard_browser_staging(request.add)
                 return session.upload_manifest()
             try:
                 session.require_upload_context(UploadContext(epoch=request.epoch, revision=request.expected_revision))
@@ -119,7 +123,25 @@ class UploadService:
             session.upload_operations[request.operation_id] = fingerprint
             while len(session.upload_operations) > _OPERATION_RECEIPT_LIMIT:
                 session.upload_operations.popitem(last=False)
+            if discard_staging:
+                self._discard_browser_staging(request.add)
             return result
+
+    @staticmethod
+    def _discard_browser_staging(additions: list[UploadAddition]) -> None:
+        # Browser paths are server-issued and their successful operation is now
+        # replayable from its receipt. Legacy path inputs remain caller-owned.
+        for addition in additions:
+            path = Path(addition.path)
+            try:
+                path.unlink(missing_ok=True)
+                path.parent.rmdir()
+            except FileNotFoundError:
+                continue
+            except OSError:
+                # Cleanup failure must not turn an already committed sync into
+                # a failure. Receipt replay or the staging TTL can retry cleanup.
+                logger.warning("upload_staging_cleanup_failed", exc_info=True)
 
     @staticmethod
     def _cleanup_resources(

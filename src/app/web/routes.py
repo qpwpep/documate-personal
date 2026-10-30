@@ -69,7 +69,8 @@ def sync_upload_manifest(
     session_id: str, request_data: UploadSyncRequest | BrowserUploadSyncRequest, request: Request,
 ):
     session_id = _upload_session_id(session_id)
-    if isinstance(request_data, BrowserUploadSyncRequest):
+    browser_upload = isinstance(request_data, BrowserUploadSyncRequest)
+    if browser_upload:
         # Keep this conversion deterministic and free of file reads: a committed
         # operation remains replayable after its staged inputs have been cleaned.
         staging = get_upload_session_dir(session_id) / "staging"
@@ -89,7 +90,7 @@ def sync_upload_manifest(
             )
         except ValidationError as exc:
             raise HTTPException(status_code=422, detail=exc.errors(include_context=False)) from exc
-    return request.app.state.upload_service.sync(session_id, request_data)
+    return request.app.state.upload_service.sync(session_id, request_data, discard_staging=browser_upload)
 
 
 def stage_browser_upload(session_id: str, file: UploadFile, request: Request) -> StagedUpload:

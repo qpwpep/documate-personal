@@ -444,9 +444,11 @@ def test_browser_stage_keeps_manifest_unconfirmed_and_coexists_with_path_uploads
     assert upload["content_hash"] == "sha256:" + hashlib.sha256(content).hexdigest()
     assert manifest(api) == before
 
-    legacy = sync(api, add=[staged(api, "beta.py", "beta = 2\n")])
+    legacy_input = staged(api, "beta.py", "beta = 2\n")
+    legacy = sync(api, add=[legacy_input])
     committed = sync(api, add=[browser_addition(upload)])
 
+    assert Path(legacy_input["path"]).read_bytes() == b"beta = 2\n"
     assert committed["revision"] == legacy["revision"] + 1
     assert {item["name"] for item in committed["files"]} == {"alpha.py", "beta.py"}
     alpha = next(item for item in committed["files"] if item["name"] == "alpha.py")
@@ -469,6 +471,8 @@ def test_browser_upload_replacement_removal_and_clear_preserve_confirmed_identit
     assert rejected.status_code == 409
     assert rejected.json()["detail"]["code"] == "UPLOAD_NAME_CONFLICT"
     assert manifest(api) == current
+    retry_path = api.root / "uploads" / "session-a" / "staging" / replacement["upload_id"] / "alpha.py"
+    assert retry_path.read_bytes() == b"alpha = 10\n"
 
     replacement["replace_file_id"] = alpha_file["file_id"]
     replaced = sync(api, add=[replacement])
@@ -479,6 +483,38 @@ def test_browser_upload_replacement_removal_and_clear_preserve_confirmed_identit
     removed = sync(api, remove=[beta_file["file_id"]])
     assert [item["name"] for item in removed["files"]] == ["alpha.py"]
     assert sync(api, clear=True)["files"] == []
+
+
+def test_browser_upload_can_replace_a_full_attachment_without_exhausting_staging(api):
+    api.settings.upload_max_total_mib = 1
+    api.settings.session_ttl_seconds = 3600
+    original_file_id = None
+    for value in (1, 2, 3):
+        notebook = json.dumps({
+            "cells": [{"cell_type": "code", "execution_count": None, "id": "sample",
+                       "metadata": {}, "outputs": [], "source": [f"alpha = {value}\n"]}],
+            "metadata": {}, "nbformat": 4, "nbformat_minor": 5,
+        }).encode("utf-8")
+        # JSON padding reaches the byte limit without inflating the indexed code.
+        content = notebook + b" " * (1_048_576 - len(notebook))
+        upload = browser_stage(api, "sample.ipynb", content)
+        addition = browser_addition(upload)
+        if original_file_id is not None:
+            addition["replace_file_id"] = original_file_id
+
+        current = sync(api, add=[addition])
+
+        assert current["revision"] == value
+        assert len(current["files"]) == 1
+        assert current["files"][0]["size_bytes"] == 1_048_576
+        assert current["files"][0]["content_hash"] == "sha256:" + hashlib.sha256(content).hexdigest()
+        if original_file_id is None:
+            original_file_id = current["files"][0]["file_id"]
+        assert current["files"][0]["file_id"] == original_file_id
+
+    response = answer(api, uploads=context(current))
+    assert any("alpha = 3" in citation.evidence.excerpt for citation in response.citations)
+    assert not any("alpha = 1" in citation.evidence.excerpt for citation in response.citations)
 
 
 @pytest.mark.parametrize("stale_field", ["epoch", "expected_revision"])
@@ -562,13 +598,13 @@ def test_browser_sync_retry_after_staging_cleanup_returns_current_manifest(api):
     api.settings.session_ttl_seconds = 3600
     before = manifest(api)
     upload = browser_stage(api, "alpha.py", b"alpha = 1\n")
+    pending = browser_stage(api, "pending.py", b"pending = 1\n")
     body = sync_body(before, add=[browser_addition(upload)], operation_id="browser-operation")
     committed = api.client.post("/sessions/session-a/uploads/sync", json=body)
     assert committed.status_code == 200, committed.text
     staging = api.root / "uploads" / "session-a" / "staging"
-    for path in staging.rglob("*"):
-        if path.is_file():
-            path.unlink()
+    assert not list(staging.rglob("alpha.py"))
+    assert (staging / pending["upload_id"] / "pending.py").read_bytes() == b"pending = 1\n"
     current = sync(api, add=[staged(api, "beta.py", "beta = 2\n")])
 
     replayed = api.client.post("/sessions/session-a/uploads/sync", json=body)
