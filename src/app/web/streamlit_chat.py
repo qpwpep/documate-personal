@@ -338,8 +338,8 @@ def _render_validation_scope(
     semantic_checks = {(check.name, check.unit_id): check for check in report.checks} if report is not None else {}
     request_check = semantic_checks.get(("request_fulfilled", None))
     issue_codes = {issue.code for issue in response.issues}
-    quote_summary = f"직접 인용 {len(excerpt_paths)}개 중 원문 일치 {exact}개" if excerpt_paths else "직접 인용 없음"
-    st.caption(f"출처가 연결된 내용 {resolved}개 · {quote_summary}")
+    quote_summary = f"원문 발췌 {len(excerpt_paths)}개 중 원문 일치 {exact}개" if excerpt_paths else ""
+    st.caption(f"출처가 연결된 내용 {resolved}개" + (f" · {quote_summary}" if quote_summary else ""))
     limits = list(dict.fromkeys(issue.message for issue in response.issues if issue.unit_id is None))
     if "invalid_content_removed" in issue_codes:
         limits.append("제외된 항목의 상세 기록은 없습니다.")
@@ -362,7 +362,10 @@ def _render_validation_scope(
             st.caption(f"출처 연결: 내용 {resolved}개에 출처가 연결되어 있습니다. ‘근거’에서 사용한 원문을 확인할 수 있습니다.")
         else:
             st.caption("출처 연결: 이 답변에 연결된 출처가 없습니다.")
-        st.caption(quote_summary + ". 직접 인용은 보관한 원문과 일치하는지 확인합니다.")
+        if quote_summary:
+            st.caption(quote_summary + ". 원문 발췌는 자료에서 그대로 옮긴 내용으로, 보관한 원문과 일치하는지 확인합니다.")
+        else:
+            st.caption("원문 발췌: 자료에서 그대로 옮긴 내용은 없습니다.")
         if any(block.type == "code" for block in response.content.blocks):
             st.caption("실행 확인: 코드 형식으로 표시된 내용의 실행 결과는 확인하지 않았습니다.")
         if limits:

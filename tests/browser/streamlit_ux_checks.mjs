@@ -38,10 +38,35 @@ export async function attachmentSelectionState(tab, { waiting, ready, rejected =
 
 export async function composerText(tab, expected) {
   const actual = await tab.playwright.getByRole("textbox", {
-    name: "공식 문서나 업로드한 자료에 대해 질문하세요", exact: true,
+    name: "질문을 입력하세요", exact: true,
   }).evaluate(el => el.value);
   assert(actual === expected, `Composer text mismatch: ${JSON.stringify({ expected, actual })}`);
   return { check: "composer text", value: actual };
+}
+
+/** Run with an empty composer at 320px; placeholder text must fit its visible area. */
+export async function composerPlaceholderLayout(tab) {
+  const state = await tab.playwright.getByRole("textbox", {
+    name: "질문을 입력하세요", exact: true,
+  }).evaluate(el => {
+    const rect = el.getBoundingClientRect();
+    return {
+      value: el.value, placeholder: el.getAttribute("placeholder"),
+      width: el.clientWidth, scrollWidth: el.scrollWidth,
+      height: el.clientHeight, scrollHeight: el.scrollHeight,
+      left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom,
+      viewportWidth: innerWidth, viewportHeight: innerHeight,
+    };
+  });
+  assert(state.value === "", "Check the placeholder before typing a question");
+  assert(state.placeholder === "질문을 입력하세요", "Composer lost the concise prompt");
+  assert(state.width > 0 && state.height > 0
+    && state.scrollWidth <= state.width + 1 && state.scrollHeight <= state.height + 1,
+    `Composer placeholder is clipped: ${JSON.stringify(state)}`);
+  assert(state.left >= 0 && state.right <= state.viewportWidth
+    && state.top >= 0 && state.bottom <= state.viewportHeight,
+    `Composer is outside the viewport: ${JSON.stringify(state)}`);
+  return { check: "complete narrow-screen composer prompt", ...state };
 }
 
 /** Run with the code-context fixture's evidence dialog and 연결된 답변 보기 open. */
@@ -113,7 +138,7 @@ export async function attachmentSelectionDetails(tab, expected) {
 /** Run with a real rejected file selected, before removing/replacing it. */
 export async function rejectedAttachmentPreservesDraft(tab, draft) {
   const input = tab.playwright.getByRole("textbox", {
-    name: "공식 문서나 업로드한 자료에 대해 질문하세요", exact: true,
+    name: "질문을 입력하세요", exact: true,
   });
   await input.fill(draft);
   const messagesBefore = await tab.playwright.evaluate(() =>
@@ -130,7 +155,8 @@ export async function rejectedAttachmentPreservesDraft(tab, draft) {
   assert(state.rejected > 0, "Rejected attachment disappeared on attempted submission");
   assert(state.messages === messagesBefore, "Question was sent without its rejected attachment");
   assert(state.sendDisabled, "Send remains enabled with a rejected attachment");
-  assert(state.notice.includes("전송할 수 없습니다"), "Rejected attachment lacks a recovery instruction");
+  assert(state.notice.includes("파일을 제거하고") && state.notice.includes("다시 선택하세요"),
+    "Rejected attachment lacks a recovery instruction");
   return { check: "rejected attachment blocks submission and preserves draft", ...state };
 }
 
@@ -150,7 +176,7 @@ export async function answerCompleted(tab, answerText) {
   const answer = tab.playwright.getByText(answerText, { exact: true });
   assert(await answer.isVisible(), `Final answer not displayed: ${answerText}`);
   const composer = tab.playwright.getByRole("textbox", {
-    name: "공식 문서나 업로드한 자료에 대해 질문하세요", exact: true,
+    name: "질문을 입력하세요", exact: true,
   });
   assert(await composer.isEnabled(), "Composer stayed busy after the answer");
   return { check: "answer completed", answerText };
@@ -164,7 +190,7 @@ export async function reloadPreservesConversation(tab, { draft, answerText, atta
   const messageCount = await tab.playwright.evaluate(() =>
     document.querySelectorAll('[data-testid="stChatMessage"]').length);
   await tab.playwright.getByRole("textbox", {
-    name: "공식 문서나 업로드한 자료에 대해 질문하세요", exact: true,
+    name: "질문을 입력하세요", exact: true,
   }).fill(draft);
   await tab.reload();
   await tab.playwright.getByText(answerText, { exact: true }).waitFor({ state: "visible", timeoutMs: 20000 });
@@ -181,7 +207,7 @@ export async function reloadPreservesConversation(tab, { draft, answerText, atta
 /** Run on a new conversation. AppTest cannot reproduce just-typed browser text. */
 export async function suggestionDraftProtection(tab, suggestionText) {
   const input = tab.playwright.getByRole("textbox", {
-    name: "공식 문서나 업로드한 자료에 대해 질문하세요", exact: true,
+    name: "질문을 입력하세요", exact: true,
   });
   const suggestion = tab.playwright.getByRole("button", { name: suggestionText, exact: true });
   const draft = "  작성 중인 내 질문\n두 번째 줄  ";

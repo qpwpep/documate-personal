@@ -58,10 +58,13 @@ def test_normal_answer_uses_one_short_scope_summary_without_repeating_generic_gu
     app = _render(TurnResult(response=answer))
 
     visible_captions = [item.value for item in app.main.children.values() if item.type == "caption"]
-    assert visible_captions == ["출처가 연결된 내용 1개 · 직접 인용 없음"]
+    assert visible_captions == ["출처가 연결된 내용 1개"]
+    assert len(app.get("popover")) == 1
     assert not app.warning
     details = next(item for item in app.expander if item.label == "검증 상세")
     assert not details.proto.expanded
+    assert any("자료에서 그대로 옮긴 내용은 없습니다" in item.value for item in details.caption)
+    assert not any("직접 인용 없음" in item.value for item in app.caption)
     assert any("답변 전체의 정확도" in item.value for item in details.caption)
 
 
@@ -73,7 +76,7 @@ def test_direct_quote_count_is_separate_from_source_connection_count(quote, matc
     app = _render(TurnResult(response=answer))
 
     visible_captions = [item.value for item in app.main.children.values() if item.type == "caption"]
-    assert f"출처가 연결된 내용 1개 · 직접 인용 1개 중 원문 일치 {matched}개" in visible_captions
+    assert f"출처가 연결된 내용 1개 · 원문 발췌 1개 중 원문 일치 {matched}개" in visible_captions
 
 
 def test_validation_details_explain_usable_scope_before_collapsed_technical_scores():
@@ -95,7 +98,7 @@ def test_validation_details_explain_usable_scope_before_collapsed_technical_scor
     details = next(item for item in app.expander if item.label == "검증 상세")
     summary = [item.value for item in details.children.values() if item.type in {"caption", "markdown"}]
     assert any("출처" in text and "1개" in text for text in summary)
-    assert any("직접 인용" in text and "원문 일치 1개" in text for text in summary)
+    assert any("원문 발췌" in text and "원문 일치 1개" in text for text in summary)
     assert any("실행 결과는 확인하지 않았습니다" in text for text in summary)
     assert any("다른 버전의 동작은 확인하지 않았습니다." in text for text in summary)
     assert not any("Decisions API" in text or "충족 확률" in text or "임곗값" in text for text in summary)

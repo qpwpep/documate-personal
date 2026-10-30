@@ -390,6 +390,16 @@ def test_suggested_question_prefills_then_sends_only_on_explicit_submission(chat
     assert any("답변: " + prompt in item.value for item in app.markdown)
 
 
+def test_composer_uses_a_short_prompt_and_keeps_source_guidance_outside_input(chat_http):
+    app = AppTest.from_file(APP, default_timeout=10).run()
+
+    assert not app.exception
+    assert app.chat_input[0].placeholder == "질문을 입력하세요"
+    assert any("공식 문서" in item.value and "파일을 첨부" in item.value for item in app.markdown)
+    assert not app.chat_input[0].disabled
+    assert not chat_http
+
+
 def test_submitted_input_preserves_boundary_whitespace_for_exact_copy(chat_http):
     app = AppTest.from_file(APP, default_timeout=10).run()
     prompt = "  아래 원문을 공백과 개행까지 그대로 복사해줘:\n    value = 1\n\n"

@@ -201,7 +201,7 @@ def main() -> None:
         st.caption("입력창의 +로 파일을 선택한 뒤 전송하세요. 파일만 먼저 전송할 수도 있습니다.")
     restore_composer(conversation)
     chat_submission = st.chat_input(
-        "공식 문서나 업로드한 자료에 대해 질문하세요",
+        "질문을 입력하세요",
         accept_file="multiple",
         file_type=[suffix.lstrip(".") for suffix in sorted(suffixes)],
         max_upload_size=SETTINGS.upload_max_file_mib,
