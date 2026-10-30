@@ -25,7 +25,13 @@ from src.runtime.nodes.validation.semantic import (
 
 SOURCE_RELEVANCE_INSTRUCTIONS = (
     "Is the selected source excerpt relevant and usable as evidence for at least part of its task's "
-    "actual subject, version, requested aspects and source scope? The excerpt need not satisfy the whole "
+    "actual subject, version, requested aspects and source scope? Evaluate only this entry's task. "
+    "The task query and requirement are the resolved scope for this judgment. Do not add independent "
+    "subjects from other tasks or earlier requests. Missing evidence for another requested variable or task "
+    "must not make an otherwise useful excerpt irrelevant. Whole-request sufficiency is checked separately. "
+    "For an uploaded variable's declared value, a complete assignment with an explicit literal value "
+    "is useful evidence of that value even when unrelated file content is unselected. It need not "
+    "prove actual execution or later runtime values. The excerpt need not satisfy the whole "
     "task by itself; complementary excerpts may supply other required facts. Reject unrelated, mismatched "
     "or unreliable evidence. Judge the selected excerpt and source context, never retrieval score, "
     "a matching keyword, or the presence of a particular sentence pattern alone."
@@ -59,7 +65,13 @@ SCOPED_ENTRY_INSTRUCTIONS = (
 )
 
 
-def _decision_context(snapshot: ValidationSnapshot) -> dict[str, Any]:
+def _decision_context(snapshot: ValidationSnapshot, *, source_only: bool = False) -> dict[str, Any]:
+    # Candidate relevance/support is local to the resolved task and source.
+    # Passing the whole request here can reject useful partial evidence merely
+    # because a different requested subject is unavailable. Packet checks below
+    # still need the complete request and dialogue to assess overall coverage.
+    if source_only:
+        return {}
     context = _context(snapshot)
     context.pop("retrieval_requirements", None)
     return context
@@ -85,7 +97,7 @@ def _evaluate_cached(
     not change its meaning and are omitted from the content fingerprint.
     """
     cache = {item.fingerprint: item for item in [*snapshot.decision_cache, *assessment.decision_cache]}
-    context = _decision_context(snapshot)
+    context = _decision_context(snapshot, source_only=collection == "evidence")
     probabilities: dict[str, float] = {}
     refused: set[str] = set()
     pending: dict[str, dict[str, Any]] = {}
@@ -167,7 +179,7 @@ def _select_source_questions(
     decisions_client: DecisionEvaluator, question_limit: int,
 ) -> list[dict[str, Any]]:
     """Charge distinct cache misses, giving relevance and each requirement priority."""
-    context = _decision_context(snapshot)
+    context = _decision_context(snapshot, source_only=True)
     known = {item.fingerprint for item in snapshot.decision_cache}
     groups: dict[tuple[str, str], list[tuple[str, str]]] = {}
     for key, hit in candidates.items():
@@ -338,7 +350,7 @@ def _assess_pre_semantics(
         )
     validated_evidence_by_id([hit.evidence for hit in snapshot.parsed_hits])
     normal_budget, compact_budget = resolve_evidence_budgets(plan=snapshot.planner_output, limits=excerpt_limits)
-    context = _decision_context(snapshot)
+    context = _decision_context(snapshot, source_only=True)
     cache = {item.fingerprint: item for item in snapshot.decision_cache}
     tasks = {task.requirement_id: task for task in snapshot.planner_output.tasks}
     prior_verdicts = {(item.requirement_id, item.evidence_id): item for item in snapshot.evidence_verdicts}

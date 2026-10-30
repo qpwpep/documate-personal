@@ -5,10 +5,14 @@ import json
 
 import httpx
 import pytest
+from langchain_core.messages import AIMessage, HumanMessage
 
-from src.core.contracts import PlannerState, RetrievalState
-from src.core.evidence import build_evidence
-from src.core.planner_schema import PlannerOutput
+from src.core.contracts import PlannerState, RetrievalState, RetryState
+from src.core.contracts.boundary.graph import build_graph_state_input
+from src.core.documents import DocumentElement, build_snapshot
+from src.core.evidence import RetrievalScore, SearchHit, build_evidence
+from src.core.planner_schema import PlannerOutput, RetrievalTask
+from src.core.request_contracts import RequestContract
 from src.runtime.nodes.validation import make_pre_synthesis_validation_node
 from tests.core.test_decisions_validation import DecisionsBoundary, _evidence, _state, read_decision_input
 from tests.synthesis_fixtures import synthesis_excerpt_limits
@@ -19,6 +23,81 @@ def _validate(state, boundary, **kwargs):
         excerpt_limits=synthesis_excerpt_limits(), **kwargs)
     state.update(node(state))
     return state
+
+
+def test_source_decisions_isolate_resolved_task_while_packet_checks_keep_the_full_request():
+    source_text = "WORKER_COUNT = 6\n"
+    file_id = "a" * 32
+    evidence = build_evidence(
+        snapshot=build_snapshot(source_uri=f"upload:///mixed-scope/{file_id}", title="worker_profile.py",
+                                media_type="text/x-python", source_type="upload", content=source_text,
+                                parser="python-ast", parser_version="1"),
+        element=DocumentElement(element_id="source", kind="code", language="python", text=source_text,
+                                metadata={"file_id": file_id}),
+    )
+    tasks = [RetrievalTask(
+        route="upload", query=f"worker_profile.py에서 {symbol}의 할당값을 알려줘.", k=3,
+        requirement_id=symbol, requirement={"symbols": [symbol], "match": "symbol", "file_ids": [file_id]},
+    ) for symbol in ("WORKER_COUNT", "FAILOVER_LIMIT")]
+    request = "첨부 코드의 WORKER_COUNT와 FAILOVER_LIMIT 값을 알려줘."
+    required_content = "WORKER_COUNT와 FAILOVER_LIMIT의 값을 각각 알려준다."
+    prior_user = "pandas merge 사용법을 설명해줘."
+    prior_answer = "pandas.merge는 두 DataFrame을 조인합니다."
+    contract = RequestContract(
+        request_id="mixed-scope", body={"kind": "compose", "instruction": request},
+        answer={"content": [{"kind": "custom", "mode": "required", "description": required_content,
+                             "evidence_ids": ["requested-values"]}]},
+        evidence=[{"id": "requested-values", "turn_id": "current-user", "quote": request,
+                   "scope": "answer.content.custom", "interpretation": "instruction"}],
+    )
+    state = build_graph_state_input(
+        user_input=request, current_turn_id="current-user", request_contract=contract,
+        messages=[HumanMessage(content=prior_user), AIMessage(content=prior_answer),
+                  HumanMessage(content=request, id="current-user")],
+        planner=PlannerState(output=PlannerOutput(use_retrieval=True, tasks=tasks)),
+        retrieval=RetrievalState(hit_log=[SearchHit(
+            evidence=evidence, requirement_id="WORKER_COUNT", rank=1,
+            score=RetrievalScore(metric="source_symbol", direction="higher"),
+        )]),
+        retry=RetryState(max_retries=0, original_tasks=tasks),
+    )
+    boundary = DecisionsBoundary({"request_ready": 0.1, "requirement_1": 0.0})
+
+    _validate(state, boundary)
+
+    payloads = [read_decision_input(call["input"]) for call in boundary.requests]
+    source_payload = next(payload for payload in payloads if "evidence" in payload)
+    assert not {"latest_user_request", "conversation_context", "confirmed_request", "bound_source_response"} & source_payload.keys()
+    source_entry, = source_payload["evidence"]
+    assert source_entry["task"] == tasks[0].model_dump(mode="json", exclude={"k"})
+    assert source_entry["source"]["id"] == evidence.id
+    assert source_entry["source"]["excerpt"] == source_text
+    assert source_entry["source"]["selection"] == evidence.selection.model_dump(mode="json")
+    packet_payload = next(payload for payload in payloads if "requirements" in payload)
+    assert packet_payload["latest_user_request"] == request
+    assert packet_payload["confirmed_request"]["body"]["instruction"] == request
+    assert packet_payload["confirmed_request"]["answer"]["content"][0]["description"] == required_content
+    assert packet_payload["conversation_context"]["messages"][:2] == [
+        {"role": "user", "content": prior_user}, {"role": "assistant", "content": prior_answer},
+    ]
+    requirements = {entry["task"]["requirement_id"]: entry for entry in packet_payload["requirements"]}
+    assert [source["id"] for source in requirements["WORKER_COUNT"]["sources"]] == [evidence.id]
+    assert requirements["FAILOVER_LIMIT"]["sources"] == []
+    assert state["retrieval"].prepared_evidence.normal.failed_requirement_ids == ["FAILOVER_LIMIT"]
+    assert state["retry"].terminal_failed_requirement_ids == ["FAILOVER_LIMIT"]
+
+    first_calls = len(boundary.requests)
+    changed_history = "pandas.merge의 how='left'는 왼쪽 키를 유지합니다."
+    state["messages"][1] = AIMessage(content=changed_history)
+
+    _validate(state, boundary)
+
+    new_payloads = [read_decision_input(call["input"]) for call in boundary.requests[first_calls:]]
+    assert len(new_payloads) == 1
+    assert "evidence" not in new_payloads[0]
+    assert new_payloads[0]["conversation_context"]["messages"][1]["content"] == changed_history
+    assert state["retrieval"].prepared_evidence.normal.evidence == [evidence]
+    assert state["retry"].terminal_failed_requirement_ids == ["FAILOVER_LIMIT"]
 
 
 def test_public_pre_node_reuses_unchanged_source_and_packet_decisions_without_provider_calls():

@@ -164,7 +164,9 @@ def test_user_code_analysis_is_judged_against_the_supplied_code_without_invented
     assert assessment["units"][0]["basis"] == "interaction"
     assert assessment["units"][0]["refs"] == []
     assert assessment["units"][0]["cited_sources"] == []
-    assert assessment["displayed_document"] == state["response"].result.content.model_dump(mode="json")
+    assert assessment["rendered_response"] == {
+        "body": state["response"].result.content.model_dump(mode="json"), "notices": [],
+    }
     assert updates["response"].kind == "answer"
     assert updates["response"].result.semantic_validation.passed
 

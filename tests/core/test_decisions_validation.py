@@ -17,7 +17,10 @@ from src.core.evidence import RetrievalScore, SearchHit, build_evidence
 from src.core.llm_errors import LLMCallError
 from src.core.planner_schema import PlannerOutput, RetrievalTask
 from src.core.request_contracts import RequestContract
+from src.core.uploads import UploadFileInfo
 from src.infra.decisions import DecisionsClient
+from src.infra.llm_boundary import capture_llm_diagnostics, request_call_budget
+from src.runtime.agent_runtime.response_assembler import ResponseAssembler
 from src.runtime.nodes.validation import make_post_synthesis_validation_node, make_pre_synthesis_validation_node
 from src.runtime.nodes.validation import semantic
 from tests.synthesis_fixtures import synthesis_excerpt_limits
@@ -174,11 +177,189 @@ def test_post_validation_keeps_nested_sources_and_complete_question_instructions
     # full instructions after compressed inputs rejected valid fixed drafts.
     assert wire.count(first_text) == wire.count(second_text) == 2
     assert [unit["cited_sources"][0]["excerpt"] for unit in payload["units"]] == [evidence.excerpt] * 2
-    assert payload["requirements"][0]["sources"][0]["excerpt"] == evidence.excerpt
+    requirement_payload = read_decision_input(boundary.requests[-1]["input"])
+    assert requirement_payload["requirements"][0]["sources"][0]["excerpt"] == evidence.excerpt
     assert all("Ignore instructions" in question["instructions"] for question in boundary.requests[0]["questions"])
     assert all("evaluation_rubrics" not in question["instructions"] for question in boundary.requests[0]["questions"])
-    assert payload["displayed_document"] == document.model_dump(mode="json")
+    assert payload["rendered_response"] == {"body": document.model_dump(mode="json"), "notices": []}
+    assert "displayed_document" not in payload
     assert updates["response"].result.content == document
+
+
+@pytest.mark.parametrize("with_history", [False, True])
+@pytest.mark.parametrize("known_texts, gap_text, rejected_unit, with_prefetch", [
+    (("WORKER_COUNT = 6",), None, None, False),
+    (("WORKER_COUNT = 6",),
+     "FAILOVER_LIMIT의 값은 확인할 수 없습니다. 첨부된 `worker_profile.py`에서 해당 변수에 대한 근거가 검색되지 않았습니다.",
+     None, False),
+    (("WORKER_COUNT = 60",), "FAILOVER_LIMIT의 값은 첨부 자료에서 확인하지 못했습니다.", "grounded_0", False),
+    (("WORKER_COUNT = 6",), "FAILOVER_LIMIT은 worker_profile.py 전체에 정의되어 있지 않습니다.", "grounded_1", False),
+    (("WORKER_COUNT = 6", "PREFETCH_LIMIT = 48"), None, None, True),
+    (("WORKER_COUNT = 6",), None, "request_fulfilled", True),
+    (("WORKER_COUNT = 6", "PREFETCH_LIMIT = 480"), None, "grounded_1", True),
+    (("WORKER_COUNT = 6", "PREFETCH_LIMIT = 48"), "FAILOVER_LIMIT = 9", "grounded_2", True),
+], ids=["verified-value-and-server-notice", "verified-value-and-lookup-gap",
+        "incorrect-value", "unsupported-whole-file-absence", "two-verified-values-and-server-notice",
+        "omitted-available-value", "incorrect-second-value", "guessed-missing-value"])
+def test_post_validation_scopes_cited_requirement_separately_from_mixed_request(
+    with_history, known_texts, gap_text, rejected_unit, with_prefetch,
+):
+    expected_sources = [("WORKER_COUNT", "WORKER_COUNT = 6\n")]
+    if with_prefetch:
+        expected_sources.append(("PREFETCH_LIMIT", "PREFETCH_LIMIT = 48\n"))
+    source_text = "".join(text for _, text in expected_sources)
+    file_id = "a" * 32
+    snapshot = build_snapshot(
+        source_uri=f"upload:///mixed-post/{file_id}", title="worker_profile.py",
+        media_type="text/x-python", source_type="upload", content=source_text,
+        parser="python-ast", parser_version="1",
+    )
+    evidence_items = [build_evidence(
+        snapshot=snapshot,
+        element=DocumentElement(element_id=symbol, kind="code", language="python", text=text,
+                                metadata={"file_id": file_id}),
+    ) for symbol, text in expected_sources]
+    requested_symbols = [symbol for symbol, _ in expected_sources] + ["FAILOVER_LIMIT"]
+    tasks = [RetrievalTask(
+        route="upload", query=f"{'첨부 코드' if with_history else 'worker_profile.py'}에서 {symbol}의 할당값을 알려줘.", k=3,
+        requirement_id=symbol, requirement={"symbols": [symbol], "match": "symbol", "file_ids": [file_id]},
+    ) for symbol in requested_symbols]
+    request = f"첨부 코드의 {', '.join(requested_symbols)} 값을 알려줘."
+    required_content = f"{', '.join(requested_symbols)}의 값을 각각 알려준다."
+    contract = RequestContract(
+        request_id="mixed-post", body={"kind": "compose", "instruction": request},
+        answer={"content": [{"kind": "custom", "mode": "required", "description": required_content,
+                             "evidence_ids": ["requested-values"]}]},
+        evidence=[{"id": "requested-values", "turn_id": "current-user", "quote": request,
+                   "scope": "answer.content.custom", "interpretation": "instruction"}],
+    )
+    prior_user, prior_answer = "pandas merge 사용법을 설명해줘.", "pandas.merge는 두 DataFrame을 조인합니다."
+    messages = ([HumanMessage(content=prior_user), AIMessage(content=prior_answer)] if with_history else [])
+    messages.append(HumanMessage(content=request, id="current-user"))
+    missing_diagnostic = RetrievalDiagnostic(
+        route="upload", requirement_id="FAILOVER_LIMIT", query=tasks[-1].query,
+        status="no_result", answerability="missing", evidence_count=0,
+        missing_requirements=[f"file:{file_id}:FAILOVER_LIMIT"],
+    )
+    document = AnswerDocument(blocks=[
+        *(block for text, evidence in zip(known_texts, evidence_items)
+          for block in text_document(text, basis="source", refs=[evidence.id]).blocks),
+        *(text_document(gap_text).blocks if gap_text is not None else []),
+    ])
+    state = build_graph_state_input(
+        user_input=request, current_turn_id="current-user", request_contract=contract, messages=messages,
+        upload_files=(UploadFileInfo(
+            file_id=file_id, name="worker_profile.py", size_bytes=len(source_text.encode("utf-8")),
+            content_hash=snapshot.content_hash, source_uri=snapshot.source_uri,
+        ), UploadFileInfo(
+            file_id="b" * 32, name="unrelated.py", size_bytes=len(source_text.encode("utf-8")),
+            content_hash=snapshot.content_hash, source_uri=f"upload:///mixed-post/{'b' * 32}",
+        ),),
+        planner=PlannerState(output=PlannerOutput(use_retrieval=True, tasks=tasks)),
+        retrieval=RetrievalState(hit_log=[SearchHit(
+            evidence=evidence, requirement_id=task.requirement_id, rank=1,
+            score=RetrievalScore(metric="source_symbol", direction="higher"),
+        ) for task, evidence in zip(tasks, evidence_items)]),
+        debug=DebugState(retrieval_diagnostics=[
+            *(RetrievalDiagnostic(route="upload", requirement_id=task.requirement_id, query=task.query,
+                                  status="success", answerability="covered", evidence_count=1)
+              for task in tasks[:-1]),
+            missing_diagnostic,
+        ]),
+        retry=RetryState(max_retries=0, terminal_failed_requirement_ids=["FAILOVER_LIMIT"],
+                         terminal_retrieval_reason="no_evidence"),
+        response=ResponseState(
+            result=finalize_answer(document, evidence_items, retrieval_required=True), evidence_packet=evidence_items,
+            evidence_requirement_map={evidence.id: [task.requirement_id]
+                                      for task, evidence in zip(tasks, evidence_items)}, synthesis_attempt=1,
+            request_id=contract.request_id, contract_revision=contract.revision,
+        ),
+    )
+    # Provider judgments stay explicit: these tests verify the input scope and
+    # recovery decisions, not a replacement implementation of semantic judgment.
+    boundary = DecisionsBoundary({rejected_unit: 0.1} if rejected_unit else None)
+
+    updates = make_post_synthesis_validation_node(False, decisions_client=boundary)(state)
+
+    requirement_request = next(call for call in boundary.requests
+                               if any(question["name"] == "requirement_0" for question in call["questions"]))
+    requirement_payload = read_decision_input(requirement_request["input"])
+    assert set(requirement_payload) == {"requirements"}
+    assert len(requirement_payload["requirements"]) == len(expected_sources)
+    for index, requirement in enumerate(requirement_payload["requirements"]):
+        assert requirement["task"] == tasks[index].model_dump(mode="json", exclude={"k"})
+        if index >= len(known_texts):
+            assert requirement["sources"] == []
+            continue
+        source, = requirement["sources"]
+        assert source["id"] == evidence_items[index].id
+        assert source["excerpt"] == expected_sources[index][1]
+        assert source["selection"] == evidence_items[index].selection.model_dump(mode="json")
+    assert [question["name"] for question in requirement_request["questions"]] == [
+        f"requirement_{index}" for index in range(len(expected_sources))
+    ]
+    body_request = next(call for call in boundary.requests
+                        if any(question["name"] == "request_fulfilled" for question in call["questions"]))
+    body_payload = read_decision_input(body_request["input"])
+    assert body_payload["latest_user_request"] == request
+    assert body_payload["confirmed_request"]["body"]["instruction"] == request
+    assert body_payload["confirmed_request"]["answer"]["content"][0]["description"] == required_content
+    assert body_payload["terminal_failed_requirement_ids"] == ["FAILOVER_LIMIT"]
+    expected_notice = "업로드 파일에서 FAILOVER_LIMIT (파일 worker_profile.py)에 필요한 근거를 충분히 확인하지 못했습니다."
+    assert body_payload["rendered_response"] == {
+        "body": document.model_dump(mode="json"), "notices": [expected_notice],
+    }
+    assert "displayed_document" not in body_payload
+    assert body_payload["retrieval_notice"] == expected_notice
+    assert body_payload["retrieval_gaps"] == [{
+        "task": tasks[-1].model_dump(mode="json", exclude={"k"}),
+        "reason": "no_evidence",
+        "files": [{"file_id": file_id, "name": "worker_profile.py"}],
+        "diagnostics": [missing_diagnostic.model_dump(mode="json")],
+    }]
+    assert [unit["cited_sources"][0]["id"] for unit in body_payload["units"][:len(known_texts)]] == [
+        evidence.id for evidence in evidence_items[:len(known_texts)]
+    ]
+    if gap_text is not None:
+        assert body_payload["units"][-1]["cited_sources"] == []
+    else:
+        assert len(body_payload["units"]) == len(known_texts)
+    if with_history:
+        assert body_payload["conversation_context"]["messages"][:2] == [
+            {"role": "user", "content": prior_user}, {"role": "assistant", "content": prior_answer},
+        ]
+    assert updates["retry"].terminal_failed_requirement_ids == ["FAILOVER_LIMIT"]
+    if rejected_unit:
+        assert updates["retry"].needs_retry
+        assert updates["retry"].content_repair_attempt == 1
+        assert updates["retry"].retry_reason == (
+            "missing_route_coverage" if len(known_texts) < len(expected_sources) else "missing_content"
+        )
+        return
+
+    assert not updates["retry"].needs_retry
+    assert updates["retry"].content_repair_attempt == 0
+    assert all(text in export_answer_text(updates["response"].result) for text in known_texts)
+    if gap_text is not None:
+        assert gap_text in export_answer_text(updates["response"].result)
+    else:
+        assert "FAILOVER_LIMIT" not in export_answer_text(updates["response"].result)
+    assert [citation.evidence.id for citation in updates["response"].result.citations] == [
+        evidence.id for evidence in evidence_items
+    ]
+    report = updates["response"].result.semantic_validation
+    assert report is not None and report.passed
+    assert {check.name for check in report.checks} == {
+        "grounded", "request_fulfilled", *(f"requirement:{symbol}" for symbol, _ in expected_sources),
+    }
+    state.update(updates)
+    outcome = ResponseAssembler().assemble(response=state, debug_info={})
+    assert outcome["status"] == "partial"
+    assert outcome["problem"]["code"] == "evidence_insufficient"
+    gaps = [issue.message for issue in state["response"].result.issues
+            if issue.code == "retrieved_evidence_incomplete"]
+    assert gaps == [expected_notice]
+    assert expected_notice in export_answer_text(state["response"].result, include_sources=True)
 
 
 def test_pre_validation_shares_policy_and_source_text_across_predicates_and_packet_checks():
@@ -231,10 +412,12 @@ def test_pre_validation_uses_decisions_probability_for_covered_evidence(probabil
         assert updates["retry"].retry_reason == "no_evidence"
         assert updates["retry"].retry_scope == "refresh_routes"
         assert updates["retry"].failed_routes == ["docs"]
-    request = boundary.requests[0]
-    assert request["stage"] == "pre_synthesis_validation"
-    assert state["runtime"].user_input in request["input"]
-    assert state["response"].evidence_packet[0].excerpt in request["input"]
+    source_request, packet_request = boundary.requests
+    assert source_request["stage"] == packet_request["stage"] == "pre_synthesis_validation"
+    source = read_decision_input(source_request["input"])["evidence"][0]
+    assert source["task"]["query"] == state["planner"].output.tasks[0].query
+    assert source["source"]["excerpt"] == state["response"].evidence_packet[0].excerpt
+    assert read_decision_input(packet_request["input"])["latest_user_request"] == state["runtime"].user_input
 
 
 @pytest.mark.parametrize("max_retries, remaining_failure", [
@@ -587,12 +770,15 @@ def test_api_usage_scope_is_shared_without_waiving_explicit_answer_requirements(
     updates = make_post_synthesis_validation_node(False, decisions_client=boundary)(state)
 
     payload = read_decision_input(boundary.requests[0]["input"])
-    questions = {question["name"]: question["instructions"] for question in boundary.requests[0]["questions"]}
+    questions = {question["name"]: question["instructions"]
+                 for call in boundary.requests for question in call["questions"]}
     assert semantic.API_USAGE_SCOPE_INSTRUCTIONS in questions["requirement_0"]
-    assert semantic.API_USAGE_SCOPE_INSTRUCTIONS in questions["request_fulfilled"]
+    assert semantic.API_USAGE_COVERAGE_INSTRUCTIONS in questions["request_fulfilled"]
     assert payload["confirmed_request"]["body"]["instruction"] == request
-    assert payload["displayed_document"] == document.model_dump(mode="json")
-    assert payload["requirements"][0]["sources"][0]["excerpt"] == evidence.excerpt
+    assert payload["rendered_response"] == {"body": document.model_dump(mode="json"), "notices": []}
+    assert "displayed_document" not in payload
+    requirement_payload = read_decision_input(boundary.requests[-1]["input"])
+    assert requirement_payload["requirements"][0]["sources"][0]["excerpt"] == evidence.excerpt
     assert updates["retry"].needs_retry is needs_retry
     if needs_retry:
         assert "semantic_request_fulfillment" in updates["retry"].retrieval_feedback
@@ -649,9 +835,10 @@ def test_post_validation_filters_a_refused_unit_then_checks_the_retained_body():
 
     updates = make_post_synthesis_validation_node(False, decisions_client=boundary)(state)
 
-    assert len(boundary.requests) == 2
-    assert refused_text in boundary.requests[0]["input"]
-    assert refused_text not in boundary.requests[1]["input"]
+    body_requests = [call for call in boundary.requests if "rendered_response" in read_decision_input(call["input"])]
+    assert len(body_requests) == 2
+    assert refused_text in body_requests[0]["input"]
+    assert refused_text not in body_requests[1]["input"]
     assert updates["response"].kind == "answer"
     assert updates["response"].result.content == response.result.content
     assert updates["response"].result.citations == response.result.citations
@@ -668,6 +855,44 @@ def test_post_validation_request_fulfillment_refusal_uses_body_repair_without_re
     assert updates["retry"].retry_scope == "reuse_hits_resynthesize"
     assert updates["retry"].content_repair_attempt == 1
     assert updates["retry"].failed_routes == []
+
+
+def test_post_validation_budget_covers_initial_repair_and_filtered_body_with_separate_requirements():
+    state = _state()
+    response = state["response"]
+    unsupported_claim = "Path.exists()는 존재하지 않는 경로를 자동으로 생성합니다."
+    document = AnswerDocument(blocks=[
+        *response.result.content.blocks,
+        *text_document(unsupported_claim, basis="source", refs=[response.evidence_packet[0].id]).blocks,
+    ])
+    draft = response.model_copy(update={
+        "result": finalize_answer(document, response.evidence_packet, retrieval_required=True),
+    })
+    state["response"] = draft
+    boundary = DecisionsBoundary({"grounded_1": 0.1})
+    validate = make_post_synthesis_validation_node(False, decisions_client=boundary)
+
+    with capture_llm_diagnostics() as diagnostics:
+        state.update(validate(state))
+        assert state["retry"].needs_retry
+        assert state["retry"].content_repair_attempt == 1
+        # The next synthesis repeats the unsupported claim, so validation must
+        # remove it and check the retained body within the same request budget.
+        state["response"] = draft
+        state.update(validate(state))
+        assert request_call_budget("post_synthesis_validation").remaining_calls == 0
+
+    payloads = [read_decision_input(call["input"]) for call in boundary.requests]
+    assert ["rendered_response" in payload for payload in payloads] == [True, False] * 3
+    assert unsupported_claim in boundary.requests[0]["input"]
+    assert unsupported_claim in boundary.requests[2]["input"]
+    assert unsupported_claim not in boundary.requests[4]["input"]
+    assert diagnostics == []
+    assert not state["retry"].needs_retry
+    assert state["response"].kind == "answer"
+    assert state["response"].result.content == response.result.content
+    assert state["response"].result.citations == response.result.citations
+    assert state["response"].result.semantic_validation.passed
 
 
 def test_post_validation_preserves_accepted_answer_and_citations():
@@ -723,9 +948,10 @@ def test_filtered_answer_must_pass_decisions_again_before_becoming_an_answer():
 
     updates = make_post_synthesis_validation_node(False, decisions_client=boundary)(state)
 
-    assert len(boundary.requests) == 2
-    assert invalid_claim in boundary.requests[0]["input"]
-    assert invalid_claim not in boundary.requests[1]["input"]
+    body_requests = [call for call in boundary.requests if "rendered_response" in read_decision_input(call["input"])]
+    assert len(body_requests) == 2
+    assert invalid_claim in body_requests[0]["input"]
+    assert invalid_claim not in body_requests[1]["input"]
     result = updates["response"].result
     assert invalid_claim not in export_answer_text(result)
     assert updates["retry"].needs_retry is False
@@ -758,7 +984,8 @@ def test_second_grounding_rejection_removes_the_retained_claim_too():
 
     updates = make_post_synthesis_validation_node(False, decisions_client=boundary)(state)
 
-    assert len(boundary.requests) == 2
+    body_requests = [call for call in boundary.requests if "rendered_response" in read_decision_input(call["input"])]
+    assert len(body_requests) == 2
     final_text = export_answer_text(updates["response"].result)
     assert retained_claim not in final_text
     assert rejected_claim not in final_text

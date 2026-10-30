@@ -52,7 +52,7 @@ def build_followup_updates(
     )
 
 
-def _retrieval_gap_message(snapshot: ValidationSnapshot) -> str:
+def retrieval_gap_message(snapshot: ValidationSnapshot) -> str:
     notices = []
     failed = set(snapshot.terminal_failed_requirement_ids)
     for task in snapshot.planner_output.tasks:
@@ -80,7 +80,7 @@ def add_retrieval_gap_issues(snapshot: ValidationSnapshot, result: AnswerRespons
     if not snapshot.terminal_failed_requirement_ids:
         return result
     issues = [issue for issue in result.issues if issue.code != "retrieved_evidence_incomplete"]
-    issues.append(ResponseIssue(code="retrieved_evidence_incomplete", message=_retrieval_gap_message(snapshot)))
+    issues.append(ResponseIssue(code="retrieved_evidence_incomplete", message=retrieval_gap_message(snapshot)))
     if not any(issue.code == "answer_incomplete" for issue in issues):
         issues.append(ResponseIssue(
             code="answer_incomplete",
