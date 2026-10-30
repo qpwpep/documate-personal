@@ -3,18 +3,21 @@ import Ajv2020, { type ValidateFunction } from 'ajv/dist/2020';
 import type { components } from './generated';
 import openapi from './openapi.json';
 import { ApiError } from './errors';
-import type { AgentResponse, AgentStreamEvent, AnswerResponse, ClientConfig, UploadManifest } from './types';
+import type { AgentResponse, AgentStreamEvent, AnswerResponse, ClientConfig, StagedUpload, UploadManifest } from './types';
 
 // OpenAPI annotations are not JSON Schema assertions. Keep every schema
 // constraint, but accept the document's OpenAPI-specific annotation keywords.
 const validator = new Ajv2020({ strictSchema: false, strictTypes: false });
 validator.addSchema(openapi, 'documate');
 
-const configValidator = validator.compile<ClientConfig>({ $ref: 'documate#/components/schemas/ClientConfig' });
-const manifestValidator = validator.compile<UploadManifest>({ $ref: 'documate#/components/schemas/UploadManifest' });
-const responseValidator = validator.compile<components['schemas']['AgentResponse']>({
-  $ref: 'documate#/components/schemas/AgentResponse',
-});
+export function modelValidator<Name extends keyof components['schemas']>(name: Name): ValidateFunction<components['schemas'][Name]> {
+  return validator.compile<components['schemas'][Name]>({ $ref: `documate#/components/schemas/${name}` });
+}
+
+const configValidator = modelValidator('ClientConfig');
+const manifestValidator = modelValidator('UploadManifest');
+const stagedUploadValidator = modelValidator('StagedUpload');
+const responseValidator = modelValidator('AgentResponse');
 const eventSchemas = openapi.paths['/agent/stream'].post.responses['200'].content['text/event-stream']['x-sse-events'];
 const eventValidators = new Map<string, ValidateFunction>(
   Object.entries(eventSchemas).map(([event, schema]) => [event, validator.compile({
@@ -33,6 +36,11 @@ export function parseUploadManifest(value: unknown): UploadManifest {
   return value;
 }
 
+export function parseStagedUpload(value: unknown): StagedUpload {
+  if (!stagedUploadValidator(value)) throw invalidResponse();
+  return value;
+}
+
 export function parseAgentEvent(event: string, value: unknown): AgentStreamEvent {
   const validate = eventValidators.get(event);
   if (!validate || !validate(value)) throw invalidResponse();
@@ -41,7 +49,7 @@ export function parseAgentEvent(event: string, value: unknown): AgentStreamEvent
   return { event, data: value } as AgentStreamEvent;
 }
 
-function parseAgentResponse(value: unknown): AgentResponse {
+export function parseAgentResponse(value: unknown): AgentResponse {
   if (!responseValidator(value)) throw invalidResponse();
   const response: AgentResponse = {
     ...value,
@@ -68,7 +76,7 @@ function parseAgentResponse(value: unknown): AgentResponse {
   return response;
 }
 
-function normalizeAnswer(value: components['schemas']['AnswerResponse']): AnswerResponse {
+export function normalizeAnswer(value: components['schemas']['AnswerResponse']): AnswerResponse {
   return {
     ...value,
     content: { blocks: value.content?.blocks ?? [] },

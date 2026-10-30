@@ -21,4 +21,5 @@ data/benchmarks/history/** -text
 # Generated browser contracts must compare identically on Windows and Unix.
 frontend/src/api/openapi.json text eol=lf
 frontend/src/api/generated.ts text eol=lf
+frontend/src/attachments/casefold.generated.ts text eol=lf
 tests/fixtures/web_contracts/*.json text eol=lf

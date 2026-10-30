@@ -824,6 +824,111 @@
         "title": "AnswerSource",
         "type": "object"
       },
+      "Body_stage_browser_upload_sessions__session_id__uploads_staging_post": {
+        "properties": {
+          "file": {
+            "contentMediaType": "application/octet-stream",
+            "title": "File",
+            "type": "string"
+          }
+        },
+        "required": [
+          "file"
+        ],
+        "title": "Body_stage_browser_upload_sessions__session_id__uploads_staging_post",
+        "type": "object"
+      },
+      "BrowserUploadAddition": {
+        "additionalProperties": false,
+        "properties": {
+          "content_hash": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "title": "Content Hash",
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "replace_file_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Replace File Id"
+          },
+          "upload_id": {
+            "pattern": "^[0-9a-f]{32}$",
+            "title": "Upload Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "upload_id",
+          "name",
+          "content_hash"
+        ],
+        "title": "BrowserUploadAddition",
+        "type": "object"
+      },
+      "BrowserUploadSyncRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "add": {
+            "items": {
+              "$ref": "#/components/schemas/BrowserUploadAddition"
+            },
+            "maxItems": 100,
+            "title": "Add",
+            "type": "array"
+          },
+          "clear": {
+            "default": false,
+            "title": "Clear",
+            "type": "boolean"
+          },
+          "epoch": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Epoch",
+            "type": "string"
+          },
+          "expected_revision": {
+            "minimum": 0.0,
+            "title": "Expected Revision",
+            "type": "integer"
+          },
+          "operation_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Operation Id",
+            "type": "string"
+          },
+          "remove": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 100,
+            "title": "Remove",
+            "type": "array"
+          }
+        },
+        "required": [
+          "epoch",
+          "expected_revision",
+          "operation_id"
+        ],
+        "title": "BrowserUploadSyncRequest",
+        "type": "object"
+      },
       "Citation": {
         "additionalProperties": false,
         "properties": {
@@ -3706,6 +3811,41 @@
         "title": "StageTotalsModel",
         "type": "object"
       },
+      "StagedUpload": {
+        "additionalProperties": false,
+        "description": "A received file that has not yet changed the searchable attachment set.",
+        "properties": {
+          "content_hash": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "title": "Content Hash",
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "size_bytes": {
+            "exclusiveMinimum": 0.0,
+            "title": "Size Bytes",
+            "type": "integer"
+          },
+          "upload_id": {
+            "pattern": "^[0-9a-f]{32}$",
+            "title": "Upload Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "upload_id",
+          "name",
+          "size_bytes",
+          "content_hash"
+        ],
+        "title": "StagedUpload",
+        "type": "object"
+      },
       "SynthesisAttemptLatencyModel": {
         "properties": {
           "attempt": {
@@ -4757,6 +4897,55 @@
         "summary": "Get Upload Manifest"
       }
     },
+    "/sessions/{session_id}/uploads/staging": {
+      "post": {
+        "operationId": "stage_browser_upload_sessions__session_id__uploads_staging_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_stage_browser_upload_sessions__session_id__uploads_staging_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StagedUpload"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Stage Browser Upload"
+      }
+    },
     "/sessions/{session_id}/uploads/sync": {
       "post": {
         "operationId": "sync_upload_manifest_sessions__session_id__uploads_sync_post",
@@ -4775,7 +4964,15 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/UploadSyncRequest"
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/UploadSyncRequest"
+                  },
+                  {
+                    "$ref": "#/components/schemas/BrowserUploadSyncRequest"
+                  }
+                ],
+                "title": "Request Data"
               }
             }
           },

@@ -102,6 +102,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/sessions/{session_id}/uploads/staging": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Stage Browser Upload */
+        post: operations["stage_browser_upload_sessions__session_id__uploads_staging_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/sessions/{session_id}/uploads/sync": {
         parameters: {
             query?: never;
@@ -422,6 +439,40 @@ export interface components {
             ref: "previous" | "pending";
             /** Response Hash */
             response_hash: string;
+        };
+        /** Body_stage_browser_upload_sessions__session_id__uploads_staging_post */
+        Body_stage_browser_upload_sessions__session_id__uploads_staging_post: {
+            /** File */
+            file: string;
+        };
+        /** BrowserUploadAddition */
+        BrowserUploadAddition: {
+            /** Content Hash */
+            content_hash: string;
+            /** Name */
+            name: string;
+            /** Replace File Id */
+            replace_file_id?: string | null;
+            /** Upload Id */
+            upload_id: string;
+        };
+        /** BrowserUploadSyncRequest */
+        BrowserUploadSyncRequest: {
+            /** Add */
+            add?: components["schemas"]["BrowserUploadAddition"][];
+            /**
+             * Clear
+             * @default false
+             */
+            clear?: boolean;
+            /** Epoch */
+            epoch: string;
+            /** Expected Revision */
+            expected_revision: number;
+            /** Operation Id */
+            operation_id: string;
+            /** Remove */
+            remove?: string[];
         };
         /** Citation */
         Citation: {
@@ -1723,6 +1774,20 @@ export interface components {
              */
             validation_ms?: number;
         };
+        /**
+         * StagedUpload
+         * @description A received file that has not yet changed the searchable attachment set.
+         */
+        StagedUpload: {
+            /** Content Hash */
+            content_hash: string;
+            /** Name */
+            name: string;
+            /** Size Bytes */
+            size_bytes: number;
+            /** Upload Id */
+            upload_id: string;
+        };
         /** SynthesisAttemptLatencyModel */
         SynthesisAttemptLatencyModel: {
             /**
@@ -2253,6 +2318,41 @@ export interface operations {
             };
         };
     };
+    stage_browser_upload_sessions__session_id__uploads_staging_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_stage_browser_upload_sessions__session_id__uploads_staging_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StagedUpload"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     sync_upload_manifest_sessions__session_id__uploads_sync_post: {
         parameters: {
             query?: never;
@@ -2264,7 +2364,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["UploadSyncRequest"];
+                "application/json": components["schemas"]["UploadSyncRequest"] | components["schemas"]["BrowserUploadSyncRequest"];
             };
         };
         responses: {
