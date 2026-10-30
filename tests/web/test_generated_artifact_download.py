@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from urllib.parse import unquote
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -8,6 +9,7 @@ import pytest
 
 from src.app.web.routes import router
 from src.core.save_contract import SaveOperation
+from src.infra.saved_artifacts import save_artifact
 from src.infra.tools.save_text import build_save_text_tool
 
 
@@ -46,7 +48,35 @@ def test_download_returns_the_actual_verified_bytes_and_operation_binding(downlo
     assert response.headers["x-save-binding-sha256"] == operation.binding_sha256
     assert response.headers["x-artifact-id"] == artifact["artifact_id"]
     assert response.headers["etag"] == f'"{artifact["sha256"]}"'
-    assert artifact["filename"] in response.headers["content-disposition"]
+    assert unquote(response.headers["content-disposition"]) == (
+        "attachment; filename*=utf-8''DocuMate - 사용자가 요청한 답변.txt"
+    )
+
+
+@pytest.mark.parametrize("text,download_name", [
+    ("## pandas.merge 기본 사용법 [1]\n본문", "DocuMate - pandas.merge 기본 사용법.txt"),
+    ('# 한글 / 경로: "답변"?\n본문', "DocuMate - 한글 경로 답변.txt"),
+    ("```python\nprint('hello')\n```", "DocuMate 답변.txt"),
+])
+def test_download_uses_a_readable_portable_name_without_renaming_the_artifact(
+    downloads, text, download_name,
+):
+    client, root = downloads
+    operation = SaveOperation.for_text(
+        text, operation_id="save-title", session_id="session-title", request_id="request-title",
+        contract_revision=1, target_kind="compose", source_hash="a" * 64, answer_hash="b" * 64,
+    )
+    manifest, path = save_artifact(root, text, operation, ttl_seconds=60)
+
+    response = client.get(f"/download/{manifest.artifact.filename}")
+
+    assert response.status_code == 200
+    assert unquote(response.headers["content-disposition"]) == (
+        f"attachment; filename*=utf-8''{download_name}"
+    )
+    assert path.name == manifest.artifact.filename
+    assert path.name.startswith("response_")
+    assert path.read_bytes() == response.content == text.encode("utf-8-sig")
 
 
 @pytest.mark.parametrize("damage,status,code", [

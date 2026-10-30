@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from urllib.parse import quote
 from uuid import uuid4
 
@@ -136,10 +137,21 @@ def download_file(filename: str):
         content=payload,
         media_type="text/plain",
         headers={
-            "Content-Disposition": f"attachment; filename*=utf-8''{quote(manifest.artifact.filename, safe='')}",
+            "Content-Disposition": f"attachment; filename*=utf-8''{quote(_download_filename(payload), safe='')}",
             "ETag": f'"{manifest.artifact.sha256}"',
             "X-Artifact-Id": manifest.artifact.artifact_id,
             "X-Save-Binding-SHA256": manifest.operation.binding_sha256,
             "Cache-Control": "no-store",
         },
     )
+
+
+def _download_filename(payload: bytes) -> str:
+    """Give verified TXT bytes a readable name without changing artifact identity."""
+    first_line = next((line.strip() for line in payload.decode("utf-8-sig").splitlines() if line.strip()), "")
+    if first_line.startswith(("```", "~~~")):
+        return "DocuMate 답변.txt"
+    title = re.sub(r"\s*\[\d+\]", "", first_line.lstrip("# "))
+    title = re.sub(r'[<>:"/\\|?*\x00-\x1f`]', " ", title)
+    title = " ".join(title.split())[:70].strip(" .-")
+    return f"DocuMate - {title}.txt" if title else "DocuMate 답변.txt"
