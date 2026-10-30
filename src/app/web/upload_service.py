@@ -8,11 +8,12 @@ import os
 import re
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import BinaryIO, TYPE_CHECKING
 from uuid import uuid4
 
 from fastapi import HTTPException
 
+from src.app.web.schemas import StagedUpload
 from src.core.uploads import (
     UploadAddition, UploadContext, UploadManifest, UploadRecord, UploadSyncRequest,
     normalized_upload_name, validate_session_id,
@@ -57,6 +58,44 @@ class UploadService:
             session = entry.agent.session
             self._cleanup_resources(session_id, session)
             return session.upload_manifest()
+
+    def stage(self, session_id: str, name: str, source: BinaryIO) -> StagedUpload:
+        session_id = validate_session_id(session_id)
+        self._validate_upload_name(name)
+        content = source.read(self.settings.upload_max_file_mib * _MIB + 1)
+        if len(content) > self.settings.upload_max_file_mib * _MIB:
+            raise _error(413, "UPLOAD_FILE_TOO_LARGE", f"파일당 {self.settings.upload_max_file_mib} MiB까지 첨부할 수 있습니다.")
+        if not content:
+            raise _error(422, "UPLOAD_EMPTY", "빈 파일은 검색할 수 없습니다.")
+
+        with self.session_store.locked_session(session_id) as (entry, _wait_ms):
+            self._cleanup_staging(session_id)
+            self._cleanup_resources(session_id, entry.agent.session)
+            self._check_storage_capacity(session_id, len(content))
+            storage = entry.agent.session.bind_upload_storage(session_id)
+            upload_id = uuid4().hex
+            folder = storage.root / "staging" / upload_id
+            if not folder.resolve().is_relative_to(storage.root):
+                raise _error(422, "UPLOAD_PATH_INVALID", "첨부 저장 경로가 세션 영역을 벗어났습니다.")
+            folder.mkdir(parents=True, exist_ok=False)
+            target = folder / name
+            temporary = folder / ".upload-part"
+            try:
+                with temporary.open("xb") as stream:
+                    stream.write(content)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                temporary.replace(target)
+            except OSError as exc:
+                temporary.unlink(missing_ok=True)
+                target.unlink(missing_ok=True)
+                folder.rmdir()
+                raise _error(500, "UPLOAD_WRITE_FAILED", "파일을 받지 못했습니다. 다시 첨부해 주세요.") from exc
+
+        return StagedUpload(
+            upload_id=upload_id, name=name, size_bytes=len(content),
+            content_hash="sha256:" + hashlib.sha256(content).hexdigest(),
+        )
 
     def sync(self, session_id: str, request: UploadSyncRequest) -> UploadManifest:
         session_id = validate_session_id(session_id)
@@ -155,14 +194,16 @@ class UploadService:
                 # result; a later request can retry the remaining expired files.
                 logger.warning("upload_staging_cleanup_failed", exc_info=True)
 
-    def _read_addition(self, addition: UploadAddition, session_id: str) -> tuple[bytes, str]:
-        name = addition.name
-        if (name in {".", ".."} or name != name.strip() or name.endswith(".")
+    def _validate_upload_name(self, name: str) -> None:
+        if (not name or len(name) > 255 or name in {".", ".."} or name != name.strip() or name.endswith(".")
                 or re.search(r'[\\/:*?"<>|\x00-\x1f]', name)
                 or re.fullmatch(r"(?:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\..*)?", name, re.I)):
             raise _error(422, "UPLOAD_NAME_INVALID", "사용할 수 없는 파일 이름입니다.")
         if Path(name).suffix.casefold() not in enabled_upload_suffixes(docling_enabled=self.settings.docling_enabled):
             raise _error(422, "UPLOAD_TYPE_INVALID", "지원하지 않거나 활성화되지 않은 첨부 형식입니다.")
+
+    def _read_addition(self, addition: UploadAddition, session_id: str) -> tuple[bytes, str]:
+        self._validate_upload_name(addition.name)
         try:
             path = resolve_upload_input_path(addition.path, session_id)
         except (OSError, RuntimeError, ValueError) as exc:

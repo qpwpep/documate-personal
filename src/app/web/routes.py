@@ -6,22 +6,24 @@ import re
 from urllib.parse import quote
 from uuid import uuid4
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, UploadFile
 from fastapi.responses import Response, StreamingResponse
+from pydantic import ValidationError
 
 from src.infra.logging_utils import log_event
-from src.infra.runtime_paths import get_save_text_output_dir
+from src.infra.runtime_paths import get_save_text_output_dir, get_upload_session_dir
 from src.infra.saved_artifacts import ArtifactError, read_saved_artifact
 from src.app.web.cleanup import resolve_download_path
+from src.app.web.upload_body_limit import BoundedUploadRoute
 from src.app.web.schemas import (
     AGENT_STREAM_EVENT_SCHEMAS, AgentRequest, AgentStreamEvent,
-    ClientConfig, ClientQueryConfig, ClientUploadConfig,
+    BrowserUploadSyncRequest, ClientConfig, ClientQueryConfig, ClientUploadConfig, StagedUpload,
 )
 from src.core.contracts.outcome import AnswerExportResult
 from src.core.conversation_memory import DEFAULT_QUERY_MAX_CHARS, DEFAULT_QUERY_MAX_UTF8_BYTES
 from src.core.slack_contract import SlackDefault
 from src.core.upload_formats import enabled_upload_suffixes
-from src.core.uploads import UploadManifest, UploadSyncRequest, validate_session_id
+from src.core.uploads import UploadAddition, UploadManifest, UploadSyncRequest, validate_session_id
 
 
 logger = logging.getLogger(__name__)
@@ -63,8 +65,43 @@ def get_upload_manifest(session_id: str, request: Request):
 
 
 @router.post("/sessions/{session_id}/uploads/sync", response_model=UploadManifest)
-def sync_upload_manifest(session_id: str, request_data: UploadSyncRequest, request: Request):
-    return request.app.state.upload_service.sync(_upload_session_id(session_id), request_data)
+def sync_upload_manifest(
+    session_id: str, request_data: UploadSyncRequest | BrowserUploadSyncRequest, request: Request,
+):
+    session_id = _upload_session_id(session_id)
+    if isinstance(request_data, BrowserUploadSyncRequest):
+        # Keep this conversion deterministic and free of file reads: a committed
+        # operation remains replayable after its staged inputs have been cleaned.
+        staging = get_upload_session_dir(session_id) / "staging"
+        try:
+            request_data = UploadSyncRequest(
+                epoch=request_data.epoch,
+                expected_revision=request_data.expected_revision,
+                operation_id=request_data.operation_id,
+                add=[UploadAddition(
+                    path=str(staging / item.upload_id / item.name),
+                    name=item.name,
+                    content_hash=item.content_hash,
+                    replace_file_id=item.replace_file_id,
+                ) for item in request_data.add],
+                remove=request_data.remove,
+                clear=request_data.clear,
+            )
+        except ValidationError as exc:
+            raise HTTPException(status_code=422, detail=exc.errors(include_context=False)) from exc
+    return request.app.state.upload_service.sync(session_id, request_data)
+
+
+def stage_browser_upload(session_id: str, file: UploadFile, request: Request) -> StagedUpload:
+    return request.app.state.upload_service.stage(
+        _upload_session_id(session_id), file.filename or "", file.file,
+    )
+
+
+router.add_api_route(
+    "/sessions/{session_id}/uploads/staging", stage_browser_upload,
+    methods=["POST"], response_model=StagedUpload, route_class_override=BoundedUploadRoute,
+)
 
 
 @router.post("/sessions/{session_id}/answers/{answer_id}/save", response_model=AnswerExportResult)

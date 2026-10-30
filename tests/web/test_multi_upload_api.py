@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 import hashlib
+import asyncio
 import socket
+from collections.abc import AsyncIterator
 from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
@@ -416,3 +418,218 @@ def test_loopback_attachment_changes_reach_streamlit_client_and_versioned_answer
             server.should_exit = True
             worker.join(timeout=10)
             assert not worker.is_alive(), "loopback server did not shut down"
+
+
+def browser_stage(api, name: str, content: bytes, *, session: str = "session-a") -> dict[str, object]:
+    response = api.client.post(f"/sessions/{session}/uploads/staging", files={"file": (name, content)})
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def browser_addition(upload: dict[str, object]) -> dict[str, object]:
+    return {key: upload[key] for key in ("upload_id", "name", "content_hash")}
+
+
+def test_browser_stage_keeps_manifest_unconfirmed_and_coexists_with_path_uploads(api):
+    before = manifest(api)
+    content = "# 한글 원문\nalpha = 7\n".encode("utf-8")
+
+    upload = browser_stage(api, "alpha.py", content)
+
+    assert set(upload) == {"upload_id", "name", "size_bytes", "content_hash"}
+    assert len(upload["upload_id"]) == 32
+    assert set(upload["upload_id"]) <= set("0123456789abcdef")
+    assert upload["name"] == "alpha.py"
+    assert upload["size_bytes"] == len(content)
+    assert upload["content_hash"] == "sha256:" + hashlib.sha256(content).hexdigest()
+    assert manifest(api) == before
+
+    legacy = sync(api, add=[staged(api, "beta.py", "beta = 2\n")])
+    committed = sync(api, add=[browser_addition(upload)])
+
+    assert committed["revision"] == legacy["revision"] + 1
+    assert {item["name"] for item in committed["files"]} == {"alpha.py", "beta.py"}
+    alpha = next(item for item in committed["files"] if item["name"] == "alpha.py")
+    assert (alpha["size_bytes"], alpha["content_hash"]) == (len(content), upload["content_hash"])
+    response = answer(api, uploads=context(committed))
+    assert {item.evidence.snapshot.title for item in response.citations} == {"alpha.py", "beta.py"}
+    assert content.decode() in {item.evidence.excerpt for item in response.citations}
+
+
+def test_browser_upload_replacement_removal_and_clear_preserve_confirmed_identity(api):
+    alpha = browser_stage(api, "alpha.py", b"alpha = 1\n")
+    beta = browser_stage(api, "beta.py", b"beta = 2\n")
+    current = sync(api, add=[browser_addition(alpha), browser_addition(beta)])
+    alpha_file = next(item for item in current["files"] if item["name"] == "alpha.py")
+    beta_file = next(item for item in current["files"] if item["name"] == "beta.py")
+    replacement = browser_addition(browser_stage(api, "alpha.py", b"alpha = 10\n"))
+
+    rejected = api.client.post("/sessions/session-a/uploads/sync", json=sync_body(current, add=[replacement]))
+
+    assert rejected.status_code == 409
+    assert rejected.json()["detail"]["code"] == "UPLOAD_NAME_CONFLICT"
+    assert manifest(api) == current
+
+    replacement["replace_file_id"] = alpha_file["file_id"]
+    replaced = sync(api, add=[replacement])
+    replaced_alpha = next(item for item in replaced["files"] if item["name"] == "alpha.py")
+    assert replaced_alpha["file_id"] == alpha_file["file_id"]
+    assert replaced_alpha["source_uri"] == alpha_file["source_uri"]
+    assert replaced_alpha["content_hash"] == "sha256:" + hashlib.sha256(b"alpha = 10\n").hexdigest()
+    removed = sync(api, remove=[beta_file["file_id"]])
+    assert [item["name"] for item in removed["files"]] == ["alpha.py"]
+    assert sync(api, clear=True)["files"] == []
+
+
+@pytest.mark.parametrize("stale_field", ["epoch", "expected_revision"])
+def test_browser_upload_rejects_stale_context_without_mutating_manifest(api, stale_field):
+    old = manifest(api)
+    current = sync(api, add=[staged(api, "alpha.py", "alpha = 1\n")])
+    upload = browser_stage(api, "beta.py", b"beta = 2\n")
+    body = sync_body(current, add=[browser_addition(upload)])
+    body[stale_field] = "expired-epoch" if stale_field == "epoch" else old["revision"]
+
+    rejected = api.client.post("/sessions/session-a/uploads/sync", json=body)
+
+    assert rejected.status_code == 409
+    assert rejected.json()["detail"]["code"] == "UPLOAD_REVISION_CONFLICT"
+    assert manifest(api) == current
+
+
+def test_browser_upload_id_cannot_read_another_sessions_staged_file(api):
+    before = manifest(api)
+    upload = browser_stage(api, "secret.py", b"secret = 42\n", session="session-b")
+
+    rejected = api.client.post("/sessions/session-a/uploads/sync", json=sync_body(
+        before, add=[browser_addition(upload)],
+    ))
+
+    assert rejected.status_code == 422
+    assert rejected.json()["detail"]["code"] == "UPLOAD_PATH_INVALID"
+    assert manifest(api) == before
+    assert manifest(api, "session-b")["files"] == []
+
+
+@pytest.mark.parametrize("name,content,status,code", [
+    ("../escape.py", b"value = 1\n", 422, "UPLOAD_NAME_INVALID"),
+    ("CON.py", b"value = 1\n", 422, "UPLOAD_NAME_INVALID"),
+    ("disabled.pdf", b"%PDF-1.4", 422, "UPLOAD_TYPE_INVALID"),
+    ("empty.py", b"", 422, "UPLOAD_EMPTY"),
+    ("large.py", b"x" * (1_048_576 + 1), 413, "UPLOAD_FILE_TOO_LARGE"),
+], ids=["path", "reserved-name", "disabled-format", "empty", "too-large"])
+def test_browser_stage_rejects_invalid_files_without_retaining_partial_bytes(api, name, content, status, code):
+    before = manifest(api)
+
+    rejected = api.client.post("/sessions/session-a/uploads/staging", files={"file": (name, content)})
+
+    assert rejected.status_code == status
+    assert rejected.json()["detail"]["code"] == code
+    assert manifest(api) == before
+    staging = api.root / "uploads" / "session-a" / "staging"
+    assert not [path for path in staging.rglob("*") if path.is_file()]
+
+
+@pytest.mark.parametrize("upload_id", ["../other", "F" * 32, "a" * 31])
+def test_browser_sync_rejects_malformed_upload_identifiers(api, upload_id):
+    before = manifest(api)
+    addition = {"upload_id": upload_id, "name": "alpha.py", "content_hash": "sha256:" + "0" * 64}
+
+    rejected = api.client.post("/sessions/session-a/uploads/sync", json=sync_body(before, add=[addition]))
+
+    assert rejected.status_code == 422
+    assert manifest(api) == before
+
+
+def test_browser_stage_enforces_storage_cap_and_removes_incomplete_file(api):
+    api.settings.session_ttl_seconds = 3600
+    before = manifest(api)
+    content = b"x" * 1_048_576
+    for index in range(6):
+        browser_stage(api, f"pending-{index}.py", content)
+    staging = api.root / "uploads" / "session-a" / "staging"
+    retained = {path: path.stat().st_size for path in staging.rglob("*") if path.is_file()}
+    assert sum(retained.values()) == 6_291_456
+
+    rejected = api.client.post("/sessions/session-a/uploads/staging", files={"file": ("overflow.py", b"value = 1\n")})
+
+    assert rejected.status_code == 413
+    assert rejected.json()["detail"]["code"] == "UPLOAD_STORAGE_FULL"
+    assert {path: path.stat().st_size for path in staging.rglob("*") if path.is_file()} == retained
+    assert manifest(api) == before
+
+
+def test_browser_sync_retry_after_staging_cleanup_returns_current_manifest(api):
+    api.settings.session_ttl_seconds = 3600
+    before = manifest(api)
+    upload = browser_stage(api, "alpha.py", b"alpha = 1\n")
+    body = sync_body(before, add=[browser_addition(upload)], operation_id="browser-operation")
+    committed = api.client.post("/sessions/session-a/uploads/sync", json=body)
+    assert committed.status_code == 200, committed.text
+    staging = api.root / "uploads" / "session-a" / "staging"
+    for path in staging.rglob("*"):
+        if path.is_file():
+            path.unlink()
+    current = sync(api, add=[staged(api, "beta.py", "beta = 2\n")])
+
+    replayed = api.client.post("/sessions/session-a/uploads/sync", json=body)
+
+    assert replayed.status_code == 200, replayed.text
+    assert replayed.json() == current
+    assert manifest(api) == current
+    assert current["revision"] == before["revision"] + 2
+
+
+def test_browser_stage_rejects_oversized_content_length_before_accepting_file(api):
+    before = manifest(api)
+    body = (
+        b'--upload-boundary\r\nContent-Disposition: form-data; name="file"; filename="alpha.py"\r\n'
+        b'Content-Type: text/plain\r\n\r\nalpha = 1\n\r\n--upload-boundary--\r\n'
+    )
+
+    async def submit() -> httpx.Response:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=api.client.app), base_url="http://testserver") as client:
+            return await client.post("/sessions/session-a/uploads/staging", content=body, headers={
+                "Content-Type": "multipart/form-data; boundary=upload-boundary",
+                "Content-Length": str(1_048_576 + 65_536 + 1),
+            })
+
+    rejected = asyncio.run(submit())
+
+    assert rejected.status_code == 413
+    assert rejected.json()["detail"]["code"] == "UPLOAD_FILE_TOO_LARGE"
+    assert manifest(api) == before
+    staging = api.root / "uploads" / "session-a" / "staging"
+    assert not [path for path in staging.rglob("*") if path.is_file()]
+
+
+def test_browser_stage_stops_chunked_body_at_ingress_limit_before_parser_reads_all_bytes(api):
+    before = manifest(api)
+    chunks_consumed = 0
+
+    async def body() -> AsyncIterator[bytes]:
+        nonlocal chunks_consumed
+        yield (
+            b'--upload-boundary\r\nContent-Disposition: form-data; name="file"; filename="large.py"\r\n'
+            b'Content-Type: application/octet-stream\r\n\r\n'
+        )
+        for _ in range(10):
+            chunks_consumed += 1
+            yield b"x" * 524_288
+        yield b"\r\n--upload-boundary--\r\n"
+
+    async def submit() -> httpx.Response:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=api.client.app), base_url="http://testserver") as client:
+            return await client.post("/sessions/session-a/uploads/staging", content=body(), headers={
+                "Content-Type": "multipart/form-data; boundary=upload-boundary",
+            })
+
+    rejected = asyncio.run(submit())
+
+    assert "content-length" not in rejected.request.headers
+    assert rejected.status_code == 413
+    assert rejected.json()["detail"]["code"] == "UPLOAD_FILE_TOO_LARGE"
+    # The third 512 KiB block crosses 1 MiB plus 64 KiB of multipart overhead.
+    assert 0 < chunks_consumed <= 3
+    assert manifest(api) == before
+    staging = api.root / "uploads" / "session-a" / "staging"
+    assert not [path for path in staging.rglob("*") if path.is_file()]
