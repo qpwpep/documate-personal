@@ -23,6 +23,30 @@ from src.core.latency import LatencyBreakdownModel, StageName
 AgentRetryContext = RetryState
 
 
+class ClientUploadConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    accepted_suffixes: list[str]
+    max_files: int = Field(ge=1)
+    max_file_bytes: int = Field(ge=1)
+    max_total_bytes: int = Field(ge=1)
+
+
+class ClientQueryConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    max_chars: int = Field(ge=1)
+    max_utf8_bytes: int = Field(ge=1)
+
+
+class ClientConfig(BaseModel):
+    """Public input limits; server settings and credentials remain private."""
+    model_config = ConfigDict(extra="forbid")
+
+    upload: ClientUploadConfig
+    query: ClientQueryConfig
+
+
 class AgentDebugInfo(BaseModel):
     schema_version: int
     observability_status: Literal["ok", "degraded", "failed"]

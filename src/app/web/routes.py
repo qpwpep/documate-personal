@@ -13,14 +13,36 @@ from src.infra.logging_utils import log_event
 from src.infra.runtime_paths import get_save_text_output_dir
 from src.infra.saved_artifacts import ArtifactError, read_saved_artifact
 from src.app.web.cleanup import resolve_download_path
-from src.app.web.schemas import AGENT_STREAM_EVENT_SCHEMAS, AgentRequest, AgentStreamEvent
+from src.app.web.schemas import (
+    AGENT_STREAM_EVENT_SCHEMAS, AgentRequest, AgentStreamEvent,
+    ClientConfig, ClientQueryConfig, ClientUploadConfig,
+)
 from src.core.contracts.outcome import AnswerExportResult
+from src.core.conversation_memory import DEFAULT_QUERY_MAX_CHARS, DEFAULT_QUERY_MAX_UTF8_BYTES
 from src.core.slack_contract import SlackDefault
+from src.core.upload_formats import enabled_upload_suffixes
 from src.core.uploads import UploadManifest, UploadSyncRequest, validate_session_id
 
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+@router.get("/client-config", response_model=ClientConfig)
+def get_client_config(request: Request) -> ClientConfig:
+    settings = request.app.state.settings
+    return ClientConfig(
+        upload=ClientUploadConfig(
+            accepted_suffixes=sorted(enabled_upload_suffixes(docling_enabled=settings.docling_enabled)),
+            max_files=settings.upload_max_files,
+            max_file_bytes=settings.upload_max_file_mib * 1024 * 1024,
+            max_total_bytes=settings.upload_max_total_mib * 1024 * 1024,
+        ),
+        query=ClientQueryConfig(
+            max_chars=DEFAULT_QUERY_MAX_CHARS,
+            max_utf8_bytes=DEFAULT_QUERY_MAX_UTF8_BYTES,
+        ),
+    )
 
 
 @router.get("/slack/default-recipient", response_model=SlackDefault)

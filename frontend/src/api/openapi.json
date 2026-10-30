@@ -1,0 +1,4828 @@
+{
+  "components": {
+    "schemas": {
+      "ActionReceipt": {
+        "additionalProperties": false,
+        "properties": {
+          "artifact": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SaveArtifact"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Error"
+          },
+          "error_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Error Code"
+          },
+          "file_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "File Path"
+          },
+          "invocation_id": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Invocation Id"
+          },
+          "kind": {
+            "enum": [
+              "save_text",
+              "slack_notify"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Message"
+          },
+          "operation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SaveOperation"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "slack": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SlackDelivery"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "status": {
+            "enum": [
+              "success",
+              "error",
+              "skipped",
+              "unknown"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "verification": {
+            "anyOf": [
+              {
+                "enum": [
+                  "verified",
+                  "failed",
+                  "unverifiable"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Verification"
+          }
+        },
+        "required": [
+          "kind",
+          "status"
+        ],
+        "title": "ActionReceipt",
+        "type": "object"
+      },
+      "ActionResults": {
+        "properties": {
+          "save_text": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SaveTextActionResult"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "slack_notify": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SlackDelivery"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "title": "ActionResults",
+        "type": "object"
+      },
+      "AgentDebugInfo": {
+        "properties": {
+          "action_results": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ActionResults"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "answer_provenance": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AnswerProvenance"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "error_codes": {
+            "items": {
+              "enum": [
+                "provider_schema_invalid",
+                "provider_configuration",
+                "provider_unavailable",
+                "provider_rate_limited",
+                "model_output_invalid",
+                "model_output_incomplete",
+                "model_refusal",
+                "internal_error",
+                "evidence_insufficient",
+                "call_budget_exhausted",
+                "upload_revision_conflict",
+                "save_failed",
+                "PLANNER_SCHEMA_INVALID",
+                "PLANNER_TIMEOUT",
+                "RETRIEVAL_DOCS_TIMEOUT",
+                "RETRIEVAL_DOCS_FAILED",
+                "RAG_INDEX_MISSING",
+                "LOCAL_RAG_FAILED",
+                "UPLOAD_RETRIEVER_BUILD_FAILED",
+                "LLM_STRUCTURED_EMPTY",
+                "SYNTHESIS_TIMEOUT",
+                "VALIDATION_UNRESOLVED_REFERENCES",
+                "VALIDATION_MISSING_CONTENT",
+                "DEBUG_NORMALIZATION_FAILED",
+                "SLACK_RECIPIENT_MISSING",
+                "SLACK_RECIPIENT_INVALID",
+                "SLACK_RECIPIENT_AMBIGUOUS",
+                "SLACK_RECIPIENT_CONFLICT",
+                "SLACK_CONFIGURATION_ERROR",
+                "SLACK_TARGET_NOT_FOUND",
+                "SLACK_TARGET_UNAVAILABLE",
+                "SLACK_PERMISSION_DENIED",
+                "SLACK_AUTHENTICATION_FAILED",
+                "SLACK_RATE_LIMITED",
+                "SLACK_TEMPORARY_FAILURE",
+                "SLACK_DELIVERY_UNKNOWN",
+                "SLACK_PROTOCOL_ERROR",
+                "UPLOAD_PATH_INVALID"
+              ],
+              "type": "string"
+            },
+            "title": "Error Codes",
+            "type": "array"
+          },
+          "errors": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Errors",
+            "type": "array"
+          },
+          "execution_evidence": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ToolExecutionEvidence"
+              },
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Execution Evidence"
+          },
+          "latency_breakdown": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LatencyBreakdownModel"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "latency_ms_server": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Latency Ms Server"
+          },
+          "llm_calls": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/LLMCallRecord"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Llm Calls"
+          },
+          "llm_diagnostics": {
+            "items": {
+              "$ref": "#/components/schemas/LLMDiagnostic"
+            },
+            "title": "Llm Diagnostics",
+            "type": "array"
+          },
+          "memory_compactions": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Memory Compactions",
+            "type": "array"
+          },
+          "missing_required_debug_fields": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Missing Required Debug Fields",
+            "type": "array"
+          },
+          "observability_status": {
+            "enum": [
+              "ok",
+              "degraded",
+              "failed"
+            ],
+            "title": "Observability Status",
+            "type": "string"
+          },
+          "observed_hits": {
+            "items": {
+              "$ref": "#/components/schemas/SearchHit"
+            },
+            "title": "Observed Hits",
+            "type": "array"
+          },
+          "planner_diagnostics": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PlannerDiagnostic"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "planner_errors": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Planner Errors",
+            "type": "array"
+          },
+          "retrieval_diagnostics": {
+            "items": {
+              "$ref": "#/components/schemas/RetrievalDiagnostic"
+            },
+            "title": "Retrieval Diagnostics",
+            "type": "array"
+          },
+          "retry_context": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RetryState"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "route_decisions": {
+            "items": {
+              "$ref": "#/components/schemas/RoutingDecision"
+            },
+            "title": "Route Decisions",
+            "type": "array"
+          },
+          "schema_version": {
+            "title": "Schema Version",
+            "type": "integer"
+          },
+          "tool_call_count": {
+            "default": 0,
+            "title": "Tool Call Count",
+            "type": "integer"
+          },
+          "tool_calls": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Tool Calls",
+            "type": "array"
+          },
+          "validation_events": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Validation Events",
+            "type": "array"
+          }
+        },
+        "required": [
+          "schema_version",
+          "observability_status",
+          "route_decisions"
+        ],
+        "title": "AgentDebugInfo",
+        "type": "object"
+      },
+      "AgentRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "include_debug": {
+            "default": false,
+            "title": "Include Debug",
+            "type": "boolean"
+          },
+          "query": {
+            "maxLength": 8192,
+            "minLength": 1,
+            "title": "Query",
+            "type": "string"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "slack_recipient": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RecipientInput"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "uploads": {
+            "$ref": "#/components/schemas/UploadContext"
+          }
+        },
+        "required": [
+          "query",
+          "session_id",
+          "uploads"
+        ],
+        "title": "AgentRequest",
+        "type": "object"
+      },
+      "AgentResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "answer_id": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Answer Id"
+          },
+          "debug": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AgentDebugInfo"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "message": {
+            "default": "",
+            "title": "Message",
+            "type": "string"
+          },
+          "missing_slots": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Missing Slots",
+            "type": "array"
+          },
+          "problem": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ExecutionProblem"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "request_id": {
+            "default": "",
+            "description": "ID of this execution, not the domain request ID.",
+            "title": "Request Id",
+            "type": "string"
+          },
+          "response": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AnswerResponse"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "status": {
+            "default": "completed",
+            "enum": [
+              "completed",
+              "needs_input",
+              "failed",
+              "partial",
+              "refused"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "trace": {
+            "title": "Trace",
+            "type": "string"
+          },
+          "upload_manifest": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/UploadManifest"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Confirmed attachment snapshot. Null on a failed request means no snapshot was available, not an empty attachment set."
+          }
+        },
+        "required": [
+          "trace"
+        ],
+        "title": "AgentResponse",
+        "type": "object"
+      },
+      "AnswerDocument": {
+        "additionalProperties": false,
+        "properties": {
+          "blocks": {
+            "items": {
+              "discriminator": {
+                "mapping": {
+                  "code": "#/components/schemas/CodeBlock",
+                  "heading": "#/components/schemas/HeadingBlock",
+                  "list": "#/components/schemas/ListBlock",
+                  "paragraph": "#/components/schemas/ParagraphBlock",
+                  "table": "#/components/schemas/TableBlock"
+                },
+                "propertyName": "type"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/ParagraphBlock"
+                },
+                {
+                  "$ref": "#/components/schemas/ListBlock"
+                },
+                {
+                  "$ref": "#/components/schemas/CodeBlock"
+                },
+                {
+                  "$ref": "#/components/schemas/TableBlock"
+                },
+                {
+                  "$ref": "#/components/schemas/HeadingBlock"
+                }
+              ]
+            },
+            "title": "Blocks",
+            "type": "array"
+          }
+        },
+        "title": "AnswerDocument",
+        "type": "object"
+      },
+      "AnswerExportResult": {
+        "additionalProperties": false,
+        "description": "A saved answer retains its body even when the filesystem operation fails.",
+        "properties": {
+          "answer_id": {
+            "minLength": 1,
+            "title": "Answer Id",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "request_id": {
+            "description": "ID of this export execution, renewed on retry.",
+            "minLength": 1,
+            "title": "Request Id",
+            "type": "string"
+          },
+          "response": {
+            "$ref": "#/components/schemas/AnswerResponse"
+          },
+          "status": {
+            "enum": [
+              "completed",
+              "failed"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "answer_id",
+          "request_id",
+          "response",
+          "message"
+        ],
+        "title": "AnswerExportResult",
+        "type": "object"
+      },
+      "AnswerProvenance": {
+        "additionalProperties": false,
+        "description": "The final construction/validation packet and the server-selected source answer.\n\nA packet also exists for deterministic copies and fallbacks without a model\ncall. It must never be reconstructed by merging a conversation's searches.",
+        "properties": {
+          "body_kind": {
+            "enum": [
+              "compose",
+              "acknowledge",
+              "copy_input",
+              "transform_input",
+              "copy_answer",
+              "transform_answer",
+              "extract",
+              "unresolved"
+            ],
+            "title": "Body Kind",
+            "type": "string"
+          },
+          "contract_revision": {
+            "anyOf": [
+              {
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Contract Revision"
+          },
+          "evidence_packet": {
+            "items": {
+              "$ref": "#/components/schemas/EvidenceRef"
+            },
+            "title": "Evidence Packet",
+            "type": "array"
+          },
+          "request_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Domain request ID from RequestContract, retained across supplementation and retries.",
+            "title": "Request Id"
+          },
+          "response_hash": {
+            "minLength": 1,
+            "title": "Response Hash",
+            "type": "string"
+          },
+          "save_operation_binding_sha256": {
+            "anyOf": [
+              {
+                "pattern": "^[a-f0-9]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Save Operation Binding Sha256"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AnswerSource"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "version": {
+            "const": 1,
+            "default": 1,
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "body_kind",
+          "response_hash",
+          "evidence_packet"
+        ],
+        "title": "AnswerProvenance",
+        "type": "object"
+      },
+      "AnswerResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "actions": {
+            "items": {
+              "$ref": "#/components/schemas/ActionReceipt"
+            },
+            "title": "Actions",
+            "type": "array"
+          },
+          "checks": {
+            "items": {
+              "$ref": "#/components/schemas/UnitCheck"
+            },
+            "title": "Checks",
+            "type": "array"
+          },
+          "citations": {
+            "items": {
+              "$ref": "#/components/schemas/Citation"
+            },
+            "title": "Citations",
+            "type": "array"
+          },
+          "content": {
+            "$ref": "#/components/schemas/AnswerDocument"
+          },
+          "content_hash": {
+            "default": "",
+            "title": "Content Hash",
+            "type": "string"
+          },
+          "issues": {
+            "items": {
+              "$ref": "#/components/schemas/ResponseIssue"
+            },
+            "title": "Issues",
+            "type": "array"
+          },
+          "retrieval_required": {
+            "default": false,
+            "title": "Retrieval Required",
+            "type": "boolean"
+          },
+          "semantic_validation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SemanticValidation"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "title": "AnswerResponse",
+        "type": "object"
+      },
+      "AnswerSource": {
+        "additionalProperties": false,
+        "description": "The resolved parent's complete adopted citation set, not its old search candidates.",
+        "properties": {
+          "citation_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Citation Ids",
+            "type": "array"
+          },
+          "ref": {
+            "enum": [
+              "previous",
+              "pending"
+            ],
+            "title": "Ref",
+            "type": "string"
+          },
+          "response_hash": {
+            "minLength": 1,
+            "title": "Response Hash",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ref",
+          "response_hash",
+          "citation_ids"
+        ],
+        "title": "AnswerSource",
+        "type": "object"
+      },
+      "Citation": {
+        "additionalProperties": false,
+        "properties": {
+          "evidence": {
+            "$ref": "#/components/schemas/EvidenceRef"
+          },
+          "number": {
+            "minimum": 1,
+            "title": "Number",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "number",
+          "evidence"
+        ],
+        "title": "Citation",
+        "type": "object"
+      },
+      "ClientConfig": {
+        "additionalProperties": false,
+        "description": "Public input limits; server settings and credentials remain private.",
+        "properties": {
+          "query": {
+            "$ref": "#/components/schemas/ClientQueryConfig"
+          },
+          "upload": {
+            "$ref": "#/components/schemas/ClientUploadConfig"
+          }
+        },
+        "required": [
+          "upload",
+          "query"
+        ],
+        "title": "ClientConfig",
+        "type": "object"
+      },
+      "ClientQueryConfig": {
+        "additionalProperties": false,
+        "properties": {
+          "max_chars": {
+            "minimum": 1.0,
+            "title": "Max Chars",
+            "type": "integer"
+          },
+          "max_utf8_bytes": {
+            "minimum": 1.0,
+            "title": "Max Utf8 Bytes",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "max_chars",
+          "max_utf8_bytes"
+        ],
+        "title": "ClientQueryConfig",
+        "type": "object"
+      },
+      "ClientUploadConfig": {
+        "additionalProperties": false,
+        "properties": {
+          "accepted_suffixes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Accepted Suffixes",
+            "type": "array"
+          },
+          "max_file_bytes": {
+            "minimum": 1.0,
+            "title": "Max File Bytes",
+            "type": "integer"
+          },
+          "max_files": {
+            "minimum": 1.0,
+            "title": "Max Files",
+            "type": "integer"
+          },
+          "max_total_bytes": {
+            "minimum": 1.0,
+            "title": "Max Total Bytes",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "accepted_suffixes",
+          "max_files",
+          "max_file_bytes",
+          "max_total_bytes"
+        ],
+        "title": "ClientUploadConfig",
+        "type": "object"
+      },
+      "CodeBlock": {
+        "additionalProperties": false,
+        "properties": {
+          "content": {
+            "$ref": "#/components/schemas/ContentUnit"
+          },
+          "inline": {
+            "default": false,
+            "title": "Inline",
+            "type": "boolean"
+          },
+          "language": {
+            "default": "",
+            "title": "Language",
+            "type": "string"
+          },
+          "type": {
+            "const": "code",
+            "default": "code",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "content"
+        ],
+        "title": "CodeBlock",
+        "type": "object"
+      },
+      "ContentUnit": {
+        "additionalProperties": false,
+        "description": "The exact displayed content and its proposed relationship to sources.",
+        "properties": {
+          "basis": {
+            "default": "interaction",
+            "enum": [
+              "source",
+              "inference",
+              "example",
+              "interaction",
+              "excerpt"
+            ],
+            "title": "Basis",
+            "type": "string"
+          },
+          "refs": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Refs",
+            "type": "array"
+          },
+          "source_location": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SourceLocationReference"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "text": {
+            "minLength": 1,
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "title": "ContentUnit",
+        "type": "object"
+      },
+      "DocsSearchProviderRequest": {
+        "description": "One provider request attempted during this tool invocation.",
+        "properties": {
+          "max_results": {
+            "maximum": 20,
+            "minimum": 1,
+            "title": "Max Results",
+            "type": "integer"
+          },
+          "query": {
+            "title": "Query",
+            "type": "string"
+          },
+          "result_count": {
+            "default": 0,
+            "minimum": 0,
+            "title": "Result Count",
+            "type": "integer"
+          },
+          "status": {
+            "enum": [
+              "completed",
+              "error"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "query",
+          "max_results",
+          "status"
+        ],
+        "title": "DocsSearchProviderRequest",
+        "type": "object"
+      },
+      "DocsSearchRequest": {
+        "description": "A completed provider scope, reused only within one fixed requirement.",
+        "properties": {
+          "max_results": {
+            "maximum": 20,
+            "minimum": 1,
+            "title": "Max Results",
+            "type": "integer"
+          },
+          "query": {
+            "title": "Query",
+            "type": "string"
+          }
+        },
+        "required": [
+          "query",
+          "max_results"
+        ],
+        "title": "DocsSearchRequest",
+        "type": "object"
+      },
+      "DocumentElement": {
+        "additionalProperties": false,
+        "properties": {
+          "anchors": {
+            "items": {
+              "$ref": "#/components/schemas/SourceAnchor"
+            },
+            "title": "Anchors",
+            "type": "array"
+          },
+          "element_id": {
+            "minLength": 1,
+            "title": "Element Id",
+            "type": "string"
+          },
+          "heading_level": {
+            "anyOf": [
+              {
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Heading Level"
+          },
+          "heading_path": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Heading Path",
+            "type": "array"
+          },
+          "kind": {
+            "enum": [
+              "heading",
+              "paragraph",
+              "list",
+              "code",
+              "table",
+              "image"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "language": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Language"
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "title": "Metadata",
+            "type": "object"
+          },
+          "order": {
+            "default": 0,
+            "minimum": 0,
+            "title": "Order",
+            "type": "integer"
+          },
+          "parent_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Parent Id"
+          },
+          "table": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TableData"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "text": {
+            "default": "",
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "element_id",
+          "kind"
+        ],
+        "title": "DocumentElement",
+        "type": "object"
+      },
+      "DocumentSnapshot": {
+        "additionalProperties": false,
+        "properties": {
+          "capture_scope": {
+            "default": "full_document",
+            "enum": [
+              "full_document",
+              "provider_excerpt"
+            ],
+            "title": "Capture Scope",
+            "type": "string"
+          },
+          "content_hash": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "title": "Content Hash",
+            "type": "string"
+          },
+          "document_id": {
+            "minLength": 1,
+            "title": "Document Id",
+            "type": "string"
+          },
+          "media_type": {
+            "title": "Media Type",
+            "type": "string"
+          },
+          "parser": {
+            "minLength": 1,
+            "title": "Parser",
+            "type": "string"
+          },
+          "parser_config": {
+            "additionalProperties": true,
+            "title": "Parser Config",
+            "type": "object"
+          },
+          "parser_version": {
+            "minLength": 1,
+            "title": "Parser Version",
+            "type": "string"
+          },
+          "quality_issues": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Quality Issues",
+            "type": "array"
+          },
+          "snapshot_id": {
+            "minLength": 1,
+            "title": "Snapshot Id",
+            "type": "string"
+          },
+          "source_type": {
+            "enum": [
+              "official",
+              "upload"
+            ],
+            "title": "Source Type",
+            "type": "string"
+          },
+          "source_uri": {
+            "minLength": 1,
+            "title": "Source Uri",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "snapshot_id",
+          "document_id",
+          "content_hash",
+          "source_uri",
+          "title",
+          "media_type",
+          "source_type",
+          "parser",
+          "parser_version"
+        ],
+        "title": "DocumentSnapshot",
+        "type": "object"
+      },
+      "EvidenceRef": {
+        "additionalProperties": false,
+        "properties": {
+          "element": {
+            "$ref": "#/components/schemas/DocumentElement"
+          },
+          "id": {
+            "minLength": 1,
+            "title": "Id",
+            "type": "string"
+          },
+          "selection": {
+            "$ref": "#/components/schemas/SourceSelection"
+          },
+          "snapshot": {
+            "$ref": "#/components/schemas/DocumentSnapshot"
+          }
+        },
+        "required": [
+          "id",
+          "snapshot",
+          "element"
+        ],
+        "title": "EvidenceRef",
+        "type": "object"
+      },
+      "ExecutionProblem": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "enum": [
+              "provider_schema_invalid",
+              "provider_configuration",
+              "provider_unavailable",
+              "provider_rate_limited",
+              "model_output_invalid",
+              "model_output_incomplete",
+              "model_refusal",
+              "internal_error",
+              "evidence_insufficient",
+              "upload_revision_conflict",
+              "call_budget_exhausted",
+              "save_failed"
+            ],
+            "title": "Code",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "next_action": {
+            "enum": [
+              "none",
+              "retry_later",
+              "fix_configuration",
+              "supply_information"
+            ],
+            "title": "Next Action",
+            "type": "string"
+          },
+          "retry_after_seconds": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Retry After Seconds"
+          },
+          "stage": {
+            "title": "Stage",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "stage",
+          "message",
+          "next_action"
+        ],
+        "title": "ExecutionProblem",
+        "type": "object"
+      },
+      "ExplicitRecipient": {
+        "additionalProperties": false,
+        "properties": {
+          "evidence_ids": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Evidence Ids",
+            "type": "array"
+          },
+          "selector": {
+            "$ref": "#/components/schemas/RecipientSelector"
+          },
+          "state": {
+            "const": "explicit",
+            "default": "explicit",
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "selector"
+        ],
+        "title": "ExplicitRecipient",
+        "type": "object"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "title": "Detail",
+            "type": "array"
+          }
+        },
+        "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "HeadingBlock": {
+        "additionalProperties": false,
+        "properties": {
+          "content": {
+            "$ref": "#/components/schemas/ContentUnit"
+          },
+          "level": {
+            "default": 2,
+            "maximum": 6,
+            "minimum": 1,
+            "title": "Level",
+            "type": "integer"
+          },
+          "type": {
+            "const": "heading",
+            "default": "heading",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "content"
+        ],
+        "title": "HeadingBlock",
+        "type": "object"
+      },
+      "LLMCallRecord": {
+        "additionalProperties": false,
+        "properties": {
+          "attempt": {
+            "default": 0,
+            "minimum": 0,
+            "title": "Attempt",
+            "type": "integer"
+          },
+          "endpoint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Endpoint"
+          },
+          "failure_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Failure Type"
+          },
+          "latency_ms": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Latency Ms"
+          },
+          "model_name": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Model Name"
+          },
+          "path": {
+            "enum": [
+              "direct",
+              "structured",
+              "structured_compact_fallback",
+              "decisions"
+            ],
+            "title": "Path",
+            "type": "string"
+          },
+          "response_metadata": {
+            "additionalProperties": true,
+            "title": "Response Metadata",
+            "type": "object"
+          },
+          "stage": {
+            "enum": [
+              "summarize",
+              "planner",
+              "synthesis",
+              "pre_synthesis_validation",
+              "post_synthesis_validation"
+            ],
+            "title": "Stage",
+            "type": "string"
+          },
+          "status": {
+            "default": "unknown",
+            "enum": [
+              "unknown",
+              "started",
+              "completed",
+              "failed"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "usage": {
+            "$ref": "#/components/schemas/TokenUsage"
+          },
+          "usage_metadata": {
+            "additionalProperties": true,
+            "title": "Usage Metadata",
+            "type": "object"
+          }
+        },
+        "required": [
+          "stage",
+          "path",
+          "usage"
+        ],
+        "title": "LLMCallRecord",
+        "type": "object"
+      },
+      "LLMDiagnostic": {
+        "additionalProperties": false,
+        "description": "Safe metadata only: never store exception text, prompts, or generated values.",
+        "properties": {
+          "attempt": {
+            "default": 0,
+            "title": "Attempt",
+            "type": "integer"
+          },
+          "budget_reason": {
+            "anyOf": [
+              {
+                "enum": [
+                  "calls",
+                  "deadline"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Budget Reason"
+          },
+          "code": {
+            "enum": [
+              "provider_schema_invalid",
+              "provider_configuration",
+              "provider_unavailable",
+              "provider_rate_limited",
+              "model_output_invalid",
+              "model_output_incomplete",
+              "model_refusal",
+              "internal_error",
+              "evidence_insufficient",
+              "upload_revision_conflict",
+              "call_budget_exhausted",
+              "save_failed"
+            ],
+            "title": "Code",
+            "type": "string"
+          },
+          "endpoint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Endpoint"
+          },
+          "exception_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Exception Type"
+          },
+          "langchain_openai_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Langchain Openai Version"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Model"
+          },
+          "openai_sdk_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Openai Sdk Version"
+          },
+          "provider_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Provider Code"
+          },
+          "provider_param": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Provider Param"
+          },
+          "provider_request_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Provider Request Id"
+          },
+          "provider_status": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Provider Status"
+          },
+          "provider_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Provider Type"
+          },
+          "recovery": {
+            "default": "stop",
+            "title": "Recovery",
+            "type": "string"
+          },
+          "schema_compiler_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Schema Compiler Version"
+          },
+          "schema_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Schema Hash"
+          },
+          "schema_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Schema Name"
+          },
+          "stage": {
+            "title": "Stage",
+            "type": "string"
+          },
+          "transport_failure": {
+            "anyOf": [
+              {
+                "enum": [
+                  "timeout",
+                  "connection"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Transport Failure"
+          },
+          "validation_paths": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Validation Paths",
+            "type": "array"
+          }
+        },
+        "required": [
+          "code",
+          "stage"
+        ],
+        "title": "LLMDiagnostic",
+        "type": "object"
+      },
+      "LatencyBreakdownModel": {
+        "properties": {
+          "graph_total_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Graph Total Ms"
+          },
+          "retrieval_routes": {
+            "items": {
+              "$ref": "#/components/schemas/RetrievalRouteLatencyModel"
+            },
+            "title": "Retrieval Routes",
+            "type": "array"
+          },
+          "server_total_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Server Total Ms"
+          },
+          "stage_attempts": {
+            "items": {
+              "$ref": "#/components/schemas/StageAttemptModel"
+            },
+            "title": "Stage Attempts",
+            "type": "array"
+          },
+          "stage_totals_ms": {
+            "$ref": "#/components/schemas/StageTotalsModel"
+          },
+          "synthesis_attempts": {
+            "items": {
+              "$ref": "#/components/schemas/SynthesisAttemptLatencyModel"
+            },
+            "title": "Synthesis Attempts",
+            "type": "array"
+          },
+          "upload_retriever_build_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Upload Retriever Build Ms"
+          }
+        },
+        "title": "LatencyBreakdownModel",
+        "type": "object"
+      },
+      "ListBlock": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ContentUnit"
+            },
+            "minItems": 1,
+            "title": "Items",
+            "type": "array"
+          },
+          "ordered": {
+            "default": false,
+            "title": "Ordered",
+            "type": "boolean"
+          },
+          "type": {
+            "const": "list",
+            "default": "list",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "ListBlock",
+        "type": "object"
+      },
+      "OmittedRecipient": {
+        "additionalProperties": false,
+        "properties": {
+          "state": {
+            "const": "omitted",
+            "default": "omitted",
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "title": "OmittedRecipient",
+        "type": "object"
+      },
+      "ParagraphBlock": {
+        "additionalProperties": false,
+        "properties": {
+          "content": {
+            "items": {
+              "$ref": "#/components/schemas/ContentUnit"
+            },
+            "minItems": 1,
+            "title": "Content",
+            "type": "array"
+          },
+          "type": {
+            "const": "paragraph",
+            "default": "paragraph",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "content"
+        ],
+        "title": "ParagraphBlock",
+        "type": "object"
+      },
+      "PlannedRequirement": {
+        "additionalProperties": false,
+        "description": "An independently planned subject has one match mode, never mixed symbol roles.",
+        "properties": {
+          "aspects": {
+            "description": "Literal parameter names, option/flag names, requested value tokens or code fragments that must appear in returned source, such as axis, --force, reflect or random_state. For docs setting-meaning questions, omit ordinary data and arbitrary counts, capacities, sizes, thresholds or seeds; keep their parameter names here and complete settings in query and the body request. A value changing the result is not sufficient to make it a literal anchor. Keep categorical modes, enum members, sentinels and distinct behavior-branch values separately alongside their parameter names, including numeric or Boolean choices. Preserve an explicitly requested exact source/code match. Source locations (lines/ranges, cells, pages or document regions) belong in query and the body request, not aspects, unless explicitly requested as literal strings occurring in source. Classify by the requested role, even when location labels are quoted. Do not repeat the primary API already in symbols. For upload and docs, never put natural-language properties or conditions here; preserve their meaning in query. For docs additionally request the relevant evidence_needs. Only anchors explicitly requested in the user's dialogue belong here; never guess an identifier from the user's description of a property.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Aspects",
+            "type": "array"
+          },
+          "evidence_needs": {
+            "description": "Docs-only evidence kinds requested by the user: signature for call syntax, parameters for option/argument descriptions, examples for usage examples, explanation for conceptual or behavioral explanation. A broad request to explain API usage needs explanation; it does not require all four kinds or examples copied from the documentation. Explaining a named parameter setting requests BOTH parameters and explanation, even when phrased as its behavior or effect; that value needs the parameter's own description. Keep empty for upload. Do not infer unrelated kinds from model knowledge.",
+            "items": {
+              "enum": [
+                "signature",
+                "parameters",
+                "examples",
+                "explanation"
+              ],
+              "type": "string"
+            },
+            "title": "Evidence Needs",
+            "type": "array"
+          },
+          "file_ids": {
+            "description": "Upload file IDs from the active catalog whose evidence is explicitly requested. Empty searches all active uploads without requiring every file in the answer. For a comparison or inspection of all attachments, include every requested file ID in one task. Empty for docs.",
+            "items": {
+              "type": "string"
+            },
+            "title": "File Ids",
+            "type": "array"
+          },
+          "library": {
+            "anyOf": [
+              {
+                "enum": [
+                  "Python",
+                  "Git",
+                  "LangChain",
+                  "matplotlib",
+                  "numpy",
+                  "pandas",
+                  "pytorch",
+                  "Hugging Face",
+                  "fastapi",
+                  "BeautifulSoup",
+                  "streamlit",
+                  "gradio",
+                  "scikit-learn",
+                  "pydantic",
+                  "Bare",
+                  "unsupported"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Exact canonical owning-library ID for official docs. Use unsupported for an explicitly requested library outside the enum; preserve its actual name in query/symbols. Python owns standard-library modules such as pathlib. Never append module names, versions or prose to this ID. Null for upload or an unscoped docs subject.",
+            "title": "Library"
+          },
+          "match": {
+            "default": "topic",
+            "description": "topic for broad explanation; symbol for API/usage references, including an uploaded function's implementation together with its actual calls/examples; definition when only the named uploaded function/class implementation is needed. A definition alone excludes calls outside its body.",
+            "enum": [
+              "topic",
+              "symbol",
+              "definition"
+            ],
+            "title": "Match",
+            "type": "string"
+          },
+          "symbols": {
+            "description": "At most one primary target. Use separate tasks for independent symbols, including each uploaded variable/constant whose value is requested. Never put a second independent variable in the first variable's aspects: symbol retrieval selects only the primary target's occurrences. Calls inspected inside a function belong in its aspects, not additional definitions.",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 1,
+            "title": "Symbols",
+            "type": "array"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "pattern": "^\\S+$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "One exact requested version token, for example 3.12, 1.26, v2.4 or latest. For 'Python 3.12', return only '3.12'. Never include a library name, spaces, prose or an inferred default version. Null when the user did not constrain the version.",
+            "title": "Version"
+          }
+        },
+        "title": "PlannedRequirement",
+        "type": "object"
+      },
+      "PlannerDiagnostic": {
+        "properties": {
+          "fallback_routes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Fallback Routes",
+            "type": "array"
+          },
+          "intent_required": {
+            "default": false,
+            "title": "Intent Required",
+            "type": "boolean"
+          },
+          "override_applied": {
+            "default": false,
+            "title": "Override Applied",
+            "type": "boolean"
+          },
+          "override_reason": {
+            "anyOf": [
+              {
+                "enum": [
+                  "missing_required_retrieval",
+                  "missing_required_routes",
+                  "upload_retriever_missing"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Override Reason"
+          },
+          "planner_warnings": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Planner Warnings",
+            "type": "array"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Reason"
+          },
+          "required_routes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Required Routes",
+            "type": "array"
+          },
+          "status": {
+            "default": "",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "title": "PlannerDiagnostic",
+        "type": "object"
+      },
+      "RecipientInput": {
+        "additionalProperties": false,
+        "description": "An optional form value; incomplete input is meaningful, not omission.",
+        "properties": {
+          "kind": {
+            "enum": [
+              "channel",
+              "user",
+              "email"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "value": {
+            "title": "Value",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "value"
+        ],
+        "title": "RecipientInput",
+        "type": "object"
+      },
+      "RecipientSelection": {
+        "additionalProperties": false,
+        "properties": {
+          "request_id": {
+            "minLength": 1,
+            "title": "Request Id",
+            "type": "string"
+          },
+          "selector": {
+            "$ref": "#/components/schemas/RecipientSelector"
+          },
+          "source": {
+            "enum": [
+              "user_text",
+              "request_input",
+              "configured_default"
+            ],
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "request_id",
+          "source",
+          "selector"
+        ],
+        "title": "RecipientSelection",
+        "type": "object"
+      },
+      "RecipientSelector": {
+        "additionalProperties": false,
+        "description": "A recipient validated when a Slack operation actually selects its target.",
+        "properties": {
+          "kind": {
+            "enum": [
+              "channel",
+              "user",
+              "email"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "value": {
+            "minLength": 1,
+            "title": "Value",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "value"
+        ],
+        "title": "RecipientSelector",
+        "type": "object"
+      },
+      "ResponseIssue": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "unit_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Unit Id"
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ],
+        "title": "ResponseIssue",
+        "type": "object"
+      },
+      "RetrievalDiagnostic": {
+        "properties": {
+          "answerability": {
+            "default": "unknown",
+            "enum": [
+              "covered",
+              "partial",
+              "missing",
+              "unknown"
+            ],
+            "title": "Answerability",
+            "type": "string"
+          },
+          "attempt": {
+            "default": 0,
+            "title": "Attempt",
+            "type": "integer"
+          },
+          "candidate_count": {
+            "default": 0,
+            "title": "Candidate Count",
+            "type": "integer"
+          },
+          "completed_requests": {
+            "items": {
+              "$ref": "#/components/schemas/DocsSearchRequest"
+            },
+            "title": "Completed Requests",
+            "type": "array"
+          },
+          "error_code": {
+            "anyOf": [
+              {
+                "enum": [
+                  "provider_schema_invalid",
+                  "provider_configuration",
+                  "provider_unavailable",
+                  "provider_rate_limited",
+                  "model_output_invalid",
+                  "model_output_incomplete",
+                  "model_refusal",
+                  "internal_error",
+                  "evidence_insufficient",
+                  "call_budget_exhausted",
+                  "upload_revision_conflict",
+                  "save_failed",
+                  "PLANNER_SCHEMA_INVALID",
+                  "PLANNER_TIMEOUT",
+                  "RETRIEVAL_DOCS_TIMEOUT",
+                  "RETRIEVAL_DOCS_FAILED",
+                  "RAG_INDEX_MISSING",
+                  "LOCAL_RAG_FAILED",
+                  "UPLOAD_RETRIEVER_BUILD_FAILED",
+                  "LLM_STRUCTURED_EMPTY",
+                  "SYNTHESIS_TIMEOUT",
+                  "VALIDATION_UNRESOLVED_REFERENCES",
+                  "VALIDATION_MISSING_CONTENT",
+                  "DEBUG_NORMALIZATION_FAILED",
+                  "SLACK_RECIPIENT_MISSING",
+                  "SLACK_RECIPIENT_INVALID",
+                  "SLACK_RECIPIENT_AMBIGUOUS",
+                  "SLACK_RECIPIENT_CONFLICT",
+                  "SLACK_CONFIGURATION_ERROR",
+                  "SLACK_TARGET_NOT_FOUND",
+                  "SLACK_TARGET_UNAVAILABLE",
+                  "SLACK_PERMISSION_DENIED",
+                  "SLACK_AUTHENTICATION_FAILED",
+                  "SLACK_RATE_LIMITED",
+                  "SLACK_TEMPORARY_FAILURE",
+                  "SLACK_DELIVERY_UNKNOWN",
+                  "SLACK_PROTOCOL_ERROR",
+                  "UPLOAD_PATH_INVALID"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Error Code"
+          },
+          "evidence_count": {
+            "default": 0,
+            "title": "Evidence Count",
+            "type": "integer"
+          },
+          "filtered_cross_domain_count": {
+            "default": 0,
+            "title": "Filtered Cross Domain Count",
+            "type": "integer"
+          },
+          "filtered_invalid_url_count": {
+            "default": 0,
+            "title": "Filtered Invalid Url Count",
+            "type": "integer"
+          },
+          "filtered_path_prefix_count": {
+            "default": 0,
+            "title": "Filtered Path Prefix Count",
+            "type": "integer"
+          },
+          "final_evidence_count": {
+            "default": 0,
+            "title": "Final Evidence Count",
+            "type": "integer"
+          },
+          "include_raw_content_requested": {
+            "default": false,
+            "title": "Include Raw Content Requested",
+            "type": "boolean"
+          },
+          "invocation_id": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Invocation Id"
+          },
+          "k": {
+            "anyOf": [
+              {
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "K"
+          },
+          "message": {
+            "default": "",
+            "title": "Message",
+            "type": "string"
+          },
+          "metric": {
+            "default": "",
+            "title": "Metric",
+            "type": "string"
+          },
+          "missing_requirements": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Missing Requirements",
+            "type": "array"
+          },
+          "normalized_score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Normalized Score"
+          },
+          "post_filter_ms": {
+            "default": 0,
+            "title": "Post Filter Ms",
+            "type": "integer"
+          },
+          "provider_ms": {
+            "default": 0,
+            "title": "Provider Ms",
+            "type": "integer"
+          },
+          "provider_requests": {
+            "items": {
+              "$ref": "#/components/schemas/DocsSearchProviderRequest"
+            },
+            "title": "Provider Requests",
+            "type": "array"
+          },
+          "provider_result_count": {
+            "default": 0,
+            "title": "Provider Result Count",
+            "type": "integer"
+          },
+          "query": {
+            "default": "",
+            "title": "Query",
+            "type": "string"
+          },
+          "raw_score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Raw Score"
+          },
+          "request_fingerprint": {
+            "default": "",
+            "title": "Request Fingerprint",
+            "type": "string"
+          },
+          "requirement_id": {
+            "default": "",
+            "title": "Requirement Id",
+            "type": "string"
+          },
+          "result_count": {
+            "default": 0,
+            "title": "Result Count",
+            "type": "integer"
+          },
+          "reused": {
+            "default": false,
+            "title": "Reused",
+            "type": "boolean"
+          },
+          "route": {
+            "default": "",
+            "title": "Route",
+            "type": "string"
+          },
+          "score_direction": {
+            "default": "",
+            "enum": [
+              "higher_is_better",
+              "lower_is_better",
+              ""
+            ],
+            "title": "Score Direction",
+            "type": "string"
+          },
+          "status": {
+            "default": "",
+            "title": "Status",
+            "type": "string"
+          },
+          "tool": {
+            "default": "",
+            "title": "Tool",
+            "type": "string"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "title": "RetrievalDiagnostic",
+        "type": "object"
+      },
+      "RetrievalRouteLatencyModel": {
+        "properties": {
+          "attempt": {
+            "default": 1,
+            "title": "Attempt",
+            "type": "integer"
+          },
+          "latency_ms": {
+            "default": 0,
+            "title": "Latency Ms",
+            "type": "integer"
+          },
+          "route": {
+            "default": "",
+            "title": "Route",
+            "type": "string"
+          },
+          "status": {
+            "default": "",
+            "title": "Status",
+            "type": "string"
+          },
+          "tool": {
+            "default": "",
+            "title": "Tool",
+            "type": "string"
+          }
+        },
+        "title": "RetrievalRouteLatencyModel",
+        "type": "object"
+      },
+      "RetrievalScore": {
+        "additionalProperties": false,
+        "properties": {
+          "direction": {
+            "enum": [
+              "higher",
+              "lower"
+            ],
+            "title": "Direction",
+            "type": "string"
+          },
+          "metric": {
+            "minLength": 1,
+            "title": "Metric",
+            "type": "string"
+          },
+          "normalized": {
+            "anyOf": [
+              {
+                "maximum": 1,
+                "minimum": 0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Normalized"
+          },
+          "raw": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Raw"
+          }
+        },
+        "required": [
+          "metric",
+          "direction"
+        ],
+        "title": "RetrievalScore",
+        "type": "object"
+      },
+      "RetrievalTask": {
+        "additionalProperties": false,
+        "properties": {
+          "k": {
+            "maximum": 10,
+            "minimum": 1,
+            "title": "K",
+            "type": "integer"
+          },
+          "query": {
+            "minLength": 1,
+            "title": "Query",
+            "type": "string"
+          },
+          "requirement": {
+            "$ref": "#/components/schemas/PlannedRequirement"
+          },
+          "requirement_id": {
+            "default": "",
+            "description": "A stable short ID for this independent requirement; preserve it during retries.",
+            "title": "Requirement Id",
+            "type": "string"
+          },
+          "route": {
+            "enum": [
+              "docs",
+              "upload"
+            ],
+            "title": "Route",
+            "type": "string"
+          }
+        },
+        "required": [
+          "query",
+          "k",
+          "route"
+        ],
+        "title": "RetrievalTask",
+        "type": "object"
+      },
+      "RetryState": {
+        "properties": {
+          "attempt": {
+            "default": 0,
+            "minimum": 0,
+            "title": "Attempt",
+            "type": "integer"
+          },
+          "content_repair_attempt": {
+            "default": 0,
+            "maximum": 1,
+            "minimum": 0,
+            "title": "Content Repair Attempt",
+            "type": "integer"
+          },
+          "failed_requirement_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Failed Requirement Ids",
+            "type": "array"
+          },
+          "failed_routes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Failed Routes",
+            "type": "array"
+          },
+          "hit_start_index": {
+            "default": 0,
+            "title": "Hit Start Index",
+            "type": "integer"
+          },
+          "max_content_repairs": {
+            "default": 1,
+            "maximum": 1,
+            "minimum": 0,
+            "title": "Max Content Repairs",
+            "type": "integer"
+          },
+          "max_retries": {
+            "default": 1,
+            "minimum": 0,
+            "title": "Max Retries",
+            "type": "integer"
+          },
+          "needs_retry": {
+            "default": false,
+            "title": "Needs Retry",
+            "type": "boolean"
+          },
+          "original_tasks": {
+            "items": {
+              "$ref": "#/components/schemas/RetrievalTask"
+            },
+            "title": "Original Tasks",
+            "type": "array"
+          },
+          "preserved_hits": {
+            "items": {
+              "$ref": "#/components/schemas/SearchHit"
+            },
+            "title": "Preserved Hits",
+            "type": "array"
+          },
+          "preserved_retrieval_diagnostics": {
+            "items": {
+              "$ref": "#/components/schemas/RetrievalDiagnostic"
+            },
+            "title": "Preserved Retrieval Diagnostics",
+            "type": "array"
+          },
+          "retrieval_diagnostic_start_index": {
+            "default": 0,
+            "title": "Retrieval Diagnostic Start Index",
+            "type": "integer"
+          },
+          "retrieval_error_start_index": {
+            "default": 0,
+            "title": "Retrieval Error Start Index",
+            "type": "integer"
+          },
+          "retrieval_feedback": {
+            "default": "",
+            "title": "Retrieval Feedback",
+            "type": "string"
+          },
+          "retry_reason": {
+            "anyOf": [
+              {
+                "enum": [
+                  "no_evidence",
+                  "low_score",
+                  "tool_error",
+                  "blocked_missing_upload",
+                  "unresolved_references",
+                  "missing",
+                  "missing_route_coverage",
+                  "missing_content"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Retry Reason"
+          },
+          "retry_scope": {
+            "default": "refresh_routes",
+            "enum": [
+              "refresh_routes",
+              "reuse_hits_resynthesize"
+            ],
+            "title": "Retry Scope",
+            "type": "string"
+          },
+          "score_avg": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Score Avg"
+          },
+          "terminal_failed_requirement_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Terminal Failed Requirement Ids",
+            "type": "array"
+          },
+          "terminal_retrieval_reason": {
+            "anyOf": [
+              {
+                "enum": [
+                  "no_evidence",
+                  "low_score",
+                  "tool_error",
+                  "blocked_missing_upload",
+                  "unresolved_references",
+                  "missing",
+                  "missing_route_coverage",
+                  "missing_content"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Terminal Retrieval Reason"
+          }
+        },
+        "title": "RetryState",
+        "type": "object"
+      },
+      "RoutingDecision": {
+        "additionalProperties": false,
+        "description": "One committed choice of the next node, shared by execution and diagnostics.",
+        "properties": {
+          "reason": {
+            "minLength": 1,
+            "pattern": "\\S",
+            "title": "Reason",
+            "type": "string"
+          },
+          "sequence": {
+            "minimum": 1,
+            "title": "Sequence",
+            "type": "integer"
+          },
+          "source": {
+            "enum": [
+              "add_user_message",
+              "planner",
+              "pre_synthesis_validation",
+              "post_synthesis_validation"
+            ],
+            "title": "Source",
+            "type": "string"
+          },
+          "target": {
+            "enum": [
+              "summarize_old_messages",
+              "planner",
+              "retrieve_dispatch",
+              "pre_synthesis_validation",
+              "synthesize",
+              "action_postprocess"
+            ],
+            "title": "Target",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sequence",
+          "source",
+          "target",
+          "reason"
+        ],
+        "title": "RoutingDecision",
+        "type": "object"
+      },
+      "SaveArtifact": {
+        "additionalProperties": false,
+        "properties": {
+          "artifact_id": {
+            "pattern": "^[a-f0-9]{64}$",
+            "title": "Artifact Id",
+            "type": "string"
+          },
+          "byte_count": {
+            "minimum": 1,
+            "title": "Byte Count",
+            "type": "integer"
+          },
+          "created_at": {
+            "minimum": 0,
+            "title": "Created At",
+            "type": "number"
+          },
+          "expires_at": {
+            "exclusiveMinimum": 0,
+            "title": "Expires At",
+            "type": "number"
+          },
+          "filename": {
+            "minLength": 1,
+            "title": "Filename",
+            "type": "string"
+          },
+          "sha256": {
+            "pattern": "^[a-f0-9]{64}$",
+            "title": "Sha256",
+            "type": "string"
+          }
+        },
+        "required": [
+          "artifact_id",
+          "filename",
+          "sha256",
+          "byte_count",
+          "created_at",
+          "expires_at"
+        ],
+        "title": "SaveArtifact",
+        "type": "object"
+      },
+      "SaveOperation": {
+        "additionalProperties": false,
+        "properties": {
+          "answer_hash": {
+            "pattern": "^[a-f0-9]{64}$",
+            "title": "Answer Hash",
+            "type": "string"
+          },
+          "byte_count": {
+            "minimum": 1,
+            "title": "Byte Count",
+            "type": "integer"
+          },
+          "contract_revision": {
+            "minimum": 1,
+            "title": "Contract Revision",
+            "type": "integer"
+          },
+          "export_profile": {
+            "const": "answer-text-v1/utf-8-sig",
+            "default": "answer-text-v1/utf-8-sig",
+            "title": "Export Profile",
+            "type": "string"
+          },
+          "operation_id": {
+            "minLength": 1,
+            "title": "Operation Id",
+            "type": "string"
+          },
+          "payload_sha256": {
+            "pattern": "^[a-f0-9]{64}$",
+            "title": "Payload Sha256",
+            "type": "string"
+          },
+          "request_id": {
+            "minLength": 1,
+            "title": "Request Id",
+            "type": "string"
+          },
+          "session_id": {
+            "minLength": 1,
+            "title": "Session Id",
+            "type": "string"
+          },
+          "source_hash": {
+            "pattern": "^[a-f0-9]{64}$",
+            "title": "Source Hash",
+            "type": "string"
+          },
+          "target_kind": {
+            "enum": [
+              "compose",
+              "copy_input",
+              "transform_input",
+              "copy_answer",
+              "transform_answer",
+              "extract"
+            ],
+            "title": "Target Kind",
+            "type": "string"
+          }
+        },
+        "required": [
+          "operation_id",
+          "session_id",
+          "request_id",
+          "contract_revision",
+          "target_kind",
+          "source_hash",
+          "answer_hash",
+          "payload_sha256",
+          "byte_count"
+        ],
+        "title": "SaveOperation",
+        "type": "object"
+      },
+      "SaveTextActionResult": {
+        "properties": {
+          "bytes": {
+            "default": 0,
+            "title": "Bytes",
+            "type": "integer"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Error"
+          },
+          "error_code": {
+            "anyOf": [
+              {
+                "enum": [
+                  "provider_schema_invalid",
+                  "provider_configuration",
+                  "provider_unavailable",
+                  "provider_rate_limited",
+                  "model_output_invalid",
+                  "model_output_incomplete",
+                  "model_refusal",
+                  "internal_error",
+                  "evidence_insufficient",
+                  "call_budget_exhausted",
+                  "upload_revision_conflict",
+                  "save_failed",
+                  "PLANNER_SCHEMA_INVALID",
+                  "PLANNER_TIMEOUT",
+                  "RETRIEVAL_DOCS_TIMEOUT",
+                  "RETRIEVAL_DOCS_FAILED",
+                  "RAG_INDEX_MISSING",
+                  "LOCAL_RAG_FAILED",
+                  "UPLOAD_RETRIEVER_BUILD_FAILED",
+                  "LLM_STRUCTURED_EMPTY",
+                  "SYNTHESIS_TIMEOUT",
+                  "VALIDATION_UNRESOLVED_REFERENCES",
+                  "VALIDATION_MISSING_CONTENT",
+                  "DEBUG_NORMALIZATION_FAILED",
+                  "SLACK_RECIPIENT_MISSING",
+                  "SLACK_RECIPIENT_INVALID",
+                  "SLACK_RECIPIENT_AMBIGUOUS",
+                  "SLACK_RECIPIENT_CONFLICT",
+                  "SLACK_CONFIGURATION_ERROR",
+                  "SLACK_TARGET_NOT_FOUND",
+                  "SLACK_TARGET_UNAVAILABLE",
+                  "SLACK_PERMISSION_DENIED",
+                  "SLACK_AUTHENTICATION_FAILED",
+                  "SLACK_RATE_LIMITED",
+                  "SLACK_TEMPORARY_FAILURE",
+                  "SLACK_DELIVERY_UNKNOWN",
+                  "SLACK_PROTOCOL_ERROR",
+                  "UPLOAD_PATH_INVALID"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Error Code"
+          },
+          "file_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "File Path"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Message"
+          },
+          "status": {
+            "default": "",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "title": "SaveTextActionResult",
+        "type": "object"
+      },
+      "SearchHit": {
+        "additionalProperties": false,
+        "properties": {
+          "evidence": {
+            "$ref": "#/components/schemas/EvidenceRef"
+          },
+          "rank": {
+            "minimum": 1,
+            "title": "Rank",
+            "type": "integer"
+          },
+          "requirement_id": {
+            "default": "",
+            "title": "Requirement Id",
+            "type": "string"
+          },
+          "score": {
+            "$ref": "#/components/schemas/RetrievalScore"
+          }
+        },
+        "required": [
+          "evidence",
+          "score",
+          "rank"
+        ],
+        "title": "SearchHit",
+        "type": "object"
+      },
+      "SemanticCheck": {
+        "additionalProperties": false,
+        "description": "One evaluated probability or explicit refusal from the Decisions API.",
+        "properties": {
+          "name": {
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "probability": {
+            "anyOf": [
+              {
+                "maximum": 1,
+                "minimum": 0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Probability"
+          },
+          "status": {
+            "default": "evaluated",
+            "enum": [
+              "evaluated",
+              "refused"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "unit_id": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Unit Id"
+          }
+        },
+        "required": [
+          "name",
+          "probability"
+        ],
+        "title": "SemanticCheck",
+        "type": "object"
+      },
+      "SemanticValidation": {
+        "additionalProperties": false,
+        "description": "Semantic results bound to the exact answer and cited source revisions.",
+        "properties": {
+          "checks": {
+            "items": {
+              "$ref": "#/components/schemas/SemanticCheck"
+            },
+            "minItems": 1,
+            "title": "Checks",
+            "type": "array"
+          },
+          "content_hash": {
+            "minLength": 1,
+            "title": "Content Hash",
+            "type": "string"
+          },
+          "evidence_fingerprint": {
+            "minLength": 1,
+            "title": "Evidence Fingerprint",
+            "type": "string"
+          },
+          "model": {
+            "default": "gpt-6-luna",
+            "minLength": 1,
+            "title": "Model",
+            "type": "string"
+          },
+          "threshold": {
+            "maximum": 1,
+            "minimum": 0,
+            "title": "Threshold",
+            "type": "number"
+          }
+        },
+        "required": [
+          "content_hash",
+          "evidence_fingerprint",
+          "threshold",
+          "checks"
+        ],
+        "title": "SemanticValidation",
+        "type": "object"
+      },
+      "SlackDefault": {
+        "additionalProperties": false,
+        "properties": {
+          "failure": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SlackFailure"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "selector": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RecipientSelector"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "title": "SlackDefault",
+        "type": "object"
+      },
+      "SlackDelivery": {
+        "additionalProperties": false,
+        "description": "The selected identity survives partial resolution and later retries.\n\nOptional IDs mean resolution has not reached that stage. Failure is always\nexplicit in status/failure, never represented by an absent ID alone.",
+        "properties": {
+          "failure": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SlackFailure"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "intent": {
+            "discriminator": {
+              "mapping": {
+                "explicit": "#/components/schemas/ExplicitRecipient",
+                "omitted": "#/components/schemas/OmittedRecipient",
+                "unresolved": "#/components/schemas/UnresolvedRecipient"
+              },
+              "propertyName": "state"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/OmittedRecipient"
+              },
+              {
+                "$ref": "#/components/schemas/ExplicitRecipient"
+              },
+              {
+                "$ref": "#/components/schemas/UnresolvedRecipient"
+              }
+            ],
+            "title": "Intent"
+          },
+          "invocation_id": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Invocation Id"
+          },
+          "message_ts": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Message Ts"
+          },
+          "resolved_user_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Resolved User Id"
+          },
+          "selection": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RecipientSelection"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "status": {
+            "default": "pending",
+            "enum": [
+              "pending",
+              "sent",
+              "not_sent",
+              "unknown"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "target": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SlackTarget"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "intent"
+        ],
+        "title": "SlackDelivery",
+        "type": "object"
+      },
+      "SlackFailure": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "enum": [
+              "recipient_missing",
+              "recipient_invalid",
+              "recipient_ambiguous",
+              "recipient_conflict",
+              "configuration_error",
+              "target_not_found",
+              "target_unavailable",
+              "permission_denied",
+              "authentication_failed",
+              "rate_limited",
+              "temporary_failure",
+              "delivery_unknown",
+              "protocol_error"
+            ],
+            "title": "Code",
+            "type": "string"
+          },
+          "message": {
+            "minLength": 1,
+            "title": "Message",
+            "type": "string"
+          },
+          "next_action": {
+            "enum": [
+              "correct_input",
+              "fix_configuration",
+              "retry_same_target",
+              "verify_delivery"
+            ],
+            "title": "Next Action",
+            "type": "string"
+          },
+          "retry_after_seconds": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Retry After Seconds"
+          },
+          "slack_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Slack Error"
+          },
+          "stage": {
+            "enum": [
+              "input",
+              "selection",
+              "lookup",
+              "open_dm",
+              "send"
+            ],
+            "title": "Stage",
+            "type": "string"
+          }
+        },
+        "required": [
+          "stage",
+          "code",
+          "message",
+          "next_action"
+        ],
+        "title": "SlackFailure",
+        "type": "object"
+      },
+      "SlackTarget": {
+        "additionalProperties": false,
+        "properties": {
+          "channel_id": {
+            "title": "Channel Id",
+            "type": "string"
+          },
+          "user_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "User Id"
+          }
+        },
+        "required": [
+          "channel_id"
+        ],
+        "title": "SlackTarget",
+        "type": "object"
+      },
+      "SourceAnchor": {
+        "additionalProperties": false,
+        "description": "Known source location; absent coordinates are valid, never invented.\n\n``start``/``end`` are a half-open range in the adapter's original text.\nLines/pages are one-based; notebook cell indexes are zero-based. Bounding\nboxes use ordered (left, minimum_y, right, maximum_y) coordinates.",
+        "properties": {
+          "bbox": {
+            "anyOf": [
+              {
+                "maxItems": 4,
+                "minItems": 4,
+                "prefixItems": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "number"
+                  }
+                ],
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Bbox"
+          },
+          "cell_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Cell Id"
+          },
+          "cell_index": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Cell Index"
+          },
+          "coordinate_origin": {
+            "default": "top_left",
+            "enum": [
+              "top_left",
+              "bottom_left"
+            ],
+            "title": "Coordinate Origin",
+            "type": "string"
+          },
+          "coordinate_space": {
+            "default": "normalized",
+            "enum": [
+              "normalized",
+              "points",
+              "pixels"
+            ],
+            "title": "Coordinate Space",
+            "type": "string"
+          },
+          "end": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "End"
+          },
+          "kind": {
+            "enum": [
+              "text",
+              "code",
+              "notebook",
+              "web",
+              "page",
+              "table"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "line_end": {
+            "anyOf": [
+              {
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Line End"
+          },
+          "line_start": {
+            "anyOf": [
+              {
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Line Start"
+          },
+          "page_height": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Page Height"
+          },
+          "page_no": {
+            "anyOf": [
+              {
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Page No"
+          },
+          "page_width": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Page Width"
+          },
+          "precision": {
+            "default": "element",
+            "enum": [
+              "exact",
+              "element",
+              "page",
+              "document"
+            ],
+            "title": "Precision",
+            "type": "string"
+          },
+          "start": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Start"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "title": "SourceAnchor",
+        "type": "object"
+      },
+      "SourceLocationReference": {
+        "additionalProperties": false,
+        "description": "A nonempty element-character range inside one supplied evidence selection.",
+        "properties": {
+          "end": {
+            "exclusiveMinimum": 0,
+            "title": "End",
+            "type": "integer"
+          },
+          "ref": {
+            "minLength": 1,
+            "title": "Ref",
+            "type": "string"
+          },
+          "start": {
+            "minimum": 0,
+            "title": "Start",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "ref",
+          "start",
+          "end"
+        ],
+        "title": "SourceLocationReference",
+        "type": "object"
+      },
+      "SourceSelection": {
+        "additionalProperties": false,
+        "description": "Half-open offsets in element.text, or structured table cell IDs.",
+        "properties": {
+          "cell_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Cell Ids",
+            "type": "array"
+          },
+          "end": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "End"
+          },
+          "start": {
+            "default": 0,
+            "minimum": 0,
+            "title": "Start",
+            "type": "integer"
+          }
+        },
+        "title": "SourceSelection",
+        "type": "object"
+      },
+      "StageAttemptModel": {
+        "properties": {
+          "attempt": {
+            "default": 1,
+            "title": "Attempt",
+            "type": "integer"
+          },
+          "latency_ms": {
+            "default": 0,
+            "title": "Latency Ms",
+            "type": "integer"
+          },
+          "stage": {
+            "enum": [
+              "summarize",
+              "planner",
+              "retrieval",
+              "pre_synthesis_validation",
+              "synthesis",
+              "post_synthesis_validation",
+              "validation",
+              "action_postprocess"
+            ],
+            "title": "Stage",
+            "type": "string"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Status"
+          }
+        },
+        "required": [
+          "stage"
+        ],
+        "title": "StageAttemptModel",
+        "type": "object"
+      },
+      "StageTotalsModel": {
+        "properties": {
+          "action_postprocess_ms": {
+            "default": 0,
+            "title": "Action Postprocess Ms",
+            "type": "integer"
+          },
+          "planner_ms": {
+            "default": 0,
+            "title": "Planner Ms",
+            "type": "integer"
+          },
+          "post_synthesis_validation_ms": {
+            "default": 0,
+            "title": "Post Synthesis Validation Ms",
+            "type": "integer"
+          },
+          "pre_synthesis_validation_ms": {
+            "default": 0,
+            "title": "Pre Synthesis Validation Ms",
+            "type": "integer"
+          },
+          "retrieval_total_ms": {
+            "default": 0,
+            "title": "Retrieval Total Ms",
+            "type": "integer"
+          },
+          "summarize_ms": {
+            "default": 0,
+            "title": "Summarize Ms",
+            "type": "integer"
+          },
+          "synthesis_total_ms": {
+            "default": 0,
+            "title": "Synthesis Total Ms",
+            "type": "integer"
+          },
+          "validation_ms": {
+            "default": 0,
+            "title": "Validation Ms",
+            "type": "integer"
+          }
+        },
+        "title": "StageTotalsModel",
+        "type": "object"
+      },
+      "SynthesisAttemptLatencyModel": {
+        "properties": {
+          "attempt": {
+            "default": 1,
+            "title": "Attempt",
+            "type": "integer"
+          },
+          "fallback_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Fallback Ms"
+          },
+          "mode": {
+            "enum": [
+              "structured_only",
+              "structured_empty_fallback",
+              "timeout_grounded_fallback",
+              "structured_error_plain_fallback",
+              "compact_structured_fallback",
+              "plain_summary_attach_fallback",
+              "korean_template_summary_fallback",
+              "deterministic_grounded_fallback",
+              "deterministic_grounded_direct"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "structured_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Structured Ms"
+          },
+          "total_ms": {
+            "default": 0,
+            "title": "Total Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "mode"
+        ],
+        "title": "SynthesisAttemptLatencyModel",
+        "type": "object"
+      },
+      "TableBlock": {
+        "additionalProperties": false,
+        "properties": {
+          "columns": {
+            "items": {
+              "$ref": "#/components/schemas/ContentUnit"
+            },
+            "minItems": 1,
+            "title": "Columns",
+            "type": "array"
+          },
+          "rows": {
+            "items": {
+              "items": {
+                "$ref": "#/components/schemas/ContentUnit"
+              },
+              "type": "array"
+            },
+            "title": "Rows",
+            "type": "array"
+          },
+          "type": {
+            "const": "table",
+            "default": "table",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "columns"
+        ],
+        "title": "TableBlock",
+        "type": "object"
+      },
+      "TableCell": {
+        "additionalProperties": false,
+        "properties": {
+          "anchors": {
+            "items": {
+              "$ref": "#/components/schemas/SourceAnchor"
+            },
+            "title": "Anchors",
+            "type": "array"
+          },
+          "cell_id": {
+            "minLength": 1,
+            "title": "Cell Id",
+            "type": "string"
+          },
+          "col": {
+            "minimum": 0,
+            "title": "Col",
+            "type": "integer"
+          },
+          "col_span": {
+            "default": 1,
+            "minimum": 1,
+            "title": "Col Span",
+            "type": "integer"
+          },
+          "is_header": {
+            "default": false,
+            "title": "Is Header",
+            "type": "boolean"
+          },
+          "row": {
+            "minimum": 0,
+            "title": "Row",
+            "type": "integer"
+          },
+          "row_span": {
+            "default": 1,
+            "minimum": 1,
+            "title": "Row Span",
+            "type": "integer"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "cell_id",
+          "row",
+          "col",
+          "text"
+        ],
+        "title": "TableCell",
+        "type": "object"
+      },
+      "TableData": {
+        "additionalProperties": false,
+        "properties": {
+          "cells": {
+            "items": {
+              "$ref": "#/components/schemas/TableCell"
+            },
+            "title": "Cells",
+            "type": "array"
+          }
+        },
+        "title": "TableData",
+        "type": "object"
+      },
+      "TokenUsage": {
+        "additionalProperties": false,
+        "properties": {
+          "cache_write_input_tokens": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Cache Write Input Tokens"
+          },
+          "cached_input_tokens": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Cached Input Tokens"
+          },
+          "input_tokens": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Input Tokens"
+          },
+          "issues": {
+            "items": {
+              "$ref": "#/components/schemas/UsageIssue"
+            },
+            "title": "Issues",
+            "type": "array"
+          },
+          "output_tokens": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Output Tokens"
+          },
+          "reasoning_output_tokens": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Reasoning Output Tokens"
+          }
+        },
+        "title": "TokenUsage",
+        "type": "object"
+      },
+      "ToolExecutionEvent": {
+        "additionalProperties": false,
+        "properties": {
+          "invocation_id": {
+            "minLength": 1,
+            "title": "Invocation Id",
+            "type": "string"
+          },
+          "origin_invocation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Origin Invocation Id"
+          },
+          "phase": {
+            "enum": [
+              "started",
+              "succeeded",
+              "failed",
+              "blocked",
+              "reused"
+            ],
+            "title": "Phase",
+            "type": "string"
+          },
+          "reason_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Reason Code"
+          },
+          "sequence": {
+            "minimum": 1,
+            "title": "Sequence",
+            "type": "integer"
+          },
+          "tool_name": {
+            "minLength": 1,
+            "title": "Tool Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sequence",
+          "invocation_id",
+          "tool_name",
+          "phase"
+        ],
+        "title": "ToolExecutionEvent",
+        "type": "object"
+      },
+      "ToolExecutionEvidence": {
+        "additionalProperties": false,
+        "properties": {
+          "events": {
+            "items": {
+              "$ref": "#/components/schemas/ToolExecutionEvent"
+            },
+            "title": "Events",
+            "type": "array"
+          },
+          "request_id": {
+            "description": "ID of this execution, matching TurnResult.request_id; not the domain request ID.",
+            "minLength": 1,
+            "title": "Request Id",
+            "type": "string"
+          },
+          "schema_version": {
+            "const": 1,
+            "title": "Schema Version",
+            "type": "integer"
+          },
+          "status": {
+            "enum": [
+              "complete",
+              "incomplete",
+              "unavailable"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "request_id",
+          "status",
+          "events"
+        ],
+        "title": "ToolExecutionEvidence",
+        "type": "object"
+      },
+      "UnitCheck": {
+        "additionalProperties": false,
+        "properties": {
+          "issues": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Issues",
+            "type": "array"
+          },
+          "reference_status": {
+            "enum": [
+              "resolved",
+              "missing",
+              "not_required"
+            ],
+            "title": "Reference Status",
+            "type": "string"
+          },
+          "support_status": {
+            "default": "not_evaluated",
+            "enum": [
+              "not_evaluated",
+              "exact_match",
+              "unsupported"
+            ],
+            "title": "Support Status",
+            "type": "string"
+          },
+          "unit_id": {
+            "title": "Unit Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "unit_id",
+          "reference_status"
+        ],
+        "title": "UnitCheck",
+        "type": "object"
+      },
+      "UnresolvedRecipient": {
+        "additionalProperties": false,
+        "properties": {
+          "evidence_ids": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Evidence Ids",
+            "type": "array"
+          },
+          "raw_input": {
+            "title": "Raw Input",
+            "type": "string"
+          },
+          "reason": {
+            "enum": [
+              "invalid",
+              "ambiguous",
+              "unverified",
+              "conflict"
+            ],
+            "title": "Reason",
+            "type": "string"
+          },
+          "state": {
+            "const": "unresolved",
+            "default": "unresolved",
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "raw_input",
+          "reason"
+        ],
+        "title": "UnresolvedRecipient",
+        "type": "object"
+      },
+      "UploadAddition": {
+        "additionalProperties": false,
+        "properties": {
+          "content_hash": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "title": "Content Hash",
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "path": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "title": "Path",
+            "type": "string"
+          },
+          "replace_file_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Replace File Id"
+          }
+        },
+        "required": [
+          "path",
+          "name",
+          "content_hash"
+        ],
+        "title": "UploadAddition",
+        "type": "object"
+      },
+      "UploadContext": {
+        "additionalProperties": false,
+        "properties": {
+          "epoch": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Epoch",
+            "type": "string"
+          },
+          "revision": {
+            "minimum": 0.0,
+            "title": "Revision",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "epoch",
+          "revision"
+        ],
+        "title": "UploadContext",
+        "type": "object"
+      },
+      "UploadFileInfo": {
+        "additionalProperties": false,
+        "properties": {
+          "content_hash": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "title": "Content Hash",
+            "type": "string"
+          },
+          "file_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "File Id",
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "size_bytes": {
+            "minimum": 0,
+            "title": "Size Bytes",
+            "type": "integer"
+          },
+          "source_uri": {
+            "minLength": 1,
+            "title": "Source Uri",
+            "type": "string"
+          }
+        },
+        "required": [
+          "file_id",
+          "name",
+          "size_bytes",
+          "content_hash",
+          "source_uri"
+        ],
+        "title": "UploadFileInfo",
+        "type": "object"
+      },
+      "UploadManifest": {
+        "additionalProperties": false,
+        "properties": {
+          "epoch": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Epoch",
+            "type": "string"
+          },
+          "files": {
+            "items": {
+              "$ref": "#/components/schemas/UploadFileInfo"
+            },
+            "title": "Files",
+            "type": "array"
+          },
+          "revision": {
+            "minimum": 0,
+            "title": "Revision",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "epoch",
+          "revision",
+          "files"
+        ],
+        "title": "UploadManifest",
+        "type": "object"
+      },
+      "UploadSyncRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "add": {
+            "items": {
+              "$ref": "#/components/schemas/UploadAddition"
+            },
+            "maxItems": 100,
+            "title": "Add",
+            "type": "array"
+          },
+          "clear": {
+            "default": false,
+            "title": "Clear",
+            "type": "boolean"
+          },
+          "epoch": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Epoch",
+            "type": "string"
+          },
+          "expected_revision": {
+            "minimum": 0.0,
+            "title": "Expected Revision",
+            "type": "integer"
+          },
+          "operation_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Operation Id",
+            "type": "string"
+          },
+          "remove": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 100,
+            "title": "Remove",
+            "type": "array"
+          }
+        },
+        "required": [
+          "epoch",
+          "expected_revision",
+          "operation_id"
+        ],
+        "title": "UploadSyncRequest",
+        "type": "object"
+      },
+      "UsageIssue": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "enum": [
+              "invalid_value",
+              "conflict",
+              "total_mismatch",
+              "detail_exceeds_total"
+            ],
+            "title": "Code",
+            "type": "string"
+          },
+          "field": {
+            "enum": [
+              "input_tokens",
+              "output_tokens",
+              "total_tokens",
+              "cached_input_tokens",
+              "cache_write_input_tokens",
+              "reasoning_output_tokens",
+              "metadata"
+            ],
+            "title": "Field",
+            "type": "string"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "field",
+          "source"
+        ],
+        "title": "UsageIssue",
+        "type": "object"
+      },
+      "ValidationError": {
+        "properties": {
+          "ctx": {
+            "title": "Context",
+            "type": "object"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Location",
+            "type": "array"
+          },
+          "msg": {
+            "title": "Message",
+            "type": "string"
+          },
+          "type": {
+            "title": "Error Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError",
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "title": "FastAPI",
+    "version": "0.1.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/": {
+      "get": {
+        "operationId": "root__get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Root"
+      }
+    },
+    "/agent/stream": {
+      "post": {
+        "operationId": "run_agent_stream_api_agent_stream_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "text/event-stream": {
+                "example": "event: request_started\ndata: {\"request_id\":\"abc12345\",\"session_id\":\"demo\"}\n\nevent: final_response\ndata: {\"status\":\"failed\",\"response\":null,\"message\":\"\",\"problem\":{\"code\":\"internal_error\",\"stage\":\"request\",\"message\":\"요청을 완료하지 못했습니다.\",\"next_action\":\"none\"},\"request_id\":\"abc12345\",\"missing_slots\":[],\"trace\":\"Request ID: abc12345\",\"debug\":null,\"upload_manifest\":null}\n\nevent: done\ndata: {}\n\n",
+                "schema": {
+                  "type": "string"
+                },
+                "x-sse-events": {
+                  "done": {
+                    "maxProperties": 0,
+                    "type": "object"
+                  },
+                  "error": {
+                    "properties": {
+                      "message": {
+                        "type": "string"
+                      },
+                      "stage": {
+                        "enum": [
+                          "summarize",
+                          "planner",
+                          "retrieval",
+                          "pre_synthesis_validation",
+                          "synthesis",
+                          "post_synthesis_validation",
+                          "validation",
+                          "action_postprocess"
+                        ],
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "message"
+                    ],
+                    "type": "object"
+                  },
+                  "final_response": {
+                    "$ref": "#/components/schemas/AgentResponse"
+                  },
+                  "heartbeat": {
+                    "properties": {
+                      "attempt": {
+                        "type": "integer"
+                      },
+                      "elapsed_ms": {
+                        "type": "integer"
+                      },
+                      "stage": {
+                        "enum": [
+                          "summarize",
+                          "planner",
+                          "retrieval",
+                          "pre_synthesis_validation",
+                          "synthesis",
+                          "post_synthesis_validation",
+                          "validation",
+                          "action_postprocess"
+                        ],
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "stage",
+                      "attempt",
+                      "elapsed_ms"
+                    ],
+                    "type": "object"
+                  },
+                  "progress_snapshot": {
+                    "properties": {
+                      "stage": {
+                        "enum": [
+                          "summarize",
+                          "planner",
+                          "retrieval",
+                          "pre_synthesis_validation",
+                          "synthesis",
+                          "post_synthesis_validation",
+                          "validation",
+                          "action_postprocess"
+                        ],
+                        "type": "string"
+                      },
+                      "summary": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "stage",
+                      "summary"
+                    ],
+                    "type": "object"
+                  },
+                  "request_started": {
+                    "properties": {
+                      "request_id": {
+                        "type": "string"
+                      },
+                      "session_id": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "request_id",
+                      "session_id"
+                    ],
+                    "type": "object"
+                  },
+                  "stage_completed": {
+                    "properties": {
+                      "attempt": {
+                        "type": "integer"
+                      },
+                      "latency_ms": {
+                        "type": "integer"
+                      },
+                      "stage": {
+                        "enum": [
+                          "summarize",
+                          "planner",
+                          "retrieval",
+                          "pre_synthesis_validation",
+                          "synthesis",
+                          "post_synthesis_validation",
+                          "validation",
+                          "action_postprocess"
+                        ],
+                        "type": "string"
+                      },
+                      "status": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "stage",
+                      "attempt"
+                    ],
+                    "type": "object"
+                  },
+                  "stage_started": {
+                    "properties": {
+                      "attempt": {
+                        "type": "integer"
+                      },
+                      "stage": {
+                        "enum": [
+                          "summarize",
+                          "planner",
+                          "retrieval",
+                          "pre_synthesis_validation",
+                          "synthesis",
+                          "post_synthesis_validation",
+                          "validation",
+                          "action_postprocess"
+                        ],
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "stage",
+                      "attempt"
+                    ],
+                    "type": "object"
+                  }
+                }
+              }
+            },
+            "description": "UTF-8 SSE frames: event: <name>\\ndata: <JSON object>\\n\\n. Each execution ends with one final_response carrying status, response, problem, message, request_id, trace, debug and upload_manifest. Status distinguishes completed, needs_input, failed, partial and refused; a failed result has no answer document. The manifest is captured under the session lock; null on failure means unknown state, not an empty attachment set. HTTP 200 and done alone do not indicate success. Clients must not automatically resubmit interrupted requests because agent actions may already have executed. x-sse-events maps each event name to its data schema."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Run Agent Stream Api"
+      }
+    },
+    "/client-config": {
+      "get": {
+        "operationId": "get_client_config_client_config_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientConfig"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Client Config"
+      }
+    },
+    "/download/{filename}": {
+      "get": {
+        "operationId": "download_file_download__filename__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "filename",
+            "required": true,
+            "schema": {
+              "title": "Filename",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Download File"
+      }
+    },
+    "/sessions/{session_id}/answers/{answer_id}/save": {
+      "post": {
+        "operationId": "save_answer_sessions__session_id__answers__answer_id__save_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "answer_id",
+            "required": true,
+            "schema": {
+              "title": "Answer Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnswerExportResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Save Answer"
+      }
+    },
+    "/sessions/{session_id}/uploads": {
+      "get": {
+        "operationId": "get_upload_manifest_sessions__session_id__uploads_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UploadManifest"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Upload Manifest"
+      }
+    },
+    "/sessions/{session_id}/uploads/sync": {
+      "post": {
+        "operationId": "sync_upload_manifest_sessions__session_id__uploads_sync_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UploadSyncRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UploadManifest"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Sync Upload Manifest"
+      }
+    },
+    "/slack/default-recipient": {
+      "get": {
+        "operationId": "get_slack_default_recipient_slack_default_recipient_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SlackDefault"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Slack Default Recipient"
+      }
+    }
+  }
+}

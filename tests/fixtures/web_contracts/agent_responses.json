@@ -1,0 +1,162 @@
+{
+  "responses": {
+    "completed": {
+      "status": "completed",
+      "response": {
+        "content": {
+          "blocks": [
+            {
+              "type": "paragraph",
+              "content": [
+                {
+                  "text": "한글 답변 🧪",
+                  "basis": "interaction",
+                  "refs": [],
+                  "source_location": null
+                }
+              ]
+            }
+          ]
+        },
+        "citations": [],
+        "checks": [
+          {
+            "unit_id": "b0.content.0",
+            "reference_status": "not_required",
+            "support_status": "not_evaluated",
+            "issues": []
+          }
+        ],
+        "issues": [],
+        "actions": [],
+        "content_hash": "ce5d415fc8a2248ffcd9b76e753ae9df6509aee28d1b0cc193111ed33c78e5ef",
+        "retrieval_required": false,
+        "semantic_validation": null
+      },
+      "answer_id": "answer-completed",
+      "message": "",
+      "problem": null,
+      "request_id": "request-completed",
+      "missing_slots": [],
+      "trace": "Request ID: request-completed",
+      "debug": null,
+      "upload_manifest": {
+        "epoch": "contract-epoch",
+        "revision": 2,
+        "files": []
+      }
+    },
+    "partial": {
+      "status": "partial",
+      "response": {
+        "content": {
+          "blocks": [
+            {
+              "type": "paragraph",
+              "content": [
+                {
+                  "text": "확인한 첫 번째 자료의 답변 🧪",
+                  "basis": "interaction",
+                  "refs": [],
+                  "source_location": null
+                }
+              ]
+            }
+          ]
+        },
+        "citations": [],
+        "checks": [
+          {
+            "unit_id": "b0.content.0",
+            "reference_status": "not_required",
+            "support_status": "not_evaluated",
+            "issues": []
+          }
+        ],
+        "issues": [
+          {
+            "code": "retrieved_evidence_incomplete",
+            "message": "두 번째 자료는 확인하지 못했습니다.",
+            "unit_id": null
+          }
+        ],
+        "actions": [],
+        "content_hash": "b4ca93741a32fd863074fe1a3569e708df87586081de3472d175a31f7c77c85d",
+        "retrieval_required": false,
+        "semantic_validation": null
+      },
+      "answer_id": "answer-partial",
+      "message": "요청한 답변을 뒷받침할 근거를 충분히 확인하지 못했습니다.",
+      "problem": {
+        "code": "evidence_insufficient",
+        "stage": "validation",
+        "message": "요청한 답변을 뒷받침할 근거를 충분히 확인하지 못했습니다.",
+        "next_action": "supply_information",
+        "retry_after_seconds": null
+      },
+      "request_id": "request-partial",
+      "missing_slots": [],
+      "trace": "Request ID: request-partial",
+      "debug": null,
+      "upload_manifest": {
+        "epoch": "contract-epoch",
+        "revision": 2,
+        "files": []
+      }
+    },
+    "needs_input": {
+      "status": "needs_input",
+      "response": null,
+      "answer_id": null,
+      "message": "비교할 파일을 첨부해 주세요.",
+      "problem": null,
+      "request_id": "request-needs-input",
+      "missing_slots": [
+        "upload"
+      ],
+      "trace": "Request ID: request-needs-input",
+      "debug": null,
+      "upload_manifest": {
+        "epoch": "contract-epoch",
+        "revision": 2,
+        "files": []
+      }
+    },
+    "failed": {
+      "status": "failed",
+      "response": null,
+      "answer_id": null,
+      "message": "AI 서비스 연결이 일시적으로 원활하지 않아 처리를 완료하지 못했습니다. 잠시 후 같은 요청으로 다시 시도할 수 있습니다.",
+      "problem": {
+        "code": "provider_unavailable",
+        "stage": "planner",
+        "message": "AI 서비스 연결이 일시적으로 원활하지 않아 처리를 완료하지 못했습니다. 잠시 후 같은 요청으로 다시 시도할 수 있습니다.",
+        "next_action": "retry_later",
+        "retry_after_seconds": null
+      },
+      "request_id": "request-failed",
+      "missing_slots": [],
+      "trace": "Request ID: request-failed",
+      "debug": null,
+      "upload_manifest": null
+    },
+    "refused": {
+      "status": "refused",
+      "response": null,
+      "answer_id": null,
+      "message": "AI 서비스가 이 요청에 대한 답변 생성을 거절했습니다.",
+      "problem": {
+        "code": "model_refusal",
+        "stage": "synthesize",
+        "message": "AI 서비스가 이 요청에 대한 답변 생성을 거절했습니다.",
+        "next_action": "none",
+        "retry_after_seconds": null
+      },
+      "request_id": "request-refused",
+      "missing_slots": [],
+      "trace": "Request ID: request-refused",
+      "debug": null,
+      "upload_manifest": null
+    }
+  }
+}

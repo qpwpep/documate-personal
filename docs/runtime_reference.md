@@ -70,6 +70,19 @@ uv run python -X utf8 -m streamlit run src/app/web/streamlit_app.py --server.por
 
 Windows 환경에서는 `-X utf8` 또는 `PYTHONUTF8=1` 사용을 권장합니다. `src.app.service_manager`와 `src.app.web.app`는 UTF-8 실행을 우선하도록 구성돼 있습니다.
 
+### 1.5 React 개발 UI
+
+기본 `startweb`는 FastAPI와 Streamlit을 실행합니다. React 초기 UI는 Node.js 22.13 이상(22.x) 또는 24 이상과 npm으로 별도 실행하며 같은 FastAPI를 호출합니다.
+
+```bash
+npm --prefix frontend ci
+npm --prefix frontend run dev
+```
+
+주소는 `http://127.0.0.1:5173/app/`입니다. 개발 프록시는 기본 `http://127.0.0.1:8000`을 사용하며 `DOCUMATE_API_PROXY_TARGET`으로 변경할 수 있습니다. API 키·Slack 토큰은 Python 서버의 `.env`에 유지합니다. 현재 React는 질문 전송·진행·최종 결과 확인을 제공하고, 파일 첨부·대화 복원·상세 근거·직접 저장·Slack 설정은 후속 단계입니다. `npm --prefix frontend run build`는 정적 파일을 생성하지만 FastAPI의 정적 제공이나 서비스 관리자의 UI 선택 옵션은 아직 추가하지 않았습니다.
+
+전체 기능 목록과 단계별 인수 조건, 계약 생성·검증 명령은 [React 전환 문서](react_migration.md)를 참고하세요. 다른 origin의 Streamlit 기록이 새 React 화면에 자동으로 이전되지는 않습니다.
+
 ## 2. 환경 변수
 
 세 GPT-5.6 모델은 역할별 환경 변수로 선택하며 같은 프롬프트와 출력 계약을 사용합니다. 공식 문서는 [Luna](https://developers.openai.com/api/docs/models/gpt-5.6-luna)를 비용 중심, [Terra](https://developers.openai.com/api/docs/models/gpt-5.6-terra)를 성능·비용 균형, [Sol](https://developers.openai.com/api/docs/models/gpt-5.6-sol)을 복잡한 전문 작업용으로 설명하며 모두 구조화 출력을 지원합니다. 이 구분만으로 서로 다른 지시문이 필요하다고 판단하지 않습니다. 모델별 분기는 같은 대표 입력에서 계약 준수·완결성·비용 차이가 확인될 때 검토합니다. [GPT-5.6 프롬프트 지침](https://developers.openai.com/api/docs/guides/latest-model?model=gpt-5.6)에 따라 중복 지시를 줄이면서 도메인 제약과 기존 회귀 사례를 보존합니다.
@@ -442,6 +455,12 @@ UI·HTTP 요청의 `RecipientInput`은 선택한 유형과 입력 문자열을 �
 `ActionReceipt.slack`은 `intent`, `selection`, `resolved_user_id`, `target`, `status`, `failure`, `message_ts`를 담습니다. `sent`에는 선택에 부합하는 채널과 Slack이 확인한 timestamp가 필요합니다. `not_sent`와 `unknown`에는 실패 단계·코드·다음 행동이 남습니다. UI와 debug는 이 결과를 그대로 사용하고, 검증된 답변 본문과 전송 결과는 분리합니다.
 
 ## 5. API 계약
+
+### 5.0 `GET /client-config`
+
+브라우저에 필요한 설정만 반환합니다. `upload.accepted_suffixes`는 서버의 Docling 활성화 상태를 반영한 지원 확장자이고, `max_files`, `max_file_bytes`, `max_total_bytes`는 현재 첨부 한도입니다. `query.max_chars`와 `query.max_utf8_bytes`는 기존 질문의 문자 수와 UTF-8 바이트 상한입니다. 첨부 바이트 한도는 서버의 MiB 설정에서 계산합니다.
+
+이 응답은 UI 안내와 입력 제한에 사용하며 실제 접수 시의 서버 검증을 대체하지 않습니다. 설정 전체, 모델·Slack 키, 서버 파일 경로를 내보내지 않습니다. 기본 Slack 수신자 조회는 기존 `/slack/default-recipient`를 사용합니다.
 
 ### 5.1 `POST /agent/stream`
 

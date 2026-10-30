@@ -35,6 +35,8 @@ uv run python -m src.app.service_manager stopweb
 
 직접 실행 명령, 환경 변수 전체 목록, API 계약, 파일 업로드 제약은 [런타임 참고 문서](docs/runtime_reference.md)에 정리했습니다.
 
+React + TypeScript + Vite 기반의 초기 UI는 기존 FastAPI에 연결해 별도로 실행합니다. Node.js 22.13 이상(22.x) 또는 24 이상에서 `npm --prefix frontend ci` 후 `npm --prefix frontend run dev`를 실행하고 `http://127.0.0.1:5173/app/`을 엽니다. 현재 범위는 질문 전송·진행 상태·최종 결과 확인이며, 기본 UI와 전체 기능은 Streamlit에 유지합니다. [React 실행과 기능 인수 기준](docs/react_migration.md)에 현재 지원 범위, 후속 단계, 계약 생성과 검증 명령을 정리했습니다.
+
 ## 실제 앱 데모
 
 아래 GIF는 2026-05-05 KST에 Streamlit 화면을 실제 Edge 렌더링으로 캡처한 데모입니다. 라이트/다크 테마, 질문 입력창 옆 파일 첨부, 사이드바를 접은 상태의 질문 제출과 답변 수신 흐름을 보여줍니다. 현재의 본문별 인용·원문 위치 표시가 적용되기 전 화면이며, 현재 응답 계약은 [런타임 참고 문서](docs/runtime_reference.md#5-api-계약)를 기준으로 합니다.
@@ -179,6 +181,7 @@ Docling은 요청에 종속된 로컬 프로세스에서 문서를 변환하고 
 
 - [도메인 용어집](GLOSSARY.md): 요청·자료·원문 근거·답변·전달의 공통 용어와 개념 경계
 - [런타임 참고 문서](docs/runtime_reference.md): 설치, 실행, 환경 변수, API 계약, 파일 제약, 운영 메모
+- [React 전환과 기능 인수 기준](docs/react_migration.md): 초기 UI 실행, 기존 기능별 완료 기준, API 계약과 검증 범위
 - [설계 판단 기록](docs/design_rationale.md): 구조를 나눈 이유, latency/retrieval 품질 문제, 주요 트레이드오프
 - [벤치마크 가이드](docs/benchmarking.md): online benchmark 실행, 로컬 run 산출물, README release 요약과 history SVG 갱신
 - [에러 코드](docs/error_codes.md): debug payload와 benchmark에서 쓰는 주요 error code
