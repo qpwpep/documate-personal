@@ -31,6 +31,7 @@ from src.app.web.app import create_app
 from src.core.answer_schema import AnswerDocument
 from src.core.planner_schema import InitialPlannerOutput
 from src.core.request_contracts import WireRequestContract
+from src.infra.runtime_paths import get_upload_session_dir
 from src.infra.settings import AppSettings
 from src.infra.slack_utils import create_slack_client
 
@@ -113,7 +114,15 @@ def run(port: int) -> None:
             if "대기 검증" in message_text and not release.wait(20):
                 raise AssertionError("The browser did not release the in-flight request")
             contract = WireRequestContract(slack_recipient={"state": "omitted"})
-            if "Slack으로 보내줘" in query:
+            copy_prefix = "다음 Markdown 원문을 그대로 복사해줘.\n\n"
+            if query.startswith(copy_prefix):
+                contract = WireRequestContract.model_validate({
+                    "body": {"kind": "copy_input", "source": {
+                        "turn_id": current_turn["turn_id"], "quote": query[len(copy_prefix):],
+                    }},
+                    "slack_recipient": {"state": "omitted"},
+                })
+            elif "Slack으로 보내줘" in query:
                 contract = WireRequestContract.model_validate({
                     "slack_recipient": {"state": "omitted"},
                     "actions": {"slack_notify": {"intent": "requested", "evidence_ids": ["send"]}},
@@ -223,6 +232,12 @@ def run(port: int) -> None:
         @app.get("/_fixture/requests")
         def received() -> dict[str, object]:
             return {"queries": list(queries), "submissions": list(submissions), "slack": list(slack_requests)}
+
+        @app.get("/_fixture/sessions/{session_id}/staging")
+        def staging_usage(session_id: str) -> dict[str, int]:
+            staging = get_upload_session_dir(session_id) / "staging"
+            sizes = [path.stat().st_size for path in staging.rglob("*") if path.is_file()]
+            return {"files": len(sizes), "bytes": sum(sizes)}
 
         @app.post("/_fixture/hold")
         async def hold_response(request: Request) -> dict[str, bool]:
