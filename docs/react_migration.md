@@ -6,6 +6,8 @@ FastAPI와 Python 런타임을 유지하고 UI를 React + TypeScript + Vite로 �
 
 React 정적 빌드는 FastAPI의 `/app/`에서 제공하며, 서비스 관리자의 기본 UI는 React입니다. 기존 Streamlit은 `--ui streamlit`로 선택하는 복귀 경로로 유지합니다. 두 UI는 같은 FastAPI와 Python 도메인 실행을 사용합니다. 기능의 구현 상태와 검증 범위는 아래 항목별로 구분하며, 화면에 없는 기능을 API가 지원한다는 이유만으로 이식 완료로 보지 않습니다.
 
+화면 구성은 기존 Streamlit을 기준으로 유지합니다. 첫 안내와 기본 예시 2개, 접힌 추가 예시·지원 문서, 최근·전체 대화, 사이드바의 확정 첨부, 입력창의 `+` 파일 선택과 전송 버튼, 시스템·라이트·다크 테마와 Slack 수신자 라디오를 같은 흐름으로 제공합니다. 첨부를 선택한 상태와 서버에서 확정한 목록은 분리하며, 예시 선택은 작성 초안만 채웁니다. [UI 동기화 브라우저 검사](../frontend/tests/e2e/ui-parity.spec.ts)는 첫 화면 배치·예시·파일 선택과 확정 목록·모바일 메뉴를 실제 Chromium에서 확인합니다.
+
 ```mermaid
 flowchart LR
   React["React 화면"] --> TS["TypeScript 클라이언트"]
@@ -104,7 +106,7 @@ flowchart LR
 
 ## 3. 실행과 개발
 
-Python 환경과 `.env`는 [빠른 시작](runtime_reference.md#1-빠른-시작)을 따릅니다. React 개발에는 Node.js 22.13 이상(22.x) 또는 24 이상과 npm이 추가로 필요합니다. 정확한 지원 범위와 재현할 의존성은 `frontend/package.json`과 `frontend/package-lock.json`을 기준으로 합니다. 모든 명령은 저장소 루트의 Git Bash 기준입니다.
+Python 환경과 `.env`는 [빠른 시작](runtime_reference.md#1-빠른-시작)을 따릅니다. React 개발·빌드·테스트에는 Node.js 22.22.2 이상(22.x), 24.15.0 이상(24.x) 또는 26 이상과 npm이 추가로 필요합니다. 정확한 지원 범위와 재현할 의존성은 `frontend/package.json`과 `frontend/package-lock.json`을 기준으로 합니다. 모든 명령은 저장소 루트의 Git Bash 기준입니다.
 
 정적 빌드를 준비한 뒤 React를 실행합니다. 기본 `startweb`도 `--ui react`와 같습니다.
 
@@ -155,7 +157,7 @@ npm --prefix frontend run generate:api
 |---|---|
 | 기존 pytest | Python 클라이언트·Streamlit AppTest·FastAPI·도메인 회귀 |
 | 공개 설정·공통 fixture pytest | 설정 allowlist, 서버·클라이언트 계약, 생성 OpenAPI 일치 |
-| Vitest | 실제 SSE 파서·응답 검증·TypeScript 클라이언트와 HTTP 경계 |
+| `test:unit` | 잠긴 의존성 전체와 Node 지원 범위의 일치, Vitest의 실제 SSE 파서·응답 검증·TypeScript 클라이언트와 HTTP 경계 |
 | React Testing Library | 명시적 제출·진행·최종 결과·중단·오류 등 사용자에게 보이는 동작 |
 | Playwright | 개발 프록시와 정적 빌드의 React를 실제 FastAPI에 연결해 질문·첨부·복원·다운로드·접근성을 검증 |
 | Streamlit Playwright | 기존 Streamlit·Python 클라이언트의 질문 1회 접수, 정확한 초안·답변 복원, TXT 저장·다운로드. 외부 실행은 기존 HTTP fixture로 대체 |
@@ -168,13 +170,13 @@ npm --prefix frontend run generate:api
 | API-02 | `export_web_contract.py --check`, `npm --prefix frontend run check:api`, [서버 출력 fixture 검사](../tests/web/test_web_contract.py) |
 | API-03·API-06 | [공통 응답의 Python 검사](../tests/web/test_web_contract.py), [상태별 응답·manifest·오류 순서 검사](../frontend/src/api/client.test.ts) |
 | API-04 | [청크·UTF-8·SSE 파서 검사](../frontend/src/api/sse.test.ts), [최종 결과 판정 검사](../frontend/src/api/client.test.ts) |
-| API-05 | [연결·중단·자동 재전송 방지](../frontend/src/api/client.test.ts), [UI 수신 중단](../frontend/src/App.test.tsx) |
+| API-05 | [연결·중단·자동 재전송 방지](../frontend/src/api/client.test.ts), [UI 수신 중단](../frontend/src/App.test.tsx), [전송 전 연결 확인 중단·재연결 브라우저 회귀](../frontend/tests/e2e/regressions.spec.ts) |
 | API-07 | [명시적 제출과 결과 표시](../frontend/src/App.test.tsx), [실제 API 브라우저 흐름](../frontend/tests/e2e/chat.spec.ts) |
 | CHAT-01·CHAT-02·CHAT-03·CHAT-07 | [예시·정확한 초안·대화 격리·진행 중 탐색·키보드 제출](../frontend/src/App.test.tsx), [대화별 snapshot](../frontend/src/conversations.test.ts) |
 | CHAT-04·CHAT-05·CHAT-06 | [새로고침·만료·실패·중단 UI](../frontend/src/App.test.tsx), [기록 검증·실행 명령 제외](../frontend/src/conversations.test.ts), [실제 브라우저 복원·만료·자동 재전송 방지](../frontend/tests/e2e/workflows.spec.ts) |
 | UPLOAD-01·UPLOAD-02·UPLOAD-03·UPLOAD-04 | [선택·교체·오류·보류 질문의 HTTP 흐름](../frontend/src/attachments/useAttachments.test.tsx), [전송 직전 연결 확인과 초안 보존](../frontend/src/App.test.tsx), [실제 파일·교체·실패 후 재시도](../frontend/tests/e2e/workflows.spec.ts) |
-| UPLOAD-05 | [브라우저 staging·기존 경로 호환·해시·세션·revision·operation 검사](../tests/web/test_multi_upload_api.py), [충돌 후 명시적 재검토](../frontend/src/attachments/useAttachments.test.tsx) |
-| ANSWER-01·ANSWER-05·ANSWER-07 | [구조화 본문·부분 답변·검사 의미](../frontend/src/components/AnswerView.test.tsx) |
+| UPLOAD-05 | [브라우저 staging·기존 경로 호환·해시·세션·revision·operation 검사](../tests/web/test_multi_upload_api.py), [충돌 후 명시적 재검토](../frontend/src/attachments/useAttachments.test.tsx), [용량 한도 파일 교체·동일 내용 재선택·staging 회수 브라우저 회귀](../frontend/tests/e2e/regressions.spec.ts) |
+| ANSWER-01·ANSWER-05·ANSWER-07 | [구조화 본문·부분 답변·검사 의미](../frontend/src/components/AnswerView.test.tsx), [Markdown 원문 복사의 블록 표시·정확한 TXT 다운로드 브라우저 회귀](../frontend/tests/e2e/regressions.spec.ts) |
 | ANSWER-02·ANSWER-04 | [답변별 인용 연결](../frontend/src/components/AnswerView.test.tsx), [원문·검색·답변 문맥](../frontend/src/components/EvidencePanel.test.tsx) |
 | ANSWER-03 | [Unicode·CRLF·물리 줄·Notebook 위치](../frontend/src/components/sourceLocations.test.ts), [병합 표·선택 셀 표시](../frontend/src/components/EvidencePanel.test.tsx) |
 | ANSWER-06 | [Markdown·상대 링크·HTML 비실행](../frontend/src/components/MarkdownView.test.tsx), [원문 보존](../frontend/src/components/EvidencePanel.test.tsx) |
@@ -184,7 +186,7 @@ npm --prefix frontend run generate:api
 | ACCESS-01·ACCESS-02·ACCESS-03 | [실제 Chromium의 모바일·낮은 화면·포커스·테마 대비·읽기 위치](../frontend/tests/e2e/accessibility.spec.ts) |
 | RUN-01 | 기존 `tests/app`·`tests/web`·브리지 회귀, [실제 Streamlit 호환 검사](../frontend/tests/streamlit/compatibility.spec.ts), 프런트엔드 설치·타입·lint·build 검사 |
 | RUN-02 | [실제 API 성공·제공자 설정 오류](../frontend/tests/e2e/chat.spec.ts), [첨부·복원·다운로드·Slack 흐름](../frontend/tests/e2e/workflows.spec.ts) |
-| RUN-03 | [서비스 관리자 시작·중지·재시작·UI 선택](../tests/app/test_service_manager.py), [정적 제공·API 경로·빌드 누락](../tests/web/test_static_ui.py), [개발 서버 없는 실제 정적 UI](../frontend/tests/e2e/static.spec.ts), production 프로젝트의 전체 [사용 흐름](../frontend/tests/e2e/workflows.spec.ts)·[접근성 검사](../frontend/tests/e2e/accessibility.spec.ts) |
+| RUN-03 | [서비스 관리자 시작·중지·재시작·UI 선택](../tests/app/test_service_manager.py), [정적 제공·API 경로·빌드 누락](../tests/web/test_static_ui.py), [개발 서버 없는 정적 UI와 localhost 외 HTTP의 첨부·질문·다운로드·복원](../frontend/tests/e2e/static.spec.ts), production 프로젝트의 전체 [사용 흐름](../frontend/tests/e2e/workflows.spec.ts)·[접근성 검사](../frontend/tests/e2e/accessibility.spec.ts) |
 
 검사 명령:
 
@@ -203,7 +205,7 @@ uv run --locked python script/check_encoding.py
 uv run --locked python script/sync_env_example.py --check
 ```
 
-브라우저 실행 환경을 처음 준비할 때는 `(cd frontend && npx playwright install chromium)`으로 테스트 브라우저를 설치합니다. `test:e2e`는 먼저 정적 빌드를 만들고 개발 프록시와 정적 제공 프로젝트를 순서대로 실행합니다. 각 프로젝트에서 새 테스트 서버로 같은 질문·첨부·복원·저장·Slack·접근성 시나리오를 확인하며, 정적 제공에서는 Vite를 실행하지 않습니다. 테스트 전용 서버의 시작·정리도 관리하므로 별도로 실제 모델 설정의 앱을 실행할 필요는 없습니다. 외부 모델·Slack은 테스트 경계로 대체하고, 실제 FastAPI의 요청 처리와 세션 상태는 실행합니다. `test:streamlit`은 실제 Streamlit과 Python 클라이언트를 기존 합성 HTTP fixture에 연결해 UI 호환성을 확인합니다. 이 검사는 실제 FastAPI 통합 검사나 유료 모델의 답변 품질 평가를 대신하지 않습니다. Streamlit은 복귀 경로로 유지하므로 기존 AppTest와 Node 브리지 검사도 계속 실행합니다.
+브라우저 실행 환경을 처음 준비할 때는 `(cd frontend && npx playwright install chromium)`으로 테스트 브라우저를 설치합니다. `test:e2e`는 먼저 정적 빌드를 만들고 개발 프록시와 정적 제공 프로젝트를 순서대로 실행합니다. 각 프로젝트에서 새 테스트 서버로 같은 질문·첨부·복원·저장·Slack·접근성 시나리오를 확인하며, 정적 제공에서는 Vite를 실행하지 않습니다. 정적 제공 검사는 테스트용 `documate.test`를 로컬 서버로 해석해 localhost 외 HTTP origin도 확인합니다. 브라우저의 `isSecureContext`가 거짓이고 `crypto.randomUUID`가 없는 상태에서 첨부·질문·다운로드·대화 복원을 실행합니다. 테스트 전용 서버의 시작·정리도 관리하므로 별도로 실제 모델 설정의 앱을 실행할 필요는 없습니다. 외부 모델·Slack은 테스트 경계로 대체하고, 실제 FastAPI의 요청 처리와 세션 상태는 실행합니다. `test:streamlit`은 실제 Streamlit과 Python 클라이언트를 기존 합성 HTTP fixture에 연결해 UI 호환성을 확인합니다. 이 검사는 실제 FastAPI 통합 검사나 유료 모델의 답변 품질 평가를 대신하지 않습니다. Streamlit은 복귀 경로로 유지하므로 기존 AppTest와 Node 브리지 검사도 계속 실행합니다.
 
 변경 범위의 관련 검사부터 실행하고, 기본 UI의 완료 판정에는 `uv run --locked pytest -q`를 포함한 전체 회귀와 전체 브라우저 인수 항목을 확인합니다. 실패를 재시도나 고정 sleep으로 가리지 않고 원인을 수정합니다. 테스트 수나 화면 캡처만으로 원문·상태 계약의 통과를 대신하지 않습니다.
 

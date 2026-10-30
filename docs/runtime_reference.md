@@ -8,7 +8,7 @@ DocuMate 실행, 환경 변수, API 계약, 파일 제약, 운영 메모를 모�
 
 - Python 3.12 이상
 - `uv`
-- Node.js 22.13 이상(22.x) 또는 24 이상과 npm: React 개발·정적 빌드에 사용
+- Node.js 22.22.2 이상(22.x), 24.15.0 이상(24.x) 또는 26 이상과 npm: React 개발·정적 빌드·테스트에 사용
 - Streamlit 1.54.0 이상 (`uv sync`로 설치): 기존 UI 실행에 사용
 - OpenAI API 키
 - Tavily API 키
@@ -83,7 +83,7 @@ Windows 환경에서는 `-X utf8` 또는 `PYTHONUTF8=1` 사용을 권장합니�
 
 ### 1.5 React 개발 UI
 
-React 개발 서버는 Node.js 22.13 이상(22.x) 또는 24 이상과 npm으로 실행하며 같은 FastAPI를 호출합니다. FastAPI는 위 직접 실행 명령이나 서비스 관리자로 먼저 실행합니다.
+React 개발 서버는 Node.js 22.22.2 이상(22.x), 24.15.0 이상(24.x) 또는 26 이상과 npm으로 실행하며 같은 FastAPI를 호출합니다. FastAPI는 위 직접 실행 명령이나 서비스 관리자로 먼저 실행합니다.
 
 ```bash
 npm --prefix frontend ci
@@ -573,6 +573,8 @@ HTTP `200`이나 `done`만으로 성공 처리하지 않습니다. 유효한 `fi
 staging 성공은 검색 가능한 첨부의 확정이 아니며 manifest와 revision을 바꾸지 않습니다. 여러 파일은 각각 수신한 뒤 하나의 `/uploads/sync` 요청으로 확정합니다. 브라우저는 `add`에 서버의 `upload_id`, `name`, `content_hash`와 필요한 `replace_file_id`를 보냅니다. 서버가 이를 세션 안의 경로로 연결하므로 브라우저가 서버 파일 경로를 만들 필요가 없습니다.
 
 기존 Streamlit·Python 클라이언트의 `path` 기반 sync도 유지합니다. 한 sync 요청의 추가 항목은 기존 경로 형식 또는 브라우저 식별자 형식 중 하나를 사용합니다. `epoch`, `expected_revision`, `operation_id`, `remove`, `clear`와 교체 검토·충돌·중복 확정 방지 계약은 동일합니다. 같은 승인 작업을 확인할 때는 upload ID·해시·operation ID를 그대로 유지합니다. 성공한 작업의 staging 파일이 정리되었더라도 보관된 operation 기록으로 같은 요청을 확인할 수 있습니다.
+
+브라우저 sync가 성공하면 서버는 operation 기록을 남긴 뒤 해당 요청의 staging을 회수합니다. 같은 내용의 파일이나 중복 선택도 sync에서 확인하므로 첨부 목록과 revision을 유지하면서 임시 파일을 회수할 수 있습니다. 실패한 요청의 staging과 아직 제출하지 않은 다른 파일은 보존하며, 기존 경로 기반 입력의 정리는 호출한 클라이언트가 계속 담당합니다.
 
 파일 수신 단계에서 이름·형식·빈 파일·파일당 바이트 한도를 검사하고, sync에서 최종 첨부 개수와 총 바이트를 검사합니다. HTTP 수신 본문은 파일 한도에 multipart 여유 64 KiB를 더한 크기로 제한하며, `Content-Length`가 없어도 실제 수신량을 검사합니다. 파일 자체에는 기존 파일당 한도를 적용합니다. staging은 기존 세션 저장 공간 한도와 TTL 정리 대상이며, 수신 실패는 검색 가능한 첨부를 바꾸지 않습니다. staging 재호출 자체의 upload ID는 새로 발급되므로 이미 승인한 sync의 재확인과 새 파일 수신을 구분합니다. 파일 선택·수신만으로 질문을 실행하지 않으며, 질문 연계와 실패 후 명시적 재개는 UI의 제출 계약을 따릅니다.
 

@@ -15,7 +15,7 @@ cp .env.example .env
 
 `.env`에는 최소 `OPENAI_API_KEY`, `TAVILY_API_KEY`를 입력해야 합니다. 기본 파일 입력은 `.py`·`.ipynb`입니다. PDF·DOCX·스캔 PDF·이미지의 본문과 표를 검색하려면 [문서 변환 안내](docs/document_ingestion.md)에 따라 `docling` 선택 의존성과 모델을 준비하고 `DOCLING_ENABLED=true`로 실행합니다.
 
-React 빌드에는 Node.js 22.13 이상(22.x) 또는 24 이상과 npm이 필요합니다. 최초 설치나 프런트엔드 변경 후 빌드하고 서버를 실행합니다.
+React 개발·빌드·테스트에는 Node.js 22.22.2 이상(22.x), 24.15.0 이상(24.x) 또는 26 이상과 npm이 필요합니다. 최초 설치나 프런트엔드 변경 후 빌드하고 서버를 실행합니다.
 
 ```bash
 npm --prefix frontend ci
