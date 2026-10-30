@@ -46,16 +46,16 @@ describe('Slack 수신자 설정', () => {
     render(<Settings />);
     await user.click(screen.getByText('Slack 수신자 설정'));
     await screen.findByText(/기본 수신자가 없습니다/);
-    await user.selectOptions(screen.getByRole('combobox', { name: '수신자 유형' }), 'channel');
+    await user.click(screen.getByRole('radio', { name: '채널' }));
     const recipient = screen.getByRole('textbox', { name: 'Slack 수신자' });
     await user.type(recipient, '  general  ');
     expect(recipient).toHaveAttribute('aria-invalid', 'true');
     expect(screen.getByText(/일반 질문은 계속할 수 있습니다/)).toBeVisible();
     expect(screen.getByLabelText('요청 수신자').textContent).toBe('{"kind":"channel","value":"  general  "}');
-    await user.selectOptions(screen.getByRole('combobox', { name: '수신자 유형' }), 'user');
+    await user.click(screen.getByRole('radio', { name: '사용자' }));
     await user.type(screen.getByRole('textbox', { name: 'Slack 수신자' }), 'U123ABC');
     expect(screen.getByRole('textbox', { name: 'Slack 수신자' })).toHaveAttribute('aria-invalid', 'false');
-    await user.selectOptions(screen.getByRole('combobox', { name: '수신자 유형' }), 'channel');
+    await user.click(screen.getByRole('radio', { name: '채널' }));
     expect(screen.getByRole('textbox', { name: 'Slack 수신자' })).toHaveValue('  general  ');
     await user.clear(screen.getByRole('textbox', { name: 'Slack 수신자' }));
     expect(screen.getByLabelText('요청 수신자')).toHaveTextContent('{"kind":"channel","value":""}');
@@ -80,7 +80,7 @@ describe('Slack 수신자 설정', () => {
     responseBody = { selector: { kind: 'email', value: 'recipient@example.com' }, failure: null };
     await user.click(screen.getByRole('button', { name: '기본 수신자 다시 확인' }));
     expect(await screen.findByText('recipient@example.com')).toBeVisible();
-    expect(screen.getByRole('combobox', { name: '수신자 유형' })).toHaveValue('omitted');
+    expect(screen.getByRole('radio', { name: '직접 지정 안 함' })).toBeChecked();
     expect(screen.getByLabelText('요청 수신자')).toHaveTextContent('null');
     expect(requests).toEqual(Array(3).fill('GET /slack/default-recipient'));
   });

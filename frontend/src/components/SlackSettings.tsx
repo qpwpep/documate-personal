@@ -47,12 +47,14 @@ export function SlackSettings({ value, onChange, baseUrl = '', disabled = false 
     <details className="slack-settings">
       <summary>Slack 수신자 설정</summary>
       <p>수신자를 설정한 뒤 질문 입력창에 “방금 답변을 Slack으로 보내줘”라고 요청하세요. 설정만으로 전송하지 않습니다.</p>
-      <label htmlFor={`${fieldId}-kind`}>수신자 유형</label>
-      <select id={`${fieldId}-kind`} value={value.kind} disabled={disabled}
-        onChange={(event) => onChange({ ...value, kind: event.target.value as SlackSettingsValue['kind'] })}>
-        <option value="omitted">직접 지정 안 함</option>
-        {Object.entries(recipientLabels).map(([key, label]) => <option value={key} key={key}>{label}</option>)}
-      </select>
+      <fieldset className="settings-options" disabled={disabled}>
+        <legend>수신자 유형</legend>
+        {(['omitted', 'channel', 'user', 'email'] as const).map((kind) => <label key={kind}>
+          <input type="radio" name={`${fieldId}-kind`} value={kind} checked={value.kind === kind}
+            onChange={() => onChange({ ...value, kind })} />
+          {kind === 'omitted' ? '직접 지정 안 함' : recipientLabels[kind]}
+        </label>)}
+      </fieldset>
       {kind && field ? <>
         <p id={`${fieldId}-guidance`}>{field.guidance}</p>
         <label htmlFor={`${fieldId}-recipient`}>Slack 수신자</label>

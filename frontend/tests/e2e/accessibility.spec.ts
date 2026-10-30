@@ -33,9 +33,9 @@ for (const viewport of [{ width: 320, height: 720 }, { width: 390, height: 844 }
     await page.keyboard.press('Tab');
     await expect(page.getByRole('button', { name: '메뉴 닫기', exact: true })).toBeFocused();
     await page.getByText('화면 설정', { exact: true }).click();
-    for (const theme of ['light', 'dark', 'system']) {
-      await page.getByLabel('테마', { exact: true }).selectOption(theme);
-      await expect(page.getByLabel('테마', { exact: true })).toHaveValue(theme);
+    for (const theme of ['라이트', '다크', '시스템']) {
+      await page.getByRole('radio', { name: theme, exact: true }).check();
+      await expect(page.getByRole('radio', { name: theme, exact: true })).toBeChecked();
     }
     await page.keyboard.press('Escape');
     await expect(menu).toBeFocused();
@@ -100,9 +100,9 @@ test('light, dark and system themes keep text, code, warnings and action labels 
   await page.getByRole('textbox', { name: '질문', exact: true }).fill('연결 경고 대비 확인');
   await page.getByRole('button', { name: '질문 보내기', exact: true }).click();
   await expect(page.locator('.turn .notice')).toBeVisible();
-  for (const theme of ['light', 'dark', 'system']) {
-    if (theme === 'system') await page.emulateMedia({ colorScheme: 'dark' });
-    await page.getByLabel('테마', { exact: true }).selectOption(theme);
+  for (const theme of ['라이트', '다크', '시스템']) {
+    if (theme === '시스템') await page.emulateMedia({ colorScheme: 'dark' });
+    await page.getByRole('radio', { name: theme, exact: true }).check();
     await source.click();
     await expect(page.locator('.evidence-code-line code')).toBeVisible();
     const ratios = await page.locator('.user-message p, .message-label, .result-status, .result-message, .notice, .answer-body p, .answer-body code, .evidence-code-line code, .evidence-code-line mark, .evidence-caption, .new-conversation, .secondary-button').evaluateAll((elements) => {

@@ -1,0 +1,84 @@
+import { expect, test } from '@playwright/test';
+
+test('the desktop sidebar can collapse and reopen without losing the composer draft', async ({ page }) => {
+  await page.goto('./');
+  const query = page.getByRole('textbox', { name: '질문', exact: true });
+  await query.fill('  메뉴를 접어도 남는 초안\n둘째 줄  ');
+  await page.getByRole('button', { name: '메뉴 닫기', exact: true }).click();
+  const opener = page.getByRole('button', { name: '메뉴 열기', exact: true });
+  await expect(opener).toBeFocused();
+  await expect(page.getByRole('complementary', { name: '대화 메뉴', exact: true })).not.toBeVisible();
+  await expect(query).toBeInViewport();
+  await page.keyboard.press('Enter');
+  await expect(page.getByRole('button', { name: '메뉴 닫기', exact: true })).toBeFocused();
+  await expect(query).toHaveValue('  메뉴를 접어도 남는 초안\n둘째 줄  ');
+});
+
+test('the Streamlit introduction keeps extra examples folded and prefills without submitting', async ({ page, request }) => {
+  await page.goto('./');
+  const title = page.getByRole('heading', { name: '문서와 자료에 질문하세요', exact: true });
+  await expect(title).toBeVisible();
+  const sidebarBox = await page.getByRole('complementary', { name: '대화 메뉴', exact: true }).boundingBox();
+  const headerBox = await page.locator('.app-header').boundingBox();
+  const introBox = await page.locator('.welcome-intro').boundingBox();
+  expect(sidebarBox?.width).toBe(300);
+  expect(headerBox!.width).toBeLessThanOrEqual(872);
+  expect(Math.abs(introBox!.x + introBox!.width / 2 - headerBox!.x - headerBox!.width / 2)).toBeLessThanOrEqual(1);
+  await expect(page.getByRole('textbox', { name: '질문', exact: true })).toBeInViewport();
+  const firstExample = page.getByRole('button', { name: 'pandas merge 사용법을 공식 문서 기준으로 설명해줘', exact: true });
+  const extraExample = page.getByRole('button', { name: 'FastAPI 라우터 구조를 간단히 설명해줘', exact: true });
+  await expect(firstExample).toBeVisible();
+  await expect(page.getByRole('button', { name: 'NumPy 배열 reshape 예제를 공식 문서 기준으로 알려줘', exact: true })).toBeVisible();
+  await expect(extraExample).not.toBeVisible();
+  await page.getByText('다른 질문 예시와 지원 문서', { exact: true }).click();
+  await expect(extraExample).toBeVisible();
+  await expect(page.getByText('지원하는 공식 문서', { exact: true })).toBeVisible();
+  await extraExample.click();
+  const query = page.getByRole('textbox', { name: '질문', exact: true });
+  await expect(query).toHaveValue('FastAPI 라우터 구조를 간단히 설명해줘');
+  await expect(query).toBeFocused();
+  await expect(firstExample).toBeDisabled();
+  const received = await (await request.get('http://127.0.0.1:18000/_fixture/requests')).json() as { queries: string[] };
+  expect(received.queries).not.toContain('FastAPI 라우터 구조를 간단히 설명해줘');
+  await query.fill('  직접 작성한 질문\n둘째 줄  ');
+  await expect(firstExample).toBeDisabled();
+  await page.screenshot({ path: test.info().outputPath('introduction.png'), fullPage: true });
+});
+
+test('confirmed attachments appear in the sidebar while selection stays in the composer', async ({ page }) => {
+  await page.goto('./');
+  const sidebar = page.getByRole('complementary', { name: '대화 메뉴', exact: true });
+  await expect(sidebar.getByText('함께 검색할 파일', { exact: true })).toBeVisible();
+  const picker = page.getByRole('button', { name: '파일 추가', exact: true });
+  await expect(picker).toBeVisible();
+  const fileChooser = page.waitForEvent('filechooser');
+  await picker.click();
+  await (await fileChooser).setFiles({ name: 'parity.py', mimeType: 'text/x-python', buffer: Buffer.from('alpha = 1\n') });
+  await expect(page.getByText('전송 대기', { exact: true })).toBeVisible();
+  await expect(sidebar.getByText('parity.py', { exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: '첨부만 확정', exact: true }).click();
+  await expect(sidebar.getByText('parity.py', { exact: true })).toBeVisible();
+  await page.getByRole('textbox', { name: '질문', exact: true }).fill('parity 첨부 원문 확인');
+  await page.getByRole('button', { name: '질문 보내기', exact: true }).click();
+  await expect(page.getByRole('button', { name: '근거 [1] parity.py', exact: true })).toBeVisible();
+  await page.screenshot({ path: test.info().outputPath('sidebar-attachment.png'), fullPage: true });
+});
+
+test('mobile examples and composer fit the viewport and the menu returns focus', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('./');
+  await expect(page.getByRole('heading', { name: '문서와 자료에 질문하세요', exact: true })).toBeVisible();
+  const query = page.getByRole('textbox', { name: '질문', exact: true });
+  await expect(query).toBeInViewport();
+  const menu = page.getByRole('button', { name: '메뉴 열기', exact: true });
+  await menu.focus();
+  await page.keyboard.press('Enter');
+  const dialog = page.getByRole('dialog', { name: '대화 메뉴', exact: true });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByText('함께 검색할 파일', { exact: true })).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(menu).toBeFocused();
+  await expect(dialog).not.toBeVisible();
+  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.screenshot({ path: test.info().outputPath('mobile-introduction.png'), fullPage: true });
+});

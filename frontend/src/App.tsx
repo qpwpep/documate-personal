@@ -7,6 +7,7 @@ import { AnswerDelivery } from './components/AnswerDelivery';
 import { SlackSettings } from './components/SlackSettings';
 import { selectedSlackRecipient } from './components/SlackSettingsState';
 import { ConversationSidebar } from './components/ConversationSidebar';
+import { createId } from './id';
 import {
   STORAGE_KEY, conversationTitle, createConversation, createConversationState,
   restoreConversations, serializeConversations, type ChatTurn, type Conversation, type ConversationState,
@@ -28,6 +29,8 @@ const docExamples = [
   'scikit-learn train_test_split 사용법을 정리해줘',
 ];
 const uploadExamples = ['첨부한 자료의 핵심 내용을 요약하고 근거를 보여줘', '첨부한 자료에서 중요한 용어를 설명해줘'];
+const supportedDocs = ['python', 'git', 'LangChain', 'Matplotlib', 'NumPy', 'pandas', 'PyTorch', 'Hugging Face',
+  'FastAPI', 'BeautifulSoup', 'streamlit', 'gradio', 'scikit-learn', 'Pydantic'];
 
 function initialState() {
   try {
@@ -87,7 +90,8 @@ export function App({ apiBaseUrl = '' }: { apiBaseUrl?: string }) {
     updateConversation(id, (item) => ({ ...item, connection: 'checking', connectionError: null }));
     try {
       const manifest = await getClient(id).refreshUploads({ signal });
-      if (!mounted.current || signal?.aborted || validations.current.get(id) !== generation) return null;
+      if (!mounted.current || validations.current.get(id) !== generation) return null;
+      signal?.throwIfAborted();
       const latest = currentState.current.conversations.find((item) => item.id === id);
       if (!latest) return null;
       if (latest.confirmedEpoch !== null && latest.confirmedEpoch !== manifest.epoch) {
@@ -98,7 +102,7 @@ export function App({ apiBaseUrl = '' }: { apiBaseUrl?: string }) {
       updateConversation(id, (item) => ({ ...item, manifest, confirmedEpoch: manifest.epoch, connection: 'ready', connectionError: null }));
       return manifest;
     } catch (error: unknown) {
-      if (!mounted.current || signal?.aborted || validations.current.get(id) !== generation) return null;
+      if (!mounted.current || validations.current.get(id) !== generation) return null;
       updateConversation(id, (item) => ({ ...item, connection: 'unknown',
         connectionError: error instanceof ApiError ? error.message : '서버 연결을 확인하지 못했습니다. 기록은 보존되며 다시 확인할 수 있습니다.' }));
       return null;
@@ -143,6 +147,13 @@ export function App({ apiBaseUrl = '' }: { apiBaseUrl?: string }) {
   const queryTooLong = config !== null && (Array.from(conversation.draft).length > config.query.max_chars
     || new TextEncoder().encode(conversation.draft).byteLength > config.query.max_utf8_bytes);
 
+  useEffect(() => {
+    const textarea = input.current;
+    if (!textarea) return;
+    textarea.style.height = 'auto';
+    textarea.style.height = `${Math.min(textarea.scrollHeight, 240)}px`;
+  }, [conversation.id, conversation.draft]);
+
   function setBusy(id: string, operation: 'upload' | 'save', busy: boolean) {
     updateConversation(id, (item) => ({ ...item, busy: busy ? operation : item.busy === operation ? null : item.busy }));
   }
@@ -173,7 +184,7 @@ export function App({ apiBaseUrl = '' }: { apiBaseUrl?: string }) {
     let turnId: string | null = null;
     try {
       if (!await ensureSession(id, controller.signal) || controller.signal.aborted) return;
-      turnId = crypto.randomUUID();
+      turnId = createId();
       const turn: ChatTurn = { id: turnId, query, result: null, notices: [], error: null, requestId: null,
         interrupted: false, receiving: true, exportResult: null, exportError: null };
       updateConversation(id, (item) => ({ ...item, draft: consumeDraft && item.draft === query ? '' : item.draft,
@@ -252,36 +263,50 @@ export function App({ apiBaseUrl = '' }: { apiBaseUrl?: string }) {
     && (conversation.manifest?.files.length ?? 0) > 0 && !attachments.hasPending && conversation.attachments.files.length === 0;
   const examples = (conversation.manifest?.files.length ?? 0) > 0
     ? [docExamples[0], uploadExamples[0], docExamples[1], uploadExamples[1]] : docExamples;
+  const primaryExamples = conversation.attachments.files.length > 0 && !conversation.manifest?.files.length
+    ? uploadExamples : examples.slice(0, 2);
   const connectionMessage = conversation.busy === 'chat' ? progress[conversation.id] || '응답을 준비하고 있습니다.'
     : readOnly ? '서버 세션이 만료되어 읽기 전용입니다. 새 채팅에서 계속할 수 있습니다.'
       : configError ?? (conversation.connection === 'checking' || !config ? '서버 연결을 확인하고 있습니다.'
         : conversation.connection === 'ready' ? '질문할 준비가 되었습니다.' : conversation.connectionError ?? '서버 연결을 다시 확인해 주세요.');
+  const attachmentStatus = conversation.attachments.phase === 'failed'
+    ? `첨부 준비 실패${conversation.manifest ? ` · 기존 자료 ${conversation.manifest.files.length}개 유지` : ''}`
+    : !conversation.manifest ? '첨부 연결 확인 중'
+      : `${readOnly ? '이전 첨부 기록' : '첨부 자료'} ${conversation.manifest.files.length}개`;
 
   return (
     <div className="app-layout">
-      <ConversationSidebar items={state.conversations.map((item) => ({ id: item.id, title: conversationTitle(item), busy: item.busy === 'chat' }))}
+      <ConversationSidebar items={state.conversations.map((item) => ({ id: item.id, title: conversationTitle(item), busy: item.busy === 'chat', expired: item.connection === 'expired' }))}
         activeId={state.activeId} onSelect={(id) => { if (!navigationBlocked) mutate((value) => ({ ...value, activeId: id })); }}
         onNew={newConversation} disabled={navigationBlocked} theme={state.theme}
-        onThemeChange={(theme) => mutate((value) => ({ ...value, theme }))} onModalChange={setSidebarModal}>
+        onThemeChange={(theme) => mutate((value) => ({ ...value, theme }))} onModalChange={setSidebarModal}
+        attachments={attachments.manifestPanel}>
         <SlackSettings value={conversation.slack} baseUrl={apiBaseUrl} disabled={readOnly || conversation.busy !== null}
           onChange={(slack) => updateConversation(conversation.id, (item) => ({ ...item, slack }))} />
       </ConversationSidebar>
       <div className="app-shell" inert={sidebarModal}>
         <header className="app-header">
-          <div className="brand"><span className="brand-mark" aria-hidden="true">DM</span><span>DocuMate<small>문서와 함께 생각하기</small></span></div>
-          <div className="conversation-heading"><strong>{conversationTitle(conversation)}</strong>
-            <small>{conversation.connection === 'ready' ? '검색 가능' : '이전 첨부 기록'} {conversation.manifest?.files.length ?? 0}개</small></div>
+          <div className="brand"><span className="brand-mark" aria-hidden="true">DM</span><span>DocuMate<small>{conversationTitle(conversation)}</small></span></div>
+          <span className="header-status">{readOnly ? '읽기 전용 · ' : ''}{attachmentStatus}</span>
         </header>
         {storageError && <p className="notice" role="alert">{storageError}</p>}
         <main className="conversation" aria-label="질문과 답변">
-          {conversation.turns.length === 0 && <section className="welcome">
-            <p className="eyebrow">공식 문서와 나의 자료</p><h1>문서와 자료에<br />질문하세요.</h1>
-            <p>사용법을 확인하거나 파일을 첨부하세요. 답변의 근거에서 사용한 원문을 확인할 수 있습니다.</p>
-            {ready && !conversation.busy && !attachments.hasPending && conversation.attachments.files.length === 0 && <div className="examples" aria-label="질문 예시">
-              <p>예시를 고른 뒤 확인하거나 수정하고 전송하세요.</p>
-              {examples.map((prompt) => <button className="secondary-button" type="button" key={prompt}
-                disabled={Boolean(conversation.draft)} onClick={() => fillExample(prompt)}>{prompt}</button>)}
-            </div>}
+          {conversation.turns.length === 0 && ready && !conversation.busy && !attachments.hasPending && <section className="welcome">
+            <div className="welcome-intro"><h1>문서와 자료에 질문하세요</h1>
+              <p>공식 문서로 사용법을 확인하거나, 입력창의 + 버튼으로 파일을 첨부하세요.<br />답변의 ‘근거’에서 사용한 원문과 위치를 확인할 수 있습니다.</p>
+            </div>
+            <div className="question-examples" aria-label="질문 예시">
+              <strong>질문 예시</strong>
+              <p className="example-hint">{conversation.draft ? '작성 중인 질문을 먼저 보내거나 지운 뒤 다른 예시를 선택하세요.' : '예시를 선택하면 입력창에 채워집니다. 확인하거나 수정한 뒤 전송하세요.'}</p>
+              <div className="examples">{primaryExamples.map((prompt) => <button className="secondary-button" type="button" key={prompt}
+                disabled={Boolean(conversation.draft)} onClick={() => fillExample(prompt)}>{prompt}</button>)}</div>
+              <details className="more-examples"><summary>다른 질문 예시와 지원 문서</summary>
+                <div className="examples">{examples.slice(2).map((prompt) => <button className="secondary-button" type="button" key={prompt}
+                  disabled={Boolean(conversation.draft)} onClick={() => fillExample(prompt)}>{prompt}</button>)}</div>
+                <p><strong>지원하는 공식 문서</strong></p>
+                <div className="docs-row">{supportedDocs.map((name) => <span key={name}>{name}</span>)}</div>
+              </details>
+            </div>
           </section>}
           {conversation.turns.map((turn, index) => {
             const result = displayedResult(turn);
@@ -318,30 +343,38 @@ export function App({ apiBaseUrl = '' }: { apiBaseUrl?: string }) {
               </div>
             </section>;
           })}
+          <details className="upload-guidance"><summary>첨부 형식과 용량 안내</summary>
+            {config && <p>{[...config.upload.accepted_suffixes].sort().join(' · ')} / 최대 {config.upload.max_files}개 / 파일당 {config.upload.max_file_bytes / (1024 * 1024)} MiB / 전체 {config.upload.max_total_bytes / (1024 * 1024)} MiB</p>}
+            <p>입력창의 +로 파일을 선택한 뒤 전송하세요. 파일만 먼저 전송할 수도 있습니다.</p>
+          </details>
         </main>
         <footer className="composer-area">
-          <div className="connection-status" role="status" aria-live="polite">{connectionMessage}</div>
+          <div className={`connection-status${ready && !conversation.busy ? ' visually-hidden' : ''}`} role="status" aria-live="polite">{connectionMessage}</div>
           {!readOnly && (conversation.connection === 'unknown' || configError) && <button type="button" className="secondary-button reconnect-button"
             disabled={conversation.busy !== null} onClick={reconnect}>연결 다시 확인</button>}
           {canContinueUploadQuestion && <button type="button" className="secondary-button" disabled={!ready || conversation.busy !== null}
             onClick={() => void sendQuestion(conversation.id, lastTurn.query)}>이전 질문 계속하기</button>}
+          {conversation.manifest && conversation.manifest.files.length > 0 && <details className="composer-attachments"><summary>첨부 {conversation.manifest.files.length}개 · {ready ? '검색 가능' : '이전 첨부 기록'}</summary>
+            <p>{conversation.manifest.files.map((file) => file.name).join(' · ')}</p><p>실제 사용한 자료는 답변의 근거에서 확인하세요.</p>
+          </details>}
           {attachments.panel}
           <form className="composer" onSubmit={submit}>
+            {attachments.picker}
             <label className="visually-hidden" htmlFor="query">질문</label>
             <textarea ref={input} id="query" value={conversation.draft} readOnly={readOnly}
               onChange={(event) => updateConversation(conversation.id, (item) => ({ ...item, draft: event.target.value }))}
-              placeholder="질문을 입력하세요" rows={3} aria-invalid={queryTooLong || undefined}
+              placeholder="질문을 입력하세요" rows={1} aria-invalid={queryTooLong || undefined}
               aria-describedby={queryTooLong ? 'query-limit' : 'composer-hint'}
               onKeyDown={(event) => {
                 if (event.key === 'Enter' && !event.shiftKey && !event.ctrlKey && !event.altKey && !event.metaKey && !event.nativeEvent.isComposing) {
                   event.preventDefault(); event.currentTarget.form?.requestSubmit();
                 }
               }} />
-            <div className="composer-actions"><p id="composer-hint">Enter로 전송 · Shift+Enter로 줄바꿈</p>
+            <div className="composer-actions"><p id="composer-hint" className="visually-hidden">Enter로 전송 · Shift+Enter로 줄바꿈</p>
               {conversation.busy === 'chat'
                 ? <button type="button" className="secondary-button" onClick={() => requests.current.get(conversation.id)?.abort()}>응답 수신 중단</button>
-                : <button type="submit" disabled={!ready || conversation.busy !== null || queryTooLong || attachments.hasPending
-                  || (!conversation.draft.trim() && !conversation.attachments.files.length)}>{conversation.draft.trim() ? '질문 보내기' : conversation.attachments.files.length ? '첨부만 전송' : '질문 보내기'}</button>}
+                : <button type="submit" aria-label={conversation.draft.trim() ? '질문 보내기' : conversation.attachments.files.length ? '첨부만 전송' : '질문 보내기'} disabled={!ready || conversation.busy !== null || queryTooLong || attachments.hasPending
+                  || (!conversation.draft.trim() && !conversation.attachments.files.length)}><span aria-hidden="true">↑</span></button>}
             </div>
           </form>
           {queryTooLong && <p id="query-limit" role="alert" className="notice">질문이 서버의 길이 제한을 넘었습니다. 내용을 나누어 보내 주세요.</p>}

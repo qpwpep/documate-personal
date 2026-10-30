@@ -25,6 +25,8 @@ let pendingResponse: ServerResponse | null = null;
 let apiBaseUrl = '';
 let serverEpoch = 'contract-epoch';
 let manifestUnavailable = false;
+let holdManifest = false;
+let pendingManifestResponse: ServerResponse | null = null;
 
 const server = createServer(async (request, response) => {
   if (request.url === '/client-config') {
@@ -33,6 +35,10 @@ const server = createServer(async (request, response) => {
     return;
   }
   if (request.method === 'GET' && request.url?.endsWith('/uploads')) {
+    if (holdManifest) {
+      pendingManifestResponse = response;
+      return;
+    }
     if (manifestUnavailable) {
       response.writeHead(503, { 'Content-Type': 'application/json' });
       response.end(JSON.stringify({ detail: 'temporarily unavailable' }));
@@ -76,6 +82,9 @@ beforeEach(() => {
   sessionStorage.clear();
   pendingResponse?.end();
   pendingResponse = null;
+  pendingManifestResponse?.end();
+  pendingManifestResponse = null;
+  holdManifest = false;
   requests = [];
   holdResponse = false;
   responseName = 'completed';
@@ -87,6 +96,7 @@ beforeEach(() => {
 
 afterAll(async () => {
   pendingResponse?.end();
+  pendingManifestResponse?.end();
   server.closeAllConnections();
   await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
 });
@@ -132,6 +142,37 @@ describe('질문 화면과 실제 HTTP 클라이언트', () => {
     expect(within(screen.getByRole('region', { name: '대화 기록' })).getByText('결과를 저장해 줘')).toBeVisible();
     expect(requests).toHaveLength(1);
     expect(screen.queryByText('답변 받음')).not.toBeInTheDocument();
+  });
+
+  it('전송 전 연결 확인을 중단하면 초안을 보존하고 재연결 후 명시적으로 한 번 보낸다', async () => {
+    const user = userEvent.setup();
+    render(<App apiBaseUrl={apiBaseUrl} />);
+    await screen.findByText('질문할 준비가 되었습니다.');
+    const question = screen.getByRole('textbox', { name: '질문' });
+    const query = '  중단 뒤 다시 보낼 질문  ';
+    await user.type(question, query);
+    holdManifest = true;
+    await user.click(screen.getByRole('button', { name: '질문 보내기' }));
+    await waitFor(() => expect(pendingManifestResponse).not.toBeNull());
+    await user.click(screen.getByRole('button', { name: '응답 수신 중단' }));
+
+    const reconnect = await screen.findByRole('button', { name: '연결 다시 확인' });
+    await waitFor(() => expect(reconnect).toBeEnabled());
+    expect(question).toHaveValue(query);
+    expect(screen.queryByRole('region', { name: '대화 기록' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '질문 보내기' })).toBeDisabled();
+    expect(requests).toHaveLength(0);
+
+    holdManifest = false;
+    pendingManifestResponse?.end();
+    await user.click(reconnect);
+    await screen.findByText('질문할 준비가 되었습니다.');
+    expect(question).toHaveValue(query);
+    expect(requests).toHaveLength(0);
+    await user.click(screen.getByRole('button', { name: '질문 보내기' }));
+    await screen.findByText('한글 답변 🧪');
+    expect(requests).toHaveLength(1);
+    expect(JSON.parse(requests[0]).query).toBe(query);
   });
 
   it('서버의 문자 수와 UTF-8 바이트 제한을 원문 기준으로 적용한다', async () => {

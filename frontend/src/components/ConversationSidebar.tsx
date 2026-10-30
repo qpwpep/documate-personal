@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import type { ConversationState } from '../conversations';
 
 interface Props {
-  items: { id: string; title: string; busy: boolean }[];
+  items: { id: string; title: string; busy: boolean; expired: boolean }[];
   activeId: string;
   onSelect(id: string): void;
   onNew(): void;
@@ -10,24 +10,32 @@ interface Props {
   theme: ConversationState['theme'];
   onThemeChange(theme: ConversationState['theme']): void;
   onModalChange(open: boolean): void;
+  attachments?: ReactNode;
   children?: ReactNode;
 }
 
-export function ConversationSidebar({ items, activeId, onSelect, onNew, disabled, theme, onThemeChange, onModalChange, children }: Props) {
+export function ConversationSidebar({ items, activeId, onSelect, onNew, disabled, theme, onThemeChange, onModalChange, attachments, children }: Props) {
   const [mobile, setMobile] = useState(() => window.matchMedia?.('(max-width: 760px)').matches ?? false);
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(() => !mobile);
   const panel = useRef<HTMLElement>(null);
   const opener = useRef<HTMLButtonElement>(null);
   const closeButton = useRef<HTMLButtonElement>(null);
-  const returnFocusAfterResize = useRef(false);
+  const returnFocusToOpener = useRef(false);
+  const focusOnOpen = useRef(false);
+  const numberedItems = items.map((item, index) => ({ ...item,
+    label: `${index + 1}. ${item.title}${item.busy ? ' · 답변 준비 중' : item.expired ? ' · 읽기 전용' : ''}`,
+  }));
+  const recentItems = numberedItems.slice(-3).reverse();
+  const currentItem = numberedItems.find((item) => item.id === activeId);
+  if (currentItem && !recentItems.some((item) => item.id === activeId)) recentItems.push(currentItem);
 
   useEffect(() => {
     const media = window.matchMedia?.('(max-width: 760px)');
     if (!media) return;
     function resized() {
-      if (media!.matches && panel.current?.contains(document.activeElement)) returnFocusAfterResize.current = true;
+      if (media!.matches && panel.current?.contains(document.activeElement)) returnFocusToOpener.current = true;
       setMobile(media!.matches);
-      if (!media!.matches) setOpen(false);
+      setOpen(!media!.matches);
     }
     media.addEventListener('change', resized);
     return () => media.removeEventListener('change', resized);
@@ -35,17 +43,20 @@ export function ConversationSidebar({ items, activeId, onSelect, onNew, disabled
 
   useEffect(() => {
     onModalChange(mobile && open);
-    if (mobile && open) closeButton.current?.focus();
-    if (mobile && !open && returnFocusAfterResize.current) {
+    if (open && focusOnOpen.current) {
+      closeButton.current?.focus();
+      focusOnOpen.current = false;
+    }
+    if (!open && returnFocusToOpener.current) {
       opener.current?.focus();
-      returnFocusAfterResize.current = false;
+      returnFocusToOpener.current = false;
     }
     return () => onModalChange(false);
   }, [mobile, open, onModalChange]);
 
   function close() {
+    returnFocusToOpener.current = true;
     setOpen(false);
-    opener.current?.focus();
   }
   function select(id: string) {
     onSelect(id);
@@ -53,39 +64,46 @@ export function ConversationSidebar({ items, activeId, onSelect, onNew, disabled
   }
 
   return <>
-    {mobile && <button ref={opener} type="button" className="sidebar-opener secondary-button" aria-label="메뉴 열기"
-      aria-expanded={open} aria-controls="conversation-menu" onClick={() => setOpen(true)}>☰</button>}
+    {!open && <button ref={opener} type="button" className="sidebar-opener secondary-button" aria-label="메뉴 열기"
+      aria-expanded={open} aria-controls="conversation-menu" onClick={() => { focusOnOpen.current = true; setOpen(true); }}>☰</button>}
     {mobile && open && <button type="button" className="sidebar-backdrop" aria-label="메뉴 배경 닫기" tabIndex={-1} onClick={close} />}
     <aside id="conversation-menu" ref={panel} className={`conversation-sidebar${mobile ? ' mobile-sidebar' : ''}`}
-      hidden={mobile && !open} aria-label="대화 메뉴" role={mobile ? 'dialog' : undefined} aria-modal={mobile && open ? true : undefined}
+      hidden={!open} aria-label="대화 메뉴" role={mobile ? 'dialog' : undefined} aria-modal={mobile && open ? true : undefined}
       onKeyDown={(event) => {
         if (!mobile || !open) return;
         if (event.key === 'Escape') { event.preventDefault(); close(); return; }
         if (event.key !== 'Tab') return;
         const controls = [...panel.current!.querySelectorAll<HTMLElement>('button:not(:disabled), select:not(:disabled), input:not(:disabled), textarea:not(:disabled), a[href], summary')]
-          .filter((element) => !element.closest('[hidden]') && !insideClosedDetails(element));
+          .filter((element) => !element.closest('[hidden]') && !insideClosedDetails(element)
+            && (!(element instanceof HTMLInputElement) || element.type !== 'radio' || element.checked));
         const first = controls[0];
         const last = controls.at(-1);
         if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
         else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
       }}>
-      <div className="sidebar-heading"><strong>내 대화</strong>{mobile && <button ref={closeButton} type="button" className="secondary-button" onClick={close}>메뉴 닫기</button>}</div>
+      <div className="sidebar-heading"><div className="brand"><span className="brand-mark" aria-hidden="true">DM</span><strong>DocuMate</strong></div><button ref={closeButton} type="button" className="sidebar-close secondary-button" aria-label="메뉴 닫기" onClick={close}><span aria-hidden="true">«</span></button></div>
       <button type="button" className="new-conversation" disabled={disabled} onClick={() => { onNew(); if (mobile) close(); }}>새 채팅</button>
       <nav aria-label="최근 대화">
-        {[...items].reverse().slice(0, 5).map((item) => <button type="button" className="conversation-choice" key={item.id}
-          disabled={disabled} aria-current={item.id === activeId ? 'page' : undefined} aria-label={`대화 선택: ${item.title}`}
-          onClick={() => select(item.id)}><span>{item.title}</span>{item.busy && <small>응답 받는 중</small>}</button>)}
+        <p className="sidebar-section-label">최근 대화</p>
+        {recentItems.map((item) => <button type="button" className="conversation-choice" key={item.id}
+          disabled={disabled || item.id === activeId} aria-current={item.id === activeId ? 'page' : undefined} aria-label={`대화 선택: ${item.title}`}
+          onClick={() => select(item.id)}><span>{item.id === activeId ? '현재 · ' : ''}{item.label}</span></button>)}
       </nav>
-      <details className="all-conversations"><summary>전체 대화 {items.length}개</summary>
+      <details className="all-conversations"><summary>모든 대화 보기</summary>
         <label htmlFor="all-conversations">대화 선택</label>
         <select id="all-conversations" value={activeId} disabled={disabled} onChange={(event) => select(event.target.value)}>
-          {[...items].reverse().map((item) => <option key={item.id} value={item.id}>{item.title}</option>)}
+          {[...numberedItems].reverse().map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
         </select>
+        <p className="sidebar-help">이 탭에서 새로고침해도 대화와 초안을 복원합니다. 서버 세션이 만료되면 기존 기록은 읽기 전용으로 남습니다.</p>
       </details>
-      <details className="theme-settings"><summary>화면 설정</summary><label htmlFor="theme">테마</label>
-        <select id="theme" value={theme} onChange={(event) => onThemeChange(event.target.value as ConversationState['theme'])}>
-          <option value="system">시스템</option><option value="light">라이트</option><option value="dark">다크</option>
-        </select>
+      {attachments}
+      <details className="theme-settings"><summary>화면 설정</summary>
+        <fieldset className="settings-options" disabled={disabled}><legend>테마</legend>
+          {(['system', 'light', 'dark'] as const).map((value, index) => <label key={value}>
+            <input type="radio" name="theme" value={value} checked={theme === value} onChange={() => onThemeChange(value)} />
+            {['시스템', '라이트', '다크'][index]}
+          </label>)}
+        </fieldset>
       </details>
       {children}
     </aside>

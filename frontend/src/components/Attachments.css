@@ -1,12 +1,16 @@
 .attachments { font-size: .875rem; min-width: 0; }
-.attachment-picker { display: block; font-weight: 650; margin-bottom: .45rem; }
+.attachment-picker { flex-shrink: 0; }
+.attachment-add { display: grid; place-items: center; width: 2.75rem; height: 2.75rem; padding: 0; border: 0; border-radius: 50%; background: transparent; color: var(--accent); font-size: 1.65rem; font-weight: 400; }
 .attachments input[type=file] { max-width: 100%; font: inherit; }
 .attachments ul { list-style: none; margin: .5rem 0; padding: 0; }
 .attachments li { display: flex; align-items: center; justify-content: space-between; gap: .5rem; padding: .35rem 0; }
 .attachments li span { overflow-wrap: anywhere; min-width: 0; }
 .attachments small, .attachment-hint { color: var(--muted, #595e57); font-size: .8rem; }
 .attachment-state { font-weight: 650; margin-bottom: .25rem; }
-.attachment-review, .held-question, .confirmed-files { border-top: 1px solid var(--border, #d9ddd2); padding-top: .7rem; margin-top: .7rem; }
+.attachment-review, .held-question { border-top: 1px solid var(--border, #d9ddd2); padding-top: .7rem; margin-top: .7rem; }
+.attachment-manifest .confirmed-files li { display: block; margin: .6rem 0; padding: .7rem .8rem; border: 1px solid var(--border); border-radius: .75rem; background: var(--panel); }
+.attachment-manifest .confirmed-files li > span { display: block; }
+.attachment-manifest .confirmed-files small { display: block; }
 .attachment-review label { display: flex; gap: .5rem; margin-bottom: .65rem; align-items: flex-start; }
 .attachment-recovery { display: flex; gap: .5rem; flex-wrap: wrap; margin-top: .6rem; }
 .held-question pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }

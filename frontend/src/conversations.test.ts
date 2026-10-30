@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import fixtures from '../../tests/fixtures/web_contracts/agent_responses.json';
 import { parseAgentResponse } from './api/validation';
 import { parseAnswerExport } from './api/delivery-validation';
@@ -21,6 +21,24 @@ function completedTurn(): ChatTurn {
 }
 
 describe('브라우저 대화 표시 상태', () => {
+  it('randomUUID가 없는 HTTP 환경에서도 서로 다른 대화를 만들고 복원한다', () => {
+    vi.stubGlobal('crypto', { getRandomValues: crypto.getRandomValues.bind(crypto) });
+    try {
+      const state = createConversationState();
+      const next = createConversation();
+      state.conversations.push(next);
+      state.activeId = next.id;
+
+      expect(next.id).not.toBe(state.conversations[0].id);
+      for (const conversation of state.conversations) {
+        expect(conversation.id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+      }
+      expect(restoreConversations(serializeConversations(state))).toEqual(state);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('서로 다른 대화의 정확한 초안·답변·첨부 표시와 Slack 입력을 복원한다', () => {
     const state = createConversationState();
     const first = state.conversations[0];

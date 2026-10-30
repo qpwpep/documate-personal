@@ -198,7 +198,7 @@ test('Slack settings preserve invalid input for normal chat and send only on an 
   await page.goto('./');
   await page.getByText('Slack 수신자 설정', { exact: true }).click();
   await expect(page.getByRole('status').filter({ hasText: '기본 수신자:' })).toContainText('UDEFAULT');
-  await page.getByLabel('수신자 유형', { exact: true }).selectOption('channel');
+  await page.getByRole('radio', { name: '채널', exact: true }).check();
   await page.getByLabel('Slack 수신자', { exact: true }).fill('invalid-channel');
   const ordinary = '잘못된 수신자를 입력한 일반 질문';
   await ask(page, ordinary);

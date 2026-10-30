@@ -5,6 +5,7 @@ import type { AgentResponse, AnswerExportResult, UploadManifest } from './api/ty
 import { parseAgentResponse, parseUploadManifest } from './api/validation';
 import { createAttachmentState, type AttachmentState } from './attachments/state';
 import { createSlackSettings, type SlackSettingsValue } from './components/SlackSettingsState';
+import { createId } from './id';
 
 export const STORAGE_KEY = 'documate.react.conversations.v1';
 
@@ -117,7 +118,7 @@ const validateSnapshot = new Ajv2020().compile<StoredSnapshot>({
 
 export function createConversation(): Conversation {
   return {
-    id: crypto.randomUUID(), draft: '', turns: [], attachments: createAttachmentState(),
+    id: createId(), draft: '', turns: [], attachments: createAttachmentState(),
     slack: createSlackSettings(), confirmedEpoch: null, manifest: null,
     connection: 'unknown', connectionError: null, busy: null,
   };

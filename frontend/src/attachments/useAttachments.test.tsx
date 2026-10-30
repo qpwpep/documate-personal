@@ -22,13 +22,16 @@ let stagedCount = 0;
 let syncBodies: Record<string, unknown>[] = [];
 let stagedFiles = new Map<string, { name: string; size_bytes: number; content_hash: string }>();
 let failSync: 'none' | 'once' | 'conflict' = 'none';
+let syncResult: UploadManifest | null = null;
 let sentQueries: string[] = [];
 let restoredQueries: string[] = [];
 let apiBaseUrl = '';
+let manifestGate: Promise<void> | null = null;
 
 const server = createServer(async (request, response) => {
   response.setHeader('Content-Type', 'application/json');
   if (request.method === 'GET' && request.url?.endsWith('/uploads')) {
+    await manifestGate;
     response.end(JSON.stringify(manifest));
     return;
   }
@@ -60,6 +63,12 @@ const server = createServer(async (request, response) => {
       return;
     }
     const additions = body.add as { upload_id: string; replace_file_id: string | null }[];
+    if (syncResult !== null) {
+      manifest = syncResult;
+      for (const add of additions) stagedFiles.delete(add.upload_id);
+      response.end(JSON.stringify(manifest));
+      return;
+    }
     const removed = new Set(body.remove as string[]);
     const files = body.clear ? [] : manifest.files.filter((file) => !removed.has(file.file_id) && !additions.some((add) => add.replace_file_id === file.file_id));
     for (const add of additions) {
@@ -93,8 +102,10 @@ beforeEach(() => {
   syncBodies = [];
   stagedFiles = new Map();
   failSync = 'none';
+  syncResult = null;
   sentQueries = [];
   restoredQueries = [];
+  manifestGate = null;
 });
 afterAll(async () => {
   server.closeAllConnections();
@@ -113,17 +124,58 @@ function Harness({ manifestConfirmed = true }: { manifestConfirmed?: boolean }) 
     onManifestChange: setConfirmed, onBusyChange: setBusy,
     onSendPrompt: (prompt) => sentQueries.push(prompt),
     onRestorePrompt: (prompt) => restoredQueries.push(prompt),
-    disabled: busy,
+    // The app's disabled flag covers other operations; this hook owns upload busy state.
+    disabled: false,
   });
-  return <>{attachments.panel}<button disabled={busy} onClick={() => { void attachments.submit('  원문 질문\n둘째 줄  '); }}>파일과 질문 제출</button></>;
+  return <><aside>{attachments.manifestPanel}</aside>{attachments.picker}{attachments.panel}<button disabled={busy} onClick={() => { void attachments.submit('  원문 질문\n둘째 줄  '); }}>파일과 질문 제출</button></>;
 }
 
 describe('첨부를 명시적으로 확정하는 흐름', () => {
+  it.each([false, true])('목록 조회 중 파일 변경을 막고 응답 후 다시 허용한다 (선택 파일: %s)', async (selected) => {
+    manifest.files = [original];
+    const user = userEvent.setup();
+    render(<Harness />);
+    if (selected) await user.upload(screen.getByLabelText('파일 첨부'), new File(['next'], 'next.py'));
+    let release = () => {};
+    manifestGate = new Promise<void>((resolve) => { release = resolve; });
+    try {
+      await user.click(screen.getByRole('button', { name: '첨부 목록 새로고침' }));
+      expect(screen.getByRole('button', { name: '파일 추가' })).toBeDisabled();
+      expect(screen.getByLabelText('파일 첨부')).toBeDisabled();
+      expect(screen.getByRole('button', { name: 'sample.py 첨부 해제' })).toBeDisabled();
+      expect(screen.getByRole('button', { name: '첨부 전체 해제' })).toBeDisabled();
+      if (selected) {
+        expect(screen.getByRole('button', { name: 'next.py 선택 취소 1' })).toBeDisabled();
+        expect(screen.queryByRole('button', { name: '첨부만 확정' })).not.toBeInTheDocument();
+      }
+      expect(stagedCount).toBe(0);
+      expect(syncBodies).toHaveLength(0);
+    } finally {
+      release();
+      await waitFor(() => expect(screen.getByRole('button', { name: '파일 추가' })).toBeEnabled());
+    }
+    if (selected) expect(screen.getByRole('button', { name: 'next.py 선택 취소 1' })).toBeEnabled();
+    else expect(screen.getByRole('button', { name: 'sample.py 첨부 해제' })).toBeEnabled();
+  });
+
+  it('사이드바 목록 새로고침은 서버 목록만 갱신하고 선택 파일과 질문을 유지한다', async () => {
+    const user = userEvent.setup();
+    render(<Harness />);
+    await user.upload(screen.getByLabelText('파일 첨부'), new File(['next'], 'next.py'));
+    manifest = { ...manifest, revision: 1, files: [original] };
+    await user.click(screen.getByRole('button', { name: '첨부 목록 새로고침' }));
+    expect(await screen.findByRole('button', { name: 'sample.py 첨부 해제' })).toBeVisible();
+    expect(screen.getByText('next.py')).toBeVisible();
+    expect(stagedCount).toBe(0);
+    expect(syncBodies).toHaveLength(0);
+    expect(sentQueries).toHaveLength(0);
+  });
+
   it('확인되지 않은 캐시 목록은 검색 가능한 첨부와 구분한다', () => {
     manifest.files = [original];
     render(<Harness manifestConfirmed={false} />);
     expect(screen.getByText('이전 첨부 기록')).toBeVisible();
-    expect(screen.queryByText('검색 가능한 첨부')).not.toBeInTheDocument();
+    expect(screen.queryByText('검색 가능')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'sample.py 첨부 해제' })).toBeDisabled();
     expect(screen.getByRole('button', { name: '첨부 전체 해제' })).toBeDisabled();
   });
@@ -136,7 +188,7 @@ describe('첨부를 명시적으로 확정하는 흐름', () => {
     expect(syncBodies).toHaveLength(0);
     expect(screen.getByText('전송 대기')).toBeVisible();
     await user.click(screen.getByRole('button', { name: '첨부만 확정' }));
-    expect(await screen.findByText('검색 가능한 첨부')).toBeVisible();
+    expect(await screen.findByRole('button', { name: 'sample.py 첨부 해제' })).toBeVisible();
     expect(manifest.files[0]?.name).toBe('sample.py');
     expect(sentQueries).toHaveLength(0);
     expect(syncBodies).toHaveLength(1);
@@ -159,15 +211,43 @@ describe('첨부를 명시적으로 확정하는 흐름', () => {
     expect(manifest.files[0]?.content_hash).toBe(hash('new'));
   });
 
-  it('동일 내용은 확정 revision을 바꾸지 않는다', async () => {
+  it.each([1, 2])('동일 내용 파일 %s개를 다시 골라도 revision을 유지하고 모든 staging을 확인한다', async (count) => {
     manifest.files = [original];
+    syncResult = manifest;
     const user = userEvent.setup();
     render(<Harness />);
-    await user.upload(screen.getByLabelText('파일 첨부'), new File(['old'], 'sample.py'));
+    await user.upload(screen.getByLabelText('파일 첨부'), Array.from({ length: count }, () => new File(['old'], 'sample.py')));
     await user.click(screen.getByRole('button', { name: '파일과 질문 제출' }));
     await waitFor(() => expect(sentQueries).toEqual(['  원문 질문\n둘째 줄  ']));
-    expect(syncBodies).toHaveLength(0);
+    expect(syncBodies).toHaveLength(1);
+    expect(syncBodies[0]?.add).toEqual(Array.from({ length: count }, (_, index) => ({
+      upload_id: String(index + 1).padStart(32, '0'), name: 'sample.py', content_hash: hash('old'), replace_file_id: null,
+    })));
     expect(manifest.revision).toBe(0);
+    expect(manifest.files).toEqual([original]);
+    expect(stagedFiles.size).toBe(0);
+  });
+
+  it.each([false, true])('동일한 신규 파일 중복 선택도 모두 확인하고 교체 승인은 한 번만 전달한다 (기존 첨부: %s)', async (replace) => {
+    if (replace) manifest.files = [original];
+    syncResult = { ...manifest, revision: 1, files: [{ ...original, content_hash: hash('new') }] };
+    const user = userEvent.setup();
+    render(<Harness />);
+    await user.upload(screen.getByLabelText('파일 첨부'), [new File(['new'], 'sample.py'), new File(['new'], 'sample.py')]);
+    await user.click(screen.getByRole('button', { name: '파일과 질문 제출' }));
+    if (replace) {
+      const approvals = await screen.findAllByRole('checkbox', { name: 'sample.py 교체 승인' });
+      await user.click(approvals[0]);
+      await user.click(screen.getByRole('button', { name: '첨부 변경 확정' }));
+    }
+    await waitFor(() => expect(sentQueries).toEqual(['  원문 질문\n둘째 줄  ']));
+    expect(syncBodies).toHaveLength(1);
+    expect(syncBodies[0]?.add).toEqual([
+      { upload_id: '1'.padStart(32, '0'), name: 'sample.py', content_hash: hash('new'), replace_file_id: replace ? 'original' : null },
+      { upload_id: '2'.padStart(32, '0'), name: 'sample.py', content_hash: hash('new'), replace_file_id: null },
+    ]);
+    expect(manifest.files).toHaveLength(1);
+    expect(stagedFiles.size).toBe(0);
   });
 
   it('실패한 같은 작업을 재시도해도 보류 질문은 클릭 전 보내지 않는다', async () => {

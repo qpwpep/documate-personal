@@ -1,7 +1,8 @@
 import { useRef } from 'react';
 import { AgentSessionClient, ApiError } from '../api/client';
 import type { BrowserUploadSyncRequest, ClientConfig, UploadManifest } from '../api/types';
-import { Attachments } from '../components/Attachments';
+import { AttachmentManifest, AttachmentPicker, Attachments } from '../components/Attachments';
+import { createId } from '../id';
 import { attachmentName, createAttachmentState, replacementFiles, type AttachmentState } from './state';
 
 interface Options {
@@ -21,6 +22,7 @@ interface Options {
 
 export function useAttachments(options: Options) {
   const active = useRef(false);
+  const pickerButton = useRef<HTMLButtonElement>(null);
 
   function change(state: AttachmentState) {
     options.onChange(state);
@@ -74,21 +76,28 @@ export function useAttachments(options: Options) {
         change({ ...state, phase: 'review' });
         return;
       }
-      const additions = state.staged.filter((file, index, files) => files.findIndex((other) => attachmentName(other.name) === attachmentName(file.name)) === index)
-        .flatMap((file) => {
-          const current = manifest.files.find((existing) => attachmentName(existing.name) === attachmentName(file.name));
-          return current?.content_hash === file.content_hash ? [] : [{
-            upload_id: file.upload_id, name: file.name, content_hash: file.content_hash,
-            replace_file_id: current?.file_id ?? null,
-          }];
+      const additions: NonNullable<BrowserUploadSyncRequest['add']> = [];
+      const addedNames = new Set<string>();
+      for (const file of state.staged) {
+        const name = attachmentName(file.name);
+        const current = manifest.files.find((existing) => attachmentName(existing.name) === name);
+        // Sync also releases unchanged and duplicate staged files. Only the first
+        // addition for a changed name owns the approved replacement.
+        const replaceFileId = current && current.content_hash !== file.content_hash && !addedNames.has(name)
+          ? current.file_id : null;
+        additions.push({
+          upload_id: file.upload_id, name: file.name, content_hash: file.content_hash,
+          replace_file_id: replaceFileId,
         });
+        addedNames.add(name);
+      }
       const remove = state.removeIds.filter((fileId) => manifest.files.some((file) => file.file_id === fileId));
       if (!additions.length && !remove.length && !state.clearAll) {
         complete(manifest, { ...state, notice: '동일한 파일은 기존 첨부를 유지했습니다.' });
         return;
       }
       const operation: BrowserUploadSyncRequest = {
-        epoch: manifest.epoch, expected_revision: manifest.revision, operation_id: crypto.randomUUID(),
+        epoch: manifest.epoch, expected_revision: manifest.revision, operation_id: createId(),
         add: additions, remove, clear: state.clearAll,
       };
       state = { ...state, phase: 'syncing', operation };
@@ -139,10 +148,23 @@ export function useAttachments(options: Options) {
     const prompt = options.state.pendingPrompt;
     change({ ...createAttachmentState(), notice: reselect ? '파일을 다시 선택하고 질문을 확인한 뒤 보내 주세요.' : '기존 첨부를 유지했습니다. 질문을 확인한 뒤 보내 주세요.' });
     if (prompt !== null) options.onRestorePrompt(prompt);
+    if (reselect) requestAnimationFrame(() => pickerButton.current?.focus());
   }
 
   async function removeFiles(fileId: string | null) {
     await run({ ...createAttachmentState(), removeIds: fileId ? [fileId] : [], clearAll: fileId === null }, false);
+  }
+
+  async function refreshManifest() {
+    if (active.current || options.disabled) return;
+    active.current = true;
+    options.onBusyChange(true);
+    try {
+      options.onManifestChange(await options.ensureSession());
+    } finally {
+      active.current = false;
+      options.onBusyChange(false);
+    }
   }
 
   function sendPending() {
@@ -152,9 +174,14 @@ export function useAttachments(options: Options) {
     options.onSendPrompt(prompt);
   }
 
-  const panel = <Attachments state={options.state} config={options.config} manifest={options.manifest}
-    manifestConfirmed={options.manifestConfirmed} disabled={options.disabled}
-    onSelect={(files) => change({ ...createAttachmentState(), files })}
+  const canChange = !options.disabled && !active.current && options.state.phase === 'idle' && options.state.pendingPrompt === null;
+  const picker = <AttachmentPicker config={options.config} disabled={!canChange} buttonRef={pickerButton}
+    onSelect={(files) => change({ ...createAttachmentState(), files })} />;
+  const manifestPanel = <AttachmentManifest manifest={options.manifest} confirmed={options.manifestConfirmed}
+    disabled={options.disabled || active.current} changesDisabled={!canChange || options.state.files.length > 0}
+    onRefresh={() => { void refreshManifest(); }}
+    onRemove={(fileId) => { void removeFiles(fileId); }} onClear={() => { void removeFiles(null); }} />;
+  const panel = <Attachments state={options.state} manifest={options.manifest} disabled={options.disabled || active.current}
     onRemoveSelected={(index) => change({
       ...createAttachmentState(), files: options.state.files.filter((_, position) => position !== index),
       phase: options.state.hadFailure ? 'failed' : 'idle', pendingPrompt: options.state.pendingPrompt,
@@ -165,9 +192,8 @@ export function useAttachments(options: Options) {
     onSubmit={() => { void submit(null); }} onConfirm={() => { void run(options.state, false); }}
     onRetry={() => { void run(options.state, true); }} onRecover={recover}
     onSendPending={sendPending} onEditPending={() => recover(true)}
-    onDiscardPending={() => change(createAttachmentState())}
-    onRemove={(fileId) => { void removeFiles(fileId); }} onClear={() => { void removeFiles(null); }} />;
-  return { submit, panel, hasPending: options.state.phase !== 'idle' || options.state.pendingPrompt !== null };
+    onDiscardPending={() => change(createAttachmentState())} />;
+  return { submit, panel, picker, manifestPanel, hasPending: options.state.phase !== 'idle' || options.state.pendingPrompt !== null };
 }
 
 function selectionErrors(files: File[], manifest: UploadManifest, config: ClientConfig) {
