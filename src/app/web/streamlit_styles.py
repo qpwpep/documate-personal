@@ -509,6 +509,21 @@ a[href^="#dm-citation-"]:focus-visible {
     box-shadow: var(--dm-shadow);
 }
 
+[data-testid="stPopoverBody"]:has(.dm-source-title) {
+    /* A citation can open a trigger below the viewport. Native popover
+       placement still anchors there, so keep the source reader on screen. */
+    position: fixed !important;
+    top: 4rem !important;
+    left: 50% !important;
+    transform: translateX(-50%) !important;
+    width: 44rem !important;
+    min-width: 0 !important;
+    max-width: calc(100vw - 2rem) !important;
+    max-height: calc(100dvh - 5rem) !important;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+}
+
 .dm-source-title {
     margin: 0;
     overflow-wrap: anywhere;
@@ -1037,15 +1052,9 @@ a[href^="#dm-citation-"]:focus-visible {
 
 @media (max-width: 760px) {
     [data-testid="stPopoverBody"]:has(.dm-source-title) {
-        /* Keep the expanded reader inside the viewport; the popover's computed
-           transform still assumes Streamlit's shorter default height. */
-        top: 4rem !important;
         left: 1rem !important;
         transform: none !important;
         width: calc(100vw - 2rem) !important;
-        min-width: 0 !important;
-        max-width: calc(100vw - 2rem);
-        max-height: calc(100dvh - 5rem) !important;
     }
 
     /* Reserve a separate toolbar row even after the conversation is scrolled. */

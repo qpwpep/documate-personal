@@ -441,6 +441,24 @@ export default function ({ data, setStateValue, parentElement }) {
     if (sidebarOverlayActive && !sidebarFocusRoots().some(root => root.contains(event.target))) {
       sidebarFocusableElements()[0]?.focus();
     }
+    revealSourceFocus();
+  }
+
+  function revealSourceFocus() {
+    const focused = document.activeElement;
+    if (!sourcePanel?.contains(focused)) return;
+    const panelBounds = sourcePanel.getBoundingClientRect();
+    const header = sourcePanel.querySelector('.dm-source-header');
+    const visibleTop = header.contains(focused) ? panelBounds.top
+      : Math.max(panelBounds.top, header.getBoundingClientRect().bottom);
+    const bounds = focused.getBoundingClientRect();
+    // Native focus scrolling ignores the sticky source title. Keep controls
+    // below it, while a tall code block starts at the top of the reading area.
+    if (bounds.top < visibleTop + 4 || bounds.height > panelBounds.bottom - visibleTop - 8) {
+      sourcePanel.scrollTop += bounds.top - visibleTop - 4;
+    } else if (bounds.bottom > panelBounds.bottom - 4) {
+      sourcePanel.scrollTop += bounds.bottom - panelBounds.bottom + 4;
+    }
   }
 
   function recoverSourceFocus() {
@@ -825,6 +843,7 @@ export default function ({ data, setStateValue, parentElement }) {
   document.addEventListener("keydown", onSidebarKeyDown, true);
   document.addEventListener("keydown", onSourceKeyDown, true);
   window.addEventListener("resize", recoverSidebarFocus);
+  window.addEventListener("resize", revealSourceFocus);
   document.addEventListener("wheel", onReadingIntent, { capture: true, passive: true });
   document.addEventListener("touchmove", onReadingIntent, { capture: true, passive: true });
   document.addEventListener("pointerdown", onReadingIntent, true);
@@ -871,6 +890,7 @@ export default function ({ data, setStateValue, parentElement }) {
     document.removeEventListener("keydown", onSidebarKeyDown, true);
     document.removeEventListener("keydown", onSourceKeyDown, true);
     window.removeEventListener("resize", recoverSidebarFocus);
+    window.removeEventListener("resize", revealSourceFocus);
     releaseSidebarBackground();
     document.removeEventListener("wheel", onReadingIntent, true);
     document.removeEventListener("touchmove", onReadingIntent, true);

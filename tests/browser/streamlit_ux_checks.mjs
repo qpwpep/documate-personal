@@ -363,13 +363,18 @@ export async function parameterEvidence(tab) {
   return { check: "wrapped parameter definitions and preserved code", ...details };
 }
 
-/** Run after opening evidence at 320px and 390px, including a long source. */
+/** Run at desktop and mobile sizes, including an inline citation whose trigger is below the viewport. */
 export async function evidencePopoverLayout(tab) {
   const layout = await tab.playwright.getByRole("dialog").evaluate(el => {
     const rect = el.getBoundingClientRect();
     const title = el.querySelector('.dm-source-title').getBoundingClientRect();
-    const excerpt = el.querySelector('.dm-source-code, .dm-source-markdown, [data-testid="stText"], [data-testid="stCode"]');
-    const excerptRect = excerpt?.getBoundingClientRect();
+    const excerpts = [...el.querySelectorAll(
+      '.dm-source-related-preview, .dm-source-search-result, .dm-source-code, .dm-source-markdown, '
+      + '[data-testid="stText"], [data-testid="stCode"]',
+    )].filter(source => !source.closest('details:not([open])')
+      && source.getClientRects().length && getComputedStyle(source).visibility === 'visible');
+    const excerptRects = excerpts.map(source => source.getBoundingClientRect());
+    const excerptRect = excerptRects[0];
     const context = el.querySelector('.dm-source-answer-context');
     const contextPanel = context?.closest('details');
     return {
@@ -378,10 +383,11 @@ export async function evidencePopoverLayout(tab) {
       titleVisible: title.top >= rect.top && title.bottom <= rect.bottom,
       width: el.clientWidth, scrollWidth: el.scrollWidth,
       detailsCollapsed: [...el.querySelectorAll('details')].every(details => !details.open),
+      sourceClasses: excerpts.map(source => source.className),
       originalVisible: Boolean(excerptRect && excerptRect.bottom > rect.top
         && excerptRect.top < rect.bottom - 20),
       originalBeforeContext: !context || Boolean(excerptRect && contextPanel
-        && excerptRect.bottom <= contextPanel.getBoundingClientRect().top + 1),
+        && excerptRects.every(sourceRect => sourceRect.bottom <= contextPanel.getBoundingClientRect().top + 1)),
       contextCollapsed: !context || contextPanel?.open === false,
     };
   });
@@ -401,15 +407,29 @@ export async function evidenceKeyboardFocus(tab, expectedFocus) {
   const state = await tab.playwright.getByRole("dialog").evaluate(panel => {
     const close = panel.querySelector('.dm-source-close');
     const rect = close?.getBoundingClientRect();
+    const panelRect = panel.getBoundingClientRect();
+    const focused = document.activeElement;
+    const focusRect = focused.getBoundingClientRect();
+    const header = panel.querySelector('.dm-source-header');
+    const visibleTop = Math.max(0, panelRect.top,
+      header.contains(focused) ? panelRect.top : header.getBoundingClientRect().bottom);
+    const visibleBottom = Math.min(innerHeight, panelRect.bottom);
     return {
-      focusInside: panel.contains(document.activeElement),
-      focused: document.activeElement?.textContent?.trim().slice(0, 100),
+      focusInside: panel.contains(focused),
+      focused: focused.textContent?.trim().slice(0, 100),
+      focusVisible: focusRect.left >= Math.max(0, panelRect.left) - 1
+        && focusRect.right <= Math.min(innerWidth, panelRect.right) + 1
+        && focusRect.top >= visibleTop - 1
+        && (focusRect.height > visibleBottom - visibleTop
+          ? focusRect.top < visibleBottom : focusRect.bottom <= visibleBottom + 1),
+      focusBounds: { top: focusRect.top, bottom: focusRect.bottom, visibleTop, visibleBottom },
       context: panel.querySelector('.dm-source-answer-context')?.textContent || "",
       closeLabel: close?.getAttribute('aria-label'),
       closeWidth: rect?.width, closeHeight: rect?.height,
     };
   });
   assert(state.focusInside, `Source keyboard focus escaped to the background: ${JSON.stringify(state)}`);
+  assert(state.focusVisible, `Source keyboard focus is clipped or behind its sticky title: ${JSON.stringify(state)}`);
   if (expectedFocus) {
     assert(state.focused?.endsWith(expectedFocus),
       `Source keyboard focus did not reach ${expectedFocus}: ${JSON.stringify(state)}`);

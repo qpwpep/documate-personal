@@ -500,9 +500,19 @@ function sourceScene(browser, initialLayout) {
         browser.notifyMutation();
       },
     }));
-    const title = { focus() { document.activeElement = this; } };
+    const title = {
+      focus() { document.activeElement = this; },
+      getBoundingClientRect: () => ({ top: 80, bottom: 104, height: 24 }),
+    };
+    const sourceHeader = {
+      contains: element => element === title,
+      getBoundingClientRect: () => ({ top: 64, bottom: 128, height: 64 }),
+    };
     scope.panel = {
-      querySelector: selector => selector === ".dm-source-header" ? {} : selector === ".dm-source-title" ? title : null,
+      scrollTop: 0,
+      contains: element => element === title || element.panel === scope.panel,
+      getBoundingClientRect: () => ({ top: 64, bottom: viewport.bottom - 16, height: viewport.bottom - 80 }),
+      querySelector: selector => selector === ".dm-source-header" ? sourceHeader : selector === ".dm-source-title" ? title : null,
       getClientRects: () => opened === scope ? [{}] : [],
     };
     return scope;
@@ -542,6 +552,57 @@ function sourceScene(browser, initialLayout) {
     },
   };
 }
+
+for (const [position, offsetTop] of [["under the sticky title", 160], ["below the panel", 850], ["already visible", 300]]) {
+  test(`source keyboard focus ${position}: the control stays inside the readable panel`, t => {
+    const browser = browserBoundary(t);
+    const source = sourceScene(browser, "desktop");
+    browser.render({ focus: false });
+    source.open();
+    const panel = source.selected.panel;
+    panel.scrollTop = 120;
+    const control = {
+      panel,
+      getBoundingClientRect() {
+        const top = panel.getBoundingClientRect().top + offsetTop - panel.scrollTop;
+        return { top, bottom: top + 40, height: 40 };
+      },
+    };
+    browser.document.activeElement = control;
+    browser.dispatch("focusin", { target: control });
+
+    const rect = control.getBoundingClientRect();
+    assert(rect.top >= 128, `Keyboard focus is hidden by the source header: ${rect.top}`);
+    assert(rect.bottom <= panel.getBoundingClientRect().bottom,
+      `Keyboard focus is below the source panel: ${rect.bottom}`);
+    if (position === "already visible") assert.equal(panel.scrollTop, 120);
+    const revealedScrollTop = panel.scrollTop;
+    browser.dispatch("focusin", { target: control });
+    assert.equal(panel.scrollTop, revealedScrollTop, "A visible control moved the reading position again");
+  });
+}
+
+test("resizing an open source keeps its focused control visible", t => {
+  const browser = browserBoundary(t);
+  const source = sourceScene(browser, "desktop");
+  browser.render({ focus: false });
+  source.open();
+  const panel = source.selected.panel;
+  const control = {
+    panel,
+    getBoundingClientRect() {
+      const top = 714 - panel.scrollTop;
+      return { top, bottom: top + 40, height: 40 };
+    },
+  };
+  browser.document.activeElement = control;
+  source.resize("mobile", 120, { top: 60, bottom: 360, composerTop: 203.5 });
+
+  const rect = control.getBoundingClientRect();
+  assert(rect.top >= 128, `Resized focus is hidden by the source header: ${rect.top}`);
+  assert(rect.bottom <= 344, `Resized focus is outside the source panel: ${rect.bottom}`);
+  assert.equal(browser.document.activeElement, control, "Resize changed the selected control");
+});
 
 for (const method of ["Enter", "send button"]) {
   test(`${method}: reload retains the submitted question before Python consumes it`, t => {
