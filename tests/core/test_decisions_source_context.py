@@ -66,7 +66,7 @@ def _validation_input(evidence_packet, location, *, raw=False):
     factory(False, decisions_client=boundary)(state)
     # Source judgment and accepted-source coverage must receive the same
     # selected ranges and source context. Bound answers have no new sources.
-    wire = boundary.requests[0 if location == "source_pre" else -1]["input"]
+    wire = boundary.requests[0 if location in {"source_pre", "post"} else -1]["input"]
     if raw:
         payload = json.loads(wire)
         return list(payload["sources"].values()), payload
@@ -75,14 +75,14 @@ def _validation_input(evidence_packet, location, *, raw=False):
         sources = payload["bound_source_response"]["sources"]
     elif location == "source_pre":
         sources = [item["source"] for item in payload["evidence"]]
-    elif location == "pre":
+    elif location in {"pre", "post_requirements"}:
         sources = payload["requirements"][0]["sources"]
     else:
         sources = [source for unit in payload["units"] for source in unit["cited_sources"]]
     return sources, payload
 
 
-@pytest.mark.parametrize("location", ["source_pre", "pre", "post", "bound_pre", "bound_post"])
+@pytest.mark.parametrize("location", ["source_pre", "pre", "post", "post_requirements", "bound_pre", "bound_post"])
 def test_validation_distinguishes_identical_excerpts_by_heading_and_preserves_selection_limits(location):
     """Identical timeout text stays attributable to its Windows or Linux section."""
     text = "Unselected introduction. 30 seconds Unselected conclusion."

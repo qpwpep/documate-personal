@@ -164,14 +164,15 @@ def test_post_requirement_batch_sees_only_actual_citations_and_records_requireme
 
     updates = make_post_synthesis_validation_node(False, decisions_client=boundary)(state)
 
-    assert len(boundary.requests) == 1
-    request = boundary.requests[0]
-    payload = read_decision_input(request["input"])
-    assert {question["name"] for question in request["questions"]} == {
-        "grounded_0", "request_fulfilled", "requirement_0",
+    body_request, request = boundary.requests
+    assert {question["name"] for question in body_request["questions"]} == {
+        "grounded_0", "request_fulfilled",
     }
+    payload = read_decision_input(request["input"])
+    assert set(payload) == {"requirements"}
+    assert [question["name"] for question in request["questions"]] == ["requirement_0"]
     assert [source["id"] for source in payload["requirements"][0]["sources"]] == [cited.id]
-    assert "UNCITED_SOURCE" not in request["input"]
+    assert all("UNCITED_SOURCE" not in item["input"] for item in boundary.requests)
     report = updates["response"].result.semantic_validation
     assert report.passed
     assert next(check for check in report.checks if check.name == "requirement:cache_limit").probability == 0.99
@@ -186,7 +187,11 @@ def test_insufficient_actual_citations_trigger_requirement_repair_even_when_body
 
     updates = make_post_synthesis_validation_node(False, decisions_client=boundary)(state)
 
-    assert len(boundary.requests) == 1
+    body_request, requirement_request = boundary.requests
+    assert {question["name"] for question in body_request["questions"]} == {
+        "grounded_0", "request_fulfilled",
+    }
+    assert [question["name"] for question in requirement_request["questions"]] == ["requirement_0"]
     assert updates["retry"].needs_retry is True
     assert updates["retry"].retry_scope == "reuse_hits_resynthesize"
     assert updates["retry"].failed_requirement_ids == ["cache_limit"]
@@ -202,7 +207,16 @@ def test_terminal_requirement_gap_preserves_grounded_partial_answer_policy():
 
     updates = make_post_synthesis_validation_node(False, decisions_client=boundary)(state)
 
-    assert read_decision_input(boundary.requests[0]["input"])["requirements"] == []
+    request, = boundary.requests
+    payload = read_decision_input(request["input"])
+    assert "requirements" not in payload
+    assert {question["name"] for question in request["questions"]} == {
+        "grounded_0", "request_fulfilled",
+    }
+    assert payload["terminal_failed_requirement_ids"] == ["cache_limit"]
+    assert payload["rendered_response"]["notices"] == [
+        "공식 문서에서 functools.lru_cache (확인 항목 maxsize)에 필요한 근거를 충분히 확인하지 못했습니다.",
+    ]
     assert updates["retry"].needs_retry is False
     assert updates["response"].kind == "failure"
     assert updates["response"].problem.code == "evidence_insufficient"
