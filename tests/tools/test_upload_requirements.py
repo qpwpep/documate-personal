@@ -13,11 +13,12 @@ from src.core.contracts import GraphState
 from src.core.contracts.boundary.graph import build_graph_state_input
 from src.core.contracts.retrieval import UploadRetriever
 from src.core.documents import DocumentElement, ParsedDocument, build_snapshot
-from src.core.planner_schema import PlannerOutput
+from src.core.planner_schema import PlannerOutput, RetrievalTask
 from src.core.uploads import UploadRecord
 from src.infra.tools.local_rag import build_upload_retriever, build_upload_search_tool
 from src.runtime.nodes.planner import make_planner_node
 from src.runtime.nodes.retrieval import make_retrieve_dispatch_node
+from src.runtime.nodes.synthesis.context import build_synthesis_context, prepare_synthesis_inputs
 from src.runtime.nodes.synthesis.evidence_selection import requirement_coverage
 from tests.core.helpers import _CapturePlannerLLM
 from tests.synthesis_fixtures import prepare_synthesis_state, synthesis_excerpt_limits
@@ -507,3 +508,42 @@ def test_planned_symbol_search_preserves_implementation_and_its_actual_example(u
     prepared = prepare_synthesis_inputs(state=state, context=build_synthesis_context(state=state), max_turns=6)
     assert {item.excerpt for item in prepared.evidence_packet} == {definition, example}
     assert all(len(item.excerpt) <= 480 for item in prepared.evidence_packet)
+
+
+def test_independent_constant_tasks_keep_both_values_in_the_prepared_packet_within_file_scope():
+    """Consume a valid plan without broadening either symbol's selected source range."""
+    selected_id, other_id = "a" * 32, "b" * 32
+    selected_source = "BATCH_SIZE = 64\nMAX_RETRIES = 4\nUNRELATED = 999\n"
+    documents = tuple(ParsedDocument(
+        snapshot=build_snapshot(source_uri=f"upload:///constants/{file_id}", title=name,
+                                media_type="text/x-python", source_type="upload", content=source,
+                                parser="python", parser_version="test"),
+        elements=[DocumentElement(element_id="source", kind="code", text=source,
+                                  metadata={"file_id": file_id})],
+    ) for file_id, name, source in (
+        (selected_id, "batch_limits.py", selected_source),
+        (other_id, "other_limits.py", "BATCH_SIZE = 128\nMAX_RETRIES = 8\n"),
+    ))
+    tasks = [RetrievalTask(
+        requirement_id=symbol, route="upload", query=f"{symbol} 값", k=4,
+        requirement={"symbols": [symbol], "match": "symbol", "file_ids": [selected_id]},
+    ) for symbol in ("BATCH_SIZE", "MAX_RETRIES")]
+    state = build_graph_state_input(
+        user_input="첨부한 batch_limits.py의 BATCH_SIZE와 MAX_RETRIES 값을 알려줘.",
+        retriever=SimpleNamespace(source_documents=documents),
+    )
+
+    state.update(make_planner_node(_CapturePlannerLLM(PlannerOutput(use_retrieval=True, tasks=tasks)), False)(state))
+    state.update(make_retrieve_dispatch_node(None, build_upload_search_tool(), False)(state))
+
+    assert len(state["planner"].output.tasks) == 2
+    assert {hit.evidence.excerpt for hit in state["retrieval"].hit_log} == {"BATCH_SIZE = 64", "MAX_RETRIES = 4"}
+    assert all(item.answerability == "covered" for item in state["debug"].retrieval_diagnostics)
+    prepare_synthesis_state(state, limits=synthesis_excerpt_limits(normal_chars=480))
+    prepared = prepare_synthesis_inputs(state=state, context=build_synthesis_context(state=state), max_turns=6)
+
+    assert prepared.missing_requirement_ids == []
+    assert {item.excerpt for item in prepared.evidence_packet} == {"BATCH_SIZE = 64", "MAX_RETRIES = 4"}
+    assert all(item.element.metadata["file_id"] == selected_id for item in prepared.evidence_packet)
+    assert all(item.excerpt == selected_source[item.selection.start:item.selection.end]
+               for item in prepared.evidence_packet)
