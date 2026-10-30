@@ -1,0 +1,285 @@
+{
+  "sectioned": {
+    "content": {
+      "blocks": [
+        {
+          "type": "heading",
+          "level": 2,
+          "content": {
+            "text": "첫 절",
+            "basis": "interaction",
+            "refs": [],
+            "source_location": null
+          }
+        },
+        {
+          "type": "paragraph",
+          "content": [
+            {
+              "text": "첫 설명",
+              "basis": "source",
+              "refs": [
+                "ref:037a8ebfff77d4773ade1883cad1a7f864943c066feeae76f1cc36a519a64de4"
+              ],
+              "source_location": null
+            },
+            {
+              "text": "둘째 설명",
+              "basis": "source",
+              "refs": [
+                "ref:037a8ebfff77d4773ade1883cad1a7f864943c066feeae76f1cc36a519a64de4"
+              ],
+              "source_location": null
+            }
+          ]
+        },
+        {
+          "type": "heading",
+          "level": 2,
+          "content": {
+            "text": "다음 절",
+            "basis": "interaction",
+            "refs": [],
+            "source_location": null
+          }
+        },
+        {
+          "type": "paragraph",
+          "content": [
+            {
+              "text": "마지막 설명",
+              "basis": "source",
+              "refs": [
+                "ref:037a8ebfff77d4773ade1883cad1a7f864943c066feeae76f1cc36a519a64de4"
+              ],
+              "source_location": null
+            }
+          ]
+        }
+      ]
+    },
+    "citations": [
+      {
+        "number": 1,
+        "evidence": {
+          "id": "ref:037a8ebfff77d4773ade1883cad1a7f864943c066feeae76f1cc36a519a64de4",
+          "snapshot": {
+            "snapshot_id": "snapshot:8b54c459df564df32620bf2c1291f173274de5c2f143a5dbb6cd260d4dcc5ec7",
+            "document_id": "doc:0c71268b5631d67268ba0cbfcf06f254e598e3f672d8a537645c64ea207cf81c",
+            "content_hash": "sha256:32b9fb7590c096c81ddee499877161b6ce79718d075f0701866bf2614e6ad459",
+            "source_uri": "https://docs.python.org/3/library/example.html",
+            "title": "같은 출처",
+            "media_type": "text/markdown",
+            "source_type": "official",
+            "parser": "fixture",
+            "parser_version": "1",
+            "parser_config": {},
+            "capture_scope": "full_document",
+            "quality_issues": []
+          },
+          "element": {
+            "element_id": "paragraph-1",
+            "kind": "paragraph",
+            "text": "보관된 원문 문장입니다.",
+            "parent_id": null,
+            "order": 0,
+            "heading_level": null,
+            "heading_path": [],
+            "language": null,
+            "table": null,
+            "anchors": [],
+            "metadata": {}
+          },
+          "selection": {
+            "start": 0,
+            "end": 13,
+            "cell_ids": []
+          }
+        }
+      }
+    ],
+    "checks": [
+      {
+        "unit_id": "b0.content",
+        "reference_status": "not_required",
+        "support_status": "not_evaluated",
+        "issues": []
+      },
+      {
+        "unit_id": "b1.content.0",
+        "reference_status": "resolved",
+        "support_status": "not_evaluated",
+        "issues": []
+      },
+      {
+        "unit_id": "b1.content.1",
+        "reference_status": "resolved",
+        "support_status": "not_evaluated",
+        "issues": []
+      },
+      {
+        "unit_id": "b2.content",
+        "reference_status": "not_required",
+        "support_status": "not_evaluated",
+        "issues": []
+      },
+      {
+        "unit_id": "b3.content.0",
+        "reference_status": "resolved",
+        "support_status": "not_evaluated",
+        "issues": []
+      }
+    ],
+    "issues": [],
+    "actions": [],
+    "content_hash": "417fb19f4aca333d27a9f04cf317e0826cbd2208a382212a56bdaa40dd8b4600",
+    "retrieval_required": false,
+    "semantic_validation": null
+  },
+  "quote": {
+    "content": {
+      "blocks": [
+        {
+          "type": "paragraph",
+          "content": [
+            {
+              "text": "보관된 원문 문장입니다.",
+              "basis": "excerpt",
+              "refs": [
+                "ref:037a8ebfff77d4773ade1883cad1a7f864943c066feeae76f1cc36a519a64de4"
+              ],
+              "source_location": null
+            }
+          ]
+        }
+      ]
+    },
+    "citations": [
+      {
+        "number": 1,
+        "evidence": {
+          "id": "ref:037a8ebfff77d4773ade1883cad1a7f864943c066feeae76f1cc36a519a64de4",
+          "snapshot": {
+            "snapshot_id": "snapshot:8b54c459df564df32620bf2c1291f173274de5c2f143a5dbb6cd260d4dcc5ec7",
+            "document_id": "doc:0c71268b5631d67268ba0cbfcf06f254e598e3f672d8a537645c64ea207cf81c",
+            "content_hash": "sha256:32b9fb7590c096c81ddee499877161b6ce79718d075f0701866bf2614e6ad459",
+            "source_uri": "https://docs.python.org/3/library/example.html",
+            "title": "같은 출처",
+            "media_type": "text/markdown",
+            "source_type": "official",
+            "parser": "fixture",
+            "parser_version": "1",
+            "parser_config": {},
+            "capture_scope": "full_document",
+            "quality_issues": []
+          },
+          "element": {
+            "element_id": "paragraph-1",
+            "kind": "paragraph",
+            "text": "보관된 원문 문장입니다.",
+            "parent_id": null,
+            "order": 0,
+            "heading_level": null,
+            "heading_path": [],
+            "language": null,
+            "table": null,
+            "anchors": [],
+            "metadata": {}
+          },
+          "selection": {
+            "start": 0,
+            "end": 13,
+            "cell_ids": []
+          }
+        }
+      }
+    ],
+    "checks": [
+      {
+        "unit_id": "b0.content.0",
+        "reference_status": "resolved",
+        "support_status": "exact_match",
+        "issues": []
+      }
+    ],
+    "issues": [],
+    "actions": [],
+    "content_hash": "b2fcdb377cda30cc97ffa5da0cb9d42e19d1c6172d350eb1315c01a45877fc1f",
+    "retrieval_required": false,
+    "semantic_validation": null
+  },
+  "mismatch": {
+    "content": {
+      "blocks": [
+        {
+          "type": "paragraph",
+          "content": [
+            {
+              "text": "원문과 다른 인용",
+              "basis": "excerpt",
+              "refs": [
+                "ref:037a8ebfff77d4773ade1883cad1a7f864943c066feeae76f1cc36a519a64de4"
+              ],
+              "source_location": null
+            }
+          ]
+        }
+      ]
+    },
+    "citations": [
+      {
+        "number": 1,
+        "evidence": {
+          "id": "ref:037a8ebfff77d4773ade1883cad1a7f864943c066feeae76f1cc36a519a64de4",
+          "snapshot": {
+            "snapshot_id": "snapshot:8b54c459df564df32620bf2c1291f173274de5c2f143a5dbb6cd260d4dcc5ec7",
+            "document_id": "doc:0c71268b5631d67268ba0cbfcf06f254e598e3f672d8a537645c64ea207cf81c",
+            "content_hash": "sha256:32b9fb7590c096c81ddee499877161b6ce79718d075f0701866bf2614e6ad459",
+            "source_uri": "https://docs.python.org/3/library/example.html",
+            "title": "같은 출처",
+            "media_type": "text/markdown",
+            "source_type": "official",
+            "parser": "fixture",
+            "parser_version": "1",
+            "parser_config": {},
+            "capture_scope": "full_document",
+            "quality_issues": []
+          },
+          "element": {
+            "element_id": "paragraph-1",
+            "kind": "paragraph",
+            "text": "보관된 원문 문장입니다.",
+            "parent_id": null,
+            "order": 0,
+            "heading_level": null,
+            "heading_path": [],
+            "language": null,
+            "table": null,
+            "anchors": [],
+            "metadata": {}
+          },
+          "selection": {
+            "start": 0,
+            "end": 13,
+            "cell_ids": []
+          }
+        }
+      }
+    ],
+    "checks": [
+      {
+        "unit_id": "b0.content.0",
+        "reference_status": "resolved",
+        "support_status": "unsupported",
+        "issues": [
+          "excerpt_does_not_match_source"
+        ]
+      }
+    ],
+    "issues": [],
+    "actions": [],
+    "content_hash": "30de3ff2421e9ecbecfdabbb78c6de6ca3fb431d7655c65cad8a7367610d40fc",
+    "retrieval_required": false,
+    "semantic_validation": null
+  }
+}

@@ -1,0 +1,17 @@
+.answer-view { min-width: 0; }
+.answer-unit { white-space: pre-wrap; }
+.answer-basis, .answer-caption { color: var(--muted); font-size: .82rem; }
+.answer-inline-citation { display: inline; padding: 0 .2rem; margin-left: .15rem; border: 0; border-radius: .2rem; color: var(--accent); background: transparent; font: inherit; font-size: .8em; vertical-align: super; line-height: 1.4; }
+.answer-inline-citation:hover:not(:disabled) { background: var(--panel); text-decoration: underline; }
+.answer-section-sources { display: flex; flex-wrap: wrap; gap: .5rem; margin: .6rem 0 1.3rem; }
+.answer-section-sources button { font-size: .78rem; text-align: left; overflow-wrap: anywhere; }
+.answer-integrity-warning, .answer-partial-notice { color: var(--text, inherit); background: var(--notice); border-left: 3px solid #b66b23; border-radius: .4rem; padding: .7rem 1rem; }
+.answer-partial-notice p { margin: .45rem 0; }
+.answer-partial-notice { margin-bottom: 1rem; }
+.answer-limit-details p, .answer-validation p { overflow-wrap: anywhere; }
+.answer-body .answer-block > p { white-space: pre-wrap; }
+.answer-body .answer-block pre { white-space: pre; overflow-x: auto; max-width: 100%; }
+.answer-actions { padding-top: .4rem; border-top: 1px solid var(--border); }
+.answer-actions > div + div { border-top: 1px solid var(--border); margin-top: .8rem; padding-top: .4rem; }
+.answer-actions p { margin: .35rem 0; }
+@media (max-width: 540px) { .answer-section-sources button { max-width: 100%; } .answer-partial-notice { padding: .6rem .75rem; } }
