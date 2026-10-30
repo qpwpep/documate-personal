@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import socket
 import subprocess
 import time
@@ -147,6 +148,7 @@ def start_background_process(
             stdout=log_file,
             stderr=subprocess.STDOUT,
             start_new_session=True,
+            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
             env=env,
         )
 
@@ -219,23 +221,23 @@ def resolve_service_process(
     pid: int | None,
     create_time: float | None,
     fallback_tokens: list[str],
+    expected_cwd: Path,
 ) -> tuple[int | None, float | None]:
-    if is_process_alive(pid=pid, expected_create_time=create_time):
-        return pid, create_time
-
-    if pid is not None:
-        log_event(logger, logging.INFO, "service_state_stale", service=name, pid=pid)
-
-    discovered_pid = find_process_pid_by_tokens(fallback_tokens)
-    if discovered_pid is None:
+    # A matching command elsewhere is not proof that this launcher owns it.
+    # Legacy records lack creation times, so verify their PID, cwd and command.
+    process = get_process(pid=pid, expected_create_time=create_time)
+    if process is None:
         return None, None
-
-    discovered_create_time = get_process_create_time(discovered_pid)
-    log_event(
-        logger,
-        logging.INFO,
-        "service_discovered_from_cmdline",
-        service=name,
-        pid=discovered_pid,
-    )
-    return discovered_pid, discovered_create_time
+    try:
+        tokens = [normalize_cmd_token(value) for value in process.cmdline()]
+        expected = [normalize_cmd_token(value) for value in fallback_tokens]
+        matches = all(any(part == token or part.endswith("/" + token) for part in tokens)
+                      for token in expected)
+        if not matches or Path(process.cwd()).resolve() != expected_cwd.resolve():
+            log_event(logger, logging.WARNING, "service_state_unverified", service=name, pid=pid)
+            return None, None
+        if not process.is_running() or process.status() == psutil.STATUS_ZOMBIE:
+            return None, None
+        return process.pid, float(process.create_time())
+    except (psutil.Error, OSError, ValueError):
+        return None, None

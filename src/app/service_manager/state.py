@@ -9,7 +9,7 @@ from src.infra.runtime_paths import get_service_state_path
 from src.app.service_manager._bootstrap import logger
 
 
-STATE_SCHEMA_VERSION = 2
+STATE_SCHEMA_VERSION = 3
 
 
 def _maybe_int(value: object) -> int | None:
@@ -29,6 +29,7 @@ def _maybe_float(value: object) -> float | None:
 @dataclass(slots=True)
 class ServiceState:
     schema_version: int = STATE_SCHEMA_VERSION
+    ui: str = "react"
     fastapi_pid: int | None = None
     fastapi_create_time: float | None = None
     streamlit_pid: int | None = None
@@ -44,6 +45,7 @@ class ServiceState:
     def from_dict(cls, payload: dict[str, object]) -> "ServiceState":
         return cls(
             schema_version=_maybe_int(payload.get("schema_version")) or STATE_SCHEMA_VERSION,
+            ui="react" if payload.get("ui") == "react" else "streamlit",
             fastapi_pid=_maybe_int(payload.get("fastapi_pid")),
             fastapi_create_time=_maybe_float(payload.get("fastapi_create_time")),
             streamlit_pid=_maybe_int(payload.get("streamlit_pid")),
@@ -59,6 +61,7 @@ class ServiceState:
     def to_dict(self) -> dict[str, object]:
         return {
             "schema_version": self.schema_version,
+            "ui": self.ui,
             "fastapi_pid": self.fastapi_pid,
             "fastapi_create_time": self.fastapi_create_time,
             "streamlit_pid": self.streamlit_pid,

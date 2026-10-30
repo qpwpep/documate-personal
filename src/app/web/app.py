@@ -18,6 +18,7 @@ from src.app.web.cleanup import RuntimeCleaner
 from src.app.web.routes import router
 from src.app.web.schemas import AgentResponse
 from src.app.web.session_store import InMemorySessionStore
+from src.app.web.static_ui import mount_react_ui
 
 
 ensure_utf8_stdio()
@@ -111,6 +112,7 @@ def create_app() -> FastAPI:
         return response
 
     app.include_router(router)
+    mount_react_ui(app)
 
     default_openapi = app.openapi
 
