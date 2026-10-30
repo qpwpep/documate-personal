@@ -8,7 +8,8 @@ DocuMate 실행, 환경 변수, API 계약, 파일 제약, 운영 메모를 모�
 
 - Python 3.12 이상
 - `uv`
-- Streamlit 1.54.0 이상 (`uv sync`로 설치)
+- Node.js 22.13 이상(22.x) 또는 24 이상과 npm: React 개발·정적 빌드에 사용
+- Streamlit 1.54.0 이상 (`uv sync`로 설치): 기존 UI 실행에 사용
 - OpenAI API 키
 - Tavily API 키
 
@@ -49,19 +50,27 @@ cp .env.example .env
 
 ### 1.4 웹 서비스 실행
 
-권장 방식:
+React 정적 빌드를 준비한 뒤 기본 UI로 실행합니다. 빌드 이후 실행에는 Node 서버가 필요하지 않습니다.
 
 ```bash
+npm --prefix frontend ci
+npm --prefix frontend run build
 uv run python -m src.app.service_manager startweb
+uv run python -m src.app.service_manager statusweb
 uv run python -m src.app.service_manager stopweb
 ```
 
+- React: `http://127.0.0.1:8000/app/`
 - FastAPI: `http://127.0.0.1:8000`
-- Streamlit: `http://127.0.0.1:8501`
-- 런타임 로그: `output/runtime/fastapi.log`, `output/runtime/streamlit.log`
+- Streamlit 선택 시: `http://127.0.0.1:8501`
+- 런타임 로그: `output/runtime/fastapi.log`, Streamlit 선택 시 `output/runtime/streamlit.log` 추가
 - 상태 파일: `output/runtime/web_services_state.json`
 
-직접 실행도 가능합니다.
+`startweb --ui react`는 기본 실행과 같으며 FastAPI만 시작합니다. `startweb --ui streamlit`는 기존처럼 FastAPI와 Streamlit을 함께 시작합니다. `restartweb`는 상태 파일의 UI를 유지하고, `restartweb --ui react` 또는 `restartweb --ui streamlit`는 실행 UI를 바꿉니다. 이전 형식의 상태 파일에 UI 값이 없으면 Streamlit으로 해석합니다. `stopweb`와 `statusweb`에는 `--ui`를 사용하지 않습니다. 상태 확인은 선택한 UI에 필요한 관리 프로세스가 모두 실행 중이면 종료 코드 0, 없거나 일부만 실행 중이면 1입니다.
+
+React 빌드가 없으면 관리자는 설치·빌드 명령을 안내하고 시작하지 않습니다. React로 재시작하는 경우에도 기존 프로세스를 중지하기 전에 빌드를 확인합니다. 실제 재시작은 FastAPI의 메모리 세션을 초기화하므로 진행 중 문맥을 보존하는 UI 전환이 아닙니다. 종료는 상태 파일로 확인한 관리 프로세스만 대상으로 하며, 상태 파일이 없다는 이유로 수동 실행한 프로세스를 찾아 종료하지 않습니다.
+
+직접 실행도 가능합니다. React는 첫 번째 명령만으로 `/app/`에 제공되며, Streamlit은 두 번째 명령을 추가합니다.
 
 ```bash
 uv run python -X utf8 -m uvicorn src.app.web.app:app --host 0.0.0.0 --port 8000
@@ -70,16 +79,18 @@ uv run python -X utf8 -m streamlit run src/app/web/streamlit_app.py --server.por
 
 Windows 환경에서는 `-X utf8` 또는 `PYTHONUTF8=1` 사용을 권장합니다. `src.app.service_manager`와 `src.app.web.app`는 UTF-8 실행을 우선하도록 구성돼 있습니다.
 
+직접 실행한 FastAPI는 빌드가 없어도 API를 제공하지만 `/app/`은 503과 설치·빌드 안내를 반환합니다. 빌드 없이 서버를 시작한 뒤 빌드를 만들었다면 서버를 다시 시작해야 합니다. `/`의 기존 JSON 응답과 API 경로는 유지하며 정적 파일은 `/app/` 아래에서만 제공합니다.
+
 ### 1.5 React 개발 UI
 
-기본 `startweb`는 FastAPI와 Streamlit을 실행합니다. React 초기 UI는 Node.js 22.13 이상(22.x) 또는 24 이상과 npm으로 별도 실행하며 같은 FastAPI를 호출합니다.
+React 개발 서버는 Node.js 22.13 이상(22.x) 또는 24 이상과 npm으로 실행하며 같은 FastAPI를 호출합니다. FastAPI는 위 직접 실행 명령이나 서비스 관리자로 먼저 실행합니다.
 
 ```bash
 npm --prefix frontend ci
 npm --prefix frontend run dev
 ```
 
-주소는 `http://127.0.0.1:5173/app/`입니다. 개발 프록시는 기본 `http://127.0.0.1:8000`을 사용하며 `DOCUMATE_API_PROXY_TARGET`으로 변경할 수 있습니다. API 키·Slack 토큰은 Python 서버의 `.env`에 유지합니다. 현재 React는 질문 전송·진행·최종 결과 확인을 제공하고, 파일 첨부·대화 복원·상세 근거·직접 저장·Slack 설정은 후속 단계입니다. `npm --prefix frontend run build`는 정적 파일을 생성하지만 FastAPI의 정적 제공이나 서비스 관리자의 UI 선택 옵션은 아직 추가하지 않았습니다.
+주소는 `http://127.0.0.1:5173/app/`입니다. 개발 프록시는 기본 `http://127.0.0.1:8000`을 사용하며 `DOCUMATE_API_PROXY_TARGET`으로 변경할 수 있습니다. API 키·Slack 토큰은 Python 서버의 `.env`에 유지합니다. `npm --prefix frontend run build`는 `frontend/dist`에 정적 파일을 생성하며, 배포 실행은 FastAPI의 `/app/`을 사용합니다. `vite preview`는 로컬 빌드 미리보기용입니다.
 
 전체 기능 목록과 단계별 인수 조건, 계약 생성·검증 명령은 [React 전환 문서](react_migration.md)를 참고하세요. 다른 origin의 Streamlit 기록이 새 React 화면에 자동으로 이전되지는 않습니다.
 
@@ -289,7 +300,7 @@ planner에는 현재 활성 업로드의 파일 ID와 이름을 제공합니다.
 - 기본 한도: 세션당 10개, 파일당 10 MiB, 활성 파일 합계 50 MiB. `UPLOAD_MAX_FILES`, `UPLOAD_MAX_FILE_MIB`, `UPLOAD_MAX_TOTAL_MIB`로 조정합니다.
 - 모든 형식은 첨부 목록 API로 등록합니다. 코드·Notebook은 UTF-8 원문으로 읽고 문서·이미지는 검증된 bytes를 Docling에 전달합니다. 빈 파일이나 검색할 본문·표가 없는 문서는 첨부 반영 전에 거부합니다.
 
-Streamlit은 여러 파일을 한 번에 선택하고 기존 첨부에 추가합니다. 같은 이름과 내용은 재전송해도 중복 추가하지 않고, 같은 이름의 다른 내용은 명시적인 교체가 필요합니다. 이름 비교는 Unicode NFC와 대소문자 정규화를 사용합니다. 다른 이름의 동일 내용은 별도 출처로 유지합니다. 개별 삭제와 전체 첨부 해제는 이후 검색에서 해당 자료를 제외하며 대화와 기존 답변의 인용은 보존합니다.
+React와 Streamlit은 여러 파일을 한 번에 선택하고 기존 첨부에 추가합니다. 같은 이름과 내용은 재전송해도 중복 추가하지 않고, 같은 이름의 다른 내용은 명시적인 교체가 필요합니다. 이름 비교는 Unicode NFC와 `casefold()` 정규화를 사용합니다. 다른 이름의 동일 내용은 별도 출처로 유지합니다. 개별 삭제와 전체 첨부 해제는 이후 검색에서 해당 자료를 제외하며 대화와 기존 답변의 인용은 보존합니다.
 
 `upload` route는 현재 세션의 활성 파일들을 하나의 임시 Chroma 인덱스로 검색합니다. 파일별 원문과 snapshot은 별도로 보관하고, 검색 청크의 snapshot ID에 맞는 원문을 복원합니다. 도구 이름은 `upload_search`이고 근거 snapshot의 `source_type`은 `upload`입니다. `requirement.file_ids`가 비어 있으면 전체 활성 파일을 검색하며, 파일을 지정하면 그 범위만 검색합니다. 명시적으로 비교하는 파일마다 근거를 배정하고, 확보하지 못한 파일은 누락으로 표시합니다. 파일 사이의 import 별칭은 공유하지 않지만 같은 Notebook의 셀 사이에서는 유지합니다.
 
@@ -437,7 +448,7 @@ graph 실행, debug 수집, response assembly, projection 또는 budget 검사�
 - `exit`/`quit`/`q`, manager close, TTL/LRU eviction은 messages와 summary를 함께 초기화합니다.
 - 서로 다른 session은 snapshot을 공유하지 않습니다.
 - 현재 서버 store는 in-memory이므로 process restart와 multi-worker 사이에서 서버의 대화 문맥·활성 첨부·답변 저장 상태를 복원하지 않습니다.
-- Streamlit은 같은 탭의 `sessionStorage`에 버전이 있는 표시용 snapshot을 보관합니다. 대화 목록과 현재 선택, 답변·당시 출처·저장 결과, 공백·개행을 포함한 작성 초안, 보류 질문, Slack 입력 초안과 마지막 확정 첨부 목록을 새로고침 후 복원합니다. 유효한 브라우저 snapshot이 있으면 기존 session ID로 클라이언트를 다시 만들고, 복원할 수 있는 기록이 없으면 새 대화를 시작합니다. 새 채팅은 별도 session ID를 발급하므로 이전 대화도 목록에서 다시 선택할 수 있습니다.
+- React와 Streamlit은 각각 같은 탭의 `sessionStorage`에 버전이 있는 표시용 snapshot을 보관합니다. 대화 목록과 현재 선택, 답변·당시 출처·저장 결과, 공백·개행을 포함한 작성 초안, 보류 질문, Slack 입력 초안과 마지막 확정 첨부 목록을 새로고침 후 복원합니다. 유효한 브라우저 snapshot이 있으면 기존 session ID로 클라이언트를 다시 만들고, 복원할 수 있는 기록이 없으면 새 대화를 시작합니다. 새 채팅은 별도 session ID를 발급하므로 이전 대화도 목록에서 다시 선택할 수 있습니다. React 개발·React 정적 제공·Streamlit 주소는 origin이 달라 기록이 자동으로 이전되지 않습니다.
 - 새로고침 복원·응답 수신 중이 아닌 대화로 복귀·새 요청 실행 전에는 서버 manifest를 재확인합니다. 기존 epoch와 같으면 활성 첨부를 다시 올리지 않고 후속 질문과 기존 답변 저장을 계속할 수 있습니다. epoch가 다르면 기록·당시 출처·초안·마지막 첨부 목록은 읽기 전용으로 유지하고 질문·저장·전송·첨부 변경을 차단합니다. 연결 실패는 만료로 확정하지 않고 재확인을 제공합니다. 새 채팅에서 필요한 파일을 다시 첨부해 계속할 수 있습니다.
 - 표시 기록의 보존은 서버 TTL/LRU나 첨부·생성 파일의 수명을 연장하지 않습니다. 새로고침과 대화 전환은 질문·첨부 변경·파일 저장·Slack 전송을 자동 재실행하지 않습니다. 질문의 응답 수신 중에도 초안 작성과 대화 전환을 허용하며, 해당 대화의 추가 전송·첨부 변경·TXT 저장만 막습니다. 첨부 준비와 TXT 저장 중에는 대화 전환을 막습니다. 새로고침 시 제출 전 네이티브 파일 선택과 실행 대기 명령은 복원하지 않습니다. 선택만 한 파일은 다시 선택해야 합니다. 탭을 닫은 뒤의 복원은 보장하지 않으며 다른 기기와의 동기화는 제공하지 않습니다. 브라우저 저장 실패나 잘못된 snapshot은 화면에 안내합니다.
 - planner/synthesis에는 summary를 비신뢰 과거 데이터로 전달하며, summary 안의 명령을 따르거나 retrieved evidence로 취급하지 않습니다.
@@ -518,9 +529,9 @@ HTTP `200`이나 `done`만으로 성공 처리하지 않습니다. 유효한 `fi
 
 ### 5.1.1 첨부 목록 조회·변경
 
-`GET /sessions/{session_id}/uploads`는 `{epoch, revision, files}`를 반환합니다. 각 파일에는 `file_id`, `name`, `size_bytes`, `content_hash`, `source_uri`가 있으며 물리 저장 경로는 노출하지 않습니다. GET·sync·최종 응답의 manifest는 같은 필수 필드와 엄격한 타입 검증을 사용합니다. 서버 재시작이나 세션 TTL/LRU 만료 후에는 새 epoch가 발급됩니다. Streamlit의 기존 대화는 이 변경을 확인하면 읽기 전용으로 남기며, 사용자는 새 채팅에서 필요한 자료를 다시 첨부합니다.
+`GET /sessions/{session_id}/uploads`는 `{epoch, revision, files}`를 반환합니다. 각 파일에는 `file_id`, `name`, `size_bytes`, `content_hash`, `source_uri`가 있으며 물리 저장 경로는 노출하지 않습니다. GET·sync·최종 응답의 manifest는 같은 필수 필드와 엄격한 타입 검증을 사용합니다. 서버 재시작이나 세션 TTL/LRU 만료 후에는 새 epoch가 발급됩니다. React와 Streamlit의 기존 대화는 이 변경을 확인하면 읽기 전용으로 남기며, 사용자는 새 채팅에서 필요한 자료를 다시 첨부합니다.
 
-`POST /sessions/{session_id}/uploads/sync`는 공유 파일시스템에 저장한 파일의 참조를 받아 첨부 집합을 갱신합니다. 파일 바이트는 Streamlit의 내장 업로드 경로 또는 benchmark fixture에서 읽어 공용 staging 절차로 준비하며 이 API는 JSON을 받습니다. 원격 클라이언트가 파일 bytes를 직접 보내는 API는 아닙니다.
+`POST /sessions/{session_id}/uploads/sync`는 준비한 파일의 참조를 JSON으로 받아 첨부 집합을 갱신합니다. Streamlit과 benchmark는 공유 파일시스템의 `path`를 사용하고, React는 아래 multipart 수신 API가 발급한 `upload_id`를 사용합니다. sync 자체에는 파일 바이트를 넣지 않습니다. Python 공용 클라이언트는 Streamlit의 내장 업로드 경로 또는 benchmark fixture에서 바이트를 읽어 기존 staging 절차로 준비합니다.
 
 `build_upload_sync_request()`는 교체 승인을 확인하고 독립된 요청을 한 번 생성합니다. 각 추가 항목에는 staging 때 읽은 불변 bytes의 `content_hash`를 포함합니다. 서버는 세션 경로와 실제 bytes를 검증하고 이 hash가 일치할 때 검증한 bytes 자체로 관리 복사본을 만듭니다. 응답 유실 후 재시도는 이 요청의 operation ID·경로·hash·epoch/revision·변경 목록과 staging 바이트를 그대로 사용합니다. 최신 목록으로 다시 적용할 때는 `review_upload_changes()`로 충돌과 삭제 대상을 재검토하고, 교체 승인을 초기화한 뒤 새 요청을 만듭니다. 성공이 확인되거나 제출 전에 취소한 staging은 정리하지만, 제출 후 처리 여부가 불명인 작업의 staging은 즉시 지우지 않고 세션 정리 정책에 맡깁니다. 최초 업로드 시도에 성공하면 함께 입력한 질문을 이어 보내며, 한 번이라도 실패했다면 이후 성공해도 질문은 명시적 전송을 기다립니다.
 
@@ -547,6 +558,23 @@ HTTP `200`이나 `done`만으로 성공 처리하지 않습니다. 유효한 `fi
 - 첨부 반영은 질문 제출과 독립적입니다. 실패 후 재시도에 성공해도 보류한 질문을 자동 실행하지 않습니다.
 
 첨부 변경과 질문 실행은 같은 세션 락으로 직렬화합니다. `SessionContext`가 활성 첨부와 인덱스를 소유하고 manifest는 그 상태에서 만든 공개 스냅샷입니다. `UploadService`만 후보 생성과 첨부 commit을 담당하며, `InMemorySessionStore`는 세션 생성·pin·락·TTL/LRU 정리를 관리합니다. `AgentRequestService`는 락을 얻은 뒤 context를 검사하고 실행 종료까지 유지하며, 락을 풀기 전에 최종 manifest를 확보합니다. 명시적 reset·exit도 context 검사를 통과한 뒤 세션 자원을 해제합니다. 런타임은 확정된 세션의 검색 자원을 사용하고 파일 경로나 인덱스 생성 입력을 받지 않습니다. 락 대기와 인덱스 생성 중에도 세션을 활성 상태로 보호하며, 한 질문은 시작할 때 확인한 집합만 사용합니다. 현재 store·인덱스는 단일 FastAPI 프로세스의 메모리 상태이며 다중 worker의 공유 세션을 제공하지 않습니다.
+
+#### 브라우저 파일 수신: `POST /sessions/{session_id}/uploads/staging`
+
+브라우저는 multipart의 `file` 필드로 파일 하나를 전송합니다. 서버는 해당 세션의 staging 영역에 바이트를 저장하고 다음 정보를 반환합니다.
+
+| 필드 | 의미 |
+|---|---|
+| `upload_id` | 서버가 발급한 32자리 소문자 hex 식별자 |
+| `name` | 검증한 파일명 |
+| `size_bytes` | 실제 수신한 파일 바이트 수 |
+| `content_hash` | 실제 파일 바이트의 `sha256:` 해시 |
+
+staging 성공은 검색 가능한 첨부의 확정이 아니며 manifest와 revision을 바꾸지 않습니다. 여러 파일은 각각 수신한 뒤 하나의 `/uploads/sync` 요청으로 확정합니다. 브라우저는 `add`에 서버의 `upload_id`, `name`, `content_hash`와 필요한 `replace_file_id`를 보냅니다. 서버가 이를 세션 안의 경로로 연결하므로 브라우저가 서버 파일 경로를 만들 필요가 없습니다.
+
+기존 Streamlit·Python 클라이언트의 `path` 기반 sync도 유지합니다. 한 sync 요청의 추가 항목은 기존 경로 형식 또는 브라우저 식별자 형식 중 하나를 사용합니다. `epoch`, `expected_revision`, `operation_id`, `remove`, `clear`와 교체 검토·충돌·중복 확정 방지 계약은 동일합니다. 같은 승인 작업을 확인할 때는 upload ID·해시·operation ID를 그대로 유지합니다. 성공한 작업의 staging 파일이 정리되었더라도 보관된 operation 기록으로 같은 요청을 확인할 수 있습니다.
+
+파일 수신 단계에서 이름·형식·빈 파일·파일당 바이트 한도를 검사하고, sync에서 최종 첨부 개수와 총 바이트를 검사합니다. HTTP 수신 본문은 파일 한도에 multipart 여유 64 KiB를 더한 크기로 제한하며, `Content-Length`가 없어도 실제 수신량을 검사합니다. 파일 자체에는 기존 파일당 한도를 적용합니다. staging은 기존 세션 저장 공간 한도와 TTL 정리 대상이며, 수신 실패는 검색 가능한 첨부를 바꾸지 않습니다. staging 재호출 자체의 upload ID는 새로 발급되므로 이미 승인한 sync의 재확인과 새 파일 수신을 구분합니다. 파일 선택·수신만으로 질문을 실행하지 않으며, 질문 연계와 실패 후 명시적 재개는 UI의 제출 계약을 따릅니다.
 
 ### 5.1.2 선택한 답변의 TXT 저장
 
@@ -754,7 +782,17 @@ Decisions 사전 검증 입력은 `sources`·`tasks` registry에 원문 근거�
 
 현재 FastAPI 서버의 기본 Slack 수신자 판정을 `{selector, failure}`로 반환합니다. 유효한 설정은 `selector`에 유형과 대상을 담고, 기본값이 없으면 두 필드가 `null`입니다. 설정이 잘못되거나 사용자 ID와 이메일 기본값이 충돌하면 `failure`에 구성 오류를 담습니다. 토큰과 다른 설정은 반환하지 않으며 Slack 조회나 전송을 실행하지 않습니다. UI는 조회 실패를 기본값 없음과 구분하고, 수신자를 직접 지정한 경우 이 조회를 사용하지 않습니다.
 
-### 5.4 Streamlit 표시와 export
+### 5.4 UI 표시와 export
+
+#### React
+
+React는 대화별 초안·답변·첨부 변경·Slack 입력을 브라우저 상태로 관리하며 같은 탭에서 복원합니다. 파일 선택과 staging만으로 검색 첨부나 질문을 확정하지 않습니다. 최초 파일·질문 제출이 성공하면 질문을 한 번 실행하고, 첨부 실패 뒤 재시도는 보류 질문의 명시적 전송을 기다립니다. 답변 수신 중에는 다음 초안과 다른 대화를 사용할 수 있고, 늦은 응답은 시작한 대화에만 반영합니다.
+
+`AnswerResponse`의 문단·제목·목록·코드·표와 해당 답변의 인용을 렌더링합니다. 근거 패널은 당시 보관한 원문·줄·Notebook 셀·선택 범위를 사용하며 현재 첨부에서 원문을 다시 읽지 않습니다. 부분 답변의 한계와 출처 연결 경고, 저장·Slack의 실행 결과를 구분합니다. TXT 저장은 선택한 답변의 서버 `answer_id`를 사용하고 서버 파일을 다운로드합니다. Slack 입력 설정만으로는 전송하지 않으며 잘못된 명시 입력을 기본값으로 바꾸지 않습니다.
+
+화면은 모바일 메뉴와 근거 패널의 키보드 포커스, 시스템·라이트·다크 테마, 새 응답 도착 전의 읽기 위치를 관리합니다. 기능별 인수 기준과 HTTP·컴포넌트·실제 브라우저 검증의 범위는 [React 전환 문서](react_migration.md#2-기능-인수-기준)에 정리합니다.
+
+#### Streamlit
 
 입력창은 `질문을 입력하세요`라는 짧은 문구를 사용하고, 공식 문서와 파일 첨부에 대한 설명은 입력창 밖에 둡니다. 새 대화는 안내 영역과 질문 예시로 시작하며, 인사말을 답변 기록이나 근거 검증 대상으로 만들지 않습니다. 예시는 고정된 순서로 표시하고, 입력창에서 파일을 선택하면 자료 질문 예시를 보여줍니다. 서버가 확인한 첨부가 있으면 공식 문서와 자료 질문을 함께 제공합니다. 먼저 두 예시를 보여주고, 나머지 예시와 지원 문서는 접힌 영역에서 확인합니다. 좁은 화면에서는 질문 문구를 줄바꿈해 표시합니다. 이전 답변이 필요한 저장·Slack 전송 예시는 첫 화면에 제공하지 않습니다. 예시 선택은 입력창만 채우며 확인·수정 후 사용자가 전송합니다. 작성 중인 초안은 덮어쓰지 않으며, 브라우저에서도 방금 입력한 텍스트가 있으면 예시 클릭을 막습니다. 입력창을 지우면 예시를 다시 선택할 수 있습니다. 처리 중·연결 미확인·첨부 변경·보류 질문이 있는 상태에서는 예시를 제공하지 않습니다.
 
@@ -801,7 +839,13 @@ Slack 수신자 설정의 `직접 지정 안 함`은 기존 미지정 입력값�
 |   |-- benchmarking.md
 |   |-- design_rationale.md
 |   |-- error_codes.md
+|   |-- react_migration.md
 |   `-- runtime_reference.md
+|-- frontend/
+|   |-- scripts/
+|   |-- src/
+|   |-- tests/
+|   `-- package-lock.json
 |-- output/
 |   |-- benchmarks/
 |   |-- runtime/
@@ -826,7 +870,7 @@ Slack 수신자 설정의 `직접 지정 안 함`은 기존 미지정 입력값�
 
 ## 7. 운영 메모
 
-- `src.app.service_manager`는 FastAPI와 Streamlit을 함께 띄우고 종료합니다.
+- `src.app.service_manager`는 기본 React 모드에서 FastAPI를 실행하고 `/app/`의 정적 빌드를 제공합니다. Streamlit 모드에서는 FastAPI와 Streamlit을 함께 실행합니다. 종료·재시작은 기록된 관리 프로세스만 대상으로 합니다.
 - `src.app.web.session_store`는 세션별 단일 요청 직렬화 lock을 사용합니다.
 - Planner와 synthesis 구조화 출력은 `src/infra/structured_schema.py`의 공통 compiler를 사용합니다. 최초 Planner는 필수·nonnull 요청 계약을 포함하고 재검색 Planner는 실패한 각 requirement ID에 대해 `query`와 `k`만 생성합니다. 서버는 실패 ID가 빠짐없이 한 번씩 포함됐는지 확인하고, 원래 route·심볼·버전·aspect·파일 범위·요청 계약과 성공한 task를 유지합니다. compiler는 선택 필드를 required로 전환하되 null 허용 여부를 보존하며, 서로 배타적인 tagged union만 `oneOf`에서 `anyOf`로 바꿉니다. 지원하지 않는 assertion은 삭제하지 않고 스키마 경로를 포함해 실패합니다. 서버 시작과 LLM registry 구성 시 실제 사용하는 세 스키마를 네트워크 호출 없이 미리 검증합니다.
 - Planner의 요청별 timeout은 30초입니다. Planner와 synthesis는 역할별 한 질문에서 최대 3회·45초의 호출 예산을 공유하며 SDK 재시도는 0회입니다. 전송 재시도, 최대 한 번의 출력 수정, 축소 합성, 그래프 재진입이 모두 같은 예산에 포함됩니다. 각 요청 timeout은 남은 예산 이하로 제한됩니다. 스키마·인증·모델 설정·할당량 오류와 명시적 거절은 자동 재시도하지 않습니다.
@@ -854,6 +898,8 @@ uv run --locked python script/check_encoding.py
 uv run --locked python script/sync_env_example.py --check
 node --test tests/browser/streamlit_browser_state.test.mjs
 ```
+
+React의 타입·계약·UI 검사와 실제 브라우저 검사는 [React 검증 명령](react_migration.md#4-계약-생성과-검증)을 따릅니다. `npm --prefix frontend run test:e2e`는 빌드 후 개발 프록시와 FastAPI 정적 제공을 검사하고, `npm --prefix frontend run test:streamlit`은 기존 Streamlit·Python 클라이언트의 질문·복원·TXT 저장 흐름을 실제 Chromium에서 확인합니다. 전자는 실제 FastAPI를 실행하고 외부 모델·Slack HTTP 경계를 대체하며, 후자는 기존 합성 HTTP fixture를 사용합니다. 두 검사를 서로 대체하지 않습니다.
 
 `--locked`는 잠금 파일 갱신이 필요하면 실패하지만, 코드가 사용하는 API의 호환성까지 검사하지는 않습니다. AppTest는 브라우저 CSS·포커스·미전송 타이핑을 실행하지 않으며, 최소 지원 버전의 UI 호환성도 별도 확인이 필요합니다.
 
