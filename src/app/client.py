@@ -13,7 +13,7 @@ from urllib3.exceptions import ReadTimeoutError
 
 from src.app.uploads import UploadStageResult, stage_uploaded_files
 from src.core.contracts.outcome import AnswerExportResult, TurnResult
-from src.core.slack_contract import RecipientInput
+from src.core.slack_contract import RecipientInput, SlackDefault
 from src.core.uploads import UploadContext, UploadManifest, UploadSyncRequest
 from src.infra.sse import iter_sse_events
 
@@ -41,6 +41,24 @@ class AnswerExportAPIError(RuntimeError):
     def __init__(self, message: str, *, status_code: int | None = None):
         super().__init__(message)
         self.status_code = status_code
+
+
+class SlackDefaultAPIError(RuntimeError):
+    """An unavailable destination must not be mistaken for an absent default."""
+
+
+def fetch_slack_default(fastapi_url: str) -> SlackDefault:
+    endpoint = f"{fastapi_url.rstrip('/')}/slack/default-recipient"
+    try:
+        with requests.get(endpoint, timeout=(2, 3), allow_redirects=False) as response:
+            if response.status_code != 200:
+                raise SlackDefaultAPIError("기본 수신자를 확인하지 못했습니다.")
+            data = response.json()
+            if not isinstance(data, dict) or not {"selector", "failure"}.issubset(data):
+                raise ValueError("default recipient response is incomplete")
+            return SlackDefault.model_validate(data)
+    except (requests.RequestException, ValueError) as exc:
+        raise SlackDefaultAPIError("기본 수신자를 확인하지 못했습니다.") from exc
 
 
 def _upload_request(method: str, endpoint: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:

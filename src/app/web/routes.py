@@ -15,11 +15,17 @@ from src.infra.saved_artifacts import ArtifactError, read_saved_artifact
 from src.app.web.cleanup import resolve_download_path
 from src.app.web.schemas import AGENT_STREAM_EVENT_SCHEMAS, AgentRequest, AgentStreamEvent
 from src.core.contracts.outcome import AnswerExportResult
+from src.core.slack_contract import SlackDefault
 from src.core.uploads import UploadManifest, UploadSyncRequest, validate_session_id
 
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+@router.get("/slack/default-recipient", response_model=SlackDefault)
+def get_slack_default_recipient(request: Request) -> SlackDefault:
+    return request.app.state.settings.slack_default_recipient()
 
 
 def _upload_session_id(value: str) -> str:

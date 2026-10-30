@@ -45,7 +45,9 @@ def conversation_http(monkeypatch, tmp_path, browser_storage):
         response.status_code = 200
         response.request = request
         response.url = request.url
-        if request.method == "GET" and path.endswith("/uploads"):
+        if request.method == "GET" and path == "/slack/default-recipient":
+            response._content = json.dumps({"selector": None, "failure": None}).encode()
+        elif request.method == "GET" and path.endswith("/uploads"):
             session_id = path.split("/")[2]
             observed["reads"].append(session_id)
             if session_id in observed["unavailable"]:

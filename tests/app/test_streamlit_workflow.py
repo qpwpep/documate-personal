@@ -71,7 +71,9 @@ def chat_http(monkeypatch, tmp_path, browser_storage):
         result.status_code = 200
         result.request = request
         result.url = request.url
-        if request.method == "GET" and path.endswith("/uploads"):
+        if request.method == "GET" and path == "/slack/default-recipient":
+            result._content = json.dumps({"selector": None, "failure": None}).encode()
+        elif request.method == "GET" and path.endswith("/uploads"):
             submissions.manifest_reads += 1
             if submissions.upload_manifest_failure:
                 result.status_code = 503

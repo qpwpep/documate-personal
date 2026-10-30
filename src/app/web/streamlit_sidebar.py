@@ -6,6 +6,7 @@ from html import escape
 import streamlit as st
 from pydantic import ValidationError
 
+from src.app.client import SlackDefaultAPIError, fetch_slack_default
 from src.app.web.streamlit_theme import THEME_OPTIONS, THEME_STATE_KEY
 from src.app.web.streamlit_state import Conversation, get_conversation
 from src.app.web.streamlit_conversations import render_conversation_picker
@@ -105,10 +106,12 @@ def _render_slack_recipient(conversation: Conversation, *, disabled: bool) -> Re
     recipient_kind = st.radio(
         "수신자 유형", options=recipient_options,
         index=recipient_options.index(conversation.slack_drafts.get("kind", "미지정")),
+        format_func=lambda kind: "직접 지정 안 함" if kind == "미지정" else kind,
         key=conversation.widget_key("slack_recipient_kind"), disabled=disabled,
     )
     conversation.slack_drafts["kind"] = recipient_kind
     if recipient_kind == "미지정":
+        _render_slack_default(conversation, disabled=disabled)
         return None
     kinds = {
         "채널": ("channel", "C0123456789", "채널 이름 대신 C, G 또는 D로 시작하는 채널 ID를 입력하세요."),
@@ -150,3 +153,39 @@ def _render_slack_recipient(conversation: Conversation, *, disabled: bool) -> Re
             else:
                 st.markdown("Slack에서 받는 사람의 프로필을 열고 **더 보기 → 멤버 ID 복사**를 선택하세요. ID를 찾기 어렵다면 수신자 유형을 **이메일**로 바꿀 수 있습니다.")
     return RecipientInput(kind=kind, value=value)
+
+
+def _render_slack_default(conversation: Conversation, *, disabled: bool) -> None:
+    fastapi_url = conversation.client.context.fastapi_url.rstrip("/")
+    cache_key = f"documate_slack_default:{fastapi_url}"
+    refresh_requested = st.button(
+        "기본 수신자 다시 확인", key=conversation.widget_key("slack_default_retry"), disabled=disabled,
+    )
+    # Sidebar widgets rerun during ordinary chat and navigation. Keep both a
+    # confirmed result and a lookup failure until the user requests a refresh.
+    if cache_key not in st.session_state or refresh_requested:
+        try:
+            st.session_state[cache_key] = fetch_slack_default(fastapi_url)
+        except SlackDefaultAPIError:
+            st.session_state[cache_key] = None
+    default = st.session_state[cache_key]
+    if default is None:
+        st.warning("기본 수신자를 확인하지 못했습니다. 기본 수신자가 없는 상태와는 다릅니다. 수신자를 직접 지정하거나 다시 확인해 주세요.")
+        return
+
+    st.caption("서버에서 확인한 설정입니다. 기본 수신자 설정을 바꿨다면 다시 확인하세요.")
+    if default.failure is not None:
+        st.warning(default.failure.message)
+        st.caption("채널·사용자·이메일로 수신자를 직접 지정하면 기본 설정을 사용하지 않습니다.")
+        return
+    if default.selector is None:
+        st.info("기본 수신자가 없습니다. 채널·사용자·이메일을 선택하거나 질문에 수신자를 지정해 주세요. 수신자가 정해져야 Slack으로 전송할 수 있습니다.")
+        return
+
+    kind_label = {"user": "사용자", "email": "이메일", "channel": "채널"}[default.selector.kind]
+    st.markdown(
+        f'<p role="status">기본 수신자: {kind_label} <strong>{escape(default.selector.value)}</strong></p>',
+        unsafe_allow_html=True,
+    )
+    st.caption("질문에도 수신자를 지정하지 않은 새 전송은 이 대상으로 보냅니다. 사용자·이메일 수신자에게는 개인 메시지로 전송합니다.")
+    st.caption("보류 중인 전송은 앞서 확정한 수신자를 유지합니다. 실제 수신 가능 여부는 전송할 때 확인합니다.")

@@ -271,6 +271,8 @@ def fixture_boundary() -> tuple[str, Path]:
             parts = path.strip("/").split("/")
             if path == "/_fixture/metrics":
                 self.json_response(200, state.metrics())
+            elif path == "/slack/default-recipient":
+                self.json_response(200, {"selector": {"kind": "user", "value": "U0123456789"}, "failure": None})
             elif len(parts) == 3 and parts[0] == "sessions" and parts[2] == "uploads":
                 self.json_response(200, state.manifest(parts[1]))
             elif len(parts) == 2 and parts[0] == "download" and unquote(parts[1]) in state.downloads:
