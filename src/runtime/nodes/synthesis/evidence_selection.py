@@ -852,7 +852,7 @@ def select_evidence_packet(
         for item in sorted(proposals, key=lambda value: value[1][0].selection.start)
     )
 
-    def reserve_docs(allowances: dict[str, int] | None = None) -> None:
+    def reserve_docs(allowances: dict[str, int] | None = None, *, include_context: bool = False) -> None:
         spent: dict[str, int] = {}
         while True:
             best = None
@@ -877,7 +877,7 @@ def select_evidence_packet(
                     # Defer the larger, better-supported range until small
                     # requirements have released their unused fair shares.
                     continue
-                if not gain and allowances is not None:
+                if not gain and not include_context:
                     continue
                 if not gain and any(
                     contains_evidence_range(existing, selected) or contains_evidence_range(selected, existing)
@@ -993,14 +993,15 @@ def select_evidence_packet(
             continue
         add_candidate(item, task, remaining, require_anchor=False)
 
-    reserved = list(packet)
+    # Docs ranges and table cells already have their final selection. Counting
+    # them in this fair share strands space that only upload text can use.
+    reserved = [selected for selected in packet
+                if origins[selected.id][0].route != "docs" and origins[selected.id][0].element.kind != "table"]
     for index, selected in enumerate(reserved):
         # Expanding an earlier passage may already have subsumed this range.
         if selected.id not in origins:
             continue
         original, task = origins[selected.id]
-        if original.route == "docs" or original.element.kind == "table":
-            continue
         limit = min(budget.max_excerpt_chars, len(selected.excerpt) + remaining // (len(reserved) - index))
         expanded = select_evidence_range(
             original, limit=limit, query=query, task=task,
@@ -1013,6 +1014,10 @@ def select_evidence_packet(
                for requirement_id in requirement_ids.get(selected.id, [])):
             continue
         admit(expanded, original, task)
+    # A first upload statement or notebook introduction does not replace the
+    # remaining accepted code. Only spend capacity on extra docs context
+    # after those source ranges have had their allocation opportunity.
+    reserve_docs(include_context=True)
     packet = list({selected.id: selected for selected in packet}.values())
     requirement_ids = {key: value for key, value in requirement_ids.items()
                        if any(item.id == key for item in packet)}

@@ -471,3 +471,63 @@ def test_impossible_description_budget_preserves_ranges_and_consumes_semantic_re
     assert missing_evidence_requirement_ids(PlannerOutput(use_retrieval=True, tasks=[task]), packet, ids) == [
         task.requirement_id
     ]
+
+
+def test_mixed_packet_keeps_uploaded_inputs_and_join_before_optional_docs_context():
+    docs_task = RetrievalTask(requirement_id="join-rule", route="docs", query="pandas left join", k=5,
+        requirement={"library": "pandas", "aspects": ["left"], "evidence_needs": ["explanation"]})
+    upload_task = RetrievalTask(requirement_id="orders", route="upload", query="Inspect the orders join", k=5,
+        requirement={"file_ids": ["orders"], "match": "topic"})
+    rule = _budget_case_source("A left join preserves every left row and adds matching right values.", "join-rule")
+    extra_docs = [_budget_case_source("Additional join documentation and supporting background. " * 2,
+                                     f"background-{index}") for index in range(5)]
+    code = (
+        "orders = pd.DataFrame({'order_id': [41, 42], 'customer_id': [7, 9]})\n"
+        "customers = pd.DataFrame({'customer_id': [7], 'tier': ['gold']})\n"
+        "joined = orders.merge(customers, on='customer_id', how='left', indicator=True)\n"
+        "unmatched = joined.loc[joined['_merge'] == 'left_only', 'order_id'].tolist()\n"
+    )
+    uploaded = _budget_case_source(code, "orders", upload=True)
+    originals = [uploaded, rule, *extra_docs]
+    budget = RetrievedEvidenceBudget(400, 650, 8)
+
+    packet, ids = select_evidence_packet(originals, budget=budget, query="Which orders lack a matching customer?",
+        requirements_by_evidence={uploaded.id: [upload_task], **{item.id: [docs_task] for item in [rule, *extra_docs]}},
+        semantic_support={item.id: {docs_task.requirement_id: {"relevance", "aspect:left", "need:explanation"}}
+                          for item in [rule, *extra_docs]})
+
+    assert any(item.excerpt == code for item in packet if item.route == "upload")
+    assert rule.id in ids and ids[rule.id] == [docs_task.requirement_id]
+    _assert_budget_case_ranges(packet, originals, budget)
+
+
+def test_mixed_packet_reserves_uploaded_code_cell_before_redundant_docs_take_item_slots():
+    from src.core.documents import DocumentElement, build_snapshot
+    from src.core.evidence import build_evidence
+
+    docs_task = RetrievalTask(requirement_id="split-rule", route="docs", query="TimeSeriesSplit configuration", k=5,
+        requirement={"library": "scikit-learn", "evidence_needs": ["explanation"]})
+    upload_task = RetrievalTask(requirement_id="notebook", route="upload", query="Inspect notebook split settings", k=5,
+        requirement={"file_ids": ["forecast"], "match": "topic"})
+    description = "This notebook checks a forecast using chronological train and test splits."
+    code = "splitter = TimeSeriesSplit(n_splits=3, test_size=2, gap=1)\n"
+    snapshot = build_snapshot(source_uri="upload://session/forecast", title="forecast.ipynb",
+        media_type="application/x-ipynb+json", source_type="upload", content=description + code,
+        parser="test", parser_version="1")
+    notebook = [build_evidence(snapshot=snapshot, element=DocumentElement(element_id=key, kind=kind, text=text,
+        language="python" if kind == "code" else None, metadata={"file_id": "forecast"}))
+        for key, kind, text in (("intro", "paragraph", description), ("settings", "code", code))]
+    docs = [_budget_case_source("TimeSeriesSplit keeps training observations before the test observations. " * 2,
+                                f"split-{index}") for index in range(4)]
+    originals = [*notebook, *docs]
+    budget = RetrievedEvidenceBudget(400, 1200, 4)
+
+    packet, ids = select_evidence_packet(originals, budget=budget, query="Explain the notebook split settings",
+        requirements_by_evidence={**{item.id: [upload_task] for item in notebook},
+                                  **{item.id: [docs_task] for item in docs}},
+        semantic_support={item.id: {docs_task.requirement_id: {"relevance", "need:explanation"}} for item in docs})
+
+    assert any(item.excerpt == code for item in packet if item.route == "upload")
+    assert ids[notebook[1].id] == [upload_task.requirement_id]
+    assert any(item.route == "docs" for item in packet)
+    _assert_budget_case_ranges(packet, originals, budget)
