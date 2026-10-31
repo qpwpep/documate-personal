@@ -355,7 +355,7 @@ class UploadService:
                 options["ingestion"] = DocumentIngestionContext(converter=self.converter, policy=policy,
                     workspace=storage.root / "conversions" / generation,
                     cache_dir=storage.root / "cache" if self.settings.document_cache_enabled else None,
-                    cache_max_bytes=self.settings.document_cache_max_mib * _MIB // 2,
+                    cache_max_bytes=self.settings.document_cache_bytes_per_store(),
                     cache_ttl_seconds=self.settings.document_cache_ttl_seconds,
                     max_chunks=self.settings.document_max_chunks,
                     deadline=time.monotonic() + self.settings.document_upload_timeout_seconds)

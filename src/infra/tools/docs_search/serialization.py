@@ -8,6 +8,7 @@ from src.core.documents import DocumentElement, SourceAnchor, build_snapshot
 from src.core.evidence import RetrievalScore, SearchHit, build_evidence
 from src.infra.tools._common import normalize_relevance_score
 from src.infra.tools.docs_search.policy import (
+    DOCS_WINDOW_CHARS,
     doc_url_filter_reason,
     normalized_domain_set,
     result_matches_domains,
@@ -95,7 +96,7 @@ def collect_docs_search_hits(
     return hits
 
 
-def _select_excerpt_range(text: str, *, query: str, max_chars: int = 3200) -> tuple[int, int]:
+def _select_excerpt_range(text: str, *, query: str, max_chars: int = DOCS_WINDOW_CHARS) -> tuple[int, int]:
     """Select one contiguous range; the citation remains a slice of provider text."""
     if len(text) <= max_chars:
         return 0, len(text)

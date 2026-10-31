@@ -13,7 +13,7 @@ from src.core.documents import DocumentElement, ParsedDocument, SourceAnchor, bu
 from src.core.evidence import EvidenceRef, build_evidence
 from src.core.python_source import PythonSourceMap
 from src.core.table_selection import table_excerpt, table_row_units
-from src.infra.notebook_loader import load_canonical_notebook, normalize_cell_source
+from src.infra.notebook_loader import normalize_cell_source
 
 _MAX_CODE_METADATA_CALLS = 8
 _MAX_CODE_METADATA_KWARGS = 12
@@ -99,22 +99,6 @@ def chunk_python_text(
     )
     return chunk_parsed_document(ParsedDocument(snapshot=snapshot, elements=[element]),
                                  chunk_size=chunk_size, chunk_overlap=chunk_overlap)
-
-
-def chunk_notebook_path(
-    *,
-    path: str,
-    chunk_size: int,
-    chunk_overlap: int,
-) -> ChunkedDocument:
-    loaded = load_canonical_notebook(path)
-    return chunk_notebook(
-        path=path,
-        notebook=loaded.notebook,
-        chunk_size=chunk_size,
-        chunk_overlap=chunk_overlap,
-        source_content=loaded.source_content,
-    )
 
 
 def chunk_notebook(

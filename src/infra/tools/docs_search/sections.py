@@ -19,13 +19,11 @@ class DocSection:
     kind: str
     start: int
     end: int
-    confidence: int = 1
 
 
 @dataclass(frozen=True)
 class DocDeclaration:
     name: str
-    parameters: frozenset[str]
     start: int
     end: int
 
@@ -79,12 +77,12 @@ def _symbol(value: str) -> str:
     return ""
 
 
-def _scan_signature(value: str) -> tuple[str, frozenset[str], int] | None:
+def _scan_signature(value: str) -> tuple[str, int] | None:
     """Recognize one bounded declaration, never evaluate document source code.
 
-    Only separators in the outer parameter list introduce parameters. Nested
-    calls, collection/type expressions, quoted commas and return annotations
-    cannot introduce names. Keep newlines to map the result to original lines.
+    Track nested expressions, quotes and optional parameter groups to locate
+    the declaration's closing delimiter. Keep newlines to map the result to
+    original lines.
     """
     match = _DECLARATION.match(value)
     if match is None:
@@ -93,16 +91,9 @@ def _scan_signature(value: str) -> tuple[str, frozenset[str], int] | None:
     stack = ["("]
     pairs = {")": "(", "]": "[", "}": "{"}
     parameter_start = opening + 1
-    parameters: set[str] = set()
     quote = ""
     lambda_arguments = 0
     index = opening + 1
-
-    def add_parameter(end: int) -> None:
-        entry = value[parameter_start:end].strip()
-        name = re.match(r"\*{0,2}([A-Za-z_]\w*)(?=\s*(?:[:=]|$))", entry)
-        if name:
-            parameters.add(name.group(1))
 
     while index < len(value):
         char = value[index]
@@ -132,11 +123,9 @@ def _scan_signature(value: str) -> tuple[str, frozenset[str], int] | None:
         ):
             # Reference grammars also use f(required[, optional]). These
             # brackets enclose parameters, unlike a default or type expression.
-            add_parameter(index)
             parameter_start = index + 1
             stack.append("optional")
         elif char == "]" and stack[-1] == "optional":
-            add_parameter(index)
             parameter_start = index + 1
             stack.pop()
         elif char in "([{":
@@ -145,17 +134,15 @@ def _scan_signature(value: str) -> tuple[str, frozenset[str], int] | None:
             if not stack or stack.pop() != pairs[char]:
                 return None
             if not stack:
-                add_parameter(index)
                 line_end = value.find("\n", index)
                 line_end = len(value) if line_end < 0 else line_end
                 tail = value[index + 1:line_end].strip(" ¶#")
                 if tail and tail != ":" and not tail.startswith(("->", "→")):
                     return None
-                return match.group("name"), frozenset(parameters), value[:line_end].count("\n") + 1
+                return match.group("name"), value[:line_end].count("\n") + 1
         elif char == ":" and outer_parameter and lambda_arguments:
             lambda_arguments -= 1
         elif char == "," and outer_parameter and not lambda_arguments:
-            add_parameter(index)
             parameter_start = index + 1
         index += 1
     return None
@@ -190,11 +177,11 @@ def scan_declarations(text: str) -> list[DocDeclaration]:
         if parsed is None:
             index += 1
             continue
-        name, parameters, consumed = parsed
+        name, consumed = parsed
         last_line = lines[index + consumed - 1]
         start = starts[index] + len(lines[index]) - len(lines[index].lstrip())
         end = starts[index + consumed] - len(last_line) + len(last_line.rstrip())
-        declarations.append(DocDeclaration(name, parameters, start, end))
+        declarations.append(DocDeclaration(name, start, end))
         index += consumed
     return declarations
 
@@ -274,7 +261,7 @@ def parse_doc_sections(
     parsed_url = urlparse(url)
     module = (identity if parsed_url.hostname == "docs.python.org" and "/library/" in parsed_url.path
               and identity == unquote(parsed_url.path.rsplit("/", 1)[-1]).removesuffix(".html") else "")
-    owner, confidence = identity, 1 if identity else 0
+    owner = identity
     kind, start, offset = "overview", 0, 0
     sections: list[DocSection] = []
     fence = ""
@@ -286,11 +273,11 @@ def parse_doc_sections(
     )}
     declaration_end = 0
 
-    def boundary(position: int, new_owner: str, new_kind: str, new_confidence: int) -> None:
-        nonlocal start, owner, kind, confidence
+    def boundary(position: int, new_owner: str, new_kind: str) -> None:
+        nonlocal start, owner, kind
         if position > start and text[start:position].strip():
-            sections.append(DocSection(owner, kind, start, position, confidence))
-        start, owner, kind, confidence = position, new_owner, new_kind, new_confidence
+            sections.append(DocSection(owner, kind, start, position))
+        start, owner, kind = position, new_owner, new_kind
 
     def qualify(name: str) -> str:
         for known in (owner, identity):
@@ -321,17 +308,17 @@ def parse_doc_sections(
                                    if lines[following].strip()), "")
                 if kind not in {"examples", "signature"} or (kind == "signature" and first_line.startswith(">>>")):
                     before_fence = kind
-                    boundary(line_start, owner, "examples", confidence)
+                    boundary(line_start, owner, "examples")
             elif marker[0] == fence[0] and len(marker) >= len(fence):
                 fence = ""
                 if before_fence is not None:
-                    boundary(offset, owner, before_fence, confidence)
+                    boundary(offset, owner, before_fence)
                     before_fence = None
             continue
         if fence or not stripped or line_start < declaration_end:
             continue
         if stripped.startswith(">>>") and kind != "examples":
-            boundary(line_start, owner, "examples", confidence)
+            boundary(line_start, owner, "examples")
             continue
         heading_match = re.match(r"^(#{1,6})\s+(.+)$", stripped)
         html_heading = re.match(r"<h([1-6])\b[^>]*>(.*?)</h\1>", stripped, flags=re.I)
@@ -345,7 +332,7 @@ def parse_doc_sections(
             # NAME is the manpage's introduction, not a new API named NAME.
             new_kind = "overview"
         if new_kind:
-            boundary(line_start, owner, new_kind, confidence)
+            boundary(line_start, owner, new_kind)
             continue
         if level is not None:
             heading_declaration = declaration_name(heading_text)
@@ -358,22 +345,22 @@ def parse_doc_sections(
                 # same level as a command heading. Only an explicit identifier
                 # changes ownership; a subheading must not reset another
                 # command's text to the page's original owner either.
-                boundary(line_start, owner, "overview", confidence)
+                boundary(line_start, owner, "overview")
                 continue
             if heading_owner:
                 owner_level = level
                 heading_kind = "signature" if heading_declaration else "overview"
-                boundary(line_start, qualify(heading_owner), heading_kind, 2)
+                boundary(line_start, qualify(heading_owner), heading_kind)
             else:
                 if owner_level is not None and level <= owner_level:
                     owner_level = None
-                    boundary(line_start, identity, "overview", 1 if identity else 0)
+                    boundary(line_start, identity, "overview")
                 else:
-                    boundary(line_start, owner, "overview", confidence)
+                    boundary(line_start, owner, "overview")
             continue
         anchored_owner = _sphinx_definition_owner(raw_line)
         if anchored_owner:
-            boundary(line_start, anchored_owner, "signature", 2)
+            boundary(line_start, anchored_owner, "signature")
             continue
         # API declarations belong in an overview/signature, not in example,
         # parameter, return, or note text that happens to contain a call.
@@ -381,9 +368,9 @@ def parse_doc_sections(
             declaration = declarations_by_start.get(line_start + len(raw_line) - len(raw_line.lstrip()))
             if declaration:
                 declaration_end = declaration.end
-                boundary(line_start, qualify(declaration.name), "signature", 2)
+                boundary(line_start, qualify(declaration.name), "signature")
     if text[start:].strip():
-        sections.append(DocSection(owner, kind, start, len(text), confidence))
+        sections.append(DocSection(owner, kind, start, len(text)))
     return sections
 
 

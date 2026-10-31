@@ -73,7 +73,7 @@ async def lifespan(app: FastAPI):
     app.state.answer_export_service = AnswerExportService(settings=settings, session_store=session_store)
     from src.app.web.upload_service import UploadService
     from src.infra.docling_runner import DoclingRunner
-    converter = DoclingRunner(cache_max_bytes=settings.document_cache_max_mib * 1024 * 1024 // 2,
+    converter = DoclingRunner(cache_max_bytes=settings.document_cache_bytes_per_store(),
                              cache_ttl_seconds=settings.document_cache_ttl_seconds)
     app.state.document_converter = converter
     app.state.upload_service = UploadService(settings=settings, session_store=session_store, converter=converter)

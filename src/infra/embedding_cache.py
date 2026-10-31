@@ -52,7 +52,7 @@ class CachedEmbeddings(Embeddings):
     containing source content, parser/model versions and options, chunking
     settings, and embedding model/dimensions. Only hashes and vectors are
     persisted, never source text, file identities or namespace configuration.
-    ``for_namespace`` creates a separate wrapper, so concurrent files cannot
+    Each wrapper has its own fixed namespace, so concurrent files cannot
     change one another's active namespace. Query embedding remains uncached.
     """
 
@@ -67,11 +67,6 @@ class CachedEmbeddings(Embeddings):
         self._dimensions = dimensions
         self._max_bytes = max(0, int(max_bytes))
         self._ttl_seconds = max(0, int(ttl_seconds))
-
-    def for_namespace(self, namespace: dict) -> CachedEmbeddings:
-        """Reuse the same service and session cache with a new fixed identity."""
-        return CachedEmbeddings(self._underlying, self._cache_dir, namespace,
-                                self._max_bytes, self._ttl_seconds)
 
     def embed_query(self, text: str) -> list[float]:
         return self._underlying.embed_query(text)

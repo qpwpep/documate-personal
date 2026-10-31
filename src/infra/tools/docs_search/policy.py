@@ -8,6 +8,7 @@ from src.core.rules import get_rules_config
 from src.infra.tools.docs_search.normalization import canonicalize_docs_query_text
 
 
+DOCS_WINDOW_CHARS = 3200
 DocUrlFilterReason = Literal["invalid_url", "path_prefix"]
 
 

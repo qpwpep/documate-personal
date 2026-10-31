@@ -9,12 +9,9 @@ from urllib.parse import unquote, urlparse
 from src.core.evidence import SearchHit, build_evidence
 from src.core.planner_schema import RetrievalRequirement
 from src.infra.tools.docs_search.policy import (
-    is_allowed_doc_url, is_current_stable_doc_url, normalized_domain_set, result_matches_domains,
+    DOCS_WINDOW_CHARS, is_allowed_doc_url, is_current_stable_doc_url, normalized_domain_set, result_matches_domains,
 )
 from src.infra.tools.docs_search.sections import document_symbol_names, parse_doc_sections, scan_declarations
-
-
-_WINDOW_CHARS = 3200
 
 
 def _ranking_terms(query: str, requirement: RetrievalRequirement) -> dict[str, int]:
@@ -32,13 +29,13 @@ def _literal_score(text: str, terms: dict[str, int]) -> int:
 
 
 def _window_at(text: str, position: int) -> tuple[int, int]:
-    start = max(0, min(position - 400, len(text) - _WINDOW_CHARS))
+    start = max(0, min(position - 400, len(text) - DOCS_WINDOW_CHARS))
     # Prefer a complete leading line where possible, without changing the text
     # or suggesting that a possibly truncated trailing line is sufficient.
     boundary = text.find("\n", start, position)
     if boundary >= 0:
         start = boundary + 1
-    return start, min(len(text), start + _WINDOW_CHARS)
+    return start, min(len(text), start + DOCS_WINDOW_CHARS)
 
 
 def _uncovered_chars(span: tuple[int, int], selected: list[tuple[int, int]]) -> int:
@@ -67,12 +64,12 @@ def _source_candidates(
     # slot may instead use a focused window so long pages do not spend their
     # whole allowance on introductory material.
     originals = dedupe_docs_hits([
-        hit for hit in hits if 0 < len(hit.evidence.excerpt) <= _WINDOW_CHARS
+        hit for hit in hits if 0 < len(hit.evidence.excerpt) <= DOCS_WINDOW_CHARS
     ])
-    ranges = {(0, min(len(text), _WINDOW_CHARS))}
+    ranges = {(0, min(len(text), DOCS_WINDOW_CHARS))}
     target_declarations = []
     target_sections = []
-    if len(text) > _WINDOW_CHARS:
+    if len(text) > DOCS_WINDOW_CHARS:
         declarations = scan_declarations(text)
         sections = parse_doc_sections(text, title=evidence.snapshot.title, url=evidence.snapshot.source_uri,
                                       declarations=declarations)
@@ -88,7 +85,7 @@ def _source_candidates(
         # Start at the actual definition so earlier APIs do not consume the
         # window that must carry this API's following parameter descriptions.
         for item in [*target_declarations, *target_sections]:
-            ranges.add((item.start, min(len(text), item.start + _WINDOW_CHARS)))
+            ranges.add((item.start, min(len(text), item.start + DOCS_WINDOW_CHARS)))
         for term in terms:
             for match in re.finditer(re.escape(term), text, flags=re.I):
                 ranges.add(_window_at(text, match.start()))

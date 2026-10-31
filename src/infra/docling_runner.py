@@ -99,11 +99,6 @@ class DoclingRunner:
         self._closed = Event()
         self._active: dict[int, subprocess.Popen] = {}
 
-    @property
-    def active_process_count(self) -> int:
-        with self._lock:
-            return len(self._active)
-
     def close(self) -> None:
         with self._lock:
             self._closed.set()

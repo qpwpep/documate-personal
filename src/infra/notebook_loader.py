@@ -3,39 +3,19 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
-from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
 from nbformat import NotebookNode, from_dict, validate
 
 
-@dataclass(frozen=True)
-class LoadedNotebook:
-    notebook: NotebookNode
-    raw_notebook: dict[str, Any]
-    added_cell_id_count: int
-    source_content: bytes
-
-
-def load_canonical_notebook(path: str | Path) -> LoadedNotebook:
-    return parse_canonical_notebook(Path(path).read_bytes())
-
-
-def parse_canonical_notebook(source_content: bytes) -> LoadedNotebook:
+def parse_canonical_notebook(source_content: bytes) -> NotebookNode:
     raw_notebook = json.loads(source_content.decode("utf-8-sig"))
     if not isinstance(raw_notebook, dict):
         raise ValueError("Notebook payload must be an object")
-    canonical_notebook, added_cell_id_count = canonicalize_notebook_payload(raw_notebook)
-    return LoadedNotebook(
-        notebook=from_dict(canonical_notebook),
-        raw_notebook=canonical_notebook,
-        added_cell_id_count=added_cell_id_count,
-        source_content=source_content,
-    )
+    return from_dict(canonicalize_notebook_payload(raw_notebook))
 
 
-def canonicalize_notebook_payload(payload: dict[str, Any]) -> tuple[dict[str, Any], int]:
+def canonicalize_notebook_payload(payload: dict[str, Any]) -> dict[str, Any]:
     notebook = copy.deepcopy(payload)
     minor_version = notebook.get("nbformat_minor")
     validate_before_ids = (
@@ -45,7 +25,6 @@ def canonicalize_notebook_payload(payload: dict[str, Any]) -> tuple[dict[str, An
     if validate_before_ids:
         validate(notebook)
     cells = notebook.get("cells")
-    added = 0
     cell_ids: set[str] = set()
     if isinstance(cells, list):
         for cell_index, cell in enumerate(cells):
@@ -62,7 +41,6 @@ def canonicalize_notebook_payload(payload: dict[str, Any]) -> tuple[dict[str, An
                     cell_type=str(cell.get("cell_type") or ""),
                     source=normalize_cell_source(source),
                 )
-                added += 1
             cell_id = cell["id"]
             if isinstance(cell_id, str):
                 # nbformat otherwise repairs duplicates with random IDs.
@@ -71,7 +49,7 @@ def canonicalize_notebook_payload(payload: dict[str, Any]) -> tuple[dict[str, An
                 cell_ids.add(cell_id)
     if not validate_before_ids:
         validate(notebook)
-    return notebook, added
+    return notebook
 
 
 def _build_deterministic_cell_id(*, cell_index: int, cell_type: str, source: str) -> str:

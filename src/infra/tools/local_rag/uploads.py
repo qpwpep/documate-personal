@@ -30,13 +30,14 @@ from src.infra.embedding_cache import CachedEmbeddings
 from src.infra.notebook_loader import parse_canonical_notebook
 from src.infra.tools.local_rag.lexical import ChunkReference, KoreanBM25Index
 from src.infra.tools.local_rag.ranking import rank_retrieval_rows
-from src.infra.tools.local_rag.serialization import build_local_hit_bundle
+from src.infra.tools.local_rag.serialization import build_local_hits
 
 
 UPLOAD_CHUNK_SIZE = 800
 UPLOAD_CHUNK_OVERLAP = 120
 UPLOAD_CHUNKING_VERSION = "source-ranges-and-table-cells-v1"
 HYBRID_CANDIDATE_MULTIPLIER = 4
+EMBEDDING_BATCH_SIZE = 128
 
 
 @dataclass(frozen=True)
@@ -181,7 +182,7 @@ class _SourceAwareRetriever:
             raise ValueError("Search result count must be positive")
         if mode == "baseline":
             rows = self._dense.similarity_search_with_score(query, k=k, file_ids=file_ids)
-            return build_local_hit_bundle(rank_retrieval_rows(rows, query=query))[0]
+            return build_local_hits(rank_retrieval_rows(rows, query=query))
         if mode not in {"bm25", "hybrid"}:
             raise ValueError(f"Unsupported upload search mode: {mode}")
         if self._lexical_index is None:
@@ -199,7 +200,7 @@ class _SourceAwareRetriever:
         if self._hybrid_config.dense_weight > 0:
             dense_rows = self._dense.similarity_search_with_score(query, k=candidate_k, file_ids=file_ids)
         dense_rows.sort(key=lambda row: row[1])
-        dense_hits = build_local_hit_bundle(dense_rows)[0]
+        dense_hits = build_local_hits(dense_rows)
         evidence_by_id: dict[str, EvidenceRef] = {}
         fused_scores: dict[str, float] = {}
         # With coverage attenuation disabled, equal shares sum reciprocal ranks.
@@ -269,10 +270,10 @@ def _index_documents(
         # Keep each embedding/storage request bounded even for a large notebook.
         for document in documents:
             try:
-                for start in range(0, len(document.chunks), 128):
+                for start in range(0, len(document.chunks), EMBEDDING_BATCH_SIZE):
                     if ingestion is not None:
                         ingestion.check_deadline()
-                    batch = document.chunks[start:start + 128]
+                    batch = document.chunks[start:start + EMBEDDING_BATCH_SIZE]
                     if ingestion is not None:
                         provider = embeddings
                         if owns_embeddings and ingestion.deadline is not None and hasattr(embeddings, "request_timeout"):
@@ -330,8 +331,8 @@ def _parse_upload(file: UploadRecord) -> ChunkedDocument:
     if file.name.lower().endswith(".py"):
         document = chunk_python_text(text=content.decode("utf-8-sig"), **options)
     elif file.name.lower().endswith(".ipynb"):
-        loaded = parse_canonical_notebook(content)
-        document = chunk_notebook(notebook=loaded.notebook, **options)
+        notebook = parse_canonical_notebook(content)
+        document = chunk_notebook(notebook=notebook, **options)
     else:
         raise ValueError("Unsupported file type (only .py or .ipynb).")
     if not document.chunks:
