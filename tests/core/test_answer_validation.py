@@ -7,8 +7,9 @@ from src.core.planner_schema import PlannerOutput
 from src.core.request_contracts import RequestContract
 from src.runtime.nodes.validation import make_post_synthesis_validation_node
 from tests.core.helpers import make_decisions_client
-from src.runtime.nodes.validation.evidence_validator import assess_validation, build_validation_snapshot
+from src.runtime.nodes.validation.assessment import assess_validation
 from src.runtime.nodes.validation.policy import apply_validation_outcome
+from src.runtime.nodes.validation.snapshot import build_validation_snapshot
 
 
 def _snapshot(document: AnswerDocument):

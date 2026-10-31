@@ -4,12 +4,11 @@ import json
 import logging
 import time
 from collections.abc import Callable
-from typing import Any, List
+from typing import List
 from uuid import uuid4
 
 from langchain_core.messages import (
     AIMessage,
-    AnyMessage,
     BaseMessage,
     HumanMessage,
     RemoveMessage,
@@ -30,6 +29,7 @@ from src.core.conversation_memory import (
 from src.core.contracts import GraphState
 from src.core.request_contracts import UserTurnSnapshot
 from src.core.llm_errors import LLMCallError, make_problem
+from src.core.message_utils import extract_text_content
 from src.core.contracts.boundary.debug import get_debug_state
 from src.core.contracts.boundary.runtime import get_runtime_state
 from src.runtime.agent_runtime.llm_usage import record_llm_call
@@ -82,22 +82,6 @@ def keep_recent_messages(messages: List[BaseMessage], max_turns: int = 6) -> Lis
     return messages[start_index:]
 
 
-def extract_text_content(content: Any) -> str:
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        parts: list[str] = []
-        for item in content:
-            if isinstance(item, str):
-                parts.append(item)
-            elif isinstance(item, dict):
-                text = item.get("text")
-                if text:
-                    parts.append(str(text))
-        return "\n".join(parts)
-    return str(content)
-
-
 def _normalize_transcript_text(text: str) -> str:
     return " ".join(str(text or "").split()).strip()
 
@@ -120,21 +104,6 @@ def build_summary_transcript(messages: List[BaseMessage]) -> str:
             continue
         lines.append(f"{_summary_role(message)}: {text}")
     return "\n".join(lines)
-
-
-def latest_previous_ai_answer(messages: list[AnyMessage]) -> str:
-    seen_current_user = False
-    for message in reversed(messages):
-        if isinstance(message, HumanMessage):
-            if not seen_current_user:
-                seen_current_user = True
-                continue
-            break
-        if seen_current_user and isinstance(message, AIMessage):
-            text = extract_text_content(message.content).strip()
-            if text:
-                return text
-    return ""
 
 
 def make_summarize_node(

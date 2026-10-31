@@ -463,7 +463,3 @@ def check_answer_contract(contract: AnswerContract, document: Any, *, evidence: 
     check.missing_required = list(dict.fromkeys(check.missing_required))
     check.forbidden_present = list(dict.fromkeys(check.forbidden_present))
     return check
-
-
-def missing_required_content(contract: AnswerContract, document: Any) -> list[str]:
-    return check_answer_contract(contract, document).missing_required

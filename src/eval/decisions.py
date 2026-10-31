@@ -72,9 +72,8 @@ def refresh_case_decision(result: CaseResult, case: BenchmarkCase | None = None)
             assessment, decision = evaluate_case_decision(result)
     result.policy_assessment = assessment
     result.decision = decision
-    result.release_pass = result.passed = decision.passed
+    result.release_pass = decision.passed
     result.gate_failures = decision.failure_codes
-    result.final_score = result.composite_quality_score
     result.judge_gate_passed = result.judge_pass
     return decision
 

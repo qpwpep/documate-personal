@@ -14,7 +14,7 @@ from src.core.contracts.boundary.runtime import get_runtime_state
 from src.core.llm_errors import LLMCallError, make_problem
 from src.infra.logging_utils import log_event
 from src.runtime.nodes.retry import build_followup_from_routes, build_retry_update, retrieval_subject
-from src.runtime.nodes.validation.evidence_validator import collect_validation_snapshot
+from src.runtime.nodes.validation.snapshot import collect_validation_snapshot
 from src.runtime.nodes.validation.policy import build_followup_updates
 from src.runtime.nodes.validation.route_policy import non_retryable_retrieval_problem
 from src.runtime.nodes.validation.semantic import DecisionEvaluator

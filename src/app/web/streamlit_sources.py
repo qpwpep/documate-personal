@@ -394,12 +394,12 @@ def _format_anchor(anchor: SourceAnchor) -> str:
     return " · ".join(parts)
 
 
-def render_code(text: str, *, language: str, line_numbers: bool = False) -> None:
+def render_code(text: str, *, language: str) -> None:
     # The code widget lays out LF lines. Normalize only its display input;
     # retained evidence and checked answer content keep their original bytes.
     display_text = text.replace("\r\n", "\n").replace("\r", "\n")
     # Streamlit removes one boundary newline; framing preserves blank lines.
-    st.code("\n" + display_text + "\n", language=language, line_numbers=line_numbers)
+    st.code("\n" + display_text + "\n", language=language, line_numbers=False)
 
 
 def _line_range(start: int, end: int) -> str:

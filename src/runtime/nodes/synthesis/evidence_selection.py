@@ -30,10 +30,6 @@ def _tokens(text: str) -> set[str]:
     return {token for token in tokens if token and token not in _STOPWORDS}
 
 
-def route_for_evidence(item: EvidenceRef) -> str:
-    return item.route
-
-
 def upload_file_id(item: EvidenceRef) -> str:
     return str(item.element.metadata.get("file_id") or "") if item.route == "upload" else ""
 
@@ -501,6 +497,10 @@ def _doc_passages(item: EvidenceRef, limit: int) -> list[EvidenceRef]:
 
 _DOC_CANDIDATES_PER_SOURCE = 8
 _DOC_CANDIDATES_TOTAL = 96
+# These selection limits bound semantic-assessment cost, not provider API capacity.
+_DOC_CANDIDATES_PER_REQUIREMENT_MIN = 12
+_DOC_CANDIDATES_PER_REQUIREMENT_MAX = 32
+_DOC_CANDIDATES_PER_REQUIREMENT_FACTOR = 2
 
 
 def prepare_evidence_candidates(
@@ -528,9 +528,17 @@ def prepare_evidence_candidates(
                 break
         pools.append(pool)
 
-    limits = {task.requirement_id: min(32, max(12, 2 * (
-        len(task.requirement.aspects) + len(task.requirement.evidence_needs) + 1)))
-        for task in planner_output.tasks}
+    limits = {
+        task.requirement_id: min(
+            _DOC_CANDIDATES_PER_REQUIREMENT_MAX,
+            max(
+                _DOC_CANDIDATES_PER_REQUIREMENT_MIN,
+                _DOC_CANDIDATES_PER_REQUIREMENT_FACTOR
+                * (len(task.requirement.aspects) + len(task.requirement.evidence_needs) + 1),
+            ),
+        )
+        for task in planner_output.tasks
+    }
     for hit in select_evidence_hits(user_input=user_input, hits=hits, planner_output=planner_output):
         item = hit.evidence
         applicable = tasks_for_hit(hit, planner_output)
@@ -653,7 +661,9 @@ def prepare_evidence_candidates(
                     continue
                 if candidate.evidence.route == "docs":
                     if (docs_count >= _DOC_CANDIDATES_TOTAL
-                            or counts.get(candidate.requirement_id, 0) >= limits.get(candidate.requirement_id, 12)):
+                            or counts.get(candidate.requirement_id, 0) >= limits.get(
+                                candidate.requirement_id, _DOC_CANDIDATES_PER_REQUIREMENT_MIN,
+                            )):
                         continue
                     docs_count += 1
                     counts[candidate.requirement_id] = counts.get(candidate.requirement_id, 0) + 1

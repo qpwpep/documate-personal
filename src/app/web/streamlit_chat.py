@@ -242,8 +242,7 @@ def render_answer_response(
         if unit_issues:
             with st.expander(f"이 내용의 한계 ({len(unit_issues)}개)"):
                 for issue in unit_issues:
-                    preview = " ".join(unit_by_path[issue.unit_id].text.split())
-                    st.caption("관련 내용: " + (preview[:117] + "…" if len(preview) > 120 else preview))
+                    st.caption("관련 내용: " + _content_preview(unit_by_path[issue.unit_id].text))
                     st.warning(f"답변에 기록된 한계: {issue.message}")
         for path, unit in units:
             check = checks.get(path)
@@ -386,9 +385,7 @@ def _render_validation_scope(
             if format_check is not None:
                 _render_semantic_result("답변 서식 조건 충족", format_check, report.threshold)
             for index, (path, unit) in enumerate(units, start=1):
-                preview = " ".join(unit.text.split())
-                if len(preview) > 120:
-                    preview = preview[:117] + "…"
+                preview = _content_preview(unit.text)
                 if unit.source_location is not None:
                     preview = literal_markdown(preview)
                 st.markdown(f"**내용 {index}** · {preview}")
@@ -396,6 +393,11 @@ def _render_validation_scope(
                     "근거 지지", semantic_checks.get(("grounded", path)),
                     report.threshold if report is not None else None,
                 )
+
+
+def _content_preview(text: str) -> str:
+    preview = " ".join(text.split())
+    return preview[:117] + "…" if len(preview) > 120 else preview
 
 
 def _render_semantic_result(label: str, check: SemanticCheck | None, threshold: float | None) -> None:

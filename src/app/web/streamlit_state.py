@@ -183,10 +183,6 @@ def get_messages() -> list[ChatMessage]:
     return get_conversation().messages
 
 
-def append_message(message: ChatMessage) -> None:
-    get_messages().append(message)
-
-
 def reset_chat_session(logger: logging.Logger) -> None:
     if get_conversation().is_busy and get_conversation().chat_task is None:
         return

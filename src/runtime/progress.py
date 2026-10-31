@@ -99,18 +99,6 @@ class ProgressEmitter:
                 payload[str(key)] = value
         self._publish("progress_snapshot", payload)
 
-    def emit_error(self, *, message: str, stage: StageName | None = None) -> None:
-        with self._lock:
-            active_stage = stage or self._current_stage
-            self._stop_heartbeat_locked()
-            self._current_stage = None
-            self._current_stage_started = 0.0
-
-        payload = {"message": str(message)}
-        if active_stage:
-            payload["stage"] = active_stage
-        self._publish("error", payload)
-
     def emit_final_response(self, payload: dict[str, Any]) -> None:
         with self._lock:
             self._stop_heartbeat_locked()

@@ -48,7 +48,6 @@ def services(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
     monkeypatch.setattr(process_client, "start_background_process", start)
     monkeypatch.setattr(process_client, "terminate_process_tree", stop)
-    monkeypatch.setattr(process_client, "is_process_alive", lambda pid, expected_create_time=None: pid in running)
     monkeypatch.setattr(process_client, "resolve_service_process", resolve)
     monkeypatch.setattr(process_client, "get_process_create_time", lambda pid: float(pid))
     monkeypatch.setattr(process_client, "is_port_open", lambda port: port in occupied)
@@ -108,11 +107,7 @@ def test_restart_without_selector_preserves_legacy_streamlit_state(services):
     assert state.load_service_state().ui == "streamlit"
 
 
-def test_missing_state_does_not_discover_or_stop_a_user_process(services, monkeypatch):
-    def unexpected_discovery(*_args):
-        raise AssertionError("Unrecorded user processes must not be adopted for termination")
-
-    monkeypatch.setattr(process_client, "find_process_pid_by_tokens", unexpected_discovery)
+def test_missing_state_does_not_discover_or_stop_a_user_process(services):
     services.running.add(999)
     assert cli.main(["stopweb"]) == 0
     assert services.running == {999}

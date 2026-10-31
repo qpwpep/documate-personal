@@ -20,7 +20,7 @@ from src.infra.llm_boundary import capture_llm_diagnostics
 from src.core.contracts.debug import DEBUG_SCHEMA_VERSION
 from src.core.contracts.provenance import AnswerProvenance
 from src.core.contracts.routing import validate_route_decisions
-from src.core.contracts.boundary.runtime import parse_runtime_state, parse_session_metadata
+from src.core.contracts.boundary.runtime import parse_runtime_state
 from src.core.contracts.boundary.response import get_response_state
 from src.runtime.graph_builder import StageExecutionError, build_agent_graph
 from src.core.latency import build_latency_breakdown, elapsed_ms, make_stage_latency_event
@@ -58,10 +58,6 @@ class AgentFlowManager:
     def messages(self) -> list[Any]:
         return self.session.messages
 
-    @messages.setter
-    def messages(self, value: list[Any]) -> None:
-        self.session.messages = list(value or [])
-
     @property
     def memory_summary(self) -> str | None:
         return self.session.memory_summary
@@ -69,18 +65,6 @@ class AgentFlowManager:
     @memory_summary.setter
     def memory_summary(self, value: str | None) -> None:
         self.session.memory_summary = value
-
-    @property
-    def session_metadata(self) -> SessionMetadata:
-        return self.session.session_metadata
-
-    @session_metadata.setter
-    def session_metadata(self, value: SessionMetadata | dict[str, Any] | None) -> None:
-        self.session.session_metadata = parse_session_metadata(value)
-
-    @property
-    def upload_retriever_handle(self):
-        return self.session.upload_retriever_handle
 
     def set_session_metadata(self, session_metadata: SessionMetadata | None) -> None:
         self.session.set_session_metadata(session_metadata)

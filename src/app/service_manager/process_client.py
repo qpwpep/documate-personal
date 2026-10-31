@@ -69,19 +69,6 @@ def get_process_create_time(pid: int | None) -> float | None:
         return None
 
 
-def is_process_alive(
-    pid: int | None,
-    expected_create_time: float | None = None,
-) -> bool:
-    process = get_process(pid=pid, expected_create_time=expected_create_time)
-    if process is None:
-        return False
-    try:
-        return process.is_running() and process.status() != psutil.STATUS_ZOMBIE
-    except (psutil.Error, OSError):
-        return False
-
-
 def is_port_open(port: int, host: str = "127.0.0.1", timeout: float = 0.2) -> bool:
     try:
         with socket.create_connection((host, port), timeout=timeout):
@@ -102,35 +89,6 @@ def wait_for_port_open(
             return True
         time.sleep(interval_sec)
     return is_port_open(port=port, host=host)
-
-
-def find_process_pid_by_tokens(tokens: list[str]) -> int | None:
-    normalized_tokens = [normalize_cmd_token(token) for token in tokens if token]
-    if not normalized_tokens:
-        return None
-
-    matches: list[tuple[float, int]] = []
-    for process in psutil.process_iter(["pid", "cmdline", "create_time"]):
-        try:
-            cmdline = process.info.get("cmdline") or []
-            normalized_cmdline = [normalize_cmd_token(str(part)) for part in cmdline if part]
-            if not normalized_cmdline:
-                continue
-            if not all(
-                any(token in cmd_part for cmd_part in normalized_cmdline)
-                for token in normalized_tokens
-            ):
-                continue
-
-            create_time = float(process.info.get("create_time") or 0.0)
-            matches.append((create_time, process.pid))
-        except (psutil.Error, OSError, ValueError, TypeError):
-            continue
-
-    if not matches:
-        return None
-    matches.sort(reverse=True)
-    return matches[0][1]
 
 
 def start_background_process(

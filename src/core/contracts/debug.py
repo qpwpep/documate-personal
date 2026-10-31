@@ -233,9 +233,6 @@ class DebugPayload(DebugDiagnostics):
     route_decisions: list[RoutingDecision] = Field(default_factory=list)
 
 
-AgentDebugPayload = DebugPayload
-
-
 def normalize_recorded_routes(values: Iterable[str] | None) -> list[str]:
     normalized = {str(value).strip() for value in values or []}
     return [route for route in RECORDED_ROUTE_ORDER if route in normalized]

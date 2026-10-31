@@ -15,10 +15,10 @@ from src.core.decisions import DecisionResult
 from src.core.evidence import EvidenceRef, selected_source_anchors
 from src.core.evidence_prompt import source_line_prompt_records, table_cell_prompt_records
 from src.core.llm_errors import LLMCallError, make_problem
+from src.core.message_utils import extract_text_content
 from src.core.python_source import PythonSourceMap
 from src.core.planner_schema import RetrievalTask
 from src.infra.tools.docs_search.policy import is_current_stable_doc_url
-from src.runtime.nodes.session import extract_text_content
 from src.runtime.nodes.validation.models import ValidationAssessment, ValidationSnapshot
 from src.runtime.nodes.validation.policy import retrieval_gap_message
 

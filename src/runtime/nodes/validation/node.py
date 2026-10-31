@@ -10,17 +10,14 @@ from src.core.contracts.boundary.graph import get_retry_state
 from src.core.contracts.boundary.response import get_response_state
 from src.infra.logging_utils import log_event
 from src.runtime.nodes.retry import build_retry_update
-from src.runtime.nodes.validation.evidence_validator import ValidationAssessment, ValidationSnapshot, assess_validation, collect_validation_snapshot
+from src.runtime.nodes.validation.assessment import assess_validation
+from src.runtime.nodes.validation.models import ValidationAssessment, ValidationSnapshot
 from src.runtime.nodes.validation.policy import add_retrieval_gap_issues, apply_validation_outcome
-from src.runtime.nodes.validation.snapshot import detect_packet_coverage_gaps
+from src.runtime.nodes.validation.snapshot import collect_validation_snapshot, detect_packet_coverage_gaps
 from src.runtime.nodes.validation.semantic import DecisionEvaluator, assess_post_semantics
 
 
 logger = logging.getLogger(__name__)
-
-
-def _assess_route_failures(snapshot: ValidationSnapshot) -> ValidationAssessment:
-    return assess_validation(snapshot)
 
 
 def _deterministic_issues(assessment: ValidationAssessment) -> dict[str, list[str]]:
@@ -119,21 +116,6 @@ def _decide_retry_outcome(
     return needs_retry, next_retry_context, retrieval_feedback, local_errors
 
 
-def _apply_validation_outcome(
-    *,
-    snapshot: ValidationSnapshot,
-    assessment: ValidationAssessment,
-    attempt: int,
-    needs_retry: bool,
-) -> GraphState:
-    return apply_validation_outcome(
-        snapshot=snapshot,
-        assessment=assessment,
-        attempt=attempt,
-        needs_retry=needs_retry,
-    )
-
-
 def make_post_synthesis_validation_node(
     verbose: bool, *, decisions_client: DecisionEvaluator, pass_threshold: float = 0.8,
     max_turns: int = 6,
@@ -160,7 +142,7 @@ def make_post_synthesis_validation_node(
             }
 
         snapshot, local_errors = collect_validation_snapshot(state, max_turns=max_turns)
-        assessment = _assess_route_failures(snapshot)
+        assessment = assess_validation(snapshot)
         assess_post_semantics(
             snapshot, assessment, decisions_client=decisions_client,
             threshold=pass_threshold, attempt=max(1, response.synthesis_attempt),
@@ -194,7 +176,7 @@ def make_post_synthesis_validation_node(
             "retry": next_retry_context,
         }
         updates.update(
-            _apply_validation_outcome(
+            apply_validation_outcome(
                 snapshot=snapshot,
                 assessment=assessment,
                 attempt=response.synthesis_attempt,

@@ -28,8 +28,6 @@ SynthesisMode = Literal[
     "deterministic_grounded_direct",
 ]
 
-LatencyEventKind = Literal["stage", "retrieval_route", "synthesis_attempt"]
-
 _STAGE_TOTAL_FIELD_BY_NAME: dict[StageName, str] = {
     "summarize": "summarize_ms",
     "planner": "planner_ms",

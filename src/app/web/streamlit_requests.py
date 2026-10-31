@@ -29,7 +29,7 @@ class UploadSubmission:
 
 
 def queue_chat(conversation: Conversation, prompt: str) -> None:
-    if conversation.is_read_only or conversation.pending_request is not None or conversation.operation_in_progress:
+    if conversation.is_read_only or conversation.is_busy:
         return
     conversation.pending_request = ChatSubmission(prompt)
 
@@ -106,12 +106,12 @@ def edit_saved_prompt(conversation: Conversation) -> None:
 
 
 def queue_save(conversation: Conversation, answer_id: str) -> None:
-    if conversation.is_read_only or conversation.pending_request is not None or conversation.operation_in_progress:
+    if conversation.is_read_only or conversation.is_busy:
         return
     conversation.pending_request = SaveSubmission(answer_id)
 
 
 def queue_upload(conversation: Conversation) -> None:
-    if conversation.is_read_only or conversation.pending_request is not None or conversation.operation_in_progress:
+    if conversation.is_read_only or conversation.is_busy:
         return
     conversation.pending_request = UploadSubmission()
