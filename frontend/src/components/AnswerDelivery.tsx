@@ -74,16 +74,24 @@ export function AnswerDelivery({ client, answerId, response, currentExport, onEx
       {ready ? <>
         <p>다운로드 가능 기한: <time dateTime={new Date(artifact.expires_at * 1000).toISOString()}>
           {new Date(artifact.expires_at * 1000).toLocaleString('ko-KR')}</time></p>
-        <a href={client.downloadUrl(artifact.filename)} download={artifact.filename}>TXT 다운로드</a>
-        <button type="button" disabled={disabled || busy || unavailable} onClick={() => void save()}>
+        <a className="answer-tool" href={client.downloadUrl(artifact.filename)} download={artifact.filename}><DownloadIcon />TXT 다운로드</a>
+        <button className="answer-tool" type="button" disabled={disabled || busy || unavailable} onClick={() => void save()}>
+          <DownloadIcon />
           {busy ? '저장 확인 중…' : '저장 파일 다시 확인'}
         </button>
       </> : <>
         {retry && !unavailable && <p>“저장 다시 시도”는 이 답변의 본문과 출처를 그대로 사용합니다.</p>}
-        <button type="button" disabled={disabled || busy || unavailable} onClick={() => void save()}>
+        <button className="answer-tool" type="button" disabled={disabled || busy || unavailable} onClick={() => void save()}>
+          <DownloadIcon />
           {busy ? 'TXT 저장 중…' : retry ? '저장 다시 시도' : expired ? 'TXT 다시 만들기' : 'TXT 파일 만들기'}
         </button>
       </>}
     </section>
   );
+}
+
+function DownloadIcon() {
+  return <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M12 3v12m-4-4 4 4 4-4M5 15v5h14v-5" />
+  </svg>;
 }

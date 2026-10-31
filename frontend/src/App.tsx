@@ -56,6 +56,8 @@ export function App({ apiBaseUrl = '' }: { apiBaseUrl?: string }) {
   const requests = useRef(new Map<string, AbortController>());
   const validations = useRef(new Map<string, number>());
   const input = useRef<HTMLTextAreaElement>(null);
+  const latestTurn = useRef<HTMLElement>(null);
+  const previousView = useRef<{ id: string; turnCount: number } | null>(null);
 
   const mutate = useCallback((update: (value: ConversationState) => ConversationState) => {
     if (!mounted.current) return;
@@ -146,6 +148,14 @@ export function App({ apiBaseUrl = '' }: { apiBaseUrl?: string }) {
   const ready = config !== null && conversation.connection === 'ready';
   const queryTooLong = config !== null && (Array.from(conversation.draft).length > config.query.max_chars
     || new TextEncoder().encode(conversation.draft).byteLength > config.query.max_utf8_bytes);
+
+  useEffect(() => {
+    // Follow an explicitly submitted question, never an incoming answer update.
+    if (previousView.current?.id === conversation.id && conversation.turns.length > previousView.current.turnCount) {
+      latestTurn.current?.scrollIntoView?.({ block: 'start' });
+    }
+    previousView.current = { id: conversation.id, turnCount: conversation.turns.length };
+  }, [conversation.id, conversation.turns.length]);
 
   useEffect(() => {
     const textarea = input.current;
@@ -273,6 +283,8 @@ export function App({ apiBaseUrl = '' }: { apiBaseUrl?: string }) {
     ? `첨부 준비 실패${conversation.manifest ? ` · 기존 자료 ${conversation.manifest.files.length}개 유지` : ''}`
     : !conversation.manifest ? '첨부 연결 확인 중'
       : `${readOnly ? '이전 첨부 기록' : '첨부 자료'} ${conversation.manifest.files.length}개`;
+  const isEmpty = conversation.turns.length === 0;
+  const showExamples = isEmpty && ready && !conversation.busy && !attachments.hasPending;
 
   return (
     <div className="app-layout">
@@ -284,39 +296,34 @@ export function App({ apiBaseUrl = '' }: { apiBaseUrl?: string }) {
         <SlackSettings value={conversation.slack} baseUrl={apiBaseUrl} disabled={readOnly || conversation.busy !== null}
           onChange={(slack) => updateConversation(conversation.id, (item) => ({ ...item, slack }))} />
       </ConversationSidebar>
-      <div className="app-shell" inert={sidebarModal}>
+      <div className={`app-shell${isEmpty ? ' is-empty' : ''}`} inert={sidebarModal}>
         <header className="app-header">
-          <div className="brand"><span className="brand-mark" aria-hidden="true">DM</span><span>DocuMate<small>{conversationTitle(conversation)}</small></span></div>
+          <div className="app-heading">DocuMate<small>{conversationTitle(conversation)}</small></div>
           <span className="header-status">{readOnly ? '읽기 전용 · ' : ''}{attachmentStatus}</span>
         </header>
         {storageError && <p className="notice" role="alert">{storageError}</p>}
-        <main className="conversation" aria-label="질문과 답변">
-          {conversation.turns.length === 0 && ready && !conversation.busy && !attachments.hasPending && <section className="welcome">
-            <div className="welcome-intro"><h1>문서와 자료에 질문하세요</h1>
-              <p>공식 문서로 사용법을 확인하거나, 입력창의 + 버튼으로 파일을 첨부하세요.<br />답변의 ‘근거’에서 사용한 원문과 위치를 확인할 수 있습니다.</p>
-            </div>
-            <div className="question-examples" aria-label="질문 예시">
-              <strong>질문 예시</strong>
-              <p className="example-hint">{conversation.draft ? '작성 중인 질문을 먼저 보내거나 지운 뒤 다른 예시를 선택하세요.' : '예시를 선택하면 입력창에 채워집니다. 확인하거나 수정한 뒤 전송하세요.'}</p>
-              <div className="examples">{primaryExamples.map((prompt) => <button className="secondary-button" type="button" key={prompt}
-                disabled={Boolean(conversation.draft)} onClick={() => fillExample(prompt)}>{prompt}</button>)}</div>
-              <details className="more-examples"><summary>다른 질문 예시와 지원 문서</summary>
-                <div className="examples">{examples.slice(2).map((prompt) => <button className="secondary-button" type="button" key={prompt}
-                  disabled={Boolean(conversation.draft)} onClick={() => fillExample(prompt)}>{prompt}</button>)}</div>
-                <p><strong>지원하는 공식 문서</strong></p>
-                <div className="docs-row">{supportedDocs.map((name) => <span key={name}>{name}</span>)}</div>
-              </details>
+        <main className="conversation" aria-label="질문과 답변" onFocusCapture={(event) => keepAnswerFocusVisible(event.target)}>
+          {isEmpty && <section className="welcome">
+            <div className="welcome-intro">
+              <span className="greeting-mark" aria-hidden="true">✳</span>
+              <p className="eyebrow">나의 문서 학습 파트너</p>
+              <h1>문서와 자료에 질문하세요</h1>
+              <p>궁금한 개념부터 내 자료의 핵심까지,<br />근거를 따라 함께 이해해 보세요.</p>
             </div>
           </section>}
           {conversation.turns.map((turn, index) => {
             const result = displayedResult(turn);
             const recovery = index === conversation.turns.length - 1 && !turn.receiving && canRecover(turn)
               && !attachments.hasPending && conversation.attachments.files.length === 0;
-            return <section className="turn" key={turn.id} aria-label="대화 기록">
-              <div className="user-message"><span className="message-label">내 질문</span><p>{turn.query}</p></div>
-              <div className="assistant-message"><span className="message-label">DocuMate</span>
+            return <section className="turn" key={turn.id} ref={index === conversation.turns.length - 1 ? latestTurn : undefined} aria-label="대화 기록">
+              <div className="user-message"><span className="visually-hidden">내 질문</span><p>{turn.query}</p></div>
+              <div className="assistant-message">
+                <div className="assistant-heading">
+                  <span className="assistant-avatar" aria-hidden="true">✳</span>
+                  <span className="message-label">DocuMate</span>
+                  {result && <span className={`result-status result-${result.status}`}>{resultLabels[result.status]}</span>}
+                </div>
                 {result && <>
-                  <p className={`result-status result-${result.status}`}>{resultLabels[result.status]}</p>
                   {result.response ? <AnswerView response={result.response} turn={result} /> : <>
                     {result.message && <p className="result-message">{result.message}</p>}
                     {result.problem && result.problem.message !== result.message && <p className="notice">{result.problem.message}</p>}
@@ -332,8 +339,8 @@ export function App({ apiBaseUrl = '' }: { apiBaseUrl?: string }) {
                 </>}
                 {turn.notices.length > 0 && <details className="transport-notices"><summary>수신 중 안내</summary>{turn.notices.map((notice, i) => <p key={i}>{notice}</p>)}</details>}
                 {turn.error && <p role="alert" className="notice">{turn.error}</p>}
-                {turn.receiving && <p className="pending-label">답변을 기다리고 있습니다.</p>}
-                {turn.requestId && <p className="request-id">요청 ID: {turn.requestId}</p>}
+                {turn.receiving && <p className="pending-label"><span className="pending-dot" aria-hidden="true" />답변을 기다리고 있습니다.</p>}
+                {turn.requestId && <details className="request-details"><summary>요청 정보</summary><p className="request-id">요청 ID: {turn.requestId}</p></details>}
                 {recovery && <div className="recovery-actions">
                   {canRetry(turn) && <button type="button" className="secondary-button" disabled={!ready || conversation.busy !== null}
                     onClick={() => void sendQuestion(conversation.id, turn.query)}>같은 질문 다시 보내기</button>}
@@ -343,10 +350,6 @@ export function App({ apiBaseUrl = '' }: { apiBaseUrl?: string }) {
               </div>
             </section>;
           })}
-          <details className="upload-guidance"><summary>첨부 형식과 용량 안내</summary>
-            {config && <p>{[...config.upload.accepted_suffixes].sort().join(' · ')} / 최대 {config.upload.max_files}개 / 파일당 {config.upload.max_file_bytes / (1024 * 1024)} MiB / 전체 {config.upload.max_total_bytes / (1024 * 1024)} MiB</p>}
-            <p>입력창의 +로 파일을 선택한 뒤 전송하세요. 파일만 먼저 전송할 수도 있습니다.</p>
-          </details>
         </main>
         <footer className="composer-area">
           <div className={`connection-status${ready && !conversation.busy ? ' visually-hidden' : ''}`} role="status" aria-live="polite">{connectionMessage}</div>
@@ -359,29 +362,72 @@ export function App({ apiBaseUrl = '' }: { apiBaseUrl?: string }) {
           </details>}
           {attachments.panel}
           <form className="composer" onSubmit={submit}>
-            {attachments.picker}
             <label className="visually-hidden" htmlFor="query">질문</label>
             <textarea ref={input} id="query" value={conversation.draft} readOnly={readOnly}
               onChange={(event) => updateConversation(conversation.id, (item) => ({ ...item, draft: event.target.value }))}
-              placeholder="질문을 입력하세요" rows={1} aria-invalid={queryTooLong || undefined}
+              placeholder={isEmpty ? '질문을 입력하세요' : '이어서 질문하세요'} rows={1} aria-invalid={queryTooLong || undefined}
               aria-describedby={queryTooLong ? 'query-limit' : 'composer-hint'}
               onKeyDown={(event) => {
                 if (event.key === 'Enter' && !event.shiftKey && !event.ctrlKey && !event.altKey && !event.metaKey && !event.nativeEvent.isComposing) {
                   event.preventDefault(); event.currentTarget.form?.requestSubmit();
                 }
               }} />
-            <div className="composer-actions"><p id="composer-hint" className="visually-hidden">Enter로 전송 · Shift+Enter로 줄바꿈</p>
+            <div className="composer-toolbar">
+              {attachments.picker}
+              <span className="composer-context">공식 문서와 첨부 자료</span>
+              <div className="composer-actions"><p id="composer-hint" className="visually-hidden">Enter로 전송 · Shift+Enter로 줄바꿈</p>
               {conversation.busy === 'chat'
                 ? <button type="button" className="secondary-button" onClick={() => requests.current.get(conversation.id)?.abort()}>응답 수신 중단</button>
                 : <button type="submit" aria-label={conversation.draft.trim() ? '질문 보내기' : conversation.attachments.files.length ? '첨부만 전송' : '질문 보내기'} disabled={!ready || conversation.busy !== null || queryTooLong || attachments.hasPending
                   || (!conversation.draft.trim() && !conversation.attachments.files.length)}><span aria-hidden="true">↑</span></button>}
             </div>
+            </div>
           </form>
           {queryTooLong && <p id="query-limit" role="alert" className="notice">질문이 서버의 길이 제한을 넘었습니다. 내용을 나누어 보내 주세요.</p>}
+          <p className="composer-footnote">답변의 근거에서 원문을 확인하세요.</p>
+          {showExamples && <section className="question-examples" aria-label="질문 예시">
+            <p className="example-heading">이렇게 시작해 보세요</p>
+            <div className="examples">{primaryExamples.map((prompt, index) => <button className="secondary-button" type="button" key={prompt}
+              aria-label={prompt} disabled={Boolean(conversation.draft)} onClick={() => fillExample(prompt)}>
+              <span className="example-icon" aria-hidden="true">{uploadExamples.includes(prompt) ? '▤' : index === 0 ? '⌘' : '↗'}</span>
+              <span className="example-copy"><strong>{uploadExamples.includes(prompt) ? '내 자료 이해하기' : index === 0 ? '공식 문서로 알아보기' : '예제로 쉽게 배우기'}</strong><small>{prompt}</small></span>
+              <span className="example-arrow" aria-hidden="true">↗</span>
+            </button>)}</div>
+            <p className="example-hint">{conversation.draft ? '작성 중인 질문을 먼저 보내거나 지운 뒤 다른 예시를 선택하세요.' : '예시를 선택하면 입력창에 채워집니다. 확인하거나 수정한 뒤 전송하세요.'}</p>
+            <details className="more-examples"><summary>다른 질문 예시와 지원 문서</summary>
+              <div className="examples">{examples.slice(2).map((prompt) => <button className="secondary-button" type="button" key={prompt}
+                disabled={Boolean(conversation.draft)} onClick={() => fillExample(prompt)}>{prompt}</button>)}</div>
+              <p><strong>지원하는 공식 문서</strong></p>
+              <div className="docs-row">{supportedDocs.map((name) => <span key={name}>{name}</span>)}</div>
+            </details>
+          </section>}
+          <details className="upload-guidance"><summary>첨부 형식과 용량 안내</summary>
+            {config && <p>{[...config.upload.accepted_suffixes].sort().join(' · ')} / 최대 {config.upload.max_files}개 / 파일당 {config.upload.max_file_bytes / (1024 * 1024)} MiB / 전체 {config.upload.max_total_bytes / (1024 * 1024)} MiB</p>}
+            <p>입력창의 +로 파일을 선택한 뒤 전송하세요. 파일만 먼저 전송할 수도 있습니다.</p>
+          </details>
         </footer>
       </div>
     </div>
   );
+}
+
+function keepAnswerFocusVisible(control: HTMLElement) {
+  // Evidence dialogs manage their own scrolling without moving the conversation behind them.
+  if (control.closest('dialog')) return;
+  // Wait until the browser has finished its own focus scroll before measuring.
+  requestAnimationFrame(() => {
+    if (document.activeElement !== control) return;
+    const header = document.querySelector<HTMLElement>('.app-header');
+    if (!header || !['fixed', 'sticky'].includes(getComputedStyle(header).position)) return;
+    const composer = document.querySelector<HTMLElement>('.composer-area');
+    // Leave room for the focus outline between the sticky header and composer.
+    const top = header.getBoundingClientRect().bottom + 8;
+    const bottom = (composer && ['fixed', 'sticky'].includes(getComputedStyle(composer).position)
+      ? Math.min(window.innerHeight, composer.getBoundingClientRect().top) : window.innerHeight) - 8;
+    const bounds = control.getBoundingClientRect();
+    if (bounds.top < top) window.scrollBy(0, bounds.top - top);
+    else if (bounds.bottom > bottom) window.scrollBy(0, bounds.bottom - bottom);
+  });
 }
 
 function displayedResult(turn: ChatTurn): AgentResponse | null {

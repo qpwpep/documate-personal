@@ -96,7 +96,8 @@ export function AnswerView({ response, turn }: { response: AnswerResponse; turn?
                     const citation = citations.get(ref);
                     return citation && (
                       <button className="secondary-button" type="button" key={ref} onClick={(event) => openCitation(citation, event.currentTarget)}>
-                        근거 [{citation.number}] {citation.evidence.snapshot.title || citation.evidence.snapshot.source_uri}
+                        <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6"><path d="M14 3H6a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8z" /><path d="M14 3v5h5M8 12h8M8 16h6" /></svg>
+                        <span>근거 [{citation.number}] {citation.evidence.snapshot.title || citation.evidence.snapshot.source_uri}</span>
                       </button>
                     );
                   })}
@@ -157,7 +158,10 @@ function BodyBlock({ block, citations, onCitation }: { block: AnswerBlock; citat
       const label = block.content.basis === 'excerpt' ? '원문 발췌'
         : `${basis ? `${basis} · ` : ''}${block.inline ? '인라인 코드' : '코드 블록'} · 실행 확인 안 됨`;
       return <>
-        {block.inline ? <p><code>{block.content.text}</code></p> : <pre><code>{block.content.text}</code></pre>}
+        {block.inline ? <p><code>{block.content.text}</code></p> : <div className="answer-code">
+          <div className="answer-code-heading"><span>{block.language || '코드'}</span><span aria-hidden="true">&lt;/&gt;</span></div>
+          <pre><code>{block.content.text}</code></pre>
+        </div>}
         <p className="answer-caption">{label} <CitationLinks unit={block.content} citations={citations} onCitation={onCitation} /></p>
       </>;
     }
@@ -252,7 +256,7 @@ function ValidationSummary({ response, units, incomplete, showLimits }: { respon
       : issueCodes.has('source_location_unverified')
         ? <p className="answer-caption">출처에서 원문 위치를 확인하거나, 위치를 확인할 수 있는 원본 파일을 첨부해 주세요.</p>
         : null)}
-    <details><summary>검증 상세</summary>
+    <details className="validation-details"><summary>검증 상세</summary>
       <p>{resolved ? `출처 연결: 내용 ${resolved}개에 출처가 연결되어 있습니다.` : '출처 연결: 이 답변에 연결된 출처가 없습니다.'}</p>
       <p>{excerpts.size ? `원문 발췌 ${excerpts.size}개 중 원문 일치 ${exact}개. 보관한 원문과 일치하는지 확인합니다.` : '원문 발췌: 자료에서 그대로 옮긴 내용은 없습니다.'}</p>
       {units.some(({ isCode }) => isCode) && <p>실행 확인: 코드 형식으로 표시된 내용의 실행 결과는 확인하지 않았습니다.</p>}

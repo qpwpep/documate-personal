@@ -81,8 +81,15 @@ export function ConversationSidebar({ items, activeId, onSelect, onNew, disabled
         if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
         else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
       }}>
-      <div className="sidebar-heading"><div className="brand"><span className="brand-mark" aria-hidden="true">DM</span><strong>DocuMate</strong></div><button ref={closeButton} type="button" className="sidebar-close secondary-button" aria-label="메뉴 닫기" onClick={close}><span aria-hidden="true">«</span></button></div>
-      <button type="button" className="new-conversation" disabled={disabled} onClick={() => { onNew(); if (mobile) close(); }}>새 채팅</button>
+      <div className="sidebar-heading"><div className="brand"><span className="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7"><path d="M12 6.5C9 4.5 5.5 4 3 5v14c3-1 6-.5 9 1.5 3-2 6-2.5 9-1.5V5c-2.5-1-6-.5-9 1.5Z" /><path d="M12 6.5v14" /></svg>
+      </span><strong>DocuMate</strong></div><button ref={closeButton} type="button" className="sidebar-close secondary-button" aria-label="메뉴 닫기" onClick={close}>
+        <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6"><rect x="3" y="4" width="18" height="16" rx="3" /><path d="M9 4v16" /></svg>
+      </button></div>
+      <button type="button" className="new-conversation" disabled={disabled} onClick={() => { onNew(); if (mobile) close(); }}>
+        <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7"><path d="m15 4 5 5M4 20l5-1 12-12a2 2 0 0 0-5-5L4 14v6Z" /></svg>
+        새 채팅<span aria-hidden="true" className="new-conversation-plus">+</span>
+      </button>
       <nav aria-label="최근 대화">
         <p className="sidebar-section-label">최근 대화</p>
         {recentItems.map((item) => <button type="button" className="conversation-choice" key={item.id}
@@ -96,6 +103,7 @@ export function ConversationSidebar({ items, activeId, onSelect, onNew, disabled
         </select>
         <p className="sidebar-help">이 탭에서 새로고침해도 대화와 초안을 복원합니다. 서버 세션이 만료되면 기존 기록은 읽기 전용으로 남습니다.</p>
       </details>
+      <div className="sidebar-utilities">
       {attachments}
       <details className="theme-settings"><summary>화면 설정</summary>
         <fieldset className="settings-options" disabled={disabled}><legend>테마</legend>
@@ -106,6 +114,8 @@ export function ConversationSidebar({ items, activeId, onSelect, onNew, disabled
         </fieldset>
       </details>
       {children}
+      </div>
+      <div className="sidebar-footer"><span className="workspace-avatar" aria-hidden="true">D</span><div><strong>나의 작업 공간</strong><span>문서로 배우고, 근거로 확인하기</span></div></div>
     </aside>
   </>;
 }
