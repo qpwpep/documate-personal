@@ -1,14 +1,10 @@
 import { ApiError } from './errors';
 import type { AnswerExportResult, SlackDefault } from './types';
 import { modelValidator, normalizeAnswer } from './validation';
+import { slackRecipientPatterns } from '../slackRecipients';
 
 const slackDefaultValidator = modelValidator('SlackDefault');
 const answerExportValidator = modelValidator('AnswerExportResult');
-const recipientPatterns = {
-  channel: /^[CGD][A-Z0-9]+$/,
-  user: /^[UW][A-Z0-9]+$/,
-  email: /^[^@\s,;]+@[^@\s,;]+\.[^@\s,;]+$/,
-};
 
 export function parseSlackDefault(value: unknown): SlackDefault {
   if (!slackDefaultValidator(value) || !('selector' in value) || !('failure' in value)) {
@@ -20,7 +16,7 @@ export function parseSlackDefault(value: unknown): SlackDefault {
   };
   const failure = value.failure ?? null;
   if ((selector !== null && failure !== null)
-    || (selector !== null && !recipientPatterns[selector.kind].test(selector.value))) {
+    || (selector !== null && !slackRecipientPatterns[selector.kind].test(selector.value))) {
     throw invalidResponse();
   }
   return { selector, failure };

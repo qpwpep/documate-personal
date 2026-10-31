@@ -9,6 +9,11 @@ export { ApiError } from './errors';
 type RequestOptions = { signal?: AbortSignal };
 type StreamOptions = RequestOptions & { slackRecipient?: RecipientInput | null };
 
+// Session JSON requests use a total timeout; streams reset it on incoming bytes.
+const DEFAULT_SESSION_TIMEOUT_MS = 60_000;
+const UPLOAD_TIMEOUT_MS = 180_000;
+const DEFAULT_LOOKUP_TIMEOUT_MS = 15_000;
+
 export async function fetchClientConfig(baseUrl = '', options: RequestOptions = {}): Promise<ClientConfig> {
   return parseClientConfig(await requestJson(`${baseUrl.replace(/\/$/, '')}/client-config`, {}, options));
 }
@@ -23,7 +28,7 @@ export class AgentSessionClient {
   private readonly baseUrl: string;
   private readonly timeoutMs: number;
 
-  constructor({ sessionId, baseUrl = '', timeoutMs = 60_000 }: { sessionId: string; baseUrl?: string; timeoutMs?: number }) {
+  constructor({ sessionId, baseUrl = '', timeoutMs = DEFAULT_SESSION_TIMEOUT_MS }: { sessionId: string; baseUrl?: string; timeoutMs?: number }) {
     if (!/^[A-Za-z0-9_-]{1,128}$/.test(sessionId)) {
       throw new ApiError('invalid_session', '대화 식별자가 올바르지 않습니다.');
     }
@@ -45,7 +50,7 @@ export class AgentSessionClient {
     body.append('file', file, file.name);
     const result = await requestJson(`${this.baseUrl}/sessions/${encodeURIComponent(this.sessionId)}/uploads/staging`, {
       method: 'POST', body,
-    }, options, 180_000);
+    }, options, UPLOAD_TIMEOUT_MS);
     return parseStagedUpload(result);
   }
 
@@ -53,7 +58,7 @@ export class AgentSessionClient {
     try {
       const result = await requestJson(`${this.baseUrl}/sessions/${encodeURIComponent(this.sessionId)}/uploads/sync`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(request),
-      }, options, 180_000);
+      }, options, UPLOAD_TIMEOUT_MS);
       this.manifest = parseUploadManifest(result);
       return this.manifest;
     } catch (error) {
@@ -156,7 +161,7 @@ export class AgentSessionClient {
   }
 }
 
-async function requestJson(url: string, init: RequestInit, options: RequestOptions, timeoutMs = 15_000): Promise<unknown> {
+async function requestJson(url: string, init: RequestInit, options: RequestOptions, timeoutMs = DEFAULT_LOOKUP_TIMEOUT_MS): Promise<unknown> {
   let requestId: string | undefined;
   const controller = new AbortController();
   const signal = options.signal ? AbortSignal.any([options.signal, controller.signal]) : controller.signal;

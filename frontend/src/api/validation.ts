@@ -20,7 +20,7 @@ const stagedUploadValidator = modelValidator('StagedUpload');
 const responseValidator = modelValidator('AgentResponse');
 const eventSchemas = openapi.paths['/agent/stream'].post.responses['200'].content['text/event-stream']['x-sse-events'];
 const eventValidators = new Map<string, ValidateFunction>(
-  Object.entries(eventSchemas).map(([event, schema]) => [event, validator.compile({
+  Object.entries(eventSchemas).filter(([event]) => event !== 'final_response').map(([event, schema]) => [event, validator.compile({
     ...schema,
     components: openapi.components,
   })]),
@@ -42,9 +42,9 @@ export function parseStagedUpload(value: unknown): StagedUpload {
 }
 
 export function parseAgentEvent(event: string, value: unknown): AgentStreamEvent {
+  if (event === 'final_response') return { event, data: parseAgentResponse(value) };
   const validate = eventValidators.get(event);
   if (!validate || !validate(value)) throw invalidResponse();
-  if (event === 'final_response') return { event, data: parseAgentResponse(value) };
   // The selected server schema validates this discriminated event at the boundary.
   return { event, data: value } as AgentStreamEvent;
 }

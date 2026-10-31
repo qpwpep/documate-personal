@@ -9,6 +9,15 @@ type Citation = components['schemas']['Citation'];
 type TableData = components['schemas']['TableData'];
 export type AnswerContext = { text: string; isCode?: boolean; inline?: boolean };
 
+const BROAD_EXCERPT_CHARACTERS = 700;
+const BROAD_EXCERPT_LINES = 12;
+const CODE_CONTEXT_LINES = 2;
+const RELATED_PREVIEW_LEADING_CHARACTERS = 120;
+const RELATED_PREVIEW_CHARACTERS = 600;
+const RELATED_PREVIEW_PARAGRAPHS = 3;
+const FALLBACK_PREVIEW_LINES = 6;
+const FALLBACK_PREVIEW_CHARACTERS = 420;
+
 export function EvidencePanel({ citation, context = [], opener, onClose }: {
   citation: Citation;
   context?: readonly AnswerContext[];
@@ -26,7 +35,8 @@ export function EvidencePanel({ citation, context = [], opener, onClose }: {
   const excerpt = sourceExcerpt(evidence);
   const sourceLines = sourceLineRecords(evidence);
   const sourceContexts = context.filter((item) => item.text.trim());
-  const broad = Array.from(excerpt).length > 700 || excerpt.split(/\r\n|\r|\n/).length > 12;
+  const broad = Array.from(excerpt).length > BROAD_EXCERPT_CHARACTERS
+    || excerpt.split(/\r\n|\r|\n/).length > BROAD_EXCERPT_LINES;
   const exactPhrases = [...new Set(sourceContexts.map((item) => item.text).filter((text) => excerpt.includes(text)))];
   const search = query.trim();
   const paragraphs = excerpt.split(/\r?\n\s*\r?\n/);
@@ -34,7 +44,7 @@ export function EvidencePanel({ citation, context = [], opener, onClose }: {
   const ranges = matchingCodeRanges(excerpt, evidence.selection?.start ?? 0, sourceContexts);
   const matchedLines = sourceLines.filter((line) => ranges.some(([start, end]) => start < line.end && line.start < end));
   const visibleLines = matchedLines.length
-    ? sourceLines.filter((line) => matchedLines.some((match) => Math.abs(match.line_number - line.line_number) <= 2))
+    ? sourceLines.filter((line) => matchedLines.some((match) => Math.abs(match.line_number - line.line_number) <= CODE_CONTEXT_LINES))
     : sourceLines;
   const status = [snapshot.capture_scope === 'provider_excerpt' ? '일부 수집' : '',
     snapshot.quality_issues?.includes('freshness_unverified') ? '최신성 미확인' : ''].filter(Boolean).join(' · ');
@@ -275,11 +285,11 @@ function RelatedPreview({ excerpt, context }: { excerpt: string; context: readon
     const words = new Set((paragraph.match(/[A-Za-z_][A-Za-z0-9_.]*/g) ?? []).map((term) => term.replace(/\.+$/, '').toLowerCase()));
     const matches = terms.filter((term) => words.has(term));
     const position = matches.length ? Math.min(...matches.map((term) => paragraph.toLowerCase().indexOf(term))) : 0;
-    const start = Math.max(0, Math.min(position - 120, paragraph.length - 600));
+    const start = Math.max(0, Math.min(position - RELATED_PREVIEW_LEADING_CHARACTERS, paragraph.length - RELATED_PREVIEW_CHARACTERS));
     return { paragraph, index, matches, start, description: (paragraph.match(/\p{L}+/gu)?.length ?? 0) > matches.length + 2 };
-  }).filter((item) => item.matches.length).sort((a, b) => b.matches.length - a.matches.length || Number(b.description) - Number(a.description) || a.index - b.index).slice(0, 3);
-  if (candidates.length === 0) return <><p className="evidence-literal">{Array.from(excerpt.split(/\r\n|\r|\n/).slice(0, 6).join('\n')).slice(0, 420).join('')}…</p>
+  }).filter((item) => item.matches.length).sort((a, b) => b.matches.length - a.matches.length || Number(b.description) - Number(a.description) || a.index - b.index).slice(0, RELATED_PREVIEW_PARAGRAPHS);
+  if (candidates.length === 0) return <><p className="evidence-literal">{Array.from(excerpt.split(/\r\n|\r|\n/).slice(0, FALLBACK_PREVIEW_LINES).join('\n')).slice(0, FALLBACK_PREVIEW_CHARACTERS).join('')}…</p>
     <p className="evidence-caption">답변과 겹치는 용어를 찾지 못해 원문 앞부분을 표시합니다. 전체 발췌에서 확인하세요.</p></>;
   return <><p className="evidence-caption">답변에 나온 용어가 포함된 원문을 먼저 표시합니다. 용어 일치는 내용의 근거성 판정은 아닙니다.</p>
-    {candidates.map(({ paragraph, index, start }) => <p className="evidence-literal" key={index}>{start > 0 ? '…' : ''}{paragraph.slice(start, start + 600)}{start + 600 < paragraph.length ? '…' : ''}</p>)}</>;
+    {candidates.map(({ paragraph, index, start }) => <p className="evidence-literal" key={index}>{start > 0 ? '…' : ''}{paragraph.slice(start, start + RELATED_PREVIEW_CHARACTERS)}{start + RELATED_PREVIEW_CHARACTERS < paragraph.length ? '…' : ''}</p>)}</>;
 }

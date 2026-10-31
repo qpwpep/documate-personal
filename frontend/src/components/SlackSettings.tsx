@@ -1,17 +1,18 @@
 import { useEffect, useId, useState } from 'react';
 import { fetchSlackDefault } from '../api/client';
 import type { SlackDefault } from '../api/types';
+import { slackRecipientPatterns } from '../slackRecipients';
 import type { SlackSettingsValue } from './SlackSettingsState';
 
 const recipientLabels = { channel: '채널', user: '사용자', email: '이메일' };
 const recipientFields = {
-  channel: { placeholder: 'C0123456789', pattern: /^[CGD][A-Z0-9]+$/,
+  channel: { placeholder: 'C0123456789',
     guidance: '채널 이름 대신 C, G 또는 D로 시작하는 채널 ID를 입력하세요.',
     invalid: '채널 이름은 사용할 수 없습니다. C, G 또는 D로 시작하는 채널 ID를 입력하세요.' },
-  user: { placeholder: 'U0123456789', pattern: /^[UW][A-Z0-9]+$/,
+  user: { placeholder: 'U0123456789',
     guidance: '표시 이름 대신 U 또는 W로 시작하는 멤버 ID를 입력하세요. 이메일로도 지정할 수 있습니다.',
     invalid: '표시 이름은 사용할 수 없습니다. U 또는 W로 시작하는 멤버 ID를 입력하세요.' },
-  email: { placeholder: 'name@example.com', pattern: /^[^@\s,;]+@[^@\s,;]+\.[^@\s,;]+$/,
+  email: { placeholder: 'name@example.com',
     guidance: '받는 사람이 Slack 워크스페이스에 등록한 이메일을 입력하세요.',
     invalid: '이메일 형식을 확인해 주세요. 예: name@example.com' },
 };
@@ -41,7 +42,7 @@ export function SlackSettings({ value, onChange, baseUrl = '', disabled = false 
 
   const kind = value.kind === 'omitted' ? null : value.kind;
   const field = kind ? recipientFields[kind] : null;
-  const valid = kind !== null && field !== null && field.pattern.test(value.drafts[kind].trim());
+  const valid = kind !== null && field !== null && slackRecipientPatterns[kind].test(value.drafts[kind].trim());
 
   return (
     <details className="slack-settings">
