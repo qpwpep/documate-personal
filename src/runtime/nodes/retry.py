@@ -146,6 +146,11 @@ def _is_repair_retry_candidate(selected_routes: set[PlannerRouteName], retry_rea
 
 
 def _can_refresh_search(task: RetrievalTask, diagnostics: list[RetrievalDiagnostic]) -> bool:
+    if any(item.requirement_id == task.requirement_id
+           and item.error_code in {"provider_configuration", "provider_rate_limited"}
+           for item in diagnostics):
+        # Neither credentials nor provider limits can be repaired by a new query.
+        return False
     if task.route == "docs":
         return task.requirement.library != "unsupported"
     requirement = task.requirement

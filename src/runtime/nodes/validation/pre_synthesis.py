@@ -16,6 +16,7 @@ from src.infra.logging_utils import log_event
 from src.runtime.nodes.retry import build_followup_from_routes, build_retry_update, retrieval_subject
 from src.runtime.nodes.validation.evidence_validator import collect_validation_snapshot
 from src.runtime.nodes.validation.policy import build_followup_updates
+from src.runtime.nodes.validation.route_policy import non_retryable_retrieval_problem
 from src.runtime.nodes.validation.semantic import DecisionEvaluator
 from src.runtime.nodes.validation.prepared_semantics import prepare_answer_evidence
 from src.runtime.nodes.synthesis.budgets import ExcerptLimits
@@ -197,6 +198,9 @@ def make_pre_synthesis_validation_node(
                         "validation_events": [*updates_debug_events, *local_errors],
                     })
                 return updates
+            provider_problem = non_retryable_retrieval_problem(snapshot.current_attempt_retrieval_diagnostics)
+            if provider_problem is not None:
+                raise LLMCallError(provider_problem)
             followup_answer = build_followup_from_routes(
                 snapshot.planner_output,
                 preparation.retry_reason,
@@ -230,15 +234,20 @@ def make_pre_synthesis_validation_node(
                         source = "공식 문서" if task.route == "docs" else "업로드 파일"
                         notices.append(f"{source}에서 {subjects}{version}에 필요한 근거를 충분히 확인하지 못했습니다.")
                 followup_answer = " ".join(notices) or followup_answer
+            problem = make_problem(
+                "provider_unavailable" if preparation.retry_reason == "tool_error" else "evidence_insufficient",
+                "retrieval" if snapshot.planner_output.tasks else "pre_synthesis_validation",
+            )
+            if preparation.retry_reason == "no_evidence":
+                # This notice is assembled from the request and observed source scope,
+                # not from an unvalidated model answer or a provider's error body.
+                problem = problem.model_copy(update={"message": followup_answer})
             updates.update(
                 build_followup_updates(
                     followup_answer,
                     attempt=response.synthesis_attempt,
                     kind="failure",
-                    problem=make_problem(
-                        "provider_unavailable" if preparation.retry_reason == "tool_error" else "evidence_insufficient",
-                        "retrieval" if snapshot.planner_output.tasks else "pre_synthesis_validation",
-                    ),
+                    problem=problem,
                     **stamp,
                 )
             )

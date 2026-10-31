@@ -4,7 +4,23 @@ from typing import Any, Literal
 
 import requests
 
+from src.core.contracts.debug import ErrorCode
+
 TAVILY_SEARCH_API_URL = "https://api.tavily.com/search"
+
+
+class TavilySearchError(RuntimeError):
+    """Keep provider status without exposing its untrusted response body."""
+
+    def __init__(self, status_code: int | None = None) -> None:
+        self.status_code = status_code
+        self.error_code: ErrorCode = "RETRIEVAL_DOCS_FAILED"
+        if status_code is None or status_code in {401, 403}:
+            self.error_code = "provider_configuration"
+        elif status_code == 429:
+            self.error_code = "provider_rate_limited"
+        message = "Tavily API key is not configured" if status_code is None else f"Tavily search failed (HTTP {status_code})"
+        super().__init__(message)
 
 
 def request_tavily_search(
@@ -18,7 +34,7 @@ def request_tavily_search(
     include_raw_content: Literal[False, "markdown", "text"] = False,
 ) -> dict[str, Any]:
     if not tavily_api_key:
-        raise RuntimeError("TAVILY_API_KEY is not configured")
+        raise TavilySearchError()
 
     headers = {
         "Authorization": f"Bearer {tavily_api_key}",
@@ -45,19 +61,15 @@ def request_tavily_search(
     except requests.Timeout as exc:
         raise TimeoutError(f"Tavily search timed out after {timeout_seconds}s") from exc
     except requests.RequestException as exc:
-        raise RuntimeError(f"Tavily request failed ({exc})") from exc
+        raise RuntimeError(f"Tavily request failed ({type(exc).__name__})") from exc
+
+    if response.status_code != 200:
+        raise TavilySearchError(response.status_code)
 
     try:
         body = response.json()
     except ValueError as exc:
         raise RuntimeError("invalid JSON response from Tavily") from exc
-
-    if response.status_code != 200:
-        detail = body.get("detail") if isinstance(body, dict) else None
-        error_message = detail.get("error") if isinstance(detail, dict) else None
-        if not error_message:
-            error_message = f"HTTP {response.status_code}"
-        raise RuntimeError(str(error_message))
 
     if not isinstance(body, dict) or not isinstance(body.get("results"), list):
         raise RuntimeError("missing or invalid Tavily results payload")

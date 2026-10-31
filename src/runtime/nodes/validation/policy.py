@@ -14,6 +14,7 @@ from src.core.request_contracts import check_answer_contract
 from src.runtime.nodes.retry import build_followup_from_routes, retrieval_subject
 from src.runtime.nodes.synthesis.fallbacks import build_synthesis_fallback
 from src.runtime.nodes.validation.models import ValidationAssessment, ValidationSnapshot
+from src.runtime.nodes.validation.route_policy import non_retryable_retrieval_problem
 from src.runtime.nodes.validation.snapshot import detect_missing_requirement_coverage, detect_packet_coverage_gaps
 
 
@@ -105,16 +106,22 @@ def apply_validation_outcome(
         "body_kind": snapshot.body_kind,
         "evidence_source": snapshot.evidence_source,
     }
+    retrieval_problem = None
+    if snapshot.terminal_failed_requirement_ids:
+        retrieval_problem = non_retryable_retrieval_problem([
+            diagnostic for diagnostic in snapshot.current_attempt_retrieval_diagnostics
+            if diagnostic.requirement_id in snapshot.terminal_failed_requirement_ids
+        ]) or make_problem(
+            "provider_unavailable" if snapshot.terminal_retrieval_reason == "tool_error" else "evidence_insufficient",
+            "retrieval",
+        )
     def checked_response_updates(checked: AnswerResponse) -> GraphState:
         kind = snapshot.response_kind if snapshot.response_kind in {"clarification", "acknowledgement", "failure"} else "answer"
         problem = None
         if snapshot.terminal_failed_requirement_ids:
             checked = add_retrieval_gap_issues(snapshot, checked)
             kind = "failure"
-            problem = make_problem(
-                "provider_unavailable" if snapshot.terminal_retrieval_reason == "tool_error" else "evidence_insufficient",
-                "retrieval",
-            )
+            problem = retrieval_problem
         return build_response_updates(
             checked, attempt=attempt, evidence_packet=packet,
             evidence_requirement_map=snapshot.evidence_requirement_map,
@@ -215,7 +222,7 @@ def apply_validation_outcome(
         requirement_map = {item.id: snapshot.evidence_requirement_map.get(item.id, []) for item in packet}
         return build_response_updates(result, attempt=attempt, evidence_packet=packet,
                                       evidence_requirement_map=requirement_map, kind="failure",
-                                      problem=make_problem("evidence_insufficient", "retrieval") if retrieved_missing else
+                                      problem=(retrieval_problem or make_problem("evidence_insufficient", "retrieval")) if retrieved_missing else
                                               make_problem("model_output_invalid", "validation"),
                                       normal_evidence_missing_requirement_ids=snapshot.normal_evidence_missing_requirement_ids,
                                       **stamp)

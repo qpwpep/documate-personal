@@ -6,11 +6,12 @@ from types import SimpleNamespace
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 
-from src.core.answer_schema import AnswerDocument, export_answer_text
+from src.core.answer_schema import AnswerDocument, export_answer_text, finalize_answer, text_document
 from src.core.contracts import PlannerState, RetryState
 from src.core.contracts.boundary.graph import build_graph_state_input
 from src.core.contracts.debug import RetrievalDiagnostic
 from src.core.contracts.retrieval import RetrievalResult
+from src.core.llm_errors import FailureCode, make_problem
 from src.core.planner_schema import PlannerOutput, RetrievalTask
 from src.core.request_contracts import RequestContract
 from src.core.uploads import UploadFileInfo
@@ -22,6 +23,7 @@ from src.runtime.nodes.actions import make_action_postprocess_node
 from src.runtime.nodes.retrieval import make_retrieve_dispatch_node
 from src.runtime.nodes.synthesis import make_synthesize_node
 from src.runtime.nodes.validation import make_post_synthesis_validation_node, make_pre_synthesis_validation_node
+from src.runtime.nodes.validation.policy import build_response_updates
 from tests.core.helpers import build_test_state, make_decisions_client, mock_chat_model
 from tests.core.test_pending_action_delivery import _contract
 from tests.core.test_answer_validation import _evidence, _hit
@@ -45,6 +47,22 @@ class NaturalPartialModel:
             {"text": "The available documentation explains axis selection.", "basis": "source", "refs": [packet[0]["id"]]},
             {"text": "The requested uploaded evidence remains unavailable, so that part cannot be compared.", "basis": "interaction", "refs": []},
         ]}]})
+
+
+@pytest.mark.parametrize("failure_code", ["evidence_insufficient", "provider_configuration", "model_output_invalid"])
+def test_failed_result_does_not_publish_unvalidated_document(failure_code: FailureCode) -> None:
+    problem = make_problem(failure_code, "retrieval")
+    state = build_response_updates(
+        finalize_answer(text_document("UNVALIDATED_PROVIDER_TEXT"), []),
+        attempt=1, evidence_packet=[], kind="failure", problem=problem,
+    )
+
+    outcome = ResponseAssembler().assemble(response=state, debug_info={})
+
+    assert outcome["status"] == "failed"
+    assert outcome["response"] is None
+    assert outcome["message"] == problem.message
+    assert "UNVALIDATED_PROVIDER_TEXT" not in outcome["message"]
 
 
 def test_incomplete_retrieval_returns_a_natural_cited_partial_without_delivery():
@@ -149,6 +167,9 @@ def test_mixed_upload_variables_keep_confirmed_value_and_identify_only_missing_i
         outcome = ResponseAssembler().assemble(response=state, debug_info={})
         assert outcome["status"] == "failed"
         assert outcome["problem"]["code"] == "evidence_insufficient"
+        assert outcome["problem"]["next_action"] == "supply_information"
+        assert "worker_profile.py" in outcome["message"]
+        assert all(symbol in outcome["message"] for symbol in requested_symbols)
         assert outcome["response"] is None
         assert not state["response"].result.citations
         assert state["retrieval"].prepared_evidence.normal.evidence == []
