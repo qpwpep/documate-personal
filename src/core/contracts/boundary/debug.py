@@ -47,7 +47,8 @@ def parse_error_codes(value: Any) -> list[ErrorCode]:
         return []
     parsed: list[ErrorCode] = []
     for item in value:
-        code = str(item or "").strip().upper()
+        # Execution errors and diagnostic codes use different canonical casing.
+        code = str(item or "").strip()
         if code in allowed and code not in parsed:
             parsed.append(code)  # type: ignore[arg-type]
     return parsed

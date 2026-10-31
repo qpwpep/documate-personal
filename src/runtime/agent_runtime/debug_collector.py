@@ -54,7 +54,7 @@ class DebugCollector:
                     "bytes": saved_bytes,
                     "error": str(payload.get("error") or "").strip() or None,
                     "message": str(payload.get("message") or "").strip() or None,
-                    "error_code": str(payload.get("error_code") or "").strip().upper() or None,
+                    "error_code": str(payload.get("error_code") or "").strip() or None,
                 }
         return action_results or None
 
@@ -125,7 +125,7 @@ class DebugCollector:
         codes: list[str] = []
 
         def add(code: Any) -> None:
-            normalized = str(code or "").strip().upper()
+            normalized = str(code or "").strip()
             if normalized and normalized not in codes:
                 codes.append(normalized)
 

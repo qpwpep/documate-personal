@@ -1,12 +1,16 @@
 """Malformed observations remain visible without discarding valid evidence."""
 from __future__ import annotations
 
+import json
+
 import pytest
+from langchain_core.messages import HumanMessage, ToolMessage
 
 from src.app.web.agent_request_support import normalize_debug_info
 from src.core.contracts.graph_state import DebugState
 from src.core.documents import DocumentElement, build_snapshot
 from src.core.evidence import RetrievalScore, SearchHit, build_evidence
+from src.eval.online_runner.response_parser import parse_agent_response
 from src.runtime.agent_runtime.debug_collector import DebugCollector
 
 
@@ -15,6 +19,46 @@ def debug_payload():
     return DebugCollector().build(
         response={"route_decisions": []}, updated_messages=[], graph_total_ms=200,
     )
+
+
+@pytest.mark.parametrize("serialized_state", [False, True])
+def test_canonical_error_codes_survive_runtime_and_web_boundaries(serialized_state):
+    state = DebugState(error_codes=[
+        "provider_unavailable", "model_output_invalid", "LOCAL_RAG_FAILED", "provider_unavailable",
+    ])
+    debug = DebugCollector().build(
+        response={"route_decisions": [], "debug": state.model_dump(mode="json") if serialized_state else state},
+        updated_messages=[
+            HumanMessage(content="Save the answer."),
+            ToolMessage(
+                name="save_text", tool_call_id="save-1",
+                content=json.dumps({"status": "error", "error_code": "save_failed"}),
+            ),
+        ],
+        graph_total_ms=200,
+    )
+    expected = ["provider_unavailable", "model_output_invalid", "LOCAL_RAG_FAILED", "save_failed"]
+
+    assert debug["error_codes"] == expected
+    assert debug["action_results"]["save_text"]["error_code"] == "save_failed"
+    normalized = normalize_debug_info(debug, 220, answer_expected=False)
+    assert normalized.error_codes == expected
+    assert normalized.action_results.save_text.error_code == "save_failed"
+
+
+def test_web_and_eval_preserve_canonical_error_codes_and_ignore_unknown_values(debug_payload):
+    debug_payload["error_codes"] = [
+        " provider_unavailable ", "model_output_invalid", "save_failed", "LOCAL_RAG_FAILED",
+        "provider_unavailable", "unknown", None,
+    ]
+    expected = ["provider_unavailable", "model_output_invalid", "save_failed", "LOCAL_RAG_FAILED"]
+
+    normalized = normalize_debug_info(debug_payload, 220, answer_expected=False)
+    assert normalized.error_codes == expected
+    for debug in (debug_payload, normalized.model_dump(mode="json")):
+        parsed = parse_agent_response({"status": "needs_input", "message": "Which source?", "debug": debug})
+        assert parsed.error_codes == expected
+        assert parsed.response_errors == []
 
 
 def test_invalid_observed_hit_preserves_valid_source_and_reports_incomplete_observation(debug_payload):
