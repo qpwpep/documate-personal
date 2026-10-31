@@ -207,8 +207,6 @@ class CaseResult(BaseModel):
     product_pass: bool | None = None
     judge_pass: bool | None = None
     release_pass: bool | None = None
-    final_score: float | None = Field(default=None, exclude=True)
-    passed: bool | None = Field(default=None, exclude=True)
     cost_usd: float | None = None
     created_at_utc: str
 
@@ -233,23 +231,13 @@ class CaseResult(BaseModel):
         )):
             raise ValueError("current policy and decision fields require decision_contract_version")
         # Records written before the explicit state contract carry no judge_status.
-        # They stay readable as legacy data, but the mirrors below only run for
-        # them; a new-contract record never lets an alias field outrank its
-        # canonical verdict.
+        # Keep them distinct from explicit current judge outcomes.
         if payload.get("judge_status") is not None:
-            if payload.get("final_score") is None and payload.get("composite_quality_score") is not None:
-                payload["final_score"] = payload.get("composite_quality_score")
-            if payload.get("passed") is None and payload.get("release_pass") is not None:
-                payload["passed"] = payload.get("release_pass")
             if payload.get("judge_gate_passed") is None and payload.get("judge_pass") is not None:
                 payload["judge_gate_passed"] = payload.get("judge_pass")
         else:
             payload["judge_status"] = "legacy_unknown"
             payload["eval_validity"] = payload.get("eval_validity") or "legacy_unknown"
-            if payload.get("composite_quality_score") is None and payload.get("final_score") is not None:
-                payload["composite_quality_score"] = payload.get("final_score")
-            if payload.get("final_score") is None and payload.get("composite_quality_score") is not None:
-                payload["final_score"] = payload.get("composite_quality_score")
         judge_errors = payload.get("judge_errors")
         if isinstance(judge_errors, list):
             audit_failures = [
@@ -277,16 +265,9 @@ class CaseResult(BaseModel):
 
     @model_validator(mode="after")
     def mirror_legacy_result_fields(self) -> "CaseResult":
-        if self.judge_status == "legacy_unknown":
-            if self.composite_quality_score is None and self.final_score is not None:
-                self.composite_quality_score = self.final_score
-            if self.final_score is None and self.composite_quality_score is not None:
-                self.final_score = self.composite_quality_score
-        else:
+        if self.judge_status != "legacy_unknown":
             # New contract: the canonical verdict fields are authoritative and
             # alias mirrors always follow them, never the other way around.
-            self.passed = self.release_pass
-            self.final_score = self.composite_quality_score
             self.judge_gate_passed = self.judge_pass
             if self.eval_validity not in {"valid", "incomplete", "invalid"}:
                 raise ValueError("new-contract results require an explicit eval_validity")

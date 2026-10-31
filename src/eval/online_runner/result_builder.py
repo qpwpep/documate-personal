@@ -466,8 +466,6 @@ def build_case_result(
         product_pass=product_pass,
         judge_pass=judge_pass,
         release_pass=None,
-        final_score=composite_quality_score,
-        passed=None,
         cost_usd=cost,
         created_at_utc=created_at,
     )

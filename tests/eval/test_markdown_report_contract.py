@@ -4,10 +4,8 @@ from __future__ import annotations
 import pytest
 
 from src.eval.history_report import refresh_history_report
-from src.eval.reporting.markdown import build_markdown_report
 from src.eval.reporting.summary import MEASUREMENT_CONTRACT_VERSION
 from src.eval.reporting.writer import write_run_outputs
-from src.eval.summary_models import RunSummary
 from tests.eval.test_release_eval_contract import _case_result, _summary
 
 
@@ -43,27 +41,6 @@ def test_saved_current_report_uses_planned_cases_for_partial_cost_observation(tm
     assert "Historical verdict" not in report
     assert "| cost_observed_cases | 1 / 2 |" in report
     assert "| cost_observation_rate | 0.5 |" in report
-
-
-def test_historical_report_keeps_historical_verdict_and_cost_coverage():
-    payload = _summary([_case_result()]).model_dump(mode="json")
-    payload.update(
-        decision_contract_version=None,
-        measurement_contract_version="llm-usage-scenario-v2",
-        case_policy_snapshots={},
-        results_fingerprint=None,
-        release_decision=None,
-    )
-    summary = RunSummary.model_validate(payload)
-
-    report = build_markdown_report(
-        summary, historical_summary={"metrics": {"llm_call_coverage_rate": 0.75}},
-    )
-
-    assert "- Release: `legacy_unverified (not eligible under the current contract)`" in report
-    assert "- Historical verdict: `PASS`" in report
-    assert "| llm_call_coverage_rate (historical) | 0.75 |" in report
-    assert "| cost_observed_cases |" not in report
 
 
 @pytest.mark.parametrize("test_result", [

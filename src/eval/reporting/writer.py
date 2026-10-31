@@ -18,9 +18,7 @@ class ReportInputs:
     """A report regenerated only from validated current-contract observations."""
 
     summary: RunSummary
-    current_results: list[CaseResult] | None = None
-    historical_results: list[dict[str, Any]] | None = None
-    historical_summary: dict[str, Any] | None = None
+    current_results: list[CaseResult]
 
 
 def is_current_measurement(summary: RunSummary) -> bool:

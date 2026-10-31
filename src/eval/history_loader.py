@@ -14,7 +14,6 @@ class StoredRun:
     summary: RunSummary
     generated_at: datetime
     track_explicit: bool = False
-    raw_summary: dict[str, Any] | None = None
 
     @property
     def run_id(self) -> str:
@@ -31,12 +30,6 @@ class StoredRun:
         if self.summary.requested_limit is not None:
             return "smoke"
         return "release"
-
-    @property
-    def has_current_measurements(self) -> bool:
-        from .reporting.writer import is_current_measurement
-
-        return is_current_measurement(self.summary)
 
 
 def latest_run_pointer_name(track: RunTrack) -> str:
@@ -72,7 +65,7 @@ def _is_historical_summary(payload: dict[str, Any]) -> bool:
     )
 
 
-def _read_summary(path: Path) -> tuple[RunSummary, bool, dict[str, Any] | None] | None:
+def _read_summary(path: Path) -> tuple[RunSummary, bool] | None:
     from .reporting.writer import is_current_measurement, load_run_outputs
 
     payload = json.loads(path.read_text(encoding="utf-8"))
@@ -87,7 +80,7 @@ def _read_summary(path: Path) -> tuple[RunSummary, bool, dict[str, Any] | None] 
     # Validate before exclusion; do not reprice or promote them to current history.
     if not is_current_measurement(summary):
         return None
-    return summary, "track" in payload, None
+    return summary, "track" in payload
 
 
 def load_history_runs(output_root: Path) -> list[StoredRun]:
@@ -101,13 +94,12 @@ def load_history_runs(output_root: Path) -> list[StoredRun]:
         loaded = _read_summary(summary_path)
         if loaded is None:
             continue
-        summary, track_explicit, raw_summary = loaded
+        summary, track_explicit = loaded
         runs.append(
             StoredRun(
                 summary=summary,
                 generated_at=_parse_generated_at(summary),
                 track_explicit=track_explicit,
-                raw_summary=raw_summary,
             )
         )
     runs.sort(key=lambda item: item.generated_at)

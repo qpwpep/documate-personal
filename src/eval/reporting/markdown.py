@@ -12,7 +12,7 @@ def _format_metric_value(value: float | int | None, *, decimals: int = 4) -> str
     return f"{float(value):.{decimals}f}"
 
 
-def _render_execution_policy(lines: list[str], summary: RunSummary, results: list[CaseResult] | None) -> None:
+def _render_execution_policy(lines: list[str], summary: RunSummary, results: list[CaseResult]) -> None:
     if summary.decision_contract_version is None:
         return
     lines.extend(["", "## Tool Execution Policy", "", "| Outcome | Cases |", "|---|---:|"])
@@ -178,23 +178,12 @@ def _render_analysis(lines: list[str], summary: RunSummary) -> None:
         lines.append(f"| {row.stage} | {row.sample_count} | {_format_metric_value(row.p50_latency_ms, decimals=2)} | {_format_metric_value(row.p95_latency_ms, decimals=2)} |")
 
 
-def build_markdown_report(
-    summary: RunSummary, results: list[CaseResult] | None = None, *,
-    historical_summary: dict | None = None,
-) -> str:
-    """Render current decisions or historical summary facts.
-
-    ``results`` supplies current decision evidence. Historical raw records are
-    validated and retained separately by ``load_report_inputs``; their current
-    evaluation projections are never used to rewrite historical report facts.
-    """
-    from .writer import is_current_measurement
+def build_markdown_report(summary: RunSummary, results: list[CaseResult]) -> str:
+    """Render current decisions and their validated observation evidence."""
+    from ..decisions import validate_run_outputs
 
     summary = RunSummary.model_validate(summary.model_dump(mode="json"))
-    if results is not None:
-        from ..decisions import validate_run_outputs
-
-        validate_run_outputs(summary, results)
+    validate_run_outputs(summary, results)
     lines: list[str] = []
     lines.append(f"# Benchmark Report ({summary.run_id})")
     lines.append("")
@@ -208,12 +197,8 @@ def build_markdown_report(
     scoring_contract = (summary.audit_metrics or {}).get("scoring_contract_version") or "legacy: unspecified"
     lines.append(f"- Scoring contract: `{scoring_contract}`")
     decision = summary.release_decision
-    current_measurement = is_current_measurement(summary)
     if summary.track == "smoke" or (decision is not None and decision.scope == "diagnostic"):
         lines.append("- Release: `diagnostic run only (no release verdict)`")
-    elif decision is None or not current_measurement:
-        lines.append("- Release: `legacy_unverified (not eligible under the current contract)`")
-        lines.append(f"- Historical verdict: `{'PASS' if summary.overall_passed else 'FAIL'}`")
     else:
         lines.append(f"- Release: `{'PASS' if decision.passed else 'FAIL'}`")
     if decision is not None:
@@ -300,20 +285,15 @@ def build_markdown_report(
     ):
         lines.append(f"| {key} | {value if value is not None else '-'} |")
 
-    if current_measurement:
-        lines.append(f"| cost_observed_cases | {summary.metrics.cost_observed_cases} / {summary.metrics.planned_cases} |")
-        lines.append(f"| cost_observation_rate | {summary.metrics.cost_observation_rate} |")
-        lines.extend(["", "Cost covers every executed scenario turn and logical LLM invocation. "
-                      "It applies configured endpoint prices to input, cache reads, cache writes and output; "
-                      "cache subsets are not added to total input again. "
-                      "The average includes only cases with every billable dimension observed; "
-                      "confirmed no-call cases count as observed zero cost. "
-                      "synthesis_output_tokens covers only synthesis attempts for the final question. "
-                      "SDK transport retries and provider billing reconciliation are outside this estimate."])
-    else:
-        raw_metrics = (historical_summary or {}).get("metrics", {})
-        historical_coverage = raw_metrics.get("llm_call_coverage_rate", (summary.audit_metrics or {}).get("llm_call_coverage_rate"))
-        lines.append(f"| llm_call_coverage_rate (historical) | {historical_coverage if historical_coverage is not None else '-'} |")
+    lines.append(f"| cost_observed_cases | {summary.metrics.cost_observed_cases} / {summary.metrics.planned_cases} |")
+    lines.append(f"| cost_observation_rate | {summary.metrics.cost_observation_rate} |")
+    lines.extend(["", "Cost covers every executed scenario turn and logical LLM invocation. "
+                  "It applies configured endpoint prices to input, cache reads, cache writes and output; "
+                  "cache subsets are not added to total input again. "
+                  "The average includes only cases with every billable dimension observed; "
+                  "confirmed no-call cases count as observed zero cost. "
+                  "synthesis_output_tokens covers only synthesis attempts for the final question. "
+                  "SDK transport retries and provider billing reconciliation are outside this estimate."])
 
     _render_execution_policy(lines, summary, results)
     lines.append("")
