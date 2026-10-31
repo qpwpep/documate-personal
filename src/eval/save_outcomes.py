@@ -94,9 +94,6 @@ def assess_save_outcome(
         return fail("save_request_mismatch")
     if provenance is None or not provenance.request_id or provenance.contract_revision is None:
         return fail("save_request_unverifiable", unknown=True)
-    if (operation.request_id != provenance.request_id
-            or operation.contract_revision > provenance.contract_revision):
-        return fail("save_request_mismatch")
     if not provenance.save_operation_binding_sha256:
         return fail("save_request_unverifiable", unknown=True)
     if operation.binding_sha256 != provenance.save_operation_binding_sha256:
@@ -105,23 +102,35 @@ def assess_save_outcome(
         return fail("save_target_unverifiable", unknown=True)
     target = expectation.target
     expected = response
-    pending_replay = (
-        provenance.body_kind == "copy_answer" and provenance.source is not None
-        and provenance.source.ref == "pending"
-        and provenance.source.response_hash == operation.answer_hash
-        and operation.contract_revision < provenance.contract_revision
-    )
     if target.kind == "setup_answer":
         index = target.setup_turn_index
         if index >= len(prior_turns) or prior_turns[index].response is None:
             return fail("save_target_unverifiable", unknown=True)
         expected = prior_turns[index].response
-        if not pending_replay and (operation.target_kind != "copy_answer" or operation.source_hash != expected.content_hash):
+
+    if provenance.body_kind == "copy_answer":
+        if provenance.source is None:
+            return fail("save_target_unverifiable", unknown=True)
+        if (provenance.response_hash != response.content_hash
+                or provenance.source.response_hash != expected.content_hash
+                or response.content_hash != expected.content_hash
+                or provenance.source.citation_ids != [citation.evidence.id for citation in expected.citations]):
             return fail("save_target_mismatch")
-    elif provenance is not None:
-        if not pending_replay and operation.target_kind != provenance.body_kind:
+        # An exact export reuses the selected answer's original operation,
+        # including compose saves and renewed retention generations. Its ID and
+        # revision need not belong to this new copy request. The current request
+        # independently committed the full operation binding above; the oracle
+        # target, answer hash and downloaded bytes must still match below.
+    else:
+        if (operation.request_id != provenance.request_id
+                or operation.contract_revision > provenance.contract_revision):
+            return fail("save_request_mismatch")
+        if target.kind == "setup_answer" and (
+                operation.target_kind != "copy_answer" or operation.source_hash != expected.content_hash):
             return fail("save_target_mismatch")
-        if not pending_replay and provenance.source is not None and operation.source_hash != provenance.source.response_hash:
+        if operation.target_kind != provenance.body_kind:
+            return fail("save_target_mismatch")
+        if provenance.source is not None and operation.source_hash != provenance.source.response_hash:
             return fail("save_target_mismatch")
         if operation.target_kind in {"compose", "extract"} and operation.source_hash != response.content_hash:
             return fail("save_target_mismatch")
