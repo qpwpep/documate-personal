@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from typing import Any, Literal, get_args
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from src.core.contracts.outcome import TurnResult
+from src.core.contracts.outcome import AgentCallResult
 from src.core.llm_errors import LLMDiagnostic
 from src.core.slack_contract import RecipientInput
 from src.core.conversation_memory import (
@@ -17,7 +17,7 @@ from src.core.evidence import SearchHit
 from src.core.contracts.provenance import AnswerProvenance
 from src.core.contracts.routing import RoutingDecision
 from src.core.contracts.tool_execution import ToolExecutionEvidence
-from src.core.uploads import UploadContext, UploadManifest, validate_session_id
+from src.core.uploads import UploadContext, validate_session_id
 from src.core.latency import LatencyBreakdownModel, StageName
 
 AgentRetryContext = RetryState
@@ -122,21 +122,11 @@ class AgentRequest(BaseModel):
         return validate_query_text(value)
 
 
-class AgentResponse(TurnResult):
+class AgentResponse(AgentCallResult):
     model_config = ConfigDict(extra="forbid")
 
     trace: str
     debug: AgentDebugInfo | None = None
-    upload_manifest: UploadManifest | None = Field(
-        default=None,
-        description="Confirmed attachment snapshot. Null on a failed request means no snapshot was available, not an empty attachment set.",
-    )
-
-    @model_validator(mode="after")
-    def require_confirmed_manifest(self):
-        if self.status not in {"failed", "refused"} and self.upload_manifest is None:
-            raise ValueError("A completed, partial or needs_input result requires upload_manifest")
-        return self
 
 
 AgentStreamEventName = Literal[

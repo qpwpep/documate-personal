@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from src.core.answer_schema import AnswerResponse
 from src.core.llm_errors import ExecutionProblem
+from src.core.uploads import UploadManifest
 
 
 class TurnResult(BaseModel):
@@ -36,6 +37,21 @@ class TurnResult(BaseModel):
             raise ValueError("clarification requires a specific question")
         if self.status == "refused" and self.problem.code != "model_refusal":
             raise ValueError("refused results require an explicit model refusal")
+        return self
+
+
+class AgentCallResult(TurnResult):
+    """A turn result with the session's confirmed attachment snapshot."""
+
+    upload_manifest: UploadManifest | None = Field(
+        default=None,
+        description="Confirmed attachment snapshot. Null on a failed request means no snapshot was available, not an empty attachment set.",
+    )
+
+    @model_validator(mode="after")
+    def require_confirmed_manifest(self) -> "AgentCallResult":
+        if self.status not in {"failed", "refused"} and self.upload_manifest is None:
+            raise ValueError("A completed, partial or needs_input result requires upload_manifest")
         return self
 
 

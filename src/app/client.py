@@ -8,11 +8,10 @@ from typing import Any
 from urllib.parse import quote
 
 import requests
-from pydantic import model_validator
 from urllib3.exceptions import ReadTimeoutError
 
 from src.app.uploads import UploadStageResult, stage_uploaded_files
-from src.core.contracts.outcome import AnswerExportResult, TurnResult
+from src.core.contracts.outcome import AgentCallResult, AnswerExportResult
 from src.core.slack_contract import RecipientInput, SlackDefault
 from src.core.uploads import UploadContext, UploadManifest, UploadSyncRequest
 from src.infra.sse import iter_sse_events
@@ -97,16 +96,6 @@ def sync_uploads(fastapi_url: str, session_id: str, payload: dict[str, Any]) -> 
         return UploadManifest.model_validate(data)
     except (KeyError, ValueError, TypeError) as exc:
         raise UploadAPIError("첨부 변경 결과의 응답 형식이 올바르지 않습니다.") from exc
-
-
-class AgentCallResult(TurnResult):
-    upload_manifest: UploadManifest | None = None
-
-    @model_validator(mode="after")
-    def require_confirmed_manifest(self):
-        if self.status not in {"failed", "refused"} and self.upload_manifest is None:
-            raise ValueError("A completed, partial or needs_input result requires upload_manifest")
-        return self
 
 
 @dataclass(frozen=True)

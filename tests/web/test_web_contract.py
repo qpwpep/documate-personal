@@ -120,3 +120,30 @@ def test_python_client_keeps_server_error_before_a_valid_final_response(
     assert events[-1].result.status == "completed"
     assert events[-1].data == responses["completed"]
     assert client.manifest == UploadManifest(epoch="contract-epoch", revision=2, files=[])
+
+
+@pytest.mark.parametrize("status", ["completed", "partial", "needs_input"])
+def test_server_and_python_client_reject_unconfirmed_attachment_state(
+    responses: dict[str, dict[str, object]], status: str,
+    http_response: Callable[[bytes], list[requests.PreparedRequest]],
+) -> None:
+    payload = {**responses[status], "upload_manifest": None}
+    with pytest.raises(ValueError, match="requires upload_manifest"):
+        AgentResponse.model_validate(payload)
+
+    sent = http_response(
+        f"event: final_response\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n".encode("utf-8"),
+    )
+    client = AgentSessionClient(
+        AgentRequestContext(fastapi_url="http://contract.test", session_id="contract-session"),
+        manifest=UploadManifest(epoch="contract-epoch", revision=1, files=[]),
+    )
+
+    events = list(client.stream("질문"))
+
+    assert len(sent) == 1
+    assert len(events) == 1
+    assert events[0].event == "error"
+    assert events[0].data["code"] == "invalid_stream"
+    assert events[0].result is None
+    assert client.manifest is None

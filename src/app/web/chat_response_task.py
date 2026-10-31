@@ -8,7 +8,8 @@ from queue import Empty, Queue
 from threading import Event, Thread
 from time import monotonic
 
-from src.app.client import AgentCallResult, AgentSessionClient, AgentStreamEvent
+from src.app.client import AgentSessionClient, AgentStreamEvent
+from src.core.contracts.outcome import AgentCallResult
 from src.app.web.streamlit_chat import progress_message_for_event
 from src.app.web.streamlit_state import Conversation
 from src.core.contracts.outcome import TurnResult
