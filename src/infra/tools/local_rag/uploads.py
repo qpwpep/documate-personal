@@ -328,7 +328,7 @@ def _parse_upload(file: UploadRecord) -> ChunkedDocument:
     options = {"path": file.path, "source_uri": file.source_uri, "title": file.name,
                "source_content": content, "chunk_size": UPLOAD_CHUNK_SIZE, "chunk_overlap": UPLOAD_CHUNK_OVERLAP}
     if file.name.lower().endswith(".py"):
-        document = chunk_python_text(text=content.decode("utf-8"), **options)
+        document = chunk_python_text(text=content.decode("utf-8-sig"), **options)
     elif file.name.lower().endswith(".ipynb"):
         loaded = parse_canonical_notebook(content)
         document = chunk_notebook(notebook=loaded.notebook, **options)

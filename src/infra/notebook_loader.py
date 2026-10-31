@@ -23,7 +23,7 @@ def load_canonical_notebook(path: str | Path) -> LoadedNotebook:
 
 
 def parse_canonical_notebook(source_content: bytes) -> LoadedNotebook:
-    raw_notebook = json.loads(source_content.decode("utf-8"))
+    raw_notebook = json.loads(source_content.decode("utf-8-sig"))
     if not isinstance(raw_notebook, dict):
         raise ValueError("Notebook payload must be an object")
     canonical_notebook, added_cell_id_count = canonicalize_notebook_payload(raw_notebook)

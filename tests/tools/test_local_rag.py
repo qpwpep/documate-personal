@@ -9,6 +9,7 @@ from uuid import uuid4
 import pytest
 from langchain_core.embeddings import Embeddings
 
+from src.core.evidence import selected_source_anchors
 from src.core.planner_schema import RetrievalRequirement
 from src.core.uploads import UploadRecord
 from src.infra.tools.local_rag import build_upload_retriever, build_upload_search_tool
@@ -24,7 +25,7 @@ class _FakeEmbeddings(Embeddings):
         return [float(len(text)), float(text.count("train_test_split"))]
 
 
-def _index_upload(path: Path):
+def _index_upload(path: Path, *, embeddings: Embeddings | None = None):
     data = path.read_bytes()
     file_id = uuid4().hex
     record = UploadRecord(
@@ -32,7 +33,8 @@ def _index_upload(path: Path):
         content_hash="sha256:" + hashlib.sha256(data).hexdigest(),
         source_uri=f"upload:///rag-tests/{file_id}",
     )
-    return build_upload_retriever([record], session_id="rag-tests", generation=uuid4().hex, api_key="test-key")
+    return build_upload_retriever([record], session_id="rag-tests", generation=uuid4().hex,
+                                  api_key="test-key", embeddings=embeddings)
 
 
 def _write_notebook(path: Path, *sources: str) -> None:
@@ -133,6 +135,44 @@ def test_notebook_upload_preserves_source_bytes_and_stable_cell_locations(tmp_pa
 
     assert cell_ids[0] == cell_ids[1]
     assert all(cell_ids[0]) and len(set(cell_ids[0])) == 2
+    assert path.read_bytes() == content
+
+
+@pytest.mark.parametrize("notebook", [False, True], ids=["python", "notebook"])
+def test_utf8_bom_upload_keeps_raw_hash_and_searchable_definition(tmp_path: Path, notebook: bool) -> None:
+    source = '# 원문\r\n\r\ndef greet(name):\r\n    return f"Hello, {name}\ufeff"\r\n'
+    path = tmp_path / ("source.ipynb" if notebook else "source.py")
+    if notebook:
+        payload = json.dumps({
+            "nbformat": 4, "nbformat_minor": 5, "metadata": {},
+            "cells": [{"id": "greeting", "cell_type": "code", "metadata": {},
+                       "execution_count": None, "outputs": [], "source": source}],
+        }, ensure_ascii=False)
+    else:
+        payload = source
+    content = payload.encode("utf-8-sig")
+    path.write_bytes(content)
+    expected_source = source.replace("\r\n", "\n") if notebook else source
+    expected_definition = expected_source[expected_source.index("def greet"):].rstrip("\r\n")
+
+    handle = _index_upload(path, embeddings=_FakeEmbeddings())
+    try:
+        result = build_upload_search_tool()(
+            query="greet 함수 정의 원문", retriever=handle.retriever,
+            requirement=RetrievalRequirement(symbols=["greet"], match="definition"),
+        )
+        assert result.diagnostics.answerability == "covered"
+        hit, = result.hits
+        assert hit.evidence.excerpt == expected_definition
+        assert hit.evidence.element.text == expected_source
+        assert hit.evidence.snapshot.content_hash == "sha256:" + hashlib.sha256(content).hexdigest()
+        anchor, = selected_source_anchors(hit.evidence)
+        assert (anchor.line_start, anchor.line_end, anchor.precision) == (3, 4, "exact")
+        if notebook:
+            assert (anchor.cell_id, anchor.cell_index) == ("greeting", 0)
+    finally:
+        handle.cleanup()
+
     assert path.read_bytes() == content
 
 

@@ -88,7 +88,8 @@ def chunk_python_text(
     snapshot = build_snapshot(
         source_uri=source_uri or path, title=title or Path(path).name, media_type="text/x-python",
         source_type="upload", content=source_content if source_content is not None else text,
-        parser="python-ast", parser_version="1",
+        # BOM-aware decoding changes parsed text without changing the original bytes.
+        parser="python-ast", parser_version="2",
     )
     element = DocumentElement(
         element_id="python-source", kind="code", text=text, language="python",
