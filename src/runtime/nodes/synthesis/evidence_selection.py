@@ -12,7 +12,7 @@ from src.core.planner_schema import PlannerOutput, RetrievalTask
 from src.core.python_source import PythonSourceMap
 from src.core.table_selection import table_excerpt, table_row_units
 from src.infra.tools.docs_search.policy import is_current_stable_doc_url
-from src.infra.tools.docs_search.sections import parse_doc_sections, scan_declarations
+from src.infra.tools.docs_search.sections import document_symbol_names, parse_doc_sections, scan_declarations
 from src.runtime.nodes.synthesis.budgets import RetrievedEvidenceBudget, literal_passage_anchors, upload_passage_targets
 
 _TOKEN_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_.-]*|[가-힣]{2,}")
@@ -190,6 +190,10 @@ def select_evidence_hits(
         ])
         applicable = [task] if task is not None else tasks_for_hit(hit, planner_output)
         wanted = set().union(*(_task_tokens(item) for item in applicable)) if applicable else _tokens(user_input)
+        if evidence.route == "docs":
+            for item in applicable:
+                wanted.update(_tokens(" ".join(document_symbol_names(item.requirement.symbols,
+                    title=evidence.snapshot.title, url=evidence.snapshot.source_uri))))
         matches = len(wanted.intersection(_tokens(text)))
         return (-matches, hit.rank)
 
@@ -554,9 +558,10 @@ def prepare_evidence_candidates(
         identity_terms.update(part.lower() for symbol in symbols for part in symbol.split("."))
         focus_terms = _tokens(" ".join(task.requirement.aspects)) if task else set()
         sections = parse_doc_sections(item.excerpt, title=item.snapshot.title, url=item.snapshot.source_uri)
+        matching_symbols = document_symbol_names(symbols, title=item.snapshot.title, url=item.snapshot.source_uri)
         owned_ranges = [(section.start, section.end) for section in sections
-                        if any(section.owner == symbol or section.owner.endswith("." + symbol)
-                               for symbol in symbols)]
+                        if any(section.owner.casefold() == symbol or section.owner.casefold().endswith("." + symbol)
+                               for symbol in matching_symbols)]
         owner_groups: list[tuple[int, int]] = []
         for start, end in owned_ranges:
             if owner_groups and owner_groups[-1][1] == start:

@@ -255,6 +255,40 @@ def test_declaration_window_spends_budget_after_definition_not_previous_api():
     assert all(hit.evidence.excerpt.startswith(declaration) for hit in candidates)
 
 
+def test_qualified_stdlib_symbol_keeps_relative_declaration_and_return_contract():
+    declaration = "Path.exists(*, follow_symlinks=True)\n"
+    behavior = "Return True if the path points to an existing file or directory, and False otherwise."
+    body = (
+        "pathlib — Object-oriented filesystem paths\n\n"
+        "Path.home()\nSee pathlib.Path.exists for existence checks.\n\n"
+        ">>> Path.home()\nPosixPath('/home/user')\n\n"
+        + "Other path operation details.\n" * 180
+        + declaration + behavior + "\n\n"
+        + "Path.is_file(*, follow_symlinks=True)\nReturn whether this is a regular file.\n" * 50
+    )
+    snapshot = build_snapshot(
+        source_uri="https://docs.python.org/3/library/pathlib.html",
+        title="pathlib — Object-oriented filesystem paths — Python documentation",
+        media_type="text/html", source_type="official", content=body,
+        parser="official_html", parser_version="1",
+    )
+    original = build_evidence(snapshot=snapshot, element=DocumentElement(element_id="body", kind="paragraph", text=body))
+    task = RetrievalTask(requirement_id="exists", route="docs", query="pathlib.Path.exists 반환값", k=1,
+        requirement={"library": "Python", "symbols": ["pathlib.Path.exists"], "evidence_needs": ["explanation"]})
+
+    hits = select_docs_candidates(task.query, [SearchHit(evidence=original, rank=1,
+        requirement_id=task.requirement_id, score={"metric": "provider", "direction": "higher"})],
+        task.requirement, k=1, allowed_domains=["docs.python.org"])
+    candidates = prepare_evidence_candidates(user_input=task.query, hits=hits,
+        planner_output=PlannerOutput(use_retrieval=True, tasks=[task]),
+        budget=RetrievedEvidenceBudget(1800, 6000, 8))
+
+    assert hits[0].evidence.excerpt.startswith(declaration)
+    assert behavior in candidates[0].evidence.excerpt
+    assert all(hit.evidence.excerpt == body[hit.evidence.selection.start:hit.evidence.selection.end]
+               for hit in [*hits, *candidates])
+
+
 def test_overlapping_anchor_windows_do_not_displace_late_examples():
     body = (
         "# numpy.mean\nnumpy.mean(a, axis=None)\n"

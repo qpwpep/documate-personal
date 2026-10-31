@@ -11,7 +11,7 @@ from src.core.planner_schema import RetrievalRequirement
 from src.infra.tools.docs_search.policy import (
     is_allowed_doc_url, is_current_stable_doc_url, normalized_domain_set, result_matches_domains,
 )
-from src.infra.tools.docs_search.sections import parse_doc_sections, scan_declarations
+from src.infra.tools.docs_search.sections import document_symbol_names, parse_doc_sections, scan_declarations
 
 
 _WINDOW_CHARS = 3200
@@ -76,8 +76,10 @@ def _source_candidates(
         declarations = scan_declarations(text)
         sections = parse_doc_sections(text, title=evidence.snapshot.title, url=evidence.snapshot.source_uri,
                                       declarations=declarations)
-        target_declarations = [item for item in declarations if item.name.casefold() in symbols]
-        target_sections = [item for item in sections if item.owner.casefold() in symbols]
+        matching_symbols = document_symbol_names(symbols, title=evidence.snapshot.title,
+                                                url=evidence.snapshot.source_uri)
+        target_declarations = [item for item in declarations if item.name.casefold() in matching_symbols]
+        target_sections = [item for item in sections if item.owner.casefold() in matching_symbols]
         for section in sections:
             # Ownership and section names may guide where a window starts, but
             # cannot exclude other APIs or unrecognized prose on the page.

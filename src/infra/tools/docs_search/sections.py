@@ -6,6 +6,7 @@ example. A missing owner is deliberately retained instead of guessed from a quer
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 import html
 import re
@@ -251,6 +252,18 @@ def resolve_document_symbol(*, title: str = "", url: str = "") -> str:
     return ""
 
 
+def document_symbol_names(symbols: Iterable[str], *, title: str, url: str) -> set[str]:
+    """Give ranking hints the relative spelling allowed by the source namespace."""
+    names = {symbol.casefold() for symbol in symbols}
+    document_symbol = resolve_document_symbol(title=title, url=url).casefold()
+    # Module references omit their namespace in declarations: pathlib documents
+    # Path.exists. An unrelated source cannot acquire that alias from the query.
+    return names | {
+        symbol[len(document_symbol) + 1:] for symbol in names
+        if document_symbol and symbol.startswith(document_symbol + ".")
+    }
+
+
 def parse_doc_sections(
     text: str, *, title: str = "", url: str = "", declarations: list[DocDeclaration] | None = None,
 ) -> list[DocSection]:
@@ -374,4 +387,5 @@ def parse_doc_sections(
     return sections
 
 
-__all__ = ["DocSection", "declaration_name", "scan_declarations", "parse_doc_sections", "resolve_document_symbol"]
+__all__ = ["DocSection", "declaration_name", "scan_declarations", "parse_doc_sections", "resolve_document_symbol",
+           "document_symbol_names"]
