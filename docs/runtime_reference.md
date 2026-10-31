@@ -96,7 +96,7 @@ npm --prefix frontend run dev
 
 ## 2. 환경 변수
 
-세 GPT-5.6 모델은 역할별 환경 변수로 선택하며 같은 프롬프트와 출력 계약을 사용합니다. 공식 문서는 [Luna](https://developers.openai.com/api/docs/models/gpt-5.6-luna)를 비용 중심, [Terra](https://developers.openai.com/api/docs/models/gpt-5.6-terra)를 성능·비용 균형, [Sol](https://developers.openai.com/api/docs/models/gpt-5.6-sol)을 복잡한 전문 작업용으로 설명하며 모두 구조화 출력을 지원합니다. 이 구분만으로 서로 다른 지시문이 필요하다고 판단하지 않습니다. 모델별 분기는 같은 대표 입력에서 계약 준수·완결성·비용 차이가 확인될 때 검토합니다. [GPT-5.6 프롬프트 지침](https://developers.openai.com/api/docs/guides/latest-model?model=gpt-5.6)에 따라 중복 지시를 줄이면서 도메인 제약과 기존 회귀 사례를 보존합니다.
+기본 모델은 답변 합성·계획·대화 요약에 [GPT-6 Luna](https://developers.openai.com/api/docs/models/gpt-6-luna), 벤치마크 심사에 [GPT-6.1 Terra](https://developers.openai.com/api/docs/models/gpt-6.1-terra)를 사용합니다. 역할별 환경 변수로 모델을 선택하며 기존 프롬프트와 출력 계약을 유지합니다. 두 모델은 구조화 출력을 지원합니다. 모델별 프롬프트 분기는 같은 대표 입력에서 계약 준수·완결성·비용 차이가 확인될 때 검토합니다.
 
 프롬프트 책임은 요청 해석·검색 계획([planner](../src/runtime/nodes/planner/prompt_builder.py)), 검색 실패 피드백([retry](../src/runtime/nodes/retry.py)), 답변 합성([공통 정책](../src/core/prompts.py), [synthesis](../src/runtime/nodes/synthesis/prompt_builder.py)), 사전 후보·packet 판정([prepared semantics](../src/runtime/nodes/validation/prepared_semantics.py)), 사후 의미 검증([validation](../src/runtime/nodes/validation/semantic.py)), 대화 요약([session](../src/runtime/nodes/session.py)), 평가용 심사([judge](../src/eval/judge_llm.py))로 나뉩니다. planner와 synthesis는 도구를 직접 호출하지 않고 서버가 출력 계약에 따라 검색·저장·전송을 실행합니다. 평가용 심사의 점수 기준은 생성 프롬프트와 독립적으로 유지합니다.
 
@@ -113,7 +113,7 @@ planner 설정은 정확한 모델명이 `gpt-5.6-luna`, `gpt-5.6-terra`, `gpt-5
 예를 들어 프로젝트 루트 `.env`에서 다음처럼 설정하면 planner에 `high`를 적용합니다.
 
 ```dotenv
-PLANNER_MODEL="gpt-5.6-luna"
+PLANNER_MODEL="gpt-6-luna"
 PLANNER_REASONING_EFFORT=high
 ```
 
@@ -131,9 +131,9 @@ PLANNER_REASONING_EFFORT=high
 |---|---|---|
 | `OPENAI_API_KEY` | 없음 | OpenAI 호출과 임베딩 생성에 필요 |
 | `TAVILY_API_KEY` | 없음 | 공식 문서 검색에 필요 |
-| `CHAT_MODEL` | `gpt-5.6-luna` | synthesis 모델 기본값 |
-| `PLANNER_MODEL` | `gpt-5.6-luna` | planner 모델 기본값 |
-| `SUMMARY_MODEL` | `gpt-5.6-luna` | session summary 모델 기본값 |
+| `CHAT_MODEL` | `gpt-6-luna` | synthesis 모델 기본값 |
+| `PLANNER_MODEL` | `gpt-6-luna` | planner 모델 기본값 |
+| `SUMMARY_MODEL` | `gpt-6-luna` | session summary 모델 기본값 |
 | `VALIDATION_MODEL` | `gpt-6-luna` | 사전·사후 검증용 OpenAI Decisions API 모델 (gpt-6-luna만 지원) |
 | `SUMMARY_MAX_TOKENS` | `1024` | 요약 LLM 생성 토큰 상한; 저장 요약 예산과 독립 |
 | `PLANNER_MAX_TOKENS` | `4096` | planner structured output 최대 토큰 |
@@ -194,6 +194,7 @@ PLANNER_REASONING_EFFORT=high
 - `gpt-5.6-terra`: none, low, medium, high, xhigh, max
 - `gpt-5.6-sol`: none, low, medium, high, xhigh, max
 - `gpt-5.6`: none, low, medium, high, xhigh, max
+- `gpt-6-luna`: none, low, medium, high, xhigh, max
 - `gpt-5-nano`: minimal, low, medium, high
 - SLACK_DEFAULT_USER_ID와 둘 중 하나만 설정합니다. 명시 수신자 실패에는 사용하지 않습니다.
 - SLACK_DEFAULT_DM_EMAIL과 둘 중 하나만 설정합니다. 명시 수신자 실패에는 사용하지 않습니다.
@@ -209,7 +210,7 @@ PLANNER_REASONING_EFFORT=high
 
 | 이름 | 기본값 | 설명 |
 |---|---|---|
-| `JUDGE_MODEL` | `gpt-5.6-luna` | benchmark judge 모델 override |
+| `JUDGE_MODEL` | `gpt-6.1-terra` | benchmark judge 모델 override |
 | `BENCHMARK_ENDPOINT` | `http://127.0.0.1:8000` | benchmark 대상 FastAPI 주소 override |
 | `BENCHMARK_JUDGE_ENABLED` | `true` | judge 사용 여부 override |
 | `BENCHMARK_SLACK_ENABLED` | `false` | benchmark live Slack 전송 opt-in |

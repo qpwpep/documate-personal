@@ -62,6 +62,7 @@ def provider(monkeypatch):
 @pytest.mark.parametrize(("model", "temperature"), [
     ("gpt-6-luna", None),
     ("gpt-6.1-sol", None),
+    ("gpt-6.1-terra", None),
     ("gpt-5.6-luna", None),
     ("gpt-4.1", 0),
 ])
@@ -94,6 +95,7 @@ def test_judge_scores_with_supported_wire_options(provider, model, temperature):
 
 @pytest.mark.parametrize(("model", "temperature"), [
     ("gpt-6-luna", None),
+    ("gpt-6.1-terra", None),
     ("gpt-4.1", 0),
 ])
 def test_semantic_assessor_uses_supported_options_and_records_them(provider, monkeypatch, tmp_path, model, temperature):

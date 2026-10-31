@@ -335,7 +335,7 @@ class BenchmarkConfig(BaseModel):
     pricing: Pricing = Field(default_factory=Pricing)
     judge_min_score: JudgeMinScoreConfig = Field(default_factory=JudgeMinScoreConfig)
     judge_min_subscores: JudgeSubscoreMinConfig = Field(default_factory=JudgeSubscoreMinConfig)
-    judge_model: str = "gpt-5.6-luna"
+    judge_model: str = "gpt-6.1-terra"
     judge_enabled: bool = True
     judge_max_input_tokens: int = Field(default=DEFAULT_JUDGE_MAX_INPUT_TOKENS, gt=0, strict=True)
     judge_max_output_tokens: int = Field(default=DEFAULT_JUDGE_MAX_OUTPUT_TOKENS, gt=0, strict=True)

@@ -61,6 +61,21 @@ cached_prompt_per_1k_usd = 0.00002
 cache_write_per_1k_usd = 0.00025
 completion_per_1k_usd = 0.00120
 
+# Standard short-context, 30-minute cache retention; verified 2026-10-31:
+# https://developers.openai.com/api/docs/pricing
+# Other context lengths, service tiers and retention policies need their own prices.
+[pricing.models."gpt-6-luna"]
+prompt_per_1k_usd = 0.00010
+cached_prompt_per_1k_usd = 0.00001
+cache_write_per_1k_usd = 0.000125
+completion_per_1k_usd = 0.00050
+
+[pricing.models."gpt-6.1-terra"]
+prompt_per_1k_usd = 0.00100
+cached_prompt_per_1k_usd = 0.00005
+cache_write_per_1k_usd = 0.00125
+completion_per_1k_usd = 0.00500
+
 # Standard short-context /v1/decisions pricing, verified 2026-10-29:
 # https://developers.openai.com/api/docs/guides/decisions#pricing-and-availability
 # https://developers.openai.com/api/docs/pricing
@@ -72,6 +87,6 @@ cache_write_per_1k_usd = 0.000125
 completion_per_1k_usd = 0.0
 
 [runtime]
-judge_model = "gpt-5.6-luna"
+judge_model = "gpt-6.1-terra"
 judge_enabled = true
 request_timeout_seconds = 60

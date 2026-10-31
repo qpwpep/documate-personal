@@ -55,9 +55,9 @@ APP_ENV_SPECS = (
         "공식 문서 검색에 필요",
         example_group="required_secrets",
     ),
-    EnvVarSpec("CHAT_MODEL", "gpt-5.6-luna", "synthesis 모델 기본값", example_group="models"),
-    EnvVarSpec("PLANNER_MODEL", "gpt-5.6-luna", "planner 모델 기본값", example_group="models"),
-    EnvVarSpec("SUMMARY_MODEL", "gpt-5.6-luna", "session summary 모델 기본값", example_group="models"),
+    EnvVarSpec("CHAT_MODEL", "gpt-6-luna", "synthesis 모델 기본값", example_group="models"),
+    EnvVarSpec("PLANNER_MODEL", "gpt-6-luna", "planner 모델 기본값", example_group="models"),
+    EnvVarSpec("SUMMARY_MODEL", "gpt-6-luna", "session summary 모델 기본값", example_group="models"),
     EnvVarSpec("VALIDATION_MODEL", "gpt-6-luna", "사전·사후 검증용 OpenAI Decisions API 모델 (gpt-6-luna만 지원)", example_group="models"),
     EnvVarSpec("SUMMARY_MAX_TOKENS", 1024, "요약 LLM 생성 토큰 상한; 저장 요약 예산과 독립", example_group="planning_summary"),
     EnvVarSpec("PLANNER_MAX_TOKENS", 4096, "planner structured output 최대 토큰", example_group="planning_summary"),
@@ -96,6 +96,7 @@ APP_ENV_SPECS = (
         None,
         "synthesis reasoning effort override (none/minimal/low/medium/high/xhigh/max, 빈 값이면 모델 기본값, none은 명시 override)",
         sync_notes=(
+            "gpt-6-luna: none, low, medium, high, xhigh, max",
             "gpt-5.6-luna: none, low, medium, high, xhigh, max",
             "gpt-5-nano: minimal, low, medium, high",
         ),
@@ -231,7 +232,7 @@ APP_ENV_SPECS = (
 BENCHMARK_ENV_SPECS = (
     EnvVarSpec(
         "JUDGE_MODEL",
-        "gpt-5.6-luna",
+        "gpt-6.1-terra",
         "benchmark judge 모델 override",
         section="benchmark",
         config_runtime_key="judge_model",
