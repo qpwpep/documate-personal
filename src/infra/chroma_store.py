@@ -11,14 +11,18 @@ from langchain_openai import OpenAIEmbeddings
 CHROMA_DISTANCE_METRIC = "l2"
 CHROMA_SCORE_DIRECTION = "lower_is_better"
 CHROMA_COLLECTION_METADATA = {"hnsw:space": CHROMA_DISTANCE_METRIC}
+EMBEDDING_REQUEST_TIMEOUT_SECONDS = 20.0
 
 
 def build_openai_embeddings(api_key: str | None, *, timeout_seconds: float | None = None) -> OpenAIEmbeddings:
-    options = {} if timeout_seconds is None else {"request_timeout": timeout_seconds, "max_retries": 0}
+    # Both indexing and query embedding hold the session lock while awaiting I/O.
+    timeout = EMBEDDING_REQUEST_TIMEOUT_SECONDS if timeout_seconds is None else min(
+        EMBEDDING_REQUEST_TIMEOUT_SECONDS, timeout_seconds)
     return OpenAIEmbeddings(
         model="text-embedding-3-small",
         api_key=api_key,
-        **options,
+        request_timeout=timeout,
+        max_retries=0,
     )
 
 
