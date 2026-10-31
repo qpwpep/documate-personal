@@ -19,6 +19,44 @@ test('shrinking the desktop sidebar returns keyboard focus to its visible menu o
   await expectClickableInViewport(opener);
 });
 
+for (const viewport of [{ width: 1280, height: 720 }, { width: 390, height: 600 }]) {
+  test(`answer keyboard focus stays below the sticky header at ${viewport.width}x${viewport.height}`, async ({ page }) => {
+    await page.setViewportSize(viewport);
+    await page.goto('./');
+    const query = page.getByRole('textbox', { name: '질문', exact: true });
+    for (let index = 0; index < 5; index += 1) {
+      await query.fill(`키보드 탐색 확인 ${index}`);
+      await page.getByRole('button', { name: '질문 보내기', exact: true }).click();
+      await expect(page.getByText('답변 받음', { exact: true })).toHaveCount(index + 1);
+    }
+    const controls = (await page.getByRole('region', { name: '대화 기록', exact: true }).all()).flatMap((turn) => [
+      turn.getByText('검증 상세', { exact: true }),
+      turn.getByRole('button', { name: 'TXT 파일 만들기', exact: true }),
+      turn.getByText('요청 정보', { exact: true }),
+    ]);
+    expect(controls).toHaveLength(15);
+    await query.fill('아직 보내지 않은 후속 질문');
+    for (const { key, targets } of [
+      { key: 'Shift+Tab', targets: [...controls].reverse() },
+      { key: 'Tab', targets: controls.slice(1) },
+    ]) {
+      for (const target of targets) {
+        await page.keyboard.press(key);
+        await expect(target).toBeFocused();
+        await expectClickableInViewport(target);
+        await expect.poll(async () => {
+          const header = await page.locator('.app-header').boundingBox();
+          const focused = await target.boundingBox();
+          return focused!.y >= header!.y + header!.height;
+        }, { message: `${key}: ${await target.textContent()} must not be hidden behind the header` }).toBe(true);
+      }
+    }
+    await page.keyboard.press('Tab');
+    await expect(query).toBeFocused();
+    await expect(query).toHaveValue('아직 보내지 않은 후속 질문');
+  });
+}
+
 for (const viewport of [{ width: 320, height: 720 }, { width: 390, height: 844 }, { width: 390, height: 360 }]) {
   test(`keyboard navigation and evidence remain usable at ${viewport.width}x${viewport.height}`, async ({ page }) => {
     await page.setViewportSize(viewport);

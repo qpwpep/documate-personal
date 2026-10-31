@@ -14,16 +14,20 @@ test('the desktop sidebar can collapse and reopen without losing the composer dr
   await expect(query).toHaveValue('  메뉴를 접어도 남는 초안\n둘째 줄  ');
 });
 
-test('the Streamlit introduction keeps extra examples folded and prefills without submitting', async ({ page, request }) => {
+test('the centered introduction puts the composer before examples and prefills without submitting', async ({ page, request }) => {
   await page.goto('./');
   const title = page.getByRole('heading', { name: '문서와 자료에 질문하세요', exact: true });
   await expect(title).toBeVisible();
-  const sidebarBox = await page.getByRole('complementary', { name: '대화 메뉴', exact: true }).boundingBox();
   const headerBox = await page.locator('.app-header').boundingBox();
   const introBox = await page.locator('.welcome-intro').boundingBox();
-  expect(sidebarBox?.width).toBe(300);
-  expect(headerBox!.width).toBeLessThanOrEqual(872);
+  const composerBox = await page.locator('form.composer').boundingBox();
+  const examplesBox = await page.getByLabel('질문 예시', { exact: true }).boundingBox();
+  expect(headerBox!.y + headerBox!.height).toBeLessThanOrEqual(introBox!.y);
+  expect(introBox!.y + introBox!.height).toBeLessThanOrEqual(composerBox!.y);
+  expect(composerBox!.y + composerBox!.height).toBeLessThanOrEqual(examplesBox!.y);
+  expect(composerBox!.width).toBeLessThanOrEqual(800);
   expect(Math.abs(introBox!.x + introBox!.width / 2 - headerBox!.x - headerBox!.width / 2)).toBeLessThanOrEqual(1);
+  expect(Math.abs(composerBox!.x + composerBox!.width / 2 - introBox!.x - introBox!.width / 2)).toBeLessThanOrEqual(1);
   await expect(page.getByRole('textbox', { name: '질문', exact: true })).toBeInViewport();
   const firstExample = page.getByRole('button', { name: 'pandas merge 사용법을 공식 문서 기준으로 설명해줘', exact: true });
   const extraExample = page.getByRole('button', { name: 'FastAPI 라우터 구조를 간단히 설명해줘', exact: true });
@@ -64,12 +68,14 @@ test('confirmed attachments appear in the sidebar while selection stays in the c
   await page.screenshot({ path: test.info().outputPath('sidebar-attachment.png'), fullPage: true });
 });
 
-test('mobile examples and composer fit the viewport and the menu returns focus', async ({ page }) => {
-  await page.setViewportSize({ width: 390, height: 844 });
+test('mobile examples and composer fit a narrow viewport and the menu returns focus', async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 720 });
   await page.goto('./');
   await expect(page.getByRole('heading', { name: '문서와 자료에 질문하세요', exact: true })).toBeVisible();
   const query = page.getByRole('textbox', { name: '질문', exact: true });
   await expect(query).toBeInViewport();
+  await expect(page.getByRole('button', { name: '파일 추가', exact: true })).toBeInViewport();
+  await expect(page.getByRole('button', { name: '질문 보내기', exact: true })).toBeInViewport();
   const menu = page.getByRole('button', { name: '메뉴 열기', exact: true });
   await menu.focus();
   await page.keyboard.press('Enter');
