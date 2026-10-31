@@ -109,9 +109,17 @@ def summarize_calls(calls: list[dict]) -> dict:
     for call in calls:
         usage = call.get("usage", {})
         model, endpoint = call.get("model"), call.get("endpoint")
-        rates = ((0.10, 0.01, 0.125, 0.0) if endpoint == "decisions" and model == "gpt-6-luna" else
-                 (0.02, 0.02, 0.02, 0.0) if endpoint == "embeddings" and model == "text-embedding-3-small" else
-                 (0.20, 0.02, 0.25, 1.20) if model == "gpt-5.6-luna" else None)
+        rates = None
+        if endpoint == "decisions" and model == "gpt-6-luna":
+            rates = (0.10, 0.01, 0.125, 0.0)
+        elif endpoint == "embeddings" and model == "text-embedding-3-small":
+            rates = (0.02, 0.02, 0.02, 0.0)
+        elif endpoint in {"chat/completions", "responses"}:
+            rates = {
+                "gpt-5.6-luna": (0.20, 0.02, 0.25, 1.20),
+                "gpt-6-luna": (0.10, 0.01, 0.125, 0.50),
+                "gpt-6.1-terra": (1.00, 0.05, 1.25, 5.00),
+            }.get(model)
         if rates is None:
             observed_complete = uncached_complete = False
             continue
@@ -478,9 +486,11 @@ def run(args) -> None:
                 "scope": "real agent graph and LLMs; frozen docs HTTP; real upload parser/index/embeddings; no FastAPI/SSE; no Slack",
                 "capture_completions": args.capture_completions,
                 "prices_per_million": {"gpt-5.6-luna": {"input": .20, "cache_read": .02, "cache_write": .25, "output": 1.20},
+                                       "gpt-6-luna": {"input": .10, "cache_read": .01, "cache_write": .125, "output": .50},
+                                       "gpt-6.1-terra": {"input": 1.00, "cache_read": .05, "cache_write": 1.25, "output": 5.00},
                                        "decisions:gpt-6-luna": {"input": .10, "cache_read": .01, "cache_write": .125, "output": 0},
                                        "text-embedding-3-small": {"input": .02}},
-                "price_source": "https://developers.openai.com/api/docs/pricing", "price_checked": "2026-10-29"}
+                "price_source": "https://developers.openai.com/api/docs/pricing", "price_checked": "2026-10-31"}
     manifest["pricing_scope"] = "Calculated public Standard short-context rates with 30-minute cache-write rates; not a provider invoice. Actual tier is retained when supplied. Unknown rates or usage make full costs unknown."
     manifest_path = run_dir / "manifest.json"
     if manifest_path.exists():

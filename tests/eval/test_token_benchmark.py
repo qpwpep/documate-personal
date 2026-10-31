@@ -32,6 +32,44 @@ def test_provider_cache_details_are_subsets_not_extra_tokens():
     assert summary["uncached_cost_usd"] == pytest.approx(0.00032)
 
 
+@pytest.mark.parametrize(("model", "endpoint", "observed_cost", "uncached_cost"), [
+    ("gpt-6-luna", "chat/completions", 0.000119, 0.00015),
+    ("gpt-6-luna", "responses", 0.000119, 0.00015),
+    ("gpt-6.1-terra", "chat/completions", 0.00117, 0.0015),
+    ("gpt-6.1-terra", "responses", 0.00117, 0.0015),
+    ("gpt-6-luna", "decisions", 0.000069, 0.0001),
+])
+def test_current_models_use_endpoint_specific_prices(model, endpoint, observed_cost, uncached_cost):
+    summary = summarize_calls([{
+        "model": model, "endpoint": endpoint, "status": "completed",
+        "usage": usage_counters({
+            "input_tokens": 1000, "output_tokens": 100,
+            "input_tokens_details": {"cached_tokens": 400, "cache_write_tokens": 200},
+        }),
+    }])
+
+    assert summary["observed_cost_usd"] == pytest.approx(observed_cost)
+    assert summary["uncached_cost_usd"] == pytest.approx(uncached_cost)
+
+
+@pytest.mark.parametrize(("model", "endpoint"), [
+    ("gpt-6-luna", "embeddings"),
+    ("gpt-6.1-terra", "embeddings"),
+    ("gpt-6.1-terra", "decisions"),
+])
+def test_general_model_prices_do_not_apply_to_other_endpoints(model, endpoint):
+    summary = summarize_calls([{
+        "model": model, "endpoint": endpoint, "status": "completed",
+        "usage": usage_counters({
+            "input_tokens": 1000, "output_tokens": 100,
+            "input_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0},
+        }),
+    }])
+
+    assert summary["observed_cost_usd"] is None
+    assert summary["uncached_cost_usd"] is None
+
+
 def test_failed_attempt_keeps_total_cost_unknown_without_hiding_observed_tokens():
     calls = [
         {"model": "gpt-6-luna", "endpoint": "decisions", "status": "completed",
