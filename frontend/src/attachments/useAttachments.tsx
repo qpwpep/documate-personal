@@ -16,7 +16,7 @@ interface Options {
   onManifestChange(manifest: UploadManifest | null): void;
   onBusyChange(busy: boolean): void;
   onSendPrompt(prompt: string): void;
-  onRestorePrompt(prompt: string): void;
+  onRestorePrompt(prompt: string): boolean;
   disabled: boolean;
 }
 
@@ -146,9 +146,13 @@ export function useAttachments(options: Options) {
   function recover(reselect: boolean) {
     if (active.current || options.disabled) return;
     const prompt = options.state.pendingPrompt;
-    change({ ...createAttachmentState(), notice: reselect ? '파일을 다시 선택하고 질문을 확인한 뒤 보내 주세요.' : '기존 첨부를 유지했습니다. 질문을 확인한 뒤 보내 주세요.' });
-    if (prompt !== null) options.onRestorePrompt(prompt);
-    if (reselect) requestAnimationFrame(() => pickerButton.current?.focus());
+    const restored = prompt === null || options.onRestorePrompt(prompt);
+    const recoveryNotice = reselect ? '파일을 다시 선택하고 질문을 확인한 뒤 보내 주세요.' : '기존 첨부를 유지했습니다. 질문을 확인한 뒤 보내 주세요.';
+    change({
+      ...createAttachmentState(), phase: restored ? 'idle' : 'ready', pendingPrompt: restored ? null : prompt,
+      notice: restored ? recoveryNotice : '작성 중인 질문을 유지했습니다. 보류한 질문을 보내거나 해제한 뒤 계속할 수 있습니다. 보류 질문과 첨부를 수정하려면 먼저 입력창을 비워 주세요.',
+    });
+    if (reselect && restored) requestAnimationFrame(() => pickerButton.current?.focus());
   }
 
   async function removeFiles(fileId: string | null) {
@@ -176,7 +180,7 @@ export function useAttachments(options: Options) {
 
   const canChange = !options.disabled && !active.current && options.state.phase === 'idle' && options.state.pendingPrompt === null;
   const picker = <AttachmentPicker config={options.config} disabled={!canChange} buttonRef={pickerButton}
-    onSelect={(files) => change({ ...createAttachmentState(), files })} />;
+    onSelect={(files) => change({ ...createAttachmentState(), files: [...options.state.files, ...files] })} />;
   const manifestPanel = <AttachmentManifest manifest={options.manifest} confirmed={options.manifestConfirmed}
     disabled={options.disabled || active.current} changesDisabled={!canChange || options.state.files.length > 0}
     onRefresh={() => { void refreshManifest(); }}
@@ -199,9 +203,10 @@ export function useAttachments(options: Options) {
 function selectionErrors(files: File[], manifest: UploadManifest, config: ClientConfig) {
   const errors: string[] = [];
   const fileErrors: Record<number, string[]> = {};
-  const names = new Set(files.map((file) => attachmentName(file.name)));
-  const retained = manifest.files.filter((file) => !names.has(attachmentName(file.name)));
+  const selectedSizes = new Map<string, number>();
   for (const [index, file] of files.entries()) {
+    const name = attachmentName(file.name);
+    selectedSizes.set(name, Math.max(selectedSizes.get(name) ?? 0, file.size));
     const suffix = file.name.slice(file.name.lastIndexOf('.')).toLowerCase();
     const messages = [];
     if (!config.upload.accepted_suffixes.includes(suffix)) messages.push('지원하지 않는 파일 형식입니다.');
@@ -211,7 +216,10 @@ function selectionErrors(files: File[], manifest: UploadManifest, config: Client
       errors.push(...messages.map((message) => `${file.name}: ${message}`));
     }
   }
-  if (names.size + retained.length > config.upload.max_files) errors.push(`한 대화에는 최대 ${config.upload.max_files}개 파일을 첨부할 수 있습니다.`);
-  if (files.reduce((total, file) => total + file.size, 0) + retained.reduce((total, file) => total + file.size_bytes, 0) > config.upload.max_total_bytes) errors.push('전체 첨부 크기 한도를 넘었습니다.');
+  // One normalized name can occupy only one final slot. Keep every selected file
+  // for staging: content hashes, not file metadata, still decide duplicates/conflicts.
+  const retained = manifest.files.filter((file) => !selectedSizes.has(attachmentName(file.name)));
+  if (selectedSizes.size + retained.length > config.upload.max_files) errors.push(`한 대화에는 최대 ${config.upload.max_files}개 파일을 첨부할 수 있습니다.`);
+  if ([...selectedSizes.values()].reduce((total, size) => total + size, 0) + retained.reduce((total, file) => total + file.size_bytes, 0) > config.upload.max_total_bytes) errors.push('전체 첨부 크기 한도를 넘었습니다.');
   return { errors, fileErrors };
 }

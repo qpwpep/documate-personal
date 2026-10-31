@@ -113,17 +113,17 @@ afterAll(async () => {
   vi.unstubAllGlobals();
 });
 
-function Harness({ manifestConfirmed = true }: { manifestConfirmed?: boolean }) {
+function Harness({ manifestConfirmed = true, clientConfig = config }: { manifestConfirmed?: boolean; clientConfig?: ClientConfig }) {
   const [client] = useState(() => new AgentSessionClient({ sessionId: 'attachments', baseUrl: apiBaseUrl }));
   const [state, setState] = useState(createAttachmentState);
   const [confirmed, setConfirmed] = useState<UploadManifest | null>(manifest);
   const [busy, setBusy] = useState(false);
   const attachments = useAttachments({
-    client, config, state, onChange: setState, manifest: confirmed, manifestConfirmed,
+    client, config: clientConfig, state, onChange: setState, manifest: confirmed, manifestConfirmed,
     ensureSession: () => client.refreshUploads(),
     onManifestChange: setConfirmed, onBusyChange: setBusy,
     onSendPrompt: (prompt) => sentQueries.push(prompt),
-    onRestorePrompt: (prompt) => restoredQueries.push(prompt),
+    onRestorePrompt: (prompt) => { restoredQueries.push(prompt); return true; },
     // The app's disabled flag covers other operations; this hook owns upload busy state.
     disabled: false,
   });
@@ -131,6 +131,77 @@ function Harness({ manifestConfirmed = true }: { manifestConfirmed?: boolean }) 
 }
 
 describe('첨부를 명시적으로 확정하는 흐름', () => {
+  it('파일 추가를 여러 번 해도 기존 선택을 유지하고 함께 확정한다', async () => {
+    const user = userEvent.setup();
+    render(<Harness />);
+    await user.upload(screen.getByLabelText('파일 첨부'), new File(['first'], 'first.py'));
+    await user.upload(screen.getByLabelText('파일 첨부'), new File(['second'], 'second.py'));
+    expect(screen.getByRole('button', { name: 'first.py 선택 취소 1' })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'second.py 선택 취소 2' })).toBeVisible();
+    await user.click(screen.getByRole('button', { name: '첨부만 확정' }));
+    await screen.findByRole('button', { name: 'second.py 첨부 해제' });
+    expect(manifest.files.map((file) => file.name)).toEqual(['first.py', 'second.py']);
+    expect(sentQueries).toHaveLength(0);
+  });
+
+  it('여러 번 추가한 선택 전체에 파일 개수 제한을 적용한다', async () => {
+    const user = userEvent.setup();
+    render(<Harness />);
+    await user.upload(screen.getByLabelText('파일 첨부'), [new File(['a'], 'a.py'), new File(['b'], 'b.py')]);
+    await user.upload(screen.getByLabelText('파일 첨부'), [new File(['c'], 'c.py'), new File(['d'], 'd.py')]);
+    await user.click(screen.getByRole('button', { name: '첨부만 확정' }));
+    expect(await screen.findByText('한 대화에는 최대 3개 파일을 첨부할 수 있습니다.')).toBeVisible();
+    expect(stagedCount).toBe(0);
+    expect(syncBodies).toHaveLength(0);
+    expect(manifest.files).toHaveLength(0);
+  });
+
+  it('이전 파일을 포함해 추가 선택해도 고유 파일의 용량으로 확정한다', async () => {
+    const user = userEvent.setup();
+    const content = 'x'.repeat(40);
+    const names = ['a.py', 'b.py', 'c.py', 'd.py'];
+    syncResult = { ...manifest, revision: 1, files: names.map((name, index) => ({
+      file_id: `file-${index}`, name, size_bytes: 40, content_hash: hash(content), source_uri: `upload:///attachments/file-${index}`,
+    })) };
+    render(<Harness clientConfig={{ ...config, upload: { ...config.upload, max_files: 4 } }} />);
+    await user.upload(screen.getByLabelText('파일 첨부'), names.slice(0, 3).map((name) => new File([content], name)));
+    await user.upload(screen.getByLabelText('파일 첨부'), ['A.PY', ...names.slice(1)].map((name) => new File([content], name)));
+    await user.click(screen.getByRole('button', { name: '첨부만 확정' }));
+    await screen.findByRole('button', { name: 'd.py 첨부 해제' });
+    expect(manifest.files.map((file) => file.name)).toEqual(names);
+    expect(stagedCount).toBe(7);
+    expect(syncBodies).toHaveLength(1);
+    expect(stagedFiles.size).toBe(0);
+    expect(sentQueries).toHaveLength(0);
+  });
+
+  it('같은 내용이라도 이름이 다르면 기존 첨부와 합쳐 용량 한도를 적용한다', async () => {
+    manifest.files = [original];
+    const user = userEvent.setup();
+    render(<Harness />);
+    await user.upload(screen.getByLabelText('파일 첨부'), new File(['x'.repeat(100)], 'a.py'));
+    await user.upload(screen.getByLabelText('파일 첨부'), [new File(['x'.repeat(100)], 'a.py'), new File(['x'.repeat(100)], 'b.py')]);
+    await user.click(screen.getByRole('button', { name: '첨부만 확정' }));
+    expect(await screen.findByText('전체 첨부 크기 한도를 넘었습니다.')).toBeVisible();
+    expect(stagedCount).toBe(0);
+    expect(syncBodies).toHaveLength(0);
+    expect(manifest.files).toEqual([original]);
+  });
+
+  it('이름과 크기와 수정 시각이 같아도 다른 내용은 중복으로 버리지 않는다', async () => {
+    const user = userEvent.setup();
+    render(<Harness />);
+    await user.upload(screen.getByLabelText('파일 첨부'), new File(['a'.repeat(100)], 'sample.py', { lastModified: 1 }));
+    await user.upload(screen.getByLabelText('파일 첨부'), [
+      new File(['b'.repeat(100)], 'sample.py', { lastModified: 1 }), new File(['x'], 'other.py'),
+    ]);
+    await user.click(screen.getByRole('button', { name: '첨부만 확정' }));
+    expect(await screen.findByText('sample.py: 한 번에 같은 이름의 서로 다른 파일을 추가할 수 없습니다.')).toBeVisible();
+    expect(stagedCount).toBe(3);
+    expect(syncBodies).toHaveLength(0);
+    expect(manifest.files).toHaveLength(0);
+  });
+
   it.each([false, true])('목록 조회 중 파일 변경을 막고 응답 후 다시 허용한다 (선택 파일: %s)', async (selected) => {
     manifest.files = [original];
     const user = userEvent.setup();

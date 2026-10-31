@@ -331,6 +331,33 @@ describe('질문 화면과 실제 HTTP 클라이언트', () => {
     expect(requests).toHaveLength(0);
   });
 
+  it.each(['첨부 없이 계속', '파일 다시 선택'])('%s 복구에서 새 초안과 보류 질문을 모두 보존한다', async (recovery) => {
+    const user = userEvent.setup({ applyAccept: false });
+    const app = render(<App apiBaseUrl={apiBaseUrl} />);
+    await screen.findByText('질문할 준비가 되었습니다.');
+    const pending = '  첨부 파일을 설명해 줘  ';
+    const newerDraft = '  나중에 보낼 새 질문  ';
+    await user.upload(screen.getByLabelText('파일 첨부'), new File(['bad'], 'wrong.exe'));
+    await user.type(screen.getByRole('textbox', { name: '질문' }), pending);
+    await user.click(screen.getByRole('button', { name: '질문 보내기' }));
+    await screen.findByText(/wrong.exe: 지원하지 않는 파일 형식/);
+    await user.type(screen.getByRole('textbox', { name: '질문' }), newerDraft);
+    await user.click(screen.getByRole('button', { name: recovery }));
+
+    expect(screen.getByRole('textbox', { name: '질문' })).toHaveValue(newerDraft);
+    expect(screen.getByText(pending.trim())).toBeVisible();
+    expect(requests).toHaveLength(0);
+    app.unmount();
+    render(<App apiBaseUrl={apiBaseUrl} />);
+    await screen.findByText('질문할 준비가 되었습니다.');
+    expect(screen.getByRole('textbox', { name: '질문' })).toHaveValue(newerDraft);
+    await user.click(screen.getByRole('button', { name: '보류한 질문 보내기' }));
+    await screen.findByText('한글 답변 🧪');
+    expect(JSON.parse(requests[0]).query).toBe(pending);
+    expect(screen.getByRole('textbox', { name: '질문' })).toHaveValue(newerDraft);
+    expect(requests).toHaveLength(1);
+  });
+
   it('파일 전송 직전 서버 만료를 확인하면 첨부 오류 뒤에도 읽기 전용을 유지한다', async () => {
     const user = userEvent.setup();
     render(<App apiBaseUrl={apiBaseUrl} />);

@@ -242,7 +242,13 @@ export function App({ apiBaseUrl = '' }: { apiBaseUrl?: string }) {
     ensureSession: () => ensureSession(conversation.id), onManifestChange: (manifest) => acceptManifest(conversation.id, manifest),
     onBusyChange: (busy) => setBusy(conversation.id, 'upload', busy),
     onSendPrompt: (query) => { void sendQuestion(conversation.id, query); },
-    onRestorePrompt: (query) => { updateConversation(conversation.id, (item) => ({ ...item, draft: query })); input.current?.focus(); },
+    onRestorePrompt: (query) => {
+      const current = currentState.current.conversations.find((item) => item.id === conversation.id)!;
+      if (current.draft && current.draft !== query) return false;
+      updateConversation(conversation.id, (item) => ({ ...item, draft: query }));
+      input.current?.focus();
+      return true;
+    },
   });
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
