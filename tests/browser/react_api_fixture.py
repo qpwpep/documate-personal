@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import json
 import socket
+import time
 from contextlib import contextmanager
 from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -92,6 +93,7 @@ def run(port: int) -> None:
     submissions: list[dict[str, object]] = []
     slack_requests: list[dict[str, object]] = []
     held_queries: dict[str, Event] = {}
+    held_decisions: dict[str, tuple[Event, Event]] = {}
 
     def model_response(request: httpx.Request) -> httpx.Response:
         payload = json.loads(request.content)
@@ -120,6 +122,16 @@ def run(port: int) -> None:
                     "body": {"kind": "copy_input", "source": {
                         "turn_id": current_turn["turn_id"], "quote": query[len(copy_prefix):],
                     }},
+                    "slack_recipient": {"state": "omitted"},
+                })
+            elif query == "방금 답변을 그대로 저장해줘. 한글 답변을 유지해줘.":
+                contract = WireRequestContract.model_validate({
+                    "body": {"kind": "copy_answer", "source": {"ref": "previous"}},
+                    "actions": {"save_text": {"intent": "requested", "evidence_ids": ["export"]}},
+                    "answer": {"content": [{"kind": "custom", "mode": "required",
+                                            "description": "한글 답변 유지", "evidence_ids": ["export"]}]},
+                    "evidence": [{"id": "export", "turn_id": current_turn["turn_id"],
+                                  "quote": query, "scope": "current_request", "interpretation": "instruction"}],
                     "slack_recipient": {"state": "omitted"},
                 })
             elif "Slack으로 보내줘" in query:
@@ -161,9 +173,15 @@ def run(port: int) -> None:
     def decisions_response(request: httpx.Request) -> httpx.Response:
         assert (request.method, request.url.path) == ("POST", "/v1/decisions")
         payload = json.loads(request.content)
+        for query, (entered, released) in held_decisions.items():
+            if query in payload["input"] and any(item["name"] == "request_ready" for item in payload["questions"]):
+                entered.set()
+                if not released.wait(20):
+                    raise AssertionError("The browser did not release its held pre-validation request")
+        probability = 0.91 if "한글 답변 유지" in payload["input"] else 0.99
         return httpx.Response(200, json={
             "model": payload["model"],
-            "answers": [{"type": "predicate", "name": item["name"], "probability": 0.99}
+            "answers": [{"type": "predicate", "name": item["name"], "probability": probability}
                         for item in payload["questions"]],
             "usage": {"input_tokens": 32, "output_tokens": 0, "total_tokens": 32},
         })
@@ -253,6 +271,36 @@ def run(port: int) -> None:
                 held_queries[payload["query"]].set()
             release.set()
             return {"released": True}
+
+        @app.post("/_fixture/decisions/hold")
+        async def hold_decisions(request: Request) -> dict[str, bool]:
+            payload = await request.json()
+            held_decisions[payload["query"]] = Event(), Event()
+            return {"held": True}
+
+        @app.get("/_fixture/decisions")
+        def decision_barriers() -> dict[str, bool]:
+            return {query: entered.is_set() for query, (entered, _released) in held_decisions.items()}
+
+        @app.post("/_fixture/decisions/release")
+        async def release_decisions(request: Request) -> dict[str, bool]:
+            payload = await request.json()
+            held_decisions[payload["query"]][1].set()
+            return {"released": True}
+
+        @app.post("/_fixture/sessions/{session_id}/age-idle")
+        def age_idle_session(session_id: str) -> dict[str, object]:
+            store = app.state.session_store
+            with store._lock:
+                entry = store.active_agents[session_id]
+                if entry.active_request_count or entry.request_lock.locked():
+                    raise AssertionError("Only an idle session can be aged by this fixture")
+                now = time.monotonic()
+                entry.last_accessed_monotonic = now - settings.session_ttl_seconds - 1
+                # Keep the periodic sweep in its cooldown. The next operation
+                # must enforce this session's TTL without relying on that sweep.
+                store._last_cleanup_monotonic = now
+                return {"epoch": entry.agent.session.upload_manifest().epoch}
 
         @app.post("/_fixture/sessions/{session_id}/expire")
         def expire_session(session_id: str) -> dict[str, bool]:
