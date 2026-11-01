@@ -11,8 +11,8 @@ import requests
 from urllib3.exceptions import ReadTimeoutError
 
 from src.app.uploads import UploadStageResult, stage_uploaded_files
-from src.core.contracts.outcome import AgentCallResult, AnswerExportResult
-from src.core.slack_contract import RecipientInput, SlackDefault
+from src.core.contracts.outcome import AgentCallResult
+from src.core.slack_contract import RecipientInput
 from src.core.uploads import UploadContext, UploadManifest, UploadSyncRequest
 from src.infra.sse import iter_sse_events
 
@@ -32,32 +32,6 @@ class UploadAPIError(RuntimeError):
         self.status_code = status_code
         self.code = code
         self.files = files or []
-
-
-class AnswerExportAPIError(RuntimeError):
-    """A save failure leaves the selected answer and explicit retry available."""
-
-    def __init__(self, message: str, *, status_code: int | None = None):
-        super().__init__(message)
-        self.status_code = status_code
-
-
-class SlackDefaultAPIError(RuntimeError):
-    """An unavailable destination must not be mistaken for an absent default."""
-
-
-def fetch_slack_default(fastapi_url: str) -> SlackDefault:
-    endpoint = f"{fastapi_url.rstrip('/')}/slack/default-recipient"
-    try:
-        with requests.get(endpoint, timeout=(2, 3), allow_redirects=False) as response:
-            if response.status_code != 200:
-                raise SlackDefaultAPIError("기본 수신자를 확인하지 못했습니다.")
-            data = response.json()
-            if not isinstance(data, dict) or not {"selector", "failure"}.issubset(data):
-                raise ValueError("default recipient response is incomplete")
-            return SlackDefault.model_validate(data)
-    except (requests.RequestException, ValueError) as exc:
-        raise SlackDefaultAPIError("기본 수신자를 확인하지 못했습니다.") from exc
 
 
 def _upload_request(method: str, endpoint: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -322,30 +296,6 @@ class AgentSessionClient:
         if self.manifest is None:
             self.refresh_uploads()
         return self.manifest.context()
-
-    def save_answer(self, answer_id: str) -> AnswerExportResult:
-        endpoint = (f"{self.context.fastapi_url.rstrip('/')}/sessions/"
-                    f"{quote(self.context.session_id, safe='')}/answers/{quote(answer_id, safe='')}/save")
-        try:
-            with requests.post(endpoint, timeout=self.context.timeout_seconds, allow_redirects=False) as response:
-                try:
-                    data = response.json()
-                except ValueError as exc:
-                    raise AnswerExportAPIError("저장 결과를 확인하지 못했습니다. 같은 답변으로 다시 시도해 주세요.") from exc
-                if response.status_code != 200:
-                    detail = data.get("detail", {}) if isinstance(data, dict) else {}
-                    message = detail.get("message") if isinstance(detail, dict) else None
-                    raise AnswerExportAPIError(message or "파일 저장에 실패했습니다. 같은 답변으로 다시 시도해 주세요.",
-                                               status_code=response.status_code)
-                try:
-                    result = AnswerExportResult.model_validate(data)
-                    if result.answer_id != answer_id:
-                        raise ValueError("export answer identity mismatch")
-                    return result
-                except ValueError as exc:
-                    raise AnswerExportAPIError("선택한 답변의 저장 결과를 확인하지 못했습니다. 같은 답변으로 다시 시도해 주세요.") from exc
-        except requests.RequestException as exc:
-            raise AnswerExportAPIError("저장 서버와 연결하지 못했습니다. 기존 답변은 유지됩니다. 같은 답변으로 다시 시도해 주세요.") from exc
 
     def stream(self, user_input: str) -> Iterator[AgentStreamEvent]:
         uploads = self.upload_context()

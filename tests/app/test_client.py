@@ -38,34 +38,6 @@ class RawStream:
         self.released = True
 
 
-@pytest.mark.parametrize("payload,status", [
-    ({}, 200),
-    ({"selector": {"kind": "user", "value": "invalid"}, "failure": None}, 200),
-    ({"selector": None, "failure": None}, 503),
-    ({"selector": None, "failure": None}, 307),
-])
-def test_invalid_default_destination_response_is_unknown_not_absent(monkeypatch, payload, status):
-    from src.app.client import SlackDefaultAPIError, fetch_slack_default
-
-    response = requests.Response()
-    response.status_code = status
-    response._content = json.dumps(payload).encode()
-    response.headers["Location"] = "http://different-server.example/slack/default-recipient"
-    requests_seen = []
-
-    def send(_adapter, request, **_kwargs):
-        requests_seen.append(request.url)
-        response.request = request
-        response.url = request.url
-        return response
-
-    monkeypatch.setattr(requests.adapters.HTTPAdapter, "send", send)
-
-    with pytest.raises(SlackDefaultAPIError, match="기본 수신자를 확인하지 못했습니다"):
-        fetch_slack_default("http://sending-server.example/")
-    assert requests_seen == ["http://sending-server.example/slack/default-recipient"]
-
-
 @pytest.fixture
 def transport(monkeypatch):
     def install(chunks, *, status=200):

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Collection, Sequence
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -15,37 +15,13 @@ from src.core.upload_formats import ALL_UPLOAD_SUFFIXES
 class StagedUpload:
     path: str
     name: str
-    size_bytes: int
     content_hash: str
-    conflicting_file_id: str | None = None
 
 
 @dataclass
 class UploadStageResult:
     files: list[StagedUpload] = field(default_factory=list)
-    unchanged_names: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
-
-
-def review_upload_changes(
-    manifest: UploadManifest,
-    *,
-    files: Sequence[StagedUpload] = (),
-    remove: Sequence[str] = (),
-) -> tuple[list[StagedUpload], list[str]]:
-    """Review a new intent against confirmed state without modifying staged bytes.
-
-    Keep even now-identical files so callers can release all staging paths after
-    confirmation. Approval belongs to the caller and must be requested again.
-    """
-    existing = {normalized_upload_name(item.name): item for item in manifest.files}
-    reviewed = []
-    for item in files:
-        current = existing.get(normalized_upload_name(item.name))
-        conflict = current.file_id if current is not None and current.content_hash != item.content_hash else None
-        reviewed.append(replace(item, conflicting_file_id=conflict))
-    current_ids = {item.file_id for item in manifest.files}
-    return reviewed, [file_id for file_id in remove if file_id in current_ids]
 
 
 def build_upload_sync_request(
@@ -115,12 +91,9 @@ def stage_uploaded_files(
         if key in seen_hashes:
             if seen_hashes[key] != digest:
                 result.errors.append(f"{name}: 한 번에 같은 이름의 서로 다른 파일을 추가할 수 없습니다.")
-            else:
-                result.unchanged_names.append(name)
             continue
         seen_hashes[key] = digest
         if previous is not None and previous.content_hash == digest:
-            result.unchanged_names.append(name)
             continue
         candidate_bytes += len(content)
         if candidate_bytes > max_total_mib * 1024 * 1024:
@@ -139,7 +112,7 @@ def stage_uploaded_files(
         return result
 
     try:
-        for name, content, digest, previous in candidates.values():
+        for name, content, digest, _previous in candidates.values():
             target_dir = session_path / "staging" / uuid4().hex
             target_dir.mkdir(parents=True, exist_ok=False)
             path = target_dir / name
@@ -152,8 +125,7 @@ def stage_uploaded_files(
                 target_dir.rmdir()
                 raise
             result.files.append(StagedUpload(
-                path=str(path.resolve()), name=name, size_bytes=len(content), content_hash=digest,
-                conflicting_file_id=previous.file_id if previous is not None else None,
+                path=str(path.resolve()), name=name, content_hash=digest,
             ))
     except Exception as exc:
         discard_staged_files(result.files, session_path)

@@ -348,7 +348,7 @@ def test_session_recovers_committed_upload_after_lost_response(api, monkeypatch)
     discard_staged_files(prepared.files, session_path)
 
 
-def test_loopback_attachment_changes_reach_streamlit_client_and_versioned_answers(api, monkeypatch):
+def test_loopback_attachment_changes_reach_python_client_and_versioned_answers(api, monkeypatch):
     """Real TCP requests carry additions, replacements and deletions into the next answer's exact sources."""
     from threading import Thread
 
@@ -444,12 +444,12 @@ def test_browser_stage_keeps_manifest_unconfirmed_and_coexists_with_path_uploads
     assert upload["content_hash"] == "sha256:" + hashlib.sha256(content).hexdigest()
     assert manifest(api) == before
 
-    legacy_input = staged(api, "beta.py", "beta = 2\n")
-    legacy = sync(api, add=[legacy_input])
+    path_input = staged(api, "beta.py", "beta = 2\n")
+    path_manifest = sync(api, add=[path_input])
     committed = sync(api, add=[browser_addition(upload)])
 
-    assert Path(legacy_input["path"]).read_bytes() == b"beta = 2\n"
-    assert committed["revision"] == legacy["revision"] + 1
+    assert Path(path_input["path"]).read_bytes() == b"beta = 2\n"
+    assert committed["revision"] == path_manifest["revision"] + 1
     assert {item["name"] for item in committed["files"]} == {"alpha.py", "beta.py"}
     alpha = next(item for item in committed["files"] if item["name"] == "alpha.py")
     assert (alpha["size_bytes"], alpha["content_hash"]) == (len(content), upload["content_hash"])

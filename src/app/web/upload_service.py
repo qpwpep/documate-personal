@@ -165,7 +165,7 @@ class UploadService:
         """Reclaim expired, unreferenced batches while holding the pinned session lock.
 
         The same lock covers indexing, so another request cannot clean a running
-        build's inputs. Streamlit writers use fresh directories; the newest child
+        build's inputs. Python client writers use fresh directories; the newest child
         or parent mtime protects recent writes, including unfinished .upload-part.
         """
         try:

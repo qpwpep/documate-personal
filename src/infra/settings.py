@@ -103,7 +103,6 @@ APP_ENV_SPECS = (
         example_group="synthesis",
     ),
     EnvVarSpec("VERBOSE", True, "에이전트 런타임 상세 로그 출력"),
-    EnvVarSpec("FASTAPI_URL", "http://127.0.0.1:8000", "Streamlit이 호출하는 API 주소"),
     EnvVarSpec("SESSION_TTL_SECONDS", 1800, "세션 TTL", example_group="sessions"),
     EnvVarSpec("MAX_ACTIVE_SESSIONS", 200, "최대 활성 세션 수", example_group="sessions"),
     EnvVarSpec("UPLOAD_MAX_FILES", 10, "세션별 활성 업로드 파일 개수", example_group="sessions"),
@@ -528,7 +527,6 @@ class AppSettings(BaseSettings):
         alias="SYNTHESIS_REASONING_EFFORT",
     )
     verbose: bool = Field(default=_app_default("VERBOSE"), alias="VERBOSE")
-    fastapi_url: str = Field(default=_app_default("FASTAPI_URL"), alias="FASTAPI_URL")
     session_ttl_seconds: int = Field(default=_app_default("SESSION_TTL_SECONDS"), alias="SESSION_TTL_SECONDS", ge=1)
     max_active_sessions: int = Field(default=_app_default("MAX_ACTIVE_SESSIONS"), alias="MAX_ACTIVE_SESSIONS", ge=1)
     upload_max_files: int = Field(default=_app_default("UPLOAD_MAX_FILES"), alias="UPLOAD_MAX_FILES", ge=1, le=100)
