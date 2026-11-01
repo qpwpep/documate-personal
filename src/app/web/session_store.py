@@ -29,6 +29,13 @@ class SessionEntry:
     request_lock: Lock = field(default_factory=Lock)
     active_request_count: int = 0
 
+    def is_idle_expired(self, *, now: float, ttl_seconds: int) -> bool:
+        return (
+            self.active_request_count <= 0
+            and not self.request_lock.locked()
+            and now - self.last_accessed_monotonic > ttl_seconds
+        )
+
 
 class InMemorySessionStore:
     def __init__(
@@ -64,9 +71,7 @@ class InMemorySessionStore:
         expired_session_ids = [
             sid
             for sid, entry in self.active_agents.items()
-            if entry.active_request_count <= 0
-            and not entry.request_lock.locked()
-            and now - entry.last_accessed_monotonic > ttl_seconds
+            if entry.is_idle_expired(now=now, ttl_seconds=ttl_seconds)
         ]
         for sid in expired_session_ids:
             self._pop_session_entry(sid)
@@ -107,6 +112,13 @@ class InMemorySessionStore:
         with self._lock:
             expired_removed_count = self.maybe_run_cleanup(now=now)
             existing_entry = self.active_agents.get(session_id)
+            # A skipped sweep must not extend the requested session's lifetime.
+            if existing_entry is not None and existing_entry.is_idle_expired(
+                now=now, ttl_seconds=self.settings.session_ttl_seconds,
+            ):
+                self._pop_session_entry(session_id)
+                expired_removed_count += 1
+                existing_entry = None
             if existing_entry is not None:
                 if activate_request:
                     existing_entry.active_request_count += 1
@@ -171,8 +183,7 @@ class InMemorySessionStore:
             entry = self.active_agents.get(session_id)
             if entry is None:
                 raise SessionUnavailable()
-            if (entry.active_request_count <= 0 and not entry.request_lock.locked()
-                    and now - entry.last_accessed_monotonic > self.settings.session_ttl_seconds):
+            if entry.is_idle_expired(now=now, ttl_seconds=self.settings.session_ttl_seconds):
                 self._pop_session_entry(session_id)
                 raise SessionUnavailable(expired=True)
             entry.active_request_count += 1

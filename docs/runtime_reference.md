@@ -450,6 +450,7 @@ graph 실행, debug 수집, response assembly, projection 또는 budget 검사�
 ### 4.3 수명주기와 한계
 
 - 같은 session 요청은 기존 per-session request lock 안에서 snapshot 읽기부터 최종 commit까지 직렬화됩니다.
+- 요청 대상의 유휴 TTL은 모든 세션 획득 경로에서 즉시 검사합니다. `SESSION_CLEANUP_INTERVAL_SECONDS`는 전체 세션을 훑어 자원을 회수하는 간격이며, 만료 판정을 늦추는 유예 시간이 아닙니다. 실행 중이거나 락 대기를 위해 pin된 요청은 만료 대상에서 제외하고, 요청 완료 시각부터 유휴 시간을 다시 계산합니다.
 - `exit`/`quit`/`q`, manager close, TTL/LRU eviction은 messages와 summary를 함께 초기화합니다.
 - 서로 다른 session은 snapshot을 공유하지 않습니다.
 - 현재 서버 store는 in-memory이므로 process restart와 multi-worker 사이에서 서버의 대화 문맥·활성 첨부·답변 저장 상태를 복원하지 않습니다.
