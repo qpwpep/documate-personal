@@ -6,7 +6,7 @@ import logging
 from fastapi import HTTPException
 
 from src.app.web.session_store import InMemorySessionStore, SessionUnavailable
-from src.core.answer_export import answer_export_key, answer_export_snapshot, build_answer_export_operation
+from src.core.answer_export import answer_export_key, build_answer_export_operation
 from src.core.answer_schema import AnswerResponse, export_answer_text
 from src.core.contracts.outcome import AnswerExportResult
 from src.infra.logging_utils import log_event
@@ -48,13 +48,13 @@ class AnswerExportService:
         session: SessionContext, request_id: str,
     ) -> AnswerExportResult:
         body = export_answer_text(snapshot, include_sources=True)
+        key = answer_export_key(snapshot)
         pending = session.pending_action
         matching_pending = bool(
             pending is not None and pending.body_prepared and pending.response is not None
             and pending.contract.action_requested("save_text")
-            and answer_export_snapshot(pending.response) == snapshot
+            and answer_export_key(pending.response) == key
         )
-        key = answer_export_key(snapshot)
         operation = session.answer_export_operations.get(key)
         prior = pending.save_operation if matching_pending else None
         if (operation is None and prior is not None and prior.session_id == session.session_id

@@ -14,6 +14,7 @@ from src.app.answer_exports import AnswerExportService
 from src.app.web.routes import router
 from src.app.web.session_store import InMemorySessionStore
 from src.core.answer_schema import AnswerResponse, ResponseIssue, export_answer_text, finalize_answer, text_document
+from src.core.answer_schema.models import SemanticCheck, SemanticValidation, semantic_evidence_fingerprint
 from src.core.contracts.graph_state import PendingAction
 from src.core.save_contract import SaveOperation
 from src.infra.saved_artifacts import ArtifactError
@@ -135,8 +136,15 @@ def test_answer_snapshot_is_isolated_from_callers_and_other_sessions(exports):
 
 
 @pytest.mark.parametrize("slack", ["not_requested", "requested", "unresolved"])
-def test_direct_retry_completes_only_the_matching_prepared_save(exports, slack):
+@pytest.mark.parametrize("revalidated", [False, True])
+def test_direct_retry_completes_only_the_matching_prepared_save(exports, slack, revalidated):
     client, _, session, answer_id, original, output = exports
+    pending_response = original
+    if revalidated:
+        pending_response = original.model_copy(update={"semantic_validation": SemanticValidation(
+            content_hash=original.content_hash, evidence_fingerprint=semantic_evidence_fingerprint(original.citations),
+            threshold=0.8, checks=[SemanticCheck(name="request_fulfilled", probability=0.95)],
+        )})
     operation = SaveOperation.for_text(
         export_answer_text(original, include_sources=True), operation_id="original-obligation",
         session_id=session.session_id, request_id="original-request", contract_revision=1,
@@ -144,7 +152,7 @@ def test_direct_retry_completes_only_the_matching_prepared_save(exports, slack):
     )
     session.pending_action = PendingAction(
         contract=_contract(save="requested", slack=slack),
-        response=original, body_prepared=True, phase="awaiting_delivery", save_operation=operation,
+        response=pending_response, body_prepared=True, phase="awaiting_delivery", save_operation=operation,
     )
     result = client.post(f"/sessions/export-session/answers/{answer_id}/save").json()
     assert result["status"] == "completed"
@@ -159,6 +167,64 @@ def test_direct_retry_completes_only_the_matching_prepared_save(exports, slack):
     assert repeated["status"] == "completed"
     assert repeated["response"]["actions"][-1]["operation"] == operation.model_dump(mode="json")
     assert len(list(output.glob("*.txt"))) == 1
+
+
+def test_revalidated_snapshots_share_exports_and_the_current_expiry_generation(exports, monkeypatch):
+    from src.infra import saved_artifacts
+
+    client, _, session, _, _, output = exports
+    original = checked_source()
+    revised_report = original.semantic_validation.model_copy(update={
+        "model": "revalidated-model", "checks": [SemanticCheck(name="request_fulfilled", probability=0.95)],
+    })
+    revised = original.model_copy(update={"semantic_validation": revised_report})
+    original_id = session.register_answer(original)
+    revised_id = session.register_answer(revised)
+    assert original_id != revised_id
+    assert session.get_answer(original_id) == original
+    assert session.get_answer(revised_id) == revised
+    original_url = f"/sessions/export-session/answers/{original_id}/save"
+    revised_url = f"/sessions/export-session/answers/{revised_id}/save"
+
+    first = client.post(original_url).json()["response"]["actions"][0]
+    repeated = client.post(revised_url).json()["response"]["actions"][0]
+    assert repeated["operation"] == first["operation"]
+    assert repeated["artifact"] == first["artifact"]
+    assert len(list(output.glob("*.txt"))) == 1
+
+    old_manifest = output / (first["artifact"]["filename"] + ".json")
+    manifest_bytes = old_manifest.read_bytes()
+    monkeypatch.setattr(saved_artifacts, "time", lambda: first["artifact"]["expires_at"] + 1)
+    renewed = client.post(revised_url).json()["response"]["actions"][0]
+    assert renewed["operation"]["operation_id"] != first["operation"]["operation_id"]
+    assert client.post(original_url).json()["response"]["actions"][0] == renewed
+    assert old_manifest.read_bytes() == manifest_bytes
+    assert client.get(f"/download/{renewed['artifact']['filename']}").content == export_answer_text(
+        original, include_sources=True).encode("utf-8-sig")
+    assert len(list(output.glob("*.txt"))) == 2
+
+
+@pytest.mark.parametrize("change", ["body", "source", "limitation"])
+def test_distinct_export_content_keeps_separate_operations(exports, change):
+    client, _, session, original_id, original, output = exports
+    evidence = original.citations[0].evidence
+    if change == "body":
+        changed = finalize_answer(text_document("변경된 설명", basis="source", refs=[evidence.id]), [evidence])
+    elif change == "source":
+        evidence = _evidence(evidence.excerpt, source_type="official")
+        changed = finalize_answer(text_document(evidence.excerpt, basis="excerpt", refs=[evidence.id]), [evidence])
+    else:
+        changed = original.model_copy(update={"issues": [ResponseIssue(code="scope", message="변경된 제한입니다.")]})
+    changed_id = session.register_answer(changed)
+
+    first = client.post(f"/sessions/export-session/answers/{original_id}/save").json()["response"]["actions"][0]
+    second = client.post(f"/sessions/export-session/answers/{changed_id}/save").json()["response"]["actions"][0]
+
+    assert first["operation"]["operation_id"] != second["operation"]["operation_id"]
+    assert first["artifact"]["artifact_id"] != second["artifact"]["artifact_id"]
+    assert client.get(f"/download/{second['artifact']['filename']}").content == export_answer_text(
+        changed, include_sources=True).encode("utf-8-sig")
+    assert len(list(output.glob("*.txt"))) == 2
 
 
 def test_exporting_partial_answer_does_not_finish_its_incomplete_original_request(exports):

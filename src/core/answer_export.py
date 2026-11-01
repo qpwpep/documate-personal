@@ -53,4 +53,8 @@ def build_answer_export_operation(response: AnswerResponse, *, session_id: str) 
 
 
 def answer_export_key(response: AnswerResponse) -> str:
-    return decision_fingerprint(answer_export_snapshot(response).model_dump(mode="json"))
+    """Identify the checked export independently of its latest semantic report."""
+    snapshot = answer_export_snapshot(response)
+    # Reports stay in displayed snapshots. Rechecking an unchanged body and
+    # cited sources must not create a new obligation for the same export bytes.
+    return decision_fingerprint(snapshot.model_dump(mode="json", exclude={"semantic_validation"}))

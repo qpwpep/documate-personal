@@ -50,7 +50,7 @@ class ExportPlanner:
         }).model_dump(mode="json")
 
 
-def export_graph(*, semantic_constraint=False, probabilities=None, transform=False, action="save_text"):
+def export_graph(*, semantic_constraint=False, probabilities=None, post_probabilities=None, transform=False, action="save_text"):
     policy = ConversationMemoryPolicy()
     planner = ExportPlanner(semantic_constraint=semantic_constraint, transform=transform, action=action)
     synthesizer = mock_chat_model(
@@ -65,7 +65,8 @@ def export_graph(*, semantic_constraint=False, probabilities=None, transform=Fal
         pre_synthesis_validation_node=make_pre_synthesis_validation_node(
             False, excerpt_limits=synthesis_excerpt_limits(), decisions_client=make_decisions_client(probabilities)),
         post_synthesis_validation_node=make_post_synthesis_validation_node(
-            False, decisions_client=make_decisions_client({"request_fulfilled": 0.01})),
+            False, decisions_client=make_decisions_client(
+                {"request_fulfilled": 0.01} if post_probabilities is None else post_probabilities)),
         action_postprocess_node=make_action_postprocess_node(build_save_text_tool(), _unavailable, False),
     )
 
@@ -127,6 +128,29 @@ def test_copy_with_new_semantic_requirement_still_requires_semantic_validation(t
     assert result["response"].kind == "failure"
     assert result["response"].result.actions == []
     assert list(tmp_path.glob("*.txt")) == []
+
+
+def test_revalidated_copy_reuses_the_original_save_operation_and_artifact(tmp_path, monkeypatch):
+    monkeypatch.setattr("src.infra.tools.save_text.get_save_text_output_dir", lambda: tmp_path)
+    source = checked_source()
+    manager = _manager(SequentialGraph(
+        export_graph(),
+        export_graph(semantic_constraint=True, post_probabilities={"request_fulfilled": 0.95}),
+    ))
+    manager.session.previous_response = source
+
+    first = manager.run_agent_flow("방금 답변을 출처와 함께 저장해줘")
+    repeated = manager.run_agent_flow("방금 답변이 새 조건을 충족하면 출처와 함께 저장해줘")
+
+    assert first["status"] == repeated["status"] == "completed"
+    assert first["response"]["semantic_validation"] != repeated["response"]["semantic_validation"]
+    first_receipt = first["response"]["actions"][0]
+    repeated_receipt = repeated["response"]["actions"][0]
+    assert repeated_receipt["operation"] == first_receipt["operation"]
+    assert repeated_receipt["artifact"] == first_receipt["artifact"]
+    assert Path(repeated_receipt["file_path"]).read_bytes() == export_answer_text(
+        source, include_sources=True).encode("utf-8-sig")
+    assert len(list(tmp_path.glob("*.txt"))) == 1
 
 
 def test_export_does_not_rejudge_whether_existing_body_can_be_prepared(tmp_path, monkeypatch):

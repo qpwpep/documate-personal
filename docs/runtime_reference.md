@@ -590,7 +590,7 @@ staging 성공은 검색 가능한 첨부의 확정이 아니며 manifest와 rev
 
 `POST /sessions/{session_id}/answers/{answer_id}/save`는 요청 본문 없이 서버에 보관된 해당 답변을 저장합니다. 임의의 본문을 업로드하는 API가 아니며 planner·검색·synthesis·Slack 전송을 실행하지 않습니다. `answer_id`는 최종 답변에 선택적으로 제공되며 세션별로 최근 200개 snapshot을 보관합니다. snapshot은 원래 본문·출처·검사·제한을 유지하고 실행 receipt는 제외합니다. 등록·조회 시 깊은 복사로 호출자의 변경과 격리합니다.
 
-성공과 저장 실패는 `{status, answer_id, request_id, response, message}`로 반환하며 `status`는 `completed` 또는 `failed`입니다. `response.actions`에는 이번 저장의 receipt가 있고 본문은 같은 snapshot입니다. 같은 답변의 중복 요청·실패 후 재시도는 현재 export 세대의 operation과 bytes를 사용합니다. snapshot별 operation 연결을 보존하므로 생성 요청에서 시작된 저장도 직접 재시도·자연어 반복 사이에 별도 파일로 갈라지지 않습니다. 검증된 artifact 만료 뒤 명시적으로 다시 저장하면 새 세대를 선택하고 이전 artifact의 기한과 tombstone은 유지합니다. 이미 준비된 보류 저장의 snapshot과 일치하면 그 저장만 완료 처리하고 남은 Slack 전송은 유지합니다. 본문이 미완료인 원래 요청은 사용자가 표시된 부분 답변을 별도로 저장했다고 완료로 바꾸지 않습니다.
+성공과 저장 실패는 `{status, answer_id, request_id, response, message}`로 반환하며 `status`는 `completed` 또는 `failed`입니다. `response.actions`에는 이번 저장의 receipt가 있고 본문은 같은 snapshot입니다. 같은 답변의 중복 요청·실패 후 재시도는 현재 export 세대의 operation과 bytes를 사용합니다. 저장 key는 본문·원문 근거·검사·제한을 보존하고 의미 검증 보고서만 제외합니다. 같은 저장 대상은 검증 확률·모델·추가 조건 검사가 달라도 operation을 공유하므로 직접 재시도·자연어 반복 사이에 별도 파일로 갈라지지 않습니다. 답변 ID와 표시 snapshot은 당시 의미 검증 보고서를 그대로 보존합니다. 검증된 artifact 만료 뒤 명시적으로 다시 저장하면 새 세대를 선택하고 이전 artifact의 기한과 tombstone은 유지합니다. 이미 준비된 보류 저장과 저장 key가 일치하면 그 저장만 완료 처리하고 남은 Slack 전송은 유지합니다. 본문이 미완료인 원래 요청은 사용자가 표시된 부분 답변을 별도로 저장했다고 완료로 바꾸지 않습니다.
 
 이 API는 기존 세션을 잠그며 누락·만료 세션을 새로 만들지 않습니다. 없는 세션·답변은 `404`, 조회 시 확인한 TTL 만료는 `410`이며 오류 본문의 `detail`에 `code`, `message`를 제공합니다. 서버 기록이 없을 때 화면 답변을 재생성하거나 대신 전송하지 않습니다. 이미 만들어진 파일의 다운로드는 별도 artifact 기한을 따릅니다.
 
