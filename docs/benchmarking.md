@@ -1,6 +1,6 @@
 # 벤치마크 가이드
 
-DocuMate release 벤치마크는 Streamlit과 같은 `src/app/client.py`의 `AgentSessionClient`와 `src/app/uploads.py`를 사용합니다. 요청 구성, 첨부 준비·동기화, SSE 처리, 최종 `AnswerResponse`·`UploadManifest` 검증을 공유하며, 실행은 일반 FastAPI 첨부 API와 `POST /agent/stream`을 거칩니다. `src/eval/online_runner`는 시나리오 순서·세션 격리·결과 수집을 담당하고 HTTP 요청이나 에이전트 실행을 별도로 구현하지 않습니다. CLI 진입점은 `src/eval/main.py`, 설정 기준은 `data/benchmarks/config.toml`입니다. planner 단독 요청 계약 평가는 별도 회귀 진단으로 유지하며 2.6에 정리했습니다.
+DocuMate release 벤치마크는 Python 클라이언트인 `src/app/client.py`의 `AgentSessionClient`와 `src/app/uploads.py`를 사용합니다. 요청 구성, 첨부 준비·동기화, SSE 처리, 최종 `AnswerResponse`·`UploadManifest` 검증을 수행하며, React와 같은 FastAPI 첨부 API 및 `POST /agent/stream`을 거칩니다. `src/eval/online_runner`는 시나리오 순서·세션 격리·결과 수집을 담당하고 HTTP 요청이나 에이전트 실행을 별도로 구현하지 않습니다. CLI 진입점은 `src/eval/main.py`, 설정 기준은 `data/benchmarks/config.toml`입니다. planner 단독 요청 계약 평가는 별도 회귀 진단으로 유지하며 2.6에 정리했습니다.
 
 평가 category는 `docs_only`, `rag_only`, `hybrid`, `tool_action`입니다. `rag_only`와 fixture의 `require_local_citation`은 파일 검색·인용을 평가하는 분류명입니다. 현재 파일 검색 도구는 `upload_search`, 검색 route와 snapshot의 source type은 `upload`입니다. 과거 결과에 남은 `local` route와 `rag_search` 호출은 당시 실행 기록이며 새 실행의 업로드 검색 충족으로 인정하지 않습니다.
 
@@ -243,7 +243,7 @@ uv run python -m src.eval.main history --track release
 
 SVG는 현재 로컬에 남아 있는 comparable release summary만으로 다시 생성됩니다. 의도한 과거 release run의 `summary.json`이 모두 있는지 확인한 뒤 실행해야 기존 추세 지점이 빠지지 않습니다.
 
-스크린샷과 데모 GIF는 `history` 명령이 갱신하지 않습니다. 실제 앱 캡처를 갱신한 뒤 공개용 자산만 `docs/assets/demo-final.png`, `docs/assets/demo-flow.gif`로 별도 저장하고 README에서 이 경로를 참조합니다.
+스크린샷과 데모 GIF는 `history` 명령이 갱신하지 않습니다. 데모를 추가할 때는 현재 React 화면을 캡처하고 공개용 자산만 `docs/assets/`에 저장한 뒤 README에서 참조합니다.
 
 저장소는 별도 smoke history 문서나 SVG를 유지하지 않습니다. smoke 결과는 해당 run의 `summary.json`과 `report.md`에서 확인하며, 일반적인 smoke 실행 뒤에는 `history`를 실행하지 않습니다. CLI도 smoke track이 기본 release README 또는 SVG를 덮어쓰지 못하게 차단합니다.
 
@@ -505,7 +505,7 @@ case의 `weight_override`는 위 여섯 키 중 변경할 축만 담는 사전�
 | LLM judge의 groundedness | 실제 표시 본문과 연결된 근거가 설명·해석을 의미적으로 뒷받침하는지 평가 |
 | `actions`와 도구 실행 기록 | 실행 의도·결과 진단. 저장 성공은 fixture 대상과 실제 HTTP 산출물 readback까지 일치해야 인정 |
 
-공식 출처 여부는 런타임의 `is_allowed_doc_url()`로 검사합니다. HTTPS를 요구하고 `agent_rules.toml`에 설정된 도메인·문서 경로·버전 경로 정책을 적용하며, UI 추천 링크인 `DEFAULT_DOCS`에서 별도의 허용 목록을 만들지 않습니다. 따라서 허용된 공식 버전 문서는 추천 링크에 없어도 인정하고, 같은 도메인의 허용되지 않은 경로는 인정하지 않습니다. 허용 URL과 금지 URL이 함께 인용돼도 각 참조의 정책 통과 여부를 따로 계산하므로, 허용된 인용 하나가 나머지 인용의 coverage를 높이지 않습니다. 이 URL 검사는 출처 범위를 확인하며 발췌의 의미적 지지는 judge가 별도로 평가합니다.
+공식 출처 여부는 런타임의 `is_allowed_doc_url()`로 검사합니다. HTTPS를 요구하고 `agent_rules.toml`에 설정된 도메인·문서 경로·버전 경로 정책을 적용합니다. UI의 지원 문서 안내와 별개로 허용된 공식 버전 문서를 인정하고, 같은 도메인의 허용되지 않은 경로는 인정하지 않습니다. 허용 URL과 금지 URL이 함께 인용돼도 각 참조의 정책 통과 여부를 따로 계산하므로, 허용된 인용 하나가 나머지 인용의 coverage를 높이지 않습니다. 이 URL 검사는 출처 범위를 확인하며 발췌의 의미적 지지는 judge가 별도로 평가합니다.
 
 현재 검색에서 packet으로 이어지는 근거는 snapshot과 원문 element가 같고, packet의 문자 범위 또는 표 cell ID가 `observed_hits`의 선택 범위에 포함되는지 확인합니다. synthesis 예산 때문에 범위를 줄이면 새 근거 ID가 생깁니다. 최종 citation은 이렇게 검증한 실제 packet의 ID와 일치해야 하므로, 검색 원문에 있었지만 모델에 제공하지 않은 범위는 인정하지 않습니다. 페이지 bbox가 없더라도 snapshot·요소·선택 범위가 유효하면 원문 연결을 인정합니다.
 
@@ -562,6 +562,6 @@ history 리포터는 현재 판정·측정 계약과 저장 증거를 검증한 
 
 - benchmark는 현재 `online` 모드만 지원합니다.
 - 확정된 첨부는 사례 종료 후 일반 sync API의 clear로 해제하고 staging 파일은 공용 정리 함수를 사용합니다. 질문 결과나 sync 처리 여부가 불확실하면 재전송·세션 폴더 직접 삭제를 하지 않습니다. 남은 세션·파일은 일반 TTL/LRU와 서버 파일 정리 주기에 따르며, 후속 요청이나 서버 재시작의 정리 실행까지 남을 수 있습니다. 정리 요청 실패는 `cleanup_errors`로 기록합니다.
-- 공용 클라이언트 평가는 Streamlit 화면 렌더링·브라우저 업로드 시간·다운로드 클릭을 측정하지 않습니다.
+- Python 클라이언트 평가는 React 화면 렌더링·브라우저 업로드 시간·다운로드 클릭을 측정하지 않습니다.
 - `history` 명령은 README의 `<!-- BEGIN BENCHMARK HISTORY -->`와 `<!-- END BENCHMARK HISTORY -->` 사이만 갱신합니다. 각 마커를 한 번씩 올바른 순서로 유지해야 하며, 누락·중복·역순이면 문서를 쓰지 않고 실패합니다.
 - 공개 release 결과의 정본은 README 요약이고, 비교 추세는 기존 benchmark history SVG에 유지합니다. 별도 결과 문서나 smoke history 파일은 만들지 않습니다.

@@ -1,12 +1,12 @@
 # DocuMate
 
-LangGraph 기반 학습 보조 에이전트입니다. 웹상의 공식 문서와 업로드 파일을 검색해 답변하고, 답변의 각 내용에서 사용한 자료 버전과 원문 위치를 확인할 수 있습니다. FastAPI와 Python 런타임에서 만든 같은 답변을 React·Streamlit 화면에 표시하고 파일 저장·Slack 전송에 사용합니다.
+LangGraph 기반 학습 보조 에이전트입니다. 웹상의 공식 문서와 업로드 파일을 검색해 답변하고, 답변의 각 내용에서 사용한 자료 버전과 원문 위치를 확인할 수 있습니다. FastAPI와 Python 런타임에서 만든 같은 답변을 React 화면에 표시하고 파일 저장·Slack 전송에 사용합니다.
 
 이 저장소는 팀 프로젝트 원형을 그대로 보관한 자료가 아니라, 원본 팀 프로젝트를 단계형 LangGraph 런타임과 120-case benchmark 체계로 재설계한 포트폴리오 개선본입니다. 현재 유지보수 기준은 `src/`, `frontend/`, `tests/`, `docs/`, `data/benchmarks/`이며, `archive/`는 원본/legacy 참고 자료를 보관하는 영역입니다.
 
 ## 로컬 데모 빠른 실행
 
-기본 UI는 React이며, FastAPI가 빌드한 정적 화면과 API를 함께 제공합니다. 기존 Streamlit도 선택해서 실행할 수 있습니다.
+UI는 React이며, FastAPI가 빌드한 정적 화면과 API를 함께 제공합니다.
 
 ```bash
 uv sync
@@ -27,13 +27,7 @@ uv run python -m src.app.service_manager startweb
 - FastAPI 서버: `http://127.0.0.1:8000`
 - 런타임 로그: `output/runtime/fastapi.log`
 
-기존 Streamlit을 사용하려면 `startweb --ui streamlit`로 시작합니다. 이미 관리 중인 서버를 바꿀 때는 다음 명령을 사용합니다. 이 재시작은 서버의 메모리 세션을 초기화하며, 두 UI의 브라우저 기록은 자동으로 옮겨지지 않습니다.
-
-```bash
-uv run python -m src.app.service_manager restartweb --ui streamlit
-```
-
-Streamlit 주소는 `http://127.0.0.1:8501`이며 추가 로그는 `output/runtime/streamlit.log`에 남습니다. `restartweb --ui react`로 React 실행으로 돌아갈 수 있습니다. UI를 지정하지 않은 `restartweb`는 현재 기록된 UI를 유지합니다.
+서버를 다시 시작하려면 `uv run python -m src.app.service_manager restartweb`을 사용합니다. 재시작하면 서버의 메모리 세션이 초기화됩니다.
 
 같은 브라우저 탭에서는 새로고침 후 대화 목록, 답변·출처, 작성 중인 초안을 복원합니다. 기존 첨부와 후속 질문은 서버 세션이 유효할 때 계속 사용할 수 있습니다. 서버 세션이 만료되거나 서버가 재시작되면 보관한 기록은 읽기 전용으로 남습니다. 아직 전송하지 않은 파일 선택은 다시 해야 합니다. 탭을 닫은 뒤의 복원은 보장하지 않으며 다른 기기와의 동기화는 제공하지 않습니다. 자세한 범위는 [대화 수명주기와 한계](docs/runtime_reference.md#43-수명주기와-한계)를 참고하세요.
 
@@ -45,17 +39,7 @@ uv run python -m src.app.service_manager stopweb
 
 직접 실행 명령, 환경 변수 전체 목록, API 계약, 파일 업로드 제약은 [런타임 참고 문서](docs/runtime_reference.md)에 정리했습니다.
 
-React 개발 중에는 FastAPI를 실행한 상태에서 `npm --prefix frontend run dev`를 별도 터미널에서 실행하고 `http://127.0.0.1:5173/app/`을 엽니다. Vite 개발 프록시는 같은 FastAPI를 사용합니다. [React 실행과 기능 인수 기준](docs/react_migration.md)에 기능별 검증 범위, 계약 생성과 검사 명령을 정리했습니다.
-
-## 실제 앱 데모
-
-아래 GIF는 2026-05-05 KST에 Streamlit 화면을 실제 Edge 렌더링으로 캡처한 데모입니다. 라이트/다크 테마, 질문 입력창 옆 파일 첨부, 사이드바를 접은 상태의 질문 제출과 답변 수신 흐름을 보여줍니다. 현재의 본문별 인용·원문 위치 표시가 적용되기 전 화면이며, 현재 응답 계약은 [런타임 참고 문서](docs/runtime_reference.md#5-api-계약)를 기준으로 합니다.
-
-![DocuMate actual app demo](docs/assets/demo-flow.gif)
-
-사이드바를 접은 상태로 질문에 대한 답변을 받은 최종 화면은 정적 스크린샷으로도 확인할 수 있습니다.
-
-![DocuMate final answer screenshot](docs/assets/demo-final.png)
+React 개발 중에는 FastAPI를 실행한 상태에서 `npm --prefix frontend run dev`를 별도 터미널에서 실행하고 `http://127.0.0.1:5173/app/`을 엽니다. Vite 개발 프록시는 같은 FastAPI를 사용합니다. [React 실행과 기능 인수 기준](docs/frontend.md)에 기능별 검증 범위, 계약 생성과 검사 명령을 정리했습니다.
 
 ## 주요 개선 포인트
 
@@ -67,8 +51,8 @@ DocuMate에서 중점적으로 개선한 범위는 단순한 챗봇 구현보다
 - 인용은 내용 hash와 parser 설정으로 식별한 문서 snapshot, 원문 요소, 선택 범위를 보존합니다. 검색 범위를 줄이거나 업로드 파일을 바꿔도 기존 답변의 근거가 다른 원문으로 바뀌지 않습니다.
 - 업로드 인덱스는 원문을 chunk마다 복제하지 않습니다. 원문 구조를 한 번 보관하고 검색된 범위만 근거로 복원해 인용에 연결합니다.
 - 업로드 주제 검색은 `bm25s`·`kiwipiepy`의 한국어 형태소 검색과 Chroma 의미 검색을 결합합니다.
-- Streamlit과 online benchmark가 공용 클라이언트에서 요청 구성, 첨부 준비·동기화, SSE 처리, 최종 답변·첨부 상태 검증을 공유합니다. 벤치마크는 같은 세션의 실제 준비 질문과 후속 질문을 재생하고, 세션 TTL/LRU와 요청 lock을 포함한 일반 FastAPI 실행 경로를 사용합니다.
-- React는 같은 FastAPI 계약에서 생성한 TypeScript 타입과 별도 브라우저 클라이언트를 사용합니다. 파일 첨부·대화 복원·구조화 답변·원문·저장·Slack 흐름을 이식하고 기존 Streamlit을 복귀 경로로 유지합니다.
+- online benchmark는 Python 클라이언트에서 요청 구성, 첨부 준비·동기화, SSE 처리, 최종 답변·첨부 상태 검증을 수행합니다. 벤치마크는 같은 세션의 실제 준비 질문과 후속 질문을 재생하고, 세션 TTL/LRU와 요청 lock을 포함한 일반 FastAPI 실행 경로를 사용합니다.
+- React는 같은 FastAPI 계약에서 생성한 TypeScript 타입과 별도 브라우저 클라이언트를 사용합니다. 파일 첨부·대화 복원·구조화 답변·원문·저장·Slack 흐름을 제공합니다.
 - 장기 대화는 고정 예산 rolling summary와 최근 canonical Human/AI 메시지로 유지합니다. 발화 ID와 정확한 원문은 최근 16개 및 보류 계약이 참조하는 발화를 별도로 보존하고, 응답 조립 성공 후에만 세션에 반영합니다.
 - 모델은 본문 작업 타입·사용자 의도·참조 선택자를 해석하고, 서버는 원문 범위·답변 hash·요청 revision을 확정합니다. 부족한 정보가 있어도 이미 확인한 금지·의사·출력 조건을 보존하며 재검색·재합성·전달은 같은 계약을 소비합니다.
 - 120-case online release benchmark와 pytest 회귀 테스트를 통해 pass rate, citation compliance, latency, 비용을 추적합니다.
@@ -84,7 +68,7 @@ DocuMate에서 중점적으로 개선한 범위는 단순한 챗봇 구현보다
 | 실행 흐름 | 모델 tool call과 개별 라우터 실험 중심 | `planner → retrieval → validation → synthesis → action` LangGraph 파이프라인 | 단계별 책임과 재시도 조건을 추적 가능 |
 | 검색 출처 | 검색/RAG 결과가 한 흐름에 섞이기 쉬움 | `docs`, `upload` route와 diagnostics, 문서 snapshot·원문 선택·검색 점수 분리 | 자료 버전·위치와 검색 실패·지연을 각각 추적 |
 | 답변 형식 | 자연어 응답 중심 | `AnswerDocument` 본문과 서버가 만든 citations·checks·issues·actions | 표시하는 내용을 직접 검사하고 UI·저장·전송에 같은 본문 사용 |
-| 웹 런타임 | 데모 UI와 백엔드 실행 기준이 느슨하게 분리 | React·Streamlit과 benchmark가 같은 FastAPI 사용, Streamlit·benchmark는 Python 클라이언트 공유 | 생성 계약·브라우저 검사와 Python 회귀로 다중 턴 문맥·첨부 revision 검증 |
+| 웹 런타임 | 데모 UI와 백엔드 실행 기준이 느슨하게 분리 | React와 benchmark가 같은 FastAPI 사용, TypeScript·Python 클라이언트가 같은 응답 계약 검증 | 생성 계약·브라우저 검사와 Python 회귀로 다중 턴 문맥·첨부 revision 검증 |
 | 세션/파일 처리 | 업로드 파일과 생성 파일의 수명 관리가 약함 | 세션별 manager cache, TTL/LRU, 요청 lock, 업로드/출력 cleanup | 사용자별 업로드 격리와 반복 실행 안정성 강화 |
 | 장기 대화 메모리 | 원문 history가 계속 누적되거나 생성한 summary가 다음 요청에서 사라질 수 있음 | high/low watermark, bounded rolling summary, reducer 삭제, canonical Human/AI projection, atomic commit | 대화 prompt·요약의 예산을 검증하고 Tool payload 재주입을 차단. 정확한 참조용 원문은 최근 16개와 보류 계약의 참조 발화를 별도 보존 |
 | 검증 체계 | 수동 확인과 일부 실험 결과 중심 | pytest 회귀 테스트 + 120-case online release benchmark | pass rate, citation compliance, latency, 비용을 변경마다 비교 가능 |
@@ -93,7 +77,7 @@ DocuMate에서 중점적으로 개선한 범위는 단순한 챗봇 구현보다
 
 ```mermaid
 flowchart LR
-    User["사용자 질문/파일 업로드"] --> UI["React·Streamlit 화면"]
+    User["사용자 질문/파일 업로드"] --> UI["React 화면"]
     UI --> API["FastAPI"]
     API --> Session["세션 관리와 요청 잠금"]
     Session --> Memory["대화 요약과 최근 발화"]
@@ -132,7 +116,7 @@ flowchart LR
 
 주요 기준 경로는 `src/runtime/graph_builder.py`, `src/runtime/make_graph.py`, `src/infra/tools/*`, `src/runtime/nodes/*`, `src/app/web/*`, `src/eval/*`입니다.
 
-- `src/app/`: 공용 클라이언트·첨부 준비, FastAPI/Streamlit 웹 런타임, 서비스 매니저, 세션별 `AgentFlowManager`
+- `src/app/`: Python 클라이언트·첨부 준비, FastAPI 웹 런타임, 서비스 매니저, 세션별 `AgentFlowManager`
 - `src/core/`: `GraphState`, bounded conversation memory 정책, parser 독립 문서·근거 모델, `AnswerDocument`와 응답·진단 계약
 - `src/infra/`: 설정, LLM registry, Chroma 기반 업로드 검색, Tavily docs search, Slack/save 도구
 - `src/runtime/`: LangGraph 조립과 session/planner/retrieval/validation/synthesis/action 노드
@@ -158,7 +142,7 @@ Docling은 요청에 종속된 로컬 프로세스에서 문서를 변환하고 
 |---|---:|
 | 테스트 | `1239 passed, 120 skipped, 69 subtests passed` |
 
-공용 클라이언트 전환 당시에는 실제 localhost FastAPI·그래프·검색·파일 저장과 외부 모델/임베딩 대체 경계로 검증했습니다. 두 파일의 근거를 포함한 준비 답변과 후속 저장 결과가 같고, 새 사례에 이전 대화·첨부가 유입되지 않는지 확인했습니다. Streamlit 최소 지원 버전 `1.54.0`의 격리 환경 UI 검사 결과도 당시 `83 passed`였습니다. 현재 회귀는 핵심 앱 로직과 벤치마크 release 판정의 대표 실패 경로를 검증합니다. React·Streamlit의 UI 검사는 [기능 인수 기준](docs/react_migration.md#4-계약-생성과-검증)에 정리한 컴포넌트·실제 브라우저 검사를 함께 사용하며, 벤치마크 생성·승격·승인·보고 도구의 전체 회귀는 포함하지 않습니다. 유료 모델·검색·judge를 사용하는 새 release run과 실서비스 Slack 전송은 실행하지 않았습니다.
+현재 회귀는 핵심 앱 로직과 벤치마크 release 판정의 대표 실패 경로를 검증합니다. React UI는 [기능 인수 기준](docs/frontend.md#4-계약-생성과-검증)의 컴포넌트·실제 브라우저 검사로 질문·첨부·대화 복원·원문 확인·저장·Slack 흐름을 확인합니다. 브라우저 검사는 실제 FastAPI를 실행하고 외부 모델·Slack HTTP 경계를 대체합니다. 벤치마크 생성·승격·승인·보고 도구의 전체 회귀와 유료 모델·검색·judge를 사용하는 새 release run, 실서비스 Slack 전송은 별도 검증 범위입니다.
 
 <!-- BEGIN BENCHMARK HISTORY -->
 
@@ -193,7 +177,7 @@ Docling은 요청에 종속된 로컬 프로세스에서 문서를 변환하고 
 
 - [도메인 용어집](GLOSSARY.md): 요청·자료·원문 근거·답변·전달의 공통 용어와 개념 경계
 - [런타임 참고 문서](docs/runtime_reference.md): 설치, 실행, 환경 변수, API 계약, 파일 제약, 운영 메모
-- [React 전환과 기능 인수 기준](docs/react_migration.md): UI 실행과 복귀, 기존 기능별 완료 기준, API 계약과 검증 범위
+- [React 프런트엔드와 기능 인수 기준](docs/frontend.md): UI 실행·개발, 기능별 완료 기준, API 계약과 검증 범위
 - [설계 판단 기록](docs/design_rationale.md): 구조를 나눈 이유, latency/retrieval 품질 문제, 주요 트레이드오프
 - [벤치마크 가이드](docs/benchmarking.md): online benchmark 실행, 로컬 run 산출물, README release 요약과 history SVG 갱신
 - [에러 코드](docs/error_codes.md): debug payload와 benchmark에서 쓰는 주요 error code
