@@ -70,12 +70,14 @@ export function Attachments(props: Props) {
 
 interface PickerProps {
   config: ClientConfig | null;
+  manifest?: UploadManifest | null;
+  confirmed?: boolean;
   disabled: boolean;
   buttonRef: RefObject<HTMLButtonElement | null>;
   onSelect(files: File[]): void;
 }
 
-export function AttachmentPicker({ config, disabled, buttonRef, onSelect }: PickerProps) {
+export function AttachmentPicker({ config, manifest, confirmed, disabled, buttonRef, onSelect }: PickerProps) {
   const inputId = useId();
   const input = useRef<HTMLInputElement>(null);
   const guidance = config
@@ -85,12 +87,13 @@ export function AttachmentPicker({ config, disabled, buttonRef, onSelect }: Pick
     <button ref={buttonRef} type="button" className="attachment-add" aria-label="파일 추가" title={guidance}
       disabled={disabled || !config} aria-describedby={`${inputId}-hint`} onClick={() => input.current?.click()}>
       <span aria-hidden="true">+</span>
+      {!!manifest?.files.length && <span className="attachment-count" aria-hidden="true">{manifest.files.length}</span>}
     </button>
     <label className="visually-hidden" htmlFor={inputId}>파일 첨부</label>
     <input id={inputId} ref={input} type="file" multiple className="visually-hidden" tabIndex={-1}
       accept={config?.upload.accepted_suffixes.join(',')} disabled={disabled || !config}
       onChange={(event) => { onSelect(Array.from(event.target.files ?? [])); event.target.value = ''; }} />
-    <span className="visually-hidden" id={`${inputId}-hint`}>{guidance}</span>
+    <span className="visually-hidden" id={`${inputId}-hint`}>{manifest?.files.length ? `${confirmed ? '검색 가능' : '이전 첨부 기록'} ${manifest.files.length}개: ${manifest.files.map((file) => file.name).join(', ')}. ` : ''}{guidance}</span>
   </div>;
 }
 
@@ -106,20 +109,21 @@ interface ManifestProps {
 
 export function AttachmentManifest({ manifest, confirmed, disabled, changesDisabled, onRefresh, onRemove, onClear }: ManifestProps) {
   return <section className="attachments attachment-manifest" aria-label="함께 검색할 파일">
-    <h2 className="sidebar-section-title">함께 검색할 파일</h2>
-    <button type="button" className="secondary-button" disabled={disabled} onClick={onRefresh}>첨부 목록 새로고침</button>
     {manifest ? <>
-      <p className="attachment-state"><span>{confirmed ? '검색 가능' : '이전 첨부 기록'}</span> {manifest.files.length}개 · {(manifest.files.reduce((sum, file) => sum + file.size_bytes, 0) / 1024 / 1024).toFixed(2)} MiB</p>
+      <p className="attachment-state"><span>{confirmed ? '검색 가능' : '이전 첨부 기록'}</span> {manifest.files.length}개 · {formatBytes(manifest.files.reduce((sum, file) => sum + file.size_bytes, 0))}</p>
       {!confirmed && <p className="attachment-hint">이 목록은 이전에 확인한 기록입니다. 현재 서버에서 사용할 수 있는지 다시 확인해야 합니다.</p>}
       {manifest.files.length ? <div className="confirmed-files">
         <ul>{manifest.files.map((file) => <li key={file.file_id}>
-          <span><strong>{file.name}</strong> <small>{formatBytes(file.size_bytes)} · {confirmed ? '검색 가능' : '이전 첨부 기록'}</small></span>
-          <button type="button" className="text-button" aria-label={`${file.name} 첨부 해제`} disabled={!confirmed || changesDisabled} onClick={() => onRemove(file.file_id)}>삭제</button>
+          <span><strong>{file.name}</strong> <small>{formatBytes(file.size_bytes)}</small></span>
+          <button type="button" className="text-button" aria-label={`${file.name} 첨부 해제`} disabled={!confirmed || changesDisabled} onClick={() => onRemove(file.file_id)}>해제</button>
         </li>)}</ul>
-        <button type="button" className="text-button" aria-label="첨부 전체 해제" disabled={!confirmed || changesDisabled} onClick={onClear}>전체 첨부 해제</button>
-        <p className="attachment-hint">첨부를 해제해도 대화와 기존 답변의 인용은 유지됩니다.</p>
       </div> : <p className="attachment-hint">검색 준비가 끝난 파일이 없습니다. 입력창에서 선택한 파일은 전송 후 여기에 표시됩니다.</p>}
     </> : <p className="attachment-hint">첨부 상태를 확인하지 못했습니다. 서버 목록을 확인한 뒤 질문할 수 있습니다.</p>}
+    <div className="attachment-manifest-actions">
+      <button type="button" className="secondary-button" aria-label="첨부 목록 새로고침" disabled={disabled} onClick={onRefresh}>새로고침</button>
+      {Boolean(manifest?.files.length) && <button type="button" className="secondary-button" aria-label="첨부 전체 해제" disabled={!confirmed || changesDisabled} onClick={onClear}>전체 해제</button>}
+    </div>
+    {Boolean(manifest?.files.length) && <p className="attachment-hint">첨부를 해제해도 대화와 기존 답변의 인용은 유지됩니다.</p>}
   </section>;
 }
 

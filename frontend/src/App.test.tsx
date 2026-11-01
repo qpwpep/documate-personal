@@ -102,6 +102,25 @@ afterAll(async () => {
 });
 
 describe('질문 화면과 실제 HTTP 클라이언트', () => {
+  it('답변 자리에서 실제 진행 단계를 알리고 최종 응답 뒤 안내를 정리한다', async () => {
+    holdResponse = true;
+    const user = userEvent.setup();
+    render(<App apiBaseUrl={apiBaseUrl} />);
+    await user.type(screen.getByRole('textbox', { name: '질문' }), '공식 문서에서 찾아줘');
+    await waitFor(() => expect(screen.getByRole('button', { name: '질문 보내기' })).toBeEnabled());
+    await user.click(screen.getByRole('button', { name: '질문 보내기' }));
+    const turn = within(await screen.findByRole('region', { name: '대화 기록' }));
+    await waitFor(() => expect(turn.getByRole('status')).toHaveTextContent('질문을 확인하고 있습니다.'));
+    pendingResponse!.write('event: stage_started\ndata: {"stage":"retrieval","attempt":1}\n\n');
+    await waitFor(() => expect(turn.getByRole('status')).toHaveTextContent('자료를 찾고 있습니다.'));
+    await user.type(screen.getByRole('textbox', { name: '질문' }), '다음 질문 초안');
+    pendingResponse!.end(`event: final_response\ndata: ${JSON.stringify(fixtures.responses.completed)}\n\n`);
+    expect(await turn.findByText('한글 답변 🧪')).toBeVisible();
+    expect(turn.queryByText('자료를 찾고 있습니다.')).not.toBeInTheDocument();
+    expect(screen.getByRole('textbox', { name: '질문' })).toHaveValue('다음 질문 초안');
+    expect(requests).toHaveLength(1);
+  });
+
   it('명시적 제출 때만 질문 원문을 한 번 보내고 최종 답변을 표시한다', async () => {
     const user = userEvent.setup();
     render(<App apiBaseUrl={apiBaseUrl} />);
@@ -202,6 +221,33 @@ describe('질문 화면과 실제 HTTP 클라이언트', () => {
     expect(screen.getByRole('textbox', { name: '질문' })).toHaveValue('pandas merge 사용법을 공식 문서 기준으로 설명해줘');
     expect(example).toBeDisabled();
     expect(requests).toHaveLength(0);
+  });
+
+  it('메뉴의 사용 안내에서 지원 문서와 첨부 제한을 확인하고 답변 정보에서 요청 ID를 확인한다', async () => {
+    const user = userEvent.setup();
+    render(<App apiBaseUrl={apiBaseUrl} />);
+    const guide = within(screen.getByRole('complementary', { name: '대화 메뉴' })).getByText('사용 안내', { exact: true });
+    expect(screen.getByText('지원하는 공식 문서', { exact: true })).not.toBeVisible();
+
+    await user.click(guide);
+    expect(screen.getByText('지원하는 공식 문서', { exact: true })).toBeVisible();
+    expect(await screen.findByText(/최대 10개.*파일당 10 MiB.*전체 50 MiB/)).toBeVisible();
+    expect(requests).toHaveLength(0);
+
+    await user.type(screen.getByRole('textbox', { name: '질문' }), '자료 내용을 설명해줘');
+    expect(requests).toHaveLength(0);
+    await user.click(guide);
+    await user.click(screen.getByRole('button', { name: '질문 보내기' }));
+    await screen.findByText('한글 답변 🧪');
+    expect(screen.queryByText('요청 정보', { exact: true })).not.toBeInTheDocument();
+    expect(screen.getByText(/^요청 ID:/)).not.toBeVisible();
+    await user.click(screen.getByText('답변 정보', { exact: true }));
+    expect(screen.getByText(/^요청 ID:/)).toBeVisible();
+    expect(screen.getByText('사용 안내', { exact: true })).toBeVisible();
+    await user.click(screen.getByText('사용 안내', { exact: true }));
+    expect(screen.getByText('지원하는 공식 문서', { exact: true })).toBeVisible();
+    expect(screen.getByText(/최대 10개.*파일당 10 MiB.*전체 50 MiB/)).toBeVisible();
+    expect(requests).toHaveLength(1);
   });
 
   it('Shift+Enter는 초안에 개행을 남기고 Enter를 눌러야 정확한 원문을 보낸다', async () => {

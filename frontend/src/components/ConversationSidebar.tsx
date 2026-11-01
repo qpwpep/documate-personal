@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import type { ConversationState } from '../conversations';
+import './ConversationSidebar.css';
 
 interface Props {
   items: { id: string; title: string; busy: boolean; expired: boolean }[];
@@ -11,15 +12,18 @@ interface Props {
   onThemeChange(theme: ConversationState['theme']): void;
   onModalChange(open: boolean): void;
   attachments?: ReactNode;
+  help?: ReactNode;
   children?: ReactNode;
 }
 
-export function ConversationSidebar({ items, activeId, onSelect, onNew, disabled, theme, onThemeChange, onModalChange, attachments, children }: Props) {
+export function ConversationSidebar({ items, activeId, onSelect, onNew, disabled, theme, onThemeChange, onModalChange, attachments, help, children }: Props) {
   const [mobile, setMobile] = useState(() => window.matchMedia?.('(max-width: 760px)').matches ?? false);
   const [open, setOpen] = useState(() => !mobile);
+  const [search, setSearch] = useState('');
   const panel = useRef<HTMLElement>(null);
   const opener = useRef<HTMLButtonElement>(null);
   const closeButton = useRef<HTMLButtonElement>(null);
+  const searchInput = useRef<HTMLInputElement>(null);
   const returnFocusToOpener = useRef(false);
   const focusOnOpen = useRef(false);
   const numberedItems = items.map((item, index) => ({ ...item,
@@ -28,6 +32,10 @@ export function ConversationSidebar({ items, activeId, onSelect, onNew, disabled
   const recentItems = numberedItems.slice(-3).reverse();
   const currentItem = numberedItems.find((item) => item.id === activeId);
   if (currentItem && !recentItems.some((item) => item.id === activeId)) recentItems.push(currentItem);
+  const searchTerm = search.trim().toLocaleLowerCase();
+  const visibleItems = searchTerm
+    ? numberedItems.filter((item) => item.title.toLocaleLowerCase().includes(searchTerm)).reverse()
+    : recentItems;
 
   useEffect(() => {
     const media = window.matchMedia?.('(max-width: 760px)');
@@ -88,39 +96,57 @@ export function ConversationSidebar({ items, activeId, onSelect, onNew, disabled
       </button></div>
       <button type="button" className="new-conversation" disabled={disabled} onClick={() => { onNew(); if (mobile) close(); }}>
         <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7"><path d="m15 4 5 5M4 20l5-1 12-12a2 2 0 0 0-5-5L4 14v6Z" /></svg>
-        새 채팅<span aria-hidden="true" className="new-conversation-plus">+</span>
+        새 채팅
       </button>
-      <nav aria-label="최근 대화">
-        <p className="sidebar-section-label">최근 대화</p>
-        {recentItems.map((item) => <button type="button" className="conversation-choice" key={item.id}
+      <div className="conversation-search">
+        <label className="visually-hidden" htmlFor="conversation-search">대화 검색</label>
+        <input ref={searchInput} id="conversation-search" type="search" value={search} placeholder="대화 검색"
+          autoComplete="off" aria-controls="conversation-list" onChange={(event) => setSearch(event.currentTarget.value)} />
+        {search && <button type="button" className="search-clear" aria-label="검색어 지우기"
+          onClick={() => { setSearch(''); searchInput.current?.focus(); }}>지우기</button>}
+      </div>
+      <nav id="conversation-list" aria-label={searchTerm ? '대화 검색 결과' : '최근 대화'}>
+        <p className="sidebar-section-label" role={searchTerm ? 'status' : undefined}>{searchTerm ? `검색 결과 ${visibleItems.length}개` : '최근 대화'}</p>
+        {searchTerm && visibleItems.length === 0 && <div className="conversation-search-empty">
+          <p>일치하는 대화가 없습니다.</p><p>다른 제목으로 검색하거나 새 채팅을 시작하세요.</p>
+        </div>}
+        {visibleItems.map((item) => <button type="button" className="conversation-choice" key={item.id}
           disabled={disabled || item.id === activeId} aria-current={item.id === activeId ? 'page' : undefined} aria-label={`대화 선택: ${item.title}`}
-          onClick={() => select(item.id)}><span>{item.id === activeId ? '현재 · ' : ''}{item.label}</span></button>)}
+          onClick={() => select(item.id)}><span>{item.title}</span>
+          {(item.busy || item.expired) && <small>{item.busy ? '답변 준비 중' : '읽기 전용'}</small>}
+        </button>)}
       </nav>
-      <details className="all-conversations"><summary>모든 대화 보기</summary>
+      <details className="all-conversations"><summary>전체 대화</summary>
         <label htmlFor="all-conversations">대화 선택</label>
         <select id="all-conversations" value={activeId} disabled={disabled} onChange={(event) => select(event.target.value)}>
           {[...numberedItems].reverse().map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
         </select>
-        <p className="sidebar-help">이 탭에서 새로고침해도 대화와 초안을 복원합니다. 서버 세션이 만료되면 기존 기록은 읽기 전용으로 남습니다.</p>
+        <p className="sidebar-help">이 탭에 대화와 초안이 보관됩니다. 서버 세션이 만료되면 기록만 읽을 수 있습니다.</p>
       </details>
       <div className="sidebar-utilities">
-      {attachments}
-      <details className="theme-settings"><summary>화면 설정</summary>
-        <fieldset className="settings-options" disabled={disabled}><legend>테마</legend>
-          {(['system', 'light', 'dark'] as const).map((value, index) => <label key={value}>
-            <input type="radio" name="theme" value={value} checked={theme === value} onChange={() => onThemeChange(value)} />
-            {['시스템', '라이트', '다크'][index]}
-          </label>)}
-        </fieldset>
-      </details>
-      {children}
+        {attachments && <details className="sidebar-attachments"><summary>첨부 자료</summary>{attachments}</details>}
+        <details className="sidebar-settings"><summary>설정</summary>
+          <details className="theme-settings"><summary>화면 설정</summary>
+            <fieldset className="settings-options" disabled={disabled}><legend>테마</legend>
+              {(['system', 'light', 'dark'] as const).map((value, index) => <label key={value}>
+                <input type="radio" name="theme" value={value} checked={theme === value} onChange={() => onThemeChange(value)} />
+                {['시스템', '라이트', '다크'][index]}
+              </label>)}
+            </fieldset>
+          </details>
+          {children}
+        </details>
+        {help}
       </div>
-      <div className="sidebar-footer"><span className="workspace-avatar" aria-hidden="true">D</span><div><strong>나의 작업 공간</strong><span>문서로 배우고, 근거로 확인하기</span></div></div>
     </aside>
   </>;
 }
 
 function insideClosedDetails(element: HTMLElement): boolean {
-  const details = element.closest('details:not([open])');
-  return details !== null && details.querySelector('summary') !== element;
+  let details = element.closest('details:not([open])');
+  while (details) {
+    if (details.querySelector(':scope > summary') !== element) return true;
+    details = details.parentElement?.closest('details:not([open])') ?? null;
+  }
+  return false;
 }

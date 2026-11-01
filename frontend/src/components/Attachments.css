@@ -8,9 +8,16 @@
 .attachments small, .attachment-hint { color: var(--muted, #595e57); font-size: .8rem; }
 .attachment-state { font-weight: 650; margin-bottom: .25rem; }
 .attachment-review, .held-question { border-top: 1px solid var(--border, #d9ddd2); padding-top: .7rem; margin-top: .7rem; }
-.attachment-manifest .confirmed-files li { display: block; margin: .6rem 0; padding: .7rem .8rem; border: 1px solid var(--border); border-radius: .75rem; background: var(--panel); }
-.attachment-manifest .confirmed-files li > span { display: block; }
+.attachment-manifest .attachment-state { margin: 0 0 .5rem; color: var(--muted); font-size: .75rem; font-weight: 400; }
+.attachment-manifest .confirmed-files ul { margin: 0; }
+.attachment-manifest .confirmed-files li { gap: .25rem; margin: 0; padding: .35rem 0; border-bottom: 1px solid var(--border); }
+.attachment-manifest .confirmed-files li > span { display: block; flex: 1; }
+.attachment-manifest .confirmed-files strong { font-size: .8rem; font-weight: 500; }
 .attachment-manifest .confirmed-files small { display: block; }
+.attachment-manifest .confirmed-files .text-button { min-width: 44px; min-height: 44px; flex-shrink: 0; padding: .3rem; border-color: transparent; color: var(--muted); }
+.attachment-manifest-actions { display: flex; flex-wrap: wrap; gap: .25rem; margin-top: .25rem; }
+.attachment-manifest-actions .secondary-button { min-height: 44px; padding: .4rem .5rem; background: transparent; border-color: transparent; color: var(--muted); font-size: .75rem; }
+.attachment-manifest .attachment-hint { margin: .5rem 0 0; line-height: 1.5; }
 .attachment-review label { display: flex; gap: .5rem; margin-bottom: .65rem; align-items: flex-start; }
 .attachment-recovery { display: flex; gap: .5rem; flex-wrap: wrap; margin-top: .6rem; }
 .held-question pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }

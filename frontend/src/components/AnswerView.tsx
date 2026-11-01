@@ -1,4 +1,4 @@
-import { Fragment, createElement, useId, useState } from 'react';
+import { Fragment, createElement, useId, useState, type ReactNode } from 'react';
 import remarkGfm from 'remark-gfm';
 import remarkParse from 'remark-parse';
 import { unified } from 'unified';
@@ -26,11 +26,16 @@ const deliveryGuidance = {
   verify_delivery: 'Slack에서 전달 여부를 확인해 주세요. 자동으로 다시 전송하지 않습니다.',
 };
 
-export function AnswerView({ response, turn }: { response: AnswerResponse; turn?: AgentResponse }) {
+export function AnswerView({ response, turn, actions, requestId }: {
+  response: AnswerResponse; turn?: AgentResponse; actions?: ReactNode; requestId?: string | null;
+}) {
   const answerId = useId();
   const [opened, setOpened] = useState<{ citation: Citation; context: AnswerContext[]; opener: HTMLElement } | null>(null);
   const citations = new Map(response.citations.map((citation) => [citation.evidence.id, citation]));
   const units = response.content.blocks.flatMap((block, index) => blockUnits(block, index));
+  const usedRefs = [...new Set(units.flatMap(({ unit }) => unit.refs ?? []))];
+  const limits = validationLimits(response);
+  const issueCodes = new Set(response.issues.map((issue) => issue.code));
   const globalIssues = response.issues.filter((issue) => !issue.unit_id);
   const partialProblem = turn?.status === 'partial' && turn.problem?.code !== 'save_failed'
     && turn.problem?.stage !== 'action_postprocess' ? turn.problem : null;
@@ -41,6 +46,13 @@ export function AnswerView({ response, turn }: { response: AnswerResponse; turn?
     }
     sections[sections.length - 1].blocks.push({ block, index });
     sections[sections.length - 1].units.push(...blockUnits(block, index));
+  }
+
+  function openCitation(citation: Citation, opener: HTMLElement, contextUnits: Unit[]) {
+    setOpened({ citation, opener,
+      context: contextUnits.filter(({ unit }) => unit.refs?.includes(citation.evidence.id))
+        .map(({ unit, isCode, inline }) => ({ text: unit.text, isCode: isCode || unit.source_location != null, inline })),
+    });
   }
 
   return (
@@ -54,12 +66,6 @@ export function AnswerView({ response, turn }: { response: AnswerResponse; turn?
       )}
       <div className="answer-body">
         {sections.map((section, sectionIndex) => {
-          const sectionRefs = [...new Set(section.units.flatMap(({ unit }) => unit.refs ?? []))];
-          const openCitation: OpenCitation = (citation, opener) => setOpened({
-            citation, opener,
-            context: section.units.filter(({ unit }) => unit.refs?.includes(citation.evidence.id))
-              .map(({ unit, isCode, inline }) => ({ text: unit.text, isCode: isCode || unit.source_location != null, inline })),
-          });
           return (
             <Fragment key={sectionIndex}>
               {section.blocks.map(({ block, index }) => {
@@ -68,7 +74,7 @@ export function AnswerView({ response, turn }: { response: AnswerResponse; turn?
                 const localIssues = response.issues.filter((issue) => issue.unit_id && paths.has(issue.unit_id));
                 return (
                   <div className="answer-block" key={index}>
-                    <BodyBlock block={block} citations={citations} onCitation={openCitation} />
+                    <BodyBlock block={block} citations={citations} onCitation={(citation, opener) => openCitation(citation, opener, section.units)} />
                     {localIssues.length > 0 && (
                       <details className="answer-limit-details">
                         <summary>이 내용의 한계 ({localIssues.length}개)</summary>
@@ -90,19 +96,6 @@ export function AnswerView({ response, turn }: { response: AnswerResponse; turn?
                   </div>
                 );
               })}
-              {sectionRefs.length > 0 && (
-                <div className="answer-section-sources" aria-label="이 절의 근거">
-                  {sectionRefs.map((ref) => {
-                    const citation = citations.get(ref);
-                    return citation && (
-                      <button className="secondary-button" type="button" key={ref} onClick={(event) => openCitation(citation, event.currentTarget)}>
-                        <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6"><path d="M14 3H6a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8z" /><path d="M14 3v5h5M8 12h8M8 16h6" /></svg>
-                        <span>근거 [{citation.number}] {citation.evidence.snapshot.title || citation.evidence.snapshot.source_uri}</span>
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
             </Fragment>
           );
         })}
@@ -115,7 +108,27 @@ export function AnswerView({ response, turn }: { response: AnswerResponse; turn?
           {partialProblem && turn?.request_id && <p className="answer-caption">오류 식별자: {turn.request_id}</p>}
         </details>
       )}
-      <ValidationSummary response={response} units={units} incomplete={turn?.status === 'partial'} showLimits={!partialProblem} />
+      {!partialProblem && limits.length > 0 && <div className="answer-validation-notices">
+        <p className="answer-caption">확인할 한계: {limits.join(' ')}</p>
+        {issueCodes.has('invalid_content_removed')
+          ? <p className="answer-caption">필요한 항목이 빠졌다면 해당 항목을 지정해 다시 질문해 주세요.</p>
+          : issueCodes.has('source_location_unverified')
+            ? <p className="answer-caption">출처에서 원문 위치를 확인하거나, 위치를 확인할 수 있는 원본 파일을 첨부해 주세요.</p>
+            : null}
+      </div>}
+      <div className="answer-toolbar">
+        {usedRefs.map((ref) => {
+          const citation = citations.get(ref);
+          if (!citation) return null;
+          const title = citation.evidence.snapshot.title || citation.evidence.snapshot.source_uri;
+          return <button type="button" className="answer-source" key={ref} aria-label={`근거 [${citation.number}] ${title}`}
+            onClick={(event) => openCitation(citation, event.currentTarget, units)}>
+            <small aria-hidden="true">{citation.number}</small><span>{title}</span>
+          </button>;
+        })}
+        {actions}
+        <ValidationSummary response={response} units={units} limits={limits} incomplete={turn?.status === 'partial'} requestId={requestId} />
+      </div>
       <ActionReceipts response={response} />
       {opened && <EvidencePanel {...opened} onClose={() => setOpened(null)} />}
     </div>
@@ -158,10 +171,8 @@ function BodyBlock({ block, citations, onCitation }: { block: AnswerBlock; citat
       const label = block.content.basis === 'excerpt' ? '원문 발췌'
         : `${basis ? `${basis} · ` : ''}${block.inline ? '인라인 코드' : '코드 블록'} · 실행 확인 안 됨`;
       return <>
-        {block.inline ? <p><code>{block.content.text}</code></p> : <div className="answer-code">
-          <div className="answer-code-heading"><span>{block.language || '코드'}</span><span aria-hidden="true">&lt;/&gt;</span></div>
-          <pre><code>{block.content.text}</code></pre>
-        </div>}
+        {block.inline ? <p><code>{block.content.text}</code></p>
+          : <AnswerCode text={block.content.text} language={block.language || '코드'} />}
         <p className="answer-caption">{label} <CitationLinks unit={block.content} citations={citations} onCitation={onCitation} /></p>
       </>;
     }
@@ -171,6 +182,32 @@ function BodyBlock({ block, citations, onCitation }: { block: AnswerBlock; citat
         <tbody>{block.rows?.map((row, rowIndex) => <tr key={rowIndex}>{row.map((unit, column) => <td key={column}>{renderUnit(unit)}</td>)}</tr>)}</tbody>
       </table></div>;
   }
+}
+
+function AnswerCode({ text, language }: { text: string; language: string }) {
+  const [copyStatus, setCopyStatus] = useState<'copied' | 'failed' | null>(null);
+
+  async function copyCode() {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopyStatus('copied');
+    } catch {
+      setCopyStatus('failed');
+    }
+  }
+
+  return <div className="answer-code">
+    <div className="answer-code-heading"><span>{language}</span>
+      <button type="button" className="answer-code-copy secondary-button" aria-label="코드 복사" onClick={() => void copyCode()}>
+        {copyStatus === 'copied' ? '복사 완료' : '코드 복사'}
+      </button>
+    </div>
+    <pre><code>{text}</code></pre>
+    <p className={`answer-code-copy-status${copyStatus !== 'failed' ? ' visually-hidden' : ''}`} role="status" aria-label="코드 복사 상태">
+      {copyStatus === 'copied' && '코드를 복사했습니다.'}
+      {copyStatus === 'failed' && '복사하지 못했습니다. 코드를 선택해 복사하거나 다시 시도해 주세요.'}
+    </p>
+  </div>;
 }
 
 function hasBlockMarkdown(text: string): boolean {
@@ -232,31 +269,32 @@ function problemGuidance(problem: Problem): string {
     supply_information: '확인에 필요한 자료나 조건을 추가해 주세요.' }[problem.next_action];
 }
 
-function ValidationSummary({ response, units, incomplete, showLimits }: { response: AnswerResponse; units: Unit[]; incomplete: boolean; showLimits: boolean }) {
+function validationLimits(response: AnswerResponse): string[] {
   const report = response.semantic_validation;
-  if (!response.citations.length && !report && !units.length) return null;
-  const resolved = response.checks.filter((check) => check.reference_status === 'resolved').length;
-  const excerpts = new Set(units.filter(({ unit }) => unit.basis === 'excerpt').map(({ path }) => path));
-  const exact = response.checks.filter((check) => excerpts.has(check.unit_id) && check.support_status === 'exact_match').length;
-  const quoteSummary = excerpts.size ? ` · 원문 발췌 ${excerpts.size}개 중 원문 일치 ${exact}개` : '';
-  const globalIssues = response.issues.filter((issue) => !issue.unit_id);
-  const issueCodes = new Set(response.issues.map((issue) => issue.code));
   const requestCheck = report?.checks.find((check) => check.name === 'request_fulfilled' && !check.unit_id);
-  const limits = [...new Set(globalIssues.map((issue) => issue.message))];
-  if (issueCodes.has('invalid_content_removed')) limits.push('제외된 항목의 상세 기록은 없습니다.');
+  const limits = [...new Set(response.issues.filter((issue) => !issue.unit_id).map((issue) => issue.message))];
+  if (response.issues.some((issue) => issue.code === 'invalid_content_removed')) limits.push('제외된 항목의 상세 기록은 없습니다.');
   const unitLimitCount = response.issues.filter((issue) => issue.unit_id).length;
   if (unitLimitCount) limits.push(`내용별 한계 ${unitLimitCount}개는 해당 내용 아래에서 확인할 수 있습니다.`);
   if (requestCheck?.status === 'refused') limits.push('요청 조건을 자동으로 확인하지 못했습니다.');
   else if (requestCheck?.probability != null && report && requestCheck.probability < report.threshold) limits.push('답변 본문의 요청 조건 충족을 확인하지 못했습니다.');
-  return <div className="answer-validation">
+  return limits;
+}
+
+function ValidationSummary({ response, units, limits, incomplete, requestId }: {
+  response: AnswerResponse; units: Unit[]; limits: string[]; incomplete: boolean; requestId?: string | null;
+}) {
+  const report = response.semantic_validation;
+  if (!response.citations.length && !report && !units.length && !requestId) return null;
+  const resolved = response.checks.filter((check) => check.reference_status === 'resolved').length;
+  const excerpts = new Set(units.filter(({ unit }) => unit.basis === 'excerpt').map(({ path }) => path));
+  const exact = response.checks.filter((check) => excerpts.has(check.unit_id) && check.support_status === 'exact_match').length;
+  const quoteSummary = excerpts.size ? ` · 원문 발췌 ${excerpts.size}개 중 원문 일치 ${exact}개` : '';
+  const issueCodes = new Set(response.issues.map((issue) => issue.code));
+  const requestCheck = report?.checks.find((check) => check.name === 'request_fulfilled' && !check.unit_id);
+  return <details className="answer-validation"><summary>답변 정보</summary>
     <p className="answer-caption">출처가 연결된 내용 {resolved}개{quoteSummary}</p>
-    {showLimits && limits.length > 0 && <p className="answer-caption">확인할 한계: {limits.join(' ')}</p>}
-    {showLimits && (issueCodes.has('invalid_content_removed')
-      ? <p className="answer-caption">필요한 항목이 빠졌다면 해당 항목을 지정해 다시 질문해 주세요.</p>
-      : issueCodes.has('source_location_unverified')
-        ? <p className="answer-caption">출처에서 원문 위치를 확인하거나, 위치를 확인할 수 있는 원본 파일을 첨부해 주세요.</p>
-        : null)}
-    <details className="validation-details"><summary>검증 상세</summary>
+    {requestId && <p className="request-id">요청 ID: {requestId}</p>}
       <p>{resolved ? `출처 연결: 내용 ${resolved}개에 출처가 연결되어 있습니다.` : '출처 연결: 이 답변에 연결된 출처가 없습니다.'}</p>
       <p>{excerpts.size ? `원문 발췌 ${excerpts.size}개 중 원문 일치 ${exact}개. 보관한 원문과 일치하는지 확인합니다.` : '원문 발췌: 자료에서 그대로 옮긴 내용은 없습니다.'}</p>
       {units.some(({ isCode }) => isCode) && <p>실행 확인: 코드 형식으로 표시된 내용의 실행 결과는 확인하지 않았습니다.</p>}
@@ -276,8 +314,7 @@ function ValidationSummary({ response, units, incomplete, showLimits }: { respon
           <SemanticResult label="근거 지지" check={report?.checks.find((check) => check.name === 'grounded' && check.unit_id === path)} threshold={report?.threshold} />
         </section>)}
       </details>
-    </details>
-  </div>;
+  </details>;
 }
 
 function SemanticResult({ label, check, threshold }: { label: string; check?: components['schemas']['SemanticCheck']; threshold?: number }) {

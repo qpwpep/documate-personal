@@ -180,6 +180,7 @@ export function useAttachments(options: Options) {
 
   const canChange = !options.disabled && !active.current && options.state.phase === 'idle' && options.state.pendingPrompt === null;
   const picker = <AttachmentPicker config={options.config} disabled={!canChange} buttonRef={pickerButton}
+    manifest={options.manifest} confirmed={options.manifestConfirmed}
     onSelect={(files) => change({ ...createAttachmentState(), files: [...options.state.files, ...files] })} />;
   const manifestPanel = <AttachmentManifest manifest={options.manifest} confirmed={options.manifestConfirmed}
     disabled={options.disabled || active.current} changesDisabled={!canChange || options.state.files.length > 0}

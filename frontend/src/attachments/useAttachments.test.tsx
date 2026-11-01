@@ -3,7 +3,7 @@ import { once } from 'node:events';
 import { createHash } from 'node:crypto';
 import * as buffer from 'node:buffer';
 import { useState } from 'react';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AgentSessionClient } from '../api/client';
@@ -141,6 +141,12 @@ describe('첨부를 명시적으로 확정하는 흐름', () => {
     await user.click(screen.getByRole('button', { name: '첨부만 확정' }));
     await screen.findByRole('button', { name: 'second.py 첨부 해제' });
     expect(manifest.files.map((file) => file.name)).toEqual(['first.py', 'second.py']);
+    const files = within(screen.getByRole('region', { name: '함께 검색할 파일' }));
+    expect(files.getAllByText(/검색 가능/)).toHaveLength(1);
+    expect(files.getByText(/2개 · 11 B/)).toBeVisible();
+    expect(files.getByRole('button', { name: 'first.py 첨부 해제' })).toHaveTextContent(/^해제$/);
+    expect(files.getByRole('button', { name: '첨부 목록 새로고침' })).toHaveTextContent(/^새로고침$/);
+    expect(files.getByRole('button', { name: '첨부 전체 해제' })).toHaveTextContent(/^전체 해제$/);
     expect(sentQueries).toHaveLength(0);
   });
 

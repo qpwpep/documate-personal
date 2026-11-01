@@ -19,6 +19,34 @@ test('shrinking the desktop sidebar returns keyboard focus to its visible menu o
   await expectClickableInViewport(opener);
 });
 
+test('evidence opens with the first pointer click after changing viewport width', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.goto('./');
+  await page.getByLabel('파일 첨부', { exact: true }).setInputFiles({
+    name: 'resize-source.py', mimeType: 'text/x-python', buffer: Buffer.from('alpha = 1\r\n'),
+  });
+  await page.getByRole('button', { name: '첨부만 확정', exact: true }).click();
+  const query = page.getByRole('textbox', { name: '질문', exact: true });
+  await query.fill('화면 크기 변경 후 첨부 원문 확인');
+  await page.getByRole('button', { name: '질문 보내기', exact: true }).click();
+  const source = page.getByRole('button', { name: '근거 [1] resize-source.py', exact: true });
+  await expect(source).toBeVisible();
+  const dialog = page.getByRole('dialog', { name: 'resize-source.py', exact: true });
+  for (const viewport of [
+    { width: 390, height: 844 }, { width: 1280, height: 720 },
+    { width: 390, height: 360 }, { width: 1280, height: 720 },
+  ]) {
+    await query.focus();
+    await page.setViewportSize(viewport);
+    // Keep pointer down across a frame, as a normal physical click can do.
+    await source.click({ delay: 60 });
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByRole('group', { name: '원문 1행', exact: true })).toContainText('alpha = 1');
+    await dialog.getByRole('button', { name: '근거 닫기', exact: true }).click();
+    await expect(dialog).toHaveCount(0);
+  }
+});
+
 for (const viewport of [{ width: 1280, height: 720 }, { width: 390, height: 600 }]) {
   test(`answer keyboard focus stays below the sticky header at ${viewport.width}x${viewport.height}`, async ({ page }) => {
     await page.setViewportSize(viewport);
@@ -30,12 +58,17 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 390, height: 600 
       await expect(page.getByText('답변 받음', { exact: true })).toHaveCount(index + 1);
     }
     const controls = (await page.getByRole('region', { name: '대화 기록', exact: true }).all()).flatMap((turn) => [
-      turn.getByText('검증 상세', { exact: true }),
       turn.getByRole('button', { name: 'TXT 파일 만들기', exact: true }),
-      turn.getByText('요청 정보', { exact: true }),
+      turn.getByText('답변 정보', { exact: true }),
     ]);
-    expect(controls).toHaveLength(15);
+    expect(controls).toHaveLength(10);
     await query.fill('아직 보내지 않은 후속 질문');
+    const jump = page.getByRole('button', { name: '최신 답변으로 이동', exact: true });
+    if (await jump.isVisible()) {
+      await page.keyboard.press('Shift+Tab');
+      await expect(jump).toBeFocused();
+      await expectClickableInViewport(jump);
+    }
     for (const { key, targets } of [
       { key: 'Shift+Tab', targets: [...controls].reverse() },
       { key: 'Tab', targets: controls.slice(1) },
@@ -50,6 +83,11 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 390, height: 600 
           return focused!.y >= header!.y + header!.height;
         }, { message: `${key}: ${await target.textContent()} must not be hidden behind the header` }).toBe(true);
       }
+    }
+    if (await jump.isVisible()) {
+      await page.keyboard.press('Tab');
+      await expect(jump).toBeFocused();
+      await expectClickableInViewport(jump);
     }
     await page.keyboard.press('Tab');
     await expect(query).toBeFocused();
@@ -70,6 +108,7 @@ for (const viewport of [{ width: 320, height: 720 }, { width: 390, height: 844 }
       .evaluate((element) => element.contains(document.activeElement))).toBe(true);
     await page.keyboard.press('Tab');
     await expect(page.getByRole('button', { name: '메뉴 닫기', exact: true })).toBeFocused();
+    await page.getByText('설정', { exact: true }).click();
     await page.getByText('화면 설정', { exact: true }).click();
     for (const theme of ['라이트', '다크', '시스템']) {
       await page.getByRole('radio', { name: theme, exact: true }).check();
@@ -119,6 +158,7 @@ for (const viewport of [{ width: 320, height: 720 }, { width: 390, height: 844 }
 
 test('light, dark and system themes keep text, code, warnings and action labels readable', async ({ page }) => {
   await page.goto('./');
+  await page.getByText('설정', { exact: true }).click();
   await page.getByText('화면 설정', { exact: true }).click();
   await page.getByRole('textbox', { name: '질문', exact: true }).fill('테마 대비 확인');
   await page.getByRole('button', { name: '질문 보내기', exact: true }).click();

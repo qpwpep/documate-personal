@@ -11,6 +11,7 @@ async function submittedQueries(request: APIRequestContext): Promise<string[]> {
 
 test('confirmed browser uploads release staging and allow repeated near-limit replacements', async ({ page, request }) => {
   await page.goto('./');
+  await page.getByText('첨부 자료', { exact: true }).click();
   const config = await (await request.get(`${fixtureUrl}/client-config`)).json() as {
     upload: { max_file_bytes: number };
   };

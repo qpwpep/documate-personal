@@ -7,6 +7,7 @@ import { AnswerDelivery } from './components/AnswerDelivery';
 import { SlackSettings } from './components/SlackSettings';
 import { selectedSlackRecipient } from './components/SlackSettingsState';
 import { ConversationSidebar } from './components/ConversationSidebar';
+import { ConversationJump } from './components/ConversationJump';
 import { createId } from './id';
 import {
   STORAGE_KEY, conversationTitle, createConversation, createConversationState,
@@ -25,10 +26,12 @@ const stageLabels: Record<string, string> = {
 const docExamples = [
   'pandas merge 사용법을 공식 문서 기준으로 설명해줘',
   'NumPy 배열 reshape 예제를 공식 문서 기준으로 알려줘',
-  'FastAPI 라우터 구조를 간단히 설명해줘',
-  'scikit-learn train_test_split 사용법을 정리해줘',
 ];
 const uploadExamples = ['첨부한 자료의 핵심 내용을 요약하고 근거를 보여줘', '첨부한 자료에서 중요한 용어를 설명해줘'];
+const exampleLabels: Record<string, string> = {
+  [docExamples[0]]: 'pandas merge 사용법', [docExamples[1]]: 'NumPy reshape 예제',
+  [uploadExamples[0]]: '첨부 자료 핵심 요약', [uploadExamples[1]]: '첨부 자료 용어 설명',
+};
 const supportedDocs = ['python', 'git', 'LangChain', 'Matplotlib', 'NumPy', 'pandas', 'PyTorch', 'Hugging Face',
   'FastAPI', 'BeautifulSoup', 'streamlit', 'gradio', 'scikit-learn', 'Pydantic'];
 
@@ -57,6 +60,8 @@ export function App({ apiBaseUrl = '' }: { apiBaseUrl?: string }) {
   const validations = useRef(new Map<string, number>());
   const input = useRef<HTMLTextAreaElement>(null);
   const latestTurn = useRef<HTMLElement>(null);
+  const conversationArea = useRef<HTMLElement>(null);
+  const composerArea = useRef<HTMLElement>(null);
   const previousView = useRef<{ id: string; turnCount: number } | null>(null);
 
   const mutate = useCallback((update: (value: ConversationState) => ConversationState) => {
@@ -160,8 +165,26 @@ export function App({ apiBaseUrl = '' }: { apiBaseUrl?: string }) {
   useEffect(() => {
     const textarea = input.current;
     if (!textarea) return;
-    textarea.style.height = 'auto';
-    textarea.style.height = `${Math.min(textarea.scrollHeight, 240)}px`;
+    function resize() {
+      textarea!.style.height = 'auto';
+      textarea!.style.height = `${Math.min(textarea!.scrollHeight, 240)}px`;
+    }
+    resize();
+    let width = textarea.clientWidth;
+    let resizeFrame = 0;
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(() => {
+      // The sidebar and viewport change line wrapping without changing the draft.
+      if (textarea.clientWidth === width) return;
+      width = textarea.clientWidth;
+      // Resize after observer delivery to avoid another layout in the same cycle.
+      cancelAnimationFrame(resizeFrame);
+      resizeFrame = requestAnimationFrame(resize);
+    });
+    observer?.observe(textarea);
+    return () => {
+      observer?.disconnect();
+      cancelAnimationFrame(resizeFrame);
+    };
   }, [conversation.id, conversation.draft]);
 
   function setBusy(id: string, operation: 'upload' | 'save', busy: boolean) {
@@ -194,6 +217,7 @@ export function App({ apiBaseUrl = '' }: { apiBaseUrl?: string }) {
     let turnId: string | null = null;
     try {
       if (!await ensureSession(id, controller.signal) || controller.signal.aborted) return;
+      setProgress((value) => ({ ...value, [id]: '질문을 보내고 있습니다.' }));
       turnId = createId();
       const turn: ChatTurn = { id: turnId, query, result: null, notices: [], error: null, requestId: null,
         interrupted: false, receiving: true, exportResult: null, exportError: null };
@@ -285,10 +309,6 @@ export function App({ apiBaseUrl = '' }: { apiBaseUrl?: string }) {
     : readOnly ? '서버 세션이 만료되어 읽기 전용입니다. 새 채팅에서 계속할 수 있습니다.'
       : configError ?? (conversation.connection === 'checking' || !config ? '서버 연결을 확인하고 있습니다.'
         : conversation.connection === 'ready' ? '질문할 준비가 되었습니다.' : conversation.connectionError ?? '서버 연결을 다시 확인해 주세요.');
-  const attachmentStatus = conversation.attachments.phase === 'failed'
-    ? `첨부 준비 실패${conversation.manifest ? ` · 기존 자료 ${conversation.manifest.files.length}개 유지` : ''}`
-    : !conversation.manifest ? '첨부 연결 확인 중'
-      : `${readOnly ? '이전 첨부 기록' : '첨부 자료'} ${conversation.manifest.files.length}개`;
   const isEmpty = conversation.turns.length === 0;
   const showExamples = isEmpty && ready && !conversation.busy && !attachments.hasPending;
 
@@ -298,23 +318,28 @@ export function App({ apiBaseUrl = '' }: { apiBaseUrl?: string }) {
         activeId={state.activeId} onSelect={(id) => { if (!navigationBlocked) mutate((value) => ({ ...value, activeId: id })); }}
         onNew={newConversation} disabled={navigationBlocked} theme={state.theme}
         onThemeChange={(theme) => mutate((value) => ({ ...value, theme }))} onModalChange={setSidebarModal}
-        attachments={attachments.manifestPanel}>
+        attachments={attachments.manifestPanel}
+        help={<details className="sidebar-help-panel"><summary>사용 안내</summary>
+          <h2>지원하는 공식 문서</h2>
+          <p>{supportedDocs.join(' · ')}</p>
+          <h2>첨부 형식과 용량</h2>
+          {config && <p>{[...config.upload.accepted_suffixes].sort().join(' · ')} / 최대 {config.upload.max_files}개 / 파일당 {config.upload.max_file_bytes / (1024 * 1024)} MiB / 전체 {config.upload.max_total_bytes / (1024 * 1024)} MiB</p>}
+          <p>입력창의 +로 파일을 선택한 뒤 전송하세요. 파일만 먼저 전송할 수도 있습니다.</p>
+        </details>}>
         <SlackSettings value={conversation.slack} baseUrl={apiBaseUrl} disabled={readOnly || conversation.busy !== null}
           onChange={(slack) => updateConversation(conversation.id, (item) => ({ ...item, slack }))} />
       </ConversationSidebar>
       <div className={`app-shell${isEmpty ? ' is-empty' : ''}`} inert={sidebarModal}>
         <header className="app-header">
-          <div className="app-heading">DocuMate<small>{conversationTitle(conversation)}</small></div>
-          <span className="header-status">{readOnly ? '읽기 전용 · ' : ''}{attachmentStatus}</span>
+          <div className="app-heading">{isEmpty ? 'DocuMate' : conversationTitle(conversation)}</div>
+          {readOnly && <span className="header-status">읽기 전용</span>}
         </header>
         {storageError && <p className="notice" role="alert">{storageError}</p>}
-        <main className="conversation" aria-label="질문과 답변" onFocusCapture={(event) => keepAnswerFocusVisible(event.target)}>
+        <main ref={conversationArea} className="conversation" aria-label="질문과 답변" onFocusCapture={(event) => keepAnswerFocusVisible(event.target)}>
           {isEmpty && <section className="welcome">
             <div className="welcome-intro">
-              <span className="greeting-mark" aria-hidden="true">✳</span>
-              <p className="eyebrow">나의 문서 학습 파트너</p>
               <h1>문서와 자료에 질문하세요</h1>
-              <p>궁금한 개념부터 내 자료의 핵심까지,<br />근거를 따라 함께 이해해 보세요.</p>
+              <p>공식 문서와 첨부 자료에서 근거를 찾아 답합니다.</p>
             </div>
           </section>}
           {conversation.turns.map((turn, index) => {
@@ -325,28 +350,29 @@ export function App({ apiBaseUrl = '' }: { apiBaseUrl?: string }) {
               <div className="user-message"><span className="visually-hidden">내 질문</span><p>{turn.query}</p></div>
               <div className="assistant-message">
                 <div className="assistant-heading">
-                  <span className="assistant-avatar" aria-hidden="true">✳</span>
                   <span className="message-label">DocuMate</span>
-                  {result && <span className={`result-status result-${result.status}`}>{resultLabels[result.status]}</span>}
+                  {result && <span className={`result-status result-${result.status}${result.status === 'completed' ? ' visually-hidden' : ''}`}>{resultLabels[result.status]}</span>}
                 </div>
                 {result && <>
-                  {result.response ? <AnswerView response={result.response} turn={result} /> : <>
-                    {result.message && <p className="result-message">{result.message}</p>}
-                    {result.problem && result.problem.message !== result.message && <p className="notice">{result.problem.message}</p>}
-                  </>}
-                  {result.answer_id && result.response && <AnswerDelivery key={result.answer_id} client={client}
+                  {result.response ? <AnswerView response={result.response} turn={result} requestId={turn.requestId}
+                    actions={result.answer_id && <AnswerDelivery key={result.answer_id} client={client}
                     answerId={result.answer_id} response={result.response} currentExport={turn.exportResult}
                     disabled={!ready || conversation.busy !== null} onBeforeSave={async () => await ensureSession(conversation.id) !== null}
                     onBusyChange={(busy) => setBusy(conversation.id, 'save', busy)} error={turn.exportError}
                     onError={(error) => updateConversation(conversation.id, (item) => ({ ...item,
                       turns: item.turns.map((saved) => saved.id === turn.id ? { ...saved, exportError: error } : saved) }))}
                     onExportResult={(exportResult) => updateConversation(conversation.id, (item) => ({ ...item,
-                      turns: item.turns.map((saved) => saved.id === turn.id ? { ...saved, exportResult, exportError: null } : saved) }))} />}
+                      turns: item.turns.map((saved) => saved.id === turn.id ? { ...saved, exportResult, exportError: null } : saved) }))} />} /> : <>
+                    {result.message && <p className="result-message">{result.message}</p>}
+                    {result.problem && result.problem.message !== result.message && <p className="notice">{result.problem.message}</p>}
+                  </>}
                 </>}
                 {turn.notices.length > 0 && <details className="transport-notices"><summary>수신 중 안내</summary>{turn.notices.map((notice, i) => <p key={i}>{notice}</p>)}</details>}
                 {turn.error && <p role="alert" className="notice">{turn.error}</p>}
-                {turn.receiving && <p className="pending-label"><span className="pending-dot" aria-hidden="true" />답변을 기다리고 있습니다.</p>}
-                {turn.requestId && <details className="request-details"><summary>요청 정보</summary><p className="request-id">요청 ID: {turn.requestId}</p></details>}
+                {turn.receiving && <div className="response-progress" role="status" aria-live="polite" aria-atomic="true">
+                  <p className="pending-label"><span className="pending-dot" aria-hidden="true" />{progress[conversation.id] || '답변을 준비하고 있습니다.'}</p>
+                </div>}
+                {turn.requestId && !result?.response && <details className="request-details"><summary>요청 정보</summary><p className="request-id">요청 ID: {turn.requestId}</p></details>}
                 {recovery && <div className="recovery-actions">
                   {canRetry(turn) && <button type="button" className="secondary-button" disabled={!ready || conversation.busy !== null}
                     onClick={() => void sendQuestion(conversation.id, turn.query)}>같은 질문 다시 보내기</button>}
@@ -357,15 +383,13 @@ export function App({ apiBaseUrl = '' }: { apiBaseUrl?: string }) {
             </section>;
           })}
         </main>
-        <footer className="composer-area">
-          <div className={`connection-status${ready && !conversation.busy ? ' visually-hidden' : ''}`} role="status" aria-live="polite">{connectionMessage}</div>
+        <footer ref={composerArea} className="composer-area">
+          {!isEmpty && <ConversationJump conversation={conversationArea} composer={composerArea} input={input} />}
+          {!conversation.turns.some((turn) => turn.receiving) && <div className={`connection-status${ready && !conversation.busy ? ' visually-hidden' : ''}`} role="status" aria-live="polite">{connectionMessage}</div>}
           {!readOnly && (conversation.connection === 'unknown' || configError) && <button type="button" className="secondary-button reconnect-button"
             disabled={conversation.busy !== null} onClick={reconnect}>연결 다시 확인</button>}
           {canContinueUploadQuestion && <button type="button" className="secondary-button" disabled={!ready || conversation.busy !== null}
             onClick={() => void sendQuestion(conversation.id, lastTurn.query)}>이전 질문 계속하기</button>}
-          {conversation.manifest && conversation.manifest.files.length > 0 && <details className="composer-attachments"><summary>첨부 {conversation.manifest.files.length}개 · {ready ? '검색 가능' : '이전 첨부 기록'}</summary>
-            <p>{conversation.manifest.files.map((file) => file.name).join(' · ')}</p><p>실제 사용한 자료는 답변의 근거에서 확인하세요.</p>
-          </details>}
           {attachments.panel}
           <form className="composer" onSubmit={submit}>
             <label className="visually-hidden" htmlFor="query">질문</label>
@@ -380,7 +404,6 @@ export function App({ apiBaseUrl = '' }: { apiBaseUrl?: string }) {
               }} />
             <div className="composer-toolbar">
               {attachments.picker}
-              <span className="composer-context">공식 문서와 첨부 자료</span>
               <div className="composer-actions"><p id="composer-hint" className="visually-hidden">Enter로 전송 · Shift+Enter로 줄바꿈</p>
               {conversation.busy === 'chat'
                 ? <button type="button" className="secondary-button" onClick={() => requests.current.get(conversation.id)?.abort()}>응답 수신 중단</button>
@@ -390,27 +413,13 @@ export function App({ apiBaseUrl = '' }: { apiBaseUrl?: string }) {
             </div>
           </form>
           {queryTooLong && <p id="query-limit" role="alert" className="notice">질문이 서버의 길이 제한을 넘었습니다. 내용을 나누어 보내 주세요.</p>}
-          <p className="composer-footnote">답변의 근거에서 원문을 확인하세요.</p>
           {showExamples && <section className="question-examples" aria-label="질문 예시">
-            <p className="example-heading">이렇게 시작해 보세요</p>
-            <div className="examples">{primaryExamples.map((prompt, index) => <button className="secondary-button" type="button" key={prompt}
+            <div className="examples">{primaryExamples.map((prompt) => <button className="secondary-button" type="button" key={prompt}
               aria-label={prompt} disabled={Boolean(conversation.draft)} onClick={() => fillExample(prompt)}>
-              <span className="example-icon" aria-hidden="true">{uploadExamples.includes(prompt) ? '▤' : index === 0 ? '⌘' : '↗'}</span>
-              <span className="example-copy"><strong>{uploadExamples.includes(prompt) ? '내 자료 이해하기' : index === 0 ? '공식 문서로 알아보기' : '예제로 쉽게 배우기'}</strong><small>{prompt}</small></span>
-              <span className="example-arrow" aria-hidden="true">↗</span>
+              {exampleLabels[prompt]}
             </button>)}</div>
-            <p className="example-hint">{conversation.draft ? '작성 중인 질문을 먼저 보내거나 지운 뒤 다른 예시를 선택하세요.' : '예시를 선택하면 입력창에 채워집니다. 확인하거나 수정한 뒤 전송하세요.'}</p>
-            <details className="more-examples"><summary>다른 질문 예시와 지원 문서</summary>
-              <div className="examples">{examples.slice(2).map((prompt) => <button className="secondary-button" type="button" key={prompt}
-                disabled={Boolean(conversation.draft)} onClick={() => fillExample(prompt)}>{prompt}</button>)}</div>
-              <p><strong>지원하는 공식 문서</strong></p>
-              <div className="docs-row">{supportedDocs.map((name) => <span key={name}>{name}</span>)}</div>
-            </details>
+            {conversation.draft && <p className="example-hint">작성 중인 질문을 보내거나 지우면 다른 예시를 선택할 수 있습니다.</p>}
           </section>}
-          <details className="upload-guidance"><summary>첨부 형식과 용량 안내</summary>
-            {config && <p>{[...config.upload.accepted_suffixes].sort().join(' · ')} / 최대 {config.upload.max_files}개 / 파일당 {config.upload.max_file_bytes / (1024 * 1024)} MiB / 전체 {config.upload.max_total_bytes / (1024 * 1024)} MiB</p>}
-            <p>입력창의 +로 파일을 선택한 뒤 전송하세요. 파일만 먼저 전송할 수도 있습니다.</p>
-          </details>
         </footer>
       </div>
     </div>
@@ -426,10 +435,13 @@ function keepAnswerFocusVisible(control: HTMLElement) {
     const header = document.querySelector<HTMLElement>('.app-header');
     if (!header || !['fixed', 'sticky'].includes(getComputedStyle(header).position)) return;
     const composer = document.querySelector<HTMLElement>('.composer-area');
+    const jump = document.querySelector<HTMLElement>('.jump-to-latest');
     // Leave room for the focus outline between the sticky header and composer.
     const top = header.getBoundingClientRect().bottom + 8;
-    const bottom = (composer && ['fixed', 'sticky'].includes(getComputedStyle(composer).position)
-      ? Math.min(window.innerHeight, composer.getBoundingClientRect().top) : window.innerHeight) - 8;
+    const bottom = Math.min(window.innerHeight,
+      composer && ['fixed', 'sticky'].includes(getComputedStyle(composer).position)
+        ? composer.getBoundingClientRect().top : window.innerHeight,
+      jump?.getBoundingClientRect().top ?? window.innerHeight) - 8;
     const bounds = control.getBoundingClientRect();
     if (bounds.top < top) window.scrollBy(0, bounds.top - top);
     else if (bounds.bottom > bottom) window.scrollBy(0, bounds.bottom - bottom);

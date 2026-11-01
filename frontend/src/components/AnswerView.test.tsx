@@ -1,6 +1,6 @@
 import { cleanup, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AgentResponse, AnswerResponse } from '../api/types';
 import { AnswerView } from './AnswerView';
 import sourceFixtures from './AnswerView.fixtures.json';
@@ -18,6 +18,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   cleanup();
+  vi.restoreAllMocks();
   for (const [name, original] of [['showModal', originalShowModal], ['close', originalClose]] as const) {
     if (original) Object.defineProperty(HTMLDialogElement.prototype, name, original);
     else Reflect.deleteProperty(HTMLDialogElement.prototype, name);
@@ -55,6 +56,39 @@ const response: AnswerResponse = {
 };
 
 describe('AnswerView', () => {
+  it('copies only the selected code block with its exact Unicode, spacing, and line endings', async () => {
+    const user = userEvent.setup();
+    const text = 'def 인사():\r\n\treturn "안녕 👋"  \r\n';
+    const withCode: AnswerResponse = { ...response, content: { blocks: [
+      { type: 'code', language: 'python', inline: false, content: unit('print("first")\n') },
+      { type: 'code', language: 'python', inline: false, content: unit(text) },
+    ] } };
+    const original = JSON.stringify(withCode);
+    const { container } = render(<AnswerView response={withCode} />);
+
+    await user.click(screen.getAllByRole('button', { name: '코드 복사' })[1]);
+
+    expect(await navigator.clipboard.readText()).toBe(text);
+    expect(screen.getAllByRole('status', { name: '코드 복사 상태' })[1]).toHaveTextContent('코드를 복사했습니다.');
+    expect(container.querySelectorAll('pre code')[1].textContent).toBe(text);
+    expect(JSON.stringify(withCode)).toBe(original);
+  });
+
+  it('reports a denied code copy and lets the user try again without changing the code', async () => {
+    const user = userEvent.setup();
+    const write = vi.spyOn(navigator.clipboard, 'writeText').mockRejectedValueOnce(new DOMException('Denied', 'NotAllowedError'));
+    const { container } = render(<AnswerView response={response} />);
+
+    await user.click(screen.getByRole('button', { name: '코드 복사' }));
+
+    expect(screen.getByRole('status')).toHaveTextContent('복사하지 못했습니다. 코드를 선택해 복사하거나 다시 시도해 주세요.');
+    expect(container.querySelector('pre code')?.textContent).toBe('def run():\n    return "<tag>"\n');
+    write.mockRestore();
+    await user.click(screen.getByRole('button', { name: '코드 복사' }));
+    expect(await navigator.clipboard.readText()).toBe('def run():\n    return "<tag>"\n');
+    expect(screen.getByRole('status')).toHaveTextContent('코드를 복사했습니다.');
+  });
+
   it('shows every body layout without changing code, spaces, or literal HTML', () => {
     const { container } = render(<AnswerView response={response} />);
 
@@ -111,24 +145,55 @@ describe('AnswerView', () => {
     expect(within(actions).queryByText('성공')).not.toBeInTheDocument();
   });
 
-  it('groups source buttons by section while keeping each inline citation scoped to its answer', () => {
+  it('lists each used source once after the body while preserving every inline citation', () => {
     const sectioned = sourceFixtures.sectioned as AnswerResponse;
     const original = JSON.stringify(sectioned);
     const { container } = render(<><AnswerView response={sectioned} /><AnswerView response={sectioned} /></>);
 
     expect(screen.getAllByRole('button', { name: '근거 [1] 열기' })).toHaveLength(6);
-    expect(screen.getAllByRole('button', { name: '근거 [1] 같은 출처' })).toHaveLength(4);
+    const sources = screen.getAllByRole('button', { name: '근거 [1] 같은 출처' });
+    expect(sources).toHaveLength(2);
+    for (const source of sources) {
+      expect(source.closest('.answer-body')).toBeNull();
+      expect(source.closest('.answer-toolbar')).not.toBeNull();
+    }
     const answerIds = Array.from(container.querySelectorAll('.answer-view')).map((answer) => answer.id);
     expect(new Set(answerIds).size).toBe(2);
     expect(JSON.stringify(sectioned)).toBe(original);
   });
 
+  it('opens all connected sections from the answer source button and omits unused sources', async () => {
+    const user = userEvent.setup();
+    const sectioned = structuredClone(sourceFixtures.sectioned) as AnswerResponse;
+    sectioned.citations.push({ ...sectioned.citations[0], number: 2, evidence: {
+      ...sectioned.citations[0].evidence, id: 'unused-source', snapshot: {
+        ...sectioned.citations[0].evidence.snapshot, title: '사용하지 않은 출처',
+      },
+    } });
+    render(<AnswerView response={sectioned} />);
+    expect(screen.queryByRole('button', { name: '근거 [2] 사용하지 않은 출처' })).not.toBeInTheDocument();
+    const opener = screen.getByRole('button', { name: '근거 [1] 같은 출처' });
+    await user.click(opener);
+    const panel = screen.getByRole('dialog', { name: '같은 출처' });
+    await user.click(within(panel).getByText('연결된 답변 보기'));
+    expect(within(panel).getByText('첫 설명')).toBeVisible();
+    expect(within(panel).getByText('둘째 설명')).toBeVisible();
+    expect(within(panel).getByText('마지막 설명')).toBeVisible();
+    await user.keyboard('{Escape}');
+    expect(opener).toHaveFocus();
+  });
+
   it('distinguishes source connections, exact excerpts, and semantic evaluation', async () => {
     const user = userEvent.setup();
-    render(<AnswerView response={sourceFixtures.quote as AnswerResponse} />);
+    render(<AnswerView response={sourceFixtures.quote as AnswerResponse}
+      actions={<button type="button">TXT 파일 만들기</button>} requestId="request-info" />);
 
+    expect(screen.getByRole('button', { name: 'TXT 파일 만들기' }).closest('.answer-toolbar')).not.toBeNull();
+    expect(screen.getByText('출처가 연결된 내용 1개 · 원문 발췌 1개 중 원문 일치 1개')).not.toBeVisible();
+    expect(screen.getByText('요청 ID: request-info')).not.toBeVisible();
+    await user.click(screen.getByText('답변 정보'));
     expect(screen.getByText('출처가 연결된 내용 1개 · 원문 발췌 1개 중 원문 일치 1개')).toBeVisible();
-    await user.click(screen.getByText('검증 상세'));
+    expect(screen.getByText('요청 ID: request-info')).toBeVisible();
     expect(screen.getByText('자동 확인은 답변 전체의 정확도나 실행 성공을 보증하지 않습니다.')).toBeVisible();
     await user.click(screen.getByText('기술 상세'));
     expect(screen.getByText('답변 본문 조건 충족: 검증 안 됨')).toBeVisible();
@@ -190,7 +255,7 @@ describe('AnswerView', () => {
 
     expect(screen.getByText('출처에서 원문 위치를 확인하거나, 위치를 확인할 수 있는 원본 파일을 첨부해 주세요.')).toBeVisible();
     expect(screen.getByText('확인할 한계: 내용별 한계 1개는 해당 내용 아래에서 확인할 수 있습니다.')).toBeVisible();
-    await user.click(screen.getByText('검증 상세'));
+    await user.click(screen.getByText('답변 정보'));
     await user.click(screen.getByText('기술 상세'));
     const contentCheck = screen.getByRole('region', { name: '내용 1 검증' });
     expect(within(contentCheck).getByText(/보관된 원문 문장입니다/)).toBeVisible();
@@ -243,7 +308,7 @@ describe('AnswerView', () => {
 
     expect(screen.queryByRole('region', { name: '부분 답변' })).not.toBeInTheDocument();
     expect(screen.getByText('파일을 만들지 못했습니다.')).toBeVisible();
-    await user.click(screen.getByText('검증 상세'));
+    await user.click(screen.getByText('답변 정보'));
     expect(screen.getByText(/이번 요청 처리는 완료되지 않았습니다/)).toBeVisible();
     await user.click(screen.getByText('기술 상세'));
     expect(screen.getByText(/답변 본문 조건 충족: 통과/)).toBeVisible();

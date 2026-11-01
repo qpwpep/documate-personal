@@ -36,6 +36,7 @@ test.describe('plain HTTP outside localhost', () => {
     expect(await page.evaluate(() => typeof crypto.randomUUID)).toBe('undefined');
     expect(errors).toEqual([]);
     await expect(page.getByText('질문할 준비가 되었습니다.', { exact: true })).toBeVisible();
+    await page.getByText('첨부 자료', { exact: true }).click();
 
     await page.getByLabel('파일 첨부', { exact: true }).setInputFiles({
       name: 'alpha.py', mimeType: 'text/x-python', buffer: Buffer.from('alpha = 1\r\n'),
@@ -75,6 +76,7 @@ test.describe('plain HTTP outside localhost', () => {
     await input.fill(draft);
     await page.reload();
     await expect(page.getByText('질문할 준비가 되었습니다.', { exact: true })).toBeVisible();
+    await page.getByText('첨부 자료', { exact: true }).click();
     await expect(input).toHaveValue(draft);
     await expect(page.getByText('alpha = 1', { exact: true }).first()).toBeVisible();
     await expect(attachment).toBeEnabled();

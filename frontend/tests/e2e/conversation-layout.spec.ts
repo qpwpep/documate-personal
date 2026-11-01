@@ -1,6 +1,54 @@
 import { expect, test } from '@playwright/test';
 
-test('request information stays out of the answer until opened and keeps its rendered identifier', async ({ page }) => {
+test('the composer resizes its draft when the available width changes', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  await page.addInitScript(() => {
+    const browserErrors: string[] = [];
+    Object.defineProperty(window, '__testWindowErrors', { value: browserErrors });
+    // Vite handles ResizeObserver error events before Playwright emits pageerror.
+    window.addEventListener('error', (event) => browserErrors.push(event.message));
+  });
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto('./');
+  const query = page.getByRole('textbox', { name: '질문', exact: true });
+  const draft = '공식 문서의 예시를 읽고 각 단계의 의미를 설명해 주세요.\n작성 중인 질문은 화면 크기를 바꾸어도 모두 읽을 수 있어야 합니다.';
+  for (const afterFirstAnswer of [false, true]) {
+    if (afterFirstAnswer) {
+      await page.getByRole('button', { name: '질문 보내기', exact: true }).click();
+      await expect(page.getByText('답변 받음', { exact: true })).toBeVisible();
+    }
+    await query.fill(draft);
+    for (const viewport of [{ width: 320, height: 720 }, { width: 390, height: 844 }, { width: 1280, height: 800 }]) {
+      await page.setViewportSize(viewport);
+      await expect(query).toHaveValue(draft);
+      await expect.poll(() => query.evaluate((element) => element.scrollHeight <= element.clientHeight + 1)).toBe(true);
+    }
+  }
+  expect(errors).toEqual([]);
+  expect(await page.evaluate(() => (window as Window & { __testWindowErrors?: string[] }).__testWindowErrors)).toEqual([]);
+});
+
+test('the latest-answer shortcut preserves the reading position until explicitly selected', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.goto('./');
+  const query = page.getByRole('textbox', { name: '질문', exact: true });
+  const markdown = Array.from({ length: 35 }, (_, index) => `${index + 1}. 문서의 근거를 읽고 이해합니다.`).join('\n\n');
+  await query.fill(`다음 Markdown 원문을 그대로 복사해줘.\n\n${markdown}`);
+  await page.getByRole('button', { name: '질문 보내기', exact: true }).click();
+  await expect(page.getByText('답변 받음', { exact: true })).toBeVisible();
+  const jump = page.getByRole('button', { name: '최신 답변으로 이동', exact: true });
+  await expect(jump).toBeVisible();
+  await expect(page.locator('.user-message')).toBeInViewport();
+  await query.fill('작성 중인 후속 질문');
+  await jump.click();
+  await expect(query).toBeFocused();
+  await expect(query).toHaveValue('작성 중인 후속 질문');
+  await expect(jump).not.toBeVisible();
+  await expect(page.getByRole('button', { name: 'TXT 파일 만들기', exact: true })).toBeInViewport();
+});
+
+test('answer information keeps the request identifier collapsed without losing the composer draft', async ({ page }) => {
   await page.goto('./');
   const query = page.getByRole('textbox', { name: '질문', exact: true });
   await query.fill('대화 화면의 요청 정보를 확인해줘.');
@@ -10,12 +58,12 @@ test('request information stays out of the answer until opened and keeps its ren
   const identifier = await requestInformation.textContent();
   expect(identifier).toMatch(/^요청 ID: [0-9a-f]{8}$/);
   await expect(requestInformation).not.toBeVisible();
-  await page.getByText('요청 정보', { exact: true }).click();
+  await page.getByText('답변 정보', { exact: true }).click();
   await expect(requestInformation).toBeVisible();
   await expect(requestInformation).toHaveText(identifier!);
   await expect(query).toHaveAttribute('placeholder', '이어서 질문하세요');
   await query.fill('  이어서 작성 중인 질문\n둘째 줄  ');
-  await page.getByText('요청 정보', { exact: true }).click();
+  await page.getByText('답변 정보', { exact: true }).click();
   await expect(requestInformation).not.toBeVisible();
   await expect(query).toHaveValue('  이어서 작성 중인 질문\n둘째 줄  ');
 });

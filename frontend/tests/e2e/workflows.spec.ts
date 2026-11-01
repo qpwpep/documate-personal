@@ -21,6 +21,7 @@ async function received(request: APIRequestContext) {
 
 test('files keep their original evidence after replacement and download the selected answer', async ({ page, request }) => {
   await page.goto('./');
+  await page.getByText('첨부 자료', { exact: true }).click();
   await page.getByLabel('파일 첨부', { exact: true }).setInputFiles({
     name: 'alpha.py', mimeType: 'text/x-python', buffer: Buffer.from('alpha = 1\r\n'),
   });
@@ -196,6 +197,7 @@ test('notebook cell numbers and CRLF physical lines survive the real upload and 
 test('Slack settings preserve invalid input for normal chat and send only on an explicit request', async ({ page, request }) => {
   const initialSends = (await received(request)).slack.filter((item) => item.path === '/chat.postMessage').length;
   await page.goto('./');
+  await page.getByText('설정', { exact: true }).click();
   await page.getByText('Slack 수신자 설정', { exact: true }).click();
   await expect(page.getByRole('status').filter({ hasText: '기본 수신자:' })).toContainText('UDEFAULT');
   await page.getByRole('radio', { name: '채널', exact: true }).check();
