@@ -56,6 +56,77 @@ afterEach(() => {
 });
 
 describe('EvidencePanel', () => {
+  it('shows the source identity and captured location before the excerpt', async () => {
+    const user = userEvent.setup();
+    render(<Harness source={citation('Retained source.')} />);
+    await user.click(screen.getByRole('button', { name: '이 답변의 근거' }));
+    const panel = screen.getByRole('dialog');
+    const summary = within(panel).getByRole('group', { name: '출처 요약' });
+    expect(within(summary).getByText('근거 1')).toBeVisible();
+    expect(within(summary).getByText('공식 문서')).toBeVisible();
+    expect(within(summary).getByText('사용 범위: 수집한 요소의 1행 (원문 줄 번호는 확인되지 않았습니다)')).toBeVisible();
+    expect(within(summary).getByText('일부 수집 · 최신성 미확인')).toBeVisible();
+    const excerptHeading = within(panel).getByRole('heading', { name: '답변에 사용한 부분' });
+    expect(summary.compareDocumentPosition(excerptHeading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('keeps code match details collapsed while preserving the excerpt, source range and collection limits', async () => {
+    const user = userEvent.setup();
+    const text = 'alpha = 1\r\nbeta = 2\r\nalpha = 1\r\n';
+    render(<Harness source={citation(text, {
+      element: {
+        element_id: 'code:retained', kind: 'code', text,
+        anchors: [{ kind: 'code', start: 0, end: text.length, line_start: 17, line_end: 19, precision: 'exact' }],
+      },
+    })} context={[{ text: 'alpha = 1', isCode: true }]} />);
+    await user.click(screen.getByRole('button', { name: '이 답변의 근거' }));
+    const panel = screen.getByRole('dialog');
+    const matchDetails = within(panel).getByText('답변의 코드와 일치하는 원문: 17행, 19행');
+    const repeatedMatch = within(panel).getByText('일치하는 위치를 모두 표시했습니다.');
+    expect(matchDetails).not.toBeVisible();
+    expect(repeatedMatch).not.toBeVisible();
+    expect(within(panel).getByText('사용 범위: 원문 17–19행')).toBeVisible();
+    expect(within(panel).getByText('일부 수집 · 최신성 미확인')).toBeVisible();
+    expect(within(panel).getByRole('group', { name: '원문 17행' })).toHaveTextContent('alpha = 1');
+    expect(within(panel).getByRole('group', { name: '원문 18행' })).toHaveTextContent('beta = 2');
+    expect(within(panel).getByRole('group', { name: '원문 19행' })).toHaveTextContent('alpha = 1');
+    expect([...panel.querySelectorAll('.evidence-code-line mark')].map((mark) => mark.textContent)).toEqual(['alpha = 1', 'alpha = 1']);
+    await user.click(within(panel).getByText('출처와 수집 정보'));
+    expect(matchDetails).toBeVisible();
+    expect(repeatedMatch).toBeVisible();
+    expect(within(panel).getByText('현재 공식 페이지를 확인하지 못해 검색에 보관된 내용을 사용했습니다. 최신 문서와 다를 수 있습니다.')).toBeVisible();
+  });
+
+  it('copies only the selected excerpt with Unicode, CRLF, whitespace and Markdown intact', async () => {
+    const user = userEvent.setup();
+    const prefix = '제외 😀\r\n';
+    const selected = '  **발췌** 😀\r\n\tsecond line\r\n';
+    const text = `${prefix}${selected}제외한 끝`;
+    render(<Harness source={citation(text, {
+      selection: { start: Array.from(prefix).length, end: Array.from(prefix + selected).length, cell_ids: [] },
+    })} />);
+    await user.click(screen.getByRole('button', { name: '이 답변의 근거' }));
+    const panel = screen.getByRole('dialog');
+    await user.click(within(panel).getByRole('button', { name: '발췌 복사' }));
+    expect(await navigator.clipboard.readText()).toBe(selected);
+    expect(within(panel).getByText('발췌를 복사했습니다.')).toBeVisible();
+    await user.click(within(panel).getByText('수집한 원문 그대로 보기'));
+    await user.click(within(panel).getByRole('button', { name: '보관 원문 복사' }));
+    expect(await navigator.clipboard.readText()).toBe(text);
+    expect(within(panel).getByText('보관 원문을 복사했습니다.')).toBeVisible();
+  });
+
+  it('reports an unavailable clipboard without claiming the excerpt was copied', async () => {
+    const user = userEvent.setup();
+    vi.spyOn(navigator.clipboard, 'writeText').mockRejectedValue(new DOMException('Denied', 'NotAllowedError'));
+    render(<Harness source={citation('Original excerpt.')} />);
+    await user.click(screen.getByRole('button', { name: '이 답변의 근거' }));
+    const panel = screen.getByRole('dialog');
+    await user.click(within(panel).getByRole('button', { name: '발췌 복사' }));
+    expect(within(panel).getByText('복사하지 못했습니다. 발췌를 선택해 복사해 주세요.')).toBeVisible();
+    expect(within(panel).queryByText('발췌를 복사했습니다.')).not.toBeInTheDocument();
+  });
+
   it('preserves the selected Unicode source, literal search, raw capture, and answer code', async () => {
     const user = userEvent.setup();
     const prefix = '제외된 😀 앞부분\n';
@@ -97,6 +168,7 @@ describe('EvidencePanel', () => {
     await user.click(screen.getByRole('button', { name: '이 답변의 근거' }));
     const panel = screen.getByRole('dialog');
     const table = within(panel).getByRole('table', { name: '보관된 표와 선택 셀' });
+    expect(within(panel).queryByRole('button', { name: '발췌 복사' })).not.toBeInTheDocument();
     expect(within(table).getByRole('columnheader', { name: '합계' })).toHaveAttribute('colspan', '2');
     expect(within(table).getByRole('cell', { name: '분류' })).toHaveAttribute('rowspan', '2');
     expect(table.querySelector('[data-selected="true"]')?.textContent).toBe('  12  ');

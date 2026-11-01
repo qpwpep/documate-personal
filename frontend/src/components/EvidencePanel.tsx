@@ -29,7 +29,7 @@ export function EvidencePanel({ citation, context = [], opener, onClose }: {
   const titleId = useId();
   const searchId = useId();
   const [query, setQuery] = useState('');
-  const [copyStatus, setCopyStatus] = useState('');
+  const [copyStatus, setCopyStatus] = useState({ excerpt: '', source: '' });
   const { evidence } = citation;
   const { element, snapshot } = evidence;
   const excerpt = sourceExcerpt(evidence);
@@ -99,12 +99,14 @@ export function EvidencePanel({ citation, context = [], opener, onClose }: {
     }
   }
 
-  async function copySource() {
+  async function copySource(target: 'excerpt' | 'source') {
     try {
-      await navigator.clipboard.writeText(element.text ?? '');
-      setCopyStatus('보관 원문을 복사했습니다.');
+      await navigator.clipboard.writeText(target === 'excerpt' ? excerpt : element.text ?? '');
+      setCopyStatus((current) => ({ ...current, [target]: target === 'excerpt' ? '발췌를 복사했습니다.' : '보관 원문을 복사했습니다.' }));
     } catch {
-      setCopyStatus('복사하지 못했습니다. 아래 원문을 선택해 복사해 주세요.');
+      setCopyStatus((current) => ({ ...current, [target]: target === 'excerpt'
+        ? '복사하지 못했습니다. 발췌를 선택해 복사해 주세요.'
+        : '복사하지 못했습니다. 아래 원문을 선택해 복사해 주세요.' }));
     }
   }
 
@@ -117,15 +119,24 @@ export function EvidencePanel({ citation, context = [], opener, onClose }: {
     <div className="evidence-content" onFocusCapture={(event) => {
       if (dialog.current) keepPanelControlVisible(dialog.current, event.target);
     }}>
+      <div className="evidence-source-summary" role="group" aria-label="출처 요약">
+        <p className="evidence-source-identity"><span>근거 {citation.number}</span><span aria-hidden="true"> · </span>
+          <span>{snapshot.source_type === 'official' ? '공식 문서' : '업로드 자료'}</span><span aria-hidden="true"> · </span>
+          <span>{sourceLocationLabel(evidence)}</span>
+        </p>
+        {status && <p className="evidence-caption">{status}</p>}
+      </div>
       {/^https?:\/\//i.test(snapshot.source_uri) && <a href={snapshot.source_uri} target="_blank" rel="noreferrer">현재 출처 페이지 열기</a>}
-      <h3>답변에 사용한 부분</h3>
+      <div className="evidence-excerpt-heading">
+        <h3>답변에 사용한 부분</h3>
+        {!element.table && <button type="button" className="secondary-button" onClick={() => void copySource('excerpt')}>발췌 복사</button>}
+      </div>
+      {!element.table && <p className="evidence-copy-status" role="status">{copyStatus.excerpt}</p>}
       {element.table ? <>
         <EvidenceTable table={element.table} selected={evidence.selection?.cell_ids ?? []} />
         {!!evidence.selection?.cell_ids?.length && <p className="evidence-caption">강조한 셀을 답변 근거로 사용했습니다. 나머지 셀은 표의 문맥을 보여 줍니다.</p>}
       </>
         : element.kind === 'code' ? <>
-          {matchedLines.length > 0 && <p className="evidence-caption">답변의 코드와 일치하는 원문: {matchedLines.map((line) => `${line.line_number}행`).join(', ')}</p>}
-          {ranges.length > 1 && <p className="evidence-caption">일치하는 위치를 모두 표시했습니다.</p>}
           {visibleLines.length ? <div className="evidence-code-lines">
             {visibleLines.map((line, index) => <Fragment key={line.line_number}>
               {index > 0 && line.line_number > visibleLines[index - 1].line_number + 1 && <div aria-label="생략한 원문">…</div>}
@@ -154,10 +165,6 @@ export function EvidencePanel({ citation, context = [], opener, onClose }: {
             ? <MarkdownView text={excerpt} sourceUri={snapshot.source_uri} providerExcerpt={snapshot.capture_scope === 'provider_excerpt'} />
             : <p className="evidence-literal">{excerpt}</p>)}
         </>}
-      <p className="evidence-caption">{sourceLocationLabel(evidence)}</p>
-      {element.heading_path?.length ? <p className="evidence-caption">문서 위치: {element.heading_path.join(' › ')}</p> : null}
-      <p className="evidence-caption">{snapshot.source_type === 'official' ? '공식 문서' : '업로드 자료'}</p>
-      {status && <p className="evidence-caption">{status}</p>}
       {sourceContexts.length > 0 && <details><summary>연결된 답변 보기</summary>
         <div className="evidence-answer-context"><p>이 근거가 연결된 답변</p>
           {sourceContexts.map((item, index) => item.isCode
@@ -166,17 +173,20 @@ export function EvidencePanel({ citation, context = [], opener, onClose }: {
         </div>
       </details>}
       <details><summary>출처와 수집 정보</summary>
+        {element.heading_path?.length ? <p className="evidence-caption">문서 위치: {element.heading_path.join(' › ')}</p> : null}
         <p>원본 자료: {snapshot.source_uri}</p>
         {selectedSourceAnchors(evidence).map((anchor, index) => <p key={index}>
           {anchor.line_start !== null && anchor.line_start !== undefined ? '원문 요소 위치: ' : ''}{formatAnchor(anchor)}
         </p>)}
+        {element.kind === 'code' && matchedLines.length > 0 && <p className="evidence-caption">답변의 코드와 일치하는 원문: {matchedLines.map((line) => `${line.line_number}행`).join(', ')}</p>}
+        {element.kind === 'code' && ranges.length > 1 && <p className="evidence-caption">일치하는 위치를 모두 표시했습니다.</p>}
         {snapshot.capture_scope === 'provider_excerpt' && <p>원문의 일부만 수집한 자료입니다. 답변에는 당시 수집한 내용을 사용했습니다.</p>}
         {snapshot.quality_issues?.map((issue) => <p className="evidence-warning" key={issue}>{qualityMessage(issue)}</p>)}
       </details>
       <details><summary>{snapshot.source_type === 'official' ? '수집한 원문 그대로 보기' : '전체 원문 보기'}</summary>
         {element.table ? <EvidenceTable table={element.table} selected={evidence.selection?.cell_ids ?? []} label="전체 표 원문" />
-          : <><button type="button" className="secondary-button" onClick={() => void copySource()}>보관 원문 복사</button>
-            <p role="status">{copyStatus}</p><pre className="evidence-raw-source"><code>{element.text}</code></pre></>}
+          : <><button type="button" className="secondary-button" onClick={() => void copySource('source')}>보관 원문 복사</button>
+            <p role="status">{copyStatus.source}</p><pre className="evidence-raw-source"><code>{element.text}</code></pre></>}
         <p className="evidence-caption">이 내용은 답변을 만들 때 보관한 원문입니다. 현재 파일의 변경이나 삭제와 무관합니다.</p>
         <p className="evidence-caption">자료 내용 해시: {snapshot.content_hash}</p>
       </details>

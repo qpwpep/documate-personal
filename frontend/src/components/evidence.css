@@ -1,6 +1,6 @@
 .evidence-panel { position: fixed; inset: 0; width: min(880px, calc(100vw - 40px)); max-width: calc(100vw - 24px); height: fit-content; max-height: calc(100dvh - 32px); padding: 0; border: 1px solid var(--border); border-radius: 14px; color: inherit; background: var(--panel); box-shadow: 0 20px 70px rgb(0 0 0 / 25%); overflow: auto; }
 .evidence-panel::backdrop { background: rgb(0 0 0 / 40%); }
-.evidence-header { position: sticky; top: 0; display: flex; align-items: start; justify-content: space-between; gap: 16px; padding: 16px 20px; z-index: 2; border-bottom: 1px solid var(--border); background: var(--panel); }
+.evidence-header { position: sticky; top: 0; display: flex; align-items: start; justify-content: space-between; gap: 16px; padding: 16px 20px; z-index: 2; background: var(--panel); }
 .evidence-header h2 { font-size: 1.05rem; line-height: 1.5; margin: .25rem 0; overflow-wrap: anywhere; }
 .evidence-header button { flex: 0 0 auto; }
 .evidence-content { padding: 16px 24px 24px; overflow-wrap: anywhere; }
@@ -8,16 +8,29 @@
 .evidence-content :is(input,button,a,summary):focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
 .evidence-content input[type=search] { display: block; width: 100%; padding: .6rem .7rem; margin: .4rem 0 1rem; font: inherit; color: inherit; background: var(--panel); border: 1px solid var(--border); border-radius: 7px; }
 .evidence-content h3 { font-size: 1rem; margin-top: 1.25rem; }
-.evidence-content pre { overflow: auto; white-space: pre; padding: .7rem; border: 1px solid var(--border); border-radius: 7px; font-size: .85rem; }
+.evidence-source-summary { margin-bottom: 12px; }
+.evidence-source-identity { color: var(--muted); font-size: .8rem; line-height: 1.7; }
+.evidence-source-summary p { margin: 6px 0; }
+.evidence-excerpt-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin: 16px 0 12px; }
+.evidence-excerpt-heading h3 { margin: 0; }
+.evidence-excerpt-heading button { flex: 0 0 auto; font-size: .8rem; border-color: transparent; background: transparent; color: var(--muted); }
+.evidence-copy-status { margin: 8px 0; color: var(--muted); font-size: .8rem; }
+.evidence-copy-status:empty { margin: 0; }
+.evidence-content pre { overflow: auto; white-space: pre; padding: .8rem; border: 0; border-radius: 6px; background: var(--dm-code-bg); font-size: .85rem; }
 .evidence-literal, .evidence-code-line code, .evidence-answer-context code { white-space: pre-wrap; overflow-wrap: anywhere; }
 .evidence-answer-context pre { white-space: pre-wrap; }
 .evidence-caption { color: var(--muted); font-size: .8rem; }
 .evidence-warning { padding: .5rem .7rem; background: var(--notice); border-radius: 6px; }
+.evidence-code-lines { padding: .85rem .65rem .85rem .2rem; background: var(--dm-code-bg); border-radius: 6px; }
 .evidence-code-line { display: grid; grid-template-columns: 3.5em minmax(0, 1fr); gap: .7em; font-size: .85rem; line-height: 1.6; }
 .evidence-line-number { text-align: right; color: var(--muted); user-select: none; }
-.evidence-panel mark, .evidence-panel [data-selected=true] { background: #ffec99; color: #1a1a1a; }
+.evidence-panel mark, .evidence-panel [data-selected=true] { background: var(--dm-accent-soft); color: var(--text); }
 .evidence-table { overflow: auto; }
 .evidence-table :is(th,td) { white-space: pre-wrap; }
-.evidence-content details { padding: 10px 12px; }
+.evidence-content details { padding: 0; margin: 0; border: 0; border-top: 1px solid var(--dm-divider); border-radius: 0; background: transparent; }
+.evidence-content > details:first-of-type { margin-top: 1.25rem; }
+.evidence-content details > summary { min-height: 44px; padding: .7rem 0; color: var(--muted); font-size: .8rem; }
+.evidence-content details[open] > summary { margin-bottom: .5rem; }
+.evidence-content details[open] { padding-bottom: .75rem; }
 @media (max-width: 540px) { .evidence-panel { width: calc(100vw - 16px); max-width: calc(100vw - 16px); max-height: calc(100dvh - 16px); } .evidence-header { padding: 12px; gap: 8px; } .evidence-content { padding: 12px; } }
 @media (max-height: 420px) { .evidence-panel { max-height: calc(100dvh - 8px); } .evidence-header { padding-block: 8px; } }
