@@ -178,17 +178,18 @@ def resolve_service_process(
     name: str,
     pid: int | None,
     create_time: float | None,
-    fallback_tokens: list[str],
+    expected_tokens: list[str],
     expected_cwd: Path,
 ) -> tuple[int | None, float | None]:
     # A matching command elsewhere is not proof that this launcher owns it.
-    # Legacy records lack creation times, so verify their PID, cwd and command.
+    if create_time is None:
+        return None, None
     process = get_process(pid=pid, expected_create_time=create_time)
     if process is None:
         return None, None
     try:
         tokens = [normalize_cmd_token(value) for value in process.cmdline()]
-        expected = [normalize_cmd_token(value) for value in fallback_tokens]
+        expected = [normalize_cmd_token(value) for value in expected_tokens]
         matches = all(any(part == token or part.endswith("/" + token) for part in tokens)
                       for token in expected)
         if not matches or Path(process.cwd()).resolve() != expected_cwd.resolve():

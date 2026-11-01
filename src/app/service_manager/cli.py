@@ -13,10 +13,8 @@ def build_parser() -> argparse.ArgumentParser:
         "mode",
         type=str,
         choices=["startweb", "stopweb", "restartweb", "statusweb"],
-        help="Start, stop, restart, or inspect the managed web services.",
+        help="Start, stop, restart, or inspect the managed web service.",
     )
-    parser.add_argument("--ui", choices=["react", "streamlit"],
-                        help="UI to start (default: React; restart preserves the recorded UI).")
     return parser
 
 
@@ -25,6 +23,4 @@ def main(argv: list[str] | None = None) -> int:
     maybe_reexec_with_utf8("src.app.service_manager", resolved_argv)
     parser = build_parser()
     args = parser.parse_args(resolved_argv)
-    if args.ui is not None and args.mode in {"stopweb", "statusweb"}:
-        parser.error("--ui is only supported with startweb or restartweb")
-    return run_web_service(args.mode, ui=args.ui)
+    return run_web_service(args.mode)

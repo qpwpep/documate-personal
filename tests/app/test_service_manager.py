@@ -1,4 +1,4 @@
-"""The launcher owns only its recorded processes and preserves both UI choices."""
+"""The launcher serves React through its single recorded FastAPI process."""
 from __future__ import annotations
 
 import json
@@ -57,8 +57,7 @@ def services(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
                            stopped=stopped, occupied=occupied)
 
 
-def test_default_react_start_uses_one_python_server_and_ignores_streamlit_port(services):
-    services.occupied.add(8501)
+def test_start_uses_one_python_server(services):
     assert cli.main(["startweb"]) == 0
     assert len(services.launched) == 1
     assert services.launched[0] == [
@@ -66,45 +65,58 @@ def test_default_react_start_uses_one_python_server_and_ignores_streamlit_port(s
         "--host", "0.0.0.0", "--port", "8000",
     ]
     saved = state.load_service_state()
-    assert saved.ui == "react"
     assert saved.fastapi_pid in services.running
-    assert saved.streamlit_pid is None
+    assert json.loads((services.root / "state.json").read_text(encoding="utf-8")) == {
+        "schema_version": 4,
+        "fastapi_pid": 101,
+        "fastapi_create_time": 101.0,
+        "fastapi_log": str(services.root / "fastapi.log"),
+        "fastapi_port": 8000,
+        "started_at_unix": saved.started_at_unix,
+        "platform": sys.platform,
+    }
     assert cli.main(["statusweb"]) == 0
 
 
-def test_streamlit_fallback_starts_both_services_and_stops_only_recorded_processes(services):
-    assert cli.main(["startweb", "--ui", "streamlit"]) == 0
-    assert len(services.launched) == 2
-    assert services.launched[1][3:] == [
-        "-m", "streamlit", "run", "src/app/web/streamlit_app.py", "--server.port", "8501",
-    ]
-    assert state.load_service_state().ui == "streamlit"
-    assert cli.main(["stopweb"]) == 0
-    assert set(services.stopped) == {101, 102}
-    assert state.load_service_state() is None
+@pytest.mark.parametrize("mode", ["startweb", "restartweb", "stopweb", "statusweb"])
+def test_ui_selector_is_not_supported(services, mode):
+    with pytest.raises(SystemExit) as error:
+        cli.main([mode, "--ui", "react"])
+    assert error.value.code == 2
+    assert services.launched == []
+    assert services.stopped == []
 
 
 def test_missing_react_build_explains_build_without_starting_or_stopping(services, caplog):
-    assert cli.main(["startweb", "--ui", "streamlit"]) == 0
+    assert cli.main(["startweb"]) == 0
     (services.build / "index.html").unlink()
     with caplog.at_level("ERROR"):
-        assert cli.main(["restartweb", "--ui", "react"]) == 1
+        assert cli.main(["restartweb"]) == 1
     assert services.stopped == []
-    assert services.running == {101, 102}
+    assert services.running == {101}
     assert "npm --prefix frontend ci" in caplog.text
     assert "npm --prefix frontend run build" in caplog.text
 
 
-def test_restart_without_selector_preserves_legacy_streamlit_state(services):
+def test_restart_replaces_the_recorded_server(services):
+    assert cli.main(["startweb"]) == 0
+    services.running.add(999)
+    assert cli.main(["restartweb"]) == 0
+    assert services.stopped == [101]
+    assert len(services.launched) == 2
+    assert state.load_service_state().fastapi_pid == 102
+    assert services.running == {102, 999}
+    assert cli.main(["statusweb"]) == 0
+
+
+def test_incompatible_state_is_not_adopted(services):
     (services.root / "state.json").write_text(json.dumps({
         "schema_version": 2, "fastapi_pid": 101, "fastapi_create_time": 101.0,
-        "streamlit_pid": 102, "streamlit_create_time": 102.0,
     }), encoding="utf-8")
-    services.running.update({101, 102})
-    assert cli.main(["restartweb"]) == 0
-    assert set(services.stopped) == {101, 102}
-    assert len(services.launched) == 2
-    assert state.load_service_state().ui == "streamlit"
+    services.running.add(101)
+    assert cli.main(["statusweb"]) == 1
+    assert cli.main(["stopweb"]) == 0
+    assert services.stopped == []
 
 
 def test_missing_state_does_not_discover_or_stop_a_user_process(services):
@@ -114,18 +126,20 @@ def test_missing_state_does_not_discover_or_stop_a_user_process(services):
     assert services.stopped == []
 
 
-def test_react_state_does_not_adopt_an_unrecorded_streamlit_process(services):
+def test_stop_does_not_adopt_an_unrecorded_process(services):
     assert cli.main(["startweb"]) == 0
     services.running.add(999)
     assert cli.main(["stopweb"]) == 0
     assert services.stopped == [101]
     assert services.running == {999}
+    assert state.load_service_state() is None
+    assert cli.main(["statusweb"]) == 1
 
 
 def test_failed_stop_preserves_state_and_prevents_restart(services, monkeypatch):
     assert cli.main(["startweb"]) == 0
     monkeypatch.setattr(process_client, "terminate_process_tree", lambda *args: False)
-    assert cli.main(["restartweb", "--ui", "streamlit"]) == 1
+    assert cli.main(["restartweb"]) == 1
     assert len(services.launched) == 1
     assert state.load_service_state().fastapi_pid == 101
 
@@ -137,18 +151,26 @@ def test_busy_api_port_does_not_launch_or_stop_anything(services):
     assert services.stopped == []
 
 
+def test_server_start_failure_cleans_up_its_process_and_state(services, monkeypatch):
+    monkeypatch.setattr(process_client, "wait_for_port_open", lambda port: False)
+    assert cli.main(["startweb"]) == 1
+    assert services.running == set()
+    assert services.stopped == [101]
+    assert state.load_service_state() is None
+
+
 def test_recorded_process_identity_includes_project_and_command(tmp_path: Path):
     command = [sys.executable, "-c", "import time; time.sleep(60)", "documate-owned-fixture"]
     process = process_client.start_background_process(command, tmp_path, tmp_path / "fixture.log")
     try:
         created = process_client.get_process_create_time(process.pid)
         arguments = {"name": "fixture", "pid": process.pid, "create_time": created,
-                     "fallback_tokens": ["documate-owned-fixture"], "expected_cwd": tmp_path}
+                     "expected_tokens": ["documate-owned-fixture"], "expected_cwd": tmp_path}
         assert process_client.resolve_service_process(**arguments) == (process.pid, created)
-        assert process_client.resolve_service_process(**{**arguments, "create_time": None}) == (process.pid, created)
+        assert process_client.resolve_service_process(**{**arguments, "create_time": None}) == (None, None)
         assert process_client.resolve_service_process(**{**arguments, "pid": None}) == (None, None)
         assert process_client.resolve_service_process(**{**arguments, "expected_cwd": tmp_path / "elsewhere"}) == (None, None)
-        assert process_client.resolve_service_process(**{**arguments, "fallback_tokens": ["other-command"]}) == (None, None)
+        assert process_client.resolve_service_process(**{**arguments, "expected_tokens": ["other-command"]}) == (None, None)
         assert process_client.resolve_service_process(**{**arguments, "create_time": created - 10}) == (None, None)
         assert process.poll() is None
         assert process_client.terminate_process_tree(process.pid, "fixture", created)
