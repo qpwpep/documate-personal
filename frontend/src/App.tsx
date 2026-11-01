@@ -231,7 +231,7 @@ export function App({ apiBaseUrl = '' }: { apiBaseUrl?: string }) {
           updateConversation(id, (item) => ({ ...item, turns: item.turns.map((saved) => saved.id === turnId ? { ...saved, requestId: incoming.data.request_id } : saved) }));
         } else if (incoming.event === 'progress_snapshot') {
           setProgress((value) => ({ ...value, [id]: incoming.data.summary }));
-        } else if (incoming.event === 'stage_started' || incoming.event === 'heartbeat') {
+        } else if (incoming.event === 'stage_started') {
           setProgress((value) => ({ ...value, [id]: stageLabels[incoming.data.stage] ?? '답변을 준비하고 있습니다.' }));
         } else if (incoming.event === 'error') {
           updateConversation(id, (item) => ({ ...item, turns: item.turns.map((saved) => saved.id === turnId

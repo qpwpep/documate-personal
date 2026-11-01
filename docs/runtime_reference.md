@@ -514,13 +514,15 @@ SSE의 `event:`는 아래 이벤트 이름이며, `data:`는 해당 이벤트의
 |---|---|
 | `request_started` | 이번 HTTP 실행 시작과 실행 ID인 `request_id` |
 | `stage_started`, `stage_completed` | graph 단계의 시작·완료 정보 |
-| `heartbeat` | 실행 중 연결 유지 신호 |
+| `heartbeat` | HTTP 실행 ID인 `request_id`와 요청 시작 후 `elapsed_ms`를 담는 연결 유지 신호 |
 | `progress_snapshot` | 현재 단계와 근거 수 등 진행 상황 |
 | `final_response` | `status`, `response`, 선택적 `answer_id`, `message`, `problem`, `request_id`, `trace`, `debug`, `upload_manifest`를 담은 최종 결과 |
 | `error` | 실행 중 오류 정보. 이후 `final_response`가 올 수도 있음 |
 | `done` | 이벤트 전송 종료. 요청 성공을 뜻하지 않음 |
 
 OpenAPI의 HTTP `200` 응답은 `text/event-stream`의 `x-sse-events` 확장에 각 이벤트의 `data` 스키마를 제공하며, `final_response`는 `AgentResponse`를 `$ref`로 참조합니다.
+
+`AgentRequestService`의 HTTP 스트림은 전송할 이벤트가 없는 동안 기본 1.5초마다 heartbeat를 보냅니다. 세션 락 대기부터 검색·사전/사후 검증·전달까지 같은 연결 유지 규칙을 적용합니다. `ProgressEmitter`는 실행 진행만 기록하며 별도 heartbeat 스레드를 만들지 않습니다. heartbeat는 단계 완료나 성공을 뜻하지 않고 모델 호출의 시간 예산을 연장하지 않습니다. UI는 마지막 단계 안내를 유지하며, 스트림 종료·수신 중단 뒤에는 해당 연결의 heartbeat도 끝납니다. 수신 중단은 이미 시작한 서버 실행이나 저장·전송을 취소하지 않습니다.
 
 요청 스키마 오류는 스트림 시작 전에 HTTP `422`로 반환합니다. 첨부 context 충돌이나 graph 실행처럼 스트림을 시작한 뒤 발생한 오류는 HTTP `200` 상태에서 SSE `error`로 전달될 수 있습니다. 경로·파일 bytes 검증은 첨부 sync 요청에서 수행합니다. 따라서 클라이언트는 HTTP 상태와 SSE 이벤트를 함께 확인해야 합니다.
 

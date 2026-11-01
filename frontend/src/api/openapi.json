@@ -4613,29 +4613,15 @@
                   },
                   "heartbeat": {
                     "properties": {
-                      "attempt": {
-                        "type": "integer"
-                      },
                       "elapsed_ms": {
                         "type": "integer"
                       },
-                      "stage": {
-                        "enum": [
-                          "summarize",
-                          "planner",
-                          "retrieval",
-                          "pre_synthesis_validation",
-                          "synthesis",
-                          "post_synthesis_validation",
-                          "validation",
-                          "action_postprocess"
-                        ],
+                      "request_id": {
                         "type": "string"
                       }
                     },
                     "required": [
-                      "stage",
-                      "attempt",
+                      "request_id",
                       "elapsed_ms"
                     ],
                     "type": "object"

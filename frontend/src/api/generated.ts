@@ -2106,10 +2106,8 @@ export interface components {
             upload_manifest?: components["schemas"]["UploadManifest"] | null;
         };
         AgentStreamEvent_heartbeat: {
-            attempt: number;
             elapsed_ms: number;
-            /** @enum {string} */
-            stage: "summarize" | "planner" | "retrieval" | "pre_synthesis_validation" | "synthesis" | "post_synthesis_validation" | "validation" | "action_postprocess";
+            request_id: string;
         };
         AgentStreamEvent_progress_snapshot: {
             /** @enum {string} */

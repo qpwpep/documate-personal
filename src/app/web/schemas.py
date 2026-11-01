@@ -169,8 +169,7 @@ AGENT_STREAM_EVENT_SCHEMAS = {
         latency_ms=_INTEGER_SCHEMA, status=_STRING_SCHEMA,
     ),
     "heartbeat": _event_data_schema(
-        ["stage", "attempt", "elapsed_ms"], stage=_STREAM_STAGE_SCHEMA,
-        attempt=_INTEGER_SCHEMA, elapsed_ms=_INTEGER_SCHEMA,
+        ["request_id", "elapsed_ms"], request_id=_STRING_SCHEMA, elapsed_ms=_INTEGER_SCHEMA,
     ),
     "progress_snapshot": _event_data_schema(
         ["stage", "summary"], stage=_STREAM_STAGE_SCHEMA, summary=_STRING_SCHEMA,

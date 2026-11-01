@@ -446,6 +446,6 @@ def progress_message_for_event(event: AgentStreamEvent) -> str:
         return "요청을 접수했습니다."
     if event.event == "progress_snapshot":
         return str(event.data.get("summary") or "").strip() or _DEFAULT_PROCESSING_MESSAGE
-    if event.event not in {"stage_started", "heartbeat"}:
+    if event.event != "stage_started":
         return ""
     return _STAGE_MESSAGES.get(str(event.data.get("stage") or "").strip(), _DEFAULT_PROCESSING_MESSAGE)

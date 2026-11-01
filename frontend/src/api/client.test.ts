@@ -234,7 +234,7 @@ describe('browser API contract', () => {
     for (let index = 1; index <= 3; index += 1) {
       await vi.advanceTimersByTimeAsync(60);
       const next = events.next();
-      pendingResponse?.write(frame('heartbeat', { stage: 'planner', attempt: 1, elapsed_ms: index * 60 }));
+      pendingResponse?.write(frame('heartbeat', { request_id: 'active-request', elapsed_ms: index * 60 }));
       expect((await next).value?.event).toBe('heartbeat');
     }
     pendingResponse?.end(frame('final_response', fixtures.responses.completed));

@@ -5,7 +5,7 @@ import hashlib
 import logging
 import time
 from collections.abc import AsyncIterator
-from queue import Queue
+from queue import Empty, Queue
 from threading import Thread
 from typing import Any
 
@@ -22,7 +22,6 @@ from src.app.web.session_store import InMemorySessionStore
 
 
 logger = logging.getLogger(__name__)
-_STREAM_DONE = object()
 
 
 def _query_log_fields(query: str) -> dict[str, Any]:
@@ -41,9 +40,11 @@ class AgentRequestService:
         *,
         runtime_cleaner: RuntimeCleaner,
         session_store: InMemorySessionStore,
+        heartbeat_interval_seconds: float = 1.5,
     ) -> None:
         self._runtime_cleaner = runtime_cleaner
         self._session_store = session_store
+        self._heartbeat_interval_seconds = heartbeat_interval_seconds
 
     def stream(
         self,
@@ -51,7 +52,8 @@ class AgentRequestService:
         request_id: str,
         request_data: AgentRequest,
     ) -> AsyncIterator[AgentStreamEvent]:
-        event_queue: Queue[AgentStreamEvent | object] = Queue()
+        event_queue: Queue[AgentStreamEvent] = Queue()
+        started = time.monotonic()
 
         def publish(event: str, data: dict[str, Any]) -> None:
             event_queue.put(AgentStreamEvent(event=event, data=dict(data)))
@@ -79,7 +81,6 @@ class AgentRequestService:
                 ).model_dump(mode="json"))
             finally:
                 progress_emitter.emit_done()
-                event_queue.put(_STREAM_DONE)
 
         Thread(
             target=worker,
@@ -89,10 +90,19 @@ class AgentRequestService:
 
         async def event_stream() -> AsyncIterator[AgentStreamEvent]:
             while True:
-                item = await asyncio.to_thread(event_queue.get)
-                if item is _STREAM_DONE:
-                    break
+                try:
+                    item = await asyncio.to_thread(event_queue.get, timeout=self._heartbeat_interval_seconds)
+                except Empty:
+                    # Keep the connection alive even before the graph starts.
+                    # This does not extend model deadlines or retry execution.
+                    yield AgentStreamEvent(event="heartbeat", data={
+                        "request_id": request_id,
+                        "elapsed_ms": round((time.monotonic() - started) * 1000),
+                    })
+                    continue
                 yield item
+                if item.event == "done":
+                    return
 
         return event_stream()
 
