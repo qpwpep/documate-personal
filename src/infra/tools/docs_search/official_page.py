@@ -1,11 +1,12 @@
-"""Refresh bounded stable documentation candidates from their current pages."""
+"""Capture bounded official pages for the requested API and version."""
 
 from __future__ import annotations
 
 from html.parser import HTMLParser
 from itertools import groupby
 import re
-from urllib.parse import urldefrag, urljoin
+import zlib
+from urllib.parse import urldefrag, urljoin, urlparse
 
 import requests
 
@@ -18,10 +19,27 @@ from src.infra.tools.docs_search.policy import (
 
 
 _MAX_PAGE_BYTES = 2 * 1024 * 1024
+_MAX_INVENTORY_TEXT_BYTES = 4 * 1024 * 1024
 _MAX_PAGES = 3
 _VOID_TAGS = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"}
 _BLOCK_TAGS = {"p", "div", "section", "article", "h1", "h2", "h3", "h4", "h5", "h6", "pre", "li", "dt", "dd", "tr", "td", "th", "br"}
 _IGNORED_TAGS = {"script", "style", "nav", "aside", "header", "footer", "button", "svg"}
+
+
+class _HTMLRedirect(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.target: str | None = None
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag != "meta":
+            return
+        attributes = dict(attrs)
+        if (attributes.get("http-equiv") or "").casefold() == "refresh":
+            refresh = re.fullmatch(r"\s*0(?:\.0+)?\s*;\s*url\s*=\s*(.+?)\s*",
+                                   attributes.get("content") or "", re.IGNORECASE)
+            if refresh:
+                self.target = refresh[1].strip("\"'")
 
 
 class _OfficialHTMLText(HTMLParser):
@@ -36,7 +54,11 @@ class _OfficialHTMLText(HTMLParser):
         ignored = tag in _IGNORED_TAGS or any(frame[2] for frame in self.stack)
         main = not ignored and (tag in {"main", "article"} or attributes.get("role") == "main"
                                 or any(frame[1] for frame in self.stack))
-        if main and tag in _BLOCK_TAGS:
+        # Keep HTML example boundaries so a ``def`` inside an example does not
+        # become the owner of the API prose following the block.
+        if main and tag == "pre":
+            self.parts.append(("\n```\n", False))
+        elif main and tag in _BLOCK_TAGS:
             self.parts.append(("\n", False))
         # Sphinx renders the classifier with CSS spacing; text extraction must
         # preserve that separator between a parameter name and its type.
@@ -55,7 +77,9 @@ class _OfficialHTMLText(HTMLParser):
                          if self.stack[index][0] == tag), None)
         if position is None:
             return
-        if self.stack[position][1] and tag in _BLOCK_TAGS:
+        if self.stack[position][1] and tag == "pre":
+            self.parts.append(("\n```\n", False))
+        elif self.stack[position][1] and tag in _BLOCK_TAGS:
             self.parts.append(("\n", False))
         del self.stack[position:]
 
@@ -79,20 +103,25 @@ class _OfficialHTMLText(HTMLParser):
         return "".join(rendered).strip("\n")
 
 
-def _capture_page(original_url: str, *, timeout_seconds: int, allowed_domains: set[str]) -> EvidenceRef:
-    url = urldefrag(original_url)[0]
+def _read_official_resource(
+    url: str, *, timeout_seconds: int, allowed_domains: set[str], accept: str,
+) -> tuple[bytes, str, str]:
+    """Read one bounded resource, validating each requested URL at the HTTP boundary."""
     for _ in range(3):
+        if not is_allowed_doc_url(url) or not result_matches_domains(url, allowed_domains):
+            raise ValueError("official resource is outside documentation scope")
         with requests.get(url, timeout=timeout_seconds, stream=True, allow_redirects=False,
-                          headers={"Accept": "text/html", "User-Agent": "DocuMate/0.2"}) as response:
+                          headers={"Accept": accept, "User-Agent": "DocuMate/0.2"}) as response:
             if response.is_redirect:
                 target = urljoin(url, response.headers.get("Location", ""))
-                if (target == url or not is_allowed_doc_url(target)
-                        or not result_matches_domains(target, allowed_domains)):
-                    raise ValueError("official page redirected outside documentation scope")
+                if target == url:
+                    raise ValueError("official resource redirected to itself")
                 url = target
                 continue
             response.raise_for_status()
-            if response.status_code != 200 or "html" not in response.headers.get("Content-Type", "").lower():
+            if response.status_code != 200:
+                raise ValueError("official resource did not return a complete response")
+            if accept == "text/html" and "html" not in response.headers.get("Content-Type", "").lower():
                 raise ValueError("official page did not return HTML")
             chunks: list[bytes] = []
             size = 0
@@ -103,10 +132,29 @@ def _capture_page(original_url: str, *, timeout_seconds: int, allowed_domains: s
                 chunks.append(chunk)
             raw = b"".join(chunks)
             encoding = response.encoding if "charset=" in response.headers.get("Content-Type", "").lower() else "utf-8"
-            html = raw.decode(encoding or "utf-8", errors="replace")
-            break
-    else:
-        raise ValueError("official page exceeded redirect limit")
+            if accept == "text/html":
+                # Some stable aliases (including PyTorch) are HTML redirect
+                # pages. Read their declarative target without executing script.
+                redirect = _HTMLRedirect()
+                redirect.feed(raw.decode(encoding or "utf-8", errors="replace"))
+                redirect.close()
+                if redirect.target is not None:
+                    target = urljoin(url, redirect.target)
+                    if target == url:
+                        raise ValueError("official resource redirected to itself")
+                    url = target
+                    continue
+            return raw, url, encoding or "utf-8"
+    raise ValueError("official resource exceeded redirect limit")
+
+
+def _capture_page(original_url: str, *, timeout_seconds: int, allowed_domains: set[str]) -> EvidenceRef:
+    # A full-page capture must not inherit a search result's unrelated anchor.
+    source_url = urldefrag(original_url)[0]
+    raw, url, encoding = _read_official_resource(
+        source_url, timeout_seconds=timeout_seconds, allowed_domains=allowed_domains, accept="text/html",
+    )
+    html = raw.decode(encoding, errors="replace")
     parser = _OfficialHTMLText()
     parser.feed(html)
     parser.close()
@@ -114,8 +162,8 @@ def _capture_page(original_url: str, *, timeout_seconds: int, allowed_domains: s
     if not text.strip():
         raise ValueError("official page has no recognized main content")
     snapshot = build_snapshot(
-        source_uri=original_url, title="".join(parser.title).strip() or original_url,
-        media_type="text/html", source_type="official", content=raw, parser="official_html", parser_version="1",
+        source_uri=source_url, title="".join(parser.title).strip() or source_url,
+        media_type="text/html", source_type="official", content=raw, parser="official_html", parser_version="2",
         parser_config={"content_region": "main", "resolved_url": url}, capture_scope="full_document",
         quality_issues=["html_structure_flattened"],
     )
@@ -124,30 +172,133 @@ def _capture_page(original_url: str, *, timeout_seconds: int, allowed_domains: s
     return build_evidence(snapshot=snapshot, element=element)
 
 
-def refresh_stable_sources(
-    hits: list[SearchHit], *, requirement: RetrievalRequirement,
+def _inventory_pages(
+    requirement: RetrievalRequirement, source_candidates: list[SearchHit], *,
+    timeout_seconds: int, allowed_domains: set[str],
+) -> list[str]:
+    """Resolve Python objects from the versioned Sphinx inventory published by their project."""
+    library = (requirement.library or "").casefold()
+    if not requirement.symbols or (requirement.version is not None
+                                  and not re.fullmatch(r"[0-9]+(?:\.[0-9]+)*", requirement.version)):
+        return []
+    if library == "python":
+        locale = ""
+        for hit in source_candidates:
+            parsed = urlparse(hit.evidence.snapshot.source_uri)
+            match = re.match(r"/([a-z]{2,3}(?:-[a-z]{2})?/)?[0-9]+(?:\.[0-9]+)*/", parsed.path)
+            if parsed.hostname == "docs.python.org" and match:
+                locale = match.group(1) or ""
+                break
+        root = f"https://docs.python.org/{locale}{requirement.version or '3'}/"
+    elif library == "pytorch":
+        root = f"https://docs.pytorch.org/docs/{requirement.version or 'stable'}/"
+    else:
+        return []
+    raw, inventory_url, _ = _read_official_resource(
+        root + "objects.inv", timeout_seconds=timeout_seconds, allowed_domains=allowed_domains,
+        accept="application/octet-stream",
+    )
+    header = raw.split(b"\n", 4)
+    if len(header) != 5 or header[0].rstrip(b"\r") != b"# Sphinx inventory version 2":
+        raise ValueError("unsupported official inventory format")
+    decompressor = zlib.decompressobj()
+    text = decompressor.decompress(header[4], _MAX_INVENTORY_TEXT_BYTES + 1)
+    if len(text) > _MAX_INVENTORY_TEXT_BYTES or not decompressor.eof:
+        raise ValueError("official inventory is incomplete or exceeds capture limit")
+    entries: dict[str, str] = {}
+    for line in text.decode("utf-8").splitlines():
+        entry = re.fullmatch(r"(.+?)\s+(\S+)\s+(-?\d+)\s+(\S+)\s+(.*)", line)
+        if entry and entry[2].startswith("py:"):
+            location = entry[4][:-1] + entry[1] if entry[4].endswith("$") else entry[4]
+            entries[entry[1]] = urljoin(inventory_url, location)
+    pages = []
+    for symbol in requirement.symbols:
+        name = symbol.removeprefix("builtins.") if library == "python" else symbol
+        url = entries.get(name)
+        if url is None:
+            # Unqualified class names are usable only when the official index
+            # identifies one object, never by guessing a module or API filename.
+            matches = [value for key, value in entries.items() if key.endswith("." + name)]
+            url = matches[0] if len(matches) == 1 else None
+        if url is not None and is_allowed_doc_url(url) and result_matches_domains(url, allowed_domains):
+            pages.append(urldefrag(url)[0])
+    return list(dict.fromkeys(pages))
+
+
+def _python_module_url(source_url: str, symbols: list[str], version: str) -> str | None:
+    """Resolve a discovered stdlib module at the requested documentation version."""
+    parsed = urlparse(source_url)
+    if parsed.hostname != "docs.python.org":
+        return None
+    path = re.fullmatch(
+        r"/(?P<locale>[a-z]{2,3}(?:-[a-z]{2})?/)?[0-9]+(?:\.[0-9]+)*/library/"
+        r"(?P<module>[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)\.html",
+        parsed.path,
+    )
+    if path is None:
+        return None
+    module = path.group("module")
+    if not any(symbol == module or symbol.startswith(module + ".") for symbol in symbols):
+        return None
+    return parsed._replace(path=f"/{path.group('locale') or ''}{version}/library/{module}.html",
+                           query="", fragment="").geturl()
+
+
+def refresh_official_sources(
+    hits: list[SearchHit], *, source_candidates: list[SearchHit], requirement: RetrievalRequirement,
     timeout_seconds: int, allowed_domains: list[str], warnings: list[str],
 ) -> list[SearchHit]:
-    """Capture the requested stable API and at most three pages in total."""
-    stable: dict[str, SearchHit | None] = {}
+    """Capture the requested API and at most three pages in total."""
+    pages: dict[str, SearchHit | None] = {}
     domains = normalized_domain_set(allowed_domains)
-    if requirement.version is None and str(requirement.library or "").casefold() == "pandas":
-        # pandas publishes each named API at this stable route. Fetch a new
+    library = (requirement.library or "").casefold()
+    try:
+        pages.update((url, None) for url in _inventory_pages(
+            requirement, source_candidates, timeout_seconds=timeout_seconds, allowed_domains=domains,
+        ))
+    except (requests.RequestException, ValueError, zlib.error):
+        warnings.append("official_inventory_unavailable")
+    if requirement.version is None and library in {"pandas", "numpy"}:
+        # These projects publish named APIs at stable routes. Fetch a new
         # source even when search returns only archives or adjacent APIs;
         # never relabel an archived excerpt as the current documentation.
+        api_root = ("https://pandas.pydata.org/docs/reference/api" if library == "pandas"
+                    else "https://numpy.org/doc/stable/reference/generated")
         for symbol in requirement.symbols:
-            if not re.fullmatch(r"pandas(?:\.[A-Za-z_][A-Za-z0-9_]*)+", symbol):
+            if not re.fullmatch(rf"{library}(?:\.[A-Za-z_][A-Za-z0-9_]*)+", symbol):
                 continue
-            url = f"https://pandas.pydata.org/docs/reference/api/{symbol}.html"
+            url = f"{api_root}/{symbol}.html"
             if is_current_stable_doc_url(url) and result_matches_domains(url, domains):
-                stable[url] = None
+                pages[url] = None
+        if library == "pandas":
+            # A discovered guide can supply conditions omitted by the API
+            # reference. Read its current publication rather than mixing an
+            # archived guide into the current reference's evidence packet.
+            for candidate in source_candidates:
+                parsed = urlparse(candidate.evidence.snapshot.source_uri)
+                page = re.fullmatch(r"/pandas-docs/version/[0-9]+(?:\.[0-9]+)*/(.+\.html)", parsed.path)
+                if parsed.hostname != "pandas.pydata.org" or page is None:
+                    continue
+                url = parsed._replace(path=f"/docs/{page[1]}", fragment="").geturl()
+                if is_current_stable_doc_url(url) and result_matches_domains(url, domains):
+                    pages.setdefault(url, None)
+    elif library == "python" and (requirement.version is None
+                                  or re.fullmatch(r"[0-9]+(?:\.[0-9]+)*", requirement.version)):
+        # Ranking can spend its budget on unrelated moving aliases before a
+        # versioned module gets a slot. Use the discovered module only to find
+        # a new source at the requested version, or /3/ when unspecified.
+        for candidate in source_candidates:
+            url = _python_module_url(candidate.evidence.snapshot.source_uri, requirement.symbols,
+                                     requirement.version or "3")
+            if url is not None and is_allowed_doc_url(url) and result_matches_domains(url, domains):
+                pages.setdefault(url, None)
     for hit in hits:
-        if is_current_stable_doc_url(hit.evidence.snapshot.source_uri):
-            url = urldefrag(hit.evidence.snapshot.source_uri)[0]
-            if stable.get(url) is None:
-                stable[url] = hit
+        url = urldefrag(hit.evidence.snapshot.source_uri)[0]
+        if url in pages or (requirement.version is None and is_current_stable_doc_url(url)):
+            if pages.get(url) is None:
+                pages[url] = hit
     captured: dict[str, SearchHit] = {}
-    for url, hit in list(stable.items())[:_MAX_PAGES]:
+    for url, hit in list(pages.items())[:_MAX_PAGES]:
         try:
             evidence = _capture_page(hit.evidence.snapshot.source_uri if hit else url,
                                      timeout_seconds=timeout_seconds, allowed_domains=domains)
@@ -170,7 +321,8 @@ def refresh_stable_sources(
         if url in captured:
             continue
         evidence = hit.evidence
-        if url in stable and evidence.snapshot.parser == "tavily" and "freshness_unverified" not in evidence.snapshot.quality_issues:
+        if (requirement.version is None and url in pages and evidence.snapshot.parser == "tavily"
+                and "freshness_unverified" not in evidence.snapshot.quality_issues):
             snapshot = evidence.snapshot.model_copy(update={
                 "quality_issues": [*evidence.snapshot.quality_issues, "freshness_unverified"],
             })

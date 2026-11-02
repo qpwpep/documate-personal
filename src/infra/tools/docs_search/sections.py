@@ -33,9 +33,10 @@ _NAME_PATTERN = re.compile(rf"^{_NAME}$")
 # Command names are document identifiers, not callable declaration syntax.
 _COMMAND = r"[A-Za-z_][A-Za-z0-9_]*(?:-[A-Za-z0-9_]+)+"
 _COMMAND_PATTERN = re.compile(rf"^{_COMMAND}$")
-_DECLARATION = re.compile(rf"^@?(?:(?:async\s+)?def\s+|class\s+|function\s+)?(?P<name>{_NAME})\s*\(")
+_DECLARATION = re.compile(rf"^@?(?:(?:async\s+)?def\s+|async\s+|class\s+|function\s+)?(?P<name>{_NAME})\s*\(")
 _SIGNATURE_MAX_CHARS = 8192
 _SIGNATURE_MAX_LINES = 64
+_FLATTENED_SOURCE_LINK = re.compile(r"\[source\](?=\s*[¶#]\s*$)")
 _SECTION_NAMES = {
     "parameter": "parameters", "parameters": "parameters", "args": "parameters",
     "arguments": "parameters", "keyword arguments": "parameters",
@@ -59,6 +60,7 @@ def clean_markup(value: str) -> str:
     """A recognition-only view; callers keep offsets from the original text."""
     value = re.sub(r"\[\[source\]\]\([^)]*\)", "", value, flags=re.I)
     value = re.sub(r"\[#\]\([^)]*\)", "", value)
+    value = _FLATTENED_SOURCE_LINK.sub("", value)
     value = re.sub(r"\[([^]\n]+)\]\([^)]*\)", r"\1", value)
     # Comparison operators in prose/code are not tags. In particular, a '< 1'
     # must not erase later parameter entries up to an unrelated '> 1'.
@@ -197,6 +199,14 @@ def _sphinx_definition_owner(raw_line: str) -> str:
     """A standalone definition and its matching self-link identify a new API."""
     if raw_line[:1].isspace():
         return ""
+    # Some Sphinx themes retain a source-link label before the definition's
+    # self-link. Require a callable so an ordinary heading is not promoted.
+    if _FLATTENED_SOURCE_LINK.search(raw_line):
+        return declaration_name(raw_line)
+    # Flattened Sphinx HTML keeps the permalink marker but loses its href.
+    # Unlike an ordinary call in an example, this still marks a definition.
+    if raw_line.rstrip().endswith("¶"):
+        return declaration_name(raw_line) or _symbol(raw_line)
     anchor = re.search(
         rf'\[(?:¶|#)\]\(#[ ]*(?P<name>{_NAME})[ ]+"(?:Permalink|Link) to this definition"\)\s*$',
         raw_line,
@@ -233,6 +243,11 @@ def resolve_document_symbol(*, title: str = "", url: str = "") -> str:
         if url_symbol and "." not in title_symbol and url_symbol.endswith("." + title_symbol):
             return url_symbol
         return title_symbol
+    if parsed.hostname == "docs.python.org" and re.fullmatch(
+        r"/(?:[a-z]{2,3}(?:-[a-z]{2})?/)?[0-9]+(?:\.[0-9]+)*/(?:library|builtins)/(?:functions|stdtypes)\.html",
+        parsed.path,
+    ):
+        return "builtins"
     stdlib_module = parsed.hostname == "docs.python.org" and "/library/" in parsed.path
     if url_symbol and (stdlib_module or "." in url_symbol or any(part in parsed.path.split("/") for part in ("api", "generated", "reference"))):
         return url_symbol
@@ -259,8 +274,9 @@ def parse_doc_sections(
         return []
     identity = resolve_document_symbol(title=title, url=url)
     parsed_url = urlparse(url)
-    module = (identity if parsed_url.hostname == "docs.python.org" and "/library/" in parsed_url.path
-              and identity == unquote(parsed_url.path.rsplit("/", 1)[-1]).removesuffix(".html") else "")
+    module = (identity if parsed_url.hostname == "docs.python.org" and (identity == "builtins" or (
+        "/library/" in parsed_url.path
+        and identity == unquote(parsed_url.path.rsplit("/", 1)[-1]).removesuffix(".html"))) else "")
     owner = identity
     kind, start, offset = "overview", 0, 0
     sections: list[DocSection] = []
@@ -352,7 +368,7 @@ def parse_doc_sections(
                 heading_kind = "signature" if heading_declaration else "overview"
                 boundary(line_start, qualify(heading_owner), heading_kind)
             else:
-                if owner_level is not None and level <= owner_level:
+                if owner_level is None or level <= owner_level:
                     owner_level = None
                     boundary(line_start, identity, "overview")
                 else:
@@ -360,7 +376,14 @@ def parse_doc_sections(
             continue
         anchored_owner = _sphinx_definition_owner(raw_line)
         if anchored_owner:
-            boundary(line_start, anchored_owner, "signature")
+            owner_level = None
+            boundary(line_start, qualify(anchored_owner), "signature")
+            continue
+        if stripped.endswith("¶"):
+            # Flattened Sphinx headings retain their permalink but lose their
+            # hierarchy; a general heading cannot inherit the preceding API.
+            owner_level = None
+            boundary(line_start, identity, "overview")
             continue
         # API declarations belong in an overview/signature, not in example,
         # parameter, return, or note text that happens to contain a call.
@@ -374,5 +397,21 @@ def parse_doc_sections(
     return sections
 
 
+def definition_sections(
+    text: str, *, declarations: list[DocDeclaration], sections: list[DocSection],
+) -> list[DocSection]:
+    """Identify self-linked definitions, excluding index entries and example calls."""
+    by_start = {section.start: section for section in sections}
+    definitions = []
+    for declaration in declarations:
+        line_start = text.rfind("\n", 0, declaration.start) + 1
+        section = by_start.get(line_start)
+        if (section is not None and section.kind == "signature"
+                and declaration.end <= section.end
+                and _sphinx_definition_owner(text[line_start:declaration.end])):
+            definitions.append(section)
+    return definitions
+
+
 __all__ = ["DocSection", "declaration_name", "scan_declarations", "parse_doc_sections", "resolve_document_symbol",
-           "document_symbol_names"]
+           "document_symbol_names", "definition_sections"]

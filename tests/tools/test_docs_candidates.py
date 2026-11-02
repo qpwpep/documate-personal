@@ -13,6 +13,7 @@ from src.core.planner_schema import PlannerOutput, RetrievalRequirement, Retriev
 from src.infra.settings import AppSettings
 from src.infra.tools.docs_search.policy import is_current_stable_doc_url
 from src.infra.tools.docs_search.ranking import select_docs_candidates
+from src.infra.tools.docs_search.sections import definition_sections, parse_doc_sections, scan_declarations
 from src.infra.tools.docs_search.tool import build_docs_search_tool
 from src.runtime.nodes.synthesis.budgets import RetrievedEvidenceBudget
 from src.runtime.nodes.synthesis.evidence_selection import prepare_evidence_candidates
@@ -106,6 +107,100 @@ def test_explicit_version_keeps_existing_candidate_order_and_original_urls():
 
     assert [hit.evidence.id for hit in candidates] == [requested.evidence.id, stable.evidence.id]
     assert candidates[0].evidence.snapshot.source_uri == requested.evidence.snapshot.source_uri
+
+
+def official_module_hit(body, *, page, title):
+    snapshot = build_snapshot(source_uri=f"https://docs.python.org/3.9/library/{page}.html", title=title,
+        media_type="text/html", source_type="official", content=body, parser="official_html", parser_version="2")
+    return SearchHit(evidence=build_evidence(snapshot=snapshot,
+        element=DocumentElement(element_id="body", kind="paragraph", text=body)), rank=1,
+        score=RetrievalScore(metric="provider", direction="higher", normalized=0.5))
+
+
+def test_owned_definition_is_retained_when_unqualified_symbol_matches_another_title():
+    behavior = "Return the first record matching the supplied value."
+    declaration = "scan(value)¶\n\n"
+    module_body = ("scan()\n\n" + "Other record operations and examples.\n\n" * 150
+        + declaration + behavior + "\n\n" + "More record operations.\n\n" * 100)
+    module = official_module_hit(module_body, page="records", title="records — Python 3.9 documentation")
+    archives = official_module_hit(
+        "".join(f"SCAN archives entry {index}: archive format and storage details.\n\n" for index in range(400)),
+        page="archives", title="SCAN archives — Python 3.9 documentation")
+
+    task = RetrievalTask(requirement_id="scan", route="docs", query="Python 3.9 scan behavior", k=5,
+        requirement={"library": "Python", "symbols": ["scan"], "version": "3.9", "evidence_needs": ["explanation"]})
+    candidates = select_docs_candidates(task.query,
+        [hit.model_copy(update={"requirement_id": task.requirement_id}) for hit in [archives, module]],
+        task.requirement, k=task.k, allowed_domains=["docs.python.org"])
+    prepared = prepare_evidence_candidates(user_input=task.query, hits=candidates,
+        planner_output=PlannerOutput(use_retrieval=True, tasks=[task]),
+        budget=RetrievedEvidenceBudget(1800, 6000, 8))
+
+    assert any(behavior in hit.evidence.excerpt for hit in candidates)
+    assert any(declaration + behavior in hit.evidence.excerpt for hit in prepared)
+    assert len(candidates) <= 15
+    assert len(prepared) <= 12
+    assert all(len(hit.evidence.excerpt) <= 3200 for hit in candidates)
+    assert all(len(hit.evidence.excerpt) <= 1800 for hit in prepared)
+    assert all(hit.evidence.excerpt == hit.evidence.element.text[hit.evidence.selection.start:hit.evidence.selection.end]
+               for hit in [*candidates, *prepared])
+
+
+@pytest.mark.parametrize("mention", ["scan()\n\n", "```python\nscan(value)\n```\n\n"], ids=["contents", "example"])
+def test_call_mention_does_not_promote_a_module_over_named_api_reference(mention):
+    module = official_module_hit(mention + "Other record operations.\n\n" * 400,
+        page="records", title="records — Python 3.9 documentation")
+    reference = official_module_hit(
+        "".join(f"scan reference entry {index}: documented behavior and supported inputs.\n\n" for index in range(400)),
+        page="scan", title="scan reference — Python 3.9 documentation")
+
+    candidates = select_docs_candidates("Python 3.9 scan behavior", [module, reference],
+        RetrievalRequirement(library="Python", symbols=["scan"], version="3.9", evidence_needs=["explanation"]),
+        k=1, allowed_domains=["docs.python.org"])
+
+    assert len(candidates) == 6
+    assert {hit.evidence.snapshot.snapshot_id for hit in candidates} == {reference.evidence.snapshot.snapshot_id}
+
+
+def test_flattened_sphinx_source_link_keeps_method_and_its_related_behavior():
+    declaration = "read()[source]#\n\n"
+    behavior = "Read the currently selected records without changing the processing mode."
+    relationship = "This is equivalent to fetch(mode=False); configure(mode) changes processing independently."
+    neighbors = [f"operation_{index}()[source]#\n\n"
+        + "Widget.read processing mode reference; unrelated operation details.\n\n" * 70
+        for index in range(8)]
+    body = ("Widget\n\n" + "".join(neighbors[:4]) + "Returns:\n\nWidget\n\n"
+        + declaration + behavior + "\n\n" + relationship + "\n\n" + "".join(neighbors[4:]))
+    original = official_module_hit(body, page="Widget", title="Widget — Python 3.9 documentation")
+    task = RetrievalTask(requirement_id="read-mode", route="docs", query="Widget.read processing mode", k=1,
+        requirement={"library": "Python", "symbols": ["Widget.read"], "version": "3.9",
+                     "evidence_needs": ["explanation"]})
+
+    hits = select_docs_candidates(task.query, [original.model_copy(update={"requirement_id": task.requirement_id})],
+        task.requirement, k=task.k, allowed_domains=["docs.python.org"])
+    prepared = prepare_evidence_candidates(user_input=task.query, hits=hits,
+        planner_output=PlannerOutput(use_retrieval=True, tasks=[task]),
+        budget=RetrievedEvidenceBudget(1800, 6000, 8))
+
+    assert any(declaration + behavior in hit.evidence.excerpt and relationship in hit.evidence.excerpt for hit in hits)
+    assert any(declaration + behavior in hit.evidence.excerpt and relationship in hit.evidence.excerpt for hit in prepared)
+    assert all(hit.evidence.excerpt == body[hit.evidence.selection.start:hit.evidence.selection.end]
+               for hit in [*hits, *prepared])
+
+
+@pytest.mark.parametrize("text", [
+    "# Examples\n\n```python\nread()[source]#\n```\n",
+    "# Examples\n\n>>> widget.read()[source]#\n",
+    "[source]\n",
+    "read()[source]\n",
+    "General notes#\n",
+], ids=["fenced-call", "doctest-call", "source-label", "call-without-self-link", "ordinary-heading"])
+def test_source_labels_and_example_calls_do_not_identify_method_definitions(text):
+    declarations = scan_declarations(text)
+    sections = parse_doc_sections(text, title="Widget — Python 3.9 documentation",
+        url="https://docs.python.org/3.9/library/Widget.html", declarations=declarations)
+
+    assert definition_sections(text, declarations=declarations, sections=sections) == []
 
 
 @pytest.mark.parametrize("version,expected_url,expected_limit", [
@@ -222,8 +317,34 @@ def test_unparsed_source_keeps_base_window_and_late_literal_anchor():
     body = "이 문서는 일반 문장으로만 작성되어 있습니다.\n" * 250 + "axis를 None으로 설정하면 전체 원소를 사용합니다.\n"
     original = source_hit(body)
     candidates = select([original])
-    assert original.evidence.id in {hit.evidence.id for hit in candidates}
+    assert any(hit.evidence.selection.start == 0 for hit in candidates)
     assert any("axis를 None" in hit.evidence.excerpt for hit in candidates)
+
+
+def test_owned_definition_precedes_bare_signature_in_reference_table():
+    behavior = "Return False when the path does not exist."
+    text = (
+        "Path.exists(*, follow_symlinks=True)¶\n\n" + behavior + "\n\n"
+        ">>> Path('missing').exists()\nFalse\n\n"
+        "Path.is_file(*, follow_symlinks=True)¶\n\n"
+        + "Other path behavior and examples.\n\n" * 140
+        + "Notes\n\nPath.exists()\n\n"
+        + "The table maps Python pathlib.Path.exists to os.path.exists.\n" * 20
+    )
+    snapshot = build_snapshot(source_uri="https://docs.python.org/3/library/pathlib.html",
+        title="pathlib", media_type="text/html", source_type="official", content=text,
+        parser="official_html", parser_version="1")
+    original = SearchHit(evidence=build_evidence(snapshot=snapshot,
+        element=DocumentElement(element_id="body", kind="paragraph", text=text)),
+        rank=1, score=RetrievalScore(metric="provider", direction="higher", normalized=1))
+
+    candidates = select_docs_candidates("Python pathlib.Path.exists returns False missing path", [original],
+        RetrievalRequirement(library="Python", symbols=["pathlib.Path.exists"], evidence_needs=["explanation"]),
+        k=1, allowed_domains=["docs.python.org"])
+
+    assert behavior in candidates[0].evidence.excerpt
+    assert candidates[0].evidence.selection.start == 0
+    assert all(0 < len(hit.evidence.excerpt) <= 3200 for hit in candidates)
 
 
 def test_exact_declaration_window_beats_incidental_cross_reference_with_same_terms():
@@ -240,6 +361,32 @@ def test_exact_declaration_window_beats_incidental_cross_reference_with_same_ter
     assert len(candidates) == 6
     assert all(requested_behavior in hit.evidence.excerpt for hit in candidates)
     assert all(hit.evidence.selection.start >= body.index("# numpy.mean") for hit in candidates)
+
+
+def test_complete_definition_window_is_not_penalized_for_ending_at_a_whole_line():
+    behavior = "Remove the matching prefix and retain the remaining characters."
+    overview = "codec.clean()\n\nPython codec.clean prefix behavior reference.\n\n"
+    neighbors = [f"codec.other_{index}(value)¶\n\n" + "Context " * 80
+        + "codec.clean prefix behavior " + "unrelated details " * 400 + "\n\n" for index in range(8)]
+    definition = "codec.clean(value, prefix)¶\n\n" + behavior + "\n\n"
+    body = overview + "".join(neighbors[:4]) + definition + "".join(neighbors[4:])
+    snapshot = build_snapshot(source_uri="https://docs.python.org/3/library/codec.html", title="codec",
+        media_type="text/html", source_type="official", content=body, parser="official_html", parser_version="1")
+    original = SearchHit(evidence=build_evidence(snapshot=snapshot,
+        element=DocumentElement(element_id="body", kind="paragraph", text=body)),
+        rank=1, score=RetrievalScore(metric="provider", direction="higher"))
+
+    candidates = select_docs_candidates("Python codec.clean prefix behavior", [original],
+        RetrievalRequirement(library="Python", symbols=["codec.clean"], evidence_needs=["explanation"]),
+        k=1, allowed_domains=["docs.python.org"])
+
+    assert len(candidates) <= 6
+    assert any(behavior in hit.evidence.excerpt for hit in candidates)
+    definition_hit = next(hit.evidence for hit in candidates if hit.evidence.excerpt.startswith(definition))
+    assert len(definition_hit.excerpt) < 3200
+    assert definition_hit.excerpt.endswith("\n")
+    assert all(hit.evidence.excerpt == body[hit.evidence.selection.start:hit.evidence.selection.end]
+               for hit in candidates)
 
 
 def test_declaration_window_spends_budget_after_definition_not_previous_api():
@@ -287,6 +434,50 @@ def test_qualified_stdlib_symbol_keeps_relative_declaration_and_return_contract(
     assert behavior in candidates[0].evidence.excerpt
     assert all(hit.evidence.excerpt == body[hit.evidence.selection.start:hit.evidence.selection.end]
                for hit in [*hits, *candidates])
+
+
+@pytest.mark.parametrize("path", ["3.10/library/functions", "3/builtins/functions"])
+def test_qualified_builtin_symbol_keeps_its_definition_on_both_python_layouts(path):
+    declaration = "zip(*iterables, strict=False)¶\n\n"
+    behavior = "With strict=True, ValueError is raised when the iterables have different lengths."
+    body = ("all(iterable)¶\n\nSee builtins.zip for iteration details.\n\n"
+        + "Additional examples of builtins.zip in unrelated introductory prose.\n" * 100
+        + declaration + behavior + "\n\n"
+        + "Other builtin behavior and examples.\n" * 110)
+    snapshot = build_snapshot(source_uri=f"https://docs.python.org/{path}.html",
+        title="Built-in Functions — Python documentation", media_type="text/html", source_type="official",
+        content=body, parser="official_html", parser_version="2")
+    original = build_evidence(snapshot=snapshot, element=DocumentElement(element_id="body", kind="paragraph", text=body))
+    task = RetrievalTask(requirement_id="zip-strict", route="docs", query="builtins.zip strict True unequal lengths", k=1,
+        requirement={"library": "Python", "symbols": ["builtins.zip"], "aspects": ["strict", "True"],
+                     "evidence_needs": ["explanation", "parameters"]})
+
+    hits = select_docs_candidates(task.query, [SearchHit(evidence=original, rank=1,
+        requirement_id=task.requirement_id, score={"metric": "provider", "direction": "higher"})],
+        task.requirement, k=1, allowed_domains=["docs.python.org"])
+    candidates = prepare_evidence_candidates(user_input=task.query, hits=hits,
+        planner_output=PlannerOutput(use_retrieval=True, tasks=[task]),
+        budget=RetrievedEvidenceBudget(1800, 6000, 8))
+
+    assert hits[0].evidence.excerpt.startswith(declaration)
+    assert behavior in candidates[0].evidence.excerpt
+    assert all(hit.evidence.excerpt == body[hit.evidence.selection.start:hit.evidence.selection.end]
+               for hit in [*hits, *candidates])
+
+
+@pytest.mark.parametrize("path", ["3.9/library/functions", "3/builtins/functions",
+                                   "3.9/library/stdtypes", "3/builtins/stdtypes"])
+def test_builtin_reference_declarations_keep_the_python_namespace(path):
+    body = ("zip(*iterables)¶\n\nCombine iterable items.\n\n"
+        "class str(object='')¶\n\nA text string.\n\n"
+        "str.removeprefix(prefix, /)¶\n\nRemove a matching prefix.\n\n"
+        "types.GenericAlias(t_origin, t_args)¶\n\nA generic alias.\n")
+    sections = parse_doc_sections(body, title="Built-in reference — Python documentation",
+                                  url=f"https://docs.python.org/{path}.html")
+
+    assert next(section.owner for section in sections if "Combine iterable" in body[section.start:section.end]) == "builtins.zip"
+    assert next(section.owner for section in sections if "Remove a matching" in body[section.start:section.end]) == "builtins.str.removeprefix"
+    assert next(section.owner for section in sections if "A generic alias" in body[section.start:section.end]) == "types.GenericAlias"
 
 
 def test_overlapping_anchor_windows_do_not_displace_late_examples():

@@ -11,7 +11,7 @@ from src.core.planner_schema import RetrievalRequirement
 from src.infra.settings import AppSettings
 from src.infra.tools._common import build_retrieval_result
 from src.infra.tools.docs_search import client
-from src.infra.tools.docs_search.official_page import refresh_stable_sources
+from src.infra.tools.docs_search.official_page import refresh_official_sources
 from src.infra.tools.docs_search.policy import docs_search_rules, normalize_include_domains
 from src.infra.tools.docs_search.ranking import dedupe_docs_hits, select_docs_candidates
 from src.infra.tools.docs_search.requirements import canonical_query, library_domains, resolve_requirement
@@ -31,7 +31,7 @@ def build_docs_search_tool(settings: AppSettings) -> Callable[..., RetrievalResu
     ) -> RetrievalResult:
         requested = resolve_requirement(requirement)
         effective_query = canonical_query(query, requested)
-        domains = normalize_include_domains(library_domains(str(requested.library or ""))
+        domains = normalize_include_domains(library_domains(requested.library or "")
                                              or list(docs_search_rules().allowed_doc_path_prefixes))
         # A small search can return only newer releases or adjacent APIs for
         # an explicit version. Widen provider recall without increasing the
@@ -99,22 +99,21 @@ def build_docs_search_tool(settings: AppSettings) -> Callable[..., RetrievalResu
                     fresh_snapshot_ids.update(hit.evidence.snapshot.snapshot_id for hit in batch
                                               if hit.evidence.snapshot.snapshot_id not in previous_snapshot_ids)
                 candidates = dedupe_docs_hits([*candidates, *batch])
-                if requested.version is None:
-                    ranked = select_docs_candidates(effective_query, candidates, requested, k=k, allowed_domains=domains,
-                                                    preferred_snapshot_ids=fresh_snapshot_ids,
-                                                    preserved_evidence_ids=preserved_ids)
-                    candidates = refresh_stable_sources(ranked, requirement=requested,
-                                                        timeout_seconds=settings.docs_search_timeout_seconds,
-                                                        allowed_domains=domains, warnings=warnings)
-                    fresh_snapshot_ids.update(hit.evidence.snapshot.snapshot_id for hit in candidates
-                                              if hit.evidence.snapshot.parser == "official_html")
+                ranked = select_docs_candidates(effective_query, candidates, requested, k=k, allowed_domains=domains,
+                                                preferred_snapshot_ids=fresh_snapshot_ids,
+                                                preserved_evidence_ids=preserved_ids)
+                candidates = refresh_official_sources(ranked, source_candidates=candidates, requirement=requested,
+                                                      timeout_seconds=settings.docs_search_timeout_seconds,
+                                                      allowed_domains=domains, warnings=warnings)
+                fresh_snapshot_ids.update(hit.evidence.snapshot.snapshot_id for hit in candidates
+                                          if hit.evidence.snapshot.parser == "official_html")
                 hits = select_docs_candidates(effective_query, candidates, requested, k=k,
                     allowed_domains=domains, preferred_snapshot_ids=fresh_snapshot_ids,
                     preserved_evidence_ids=preserved_ids)
                 post_ms += elapsed_ms(started, time.perf_counter())
         status = "success" if hits else "error" if error_code else "no_result"
         result = build_retrieval_result(tool="tavily_search", route="docs", query=effective_query,
-            hits=[hit.model_copy(update={"rank": i}) for i, hit in enumerate(hits, 1)], status=status,
+            hits=hits, status=status,
             message=error_message if error_code else "" if hits else "no official documentation evidence found",
             raw_score=max((h.score.raw for h in hits if h.score.raw is not None), default=None),
             provider_ms=provider_ms, post_filter_ms=post_ms, include_raw_content_requested=bool(include_raw),

@@ -18,6 +18,9 @@ from src.core.contracts.boundary.retrieval import get_retrieval_state
 from src.core.contracts.boundary.runtime import get_runtime_state
 from src.core.latency import elapsed_ms, make_stage_latency_event
 from src.infra.logging_utils import log_event
+from src.infra.tools.docs_search.policy import docs_search_rules
+from src.infra.tools.docs_search.ranking import select_docs_candidates
+from src.infra.tools.docs_search.requirements import library_domains, resolve_requirement
 from src.core.message_utils import build_tool_message
 from src.core.planner_schema import PlannerOutput, RetrievalTask
 from src.core.evidence import SearchHit, dedupe_search_hits
@@ -147,7 +150,8 @@ def _collect_retrieval_batch(
     return batch_plan
 
 def _execute_retrieval_batch(
-    batch_plan: RetrievalBatchPlan, *, prior_candidates: list[SearchHit] | None = None,
+    batch_plan: RetrievalBatchPlan, *, planner_output: PlannerOutput,
+    prior_candidates: list[SearchHit] | None = None, preserved_hits: list[SearchHit] | None = None,
 ) -> RetrievalBatchResult:
     task_results: list[RetrievalTaskResult] = list(batch_plan.reused_results)
 
@@ -183,8 +187,6 @@ def _execute_retrieval_batch(
 
     task_results.sort(key=lambda item: int(item.index))
 
-    result = RetrievalBatchResult()
-    tool_call_counts: dict[str, int] = {}
     for item in task_results:
         # A refresh may return only replacement candidates. Preserve raw ranges
         # until pre-validation can compare their complete decision identity.
@@ -200,6 +202,11 @@ def _execute_retrieval_batch(
                     "final_evidence_count": len(merged),
                 }),
             })
+
+    _share_official_doc_sources(task_results, planner_output, preserved_hits or [])
+    result = RetrievalBatchResult()
+    tool_call_counts: dict[str, int] = {}
+    for item in task_results:
         result.hit_updates.extend(item.result.hits)
         result.retrieval_diagnostics.append(item.result.diagnostics)
         result.local_errors.extend(str(error) for error in item.errors if str(error).strip())
@@ -210,6 +217,50 @@ def _execute_retrieval_batch(
             build_tool_message(item.tool_name, item.result.model_dump(mode="json"), tool_call_counts[item.tool_name])
         )
     return result
+
+
+def _share_official_doc_sources(
+    results: list[RetrievalTaskResult], plan: PlannerOutput, preserved_hits: list[SearchHit],
+) -> None:
+    # Parallel tasks can discover different APIs in the same full page. Reuse
+    # the capture after the batch, then assign newly selected ranges to the
+    # target requirement; every association still needs its own semantic check.
+    captured = {}
+    for result in results:
+        for hit in result.result.hits:
+            evidence = hit.evidence
+            if (evidence.route == "docs" and evidence.snapshot.parser == "official_html"
+                    and evidence.snapshot.capture_scope == "full_document"):
+                captured.setdefault((evidence.snapshot.snapshot_id, evidence.element.element_id), hit)
+    tasks = {task.requirement_id: task for task in plan.tasks}
+    for result in results:
+        task = tasks[result.result.diagnostics.requirement_id]
+        if task.route != "docs":
+            continue
+        own_sources = {(hit.evidence.snapshot.snapshot_id, hit.evidence.element.element_id)
+                       for hit in result.result.hits}
+        shared = [hit for key, hit in captured.items() if key not in own_sources]
+        if not shared:
+            continue
+        requested = resolve_requirement(task.requirement)
+        domains = library_domains(requested.library or "")
+        if requested.library and not domains:
+            continue
+        selected = select_docs_candidates(task.query, [*result.result.hits, *shared], requested,
+            k=task.k, allowed_domains=domains or list(docs_search_rules().allowed_doc_path_prefixes),
+            preserved_evidence_ids={hit.evidence.id for hit in preserved_hits
+                                    if hit.requirement_id == task.requirement_id})
+        if not any((hit.evidence.snapshot.snapshot_id, hit.evidence.element.element_id) not in own_sources
+                   for hit in selected):
+            continue
+        hits = [hit.model_copy(update={"requirement_id": task.requirement_id}) for hit in selected]
+        diagnostic = result.result.diagnostics
+        result.result = result.result.model_copy(update={"hits": hits, "diagnostics": diagnostic.model_copy(update={
+            "status": "success", "message": diagnostic.message if diagnostic.error_code else "",
+            "answerability": "unknown", "evidence_count": len(hits), "result_count": len(hits),
+            "final_evidence_count": len(hits), "candidate_count": len(hits),
+            "warnings": sorted(set([*diagnostic.warnings, "shared_official_source"])),
+        })})
 
 
 def _build_retrieval_updates(
@@ -310,7 +361,9 @@ def make_retrieve_dispatch_node(
         )
         batch_result = _execute_retrieval_batch(
             batch_plan,
+            planner_output=planner_output,
             prior_candidates=prior_hits,
+            preserved_hits=retry_context.preserved_hits,
         )
         _emit_retrieval_progress_snapshot(
             progress_emitter=getattr(runtime, "progress_emitter", None),

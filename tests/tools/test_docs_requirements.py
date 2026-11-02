@@ -4,7 +4,7 @@ import requests
 
 pytestmark = pytest.mark.usefixtures("unavailable_official_pages")
 
-from src.core.planner_schema import RetrievalRequirement
+from src.core.planner_schema import PlannedRequirement, RetrievalRequirement
 from src.core.evidence import SearchHit
 from src.infra.settings import AppSettings
 from src.infra.tools.docs_search.tool import build_docs_search_tool
@@ -35,6 +35,21 @@ def search(monkeypatch):
     monkeypatch.setattr(requests, "post", post)
     tool = build_docs_search_tool(AppSettings(_env_file=None, tavily_api_key="test", openai_api_key="test"))
     return tool, batches, requests_seen
+
+
+@pytest.mark.parametrize("library", ["numpy", None])
+def test_symbol_alias_keeps_the_requested_source_first_with_or_without_an_owner(search, library):
+    tool, batches, _seen = search
+    requested = result(version="stable")
+    requested["score"] = 0.01
+    batches.append([*[result(f"numpy.other_{index}", version="stable") for index in range(6)], requested])
+
+    payload = tool("이 API를 설명해 주세요", k=1,
+                   requirement=PlannedRequirement(library=library, symbols=["np . reshape"]))
+
+    assert payload.hits[0].evidence.snapshot.source_uri == requested["url"]
+    assert [hit.rank for hit in payload.hits] == [1, 2, 3, 4, 5, 6]
+    assert all(hit.evidence.snapshot.source_uri.startswith("https://numpy.org/") for hit in payload.hits)
 
 
 @pytest.mark.parametrize("previous_scope", ["other_library", "other_version"])

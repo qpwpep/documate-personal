@@ -10,11 +10,6 @@ _LIBRARY_NAMES = {"np": "numpy", "pd": "pandas", "plt": "matplotlib", "sklearn":
 _SYMBOL_ALIASES = {"numpy": {"np": "numpy"}, "pandas": {"pd": "pandas"}, "matplotlib": {"plt": "matplotlib.pyplot"}, "pytorch": {"nn": "torch.nn"}, "streamlit": {"st": "streamlit"}, "scikit-learn": {"sklearn": "sklearn"}}
 
 
-def canonical_library(value: str | None) -> str:
-    text = str(value or "").strip()
-    return _LIBRARY_NAMES.get(text.casefold(), text)
-
-
 def canonical_symbol(symbol: str, library: str) -> str:
     value = canonicalize_docs_symbol_text(symbol)
     for alias, target in _SYMBOL_ALIASES.get(library.casefold(), {}).items():
@@ -24,14 +19,14 @@ def canonical_symbol(symbol: str, library: str) -> str:
 
 
 def library_domains(library: str) -> list[str]:
-    wanted = canonical_library(library).casefold()
+    wanted = library.casefold()
     return list(dict.fromkeys(domain for hint in docs_search_rules().query_hints
                               if hint.library_name.casefold() == wanted for domain in hint.domains))
 
 
 def resolve_requirement(requirement: RetrievalRequirement) -> RetrievalRequirement:
-    """Canonicalize the fixed source requirement without deriving goals from query text."""
-    library = canonical_library(requirement.library)
+    """Keep canonical library IDs while resolving unscoped owners and symbol aliases."""
+    library = requirement.library or ""
     if not library:
         scope_text = " ".join(requirement.symbols)
         prefixes = re.findall(r"(?<![\w.])([A-Za-z_]+)\s*\.", scope_text)
