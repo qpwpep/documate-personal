@@ -7,7 +7,7 @@ import pytest
 from langchain_core.messages import HumanMessage, ToolMessage
 
 from src.app.web.agent_request_support import normalize_debug_info
-from src.core.contracts.graph_state import DebugState
+from src.core.contracts.graph_state import DebugState, RetrievalState
 from src.core.documents import DocumentElement, build_snapshot
 from src.core.evidence import RetrievalScore, SearchHit, build_evidence
 from src.eval.online_runner.response_parser import parse_agent_response
@@ -59,6 +59,33 @@ def test_web_and_eval_preserve_canonical_error_codes_and_ignore_unknown_values(d
         parsed = parse_agent_response({"status": "needs_input", "message": "Which source?", "debug": debug})
         assert parsed.error_codes == expected
         assert parsed.response_errors == []
+
+
+def test_current_search_observations_do_not_depend_on_conversation_tool_messages():
+    hits = []
+    for name, content in (("current", "Current source text"), ("previous", "Previous source text")):
+        snapshot = build_snapshot(
+            source_uri=f"https://example.test/{name}", title=name, media_type="text/plain",
+            source_type="official", content=content, parser="test", parser_version="1",
+        )
+        hits.append(SearchHit(evidence=build_evidence(
+            snapshot=snapshot, element=DocumentElement(element_id="paragraph", kind="paragraph", text=content),
+        ), score=RetrievalScore(metric="relevance", raw=0.9, direction="higher"), rank=1))
+    debug = DebugCollector().build(
+        response={"route_decisions": [], "retrieval": RetrievalState(hit_log=[hits[0]])},
+        updated_messages=[
+            HumanMessage(content="Previous question"),
+            ToolMessage(name="tavily_search", tool_call_id="previous-search",
+                        content=json.dumps({"hits": [hits[1].model_dump(mode="json")]})),
+            HumanMessage(content="Current question"),
+        ],
+        graph_total_ms=200,
+    )
+
+    normalized = normalize_debug_info(debug, 220, answer_expected=False)
+
+    assert [hit.evidence.excerpt for hit in normalized.observed_hits] == ["Current source text"]
+    assert "observed_hits" not in normalized.missing_required_debug_fields
 
 
 def test_invalid_observed_hit_preserves_valid_source_and_reports_incomplete_observation(debug_payload):

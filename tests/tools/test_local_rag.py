@@ -84,6 +84,23 @@ def test_notebook_upload_rejects_invalid_cell_source(tmp_path, source):
     assert path.read_bytes() == content
 
 
+def test_v3_notebook_upload_reports_no_searchable_text(tmp_path):
+    path = tmp_path / "legacy.ipynb"
+    content = json.dumps({
+        "nbformat": 3, "nbformat_minor": 0, "metadata": {},
+        "worksheets": [{"metadata": {}, "cells": [
+            {"cell_type": "markdown", "metadata": {}, "source": "Legacy worksheet text."},
+        ]}],
+    }).encode("utf-8")
+    path.write_bytes(content)
+
+    with pytest.raises(ValueError, match="file has no searchable text"):
+        handle = _index_upload(path, embeddings=_FakeEmbeddings())
+        handle.cleanup()
+
+    assert path.read_bytes() == content
+
+
 def test_notebook_upload_rejects_duplicate_cell_ids(tmp_path):
     path = tmp_path / "duplicate.ipynb"
     content = json.dumps({

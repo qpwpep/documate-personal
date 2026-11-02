@@ -16,7 +16,7 @@ from fastapi import HTTPException
 from src.app.web.schemas import StagedUpload
 from src.core.uploads import (
     UploadAddition, UploadContext, UploadManifest, UploadRecord, UploadSyncRequest,
-    normalized_upload_name, validate_session_id,
+    normalized_upload_name,
 )
 from src.infra.runtime_paths import get_project_root_path, get_upload_session_dir, get_uploads_dir
 from src.infra.settings import AppSettings
@@ -45,6 +45,8 @@ def _error(status: int, code: str, message: str, *, files: list[dict] | None = N
 
 
 class UploadService:
+    """Attachment operations use canonical session IDs from the request boundary."""
+
     def __init__(self, *, settings: AppSettings, session_store: InMemorySessionStore,
                  converter: DocumentConverterPort | None = None):
         self.settings = settings
@@ -52,7 +54,6 @@ class UploadService:
         self.converter = converter
 
     def get_manifest(self, session_id: str) -> UploadManifest:
-        session_id = validate_session_id(session_id)
         with self.session_store.locked_session(session_id) as (entry, _wait_ms):
             self._cleanup_staging(session_id)
             session = entry.agent.session
@@ -60,7 +61,6 @@ class UploadService:
             return session.upload_manifest()
 
     def stage(self, session_id: str, name: str, source: BinaryIO) -> StagedUpload:
-        session_id = validate_session_id(session_id)
         self._validate_upload_name(name)
         content = source.read(self.settings.upload_max_file_mib * _MIB + 1)
         if len(content) > self.settings.upload_max_file_mib * _MIB:
@@ -100,7 +100,6 @@ class UploadService:
     def sync(
         self, session_id: str, request: UploadSyncRequest, *, discard_staging: bool = False,
     ) -> UploadManifest:
-        session_id = validate_session_id(session_id)
         with self.session_store.locked_session(session_id) as (entry, _wait_ms):
             session = entry.agent.session
             if request.epoch != session.upload_epoch:
@@ -283,7 +282,7 @@ class UploadService:
                 batch_hashes[key] = digest
                 target = addition.replace_file_id
                 if target is not None:
-                    if target not in existing or target in request.remove:
+                    if target not in existing:
                         raise _error(409, "UPLOAD_FILE_NOT_FOUND", "교체할 파일이 현재 첨부 목록에 없습니다.")
                     if key != normalized_upload_name(existing[target].name):
                         raise _error(422, "UPLOAD_REPLACEMENT_NAME_MISMATCH", "교체 파일의 이름은 기존 파일과 같아야 합니다.")
@@ -294,7 +293,7 @@ class UploadService:
                     raise _error(409, "UPLOAD_NAME_CONFLICT", "같은 이름의 파일이 있습니다. 기존 파일 교체를 선택해 주세요.")
                 file_id = target or uuid4().hex
                 source_uri = existing[target].source_uri if target else f"upload:///{session_id}/{file_id}"
-                pending_bytes += len(content) - (len(pending[file_id][1]) if file_id in pending else 0)
+                pending_bytes += len(content)
                 pending[file_id] = (addition, content, digest, source_uri)
                 name_to_id[key] = file_id
                 hashes[file_id] = digest

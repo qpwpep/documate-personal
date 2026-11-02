@@ -6,7 +6,6 @@ from xml.sax.saxutils import escape
 
 from .history_loader import StoredRun, suite_label
 from .readme_renderer import format_gate_threshold, format_metric_value
-from .summary_models import RunSummary
 
 
 SVG_COLORS = [
@@ -100,7 +99,6 @@ def build_history_svg(comparable_runs: list[StoredRun]) -> str:
 
     legend_cell_width = 360
     for index, run in enumerate(comparable_runs):
-        summary = RunSummary.model_validate(run.summary.model_dump(mode="json"))
         fill, stroke = SVG_COLORS[index % len(SVG_COLORS)]
         column = index % legend_columns
         row = index // legend_columns
@@ -110,7 +108,7 @@ def build_history_svg(comparable_runs: list[StoredRun]) -> str:
             f'  <circle cx="{origin_x}" cy="{origin_y}" r="7" fill="{fill}" stroke="{stroke}" stroke-width="1.5"/>'
         )
         lines.append(f'  <text class="legend" x="{origin_x + 16}" y="{origin_y + 4}">{escape(run.run_id)}</text>')
-        decision = summary.release_decision
+        decision = run.summary.release_decision
         if run.track == "smoke" or (decision is not None and decision.scope == "diagnostic"):
             verdict = "diagnostic; no release verdict"
         else:

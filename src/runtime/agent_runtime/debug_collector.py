@@ -5,14 +5,14 @@ from typing import Any
 
 from langchain_core.messages import HumanMessage, ToolMessage
 
-from src.core.contracts.debug import DEBUG_SCHEMA_VERSION
+from src.core.contracts.debug import DEBUG_SCHEMA_VERSION, RetryState
 from src.core.contracts.provenance import AnswerProvenance
 from src.core.contracts.routing import validate_route_decisions
-from src.core.contracts.boundary.debug import get_debug_state, parse_retry_state
+from src.core.contracts.boundary.debug import get_debug_state
 from src.core.contracts.boundary.graph import get_retry_state
-from src.core.contracts.boundary.planner import get_planner_state, parse_planner_diagnostic
+from src.core.contracts.boundary.planner import get_planner_state
 from src.core.contracts.boundary.response import get_response_state
-from src.core.contracts.boundary.retrieval import parse_retrieval_diagnostics, parse_search_hit_message
+from src.core.contracts.boundary.retrieval import get_retrieval_state
 from src.core.evidence import dedupe_search_hits
 from src.core.latency import build_latency_breakdown
 from src.runtime.agent_runtime.tool_execution import current_execution_evidence
@@ -59,37 +59,7 @@ class DebugCollector:
         return action_results or None
 
     @staticmethod
-    def _extract_observed_hits(
-        current_turn_messages: list[Any],
-        *,
-        errors: list[str],
-    ) -> list[dict[str, Any]]:
-        collected = []
-        # Only this turn's retrieval tool results count as observed sources.
-        evidence_tools = {"tavily_search", "upload_search"}
-
-        for message in current_turn_messages:
-            if not isinstance(message, ToolMessage):
-                continue
-
-            tool_name = str(getattr(message, "name", "") or "").strip()
-            if tool_name not in evidence_tools:
-                continue
-
-            parsed_items = parse_search_hit_message(
-                getattr(message, "content", None),
-                errors=errors,
-            )
-            collected.extend(parsed_items)
-
-        return [hit.model_dump(mode="json") for hit in dedupe_search_hits(collected)]
-
-    @staticmethod
-    def _normalize_retry_context(raw_retry_context: Any) -> dict[str, Any] | None:
-        retry = parse_retry_state(raw_retry_context)
-        payload = retry.model_dump(mode="json")
-        payload.pop("preserved_hits", None)
-        payload.pop("preserved_retrieval_diagnostics", None)
+    def _serialize_retry_context(retry: RetryState) -> dict[str, Any] | None:
         if not retry.needs_retry and retry.attempt <= 0 and retry.retry_reason is None and not retry.retrieval_feedback:
             if (
                 retry.hit_start_index == 0
@@ -102,16 +72,7 @@ class DebugCollector:
                 and retry.terminal_retrieval_reason is None
             ):
                 return None
-        return payload
-
-    @staticmethod
-    def _normalize_retrieval_diagnostics(raw_diagnostics: Any) -> list[dict[str, Any]]:
-        return [item.model_dump(mode="json") for item in parse_retrieval_diagnostics(raw_diagnostics)]
-
-    @staticmethod
-    def _normalize_planner_diagnostics(raw_planner_diagnostics: Any) -> dict[str, Any] | None:
-        diagnostics = parse_planner_diagnostic(raw_planner_diagnostics)
-        return diagnostics.model_dump(mode="json") if diagnostics is not None else None
+        return retry.model_dump(mode="json", exclude={"preserved_hits", "preserved_retrieval_diagnostics"})
 
     @staticmethod
     def _collect_error_codes(
@@ -185,17 +146,12 @@ class DebugCollector:
         if execution_evidence is not None:
             tool_calls = [event.tool_name for event in execution_evidence.events if event.phase == "started"]
 
-        observed_hits = self._extract_observed_hits(
-            current_turn_messages,
-            errors=debug_errors,
-        )
-        retry_context = self._normalize_retry_context(state_retry.model_dump(mode="json"))
-        retrieval_diagnostics = self._normalize_retrieval_diagnostics(
-            [item.model_dump(mode="json") for item in state_debug.retrieval_diagnostics]
-        )
-        planner_diagnostics = self._normalize_planner_diagnostics(
-            state_planner.diagnostics.model_dump(mode="json")
-        )
+        observed_hits = [
+            hit.model_dump(mode="json") for hit in dedupe_search_hits(get_retrieval_state(response).hit_log)
+        ]
+        retry_context = self._serialize_retry_context(state_retry)
+        retrieval_diagnostics = [item.model_dump(mode="json") for item in state_debug.retrieval_diagnostics]
+        planner_diagnostics = state_planner.diagnostics.model_dump(mode="json")
         action_results = self._extract_action_results(current_turn_messages) or {}
         for receipt in state_response.result.actions:
             if receipt.kind == "slack_notify" and receipt.slack is not None:

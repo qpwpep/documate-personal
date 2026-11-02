@@ -1,32 +1,9 @@
 from __future__ import annotations
 
-import json
 from typing import Any
-
-from pydantic import ValidationError
 
 from src.core.contracts.debug import RetrievalDiagnostic
 from src.core.contracts.graph_state import RetrievalState
-from src.core.evidence import SearchHit, dedupe_search_hits
-
-
-def parse_search_hit_message(content: str, *, errors: list[str]) -> list[SearchHit]:
-    """Validate the current JSON message envelope at the serialization boundary."""
-    try:
-        payload = json.loads(content)
-    except (json.JSONDecodeError, TypeError) as exc:
-        errors.append(f"search hits: invalid JSON ({exc})")
-        return []
-    if not isinstance(payload, dict) or not isinstance(payload.get("hits"), list):
-        errors.append("search hits: expected an object containing a hits list")
-        return []
-    hits = []
-    for index, item in enumerate(payload["hits"]):
-        try:
-            hits.append(SearchHit.model_validate(item))
-        except (ValidationError, TypeError, ValueError) as exc:
-            errors.append(f"search hits[{index}]: invalid item ({exc})")
-    return dedupe_search_hits(hits)
 
 
 def parse_retrieval_diagnostic(value: Any) -> RetrievalDiagnostic:

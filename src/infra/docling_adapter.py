@@ -81,8 +81,6 @@ def convert_file(file: UploadRecord, policy: ConversionPolicy, *, parser_config:
     """Convert one verified upload; incomplete output is never a successful snapshot."""
     raw = read_verified_upload(file)
     validate_document_input(file, raw, policy)
-    if Path(file.name).suffix.lower() not in DOCUMENT_MEDIA_TYPES:
-        raise _fail("DOCUMENT_INVALID", "지원하지 않는 문서 형식입니다.", file)
     try:
         from docling.datamodel.base_models import DocumentStream
 

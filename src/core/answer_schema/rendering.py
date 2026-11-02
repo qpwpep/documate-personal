@@ -117,6 +117,11 @@ def export_answer_text(response: AnswerResponse, *, include_sources: bool = Fals
     messages. Action receipts remain separate in both modes.
     """
     response = AnswerResponse.model_validate(response.model_dump(mode="json"))
+    return render_answer_text(response, include_sources=include_sources)
+
+
+def render_answer_text(response: AnswerResponse, *, include_sources: bool = False) -> str:
+    """Render a validated answer snapshot without changing its body or source bindings."""
 
     def render(unit: ContentUnit) -> str:
         labels = citation_labels(unit, response)

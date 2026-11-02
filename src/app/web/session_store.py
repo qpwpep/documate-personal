@@ -8,7 +8,6 @@ from dataclasses import dataclass, field
 from threading import Lock
 
 from src.app.agent_manager import AgentFlowManager
-from src.core.uploads import validate_session_id
 from src.infra.logging_utils import log_event
 from src.infra.settings import AppSettings
 
@@ -38,6 +37,8 @@ class SessionEntry:
 
 
 class InMemorySessionStore:
+    """Process-local sessions keyed by canonical IDs from the request boundary."""
+
     def __init__(
         self,
         settings: AppSettings,
@@ -107,7 +108,6 @@ class InMemorySessionStore:
         return expired_removed_count
 
     def get_or_create_entry(self, session_id: str, *, activate_request: bool = False) -> SessionEntry:
-        session_id = validate_session_id(session_id)
         now = time.monotonic()
         with self._lock:
             expired_removed_count = self.maybe_run_cleanup(now=now)
@@ -162,7 +162,6 @@ class InMemorySessionStore:
     @contextmanager
     def locked_session(self, session_id: str):
         """Pin a session before queueing for its lock, including attachment operations."""
-        session_id = validate_session_id(session_id)
         entry = self.get_or_create_entry(session_id, activate_request=True)
         lock_started = time.monotonic()
         try:
@@ -177,7 +176,6 @@ class InMemorySessionStore:
     @contextmanager
     def locked_existing_session(self, session_id: str):
         """Pin a live session without silently recreating expired answer history."""
-        session_id = validate_session_id(session_id)
         now = time.monotonic()
         with self._lock:
             entry = self.active_agents.get(session_id)

@@ -8,6 +8,7 @@ from uuid import uuid4
 
 from src.app.client import AgentSessionClient, AgentStreamEvent, UploadAPIError, build_agent_payload
 from src.app.uploads import build_upload_sync_request, discard_staged_files
+from src.core.contracts.outcome import AgentCallResult
 from src.infra.runtime_paths import get_upload_session_dir
 from src.infra.settings import get_settings
 
@@ -26,17 +27,18 @@ from .response_parser import ParsedResponseData, parse_agent_response
 from .result_builder import build_case_result
 
 
-def _parse_final(body: dict, *, previous: ParsedResponseData, validated_response=None,
+def _parse_final(body: dict, *, previous: ParsedResponseData, validated_result: AgentCallResult | None = None,
                  expected_partial_problem: str | None = None) -> ParsedResponseData:
     try:
         return parse_agent_response(body, http_status=previous.http_status, request_id=previous.request_id,
-                                    validated_response=validated_response,
+                                    validated_result=validated_result,
                                     expected_partial_problem=expected_partial_problem)
     except Exception as exc:
         # Diagnostics are external input too. An unexpected shape must not lose
         # the case, its original debug data, or subsequent scenario results.
         return ParsedResponseData(http_status=previous.http_status, request_id=previous.request_id,
-                                  response=validated_response,
+                                  turn_result=validated_result,
+                                  response=validated_result.response if validated_result is not None else None,
                                   debug=body.get("debug") if isinstance(body.get("debug"), dict) else None,
                                   response_trace=body.get("trace") if isinstance(body.get("trace"), str) else None,
                                   runtime_errors=[f"unexpected error parsing evaluation diagnostics: {exc}"])
@@ -82,7 +84,7 @@ def _run_turn(client: AgentSessionClient, query: str, *,
         parsed.request_id = observation.request_id or parsed.request_id
         elapsed = round(observation.elapsed_ms)
         if event.event == "final_response" and event.result is not None:
-            final = _parse_final(event.data, previous=parsed, validated_response=event.result.response,
+            final = _parse_final(event.data, previous=parsed, validated_result=event.result,
                                  expected_partial_problem=expectation.problem_code if expectation else None)
             final.runtime_errors.extend(parsed.runtime_errors)
             final.response_errors.extend(parsed.response_errors)

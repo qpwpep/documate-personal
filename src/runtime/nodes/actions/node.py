@@ -18,7 +18,7 @@ from src.core.save_contract import SaveOperation
 from src.infra.logging_utils import log_event
 from src.infra.answer_export import select_current_save_operation
 from src.runtime.nodes.actions.policy import select_slack_delivery
-from src.core.slack_contract import SlackDefault, SlackDelivery
+from src.core.slack_contract import SlackDefault
 from src.runtime.nodes.actions.receipts import build_save_receipt, build_slack_receipt
 from src.runtime.agent_runtime.tool_execution import invoke_tool, record_nonexecution
 
@@ -282,7 +282,7 @@ def make_action_postprocess_node(
                         invocation_id = uuid4().hex
                         result = invoke_tool("slack_notify", slack_notify_tool, execution_id=invocation_id,
                                              text=body, delivery=slack_delivery)
-                        slack_delivery = SlackDelivery.model_validate(result.model_dump()).model_copy(update={"invocation_id": invocation_id})
+                        slack_delivery = result.model_copy(update={"invocation_id": invocation_id})
                     messages.append(build_tool_message("slack_notify", slack_delivery.model_dump(mode="json"), 1))
                 else:
                     record_nonexecution("slack_notify", reason_code="destination_not_ready")

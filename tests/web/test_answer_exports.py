@@ -2,16 +2,16 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import nullcontext
 import json
 from pathlib import Path
 from types import SimpleNamespace
 
-from fastapi import FastAPI
 from fastapi.testclient import TestClient
 import pytest
 
 from src.app.answer_exports import AnswerExportService
-from src.app.web.routes import router
+from src.app.web.app import create_app
 from src.app.web.session_store import InMemorySessionStore
 from src.core.answer_schema import AnswerResponse, ResponseIssue, export_answer_text, finalize_answer, text_document
 from src.core.answer_schema.models import SemanticCheck, SemanticValidation, semantic_evidence_fingerprint
@@ -45,9 +45,9 @@ def exports(tmp_path, monkeypatch):
         issues=[ResponseIssue(code="scope", message="첨부 파일의 코드만 확인했습니다.")],
     )
     answer_id = session.register_answer(original)
-    app = FastAPI()
+    app = create_app()
+    app.router.lifespan_context = lambda _app: nullcontext()
     app.state.answer_export_service = AnswerExportService(settings=settings, session_store=store)
-    app.include_router(router)
     with TestClient(app) as client:
         yield client, store, session, answer_id, original, tmp_path
     store.close_all()
@@ -288,9 +288,9 @@ def test_natural_language_failure_direct_retry_and_natural_repeat_share_one_file
     assert manager.session.pending_action is not None
     store = InMemorySessionStore(settings=manager.settings, agent_factory=lambda: manager)
     store.get_or_create("flow-session")
-    app = FastAPI()
+    app = create_app()
+    app.router.lifespan_context = lambda _app: nullcontext()
     app.state.answer_export_service = AnswerExportService(settings=manager.settings, session_store=store)
-    app.include_router(router)
     with TestClient(app) as client:
         direct = client.post(f"/sessions/flow-session/answers/{failed['answer_id']}/save").json()
         assert direct["status"] == "completed"
@@ -378,9 +378,9 @@ def test_compose_save_recovery_keeps_binding_across_direct_and_natural_exports(t
     assert original_operation["target_kind"] == "compose"
     store = InMemorySessionStore(settings=manager.settings, agent_factory=lambda: manager)
     store.get_or_create("compose-session")
-    app = FastAPI()
+    app = create_app()
+    app.router.lifespan_context = lambda _app: nullcontext()
     app.state.answer_export_service = AnswerExportService(settings=manager.settings, session_store=store)
-    app.include_router(router)
     with TestClient(app) as client:
         url = f"/sessions/compose-session/answers/{failed['answer_id']}/save"
         for _ in range(2):

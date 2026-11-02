@@ -3,7 +3,8 @@ from __future__ import annotations
 
 from uuid import NAMESPACE_URL, uuid5
 
-from src.core.answer_schema import AnswerResponse, export_answer_text, finalize_answer, text_document
+from src.core.answer_schema import AnswerResponse, finalize_answer, text_document
+from src.core.answer_schema.rendering import render_answer_text
 from src.core.decisions import decision_fingerprint
 from src.core.request_contracts import BoundInputText, RequestContract, check_answer_contract
 from src.core.save_contract import SaveOperation
@@ -43,10 +44,10 @@ def exact_copy_ready(contract: RequestContract | None, source: AnswerResponse | 
 
 def build_answer_export_operation(response: AnswerResponse, *, session_id: str) -> SaveOperation:
     snapshot = answer_export_snapshot(response)
-    fingerprint = answer_export_key(snapshot)
+    fingerprint = _snapshot_export_key(snapshot)
     operation_id = uuid5(NAMESPACE_URL, f"answer-export:{session_id}:{fingerprint}").hex
     return SaveOperation.for_text(
-        export_answer_text(snapshot, include_sources=True), operation_id=operation_id,
+        render_answer_text(snapshot, include_sources=True), operation_id=operation_id,
         session_id=session_id, request_id=f"answer-export:{fingerprint}", contract_revision=1,
         target_kind="copy_answer", source_hash=snapshot.content_hash, answer_hash=snapshot.content_hash,
     )
@@ -54,7 +55,10 @@ def build_answer_export_operation(response: AnswerResponse, *, session_id: str) 
 
 def answer_export_key(response: AnswerResponse) -> str:
     """Identify the checked export independently of its latest semantic report."""
-    snapshot = answer_export_snapshot(response)
+    return _snapshot_export_key(answer_export_snapshot(response))
+
+
+def _snapshot_export_key(snapshot: AnswerResponse) -> str:
     # Reports stay in displayed snapshots. Rechecking an unchanged body and
     # cited sources must not create a new obligation for the same export bytes.
     return decision_fingerprint(snapshot.model_dump(mode="json", exclude={"semantic_validation"}))

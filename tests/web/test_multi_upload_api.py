@@ -181,6 +181,47 @@ def answer(api, **kwargs):
     return AnswerResponse.model_validate(final["response"])
 
 
+def test_http_session_boundary_preserves_case_identity_and_rejects_invalid_ids(api):
+    current = manifest(api, "SESSION-A")
+
+    assert manifest(api, "session-a") == current
+    result = final_response(api, session_id="Session-A", uploads=context(current))
+    assert result["status"] == "completed"
+    assert result["upload_manifest"] == current
+    assert api.client.get("/sessions/invalid.id/uploads").status_code == 422
+    rejected = api.client.post("/agent/stream", json={
+        "query": "Hello", "session_id": "invalid.id", "uploads": context(current),
+    })
+    assert rejected.status_code == 422
+    assert manifest(api) == current
+
+
+@pytest.mark.parametrize("transport", ["path", "browser"])
+@pytest.mark.parametrize("conflict", ["duplicate_replacement", "replace_and_remove"])
+def test_sync_rejects_conflicting_operations_without_changing_attachments(api, transport, conflict):
+    current = sync(api, add=[staged(api, "alpha.py", "alpha = 1\n")])
+    target = current["files"][0]["file_id"]
+    replacement = (browser_addition(browser_stage(api, "alpha.py", b"alpha = 2\n"))
+                   if transport == "browser" else staged(api, "alpha.py", "alpha = 2\n"))
+    replacement["replace_file_id"] = target
+    additions = [replacement, replacement] if conflict == "duplicate_replacement" else [replacement]
+    removals = [target] if conflict == "replace_and_remove" else []
+
+    response = api.client.post("/sessions/session-a/uploads/sync", json=sync_body(
+        current, add=additions, remove=removals,
+    ))
+
+    assert response.status_code == 422
+    error = next(item for item in response.json()["detail"]
+                 if "a file cannot be replaced or removed twice" in item["msg"])
+    assert error["type"] == "value_error"
+    if transport == "browser":
+        assert error["loc"] == []
+    else:
+        assert error["loc"][0] == "body"
+    assert manifest(api) == current
+
+
 @pytest.mark.parametrize(("api", "expected_metric"), [
     ("baseline", "l2"), ("bm25", "bm25"), ("hybrid", "rrf"),
 ], indirect=["api"])

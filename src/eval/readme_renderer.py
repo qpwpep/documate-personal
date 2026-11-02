@@ -56,7 +56,6 @@ def build_history_readme_block(
     output_root: Path,
     svg_path: Path,
 ) -> str:
-    summary = RunSummary.model_validate(latest.summary.model_dump(mode="json"))
     current_suite_label = suite_label(latest.summary.fixtures_path)
     previous = comparable_runs[-2] if len(comparable_runs) > 1 else None
     passed_gates, failed_gates = _gate_lists(latest.summary)
@@ -72,7 +71,7 @@ def build_history_readme_block(
         f"로컬 benchmark 실행은 `{local_pointer_path}`를 최신 `{track}` run 포인터로 갱신합니다."
     )
     lines.append("")
-    decision = summary.release_decision
+    decision = latest.summary.release_decision
     if track == "smoke" or (decision is not None and decision.scope == "diagnostic"):
         lines.append("이 런은 진단용이며 release 자격 판정이 아닙니다.")
     else:

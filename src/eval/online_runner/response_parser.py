@@ -10,7 +10,7 @@ from src.core.contracts.boundary.planner import parse_planner_diagnostic
 from src.core.contracts.boundary.retrieval import normalize_retrieval_diagnostic_observation
 from src.core.contracts.debug import DEBUG_CRITICAL_FIELDS, DEBUG_REQUIRED_FIELDS, DEBUG_SCHEMA_VERSION
 from src.core.contracts.debug import PlannerDiagnostic, RetrievalDiagnostic
-from src.core.contracts.outcome import TurnResult
+from src.core.contracts.outcome import AgentCallResult, TurnResult
 from src.core.contracts.usage import LLMCallRecord
 from src.core.contracts.provenance import AnswerProvenance
 from src.core.contracts.routing import RoutingDecision, validate_route_decisions
@@ -183,7 +183,7 @@ def parse_agent_response(
     *,
     http_status: int = 200,
     request_id: str | None = None,
-    validated_response: AnswerResponse | None = None,
+    validated_result: AgentCallResult | None = None,
     expected_partial_problem: str | None = None,
 ) -> ParsedResponseData:
     """Parse the complete data object from an SSE final_response event."""
@@ -203,13 +203,13 @@ def parse_agent_response(
     ) or _extract_request_id(parsed.response_trace)
 
     response_raw = body.get("response")
-    outcome_payload = {name: body[name] for name in TurnResult.model_fields if name in body}
-    if isinstance(response_raw, dict) and validated_response is not None:
-        outcome_payload["response"] = validated_response
-    try:
-        parsed.turn_result = TurnResult.model_validate(outcome_payload)
-    except (TypeError, ValueError) as exc:
-        parsed.response_errors.append(f"turn result invalid: {exc}")
+    parsed.turn_result = validated_result
+    if parsed.turn_result is None:
+        outcome_payload = {name: body[name] for name in TurnResult.model_fields if name in body}
+        try:
+            parsed.turn_result = TurnResult.model_validate(outcome_payload)
+        except (TypeError, ValueError) as exc:
+            parsed.response_errors.append(f"turn result invalid: {exc}")
     if parsed.turn_result is not None:
         outcome = parsed.turn_result
         parsed.response = outcome.response

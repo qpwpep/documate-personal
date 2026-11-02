@@ -2,16 +2,16 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 
-from fastapi import FastAPI
 from fastapi.testclient import TestClient
 import pytest
 
 from src.app.agent_manager import AgentFlowManager
 from src.app.answer_exports import AnswerExportService
-from src.app.web.routes import router
+from src.app.web.app import create_app
 from src.app.web.session_store import InMemorySessionStore, SessionUnavailable
 from src.app.web.upload_service import UploadService
 from src.core.answer_schema import finalize_answer, text_document
@@ -132,10 +132,10 @@ def test_manifest_refresh_cannot_revive_expired_answer_history(
     monkeypatch: pytest.MonkeyPatch, first_access: str,
 ) -> None:
     monkeypatch.setattr("src.infra.runtime_paths.get_project_root_path", lambda: tmp_path)
-    app = FastAPI()
+    app = create_app()
+    app.router.lifespan_context = lambda _app: nullcontext()
     app.state.upload_service = UploadService(settings=store.settings, session_store=store)
     app.state.answer_export_service = AnswerExportService(settings=store.settings, session_store=store)
-    app.include_router(router)
 
     with TestClient(app) as client:
         manifest_url = "/sessions/session-a/uploads"

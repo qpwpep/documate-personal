@@ -8,6 +8,7 @@ from typing import Any
 
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+from nbformat import NotebookNode
 
 from src.core.documents import DocumentElement, ParsedDocument, SourceAnchor, build_snapshot
 from src.core.evidence import EvidenceRef, build_evidence
@@ -104,7 +105,7 @@ def chunk_python_text(
 def chunk_notebook(
     *,
     path: str,
-    notebook: Any,
+    notebook: NotebookNode,
     chunk_size: int,
     chunk_overlap: int,
     source_content: bytes | str | None = None,
@@ -123,7 +124,7 @@ def chunk_notebook(
         source = normalize_cell_source(cell.get("source"))
         if not source.strip():
             continue
-        native_id = str(cell.get("id") or "").strip() or f"cell-{cell_index}"
+        native_id = cell["id"]
         is_code = cell.get("cell_type") == "code"
         elements.append(DocumentElement(
             element_id=f"cell-{native_id}", kind="code" if is_code else "paragraph",

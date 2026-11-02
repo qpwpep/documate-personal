@@ -163,15 +163,9 @@ def _apply_requested_copy_layout(body, body_request, answer, runtime):
 
 def _merge_pending(proposal: WireRequestContract, pending, *, current_turn_id: str, current_utterance: str):
     original = pending.contract
-    evidence = {item.id: item for item in original.evidence}
-    current_ids = set()
-    for item in proposal.evidence:
-        previous = evidence.get(item.id)
-        if previous is not None and previous != item:
-            raise ValueError("pending evidence identity cannot be reassigned")
-        if previous is None and item.turn_id == current_turn_id:
-            current_ids.add(item.id)
-        evidence[item.id] = item
+    # The proposal's IDs were bound to a new revision before this merge.
+    evidence = {item.id: item for item in (*original.evidence, *proposal.evidence)}
+    current_ids = {item.id for item in proposal.evidence if item.turn_id == current_turn_id}
 
     actions = {}
     updated_intent_slots = set()

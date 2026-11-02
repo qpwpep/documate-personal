@@ -180,10 +180,6 @@ def _render_analysis(lines: list[str], summary: RunSummary) -> None:
 
 def build_markdown_report(summary: RunSummary, results: list[CaseResult]) -> str:
     """Render current decisions and their validated observation evidence."""
-    from ..decisions import validate_run_outputs
-
-    summary = RunSummary.model_validate(summary.model_dump(mode="json"))
-    validate_run_outputs(summary, results)
     lines: list[str] = []
     lines.append(f"# Benchmark Report ({summary.run_id})")
     lines.append("")

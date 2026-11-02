@@ -77,9 +77,8 @@ class ConversionCache:
             pass
 
     def get(self, file: UploadRecord, raw: bytes, parser_config: dict) -> ParsedDocument | None:
+        """Read a conversion using source bytes already verified by the ingestion boundary."""
         if not self.max_bytes or not self.ttl_seconds:
-            return None
-        if "sha256:" + hashlib.sha256(raw).hexdigest() != file.content_hash:
             return None
         target = None
         try:

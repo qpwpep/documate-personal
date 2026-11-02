@@ -27,8 +27,6 @@ def build_slack_notify_tool(token: str | None) -> Callable[..., SlackDelivery]:
     slack_client = create_slack_client(token)
 
     def slack_notify(*, text: str, delivery: SlackDelivery) -> SlackDelivery:
-        # Validate even for internal direct callers before touching Slack.
-        delivery = SlackDelivery.model_validate(delivery.model_dump(mode="json"))
         if delivery.status in {"sent", "unknown"}:
             return delivery
         if delivery.selection is None:

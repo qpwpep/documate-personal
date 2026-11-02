@@ -5,7 +5,7 @@ from collections.abc import Iterator
 from typing import Any, Literal, Protocol
 from uuid import uuid4
 
-from src.core.contracts.boundary.graph import build_graph_state_input, normalize_graph_update
+from src.core.contracts.boundary.graph import build_graph_state_input
 from src.core.latency import elapsed_ms
 from src.runtime.agent_runtime.session_context import SessionContext
 
@@ -38,7 +38,7 @@ class ExecutionRunner:
         """Read committed session state while the application holds its request lock."""
         conversation = self.session.snapshot_conversation_memory()
         handle = self.session.upload_retriever_handle
-        state = build_graph_state_input(
+        return build_graph_state_input(
             session_id=self.session.session_id,
             user_input=user_input,
             current_turn_id=f"user:{uuid4().hex}",
@@ -55,7 +55,6 @@ class ExecutionRunner:
                             if self.session.pending_action is not None else None),
             answer_export_operations=dict(self.session.answer_export_operations),
         )
-        return normalize_graph_update(state)
 
     def invoke_graph(self, state: dict[str, Any]) -> tuple[dict[str, Any], int]:
         graph_started = time.perf_counter()

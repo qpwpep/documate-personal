@@ -179,7 +179,9 @@ class CachedEmbeddings(Embeddings):
             payload = self._read(path)
             if payload["namespace"] != self._namespace:
                 raise ValueError("Embedding cache namespace mismatch")
-            vector = _vector(payload["vector"], dimensions)
+            vector = payload["vector"]
+            if dimensions is not None and len(vector) != dimensions:
+                raise ValueError("Cached embedding dimensions differ from the current batch")
         except _CACHE_ERRORS:
             self._remove(path)
             return None

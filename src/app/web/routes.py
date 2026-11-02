@@ -4,7 +4,6 @@ import json
 import logging
 import re
 from urllib.parse import quote
-from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException, Request, UploadFile
 from fastapi.responses import Response, StreamingResponse
@@ -89,7 +88,7 @@ def sync_upload_manifest(
                 clear=request_data.clear,
             )
         except ValidationError as exc:
-            raise HTTPException(status_code=422, detail=exc.errors(include_context=False)) from exc
+            raise HTTPException(status_code=422, detail=exc.errors(include_context=False, include_input=False)) from exc
     return request.app.state.upload_service.sync(session_id, request_data, discard_staging=browser_upload)
 
 
@@ -107,7 +106,7 @@ router.add_api_route(
 
 @router.post("/sessions/{session_id}/answers/{answer_id}/save", response_model=AnswerExportResult)
 def save_answer(session_id: str, answer_id: str, request: Request):
-    request_id = str(getattr(request.state, "request_id", None) or uuid4().hex)[:8]
+    request_id = request.state.request_id[:8]
     return request.app.state.answer_export_service.save(_upload_session_id(session_id), answer_id, request_id=request_id)
 
 

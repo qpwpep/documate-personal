@@ -1,13 +1,13 @@
 """Saved answer exports retain their original identity across new copy requests."""
+from contextlib import nullcontext
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from fastapi import FastAPI
 from fastapi.testclient import TestClient
 import pytest
 
 from src.app.answer_exports import AnswerExportService
-from src.app.web.routes import router
+from src.app.web.app import create_app
 from src.app.web.session_store import InMemorySessionStore
 from src.core.answer_schema import AnswerResponse, export_answer_text
 from src.core.contracts.provenance import AnswerProvenance
@@ -33,9 +33,9 @@ def saved_answer_flow(tmp_path, monkeypatch, request):
     ))
     store = InMemorySessionStore(settings=manager.settings, agent_factory=lambda: manager)
     store.get_or_create("save-eval-session")
-    app = FastAPI()
+    app = create_app()
+    app.router.lifespan_context = lambda _app: nullcontext()
     app.state.answer_export_service = AnswerExportService(settings=manager.settings, session_store=store)
-    app.include_router(router)
     with TestClient(app) as client:
         # Replace only the network boundary; downloads still validate real manifests and bytes.
         monkeypatch.setattr("src.eval.save_outcomes.requests.get",

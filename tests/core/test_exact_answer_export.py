@@ -1,10 +1,13 @@
 """An explicit export preserves the displayed answer instead of regenerating it."""
 import json
+from functools import partial
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
-from src.core.answer_schema import ResponseIssue, export_answer_text, text_document
+from src.core.answer_export import answer_export_key, answer_export_snapshot, build_answer_export_operation
+from src.core.answer_schema import ResponseIssue, export_answer_text, finalize_answer, text_document
 from src.core.contracts import GraphState
 from src.core.contracts.boundary.graph import build_graph_state_input
 from src.core.conversation_memory import ConversationMemoryPolicy
@@ -75,6 +78,29 @@ def checked_source():
     state = _state()
     result = make_post_synthesis_validation_node(False, decisions_client=make_decisions_client())(state)["response"].result
     return result.model_copy(update={"issues": [ResponseIssue(code="source_limit", message="추가 입력의 결과는 확인하지 않았습니다.")]})
+
+
+@pytest.mark.parametrize("export", [
+    answer_export_snapshot, answer_export_key, export_answer_text,
+    partial(build_answer_export_operation, session_id="exact-export-session"),
+])
+def test_export_boundaries_reject_body_changed_after_validation(export):
+    source = finalize_answer(text_document("검증한 본문"), [])
+    source.content = text_document("검증 후 바뀐 본문")
+
+    with pytest.raises(ValidationError, match="content changed"):
+        export(source)
+
+
+def test_export_operation_preserves_literal_body_and_limit_bytes():
+    source = finalize_answer(text_document("첫 문장입니다.\n둘째 문장입니다."), [], issues=[
+        ResponseIssue(code="source_limit", message="첨부된 자료만 확인했습니다."),
+    ])
+
+    operation = build_answer_export_operation(source, session_id="exact-export-session")
+
+    expected = "첫 문장입니다.\n둘째 문장입니다.\n\n참고 및 제한\n- 첨부된 자료만 확인했습니다."
+    assert operation.matches_bytes(expected.encode("utf-8-sig"))
 
 
 def test_export_preserves_checked_body_sources_limits_and_semantic_report(tmp_path, monkeypatch):

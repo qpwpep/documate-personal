@@ -8,10 +8,12 @@ from src.core.contracts.graph_state import PendingAction, RuntimeState, SessionM
 from src.core.request_contracts import RequestContract, UserTurnSnapshot
 
 
-def parse_session_metadata(value: Any) -> SessionMetadata:
+def parse_session_metadata(value: object) -> SessionMetadata:
+    if isinstance(value, SessionMetadata):
+        return value
     if value is None:
         return SessionMetadata()
-    return SessionMetadata.model_validate(value.model_dump() if isinstance(value, SessionMetadata) else value)
+    return SessionMetadata.model_validate(value)
 
 
 def parse_request_contract(value: Any) -> RequestContract | None:
