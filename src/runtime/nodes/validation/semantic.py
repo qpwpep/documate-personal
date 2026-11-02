@@ -20,6 +20,7 @@ from src.core.python_source import PythonSourceMap
 from src.core.planner_schema import RetrievalTask
 from src.infra.tools.docs_search.policy import is_current_stable_doc_url
 from src.runtime.nodes.validation.models import ValidationAssessment, ValidationSnapshot
+from src.runtime.source_scope import documentation_declaration_scope
 from src.runtime.nodes.validation.policy import retrieval_gap_message
 
 
@@ -49,6 +50,28 @@ API_USAGE_SCOPE_INSTRUCTIONS = API_USAGE_COVERAGE_INSTRUCTIONS + (
 )
 
 
+API_AVAILABILITY_INSTRUCTIONS = (
+    "A question whether a callable accepts a proposed keyword can have a supported negative answer. "
+    "A complete official declaration for that exact callable and requested version can establish its "
+    "accepted arguments: a keyword absent from a closed parameter list is not accepted. Positional "
+    "*args does not accept arbitrary keywords. This is positive evidence from the declaration, not "
+    "absence inferred from failed retrieval. Do not demand a positive parameter description or a "
+    "literal occurrence of the proposed keyword to support that negative answer, even if parameter "
+    "or aspect hints name it. Do not infer non-support from a clipped declaration, an example call, "
+    "an unrelated API, a different version, or missing search results. A declaration with **kwargs, "
+    "ellipsis or another open-ended keyword interface cannot alone establish which keywords are "
+    "unsupported. Apply this distinction to availability questions, not ordinary requests to explain "
+    "the behavior of a supported setting. It does not waive a separately requested literal quotation "
+    "or concrete usage example. "
+    "For selection_scope.kind=documentation_declarations, fully_selected identifies whether the entire "
+    "official declaration is visible. keyword_parameters and accepts_arbitrary_keywords, when present, "
+    "are parsed from that selected declaration using Python argument syntax; positional-only arguments "
+    "are not keyword parameters. They describe calling syntax, not behavior or external facts. "
+    "selection_scope.api_owners gives parser-confirmed API owners and original section boundaries for selected text; "
+    "it does not expand the excerpt or establish API relationships, argument acceptance, or behavior for another API. "
+)
+
+
 EVIDENCE_SUFFICIENCY_INSTRUCTIONS = API_USAGE_SCOPE_INSTRUCTIONS + (
     "Do this requirement's provided source excerpts together contain sufficient relevant and mutually "
     "consistent evidence to satisfy its actual subject, version, requested aspects and source scope? "
@@ -72,8 +95,8 @@ EVIDENCE_SUFFICIENCY_INSTRUCTIONS = API_USAGE_SCOPE_INSTRUCTIONS + (
     "excerpts support the callable and arguments it uses. When no version is specified, versioned "
     "official documentation may support a version-scoped explanation. Different versions need not "
     "have identical defaults, but conflicting claims must be distinguishable by version rather than "
-    "combined as universal facts. Explicitly documented absence or limitations can support a faithful "
-    "answer explaining that absence; missing selected evidence alone cannot establish absence from "
+    "combined as universal facts. Documented limitations or a complete declaration that establishes "
+    "non-support can support a faithful negative answer; missing selected evidence alone cannot establish absence from "
     "the original source. For a definition request, a fully selected requested definition is sufficient "
     "even if unrelated file content is unselected; a clipped definition is insufficient. "
     "Return false for missing necessary evidence."
@@ -119,7 +142,7 @@ EVALUATION_POLICY = (
     "require the answer to disclose that freshness limit rather than certify the cached text as current. "
     "Do not accept archived or development documentation as latest stable; any fallback must state its version and limits. "
     "Explicitly requested versions take precedence over this default. "
-)
+) + API_AVAILABILITY_INSTRUCTIONS
 
 
 def _predicate_instructions(questions: list[dict[str, str]]) -> list[dict[str, str]]:
@@ -161,6 +184,7 @@ def _python_definition_scope(evidence: EvidenceRef) -> dict[str, Any] | None:
     return {"kind": "python_definitions", "definitions": definitions} if definitions else None
 
 
+
 def _source(evidence: EvidenceRef) -> dict[str, Any]:
     source = {
         "id": evidence.id, "route": evidence.route,
@@ -183,7 +207,7 @@ def _source(evidence: EvidenceRef) -> dict[str, Any]:
         "source_locations": [anchor.model_dump(mode="json") for anchor in selected_source_anchors(evidence)],
         "source_lines": source_line_prompt_records(evidence),
     }
-    scope = _python_definition_scope(evidence)
+    scope = _python_definition_scope(evidence) or documentation_declaration_scope(evidence)
     if scope is not None:
         source["selection_scope"] = scope
     if evidence.element.table is not None and evidence.selection.cell_ids:
@@ -264,7 +288,7 @@ def _post_predicate_instructions(questions: list[dict[str, str]]) -> list[dict[s
         "require the answer to disclose that freshness limit rather than certify the cached text as current. "
         "Do not accept archived or development documentation as latest stable; any fallback must state its version and limits. "
         "Explicitly requested versions take precedence over this default. "
-        + question["instructions"]
+        + API_AVAILABILITY_INSTRUCTIONS + question["instructions"]
     )} for question in questions]
 
 
@@ -381,7 +405,12 @@ def assess_post_semantics(
                 "For source/excerpt claims require those cited excerpts to support every material claim. "
                 "For source units, accept faithful translations and paraphrases; omitting unrelated details "
                 "is not an error unless the omission changes the stated meaning. "
-                "For inference require a justified deduction with uncertainty stated where needed. "
+                "For inference require a deduction from facts established by these cited excerpts, with "
+                "uncertainty stated where needed. The inference label cannot introduce externally known "
+                "API behavior, a specific exception class, return guarantees or copy/view conditions that "
+                "the cited excerpts do not establish. A general validation rule does not establish the "
+                "name of its failure exception. Source titles, related APIs and correct-looking results "
+                "cannot fill a missing premise. Check every material detail, not just the overall topic. "
                 "Do not borrow another unit's sources or accept a valid citation identifier as proof. "
                 "The bound prior answer is a transformation target, not a substitute for this unit's cited_sources. "
                 "For interaction text, headings and labels, allow neutral presentation or conversation "
@@ -405,6 +434,23 @@ def assess_post_semantics(
                 "must be labeled appropriately and consistent with cited API behavior when they use it. "
                 "For requested creative composition or transformation of bound user text with no retrieval "
                 "requirement, judge faithfulness to that input and request; external citations are unnecessary."
+            ),
+        })
+    citation_units = {index: unit_id for index, (unit_id, unit) in enumerate(grounded_units)
+                      if len(unit.refs) > 1}
+    for index in citation_units:
+        questions.append({
+            "type": "predicate", "name": f"citations_{index}",
+            "instructions": (
+                f"Evaluate only unit grounded_{index} and each of its own cited_sources. "
+                "Does every cited excerpt contribute evidence for at least one material statement or "
+                "necessary API relationship in this unit? Complementary excerpts may support different "
+                "parts; no one excerpt must prove the whole unit. A source that only discusses another "
+                "option or repeats the API name without supporting any stated fact is an irrelevant "
+                "citation, even if the remaining sources fully support the answer. Reject the citation "
+                "set if any member is unrelated. Judge actual selected content, not titles or the "
+                "uncited remainder of a document. This checks citation relevance; it does not replace "
+                "the separate grounding check of every claim."
             ),
         })
     context = _post_context(snapshot)
@@ -616,6 +662,18 @@ def assess_post_semantics(
         if probability is None or probability < threshold:
             assessment.invalid_unit_paths.add(unit_id)
             assessment.valid_unit_paths.discard(unit_id)
+    for index, unit_id in citation_units.items():
+        name = f"citations_{index}"
+        refused = name in refused_names
+        probability = None if refused else probabilities[name]
+        checks.append(SemanticCheck(
+            name="citation_relevance", status="refused" if refused else "evaluated",
+            probability=probability, unit_id=unit_id,
+        ))
+        if probability is None or probability < threshold:
+            assessment.invalid_unit_paths.add(unit_id)
+            assessment.valid_unit_paths.discard(unit_id)
+            assessment.missing_content.append(f"semantic_citation_relevance:{unit_id}")
     refused = "request_fulfilled" in refused_names
     fulfilled = None if refused else probabilities["request_fulfilled"]
     checks.append(SemanticCheck(

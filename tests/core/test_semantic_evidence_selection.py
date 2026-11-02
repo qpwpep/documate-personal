@@ -85,6 +85,40 @@ def test_extra_context_preserves_ranked_example_over_shorter_redundant_signature
     assert_ranges(packet, originals, budget)
 
 
+@pytest.mark.parametrize("detail_label", ["need:explanation", "aspect:enabled"])
+def test_requested_detail_precedes_relevance_only_context_after_label_coverage(detail_label):
+    recording = RetrievalTask(requirement_id="recording", route="docs", query="recording behavior", k=4,
+        requirement={"library": "Python", "symbols": ["recorder.disabled"],
+                     "aspects": ["enabled"] if detail_label == "aspect:enabled" else [],
+                     "evidence_needs": ["explanation"] if detail_label == "need:explanation" else []})
+    processing = RetrievalTask(requirement_id="processing", route="docs", query="processing mode", k=4,
+        requirement={"library": "Python", "symbols": ["processor.configure"], "evidence_needs": ["explanation"]})
+    incidental = source("The initialization example calls recorder.disabled() before creating a processor.", "initialization")
+    summary = source("Disable recording while preparing inputs.", "recording-note")
+    processing_detail = source("Processing mode changes how records are processed and does not control recording.", "processing")
+    recording_detail = source(
+        "Disabled recording prevents new operations from being stored. Existing recorded operations remain available, "
+        "and creating a processor with an explicit enabled setting is unaffected by this context.", "recording")
+    originals = [incidental, summary, processing_detail, recording_detail]
+    budget = RetrievedEvidenceBudget(300,
+        len(summary.excerpt + processing_detail.excerpt + recording_detail.excerpt), 4)
+
+    # A broad label can already be covered by a short note. The approved
+    # explanation still takes priority over an earlier incidental API example.
+    packet, ids = select_evidence_packet(originals, budget=budget,
+        requirements_by_evidence={incidental.id: [recording], summary.id: [recording],
+                                  processing_detail.id: [processing], recording_detail.id: [recording]},
+        semantic_support={incidental.id: {recording.requirement_id: {"relevance"}},
+                          summary.id: {recording.requirement_id: {"relevance", detail_label}},
+                          processing_detail.id: {processing.requirement_id: {"relevance", "need:explanation"}},
+                          recording_detail.id: {recording.requirement_id: {"relevance", detail_label}}})
+
+    assert {item.id for item in packet} == {summary.id, processing_detail.id, recording_detail.id}
+    assert ids[recording_detail.id] == [recording.requirement_id]
+    assert ids[processing_detail.id] == [processing.requirement_id]
+    assert_ranges(packet, originals, budget)
+
+
 def test_same_document_usage_flow_precedes_overlapping_late_notes():
     entry = RetrievalTask(requirement_id="cache-usage", route="docs", query="memoize usage", k=4,
         requirement={"library": "Python", "symbols": ["memoize"], "match": "symbol",
@@ -283,6 +317,108 @@ def test_small_generic_range_does_not_displace_deferred_complete_range():
     assert_ranges(packet, [generic, complete, small], budget)
 
 
+@pytest.mark.parametrize("excerpt_limit", [1800, 800])
+def test_approved_context_can_replace_a_shorter_parameter_range(excerpt_limit):
+    ravel = RetrievalTask(requirement_id="ravel-copy", route="docs", k=3,
+        query="numpy.ravel flattened array copy behavior",
+        requirement={"library": "numpy", "symbols": ["numpy.ravel"], "evidence_needs": ["explanation"]})
+    flatten = RetrievalTask(requirement_id="flatten-copy", route="docs", k=3,
+        query="numpy.ndarray.flatten copy behavior",
+        requirement={"library": "numpy", "symbols": ["numpy.ndarray.flatten"], "evidence_needs": ["explanation"]})
+    condition = "A copy is made only if needed."
+    parameter = "a: array_like\n\nInput array. The elements are packed as a flattened array.\n\n"
+    body = ("numpy.ravel#\n\nnumpy.ravel(a, order='C')[source]#\n\n"
+        "Return a contiguous flattened array.\n\n" + condition + "\n\nParameters:\n\n" + parameter
+        + "order: {'C', 'F', 'A', 'K'}, optional\n\n"
+        + "The array elements are read in the specified index order. " * 20 + "\n")
+    overview = source(body, "numpy.ravel", uri="https://numpy.org/doc/stable/reference/generated/numpy.ravel.html")
+    offset = body.index(parameter)
+    shorter = build_evidence(snapshot=overview.snapshot, element=overview.element,
+        start=offset, end=offset + len(parameter))
+    copy = source("numpy.ndarray.flatten#\n\nndarray.flatten(order='C')#\n\nReturn a copy of the array collapsed into one dimension.",
+        "numpy.ndarray.flatten", uri="https://numpy.org/doc/stable/reference/generated/numpy.ndarray.flatten.html")
+    budget = RetrievedEvidenceBudget(excerpt_limit, 3000, 8)
+
+    packet, ids = select_evidence_packet([overview, shorter, copy], budget=budget,
+        requirements_by_evidence={overview.id: [ravel], shorter.id: [ravel], copy.id: [flatten]},
+        semantic_support={overview.id: {ravel.requirement_id: {"relevance", "need:explanation"}},
+            shorter.id: {ravel.requirement_id: {"relevance", "need:explanation"}},
+            copy.id: {flatten.requirement_id: {"relevance", "need:explanation"}}})
+
+    assert any(condition in item.excerpt and ravel.requirement_id in ids[item.id] for item in packet)
+    assert any("Return a copy" in item.excerpt and flatten.requirement_id in ids[item.id] for item in packet)
+    assert_ranges(packet, [overview, copy], budget)
+
+
+@pytest.mark.parametrize("compact", [False, True])
+def test_exception_question_keeps_direct_answer_before_generic_introduction(compact):
+    entry = RetrievalTask(requirement_id="decode-error", route="docs", k=3,
+        query="What exception does codec.decode raise for invalid text?",
+        requirement={"library": "Python", "symbols": ["codec.decode"], "evidence_needs": ["explanation"]})
+    introduction = "codec.decode(data)¶\n\nDecode an encoded document into a Python object.\n\n"
+    error = "ParseError is raised when codec.decode receives invalid text."
+    body = (introduction + "Parameters:\n\ndata: str\n\n"
+        + "Text input passed to the codec parser. " * (24 if compact else 1)
+        + "\n\nRaises:\n\n" + error + "\n\nReturns:\n\nThe decoded object.\n")
+    original = source(body, "codec", uri="https://docs.python.org/3/library/codec.html", parser="official_html")
+    if compact:
+        candidates = [original]
+        budget = RetrievedEvidenceBudget(800, 3000, 8)
+    else:
+        candidates = [build_evidence(snapshot=original.snapshot, element=original.element, end=len(introduction)),
+            build_evidence(snapshot=original.snapshot, element=original.element,
+                start=body.index(error), end=body.index(error) + len(error))]
+        budget = RetrievedEvidenceBudget(600, 600, 1)
+
+    packet, _ = select_evidence_packet(candidates, query=entry.query, budget=budget,
+        requirements_by_evidence={item.id: [entry] for item in candidates},
+        semantic_support={item.id: {entry.requirement_id: {"relevance", "need:explanation"}} for item in candidates})
+
+    assert any(error in item.excerpt for item in packet)
+    assert_ranges(packet, [original], budget)
+
+
+def test_compact_api_range_uses_its_scoped_requirement_in_a_comparison():
+    entry = RetrievalTask(requirement_id="ravel-copy", route="docs", k=3,
+        query="numpy.ravel 복사 동작",
+        requirement={"library": "numpy", "symbols": ["numpy.ravel"], "evidence_needs": ["explanation"]})
+    condition = "A copy is made only if needed."
+    body = ("numpy.ravel(a, order='C')\n\nReturn a contiguous flattened array.\n\n" + condition
+        + "\n\nParameters:\n\norder: optional\n\n" + "Items follow the specified index order. " * 30
+        + "\n\nSee also:\n\nnumpy.ndarray.flatten\n\nReturn a copy of the input array in one dimension.\n")
+    original = source(body, "numpy.ravel", uri="https://numpy.org/doc/stable/reference/generated/numpy.ravel.html")
+    budget = RetrievedEvidenceBudget(800, 3000, 8)
+
+    packet, _ = select_evidence_packet([original], budget=budget,
+        query="numpy.ravel과 numpy.ndarray.flatten의 차이점과 복사 조건을 비교해줘.",
+        requirements_by_evidence={original.id: [entry]},
+        semantic_support={original.id: {entry.requirement_id: {"relevance", "need:explanation"}}})
+
+    assert any(condition in item.excerpt for item in packet)
+    assert_ranges(packet, [original], budget)
+
+
+@pytest.mark.parametrize("parent_supported_for_second", [False, True])
+def test_context_replacement_preserves_each_requirement_approval(parent_supported_for_second):
+    first, second = task("first"), task("second")
+    parent = source("First and second are supported.\n\nAdditional source context explains their behavior.\n")
+    child = build_evidence(snapshot=parent.snapshot, element=parent.element,
+        end=parent.element.text.index("\n\n"))
+    tasks = [first, second] if parent_supported_for_second else [first]
+    labels = {"relevance", "need:explanation"}
+    budget = RetrievedEvidenceBudget(200, 200, 1)
+
+    packet, ids = select_evidence_packet([child, parent], budget=budget,
+        requirements_by_evidence={child.id: [first, second], parent.id: tasks},
+        semantic_support={child.id: {first.requirement_id: labels, second.requirement_id: labels},
+            parent.id: {entry.requirement_id: labels for entry in tasks}})
+
+    selected = parent if parent_supported_for_second else child
+    assert [item.id for item in packet] == [selected.id]
+    assert set(ids[selected.id]) == {first.requirement_id, second.requirement_id}
+    assert_ranges(packet, [parent], budget)
+
+
 def test_saturated_source_pool_keeps_behavior_context_before_short_signatures():
     entry = RetrievalTask(requirement_id="lru-settings", route="docs",
         query="functools.lru_cache maxsize None typed True", k=6,
@@ -351,3 +487,101 @@ def test_same_owner_context_after_example_remains_in_the_first_candidate():
     assert "Path.write_text" not in candidates[0].evidence.excerpt
     assert candidates[0].evidence.selection.end <= len(target)
     assert all(contains_evidence_range(original, hit.evidence) for hit in candidates)
+
+
+def test_flattened_definition_after_doctest_keeps_requested_method_context():
+    entry = RetrievalTask(requirement_id="link-exists", route="docs",
+        query="Python pathlib.Path.exists follow_symlinks False", k=6,
+        requirement={"library": "Python", "symbols": ["pathlib.Path.exists"],
+                     "aspects": ["follow_symlinks", "False"],
+                     "evidence_needs": ["explanation", "parameters"], "match": "symbol"})
+    behavior = "This method normally follows symlinks; to check if a symlink exists, add the argument follow_symlinks=False."
+    target = (
+        "Path.exists(*, follow_symlinks=True)¶\n\n"
+        "Return True if the path points to an existing file or directory and False otherwise.\n\n"
+        + behavior + "\n\n>>> Path('missing').exists()\nFalse\n\n"
+        "Changed in version 3.12: The follow_symlinks parameter was added.\n\n"
+    )
+    neighbors = "".join(
+        f"Path.{name}(*, follow_symlinks=True)¶\n\n"
+        + "Return True only for this other kind of path, and False otherwise. " * 8
+        + "\n\nTo exclude symlinks, add follow_symlinks=False.\n\n"
+        for name in ["is_file", "is_dir", "is_socket"]
+    )
+    original = source(target + neighbors, name="pathlib",
+        uri="https://docs.python.org/3/library/pathlib.html", parser="official_html")
+
+    candidates = prepare([original], [entry], RetrievedEvidenceBudget(1800, 6000, 8))
+
+    assert behavior in candidates[0].evidence.excerpt
+    assert "Path.is_file" not in candidates[0].evidence.excerpt
+    assert candidates[0].evidence.selection.end <= len(target)
+    assert all(contains_evidence_range(original, hit.evidence) for hit in candidates)
+
+
+def test_document_primary_window_keeps_retrieval_rank_over_incidental_query_words():
+    from src.runtime.nodes.synthesis.evidence_selection import prepare_evidence_candidates
+
+    behavior = "Return False when no value exists."
+    target = "codec.decode(value)¶\n\n" + behavior + "\n\n"
+    neighbor = ("codec.resolve(value)¶\n\n"
+        + "codec.decode behavior when input is invalid whether it raises an exception. " * 22 + "\n\n")
+    body = target + neighbor * 5
+    entry = RetrievalTask(requirement_id="missing-value", route="docs",
+        query="codec.decode behavior when input is invalid whether it raises an exception", k=5,
+        requirement={"library": "Python", "symbols": ["codec.decode"], "evidence_needs": ["explanation"]})
+    hits = []
+    for locale in ("", "ko/", "uk/"):
+        original = source(body, name="codec", uri=f"https://docs.python.org/{locale}3/library/codec.html",
+            parser="official_html")
+        spans = [(0, len(target)), *[(len(target) + index * len(neighbor), len(target) + (index + 1) * len(neighbor))
+                                    for index in range(5)]]
+        hits.extend(SearchHit(evidence=build_evidence(snapshot=original.snapshot, element=original.element,
+                start=start, end=end), rank=index + 1, requirement_id=entry.requirement_id,
+                score={"metric": "test", "direction": "higher", "raw": 1.0})
+            for index, (start, end) in enumerate(spans))
+
+    candidates = prepare_evidence_candidates(user_input=entry.query, hits=hits,
+        planner_output=PlannerOutput(use_retrieval=True, tasks=[entry]),
+        budget=RetrievedEvidenceBudget(1000, 6000, 8))
+
+    assert len(candidates) <= 12
+    assert any(behavior in hit.evidence.excerpt for hit in candidates)
+
+
+def test_later_parameter_window_is_not_displaced_by_duplicate_primary_ranges():
+    from src.runtime.nodes.synthesis.evidence_selection import prepare_evidence_candidates
+
+    entry = RetrievalTask(requirement_id="encode-characters", route="docs",
+        query="codec.dumps ascii_only False character output", k=5,
+        requirement={"library": "Python", "symbols": ["codec.dumps"],
+            "aspects": ["ascii_only", "False"], "evidence_needs": ["parameters", "explanation"]})
+    behavior = "If ascii_only is False, characters are preserved except those requiring escaping."
+    blocks = ["codec.dumps(value, *, ascii_only=True, sort_keys=False)¶\n\n"
+        "Return encoded text. Parameters have the same meaning as codec.dump.\n\n"
+        + "Details of the following codec operation. " * 65 + "\n\n"]
+    blocks.extend(f"codec.helper_{index}(value)¶\n\n" + "Other operation details.\n\n" * 120
+                  for index in range(3))
+    blocks.append("codec.dump(value, *, ascii_only=True)¶\n\n" + behavior + "\n\n"
+        + "Additional parameter details.\n\n" * 100)
+    original = source("".join(blocks), name="codec", uri="https://docs.python.org/3/library/codec.html",
+        parser="official_html")
+    hits = []
+    offset = 0
+    for index, block in enumerate(blocks):
+        item = build_evidence(snapshot=original.snapshot, element=original.element, start=offset, end=offset + len(block))
+        hits.append(SearchHit(evidence=item, rank=index + 1, requirement_id=entry.requirement_id,
+            score={"metric": "test", "direction": "higher", "raw": 1.0}))
+        offset += len(block)
+    unrelated = source("Character encoding background.\n\n" * 100, name="unicode",
+        uri="https://docs.python.org/3/howto/unicode.html", parser="official_html")
+    hits.append(SearchHit(evidence=unrelated, rank=6, requirement_id=entry.requirement_id,
+        score={"metric": "test", "direction": "higher", "raw": 1.0}))
+
+    candidates = prepare_evidence_candidates(user_input=entry.query, hits=hits,
+        planner_output=PlannerOutput(use_retrieval=True, tasks=[entry]),
+        budget=RetrievedEvidenceBudget(1800, 6000, 8))
+
+    assert len(candidates) <= 12
+    assert any(behavior in hit.evidence.excerpt for hit in candidates)
+    assert any("Parameters have the same meaning as codec.dump." in hit.evidence.excerpt for hit in candidates)

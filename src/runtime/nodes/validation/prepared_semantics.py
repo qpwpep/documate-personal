@@ -55,7 +55,9 @@ SUPPORT_INSTRUCTIONS = (
     "Judge only the content actually present in the source's excerpt. Titles, URLs and headings may identify "
     "the subject but cannot supply missing content from the rest of the page. For signature, require "
     "actual declaration or call syntax, not just the API name. For parameters, require a named "
-    "argument's description. For examples, require concrete usage such as a call with supplied values, "
+    "argument's description when explaining its behavior; for a supported-argument question, a complete "
+    "matching declaration may instead establish that the proposed keyword is not accepted. "
+    "For examples, require concrete usage such as a call with supplied values, "
     "a worked input/output, or an illustrative scenario. A declaration with defaults, a parameter "
     "description, an Examples heading, or a link to examples elsewhere is not itself a usage example."
 )
@@ -306,7 +308,7 @@ def prepare_answer_evidence(
             }), "compact": None,
         })
     request_failure: Literal["model_refusal", "evidence_insufficient"] | None = None
-    if "request_ready" in assessment.semantic_refusals:
+    if assessment.request_readiness_failed and "request_ready" in assessment.semantic_refusals:
         request_failure = "model_refusal"
     elif assessment.request_readiness_failed and not assessment.failed_requirement_ids:
         request_failure = "evidence_insufficient"
@@ -445,13 +447,25 @@ def _assess_pre_semantics(
             if decisions.probabilities.get(name, -1) < threshold:
                 if task.requirement_id not in failed:
                     failed.append(task.requirement_id)
-            if mode == "normal" and task.requirement_id in failed:
-                assessment.failed_requirement_ids.add(task.requirement_id)
-                assessment.failed_routes.add(task.route)
         packets[mode] = packet.model_copy(update={"failed_requirement_ids": failed})
     normal, compact = packets["normal"], packets["compact"]
+    normal_usable = (not normal.failed_requirement_ids
+                     and decisions.probabilities.get("request_ready", -1) >= threshold)
     compact_usable = (not compact.failed_requirement_ids
                       and decisions.probabilities.get("compact_request_ready", -1) >= threshold)
+    readiness_name = "request_ready"
+    if not normal_usable and compact_usable:
+        # A smaller independently approved packet can be sufficient when the
+        # larger selection contains conflicting or distracting source ranges.
+        # Promote those exact checked ranges before synthesis and retry routing.
+        normal = compact
+        readiness_name = "compact_request_ready"
+        assessment.cache_observations.append({"phase": "packet_selection", "selected": "compact",
+            "normal_failed_requirement_ids": packets["normal"].failed_requirement_ids,
+            "normal_readiness_probability": decisions.probabilities.get("request_ready")})
+    assessment.failed_requirement_ids.update(normal.failed_requirement_ids)
+    assessment.failed_routes.update(task.route for task in snapshot.planner_output.tasks
+                                    if task.requirement_id in assessment.failed_requirement_ids)
     if not compact_usable:
         assessment.cache_observations.append({"phase": "compact", "usable": False,
             "failed_requirement_ids": compact.failed_requirement_ids,
@@ -471,7 +485,7 @@ def _assess_pre_semantics(
     )
     values = assessment.semantic_probabilities.values()
     assessment.score_avg = sum(values) / len(values) if values else None
-    assessment.request_readiness_failed = decisions.probabilities.get("request_ready", -1) < threshold
+    assessment.request_readiness_failed = decisions.probabilities.get(readiness_name, -1) < threshold
     if assessment.request_readiness_failed and not assessment.failed_requirement_ids:
         assessment.missing_content.append("request_readiness")
     if assessment.failed_requirement_ids:

@@ -13,8 +13,11 @@ from src.core.documents import DocumentElement, build_snapshot
 from src.core.evidence import RetrievalScore, SearchHit, build_evidence
 from src.core.planner_schema import PlannerOutput, RetrievalTask
 from src.core.request_contracts import RequestContract
+from src.runtime.nodes.synthesis import make_synthesize_node
 from src.runtime.nodes.validation import make_pre_synthesis_validation_node
+from tests.core.helpers import mock_chat_model
 from tests.core.test_decisions_validation import DecisionsBoundary, _evidence, _state, read_decision_input
+from tests.core.test_synthesis_budget_contract import PacketEchoModel
 from tests.synthesis_fixtures import synthesis_excerpt_limits
 
 
@@ -323,3 +326,84 @@ def test_untrusted_aspect_text_stays_in_input_and_never_becomes_evaluator_instru
     assert "tasks[entry.task_id].requirement.evidence_needs[1]" in instructions
     assert "tasks[entry.task_id].requirement.aspects[0]" in instructions
     assert "tasks[entry.task_id].requirement.aspects[1]" in instructions
+
+
+@pytest.fixture
+def distinct_packet_state():
+    state = _state()
+    hit = state["retrieval"].hit_log[0]
+    state["retrieval"] = RetrievalState(hit_log=[
+        hit.model_copy(update={"rank": index + 1, "evidence": _evidence(
+            f"Path.exists documentation passage {index}. "
+            + "Path.exists returns False for a missing path. " * 15,
+        )}) for index in range(8)
+    ])
+    return state
+
+
+@pytest.mark.parametrize("failed_check,refused_names", [
+    ("requirement_0", ()), ("request_ready", ()), ("request_ready", ("request_ready",)),
+])
+def test_fully_approved_compact_packet_replaces_insufficient_normal_input(
+    distinct_packet_state, failed_check, refused_names,
+):
+    state = distinct_packet_state
+    boundary = DecisionsBoundary({failed_check: 0.75}, refused_names=refused_names)
+
+    _validate(state, boundary)
+
+    prepared = state["retrieval"].prepared_evidence
+    assert prepared.compact is not None
+    assert prepared.normal == prepared.compact
+    assert prepared.normal.failed_requirement_ids == []
+    assert state["retry"].needs_retry is False
+    assert state["retry"].terminal_failed_requirement_ids == []
+    packet_input = read_decision_input(boundary.requests[-1]["input"])
+    evaluated = {packet["name"]: packet["sources"] for packet in packet_input["packets"]}
+    assert evaluated["request_ready"] != evaluated["compact_request_ready"]
+    assert [item.id for item in prepared.normal.evidence] == [
+        item["id"] for item in evaluated["compact_request_ready"]
+    ]
+
+    model = PacketEchoModel()
+    state.update(make_synthesize_node(mock_chat_model(model.invoke))(state))
+
+    assert [item["excerpt"] for item in model.packets[0]] == [item.excerpt for item in prepared.normal.evidence]
+    assert state["response"].evidence_packet == prepared.normal.evidence
+    assert state["response"].normal_evidence_missing_requirement_ids == []
+
+
+@pytest.mark.parametrize("failed_check", ["compact_requirement_0", "compact_request_ready"])
+def test_compact_packet_never_replaces_normal_without_all_semantic_checks(distinct_packet_state, failed_check):
+    state = distinct_packet_state
+
+    _validate(state, DecisionsBoundary({"requirement_0": 0.75, failed_check: 0.2}))
+
+    prepared = state["retrieval"].prepared_evidence
+    assert prepared.compact is None
+    assert prepared.normal.failed_requirement_ids == ["path_exists"]
+    assert state["retry"].needs_retry is True
+
+
+def test_unrelated_candidate_approval_cannot_bypass_packet_sufficiency():
+    state = _state()
+    task = state["planner"].output.tasks[0].model_copy(deep=True)
+    task.requirement.library = "numpy"
+    task.requirement.symbols = ["numpy.reshape"]
+    task.requirement.aspects = ["-1"]
+    task.requirement.evidence_needs = ["explanation"]
+    state["planner"] = PlannerState(output=PlannerOutput(use_retrieval=True, tasks=[task]))
+    hit = state["retrieval"].hit_log[0]
+    state["retrieval"] = RetrievalState(hit_log=[hit.model_copy(update={"evidence": _evidence(
+        "When reading untrusted data, consider enforcing a specific shape or dtype to reduce complexity.",
+        subject="NumPy security", source_uri="https://numpy.org/doc/2.2/reference/security.html",
+    )})])
+    boundary = DecisionsBoundary({"evidence_0": 0.94, "evidence_0_support_2": 0.99,
+                                  "requirement_0": 0.0, "request_ready": 0.02})
+
+    _validate(state, boundary)
+
+    assert state["retrieval"].evidence_verdicts[0].status == "passed"
+    assert state["retrieval"].prepared_evidence.normal.failed_requirement_ids == ["path_exists"]
+    assert state["retrieval"].prepared_evidence.compact is None
+    assert state["retry"].needs_retry is True
