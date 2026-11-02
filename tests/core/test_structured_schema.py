@@ -7,7 +7,7 @@ import jsonschema
 import pytest
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from src.core.planner_schema import PlannerOutput
+from src.core.planner_schema import InitialPlannerOutput
 from src.core.request_contracts import WireRequestContract
 from src.infra.structured_schema import SchemaCompilationError, compile_output_schema
 
@@ -40,20 +40,20 @@ def _wire_validator(model: type[BaseModel]) -> jsonschema.Draft202012Validator:
     {"kind": "extract", "instruction": "Show the source", "requirement_ids": ["req1"]},
 ])
 def test_planner_body_variants_keep_their_canonical_meaning(body):
-    plan = PlannerOutput(use_retrieval=False, tasks=[], request_contract=WireRequestContract(
+    plan = InitialPlannerOutput(use_retrieval=False, tasks=[], request_contract=WireRequestContract(
         slack_recipient={"state": "omitted"}, body=body,
     ))
     value = plan.model_dump(mode="json")
-    validator = _wire_validator(PlannerOutput)
+    validator = _wire_validator(InitialPlannerOutput)
     validator.validate(value)
-    assert PlannerOutput.model_validate(value) == plan
+    assert InitialPlannerOutput.model_validate(value) == plan
 
     malformed = deepcopy(value)
     malformed["request_contract"]["body"]["kind"] = "unknown"
     with pytest.raises(jsonschema.ValidationError):
         validator.validate(malformed)
     with pytest.raises(ValidationError):
-        PlannerOutput.model_validate(malformed)
+        InitialPlannerOutput.model_validate(malformed)
 
 
 def test_referenced_tagged_union_preserves_oneof_acceptance_when_lowered():

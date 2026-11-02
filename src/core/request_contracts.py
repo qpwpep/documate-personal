@@ -19,7 +19,6 @@ from src.core.request_bodies import (
     CopyAnswerBody, CopyInputBody, ExtractBody, InputTextReference, TransformAnswerBody,
     TransformInputBody, UnresolvedBody, UserTurnSnapshot, WireBodyPlan,
     WireCopyAnswerBody, WireCopyInputBody, WireTransformAnswerBody, WireTransformInputBody,
-    body_to_wire,
 )
 
 
@@ -261,12 +260,6 @@ class RequestContract(_RequestFacts):
         return self.failure is None and self.body.kind == "acknowledge" and not self.missing_info and not any(
             getattr(self.actions, kind).intent in {"requested", "unresolved"} for kind in ("save_text", "slack_notify")
         )
-
-    def to_wire(self) -> WireRequestContract:
-        return WireRequestContract.model_validate({
-            **self.model_dump(mode="python", exclude={"request_id", "revision", "body", "body_request", "failure"}),
-            "body": self.body_request or body_to_wire(self.body),
-        })
 
     @classmethod
     def invalid(cls, *, request_id: str | None = None, revision: int = 1) -> "RequestContract":

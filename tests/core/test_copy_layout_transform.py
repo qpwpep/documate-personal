@@ -85,7 +85,7 @@ def test_explicit_block_layout_changes_copy_operation_but_preserves_bound_input(
     assert contract.body.source.text == text
     assert contract.body.source.content_hash == sha256(text.encode("utf-8")).hexdigest()
     assert contract.body_request.kind == "transform_input"
-    assert contract.to_wire() == state["planner"].output.request_contract
+    assert contract.body_request.source.quote == text
     assert [(item.kind, item.mode) for item in contract.answer.content] == [
         ("example", "forbidden"), ("explanation", "forbidden"),
     ]
@@ -102,7 +102,7 @@ def test_explicit_block_layout_changes_answer_copy_without_rebinding_its_source(
     assert contract.body.source.ref == "previous"
     assert contract.body.source.response_hash == previous.content_hash
     assert contract.body_request.kind == "transform_answer"
-    assert contract.to_wire() == state["planner"].output.request_contract
+    assert contract.body_request.source.ref == "previous"
     assert state["runtime"].previous_response.content == previous.content
 
 

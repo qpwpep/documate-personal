@@ -88,7 +88,8 @@ def test_transform_repair_preserves_contract_and_delivers_only_the_repaired_body
     assert export_answer_text(answer) == expected
     assert result["response"].kind == "answer"
     assert result["response"].synthesis_attempt == 2
-    assert result["runtime"].request_contract.to_wire() == result["planner"].output.request_contract
+    assert result["response"].request_id == result["runtime"].request_contract.request_id
+    assert result["response"].contract_revision == result["runtime"].request_contract.revision
     assert result["runtime"].request_contract.actions.save_text.intent == save_intent
     files = list(tmp_path.glob("*.txt"))
     if save_intent == "requested":

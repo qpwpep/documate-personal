@@ -230,7 +230,7 @@ planner의 `PlannedDocsLibrary`는 지원 출처의 canonical ID와 `unsupported
 
 필요한 검색 출처는 업로드 가용성과 무관하게 LLM이 선택하고, 스키마 검증을 통과한 `PlannerOutput.tasks`를 기준으로 실행합니다. [planner 지침](../src/runtime/nodes/planner/prompt_builder.py)은 일반 기술 설명과 실제 파일 조회를 구분하고 출처 제외 지시를 반영합니다.
 
-최초 planner 출력에는 `request_contract`도 포함됩니다. 모델은 [`WireRequestContract`](../src/core/request_contracts.py)로 사용자 의도와 참조 선택자를 반환합니다. 서버는 최초 출력의 evidence에 대해 발화 ID와 원문 인용을 한 번 검증한 뒤 aspect의 출처를 확인합니다. 이어서 같은 발화 집합과 기존 답변·보류 상태를 사용해 [`RequestContract`](../src/core/request_contracts.py)를 확정하고 `RuntimeState.request_contract`에 고정합니다.
+최초 모델 출력인 `InitialPlannerOutput`에는 필수 `request_contract`가 포함됩니다. 모델은 [`WireRequestContract`](../src/core/request_contracts.py)로 사용자 의도와 참조 선택자를 반환합니다. 서버는 최초 출력의 evidence에 대해 발화 ID와 원문 인용을 한 번 검증한 뒤 aspect의 출처를 확인합니다. 이어서 같은 발화 집합과 기존 답변·보류 상태를 사용해 [`RequestContract`](../src/core/request_contracts.py)를 확정하고 `RuntimeState.request_contract`에 고정합니다. 내부 `PlannerOutput`에는 `use_retrieval`과 `tasks`만 보관하며, 검색 재시도·합성·전달은 `RuntimeState`의 확정 계약을 사용합니다.
 
 | 필드 | 의미 |
 | --- | --- |

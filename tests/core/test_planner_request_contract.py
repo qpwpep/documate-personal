@@ -7,21 +7,21 @@ from langchain_core.messages import HumanMessage
 from src.core.answer_schema import finalize_answer, text_document
 from src.core.contracts.boundary.graph import build_graph_state_input
 from src.core.contracts.graph_state import PendingAction
-from src.core.planner_schema import InitialPlannerOutput, PlannerOutput
+from src.core.planner_schema import InitialPlannerOutput, RetrievalRewrite, RetrievalRewriteOutput, RetrievalTask
 from src.core.llm_errors import LLMCallError
 from src.core.request_contracts import (
-    ActionContract, ActionRequest, ComposeBody, ContractEvidence, RequestContract,
+    ActionContract, ActionRequest, AnswerContract, ComposeBody, ContractEvidence, RequestContract,
     UserTurnSnapshot, WireRequestContract,
 )
 from src.core.slack_contract import OmittedRecipient
 from src.runtime.nodes.planner import make_planner_node
+from src.runtime.nodes.planner.request_resolution import pending_body_changed
 from tests.core.helpers import structured_model
 
 
 class PlannerResult:
     def __init__(self, result):
-        self.result = (InitialPlannerOutput.model_validate(result.model_dump(mode="json")).model_dump(mode="json")
-                       if isinstance(result, PlannerOutput) else result)
+        self.result = result.model_dump(mode="json") if isinstance(result, InitialPlannerOutput) else result
         self.calls = []
 
     def invoke(self, messages):
@@ -37,7 +37,7 @@ def state_for(query, **kwargs):
 
 
 def plan(query, contract, **kwargs):
-    model = PlannerResult(PlannerOutput(use_retrieval=False, tasks=[], request_contract=contract))
+    model = PlannerResult(InitialPlannerOutput(use_retrieval=False, tasks=[], request_contract=contract))
     state = state_for(query, **kwargs)
     result = make_planner_node(structured_model(model.invoke, InitialPlannerOutput), False)(state)
     return result, model

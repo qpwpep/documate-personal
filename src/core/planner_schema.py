@@ -183,13 +183,11 @@ class RetrievalRewriteOutput(BaseModel):
 
 
 class PlannerOutput(RetrievalPlanOutput):
-    """Internal plan with the server-preserved interpretation available to later nodes."""
-
-    request_contract: WireRequestContract | None = None
+    """Internal retrieval plan; RuntimeState owns the confirmed request contract."""
 
     @classmethod
-    def fallback(cls, request_contract: WireRequestContract | None = None) -> "PlannerOutput":
-        return cls(use_retrieval=False, tasks=[], request_contract=request_contract)
+    def fallback(cls) -> "PlannerOutput":
+        return cls(use_retrieval=False, tasks=[])
 
 
 class AspectReference(BaseModel):
@@ -202,7 +200,7 @@ class AspectReference(BaseModel):
     answer_quote: str = Field(min_length=1, description="Exact, minimal selected item from previous_answer_for_aspects containing this aspect. Never quote the whole answer or unselected items.")
 
 
-class InitialPlannerOutput(PlannerOutput):
+class InitialPlannerOutput(RetrievalPlanOutput):
     """Initial model output must include the request facts before any plan can execute."""
 
     request_contract: WireRequestContract = Field(description="Interpret the current user request once, with locally defined evidence and offered body references. Do not invent server identities, hashes or readiness.")

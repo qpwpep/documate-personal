@@ -122,7 +122,7 @@ class _ConsumerGraph:
         if callable(contract):
             contract = contract(state["runtime"])
         state["runtime"] = state["runtime"].model_copy(update={"request_contract": contract})
-        state["planner"] = PlannerState(output=PlannerOutput(use_retrieval=False, tasks=[], request_contract=contract.to_wire()))
+        state["planner"] = PlannerState(output=PlannerOutput(use_retrieval=False, tasks=[]))
         state["messages"] = [*state["messages"], HumanMessage(content=state["runtime"].user_input)]
         prepare_synthesis_state(state)
         for node in (self.synthesize, self.validate, self.actions):

@@ -76,7 +76,7 @@ def _resolve_planner_strategy(
                     "k": current_tasks[task.requirement_id].k,
                 })
                 for task in original_tasks
-            ], request_contract=contract.to_wire())
+            ])
         else:
             initial = InitialPlannerOutput.model_validate(payload)
             validate_upload_source_references(initial, upload_files=runtime.upload_files)
@@ -94,8 +94,7 @@ def _resolve_planner_strategy(
             initial = grounded
             # Binding is part of model-output validation. A failed call never reaches it.
             contract = resolve_request_contract(initial.request_contract, state, utterances=utterances)
-            output = PlannerOutput(use_retrieval=initial.use_retrieval, tasks=initial.tasks,
-                                   request_contract=contract.to_wire())
+            output = PlannerOutput(use_retrieval=initial.use_retrieval, tasks=initial.tasks)
         return output, contract
 
     output, contract = run_structured_call(
@@ -174,11 +173,11 @@ def make_planner_node(
         is_initial_plan = runtime.request_contract is None
         if is_initial_plan:
             if contract.can_acknowledge() or contract.can_cancel_pending():
-                decision = replace(decision, output=PlannerOutput.fallback(request_contract=contract.to_wire()))
+                decision = replace(decision, output=PlannerOutput.fallback())
             elif not contract.can_prepare_body():
                 question = contract.clarification_question or "요청의 작업과 대상을 더 구체적으로 알려 주세요."
                 decision = replace(
-                    decision, output=PlannerOutput.fallback(request_contract=contract.to_wire()),
+                    decision, output=PlannerOutput.fallback(),
                     guided_followup=question,
                     diagnostics=decision.diagnostics.model_copy(update={"reason": "clarification_required"}),
                 )

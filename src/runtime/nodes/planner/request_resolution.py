@@ -8,6 +8,7 @@ from src.core.answer_schema import text_document
 from src.core.contracts import GraphState
 from src.core.contracts.boundary.runtime import get_runtime_state
 from src.core.contracts.graph_state import PendingAction
+from src.core.request_bodies import body_to_wire
 from src.core.request_contracts import (
     AcknowledgeBody, ActionContract, ActionRequest, AnswerContract, AnswerReference, BoundAnswerReference,
     BoundInputText, ComposeBody, CopyAnswerBody, CopyInputBody, MissingInformation,
@@ -262,7 +263,7 @@ def _merge_pending(proposal: WireRequestContract, pending, *, current_turn_id: s
             })
     elif not confirmed_ids:
         raise ValueError("pending recipient changes must be grounded in the current user instruction")
-    original_body = original.body_request or original.to_wire().body
+    original_body = original.body_request or body_to_wire(original.body)
     unfinished_content = not pending.body_prepared and (
         original_body.kind in {"transform_input", "transform_answer", "extract"}
         or (isinstance(original_body, ComposeBody) and bool(original_body.instruction.strip()))

@@ -3,7 +3,7 @@ import unittest
 from langchain_core.messages import HumanMessage
 
 from src.core.planner_schema import (
-    PlannerOutput,
+    InitialPlannerOutput,
     RetrievalTask,
 )
 from src.core.request_contracts import MissingInformation, WireRequestContract
@@ -17,9 +17,9 @@ from .helpers import _CapturePlannerLLM, build_test_state, mock_chat_model
 class PlannerNodeTest(unittest.TestCase):
     def test_missing_upload_requests_a_file_without_starting_retrieval(self) -> None:
         query = "Find groupby in my notebook."
-        requested = PlannerOutput(use_retrieval=True, tasks=[
+        requested = InitialPlannerOutput(use_retrieval=True, tasks=[
             RetrievalTask(route="upload", query="groupby usage", k=4),
-        ])
+        ], request_contract=WireRequestContract(slack_recipient={"state": "omitted"}))
         state = build_test_state({
             "user_input": query, "messages": [HumanMessage(content=query)], "retriever": None,
         })
@@ -40,7 +40,7 @@ class PlannerNodeTest(unittest.TestCase):
 
     def test_subject_clarification_does_not_request_an_upload(self) -> None:
         query = "Please explain it."
-        requested = PlannerOutput(use_retrieval=False, tasks=[], request_contract=WireRequestContract(
+        requested = InitialPlannerOutput(use_retrieval=False, tasks=[], request_contract=WireRequestContract(
             slack_recipient={"state": "omitted"},
             missing_info=(MissingInformation(
                 slot="subject", reason="unclear", question="What should I explain?",

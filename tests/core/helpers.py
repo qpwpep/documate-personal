@@ -11,7 +11,7 @@ from pydantic import BaseModel
 from src.core.contracts import DebugState, PlannerState, ResponseState, RetrievalState, RetryState
 from src.core.contracts.boundary.graph import build_graph_state_input, normalize_graph_update
 from src.core.planner_schema import InitialPlannerOutput, PlannerOutput, RetrievalRewriteOutput
-from src.core.request_contracts import RequestContract, UserTurnSnapshot, WireRequestContract
+from src.core.request_contracts import UserTurnSnapshot, WireRequestContract
 from src.infra.decisions import DecisionsClient
 from src.infra.llm_boundary import StructuredModel, bind_structured_output
 from src.runtime.agent_runtime import AgentGraph
@@ -159,14 +159,14 @@ class _CapturePlannerLLM(StructuredModel):
     def __init__(self, planner_output):
         # Retrieval-only fixtures still supply an explicit neutral interpretation.
         # Missing-contract tests use an unadapted model boundary of their own.
-        if isinstance(planner_output, PlannerOutput) and planner_output.request_contract is None:
-            planner_output.request_contract = WireRequestContract(slack_recipient={"state": "omitted"})
-        elif isinstance(planner_output, PlannerOutput) and isinstance(planner_output.request_contract, RequestContract):
-            planner_output.request_contract = planner_output.request_contract.to_wire()
         if isinstance(planner_output, PlannerOutput):
-            planner_output = InitialPlannerOutput.model_validate(planner_output.model_dump(mode="json"))
+            planner_output = InitialPlannerOutput(
+                use_retrieval=planner_output.use_retrieval,
+                tasks=planner_output.tasks,
+                request_contract=WireRequestContract(slack_recipient={"state": "omitted"}),
+            )
         self.planner_output = (planner_output.model_dump(mode="json")
-                               if isinstance(planner_output, (PlannerOutput, RetrievalRewriteOutput)) else planner_output)
+                               if isinstance(planner_output, (InitialPlannerOutput, RetrievalRewriteOutput)) else planner_output)
         self.call_count = 0
         schema = RetrievalRewriteOutput if "rewrites" in self.planner_output else InitialPlannerOutput
         bound = structured_model(self._reply, schema)

@@ -9,6 +9,7 @@ from src.core.conversation_memory import build_untrusted_memory_prompt_messages
 from src.core.contracts import GraphState
 from src.core.contracts.boundary.graph import get_retry_state
 from src.core.contracts.boundary.runtime import get_runtime_state
+from src.core.request_bodies import body_to_wire
 from src.runtime.nodes.retry import format_retry_context_for_planner
 from src.runtime.nodes.session import keep_recent_messages
 
@@ -152,7 +153,7 @@ def _confirmed_facts(contract) -> dict:
     return {
         "actions": {name: getattr(contract.actions, name).intent for name in ("save_text", "slack_notify")},
         "answer": answer,
-        "body_request": without_evidence((contract.body_request or contract.to_wire().body).model_dump(mode="json")),
+        "body_request": without_evidence((contract.body_request or body_to_wire(contract.body)).model_dump(mode="json")),
         "slack_recipient": without_evidence(contract.slack_recipient.model_dump(mode="json")),
         "missing_info": [item.model_dump(mode="json") for item in contract.missing_info],
     }

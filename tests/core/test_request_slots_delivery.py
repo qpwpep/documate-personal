@@ -40,7 +40,7 @@ def _input(text):
 def _state(contract):
     return {
         "runtime": RuntimeState(user_input="요청", request_contract=contract),
-        "planner": PlannerState(output=PlannerOutput(use_retrieval=False, tasks=[], request_contract=contract.to_wire())),
+        "planner": PlannerState(output=PlannerOutput(use_retrieval=False, tasks=[])),
         "messages": [HumanMessage(content="요청", id="current")],
     }
 
