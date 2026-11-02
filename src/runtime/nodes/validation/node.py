@@ -70,6 +70,17 @@ def _decide_retry_outcome(
             f" Forbidden present: {assessment.forbidden_content}."
             " Keep the confirmed request contract unchanged when repairing the body."
         )
+        failed_conditions = [
+            {"path": f"answer.content[{index}]",
+             **requirement.model_dump(include={"kind", "mode", "description"})}
+            for index, requirement in enumerate(snapshot.request_contract.answer.content)
+            if f"semantic_content_condition:{index}" in assessment.missing_content
+        ] if snapshot.request_contract is not None else []
+        if failed_conditions:
+            retrieval_feedback += (
+                " Failed confirmed content conditions: "
+                + json.dumps(failed_conditions, ensure_ascii=False) + "."
+            )
         next_retry_context = next_retry_context.model_copy(update={"retrieval_feedback": retrieval_feedback})
     if "inline_code" in assessment.missing_content or "semantic_format_fulfillment" in assessment.missing_content:
         retrieval_feedback += (

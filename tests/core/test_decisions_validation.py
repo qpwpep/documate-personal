@@ -350,7 +350,8 @@ def test_post_validation_scopes_cited_requirement_separately_from_mixed_request(
     report = updates["response"].result.semantic_validation
     assert report is not None and report.passed
     assert {check.name for check in report.checks} == {
-        "grounded", "request_fulfilled", *(f"requirement:{symbol}" for symbol, _ in expected_sources),
+        "grounded", "request_fulfilled", "content_condition:0",
+        *(f"requirement:{symbol}" for symbol, _ in expected_sources),
     }
     state.update(updates)
     outcome = ResponseAssembler().assemble(response=state, debug_info={})

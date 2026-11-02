@@ -115,7 +115,9 @@ def test_copy_with_an_additional_semantic_condition_still_checks_that_condition(
     assert state["response"].kind == expected_kind
     if expected_kind == "answer":
         report = state["response"].result.semantic_validation
-        assert [(check.name, check.probability) for check in report.checks] == [("request_fulfilled", probability)]
+        assert [(check.name, check.probability) for check in report.checks] == [
+            ("request_fulfilled", probability), ("content_condition:0", 0.99),
+        ]
 
 
 def test_copy_with_conflicting_local_format_remains_a_clarification():
