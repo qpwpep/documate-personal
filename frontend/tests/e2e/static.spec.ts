@@ -5,9 +5,9 @@ import { readFile } from 'node:fs/promises';
 test.use({ launchOptions: { args: ['--host-resolver-rules=MAP documate.test 127.0.0.1', '--no-proxy-server'] } });
 
 test('the production bundle serves chat from the API origin without the Vite client', async ({ page }) => {
-  const assetRequests: string[] = [];
+  const assetRequests: { url: string; resourceType: string }[] = [];
   const errors: string[] = [];
-  page.on('request', (request) => assetRequests.push(request.url()));
+  page.on('request', (request) => assetRequests.push({ url: request.url(), resourceType: request.resourceType() }));
   page.on('pageerror', (error) => errors.push(error.message));
   const document = await page.goto('./');
   expect(document?.status(), 'Run npm --prefix frontend run build before the production smoke').toBe(200);
@@ -16,10 +16,17 @@ test('the production bundle serves chat from the API origin without the Vite cli
   await expect(submit).toBeEnabled();
   await submit.click();
   await expect(page.getByText('실제 FastAPI와 Python 런타임을 거친 한글 답변입니다. 🧪', { exact: true })).toBeVisible();
-  expect(assetRequests.some((url) => url.includes('/app/assets/') && url.endsWith('.js'))).toBe(true);
-  expect(assetRequests.some((url) => url.includes('/app/assets/') && url.endsWith('.css'))).toBe(true);
-  expect(assetRequests.some((url) => url.includes('/@vite/') || url.includes('/src/main.tsx'))).toBe(false);
-  expect(assetRequests.every((url) => new URL(url).origin === 'http://127.0.0.1:18000')).toBe(true);
+  expect(assetRequests.some(({ url }) => url.includes('/app/assets/') && url.endsWith('.js'))).toBe(true);
+  expect(assetRequests.some(({ url }) => url.includes('/app/assets/') && url.endsWith('.css'))).toBe(true);
+  expect(assetRequests.some(({ url }) => url.includes('/@vite/') || url.includes('/src/main.tsx'))).toBe(false);
+  const fontStylesheet = 'https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css';
+  const fontSubsets = 'https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/packages/pretendard/dist/web/variable/woff2-dynamic-subset/';
+  const unexpectedRequests = assetRequests.filter(({ url, resourceType }) => {
+    if (resourceType === 'stylesheet' && url === fontStylesheet) return false;
+    if (resourceType === 'font' && url.startsWith(fontSubsets) && url.endsWith('.woff2')) return false;
+    return new URL(url).origin !== 'http://127.0.0.1:18000';
+  });
+  expect(unexpectedRequests).toEqual([]);
   expect(errors).toEqual([]);
 });
 
