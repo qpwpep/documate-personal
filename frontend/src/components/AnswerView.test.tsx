@@ -183,6 +183,26 @@ describe('AnswerView', () => {
     expect(opener).toHaveFocus();
   });
 
+  it('keeps sentence scopes as metadata without changing prose or citation context', async () => {
+    const user = userEvent.setup();
+    const scoped = structuredClone(sourceFixtures.sectioned) as AnswerResponse;
+    const paragraph = scoped.content.blocks[1];
+    if (paragraph.type !== 'paragraph') throw new Error('Fixture must contain a paragraph.');
+    paragraph.content[0].sentence_scope = 1;
+    paragraph.content[1].sentence_scope = 1;
+    const original = JSON.stringify(scoped);
+    const { container } = render(<AnswerView response={scoped} />);
+
+    expect(container.querySelector('.answer-body p')?.textContent).toBe('첫 설명[1] 둘째 설명[1]');
+    await user.click(screen.getByRole('button', { name: '근거 [1] 같은 출처' }));
+    const panel = screen.getByRole('dialog', { name: '같은 출처' });
+    await user.click(within(panel).getByText('연결된 답변 보기'));
+    expect(within(panel).getByText('첫 설명')).toBeVisible();
+    expect(within(panel).getByText('둘째 설명')).toBeVisible();
+    expect(JSON.stringify(scoped)).toBe(original);
+    expect(container).not.toHaveTextContent('sentence_scope');
+  });
+
   it('distinguishes source connections, exact excerpts, and semantic evaluation', async () => {
     const user = userEvent.setup();
     render(<AnswerView response={sourceFixtures.quote as AnswerResponse}

@@ -66,7 +66,7 @@ def _bind_local_evidence(proposal: WireRequestContract, *, request_id: str, revi
     data["evidence"] = tuple(item.model_copy(update={"id": ids[item.id]}) for item in proposal.evidence)
     for name in ("save_text", "slack_notify"):
         data["actions"][name]["evidence_ids"] = tuple(ids[item] for item in data["actions"][name]["evidence_ids"])
-    for group in ("content", "format"):
+    for group in ("content", "format", "sentence_counts"):
         for item in data["answer"][group]:
             item["evidence_ids"] = tuple(ids[key] for key in item["evidence_ids"])
     if "evidence_ids" in data["body"]:
@@ -237,8 +237,22 @@ def _merge_pending(proposal: WireRequestContract, pending, *, current_turn_id: s
             result.append(item)
         return tuple(result)
 
+    sentence_counts = list(original.answer.sentence_counts)
+    for item in proposal.answer.sentence_counts:
+        if item in sentence_counts:
+            continue
+        if not current_requirement_instruction(item, "sentence_counts"):
+            raise ValueError("pending sentence counts need a new user instruction to change")
+        matching = next((index for index, old in enumerate(sentence_counts) if old.scope == item.scope), None)
+        if matching is None:
+            sentence_counts.append(item)
+        else:
+            # Keep scope indices stable for a prepared answer and its citations.
+            sentence_counts[matching] = item
+
     answer = AnswerContract(content=content_requirements(original.answer.content, proposal.answer.content),
                             format=format_requirements(original.answer.format, proposal.answer.format),
+                            sentence_counts=tuple(sentence_counts),
                             preferences=tuple(dict.fromkeys([*original.answer.preferences, *proposal.answer.preferences])))
     body = proposal.body
     neutral_body = isinstance(body, ComposeBody) and not body.instruction.strip() and not body.evidence_ids
@@ -288,7 +302,7 @@ def _merge_pending(proposal: WireRequestContract, pending, *, current_turn_id: s
     elif actions["slack_notify"].intent not in {"requested", "unresolved"}:
         missing = [item for item in missing if item.slot != "slack_destination"]
     retained_ids = set(getattr(body, "evidence_ids", ()))
-    for item in (*actions.values(), *answer.content, *answer.format):
+    for item in (*actions.values(), *answer.content, *answer.format, *answer.sentence_counts):
         retained_ids.update(item.evidence_ids)
     retained_ids.update(getattr(recipient, "evidence_ids", ()))
     evidence = {key: item for key, item in evidence.items() if key in retained_ids or item.turn_id == current_turn_id}
@@ -310,6 +324,7 @@ def pending_body_changed(pending: PendingAction, contract: RequestContract) -> b
         return {
             "content": tuple(item.model_dump(exclude={"evidence_ids"}) for item in answer.content),
             "format": tuple(item.model_dump(exclude={"evidence_ids"}) for item in answer.format),
+            "sentence_counts": tuple(item.model_dump(exclude={"evidence_ids"}) for item in answer.sentence_counts),
             "preferences": answer.preferences,
         }
 

@@ -72,6 +72,30 @@ def test_direct_save_downloads_exact_server_answer_sources_and_limits(exports):
     assert session.get_answer(answer_id) == original
 
 
+def test_sentence_scope_survives_saved_snapshot_without_changing_export_text(exports):
+    client, _, session, _, original, _ = exports
+    document = original.content.model_copy(deep=True)
+    document.blocks[0].content[0].sentence_scope = 1
+    scoped = finalize_answer(
+        document, [citation.evidence for citation in original.citations], issues=original.issues,
+    )
+    answer_id = session.register_answer(scoped)
+
+    response = client.post(f"/sessions/export-session/answers/{answer_id}/save")
+
+    assert response.status_code == 200
+    result = response.json()
+    assert result["status"] == "completed"
+    saved = AnswerResponse.model_validate(result["response"])
+    assert saved.content.blocks[0].content[0].sentence_scope == 1
+    assert saved.citations == original.citations
+    assert saved.model_copy(update={"actions": []}) == scoped
+    download = client.get(f"/download/{saved.actions[-1].artifact.filename}")
+    assert download.status_code == 200
+    assert download.content == export_answer_text(original, include_sources=True).encode("utf-8-sig")
+    assert session.get_answer(answer_id) == scoped
+
+
 def test_duplicate_save_requests_reuse_one_artifact(exports):
     client, _, _, answer_id, _, output = exports
     url = f"/sessions/export-session/answers/{answer_id}/save"

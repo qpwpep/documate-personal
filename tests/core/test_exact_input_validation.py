@@ -1,17 +1,19 @@
-"""Exact input copying verifies fidelity before authorizing delivery."""
+"""Exact copies verify fidelity and current contract obligations before delivery."""
 from hashlib import sha256
+import json
 from pathlib import Path
 
 import pytest
 from langchain_core.messages import HumanMessage
 
-from src.core.answer_schema import export_answer_text, finalize_answer, text_document
+from src.core.answer_schema import AnswerDocument, export_answer_text, finalize_answer, text_document
 from src.core.contracts import PlannerState, RetryState
 from src.core.contracts.boundary.graph import build_graph_state_input
 from src.core.planner_schema import PlannerOutput
 from src.core.request_contracts import (
-    ActionContract, ActionRequest, AnswerContract, BoundInputText, ContentRequirement, ContractEvidence,
-    CopyInputBody, LineCountRequirement, RequestContract,
+    ActionContract, ActionRequest, AnswerContract, BoundAnswerReference, BoundInputText,
+    ContentRequirement, ContractEvidence, CopyAnswerBody, CopyInputBody, LineCountRequirement,
+    RequestContract, SentenceCountRequirement,
 )
 from src.core.llm_errors import LLMCallError
 from src.infra.tools.save_text import build_save_text_tool
@@ -29,19 +31,19 @@ REQUEST = ("Copy only the following input exactly, without changes or additional
            "and save it as a TXT file. Input:\n" + ORIGINAL)
 
 
-def _state(*, answer=None):
+def _state(*, answer=None, request=REQUEST):
     contract = RequestContract(
         body=CopyInputBody(source=BoundInputText(
-            turn_id="current", text=ORIGINAL, start=REQUEST.index(ORIGINAL), end=len(REQUEST),
+            turn_id="current", text=ORIGINAL, start=request.index(ORIGINAL), end=len(request),
             content_hash=sha256(ORIGINAL.encode("utf-8")).hexdigest(),
         )),
         actions=ActionContract(save_text=ActionRequest(intent="requested", evidence_ids=("request",))),
-        evidence=(ContractEvidence(id="request", turn_id="current", quote=REQUEST,
+        evidence=(ContractEvidence(id="request", turn_id="current", quote=request,
                                    scope="current_request", interpretation="instruction"),),
         answer=answer or AnswerContract(),
     )
     return build_graph_state_input(
-        user_input=REQUEST, messages=[HumanMessage(content=REQUEST, id="current")],
+        user_input=request, messages=[HumanMessage(content=request, id="current")],
         request_contract=contract,
         planner=PlannerState(output=PlannerOutput(use_retrieval=False, tasks=[])),
         retry=RetryState(max_retries=0, max_content_repairs=0),
@@ -131,6 +133,92 @@ def test_copy_with_conflicting_local_format_remains_a_clarification():
 
     assert state["response"].kind == "clarification"
     assert state["response"].result.actions == []
+
+
+@pytest.mark.parametrize("minimum,maximum,expected_kind", [
+    pytest.param(1, 1, "answer", id="one-sentence-copy-meets-quota"),
+    pytest.param(2, 2, "clarification", id="copy-cannot-add-a-required-sentence"),
+    pytest.param(0, 0, "clarification", id="copy-cannot-remove-a-forbidden-sentence"),
+])
+def test_exact_input_checks_whole_body_sentence_bounds_without_rewriting(
+    minimum, maximum, expected_kind,
+):
+    request = f"The complete body must have exactly {minimum} sentences. " + REQUEST
+    state = _state(request=request, answer=AnswerContract(sentence_counts=(SentenceCountRequirement(
+        scope=None, minimum=minimum, maximum=maximum, evidence_ids=("request",),
+    ),)))
+    contract = state["runtime"].request_contract
+    prepare_synthesis_state(state)
+    state.update(make_synthesize_node(mock_chat_model(DocumentModel().invoke))(state))
+    # An immutable copy whose bounds conflict is clarified during preparation.
+    assert state["response"].kind == ("draft" if expected_kind == "answer" else expected_kind)
+    assert contract.body.source.text == ORIGINAL
+    decisions = DecisionsBoundary()
+
+    state.update(make_post_synthesis_validation_node(False, decisions_client=decisions)(state))
+
+    assert state["response"].kind == expected_kind
+    assert state["runtime"].request_contract == contract
+    assert decisions.requests == []
+    assert state["response"].result.actions == []
+    if expected_kind == "answer":
+        assert export_answer_text(state["response"].result) == ORIGINAL
+
+
+@pytest.mark.parametrize("scope,probability,expected_kind", [
+    pytest.param(None, 0.01, "answer", id="whole-body-count-needs-no-semantic-check"),
+    pytest.param("사과 색상 설명", 0.99, "answer", id="copied-unit-belongs-to-current-scope"),
+    pytest.param("바나나 색상 설명", 0.01, "failure", id="same-index-does-not-prove-new-scope"),
+])
+def test_copied_answer_rechecks_sentence_scope_meaning_in_the_current_contract(
+    scope, probability, expected_kind,
+):
+    previous = finalize_answer(AnswerDocument.model_validate({"blocks": [{
+        "type": "paragraph", "content": [{
+            "text": "사과는 빨갛습니다.", "basis": "interaction", "sentence_scope": 1,
+        }],
+    }]}), [])
+    request = "이전 답변을 그대로 사용해 줘. " + (
+        "전체 본문은 한 문장이어야 해." if scope is None else f"{scope}은 한 문장이어야 해."
+    )
+    contract = RequestContract(
+        body=CopyAnswerBody(source=BoundAnswerReference(ref="previous", response_hash=previous.content_hash)),
+        answer=AnswerContract(sentence_counts=(SentenceCountRequirement(
+            scope=scope, minimum=1, maximum=1, evidence_ids=("request",),
+        ),)),
+        evidence=(ContractEvidence(id="request", turn_id="current", quote=request,
+                                   scope="current_request", interpretation="instruction"),),
+    )
+    state = build_graph_state_input(
+        user_input=request, messages=[HumanMessage(content=request, id="current")],
+        previous_response=previous, request_contract=contract,
+        planner=PlannerState(output=PlannerOutput(use_retrieval=False, tasks=[])),
+        retry=RetryState(max_retries=0, max_content_repairs=0),
+    )
+    preparation = DecisionsBoundary()
+    prepare_synthesis_state(state, decisions=preparation)
+    state.update(make_synthesize_node(mock_chat_model(DocumentModel().invoke))(state))
+    assert state["response"].result.content == previous.content
+    decisions = DecisionsBoundary({"request_fulfilled": probability})
+
+    state.update(make_post_synthesis_validation_node(False, decisions_client=decisions)(state))
+
+    assert state["response"].kind == expected_kind
+    assert state["runtime"].request_contract == contract
+    assert state["runtime"].previous_response == previous
+    if scope is None:
+        assert preparation.requests == []
+        assert decisions.requests == []
+    else:
+        assert preparation.requests
+        assert decisions.requests
+        payload = json.loads(decisions.requests[0]["input"])
+        assert payload["confirmed_request"]["answer"]["sentence_counts"][0]["scope"] == scope
+    if expected_kind == "answer":
+        assert state["response"].result.content == previous.content
+    else:
+        assert state["response"].result.content != previous.content
+        assert state["response"].result.actions == []
 
 
 def test_copy_with_semantic_report_can_be_revalidated_without_changing_the_body():

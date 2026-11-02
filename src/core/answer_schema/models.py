@@ -36,6 +36,8 @@ class ContentUnit(AnswerModel):
     basis: Literal["source", "inference", "example", "interaction", "excerpt"] = "interaction"
     refs: list[str] = Field(default_factory=list)
     source_location: SourceLocationReference | None = None
+    sentence_scope: int | None = Field(default=None, ge=1, strict=True,
+        description="One-based index of the scoped sentence-count condition this prose belongs to. Use null when the confirmed contract has no scoped sentence counts. A sentence cannot fill multiple scopes.")
 
     @field_validator("text")
     @classmethod

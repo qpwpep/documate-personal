@@ -117,6 +117,9 @@ def test_failed_save_retries_the_same_frozen_operation_through_real_planner(tmp_
             }
             if self.pending_request_id is None:
                 payload["body"] = {"kind": "compose", "instruction": "설명을 작성한다.", "evidence_ids": ["save"]}
+                payload["answer"] = {"sentence_counts": [{
+                    "scope": None, "minimum": 1, "maximum": 1, "evidence_ids": ["save"],
+                }]}
             else:
                 payload.update(relation="supplement", target_request_id=self.pending_request_id,
                                body={"kind": "copy_answer", "source": {"ref": "pending"}})
@@ -130,7 +133,9 @@ def test_failed_save_retries_the_same_frozen_operation_through_real_planner(tmp_
         summarize_node=make_summarize_node(None, False, policy=policy),
         planner_node=make_planner_node(structured_model(planner_boundary.invoke, InitialPlannerOutput), False),
         retrieve_dispatch_node=make_retrieve_dispatch_node(unavailable_boundary, unavailable_boundary, False),
-        synthesize_node=make_synthesize_node(mock_chat_model(RepairingModelBoundary().invoke)),
+        synthesize_node=make_synthesize_node(mock_chat_model(
+            lambda _messages: text_document("설명을 작성했습니다.").model_dump(mode="json"),
+        )),
         pre_synthesis_validation_node=make_pre_synthesis_validation_node(False, excerpt_limits=synthesis_excerpt_limits(), decisions_client=make_decisions_client()),
         post_synthesis_validation_node=make_post_synthesis_validation_node(False, decisions_client=make_decisions_client()),
         action_postprocess_node=make_action_postprocess_node(build_save_text_tool(), unavailable_boundary, False),
@@ -146,7 +151,7 @@ def test_failed_save_retries_the_same_frozen_operation_through_real_planner(tmp_
     with monkeypatch.context() as failure:
         failure.setattr(saved_artifacts.os, "link", fail_payload_publication)
         first = graph.invoke(build_graph_state_input(
-            user_input="설명을 작성하고 파일로 저장해줘", session_id="save-retry-session",
+            user_input="설명을 한 문장으로 작성하고 파일로 저장해줘", session_id="save-retry-session",
         ))
     failed_receipt = first["response"].result.actions[0]
     pending = first["runtime"].pending_action
@@ -170,6 +175,8 @@ def test_failed_save_retries_the_same_frozen_operation_through_real_planner(tmp_
     assert second["runtime"].request_contract.body.kind == "copy_answer"
     assert second["runtime"].request_contract.body.source.ref == "pending"
     assert second["runtime"].request_contract.actions.save_text.intent == "requested"
+    assert second["runtime"].request_contract.answer.sentence_counts == pending.contract.answer.sentence_counts
+    assert pending.contract.answer.sentence_counts[0].minimum == pending.contract.answer.sentence_counts[0].maximum == 1
     assert second["response"].result.content == first["response"].result.content
     assert completed_receipt.status == "success"
     assert completed_receipt.operation == failed_receipt.operation

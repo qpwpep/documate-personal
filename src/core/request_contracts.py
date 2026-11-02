@@ -13,6 +13,7 @@ from src.core.answer_schema import AnswerDocument, AnswerResponse, iter_content_
 from src.core.answer_schema.rendering import content_unit_markdown
 from src.core.evidence import EvidenceRef
 from src.core.python_source import PythonSourceMap
+from src.core.sentence_counts import sentence_count_issues
 from src.core.slack_contract import ExplicitRecipient, OmittedRecipient, RecipientIntent, UnresolvedRecipient
 from src.core.request_bodies import (
     AcknowledgeBody, AnswerReference, BodyPlan, BoundAnswerReference, BoundInputText, ComposeBody,
@@ -98,15 +99,36 @@ class LineCountRequirement(ContractModel):
 FormatConstraint = LayoutRequirement | LineCountRequirement
 
 
+class SentenceCountRequirement(ContractModel):
+    kind: Literal["sentence_count"] = "sentence_count"
+    scope: str | None = Field(default=None, description="The target and content covered by this quota; null means the whole body. Split per-target quotas into separate entries. True and False explanations for the same target are distinct scopes.")
+    minimum: int = Field(ge=0, strict=True)
+    maximum: int | None = Field(default=None, ge=0, strict=True)
+    mode: Literal["required", "preferred"] = "required"
+    evidence_ids: tuple[str, ...] = ()
+
+    @model_validator(mode="after")
+    def valid_bounds_and_scope(self) -> "SentenceCountRequirement":
+        if self.maximum is not None and self.minimum > self.maximum:
+            raise ValueError("minimum sentence count must not exceed maximum")
+        if self.scope is not None and not self.scope.strip():
+            raise ValueError("sentence scope must not be blank")
+        return self
+
+
 class AnswerContract(ContractModel):
     """Content, presentation and soft preferences stay independent of retrieval."""
 
     content: tuple[ContentRequirement, ...] = ()
     format: tuple[FormatConstraint, ...] = ()
+    sentence_counts: tuple[SentenceCountRequirement, ...] = ()
     preferences: tuple[str, ...] = ()
 
     @model_validator(mode="after")
     def reject_conflicts(self) -> "AnswerContract":
+        scopes = [requirement.scope for requirement in self.sentence_counts]
+        if len(scopes) != len(set(scopes)):
+            raise ValueError("sentence count scopes must be unique")
         for constraints in (self.content, self.format):
             modes: dict[tuple[str, Any], set[str]] = {}
             for item in constraints:
@@ -156,7 +178,8 @@ class _RequestFacts(ContractModel):
         evidence = {item.id: item for item in self.evidence}
         if len(evidence) != len(self.evidence):
             raise ValueError("contract evidence ids must be unique")
-        references = [self.actions.save_text, self.actions.slack_notify, *self.answer.content, *self.answer.format]
+        references = [self.actions.save_text, self.actions.slack_notify,
+                      *self.answer.content, *self.answer.format, *self.answer.sentence_counts]
         if hasattr(self.body, "evidence_ids"):
             references.append(self.body)
         if hasattr(self.slack_recipient, "evidence_ids"):
@@ -183,7 +206,8 @@ class _RequestFacts(ContractModel):
                 allowed.add("negation")
             if not supports(self.slack_recipient.evidence_ids, "slack_recipient", allowed):
                 raise ValueError("recipient intent requires a user instruction or reference within its scope")
-        for group, requirements in (("content", self.answer.content), ("format", self.answer.format)):
+        for group, requirements in (("content", self.answer.content), ("format", self.answer.format),
+                                    ("sentence_counts", self.answer.sentence_counts)):
             for requirement in requirements:
                 allowed = {"negation", "correction", "instruction"} if requirement.mode == "forbidden" else {"instruction", "correction", "reference"}
                 if not supports(requirement.evidence_ids, f"answer.{group}.{requirement.kind}", allowed):
@@ -362,7 +386,8 @@ def _selected_code_statements(evidence: EvidenceRef) -> set[str]:
     return statements
 
 
-def check_answer_contract(contract: AnswerContract, document: Any, *, evidence: Iterable[EvidenceRef] = ()) -> ContractCheck:
+def check_answer_contract(contract: AnswerContract, document: Any, *, evidence: Iterable[EvidenceRef] = (),
+                          partial: bool = False) -> ContractCheck:
     """Check observable content; keep semantic evaluation explicitly separate.
 
     Line counts refer to nonblank body lines, excluding citation appendices and
@@ -428,6 +453,12 @@ def check_answer_contract(contract: AnswerContract, document: Any, *, evidence: 
     if has_code:
         present["code"] = True
     check = ContractCheck()
+    check.missing_required.extend(sentence_count_issues(document, contract.sentence_counts, partial=partial))
+    check.unchecked_semantic.extend(
+        f"required:sentence_scope:{index}"
+        for index, requirement in enumerate(contract.sentence_counts, 1)
+        if requirement.mode == "required" and requirement.scope is not None
+    )
     for requirement in (*contract.content, *contract.format):
         if requirement.mode == "preferred":
             continue

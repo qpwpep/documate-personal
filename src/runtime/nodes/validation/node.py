@@ -81,6 +81,17 @@ def _decide_retry_outcome(
                 " Failed confirmed content conditions: "
                 + json.dumps(failed_conditions, ensure_ascii=False) + "."
             )
+        failed_sentence_counts = [
+            {"scope_id": index, **requirement.model_dump(exclude={"evidence_ids"})}
+            for index, requirement in enumerate(snapshot.request_contract.answer.sentence_counts, 1)
+            if "sentence_scope" in assessment.missing_content
+            or f"sentence_count:{index}" in assessment.missing_content
+        ] if snapshot.request_contract is not None else []
+        if failed_sentence_counts:
+            retrieval_feedback += (
+                " Failed confirmed sentence conditions: "
+                + json.dumps(failed_sentence_counts, ensure_ascii=False) + "."
+            )
         next_retry_context = next_retry_context.model_copy(update={"retrieval_feedback": retrieval_feedback})
     if "inline_code" in assessment.missing_content or "semantic_format_fulfillment" in assessment.missing_content:
         retrieval_feedback += (

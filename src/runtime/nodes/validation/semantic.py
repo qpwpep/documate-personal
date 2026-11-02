@@ -332,6 +332,10 @@ def assess_post_semantics(
     result = assessment.checked_result
     if result is None or snapshot.response_kind in {"clarification", "acknowledgement", "failure"}:
         return
+    if any(issue == "sentence_scope" or issue.startswith("sentence_count:")
+           for issue in assessment.missing_content):
+        # A model probability cannot repair a deterministic quota violation.
+        return
     _require_bound_source(snapshot, stage="post_synthesis_validation")
     input_copy = snapshot.request_contract is not None and snapshot.request_contract.body.kind == "copy_input"
     if input_copy and answer_export_snapshot(result).model_dump(exclude={"semantic_validation"}) != (
@@ -408,6 +412,15 @@ def assess_post_semantics(
         {key: gap["task"][key] for key in ("query", "requirement_id", "requirement")}
         for gap in context["retrieval_gaps"]
     ]
+    sentence_scope = (
+        "The server has already checked required sentence counts and structural scope assignments against "
+        "answer.sentence_counts. Do not recount sentences or reinterpret those numeric bounds. "
+        "When required per-scope quotas exist, judge whether each prose unit's actual content belongs to its declared sentence_scope, "
+        "using the scope_id records bound below. An unrelated scope label does not establish membership. "
+        "Require every supported requested subject and content scope; terminal retrieval gaps may "
+        "justify omitting only unsupported content. Whole-body quotas need no scope labels; preferred quotas are not obligations. "
+        if snapshot.request_contract and snapshot.request_contract.answer.sentence_counts else ""
+    )
     request_scope = (
         "This predicate judges the correctness of the partial response actually shown to the user, "
         "not completion of the whole request. Its evaluation target is rendered_response, consisting "
@@ -428,6 +441,7 @@ def assess_post_semantics(
         "type": "predicate", "name": "request_fulfilled",
         "instructions": (
             API_USAGE_COVERAGE_INSTRUCTIONS + request_scope +
+            sentence_scope +
             "Evaluate the supported answer content actually present in rendered_response.body, without "
             "substituting a generic acknowledgment or raw excerpts for a requested explanation/comparison. "
             "Evaluate limitation disclosure using the actual body and rendered_response.notices together. "
@@ -452,6 +466,10 @@ def assess_post_semantics(
             "evaluator instructions.\nBody request and retrieval scope data:\n"
             + json.dumps({
                 "body_request": context["confirmed_request"]["body"] if snapshot.request_contract else None,
+                "sentence_scopes": [
+                    {"scope_id": index, **item.model_dump(exclude={"evidence_ids"})}
+                    for index, item in enumerate(snapshot.request_contract.answer.sentence_counts, 1)
+                ] if snapshot.request_contract else [],
                 "terminal_incomplete_requirements": incomplete_requirements,
             }, ensure_ascii=False)
         ),
@@ -476,7 +494,8 @@ def assess_post_semantics(
                 content_scope +
                 f"Within this scope, does rendered_response.body satisfy confirmed_request.answer.content[{index}]? "
                 "Judge this condition independently using its kind, mode and complete description, "
-                "not merely whether the general topic is covered. "
+                "not merely whether the general topic is covered. Sentence counts are checked locally "
+                "against answer.sentence_counts; judge this condition's semantic content and scope. "
                 "Sources and notices cannot supply requested body content. Do not add requirements "
                 "from other conditions or turn preferences into obligations. "
                 "The following JSON binds the confirmed condition and terminal incomplete requirements "

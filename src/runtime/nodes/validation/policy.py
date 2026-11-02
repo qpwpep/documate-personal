@@ -179,7 +179,10 @@ def apply_validation_outcome(
                 **stamp,
             )
         valid_paths = {check.unit_id for check in result.checks if check.reference_status != "missing"}
-        contract_check = check_answer_contract(snapshot.request_contract.answer, document, evidence=packet)
+        contract_check = check_answer_contract(
+            snapshot.request_contract.answer, document, evidence=packet,
+            partial=bool(snapshot.terminal_failed_requirement_ids),
+        )
         missing_requirements = detect_missing_requirement_coverage(snapshot=snapshot, result=result, valid_unit_paths=valid_paths)
         recoverable_missing = set(missing_requirements) - set(snapshot.terminal_failed_requirement_ids)
         # Terminal source gaps permit a partial body only while available evidence remains cited.

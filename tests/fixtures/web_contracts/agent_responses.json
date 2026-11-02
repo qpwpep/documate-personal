@@ -12,7 +12,8 @@
                   "text": "한글 답변 🧪",
                   "basis": "interaction",
                   "refs": [],
-                  "source_location": null
+                  "source_location": null,
+                  "sentence_scope": null
                 }
               ]
             }
@@ -58,7 +59,8 @@
                   "text": "확인한 첫 번째 자료의 답변 🧪",
                   "basis": "interaction",
                   "refs": [],
-                  "source_location": null
+                  "source_location": null,
+                  "sentence_scope": null
                 }
               ]
             }

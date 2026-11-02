@@ -88,6 +88,25 @@ describe('browser API contract', () => {
     });
   });
 
+  it('preserves sentence scope metadata with the exact answer text', async () => {
+    const original = fixtures.responses.completed;
+    const result = { ...original, response: { ...original.response, content: { blocks: [
+      { type: 'paragraph', content: [
+        { ...original.response.content.blocks[0].content[0], sentence_scope: 1 },
+      ] },
+    ] } } };
+    respond = (_request, response) => {
+      response.writeHead(200, { 'Content-Type': 'text/event-stream' });
+      response.end(frame('final_response', result));
+    };
+
+    const client = new AgentSessionClient({ sessionId: 'session-1', baseUrl });
+
+    expect(await collect(client.stream('한 문장으로 설명해 줘.'))).toEqual([
+      { event: 'final_response', data: result },
+    ]);
+  });
+
   it('keeps a server error before the valid final response', async () => {
     const error = { message: '단계 진단', stage: 'planner' };
     respond = (_request, response) => {

@@ -1074,6 +1074,20 @@
             "title": "Refs",
             "type": "array"
           },
+          "sentence_scope": {
+            "anyOf": [
+              {
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "One-based index of the scoped sentence-count condition this prose belongs to. Use null when the confirmed contract has no scoped sentence counts. A sentence cannot fill multiple scopes.",
+            "title": "Sentence Scope"
+          },
           "source_location": {
             "anyOf": [
               {

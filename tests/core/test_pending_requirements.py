@@ -37,6 +37,7 @@ def _facts(query, *, content=(), format=(), pending=None, relation="new", turn_i
             "content": [ContentRequirement(**{**item, "evidence_ids": ["instruction"]}).model_dump(mode="json") for item in content],
             "format": [(LineCountRequirement if item["kind"] == "line_count" else LayoutRequirement)(
                 **{**item, "evidence_ids": ["instruction"]}).model_dump(mode="json") for item in format],
+            "sentence_counts": [],
             "preferences": [],
         },
         "evidence": [{"id": "instruction", "turn_id": turn_id, "quote": query,

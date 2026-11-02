@@ -538,6 +538,12 @@ export interface components {
             basis?: "source" | "inference" | "example" | "interaction" | "excerpt";
             /** Refs */
             refs?: string[];
+            /**
+             * Sentence Scope
+             * @description One-based index of the scoped sentence-count condition this prose belongs to. Use null when the confirmed contract has no scoped sentence counts. A sentence cannot fill multiple scopes.
+             * @default null
+             */
+            sentence_scope?: number | null;
             /** @default null */
             source_location?: components["schemas"]["SourceLocationReference"] | null;
             /** Text */

@@ -97,7 +97,10 @@ def assess_validation(snapshot: ValidationSnapshot) -> ValidationAssessment:
           or snapshot.response_contract_revision != contract.revision):
         assessment.missing_content = ["current_contract_revision"]
     else:
-        contract_check = check_answer_contract(snapshot.request_contract.answer, result.content, evidence=snapshot.evidence_packet)
+        contract_check = check_answer_contract(
+            snapshot.request_contract.answer, result.content, evidence=snapshot.evidence_packet,
+            partial=bool(snapshot.terminal_failed_requirement_ids),
+        )
         assessment.missing_content = contract_check.missing_required
         assessment.forbidden_content = contract_check.forbidden_present
     if not result.content.blocks:
