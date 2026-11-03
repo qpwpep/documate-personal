@@ -135,8 +135,17 @@
           }
         },
         "required": [
+          "invocation_id",
           "kind",
-          "status"
+          "status",
+          "file_path",
+          "slack",
+          "message",
+          "error",
+          "operation",
+          "artifact",
+          "verification",
+          "error_code"
         ],
         "title": "ActionReceipt",
         "type": "object"
@@ -166,6 +175,10 @@
             "default": null
           }
         },
+        "required": [
+          "slack_notify",
+          "save_text"
+        ],
         "title": "ActionResults",
         "type": "object"
       },
@@ -409,7 +422,26 @@
         "required": [
           "schema_version",
           "observability_status",
-          "route_decisions"
+          "missing_required_debug_fields",
+          "tool_calls",
+          "tool_call_count",
+          "execution_evidence",
+          "latency_ms_server",
+          "latency_breakdown",
+          "llm_calls",
+          "llm_diagnostics",
+          "errors",
+          "error_codes",
+          "validation_events",
+          "route_decisions",
+          "memory_compactions",
+          "planner_errors",
+          "observed_hits",
+          "answer_provenance",
+          "retry_context",
+          "retrieval_diagnostics",
+          "planner_diagnostics",
+          "action_results"
         ],
         "title": "AgentDebugInfo",
         "type": "object"
@@ -551,7 +583,16 @@
           }
         },
         "required": [
-          "trace"
+          "status",
+          "response",
+          "answer_id",
+          "message",
+          "problem",
+          "request_id",
+          "missing_slots",
+          "upload_manifest",
+          "trace",
+          "debug"
         ],
         "title": "AgentResponse",
         "type": "object"
@@ -593,6 +634,9 @@
             "type": "array"
           }
         },
+        "required": [
+          "blocks"
+        ],
         "title": "AnswerDocument",
         "type": "object"
       },
@@ -725,8 +769,13 @@
           }
         },
         "required": [
+          "version",
+          "request_id",
+          "contract_revision",
+          "save_operation_binding_sha256",
           "body_kind",
           "response_hash",
+          "source",
           "evidence_packet"
         ],
         "title": "AnswerProvenance",
@@ -788,6 +837,16 @@
             "default": null
           }
         },
+        "required": [
+          "content",
+          "citations",
+          "checks",
+          "issues",
+          "actions",
+          "content_hash",
+          "retrieval_required",
+          "semantic_validation"
+        ],
         "title": "AnswerResponse",
         "type": "object"
       },
@@ -970,12 +1029,12 @@
         "additionalProperties": false,
         "properties": {
           "max_chars": {
-            "minimum": 1.0,
+            "minimum": 1,
             "title": "Max Chars",
             "type": "integer"
           },
           "max_utf8_bytes": {
-            "minimum": 1.0,
+            "minimum": 1,
             "title": "Max Utf8 Bytes",
             "type": "integer"
           }
@@ -998,17 +1057,17 @@
             "type": "array"
           },
           "max_file_bytes": {
-            "minimum": 1.0,
+            "minimum": 1,
             "title": "Max File Bytes",
             "type": "integer"
           },
           "max_files": {
-            "minimum": 1.0,
+            "minimum": 1,
             "title": "Max Files",
             "type": "integer"
           },
           "max_total_bytes": {
-            "minimum": 1.0,
+            "minimum": 1,
             "title": "Max Total Bytes",
             "type": "integer"
           }
@@ -1046,6 +1105,9 @@
           }
         },
         "required": [
+          "type",
+          "language",
+          "inline",
           "content"
         ],
         "title": "CodeBlock",
@@ -1106,7 +1168,11 @@
           }
         },
         "required": [
-          "text"
+          "text",
+          "basis",
+          "refs",
+          "source_location",
+          "sentence_scope"
         ],
         "title": "ContentUnit",
         "type": "object"
@@ -1142,7 +1208,8 @@
         "required": [
           "query",
           "max_results",
-          "status"
+          "status",
+          "result_count"
         ],
         "title": "DocsSearchProviderRequest",
         "type": "object"
@@ -1269,7 +1336,16 @@
         },
         "required": [
           "element_id",
-          "kind"
+          "kind",
+          "text",
+          "parent_id",
+          "order",
+          "heading_level",
+          "heading_path",
+          "language",
+          "table",
+          "anchors",
+          "metadata"
         ],
         "title": "DocumentElement",
         "type": "object"
@@ -1354,7 +1430,10 @@
           "media_type",
           "source_type",
           "parser",
-          "parser_version"
+          "parser_version",
+          "parser_config",
+          "capture_scope",
+          "quality_issues"
         ],
         "title": "DocumentSnapshot",
         "type": "object"
@@ -1380,7 +1459,8 @@
         "required": [
           "id",
           "snapshot",
-          "element"
+          "element",
+          "selection"
         ],
         "title": "EvidenceRef",
         "type": "object"
@@ -1442,7 +1522,8 @@
           "code",
           "stage",
           "message",
-          "next_action"
+          "next_action",
+          "retry_after_seconds"
         ],
         "title": "ExecutionProblem",
         "type": "object"
@@ -1469,7 +1550,9 @@
           }
         },
         "required": [
-          "selector"
+          "state",
+          "selector",
+          "evidence_ids"
         ],
         "title": "ExplicitRecipient",
         "type": "object"
@@ -1508,6 +1591,8 @@
           }
         },
         "required": [
+          "type",
+          "level",
           "content"
         ],
         "title": "HeadingBlock",
@@ -1620,8 +1705,16 @@
         },
         "required": [
           "stage",
+          "attempt",
           "path",
-          "usage"
+          "model_name",
+          "endpoint",
+          "status",
+          "latency_ms",
+          "failure_type",
+          "usage",
+          "response_metadata",
+          "usage_metadata"
         ],
         "title": "LLMCallRecord",
         "type": "object"
@@ -1860,7 +1953,25 @@
         },
         "required": [
           "code",
-          "stage"
+          "stage",
+          "model",
+          "endpoint",
+          "schema_name",
+          "schema_hash",
+          "schema_compiler_version",
+          "openai_sdk_version",
+          "langchain_openai_version",
+          "provider_status",
+          "provider_code",
+          "provider_type",
+          "provider_param",
+          "provider_request_id",
+          "attempt",
+          "exception_type",
+          "transport_failure",
+          "budget_reason",
+          "validation_paths",
+          "recovery"
         ],
         "title": "LLMDiagnostic",
         "type": "object"
@@ -1928,6 +2039,15 @@
             "title": "Upload Retriever Build Ms"
           }
         },
+        "required": [
+          "server_total_ms",
+          "graph_total_ms",
+          "upload_retriever_build_ms",
+          "stage_totals_ms",
+          "stage_attempts",
+          "retrieval_routes",
+          "synthesis_attempts"
+        ],
         "title": "LatencyBreakdownModel",
         "type": "object"
       },
@@ -1955,6 +2075,8 @@
           }
         },
         "required": [
+          "type",
+          "ordered",
           "items"
         ],
         "title": "ListBlock",
@@ -1970,6 +2092,9 @@
             "type": "string"
           }
         },
+        "required": [
+          "state"
+        ],
         "title": "OmittedRecipient",
         "type": "object"
       },
@@ -1992,6 +2117,7 @@
           }
         },
         "required": [
+          "type",
           "content"
         ],
         "title": "ParagraphBlock",
@@ -2097,6 +2223,15 @@
             "title": "Version"
           }
         },
+        "required": [
+          "library",
+          "symbols",
+          "version",
+          "aspects",
+          "evidence_needs",
+          "file_ids",
+          "match"
+        ],
         "title": "PlannedRequirement",
         "type": "object"
       },
@@ -2168,6 +2303,16 @@
             "type": "string"
           }
         },
+        "required": [
+          "status",
+          "reason",
+          "fallback_routes",
+          "intent_required",
+          "required_routes",
+          "override_applied",
+          "override_reason",
+          "planner_warnings"
+        ],
         "title": "PlannerDiagnostic",
         "type": "object"
       },
@@ -2277,7 +2422,8 @@
         },
         "required": [
           "code",
-          "message"
+          "message",
+          "unit_id"
         ],
         "title": "ResponseIssue",
         "type": "object"
@@ -2541,6 +2687,40 @@
             "type": "array"
           }
         },
+        "required": [
+          "invocation_id",
+          "tool",
+          "route",
+          "status",
+          "message",
+          "error_code",
+          "query",
+          "requirement_id",
+          "answerability",
+          "missing_requirements",
+          "candidate_count",
+          "k",
+          "completed_requests",
+          "provider_requests",
+          "request_fingerprint",
+          "reused",
+          "attempt",
+          "evidence_count",
+          "result_count",
+          "provider_result_count",
+          "filtered_invalid_url_count",
+          "filtered_path_prefix_count",
+          "filtered_cross_domain_count",
+          "final_evidence_count",
+          "metric",
+          "score_direction",
+          "normalized_score",
+          "raw_score",
+          "provider_ms",
+          "post_filter_ms",
+          "include_raw_content_requested",
+          "warnings"
+        ],
         "title": "RetrievalDiagnostic",
         "type": "object"
       },
@@ -2572,6 +2752,13 @@
             "type": "string"
           }
         },
+        "required": [
+          "route",
+          "tool",
+          "attempt",
+          "latency_ms",
+          "status"
+        ],
         "title": "RetrievalRouteLatencyModel",
         "type": "object"
       },
@@ -2620,7 +2807,9 @@
         },
         "required": [
           "metric",
-          "direction"
+          "raw",
+          "direction",
+          "normalized"
         ],
         "title": "RetrievalScore",
         "type": "object"
@@ -2660,7 +2849,9 @@
         "required": [
           "query",
           "k",
-          "route"
+          "route",
+          "requirement",
+          "requirement_id"
         ],
         "title": "RetrievalTask",
         "type": "object"
@@ -2826,6 +3017,27 @@
             "title": "Terminal Retrieval Reason"
           }
         },
+        "required": [
+          "needs_retry",
+          "attempt",
+          "max_retries",
+          "content_repair_attempt",
+          "max_content_repairs",
+          "terminal_failed_requirement_ids",
+          "terminal_retrieval_reason",
+          "retry_reason",
+          "retrieval_feedback",
+          "hit_start_index",
+          "retrieval_error_start_index",
+          "retrieval_diagnostic_start_index",
+          "score_avg",
+          "failed_routes",
+          "failed_requirement_ids",
+          "original_tasks",
+          "preserved_hits",
+          "preserved_retrieval_diagnostics",
+          "retry_scope"
+        ],
         "title": "RetryState",
         "type": "object"
       },
@@ -2991,6 +3203,7 @@
           "target_kind",
           "source_hash",
           "answer_hash",
+          "export_profile",
           "payload_sha256",
           "byte_count"
         ],
@@ -3098,6 +3311,14 @@
             "type": "string"
           }
         },
+        "required": [
+          "status",
+          "file_path",
+          "bytes",
+          "error",
+          "message",
+          "error_code"
+        ],
         "title": "SaveTextActionResult",
         "type": "object"
       },
@@ -3124,7 +3345,8 @@
         "required": [
           "evidence",
           "score",
-          "rank"
+          "rank",
+          "requirement_id"
         ],
         "title": "SearchHit",
         "type": "object"
@@ -3176,7 +3398,9 @@
         },
         "required": [
           "name",
-          "probability"
+          "status",
+          "probability",
+          "unit_id"
         ],
         "title": "SemanticCheck",
         "type": "object"
@@ -3219,6 +3443,7 @@
         "required": [
           "content_hash",
           "evidence_fingerprint",
+          "model",
           "threshold",
           "checks"
         ],
@@ -3236,7 +3461,8 @@
               {
                 "type": "null"
               }
-            ]
+            ],
+            "default": null
           },
           "selector": {
             "anyOf": [
@@ -3246,9 +3472,14 @@
               {
                 "type": "null"
               }
-            ]
+            ],
+            "default": null
           }
         },
+        "required": [
+          "selector",
+          "failure"
+        ],
         "title": "SlackDefault",
         "type": "object"
       },
@@ -3361,7 +3592,14 @@
           }
         },
         "required": [
-          "intent"
+          "invocation_id",
+          "intent",
+          "selection",
+          "resolved_user_id",
+          "target",
+          "status",
+          "failure",
+          "message_ts"
         ],
         "title": "SlackDelivery",
         "type": "object"
@@ -3444,7 +3682,9 @@
           "stage",
           "code",
           "message",
-          "next_action"
+          "next_action",
+          "retry_after_seconds",
+          "slack_error"
         ],
         "title": "SlackFailure",
         "type": "object"
@@ -3470,7 +3710,8 @@
           }
         },
         "required": [
-          "channel_id"
+          "channel_id",
+          "user_id"
         ],
         "title": "SlackTarget",
         "type": "object"
@@ -3667,7 +3908,20 @@
           }
         },
         "required": [
-          "kind"
+          "kind",
+          "start",
+          "end",
+          "line_start",
+          "line_end",
+          "cell_id",
+          "cell_index",
+          "page_no",
+          "bbox",
+          "coordinate_space",
+          "coordinate_origin",
+          "page_width",
+          "page_height",
+          "precision"
         ],
         "title": "SourceAnchor",
         "type": "object"
@@ -3731,6 +3985,11 @@
             "type": "integer"
           }
         },
+        "required": [
+          "start",
+          "end",
+          "cell_ids"
+        ],
         "title": "SourceSelection",
         "type": "object"
       },
@@ -3774,7 +4033,10 @@
           }
         },
         "required": [
-          "stage"
+          "stage",
+          "attempt",
+          "latency_ms",
+          "status"
         ],
         "title": "StageAttemptModel",
         "type": "object"
@@ -3822,6 +4084,16 @@
             "type": "integer"
           }
         },
+        "required": [
+          "summarize_ms",
+          "planner_ms",
+          "retrieval_total_ms",
+          "pre_synthesis_validation_ms",
+          "synthesis_total_ms",
+          "post_synthesis_validation_ms",
+          "validation_ms",
+          "action_postprocess_ms"
+        ],
         "title": "StageTotalsModel",
         "type": "object"
       },
@@ -3841,7 +4113,7 @@
             "type": "string"
           },
           "size_bytes": {
-            "exclusiveMinimum": 0.0,
+            "exclusiveMinimum": 0,
             "title": "Size Bytes",
             "type": "integer"
           },
@@ -3913,7 +4185,11 @@
           }
         },
         "required": [
-          "mode"
+          "attempt",
+          "mode",
+          "structured_ms",
+          "fallback_ms",
+          "total_ms"
         ],
         "title": "SynthesisAttemptLatencyModel",
         "type": "object"
@@ -3947,7 +4223,9 @@
           }
         },
         "required": [
-          "columns"
+          "type",
+          "columns",
+          "rows"
         ],
         "title": "TableBlock",
         "type": "object"
@@ -4003,7 +4281,11 @@
           "cell_id",
           "row",
           "col",
-          "text"
+          "row_span",
+          "col_span",
+          "text",
+          "is_header",
+          "anchors"
         ],
         "title": "TableCell",
         "type": "object"
@@ -4019,6 +4301,9 @@
             "type": "array"
           }
         },
+        "required": [
+          "cells"
+        ],
         "title": "TableData",
         "type": "object"
       },
@@ -4098,6 +4383,14 @@
             "title": "Reasoning Output Tokens"
           }
         },
+        "required": [
+          "input_tokens",
+          "output_tokens",
+          "cached_input_tokens",
+          "cache_write_input_tokens",
+          "reasoning_output_tokens",
+          "issues"
+        ],
         "title": "TokenUsage",
         "type": "object"
       },
@@ -4159,7 +4452,9 @@
           "sequence",
           "invocation_id",
           "tool_name",
-          "phase"
+          "phase",
+          "reason_code",
+          "origin_invocation_id"
         ],
         "title": "ToolExecutionEvent",
         "type": "object"
@@ -4240,7 +4535,9 @@
         },
         "required": [
           "unit_id",
-          "reference_status"
+          "reference_status",
+          "support_status",
+          "issues"
         ],
         "title": "UnitCheck",
         "type": "object"
@@ -4278,8 +4575,10 @@
           }
         },
         "required": [
+          "state",
           "raw_input",
-          "reason"
+          "reason",
+          "evidence_ids"
         ],
         "title": "UnresolvedRecipient",
         "type": "object"

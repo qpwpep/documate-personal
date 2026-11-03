@@ -3,6 +3,8 @@ from __future__ import annotations
 from typing import Any, Literal, get_args
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic.json_schema import GenerateJsonSchema
+from pydantic_core import core_schema
 
 from src.core.contracts.outcome import AgentCallResult
 from src.core.llm_errors import LLMDiagnostic
@@ -21,6 +23,19 @@ from src.core.uploads import UploadContext, validate_session_id
 from src.core.latency import LatencyBreakdownModel, StageName
 
 AgentRetryContext = RetryState
+
+
+class HTTPResponseSchema(GenerateJsonSchema):
+    """HTTP model dumps include defaults; model construction may still omit them."""
+
+    def field_is_required(
+        self,
+        field: core_schema.ModelField | core_schema.DataclassField | core_schema.TypedDictField,
+        total: bool,
+    ) -> bool:
+        if self.mode == "serialization" and field["type"] != "typed-dict-field":
+            return field.get("serialization_exclude_if") is None
+        return super().field_is_required(field, total)
 
 
 class ClientUploadConfig(BaseModel):

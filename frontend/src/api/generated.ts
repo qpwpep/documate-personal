@@ -160,27 +160,27 @@ export interface components {
         /** ActionReceipt */
         ActionReceipt: {
             /** @default null */
-            artifact?: components["schemas"]["SaveArtifact"] | null;
+            artifact: components["schemas"]["SaveArtifact"] | null;
             /**
              * Error
              * @default null
              */
-            error?: string | null;
+            error: string | null;
             /**
              * Error Code
              * @default null
              */
-            error_code?: string | null;
+            error_code: string | null;
             /**
              * File Path
              * @default null
              */
-            file_path?: string | null;
+            file_path: string | null;
             /**
              * Invocation Id
              * @default null
              */
-            invocation_id?: string | null;
+            invocation_id: string | null;
             /**
              * Kind
              * @enum {string}
@@ -190,11 +190,11 @@ export interface components {
              * Message
              * @default null
              */
-            message?: string | null;
+            message: string | null;
             /** @default null */
-            operation?: components["schemas"]["SaveOperation"] | null;
+            operation: components["schemas"]["SaveOperation"] | null;
             /** @default null */
-            slack?: components["schemas"]["SlackDelivery"] | null;
+            slack: components["schemas"]["SlackDelivery"] | null;
             /**
              * Status
              * @enum {string}
@@ -204,67 +204,67 @@ export interface components {
              * Verification
              * @default null
              */
-            verification?: ("verified" | "failed" | "unverifiable") | null;
+            verification: ("verified" | "failed" | "unverifiable") | null;
         };
         /** ActionResults */
         ActionResults: {
             /** @default null */
-            save_text?: components["schemas"]["SaveTextActionResult"] | null;
+            save_text: components["schemas"]["SaveTextActionResult"] | null;
             /** @default null */
-            slack_notify?: components["schemas"]["SlackDelivery"] | null;
+            slack_notify: components["schemas"]["SlackDelivery"] | null;
         };
         /** AgentDebugInfo */
         AgentDebugInfo: {
             /** @default null */
-            action_results?: components["schemas"]["ActionResults"] | null;
+            action_results: components["schemas"]["ActionResults"] | null;
             /** @default null */
-            answer_provenance?: components["schemas"]["AnswerProvenance"] | null;
+            answer_provenance: components["schemas"]["AnswerProvenance"] | null;
             /** Error Codes */
-            error_codes?: ("provider_schema_invalid" | "provider_configuration" | "provider_unavailable" | "provider_rate_limited" | "model_output_invalid" | "model_output_incomplete" | "model_refusal" | "internal_error" | "evidence_insufficient" | "call_budget_exhausted" | "upload_revision_conflict" | "save_failed" | "PLANNER_SCHEMA_INVALID" | "PLANNER_TIMEOUT" | "RETRIEVAL_DOCS_TIMEOUT" | "RETRIEVAL_DOCS_FAILED" | "RAG_INDEX_MISSING" | "LOCAL_RAG_FAILED" | "UPLOAD_RETRIEVER_BUILD_FAILED" | "LLM_STRUCTURED_EMPTY" | "SYNTHESIS_TIMEOUT" | "VALIDATION_UNRESOLVED_REFERENCES" | "VALIDATION_MISSING_CONTENT" | "DEBUG_NORMALIZATION_FAILED" | "SLACK_RECIPIENT_MISSING" | "SLACK_RECIPIENT_INVALID" | "SLACK_RECIPIENT_AMBIGUOUS" | "SLACK_RECIPIENT_CONFLICT" | "SLACK_CONFIGURATION_ERROR" | "SLACK_TARGET_NOT_FOUND" | "SLACK_TARGET_UNAVAILABLE" | "SLACK_PERMISSION_DENIED" | "SLACK_AUTHENTICATION_FAILED" | "SLACK_RATE_LIMITED" | "SLACK_TEMPORARY_FAILURE" | "SLACK_DELIVERY_UNKNOWN" | "SLACK_PROTOCOL_ERROR" | "UPLOAD_PATH_INVALID")[];
+            error_codes: ("provider_schema_invalid" | "provider_configuration" | "provider_unavailable" | "provider_rate_limited" | "model_output_invalid" | "model_output_incomplete" | "model_refusal" | "internal_error" | "evidence_insufficient" | "call_budget_exhausted" | "upload_revision_conflict" | "save_failed" | "PLANNER_SCHEMA_INVALID" | "PLANNER_TIMEOUT" | "RETRIEVAL_DOCS_TIMEOUT" | "RETRIEVAL_DOCS_FAILED" | "RAG_INDEX_MISSING" | "LOCAL_RAG_FAILED" | "UPLOAD_RETRIEVER_BUILD_FAILED" | "LLM_STRUCTURED_EMPTY" | "SYNTHESIS_TIMEOUT" | "VALIDATION_UNRESOLVED_REFERENCES" | "VALIDATION_MISSING_CONTENT" | "DEBUG_NORMALIZATION_FAILED" | "SLACK_RECIPIENT_MISSING" | "SLACK_RECIPIENT_INVALID" | "SLACK_RECIPIENT_AMBIGUOUS" | "SLACK_RECIPIENT_CONFLICT" | "SLACK_CONFIGURATION_ERROR" | "SLACK_TARGET_NOT_FOUND" | "SLACK_TARGET_UNAVAILABLE" | "SLACK_PERMISSION_DENIED" | "SLACK_AUTHENTICATION_FAILED" | "SLACK_RATE_LIMITED" | "SLACK_TEMPORARY_FAILURE" | "SLACK_DELIVERY_UNKNOWN" | "SLACK_PROTOCOL_ERROR" | "UPLOAD_PATH_INVALID")[];
             /** Errors */
-            errors?: string[];
+            errors: string[];
             /**
              * Execution Evidence
              * @default null
              */
-            execution_evidence?: components["schemas"]["ToolExecutionEvidence"] | {
+            execution_evidence: components["schemas"]["ToolExecutionEvidence"] | {
                 [key: string]: unknown;
             } | null;
             /** @default null */
-            latency_breakdown?: components["schemas"]["LatencyBreakdownModel"] | null;
+            latency_breakdown: components["schemas"]["LatencyBreakdownModel"] | null;
             /**
              * Latency Ms Server
              * @default null
              */
-            latency_ms_server?: number | null;
+            latency_ms_server: number | null;
             /**
              * Llm Calls
              * @default null
              */
-            llm_calls?: components["schemas"]["LLMCallRecord"][] | null;
+            llm_calls: components["schemas"]["LLMCallRecord"][] | null;
             /** Llm Diagnostics */
-            llm_diagnostics?: components["schemas"]["LLMDiagnostic"][];
+            llm_diagnostics: components["schemas"]["LLMDiagnostic"][];
             /** Memory Compactions */
-            memory_compactions?: {
+            memory_compactions: {
                 [key: string]: unknown;
             }[];
             /** Missing Required Debug Fields */
-            missing_required_debug_fields?: string[];
+            missing_required_debug_fields: string[];
             /**
              * Observability Status
              * @enum {string}
              */
             observability_status: "ok" | "degraded" | "failed";
             /** Observed Hits */
-            observed_hits?: components["schemas"]["SearchHit"][];
+            observed_hits: components["schemas"]["SearchHit"][];
             /** @default null */
-            planner_diagnostics?: components["schemas"]["PlannerDiagnostic"] | null;
+            planner_diagnostics: components["schemas"]["PlannerDiagnostic"] | null;
             /** Planner Errors */
-            planner_errors?: string[];
+            planner_errors: string[];
             /** Retrieval Diagnostics */
-            retrieval_diagnostics?: components["schemas"]["RetrievalDiagnostic"][];
+            retrieval_diagnostics: components["schemas"]["RetrievalDiagnostic"][];
             /** @default null */
-            retry_context?: components["schemas"]["RetryState"] | null;
+            retry_context: components["schemas"]["RetryState"] | null;
             /** Route Decisions */
             route_decisions: components["schemas"]["RoutingDecision"][];
             /** Schema Version */
@@ -273,11 +273,11 @@ export interface components {
              * Tool Call Count
              * @default 0
              */
-            tool_call_count?: number;
+            tool_call_count: number;
             /** Tool Calls */
-            tool_calls?: string[];
+            tool_calls: string[];
             /** Validation Events */
-            validation_events?: string[];
+            validation_events: string[];
         };
         /** AgentRequest */
         AgentRequest: {
@@ -299,44 +299,44 @@ export interface components {
              * Answer Id
              * @default null
              */
-            answer_id?: string | null;
+            answer_id: string | null;
             /** @default null */
-            debug?: components["schemas"]["AgentDebugInfo"] | null;
+            debug: components["schemas"]["AgentDebugInfo"] | null;
             /**
              * Message
              * @default
              */
-            message?: string;
+            message: string;
             /** Missing Slots */
-            missing_slots?: string[];
+            missing_slots: string[];
             /** @default null */
-            problem?: components["schemas"]["ExecutionProblem"] | null;
+            problem: components["schemas"]["ExecutionProblem"] | null;
             /**
              * Request Id
              * @description ID of this execution, not the domain request ID.
              * @default
              */
-            request_id?: string;
+            request_id: string;
             /** @default null */
-            response?: components["schemas"]["AnswerResponse"] | null;
+            response: components["schemas"]["AnswerResponse"] | null;
             /**
              * Status
              * @default completed
              * @enum {string}
              */
-            status?: "completed" | "needs_input" | "failed" | "partial" | "refused";
+            status: "completed" | "needs_input" | "failed" | "partial" | "refused";
             /** Trace */
             trace: string;
             /**
              * @description Confirmed attachment snapshot. Null on a failed request means no snapshot was available, not an empty attachment set.
              * @default null
              */
-            upload_manifest?: components["schemas"]["UploadManifest"] | null;
+            upload_manifest: components["schemas"]["UploadManifest"] | null;
         };
         /** AnswerDocument */
         AnswerDocument: {
             /** Blocks */
-            blocks?: (components["schemas"]["ParagraphBlock"] | components["schemas"]["ListBlock"] | components["schemas"]["CodeBlock"] | components["schemas"]["TableBlock"] | components["schemas"]["HeadingBlock"])[];
+            blocks: (components["schemas"]["ParagraphBlock"] | components["schemas"]["ListBlock"] | components["schemas"]["CodeBlock"] | components["schemas"]["TableBlock"] | components["schemas"]["HeadingBlock"])[];
         };
         /**
          * AnswerExportResult
@@ -376,7 +376,7 @@ export interface components {
              * Contract Revision
              * @default null
              */
-            contract_revision?: number | null;
+            contract_revision: number | null;
             /** Evidence Packet */
             evidence_packet: components["schemas"]["EvidenceRef"][];
             /**
@@ -384,46 +384,46 @@ export interface components {
              * @description Domain request ID from RequestContract, retained across supplementation and retries.
              * @default null
              */
-            request_id?: string | null;
+            request_id: string | null;
             /** Response Hash */
             response_hash: string;
             /**
              * Save Operation Binding Sha256
              * @default null
              */
-            save_operation_binding_sha256?: string | null;
+            save_operation_binding_sha256: string | null;
             /** @default null */
-            source?: components["schemas"]["AnswerSource"] | null;
+            source: components["schemas"]["AnswerSource"] | null;
             /**
              * Version
              * @default 1
              * @constant
              */
-            version?: 1;
+            version: 1;
         };
         /** AnswerResponse */
         AnswerResponse: {
             /** Actions */
-            actions?: components["schemas"]["ActionReceipt"][];
+            actions: components["schemas"]["ActionReceipt"][];
             /** Checks */
-            checks?: components["schemas"]["UnitCheck"][];
+            checks: components["schemas"]["UnitCheck"][];
             /** Citations */
-            citations?: components["schemas"]["Citation"][];
-            content?: components["schemas"]["AnswerDocument"];
+            citations: components["schemas"]["Citation"][];
+            content: components["schemas"]["AnswerDocument"];
             /**
              * Content Hash
              * @default
              */
-            content_hash?: string;
+            content_hash: string;
             /** Issues */
-            issues?: components["schemas"]["ResponseIssue"][];
+            issues: components["schemas"]["ResponseIssue"][];
             /**
              * Retrieval Required
              * @default false
              */
-            retrieval_required?: boolean;
+            retrieval_required: boolean;
             /** @default null */
-            semantic_validation?: components["schemas"]["SemanticValidation"] | null;
+            semantic_validation: components["schemas"]["SemanticValidation"] | null;
         };
         /**
          * AnswerSource
@@ -513,12 +513,12 @@ export interface components {
              * Inline
              * @default false
              */
-            inline?: boolean;
+            inline: boolean;
             /**
              * Language
              * @default
              */
-            language?: string;
+            language: string;
             /**
              * @description discriminator enum property added by openapi-typescript
              * @enum {string}
@@ -535,17 +535,17 @@ export interface components {
              * @default interaction
              * @enum {string}
              */
-            basis?: "source" | "inference" | "example" | "interaction" | "excerpt";
+            basis: "source" | "inference" | "example" | "interaction" | "excerpt";
             /** Refs */
-            refs?: string[];
+            refs: string[];
             /**
              * Sentence Scope
              * @description One-based index of the scoped sentence-count condition this prose belongs to. Use null when the confirmed contract has no scoped sentence counts. A sentence cannot fill multiple scopes.
              * @default null
              */
-            sentence_scope?: number | null;
+            sentence_scope: number | null;
             /** @default null */
-            source_location?: components["schemas"]["SourceLocationReference"] | null;
+            source_location: components["schemas"]["SourceLocationReference"] | null;
             /** Text */
             text: string;
         };
@@ -562,7 +562,7 @@ export interface components {
              * Result Count
              * @default 0
              */
-            result_count?: number;
+            result_count: number;
             /**
              * Status
              * @enum {string}
@@ -582,16 +582,16 @@ export interface components {
         /** DocumentElement */
         DocumentElement: {
             /** Anchors */
-            anchors?: components["schemas"]["SourceAnchor"][];
+            anchors: components["schemas"]["SourceAnchor"][];
             /** Element Id */
             element_id: string;
             /**
              * Heading Level
              * @default null
              */
-            heading_level?: number | null;
+            heading_level: number | null;
             /** Heading Path */
-            heading_path?: string[];
+            heading_path: string[];
             /**
              * Kind
              * @enum {string}
@@ -601,28 +601,28 @@ export interface components {
              * Language
              * @default null
              */
-            language?: string | null;
+            language: string | null;
             /** Metadata */
-            metadata?: {
+            metadata: {
                 [key: string]: unknown;
             };
             /**
              * Order
              * @default 0
              */
-            order?: number;
+            order: number;
             /**
              * Parent Id
              * @default null
              */
-            parent_id?: string | null;
+            parent_id: string | null;
             /** @default null */
-            table?: components["schemas"]["TableData"] | null;
+            table: components["schemas"]["TableData"] | null;
             /**
              * Text
              * @default
              */
-            text?: string;
+            text: string;
         };
         /** DocumentSnapshot */
         DocumentSnapshot: {
@@ -631,7 +631,7 @@ export interface components {
              * @default full_document
              * @enum {string}
              */
-            capture_scope?: "full_document" | "provider_excerpt";
+            capture_scope: "full_document" | "provider_excerpt";
             /** Content Hash */
             content_hash: string;
             /** Document Id */
@@ -641,13 +641,13 @@ export interface components {
             /** Parser */
             parser: string;
             /** Parser Config */
-            parser_config?: {
+            parser_config: {
                 [key: string]: unknown;
             };
             /** Parser Version */
             parser_version: string;
             /** Quality Issues */
-            quality_issues?: string[];
+            quality_issues: string[];
             /** Snapshot Id */
             snapshot_id: string;
             /**
@@ -665,7 +665,7 @@ export interface components {
             element: components["schemas"]["DocumentElement"];
             /** Id */
             id: string;
-            selection?: components["schemas"]["SourceSelection"];
+            selection: components["schemas"]["SourceSelection"];
             snapshot: components["schemas"]["DocumentSnapshot"];
         };
         /** ExecutionProblem */
@@ -686,7 +686,7 @@ export interface components {
              * Retry After Seconds
              * @default null
              */
-            retry_after_seconds?: number | null;
+            retry_after_seconds: number | null;
             /** Stage */
             stage: string;
         };
@@ -696,7 +696,7 @@ export interface components {
              * Evidence Ids
              * @default []
              */
-            evidence_ids?: string[];
+            evidence_ids: string[];
             selector: components["schemas"]["RecipientSelector"];
             /**
              * @description discriminator enum property added by openapi-typescript
@@ -716,7 +716,7 @@ export interface components {
              * Level
              * @default 2
              */
-            level?: number;
+            level: number;
             /**
              * @description discriminator enum property added by openapi-typescript
              * @enum {string}
@@ -729,34 +729,34 @@ export interface components {
              * Attempt
              * @default 0
              */
-            attempt?: number;
+            attempt: number;
             /**
              * Endpoint
              * @default null
              */
-            endpoint?: string | null;
+            endpoint: string | null;
             /**
              * Failure Type
              * @default null
              */
-            failure_type?: string | null;
+            failure_type: string | null;
             /**
              * Latency Ms
              * @default null
              */
-            latency_ms?: number | null;
+            latency_ms: number | null;
             /**
              * Model Name
              * @default null
              */
-            model_name?: string | null;
+            model_name: string | null;
             /**
              * Path
              * @enum {string}
              */
             path: "direct" | "structured" | "structured_compact_fallback" | "decisions";
             /** Response Metadata */
-            response_metadata?: {
+            response_metadata: {
                 [key: string]: unknown;
             };
             /**
@@ -769,10 +769,10 @@ export interface components {
              * @default unknown
              * @enum {string}
              */
-            status?: "unknown" | "started" | "completed" | "failed";
+            status: "unknown" | "started" | "completed" | "failed";
             usage: components["schemas"]["TokenUsage"];
             /** Usage Metadata */
-            usage_metadata?: {
+            usage_metadata: {
                 [key: string]: unknown;
             };
         };
@@ -785,12 +785,12 @@ export interface components {
              * Attempt
              * @default 0
              */
-            attempt?: number;
+            attempt: number;
             /**
              * Budget Reason
              * @default null
              */
-            budget_reason?: ("calls" | "deadline") | null;
+            budget_reason: ("calls" | "deadline") | null;
             /**
              * Code
              * @enum {string}
@@ -800,81 +800,81 @@ export interface components {
              * Endpoint
              * @default null
              */
-            endpoint?: string | null;
+            endpoint: string | null;
             /**
              * Exception Type
              * @default null
              */
-            exception_type?: string | null;
+            exception_type: string | null;
             /**
              * Langchain Openai Version
              * @default null
              */
-            langchain_openai_version?: string | null;
+            langchain_openai_version: string | null;
             /**
              * Model
              * @default null
              */
-            model?: string | null;
+            model: string | null;
             /**
              * Openai Sdk Version
              * @default null
              */
-            openai_sdk_version?: string | null;
+            openai_sdk_version: string | null;
             /**
              * Provider Code
              * @default null
              */
-            provider_code?: string | null;
+            provider_code: string | null;
             /**
              * Provider Param
              * @default null
              */
-            provider_param?: string | null;
+            provider_param: string | null;
             /**
              * Provider Request Id
              * @default null
              */
-            provider_request_id?: string | null;
+            provider_request_id: string | null;
             /**
              * Provider Status
              * @default null
              */
-            provider_status?: number | null;
+            provider_status: number | null;
             /**
              * Provider Type
              * @default null
              */
-            provider_type?: string | null;
+            provider_type: string | null;
             /**
              * Recovery
              * @default stop
              */
-            recovery?: string;
+            recovery: string;
             /**
              * Schema Compiler Version
              * @default null
              */
-            schema_compiler_version?: string | null;
+            schema_compiler_version: string | null;
             /**
              * Schema Hash
              * @default null
              */
-            schema_hash?: string | null;
+            schema_hash: string | null;
             /**
              * Schema Name
              * @default null
              */
-            schema_name?: string | null;
+            schema_name: string | null;
             /** Stage */
             stage: string;
             /**
              * Transport Failure
              * @default null
              */
-            transport_failure?: ("timeout" | "connection") | null;
+            transport_failure: ("timeout" | "connection") | null;
             /** Validation Paths */
-            validation_paths?: string[];
+            validation_paths: string[];
         };
         /** LatencyBreakdownModel */
         LatencyBreakdownModel: {
@@ -882,24 +882,24 @@ export interface components {
              * Graph Total Ms
              * @default null
              */
-            graph_total_ms?: number | null;
+            graph_total_ms: number | null;
             /** Retrieval Routes */
-            retrieval_routes?: components["schemas"]["RetrievalRouteLatencyModel"][];
+            retrieval_routes: components["schemas"]["RetrievalRouteLatencyModel"][];
             /**
              * Server Total Ms
              * @default null
              */
-            server_total_ms?: number | null;
+            server_total_ms: number | null;
             /** Stage Attempts */
-            stage_attempts?: components["schemas"]["StageAttemptModel"][];
-            stage_totals_ms?: components["schemas"]["StageTotalsModel"];
+            stage_attempts: components["schemas"]["StageAttemptModel"][];
+            stage_totals_ms: components["schemas"]["StageTotalsModel"];
             /** Synthesis Attempts */
-            synthesis_attempts?: components["schemas"]["SynthesisAttemptLatencyModel"][];
+            synthesis_attempts: components["schemas"]["SynthesisAttemptLatencyModel"][];
             /**
              * Upload Retriever Build Ms
              * @default null
              */
-            upload_retriever_build_ms?: number | null;
+            upload_retriever_build_ms: number | null;
         };
         /** ListBlock */
         ListBlock: {
@@ -909,7 +909,7 @@ export interface components {
              * Ordered
              * @default false
              */
-            ordered?: boolean;
+            ordered: boolean;
             /**
              * @description discriminator enum property added by openapi-typescript
              * @enum {string}
@@ -943,75 +943,75 @@ export interface components {
              * Aspects
              * @description Literal parameter names, option/flag names, requested value tokens or code fragments that must appear in returned source, such as axis, --force, reflect or random_state. For docs setting-meaning questions, omit ordinary data and arbitrary counts, capacities, sizes, thresholds or seeds; keep their parameter names here and complete settings in query and the body request. A value changing the result is not sufficient to make it a literal anchor. Keep categorical modes, enum members, sentinels and distinct behavior-branch values separately alongside their parameter names, including numeric or Boolean choices. Preserve an explicitly requested exact source/code match. Source locations (lines/ranges, cells, pages or document regions) belong in query and the body request, not aspects, unless explicitly requested as literal strings occurring in source. Classify by the requested role, even when location labels are quoted. Do not repeat the primary API already in symbols. For upload and docs, never put natural-language properties or conditions here; preserve their meaning in query. For docs additionally request the relevant evidence_needs. Only anchors explicitly requested in the user's dialogue belong here; never guess an identifier from the user's description of a property.
              */
-            aspects?: string[];
+            aspects: string[];
             /**
              * Evidence Needs
              * @description Docs-only evidence kinds requested by the user: signature for call syntax, parameters for option/argument descriptions, examples for usage examples, explanation for conceptual or behavioral explanation. A broad request to explain API usage needs explanation; it does not require all four kinds or examples copied from the documentation. Explaining a named parameter setting requests BOTH parameters and explanation, even when phrased as its behavior or effect; that value needs the parameter's own description. Keep empty for upload. Do not infer unrelated kinds from model knowledge.
              */
-            evidence_needs?: ("signature" | "parameters" | "examples" | "explanation")[];
+            evidence_needs: ("signature" | "parameters" | "examples" | "explanation")[];
             /**
              * File Ids
              * @description Upload file IDs from the active catalog whose evidence is explicitly requested. Empty searches all active uploads without requiring every file in the answer. For a comparison or inspection of all attachments, include every requested file ID in one task. Empty for docs.
              */
-            file_ids?: string[];
+            file_ids: string[];
             /**
              * Library
              * @description Exact canonical owning-library ID for official docs. Use unsupported for an explicitly requested library outside the enum; preserve its actual name in query/symbols. Python owns standard-library modules such as pathlib. Never append module names, versions or prose to this ID. Null for upload or an unscoped docs subject.
              * @default null
              */
-            library?: ("Python" | "Git" | "LangChain" | "matplotlib" | "numpy" | "pandas" | "pytorch" | "Hugging Face" | "fastapi" | "BeautifulSoup" | "streamlit" | "gradio" | "scikit-learn" | "pydantic" | "Bare" | "unsupported") | null;
+            library: ("Python" | "Git" | "LangChain" | "matplotlib" | "numpy" | "pandas" | "pytorch" | "Hugging Face" | "fastapi" | "BeautifulSoup" | "streamlit" | "gradio" | "scikit-learn" | "pydantic" | "Bare" | "unsupported") | null;
             /**
              * Match
              * @description topic for broad explanation; symbol for API/usage references, including an uploaded function's implementation together with its actual calls/examples; definition when only the named uploaded function/class implementation is needed. A definition alone excludes calls outside its body.
              * @default topic
              * @enum {string}
              */
-            match?: "topic" | "symbol" | "definition";
+            match: "topic" | "symbol" | "definition";
             /**
              * Symbols
              * @description At most one primary target. Use separate tasks for independent symbols, including each uploaded variable/constant whose value is requested. Never put a second independent variable in the first variable's aspects: symbol retrieval selects only the primary target's occurrences. Calls inspected inside a function belong in its aspects, not additional definitions.
              */
-            symbols?: string[];
+            symbols: string[];
             /**
              * Version
              * @description One exact requested version token, for example 3.12, 1.26, v2.4 or latest. For 'Python 3.12', return only '3.12'. Never include a library name, spaces, prose or an inferred default version. Null when the user did not constrain the version.
              * @default null
              */
-            version?: string | null;
+            version: string | null;
         };
         /** PlannerDiagnostic */
         PlannerDiagnostic: {
             /** Fallback Routes */
-            fallback_routes?: string[];
+            fallback_routes: string[];
             /**
              * Intent Required
              * @default false
              */
-            intent_required?: boolean;
+            intent_required: boolean;
             /**
              * Override Applied
              * @default false
              */
-            override_applied?: boolean;
+            override_applied: boolean;
             /**
              * Override Reason
              * @default null
              */
-            override_reason?: ("missing_required_retrieval" | "missing_required_routes" | "upload_retriever_missing") | null;
+            override_reason: ("missing_required_retrieval" | "missing_required_routes" | "upload_retriever_missing") | null;
             /** Planner Warnings */
-            planner_warnings?: string[];
+            planner_warnings: string[];
             /**
              * Reason
              * @default null
              */
-            reason?: string | null;
+            reason: string | null;
             /** Required Routes */
-            required_routes?: string[];
+            required_routes: string[];
             /**
              * Status
              * @default
              */
-            status?: string;
+            status: string;
         };
         /**
          * RecipientInput
@@ -1060,7 +1060,7 @@ export interface components {
              * Unit Id
              * @default null
              */
-            unit_id?: string | null;
+            unit_id: string | null;
         };
         /** RetrievalDiagnostic */
         RetrievalDiagnostic: {
@@ -1069,151 +1069,151 @@ export interface components {
              * @default unknown
              * @enum {string}
              */
-            answerability?: "covered" | "partial" | "missing" | "unknown";
+            answerability: "covered" | "partial" | "missing" | "unknown";
             /**
              * Attempt
              * @default 0
              */
-            attempt?: number;
+            attempt: number;
             /**
              * Candidate Count
              * @default 0
              */
-            candidate_count?: number;
+            candidate_count: number;
             /** Completed Requests */
-            completed_requests?: components["schemas"]["DocsSearchRequest"][];
+            completed_requests: components["schemas"]["DocsSearchRequest"][];
             /**
              * Error Code
              * @default null
              */
-            error_code?: ("provider_schema_invalid" | "provider_configuration" | "provider_unavailable" | "provider_rate_limited" | "model_output_invalid" | "model_output_incomplete" | "model_refusal" | "internal_error" | "evidence_insufficient" | "call_budget_exhausted" | "upload_revision_conflict" | "save_failed" | "PLANNER_SCHEMA_INVALID" | "PLANNER_TIMEOUT" | "RETRIEVAL_DOCS_TIMEOUT" | "RETRIEVAL_DOCS_FAILED" | "RAG_INDEX_MISSING" | "LOCAL_RAG_FAILED" | "UPLOAD_RETRIEVER_BUILD_FAILED" | "LLM_STRUCTURED_EMPTY" | "SYNTHESIS_TIMEOUT" | "VALIDATION_UNRESOLVED_REFERENCES" | "VALIDATION_MISSING_CONTENT" | "DEBUG_NORMALIZATION_FAILED" | "SLACK_RECIPIENT_MISSING" | "SLACK_RECIPIENT_INVALID" | "SLACK_RECIPIENT_AMBIGUOUS" | "SLACK_RECIPIENT_CONFLICT" | "SLACK_CONFIGURATION_ERROR" | "SLACK_TARGET_NOT_FOUND" | "SLACK_TARGET_UNAVAILABLE" | "SLACK_PERMISSION_DENIED" | "SLACK_AUTHENTICATION_FAILED" | "SLACK_RATE_LIMITED" | "SLACK_TEMPORARY_FAILURE" | "SLACK_DELIVERY_UNKNOWN" | "SLACK_PROTOCOL_ERROR" | "UPLOAD_PATH_INVALID") | null;
+            error_code: ("provider_schema_invalid" | "provider_configuration" | "provider_unavailable" | "provider_rate_limited" | "model_output_invalid" | "model_output_incomplete" | "model_refusal" | "internal_error" | "evidence_insufficient" | "call_budget_exhausted" | "upload_revision_conflict" | "save_failed" | "PLANNER_SCHEMA_INVALID" | "PLANNER_TIMEOUT" | "RETRIEVAL_DOCS_TIMEOUT" | "RETRIEVAL_DOCS_FAILED" | "RAG_INDEX_MISSING" | "LOCAL_RAG_FAILED" | "UPLOAD_RETRIEVER_BUILD_FAILED" | "LLM_STRUCTURED_EMPTY" | "SYNTHESIS_TIMEOUT" | "VALIDATION_UNRESOLVED_REFERENCES" | "VALIDATION_MISSING_CONTENT" | "DEBUG_NORMALIZATION_FAILED" | "SLACK_RECIPIENT_MISSING" | "SLACK_RECIPIENT_INVALID" | "SLACK_RECIPIENT_AMBIGUOUS" | "SLACK_RECIPIENT_CONFLICT" | "SLACK_CONFIGURATION_ERROR" | "SLACK_TARGET_NOT_FOUND" | "SLACK_TARGET_UNAVAILABLE" | "SLACK_PERMISSION_DENIED" | "SLACK_AUTHENTICATION_FAILED" | "SLACK_RATE_LIMITED" | "SLACK_TEMPORARY_FAILURE" | "SLACK_DELIVERY_UNKNOWN" | "SLACK_PROTOCOL_ERROR" | "UPLOAD_PATH_INVALID") | null;
             /**
              * Evidence Count
              * @default 0
              */
-            evidence_count?: number;
+            evidence_count: number;
             /**
              * Filtered Cross Domain Count
              * @default 0
              */
-            filtered_cross_domain_count?: number;
+            filtered_cross_domain_count: number;
             /**
              * Filtered Invalid Url Count
              * @default 0
              */
-            filtered_invalid_url_count?: number;
+            filtered_invalid_url_count: number;
             /**
              * Filtered Path Prefix Count
              * @default 0
              */
-            filtered_path_prefix_count?: number;
+            filtered_path_prefix_count: number;
             /**
              * Final Evidence Count
              * @default 0
              */
-            final_evidence_count?: number;
+            final_evidence_count: number;
             /**
              * Include Raw Content Requested
              * @default false
              */
-            include_raw_content_requested?: boolean;
+            include_raw_content_requested: boolean;
             /**
              * Invocation Id
              * @default null
              */
-            invocation_id?: string | null;
+            invocation_id: string | null;
             /**
              * K
              * @default null
              */
-            k?: number | null;
+            k: number | null;
             /**
              * Message
              * @default
              */
-            message?: string;
+            message: string;
             /**
              * Metric
              * @default
              */
-            metric?: string;
+            metric: string;
             /** Missing Requirements */
-            missing_requirements?: string[];
+            missing_requirements: string[];
             /**
              * Normalized Score
              * @default null
              */
-            normalized_score?: number | null;
+            normalized_score: number | null;
             /**
              * Post Filter Ms
              * @default 0
              */
-            post_filter_ms?: number;
+            post_filter_ms: number;
             /**
              * Provider Ms
              * @default 0
              */
-            provider_ms?: number;
+            provider_ms: number;
             /** Provider Requests */
-            provider_requests?: components["schemas"]["DocsSearchProviderRequest"][];
+            provider_requests: components["schemas"]["DocsSearchProviderRequest"][];
             /**
              * Provider Result Count
              * @default 0
              */
-            provider_result_count?: number;
+            provider_result_count: number;
             /**
              * Query
              * @default
              */
-            query?: string;
+            query: string;
             /**
              * Raw Score
              * @default null
              */
-            raw_score?: number | null;
+            raw_score: number | null;
             /**
              * Request Fingerprint
              * @default
              */
-            request_fingerprint?: string;
+            request_fingerprint: string;
             /**
              * Requirement Id
              * @default
              */
-            requirement_id?: string;
+            requirement_id: string;
             /**
              * Result Count
              * @default 0
              */
-            result_count?: number;
+            result_count: number;
             /**
              * Reused
              * @default false
              */
-            reused?: boolean;
+            reused: boolean;
             /**
              * Route
              * @default
              */
-            route?: string;
+            route: string;
             /**
              * Score Direction
              * @default
              * @enum {string}
              */
-            score_direction?: "higher_is_better" | "lower_is_better" | "";
+            score_direction: "higher_is_better" | "lower_is_better" | "";
             /**
              * Status
              * @default
              */
-            status?: string;
+            status: string;
             /**
              * Tool
              * @default
              */
-            tool?: string;
+            tool: string;
             /** Warnings */
-            warnings?: string[];
+            warnings: string[];
         };
         /** RetrievalRouteLatencyModel */
         RetrievalRouteLatencyModel: {
@@ -1221,27 +1221,27 @@ export interface components {
              * Attempt
              * @default 1
              */
-            attempt?: number;
+            attempt: number;
             /**
              * Latency Ms
              * @default 0
              */
-            latency_ms?: number;
+            latency_ms: number;
             /**
              * Route
              * @default
              */
-            route?: string;
+            route: string;
             /**
              * Status
              * @default
              */
-            status?: string;
+            status: string;
             /**
              * Tool
              * @default
              */
-            tool?: string;
+            tool: string;
         };
         /** RetrievalScore */
         RetrievalScore: {
@@ -1256,12 +1256,12 @@ export interface components {
              * Normalized
              * @default null
              */
-            normalized?: number | null;
+            normalized: number | null;
             /**
              * Raw
              * @default null
              */
-            raw?: number | null;
+            raw: number | null;
         };
         /** RetrievalTask */
         RetrievalTask: {
@@ -1269,13 +1269,13 @@ export interface components {
             k: number;
             /** Query */
             query: string;
-            requirement?: components["schemas"]["PlannedRequirement"];
+            requirement: components["schemas"]["PlannedRequirement"];
             /**
              * Requirement Id
              * @description A stable short ID for this independent requirement; preserve it during retries.
              * @default
              */
-            requirement_id?: string;
+            requirement_id: string;
             /**
              * Route
              * @enum {string}
@@ -1288,80 +1288,80 @@ export interface components {
              * Attempt
              * @default 0
              */
-            attempt?: number;
+            attempt: number;
             /**
              * Content Repair Attempt
              * @default 0
              */
-            content_repair_attempt?: number;
+            content_repair_attempt: number;
             /** Failed Requirement Ids */
-            failed_requirement_ids?: string[];
+            failed_requirement_ids: string[];
             /** Failed Routes */
-            failed_routes?: string[];
+            failed_routes: string[];
             /**
              * Hit Start Index
              * @default 0
              */
-            hit_start_index?: number;
+            hit_start_index: number;
             /**
              * Max Content Repairs
              * @default 1
              */
-            max_content_repairs?: number;
+            max_content_repairs: number;
             /**
              * Max Retries
              * @default 1
              */
-            max_retries?: number;
+            max_retries: number;
             /**
              * Needs Retry
              * @default false
              */
-            needs_retry?: boolean;
+            needs_retry: boolean;
             /** Original Tasks */
-            original_tasks?: components["schemas"]["RetrievalTask"][];
+            original_tasks: components["schemas"]["RetrievalTask"][];
             /** Preserved Hits */
-            preserved_hits?: components["schemas"]["SearchHit"][];
+            preserved_hits: components["schemas"]["SearchHit"][];
             /** Preserved Retrieval Diagnostics */
-            preserved_retrieval_diagnostics?: components["schemas"]["RetrievalDiagnostic"][];
+            preserved_retrieval_diagnostics: components["schemas"]["RetrievalDiagnostic"][];
             /**
              * Retrieval Diagnostic Start Index
              * @default 0
              */
-            retrieval_diagnostic_start_index?: number;
+            retrieval_diagnostic_start_index: number;
             /**
              * Retrieval Error Start Index
              * @default 0
              */
-            retrieval_error_start_index?: number;
+            retrieval_error_start_index: number;
             /**
              * Retrieval Feedback
              * @default
              */
-            retrieval_feedback?: string;
+            retrieval_feedback: string;
             /**
              * Retry Reason
              * @default null
              */
-            retry_reason?: ("no_evidence" | "low_score" | "tool_error" | "blocked_missing_upload" | "unresolved_references" | "missing" | "missing_route_coverage" | "missing_content") | null;
+            retry_reason: ("no_evidence" | "low_score" | "tool_error" | "blocked_missing_upload" | "unresolved_references" | "missing" | "missing_route_coverage" | "missing_content") | null;
             /**
              * Retry Scope
              * @default refresh_routes
              * @enum {string}
              */
-            retry_scope?: "refresh_routes" | "reuse_hits_resynthesize";
+            retry_scope: "refresh_routes" | "reuse_hits_resynthesize";
             /**
              * Score Avg
              * @default null
              */
-            score_avg?: number | null;
+            score_avg: number | null;
             /** Terminal Failed Requirement Ids */
-            terminal_failed_requirement_ids?: string[];
+            terminal_failed_requirement_ids: string[];
             /**
              * Terminal Retrieval Reason
              * @default null
              */
-            terminal_retrieval_reason?: ("no_evidence" | "low_score" | "tool_error" | "blocked_missing_upload" | "unresolved_references" | "missing" | "missing_route_coverage" | "missing_content") | null;
+            terminal_retrieval_reason: ("no_evidence" | "low_score" | "tool_error" | "blocked_missing_upload" | "unresolved_references" | "missing" | "missing_route_coverage" | "missing_content") | null;
         };
         /**
          * RoutingDecision
@@ -1411,7 +1411,7 @@ export interface components {
              * @default answer-text-v1/utf-8-sig
              * @constant
              */
-            export_profile?: "answer-text-v1/utf-8-sig";
+            export_profile: "answer-text-v1/utf-8-sig";
             /** Operation Id */
             operation_id: string;
             /** Payload Sha256 */
@@ -1434,32 +1434,32 @@ export interface components {
              * Bytes
              * @default 0
              */
-            bytes?: number;
+            bytes: number;
             /**
              * Error
              * @default null
              */
-            error?: string | null;
+            error: string | null;
             /**
              * Error Code
              * @default null
              */
-            error_code?: ("provider_schema_invalid" | "provider_configuration" | "provider_unavailable" | "provider_rate_limited" | "model_output_invalid" | "model_output_incomplete" | "model_refusal" | "internal_error" | "evidence_insufficient" | "call_budget_exhausted" | "upload_revision_conflict" | "save_failed" | "PLANNER_SCHEMA_INVALID" | "PLANNER_TIMEOUT" | "RETRIEVAL_DOCS_TIMEOUT" | "RETRIEVAL_DOCS_FAILED" | "RAG_INDEX_MISSING" | "LOCAL_RAG_FAILED" | "UPLOAD_RETRIEVER_BUILD_FAILED" | "LLM_STRUCTURED_EMPTY" | "SYNTHESIS_TIMEOUT" | "VALIDATION_UNRESOLVED_REFERENCES" | "VALIDATION_MISSING_CONTENT" | "DEBUG_NORMALIZATION_FAILED" | "SLACK_RECIPIENT_MISSING" | "SLACK_RECIPIENT_INVALID" | "SLACK_RECIPIENT_AMBIGUOUS" | "SLACK_RECIPIENT_CONFLICT" | "SLACK_CONFIGURATION_ERROR" | "SLACK_TARGET_NOT_FOUND" | "SLACK_TARGET_UNAVAILABLE" | "SLACK_PERMISSION_DENIED" | "SLACK_AUTHENTICATION_FAILED" | "SLACK_RATE_LIMITED" | "SLACK_TEMPORARY_FAILURE" | "SLACK_DELIVERY_UNKNOWN" | "SLACK_PROTOCOL_ERROR" | "UPLOAD_PATH_INVALID") | null;
+            error_code: ("provider_schema_invalid" | "provider_configuration" | "provider_unavailable" | "provider_rate_limited" | "model_output_invalid" | "model_output_incomplete" | "model_refusal" | "internal_error" | "evidence_insufficient" | "call_budget_exhausted" | "upload_revision_conflict" | "save_failed" | "PLANNER_SCHEMA_INVALID" | "PLANNER_TIMEOUT" | "RETRIEVAL_DOCS_TIMEOUT" | "RETRIEVAL_DOCS_FAILED" | "RAG_INDEX_MISSING" | "LOCAL_RAG_FAILED" | "UPLOAD_RETRIEVER_BUILD_FAILED" | "LLM_STRUCTURED_EMPTY" | "SYNTHESIS_TIMEOUT" | "VALIDATION_UNRESOLVED_REFERENCES" | "VALIDATION_MISSING_CONTENT" | "DEBUG_NORMALIZATION_FAILED" | "SLACK_RECIPIENT_MISSING" | "SLACK_RECIPIENT_INVALID" | "SLACK_RECIPIENT_AMBIGUOUS" | "SLACK_RECIPIENT_CONFLICT" | "SLACK_CONFIGURATION_ERROR" | "SLACK_TARGET_NOT_FOUND" | "SLACK_TARGET_UNAVAILABLE" | "SLACK_PERMISSION_DENIED" | "SLACK_AUTHENTICATION_FAILED" | "SLACK_RATE_LIMITED" | "SLACK_TEMPORARY_FAILURE" | "SLACK_DELIVERY_UNKNOWN" | "SLACK_PROTOCOL_ERROR" | "UPLOAD_PATH_INVALID") | null;
             /**
              * File Path
              * @default null
              */
-            file_path?: string | null;
+            file_path: string | null;
             /**
              * Message
              * @default null
              */
-            message?: string | null;
+            message: string | null;
             /**
              * Status
              * @default
              */
-            status?: string;
+            status: string;
         };
         /** SearchHit */
         SearchHit: {
@@ -1470,7 +1470,7 @@ export interface components {
              * Requirement Id
              * @default
              */
-            requirement_id?: string;
+            requirement_id: string;
             score: components["schemas"]["RetrievalScore"];
         };
         /**
@@ -1487,12 +1487,12 @@ export interface components {
              * @default evaluated
              * @enum {string}
              */
-            status?: "evaluated" | "refused";
+            status: "evaluated" | "refused";
             /**
              * Unit Id
              * @default null
              */
-            unit_id?: string | null;
+            unit_id: string | null;
         };
         /**
          * SemanticValidation
@@ -1509,14 +1509,16 @@ export interface components {
              * Model
              * @default gpt-6-luna
              */
-            model?: string;
+            model: string;
             /** Threshold */
             threshold: number;
         };
         /** SlackDefault */
         SlackDefault: {
-            failure?: components["schemas"]["SlackFailure"] | null;
-            selector?: components["schemas"]["RecipientSelector"] | null;
+            /** @default null */
+            failure: components["schemas"]["SlackFailure"] | null;
+            /** @default null */
+            selector: components["schemas"]["RecipientSelector"] | null;
         };
         /**
          * SlackDelivery
@@ -1527,34 +1529,34 @@ export interface components {
          */
         SlackDelivery: {
             /** @default null */
-            failure?: components["schemas"]["SlackFailure"] | null;
+            failure: components["schemas"]["SlackFailure"] | null;
             /** Intent */
             intent: components["schemas"]["OmittedRecipient"] | components["schemas"]["ExplicitRecipient"] | components["schemas"]["UnresolvedRecipient"];
             /**
              * Invocation Id
              * @default null
              */
-            invocation_id?: string | null;
+            invocation_id: string | null;
             /**
              * Message Ts
              * @default null
              */
-            message_ts?: string | null;
+            message_ts: string | null;
             /**
              * Resolved User Id
              * @default null
              */
-            resolved_user_id?: string | null;
+            resolved_user_id: string | null;
             /** @default null */
-            selection?: components["schemas"]["RecipientSelection"] | null;
+            selection: components["schemas"]["RecipientSelection"] | null;
             /**
              * Status
              * @default pending
              * @enum {string}
              */
-            status?: "pending" | "sent" | "not_sent" | "unknown";
+            status: "pending" | "sent" | "not_sent" | "unknown";
             /** @default null */
-            target?: components["schemas"]["SlackTarget"] | null;
+            target: components["schemas"]["SlackTarget"] | null;
         };
         /** SlackFailure */
         SlackFailure: {
@@ -1574,12 +1576,12 @@ export interface components {
              * Retry After Seconds
              * @default null
              */
-            retry_after_seconds?: number | null;
+            retry_after_seconds: number | null;
             /**
              * Slack Error
              * @default null
              */
-            slack_error?: string | null;
+            slack_error: string | null;
             /**
              * Stage
              * @enum {string}
@@ -1594,7 +1596,7 @@ export interface components {
              * User Id
              * @default null
              */
-            user_id?: string | null;
+            user_id: string | null;
         };
         /**
          * SourceAnchor
@@ -1609,7 +1611,7 @@ export interface components {
              * Bbox
              * @default null
              */
-            bbox?: [
+            bbox: [
                 number,
                 number,
                 number,
@@ -1619,29 +1621,29 @@ export interface components {
              * Cell Id
              * @default null
              */
-            cell_id?: string | null;
+            cell_id: string | null;
             /**
              * Cell Index
              * @default null
              */
-            cell_index?: number | null;
+            cell_index: number | null;
             /**
              * Coordinate Origin
              * @default top_left
              * @enum {string}
              */
-            coordinate_origin?: "top_left" | "bottom_left";
+            coordinate_origin: "top_left" | "bottom_left";
             /**
              * Coordinate Space
              * @default normalized
              * @enum {string}
              */
-            coordinate_space?: "normalized" | "points" | "pixels";
+            coordinate_space: "normalized" | "points" | "pixels";
             /**
              * End
              * @default null
              */
-            end?: number | null;
+            end: number | null;
             /**
              * Kind
              * @enum {string}
@@ -1651,38 +1653,38 @@ export interface components {
              * Line End
              * @default null
              */
-            line_end?: number | null;
+            line_end: number | null;
             /**
              * Line Start
              * @default null
              */
-            line_start?: number | null;
+            line_start: number | null;
             /**
              * Page Height
              * @default null
              */
-            page_height?: number | null;
+            page_height: number | null;
             /**
              * Page No
              * @default null
              */
-            page_no?: number | null;
+            page_no: number | null;
             /**
              * Page Width
              * @default null
              */
-            page_width?: number | null;
+            page_width: number | null;
             /**
              * Precision
              * @default element
              * @enum {string}
              */
-            precision?: "exact" | "element" | "page" | "document";
+            precision: "exact" | "element" | "page" | "document";
             /**
              * Start
              * @default null
              */
-            start?: number | null;
+            start: number | null;
         };
         /**
          * SourceLocationReference
@@ -1702,17 +1704,17 @@ export interface components {
          */
         SourceSelection: {
             /** Cell Ids */
-            cell_ids?: string[];
+            cell_ids: string[];
             /**
              * End
              * @default null
              */
-            end?: number | null;
+            end: number | null;
             /**
              * Start
              * @default 0
              */
-            start?: number;
+            start: number;
         };
         /** StageAttemptModel */
         StageAttemptModel: {
@@ -1720,12 +1722,12 @@ export interface components {
              * Attempt
              * @default 1
              */
-            attempt?: number;
+            attempt: number;
             /**
              * Latency Ms
              * @default 0
              */
-            latency_ms?: number;
+            latency_ms: number;
             /**
              * Stage
              * @enum {string}
@@ -1735,7 +1737,7 @@ export interface components {
              * Status
              * @default null
              */
-            status?: string | null;
+            status: string | null;
         };
         /** StageTotalsModel */
         StageTotalsModel: {
@@ -1743,42 +1745,42 @@ export interface components {
              * Action Postprocess Ms
              * @default 0
              */
-            action_postprocess_ms?: number;
+            action_postprocess_ms: number;
             /**
              * Planner Ms
              * @default 0
              */
-            planner_ms?: number;
+            planner_ms: number;
             /**
              * Post Synthesis Validation Ms
              * @default 0
              */
-            post_synthesis_validation_ms?: number;
+            post_synthesis_validation_ms: number;
             /**
              * Pre Synthesis Validation Ms
              * @default 0
              */
-            pre_synthesis_validation_ms?: number;
+            pre_synthesis_validation_ms: number;
             /**
              * Retrieval Total Ms
              * @default 0
              */
-            retrieval_total_ms?: number;
+            retrieval_total_ms: number;
             /**
              * Summarize Ms
              * @default 0
              */
-            summarize_ms?: number;
+            summarize_ms: number;
             /**
              * Synthesis Total Ms
              * @default 0
              */
-            synthesis_total_ms?: number;
+            synthesis_total_ms: number;
             /**
              * Validation Ms
              * @default 0
              */
-            validation_ms?: number;
+            validation_ms: number;
         };
         /**
          * StagedUpload
@@ -1800,12 +1802,12 @@ export interface components {
              * Attempt
              * @default 1
              */
-            attempt?: number;
+            attempt: number;
             /**
              * Fallback Ms
              * @default null
              */
-            fallback_ms?: number | null;
+            fallback_ms: number | null;
             /**
              * Mode
              * @enum {string}
@@ -1815,19 +1817,19 @@ export interface components {
              * Structured Ms
              * @default null
              */
-            structured_ms?: number | null;
+            structured_ms: number | null;
             /**
              * Total Ms
              * @default 0
              */
-            total_ms?: number;
+            total_ms: number;
         };
         /** TableBlock */
         TableBlock: {
             /** Columns */
             columns: components["schemas"]["ContentUnit"][];
             /** Rows */
-            rows?: components["schemas"]["ContentUnit"][][];
+            rows: components["schemas"]["ContentUnit"][][];
             /**
              * @description discriminator enum property added by openapi-typescript
              * @enum {string}
@@ -1837,7 +1839,7 @@ export interface components {
         /** TableCell */
         TableCell: {
             /** Anchors */
-            anchors?: components["schemas"]["SourceAnchor"][];
+            anchors: components["schemas"]["SourceAnchor"][];
             /** Cell Id */
             cell_id: string;
             /** Col */
@@ -1846,26 +1848,26 @@ export interface components {
              * Col Span
              * @default 1
              */
-            col_span?: number;
+            col_span: number;
             /**
              * Is Header
              * @default false
              */
-            is_header?: boolean;
+            is_header: boolean;
             /** Row */
             row: number;
             /**
              * Row Span
              * @default 1
              */
-            row_span?: number;
+            row_span: number;
             /** Text */
             text: string;
         };
         /** TableData */
         TableData: {
             /** Cells */
-            cells?: components["schemas"]["TableCell"][];
+            cells: components["schemas"]["TableCell"][];
         };
         /** TokenUsage */
         TokenUsage: {
@@ -1873,29 +1875,29 @@ export interface components {
              * Cache Write Input Tokens
              * @default null
              */
-            cache_write_input_tokens?: number | null;
+            cache_write_input_tokens: number | null;
             /**
              * Cached Input Tokens
              * @default null
              */
-            cached_input_tokens?: number | null;
+            cached_input_tokens: number | null;
             /**
              * Input Tokens
              * @default null
              */
-            input_tokens?: number | null;
+            input_tokens: number | null;
             /** Issues */
-            issues?: components["schemas"]["UsageIssue"][];
+            issues: components["schemas"]["UsageIssue"][];
             /**
              * Output Tokens
              * @default null
              */
-            output_tokens?: number | null;
+            output_tokens: number | null;
             /**
              * Reasoning Output Tokens
              * @default null
              */
-            reasoning_output_tokens?: number | null;
+            reasoning_output_tokens: number | null;
         };
         /** ToolExecutionEvent */
         ToolExecutionEvent: {
@@ -1905,7 +1907,7 @@ export interface components {
              * Origin Invocation Id
              * @default null
              */
-            origin_invocation_id?: string | null;
+            origin_invocation_id: string | null;
             /**
              * Phase
              * @enum {string}
@@ -1915,7 +1917,7 @@ export interface components {
              * Reason Code
              * @default null
              */
-            reason_code?: string | null;
+            reason_code: string | null;
             /** Sequence */
             sequence: number;
             /** Tool Name */
@@ -1944,7 +1946,7 @@ export interface components {
         /** UnitCheck */
         UnitCheck: {
             /** Issues */
-            issues?: string[];
+            issues: string[];
             /**
              * Reference Status
              * @enum {string}
@@ -1955,7 +1957,7 @@ export interface components {
              * @default not_evaluated
              * @enum {string}
              */
-            support_status?: "not_evaluated" | "exact_match" | "unsupported";
+            support_status: "not_evaluated" | "exact_match" | "unsupported";
             /** Unit Id */
             unit_id: string;
         };
@@ -1965,7 +1967,7 @@ export interface components {
              * Evidence Ids
              * @default []
              */
-            evidence_ids?: string[];
+            evidence_ids: string[];
             /** Raw Input */
             raw_input: string;
             /**
@@ -2077,39 +2079,39 @@ export interface components {
              * Answer Id
              * @default null
              */
-            answer_id?: string | null;
+            answer_id: string | null;
             /** @default null */
-            debug?: components["schemas"]["AgentDebugInfo"] | null;
+            debug: components["schemas"]["AgentDebugInfo"] | null;
             /**
              * Message
              * @default
              */
-            message?: string;
+            message: string;
             /** Missing Slots */
-            missing_slots?: string[];
+            missing_slots: string[];
             /** @default null */
-            problem?: components["schemas"]["ExecutionProblem"] | null;
+            problem: components["schemas"]["ExecutionProblem"] | null;
             /**
              * Request Id
              * @description ID of this execution, not the domain request ID.
              * @default
              */
-            request_id?: string;
+            request_id: string;
             /** @default null */
-            response?: components["schemas"]["AnswerResponse"] | null;
+            response: components["schemas"]["AnswerResponse"] | null;
             /**
              * Status
              * @default completed
              * @enum {string}
              */
-            status?: "completed" | "needs_input" | "failed" | "partial" | "refused";
+            status: "completed" | "needs_input" | "failed" | "partial" | "refused";
             /** Trace */
             trace: string;
             /**
              * @description Confirmed attachment snapshot. Null on a failed request means no snapshot was available, not an empty attachment set.
              * @default null
              */
-            upload_manifest?: components["schemas"]["UploadManifest"] | null;
+            upload_manifest: components["schemas"]["UploadManifest"] | null;
         };
         AgentStreamEvent_heartbeat: {
             elapsed_ms: number;

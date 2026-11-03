@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 
 import fixtures from '../../../tests/fixtures/web_contracts/agent_responses.json';
 import { parseAnswerExport, parseSlackDefault } from './delivery-validation';
+import { parseAgentResponse } from './validation';
 
 const failure = {
   stage: 'selection', code: 'configuration_error', message: '기본 수신자 설정을 확인해 주세요.',
@@ -59,6 +60,15 @@ describe('Slack default response', () => {
 });
 
 describe('answer export response', () => {
+  it.each([null, 'unverifiable'])('rejects a legacy successful save with verification %s in a final response', (verification) => {
+    const result = {
+      ...fixtures.responses.completed,
+      response: { ...completed.response, actions: [{ ...receipt, verification, artifact: null, operation: null }] },
+    };
+
+    expect(() => parseAgentResponse(result)).toThrowError(expect.objectContaining({ code: 'invalid_response' }));
+  });
+
   it('preserves the selected answer and its verified save identity', () => {
     expect(parseAnswerExport(completed, 'answer-1')).toEqual(completed);
   });

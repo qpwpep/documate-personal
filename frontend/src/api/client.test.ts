@@ -88,6 +88,27 @@ describe('browser API contract', () => {
     });
   });
 
+  it.each([
+    ['status', ['status']],
+    ['message', ['message']],
+    ['actions', ['response', 'actions']],
+    ['content blocks', ['response', 'content', 'blocks']],
+    ['content references', ['response', 'content', 'blocks', '0', 'content', '0', 'refs']],
+  ])('rejects a missing serialized %s field instead of filling a default', async (_name, path) => {
+    const result = structuredClone(fixtures.responses.completed);
+    let container: Record<string, unknown> = result;
+    for (const key of path.slice(0, -1)) container = container[key] as Record<string, unknown>;
+    delete container[path[path.length - 1]];
+    respond = (_request, response) => {
+      response.writeHead(200, { 'Content-Type': 'text/event-stream' });
+      response.end(frame('final_response', result));
+    };
+    const client = new AgentSessionClient({ sessionId: 'session-1', baseUrl });
+
+    await expect(collect(client.stream('질문'))).rejects.toMatchObject({ code: 'invalid_stream' });
+    expect(client.manifest).toBeNull();
+  });
+
   it('preserves sentence scope metadata with the exact answer text', async () => {
     const original = fixtures.responses.completed;
     const result = { ...original, response: { ...original.response, content: { blocks: [

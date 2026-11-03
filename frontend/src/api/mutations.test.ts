@@ -118,7 +118,9 @@ describe('explicit attachment and delivery operations', () => {
   it('retries only the selected answer ID and returns a failed save receipt without replaying chat', async () => {
     const result = {
       status: 'failed', answer_id: 'old-answer', request_id: 'export-1', message: '저장에 실패했습니다.',
-      response: { ...fixtures.responses.completed.response, actions: [{ kind: 'save_text', status: 'error', error: 'write_failed' }] },
+      response: { ...fixtures.responses.completed.response, actions: [{ kind: 'save_text', status: 'error', error: 'write_failed',
+        invocation_id: null, file_path: null, slack: null, message: null, operation: null, artifact: null,
+        verification: 'failed', error_code: 'write_failed' }] },
     };
     respond = (_request, response) => {
       response.writeHead(200, { 'Content-Type': 'application/json' });

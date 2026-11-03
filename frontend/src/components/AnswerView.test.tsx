@@ -5,7 +5,7 @@ import type { AgentResponse, AnswerResponse } from '../api/types';
 import { AnswerView } from './AnswerView';
 import sourceFixtures from './AnswerView.fixtures.json';
 
-const unit = (text: string) => ({ text, basis: 'interaction' as const, refs: [], source_location: null });
+const unit = (text: string) => ({ text, basis: 'interaction' as const, refs: [], source_location: null, sentence_scope: null });
 
 const originalShowModal = Object.getOwnPropertyDescriptor(HTMLDialogElement.prototype, 'showModal');
 const originalClose = Object.getOwnPropertyDescriptor(HTMLDialogElement.prototype, 'close');
@@ -239,20 +239,21 @@ describe('AnswerView', () => {
     expect(opener).toHaveFocus();
   });
 
-  it('keeps unknown Slack delivery and legacy unverified saves distinct from success', () => {
+  it('keeps unknown Slack delivery and unverified saves distinct from success', () => {
     const deliveryResponse: AnswerResponse = { ...response, actions: [
-      { ...response.actions[0], status: 'success', message: '이전 저장 기록', verification: 'unverifiable' },
-      { kind: 'slack_notify', status: 'unknown', message: '응답을 받지 못했습니다.', slack: {
+      { ...response.actions[0], status: 'unknown', message: '저장 여부를 확인하지 못했습니다.', verification: 'unverifiable' },
+      { ...response.actions[1], status: 'unknown', message: '응답을 받지 못했습니다.', slack: {
         intent: { state: 'omitted' }, status: 'unknown', invocation_id: 'delivery-1',
         selection: { source: 'configured_default', request_id: 'request-1', selector: { kind: 'channel', value: 'C123' } },
-        target: { channel_id: 'C123' }, message_ts: null,
-        failure: { code: 'delivery_unknown', stage: 'send', message: '전달 여부를 확인할 수 없습니다.', next_action: 'verify_delivery' },
+        target: { channel_id: 'C123', user_id: null }, message_ts: null, resolved_user_id: null,
+        failure: { code: 'delivery_unknown', stage: 'send', message: '전달 여부를 확인할 수 없습니다.', next_action: 'verify_delivery',
+          retry_after_seconds: null, slack_error: null },
       } },
     ] };
     render(<AnswerView response={deliveryResponse} />);
 
     const actions = screen.getByRole('region', { name: '전달 결과' });
-    expect(within(actions).getByText('파일 저장 · 검증 안 됨')).toBeVisible();
+    expect(within(actions).getByText('파일 저장 · 결과 확인 필요')).toBeVisible();
     expect(within(actions).getByText('Slack 전송 · 전달 여부 불명')).toBeVisible();
     expect(within(actions).getByText('기본 수신자: C123')).toBeVisible();
     expect(within(actions).getByText('Slack에서 전달 여부를 확인해 주세요. 자동으로 다시 전송하지 않습니다.')).toBeVisible();
@@ -287,15 +288,15 @@ describe('AnswerView', () => {
     const partialResponse: AnswerResponse = {
       ...response,
       issues: [
-        { code: 'answer_incomplete', message: '요청 전체를 완성하지 못했습니다.' },
-        { code: 'evidence_packet_incomplete', message: '검색한 원문을 답변 준비 범위에 모두 담지 못했습니다.' },
-        { code: 'source_excerpt_fallback', message: '요청한 설명 대신 확인 가능한 원문 발췌만 제공합니다.' },
+        { code: 'answer_incomplete', message: '요청 전체를 완성하지 못했습니다.', unit_id: null },
+        { code: 'evidence_packet_incomplete', message: '검색한 원문을 답변 준비 범위에 모두 담지 못했습니다.', unit_id: null },
+        { code: 'source_excerpt_fallback', message: '요청한 설명 대신 확인 가능한 원문 발췌만 제공합니다.', unit_id: null },
         { code: 'scope_limited', unit_id: 'b1.content.0', message: '이 문장의 추가 조건은 확인하지 못했습니다.' },
       ],
     };
     const turn: AgentResponse = {
       status: 'partial', response: partialResponse, answer_id: 'answer-partial', message: '',
-      problem: { code: 'evidence_insufficient', stage: 'validation', message: '근거를 충분히 확인하지 못했습니다.', next_action: 'supply_information' },
+      problem: { code: 'evidence_insufficient', stage: 'validation', message: '근거를 충분히 확인하지 못했습니다.', next_action: 'supply_information', retry_after_seconds: null },
       request_id: 'request-partial', missing_slots: [], trace: '', debug: null, upload_manifest: { epoch: 'session', revision: 0, files: [] },
     };
     render(<AnswerView response={partialResponse} turn={turn} />);
@@ -316,12 +317,13 @@ describe('AnswerView', () => {
     const checked: AnswerResponse = {
       ...response, issues: [], semantic_validation: {
         content_hash: response.content_hash, evidence_fingerprint: '4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945',
-        threshold: 0.8, checks: [{ name: 'request_fulfilled', probability: 0.95 }],
+        model: 'gpt-6-luna', threshold: 0.8,
+        checks: [{ name: 'request_fulfilled', probability: 0.95, unit_id: null, status: 'evaluated' }],
       },
     };
     const turn: AgentResponse = {
       status: 'partial', response: checked, answer_id: 'saved-answer', message: '',
-      problem: { code: 'save_failed', stage: 'action_postprocess', message: '파일을 만들지 못했습니다.', next_action: 'retry_later' },
+      problem: { code: 'save_failed', stage: 'action_postprocess', message: '파일을 만들지 못했습니다.', next_action: 'retry_later', retry_after_seconds: null },
       request_id: 'save-request', missing_slots: [], trace: '', debug: null, upload_manifest: { epoch: 'session', revision: 0, files: [] },
     };
     render(<AnswerView response={checked} turn={turn} />);

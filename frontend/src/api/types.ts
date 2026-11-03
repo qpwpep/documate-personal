@@ -6,21 +6,11 @@ export type StagedUpload = components['schemas']['StagedUpload'];
 export type BrowserUploadSyncRequest = components['schemas']['BrowserUploadSyncRequest'];
 export type AgentRequest = components['schemas']['AgentRequest'];
 export type RecipientInput = components['schemas']['RecipientInput'];
-export type SlackDefault = Required<components['schemas']['SlackDefault']>;
-export type AnswerExportResult = Omit<components['schemas']['AnswerExportResult'], 'response'> & {
-  response: AnswerResponse;
-};
-export type AnswerResponse = Omit<Required<components['schemas']['AnswerResponse']>, 'content'> & {
-  content: Required<components['schemas']['AnswerDocument']>;
-};
-export type AgentResponse = Omit<Required<components['schemas']['AgentResponse']>, 'response'> & {
-  response: AnswerResponse | null;
-};
-
-type EventData = Omit<AgentStreamEventData, 'final_response'> & {
-  final_response: AgentResponse;
-};
+export type SlackDefault = components['schemas']['SlackDefault'];
+export type AnswerExportResult = components['schemas']['AnswerExportResult'];
+export type AnswerResponse = components['schemas']['AnswerResponse'];
+export type AgentResponse = components['schemas']['AgentResponse'];
 
 export type AgentStreamEvent = {
-  [Name in keyof EventData]: { event: Name; data: EventData[Name] }
-}[keyof EventData];
+  [Name in keyof AgentStreamEventData]: { event: Name; data: AgentStreamEventData[Name] }
+}[keyof AgentStreamEventData];

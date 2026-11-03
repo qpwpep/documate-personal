@@ -126,7 +126,8 @@ describe('브라우저 대화 표시 상태', () => {
       message: '파일을 저장하지 못했습니다.',
       response: {
         ...turn.result.response,
-        actions: [{ kind: 'save_text', status: 'error', message: '저장 공간을 확인해 주세요.' }],
+        actions: [{ kind: 'save_text', status: 'error', message: '저장 공간을 확인해 주세요.', invocation_id: null,
+          file_path: null, slack: null, error: null, operation: null, artifact: null, verification: 'failed', error_code: 'write_failed' }],
       },
     }, turn.result.answer_id!);
     turn.exportError = '저장 공간을 확인해 주세요.';
@@ -162,5 +163,18 @@ describe('브라우저 대화 표시 상태', () => {
     state.conversations[0].turns = [completedTurn()];
     const serialized = serializeConversations(state).replace('"status":"completed"', '"status":"failed"');
     expect(() => restoreConversations(serialized)).toThrow('대화 기록');
+  });
+
+  it('과거의 검증되지 않은 저장 성공 기록을 새 성공 계약으로 복원하지 않는다', () => {
+    const state = createConversationState();
+    state.conversations[0].turns = [completedTurn()];
+    const snapshot = JSON.parse(serializeConversations(state));
+    snapshot.conversations[0].turns[0].result.response.actions = [{
+      kind: 'save_text', status: 'success', message: '이전 저장 기록', invocation_id: null,
+      file_path: 'old-answer.txt', slack: null, error: null, operation: null, artifact: null,
+      verification: null, error_code: null,
+    }];
+
+    expect(() => restoreConversations(JSON.stringify(snapshot))).toThrow('대화 기록');
   });
 });

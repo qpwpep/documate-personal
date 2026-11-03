@@ -6,6 +6,7 @@ import uuid
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
+from pydantic.json_schema import models_json_schema
 
 from src.app.agent_manager import AgentFlowManager
 from src.app.answer_exports import AnswerExportService
@@ -16,7 +17,10 @@ from src.infra.llm import validate_output_schemas
 from src.app.web.agent_request_service import AgentRequestService
 from src.app.web.cleanup import RuntimeCleaner
 from src.app.web.routes import router
-from src.app.web.schemas import AgentResponse
+from src.app.web.schemas import AgentResponse, ClientConfig, HTTPResponseSchema, StagedUpload
+from src.core.contracts.outcome import AnswerExportResult
+from src.core.slack_contract import SlackDefault
+from src.core.uploads import UploadManifest
 from src.app.web.session_store import InMemorySessionStore
 from src.app.web.static_ui import mount_react_ui
 
@@ -119,14 +123,18 @@ def create_app() -> FastAPI:
     def stream_openapi():
         if app.openapi_schema is None:
             schema = default_openapi()
-            # SSE carries this model inside event data, outside FastAPI's JSON
-            # response_model handling. Keep its referenced schemas discoverable.
-            final_response_schema = AgentResponse.model_json_schema(
-                ref_template="#/components/schemas/{model}", mode="serialization",
+            # HTTP outputs include model defaults, unlike model/LLM input schemas.
+            # SSE also needs its final-response model registered explicitly.
+            _, response_schemas = models_json_schema(
+                [(model, "serialization") for model in (
+                    AgentResponse, AnswerExportResult, SlackDefault,
+                    UploadManifest, StagedUpload, ClientConfig,
+                )],
+                ref_template="#/components/schemas/{model}",
+                schema_generator=HTTPResponseSchema,
             )
             components = schema.setdefault("components", {}).setdefault("schemas", {})
-            components.update(final_response_schema.pop("$defs", {}))
-            components["AgentResponse"] = final_response_schema
+            components.update(response_schemas["$defs"])
         return app.openapi_schema
 
     app.openapi = stream_openapi

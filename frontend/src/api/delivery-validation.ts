@@ -1,20 +1,20 @@
 import { ApiError } from './errors';
 import type { AnswerExportResult, SlackDefault } from './types';
-import { modelValidator, normalizeAnswer } from './validation';
+import { modelValidator, validateSaveReceipts } from './validation';
 import { slackRecipientPatterns } from '../slackRecipients';
 
 const slackDefaultValidator = modelValidator('SlackDefault');
 const answerExportValidator = modelValidator('AnswerExportResult');
 
 export function parseSlackDefault(value: unknown): SlackDefault {
-  if (!slackDefaultValidator(value) || !('selector' in value) || !('failure' in value)) {
+  if (!slackDefaultValidator(value)) {
     throw invalidResponse();
   }
   const selector = value.selector == null ? null : {
     ...value.selector,
     value: value.selector.value.trim(),
   };
-  const failure = value.failure ?? null;
+  const failure = value.failure;
   if ((selector !== null && failure !== null)
     || (selector !== null && !slackRecipientPatterns[selector.kind].test(selector.value))) {
     throw invalidResponse();
@@ -24,24 +24,13 @@ export function parseSlackDefault(value: unknown): SlackDefault {
 
 export function parseAnswerExport(value: unknown, answerId: string): AnswerExportResult {
   if (!answerExportValidator(value) || value.answer_id !== answerId) throw invalidResponse();
-  const response = normalizeAnswer(value.response);
-  const receipts = response.actions.filter((receipt) => receipt.kind === 'save_text');
+  validateSaveReceipts(value.response);
+  const receipts = value.response.actions.filter((receipt) => receipt.kind === 'save_text');
   if (receipts.length !== 1) throw invalidResponse();
   const receipt = receipts[0];
-  const artifact = receipt.artifact;
-  const operation = receipt.operation;
-  const complete = receipt.status === 'success' && receipt.verification === 'verified'
-    && artifact != null && operation != null;
+  const complete = receipt.status === 'success';
   if ((value.status === 'completed') !== complete) throw invalidResponse();
-  if (artifact != null && (
-    /[/\\:]/.test(artifact.filename) || !artifact.filename.endsWith('.txt')
-    || artifact.expires_at <= artifact.created_at
-  )) throw invalidResponse();
-  if (receipt.verification === 'verified' && (
-    !complete || !receipt.file_path || artifact == null || operation == null
-    || artifact.sha256 !== operation.payload_sha256 || artifact.byte_count !== operation.byte_count
-  )) throw invalidResponse();
-  return { ...value, response };
+  return value;
 }
 
 function invalidResponse(): ApiError {

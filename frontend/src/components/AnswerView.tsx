@@ -328,9 +328,7 @@ function ActionReceipts({ response }: { response: AnswerResponse }) {
   return <section className="answer-actions" aria-label="전달 결과"><h3>전달 결과</h3>
     {response.actions.map((action, index) => {
       const delivery = action.slack;
-      const verifiedSave = action.kind !== 'save_text' || (action.verification === 'verified' && action.artifact);
-      const label = action.kind === 'save_text' && action.status === 'success' && !verifiedSave
-        ? '검증 안 됨' : delivery?.status === 'unknown' ? '전달 여부 불명' : actionStatuses[action.status];
+      const label = delivery?.status === 'unknown' ? '전달 여부 불명' : actionStatuses[action.status];
       return <div key={index}>
         <p><strong>{actionLabels[action.kind]} · {label}</strong></p>
         {delivery?.selection && <p>{delivery.selection.source === 'configured_default' ? '기본 수신자' : '요청 수신자'}: {delivery.selection.selector.value}</p>}
@@ -339,7 +337,6 @@ function ActionReceipts({ response }: { response: AnswerResponse }) {
         {[...new Set([action.message, action.error, delivery?.failure?.message])].filter((message): message is string => Boolean(message)).map((message) => <p key={message}>{message}</p>)}
         {delivery?.failure && <p>{delivery.failure.retry_after_seconds != null && `${delivery.failure.retry_after_seconds}초 이후 `}{deliveryGuidance[delivery.failure.next_action]}</p>}
         {action.kind === 'save_text' && action.status === 'error' && <p>기존 답변은 유지됩니다. 같은 답변으로 저장을 다시 시도할 수 있습니다.</p>}
-        {action.kind === 'save_text' && action.status === 'success' && !verifiedSave && <p>검증된 파일 정보가 없는 이전 저장 기록입니다.</p>}
       </div>;
     })}
   </section>;

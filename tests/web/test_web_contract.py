@@ -8,14 +8,41 @@ from pathlib import Path
 
 import pytest
 import requests
+from jsonschema import Draft202012Validator
 
 from src.app.client import AgentRequestContext, AgentSessionClient
+from src.app.web.app import create_app
 from src.app.web.schemas import AgentResponse
+from src.core.slack_contract import RecipientInput
 from src.core.uploads import UploadManifest
 
 
 CONTRACT_PATH = Path(__file__).resolve().parents[1] / "fixtures" / "web_contracts" / "agent_responses.json"
 STATUSES = ("completed", "partial", "needs_input", "failed", "refused")
+
+
+@pytest.mark.parametrize("field", ["status", "message", "missing_slots", "debug"])
+def test_output_schema_rejects_missing_serialized_defaults(
+    responses: dict[str, dict[str, object]], field: str,
+) -> None:
+    schema = create_app().openapi()
+    validator = Draft202012Validator({
+        "$ref": "#/components/schemas/AgentResponse", "components": schema["components"],
+    })
+    payload = {key: value for key, value in responses["completed"].items() if key != field}
+
+    assert not validator.is_valid(payload)
+    assert validator.is_valid(responses["completed"])
+
+
+def test_output_defaults_do_not_change_optional_request_fields() -> None:
+    schemas = create_app().openapi()["components"]["schemas"]
+
+    assert "include_debug" not in schemas["AgentRequest"]["required"]
+    assert "add" not in schemas["BrowserUploadSyncRequest"]["required"]
+    assert schemas["RecipientInput"] == RecipientInput.model_json_schema()
+    assert {"selector", "failure"} <= set(schemas["SlackDefault"]["required"])
+    assert {"actions", "content_hash", "semantic_validation"} <= set(schemas["AnswerResponse"]["required"])
 
 
 @pytest.fixture

@@ -18,7 +18,8 @@ function citation(text: string, overrides: Partial<Citation['evidence']> = {}): 
         source_type: 'official', parser: 'test', parser_version: '1', parser_config: {},
         capture_scope: 'provider_excerpt', quality_issues: ['freshness_unverified'],
       },
-      element: { element_id: 'element:retained', kind: 'paragraph', text, anchors: [], heading_path: ['Guide', 'Example'] },
+      element: { element_id: 'element:retained', kind: 'paragraph', text, anchors: [], heading_path: ['Guide', 'Example'],
+        parent_id: null, order: 0, heading_level: null, language: null, table: null, metadata: {} },
       selection: { start: 0, end: Array.from(text).length, cell_ids: [] },
       ...overrides,
     },
@@ -76,7 +77,10 @@ describe('EvidencePanel', () => {
     render(<Harness source={citation(text, {
       element: {
         element_id: 'code:retained', kind: 'code', text,
-        anchors: [{ kind: 'code', start: 0, end: text.length, line_start: 17, line_end: 19, precision: 'exact' }],
+        parent_id: null, order: 0, heading_level: null, heading_path: [], language: null, table: null, metadata: {},
+        anchors: [{ kind: 'code', start: 0, end: text.length, line_start: 17, line_end: 19, precision: 'exact',
+          cell_id: null, cell_index: null, page_no: null, bbox: null, coordinate_space: 'normalized',
+          coordinate_origin: 'top_left', page_width: null, page_height: null }],
       },
     })} context={[{ text: 'alpha = 1', isCode: true }]} />);
     await user.click(screen.getByRole('button', { name: '이 답변의 근거' }));
@@ -156,11 +160,12 @@ describe('EvidencePanel', () => {
   it('preserves merged table cells and identifies selected cells', async () => {
     const user = userEvent.setup();
     const source = citation('', {
-      element: { element_id: 'table:retained', kind: 'table', text: '', table: { cells: [
-        { cell_id: 'header', row: 0, col: 0, col_span: 2, row_span: 1, text: '합계', is_header: true },
-        { cell_id: 'left', row: 1, col: 0, row_span: 2, col_span: 1, text: '분류' },
-        { cell_id: 'selected', row: 1, col: 1, row_span: 1, col_span: 1, text: '  12  ' },
-        { cell_id: 'last', row: 2, col: 1, row_span: 1, col_span: 1, text: '9' },
+      element: { element_id: 'table:retained', kind: 'table', text: '', anchors: [],
+        parent_id: null, order: 0, heading_level: null, heading_path: [], language: null, metadata: {}, table: { cells: [
+        { cell_id: 'header', row: 0, col: 0, col_span: 2, row_span: 1, text: '합계', is_header: true, anchors: [] },
+        { cell_id: 'left', row: 1, col: 0, row_span: 2, col_span: 1, text: '분류', is_header: false, anchors: [] },
+        { cell_id: 'selected', row: 1, col: 1, row_span: 1, col_span: 1, text: '  12  ', is_header: false, anchors: [] },
+        { cell_id: 'last', row: 2, col: 1, row_span: 1, col_span: 1, text: '9', is_header: false, anchors: [] },
       ] } },
       selection: { start: 0, end: null, cell_ids: ['selected'] },
     });

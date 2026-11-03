@@ -51,18 +51,7 @@ export function parseAgentEvent(event: string, value: unknown): AgentStreamEvent
 
 export function parseAgentResponse(value: unknown): AgentResponse {
   if (!responseValidator(value)) throw invalidResponse();
-  const response: AgentResponse = {
-    ...value,
-    status: value.status ?? 'completed',
-    response: value.response == null ? null : normalizeAnswer(value.response),
-    answer_id: value.answer_id ?? null,
-    message: value.message ?? '',
-    problem: value.problem ?? null,
-    request_id: value.request_id ?? '',
-    missing_slots: value.missing_slots ?? [],
-    debug: value.debug ?? null,
-    upload_manifest: value.upload_manifest ?? null,
-  };
+  const response = value;
   const hasAnswer = response.status === 'completed' || response.status === 'partial';
   const hasProblem = response.status === 'failed' || response.status === 'partial' || response.status === 'refused';
   if (hasAnswer !== (response.response !== null)
@@ -73,21 +62,26 @@ export function parseAgentResponse(value: unknown): AgentResponse {
     || (!['failed', 'refused'].includes(response.status) && response.upload_manifest === null)) {
     throw invalidResponse();
   }
+  if (response.response !== null) validateSaveReceipts(response.response);
   return response;
 }
 
-export function normalizeAnswer(value: components['schemas']['AnswerResponse']): AnswerResponse {
-  return {
-    ...value,
-    content: { blocks: value.content?.blocks ?? [] },
-    citations: value.citations ?? [],
-    checks: value.checks ?? [],
-    issues: value.issues ?? [],
-    actions: value.actions ?? [],
-    content_hash: value.content_hash ?? '',
-    retrieval_required: value.retrieval_required ?? false,
-    semantic_validation: value.semantic_validation ?? null,
-  };
+export function validateSaveReceipts(response: AnswerResponse): void {
+  for (const receipt of response.actions) {
+    const artifact = receipt.artifact;
+    const operation = receipt.operation;
+    if (artifact !== null && (
+      /[/\\:]/.test(artifact.filename) || !artifact.filename.endsWith('.txt')
+      || artifact.expires_at <= artifact.created_at
+    )) throw invalidResponse();
+    if ((receipt.kind === 'save_text' && receipt.status === 'success') || receipt.verification === 'verified') {
+      if (receipt.kind !== 'save_text' || receipt.status !== 'success' || receipt.verification !== 'verified'
+        || !receipt.file_path || artifact === null || operation === null
+        || artifact.sha256 !== operation.payload_sha256 || artifact.byte_count !== operation.byte_count) {
+        throw invalidResponse();
+      }
+    }
+  }
 }
 
 function invalidResponse(): ApiError {

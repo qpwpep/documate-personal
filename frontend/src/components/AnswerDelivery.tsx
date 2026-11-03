@@ -26,10 +26,10 @@ export function AnswerDelivery({ client, answerId, response, currentExport, onEx
   const artifact = receipt?.artifact;
   const expiresAt = artifact ? artifact.expires_at * 1000 : null;
   const expired = expiresAt !== null && expiresAt <= now;
-  const ready = receipt?.status === 'success' && receipt.verification === 'verified' && artifact && !expired;
+  const ready = receipt?.status === 'success' && artifact && !expired;
   const message = error ?? localError;
   const retry = Boolean(message) || currentExport?.status === 'failed'
-    || Boolean(receipt && (receipt.status !== 'success' || receipt.verification !== 'verified' || !artifact));
+    || Boolean(receipt && receipt.status !== 'success');
 
   useEffect(() => () => active.current?.abort(), []);
   useEffect(() => {

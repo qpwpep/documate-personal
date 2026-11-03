@@ -140,6 +140,8 @@ DOCUMATE_API_PROXY_TARGET=http://127.0.0.1:8001 npm --prefix frontend run dev
 
 서버의 OpenAPI에는 `AgentResponse`와 `x-sse-events`가 포함됩니다. Python에서 이를 정적으로 내보내고 TypeScript 타입을 생성합니다. API 계약 변경 시 생성 파일을 함께 갱신합니다. 내보내기는 서버 lifespan을 실행하지 않으며 모델 호출이나 실제 API 키를 요구하지 않습니다. `generate:api`와 `check:api`에는 파일명 비교용 Unicode 예외표의 생성·검사도 포함합니다. Python 서버의 NFC 정규화와 `casefold()`를 브라우저의 단순 소문자 변환으로 바꾸지 않아 같은 이름의 검토 결과를 일치시킵니다.
 
+응답 스키마는 서버가 기본값과 `null`을 포함해 직렬화하는 필드를 필수로 선언합니다. 브라우저는 누락된 응답 필드를 기본값으로 채우지 않고 계약 오류로 처리합니다. 요청의 생략 가능한 설정과 LLM 출력 스키마는 이 웹 응답 규칙의 적용 대상이 아닙니다. 저장 성공에는 검증된 파일 경로·operation·artifact가 필요하며, 해당 정보가 없는 과거 성공 영수증은 응답과 대화 기록 복원 경계에서 거부합니다.
+
 ```bash
 uv run --locked python script/export_web_contract.py
 npm --prefix frontend run generate:api
