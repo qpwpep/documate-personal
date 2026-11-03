@@ -359,9 +359,8 @@ def resolve_request_contract(proposal: WireRequestContract, state: GraphState, *
     revision = original.revision + 1 if original is not None else 1
     proposal = _bind_local_evidence(proposal, request_id=request_id, revision=revision, turn_id=runtime.current_turn_id)
     if inherits_pending:
-        current_turn_id = runtime.current_turn_id or next(reversed(utterances))
-        proposal = _merge_pending(proposal, pending, current_turn_id=current_turn_id,
-                                  current_utterance=utterances[current_turn_id])
+        proposal = _merge_pending(proposal, pending, current_turn_id=runtime.current_turn_id,
+                                  current_utterance=utterances[runtime.current_turn_id])
     missing = list(proposal.missing_info)
     if proposal.target_request_id is not None and not matches_pending:
         missing.append(_missing("pending_request", "unknown_id", "지정한 보류 요청이 없습니다. 처리할 요청을 다시 지정해 주세요."))

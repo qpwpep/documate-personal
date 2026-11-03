@@ -79,6 +79,7 @@ def test_planner_preserves_displayed_followups_without_offering_them_as_answers(
         history.extend([HumanMessage(id="followup", content="Translate it."), AIMessage(content=visible_followup)])
     history.append(HumanMessage(id="current", content=query))
     state = build_graph_state_input(user_input=query, current_turn_id="current", messages=history,
+                                    user_turns=(UserTurnSnapshot(turn_id="current", text=query),),
                                     previous_response=previous)
     observed = []
 

@@ -39,7 +39,7 @@ def make_pre_synthesis_validation_node(
         guided_followup = str(planner.guided_followup or "").strip()
         runtime = get_runtime_state(state)
         contract = runtime.request_contract
-        if contract is None or contract.failure is not None or planner.diagnostics.reason == "planner_unavailable":
+        if contract is None:
             raise LLMCallError(make_problem("internal_error", "pre_synthesis_validation"))
         if contract.can_acknowledge() or contract.can_cancel_pending():
             # These server-resolved instructions create no deliverable body.

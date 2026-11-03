@@ -229,7 +229,7 @@ def make_planner_node(
 
         runtime_updates = {"request_contract": contract}
         if (is_initial_plan and runtime.pending_action is not None and contract.relation in {"correction", "supplement"}
-                and contract.target_request_id == runtime.pending_action.contract.request_id and contract.failure is None):
+                and contract.target_request_id == runtime.pending_action.contract.request_id):
             completed = tuple(name for name in runtime.pending_action.completed_actions
                               if getattr(contract.actions, name).intent != "requested")
             pending_updates = {"contract": contract, "completed_actions": completed}

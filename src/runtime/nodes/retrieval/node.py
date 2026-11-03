@@ -27,6 +27,7 @@ from src.core.evidence import SearchHit, dedupe_search_hits
 from src.runtime.nodes.retry import current_retrieval_attempt
 from src.runtime.nodes.retrieval.executor import RetrievalTaskResult, build_reused_retrieval_task_result, execute_retrieval_task, retrieval_fingerprint
 from src.runtime.agent_runtime.tool_execution import invoke_tool
+from src.runtime.progress import ProgressEmitter
 
 
 logger = logging.getLogger(__name__)
@@ -185,7 +186,7 @@ def _execute_retrieval_batch(
             for future in as_completed(futures):
                 task_results.append(future.result())
 
-    task_results.sort(key=lambda item: int(item.index))
+    task_results.sort(key=lambda item: item.index)
 
     for item in task_results:
         # A refresh may return only replacement candidates. Preserve raw ranges
@@ -209,7 +210,7 @@ def _execute_retrieval_batch(
     for item in task_results:
         result.hit_updates.extend(item.result.hits)
         result.retrieval_diagnostics.append(item.result.diagnostics)
-        result.local_errors.extend(str(error) for error in item.errors if str(error).strip())
+        result.local_errors.extend(item.errors)
         result.latency_trace.append(item.latency_trace)
 
         tool_call_counts[item.tool_name] = tool_call_counts.get(item.tool_name, 0) + 1
@@ -301,16 +302,14 @@ def _build_retrieval_updates(
 
 def _emit_retrieval_progress_snapshot(
     *,
-    progress_emitter: Any | None,
+    progress_emitter: ProgressEmitter | None,
     batch_result: RetrievalBatchResult,
 ) -> None:
-    if progress_emitter is None or not hasattr(progress_emitter, "emit_progress_snapshot"):
+    if progress_emitter is None:
         return
     route_counts: dict[str, int] = {}
     for item in batch_result.retrieval_diagnostics:
-        route = str(item.route or "").strip()
-        if route:
-            route_counts[route] = route_counts.get(route, 0) + int(item.evidence_count or 0)
+        route_counts[item.route] = route_counts.get(item.route, 0) + item.evidence_count
     summary_parts = [
         f"{route} {count}건"
         for route, count in route_counts.items()
@@ -322,7 +321,7 @@ def _emit_retrieval_progress_snapshot(
         summary=summary,
         evidence_count=sum(route_counts.values()),
         routes=route_counts,
-        statuses=[str(item.status or "") for item in batch_result.retrieval_diagnostics],
+        statuses=[item.status for item in batch_result.retrieval_diagnostics],
     )
 
 
@@ -366,7 +365,7 @@ def make_retrieve_dispatch_node(
             preserved_hits=retry_context.preserved_hits,
         )
         _emit_retrieval_progress_snapshot(
-            progress_emitter=getattr(runtime, "progress_emitter", None),
+            progress_emitter=runtime.progress_emitter,
             batch_result=batch_result,
         )
 

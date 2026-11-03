@@ -76,7 +76,7 @@ def build_docs_search_tool(settings: AppSettings) -> Callable[..., RetrievalResu
             except LLMCallError:
                 raise
             except Exception as exc:
-                timed_out = isinstance(exc, TimeoutError) or "timed out" in str(exc).lower() or "timeout" in str(exc).lower()
+                timed_out = isinstance(exc, TimeoutError)
                 error_code = "RETRIEVAL_DOCS_TIMEOUT" if timed_out else "RETRIEVAL_DOCS_FAILED"
                 if isinstance(exc, client.TavilySearchError):
                     error_code = exc.error_code

@@ -127,16 +127,15 @@ def collect_validation_snapshot(state: GraphState, *, max_turns: int = 6) -> tup
     # A verdict for an older context must not erase a source before that check.
     parsed_hits = dedupe_search_hits(slice_from_index(retrieval.hit_log, retry.hit_start_index))
     retrieval_errors = [
-        str(error) for error in slice_from_index(debug.retrieval_errors, retry.retrieval_error_start_index)
-        if str(error).strip()
+        error for error in slice_from_index(debug.retrieval_errors, retry.retrieval_error_start_index)
+        if error.strip()
     ]
     snapshot = build_validation_snapshot(
         user_input=runtime.user_input, planner_output=planner_output, parsed_hits=parsed_hits,
         current_attempt_retrieval_errors=[*retrieval_errors, *local_errors],
-        current_attempt_retrieval_diagnostics=[
-            item for item in slice_from_index(debug.retrieval_diagnostics, retry.retrieval_diagnostic_start_index)
-            if item is not None
-        ],
+        current_attempt_retrieval_diagnostics=slice_from_index(
+            debug.retrieval_diagnostics, retry.retrieval_diagnostic_start_index,
+        ),
         response_result=response.result, evidence_packet=response.evidence_packet,
         evidence_requirement_map=response.evidence_requirement_map,
         request_contract=runtime.request_contract,

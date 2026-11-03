@@ -18,6 +18,7 @@ from src.core.uploads import UploadRecord
 from src.infra.tools.local_rag import build_upload_retriever, build_upload_search_tool
 from src.runtime.nodes.planner import make_planner_node
 from src.runtime.nodes.retrieval import make_retrieve_dispatch_node
+from src.runtime.nodes.session import add_user_message
 from src.runtime.nodes.synthesis.context import build_synthesis_context, prepare_synthesis_inputs
 from src.runtime.nodes.synthesis.evidence_selection import requirement_coverage
 from tests.core.helpers import _CapturePlannerLLM
@@ -337,6 +338,7 @@ def test_planned_code_fragment_reaches_source_retrieval_without_losing_the_const
         "requirement": {"symbols": ["target"], "match": "definition", "aspects": ["is None"]},
     }]}))
     state = build_graph_state_input(user_input=query, retriever=_source_retriever(source))
+    state.update(add_user_message(state))
 
     state.update(make_planner_node(planner, False)(state))
     state.update(make_retrieve_dispatch_node(None, build_upload_search_tool(), False)(state))
@@ -360,6 +362,7 @@ def _retrieve_planned_topic(retriever: UploadRetriever, query: str, aspects: lis
         "requirement": {"file_ids": [file_id], "match": "topic", "aspects": aspects},
     }]}))
     state = build_graph_state_input(user_input=query, retriever=retriever)
+    state.update(add_user_message(state))
     state.update(make_planner_node(planner, False)(state))
     state.update(make_retrieve_dispatch_node(None, build_upload_search_tool(), False)(state))
     return state
@@ -496,6 +499,7 @@ def test_planned_symbol_search_preserves_implementation_and_its_actual_example(u
                          requirement={"symbols": ["calculate_total"], "match": "symbol"})
     with uploaded(source) as retriever:
         state = build_graph_state_input(user_input=query, retriever=retriever)
+        state.update(add_user_message(state))
         state.update(make_planner_node(_CapturePlannerLLM(PlannerOutput(use_retrieval=True, tasks=[task])), False)(state))
         state.update(make_retrieve_dispatch_node(None, build_upload_search_tool(), False)(state))
     hits = state["retrieval"].hit_log
@@ -532,6 +536,7 @@ def test_independent_constant_tasks_keep_both_values_in_the_prepared_packet_with
         user_input="첨부한 batch_limits.py의 BATCH_SIZE와 MAX_RETRIES 값을 알려줘.",
         retriever=SimpleNamespace(source_documents=documents),
     )
+    state.update(add_user_message(state))
 
     state.update(make_planner_node(_CapturePlannerLLM(PlannerOutput(use_retrieval=True, tasks=tasks)), False)(state))
     state.update(make_retrieve_dispatch_node(None, build_upload_search_tool(), False)(state))

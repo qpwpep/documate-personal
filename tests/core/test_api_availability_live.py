@@ -13,6 +13,7 @@ from __future__ import annotations
 import os
 
 import pytest
+from langchain_core.messages import HumanMessage
 
 from src.core.answer_schema import finalize_answer, text_document
 from src.core.contracts import PlannerState, ResponseState, RetrievalState, RetryState
@@ -20,7 +21,7 @@ from src.core.contracts.boundary.graph import build_graph_state_input
 from src.core.documents import DocumentElement, build_snapshot
 from src.core.evidence import SearchHit, build_evidence
 from src.core.planner_schema import PlannerOutput, RetrievalTask
-from src.core.request_contracts import RequestContract
+from src.core.request_contracts import RequestContract, UserTurnSnapshot
 from src.infra.llm import LLMRegistry, build_llm_registry
 from src.infra.settings import get_settings
 from src.runtime.nodes.planner import make_planner_node
@@ -44,7 +45,11 @@ def live_registry() -> LLMRegistry:
     ("Python 3.9의 zip()에 strict=True 옵션이 있어? Python 3.9 공식 문서로만 확인해 줘.", "strict"),
 ])
 def test_live_planner_does_not_presuppose_a_proposed_keyword_exists(query, option, live_registry):
-    state = build_graph_state_input(user_input=query, current_turn_id="availability")
+    state = build_graph_state_input(
+        user_input=query, current_turn_id="availability",
+        user_turns=(UserTurnSnapshot(turn_id="availability", text=query),),
+        messages=[HumanMessage(id="availability", content=query)],
+    )
 
     output = make_planner_node(live_registry.llm_planner, False)(state)["planner"].output
 
@@ -58,7 +63,11 @@ def test_live_planner_does_not_presuppose_a_proposed_keyword_exists(query, optio
 
 def test_live_planner_keeps_supported_setting_behavior_requirements(live_registry):
     query = "Path.stat(follow_symlinks=False)는 어떤 동작을 하는지 Python 공식 문서로 설명해 줘."
-    state = build_graph_state_input(user_input=query, current_turn_id="setting-meaning")
+    state = build_graph_state_input(
+        user_input=query, current_turn_id="setting-meaning",
+        user_turns=(UserTurnSnapshot(turn_id="setting-meaning", text=query),),
+        messages=[HumanMessage(id="setting-meaning", content=query)],
+    )
 
     output = make_planner_node(live_registry.llm_planner, False)(state)["planner"].output
 

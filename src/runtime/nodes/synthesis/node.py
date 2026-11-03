@@ -38,7 +38,7 @@ def make_synthesize_node(
             state=state, context=context, max_turns=max_turns,
         )
         emitter = get_runtime_state(state).progress_emitter
-        if emitter is not None and hasattr(emitter, "emit_progress_snapshot"):
+        if emitter is not None:
             emitter.emit_progress_snapshot(
                 stage="synthesis", summary="원문 근거를 연결해 답변을 작성하는 중...",
                 evidence_count=len(prepared.evidence_packet),

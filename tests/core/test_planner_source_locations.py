@@ -16,10 +16,12 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 import pytest
+from langchain_core.messages import HumanMessage
 
 from src.core.contracts.boundary.graph import build_graph_state_input
 from src.core.documents import ParsedDocument
 from src.core.evidence import SearchHit
+from src.core.request_contracts import UserTurnSnapshot
 from src.core.uploads import UploadFileInfo
 from src.infra.llm import LLMRegistry, build_llm_registry
 from src.infra.settings import get_settings
@@ -131,6 +133,8 @@ def test_live_planner_distinguishes_source_locations_from_literal_anchors(
     attachments = (selected, other)
     state = build_graph_state_input(
         user_input=case.prompt, current_turn_id="location-request",
+        user_turns=(UserTurnSnapshot(turn_id="location-request", text=case.prompt),),
+        messages=[HumanMessage(id="location-request", content=case.prompt)],
         upload_files=attachments, retriever=_ManifestOnlyRetriever(attachments),
     )
     planner = make_planner_node(live_planner_registry.llm_planner, False)

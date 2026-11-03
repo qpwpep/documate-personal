@@ -19,7 +19,7 @@ def maybe_short_circuit_synthesis(
     packet = []
     kind = "draft"
     contract = context.request_contract
-    if contract is None or contract.failure is not None:
+    if contract is None:
         raise LLMCallError(make_problem("internal_error", "synthesis"))
     elif context.guided_followup and context.planner_blocked:
         result = finalize_answer(text_document(context.guided_followup), [])

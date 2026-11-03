@@ -126,11 +126,7 @@ def _planner_conversation(state: GraphState, max_turns: int) -> list[BaseMessage
 
 def planner_user_utterances(state: GraphState) -> dict[str, str]:
     """Raw provenance comes from the immutable ledger, never projected dialogue."""
-    runtime = get_runtime_state(state)
-    utterances = {turn.turn_id: turn.text for turn in runtime.user_turns}
-    if runtime.current_turn_id:
-        utterances.setdefault(runtime.current_turn_id, runtime.user_input)
-    return utterances
+    return {turn.turn_id: turn.text for turn in get_runtime_state(state).user_turns}
 
 
 def planner_previous_answer(state: GraphState) -> str:
@@ -218,8 +214,6 @@ def build_planner_messages(state: GraphState, max_turns: int = 6) -> list[BaseMe
 
     model_messages.extend(_planner_conversation(state, max_turns))
 
-    if not any(isinstance(message, HumanMessage) for message in model_messages):
-        model_messages.append(HumanMessage(content=runtime.user_input.strip()))
     return model_messages
 
 

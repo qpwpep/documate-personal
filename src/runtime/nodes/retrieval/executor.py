@@ -39,8 +39,6 @@ def execute_retrieval_task(
     started = time.perf_counter()
     invocation_id = uuid4().hex
     result = invoke_tool(task, invocation_id)
-    if not isinstance(result, RetrievalResult):
-        raise TypeError(f"{tool_name} must return RetrievalResult")
     hits = [hit.model_copy(update={"requirement_id": task.requirement_id})
             for hit in dedupe_search_hits(result.hits)]
     diagnostic = result.diagnostics.model_copy(update={
@@ -48,7 +46,6 @@ def execute_retrieval_task(
         "requirement_id": task.requirement_id, "request_fingerprint": retrieval_fingerprint(task),
         "k": task.k, "invocation_id": invocation_id,
         "evidence_count": len(hits), "result_count": len(hits), "final_evidence_count": len(hits),
-        "warnings": sorted(set(result.diagnostics.warnings)),
     })
     errors = ([f"{tool_name}: {diagnostic.message}"]
               if diagnostic.status in {"error", "unavailable"} and diagnostic.message else [])

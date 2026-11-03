@@ -1,7 +1,9 @@
 import pytest
+from langchain_core.messages import HumanMessage
 
 from src.core.contracts.boundary.graph import build_graph_state_input
 from src.core.planner_schema import InitialPlannerOutput, RetrievalRequirement
+from src.core.request_contracts import UserTurnSnapshot
 from src.runtime.nodes.planner import make_planner_node
 from .helpers import _CapturePlannerLLM, structured_model
 
@@ -28,10 +30,15 @@ def test_active_upload_filename_is_repaired_to_file_scope_before_search():
     from types import SimpleNamespace
 
     query = "첨부한 billing_rules.py의 계산 방식을 설명해줘."
-    state = build_graph_state_input(user_input=query, retriever=SimpleNamespace(), upload_files=[{
-        "file_id": "billing", "name": "billing_rules.py", "size_bytes": 10,
-        "content_hash": "sha256:" + "a" * 64, "source_uri": "upload://session/billing",
-    }])
+    state = build_graph_state_input(
+        user_input=query, current_turn_id="current",
+        user_turns=(UserTurnSnapshot(turn_id="current", text=query),),
+        messages=[HumanMessage(id="current", content=query)],
+        retriever=SimpleNamespace(), upload_files=[{
+            "file_id": "billing", "name": "billing_rules.py", "size_bytes": 10,
+            "content_hash": "sha256:" + "a" * 64, "source_uri": "upload://session/billing",
+        }],
+    )
     planner = _RepairingPlanner(
         _upload_plan({"symbols": ["billing_rules.py"], "match": "symbol", "file_ids": ["billing"]}, query=query),
         _upload_plan({"file_ids": ["billing"]}, query=query),
@@ -50,7 +57,11 @@ def test_semantic_upload_condition_is_repaired_without_weakening_the_question(co
     from types import SimpleNamespace
 
     query = f"현재 첨부의 calculate_total 함수에서 {condition}에 대해 알려줘. 출처를 인용해줘."
-    state = build_graph_state_input(user_input=query, retriever=SimpleNamespace())
+    state = build_graph_state_input(
+        user_input=query, current_turn_id="current",
+        user_turns=(UserTurnSnapshot(turn_id="current", text=query),),
+        messages=[HumanMessage(id="current", content=query)], retriever=SimpleNamespace(),
+    )
     planner = _RepairingPlanner(
         _upload_plan({"symbols": ["calculate_total"], "match": "definition", "aspects": [condition]}, query=query),
         _upload_plan({"symbols": ["calculate_total"], "match": "definition"}, query=query),
@@ -75,7 +86,11 @@ def test_planner_preserves_python_fragments_as_literal_requirements(fragment, ma
     from types import SimpleNamespace
 
     query = f"첨부한 calculate_total의 `{fragment}` 코드 조각을 찾아 인용해줘."
-    state = build_graph_state_input(user_input=query, retriever=SimpleNamespace())
+    state = build_graph_state_input(
+        user_input=query, current_turn_id="current",
+        user_turns=(UserTurnSnapshot(turn_id="current", text=query),),
+        messages=[HumanMessage(id="current", content=query)], retriever=SimpleNamespace(),
+    )
     planner = _CapturePlannerLLM(_upload_plan({
         "symbols": ["calculate_total"], "match": match, "aspects": [fragment],
     }, query=query))

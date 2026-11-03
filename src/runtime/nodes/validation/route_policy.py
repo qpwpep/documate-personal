@@ -5,7 +5,7 @@ from src.core.llm_errors import ExecutionProblem, make_problem
 
 
 def route_error_statuses(diagnostics: list[RetrievalDiagnostic]) -> set[str]:
-    return {str(item.status or "").strip() for item in diagnostics if str(item.status or "").strip()}
+    return {item.status for item in diagnostics}
 
 
 def non_retryable_retrieval_problem(diagnostics: list[RetrievalDiagnostic]) -> ExecutionProblem | None:

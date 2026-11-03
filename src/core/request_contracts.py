@@ -233,7 +233,6 @@ class RequestContract(_RequestFacts):
     revision: int = Field(default=1, ge=1)
     body: BodyPlan = Field(default_factory=ComposeBody)
     body_request: WireBodyPlan | None = None
-    failure: str | None = None
 
     @property
     def content_requirements_by_ref(self) -> dict[str, ContentRequirement]:
@@ -242,9 +241,7 @@ class RequestContract(_RequestFacts):
                 for index, item in enumerate(self.answer.content, 1)}
 
     @property
-    def status(self) -> Literal["resolved", "unresolved", "invalid"]:
-        if self.failure is not None:
-            return "invalid"
+    def status(self) -> Literal["resolved", "unresolved"]:
         if not (self.can_prepare_body() or self.can_acknowledge() or self.can_cancel_pending()) or any(item.slot != "slack_destination" for item in self.missing_info):
             return "unresolved"
         return "resolved"
@@ -256,7 +253,7 @@ class RequestContract(_RequestFacts):
         return self.missing_info[0].question if self.missing_info else None
 
     def can_prepare_body(self) -> bool:
-        return self.failure is None and self.relation != "cancel" and self.body.kind not in {"unresolved", "acknowledge"} and not any(
+        return self.relation != "cancel" and self.body.kind not in {"unresolved", "acknowledge"} and not any(
             item.slot in {"subject", "input_reference", "answer_reference", "pending_request"} for item in self.missing_info
         )
 
@@ -276,19 +273,14 @@ class RequestContract(_RequestFacts):
         return kind != "slack_notify" or destination_ready
 
     def can_cancel_pending(self) -> bool:
-        return (self.failure is None and self.relation == "cancel" and self.target_request_id is not None
+        return (self.relation == "cancel" and self.target_request_id is not None
                 and not any(getattr(self.actions, kind).intent == "unresolved" for kind in ("save_text", "slack_notify"))
                 and not any(item.slot in {"pending_request", "save_intent", "slack_intent"} for item in self.missing_info))
 
     def can_acknowledge(self) -> bool:
-        return self.failure is None and self.body.kind == "acknowledge" and not self.missing_info and not any(
+        return self.body.kind == "acknowledge" and not self.missing_info and not any(
             getattr(self.actions, kind).intent in {"requested", "unresolved"} for kind in ("save_text", "slack_notify")
         )
-
-    @classmethod
-    def invalid(cls, *, request_id: str | None = None, revision: int = 1) -> "RequestContract":
-        return cls(request_id=request_id or str(uuid4()), revision=revision, failure="contract_invalid",
-                   body=UnresolvedBody(question="요청의 실행 의사와 답변 조건을 해석하지 못했습니다. 다시 요청해 주세요."))
 
 
 def validate_contract_evidence(contract: RequestContract | WireRequestContract, utterances: dict[str, str]) -> list[str]:

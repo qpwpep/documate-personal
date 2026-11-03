@@ -30,7 +30,7 @@ planner는 기존 Human/AI 메시지 순서, 발화 ID와 원문 ledger, 이전 
 
 ### 요청 계약과 실행 의사의 분리
 
-최초 planner 호출의 `InitialPlannerOutput`은 검색 계획과 필수 [`WireRequestContract`](../src/core/request_contracts.py)를 함께 생성합니다. 별도의 의도 판별 모델은 호출하지 않습니다. 서버는 최초 planner 출력에서 사용자 발화 ID와 정확한 원문 구절을 한 번 검증합니다. 이 검증을 통과한 근거로 aspect의 출처를 확인한 뒤, 같은 발화 집합을 사용해 원문 선택 범위와 기존 답변 hash를 연결한 `RequestContract`를 `RuntimeState.request_contract`에 확정합니다. 내부 `PlannerOutput`은 검색 계획만 보관하고, 후속 단계는 `RuntimeState`의 확정 계약을 사용합니다. 적용 범위와 해석 종류도 계약과 참조의 용도에 맞게 검사합니다. 요청 계약 ID와 revision은 서버가 소유하며 실제 보류 요청에 대한 새 발화의 보충·정정만 revision을 올립니다. 이후 검색 재시도와 재합성은 이 계약을 그대로 사용합니다. 저장·Slack·코드 예시 등의 단어를 후속 단계가 다시 해석해 행동이나 필수 형식을 추가하지 않습니다.
+그래프 진입 노드는 현재 발화 ID와 원문 ledger·HumanMessage를 함께 확정하며, planner는 이 기록을 그대로 사용합니다. 최초 planner 호출이나 출력 검증이 실패하면 요청 계약을 생성하지 않고 예외로 실행을 종료합니다. 최초 planner 호출의 `InitialPlannerOutput`은 검색 계획과 필수 [`WireRequestContract`](../src/core/request_contracts.py)를 함께 생성합니다. 별도의 의도 판별 모델은 호출하지 않습니다. 서버는 최초 planner 출력에서 사용자 발화 ID와 정확한 원문 구절을 한 번 검증합니다. 이 검증을 통과한 근거로 aspect의 출처를 확인한 뒤, 같은 발화 집합을 사용해 원문 선택 범위와 기존 답변 hash를 연결한 `RequestContract`를 `RuntimeState.request_contract`에 확정합니다. 내부 `PlannerOutput`은 검색 계획만 보관하고, 후속 단계는 `RuntimeState`의 확정 계약을 사용합니다. 적용 범위와 해석 종류도 계약과 참조의 용도에 맞게 검사합니다. 요청 계약 ID와 revision은 서버가 소유하며 실제 보류 요청에 대한 새 발화의 보충·정정만 revision을 올립니다. 이후 검색 재시도와 재합성은 이 계약을 그대로 사용합니다. 저장·Slack·코드 예시 등의 단어를 후속 단계가 다시 해석해 행동이나 필수 형식을 추가하지 않습니다.
 
 요청 계약은 여러 사용자 발화에 걸쳐 이어질 수 있으므로 한 번의 HTTP 실행과 식별자를 공유하지 않습니다. 보충·정정은 요청 계약 ID를 유지하지만 새 실행 ID를 받습니다. 턴 결과와 도구 실행 기록은 실행 ID로, 답변의 provenance와 저장 작업은 요청 계약 ID로 연결합니다. 두 범주의 공개 필드 이름은 모두 `request_id`이므로 소비자는 필드가 속한 모델의 의미를 따라야 합니다. 같은 본문을 저장 재시도할 때도 새 실행 ID와 기존 `SaveOperation`을 함께 보존합니다. 구체적인 필드별 수명은 [런타임 참조의 식별자 표](runtime_reference.md#52-최종-응답과-debug)에 정리했습니다.
 

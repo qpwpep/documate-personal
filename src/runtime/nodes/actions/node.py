@@ -80,7 +80,7 @@ def _ready_body(*, contract, response, runtime, pending, planner) -> bool:
         not contract.can_prepare_body() or response.kind != "answer"
         or response.request_id != contract.request_id
         or response.contract_revision != contract.revision
-        or planner.diagnostics.reason in {"upload_retriever_missing", "planner_unavailable"}
+        or planner.diagnostics.reason == "upload_retriever_missing"
         or not response.result.content.blocks
     ):
         return False
@@ -141,7 +141,7 @@ def make_action_postprocess_node(
     def action_postprocess(state: GraphState) -> GraphState:
         runtime = get_runtime_state(state)
         contract = runtime.request_contract
-        if contract is None or contract.failure is not None:
+        if contract is None:
             return {}
         pending = runtime.pending_action
         if any(item.slot == "pending_request" for item in contract.missing_info):

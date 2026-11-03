@@ -15,6 +15,7 @@ from src.core.conversation_memory import (
     build_durable_conversation_memory,
     estimate_text_tokens,
 )
+from src.core.request_contracts import UserTurnSnapshot
 from src.infra import llm as llm_module
 from src.infra.llm_boundary import capture_llm_diagnostics
 from src.infra.settings import APP_ENV_SPEC_BY_NAME, AppSettings
@@ -172,8 +173,9 @@ def test_generated_or_fallback_summary_stays_bounded_and_reaches_next_prompt(
         assert "OLDER_FACT:" in summary
 
     next_prompt = build_planner_messages(build_graph_state_input(
-        user_input="follow-up request",
-        messages=[*snapshot.messages, HumanMessage(content="follow-up request")],
+        user_input="follow-up request", current_turn_id="follow-up",
+        user_turns=(*snapshot.user_turns, UserTurnSnapshot(turn_id="follow-up", text="follow-up request")),
+        messages=[*snapshot.messages, HumanMessage(id="follow-up", content="follow-up request")],
         memory_summary=summary,
     ), max_turns=policy.low_water_turns)
     prompt_memory = [
@@ -185,7 +187,7 @@ def test_generated_or_fallback_summary_stays_bounded_and_reaches_next_prompt(
     context = json.loads(next(message.content for message in next_prompt
                               if message.name == "request_context").split("\n", 1)[1])
     assert context["user_turn_ledger"][-1]["text"] == "follow-up request"
-    assert next_prompt[-1] == HumanMessage(content="follow-up request")
+    assert next_prompt[-1] == HumanMessage(id="follow-up", content="follow-up request")
     assert sum(str(message.content).count("follow-up request") for message in next_prompt) == 2
     assert [request["max_completion_tokens"] for request in requests] == [generation_budget]
     transcript = requests[0]["messages"][-1]["content"]
