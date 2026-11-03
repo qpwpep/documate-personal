@@ -39,15 +39,15 @@ def saved(downloads, monkeypatch):
 def test_download_returns_the_actual_verified_bytes_and_operation_binding(downloads, saved):
     client, _ = downloads
     result, text, operation, _ = saved
-    artifact = result["artifact"]
+    artifact = result.artifact
 
-    response = client.get(f"/download/{artifact['filename']}")
+    response = client.get(f"/download/{artifact.filename}")
 
     assert response.status_code == 200
     assert response.content == text.encode("utf-8-sig")
     assert response.headers["x-save-binding-sha256"] == operation.binding_sha256
-    assert response.headers["x-artifact-id"] == artifact["artifact_id"]
-    assert response.headers["etag"] == f'"{artifact["sha256"]}"'
+    assert response.headers["x-artifact-id"] == artifact.artifact_id
+    assert response.headers["etag"] == f'"{artifact.sha256}"'
     assert unquote(response.headers["content-disposition"]) == (
         "attachment; filename*=utf-8''DocuMate - 사용자가 요청한 답변.txt"
     )
@@ -86,7 +86,7 @@ def test_download_uses_a_readable_portable_name_without_renaming_the_artifact(
 def test_download_rejects_missing_or_inconsistent_artifacts(downloads, saved, damage, status, code):
     client, _ = downloads
     result, _, _, _ = saved
-    path = Path(result["file_path"])
+    path = result.file_path
     if damage == "delete_payload":
         path.unlink()
     else:

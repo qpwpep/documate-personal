@@ -14,7 +14,7 @@ from src.infra.saved_artifacts import ArtifactError
 from src.infra.answer_export import select_current_save_operation
 from src.infra.settings import AppSettings
 from src.infra.tools.save_text import build_save_text_tool
-from src.runtime.nodes.actions.receipts import build_save_receipt
+from src.runtime.nodes.actions.receipts import build_save_failure, build_save_receipt
 from src.runtime.agent_runtime.session_context import SessionContext
 
 
@@ -65,13 +65,16 @@ class AnswerExportService:
         try:
             result = self._save(body, operation=operation)
         except (ArtifactError, OSError) as exc:
-            result = {"status": "error", "error_code": getattr(exc, "code", "write_failed"),
-                      "error": "파일을 만들지 못했습니다. 기존 답변은 유지됩니다."}
+            receipt = build_save_failure(
+                exc.code if isinstance(exc, ArtifactError) else "write_failed",
+                "파일을 만들지 못했습니다. 기존 답변은 유지됩니다.", operation=operation,
+            )
             log_event(logger, logging.WARNING, "answer_export_error", session_id=session_id[:8],
-                      request_id=request_id, answer_id=answer_id, error_code=result["error_code"],
+                      request_id=request_id, answer_id=answer_id, error_code=receipt.error_code,
                       exception_type=type(exc).__name__)
-        receipt = build_save_receipt(result, operation=operation)
-        completed = receipt.status == "success" and receipt.verification == "verified"
+        else:
+            receipt = build_save_receipt(result, operation=operation)
+        completed = receipt.status == "success"
         if completed and matching_pending:
             completed_actions = set(pending.completed_actions) | {"save_text"}
             waiting_slack = (pending.contract.actions.slack_notify.intent in {"requested", "unresolved"}

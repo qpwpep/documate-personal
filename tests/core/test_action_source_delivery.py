@@ -12,11 +12,13 @@ from src.core.answer_schema import (
     finalize_answer,
     text_document,
 )
-from src.core.contracts import GraphState, PlannerState, ResponseState, RuntimeState
+from src.core.contracts import GraphState, PlannerState, ResponseState, RetryState, RuntimeState
 from src.core.documents import DocumentElement, SourceAnchor, build_snapshot
 from src.core.evidence import build_evidence
 from src.infra.tools.save_text import build_save_text_tool
 from src.runtime.nodes.actions import make_action_postprocess_node
+from src.runtime.nodes.validation import make_post_synthesis_validation_node
+from tests.core.helpers import make_decisions_client
 from tests.core.test_pending_action_delivery import _contract, delivery_tools
 
 
@@ -129,9 +131,10 @@ def _no_code_save_state(answer):
     return {
         "runtime": RuntimeState(request_contract=contract),
         "planner": PlannerState(),
-        # Delivery must use the checked citations even if transient retrieval
-        # state is unavailable after a previous-answer reuse.
-        "response": ResponseState(result=answer, kind="answer", request_id=contract.request_id, contract_revision=contract.revision),
+        "retry": RetryState(max_retries=0, max_content_repairs=0),
+        "response": ResponseState(result=answer, kind="answer", request_id=contract.request_id,
+                                  contract_revision=contract.revision,
+                                  evidence_packet=[citation.evidence for citation in answer.citations]),
     }
 
 
@@ -141,9 +144,10 @@ def test_forbidden_source_code_wrapped_as_paragraph_is_not_saved(tmp_path: Path,
     monkeypatch.setattr("src.infra.tools.save_text.get_save_text_output_dir", lambda: output)
     answer = _code_source_answer("def retry():\n    return 3\n", basis="excerpt")
 
-    updates = make_action_postprocess_node(build_save_text_tool(), lambda **kwargs: {}, False)(
-        _no_code_save_state(answer)
-    )
+    state = _no_code_save_state(answer)
+    state.update(make_post_synthesis_validation_node(False, decisions_client=make_decisions_client())(state))
+    updates = make_action_postprocess_node(build_save_text_tool(), lambda **kwargs: {}, False)(state)
 
+    assert state["response"].kind == "failure"
     assert not output.exists()
     assert "response" not in updates

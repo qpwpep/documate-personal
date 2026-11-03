@@ -279,7 +279,8 @@ class ActionReceipt(AnswerModel):
                     raise ValueError("Slack receipt status differs from delivery facts")
         elif self.slack is not None:
             raise ValueError("only Slack receipts contain Slack delivery facts")
-        # Legacy receipts remain readable; they cannot claim new verification.
+        if self.kind == "save_text" and self.status == "success" and self.verification != "verified":
+            raise ValueError("successful save requires verified artifact identity")
         if self.verification == "verified":
             if self.kind != "save_text" or self.status != "success" or not self.file_path:
                 raise ValueError("verified save requires a successful file receipt")

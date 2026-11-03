@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
 
 from src.infra.settings import AppSettings
 from src.infra.tools.docs_search import build_docs_search_tool
@@ -10,6 +9,7 @@ from src.infra.tools.local_rag import build_upload_search_tool
 from src.infra.tools.save_text import build_save_text_tool
 from src.infra.tools.slack_notify import build_slack_notify_tool
 from src.core.slack_contract import SlackDelivery
+from src.core.save_contract import SaveToolResult
 from src.core.contracts.retrieval import RetrievalResult
 
 
@@ -17,7 +17,7 @@ from src.core.contracts.retrieval import RetrievalResult
 class ToolRegistry:
     tavily_search_tool: Callable[..., RetrievalResult]
     upload_search_tool: Callable[..., RetrievalResult]
-    save_text_tool: Callable[..., dict[str, Any]]
+    save_text_tool: Callable[..., SaveToolResult]
     slack_notify_tool: Callable[..., SlackDelivery]
 
 

@@ -5,13 +5,13 @@ from pydantic import ValidationError
 
 from src.core.answer_schema import (
     AnswerDocument, CodeBlock, ContentUnit, HeadingBlock, ListBlock, ParagraphBlock,
-    SemanticCheck, SemanticValidation, SourceLocationReference,
-    finalize_answer, semantic_evidence_fingerprint, text_document,
+    SourceLocationReference, finalize_answer, text_document,
 )
 from src.core.contracts import PlannerState, ResponseState, RetryState
 from src.core.contracts.boundary.graph import build_graph_state_input
 from src.core.documents import DocumentElement, SourceAnchor, build_snapshot
 from src.core.evidence import build_evidence
+from src.core.llm_errors import LLMCallError
 from src.core.planner_schema import PlannerOutput
 from src.core.request_contracts import (
     ActionContract, ActionRequest, AnswerContract, ContentRequirement, ContractEvidence, LayoutRequirement, RequestContract,
@@ -21,6 +21,7 @@ from src.runtime.nodes.validation import make_post_synthesis_validation_node
 from src.runtime.nodes.actions import make_action_postprocess_node
 from src.infra.tools.save_text import build_save_text_tool
 from tests.core.helpers import make_decisions_client
+from tests.core.test_decisions_validation import DecisionsBoundary
 
 
 @pytest.mark.parametrize(("text", "present"), [
@@ -239,21 +240,19 @@ def _request_save(state):
     return state
 
 
-def test_unchecked_example_condition_cannot_be_saved_without_semantic_validation(tmp_path, monkeypatch):
+def test_unavailable_semantic_validation_blocks_save(tmp_path, monkeypatch):
     output = tmp_path / "saved"
     monkeypatch.setattr("src.infra.tools.save_text.get_save_text_output_dir", lambda: output)
     document = AnswerDocument(blocks=[CodeBlock(
         language="python", content=ContentUnit(text="print('illustrative example')", basis="interaction"),
     )])
     state = _request_save(_validation_state(document))
-
-    updates = make_action_postprocess_node(build_save_text_tool(), lambda **kwargs: {}, False)(state)
-
+    with pytest.raises(LLMCallError):
+        make_post_synthesis_validation_node(False, decisions_client=DecisionsBoundary(error_status=401))(state)
     assert not output.exists()
-    assert "response" not in updates
 
 
-@pytest.mark.parametrize("judgment", ["rejected", "refused", "missing_request_check"])
+@pytest.mark.parametrize("judgment", ["rejected", "refused"])
 def test_delivery_requires_a_passing_request_fulfillment_check(tmp_path, monkeypatch, judgment):
     output = tmp_path / "saved"
     monkeypatch.setattr("src.infra.tools.save_text.get_save_text_output_dir", lambda: output)
@@ -261,27 +260,21 @@ def test_delivery_requires_a_passing_request_fulfillment_check(tmp_path, monkeyp
         language="text", content=ContentUnit(text="INFO request completed", basis="interaction"),
     )])
     state = _request_save(_validation_state(document))
-    answer = state["response"].result
-    check = SemanticCheck(
-        name="grounded" if judgment == "missing_request_check" else "request_fulfilled",
-        status="refused" if judgment == "refused" else "evaluated",
-        probability=None if judgment == "refused" else (0.1 if judgment == "rejected" else 0.99),
+    decisions = make_decisions_client(
+        {"request_fulfilled": 0.1} if judgment == "rejected" else None,
+        refused_names={"request_fulfilled"} if judgment == "refused" else None,
     )
-    report = SemanticValidation(content_hash=answer.content_hash,
-                                evidence_fingerprint=semantic_evidence_fingerprint(answer.citations),
-                                threshold=0.8, checks=[check])
-    state["response"] = state["response"].model_copy(update={
-        "result": answer.model_copy(update={"semantic_validation": report}),
-    })
+    state.update(make_post_synthesis_validation_node(False, decisions_client=decisions)(state))
 
     updates = make_action_postprocess_node(build_save_text_tool(), lambda **kwargs: {}, False)(state)
 
+    assert state["response"].kind == "failure"
     assert not output.exists()
     assert "response" not in updates
 
 
 @pytest.mark.parametrize("stale_field", ["content_hash", "evidence_fingerprint"])
-def test_delivery_rejects_semantic_report_for_another_answer_revision(tmp_path, monkeypatch, stale_field):
+def test_post_validation_rejects_semantic_report_for_another_answer_revision(tmp_path, monkeypatch, stale_field):
     output = tmp_path / "saved"
     monkeypatch.setattr("src.infra.tools.save_text.get_save_text_output_dir", lambda: output)
     document = AnswerDocument(blocks=[CodeBlock(
@@ -295,10 +288,10 @@ def test_delivery_rejects_semantic_report_for_another_answer_revision(tmp_path, 
         "result": answer.model_copy(update={"semantic_validation": report}),
     })
 
-    updates = make_action_postprocess_node(build_save_text_tool(), lambda **kwargs: {}, False)(state)
+    with pytest.raises(ValidationError, match="semantic validation must match"):
+        make_post_synthesis_validation_node(False, decisions_client=make_decisions_client())(state)
 
     assert not output.exists()
-    assert "response" not in updates
 
 
 @pytest.mark.parametrize("kind", ["code", "example", "code_example"])

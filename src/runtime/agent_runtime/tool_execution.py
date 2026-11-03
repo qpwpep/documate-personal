@@ -81,9 +81,9 @@ def invoke_tool(tool_name: str, implementation: Callable[..., Any], *,
             status = result.status
             reason_code = result.failure.code if result.failure is not None else None
         else:
-            # The save tool returns its storage receipt as a dictionary.
-            status = result["status"]
-            reason_code = result.get("error_code")
+            # A save returns its typed artifact only after success; failures raise.
+            status = "success"
+            reason_code = None
     except BaseException as exc:
         recorder.record(tool_name, "failed", invocation_id=invocation_id,
                         reason_code=str(getattr(exc, "code", None) or type(exc).__name__))

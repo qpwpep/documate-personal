@@ -9,7 +9,7 @@ import pytest
 
 from src.infra.tools import save_text as save_module
 from src.infra import saved_artifacts
-from src.core.save_contract import SaveOperation
+from src.core.save_contract import SaveOperation, SaveToolResult
 from src.infra.saved_artifacts import ArtifactError, artifact_filename, read_saved_artifact
 
 
@@ -74,7 +74,7 @@ def test_changed_payload_conflicts_without_overwriting_the_winner(store):
 
     results = [attempt(answer) for answer in answers]
     assert results.count("idempotency_conflict") == 1
-    winner = next(index for index, result in enumerate(results) if isinstance(result, dict))
+    winner = next(index for index, result in enumerate(results) if isinstance(result, SaveToolResult))
     manifest, payload = read_saved_artifact(root, artifact_filename(_operation()))
     assert payload == answers[winner].encode("utf-8-sig")
     assert manifest.operation == _operation(answers[winner])
@@ -97,5 +97,6 @@ def test_readback_error_after_publication_never_returns_success_and_can_retry(st
     assert error.value.code == "artifact_unverifiable"
     assert len(list(root.glob("*.txt"))) == 1
     result = save_module.build_save_text_tool(ttl_seconds=60)("원본 답변", operation=_operation())
-    assert result["verification"] == "verified"
+    assert result.operation == _operation()
+    assert result.file_path.read_bytes() == "원본 답변".encode("utf-8-sig")
     assert len(list(root.glob("*.txt"))) == 1

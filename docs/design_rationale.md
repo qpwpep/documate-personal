@@ -138,7 +138,7 @@ React는 `AnswerResponse` 전체를 채팅 기록에 보존하고, 인용과 연
 
 ### 저장 요청과 보존된 파일을 연결하는 계약
 
-저장 도구 호출이나 success 문자열은 파일 보존의 증거가 아닙니다. 서버가 요청 계약 ID·세션·대상 원본·저장 대상으로 확정한 답변과 출처 포함 export bytes를 `SaveOperation`으로 연결하고, 저장소는 이 identity와 artifact를 immutable manifest로 보관합니다. 본문 `content_hash`는 출처 부록·제한·BOM을 포함한 파일 digest가 아니므로 실제 전달 bytes의 SHA-256과 크기를 별도로 계산합니다. 이 연결로 잘못된 답변을 저장하고 자기 hash만 맞추는 경우와 올바른 요청의 파일이 변조된 경우를 구분합니다. 자연어 요청 해석과 답변의 의미 품질은 여전히 별도 평가 대상입니다.
+서버가 요청 계약 ID·세션·대상 원본·저장 대상으로 확정한 답변과 출처 포함 export bytes를 `SaveOperation`으로 연결하고, 저장소는 이 identity와 artifact를 immutable manifest로 보관합니다. 저장 도구는 파일 경로와 검증한 operation·artifact를 타입이 있는 결과로 반환하며 실패는 예외로 전달합니다. 영수증 생성부는 이 결과의 실제 파일·작업·바이트를 확인한 뒤 성공을 기록합니다. 저장 성공 영수증에는 `verified`, 파일 경로, operation과 artifact가 모두 필요하며 검증 정보 없는 과거 성공 형식은 현재 계약으로 수용하지 않습니다. 본문 `content_hash`는 출처 부록·제한·BOM을 포함한 파일 digest가 아니므로 실제 전달 bytes의 SHA-256과 크기를 별도로 계산합니다. 이 연결로 잘못된 답변을 저장하고 자기 hash만 맞추는 경우와 올바른 요청의 파일이 변조된 경우를 구분합니다. 자연어 요청 해석과 답변의 의미 품질은 여전히 별도 평가 대상입니다.
 
 서버는 도구 반환값을 받기 전에 저장 operation의 바인딩 hash를 `answer_provenance.save_operation_binding_sha256`에 고정합니다. 평가기는 이 독립된 값과 receipt·다운로드의 operation 바인딩을 비교합니다. 파일 bytes만 맞는 다른 작업의 성공 receipt도 통과시키지 않기 위한 연결이며, 전체 이벤트 저장소나 새로운 본문 생성 모델을 추가하지 않습니다.
 

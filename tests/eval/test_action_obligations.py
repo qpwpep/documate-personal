@@ -85,7 +85,7 @@ def _result(*, status="success", terminal="succeeded", missing=False, reused_ori
             missing_receipt_after_attempt=False, domain_request_id="req-domain",
             execution_id="req-final", evidence_execution_id="req-final", evidence_status="complete",
             provenance_hash=None):
-    actions = [] if missing else [_receipt(status, reused_origin or "slack-call", tool_name)]
+    actions = []
     operation = None
     if artifact_dir is not None:
         body = _answer()
@@ -97,9 +97,11 @@ def _result(*, status="success", terminal="succeeded", missing=False, reused_ori
         )
         manifest, path = save_artifact(artifact_dir, content, operation, ttl_seconds=60)
         actions = [ActionReceipt(
-            invocation_id="slack-call", kind="save_text", status="success",
+            invocation_id=reused_origin or "slack-call", kind="save_text", status="success",
             file_path=str(path), operation=operation, artifact=manifest.artifact, verification="verified",
         )]
+    elif not missing:
+        actions = [_receipt(status, reused_origin or "slack-call", tool_name)]
     answer = _answer(actions)
     turns = []
     if reused_origin is None:
@@ -198,8 +200,17 @@ def test_complete_execution_proof_of_omitted_required_action_is_product_failure(
 
 @pytest.mark.parametrize("reused_origin", [None, "failed-original-call"])
 @pytest.mark.parametrize("tool_name", ["slack_notify", "save_text"])
-def test_success_receipt_cannot_relabel_failed_execution(reused_origin, tool_name):
-    result = _result(terminal="failed", reused_origin=reused_origin, tool_name=tool_name)
+def test_success_receipt_cannot_relabel_failed_execution(tmp_path, monkeypatch, reused_origin, tool_name):
+    def download(url, timeout):
+        manifest, payload = read_saved_artifact(tmp_path, unquote(urlparse(url).path.rsplit("/", 1)[1]))
+        return SimpleNamespace(status_code=200, content=payload, headers={
+            "X-Save-Binding-SHA256": manifest.operation.binding_sha256,
+            "X-Artifact-Id": manifest.artifact.artifact_id,
+        })
+
+    monkeypatch.setattr(requests, "get", download)
+    result = _result(terminal="failed", reused_origin=reused_origin, tool_name=tool_name,
+                     artifact_dir=tmp_path if tool_name == "save_text" else None)
 
     assert result.release_pass is False
     assert result.policy_assessment.status == "indeterminate"

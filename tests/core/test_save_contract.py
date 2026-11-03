@@ -1,8 +1,9 @@
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
-from src.core.answer_schema import finalize_answer, text_document
+from src.core.answer_schema import ActionReceipt, finalize_answer, text_document
 from src.core.contracts import RuntimeState, PlannerState, ResponseState
 from src.core.contracts.graph_state import PendingAction
 from src.core.request_contracts import RequestContract
@@ -12,6 +13,7 @@ from src.eval.tool_policy import assess_execution_policy
 from src.infra.tools.save_text import build_save_text_tool
 from src.runtime.agent_runtime.tool_execution import capture_tool_execution
 from src.runtime.nodes.actions import make_action_postprocess_node
+from src.runtime.nodes.actions.receipts import build_save_receipt
 
 
 def _save_state(text="정확한 저장 본문", *, session_id="session-a"):
@@ -39,6 +41,39 @@ def test_reentering_same_save_action_reuses_artifact(tmp_path, monkeypatch):
     assert first.artifact == second.artifact
     assert Path(first.file_path).stat().st_mtime_ns == before
     assert len(list(tmp_path.glob("*.txt"))) == 1
+
+
+@pytest.mark.parametrize("missing", ["verification", "operation", "artifact", "file_path"])
+def test_successful_save_receipt_requires_verified_artifact(tmp_path, monkeypatch, missing):
+    monkeypatch.setattr("src.infra.tools.save_text.get_save_text_output_dir", lambda: tmp_path)
+    node = make_action_postprocess_node(build_save_text_tool(), lambda **_: {}, False)
+    receipt = node(_save_state())["response"].result.actions[0]
+    payload = receipt.model_dump(mode="json")
+    payload.pop(missing)
+
+    with pytest.raises(ValueError, match="save requires"):
+        ActionReceipt.model_validate(payload)
+
+
+@pytest.mark.parametrize("damage", ["wrong_operation", "outside_path", "changed_payload"])
+def test_typed_save_result_still_requires_matching_storage(tmp_path, monkeypatch, damage):
+    monkeypatch.setattr("src.infra.tools.save_text.get_save_text_output_dir", lambda: tmp_path)
+    state = _save_state()
+    node = make_action_postprocess_node(build_save_text_tool(), lambda **_: {}, False)
+    first = node(state)["response"].result.actions[0]
+    result = build_save_text_tool()("정확한 저장 본문", operation=first.operation)
+    if damage == "wrong_operation":
+        result = replace(result, operation=first.operation.model_copy(update={"operation_id": "other-operation"}))
+    elif damage == "outside_path":
+        result = replace(result, file_path=tmp_path.parent / result.file_path.name)
+    else:
+        result.file_path.write_bytes(b"changed payload")
+
+    receipt = build_save_receipt(result, operation=first.operation)
+
+    assert receipt.status == "error"
+    assert receipt.verification == "failed"
+    assert receipt.error_code == "artifact_mismatch"
 
 
 @pytest.mark.parametrize("failure", ["changed_body", "missing_artifact", "unreadable_artifact"])

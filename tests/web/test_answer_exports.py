@@ -133,6 +133,28 @@ def test_failed_save_retries_the_original_snapshot(exports, monkeypatch):
     assert saved[0].read_bytes() == export_answer_text(original, include_sources=True).encode("utf-8-sig")
 
 
+def test_published_export_with_unavailable_readback_remains_unknown(exports, monkeypatch):
+    client, _, session, answer_id, original, output = exports
+    real_read = Path.read_bytes
+
+    def unavailable_artifact_readback(path):
+        if path.parent == output and path.suffix == ".txt":
+            raise PermissionError("readback unavailable")
+        return real_read(path)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "read_bytes", unavailable_artifact_readback)
+        result = client.post(f"/sessions/export-session/answers/{answer_id}/save").json()
+
+    assert result["status"] == "failed"
+    receipt = result["response"]["actions"][-1]
+    assert receipt["status"] == "unknown"
+    assert receipt["verification"] == "unverifiable"
+    assert receipt["error_code"] == "artifact_unverifiable"
+    assert len(list(output.glob("*.txt"))) == 1
+    assert session.get_answer(answer_id) == original
+
+
 @pytest.mark.parametrize("monotonic_now", [1.0, 86400.0], ids=["just-booted", "long-running"])
 def test_missing_or_expired_session_is_not_recreated(exports, monkeypatch, monotonic_now):
     client, store, _, answer_id, _, output = exports

@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -67,3 +69,12 @@ class SaveManifest(SaveModel):
                 or self.operation.byte_count != self.artifact.byte_count):
             raise ValueError("artifact bytes must match the save operation")
         return self
+
+
+@dataclass(frozen=True, slots=True)
+class SaveToolResult:
+    """A successful local write; consumers still verify the stored artifact."""
+
+    file_path: Path
+    operation: SaveOperation
+    artifact: SaveArtifact

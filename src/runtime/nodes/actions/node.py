@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+from collections.abc import Callable
+from pathlib import Path
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from src.core.answer_schema import ActionReceipt, AnswerResponse, export_answer_text
@@ -14,12 +15,13 @@ from src.core.contracts.boundary.response import get_response_state
 from src.core.contracts.boundary.runtime import get_runtime_state
 from src.core.message_utils import build_tool_message
 from src.core.request_contracts import check_answer_contract, resolve_body_response
-from src.core.save_contract import SaveOperation
+from src.core.save_contract import SaveOperation, SaveToolResult
 from src.infra.logging_utils import log_event
 from src.infra.answer_export import select_current_save_operation
+from src.infra.saved_artifacts import ArtifactError
 from src.runtime.nodes.actions.policy import select_slack_delivery
-from src.core.slack_contract import SlackDefault
-from src.runtime.nodes.actions.receipts import build_save_receipt, build_slack_receipt
+from src.core.slack_contract import SlackDefault, SlackDelivery
+from src.runtime.nodes.actions.receipts import build_save_failure, build_save_receipt, build_slack_receipt
 from src.runtime.agent_runtime.tool_execution import invoke_tool, record_nonexecution
 
 
@@ -33,7 +35,6 @@ def _save_operation(*, contract, runtime, pending, response, body: str) -> SaveO
         operation = (runtime.answer_export_operations.get(answer_export_key(response.result))
                      or prior or build_answer_export_operation(response.result, session_id=scope))
         if operation.session_id != scope or not operation.matches_bytes(body.encode("utf-8-sig")):
-            from src.infra.saved_artifacts import ArtifactError
             raise ArtifactError("idempotency_conflict", "선택한 저장 작업의 본문과 세션이 다릅니다.")
         return select_current_save_operation(operation)
     if prior is not None and prior.request_id == contract.request_id and prior.session_id == scope:
@@ -79,7 +80,6 @@ def _ready_body(*, contract, response, runtime, pending, planner) -> bool:
         or response.contract_revision != contract.revision
         or planner.diagnostics.reason in {"upload_retriever_missing", "planner_unavailable"}
         or not response.result.content.blocks
-        or not _answer_conditions_ready(contract, response.result)
     ):
         return False
     if contract.body.kind == "copy_input":
@@ -131,7 +131,7 @@ def _prepared_pending_body(*, contract, pending, body_ready: bool) -> bool:
 
 
 def make_action_postprocess_node(
-    save_text_tool: Any, slack_notify_tool: Any, verbose: bool,
+    save_text_tool: Callable[..., SaveToolResult], slack_notify_tool: Callable[..., SlackDelivery], verbose: bool,
     default_slack_recipient: SlackDefault | None = None,
 ):
     default_slack_recipient = default_slack_recipient or SlackDefault()
@@ -222,17 +222,18 @@ def make_action_postprocess_node(
                     save_operation = _save_operation(contract=contract, runtime=runtime, pending=pending,
                                                      response=response, body=body)
                     if save_operation.answer_hash != response.result.content_hash:
-                        from src.infra.saved_artifacts import ArtifactError
                         invocation_id = record_nonexecution("save_text", reason_code="idempotency_conflict")
                         raise ArtifactError("idempotency_conflict", "재시도 본문이 확정된 저장 대상과 다릅니다.")
                     invocation_id = uuid4().hex
                     result = invoke_tool("save_text", save_text_tool, execution_id=invocation_id,
                                          content=body, operation=save_operation)
                 except Exception as exc:
-                    code = getattr(exc, "code", "write_failed")
-                    result = {"status": "unknown" if code == "artifact_unverifiable" else "error",
-                              "error": str(exc), "error_code": code}
-                receipt = build_save_receipt(result, operation=save_operation).model_copy(update={"invocation_id": invocation_id})
+                    receipt = build_save_failure(
+                        exc.code if isinstance(exc, ArtifactError) else "write_failed", str(exc),
+                        operation=save_operation, invocation_id=invocation_id,
+                    )
+                else:
+                    receipt = build_save_receipt(result, operation=save_operation, invocation_id=invocation_id)
                 save_receipt = receipt
                 messages.append(build_tool_message("save_text", {
                     **receipt.model_dump(mode="json", exclude_none=True),
@@ -249,12 +250,12 @@ def make_action_postprocess_node(
             # follow-ups; this branch must never attach old success to new text.
             if (body_ready and save_operation.answer_hash == response.result.content_hash
                     and save_operation.matches_bytes(body.encode("utf-8-sig"))):
-                receipt = build_save_receipt(save_receipt.model_dump(mode="json"), operation=save_operation)
+                result = SaveToolResult(file_path=Path(save_receipt.file_path),
+                                        operation=save_receipt.operation, artifact=save_receipt.artifact)
+                receipt = build_save_receipt(result, operation=save_operation, invocation_id=save_receipt.invocation_id)
             else:
-                receipt = build_save_receipt({
-                    "status": "error", "error_code": "idempotency_conflict",
-                    "error": "현재 답변이 확정된 저장 대상과 다릅니다.",
-                }, operation=save_operation)
+                receipt = build_save_failure("idempotency_conflict", "현재 답변이 확정된 저장 대상과 다릅니다.",
+                                             operation=save_operation)
             if receipt.status == "success":
                 record_nonexecution("save_text", phase="reused", reason_code="completed_operation",
                                     origin_invocation_id=save_receipt.invocation_id)
