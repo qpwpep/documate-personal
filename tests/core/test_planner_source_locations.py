@@ -135,11 +135,12 @@ def test_live_planner_distinguishes_source_locations_from_literal_anchors(
     )
     planner = make_planner_node(live_planner_registry.llm_planner, False)
 
-    result = planner(state)["planner"].output
+    updates = planner(state)
+    result = updates["planner"].output
 
     assert result.use_retrieval
     assert result.tasks
-    inline_modes = [item.mode for item in result.request_contract.answer.format if item.kind == "inline_code"]
+    inline_modes = [item.mode for item in updates["runtime"].request_contract.answer.format if item.kind == "inline_code"]
     assert inline_modes == ([case.inline_mode] if case.inline_mode else [])
     for task in result.tasks:
         assert task.route == "upload"
