@@ -110,8 +110,6 @@ class ConversionCache:
         if not self.max_bytes or not self.ttl_seconds:
             return
         snapshot = document.snapshot
-        if snapshot.content_hash != file.content_hash or snapshot.capture_scope != "full_document":
-            raise ValueError("Only complete matching source conversions can be cached")
         elements = [element.model_dump(mode="json") for element in document.elements]
         for element in elements:
             element["metadata"].pop("file_id", None)

@@ -6,11 +6,14 @@ import hashlib
 from contextlib import contextmanager
 from uuid import uuid4
 
+import chromadb
 import pytest
+from chromadb.errors import NotFoundError
 from langchain_core.embeddings import Embeddings
 
 from src.core.planner_schema import RetrievalRequirement
 from src.infra.tools.local_rag import build_upload_search_tool
+from src.infra.tools.local_rag.uploads import retry_pending_upload_index_cleanup
 
 
 class LengthEmbeddings(Embeddings):
@@ -49,6 +52,31 @@ def uploads(tmp_path, monkeypatch):
             handle.cleanup()
 
     return record, indexed
+
+
+def test_failed_index_cleanup_blocks_new_builds_until_deletion_recovers(uploads, monkeypatch):
+    record, indexed = uploads
+    client = chromadb.Client()
+    with indexed([record("source.py", "value = 1\n")]) as handle:
+        assert client.get_collection(handle.collection_name).count() == 1
+
+        def unavailable(self, name):
+            raise RuntimeError("storage deletion unavailable")
+
+        with monkeypatch.context() as boundary:
+            boundary.setattr(type(client), "delete_collection", unavailable)
+            with pytest.raises(RuntimeError, match="storage deletion unavailable"):
+                handle.cleanup()
+            with pytest.raises(RuntimeError, match="cleanup is pending"):
+                with indexed([record("next.py", "value = 2\n")]):
+                    pytest.fail("A pending deletion must prevent another index build")
+
+        retry_pending_upload_index_cleanup()
+        with pytest.raises(NotFoundError):
+            client.get_collection(handle.collection_name)
+
+    with indexed([record("recovered.py", "value = 3\n")]) as recovered:
+        assert client.get_collection(recovered.collection_name).count() == 1
 
 
 def test_same_content_in_different_files_has_distinct_citations(uploads):

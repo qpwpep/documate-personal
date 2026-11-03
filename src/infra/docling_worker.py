@@ -6,7 +6,6 @@ import argparse
 import json
 import math
 import os
-import sys
 from pathlib import Path
 from threading import Event, Thread
 from typing import NoReturn
@@ -37,36 +36,26 @@ def _start_parent_watchdog() -> Event:
     stopped = Event()
     parent_pid = os.getppid()
     try:
-        expected_owner = None
         expected_pid = os.environ.get("DOCUMATE_CONVERSION_OWNER_PID")
         expected_created = os.environ.get("DOCUMATE_CONVERSION_OWNER_CREATED")
-        if expected_pid is not None or expected_created is not None:
-            if expected_pid is None or expected_created is None:
-                _terminate_orphan()
-            owner_pid, owner_created = int(expected_pid), float(expected_created)
-            if owner_pid < 1 or not math.isfinite(owner_created) or owner_created <= 0:
-                _terminate_orphan()
-            expected_owner = psutil.Process(owner_pid)
-            if (expected_owner.create_time() != owner_created or not expected_owner.is_running()
-                    or expected_owner.status() == psutil.STATUS_ZOMBIE):
-                _terminate_orphan()
-        if parent_pid <= 1 and (expected_owner is None or parent_pid != expected_owner.pid):
+        if expected_pid is None or expected_created is None:
+            _terminate_orphan()
+        owner_pid, owner_created = int(expected_pid), float(expected_created)
+        if owner_pid < 1 or not math.isfinite(owner_created) or owner_created <= 0:
+            _terminate_orphan()
+        expected_owner = psutil.Process(owner_pid)
+        if (expected_owner.create_time() != owner_created or not expected_owner.is_running()
+                or expected_owner.status() == psutil.STATUS_ZOMBIE):
+            _terminate_orphan()
+        if parent_pid <= 1 and parent_pid != expected_owner.pid:
             # A container's PID 1 API is legitimate only when the runner
             # supplied that exact owner identity; otherwise this is an orphan.
             _terminate_orphan()
         worker = psutil.Process(os.getpid())
         parent = psutil.Process(parent_pid)
         parents = [parent]
-        if expected_owner is not None and expected_owner.pid != parent_pid:
+        if expected_owner.pid != parent_pid:
             parents.append(expected_owner)
-        # Windows venv Python is a redirector which waits for this interpreter.
-        # Its lifetime alone cannot prove the owning API is still running.
-        if (expected_owner is None and os.name == "nt" and os.path.normcase(parent.exe()) == os.path.normcase(sys.executable)
-                and os.path.normcase(worker.exe()) != os.path.normcase(sys.executable)):
-            owner = parent.parent()
-            if owner is None:
-                _terminate_orphan()
-            parents.append(owner)
         identities = [(item.pid, item.create_time()) for item in parents]
         if any(created > worker.create_time() for _pid, created in identities):
             _terminate_orphan()

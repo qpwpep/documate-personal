@@ -133,7 +133,7 @@ def chunk_notebook(
                                   line_start=1, line_end=(PythonSourceMap(source).line_count if is_code
                                                         else max(1, len(source.splitlines()))),
                                   cell_id=native_id, cell_index=cell_index, precision="exact")],
-            metadata={"cell_type": str(cell.get("cell_type")),
+            metadata={"cell_type": cell["cell_type"],
                       "code_metadata": _build_code_metadata(source=source, cell_id=cell_index) if is_code else {}},
         ))
     return chunk_parsed_document(ParsedDocument(snapshot=snapshot, elements=elements),
@@ -170,7 +170,7 @@ def _option_literal(name: str, value: str) -> str:
 
 
 def _build_code_metadata(*, source: str, cell_id: int | None = None) -> dict[str, Any]:
-    if not str(source or "").strip():
+    if not source.strip():
         return {}
     try:
         tree = ast.parse(source)
@@ -206,16 +206,14 @@ def _build_code_metadata(*, source: str, cell_id: int | None = None) -> dict[str
         call_payload: dict[str, Any] = {"call_name": call_name}
         if kwargs:
             call_payload["kwargs"] = kwargs
-        line_number = getattr(node, "lineno", None)
-        if isinstance(line_number, int) and line_number > 0:
-            call_payload["line"] = line_number
+        call_payload["line"] = node.lineno
         calls.append(call_payload)
         if len(calls) >= _MAX_CODE_METADATA_CALLS:
             break
 
     metadata: dict[str, Any] = {}
     if cell_id is not None:
-        metadata["cell_id"] = max(0, int(cell_id))
+        metadata["cell_id"] = cell_id
     if calls:
         metadata["calls"] = calls
     if option_literals:

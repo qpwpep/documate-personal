@@ -48,7 +48,6 @@ EMBEDDING_BATCH_SIZE = 128
 class _PendingIndexDeletion:
     client: Any = field(repr=False)
     name: str
-    collection_id: str
 
 
 _pending_index_deletions: OrderedDict[tuple[int, str], _PendingIndexDeletion] = OrderedDict()
@@ -67,37 +66,31 @@ def retry_pending_upload_index_cleanup() -> None:
         pending = list(_pending_index_deletions.items())[:_INDEX_CLEANUP_BATCH]
     for key, item in pending:
         try:
-            try:
-                current = item.client.get_collection(item.name)
-            except NotFoundError:
-                current = None
-            # A name reused outside the managed builder is not the retired resource.
-            if current is not None and str(current.id) == item.collection_id:
-                item.client.delete_collection(item.name)
+            item.client.delete_collection(item.name)
+        except NotFoundError:
+            pass
         except Exception:
             logging.getLogger(__name__).warning("upload_index_cleanup_retry_failed", exc_info=True)
             with _index_cleanup_lock:
                 if key in _pending_index_deletions:
                     _pending_index_deletions.move_to_end(key)
-        else:
-            with _index_cleanup_lock:
-                if _pending_index_deletions.get(key) is item:
-                    del _pending_index_deletions[key]
+            continue
+        with _index_cleanup_lock:
+            if _pending_index_deletions.get(key) is item:
+                del _pending_index_deletions[key]
 
 
 def _delete_upload_index(vectorstore: Chroma) -> None:
     collection = vectorstore._collection
-    key = (id(vectorstore._client), str(collection.id))
+    key = (id(vectorstore._client), collection.name)
     try:
-        current = vectorstore._client.get_collection(collection.name)
-        if str(current.id) == str(collection.id):
-            vectorstore.delete_collection()
+        vectorstore.delete_collection()
     except NotFoundError:
         pass
     except Exception:
         with _index_cleanup_lock:
             _pending_index_deletions[key] = _PendingIndexDeletion(
-                client=vectorstore._client, name=collection.name, collection_id=str(collection.id))
+                client=vectorstore._client, name=collection.name)
         raise
     with _index_cleanup_lock:
         _pending_index_deletions.pop(key, None)
@@ -390,17 +383,12 @@ def build_upload_retriever(
                 workspace=ingestion.workspace,
                 cache_dir=ingestion.cache_dir / "conversions" if ingestion.cache_dir is not None else None,
                 deadline=ingestion.deadline)
-            if len(parsed) != len(new_formats):
-                raise IngestionError("DOCUMENT_ADAPTER_ERROR", "변환 결과의 파일 개수가 일치하지 않습니다.")
             converted = {file.file_id: document for file, document in zip(new_formats, parsed, strict=True)}
         document_chunks = 0
         for file in files:
             try:
                 if file.file_id in converted:
                     parsed = converted[file.file_id]
-                    if (parsed.snapshot.content_hash != file.content_hash or parsed.snapshot.source_uri != file.source_uri
-                            or parsed.snapshot.capture_scope != "full_document"):
-                        raise IngestionError("DOCUMENT_ADAPTER_ERROR", "변환 결과가 원본과 일치하지 않습니다.", file_name=file.name)
                     chunked = chunk_parsed_document(parsed, chunk_size=UPLOAD_CHUNK_SIZE, chunk_overlap=UPLOAD_CHUNK_OVERLAP)
                     documents.append(chunked)
                     if not chunked.chunks:

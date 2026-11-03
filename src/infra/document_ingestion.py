@@ -58,7 +58,9 @@ class IngestionError(RuntimeError):
 class DocumentConverterPort(Protocol):
     def convert_many(self, files: Sequence[UploadRecord], *, policy: ConversionPolicy,
                      workspace: Path, cache_dir: Path | None = None,
-                     deadline: float | None = None) -> tuple[ParsedDocument, ...]: ...
+                     deadline: float | None = None) -> tuple[ParsedDocument, ...]:
+        """Return one identity- and policy-validated full document per file, in input order."""
+        ...
 
     def close(self) -> None: ...
 
