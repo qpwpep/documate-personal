@@ -129,3 +129,16 @@ def test_rejected_send_retries_the_already_resolved_channel(slack_http_boundary)
     assert second.target == first.target
     assert {request["payload"]["channel"] for request in _sent_requests(requests)} == {"DTARGET"}
     assert len(_sent_requests(requests)) == 2
+
+
+@pytest.mark.parametrize("response", [None, {"ok": True, "channel": "DTARGET", "ts": "1.0"}])
+def test_attempted_delivery_cannot_be_reused_for_different_text(slack_http_boundary, response):
+    requests, responses = slack_http_boundary
+    responses["/chat.postMessage"] = response
+    tool = build_slack_notify_tool("test-token")
+    original = tool(text="original body", delivery=_delivery())
+
+    with pytest.raises(ValueError, match="differs from the bound delivery operation"):
+        tool(text="replacement body", delivery=original)
+    assert tool(text="original body", delivery=original) == original
+    assert len(_sent_requests(requests)) == 1

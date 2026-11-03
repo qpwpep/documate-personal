@@ -28,12 +28,13 @@ def build_slack_notify_tool(token: str | None) -> Callable[..., SlackDelivery]:
     slack_client = create_slack_client(token)
 
     def slack_notify(*, text: str, delivery: SlackDelivery) -> SlackDelivery:
-        if delivery.status in {"sent", "unknown"}:
-            return delivery
         if delivery.selection is None:
             # Policy rejection cannot become a fresh recipient choice or be
             # erased by authentication checking at the transport boundary.
             return resolve_destination(slack_client, delivery)
+        delivery = delivery.bind_text(text)
+        if delivery.status in {"sent", "unknown"}:
+            return delivery
         delivery = update_delivery(delivery, status="pending", failure=None, message_ts=None)
         if slack_client is None:
             return failed_delivery(

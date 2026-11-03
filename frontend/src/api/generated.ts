@@ -194,6 +194,8 @@ export interface components {
             /** @default null */
             operation: components["schemas"]["SaveOperation"] | null;
             /** @default null */
+            previous_slack: components["schemas"]["SlackDelivery"] | null;
+            /** @default null */
             slack: components["schemas"]["SlackDelivery"] | null;
             /**
              * Status
@@ -1537,6 +1539,8 @@ export interface components {
              * @default null
              */
             message_ts: string | null;
+            /** @default null */
+            operation: components["schemas"]["SlackOperation"] | null;
             /**
              * Resolved User Id
              * @default null
@@ -1582,6 +1586,20 @@ export interface components {
              * @enum {string}
              */
             stage: "input" | "selection" | "lookup" | "open_dm" | "send";
+        };
+        /**
+         * SlackOperation
+         * @description One request's exact outgoing text, independent of later answer revisions.
+         */
+        SlackOperation: {
+            /** Byte Count */
+            byte_count: number;
+            /** Operation Id */
+            operation_id: string;
+            /** Payload Sha256 */
+            payload_sha256: string;
+            /** Request Id */
+            request_id: string;
         };
         /** SlackTarget */
         SlackTarget: {

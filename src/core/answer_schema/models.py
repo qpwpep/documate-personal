@@ -257,6 +257,7 @@ class ActionReceipt(AnswerModel):
     status: Literal["success", "error", "skipped", "unknown"]
     file_path: str | None = None
     slack: SlackDelivery | None = None
+    previous_slack: SlackDelivery | None = None
     message: str | None = None
     error: str | None = None
     operation: SaveOperation | None = None
@@ -266,6 +267,11 @@ class ActionReceipt(AnswerModel):
 
     @model_validator(mode="after")
     def verified_save_is_bound(self) -> "ActionReceipt":
+        if self.previous_slack is not None and (
+            self.kind != "slack_notify" or self.status != "skipped" or self.slack is not None
+            or self.previous_slack.status != "unknown" or not self.message
+        ):
+            raise ValueError("a previous uncertain Slack delivery requires a distinct skipped receipt")
         if self.kind == "slack_notify":
             if self.slack is None:
                 if self.status != "skipped":
@@ -377,4 +383,14 @@ class AnswerResponse(AnswerModel):
                 raise ValueError("semantic validation must match the cited source revisions")
             if any(check.unit_id is not None and check.unit_id not in paths for check in semantic.checks):
                 raise ValueError("semantic validation refers to an unknown content unit")
+        slack_operations = [receipt.slack.operation for receipt in self.actions
+                            if receipt.slack is not None and receipt.slack.operation is not None]
+        if slack_operations:
+            # The public exporter re-enters this validator. Render only after
+            # the content/source checks above have established this revision.
+            from src.core.answer_schema.rendering import render_answer_text
+
+            payload = render_answer_text(self, include_sources=True)
+            if any(not operation.matches_text(payload) for operation in slack_operations):
+                raise ValueError("current Slack delivery must match the response export payload")
         return self

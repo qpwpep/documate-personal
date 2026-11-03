@@ -279,7 +279,19 @@ def make_action_postprocess_node(
                 completed.discard("save_text")
 
         if intents["slack_notify"] == "requested" and "slack_notify" not in completed:
-            if body_ready and "slack_notify" not in waiting_intents:
+            if (body_ready and slack_delivery.status == "unknown"
+                    and (not slack_delivery.operation.matches_text(body)
+                         or (contract.slack_recipient.state == "explicit"
+                             and contract.slack_recipient.selector != slack_delivery.selection.selector))):
+                invocation_id = record_nonexecution("slack_notify", reason_code="previous_delivery_unknown")
+                unchanged_body = slack_delivery.operation.matches_text(body)
+                receipts.append(ActionReceipt(
+                    kind="slack_notify", status="skipped", invocation_id=invocation_id,
+                    previous_slack=slack_delivery,
+                    message=("변경한 수신자에게 전송하지 않았습니다. " if unchanged_body else "수정된 본문은 전송하지 않았습니다. ")
+                    + "이전 본문의 Slack 전달 여부를 먼저 확인한 뒤, 추가 전송이 필요하면 새 전송 요청을 해 주세요.",
+                ))
+            elif body_ready and "slack_notify" not in waiting_intents:
                 if slack_delivery.selection is not None and contract.execution_ready(
                     "slack_notify", body_ready=True, destination_ready=True,
                 ):
@@ -290,6 +302,7 @@ def make_action_postprocess_node(
                         try:
                             check_request_deadline("action_postprocess")
                             invocation_id = uuid4().hex
+                            slack_delivery = slack_delivery.bind_text(body)
                             result = invoke_tool("slack_notify", slack_notify_tool, execution_id=invocation_id,
                                                  text=body, delivery=slack_delivery)
                             slack_delivery = result.model_copy(update={"invocation_id": invocation_id})

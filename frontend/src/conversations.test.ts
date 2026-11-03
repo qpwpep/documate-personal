@@ -127,7 +127,7 @@ describe('브라우저 대화 표시 상태', () => {
       response: {
         ...turn.result.response,
         actions: [{ kind: 'save_text', status: 'error', message: '저장 공간을 확인해 주세요.', invocation_id: null,
-          file_path: null, slack: null, error: null, operation: null, artifact: null, verification: 'failed', error_code: 'write_failed' }],
+          file_path: null, slack: null, previous_slack: null, error: null, operation: null, artifact: null, verification: 'failed', error_code: 'write_failed' }],
       },
     }, turn.result.answer_id!);
     turn.exportError = '저장 공간을 확인해 주세요.';

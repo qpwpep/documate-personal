@@ -46,9 +46,9 @@ const response: AnswerResponse = {
   issues: [{ code: 'source_limit', message: '일부 원문을 확인하지 못했습니다.', unit_id: null }],
   actions: [
     { kind: 'save_text', status: 'error', message: '파일을 저장하지 못했습니다.', invocation_id: null,
-      file_path: null, slack: null, error: null, operation: null, artifact: null, verification: null, error_code: null },
+      file_path: null, slack: null, previous_slack: null, error: null, operation: null, artifact: null, verification: null, error_code: null },
     { kind: 'slack_notify', status: 'skipped', message: '수신자를 확인해 주세요.', invocation_id: null,
-      file_path: null, slack: null, error: null, operation: null, artifact: null, verification: null, error_code: null },
+      file_path: null, slack: null, previous_slack: null, error: null, operation: null, artifact: null, verification: null, error_code: null },
   ],
   content_hash: '6a089f7a08d3dcaf3b9a3248d0bf5901908a81d5e74eada2b9fe09bb1f04a28f',
   retrieval_required: false,
@@ -245,6 +245,7 @@ describe('AnswerView', () => {
       { ...response.actions[1], status: 'unknown', message: '응답을 받지 못했습니다.', slack: {
         intent: { state: 'omitted' }, status: 'unknown', invocation_id: 'delivery-1',
         selection: { source: 'configured_default', request_id: 'request-1', selector: { kind: 'channel', value: 'C123' } },
+        operation: { operation_id: 'delivery-operation', request_id: 'request-1', payload_sha256: 'b'.repeat(64), byte_count: 18 },
         target: { channel_id: 'C123', user_id: null }, message_ts: null, resolved_user_id: null,
         failure: { code: 'delivery_unknown', stage: 'send', message: '전달 여부를 확인할 수 없습니다.', next_action: 'verify_delivery',
           retry_after_seconds: null, slack_error: null },
@@ -259,6 +260,40 @@ describe('AnswerView', () => {
     expect(within(actions).getByText('Slack에서 전달 여부를 확인해 주세요. 자동으로 다시 전송하지 않습니다.')).toBeVisible();
     expect(within(actions).queryByText(/메시지 식별자/)).not.toBeInTheDocument();
     expect(within(actions).queryByRole('button')).not.toBeInTheDocument();
+  });
+
+  it('separates an unsent corrected body from the previous body whose Slack delivery is unknown', () => {
+    const corrected: AnswerResponse = { ...response,
+      content: { blocks: [{ type: 'paragraph', content: [unit('수정한 본문입니다.')] }] },
+      actions: [{ ...response.actions[1], message: '수정한 본문은 전송하지 않았습니다.',
+        previous_slack: {
+          invocation_id: 'previous-send', intent: { state: 'omitted' },
+          selection: { source: 'configured_default', request_id: 'request-1', selector: { kind: 'channel', value: 'C123' } },
+          operation: { operation_id: 'previous-operation', request_id: 'request-1', payload_sha256: 'a'.repeat(64), byte_count: 18 },
+          status: 'unknown', target: { channel_id: 'C123', user_id: null },
+          message_ts: null, resolved_user_id: null,
+          failure: { code: 'delivery_unknown', stage: 'send', message: '이전 전송의 응답을 받지 못했습니다.',
+            next_action: 'verify_delivery', retry_after_seconds: null, slack_error: null },
+        },
+      }],
+    };
+    const original = JSON.stringify(corrected);
+    render(<AnswerView response={corrected} />);
+
+    expect(screen.getByText('수정한 본문입니다.')).toBeVisible();
+    const actions = screen.getByRole('region', { name: '전달 결과' });
+    expect(within(actions).getByText('Slack 전송 · 현재 본문 미전송')).toBeVisible();
+    expect(within(actions).getByText('수정한 본문은 전송하지 않았습니다.')).toBeVisible();
+    const previous = within(actions).getByRole('region', { name: '이전 본문의 Slack 전달 결과' });
+    expect(within(previous).getByText('이전 본문 · 전달 여부 불명')).toBeVisible();
+    expect(within(previous).getByText('이전 수신자: C123')).toBeVisible();
+    expect(within(previous).getByText('이전 전송의 응답을 받지 못했습니다.')).toBeVisible();
+    expect(within(previous).getByText('Slack에서 전달 여부를 확인해 주세요. 자동으로 다시 전송하지 않습니다.')).toBeVisible();
+    expect(within(actions).queryByText('Slack 전송 · 전달 여부 불명')).not.toBeInTheDocument();
+    expect(within(actions).queryByText(/메시지 식별자|완료/)).not.toBeInTheDocument();
+    expect(within(actions).queryByRole('button')).not.toBeInTheDocument();
+    expect(actions).not.toHaveTextContent('a'.repeat(64));
+    expect(JSON.stringify(corrected)).toBe(original);
   });
 
   it('keeps source mismatch warnings beside the affected content', () => {

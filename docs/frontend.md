@@ -83,7 +83,7 @@ flowchart LR
 | ACTION-01 | 선택한 답변의 `answer_id`로 TXT를 만든다. 과거 답변도 그 본문·출처·한계를 저장하며 다운로드 바이트는 서버 산출물과 같다. 답변을 다시 생성하지 않는다. |
 | ACTION-02 | 저장 실패는 같은 답변·저장 작업으로 재시도한다. 준비된 파일은 다운로드를 제공하고 만료·불명 상태에서는 적절히 재확인·재생성한다. 세션 만료를 화면 텍스트로 우회하지 않는다. |
 | ACTION-03 | Slack 수신자 설정만으로 전송하지 않는다. 대화별 입력을 유지하며 잘못된 명시 입력은 기본값으로 대체하지 않는다. 일반 질문은 계속할 수 있다. 기본값 없음·설정 오류·조회 실패를 구분한다. |
-| ACTION-04 | 본문 완료와 저장·Slack의 성공·실패·보류·전달 여부 불명을 구분한다. 수신자 보충 뒤 이미 성공한 저장을 반복하지 않고, 전달 불명인 요청 전체 재전송을 권하지 않는다. 부분 답변의 한계는 새 저장 이후에도 남는다. |
+| ACTION-04 | 본문 완료와 저장·Slack의 성공·실패·보류·전달 여부 불명을 구분한다. 수신자 보충 뒤 이미 성공한 저장을 반복하지 않고, 전달 불명인 요청 전체 재전송을 권하지 않는다. 전달 불명 이후 본문을 수정하거나 자연어로 다른 수신자를 명시하면 현재 전송의 미실행 안내와 이전 본문·수신자의 전달 여부 불명을 따로 표시한다. 부분 답변의 한계는 새 저장 이후에도 남는다. |
 
 ### 접근성과 실행
 
@@ -177,7 +177,7 @@ npm --prefix frontend run generate:api
 | ANSWER-06 | [Markdown·상대 링크·HTML 비실행](../frontend/src/components/MarkdownView.test.tsx), [원문 보존](../frontend/src/components/EvidencePanel.test.tsx) |
 | ACTION-01·ACTION-02 | [선택 답변·정확한 다운로드 바이트·동일 저장 재시도·만료](../frontend/src/components/AnswerDelivery.test.tsx), [저장 응답 경계](../frontend/src/api/delivery-validation.test.ts), [실제 API 저장·다운로드](../frontend/tests/e2e/workflows.spec.ts) |
 | ACTION-03 | [수신자 입력·기본값 구분·설정만으로 전송하지 않음](../frontend/src/components/SlackSettings.test.tsx), [실제 브라우저의 명시적 Slack 요청](../frontend/tests/e2e/workflows.spec.ts) |
-| ACTION-04 | [본문·한계·행동별 결과 표시](../frontend/src/components/AnswerView.test.tsx), [저장 후 한계 보존](../frontend/src/components/AnswerDelivery.test.tsx), [서버 전송 재시도 계약](../tests/core/test_slack_contract.py) |
+| ACTION-04 | [본문·한계·현재 전송과 이전 불확실한 전송의 구분](../frontend/src/components/AnswerView.test.tsx), [저장 후 한계 보존](../frontend/src/components/AnswerDelivery.test.tsx), [본문·수신자 교정과 전송 재시도 계약](../tests/core/test_slack_contract.py) |
 | ACCESS-01·ACCESS-02·ACCESS-03 | [실제 Chromium의 모바일·낮은 화면·포커스·테마 대비·읽기 위치](../frontend/tests/e2e/accessibility.spec.ts) |
 | RUN-01 | [Python 클라이언트](../tests/app/test_client.py), [서비스 관리자](../tests/app/test_service_manager.py), 프런트엔드 설치·타입·lint·build 검사 |
 | RUN-02 | [실제 API 성공·제공자 설정 오류](../frontend/tests/e2e/chat.spec.ts), [첨부·복원·다운로드·Slack 흐름](../frontend/tests/e2e/workflows.spec.ts) |

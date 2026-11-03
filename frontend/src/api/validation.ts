@@ -62,12 +62,30 @@ export function parseAgentResponse(value: unknown): AgentResponse {
     || (!['failed', 'refused'].includes(response.status) && response.upload_manifest === null)) {
     throw invalidResponse();
   }
-  if (response.response !== null) validateSaveReceipts(response.response);
+  if (response.response !== null) validateActionReceipts(response.response);
   return response;
 }
 
-export function validateSaveReceipts(response: AnswerResponse): void {
+export function validateActionReceipts(response: AnswerResponse): void {
   for (const receipt of response.actions) {
+    const slack = receipt.slack;
+    const previousSlack = receipt.previous_slack;
+    if (slack !== null) validateSlackDelivery(slack);
+    if (previousSlack !== null) {
+      validateSlackDelivery(previousSlack);
+      if (receipt.kind !== 'slack_notify' || receipt.status !== 'skipped' || slack !== null
+        || previousSlack.status !== 'unknown' || !receipt.message) throw invalidResponse();
+    }
+    if (receipt.kind === 'slack_notify') {
+      if (slack === null) {
+        if (receipt.status !== 'skipped') throw invalidResponse();
+      } else {
+        const expected = { sent: 'success', unknown: 'unknown', not_sent: 'error', pending: null }[slack.status];
+        const skippedSelection = slack.status === 'not_sent' && receipt.status === 'skipped'
+          && (slack.failure?.stage === 'input' || slack.failure?.stage === 'selection');
+        if (expected === null || (receipt.status !== expected && !skippedSelection)) throw invalidResponse();
+      }
+    } else if (slack !== null) throw invalidResponse();
     const artifact = receipt.artifact;
     const operation = receipt.operation;
     if (artifact !== null && (
@@ -81,6 +99,25 @@ export function validateSaveReceipts(response: AnswerResponse): void {
         throw invalidResponse();
       }
     }
+  }
+}
+
+function validateSlackDelivery(delivery: components['schemas']['SlackDelivery']): void {
+  const { operation, selection, status, target, failure } = delivery;
+  if (operation !== null && (selection === null || operation.request_id !== selection.request_id)) {
+    throw invalidResponse();
+  }
+  if ((status === 'sent' || status === 'unknown') && operation === null) throw invalidResponse();
+  if (status === 'sent') {
+    if (target === null || !delivery.message_ts?.trim() || failure !== null) throw invalidResponse();
+  } else if (delivery.message_ts !== null) throw invalidResponse();
+  if ((status === 'not_sent' || status === 'unknown') && failure === null) throw invalidResponse();
+  if (status === 'pending' && failure !== null) throw invalidResponse();
+  if (status === 'unknown' && (target === null || failure?.stage !== 'send' || failure.next_action !== 'verify_delivery')) {
+    throw invalidResponse();
+  }
+  if (failure !== null && status !== 'unknown' && (failure.code === 'delivery_unknown' || failure.next_action === 'verify_delivery')) {
+    throw invalidResponse();
   }
 }
 

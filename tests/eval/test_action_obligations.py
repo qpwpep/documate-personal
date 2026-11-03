@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from types import SimpleNamespace
 from urllib.parse import unquote, urlparse
@@ -39,8 +40,13 @@ class _PerfectJudgeBoundary:
 def _receipt(status, invocation_id="slack-call", tool_name="slack_notify"):
     if tool_name == "save_text":
         return ActionReceipt(invocation_id=invocation_id, kind=tool_name, status=status, error="Storage failure")
+    payload = "요청한 내용을 처리했습니다.".encode("utf-8")
     delivery = {
         "invocation_id": invocation_id,
+        "operation": {
+            "operation_id": "slack-operation", "request_id": "req-final",
+            "payload_sha256": hashlib.sha256(payload).hexdigest(), "byte_count": len(payload),
+        },
         "intent": {"state": "explicit", "selector": {"kind": "channel", "value": "CTEST"}},
         "selection": {
             "request_id": "req-final", "source": "request_input",

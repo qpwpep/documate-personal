@@ -234,7 +234,9 @@ def make_planner_node(
                               if getattr(contract.actions, name).intent != "requested")
             pending_updates = {"contract": contract, "completed_actions": completed}
             body_changed = pending_body_changed(runtime.pending_action, contract)
-            if pending_recipient_changed(runtime.pending_action, contract):
+            if (pending_recipient_changed(runtime.pending_action, contract)
+                    and (runtime.pending_action.slack_delivery is None
+                         or runtime.pending_action.slack_delivery.status != "unknown")):
                 pending_updates["slack_delivery"] = None
             elif (runtime.pending_action.slack_delivery is not None
                   and runtime.pending_action.slack_delivery.selection is None
@@ -254,6 +256,13 @@ def make_planner_node(
                 pending_updates["slack_delivery"] = SlackDelivery.model_validate({
                     **runtime.pending_action.slack_delivery.model_dump(),
                     "status": "pending", "failure": None, "message_ts": None,
+                    "operation": None, "invocation_id": None,
+                })
+            if (body_changed and "slack_delivery" not in pending_updates
+                    and runtime.pending_action.slack_delivery is not None
+                    and runtime.pending_action.slack_delivery.status in {"pending", "not_sent"}):
+                pending_updates["slack_delivery"] = runtime.pending_action.slack_delivery.model_copy(update={
+                    "operation": None, "invocation_id": None,
                 })
             if body_changed or ("save_text" in runtime.pending_action.completed_actions
                                 and contract.actions.save_text.intent == "requested"):

@@ -17,6 +17,12 @@ def select_slack_delivery(
     default: SlackDefault, previous: SlackDelivery | None = None,
 ) -> SlackDelivery:
     """Select once. Resolution failure never becomes an omitted recipient."""
+    if previous is not None and previous.status == "unknown":
+        if previous.selection.request_id != request_id:
+            raise ValueError("Slack delivery belongs to another request")
+        # A correction cannot resolve whether the original send happened.
+        # Only a separate new request can authorize a new delivery obligation.
+        return previous
     selector_input = None
     if request_recipient is not None:
         try:

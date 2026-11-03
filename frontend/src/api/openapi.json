@@ -95,6 +95,17 @@
             ],
             "default": null
           },
+          "previous_slack": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SlackDelivery"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
           "slack": {
             "anyOf": [
               {
@@ -140,6 +151,7 @@
           "status",
           "file_path",
           "slack",
+          "previous_slack",
           "message",
           "error",
           "operation",
@@ -3509,6 +3521,17 @@
             "default": null,
             "title": "Message Ts"
           },
+          "operation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SlackOperation"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
           "resolved_user_id": {
             "anyOf": [
               {
@@ -3557,6 +3580,7 @@
         },
         "required": [
           "invocation_id",
+          "operation",
           "intent",
           "selection",
           "resolved_user_id",
@@ -3651,6 +3675,40 @@
           "slack_error"
         ],
         "title": "SlackFailure",
+        "type": "object"
+      },
+      "SlackOperation": {
+        "additionalProperties": false,
+        "description": "One request's exact outgoing text, independent of later answer revisions.",
+        "properties": {
+          "byte_count": {
+            "minimum": 1,
+            "title": "Byte Count",
+            "type": "integer"
+          },
+          "operation_id": {
+            "minLength": 1,
+            "title": "Operation Id",
+            "type": "string"
+          },
+          "payload_sha256": {
+            "pattern": "^[a-f0-9]{64}$",
+            "title": "Payload Sha256",
+            "type": "string"
+          },
+          "request_id": {
+            "minLength": 1,
+            "title": "Request Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "operation_id",
+          "request_id",
+          "payload_sha256",
+          "byte_count"
+        ],
+        "title": "SlackOperation",
         "type": "object"
       },
       "SlackTarget": {

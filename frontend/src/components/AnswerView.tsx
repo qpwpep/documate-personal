@@ -327,14 +327,22 @@ function ActionReceipts({ response }: { response: AnswerResponse }) {
   return <section className="answer-actions" aria-label="전달 결과"><h3>전달 결과</h3>
     {response.actions.map((action, index) => {
       const delivery = action.slack;
+      const previous = action.previous_slack;
       const label = delivery?.status === 'unknown' ? '전달 여부 불명' : actionStatuses[action.status];
       return <div key={index}>
-        <p><strong>{actionLabels[action.kind]} · {label}</strong></p>
+        <p><strong>{actionLabels[action.kind]} · {previous ? '현재 본문 미전송' : label}</strong></p>
         {delivery?.selection && <p>{delivery.selection.source === 'configured_default' ? '기본 수신자' : '요청 수신자'}: {delivery.selection.selector.value}</p>}
         {delivery?.intent.state === 'unresolved' && <p>요청 수신자: {delivery.intent.raw_input}</p>}
         {delivery?.status === 'sent' && <p>전송 대상: {delivery.target?.channel_id} · 메시지 식별자: {delivery.message_ts}</p>}
         {[...new Set([action.message, action.error, delivery?.failure?.message])].filter((message): message is string => Boolean(message)).map((message) => <p key={message}>{message}</p>)}
         {delivery?.failure && <p>{delivery.failure.retry_after_seconds != null && `${delivery.failure.retry_after_seconds}초 이후 `}{deliveryGuidance[delivery.failure.next_action]}</p>}
+        {previous && <section aria-label="이전 본문의 Slack 전달 결과">
+          <p><strong>이전 본문 · 전달 여부 불명</strong></p>
+          {previous.selection && <p>이전 수신자: {previous.selection.selector.value}</p>}
+          {previous.target && <p>확인할 Slack 대화: {previous.target.channel_id}</p>}
+          <p>{previous.failure?.message}</p>
+          <p>{deliveryGuidance.verify_delivery}</p>
+        </section>}
         {action.kind === 'save_text' && action.status === 'error' && <p>기존 답변은 유지됩니다. 같은 답변으로 저장을 다시 시도할 수 있습니다.</p>}
       </div>;
     })}

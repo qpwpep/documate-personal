@@ -1,11 +1,73 @@
 from __future__ import annotations
 
+import hashlib
+
 import pytest
 
+from src.core.answer_schema import AnswerResponse, export_answer_text
 from src.core.slack_contract import RecipientSelector
 from src.core.contracts.graph_state import SessionMetadata
 from tests.core.test_pending_action_delivery import delivery_tools
 from tests.core.test_request_contract_retries import _SaveConversation, _fail_save_publication
+
+
+@pytest.mark.parametrize("delivery_tools", [{"/chat.postMessage": None}], indirect=True)
+@pytest.mark.parametrize("corrected_channel", ["C123", "C456"])
+def test_body_correction_preserves_unknown_delivery_for_the_original_payload(delivery_tools, corrected_channel):
+    _save, slack, requests, _output = delivery_tools
+    conversation = _SaveConversation(["원래 본문", "수정 본문", "원래 본문"], slack=slack)
+    recipient = {"state": "explicit", "selector": {"kind": "channel", "value": "C123"},
+                 "evidence_ids": ["request"]}
+    send = {"slack_notify": {"intent": "requested", "evidence_ids": ["request"]}}
+    first = conversation.turn("첫 본문을 작성해서 C123으로 보내줘",
+        body={"kind": "compose", "instruction": "첫 본문 작성", "evidence_ids": ["request"]},
+        actions=send, slack_recipient=recipient)
+    original = first["runtime"].pending_action.slack_delivery
+
+    corrected_recipient = {**recipient, "selector": {"kind": "channel", "value": corrected_channel}}
+    second = conversation.turn(f"본문을 새 내용으로 바꿔서 {corrected_channel}으로 보내줘", relation="correction",
+        body={"kind": "compose", "instruction": "새 내용 작성", "evidence_ids": ["request"]},
+        actions=send, slack_recipient=corrected_recipient)
+    corrected = AnswerResponse.model_validate(second["response"].result.model_dump(mode="json"))
+    receipt = corrected.actions[0]
+    assert receipt.status == "skipped"
+    assert receipt.slack is None
+    assert receipt.previous_slack == original
+    assert "수정된 본문은 전송하지 않았습니다" in receipt.message
+    assert export_answer_text(corrected) == "수정 본문"
+    assert export_answer_text(second["runtime"].pending_action.response) == "수정 본문"
+    assert second["runtime"].pending_action.slack_delivery == original
+    payload = "원래 본문".encode("utf-8")
+    assert original.operation.payload_sha256 == hashlib.sha256(payload).hexdigest()
+    assert original.operation.byte_count == len(payload)
+    mismatched = corrected.model_dump(mode="json")
+    mismatched["actions"] = [first["response"].result.actions[0].model_dump(mode="json")]
+    with pytest.raises(ValueError, match="current Slack delivery must match"):
+        AnswerResponse.model_validate(mismatched)
+
+    repeated = conversation.turn("수정 본문 그대로 다시 보내줘", relation="supplement", actions={},
+        body={"kind": "copy_answer", "source": {"ref": "pending"}})
+    assert repeated["response"].result.actions[0].previous_slack == original
+    assert repeated["response"].result.actions[0].status == "skipped"
+
+    restored = conversation.turn("원래 본문으로 다시 바꿔서 C123으로 보내줘", relation="correction",
+        body={"kind": "compose", "instruction": "첫 본문 작성", "evidence_ids": ["request"]},
+        actions=send, slack_recipient=recipient)
+    assert restored["response"].result.actions[0].slack == original
+    assert restored["response"].result.actions[0].status == "unknown"
+    assert [request["payload"]["text"] for request in requests if request["path"] == "/chat.postMessage"] == ["원래 본문"]
+
+    fresh = conversation.turn("별도 새 요청으로 이 본문을 C123으로 다시 보내줘", relation="new",
+        body={"kind": "copy_answer", "source": {"ref": "previous"}},
+        actions=send, slack_recipient=recipient)
+    new_delivery = fresh["response"].result.actions[0].slack
+    assert new_delivery.status == "sent"
+    assert new_delivery.operation.request_id != original.operation.request_id
+    assert new_delivery.operation.operation_id != original.operation.operation_id
+    assert new_delivery.operation.payload_sha256 == original.operation.payload_sha256
+    assert fresh["response"].result.actions[0].previous_slack is None
+    assert fresh["runtime"].pending_action is None
+    assert len([request for request in requests if request["path"] == "/chat.postMessage"]) == 2
 
 
 @pytest.mark.parametrize("delivery_tools", [{"/chat.postMessage": None}], indirect=True)

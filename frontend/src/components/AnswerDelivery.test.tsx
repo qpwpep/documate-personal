@@ -24,11 +24,11 @@ const operation = { operation_id: 'save-selected-answer', session_id: 'delivery-
 const completed: AnswerExportResult = { status: 'completed', answer_id: 'selected-answer', request_id: 'export-1',
   message: 'TXT 파일을 저장했습니다.', response: { ...answer, actions: [{ kind: 'save_text', status: 'success',
     verification: 'verified', artifact, operation, file_path: 'output/save_text/답변 결과.txt',
-    invocation_id: null, slack: null, message: 'TXT 파일을 저장했습니다.', error: null, error_code: null }] } };
+    invocation_id: null, slack: null, previous_slack: null, message: 'TXT 파일을 저장했습니다.', error: null, error_code: null }] } };
 const failed: AnswerExportResult = { ...completed, status: 'failed', message: '파일을 만들지 못했습니다. 기존 답변은 유지됩니다.',
   response: { ...answer, actions: [{ kind: 'save_text', status: 'error', verification: 'failed', artifact: null,
     operation, error_code: 'write_failed', error: '파일을 만들지 못했습니다.', file_path: null,
-    invocation_id: null, slack: null, message: '파일을 만들지 못했습니다.' }] } };
+    invocation_id: null, slack: null, previous_slack: null, message: '파일을 만들지 못했습니다.' }] } };
 
 let apiBaseUrl = '';
 let mode: 'completed' | 'failed' | 'unavailable' | 'hold' = 'completed';
