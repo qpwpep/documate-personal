@@ -148,6 +148,18 @@ describe('browser API contract', () => {
     ]);
   });
 
+  it.each([{ payload: [] }, { payload: null }, { payload: 'text' }])('rejects a non-object event payload at the API boundary: $payload', async ({ payload }) => {
+    respond = (_request, response) => {
+      response.writeHead(200, { 'Content-Type': 'text/event-stream', 'X-Request-ID': 'invalid-payload' });
+      response.end(frame('final_response', payload));
+    };
+    const client = new AgentSessionClient({ sessionId: 'session-1', baseUrl });
+
+    await expect(collect(client.stream('질문'))).rejects.toMatchObject({ code: 'invalid_stream', requestId: 'invalid-payload' });
+    expect(client.manifest).toBeNull();
+    expect(requests.filter(({ method }) => method === 'POST')).toHaveLength(1);
+  });
+
   it('keeps a server error before the valid final response', async () => {
     const error = { message: '단계 진단', stage: 'planner' };
     respond = (_request, response) => {

@@ -14,9 +14,6 @@ export async function* parseSseStream(
     if (line === '') {
       if (dataLines.length > 0) {
         const data: unknown = JSON.parse(dataLines.join('\n'));
-        if (data === null || typeof data !== 'object' || Array.isArray(data)) {
-          throw new Error(`SSE event '${event}' data must be an object`);
-        }
         yield { event, data };
       }
       event = 'message';

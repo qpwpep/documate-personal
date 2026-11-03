@@ -33,7 +33,7 @@ export function AnswerView({ response, turn, actions, requestId }: {
   const [opened, setOpened] = useState<{ citation: Citation; context: AnswerContext[]; opener: HTMLElement } | null>(null);
   const citations = new Map(response.citations.map((citation) => [citation.evidence.id, citation]));
   const units = response.content.blocks.flatMap((block, index) => blockUnits(block, index));
-  const usedRefs = [...new Set(units.flatMap(({ unit }) => unit.refs ?? []))];
+  const usedRefs = [...new Set(units.flatMap(({ unit }) => unit.refs))];
   const limits = validationLimits(response);
   const issueCodes = new Set(response.issues.map((issue) => issue.code));
   const globalIssues = response.issues.filter((issue) => !issue.unit_id);
@@ -50,7 +50,7 @@ export function AnswerView({ response, turn, actions, requestId }: {
 
   function openCitation(citation: Citation, opener: HTMLElement, contextUnits: Unit[]) {
     setOpened({ citation, opener,
-      context: contextUnits.filter(({ unit }) => unit.refs?.includes(citation.evidence.id))
+      context: contextUnits.filter(({ unit }) => unit.refs.includes(citation.evidence.id))
         .map(({ unit, isCode, inline }) => ({ text: unit.text, isCode: isCode || unit.source_location != null, inline })),
     });
   }
@@ -143,7 +143,7 @@ function blockUnits(block: AnswerBlock, index: number): Unit[] {
     case 'code': return [{ path: `${prefix}.content`, unit: block.content, isCode: true, inline: block.inline }];
     case 'table': return [
       ...block.columns.map((unit, column) => ({ path: `${prefix}.columns.${column}`, unit })),
-      ...(block.rows ?? []).flatMap((row, rowIndex) => row.map((unit, column) => ({ path: `${prefix}.rows.${rowIndex}.${column}`, unit }))),
+      ...block.rows.flatMap((row, rowIndex) => row.map((unit, column) => ({ path: `${prefix}.rows.${rowIndex}.${column}`, unit }))),
     ];
   }
 }
@@ -160,13 +160,13 @@ function BodyBlock({ block, citations, onCitation }: { block: AnswerBlock; citat
       </Fragment>)}</Paragraph>;
     }
     case 'heading':
-      return createElement(`h${block.level ?? 2}`, {}, renderUnit(block.content));
+      return createElement(`h${block.level}`, {}, renderUnit(block.content));
     case 'list': {
       const List = block.ordered ? 'ol' : 'ul';
       return <List>{block.items.map((unit, index) => <li key={index}>{renderUnit(unit)}</li>)}</List>;
     }
     case 'code': {
-      const basis = basisLabels[block.content.basis ?? 'interaction'];
+      const basis = basisLabels[block.content.basis];
       const label = block.content.basis === 'excerpt' ? '원문 발췌'
         : `${basis ? `${basis} · ` : ''}${block.inline ? '인라인 코드' : '코드 블록'} · 실행 확인 안 됨`;
       return <>
@@ -178,7 +178,7 @@ function BodyBlock({ block, citations, onCitation }: { block: AnswerBlock; citat
     case 'table':
       return <div className="answer-table"><table>
         <thead><tr>{block.columns.map((unit, column) => <th scope="col" key={column}>{renderUnit(unit)}</th>)}</tr></thead>
-        <tbody>{block.rows?.map((row, rowIndex) => <tr key={rowIndex}>{row.map((unit, column) => <td key={column}>{renderUnit(unit)}</td>)}</tr>)}</tbody>
+        <tbody>{block.rows.map((row, rowIndex) => <tr key={rowIndex}>{row.map((unit, column) => <td key={column}>{renderUnit(unit)}</td>)}</tr>)}</tbody>
       </table></div>;
   }
 }
@@ -216,7 +216,7 @@ function hasBlockMarkdown(text: string): boolean {
 function UnitText({ unit, citations, onCitation, inline = true }: {
   unit: ContentUnit; citations: Map<string, Citation>; onCitation: OpenCitation; inline?: boolean;
 }) {
-  const basis = basisLabels[unit.basis ?? 'interaction'];
+  const basis = basisLabels[unit.basis];
   const Container = inline ? 'span' : 'div';
   return <Container className={inline ? 'answer-unit' : 'answer-markdown-unit'}>
     {basis && <span className="answer-basis">{basis} · </span>}
@@ -226,7 +226,7 @@ function UnitText({ unit, citations, onCitation, inline = true }: {
 }
 
 function CitationLinks({ unit, citations, onCitation }: { unit: ContentUnit; citations: Map<string, Citation>; onCitation: OpenCitation }) {
-  return (unit.refs ?? []).map((ref) => {
+  return unit.refs.map((ref) => {
     const citation = citations.get(ref);
     return citation && <button className="answer-inline-citation" type="button" key={ref}
       aria-label={`근거 [${citation.number}] 열기`} onClick={(event) => onCitation(citation, event.currentTarget)}>[{citation.number}]</button>;

@@ -217,10 +217,10 @@ function qualityMessage(issue: string): string {
 }
 
 function EvidenceTable({ table, selected, label = '보관된 표와 선택 셀' }: { table: TableData; selected: string[]; label?: string }) {
-  const cells = table.cells ?? [];
+  const cells = table.cells;
   const positions = new Map(cells.map((cell) => [`${cell.row}:${cell.col}`, cell]));
-  const rowCount = Math.max(0, ...cells.map((cell) => cell.row + (cell.row_span ?? 1)));
-  const columnCount = Math.max(0, ...cells.map((cell) => cell.col + (cell.col_span ?? 1)));
+  const rowCount = Math.max(0, ...cells.map((cell) => cell.row + cell.row_span));
+  const columnCount = Math.max(0, ...cells.map((cell) => cell.col + cell.col_span));
   const covered = new Set<string>();
   return <div className="evidence-table"><table aria-label={label}><tbody>
     {Array.from({ length: rowCount }, (_, row) => <tr key={row}>
@@ -229,11 +229,11 @@ function EvidenceTable({ table, selected, label = '보관된 표와 선택 셀' 
         if (covered.has(position)) return null;
         const cell = positions.get(position);
         if (cell === undefined) return <td key={column} />;
-        for (let r = cell.row; r < cell.row + (cell.row_span ?? 1); r += 1) {
-          for (let c = cell.col; c < cell.col + (cell.col_span ?? 1); c += 1) covered.add(`${r}:${c}`);
+        for (let r = cell.row; r < cell.row + cell.row_span; r += 1) {
+          for (let c = cell.col; c < cell.col + cell.col_span; c += 1) covered.add(`${r}:${c}`);
         }
         const Cell = cell.is_header ? 'th' : 'td';
-        return <Cell key={column} scope={cell.is_header ? 'col' : undefined} rowSpan={cell.row_span ?? 1} colSpan={cell.col_span ?? 1}
+        return <Cell key={column} scope={cell.is_header ? 'col' : undefined} rowSpan={cell.row_span} colSpan={cell.col_span}
           data-selected={selected.includes(cell.cell_id) ? 'true' : undefined}>{cell.text}</Cell>;
       })}
     </tr>)}

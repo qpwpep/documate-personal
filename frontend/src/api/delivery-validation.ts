@@ -10,16 +10,13 @@ export function parseSlackDefault(value: unknown): SlackDefault {
   if (!slackDefaultValidator(value)) {
     throw invalidResponse();
   }
-  const selector = value.selector == null ? null : {
-    ...value.selector,
-    value: value.selector.value.trim(),
-  };
+  const selector = value.selector;
   const failure = value.failure;
   if ((selector !== null && failure !== null)
     || (selector !== null && !slackRecipientPatterns[selector.kind].test(selector.value))) {
     throw invalidResponse();
   }
-  return { selector, failure };
+  return value;
 }
 
 export function parseAnswerExport(value: unknown, answerId: string): AnswerExportResult {

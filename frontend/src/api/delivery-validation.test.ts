@@ -52,10 +52,9 @@ describe('Slack default response', () => {
     expect(() => parseSlackDefault(value)).toThrowError(expect.objectContaining({ code: 'invalid_response' }));
   });
 
-  it('normalizes the confirmed selector the same way as the server', () => {
-    expect(parseSlackDefault({ selector: { kind: 'user', value: ' U123 ' }, failure: null })).toEqual({
-      selector: { kind: 'user', value: 'U123' }, failure: null,
-    });
+  it('rejects a noncanonical confirmed selector instead of repairing the response', () => {
+    expect(() => parseSlackDefault({ selector: { kind: 'user', value: ' U123 ' }, failure: null }))
+      .toThrowError(expect.objectContaining({ code: 'invalid_response' }));
   });
 });
 

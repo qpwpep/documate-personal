@@ -52,9 +52,6 @@ describe('parseSseStream', () => {
 
   it.each([
     ['malformed JSON', 'event: final_response\ndata: {\n\n'],
-    ['array payload', 'data: []\n\n'],
-    ['null payload', 'data: null\n\n'],
-    ['primitive payload', 'data: "text"\n\n'],
     ['missing frame delimiter', 'data: {}\n'],
     ['missing line delimiter', 'data: {}'],
   ])('rejects %s instead of emitting an event', async (_name, text) => {
