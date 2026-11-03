@@ -546,34 +546,27 @@ def assess_post_semantics(
         "its version and limits. "
         if any(source.route == "docs" and source.id in cited_ids for source in sources.values()) else ""
     )
-    questions.append({
-        "type": "predicate", "name": "request_fulfilled",
-        "instructions": (
-            "This predicate asks whether the displayed response correctly fulfills the supported portion of the body task, "
-            "not what fraction of the original request is complete. A correct partial response can fully satisfy it. "
-            "First apply answer_scope to every instruction in confirmed_request.body, including instructions not delegated "
-            "to another predicate. Then judge the resulting scoped operation, supported targets and requested language. "
-            "Check target coverage, transformation fidelity and the scoped instructions not delegated below. "
-            "Each non-preferred answer.content condition is judged only by its content_condition_<index> predicate; "
-            "required/forbidden answer.format conditions are judged only by format_fulfilled. Do not rejudge those "
-            "conditions or lower this score for their violations. Body instructions not represented by those separate "
-            "conditions still belong to this check. Preferences are not obligations. Grounding and cited-source "
-            "sufficiency have separate predicates; their approval cannot substitute for answering a supported target. "
-            + ANSWER_SCOPE_INSTRUCTIONS + sentence_scope + documentation_scope +
-            "Judge the partial response actually shown, not completion of unavailable targets. A matching "
-            "rendered_response.notices entry satisfies limitation disclosure without repetition in the body. Do not replace "
-            "supported answers with a generic acknowledgment or an irrelevant related API. For a general API usage "
-            "request a coherent basic use is enough; do not invent extra tutorial requirements. For extract, the requested original "
-            "source text itself is the answer: require the selected definition or passage verbatim, without "
-            "demanding explanation, translation, examples, or execution that the user did not request. "
-            "For copy_input/copy_answer, the server checks literal fidelity; do not judge the copied statements as "
-            "new facts. For transformations, use the bound input or bound_source_response as the actual original. "
-            "Do not require downstream save or notification actions to have completed. "
-            "For a supported requested code value, rendered_response.body itself must state the variable "
-            "and its verified value. A citation or source_location title/line range alone is not that answer, "
-            "even if the value is visible in the sources. "
-        ),
-    })
+    request_instructions = (
+        "Does rendered_response.body answer the supported portion of confirmed_request.body? "
+        "Use answer_scope.requirements: answer every supported target and omit unknown facts for coverage=unavailable. "
+        "A comparison with an unavailable target is not required. A supported target must actually be answered "
+        "in the body; a source citation, generic acknowledgement or related fact is not an answer. "
+        "Check the requested operation and language. Ignore unavailable-target completion, numeric sentence counts, "
+        "grounding and the separately assessed content/format conditions. Rendered notices disclose missing evidence. "
+        "A faithful paraphrase of the requested supported fact satisfies this check. "
+        + sentence_scope + documentation_scope
+    )
+    body = snapshot.request_contract.body if snapshot.request_contract else None
+    if body is not None and body.kind == "extract":
+        request_instructions += (
+            "For extract, require the requested source passage verbatim, without demanding unrequested explanation, "
+            "translation, examples or execution. "
+        )
+    elif body is not None and body.kind in {"copy_input", "copy_answer"}:
+        request_instructions += "Literal fidelity is checked locally; do not judge copied statements as new facts. "
+    elif body is not None and body.kind in {"transform_input", "transform_answer"}:
+        request_instructions += "Check transformation fidelity against the bound input or bound_source_response. "
+    questions.append({"type": "predicate", "name": "request_fulfilled", "instructions": request_instructions})
     content_conditions = {
         index: requirement for index, requirement in enumerate(snapshot.request_contract.answer.content)
         if requirement.mode != "preferred"
