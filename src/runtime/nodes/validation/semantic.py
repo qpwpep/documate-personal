@@ -137,6 +137,9 @@ EVALUATION_POLICY = (
 ) + API_AVAILABILITY_INSTRUCTIONS
 
 
+EVIDENCE_SUFFICIENCY_QUESTION = "Do the selected source excerpts provide sufficient evidence to answer this requirement task? "
+
+
 SCOPED_ENTRY_INSTRUCTIONS = (
     "Evaluate only the {collection} entry named {name} and the shared request context. "
     "Do not borrow evidence from another entry. "
@@ -629,7 +632,8 @@ def assess_post_semantics(
         requirement_questions.append({
             "type": "predicate", "name": name,
             "instructions": (
-                SCOPED_ENTRY_INSTRUCTIONS.format(collection="requirements", name=name)
+                EVIDENCE_SUFFICIENCY_QUESTION
+                + SCOPED_ENTRY_INSTRUCTIONS.format(collection="requirements", name=name)
                 + "Apply evaluation_rubrics.evidence_sufficiency. "
             ),
         })

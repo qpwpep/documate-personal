@@ -18,7 +18,7 @@ from src.runtime.nodes.validation.assessment import assess_retrieval_quality
 from src.runtime.nodes.validation.models import EvidencePreparationResult, ValidationAssessment, ValidationSnapshot
 from src.runtime.nodes.validation.decision_input import encode_decision_input
 from src.runtime.nodes.validation.semantic import (
-    EVALUATION_POLICY, EVIDENCE_SUFFICIENCY_INSTRUCTIONS, SCOPED_ENTRY_INSTRUCTIONS,
+    EVALUATION_POLICY, EVIDENCE_SUFFICIENCY_INSTRUCTIONS, EVIDENCE_SUFFICIENCY_QUESTION, SCOPED_ENTRY_INSTRUCTIONS,
     DecisionEvaluator, _context, _predicate_instructions, _require_bound_source, _source, semantic_task_input,
 )
 
@@ -84,7 +84,8 @@ def _bind_question(job: dict[str, Any], *, context: dict[str, Any], model: str) 
     fingerprint = decision_fingerprint({"model": model, "context": context,
                                         "entry": job["entry"], "instructions": instructions,
                                          "policy": EVALUATION_POLICY, "target_path": job.get("target_path"),
-                                        "scope_instructions": SCOPED_ENTRY_INSTRUCTIONS})
+                                        "scope_instructions": SCOPED_ENTRY_INSTRUCTIONS,
+                                        "question": EVIDENCE_SUFFICIENCY_QUESTION if job["rubric"] == "evidence_sufficiency" else None})
     return fingerprint, instructions
 
 
@@ -129,7 +130,8 @@ def _evaluate_cached(
             rubric = job["rubric"]
             rubrics[rubric] = job["instructions"]
             questions.append({"type": "predicate", "name": job["name"], "instructions": (
-                SCOPED_ENTRY_INSTRUCTIONS.format(collection=location, name=entry_name)
+                (EVIDENCE_SUFFICIENCY_QUESTION if rubric == "evidence_sufficiency" else "")
+                + SCOPED_ENTRY_INSTRUCTIONS.format(collection=location, name=entry_name)
                 + f"Apply evaluation_rubrics.{rubric}. "
                 + (f"target_path: {job['target_path']}. " if job.get("target_path") is not None else "")
             )})
@@ -365,6 +367,7 @@ def _assess_pre_semantics(
         fingerprint, _ = _bind_question({
             "entry": {"task": semantic_task_input(task, snapshot), "source": _source(hit.evidence)},
             "instructions": SOURCE_RELEVANCE_INSTRUCTIONS,
+            "rubric": "source_relevance",
         }, context=context, model=decisions_client.model_name)
         cached = cache.get(fingerprint)
         # Reject only this exact range and judgment input. Changed requirements,
@@ -480,6 +483,7 @@ def _assess_pre_semantics(
             {"instructions": READINESS_INSTRUCTIONS},
             {"instructions": SUPPORT_INSTRUCTIONS},
             {"instructions": SCOPED_ENTRY_INSTRUCTIONS},
+            {"instructions": EVIDENCE_SUFFICIENCY_QUESTION},
         ])}), threshold=threshold, normal=normal, compact=compact if compact_usable else None,
     )
     values = assessment.semantic_probabilities.values()

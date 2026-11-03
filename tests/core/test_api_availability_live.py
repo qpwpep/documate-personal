@@ -87,6 +87,11 @@ def test_live_planner_keeps_supported_setting_behavior_requirements(live_registr
         "Path.stat()¶\n\nReturn a os.stat_result object containing information about this path, "
         "like os.stat(). The result is looked up at each call to this method.\n\n",
         "3.9", True, id="closed-stat-official-description"),
+    pytest.param("pathlib.Path.stat", "follow_symlinks", "False",
+        "Path.stat()¶\n\nos.stat()과 유사하게, 이 경로에 대한 정보를 포함하는 os.stat_result 객체를 반환합니다. "
+        "결과는 이 메서드를 호출할 때마다 조회됩니다.\n\n"
+        "```\n>>> p = Path('setup.py')\n>>> p.stat().st_size\n956\n>>> p.stat().st_mtime\n1327883547.852554\n\n```\n",
+        "3.9", True, id="closed-stat-korean-official-description"),
     pytest.param("builtins.zip", "strict", "True",
         "zip(*iterables)¶\n\nMake an iterator that aggregates elements from each of the iterables.",
         "3.9", True, id="positional-variadic-zip"),
