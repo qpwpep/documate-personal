@@ -93,6 +93,7 @@ def run(port: int) -> None:
     queries: list[str] = []
     submissions: list[dict[str, object]] = []
     slack_requests: list[dict[str, object]] = []
+    rejected_answers: list[dict[str, object]] = []
     held_queries: dict[str, Event] = {}
     held_decisions: dict[str, tuple[Event, Event]] = {}
 
@@ -192,10 +193,18 @@ def run(port: int) -> None:
                 if not released.wait(20):
                     raise AssertionError("The browser did not release its held pre-validation request")
         probability = 0.91 if "한글 답변 유지" in payload["input"] else 0.99
+        reject_answer = "답변 조건 실패 검증" in payload["input"]
+        if reject_answer and any(item["name"] == "request_fulfilled" for item in payload["questions"]):
+            context = json.loads(payload["input"])
+            rejected_answers.append({
+                "query": context["latest_user_request"],
+                "body_texts": [unit["text"] for unit in context["units"]],
+                "source_excerpts": [source["excerpt"] for unit in context["units"] for source in unit["cited_sources"]],
+            })
         return httpx.Response(200, json={
             "model": payload["model"],
             "answers": [{"type": "predicate", "name": item["name"], "probability": (
-                0.1 if "답변 조건 실패 검증" in payload["input"] and item["name"] == "request_fulfilled"
+                0.1 if reject_answer and item["name"] == "request_fulfilled"
                 else probability
             )}
                         for item in payload["questions"]],
@@ -265,7 +274,8 @@ def run(port: int) -> None:
 
         @app.get("/_fixture/requests")
         def received() -> dict[str, object]:
-            return {"queries": list(queries), "submissions": list(submissions), "slack": list(slack_requests)}
+            return {"queries": list(queries), "submissions": list(submissions), "slack": list(slack_requests),
+                    "rejected_answers": list(rejected_answers)}
 
         @app.get("/_fixture/sessions/{session_id}/staging")
         def staging_usage(session_id: str) -> dict[str, int]:

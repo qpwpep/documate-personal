@@ -5,6 +5,7 @@ from src.core.documents import DocumentElement, SourceAnchor, build_snapshot
 from src.core.evidence import RetrievalScore, SearchHit, build_evidence
 from src.core.planner_schema import PlannerOutput
 from src.core.request_contracts import RequestContract
+from src.runtime.agent_runtime.response_assembler import ResponseAssembler
 from src.runtime.nodes.validation import make_post_synthesis_validation_node
 from tests.core.helpers import make_decisions_client
 from src.runtime.nodes.validation.assessment import assess_validation
@@ -82,8 +83,8 @@ def test_validation_covers_list_code_and_table_cell_text():
     assert any(issue.code == "invalid_content_removed" for issue in result.issues)
 
 
-def test_mismatching_excerpt_falls_back_to_the_exact_original_text():
-    """원문과 다른 발췌를 정상으로 처리하지 않고 실제 원문으로 대체한다."""
+def test_mismatching_excerpt_fails_without_publishing_a_replacement_excerpt():
+    """원문과 다른 발췌를 거절하고 검증하지 않은 새 발췌도 답변으로 내보내지 않는다."""
     evidence = _evidence()
     document = AnswerDocument.model_validate({"blocks": [{
         "type": "code", "language": "python",
@@ -95,11 +96,17 @@ def test_mismatching_excerpt_falls_back_to_the_exact_original_text():
 
     assessment = assess_validation(snapshot)
     updates = apply_validation_outcome(snapshot=snapshot, assessment=assessment, attempt=1, needs_retry=False)
+    outcome = ResponseAssembler().assemble(response=updates, debug_info={})
 
     assert assessment.checked_result.checks[0].support_status == "unsupported"
     assert assessment.retry_reason == "missing_content"
+    assert outcome["status"] == "failed"
+    assert outcome["problem"]["code"] == "model_output_invalid"
+    assert outcome["response"] is None
     result = updates["response"].result
     excerpts = [unit.text for _, unit in iter_content_units(result.content) if unit.basis == "excerpt"]
-    assert excerpts == [evidence.excerpt]
+    assert excerpts == []
+    assert result.citations == []
+    assert updates["response"].evidence_packet == []
     assert "retries = 99" not in export_answer_text(result)
-    assert any(check.support_status == "exact_match" for check in result.checks)
+    assert evidence.excerpt.strip() not in export_answer_text(result)

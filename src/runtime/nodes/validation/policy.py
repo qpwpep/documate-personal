@@ -12,11 +12,10 @@ from src.core.contracts.provenance import AnswerSource, BodyKind
 from src.core.evidence import EvidenceRef
 from src.core.llm_errors import ExecutionProblem, make_problem
 from src.core.request_contracts import check_answer_contract
-from src.runtime.nodes.retry import build_followup_from_routes, retrieval_subject
-from src.runtime.nodes.synthesis.fallbacks import build_synthesis_fallback
+from src.runtime.nodes.retry import retrieval_subject
 from src.runtime.nodes.validation.models import ValidationAssessment, ValidationSnapshot
 from src.runtime.nodes.validation.route_policy import non_retryable_retrieval_problem
-from src.runtime.nodes.validation.snapshot import detect_missing_requirement_coverage, detect_packet_coverage_gaps
+from src.runtime.nodes.validation.snapshot import detect_missing_requirement_coverage
 
 
 def build_response_updates(
@@ -206,51 +205,11 @@ def apply_validation_outcome(
                 and not recoverable_missing and has_required_citations):
             return checked_response_updates(result)
 
-    # Only the exact approved ranges passed to generation are eligible for an
-    # excerpt fallback. Raw observations can contain rejected/unassessed text.
-    if snapshot.evidence_packet:
-        retrieved_missing, packet_omitted = detect_packet_coverage_gaps(snapshot)
-        if packet_omitted:
-            retained_issues.append(ResponseIssue(
-                code="evidence_packet_incomplete",
-                message="검색한 원문 중 필요한 내용을 답변 준비 범위에 모두 담지 못했습니다.",
-            ))
-        if retrieved_missing:
-            retained_issues.append(ResponseIssue(
-                code="retrieved_evidence_incomplete",
-                message="검색한 원문에서 요청에 필요한 근거를 모두 확인하지 못했습니다.",
-            ))
-        packet = list({item.id: item for item in snapshot.evidence_packet}.values())
-        result = build_synthesis_fallback(
-            evidence_packet=packet, retrieval_required=True,
-            message="요청한 답변을 충분히 구성하지 못해, 확인 가능한 원문 발췌를 제공합니다.",
-            request_contract=snapshot.request_contract,
-        )
-        issues = [*retained_issues, *result.issues, ResponseIssue(
-            code="answer_incomplete",
-            message=("아래 발췌는 요청 전체에 대한 설명이나 비교가 아닙니다."
-                     if result.citations else "요청 전체의 조건을 충족하는 답변을 완성하지 못했습니다."),
-        )]
-        result = finalize_answer(
-            result.content, packet, retrieval_required=result.retrieval_required,
-            actions=snapshot.response_result.actions if snapshot.response_result else [],
-            issues=issues,
-        )
-        result = add_retrieval_gap_issues(snapshot, result)
-        requirement_map = {item.id: snapshot.evidence_requirement_map.get(item.id, []) for item in packet}
-        return build_response_updates(result, attempt=attempt, evidence_packet=packet,
-                                      evidence_requirement_map=requirement_map, kind="failure",
-                                      problem=validation_problem or (
-                                          retrieval_problem or make_problem("evidence_insufficient", "retrieval")
-                                          if retrieved_missing else make_problem("model_output_invalid", "validation")
-                                      ),
-                                      normal_evidence_missing_requirement_ids=snapshot.normal_evidence_missing_requirement_ids,
-                                      **stamp)
-
-    return build_followup_updates(
-        ("요청의 필수·금지 조건을 충족하는 답변을 완성하지 못했습니다. 다시 요청해 주세요."
-         if assessment.missing_content or assessment.forbidden_content else
-         build_followup_from_routes(snapshot.planner_output, assessment.retry_reason or "missing_content")),
-        attempt=attempt, kind="failure",
-        problem=validation_problem or make_problem("model_output_invalid", "validation"), **stamp,
+    # Preparation approves evidence for writing, not a replacement answer.
+    # Exhausted answer validation must not introduce unreviewed text or citations.
+    problem = validation_problem or retrieval_problem or make_problem("model_output_invalid", "validation")
+    failure = add_retrieval_gap_issues(snapshot, finalize_answer(text_document(problem.message), []))
+    return build_response_updates(
+        failure, attempt=attempt, evidence_packet=[], kind="failure",
+        problem=problem, **stamp,
     )

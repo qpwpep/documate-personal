@@ -100,8 +100,8 @@ def test_each_file_must_retain_its_own_literal_code_anchors_in_prompt_and_citati
     assert assess_validation(snapshot).failed_requirement_ids == {task.requirement_id}
 
 
-def test_failed_comparison_fallback_excludes_files_outside_the_requested_scope():
-    """A failed comparison exposes original excerpts only from the requested upload scope."""
+def test_failed_comparison_does_not_publish_new_excerpts_from_requested_or_other_files():
+    """A failed comparison cannot substitute a new source excerpt for its rejected answer."""
     task = RetrievalTask(route="upload", query="compare alpha and beta", k=2,
                          requirement={"file_ids": ["alpha", "beta"]})
     requested = _upload_hit(task, "alpha", "setup = 1\n")
@@ -125,5 +125,6 @@ def test_failed_comparison_fallback_excludes_files_outside_the_requested_scope()
     response = make_post_synthesis_validation_node(False, decisions_client=make_decisions_client())(state)["response"]
 
     assert response.kind == "failure"
-    assert [citation.evidence.snapshot.title for citation in response.result.citations] == ["alpha.py"]
-    assert [item.snapshot.title for item in response.evidence_packet] == ["alpha.py"]
+    assert response.result.citations == []
+    assert response.evidence_packet == []
+    assert all(hit.evidence.excerpt not in response.result.content.blocks[0].content[0].text for hit in hits)

@@ -892,7 +892,10 @@ def test_exhausted_post_validation_does_not_publish_rejected_claim():
     assert claim not in export_answer_text(updates["response"].result)
     assert updates["response"].kind == "failure"
     assert updates["response"].problem is not None
-    assert state["response"].evidence_packet[0].excerpt in export_answer_text(updates["response"].result)
+    assert updates["response"].result.citations == []
+    outcome = ResponseAssembler().assemble(response={**state, **updates}, debug_info={})
+    assert outcome["status"] == "failed"
+    assert outcome["response"] is None
 
 
 def test_filtered_answer_must_pass_decisions_again_before_becoming_an_answer():
@@ -925,13 +928,16 @@ def test_filtered_answer_must_pass_decisions_again_before_becoming_an_answer():
     assert updates["response"].kind == "failure"
     assert updates["response"].problem is not None
     assert result.semantic_validation is None
-    assert response.evidence_packet[0].excerpt in export_answer_text(result)
+    assert result.citations == []
+    outcome = ResponseAssembler().assemble(response={**state, **updates}, debug_info={})
+    assert outcome["status"] == "failed"
+    assert outcome["response"] is None
     assert any("revision=filtered" in event and "request_fulfilled" in event
                for event in updates["debug"].validation_events)
 
 
 def test_second_grounding_rejection_removes_the_retained_claim_too():
-    """필터된 본문의 근거까지 재검증에서 거절되면 두 주장을 모두 원문 발췌로 대체한다."""
+    """필터된 본문까지 거절되면 새 원문 발췌를 만들지 않고 실패를 반환한다."""
     retained_claim = "Path.exists()는 파일 또는 디렉터리의 존재를 확인합니다."
     rejected_claim = "Path.exists()는 존재하지 않는 경로를 자동으로 생성합니다."
     state = _state(answer=retained_claim, repairs=0)
@@ -956,7 +962,10 @@ def test_second_grounding_rejection_removes_the_retained_claim_too():
     final_text = export_answer_text(updates["response"].result)
     assert retained_claim not in final_text
     assert rejected_claim not in final_text
-    assert response.evidence_packet[0].excerpt in final_text
+    assert updates["response"].result.citations == []
+    outcome = ResponseAssembler().assemble(response={**state, **updates}, debug_info={})
+    assert outcome["status"] == "failed"
+    assert outcome["response"] is None
     assert updates["response"].kind == "failure"
     assert updates["response"].problem is not None
     assert any("revision=filtered" in event and "grounded_0" in event and "0.1" in event

@@ -223,7 +223,7 @@ def make_post_synthesis_validation_node(
             )
             semantic_assessments.append(("filtered", revised_assessment))
             # A second rejection must remove the newly rejected claims as well.
-            # Stop bounded recovery with source excerpts or an explicit failure;
+            # Stop bounded recovery with an explicit failure;
             # do not publish an unreviewed third revision as a validated answer.
             updates.update(apply_validation_outcome(
                 snapshot=revised_snapshot, assessment=revised_assessment,

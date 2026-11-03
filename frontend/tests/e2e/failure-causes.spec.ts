@@ -5,11 +5,12 @@ const fixtureUrl = 'http://127.0.0.1:18000';
 const cases = [
   { code: 'request_timeout', query: '전체 시간 소진 검증: 질문의 처리 결과를 확인해줘.', status: 'failed', upload: false },
   { code: 'answer_validation_failed', query: '답변 조건 실패 검증: 요청 조건에 맞는 답변을 작성해줘.', status: 'failed', upload: false },
+  { code: 'answer_validation_failed', query: '답변 조건 실패 검증: 첨부 alpha의 코드를 설명해줘.', status: 'failed', upload: true },
   { code: 'evidence_insufficient', query: '근거 부족 구분 검증: 첨부에서 alpha와 beta를 설명해줘.', status: 'partial', upload: true },
 ] as const;
 
 for (const scenario of cases) {
-  test(`${scenario.code} keeps the server cause and request ID without automatically resubmitting`, async ({ page, request }) => {
+  test(`${scenario.code}${scenario.upload ? ' with uploaded evidence' : ''} keeps the server cause and request ID without automatically resubmitting`, async ({ page, request }) => {
     await page.goto('./');
     if (scenario.upload) {
       await page.getByText('첨부 자료', { exact: true }).click();
@@ -40,15 +41,35 @@ for (const scenario of cases) {
     expect(result.status).toBe(scenario.status);
     expect(result.problem?.code).toBe(scenario.code);
     expect(result.request_id).toMatch(/^[0-9a-f]{8}$/);
-    const cause = scenario.upload ? page.getByRole('region', { name: '부분 답변' }) : page;
+    const hasAnswer = scenario.status === 'partial';
+    const cause = hasAnswer ? page.getByRole('region', { name: '부분 답변' }) : page;
     await expect(cause.getByText(result.problem!.message, { exact: true })).toBeVisible();
-    await page.getByText(scenario.upload ? '답변 정보' : '요청 정보', { exact: true }).click();
+    await page.getByText(hasAnswer ? '답변 정보' : '요청 정보', { exact: true }).click();
     await expect(page.getByText(`요청 ID: ${result.request_id}`, { exact: true })).toBeVisible();
-    if (scenario.upload) await expect(page.getByText('alpha = 1', { exact: true }).first()).toBeVisible();
+    if (hasAnswer) await expect(page.getByText('alpha = 1', { exact: true }).first()).toBeVisible();
     else await expect(page.locator('.answer-body')).toHaveCount(0);
+
+    if (scenario.upload && !hasAnswer) {
+      expect(result.response).toBeNull();
+      expect(result.answer_id).toBeNull();
+      expect(result.upload_manifest?.files.map((file) => file.name)).toEqual(['alpha.py']);
+      await expect(page.getByText('alpha = 1', { exact: true })).toHaveCount(0);
+      await expect(page.getByRole('button', { name: /^근거 \[/ })).toHaveCount(0);
+      await expect(page.getByRole('button', { name: 'TXT 파일 만들기', exact: true })).toHaveCount(0);
+      const observations = await (await request.get(`${fixtureUrl}/_fixture/requests`)).json() as {
+        rejected_answers: { query: string; body_texts: string[]; source_excerpts: string[] }[];
+      };
+      const rejected = observations.rejected_answers.filter((item) => item.query === scenario.query);
+      expect(rejected.length).toBeGreaterThan(0);
+      for (const answer of rejected) {
+        expect(answer.body_texts.join('\n')).toContain('alpha = 1');
+        expect(answer.source_excerpts.join('\n')).toContain('alpha = 1');
+      }
+    }
 
     await page.reload();
     await expect(cause.getByText(result.problem!.message, { exact: true })).toBeVisible();
+    if (!hasAnswer) await expect(page.locator('.answer-body')).toHaveCount(0);
     await expect(page.getByRole('textbox', { name: '질문', exact: true })).toBeEnabled();
     const received = await (await request.get(`${fixtureUrl}/_fixture/requests`)).json() as { queries: string[] };
     expect(received.queries.filter((query) => query === scenario.query)).toEqual([scenario.query]);

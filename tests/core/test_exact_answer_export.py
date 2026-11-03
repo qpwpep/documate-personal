@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 
 import pytest
+from langchain_core.messages import AIMessage, HumanMessage
 from pydantic import ValidationError
 
 from src.core.answer_export import answer_export_snapshot, build_answer_export_operation
@@ -208,11 +209,38 @@ def test_export_failure_feedback_does_not_replace_target_of_a_followup_retry(tmp
 def test_failed_transformation_keeps_original_answer_as_retry_target(tmp_path, monkeypatch, action, prompt):
     monkeypatch.setattr("src.infra.tools.save_text.get_save_text_output_dir", lambda: tmp_path)
     source = checked_source()
-    manager = _manager(export_graph(transform=True, action=action))
+    expected_saved_bytes = export_answer_text(source, include_sources=True).encode("utf-8-sig")
+    manager = _manager(SequentialGraph(export_graph(transform=True, action=action), export_graph()))
     manager.session.previous_response = source.model_copy(deep=True)
+    manager.session.commit_conversation_memory(
+        messages=[
+            HumanMessage(content="Path.exists()의 반환값을 설명해 주세요.", id="previous-question"),
+            AIMessage(content=export_answer_text(source)),
+        ],
+        memory_summary="Path.exists()의 반환값을 확인했습니다.",
+    )
+    memory_before = manager.session.snapshot_conversation_memory()
+
     failed = manager.run_agent_flow(prompt)
-    assert failed["status"] == "partial"
+
+    assert failed["status"] == "failed"
+    assert failed["response"] is None
+    assert failed["problem"]["code"] == "answer_validation_failed"
     assert failed["answer_id"] is None
     assert manager.session.previous_response == source
-    assert manager.session.pending_action.response == source
+    assert manager.session.pending_action is None
+    assert manager.session.snapshot_conversation_memory() == memory_before
     assert list(tmp_path.glob("*.txt")) == []
+
+    retried = manager.run_agent_flow("방금 답변을 출처와 함께 txt 파일로 저장해줘")
+
+    assert retried["status"] == "completed"
+    assert retried["answer_id"] is not None
+    assert {key: value for key, value in retried["response"].items() if key != "actions"} == source.model_dump(
+        mode="json", exclude={"actions"},
+    )
+    receipt = retried["response"]["actions"][0]
+    assert receipt["status"] == "success"
+    saved_files = list(tmp_path.glob("*.txt"))
+    assert saved_files == [Path(receipt["file_path"])]
+    assert saved_files[0].read_bytes() == expected_saved_bytes
