@@ -20,7 +20,7 @@ from .reporting import build_markdown_report
 from .reporting.writer import load_report_inputs
 from .config_models import BenchmarkConfig, BenchmarkLiveSlackConfig
 from .summary_models import RunTrack
-from src.infra.settings import get_settings, load_benchmark_cli_env_settings
+from src.infra.settings import BenchmarkCLIEnvSettings, get_settings, load_benchmark_cli_env_settings
 from src.core.slack_contract import RecipientSelector, SlackDefault
 
 
@@ -34,12 +34,11 @@ DEFAULT_REGRESSION_SEED_PATH = get_regression_seed_cases_path()
 def _load_config_with_env_overrides(
     config_path: Path,
     *,
-    benchmark_env: object | None = None,
+    benchmark_env: BenchmarkCLIEnvSettings,
 ) -> BenchmarkConfig:
     config = load_config(config_path)
-    if benchmark_env is not None:
-        config.judge_model = str(getattr(benchmark_env, "judge_model", config.judge_model) or config.judge_model)
-        config.judge_enabled = bool(getattr(benchmark_env, "judge_enabled", config.judge_enabled))
+    config.judge_model = benchmark_env.judge_model
+    config.judge_enabled = benchmark_env.judge_enabled
     return config
 
 

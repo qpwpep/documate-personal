@@ -8,7 +8,7 @@ from typing import Any, Literal, TYPE_CHECKING
 from pydantic import BaseModel, Field
 
 from .tool_policy import ToolPolicyAssessment, ToolPolicySpec, assess_execution_policy
-from .action_outcomes import assess_action_outcomes
+from .action_outcomes import ActionAssessment, assess_action_outcomes
 
 if TYPE_CHECKING:
     from .config_models import BenchmarkCase
@@ -53,12 +53,11 @@ def refresh_case_decision(result: CaseResult, case: BenchmarkCase | None = None)
     if case is not None and result.decision_contract_version == DECISION_CONTRACT_VERSION:
         if result.policy_snapshot is not None and result.policy_snapshot != policy_for_case(case):
             raise ValueError("case policy does not match the retained execution policy snapshot")
-    assessment, decision = evaluate_case_decision(result)
-    result.action_assessments = assess_action_outcomes(result, assessment)
+    assessment, actions = _assess_case_outcomes(result)
+    result.action_assessments = actions
     if any(item.status == "failed" and item.outcome != "must_not_execute"
            for item in result.action_assessments.values()):
         result.product_pass = False
-        assessment, decision = evaluate_case_decision(result)
     outcome_assessments = [
         *result.action_assessments.values(),
         *([result.save_assessment] if result.save_assessment is not None else []),
@@ -69,7 +68,7 @@ def refresh_case_decision(result: CaseResult, case: BenchmarkCase | None = None)
         # Apply this once for initial results, run-end rechecks, and reloads.
         if result.eval_validity == "valid" and result.judge_status_reason != "missing_final_response":
             result.eval_validity = "incomplete"
-            assessment, decision = evaluate_case_decision(result)
+    decision = _decide_case(result, assessment, actions)
     result.policy_assessment = assessment
     result.decision = decision
     result.release_pass = decision.passed
@@ -78,13 +77,19 @@ def refresh_case_decision(result: CaseResult, case: BenchmarkCase | None = None)
     return decision
 
 
-def evaluate_case_decision(result: CaseResult) -> tuple[ToolPolicyAssessment, CaseDecision]:
-    """Evaluate retained decision evidence without changing stored measurements."""
+def _assess_case_outcomes(result: CaseResult) -> tuple[ToolPolicyAssessment, dict[str, ActionAssessment]]:
+    """Evaluate retained observations before deriving the case verdict."""
     assessment = assess_execution_policy(policy=result.policy_snapshot, evidence=result.execution_evidence,
                                          request_id=result.request_id, prior_turns=result.scenario_turns,
                                          actions=result.actions, retrieval_diagnostics=result.retrieval_diagnostics,
                                          debug=result.debug, tool_calls=result.tool_calls,
                                          tool_call_count=result.tool_call_count)
+    return assessment, assess_action_outcomes(result, assessment)
+
+
+def _decide_case(
+    result: CaseResult, assessment: ToolPolicyAssessment, actions: dict[str, ActionAssessment],
+) -> CaseDecision:
     # New preflight failures have no quality observation. Keep prior reason
     # semantics intact so existing decision-contract records remain readable.
     preflight_quality_unobserved = (
@@ -101,7 +106,6 @@ def evaluate_case_decision(result: CaseResult) -> tuple[ToolPolicyAssessment, Ca
                    "forbidden_tool_execution", "tool_policy_snapshot_missing", "legacy_result_unverified",
                }]
     reasons.extend(assessment.failure_codes)
-    actions = assess_action_outcomes(result, assessment)
     reasons.extend(code for item in actions.values() for code in item.failure_codes)
     if result.decision_contract_version != DECISION_CONTRACT_VERSION:
         reasons.append("legacy_result_unverified")
@@ -122,7 +126,7 @@ def evaluate_case_decision(result: CaseResult) -> tuple[ToolPolicyAssessment, Ca
         if item.passed is False:
             reasons.extend(item.failure_codes)
     reasons = sorted(set(reasons), key=lambda code: (code != "forbidden_tool_execution", code))
-    return assessment, CaseDecision(passed=not reasons, failure_codes=reasons)
+    return CaseDecision(passed=not reasons, failure_codes=reasons)
 
 
 def decide_release(*, gates: list[GateResult], track: str, policy_failure_codes: list[str]) -> ReleaseDecision:
@@ -184,10 +188,11 @@ def validate_run_decision_evidence(summary: RunSummary, results: list[CaseResult
         snapshot = summary.case_policy_snapshots.get(result.case_id)
         if snapshot is not None and result.policy_snapshot != snapshot:
             raise ValueError("case policy does not match the run policy snapshot")
-        assessment, decision = evaluate_case_decision(result)
+        assessment, actions = _assess_case_outcomes(result)
+        decision = _decide_case(result, assessment, actions)
         if (result.decision != decision or result.release_pass != decision.passed
                 or result.policy_assessment != assessment
-                or result.action_assessments != assess_action_outcomes(result, assessment)):
+                or result.action_assessments != actions):
             raise ValueError("stored case verdict disagrees with execution policy")
     expected = decide_release(gates=summary.gates, track=summary.track,
                               policy_failure_codes=summary.metrics.policy_failure_codes)
