@@ -169,7 +169,9 @@ def test_post_requirement_batch_sees_only_actual_citations_and_records_requireme
         "grounded_0", "request_fulfilled",
     }
     payload = read_decision_input(request["input"])
-    assert set(payload) == {"requirements"}
+    assert set(payload) == {
+        "evaluation_policy", "evaluation_rubrics", "requirements", "sources", "tasks",
+    }
     assert [question["name"] for question in request["questions"]] == ["requirement_0"]
     assert [source["id"] for source in payload["requirements"][0]["sources"]] == [cited.id]
     assert "UNCITED_SOURCE" not in request["input"]

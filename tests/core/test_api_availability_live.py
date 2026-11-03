@@ -81,6 +81,12 @@ def test_live_planner_keeps_supported_setting_behavior_requirements(live_registr
 @pytest.mark.parametrize("symbol, keyword, value, excerpt, source_version, supported_absence", [
     pytest.param("pathlib.Path.stat", "follow_symlinks", "False",
         "Path.stat()¶\n\nReturn information about this path.", "3.9", True, id="closed-stat"),
+    # The complete declaration and prose from the Python 3.9 official reference:
+    # https://docs.python.org/3.9/library/pathlib.html#pathlib.Path.stat
+    pytest.param("pathlib.Path.stat", "follow_symlinks", "False",
+        "Path.stat()¶\n\nReturn a os.stat_result object containing information about this path, "
+        "like os.stat(). The result is looked up at each call to this method.\n\n",
+        "3.9", True, id="closed-stat-official-description"),
     pytest.param("builtins.zip", "strict", "True",
         "zip(*iterables)¶\n\nMake an iterator that aggregates elements from each of the iterables.",
         "3.9", True, id="positional-variadic-zip"),

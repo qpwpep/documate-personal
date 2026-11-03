@@ -29,7 +29,7 @@ make_pre_synthesis_validation_node = partial(make_pre_synthesis_validation_node,
 
 
 def read_decision_input(value: str) -> dict:
-    """Resolve pre-validation references; post-validation already embeds its scope."""
+    """Resolve shared task/source references for semantic input assertions."""
     payload = json.loads(value)
     if "evaluation_policy" not in payload:
         return payload
@@ -248,7 +248,9 @@ def test_post_validation_scopes_cited_requirement_separately_from_mixed_request(
     requirement_request = next(call for call in boundary.requests
                                if any(question["name"] == "requirement_0" for question in call["questions"]))
     requirement_payload = read_decision_input(requirement_request["input"])
-    assert set(requirement_payload) == {"requirements"}
+    assert set(requirement_payload) == {
+        "evaluation_policy", "evaluation_rubrics", "requirements", "sources", "tasks",
+    }
     assert len(requirement_payload["requirements"]) == len(expected_sources)
     for index, requirement in enumerate(requirement_payload["requirements"]):
         assert requirement["task"] == tasks[index].model_dump(mode="json", exclude={"k"})
@@ -658,6 +660,8 @@ def test_api_requirement_checks_keep_target_and_selected_ranges_before_and_after
     pre_payload = next(read_decision_input(call["input"]) for call in boundary.requests
                        if "requirements" in read_decision_input(call["input"]))
     pre_requirement = pre_payload["requirements"][0]
+    pre_question = next(question for call in boundary.requests for question in call["questions"]
+                        if question["name"] == "requirement_0")
     assert pre_requirement["task"]["requirement"]["symbols"] == ["pandas.merge"]
     assert {source["id"] for source in pre_requirement["sources"]} == {selected.id, primary.id}
 
@@ -671,6 +675,14 @@ def test_api_requirement_checks_keep_target_and_selected_ranges_before_and_after
     post = make_post_synthesis_validation_node(False, decisions_client=boundary)(state)
 
     requirement = read_decision_input(boundary.requests[-1]["input"])["requirements"][0]
+    post_payload = json.loads(boundary.requests[-1]["input"])
+    assert post_payload["evaluation_policy"] == pre_payload["evaluation_policy"]
+    assert post_payload["evaluation_rubrics"]["evidence_sufficiency"] == (
+        pre_payload["evaluation_rubrics"]["evidence_sufficiency"]
+    )
+    assert post_payload["sources"] == {selected.id: pre_payload["sources"][selected.id]}
+    assert post_payload["tasks"] == pre_payload["tasks"]
+    assert boundary.requests[-1]["questions"] == [pre_question]
     assert requirement["task"] == pre_requirement["task"]
     assert [source["id"] for source in requirement["sources"]] == [selected.id]
     assert requirement["sources"][0]["excerpt"] == "on names the common key columns."

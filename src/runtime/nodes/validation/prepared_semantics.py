@@ -18,8 +18,8 @@ from src.runtime.nodes.validation.assessment import assess_retrieval_quality
 from src.runtime.nodes.validation.models import EvidencePreparationResult, ValidationAssessment, ValidationSnapshot
 from src.runtime.nodes.validation.decision_input import encode_decision_input
 from src.runtime.nodes.validation.semantic import (
-    EVALUATION_POLICY, EVIDENCE_SUFFICIENCY_INSTRUCTIONS, DecisionEvaluator, _context, _predicate_instructions,
-    _require_bound_source, _source, semantic_task_input,
+    EVALUATION_POLICY, EVIDENCE_SUFFICIENCY_INSTRUCTIONS, SCOPED_ENTRY_INSTRUCTIONS,
+    DecisionEvaluator, _context, _predicate_instructions, _require_bound_source, _source, semantic_task_input,
 )
 
 
@@ -54,16 +54,15 @@ SUPPORT_INSTRUCTIONS = (
     "and natural language, but reject another API's description or a bare occurrence without useful support. "
     "Judge only the content actually present in the source's excerpt. Titles, URLs and headings may identify "
     "the subject but cannot supply missing content from the rest of the page. For signature, require "
-    "actual declaration or call syntax, not just the API name. For parameters, require a named "
+    "actual declaration or call syntax, not just the API name. A fully selected official declaration's "
+    "empty parameter list () is complete signature evidence under the availability policy. For explanation, "
+    "judge the explanation this task requests: for an availability-only question, a complete matching closed "
+    "declaration supports explaining why a proposed keyword is not accepted. For parameters, require a named "
     "argument's description when explaining its behavior; for a supported-argument question, a complete "
     "matching declaration may instead establish that the proposed keyword is not accepted. "
     "For examples, require concrete usage such as a call with supplied values, "
     "a worked input/output, or an illustrative scenario. A declaration with defaults, a parameter "
     "description, an Examples heading, or a link to examples elsewhere is not itself a usage example."
-)
-SCOPED_ENTRY_INSTRUCTIONS = (
-    "Evaluate only the {collection} entry named {name} and the shared request context. "
-    "Do not borrow evidence from another entry. "
 )
 
 
