@@ -11,7 +11,7 @@ from typing import Any
 
 from src.infra.logging_utils import log_event
 from src.runtime.progress import ProgressEmitter
-from src.app.web.agent_request_support import build_session_metadata_snapshot, normalize_debug_info
+from src.app.web.agent_request_support import build_session_metadata_snapshot, build_debug_info
 from src.app.web.cleanup import RuntimeCleaner
 from src.app.web.schemas import AgentDebugInfo, AgentRequest, AgentResponse, AgentStreamEvent
 from src.core.contracts.debug import DEBUG_SCHEMA_VERSION
@@ -25,10 +25,9 @@ logger = logging.getLogger(__name__)
 
 
 def _query_log_fields(query: str) -> dict[str, Any]:
-    normalized_query = str(query or "")
-    encoded_query = normalized_query.encode("utf-8", errors="replace")
+    encoded_query = query.encode("utf-8", errors="replace")
     return {
-        "query_length": len(normalized_query),
+        "query_length": len(query),
         "query_utf8_bytes": len(encoded_query),
         "query_hash": hashlib.sha256(encoded_query).hexdigest(),
     }
@@ -159,7 +158,7 @@ class AgentRequestService:
         debug_info = None
         if request_data.include_debug:
             try:
-                debug_info = normalize_debug_info(
+                debug_info = build_debug_info(
                     raw_debug=agent_answer.get("debug"),
                     latency_ms_server=latency_ms_server,
                     answer_expected=outcome.response is not None,

@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-import json
-from typing import Any
+from typing import Any, get_args
 
-from langchain_core.messages import HumanMessage, ToolMessage
-
-from src.core.contracts.debug import DEBUG_SCHEMA_VERSION, RetryState
+from src.core.answer_schema import ActionReceipt
+from src.core.contracts.debug import DEBUG_SCHEMA_VERSION, ErrorCode, RetryState
 from src.core.contracts.provenance import AnswerProvenance
 from src.core.contracts.routing import validate_route_decisions
 from src.core.contracts.boundary.debug import get_debug_state
@@ -21,41 +19,20 @@ from src.runtime.agent_runtime.llm_usage import current_llm_calls
 
 class DebugCollector:
     @staticmethod
-    def _parse_tool_payload(message: ToolMessage) -> dict[str, Any]:
-        content = getattr(message, "content", None)
-        if isinstance(content, str):
-            raw_text = content
-        elif isinstance(content, list):
-            raw_text = "\n".join(str(item) for item in content)
-        else:
-            raw_text = str(content or "")
-        try:
-            parsed = json.loads(raw_text)
-        except (TypeError, ValueError, json.JSONDecodeError):
-            return {}
-        return parsed if isinstance(parsed, dict) else {}
-
-    @classmethod
-    def _extract_action_results(cls, current_turn_messages: list[Any]) -> dict[str, Any] | None:
+    def _extract_action_results(receipts: list[ActionReceipt]) -> dict[str, Any] | None:
         action_results: dict[str, Any] = {}
-        for message in current_turn_messages:
-            if not isinstance(message, ToolMessage):
-                continue
-            tool_name = str(getattr(message, "name", "") or "").strip()
-            payload = cls._parse_tool_payload(message)
-            if tool_name == "save_text":
-                try:
-                    saved_bytes = max(0, int(payload.get("bytes", 0) or 0))
-                except (TypeError, ValueError):
-                    saved_bytes = 0
+        for receipt in receipts:
+            if receipt.kind == "save_text":
                 action_results["save_text"] = {
-                    "status": str(payload.get("status") or "").strip(),
-                    "file_path": str(payload.get("file_path") or "").strip() or None,
-                    "bytes": saved_bytes,
-                    "error": str(payload.get("error") or "").strip() or None,
-                    "message": str(payload.get("message") or "").strip() or None,
-                    "error_code": str(payload.get("error_code") or "").strip() or None,
+                    "status": receipt.status,
+                    "file_path": receipt.file_path,
+                    "bytes": receipt.artifact.byte_count if receipt.artifact is not None else 0,
+                    "error": receipt.error,
+                    "message": receipt.message,
+                    "error_code": receipt.error_code,
                 }
+            elif receipt.slack is not None:
+                action_results["slack_notify"] = receipt.slack.model_dump(mode="json")
         return action_results or None
 
     @staticmethod
@@ -80,25 +57,23 @@ class DebugCollector:
         state_error_codes: list[str],
         retrieval_diagnostics: list[dict[str, Any]],
         action_results: dict[str, Any] | None,
-        planner_errors: list[str],
         debug_errors: list[str],
     ) -> list[str]:
         codes: list[str] = []
+        allowed = get_args(ErrorCode)
 
-        def add(code: Any) -> None:
-            normalized = str(code or "").strip()
-            if normalized and normalized not in codes:
-                codes.append(normalized)
+        def add(code: str | None) -> None:
+            if code is not None and code in allowed and code not in codes:
+                codes.append(code)
 
         for code in state_error_codes:
             add(code)
         for diagnostic in retrieval_diagnostics:
             add(diagnostic.get("error_code"))
         for result in (action_results or {}).values():
-            if isinstance(result, dict):
-                add(result.get("error_code"))
+            add(result.get("error_code"))
         for error in debug_errors:
-            lowered = str(error or "").lower()
+            lowered = error.lower()
             if "local_rag_failed" in lowered or "local similarity search failed" in lowered:
                 add("LOCAL_RAG_FAILED")
         return codes
@@ -107,7 +82,6 @@ class DebugCollector:
         self,
         *,
         response: dict[str, Any],
-        updated_messages: list[Any],
         graph_total_ms: int,
     ) -> dict[str, Any]:
         tool_calls: list[str] = []
@@ -130,17 +104,6 @@ class DebugCollector:
         calls = current_llm_calls()
         llm_calls = [item.model_dump(mode="json") for item in calls] if calls is not None else None
         planner_errors = list(state_debug.planner_errors)
-        current_turn_start_index = -1
-        for index in range(len(updated_messages) - 1, -1, -1):
-            if isinstance(updated_messages[index], HumanMessage):
-                current_turn_start_index = index
-                break
-
-        current_turn_messages = (
-            updated_messages[current_turn_start_index + 1 :]
-            if current_turn_start_index >= 0
-            else updated_messages
-        )
 
         execution_evidence = current_execution_evidence()
         if execution_evidence is not None:
@@ -152,11 +115,7 @@ class DebugCollector:
         retry_context = self._serialize_retry_context(state_retry)
         retrieval_diagnostics = [item.model_dump(mode="json") for item in state_debug.retrieval_diagnostics]
         planner_diagnostics = state_planner.diagnostics.model_dump(mode="json")
-        action_results = self._extract_action_results(current_turn_messages) or {}
-        for receipt in state_response.result.actions:
-            if receipt.kind == "slack_notify" and receipt.slack is not None:
-                action_results["slack_notify"] = receipt.slack.model_dump(mode="json")
-        action_results = action_results or None
+        action_results = self._extract_action_results(state_response.result.actions)
         latency_errors: list[str] = []
         latency_breakdown = build_latency_breakdown(
             raw_trace=state_debug.latency_trace,
@@ -170,7 +129,6 @@ class DebugCollector:
             state_error_codes=list(state_debug.error_codes),
             retrieval_diagnostics=retrieval_diagnostics,
             action_results=action_results,
-            planner_errors=planner_errors,
             debug_errors=debug_errors,
         )
         if state_response.problem is not None and state_response.problem.code not in error_codes:

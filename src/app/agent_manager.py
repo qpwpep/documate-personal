@@ -6,7 +6,6 @@ from typing import Any
 
 from src.core.conversation_memory import (
     build_durable_conversation_memory,
-    validate_query_text,
 )
 from src.runtime.agent_runtime import AgentGraph, DebugCollector, ExecutionRunner, GraphInvocationError, ResponseAssembler, SessionContext
 from src.runtime.agent_runtime.tool_execution import capture_tool_execution
@@ -194,7 +193,7 @@ class AgentFlowManager:
         *,
         progress_emitter: ProgressEmitter | None = None,
     ) -> dict[str, Any]:
-        with (capture_tool_execution(getattr(progress_emitter, "request_id", None)) as recorder,
+        with (capture_tool_execution(progress_emitter.request_id if progress_emitter is not None else None) as recorder,
               capture_llm_usage() as usage_recorder, capture_llm_diagnostics() as diagnostics,
               request_deadline(self.settings.request_timeout_seconds)):
             result = self._run_agent_flow(user_input, progress_emitter=progress_emitter)
@@ -202,7 +201,7 @@ class AgentFlowManager:
             debug = result["debug"]
             debug["llm_calls"] = [call.model_dump(mode="json") for call in usage_recorder.snapshot()]
             debug["llm_diagnostics"] = [entry.model_dump(mode="json") for entry in diagnostics] or debug.get("llm_diagnostics", [])
-            result["request_id"] = getattr(progress_emitter, "request_id", "")
+            result["request_id"] = progress_emitter.request_id if progress_emitter is not None else ""
             debug["execution_evidence"] = evidence.model_dump(mode="json")
             debug["tool_calls"] = [event.tool_name for event in evidence.events if event.phase == "started"]
             debug["tool_call_count"] = len(debug["tool_calls"])
@@ -215,15 +214,6 @@ class AgentFlowManager:
         progress_emitter: ProgressEmitter | None = None,
     ) -> dict[str, Any]:
         flow_started = time.perf_counter()
-        try:
-            validate_query_text(user_input)
-        except ValueError:
-            return self._early_result(TurnResult(
-                status="needs_input", missing_slots=["query"],
-                message="질문을 입력해 주세요." if not user_input.strip() else
-                        "질문이 입력 한도를 초과했습니다. 내용을 줄이거나 나누어 입력해 주세요.",
-            ))
-
         if is_session_reset_command(user_input):
             self.close()
             return self._early_result(TurnResult(
@@ -244,7 +234,6 @@ class AgentFlowManager:
             candidate_summary = final_runtime.memory_summary
             debug_info = self._debug_collector.build(
                 response=response,
-                updated_messages=updated_messages,
                 graph_total_ms=graph_total_ms,
             )
             assembled_response = self._response_assembler.assemble(

@@ -200,7 +200,7 @@ class SaveTextActionResult(BaseModel):
     bytes: int = 0
     error: str | None = None
     message: str | None = None
-    error_code: ErrorCode | None = None
+    error_code: str | None = None
 
 
 class ActionResults(BaseModel):

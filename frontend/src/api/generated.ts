@@ -223,13 +223,8 @@ export interface components {
             error_codes: ("provider_schema_invalid" | "provider_configuration" | "provider_unavailable" | "provider_rate_limited" | "model_output_invalid" | "model_output_incomplete" | "model_refusal" | "internal_error" | "evidence_insufficient" | "call_budget_exhausted" | "request_timeout" | "answer_validation_failed" | "upload_revision_conflict" | "save_failed" | "PLANNER_SCHEMA_INVALID" | "PLANNER_TIMEOUT" | "RETRIEVAL_DOCS_TIMEOUT" | "RETRIEVAL_DOCS_FAILED" | "RAG_INDEX_MISSING" | "LOCAL_RAG_FAILED" | "UPLOAD_RETRIEVER_BUILD_FAILED" | "LLM_STRUCTURED_EMPTY" | "SYNTHESIS_TIMEOUT" | "VALIDATION_UNRESOLVED_REFERENCES" | "VALIDATION_MISSING_CONTENT" | "DEBUG_NORMALIZATION_FAILED" | "SLACK_RECIPIENT_MISSING" | "SLACK_RECIPIENT_INVALID" | "SLACK_RECIPIENT_AMBIGUOUS" | "SLACK_RECIPIENT_CONFLICT" | "SLACK_CONFIGURATION_ERROR" | "SLACK_TARGET_NOT_FOUND" | "SLACK_TARGET_UNAVAILABLE" | "SLACK_PERMISSION_DENIED" | "SLACK_AUTHENTICATION_FAILED" | "SLACK_RATE_LIMITED" | "SLACK_TEMPORARY_FAILURE" | "SLACK_DELIVERY_UNKNOWN" | "SLACK_PROTOCOL_ERROR" | "UPLOAD_PATH_INVALID")[];
             /** Errors */
             errors: string[];
-            /**
-             * Execution Evidence
-             * @default null
-             */
-            execution_evidence: components["schemas"]["ToolExecutionEvidence"] | {
-                [key: string]: unknown;
-            } | null;
+            /** @default null */
+            execution_evidence: components["schemas"]["ToolExecutionEvidence"] | null;
             /** @default null */
             latency_breakdown: components["schemas"]["LatencyBreakdownModel"] | null;
             /**
@@ -1444,7 +1439,7 @@ export interface components {
              * Error Code
              * @default null
              */
-            error_code: ("provider_schema_invalid" | "provider_configuration" | "provider_unavailable" | "provider_rate_limited" | "model_output_invalid" | "model_output_incomplete" | "model_refusal" | "internal_error" | "evidence_insufficient" | "call_budget_exhausted" | "request_timeout" | "answer_validation_failed" | "upload_revision_conflict" | "save_failed" | "PLANNER_SCHEMA_INVALID" | "PLANNER_TIMEOUT" | "RETRIEVAL_DOCS_TIMEOUT" | "RETRIEVAL_DOCS_FAILED" | "RAG_INDEX_MISSING" | "LOCAL_RAG_FAILED" | "UPLOAD_RETRIEVER_BUILD_FAILED" | "LLM_STRUCTURED_EMPTY" | "SYNTHESIS_TIMEOUT" | "VALIDATION_UNRESOLVED_REFERENCES" | "VALIDATION_MISSING_CONTENT" | "DEBUG_NORMALIZATION_FAILED" | "SLACK_RECIPIENT_MISSING" | "SLACK_RECIPIENT_INVALID" | "SLACK_RECIPIENT_AMBIGUOUS" | "SLACK_RECIPIENT_CONFLICT" | "SLACK_CONFIGURATION_ERROR" | "SLACK_TARGET_NOT_FOUND" | "SLACK_TARGET_UNAVAILABLE" | "SLACK_PERMISSION_DENIED" | "SLACK_AUTHENTICATION_FAILED" | "SLACK_RATE_LIMITED" | "SLACK_TEMPORARY_FAILURE" | "SLACK_DELIVERY_UNKNOWN" | "SLACK_PROTOCOL_ERROR" | "UPLOAD_PATH_INVALID") | null;
+            error_code: string | null;
             /**
              * File Path
              * @default null

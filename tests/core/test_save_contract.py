@@ -12,6 +12,7 @@ from src.eval.decisions import policy_for_case
 from src.eval.tool_policy import assess_execution_policy
 from src.infra.tools.save_text import build_save_text_tool
 from src.runtime.agent_runtime.tool_execution import capture_tool_execution
+from src.runtime.agent_runtime.debug_collector import DebugCollector
 from src.runtime.nodes.actions import make_action_postprocess_node
 from src.runtime.nodes.actions.receipts import build_save_receipt
 
@@ -40,6 +41,31 @@ def test_reentering_same_save_action_reuses_artifact(tmp_path, monkeypatch):
     assert first.operation.operation_id == second.operation.operation_id
     assert first.artifact == second.artifact
     assert Path(first.file_path).stat().st_mtime_ns == before
+    assert len(list(tmp_path.glob("*.txt"))) == 1
+
+
+def test_reused_save_receipt_is_observed_without_tool_messages(tmp_path, monkeypatch):
+    monkeypatch.setattr("src.infra.tools.save_text.get_save_text_output_dir", lambda: tmp_path)
+    state = _save_state()
+    node = make_action_postprocess_node(build_save_text_tool(), lambda **_: {}, False)
+    receipt = node(state)["response"].result.actions[0]
+    pending = PendingAction(
+        contract=state["runtime"].request_contract, response=state["response"].result,
+        body_prepared=True, completed_actions=("save_text",),
+        save_operation=receipt.operation, save_receipt=receipt,
+    )
+    state["runtime"] = state["runtime"].model_copy(update={"pending_action": pending})
+
+    updates = node(state)
+    debug = DebugCollector().build(
+        response={**state, **updates, "route_decisions": []}, graph_total_ms=0,
+    )
+
+    assert debug["action_results"]["save_text"] == {
+        "status": "success", "file_path": receipt.file_path, "bytes": receipt.artifact.byte_count,
+        "error": None, "message": None, "error_code": None,
+    }
+    assert updates["response"].result.actions[0] == receipt
     assert len(list(tmp_path.glob("*.txt"))) == 1
 
 
@@ -104,7 +130,8 @@ def test_rejected_save_reuse_records_new_blocked_attempt(tmp_path, monkeypatch, 
                 return read_bytes(path)
 
             monkeypatch.setattr(Path, "read_bytes", read_existing_artifact)
-        receipt = node(state)["response"].result.actions[-1]
+        updates = node(state)
+        receipt = updates["response"].result.actions[-1]
     evidence = recorder.snapshot()
 
     assert receipt.status == ("unknown" if failure == "unreadable_artifact" else "error")
@@ -112,6 +139,13 @@ def test_rejected_save_reuse_records_new_blocked_attempt(tmp_path, monkeypatch, 
     assert evidence.events[-1].phase == "blocked"
     assert evidence.events[-1].invocation_id == receipt.invocation_id
     assert evidence.events[-1].reason_code == receipt.error_code
+    debug = DebugCollector().build(
+        response={**state, **updates, "route_decisions": []},
+        graph_total_ms=0,
+    )
+    assert debug["action_results"]["save_text"]["error_code"] == receipt.error_code
+    assert debug["action_results"]["save_text"]["status"] == receipt.status
+    assert receipt.error_code not in debug["error_codes"]
     policy = policy_for_case(BenchmarkCase(
         case_id="save-reuse", category="tool_action", query="저장해줘.", expected_tools=["save_text"],
     ))

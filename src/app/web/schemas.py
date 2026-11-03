@@ -93,12 +93,12 @@ class BrowserUploadSyncRequest(BaseModel):
 
 
 class AgentDebugInfo(BaseModel):
-    schema_version: int
+    schema_version: int = Field(strict=True)
     observability_status: Literal["ok", "degraded", "failed"]
     missing_required_debug_fields: list[str] = Field(default_factory=list)
     tool_calls: list[str] = Field(default_factory=list)
     tool_call_count: int = 0
-    execution_evidence: ToolExecutionEvidence | dict[str, Any] | None = None
+    execution_evidence: ToolExecutionEvidence | None = None
     latency_ms_server: int | None = None
     latency_breakdown: LatencyBreakdownModel | None = None
     llm_calls: list[LLMCallRecord] | None = None

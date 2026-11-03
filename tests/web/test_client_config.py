@@ -10,6 +10,21 @@ from src.core.conversation_memory import DEFAULT_QUERY_MAX_CHARS, DEFAULT_QUERY_
 from src.infra.settings import AppSettings
 
 
+@pytest.mark.parametrize("query", ["", " \n\t", "x" * (DEFAULT_QUERY_MAX_CHARS + 1), "가" * 6_000],
+                         ids=["empty", "blank", "character-limit", "utf8-byte-limit"])
+def test_invalid_questions_are_rejected_at_the_http_boundary(query: str) -> None:
+    app = FastAPI()
+    app.include_router(router)
+    with TestClient(app) as client:
+        response = client.post("/agent/stream", json={
+            "query": query, "session_id": "query-session",
+            "uploads": {"epoch": "query-epoch", "revision": 0},
+        })
+
+    assert response.status_code == 422
+    assert response.json()["detail"][0]["loc"] == ["body", "query"]
+
+
 @pytest.mark.parametrize("docling_enabled,accepted_suffixes", [
     (False, [".ipynb", ".py"]),
     (True, [".bmp", ".docx", ".ipynb", ".jpeg", ".jpg", ".pdf", ".png", ".py", ".tif", ".tiff", ".webp"]),

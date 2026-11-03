@@ -24,6 +24,7 @@ from src.core.answer_schema import AnswerDocument, AnswerResponse
 from src.core.planner_schema import InitialPlannerOutput
 from src.core.request_contracts import WireRequestContract
 from src.infra.settings import AppSettings
+from src.runtime.agent_runtime.debug_collector import DebugCollector
 
 
 class LocalEmbeddings(Embeddings):
@@ -179,6 +180,26 @@ def final_response(api, **kwargs):
 def answer(api, **kwargs):
     final = final_response(api, **kwargs)
     return AnswerResponse.model_validate(final["response"])
+
+
+def test_invalid_internal_debug_preserves_the_answer_and_attachment_manifest(api, monkeypatch):
+    current = manifest(api)
+    build = DebugCollector.build
+
+    def corrupt_observation(self, **kwargs):
+        debug = build(self, **kwargs)
+        debug["observability_status"] = "unknown"
+        return debug
+
+    monkeypatch.setattr(DebugCollector, "build", corrupt_observation)
+    final = final_response(api, uploads=context(current), include_debug=True)
+
+    assert final["status"] == "completed"
+    assert AnswerResponse.model_validate(final["response"]).content.blocks
+    assert final["upload_manifest"] == current
+    assert final["debug"]["observability_status"] == "failed"
+    assert final["debug"]["missing_required_debug_fields"] == ["debug"]
+    assert final["debug"]["error_codes"] == ["DEBUG_NORMALIZATION_FAILED"]
 
 
 def test_http_session_boundary_preserves_case_identity_and_rejects_invalid_ids(api):
