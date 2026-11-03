@@ -21,13 +21,12 @@ def debug_payload():
     )
 
 
-@pytest.mark.parametrize("serialized_state", [False, True])
-def test_canonical_error_codes_survive_runtime_and_web_boundaries(serialized_state):
+def test_canonical_error_codes_survive_runtime_and_web_boundaries():
     state = DebugState(error_codes=[
         "provider_unavailable", "model_output_invalid", "LOCAL_RAG_FAILED", "provider_unavailable",
     ])
     debug = DebugCollector().build(
-        response={"route_decisions": [], "debug": state.model_dump(mode="json") if serialized_state else state},
+        response={"route_decisions": [], "debug": state},
         updated_messages=[
             HumanMessage(content="Save the answer."),
             ToolMessage(

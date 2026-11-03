@@ -296,7 +296,7 @@ structured synthesis timeout에서는 사전에 충분성과 준비 판정을 �
 
 ### 사용자 요청과 시스템 진단을 분리
 
-사용자에게는 간결한 답변을 제공하되, `include_debug=true`에서는 latency, planner/retrieval diagnostics, retry context, LLM call metadata를 확인할 수 있게 했습니다. 일반 응답 품질과 개발자 관측성을 같은 메시지에 섞지 않기 위한 기준입니다.
+사용자에게는 간결한 답변을 제공하되, `include_debug=true`에서는 latency, planner/retrieval diagnostics, retry context, LLM call metadata를 확인할 수 있게 했습니다. 웹 계층의 디버그 정규화는 요청한 경우에만 실행하며, 일반 요청의 런타임 진단 수집과 요청 로그는 유지합니다. 일반 응답 품질과 개발자 관측성을 같은 메시지에 섞지 않기 위한 기준입니다.
 
 현재 debug schema version은 `14`입니다. debug payload에는 tool call, 호출별 모델·사용량을 정규화한 `llm_calls`, validation events, `route_decisions`, `memory_compactions`, `observed_hits`, `answer_provenance`, action results, stage별 latency, retrieval route latency, synthesis attempt mode가 포함됩니다. `llm_calls`는 endpoint·완료/실패 상태·시도별 시간과 입력·출력·캐시 읽기/쓰기·reasoning 사용량을 구분합니다. 실패·재시도를 포함해 누적하며 제공자가 보고하지 않은 사용량은 0으로 바꾸지 않습니다. 캐시 읽기·쓰기는 입력의 부분집합이므로 전체 입력에 다시 더하지 않고, 총 입력 감소와 캐시 단가 차이를 별도로 비교합니다. Decisions 호출은 사전·사후 단계별로 기록하고 판정 확률 요약은 validation events에 남깁니다. `observed_hits`는 현재 검색에서 본 자료이고, `answer_provenance.evidence_packet`은 최종 결과를 생성·검증한 범위이며, 응답의 `citations`는 그중 실제 표시 내용이 채택한 원문입니다. 본문 생성 모델을 호출하지 않는 복사에서도 선택한 원본의 인용을 검증 packet으로 사용합니다. 이 정보는 회귀 분석과 benchmark 해석을 위한 진단이며, 일반 응답에는 별도의 `semantic_validation`으로 해당 본문의 의미 판정을 전달합니다.
 

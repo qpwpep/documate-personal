@@ -156,22 +156,24 @@ class AgentRequestService:
                                      error=exc, include_debug=request_data.include_debug)
         latency_ms_server = int((time.monotonic() - started) * 1000)
 
-        try:
-            debug_info = normalize_debug_info(
-                raw_debug=agent_answer.get("debug"),
-                latency_ms_server=latency_ms_server,
-                answer_expected=outcome.response is not None,
-            )
-        except Exception as exc:
-            # Observability failure must not replace a checked answer or discard
-            # the manifest captured at its completion.
-            log_event(logger, logging.ERROR, "debug_normalization_failure",
-                      request_id=request_id, exception_type=type(exc).__name__)
-            debug_info = AgentDebugInfo(
-                schema_version=DEBUG_SCHEMA_VERSION, observability_status="failed", route_decisions=[],
-                missing_required_debug_fields=["debug"], error_codes=["DEBUG_NORMALIZATION_FAILED"],
-                latency_ms_server=latency_ms_server,
-            )
+        debug_info = None
+        if request_data.include_debug:
+            try:
+                debug_info = normalize_debug_info(
+                    raw_debug=agent_answer.get("debug"),
+                    latency_ms_server=latency_ms_server,
+                    answer_expected=outcome.response is not None,
+                )
+            except Exception as exc:
+                # Observability failure must not replace a checked answer or discard
+                # the manifest captured at its completion.
+                log_event(logger, logging.ERROR, "debug_normalization_failure",
+                          request_id=request_id, exception_type=type(exc).__name__)
+                debug_info = AgentDebugInfo(
+                    schema_version=DEBUG_SCHEMA_VERSION, observability_status="failed", route_decisions=[],
+                    missing_required_debug_fields=["debug"], error_codes=["DEBUG_NORMALIZATION_FAILED"],
+                    latency_ms_server=latency_ms_server,
+                )
 
         log_event(
             logger,
@@ -191,7 +193,7 @@ class AgentRequestService:
             **outcome.model_dump(mode="json"),
             trace=f"Session ID: {session_id}, Request ID: {request_id}, Agent ID: {id(agent_manager)}",
             upload_manifest=upload_manifest,
-            debug=debug_info if request_data.include_debug else None,
+            debug=debug_info,
         )
 
 
