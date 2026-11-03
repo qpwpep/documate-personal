@@ -258,7 +258,7 @@ DocuMate에서 가장 까다로웠던 문제는 "더 빠른 응답"과 "더 충�
 
 그래서 이 문제를 단순 최적화가 아니라, latency와 retrieval quality 사이의 균형을 계측 가능한 시스템 문제로 다시 정의했습니다. 전체 응답 시간을 하나의 숫자로 보지 않고 `summarize`, `planner`, `retrieval`, `pre_synthesis_validation`, `synthesis`, `post_synthesis_validation`, `action_postprocess` 단계로 나누어 latency trace를 남겼습니다. retrieval도 route별 latency와 status를 기록해 `docs`, `upload` 중 어느 경로가 병목인지, no result인지, timeout인지 debug payload와 benchmark output에서 바로 추적할 수 있게 했습니다.
 
-독립 retrieval task는 `ThreadPoolExecutor`로 병렬 실행하고 결과는 planner 순서대로 다시 정렬합니다. 이 실행 단위는 서로 다른 route뿐 아니라 같은 docs route의 복수 대상도 포함합니다. 외부 검색은 각 Tavily 요청마다 `DOCS_SEARCH_TIMEOUT_SECONDS`를 적용하고 timeout 원인을 diagnostics에 남깁니다.
+독립 retrieval task는 `ThreadPoolExecutor`로 병렬 실행하고 결과는 planner 순서대로 다시 정렬합니다. 이 실행 단위는 서로 다른 route뿐 아니라 같은 docs route의 복수 대상도 포함합니다. 외부 검색은 각 Tavily 요청마다 `DOCS_SEARCH_TIMEOUT_SECONDS`를 적용하고 timeout 원인을 diagnostics에 남깁니다. 공식 HTML의 정의 식별자(`<dt id>`)는 평탄화된 선언의 문자 위치와 함께 메타데이터로 보존합니다. 후보 선택·발췌 선택·의미 검증이 같은 식별자를 사용하므로, `sort()`처럼 본문에 짧게 표시된 메서드도 `list.sort`에 정확히 연결합니다. 발췌 원문은 변경하지 않습니다.
 
 planner와 synthesis는 구조화 모델 호출 경로를 사용하며 provider timeout과 SDK retry를 호출 경계에서 관리합니다. 역할별 시간 예산과 별도로 `REQUEST_TIMEOUT_SECONDS` 기본 60초의 전체 요청 기한을 적용합니다. 세션 잠금 대기 후 시작해 모든 실행 단계를 포함하며, 모델·검색 호출과 단계 경계에서 만료를 확인합니다. 만료 후 새 작업과 대화 기억 커밋을 차단하되 이미 완료된 저장·전송 결과는 보존합니다. 진행 중인 동기 작업을 강제 종료하지는 않으므로 실패 응답 도착이 기한보다 늦어질 수 있습니다. 검색은 요구당 초기 요청과 의미 판정 실패 후 재계획 요청으로 최대 두 번이며 docs 도구는 한 번의 실행 안에서 추가 보완 검색을 하지 않습니다. 상세 재사용·복구 기준은 앞의 검증 계약과 [실행 참고서](runtime_reference.md)에 둡니다.
 
