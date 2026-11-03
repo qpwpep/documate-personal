@@ -14,7 +14,7 @@ DocuMate는 LangGraph 기반 학습 보조 에이전트입니다. 현재 구조�
 
 초기 구조처럼 모델의 tool call 흐름에만 실행을 맡기면 검색, 검증, 액션의 책임 경계가 흐려지기 쉽습니다. 그래서 현재 그래프는 `add_user_message`, `summarize_old_messages`, `planner`, `retrieve_dispatch`, `pre_synthesis_validation`, `synthesize`, `post_synthesis_validation`, `action_postprocess` 단계로 나누었습니다.
 
-이 구조의 목표는 각 단계가 명확한 상태 계약을 주고받게 만드는 것입니다. `GraphState`는 `runtime`, `planner`, `retrieval`, `retry`, `response`, `debug`와 전용 `route_decisions` 영역으로 나뉘며, boundary adapter가 dict와 Pydantic 모델 사이의 상태를 정규화합니다. planner는 확인 질문이 필요한지 또는 어떤 근거 요구를 검색할지 결정하고, retrieval은 각 `requirement_id`에 대응하는 `SearchHit`와 diagnostics를 모읍니다. OpenAI Decisions API는 후보의 관련성과 실제 합성 packet의 충분성을 사전에 판정하고, 생성 후에는 실제 본문과 인용 범위의 요청 충족을 판단합니다. 원문 참조·hash·발췌 일치와 관찰 가능한 출력 조건은 로컬 검사로 함께 확인합니다. 검색 없는 답변도 생성 전후 검증을 거칩니다.
+이 구조의 목표는 각 단계가 명확한 상태 계약을 주고받게 만드는 것입니다. `GraphState`는 `runtime`, `planner`, `retrieval`, `retry`, `response`, `debug`와 전용 `route_decisions` 영역으로 나뉩니다. 실행 진입점이 상태 모델을 만들고 각 노드는 같은 모델 계약으로 업데이트를 반환합니다. 아직 생성되지 않은 선택 채널만 기본 상태를 사용하며, 잘못된 내부 타입을 빈 상태로 보정하지 않습니다. planner는 확인 질문이 필요한지 또는 어떤 근거 요구를 검색할지 결정하고, retrieval은 각 `requirement_id`에 대응하는 `SearchHit`와 diagnostics를 모읍니다. OpenAI Decisions API는 후보의 관련성과 실제 합성 packet의 충분성을 사전에 판정하고, 생성 후에는 실제 본문과 인용 범위의 요청 충족을 판단합니다. 원문 참조·hash·발췌 일치와 관찰 가능한 출력 조건은 로컬 검사로 함께 확인합니다. 검색 없는 답변도 생성 전후 검증을 거칩니다.
 
 ### 유한한 장기 대화 메모리
 

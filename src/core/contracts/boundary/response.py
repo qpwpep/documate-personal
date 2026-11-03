@@ -1,16 +1,7 @@
 from __future__ import annotations
 
-from typing import Any
-from src.core.contracts.graph_state import ResponseState
+from src.core.contracts.graph_state import GraphState, ResponseState
 
 
-def parse_response_state(value: Any) -> ResponseState:
-    if isinstance(value, ResponseState):
-        return value
-    if value is None:
-        return ResponseState()
-    return ResponseState.model_validate(value)
-
-
-def get_response_state(state: dict[str, Any]) -> ResponseState:
-    return parse_response_state(state.get("response"))
+def get_response_state(state: GraphState) -> ResponseState:
+    return state["response"] if "response" in state else ResponseState()

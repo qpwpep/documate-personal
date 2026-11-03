@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from src.core.contracts.debug import RetrievalDiagnostic
-from src.core.contracts.graph_state import RetrievalState
+from src.core.contracts.graph_state import GraphState, RetrievalState
 
 
 def parse_retrieval_diagnostic(value: Any) -> RetrievalDiagnostic:
@@ -60,13 +60,5 @@ def normalize_retrieval_diagnostic_observation(
     return diagnostics, issues
 
 
-def parse_retrieval_state(value: Any) -> RetrievalState:
-    if isinstance(value, RetrievalState):
-        return value
-    if value is None:
-        return RetrievalState()
-    return RetrievalState.model_validate(value)
-
-
-def get_retrieval_state(state: dict[str, Any]) -> RetrievalState:
-    return parse_retrieval_state(state.get("retrieval"))
+def get_retrieval_state(state: GraphState) -> RetrievalState:
+    return state["retrieval"] if "retrieval" in state else RetrievalState()

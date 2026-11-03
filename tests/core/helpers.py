@@ -9,7 +9,7 @@ from openai import OpenAI
 from pydantic import BaseModel
 
 from src.core.contracts import DebugState, PlannerState, ResponseState, RetrievalState, RetryState
-from src.core.contracts.boundary.graph import build_graph_state_input, normalize_graph_update
+from src.core.contracts.boundary.graph import build_graph_state_input
 from src.core.planner_schema import InitialPlannerOutput, PlannerOutput, RetrievalRewriteOutput
 from src.core.request_contracts import UserTurnSnapshot, WireRequestContract
 from src.infra.decisions import DecisionsClient
@@ -152,7 +152,7 @@ def build_test_state(payload: dict):
         state["debug"] = DebugState.model_validate(debug)
     if raw:
         raise ValueError(f"Unknown test state fields: {sorted(raw)}")
-    return normalize_graph_update(state)
+    return state
 
 
 class _CapturePlannerLLM(StructuredModel):

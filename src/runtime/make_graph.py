@@ -9,7 +9,7 @@ from langgraph.types import Command
 from src.core.conversation_memory import ConversationMemoryPolicy, plan_compaction
 from src.core.contracts.graph_state import GraphState
 from src.core.contracts.routing import RoutingDecision, RoutingSource, RoutingTarget
-from src.core.contracts.boundary.graph import get_retry_state, normalize_graph_update
+from src.core.contracts.boundary.graph import get_retry_state
 from src.core.contracts.boundary.planner import get_planner_state
 from src.core.contracts.boundary.response import get_response_state
 from src.core.contracts.boundary.runtime import get_runtime_state
@@ -57,7 +57,7 @@ def _business_node(node: Callable[[GraphState], GraphState]):
             raise TypeError("Graph business nodes must return a state update dictionary")
         if "route_decisions" in updates:
             raise ValueError("Only the graph routing adapter can write route_decisions")
-        return normalize_graph_update(updates)
+        return updates
 
     return wrapped
 

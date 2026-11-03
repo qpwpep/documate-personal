@@ -9,7 +9,8 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 from langchain_core.messages import HumanMessage
-from src.core.answer_schema import AnswerResponse, export_answer_text
+from src.core.answer_schema import AnswerResponse
+from src.core.answer_schema.rendering import render_answer_text
 from src.core.answer_export import answer_export_key, answer_export_snapshot
 from src.core.save_contract import SaveOperation
 from src.core.request_contracts import UserTurnSnapshot, required_contract_turn_ids
@@ -61,7 +62,7 @@ class SessionContext:
         # The graph may have selected a newer generation already. A displayed
         # older receipt must never overwrite that current operation binding.
         if key not in self.answer_export_operations:
-            body = export_answer_text(snapshot, include_sources=True).encode("utf-8-sig")
+            body = render_answer_text(snapshot, include_sources=True).encode("utf-8-sig")
             for receipt in response.actions:
                 operation = receipt.operation
                 if (receipt.kind == "save_text" and operation is not None

@@ -4,7 +4,7 @@ from typing import Any
 
 from src.core.slack_contract import SlackDelivery
 from src.core.contracts.debug import ActionResults, DEBUG_SCHEMA_VERSION, DebugDiagnostics, DebugPayload, ErrorCode, RetryState, SaveTextActionResult, json_safe_deep_copy
-from src.core.contracts.graph_state import DebugState
+from src.core.contracts.graph_state import DebugState, GraphState
 from src.core.contracts.usage import LLMCallRecord
 from src.core.contracts.routing import validate_route_decisions
 from src.core.contracts.boundary.planner import parse_planner_diagnostic
@@ -175,30 +175,5 @@ def parse_debug_payload(value: Any) -> DebugPayload:
     )
 
 
-def parse_debug_state(value: Any) -> DebugState:
-    if isinstance(value, DebugState):
-        return value
-    if isinstance(value, DebugPayload):
-        return DebugState.model_validate(value.model_dump(mode="json"))
-    if not isinstance(value, dict):
-        return DebugState()
-
-    payload = _parse_debug_diagnostics(value).model_dump(mode="json")
-    payload["retrieval_errors"] = [
-        str(item) for item in value.get("retrieval_errors", []) if str(item).strip()
-    ] if isinstance(value.get("retrieval_errors"), list) else []
-    payload["synthesis_errors"] = [
-        str(item) for item in value.get("synthesis_errors", []) if str(item).strip()
-    ] if isinstance(value.get("synthesis_errors"), list) else []
-    payload["validation_errors"] = [
-        str(item) for item in value.get("validation_errors", []) if str(item).strip()
-    ] if isinstance(value.get("validation_errors"), list) else []
-    payload["action_errors"] = [
-        str(item) for item in value.get("action_errors", []) if str(item).strip()
-    ] if isinstance(value.get("action_errors"), list) else []
-    payload["latency_trace"] = list(value.get("latency_trace", [])) if isinstance(value.get("latency_trace"), list) else []
-    return DebugState.model_validate(payload)
-
-
-def get_debug_state(state: dict[str, Any]) -> DebugState:
-    return parse_debug_state(state.get("debug"))
+def get_debug_state(state: GraphState) -> DebugState:
+    return state["debug"] if "debug" in state else DebugState()

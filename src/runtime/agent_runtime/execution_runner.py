@@ -6,18 +6,19 @@ from typing import Any, Literal, Protocol
 from uuid import uuid4
 
 from src.core.contracts.boundary.graph import build_graph_state_input
+from src.core.contracts.graph_state import GraphState
 from src.core.latency import elapsed_ms
 from src.runtime.agent_runtime.session_context import SessionContext
 
 
 class AgentGraph(Protocol):
     def stream(
-        self, state: dict[str, object], *, stream_mode: Literal["values"],
-    ) -> Iterator[dict[str, object]]: ...
+        self, state: GraphState, *, stream_mode: Literal["values"],
+    ) -> Iterator[GraphState]: ...
 
 
 class GraphInvocationError(RuntimeError):
-    def __init__(self, *, graph_total_ms: int, cause: Exception, last_state: dict[str, Any] | None):
+    def __init__(self, *, graph_total_ms: int, cause: Exception, last_state: GraphState | None):
         super().__init__(str(cause))
         self.graph_total_ms = graph_total_ms
         self.cause = cause
@@ -34,7 +35,7 @@ class ExecutionRunner:
         user_input: str,
         *,
         progress_emitter: Any | None = None,
-    ) -> dict[str, Any]:
+    ) -> GraphState:
         """Read committed session state while the application holds its request lock."""
         conversation = self.session.snapshot_conversation_memory()
         handle = self.session.upload_retriever_handle
@@ -56,9 +57,9 @@ class ExecutionRunner:
             answer_export_operations=dict(self.session.answer_export_operations),
         )
 
-    def invoke_graph(self, state: dict[str, Any]) -> tuple[dict[str, Any], int]:
+    def invoke_graph(self, state: GraphState) -> tuple[GraphState, int]:
         graph_started = time.perf_counter()
-        last_state: dict[str, Any] | None = None
+        last_state: GraphState | None = None
         try:
             # Each values event is the complete committed state. Replacing the
             # snapshot preserves completed decisions without appending them again.

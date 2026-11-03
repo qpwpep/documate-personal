@@ -1,5 +1,5 @@
 from src.core.answer_schema import AnswerDocument, export_answer_text, finalize_answer, iter_content_units, text_document
-from src.core.contracts import ResponseState
+from src.core.contracts import ResponseState, RetryState
 from src.core.contracts.boundary.graph import build_graph_state_input
 from src.core.documents import DocumentElement, SourceAnchor, build_snapshot
 from src.core.evidence import RetrievalScore, SearchHit, build_evidence
@@ -68,7 +68,7 @@ def test_validation_covers_list_code_and_table_cell_text():
         user_input="자료를 설명해 주세요", request_contract=contract,
         response=ResponseState(result=finalize_answer(document, []),
                                request_id=contract.request_id, contract_revision=contract.revision),
-        retry={"max_retries": 0, "max_content_repairs": 0},
+        retry=RetryState(max_retries=0, max_content_repairs=0),
     )
 
     updates = make_post_synthesis_validation_node(False, decisions_client=make_decisions_client())(state)

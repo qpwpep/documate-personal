@@ -3,9 +3,10 @@ from __future__ import annotations
 from langchain_core.messages import AIMessage
 
 from src.core.answer_schema import (
-    AnswerResponse, ResponseIssue, export_answer_text,
+    AnswerResponse, ResponseIssue,
     filter_document_units, finalize_answer, text_document,
 )
+from src.core.answer_schema.rendering import render_answer_text
 from src.core.contracts import GraphState, ResponseState
 from src.core.contracts.provenance import AnswerSource, BodyKind
 from src.core.evidence import EvidenceRef
@@ -29,8 +30,9 @@ def build_response_updates(
     evidence_source: AnswerSource | None = None,
     problem: ExecutionProblem | None = None,
 ) -> GraphState:
+    """Publish a validated answer without changing its body or source bindings."""
     return {
-        "messages": [AIMessage(content=export_answer_text(result))],
+        "messages": [AIMessage(content=render_answer_text(result))],
         "response": ResponseState(result=result, evidence_packet=evidence_packet, synthesis_attempt=attempt,
                                   evidence_requirement_map=evidence_requirement_map or {}, kind=kind,
                                   normal_evidence_missing_requirement_ids=normal_evidence_missing_requirement_ids or [],

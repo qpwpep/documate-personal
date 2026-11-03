@@ -1,8 +1,9 @@
 import time
+from collections.abc import Callable
 from typing import Any
 
-from src.core.contracts import GraphState
-from src.core.contracts.boundary.debug import get_debug_state, parse_debug_state
+from src.core.contracts import DebugState, GraphState
+from src.core.contracts.boundary.debug import get_debug_state
 from src.core.contracts.boundary.graph import get_retry_state
 from src.core.contracts.boundary.planner import get_planner_state
 from src.core.contracts.boundary.response import get_response_state
@@ -63,12 +64,8 @@ def _resolve_stage_status(stage: str, updates: GraphState) -> str | None:
     return None
 
 
-def _extract_stage_status_from_debug(stage: str, debug: Any, attempt: int) -> str | None:
-    latency_trace = getattr(debug, "latency_trace", None)
-    if not isinstance(latency_trace, list):
-        return None
-
-    for item in reversed(latency_trace):
+def _extract_stage_status_from_debug(stage: str, debug: DebugState, attempt: int) -> str | None:
+    for item in reversed(debug.latency_trace):
         if not isinstance(item, dict):
             continue
         if str(item.get("kind") or "").strip() != "stage":
@@ -90,18 +87,9 @@ def _get_progress_emitter(state: GraphState) -> Any | None:
     return get_runtime_state(state).progress_emitter
 
 
-def _merge_debug_patch(state: GraphState, raw_debug_patch: Any):
-    base_debug = get_debug_state(state)
-    if raw_debug_patch is None:
-        return base_debug
-    if hasattr(raw_debug_patch, "model_dump"):
-        return parse_debug_state(raw_debug_patch)
-    if isinstance(raw_debug_patch, dict):
-        return base_debug.model_copy(update=dict(raw_debug_patch))
-    return base_debug
-
-
-def _instrument_stage_node(stage: str, node: Any, *, record_latency_trace: bool = True):
+def _instrument_stage_node(
+    stage: str, node: Callable[[GraphState], GraphState], *, record_latency_trace: bool = True,
+) -> Callable[[GraphState], GraphState]:
     def wrapped(state: GraphState) -> GraphState:
         started = time.perf_counter()
         attempt = _resolve_stage_attempt_for_start(stage, state)
@@ -122,11 +110,7 @@ def _instrument_stage_node(stage: str, node: Any, *, record_latency_trace: bool 
                 latency_ms=elapsed_ms(started, time.perf_counter()),
                 cause=exc,
             ) from exc
-        if not isinstance(updates, dict):
-            return updates
-
-        raw_debug_patch = updates.get("debug") if "debug" in updates else None
-        debug = _merge_debug_patch(state, raw_debug_patch)
+        debug = updates["debug"] if "debug" in updates else get_debug_state(state)
         stage_status = _resolve_stage_status(stage, {**state, **updates}) or _extract_stage_status_from_debug(
             stage,
             debug,

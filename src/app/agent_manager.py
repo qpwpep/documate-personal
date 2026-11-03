@@ -11,16 +11,17 @@ from src.core.conversation_memory import (
 from src.runtime.agent_runtime import AgentGraph, DebugCollector, ExecutionRunner, GraphInvocationError, ResponseAssembler, SessionContext
 from src.runtime.agent_runtime.tool_execution import capture_tool_execution
 from src.runtime.agent_runtime.llm_usage import capture_llm_usage
-from src.core.answer_schema import finalize_answer, text_document, export_answer_text
+from src.core.answer_schema import finalize_answer, text_document
+from src.core.answer_schema.rendering import render_answer_text
 from src.core.request_contracts import required_contract_turn_ids
-from src.core.contracts import RuntimeState, SessionMetadata
+from src.core.contracts import GraphState, SessionMetadata
 from src.core.contracts.outcome import TurnResult
 from src.core.llm_errors import LLMCallError, ExecutionProblem, LLMDiagnostic, make_problem
 from src.infra.llm_boundary import capture_llm_diagnostics
 from src.core.contracts.debug import DEBUG_SCHEMA_VERSION
 from src.core.contracts.provenance import AnswerProvenance
 from src.core.contracts.routing import validate_route_decisions
-from src.core.contracts.boundary.runtime import parse_runtime_state
+from src.core.contracts.boundary.runtime import get_runtime_state
 from src.core.contracts.boundary.response import get_response_state
 from src.runtime.graph_builder import StageExecutionError, build_agent_graph
 from src.core.latency import build_latency_breakdown, elapsed_ms, make_stage_latency_event
@@ -73,21 +74,6 @@ class AgentFlowManager:
         self.session.close()
 
     @staticmethod
-    def _resolve_response_memory_summary(
-        response: dict[str, Any],
-        *,
-        fallback: str | None,
-    ) -> str | None:
-        if "runtime" not in response:
-            return fallback
-        raw_runtime = response.get("runtime")
-        if isinstance(raw_runtime, RuntimeState):
-            return raw_runtime.memory_summary
-        if isinstance(raw_runtime, dict) and "memory_summary" in raw_runtime:
-            return parse_runtime_state(raw_runtime).memory_summary
-        return fallback
-
-    @staticmethod
     def _early_result(outcome: TurnResult) -> dict[str, Any]:
         result = outcome.response
         return {
@@ -122,7 +108,7 @@ class AgentFlowManager:
         graph_total_ms: int | None,
         flow_started: float,
         stage_error: StageExecutionError | None,
-        graph_state: dict[str, Any] | None = None,
+        graph_state: GraphState | None = None,
         problem: ExecutionProblem | None = None,
         diagnostic: LLMDiagnostic | None = None,
     ) -> dict[str, Any]:
@@ -243,20 +229,17 @@ class AgentFlowManager:
                 response=finalize_answer(text_document("Chat session has been reset. Start again."), []),
             ))
 
-        response: dict[str, Any] | None = None
+        response: GraphState | None = None
         graph_total_ms: int | None = None
         try:
-            previous_memory = self.session.snapshot_conversation_memory()
             state = self._runner.prepare_graph_state(
                 user_input,
                 progress_emitter=progress_emitter,
             )
             response, graph_total_ms = self._runner.invoke_graph(state)
             updated_messages = list(response["messages"])
-            candidate_summary = self._resolve_response_memory_summary(
-                response,
-                fallback=previous_memory.memory_summary,
-            )
+            final_runtime = get_runtime_state(response)
+            candidate_summary = final_runtime.memory_summary
             debug_info = self._debug_collector.build(
                 response=response,
                 updated_messages=updated_messages,
@@ -266,12 +249,11 @@ class AgentFlowManager:
                 response=response,
                 debug_info=debug_info,
             )
-            final_runtime = parse_runtime_state(response.get("runtime", state.get("runtime")))
             final_response_state = get_response_state(response)
             if assembled_response["status"] in {"failed", "refused"}:
                 return assembled_response
             canonical_text = (assembled_response["message"] if assembled_response["status"] == "needs_input"
-                              else export_answer_text(final_response_state.result))
+                              else render_answer_text(final_response_state.result))
             if (assembled_response["status"] == "partial"
                     and assembled_response["problem"]["code"] == "save_failed"):
                 canonical_text = "\n\n".join([canonical_text, assembled_response["message"]])

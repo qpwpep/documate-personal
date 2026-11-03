@@ -46,9 +46,13 @@ class _RollingSummaryGraph:
 
 
 class _InvalidRuntimeGraph(_RollingSummaryGraph):
+    def __init__(self, runtime: object) -> None:
+        super().__init__()
+        self.runtime = runtime
+
     def stream(self, state: dict, *, stream_mode: str):
         result = next(super().stream(state, stream_mode=stream_mode))
-        result["runtime"] = {"previous_response": {"content": text_document("unchecked runtime body").model_dump(mode="json")}}
+        result["runtime"] = self.runtime
         yield result
 
 
@@ -88,21 +92,27 @@ def test_failed_request_reports_incomplete_latency_observations(raw_trace, plann
 class ConversationMemoryLifecycleTest(unittest.TestCase):
     def test_invalid_returned_runtime_preserves_conversation_and_previous_answer(self) -> None:
         """잘못된 반환 runtime은 대화 기록 일부만 새 요청으로 교체하지 않는다."""
-        graph = _RollingSummaryGraph()
-        manager = _make_manager(SequentialGraph(graph, _InvalidRuntimeGraph(), graph))
-        previous = AnswerResponse.model_validate(manager.run_agent_flow("stable request")["response"])
-        before = deepcopy(manager.messages)
-        summary = manager.memory_summary
+        malformed_response = {"previous_response": {
+            "content": text_document("unchecked runtime body").model_dump(mode="json"),
+        }}
+        for runtime in (None, {}, "broken", malformed_response):
+            with self.subTest(runtime=runtime):
+                graph = _RollingSummaryGraph()
+                manager = _make_manager(SequentialGraph(graph, _InvalidRuntimeGraph(runtime), graph))
+                previous = AnswerResponse.model_validate(manager.run_agent_flow("stable request")["response"])
+                before = deepcopy(manager.messages)
+                summary = manager.memory_summary
 
-        result = manager.run_agent_flow("new request")
+                result = manager.run_agent_flow("new request")
 
-        self.assertEqual(result["debug"]["observability_status"], "failed")
-        self.assertEqual(manager.messages, before)
-        self.assertEqual(manager.memory_summary, summary)
-        manager.run_agent_flow("continue")
-        self.assertEqual(graph.states[1]["runtime"].previous_response, previous)
-        self.assertEqual(graph.states[1]["messages"], before)
-        self.assertEqual([turn.text for turn in graph.states[1]["runtime"].user_turns], ["stable request"])
+                self.assertEqual(result["status"], "failed")
+                self.assertEqual(result["debug"]["observability_status"], "failed")
+                self.assertEqual(manager.messages, before)
+                self.assertEqual(manager.memory_summary, summary)
+                manager.run_agent_flow("continue")
+                self.assertEqual(graph.states[1]["runtime"].previous_response, previous)
+                self.assertEqual(graph.states[1]["messages"], before)
+                self.assertEqual([turn.text for turn in graph.states[1]["runtime"].user_turns], ["stable request"])
 
 
     def test_different_sessions_do_not_share_conversation_memory(self) -> None:

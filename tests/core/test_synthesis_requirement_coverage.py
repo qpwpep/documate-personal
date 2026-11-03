@@ -1,7 +1,7 @@
 import json
 
 
-from src.core.contracts import PlannerState
+from src.core.contracts import PlannerState, ResponseState, RetrievalState, RetryState
 from src.core.answer_schema import finalize_answer, text_document
 from src.core.contracts.boundary.graph import build_graph_state_input
 from src.core.documents import DocumentElement, build_snapshot
@@ -21,7 +21,7 @@ def _prepare(tasks, hits, *, snippet=960):
     state = build_graph_state_input(
         user_input="Compare the requested settings", planner=PlannerState(output=plan),
         request_contract=RequestContract(),
-        retrieval={"hit_log": [hit.model_dump(mode="json") for hit in hits]},
+        retrieval=RetrievalState(hit_log=hits),
     )
     prepare_synthesis_state(state, limits=synthesis_excerpt_limits(normal_chars=snippet))
     context = build_synthesis_context(state=state)
@@ -112,14 +112,14 @@ def test_failed_comparison_fallback_excludes_files_outside_the_requested_scope()
     state = build_graph_state_input(
         user_input=task.query, request_contract=contract,
         planner=PlannerState(output=PlannerOutput(use_retrieval=True, tasks=[task])),
-        retrieval={"hit_log": [hit.model_dump(mode="json") for hit in hits]},
-        response={
-            "result": finalize_answer(text_document("The comparison is incomplete."), packet),
-            "evidence_packet": packet,
-            "evidence_requirement_map": {item.id: [task.requirement_id] for item in packet},
-            "request_id": contract.request_id, "contract_revision": contract.revision,
-        },
-        retry={"max_retries": 0, "max_content_repairs": 0},
+        retrieval=RetrievalState(hit_log=hits),
+        response=ResponseState(
+            result=finalize_answer(text_document("The comparison is incomplete."), packet),
+            evidence_packet=packet,
+            evidence_requirement_map={item.id: [task.requirement_id] for item in packet},
+            request_id=contract.request_id, contract_revision=contract.revision,
+        ),
+        retry=RetryState(max_retries=0, max_content_repairs=0),
     )
 
     response = make_post_synthesis_validation_node(False, decisions_client=make_decisions_client())(state)["response"]
