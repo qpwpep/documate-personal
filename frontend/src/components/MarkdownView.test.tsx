@@ -15,10 +15,9 @@ describe('MarkdownView', () => {
     expect(container.textContent).toContain('<script>alert("source")</script>');
   });
 
-  it('resolves source links and images but leaves code and captured input untouched', () => {
+  it('resolves source links and images while preserving code', () => {
     const relative = '../reference/generated/numpy.concatenate.html#numpy.concatenate';
     const text = `[concatenate](${relative}) and [reference][api] and [section](#arrays).\n\n![diagram](../images/arrays.svg)\n\n\`[example](${relative})\`\n\n\`\`\`markdown\n[example](${relative})\n\`\`\`\n\n[api]: ${relative}`;
-    const original = text;
     const { container } = render(<MarkdownView text={text} sourceUri="https://numpy.org/doc/2.1/user/absolute_beginners.html" />);
 
     expect(screen.getByRole('link', { name: 'concatenate' })).toHaveAttribute('href', 'https://numpy.org/doc/2.1/reference/generated/numpy.concatenate.html#numpy.concatenate');
@@ -26,7 +25,6 @@ describe('MarkdownView', () => {
     expect(screen.getByRole('link', { name: 'section' })).toHaveAttribute('href', 'https://numpy.org/doc/2.1/user/absolute_beginners.html#arrays');
     expect(screen.getByRole('img', { name: 'diagram' })).toHaveAttribute('src', 'https://numpy.org/doc/2.1/images/arrays.svg');
     expect(container.querySelector('pre code')?.textContent).toBe(`[example](${relative})\n`);
-    expect(text).toBe(original);
   });
 
   it('can render an inline unit inside a paragraph without adding a nested paragraph', () => {

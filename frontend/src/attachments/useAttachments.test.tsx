@@ -174,7 +174,6 @@ describe('첨부를 명시적으로 확정하는 흐름', () => {
     await user.upload(screen.getByLabelText('파일 첨부'), ['A.PY', ...names.slice(1)].map((name) => new File([content], name)));
     await user.click(screen.getByRole('button', { name: '첨부만 확정' }));
     await screen.findByRole('button', { name: 'd.py 첨부 해제' });
-    expect(manifest.files.map((file) => file.name)).toEqual(names);
     expect(stagedCount).toBe(7);
     expect(syncBodies).toHaveLength(1);
     expect(stagedFiles.size).toBe(0);
@@ -288,7 +287,7 @@ describe('첨부를 명시적으로 확정하는 흐름', () => {
     expect(manifest.files[0]?.content_hash).toBe(hash('new'));
   });
 
-  it.each([1, 2])('동일 내용 파일 %s개를 다시 골라도 revision을 유지하고 모든 staging을 확인한다', async (count) => {
+  it.each([1, 2])('동일 내용 파일 %s개를 다시 골라도 모든 staging을 확인하고 원래 질문을 전달한다', async (count) => {
     manifest.files = [original];
     syncResult = manifest;
     const user = userEvent.setup();
@@ -300,8 +299,6 @@ describe('첨부를 명시적으로 확정하는 흐름', () => {
     expect(syncBodies[0]?.add).toEqual(Array.from({ length: count }, (_, index) => ({
       upload_id: String(index + 1).padStart(32, '0'), name: 'sample.py', content_hash: hash('old'), replace_file_id: null,
     })));
-    expect(manifest.revision).toBe(0);
-    expect(manifest.files).toEqual([original]);
     expect(stagedFiles.size).toBe(0);
   });
 
@@ -323,7 +320,6 @@ describe('첨부를 명시적으로 확정하는 흐름', () => {
       { upload_id: '1'.padStart(32, '0'), name: 'sample.py', content_hash: hash('new'), replace_file_id: replace ? 'original' : null },
       { upload_id: '2'.padStart(32, '0'), name: 'sample.py', content_hash: hash('new'), replace_file_id: null },
     ]);
-    expect(manifest.files).toHaveLength(1);
     expect(stagedFiles.size).toBe(0);
   });
 

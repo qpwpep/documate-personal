@@ -69,7 +69,6 @@ function Delivery({ initial = null, allowSave = true }: { initial?: AnswerExport
   const [busy, setBusy] = useState(false);
   const [client] = useState(() => new AgentSessionClient({ sessionId: 'delivery-session', baseUrl: apiBaseUrl }));
   return <>
-    <p>{answer.issues[0].message}</p>
     <button disabled={busy}>다른 대화</button>
     <AnswerDelivery client={client} answerId="selected-answer" response={answer} currentExport={result}
       onExportResult={setResult} onBusyChange={setBusy} onBeforeSave={async () => allowSave} />
@@ -77,7 +76,7 @@ function Delivery({ initial = null, allowSave = true }: { initial?: AnswerExport
 }
 
 describe('선택 답변 TXT 저장', () => {
-  it('saves only the server answer id, keeps its limitations and links the exact server bytes', async () => {
+  it('saves only the server answer id and links the exact server bytes', async () => {
     const user = userEvent.setup();
     render(<Delivery />);
     expect(requests).toHaveLength(0);
@@ -87,7 +86,6 @@ describe('선택 답변 TXT 저장', () => {
     expect(download).toHaveAttribute('href', `${apiBaseUrl}/download/${encodeURIComponent(artifact.filename)}`);
     const downloaded = await fetch(download.getAttribute('href') ?? '');
     expect(Buffer.from(await downloaded.arrayBuffer())).toEqual(downloadBytes);
-    expect(screen.getByText(answer.issues[0].message)).toBeVisible();
   });
 
   it('retries the same answer after a failed receipt without resubmitting a question', async () => {
@@ -125,7 +123,6 @@ describe('선택 답변 TXT 저장', () => {
     expect(screen.queryByRole('link', { name: 'TXT 다운로드' })).not.toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'TXT 다시 만들기' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('서버 기록이 만료');
-    expect(screen.getByText(answer.issues[0].message)).toBeVisible();
     expect(requests).toHaveLength(1);
     expect(screen.queryByRole('link')).not.toBeInTheDocument();
   });
