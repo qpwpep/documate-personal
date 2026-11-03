@@ -14,9 +14,11 @@ from src.core.contracts.boundary.planner import get_planner_state
 from src.core.contracts.boundary.response import get_response_state
 from src.core.contracts.boundary.runtime import get_runtime_state
 from src.core.message_utils import build_tool_message
+from src.core.llm_errors import LLMCallError
 from src.core.request_contracts import check_answer_contract, resolve_body_response
 from src.core.save_contract import SaveOperation, SaveToolResult
 from src.infra.logging_utils import log_event
+from src.infra.llm_boundary import check_request_deadline
 from src.infra.answer_export import select_current_save_operation
 from src.infra.saved_artifacts import ArtifactError
 from src.runtime.nodes.actions.policy import select_slack_delivery
@@ -219,14 +221,19 @@ def make_action_postprocess_node(
             if contract.execution_ready("save_text", body_ready=body_ready):
                 invocation_id = None
                 try:
+                    check_request_deadline("action_postprocess")
                     save_operation = _save_operation(contract=contract, runtime=runtime, pending=pending,
                                                      response=response, body=body)
                     if save_operation.answer_hash != response.result.content_hash:
                         invocation_id = record_nonexecution("save_text", reason_code="idempotency_conflict")
                         raise ArtifactError("idempotency_conflict", "재시도 본문이 확정된 저장 대상과 다릅니다.")
                     invocation_id = uuid4().hex
+                    check_request_deadline("action_postprocess")
                     result = invoke_tool("save_text", save_text_tool, execution_id=invocation_id,
                                          content=body, operation=save_operation)
+                except LLMCallError:
+                    # A request deadline is not a failed filesystem write.
+                    raise
                 except Exception as exc:
                     receipt = build_save_failure(
                         exc.code if isinstance(exc, ArtifactError) else "write_failed", str(exc),
@@ -280,11 +287,21 @@ def make_action_postprocess_node(
                         record_nonexecution("slack_notify", phase="reused", reason_code="existing_delivery",
                                             origin_invocation_id=slack_delivery.invocation_id)
                     else:
-                        invocation_id = uuid4().hex
-                        result = invoke_tool("slack_notify", slack_notify_tool, execution_id=invocation_id,
-                                             text=body, delivery=slack_delivery)
-                        slack_delivery = result.model_copy(update={"invocation_id": invocation_id})
-                    messages.append(build_tool_message("slack_notify", slack_delivery.model_dump(mode="json"), 1))
+                        try:
+                            check_request_deadline("action_postprocess")
+                            invocation_id = uuid4().hex
+                            result = invoke_tool("slack_notify", slack_notify_tool, execution_id=invocation_id,
+                                                 text=body, delivery=slack_delivery)
+                            slack_delivery = result.model_copy(update={"invocation_id": invocation_id})
+                        except LLMCallError as exc:
+                            if exc.problem.code != "request_timeout":
+                                raise
+                            # Keep an earlier save receipt and its pending delivery
+                            # state. The runner reports the expired request after
+                            # receiving this update; no second side effect starts.
+                            record_nonexecution("slack_notify", reason_code="request_timeout")
+                    if slack_delivery.status != "pending":
+                        messages.append(build_tool_message("slack_notify", slack_delivery.model_dump(mode="json"), 1))
                 else:
                     record_nonexecution("slack_notify", reason_code="destination_not_ready")
                 if slack_delivery.status != "pending":

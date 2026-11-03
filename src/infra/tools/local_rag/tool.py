@@ -7,9 +7,11 @@ from src.core.contracts.retrieval import RetrievalResult, UploadRetriever, Uploa
 from src.core.documents import ParsedDocument
 from src.core.evidence import SearchHit
 from src.core.latency import elapsed_ms
+from src.core.llm_errors import LLMCallError
 from src.core.literal_matching import missing_literal_aspects
 from src.core.planner_schema import RetrievalRequirement
 from src.infra.tools._common import build_retrieval_result
+from src.infra.llm_boundary import check_request_deadline
 from src.infra.tools.local_rag.requirements import resolve_source_requirement
 
 
@@ -109,9 +111,14 @@ def build_upload_search_tool(*, default_mode: UploadSearchMode = "hybrid") -> Ca
         provider_ms = 0
         provider_started = time.perf_counter()
         try:
+            check_request_deadline("retrieval")
             hits = retriever.search(query, k=k, file_ids=file_ids, mode=mode)
+            check_request_deadline("retrieval")
             provider_ms += elapsed_ms(provider_started, time.perf_counter())
+        except LLMCallError:
+            raise
         except Exception as exc:
+            check_request_deadline("retrieval")
             provider_ms += elapsed_ms(provider_started, time.perf_counter())
             return build_retrieval_result(
                 tool="upload_search",

@@ -15,6 +15,7 @@ from chromadb.errors import NotFoundError
 from langchain_chroma import Chroma
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
+from langchain_openai import OpenAIEmbeddings
 from openai import APITimeoutError
 
 from src.core.contracts.retrieval import UploadRetriever, UploadSearchMode
@@ -23,10 +24,13 @@ from src.core.evidence import EvidenceRef, RetrievalScore, SearchHit, build_evid
 from src.core.rules import HybridSearchConfig
 from src.core.uploads import UploadFileInfo, UploadRecord
 from src.core.upload_formats import is_document_upload
-from src.infra.chroma_store import build_openai_embeddings, create_chroma_vectorstore, add_preembedded_documents
+from src.infra.chroma_store import (
+    EMBEDDING_REQUEST_TIMEOUT_SECONDS, build_openai_embeddings, create_chroma_vectorstore, add_preembedded_documents,
+)
 from src.infra.chunking import ChunkedDocument, chunk_notebook, chunk_python_text, chunk_parsed_document
 from src.infra.document_ingestion import DocumentIngestionContext, IngestionError
 from src.infra.embedding_cache import CachedEmbeddings
+from src.infra.llm_boundary import bounded_request_timeout, check_request_deadline
 from src.infra.notebook_loader import parse_canonical_notebook
 from src.infra.tools.local_rag.lexical import ChunkReference, KoreanBM25Index
 from src.infra.tools.local_rag.ranking import rank_retrieval_rows
@@ -150,12 +154,21 @@ class _SourceAwareVectorStore:
     def similarity_search_with_score(
         self, query: str, k: int = 4, *, file_ids: Sequence[str] = (),
     ) -> list[tuple[EvidenceRef, float]]:
+        embeddings = self._vectorstore.embeddings
+        if isinstance(embeddings, OpenAIEmbeddings):
+            # Pass a per-call option; the session's shared embedding client and
+            # the separate ingestion timeout must retain their configuration.
+            timeout = bounded_request_timeout(EMBEDDING_REQUEST_TIMEOUT_SECONDS, stage="retrieval")
+            query_embedding = embeddings.embed_query(query, timeout=timeout)
+        else:
+            check_request_deadline("retrieval")
+            query_embedding = embeddings.embed_query(query)
+        check_request_deadline("retrieval")
         if not file_ids:
-            rows = self._vectorstore.similarity_search_with_score(query, k=k)
+            rows = self._vectorstore.similarity_search_by_vector_with_relevance_scores(query_embedding, k=k)
         else:
             # Reserve at least one candidate per explicitly requested source.
             budget = max(k, len(file_ids))
-            query_embedding = self._vectorstore.embeddings.embed_query(query)
             groups = [self._vectorstore.similarity_search_by_vector_with_relevance_scores(
                 query_embedding, k=budget, filter={"file_id": file_id}) for file_id in file_ids]
             rows = [group[0] for group in groups if group]

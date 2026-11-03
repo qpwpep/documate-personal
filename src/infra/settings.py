@@ -75,6 +75,7 @@ APP_ENV_SPECS = (
     EnvVarSpec("UPLOAD_SEARCH_MODE", "hybrid", "첨부 검색 모드: baseline, bm25, hybrid (변경 후 서버 재시작)", example_group="search"),
     EnvVarSpec("VALIDATION_TIMEOUT_SECONDS", 20, "사전·사후 검증의 Decisions API 요청별 timeout", example_group="validation"),
     EnvVarSpec("VALIDATION_PASS_THRESHOLD", 0.8, "사전·사후 검증 통과 확률 기준 (0 이상 1 이하)", example_group="validation"),
+    EnvVarSpec("REQUEST_TIMEOUT_SECONDS", 60, "한 질문의 전체 실행 시간 한도; 세션 잠금 대기는 제외", example_group="application_settings"),
     EnvVarSpec("SYNTHESIS_TIMEOUT_SECONDS", 20, "synthesis provider 요청 timeout", example_group="synthesis"),
     EnvVarSpec("SYNTHESIS_USE_RESPONSES_API", False, "synthesis Responses API 사용 여부", example_group="synthesis"),
     EnvVarSpec("SYNTHESIS_MAX_TOKENS", 4096, "일반 synthesis 생성 토큰 상한", example_group="synthesis"),
@@ -493,6 +494,12 @@ class AppSettings(BaseSettings):
         le=1,
         allow_inf_nan=False,
     )
+    request_timeout_seconds: float = Field(
+        default=_app_default("REQUEST_TIMEOUT_SECONDS"),
+        alias="REQUEST_TIMEOUT_SECONDS",
+        gt=0,
+        allow_inf_nan=False,
+    )
     synthesis_timeout_seconds: int = Field(
         default=_app_default("SYNTHESIS_TIMEOUT_SECONDS"),
         alias="SYNTHESIS_TIMEOUT_SECONDS",
@@ -654,6 +661,7 @@ class AppSettings(BaseSettings):
             "validation_model": self.validation_model,
             "validation_timeout_seconds": self.validation_timeout_seconds,
             "validation_pass_threshold": self.validation_pass_threshold,
+            "request_timeout_seconds": self.request_timeout_seconds,
             "planner_max_tokens": self.planner_max_tokens,
             "planner_reasoning_effort": self.planner_reasoning_effort or "model_default",
             "summary_max_tokens": self.summary_max_tokens,

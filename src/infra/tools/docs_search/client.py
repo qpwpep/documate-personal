@@ -5,6 +5,7 @@ from typing import Any, Literal
 import requests
 
 from src.core.contracts.debug import ErrorCode
+from src.infra.llm_boundary import bounded_request_timeout, check_request_deadline
 
 TAVILY_SEARCH_API_URL = "https://api.tavily.com/search"
 
@@ -51,18 +52,22 @@ def request_tavily_search(
     if include_raw_content:
         payload["include_raw_content"] = include_raw_content
 
+    timeout = bounded_request_timeout(timeout_seconds, stage="retrieval")
     try:
         response = requests.post(
             TAVILY_SEARCH_API_URL,
             json=payload,
             headers=headers,
-            timeout=timeout_seconds,
+            timeout=timeout,
         )
     except requests.Timeout as exc:
-        raise TimeoutError(f"Tavily search timed out after {timeout_seconds}s") from exc
+        check_request_deadline("retrieval")
+        raise TimeoutError(f"Tavily search timed out after {timeout}s") from exc
     except requests.RequestException as exc:
+        check_request_deadline("retrieval")
         raise RuntimeError(f"Tavily request failed ({type(exc).__name__})") from exc
 
+    check_request_deadline("retrieval")
     if response.status_code != 200:
         raise TavilySearchError(response.status_code)
 

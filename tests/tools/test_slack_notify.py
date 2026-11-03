@@ -36,6 +36,8 @@ def slack_http_boundary(monkeypatch):
                 "/conversations.open": {"ok": True, "channel": {"id": "DTARGET"}},
                 "/chat.postMessage": {"ok": True, "channel": "DTARGET", "ts": "1.0"},
             }.get(parsed.path, {"ok": False, "error": "unknown_method"}))
+            if callable(response):
+                response = response()
             body = json.dumps(response).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "application/json")

@@ -34,6 +34,9 @@ from src.core.contracts.boundary.debug import get_debug_state
 from src.core.contracts.boundary.runtime import get_runtime_state
 from src.runtime.agent_runtime.llm_usage import record_llm_call
 from src.infra.llm_boundary import (
+    bounded_request_timeout,
+    check_request_deadline,
+    check_role_timeout,
     classify_call_error,
     record_llm_diagnostic,
     request_call_budget,
@@ -165,6 +168,8 @@ def make_summarize_node(
                 else:
                     fallback_reason = "blank_output"
             except Exception as exc:
+                if isinstance(exc, LLMCallError) and exc.problem.code == "request_timeout":
+                    raise
                 fallback_reason = "exception"
                 if verbose:
                     log_event(logger, logging.WARNING, "summary_failed", error=exc)
@@ -251,23 +256,29 @@ def make_summarize_node(
 def _generate_summary(llm: ChatOpenAI, messages: list[BaseMessage]) -> str:
     budget = request_call_budget("summarize")
     while budget.can_attempt:
+        timeout = bounded_request_timeout(budget.remaining_seconds, stage="summarize")
         budget.calls += 1
         try:
             with record_llm_call(
                 stage="summarize", attempt=budget.calls, path="direct",
                 model_name=llm.model_name, endpoint="chat_completions",
             ) as call:
-                response = llm.invoke(messages, timeout=budget.remaining_seconds)
+                with budget.track_active_time():
+                    response = llm.invoke(messages, timeout=timeout)
                 call.complete(response)
+                check_request_deadline("summarize")
+                check_role_timeout(budget, stage="summarize")
             return extract_text_content(response.content)
         except (APIConnectionError, APIStatusError) as exc:
+            check_request_deadline("summarize")
             error = classify_call_error(exc, stage="summarize", llm=llm, attempt=budget.calls)
             delay = error.problem.retry_after_seconds
             if delay is None:
                 delay = min(2 ** (budget.calls - 1) * 0.25, 2.0)
             can_retry = (
                 error.problem.code in {"provider_unavailable", "provider_rate_limited"}
-                and budget.can_attempt and delay < budget.remaining_seconds
+                and budget.can_attempt
+                and delay < bounded_request_timeout(budget.remaining_seconds, stage="summarize")
             )
             diagnostic = error.diagnostic.model_copy(update={
                 "endpoint": "chat_completions", "recovery": "retry" if can_retry else "stop",
@@ -275,5 +286,7 @@ def _generate_summary(llm: ChatOpenAI, messages: list[BaseMessage]) -> str:
             record_llm_diagnostic(diagnostic)
             if not can_retry:
                 raise LLMCallError(error.problem, diagnostic) from exc
-            time.sleep(delay)
+            with budget.track_active_time():
+                time.sleep(delay)
+    check_request_deadline("summarize")
     raise LLMCallError(make_problem("call_budget_exhausted", "summarize"))

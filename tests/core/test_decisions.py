@@ -1,6 +1,8 @@
 """Exercise the Decisions boundary through a real SDK and fake HTTP provider."""
 import json
 import logging
+import time
+from types import SimpleNamespace
 
 import httpx2 as httpx
 import pytest
@@ -9,7 +11,7 @@ from openai import OpenAI
 from src.core.decisions import DecisionResult
 from src.core.llm_errors import LLMCallError
 from src.infra.decisions import DecisionsClient
-from src.infra.llm_boundary import capture_llm_diagnostics, request_call_budget
+from src.infra.llm_boundary import capture_llm_diagnostics, request_call_budget, request_deadline
 from src.runtime.agent_runtime.llm_usage import capture_llm_usage
 
 
@@ -24,6 +26,145 @@ def decision(*, answers=None, **overrides):
         "usage": {"input_tokens": 42, "output_tokens": 0, "total_tokens": 42},
         **overrides,
     })
+
+
+@pytest.fixture
+def budget_clock(monkeypatch):
+    clock = SimpleNamespace(now=0.0, sleeps=[])
+
+    def sleep(seconds):
+        clock.sleeps.append(seconds)
+        clock.now += seconds
+
+    replacement = SimpleNamespace(monotonic=lambda: clock.now, perf_counter=time.perf_counter, sleep=sleep)
+    monkeypatch.setattr("src.infra.llm_boundary.time", replacement)
+    monkeypatch.setattr("src.infra.decisions.time", replacement)
+    return clock
+
+
+def test_validation_reentry_excludes_other_stage_time(budget_clock):
+    timeouts = []
+
+    def handle(request):
+        timeouts.append(request.extensions["timeout"]["read"])
+        budget_clock.now += 7
+        return decision()
+
+    with httpx.Client(transport=httpx.MockTransport(handle)) as http_client:
+        sdk = OpenAI(api_key="test", base_url="https://provider.test/v1", http_client=http_client,
+                     max_retries=0)
+        client = DecisionsClient(sdk, timeout_seconds=20)
+        with capture_llm_diagnostics():
+            first = client.evaluate(input="first evidence", questions=[QUESTION], stage=STAGE)
+            budget_clock.now += 100  # Replanning and retrieval belong to other roles.
+            second = client.evaluate(input="refreshed evidence", questions=[QUESTION], stage=STAGE)
+            budget = request_call_budget(STAGE)
+
+    assert first == second == DecisionResult(probabilities={"ready": 0.9}, refused_names=set())
+    assert timeouts == [20, 20]
+    assert budget.remaining_calls == 4
+    assert budget.remaining_seconds == pytest.approx(76)
+
+
+def test_validation_charges_failed_api_and_backoff_to_the_role(budget_clock):
+    seen = []
+
+    def handle(request):
+        seen.append(request)
+        budget_clock.now += 12 if len(seen) == 1 else 4
+        if len(seen) == 1:
+            return httpx.Response(503, json={"error": {"code": "server_error"}}, headers={"retry-after": "3"})
+        return decision()
+
+    with httpx.Client(transport=httpx.MockTransport(handle)) as http_client:
+        client = DecisionsClient(OpenAI(api_key="test", base_url="https://provider.test/v1",
+                                        http_client=http_client, max_retries=0))
+        with capture_llm_diagnostics():
+            result = client.evaluate(input="evidence", questions=[QUESTION], stage=STAGE)
+            budget = request_call_budget(STAGE)
+
+    assert result == DecisionResult(probabilities={"ready": 0.9}, refused_names=set())
+    assert len(seen) == 2
+    assert budget_clock.sleeps == [3]
+    assert budget.remaining_calls == 4
+    assert budget.remaining_seconds == pytest.approx(71)
+
+
+@pytest.mark.parametrize("role_seconds, request_seconds, expected", [(90, 30, 20), (5, 30, 5), (90, 3, 3)])
+def test_validation_timeout_respects_role_request_and_provider_limits(budget_clock, role_seconds, request_seconds, expected):
+    timeouts = []
+
+    def handle(request):
+        timeouts.append(request.extensions["timeout"]["read"])
+        return decision()
+
+    with httpx.Client(transport=httpx.MockTransport(handle)) as http_client:
+        client = DecisionsClient(OpenAI(api_key="test", base_url="https://provider.test/v1",
+                                        http_client=http_client, max_retries=0))
+        with capture_llm_diagnostics(), request_deadline(request_seconds):
+            request_call_budget(STAGE).timeout_seconds = role_seconds
+            result = client.evaluate(input="evidence", questions=[QUESTION], stage=STAGE)
+
+    assert result == DecisionResult(probabilities={"ready": 0.9}, refused_names=set())
+    assert timeouts == [expected]
+
+
+@pytest.mark.parametrize("outcome", ["expired_before_call", "late_success", "late_timeout"])
+def test_validation_deadline_overrides_provider_outcome_without_losing_usage(budget_clock, outcome):
+    seen = []
+
+    def handle(request):
+        seen.append(request)
+        budget_clock.now += 6
+        if outcome == "late_timeout":
+            raise httpx.ReadTimeout("provider timed out")
+        return decision()
+
+    with httpx.Client(transport=httpx.MockTransport(handle)) as http_client:
+        client = DecisionsClient(OpenAI(api_key="test", base_url="https://provider.test/v1",
+                                        http_client=http_client, max_retries=0))
+        with capture_llm_diagnostics(), capture_llm_usage() as usage, request_deadline(5):
+            request_call_budget(STAGE).timeout_seconds = 5
+            if outcome == "expired_before_call":
+                budget_clock.now += 6
+            with pytest.raises(LLMCallError) as failure:
+                client.evaluate(input="evidence", questions=[QUESTION], stage=STAGE)
+            budget = request_call_budget(STAGE)
+            calls = usage.snapshot()
+
+    assert failure.value.problem.code == "request_timeout"
+    assert failure.value.diagnostic.budget_reason == "request_timeout"
+    assert len(seen) == budget.calls == len(calls) == (0 if outcome == "expired_before_call" else 1)
+    assert budget_clock.sleeps == []
+    if calls:
+        assert calls[0].status == "failed"
+        assert calls[0].usage.total_tokens == (42 if outcome == "late_success" else None)
+
+
+def test_validation_rejects_late_success_after_role_time_expires(budget_clock):
+    seen = []
+
+    def handle(request):
+        seen.append(request)
+        budget_clock.now += 6
+        return decision()
+
+    with httpx.Client(transport=httpx.MockTransport(handle)) as http_client:
+        client = DecisionsClient(OpenAI(api_key="test", base_url="https://provider.test/v1",
+                                        http_client=http_client, max_retries=0))
+        with capture_llm_diagnostics(), capture_llm_usage() as usage, request_deadline(100):
+            budget = request_call_budget(STAGE)
+            budget.timeout_seconds = 5
+            with pytest.raises(LLMCallError) as failure:
+                client.evaluate(input="evidence", questions=[QUESTION], stage=STAGE)
+            calls = usage.snapshot()
+
+    assert failure.value.problem.code == "call_budget_exhausted"
+    assert failure.value.diagnostic.budget_reason == "role_timeout"
+    assert budget.remaining_calls == 5
+    assert len(seen) == len(calls) == 1
+    assert calls[0].status == "failed"
+    assert calls[0].usage.total_tokens == 42
 
 
 @pytest.fixture

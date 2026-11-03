@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+from copy import copy
 from typing import Any, Literal
 
 from slack_sdk.errors import SlackApiError
 from slack_sdk.web import WebClient
 
 from src.core.slack_contract import RecipientSelector, SlackDelivery, SlackFailure, SlackTarget
+from src.infra.llm_boundary import bounded_request_timeout
 
 
 SlackStage = Literal["input", "selection", "lookup", "open_dm", "send"]
@@ -14,6 +16,15 @@ SlackStage = Literal["input", "selection", "lookup", "open_dm", "send"]
 def create_slack_client(token: str | None) -> WebClient | None:
     # A send whose response is lost must not be repeated by a hidden SDK retry.
     return WebClient(token=token, retry_handlers=[]) if token else None
+
+
+def bounded_slack_client(slack_client: WebClient, *, stage: SlackStage) -> WebClient:
+    # The SDK exposes timeout on the client, so isolate this request's limit
+    # from other sessions sharing the tool's configured client.
+    timeout = bounded_request_timeout(slack_client.timeout, stage=f"slack_{stage}")
+    client = copy(slack_client)
+    client.timeout = timeout
+    return client
 
 
 def update_delivery(delivery: SlackDelivery, **updates: Any) -> SlackDelivery:
@@ -154,8 +165,9 @@ def resolve_destination(slack_client: WebClient | None, delivery: SlackDelivery)
     if user_id is None and selector.kind == "user":
         user_id = selector.value
     if user_id is None:
+        request_client = bounded_slack_client(slack_client, stage="lookup")
         try:
-            response = slack_client.users_lookupByEmail(email=selector.value)
+            response = request_client.users_lookupByEmail(email=selector.value)
         except SlackApiError as error:
             return api_failure(delivery, "lookup", error)
         except Exception:
@@ -168,8 +180,9 @@ def resolve_destination(slack_client: WebClient | None, delivery: SlackDelivery)
     # Persist the user even if opening the DM fails. Re-resolving an email on
     # retry could bind a different user if the email's ownership has changed.
     delivery = update_delivery(delivery, resolved_user_id=user_id)
+    request_client = bounded_slack_client(slack_client, stage="open_dm")
     try:
-        response = slack_client.conversations_open(users=user_id)
+        response = request_client.conversations_open(users=user_id)
     except SlackApiError as error:
         return api_failure(delivery, "open_dm", error)
     except Exception:

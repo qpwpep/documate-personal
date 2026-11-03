@@ -7,6 +7,7 @@ from src.core.evidence import SearchHit
 from src.core.contracts.retrieval import RetrievalResult
 from src.core.contracts.debug import DocsSearchRequest, DocsSearchProviderRequest
 from src.core.latency import elapsed_ms
+from src.core.llm_errors import LLMCallError
 from src.core.planner_schema import RetrievalRequirement
 from src.infra.settings import AppSettings
 from src.infra.tools._common import build_retrieval_result
@@ -72,6 +73,8 @@ def build_docs_search_tool(settings: AppSettings) -> Callable[..., RetrievalResu
                 payload = client.request_tavily_search(query=query_text, tavily_api_key=settings.tavily_api_key,
                     include_domains=domains, search_depth="basic", timeout_seconds=settings.docs_search_timeout_seconds,
                     max_results=provider_limit, include_raw_content=include_raw)
+            except LLMCallError:
+                raise
             except Exception as exc:
                 timed_out = isinstance(exc, TimeoutError) or "timed out" in str(exc).lower() or "timeout" in str(exc).lower()
                 error_code = "RETRIEVAL_DOCS_TIMEOUT" if timed_out else "RETRIEVAL_DOCS_FAILED"

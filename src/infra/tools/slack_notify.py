@@ -9,6 +9,7 @@ from slack_sdk.web import WebClient
 from src.core.slack_contract import SlackDelivery, SlackTarget
 from src.infra.slack_utils import (
     api_failure,
+    bounded_slack_client,
     create_slack_client,
     failed_delivery,
     protocol_failure,
@@ -44,8 +45,9 @@ def build_slack_notify_tool(token: str | None) -> Callable[..., SlackDelivery]:
         delivery = resolve_destination(slack_client, delivery)
         if delivery.status != "pending" or delivery.target is None:
             return delivery
+        request_client = bounded_slack_client(slack_client, stage="send")
         try:
-            response = _send_message(slack_client, text=text, target=delivery.target)
+            response = _send_message(request_client, text=text, target=delivery.target)
         except SlackApiError as error:
             return api_failure(delivery, "send", error)
         except Exception:

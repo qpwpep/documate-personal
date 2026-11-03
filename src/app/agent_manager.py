@@ -17,7 +17,7 @@ from src.core.request_contracts import required_contract_turn_ids
 from src.core.contracts import GraphState, SessionMetadata
 from src.core.contracts.outcome import TurnResult
 from src.core.llm_errors import LLMCallError, ExecutionProblem, LLMDiagnostic, make_problem
-from src.infra.llm_boundary import capture_llm_diagnostics
+from src.infra.llm_boundary import capture_llm_diagnostics, check_request_deadline, request_deadline
 from src.core.contracts.debug import DEBUG_SCHEMA_VERSION
 from src.core.contracts.provenance import AnswerProvenance
 from src.core.contracts.routing import validate_route_decisions
@@ -195,7 +195,8 @@ class AgentFlowManager:
         progress_emitter: ProgressEmitter | None = None,
     ) -> dict[str, Any]:
         with (capture_tool_execution(getattr(progress_emitter, "request_id", None)) as recorder,
-              capture_llm_usage() as usage_recorder, capture_llm_diagnostics() as diagnostics):
+              capture_llm_usage() as usage_recorder, capture_llm_diagnostics() as diagnostics,
+              request_deadline(self.settings.request_timeout_seconds)):
             result = self._run_agent_flow(user_input, progress_emitter=progress_emitter)
             evidence = recorder.snapshot()
             debug = result["debug"]
@@ -232,6 +233,7 @@ class AgentFlowManager:
         response: GraphState | None = None
         graph_total_ms: int | None = None
         try:
+            check_request_deadline("request")
             state = self._runner.prepare_graph_state(
                 user_input,
                 progress_emitter=progress_emitter,
@@ -249,6 +251,7 @@ class AgentFlowManager:
                 response=response,
                 debug_info=debug_info,
             )
+            check_request_deadline("response_assembly")
             final_response_state = get_response_state(response)
             if assembled_response["status"] in {"failed", "refused"}:
                 return assembled_response
@@ -275,6 +278,7 @@ class AgentFlowManager:
                 policy=self.settings.conversation_memory_policy(),
                 canonical_assistant_text=canonical_text,
             )
+            check_request_deadline("memory_commit")
             self.session.commit_conversation_memory(
                 messages=durable_memory.messages,
                 memory_summary=durable_memory.memory_summary,
@@ -318,7 +322,7 @@ class AgentFlowManager:
             diagnostic = root_exc.diagnostic if isinstance(root_exc, LLMCallError) else None
             log_event(logger, logging.ERROR, "agent_execution_error", code=problem.code,
                       stage=problem.stage, exception_type=type(root_exc).__name__)
-            return self._error_payload(
+            result = self._error_payload(
                 problem=problem,
                 diagnostic=diagnostic,
                 graph_total_ms=graph_total_ms,
@@ -326,3 +330,30 @@ class AgentFlowManager:
                 stage_error=stage_error,
                 graph_state=response,
             )
+            if problem.code == "request_timeout" and response is not None:
+                self._retain_timed_out_delivery(result, response, problem)
+            return result
+
+    def _retain_timed_out_delivery(
+        self, result: dict[str, Any], state: GraphState, problem: ExecutionProblem,
+    ) -> None:
+        response = get_response_state(state)
+        if not any(receipt.invocation_id and receipt.status != "skipped" for receipt in response.result.actions):
+            return
+        runtime = get_runtime_state(state)
+        # A completed or uncertain external effect must remain visible and must
+        # not become a fresh delivery on a follow-up. This is delivery bookkeeping,
+        # not a successful conversation/answer commit for the timed-out request.
+        self.session.pending_action = (
+            runtime.pending_action.model_copy(deep=True) if runtime.pending_action is not None else None
+        )
+        self.session.answer_export_operations.update(runtime.answer_export_operations)
+        result.update(TurnResult(
+            status="partial", response=response.result, problem=problem, message=problem.message,
+        ).model_dump(mode="json"))
+        result["debug"]["answer_provenance"] = AnswerProvenance(
+            request_id=response.request_id, contract_revision=response.contract_revision,
+            save_operation_binding_sha256=response.save_operation_binding_sha256,
+            body_kind=response.body_kind, response_hash=response.result.content_hash,
+            source=response.evidence_source, evidence_packet=response.evidence_packet,
+        ).model_dump(mode="json") if response.body_kind is not None else None

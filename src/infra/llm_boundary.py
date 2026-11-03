@@ -10,7 +10,7 @@ import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from functools import lru_cache
@@ -34,6 +34,7 @@ logger = logging.getLogger(__name__)
 _diagnostics: ContextVar[list[LLMDiagnostic] | None] = ContextVar("llm_diagnostics", default=None)
 _budgets: ContextVar[dict[str, CallBudget] | None] = ContextVar("llm_call_budgets", default=None)
 _observations: ContextVar[list[StructuredCallObservation] | None] = ContextVar("llm_call_observations", default=None)
+_request_deadline: ContextVar[RequestDeadline | None] = ContextVar("request_deadline", default=None)
 
 
 @dataclass(frozen=True)
@@ -81,16 +82,68 @@ def record_llm_diagnostic(diagnostic: LLMDiagnostic) -> None:
 
 
 @dataclass
+class RequestDeadline:
+    expires_at: float
+
+    @property
+    def remaining_seconds(self) -> float:
+        return max(0.0, self.expires_at - time.monotonic())
+
+
+@contextmanager
+def request_deadline(timeout_seconds: float) -> Iterator[RequestDeadline]:
+    """Bound one request's wall time; nested scopes never extend its deadline."""
+    deadline = RequestDeadline(time.monotonic() + timeout_seconds)
+    existing = _request_deadline.get()
+    if existing is not None and existing.expires_at <= deadline.expires_at:
+        deadline = existing
+    token = _request_deadline.set(deadline)
+    try:
+        yield deadline
+    finally:
+        _request_deadline.reset(token)
+
+
+def remaining_request_seconds() -> float | None:
+    deadline = _request_deadline.get()
+    return deadline.remaining_seconds if deadline is not None else None
+
+
+def check_request_deadline(stage: str) -> None:
+    remaining = remaining_request_seconds()
+    if remaining is not None and remaining <= 0:
+        diagnostic = LLMDiagnostic(code="request_timeout", stage=stage, budget_reason="request_timeout")
+        record_llm_diagnostic(diagnostic)
+        raise LLMCallError(make_problem("request_timeout", stage), diagnostic)
+
+
+def bounded_request_timeout(timeout_seconds: float, *, stage: str) -> float:
+    check_request_deadline(stage)
+    remaining = remaining_request_seconds()
+    return min(timeout_seconds, remaining) if remaining is not None else timeout_seconds
+
+
+@dataclass
 class CallBudget:
+    """A role's shared call count and API/backoff time, excluding other work."""
+
     max_calls: int = 3
     timeout_seconds: float = 45
     calls: int = 0
     repairs: int = 0
-    started: float = field(default_factory=time.monotonic)
+    elapsed_seconds: float = 0
+
+    @contextmanager
+    def track_active_time(self) -> Iterator[None]:
+        started = time.monotonic()
+        try:
+            yield
+        finally:
+            self.elapsed_seconds += time.monotonic() - started
 
     @property
     def remaining_seconds(self) -> float:
-        return max(0.0, self.timeout_seconds - (time.monotonic() - self.started))
+        return max(0.0, self.timeout_seconds - self.elapsed_seconds)
 
     @property
     def remaining_calls(self) -> int:
@@ -99,6 +152,14 @@ class CallBudget:
     @property
     def can_attempt(self) -> bool:
         return self.remaining_calls > 0 and self.remaining_seconds > 0
+
+
+def check_role_timeout(budget: CallBudget, *, stage: str) -> None:
+    if budget.remaining_seconds <= 0:
+        diagnostic = LLMDiagnostic(code="call_budget_exhausted", stage=stage,
+                                   attempt=budget.calls, budget_reason="role_timeout")
+        record_llm_diagnostic(diagnostic)
+        raise LLMCallError(make_problem("call_budget_exhausted", stage), diagnostic)
 
 
 def request_call_budget(stage: str) -> CallBudget:
@@ -385,14 +446,17 @@ def run_structured_call(llm: StructuredModel, messages: list[Any], *, stage: str
     budget = budget or request_call_budget(stage)
     request_messages = list(messages)
     last: LLMCallError | None = None
+    check_request_deadline(stage)
     while budget.can_attempt:
+        timeout_seconds = bounded_request_timeout(budget.remaining_seconds, stage=stage)
         budget.calls += 1
         try:
             with record_llm_call(stage=stage, attempt=max(attempt, budget.calls), path=path,
                                  model_name=llm.model_name, endpoint=llm.endpoint) as call:
                 try:
-                    value = _invoke_observed(llm, request_messages, stage=stage, attempt=max(attempt, budget.calls),
-                                             path=path, timeout_seconds=budget.remaining_seconds)
+                    with budget.track_active_time():
+                        value = _invoke_observed(llm, request_messages, stage=stage, attempt=max(attempt, budget.calls),
+                                                 path=path, timeout_seconds=timeout_seconds)
                 except (LengthFinishReasonError, ContentFilterFinishReasonError) as exc:
                     # SDK parsing can fail before returning the already billed completion.
                     if exc.completion is not None and exc.completion.usage is not None:
@@ -403,12 +467,16 @@ def run_structured_call(llm: StructuredModel, messages: list[Any], *, stage: str
                     raise
                 raw = _raw_message(value)
                 call.complete(raw)
+                check_request_deadline(stage)
+                check_role_timeout(budget, stage=stage)
                 _provider_completion(raw, stage=stage)
                 try:
                     parsed = _parse(value, raw)
                     wire_value = parsed.model_dump(mode="json") if isinstance(parsed, BaseModel) else parsed
                     llm.wire_validator.validate(wire_value)
-                    return validate(parsed)
+                    result = validate(parsed)
+                    check_request_deadline(stage)
+                    return result
                 except (ValueError, WireValidationError) as exc:
                     error = LLMCallError(make_problem("model_output_invalid", stage), LLMDiagnostic(
                         code="model_output_invalid", stage=stage, attempt=budget.calls,
@@ -421,6 +489,9 @@ def run_structured_call(llm: StructuredModel, messages: list[Any], *, stage: str
                         if isinstance(exc, ValidationError) else str(exc))[:2000]
                     raise error from exc
         except Exception as exc:
+            if isinstance(exc, LLMCallError) and exc.problem.code in {"request_timeout", "call_budget_exhausted"}:
+                raise
+            check_request_deadline(stage)
             error = classify_call_error(exc, stage=stage, llm=llm, attempt=budget.calls)
             diagnostic = error.diagnostic.model_copy(update={
                 **_metadata(llm), "attempt": budget.calls,
@@ -433,13 +504,15 @@ def run_structured_call(llm: StructuredModel, messages: list[Any], *, stage: str
             delay = error.problem.retry_after_seconds
             if delay is None:
                 delay = min(2 ** (budget.calls - 1) * 0.25, 2.0) + random.uniform(0, 0.1)
-            can_retry = transient and permitted and budget.can_attempt and delay < budget.remaining_seconds
+            remaining = bounded_request_timeout(budget.remaining_seconds, stage=stage)
+            can_retry = transient and permitted and budget.can_attempt and delay < remaining
             can_repair = code == "model_output_invalid" and repair and budget.repairs < 1 and budget.can_attempt
             diagnostic = diagnostic.model_copy(update={"recovery": "retry" if can_retry else "repair" if can_repair else "stop"})
             record_llm_diagnostic(diagnostic)
             last = LLMCallError(error.problem, diagnostic)
             if can_retry:
-                time.sleep(delay)
+                with budget.track_active_time():
+                    time.sleep(delay)
                 continue
             if can_repair:
                 budget.repairs += 1
@@ -451,9 +524,10 @@ def run_structured_call(llm: StructuredModel, messages: list[Any], *, stage: str
                 ))]
                 continue
             raise last from exc
+    check_request_deadline(stage)
     if last is not None:
         raise last
     diagnostic = LLMDiagnostic(code="call_budget_exhausted", stage=stage, attempt=budget.calls, **_metadata(llm),
-        budget_reason="calls" if budget.calls >= budget.max_calls else "deadline")
+        budget_reason="calls" if budget.calls >= budget.max_calls else "role_timeout")
     record_llm_diagnostic(diagnostic)
     raise LLMCallError(make_problem("call_budget_exhausted", stage), diagnostic)

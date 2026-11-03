@@ -14,7 +14,10 @@ from openai import OpenAI
 from src.core.contracts.usage import normalize_token_usage
 from src.core.decisions import DecisionResult
 from src.core.llm_errors import LLMCallError, LLMDiagnostic, make_problem
-from src.infra.llm_boundary import classify_call_error, record_llm_diagnostic, request_call_budget
+from src.infra.llm_boundary import (
+    bounded_request_timeout, check_request_deadline, check_role_timeout, classify_call_error,
+    record_llm_diagnostic, request_call_budget,
+)
 from src.infra.logging_utils import log_event
 from src.runtime.agent_runtime.llm_usage import record_llm_call
 
@@ -146,12 +149,14 @@ class DecisionsClient:
             batch_names = {question["name"] for question in batch}
             remaining_batches = math.ceil((len(questions) - start - len(batch)) / self.max_questions_per_call)
             while True:
+                check_request_deadline(stage)
                 if not budget.can_attempt or budget.remaining_calls <= reserve_calls:
                     diagnostic = LLMDiagnostic(code="call_budget_exhausted", stage=stage, model=self.model_name,
                         endpoint="decisions", attempt=budget.calls,
-                        budget_reason="calls" if budget.remaining_calls <= reserve_calls else "deadline")
+                        budget_reason="calls" if budget.remaining_calls <= reserve_calls else "role_timeout")
                     record_llm_diagnostic(diagnostic)
                     raise LLMCallError(make_problem("call_budget_exhausted", stage), diagnostic)
+                timeout = bounded_request_timeout(min(self.timeout_seconds, budget.remaining_seconds), stage=stage)
                 budget.calls += 1
                 current_attempt = max(attempt, budget.calls)
                 request_id = None
@@ -160,14 +165,16 @@ class DecisionsClient:
                                          model_name=self.model_name, endpoint="decisions") as call:
                         # Keep the native SDK request and inspect raw bytes before
                         # its permissive parser could hide duplicate JSON keys.
-                        response = self._client.decisions.with_raw_response.create(
-                            model=self.model_name, input=input, questions=batch,
-                            timeout=min(self.timeout_seconds, budget.remaining_seconds))
+                        with budget.track_active_time():
+                            response = self._client.decisions.with_raw_response.create(
+                                model=self.model_name, input=input, questions=batch, timeout=timeout)
                         request_id = _safe_identifier(response.headers.get("x-request-id"))
                         try:
                             payload = _parse_json(response.content)
                             observation = _usage_observation(payload, model=self.model_name, request_id=request_id)
                             call.complete(observation)
+                            check_request_deadline(stage)
+                            check_role_timeout(budget, stage=stage)
                             batch_result = _parse_answers(payload, names=batch_names)
                         except ValueError as exc:
                             raise LLMCallError(make_problem("model_output_invalid", stage), LLMDiagnostic(
@@ -185,16 +192,20 @@ class DecisionsClient:
                     refused_names.update(batch_result.refused_names)
                     break
                 except Exception as exc:
+                    if isinstance(exc, LLMCallError) and exc.problem.code in {"request_timeout", "call_budget_exhausted"}:
+                        raise
+                    check_request_deadline(stage)
                     error = classify_call_error(exc, stage=stage, llm=self, attempt=current_attempt)
                     delay = error.problem.retry_after_seconds
                     if delay is None:
                         delay = min(2 ** (budget.calls - 1) * 0.25, 2.0)
                     # Retrying is useful only if every later batch can still run
                     # without spending the calls reserved for later checks.
+                    remaining = bounded_request_timeout(budget.remaining_seconds, stage=stage)
                     can_retry = (error.problem.code in {"provider_unavailable", "provider_rate_limited"}
                                  and budget.can_attempt
                                  and budget.remaining_calls > reserve_calls + remaining_batches
-                                 and delay < budget.remaining_seconds)
+                                 and delay < remaining)
                     diagnostic = error.diagnostic.model_copy(update={
                         "model": self.model_name, "endpoint": "decisions", "attempt": current_attempt,
                         "provider_request_id": error.diagnostic.provider_request_id or request_id,
@@ -203,7 +214,9 @@ class DecisionsClient:
                     })
                     record_llm_diagnostic(diagnostic)
                     if can_retry:
-                        time.sleep(delay)
+                        with budget.track_active_time():
+                            time.sleep(delay)
                         continue
                     raise LLMCallError(error.problem, diagnostic) from exc
+        check_request_deadline(stage)
         return DecisionResult(probabilities=probabilities, refused_names=refused_names)

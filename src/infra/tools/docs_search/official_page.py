@@ -13,6 +13,7 @@ import requests
 from src.core.documents import DocumentElement, SourceAnchor, build_snapshot
 from src.core.evidence import EvidenceRef, RetrievalScore, SearchHit, build_evidence
 from src.core.planner_schema import RetrievalRequirement
+from src.infra.llm_boundary import bounded_request_timeout, check_request_deadline
 from src.infra.tools.docs_search.policy import (
     is_allowed_doc_url, is_current_stable_doc_url, normalized_domain_set, result_matches_domains,
 )
@@ -140,8 +141,10 @@ def _read_official_resource(
     for _ in range(3):
         if not is_allowed_doc_url(url) or not result_matches_domains(url, allowed_domains):
             raise ValueError("official resource is outside documentation scope")
-        with requests.get(url, timeout=timeout_seconds, stream=True, allow_redirects=False,
+        timeout = bounded_request_timeout(timeout_seconds, stage="retrieval")
+        with requests.get(url, timeout=timeout, stream=True, allow_redirects=False,
                           headers={"Accept": accept, "User-Agent": "DocuMate/0.2"}) as response:
+            check_request_deadline("retrieval")
             if response.is_redirect:
                 target = urljoin(url, response.headers.get("Location", ""))
                 if target == url:
@@ -156,10 +159,12 @@ def _read_official_resource(
             chunks: list[bytes] = []
             size = 0
             for chunk in response.iter_content(chunk_size=65536):
+                check_request_deadline("retrieval")
                 size += len(chunk)
                 if size > _MAX_PAGE_BYTES:
                     raise ValueError("official page exceeds capture limit")
                 chunks.append(chunk)
+            check_request_deadline("retrieval")
             raw = b"".join(chunks)
             encoding = response.encoding if "charset=" in response.headers.get("Content-Type", "").lower() else "utf-8"
             if accept == "text/html":
@@ -288,6 +293,7 @@ def refresh_official_sources(
             requirement, source_candidates, timeout_seconds=timeout_seconds, allowed_domains=domains,
         ))
     except (requests.RequestException, ValueError, zlib.error):
+        check_request_deadline("retrieval")
         warnings.append("official_inventory_unavailable")
     if requirement.version is None and library in {"pandas", "numpy"}:
         # These projects publish named APIs at stable routes. Fetch a new
@@ -334,6 +340,7 @@ def refresh_official_sources(
             evidence = _capture_page(hit.evidence.snapshot.source_uri if hit else url,
                                      timeout_seconds=timeout_seconds, allowed_domains=domains)
         except (requests.RequestException, ValueError):
+            check_request_deadline("retrieval")
             if "official_page_refresh_failed" not in warnings:
                 warnings.append("official_page_refresh_failed")
             continue

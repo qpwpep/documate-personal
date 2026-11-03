@@ -108,7 +108,9 @@ npm --prefix frontend run dev
 
 부분 답변은 실제로 답한 범위의 수량과 별도 전체 본문 수량을 그대로 지켜야 합니다. 비어 있는 개별 범위만 최소 수량 검사를 유예하고, 의미 검증이 검색 근거를 바탕으로 생략 가능 여부를 판단합니다. 로컬 수량·범위 위반은 `sentence_count:<항목 번호>` 또는 `sentence_scope`로 반환하며, 이미 실패가 확정된 초안에는 유료 사후 의미 검증을 호출하지 않습니다. 의미 검증은 수량을 다시 세지 않고 실제 내용이 지정 범위에 속하는지, 확인된 요청 내용을 빠뜨리지 않았는지와 근거성을 판정합니다. 판정용 계약 view에서는 `sentence_counts`를 제외하고, `answer_scope.sentence_scope_bindings`에 실제 표시 단위의 텍스트와 선언한 주제만 전달합니다. 원래 runtime 계약은 유지합니다. 높은 의미 점수도 로컬 위반을 무효화하지 못합니다.
 
-기본 통과 기준은 각 질문의 확률 `0.8` 이상입니다. 질문은 호출당 최대 200개로 나누며, `pre_synthesis_validation`은 최대 6회·90초, `post_synthesis_validation`은 최대 6회·45초의 예산을 사용합니다. 사전 검증의 원문·요구 충족 두 단계와 재검색 후 검증이 같은 단계 예산을 공유합니다. 사후 검증은 본문과 인용 요구의 충분성을 별도 호출로 판정하며, 최초 답변·한 번의 본문 보정·필터링한 답변의 재검사도 같은 6회 예산을 사용합니다. 배치와 일시 오류 재시도는 각 단계의 남은 호출 예산을 소비합니다. 개별 호출 timeout 기본값은 20초이고 남은 단계 예산을 넘기지 않습니다.
+기본 통과 기준은 각 질문의 확률 `0.8` 이상입니다. 질문은 호출당 최대 200개로 나누며, `pre_synthesis_validation`은 최대 6회·90초, `post_synthesis_validation`은 최대 6회·45초의 예산을 사용합니다. 사전 검증의 원문·요구 충족 두 단계와 재검색 후 검증이 같은 역할 예산을 공유합니다. 사후 검증은 본문과 인용 요구의 충분성을 별도 호출로 판정하며, 최초 답변·한 번의 본문 보정·필터링한 답변의 재검사도 같은 6회 예산을 사용합니다. 배치와 일시 오류 재시도는 각 역할의 남은 호출 예산을 소비합니다. 역할별 시간에는 모델 호출과 재시도 대기만 누적하고 검색·다른 역할의 실행·로컬 처리는 포함하지 않습니다. 개별 호출 timeout 기본값은 20초이며 역할과 전체 요청의 남은 시간 중 작은 값을 넘기지 않습니다.
+
+`REQUEST_TIMEOUT_SECONDS`는 세션 잠금을 얻은 뒤 한 질문의 전체 실행을 제한하며 기본값은 60초입니다. 요약·계획·검색·검증·생성·행동 실행을 모두 포함합니다. 경계에서 만료를 확인하면 `request_timeout`으로 종료하고 새로운 호출·행동·대화 기억 커밋을 차단합니다. 이미 완료된 저장·전송 영수증은 보존합니다. 동기 작업을 강제 종료하지 않으므로, SDK가 지정 timeout을 무시하거나 로컬 작업이 오래 걸리면 실패 응답은 설정 시간보다 늦게 도착할 수 있습니다. 역할별 소진은 `call_budget_exhausted`, 전체 요청 만료는 `request_timeout`으로 구분합니다.
 
 `DecisionsClient.evaluate()`는 `DecisionResult(probabilities, refused_names)`를 반환합니다. 응답의 모든 이름은 요청한 질문과 정확히 대응해야 하며, 유효한 개별 refusal은 확률 없이 `refused_names`에 보존합니다. 같은 배치와 이전 배치에서 얻은 정상 확률은 유지합니다. 이름 누락·중복·미지 이름·잘못된 확률·잘못된 JSON은 refusal 이후에 발견되어도 호출 전체의 `model_output_invalid` 오류입니다. API 연결·권한·요청 오류도 전체 호출 실패로 분류하며, 부분 결과를 검증 완료로 반환하지 않습니다. `decisions_completed` 로그에는 단계·모델·질문 수·확률 판정 수·거절 판정 수·요청 ID·토큰 수를 기록하고 원문·refusal 메시지·키는 기록하지 않습니다.
 
@@ -148,6 +150,7 @@ PLANNER_REASONING_EFFORT=high
 | `UPLOAD_SEARCH_MODE` | `hybrid` | 첨부 검색 모드: baseline, bm25, hybrid (변경 후 서버 재시작) |
 | `VALIDATION_TIMEOUT_SECONDS` | `20` | 사전·사후 검증의 Decisions API 요청별 timeout |
 | `VALIDATION_PASS_THRESHOLD` | `0.8` | 사전·사후 검증 통과 확률 기준 (0 이상 1 이하) |
+| `REQUEST_TIMEOUT_SECONDS` | `60` | 한 질문의 전체 실행 시간 한도; 세션 잠금 대기는 제외 |
 | `SYNTHESIS_TIMEOUT_SECONDS` | `20` | synthesis provider 요청 timeout |
 | `SYNTHESIS_USE_RESPONSES_API` | `false` | synthesis Responses API 사용 여부 |
 | `SYNTHESIS_MAX_TOKENS` | `4096` | 일반 synthesis 생성 토큰 상한 |

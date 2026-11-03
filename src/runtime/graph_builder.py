@@ -10,6 +10,7 @@ from src.core.contracts.boundary.response import get_response_state
 from src.core.contracts.boundary.runtime import get_runtime_state
 from src.core.latency import elapsed_ms, make_stage_latency_event
 from src.infra.llm import build_llm_registry
+from src.infra.llm_boundary import check_request_deadline
 from src.infra.settings import AppSettings, get_settings
 from src.infra.tools import build_tool_registry
 from src.runtime.make_graph import build_graph
@@ -100,6 +101,7 @@ def _instrument_stage_node(
                 attempt=attempt,
             )
         try:
+            check_request_deadline(stage)
             updates = node(state)
         except Exception as exc:
             if progress_emitter is not None:

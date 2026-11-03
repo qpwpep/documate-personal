@@ -17,7 +17,7 @@ from src.core.evidence import SearchHit
 ErrorCode = Literal[
     "provider_schema_invalid", "provider_configuration", "provider_unavailable", "provider_rate_limited",
     "model_output_invalid", "model_output_incomplete", "model_refusal", "internal_error", "evidence_insufficient",
-    "call_budget_exhausted", "upload_revision_conflict", "save_failed",
+    "call_budget_exhausted", "request_timeout", "upload_revision_conflict", "save_failed",
     "PLANNER_SCHEMA_INVALID",
     "PLANNER_TIMEOUT",
     "RETRIEVAL_DOCS_TIMEOUT",

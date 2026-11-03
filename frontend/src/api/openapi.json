@@ -219,6 +219,7 @@
                 "internal_error",
                 "evidence_insufficient",
                 "call_budget_exhausted",
+                "request_timeout",
                 "upload_revision_conflict",
                 "save_failed",
                 "PLANNER_SCHEMA_INVALID",
@@ -1481,6 +1482,7 @@
               "evidence_insufficient",
               "upload_revision_conflict",
               "call_budget_exhausted",
+              "request_timeout",
               "save_failed"
             ],
             "title": "Code",
@@ -1733,7 +1735,8 @@
               {
                 "enum": [
                   "calls",
-                  "deadline"
+                  "role_timeout",
+                  "request_timeout"
                 ],
                 "type": "string"
               },
@@ -1757,6 +1760,7 @@
               "evidence_insufficient",
               "upload_revision_conflict",
               "call_budget_exhausted",
+              "request_timeout",
               "save_failed"
             ],
             "title": "Code",
@@ -2472,6 +2476,7 @@
                   "internal_error",
                   "evidence_insufficient",
                   "call_budget_exhausted",
+                  "request_timeout",
                   "upload_revision_conflict",
                   "save_failed",
                   "PLANNER_SCHEMA_INVALID",
@@ -3243,6 +3248,7 @@
                   "internal_error",
                   "evidence_insufficient",
                   "call_budget_exhausted",
+                  "request_timeout",
                   "upload_revision_conflict",
                   "save_failed",
                   "PLANNER_SCHEMA_INVALID",
