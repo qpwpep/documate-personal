@@ -9,7 +9,7 @@ from src.core.answer_schema import (
     AnswerDocument, AnswerResponse, SemanticCheck, SemanticValidation, iter_content_units,
     semantic_evidence_fingerprint,
 )
-from src.core.answer_export import answer_export_snapshot, exact_copy_ready, input_copy_snapshot
+from src.core.answer_export import exact_copy_ready, input_copy_snapshot
 from src.core.decisions import DecisionResult
 from src.core.evidence import EvidenceRef, selected_source_anchors
 from src.core.evidence_prompt import source_line_prompt_records, table_cell_prompt_records
@@ -419,19 +419,19 @@ def assess_post_semantics(
         return
     _require_bound_source(snapshot, stage="post_synthesis_validation")
     input_copy = snapshot.request_contract is not None and snapshot.request_contract.body.kind == "copy_input"
-    if input_copy and answer_export_snapshot(result).model_dump(exclude={"semantic_validation"}) != (
-        input_copy_snapshot(snapshot.request_contract).model_dump(exclude={"semantic_validation"})
+    source = input_copy_snapshot(snapshot.request_contract.body.source) if input_copy else snapshot.source_response
+    if input_copy and result.model_dump(exclude={"actions", "semantic_validation"}) != (
+        source.model_dump(exclude={"actions", "semantic_validation"})
     ):
         # A self-consistent answer hash or a high model score cannot certify
         # copying a different body, changing its basis, or adding citations.
         raise LLMCallError(make_problem("model_output_invalid", "post_synthesis_validation"))
-    if not snapshot.retrieval_required and exact_copy_ready(snapshot.request_contract, snapshot.source_response):
+    if not snapshot.retrieval_required and exact_copy_ready(snapshot.request_contract, source):
         if input_copy:
             # This proves fidelity, not the factual truth of the quoted text.
             # Do not manufacture a semantic probability for a local comparison.
             return
-        source = answer_export_snapshot(snapshot.source_response)
-        if answer_export_snapshot(result) != source:
+        if result.model_dump(exclude={"actions"}) != source.model_dump(exclude={"actions"}):
             raise LLMCallError(make_problem("model_output_invalid", "post_synthesis_validation"))
         # Retain the original semantic report, including limits on a previously
         # displayed partial answer. This check certifies copying, not new claims.

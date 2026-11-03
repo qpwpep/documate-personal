@@ -334,11 +334,12 @@ def _assess_pre_semantics(
     excerpt_limits: ExcerptLimits,
 ) -> PreparedEvidence:
     _require_bound_source(snapshot, stage="pre_synthesis_validation")
-    if not snapshot.retrieval_required and exact_copy_ready(snapshot.request_contract, snapshot.source_response):
+    contract = snapshot.request_contract
+    input_copy = contract is not None and contract.body.kind == "copy_input"
+    source = input_copy_snapshot(contract.body.source) if input_copy else snapshot.source_response
+    if not snapshot.retrieval_required and exact_copy_ready(contract, source):
         # The body already exists. Check its exact revision instead of asking a
         # model whether this export needs a newly generated answer.
-        input_copy = snapshot.request_contract.body.kind == "copy_input"
-        source = input_copy_snapshot(snapshot.request_contract) if input_copy else snapshot.source_response
         packet = [citation.evidence for citation in source.citations]
         prepared = PreparedEvidencePacket(evidence=packet,
             fingerprint=prepared_packet_fingerprint(packet, {}))
@@ -470,7 +471,6 @@ def _assess_pre_semantics(
         assessment.cache_observations.append({"phase": "compact", "usable": False,
             "failed_requirement_ids": compact.failed_requirement_ids,
             "readiness_probability": decisions.probabilities.get("compact_request_ready")})
-    contract = snapshot.request_contract
     prepared = PreparedEvidence(
         request_id=contract.request_id, contract_revision=contract.revision,
         plan_fingerprint=evidence_plan_fingerprint(snapshot.planner_output),

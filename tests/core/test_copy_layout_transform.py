@@ -5,7 +5,7 @@ import pytest
 from langchain_core.messages import HumanMessage
 
 from src.core.answer_schema import AnswerDocument, CodeBlock, ContentUnit, finalize_answer, text_document
-from src.core.answer_export import exact_copy_ready
+from src.core.answer_export import exact_copy_ready, input_copy_snapshot
 from src.core.contracts.boundary.graph import build_graph_state_input
 from src.core.documents import DocumentElement, build_snapshot
 from src.core.evidence import build_evidence
@@ -170,7 +170,9 @@ def test_pure_copy_and_soft_layout_preferences_preserve_the_exact_copy_path(prev
     previous = finalize_answer(text_document(text), []) if previous_answer else None
     state = _plan_copy(text, formats=formats, previous=previous)
 
-    assert exact_copy_ready(state["runtime"].request_contract, previous)
+    contract = state["runtime"].request_contract
+    source = previous if previous_answer else input_copy_snapshot(contract.body.source)
+    assert exact_copy_ready(contract, source)
     prepare_synthesis_state(state)
     updates = make_synthesize_node(_document_model())(state)
 

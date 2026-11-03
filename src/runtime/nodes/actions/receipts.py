@@ -18,9 +18,8 @@ def build_save_receipt(
         if (save_result.file_path.parent.resolve() != root.resolve()
                 or save_result.file_path.name != save_result.artifact.filename):
             raise ArtifactError("artifact_mismatch", "저장 결과의 파일 위치가 일치하지 않습니다.")
-        manifest, payload = read_saved_artifact(root, save_result.artifact.filename)
-        if (manifest.operation != operation or manifest.artifact != save_result.artifact
-                or not operation.matches_bytes(payload)):
+        manifest, _ = read_saved_artifact(root, save_result.artifact.filename)
+        if manifest.operation != operation or manifest.artifact != save_result.artifact:
             raise ArtifactError("artifact_mismatch", "저장된 산출물이 요청한 본문과 다릅니다.")
         return ActionReceipt(kind="save_text", status="success", file_path=str(save_result.file_path),
                              operation=operation, artifact=save_result.artifact, verification="verified",

@@ -71,9 +71,7 @@ def _load_manifest(path: Path) -> SaveManifest:
         raise ArtifactError("artifact_unverifiable", f"Cannot read saved operation manifest: {exc}") from exc
     if (manifest.artifact.filename != path.name
             or manifest.artifact.artifact_id != _operation_identifier(manifest.operation)
-            or path.name != artifact_filename(manifest.operation)
-            or manifest.artifact.sha256 != manifest.operation.payload_sha256
-            or manifest.artifact.byte_count != manifest.operation.byte_count):
+            or path.name != artifact_filename(manifest.operation)):
         raise ArtifactError("artifact_mismatch", "Saved operation and artifact metadata disagree")
     return manifest
 

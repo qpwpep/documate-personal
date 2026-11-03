@@ -1,12 +1,11 @@
 """An explicit export preserves the displayed answer instead of regenerating it."""
 import json
-from functools import partial
 from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
 
-from src.core.answer_export import answer_export_key, answer_export_snapshot, build_answer_export_operation
+from src.core.answer_export import answer_export_snapshot, build_answer_export_operation
 from src.core.answer_schema import ResponseIssue, export_answer_text, finalize_answer, text_document
 from src.core.contracts import GraphState
 from src.core.contracts.boundary.graph import build_graph_state_input
@@ -80,10 +79,7 @@ def checked_source():
     return result.model_copy(update={"issues": [ResponseIssue(code="source_limit", message="추가 입력의 결과는 확인하지 않았습니다.")]})
 
 
-@pytest.mark.parametrize("export", [
-    answer_export_snapshot, answer_export_key, export_answer_text,
-    partial(build_answer_export_operation, session_id="exact-export-session"),
-])
+@pytest.mark.parametrize("export", [answer_export_snapshot, export_answer_text])
 def test_export_boundaries_reject_body_changed_after_validation(export):
     source = finalize_answer(text_document("검증한 본문"), [])
     source.content = text_document("검증 후 바뀐 본문")

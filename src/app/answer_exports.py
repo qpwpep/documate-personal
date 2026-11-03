@@ -7,7 +7,8 @@ from fastapi import HTTPException
 
 from src.app.web.session_store import InMemorySessionStore, SessionUnavailable
 from src.core.answer_export import answer_export_key, build_answer_export_operation
-from src.core.answer_schema import AnswerResponse, export_answer_text
+from src.core.answer_schema import AnswerResponse
+from src.core.answer_schema.rendering import render_answer_text
 from src.core.contracts.outcome import AnswerExportResult
 from src.infra.logging_utils import log_event
 from src.infra.saved_artifacts import ArtifactError
@@ -47,7 +48,7 @@ class AnswerExportService:
         self, session_id: str, answer_id: str, snapshot: AnswerResponse, *,
         session: SessionContext, request_id: str,
     ) -> AnswerExportResult:
-        body = export_answer_text(snapshot, include_sources=True)
+        body = render_answer_text(snapshot, include_sources=True)
         key = answer_export_key(snapshot)
         pending = session.pending_action
         matching_pending = bool(
