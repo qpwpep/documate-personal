@@ -10,7 +10,7 @@ FailureCode = Literal[
     "provider_schema_invalid", "provider_configuration", "provider_unavailable",
     "provider_rate_limited", "model_output_invalid", "model_output_incomplete",
     "model_refusal", "internal_error", "evidence_insufficient", "upload_revision_conflict",
-    "call_budget_exhausted", "request_timeout", "save_failed",
+    "call_budget_exhausted", "request_timeout", "answer_validation_failed", "save_failed",
 ]
 NextAction = Literal["none", "retry_later", "fix_configuration", "supply_information"]
 
@@ -34,6 +34,7 @@ _PUBLIC_MESSAGES: dict[str, tuple[str, NextAction]] = {
     "model_refusal": ("AI 서비스가 이 요청에 대한 답변 생성을 거절했습니다.", "none"),
     "call_budget_exhausted": ("AI 처리 단계의 시간 또는 호출 한도에 도달했습니다. 처리 결과를 확인한 뒤 같은 요청으로 다시 시도할 수 있습니다.", "retry_later"),
     "request_timeout": ("요청 전체의 처리 시간 한도에 도달했습니다. 표시된 답변과 저장·전송 결과를 확인한 뒤 다시 요청해 주세요.", "retry_later"),
+    "answer_validation_failed": ("확인한 근거로 만든 답변이 요청한 내용·조건을 충족하는지 검증하지 못했습니다. 같은 요청으로 다시 시도할 수 있습니다.", "retry_later"),
     "internal_error": ("서비스 내부 오류로 처리를 완료하지 못했습니다. 질문을 수정할 필요는 없습니다.", "none"),
     "evidence_insufficient": ("요청한 답변을 뒷받침할 근거를 충분히 확인하지 못했습니다.", "supply_information"),
     "upload_revision_conflict": ("첨부 목록이 변경되었습니다. 현재 첨부 목록을 확인한 뒤 다시 요청해 주세요.", "none"),

@@ -88,6 +88,26 @@ describe('browser API contract', () => {
     });
   });
 
+  it.each(['request_timeout', 'answer_validation_failed'])('preserves the server %s problem and request ID without resubmitting', async (code) => {
+    const result = {
+      ...fixtures.responses.failed,
+      message: `서버가 보낸 실행 결과: ${code}`,
+      problem: { ...fixtures.responses.failed.problem, code, message: `서버가 확인한 실패 사유: ${code}` },
+      request_id: `server-request-${code}`,
+    };
+    respond = (_request, response) => {
+      response.writeHead(200, { 'Content-Type': 'text/event-stream' });
+      response.end(frame('final_response', result));
+    };
+    const client = new AgentSessionClient({ sessionId: 'session-1', baseUrl });
+
+    expect(await collect(client.stream('서버 결과를 확인해 줘'))).toEqual([
+      { event: 'final_response', data: result },
+    ]);
+    expect(requests.filter(({ method }) => method === 'POST')).toHaveLength(1);
+    expect(client.manifest).toBeNull();
+  });
+
   it.each([
     ['status', ['status']],
     ['message', ['message']],

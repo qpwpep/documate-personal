@@ -32,6 +32,7 @@ from src.app.web.app import create_app
 from src.core.answer_schema import AnswerDocument
 from src.core.planner_schema import InitialPlannerOutput
 from src.core.request_contracts import WireRequestContract
+from src.infra import llm_boundary
 from src.infra.runtime_paths import get_upload_session_dir
 from src.infra.settings import AppSettings
 from src.infra.slack_utils import create_slack_client
@@ -111,6 +112,12 @@ def run(port: int) -> None:
             context = json.loads(str(raw).split("\n", 1)[1])
             current_turn = context["user_turn_ledger"][-1]
             query = current_turn["text"]
+            if "전체 시간 소진 검증" in query:
+                # Expire only this request while the fake provider is handling it.
+                # The real post-call deadline check owns the resulting failure.
+                deadline = llm_boundary._request_deadline.get()
+                assert deadline is not None
+                deadline.expires_at = time.monotonic() - 1
             if query in held_queries and not held_queries[query].wait(20):
                 raise AssertionError("The browser did not release its held question")
             if "대기 검증" in message_text and not release.wait(20):
@@ -143,10 +150,16 @@ def run(port: int) -> None:
                                   "interpretation": "instruction"}],
                 })
             files = context["upload_files"]
+            tasks = [{"route": "upload", "query": "alpha beta value", "k": 4,
+                      "requirement": {"file_ids": [item["file_id"] for item in files]}}] if files else []
+            if "근거 부족 구분 검증" in query:
+                tasks = [{"route": "upload", "requirement_id": symbol, "query": symbol, "k": 4,
+                          "requirement": {"symbols": [symbol], "match": "symbol",
+                                          "file_ids": [item["file_id"] for item in files]}}
+                         for symbol in ("alpha", "beta")]
             content = InitialPlannerOutput.model_validate({
-                "use_retrieval": bool(files),
-                "tasks": [{"route": "upload", "query": "alpha beta value", "k": 4,
-                           "requirement": {"file_ids": [item["file_id"] for item in files]}}] if files else [],
+                "use_retrieval": bool(tasks),
+                "tasks": tasks,
                 "request_contract": contract.model_dump(mode="json"),
             }).model_dump_json()
         elif schema == "AnswerDocument":
@@ -181,7 +194,10 @@ def run(port: int) -> None:
         probability = 0.91 if "한글 답변 유지" in payload["input"] else 0.99
         return httpx.Response(200, json={
             "model": payload["model"],
-            "answers": [{"type": "predicate", "name": item["name"], "probability": probability}
+            "answers": [{"type": "predicate", "name": item["name"], "probability": (
+                0.1 if "답변 조건 실패 검증" in payload["input"] and item["name"] == "request_fulfilled"
+                else probability
+            )}
                         for item in payload["questions"]],
             "usage": {"input_tokens": 32, "output_tokens": 0, "total_tokens": 32},
         })

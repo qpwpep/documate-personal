@@ -302,6 +302,7 @@ describe('AnswerView', () => {
     render(<AnswerView response={partialResponse} turn={turn} />);
 
     const summary = screen.getByRole('region', { name: '부분 답변' });
+    expect(within(summary).getByText('근거를 충분히 확인하지 못했습니다.')).toBeVisible();
     expect(within(summary).getByText('요청한 설명 대신 확인 가능한 원문 발췌만 제공합니다.')).toBeVisible();
     expect(within(summary).getByText(/질문을 항목별로 나누어/)).toBeVisible();
     expect(within(summary).queryByText(/자료를 추가/)).not.toBeInTheDocument();

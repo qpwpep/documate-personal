@@ -103,7 +103,6 @@ export function AnswerView({ response, turn, actions, requestId }: {
       {(globalIssues.length > 0 || partialProblem) && (
         <details className="answer-limit-details">
           <summary>답변의 한계와 처리 정보</summary>
-          {partialProblem && <p>{partialProblem.message}</p>}
           {globalIssues.map((issue, index) => <p key={index}>{issue.message}</p>)}
           {partialProblem && turn?.request_id && <p className="answer-caption">오류 식별자: {turn.request_id}</p>}
         </details>
@@ -239,7 +238,6 @@ function PartialNotice({ response, problem }: { response: AnswerResponse; proble
   const codes = new Set(globalIssues.map((issue) => issue.code));
   const provided = globalIssues.find((issue) => issue.code === 'source_excerpt_fallback')?.message ?? '현재 제공할 수 있는 본문을 아래에 표시합니다.';
   const reasons = [...new Set(globalIssues.filter((issue) => !['answer_incomplete', 'source_excerpt_fallback'].includes(issue.code)).map((issue) => issue.message))];
-  if (!reasons.length) reasons.push(problem.message);
   let guidance = problemGuidance(problem);
   if (problem.next_action === 'supply_information') {
     if (codes.has('evidence_packet_incomplete') && !codes.has('retrieved_evidence_incomplete')) {
@@ -254,8 +252,9 @@ function PartialNotice({ response, problem }: { response: AnswerResponse; proble
   }
   return <section className="answer-partial-notice" aria-label="부분 답변">
     <p><strong>부분 답변</strong> · 요청 전체를 완성하지 못했습니다.</p>
+    <p>{problem.message}</p>
     <p><strong>제공한 범위</strong></p><p>{provided}</p>
-    <p><strong>확인하지 못한 내용</strong></p><ul>{reasons.slice(0, 2).map((reason) => <li key={reason}>{reason}</li>)}</ul>
+    {reasons.length > 0 && <><p><strong>확인하지 못한 내용</strong></p><ul>{reasons.slice(0, 2).map((reason) => <li key={reason}>{reason}</li>)}</ul></>}
     {reasons.length > 2 && <p>나머지 {reasons.length - 2}개 한계는 ‘답변의 한계와 처리 정보’에서 확인하세요.</p>}
     {codes.has('invalid_content_removed') && <p>제외된 항목의 상세 기록은 없습니다.</p>}
     {guidance && <><p><strong>다음 행동</strong></p><p>{guidance}</p></>}

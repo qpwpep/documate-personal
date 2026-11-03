@@ -18,6 +18,7 @@
 | `model_output_incomplete` | 출력 토큰 한도 등으로 생성이 미완료 | `retry_later`. 잘린 JSON을 정상 문서로 복구하거나 보충 질문으로 바꾸지 않습니다. |
 | `call_budget_exhausted` | 역할별 호출 횟수 또는 모델 호출·재시도 대기 시간 예산이 소진됨 | `retry_later`. 추가 모델 호출 없이 종료합니다. 진단의 `budget_reason`은 `calls` 또는 `role_timeout`입니다. |
 | `request_timeout` | `REQUEST_TIMEOUT_SECONDS`로 정한 전체 질문 실행 시간이 소진됨 | `retry_later`. 다음 단계·호출·대화 기억 커밋을 차단합니다. 이미 완료된 저장·전송 결과는 보존하므로 화면의 결과를 확인한 뒤 수동으로 다시 요청합니다. |
+| `answer_validation_failed` | 생성한 본문이 의미 검증 또는 필수·금지 내용·형식 조건을 끝내 충족하지 못함 | `retry_later`. 검증에 실패한 답변을 완료로 승인하거나 저장·전송하지 않습니다. 선행 검색 부족과 최종 본문 검증 실패를 구분합니다. |
 | `model_refusal` | 호출 전체에 대한 명시적 refusal·content filter, 또는 근거 부족 동반 여부와 관계없이 `request_ready`가 명시적으로 거절됨 | `none`. `refused`로 표시하고 재검색·재생성하지 않습니다. Decisions의 이름별 원문·요구·사후 판정 refusal은 아래 개별 판정 정책을 적용하며 곧바로 전체 `model_refusal`로 바꾸지 않습니다. |
 | `internal_error` | 분류되지 않은 내부 실행 오류 | `none`. 예외 원문 대신 안전한 안내와 request ID를 전달하며 운영자가 진단을 확인합니다. |
 | `evidence_insufficient` | 검색·근거 검증 후 답변에 필요한 근거를 확보하지 못함 | `supply_information`. 기술적 검색 실패와 실제 사용자 정보 누락을 구분합니다. |

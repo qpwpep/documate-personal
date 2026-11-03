@@ -148,6 +148,53 @@ describe('질문 화면과 실제 HTTP 클라이언트', () => {
     expect(within(screen.getByRole('region', { name: '부분 답변' })).getByText('두 번째 자료는 확인하지 못했습니다.')).toBeVisible();
   });
 
+  it.each(['request_timeout', 'answer_validation_failed'])('%s의 서버 안내와 요청 ID를 보존하고 질문을 자동 재전송하지 않는다', async (code) => {
+    holdResponse = true;
+    const result = {
+      ...fixtures.responses.failed,
+      message: `서버 실행 결과 안내: ${code}`,
+      problem: { ...fixtures.responses.failed.problem, code, message: `서버가 확인한 원인 안내: ${code}` },
+      request_id: `server-request-${code}`,
+    };
+    const user = userEvent.setup();
+    render(<App apiBaseUrl={apiBaseUrl} />);
+    await user.type(screen.getByRole('textbox', { name: '질문' }), '실패 원인을 확인해 줘');
+    await waitFor(() => expect(screen.getByRole('button', { name: '질문 보내기' })).toBeEnabled());
+    await user.click(screen.getByRole('button', { name: '질문 보내기' }));
+    await waitFor(() => expect(pendingResponse).not.toBeNull());
+    pendingResponse!.end(`event: final_response\ndata: ${JSON.stringify(result)}\n\n`);
+
+    expect(await screen.findByText(result.message)).toBeVisible();
+    expect(screen.getByText(result.problem.message)).toBeVisible();
+    await user.click(screen.getByText('요청 정보', { exact: true }));
+    expect(screen.getByText(`요청 ID: ${result.request_id}`)).toBeVisible();
+    expect(requests).toHaveLength(1);
+    expect(JSON.parse(requests[0]).query).toBe('실패 원인을 확인해 줘');
+  });
+
+  it('근거 부족 부분 답변의 서버 원인을 펼치지 않아도 보여 주고 요청 ID와 본문을 보존한다', async () => {
+    holdResponse = true;
+    const result = {
+      ...fixtures.responses.partial,
+      message: '서버가 확보한 범위의 답변입니다.',
+      problem: { ...fixtures.responses.partial.problem, message: '서버는 비교 대상의 두 번째 근거를 확보하지 못했습니다.' },
+      request_id: 'server-request-evidence-insufficient',
+    };
+    const user = userEvent.setup();
+    render(<App apiBaseUrl={apiBaseUrl} />);
+    await user.type(screen.getByRole('textbox', { name: '질문' }), '두 자료를 비교해 줘');
+    await waitFor(() => expect(screen.getByRole('button', { name: '질문 보내기' })).toBeEnabled());
+    await user.click(screen.getByRole('button', { name: '질문 보내기' }));
+    await waitFor(() => expect(pendingResponse).not.toBeNull());
+    pendingResponse!.end(`event: final_response\ndata: ${JSON.stringify(result)}\n\n`);
+
+    expect(await screen.findByText('확인한 첫 번째 자료의 답변 🧪')).toBeVisible();
+    expect(within(screen.getByRole('region', { name: '부분 답변' })).getByText(result.problem.message)).toBeVisible();
+    await user.click(screen.getByText('답변 정보', { exact: true }));
+    expect(screen.getByText(`요청 ID: ${result.request_id}`)).toBeVisible();
+    expect(requests).toHaveLength(1);
+  });
+
   it('수신 중단 시 질문을 재전송하지 않고 제출한 원문을 남긴다', async () => {
     holdResponse = true;
     const user = userEvent.setup();

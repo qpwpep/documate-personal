@@ -153,7 +153,7 @@ def test_sentence_condition_failure_after_repair_does_not_publish_or_save_the_so
     result = _run_request(tmp_path, monkeypatch, repaired=False)[-1]
 
     assert result["response"].kind == "failure"
-    assert result["response"].problem.code == "model_output_invalid"
+    assert result["response"].problem.code == "answer_validation_failed"
     assert result["response"].synthesis_attempt == 2
     assert result["retry"].content_repair_attempt == 1
     assert not result["retry"].needs_retry

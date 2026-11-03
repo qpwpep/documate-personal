@@ -143,6 +143,18 @@ def apply_validation_outcome(
             **stamp,
         )
 
+    # A retrieval gap does not explain why the available answer was discarded.
+    validation_problem = None
+    if result is None or not result.content.blocks or any(
+        check.reference_status == "missing" or check.support_status == "unsupported"
+        for check in result.checks
+    ):
+        validation_problem = make_problem("model_output_invalid", "validation")
+    elif ((result.semantic_validation is not None and not result.semantic_validation.passed)
+          or any(missing != "available_evidence" for missing in assessment.missing_content)
+          or assessment.forbidden_content):
+        validation_problem = make_problem("answer_validation_failed", "validation")
+
     retained_issues = [
         issue for issue in (snapshot.response_result.issues if snapshot.response_result else [])
         if issue.unit_id is None
@@ -173,6 +185,7 @@ def apply_validation_outcome(
                     message="원본의 줄 위치를 정확히 확인하지 못한 내용을 제외했습니다. 출처에서 원문 위치를 확인해 주세요.",
                 )],
             )
+            result = add_retrieval_gap_issues(snapshot, result)
             return build_response_updates(
                 result, attempt=attempt, evidence_packet=packet,
                 evidence_requirement_map=snapshot.evidence_requirement_map, kind="failure",
@@ -227,8 +240,10 @@ def apply_validation_outcome(
         requirement_map = {item.id: snapshot.evidence_requirement_map.get(item.id, []) for item in packet}
         return build_response_updates(result, attempt=attempt, evidence_packet=packet,
                                       evidence_requirement_map=requirement_map, kind="failure",
-                                      problem=(retrieval_problem or make_problem("evidence_insufficient", "retrieval")) if retrieved_missing else
-                                              make_problem("model_output_invalid", "validation"),
+                                      problem=validation_problem or (
+                                          retrieval_problem or make_problem("evidence_insufficient", "retrieval")
+                                          if retrieved_missing else make_problem("model_output_invalid", "validation")
+                                      ),
                                       normal_evidence_missing_requirement_ids=snapshot.normal_evidence_missing_requirement_ids,
                                       **stamp)
 
@@ -236,5 +251,6 @@ def apply_validation_outcome(
         ("요청의 필수·금지 조건을 충족하는 답변을 완성하지 못했습니다. 다시 요청해 주세요."
          if assessment.missing_content or assessment.forbidden_content else
          build_followup_from_routes(snapshot.planner_output, assessment.retry_reason or "missing_content")),
-        attempt=attempt, kind="failure", problem=make_problem("model_output_invalid", "validation"), **stamp,
+        attempt=attempt, kind="failure",
+        problem=validation_problem or make_problem("model_output_invalid", "validation"), **stamp,
     )
