@@ -108,13 +108,9 @@ describe('browser API contract', () => {
     expect(client.manifest).toBeNull();
   });
 
-  it.each([
-    ['status', ['status']],
-    ['message', ['message']],
-    ['actions', ['response', 'actions']],
-    ['content blocks', ['response', 'content', 'blocks']],
-    ['content references', ['response', 'content', 'blocks', '0', 'content', '0', 'refs']],
-  ])('rejects a missing serialized %s field instead of filling a default', async (_name, path) => {
+  it.each(
+    fixtures.missing_response_fields.map((path) => ({ name: path.join('.'), path })),
+  )('rejects a missing serialized $name field instead of filling a default', async ({ path }) => {
     const result = structuredClone(fixtures.responses.completed);
     let container: Record<string, unknown> = result;
     for (const key of path.slice(0, -1)) container = container[key] as Record<string, unknown>;
@@ -127,6 +123,19 @@ describe('browser API contract', () => {
 
     await expect(collect(client.stream('질문'))).rejects.toMatchObject({ code: 'invalid_stream' });
     expect(client.manifest).toBeNull();
+    expect(requests.filter(({ method }) => method === 'POST')).toHaveLength(1);
+  });
+
+  it.each(fixtures.invalid_events)('rejects the shared invalid $event event before accepting a later answer', async ({ event, data }) => {
+    respond = (_request, response) => {
+      response.writeHead(200, { 'Content-Type': 'text/event-stream', 'X-Request-ID': 'invalid-event' });
+      response.end(frame(event, data) + frame('final_response', fixtures.responses.completed));
+    };
+    const client = new AgentSessionClient({ sessionId: 'session-1', baseUrl });
+
+    await expect(collect(client.stream('질문'))).rejects.toMatchObject({ code: 'invalid_stream', requestId: 'invalid-event' });
+    expect(client.manifest).toBeNull();
+    expect(requests.filter(({ method }) => method === 'POST')).toHaveLength(1);
   });
 
   it('preserves sentence scope metadata with the exact answer text', async () => {

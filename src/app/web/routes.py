@@ -14,8 +14,9 @@ from src.infra.runtime_paths import get_save_text_output_dir, get_upload_session
 from src.infra.saved_artifacts import ArtifactError, read_saved_artifact
 from src.app.web.cleanup import resolve_download_path
 from src.app.web.upload_body_limit import BoundedUploadRoute
+from src.app.transport_contracts import AGENT_STREAM_EVENT_SCHEMAS, AgentStreamEvent
 from src.app.web.schemas import (
-    AGENT_STREAM_EVENT_SCHEMAS, AgentRequest, AgentStreamEvent,
+    AgentRequest,
     BrowserUploadSyncRequest, ClientConfig, ClientQueryConfig, ClientUploadConfig, StagedUpload,
 )
 from src.core.contracts.outcome import AnswerExportResult

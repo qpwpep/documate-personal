@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import io
 import json
+from copy import deepcopy
 from collections.abc import Callable
 from pathlib import Path
 
@@ -12,12 +13,13 @@ from jsonschema import Draft202012Validator
 
 from src.app.client import AgentRequestContext, AgentSessionClient
 from src.app.web.app import create_app
-from src.app.web.schemas import AgentResponse
+from src.app.transport_contracts import AgentResponse, agent_response_json_schema
 from src.core.uploads import UploadManifest
 
 
 CONTRACT_PATH = Path(__file__).resolve().parents[1] / "fixtures" / "web_contracts" / "agent_responses.json"
 STATUSES = ("completed", "partial", "needs_input", "failed", "refused")
+STREAM_CONTRACT = json.loads(CONTRACT_PATH.read_text(encoding="utf-8"))
 
 
 @pytest.mark.parametrize("field", ["status", "message", "missing_slots", "debug"])
@@ -41,6 +43,13 @@ def test_output_defaults_do_not_change_optional_request_fields() -> None:
     assert "add" not in schemas["BrowserUploadSyncRequest"]["required"]
     assert {"selector", "failure"} <= set(schemas["SlackDefault"]["required"])
     assert {"actions", "content_hash", "semantic_validation"} <= set(schemas["AnswerResponse"]["required"])
+
+
+def test_python_transport_schema_matches_generated_openapi_response_schemas() -> None:
+    schemas = create_app().openapi()["components"]["schemas"]
+    transport_schemas = agent_response_json_schema()["components"]["schemas"]
+
+    assert all(schema == schemas[name] for name, schema in transport_schemas.items())
 
 
 @pytest.fixture
@@ -145,6 +154,114 @@ def test_python_client_keeps_server_error_before_a_valid_final_response(
     assert events[-1].result.status == "completed"
     assert events[-1].data == responses["completed"]
     assert client.manifest == UploadManifest(epoch="contract-epoch", revision=2, files=[])
+
+
+@pytest.mark.parametrize("path", STREAM_CONTRACT["missing_response_fields"])
+def test_python_client_rejects_missing_serialized_response_fields(
+    responses: dict[str, dict[str, object]], path: list[str | int],
+    http_response: Callable[[bytes], list[requests.PreparedRequest]],
+) -> None:
+    payload = deepcopy(responses["completed"])
+    container = payload
+    for key in path[:-1]:
+        container = container[key]
+    del container[path[-1]]
+    sent = http_response(
+        f"event: final_response\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n".encode("utf-8"),
+    )
+    client = AgentSessionClient(
+        AgentRequestContext(fastapi_url="http://contract.test", session_id="contract-session"),
+        manifest=UploadManifest(epoch="contract-epoch", revision=1, files=[]),
+    )
+
+    events = list(client.stream("결과를 저장해줘"))
+
+    assert len(sent) == 1
+    assert [event.event for event in events] == ["error"]
+    assert events[0].data["code"] == "invalid_stream"
+    assert events[0].observation.error_type == "agent_schema_error"
+    assert events[0].data["raw_final_response"] == payload
+    assert events[0].result is None
+    assert client.manifest is None
+
+
+@pytest.mark.parametrize("invalid_event", STREAM_CONTRACT["invalid_events"])
+def test_python_client_rejects_unknown_or_malformed_stream_events(
+    invalid_event: dict[str, object],
+    responses: dict[str, dict[str, object]],
+    http_response: Callable[[bytes], list[requests.PreparedRequest]],
+) -> None:
+    # A later valid answer cannot turn a malformed earlier event into success.
+    frames = [
+        f"event: {invalid_event['event']}\ndata: {json.dumps(invalid_event['data'])}\n\n",
+        f"event: final_response\ndata: {json.dumps(responses['completed'], ensure_ascii=False)}\n\n",
+    ]
+    sent = http_response("".join(frames).encode("utf-8"))
+    client = AgentSessionClient(
+        AgentRequestContext(fastapi_url="http://contract.test", session_id="contract-session"),
+        manifest=UploadManifest(epoch="contract-epoch", revision=1, files=[]),
+    )
+
+    events = list(client.stream("결과를 저장해줘"))
+
+    assert len(sent) == 1
+    assert [event.event for event in events] == ["error"]
+    assert events[0].data["code"] == "invalid_stream"
+    assert events[0].observation.error_type == "agent_schema_error"
+    assert events[0].data["raw_event"] == invalid_event
+    assert "raw_final_response" not in events[0].data
+    assert events[0].result is None
+    assert client.manifest is None
+
+
+def test_python_client_rejects_extra_final_response_fields_without_filtering(
+    responses: dict[str, dict[str, object]],
+    http_response: Callable[[bytes], list[requests.PreparedRequest]],
+) -> None:
+    payload = {**responses["completed"], "unexpected": "contract drift"}
+    sent = http_response(f"event: final_response\ndata: {json.dumps(payload)}\n\n".encode("utf-8"))
+    client = AgentSessionClient(
+        AgentRequestContext(fastapi_url="http://contract.test", session_id="contract-session"),
+        manifest=UploadManifest(epoch="contract-epoch", revision=1, files=[]),
+    )
+
+    events = list(client.stream("결과를 저장해줘"))
+
+    assert len(sent) == 1
+    assert [event.event for event in events] == ["error"]
+    assert events[0].data["code"] == "invalid_stream"
+    assert events[0].data["raw_final_response"] == payload
+    assert events[0].result is None
+    assert client.manifest is None
+
+
+def test_python_client_preserves_valid_progress_and_request_identity(
+    responses: dict[str, dict[str, object]],
+    http_response: Callable[[bytes], list[requests.PreparedRequest]],
+) -> None:
+    progress = [
+        ("request_started", {"request_id": "stream-request", "session_id": "contract-session"}),
+        ("stage_started", {"stage": "planner", "attempt": 1}),
+        ("stage_completed", {"stage": "planner", "attempt": 1, "latency_ms": 12, "status": "completed"}),
+        ("heartbeat", {"request_id": "stream-request", "elapsed_ms": 15}),
+        ("progress_snapshot", {"stage": "synthesis", "summary": "답변을 작성하고 있습니다."}),
+    ]
+    expected = [*progress, ("final_response", responses["completed"])]
+    sent = http_response("".join(
+        f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+        for event, data in expected
+    ).encode("utf-8"))
+    client = AgentSessionClient(
+        AgentRequestContext(fastapi_url="http://contract.test", session_id="contract-session"),
+        manifest=UploadManifest(epoch="contract-epoch", revision=1, files=[]),
+    )
+
+    events = list(client.stream("질문"))
+
+    assert len(sent) == 1
+    assert [(event.event, event.data) for event in events] == expected
+    assert all(event.observation.request_id == "stream-request" for event in events)
+    assert events[-1].result.status == "completed"
 
 
 @pytest.mark.parametrize("status", ["completed", "partial", "needs_input"])

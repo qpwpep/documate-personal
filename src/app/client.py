@@ -11,6 +11,7 @@ import requests
 from urllib3.exceptions import ReadTimeoutError
 
 from src.app.uploads import UploadStageResult, stage_uploaded_files
+from src.app.transport_contracts import parse_agent_event
 from src.core.contracts.outcome import AgentCallResult
 from src.core.slack_contract import RecipientInput
 from src.core.uploads import UploadContext, UploadManifest, UploadSyncRequest
@@ -156,7 +157,6 @@ def stream_agent_response(
                 saw_event = True
                 observation = replace(
                     observation,
-                    request_id=observation.request_id or raw_event.data.get("request_id"),
                     elapsed_ms=(perf_counter() - started) * 1000,
                     final_received=raw_event.event == "final_response",
                     error_source="server" if raw_event.event == "error" else None,
@@ -167,14 +167,19 @@ def stream_agent_response(
                 except ValueError as exc:
                     # Preserve the malformed payload for diagnostics while rejecting it
                     # as a usable answer in every client, including benchmarks.
+                    raw_payload = ({"raw_final_response": raw_event.data} if raw_event.event == "final_response"
+                                   else {"raw_event": {"event": raw_event.event, "data": raw_event.data}})
                     yield AgentStreamEvent(
                         event="error",
                         data={"code": "invalid_stream", "message": "스트리밍 응답 형식을 검증하지 못했습니다. 서버의 처리 결과를 확인해 주세요.",
-                              "raw_final_response": raw_event.data},
+                              **raw_payload},
                         observation=replace(observation, error_source="client", error_type="agent_schema_error",
                                             exception_type=type(exc).__name__, exception_detail=str(exc)),
                     )
                     return
+                if event.event in {"request_started", "final_response"} and not observation.request_id:
+                    observation = replace(observation, request_id=event.data["request_id"])
+                    event = replace(event, observation=observation)
                 saw_error = saw_error or event.event == "error"
                 yield event
                 if event.event == "final_response":
@@ -241,15 +246,9 @@ def build_agent_payload(
     return payload
 
 
-def _parse_agent_response_data(data: dict[str, Any]) -> AgentCallResult:
-    return AgentCallResult.model_validate({
-        key: value for key, value in data.items() if key in AgentCallResult.model_fields
-    })
-
-
 def _validated_event(event: str, data: dict[str, Any],
                      observation: AgentTransportObservation | None = None) -> AgentStreamEvent:
-    result = _parse_agent_response_data(data) if event == "final_response" else None
+    result = parse_agent_event(event, data)
     return AgentStreamEvent(event=event, data=data, result=result,
                             observation=observation or AgentTransportObservation())
 

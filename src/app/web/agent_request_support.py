@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from src.core.contracts import SessionMetadata
 from src.core.contracts.debug import DEBUG_REQUIRED_FIELDS
-from src.app.web.schemas import AgentDebugInfo, AgentRequest
+from src.app.transport_contracts import AgentDebugInfo
+from src.app.web.schemas import AgentRequest
 
 
 def build_debug_info(

@@ -160,5 +160,96 @@
       "debug": null,
       "upload_manifest": null
     }
-  }
+  },
+  "missing_response_fields": [
+    [
+      "status"
+    ],
+    [
+      "message"
+    ],
+    [
+      "missing_slots"
+    ],
+    [
+      "answer_id"
+    ],
+    [
+      "debug"
+    ],
+    [
+      "trace"
+    ],
+    [
+      "response",
+      "actions"
+    ],
+    [
+      "response",
+      "content",
+      "blocks"
+    ],
+    [
+      "response",
+      "content",
+      "blocks",
+      0,
+      "content",
+      0,
+      "refs"
+    ]
+  ],
+  "invalid_events": [
+    {
+      "event": "made_up_event",
+      "data": {}
+    },
+    {
+      "event": "stage_started",
+      "data": {}
+    },
+    {
+      "event": "stage_started",
+      "data": {
+        "stage": "planner",
+        "attempt": "1"
+      }
+    },
+    {
+      "event": "stage_completed",
+      "data": {
+        "stage": "unknown_stage",
+        "attempt": 1
+      }
+    },
+    {
+      "event": "request_started",
+      "data": {
+        "request_id": "request-1"
+      }
+    },
+    {
+      "event": "heartbeat",
+      "data": {
+        "request_id": "request-1",
+        "elapsed_ms": "10"
+      }
+    },
+    {
+      "event": "progress_snapshot",
+      "data": {
+        "stage": "planner"
+      }
+    },
+    {
+      "event": "error",
+      "data": {}
+    },
+    {
+      "event": "done",
+      "data": {
+        "extra": true
+      }
+    }
+  ]
 }

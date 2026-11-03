@@ -8,9 +8,11 @@ import pytest
 import requests
 from pydantic import ValidationError
 
+from src.app.transport_contracts import AgentDebugInfo, AgentResponse
 from src.core.answer_schema import ActionReceipt, AnswerDocument, export_answer_text, finalize_answer
-from src.core.contracts.debug import DebugPayload
+from src.core.contracts.debug import DEBUG_SCHEMA_VERSION
 from src.core.contracts.provenance import AnswerProvenance, AnswerSource
+from src.core.contracts.tool_execution import ToolExecutionEvent
 from src.core.llm_errors import make_problem
 from src.core.save_contract import SaveOperation
 from src.eval.config_models import BenchmarkCase, BenchmarkConfig
@@ -36,19 +38,18 @@ def _body(answer, *, setup, session_id):
             ref="previous", response_hash=answer.content_hash, citation_ids=[],
         ),
     )
-    debug = DebugPayload(
+    debug = AgentDebugInfo(
+        schema_version=DEBUG_SCHEMA_VERSION, observability_status="ok", route_decisions=[],
         answer_provenance=provenance, llm_calls=[],
         execution_evidence={"schema_version": 1, "request_id": request_id,
                             "status": "complete", "events": []},
     )
-    return {
-        "status": "partial" if setup else "completed",
-        "response": answer.model_dump(mode="json"),
-        "problem": make_problem("evidence_insufficient", "validation").model_dump(mode="json") if setup else None,
-        "request_id": request_id,
-        "upload_manifest": {"epoch": session_id, "revision": 0, "files": []},
-        "debug": debug.model_dump(mode="json"),
-    }
+    return AgentResponse(
+        status="partial" if setup else "completed", response=answer,
+        problem=make_problem("evidence_insufficient", "validation") if setup else None,
+        request_id=request_id, trace=f"Request ID: {request_id}",
+        upload_manifest={"epoch": session_id, "revision": 0, "files": []}, debug=debug,
+    ).model_dump(mode="json")
 
 
 def _run_scenario(monkeypatch, tmp_path, *, expectation, setup_code="evidence_insufficient",
@@ -112,7 +113,8 @@ def _run_scenario(monkeypatch, tmp_path, *, expectation, setup_code="evidence_in
                 body["debug"]["tool_calls"] = ["save_text"]
                 body["debug"]["tool_call_count"] = 1
                 body["debug"]["execution_evidence"]["events"] = [
-                    {"sequence": index, "invocation_id": invocation_id, "tool_name": "save_text", "phase": phase}
+                    ToolExecutionEvent(sequence=index, invocation_id=invocation_id,
+                                       tool_name="save_text", phase=phase).model_dump(mode="json")
                     for index, phase in enumerate(("started", "failed" if len(sent) == 1 else "succeeded"), 1)
                 ]
             if len(sent) == 1:

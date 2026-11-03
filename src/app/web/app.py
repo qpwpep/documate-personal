@@ -17,7 +17,8 @@ from src.infra.llm import validate_output_schemas
 from src.app.web.agent_request_service import AgentRequestService
 from src.app.web.cleanup import RuntimeCleaner
 from src.app.web.routes import router
-from src.app.web.schemas import AgentResponse, ClientConfig, HTTPResponseSchema, StagedUpload
+from src.app.transport_contracts import AgentResponse, HTTPResponseSchema
+from src.app.web.schemas import ClientConfig, StagedUpload
 from src.core.contracts.outcome import AnswerExportResult
 from src.core.slack_contract import SlackDefault
 from src.core.uploads import UploadManifest

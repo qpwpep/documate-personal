@@ -13,7 +13,8 @@ from src.infra.logging_utils import log_event
 from src.runtime.progress import ProgressEmitter
 from src.app.web.agent_request_support import build_session_metadata_snapshot, build_debug_info
 from src.app.web.cleanup import RuntimeCleaner
-from src.app.web.schemas import AgentDebugInfo, AgentRequest, AgentResponse, AgentStreamEvent
+from src.app.transport_contracts import AgentDebugInfo, AgentResponse, AgentStreamEvent
+from src.app.web.schemas import AgentRequest
 from src.core.contracts.debug import DEBUG_SCHEMA_VERSION
 from src.core.contracts.outcome import TurnResult
 from src.core.llm_errors import ExecutionProblem, LLMCallError, make_problem
