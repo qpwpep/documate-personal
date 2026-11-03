@@ -350,7 +350,7 @@ uv run --locked python script/benchmark_llm_tokens.py \
 
 `summary.json`의 `judge_model`은 config와 환경 변수 override를 모두 반영해 실제 실행에 적용된 effective judge model입니다.
 
-judge 입력은 원본 응답·출처 계약을 검증한 뒤 `evidence-selection-v1` 전송 형식으로 변환합니다. 원래 근거 ID마다 정확한 선택 구간(`excerpt` 또는 선택한 표 셀), snapshot 식별자, 출처와 위치를 한 번 보존하고, 응답·검색 결과·출처 기록에서는 그 ID를 참조합니다. `turn_result.response`도 나란히 있는 동일 응답의 hash로 참조합니다. 원본 근거 객체와 저장된 사례·응답은 바꾸지 않으며, 선택 범위 밖의 문서 전체를 judge에게 보내지 않습니다. 본문·oracle·선택된 모든 근거·대화·진단은 잘라내거나 요약하지 않습니다.
+judge 입력은 `LLMJudge.score_case()`에서 한 번 구성하고 완전성을 검사합니다. 실행 결과 조립부는 이 검사 결과를 받아 기록하며, judge client를 사용할 수 없는 경우에도 입력 누락 관측을 보존합니다. 원본 응답·출처 계약을 검증한 뒤 `evidence-selection-v1` 전송 형식으로 변환합니다. 원래 근거 ID마다 정확한 선택 구간(`excerpt` 또는 선택한 표 셀), snapshot 식별자, 출처와 위치를 한 번 보존하고, 응답·검색 결과·출처 기록에서는 그 ID를 참조합니다. `turn_result.response`도 나란히 있는 동일 응답의 hash로 참조합니다. 원본 근거 객체와 저장된 사례·응답은 바꾸지 않으며, 선택 범위 밖의 문서 전체를 judge에게 보내지 않습니다. 본문·oracle·선택된 모든 근거·대화·진단은 잘라내거나 요약하지 않습니다.
 
 `[runtime]`의 `judge_max_input_tokens` 기본값은 `128000`, `judge_max_output_tokens` 기본값은 `4096`입니다. 입력 예산은 system prompt와 실제 JSON을 tokenizer로 센 값에 메시지 형식 여유분 256토큰을 더해 검사하며, 출력 상한은 별도로 API에 전달합니다. 모델별 tokenizer가 등록되지 않았으면 해당 모델 계열의 encoding을 사용합니다. vocabulary를 불러오지 못하면 UTF-8 바이트 수를 보수적인 토큰 상한으로 사용합니다. 추정값과 API가 보고한 사용량은 구분합니다.
 

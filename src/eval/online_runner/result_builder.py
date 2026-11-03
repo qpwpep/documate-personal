@@ -243,27 +243,6 @@ def build_case_result(
         judge_status = "not_run"
         judge_status_reason = "missing_final_response"
     else:
-        judge_payload = judge.build_case_payload(
-            case=case,
-            tool_calls=parsed_response.tool_calls,
-            response=response,
-            turn_result=parsed_response.turn_result,
-            observed_hits=parsed_response.observed_hits,
-            retrieval_diagnostics=parsed_response.retrieval_diagnostics,
-            planner_diagnostics=parsed_response.planner_diagnostics,
-            validator_reason=parsed_response.validator_reason,
-            synthesis_mode=parsed_response.synthesis_mode,
-            resolved_unit_count=resolved_unit_count,
-            missing_reference_unit_count=missing_reference_unit_count,
-            unchecked_unit_count=unchecked_unit_count,
-            tool_call_count=parsed_response.tool_call_count,
-            slack_delivery_required=slack_delivery_required,
-            conversation=conversation,
-            evidence_scope=evidence_scope.model_dump(mode="json") if evidence_scope is not None else None,
-            answer_provenance=parsed_response.answer_provenance,
-        )
-        judge_input_issues = judge.payload_completeness_issues(judge_payload)
-        judge_input_complete = not judge_input_issues
         outcome = judge.score_case(
             case=case,
             tool_calls=parsed_response.tool_calls,
@@ -284,6 +263,8 @@ def build_case_result(
             answer_provenance=parsed_response.answer_provenance,
         )
         judge_input_stats = outcome.input_stats
+        judge_input_issues = outcome.input_issues
+        judge_input_complete = not judge_input_issues
         if outcome.status == "disabled":
             # Config requires the judge but the client was built disabled or is missing.
             judge_status = "failed"
@@ -294,9 +275,6 @@ def build_case_result(
             judge_status_reason = outcome.failure_kind
             if outcome.error:
                 judge_errors.append(outcome.error)
-            if outcome.input_issues:
-                judge_input_issues = outcome.input_issues
-                judge_input_complete = False
             llm_judge_score = outcome.score
             llm_judge_reason = outcome.reason
             judge_subscores = outcome.subscores

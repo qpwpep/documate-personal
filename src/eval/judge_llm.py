@@ -8,6 +8,7 @@ from typing import Any, Literal
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
+from pydantic import BaseModel
 
 from src.core.answer_schema import AnswerResponse
 from src.core.contracts.outcome import TurnResult
@@ -92,16 +93,16 @@ def _parse_json_payload(text: str) -> Any | None:
         return None
 
 
-def _normalize_jsonable(value: Any) -> Any:
+def _normalize_jsonable(value: object) -> object:
     if value is None or isinstance(value, (str, int, float, bool)):
         return value
     if isinstance(value, dict):
-        return {str(key): _normalize_jsonable(item) for key, item in value.items()}
+        return {key: _normalize_jsonable(item) for key, item in value.items()}
     if isinstance(value, (list, tuple)):
         return [_normalize_jsonable(item) for item in value]
-    if hasattr(value, "model_dump"):
-        return _normalize_jsonable(value.model_dump(mode="json"))
-    return str(value)
+    if isinstance(value, BaseModel):
+        return value.model_dump(mode="json")
+    raise TypeError(f"Unsupported judge input value: {type(value).__name__}")
 
 
 @dataclass(frozen=True)
@@ -262,15 +263,6 @@ class LLMJudge:
         evidence_scope: dict[str, Any] | None = None,
         answer_provenance: AnswerProvenance | dict[str, Any] | None = None,
     ) -> JudgeScoreOutcome:
-        if not self.enabled:
-            return JudgeScoreOutcome(status="disabled")
-        if self.client is None:
-            return JudgeScoreOutcome(
-                status="failed",
-                failure_kind="client_unavailable",
-                error="invalid_eval: judge client is not initialized",
-            )
-
         user_prompt = self.build_case_payload(
             case=case,
             tool_calls=tool_calls,
@@ -291,6 +283,15 @@ class LLMJudge:
             answer_provenance=answer_provenance,
         )
         input_issues = _payload_completeness_issues(user_prompt)
+        if not self.enabled:
+            return JudgeScoreOutcome(status="disabled", input_issues=input_issues)
+        if self.client is None:
+            return JudgeScoreOutcome(
+                status="failed",
+                failure_kind="client_unavailable",
+                error="invalid_eval: judge client is not initialized",
+                input_issues=input_issues,
+            )
         if input_issues:
             return JudgeScoreOutcome(
                 status="not_run",
@@ -450,7 +451,3 @@ class LLMJudge:
     @staticmethod
     def is_payload_complete(payload: dict[str, Any]) -> bool:
         return _is_payload_complete(payload)
-
-    @staticmethod
-    def payload_completeness_issues(payload: dict[str, Any]) -> list[str]:
-        return _payload_completeness_issues(payload)

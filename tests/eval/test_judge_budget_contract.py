@@ -149,3 +149,52 @@ def test_input_budget_failure_retains_stats_and_unknown_quality_on_roundtrip(tmp
     assert restored_results[0].product_pass is None
     assert restored_summary.evaluation_fingerprint == summary.evaluation_fingerprint
     assert restored_summary.overall_passed is False
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_unavailable_judge_retains_input_completeness_observation(enabled):
+    case = BenchmarkCase(
+        case_id="missing-setup", category="docs_only", query="앞선 설명을 요약해 줘.",
+        setup_turns=["pandas merge는 어떻게 동작해?"],
+    )
+    judge = LLMJudge(model_name="fixture-judge", enabled=False)
+    judge.enabled = enabled
+    response = parse_agent_response(_response_payload()).response
+
+    outcome = judge.score_case(case=case, tool_calls=[], response=response)
+
+    assert outcome.status == ("failed" if enabled else "disabled")
+    assert outcome.failure_kind == ("client_unavailable" if enabled else None)
+    assert outcome.input_issues == ["setup conversation is missing or does not match case.setup_turns"]
+    assert outcome.score is None
+    assert outcome.input_stats is None
+
+
+@pytest.mark.parametrize("judge_enabled", [False, True])
+@pytest.mark.parametrize("complete_input", [False, True])
+def test_unavailable_judge_preserves_case_input_observation(judge_enabled, complete_input):
+    case = BenchmarkCase(
+        case_id="unavailable-judge", category="docs_only", query="pandas merge는 어떻게 동작해?",
+        setup_turns=[] if complete_input else ["먼저 merge를 설명해 줘."],
+    )
+    config = _config()
+    judge = LLMJudge(model_name="fixture-judge", enabled=False)
+    judge.enabled = judge_enabled
+
+    result = build_case_result(
+        run_id="judge-budget", endpoint_url="http://fixture", case=case, judge=judge,
+        config=config, resolved_weights=resolve_case_weights(case=case, profiles=config.weights),
+        session_id="unavailable-session", created_at="2026-01-01T00:00:00+00:00",
+        request_payload={"query": case.query}, latency_ms_e2e=10,
+        parsed_response=parse_agent_response(_response_payload()),
+    )
+
+    assert result.judge_status == "failed"
+    assert result.judge_status_reason == "client_unavailable"
+    assert result.judge_input_complete is complete_input
+    assert result.judge_input_issues == (
+        [] if complete_input else ["setup conversation is missing or does not match case.setup_turns"]
+    )
+    assert result.eval_validity == "invalid"
+    assert result.llm_judge_score is None
+    assert result.release_pass is False

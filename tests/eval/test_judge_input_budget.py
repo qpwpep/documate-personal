@@ -128,6 +128,14 @@ def _wire_payload(request):
     return json.loads(next(message["content"] for message in request["messages"] if message["role"] == "user"))
 
 
+def test_judge_input_rejects_unsupported_internal_values():
+    inputs, _ = _inputs()
+    inputs["planner_diagnostics"] = {"unexpected": object()}
+
+    with pytest.raises(TypeError, match="Unsupported judge input value: object"):
+        LLMJudge.build_case_payload(**inputs)
+
+
 def test_repeated_large_source_is_sent_once_as_exact_selected_evidence(provider):
     inputs, evidence = _inputs(large_source=True)
     inputs["turn_result"] = TurnResult(
