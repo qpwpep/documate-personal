@@ -568,7 +568,9 @@ def prepare_evidence_candidates(
         identity_terms = _tokens(" ".join([*symbols, task.requirement.library or ""])) if task else set()
         identity_terms.update(part.lower() for symbol in symbols for part in symbol.split("."))
         focus_terms = _tokens(" ".join(task.requirement.aspects)) if task else set()
-        sections = parse_doc_sections(item.excerpt, title=item.snapshot.title, url=item.snapshot.source_uri)
+        sections = parse_doc_sections(item.excerpt, title=item.snapshot.title, url=item.snapshot.source_uri,
+                                      definition_owners=item.element.metadata.get("definition_owners"),
+                                      source_start=item.selection.start)
         matching_symbols = document_symbol_names(symbols, title=item.snapshot.title, url=item.snapshot.source_uri)
         owned_ranges = [(section.start, section.end) for section in sections
                         if any(section.owner.casefold() == symbol or section.owner.casefold().endswith("." + symbol)

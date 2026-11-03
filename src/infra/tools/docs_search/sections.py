@@ -268,6 +268,7 @@ def document_symbol_names(symbols: Iterable[str], *, title: str, url: str) -> se
 
 def parse_doc_sections(
     text: str, *, title: str = "", url: str = "", declarations: list[DocDeclaration] | None = None,
+    definition_owners: dict[str, str] | None = None, source_start: int = 0,
 ) -> list[DocSection]:
     """Partition source into owned structural sections without rewriting it."""
     if not text or not text.strip():
@@ -374,10 +375,13 @@ def parse_doc_sections(
                 else:
                     boundary(line_start, owner, "overview")
             continue
-        anchored_owner = _sphinx_definition_owner(raw_line)
+        captured_owner = (definition_owners or {}).get(
+            str(source_start + line_start + len(raw_line) - len(raw_line.lstrip())),
+        )
+        anchored_owner = captured_owner or _sphinx_definition_owner(raw_line)
         if anchored_owner:
             owner_level = None
-            boundary(line_start, qualify(anchored_owner), "signature")
+            boundary(line_start, captured_owner or qualify(anchored_owner), "signature")
             continue
         if stripped.endswith("¶"):
             # Flattened Sphinx headings retain their permalink but lose their

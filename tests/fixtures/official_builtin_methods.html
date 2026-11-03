@@ -1,0 +1,30 @@
+<!-- Minimal definition excerpts captured from https://docs.python.org/ko/3/builtins/stdtypes.html -->
+<title>Built-in Types — Python documentation</title>
+<main>
+<dl class="py method"><dt class="sig sig-object py" id="list.sort">
+<span class="sig-name descname"><span class="pre">sort</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="keyword-only-separator o"><abbr title="Keyword-only parameters separator (PEP 3102)"><span class="pre">*</span></abbr></span></em>, <em class="sig-param"><span class="n"><span class="pre">key</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">reverse</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#list.sort" title="Link to this definition">¶</a></dt>
+<dd><p>This method sorts the list in place, using only <code class="docutils literal notranslate"><span class="pre">&lt;</span></code> comparisons
+between items. Exceptions are not suppressed - if any comparison operations
+fail, the entire sort operation will fail (and the list will likely be left
+in a partially modified state).</p></dd></dl>
+<dl class="py method"><dt class="sig sig-object py" id="dict.update">
+<span class="sig-name descname"><span class="pre">update</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="o"><span class="pre">**</span></span><span class="n"><span class="pre">kwargs</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#dict.update" title="Link to this definition">¶</a></dt>
+<dt class="sig sig-object py">
+<span class="sig-name descname"><span class="pre">update</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">mapping</span></span></em>, <em class="sig-param"><span class="positional-only-separator o"><abbr title="Positional-only parameter separator (PEP 570)"><span class="pre">/</span></abbr></span></em>, <em class="sig-param"><span class="o"><span class="pre">**</span></span><span class="n"><span class="pre">kwargs</span></span></em><span class="sig-paren">)</span></dt>
+<dt class="sig sig-object py">
+<span class="sig-name descname"><span class="pre">update</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">iterable</span></span></em>, <em class="sig-param"><span class="positional-only-separator o"><abbr title="Positional-only parameter separator (PEP 570)"><span class="pre">/</span></abbr></span></em>, <em class="sig-param"><span class="o"><span class="pre">**</span></span><span class="n"><span class="pre">kwargs</span></span></em><span class="sig-paren">)</span></dt>
+<dd><p>Update the dictionary with the key/value pairs from <em>mapping</em> or <em>iterable</em> and <em>kwargs</em>, overwriting
+existing keys.  Return <code class="docutils literal notranslate"><span class="pre">None</span></code>.</p></dd></dl>
+<dl class="py method"><dt class="sig sig-object py" id="str.removeprefix">
+<span class="sig-prename descclassname"><span class="pre">str.</span></span><span class="sig-name descname"><span class="pre">removeprefix</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">prefix</span></span></em>, <em class="sig-param"><span class="positional-only-separator o"><abbr title="Positional-only parameter separator (PEP 570)"><span class="pre">/</span></abbr></span></em><span class="sig-paren">)</span><a class="headerlink" href="#str.removeprefix" title="Link to this definition">¶</a></dt>
+<dd><p>If the string starts with the <em>prefix</em> string, return
+<code class="docutils literal notranslate"><span class="pre">string[len(prefix):]</span></code>. Otherwise, return a copy of the original
+string:</p></dd></dl>
+<dl class="py method" id="bytearray.reverse">
+<span id="list.reverse"></span><dt class="sig sig-object py" id="sequence.reverse">
+<span class="sig-prename descclassname"><span class="pre">sequence.</span></span><span class="sig-name descname"><span class="pre">reverse</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#sequence.reverse" title="Link to this definition">¶</a></dt>
+<dd><p>Reverse the items of <em>sequence</em> in place.
+This method maintains economy of space when reversing a large sequence.
+To remind users that it operates by side-effect, it returns <code class="docutils literal notranslate"><span class="pre">None</span></code>.</p>
+</dd></dl>
+</main>

@@ -88,7 +88,8 @@ def _source_candidates(
         if structure is None:
             declarations = scan_declarations(text)
             sections = parse_doc_sections(text, title=evidence.snapshot.title, url=evidence.snapshot.source_uri,
-                                          declarations=declarations)
+                                          declarations=declarations,
+                                          definition_owners=evidence.element.metadata.get("definition_owners"))
             definitions = definition_sections(text, declarations=declarations, sections=sections)
         else:
             declarations, sections, definitions = structure
@@ -210,7 +211,8 @@ def select_docs_candidates(
         if not matches_symbol and symbols:
             declarations = scan_declarations(evidence.element.text)
             sections = parse_doc_sections(evidence.element.text, title=snapshot.title,
-                url=snapshot.source_uri, declarations=declarations)
+                url=snapshot.source_uri, declarations=declarations,
+                definition_owners=evidence.element.metadata.get("definition_owners"))
             definitions = definition_sections(evidence.element.text, declarations=declarations, sections=sections)
             structures[(snapshot.snapshot_id, evidence.element.element_id)] = (declarations, sections, definitions)
             # Module and builtin reference titles need not list every member.

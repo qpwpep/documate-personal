@@ -17,7 +17,8 @@ def documentation_declaration_scope(evidence: EvidenceRef) -> dict[str, object] 
     element, selection = evidence.element, evidence.selection
     declarations = scan_declarations(element.text)
     sections = parse_doc_sections(element.text, title=evidence.snapshot.title,
-                                  url=evidence.snapshot.source_uri, declarations=declarations)
+                                  url=evidence.snapshot.source_uri, declarations=declarations,
+                                  definition_owners=element.metadata.get("definition_owners"))
     definitions = {section.start: section for section in definition_sections(
         element.text, declarations=declarations, sections=sections,
     )}

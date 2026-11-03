@@ -48,6 +48,8 @@ class _OfficialHTMLText(HTMLParser):
         self.stack: list[tuple[str, bool, bool]] = []
         self.title: list[str] = []
         self.parts: list[tuple[str, bool]] = []
+        self.definitions: list[tuple[str, int, int]] = []
+        self.definition_start: tuple[str, int] | None = None
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         attributes = dict(attrs)
@@ -60,6 +62,12 @@ class _OfficialHTMLText(HTMLParser):
             self.parts.append(("\n```\n", False))
         elif main and tag in _BLOCK_TAGS:
             self.parts.append(("\n", False))
+        # CLI options and glossary terms also use dt IDs. Only API identifiers
+        # establish ownership; other anchors retain the surrounding document.
+        if main and tag == "dt" and re.fullmatch(
+            r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*", attributes.get("id") or "",
+        ):
+            self.definition_start = (attributes["id"], len(self.parts))
         # Sphinx renders the classifier with CSS spacing; text extraction must
         # preserve that separator between a parameter name and its type.
         if main and "classifier" in (attributes.get("class") or "").split():
@@ -77,6 +85,10 @@ class _OfficialHTMLText(HTMLParser):
                          if self.stack[index][0] == tag), None)
         if position is None:
             return
+        if tag == "dt" and self.definition_start is not None:
+            name, start = self.definition_start
+            self.definitions.append((name, start, len(self.parts)))
+            self.definition_start = None
         if self.stack[position][1] and tag == "pre":
             self.parts.append(("\n```\n", False))
         elif self.stack[position][1] and tag in _BLOCK_TAGS:
@@ -92,9 +104,27 @@ class _OfficialHTMLText(HTMLParser):
         self.parts.append((data if preserve else re.sub(r"\s+", " ", data), preserve))
 
     def text(self) -> str:
+        return self._render_parts(self.parts)
+
+    def definition_owners(self, text: str) -> dict[str, str]:
+        """Bind source IDs to unchanged declaration text in document order."""
+        owners = {}
+        cursor = 0
+        for name, start, end in self.definitions:
+            declaration = self._render_parts(self.parts[start:end]).strip()
+            if not declaration:
+                continue
+            position = text.find(declaration, cursor)
+            if position >= 0:
+                owners[str(position)] = name
+                cursor = position + len(declaration)
+        return owners
+
+    @staticmethod
+    def _render_parts(parts: list[tuple[str, bool]]) -> str:
         rendered = []
-        for preserve, parts in groupby(self.parts, key=lambda part: part[1]):
-            text = "".join(part[0] for part in parts)
+        for preserve, group in groupby(parts, key=lambda part: part[1]):
+            text = "".join(part[0] for part in group)
             if not preserve:
                 text = re.sub(r"[ \t]+", " ", text)
                 text = re.sub(r" *\n *", "\n", text)
@@ -163,11 +193,12 @@ def _capture_page(original_url: str, *, timeout_seconds: int, allowed_domains: s
         raise ValueError("official page has no recognized main content")
     snapshot = build_snapshot(
         source_uri=source_url, title="".join(parser.title).strip() or source_url,
-        media_type="text/html", source_type="official", content=raw, parser="official_html", parser_version="2",
+        media_type="text/html", source_type="official", content=raw, parser="official_html", parser_version="3",
         parser_config={"content_region": "main", "resolved_url": url}, capture_scope="full_document",
         quality_issues=["html_structure_flattened"],
     )
     element = DocumentElement(element_id=f"{snapshot.snapshot_id}:body", kind="paragraph", text=text,
+                              metadata={"definition_owners": parser.definition_owners(text)},
                               anchors=[SourceAnchor(kind="web", start=0, end=len(text), precision="element")])
     return build_evidence(snapshot=snapshot, element=element)
 
