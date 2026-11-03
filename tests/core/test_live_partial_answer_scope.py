@@ -167,14 +167,53 @@ def test_partial_sentence_quota_keeps_supported_body_and_contract(
 
     body_request = decisions.requests[0]
     payload = json.loads(body_request["input"])
-    assert payload["confirmed_request"]["answer"] == contract.answer.model_dump(mode="json")
+    assert payload["confirmed_request"]["answer"] == contract.answer.model_dump(
+        mode="json", exclude={"sentence_counts"},
+    )
+    assert "sentence_scopes" not in payload["answer_scope"]
+    assert payload["answer_scope"]["sentence_scope_bindings"] == [{
+        "unit_id": "b0.content.0", "text": ONE_SENTENCE,
+        "scope": "Path.is_file()이 True를 반환하는 경우",
+    }]
     assert payload["terminal_failed_requirement_ids"] == [task.requirement_id for task in incomplete_tasks]
     assert payload["rendered_response"]["notices"] == [expected_notice]
+    scope = {item["task"]["requirement_id"]: item for item in payload["answer_scope"]["requirements"]}
+    assert scope["is_file"]["coverage"] == ("partial" if 0 in incomplete_task_indices else "required")
+    assert scope["is_file"]["available_source_ids"] == [state["response"].evidence_packet[0].id]
+    assert scope["is_file"]["cited_source_ids"] == scope["is_file"]["available_source_ids"]
+    assert scope["is_dir"]["coverage"] == "unavailable"
+    assert scope["is_dir"]["available_source_ids"] == scope["is_dir"]["cited_source_ids"] == []
     outcome = ResponseAssembler().assemble(response=state, debug_info={})
     assert outcome["status"] == "partial"
     assert state["response"].result.content == original
     assert state["response"].result.semantic_validation.passed
     assert state["runtime"].request_contract == contract
+
+
+@pytest.mark.parametrize("supported_target_is_terminal", [False, True])
+def test_uncited_supported_target_is_not_exempted_by_a_terminal_gap(supported_target_is_terminal):
+    state = _partial_state(ONE_SENTENCE)
+    if supported_target_is_terminal:
+        state["retry"].terminal_failed_requirement_ids = ["is_file", "is_dir"]
+    evidence = state["response"].evidence_packet[0]
+    document = AnswerDocument.model_validate({"blocks": [{"type": "paragraph", "content": [{
+        "text": "확인한 내용은 없습니다.", "basis": "interaction", "refs": [], "sentence_scope": 1,
+    }]}]})
+    state["response"].result = finalize_answer(document, [evidence], retrieval_required=True)
+    boundary = DecisionsBoundary({"request_fulfilled": 0.1, "requirement_0": 0.1})
+
+    state.update(make_post_synthesis_validation_node(False, decisions_client=boundary)(state))
+
+    payload = json.loads(boundary.requests[0]["input"])
+    scope = {item["task"]["requirement_id"]: item for item in payload["answer_scope"]["requirements"]}
+    assert scope["is_file"]["coverage"] == ("partial" if supported_target_is_terminal else "required")
+    assert scope["is_file"]["available_source_ids"] == [evidence.id]
+    assert scope["is_file"]["cited_source_ids"] == []
+    assert scope["is_file"]["uncited_sources"][0]["excerpt"] == SOURCE_TEXT
+    assert scope["is_dir"]["coverage"] == "unavailable"
+    outcome = ResponseAssembler().assemble(response=state, debug_info={})
+    assert outcome["status"] == "failed"
+    assert "semantic_request_fulfillment" in state["retry"].retrieval_feedback
 
 
 @pytest.mark.parametrize(("text", "sentence_scope", "following_parts", "complete", "missing"), [
@@ -260,17 +299,23 @@ def test_independent_true_and_false_conditions_for_one_target_have_separate_quot
     os.environ.get("RUN_LIVE_PARTIAL_ANSWER_SCOPE") != "1",
     reason="Set RUN_LIVE_PARTIAL_ANSWER_SCOPE=1 to call the configured Decisions provider.",
 )
-@pytest.mark.parametrize(("text", "acceptable", "complete"), [
-    pytest.param(ONE_SENTENCE, True, False, id="supported-one-sentence"),
-    pytest.param(TWO_SENTENCES, False, False, id="supported-two-sentences-violate-per-target-count"),
+@pytest.mark.parametrize(("text", "expected", "complete"), [
+    pytest.param(ONE_SENTENCE, "partial", False, id="supported-one-sentence"),
+    pytest.param("`Path.is_file()`은 지정한 경로가 일반 파일을 가리키는 경우에 `True`를 돌려줍니다.",
+                 "partial", False, id="supported-paraphrase-returns-true"),
+    pytest.param("경로가 일반 파일을 가리키면 `Path.is_file()`의 반환값은 `True`입니다.",
+                 "partial", False, id="supported-paraphrase-condition-first"),
+    pytest.param("`Path.is_file()`에는 `follow_symlinks` 매개변수가 있습니다.",
+                 "semantic_rejection", False, id="omitted-supported-fact"),
+    pytest.param(TWO_SENTENCES, "sentence_count", False, id="supported-two-sentences-violate-per-target-count"),
     pytest.param(INTRODUCTION + " " + ONE_SENTENCE,
-                 False, False, id="introduction-repeats-per-target-condition"),
+                 "sentence_count", False, id="introduction-repeats-per-target-condition"),
     pytest.param("`Path.is_file()`은 경로가 일반 파일을 가리킬 때 True를 반환하며, "
                  "`Path.is_dir()`은 경로가 디렉터리를 가리킬 때 True를 반환합니다.",
-                 False, True, id="complete-two-targets-merged-into-one-sentence"),
+                 "sentence_count", True, id="complete-two-targets-merged-into-one-sentence"),
 ])
 def test_live_answer_applies_sentence_count_to_supported_targets(
-    text: str, acceptable: bool, complete: bool,
+    text: str, expected: str, complete: bool,
     live_decisions_client: DecisionsClient, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     state = _partial_state(text, complete=complete)
@@ -298,20 +343,26 @@ def test_live_answer_applies_sentence_count_to_supported_targets(
     refused_names = {name for evaluation in evaluations for name in evaluation.refused_names}
     diagnostics = "\n".join([state["retry"].retrieval_feedback, *state["debug"].validation_events])
     print({
+        "candidate": text,
         "status": outcome["status"],
         "probabilities": probabilities,
         "refused_names": sorted(refused_names),
         "validation_events": state["debug"].validation_events,
     })
-    if acceptable:
+    if expected == "partial":
         assert len(evaluations) == 2
         assert outcome["status"] == "partial", diagnostics
         assert outcome["problem"]["code"] == "evidence_insufficient"
         assert response.content == original
         assert response.semantic_validation is not None and response.semantic_validation.passed
         assert any("pathlib.Path.is_dir" in issue.message for issue in response.issues)
-    else:
+    elif expected == "sentence_count":
         assert evaluations == []
         assert response.content != original, diagnostics
         assert outcome["status"] == "failed"
         assert "sentence_count" in state["retry"].retrieval_feedback, diagnostics
+    else:
+        assert len(evaluations) == 2
+        assert response.content != original, diagnostics
+        assert outcome["status"] == "failed", diagnostics
+        assert "semantic_" in state["retry"].retrieval_feedback, diagnostics

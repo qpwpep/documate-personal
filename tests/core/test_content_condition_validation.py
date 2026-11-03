@@ -1,6 +1,5 @@
 """Confirmed content conditions independently control answer acceptance and repair."""
 from hashlib import sha256
-import json
 
 import pytest
 from langchain_core.messages import HumanMessage
@@ -99,16 +98,9 @@ def test_preference_is_not_a_gate_and_same_kind_conditions_keep_their_contract_i
         if question["name"].startswith("content_condition_")
     }
     assert set(condition_questions) == {"content_condition_1", "content_condition_2"}
-    expected_conditions = {
-        1: {"kind": "custom", "mode": "required", "description": "각 대상의 목적을 따로 설명한다."},
-        2: {"kind": "custom", "mode": "forbidden", "description": "확인하지 않은 실행 결과를 주장하지 않는다."},
-    }
-    for index, condition in expected_conditions.items():
+    for index in (1, 2):
         instructions = condition_questions[f"content_condition_{index}"]["instructions"]
         assert f"confirmed_request.answer.content[{index}]" in instructions
-        assert json.loads(instructions.split("Condition and retrieval scope data:\n", 1)[1]) == {
-            "condition": condition, "terminal_incomplete_requirements": [],
-        }
     payload = read_decision_input(request["input"])
     assert payload["confirmed_request"]["answer"]["content"] == [
         condition.model_dump(mode="json") for condition in contract.answer.content

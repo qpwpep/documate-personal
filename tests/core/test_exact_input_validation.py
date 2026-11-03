@@ -110,7 +110,7 @@ def test_copy_with_an_additional_semantic_condition_still_checks_that_condition(
     ),)))
     prepare_synthesis_state(state)
     state.update(make_synthesize_node(mock_chat_model(DocumentModel().invoke))(state))
-    decisions = DecisionsBoundary({"grounded_0": 0.01, "request_fulfilled": probability})
+    decisions = DecisionsBoundary({"grounded_0": 0.01, "content_condition_0": probability})
 
     state.update(make_post_synthesis_validation_node(False, decisions_client=decisions)(state))
 
@@ -118,7 +118,7 @@ def test_copy_with_an_additional_semantic_condition_still_checks_that_condition(
     if expected_kind == "answer":
         report = state["response"].result.semantic_validation
         assert [(check.name, check.probability) for check in report.checks] == [
-            ("request_fulfilled", probability), ("content_condition:0", 0.99),
+            ("request_fulfilled", 0.99), ("content_condition:0", probability),
         ]
 
 
@@ -213,7 +213,8 @@ def test_copied_answer_rechecks_sentence_scope_meaning_in_the_current_contract(
         assert preparation.requests
         assert decisions.requests
         payload = json.loads(decisions.requests[0]["input"])
-        assert payload["confirmed_request"]["answer"]["sentence_counts"][0]["scope"] == scope
+        assert "sentence_counts" not in payload["confirmed_request"]["answer"]
+        assert payload["answer_scope"]["sentence_scope_bindings"][0]["scope"] == scope
     if expected_kind == "answer":
         assert state["response"].result.content == previous.content
     else:

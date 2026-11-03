@@ -63,6 +63,7 @@ def assess_validation(snapshot: ValidationSnapshot) -> ValidationAssessment:
     # Re-finalizing unchanged content would conceal in-memory tampering.
     result = AnswerResponse.model_validate(snapshot.response_result.model_dump(mode="json"))
     packet_by_id = validated_evidence_by_id(snapshot.evidence_packet)
+    assessment.checked_evidence_by_id = packet_by_id
     referenced = {ref for _, unit in iter_content_units(result.content) for ref in unit.refs}
     packet_references = {ref: packet_by_id[ref] for ref in referenced if ref in packet_by_id}
     recorded_references = {citation.evidence.id: citation.evidence for citation in result.citations}

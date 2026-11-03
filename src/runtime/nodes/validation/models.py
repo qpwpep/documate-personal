@@ -58,6 +58,7 @@ class ValidationAssessment:
     missing_content: list[str] = field(default_factory=list)
     forbidden_content: list[str] = field(default_factory=list)
     checked_result: AnswerResponse | None = None
+    checked_evidence_by_id: dict[str, EvidenceRef] = field(default_factory=dict)
     retry_reason: RetryReason | None = None
     failed_routes: set[str] = field(default_factory=set)
     failed_requirement_ids: set[str] = field(default_factory=set)

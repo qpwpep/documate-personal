@@ -315,7 +315,11 @@ def test_post_validation_scopes_cited_requirement_separately_from_mixed_request(
         "task": tasks[-1].model_dump(mode="json", exclude={"k"}),
         "reason": "no_evidence",
         "files": [{"file_id": file_id, "name": "worker_profile.py"}],
-        "diagnostics": [missing_diagnostic.model_dump(mode="json")],
+        "diagnostics": [{
+            "requirement_id": "FAILOVER_LIMIT", "status": "no_result", "message": "", "error_code": None,
+            "answerability": "missing", "missing_requirements": [f"file:{file_id}:FAILOVER_LIMIT"],
+            "evidence_count": 0, "warnings": [],
+        }],
     }]
     assert [unit["cited_sources"][0]["id"] for unit in body_payload["units"][:len(known_texts)]] == [
         evidence.id for evidence in evidence_items[:len(known_texts)]
@@ -558,13 +562,18 @@ def test_conversation_followups_send_the_user_facts_used_by_synthesis(factory, r
 
     updates = factory(False, decisions_client=boundary)(state)
 
-    context = read_decision_input(boundary.requests[0]["input"])["conversation_context"]
+    payload = read_decision_input(boundary.requests[0]["input"])
+    context = payload["conversation_context"]
     assert context["memory_summary"] == summary
-    assert context["messages"] == [
+    expected_messages = [
         *([{"role": "user", "content": "제 이름은 민수입니다."},
            {"role": "assistant", "content": "반갑습니다."}] if history else []),
         {"role": "user", "content": request},
     ]
+    assert payload["latest_user_request"] == request
+    assert context["messages"] == (
+        expected_messages[:-1] if factory is make_post_synthesis_validation_node else expected_messages
+    )
     assert "민수" in json.dumps(context, ensure_ascii=False)
     assert updates["retry"].needs_retry is False
 
@@ -589,14 +598,18 @@ def test_validation_conversation_uses_the_synthesis_turn_limit_and_excludes_tool
 
     factory(False, decisions_client=boundary, max_turns=1)(state)
 
-    context = read_decision_input(boundary.requests[0]["input"])["conversation_context"]
+    payload = read_decision_input(boundary.requests[0]["input"])
+    context = payload["conversation_context"]
     messages, _, _ = build_synthesis_messages(
         state=state, request_contract=state["runtime"].request_contract,
         action_rules=[], evidence_packet=[], attempt=1, max_turns=1,
         requirement_ids_by_evidence={}, reference_aliases={}, retrieval_required=False,
     )
     synthesis_dialogue = [message.content for message in messages if isinstance(message, (HumanMessage, AIMessage))]
-    assert [message["content"] for message in context["messages"]] == synthesis_dialogue
+    validation_dialogue = [message["content"] for message in context["messages"]]
+    if factory is make_post_synthesis_validation_node:
+        validation_dialogue.append(payload["latest_user_request"])
+    assert validation_dialogue == synthesis_dialogue
     assert synthesis_dialogue == ["제 이름은 민수입니다.", "반갑습니다.", request]
     assert "이미 대화 범위에서 제외" not in json.dumps(context, ensure_ascii=False)
     assert "현재 검색 도구의 원문" not in json.dumps(context, ensure_ascii=False)
@@ -728,10 +741,10 @@ def test_api_requirement_checks_keep_target_and_selected_ranges_before_and_after
     ("", 0.99, False),
     (" 모든 매개변수와 null 키 주의사항도 빠짐없이 설명해줘.", 0.2, True),
 ])
-def test_api_usage_scope_is_shared_without_waiving_explicit_answer_requirements(
+def test_body_instructions_without_separate_content_conditions_still_require_fulfillment(
     extra_request, fulfilled, needs_retry,
 ):
-    """Scope policy reaches both checks; source availability cannot fill answer omissions."""
+    """A condition not assigned its own predicate remains part of body fulfillment."""
     request = "pandas.merge 사용법을 공식 문서 기준으로 설명해줘." + extra_request
     task = RetrievalTask(route="docs", query=request, k=1, requirement_id="merge_usage", requirement={
         "library": "pandas", "symbols": ["pandas.merge"], "evidence_needs": ["explanation"],
@@ -774,7 +787,7 @@ def test_api_usage_scope_is_shared_without_waiving_explicit_answer_requirements(
     questions = {question["name"]: question["instructions"]
                  for call in boundary.requests for question in call["questions"]}
     assert semantic.API_USAGE_SCOPE_INSTRUCTIONS in questions["requirement_0"]
-    assert semantic.API_USAGE_COVERAGE_INSTRUCTIONS in questions["request_fulfilled"]
+    assert not any(name.startswith("content_condition_") for name in questions)
     assert payload["confirmed_request"]["body"]["instruction"] == request
     assert payload["rendered_response"] == {"body": document.model_dump(mode="json"), "notices": []}
     assert "displayed_document" not in payload

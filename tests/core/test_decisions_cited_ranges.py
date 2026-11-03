@@ -172,7 +172,12 @@ def test_post_requirement_batch_sees_only_actual_citations_and_records_requireme
     assert set(payload) == {"requirements"}
     assert [question["name"] for question in request["questions"]] == ["requirement_0"]
     assert [source["id"] for source in payload["requirements"][0]["sources"]] == [cited.id]
-    assert all("UNCITED_SOURCE" not in item["input"] for item in boundary.requests)
+    assert "UNCITED_SOURCE" not in request["input"]
+    body_payload = read_decision_input(body_request["input"])
+    assert [source["id"] for source in body_payload["units"][0]["cited_sources"]] == [cited.id]
+    requirement_scope = body_payload["answer_scope"]["requirements"][0]
+    assert [source["id"] for source in requirement_scope["uncited_sources"]] == [uncited.id]
+    assert set(requirement_scope["available_source_ids"]) == {cited.id, uncited.id}
     report = updates["response"].result.semantic_validation
     assert report.passed
     assert next(check for check in report.checks if check.name == "requirement:cache_limit").probability == 0.99

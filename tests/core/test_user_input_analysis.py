@@ -160,7 +160,8 @@ def test_user_code_analysis_is_judged_against_the_supplied_code_without_invented
     updates = make_post_synthesis_validation_node(False, decisions_client=decisions)(state)
 
     assessment = read_decision_input(decisions.requests[0]["input"])
-    assert assessment["conversation_context"]["messages"] == [{"role": "user", "content": REQUEST}]
+    assert assessment["latest_user_request"] == REQUEST
+    assert assessment["conversation_context"]["messages"] == []
     assert assessment["units"][0]["basis"] == "interaction"
     assert assessment["units"][0]["refs"] == []
     assert assessment["units"][0]["cited_sources"] == []
