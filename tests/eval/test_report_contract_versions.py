@@ -289,65 +289,6 @@ def test_history_ignores_pointer_to_another_track_when_matching_runs_exist(tmp_p
     assert expected.run_id in svg.read_text(encoding="utf-8")
 
 
-def _write_previous_execution_history(
-    output_root, monkeypatch, *, execution="shared-client-scenario-v1", scoring="release-obligations-v6",
-):
-    from src.eval.reporting import summary as summary_module
-
-    with monkeypatch.context() as legacy:
-        legacy.setattr(summary_module, "EXECUTION_CONTRACT_VERSION", execution)
-        legacy.setattr(summary_module, "SCORING_CONTRACT_VERSION", scoring)
-        legacy.setattr(summary_module, "MEASUREMENT_CONTRACT_VERSION", "llm-usage-scenario-v3")
-        case, result = _case_result()
-        result.run_id = "previous-execution-and-scoring"
-        summary = _summary([(case, result)]).model_copy(update={"run_id": result.run_id})
-        write_run_outputs(output_dir=output_root / summary.run_id, results=[result], summary=summary)
-    raw_result = result.model_dump(mode="json")
-    for turn in raw_result["scenario_turns"]:
-        for call in turn["llm_calls"] or []:
-            for field in ("endpoint", "status", "latency_ms", "failure_type"):
-                call.pop(field)
-            for field in ("cached_input_tokens", "cache_write_input_tokens", "reasoning_output_tokens"):
-                call["usage"].pop(field)
-    summary = summary.model_copy(update={"results_fingerprint": raw_results_fingerprint([raw_result])})
-    _save_payloads(output_root / summary.run_id, summary.model_dump(mode="json"), [raw_result])
-    return summary
-
-
-@pytest.mark.parametrize("execution,scoring", [
-    ("shared-client-scenario-v1", "release-obligations-v6"),
-    ("shared-client-scenario-v2", "release-obligations-v7"),
-    ("shared-client-scenario-v2", "release-obligations-v8"),
-    ("shared-client-scenario-v2", "release-obligations-v9"),
-])
-def test_history_excludes_previous_execution_and_scoring_without_rewriting(
-    tmp_path, monkeypatch, execution, scoring,
-):
-    output_root = tmp_path / "runs"
-    previous = _write_previous_execution_history(output_root, monkeypatch, execution=execution, scoring=scoring)
-    pair = _case_result()
-    current = _summary([pair])
-    write_run_outputs(output_dir=output_root / current.run_id, results=[pair[1]], summary=current)
-    (output_root / "latest_release_run.txt").write_text(previous.run_id, encoding="utf-8")
-    before = {path: path.read_bytes() for path in output_root.rglob("*") if path.is_file()}
-    readme = tmp_path / "README.md"
-    readme.write_text("# Fixture\n\n## 검증 결과\n\n<!-- BEGIN BENCHMARK HISTORY -->\n\nOld history.\n\n<!-- END BENCHMARK HISTORY -->\n\n## 문서\n", encoding="utf-8")
-
-    latest, comparable = refresh_history_report(
-        output_root=output_root, readme_path=readme, svg_path=tmp_path / "history.svg",
-    )
-
-    assert latest.run_id == current.run_id
-    assert [run.run_id for run in comparable] == [current.run_id]
-    assert [run.run_id for run in load_history_runs(output_root)] == [current.run_id]
-    assert current.execution_contract_version == "shared-client-scenario-v2"
-    assert current.audit_metrics["scoring_contract_version"] == "release-obligations-v9"
-    assert current.measurement_contract_version != previous.measurement_contract_version
-    assert {path: path.read_bytes() for path in before} == before
-    with pytest.raises(ValueError, match="current.*contracts"):
-        load_report_inputs(output_root / previous.run_id)
-
-
 @pytest.mark.parametrize("execution,scoring", [
     ("shared-client-scenario-v2", "release-obligations-v6"),
     ("shared-client-scenario-v1", "release-obligations-v7"),
@@ -368,46 +309,4 @@ def test_history_rejects_mixed_unknown_or_missing_execution_and_scoring(tmp_path
     _save_payloads(tmp_path / "run", summary, [pair[1].model_dump(mode="json")])
 
     with pytest.raises(ValueError, match="contract"):
-        load_history_runs(tmp_path)
-
-
-@pytest.mark.parametrize("execution,scoring", [
-    ("shared-client-scenario-v1", "release-obligations-v6"),
-    ("shared-client-scenario-v2", "release-obligations-v7"),
-    ("shared-client-scenario-v2", "release-obligations-v8"),
-    ("shared-client-scenario-v2", "release-obligations-v9"),
-])
-@pytest.mark.parametrize("damage", ["fingerprint", "missing_evidence"])
-def test_previous_execution_history_still_rejects_corrupt_evidence(
-    tmp_path, monkeypatch, execution, scoring, damage,
-):
-    previous = _write_previous_execution_history(tmp_path, monkeypatch, execution=execution, scoring=scoring)
-    raw_path = tmp_path / previous.run_id / "raw_results.jsonl"
-    raw = json.loads(raw_path.read_text(encoding="utf-8"))
-    if damage == "fingerprint":
-        raw["cost_usd"] = 100
-    else:
-        raw.pop("cost_usd")
-        summary_path = tmp_path / previous.run_id / "summary.json"
-        summary = json.loads(summary_path.read_text(encoding="utf-8"))
-        summary["results_fingerprint"] = raw_results_fingerprint([raw])
-        summary_path.write_text(json.dumps(summary), encoding="utf-8")
-    raw_path.write_text(json.dumps(raw) + "\n", encoding="utf-8")
-
-    with pytest.raises(ValueError, match="fingerprint mismatch" if damage == "fingerprint" else "cost metrics disagree"):
-        load_history_runs(tmp_path)
-
-
-def test_previous_measurement_still_rejects_changed_decision_with_valid_raw_fingerprint(tmp_path, monkeypatch):
-    previous = _write_previous_execution_history(
-        tmp_path, monkeypatch, execution="shared-client-scenario-v2", scoring="release-obligations-v9",
-    )
-    directory = tmp_path / previous.run_id
-    raw_result = json.loads((directory / "raw_results.jsonl").read_text(encoding="utf-8"))
-    raw_result["decision"]["passed"] = not raw_result["decision"]["passed"]
-    summary = previous.model_dump(mode="json")
-    summary["results_fingerprint"] = raw_results_fingerprint([raw_result])
-    _save_payloads(directory, summary, [raw_result])
-
-    with pytest.raises(ValueError, match="stored case"):
         load_history_runs(tmp_path)

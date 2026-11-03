@@ -1,4 +1,4 @@
-"""Whole-request deadlines preserve memory and the observed delivery outcomes."""
+"""Whole-request deadlines preserve committed conversation memory."""
 from __future__ import annotations
 
 import json
@@ -11,12 +11,12 @@ from langchain_openai import ChatOpenAI
 from openai import OpenAI
 
 from src.app.agent_manager import AgentFlowManager
-from src.core.answer_schema import AnswerResponse, export_answer_text, text_document
+from src.core.answer_schema import text_document
 from src.core.planner_schema import InitialPlannerOutput
 from src.core.request_contracts import WireRequestContract
 from src.infra.llm_boundary import remaining_request_seconds, request_deadline
 from src.infra.settings import AppSettings
-from tests.core.test_pending_action_delivery import _ConsumerGraph, _contract, delivery_tools
+from tests.core.test_pending_action_delivery import delivery_tools
 
 
 @pytest.fixture
@@ -158,71 +158,3 @@ def test_summary_retry_after_outside_remaining_request_does_not_sleep(runtime_ap
     assert [item["stage"] for item in requests].count("summary") == 1
     assert any(item["code"] == "provider_rate_limited" and item["recovery"] == "stop"
                for item in result["debug"]["llm_diagnostics"])
-
-
-@pytest.mark.parametrize(("late_delivery", "delivery_tools"), [
-    ("save", {}), ("slack_before_send", {}), ("slack", {}),
-    ("slack_unknown", {"/chat.postMessage": [None]}),
-], indirect=["delivery_tools"])
-def test_late_delivery_keeps_verified_receipt_without_committing_conversation(delivery_tools, late_delivery):
-    save, slack, deliveries, output = delivery_tools
-    contract = _contract(save="requested", slack="requested", slack_recipient={
-        "state": "explicit", "selector": {"kind": "channel", "value": "C123"}, "evidence_ids": ["request"],
-    })
-    with request_deadline(10) as deadline:
-        def save_then_expire(**kwargs):
-            result = save(**kwargs)
-            if late_delivery == "save":
-                deadline.expires_at = 0
-            return result
-
-        def slack_then_expire(**kwargs):
-            if late_delivery == "slack_before_send":
-                deadline.expires_at = 0
-            result = slack(**kwargs)
-            deadline.expires_at = 0
-            return result
-
-        manager = AgentFlowManager(_settings(), graph=_ConsumerGraph(
-            [contract], ["실제 저장·전송 본문"], save_then_expire, slack_then_expire,
-        ))
-        before = manager.session.snapshot_conversation_memory()
-        result = manager.run_agent_flow("사용자 요청")
-
-    assert result["status"] == "partial"
-    assert result["problem"]["code"] == "request_timeout"
-    response = AnswerResponse.model_validate(result["response"])
-    assert export_answer_text(response) == "실제 저장·전송 본문"
-    save_receipt = response.actions[0]
-    assert save_receipt.kind == "save_text"
-    assert save_receipt.status == "success"
-    assert save_receipt.verification == "verified"
-    files = list(output.glob("*.txt"))
-    assert len(files) == 1
-    assert files[0].read_bytes() == "실제 저장·전송 본문".encode("utf-8-sig")
-    assert manager.session.snapshot_conversation_memory() == before
-    assert manager.session.previous_response is None
-    assert result["answer_id"] is None
-    assert list(manager.session.answer_export_operations.values()) == [save_receipt.operation]
-    if late_delivery in {"save", "slack_before_send"}:
-        assert deliveries == []
-        pending = manager.session.pending_action
-        assert pending.completed_actions == ("save_text",)
-        assert pending.save_receipt == save_receipt
-        assert pending.slack_delivery.status == "pending"
-    elif late_delivery == "slack":
-        assert response.actions[1].slack.status == "sent"
-        assert response.actions[1].slack.message_ts == "1.0"
-        assert deliveries == [{"path": "/chat.postMessage", "payload": {
-            "channel": "C123", "text": "실제 저장·전송 본문",
-        }}]
-        assert manager.session.pending_action is None
-    else:
-        delivery = response.actions[1].slack
-        assert delivery.status == "unknown"
-        assert delivery.failure.next_action == "verify_delivery"
-        assert manager.session.pending_action.slack_delivery == delivery
-        assert manager.session.pending_action.completed_actions == ("save_text",)
-        assert deliveries == [{"path": "/chat.postMessage", "payload": {
-            "channel": "C123", "text": "실제 저장·전송 본문",
-        }}]

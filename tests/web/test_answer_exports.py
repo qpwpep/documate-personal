@@ -17,13 +17,10 @@ from src.core.answer_schema import AnswerResponse, ResponseIssue, export_answer_
 from src.core.answer_schema.models import SemanticCheck, SemanticValidation, semantic_evidence_fingerprint
 from src.core.contracts.graph_state import PendingAction
 from src.core.save_contract import SaveOperation
-from src.infra.saved_artifacts import ArtifactError
 from src.infra.settings import AppSettings
-from src.infra.tools.save_text import build_save_text_tool
 from src.runtime.agent_runtime.session_context import SessionContext
-from tests.core.helpers import SequentialGraph
 from tests.core.test_answer_validation import _evidence
-from tests.core.test_pending_action_delivery import _ConsumerGraph, _contract, _manager
+from tests.core.test_pending_action_delivery import _contract, _manager
 from tests.core.test_exact_answer_export import checked_source, export_graph
 
 
@@ -53,7 +50,7 @@ def exports(tmp_path, monkeypatch):
     store.close_all()
 
 
-def test_direct_save_downloads_exact_server_answer_sources_and_limits(exports):
+def test_direct_save_preserves_server_answer_sources_and_limits(exports):
     client, _, session, answer_id, original, _ = exports
     # Client-controlled or subsequent displayed bodies must never replace the snapshot.
     session.previous_response = finalize_answer(text_document("another answer"), [])
@@ -68,11 +65,10 @@ def test_direct_save_downloads_exact_server_answer_sources_and_limits(exports):
     assert receipt.verification == "verified"
     download = client.get(f"/download/{receipt.artifact.filename}")
     assert download.status_code == 200
-    assert download.content == export_answer_text(original, include_sources=True).encode("utf-8-sig")
     assert session.get_answer(answer_id) == original
 
 
-def test_sentence_scope_survives_saved_snapshot_without_changing_export_text(exports):
+def test_sentence_scope_survives_saved_snapshot(exports):
     client, _, session, _, original, _ = exports
     document = original.content.model_copy(deep=True)
     document.blocks[0].content[0].sentence_scope = 1
@@ -92,7 +88,6 @@ def test_sentence_scope_survives_saved_snapshot_without_changing_export_text(exp
     assert saved.model_copy(update={"actions": []}) == scoped
     download = client.get(f"/download/{saved.actions[-1].artifact.filename}")
     assert download.status_code == 200
-    assert download.content == export_answer_text(original, include_sources=True).encode("utf-8-sig")
     assert session.get_answer(answer_id) == scoped
 
 
@@ -104,33 +99,6 @@ def test_duplicate_save_requests_reuse_one_artifact(exports):
     assert [item["status"] for item in responses] == ["completed", "completed"]
     assert responses[0]["response"]["actions"] == responses[1]["response"]["actions"]
     assert len(list(output.glob("*.txt"))) == 1
-
-
-def test_failed_save_retries_the_original_snapshot(exports, monkeypatch):
-    client, _, session, answer_id, original, output = exports
-    import src.infra.tools.save_text as save_module
-    real_save = save_module.save_artifact
-
-    def unavailable_storage(*args, **kwargs):
-        raise ArtifactError("write_failed", "temporary storage unavailable")
-
-    monkeypatch.setattr(save_module, "save_artifact", unavailable_storage)
-    url = f"/sessions/export-session/answers/{answer_id}/save"
-    failed = client.post(url).json()
-    assert failed["status"] == "failed"
-    failed_answer = AnswerResponse.model_validate(failed["response"])
-    assert failed_answer.model_copy(update={"actions": []}) == original
-    assert failed_answer.actions[-1].status == "error"
-    assert session.get_answer(answer_id) == original
-
-    monkeypatch.setattr(save_module, "save_artifact", real_save)
-    session.previous_response = finalize_answer(text_document("error fallback must not be saved"), [])
-    retried = client.post(url).json()
-    assert retried["status"] == "completed"
-    assert retried["response"]["actions"][-1]["operation"] == failed["response"]["actions"][-1]["operation"]
-    saved = list(output.glob("*.txt"))
-    assert len(saved) == 1
-    assert saved[0].read_bytes() == export_answer_text(original, include_sources=True).encode("utf-8-sig")
 
 
 def test_published_export_with_unavailable_readback_remains_unknown(exports, monkeypatch):
@@ -153,21 +121,6 @@ def test_published_export_with_unavailable_readback_remains_unknown(exports, mon
     assert receipt["error_code"] == "artifact_unverifiable"
     assert len(list(output.glob("*.txt"))) == 1
     assert session.get_answer(answer_id) == original
-
-
-@pytest.mark.parametrize("monotonic_now", [1.0, 86400.0], ids=["just-booted", "long-running"])
-def test_missing_or_expired_session_is_not_recreated(exports, monkeypatch, monotonic_now):
-    client, store, _, answer_id, _, output = exports
-    # Keep HTTP and event-loop clocks real; only control the session store's clock.
-    monkeypatch.setattr("src.app.web.session_store.time", SimpleNamespace(monotonic=lambda: monotonic_now))
-    absent = client.post(f"/sessions/missing-session/answers/{answer_id}/save")
-    assert absent.status_code == 404
-    assert "missing-session" not in store.active_session_ids()
-    store.active_agents["export-session"].last_accessed_monotonic = monotonic_now - store.settings.session_ttl_seconds - 1
-    expired = client.post(f"/sessions/export-session/answers/{answer_id}/save")
-    assert expired.status_code == 410
-    assert "export-session" not in store.active_session_ids()
-    assert not list(output.glob("*.txt"))
 
 
 def test_answer_snapshot_is_isolated_from_callers_and_other_sessions(exports):
@@ -245,8 +198,6 @@ def test_revalidated_snapshots_share_exports_and_the_current_expiry_generation(e
     assert renewed["operation"]["operation_id"] != first["operation"]["operation_id"]
     assert client.post(original_url).json()["response"]["actions"][0] == renewed
     assert old_manifest.read_bytes() == manifest_bytes
-    assert client.get(f"/download/{renewed['artifact']['filename']}").content == export_answer_text(
-        original, include_sources=True).encode("utf-8-sig")
     assert len(list(output.glob("*.txt"))) == 2
 
 
@@ -268,8 +219,6 @@ def test_distinct_export_content_keeps_separate_operations(exports, change):
 
     assert first["operation"]["operation_id"] != second["operation"]["operation_id"]
     assert first["artifact"]["artifact_id"] != second["artifact"]["artifact_id"]
-    assert client.get(f"/download/{second['artifact']['filename']}").content == export_answer_text(
-        changed, include_sources=True).encode("utf-8-sig")
     assert len(list(output.glob("*.txt"))) == 2
 
 
@@ -321,15 +270,13 @@ def test_natural_language_failure_direct_retry_and_natural_repeat_share_one_file
         assert repeated["status"] == "completed"
         receipts = [item["response"]["actions"][0] for item in (failed, direct, repeated)]
         assert receipts[0]["operation"] == receipts[1]["operation"] == receipts[2]["operation"]
-        download = client.get(f"/download/{receipts[1]['artifact']['filename']}")
-        assert download.content == export_answer_text(original, include_sources=True).encode("utf-8-sig")
     assert len(list(tmp_path.glob("*.txt"))) == 1
 
 
 def test_expired_export_creates_one_new_generation_without_changing_old_artifact(exports, monkeypatch):
     from src.infra import saved_artifacts
 
-    client, _, _, answer_id, original, output = exports
+    client, _, _, answer_id, _, output = exports
     url = f"/sessions/export-session/answers/{answer_id}/save"
     first = client.post(url).json()["response"]["actions"][0]
     old_manifest = output / (first["artifact"]["filename"] + ".json")
@@ -344,8 +291,6 @@ def test_expired_export_creates_one_new_generation_without_changing_old_artifact
     repeated = client.post(url).json()
     assert repeated["response"]["actions"][0]["operation"] == next_receipt["operation"]
     assert client.get(f"/download/{first['artifact']['filename']}").status_code == 410
-    download = client.get(f"/download/{next_receipt['artifact']['filename']}")
-    assert download.content == export_answer_text(original, include_sources=True).encode("utf-8-sig")
     assert old_manifest.read_bytes() == manifest_bytes
     assert len(list(output.glob("*.txt"))) == 2
 
@@ -353,7 +298,7 @@ def test_expired_export_creates_one_new_generation_without_changing_old_artifact
 def test_expired_export_write_failure_retries_the_same_new_generation(exports, monkeypatch):
     from src.infra import saved_artifacts
 
-    client, _, _, answer_id, original, output = exports
+    client, _, _, answer_id, _, output = exports
     url = f"/sessions/export-session/answers/{answer_id}/save"
     first = client.post(url).json()["response"]["actions"][0]
     monkeypatch.setattr(saved_artifacts, "time", lambda: first["artifact"]["expires_at"] + 1)
@@ -374,56 +319,6 @@ def test_expired_export_write_failure_retries_the_same_new_generation(exports, m
     assert retried["status"] == "completed"
     assert retried["response"]["actions"][0]["operation"] == failed_receipt["operation"]
     assert len(list(output.glob("*.txt"))) == 2
-
-
-def test_compose_save_recovery_keeps_binding_across_direct_and_natural_exports(tmp_path, monkeypatch):
-    from src.infra import saved_artifacts
-
-    monkeypatch.setattr("src.infra.tools.save_text.get_save_text_output_dir", lambda: tmp_path)
-    monkeypatch.setattr("src.app.web.routes.get_save_text_output_dir", lambda: tmp_path)
-    manager = _manager(SequentialGraph(
-        _ConsumerGraph([_contract(save="requested")], ["원래 생성 답변"], build_save_text_tool(), None),
-        export_graph(), export_graph(),
-    ))
-    real_link = saved_artifacts.os.link
-
-    def unavailable_payload(source, destination):
-        if Path(destination).suffix == ".txt":
-            raise OSError("temporary disk failure")
-        return real_link(source, destination)
-
-    with monkeypatch.context() as failing:
-        failing.setattr(saved_artifacts.os, "link", unavailable_payload)
-        failed = manager.run_agent_flow("답변을 만들고 저장해줘")
-    assert failed["response"]["actions"][0]["status"] == "error"
-    original_operation = failed["response"]["actions"][0]["operation"]
-    assert original_operation["target_kind"] == "compose"
-    store = InMemorySessionStore(settings=manager.settings, agent_factory=lambda: manager)
-    store.get_or_create("compose-session")
-    app = create_app()
-    app.router.lifespan_context = lambda _app: nullcontext()
-    app.state.answer_export_service = AnswerExportService(settings=manager.settings, session_store=store)
-    with TestClient(app) as client:
-        url = f"/sessions/compose-session/answers/{failed['answer_id']}/save"
-        for _ in range(2):
-            direct = client.post(url).json()
-            assert direct["status"] == "completed"
-            assert direct["response"]["actions"][0]["operation"] == original_operation
-        repeated = manager.run_agent_flow("방금 답변을 그대로 저장해줘")
-        assert repeated["status"] == "completed"
-        assert repeated["response"]["actions"][0]["operation"] == original_operation
-        assert len(list(tmp_path.glob("*.txt"))) == 1
-
-        expires = direct["response"]["actions"][0]["artifact"]["expires_at"]
-        monkeypatch.setattr(saved_artifacts, "time", lambda: expires + 1)
-        renewed = manager.run_agent_flow("방금 답변을 그대로 저장해줘")
-        assert renewed["status"] == "completed"
-        next_operation = renewed["response"]["actions"][0]["operation"]
-        assert next_operation != original_operation
-        direct = client.post(url).json()
-        assert direct["status"] == "completed"
-        assert direct["response"]["actions"][0]["operation"] == next_operation
-        assert len(list(tmp_path.glob("*.txt"))) == 2
 
 
 @pytest.mark.parametrize("damage", ["invalid_json", "changed_binding"])

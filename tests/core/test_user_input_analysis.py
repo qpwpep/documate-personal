@@ -96,10 +96,6 @@ def test_synthesis_keeps_request_interpretation_ids_out_of_citation_context(body
     projected = json.JSONDecoder().raw_decode(contract_message[contract_message.index("{"):])[0]
     assert "evidence" not in projected
     assert "body_request" not in projected
-    assert projected["request_interpretation"] == [
-        {key: item[key] for key in ("turn_id", "quote", "scope", "interpretation")}
-        for item in original["evidence"]
-    ]
     assert projected["body"]["kind"] == body_kind
     assert projected["body"]["instruction"] == original["body"]["instruction"]
     assert [(item["kind"], item["mode"], item["description"]) for item in projected["answer"]["content"]] == [

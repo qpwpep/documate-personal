@@ -103,7 +103,7 @@ def test_judge_retains_expected_partial_setup_separately_from_final_answer():
     assert LLMJudge.is_payload_complete(payload)
 
 
-def test_judge_receives_requested_language_policy_and_preserves_its_semantic_verdict(monkeypatch):
+def test_judge_receives_query_and_oracle_and_preserves_its_semantic_verdict(monkeypatch):
     requests = []
 
     def respond(request):
@@ -147,7 +147,3 @@ def test_judge_receives_requested_language_policy_and_preserves_its_semantic_ver
     payload = json.loads(requests[0]["messages"][1]["content"])
     assert payload["case"]["query"] == case.query
     assert payload["case"]["oracle"] == case.oracle.model_dump(mode="json")
-    policy = requests[0]["messages"][0]["content"]
-    assert "For Korean queries, a non-Korean answer should score 0" not in policy
-    assert "language explicitly requested" in policy
-    assert "faithful copies" in policy

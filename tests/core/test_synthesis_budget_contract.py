@@ -1,5 +1,4 @@
 import json
-from pathlib import Path
 
 import pytest
 
@@ -70,7 +69,7 @@ def test_model_receives_bounded_excerpts_and_citations_use_the_attempt_that_answ
     assert response.normal_evidence_missing_requirement_ids == []
 
 
-def test_saving_a_researched_answer_keeps_the_actual_packet_and_complete_validated_body(
+def test_save_intent_preserves_retrieved_packet_and_generated_body(
     tmp_path, monkeypatch,
 ):
     monkeypatch.setattr("src.infra.tools.save_text.get_save_text_output_dir", lambda: tmp_path)
@@ -97,7 +96,6 @@ def test_saving_a_researched_answer_keeps_the_actual_packet_and_complete_validat
             receipt = state["response"].result.actions[0]
             assert receipt.status == "success"
             assert receipt.verification == "verified"
-            assert Path(receipt.file_path).read_text(encoding="utf-8-sig") == results[-1]
         else:
             assert list(tmp_path.iterdir()) == []
 

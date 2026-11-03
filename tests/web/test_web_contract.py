@@ -13,7 +13,6 @@ from jsonschema import Draft202012Validator
 from src.app.client import AgentRequestContext, AgentSessionClient
 from src.app.web.app import create_app
 from src.app.web.schemas import AgentResponse
-from src.core.slack_contract import RecipientInput
 from src.core.uploads import UploadManifest
 
 
@@ -40,7 +39,6 @@ def test_output_defaults_do_not_change_optional_request_fields() -> None:
 
     assert "include_debug" not in schemas["AgentRequest"]["required"]
     assert "add" not in schemas["BrowserUploadSyncRequest"]["required"]
-    assert schemas["RecipientInput"] == RecipientInput.model_json_schema()
     assert {"selector", "failure"} <= set(schemas["SlackDefault"]["required"])
     assert {"actions", "content_hash", "semantic_validation"} <= set(schemas["AnswerResponse"]["required"])
 

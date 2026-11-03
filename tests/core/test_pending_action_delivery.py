@@ -8,22 +8,13 @@ from threading import Thread
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
-from langchain_core.messages import HumanMessage
 from slack_sdk.web import WebClient
 
 from src.app.agent_manager import AgentFlowManager
-from src.core.answer_schema import AnswerResponse, export_answer_text, text_document
-from src.core.contracts import PlannerState
-from src.core.planner_schema import PlannerOutput
 from src.core.request_contracts import RequestContract
 from src.infra.settings import AppSettings
 from src.infra.tools.save_text import build_save_text_tool
 from src.infra.tools.slack_notify import build_slack_notify_tool
-from src.runtime.nodes.actions import make_action_postprocess_node
-from src.runtime.nodes.synthesis import make_synthesize_node
-from src.runtime.nodes.validation import make_post_synthesis_validation_node
-from tests.core.helpers import make_decisions_client, mock_chat_model
-from tests.synthesis_fixtures import prepare_synthesis_state
 
 
 def _contract(*, save="not_requested", slack="not_requested", **updates):
@@ -99,59 +90,8 @@ def delivery_tools(tmp_path: Path, monkeypatch, request):
         thread.join(timeout=3)
 
 
-class _DocumentModelBoundary:
-    def __init__(self, documents):
-        self.documents = iter(documents)
-
-    def invoke(self, _messages):
-        return text_document(next(self.documents)).model_dump(mode="json")
-
-
-class _ConsumerGraph:
-    """정답 계약 fixture를 받아 실제 합성과 액션 소비 경로를 실행한다."""
-
-    def __init__(self, contracts, documents, save, slack, default_slack_recipient=None):
-        self.contracts = iter(contracts)
-        self.synthesize = make_synthesize_node(mock_chat_model(_DocumentModelBoundary(documents).invoke))
-        self.validate = make_post_synthesis_validation_node(verbose=False, decisions_client=make_decisions_client())
-        self.actions = make_action_postprocess_node(save, slack, False, default_slack_recipient)
-
-    def stream(self, state, *, stream_mode):
-        state = dict(state)
-        contract = next(self.contracts)
-        if callable(contract):
-            contract = contract(state["runtime"])
-        state["runtime"] = state["runtime"].model_copy(update={"request_contract": contract})
-        state["planner"] = PlannerState(output=PlannerOutput(use_retrieval=False, tasks=[]))
-        state["messages"] = [*state["messages"], HumanMessage(content=state["runtime"].user_input)]
-        prepare_synthesis_state(state)
-        for node in (self.synthesize, self.validate, self.actions):
-            updates = node(state)
-            messages = [*state["messages"], *updates.pop("messages", [])]
-            state.update(updates)
-            state["messages"] = messages
-        yield state
-
-
 def _manager(graph):
     return AgentFlowManager(
         settings=AppSettings(_env_file=None, openai_api_key="test-key", tavily_api_key="test-key"),
         graph=graph,
     )
-
-
-def test_separate_task_discards_the_pending_action(delivery_tools):
-    """별개의 새 작업은 이전 전송 의사를 다음 턴으로 승계하지 않는다."""
-    save, slack, messages, _output = delivery_tools
-    manager = _manager(_ConsumerGraph([
-        _contract(slack="requested"), _contract(), _contract(),
-    ], ["원 본문", "새 작업의 답변", "독립 답변"], save, slack))
-    manager.run_agent_flow("이 내용을 Slack으로 보내줘")
-    assert manager.session.pending_action is not None
-
-    second = manager.run_agent_flow("다른 주제를 설명해줘")
-    assert export_answer_text(AnswerResponse.model_validate(second["response"])) == "새 작업의 답변"
-    assert manager.session.pending_action is None
-    manager.run_agent_flow("C123")
-
-    assert messages == []

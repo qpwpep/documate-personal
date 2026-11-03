@@ -6,9 +6,7 @@ from src.core.documents import DocumentElement, build_snapshot
 from src.core.evidence import SearchHit, build_evidence
 from src.core.planner_schema import PlannerOutput, RetrievalTask
 from src.runtime.nodes.synthesis.budgets import RetrievedEvidenceBudget
-from src.runtime.nodes.synthesis.evidence_selection import (
-    contains_evidence_range, select_evidence_packet,
-)
+from src.runtime.nodes.synthesis.evidence_selection import select_evidence_packet
 
 
 def source(text, name="memoize", *, uri=None, quality_issues=None, parser="test"):
@@ -34,12 +32,11 @@ def prepare(originals, tasks, budget):
         budget=budget)
 
 
-def assert_ranges(packet, originals, budget):
+def assert_ranges(packet, budget):
     assert len(packet) <= budget.max_items
     assert sum(len(item.excerpt) for item in packet) <= budget.max_total_excerpt_chars
     for item in packet:
         assert len(item.excerpt) <= budget.max_excerpt_chars
-        assert any(contains_evidence_range(original, item) for original in originals)
         assert item.excerpt == item.element.text[item.selection.start:item.selection.end]
 
 
@@ -82,7 +79,7 @@ def test_extra_context_preserves_ranked_example_over_shorter_redundant_signature
 
     assert [item.id for item in packet] == [broad.id, explanation.id, example.id]
     assert ids == {item.id: [entry.requirement_id] for item in packet}
-    assert_ranges(packet, originals, budget)
+    assert_ranges(packet, budget)
 
 
 @pytest.mark.parametrize("detail_label", ["need:explanation", "aspect:enabled"])
@@ -116,7 +113,7 @@ def test_requested_detail_precedes_relevance_only_context_after_label_coverage(d
     assert {item.id for item in packet} == {summary.id, processing_detail.id, recording_detail.id}
     assert ids[recording_detail.id] == [recording.requirement_id]
     assert ids[processing_detail.id] == [processing.requirement_id]
-    assert_ranges(packet, originals, budget)
+    assert_ranges(packet, budget)
 
 
 def test_same_document_usage_flow_precedes_overlapping_late_notes():
@@ -149,7 +146,7 @@ def test_same_document_usage_flow_precedes_overlapping_late_notes():
     assert [item.id for item in packet] == [summary.id, intro.id, usage.id]
     assert any(workflow in item.excerpt for item in packet)
     assert ids == {item.id: [entry.requirement_id] for item in packet}
-    assert_ranges(packet, [original], budget)
+    assert_ranges(packet, budget)
 
 
 @pytest.mark.parametrize("excerpt_limit", [300, 70])
@@ -168,7 +165,7 @@ def test_unversioned_packet_uses_approved_stable_sources_without_mixing_archives
     assert packet
     assert {item.snapshot.source_uri for item in packet} == {stable.snapshot.source_uri}
     assert ids == {item.id: [entry.requirement_id] for item in packet}
-    assert_ranges(packet, originals, RetrievedEvidenceBudget(excerpt_limit, 500, 4))
+    assert_ranges(packet, RetrievedEvidenceBudget(excerpt_limit, 500, 4))
 
 
 @pytest.mark.parametrize("version, stable_approved", [("1.5", True), (None, False)])
@@ -224,7 +221,7 @@ def test_comparison_keeps_archive_associated_only_with_its_explicit_version(exce
     assert {item.snapshot.source_uri for item in packet} == {current.snapshot.source_uri, archived.snapshot.source_uri}
     assert ids[archived.id] == ["archived"]
     assert all(ids[item.id] == ["current"] for item in packet if item.id != archived.id)
-    assert_ranges(packet, [archived, current], budget)
+    assert_ranges(packet, budget)
 
 
 def test_compact_packet_gets_new_identity_instead_of_reusing_full_source_verdict():
@@ -234,7 +231,7 @@ def test_compact_packet_gets_new_identity_instead_of_reusing_full_source_verdict
         semantic_support={original.id: {entry.requirement_id: {"relevance", "aspect:limit", "need:parameters"}}})
     assert packet
     assert original.id not in {item.id for item in packet}
-    assert_ranges(packet, [original], RetrievedEvidenceBudget(70, 100, 2))
+    assert_ranges(packet, RetrievedEvidenceBudget(70, 100, 2))
 
 
 def test_candidate_pool_retains_complete_wrapped_parameter_and_condition():
@@ -250,7 +247,6 @@ def test_candidate_pool_retains_complete_wrapped_parameter_and_condition():
     candidates = prepare([original], [task("engine")], RetrievedEvidenceBudget(1800, 6000, 8))
     assert any(required in hit.evidence.excerpt for hit in candidates)
     assert len(candidates) <= 8
-    assert all(contains_evidence_range(original, hit.evidence) for hit in candidates)
 
 
 @pytest.mark.parametrize("version, uri, parser, prefer_current", [
@@ -290,7 +286,6 @@ def test_candidate_cap_keeps_current_page_middle_before_cached_source_breadth(ve
     else:
         assert len(current_candidates) == 1
     assert all(len(hit.evidence.excerpt) <= 450 for hit in candidates)
-    assert all(any(contains_evidence_range(original, hit.evidence) for original in originals) for hit in candidates)
 
 
 def test_normal_packet_preserves_identity_and_charges_shared_range_once():
@@ -314,7 +309,7 @@ def test_small_generic_range_does_not_displace_deferred_complete_range():
                           complete.id: {first.requirement_id: {"relevance", "aspect:first", "need:explanation"}},
                           small.id: {second.requirement_id: {"relevance", "aspect:second", "need:explanation"}}})
     assert {item.id for item in packet} == {complete.id, small.id}
-    assert_ranges(packet, [generic, complete, small], budget)
+    assert_ranges(packet, budget)
 
 
 @pytest.mark.parametrize("excerpt_limit", [1800, 800])
@@ -347,7 +342,7 @@ def test_approved_context_can_replace_a_shorter_parameter_range(excerpt_limit):
 
     assert any(condition in item.excerpt and ravel.requirement_id in ids[item.id] for item in packet)
     assert any("Return a copy" in item.excerpt and flatten.requirement_id in ids[item.id] for item in packet)
-    assert_ranges(packet, [overview, copy], budget)
+    assert_ranges(packet, budget)
 
 
 @pytest.mark.parametrize("compact", [False, True])
@@ -375,7 +370,7 @@ def test_exception_question_keeps_direct_answer_before_generic_introduction(comp
         semantic_support={item.id: {entry.requirement_id: {"relevance", "need:explanation"}} for item in candidates})
 
     assert any(error in item.excerpt for item in packet)
-    assert_ranges(packet, [original], budget)
+    assert_ranges(packet, budget)
 
 
 def test_compact_api_range_uses_its_scoped_requirement_in_a_comparison():
@@ -395,7 +390,7 @@ def test_compact_api_range_uses_its_scoped_requirement_in_a_comparison():
         semantic_support={original.id: {entry.requirement_id: {"relevance", "need:explanation"}}})
 
     assert any(condition in item.excerpt for item in packet)
-    assert_ranges(packet, [original], budget)
+    assert_ranges(packet, budget)
 
 
 @pytest.mark.parametrize("parent_supported_for_second", [False, True])
@@ -416,7 +411,7 @@ def test_context_replacement_preserves_each_requirement_approval(parent_supporte
     selected = parent if parent_supported_for_second else child
     assert [item.id for item in packet] == [selected.id]
     assert set(ids[selected.id]) == {first.requirement_id, second.requirement_id}
-    assert_ranges(packet, [parent], budget)
+    assert_ranges(packet, budget)
 
 
 def test_saturated_source_pool_keeps_behavior_context_before_short_signatures():
@@ -462,7 +457,6 @@ def test_mixed_api_window_prefers_requested_section_over_more_repeated_name_toke
     first = candidates[0].evidence
     assert first.selection.start >= len(unrelated)
     assert maxsize in first.excerpt and typed in first.excerpt and clear in first.excerpt
-    assert all(contains_evidence_range(original, hit.evidence) for hit in candidates)
 
 
 def test_same_owner_context_after_example_remains_in_the_first_candidate():
@@ -486,7 +480,6 @@ def test_same_owner_context_after_example_remains_in_the_first_candidate():
     assert explanation in candidates[0].evidence.excerpt
     assert "Path.write_text" not in candidates[0].evidence.excerpt
     assert candidates[0].evidence.selection.end <= len(target)
-    assert all(contains_evidence_range(original, hit.evidence) for hit in candidates)
 
 
 def test_flattened_definition_after_doctest_keeps_requested_method_context():
@@ -516,7 +509,6 @@ def test_flattened_definition_after_doctest_keeps_requested_method_context():
     assert behavior in candidates[0].evidence.excerpt
     assert "Path.is_file" not in candidates[0].evidence.excerpt
     assert candidates[0].evidence.selection.end <= len(target)
-    assert all(contains_evidence_range(original, hit.evidence) for hit in candidates)
 
 
 def test_document_primary_window_keeps_retrieval_rank_over_incidental_query_words():

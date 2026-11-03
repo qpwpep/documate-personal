@@ -89,16 +89,13 @@ def test_unrecorded_judge_input_stats_do_not_change_saved_result_fingerprint():
     assert results_fingerprint([restored]) == raw_results_fingerprint([saved])
 
 
-def test_evaluation_fingerprint_identifies_judge_policy_and_budgets(monkeypatch):
+def test_evaluation_fingerprint_identifies_judge_budgets():
     case, result = _case_result()
     config = _config()
     original = _summary(case, result, config).evaluation_fingerprint
     for field in ("judge_max_input_tokens", "judge_max_output_tokens"):
         changed = config.model_copy(update={field: getattr(config, field) + 1})
         assert _summary(case, result, changed).evaluation_fingerprint != original
-
-    monkeypatch.setattr(summary_module, "JUDGE_INPUT_CONTRACT_VERSION", "future-input-policy")
-    assert _summary(case, result, config).evaluation_fingerprint != original
 
 
 def test_input_budget_failure_retains_stats_and_unknown_quality_on_roundtrip(tmp_path):

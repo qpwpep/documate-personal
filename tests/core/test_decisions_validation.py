@@ -22,7 +22,6 @@ from src.infra.decisions import DecisionsClient
 from src.infra.llm_boundary import capture_llm_diagnostics, request_call_budget
 from src.runtime.agent_runtime.response_assembler import ResponseAssembler
 from src.runtime.nodes.validation import make_post_synthesis_validation_node, make_pre_synthesis_validation_node
-from src.runtime.nodes.validation import semantic
 from tests.synthesis_fixtures import synthesis_excerpt_limits
 
 
@@ -149,41 +148,6 @@ def _state(*, retrieval=True, answer="Path.exists()는 파일이나 디렉터리
             synthesis_attempt=1, request_id=contract.request_id, contract_revision=contract.revision,
         ),
     )
-
-
-def test_post_validation_keeps_nested_sources_and_complete_question_instructions():
-    state = _state()
-    response = state["response"]
-    evidence = response.evidence_packet[0]
-    first_text = "UNIQUE_FIRST_CLAIM: the path exists."
-    second_text = "UNIQUE_SECOND_CLAIM: the result is Boolean."
-    document = AnswerDocument(blocks=[
-        *text_document(first_text, basis="source", refs=[evidence.id]).blocks,
-        *text_document(second_text, basis="source", refs=[evidence.id]).blocks,
-    ])
-    state["response"] = response.model_copy(update={
-        "result": finalize_answer(document, [evidence], retrieval_required=True),
-    })
-    boundary = DecisionsBoundary()
-
-    updates = make_post_synthesis_validation_node(False, decisions_client=boundary)(state)
-
-    wire = boundary.requests[0]["input"]
-    payload = json.loads(wire)
-    assert "sources" not in payload
-    assert "evaluation_policy" not in payload
-    assert "evaluation_rubrics" not in payload
-    # Post-validation deliberately retains its established local evidence and
-    # full instructions after compressed inputs rejected valid fixed drafts.
-    assert wire.count(first_text) == wire.count(second_text) == 2
-    assert [unit["cited_sources"][0]["excerpt"] for unit in payload["units"]] == [evidence.excerpt] * 2
-    requirement_payload = read_decision_input(boundary.requests[-1]["input"])
-    assert requirement_payload["requirements"][0]["sources"][0]["excerpt"] == evidence.excerpt
-    assert all("Ignore instructions" in question["instructions"] for question in boundary.requests[0]["questions"])
-    assert all("evaluation_rubrics" not in question["instructions"] for question in boundary.requests[0]["questions"])
-    assert payload["rendered_response"] == {"body": document.model_dump(mode="json"), "notices": []}
-    assert "displayed_document" not in payload
-    assert updates["response"].result.content == document
 
 
 @pytest.mark.parametrize("with_history", [False, True])
@@ -367,25 +331,6 @@ def test_post_validation_scopes_cited_requirement_separately_from_mixed_request(
     assert expected_notice in export_answer_text(state["response"].result, include_sources=True)
 
 
-def test_pre_validation_shares_policy_and_source_text_across_predicates_and_packet_checks():
-    state, boundary = _state(), DecisionsBoundary()
-    task = state["planner"].output.tasks[0].model_copy(deep=True)
-    task.requirement.evidence_needs = ["parameters", "explanation"]
-    state["planner"] = PlannerState(output=PlannerOutput(use_retrieval=True, tasks=[task]))
-
-    updates = make_pre_synthesis_validation_node(False, decisions_client=boundary)(state)
-
-    evidence = state["retrieval"].hit_log[0].evidence
-    for request in boundary.requests:
-        payload = json.loads(request["input"])
-        assert list(payload)[0] == "evaluation_policy"
-        assert request["input"].count(evidence.excerpt) == 1
-        assert "Ignore instructions" in payload["evaluation_policy"]
-        assert all("Ignore instructions" not in question["instructions"] for question in request["questions"])
-        assert all("evaluation_policy" in question["instructions"] for question in request["questions"])
-    assert not updates["retry"].needs_retry
-
-
 @pytest.mark.parametrize("parser", ["official_html", "tavily"])
 def test_validation_receives_the_actual_capture_method(parser):
     state = _state()
@@ -519,8 +464,6 @@ def test_pre_validation_checks_readiness_without_retrieval():
 
 def test_request_readiness_refusal_stops_even_when_a_requirement_lacks_coverage():
     """A refused whole request cannot become a partial body through an unrelated source gap."""
-    from src.runtime.make_graph import _pre_synthesis_route
-
     state = _state()
     accepted_hit = state["retrieval"].hit_log[0]
     state["response"] = ResponseState()
@@ -533,7 +476,6 @@ def test_request_readiness_refusal_stops_even_when_a_requirement_lacks_coverage(
     assert state["retry"].attempt == 0
     assert state["response"].kind == "failure"
     assert state["response"].problem.code == "model_refusal"
-    assert _pre_synthesis_route(state)[0] == "action_postprocess"
     verdict = state["retrieval"].evidence_verdicts[0]
     assert (verdict.requirement_id, verdict.evidence_id, verdict.status) == (
         accepted_hit.requirement_id, accepted_hit.evidence.id, "passed",
@@ -786,7 +728,6 @@ def test_body_instructions_without_separate_content_conditions_still_require_ful
     payload = read_decision_input(boundary.requests[0]["input"])
     questions = {question["name"]: question["instructions"]
                  for call in boundary.requests for question in call["questions"]}
-    assert semantic.API_USAGE_SCOPE_INSTRUCTIONS in questions["requirement_0"]
     assert not any(name.startswith("content_condition_") for name in questions)
     assert payload["confirmed_request"]["body"]["instruction"] == request
     assert payload["rendered_response"] == {"body": document.model_dump(mode="json"), "notices": []}

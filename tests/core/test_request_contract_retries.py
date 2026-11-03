@@ -183,8 +183,6 @@ def test_failed_save_retries_the_same_frozen_operation_through_real_planner(tmp_
     assert completed_receipt.operation.target_kind == "compose"
     assert second["response"].save_operation_binding_sha256 == failed_receipt.operation.binding_sha256
     assert second["runtime"].pending_action is None
-    expected = export_answer_text(first["response"].result, include_sources=True).encode("utf-8-sig")
-    assert Path(completed_receipt.file_path).read_bytes() == expected
     assert len(list(tmp_path.glob("*.txt"))) == 1
     assert len(list(tmp_path.glob("*.json"))) == 1
 

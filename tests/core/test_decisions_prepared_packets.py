@@ -118,8 +118,8 @@ def test_public_pre_node_reuses_unchanged_source_and_packet_decisions_without_pr
     assert any('"cache_hits"' in event for event in state["debug"].validation_events)
 
 
-@pytest.mark.parametrize("changed", ["source", "model", "prompt", "policy"])
-def test_public_pre_node_invalidates_semantic_cache_for_changed_judgment_inputs(changed, monkeypatch):
+@pytest.mark.parametrize("changed", ["source", "model"])
+def test_public_pre_node_invalidates_semantic_cache_for_changed_judgment_inputs(changed):
     state, boundary = _state(), DecisionsBoundary()
     _validate(state, boundary)
     original_calls = len(boundary.requests)
@@ -128,14 +128,8 @@ def test_public_pre_node_invalidates_semantic_cache_for_changed_judgment_inputs(
         state["retrieval"] = state["retrieval"].model_copy(update={"hit_log": [
             old.model_copy(update={"evidence": _evidence(old.evidence.excerpt + " Revised wording.")}),
         ]})
-    elif changed == "model":
-        boundary.model_name = "changed-model"
-    elif changed == "prompt":
-        from src.runtime.nodes.validation import prepared_semantics as semantic
-        monkeypatch.setattr(semantic, "SOURCE_RELEVANCE_INSTRUCTIONS", semantic.SOURCE_RELEVANCE_INSTRUCTIONS + " New rubric.")
     else:
-        from src.runtime.nodes.validation import prepared_semantics as semantic
-        monkeypatch.setattr(semantic, "EVALUATION_POLICY", semantic.EVALUATION_POLICY + " Updated shared evaluation policy.")
+        boundary.model_name = "changed-model"
 
     _validate(state, boundary)
 

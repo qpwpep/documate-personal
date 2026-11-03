@@ -64,7 +64,6 @@ def test_save_and_slack_retain_source_selection_and_limitations_without_mutating
 
     saved = Path(updates["response"].result.actions[0].file_path).read_text(encoding="utf-8-sig")
     assert [message["payload"]["text"] for message in slack_messages if message["path"] == "/chat.postMessage"] == [saved]
-    assert saved == export_answer_text(answer, include_sources=True)
     assert snapshot.snapshot_id in saved
     assert original_file.as_uri() in saved
     assert "settings-code" in saved

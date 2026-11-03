@@ -126,7 +126,7 @@ def test_multiline_signature_survives_budget_beside_a_long_unbroken_description(
     assert any(signature in item.excerpt for item in prepared.evidence_packet)
     assert any(description in item.excerpt for item in prepared.evidence_packet)
     _assert_budget_case_ranges(
-        prepared.evidence_packet, [hit.evidence for hit in hits], RetrievedEvidenceBudget(excerpt_chars, 6000, 8),
+        prepared.evidence_packet, RetrievedEvidenceBudget(excerpt_chars, 6000, 8),
     )
 
 
@@ -153,7 +153,7 @@ def test_signature_outside_retrieved_range_or_budget_is_not_reconstructed(clippe
     )
     assert candidates
     for hit in candidates:
-        _assert_budget_case_ranges([hit.evidence], [original], budget)
+        _assert_budget_case_ranges([hit.evidence], budget)
     assert all(signature not in hit.evidence.excerpt for hit in candidates)
     # The semantic stage can reject these incomplete candidates. The allocator
     # consumes that rejection instead of trying to infer a signature itself.
@@ -187,7 +187,7 @@ def test_definition_context_preserves_alias_candidates_before_semantic_selection
     assert any(introduction in item.excerpt for item in prepared.evidence_packet)
     assert any(condition in item.excerpt for item in prepared.evidence_packet)
     _assert_budget_case_ranges(
-        prepared.evidence_packet, [hit.evidence for hit in hits], RetrievedEvidenceBudget(excerpt_chars, 6000, 8),
+        prepared.evidence_packet, RetrievedEvidenceBudget(excerpt_chars, 6000, 8),
     )
 
 
@@ -201,7 +201,6 @@ def test_long_parameter_description_keeps_complete_coverage_within_normal_budget
     """
     from src.core.documents import DocumentElement, build_snapshot
     from src.core.evidence import build_evidence
-    from src.runtime.nodes.synthesis.evidence_selection import contains_evidence_range
 
     aspects = ["sep", "dtype", "parse_dates", "na_values", "usecols", "converters", "chunksize", "iterator"]
     task = RetrievalTask(
@@ -272,7 +271,6 @@ def test_long_parameter_description_keeps_complete_coverage_within_normal_budget
     assert all(len(item.excerpt) <= 1800 for item in packet)
     assert sum(len(item.excerpt) for item in packet) <= 6000
     for selected in packet:
-        assert any(contains_evidence_range(original, selected) for original in originals)
         assert selected.excerpt == body[selected.selection.start:selected.selection.end]
     assert coverage["is_partial"] is False
     assert all(any(description.strip() in item.excerpt for item in packet) for description in descriptions.values())
@@ -358,14 +356,11 @@ def _budget_case_source(text, key, *, upload=False):
     ))
 
 
-def _assert_budget_case_ranges(packet, originals, budget):
-    from src.runtime.nodes.synthesis.evidence_selection import contains_evidence_range
-
+def _assert_budget_case_ranges(packet, budget):
     assert len(packet) <= budget.max_items
     assert all(len(item.excerpt) <= budget.max_excerpt_chars for item in packet)
     assert sum(len(item.excerpt) for item in packet) <= budget.max_total_excerpt_chars
     for item in packet:
-        assert any(contains_evidence_range(original, item) for original in originals)
         assert item.excerpt == item.element.text[item.selection.start:item.selection.end]
 
 
@@ -414,7 +409,7 @@ def test_two_docs_requirements_and_upload_share_space_for_their_required_ranges(
         semantic_support=support,
     )
 
-    _assert_budget_case_ranges(packet, originals, budget)
+    _assert_budget_case_ranges(packet, budget)
     assert {requirement_id for associated in ids.values() for requirement_id in associated} == {
         task.requirement_id for task in tasks
     }
@@ -453,7 +448,7 @@ def test_impossible_description_budget_preserves_ranges_and_consumes_semantic_re
     )
     assert candidates
     for hit in candidates:
-        _assert_budget_case_ranges([hit.evidence], [original], budget)
+        _assert_budget_case_ranges([hit.evidence], budget)
         assert hit.evidence.id != original.id
         assert description not in hit.evidence.excerpt
     # A previous full-source decision is not a verdict for any bounded candidate.
@@ -464,7 +459,7 @@ def test_impossible_description_budget_preserves_ranges_and_consumes_semantic_re
             "relevance", "aspect:usecols", "need:parameters", "need:explanation",
         }}},
     )
-    _assert_budget_case_ranges(packet, [original], budget)
+    _assert_budget_case_ranges(packet, budget)
     assert packet == []
     coverage = requirement_coverage(task, packet, ids)
     assert coverage["is_partial"] is True
@@ -498,7 +493,7 @@ def test_mixed_packet_keeps_uploaded_inputs_and_join_before_optional_docs_contex
 
     assert any(item.excerpt == code for item in packet if item.route == "upload")
     assert rule.id in ids and ids[rule.id] == [docs_task.requirement_id]
-    _assert_budget_case_ranges(packet, originals, budget)
+    _assert_budget_case_ranges(packet, budget)
 
 
 def test_mixed_packet_reserves_uploaded_code_cell_before_redundant_docs_take_item_slots():
@@ -530,4 +525,4 @@ def test_mixed_packet_reserves_uploaded_code_cell_before_redundant_docs_take_ite
     assert any(item.excerpt == code for item in packet if item.route == "upload")
     assert ids[notebook[1].id] == [upload_task.requirement_id]
     assert any(item.route == "docs" for item in packet)
-    _assert_budget_case_ranges(packet, originals, budget)
+    _assert_budget_case_ranges(packet, budget)

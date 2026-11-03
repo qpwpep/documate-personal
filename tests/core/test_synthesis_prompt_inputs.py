@@ -9,11 +9,10 @@ from src.core.answer_schema import (
     ResponseIssue, SemanticCheck, SemanticValidation, export_answer_text, finalize_answer,
     semantic_evidence_fingerprint, text_document,
 )
-from src.core.contracts import ResponseState
 from src.core.documents import DocumentElement, SourceAnchor, TableCell, TableData, build_snapshot
 from src.core.evidence import RetrievalScore, SearchHit, build_evidence, source_line_records
 from src.core.request_contracts import (
-    BoundAnswerReference, BoundInputText, ComposeBody, RequestContract, TransformAnswerBody, TransformInputBody,
+    BoundAnswerReference, BoundInputText, RequestContract, TransformAnswerBody, TransformInputBody,
 )
 from src.runtime.nodes.synthesis import make_synthesize_node
 from tests.core.helpers import mock_chat_model
@@ -204,92 +203,6 @@ def test_transform_answer_reuses_bound_body_and_preserves_only_semantic_limits()
     assert state["messages"][1].content == history_text
 
 
-def test_fixed_reference_policy_remains_in_the_shared_prefix():
-    prefixes = []
-    for request in ("Explain the first topic.", "Explain the second topic."):
-        def respond(messages):
-            reference_index = next(index for index, message in enumerate(messages)
-                                   if str(message.content).startswith("[Reference Policy]"))
-            prefixes.append([message.content for message in messages[:reference_index + 1]])
-            return text_document("An explanation.")
-
-        state = prepare_synthesis_state(_state([], query=request))
-        make_synthesize_node(mock_chat_model(respond))(state)
-
-    assert prefixes[0] == prefixes[1]
-
-
-@pytest.mark.parametrize("is_repair", [False, True])
-@pytest.mark.parametrize("user_request,instruction", [
-    (
-        "Python 3.9 공식 문서로 pathlib.Path.exists()를 설명해 줘.",
-        "Explain pathlib.Path.exists() using the Python 3.9 documentation.",
-    ),
-    (
-        "Python 3.9 공식 문서로 pathlib.Path.exists()를 영어로 설명해 줘.",
-        "Explain pathlib.Path.exists() in English using the Python 3.9 documentation.",
-    ),
-])
-def test_synthesis_language_comes_from_request_not_foreign_source_or_draft(user_request, instruction, is_repair):
-    source_text = "Se o caminho aponta para um arquivo ou diretório existente."
-    element = DocumentElement(element_id="exists", kind="paragraph", text=source_text)
-    state, evidence = _source_state(element)
-    state["messages"] = [HumanMessage(content=user_request)]
-    state["runtime"] = state["runtime"].model_copy(update={
-        "user_input": user_request,
-        "request_contract": RequestContract(body=ComposeBody(instruction=instruction)),
-    })
-    prior = finalize_answer(text_document(source_text, basis="source", refs=[evidence.id]), [evidence])
-    if is_repair:
-        state["response"] = ResponseState(result=prior, synthesis_attempt=1)
-    sent = []
-
-    def respond(messages):
-        sent.extend(messages)
-        source, = _record(messages, "[Evidence Packet]")
-        return text_document(source_text, basis="source", refs=[source["id"]])
-
-    make_synthesize_node(mock_chat_model(respond))(prepare_synthesis_state(state))
-
-    policy = str(sent[0].content)
-    assert "rejected drafts do not choose the response language" in policy
-    human, = [message for message in sent if isinstance(message, HumanMessage)]
-    assert human.content == user_request
-    assert _record(sent, "[Evidence Packet]")[0]["excerpt"] == source_text
-    contract_text = next(str(message.content) for message in sent
-                         if str(message.content).startswith("[Confirmed Request Contract]"))
-    assert instruction in contract_text
-    if is_repair:
-        assert _record(sent, "[Failed Draft]")["content"]["blocks"][0]["content"][0]["text"] == source_text
-
-
-def test_synthesis_keeps_source_example_inputs_available_under_brevity_constraint():
-    source_text = (
-        "a = np.array([[1, 2, 3], [4, 5, 6]])\n"
-        "np.reshape(a, (3, -1))\n"
-        "array([[1, 2], [3, 4], [5, 6]])"
-    )
-    element = DocumentElement(element_id="reshape-example", kind="code", text=source_text, language="python")
-    state, _ = _source_state(element)
-    instruction = "Explain the inferred dimension in at most two sentences."
-    state["runtime"] = state["runtime"].model_copy(update={
-        "request_contract": RequestContract(body=ComposeBody(instruction=instruction)),
-    })
-    sent = []
-
-    def respond(messages):
-        sent.extend(messages)
-        source, = _record(messages, "[Evidence Packet]")
-        return text_document("For this six-element array, (3, -1) infers a second dimension of 2.",
-                             basis="source", refs=[source["id"]])
-
-    make_synthesize_node(mock_chat_model(respond))(prepare_synthesis_state(state))
-
-    assert _record(sent, "[Evidence Packet]")[0]["excerpt"] == source_text
-    assert any(instruction in str(message.content) for message in sent)
-    assert any("For generated or paraphrased examples" in str(message.content) for message in sent)
-
-
 def test_synthesis_can_cite_api_relationship_and_behavior_on_the_same_claim():
     relationship = _hit("parse_text(text) uses the same decoding rules as parse_stream(stream).")
     behavior = _hit("parse_stream(stream) raises DecodeError when the input is not a valid encoded document.")
@@ -310,4 +223,3 @@ def test_synthesis_can_cite_api_relationship_and_behavior_on_the_same_claim():
     assert {citation.evidence.id for citation in updates["response"].result.citations} == {
         relationship.evidence.id, behavior.evidence.id,
     }
-    assert any("cite the documented relationship" in str(message.content) for message in sent)

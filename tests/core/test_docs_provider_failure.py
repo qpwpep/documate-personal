@@ -20,7 +20,6 @@ from src.infra.tools.docs_search import client
 from src.infra.tools.docs_search.tool import build_docs_search_tool
 from src.infra.tools.local_rag import build_upload_search_tool
 from src.runtime.agent_runtime.response_assembler import ResponseAssembler
-from src.runtime.make_graph import _pre_synthesis_route
 from src.runtime.nodes.retrieval import make_retrieve_dispatch_node
 from src.runtime.nodes.synthesis import make_synthesize_node
 from src.runtime.nodes.validation import make_post_synthesis_validation_node, make_pre_synthesis_validation_node
@@ -161,7 +160,6 @@ def test_rejected_docs_preserve_a_cited_upload_partial_without_replanning(
         False, excerpt_limits=synthesis_excerpt_limits(), decisions_client=make_decisions_client(),
     )(state))
 
-    assert _pre_synthesis_route(state)[0] == "synthesize"
     assert not state["retry"].needs_retry
     assert state["retry"].terminal_failed_requirement_ids == ["head"]
     packet = state["retrieval"].prepared_evidence.normal.evidence

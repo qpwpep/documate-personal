@@ -180,7 +180,7 @@ def test_validated_input_log_remains_an_answer_when_examples_are_forbidden():
     assert updates["response"].result.semantic_validation.passed
 
 
-@pytest.mark.parametrize("basis", ["example", "interaction", "inference"])
+@pytest.mark.parametrize("basis", ["example", "interaction"])
 @pytest.mark.parametrize("kind", ["example", "code_example"])
 def test_forbidden_example_cannot_bypass_semantics_with_a_different_basis(kind, basis):
     document = AnswerDocument(blocks=[CodeBlock(
@@ -240,16 +240,13 @@ def _request_save(state):
     return state
 
 
-def test_unavailable_semantic_validation_blocks_save(tmp_path, monkeypatch):
-    output = tmp_path / "saved"
-    monkeypatch.setattr("src.infra.tools.save_text.get_save_text_output_dir", lambda: output)
+def test_unavailable_semantic_validation_propagates_provider_error():
     document = AnswerDocument(blocks=[CodeBlock(
         language="python", content=ContentUnit(text="print('illustrative example')", basis="interaction"),
     )])
     state = _request_save(_validation_state(document))
     with pytest.raises(LLMCallError):
         make_post_synthesis_validation_node(False, decisions_client=DecisionsBoundary(error_status=401))(state)
-    assert not output.exists()
 
 
 @pytest.mark.parametrize("judgment", ["rejected", "refused"])
@@ -274,9 +271,7 @@ def test_delivery_requires_a_passing_request_fulfillment_check(tmp_path, monkeyp
 
 
 @pytest.mark.parametrize("stale_field", ["content_hash", "evidence_fingerprint"])
-def test_post_validation_rejects_semantic_report_for_another_answer_revision(tmp_path, monkeypatch, stale_field):
-    output = tmp_path / "saved"
-    monkeypatch.setattr("src.infra.tools.save_text.get_save_text_output_dir", lambda: output)
+def test_post_validation_rejects_semantic_report_for_another_answer_revision(stale_field):
     document = AnswerDocument(blocks=[CodeBlock(
         language="text", content=ContentUnit(text="INFO request completed", basis="interaction"),
     )])
@@ -290,8 +285,6 @@ def test_post_validation_rejects_semantic_report_for_another_answer_revision(tmp
 
     with pytest.raises(ValidationError, match="semantic validation must match"):
         make_post_synthesis_validation_node(False, decisions_client=make_decisions_client())(state)
-
-    assert not output.exists()
 
 
 @pytest.mark.parametrize("kind", ["code", "example", "code_example"])

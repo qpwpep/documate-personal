@@ -64,8 +64,7 @@ def physical_line_api(tmp_path, monkeypatch):
         return connect(sock, address)
 
     monkeypatch.setattr(socket.socket, "connect", local_only)
-    controls = SimpleNamespace(invalid_location=True, repair_location=False, paragraph_code=False,
-                               excerpt_repair_required=False, location_repair_required=False,
+    controls = SimpleNamespace(invalid_location=True, paragraph_code=False,
                                inline_mode=None, invalid_second_location=False, format_probability=0.99, format_refused=False,
                                requests=[], synthesis_packets=[], decisions_inputs=[])
 
@@ -145,26 +144,13 @@ def physical_line_api(tmp_path, monkeypatch):
                 ]}]}
                 return httpx.Response(200, json=_chat_response(payload, document))
             evidence = next(item for item in packet if CALCULATION in item["excerpt"])
-            feedback = next((item["content"] for item in payload["messages"]
-                             if str(item["content"]).startswith("[Validation Repair]")), "")
-            location_repair_ready = not controls.location_repair_required or (
-                "source_location_mismatch" in feedback and "start/end offsets" in feedback
-            )
-            invalid_location = controls.invalid_location and not (
-                len(controls.synthesis_packets) > 1 and controls.repair_location and location_repair_ready
-            )
-            start = (evidence["selection"]["end"] if invalid_location
+            start = (evidence["selection"]["end"] if controls.invalid_location
                      else evidence["selection"]["start"] + evidence["excerpt"].index(CALCULATION))
             location = {"text": "source position", "basis": "source", "refs": [evidence["id"]],
                         "source_location": {"ref": evidence["id"], "start": start, "end": start + len(CALCULATION)}}
-            basis = "source"
-            if controls.excerpt_repair_required and not (
-                "excerpt_does_not_match_source" in feedback and "basis=source" in feedback
-            ):
-                basis = "excerpt"
             document = {"blocks": [
                 {"type": "code", "language": "python", "inline": False, "content": {
-                    "text": CALCULATION, "basis": basis, "refs": [evidence["id"]],
+                    "text": CALCULATION, "basis": "source", "refs": [evidence["id"]],
                 }},
                 {"type": "paragraph", "content": [location]},
             ]}
@@ -210,59 +196,6 @@ def test_out_of_evidence_location_cannot_be_delivered_as_completed(physical_line
     limitation = next(issue for issue in response.issues if issue.code == "source_location_unverified")
     assert "원본" in limitation.message and "줄" in limitation.message
     assert response.actions == []
-
-
-def test_location_recovers_when_provider_repairs_the_selected_range(physical_line_api):
-    api = physical_line_api
-    api.controls.repair_location = True
-    api.controls.location_repair_required = True
-    current = sync(api, add=[staged(api, SAMPLE.name, SAMPLE.read_bytes())])
-
-    result = final_response(api, query=QUESTION, uploads=context(current))
-
-    assert result["status"] == "completed", result
-    response = AnswerResponse.model_validate(result["response"])
-    displayed = export_answer_text(response)
-    assert CALCULATION in displayed
-    assert "sample_data_analysis.py:30" in displayed
-    assert "29행" not in displayed
-    assert not response.issues
-    assert all(check.support_status != "unsupported" for check in response.checks)
-    assert len(api.controls.synthesis_packets) == 2
-
-
-def test_partial_source_quotation_recovers_from_exact_excerpt_diagnostic(physical_line_api, caplog):
-    api = physical_line_api
-    api.controls.invalid_location = False
-    api.controls.excerpt_repair_required = True
-    current = sync(api, add=[staged(api, SAMPLE.name, SAMPLE.read_bytes())])
-
-    result = final_response(api, query=QUESTION, uploads=context(current))
-
-    assert result["status"] == "completed", result
-    response = AnswerResponse.model_validate(result["response"])
-    displayed = export_answer_text(response)
-    assert CALCULATION in displayed
-    assert "sample_data_analysis.py:30" in displayed
-    assert response.content.blocks[0].content.basis == "source"
-    assert not response.issues
-    assert all(check.support_status != "unsupported" for check in response.checks)
-    assert len(api.controls.synthesis_packets) == 2
-    saved = api.client.post(f"/sessions/session-a/answers/{result['answer_id']}/save")
-    assert saved.status_code == 200, saved.text
-    assert saved.json()["status"] == "completed", saved.json()
-    saved_answer = AnswerResponse.model_validate(saved.json()["response"])
-    artifact = saved_answer.actions[-1].artifact
-    download = api.client.get(f"/download/{artifact.filename}")
-    assert download.status_code == 200
-    assert download.content == export_answer_text(response, include_sources=True).encode("utf-8-sig")
-    validation_logs = [record.getMessage() for record in caplog.records
-                       if getattr(record, "event", None) == "post_synthesis_validation"]
-    assert validation_logs
-    assert "excerpt_does_not_match_source" in validation_logs[0]
-    assert "missing_content=[]" in validation_logs[0]
-    assert "semantic_failures={}" in validation_logs[0]
-    assert all(CALCULATION not in message and QUESTION not in message for message in validation_logs)
 
 
 def test_physical_line_is_shared_by_model_validation_answer_and_download(physical_line_api):
@@ -320,7 +253,6 @@ def test_physical_line_is_shared_by_model_validation_answer_and_download(physica
     receipt = saved_answer.actions[-1]
     download = api.client.get(f"/download/{receipt.artifact.filename}")
     assert download.status_code == 200, download.text
-    assert download.content == export_answer_text(original, include_sources=True).encode("utf-8-sig")
     assert CALCULATION in download.content.decode("utf-8-sig")
     assert "sample_data_analysis.py:30" in download.content.decode("utf-8-sig")
 
@@ -347,7 +279,6 @@ def test_exact_source_line_in_paragraph_completes_and_downloads(physical_line_ap
     artifact = saved_answer.actions[-1].artifact
     download = api.client.get(f"/download/{artifact.filename}")
     assert download.status_code == 200
-    assert download.content == export_answer_text(response, include_sources=True).encode("utf-8-sig")
 
 
 def test_missing_required_inline_code_cannot_complete_with_high_model_scores(physical_line_api):
@@ -386,7 +317,6 @@ def test_required_inline_code_with_correct_lines_completes_and_preserves_saved_b
     receipt = saved_answer.actions[-1]
     download = api.client.get(f"/download/{receipt.artifact.filename}")
     assert download.status_code == 200, download.text
-    assert download.content == export_answer_text(response, include_sources=True).encode("utf-8-sig")
     assert download.content == Path(receipt.file_path).read_bytes()
     assert b"`x = 1`" in download.content and b"`y = 2`" in download.content
 

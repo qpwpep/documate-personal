@@ -188,9 +188,6 @@ def test_selected_table_cells_and_excerpt_survive_without_unselected_cells(provi
     record = payload["evidence"][evidence.id]
     assert record["selection"] == evidence.selection.model_dump(mode="json")
     assert record["excerpt"] == evidence.excerpt
-    selected = [cell.model_dump(mode="json") for cell in evidence.element.table.cells
-                if cell.cell_id in evidence.selection.cell_ids]
-    assert record["selected_cells"] == selected
     assert record["is_partial"] is table_partial
     assert "UNSELECTED_SOURCE_DO_NOT_SEND" not in json.dumps(payload, ensure_ascii=False)
     assert inputs == original

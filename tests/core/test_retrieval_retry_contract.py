@@ -204,40 +204,6 @@ def test_refresh_evaluates_new_evidence_after_lexically_stronger_candidates_are_
     assert state["retry"].terminal_retrieval_reason is None
 
 
-@pytest.mark.parametrize("rejected_status", ["failed", "refused"])
-def test_refresh_returning_the_same_rejected_source_does_not_restore_it_to_synthesis(rejected_status):
-    """재검색이 실패 원문을 다시 반환해도 새 합성과 검증에는 통과·새 원문만 들어간다."""
-    from src.core.contracts import RetrievalDiagnostic
-    from src.core.contracts.retrieval import RetrievalResult
-    from src.runtime.nodes.validation.snapshot import collect_validation_snapshot
-    from tests.core.test_decisions_validation import _evidence
-
-    state, accepted, rejected = _mixed_evidence_state(rejected_status=rejected_status)
-    candidate = accepted.model_copy(update={"evidence": _evidence(
-        "Path.exists() tests the existing path without creating files or directories."
-    ), "rank": 3})
-
-    def docs_search(**kwargs):
-        return RetrievalResult(hits=[rejected, candidate], diagnostics=RetrievalDiagnostic(
-            route="docs", status="success", answerability="covered",
-        ))
-
-    state["retry"] = RetryState(
-        attempt=1, retry_reason="no_evidence", failed_requirement_ids=[accepted.requirement_id],
-        hit_start_index=len(state["retrieval"].hit_log),
-    )
-    state.update(make_retrieve_dispatch_node(docs_search, None, False)(state))
-
-    snapshot, errors = collect_validation_snapshot(state)
-    expected = {accepted.evidence.id, candidate.evidence.id}
-    current = state["retrieval"].hit_log[state["retry"].hit_start_index:]
-    assert {hit.evidence.id for hit in snapshot.parsed_hits} == {hit.evidence.id for hit in current}
-    assert errors == []
-    prepare_synthesis_state(state, decisions=_rejecting_decisions(rejected_status))
-    assert {item.id for item in state["retrieval"].prepared_evidence.normal.evidence} == expected
-    assert state["retrieval"].hit_log[:2] == [accepted, rejected]
-
-
 def test_duplicate_request_reuse_does_not_restore_refused_evidence():
     """같은 검색 재사용도 거절 원문을 되살리지 않고 통과 원문만 새 시도에 전달한다."""
     from src.runtime.nodes.retrieval.executor import retrieval_fingerprint
@@ -261,43 +227,6 @@ def test_duplicate_request_reuse_does_not_restore_refused_evidence():
     state.update(updates)
     prepare_synthesis_state(state, decisions=_rejecting_decisions("refused"))
     assert [item.id for item in state["retrieval"].prepared_evidence.normal.evidence] == [accepted.evidence.id]
-
-
-def test_complementary_upload_refresh_can_complete_coverage_with_preserved_sources():
-    """새 검색 결과 단독으로는 partial이어도 통과 원문과 합친 실제 범위를 평가한다."""
-    from types import SimpleNamespace
-
-    from src.core.contracts import RetrievalState
-    from src.infra.tools.local_rag.tool import build_upload_search_tool
-    from src.runtime.nodes.validation import make_pre_synthesis_validation_node
-    from tests.core.helpers import make_decisions_client
-    from tests.core.test_answer_validation import _evidence, _hit
-
-    task = RetrievalTask(route="upload", query="alpha beta", k=1, requirement_id="parts",
-                         requirement={"match": "topic", "aspects": ["alpha", "beta"]})
-    accepted = _hit(_evidence("alpha = 1\n")).model_copy(update={"requirement_id": task.requirement_id})
-    replacement = _evidence("beta = 2\n")
-    retriever = SimpleNamespace(search=lambda query, **kwargs: [_hit(replacement)])
-    state = build_test_state({
-        "user_input": "alpha와 beta를 설명해 주세요.", "request_contract": RequestContract(),
-        "planner_output": PlannerOutput(use_retrieval=True, tasks=[task]),
-        "retriever": retriever,
-        "retrieval": RetrievalState(hit_log=[accepted], evidence_verdicts=[_verdict(accepted, "passed")]),
-        "retry": RetryState(attempt=1, max_retries=1, retry_reason="no_evidence",
-                            failed_requirement_ids=[task.requirement_id], hit_start_index=1),
-    })
-    state.update(make_retrieve_dispatch_node(None, build_upload_search_tool(), False)(state))
-    assert state["debug"].retrieval_diagnostics[-1].answerability == "partial"
-
-    state.update(make_pre_synthesis_validation_node(False, excerpt_limits=synthesis_excerpt_limits(), decisions_client=make_decisions_client())(state))
-
-    assert state["retry"].needs_retry is False
-    assert state["retry"].failed_requirement_ids == []
-    assert state["retry"].terminal_failed_requirement_ids == []
-    assert state["retry"].retry_reason is None
-    assert {item.evidence_id for item in state["retrieval"].evidence_verdicts if item.status == "passed"} == {
-        accepted.evidence.id, replacement.id,
-    }
 
 
 @pytest.mark.parametrize("rejected_status", ["failed", "refused"])

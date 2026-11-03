@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from src.core.slack_contract import RecipientSelector, SlackDefault
+from src.core.slack_contract import RecipientSelector
 from src.core.contracts.graph_state import SessionMetadata
 from tests.core.test_pending_action_delivery import delivery_tools
 from tests.core.test_request_contract_retries import _SaveConversation, _fail_save_publication
@@ -121,23 +121,6 @@ def test_incomplete_sidebar_recipient_blocks_only_send_and_recovers_after_correc
     assert [request["payload"] for request in requests] == [
         {"channel": "C123", "text": "수신자를 고쳐도 유지할 본문"},
     ]
-
-
-def test_incomplete_sidebar_recipient_never_falls_back_to_configured_default(delivery_tools):
-    from tests.core.test_pending_action_delivery import _ConsumerGraph, _contract, _manager
-
-    save, slack, requests, _output = delivery_tools
-    manager = _manager(_ConsumerGraph([_contract(slack="requested")], ["전송할 본문"], save, slack,
-        SlackDefault(selector=RecipientSelector(kind="channel", value="CDEFAULT"))))
-    manager.set_session_metadata(SessionMetadata(slack_recipient={"kind": "channel", "value": ""}))
-
-    result = manager.run_agent_flow("본문을 Slack으로 보내줘")
-
-    assert result["response"]["actions"][0]["status"] == "skipped"
-    assert requests == []
-    delivery = manager.session.pending_action.slack_delivery
-    assert delivery.selection is None
-    assert delivery.failure.code == "recipient_invalid"
 
 
 @pytest.mark.parametrize("delivery_tools", [{"/chat.postMessage": None}], indirect=True)

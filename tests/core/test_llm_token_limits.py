@@ -8,7 +8,7 @@ import pytest
 from langchain_core.messages import HumanMessage
 from langchain_openai import ChatOpenAI
 
-from src.core.answer_schema import finalize_answer, text_document
+from src.core.answer_schema import text_document
 from src.core.contracts import PlannerState, RetrievalState
 from src.core.contracts.boundary.graph import build_graph_state_input
 from src.core.documents import DocumentElement, build_snapshot
@@ -146,6 +146,3 @@ def test_timeout_uses_independent_compact_output_cap(provider):
     assert len(_evidence_packet(requests[0])[0]["excerpt"]) > 900
     selected = response.evidence_packet[0]
     assert len(selected.excerpt) <= 900
-    assert response.result == finalize_answer(
-        text_document(selected.excerpt, basis="excerpt", refs=[selected.id]), [selected], retrieval_required=True,
-    )

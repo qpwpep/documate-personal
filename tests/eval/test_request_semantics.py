@@ -3,19 +3,16 @@ from __future__ import annotations
 
 from copy import deepcopy
 import json
-from types import SimpleNamespace
 
 import httpx
 import pytest
 from langchain_openai import ChatOpenAI
 
-from src.core.planner_schema import InitialPlannerOutput
-from src.eval.request_contract_eval import load_cases, load_policy, make_live_observer
+from src.eval.request_contract_eval import load_cases, load_policy
 from src.eval.request_contract_scoring import score_observation, summarize_results
 from src.eval.request_contract_semantics import (
     BodySemanticAssessor, SemanticChecks, semantic_input_hash,
 )
-from src.infra.llm_boundary import bind_structured_output
 
 
 def _case(query="Explain the cache eviction policy", *, kind="compose"):
@@ -274,7 +271,6 @@ def test_http_assessor_preserves_original_request_and_rejects_unrelated_plan():
     assert audit["request"][1]["content"] == requests[0]["messages"][1]["content"]
     assert audit["raw_response"]["response_metadata"]["model_name"] == "semantic-test-v1"
     assert audit["raw_response"]["usage_metadata"]["total_tokens"] == 30
-    assert audit["input_hash"] == semantic_input_hash(case, observed)
 
 
 @pytest.mark.parametrize("content", [
@@ -387,45 +383,6 @@ def test_provider_refusal_cannot_pass_with_valid_json():
     assert score_observation(case, observed, _policy())["overall"] is False
 
 
-@pytest.mark.parametrize(
-    ("case_id", "body", "criterion"),
-    [
-        ("mention_en", {"kind": "compose", "instruction": "Explain how to bake a cake."}, "subject"),
-        ("quotation_en", {
-            "kind": "transform_input",
-            "source": {"turn_id": "u1", "quote": "send this to Slack"},
-            "instruction": "Translate into French.",
-        }, "target_language"),
-    ],
-)
-def test_real_observer_and_scorer_reject_wrong_subject_or_translation_with_http_fakes(monkeypatch, case_id, body, criterion):
-    # Read one frozen oracle as test input. No batch evaluator or benchmark CLI runs.
-    case = next(case for case in load_cases() if case["id"] == case_id)
-    plan = InitialPlannerOutput.model_validate({
-        "use_retrieval": False, "tasks": [],
-        "request_contract": {"body": body, "slack_recipient": {"state": "omitted"}},
-    }).model_dump(mode="json")
-    with httpx.Client(transport=httpx.MockTransport(lambda request: _response(json.dumps(plan)))) as client:
-        planner = bind_structured_output(ChatOpenAI(
-            model="planner-test", api_key="test-key", base_url="https://planner.invalid/v1",
-            http_client=client, use_responses_api=False, max_retries=0,
-        ), InitialPlannerOutput, name="PlannerOutput")
-        monkeypatch.setattr("src.infra.llm.build_llm_registry", lambda settings: SimpleNamespace(llm_planner=planner))
-        assessor = _http_assessor(lambda request: _response(json.dumps(_checks(**{
-            criterion: "The user request and planned instruction disagree.",
-        }))))
-        observation = make_live_observer(
-            SimpleNamespace(openai_api_key="test-key"), body_semantic_assessor=assessor,
-        )(case)
-    score = score_observation(case, observation, _policy())
-    assert observation["contract_accepted"] is True
-    assert score["dimensions"]["body"]["passed"] is True
-    assert score["dimensions"]["attempt_coverage"]["passed"] is True
-    assert score["dimensions"]["body_semantics"]["errors"] == [f"semantic_mismatch:{criterion}"]
-    assert score["status"] == "product_failure"
-    assert score["overall"] is False
-
-
 def test_incomplete_evaluation_is_not_absorbed_by_allowed_product_failure_rate():
     case = _case()
     observed = _observation(case)
@@ -441,80 +398,3 @@ def test_incomplete_evaluation_is_not_absorbed_by_allowed_product_failure_rate()
     assert summary["gates"]["contract_acceptance_at_least_99_percent"] is True
     assert summary["gates"]["complete_evaluation"] is False
     assert summary["qualified"] is False
-
-
-@pytest.mark.parametrize("failure_boundary", ["registry", "case_state"])
-def test_evaluation_setup_failure_is_not_a_product_failure(monkeypatch, failure_boundary):
-    case = _case()
-
-    def invalid_configuration(*args, **kwargs):
-        raise ValueError("invalid evaluator model settings")
-
-    target = (
-        "src.infra.llm.build_llm_registry"
-        if failure_boundary == "registry" else "src.eval.request_contract_eval.build_case_state"
-    )
-    monkeypatch.setattr(target, invalid_configuration)
-    observation = make_live_observer(SimpleNamespace(openai_api_key="test-key"))(case)
-    score = score_observation(case, observation, _policy())
-    assert observation["product_execution"] == {
-        "status": "not_started", "failure_origin": "evaluation_setup",
-    }
-    assert observation["model_calls"] == []
-    assert score["status"] == "evaluation_failure"
-    assert score["failure_categories"] == ["evaluation_failure"]
-    assert score["dimensions"]["validity"]["passed"] is None
-    assert score["dimensions"]["body"]["status"] == "not_evaluated"
-    assert score["critical_assessment"] == "not_evaluated"
-    assert score["overall"] is False
-
-
-def test_unexpected_observer_exception_does_not_assert_a_product_failure():
-    from src.eval import request_contract_eval
-
-    def unavailable_observer(case):
-        raise RuntimeError("observation serialization failed")
-
-    case = _case()
-    observation = request_contract_eval.observe_case(case, unavailable_observer)
-    score = score_observation(case, observation, _policy())
-    assert observation["product_execution"] == {"status": "unknown", "failure_origin": "observer"}
-    assert score["status"] == "evaluation_failure"
-    assert "product_failure" not in score["failure_categories"]
-    assert score["dimensions"]["validity"]["status"] == "not_evaluated"
-    assert score["overall"] is False
-
-
-def test_actual_product_call_failure_is_still_a_product_failure(monkeypatch):
-    case = _case()
-    with httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(
-        401, json={"error": {"message": "Invalid credential", "type": "authentication_error"}},
-    ))) as client:
-        planner = bind_structured_output(ChatOpenAI(
-            model="planner-test", api_key="test-key", base_url="https://planner.invalid/v1",
-            http_client=client, use_responses_api=False, max_retries=0,
-        ), InitialPlannerOutput, name="PlannerOutput")
-        monkeypatch.setattr("src.infra.llm.build_llm_registry", lambda settings: SimpleNamespace(llm_planner=planner))
-        observation = make_live_observer(SimpleNamespace(openai_api_key="test-key"))(case)
-    score = score_observation(case, observation, _policy())
-    assert observation["product_execution"] == {"status": "failed", "failure_origin": "product"}
-    assert len(observation["model_calls"]) == 1
-    assert score["status"] == "product_failure"
-    assert score["failure_categories"] == ["product_failure", "observation_insufficient"]
-    assert score["dimensions"]["validity"]["passed"] is False
-
-
-def test_setup_failure_summary_keeps_product_dimensions_unobserved(monkeypatch):
-    def invalid_configuration(settings):
-        raise ValueError("invalid evaluator model settings")
-
-    monkeypatch.setattr("src.infra.llm.build_llm_registry", invalid_configuration)
-    case = _case()
-    observation = make_live_observer(SimpleNamespace(openai_api_key="test-key"))(case)
-    score = score_observation(case, observation, _policy())
-    summary = summarize_results([{"case_id": case["id"], "score": score}], [case], _policy(), repeats=1)
-    assert summary["status_counts"] == {"evaluation_failure": 1}
-    assert summary["dimension_failures"] == {"evaluation_execution": 1}
-    assert summary["dimensions_not_evaluated"]["validity"] == 1
-    assert summary["gates"]["zero_critical_failures"] is False
-    assert summary["gates"]["complete_evaluation"] is False

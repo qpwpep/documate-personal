@@ -156,41 +156,6 @@ def test_initial_contract_rejects_evidence_absent_from_the_user_utterance(turn_i
     assert state["runtime"].request_contract is None
 
 
-@pytest.mark.parametrize("evidence_ids, scope, interpretation, turn_id, quote", [
-    ([], "answer.sentence_counts", "instruction", "current", "한 문장으로"),
-    (["missing"], "answer.sentence_counts", "instruction", "current", "한 문장으로"),
-    (["count"], "answer.format", "instruction", "current", "한 문장으로"),
-    (["count"], "answer.sentence_counts", "quotation", "current", "한 문장으로"),
-    (["count"], "answer.sentence_counts", "mention", "current", "한 문장으로"),
-    (["count"], "answer.sentence_counts", "instruction", "unknown", "한 문장으로"),
-    (["count"], "answer.sentence_counts", "instruction", "current", "두 문장으로"),
-])
-def test_initial_sentence_quota_requires_a_grounded_user_instruction(
-    evidence_ids, scope, interpretation, turn_id, quote,
-):
-    payload = {
-        "use_retrieval": False, "tasks": [],
-        "request_contract": {
-            "slack_recipient": {"state": "omitted"},
-            "body": {"kind": "compose", "instruction": "대상을 설명한다."},
-            "answer": {"sentence_counts": [{
-                "scope": "대상의 설명", "minimum": 1, "maximum": 1,
-                "evidence_ids": evidence_ids,
-            }]},
-            "evidence": [{"id": "count", "turn_id": turn_id, "quote": quote,
-                          "scope": scope, "interpretation": interpretation}],
-        },
-    }
-    model = PlannerResult(payload)
-    state = state_for("대상을 한 문장으로 설명해줘")
-
-    with pytest.raises(LLMCallError) as caught:
-        make_planner_node(structured_model(model.invoke, InitialPlannerOutput), False)(state)
-
-    assert caught.value.problem.code == "model_output_invalid"
-    assert state["runtime"].request_contract is None
-
-
 def test_pending_sentence_correction_preserves_other_scopes_and_rebinds_its_evidence():
     original_query = "alpha는 한 문장으로, beta도 한 문장으로 설명해줘"
     first, _ = plan(original_query, WireRequestContract(

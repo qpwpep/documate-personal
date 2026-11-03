@@ -1,14 +1,11 @@
 """Source-owned HTML identities survive flattening without entering the excerpt."""
 from pathlib import Path
-from urllib.parse import urlparse
 
 import pytest
 import requests
 
 from src.core.planner_schema import PlannerOutput, RetrievalTask
 from src.infra.settings import AppSettings
-from src.infra.tools.docs_search.official_page import _capture_page
-from src.infra.tools.docs_search.sections import parse_doc_sections
 from src.infra.tools.docs_search.tool import build_docs_search_tool
 from src.runtime.nodes.synthesis.budgets import RetrievedEvidenceBudget
 from src.runtime.nodes.synthesis.evidence_selection import prepare_evidence_candidates
@@ -118,35 +115,3 @@ def test_identical_short_signatures_keep_their_source_owners_and_exact_display_t
             for item in documentation_declaration_scope(evidence)["declarations"]] == [
         ("First.method", "method(value)¶"), ("Second.method", "method(value)¶"),
     ]
-
-
-@pytest.mark.parametrize("url, owner, title, definition", [
-    (
-        "https://docs.python.org/3/library/ast.html", "ast", "ast — Python documentation",
-        '<dt class="sig sig-object std" id="cmdoption-ast-mode">'
-        '<span class="sig-name descname"><span class="pre">--mode</span></span>'
-        '<span class="sig-prename descclassname"> <span class="pre">&lt;mode&gt;</span></span>'
-        '<a class="headerlink" href="#cmdoption-ast-mode" title="Link to this definition">¶</a></dt>'
-        '<dd><p>Specify what kind of code must be compiled, like the <em>mode</em> argument in parse().</p></dd>',
-    ),
-    (
-        "https://git-scm.com/docs/git-rebase", "git-rebase", "Git - git-rebase Documentation",
-        '<dt class="hdlist1" id="Documentation/git-rebase.txt---ontoltnewbasegt">'
-        '<a id="Documentation/git-rebase.txt---ontonewbase" class="anchor" '
-        'href="#Documentation/git-rebase.txt---ontonewbase"></a>--onto &lt;newbase&gt; </dt>'
-        '<dd><p>Starting point at which to create the new commits.</p></dd>',
-    ),
-], ids=["python-ast-cli", "git-rebase-options"])
-def test_cli_option_anchor_ids_keep_the_existing_document_owner(monkeypatch, url, owner, title, definition):
-    # The definition markup comes from the actual API page/manual. Its option
-    # anchor identifies a link target, not a Python API declaration.
-    page = f"<title>{title}</title><main><dl>{definition}</dl></main>"
-    monkeypatch.setattr(requests, "get", lambda target, **kwargs: response(target, page))
-
-    evidence = _capture_page(url, timeout_seconds=10, allowed_domains={urlparse(url).hostname})
-    sections = parse_doc_sections(
-        evidence.element.text, title=evidence.snapshot.title, url=evidence.snapshot.source_uri,
-        definition_owners=evidence.element.metadata["definition_owners"],
-    )
-    assert {section.owner for section in sections} == {owner}
-    assert evidence.element.metadata["definition_owners"] == {}

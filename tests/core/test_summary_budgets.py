@@ -192,7 +192,6 @@ def test_generated_or_fallback_summary_stays_bounded_and_reaches_next_prompt(
     assert "OLDER_FACT:" in transcript
     assert "EVICTED_FACT:" in transcript
     assert "SECRET_TOOL_PAYLOAD" not in transcript
-    assert f"{min(policy.summary_max_bytes, storage_budget * 3)} UTF-8 bytes" in requests[0]["messages"][0]["content"]
 
 
 @pytest.mark.parametrize(

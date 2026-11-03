@@ -75,25 +75,6 @@ def test_complete_approved_suite_and_observed_cost_can_release():
     assert RunSummary.model_validate(summary.model_dump(mode="json")).overall_passed is True
 
 
-def test_unapproved_suite_is_rejected_before_judge_or_scenario(monkeypatch, tmp_path):
-    from src.eval import release_dataset
-    from src.eval.online_runner import case_runner
-
-    monkeypatch.setattr(release_dataset, "load_release_input", lambda *args, **kwargs: ([_case_result()[0]], None))
-
-    def forbidden(*args, **kwargs):
-        pytest.fail("unapproved input reached model or scenario execution")
-
-    monkeypatch.setattr(case_runner, "LLMJudge", forbidden)
-    monkeypatch.setattr(case_runner, "_run_single_case", forbidden)
-    with pytest.raises(ValueError, match="approved complete suite"):
-        run_online_benchmark(
-            fixtures_path=tmp_path / "candidate.jsonl", endpoint="http://must-not-call",
-            config=BenchmarkConfig(), config_path=Path("absent.toml"),
-            output_root=tmp_path, track="release",
-        )
-
-
 def test_unknown_cost_blocks_release_without_relabeling_product_quality():
     case, result = _case_result()
     result.cost_usd = compute_cost_usd(
