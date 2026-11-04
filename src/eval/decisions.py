@@ -12,11 +12,11 @@ from .action_outcomes import ActionAssessment, assess_action_outcomes
 
 if TYPE_CHECKING:
     from .config_models import BenchmarkCase
-    from .result_models import CaseResult
+    from .result_models import CaseResult, SaveAssessment
     from .summary_models import GateResult, RunSummary
 
 
-DECISION_CONTRACT_VERSION = 2
+DECISION_CONTRACT_VERSION = 3
 REQUIRED_RELEASE_GATES = frozenset({
     "tool_execution_policy", "save_outcome_contract", "evaluation_completeness", "release_pass_rate",
     "tool_precision", "tool_recall", "citation_compliance", "p95_latency_ms", "avg_cost_per_case_usd",
@@ -66,7 +66,7 @@ def refresh_case_decision(result: CaseResult, case: BenchmarkCase | None = None)
     if any(item.status == "unverifiable" for item in outcome_assessments):
         # Unobserved actions cannot erase an already settled product failure.
         # Apply this once for initial results, run-end rechecks, and reloads.
-        if result.eval_validity == "valid" and result.judge_status_reason != "missing_final_response":
+        if result.eval_validity == "valid" and result.judge_status_reason != "product_failure":
             result.eval_validity = "incomplete"
     decision = _decide_case(result, assessment, actions)
     result.policy_assessment = assessment
@@ -83,14 +83,24 @@ def _assess_case_outcomes(result: CaseResult) -> tuple[ToolPolicyAssessment, dic
                                          actions=result.actions, retrieval_diagnostics=result.retrieval_diagnostics,
                                          debug=result.debug, tool_calls=result.tool_calls,
                                          tool_call_count=result.tool_call_count)
-    return assessment, assess_action_outcomes(result, assessment)
+    return assessment, assess_action_outcomes(
+        policy=result.policy_snapshot, execution_evidence=result.execution_evidence,
+        response=result.response, actions=result.actions, save_assessment=result.save_assessment,
+        policy_assessment=assessment,
+    )
 
 
 def _decide_case(
     result: CaseResult, assessment: ToolPolicyAssessment, actions: dict[str, ActionAssessment],
 ) -> CaseDecision:
-    # New preflight failures have no quality observation. Keep prior reason
-    # semantics intact so existing decision-contract records remain readable.
+    if result.judge_status_reason == "product_failure" and not product_failure_observed(
+        runtime_errors=result.runtime_errors, response_errors=result.response_errors,
+        policy_assessment=assessment, actions=actions,
+        save_assessments=[*([result.save_assessment] if result.save_assessment is not None else []),
+                          *result.setup_save_assessments.values()],
+    ):
+        raise ValueError("a product_failure judge skip requires an observed product failure")
+    # Input budget/schema failures leave semantic quality unobserved.
     preflight_quality_unobserved = (
         result.product_pass is None and result.judge_status == "not_run"
         and result.judge_status_reason in {"input_budget_exceeded", "input_invalid"}
@@ -102,7 +112,7 @@ def _decide_case(
     reasons = [code for code in result.gate_failures
                if code not in quality_reasons
                and not code.startswith(("tool_execution_", "tool_policy_", "action_")) and code not in {
-                   "forbidden_tool_execution", "tool_policy_snapshot_missing", "legacy_result_unverified",
+                   "forbidden_tool_execution",
                }]
     reasons.extend(assessment.failure_codes)
     reasons.extend(code for item in actions.values() for code in item.failure_codes)
@@ -114,9 +124,10 @@ def _decide_case(
         reasons.append("invalid_eval" if result.eval_validity == "invalid" else "incomplete_eval")
     if preflight_quality_unobserved:
         reasons.append("product_quality_unobserved")
-    elif result.product_pass is not True and not any(item.status == "failed" for item in actions.values()):
+    elif (result.product_pass is not True and result.judge_status_reason != "product_failure"
+          and not any(item.status == "failed" for item in actions.values())):
         reasons.append("product_quality_below_floor")
-    if result.judge_pass is not True or result.judge_status != "succeeded":
+    if result.judge_status_reason != "product_failure" and (result.judge_pass is not True or result.judge_status != "succeeded"):
         reasons.append("judge_not_passed")
     for item in [*([result.save_assessment] if result.save_assessment is not None else []),
                  *result.setup_save_assessments.values()]:
@@ -124,6 +135,17 @@ def _decide_case(
             reasons.extend(item.failure_codes)
     reasons = sorted(set(reasons), key=lambda code: (code != "forbidden_tool_execution", code))
     return CaseDecision(passed=not reasons, failure_codes=reasons)
+
+
+def product_failure_observed(
+    *, runtime_errors: list[str], response_errors: list[str], policy_assessment: ToolPolicyAssessment,
+    actions: dict[str, ActionAssessment], save_assessments: list[SaveAssessment],
+) -> bool:
+    """Only observed failures settle a verdict before semantic evaluation."""
+    return bool(
+        runtime_errors or response_errors or policy_assessment.violations
+        or any(item.status == "failed" for item in [*save_assessments, *actions.values()])
+    )
 
 
 def decide_release(*, gates: list[GateResult], track: str, policy_failure_codes: list[str]) -> ReleaseDecision:
@@ -206,6 +228,20 @@ def validate_run_decision_evidence(summary: RunSummary, results: list[CaseResult
     }
     if any(getattr(summary.metrics, field) != value for field, value in policy_counts.items()):
         raise ValueError("run policy counts disagree with case policy assessments")
+    skipped = len({result.case_id for result in results if result.case_id in planned_ids
+                   and result.judge_status == "not_run" and result.judge_status_reason == "product_failure"})
+    required = len(planned_ids) - skipped if summary.judge_enabled else 0
+    succeeded = sum(result.judge_status == "succeeded" for result in results)
+    judge_counts = {
+        "judge_skipped_product_failure_cases": skipped, "judge_required_cases": required,
+        "judge_succeeded_cases": succeeded,
+        "judge_failed_cases": sum(result.judge_status == "failed" for result in results),
+        "judge_disabled_cases": sum(result.judge_status == "disabled" for result in results),
+        "judge_not_run_cases": sum(result.judge_status == "not_run" for result in results),
+        "judge_execution_rate": round(succeeded / required, 4) if required else None,
+    }
+    if any(getattr(summary.metrics, field) != value for field, value in judge_counts.items()):
+        raise ValueError("run judge counts disagree with observed judge eligibility")
     passed = sum(result.decision.passed for result in results)
     rate = round(passed / len(planned_ids), 4) if planned_ids else 0.0
     if summary.metrics.release_passed_cases != passed or summary.metrics.release_pass_rate != rate:

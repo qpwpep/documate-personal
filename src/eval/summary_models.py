@@ -39,6 +39,7 @@ class SummaryStats(BaseModel):
     judge_failed_cases: int = 0
     judge_disabled_cases: int = 0
     judge_not_run_cases: int = 0
+    judge_skipped_product_failure_cases: int = 0
     judge_execution_rate: float | None = None
     product_passed_cases: int = 0
     judge_passed_cases: int = 0
@@ -243,7 +244,7 @@ def release_suite_gate(
 class RunSummary(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    decision_contract_version: Literal[2]
+    decision_contract_version: Literal[3]
     case_policy_snapshots: dict[str, ToolPolicySpec]
     results_fingerprint: str
     release_decision: ReleaseDecision

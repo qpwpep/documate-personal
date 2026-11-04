@@ -64,9 +64,11 @@ def test_current_summary_requires_explicit_policy_observations():
         RunSummary.model_validate(payload)
 
 
-def test_retained_aliases_are_projected_only_at_the_history_boundary(tmp_path):
+@pytest.mark.parametrize("measurement", ["llm-usage-scenario-v3", "llm-usage-scenario-v4", "llm-usage-scenario-v5"])
+def test_previous_decision_records_are_preserved_without_reinterpretation(tmp_path, measurement):
     pair = _case_result()
     result = pair[1].model_dump(mode="json")
+    result["decision_contract_version"] = 2
     result.update(judge_gate_passed=result["judge_pass"], judge_score_total=result["llm_judge_score"], invalid_eval=False)
     result["latency_ms_e2e"] = result.pop("question_response_ms")
     result["request_id"] = result.pop("execution_id")
@@ -79,7 +81,9 @@ def test_retained_aliases_are_projected_only_at_the_history_boundary(tmp_path):
         if turn["turn_result"] is not None:
             turn["turn_result"]["request_id"] = turn["turn_result"].pop("execution_id")
     summary = _summary([pair]).model_dump(mode="json")
-    summary["measurement_contract_version"] = "llm-usage-scenario-v4"
+    summary["decision_contract_version"] = 2
+    summary["measurement_contract_version"] = measurement
+    summary["audit_metrics"]["scoring_contract_version"] = "release-obligations-v9"
     summary["metrics"].update(
         passed_cases=1, pass_rate=1.0, judge_legacy_unknown_cases=0, deterministic_direct_usage_rate=0.0,
     )
@@ -91,15 +95,57 @@ def test_retained_aliases_are_projected_only_at_the_history_boundary(tmp_path):
     (run_dir / "raw_results.jsonl").write_text(json.dumps(result) + "\n", encoding="utf-8")
     original = {path: path.read_bytes() for path in run_dir.iterdir()}
 
-    loaded_summary, loaded_results = load_run_outputs(run_dir)
-
-    assert loaded_summary.measurement_contract_version == "llm-usage-scenario-v4"
-    assert loaded_results[0].cost_usd == result["cost_usd"]
-    assert loaded_results[0].question_response_ms == result["latency_ms_e2e"]
-    assert loaded_results[0].execution_id == result["request_id"]
-    assert loaded_results[0].decision == pair[1].decision
-    assert not {"judge_gate_passed", "judge_score_total", "invalid_eval"}.intersection(loaded_results[0].model_dump())
+    with pytest.raises(ValueError, match="current.*contracts"):
+        load_run_outputs(run_dir)
     assert load_history_runs(tmp_path) == []
     with pytest.raises(ValueError, match="current.*contracts"):
         load_report_inputs(run_dir)
     assert {path: path.read_bytes() for path in original} == original
+
+
+@pytest.mark.parametrize("tampering", ["fingerprint", "mixed_results", "mixed_measurement"])
+def test_history_does_not_hide_damaged_previous_decision_records(tmp_path, tampering):
+    pair = _case_result()
+    result = pair[1].model_dump(mode="json")
+    result["decision_contract_version"] = 2
+    summary = _summary([pair]).model_dump(mode="json")
+    summary.update(decision_contract_version=2, measurement_contract_version="llm-usage-scenario-v5")
+    summary["audit_metrics"]["scoring_contract_version"] = "release-obligations-v9"
+    summary["results_fingerprint"] = raw_results_fingerprint([result])
+    if tampering == "fingerprint":
+        result["cost_usd"] = 123.0
+    elif tampering == "mixed_results":
+        result["decision_contract_version"] = 3
+        summary["results_fingerprint"] = raw_results_fingerprint([result])
+    else:
+        summary["measurement_contract_version"] = "llm-usage-scenario-v6"
+    run_dir = tmp_path / summary["run_id"]
+    run_dir.mkdir()
+    (run_dir / "summary.json").write_text(json.dumps(summary), encoding="utf-8")
+    (run_dir / "raw_results.jsonl").write_text(json.dumps(result) + "\n", encoding="utf-8")
+
+    with pytest.raises(ValueError):
+        load_history_runs(tmp_path)
+
+
+def test_previous_location_measurement_is_preserved_without_reloading_its_checks(tmp_path):
+    pair = _case_result()
+    result = pair[1].model_dump(mode="json")
+    summary = _summary([pair]).model_dump(mode="json")
+    summary["measurement_contract_version"] = "llm-usage-scenario-v6"
+    summary["results_fingerprint"] = raw_results_fingerprint([result])
+    run_dir = tmp_path / summary["run_id"]
+    run_dir.mkdir()
+    (run_dir / "summary.json").write_text(json.dumps(summary), encoding="utf-8")
+    (run_dir / "raw_results.jsonl").write_text(json.dumps(result) + "\n", encoding="utf-8")
+    original = {path: path.read_bytes() for path in run_dir.iterdir()}
+
+    with pytest.raises(ValueError, match="current.*contracts"):
+        load_run_outputs(run_dir)
+    assert load_history_runs(tmp_path) == []
+    assert {path: path.read_bytes() for path in original} == original
+
+    result["cost_usd"] = 123.0
+    (run_dir / "raw_results.jsonl").write_text(json.dumps(result) + "\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="fingerprint mismatch"):
+        load_history_runs(tmp_path)

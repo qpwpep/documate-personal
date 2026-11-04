@@ -244,7 +244,7 @@ def test_missing_product_response_is_unscored_but_remains_in_release_denominator
     result = failed[1]
 
     assert result.judge_status == "not_run"
-    assert result.judge_status_reason == "missing_final_response"
+    assert result.judge_status_reason == "product_failure"
     assert result.llm_judge_score is None
     assert result.composite_quality_score is None
     assert result.eval_validity == "valid"
@@ -254,6 +254,9 @@ def test_missing_product_response_is_unscored_but_remains_in_release_denominator
     assert summary.metrics.planned_cases == summary.metrics.total_cases == 2
     assert summary.metrics.judge_failed_cases == 0
     assert summary.metrics.judge_not_run_cases == 1
+    assert summary.metrics.judge_skipped_product_failure_cases == 1
+    assert summary.metrics.judge_required_cases == 1
+    assert summary.metrics.judge_execution_rate == 1.0
     assert summary.metrics.release_passed_cases == 1
     assert summary.metrics.release_pass_rate == pytest.approx(0.5)
     assert summary.overall_passed is False
@@ -264,7 +267,7 @@ def test_missing_save_response_remains_a_product_failure_through_reporting(tmp_p
     failed = _case_result(1, missing_response=True, save_required=True)
     case, result = failed
 
-    assert result.judge_status_reason == "missing_final_response"
+    assert result.judge_status_reason == "product_failure"
     assert result.product_pass is False
     assert result.eval_validity == "valid"
     assert result.save_assessment.status == "unverifiable"
@@ -403,9 +406,10 @@ def test_nine_perfect_cases_cannot_dilute_one_forbidden_execution(phase):
     pairs.append(forbidden)
     result = forbidden[1]
 
-    assert result.composite_quality_score == pytest.approx(1.0)
-    assert result.product_pass is True
-    assert result.judge_pass is True
+    assert result.composite_quality_score is None
+    assert result.product_pass is False
+    assert result.judge_pass is None
+    assert result.judge_status_reason == "product_failure"
     assert result.release_pass is False
     assert "forbidden_tool_execution" in result.gate_failures
 

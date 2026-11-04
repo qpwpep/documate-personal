@@ -172,11 +172,12 @@ def _result(*, status="success", terminal="succeeded", missing=False, reused_ori
     )
 
 
-def test_required_slack_failure_cannot_be_offset_by_perfect_judge():
+def test_required_slack_failure_skips_an_unnecessary_quality_judge():
     result = _result(status="error", terminal="failed")
 
-    assert result.judge_status == "succeeded"
-    assert result.composite_quality_score >= 0.75
+    assert result.judge_status == "not_run"
+    assert result.judge_status_reason == "product_failure"
+    assert result.composite_quality_score is None
     assert result.release_pass is False
     assert result.action_assessments["slack_notify"].status == "failed"
     assert result.eval_validity == "valid"
@@ -248,7 +249,11 @@ def test_successful_reuse_preserves_verified_origin_and_saved_decision():
 def test_save_failure_and_unobserved_save_remain_distinct(status, assessment_status):
     result = _result(status=status, terminal="failed", tool_name="save_text")
 
-    assert result.composite_quality_score >= 0.75
+    if status == "error":
+        assert result.composite_quality_score is None
+        assert result.judge_status_reason == "product_failure"
+    else:
+        assert result.composite_quality_score >= 0.75
     assert result.release_pass is False
     assert result.save_assessment.status == assessment_status
     assert result.action_assessments["save_text"].status == assessment_status
@@ -367,5 +372,10 @@ def test_missing_save_is_unverifiable_without_matching_complete_execution_and_bo
     result = _result(missing=True, tool_name="save_text", **observation)
 
     assert result.save_assessment.status == "unverifiable"
-    assert result.eval_validity == "incomplete"
+    if "provenance_hash" in observation:
+        assert result.response_errors
+        assert result.eval_validity == "valid"
+        assert result.judge_status_reason == "product_failure"
+    else:
+        assert result.eval_validity == "incomplete"
     assert result.release_pass is False

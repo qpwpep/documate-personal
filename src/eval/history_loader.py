@@ -70,12 +70,47 @@ def _read_summary(path: Path) -> RunSummary | None:
         # Exclude known historical contracts before loading their evidence.
         # Mixed/unknown versions and damaged current runs still fail validation.
         return None
+    if _is_previous_contract_summary(path, payload):
+        return None
     summary, _ = load_run_outputs(path.parent)
-    # Recognized v3 measurements keep their original costs and decision evidence.
-    # Validate before exclusion; do not reprice or promote them to current history.
     if not is_current_measurement(summary):
         return None
     return summary
+
+
+def _is_previous_contract_summary(path: Path, payload: dict[str, object]) -> bool:
+    """Exclude known immutable archives after checking their raw integrity."""
+    from .decisions import raw_results_fingerprint
+
+    decision = payload.get("decision_contract_version")
+    measurement = payload.get("measurement_contract_version")
+    if decision != 2 and not (decision == 3 and measurement == "llm-usage-scenario-v6"):
+        return False
+    known = {
+        "llm-usage-scenario-v3": (
+            ("shared-client-scenario-v1", "release-obligations-v6"),
+            ("shared-client-scenario-v2", "release-obligations-v7"),
+            ("shared-client-scenario-v2", "release-obligations-v8"),
+            ("shared-client-scenario-v2", "release-obligations-v9"),
+        ),
+        "llm-usage-scenario-v4": (("shared-client-scenario-v2", "release-obligations-v9"),),
+        "llm-usage-scenario-v5": (("shared-client-scenario-v2", "release-obligations-v9"),),
+    }
+    if decision == 3:
+        known = {"llm-usage-scenario-v6": (("shared-client-scenario-v2", "release-obligations-v10"),)}
+    audit = payload.get("audit_metrics")
+    versions = (payload.get("execution_contract_version"),
+                audit.get("scoring_contract_version") if isinstance(audit, dict) else None)
+    if not isinstance(measurement, str) or versions not in known.get(measurement, ()):
+        raise ValueError("unknown or mixed historical decision contract")
+    raw = [json.loads(line) for line in (path.parent / "raw_results.jsonl").read_text(encoding="utf-8").splitlines()
+           if line.strip()]
+    if any(not isinstance(result, dict) or result.get("decision_contract_version") != decision
+           or result.get("run_id") != payload.get("run_id") for result in raw):
+        raise ValueError("historical decision contract disagrees with retained results")
+    if payload.get("results_fingerprint") != raw_results_fingerprint(raw):
+        raise ValueError("run results fingerprint mismatch")
+    return True
 
 
 def load_history_runs(output_root: Path) -> list[StoredRun]:

@@ -60,22 +60,12 @@ def write_run_outputs(*, output_dir: Path, results: list[CaseResult], summary: R
 
 
 def load_run_outputs(output_dir: Path) -> tuple[RunSummary, list[CaseResult]]:
-    """Verify saved evidence without repricing recognized historical measurements."""
-    from ..decisions import validate_run_decision_evidence, validate_run_outputs
-    from .summary import MEASUREMENT_CONTRACT_VERSION
+    """Verify current saved evidence without reinterpreting historical verdicts."""
+    from ..decisions import validate_run_outputs
 
     _, raw_results, summary = _read_saved_payloads(output_dir)
-    if summary.measurement_contract_version != MEASUREMENT_CONTRACT_VERSION:
-        from ..history_formats import project_case_result
-
-        raw_results = [project_case_result(payload) for payload in raw_results]
     results = [CaseResult.model_validate(payload) for payload in raw_results]
-    if summary.measurement_contract_version == MEASUREMENT_CONTRACT_VERSION:
-        validate_run_outputs(summary, results)
-    else:
-        # The original fingerprint was checked before the historical projection.
-        # Current field names do not change the retained observations or verdicts.
-        validate_run_decision_evidence(summary, results)
+    validate_run_outputs(summary, results)
     return summary, results
 
 
@@ -96,9 +86,9 @@ def _read_saved_payloads(output_dir: Path) -> tuple[dict[str, Any], list[dict[st
         raise ValueError("run summary must be a JSON object")
     measurement = summary_payload.get("measurement_contract_version")
     if (summary_payload.get("decision_contract_version") != DECISION_CONTRACT_VERSION
-            or measurement not in (MEASUREMENT_CONTRACT_VERSION, "llm-usage-scenario-v3", "llm-usage-scenario-v4")):
+            or measurement != MEASUREMENT_CONTRACT_VERSION):
         raise ValueError(
-            "only the current decision and recognized measurement contracts can be loaded; "
+            "only the current decision and measurement contracts can be loaded; "
             "historical reports remain available as their originally saved files"
         )
     audit_metrics = summary_payload.get("audit_metrics")
@@ -106,18 +96,7 @@ def _read_saved_payloads(output_dir: Path) -> tuple[dict[str, Any], list[dict[st
         summary_payload.get("execution_contract_version"),
         audit_metrics.get("scoring_contract_version") if isinstance(audit_metrics, dict) else None,
     )
-    if measurement == "llm-usage-scenario-v3":
-        recognized_execution_and_scoring = (
-            ("shared-client-scenario-v1", "release-obligations-v6"),
-            ("shared-client-scenario-v2", "release-obligations-v7"),
-            ("shared-client-scenario-v2", "release-obligations-v8"),
-            ("shared-client-scenario-v2", "release-obligations-v9"),
-        )
-    elif measurement == "llm-usage-scenario-v4":
-        recognized_execution_and_scoring = (("shared-client-scenario-v2", "release-obligations-v9"),)
-    else:
-        recognized_execution_and_scoring = ((EXECUTION_CONTRACT_VERSION, SCORING_CONTRACT_VERSION),)
-    if execution_and_scoring not in recognized_execution_and_scoring:
+    if execution_and_scoring != (EXECUTION_CONTRACT_VERSION, SCORING_CONTRACT_VERSION):
         raise ValueError("unknown, mixed, or missing execution and scoring contracts")
     raw_results: list[dict[str, Any]] = []
     for line in raw_path.read_text(encoding="utf-8").splitlines():
@@ -129,12 +108,7 @@ def _read_saved_payloads(output_dir: Path) -> tuple[dict[str, Any], list[dict[st
         raw_results.append(payload)
     if summary_payload.get("results_fingerprint") != raw_results_fingerprint(raw_results):
         raise ValueError("run results fingerprint mismatch")
-    projected_summary = summary_payload
-    if measurement != MEASUREMENT_CONTRACT_VERSION:
-        from ..history_formats import project_run_summary
-
-        projected_summary = project_run_summary(summary_payload)
-    summary = RunSummary.model_validate(projected_summary)
+    summary = RunSummary.model_validate(summary_payload)
     return summary_payload, raw_results, summary
 
 

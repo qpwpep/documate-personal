@@ -5,11 +5,12 @@ from typing import Literal, TYPE_CHECKING
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from src.core.answer_schema import ActionReceipt, AnswerResponse
 from src.core.contracts.tool_execution import ToolExecutionEvidence
-from .tool_policy import ToolPolicyAssessment, executed_tool_names
+from .tool_policy import ToolPolicyAssessment, ToolPolicySpec, executed_tool_names
 
 if TYPE_CHECKING:
-    from .result_models import CaseResult
+    from .result_models import SaveAssessment
 
 
 class ActionAssessment(BaseModel):
@@ -25,27 +26,33 @@ class ActionAssessment(BaseModel):
         return self.status == "verified"
 
 
-def assess_action_outcomes(result: CaseResult, policy_assessment: ToolPolicyAssessment) -> dict[str, ActionAssessment]:
+def assess_action_outcomes(
+    *, policy: ToolPolicySpec | None, execution_evidence: ToolExecutionEvidence | dict[str, object] | None,
+    response: AnswerResponse | None, actions: list[ActionReceipt], save_assessment: SaveAssessment | None,
+    policy_assessment: ToolPolicyAssessment,
+) -> dict[str, ActionAssessment]:
     """Recompute from retained receipts, lifecycle facts, and byte verification."""
-    obligations = result.policy_snapshot.final_action_outcomes if result.policy_snapshot is not None else None
+    obligations = policy.final_action_outcomes if policy is not None else None
     assessments = {}
     for tool, outcome in (obligations or {}).items():
         status = "unverifiable"
+        evidence_issues = [issue for issue in policy_assessment.evidence_issues
+                           if issue.tool_name is None or issue.tool_name == tool]
         if outcome == "must_not_execute":
-            executed = executed_tool_names(result.execution_evidence)
+            executed = executed_tool_names(execution_evidence)
             if executed is not None:
                 status = "failed" if tool in executed else "verified"
         elif tool == "save_text":
-            saved = result.save_assessment
+            saved = save_assessment
             if saved is not None and saved.outcome == outcome and saved.status != "not_applicable":
                 status = saved.status
         else:
-            receipts = [receipt for receipt in result.actions if receipt.kind == tool]
-            if not receipts and outcome == "required_success" and policy_assessment.status == "compliant" and result.response is not None:
+            receipts = [receipt for receipt in actions if receipt.kind == tool]
+            if not receipts and outcome == "required_success" and not evidence_issues and response is not None:
                 # A complete, consistent request history can prove that the
                 # required action was omitted. Missing/incomplete histories or
                 # an attempted action without its receipt remain unverified.
-                evidence = ToolExecutionEvidence.model_validate(result.execution_evidence)
+                evidence = ToolExecutionEvidence.model_validate(execution_evidence)
                 if not any(event.tool_name == tool for event in evidence.events):
                     status = "failed"
             elif len(receipts) == 1:
@@ -57,7 +64,8 @@ def assess_action_outcomes(result: CaseResult, policy_assessment: ToolPolicyAsse
                         status = "failed"
                 # A future expected-failure obligation needs an explicit error
                 # oracle. An arbitrary failed send must never imply success.
-        if status == "verified" and policy_assessment.status != "compliant":
+        # A prohibited action does not invalidate another action's observation.
+        if status == "verified" and evidence_issues:
             status = "unverifiable"
         assessments[tool] = ActionAssessment(
             tool_name=tool, outcome=outcome, status=status,

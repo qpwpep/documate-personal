@@ -36,6 +36,7 @@ class PolicyIssue(BaseModel):
     turn_index: int
     execution_id: str | None = None
     detail: str | None = None
+    tool_name: str | None = None
 
 
 class PolicyViolation(PolicyIssue):
@@ -142,7 +143,8 @@ def assess_execution_policy(*, policy: ToolPolicySpec | None, evidence: Any,
             issues.append(PolicyIssue(code="tool_execution_evidence_incomplete", detail=parsed.status, **detail))
         for event in parsed.events:
             if event.tool_name not in EXECUTABLE_TOOL_NAMES:
-                issues.append(PolicyIssue(code="tool_execution_unknown_tool", detail=event.tool_name, **detail))
+                issues.append(PolicyIssue(code="tool_execution_unknown_tool", tool_name=event.tool_name,
+                                          detail=event.tool_name, **detail))
         if parsed.status == "complete":
             started = [event for event in parsed.events if event.phase == "started"]
             names = {event.tool_name for event in started}
@@ -169,7 +171,8 @@ def assess_execution_policy(*, policy: ToolPolicySpec | None, evidence: Any,
         for event in parsed.events:
             origin = (event.origin_invocation_id, event.tool_name)
             if event.phase == "reused" and origin not in completed_invocations and origin not in terminal_outcomes:
-                issues.append(PolicyIssue(code="tool_execution_reuse_unverifiable", detail=event.invocation_id, **detail))
+                issues.append(PolicyIssue(code="tool_execution_reuse_unverifiable", tool_name=event.tool_name,
+                                          detail=event.invocation_id, **detail))
             elif event.phase in {"succeeded", "failed"}:
                 terminal_outcomes[(event.invocation_id, event.tool_name)] = event.phase
         starts = {(event.invocation_id, event.tool_name) for event in parsed.events if event.phase == "started"}
@@ -187,7 +190,8 @@ def assess_execution_policy(*, policy: ToolPolicySpec | None, evidence: Any,
             if receipt.get("status") in {"error", "skipped", "unknown"}:
                 allowed |= blocked
             if key not in allowed:
-                issues.append(PolicyIssue(code="tool_execution_receipt_unmatched", detail=str(receipt.get("kind")), **detail))
+                issues.append(PolicyIssue(code="tool_execution_receipt_unmatched", tool_name=str(receipt.get("kind")),
+                                          detail=str(receipt.get("kind")), **detail))
                 continue
             terminal = terminal_outcomes.get(key) if key in starts else completed_invocations.get(key)
             status = receipt.get("status")
@@ -196,13 +200,14 @@ def assess_execution_policy(*, policy: ToolPolicySpec | None, evidence: Any,
                     or isinstance(receipt.get("slack"), dict)
                     and receipt["slack"].get("invocation_id") != receipt.get("invocation_id")):
                 issues.append(PolicyIssue(code="tool_execution_receipt_outcome_conflict",
-                                          detail=str(receipt.get("kind")), **detail))
+                                          tool_name=str(receipt.get("kind")), detail=str(receipt.get("kind")), **detail))
         for diagnostic in normalized_diagnostics:
             if diagnostic.status in {"skipped", "not_run"}:
                 continue
             key = (diagnostic.invocation_id, diagnostic.tool)
             if key not in starts | reused | blocked:
-                issues.append(PolicyIssue(code="tool_execution_retrieval_unmatched", detail=diagnostic.tool, **detail))
+                issues.append(PolicyIssue(code="tool_execution_retrieval_unmatched", tool_name=diagnostic.tool,
+                                          detail=diagnostic.tool, **detail))
         # A request with contradictory receipts cannot establish an origin that
         # a later reuse turns into apparently verified success.
         if trust_origins and len(issues) == initial_issue_count:

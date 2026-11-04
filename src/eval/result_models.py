@@ -26,6 +26,7 @@ EvalValidity = Literal["valid", "incomplete", "invalid"]
 # not_run: evaluation never reached the judge. failed: the judge boundary was
 # invoked but its contract failed. The two must not share one bucket.
 JudgeStatusReason = Literal[
+    "product_failure",
     "missing_final_response",
     "input_incomplete",
     "input_budget_exceeded",
@@ -120,7 +121,7 @@ class SaveAssessment(BaseModel):
 class CaseResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    decision_contract_version: Literal[2]
+    decision_contract_version: Literal[3]
     policy_snapshot: ToolPolicySpec | None = None
     policy_assessment: ToolPolicyAssessment | None = None
     action_assessments: dict[str, ActionAssessment] = Field(default_factory=dict)
@@ -214,6 +215,11 @@ class CaseResult(BaseModel):
 
     @model_validator(mode="after")
     def validate_judge_outcome(self) -> "CaseResult":
+        if self.judge_status_reason == "product_failure" and (
+            self.judge_status != "not_run" or self.product_pass is not False or self.eval_validity != "valid"
+            or self.composite_quality_score is not None or self.judge_input_complete is not None
+        ):
+            raise ValueError("a product_failure judge skip requires a valid, unscored product failure")
         if self.judge_status == "succeeded":
             if self.llm_judge_score is None or self.judge_subscores is None or self.judge_pass is None:
                 raise ValueError("a succeeded judge verdict requires score, subscores, and judge_pass")

@@ -35,7 +35,7 @@ def _render_execution_policy(lines: list[str], summary: RunSummary, results: lis
         for case_id, status, issue in issues:
             lines.append(
                 f"| {case_id} | {status} | {issue.turn_index} | {issue.execution_id or '-'} | "
-                f"{getattr(issue, 'tool_name', '-')} | {getattr(issue, 'invocation_id', '-')} | {issue.code} |"
+                f"{issue.tool_name or '-'} | {getattr(issue, 'invocation_id', '-')} | {issue.code} |"
             )
 
 
@@ -213,6 +213,12 @@ def build_markdown_report(summary: RunSummary, results: list[CaseResult]) -> str
     lines.append("")
     lines.append("## Metrics")
     lines.append("")
+    lines.append(
+        "judge_skipped_product_failure_cases counts observed product failures that settle release failure before judging. "
+        "They remain in the release denominator and are excluded from judge_required_cases. "
+        "Their semantic quality scores remain unobserved."
+    )
+    lines.append("")
     lines.append("| Metric | Value |")
     lines.append("|---|---:|")
     for key, value in (
@@ -229,6 +235,7 @@ def build_markdown_report(summary: RunSummary, results: list[CaseResult]) -> str
         ("judge_failed_cases", summary.metrics.judge_failed_cases),
         ("judge_disabled_cases", summary.metrics.judge_disabled_cases),
         ("judge_not_run_cases", summary.metrics.judge_not_run_cases),
+        ("judge_skipped_product_failure_cases", summary.metrics.judge_skipped_product_failure_cases),
         ("judge_execution_rate", summary.metrics.judge_execution_rate),
         ("product_passed_cases", summary.metrics.product_passed_cases),
         ("judge_passed_cases", summary.metrics.judge_passed_cases),

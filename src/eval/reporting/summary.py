@@ -26,10 +26,10 @@ from .latency_values import result_latency_breakdown_stage_ms, result_server_lat
 _AUDIT_HIGH_RULE_LOW_JUDGE_DIVERGENCE_CEILING = 0.10
 _HIGH_RULE_LOW_JUDGE_DIVERGENCE_MARGIN = 0.35
 EXECUTION_CONTRACT_VERSION = "shared-client-scenario-v2"
-MEASUREMENT_CONTRACT_VERSION = "llm-usage-scenario-v5"
+MEASUREMENT_CONTRACT_VERSION = "llm-usage-scenario-v7"
 # Weight profiles are fixed before execution; pure actions exclude citation axes.
 # This scoring contract establishes its own comparison baseline.
-SCORING_CONTRACT_VERSION = "release-obligations-v9"
+SCORING_CONTRACT_VERSION = "release-obligations-v10"
 
 
 def _fingerprint(value: Any) -> str:
@@ -267,7 +267,11 @@ def build_summary(
     judge_failed_cases = judge_buckets.count("failed")
     judge_disabled_cases = judge_buckets.count("disabled")
     judge_not_run_cases = judge_buckets.count("not_run")
-    judge_required_cases = planned_cases if config.judge_enabled else 0
+    judge_skipped_product_failure_cases = len({
+        result.case_id for result in results if result.case_id in case_map
+        and result.judge_status == "not_run" and result.judge_status_reason == "product_failure"
+    })
+    judge_required_cases = (planned_cases - judge_skipped_product_failure_cases) if config.judge_enabled else 0
     judge_execution_rate = (
         judge_succeeded_cases / judge_required_cases if judge_required_cases else None
     )
@@ -374,6 +378,7 @@ def build_summary(
         judge_failed_cases=judge_failed_cases,
         judge_disabled_cases=judge_disabled_cases,
         judge_not_run_cases=judge_not_run_cases,
+        judge_skipped_product_failure_cases=judge_skipped_product_failure_cases,
         judge_execution_rate=round(judge_execution_rate, 4) if judge_execution_rate is not None else None,
         product_passed_cases=len(product_results),
         judge_passed_cases=len(judge_results),
@@ -585,6 +590,7 @@ def build_summary(
             "judge_succeeded_cases": metrics.judge_succeeded_cases,
             "judge_failed_cases": metrics.judge_failed_cases,
             "judge_not_run_cases": metrics.judge_not_run_cases,
+            "judge_skipped_product_failure_cases": metrics.judge_skipped_product_failure_cases,
             "judge_disabled_cases": metrics.judge_disabled_cases,
             "judge_execution_rate": metrics.judge_execution_rate,
             "invalid_eval_cases": metrics.invalid_eval_cases,

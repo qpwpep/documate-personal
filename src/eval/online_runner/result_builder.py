@@ -10,7 +10,9 @@ from ..pricing import compute_cost_usd
 from ..config_models import BenchmarkCase, BenchmarkConfig
 from ..result_models import CaseResult, JudgeSubscores, ScenarioTurnResult
 from ..save_outcomes import assess_save_outcome, assess_setup_saves
-from ..decisions import DECISION_CONTRACT_VERSION, policy_for_case, refresh_case_decision
+from ..decisions import DECISION_CONTRACT_VERSION, policy_for_case, product_failure_observed, refresh_case_decision
+from ..action_outcomes import assess_action_outcomes
+from ..tool_policy import assess_execution_policy
 from ..weighting import (
     compute_composite_quality_score,
     compute_rule_weighted_score,
@@ -63,7 +65,7 @@ def _build_gate_failures(
         failures.append("judge_disabled")
     elif judge_status == "failed":
         failures.append("judge_failed")
-    elif judge_status == "not_run":
+    elif judge_status == "not_run" and judge_status_reason != "product_failure":
         failures.append(
             "judge_input_incomplete" if judge_status_reason == "input_incomplete" else "judge_not_run"
         )
@@ -236,10 +238,28 @@ def build_case_result(
         parsed_response.turn_result is not None
         and parsed_response.turn_result.status == "needs_input"
     )
+    policy = policy_for_case(case)
+    policy_assessment = assess_execution_policy(
+        policy=policy, evidence=parsed_response.execution_evidence, execution_id=parsed_response.execution_id,
+        prior_turns=scenario_turns, actions=parsed_response.actions,
+        retrieval_diagnostics=parsed_response.retrieval_diagnostics, debug=parsed_response.debug,
+        tool_calls=parsed_response.tool_calls, tool_call_count=parsed_response.tool_call_count,
+    )
+    action_assessments = assess_action_outcomes(
+        policy=policy, execution_evidence=parsed_response.execution_evidence, response=response,
+        actions=parsed_response.actions, save_assessment=save_assessment, policy_assessment=policy_assessment,
+    )
+    product_failure = product_failure_observed(
+        runtime_errors=runtime_errors, response_errors=response_errors, policy_assessment=policy_assessment,
+        actions=action_assessments, save_assessments=save_assessments,
+    )
     if not judge_required:
         judge_status = "disabled"
+    elif product_failure:
+        judge_status = "not_run"
+        judge_status_reason = "product_failure"
     elif not has_final_response and not has_clarification:
-        # A product failure already settles the verdict; this is not a judge outage.
+        # Absence without a settled failure is an observation gap.
         judge_status = "not_run"
         judge_status_reason = "missing_final_response"
     else:
@@ -326,7 +346,9 @@ def build_case_result(
         llm_judge_score=llm_judge_score if judge_status == "succeeded" else None,
         weights=resolved_weights,
     )
-    if composite_quality_score is not None:
+    if product_failure:
+        product_pass = False
+    elif composite_quality_score is not None:
         product_pass = composite_quality_score >= _PRODUCT_PASS_FLOOR
     elif runtime_errors or response_errors:
         product_pass = False
@@ -338,13 +360,12 @@ def build_case_result(
     elif judge_status == "disabled":
         eval_validity = "incomplete"
     elif judge_status == "not_run":
-        # missing_final_response is a settled product verdict, not an
-        # evaluation gap. Any other unrun reason leaves the case incomplete.
-        eval_validity = "valid" if judge_status_reason == "missing_final_response" else "incomplete"
+        eval_validity = "valid" if judge_status_reason == "product_failure" else "incomplete"
     else:
         eval_validity = "valid"
 
-    quality_pass = product_pass
+    quality_pass = (composite_quality_score >= _PRODUCT_PASS_FLOOR
+                    if composite_quality_score is not None else None)
     if any(item.status == "failed" for item in save_assessments):
         product_pass = False
     gate_failures = _build_gate_failures(
@@ -364,7 +385,7 @@ def build_case_result(
 
     result = CaseResult(
         decision_contract_version=DECISION_CONTRACT_VERSION,
-        policy_snapshot=policy_for_case(case),
+        policy_snapshot=policy,
         execution_evidence=parsed_response.execution_evidence,
         run_id=run_id,
         case_id=case.case_id,
