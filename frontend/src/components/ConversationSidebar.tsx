@@ -7,6 +7,7 @@ interface Props {
   activeId: string;
   onSelect(id: string): void;
   onNew(): void;
+  onDelete(id: string): void;
   disabled: boolean;
   theme: ConversationState['theme'];
   onThemeChange(theme: ConversationState['theme']): void;
@@ -16,14 +17,17 @@ interface Props {
   children?: ReactNode;
 }
 
-export function ConversationSidebar({ items, activeId, onSelect, onNew, disabled, theme, onThemeChange, onModalChange, attachments, help, children }: Props) {
+export function ConversationSidebar({ items, activeId, onSelect, onNew, onDelete, disabled, theme, onThemeChange, onModalChange, attachments, help, children }: Props) {
   const [mobile, setMobile] = useState(() => window.matchMedia?.('(max-width: 760px)').matches ?? false);
   const [open, setOpen] = useState(() => !mobile);
   const [search, setSearch] = useState('');
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   const panel = useRef<HTMLElement>(null);
   const opener = useRef<HTMLButtonElement>(null);
   const closeButton = useRef<HTMLButtonElement>(null);
   const searchInput = useRef<HTMLInputElement>(null);
+  const deleteOpener = useRef<HTMLButtonElement | null>(null);
+  const cancelDelete = useRef<HTMLButtonElement>(null);
   const returnFocusToOpener = useRef(false);
   const focusOnOpen = useRef(false);
   const numberedItems = items.map((item, index) => ({ ...item,
@@ -62,11 +66,17 @@ export function ConversationSidebar({ items, activeId, onSelect, onNew, disabled
     return () => onModalChange(false);
   }, [mobile, open, onModalChange]);
 
+  useEffect(() => {
+    if (deletingId !== null) cancelDelete.current?.focus();
+  }, [deletingId]);
+
   function close() {
+    setDeletingId(null);
     returnFocusToOpener.current = true;
     setOpen(false);
   }
   function select(id: string) {
+    setDeletingId(null);
     onSelect(id);
     if (mobile) close();
   }
@@ -101,7 +111,7 @@ export function ConversationSidebar({ items, activeId, onSelect, onNew, disabled
       <div className="conversation-search">
         <label className="visually-hidden" htmlFor="conversation-search">대화 검색</label>
         <input ref={searchInput} id="conversation-search" type="search" value={search} placeholder="대화 검색"
-          autoComplete="off" aria-controls="conversation-list" onChange={(event) => setSearch(event.currentTarget.value)} />
+          autoComplete="off" aria-controls="conversation-list" onChange={(event) => { setDeletingId(null); setSearch(event.currentTarget.value); }} />
         {search && <button type="button" className="search-clear" aria-label="검색어 지우기"
           onClick={() => { setSearch(''); searchInput.current?.focus(); }}>지우기</button>}
       </div>
@@ -110,11 +120,31 @@ export function ConversationSidebar({ items, activeId, onSelect, onNew, disabled
         {searchTerm && visibleItems.length === 0 && <div className="conversation-search-empty">
           <p>일치하는 대화가 없습니다.</p><p>다른 제목으로 검색하거나 새 채팅을 시작하세요.</p>
         </div>}
-        {visibleItems.map((item) => <button type="button" className="conversation-choice" key={item.id}
-          disabled={disabled || item.id === activeId} aria-current={item.id === activeId ? 'page' : undefined} aria-label={`대화 선택: ${item.title}`}
-          onClick={() => select(item.id)}><span>{item.title}</span>
-          {(item.busy || item.expired) && <small>{item.busy ? '답변 준비 중' : '읽기 전용'}</small>}
-        </button>)}
+        {visibleItems.map((item) => <div className="conversation-entry" key={item.id}>
+          <div className="conversation-entry-actions">
+            <button type="button" className="conversation-choice"
+              disabled={disabled || item.id === activeId} aria-current={item.id === activeId ? 'page' : undefined} aria-label={`대화 선택: ${item.title}`}
+              onClick={() => select(item.id)}><span>{item.title}</span>
+              {(item.busy || item.expired) && <small>{item.busy ? '답변 준비 중' : '읽기 전용'}</small>}
+            </button>
+            <button type="button" className="conversation-delete" disabled={disabled || item.busy}
+              aria-label={`대화 삭제: ${item.title}`} title="대화 삭제" aria-expanded={deletingId === item.id}
+              onClick={(event) => { deleteOpener.current = event.currentTarget; setDeletingId(item.id); }}>
+              <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7m4-7v7" />
+              </svg>
+            </button>
+          </div>
+          {deletingId === item.id && <div className="conversation-delete-confirmation" role="group" aria-label={`대화 삭제 확인: ${item.title}`}>
+            <p>이 대화의 기록과 초안을 삭제합니다.</p>
+            <div>
+              <button ref={cancelDelete} type="button" className="secondary-button"
+                onClick={() => { setDeletingId(null); deleteOpener.current?.focus(); }}>취소</button>
+              <button type="button" className="secondary-button" disabled={disabled || item.busy}
+                onClick={() => { setDeletingId(null); onDelete(item.id); searchInput.current?.focus(); }}>삭제</button>
+            </div>
+          </div>}
+        </div>)}
       </nav>
       <details className="all-conversations"><summary>전체 대화</summary>
         <label htmlFor="all-conversations">대화 선택</label>

@@ -48,23 +48,26 @@ test('the latest-answer shortcut preserves the reading position until explicitly
   await expect(page.getByRole('button', { name: 'TXT 파일 만들기', exact: true })).toBeInViewport();
 });
 
-test('answer information keeps the request identifier collapsed without losing the composer draft', async ({ page }) => {
+test('answer information keeps the full execution identifier collapsed without losing the composer draft', async ({ page }) => {
   await page.goto('./');
   const query = page.getByRole('textbox', { name: '질문', exact: true });
-  await query.fill('대화 화면의 요청 정보를 확인해줘.');
+  await query.fill('대화 화면의 실행 정보를 확인해줘.');
+  const streamed = page.waitForResponse((response) =>
+    response.url().endsWith('/agent/stream') && response.request().method() === 'POST');
   await page.getByRole('button', { name: '질문 보내기', exact: true }).click();
   await expect(page.getByText('답변 받음', { exact: true })).toBeVisible();
-  const requestInformation = page.locator('.request-id');
-  const identifier = await requestInformation.textContent();
-  expect(identifier).toMatch(/^요청 ID: [0-9a-f]{8}$/);
-  await expect(requestInformation).not.toBeVisible();
+  const executionId = (await streamed).headers()['x-execution-id'];
+  expect(executionId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+  const executionInformation = page.locator('.request-id');
+  await expect(executionInformation).toHaveText(`실행 ID: ${executionId}`);
+  await expect(executionInformation).not.toBeVisible();
   await page.getByText('답변 정보', { exact: true }).click();
-  await expect(requestInformation).toBeVisible();
-  await expect(requestInformation).toHaveText(identifier!);
+  await expect(executionInformation).toBeVisible();
+  await expect(executionInformation).toHaveText(`실행 ID: ${executionId}`);
   await expect(query).toHaveAttribute('placeholder', '이어서 질문하세요');
   await query.fill('  이어서 작성 중인 질문\n둘째 줄  ');
   await page.getByText('답변 정보', { exact: true }).click();
-  await expect(requestInformation).not.toBeVisible();
+  await expect(executionInformation).not.toBeVisible();
   await expect(query).toHaveValue('  이어서 작성 중인 질문\n둘째 줄  ');
 });
 

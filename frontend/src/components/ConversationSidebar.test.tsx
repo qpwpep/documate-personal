@@ -10,7 +10,7 @@ function renderSidebar(mobile = false, props: Partial<ComponentProps<typeof Conv
   vi.stubGlobal('matchMedia', () => ({ matches: mobile, addEventListener() {}, removeEventListener() {} }));
   return render(<>
     <ConversationSidebar items={[{ id: 'one', title: '새 대화', busy: false, expired: false }]}
-      activeId="one" onSelect={() => {}} onNew={() => {}} disabled={false} theme="system"
+      activeId="one" onSelect={() => {}} onNew={() => {}} onDelete={() => {}} disabled={false} theme="system"
       onThemeChange={() => {}} onModalChange={() => {}} {...props}>
       <details><summary>Slack 수신자 설정</summary><fieldset><legend>수신자 유형</legend>
         <label><input type="radio" name="recipient" value="omitted" defaultChecked />직접 지정 안 함</label>
@@ -74,6 +74,66 @@ describe('대화 메뉴 열기와 키보드 탐색', () => {
     expect(screen.getByText('설정', { selector: 'summary' })).toHaveFocus();
     await user.tab();
     expect(screen.getByRole('button', { name: '메뉴 닫기' })).toHaveFocus();
+  });
+});
+
+describe('대화 기록 삭제', () => {
+  it('삭제 대상을 확인하고 명시적으로 승인한 대화만 삭제한다', async () => {
+    const user = userEvent.setup();
+    const onDelete = vi.fn();
+    renderSidebar(false, { onDelete });
+    await user.click(screen.getByRole('button', { name: '대화 삭제: 새 대화' }));
+    expect(onDelete).not.toHaveBeenCalled();
+    expect(screen.getByRole('group', { name: '대화 삭제 확인: 새 대화' })).toHaveTextContent('이 대화의 기록과 초안을 삭제합니다.');
+    expect(screen.getByRole('button', { name: '취소' })).toHaveFocus();
+    await user.click(screen.getByRole('button', { name: '삭제' }));
+    expect(onDelete).toHaveBeenCalledExactlyOnceWith('one');
+    expect(screen.queryByRole('group', { name: '대화 삭제 확인: 새 대화' })).not.toBeInTheDocument();
+    expect(screen.getByRole('searchbox', { name: '대화 검색' })).toHaveFocus();
+  });
+
+  it('삭제를 취소하면 기록을 보존하고 삭제 버튼으로 포커스를 돌린다', async () => {
+    const user = userEvent.setup();
+    const onDelete = vi.fn();
+    renderSidebar(false, { onDelete });
+    const remove = screen.getByRole('button', { name: '대화 삭제: 새 대화' });
+    await user.click(remove);
+    await user.click(screen.getByRole('button', { name: '취소' }));
+    expect(onDelete).not.toHaveBeenCalled();
+    expect(remove).toHaveFocus();
+    expect(screen.queryByRole('group', { name: '대화 삭제 확인: 새 대화' })).not.toBeInTheDocument();
+  });
+
+  it.each([
+    { disabled: true, busy: false },
+    { disabled: false, busy: true },
+  ])('첨부·저장 또는 해당 대화의 응답 수신 중에는 삭제하지 않는다: %j', async ({ disabled, busy }) => {
+    const user = userEvent.setup();
+    const onDelete = vi.fn();
+    renderSidebar(false, { disabled, onDelete, items: [{ id: 'one', title: '새 대화', busy, expired: false }] });
+    const remove = screen.getByRole('button', { name: '대화 삭제: 새 대화' });
+    expect(remove).toBeDisabled();
+    await user.click(remove);
+    expect(onDelete).not.toHaveBeenCalled();
+    expect(screen.queryByRole('button', { name: '삭제' })).not.toBeInTheDocument();
+  });
+
+  it('검색으로 찾은 오래된 대화도 현재 대화를 바꾸지 않고 삭제할 수 있다', async () => {
+    const user = userEvent.setup();
+    const onDelete = vi.fn();
+    const onSelect = vi.fn();
+    renderSidebar(false, { activeId: 'four', onDelete, onSelect, items: [
+      { id: 'one', title: '오래된 질문', busy: false, expired: true },
+      { id: 'two', title: '둘째 질문', busy: false, expired: false },
+      { id: 'three', title: '셋째 질문', busy: false, expired: false },
+      { id: 'four', title: '현재 질문', busy: false, expired: false },
+    ] });
+    expect(screen.queryByRole('button', { name: '대화 삭제: 오래된 질문' })).not.toBeInTheDocument();
+    await user.type(screen.getByRole('searchbox', { name: '대화 검색' }), '오래된');
+    await user.click(screen.getByRole('button', { name: '대화 삭제: 오래된 질문' }));
+    await user.click(screen.getByRole('button', { name: '삭제' }));
+    expect(onDelete).toHaveBeenCalledExactlyOnceWith('one');
+    expect(onSelect).not.toHaveBeenCalled();
   });
 });
 

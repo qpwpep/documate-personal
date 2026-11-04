@@ -9,9 +9,9 @@ import { selectedSlackRecipient } from './components/SlackSettingsState';
 import { ConversationSidebar } from './components/ConversationSidebar';
 import { ConversationJump } from './components/ConversationJump';
 import { createId } from './id';
+import { ConversationPersistence, loadConversationState } from './conversationPersistence';
 import {
-  STORAGE_KEY, conversationTitle, createConversation, createConversationState,
-  restoreConversations, serializeConversations, type ChatTurn, type Conversation, type ConversationState,
+  conversationTitle, createConversation, type ChatTurn, type Conversation, type ConversationState,
 } from './conversations';
 
 const resultLabels = {
@@ -36,12 +36,7 @@ const supportedDocs = ['python', 'git', 'LangChain', 'Matplotlib', 'NumPy', 'pan
   'FastAPI', 'BeautifulSoup', 'streamlit', 'gradio', 'scikit-learn', 'Pydantic'];
 
 function initialState() {
-  try {
-    const snapshot = sessionStorage.getItem(STORAGE_KEY);
-    return { state: snapshot ? restoreConversations(snapshot) : createConversationState(), error: null };
-  } catch {
-    return { state: createConversationState(), error: '저장된 대화를 복원하지 못했습니다. 새 대화를 시작할 수 있습니다.' };
-  }
+  return loadConversationState(() => sessionStorage);
 }
 
 export function App({ apiBaseUrl = '' }: { apiBaseUrl?: string }) {
@@ -49,7 +44,11 @@ export function App({ apiBaseUrl = '' }: { apiBaseUrl?: string }) {
   const [state, setState] = useState(initial.state);
   const currentState = useRef(state);
   const mounted = useRef(true);
-  const [storageError, setStorageError] = useState<string | null>(initial.error);
+  const [storageError, setStorageError] = useState<string | null>(null);
+  const [obsoleteRecord, setObsoleteRecord] = useState(initial.obsoleteRecord);
+  const [persistence] = useState(() => new ConversationPersistence(() => sessionStorage, (error) => {
+    if (mounted.current) setStorageError(error);
+  }));
   const [config, setConfig] = useState<ClientConfig | null>(null);
   const [configError, setConfigError] = useState<string | null>(null);
   const [configAttempt, setConfigAttempt] = useState(0);
@@ -69,13 +68,8 @@ export function App({ apiBaseUrl = '' }: { apiBaseUrl?: string }) {
     const next = update(currentState.current);
     currentState.current = next;
     setState(next);
-    // Persist the utterance before HTTP begins. Restore records, never commands.
-    try {
-      sessionStorage.setItem(STORAGE_KEY, serializeConversations(next));
-    } catch {
-      setStorageError('대화를 브라우저에 저장하지 못했습니다. 이 탭에서는 계속 사용할 수 있지만 새로고침 후 기록이 복원되지 않을 수 있습니다.');
-    }
-  }, []);
+    persistence.schedule(next);
+  }, [persistence]);
   const updateConversation = useCallback((id: string, update: (value: Conversation) => Conversation) => {
     mutate((value) => ({ ...value, conversations: value.conversations.map((item) => item.id === id ? update(item) : item) }));
   }, [mutate]);
@@ -119,11 +113,18 @@ export function App({ apiBaseUrl = '' }: { apiBaseUrl?: string }) {
   useEffect(() => {
     mounted.current = true;
     const running = requests.current;
+    const flush = () => { persistence.flush(); };
+    const hidden = () => { if (document.visibilityState === 'hidden') flush(); };
+    window.addEventListener('pagehide', flush);
+    document.addEventListener('visibilitychange', hidden);
     return () => {
       mounted.current = false;
+      persistence.flush();
+      window.removeEventListener('pagehide', flush);
+      document.removeEventListener('visibilitychange', hidden);
       for (const controller of running.values()) controller.abort();
     };
-  }, []);
+  }, [persistence]);
   useEffect(() => {
     const controller = new AbortController();
     fetchClientConfig(apiBaseUrl, { signal: controller.signal }).then((settings) => {
@@ -224,6 +225,8 @@ export function App({ apiBaseUrl = '' }: { apiBaseUrl?: string }) {
       updateConversation(id, (item) => ({ ...item, draft: consumeDraft && item.draft === query ? '' : item.draft,
         attachments: item.attachments.pendingPrompt === query ? { ...item.attachments, pendingPrompt: null, phase: 'idle' } : item.attachments,
         turns: [...item.turns, turn] }));
+      // A submitted utterance must survive reload before its POST begins.
+      persistence.flush();
       const recipient = selectedSlackRecipient(currentState.current.conversations.find((item) => item.id === id)!.slack);
       for await (const incoming of getClient(id).stream(query, { signal: controller.signal, slackRecipient: recipient })) {
         if (!mounted.current || requests.current.get(id) !== controller || controller.signal.aborted) break;
@@ -265,6 +268,7 @@ export function App({ apiBaseUrl = '' }: { apiBaseUrl?: string }) {
     onChange: (next) => updateConversation(conversation.id, (item) => ({ ...item, attachments: next })),
     ensureSession: () => ensureSession(conversation.id), onManifestChange: (manifest) => acceptManifest(conversation.id, manifest),
     onBusyChange: (busy) => setBusy(conversation.id, 'upload', busy),
+    onBeforeRequest: () => { persistence.flush(); },
     onSendPrompt: (query) => { void sendQuestion(conversation.id, query); },
     onRestorePrompt: (query) => {
       const current = currentState.current.conversations.find((item) => item.id === conversation.id)!;
@@ -288,6 +292,18 @@ export function App({ apiBaseUrl = '' }: { apiBaseUrl?: string }) {
     const next = createConversation();
     mutate((value) => ({ ...value, activeId: next.id, conversations: [...value.conversations, next] }));
     input.current?.focus();
+  }
+  function deleteConversation(id: string) {
+    const selected = currentState.current.conversations.find((item) => item.id === id);
+    if (navigationBlocked || !selected || selected.busy !== null) return;
+    validations.current.delete(id);
+    clients.current.delete(`${apiBaseUrl}|${id}`);
+    mutate((value) => {
+      const remaining = value.conversations.filter((item) => item.id !== id);
+      const conversations = remaining.length ? remaining : [createConversation()];
+      return { ...value, conversations, activeId: value.activeId === id ? conversations.at(-1)!.id : value.activeId };
+    });
+    persistence.flush();
   }
   function reconnect() {
     if (!config) setConfigAttempt((attempt) => attempt + 1);
@@ -316,7 +332,7 @@ export function App({ apiBaseUrl = '' }: { apiBaseUrl?: string }) {
     <div className="app-layout">
       <ConversationSidebar items={state.conversations.map((item) => ({ id: item.id, title: conversationTitle(item), busy: item.busy === 'chat', expired: item.connection === 'expired' }))}
         activeId={state.activeId} onSelect={(id) => { if (!navigationBlocked) mutate((value) => ({ ...value, activeId: id })); }}
-        onNew={newConversation} disabled={navigationBlocked} theme={state.theme}
+        onNew={newConversation} onDelete={deleteConversation} disabled={navigationBlocked} theme={state.theme}
         onThemeChange={(theme) => mutate((value) => ({ ...value, theme }))} onModalChange={setSidebarModal}
         attachments={attachments.manifestPanel}
         help={<details className="sidebar-help-panel"><summary>사용 안내</summary>
@@ -334,6 +350,13 @@ export function App({ apiBaseUrl = '' }: { apiBaseUrl?: string }) {
           <div className="app-heading">{isEmpty ? 'DocuMate' : conversationTitle(conversation)}</div>
           {readOnly && <span className="header-status">읽기 전용</span>}
         </header>
+        {initial.error && <p className="notice" role="alert">{initial.error}</p>}
+        {obsoleteRecord && <div className="notice" role="alert">
+          <p>이전 형식의 대화 기록은 현재 버전에서 복원할 수 없습니다. 기존 기록은 브라우저에 남아 있습니다. 정리하면 저장 공간을 확보하지만 해당 기록을 되돌릴 수 없습니다.</p>
+          <button type="button" className="secondary-button" onClick={() => {
+            if (persistence.clearObsoleteRecord()) setObsoleteRecord(false);
+          }}>이전 형식 기록 정리</button>
+        </div>}
         {storageError && <p className="notice" role="alert">{storageError}</p>}
         <main ref={conversationArea} className="conversation" aria-label="질문과 답변" onFocusCapture={(event) => keepAnswerFocusVisible(event.target)}>
           {isEmpty && <section className="welcome">
@@ -372,7 +395,7 @@ export function App({ apiBaseUrl = '' }: { apiBaseUrl?: string }) {
                 {turn.receiving && <div className="response-progress" role="status" aria-live="polite" aria-atomic="true">
                   <p className="pending-label"><span className="pending-dot" aria-hidden="true" />{progress[conversation.id] || '답변을 준비하고 있습니다.'}</p>
                 </div>}
-                {turn.executionId && !result?.response && <details className="request-details"><summary>요청 정보</summary><p className="request-id">요청 ID: {turn.executionId}</p></details>}
+                {turn.executionId && !result?.response && <details className="request-details"><summary>요청 정보</summary><p className="request-id">실행 ID: {turn.executionId}</p></details>}
                 {recovery && <div className="recovery-actions">
                   {canRetry(turn) && <button type="button" className="secondary-button" disabled={!ready || conversation.busy !== null}
                     onClick={() => void sendQuestion(conversation.id, turn.query)}>같은 질문 다시 보내기</button>}

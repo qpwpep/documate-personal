@@ -15,6 +15,7 @@ interface Options {
   ensureSession(): Promise<UploadManifest | null>;
   onManifestChange(manifest: UploadManifest | null): void;
   onBusyChange(busy: boolean): void;
+  onBeforeRequest?(): void;
   onSendPrompt(prompt: string): void;
   onRestorePrompt(prompt: string): boolean;
   disabled: boolean;
@@ -34,6 +35,7 @@ export function useAttachments(options: Options) {
     options.onBusyChange(true);
     let state = { ...initial, errors: [], fileErrors: {}, notice: null };
     change({ ...state, phase: 'staging' });
+    options.onBeforeRequest?.();
     try {
       const manifest = await options.ensureSession();
       if (!manifest) throw new Error('첨부 목록을 확인하지 못했습니다. 연결을 확인해 주세요.');

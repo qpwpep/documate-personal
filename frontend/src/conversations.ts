@@ -1,13 +1,13 @@
 import Ajv2020 from 'ajv/dist/2020';
 import { ApiError } from './api/errors';
 import { parseAnswerExport } from './api/delivery-validation';
-import type { AgentResponse, AnswerExportResult, UploadManifest } from './api/types';
+import type { AgentResponse, AnswerExportResult, AnswerResponse, UploadManifest } from './api/types';
 import { parseAgentResponse, parseUploadManifest } from './api/validation';
 import { createAttachmentState, type AttachmentState } from './attachments/state';
 import { createSlackSettings, type SlackSettingsValue } from './components/SlackSettingsState';
 import { createId } from './id';
 
-export const STORAGE_KEY = 'documate.react.conversations.v1';
+export const STORAGE_KEY = 'documate.react.conversations';
 
 export interface ChatTurn {
   id: string;
@@ -42,9 +42,12 @@ export interface ConversationState {
 }
 
 interface StoredTurn extends Omit<ChatTurn, 'result' | 'exportResult'> {
-  result: object | null;
+  result: (Omit<AgentResponse, 'response'> & { response: StoredAnswer | null }) | null;
   exportResult: object | null;
 }
+
+type StoredAnswer = Omit<AnswerResponse, 'sources'> & { sourceIds: string[] };
+type SourceRegistry = AnswerResponse['sources'];
 
 interface StoredConversation {
   id: string;
@@ -58,10 +61,11 @@ interface StoredConversation {
 }
 
 interface StoredSnapshot {
-  version: 1;
+  version: 2;
   activeId: string;
   conversations: StoredConversation[];
   theme: ConversationState['theme'];
+  sources: SourceRegistry;
 }
 
 const text = { type: 'string' };
@@ -70,10 +74,11 @@ const nullableObject = { type: ['object', 'null'] };
 const identity = { type: 'string', pattern: '^[A-Za-z0-9_-]{1,128}$' };
 const validateSnapshot = new Ajv2020().compile<StoredSnapshot>({
   type: 'object', additionalProperties: false,
-  required: ['version', 'activeId', 'conversations', 'theme'],
+  required: ['version', 'activeId', 'conversations', 'theme', 'sources'],
   properties: {
-    version: { const: 1 }, activeId: identity,
+    version: { const: 2 }, activeId: identity,
     theme: { enum: ['system', 'light', 'dark'] },
+    sources: { type: 'object', additionalProperties: { type: 'object' } },
     conversations: {
       type: 'array', minItems: 1,
       items: {
@@ -103,7 +108,14 @@ const validateSnapshot = new Ajv2020().compile<StoredSnapshot>({
               type: 'object', additionalProperties: false,
               required: ['id', 'query', 'result', 'notices', 'error', 'executionId', 'interrupted', 'receiving', 'exportResult', 'exportError'],
               properties: {
-                id: identity, query: text, result: nullableObject,
+                id: identity, query: text,
+                result: { anyOf: [{ type: 'null' }, {
+                  type: 'object', required: ['response'],
+                  properties: { response: { anyOf: [{ type: 'null' }, {
+                    type: 'object', required: ['sourceIds'],
+                    properties: { sourceIds: { type: 'array', uniqueItems: true, items: text } },
+                  }] } },
+                }] },
                 notices: { type: 'array', items: text }, error: nullableText,
                 executionId: nullableText, interrupted: { type: 'boolean' }, receiving: { type: 'boolean' },
                 exportResult: nullableObject, exportError: nullableText,
@@ -135,10 +147,17 @@ export function conversationTitle(conversation: Conversation): string {
 }
 
 export function serializeConversations(state: ConversationState): string {
+  const sources: SourceRegistry = {};
   const snapshot: StoredSnapshot = {
-    version: 1, activeId: state.activeId, theme: state.theme,
+    version: 2, activeId: state.activeId, theme: state.theme, sources,
     conversations: state.conversations.map((conversation) => ({
-      id: conversation.id, draft: conversation.draft, turns: conversation.turns,
+      id: conversation.id, draft: conversation.draft,
+      turns: conversation.turns.map((turn) => {
+        if (!turn.result?.response) return { ...turn, result: turn.result === null ? null : { ...turn.result, response: null } };
+        const { sources: answerSources, ...answer } = turn.result.response;
+        Object.assign(sources, answerSources);
+        return { ...turn, result: { ...turn.result, response: { ...answer, sourceIds: Object.keys(answerSources) } } };
+      }),
       attachments: {
         pendingPrompt: conversation.attachments.pendingPrompt,
         restoreFilesRequired: conversation.attachments.restoreFilesRequired
@@ -169,7 +188,7 @@ export function restoreConversations(snapshot: string): ConversationState {
         if (new Set(conversation.turns.map((turn) => turn.id)).size !== conversation.turns.length) throw invalidSnapshot();
         return {
           id: conversation.id, draft: conversation.draft,
-          turns: conversation.turns.map(restoreTurn),
+          turns: conversation.turns.map((turn) => restoreTurn(turn, value.sources)),
           attachments: { ...createAttachmentState(), ...conversation.attachments },
           slack: conversation.slack,
           confirmedEpoch: conversation.confirmedEpoch,
@@ -186,8 +205,19 @@ export function restoreConversations(snapshot: string): ConversationState {
   }
 }
 
-function restoreTurn(turn: StoredTurn): ChatTurn {
-  const result = turn.result === null ? null : parseAgentResponse(turn.result);
+function restoreTurn(turn: StoredTurn, sources: SourceRegistry): ChatTurn {
+  let result: AgentResponse | null = null;
+  if (turn.result !== null) {
+    if (turn.result.response === null) result = parseAgentResponse(turn.result);
+    else {
+      const { sourceIds, ...answer } = turn.result.response;
+      const answerSources = Object.fromEntries(sourceIds.map((id) => {
+        if (!Object.hasOwn(sources, id)) throw invalidSnapshot();
+        return [id, sources[id]];
+      }));
+      result = parseAgentResponse({ ...turn.result, response: { ...answer, sources: answerSources } });
+    }
+  }
   let exportResult: AnswerExportResult | null = null;
   if (turn.exportResult !== null) {
     if (!result?.answer_id) throw invalidSnapshot();

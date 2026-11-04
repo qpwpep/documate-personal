@@ -5,7 +5,7 @@ import userEvent from '@testing-library/user-event';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import fixtures from '../../tests/fixtures/web_contracts/agent_responses.json';
 import { App } from './App';
-import { createConversationState, serializeConversations, STORAGE_KEY } from './conversations';
+import { createConversationState, restoreConversations, serializeConversations, STORAGE_KEY } from './conversations';
 
 const config = {
   upload: {
@@ -27,6 +27,7 @@ let serverEpoch = 'contract-epoch';
 let manifestUnavailable = false;
 let holdManifest = false;
 let pendingManifestResponse: ServerResponse | null = null;
+let storedBeforePost: string | null = null;
 
 const server = createServer(async (request, response) => {
   if (request.url === '/client-config') {
@@ -54,6 +55,7 @@ const server = createServer(async (request, response) => {
     return;
   }
   if (request.url === '/agent/stream') {
+    storedBeforePost = sessionStorage.getItem(STORAGE_KEY);
     let body = '';
     for await (const chunk of request) body += String(chunk);
     requests.push(body);
@@ -90,6 +92,7 @@ beforeEach(() => {
   responseName = 'completed';
   serverEpoch = 'contract-epoch';
   manifestUnavailable = false;
+  storedBeforePost = null;
   config.query.max_chars = 8192;
   config.query.max_utf8_bytes = 16384;
 });
@@ -148,7 +151,7 @@ describe('질문 화면과 실제 HTTP 클라이언트', () => {
     expect(within(screen.getByRole('region', { name: '부분 답변' })).getByText('두 번째 자료는 확인하지 못했습니다.')).toBeVisible();
   });
 
-  it.each(['request_timeout', 'answer_validation_failed'])('%s의 서버 안내와 요청 ID를 보존하고 질문을 자동 재전송하지 않는다', async (code) => {
+  it.each(['request_timeout', 'answer_validation_failed'])('%s의 서버 안내와 실행 ID를 보존하고 질문을 자동 재전송하지 않는다', async (code) => {
     holdResponse = true;
     const result = {
       ...fixtures.responses.failed,
@@ -167,12 +170,12 @@ describe('질문 화면과 실제 HTTP 클라이언트', () => {
     expect(await screen.findByText(result.message)).toBeVisible();
     expect(screen.getByText(result.problem.message)).toBeVisible();
     await user.click(screen.getByText('요청 정보', { exact: true }));
-    expect(screen.getByText(`요청 ID: ${result.execution_id}`)).toBeVisible();
+    expect(screen.getByText(`실행 ID: ${result.execution_id}`)).toBeVisible();
     expect(requests).toHaveLength(1);
     expect(JSON.parse(requests[0]).query).toBe('실패 원인을 확인해 줘');
   });
 
-  it('근거 부족 부분 답변의 서버 원인을 펼치지 않아도 보여 주고 요청 ID와 본문을 보존한다', async () => {
+  it('근거 부족 부분 답변의 서버 원인을 펼치지 않아도 보여 주고 실행 ID와 본문을 보존한다', async () => {
     holdResponse = true;
     const result = {
       ...fixtures.responses.partial,
@@ -191,7 +194,7 @@ describe('질문 화면과 실제 HTTP 클라이언트', () => {
     expect(await screen.findByText('확인한 첫 번째 자료의 답변 🧪')).toBeVisible();
     expect(within(screen.getByRole('region', { name: '부분 답변' })).getByText(result.problem.message)).toBeVisible();
     await user.click(screen.getByText('답변 정보', { exact: true }));
-    expect(screen.getByText(`요청 ID: ${result.execution_id}`)).toBeVisible();
+    expect(screen.getByText(`실행 ID: ${result.execution_id}`)).toBeVisible();
     expect(requests).toHaveLength(1);
   });
 
@@ -270,7 +273,7 @@ describe('질문 화면과 실제 HTTP 클라이언트', () => {
     expect(requests).toHaveLength(0);
   });
 
-  it('메뉴의 사용 안내에서 지원 문서와 첨부 제한을 확인하고 답변 정보에서 요청 ID를 확인한다', async () => {
+  it('메뉴의 사용 안내에서 지원 문서와 첨부 제한을 확인하고 답변 정보에서 실행 ID를 확인한다', async () => {
     const user = userEvent.setup();
     render(<App apiBaseUrl={apiBaseUrl} />);
     const guide = within(screen.getByRole('complementary', { name: '대화 메뉴' })).getByText('사용 안내', { exact: true });
@@ -287,9 +290,9 @@ describe('질문 화면과 실제 HTTP 클라이언트', () => {
     await user.click(screen.getByRole('button', { name: '질문 보내기' }));
     await screen.findByText('한글 답변 🧪');
     expect(screen.queryByText('요청 정보', { exact: true })).not.toBeInTheDocument();
-    expect(screen.getByText(/^요청 ID:/)).not.toBeVisible();
+    expect(screen.getByText(/^실행 ID:/)).not.toBeVisible();
     await user.click(screen.getByText('답변 정보', { exact: true }));
-    expect(screen.getByText(/^요청 ID:/)).toBeVisible();
+    expect(screen.getByText(/^실행 ID:/)).toBeVisible();
     expect(screen.getByText('사용 안내', { exact: true })).toBeVisible();
     await user.click(screen.getByText('사용 안내', { exact: true }));
     expect(screen.getByText('지원하는 공식 문서', { exact: true })).toBeVisible();
@@ -398,6 +401,7 @@ describe('질문 화면과 실제 HTTP 클라이언트', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: '질문 보내기' })).toBeEnabled());
     await user.click(screen.getByRole('button', { name: '질문 보내기' }));
     await screen.findByText('질문을 확인하고 있습니다.');
+    expect(restoreConversations(storedBeforePost!).conversations[0].turns[0].query).toBe('저장할 질문');
     first.unmount();
     render(<App apiBaseUrl={apiBaseUrl} />);
     expect(within(screen.getByRole('region', { name: '대화 기록' })).getByText('저장할 질문')).toBeVisible();
@@ -405,6 +409,25 @@ describe('질문 화면과 실제 HTTP 클라이언트', () => {
     await user.click(screen.getByRole('button', { name: '질문 수정' }));
     expect(screen.getByRole('textbox', { name: '질문' })).toHaveValue('저장할 질문');
     expect(requests).toHaveLength(1);
+  });
+
+  it('페이지를 떠나기 직전 최신 초안을 저장하고 대화 삭제를 즉시 보존한다', async () => {
+    const user = userEvent.setup();
+    render(<App apiBaseUrl={apiBaseUrl} />);
+    await screen.findByText('질문할 준비가 되었습니다.');
+    await user.type(screen.getByRole('textbox', { name: '질문' }), '  남길 초안\n');
+    window.dispatchEvent(new Event('pagehide'));
+    const before = restoreConversations(sessionStorage.getItem(STORAGE_KEY)!);
+    expect(before.conversations[0].draft).toBe('  남길 초안\n');
+
+    await user.click(screen.getByRole('button', { name: '대화 삭제: 새 대화' }));
+    await user.click(screen.getByRole('button', { name: '삭제' }));
+    const after = restoreConversations(sessionStorage.getItem(STORAGE_KEY)!);
+    expect(after.conversations).toHaveLength(1);
+    expect(after.conversations[0].id).not.toBe(before.conversations[0].id);
+    expect(after.conversations[0].draft).toBe('');
+    expect(screen.getByRole('textbox', { name: '질문' })).toHaveValue('');
+    expect(requests).toHaveLength(0);
   });
 
   it('보류한 질문을 보내기 전 연결 확인이 실패해도 질문 원문을 보존한다', async () => {

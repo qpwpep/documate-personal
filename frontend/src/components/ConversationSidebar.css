@@ -43,6 +43,38 @@
   color: var(--dm-muted);
   font-size: .7rem;
 }
+.conversation-entry-actions {
+  display: flex;
+  align-items: center;
+  gap: .1rem;
+}
+.conversation-entry-actions .conversation-choice {
+  flex: 1;
+  min-width: 0;
+}
+.conversation-sidebar .conversation-delete {
+  flex: 0 0 44px;
+  display: grid;
+  place-items: center;
+  width: 44px;
+  min-height: 44px;
+  padding: .65rem;
+  border: 1px solid transparent;
+  border-radius: .6rem;
+  background: transparent;
+  color: var(--dm-muted);
+}
+.conversation-delete svg { width: 18px; height: 18px; }
+.conversation-delete-confirmation {
+  margin: 0 .25rem .5rem;
+  padding: .5rem;
+  border: 1px solid var(--dm-divider);
+  border-radius: .6rem;
+  font-size: .75rem;
+}
+.conversation-delete-confirmation p { margin: 0 0 .5rem; }
+.conversation-delete-confirmation > div { display: flex; flex-wrap: wrap; gap: .4rem; }
+.conversation-delete-confirmation button { flex: 1; min-height: 44px; }
 .conversation-sidebar .sidebar-utilities {
   padding-top: 1rem;
   padding-bottom: .25rem;

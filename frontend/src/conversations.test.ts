@@ -21,6 +21,35 @@ function completedTurn(): ChatTurn {
 }
 
 describe('브라우저 대화 표시 상태', () => {
+  it('같은 원문을 사용한 여러 답변은 원문을 한 번 저장하고 할당량 안에서 복원한다', () => {
+    const state = createConversationState();
+    const response = structuredClone(sourceFixtures.quote);
+    const sourceText = '# source-storage-regression\n'.repeat(2800);
+    response.sources[response.citations[0].source_id as keyof typeof response.sources].element.text = sourceText;
+    const result = parseAgentResponse({ ...fixtures.responses.completed, response });
+    state.conversations[0].turns = Array.from({ length: 80 }, (_, index) => ({
+      ...completedTurn(), id: `turn-${index}`, result,
+    }));
+
+    const serialized = serializeConversations(state);
+
+    expect(serialized.split('source-storage-regression').length - 1).toBe(2800);
+    expect(() => sessionStorage.setItem('large-conversation-regression', serialized)).not.toThrow();
+    const restored = restoreConversations(serialized);
+    expect(restored.conversations[0].turns).toEqual(state.conversations[0].turns);
+    sessionStorage.removeItem('large-conversation-regression');
+  });
+
+  it('저장한 답변이 참조하는 원문이 누락되면 복원하지 않는다', () => {
+    const state = createConversationState();
+    state.conversations[0].turns = [{ ...completedTurn(),
+      result: parseAgentResponse({ ...fixtures.responses.completed, response: sourceFixtures.quote }),
+    }];
+    const snapshot = JSON.parse(serializeConversations(state));
+    snapshot.sources = {};
+    expect(() => restoreConversations(JSON.stringify(snapshot))).toThrow('대화 기록');
+  });
+
   it('randomUUID가 없는 HTTP 환경에서도 서로 다른 대화를 만들고 복원한다', () => {
     vi.stubGlobal('crypto', { getRandomValues: crypto.getRandomValues.bind(crypto) });
     try {
@@ -124,11 +153,8 @@ describe('브라우저 대화 표시 상태', () => {
     turn.exportResult = parseAnswerExport({
       status: 'failed', answer_id: turn.result.answer_id, execution_id: 'save-attempt',
       message: '파일을 저장하지 못했습니다.',
-      response: {
-        ...turn.result.response,
-        actions: [{ kind: 'save_text', status: 'error', message: '저장 공간을 확인해 주세요.', invocation_id: null,
-          file_path: null, slack: null, previous_slack: null, error: null, operation: null, artifact: null, verification: 'failed', error_code: 'write_failed' }],
-      },
+      receipt: { kind: 'save_text', status: 'error', message: '저장 공간을 확인해 주세요.', invocation_id: null,
+        file_path: null, slack: null, previous_slack: null, error: null, operation: null, artifact: null, verification: 'failed', error_code: 'write_failed' },
     }, turn.result.answer_id!);
     turn.exportError = '저장 공간을 확인해 주세요.';
     state.conversations[0].turns = [turn];
