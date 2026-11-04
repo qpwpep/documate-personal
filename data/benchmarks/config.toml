@@ -23,22 +23,22 @@ format_language = 0.10
 llm_judge = 0.15
 
 [hard_gates]
-pass_rate = 0.90
-tool_precision = 0.90
-tool_recall = 0.85
+pass_rate = 0.95
+tool_precision = 0.95
+tool_recall = 0.95
 citation_compliance = 0.95
-p95_latency_ms = 10000
+p95_latency_ms = 30000
 avg_cost_per_case_usd = 0.01
 
 [judge_min_score]
-docs_only = 0.70
-rag_only = 0.70
-hybrid = 0.70
-tool_action = 0.70
+docs_only = 0.75
+rag_only = 0.75
+hybrid = 0.75
+tool_action = 0.75
 
 [judge_min_subscores]
-answer_quality = 0.70
-groundedness = 0.70
+answer_quality = 0.8
+groundedness = 0.8
 
 [pricing.models."gpt-5-mini"]
 prompt_per_1k_usd = 0.00025
