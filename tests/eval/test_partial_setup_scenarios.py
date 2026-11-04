@@ -8,9 +8,9 @@ import pytest
 import requests
 from pydantic import ValidationError
 
-from src.app.transport_contracts import AgentDebugInfo, AgentResponse
+from src.app.transport_contracts import AgentResponse
 from src.core.answer_schema import ActionReceipt, AnswerDocument, export_answer_text, finalize_answer
-from src.core.contracts.debug import DEBUG_SCHEMA_VERSION
+from src.core.contracts.debug import DEBUG_SCHEMA_VERSION, DebugPayload
 from src.core.contracts.provenance import AnswerProvenance, AnswerSource
 from src.core.contracts.tool_execution import ToolExecutionEvent
 from src.core.llm_errors import make_problem
@@ -30,7 +30,7 @@ def _answer():
 
 
 def _body(answer, *, setup, session_id):
-    request_id = "setup-request" if setup else "question-request"
+    execution_id = "setup-request" if setup else "question-request"
     provenance = AnswerProvenance(
         body_kind="compose" if setup else "copy_answer",
         response_hash=answer.content_hash, evidence_packet=[],
@@ -38,16 +38,16 @@ def _body(answer, *, setup, session_id):
             ref="previous", response_hash=answer.content_hash, citation_ids=[],
         ),
     )
-    debug = AgentDebugInfo(
+    debug = DebugPayload(
         schema_version=DEBUG_SCHEMA_VERSION, observability_status="ok", route_decisions=[],
         answer_provenance=provenance, llm_calls=[],
-        execution_evidence={"schema_version": 1, "request_id": request_id,
+        execution_evidence={"schema_version": 1, "execution_id": execution_id,
                             "status": "complete", "events": []},
     )
     return AgentResponse(
         status="partial" if setup else "completed", response=answer,
         problem=make_problem("evidence_insufficient", "validation") if setup else None,
-        request_id=request_id, trace=f"Request ID: {request_id}",
+        execution_id=execution_id, trace=f"Execution ID: {execution_id}",
         upload_manifest={"epoch": session_id, "revision": 0, "files": []}, debug=debug,
     ).model_dump(mode="json")
 

@@ -79,9 +79,13 @@ def _read_summary(path: Path) -> RunSummary | None:
 
 
 def load_history_runs(output_root: Path) -> list[StoredRun]:
+    from .reporting.writer import is_completed_run
+
     runs: list[StoredRun] = []
     for entry in output_root.iterdir():
         if not entry.is_dir():
+            continue
+        if not is_completed_run(entry):
             continue
         summary_path = entry / "summary.json"
         if not summary_path.exists():

@@ -48,8 +48,6 @@ def score_answer_quality(
     case: BenchmarkCase,
     response_text: str,
     observed_hits: list[SearchHit],
-    *,
-    synthesis_mode: str | None = None,
 ) -> float:
     """Score explicit text constraints, not semantic proxies.
 
@@ -73,9 +71,6 @@ def score_answer_quality(
         exclude_score = 1.0 - (exclude_violations / len(case.must_not_include))
 
     quality = max(0.0, min(1.0, (include_score + exclude_score) / 2.0))
-
-    if case.category in {"docs_only", "hybrid"} and synthesis_mode == "deterministic_grounded_direct":
-        quality = min(quality, 0.2)
 
     return max(0.0, min(1.0, quality))
 
@@ -200,7 +195,6 @@ def compute_rule_scores(
     runtime_errors: list[str],
     response_errors: list[str],
     validator_reason: str | None = None,
-    synthesis_mode: str | None = None,
     slack_delivery_required: bool = False,
     slack_delivery_status: str = "not_applicable",
     evidence_scope: EvidenceAssessment | None = None,
@@ -210,7 +204,7 @@ def compute_rule_scores(
     if turn_result is not None and turn_result.status == "needs_input":
         response_text = turn_result.message
     return {
-        "answer_quality": score_answer_quality(case, response_text, observed_hits, synthesis_mode=synthesis_mode),
+        "answer_quality": score_answer_quality(case, response_text, observed_hits),
         "reference_coverage": score_reference_coverage(case=case, response=response, observed_hits=observed_hits, validator_reason=validator_reason, evidence_scope=evidence_scope),
         "citation_traceability": score_citation_traceability(case=case, response=response, observed_hits=observed_hits, called_tools=called_tools, evidence_scope=evidence_scope),
         "tool_choice": score_tool_choice(case, called_tools, slack_delivery_required=slack_delivery_required, slack_delivery_status=slack_delivery_status, save_outcome_verified=save_outcome_verified),

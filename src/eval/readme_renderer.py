@@ -15,7 +15,7 @@ def format_metric_value(metric_key: str, value: float | int | None) -> str:
     if value is None:
         return "-"
     numeric = float(value)
-    if metric_key in {"pass_rate", "tool_precision", "tool_recall", "citation_compliance"}:
+    if metric_key in {"release_pass_rate", "tool_precision", "tool_recall", "citation_compliance"}:
         return f"{numeric:.4f}"
     if metric_key.endswith("_ms"):
         return f"{numeric:.1f}"
@@ -28,7 +28,7 @@ def format_metric_value(metric_key: str, value: float | int | None) -> str:
 
 def format_gate_threshold(metric_key: str, value: float | int) -> str:
     numeric = float(value)
-    if metric_key in {"pass_rate", "tool_precision", "tool_recall", "citation_compliance"}:
+    if metric_key in {"release_pass_rate", "tool_precision", "tool_recall", "citation_compliance"}:
         return f"{numeric:.2f}"
     if metric_key == "avg_cost_per_case_usd":
         return f"{numeric:.3f}"
@@ -38,7 +38,7 @@ def format_gate_threshold(metric_key: str, value: float | int) -> str:
 
 
 def format_delta(metric_key: str, value: float) -> str:
-    if metric_key in {"pass_rate", "tool_precision", "tool_recall", "citation_compliance"}:
+    if metric_key in {"release_pass_rate", "tool_precision", "tool_recall", "citation_compliance"}:
         return f"{value:+.4f}"
     if metric_key.endswith("_ms"):
         return f"{value:+.1f}"
@@ -82,8 +82,8 @@ def build_history_readme_block(
     lines.append("| 항목 | 결과 |")
     lines.append("|---|---:|")
     metric_scope = "release" if track == "release" else "diagnostic"
-    lines.append(f"| {metric_scope} benchmark | `{latest.metrics.passed_cases}/{latest.metrics.total_cases}` cases passed |")
-    lines.append(f"| {metric_scope} pass rate | `{format_metric_value('pass_rate', latest.metrics.pass_rate)}` |")
+    lines.append(f"| {metric_scope} benchmark | `{latest.metrics.release_passed_cases}/{latest.metrics.total_cases}` cases passed |")
+    lines.append(f"| {metric_scope} pass rate | `{format_metric_value('release_pass_rate', latest.metrics.release_pass_rate)}` |")
     lines.append(
         "| tool precision / recall | "
         f"`{format_metric_value('tool_precision', latest.metrics.tool_precision)}` / "
@@ -122,14 +122,14 @@ def build_history_readme_block(
     else:
         lines.append(
             "비교 가능한 {count}개 {suite} 런 기준으로 최신 `{latest_run}` 런은 직전 `{previous_run}` 대비 "
-            "`pass_rate` {pass_rate}, `citation_compliance` {citation}, `p95_latency_ms` {p95_latency} 변화를 보였습니다.".format(
+            "`release_pass_rate` {pass_rate}, `citation_compliance` {citation}, `p95_latency_ms` {p95_latency} 변화를 보였습니다.".format(
                 count=len(comparable_runs),
                 suite=current_suite_label,
                 latest_run=latest.run_id,
                 previous_run=previous.run_id,
                 pass_rate=format_delta(
-                    "pass_rate",
-                    float(latest.metrics.pass_rate) - float(previous.metrics.pass_rate),
+                    "release_pass_rate",
+                    float(latest.metrics.release_pass_rate) - float(previous.metrics.release_pass_rate),
                 ),
                 citation=format_delta(
                     "citation_compliance",

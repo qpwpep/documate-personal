@@ -123,7 +123,7 @@ def test_input_budget_failure_retains_stats_and_unknown_quality_on_roundtrip(tmp
         run_id="judge-budget", endpoint_url="http://fixture", case=case, judge=judge,
         config=config, resolved_weights=resolve_case_weights(case=case, profiles=config.weights),
         session_id="budget-session", created_at="2026-01-01T00:00:00+00:00",
-        request_payload={"query": case.query}, latency_ms_e2e=10,
+        request_payload={"query": case.query}, question_response_ms=10,
         parsed_response=parse_agent_response(_response_payload()),
     )
 
@@ -182,7 +182,7 @@ def test_unavailable_judge_preserves_case_input_observation(judge_enabled, compl
         run_id="judge-budget", endpoint_url="http://fixture", case=case, judge=judge,
         config=config, resolved_weights=resolve_case_weights(case=case, profiles=config.weights),
         session_id="unavailable-session", created_at="2026-01-01T00:00:00+00:00",
-        request_payload={"query": case.query}, latency_ms_e2e=10,
+        request_payload={"query": case.query}, question_response_ms=10,
         parsed_response=parse_agent_response(_response_payload()),
     )
 

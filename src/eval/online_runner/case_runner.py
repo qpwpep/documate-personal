@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import json
+import os
 import time
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import TextIO
 from uuid import uuid4
 
 from src.app.client import AgentSessionClient, AgentStreamEvent, UploadAPIError, build_agent_payload
@@ -30,13 +34,13 @@ from .result_builder import build_case_result
 def _parse_final(body: dict, *, previous: ParsedResponseData, validated_result: AgentCallResult | None = None,
                  expected_partial_problem: str | None = None) -> ParsedResponseData:
     try:
-        return parse_agent_response(body, http_status=previous.http_status, request_id=previous.request_id,
+        return parse_agent_response(body, http_status=previous.http_status, execution_id=previous.execution_id,
                                     validated_result=validated_result,
                                     expected_partial_problem=expected_partial_problem)
     except Exception as exc:
         # Diagnostics are external input too. An unexpected shape must not lose
         # the case, its original debug data, or subsequent scenario results.
-        return ParsedResponseData(http_status=previous.http_status, request_id=previous.request_id,
+        return ParsedResponseData(http_status=previous.http_status, execution_id=previous.execution_id,
                                   turn_result=validated_result,
                                   response=validated_result.response if validated_result is not None else None,
                                   debug=body.get("debug") if isinstance(body.get("debug"), dict) else None,
@@ -81,7 +85,7 @@ def _run_turn(client: AgentSessionClient, query: str, *,
     for event in client.stream(query):
         observation = event.observation
         parsed.http_status = observation.http_status or parsed.http_status
-        parsed.request_id = observation.request_id or parsed.request_id
+        parsed.execution_id = observation.execution_id or parsed.execution_id
         elapsed = round(observation.elapsed_ms)
         if event.event == "final_response" and event.result is not None:
             final = _parse_final(event.data, previous=parsed, validated_result=event.result,
@@ -119,7 +123,7 @@ def _run_turn(client: AgentSessionClient, query: str, *,
                                       if error not in parsed.response_errors)
     turn = ScenarioTurnResult(
         role=role, llm_calls=parsed.llm_calls,
-        query=query, request_payload=payload, http_status=parsed.http_status, request_id=parsed.request_id,
+        query=query, request_payload=payload, http_status=parsed.http_status, execution_id=parsed.execution_id,
         response=parsed.response, turn_result=parsed.turn_result, trace=parsed.response_trace, debug=parsed.debug,
         upload_manifest=client.manifest, question_response_ms=elapsed,
         runtime_errors=parsed.runtime_errors, response_errors=parsed.response_errors,
@@ -245,14 +249,13 @@ def _run_single_case(
         session_id=session_id,
         created_at=created_at,
         request_payload=request_payload,
-        latency_ms_e2e=question_response_ms,
+        question_response_ms=question_response_ms,
         parsed_response=parsed_response,
         slack_delivery_required=resolved_live_slack.applies_to_case(case),
         prior_turns=turns[:len(case.setup_turns)],
         scenario_turns=turns,
     )
     result.attachment_setup_ms = attachment_setup_ms
-    result.question_response_ms = question_response_ms
     result.scenario_total_ms = scenario_total_ms
     result.attachment_fingerprints = ({name: upload.fingerprint for name, upload in
                                       zip(case.resolved_upload_fixtures, files, strict=True) if upload.fingerprint is not None}
@@ -382,65 +385,111 @@ def run_online_benchmark(
             raise ValueError("Release save cases require save_expectation: " + ", ".join(missing_save_contracts))
     _validate_live_slack_targets(cases=cases, live_slack=live_slack)
 
-    run_id = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-    judge = LLMJudge(
-        model_name=config.judge_model,
-        enabled=config.judge_enabled,
-        max_input_tokens=config.judge_max_input_tokens,
-        max_output_tokens=config.judge_max_output_tokens,
-    )
-
+    started_at = datetime.now(timezone.utc)
+    run_id = started_at.strftime("%Y%m%d_%H%M%S_%f")
+    run_dir = output_root / run_id
     results: list[CaseResult] = []
-    for index, (case, resolved_weights) in enumerate(zip(cases, resolved_case_weights, strict=True), 1):
-        result = _run_single_case(
+    manifest: dict[str, object] = {
+        "run_id": run_id, "status": "running", "track": track,
+        "started_at_utc": started_at.isoformat(), "finished_at_utc": None,
+        "endpoint": endpoint, "fixtures_path": str(fixtures_path), "config_path": str(config_path),
+        "config": config.model_dump(mode="json"), "case_ids": [case.case_id for case in cases],
+        "completed_cases": 0, "dataset_approval": dataset_approval,
+        "execution_options": (live_slack or BenchmarkLiveSlackConfig()).model_dump(mode="json"),
+    }
+    with _record_run_progress(run_dir, manifest, results) as records:
+        judge = LLMJudge(
+            model_name=config.judge_model,
+            enabled=config.judge_enabled,
+            max_input_tokens=config.judge_max_input_tokens,
+            max_output_tokens=config.judge_max_output_tokens,
+        )
+        for index, (case, resolved_weights) in enumerate(zip(cases, resolved_case_weights, strict=True), 1):
+            result = _run_single_case(
+                run_id=run_id,
+                endpoint=endpoint,
+                fixtures_path=fixtures_path,
+                case=case,
+                timeout_seconds=config.request_timeout_seconds,
+                judge=judge,
+                config=config,
+                resolved_weights=resolved_weights,
+                live_slack=live_slack,
+                verified_uploads=verified_uploads,
+            )
+            # Keep the case observation before run-end artifact checks can change
+            # its assessment. Only final outputs establish release eligibility.
+            records.write(result.model_dump_json() + "\n")
+            records.flush()
+            os.fsync(records.fileno())
+            results.append(result)
+            manifest["completed_cases"] = len(results)
+            _write_run_manifest(run_dir, manifest)
+            composite_text = (
+                f"{result.composite_quality_score:.3f}"
+                if result.composite_quality_score is not None
+                else "n/a"
+            )
+            print(
+                f"[{index}/{len(cases)}] {case.case_id} composite={composite_text} "
+                f"judge={result.judge_status} release={'PASS' if result.release_pass else 'FAIL'} "
+                f"status={result.http_status} latency={result.question_response_ms}ms"
+            )
+
+        from ..save_outcomes import revalidate_saved_artifacts
+        revalidate_saved_artifacts(cases=cases, results=results, timeout=config.request_timeout_seconds)
+        summary = build_summary(
             run_id=run_id,
             endpoint=endpoint,
-            fixtures_path=fixtures_path,
-            case=case,
-            timeout_seconds=config.request_timeout_seconds,
-            judge=judge,
+            fixtures_path=str(fixtures_path),
+            config_path=str(config_path),
+            track=track,
+            requested_limit=requested_limit,
             config=config,
-            resolved_weights=resolved_weights,
-            live_slack=live_slack,
-            verified_uploads=verified_uploads,
+            cases=cases,
+            results=results,
+            slack_live_enabled=bool((live_slack or BenchmarkLiveSlackConfig()).enabled),
+            attachment_fingerprints={f"{result.case_id}/{name}": digest for result in results
+                                     for name, digest in result.attachment_fingerprints.items()},
+            execution_options=(live_slack or BenchmarkLiveSlackConfig()).model_dump(mode="json"),
+            release_suite=release_suite,
         )
-        results.append(result)
-        composite_text = (
-            f"{result.composite_quality_score:.3f}"
-            if result.composite_quality_score is not None
-            else "n/a"
-        )
-        print(
-            f"[{index}/{len(cases)}] {case.case_id} composite={composite_text} "
-            f"judge={result.judge_status} release={'PASS' if result.release_pass else 'FAIL'} "
-            f"status={result.http_status} latency={result.latency_ms_e2e}ms"
-        )
-
-    from ..save_outcomes import revalidate_saved_artifacts
-    revalidate_saved_artifacts(cases=cases, results=results, timeout=config.request_timeout_seconds)
-    summary = build_summary(
-        run_id=run_id,
-        endpoint=endpoint,
-        fixtures_path=str(fixtures_path),
-        config_path=str(config_path),
-        track=track,
-        requested_limit=requested_limit,
-        config=config,
-        cases=cases,
-        results=results,
-        slack_live_enabled=bool((live_slack or BenchmarkLiveSlackConfig()).enabled),
-        attachment_fingerprints={f"{result.case_id}/{name}": digest for result in results
-                                 for name, digest in result.attachment_fingerprints.items()},
-        execution_options=(live_slack or BenchmarkLiveSlackConfig()).model_dump(mode="json"),
-        release_suite=release_suite,
-    )
-
-    summary.audit_metrics["dataset_approval"] = dataset_approval
-
-    run_dir = output_root / run_id
-    write_run_outputs(output_dir=run_dir, results=results, summary=summary)
+        summary.audit_metrics["dataset_approval"] = dataset_approval
+        write_run_outputs(output_dir=run_dir, results=results, summary=summary)
     latest_run_pointer_path(output_root, track).write_text(run_id + "\n", encoding="utf-8")
     return run_dir, results, summary
+
+
+@contextmanager
+def _record_run_progress(run_dir: Path, manifest: dict[str, object],
+                         results: list[CaseResult]) -> Iterator[TextIO]:
+    run_dir.mkdir(parents=True, exist_ok=False)
+    _write_run_manifest(run_dir, manifest)
+    try:
+        with (run_dir / "case_results.jsonl").open("x", encoding="utf-8") as records:
+            yield records
+    except (KeyboardInterrupt, SystemExit):
+        manifest["status"] = "interrupted"
+        raise
+    except Exception:
+        manifest["status"] = "failed"
+        raise
+    else:
+        manifest["status"] = "completed"
+    finally:
+        manifest["completed_cases"] = len(results)
+        manifest["finished_at_utc"] = datetime.now(timezone.utc).isoformat()
+        _write_run_manifest(run_dir, manifest)
+
+
+def _write_run_manifest(run_dir: Path, manifest: dict[str, object]) -> None:
+    pending = run_dir / "manifest.pending.json"
+    with pending.open("w", encoding="utf-8") as handle:
+        json.dump(manifest, handle, ensure_ascii=False, indent=2)
+        handle.write("\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    pending.replace(run_dir / "manifest.json")
 
 
 __all__ = [

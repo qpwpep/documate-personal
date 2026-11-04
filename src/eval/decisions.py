@@ -73,14 +73,13 @@ def refresh_case_decision(result: CaseResult, case: BenchmarkCase | None = None)
     result.decision = decision
     result.release_pass = decision.passed
     result.gate_failures = decision.failure_codes
-    result.judge_gate_passed = result.judge_pass
     return decision
 
 
 def _assess_case_outcomes(result: CaseResult) -> tuple[ToolPolicyAssessment, dict[str, ActionAssessment]]:
     """Evaluate retained observations before deriving the case verdict."""
     assessment = assess_execution_policy(policy=result.policy_snapshot, evidence=result.execution_evidence,
-                                         request_id=result.request_id, prior_turns=result.scenario_turns,
+                                         execution_id=result.execution_id, prior_turns=result.scenario_turns,
                                          actions=result.actions, retrieval_diagnostics=result.retrieval_diagnostics,
                                          debug=result.debug, tool_calls=result.tool_calls,
                                          tool_call_count=result.tool_call_count)
@@ -107,8 +106,6 @@ def _decide_case(
                }]
     reasons.extend(assessment.failure_codes)
     reasons.extend(code for item in actions.values() for code in item.failure_codes)
-    if result.decision_contract_version != DECISION_CONTRACT_VERSION:
-        reasons.append("legacy_result_unverified")
     if result.runtime_errors:
         reasons.append("runtime_error")
     if result.response_errors:

@@ -139,7 +139,7 @@ uv run python -m src.eval.main run --mode online --track release \
 
 [보존된 유사도 보고서](../data/benchmarks/design/similarity_report.json)는 2026-09-18에 120개 후보·교체 전 원래 120개·당시 운영 프롬프트 정적 구간 111개를 실제 `nvidia/nemotron-3-embed-1b`로 비교한 기록입니다. 임베딩 입력과 최근접 대상·순서는 v1과 같고 점수 2개만 0.000001 차이가 있습니다. 검토 대상 50쌍과 동일 질문 30쌍은 이전과 같습니다. release 내부의 동일 질문은 없고, 임계값 0.75를 넘는 내부 쌍은 의도적으로 같은 답변을 저장/공유로 나눈 공개 회귀 029/030뿐입니다. 이전 119개 검토를 명시적으로 이어 사용했고 변경 028은 별도 coding-agent가 명세·참고 답안·실제 trace와 가까운 사례를 대조했습니다. 수신자 표현 변경에서는 새 임베딩 요청을 하지 않았으므로 현재 수정된 planner 프롬프트와의 유사도를 측정한 결과로 해석하지 않습니다. 수정된 oracle은 임베딩 입력이 아니므로 유사도로 정확성을 증명하지 않으며 독립적인 사람의 승인을 주장하지 않습니다.
 
-현재 pytest는 앱의 핵심 로직과 벤치마크 release 판정의 대표 실패 경로를 검증합니다. `uv run --locked pytest -q tests/eval`은 외부 judge 응답만 대체하고 실제 사례 판정·집계를 실행해 평가 오류·미채점의 분모 유지, 결과 누락·중복, 금지 실행과 실행 증거 누락에 따른 release 차단을 확인합니다. 생성·승격·승인·보고 도구의 전체 회귀는 포함하지 않습니다. 데이터 검증과 실제 품질 평가는 이 문서의 CLI 명령으로 별도 실행합니다. HTTP 경계 검증은 모델 품질 측정을 대체하지 않습니다.
+현재 pytest는 앱의 핵심 로직과 벤치마크 release 판정의 대표 실패 경로를 검증합니다. `uv run --locked pytest -q tests/eval`은 외부 judge 응답만 대체하고 실제 사례 판정·집계를 실행해 평가 오류·미채점의 분모 유지, 결과 누락·중복, 금지 실행과 실행 증거 누락에 따른 release 차단을 확인합니다. 설정 검증과 보고 계약 등 지원 기능의 회귀 검사도 함께 실행합니다. 데이터 검증과 실제 품질 평가는 이 문서의 CLI 명령으로 별도 실행합니다. HTTP 경계 검증은 모델 품질 측정을 대체하지 않습니다.
 
 PDF 3개·DOCX 2개·PNG 1개의 바이트는 v1과 같습니다. 실제 Docling 변환·근거 발췌 검사, PDF 7쪽·PNG 시각 검사, DOCX OOXML·추출 검사는 v1 당시 기록으로 보존합니다. 별도 격리 서버의 실제 `gpt-5.6-luna`·검색·judge 표본 6개(저장/문맥 부족 2개 통과, 검색 4개 근거 부족)도 v1의 측정이며 새 결과로 표기하지 않습니다. 실서비스 Slack 전송과 현재 120개 전체 실모델 품질 평가는 이 변경의 검증에 포함하지 않았습니다. 과거 release 점수를 새 데이터 성능으로 해석하지 않습니다.
 
@@ -147,7 +147,7 @@ PDF 3개·DOCX 2개·PNG 1개의 바이트는 v1과 같습니다. 실제 Docling
 
 각 사례는 새 세션에서 시작합니다. `upload_fixtures`에 나열한 파일들을 UI와 같은 staging·동기화 절차로 등록한 뒤, `setup_turns`를 순서대로 보내고 마지막 `query`의 답변 품질을 사례의 기대값으로 채점합니다. 모든 질문은 공용 클라이언트가 확인한 `uploads` epoch/revision을 필수로 보내며 파일 경로를 받지 않습니다. 첨부 준비가 실패해 질문을 보내지 않은 결과의 `request_payload`는 빈 객체로 남깁니다. 도구 실행 정책은 준비 턴마다 `setup_forbidden_tools`로, 마지막 턴은 `forbidden_tools`로 별도 지정하며 모든 턴의 준수 여부를 확인합니다. 각 턴의 최종 manifest를 다음 질문에 사용하며 내부 대화 상태를 직접 주입하지 않습니다. 준비 턴의 실행·응답·필수 진단이 실패하면 후속 요청을 보내지 않고 해당 사례를 실패로 기록합니다. judge에는 실제 준비 질문·답변·검색 근거도 전달합니다.
 
-fixture의 최소 예시는 다음과 같습니다. 기존 단일 `upload_fixture`도 읽을 수 있지만 `upload_fixtures`와 동시에 지정할 수 없습니다.
+fixture의 최소 예시는 다음과 같습니다. 입력은 단일 `upload_fixture` 또는 복수 `upload_fixtures` 중 하나를 사용하며 동시에 지정할 수 없습니다. 실행 결과인 `CaseResult`는 파일 개수와 관계없이 `upload_fixtures`만 기록합니다.
 
 ```json
 {
@@ -341,12 +341,16 @@ uv run --locked python script/benchmark_llm_tokens.py \
 
 | 파일 | 설명 |
 |---|---|
+| `manifest.json` | 실행 설정·예정 사례·완료 사례 수와 `running`·`completed`·`interrupted`·`failed` 상태 |
+| `case_results.jsonl` | 각 사례 완료 직후 보존한 관측·평가 결과. run 종료 후 산출물 재검증 전 기록이며 release 승인 결과가 아님 |
 | `raw_results.jsonl` | 최종 평가 결과, 모든 `scenario_turns`의 요청·응답·manifest·debug·오류, 소비한 첨부 hash와 정리 오류 |
 | `summary.json` | 집계 지표, gate 판정, 비용/모델 정보, track, 제한 수, 실행·측정 계약, 채점 버전과 비교 fingerprint |
 | `report.md` | 사람이 읽기 쉬운 분석 보고서 |
-| `request_map.jsonl` | 사례의 최종 평가 질문을 기준으로 한 session ID·HTTP 실행 ID(`request_id`), query hash, trace 매핑. 준비 턴은 `raw_results.jsonl`에서 확인 |
+| `request_map.jsonl` | 사례의 최종 평가 질문을 기준으로 한 session ID·HTTP 실행 ID(`execution_id`), query hash, trace 매핑. 준비 턴은 `raw_results.jsonl`에서 확인 |
 | `output/benchmarks/latest_release_run.txt` | 최신 release run id를 가리키는 루트 포인터 |
 | `output/benchmarks/latest_smoke_run.txt` | 최신 smoke run id를 가리키는 루트 포인터 |
+
+실행 시작 시 manifest를 기록하고 각 사례가 끝날 때 `case_results.jsonl`에 기록한 뒤 flush·fsync합니다. 중단이나 실패 뒤에도 완료한 사례를 조사할 수 있습니다. 전체 실행과 저장 산출물 재검증, 최종 raw 결과·summary·report 저장이 모두 끝나야 manifest를 `completed`로 확정하고 최신 포인터를 갱신합니다. 미완료 manifest의 run은 report 입력으로 거부하고 history 집계에서 제외합니다. 중간 기록에서 질문을 자동 재개하거나 재전송하지 않습니다.
 
 `summary.json`의 `judge_model`은 config와 환경 변수 override를 모두 반영해 실제 실행에 적용된 effective judge model입니다.
 
@@ -362,7 +366,6 @@ judge 입력은 `LLMJudge.score_case()`에서 한 번 구성하고 완전성을 
 |---|---|
 | `attachment_setup_ms` | 사례 시작부터 최초 첨부 목록 조회, 로컬 파일 읽기·staging, 동기화와 인덱스 준비까지. 준비 실패 시 실패 확인까지 |
 | `question_response_ms` | 최종 평가 질문 POST부터 final 수신까지. 공용 응답 검증과 `done` 대기는 제외. 실패 시 오류 확인까지, 질문을 보내지 않았으면 `null` |
-| `latency_ms_e2e` | 기존 소비자를 위한 `question_response_ms` 별칭. 브라우저 렌더링 시간은 아님 |
 | `scenario_total_ms` | 최초 준비와 모든 준비 질문·최종 질문, 응답 검증·평가 입력 해석까지. judge·결과 파일 저장·정리 요청은 제외 |
 | `cost_usd` | 준비 턴과 최종 질문의 모든 앱 LLM 호출에 관측된 캐시 읽기·쓰기 단가를 적용한 비용 합계. 필요한 단가나 유료 차원의 토큰을 확정하지 못하면 `null`. 명시적으로 무료인 차원은 토큰 미관측이어도 비용에 더하지 않음. 확인된 무호출 시나리오는 `0` |
 | `synthesis_output_tokens` | 최종 질문 턴의 모든 synthesis 시도에서 관측한 출력 토큰 합계. planner·memory summary·준비 턴은 제외. synthesis 출력이 하나라도 미관측이면 `null`, 확인된 무호출은 `0` |
@@ -385,7 +388,7 @@ judge 입력은 `LLMJudge.score_case()`에서 한 번 구성하고 완전성을 
 
 ## 4. Hard Gate 기준
 
-기준 파일은 `data/benchmarks/config.toml`입니다.
+기준 파일은 `data/benchmarks/config.toml`입니다. 알 수 없는 gate 이름과 문자열·boolean의 숫자 변환은 거부합니다. 비율은 유한한 `0..1`, 비용은 유한한 비음수, 지연은 비음수 정수여야 합니다. 잘못된 설정은 사례 실행 전에 실패하며 오타를 기본값으로 대체하지 않습니다.
 
 | Gate | Threshold |
 |---|---:|
@@ -405,10 +408,10 @@ judge minimum score와 pricing도 같은 파일에서 관리합니다. `cost_gat
 
 ### 4.0.1 평가 상태와 release 판정
 
-사례별 결과는 평가 실행 상태와 답변 품질 합격을 분리해 기록합니다.
+사례별 결과는 평가 실행 상태와 답변 품질 합격을 분리해 기록합니다. 현재 `CaseResult`는 현행 상태와 지표만 받습니다. 결과 조립부가 관측·정책에서 판정을 명시적으로 계산하며, 모델 validator가 과거 필드를 보정하거나 판정을 새로 만들지 않습니다. `judge_gate_passed`·`judge_score_total`·`invalid_eval` 별칭은 사용하지 않으며, run 통과 집계는 `release_passed_cases`·`release_pass_rate`로 통일합니다.
 
-- `judge_status`: `disabled`(설정으로 비활성화), `not_run`(제품 응답 부재·입력 불완전 등으로 미실행, 사유는 `judge_status_reason`), `failed`(호출 실패 또는 출력 계약 오류), `succeeded`(입력 완비·호출·출력 계약 통과. 품질 합격이 아님), `legacy_unknown`(상태 필드가 없는 과거 결과).
-- `eval_validity`: `valid`(현재 정책의 평가가 완료되어 판정 가능, 품질 불합격도 유효한 평가), `incomplete`(필수 입력·단계 부족), `invalid`(judge 호출 실패·출력 계약 오류로 결과 신뢰 불가), `legacy_unknown`.
+- `judge_status`: `disabled`(설정으로 비활성화), `not_run`(제품 응답 부재·입력 불완전 등으로 미실행, 사유는 `judge_status_reason`), `failed`(호출 실패 또는 출력 계약 오류), `succeeded`(입력 완비·호출·출력 계약 통과. 품질 합격이 아님).
+- `eval_validity`: `valid`(현재 정책의 평가가 완료되어 판정 가능, 품질 불합격도 유효한 평가), `incomplete`(필수 입력·단계 부족), `invalid`(judge 호출 실패·출력 계약 오류로 결과 신뢰 불가).
 - `llm_judge_score`: 유효한 judge 0점은 `0`으로, 평가하지 못한 점수는 `null`로 보존합니다. 평가 오류를 점수로 대체하거나 범위 밖 값을 잘라내지 않습니다.
 - `judge_pass`: `succeeded` 평가가 전체 점수와 필수 세부 점수 기준을 모두 충족할 때만 `true`. `disabled`·`not_run`·`failed`는 `null`입니다.
 - `product_pass`: 완전한 composite 점수가 있을 때 composite 기준 판정. 제품 실행 실패 또는 필수 저장 계약 실패는 점수와 관계없이 `false`, judge 장애로 composite를 계산할 수 없으면 `null`입니다.
@@ -434,9 +437,9 @@ receipt는 호출 ID뿐 아니라 종료 상태와도 일치해야 합니다. �
 
 CLI, Markdown 보고서와 history는 같은 중앙 판정을 사용합니다. `run --track release`는 `release_decision`의 통과 여부로 종료 코드 0/1을 정하며, smoke는 judge 실행 여부와 관계없이 진단용입니다. planner 단독 요청 계약 평가의 `qualified`도 전체 release 자격이 아닙니다. 구형 결과의 당시 PASS와 측정값은 현재 자격으로 승격하지 않습니다.
 
-현재 계약의 `report --run`과 history 로더는 저장된 정책 snapshot, 원시 결과의 fingerprint와 중앙 재판정 결과가 summary와 일치하는지 확인합니다. fingerprint는 원시 JSON을 현재 모델로 변환하기 전에 확인합니다. 불일치한 산출물은 보고서로 다시 발행하지 않습니다. 결과 로더는 현재 `decision_contract_version=2`와 `measurement_contract_version=llm-usage-scenario-v4`에 연결된 실행·채점 버전 조합도 검증합니다. v4는 캐시 상세와 시도별 실행 관측을 포함하므로 v3 결과를 새 비용 계약으로 재해석하지 않습니다. 이전 실행·채점 계약의 증거는 검증 후 history에서 제외하고 `report --run`으로 다시 발행하지 않습니다. 구형 결과의 버전·점수를 현재 값으로 바꾸거나 과거 필드에서 필수 판정 증거를 만들어 넣지 않습니다.
+현재 계약의 `report --run`과 history 로더는 저장된 정책 snapshot, 원시 결과의 fingerprint와 중앙 재판정 결과가 summary와 일치하는지 확인합니다. fingerprint는 원시 JSON을 모델로 읽기 전에 확인합니다. 불일치한 산출물은 보고서로 다시 발행하지 않습니다. 결과 로더는 현재 `decision_contract_version=2`와 `measurement_contract_version=llm-usage-scenario-v5`에 연결된 실행·채점 버전 조합도 검증합니다. v5는 실행 ID를 `execution_id`로 명확히 구분하고 현재 결과의 과거 별칭을 제거한 계약입니다. 보관된 v3·v4의 별칭과 실행 ID는 `history_formats.py`의 읽기 경계에서만 해석합니다. 이 투영은 당시 관측과 판정을 보존하며 저장 파일을 변경하거나 비용을 재계산하지 않습니다. 이전 실행·채점 계약의 증거는 검증 후 현재 history 비교에서 제외하고 `report --run`으로 다시 발행하지 않습니다. 과거 필드에서 누락된 판정 증거를 만들어 넣지 않습니다.
 
-과거 `summary.json`·`raw_results.jsonl`·`report.md`는 당시 계약의 기록으로 보존합니다. 구형 계약의 재발행이나 현재 자격 판정은 거부하며, 과거 결과는 당시 저장된 보고서로 확인합니다. 현재 계약과 과거 계약의 결과를 섞거나 필수 버전을 제거한 입력도 거부합니다. 현재 보고서 재생성은 원본 summary·raw 결과를 변경하거나 모델 호출·외부 효과를 다시 실행하지 않습니다. 기존 생성 계보와 과거 수치의 원본도 유지합니다. 최신 run 포인터는 성공 여부와 관계없이 가장 최근 실행을 가리킵니다.
+과거 `summary.json`·`raw_results.jsonl`·`report.md`는 당시 계약의 기록으로 보존합니다. 구형 계약의 재발행이나 현재 자격 판정은 거부하며, 과거 결과는 당시 저장된 보고서로 확인합니다. 현재 계약과 과거 계약의 결과를 섞거나 필수 버전을 제거한 입력도 거부합니다. 현재 보고서 재생성은 원본 summary·raw 결과를 변경하거나 모델 호출·외부 효과를 다시 실행하지 않습니다. 기존 생성 계보와 과거 수치의 원본도 유지합니다. 최신 run 포인터는 release 판정의 PASS·FAIL과 관계없이 최종 산출물 저장까지 완료된 가장 최근 실행을 가리킵니다. 중단되거나 후처리에 실패한 실행은 포인터를 바꾸지 않습니다.
 
 ### 4.0.2 행동 결과와 저장 산출물의 필수 조건
 
@@ -456,7 +459,7 @@ Slack 성공 의무에는 `status=success`인 receipt, 내부 `status=sent`, 일
 
 평가기는 일반 `GET /download/{filename}`로 실제 bytes를 읽고 `X-Save-Binding-SHA256`, `X-Artifact-Id`, receipt의 바인딩과 비교합니다. 도구 호출 전에 캡처된 `answer_provenance.save_operation_binding_sha256`도 대조하므로 receipt와 파일이 서로 일치하더라도 다른 저장 작업의 결과로 바뀌었다면 실패합니다. 파일·manifest 부재, 내용 불일치, 만료는 제품 실패입니다. 응답은 있지만 timeout·읽기 불가로 저장 결과를 검증할 수 없으면 `eval_validity=incomplete`로 남깁니다. `CaseResult.save_assessment`에는 `status`(`verified`, `failed`, `unverifiable`, `not_applicable`), `passed`, `failure_codes`, 예상·관측 hash와 크기, artifact ID, 확인 시각을 기록합니다. 개별 사례 후 검사와 실행 끝의 재검사(`phase=case/run_end`)로 뒤의 저장이 앞선 파일을 덮거나 삭제했는지도 확인합니다.
 
-저장 receipt가 없으면 현재 응답의 HTTP 실행 ID와 `ToolExecutionEvidence.request_id`가 일치하는지 먼저 확인합니다. 완전한 실행 기록에 저장 이벤트가 없고, provenance의 답변 hash가 현재 답변과 같으면 저장 누락이 확인된 제품 실패(`failed`)입니다. 확인 가능한 제품 실패는 유효한 평가(`eval_validity=valid`)로 남깁니다. 실행 ID가 없거나 다른 실행의 기록이면 누락을 확정하지 않고 `unverifiable`로 남깁니다. 저장 receipt가 있는 경로에서는 `SaveOperation.request_id`와 `AnswerProvenance.request_id`가 같은 요청 계약을 가리키는지 별도로 대조합니다.
+저장 receipt가 없으면 현재 응답의 HTTP 실행 ID와 `ToolExecutionEvidence.execution_id`가 일치하는지 먼저 확인합니다. 완전한 실행 기록에 저장 이벤트가 없고, provenance의 답변 hash가 현재 답변과 같으면 저장 누락이 확인된 제품 실패(`failed`)입니다. 확인 가능한 제품 실패는 유효한 평가(`eval_validity=valid`)로 남깁니다. 실행 ID가 없거나 다른 실행의 기록이면 누락을 확정하지 않고 `unverifiable`로 남깁니다. 저장 receipt가 있는 경로에서는 `SaveOperation.request_id`와 `AnswerProvenance.request_id`가 같은 요청 계약을 가리키는지 별도로 대조합니다.
 
 최종 응답 부재(`missing_final_response`)로 제품 실패가 확정된 사례는 저장 검증 결과와 관계없이 `eval_validity=valid`를 유지해 제품 통과율의 분모에 포함합니다. 확인할 수 없는 최종·준비 턴 저장 결과는 계속 `unverifiable`이며 release를 통과시키지 않습니다. 이 구분은 초기 판정, 실행 종료 후 재검증, 저장 결과 재로드에 동일하게 적용합니다.
 
@@ -544,7 +547,7 @@ history 리포터는 현재 판정·측정 계약과 저장 증거를 검증한 
 - `total_cases`
 - `decision_contract_version`
 - `execution_contract_version`: 현재 `shared-client-scenario-v2`
-- `measurement_contract_version`: 현재 `llm-usage-scenario-v4`
+- `measurement_contract_version`: 현재 `llm-usage-scenario-v5`
 - `suite_fingerprint`: 준비 턴·준비 턴의 기대 결과·첨부 목록·부분 override를 포함한 사례 모델의 JSON 직렬화와 staging에서 실제 읽은 첨부 bytes의 SHA256
 - `evaluation_fingerprint`: 채점 계약 버전과 가중치·gate·pricing·judge·timeout 설정, Slack 실행 옵션
 

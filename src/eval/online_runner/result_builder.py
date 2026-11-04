@@ -10,7 +10,7 @@ from ..pricing import compute_cost_usd
 from ..config_models import BenchmarkCase, BenchmarkConfig
 from ..result_models import CaseResult, JudgeSubscores, ScenarioTurnResult
 from ..save_outcomes import assess_save_outcome, assess_setup_saves
-from ..decisions import DECISION_CONTRACT_VERSION, policy_for_case
+from ..decisions import DECISION_CONTRACT_VERSION, policy_for_case, refresh_case_decision
 from ..weighting import (
     compute_composite_quality_score,
     compute_rule_weighted_score,
@@ -128,7 +128,7 @@ def build_case_result(
     session_id: str,
     created_at: str,
     request_payload: dict,
-    latency_ms_e2e: int | None,
+    question_response_ms: int | None,
     parsed_response: ParsedResponseData,
     slack_delivery_required: bool = False,
     prior_turns: list[ScenarioTurnResult] | None = None,
@@ -141,7 +141,7 @@ def build_case_result(
     if scenario_turns is None:
         scenario_turns = [*(prior_turns or []), ScenarioTurnResult(
             role="question", query=case.query, request_payload=request_payload,
-            http_status=parsed_response.http_status, request_id=parsed_response.request_id,
+            http_status=parsed_response.http_status, execution_id=parsed_response.execution_id,
             response=response, turn_result=parsed_response.turn_result,
             debug=parsed_response.debug, llm_calls=parsed_response.llm_calls,
             execution_evidence=parsed_response.execution_evidence,
@@ -195,7 +195,7 @@ def build_case_result(
         called_tools=parsed_response.tool_calls, prior_turns=prior_turns or [],
         session_id=session_id, endpoint=endpoint_url, timeout=config.request_timeout_seconds,
         provenance=parsed_response.answer_provenance,
-        execution_id=parsed_response.request_id,
+        execution_id=parsed_response.execution_id,
         execution_evidence=parsed_response.execution_evidence,
     )
     setup_save_assessments = assess_setup_saves(
@@ -314,7 +314,6 @@ def build_case_result(
         runtime_errors=runtime_errors,
         response_errors=response_errors,
         validator_reason=parsed_response.validator_reason,
-        synthesis_mode=parsed_response.synthesis_mode,
         slack_delivery_required=slack_delivery_required,
         slack_delivery_status=slack_delivery_status,
         evidence_scope=evidence_scope,
@@ -363,7 +362,7 @@ def build_case_result(
     gate_failures = list(dict.fromkeys([*gate_failures, *(code for item in save_assessments for code in item.failure_codes)]))
     cost = _scenario_cost(scenario_turns, config)
 
-    return CaseResult(
+    result = CaseResult(
         decision_contract_version=DECISION_CONTRACT_VERSION,
         policy_snapshot=policy_for_case(case),
         execution_evidence=parsed_response.execution_evidence,
@@ -374,10 +373,9 @@ def build_case_result(
         query=case.query,
         session_id=session_id,
         endpoint=endpoint_url,
-        upload_fixture=case.upload_fixture,
         upload_fixtures=case.resolved_upload_fixtures,
         request_payload=request_payload,
-        request_id=parsed_response.request_id,
+        execution_id=parsed_response.execution_id,
         http_status=parsed_response.http_status,
         response_text=parsed_response.response_text,
         response=response,
@@ -389,7 +387,7 @@ def build_case_result(
         retrieval_diagnostics=parsed_response.retrieval_diagnostics,
         planner_diagnostics=parsed_response.planner_diagnostics,
         trace=parsed_response.response_trace,
-        latency_ms_e2e=latency_ms_e2e,
+        question_response_ms=question_response_ms,
         latency_ms_server=parsed_response.latency_ms_server,
         latency_breakdown=parsed_response.latency_breakdown,
         tool_calls=parsed_response.tool_calls,
@@ -424,12 +422,10 @@ def build_case_result(
         debug_observability_status=parsed_response.debug_observability_status,
         missing_required_debug_fields=parsed_response.missing_required_debug_fields,
         judge_subscores=judge_subscores,
-        judge_score_total=llm_judge_score,
         llm_judge_score=llm_judge_score,
         llm_judge_reason=llm_judge_reason,
         judge_min_score_applied=judge_min_score if judge_required else None,
         judge_input_complete=judge_input_complete,
-        invalid_eval=(eval_validity == "invalid"),
         resolved_unit_count=resolved_unit_count,
         missing_reference_unit_count=missing_reference_unit_count,
         unchecked_unit_count=unchecked_unit_count,
@@ -447,6 +443,8 @@ def build_case_result(
         cost_usd=cost,
         created_at_utc=created_at,
     )
+    refresh_case_decision(result)
+    return result
 
 
 __all__ = [

@@ -74,7 +74,7 @@ def assess_save_outcome(
             response is not None and history is not None and provenance is not None
             # The ledger belongs to one execution. Provenance belongs to the
             # domain request, which may span several executions and retries.
-            and bool(execution_id) and execution_id == history.request_id
+            and bool(execution_id) and execution_id == history.execution_id
             and bool(provenance.request_id)
             and provenance.response_hash == response.content_hash
             and not any(event.tool_name == "save_text" for event in history.events)
@@ -208,7 +208,7 @@ def assess_setup_saves(*, turns: list[ScenarioTurnResult], session_id: str, endp
             case=expectation, response=turn.response, actions=turn.response.actions, called_tools=turn.tool_calls,
             prior_turns=turns[:index], session_id=session_id, endpoint=endpoint, timeout=timeout,
             provenance=turn.answer_provenance, phase=phase,
-            execution_id=turn.request_id,
+            execution_id=turn.execution_id,
             execution_evidence=turn.execution_evidence,
         )
     return assessments
@@ -236,7 +236,7 @@ def revalidate_saved_artifacts(*, cases: list[BenchmarkCase], results: list[Case
                 case=case, response=result.response, actions=result.actions, called_tools=result.tool_calls,
                 prior_turns=prior_turns, session_id=result.session_id, endpoint=result.endpoint,
                 timeout=timeout, provenance=result.answer_provenance, phase="run_end",
-                execution_id=result.request_id,
+                execution_id=result.execution_id,
                 execution_evidence=result.execution_evidence,
             )
             assessments.append(result.save_assessment)

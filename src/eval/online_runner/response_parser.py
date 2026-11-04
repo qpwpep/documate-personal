@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass, field
 from typing import Any
 
 from src.core.answer_schema import AnswerResponse, ActionReceipt, export_answer_text
+from src.core.answer_schema.wire import SourcedAnswerPayload
 from src.core.contracts.boundary.debug import parse_error_codes, normalize_llm_call_observation
 from src.core.contracts.boundary.planner import parse_planner_diagnostic
 from src.core.contracts.boundary.retrieval import normalize_retrieval_diagnostic_observation
@@ -19,9 +19,6 @@ from src.core.evidence import SearchHit
 from src.core.latency import LatencyBreakdownModel
 from ..result_models import EvidenceAssessment
 from ..tool_policy import executed_tool_names
-
-
-_REQUEST_ID_PATTERN = re.compile(r"Request ID:\s*([^,\s]+)")
 
 
 @dataclass(slots=True)
@@ -39,7 +36,7 @@ class ParsedResponseData:
     validator_reason: str | None = None
     validator_feedback: str | None = None
     response_trace: str | None = None
-    request_id: str | None = None
+    execution_id: str | None = None
     latency_ms_server: int | None = None
     latency_breakdown: LatencyBreakdownModel | None = None
     tool_calls: list[str] = field(default_factory=list)
@@ -168,21 +165,11 @@ def _parse_validator_metadata(
     return reason, feedback
 
 
-def _extract_request_id(trace: str | None) -> str | None:
-    if not trace:
-        return None
-    match = _REQUEST_ID_PATTERN.search(str(trace))
-    if not match:
-        return None
-    request_id = str(match.group(1)).strip()
-    return request_id or None
-
-
 def parse_agent_response(
     body: dict[str, Any],
     *,
     http_status: int = 200,
-    request_id: str | None = None,
+    execution_id: str | None = None,
     validated_result: AgentCallResult | None = None,
     expected_partial_problem: str | None = None,
 ) -> ParsedResponseData:
@@ -197,16 +184,18 @@ def parse_agent_response(
         parsed.response_trace = trace_raw
     else:
         parsed.response_errors.append("trace must be a string")
-    body_request_id = body.get("request_id")
-    parsed.request_id = request_id or (
-        body_request_id if isinstance(body_request_id, str) and body_request_id else None
-    ) or _extract_request_id(parsed.response_trace)
+    body_execution_id = body.get("execution_id")
+    parsed.execution_id = execution_id or (
+        body_execution_id if isinstance(body_execution_id, str) and body_execution_id else None
+    )
 
     response_raw = body.get("response")
     parsed.turn_result = validated_result
     if parsed.turn_result is None:
         outcome_payload = {name: body[name] for name in TurnResult.model_fields if name in body}
         try:
+            if response_raw is not None:
+                outcome_payload["response"] = SourcedAnswerPayload.model_validate(response_raw).to_answer()
             parsed.turn_result = TurnResult.model_validate(outcome_payload)
         except (TypeError, ValueError) as exc:
             parsed.response_errors.append(f"turn result invalid: {exc}")

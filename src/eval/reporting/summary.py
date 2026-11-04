@@ -23,11 +23,10 @@ from .histograms import build_analysis, build_failure_reason, percentile
 from .latency_values import result_latency_breakdown_stage_ms, result_server_latency_ms
 
 
-_AUDIT_DETERMINISTIC_DIRECT_USAGE_CEILING = 0.35
 _AUDIT_HIGH_RULE_LOW_JUDGE_DIVERGENCE_CEILING = 0.10
 _HIGH_RULE_LOW_JUDGE_DIVERGENCE_MARGIN = 0.35
 EXECUTION_CONTRACT_VERSION = "shared-client-scenario-v2"
-MEASUREMENT_CONTRACT_VERSION = "llm-usage-scenario-v4"
+MEASUREMENT_CONTRACT_VERSION = "llm-usage-scenario-v5"
 # Weight profiles are fixed before execution; pure actions exclude citation axes.
 # This scoring contract establishes its own comparison baseline.
 SCORING_CONTRACT_VERSION = "release-obligations-v9"
@@ -63,10 +62,10 @@ def _scenario_latency_metrics(results: list[CaseResult]) -> dict[str, float | No
     return metrics
 
 
-def _has_request_id_coverage(result: CaseResult) -> bool:
+def _has_execution_id_coverage(result: CaseResult) -> bool:
     if result.scenario_turns:
-        return all(bool(turn.request_id) for turn in result.scenario_turns)
-    return bool(result.request_id)
+        return all(bool(turn.execution_id) for turn in result.scenario_turns)
+    return bool(result.execution_id)
 
 
 def _structured_success_cases(results: list[CaseResult]) -> list[CaseResult]:
@@ -180,12 +179,12 @@ def _category_p95_metric(
     return _rounded_p95(values)
 
 
-def _result_e2e_latency_ms(result: CaseResult) -> int | None:
-    return result.latency_ms_e2e
+def _question_response_ms(result: CaseResult) -> int | None:
+    return result.question_response_ms
 
 
 def _category_p95_latency(results: list[CaseResult], category: str) -> float | None:
-    return _category_p95_metric(results, category, _result_e2e_latency_ms)
+    return _category_p95_metric(results, category, _question_response_ms)
 
 
 def build_summary(
@@ -252,7 +251,6 @@ def build_summary(
         result
         for result in results
         if result.eval_validity == "valid"
-        or (result.eval_validity in {None, "legacy_unknown"} and result.composite_quality_score is not None)
     ]
     invalid_eval_cases = sum(1 for result in results if result.eval_validity == "invalid")
     incomplete_eval_cases = sum(1 for result in results if result.eval_validity == "incomplete")
@@ -264,22 +262,11 @@ def build_summary(
     release_pass_rate = (len(release_results) / planned_cases) if planned_cases else 0.0
     judge_pass_rate = (len(judge_results) / len(judge_eligible_results)) if judge_eligible_results else None
 
-    def _judge_bucket(result: CaseResult) -> str:
-        status = result.judge_status
-        if status in {None, "legacy_unknown"}:
-            if result.llm_judge_score is not None:
-                return "succeeded"
-            if result.judge_errors:
-                return "failed"
-            return "legacy_unknown"
-        return str(status)
-
-    judge_buckets = [_judge_bucket(result) for result in results]
+    judge_buckets = [result.judge_status for result in results]
     judge_succeeded_cases = judge_buckets.count("succeeded")
     judge_failed_cases = judge_buckets.count("failed")
     judge_disabled_cases = judge_buckets.count("disabled")
     judge_not_run_cases = judge_buckets.count("not_run")
-    judge_legacy_unknown_cases = judge_buckets.count("legacy_unknown")
     judge_required_cases = planned_cases if config.judge_enabled else 0
     judge_execution_rate = (
         judge_succeeded_cases / judge_required_cases if judge_required_cases else None
@@ -309,7 +296,7 @@ def build_summary(
             citation_scores.append(float(result.rule_scores.get("citation_traceability", 0.0)))
     citation_compliance = (sum(citation_scores) / len(citation_scores)) if citation_scores else 1.0
 
-    latencies = [int(result.latency_ms_e2e) for result in results if result.latency_ms_e2e is not None]
+    latencies = [int(result.question_response_ms) for result in results if result.question_response_ms is not None]
     p50_latency = percentile(latencies, 0.50)
     p95_latency = percentile(latencies, 0.95)
     hybrid_p95_latency = _category_p95_latency(results, "hybrid")
@@ -338,7 +325,7 @@ def build_summary(
     )
     cost_observed_cases = int(costs["cost_observed_cases"])
     cost_observation_rate = cost_observed_cases / planned_cases if planned_cases else 0.0
-    request_id_coverage_rate = sum(1 for result in results if _has_request_id_coverage(result)) / len(results) if results else 0.0
+    execution_id_coverage_rate = sum(1 for result in results if _has_execution_id_coverage(result)) / len(results) if results else 0.0
     judge_input_eligible = [result for result in results if result.judge_input_complete is not None]
     judge_input_completeness_rate = (
         sum(1 for result in judge_input_eligible if result.judge_input_complete) / len(judge_input_eligible)
@@ -346,12 +333,6 @@ def build_summary(
         else None
     )
     judge_min_score_failures = sum(1 for result in results if "judge_min_score_audit_failed" in result.gate_failures)
-    deterministic_direct_usage_rate = (
-        sum(1 for result in _structured_success_cases(results) if result.synthesis_mode == "deterministic_grounded_direct")
-        / len(_structured_success_cases(results))
-        if _structured_success_cases(results)
-        else 0.0
-    )
     high_rule_low_judge_divergence_rate = (
         sum(
             1
@@ -393,10 +374,7 @@ def build_summary(
         judge_failed_cases=judge_failed_cases,
         judge_disabled_cases=judge_disabled_cases,
         judge_not_run_cases=judge_not_run_cases,
-        judge_legacy_unknown_cases=judge_legacy_unknown_cases,
         judge_execution_rate=round(judge_execution_rate, 4) if judge_execution_rate is not None else None,
-        passed_cases=len(release_results),
-        pass_rate=round(release_pass_rate, 4),
         product_passed_cases=len(product_results),
         judge_passed_cases=len(judge_results),
         release_passed_cases=len(release_results),
@@ -436,10 +414,9 @@ def build_summary(
         cost_gate_eligible=cost_gate_eligible,
         cost_observation_rate=round(cost_observation_rate, 4),
         cost_observed_cases=cost_observed_cases,
-        request_id_coverage_rate=round(request_id_coverage_rate, 4),
+        execution_id_coverage_rate=round(execution_id_coverage_rate, 4),
         judge_input_completeness_rate=round(judge_input_completeness_rate, 4) if judge_input_completeness_rate is not None else None,
         judge_min_score_failures=judge_min_score_failures,
-        deterministic_direct_usage_rate=round(deterministic_direct_usage_rate, 4),
         high_rule_low_judge_divergence_rate=round(high_rule_low_judge_divergence_rate, 4),
         planner_deterministic_rate=_compute_planner_deterministic_rate(results),
         planner_llm_attempt_count=_compute_planner_llm_attempt_count(results),
@@ -536,7 +513,6 @@ def build_summary(
             ),
             gate_type="audit",
         ),
-        GateResult(name="deterministic_direct_usage_rate", threshold=_AUDIT_DETERMINISTIC_DIRECT_USAGE_CEILING, actual=metrics.deterministic_direct_usage_rate, passed=metrics.deterministic_direct_usage_rate <= _AUDIT_DETERMINISTIC_DIRECT_USAGE_CEILING, gate_type="audit"),
         GateResult(name="high_rule_low_judge_divergence_rate", threshold=_AUDIT_HIGH_RULE_LOW_JUDGE_DIVERGENCE_CEILING, actual=metrics.high_rule_low_judge_divergence_rate, passed=metrics.high_rule_low_judge_divergence_rate <= _AUDIT_HIGH_RULE_LOW_JUDGE_DIVERGENCE_CEILING, gate_type="audit"),
         GateResult(
             name="slack_delivery_success_rate",
@@ -614,9 +590,8 @@ def build_summary(
             "invalid_eval_cases": metrics.invalid_eval_cases,
             "incomplete_eval_cases": metrics.incomplete_eval_cases,
             "cost_observation_rate": metrics.cost_observation_rate,
-            "request_id_coverage_rate": metrics.request_id_coverage_rate,
+            "execution_id_coverage_rate": metrics.execution_id_coverage_rate,
             "judge_input_completeness_rate": metrics.judge_input_completeness_rate,
-            "deterministic_direct_usage_rate": metrics.deterministic_direct_usage_rate,
             "high_rule_low_judge_divergence_rate": metrics.high_rule_low_judge_divergence_rate,
             "planner_error_count": metrics.planner_error_count,
             "planner_error_case_count": metrics.planner_error_case_count,

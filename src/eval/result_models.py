@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from src.core.answer_schema import AnswerResponse, ActionReceipt
 from src.core.contracts.outcome import TurnResult
@@ -16,13 +16,13 @@ from src.core.evidence import EvidenceRef, SearchHit
 from src.core.latency import LatencyBreakdownModel
 from src.core.uploads import UploadManifest
 from .config_models import CaseCategory, CaseScenario
-from .decisions import CaseDecision, DECISION_CONTRACT_VERSION
+from .decisions import CaseDecision
 from .tool_policy import ToolPolicyAssessment, ToolPolicySpec
 from .action_outcomes import ActionAssessment
 
 
-JudgeStatus = Literal["disabled", "not_run", "failed", "succeeded", "legacy_unknown"]
-EvalValidity = Literal["valid", "incomplete", "invalid", "legacy_unknown"]
+JudgeStatus = Literal["disabled", "not_run", "failed", "succeeded"]
+EvalValidity = Literal["valid", "incomplete", "invalid"]
 # not_run: evaluation never reached the judge. failed: the judge boundary was
 # invoked but its contract failed. The two must not share one bucket.
 JudgeStatusReason = Literal[
@@ -72,7 +72,7 @@ class ScenarioTurnResult(BaseModel):
     query: str
     request_payload: dict[str, Any]
     http_status: int = 0
-    request_id: str | None = None
+    execution_id: str | None = None
     response: AnswerResponse | None = None
     turn_result: TurnResult | None = Field(default=None, exclude_if=lambda value: value is None)
     raw_final_response: dict[str, Any] | None = None
@@ -118,7 +118,9 @@ class SaveAssessment(BaseModel):
 
 
 class CaseResult(BaseModel):
-    decision_contract_version: Literal[2] | None = None
+    model_config = ConfigDict(extra="forbid")
+
+    decision_contract_version: Literal[2]
     policy_snapshot: ToolPolicySpec | None = None
     policy_assessment: ToolPolicyAssessment | None = None
     action_assessments: dict[str, ActionAssessment] = Field(default_factory=dict)
@@ -131,11 +133,10 @@ class CaseResult(BaseModel):
     query: str
     session_id: str
     endpoint: str
-    upload_fixture: str | None = None
     upload_fixtures: list[str] = Field(default_factory=list)
     attachment_fingerprints: dict[str, str] = Field(default_factory=dict)
     request_payload: dict[str, Any]
-    request_id: str | None = None
+    execution_id: str | None = None
     http_status: int
     response_text: str = ""
     response: AnswerResponse | None = None
@@ -147,7 +148,6 @@ class CaseResult(BaseModel):
     retrieval_diagnostics: list[RetrievalDiagnostic] = Field(default_factory=list)
     planner_diagnostics: PlannerDiagnostic | None = None
     trace: str | None = None
-    latency_ms_e2e: int | None = None
     attachment_setup_ms: int | None = Field(default=None, ge=0)
     question_response_ms: int | None = Field(default=None, ge=0)
     scenario_total_ms: int | None = Field(default=None, ge=0)
@@ -166,9 +166,9 @@ class CaseResult(BaseModel):
     runtime_errors: list[str] = Field(default_factory=list)
     cleanup_errors: list[str] = Field(default_factory=list)
     response_errors: list[str] = Field(default_factory=list)
-    judge_status: JudgeStatus | None = None
+    judge_status: JudgeStatus
     judge_status_reason: JudgeStatusReason | None = None
-    eval_validity: EvalValidity | None = None
+    eval_validity: EvalValidity
     judge_input_issues: list[str] = Field(default_factory=list)
     judge_input_stats: dict[str, Any] | None = Field(default=None, exclude_if=lambda value: value is None)
     judge_errors: list[str] = Field(default_factory=list)
@@ -188,13 +188,10 @@ class CaseResult(BaseModel):
     debug_observability_status: str | None = None
     missing_required_debug_fields: list[str] = Field(default_factory=list)
     judge_subscores: JudgeSubscores | None = None
-    judge_score_total: float | None = None
     llm_judge_score: float | None = None
     llm_judge_reason: str | None = None
     judge_input_complete: bool | None = None
     judge_min_score_applied: float | None = None
-    judge_gate_passed: bool | None = None
-    invalid_eval: bool = False
     resolved_unit_count: int = 0
     missing_reference_unit_count: int = 0
     unchecked_unit_count: int = 0
@@ -215,84 +212,11 @@ class CaseResult(BaseModel):
         question = next((turn for turn in reversed(self.scenario_turns) if turn.role == "question"), None)
         return question.llm_calls if question is not None else None
 
-    @model_validator(mode="before")
-    @classmethod
-    def migrate_legacy_result_fields(cls, value: Any) -> Any:
-        if not isinstance(value, dict):
-            return value
-        payload = dict(value)
-        if payload.get("decision_contract_version") == DECISION_CONTRACT_VERSION:
-            if payload.get("judge_status") not in {"disabled", "not_run", "failed", "succeeded"}:
-                raise ValueError("current results require an explicit current judge_status")
-            if payload.get("eval_validity") not in {"valid", "incomplete", "invalid"}:
-                raise ValueError("current results require an explicit current eval_validity")
-        if payload.get("decision_contract_version") is None and any(payload.get(field) is not None for field in (
-            "policy_snapshot", "policy_assessment", "decision", "execution_evidence",
-        )):
-            raise ValueError("current policy and decision fields require decision_contract_version")
-        # Records written before the explicit state contract carry no judge_status.
-        # Keep them distinct from explicit current judge outcomes.
-        if payload.get("judge_status") is not None:
-            if payload.get("judge_gate_passed") is None and payload.get("judge_pass") is not None:
-                payload["judge_gate_passed"] = payload.get("judge_pass")
-        else:
-            payload["judge_status"] = "legacy_unknown"
-            payload["eval_validity"] = payload.get("eval_validity") or "legacy_unknown"
-        judge_errors = payload.get("judge_errors")
-        if isinstance(judge_errors, list):
-            audit_failures = [
-                str(item)
-                for item in judge_errors
-                if "judge_min_score audit failed" in str(item)
-            ]
-            if audit_failures:
-                existing_audit_failures = payload.get("judge_audit_failures")
-                merged_audit_failures = [
-                    str(item)
-                    for item in (existing_audit_failures if isinstance(existing_audit_failures, list) else [])
-                    if str(item).strip()
-                ]
-                for item in audit_failures:
-                    if item not in merged_audit_failures:
-                        merged_audit_failures.append(item)
-                payload["judge_audit_failures"] = merged_audit_failures
-                payload["judge_errors"] = [
-                    item
-                    for item in judge_errors
-                    if "judge_min_score audit failed" not in str(item)
-                ]
-        return payload
-
     @model_validator(mode="after")
-    def mirror_legacy_result_fields(self) -> "CaseResult":
-        if self.judge_status != "legacy_unknown":
-            # New contract: the canonical verdict fields are authoritative and
-            # alias mirrors always follow them, never the other way around.
-            self.judge_gate_passed = self.judge_pass
-            if self.eval_validity not in {"valid", "incomplete", "invalid"}:
-                raise ValueError("new-contract results require an explicit eval_validity")
-            if self.judge_status == "succeeded":
-                if self.llm_judge_score is None or self.judge_subscores is None or self.judge_pass is None:
-                    raise ValueError("a succeeded judge verdict requires score, subscores, and judge_pass")
-            else:
-                if self.llm_judge_score is not None or self.judge_subscores is not None or self.judge_pass is not None:
-                    raise ValueError("a non-succeeded judge status cannot carry a score or verdict")
-            if self.invalid_eval != (self.eval_validity == "invalid"):
-                raise ValueError("invalid_eval must mirror eval_validity == 'invalid'")
-        from .decisions import refresh_case_decision
-        stored_decision = self.decision
-        stored_policy = self.policy_assessment
-        stored_actions = self.action_assessments
-        refresh_case_decision(self)
-        if self.decision_contract_version == DECISION_CONTRACT_VERSION:
-            if stored_decision is not None and stored_decision != self.decision:
-                raise ValueError("stored case decision disagrees with its assessments")
-            if stored_policy is not None and stored_policy != self.policy_assessment:
-                raise ValueError("stored policy assessment disagrees with execution evidence")
-            if stored_actions and stored_actions != self.action_assessments:
-                raise ValueError("stored action assessment disagrees with action evidence")
-        if self.tool_call_count <= 0 and self.tool_calls:
-            self.tool_call_count = len(self.tool_calls)
-        if self.synthesis_mode is None and self.latency_breakdown and self.latency_breakdown.synthesis_attempts:
-            self.synthesis_mode = self.latency_breakdown.synthesis_attempts[0].mode
+    def validate_judge_outcome(self) -> "CaseResult":
+        if self.judge_status == "succeeded":
+            if self.llm_judge_score is None or self.judge_subscores is None or self.judge_pass is None:
+                raise ValueError("a succeeded judge verdict requires score, subscores, and judge_pass")
+        elif self.llm_judge_score is not None or self.judge_subscores is not None or self.judge_pass is not None:
+            raise ValueError("a non-succeeded judge status cannot carry a score or verdict")
         return self

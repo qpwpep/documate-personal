@@ -10,6 +10,7 @@ from urllib.parse import unquote, urlparse
 import pytest
 import requests
 
+from src.core.answer_schema.wire import SourcedAnswerPayload
 from src.core.answer_schema import ActionReceipt, AnswerDocument, export_answer_text, finalize_answer
 from src.core.contracts.debug import DebugPayload
 from src.core.contracts.provenance import AnswerProvenance
@@ -76,8 +77,8 @@ def _events(phase, invocation_id="slack-call", tool_name="slack_notify"):
     ]
 
 
-def _evidence(request_id, events):
-    return {"schema_version": 1, "request_id": request_id, "status": "complete", "events": events}
+def _evidence(execution_id, events):
+    return {"schema_version": 1, "execution_id": execution_id, "status": "complete", "events": events}
 
 
 def _answer(actions=()):
@@ -116,7 +117,7 @@ def _result(*, status="success", terminal="succeeded", missing=False, reused_ori
     else:
         turns = [ScenarioTurnResult(
             role="setup", query="첫 전송을 시도해줘.", request_payload={},
-            request_id="req-setup", response=_answer([
+            execution_id="req-setup", response=_answer([
                 _receipt("success" if origin_terminal == "succeeded" else "error", reused_origin, tool_name),
             ]),
             execution_evidence=_evidence("req-setup", _events(origin_terminal, reused_origin, tool_name)),
@@ -154,8 +155,8 @@ def _result(*, status="success", terminal="succeeded", missing=False, reused_ori
         } if evidence_available else None,
     )
     parsed = parse_agent_response({
-        "response": answer.model_dump(mode="json"), "request_id": execution_id,
-        "trace": f"Request ID: {execution_id}" if execution_id else "",
+        "response": SourcedAnswerPayload.from_answer(answer).model_dump(mode="json"), "execution_id": execution_id,
+        "trace": f"Execution ID: {execution_id}" if execution_id else "",
         "debug": debug.model_dump(mode="json"),
     })
     judge = LLMJudge(model_name="fixture", enabled=False)
@@ -166,7 +167,7 @@ def _result(*, status="success", terminal="succeeded", missing=False, reused_ori
         run_id="action-test", endpoint_url="http://fixture", case=case, judge=judge, config=config,
         resolved_weights=resolve_case_weights(case=case, profiles=config.weights),
         session_id="session", created_at="2026-01-01T00:00:00+00:00",
-        request_payload={"query": case.query}, latency_ms_e2e=10,
+        request_payload={"query": case.query}, question_response_ms=10,
         parsed_response=parsed, prior_turns=turns,
     )
 
@@ -296,7 +297,7 @@ def test_completed_search_can_be_reused_later_in_the_same_request():
     ]
     assessment = assess_execution_policy(
         policy=policy_for_case(case), evidence=_evidence("request", events),
-        request_id="request", prior_turns=[], tool_calls=["tavily_search"], tool_call_count=1,
+        execution_id="request", prior_turns=[], tool_calls=["tavily_search"], tool_call_count=1,
     )
 
     assert assessment.status == "compliant"
@@ -314,7 +315,7 @@ def test_failed_action_reused_in_same_request_cannot_claim_success():
     ]
     assessment = assess_execution_policy(
         policy=policy_for_case(case), evidence=_evidence("request", events),
-        request_id="request", prior_turns=[], tool_calls=["slack_notify"], tool_call_count=1,
+        execution_id="request", prior_turns=[], tool_calls=["slack_notify"], tool_call_count=1,
         actions=[_receipt("success", "slack-original")],
     )
 
@@ -346,7 +347,7 @@ def test_missing_save_receipt_distinguishes_proven_omission_from_missing_observa
 def test_omitted_save_is_product_failure_with_distinct_request_and_execution_ids():
     result = _result(missing=True, tool_name="save_text")
 
-    assert result.answer_provenance.request_id != result.request_id
+    assert result.answer_provenance.request_id != result.execution_id
     assert result.policy_assessment.status == "compliant"
     assert result.save_assessment.status == "failed"
     assert result.save_assessment.failure_codes == ["save_receipt_missing"]

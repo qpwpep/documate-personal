@@ -9,6 +9,7 @@ from urllib.parse import unquote, urlparse
 import pytest
 import requests
 
+from src.core.answer_schema.wire import SourcedAnswerPayload
 from src.core.answer_schema import (
     ActionReceipt, AnswerDocument, SemanticValidation, export_answer_text, finalize_answer,
     semantic_evidence_fingerprint,
@@ -112,11 +113,12 @@ def _response_payload(*, forbidden_phase=None, execution_evidence=True, semantic
             body_kind="compose", response_hash=answer.content_hash, evidence_packet=[source],
         ),
         execution_evidence={
-            "schema_version": 1, "request_id": "req-1", "status": "complete", "events": events,
+            "schema_version": 1, "execution_id": "req-1", "status": "complete", "events": events,
         } if execution_evidence else None,
     )
     return {
-        "response": answer.model_dump(mode="json"), "trace": "Request ID: req-1",
+        "response": SourcedAnswerPayload.from_answer(answer).model_dump(mode="json"),
+        "execution_id": "req-1", "trace": "Execution ID: req-1",
         "debug": debug.model_dump(mode="json"),
     }
 
@@ -148,7 +150,7 @@ def _case_result(index=0, *, judge_failure=None, missing_response=False, save_re
         run_id="release-contract", endpoint_url="http://fixture", case=case, judge=judge,
         config=config, resolved_weights=resolve_case_weights(case=case, profiles=config.weights),
         session_id=f"session-{index}", created_at="2026-01-01T00:00:00+00:00",
-        request_payload={"query": case.query}, latency_ms_e2e=10, parsed_response=parsed,
+        request_payload={"query": case.query}, question_response_ms=10, parsed_response=parsed,
         prior_turns=prior_turns,
     )
     return case, result
@@ -309,7 +311,7 @@ def _saved_setup_turn(artifact_dir):
     )]
     return ScenarioTurnResult(
         role="setup", query="준비한 내용을 저장해줘.", request_payload={},
-        request_id="req-setup", response=answer, tool_calls=["save_text"],
+        execution_id="req-setup", response=answer, tool_calls=["save_text"],
         debug={"retrieval_diagnostics": []},
         answer_provenance=AnswerProvenance(
             body_kind="compose", response_hash=answer.content_hash, evidence_packet=[],
@@ -317,7 +319,7 @@ def _saved_setup_turn(artifact_dir):
             save_operation_binding_sha256=operation.binding_sha256,
         ),
         execution_evidence={
-            "schema_version": 1, "request_id": "req-setup", "status": "complete",
+            "schema_version": 1, "execution_id": "req-setup", "status": "complete",
             "events": [
                 {"sequence": index, "invocation_id": "setup-save", "tool_name": "save_text", "phase": phase}
                 for index, phase in enumerate(("started", "succeeded"), 1)

@@ -34,7 +34,7 @@ class ToolPolicySpec(BaseModel):
 class PolicyIssue(BaseModel):
     code: str
     turn_index: int
-    request_id: str | None = None
+    execution_id: str | None = None
     detail: str | None = None
 
 
@@ -65,7 +65,7 @@ def _canonical_evidence(evidence: Any) -> Any:
 
 
 def assess_execution_policy(*, policy: ToolPolicySpec | None, evidence: Any,
-                            request_id: str | None, prior_turns: list[Any],
+                            execution_id: str | None, prior_turns: list[Any],
                             actions: list[Any] | None = None,
                             retrieval_diagnostics: list[Any] | None = None,
                             debug: dict[str, Any] | None = None,
@@ -93,8 +93,8 @@ def assess_execution_policy(*, policy: ToolPolicySpec | None, evidence: Any,
                *, trust_origins: bool = True) -> None:
         initial_issue_count = len(issues)
         raw = _raw(raw)
-        observed_id = raw.get("request_id") if isinstance(raw, dict) else None
-        detail = {"turn_index": index, "request_id": expected_id}
+        observed_id = raw.get("execution_id") if isinstance(raw, dict) else None
+        detail = {"turn_index": index, "execution_id": expected_id}
         # Persisted turns retain raw debug values. Normalize every observation
         # through the same boundary as live responses, keeping discarded input
         # visible as an evidence issue rather than inventing an empty history.
@@ -219,12 +219,12 @@ def assess_execution_policy(*, policy: ToolPolicySpec | None, evidence: Any,
                                       detail="required setup turn is missing"))
         else:
             turn = prior_turns[index]
-            assess(turn.execution_evidence, turn.request_id, index, setup_forbidden,
+            assess(turn.execution_evidence, turn.execution_id, index, setup_forbidden,
                    list(turn.response.actions) if turn.response is not None else [],
                    (turn.debug or {}).get("retrieval_diagnostics"),
                    [{"tool_calls": turn.tool_calls}, *([turn.debug] if turn.debug is not None else [])])
     final_turn = prior_turns[-1] if len(prior_turns) == policy.setup_turn_count + 1 else None
-    final_turn_matches = (final_turn is not None and final_turn.request_id == request_id
+    final_turn_matches = (final_turn is not None and final_turn.execution_id == execution_id
                           and _canonical_evidence(final_turn.execution_evidence) == _canonical_evidence(evidence))
     final_observations = [
         {"tool_calls": tool_calls, "tool_call_count": tool_call_count,
@@ -239,7 +239,7 @@ def assess_execution_policy(*, policy: ToolPolicySpec | None, evidence: Any,
              "retrieval_diagnostics": (final_turn.debug or {}).get("retrieval_diagnostics")},
             *([final_turn.debug] if final_turn.debug is not None else []),
         ])
-    assess(evidence, request_id, policy.setup_turn_count, set(policy.final_forbidden_tools),
+    assess(evidence, execution_id, policy.setup_turn_count, set(policy.final_forbidden_tools),
            actions or [], debug.get("retrieval_diagnostics") if debug is not None else retrieval_diagnostics or [],
            final_observations)
     if len(prior_turns) > policy.setup_turn_count + 1:
@@ -249,7 +249,7 @@ def assess_execution_policy(*, policy: ToolPolicySpec | None, evidence: Any,
             issues.append(PolicyIssue(code="tool_execution_final_turn_mismatch", turn_index=policy.setup_turn_count))
             # Keep a forbidden start present in the retained actual final turn
             # even when the duplicated case-level envelope was changed.
-            assess(final_turn.execution_evidence, final_turn.request_id, policy.setup_turn_count,
+            assess(final_turn.execution_evidence, final_turn.execution_id, policy.setup_turn_count,
                    set(policy.final_forbidden_tools),
                    list(final_turn.response.actions) if final_turn.response is not None else [],
                    (final_turn.debug or {}).get("retrieval_diagnostics"),

@@ -34,7 +34,7 @@ def _render_execution_policy(lines: list[str], summary: RunSummary, results: lis
                       "|---|---|---:|---|---|---|---|"])
         for case_id, status, issue in issues:
             lines.append(
-                f"| {case_id} | {status} | {issue.turn_index} | {issue.request_id or '-'} | "
+                f"| {case_id} | {status} | {issue.turn_index} | {issue.execution_id or '-'} | "
                 f"{getattr(issue, 'tool_name', '-')} | {getattr(issue, 'invocation_id', '-')} | {issue.code} |"
             )
 
@@ -229,13 +229,10 @@ def build_markdown_report(summary: RunSummary, results: list[CaseResult]) -> str
         ("judge_failed_cases", summary.metrics.judge_failed_cases),
         ("judge_disabled_cases", summary.metrics.judge_disabled_cases),
         ("judge_not_run_cases", summary.metrics.judge_not_run_cases),
-        ("judge_legacy_unknown_cases", summary.metrics.judge_legacy_unknown_cases),
         ("judge_execution_rate", summary.metrics.judge_execution_rate),
-        ("passed_cases", summary.metrics.passed_cases),
         ("product_passed_cases", summary.metrics.product_passed_cases),
         ("judge_passed_cases", summary.metrics.judge_passed_cases),
         ("release_passed_cases", summary.metrics.release_passed_cases),
-        ("pass_rate", summary.metrics.pass_rate),
         ("product_pass_rate", summary.metrics.product_pass_rate),
         ("judge_pass_rate", summary.metrics.judge_pass_rate),
         ("release_pass_rate", summary.metrics.release_pass_rate),
@@ -264,10 +261,9 @@ def build_markdown_report(summary: RunSummary, results: list[CaseResult]) -> str
         ("slack_delivery_success_cases", summary.metrics.slack_delivery_success_cases),
         ("slack_delivery_success_rate", summary.metrics.slack_delivery_success_rate),
         ("cost_gate_eligible", summary.metrics.cost_gate_eligible),
-        ("request_id_coverage_rate", summary.metrics.request_id_coverage_rate),
+        ("execution_id_coverage_rate", summary.metrics.execution_id_coverage_rate),
         ("judge_input_completeness_rate", summary.metrics.judge_input_completeness_rate),
         ("judge_min_score_failures", summary.metrics.judge_min_score_failures),
-        ("deterministic_direct_usage_rate", summary.metrics.deterministic_direct_usage_rate),
         ("high_rule_low_judge_divergence_rate", summary.metrics.high_rule_low_judge_divergence_rate),
         ("planner_deterministic_rate", summary.metrics.planner_deterministic_rate),
         ("planner_llm_attempt_count", summary.metrics.planner_llm_attempt_count),

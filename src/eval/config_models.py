@@ -266,13 +266,15 @@ class WeightProfiles(BaseModel):
 
 
 class HardGates(BaseModel):
-    pass_rate: float = 0.90
-    tool_precision: float = 0.90
-    tool_recall: float = 0.85
-    citation_compliance: float = 0.95
-    p95_latency_ms: int = 10000
-    avg_cost_per_case_usd: float = 0.01
-    cost_gate_min_observation_rate: float = 0.80
+    model_config = ConfigDict(extra="forbid", strict=True, allow_inf_nan=False)
+
+    pass_rate: float = Field(default=0.90, ge=0, le=1)
+    tool_precision: float = Field(default=0.90, ge=0, le=1)
+    tool_recall: float = Field(default=0.85, ge=0, le=1)
+    citation_compliance: float = Field(default=0.95, ge=0, le=1)
+    p95_latency_ms: int = Field(default=10000, ge=0)
+    avg_cost_per_case_usd: float = Field(default=0.01, ge=0)
+    cost_gate_min_observation_rate: float = Field(default=0.80, ge=0, le=1)
 
 
 class ModelPricing(BaseModel):

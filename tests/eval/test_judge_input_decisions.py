@@ -14,7 +14,6 @@ def _unobserved_result(reason, *, eval_validity="incomplete"):
     result.product_pass = None
     result.composite_quality_score = None
     result.eval_validity = eval_validity
-    result.invalid_eval = eval_validity == "invalid"
     result.judge_status = "not_run"
     result.judge_status_reason = reason
     result.judge_input_issues = [reason]

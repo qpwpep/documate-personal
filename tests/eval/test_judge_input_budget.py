@@ -113,7 +113,7 @@ def _inputs(*, excerpt="선택한 근거는 α와 🧪 및 <|endoftext|> 문자�
     )
     return {
         "case": case, "tool_calls": ["tavily_search"], "response": answer,
-        "turn_result": TurnResult(status="completed", response=answer, request_id="request-budget"),
+        "turn_result": TurnResult(status="completed", response=answer, execution_id="request-budget"),
         "observed_hits": [hit, hit.model_copy(deep=True)],
         "evidence_scope": {
             "status": "complete", "errors": [], "verified_evidence": [evidence.model_dump(mode="json")],
@@ -139,7 +139,7 @@ def test_judge_input_rejects_unsupported_internal_values():
 def test_repeated_large_source_is_sent_once_as_exact_selected_evidence(provider):
     inputs, evidence = _inputs(large_source=True)
     inputs["turn_result"] = TurnResult(
-        status="partial", response=inputs["response"], request_id="request-budget",
+        status="partial", response=inputs["response"], execution_id="request-budget",
         problem=make_problem("evidence_insufficient", "retrieval"),
     )
     original = copy.deepcopy(inputs)
@@ -323,7 +323,7 @@ def test_missing_input_clarification_does_not_require_a_response_document(provid
     )
     turn = TurnResult(
         status="needs_input", message="요약할 문서를 업로드해 주세요.",
-        request_id="clarification-request", missing_slots=["attachment"],
+        execution_id="clarification-request", missing_slots=["attachment"],
     )
     outcome = LLMJudge(model_name="gpt-6-luna").score_case(
         case=case, tool_calls=[], response=None, turn_result=turn,

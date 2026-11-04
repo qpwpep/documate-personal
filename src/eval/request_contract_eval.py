@@ -58,7 +58,7 @@ def build_case_state(case: dict) -> tuple[dict, dict]:
     from langchain_core.messages import AIMessage, HumanMessage
     from src.core.answer_schema import finalize_answer, text_document
     from src.core.contracts.boundary.graph import build_graph_state_input
-    from src.core.contracts.graph_state import PendingRequest
+    from src.core.pending_request import PendingRequest
     from src.core.request_contracts import RequestContract, UserTurnSnapshot
 
     context = case["context"]

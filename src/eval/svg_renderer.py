@@ -28,7 +28,7 @@ class MetricSpec:
 
 
 SVG_METRICS = [
-    MetricSpec("pass_rate", "higher is better", "pass_rate"),
+    MetricSpec("release_pass_rate", "higher is better", "pass_rate"),
     MetricSpec("tool_precision", "higher is better", "tool_precision"),
     MetricSpec("tool_recall", "higher is better", "tool_recall"),
     MetricSpec("citation_compliance", "higher is better", "citation_compliance"),
@@ -217,7 +217,7 @@ def _round_up(value: float, step: float) -> float:
 
 def _scale_max(metric_key: str, values: list[float], gate_value: float | None) -> float:
     max_value = max(values) if values else 1.0
-    if metric_key in {"pass_rate", "tool_precision", "tool_recall", "citation_compliance"}:
+    if metric_key in {"release_pass_rate", "tool_precision", "tool_recall", "citation_compliance"}:
         return 1.0
     if metric_key.endswith("_ms"):
         baseline = max(max_value, gate_value or 0.0) * 1.1
@@ -229,7 +229,7 @@ def _scale_max(metric_key: str, values: list[float], gate_value: float | None) -
 
 
 def _svg_axis_label(metric_key: str, value: float) -> str:
-    if metric_key in {"pass_rate", "tool_precision", "tool_recall", "citation_compliance"}:
+    if metric_key in {"release_pass_rate", "tool_precision", "tool_recall", "citation_compliance"}:
         return f"{value:.1f}"
     if metric_key.endswith("_ms"):
         return str(int(value))
