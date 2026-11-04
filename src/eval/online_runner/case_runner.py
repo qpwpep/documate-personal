@@ -426,16 +426,7 @@ def run_online_benchmark(
             results.append(result)
             manifest["completed_cases"] = len(results)
             _write_run_manifest(run_dir, manifest)
-            composite_text = (
-                f"{result.composite_quality_score:.3f}"
-                if result.composite_quality_score is not None
-                else "n/a"
-            )
-            print(
-                f"[{index}/{len(cases)}] {case.case_id} composite={composite_text} "
-                f"judge={result.judge_status} release={'PASS' if result.release_pass else 'FAIL'} "
-                f"status={result.http_status} latency={result.question_response_ms}ms"
-            )
+            _print_case_progress(index, len(cases), result)
 
         from ..save_outcomes import revalidate_saved_artifacts
         revalidate_saved_artifacts(cases=cases, results=results, timeout=config.request_timeout_seconds)
@@ -459,6 +450,40 @@ def run_online_benchmark(
         write_run_outputs(output_dir=run_dir, results=results, summary=summary)
     latest_run_pointer_path(output_root, track).write_text(run_id + "\n", encoding="utf-8")
     return run_dir, results, summary
+
+
+def _print_case_progress(index: int, total: int, result: CaseResult) -> None:
+    composite_text = (
+        f"{result.composite_quality_score:.3f}"
+        if result.composite_quality_score is not None else "n/a"
+    )
+    verdicts = {True: "PASS", False: "FAIL", None: "n/a"}
+    outcome = result.turn_result
+    turn = "question"
+    if outcome is None and result.scenario_turns and result.scenario_turns[-1].role == "setup":
+        outcome = result.scenario_turns[-1].turn_result
+        turn = f"setup[{len(result.scenario_turns)}]"
+    problem = outcome.problem if outcome is not None else None
+    latency_text = f"{result.question_response_ms}ms" if result.question_response_ms is not None else "n/a"
+    product_reason = "none"
+    if problem is not None:
+        product_reason = problem.code
+    elif result.runtime_errors:
+        product_reason = "runtime_error"
+    elif result.response_errors:
+        product_reason = "response_contract_error"
+    print(
+        f"[{index}/{total}] {result.case_id} composite={composite_text} "
+        f"judge={result.judge_status} release={verdicts[result.release_pass]} "
+        f"http={result.http_status} latency={latency_text}\n"
+        f"  product: turn={turn} status={outcome.status if outcome is not None else 'unavailable'} "
+        f"reason={product_reason} "
+        f"stage={problem.stage if problem is not None else 'none'}\n"
+        f"  judge: status={result.judge_status} verdict={verdicts[result.judge_pass]} "
+        f"reason={result.judge_status_reason or 'none'}\n"
+        f"  release: verdict={verdicts[result.release_pass]} reasons={','.join(result.gate_failures) or 'none'}",
+        flush=True,
+    )
 
 
 @contextmanager

@@ -15,6 +15,7 @@ from src.app.transport_contracts import AgentResponse
 from src.core.answer_schema import AnswerDocument, finalize_answer
 from src.core.contracts.debug import DEBUG_SCHEMA_VERSION, DebugPayload
 from src.core.contracts.provenance import AnswerProvenance
+from src.core.llm_errors import make_problem
 from src.eval.config_models import BenchmarkCase, BenchmarkConfig
 from src.eval.online_runner.case_runner import run_online_benchmark
 from src.eval.reporting.writer import load_run_outputs
@@ -75,9 +76,11 @@ def test_standard_runner_uses_project_judge_credentials_without_environment_copy
 
 
 def _prepare_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, interrupt: bool = False,
-                 fail_report: bool = False) -> tuple[Path, Path]:
+                 fail_report: bool = False, product_failure: bool = False,
+                 setup_failure: bool = False) -> tuple[Path, Path]:
     fixtures = tmp_path / "cases.jsonl"
-    cases = [BenchmarkCase(case_id=f"case-{index}", category="tool_action", query=f"질문 {index}")
+    cases = [BenchmarkCase(case_id=f"case-{index}", category="tool_action", query=f"질문 {index}",
+                           setup_turns=[f"준비 질문 {index}"] if setup_failure else [])
              for index in range(2)]
     fixtures.write_text("\n".join(case.model_dump_json() for case in cases) + "\n", encoding="utf-8")
     output_root = tmp_path / "runs"
@@ -113,14 +116,17 @@ def _prepare_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, interrupt: 
         payload = kwargs["json"]
         assert isinstance(payload, dict)
         execution_id = f"request-{question_count}"
+        failed = product_failure or setup_failure
         body = AgentResponse(
-            status="completed", response=answer, execution_id=execution_id, trace=f"Execution ID: {execution_id}",
+            status="failed" if failed else "completed", response=None if failed else answer,
+            problem=make_problem("answer_validation_failed", "validation") if failed else None,
+            execution_id=execution_id, trace=f"Execution ID: {execution_id}",
             upload_manifest={"epoch": payload["session_id"], "revision": 0, "files": []},
             debug=DebugPayload(
                 schema_version=DEBUG_SCHEMA_VERSION, observability_status="ok", route_decisions=[],
                 answer_provenance=AnswerProvenance(
                     body_kind="compose", response_hash=answer.content_hash, evidence_packet=[],
-                ),
+                ) if not failed else None,
                 llm_calls=[],
                 execution_evidence={"schema_version": 1, "execution_id": execution_id,
                                     "status": "complete", "events": []},
@@ -134,11 +140,57 @@ def _prepare_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, interrupt: 
     return fixtures, output_root
 
 
-def _run(fixtures: Path, output_root: Path) -> tuple[Path, list[CaseResult], RunSummary]:
+def _run(fixtures: Path, output_root: Path, *, config: BenchmarkConfig | None = None) -> tuple[Path, list[CaseResult], RunSummary]:
     return run_online_benchmark(
-        fixtures_path=fixtures, endpoint="http://benchmark.invalid", config=BenchmarkConfig(judge_enabled=False),
+        fixtures_path=fixtures, endpoint="http://benchmark.invalid", config=config or BenchmarkConfig(judge_enabled=False),
         config_path=fixtures.parent / "config.toml", output_root=output_root, track="smoke",
     )
+
+
+@pytest.mark.parametrize(("product_failure", "input_budget", "product_line", "judge_line", "release_reason"), [
+    (False, 128_000, "product: turn=question status=completed reason=none stage=none",
+     "judge: status=succeeded verdict=PASS reason=none", "release: verdict=PASS reasons=none"),
+    (True, 128_000, "product: turn=question status=failed reason=answer_validation_failed stage=validation",
+     "judge: status=not_run verdict=n/a reason=product_failure", "runtime_error"),
+    (False, 1, "product: turn=question status=completed reason=none stage=none",
+     "judge: status=not_run verdict=n/a reason=input_budget_exceeded", "product_quality_unobserved"),
+], ids=["passed", "product-failed", "judge-skipped"])
+def test_console_separates_product_judge_and_release(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], provider,
+    product_failure: bool, input_budget: int, product_line: str, judge_line: str, release_reason: str,
+) -> None:
+    fixtures, output_root = _prepare_run(tmp_path, monkeypatch, product_failure=product_failure)
+
+    _, results, _ = _run(fixtures, output_root, config=BenchmarkConfig(judge_max_input_tokens=input_budget))
+
+    output = capsys.readouterr().out
+    assert "[1/2] case-0 composite=" in output
+    assert "http=200 latency=" in output
+    assert output.count(product_line) == 2
+    assert output.count(judge_line) == 2
+    assert release_reason in output
+    assert output.count("release: verdict=") == 2
+    assert len(provider) == (2 if not product_failure and input_budget > 1 else 0)
+    assert all(result.http_status == 200 for result in results)
+
+
+def test_console_identifies_failed_setup_and_unsent_question(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], provider,
+) -> None:
+    fixtures, output_root = _prepare_run(tmp_path, monkeypatch, setup_failure=True)
+
+    _, results, _ = _run(fixtures, output_root, config=BenchmarkConfig())
+
+    output = capsys.readouterr().out
+    assert output.count("http=200 latency=n/a") == 2
+    assert output.count(
+        "product: turn=setup[1] status=failed reason=answer_validation_failed stage=validation"
+    ) == 2
+    assert "Nonems" not in output
+    assert output.count("judge: status=not_run verdict=n/a reason=product_failure") == 2
+    assert provider == []
+    assert all(result.turn_result is None and result.request_payload == {} for result in results)
+    assert all(len(result.scenario_turns) == 1 and result.scenario_turns[0].role == "setup" for result in results)
 
 
 def test_interrupted_run_retains_finished_case_and_plan(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
