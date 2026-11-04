@@ -7,6 +7,13 @@ from typing import Literal, Union
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
+BODY_INSTRUCTION_DESCRIPTION = (
+    "Describe only the requested operation on the displayed body. Put file saving and message delivery "
+    "in actions, not in this instruction. Preserve words about "
+    "saving or sending when they are quoted payload or the subject being explained."
+)
+
+
 class BodyModel(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -49,7 +56,7 @@ class BoundAnswerReference(BodyModel):
 
 class ComposeBody(BodyModel):
     kind: Literal["compose"] = "compose"
-    instruction: str = ""
+    instruction: str = Field(default="", description=BODY_INSTRUCTION_DESCRIPTION)
     evidence_ids: tuple[str, ...] = ()
 
 
@@ -75,7 +82,8 @@ class WireTransformInputBody(BodyModel):
     source: InputTextReference
     instruction: str = Field(min_length=1, description=(
         "The requested translation, edit or layout-only change. If wording must stay literal while adding "
-        "a code block/list/table, preserve the selected payload and change only its presentation."
+        "a code block/list/table, preserve the selected payload and change only its presentation. "
+        + BODY_INSTRUCTION_DESCRIPTION
     ))
     evidence_ids: tuple[str, ...] = ()
 
@@ -83,7 +91,7 @@ class WireTransformInputBody(BodyModel):
 class TransformInputBody(BodyModel):
     kind: Literal["transform_input"] = "transform_input"
     source: BoundInputText
-    instruction: str = Field(min_length=1)
+    instruction: str = Field(min_length=1, description=BODY_INSTRUCTION_DESCRIPTION)
     evidence_ids: tuple[str, ...] = ()
 
 
@@ -112,7 +120,8 @@ class WireTransformAnswerBody(BodyModel):
     source: AnswerReference
     instruction: str = Field(min_length=1, description=(
         "The requested change to the answer's actual wording, language, structure or claims. "
-        "TXT serialization or including existing sources/limitations is not a body change; use copy_answer."
+        "TXT serialization or including existing sources/limitations is not a body change; use copy_answer. "
+        + BODY_INSTRUCTION_DESCRIPTION
     ))
     evidence_ids: tuple[str, ...] = ()
 
@@ -120,13 +129,13 @@ class WireTransformAnswerBody(BodyModel):
 class TransformAnswerBody(BodyModel):
     kind: Literal["transform_answer"] = "transform_answer"
     source: BoundAnswerReference
-    instruction: str = Field(min_length=1)
+    instruction: str = Field(min_length=1, description=BODY_INSTRUCTION_DESCRIPTION)
     evidence_ids: tuple[str, ...] = ()
 
 
 class ExtractBody(BodyModel):
     kind: Literal["extract"] = "extract"
-    instruction: str = ""
+    instruction: str = Field(default="", description=BODY_INSTRUCTION_DESCRIPTION)
     requirement_ids: tuple[str, ...] = ()
     evidence_ids: tuple[str, ...] = ()
 
@@ -134,7 +143,7 @@ class ExtractBody(BodyModel):
 class UnresolvedBody(BodyModel):
     kind: Literal["unresolved"] = "unresolved"
     question: str = Field(min_length=1)
-    instruction: str = ""
+    instruction: str = Field(default="", description=BODY_INSTRUCTION_DESCRIPTION)
 
 
 # Unique Literal tags make branches disjoint. A plain union emits nested anyOf

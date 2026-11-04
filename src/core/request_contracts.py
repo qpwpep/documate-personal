@@ -65,7 +65,7 @@ RequirementMode = Literal["required", "forbidden", "preferred"]
 class ContentRequirement(ContractModel):
     kind: Literal["code", "code_example", "example", "comparison", "options_summary", "explanation", "procedure", "custom"] = Field(description="Semantic content only. code means program code, code_example means an illustrative code example, and example means an illustration of any kind. A code_block is layout and can contain logs or input text. Do not repeat the body transformation, action, line count or layout as custom content. A table prohibition belongs to format.table, not comparison or custom.")
     mode: RequirementMode
-    description: str = ""
+    description: str = Field(default="", description="An independently requested content subject and its scope; mode carries the required/forbidden polarity. Describe prohibited content itself, such as 'explanatory prose in the source text', not 'do not include explanation'. Exact copy already guarantees no changes or additions: do not create content conditions for 'copy unchanged' or 'do not add a new explanation'. Preserve conditions on the selected text itself, such as required topics or prohibited original content. Do not restate saving, sending, or the body operation as a content condition.")
     evidence_ids: tuple[str, ...] = ()
     replaces: str | None = Field(default=None, min_length=1, description="For a change to one pending content condition, copy its offered ref from pending_request.confirmed_facts.answer.content. Null adds an independent condition. Never invent a ref; it is valid only for the offered request revision.")
 
@@ -187,31 +187,38 @@ class _RequestFacts(ContractModel):
         for item in references:
             if any(key not in evidence for key in item.evidence_ids):
                 raise ValueError("unknown contract evidence id")
-        def supports(ids: tuple[str, ...], path: str, allowed: set[str]) -> bool:
-            return any(
+        def require_support(ids: tuple[str, ...], path: str, allowed: set[str]) -> None:
+            if any(
                 evidence[key].interpretation in allowed
                 and evidence_scope_covers(evidence[key].scope, path) for key in ids
+            ):
+                return
+            # Repair feedback identifies the failed relation without repeating
+            # user quotes or including the entire rejected model output.
+            references = "; ".join(
+                f"{key}(scope={evidence[key].scope}, interpretation={evidence[key].interpretation})"
+                for key in ids
+            ) or "none"
+            raise ValueError(
+                f"{path} requires user evidence with a covering scope and one of these interpretations: "
+                f"{', '.join(sorted(allowed))}. Referenced evidence: {references}. "
+                "Keep only user-stated conditions; do not widen evidence scope solely to satisfy validation."
             )
 
         for name, action in (("save_text", self.actions.save_text), ("slack_notify", self.actions.slack_notify)):
             if action.intent in {"requested", "forbidden"}:
-                if not action.evidence_ids:
-                    raise ValueError("explicit actions require user evidence")
                 allowed = {"instruction", "correction", "reference"} if action.intent == "requested" else {"negation", "correction", "instruction"}
-                if not supports(action.evidence_ids, f"actions.{name}", allowed):
-                    raise ValueError("actions require an instruction within their scope, not a mention or quotation")
+                require_support(action.evidence_ids, f"actions.{name}", allowed)
         if isinstance(self.slack_recipient, (ExplicitRecipient, UnresolvedRecipient)):
             allowed = {"instruction", "correction", "reference"}
             if isinstance(self.slack_recipient, UnresolvedRecipient):
                 allowed.add("negation")
-            if not supports(self.slack_recipient.evidence_ids, "slack_recipient", allowed):
-                raise ValueError("recipient intent requires a user instruction or reference within its scope")
+            require_support(self.slack_recipient.evidence_ids, "slack_recipient", allowed)
         for group, requirements in (("content", self.answer.content), ("format", self.answer.format),
                                     ("sentence_counts", self.answer.sentence_counts)):
             for requirement in requirements:
                 allowed = {"negation", "correction", "instruction"} if requirement.mode == "forbidden" else {"instruction", "correction", "reference"}
-                if not supports(requirement.evidence_ids, f"answer.{group}.{requirement.kind}", allowed):
-                    raise ValueError("answer requirements require an instruction within their scope")
+                require_support(requirement.evidence_ids, f"answer.{group}.{requirement.kind}", allowed)
         if self.relation == "cancel" and any(
             action.intent == "requested" for action in (self.actions.save_text, self.actions.slack_notify)
         ):

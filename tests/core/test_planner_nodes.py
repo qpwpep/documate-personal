@@ -32,11 +32,11 @@ class PlannerNodeTest(unittest.TestCase):
         self.assertEqual(result.diagnostics.required_routes, ["upload"])
         synthesize = make_synthesize_node(mock_chat_model(lambda messages: self.fail("Clarification needs no model call")))
         state.update(synthesize(state))
-        outcome = ResponseAssembler().assemble(response=state, debug_info={})
+        outcome = ResponseAssembler().assemble(response=state)
 
-        self.assertEqual(outcome["status"], "needs_input")
-        self.assertEqual(outcome["missing_slots"], ["upload"])
-        self.assertIsNone(outcome["response"])
+        self.assertEqual(outcome.status, "needs_input")
+        self.assertEqual(outcome.missing_slots, ["upload"])
+        self.assertIsNone(outcome.response)
 
     def test_subject_clarification_does_not_request_an_upload(self) -> None:
         query = "Please explain it."
@@ -50,11 +50,11 @@ class PlannerNodeTest(unittest.TestCase):
         state.update(make_planner_node(_CapturePlannerLLM(requested), verbose=False)(state))
         synthesize = make_synthesize_node(mock_chat_model(lambda messages: self.fail("Clarification needs no model call")))
         state.update(synthesize(state))
-        outcome = ResponseAssembler().assemble(response=state, debug_info={})
+        outcome = ResponseAssembler().assemble(response=state)
 
-        self.assertEqual(outcome["status"], "needs_input")
-        self.assertEqual(outcome["missing_slots"], ["subject"])
-        self.assertEqual(outcome["message"], "What should I explain?")
+        self.assertEqual(outcome.status, "needs_input")
+        self.assertEqual(outcome.missing_slots, ["subject"])
+        self.assertEqual(outcome.message, "What should I explain?")
 
 
 if __name__ == "__main__":

@@ -6,7 +6,7 @@ from langchain_core.messages import HumanMessage
 
 from src.core.answer_schema import finalize_answer, text_document
 from src.core.contracts.boundary.graph import build_graph_state_input
-from src.core.contracts.graph_state import PendingRequest
+from src.core.pending_request import PendingRequest
 from src.core.planner_schema import InitialPlannerOutput, RetrievalRewrite, RetrievalRewriteOutput, RetrievalTask
 from src.core.llm_errors import LLMCallError
 from src.core.request_contracts import (
@@ -15,7 +15,6 @@ from src.core.request_contracts import (
 )
 from src.core.slack_contract import OmittedRecipient
 from src.runtime.nodes.planner import make_planner_node
-from src.runtime.nodes.planner.request_resolution import pending_body_changed
 from tests.core.helpers import structured_model
 
 
@@ -54,6 +53,35 @@ def original_pending(*, response, completed=()):
                          body_prepared=True)
 
 
+def test_planner_boundary_separates_body_operations_from_delivery_instructions():
+    query = "아니, 마지막 줄의 42만 43으로 고쳐서 새 TXT 파일로 저장해줘. 나머지 글자와 줄바꿈은 그대로 둬."
+    previous = finalize_answer(text_document("첫 줄: 봄  여름\n둘째 줄: 가을 🧪\n마지막 줄: 42"), [])
+    proposal = WireRequestContract.model_validate({
+        "relation": "correction",
+        "slack_recipient": {"state": "omitted"},
+        "body": {"kind": "transform_answer", "source": {"ref": "previous"},
+                 "instruction": "Change only the final line's 42 to 43. Preserve every other character and all line breaks.",
+                 "evidence_ids": ["change"]},
+        "actions": {"save_text": {"intent": "requested", "evidence_ids": ["change"]}},
+        "evidence": [{"id": "change", "turn_id": "current", "quote": query,
+                      "scope": "current_request", "interpretation": "correction"}],
+    })
+
+    updates, model = plan(query, proposal, previous_response=previous)
+
+    definitions = InitialPlannerOutput.model_json_schema()["$defs"]
+    for name in ("ComposeBody", "WireTransformInputBody", "WireTransformAnswerBody", "ExtractBody"):
+        description = definitions[name]["properties"]["instruction"].get("description", "")
+        assert "displayed body" in description
+        assert "actions" in description
+    instructions = model.calls[0][0].content
+    assert "Keep body.instruction limited to the requested body operation" in instructions
+    contract = updates["runtime"].request_contract
+    assert contract.body.source.response_hash == previous.content_hash
+    assert contract.body.instruction == proposal.body.instruction
+    assert contract.actions.save_text.intent == "requested"
+
+
 @pytest.mark.parametrize("payload", [
     {"use_retrieval": False, "tasks": []},
     {"use_retrieval": False, "tasks": [], "request_contract": {"actions": {"save_text": {"intent": "requested"}}}},
@@ -66,6 +94,51 @@ def test_missing_contract_or_ungrounded_action_never_recovers_actions_from_keywo
     assert caught.value.problem.code == "model_output_invalid"
     assert state["runtime"].request_contract is None
     assert len(model.calls) == 2
+
+
+def test_authority_repair_identifies_the_unsupported_requirement_and_its_evidence():
+    query = "아래 텍스트만 글자와 줄바꿈을 바꾸지 말고 TXT로 저장해줘. 설명은 붙이지 마.\n\n첫 줄: 봄  여름\n둘째 줄: 가을 🧪\n마지막 줄: 42"
+    # This candidate was rejected during a live exact-input save. The model
+    # added a layout prohibition but cited evidence scoped only to the body.
+    model = PlannerResult({
+        "use_retrieval": False, "tasks": [], "aspect_references": [],
+        "request_contract": {
+            "relation": "new", "target_request_id": None,
+            "actions": {
+                "save_text": {"intent": "requested", "evidence_ids": ["e1"]},
+                "slack_notify": {"intent": "not_requested", "evidence_ids": []},
+            },
+            "slack_recipient": {"state": "omitted"},
+            "answer": {
+                "content": [], "sentence_counts": [], "preferences": [],
+                "format": [{"kind": "code_block", "mode": "forbidden", "value": None, "evidence_ids": ["e2"]}],
+            },
+            "evidence": [
+                {"id": "e1", "turn_id": "current", "quote": "TXT로 저장해줘", "scope": "actions.save_text", "interpretation": "instruction"},
+                {"id": "e2", "turn_id": "current", "quote": "아래 텍스트만 글자와 줄바꿈을 바꾸지 말고", "scope": "body", "interpretation": "instruction"},
+                {"id": "e3", "turn_id": "current", "quote": "설명은 붙이지 마.", "scope": "answer.content", "interpretation": "negation"},
+            ],
+            "missing_info": [],
+            "body": {"kind": "copy_input", "source": {
+                "turn_id": "current", "quote": "첫 줄: 봄  여름\n둘째 줄: 가을 🧪\n마지막 줄: 42", "occurrence": None,
+            }},
+        },
+    })
+    state = state_for(query)
+
+    with pytest.raises(LLMCallError) as caught:
+        make_planner_node(structured_model(model.invoke, InitialPlannerOutput), False)(state)
+
+    assert caught.value.problem.code == "model_output_invalid"
+    assert state["runtime"].request_contract is None
+    assert len(model.calls) == 2
+    feedback = model.calls[1][-1].content
+    assert "answer.format.code_block" in feedback
+    assert "e2" in feedback
+    assert "scope=body" in feedback
+    assert "interpretation=instruction" in feedback
+    assert "negation" in feedback
+    assert "첫 줄: 봄" not in feedback
 
 
 @pytest.mark.parametrize("route", ["docs", "upload"])
@@ -201,7 +274,7 @@ def test_pending_sentence_correction_preserves_other_scopes_and_rebinds_its_evid
     assert evidence_by_id[changed_id].quote == query
     assert original.answer.sentence_counts[0].evidence_ids[0] not in evidence_by_id
     assert contract.answer.sentence_counts[2].evidence_ids == (changed_id,)
-    assert pending_body_changed(pending, contract)
+    assert pending.body_changed(contract)
     assert original.answer.sentence_counts[0].maximum == 1
 
 
