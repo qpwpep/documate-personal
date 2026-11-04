@@ -697,10 +697,38 @@ def prepare_evidence_candidates(
     return result
 
 
+def _coalesce_binding_ranges(members: list[EvidenceRef], *, limit: int) -> list[EvidenceRef]:
+    """Preserve original whitespace without pulling unselected code into a binding bundle."""
+    joined: list[EvidenceRef] = []
+    for item in sorted(members, key=lambda member: (
+        member.snapshot.snapshot_id, member.element.element_id, member.selection.start,
+    )):
+        text = item.element.text
+        start = item.selection.start
+        end = item.selection.end if item.selection.end is not None else len(text)
+        if not text[:start].strip() and end <= limit:
+            start = 0
+        if not text[end:].strip() and len(text) - start <= limit:
+            end = len(text)
+        selected = build_evidence(snapshot=item.snapshot, element=item.element, start=start, end=end)
+        previous = joined[-1] if joined else None
+        if (previous is not None and previous.snapshot.snapshot_id == item.snapshot.snapshot_id
+                and previous.element == item.element):
+            previous_end = previous.selection.end if previous.selection.end is not None else len(text)
+            if (not text[previous_end:start].strip()
+                    and end - previous.selection.start <= limit):
+                joined[-1] = build_evidence(snapshot=item.snapshot, element=item.element,
+                    start=previous.selection.start, end=max(previous_end, end))
+                continue
+        joined.append(selected)
+    return joined
+
+
 def select_evidence_packet(
     evidence: list[EvidenceRef], *, budget: RetrievedEvidenceBudget, query: str = "",
     requirements_by_evidence: dict[str, list[RetrievalTask]] | None = None,
     semantic_support: dict[str, dict[str, set[str]]] | None = None,
+    supporting_evidence_ids: dict[tuple[str, str], list[str]] | None = None,
 ) -> tuple[list[EvidenceRef], dict[str, list[str]]]:
     """Reserve required passages before expanding context, charging shared ranges only once."""
     packet: list[EvidenceRef] = []
@@ -710,9 +738,26 @@ def select_evidence_packet(
     contracts: dict[str, RetrievalTask] = {}
     support = semantic_support or {}
     selected_labels: dict[str, set[str]] = {}
+    evidence_by_id = {item.id: item for item in evidence}
+    dependencies = supporting_evidence_ids or {}
+    context_only = {(requirement_id, identity) for (requirement_id, _), identities in dependencies.items()
+                    for identity in identities} - dependencies.keys()
+    bundles = {}
+    for key, identities in dependencies.items():
+        if not identities:
+            continue
+        members = list({identity: evidence_by_id[identity] for identity in [key[1], *identities]}.values())
+        # A control range can already contain the call. Charge and select that
+        # original range once, without discarding another cell's import.
+        maximal = [item for item in members if not any(
+            other.id != item.id and contains_evidence_range(other, item) for other in members
+        )]
+        bundles[key] = _coalesce_binding_ranges(maximal, limit=budget.max_excerpt_chars)
     for item in evidence:
         tasks = (requirements_by_evidence or {}).get(item.id) or [None]
         for task in tasks:
+            if task is not None and (task.requirement_id, item.id) in context_only:
+                continue
             if task is not None:
                 contracts[task.requirement_id] = task
             targets = (upload_passage_targets(task) if task is not None and task.route != "docs"
@@ -754,6 +799,8 @@ def select_evidence_packet(
         else:
             rest.append(candidate)
     ordered = [*first.values(), *rest]
+    eligible_ranges = [*ordered, *((member, task) for item, task in ordered if task is not None
+                                  for member in bundles.get((task.requirement_id, item.id), []))]
     origins: dict[str, tuple[EvidenceRef, RetrievalTask | None]] = {}
 
     def associate(selected: EvidenceRef, task: RetrievalTask | None) -> None:
@@ -763,6 +810,11 @@ def select_evidence_packet(
                 associated.append(task.requirement_id)
 
     def needs_passage(item: EvidenceRef, task: RetrievalTask | None) -> bool:
+        bundle = bundles.get((task.requirement_id, item.id)) if task is not None else None
+        if bundle:
+            return not all(any(contains_evidence_range(selected, member)
+                               and task.requirement_id in requirement_ids.get(selected.id, [])
+                               for selected in packet) for member in bundle)
         if task is not None and task.route == "docs":
             wanted = {"relevance", *(f"aspect:{aspect}" for aspect in task.requirement.aspects),
                       *(f"need:{need}" for need in task.requirement.evidence_needs)}
@@ -776,6 +828,14 @@ def select_evidence_packet(
     # All associations are attached before testing capacity: sharing a cropped
     # range is free even when the item or character budget has been exhausted.
     def share_existing(item: EvidenceRef, task: RetrievalTask | None) -> None:
+        bundle = bundles.get((task.requirement_id, item.id)) if task is not None else None
+        if bundle:
+            covering = [next((selected for selected in packet if contains_evidence_range(selected, member)), None)
+                        for member in bundle]
+            if all(selected is not None for selected in covering):
+                for selected in covering:
+                    associate(selected, task)
+            return
         for selected in packet:
             if item.route == "docs":
                 # Sharing must not restore an association removed by the
@@ -799,7 +859,7 @@ def select_evidence_packet(
         return [old for old in packet if contains_evidence_range(selected, old)
                 and all(any(candidate_task is not None and candidate_task.requirement_id == requirement_id
                             and contains_evidence_range(candidate, selected)
-                            for candidate, candidate_task in ordered)
+                            for candidate, candidate_task in eligible_ranges)
                         for requirement_id in requirement_ids.get(old.id, []))]
 
     def admit(selected: EvidenceRef, item: EvidenceRef, task: RetrievalTask | None) -> bool:
@@ -825,6 +885,32 @@ def select_evidence_packet(
         associate(selected, task)
         remaining -= cost
         return True
+
+    def admit_bundle(bundle: list[EvidenceRef], task: RetrievalTask, allowance: int) -> None:
+        nonlocal remaining
+        if any(len(member.excerpt) > budget.max_excerpt_chars for member in bundle):
+            return
+        additions = [member for member in bundle if not any(
+            contains_evidence_range(selected, member) for selected in packet
+        )]
+        replaced = {old.id: old for member in additions for old in replaced_ranges(member)}
+        cost = sum(len(member.excerpt) for member in additions) - sum(len(old.excerpt) for old in replaced.values())
+        if cost > min(remaining, allowance) or len(packet) - len(replaced) + len(additions) > budget.max_items:
+            return
+        inherited = {member.id: {identity for old in replaced.values() if contains_evidence_range(member, old)
+                                for identity in requirement_ids.get(old.id, [])} for member in additions}
+        for old in replaced.values():
+            packet.remove(old)
+            origins.pop(old.id, None)
+            requirement_ids.pop(old.id, None)
+        for member in additions:
+            packet.append(member)
+            origins[member.id] = (member, task)
+            requirement_ids[member.id] = sorted(inherited[member.id])
+        for member in bundle:
+            selected = next(selected for selected in packet if contains_evidence_range(selected, member))
+            associate(selected, task)
+        remaining -= cost
 
     # Docs ranges were prepared before Decisions. Normal selection keeps their
     # exact identities; compact selection creates new identities for rechecking.
@@ -946,6 +1032,10 @@ def select_evidence_packet(
         item: EvidenceRef, task: RetrievalTask | None, allowance: int, *, require_anchor: bool = True,
         allow_partial: bool = True, complete_char_limit: int | None = None,
     ) -> None:
+        bundle = bundles.get((task.requirement_id, item.id)) if task is not None else None
+        if bundle:
+            admit_bundle(bundle, task, allowance)
+            return
         if len(packet) >= budget.max_items or allowance <= 0:
             return
         if item.element.kind == "table":
@@ -959,7 +1049,9 @@ def select_evidence_packet(
             if not limit:
                 return
             selected = select_evidence_range(
-                item, limit=limit, query=query, task=task, expand_context=False,
+                item, limit=limit, query=query, task=task,
+                expand_context=(task is not None and task.route == "upload"
+                                and task.requirement.match != "topic" and item.element.kind == "code"),
                 allow_partial=allow_partial, complete_char_limit=complete_char_limit,
             )
         if not selected.excerpt.strip():
@@ -1043,7 +1135,7 @@ def select_evidence_packet(
             continue
         if any(not any(candidate_task is not None and candidate_task.requirement_id == requirement_id
                        and contains_evidence_range(candidate, expanded)
-                       for candidate, candidate_task in ordered)
+                       for candidate, candidate_task in eligible_ranges)
                for requirement_id in requirement_ids.get(selected.id, [])):
             continue
         admit(expanded, original, task)

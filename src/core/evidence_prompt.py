@@ -1,7 +1,48 @@
 """Source position views that refer to one unchanged excerpt in model input."""
 from __future__ import annotations
 
-from src.core.evidence import EvidenceRef, source_line_records
+from src.core.evidence import EvidenceRef, selected_source_anchors, source_line_records
+
+
+def source_scope_prompt_record(evidence: EvidenceRef) -> dict[str, object]:
+    """Preserve captured file identity and selection boundaries without adding text."""
+    record: dict[str, object] = {
+        "file_id": evidence.element.metadata.get("file_id") if evidence.route == "upload" else None,
+        "selection": evidence.selection.model_dump(mode="json"),
+    }
+    if evidence.element.table is not None:
+        record["is_partial"] = len(evidence.selection.cell_ids) < len(evidence.element.table.cells)
+        return record
+
+    length = len(evidence.element.text)
+    end = length if evidence.selection.end is None else evidence.selection.end
+    omitted_prefix = evidence.selection.start > 0
+    omitted_suffix = end < length
+    # Native Python parsing retains one whole-file element; notebook elements
+    # retain individual cells. Generic code blocks establish neither boundary.
+    kind = "document_element"
+    if (evidence.snapshot.parser == "python-ast" and evidence.element.element_id == "python-source"
+            and evidence.snapshot.capture_scope == "full_document"):
+        kind = "python_file"
+    elif evidence.snapshot.parser == "notebook-source":
+        kind = "notebook_cell"
+    record["is_partial"] = omitted_prefix or omitted_suffix
+    record["element_extent"] = {
+        "kind": kind, "text_length": length,
+        "omitted_prefix": omitted_prefix, "omitted_suffix": omitted_suffix,
+    }
+    return record
+
+
+def source_location_prompt_records(evidence: EvidenceRef) -> list[dict[str, object]]:
+    """Use human cell numbers at model boundaries without changing source anchors."""
+    records = []
+    for anchor in selected_source_anchors(evidence):
+        record = anchor.model_dump(mode="json", exclude={"cell_index"})
+        if anchor.cell_index is not None:
+            record["cell_number"] = anchor.cell_index + 1
+        records.append(record)
+    return records
 
 
 def source_line_prompt_records(evidence: EvidenceRef) -> list[dict[str, object]]:

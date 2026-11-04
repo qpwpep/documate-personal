@@ -7,3 +7,11 @@ Scope:
 - Uploaded evidence describes the session's selected uploaded files. Preserve each file's identity; it does not establish facts about unprovided project files or a separate notebook index.
 - Ground source-based explanations in the supplied selections. Distinguish observed facts, derived conclusions, generated examples, and missing information.
 """
+
+CODE_API_IDENTITY_POLICY = (
+    "For a code claim attributing a call to a named library or API, require the supplied code to establish "
+    "that the receiver or name resolves to that target on the call's path. A conventional alias or matching attribute "
+    "spelling does not establish that binding; a value captured, supplied or rebound from an unidentified source "
+    "has an unidentified target. Distinguish an explicitly conditional possibility from attribution of the supplied "
+    "call. Static binding can establish identity without establishing runtime execution. "
+)

@@ -3,7 +3,8 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from src.core.answer_schema import AnswerResponse, finalize_answer, iter_content_units
+from src.core.answer_schema import AnswerResponse, finalize_answer
+from src.core.answer_schema.model_references import remap_document_source_references
 from src.core.latency import elapsed_ms, make_stage_latency_event, make_synthesis_attempt_latency_event
 from src.core.llm_errors import LLMCallError, LLMDiagnostic
 from src.infra.llm_boundary import CallBudget, is_timeout_failure, request_call_budget, run_structured_call
@@ -23,13 +24,7 @@ def _invoke_structured_attempt(
         if not document.blocks:
             raise ValueError("structured output was empty")
         if prepared.reference_aliases:
-            document = document.model_copy(deep=True)
-            for _path, unit in iter_content_units(document):
-                unit.refs = [prepared.reference_aliases.get(reference, reference) for reference in unit.refs]
-                if unit.source_location is not None:
-                    unit.source_location = unit.source_location.model_copy(update={
-                        "ref": prepared.reference_aliases.get(unit.source_location.ref, unit.source_location.ref),
-                    })
+            document = remap_document_source_references(document, prepared.reference_aliases)
         return finalize_answer(document, prepared.evidence_packet, retrieval_required=prepared.retrieval_required)
 
     return run_structured_call(

@@ -4,7 +4,6 @@ import time
 
 from src.core.answer_schema import finalize_answer, text_document
 from src.core.answer_export import answer_export_snapshot
-from src.core.answer_schema.fallbacks import build_grounded_document
 from src.core.contracts import DebugState, GraphState
 from src.core.latency import elapsed_ms, make_stage_latency_event
 from src.core.llm_errors import LLMCallError, make_problem
@@ -76,22 +75,6 @@ def maybe_short_circuit_synthesis(
             packet = [citation.evidence for citation in previous.citations]
             result = answer_export_snapshot(previous)
             mode = "reuse_bound_answer"
-    elif (
-        context.retrieval_required and context.prepared_evidence is not None
-        and len(context.prepared_evidence.normal.evidence) == 1
-        and not context.prepared_evidence.normal.failed_requirement_ids
-        and context.attempt == 1
-        and len(context.planner_output.tasks) == 1
-        and context.prepared_evidence.normal.evidence[0].route == "upload"
-        and contract.body.kind == "extract"
-    ):
-        packet = list(context.prepared_evidence.normal.evidence)
-        document = build_grounded_document(packet)
-        check = check_answer_contract(contract.answer, document, evidence=packet)
-        if not check.valid or check.unchecked_semantic:
-            return None
-        result = finalize_answer(document, packet, retrieval_required=True)
-        mode = "deterministic_grounded_direct"
     else:
         return None
     prepared = context.prepared_evidence

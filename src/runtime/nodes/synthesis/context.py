@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from src.core.answer_schema.model_references import source_reference_aliases
 from src.core.contracts import GraphState, RuntimeState
 from src.core.contracts.boundary.graph import get_retry_state
 from src.core.contracts.boundary.planner import get_planner_state
@@ -101,7 +102,8 @@ def prepare_synthesis_inputs(
     # Never shorten or re-rank an approved packet during message construction.
     packet = list(selection.evidence)
     requirement_ids = selection.requirement_map
-    reference_aliases = {f"e{index}": source.id for index, source in enumerate(packet, 1)}
+    reference_aliases = {alias: identity for identity, alias in
+                         source_reference_aliases(source.id for source in packet).items()}
     retrieval_required = context.retrieval_required or bool(
         context.source_response and context.source_response.retrieval_required
     )

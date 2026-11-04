@@ -46,10 +46,12 @@ def test_code_source_is_sent_once_with_exact_line_offsets_and_citations():
     ))
     saved = evidence.model_dump(mode="json")
     sent = []
+    instructions = []
 
     def respond(messages):
         source, = _record(messages, "[Evidence Packet]")
         sent.append(source)
+        instructions.extend(str(message.content) for message in messages if message.type == "system")
         return text_document(source["excerpt"], basis="excerpt", refs=[source["id"]])
 
     state.update(make_synthesize_node(mock_chat_model(respond))(prepare_synthesis_state(state)))
@@ -62,6 +64,34 @@ def test_code_source_is_sent_once_with_exact_line_offsets_and_citations():
     assert source["excerpt"][line["start"] - base:line["end"] - base] == "SOURCE_SENTINEL = 'value'\r\n"
     assert state["response"].result.citations[0].evidence == evidence
     assert state["response"].result.checks[0].support_status == "exact_match"
+    assert evidence.model_dump(mode="json") == saved
+    assert "A conventional alias or matching attribute spelling does not establish that binding" in "\n".join(instructions)
+
+
+def test_notebook_model_locations_use_human_cell_numbers_without_mutating_anchors():
+    original = "result = np.array([1, 2, 3])\n"
+    state, evidence = _source_state(DocumentElement(
+        element_id="result-cell", kind="code", text=original, language="python",
+        anchors=[SourceAnchor(kind="notebook", start=0, end=len(original), line_start=1, line_end=1,
+                              cell_id="result-cell", cell_index=2, precision="exact")],
+    ))
+    saved = evidence.model_dump(mode="json")
+    sent = []
+
+    def respond(messages):
+        source, = _record(messages, "[Evidence Packet]")
+        sent.append(source)
+        return text_document(source["excerpt"], basis="excerpt", refs=[source["id"]])
+
+    state.update(make_synthesize_node(mock_chat_model(respond))(prepare_synthesis_state(state)))
+
+    source, = sent
+    source_location, = source["source_locations"]
+    assert source_location["cell_number"] == 3
+    assert "cell_index" not in source_location
+    assert source_location["cell_id"] == "result-cell"
+    assert source_location["line_start"] == 1
+    assert state["response"].result.citations[0].evidence.element.anchors[0].cell_index == 2
     assert evidence.model_dump(mode="json") == saved
 
 
